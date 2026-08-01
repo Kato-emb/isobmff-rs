@@ -1,0 +1,6 @@
+# Relax only `unwrap_used`/`expect_used` in test code.
+# The other denied lints (indexing_slicing, panic, arithmetic_side_effects, ...)
+# still apply to tests; relax them per-crate when needed with a reasoned
+# `#![cfg_attr(test, allow(clippy::indexing_slicing, ...))]`.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

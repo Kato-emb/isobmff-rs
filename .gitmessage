@@ -1,0 +1,24 @@
+# <type>(<scope>): <subject>
+#
+# <body>
+#
+# <footer>
+#
+# ── Conventional Commits ── https://www.conventionalcommits.org
+#
+# type   (required): feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert
+# scope  (optional): area of change. e.g. (parse) (box) (io)
+# subject(required): imperative, present tense. <= 50 chars. No trailing period.
+#
+# body   (optional): what and why. Wrap at 72 chars. Leave the "how" to the code.
+#
+# footer (optional):
+#   Breaking change -> BREAKING CHANGE: <description>   (or `!` after type/scope)
+#   Issue reference -> Refs: #123 / Closes: #123
+#
+# Examples:
+#   feat(parse): add resumable box iteration
+#   fix(io): correct offset calculation at box boundaries
+#   feat(parse)!: change the box iterator return type
+#
+#   BREAKING CHANGE: `BoxReader::next` now yields `Result<Box>` instead of `Box`

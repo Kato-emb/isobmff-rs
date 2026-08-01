@@ -1,0 +1,77 @@
+# Rust Coding Guidelines
+
+* When performance conflicts with correctness or clarity, choose correctness and clarity unless the task states a performance requirement.
+* Do not add your own implementation unless explicitly requested.
+* Do not abbreviate variable names. Do not write `count` as `cnt`.
+* Do not silence warnings with `#[allow()]`. When one is unavoidable, report it.
+* Prefer adding functionality to an existing file unless it is a new logical component or the file already exceeds the size cap below. Avoid creating many small files.
+* Target modules under 500 LoC, excluding tests. Once a file exceeds roughly 800 LoC, add new functionality in a new module instead of extending the file, unless there is a strong reason documented in the PR description.
+* When extracting code from a large module, move the related tests and module/type docs with it so the invariants stay close to the code that owns them.
+* Do not create small helper methods that are referenced only once. Split code along logical component boundaries, not to shrink line counts.
+* In tests, prefer comparing whole objects for equality over asserting fields one by one.
+* Do not add tests for values that are statically defined.
+* When logic is removed, delete its tests; do not add tests asserting the removed behavior is absent.
+* Write the summary line of a doc comment as a single sentence with no trailing punctuation.
+* Put each kind of information in one place: How in code, What in tests, Why in commit logs, Why not in code comments (`//`).
+* Do not write code comments (`//`) to summarize or organize what the code does — the code already says How. Write a `//` comment only to record Why not: why an obvious-looking alternative was rejected, why a non-obvious workaround is required, or which pitfall is being avoided.
+* Doc comments (`///` `//!`) are separate: they state the public contract — what a caller may rely on. Do not put Why not in them; that belongs in `//`.
+* A test should read as an executable specification: its name and body state the behavior, not the mechanics of exercising it.
+* `// TODO:` and `// FIXME:` are exempt from the Why-not rule.
+
+```rust
+/// Returns the foo with the given ID
+///
+/// # Errors
+/// * `NotFound`: the foo with the given ID was not found
+pub fn foo(&self, id: FooId) -> Result<Foo> {
+    // Why not bar_mut: this path must stay read-only so callers can share &self
+    self.bar(id)
+}
+```
+
+# Naming
+
+Public identifiers take their vocabulary from ISO/IEC 14496-12, so that users who know the spec can navigate the API without translation.
+
+* Structs and enums use the spec's class names verbatim: `MovieHeaderBox`, `ChunkOffsetBox`.
+* Box types carry `#[doc(alias = "mvhd")]` with their fourcc so rustdoc search finds them by either name.
+* Fields use the spec's field names, splitting fused words into snake_case: `channelcount` becomes `channel_count`.
+* A module hosting one box is named by its fourcc (`mvhd`); a module hosting a box family is named by the spec term in snake_case (`chunk_offset` for `stco`/`co64`).
+* Where no spec term exists or it collides with Rust (the spec's `Box`), build the closest compound from spec vocabulary (`RawBox`, `BoxDecode`) — never a synonym that renames a spec concept.
+* Every box module doc and box type doc cite the spec section, e.g. ``//! [`MovieHeaderBox`] (`mvhd`), ISO/IEC 14496-12 §8.2.2``.
+
+# Pull request hygiene
+
+PR title, branch naming, and section layout live in `CONTRIBUTING.md` (CI enforces
+the title via the `pr-title` job) — follow it, do not restate it here.
+
+Repo-specific traps:
+
+- **Squash-merge**: the PR title is the sole commit message and drives the CHANGELOG
+  and version bump. Commits inside the PR are free-form and discarded — do not make
+  each one conventional.
+- Declare breaking changes with `!` (`feat(parse)!: ...`) or a `BREAKING CHANGE:`
+  footer so release-plz bumps the version.
+
+# Rules Hygiene
+
+These `.rules` files are loaded in every agent session. Keep them **high-signal**.
+
+## After a Session
+If you discover a non-trivial pattern useful for future sessions, add a heading "Proposed additions to .rules" to the pull request description with the suggested text. Do not edit `.rules` files directly during normal feature/fix work. The reviewer decides whether to adopt it.
+
+## What Not to Put in .rules
+- Avoid describing project architecture (module layout, data flow, key types). Such information goes stale quickly, and agents can gather it by reading the code. Rules should be **traps to avoid**, not a **map to follow**.
+- Avoid what lint, the compiler, or tests mechanically detect and enforce. CI gives reliable feedback on every run, so a rule would only be a weak duplicate. The test: would CI catch the mistake without the rule? If so, do not propose it.
+
+## No Ad-hoc Additions
+Rules are created from verified patterns, not short-term results. The workflow is:
+1. An agent notes a pattern during a session.
+2. The team verifies the pattern in code review.
+3. The rule is added in a dedicated commit with context on why it exists.
+
+## High Bar for New Rules
+Editing or clarifying existing rules is always welcome. But a new rule must meet **all three** criteria:
+1. **Non-obvious** — even someone familiar with the codebase would make the wrong call without it.
+2. **Recurring** — it appears multiple times (including multiple times within a single session).
+3. **Specific enough to act on** — a concrete instruction, not a vague principle.

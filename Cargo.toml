@@ -1,0 +1,121 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+authors = ["Ryohei Kato <r-kato@musen.co.jp>"]
+repository = "https://github.com/Kato-emb/isobmff-rs"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+keywords = ["iso-bmff", "mp4", "media", "parser", "container"]
+categories = ["multimedia", "parser-implementations", "encoding"]
+exclude = []
+
+[workspace.dependencies]
+
+[workspace.lints.rust]
+# Memory safety: the parser is fed untrusted input, so safety must not rest on
+# reviewing unsafe blocks. forbid (not deny) cannot be lifted by an attribute;
+# introducing unsafe requires editing this file, which always reaches review.
+unsafe_code = "forbid"
+
+# Public API surface: everything a user can reach must be documented and
+# Debug-printable, and `pub` must be honest — items that look public but are
+# not usable from outside get flagged.
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unnameable_types = "warn"
+
+# Dead weight: constructs that compile but say nothing (no-op casts, stale
+# lifetimes, redundant paths) accumulate as noise and hide real changes.
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unused_lifetimes = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+# Panic freedom: malformed input must surface as Err, never abort the caller.
+# Every implicit panic path — unwrap, indexing, unchecked arithmetic — is a
+# denial-of-service vector when the input is untrusted.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+
+# Lossy numeric conversion: wire fields have fixed widths; a silent `as` that
+# truncates or flips sign corrupts values without any error. Convert with
+# From/TryFrom so loss is impossible or explicitly handled.
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_precision_loss = "deny"
+cast_sign_loss = "deny"
+
+# Fixed-point discipline: rate/volume/matrix fields are fixed-point held as
+# raw integers; computing them via floats loses precision by amounts too small
+# for tests to catch reliably.
+float_arithmetic = "deny"
+
+# Byte order: ISOBMFF is big-endian on the wire; a symmetric le/ne mistake in
+# encode+decode cancels out in roundtrip tests, so this bug class must be
+# caught by lint.
+host_endian_bytes = "deny"
+little_endian_bytes = "deny"
+
+# Deterministic output: encode follows a canonical box order; iterating a hash
+# type would make the byte stream differ between runs while a tolerant decoder
+# still roundtrips it.
+iter_over_hash_type = "deny"
+
+# Console output: a library owns no console — diagnostics belong to the
+# caller, and dbg!/print leftovers from debugging must not ship.
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+
+# Source layout and naming: one uniform module layout (foo.rs + foo/, never
+# foo/mod.rs) so file names map one-to-one to module paths; single-char idents
+# are the mechanized half of the no-abbreviation rule in .rules.
+mod_module_files = "deny"
+min_ident_chars = "deny"
+
+# Lint suppression: every silenced lint must state why at the site.
+allow_attributes_without_reason = "deny"
+
+# API evolution: box types grow fields as ISO/IEC 14496-12 is revised, so
+# public types must stay extensible without a semver break; on the consuming
+# side, a `_` arm would silently absorb variants added later — matches must
+# break loudly instead.
+exhaustive_structs = "deny"
+exhaustive_enums = "deny"
+wildcard_enum_match_arm = "deny"
+
+# no_std readiness: pre-positioning for the planned no-alloc milestone — keep
+# core/alloc-available APIs off the std paths so the future no_std diff stays
+# minimal.
+std_instead_of_core = "warn"
+std_instead_of_alloc = "warn"
+alloc_instead_of_core = "warn"
+
+# Test placement: unit tests live in #[cfg(test)] modules, keeping test-only
+# code out of the shipped item namespace.
+tests_outside_test_module = "warn"
+
+# Doc quality: rendered docs are the public contract — error/panic sections
+# and clean markdown are part of it, and they ship to docs.rs as written.
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+too_long_first_doc_paragraph = "warn"
+doc_markdown = "warn"
+doc_link_with_quotes = "warn"
+
+[workspace.lints.rustdoc]
+# Doc quality: allow-by-default in rustdoc, so the docs job's -D warnings alone
+# never fires it — an unclosed backtick would ship to docs.rs as written.
+unescaped_backticks = "warn"
