@@ -81,7 +81,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-07-04
-      - uses: taiki-e/install-action@cargo-fuzz
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
       - uses: Swatinem/rust-cache@v2
       - run: cargo fuzz run boxes -- -runs=65536
 
