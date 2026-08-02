@@ -72,6 +72,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --all-features
 
+  # Fixed-run fuzzing over the committed corpus. A finding is a real bug, so this
+  # job blocks the merge; the nightly it needs stays pinned to this job.
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-04
+      - uses: taiki-e/install-action@cargo-fuzz
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fuzz run boxes -- -runs=65536
+
   docs:
     runs-on: ubuntu-latest
     env:

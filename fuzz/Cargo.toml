@@ -1,0 +1,30 @@
+[package]
+name = "isobmff-core-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Kept out of the parent workspace: the fuzz targets need a nightly toolchain
+# and a libfuzzer dependency, neither of which the library itself takes on.
+# This table is load-bearing — cargo walks up to the manifest above and errors
+# out without it, whether or not the `crates/*` member glob matches this crate.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
+
+[dependencies.isobmff-core]
+path = "../crates/isobmff-core"
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "boxes"
+path = "fuzz_targets/boxes.rs"
+test = false
+doc = false
+bench = false

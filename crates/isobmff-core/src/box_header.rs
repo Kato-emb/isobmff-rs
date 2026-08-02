@@ -234,6 +234,13 @@ pub enum DecodeError {
         /// Bytes the header occupies
         header_length: u64,
     },
+    /// Declared total overruns the input
+    TruncatedBox {
+        /// Bytes the box occupies, as the `size` or `largesize` field declares
+        needed: u64,
+        /// Bytes the input offered
+        available: u64,
+    },
 }
 
 impl fmt::Display for DecodeError {
@@ -249,6 +256,10 @@ impl fmt::Display for DecodeError {
             } => write!(
                 formatter,
                 "box declares a total of {declared} bytes, below its {header_length}-byte header"
+            ),
+            Self::TruncatedBox { needed, available } => write!(
+                formatter,
+                "box of {needed} bytes cut short by an input of {available}"
             ),
         }
     }
@@ -498,6 +509,19 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "box header of 16 bytes cut short by an input of 12"
+        );
+    }
+
+    #[test]
+    fn display_of_a_truncated_box_names_both_lengths() {
+        let error = DecodeError::TruncatedBox {
+            needed: 32,
+            available: 24,
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "box of 32 bytes cut short by an input of 24"
         );
     }
 

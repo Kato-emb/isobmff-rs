@@ -2,3 +2,7 @@
 # will have compiled files and executables
 debug
 target
+
+# Crashing and slow inputs a fuzz run writes out; a finding is reproduced as a
+# unit test instead of being kept here.
+fuzz/artifacts/
