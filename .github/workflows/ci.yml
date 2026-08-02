@@ -85,6 +85,8 @@ jobs:
         with:
           tool: cargo-fuzz
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
       # The target is spelled out because cargo-fuzz defaults to the triple it
       # was itself built for, and the binary this action installs is the
       # statically linked musl one.

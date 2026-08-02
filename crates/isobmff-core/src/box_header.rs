@@ -216,7 +216,7 @@ impl BoxHeader {
     }
 }
 
-/// Reason a byte sequence does not start with a box header
+/// Reason a byte sequence does not start with a box
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum DecodeError {
