@@ -133,7 +133,7 @@ impl BoxHeader {
         let (large_size, after_large_size) = if declared == EXTENDED_SIZE_MARKER {
             let (large_size_field, rest) = after_type
                 .split_first_chunk::<8>()
-                .ok_or_else(|| truncated_at(header_length(true, false)))?;
+                .ok_or_else(|| truncated_at(header_length(true, compact_type.is_none())))?;
             (Some(u64::from_be_bytes(*large_size_field)), rest)
         } else {
             (None, after_type)
@@ -318,6 +318,21 @@ mod tests {
     }
 
     #[test]
+    fn a_user_type_box_cut_short_inside_the_large_size_field_needs_the_whole_header() {
+        let input = [
+            0x00, 0x00, 0x00, 0x01, b'u', b'u', b'i', b'd', 0x00, 0x00, 0x00, 0x01,
+        ];
+
+        assert_eq!(
+            BoxHeader::decode(&input),
+            Err(DecodeError::TruncatedHeader {
+                needed: 32,
+                available: 12
+            })
+        );
+    }
+
+    #[test]
     fn input_ending_before_the_user_type_field_is_truncated() {
         let input = [0x00, 0x00, 0x00, 0x18, b'u', b'u', b'i', b'd'];
 
@@ -339,6 +354,22 @@ mod tests {
             Err(DecodeError::SizeBelowHeader {
                 declared: 4,
                 header_length: 8
+            })
+        );
+    }
+
+    #[test]
+    fn a_large_size_below_the_fields_it_is_stored_in_is_rejected() {
+        let input = [
+            0x00, 0x00, 0x00, 0x01, b'm', b'd', b'a', b't', 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x08,
+        ];
+
+        assert_eq!(
+            BoxHeader::decode(&input),
+            Err(DecodeError::SizeBelowHeader {
+                declared: 8,
+                header_length: 16
             })
         );
     }
