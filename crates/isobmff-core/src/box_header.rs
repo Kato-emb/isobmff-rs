@@ -391,6 +391,23 @@ mod tests {
     }
 
     #[test]
+    fn a_large_size_that_leaves_out_the_user_type_field_is_rejected() {
+        let input = [
+            0x00, 0x00, 0x00, 0x01, b'u', b'u', b'i', b'd', 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x10, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98,
+            0x76, 0x54, 0x32, 0x10,
+        ];
+
+        assert_eq!(
+            BoxHeader::decode(&input),
+            Err(DecodeError::SizeBelowHeader {
+                declared: 16,
+                header_length: 32
+            })
+        );
+    }
+
+    #[test]
     fn a_total_overrunning_the_input_decodes_as_it_stands() {
         let mut input = [0x00; 50];
         *input.first_chunk_mut::<8>().unwrap() = [0x00, 0x00, 0x00, 0x64, b'f', b'r', b'e', b'e'];
