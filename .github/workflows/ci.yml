@@ -133,6 +133,13 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
+      # The fuzz crate declares its own workspace, so the check above stops at
+      # isobmff-core and never sees libfuzzer-sys or what it pulls in.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          manifest-path: fuzz/Cargo.toml
+          command-arguments: --config deny.toml
 
   # A TODO/FIXME must carry an issue link or owner: `TODO(#12):`, `TODO(name):`, or a URL.
   bare-todo:

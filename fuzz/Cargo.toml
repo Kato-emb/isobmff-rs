@@ -2,6 +2,7 @@
 name = "isobmff-core-fuzz"
 version = "0.0.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
 publish = false
 
 # Kept out of the parent workspace: the fuzz targets need a nightly toolchain
