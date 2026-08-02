@@ -30,11 +30,17 @@ allow = [
     "CC0-1.0",
 ]
 confidence-threshold = 0.9
-exceptions = []
+# libfuzzer-sys vendors the LLVM libFuzzer sources, which carry NCSA on top of
+# its own MIT OR Apache-2.0. It is a fuzz-only build dependency and never
+# reaches a published artifact.
+exceptions = [{ name = "libfuzzer-sys", allow = ["NCSA"] }]
 
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# A path dependency carries no version requirement; the wildcard ban is aimed
+# at registry crates.
+allow-wildcard-paths = true
 highlight = "all"
 allow = []
 deny = []
