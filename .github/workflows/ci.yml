@@ -139,7 +139,7 @@ jobs:
         with:
           command: check
           manifest-path: fuzz/Cargo.toml
-          command-arguments: --config deny.toml
+          arguments: --all-features --config deny.toml
 
   # A TODO/FIXME must carry an issue link or owner: `TODO(#12):`, `TODO(name):`, or a URL.
   bare-todo:
