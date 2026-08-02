@@ -158,6 +158,9 @@ impl FusedIterator for Boxes<'_> {}
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+    use alloc::vec::Vec;
+
     use super::{RawBox, boxes};
     use crate::box_header::{BoxHeader, DecodeError};
     use crate::box_size::{BoxSize, CompactSize};

@@ -75,6 +75,9 @@ impl From<Uuid> for [u8; 16] {
 
 #[cfg(test)]
 mod tests {
+    use alloc::format;
+    use alloc::string::ToString as _;
+
     use super::Uuid;
 
     const SAMPLE: Uuid = Uuid::new([

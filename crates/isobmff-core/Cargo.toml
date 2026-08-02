@@ -1,6 +1,7 @@
 [package]
 name = "isobmff-core"
 version = "0.0.0"
+description = "Minimal, dependency-free extension layer for ISO base media file format boxes — no_std, no alloc"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true

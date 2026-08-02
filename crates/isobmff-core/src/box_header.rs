@@ -269,6 +269,8 @@ impl error::Error for DecodeError {}
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::ToString as _;
+
     use super::{BoxHeader, DecodeError};
     use crate::box_size::{BoxSize, CompactSize, ExtendedSize};
     use crate::box_type::BoxType;
