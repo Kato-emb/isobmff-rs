@@ -2,8 +2,9 @@
 
 ## Branch Strategy
 
-- `main` is protected: a repository ruleset requires every change to go
-  through a pull request.
+- Every change to `main` goes through a pull request. The ruleset enforcing
+  this is prepared but not yet active — see
+  [Repository Settings](#repository-settings-this-scheme-relies-on).
 - Name branches `<type>/<issue-number>-<short-description>`.
   - `<type>`: one of the [commit types](#commit-types) below.
   - `<issue-number>`: the related issue number, if any.
@@ -57,10 +58,14 @@ Recorded here because they live outside the repository
 (Settings → General / Rules):
 
 - Merge button: **squash merge only** — merge commits and rebase merging are
-  disabled, so the validated PR title is always the message that lands on
-  `main`.
+  disabled, so a PR merge always lands the validated title as the commit
+  message.
 - Default commit message: **Pull request title and description** — the GitHub
   default would reuse the branch commit message when a PR has exactly one
   commit, replacing the validated title as the commit subject.
 - Ruleset on `main`: require a pull request (0 required approvals) with
-  `pr-title` as a required status check.
+  `pr-title` as a required status check. **Not yet active** — rulesets are
+  unavailable on free-plan private repositories, so until this repository goes
+  public the requirement is convention only. Apply it at public launch by
+  importing `.github/rulesets/main.json` (Settings → Rules → Rulesets →
+  New ruleset → Import a ruleset).
