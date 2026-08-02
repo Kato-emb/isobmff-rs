@@ -66,6 +66,9 @@ impl From<FourCC> for [u8; 4] {
 
 #[cfg(test)]
 mod tests {
+    use alloc::format;
+    use alloc::string::ToString as _;
+
     use super::FourCC;
 
     #[test]

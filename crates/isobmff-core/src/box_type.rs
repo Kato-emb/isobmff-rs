@@ -121,6 +121,8 @@ impl fmt::Display for BoxType {
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::ToString as _;
+
     use super::{BoxType, CompactType};
     use crate::fourcc::FourCC;
     use crate::uuid::Uuid;

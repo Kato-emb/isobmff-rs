@@ -1,4 +1,13 @@
 //! Minimal, dependency-free extension layer for ISO base media file format boxes
+//!
+//! # `no_std`
+//!
+//! The crate is `no_std` and does not depend on `alloc`.
+
+#![no_std]
+
+#[cfg(test)]
+extern crate alloc;
 
 mod box_header;
 mod box_size;

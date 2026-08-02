@@ -63,6 +63,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --all-targets --all-features
 
+  # This target ships no std, so std creeping back in — a dropped `#![no_std]`, a
+  # dependency that needs std — fails here and nowhere else: the host jobs link
+  # std for their test binaries no matter what the crate declares. A target that
+  # does have std (wasm32-unknown-unknown) would add no such guard.
+  no-std:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+      # Not --all-targets: the test and doctest targets need std by design, and
+      # building them here would fail for reasons unrelated to the crate.
+      - run: cargo check --workspace --target thumbv7em-none-eabihf
+
   nightly:
     runs-on: ubuntu-latest
     continue-on-error: true
