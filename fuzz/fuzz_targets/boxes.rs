@@ -10,7 +10,7 @@
 
 #![no_main]
 
-use isobmff_core::{BoxHeader, DecodeError, RawBox, boxes};
+use isobmff_core::{BoxHeader, BoxHeaderError, RawBox, boxes};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
 
@@ -94,10 +94,10 @@ fn truncation_asks_for_more_than_the_input_offered(bytes: &[u8], prefix_length: 
 }
 
 /// Length the input must grow to, for an error that says it was cut short
-fn bytes_needed(result: Result<(RawBox<'_>, &[u8]), DecodeError>) -> Option<u64> {
+fn bytes_needed(result: Result<(RawBox<'_>, &[u8]), BoxHeaderError>) -> Option<u64> {
     match result {
-        Err(DecodeError::TruncatedHeader { needed, .. }) => u64::try_from(needed).ok(),
-        Err(DecodeError::TruncatedBox { needed, .. }) => Some(needed),
+        Err(BoxHeaderError::TruncatedHeader { needed, .. }) => u64::try_from(needed).ok(),
+        Err(BoxHeaderError::TruncatedBox { needed, .. }) => Some(needed),
         _ => None,
     }
 }
