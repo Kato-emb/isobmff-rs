@@ -2,7 +2,7 @@
 
 use core::iter::FusedIterator;
 
-use crate::box_header::{BoxHeader, DecodeError};
+use crate::box_header::{BoxHeader, BoxHeaderError};
 
 /// Box as it lies in an input: its header, and the payload the header spans
 ///
@@ -60,15 +60,15 @@ impl<'a> RawBox<'a> {
     ///
     /// # Errors
     ///
-    /// * [`TruncatedHeader`](DecodeError::TruncatedHeader): `input` ends inside
+    /// * [`TruncatedHeader`](BoxHeaderError::TruncatedHeader): `input` ends inside
     ///   the header.
-    /// * [`SizeBelowHeader`](DecodeError::SizeBelowHeader): the declared total
+    /// * [`SizeBelowHeader`](BoxHeaderError::SizeBelowHeader): the declared total
     ///   is smaller than the header it prefixes.
-    /// * [`TruncatedBox`](DecodeError::TruncatedBox): the declared total
+    /// * [`TruncatedBox`](BoxHeaderError::TruncatedBox): the declared total
     ///   overruns `input`. A caller that reads in chunks can extend `input` to
     ///   `needed` bytes and split again, so long as a slice that long can exist
     ///   on the target.
-    pub fn split_first(input: &[u8]) -> Result<(RawBox<'_>, &[u8]), DecodeError> {
+    pub fn split_first(input: &[u8]) -> Result<(RawBox<'_>, &[u8]), BoxHeaderError> {
         let (header, after_header) = BoxHeader::decode(input)?;
 
         let Some(total) = header.size().total_bytes() else {
@@ -89,7 +89,7 @@ impl<'a> RawBox<'a> {
             .and_then(|total| input.split_at_checked(total));
 
         let Some((_framed, rest)) = split else {
-            return Err(DecodeError::TruncatedBox {
+            return Err(BoxHeaderError::TruncatedBox {
                 needed: total,
                 // Why not unwrap: a usize above `u64::MAX` needs a 128-bit
                 // target to exist, and saturating keeps the panic-free path.
@@ -134,7 +134,7 @@ pub struct Boxes<'a> {
 }
 
 impl<'a> Iterator for Boxes<'a> {
-    type Item = Result<RawBox<'a>, DecodeError>;
+    type Item = Result<RawBox<'a>, BoxHeaderError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.done || self.remaining.is_empty() {
@@ -162,7 +162,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use super::{RawBox, boxes};
-    use crate::box_header::{BoxHeader, DecodeError};
+    use crate::box_header::{BoxHeader, BoxHeaderError};
     use crate::box_size::{BoxSize, CompactSize};
     use crate::box_type::BoxType;
 
@@ -214,7 +214,7 @@ mod tests {
 
         assert_eq!(
             RawBox::split_first(input),
-            Err(DecodeError::TruncatedBox {
+            Err(BoxHeaderError::TruncatedBox {
                 needed: 16,
                 available: 12
             })
@@ -230,7 +230,7 @@ mod tests {
 
         assert_eq!(
             RawBox::split_first(&input),
-            Err(DecodeError::TruncatedBox {
+            Err(BoxHeaderError::TruncatedBox {
                 needed: u64::MAX,
                 available: 16
             })
@@ -241,7 +241,7 @@ mod tests {
     fn an_input_ending_inside_the_header_fails_as_the_header_decode_does() {
         assert_eq!(
             RawBox::split_first(&[0x00, 0x00, 0x00]),
-            Err(DecodeError::TruncatedHeader {
+            Err(BoxHeaderError::TruncatedHeader {
                 needed: 8,
                 available: 3
             })
@@ -286,7 +286,7 @@ mod tests {
                     header: compact_header(*b"free", 8),
                     payload: b"",
                 }),
-                Err(DecodeError::TruncatedBox {
+                Err(BoxHeaderError::TruncatedBox {
                     needed: 32,
                     available: 8
                 }),
