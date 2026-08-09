@@ -1,0 +1,5 @@
+# Four-character box codes of ISO/IEC 14496-12 that read as misspelled English.
+# The spec fixes these spellings and they travel on the wire, so they are data
+# rather than prose — correcting one would change the format.
+[default.extend-words]
+trak = "trak"
