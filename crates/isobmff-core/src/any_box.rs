@@ -83,7 +83,7 @@ impl BoxEncode for OpaquePayload {
 /// [`BOX_TYPE`](BoxDefinition::BOX_TYPE) of that type so the two can never be
 /// paired wrongly; [`downcast_ref`](Self::downcast_ref) and
 /// [`downcast_mut`](Self::downcast_mut) reach it again. One the reader has no
-/// type for arrives through [`raw`](Self::raw) as the bytes it lies as, and
+/// type for arrives through [`from_raw_bytes`](Self::from_raw_bytes) as the bytes it lies as, and
 /// comes back out of [`raw_payload`](Self::raw_payload).
 ///
 /// # Examples
@@ -130,7 +130,7 @@ impl BoxEncode for OpaquePayload {
 /// known.downcast_mut::<SequenceNumberBox>().unwrap().sequence_number = 9;
 ///
 /// // A box the reader has no type for keeps the bytes it lies as
-/// let unknown = AnyBox::raw(BoxType::compact(*b"skip"), vec![1, 2, 3, 4]);
+/// let unknown = AnyBox::from_raw_bytes(BoxType::compact(*b"skip"), vec![1, 2, 3, 4]);
 /// assert_eq!(unknown.raw_payload(), Some([1, 2, 3, 4].as_slice()));
 /// assert_eq!(unknown.downcast_ref::<SequenceNumberBox>(), None);
 ///
@@ -160,7 +160,7 @@ impl AnyBox {
     /// bytes after such a box are addressed absolutely — as `stco` and `co64`
     /// address sample data — those offsets no longer point where they did.
     #[must_use]
-    pub fn raw(box_type: BoxType, payload: Vec<u8>) -> Self {
+    pub fn from_raw_bytes(box_type: BoxType, payload: Vec<u8>) -> Self {
         Self {
             box_type,
             payload: Box::new(OpaquePayload(payload)),
@@ -174,7 +174,7 @@ impl AnyBox {
     }
 
     /// Returns the payload as the bytes it lies as, for a box built by
-    /// [`raw`](Self::raw)
+    /// [`from_raw_bytes`](Self::from_raw_bytes)
     ///
     /// Returns `None` for a box built from a payload type, whose bytes exist
     /// only once [`encode`](Self::encode) writes them.
@@ -327,7 +327,7 @@ mod tests {
     fn a_payload_type_and_the_same_bytes_carried_raw_are_unequal() {
         assert_ne!(
             AnyBox::from(MarkerBox(7)),
-            AnyBox::raw(MarkerBox::BOX_TYPE, vec![7])
+            AnyBox::from_raw_bytes(MarkerBox::BOX_TYPE, vec![7])
         );
     }
 
@@ -345,7 +345,7 @@ mod tests {
     fn only_a_raw_box_offers_the_bytes_of_its_payload() {
         assert_eq!(AnyBox::from(MarkerBox(7)).raw_payload(), None);
         assert_eq!(
-            AnyBox::raw(MarkerBox::BOX_TYPE, vec![7]).raw_payload(),
+            AnyBox::from_raw_bytes(MarkerBox::BOX_TYPE, vec![7]).raw_payload(),
             Some([7].as_slice())
         );
     }
@@ -353,7 +353,7 @@ mod tests {
     #[test]
     fn a_payload_of_another_type_does_not_come_back_out() {
         assert_eq!(
-            AnyBox::raw(MarkerBox::BOX_TYPE, vec![7]).downcast_ref::<MarkerBox>(),
+            AnyBox::from_raw_bytes(MarkerBox::BOX_TYPE, vec![7]).downcast_ref::<MarkerBox>(),
             None
         );
     }
