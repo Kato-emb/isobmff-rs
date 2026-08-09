@@ -45,6 +45,9 @@ const fn header_length(has_large_size: bool, has_user_type: bool) -> u8 {
 /// )
 /// .unwrap();
 ///
+/// // The total covers the header, so the payload is what is left over
+/// assert_eq!(header.payload_len(), Some(8));
+///
 /// // A total that leaves no room for the header it prefixes is not a header
 /// assert_eq!(
 ///     BoxHeader::new(
@@ -100,6 +103,23 @@ impl BoxHeader {
         self.size
     }
 
+    /// Returns the length of the payload the header spans, header excluded
+    ///
+    /// Returns `None` for [`BoxSize::ToEndOfFile`], which declares no total and
+    /// so leaves the payload to run as far as the enclosing file does.
+    #[must_use]
+    pub const fn payload_len(self) -> Option<u64> {
+        let header_length = header_length(
+            matches!(self.size, BoxSize::Extended(_)),
+            matches!(self.box_type, BoxType::Extended(_)),
+        ) as u64;
+
+        match self.size.total_bytes() {
+            Some(total) => total.checked_sub(header_length),
+            None => None,
+        }
+    }
+
     /// Decodes the header that starts `input`
     ///
     /// Returns the header and the bytes after it, where the payload of the box
@@ -111,7 +131,10 @@ impl BoxHeader {
     ///
     /// * [`TruncatedHeader`](BoxHeaderError::TruncatedHeader): `input` ends inside
     ///   the header. A caller that reads in chunks can extend `input` to
-    ///   `needed` bytes and decode again.
+    ///   `needed` bytes and decode again. Once `input` holds the `size` and
+    ///   `type` fields — the eight bytes that settle whether a `largesize` and a
+    ///   `usertype` follow — `needed` is the length of the whole header, so one
+    ///   such extension always suffices.
     /// * [`SizeBelowHeader`](BoxHeaderError::SizeBelowHeader): the declared total
     ///   is smaller than the header it prefixes.
     pub fn decode(input: &[u8]) -> Result<(Self, &[u8]), BoxHeaderError> {
@@ -498,6 +521,33 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn the_payload_of_a_header_in_both_extended_forms_is_the_total_past_its_thirty_two_bytes() {
+        let header = BoxHeader::new(
+            BoxType::Extended(USER_TYPE),
+            BoxSize::Extended(ExtendedSize::new(40).unwrap()),
+        );
+
+        assert_eq!(header.and_then(BoxHeader::payload_len), Some(8));
+    }
+
+    #[test]
+    fn a_total_of_exactly_the_header_leaves_no_payload() {
+        let header = BoxHeader::new(
+            BoxType::compact(*b"free"),
+            BoxSize::Compact(CompactSize::new(8).unwrap()),
+        );
+
+        assert_eq!(header.and_then(BoxHeader::payload_len), Some(0));
+    }
+
+    #[test]
+    fn the_end_of_file_size_leaves_the_payload_without_a_declared_length() {
+        let header = BoxHeader::new(BoxType::compact(*b"mdat"), BoxSize::ToEndOfFile).unwrap();
+
+        assert_eq!(header.payload_len(), None);
     }
 
     #[test]
