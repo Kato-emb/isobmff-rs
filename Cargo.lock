@@ -3,5 +3,12 @@
 version = 4
 
 [[package]]
+name = "isobmff-boxes"
+version = "0.0.0"
+dependencies = [
+ "isobmff-core",
+]
+
+[[package]]
 name = "isobmff-core"
 version = "0.0.0"
