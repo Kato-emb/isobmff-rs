@@ -121,6 +121,8 @@ pub enum DecodeError {
         /// Bytes left over once every field was read
         remaining: u64,
     },
+    /// Full box declares a version the box does not read
+    UnsupportedVersion(u8),
     /// Field the spec declares as text does not read as UTF-8
     InvalidUtf8(str::Utf8Error),
     /// Payload of a container does not split into the boxes it holds
@@ -179,6 +181,10 @@ impl fmt::Display for DecodeError {
                 formatter,
                 "box payload leaves {remaining} bytes past the fields it holds"
             ),
+            Self::UnsupportedVersion(version) => write!(
+                formatter,
+                "full box declares version {version}, which this box does not read"
+            ),
             Self::InvalidUtf8(_) => {
                 formatter.write_str("box payload holds a string that is not UTF-8")
             }
@@ -203,6 +209,7 @@ impl error::Error for DecodeError {
         match *self {
             Self::TruncatedPayload { .. }
             | Self::TrailingBytes { .. }
+            | Self::UnsupportedVersion(_)
             | Self::MissingMandatoryBox(_)
             | Self::DuplicateBox(_) => None,
             Self::InvalidUtf8(ref error) => Some(error),
@@ -257,6 +264,16 @@ mod tests {
         assert_eq!(
             DecodeError::Framing(framing_error).to_string(),
             framing_error.to_string()
+        );
+    }
+
+    #[test]
+    fn display_of_an_unsupported_version_names_the_version() {
+        let error = DecodeError::UnsupportedVersion(2);
+
+        assert_eq!(
+            error.to_string(),
+            "full box declares version 2, which this box does not read"
         );
     }
 
