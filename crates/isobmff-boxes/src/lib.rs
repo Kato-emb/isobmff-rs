@@ -14,19 +14,34 @@
 extern crate alloc;
 
 mod brand;
+mod container;
 mod field;
 mod ftyp;
 mod hdlr;
 mod mdhd;
+mod mdia;
+mod minf;
+mod moov;
+mod mvex;
 mod mvhd;
+mod stbl;
+mod stsd;
 mod styp;
 mod tkhd;
+mod trak;
 mod trex;
 
 pub use ftyp::FileTypeBox;
 pub use hdlr::HandlerBox;
 pub use mdhd::MediaHeaderBox;
+pub use mdia::MediaBox;
+pub use minf::MediaInformationBox;
+pub use moov::MovieBox;
+pub use mvex::MovieExtendsBox;
 pub use mvhd::MovieHeaderBox;
+pub use stbl::SampleTableBox;
+pub use stsd::SampleDescriptionBox;
 pub use styp::SegmentTypeBox;
 pub use tkhd::TrackHeaderBox;
+pub use trak::TrackBox;
 pub use trex::TrackExtendsBox;
