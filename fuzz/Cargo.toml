@@ -29,3 +29,10 @@ path = "fuzz_targets/boxes.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "framer"
+path = "fuzz_targets/framer.rs"
+test = false
+doc = false
+bench = false

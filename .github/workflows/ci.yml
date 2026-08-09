@@ -107,6 +107,7 @@ jobs:
       # was itself built for, and the binary this action installs is the
       # statically linked musl one.
       - run: cargo fuzz run boxes --target x86_64-unknown-linux-gnu -- -runs=65536
+      - run: cargo fuzz run framer --target x86_64-unknown-linux-gnu -- -runs=65536
 
   docs:
     runs-on: ubuntu-latest
