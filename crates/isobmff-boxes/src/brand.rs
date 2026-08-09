@@ -270,7 +270,9 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxWrite as _, DecodeError, FourCC};
+    use isobmff_core::{
+        BoxDecode, BoxEncode as _, BoxWrite as _, DecodeError, EncodeError, FourCC,
+    };
 
     use super::{FileTypeBox, SegmentTypeBox};
 
@@ -328,17 +330,35 @@ mod tests {
     }
 
     #[test]
-    fn the_segment_box_reads_the_same_payload_as_the_file_box_under_its_own_type() {
-        let payload = b"iso6\0\0\x02\0dash";
-
-        let file_type = FileTypeBox::decode_payload(payload).unwrap();
-        let segment_type = SegmentTypeBox::decode_payload(payload).unwrap();
-
-        assert_eq!(segment_type.major_brand(), file_type.major_brand());
-        assert_eq!(segment_type.minor_version(), file_type.minor_version());
+    fn a_payload_reads_into_the_fields_the_spec_lays_out_in_order() {
         assert_eq!(
-            segment_type.compatible_brands(),
-            file_type.compatible_brands()
+            FileTypeBox::decode_payload(b"iso6\0\0\x02\0iso6dash").unwrap(),
+            FileTypeBox::new(
+                FourCC::new(*b"iso6"),
+                512,
+                vec![FourCC::new(*b"iso6"), FourCC::new(*b"dash")],
+            )
+        );
+    }
+
+    #[test]
+    fn the_segment_box_reads_the_same_payload_under_its_own_type() {
+        assert_eq!(
+            SegmentTypeBox::decode_payload(b"iso6\0\0\x02\0dash").unwrap(),
+            SegmentTypeBox::new(FourCC::new(*b"iso6"), 512, vec![FourCC::new(*b"dash")])
+        );
+    }
+
+    #[test]
+    fn a_buffer_with_room_to_spare_is_refused_as_a_short_one_is() {
+        let file_type = FileTypeBox::new(FourCC::new(*b"isom"), 0, Vec::new());
+
+        assert_eq!(
+            file_type.encode_payload(&mut [0; 32]),
+            Err(EncodeError::BufferLengthMismatch {
+                expected: 8,
+                actual: 32
+            })
         );
     }
 
