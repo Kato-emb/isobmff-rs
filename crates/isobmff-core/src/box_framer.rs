@@ -5,13 +5,6 @@ use core::fmt;
 
 use crate::box_header::{BoxHeader, BoxHeaderError};
 
-/// Shortest header, and the length the first gathering of a header reaches for
-const HEADER_MINIMUM: usize = 8;
-
-/// Gatherings a header takes: one to reach its `size` and `type`, one to reach
-/// the length those two name
-const ROUNDS_TO_A_WHOLE_HEADER: usize = 2;
-
 /// Step a stream of boxes takes, as [`BoxFramer::next_event`] reports it
 ///
 /// A box appears as [`Start`](Self::Start), then as many
@@ -237,9 +230,8 @@ enum State {
 
 /// Header bytes gathered so far, for a header spread over several chunks
 ///
-/// `needed` is the length the header is known to reach, as far as the bytes
-/// gathered so far tell: eight until they say otherwise, and never past the
-/// longest header a box can carry.
+/// `needed` is the length the header reaches: the shortest header until the
+/// bytes gathered name the true one, and never past the longest a box can carry.
 #[derive(Clone, Copy, Debug)]
 struct PartialHeader {
     bytes: [u8; BoxHeader::MAX_ENCODED_LEN],
@@ -251,7 +243,7 @@ impl PartialHeader {
     const EMPTY: Self = Self {
         bytes: [0; BoxHeader::MAX_ENCODED_LEN],
         filled: 0,
-        needed: HEADER_MINIMUM,
+        needed: BoxHeader::MIN_ENCODED_LEN,
     };
 
     /// Takes header bytes off `input`, and decodes the header once it is whole
@@ -264,20 +256,49 @@ impl PartialHeader {
     /// * [`SizeBelowHeader`](BoxFramerError::SizeBelowHeader): the header
     ///   declares a total smaller than itself.
     fn take_from(&mut self, input: &mut &[u8]) -> Result<Option<BoxHeader>, BoxFramerError> {
-        // Why not loop until the header decodes: the `size` and `type` fields
-        // settle whether a `largesize` and a `usertype` follow, so the eight
-        // bytes of the first round name the length of the whole header, and a
-        // second round reaches it whenever the chunk carries that far. An open
-        // loop would have to carry a guard against a length that fails to grow,
-        // for a round that cannot happen.
-        for _round in 0..ROUNDS_TO_A_WHOLE_HEADER {
-            self.gather(input);
-            if let Some(header) = self.decode_gathered()? {
-                return Ok(Some(header));
+        self.gather(input);
+        if self.filled < BoxHeader::MIN_ENCODED_LEN {
+            return Ok(None);
+        }
+        // Why not unreachable: the buffer is the longest header a box can carry,
+        // so a chunk of the shortest always splits off, and the fallback is a
+        // degenerate value in place of a panic the lints forbid.
+        let Some(prefix) = self.bytes.first_chunk() else {
+            return Ok(None);
+        };
+
+        self.needed = BoxHeader::encoded_len_from_prefix(prefix);
+        self.gather(input);
+        if self.filled < self.needed {
+            return Ok(None);
+        }
+        // Why not unreachable: `gather` takes no more than `needed`, which is a
+        // header length and so never past the buffer, for the same reason.
+        let Some(gathered) = self.bytes.get(..self.filled) else {
+            return Ok(None);
+        };
+
+        match BoxHeader::decode(gathered) {
+            Ok((header, _nothing_beyond)) => Ok(Some(header)),
+            Err(BoxHeaderError::SizeBelowHeader {
+                declared,
+                header_length,
+            }) => Err(BoxFramerError::SizeBelowHeader {
+                declared,
+                header_length,
+            }),
+            // Why not leave these two arms out: the bytes handed over are the
+            // length `encoded_len_from_prefix` named, so the header cannot come up short,
+            // and a header decode reads no payload and so never reports one.
+            // Matching them rather than waving them past with a catch-all stops
+            // the build here if a variant is added later.
+            Err(BoxHeaderError::TruncatedHeader { needed, available }) => {
+                Err(BoxFramerError::UnfinishedHeader { needed, available })
+            }
+            Err(BoxHeaderError::TruncatedBox { needed, available }) => {
+                Err(BoxFramerError::UnfinishedBox { needed, available })
             }
         }
-
-        Ok(None)
     }
 
     /// Takes off `input` as many bytes as the length being reached for is short
@@ -293,38 +314,6 @@ impl PartialHeader {
         slot.copy_from_slice(chunk);
         self.filled = filled;
         *input = rest;
-    }
-
-    /// Decodes the header from the bytes gathered, or reaches for a longer one
-    ///
-    /// Returns `Ok(None)` when the bytes gathered fall short of a whole header,
-    /// having raised the length to reach for to the one they name.
-    fn decode_gathered(&mut self) -> Result<Option<BoxHeader>, BoxFramerError> {
-        let Some(gathered) = self.bytes.get(..self.filled) else {
-            return Ok(None);
-        };
-
-        match BoxHeader::decode(gathered) {
-            Ok((header, _nothing_beyond)) => Ok(Some(header)),
-            Err(BoxHeaderError::TruncatedHeader { needed, .. }) => {
-                self.needed = needed.min(BoxHeader::MAX_ENCODED_LEN);
-                Ok(None)
-            }
-            Err(BoxHeaderError::SizeBelowHeader {
-                declared,
-                header_length,
-            }) => Err(BoxFramerError::SizeBelowHeader {
-                declared,
-                header_length,
-            }),
-            // Why not leave this arm out: a header decode reads no payload and
-            // so never reports it, but the variant is matched rather than waved
-            // past with a catch-all, so that a variant added later stops the
-            // build here instead of being absorbed silently.
-            Err(BoxHeaderError::TruncatedBox { needed, available }) => {
-                Err(BoxFramerError::UnfinishedBox { needed, available })
-            }
-        }
     }
 }
 
