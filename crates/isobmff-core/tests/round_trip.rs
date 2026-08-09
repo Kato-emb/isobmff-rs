@@ -47,7 +47,7 @@ fn a_fixed_length_payload_reads_back_as_the_value_that_wrote_it() {
     let payload = encoded(&value).unwrap();
 
     assert_eq!(payload, b"\x01\x02\x03\x04".as_slice());
-    assert_eq!(SequenceNumberBox::decode_payload(&payload), Ok(value));
+    assert_eq!(SequenceNumberBox::decode_payload(&payload).unwrap(), value);
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn a_variable_length_payload_reads_back_as_the_value_that_wrote_it() {
 
     let payload = encoded(&value).unwrap();
 
-    assert_eq!(OpaqueDataBox::decode_payload(&payload), Ok(value));
+    assert_eq!(OpaqueDataBox::decode_payload(&payload).unwrap(), value);
 }
 
 #[test]
@@ -66,8 +66,8 @@ fn an_empty_payload_reads_back_as_the_value_that_wrote_it() {
     let payload = encoded(&VendorMarkerBox).unwrap();
 
     assert_eq!(
-        VendorMarkerBox::decode_payload(&payload),
-        Ok(VendorMarkerBox)
+        VendorMarkerBox::decode_payload(&payload).unwrap(),
+        VendorMarkerBox
     );
 }
 
@@ -78,7 +78,7 @@ fn a_payload_opening_with_version_and_flags_reads_back_as_the_value_that_wrote_i
     let payload = encoded(&value).unwrap();
 
     assert_eq!(payload, b"\0\0\0\0\x01\x02\x03\x04".as_slice());
-    assert_eq!(ExpiryBox::decode_payload(&payload), Ok(value));
+    assert_eq!(ExpiryBox::decode_payload(&payload).unwrap(), value);
 }
 
 #[test]
@@ -88,7 +88,7 @@ fn a_value_too_wide_for_the_first_version_writes_at_the_version_that_holds_it() 
     let payload = encoded(&value).unwrap();
 
     assert_eq!(payload, b"\x01\0\0\0\0\0\0\x01\0\0\0\0".as_slice());
-    assert_eq!(ExpiryBox::decode_payload(&payload), Ok(value));
+    assert_eq!(ExpiryBox::decode_payload(&payload).unwrap(), value);
 }
 
 #[test]
@@ -101,8 +101,8 @@ fn a_box_framed_under_its_declared_type_splits_back_into_the_value() {
     assert_eq!(rest, b"");
     assert_eq!(split.header().box_type(), SequenceNumberBox::BOX_TYPE);
     assert_eq!(
-        SequenceNumberBox::decode_payload(split.payload()),
-        Ok(value)
+        SequenceNumberBox::decode_payload(split.payload()).unwrap(),
+        value
     );
 }
 
@@ -119,7 +119,7 @@ fn a_box_declared_under_a_user_type_frames_and_splits_the_same_way() {
     assert_eq!(rest, b"");
     assert_eq!(split.header().box_type(), VendorMarkerBox::BOX_TYPE);
     assert_eq!(
-        VendorMarkerBox::decode_payload(split.payload()),
-        Ok(VendorMarkerBox)
+        VendorMarkerBox::decode_payload(split.payload()).unwrap(),
+        VendorMarkerBox
     );
 }
