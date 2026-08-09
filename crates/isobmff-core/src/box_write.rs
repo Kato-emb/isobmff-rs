@@ -134,6 +134,11 @@ pub trait BoxWrite: BoxDefinition + BoxEncode {
     /// to spare is what the returned remainder is for: a container writes its
     /// children by passing that remainder to the next one in turn.
     ///
+    /// An `Err` may leave `buffer` written to in part — the header goes down
+    /// before the payload does, so a payload that fails partway leaves a header
+    /// that reads as whole in front of bytes that are not. A caller that writes
+    /// out what it has on failure would emit that.
+    ///
     /// # Errors
     ///
     /// * [`BufferTooShort`](EncodeError::BufferTooShort): `buffer` is shorter

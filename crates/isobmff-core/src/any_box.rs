@@ -151,6 +151,14 @@ impl AnyBox {
     ///
     /// `payload` is the payload of the box whole, header excluded, as
     /// [`RawBox::payload`](crate::RawBox::payload) leaves it.
+    ///
+    /// Only the payload is kept, so the size form the box was read under is
+    /// not. Writing it back builds the header afresh from the payload length,
+    /// which yields the shortest form that can declare it: a box that arrived
+    /// with a `largesize` it did not need, or with a size of zero running to
+    /// the end of the file, comes back out shorter than it went in. Where the
+    /// bytes after such a box are addressed absolutely — as `stco` and `co64`
+    /// address sample data — those offsets no longer point where they did.
     #[must_use]
     pub fn raw(box_type: BoxType, payload: Vec<u8>) -> Self {
         Self {
@@ -189,7 +197,8 @@ impl AnyBox {
     ///
     /// This is [`BoxWrite::encode`](crate::BoxWrite::encode) under the same
     /// contract, which `AnyBox` cannot have as that trait: the box type is a
-    /// value here rather than the constant [`BoxDefinition`] declares.
+    /// value here rather than the constant [`BoxDefinition`] declares. An `Err`
+    /// may leave `buffer` written to in part, as it does there.
     ///
     /// # Errors
     ///

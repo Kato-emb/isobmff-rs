@@ -195,7 +195,9 @@ impl fmt::Display for DecodeError {
             Self::InvalidUtf8(_) => {
                 formatter.write_str("box payload holds a string that is not UTF-8")
             }
-            Self::Framing(ref error) => error.fmt(formatter),
+            Self::Framing(_) => {
+                formatter.write_str("container payload does not split into the boxes it holds")
+            }
             Self::MissingMandatoryBox(box_type) => {
                 write!(formatter, "container holds no mandatory {box_type} box")
             }
@@ -234,7 +236,10 @@ impl error::Error for DecodeError {
 
 #[cfg(test)]
 mod tests {
-    use alloc::string::{String, ToString as _};
+    #[cfg(feature = "alloc")]
+    use alloc::string::String;
+    use alloc::string::ToString as _;
+    #[cfg(feature = "alloc")]
     use alloc::vec;
     use core::error::Error as _;
 
@@ -267,16 +272,19 @@ mod tests {
     }
 
     #[test]
-    fn display_of_a_framing_failure_reads_as_the_framing_error_itself() {
+    fn display_of_a_framing_failure_says_what_the_container_was_doing() {
         let framing_error = RawBoxError::Header(BoxHeaderError::TruncatedHeader {
             needed: 16,
             available: 12,
         });
 
+        let error = DecodeError::Framing(framing_error);
+
         assert_eq!(
-            DecodeError::Framing(framing_error).to_string(),
-            framing_error.to_string()
+            error.to_string(),
+            "container payload does not split into the boxes it holds"
         );
+        assert_ne!(error.to_string(), framing_error.to_string());
     }
 
     #[test]
@@ -330,6 +338,7 @@ mod tests {
         assert_eq!(source, Some(framing_error.to_string()));
     }
 
+    #[cfg(feature = "alloc")]
     #[test]
     fn nested_children_spell_out_the_path_to_the_box_that_failed() {
         let innermost = DecodeError::TruncatedPayload {
