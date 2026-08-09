@@ -287,16 +287,12 @@ impl PartialHeader {
                 declared,
                 header_length,
             }),
-            // Why not leave these two arms out: the bytes handed over are the
-            // length `encoded_len_from_prefix` named, so the header cannot come up short,
-            // and a header decode reads no payload and so never reports one.
-            // Matching them rather than waving them past with a catch-all stops
-            // the build here if a variant is added later.
+            // Why not leave this arm out: the bytes handed over are the length
+            // `encoded_len_from_prefix` named, so the header cannot come up
+            // short. Matching it rather than waving it past with a catch-all
+            // stops the build here if a variant is added later.
             Err(BoxHeaderError::TruncatedHeader { needed, available }) => {
                 Err(BoxFramerError::UnfinishedHeader { needed, available })
-            }
-            Err(BoxHeaderError::TruncatedBox { needed, available }) => {
-                Err(BoxFramerError::UnfinishedBox { needed, available })
             }
         }
     }
@@ -323,6 +319,10 @@ impl PartialHeader {
 /// is `Ok(None)`, an ask for the next chunk — and becomes
 /// [`UnfinishedHeader`](Self::UnfinishedHeader) only once [`BoxFramer::finish`]
 /// says that no chunk is coming.
+// Why not carry `BoxHeaderError` the way `RawBoxError` does: only
+// `SizeBelowHeader` of it can reach a framer, since a header short of its
+// length is answered with more chunks rather than reported, so nesting would
+// seat a variant no caller can ever meet inside a public type.
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum BoxFramerError {

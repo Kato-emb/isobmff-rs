@@ -292,13 +292,12 @@ impl BoxHeader {
     }
 }
 
-/// Reason a byte sequence does not frame a box
+/// Reason a byte sequence does not decode as a box header
 ///
-/// Framing is where these errors arise: [`BoxHeader::decode`] and
-/// [`RawBox::split_first`](crate::RawBox::split_first) report them, and the
-/// [`boxes`](crate::boxes) iterator passes them on. Reading what a frame holds
-/// is a layer further in, and reports [`DecodeError`](crate::DecodeError)
-/// instead.
+/// These are the failures of [`BoxHeader::decode`], and only those. Framing a
+/// whole box reaches past the header and can fail in one way more, which
+/// [`RawBoxError`](crate::RawBoxError) adds; reading what a frame holds is a
+/// layer further in again, and reports [`DecodeError`](crate::DecodeError).
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum BoxHeaderError {
@@ -316,13 +315,6 @@ pub enum BoxHeaderError {
         /// Bytes the header occupies
         header_length: u64,
     },
-    /// Declared total overruns the input
-    TruncatedBox {
-        /// Bytes the box occupies, as the `size` or `largesize` field declares
-        needed: u64,
-        /// Bytes the input offered
-        available: u64,
-    },
 }
 
 impl fmt::Display for BoxHeaderError {
@@ -338,10 +330,6 @@ impl fmt::Display for BoxHeaderError {
             } => write!(
                 formatter,
                 "box declares a total of {declared} bytes, below its {header_length}-byte header"
-            ),
-            Self::TruncatedBox { needed, available } => write!(
-                formatter,
-                "box of {needed} bytes cut short by an input of {available}"
             ),
         }
     }
@@ -634,19 +622,6 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "box header of 16 bytes cut short by an input of 12"
-        );
-    }
-
-    #[test]
-    fn display_of_a_truncated_box_names_both_lengths() {
-        let error = BoxHeaderError::TruncatedBox {
-            needed: 32,
-            available: 24,
-        };
-
-        assert_eq!(
-            error.to_string(),
-            "box of 32 bytes cut short by an input of 24"
         );
     }
 
