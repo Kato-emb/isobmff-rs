@@ -131,6 +131,13 @@ pub enum DecodeError {
     MissingMandatoryBox(BoxType),
     /// Container holds more of a child box than its quantity allows
     DuplicateBox(BoxType),
+    /// Count a box declares does not match the entries it holds
+    EntryCountMismatch {
+        /// Entries the `entry_count` field declares
+        declared: u64,
+        /// Entries the payload holds
+        actual: u64,
+    },
     /// Child box of a container does not decode
     ///
     /// Needs the `alloc` feature.
@@ -196,6 +203,10 @@ impl fmt::Display for DecodeError {
                 formatter,
                 "container holds more than one {box_type} box, which may appear once"
             ),
+            Self::EntryCountMismatch { declared, actual } => write!(
+                formatter,
+                "box declares {declared} entries but holds {actual}"
+            ),
             #[cfg(feature = "alloc")]
             Self::Child { box_type, .. } => {
                 write!(formatter, "child {box_type} box does not decode")
@@ -211,7 +222,8 @@ impl error::Error for DecodeError {
             | Self::TrailingBytes { .. }
             | Self::UnsupportedVersion(_)
             | Self::MissingMandatoryBox(_)
-            | Self::DuplicateBox(_) => None,
+            | Self::DuplicateBox(_)
+            | Self::EntryCountMismatch { .. } => None,
             Self::InvalidUtf8(ref error) => Some(error),
             Self::Framing(ref error) => Some(error),
             #[cfg(feature = "alloc")]
@@ -292,6 +304,16 @@ mod tests {
             error.to_string(),
             "container holds more than one tkhd box, which may appear once"
         );
+    }
+
+    #[test]
+    fn display_of_an_entry_count_mismatch_names_both_counts() {
+        let error = DecodeError::EntryCountMismatch {
+            declared: 4,
+            actual: 2,
+        };
+
+        assert_eq!(error.to_string(), "box declares 4 entries but holds 2");
     }
 
     #[test]
