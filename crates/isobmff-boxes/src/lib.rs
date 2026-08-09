@@ -14,5 +14,8 @@
 extern crate alloc;
 
 mod brand;
+mod ftyp;
+mod styp;
 
-pub use brand::{FileTypeBox, SegmentTypeBox};
+pub use ftyp::FileTypeBox;
+pub use styp::SegmentTypeBox;
