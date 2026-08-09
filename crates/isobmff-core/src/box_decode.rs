@@ -84,8 +84,8 @@ pub trait BoxDecode: Sized {
 /// Reason a payload does not read as the box it was framed as
 ///
 /// Framing is settled before a payload reaches [`BoxDecode::decode_payload`],
-/// so a frame that does not hold is [`BoxHeaderError`](crate::BoxHeaderError),
-/// the error of the layer before this one.
+/// so a frame that does not hold is [`RawBoxError`](crate::RawBoxError), the
+/// error of the layer before this one.
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum DecodeError {

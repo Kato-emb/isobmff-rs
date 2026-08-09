@@ -30,5 +30,5 @@ pub use box_size::{BoxSize, CompactSize, ExtendedSize};
 pub use box_type::{BoxType, CompactType};
 pub use fourcc::FourCC;
 pub use full_box::{FullBoxFields, FullBoxFlags};
-pub use raw_box::{Boxes, RawBox, boxes};
+pub use raw_box::{Boxes, RawBox, RawBoxError, boxes};
 pub use uuid::Uuid;
