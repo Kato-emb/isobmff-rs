@@ -80,6 +80,14 @@ pub trait BoxEncode {
 }
 
 /// Reason a value does not write as the payload of its box
+///
+/// The two say different things about `buffer`.
+/// [`BufferLengthMismatch`](Self::BufferLengthMismatch) comes from a payload,
+/// which is handed a buffer of exactly its own length and refuses any other.
+/// [`BufferTooShort`](Self::BufferTooShort) comes from a value written into a
+/// buffer it shares with what follows it — a whole box, or one field among
+/// several — which takes what it needs off the front and leaves the rest. Room
+/// to spare is expected there, and only a shortfall is an error.
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum EncodeError {
@@ -91,6 +99,13 @@ pub enum EncodeError {
         /// Bytes the buffer offered
         actual: u64,
     },
+    /// Buffer offered is shorter than the value needs
+    BufferTooShort {
+        /// Bytes the value occupies on the wire
+        needed: u64,
+        /// Bytes the buffer offered
+        available: u64,
+    },
 }
 
 impl fmt::Display for EncodeError {
@@ -99,6 +114,10 @@ impl fmt::Display for EncodeError {
             Self::BufferLengthMismatch { expected, actual } => write!(
                 formatter,
                 "box payload of {expected} bytes needs a buffer of that length, not {actual}"
+            ),
+            Self::BufferTooShort { needed, available } => write!(
+                formatter,
+                "value of {needed} bytes needs a buffer at least that long, not {available}"
             ),
         }
     }
@@ -122,6 +141,19 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "box payload of 16 bytes needs a buffer of that length, not 12"
+        );
+    }
+
+    #[test]
+    fn display_of_a_buffer_too_short_names_both_lengths() {
+        let error = EncodeError::BufferTooShort {
+            needed: 24,
+            available: 16,
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "value of 24 bytes needs a buffer at least that long, not 16"
         );
     }
 }

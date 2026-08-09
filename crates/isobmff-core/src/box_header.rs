@@ -172,6 +172,72 @@ impl BoxHeader {
         }
     }
 
+    /// Returns the length of the header itself, payload excluded
+    ///
+    /// This is what [`encode`](Self::encode) writes, and what stands between
+    /// the start of the box and the payload
+    /// [`payload_len`](Self::payload_len) measures.
+    #[must_use]
+    pub const fn encoded_len(self) -> usize {
+        header_length(
+            matches!(self.size, BoxSize::Extended(_)),
+            matches!(self.box_type, BoxType::Extended(_)),
+        ) as usize
+    }
+
+    /// Creates the header that introduces a payload of the given length
+    ///
+    /// The total goes in the `size` field where it fits and moves to the
+    /// `largesize` field where it does not, so the header is the shortest one
+    /// that can declare the box. A `usertype` field is included whenever
+    /// `box_type` carries one.
+    ///
+    /// Returns `None` when the total of header and payload overruns `u64`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize, Uuid};
+    ///
+    /// // A payload the 32-bit `size` field can declare
+    /// let header = BoxHeader::with_payload_len(BoxType::compact(*b"free"), 4).unwrap();
+    /// assert_eq!(header.size(), BoxSize::Compact(CompactSize::new(12).unwrap()));
+    /// assert_eq!(header.encoded_len(), 8);
+    ///
+    /// // A payload too long for that field moves the total into `largesize`
+    /// let long = BoxHeader::with_payload_len(BoxType::compact(*b"mdat"), u32::MAX.into()).unwrap();
+    /// assert_eq!(long.encoded_len(), 16);
+    ///
+    /// // A user type takes sixteen bytes more, which the total must cover
+    /// let vendor = BoxType::Extended(Uuid::new([0xab; 16]));
+    /// assert_eq!(BoxHeader::with_payload_len(vendor, 4).unwrap().encoded_len(), 24);
+    ///
+    /// // A payload leaving no room for the header it needs
+    /// assert_eq!(BoxHeader::with_payload_len(BoxType::compact(*b"mdat"), u64::MAX), None);
+    /// ```
+    #[must_use]
+    pub fn with_payload_len(box_type: BoxType, payload_len: u64) -> Option<Self> {
+        let has_user_type = matches!(box_type, BoxType::Extended(_));
+
+        let compact = payload_len
+            .checked_add(u64::from(header_length(false, has_user_type)))
+            .and_then(|total| u32::try_from(total).ok())
+            .and_then(CompactSize::new);
+        if let Some(size) = compact {
+            return Some(Self {
+                box_type,
+                size: BoxSize::Compact(size),
+            });
+        }
+
+        let total = payload_len.checked_add(u64::from(header_length(true, has_user_type)))?;
+
+        Some(Self {
+            box_type,
+            size: BoxSize::Extended(ExtendedSize::new(total)?),
+        })
+    }
+
     /// Decodes the header that starts `input`
     ///
     /// Returns the header and the bytes after it, where the payload of the box

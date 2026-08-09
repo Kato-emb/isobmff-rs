@@ -16,7 +16,7 @@ concurrency:
 
 env:
   # Minimum supported Rust version. Keep in sync with `rust-version` in Cargo.toml.
-  MSRV: "1.85"
+  MSRV: "1.86"
   CARGO_TERM_COLOR: always
 
 jobs:
@@ -38,6 +38,11 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # The alloc feature is on by default, so the run above never reaches the
+      # alloc-free path. The no-std job does, but it cannot pass --all-targets —
+      # a test binary needs std — so nothing else builds the tests and lints of
+      # the very configuration the feature exists for.
+      - run: cargo clippy -p isobmff-core --no-default-features --all-targets -- -D warnings
 
   test:
     strategy:
@@ -78,6 +83,10 @@ jobs:
       # Not --all-targets: the test and doctest targets need std by design, and
       # building them here would fail for reasons unrelated to the crate.
       - run: cargo check --workspace --target thumbv7em-none-eabihf
+      # The alloc feature is on by default, so every other job builds core with a
+      # heap behind it. Only this run reaches the alloc-free path, and it runs on
+      # the target that has no allocator to fall back on.
+      - run: cargo check -p isobmff-core --no-default-features --target thumbv7em-none-eabihf
 
   nightly:
     runs-on: ubuntu-latest
