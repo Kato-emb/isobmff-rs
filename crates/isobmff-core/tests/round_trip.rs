@@ -12,7 +12,7 @@ use isobmff_core::{
     BoxDecode, BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, CompactSize, EncodeError,
     RawBox,
 };
-use vendor::{OpaqueDataBox, SequenceNumberBox, VendorMarkerBox};
+use vendor::{ExpiryBox, OpaqueDataBox, SequenceNumberBox, VendorMarkerBox};
 
 /// Writes `value` into a buffer of exactly the payload length it declares
 fn encoded(value: &impl BoxEncode) -> Result<Vec<u8>, EncodeError> {
@@ -69,6 +69,26 @@ fn an_empty_payload_reads_back_as_the_value_that_wrote_it() {
         VendorMarkerBox::decode_payload(&payload),
         Ok(VendorMarkerBox)
     );
+}
+
+#[test]
+fn a_payload_opening_with_version_and_flags_reads_back_as_the_value_that_wrote_it() {
+    let value = ExpiryBox::new(0x0102_0304);
+
+    let payload = encoded(&value).unwrap();
+
+    assert_eq!(payload, b"\0\0\0\0\x01\x02\x03\x04".as_slice());
+    assert_eq!(ExpiryBox::decode_payload(&payload), Ok(value));
+}
+
+#[test]
+fn a_value_too_wide_for_the_first_version_writes_at_the_version_that_holds_it() {
+    let value = ExpiryBox::new(0x1_0000_0000);
+
+    let payload = encoded(&value).unwrap();
+
+    assert_eq!(payload, b"\x01\0\0\0\0\0\0\x01\0\0\0\0".as_slice());
+    assert_eq!(ExpiryBox::decode_payload(&payload), Ok(value));
 }
 
 #[test]

@@ -10,7 +10,7 @@
 mod vendor;
 
 use isobmff_core::{BoxDecode, BoxEncode, DecodeError, EncodeError};
-use vendor::{OpaqueDataBox, SequenceNumberBox, VendorMarkerBox};
+use vendor::{ExpiryBox, OpaqueDataBox, SequenceNumberBox, VendorMarkerBox};
 
 #[test]
 fn a_payload_ending_inside_a_field_is_rejected_as_truncated() {
@@ -40,6 +40,17 @@ fn a_box_with_no_fields_rejects_a_payload_that_is_not_empty() {
 }
 
 #[test]
+fn a_payload_cut_short_of_the_field_its_version_selects_names_the_length_that_version_needs() {
+    assert_eq!(
+        ExpiryBox::decode_payload(b"\x01\0\0\0\0\0\0\x01"),
+        Err(DecodeError::TruncatedPayload {
+            needed: 12,
+            available: 8
+        })
+    );
+}
+
+#[test]
 fn a_buffer_shorter_than_the_declared_payload_is_rejected() {
     let value = SequenceNumberBox { sequence_number: 7 };
 
@@ -48,6 +59,19 @@ fn a_buffer_shorter_than_the_declared_payload_is_rejected() {
         Err(EncodeError::BufferLengthMismatch {
             expected: 4,
             actual: 3
+        })
+    );
+}
+
+#[test]
+fn a_buffer_sized_for_a_version_other_than_the_declared_one_is_rejected() {
+    let value = ExpiryBox::new(0x1_0000_0000);
+
+    assert_eq!(
+        value.encode_payload(&mut [0; 8]),
+        Err(EncodeError::BufferLengthMismatch {
+            expected: 12,
+            actual: 8
         })
     );
 }

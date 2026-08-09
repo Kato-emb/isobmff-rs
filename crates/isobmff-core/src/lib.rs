@@ -16,6 +16,7 @@ mod box_header;
 mod box_size;
 mod box_type;
 mod fourcc;
+mod full_box;
 mod raw_box;
 mod uuid;
 
@@ -26,5 +27,6 @@ pub use box_header::{BoxHeader, BoxHeaderError};
 pub use box_size::{BoxSize, CompactSize, ExtendedSize};
 pub use box_type::{BoxType, CompactType};
 pub use fourcc::FourCC;
+pub use full_box::{FullBoxFields, FullBoxFlags};
 pub use raw_box::{Boxes, RawBox, boxes};
 pub use uuid::Uuid;
