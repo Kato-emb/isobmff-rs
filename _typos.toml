@@ -3,3 +3,4 @@
 # rather than prose — correcting one would change the format.
 [default.extend-words]
 trak = "trak"
+trun = "trun"
