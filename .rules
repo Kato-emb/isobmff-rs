@@ -15,6 +15,7 @@
 * Put each kind of information in one place: How in code, What in tests, Why in commit logs, Why not in code comments (`//`).
 * Do not write code comments (`//`) to summarize or organize what the code does — the code already says How. Write a `//` comment only to record Why not: why an obvious-looking alternative was rejected, why a non-obvious workaround is required, or which pitfall is being avoided.
 * Doc comments (`///` `//!`) are separate: they state the public contract — what a caller may rely on. Do not put Why not in them; that belongs in `//`.
+* A doctest body sits inside a doc comment, so the ban on `//` comments that summarize How does not reach it: mark the sections of a visible doctest body with brief one-line `// ...` comments, as the standard library does, so a reader can scan the example.
 * A test should read as an executable specification: its name and body state the behavior, not the mechanics of exercising it.
 * `// TODO:` and `// FIXME:` are exempt from the Why-not rule.
 
@@ -37,6 +38,7 @@ Public identifiers take their vocabulary from ISO/IEC 14496-12, so that users wh
 * Box types carry `#[doc(alias = "mvhd")]` with their fourcc so rustdoc search finds them by either name.
 * Fields use the spec's field names, splitting fused words into snake_case: `channelcount` becomes `channel_count`.
 * A module hosting one box is named by its fourcc (`mvhd`); a module hosting a box family is named by the spec term in snake_case (`chunk_offset` for `stco`/`co64`).
+* A fourcc is spec vocabulary, not an abbreviation: it names a field or a local as readily as a module, without the "Do not abbreviate variable names" rule reaching it. A fourcc invented for an example is not covered — spell the name out there.
 * Where no spec term exists or it collides with Rust (the spec's `Box`), build the closest compound from spec vocabulary (`RawBox`, `BoxDecode`) — never a synonym that renames a spec concept.
 * Every box module doc and box type doc cite the spec section, e.g. ``//! [`MovieHeaderBox`] (`mvhd`), ISO/IEC 14496-12 §8.2.2``.
 
