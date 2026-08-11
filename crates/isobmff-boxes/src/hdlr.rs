@@ -2,7 +2,7 @@
 
 use isobmff_core::{
     BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FourCC, FullBoxFields,
-    FullBoxFlags, Utf8CString,
+    FullBoxFlags, NullTerminatedString,
 };
 
 use crate::field::{split_field, split_field_mut};
@@ -17,14 +17,14 @@ const FIXED_FIELDS_LEN: u64 = 24;
 /// `soun` for audio — and the `name` is human-readable text a tool may show.
 ///
 /// The `name` is read leniently: files that leave its terminator off are common,
-/// and [`Utf8CString`] accepts them. Writing puts a terminator back.
+/// and [`NullTerminatedString`] accepts them. Writing puts a terminator back.
 #[doc(alias = "hdlr")]
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct HandlerBox {
     pre_defined: u32,
     handler_type: FourCC,
-    name: Utf8CString,
+    name: NullTerminatedString,
 }
 
 impl HandlerBox {
@@ -33,7 +33,7 @@ impl HandlerBox {
     /// The `pre_defined` field is left zero, as the spec declares it for a file
     /// written to this revision.
     #[must_use]
-    pub const fn new(handler_type: FourCC, name: Utf8CString) -> Self {
+    pub const fn new(handler_type: FourCC, name: NullTerminatedString) -> Self {
         Self {
             pre_defined: 0,
             handler_type,
@@ -55,7 +55,7 @@ impl HandlerBox {
 
     /// Returns the human-readable name of the handler
     #[must_use]
-    pub const fn name(&self) -> &Utf8CString {
+    pub const fn name(&self) -> &NullTerminatedString {
         &self.name
     }
 }
@@ -88,7 +88,7 @@ impl BoxDecode for HandlerBox {
         Ok(Self {
             pre_defined: u32::from_be_bytes(*pre_defined),
             handler_type: FourCC::new(*handler_type),
-            name: Utf8CString::from_slice(name)?,
+            name: NullTerminatedString::from_slice(name)?,
         })
     }
 }
@@ -126,7 +126,7 @@ mod tests {
     use alloc::string::String;
     use alloc::vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, DecodeError, FourCC, Utf8CString};
+    use isobmff_core::{BoxDecode, BoxEncode, DecodeError, FourCC, NullTerminatedString};
 
     use super::HandlerBox;
 
@@ -134,7 +134,7 @@ mod tests {
     fn video_handler() -> HandlerBox {
         HandlerBox::new(
             FourCC::new(*b"vide"),
-            Utf8CString::new(String::from("VideoHandler")).unwrap(),
+            NullTerminatedString::new(String::from("VideoHandler")).unwrap(),
         )
     }
 
