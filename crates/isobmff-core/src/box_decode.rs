@@ -7,6 +7,7 @@ use core::fmt;
 use core::str;
 
 use crate::box_type::BoxType;
+use crate::field::FieldReadError;
 use crate::raw_box::RawBoxError;
 
 /// Value that the payload of a box decodes into
@@ -121,6 +122,8 @@ pub enum DecodeError {
         /// Bytes left over once every field was read
         remaining: u64,
     },
+    /// Fields of the box do not read off its payload
+    Field(FieldReadError),
     /// Full box declares a version the box does not read
     UnsupportedVersion(u8),
     /// Field the spec declares as text does not read as UTF-8
@@ -171,6 +174,12 @@ impl DecodeError {
     }
 }
 
+impl From<FieldReadError> for DecodeError {
+    fn from(error: FieldReadError) -> Self {
+        Self::Field(error)
+    }
+}
+
 impl From<RawBoxError> for DecodeError {
     fn from(error: RawBoxError) -> Self {
         Self::Framing(error)
@@ -188,6 +197,9 @@ impl fmt::Display for DecodeError {
                 formatter,
                 "box payload leaves {remaining} bytes past the fields it holds"
             ),
+            Self::Field(_) => {
+                formatter.write_str("box payload does not read as the fields it holds")
+            }
             Self::UnsupportedVersion(version) => write!(
                 formatter,
                 "full box declares version {version}, which this box does not read"
@@ -226,6 +238,7 @@ impl error::Error for DecodeError {
             | Self::MissingMandatoryBox(_)
             | Self::DuplicateBox(_)
             | Self::EntryCountMismatch { .. } => None,
+            Self::Field(ref error) => Some(error),
             Self::InvalidUtf8(ref error) => Some(error),
             Self::Framing(ref error) => Some(error),
             #[cfg(feature = "alloc")]

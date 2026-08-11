@@ -4,3 +4,7 @@
 # `#![cfg_attr(test, allow(clippy::indexing_slicing, ...))]`.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+
+# Proper nouns the format's vocabulary carries, which `doc_markdown` would
+# otherwise read as identifiers that lost their backticks.
+doc-valid-idents = ["QuickTime", ".."]
