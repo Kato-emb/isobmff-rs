@@ -5,8 +5,8 @@
 //! `#[path = "helpers/vendor.rs"] mod vendor;`.
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FullBoxFields,
-    FullBoxFlags, Uuid,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FieldReader,
+    FieldWidth, FieldWriter, FullBoxFields, FullBoxFlags, Uuid,
 };
 
 /// Returns the length as the payload traits count it
@@ -34,23 +34,11 @@ impl BoxDefinition for SequenceNumberBox {
 
 impl BoxDecode for SequenceNumberBox {
     fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
-        let (field, rest) =
-            payload
-                .split_first_chunk::<4>()
-                .ok_or(DecodeError::TruncatedPayload {
-                    needed: 4,
-                    available: byte_count(payload.len()),
-                })?;
+        let mut reader = FieldReader::new(payload);
+        let sequence_number = reader.read_u32()?;
+        reader.finish()?;
 
-        if !rest.is_empty() {
-            return Err(DecodeError::TrailingBytes {
-                remaining: byte_count(rest.len()),
-            });
-        }
-
-        Ok(Self {
-            sequence_number: u32::from_be_bytes(*field),
-        })
+        Ok(Self { sequence_number })
     }
 }
 
@@ -60,13 +48,11 @@ impl BoxEncode for SequenceNumberBox {
     }
 
     fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
-        let mismatch = buffer_length_mismatch(self.payload_len(), buffer);
         if byte_count(buffer.len()) != self.payload_len() {
-            return Err(mismatch);
+            return Err(buffer_length_mismatch(self.payload_len(), buffer));
         }
 
-        let field = buffer.first_chunk_mut::<4>().ok_or(mismatch)?;
-        *field = self.sequence_number.to_be_bytes();
+        FieldWriter::new(buffer).write_u32(self.sequence_number)?;
 
         Ok(())
     }
@@ -134,6 +120,14 @@ impl ExpiryBox {
         }
     }
 
+    /// Returns the width the given version carries the expiry time at
+    fn field_width(version: u8) -> FieldWidth {
+        match version {
+            0 => FieldWidth::Compact,
+            _ => FieldWidth::Extended,
+        }
+    }
+
     /// Returns the payload length the version selects
     fn payload_len_at_version(version: u8) -> u64 {
         match version {
@@ -149,33 +143,10 @@ impl BoxDefinition for ExpiryBox {
 
 impl BoxDecode for ExpiryBox {
     fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
-        let truncated_at = |needed: u64| DecodeError::TruncatedPayload {
-            needed,
-            available: byte_count(payload.len()),
-        };
-
-        let (word, after_word) = payload
-            .split_first_chunk::<4>()
-            .ok_or_else(|| truncated_at(4))?;
-        let full_box = FullBoxFields::from_bytes(word);
-        let truncated = || truncated_at(Self::payload_len_at_version(full_box.version()));
-
-        let (expiry_time, rest) = match full_box.version() {
-            0 => {
-                let (field, rest) = after_word.split_first_chunk::<4>().ok_or_else(truncated)?;
-                (u64::from(u32::from_be_bytes(*field)), rest)
-            }
-            _ => {
-                let (field, rest) = after_word.split_first_chunk::<8>().ok_or_else(truncated)?;
-                (u64::from_be_bytes(*field), rest)
-            }
-        };
-
-        if !rest.is_empty() {
-            return Err(DecodeError::TrailingBytes {
-                remaining: byte_count(rest.len()),
-            });
-        }
+        let mut reader = FieldReader::new(payload);
+        let full_box = FullBoxFields::from_bytes(reader.read_bytes::<4>()?);
+        let expiry_time = reader.read_unsigned(Self::field_width(full_box.version()))?;
+        reader.finish()?;
 
         Ok(Self {
             full_box,
@@ -190,26 +161,13 @@ impl BoxEncode for ExpiryBox {
     }
 
     fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
-        let mismatch = buffer_length_mismatch(self.payload_len(), buffer);
         if byte_count(buffer.len()) != self.payload_len() {
-            return Err(mismatch);
+            return Err(buffer_length_mismatch(self.payload_len(), buffer));
         }
 
-        let (word, after_word) = buffer.split_first_chunk_mut::<4>().ok_or(mismatch)?;
-        *word = self.full_box.to_bytes();
-
-        match self.full_box.version() {
-            0 => {
-                let field = after_word.first_chunk_mut::<4>().ok_or(mismatch)?;
-                *field = u32::try_from(self.expiry_time)
-                    .map_err(|_| mismatch)?
-                    .to_be_bytes();
-            }
-            _ => {
-                let field = after_word.first_chunk_mut::<8>().ok_or(mismatch)?;
-                *field = self.expiry_time.to_be_bytes();
-            }
-        }
+        let mut writer = FieldWriter::new(buffer);
+        writer.write_bytes(&self.full_box.to_bytes())?;
+        writer.write_unsigned(Self::field_width(self.full_box.version()), self.expiry_time)?;
 
         Ok(())
     }
@@ -230,11 +188,7 @@ impl BoxDefinition for VendorMarkerBox {
 
 impl BoxDecode for VendorMarkerBox {
     fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
-        if !payload.is_empty() {
-            return Err(DecodeError::TrailingBytes {
-                remaining: byte_count(payload.len()),
-            });
-        }
+        FieldReader::new(payload).finish()?;
 
         Ok(Self)
     }

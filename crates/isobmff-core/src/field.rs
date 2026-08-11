@@ -1,8 +1,38 @@
-//! [`FieldReader`] and [`FieldWriter`], the fixed-width fields a box payload of ISO/IEC 14496-12 §4.2 is made of
+//! [`FieldReader`] and [`FieldWriter`], the fields a box payload of ISO/IEC 14496-12 §4.2 is made of
 
 use core::error;
 use core::fmt;
 use core::mem;
+
+/// Width a box settles for a field it carries at more than one size
+///
+/// A full box that carries a value both ways says which it used in its
+/// version, and every field that widens with the version takes the same width.
+/// Choosing it is the box's part; this is what the choice comes to, and
+/// [`read_unsigned`](FieldReader::read_unsigned) and
+/// [`write_unsigned`](FieldWriter::write_unsigned) are where it is spent.
+///
+/// # Examples
+///
+/// ```
+/// use isobmff_core::{FieldReader, FieldWidth};
+///
+/// // The width a box carrying its times in 64 bits settles on
+/// let width = FieldWidth::Extended;
+///
+/// // The field occupies those eight bytes and reads as the integer they spell
+/// let mut reader = FieldReader::new(b"\0\0\0\0\0\0\0\x07");
+/// assert_eq!(reader.read_unsigned(width), Ok(7));
+/// assert_eq!(reader.finish(), Ok(()));
+/// ```
+#[non_exhaustive]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum FieldWidth {
+    /// Field of four bytes
+    Compact,
+    /// Field of eight bytes
+    Extended,
+}
 
 /// Cursor reading the fields of a box payload off its front
 ///
@@ -126,6 +156,19 @@ impl<'payload> FieldReader<'payload> {
     ///   inside the field.
     pub fn read_u64(&mut self) -> Result<u64, FieldReadError> {
         Ok(u64::from_be_bytes(*self.read_bytes::<8>()?))
+    }
+
+    /// Reads the next field as an unsigned integer of the width the box settled
+    ///
+    /// # Errors
+    ///
+    /// * [`UnexpectedEof`](FieldReadError::UnexpectedEof): the payload ends
+    ///   inside the field.
+    pub fn read_unsigned(&mut self, width: FieldWidth) -> Result<u64, FieldReadError> {
+        match width {
+            FieldWidth::Compact => Ok(u64::from(self.read_u32()?)),
+            FieldWidth::Extended => self.read_u64(),
+        }
     }
 
     /// Returns the bytes of the payload no field has taken
@@ -280,6 +323,26 @@ impl<'buffer> FieldWriter<'buffer> {
         self.write_bytes(&value.to_be_bytes())
     }
 
+    /// Writes the next field as an unsigned integer of the width the box settled
+    ///
+    /// # Errors
+    ///
+    /// * [`UnexpectedEof`](FieldWriteError::UnexpectedEof): the buffer ends
+    ///   inside the field.
+    /// * [`OutOfRange`](FieldWriteError::OutOfRange): `value` is wider than the
+    ///   field, which leaves nothing to write.
+    pub fn write_unsigned(&mut self, width: FieldWidth, value: u64) -> Result<(), FieldWriteError> {
+        match width {
+            FieldWidth::Compact => {
+                let narrow = u32::try_from(value)
+                    .map_err(|_| FieldWriteError::OutOfRange { value, width })?;
+
+                self.write_u32(narrow)
+            }
+            FieldWidth::Extended => self.write_u64(value),
+        }
+    }
+
     /// Returns the buffer no field has written into
     ///
     /// A box writes its last field into these bytes when the field runs to the
@@ -355,9 +418,10 @@ impl error::Error for FieldReadError {}
 
 /// Reason the fields of a box do not write into the buffer of its payload
 ///
-/// Both failures say the same thing about a box: the length its payload
+/// The first two say the same thing about a box: the length its payload
 /// declares and the fields it writes do not agree. Which of the two is wrong
-/// is the box's to settle — the buffer is the length that was declared.
+/// is the box's to settle — the buffer is the length that was declared. The
+/// third is about one field alone, and no buffer would make it write.
 ///
 /// A box reports this as [`EncodeError::Field`](crate::EncodeError::Field),
 /// which the `?` of an [`encode_payload`](crate::BoxEncode::encode_payload)
@@ -377,6 +441,13 @@ pub enum FieldWriteError {
         /// Bytes left over once every field was written
         remaining: u64,
     },
+    /// Value is wider than the field it was given to
+    OutOfRange {
+        /// Value the field was given
+        value: u64,
+        /// Width of the field that was given it
+        width: FieldWidth,
+    },
 }
 
 impl fmt::Display for FieldWriteError {
@@ -390,6 +461,17 @@ impl fmt::Display for FieldWriteError {
                 formatter,
                 "buffer holds {remaining} bytes past the fields the box wrote"
             ),
+            Self::OutOfRange { value, width } => {
+                let bytes = match width {
+                    FieldWidth::Compact => 4,
+                    FieldWidth::Extended => 8,
+                };
+
+                write!(
+                    formatter,
+                    "value {value} does not fit the {bytes} bytes of the field it was given to"
+                )
+            }
         }
     }
 }
@@ -400,7 +482,7 @@ impl error::Error for FieldWriteError {}
 mod tests {
     use alloc::string::ToString as _;
 
-    use super::{FieldReadError, FieldReader, FieldWriteError, FieldWriter};
+    use super::{FieldReadError, FieldReader, FieldWidth, FieldWriteError, FieldWriter};
 
     #[test]
     fn fields_are_read_off_the_front_in_the_order_they_are_asked_for() {
@@ -434,6 +516,15 @@ mod tests {
             reader.finish(),
             Err(FieldReadError::TrailingBytes { remaining: 1 })
         );
+    }
+
+    #[test]
+    fn a_field_of_either_width_reads_as_the_integer_its_bytes_spell() {
+        let mut compact = FieldReader::new(b"\0\0\0\x07");
+        let mut extended = FieldReader::new(b"\0\0\0\0\0\0\0\x07");
+
+        assert_eq!(compact.read_unsigned(FieldWidth::Compact), Ok(7));
+        assert_eq!(extended.read_unsigned(FieldWidth::Extended), Ok(7));
     }
 
     #[test]
@@ -483,6 +574,32 @@ mod tests {
     }
 
     #[test]
+    fn a_field_of_either_width_writes_the_bytes_that_width_names() {
+        let mut buffer = [0; 12];
+        let mut writer = FieldWriter::new(&mut buffer);
+
+        assert_eq!(writer.write_unsigned(FieldWidth::Compact, 7), Ok(()));
+        assert_eq!(writer.write_unsigned(FieldWidth::Extended, 7), Ok(()));
+        assert_eq!(writer.finish(), Ok(()));
+        assert_eq!(&buffer, b"\0\0\0\x07\0\0\0\0\0\0\0\x07");
+    }
+
+    #[test]
+    fn a_value_wider_than_its_field_is_refused_before_a_byte_is_written() {
+        let mut buffer = [0xff; 4];
+
+        assert_eq!(
+            FieldWriter::new(&mut buffer)
+                .write_unsigned(FieldWidth::Compact, u64::from(u32::MAX) + 1),
+            Err(FieldWriteError::OutOfRange {
+                value: 0x1_0000_0000,
+                width: FieldWidth::Compact
+            })
+        );
+        assert_eq!(buffer, [0xff; 4]);
+    }
+
+    #[test]
     fn the_bytes_no_field_wrote_into_are_what_a_variable_field_writes_to() {
         let mut buffer = [0; 6];
         let mut writer = FieldWriter::new(&mut buffer);
@@ -518,6 +635,10 @@ mod tests {
             available: 12,
         };
         let trailing = FieldWriteError::TrailingBytes { remaining: 4 };
+        let out_of_range = FieldWriteError::OutOfRange {
+            value: 0x1_0000_0000,
+            width: FieldWidth::Compact,
+        };
 
         assert_eq!(
             exhausted.to_string(),
@@ -526,6 +647,10 @@ mod tests {
         assert_eq!(
             trailing.to_string(),
             "buffer holds 4 bytes past the fields the box wrote"
+        );
+        assert_eq!(
+            out_of_range.to_string(),
+            "value 4294967296 does not fit the 4 bytes of the field it was given to"
         );
     }
 }

@@ -3,12 +3,11 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FullBoxFields,
-    FullBoxFlags, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FieldReader,
+    FieldWriter, FullBoxFields, FullBoxFlags, boxes,
 };
 
 use crate::container::{total_encoded_len, write_all};
-use crate::field::{split_field, split_field_mut};
 
 /// Length of the fields that precede the entries
 const FIXED_FIELDS_LEN: u64 = 8;
@@ -53,25 +52,22 @@ impl BoxDecode for SampleDescriptionBox {
     ///
     /// * [`UnsupportedVersion`](DecodeError::UnsupportedVersion): the box
     ///   declares a version other than 0.
-    /// * [`TruncatedPayload`](DecodeError::TruncatedPayload): the payload ends
-    ///   before the fields that precede the entries.
+    /// * [`Field`](DecodeError::Field): the payload ends before the fields that
+    ///   precede the entries.
     /// * [`Framing`](DecodeError::Framing): an entry does not frame as a box.
     /// * [`EntryCountMismatch`](DecodeError::EntryCountMismatch): the
     ///   `entry_count` field disagrees with the entries that follow it.
     fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
-        let available = u64::try_from(payload.len()).unwrap_or(u64::MAX);
-        let (full_box_field, rest) = split_field::<4>(payload, 4, available)?;
-
-        let version = FullBoxFields::from_bytes(full_box_field).version();
+        let mut reader = FieldReader::new(payload);
+        let version = FullBoxFields::from_bytes(reader.read_bytes::<4>()?).version();
         if version != 0 {
             return Err(DecodeError::UnsupportedVersion(version));
         }
 
-        let (entry_count_field, rest) = split_field::<4>(rest, FIXED_FIELDS_LEN, available)?;
-        let declared = u64::from(u32::from_be_bytes(*entry_count_field));
+        let declared = u64::from(reader.read_u32()?);
 
         let mut entries = Vec::new();
-        for entry in boxes(rest) {
+        for entry in boxes(reader.remainder()) {
             let entry = entry?;
             entries.push(AnyBox::from_raw_bytes(
                 entry.header().box_type(),
@@ -101,18 +97,14 @@ impl BoxEncode for SampleDescriptionBox {
             return Err(mismatch);
         }
 
-        let (full_box_field, rest) = split_field_mut::<4>(buffer, mismatch)?;
-        *full_box_field = FullBoxFields::new(0, FullBoxFlags::ZERO).to_bytes();
-
-        let (entry_count_field, rest) = split_field_mut::<4>(rest, mismatch)?;
+        let mut writer = FieldWriter::new(buffer);
+        writer.write_bytes(&FullBoxFields::new(0, FullBoxFlags::ZERO).to_bytes())?;
         // Why not saturate silently: an entry count past `u32` cannot be written
         // at all, and the box has already declared a length built from it, so
         // this stands for a `Vec` no target can hold.
-        *entry_count_field = u32::try_from(self.entries.len())
-            .map_err(|_| mismatch)?
-            .to_be_bytes();
+        writer.write_u32(u32::try_from(self.entries.len()).map_err(|_| mismatch)?)?;
 
-        write_all(&self.entries, rest)?;
+        write_all(&self.entries, writer.into_remainder())?;
 
         Ok(())
     }

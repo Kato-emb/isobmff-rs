@@ -1,11 +1,9 @@
 //! [`HandlerBox`] (`hdlr`), ISO/IEC 14496-12 §8.4.3
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FourCC, FullBoxFields,
-    FullBoxFlags, NullTerminatedString,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FieldReader,
+    FieldWriter, FourCC, FullBoxFields, FullBoxFlags, NullTerminatedString,
 };
-
-use crate::field::{split_field, split_field_mut};
 
 /// Length of the fields that precede the `name`
 const FIXED_FIELDS_LEN: u64 = 24;
@@ -42,6 +40,11 @@ impl HandlerBox {
     }
 
     /// Returns the field the spec reserves for a later definition
+    ///
+    /// The value is carried through un-inspected: this box reads no meaning
+    /// into it and does not zero it on the way out, so a file that puts data
+    /// here — as writers in the QuickTime line do — reads back as the bytes it
+    /// was written with.
     #[must_use]
     pub const fn pre_defined(&self) -> u32 {
         self.pre_defined
@@ -69,26 +72,24 @@ impl BoxDecode for HandlerBox {
     ///
     /// * [`UnsupportedVersion`](DecodeError::UnsupportedVersion): the box
     ///   declares a version other than 0.
-    /// * [`TruncatedPayload`](DecodeError::TruncatedPayload): the payload ends
-    ///   before the fields that precede the `name`.
+    /// * [`Field`](DecodeError::Field): the payload ends before the fields that
+    ///   precede the `name`.
     /// * [`InvalidUtf8`](DecodeError::InvalidUtf8): the `name` is not UTF-8.
     fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
-        let available = u64::try_from(payload.len()).unwrap_or(u64::MAX);
-        let (full_box_field, rest) = split_field::<4>(payload, 4, available)?;
-
-        let version = FullBoxFields::from_bytes(full_box_field).version();
+        let mut reader = FieldReader::new(payload);
+        let version = FullBoxFields::from_bytes(reader.read_bytes::<4>()?).version();
         if version != 0 {
             return Err(DecodeError::UnsupportedVersion(version));
         }
 
-        let (pre_defined, rest) = split_field::<4>(rest, FIXED_FIELDS_LEN, available)?;
-        let (handler_type, rest) = split_field::<4>(rest, FIXED_FIELDS_LEN, available)?;
-        let (_reserved, name) = split_field::<12>(rest, FIXED_FIELDS_LEN, available)?;
+        let pre_defined = reader.read_u32()?;
+        let handler_type = FourCC::new(*reader.read_bytes::<4>()?);
+        let _reserved = reader.read_bytes::<12>()?;
 
         Ok(Self {
-            pre_defined: u32::from_be_bytes(*pre_defined),
-            handler_type: FourCC::new(*handler_type),
-            name: NullTerminatedString::from_slice(name)?,
+            pre_defined,
+            handler_type,
+            name: NullTerminatedString::from_slice(reader.remainder())?,
         })
     }
 }
@@ -101,21 +102,16 @@ impl BoxEncode for HandlerBox {
     fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
         let expected = self.payload_len();
         let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
-        let mismatch = EncodeError::BufferLengthMismatch { expected, actual };
         if actual != expected {
-            return Err(mismatch);
+            return Err(EncodeError::BufferLengthMismatch { expected, actual });
         }
 
-        let (full_box_field, rest) = split_field_mut::<4>(buffer, mismatch)?;
-        *full_box_field = FullBoxFields::new(0, FullBoxFlags::ZERO).to_bytes();
-
-        let (pre_defined, rest) = split_field_mut::<4>(rest, mismatch)?;
-        *pre_defined = self.pre_defined.to_be_bytes();
-        let (handler_type, rest) = split_field_mut::<4>(rest, mismatch)?;
-        *handler_type = *self.handler_type.as_bytes();
-        let (reserved, rest) = split_field_mut::<12>(rest, mismatch)?;
-        *reserved = [0; 12];
-        self.name.encode(rest)?;
+        let mut writer = FieldWriter::new(buffer);
+        writer.write_bytes(&FullBoxFields::new(0, FullBoxFlags::ZERO).to_bytes())?;
+        writer.write_u32(self.pre_defined)?;
+        writer.write_bytes(self.handler_type.as_bytes())?;
+        writer.write_bytes(&[0; 12])?;
+        self.name.encode(writer.into_remainder())?;
 
         Ok(())
     }
@@ -126,7 +122,9 @@ mod tests {
     use alloc::string::String;
     use alloc::vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, DecodeError, FourCC, NullTerminatedString};
+    use isobmff_core::{
+        BoxDecode, BoxEncode, DecodeError, FieldReadError, FourCC, NullTerminatedString,
+    };
 
     use super::HandlerBox;
 
@@ -170,10 +168,10 @@ mod tests {
     fn a_payload_ending_before_the_name_is_rejected_as_truncated() {
         assert!(matches!(
             HandlerBox::decode_payload(&[0; 23]),
-            Err(DecodeError::TruncatedPayload {
+            Err(DecodeError::Field(FieldReadError::UnexpectedEof {
                 needed: 24,
                 available: 23
-            })
+            }))
         ));
     }
 

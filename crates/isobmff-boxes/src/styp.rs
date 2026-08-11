@@ -3,10 +3,15 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FourCC,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FieldReader,
+    FieldWriter, FourCC,
 };
 
-use crate::brand::{brands_payload_len, decode_brands, encode_brands};
+/// Length of the fields that precede the compatible brands
+const FIXED_FIELDS_LEN: u64 = 8;
+
+/// Length one brand occupies
+const BRAND_LEN: u64 = 4;
 
 /// Box that declares the brands a segment complies with
 ///
@@ -65,11 +70,18 @@ impl BoxDefinition for SegmentTypeBox {
 impl BoxDecode for SegmentTypeBox {
     /// # Errors
     ///
-    /// * [`TruncatedPayload`](DecodeError::TruncatedPayload): the payload ends
-    ///   inside a field, which includes a `compatible_brands` list whose length
-    ///   is not a multiple of four.
+    /// * [`Field`](DecodeError::Field): the payload ends inside a field, which
+    ///   includes a `compatible_brands` list whose length is not a multiple of
+    ///   four.
     fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
-        let (major_brand, minor_version, compatible_brands) = decode_brands(payload)?;
+        let mut reader = FieldReader::new(payload);
+        let major_brand = FourCC::new(*reader.read_bytes::<4>()?);
+        let minor_version = reader.read_u32()?;
+
+        let mut compatible_brands = Vec::new();
+        while !reader.remainder().is_empty() {
+            compatible_brands.push(FourCC::new(*reader.read_bytes::<4>()?));
+        }
 
         Ok(Self::new(major_brand, minor_version, compatible_brands))
     }
@@ -77,16 +89,27 @@ impl BoxDecode for SegmentTypeBox {
 
 impl BoxEncode for SegmentTypeBox {
     fn payload_len(&self) -> u64 {
-        brands_payload_len(&self.compatible_brands)
+        u64::try_from(self.compatible_brands.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(BRAND_LEN)
+            .saturating_add(FIXED_FIELDS_LEN)
     }
 
     fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
-        encode_brands(
-            self.major_brand,
-            self.minor_version,
-            &self.compatible_brands,
-            buffer,
-        )
+        let expected = self.payload_len();
+        let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
+        if actual != expected {
+            return Err(EncodeError::BufferLengthMismatch { expected, actual });
+        }
+
+        let mut writer = FieldWriter::new(buffer);
+        writer.write_bytes(self.major_brand.as_bytes())?;
+        writer.write_u32(self.minor_version)?;
+        for brand in &self.compatible_brands {
+            writer.write_bytes(brand.as_bytes())?;
+        }
+
+        Ok(())
     }
 }
 

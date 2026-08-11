@@ -3,10 +3,15 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FourCC,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FieldReader,
+    FieldWriter, FourCC,
 };
 
-use crate::brand::{brands_payload_len, decode_brands, encode_brands};
+/// Length of the fields that precede the compatible brands
+const FIXED_FIELDS_LEN: u64 = 8;
+
+/// Length one brand occupies
+const BRAND_LEN: u64 = 4;
 
 /// Box that declares the brands a file complies with
 ///
@@ -86,11 +91,18 @@ impl BoxDefinition for FileTypeBox {
 impl BoxDecode for FileTypeBox {
     /// # Errors
     ///
-    /// * [`TruncatedPayload`](DecodeError::TruncatedPayload): the payload ends
-    ///   inside a field, which includes a `compatible_brands` list whose length
-    ///   is not a multiple of four.
+    /// * [`Field`](DecodeError::Field): the payload ends inside a field, which
+    ///   includes a `compatible_brands` list whose length is not a multiple of
+    ///   four.
     fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
-        let (major_brand, minor_version, compatible_brands) = decode_brands(payload)?;
+        let mut reader = FieldReader::new(payload);
+        let major_brand = FourCC::new(*reader.read_bytes::<4>()?);
+        let minor_version = reader.read_u32()?;
+
+        let mut compatible_brands = Vec::new();
+        while !reader.remainder().is_empty() {
+            compatible_brands.push(FourCC::new(*reader.read_bytes::<4>()?));
+        }
 
         Ok(Self::new(major_brand, minor_version, compatible_brands))
     }
@@ -98,16 +110,27 @@ impl BoxDecode for FileTypeBox {
 
 impl BoxEncode for FileTypeBox {
     fn payload_len(&self) -> u64 {
-        brands_payload_len(&self.compatible_brands)
+        u64::try_from(self.compatible_brands.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(BRAND_LEN)
+            .saturating_add(FIXED_FIELDS_LEN)
     }
 
     fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
-        encode_brands(
-            self.major_brand,
-            self.minor_version,
-            &self.compatible_brands,
-            buffer,
-        )
+        let expected = self.payload_len();
+        let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
+        if actual != expected {
+            return Err(EncodeError::BufferLengthMismatch { expected, actual });
+        }
+
+        let mut writer = FieldWriter::new(buffer);
+        writer.write_bytes(self.major_brand.as_bytes())?;
+        writer.write_u32(self.minor_version)?;
+        for brand in &self.compatible_brands {
+            writer.write_bytes(brand.as_bytes())?;
+        }
+
+        Ok(())
     }
 }
 
@@ -116,7 +139,9 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxWrite as _, FourCC};
+    use isobmff_core::{
+        BoxDecode, BoxEncode as _, BoxWrite as _, DecodeError, EncodeError, FieldReadError, FourCC,
+    };
 
     use super::FileTypeBox;
 
@@ -149,5 +174,65 @@ mod tests {
             FileTypeBox::decode_payload(whole.get(8..).unwrap()).unwrap(),
             file_type
         );
+    }
+
+    #[test]
+    fn a_payload_reads_into_the_fields_the_spec_lays_out_in_order() {
+        assert_eq!(
+            FileTypeBox::decode_payload(b"iso6\0\0\x02\0iso6dash").unwrap(),
+            FileTypeBox::new(
+                FourCC::new(*b"iso6"),
+                512,
+                vec![FourCC::new(*b"iso6"), FourCC::new(*b"dash")]
+            )
+        );
+    }
+
+    #[test]
+    fn a_payload_ending_inside_the_minor_version_is_rejected_as_truncated() {
+        assert!(matches!(
+            FileTypeBox::decode_payload(b"isom\0\0"),
+            Err(DecodeError::Field(FieldReadError::UnexpectedEof {
+                needed: 8,
+                available: 6
+            }))
+        ));
+    }
+
+    #[test]
+    fn a_compatible_brand_cut_short_names_the_length_that_would_complete_it() {
+        assert!(matches!(
+            FileTypeBox::decode_payload(b"isom\0\0\0\0iso"),
+            Err(DecodeError::Field(FieldReadError::UnexpectedEof {
+                needed: 12,
+                available: 11
+            }))
+        ));
+    }
+
+    #[test]
+    fn a_buffer_with_room_to_spare_is_refused_as_a_short_one_is() {
+        let file_type = FileTypeBox::new(FourCC::new(*b"isom"), 0, Vec::new());
+
+        assert_eq!(
+            file_type.encode_payload(&mut [0; 32]),
+            Err(EncodeError::BufferLengthMismatch {
+                expected: 8,
+                actual: 32
+            })
+        );
+    }
+
+    #[test]
+    fn every_compatible_brand_adds_four_bytes_to_the_fixed_fields() {
+        let none = FileTypeBox::new(FourCC::new(*b"isom"), 0, Vec::new());
+        let two = FileTypeBox::new(
+            FourCC::new(*b"isom"),
+            0,
+            vec![FourCC::new(*b"isom"), FourCC::new(*b"iso6")],
+        );
+
+        assert_eq!(none.payload_len(), 8);
+        assert_eq!(two.payload_len(), 16);
     }
 }

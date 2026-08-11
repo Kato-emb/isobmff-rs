@@ -125,7 +125,8 @@ pub(crate) mod tests {
     use alloc::vec::Vec;
 
     use isobmff_core::{
-        BoxDecode, BoxEncode, DecodeError, FourCC, FullBoxFlags, NullTerminatedString,
+        BoxDecode, BoxEncode, DecodeError, FourCC, FullBoxFlags, LanguageCode,
+        NullTerminatedString, QuickTimeDateTime,
     };
 
     use super::TrackBox;
@@ -140,9 +141,21 @@ pub(crate) mod tests {
     /// Track box of a video track, with every mandatory child in place
     pub(crate) fn track() -> TrackBox {
         TrackBox::new(
-            TrackHeaderBox::new(FullBoxFlags::new(0x3).unwrap(), 0, 0, 1, 90_000),
+            TrackHeaderBox::new(
+                FullBoxFlags::new(0x3).unwrap(),
+                QuickTimeDateTime::from_seconds(0),
+                QuickTimeDateTime::from_seconds(0),
+                1,
+                90_000,
+            ),
             MediaBox::new(
-                MediaHeaderBox::new(0, 0, 90_000, 90_000, 0x55C4).unwrap(),
+                MediaHeaderBox::new(
+                    QuickTimeDateTime::from_seconds(0),
+                    QuickTimeDateTime::from_seconds(0),
+                    90_000,
+                    90_000,
+                    LanguageCode::UND,
+                ),
                 HandlerBox::new(
                     FourCC::new(*b"vide"),
                     NullTerminatedString::new(String::from("VideoHandler")).unwrap(),
