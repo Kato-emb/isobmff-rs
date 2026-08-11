@@ -9,17 +9,17 @@
 #[path = "helpers/vendor.rs"]
 mod vendor;
 
-use isobmff_core::{BoxDecode, BoxEncode, DecodeError, EncodeError};
+use isobmff_core::{BoxDecode, BoxEncode, DecodeError, EncodeError, FieldReadError};
 use vendor::{ExpiryBox, OpaqueDataBox, SequenceNumberBox, VendorMarkerBox};
 
 #[test]
 fn a_payload_ending_inside_a_field_is_rejected_as_truncated() {
     assert!(matches!(
         SequenceNumberBox::decode_payload(b"\0\0\x07"),
-        Err(DecodeError::TruncatedPayload {
+        Err(DecodeError::Field(FieldReadError::UnexpectedEof {
             needed: 4,
             available: 3
-        })
+        }))
     ));
 }
 
@@ -27,7 +27,9 @@ fn a_payload_ending_inside_a_field_is_rejected_as_truncated() {
 fn a_payload_with_bytes_past_the_fields_is_rejected_instead_of_trimmed() {
     assert!(matches!(
         SequenceNumberBox::decode_payload(b"\0\0\0\x07!!"),
-        Err(DecodeError::TrailingBytes { remaining: 2 })
+        Err(DecodeError::Field(FieldReadError::TrailingBytes {
+            remaining: 2
+        }))
     ));
 }
 
@@ -35,7 +37,9 @@ fn a_payload_with_bytes_past_the_fields_is_rejected_instead_of_trimmed() {
 fn a_box_with_no_fields_rejects_a_payload_that_is_not_empty() {
     assert!(matches!(
         VendorMarkerBox::decode_payload(b"!"),
-        Err(DecodeError::TrailingBytes { remaining: 1 })
+        Err(DecodeError::Field(FieldReadError::TrailingBytes {
+            remaining: 1
+        }))
     ));
 }
 
@@ -43,10 +47,10 @@ fn a_box_with_no_fields_rejects_a_payload_that_is_not_empty() {
 fn a_payload_cut_short_of_the_field_its_version_selects_names_the_length_that_version_needs() {
     assert!(matches!(
         ExpiryBox::decode_payload(b"\x01\0\0\0\0\0\0\x01"),
-        Err(DecodeError::TruncatedPayload {
+        Err(DecodeError::Field(FieldReadError::UnexpectedEof {
             needed: 12,
             available: 8
-        })
+        }))
     ));
 }
 

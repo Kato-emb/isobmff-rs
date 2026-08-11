@@ -1,11 +1,9 @@
 //! [`TrackExtendsBox`] (`trex`), ISO/IEC 14496-12 §8.8.3
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FullBoxFields,
-    FullBoxFlags,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FieldReader,
+    FieldWriter, FullBoxFields, FullBoxFlags,
 };
-
-use crate::field::{check_payload_len, split_field, split_field_mut};
 
 /// Length of the payload, which has no version-dependent field
 const PAYLOAD_LEN: u64 = 24;
@@ -85,31 +83,28 @@ impl BoxDecode for TrackExtendsBox {
     ///
     /// * [`UnsupportedVersion`](DecodeError::UnsupportedVersion): the box
     ///   declares a version other than 0.
-    /// * [`TruncatedPayload`](DecodeError::TruncatedPayload): the payload is
-    ///   shorter than the fields require.
-    /// * [`TrailingBytes`](DecodeError::TrailingBytes): the payload is longer.
+    /// * [`Field`](DecodeError::Field): the payload ends inside a field, or
+    ///   holds bytes past the fields of the box.
     fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
-        let available = u64::try_from(payload.len()).unwrap_or(u64::MAX);
-        let (full_box_field, rest) = split_field::<4>(payload, 4, available)?;
-
-        let version = FullBoxFields::from_bytes(full_box_field).version();
+        let mut reader = FieldReader::new(payload);
+        let version = FullBoxFields::from_bytes(reader.read_bytes::<4>()?).version();
         if version != 0 {
             return Err(DecodeError::UnsupportedVersion(version));
         }
-        check_payload_len(PAYLOAD_LEN, available)?;
 
-        let (track_id, rest) = split_field::<4>(rest, PAYLOAD_LEN, available)?;
-        let (description_index, rest) = split_field::<4>(rest, PAYLOAD_LEN, available)?;
-        let (duration, rest) = split_field::<4>(rest, PAYLOAD_LEN, available)?;
-        let (size, rest) = split_field::<4>(rest, PAYLOAD_LEN, available)?;
-        let (flags, _rest) = split_field::<4>(rest, PAYLOAD_LEN, available)?;
+        let track_id = reader.read_u32()?;
+        let default_sample_description_index = reader.read_u32()?;
+        let default_sample_duration = reader.read_u32()?;
+        let default_sample_size = reader.read_u32()?;
+        let default_sample_flags = reader.read_u32()?;
+        reader.finish()?;
 
         Ok(Self {
-            track_id: u32::from_be_bytes(*track_id),
-            default_sample_description_index: u32::from_be_bytes(*description_index),
-            default_sample_duration: u32::from_be_bytes(*duration),
-            default_sample_size: u32::from_be_bytes(*size),
-            default_sample_flags: u32::from_be_bytes(*flags),
+            track_id,
+            default_sample_description_index,
+            default_sample_duration,
+            default_sample_size,
+            default_sample_flags,
         })
     }
 }
@@ -121,27 +116,20 @@ impl BoxEncode for TrackExtendsBox {
 
     fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
         let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
-        let mismatch = EncodeError::BufferLengthMismatch {
-            expected: PAYLOAD_LEN,
-            actual,
-        };
         if actual != PAYLOAD_LEN {
-            return Err(mismatch);
+            return Err(EncodeError::BufferLengthMismatch {
+                expected: PAYLOAD_LEN,
+                actual,
+            });
         }
 
-        let (full_box_field, rest) = split_field_mut::<4>(buffer, mismatch)?;
-        *full_box_field = FullBoxFields::new(0, FullBoxFlags::ZERO).to_bytes();
-
-        let (track_id, rest) = split_field_mut::<4>(rest, mismatch)?;
-        *track_id = self.track_id.to_be_bytes();
-        let (description_index, rest) = split_field_mut::<4>(rest, mismatch)?;
-        *description_index = self.default_sample_description_index.to_be_bytes();
-        let (duration, rest) = split_field_mut::<4>(rest, mismatch)?;
-        *duration = self.default_sample_duration.to_be_bytes();
-        let (size, rest) = split_field_mut::<4>(rest, mismatch)?;
-        *size = self.default_sample_size.to_be_bytes();
-        let (flags, _rest) = split_field_mut::<4>(rest, mismatch)?;
-        *flags = self.default_sample_flags.to_be_bytes();
+        let mut writer = FieldWriter::new(buffer);
+        writer.write_bytes(&FullBoxFields::new(0, FullBoxFlags::ZERO).to_bytes())?;
+        writer.write_u32(self.track_id)?;
+        writer.write_u32(self.default_sample_description_index)?;
+        writer.write_u32(self.default_sample_duration)?;
+        writer.write_u32(self.default_sample_size)?;
+        writer.write_u32(self.default_sample_flags)?;
 
         Ok(())
     }
@@ -151,7 +139,7 @@ impl BoxEncode for TrackExtendsBox {
 mod tests {
     use alloc::vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, DecodeError};
+    use isobmff_core::{BoxDecode, BoxEncode, DecodeError, FieldReadError};
 
     use super::TrackExtendsBox;
 
@@ -183,10 +171,10 @@ mod tests {
     fn a_payload_shorter_than_the_fields_is_rejected() {
         assert!(matches!(
             TrackExtendsBox::decode_payload(&[0; 23]),
-            Err(DecodeError::TruncatedPayload {
+            Err(DecodeError::Field(FieldReadError::UnexpectedEof {
                 needed: 24,
                 available: 23
-            })
+            }))
         ));
     }
 }

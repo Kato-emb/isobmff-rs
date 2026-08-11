@@ -1,13 +1,8 @@
 //! [`MovieHeaderBox`] (`mvhd`), ISO/IEC 14496-12 §8.2.2
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FullBoxFields,
-    FullBoxFlags,
-};
-
-use crate::field::{
-    check_payload_len, split_field, split_field_mut, split_i32_array, split_time, split_u32_array,
-    write_i32_array, write_time, write_u32_array,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FieldReader,
+    FieldWidth, FieldWriter, FullBoxFields, FullBoxFlags, I8F8, I16F16, Matrix, QuickTimeDateTime,
 };
 
 /// Length of the payload when version 0 carries the times in 32 bits
@@ -15,15 +10,6 @@ const PAYLOAD_LEN_VERSION_0: u64 = 100;
 
 /// Length of the payload when version 1 carries the times in 64 bits
 const PAYLOAD_LEN_VERSION_1: u64 = 112;
-
-/// Transformation matrix the spec gives as the template value
-const UNITY_MATRIX: [i32; 9] = [0x0001_0000, 0, 0, 0, 0x0001_0000, 0, 0, 0, 0x4000_0000];
-
-/// Playback rate the spec gives as the template value, 1.0 in 16.16 fixed point
-const NORMAL_RATE: i32 = 0x0001_0000;
-
-/// Playback volume the spec gives as the template value, 1.0 in 8.8 fixed point
-const FULL_VOLUME: i16 = 0x0100;
 
 /// Box that holds the declarations a presentation applies as a whole
 ///
@@ -40,10 +26,11 @@ const FULL_VOLUME: i16 = 0x0100;
 ///
 /// ```
 /// use isobmff_boxes::MovieHeaderBox;
-/// use isobmff_core::{BoxDecode, BoxWrite};
+/// use isobmff_core::{BoxDecode, BoxWrite, QuickTimeDateTime};
 ///
 /// // A movie of five seconds at millisecond resolution, with one track
-/// let movie_header = MovieHeaderBox::new(0, 0, 1_000, 5_000, 2);
+/// let epoch = QuickTimeDateTime::from_seconds(0);
+/// let movie_header = MovieHeaderBox::new(epoch, epoch, 1_000, 5_000, 2);
 ///
 /// // Times that fit in 32 bits are written at version 0
 /// assert_eq!(movie_header.encoded_len(), 108);
@@ -53,7 +40,7 @@ const FULL_VOLUME: i16 = 0x0100;
 /// assert_eq!(buffer.get(..12).unwrap(), b"\0\0\0lmvhd\0\0\0\0");
 ///
 /// // A duration past the 32-bit limit moves the times to version 1
-/// let long_movie = MovieHeaderBox::new(0, 0, 1_000, u64::from(u32::MAX) + 1, 2);
+/// let long_movie = MovieHeaderBox::new(epoch, epoch, 1_000, u64::from(u32::MAX) + 1, 2);
 /// assert_eq!(long_movie.encoded_len(), 120);
 ///
 /// // Either way the box reads back as the value that wrote it
@@ -66,13 +53,13 @@ const FULL_VOLUME: i16 = 0x0100;
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct MovieHeaderBox {
-    creation_time: u64,
-    modification_time: u64,
+    creation_time: QuickTimeDateTime,
+    modification_time: QuickTimeDateTime,
     timescale: u32,
     duration: u64,
-    rate: i32,
-    volume: i16,
-    matrix: [i32; 9],
+    rate: I16F16,
+    volume: I8F8,
+    matrix: Matrix,
     pre_defined: [u32; 6],
     next_track_id: u32,
 }
@@ -85,8 +72,8 @@ impl MovieHeaderBox {
     /// `pre_defined` is left zero.
     #[must_use]
     pub const fn new(
-        creation_time: u64,
-        modification_time: u64,
+        creation_time: QuickTimeDateTime,
+        modification_time: QuickTimeDateTime,
         timescale: u32,
         duration: u64,
         next_track_id: u32,
@@ -96,23 +83,23 @@ impl MovieHeaderBox {
             modification_time,
             timescale,
             duration,
-            rate: NORMAL_RATE,
-            volume: FULL_VOLUME,
-            matrix: UNITY_MATRIX,
+            rate: I16F16::ONE,
+            volume: I8F8::ONE,
+            matrix: Matrix::UNITY,
             pre_defined: [0; 6],
             next_track_id,
         }
     }
 
-    /// Returns the time the presentation was created, in seconds since 1904-01-01
+    /// Returns the time the presentation was created
     #[must_use]
-    pub const fn creation_time(&self) -> u64 {
+    pub const fn creation_time(&self) -> QuickTimeDateTime {
         self.creation_time
     }
 
-    /// Returns the time the presentation was last modified, on the same scale
+    /// Returns the time the presentation was last modified
     #[must_use]
-    pub const fn modification_time(&self) -> u64 {
+    pub const fn modification_time(&self) -> QuickTimeDateTime {
         self.modification_time
     }
 
@@ -128,25 +115,30 @@ impl MovieHeaderBox {
         self.duration
     }
 
-    /// Returns the playback rate, as 16.16 fixed point
+    /// Returns the playback rate
     #[must_use]
-    pub const fn rate(&self) -> i32 {
+    pub const fn rate(&self) -> I16F16 {
         self.rate
     }
 
-    /// Returns the playback volume, as 8.8 fixed point
+    /// Returns the playback volume
     #[must_use]
-    pub const fn volume(&self) -> i16 {
+    pub const fn volume(&self) -> I8F8 {
         self.volume
     }
 
     /// Returns the transformation matrix the presentation is rendered under
     #[must_use]
-    pub const fn matrix(&self) -> &[i32; 9] {
-        &self.matrix
+    pub const fn matrix(&self) -> Matrix {
+        self.matrix
     }
 
     /// Returns the fields the spec reserves for a later definition
+    ///
+    /// The values are carried through un-inspected: this box reads no meaning
+    /// into them and does not zero them on the way out, so a file that puts
+    /// data here — as writers in the QuickTime line do — reads back as the
+    /// bytes it was written with.
     #[must_use]
     pub const fn pre_defined(&self) -> &[u32; 6] {
         &self.pre_defined
@@ -161,11 +153,19 @@ impl MovieHeaderBox {
     /// Returns the version whose field widths carry the times of this box
     const fn version(&self) -> u8 {
         let widest = u32::MAX as u64;
-        let fits_in_32_bits = self.creation_time <= widest
-            && self.modification_time <= widest
+        let fits_in_32_bits = self.creation_time.seconds() <= widest
+            && self.modification_time.seconds() <= widest
             && self.duration <= widest;
 
         if fits_in_32_bits { 0 } else { 1 }
+    }
+
+    /// Returns the width the given version carries the times of this box at
+    const fn field_width(version: u8) -> FieldWidth {
+        match version {
+            0 => FieldWidth::Compact,
+            _ => FieldWidth::Extended,
+        }
     }
 }
 
@@ -178,42 +178,41 @@ impl BoxDecode for MovieHeaderBox {
     ///
     /// * [`UnsupportedVersion`](DecodeError::UnsupportedVersion): the box
     ///   declares a version other than 0 or 1.
-    /// * [`TruncatedPayload`](DecodeError::TruncatedPayload): the payload is
-    ///   shorter than the version it declares requires.
-    /// * [`TrailingBytes`](DecodeError::TrailingBytes): the payload is longer.
+    /// * [`Field`](DecodeError::Field): the payload ends inside a field, or
+    ///   holds bytes past the fields of the box.
     fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
-        let available = u64::try_from(payload.len()).unwrap_or(u64::MAX);
-        let (full_box_field, rest) = split_field::<4>(payload, 4, available)?;
-        let version = FullBoxFields::from_bytes(full_box_field).version();
+        let mut reader = FieldReader::new(payload);
+        let version = FullBoxFields::from_bytes(reader.read_bytes::<4>()?).version();
+        if version > 1 {
+            return Err(DecodeError::UnsupportedVersion(version));
+        }
+        let field_width = Self::field_width(version);
 
-        let needed = match version {
-            0 => PAYLOAD_LEN_VERSION_0,
-            1 => PAYLOAD_LEN_VERSION_1,
-            unsupported => return Err(DecodeError::UnsupportedVersion(unsupported)),
-        };
-        check_payload_len(needed, available)?;
-
-        let (creation_time, rest) = split_time(version, rest, needed, available)?;
-        let (modification_time, rest) = split_time(version, rest, needed, available)?;
-        let (timescale_field, rest) = split_field::<4>(rest, needed, available)?;
-        let (duration, rest) = split_time(version, rest, needed, available)?;
-        let (rate_field, rest) = split_field::<4>(rest, needed, available)?;
-        let (volume_field, rest) = split_field::<2>(rest, needed, available)?;
-        let (_reserved, rest) = split_field::<10>(rest, needed, available)?;
-        let (matrix, rest) = split_i32_array::<9>(rest, needed, available)?;
-        let (pre_defined, rest) = split_u32_array::<6>(rest, needed, available)?;
-        let (next_track_id_field, _rest) = split_field::<4>(rest, needed, available)?;
+        let creation_time = QuickTimeDateTime::from_seconds(reader.read_unsigned(field_width)?);
+        let modification_time = QuickTimeDateTime::from_seconds(reader.read_unsigned(field_width)?);
+        let timescale = reader.read_u32()?;
+        let duration = reader.read_unsigned(field_width)?;
+        let rate = I16F16::from_raw(reader.read_i32()?);
+        let volume = I8F8::from_raw(reader.read_i16()?);
+        let _reserved = reader.read_bytes::<10>()?;
+        let matrix = Matrix::from_bytes(reader.read_bytes::<36>()?);
+        let mut pre_defined = [0; 6];
+        for field in &mut pre_defined {
+            *field = reader.read_u32()?;
+        }
+        let next_track_id = reader.read_u32()?;
+        reader.finish()?;
 
         Ok(Self {
             creation_time,
             modification_time,
-            timescale: u32::from_be_bytes(*timescale_field),
+            timescale,
             duration,
-            rate: i32::from_be_bytes(*rate_field),
-            volume: i16::from_be_bytes(*volume_field),
+            rate,
+            volume,
             matrix,
             pre_defined,
-            next_track_id: u32::from_be_bytes(*next_track_id_field),
+            next_track_id,
         })
     }
 }
@@ -230,43 +229,53 @@ impl BoxEncode for MovieHeaderBox {
     fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
         let expected = self.payload_len();
         let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
-        let mismatch = EncodeError::BufferLengthMismatch { expected, actual };
         if actual != expected {
-            return Err(mismatch);
+            return Err(EncodeError::BufferLengthMismatch { expected, actual });
         }
 
         let version = self.version();
-        let (full_box_field, rest) = split_field_mut::<4>(buffer, mismatch)?;
-        *full_box_field = FullBoxFields::new(version, FullBoxFlags::ZERO).to_bytes();
+        let field_width = Self::field_width(version);
+        let mut writer = FieldWriter::new(buffer);
 
-        let rest = write_time(version, self.creation_time, rest, mismatch)?;
-        let rest = write_time(version, self.modification_time, rest, mismatch)?;
-        let (timescale_field, rest) = split_field_mut::<4>(rest, mismatch)?;
-        *timescale_field = self.timescale.to_be_bytes();
-        let rest = write_time(version, self.duration, rest, mismatch)?;
-        let (rate_field, rest) = split_field_mut::<4>(rest, mismatch)?;
-        *rate_field = self.rate.to_be_bytes();
-        let (volume_field, rest) = split_field_mut::<2>(rest, mismatch)?;
-        *volume_field = self.volume.to_be_bytes();
-        let (reserved_field, rest) = split_field_mut::<10>(rest, mismatch)?;
-        *reserved_field = [0; 10];
-        let rest = write_i32_array(&self.matrix, rest, mismatch)?;
-        let rest = write_u32_array(&self.pre_defined, rest, mismatch)?;
-        let (next_track_id_field, _rest) = split_field_mut::<4>(rest, mismatch)?;
-        *next_track_id_field = self.next_track_id.to_be_bytes();
+        writer.write_bytes(&FullBoxFields::new(version, FullBoxFlags::ZERO).to_bytes())?;
+        writer.write_unsigned(field_width, self.creation_time.seconds())?;
+        writer.write_unsigned(field_width, self.modification_time.seconds())?;
+        writer.write_u32(self.timescale)?;
+        writer.write_unsigned(field_width, self.duration)?;
+        writer.write_i32(self.rate.raw())?;
+        writer.write_i16(self.volume.raw())?;
+        writer.write_bytes(&[0; 10])?;
+        writer.write_bytes(&self.matrix.to_bytes())?;
+        for field in self.pre_defined {
+            writer.write_u32(field)?;
+        }
+        writer.write_u32(self.next_track_id)?;
 
         Ok(())
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, BoxWrite as _, DecodeError};
+    use isobmff_core::{
+        BoxDecode, BoxEncode, BoxWrite as _, DecodeError, FieldReadError, QuickTimeDateTime,
+    };
 
     use super::MovieHeaderBox;
+
+    /// Movie header carrying the times a file written at the epoch declares
+    pub(crate) fn movie_header(duration: u64) -> MovieHeaderBox {
+        MovieHeaderBox::new(
+            QuickTimeDateTime::from_seconds(1),
+            QuickTimeDateTime::from_seconds(2),
+            1_000,
+            duration,
+            3,
+        )
+    }
 
     /// Writes the payload of the box and returns the bytes it occupies
     fn encoded_payload(movie_header: &MovieHeaderBox) -> Vec<u8> {
@@ -278,9 +287,7 @@ mod tests {
 
     #[test]
     fn times_within_32_bits_are_written_at_version_0() {
-        let movie_header = MovieHeaderBox::new(1, 2, 1_000, u64::from(u32::MAX), 3);
-
-        let payload = encoded_payload(&movie_header);
+        let payload = encoded_payload(&movie_header(u64::from(u32::MAX)));
 
         assert_eq!(payload.len(), 100);
         assert_eq!(payload.first(), Some(&0));
@@ -288,9 +295,7 @@ mod tests {
 
     #[test]
     fn a_time_past_32_bits_moves_every_time_to_version_1() {
-        let movie_header = MovieHeaderBox::new(1, 2, 1_000, u64::from(u32::MAX) + 1, 3);
-
-        let payload = encoded_payload(&movie_header);
+        let payload = encoded_payload(&movie_header(u64::from(u32::MAX) + 1));
 
         assert_eq!(payload.len(), 112);
         assert_eq!(payload.first(), Some(&1));
@@ -299,7 +304,7 @@ mod tests {
     #[test]
     fn a_box_reads_back_as_the_value_that_wrote_it_at_either_version() {
         for duration in [u64::from(u32::MAX), u64::from(u32::MAX) + 1] {
-            let movie_header = MovieHeaderBox::new(1, 2, 1_000, duration, 3);
+            let movie_header = movie_header(duration);
 
             let payload = encoded_payload(&movie_header);
 
@@ -313,7 +318,7 @@ mod tests {
     #[test]
     fn the_fields_the_spec_reserves_survive_a_round_trip() {
         let payload = {
-            let mut payload = encoded_payload(&MovieHeaderBox::new(0, 0, 1, 0, 1));
+            let mut payload = encoded_payload(&movie_header(0));
             payload
                 .get_mut(72..96)
                 .unwrap()
@@ -329,7 +334,7 @@ mod tests {
 
     #[test]
     fn a_version_the_box_does_not_read_is_rejected() {
-        let mut payload = encoded_payload(&MovieHeaderBox::new(0, 0, 1, 0, 1));
+        let mut payload = encoded_payload(&movie_header(0));
         *payload.first_mut().unwrap() = 2;
 
         assert!(matches!(
@@ -340,30 +345,32 @@ mod tests {
 
     #[test]
     fn a_payload_shorter_than_its_version_requires_is_rejected() {
-        let payload = encoded_payload(&MovieHeaderBox::new(0, 0, 1, 0, 1));
+        let payload = encoded_payload(&movie_header(0));
 
         assert!(matches!(
             MovieHeaderBox::decode_payload(payload.get(..99).unwrap()),
-            Err(DecodeError::TruncatedPayload {
+            Err(DecodeError::Field(FieldReadError::UnexpectedEof {
                 needed: 100,
                 available: 99
-            })
+            }))
         ));
     }
 
     #[test]
     fn a_payload_longer_than_its_version_requires_is_rejected() {
-        let mut payload = encoded_payload(&MovieHeaderBox::new(0, 0, 1, 0, 1));
+        let mut payload = encoded_payload(&movie_header(0));
         payload.push(0);
 
         assert!(matches!(
             MovieHeaderBox::decode_payload(&payload),
-            Err(DecodeError::TrailingBytes { remaining: 1 })
+            Err(DecodeError::Field(FieldReadError::TrailingBytes {
+                remaining: 1
+            }))
         ));
     }
 
     #[test]
     fn the_whole_box_counts_its_header_on_top_of_the_payload() {
-        assert_eq!(MovieHeaderBox::new(0, 0, 1, 0, 1).encoded_len(), 108);
+        assert_eq!(movie_header(0).encoded_len(), 108);
     }
 }

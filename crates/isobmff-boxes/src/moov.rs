@@ -167,17 +167,12 @@ mod tests {
 
     use super::MovieBox;
     use crate::mvex::tests::movie_extends;
-    use crate::mvhd::MovieHeaderBox;
+    use crate::mvhd::tests::movie_header;
     use crate::trak::tests::track;
 
     /// Movie with one track, as a progressive file declares it
     fn movie() -> MovieBox {
-        MovieBox::new(
-            MovieHeaderBox::new(0, 0, 1_000, 5_000, 2),
-            vec![track()],
-            None,
-        )
-        .unwrap()
+        MovieBox::new(movie_header(5_000), vec![track()], None).unwrap()
     }
 
     /// Writes the payload of the box and returns the bytes it occupies
@@ -190,10 +185,7 @@ mod tests {
 
     #[test]
     fn a_movie_of_no_tracks_cannot_be_built() {
-        assert_eq!(
-            MovieBox::new(MovieHeaderBox::new(0, 0, 1_000, 0, 1), Vec::new(), None),
-            None
-        );
+        assert_eq!(MovieBox::new(movie_header(0), Vec::new(), None), None);
     }
 
     #[test]
@@ -205,12 +197,8 @@ mod tests {
 
     #[test]
     fn a_fragmented_movie_reads_back_with_its_extends_box() {
-        let fragmented = MovieBox::new(
-            MovieHeaderBox::new(0, 0, 1_000, 0, 2),
-            vec![track()],
-            Some(movie_extends()),
-        )
-        .unwrap();
+        let fragmented =
+            MovieBox::new(movie_header(0), vec![track()], Some(movie_extends())).unwrap();
 
         let payload = encoded_payload(&fragmented);
 

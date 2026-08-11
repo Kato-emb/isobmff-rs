@@ -142,7 +142,10 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, DecodeError, FourCC, NullTerminatedString};
+    use isobmff_core::{
+        BoxDecode, BoxEncode, DecodeError, FourCC, LanguageCode, NullTerminatedString,
+        QuickTimeDateTime,
+    };
 
     use super::MediaBox;
     use crate::hdlr::HandlerBox;
@@ -154,7 +157,13 @@ mod tests {
     /// Media box of a video track, with every mandatory child in place
     fn media() -> MediaBox {
         MediaBox::new(
-            MediaHeaderBox::new(0, 0, 90_000, 90_000, 0x55C4).unwrap(),
+            MediaHeaderBox::new(
+                QuickTimeDateTime::from_seconds(0),
+                QuickTimeDateTime::from_seconds(0),
+                90_000,
+                90_000,
+                LanguageCode::UND,
+            ),
             HandlerBox::new(
                 FourCC::new(*b"vide"),
                 NullTerminatedString::new(String::from("VideoHandler")).unwrap(),

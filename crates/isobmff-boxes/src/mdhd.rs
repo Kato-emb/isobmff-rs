@@ -1,20 +1,15 @@
 //! [`MediaHeaderBox`] (`mdhd`), ISO/IEC 14496-12 §8.4.2
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FullBoxFields,
-    FullBoxFlags,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FieldReader,
+    FieldWidth, FieldWriter, FullBoxFields, FullBoxFlags, LanguageCode, QuickTimeDateTime,
 };
-
-use crate::field::{check_payload_len, split_field, split_field_mut, split_time, write_time};
 
 /// Length of the payload when version 0 carries the times in 32 bits
 const PAYLOAD_LEN_VERSION_0: u64 = 24;
 
 /// Length of the payload when version 1 carries the times in 64 bits
 const PAYLOAD_LEN_VERSION_1: u64 = 36;
-
-/// Widest value the 15-bit `language` field carries
-const LANGUAGE_MAXIMUM: u16 = 0x7FFF;
 
 /// Box that holds the declarations the media of one track applies
 ///
@@ -29,51 +24,43 @@ const LANGUAGE_MAXIMUM: u16 = 0x7FFF;
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct MediaHeaderBox {
-    creation_time: u64,
-    modification_time: u64,
+    creation_time: QuickTimeDateTime,
+    modification_time: QuickTimeDateTime,
     timescale: u32,
     duration: u64,
-    language: u16,
+    language: LanguageCode,
     pre_defined: u16,
 }
 
 impl MediaHeaderBox {
     /// Creates the box from the declarations of one track's media
-    ///
-    /// `language` is an ISO-639-2/T code packed as three five-bit letters, so
-    /// it occupies the low 15 bits. Returns `None` for a wider value, which the
-    /// field cannot carry.
     #[must_use]
     pub const fn new(
-        creation_time: u64,
-        modification_time: u64,
+        creation_time: QuickTimeDateTime,
+        modification_time: QuickTimeDateTime,
         timescale: u32,
         duration: u64,
-        language: u16,
-    ) -> Option<Self> {
-        if language > LANGUAGE_MAXIMUM {
-            return None;
-        }
-
-        Some(Self {
+        language: LanguageCode,
+    ) -> Self {
+        Self {
             creation_time,
             modification_time,
             timescale,
             duration,
             language,
             pre_defined: 0,
-        })
+        }
     }
 
-    /// Returns the time the media was created, in seconds since 1904-01-01
+    /// Returns the time the media was created
     #[must_use]
-    pub const fn creation_time(&self) -> u64 {
+    pub const fn creation_time(&self) -> QuickTimeDateTime {
         self.creation_time
     }
 
-    /// Returns the time the media was last modified, on the same scale
+    /// Returns the time the media was last modified
     #[must_use]
-    pub const fn modification_time(&self) -> u64 {
+    pub const fn modification_time(&self) -> QuickTimeDateTime {
         self.modification_time
     }
 
@@ -89,13 +76,18 @@ impl MediaHeaderBox {
         self.duration
     }
 
-    /// Returns the ISO-639-2/T language code, packed as three five-bit letters
+    /// Returns the language the media is in
     #[must_use]
-    pub const fn language(&self) -> u16 {
+    pub const fn language(&self) -> LanguageCode {
         self.language
     }
 
     /// Returns the field the spec reserves for a later definition
+    ///
+    /// The value is carried through un-inspected: this box reads no meaning
+    /// into it and does not zero it on the way out, so a file that puts data
+    /// here — as writers in the QuickTime line do — reads back as the bytes it
+    /// was written with.
     #[must_use]
     pub const fn pre_defined(&self) -> u16 {
         self.pre_defined
@@ -104,11 +96,19 @@ impl MediaHeaderBox {
     /// Returns the version whose field widths carry the times of this box
     const fn version(&self) -> u8 {
         let widest = u32::MAX as u64;
-        let fits_in_32_bits = self.creation_time <= widest
-            && self.modification_time <= widest
+        let fits_in_32_bits = self.creation_time.seconds() <= widest
+            && self.modification_time.seconds() <= widest
             && self.duration <= widest;
 
         if fits_in_32_bits { 0 } else { 1 }
+    }
+
+    /// Returns the width the given version carries the times of this box at
+    const fn field_width(version: u8) -> FieldWidth {
+        match version {
+            0 => FieldWidth::Compact,
+            _ => FieldWidth::Extended,
+        }
     }
 }
 
@@ -121,35 +121,31 @@ impl BoxDecode for MediaHeaderBox {
     ///
     /// * [`UnsupportedVersion`](DecodeError::UnsupportedVersion): the box
     ///   declares a version other than 0 or 1.
-    /// * [`TruncatedPayload`](DecodeError::TruncatedPayload): the payload is
-    ///   shorter than the version it declares requires.
-    /// * [`TrailingBytes`](DecodeError::TrailingBytes): the payload is longer.
+    /// * [`Field`](DecodeError::Field): the payload ends inside a field, or
+    ///   holds bytes past the fields of the box.
     fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
-        let available = u64::try_from(payload.len()).unwrap_or(u64::MAX);
-        let (full_box_field, rest) = split_field::<4>(payload, 4, available)?;
-        let version = FullBoxFields::from_bytes(full_box_field).version();
+        let mut reader = FieldReader::new(payload);
+        let version = FullBoxFields::from_bytes(reader.read_bytes::<4>()?).version();
+        if version > 1 {
+            return Err(DecodeError::UnsupportedVersion(version));
+        }
+        let field_width = Self::field_width(version);
 
-        let needed = match version {
-            0 => PAYLOAD_LEN_VERSION_0,
-            1 => PAYLOAD_LEN_VERSION_1,
-            unsupported => return Err(DecodeError::UnsupportedVersion(unsupported)),
-        };
-        check_payload_len(needed, available)?;
-
-        let (creation_time, rest) = split_time(version, rest, needed, available)?;
-        let (modification_time, rest) = split_time(version, rest, needed, available)?;
-        let (timescale, rest) = split_field::<4>(rest, needed, available)?;
-        let (duration, rest) = split_time(version, rest, needed, available)?;
-        let (language, rest) = split_field::<2>(rest, needed, available)?;
-        let (pre_defined, _rest) = split_field::<2>(rest, needed, available)?;
+        let creation_time = QuickTimeDateTime::from_seconds(reader.read_unsigned(field_width)?);
+        let modification_time = QuickTimeDateTime::from_seconds(reader.read_unsigned(field_width)?);
+        let timescale = reader.read_u32()?;
+        let duration = reader.read_unsigned(field_width)?;
+        let language = LanguageCode::from_raw(reader.read_u16()?);
+        let pre_defined = reader.read_u16()?;
+        reader.finish()?;
 
         Ok(Self {
             creation_time,
             modification_time,
-            timescale: u32::from_be_bytes(*timescale),
+            timescale,
             duration,
-            language: u16::from_be_bytes(*language) & LANGUAGE_MAXIMUM,
-            pre_defined: u16::from_be_bytes(*pre_defined),
+            language,
+            pre_defined,
         })
     }
 }
@@ -166,24 +162,21 @@ impl BoxEncode for MediaHeaderBox {
     fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
         let expected = self.payload_len();
         let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
-        let mismatch = EncodeError::BufferLengthMismatch { expected, actual };
         if actual != expected {
-            return Err(mismatch);
+            return Err(EncodeError::BufferLengthMismatch { expected, actual });
         }
 
         let version = self.version();
-        let (full_box_field, rest) = split_field_mut::<4>(buffer, mismatch)?;
-        *full_box_field = FullBoxFields::new(version, FullBoxFlags::ZERO).to_bytes();
+        let field_width = Self::field_width(version);
+        let mut writer = FieldWriter::new(buffer);
 
-        let rest = write_time(version, self.creation_time, rest, mismatch)?;
-        let rest = write_time(version, self.modification_time, rest, mismatch)?;
-        let (timescale, rest) = split_field_mut::<4>(rest, mismatch)?;
-        *timescale = self.timescale.to_be_bytes();
-        let rest = write_time(version, self.duration, rest, mismatch)?;
-        let (language, rest) = split_field_mut::<2>(rest, mismatch)?;
-        *language = self.language.to_be_bytes();
-        let (pre_defined, _rest) = split_field_mut::<2>(rest, mismatch)?;
-        *pre_defined = self.pre_defined.to_be_bytes();
+        writer.write_bytes(&FullBoxFields::new(version, FullBoxFlags::ZERO).to_bytes())?;
+        writer.write_unsigned(field_width, self.creation_time.seconds())?;
+        writer.write_unsigned(field_width, self.modification_time.seconds())?;
+        writer.write_u32(self.timescale)?;
+        writer.write_unsigned(field_width, self.duration)?;
+        writer.write_u16(self.language.raw())?;
+        writer.write_u16(self.pre_defined)?;
 
         Ok(())
     }
@@ -194,12 +187,22 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, DecodeError};
+    use isobmff_core::{
+        BoxDecode, BoxEncode, DecodeError, FieldReadError, LanguageCode, QuickTimeDateTime,
+    };
 
-    use super::{LANGUAGE_MAXIMUM, MediaHeaderBox};
+    use super::MediaHeaderBox;
 
-    /// `und`, the code a writer uses when the language is undetermined
-    const UNDETERMINED: u16 = 0x55C4;
+    /// Media header of a track whose language is left undetermined
+    fn media_header(duration: u64) -> MediaHeaderBox {
+        MediaHeaderBox::new(
+            QuickTimeDateTime::from_seconds(1),
+            QuickTimeDateTime::from_seconds(2),
+            90_000,
+            duration,
+            LanguageCode::UND,
+        )
+    }
 
     /// Writes the payload of the box and returns the bytes it occupies
     fn encoded_payload(media_header: &MediaHeaderBox) -> Vec<u8> {
@@ -210,14 +213,9 @@ mod tests {
     }
 
     #[test]
-    fn a_language_wider_than_the_field_is_refused() {
-        assert_eq!(MediaHeaderBox::new(0, 0, 1, 0, LANGUAGE_MAXIMUM + 1), None);
-    }
-
-    #[test]
     fn a_box_reads_back_as_the_value_that_wrote_it_at_either_version() {
         for duration in [u64::from(u32::MAX), u64::from(u32::MAX) + 1] {
-            let media_header = MediaHeaderBox::new(1, 2, 90_000, duration, UNDETERMINED).unwrap();
+            let media_header = media_header(duration);
 
             let payload = encoded_payload(&media_header);
 
@@ -230,10 +228,10 @@ mod tests {
 
     #[test]
     fn the_pad_bit_above_the_language_is_dropped_on_the_way_in() {
-        let media_header = MediaHeaderBox::new(0, 0, 1, 0, UNDETERMINED).unwrap();
+        let media_header = media_header(0);
         let mut payload = encoded_payload(&media_header);
         let language = payload.get_mut(20..22).unwrap();
-        language.copy_from_slice(&(UNDETERMINED | 0x8000).to_be_bytes());
+        language.copy_from_slice(&(LanguageCode::UND.raw() | 0x8000).to_be_bytes());
 
         assert_eq!(
             MediaHeaderBox::decode_payload(&payload).unwrap(),
@@ -256,7 +254,9 @@ mod tests {
     fn a_payload_longer_than_its_version_requires_is_rejected() {
         assert!(matches!(
             MediaHeaderBox::decode_payload(&[0; 25]),
-            Err(DecodeError::TrailingBytes { remaining: 1 })
+            Err(DecodeError::Field(FieldReadError::TrailingBytes {
+                remaining: 1
+            }))
         ));
     }
 }

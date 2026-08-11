@@ -48,7 +48,7 @@ pub use box_write::BoxWrite;
 #[cfg(feature = "alloc")]
 pub use container::{ChildBoxes, OtherBoxes};
 pub use data_types::{I8F8, I16F16, Matrix, QuickTimeDateTime, U16F16};
-pub use field::{FieldReadError, FieldReader, FieldWriteError, FieldWriter};
+pub use field::{FieldReadError, FieldReader, FieldWidth, FieldWriteError, FieldWriter};
 pub use fourcc::FourCC;
 pub use full_box::{FullBoxFields, FullBoxFlags};
 pub use language_code::LanguageCode;

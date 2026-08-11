@@ -15,7 +15,7 @@ use crate::raw_box::RawBoxError;
 /// # Examples
 ///
 /// ```
-/// use isobmff_core::{BoxDecode, DecodeError};
+/// use isobmff_core::{BoxDecode, DecodeError, FieldReadError, FieldReader};
 ///
 /// // A box whose payload is one 32-bit sequence number
 /// #[derive(PartialEq, Debug)]
@@ -25,23 +25,11 @@ use crate::raw_box::RawBoxError;
 ///
 /// impl BoxDecode for SequenceNumberBox {
 ///     fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
-///         let (field, rest) =
-///             payload
-///                 .split_first_chunk::<4>()
-///                 .ok_or(DecodeError::TruncatedPayload {
-///                     needed: 4,
-///                     available: u64::try_from(payload.len()).unwrap_or(u64::MAX),
-///                 })?;
+///         let mut reader = FieldReader::new(payload);
+///         let sequence_number = reader.read_u32()?;
+///         reader.finish()?;
 ///
-///         if !rest.is_empty() {
-///             return Err(DecodeError::TrailingBytes {
-///                 remaining: u64::try_from(rest.len()).unwrap_or(u64::MAX),
-///             });
-///         }
-///
-///         Ok(Self {
-///             sequence_number: u32::from_be_bytes(*field),
-///         })
+///         Ok(Self { sequence_number })
 ///     }
 /// }
 ///
@@ -54,16 +42,16 @@ use crate::raw_box::RawBoxError;
 /// // A payload ending inside the field says how far it had to reach
 /// assert!(matches!(
 ///     SequenceNumberBox::decode_payload(b"\0\0\0"),
-///     Err(DecodeError::TruncatedPayload {
+///     Err(DecodeError::Field(FieldReadError::UnexpectedEof {
 ///         needed: 4,
 ///         available: 3
-///     })
+///     }))
 /// ));
 ///
 /// // Bytes past the field are an error, not a remainder to skip over
 /// assert!(matches!(
 ///     SequenceNumberBox::decode_payload(b"\0\0\0\x07!"),
-///     Err(DecodeError::TrailingBytes { remaining: 1 })
+///     Err(DecodeError::Field(FieldReadError::TrailingBytes { remaining: 1 }))
 /// ));
 /// ```
 pub trait BoxDecode: Sized {
@@ -76,8 +64,8 @@ pub trait BoxDecode: Sized {
     ///
     /// Reading is strict. Every byte of `payload` belongs to a field of `Self`,
     /// and bytes the fields do not claim are
-    /// [`TrailingBytes`](DecodeError::TrailingBytes) rather than a remainder to
-    /// pass over.
+    /// [`TrailingBytes`](FieldReadError::TrailingBytes) rather than a remainder
+    /// to pass over.
     ///
     /// A container reads the boxes its payload holds, so its failures reach
     /// past its own fields: the ones a child brings are listed on
@@ -85,10 +73,8 @@ pub trait BoxDecode: Sized {
     ///
     /// # Errors
     ///
-    /// * [`TruncatedPayload`](DecodeError::TruncatedPayload): `payload` ends
-    ///   inside a field.
-    /// * [`TrailingBytes`](DecodeError::TrailingBytes): `payload` holds bytes
-    ///   past the fields of `Self`.
+    /// * [`Field`](DecodeError::Field): `payload` ends inside a field of
+    ///   `Self`, or holds bytes past them.
     /// * The container failures of [`DecodeError`], for a box whose payload is
     ///   the boxes it contains.
     fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError>;
@@ -110,18 +96,6 @@ pub trait BoxDecode: Sized {
 #[non_exhaustive]
 #[derive(Debug)]
 pub enum DecodeError {
-    /// Payload ends inside a field
-    TruncatedPayload {
-        /// Bytes the fields read so far require
-        needed: u64,
-        /// Bytes the payload offered
-        available: u64,
-    },
-    /// Payload holds bytes past the fields of the box
-    TrailingBytes {
-        /// Bytes left over once every field was read
-        remaining: u64,
-    },
     /// Fields of the box do not read off its payload
     Field(FieldReadError),
     /// Full box declares a version the box does not read
@@ -189,14 +163,6 @@ impl From<RawBoxError> for DecodeError {
 impl fmt::Display for DecodeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            Self::TruncatedPayload { needed, available } => write!(
-                formatter,
-                "box payload of {needed} bytes cut short by an input of {available}"
-            ),
-            Self::TrailingBytes { remaining } => write!(
-                formatter,
-                "box payload leaves {remaining} bytes past the fields it holds"
-            ),
             Self::Field(_) => {
                 formatter.write_str("box payload does not read as the fields it holds")
             }
@@ -232,9 +198,7 @@ impl fmt::Display for DecodeError {
 impl error::Error for DecodeError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match *self {
-            Self::TruncatedPayload { .. }
-            | Self::TrailingBytes { .. }
-            | Self::UnsupportedVersion(_)
+            Self::UnsupportedVersion(_)
             | Self::MissingMandatoryBox(_)
             | Self::DuplicateBox(_)
             | Self::EntryCountMismatch { .. } => None,
@@ -259,30 +223,9 @@ mod tests {
     use super::DecodeError;
     use crate::box_header::BoxHeaderError;
     use crate::box_type::BoxType;
+    #[cfg(feature = "alloc")]
+    use crate::field::FieldReadError;
     use crate::raw_box::RawBoxError;
-
-    #[test]
-    fn display_of_a_truncated_payload_names_both_lengths() {
-        let error = DecodeError::TruncatedPayload {
-            needed: 16,
-            available: 12,
-        };
-
-        assert_eq!(
-            error.to_string(),
-            "box payload of 16 bytes cut short by an input of 12"
-        );
-    }
-
-    #[test]
-    fn display_of_trailing_bytes_names_how_many_are_left() {
-        let error = DecodeError::TrailingBytes { remaining: 4 };
-
-        assert_eq!(
-            error.to_string(),
-            "box payload leaves 4 bytes past the fields it holds"
-        );
-    }
 
     #[test]
     fn display_of_a_framing_failure_says_what_the_container_was_doing() {
@@ -354,10 +297,10 @@ mod tests {
     #[cfg(feature = "alloc")]
     #[test]
     fn nested_children_spell_out_the_path_to_the_box_that_failed() {
-        let innermost = DecodeError::TruncatedPayload {
+        let innermost = DecodeError::Field(FieldReadError::UnexpectedEof {
             needed: 20,
             available: 12,
-        };
+        });
         let error = DecodeError::child(
             BoxType::compact(*b"trak"),
             DecodeError::child(BoxType::compact(*b"tkhd"), innermost),
@@ -375,6 +318,7 @@ mod tests {
             [
                 "child trak box does not decode",
                 "child tkhd box does not decode",
+                "box payload does not read as the fields it holds",
                 "box payload of 20 bytes cut short by an input of 12",
             ]
             .map(String::from)
