@@ -100,6 +100,10 @@ pub enum DecodeError {
     Field(FieldReadError),
     /// Full box declares a version the box does not read
     UnsupportedVersion(u8),
+    /// Full box declares flags the box does not read
+    UnsupportedFlags(u32),
+    /// Full box declares flags the spec does not allow together
+    ConflictingFlags(u32),
     /// Field the spec declares as text does not read as UTF-8
     InvalidUtf8(str::Utf8Error),
     /// Payload of a container does not split into the boxes it holds
@@ -108,12 +112,28 @@ pub enum DecodeError {
     MissingMandatoryBox(BoxType),
     /// Container holds more of a child box than its quantity allows
     DuplicateBox(BoxType),
-    /// Count a box declares does not match the entries it holds
+    /// Count a box declares does not match the entries it frames for itself
+    ///
+    /// A box whose entries frame themselves counts them twice over, and the two
+    /// counts can disagree. Where the count is the framing — a table of entries
+    /// of one fixed length — a count too large runs the payload out and a count
+    /// too small leaves bytes past the entries, both of which are
+    /// [`Field`](Self::Field).
     EntryCountMismatch {
         /// Entries the `entry_count` field declares
         declared: u64,
         /// Entries the payload holds
         actual: u64,
+    },
+    /// Count a box declares is past the entries the box reads
+    ///
+    /// A count that frames entries of no length is bounded by nothing in the
+    /// payload, so the box that reads it states how many of them it holds.
+    UnsupportedEntryCount {
+        /// Entries the count field declares
+        declared: u64,
+        /// Entries the box reads
+        limit: u64,
     },
     /// Child box of a container does not decode
     ///
@@ -170,6 +190,14 @@ impl fmt::Display for DecodeError {
                 formatter,
                 "full box declares version {version}, which this box does not read"
             ),
+            Self::UnsupportedFlags(bits) => write!(
+                formatter,
+                "full box declares flags {bits:#08x}, which this box does not read"
+            ),
+            Self::ConflictingFlags(bits) => write!(
+                formatter,
+                "full box declares flags {bits:#08x}, which the spec does not allow together"
+            ),
             Self::InvalidUtf8(_) => {
                 formatter.write_str("box payload holds a string that is not UTF-8")
             }
@@ -187,6 +215,10 @@ impl fmt::Display for DecodeError {
                 formatter,
                 "box declares {declared} entries but holds {actual}"
             ),
+            Self::UnsupportedEntryCount { declared, limit } => write!(
+                formatter,
+                "box declares {declared} entries, past the {limit} this box reads"
+            ),
             #[cfg(feature = "alloc")]
             Self::Child { box_type, .. } => {
                 write!(formatter, "child {box_type} box does not decode")
@@ -199,9 +231,12 @@ impl error::Error for DecodeError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match *self {
             Self::UnsupportedVersion(_)
+            | Self::UnsupportedFlags(_)
+            | Self::ConflictingFlags(_)
             | Self::MissingMandatoryBox(_)
             | Self::DuplicateBox(_)
-            | Self::EntryCountMismatch { .. } => None,
+            | Self::EntryCountMismatch { .. }
+            | Self::UnsupportedEntryCount { .. } => None,
             Self::Field(ref error) => Some(error),
             Self::InvalidUtf8(ref error) => Some(error),
             Self::Framing(ref error) => Some(error),
@@ -254,6 +289,26 @@ mod tests {
     }
 
     #[test]
+    fn display_of_unsupported_flags_names_the_bits_the_box_does_not_read() {
+        let error = DecodeError::UnsupportedFlags(0x0000_1000);
+
+        assert_eq!(
+            error.to_string(),
+            "full box declares flags 0x001000, which this box does not read"
+        );
+    }
+
+    #[test]
+    fn display_of_conflicting_flags_names_the_bits_that_conflict() {
+        let error = DecodeError::ConflictingFlags(0x0000_0404);
+
+        assert_eq!(
+            error.to_string(),
+            "full box declares flags 0x000404, which the spec does not allow together"
+        );
+    }
+
+    #[test]
     fn display_of_a_missing_mandatory_box_names_the_box_type() {
         let error = DecodeError::MissingMandatoryBox(BoxType::compact(*b"mvhd"));
 
@@ -278,6 +333,19 @@ mod tests {
         };
 
         assert_eq!(error.to_string(), "box declares 4 entries but holds 2");
+    }
+
+    #[test]
+    fn display_of_an_unsupported_entry_count_names_the_count_and_the_limit() {
+        let error = DecodeError::UnsupportedEntryCount {
+            declared: 4_294_967_295,
+            limit: 1_048_576,
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "box declares 4294967295 entries, past the 1048576 this box reads"
+        );
     }
 
     #[test]
