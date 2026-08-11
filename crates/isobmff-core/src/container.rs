@@ -55,19 +55,20 @@ use crate::raw_box::RawBox;
 /// let payload = b"\0\0\0\x0csqnc\0\0\0\x07\0\0\0\x08free";
 ///
 /// // Reading it sorts the children by the type that names them
-/// let mut sqnc = ChildBoxes::new();
+/// let mut sequence_number_boxes = ChildBoxes::new();
 /// let mut other_boxes = OtherBoxes::new();
 /// for child in boxes(payload) {
 ///     let child = child.unwrap();
 ///     if child.header().box_type() == SequenceNumberBox::BOX_TYPE {
-///         sqnc.push(child);
+///         sequence_number_boxes.push(child);
 ///     } else {
 ///         other_boxes.keep(child);
 ///     }
 /// }
 ///
 /// // The quantity the box table states is asked for once, as the field is built
-/// let sequence_number: SequenceNumberBox = sqnc.exactly_one().unwrap();
+/// let sequence_number: SequenceNumberBox =
+///     sequence_number_boxes.exactly_one().unwrap();
 /// assert_eq!(sequence_number, SequenceNumberBox { sequence_number: 7 });
 /// assert_eq!(other_boxes.as_slice().len(), 1);
 ///
