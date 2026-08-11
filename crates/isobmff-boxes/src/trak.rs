@@ -1,13 +1,10 @@
 //! [`TrackBox`] (`trak`), ISO/IEC 14496-12 §8.3.1
 
-use alloc::vec::Vec;
-
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, DecodeError, EncodeError,
-    boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, DecodeError,
+    EncodeError, OtherBoxes, boxes,
 };
 
-use crate::container::{keep_unpromoted, promote_once, require, total_encoded_len, write_all};
 use crate::mdia::MediaBox;
 use crate::tkhd::TrackHeaderBox;
 
@@ -24,7 +21,7 @@ use crate::tkhd::TrackHeaderBox;
 pub struct TrackBox {
     tkhd: TrackHeaderBox,
     mdia: MediaBox,
-    other_boxes: Vec<AnyBox>,
+    other_boxes: OtherBoxes,
 }
 
 impl TrackBox {
@@ -34,7 +31,7 @@ impl TrackBox {
         Self {
             tkhd,
             mdia,
-            other_boxes: Vec::new(),
+            other_boxes: OtherBoxes::new(),
         }
     }
 
@@ -53,7 +50,7 @@ impl TrackBox {
     /// Returns the children no field of this box claims, in the order they came
     #[must_use]
     pub fn other_boxes(&self) -> &[AnyBox] {
-        &self.other_boxes
+        self.other_boxes.as_slice()
     }
 }
 
@@ -70,26 +67,26 @@ impl BoxDecode for TrackBox {
     /// * [`DuplicateBox`](DecodeError::DuplicateBox): more than one of either.
     /// * [`Child`](DecodeError::Child): one of them does not decode.
     fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
-        let mut tkhd = None;
-        let mut mdia = None;
-        let mut other_boxes = Vec::new();
+        let mut tkhd_boxes = ChildBoxes::new();
+        let mut mdia_boxes = ChildBoxes::new();
+        let mut other_boxes = OtherBoxes::new();
 
         for child in boxes(payload) {
             let child = child?;
             let box_type = child.header().box_type();
 
             if box_type == TrackHeaderBox::BOX_TYPE {
-                promote_once(&mut tkhd, child)?;
+                tkhd_boxes.push(child);
             } else if box_type == MediaBox::BOX_TYPE {
-                promote_once(&mut mdia, child)?;
+                mdia_boxes.push(child);
             } else {
-                keep_unpromoted(&mut other_boxes, child);
+                other_boxes.keep(child);
             }
         }
 
         Ok(Self {
-            tkhd: require(tkhd)?,
-            mdia: require(mdia)?,
+            tkhd: tkhd_boxes.exactly_one()?,
+            mdia: mdia_boxes.exactly_one()?,
             other_boxes,
         })
     }
@@ -97,10 +94,18 @@ impl BoxDecode for TrackBox {
 
 impl BoxEncode for TrackBox {
     fn payload_len(&self) -> u64 {
+        let others = self
+            .other_boxes
+            .as_slice()
+            .iter()
+            .fold(0_u64, |total, other| {
+                total.saturating_add(other.encoded_len())
+            });
+
         self.tkhd
             .encoded_len()
             .saturating_add(self.mdia.encoded_len())
-            .saturating_add(total_encoded_len(&self.other_boxes))
+            .saturating_add(others)
     }
 
     fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
@@ -110,9 +115,11 @@ impl BoxEncode for TrackBox {
             return Err(EncodeError::BufferLengthMismatch { expected, actual });
         }
 
-        let rest = self.tkhd.encode(buffer)?;
-        let rest = self.mdia.encode(rest)?;
-        write_all(&self.other_boxes, rest)?;
+        let mut rest = self.tkhd.encode(buffer)?;
+        rest = self.mdia.encode(rest)?;
+        for other in self.other_boxes.as_slice() {
+            rest = other.encode(rest)?;
+        }
 
         Ok(())
     }

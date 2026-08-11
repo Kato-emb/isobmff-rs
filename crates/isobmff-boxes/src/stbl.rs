@@ -1,13 +1,10 @@
 //! [`SampleTableBox`] (`stbl`), ISO/IEC 14496-12 §8.5.1
 
-use alloc::vec::Vec;
-
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, DecodeError, EncodeError,
-    boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, DecodeError,
+    EncodeError, OtherBoxes, boxes,
 };
 
-use crate::container::{keep_unpromoted, promote_once, require, total_encoded_len, write_all};
 use crate::stsd::SampleDescriptionBox;
 
 /// Box that holds every table locating and describing the samples of a track
@@ -23,7 +20,7 @@ use crate::stsd::SampleDescriptionBox;
 #[derive(Clone, PartialEq, Debug)]
 pub struct SampleTableBox {
     stsd: SampleDescriptionBox,
-    other_boxes: Vec<AnyBox>,
+    other_boxes: OtherBoxes,
 }
 
 impl SampleTableBox {
@@ -32,7 +29,7 @@ impl SampleTableBox {
     pub const fn new(stsd: SampleDescriptionBox) -> Self {
         Self {
             stsd,
-            other_boxes: Vec::new(),
+            other_boxes: OtherBoxes::new(),
         }
     }
 
@@ -45,7 +42,7 @@ impl SampleTableBox {
     /// Returns the children no field of this box claims, in the order they came
     #[must_use]
     pub fn other_boxes(&self) -> &[AnyBox] {
-        &self.other_boxes
+        self.other_boxes.as_slice()
     }
 }
 
@@ -61,20 +58,20 @@ impl BoxDecode for SampleTableBox {
     /// * [`DuplicateBox`](DecodeError::DuplicateBox): more than one `stsd`.
     /// * [`Child`](DecodeError::Child): the `stsd` does not decode.
     fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
-        let mut stsd = None;
-        let mut other_boxes = Vec::new();
+        let mut stsd_boxes = ChildBoxes::new();
+        let mut other_boxes = OtherBoxes::new();
 
         for child in boxes(payload) {
             let child = child?;
             if child.header().box_type() == SampleDescriptionBox::BOX_TYPE {
-                promote_once(&mut stsd, child)?;
+                stsd_boxes.push(child);
             } else {
-                keep_unpromoted(&mut other_boxes, child);
+                other_boxes.keep(child);
             }
         }
 
         Ok(Self {
-            stsd: require(stsd)?,
+            stsd: stsd_boxes.exactly_one()?,
             other_boxes,
         })
     }
@@ -82,9 +79,15 @@ impl BoxDecode for SampleTableBox {
 
 impl BoxEncode for SampleTableBox {
     fn payload_len(&self) -> u64 {
-        self.stsd
-            .encoded_len()
-            .saturating_add(total_encoded_len(&self.other_boxes))
+        let others = self
+            .other_boxes
+            .as_slice()
+            .iter()
+            .fold(0_u64, |total, other| {
+                total.saturating_add(other.encoded_len())
+            });
+
+        self.stsd.encoded_len().saturating_add(others)
     }
 
     fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
@@ -94,8 +97,10 @@ impl BoxEncode for SampleTableBox {
             return Err(EncodeError::BufferLengthMismatch { expected, actual });
         }
 
-        let rest = self.stsd.encode(buffer)?;
-        write_all(&self.other_boxes, rest)?;
+        let mut rest = self.stsd.encode(buffer)?;
+        for other in self.other_boxes.as_slice() {
+            rest = other.encode(rest)?;
+        }
 
         Ok(())
     }

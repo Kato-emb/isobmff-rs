@@ -13,7 +13,6 @@
 
 extern crate alloc;
 
-mod container;
 mod ftyp;
 mod hdlr;
 mod mdhd;

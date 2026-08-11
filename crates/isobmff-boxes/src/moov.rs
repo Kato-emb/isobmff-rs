@@ -3,13 +3,10 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, DecodeError, EncodeError,
-    boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, DecodeError,
+    EncodeError, OtherBoxes, boxes,
 };
 
-use crate::container::{
-    keep_unpromoted, promote_each, promote_once, require, require_any, total_encoded_len, write_all,
-};
 use crate::mvex::MovieExtendsBox;
 use crate::mvhd::MovieHeaderBox;
 use crate::trak::TrackBox;
@@ -30,7 +27,7 @@ pub struct MovieBox {
     mvhd: MovieHeaderBox,
     trak: Vec<TrackBox>,
     mvex: Option<MovieExtendsBox>,
-    other_boxes: Vec<AnyBox>,
+    other_boxes: OtherBoxes,
 }
 
 impl MovieBox {
@@ -52,7 +49,7 @@ impl MovieBox {
             mvhd,
             trak,
             mvex,
-            other_boxes: Vec::new(),
+            other_boxes: OtherBoxes::new(),
         })
     }
 
@@ -77,7 +74,7 @@ impl MovieBox {
     /// Returns the children no field of this box claims, in the order they came
     #[must_use]
     pub fn other_boxes(&self) -> &[AnyBox] {
-        &self.other_boxes
+        self.other_boxes.as_slice()
     }
 }
 
@@ -95,30 +92,30 @@ impl BoxDecode for MovieBox {
     ///   `mvex`.
     /// * [`Child`](DecodeError::Child): one of the children does not decode.
     fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
-        let mut mvhd = None;
-        let mut trak = Vec::new();
-        let mut mvex = None;
-        let mut other_boxes = Vec::new();
+        let mut mvhd_boxes = ChildBoxes::new();
+        let mut trak_boxes = ChildBoxes::new();
+        let mut mvex_boxes = ChildBoxes::new();
+        let mut other_boxes = OtherBoxes::new();
 
         for child in boxes(payload) {
             let child = child?;
             let box_type = child.header().box_type();
 
             if box_type == MovieHeaderBox::BOX_TYPE {
-                promote_once(&mut mvhd, child)?;
+                mvhd_boxes.push(child);
             } else if box_type == TrackBox::BOX_TYPE {
-                promote_each(&mut trak, child)?;
+                trak_boxes.push(child);
             } else if box_type == MovieExtendsBox::BOX_TYPE {
-                promote_once(&mut mvex, child)?;
+                mvex_boxes.push(child);
             } else {
-                keep_unpromoted(&mut other_boxes, child);
+                other_boxes.keep(child);
             }
         }
 
         Ok(Self {
-            mvhd: require(mvhd)?,
-            trak: require_any(trak)?,
-            mvex,
+            mvhd: mvhd_boxes.exactly_one()?,
+            trak: trak_boxes.one_or_more()?,
+            mvex: mvex_boxes.zero_or_one()?,
             other_boxes,
         })
     }
@@ -130,12 +127,19 @@ impl BoxEncode for MovieBox {
             total.saturating_add(track.encoded_len())
         });
         let extends = self.mvex.as_ref().map_or(0, |mvex| mvex.encoded_len());
+        let others = self
+            .other_boxes
+            .as_slice()
+            .iter()
+            .fold(0_u64, |total, other| {
+                total.saturating_add(other.encoded_len())
+            });
 
         self.mvhd
             .encoded_len()
             .saturating_add(tracks)
             .saturating_add(extends)
-            .saturating_add(total_encoded_len(&self.other_boxes))
+            .saturating_add(others)
     }
 
     fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
@@ -152,7 +156,9 @@ impl BoxEncode for MovieBox {
         if let Some(mvex) = &self.mvex {
             rest = mvex.encode(rest)?;
         }
-        write_all(&self.other_boxes, rest)?;
+        for other in self.other_boxes.as_slice() {
+            rest = other.encode(rest)?;
+        }
 
         Ok(())
     }
