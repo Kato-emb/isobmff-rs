@@ -1,4 +1,4 @@
-//! [`Utf8CString`], the null-terminated UTF-8 string of ISO/IEC 14496-12 §4.2
+//! [`NullTerminatedString`], the null-terminated UTF-8 string of ISO/IEC 14496-12 §4.2
 
 use alloc::string::{String, ToString as _};
 use core::str;
@@ -20,14 +20,14 @@ use crate::box_encode::EncodeError;
 /// # Examples
 ///
 /// ```
-/// use isobmff_core::Utf8CString;
+/// use isobmff_core::NullTerminatedString;
 ///
 /// // A field that ends at its terminator
-/// let name = Utf8CString::from_slice(b"VideoHandler\0").unwrap();
+/// let name = NullTerminatedString::from_slice(b"VideoHandler\0").unwrap();
 /// assert_eq!(name.as_str(), "VideoHandler");
 ///
 /// // A file that leaves the terminator off reads the same
-/// assert_eq!(Utf8CString::from_slice(b"VideoHandler").unwrap(), name);
+/// assert_eq!(NullTerminatedString::from_slice(b"VideoHandler").unwrap(), name);
 ///
 /// // Writing puts the terminator back, so the length counts it
 /// assert_eq!(name.encoded_len(), 13);
@@ -37,12 +37,12 @@ use crate::box_encode::EncodeError;
 /// assert_eq!(buffer, b"VideoHandler\0");
 ///
 /// // A string carrying a NUL of its own could not be read back whole
-/// assert_eq!(Utf8CString::new(String::from("Video\0Handler")), None);
+/// assert_eq!(NullTerminatedString::new(String::from("Video\0Handler")), None);
 /// ```
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct Utf8CString(String);
+pub struct NullTerminatedString(String);
 
-impl Utf8CString {
+impl NullTerminatedString {
     /// Creates the field from the text it carries
     ///
     /// Returns `None` when `value` holds a NUL, which the terminator written
@@ -134,56 +134,56 @@ mod tests {
     use alloc::string::String;
     use alloc::vec;
 
-    use super::Utf8CString;
+    use super::NullTerminatedString;
     use crate::box_decode::DecodeError;
     use crate::box_encode::EncodeError;
 
     #[test]
     fn a_field_holding_only_a_terminator_reads_as_the_empty_string() {
         assert_eq!(
-            Utf8CString::from_slice(b"\0").unwrap(),
-            Utf8CString(String::new())
+            NullTerminatedString::from_slice(b"\0").unwrap(),
+            NullTerminatedString(String::new())
         );
     }
 
     #[test]
     fn an_empty_field_reads_as_the_empty_string() {
         assert_eq!(
-            Utf8CString::from_slice(b"").unwrap(),
-            Utf8CString(String::new())
+            NullTerminatedString::from_slice(b"").unwrap(),
+            NullTerminatedString(String::new())
         );
     }
 
     #[test]
     fn bytes_after_the_terminator_are_dropped() {
         assert_eq!(
-            Utf8CString::from_slice(b"name\0trailing").unwrap(),
-            Utf8CString(String::from("name"))
+            NullTerminatedString::from_slice(b"name\0trailing").unwrap(),
+            NullTerminatedString(String::from("name"))
         );
     }
 
     #[test]
     fn text_that_is_not_utf8_is_rejected() {
         assert!(matches!(
-            Utf8CString::from_slice(b"\xff\0"),
+            NullTerminatedString::from_slice(b"\xff\0"),
             Err(DecodeError::InvalidUtf8(_))
         ));
     }
 
     #[test]
     fn multibyte_text_is_written_and_read_back_whole() {
-        let field = Utf8CString::new(String::from("日本語")).unwrap();
+        let field = NullTerminatedString::new(String::from("日本語")).unwrap();
         let mut buffer = vec![0xff; 10];
 
         field.encode(&mut buffer).unwrap();
 
         assert_eq!(field.encoded_len(), 10);
-        assert_eq!(Utf8CString::from_slice(&buffer).unwrap(), field);
+        assert_eq!(NullTerminatedString::from_slice(&buffer).unwrap(), field);
     }
 
     #[test]
     fn a_buffer_one_byte_short_of_the_terminator_is_refused() {
-        let field = Utf8CString::new(String::from("name")).unwrap();
+        let field = NullTerminatedString::new(String::from("name")).unwrap();
 
         assert_eq!(
             field.encode(&mut [0; 4]),
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn a_field_written_into_a_longer_buffer_leaves_the_rest_untouched() {
-        let field = Utf8CString::new(String::from("ab")).unwrap();
+        let field = NullTerminatedString::new(String::from("ab")).unwrap();
         let mut buffer = [0xff; 6];
 
         let rest = field.encode(&mut buffer).unwrap();

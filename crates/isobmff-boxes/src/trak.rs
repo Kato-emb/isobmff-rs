@@ -124,7 +124,9 @@ pub(crate) mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, DecodeError, FourCC, FullBoxFlags, Utf8CString};
+    use isobmff_core::{
+        BoxDecode, BoxEncode, DecodeError, FourCC, FullBoxFlags, NullTerminatedString,
+    };
 
     use super::TrackBox;
     use crate::hdlr::HandlerBox;
@@ -143,7 +145,7 @@ pub(crate) mod tests {
                 MediaHeaderBox::new(0, 0, 90_000, 90_000, 0x55C4).unwrap(),
                 HandlerBox::new(
                     FourCC::new(*b"vide"),
-                    Utf8CString::new(String::from("VideoHandler")).unwrap(),
+                    NullTerminatedString::new(String::from("VideoHandler")).unwrap(),
                 ),
                 MediaInformationBox::new(SampleTableBox::new(
                     SampleDescriptionBox::new(Vec::new()),

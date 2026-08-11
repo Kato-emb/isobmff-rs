@@ -13,7 +13,7 @@ exclude.workspace = true
 
 [features]
 default = ["alloc"]
-# Owned boxes — `AnyBox` and `Utf8CString` — which need a heap.
+# Owned boxes — `AnyBox` and `NullTerminatedString` — which need a heap.
 alloc = []
 
 [dependencies]

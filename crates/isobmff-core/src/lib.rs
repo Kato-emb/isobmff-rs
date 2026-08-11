@@ -3,10 +3,10 @@
 //! # `no_std`
 //!
 //! The crate is `no_std`. The `alloc` feature, on by default, adds the items
-//! that need a heap: [`AnyBox`] and [`Utf8CString`], which own the bytes they
-//! carry, [`ChildBoxes`] and [`OtherBoxes`], which gather the children of a
-//! container, and the [`DecodeError::Child`] variant that nests one failure
-//! inside another. Nothing else in the crate reaches for a heap.
+//! that need a heap: [`AnyBox`] and [`NullTerminatedString`], which own the
+//! bytes they carry, [`ChildBoxes`] and [`OtherBoxes`], which gather the
+//! children of a container, and the [`DecodeError::Child`] variant that nests
+//! one failure inside another. Nothing else in the crate reaches for a heap.
 
 #![no_std]
 
@@ -30,9 +30,9 @@ mod field;
 mod fourcc;
 mod full_box;
 mod language_code;
-mod raw_box;
 #[cfg(feature = "alloc")]
-mod utf8_c_string;
+mod null_terminated_string;
+mod raw_box;
 mod uuid;
 
 #[cfg(feature = "alloc")]
@@ -52,7 +52,7 @@ pub use field::{FieldReadError, FieldReader, FieldWriteError, FieldWriter};
 pub use fourcc::FourCC;
 pub use full_box::{FullBoxFields, FullBoxFlags};
 pub use language_code::LanguageCode;
-pub use raw_box::{Boxes, RawBox, RawBoxError, boxes};
 #[cfg(feature = "alloc")]
-pub use utf8_c_string::Utf8CString;
+pub use null_terminated_string::NullTerminatedString;
+pub use raw_box::{Boxes, RawBox, RawBoxError, boxes};
 pub use uuid::Uuid;
