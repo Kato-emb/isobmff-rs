@@ -29,6 +29,9 @@ const DEFAULT_SAMPLE_SIZE_PRESENT: u32 = 0x0000_0010;
 /// Flag stating that `default_sample_flags` is present
 const DEFAULT_SAMPLE_FLAGS_PRESENT: u32 = 0x0000_0020;
 
+/// Flag stating that the fragment of this box holds no samples
+const DURATION_IS_EMPTY: u32 = 0x0001_0000;
+
 /// Every flag stating that a field of this box is present
 const PRESENCE_FLAGS: u32 = BASE_DATA_OFFSET_PRESENT
     | SAMPLE_DESCRIPTION_INDEX_PRESENT
@@ -150,6 +153,15 @@ impl TrackFragmentHeaderBox {
     #[must_use]
     pub const fn flags(&self) -> FullBoxFlags {
         self.flags
+    }
+
+    /// Returns whether the fragment states that it holds no samples
+    ///
+    /// [`TrackFragmentBox`](crate::TrackFragmentBox) refuses this alongside a
+    /// `trun`.
+    #[must_use]
+    pub const fn duration_is_empty(&self) -> bool {
+        self.flags.bits() & DURATION_IS_EMPTY != 0
     }
 
     /// Returns the track this fragment carries samples of

@@ -11,11 +11,12 @@ use crate::raw_box::RawBox;
 ///
 /// The box tables of ISO/IEC 14496-12 state, for every child a container may
 /// hold, the quantity of it the container may hold: `Exactly one`, `Zero or
-/// one`, `One or more`. A container gathers the children of one type here and
-/// states that quantity once, by which method it finishes with —
+/// one`, `One or more`, `Zero or more`. A container gathers the children of one
+/// type here and states that quantity once, by which method it finishes with —
 /// [`exactly_one`](Self::exactly_one), [`zero_or_one`](Self::zero_or_one),
-/// [`one_or_more`](Self::one_or_more). Each hands back the field the quantity
-/// calls for and reports the counts the quantity forbids.
+/// [`one_or_more`](Self::one_or_more), [`zero_or_more`](Self::zero_or_more).
+/// Each hands back the field the quantity calls for and reports the counts the
+/// quantity forbids.
 ///
 /// Reading is left until then. The children are gathered as the bytes they were
 /// framed as, so a count the quantity already forbids is reported without a
@@ -97,6 +98,15 @@ impl<'payload> ChildBoxes<'payload> {
         self.children.push(child);
     }
 
+    /// Returns whether no child of the type this gathering claims was taken
+    ///
+    /// A container settling a rule on whether a child is there at all asks this
+    /// before it states the quantity, which is what leaves the payload unread.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.children.is_empty()
+    }
+
     /// Returns the one child of a quantity of `Exactly one`
     ///
     /// # Errors
@@ -150,6 +160,18 @@ impl<'payload> ChildBoxes<'payload> {
             return Err(DecodeError::MissingMandatoryBox(Child::BOX_TYPE));
         }
 
+        self.zero_or_more()
+    }
+
+    /// Returns the children of a quantity of `Zero or more`, in the order they came
+    ///
+    /// # Errors
+    ///
+    /// * [`Child`](DecodeError::Child): one of the children does not decode.
+    pub fn zero_or_more<Child>(self) -> Result<Vec<Child>, DecodeError>
+    where
+        Child: BoxDecode + BoxDefinition,
+    {
         self.children.into_iter().map(decode::<Child>).collect()
     }
 }
@@ -348,6 +370,36 @@ mod tests {
                 .one_or_more::<SequenceNumberBox>()
                 .unwrap(),
             vec![SequenceNumberBox(7), SequenceNumberBox(9)]
+        );
+    }
+
+    #[test]
+    fn a_gathering_reports_whether_it_took_a_child_before_any_quantity_is_stated() {
+        let payload = b"\0\0\0\x0csqnc\0\0\0\x07";
+
+        assert!(ChildBoxes::new().is_empty());
+        assert!(!gathered(payload).is_empty());
+    }
+
+    #[test]
+    fn a_quantity_of_zero_or_more_yields_the_children_in_the_order_they_came() {
+        let payload = b"\0\0\0\x0csqnc\0\0\0\x07\0\0\0\x0csqnc\0\0\0\x09";
+
+        assert_eq!(
+            gathered(payload)
+                .zero_or_more::<SequenceNumberBox>()
+                .unwrap(),
+            vec![SequenceNumberBox(7), SequenceNumberBox(9)]
+        );
+    }
+
+    #[test]
+    fn a_quantity_of_zero_or_more_yields_nothing_for_a_container_holding_none() {
+        assert_eq!(
+            ChildBoxes::new()
+                .zero_or_more::<SequenceNumberBox>()
+                .unwrap(),
+            Vec::new()
         );
     }
 
