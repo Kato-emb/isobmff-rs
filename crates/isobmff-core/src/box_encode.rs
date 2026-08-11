@@ -3,6 +3,8 @@
 use core::error;
 use core::fmt;
 
+use crate::field::FieldWriteError;
+
 /// Value that writes itself as the payload of a box
 ///
 /// # Examples
@@ -106,6 +108,14 @@ pub enum EncodeError {
         /// Bytes the buffer offered
         available: u64,
     },
+    /// Fields of the box do not write into the buffer of its payload
+    Field(FieldWriteError),
+}
+
+impl From<FieldWriteError> for EncodeError {
+    fn from(error: FieldWriteError) -> Self {
+        Self::Field(error)
+    }
 }
 
 impl fmt::Display for EncodeError {
@@ -119,11 +129,21 @@ impl fmt::Display for EncodeError {
                 formatter,
                 "value of {needed} bytes needs a buffer at least that long, not {available}"
             ),
+            Self::Field(_) => {
+                formatter.write_str("box payload does not write as the fields it holds")
+            }
         }
     }
 }
 
-impl error::Error for EncodeError {}
+impl error::Error for EncodeError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match *self {
+            Self::BufferLengthMismatch { .. } | Self::BufferTooShort { .. } => None,
+            Self::Field(ref error) => Some(error),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

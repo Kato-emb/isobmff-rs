@@ -22,8 +22,11 @@ mod box_header;
 mod box_size;
 mod box_type;
 mod box_write;
+mod data_types;
+mod field;
 mod fourcc;
 mod full_box;
+mod language_code;
 mod raw_box;
 #[cfg(feature = "alloc")]
 mod utf8_c_string;
@@ -39,8 +42,11 @@ pub use box_header::{BoxHeader, BoxHeaderError};
 pub use box_size::{BoxSize, CompactSize, ExtendedSize};
 pub use box_type::{BoxType, CompactType};
 pub use box_write::BoxWrite;
+pub use data_types::{I8F8, I16F16, Matrix, QuickTimeDateTime, U16F16};
+pub use field::{FieldReadError, FieldReader, FieldWriteError, FieldWriter};
 pub use fourcc::FourCC;
 pub use full_box::{FullBoxFields, FullBoxFlags};
+pub use language_code::LanguageCode;
 pub use raw_box::{Boxes, RawBox, RawBoxError, boxes};
 #[cfg(feature = "alloc")]
 pub use utf8_c_string::Utf8CString;
