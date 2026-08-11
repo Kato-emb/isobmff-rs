@@ -112,6 +112,8 @@ pub enum DecodeError {
     MissingMandatoryBox(BoxType),
     /// Container holds more of a child box than its quantity allows
     DuplicateBox(BoxType),
+    /// Container holds a child box that a field of it forbids
+    ForbiddenChildBox(BoxType),
     /// Count a box declares does not match the entries it frames for itself
     ///
     /// A box whose entries frame themselves counts them twice over, and the two
@@ -211,6 +213,10 @@ impl fmt::Display for DecodeError {
                 formatter,
                 "container holds more than one {box_type} box, which may appear once"
             ),
+            Self::ForbiddenChildBox(box_type) => write!(
+                formatter,
+                "container holds a {box_type} box that a field of it forbids"
+            ),
             Self::EntryCountMismatch { declared, actual } => write!(
                 formatter,
                 "box declares {declared} entries but holds {actual}"
@@ -235,6 +241,7 @@ impl error::Error for DecodeError {
             | Self::ConflictingFlags(_)
             | Self::MissingMandatoryBox(_)
             | Self::DuplicateBox(_)
+            | Self::ForbiddenChildBox(_)
             | Self::EntryCountMismatch { .. }
             | Self::UnsupportedEntryCount { .. } => None,
             Self::Field(ref error) => Some(error),
@@ -322,6 +329,16 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "container holds more than one tkhd box, which may appear once"
+        );
+    }
+
+    #[test]
+    fn display_of_a_forbidden_child_box_names_the_box_type() {
+        let error = DecodeError::ForbiddenChildBox(BoxType::compact(*b"trun"));
+
+        assert_eq!(
+            error.to_string(),
+            "container holds a trun box that a field of it forbids"
         );
     }
 
