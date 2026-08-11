@@ -3,9 +3,10 @@
 //! # `no_std`
 //!
 //! The crate is `no_std`. The `alloc` feature, on by default, adds the items
-//! that own the bytes they carry — [`AnyBox`] and [`Utf8CString`], and the
-//! [`DecodeError::Child`] variant that nests one failure inside another.
-//! Nothing else in the crate reaches for a heap.
+//! that need a heap: [`AnyBox`] and [`Utf8CString`], which own the bytes they
+//! carry, [`ChildBoxes`] and [`OtherBoxes`], which gather the children of a
+//! container, and the [`DecodeError::Child`] variant that nests one failure
+//! inside another. Nothing else in the crate reaches for a heap.
 
 #![no_std]
 
@@ -22,6 +23,8 @@ mod box_header;
 mod box_size;
 mod box_type;
 mod box_write;
+#[cfg(feature = "alloc")]
+mod container;
 mod data_types;
 mod field;
 mod fourcc;
@@ -42,6 +45,8 @@ pub use box_header::{BoxHeader, BoxHeaderError};
 pub use box_size::{BoxSize, CompactSize, ExtendedSize};
 pub use box_type::{BoxType, CompactType};
 pub use box_write::BoxWrite;
+#[cfg(feature = "alloc")]
+pub use container::{ChildBoxes, OtherBoxes};
 pub use data_types::{I8F8, I16F16, Matrix, QuickTimeDateTime, U16F16};
 pub use field::{FieldReadError, FieldReader, FieldWriteError, FieldWriter};
 pub use fourcc::FourCC;
