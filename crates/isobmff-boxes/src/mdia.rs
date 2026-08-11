@@ -1,13 +1,10 @@
 //! [`MediaBox`] (`mdia`), ISO/IEC 14496-12 §8.4.1
 
-use alloc::vec::Vec;
-
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, DecodeError, EncodeError,
-    boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, DecodeError,
+    EncodeError, OtherBoxes, boxes,
 };
 
-use crate::container::{keep_unpromoted, promote_once, require, total_encoded_len, write_all};
 use crate::hdlr::HandlerBox;
 use crate::mdhd::MediaHeaderBox;
 use crate::minf::MediaInformationBox;
@@ -28,7 +25,7 @@ pub struct MediaBox {
     mdhd: MediaHeaderBox,
     hdlr: HandlerBox,
     minf: MediaInformationBox,
-    other_boxes: Vec<AnyBox>,
+    other_boxes: OtherBoxes,
 }
 
 impl MediaBox {
@@ -39,7 +36,7 @@ impl MediaBox {
             mdhd,
             hdlr,
             minf,
-            other_boxes: Vec::new(),
+            other_boxes: OtherBoxes::new(),
         }
     }
 
@@ -64,7 +61,7 @@ impl MediaBox {
     /// Returns the children no field of this box claims, in the order they came
     #[must_use]
     pub fn other_boxes(&self) -> &[AnyBox] {
-        &self.other_boxes
+        self.other_boxes.as_slice()
     }
 }
 
@@ -82,30 +79,30 @@ impl BoxDecode for MediaBox {
     ///   them.
     /// * [`Child`](DecodeError::Child): one of them does not decode.
     fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
-        let mut mdhd = None;
-        let mut hdlr = None;
-        let mut minf = None;
-        let mut other_boxes = Vec::new();
+        let mut mdhd_boxes = ChildBoxes::new();
+        let mut hdlr_boxes = ChildBoxes::new();
+        let mut minf_boxes = ChildBoxes::new();
+        let mut other_boxes = OtherBoxes::new();
 
         for child in boxes(payload) {
             let child = child?;
             let box_type = child.header().box_type();
 
             if box_type == MediaHeaderBox::BOX_TYPE {
-                promote_once(&mut mdhd, child)?;
+                mdhd_boxes.push(child);
             } else if box_type == HandlerBox::BOX_TYPE {
-                promote_once(&mut hdlr, child)?;
+                hdlr_boxes.push(child);
             } else if box_type == MediaInformationBox::BOX_TYPE {
-                promote_once(&mut minf, child)?;
+                minf_boxes.push(child);
             } else {
-                keep_unpromoted(&mut other_boxes, child);
+                other_boxes.keep(child);
             }
         }
 
         Ok(Self {
-            mdhd: require(mdhd)?,
-            hdlr: require(hdlr)?,
-            minf: require(minf)?,
+            mdhd: mdhd_boxes.exactly_one()?,
+            hdlr: hdlr_boxes.exactly_one()?,
+            minf: minf_boxes.exactly_one()?,
             other_boxes,
         })
     }
@@ -113,11 +110,19 @@ impl BoxDecode for MediaBox {
 
 impl BoxEncode for MediaBox {
     fn payload_len(&self) -> u64 {
+        let others = self
+            .other_boxes
+            .as_slice()
+            .iter()
+            .fold(0_u64, |total, other| {
+                total.saturating_add(other.encoded_len())
+            });
+
         self.mdhd
             .encoded_len()
             .saturating_add(self.hdlr.encoded_len())
             .saturating_add(self.minf.encoded_len())
-            .saturating_add(total_encoded_len(&self.other_boxes))
+            .saturating_add(others)
     }
 
     fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
@@ -127,10 +132,12 @@ impl BoxEncode for MediaBox {
             return Err(EncodeError::BufferLengthMismatch { expected, actual });
         }
 
-        let rest = self.mdhd.encode(buffer)?;
-        let rest = self.hdlr.encode(rest)?;
-        let rest = self.minf.encode(rest)?;
-        write_all(&self.other_boxes, rest)?;
+        let mut rest = self.mdhd.encode(buffer)?;
+        rest = self.hdlr.encode(rest)?;
+        rest = self.minf.encode(rest)?;
+        for other in self.other_boxes.as_slice() {
+            rest = other.encode(rest)?;
+        }
 
         Ok(())
     }

@@ -1,13 +1,10 @@
 //! [`MediaInformationBox`] (`minf`), ISO/IEC 14496-12 §8.4.4
 
-use alloc::vec::Vec;
-
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, DecodeError, EncodeError,
-    boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, DecodeError,
+    EncodeError, OtherBoxes, boxes,
 };
 
-use crate::container::{keep_unpromoted, promote_once, require, total_encoded_len, write_all};
 use crate::stbl::SampleTableBox;
 
 /// Box that holds every declaration specific to the media of one track
@@ -23,7 +20,7 @@ use crate::stbl::SampleTableBox;
 #[derive(Clone, PartialEq, Debug)]
 pub struct MediaInformationBox {
     stbl: SampleTableBox,
-    other_boxes: Vec<AnyBox>,
+    other_boxes: OtherBoxes,
 }
 
 impl MediaInformationBox {
@@ -32,7 +29,7 @@ impl MediaInformationBox {
     pub const fn new(stbl: SampleTableBox) -> Self {
         Self {
             stbl,
-            other_boxes: Vec::new(),
+            other_boxes: OtherBoxes::new(),
         }
     }
 
@@ -45,7 +42,7 @@ impl MediaInformationBox {
     /// Returns the children no field of this box claims, in the order they came
     #[must_use]
     pub fn other_boxes(&self) -> &[AnyBox] {
-        &self.other_boxes
+        self.other_boxes.as_slice()
     }
 }
 
@@ -61,20 +58,20 @@ impl BoxDecode for MediaInformationBox {
     /// * [`DuplicateBox`](DecodeError::DuplicateBox): more than one `stbl`.
     /// * [`Child`](DecodeError::Child): the `stbl` does not decode.
     fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
-        let mut stbl = None;
-        let mut other_boxes = Vec::new();
+        let mut stbl_boxes = ChildBoxes::new();
+        let mut other_boxes = OtherBoxes::new();
 
         for child in boxes(payload) {
             let child = child?;
             if child.header().box_type() == SampleTableBox::BOX_TYPE {
-                promote_once(&mut stbl, child)?;
+                stbl_boxes.push(child);
             } else {
-                keep_unpromoted(&mut other_boxes, child);
+                other_boxes.keep(child);
             }
         }
 
         Ok(Self {
-            stbl: require(stbl)?,
+            stbl: stbl_boxes.exactly_one()?,
             other_boxes,
         })
     }
@@ -82,9 +79,15 @@ impl BoxDecode for MediaInformationBox {
 
 impl BoxEncode for MediaInformationBox {
     fn payload_len(&self) -> u64 {
-        self.stbl
-            .encoded_len()
-            .saturating_add(total_encoded_len(&self.other_boxes))
+        let others = self
+            .other_boxes
+            .as_slice()
+            .iter()
+            .fold(0_u64, |total, other| {
+                total.saturating_add(other.encoded_len())
+            });
+
+        self.stbl.encoded_len().saturating_add(others)
     }
 
     fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
@@ -94,8 +97,10 @@ impl BoxEncode for MediaInformationBox {
             return Err(EncodeError::BufferLengthMismatch { expected, actual });
         }
 
-        let rest = self.stbl.encode(buffer)?;
-        write_all(&self.other_boxes, rest)?;
+        let mut rest = self.stbl.encode(buffer)?;
+        for other in self.other_boxes.as_slice() {
+            rest = other.encode(rest)?;
+        }
 
         Ok(())
     }

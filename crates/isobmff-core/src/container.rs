@@ -170,9 +170,9 @@ where
 /// The order they came in is the order they are held.
 ///
 /// Where they go among the children the container does read is that container's
-/// own canonical order, so writing them is its part: this type says how long
-/// they are with [`encoded_len`](Self::encoded_len) and hands them over with
-/// [`as_slice`](Self::as_slice).
+/// own canonical order, so summing them and writing them is that container's
+/// part: this type hands them over with [`as_slice`](Self::as_slice), and the
+/// container treats that run as it treats any run of children it holds.
 ///
 /// # Examples
 ///
@@ -198,8 +198,14 @@ where
 ///     [BoxType::compact(*b"free"), BoxType::compact(*b"skip")]
 /// );
 ///
-/// // The container writes them where its own order puts them
-/// let mut buffer = vec![0; usize::try_from(other_boxes.encoded_len()).unwrap()];
+/// // The container sums them as it sums any run of children
+/// let length = other_boxes
+///     .as_slice()
+///     .iter()
+///     .fold(0_u64, |total, kept| total.saturating_add(kept.encoded_len()));
+///
+/// // And writes them where its own order puts them
+/// let mut buffer = vec![0; usize::try_from(length).unwrap()];
 /// let mut rest = buffer.as_mut_slice();
 /// for kept in other_boxes.as_slice() {
 ///     rest = kept.encode(rest).unwrap();
@@ -229,14 +235,6 @@ impl OtherBoxes {
             child.header().box_type(),
             child.payload().to_vec(),
         ));
-    }
-
-    /// Returns the length the children kept occupy, headers included
-    #[must_use]
-    pub fn encoded_len(&self) -> u64 {
-        self.children
-            .iter()
-            .fold(0, |total, child| total.saturating_add(child.encoded_len()))
     }
 
     /// Returns the children kept, in the order they came
@@ -388,12 +386,5 @@ mod tests {
                 AnyBox::from_raw_bytes(BoxType::compact(*b"skip"), Vec::new()),
             ]
         );
-        assert_eq!(other_boxes.encoded_len(), 20);
-    }
-
-    #[test]
-    fn a_holding_that_kept_nothing_occupies_no_bytes() {
-        assert_eq!(OtherBoxes::new().encoded_len(), 0);
-        assert_eq!(OtherBoxes::new().as_slice(), []);
     }
 }

@@ -3,11 +3,10 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, DecodeError, EncodeError,
-    boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, DecodeError,
+    EncodeError, OtherBoxes, boxes,
 };
 
-use crate::container::{keep_unpromoted, promote_each, require_any, total_encoded_len, write_all};
 use crate::trex::TrackExtendsBox;
 
 /// Box whose presence says the movie continues in fragments
@@ -24,7 +23,7 @@ use crate::trex::TrackExtendsBox;
 #[derive(Clone, PartialEq, Debug)]
 pub struct MovieExtendsBox {
     trex: Vec<TrackExtendsBox>,
-    other_boxes: Vec<AnyBox>,
+    other_boxes: OtherBoxes,
 }
 
 impl MovieExtendsBox {
@@ -40,7 +39,7 @@ impl MovieExtendsBox {
 
         Some(Self {
             trex,
-            other_boxes: Vec::new(),
+            other_boxes: OtherBoxes::new(),
         })
     }
 
@@ -53,7 +52,7 @@ impl MovieExtendsBox {
     /// Returns the children no field of this box claims, in the order they came
     #[must_use]
     pub fn other_boxes(&self) -> &[AnyBox] {
-        &self.other_boxes
+        self.other_boxes.as_slice()
     }
 }
 
@@ -68,20 +67,20 @@ impl BoxDecode for MovieExtendsBox {
     /// * [`MissingMandatoryBox`](DecodeError::MissingMandatoryBox): no `trex`.
     /// * [`Child`](DecodeError::Child): a `trex` does not decode.
     fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
-        let mut trex = Vec::new();
-        let mut other_boxes = Vec::new();
+        let mut trex_boxes = ChildBoxes::new();
+        let mut other_boxes = OtherBoxes::new();
 
         for child in boxes(payload) {
             let child = child?;
             if child.header().box_type() == TrackExtendsBox::BOX_TYPE {
-                promote_each(&mut trex, child)?;
+                trex_boxes.push(child);
             } else {
-                keep_unpromoted(&mut other_boxes, child);
+                other_boxes.keep(child);
             }
         }
 
         Ok(Self {
-            trex: require_any(trex)?,
+            trex: trex_boxes.one_or_more()?,
             other_boxes,
         })
     }
@@ -89,12 +88,18 @@ impl BoxDecode for MovieExtendsBox {
 
 impl BoxEncode for MovieExtendsBox {
     fn payload_len(&self) -> u64 {
-        self.trex
+        let track_extends = self.trex.iter().fold(0_u64, |total, trex| {
+            total.saturating_add(trex.encoded_len())
+        });
+        let others = self
+            .other_boxes
+            .as_slice()
             .iter()
-            .fold(0_u64, |total, trex| {
-                total.saturating_add(trex.encoded_len())
-            })
-            .saturating_add(total_encoded_len(&self.other_boxes))
+            .fold(0_u64, |total, other| {
+                total.saturating_add(other.encoded_len())
+            });
+
+        track_extends.saturating_add(others)
     }
 
     fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
@@ -108,7 +113,9 @@ impl BoxEncode for MovieExtendsBox {
         for trex in &self.trex {
             rest = trex.encode(rest)?;
         }
-        write_all(&self.other_boxes, rest)?;
+        for other in self.other_boxes.as_slice() {
+            rest = other.encode(rest)?;
+        }
 
         Ok(())
     }

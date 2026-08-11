@@ -7,8 +7,6 @@ use isobmff_core::{
     FieldWriter, FullBoxFields, FullBoxFlags, boxes,
 };
 
-use crate::container::{total_encoded_len, write_all};
-
 /// Length of the fields that precede the entries
 const FIXED_FIELDS_LEN: u64 = 8;
 
@@ -86,7 +84,11 @@ impl BoxDecode for SampleDescriptionBox {
 
 impl BoxEncode for SampleDescriptionBox {
     fn payload_len(&self) -> u64 {
-        FIXED_FIELDS_LEN.saturating_add(total_encoded_len(&self.entries))
+        let entries = self.entries.iter().fold(0_u64, |total, entry| {
+            total.saturating_add(entry.encoded_len())
+        });
+
+        FIXED_FIELDS_LEN.saturating_add(entries)
     }
 
     fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
@@ -104,7 +106,10 @@ impl BoxEncode for SampleDescriptionBox {
         // this stands for a `Vec` no target can hold.
         writer.write_u32(u32::try_from(self.entries.len()).map_err(|_| mismatch)?)?;
 
-        write_all(&self.entries, writer.into_remainder())?;
+        let mut rest = writer.into_remainder();
+        for entry in &self.entries {
+            rest = entry.encode(rest)?;
+        }
 
         Ok(())
     }
