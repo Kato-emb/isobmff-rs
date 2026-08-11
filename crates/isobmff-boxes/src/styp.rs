@@ -118,7 +118,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxWrite as _, FourCC};
+    use isobmff_core::{BoxDecode, BoxWrite as _, DecodeError, FieldReadError, FourCC};
 
     use super::SegmentTypeBox;
 
@@ -128,6 +128,17 @@ mod tests {
             SegmentTypeBox::decode_payload(b"iso6\0\0\x02\0dash").unwrap(),
             SegmentTypeBox::new(FourCC::new(*b"iso6"), 512, vec![FourCC::new(*b"dash")])
         );
+    }
+
+    #[test]
+    fn a_compatible_brand_cut_short_names_the_length_that_would_complete_it() {
+        assert!(matches!(
+            SegmentTypeBox::decode_payload(b"msdh\0\0\0\0msd"),
+            Err(DecodeError::Field(FieldReadError::UnexpectedEof {
+                needed: 12,
+                available: 11
+            }))
+        ));
     }
 
     #[test]

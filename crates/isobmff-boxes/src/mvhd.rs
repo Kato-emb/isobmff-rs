@@ -256,7 +256,7 @@ impl BoxEncode for MovieHeaderBox {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
@@ -267,7 +267,7 @@ mod tests {
     use super::MovieHeaderBox;
 
     /// Movie header carrying the times a file written at the epoch declares
-    fn movie_header(duration: u64) -> MovieHeaderBox {
+    pub(crate) fn movie_header(duration: u64) -> MovieHeaderBox {
         MovieHeaderBox::new(
             QuickTimeDateTime::from_seconds(1),
             QuickTimeDateTime::from_seconds(2),
