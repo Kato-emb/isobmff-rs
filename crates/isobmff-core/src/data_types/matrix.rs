@@ -15,9 +15,6 @@ const ENCODED_LEN: usize = 36;
 /// ```
 /// use isobmff_core::Matrix;
 ///
-/// // The template value the spec gives every matrix field
-/// assert_eq!(Matrix::UNITY.raw(), &[0x0001_0000, 0, 0, 0, 0x0001_0000, 0, 0, 0, 0x4000_0000]);
-///
 /// // The 36 bytes of a matrix read back as the value that wrote them
 /// let bytes = Matrix::UNITY.to_bytes();
 /// assert_eq!(Matrix::from_bytes(&bytes), Matrix::UNITY);
@@ -91,9 +88,21 @@ mod tests {
 
     #[test]
     fn the_fields_are_written_in_the_order_the_spec_lists_them() {
-        let bytes = Matrix::from_raw([0x0102_0304, 0, 0, 0, 0, 0, 0, 0, 0x0a0b_0c0d]).to_bytes();
+        let bytes = EVERY_FIELD_DISTINCT.to_bytes();
 
-        assert_eq!(bytes.first_chunk::<4>(), Some(&[0x01, 0x02, 0x03, 0x04]));
-        assert_eq!(bytes.last_chunk::<4>(), Some(&[0x0a, 0x0b, 0x0c, 0x0d]));
+        assert_eq!(
+            bytes,
+            [
+                0x00, 0x00, 0x00, 0x01, // a
+                0xff, 0xff, 0xff, 0xfe, // b
+                0x00, 0x00, 0x00, 0x03, // u
+                0xff, 0xff, 0xff, 0xfc, // c
+                0x00, 0x00, 0x00, 0x05, // d
+                0xff, 0xff, 0xff, 0xfa, // v
+                0x00, 0x00, 0x00, 0x07, // x
+                0xff, 0xff, 0xff, 0xf8, // y
+                0x00, 0x00, 0x00, 0x09, // w
+            ]
+        );
     }
 }

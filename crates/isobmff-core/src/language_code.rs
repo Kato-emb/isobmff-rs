@@ -29,9 +29,6 @@ const PACKED_BITS: u16 = 0x7FFF;
 /// // The bit above the code is not part of it, so a field carrying it reads the same
 /// assert_eq!(LanguageCode::from_raw(japanese.raw() | 0x8000), japanese);
 ///
-/// // `und`, which a writer states when the language is undetermined
-/// assert_eq!(LanguageCode::UND.letters(), Some(*b"und"));
-///
 /// // A packed value spelling no letters is still a value the field carries
 /// assert_eq!(LanguageCode::from_raw(0).letters(), None);
 /// ```
@@ -118,6 +115,11 @@ mod tests {
 
             assert_eq!(code.and_then(LanguageCode::letters), Some(*letters));
         }
+    }
+
+    #[test]
+    fn the_undetermined_code_is_the_packing_of_the_letters_it_is_named_for() {
+        assert_eq!(LanguageCode::from_letters(b"und"), Some(LanguageCode::UND));
     }
 
     #[test]
