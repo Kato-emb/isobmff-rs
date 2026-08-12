@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "isobmff"
+version = "0.0.0"
+
+[[package]]
 name = "isobmff-boxes"
 version = "0.0.0"
 dependencies = [
