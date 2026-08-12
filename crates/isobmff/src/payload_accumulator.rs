@@ -59,6 +59,9 @@ impl PayloadAccumulator {
     pub const fn new(limit: usize) -> Self {
         Self {
             limit,
+            // Why not Vec::with_capacity(limit): the limit is a DoS bound, not
+            // an expected length — reserving it would cost every accumulator
+            // its worst case before a single payload byte arrives.
             gathered: Ok(Vec::new()),
         }
     }
