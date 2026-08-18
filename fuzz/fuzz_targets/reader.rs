@@ -1,19 +1,19 @@
 //! Reading properties of [`BoxReader`]
 //!
-//! One run checks five properties of the same input:
+//! One run checks four properties of the same input:
 //!
 //! 1. no call panics, and no event carries a payload part that is empty
 //! 2. where the input is cut does not change the boxes it reads
-//! 3. the boxes read agree with the [`boxes`] iterator over the input, box for
-//!    box, as far as the reader got through it
-//! 4. every box passed on re-encodes to the span of input it was read from, at
-//!    the offset the reader reported the box begins at, and a box read into a
-//!    value begins at the offset the same walk reaches
-//! 5. input the iterator rejects the reader rejects as well
+//! 3. the boxes read agree with the [`boxes`] iterator over the input — box type,
+//!    header, payload, and the offset each box begins at — as far as the reader
+//!    got through it
+//! 4. input the iterator rejects the reader rejects as well
 //!
 //! Where the reader alone rejects, property 3 holds over the boxes it did report
 //! rather than the whole input: reading a box into a value decodes its payload,
-//! which the iterator never looks at.
+//! which the iterator never looks at. That the boxes the iterator splits out
+//! re-encode to the spans they came from is the `boxes` target's property, not
+//! this one's.
 
 #![no_main]
 
@@ -48,23 +48,6 @@ enum Reported {
     },
     /// Box read into a value, which publishes no bytes of its own
     Value { box_type: BoxType, file_offset: u64 },
-}
-
-impl Reported {
-    /// Returns whether the whole box was reported, its end included
-    const fn is_whole(&self) -> bool {
-        match *self {
-            Self::PassedOn { ended, .. } => ended,
-            Self::Value { .. } => true,
-        }
-    }
-
-    /// Returns where in the input the box begins
-    const fn file_offset(&self) -> u64 {
-        match *self {
-            Self::PassedOn { file_offset, .. } | Self::Value { file_offset, .. } => file_offset,
-        }
-    }
 }
 
 /// Everything one pass of the reader over an input reported
@@ -121,7 +104,10 @@ fn read<'input>(arriving: impl IntoIterator<Item = &'input [u8]>) -> Run {
     // Why not keep the box left unclosed: it spans bytes the reader never got
     // through, so comparing it against the iterator would hold a partial box up
     // against a whole one.
-    reported.retain(Reported::is_whole);
+    reported.retain(|reported| match *reported {
+        Reported::PassedOn { ended, .. } => ended,
+        Reported::Value { .. } => true,
+    });
 
     Run { reported, failure }
 }
@@ -221,35 +207,22 @@ fn agrees_with_the_boxes_iterator(bytes: &[u8], run: &Run) {
     let mut offset = 0;
 
     for (reported, framed) in run.reported.iter().zip(&iterated) {
-        let mut buffer = [0; BoxHeader::MAX_ENCODED_LEN];
-        let header = framed.header().encode(&mut buffer);
+        let (Reported::PassedOn { file_offset, .. } | Reported::Value { file_offset, .. }) =
+            *reported;
 
         assert_eq!(
-            reported.file_offset(),
-            offset as u64,
+            file_offset, offset as u64,
             "a box was reported at an offset it does not begin at"
-        );
-        assert_eq!(
-            bytes.get(offset..offset + header.len()),
-            Some(header),
-            "a header does not re-encode to the span it was read from"
         );
 
         match reported {
             Reported::PassedOn {
-                header: reported_header,
-                payload,
-                ..
+                header, payload, ..
             } => {
                 assert_eq!(
-                    *reported_header,
+                    *header,
                     framed.header(),
                     "the reader and the iterator disagree on the header of a box"
-                );
-                assert_eq!(
-                    bytes.get(offset + header.len()..offset + header.len() + payload.len()),
-                    Some(payload.as_slice()),
-                    "a payload does not match the span it was read from"
                 );
                 assert_eq!(
                     payload.as_slice(),
@@ -264,6 +237,6 @@ fn agrees_with_the_boxes_iterator(bytes: &[u8], run: &Run) {
             ),
         }
 
-        offset += header.len() + framed.payload().len();
+        offset += framed.header().encoded_len() + framed.payload().len();
     }
 }

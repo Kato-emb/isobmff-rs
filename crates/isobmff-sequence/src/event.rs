@@ -63,13 +63,13 @@ pub enum BoxEvent {
 /// Box the reader reads into a value rather than passing on as it lies
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ValueBox {
-    /// [`FileTypeBox`] (`ftyp`), ISO/IEC 14496-12 §4.3
+    /// [`FileTypeBox`] (`ftyp`)
     FileType,
-    /// [`SegmentTypeBox`] (`styp`), ISO/IEC 14496-12 §8.16.2
+    /// [`SegmentTypeBox`] (`styp`)
     SegmentType,
-    /// [`MovieBox`] (`moov`), ISO/IEC 14496-12 §8.2.1
+    /// [`MovieBox`] (`moov`)
     Movie,
-    /// [`MovieFragmentBox`] (`moof`), ISO/IEC 14496-12 §8.8.4
+    /// [`MovieFragmentBox`] (`moof`)
     MovieFragment,
 }
 

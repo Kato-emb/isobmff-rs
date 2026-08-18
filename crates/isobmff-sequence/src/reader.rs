@@ -43,6 +43,22 @@ const fn header_len_from_prefix(prefix: &[u8; MIN_HEADER_LEN]) -> usize {
     }
 }
 
+/// Takes off `input` the payload bytes the box that started has still to come
+///
+/// `remaining` is `None` for a box that declares no total, which only the end of
+/// the file ends: every byte `input` offers is taken.
+fn take_payload<'input>(remaining: Option<u64>, input: &mut &'input [u8]) -> &'input [u8] {
+    let wanted = remaining
+        .and_then(|remaining| usize::try_from(remaining).ok())
+        .unwrap_or(usize::MAX)
+        .min(input.len());
+    let (taken, rest) = input.split_at(wanted);
+
+    *input = rest;
+
+    taken
+}
+
 /// Reads the sequence of boxes a file is formed as, taking the input as it arrives
 ///
 /// The reader is handed the input as it arrives and reports the boxes it frames
@@ -232,51 +248,48 @@ impl BoxReader {
                     // would leave the offset short by the head of that header.
                     self.advance(available.saturating_sub(unread.len()));
 
-                    match gathered {
-                        Ok(Some(header)) => {
-                            match ValueBox::of(header.box_type()).zip(header.payload_len()) {
-                                Some((value_box, declared)) => {
-                                    if declared > self.payload_limit {
-                                        return Err(self.fail(
-                                            BoxReaderError::PayloadLimitExceeded {
-                                                box_type: header.box_type(),
-                                                declared,
-                                                limit: self.payload_limit,
-                                            },
-                                        ));
-                                    }
-
-                                    self.state = State::Gathering {
-                                        header,
-                                        value_box,
-                                        // Why not reserve the declared length:
-                                        // the file declares it and the limit
-                                        // only bounds it, so reserving would
-                                        // take memory for bytes that may never
-                                        // arrive.
-                                        gathered: Vec::new(),
-                                        remaining: declared,
-                                        began_at: partial.began_at,
-                                    };
-                                }
-                                None => {
-                                    self.state = State::Payload {
-                                        header,
-                                        remaining: header.payload_len(),
-                                    };
-                                    self.events.push_back(BoxEvent::RawStart {
-                                        header,
-                                        file_offset: partial.began_at,
-                                    });
-                                }
-                            }
-                        }
+                    let header = match gathered {
+                        Ok(Some(header)) => header,
                         Ok(None) => {
                             self.state = State::Header(partial);
                             return Ok(());
                         }
                         Err(error) => return Err(self.fail(error)),
+                    };
+                    let payload_len = header.payload_len();
+
+                    let Some((value_box, declared)) =
+                        ValueBox::of(header.box_type()).zip(payload_len)
+                    else {
+                        self.state = State::Payload {
+                            header,
+                            remaining: payload_len,
+                        };
+                        self.events.push_back(BoxEvent::RawStart {
+                            header,
+                            file_offset: partial.began_at,
+                        });
+                        continue;
+                    };
+
+                    if declared > self.payload_limit {
+                        return Err(self.fail(BoxReaderError::PayloadLimitExceeded {
+                            box_type: header.box_type(),
+                            declared,
+                            limit: self.payload_limit,
+                        }));
                     }
+
+                    self.state = State::Gathering {
+                        header,
+                        value_box,
+                        // Why not reserve the declared length: the file declares
+                        // it and the limit only bounds it, so reserving would take
+                        // memory for bytes that may never arrive.
+                        gathered: Vec::new(),
+                        remaining: declared,
+                        began_at: partial.began_at,
+                    };
                 }
                 State::Payload { header, remaining } => {
                     if remaining == Some(0) {
@@ -288,13 +301,8 @@ impl BoxReader {
                         return Ok(());
                     }
 
-                    let wanted = remaining
-                        .and_then(|remaining| usize::try_from(remaining).ok())
-                        .unwrap_or(usize::MAX)
-                        .min(unread.len());
-                    let (payload, rest) = unread.split_at(wanted);
+                    let payload = take_payload(remaining, &mut unread);
 
-                    unread = rest;
                     self.state = State::Payload {
                         header,
                         remaining: remaining.map(|remaining| {
@@ -332,15 +340,11 @@ impl BoxReader {
                         return Ok(());
                     }
 
-                    let wanted = usize::try_from(*remaining)
-                        .unwrap_or(usize::MAX)
-                        .min(unread.len());
-                    let (payload, rest) = unread.split_at(wanted);
+                    let payload = take_payload(Some(*remaining), &mut unread);
 
                     gathered.extend_from_slice(payload);
                     *remaining =
                         remaining.saturating_sub(u64::try_from(payload.len()).unwrap_or(u64::MAX));
-                    unread = rest;
                     self.advance(payload.len());
                 }
             }

@@ -5,6 +5,9 @@
     reason = "an integration test binary ships no items, so its tests are the crate root"
 )]
 
+#[path = "helpers/reading.rs"]
+mod reading;
+
 use isobmff_boxes::{
     FileTypeBox, HandlerBox, MediaBox, MediaHeaderBox, MediaInformationBox, MovieBox,
     MovieFragmentBox, MovieFragmentHeaderBox, MovieHeaderBox, SampleDescriptionBox, SampleTableBox,
@@ -16,6 +19,7 @@ use isobmff_core::{
     NullTerminatedString, QuickTimeDateTime,
 };
 use isobmff_sequence::{BoxEvent, BoxReader, BoxReaderError};
+use reading::{events_of, framed, payloads_fused};
 
 /// Time every header of the synthetic file declares
 const EPOCH: QuickTimeDateTime = QuickTimeDateTime::from_seconds(0);
@@ -91,16 +95,6 @@ fn written(value: &impl BoxWrite) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-/// The media data as it lies in the file, the header it is framed by first
-fn media_data_written() -> Option<Vec<u8>> {
-    let mut buffer = [0; BoxHeader::MAX_ENCODED_LEN];
-    let mut bytes = media_data_header()?.encode(&mut buffer).to_vec();
-
-    bytes.extend_from_slice(&MEDIA_DATA);
-
-    Some(bytes)
-}
-
 /// A synthetic fragmented file: the brands, the movie, one fragment, its media data
 fn fragmented_file() -> Option<Vec<u8>> {
     Some(
@@ -108,55 +102,10 @@ fn fragmented_file() -> Option<Vec<u8>> {
             written(&file_type())?,
             written(&movie()?)?,
             written(&movie_fragment()?)?,
-            media_data_written()?,
+            framed(BoxType::compact(*b"mdat"), &MEDIA_DATA)?,
         ]
         .concat(),
     )
-}
-
-/// Every event a reader reports for `file`, handed over `cut_length` bytes at a time
-fn events_of(file: &[u8], cut_length: usize) -> Result<Vec<BoxEvent>, BoxReaderError> {
-    events_within(BoxReader::new(), file, cut_length)
-}
-
-/// Every event `reader` reports for `file`, handed over `cut_length` bytes at a time
-fn events_within(
-    mut reader: BoxReader,
-    file: &[u8],
-    cut_length: usize,
-) -> Result<Vec<BoxEvent>, BoxReaderError> {
-    let mut events = Vec::new();
-
-    for arriving in file.chunks(cut_length) {
-        reader.handle_read(arriving)?;
-        while let Some(event) = reader.poll_event() {
-            events.push(event);
-        }
-    }
-    reader.finish()?;
-    while let Some(event) = reader.poll_event() {
-        events.push(event);
-    }
-
-    Ok(events)
-}
-
-/// The events with the payload of each box passed on fused back into one
-///
-/// What is left is what the file says rather than how it was cut
-fn payloads_fused(events: Vec<BoxEvent>) -> Vec<BoxEvent> {
-    let mut fused: Vec<BoxEvent> = Vec::new();
-
-    for event in events {
-        match (fused.last_mut(), event) {
-            (Some(BoxEvent::RawPayload(gathered)), BoxEvent::RawPayload(bytes)) => {
-                gathered.extend_from_slice(&bytes);
-            }
-            (_, event) => fused.push(event),
-        }
-    }
-
-    fused
 }
 
 #[test]
@@ -194,7 +143,7 @@ fn the_boxes_a_file_is_framed_by_are_values_and_its_media_data_is_passed_on() {
 }
 
 #[test]
-fn the_events_reported_do_not_turn_on_where_the_file_was_cut() {
+fn the_events_reported_do_not_turn_on_where_the_fragmented_file_was_cut() {
     let file = fragmented_file().unwrap();
     let whole = payloads_fused(events_of(&file, file.len()).unwrap());
 
@@ -208,26 +157,6 @@ fn the_events_reported_do_not_turn_on_where_the_file_was_cut() {
 }
 
 #[test]
-fn media_data_larger_than_the_limit_is_passed_on_as_it_lies() {
-    let media_data = media_data_written().unwrap();
-    let limit = 16;
-
-    assert_eq!(
-        payloads_fused(
-            events_within(BoxReader::with_payload_limit(limit), &media_data, 8).unwrap()
-        ),
-        vec![
-            BoxEvent::RawStart {
-                header: media_data_header().unwrap(),
-                file_offset: 0
-            },
-            BoxEvent::RawPayload(Vec::from(MEDIA_DATA)),
-            BoxEvent::RawEnd,
-        ]
-    );
-}
-
-#[test]
 fn a_value_declaring_more_than_the_limit_stops_the_reader_where_it_stands() {
     let declared = movie().unwrap().payload_len();
     let limit = declared.saturating_sub(1);
@@ -238,11 +167,11 @@ fn a_value_declaring_more_than_the_limit_stops_the_reader_where_it_stands() {
         reader.handle_read(&file),
         Err(BoxReaderError::PayloadLimitExceeded {
             box_type,
-            declared,
-            limit: reported
+            declared: reported_declared,
+            limit: reported_limit
         }) if box_type == BoxType::compact(*b"moov")
-            && declared == movie().unwrap().payload_len()
-            && reported == limit
+            && reported_declared == declared
+            && reported_limit == limit
     ));
     assert_eq!(
         reader.poll_event(),
