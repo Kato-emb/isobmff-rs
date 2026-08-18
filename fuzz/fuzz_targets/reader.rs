@@ -1,18 +1,24 @@
 //! Reading properties of [`BoxReader`]
 //!
-//! One run checks four properties of the same input:
+//! One run checks five properties of the same input:
 //!
 //! 1. no call panics, and no event carries a payload part that is empty
 //! 2. where the input is cut does not change the boxes it reads
-//! 3. reading a whole input agrees with the [`boxes`] iterator over it, box for
-//!    box and on whether the input reads at all
-//! 4. every box read re-encodes to the span of input it was read from, at the
-//!    offset the reader reported the box begins at
+//! 3. the boxes read agree with the [`boxes`] iterator over the input, box for
+//!    box, as far as the reader got through it
+//! 4. every box passed on re-encodes to the span of input it was read from, at
+//!    the offset the reader reported the box begins at, and a box read into a
+//!    value begins at the offset the same walk reaches
+//! 5. input the iterator rejects the reader rejects as well
+//!
+//! Where the reader alone rejects, property 3 holds over the boxes it did report
+//! rather than the whole input: reading a box into a value decodes its payload,
+//! which the iterator never looks at.
 
 #![no_main]
 
-use isobmff_core::{BoxHeader, boxes};
-use isobmff_sequence::{BoxEvent, BoxReader, BoxReaderError};
+use isobmff_core::{BoxHeader, BoxType, boxes};
+use isobmff_sequence::{BoxEvent, BoxReader};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
 
@@ -32,18 +38,42 @@ struct Input {
 
 /// One box as the reader reported it
 #[derive(PartialEq, Debug)]
-struct Framed {
-    header: BoxHeader,
-    file_offset: u64,
-    payload: Vec<u8>,
-    ended: bool,
+enum Reported {
+    /// Box passed on as it lies, gathered back from its raw events
+    PassedOn {
+        header: BoxHeader,
+        file_offset: u64,
+        payload: Vec<u8>,
+        ended: bool,
+    },
+    /// Box read into a value, which publishes no bytes of its own
+    Value { box_type: BoxType, file_offset: u64 },
+}
+
+impl Reported {
+    /// Returns whether the whole box was reported, its end included
+    const fn is_whole(&self) -> bool {
+        match *self {
+            Self::PassedOn { ended, .. } => ended,
+            Self::Value { .. } => true,
+        }
+    }
+
+    /// Returns where in the input the box begins
+    const fn file_offset(&self) -> u64 {
+        match *self {
+            Self::PassedOn { file_offset, .. } | Self::Value { file_offset, .. } => file_offset,
+        }
+    }
 }
 
 /// Everything one pass of the reader over an input reported
 #[derive(PartialEq, Debug)]
 struct Run {
-    framed: Vec<Framed>,
-    failure: Option<BoxReaderError>,
+    reported: Vec<Reported>,
+    // Why the failure as its own text: the error carries the failure of a box
+    // that did not decode, which is not a value two runs can be compared by.
+    failure: Option<String>,
 }
 
 fuzz_target!(|input: Input| {
@@ -58,13 +88,12 @@ fuzz_target!(|input: Input| {
     );
 
     agrees_with_the_boxes_iterator(&bytes, &whole);
-    boxes_re_encode_to_the_span_they_came_from(&bytes, &whole);
 });
 
 /// Hands `arriving` to a reader, a part at a time, and gathers what it reports
 fn read<'input>(arriving: impl IntoIterator<Item = &'input [u8]>) -> Run {
     let mut reader = BoxReader::new();
-    let mut framed: Vec<Framed> = Vec::new();
+    let mut reported: Vec<Reported> = Vec::new();
     let mut failure = None;
 
     for input in arriving {
@@ -72,39 +101,39 @@ fn read<'input>(arriving: impl IntoIterator<Item = &'input [u8]>) -> Run {
         // still the reader's to hand over, and dropping them would leave a box
         // half gathered for the comparison against the iterator.
         let outcome = reader.handle_read(input);
-        drain(&mut reader, &mut framed);
+        drain(&mut reader, &mut reported);
 
         if let Err(reported) = outcome {
-            failure = Some(reported);
+            failure = Some(format!("{reported:?}"));
             break;
         }
     }
 
     if failure.is_none() {
         let outcome = reader.finish();
-        drain(&mut reader, &mut framed);
+        drain(&mut reader, &mut reported);
 
         if let Err(reported) = outcome {
-            failure = Some(reported);
+            failure = Some(format!("{reported:?}"));
         }
     }
 
     // Why not keep the box left unclosed: it spans bytes the reader never got
     // through, so comparing it against the iterator would hold a partial box up
     // against a whole one.
-    framed.retain(|framed| framed.ended);
+    reported.retain(Reported::is_whole);
 
-    Run { framed, failure }
+    Run { reported, failure }
 }
 
 /// Takes every event the reader has made, folding it into the boxes gathered
-fn drain(reader: &mut BoxReader, framed: &mut Vec<Framed>) {
+fn drain(reader: &mut BoxReader, reported: &mut Vec<Reported>) {
     while let Some(event) = reader.poll_event() {
         match event {
             BoxEvent::RawStart {
                 header,
                 file_offset,
-            } => framed.push(Framed {
+            } => reported.push(Reported::PassedOn {
                 header,
                 file_offset,
                 payload: Vec::new(),
@@ -112,15 +141,33 @@ fn drain(reader: &mut BoxReader, framed: &mut Vec<Framed>) {
             }),
             BoxEvent::RawPayload(part) => {
                 assert!(!part.is_empty(), "an empty payload event was reported");
-                let open = framed.last_mut().expect("a payload before any box started");
-                open.payload.extend_from_slice(&part);
+                let open = reported.last_mut().expect("a payload before any box started");
+
+                match open {
+                    Reported::PassedOn { payload, .. } => payload.extend_from_slice(&part),
+                    Reported::Value { .. } => panic!("a payload of a box read into a value"),
+                }
             }
-            BoxEvent::RawEnd => {
-                framed
-                    .last_mut()
-                    .expect("an end before any box started")
-                    .ended = true;
-            }
+            BoxEvent::RawEnd => match reported.last_mut().expect("an end before any box started") {
+                Reported::PassedOn { ended, .. } => *ended = true,
+                Reported::Value { .. } => panic!("an end of a box read into a value"),
+            },
+            BoxEvent::FileType { file_offset, .. } => reported.push(Reported::Value {
+                box_type: BoxType::compact(*b"ftyp"),
+                file_offset,
+            }),
+            BoxEvent::SegmentType { file_offset, .. } => reported.push(Reported::Value {
+                box_type: BoxType::compact(*b"styp"),
+                file_offset,
+            }),
+            BoxEvent::Movie { file_offset, .. } => reported.push(Reported::Value {
+                box_type: BoxType::compact(*b"moov"),
+                file_offset,
+            }),
+            BoxEvent::MovieFragment { file_offset, .. } => reported.push(Reported::Value {
+                box_type: BoxType::compact(*b"moof"),
+                file_offset,
+            }),
             unknown => panic!("the reader reported an event this run cannot check: {unknown:?}"),
         }
     }
@@ -151,50 +198,72 @@ fn agrees_with_the_boxes_iterator(bytes: &[u8], run: &Run) {
         }
     }
 
-    assert_eq!(
-        run.framed
-            .iter()
-            .map(|framed| (framed.header, framed.payload.as_slice()))
-            .collect::<Vec<_>>(),
-        iterated
-            .iter()
-            .map(|framed| (framed.header(), framed.payload()))
-            .collect::<Vec<_>>(),
-        "the reader and the iterator disagree on the boxes the input holds"
-    );
+    if run.failure.is_none() {
+        assert_eq!(
+            run.reported.len(),
+            iterated.len(),
+            "the reader and the iterator disagree on how many boxes the input holds"
+        );
+    } else {
+        assert!(
+            run.reported.len() <= iterated.len(),
+            "the reader reported boxes the iterator does not split out"
+        );
+    }
 
-    assert_eq!(
-        run.failure.is_some(),
-        iterator_failed,
-        "the reader and the iterator disagree on whether the input is well formed"
-    );
-}
+    if iterator_failed {
+        assert!(
+            run.failure.is_some(),
+            "the reader read to the end of input the iterator rejects"
+        );
+    }
 
-fn boxes_re_encode_to_the_span_they_came_from(bytes: &[u8], run: &Run) {
     let mut offset = 0;
 
-    for framed in &run.framed {
+    for (reported, framed) in run.reported.iter().zip(&iterated) {
         let mut buffer = [0; BoxHeader::MAX_ENCODED_LEN];
-        let header = framed.header.encode(&mut buffer);
+        let header = framed.header().encode(&mut buffer);
 
         assert_eq!(
-            framed.file_offset,
+            reported.file_offset(),
             offset as u64,
             "a box was reported at an offset it does not begin at"
         );
-
         assert_eq!(
             bytes.get(offset..offset + header.len()),
             Some(header),
             "a header does not re-encode to the span it was read from"
         );
-        offset += header.len();
 
-        assert_eq!(
-            bytes.get(offset..offset + framed.payload.len()),
-            Some(framed.payload.as_slice()),
-            "a payload does not match the span it was read from"
-        );
-        offset += framed.payload.len();
+        match reported {
+            Reported::PassedOn {
+                header: reported_header,
+                payload,
+                ..
+            } => {
+                assert_eq!(
+                    *reported_header,
+                    framed.header(),
+                    "the reader and the iterator disagree on the header of a box"
+                );
+                assert_eq!(
+                    bytes.get(offset + header.len()..offset + header.len() + payload.len()),
+                    Some(payload.as_slice()),
+                    "a payload does not match the span it was read from"
+                );
+                assert_eq!(
+                    payload.as_slice(),
+                    framed.payload(),
+                    "the reader and the iterator disagree on the payload of a box"
+                );
+            }
+            Reported::Value { box_type, .. } => assert_eq!(
+                *box_type,
+                framed.header().box_type(),
+                "a box was read into a value of another box type"
+            ),
+        }
+
+        offset += header.len() + framed.payload().len();
     }
 }
