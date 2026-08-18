@@ -69,60 +69,8 @@ pub struct BoxHeader {
 }
 
 impl BoxHeader {
-    /// Shortest header a box can carry: the `size` and `type` fields alone
-    pub const MIN_ENCODED_LEN: usize = header_length(false, false) as usize;
-
     /// Buffer length [`encode`](Self::encode) writes into: the longest header
     pub const MAX_ENCODED_LEN: usize = header_length(true, true) as usize;
-
-    /// Returns the length of the header that starts with the given bytes
-    ///
-    /// The `size` and `type` fields settle whether a `largesize` and a
-    /// `usertype` follow, so the [`MIN_ENCODED_LEN`](Self::MIN_ENCODED_LEN)
-    /// bytes they occupy name the length of the whole header: 8, 16, 24, or 32.
-    /// Every such prefix names one, so a reader that has them can size the rest
-    /// of its read before any of it is decoded.
-    ///
-    /// The two fields name that length and nothing more. Whether the bytes it
-    /// spans are a header at all is settled by [`decode`](Self::decode), which
-    /// still rejects a total too small to cover them.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use isobmff_core::BoxHeader;
-    ///
-    /// // The `size` and `type` fields alone, with nothing after them
-    /// assert_eq!(BoxHeader::encoded_len_from_prefix(b"\0\0\0\x10free"), 8);
-    ///
-    /// // A `size` of one moves the total into the `largesize` field that follows
-    /// assert_eq!(BoxHeader::encoded_len_from_prefix(b"\0\0\0\x01mdat"), 16);
-    ///
-    /// // The reserved `uuid` code introduces a `usertype` field
-    /// assert_eq!(BoxHeader::encoded_len_from_prefix(b"\0\0\0\x20uuid"), 24);
-    ///
-    /// // Both extended forms at once, for the longest header there is
-    /// assert_eq!(BoxHeader::encoded_len_from_prefix(b"\0\0\0\x01uuid"), 32);
-    ///
-    /// // The length is named even where no header follows: this total is below it
-    /// assert_eq!(BoxHeader::encoded_len_from_prefix(b"\0\0\0\x08uuid"), 24);
-    /// assert!(BoxHeader::decode(b"\0\0\0\x08uuid").is_err());
-    /// ```
-    #[must_use]
-    pub const fn encoded_len_from_prefix(prefix: &[u8; Self::MIN_ENCODED_LEN]) -> usize {
-        let [
-            size_first,
-            size_second,
-            size_third,
-            size_fourth,
-            type_field @ ..,
-        ] = *prefix;
-
-        let declared = u32::from_be_bytes([size_first, size_second, size_third, size_fourth]);
-        let compact_type = CompactType::new(FourCC::new(type_field));
-
-        header_length(declared == EXTENDED_SIZE_MARKER, compact_type.is_none()) as usize
-    }
 
     /// Creates a header from a box type and a size
     ///
@@ -249,11 +197,9 @@ impl BoxHeader {
     ///
     /// * [`TruncatedHeader`](BoxHeaderError::TruncatedHeader): `input` ends inside
     ///   the header. A caller that reads in chunks can extend `input` to
-    ///   `needed` bytes and decode again; once `input` holds the first
-    ///   [`MIN_ENCODED_LEN`](Self::MIN_ENCODED_LEN) bytes, `needed` is the length
-    ///   of the whole header, so one such extension always suffices. A caller
-    ///   that would rather size the read before attempting it asks
-    ///   [`encoded_len_from_prefix`](Self::encoded_len_from_prefix) for that same length instead.
+    ///   `needed` bytes and decode again; once `input` holds the eight bytes
+    ///   the `size` and `type` fields occupy, `needed` is the length of the
+    ///   whole header, so one such extension always suffices.
     /// * [`SizeBelowHeader`](BoxHeaderError::SizeBelowHeader): the declared total
     ///   is smaller than the header it prefixes.
     pub fn decode(input: &[u8]) -> Result<(Self, &[u8]), BoxHeaderError> {
@@ -607,20 +553,6 @@ mod tests {
                 b"".as_slice()
             ))
         );
-    }
-
-    #[test]
-    fn the_length_a_prefix_names_is_the_bytes_the_header_decodes_from() {
-        for encoded in EVERY_FORM {
-            let (_header, after_header) = BoxHeader::decode(encoded).unwrap();
-            let prefix = encoded.first_chunk().unwrap();
-
-            assert_eq!(
-                BoxHeader::encoded_len_from_prefix(prefix),
-                encoded.len().checked_sub(after_header.len()).unwrap(),
-                "{encoded:02x?}"
-            );
-        }
     }
 
     #[test]
