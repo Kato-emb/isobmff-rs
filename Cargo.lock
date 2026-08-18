@@ -17,5 +17,6 @@ version = "0.0.0"
 name = "isobmff-sequence"
 version = "0.0.0"
 dependencies = [
+ "isobmff-boxes",
  "isobmff-core",
 ]
