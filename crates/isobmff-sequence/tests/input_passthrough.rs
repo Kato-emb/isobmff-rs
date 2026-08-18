@@ -47,13 +47,13 @@ fn fragmented_file() -> Option<Vec<u8>> {
     Some(file)
 }
 
-/// Every event a reader reports for `file`, handed over in chunks of `chunk_length`
-fn events_of(file: &[u8], chunk_length: usize) -> Result<Vec<BoxEvent>, BoxReaderError> {
+/// Every event a reader reports for `file`, handed over `cut_length` bytes at a time
+fn events_of(file: &[u8], cut_length: usize) -> Result<Vec<BoxEvent>, BoxReaderError> {
     let mut reader = BoxReader::new();
     let mut events = Vec::new();
 
-    for chunk in file.chunks(chunk_length) {
-        reader.handle_read(chunk)?;
+    for arriving in file.chunks(cut_length) {
+        reader.handle_read(arriving)?;
         while let Some(event) = reader.poll_event() {
             events.push(event);
         }
@@ -66,15 +66,15 @@ fn events_of(file: &[u8], chunk_length: usize) -> Result<Vec<BoxEvent>, BoxReade
     Ok(events)
 }
 
-/// The events with the payload pieces of each box fused into one
+/// The events with the payload of each box fused back into one
 ///
 /// What is left is what the file says rather than how it was cut
-fn payload_pieces_fused(events: Vec<BoxEvent>) -> Vec<BoxEvent> {
+fn payloads_fused(events: Vec<BoxEvent>) -> Vec<BoxEvent> {
     let mut fused: Vec<BoxEvent> = Vec::new();
 
     for event in events {
         match (fused.last_mut(), event) {
-            (Some(BoxEvent::RawChunk(gathered)), BoxEvent::RawChunk(bytes)) => {
+            (Some(BoxEvent::RawPayload(gathered)), BoxEvent::RawPayload(bytes)) => {
                 gathered.extend_from_slice(&bytes);
             }
             (_, event) => fused.push(event),
@@ -91,7 +91,7 @@ fn boxes_reported(events: Vec<BoxEvent>) -> Vec<(BoxHeader, Vec<u8>)> {
     for event in events {
         match event {
             BoxEvent::RawStart { header, .. } => reported.push((header, Vec::new())),
-            BoxEvent::RawChunk(bytes) => {
+            BoxEvent::RawPayload(bytes) => {
                 if let Some((_, payload)) = reported.last_mut() {
                     payload.extend_from_slice(&bytes);
                 }
@@ -110,22 +110,22 @@ fn offsets_reported(events: Vec<BoxEvent>) -> Vec<u64> {
         .into_iter()
         .filter_map(|event| match event {
             BoxEvent::RawStart { file_offset, .. } => Some(file_offset),
-            BoxEvent::RawChunk(_) | BoxEvent::RawEnd => None,
+            BoxEvent::RawPayload(_) | BoxEvent::RawEnd => None,
             _ => None,
         })
         .collect()
 }
 
 #[test]
-fn the_events_reported_do_not_turn_on_how_the_file_was_cut_into_chunks() {
+fn the_events_reported_do_not_turn_on_where_the_file_was_cut() {
     let file = fragmented_file().unwrap();
-    let whole = payload_pieces_fused(events_of(&file, file.len()).unwrap());
+    let whole = payloads_fused(events_of(&file, file.len()).unwrap());
 
-    for chunk_length in 1..=file.len() {
+    for cut_length in 1..=file.len() {
         assert_eq!(
-            payload_pieces_fused(events_of(&file, chunk_length).unwrap()),
+            payloads_fused(events_of(&file, cut_length).unwrap()),
             whole,
-            "chunks of {chunk_length} bytes"
+            "cut every {cut_length} bytes"
         );
     }
 }
@@ -141,11 +141,11 @@ fn the_boxes_reported_are_the_ones_the_boxes_iterator_splits_out() {
         })
         .collect::<Vec<_>>();
 
-    for chunk_length in 1..=file.len() {
+    for cut_length in 1..=file.len() {
         assert_eq!(
-            boxes_reported(events_of(&file, chunk_length).unwrap()),
+            boxes_reported(events_of(&file, cut_length).unwrap()),
             split,
-            "chunks of {chunk_length} bytes"
+            "cut every {cut_length} bytes"
         );
     }
 }
@@ -169,11 +169,11 @@ fn the_offset_a_box_carries_is_where_it_begins_in_the_file() {
         })
         .collect::<Vec<_>>();
 
-    for chunk_length in 1..=file.len() {
+    for cut_length in 1..=file.len() {
         assert_eq!(
-            offsets_reported(events_of(&file, chunk_length).unwrap()),
+            offsets_reported(events_of(&file, cut_length).unwrap()),
             beginnings,
-            "chunks of {chunk_length} bytes"
+            "cut every {cut_length} bytes"
         );
     }
 }

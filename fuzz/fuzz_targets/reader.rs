@@ -2,8 +2,8 @@
 //!
 //! One run checks four properties of the same input:
 //!
-//! 1. no call panics, and no event carries a payload piece that is empty
-//! 2. the chunks an input arrives in do not change the boxes it reads
+//! 1. no call panics, and no event carries a payload part that is empty
+//! 2. where the input is cut does not change the boxes it reads
 //! 3. reading a whole input agrees with the [`boxes`] iterator over it, box for
 //!    box and on whether the input reads at all
 //! 4. every box read re-encodes to the span of input it was read from, at the
@@ -16,17 +16,17 @@ use isobmff_sequence::{BoxEvent, BoxReader, BoxReaderError};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
 
-/// Input of one run: bytes to read, and the chunk lengths to feed them in
+/// Input of one run: bytes to read, and the lengths to cut them into
 ///
-/// A corpus file is four bytes of `chunk_lengths` followed by the bytes
+/// A corpus file is four bytes of `cut_lengths` followed by the bytes
 /// themselves, verbatim. The lengths are cycled, each one byte longer than it
-/// reads, so a chunk is 1 to 256 bytes and the feeding always advances.
+/// reads, so a cut is 1 to 256 bytes and the feeding always advances.
 #[derive(Arbitrary, Debug)]
 struct Input {
     // Why not put `bytes` first: only a trailing `Vec<u8>` is taken verbatim by
     // `Arbitrary`, so any other order leaves the seed files unreadable as a
     // hexdump of the input.
-    chunk_lengths: [u8; 4],
+    cut_lengths: [u8; 4],
     bytes: Vec<u8>,
 }
 
@@ -47,34 +47,31 @@ struct Run {
 }
 
 fuzz_target!(|input: Input| {
-    let Input {
-        chunk_lengths,
-        bytes,
-    } = input;
+    let Input { cut_lengths, bytes } = input;
 
     let whole = read([bytes.as_slice()]);
-    let chunked = read(chunks(&bytes, chunk_lengths));
+    let cut = read(cut_into(&bytes, cut_lengths));
 
     assert_eq!(
-        whole, chunked,
-        "the chunks the input arrived in changed the boxes it read"
+        whole, cut,
+        "where the input was cut changed the boxes it read"
     );
 
     agrees_with_the_boxes_iterator(&bytes, &whole);
     boxes_re_encode_to_the_span_they_came_from(&bytes, &whole);
 });
 
-/// Hands `chunks` to a reader and gathers what it reports
-fn read<'chunk>(chunks: impl IntoIterator<Item = &'chunk [u8]>) -> Run {
+/// Hands `arriving` to a reader, a part at a time, and gathers what it reports
+fn read<'input>(arriving: impl IntoIterator<Item = &'input [u8]>) -> Run {
     let mut reader = BoxReader::new();
     let mut framed: Vec<Framed> = Vec::new();
     let mut failure = None;
 
-    for chunk in chunks {
+    for input in arriving {
         // Why drain before reporting the failure: the events made before it are
         // still the reader's to hand over, and dropping them would leave a box
         // half gathered for the comparison against the iterator.
-        let outcome = reader.handle_read(chunk);
+        let outcome = reader.handle_read(input);
         drain(&mut reader, &mut framed);
 
         if let Err(reported) = outcome {
@@ -113,7 +110,7 @@ fn drain(reader: &mut BoxReader, framed: &mut Vec<Framed>) {
                 payload: Vec::new(),
                 ended: false,
             }),
-            BoxEvent::RawChunk(part) => {
+            BoxEvent::RawPayload(part) => {
                 assert!(!part.is_empty(), "an empty payload event was reported");
                 let open = framed.last_mut().expect("a payload before any box started");
                 open.payload.extend_from_slice(&part);
@@ -129,17 +126,17 @@ fn drain(reader: &mut BoxReader, framed: &mut Vec<Framed>) {
     }
 }
 
-/// Splits `bytes` at the cycled `lengths`, each one byte longer than it reads
-fn chunks(bytes: &[u8], lengths: [u8; 4]) -> impl Iterator<Item = &[u8]> {
+/// Cuts `bytes` at the cycled `lengths`, each one byte longer than it reads
+fn cut_into(bytes: &[u8], lengths: [u8; 4]) -> impl Iterator<Item = &[u8]> {
     let mut rest = bytes;
 
     lengths.into_iter().cycle().map_while(move |length| {
         if rest.is_empty() {
             return None;
         }
-        let (chunk, remainder) = rest.split_at((usize::from(length) + 1).min(rest.len()));
+        let (taken, remainder) = rest.split_at((usize::from(length) + 1).min(rest.len()));
         rest = remainder;
-        Some(chunk)
+        Some(taken)
     })
 }
 

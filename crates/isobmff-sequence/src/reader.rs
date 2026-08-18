@@ -1,4 +1,4 @@
-//! [`BoxReader`] and [`BoxEvent`], the sequence of boxes of ISO/IEC 14496-12 §4.2 read chunk by chunk
+//! [`BoxReader`] and [`BoxEvent`], the sequence of boxes of ISO/IEC 14496-12 §4.2 read as the input arrives
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
@@ -43,7 +43,7 @@ const fn header_len_from_prefix(prefix: &[u8; MIN_HEADER_LEN]) -> usize {
 /// Step of the sequence of boxes, owning the bytes it carries
 ///
 /// A box appears as [`RawStart`](Self::RawStart), then as many
-/// [`RawChunk`](Self::RawChunk) events as the chunks its payload arrived in,
+/// [`RawPayload`](Self::RawPayload) events as the input cut its payload into,
 /// then [`RawEnd`](Self::RawEnd). A container is reported as one box like any
 /// other: its payload is passed on whole rather than descended into.
 #[non_exhaustive]
@@ -51,48 +51,48 @@ const fn header_len_from_prefix(prefix: &[u8; MIN_HEADER_LEN]) -> usize {
 pub enum BoxEvent {
     /// Header of a box, whole, and where in the file that box begins
     RawStart {
-        /// Header of the box, however many chunks it was spread over
+        /// Header of the box, however the input cut across it
         header: BoxHeader,
         /// Bytes the file carried before the header of this box
         file_offset: u64,
     },
-    /// Part of the payload of the box that started, as it lay in one chunk
-    RawChunk(Vec<u8>),
+    /// Part of the payload of the box that started, as it lay in the input
+    RawPayload(Vec<u8>),
     /// End of the box that started, its declared total reached
     RawEnd,
 }
 
-/// Reads the sequence of boxes a file is formed as, taking it chunk by chunk
+/// Reads the sequence of boxes a file is formed as, taking the input as it arrives
 ///
-/// The reader is handed a chunk at a time and reports the boxes it frames as
-/// owned [`BoxEvent`]s. It reaches for no source of its own: when to read and
+/// The reader is handed the input as it arrives and reports the boxes it frames
+/// as owned [`BoxEvent`]s. It reaches for no source of its own: when to read and
 /// from where stay with the caller. It reads no box type and holds no policy
 /// either — every box is passed on the same way, and which ones matter is the
 /// caller's.
 ///
 /// # Contract
 ///
-/// * [`handle_read`](Self::handle_read) takes the chunk whole and owns what it
+/// * [`handle_read`](Self::handle_read) takes the input whole and owns what it
 ///   made of it, so the buffer is the caller's again once the call returns. The
 ///   events are taken one at a time from [`poll_event`](Self::poll_event),
-///   which reports `None` once the chunks handed over so far are used up.
-/// * The caller drains before handing over the next chunk. Events are held
-///   until they are taken, so reading on without polling has the reader hold
-///   the whole file.
-/// * A [`RawChunk`](BoxEvent::RawChunk) is never empty. A box with no payload
-///   is a [`RawStart`](BoxEvent::RawStart) followed by a
+///   which reports `None` once the input handed over so far is used up.
+/// * The caller drains before handing over more input. Events are held until
+///   they are taken, so reading on without polling has the reader hold the
+///   whole file.
+/// * A [`RawPayload`](BoxEvent::RawPayload) is never empty. A box with no
+///   payload is a [`RawStart`](BoxEvent::RawStart) followed by a
 ///   [`RawEnd`](BoxEvent::RawEnd).
-/// * Where a payload is cut into [`RawChunk`](BoxEvent::RawChunk) events
-///   follows how the caller cut the file into chunks. What does not follow it:
-///   the [`RawStart`](BoxEvent::RawStart) and [`RawEnd`](BoxEvent::RawEnd)
-///   events, the offsets they carry, and the payload bytes those chunks hold
-///   end to end.
+/// * Where a payload is cut into [`RawPayload`](BoxEvent::RawPayload) events
+///   follows how the caller cut the file. What does not follow it: the
+///   [`RawStart`](BoxEvent::RawStart) and [`RawEnd`](BoxEvent::RawEnd) events,
+///   the offsets they carry, and the payload bytes those events hold end to
+///   end.
 /// * An `Err` leaves the reader failed for good: every later
 ///   [`handle_read`](Self::handle_read) and [`finish`](Self::finish) reports
 ///   that same error. The events made before it are still there to take, and no
 ///   further one is ever made.
 /// * [`finish`](Self::finish) declares the file over. Events are still taken
-///   after it, but a chunk handed over then, or a second
+///   after it, but input handed over then, or a second
 ///   [`finish`](Self::finish), is
 ///   [`AlreadyFinished`](BoxReaderError::AlreadyFinished).
 ///
@@ -102,14 +102,14 @@ pub enum BoxEvent {
 /// use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize};
 /// use isobmff_sequence::{BoxEvent, BoxReader};
 ///
-/// // One twelve-byte box, arriving in chunks that cut both its header and its payload
-/// let chunks: [&[u8]; 3] = [b"\0\0\0\x0cfr", b"eeAA", b"AA"];
+/// // One twelve-byte box, arriving cut across both its header and its payload
+/// let arriving: [&[u8]; 3] = [b"\0\0\0\x0cfr", b"eeAA", b"AA"];
 /// let mut reader = BoxReader::new();
 /// let mut events = Vec::new();
 ///
-/// // A chunk is handed over whole, then what it completed is drained
-/// for chunk in chunks {
-///     reader.handle_read(chunk).unwrap();
+/// // Input is handed over whole, then what it completed is drained
+/// for input in arriving {
+///     reader.handle_read(input).unwrap();
 ///     while let Some(event) = reader.poll_event() {
 ///         events.push(event);
 ///     }
@@ -119,7 +119,7 @@ pub enum BoxEvent {
 /// reader.finish().unwrap();
 /// assert_eq!(reader.poll_event(), None);
 ///
-/// // The header spanning two chunks is gathered before the box is reported
+/// // The header the input cut across is gathered before the box is reported
 /// let header = BoxHeader::new(
 ///     BoxType::compact(*b"free"),
 ///     BoxSize::Compact(CompactSize::new(12).unwrap()),
@@ -132,8 +132,8 @@ pub enum BoxEvent {
 ///             header,
 ///             file_offset: 0
 ///         },
-///         BoxEvent::RawChunk(b"AA".to_vec()),
-///         BoxEvent::RawChunk(b"AA".to_vec()),
+///         BoxEvent::RawPayload(b"AA".to_vec()),
+///         BoxEvent::RawPayload(b"AA".to_vec()),
 ///         BoxEvent::RawEnd,
 ///     ]
 /// );
@@ -159,10 +159,10 @@ impl BoxReader {
         }
     }
 
-    /// Takes a chunk of the file, and makes the events it completes
+    /// Takes the input that arrived, and makes the events it completes
     ///
-    /// The chunk is taken whole. What it completed is then taken from
-    /// [`poll_event`](Self::poll_event); an empty chunk completes nothing and
+    /// The input is taken whole. What it completed is then taken from
+    /// [`poll_event`](Self::poll_event); empty input completes nothing and
     /// leaves the reader where it was.
     ///
     /// # Errors
@@ -172,22 +172,21 @@ impl BoxReader {
     /// * [`AlreadyFinished`](BoxReaderError::AlreadyFinished): the file was
     ///   declared over by [`finish`](Self::finish).
     /// * The error a previous call already reported, once the reader has failed.
-    pub fn handle_read(&mut self, chunk: &[u8]) -> Result<(), BoxReaderError> {
-        let mut input = chunk;
+    pub fn handle_read(&mut self, input: &[u8]) -> Result<(), BoxReaderError> {
+        let mut unread = input;
 
         loop {
             match self.state {
                 State::Failed(ref error) => return Err(error.clone()),
                 State::Finished => return Err(BoxReaderError::AlreadyFinished),
                 State::Header(mut partial) => {
-                    let available = input.len();
-                    let gathered = partial.take_from(&mut input);
-                    // Why count here rather than under the event: a header
-                    // spread over chunks takes bytes off every one of them
-                    // while completing no event, so counting only what an event
-                    // took would leave the offset short by the head of that
-                    // header.
-                    self.advance(available.saturating_sub(input.len()));
+                    let available = unread.len();
+                    let gathered = partial.take_from(&mut unread);
+                    // Why count here rather than under the event: a header the
+                    // input cut across takes bytes off every part of it while
+                    // completing no event, so counting only what an event took
+                    // would leave the offset short by the head of that header.
+                    self.advance(available.saturating_sub(unread.len()));
 
                     match gathered {
                         Ok(Some(header)) => {
@@ -216,17 +215,17 @@ impl BoxReader {
                         self.events.push_back(BoxEvent::RawEnd);
                         continue;
                     }
-                    if input.is_empty() {
+                    if unread.is_empty() {
                         return Ok(());
                     }
 
                     let wanted = remaining
                         .and_then(|remaining| usize::try_from(remaining).ok())
                         .unwrap_or(usize::MAX)
-                        .min(input.len());
-                    let (payload, rest) = input.split_at(wanted);
+                        .min(unread.len());
+                    let (payload, rest) = unread.split_at(wanted);
 
-                    input = rest;
+                    unread = rest;
                     self.state = State::Payload {
                         header,
                         remaining: remaining.map(|remaining| {
@@ -236,15 +235,15 @@ impl BoxReader {
                     };
                     self.advance(payload.len());
                     self.events
-                        .push_back(BoxEvent::RawChunk(Vec::from(payload)));
+                        .push_back(BoxEvent::RawPayload(Vec::from(payload)));
                 }
             }
         }
     }
 
-    /// Takes the next event the chunks handed over so far completed
+    /// Takes the next event the input handed over so far completed
     ///
-    /// Reports `None` once they are used up: the next chunk is needed, or
+    /// Reports `None` once it is used up: more input is needed, or
     /// [`finish`](Self::finish) is. Failure is reported by
     /// [`handle_read`](Self::handle_read) and [`finish`](Self::finish) alone, so
     /// this call never fails — a failed reader hands over the events it had
@@ -335,13 +334,13 @@ enum State {
         header: BoxHeader,
         remaining: Option<u64>,
     },
-    /// Told the file is over, and taking no more chunks
+    /// Told the file is over, and taking no more input
     Finished,
     /// Failed, and reporting the same error from here on
     Failed(BoxReaderError),
 }
 
-/// Header bytes gathered so far, for a header spread over several chunks
+/// Header bytes gathered so far, for a header the input cut across
 ///
 /// `needed` is the length the header reaches: the shortest header until the
 /// bytes gathered name the true one, and never past the longest a box can carry.
@@ -375,7 +374,7 @@ impl PartialHeader {
             return Ok(None);
         }
         // Why not unreachable: the buffer is the longest header a box can carry,
-        // so a chunk of the shortest always splits off, and the fallback is a
+        // so a prefix of the shortest always splits off, and the fallback is a
         // degenerate value in place of a panic the lints forbid.
         let Some(prefix) = self.bytes.first_chunk() else {
             return Ok(None);
@@ -411,15 +410,15 @@ impl PartialHeader {
         let Some(slot) = self.bytes.get_mut(self.filled..filled) else {
             return;
         };
-        let (chunk, rest) = input.split_at(wanted);
+        let (taken, rest) = input.split_at(wanted);
 
-        slot.copy_from_slice(chunk);
+        slot.copy_from_slice(taken);
         self.filled = filled;
         *input = rest;
     }
 }
 
-/// Reason a file of chunks does not read as a sequence of boxes
+/// Reason input does not read as a sequence of boxes
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum BoxReaderError {
@@ -439,7 +438,7 @@ pub enum BoxReaderError {
         /// Bytes of the box the file carried, header included
         available: u64,
     },
-    /// File was declared over, and takes no more chunks
+    /// File was declared over, and takes no more input
     AlreadyFinished,
 }
 
@@ -456,7 +455,7 @@ impl fmt::Display for BoxReaderError {
                 "input ended {available} bytes into a box of {needed}"
             ),
             Self::AlreadyFinished => {
-                formatter.write_str("file was declared over and takes no more chunks")
+                formatter.write_str("file was declared over and takes no more input")
             }
         }
     }
@@ -537,13 +536,13 @@ mod tests {
         }
     }
 
-    /// Every event a reader reports for `input`, handed over in chunks of `chunk_length`
-    fn events_of(input: &[u8], chunk_length: usize) -> Vec<BoxEvent> {
+    /// Every event a reader reports for `input`, handed over `cut_length` bytes at a time
+    fn events_of(input: &[u8], cut_length: usize) -> Vec<BoxEvent> {
         let mut reader = BoxReader::new();
         let mut events = Vec::new();
 
-        for chunk in input.chunks(chunk_length) {
-            reader.handle_read(chunk).unwrap();
+        for arriving in input.chunks(cut_length) {
+            reader.handle_read(arriving).unwrap();
             while let Some(event) = reader.poll_event() {
                 events.push(event);
             }
@@ -571,12 +570,12 @@ mod tests {
     }
 
     #[test]
-    fn a_box_arriving_whole_is_reported_as_a_start_a_chunk_and_an_end() {
+    fn a_box_arriving_whole_is_reported_as_a_start_a_payload_and_an_end() {
         assert_eq!(
             events_of(b"\0\0\0\x0cfreeAAAA", 12),
             vec![
                 started(compact_header(*b"free", 12), 0),
-                BoxEvent::RawChunk(Vec::from(*b"AAAA")),
+                BoxEvent::RawPayload(Vec::from(*b"AAAA")),
                 BoxEvent::RawEnd,
             ]
         );
@@ -591,13 +590,13 @@ mod tests {
     }
 
     #[test]
-    fn a_payload_is_passed_on_in_the_pieces_the_chunks_cut_it_into() {
+    fn a_payload_is_passed_on_as_the_input_cut_it() {
         assert_eq!(
             events_of(b"\0\0\0\x0cfreeAAAA", 5),
             vec![
                 started(compact_header(*b"free", 12), 0),
-                BoxEvent::RawChunk(Vec::from(*b"AA")),
-                BoxEvent::RawChunk(Vec::from(*b"AA")),
+                BoxEvent::RawPayload(Vec::from(*b"AA")),
+                BoxEvent::RawPayload(Vec::from(*b"AA")),
                 BoxEvent::RawEnd,
             ]
         );
@@ -609,8 +608,8 @@ mod tests {
             events_of(b"\0\0\0\x0cfreeAAAA\0\0\0\x08skip", 5),
             vec![
                 started(compact_header(*b"free", 12), 0),
-                BoxEvent::RawChunk(Vec::from(*b"AA")),
-                BoxEvent::RawChunk(Vec::from(*b"AA")),
+                BoxEvent::RawPayload(Vec::from(*b"AA")),
+                BoxEvent::RawPayload(Vec::from(*b"AA")),
                 BoxEvent::RawEnd,
                 started(compact_header(*b"skip", 8), 12),
                 BoxEvent::RawEnd,
@@ -635,7 +634,7 @@ mod tests {
             events_of(&input, 3),
             vec![
                 started(header, 0),
-                BoxEvent::RawChunk(Vec::from(*b"!")),
+                BoxEvent::RawPayload(Vec::from(*b"!")),
                 BoxEvent::RawEnd,
                 started(compact_header(*b"skip", 8), 33),
                 BoxEvent::RawEnd,
@@ -652,15 +651,15 @@ mod tests {
                     BoxHeader::new(BoxType::compact(*b"mdat"), BoxSize::ToEndOfFile).unwrap(),
                     0
                 ),
-                BoxEvent::RawChunk(Vec::from(*b"PAYL")),
-                BoxEvent::RawChunk(Vec::from(*b"OAD")),
+                BoxEvent::RawPayload(Vec::from(*b"PAYL")),
+                BoxEvent::RawPayload(Vec::from(*b"OAD")),
                 BoxEvent::RawEnd,
             ]
         );
     }
 
     #[test]
-    fn an_empty_chunk_completes_nothing_and_leaves_the_reader_where_it_was() {
+    fn empty_input_completes_nothing_and_leaves_the_reader_where_it_was() {
         let mut reader = BoxReader::new();
 
         reader.handle_read(b"\0\0\0\x08fr").unwrap();
@@ -677,7 +676,7 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_chunk_arriving_inside_a_payload_asks_for_the_next_one() {
+    fn empty_input_arriving_inside_a_payload_asks_for_more() {
         let mut reader = BoxReader::new();
 
         reader.handle_read(b"\0\0\0\x0cfreeAA").unwrap();
@@ -690,7 +689,7 @@ mod tests {
 
         assert_eq!(
             reader.poll_event(),
-            Some(BoxEvent::RawChunk(Vec::from(*b"AA")))
+            Some(BoxEvent::RawPayload(Vec::from(*b"AA")))
         );
     }
 
@@ -784,7 +783,7 @@ mod tests {
     }
 
     #[test]
-    fn a_chunk_handed_over_after_finishing_is_rejected() {
+    fn input_handed_over_after_finishing_is_rejected() {
         let mut reader = BoxReader::new();
 
         reader.finish().unwrap();
