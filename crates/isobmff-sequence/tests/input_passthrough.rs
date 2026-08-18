@@ -5,44 +5,23 @@
     reason = "an integration test binary ships no items, so its tests are the crate root"
 )]
 
-#[path = "helpers/reading.rs"]
-mod reading;
+#[path = "helpers/sequence.rs"]
+pub mod sequence;
 
-use isobmff_core::{BoxHeader, BoxSize, BoxType, Uuid, boxes};
-use isobmff_sequence::BoxEvent;
+use isobmff_core::{BoxHeader, boxes};
+use isobmff_sequence::{BoxEvent, BoxEventAt};
 
-use reading::{events_of, framed, laid_out, payloads_fused};
-
-/// User type the vendor box of the synthetic file is declared under
-const USER_TYPE: Uuid = Uuid::new([
-    0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10,
-]);
-
-/// A synthetic file of boxes passed on as they lie, its last box running to the end of it
-fn file_passed_on() -> Option<Vec<u8>> {
-    // Why hold no box the reader reads into a value: such a box is reported as
-    // that value and never as the bytes it was read from, which is what this file
-    // fixes. `value_boxes.rs` covers those.
-    let unbounded = BoxHeader::new(BoxType::compact(*b"mdat"), BoxSize::ToEndOfFile)?;
-    let mut file = framed(BoxType::compact(*b"free"), b"")?;
-
-    file.extend_from_slice(&framed(BoxType::compact(*b"skip"), &[0xa5; 40])?);
-    file.extend_from_slice(&framed(BoxType::Extended(USER_TYPE), b"vendor!!")?);
-    file.extend_from_slice(&framed(BoxType::compact(*b"mdat"), &[0x11; 64])?);
-    file.extend_from_slice(&laid_out(unbounded, &[0x22; 48]));
-
-    Some(file)
-}
+use sequence::{events_of, file_passed_on, payloads_fused};
 
 /// Each box the reader reported, as its header and the payload it passed on
-fn boxes_reported(events: &[BoxEvent]) -> Vec<(BoxHeader, Vec<u8>)> {
+fn boxes_reported(events: &[BoxEventAt]) -> Vec<(BoxHeader, Vec<u8>)> {
     let mut reported: Vec<(BoxHeader, Vec<u8>)> = Vec::new();
 
     for event in events {
-        if let BoxEvent::RawStart { header, .. } = *event {
+        if let BoxEvent::RawStart(header) = *event.event() {
             reported.push((header, Vec::new()));
-        } else if let BoxEvent::RawPayload(ref bytes) = *event {
-            if let Some((_, payload)) = reported.last_mut() {
+        } else if let BoxEvent::RawPayload(ref bytes) = *event.event() {
+            if let Some((_header, payload)) = reported.last_mut() {
                 payload.extend_from_slice(bytes);
             }
         }
@@ -52,17 +31,16 @@ fn boxes_reported(events: &[BoxEvent]) -> Vec<(BoxHeader, Vec<u8>)> {
 }
 
 /// Where each box the reader reported said it begins
-fn offsets_reported(events: &[BoxEvent]) -> Vec<u64> {
-    events
-        .iter()
-        .filter_map(|event| {
-            if let BoxEvent::RawStart { file_offset, .. } = *event {
-                Some(file_offset)
-            } else {
-                None
-            }
-        })
-        .collect()
+fn offsets_reported(events: &[BoxEventAt]) -> Vec<u64> {
+    let mut offsets = Vec::new();
+
+    for event in events {
+        if let BoxEvent::RawStart(_header) = *event.event() {
+            offsets.push(event.file_offset());
+        }
+    }
+
+    offsets
 }
 
 #[test]
