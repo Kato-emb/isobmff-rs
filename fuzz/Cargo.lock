@@ -62,11 +62,19 @@ name = "isobmff-core"
 version = "0.0.0"
 
 [[package]]
-name = "isobmff-core-fuzz"
+name = "isobmff-fuzz"
 version = "0.0.0"
 dependencies = [
  "isobmff-core",
+ "isobmff-sequence",
  "libfuzzer-sys",
+]
+
+[[package]]
+name = "isobmff-sequence"
+version = "0.0.0"
+dependencies = [
+ "isobmff-core",
 ]
 
 [[package]]

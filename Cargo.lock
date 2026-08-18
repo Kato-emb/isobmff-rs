@@ -12,3 +12,10 @@ dependencies = [
 [[package]]
 name = "isobmff-core"
 version = "0.0.0"
+
+[[package]]
+name = "isobmff-sequence"
+version = "0.0.0"
+dependencies = [
+ "isobmff-core",
+]

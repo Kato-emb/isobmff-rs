@@ -1,5 +1,5 @@
 [package]
-name = "isobmff-core-fuzz"
+name = "isobmff-fuzz"
 version = "0.0.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -20,6 +20,9 @@ libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
 [dependencies.isobmff-core]
 path = "../crates/isobmff-core"
 
+[dependencies.isobmff-sequence]
+path = "../crates/isobmff-sequence"
+
 [profile.release]
 debug = 1
 
@@ -31,8 +34,8 @@ doc = false
 bench = false
 
 [[bin]]
-name = "framer"
-path = "fuzz_targets/framer.rs"
+name = "reader"
+path = "fuzz_targets/reader.rs"
 test = false
 doc = false
 bench = false
