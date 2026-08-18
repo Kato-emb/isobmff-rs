@@ -157,6 +157,13 @@ impl BoxWriter {
             State::Failed => return Err(BoxWriterError::AlreadyFailed),
             State::Finished => return Err(BoxWriterError::AlreadyFinished),
             State::EndOfFile => return Err(self.fail(BoxWriterError::PastEndOfFile)),
+            State::Payload { header, .. }
+                if !matches!(event, BoxEvent::RawPayload(_) | BoxEvent::RawEnd) =>
+            {
+                return Err(self.fail(BoxWriterError::BoxStillOpen {
+                    box_type: header.box_type(),
+                }));
+            }
             State::Between | State::Payload { .. } => {}
         }
 
@@ -166,11 +173,6 @@ impl BoxWriter {
             BoxEvent::Movie(moov) => self.write_whole(&moov),
             BoxEvent::MovieFragment(moof) => self.write_whole(&moof),
             BoxEvent::RawStart(header) => {
-                if let State::Payload { header: open, .. } = self.state {
-                    return Err(self.fail(BoxWriterError::BoxStillOpen {
-                        box_type: open.box_type(),
-                    }));
-                }
                 let mut scratch = [0; BoxHeader::MAX_ENCODED_LEN];
 
                 self.output.extend_from_slice(header.encode(&mut scratch));
@@ -195,7 +197,12 @@ impl BoxWriter {
                     }
                 }
 
-                self.output.extend_from_slice(&payload);
+                if self.output.is_empty() {
+                    self.output = payload;
+                    self.taken = 0;
+                } else {
+                    self.output.extend_from_slice(&payload);
+                }
                 self.state = State::Payload {
                     header,
                     written: offered,
@@ -210,7 +217,7 @@ impl BoxWriter {
 
                 match header.payload_len() {
                     Some(declared) if written < declared => {
-                        Err(self.fail(unfinished(header, declared, written)))
+                        Err(self.fail(unfinished(header, written)))
                     }
                     Some(_reached) => {
                         self.state = State::Between;
@@ -235,9 +242,7 @@ impl BoxWriter {
     /// so this call never fails — a failed writer hands over the bytes it had
     /// already made, then nothing from there on.
     pub fn poll_output(&mut self, buffer: &mut [u8]) -> usize {
-        let Some(pending) = self.output.get(self.taken..) else {
-            return 0;
-        };
+        let pending = self.output.get(self.taken..).unwrap_or_default();
         let wanted = pending.len().min(buffer.len());
         let (Some(taking), Some(slot)) = (pending.get(..wanted), buffer.get_mut(..wanted)) else {
             return 0;
@@ -247,6 +252,9 @@ impl BoxWriter {
         self.taken = self.taken.saturating_add(wanted);
         if self.taken >= self.output.len() {
             self.output.clear();
+            self.taken = 0;
+        } else if self.taken >= self.output.len().saturating_sub(self.taken) {
+            self.output.drain(..self.taken);
             self.taken = 0;
         }
 
@@ -272,54 +280,39 @@ impl BoxWriter {
 
                 Ok(())
             }
-            State::Payload { header, written } => {
-                let unmet = header
-                    .payload_len()
-                    .filter(|declared| written < *declared)
-                    .map(|declared| unfinished(header, declared, written));
+            State::Payload { header, written } => match header.payload_len() {
+                Some(declared) if written < declared => Err(self.fail(unfinished(header, written))),
+                Some(_) | None => {
+                    self.state = State::Finished;
 
-                match unmet {
-                    Some(failure) => Err(self.fail(failure)),
-                    None => {
-                        self.state = State::Finished;
-
-                        Ok(())
-                    }
+                    Ok(())
                 }
-            }
+            },
         }
     }
 
-    /// Lays down the whole box `value` forms, where no box is open
+    /// Lays down the whole box `value` forms
     fn write_whole<Value: BoxWrite>(&mut self, value: &Value) -> Result<(), BoxWriterError> {
-        if let State::Payload { header, .. } = self.state {
-            return Err(self.fail(BoxWriterError::BoxStillOpen {
-                box_type: header.box_type(),
-            }));
-        }
-
         let needed = value.encoded_len();
-        // Why not an error of its own for a box beyond `usize`: such a total
-        // exceeds every buffer this target can hold, which is what
-        // `BoxWrite::encode` reports as a short buffer for the same reason.
-        let too_short = EncodeError::BufferTooShort {
-            needed,
-            available: u64::try_from(usize::MAX).unwrap_or(u64::MAX),
+        let Ok(length) = usize::try_from(needed) else {
+            // Why not an error of its own for a box beyond `usize`: such a total
+            // exceeds every buffer this target can hold, which is what
+            // `BoxWrite::encode` reports as a short buffer for the same reason.
+            return Err(self.encode_failure::<Value>(EncodeError::BufferTooShort {
+                needed,
+                available: u64::try_from(usize::MAX).unwrap_or(u64::MAX),
+            }));
         };
         let written = self.output.len();
-        let filled = usize::try_from(needed)
-            .ok()
-            .and_then(|needed| written.checked_add(needed))
-            .ok_or_else(|| self.encode_failure::<Value>(too_short))?;
 
-        self.output.resize(filled, 0);
+        self.output.resize(written.saturating_add(length), 0);
 
-        let Some(slot) = self.output.get_mut(written..filled) else {
-            return Err(self.encode_failure::<Value>(too_short));
-        };
+        let encoded = value
+            .encode(self.output.get_mut(written..).unwrap_or_default())
+            .map(|_nothing_beyond| ());
 
-        match value.encode(slot) {
-            Ok(_nothing_beyond) => Ok(()),
+        match encoded {
+            Ok(()) => Ok(()),
             Err(error) => Err(self.encode_failure::<Value>(error)),
         }
     }
@@ -346,12 +339,15 @@ impl Default for BoxWriter {
     }
 }
 
-/// Returns the failure of a box closed `written` bytes into the `declared` payload
-fn unfinished(header: BoxHeader, declared: u64, written: u64) -> BoxWriterError {
+/// Returns the failure of a box the events carried `written` payload bytes of
+///
+/// The box declares a total, which is what makes it unfinished; the fallback is
+/// a degenerate value in place of a panic the lints forbid.
+fn unfinished(header: BoxHeader, written: u64) -> BoxWriterError {
     let header_len = u64::try_from(header.encoded_len()).unwrap_or(u64::MAX);
 
     BoxWriterError::UnfinishedBox {
-        needed: header_len.saturating_add(declared),
+        needed: header.size().total_bytes().unwrap_or(header_len),
         available: header_len.saturating_add(written),
     }
 }

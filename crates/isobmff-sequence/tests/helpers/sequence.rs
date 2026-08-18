@@ -3,8 +3,8 @@
 //! Shared across the integration test binaries with
 //! `#[path = "helpers/sequence.rs"] pub mod sequence;`.
 
-// Why `pub` rather than `pub(crate)`: each binary drives a part of this module,
-// and a part left undriven reads as dead code under `pub(crate)`.
+// Why `pub` on what the binaries import: each of them drives a part of this
+// module, and a part left undriven reads as dead code under `pub(crate)`.
 
 use isobmff_boxes::{
     FileTypeBox, HandlerBox, MediaBox, MediaHeaderBox, MediaInformationBox, MovieBox,
@@ -21,21 +21,21 @@ use isobmff_sequence::{
 };
 
 /// Time every header of the synthetic files declares
-pub const EPOCH: QuickTimeDateTime = QuickTimeDateTime::from_seconds(0);
+const EPOCH: QuickTimeDateTime = QuickTimeDateTime::from_seconds(0);
 
 /// Ticks a second the media of the synthetic files is timed in
-pub const TIMESCALE: u32 = 90_000;
+const TIMESCALE: u32 = 90_000;
 
 /// Media data the fragment of the synthetic files addresses
 pub const MEDIA_DATA: [u8; 64] = [0x11; 64];
 
 /// User type the vendor box of the file of boxes passed on is declared under
-pub const USER_TYPE: Uuid = Uuid::new([
+const USER_TYPE: Uuid = Uuid::new([
     0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10,
 ]);
 
 /// Lays out the box `header` introduces: the header, then `payload`
-pub fn laid_out(header: BoxHeader, payload: &[u8]) -> Vec<u8> {
+fn laid_out(header: BoxHeader, payload: &[u8]) -> Vec<u8> {
     let mut buffer = [0; BoxHeader::MAX_ENCODED_LEN];
     let mut bytes = header.encode(&mut buffer).to_vec();
 
@@ -45,7 +45,7 @@ pub fn laid_out(header: BoxHeader, payload: &[u8]) -> Vec<u8> {
 }
 
 /// Lays out one whole box: the header that `box_type` and `payload` need, then the payload
-pub fn framed(box_type: BoxType, payload: &[u8]) -> Option<Vec<u8>> {
+fn framed(box_type: BoxType, payload: &[u8]) -> Option<Vec<u8>> {
     let header = BoxHeader::with_payload_len(box_type, u64::try_from(payload.len()).ok()?)?;
 
     Some(laid_out(header, payload))
@@ -83,34 +83,22 @@ pub fn events_of(file: &[u8], cut_length: usize) -> Result<Vec<BoxEventAt>, BoxR
     Ok(events)
 }
 
-/// The events with the payload of each box passed on fused back into one
+/// The steps with the payload of each box passed on fused back into one
 ///
-/// What is left is what the file says rather than how it was cut
-pub fn payloads_fused(events: Vec<BoxEventAt>) -> Vec<BoxEventAt> {
-    let mut fused: Vec<BoxEventAt> = Vec::new();
+/// What is left is what the file says rather than how it was cut, each step with
+/// the offset it begins at
+pub fn payloads_fused(events: Vec<BoxEventAt>) -> Vec<(u64, BoxEvent)> {
+    let mut fused: Vec<(u64, BoxEvent)> = Vec::new();
 
     for event in events {
-        let joined = fused
-            .last()
-            .and_then(|last| match (last.event(), event.event()) {
-                (BoxEvent::RawPayload(gathered), BoxEvent::RawPayload(bytes)) => {
-                    let mut joined = gathered.clone();
-                    joined.extend_from_slice(bytes);
+        let step = (event.file_offset(), event.into_event());
 
-                    Some(BoxEventAt::new(
-                        last.file_offset(),
-                        BoxEvent::RawPayload(joined),
-                    ))
-                }
-                _not_two_payloads => None,
-            });
-
-        match joined {
-            Some(joined) => {
-                fused.pop();
-                fused.push(joined);
-            }
-            None => fused.push(event),
+        match (fused.last_mut(), step) {
+            (
+                Some((_began_at, BoxEvent::RawPayload(gathered))),
+                (_next_at, BoxEvent::RawPayload(bytes)),
+            ) => gathered.extend_from_slice(&bytes),
+            (_not_two_payloads, step) => fused.push(step),
         }
     }
 

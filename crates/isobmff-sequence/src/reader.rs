@@ -306,7 +306,6 @@ impl BoxReader {
                     }
 
                     let payload = take_payload(remaining, &mut unread);
-                    let began_at = self.file_offset;
 
                     self.state = State::Payload {
                         header,
@@ -315,11 +314,11 @@ impl BoxReader {
                                 .saturating_sub(u64::try_from(payload.len()).unwrap_or(u64::MAX))
                         }),
                     };
-                    self.advance(payload.len());
                     self.events.push_back(BoxEventAt::new(
-                        began_at,
+                        self.file_offset,
                         BoxEvent::RawPayload(Vec::from(payload)),
                     ));
+                    self.advance(payload.len());
                 }
                 State::Gathering {
                     header,

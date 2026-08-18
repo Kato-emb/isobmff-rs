@@ -62,14 +62,16 @@ fn a_file_is_written_back_from_its_events_however_the_output_was_drained() {
 #[test]
 fn a_file_written_back_without_the_boxes_passed_on_holds_the_values_that_are_left() {
     let file = fragmented_file().unwrap();
-    let mut values_only = Vec::new();
-
-    for event in events_to_write(&file, file.len()).unwrap() {
-        if let BoxEvent::RawStart(..) | BoxEvent::RawPayload(..) | BoxEvent::RawEnd = event {
-            continue;
-        }
-        values_only.push(event);
-    }
+    let values_only = events_to_write(&file, file.len())
+        .unwrap()
+        .into_iter()
+        .filter(|event| {
+            !matches!(
+                *event,
+                BoxEvent::RawStart(..) | BoxEvent::RawPayload(..) | BoxEvent::RawEnd
+            )
+        })
+        .collect();
 
     assert_eq!(
         bytes_of(values_only, file.len()).unwrap(),
