@@ -19,22 +19,23 @@ use libfuzzer_sys::fuzz_target;
 /// A corpus file is two bytes of `prefix_length` followed by the bytes
 /// themselves, verbatim.
 #[derive(Arbitrary, Debug)]
-struct Input {
-    // Why not put `bytes` first: only a trailing `Vec<u8>` is taken verbatim by
-    // `Arbitrary`, so any other order leaves the seed files unreadable as a
-    // hexdump of the input.
+struct Input<'bytes> {
+    // Why not put `bytes` first, and why a slice: only the last field is handed
+    // what is left, and only `&[u8]` takes it verbatim — a `Vec<u8>` reads a
+    // byte of its own before each element, so a seed stops at its first even
+    // byte.
     prefix_length: u16,
-    bytes: Vec<u8>,
+    bytes: &'bytes [u8],
 }
 
-fuzz_target!(|input: Input| {
+fuzz_target!(|input: Input<'_>| {
     let Input {
         prefix_length,
         bytes,
     } = input;
 
-    frames_re_encode_to_the_span_they_came_from(&bytes);
-    truncation_asks_for_more_than_the_input_offered(&bytes, prefix_length);
+    frames_re_encode_to_the_span_they_came_from(bytes);
+    truncation_asks_for_more_than_the_input_offered(bytes, prefix_length);
 });
 
 fn frames_re_encode_to_the_span_they_came_from(bytes: &[u8]) {

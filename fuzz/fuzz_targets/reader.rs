@@ -1,15 +1,18 @@
 //! Reading properties of [`BoxReader`]
 //!
-//! One run checks four properties of the same input:
+//! One run checks five properties of the same input:
 //!
 //! 1. no call panics, and no event carries a payload part that is empty
-//! 2. where the input is cut does not change the boxes it reads
-//! 3. the boxes read agree with the [`boxes`] iterator over the input — box type,
+//! 2. the extents partition the input the reader got through: each one begins
+//!    where the one before it ended, and a box passed on lies over the header,
+//!    the payload parts, and the empty end it was read as
+//! 3. where the input is cut does not change the boxes it reads, nor where they lie
+//! 4. the boxes read agree with the [`boxes`] iterator over the input — box type,
 //!    header, payload, and the offset each box begins at — as far as the reader
 //!    got through it
-//! 4. input the iterator rejects the reader rejects as well
+//! 5. input the iterator rejects the reader rejects as well
 //!
-//! Where the reader alone rejects, property 3 holds over the boxes it did report
+//! Where the reader alone rejects, property 4 holds over the boxes it did report
 //! rather than the whole input: reading a box into a value decodes its payload,
 //! which the iterator never looks at. That the boxes the iterator splits out
 //! re-encode to the spans they came from is the `boxes` target's property, not
@@ -22,18 +25,24 @@ use isobmff_sequence::{BoxEvent, BoxReader};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
 
+#[path = "helpers/cut.rs"]
+mod cut;
+
+use cut::cut_into;
+
 /// Input of one run: bytes to read, and the lengths to cut them into
 ///
 /// A corpus file is four bytes of `cut_lengths` followed by the bytes
 /// themselves, verbatim. The lengths are cycled, each one byte longer than it
 /// reads, so a cut is 1 to 256 bytes and the feeding always advances.
 #[derive(Arbitrary, Debug)]
-struct Input {
-    // Why not put `bytes` first: only a trailing `Vec<u8>` is taken verbatim by
-    // `Arbitrary`, so any other order leaves the seed files unreadable as a
-    // hexdump of the input.
+struct Input<'bytes> {
+    // Why not put `bytes` first, and why a slice: only the last field is handed
+    // what is left, and only `&[u8]` takes it verbatim — a `Vec<u8>` reads a
+    // byte of its own before each element, so a seed stops at its first even
+    // byte.
     cut_lengths: [u8; 4],
-    bytes: Vec<u8>,
+    bytes: &'bytes [u8],
 }
 
 /// One box as the reader reported it
@@ -54,29 +63,39 @@ enum Reported {
 #[derive(PartialEq, Debug)]
 struct Run {
     reported: Vec<Reported>,
+    covered: u64,
     // Why the failure as its own text: the error carries the failure of a box
     // that did not decode, which is not a value two runs can be compared by.
     failure: Option<String>,
 }
 
-fuzz_target!(|input: Input| {
+fuzz_target!(|input: Input<'_>| {
     let Input { cut_lengths, bytes } = input;
 
-    let whole = read([bytes.as_slice()]);
-    let cut = read(cut_into(&bytes, cut_lengths));
+    let whole = read([bytes]);
+    let cut = read(cut_into(bytes, cut_lengths));
 
     assert_eq!(
         whole, cut,
-        "where the input was cut changed the boxes it read"
+        "where the input was cut changed the boxes it read, or where they lie"
     );
 
-    agrees_with_the_boxes_iterator(&bytes, &whole);
+    if whole.failure.is_none() {
+        assert_eq!(
+            whole.covered,
+            u64::try_from(bytes.len()).expect("an input beyond `u64` was read"),
+            "the extents stop short of an input the reader read to the end of"
+        );
+    }
+
+    agrees_with_the_boxes_iterator(bytes, &whole);
 });
 
 /// Hands `arriving` to a reader, a part at a time, and gathers what it reports
 fn read<'input>(arriving: impl IntoIterator<Item = &'input [u8]>) -> Run {
     let mut reader = BoxReader::new();
     let mut reported: Vec<Reported> = Vec::new();
+    let mut covered = 0;
     let mut failure = None;
 
     for input in arriving {
@@ -84,7 +103,7 @@ fn read<'input>(arriving: impl IntoIterator<Item = &'input [u8]>) -> Run {
         // still the reader's to hand over, and dropping them would leave a box
         // half gathered for the comparison against the iterator.
         let outcome = reader.handle_input(input);
-        drain(&mut reader, &mut reported);
+        drain(&mut reader, &mut reported, &mut covered);
 
         if let Err(reported) = outcome {
             failure = Some(format!("{reported:?}"));
@@ -94,7 +113,7 @@ fn read<'input>(arriving: impl IntoIterator<Item = &'input [u8]>) -> Run {
 
     if failure.is_none() {
         let outcome = reader.finish();
-        drain(&mut reader, &mut reported);
+        drain(&mut reader, &mut reported, &mut covered);
 
         if let Err(reported) = outcome {
             failure = Some(format!("{reported:?}"));
@@ -109,37 +128,76 @@ fn read<'input>(arriving: impl IntoIterator<Item = &'input [u8]>) -> Run {
         Reported::Value { .. } => true,
     });
 
-    Run { reported, failure }
+    Run {
+        reported,
+        covered,
+        failure,
+    }
 }
 
 /// Takes every event the reader has made, folding it into the boxes gathered
-fn drain(reader: &mut BoxReader, reported: &mut Vec<Reported>) {
+///
+/// `covered` walks the input along with the extents, each event taking it from
+/// where the one before it left off to the end of the bytes that event was read
+/// from.
+fn drain(reader: &mut BoxReader, reported: &mut Vec<Reported>, covered: &mut u64) {
     while let Some(polled) = reader.poll_event() {
-        let began_at = reader
+        let extent = reader
             .event_extent()
-            .expect("an event was taken, so it has an extent")
-            .start;
+            .expect("an event was taken, so it has an extent");
+        let began_at = extent.start;
+        let bytes_read_from = extent
+            .end
+            .checked_sub(extent.start)
+            .expect("an extent ending before it begins");
+
+        assert_eq!(
+            began_at, *covered,
+            "an event does not begin where the one before it ended"
+        );
+        *covered = extent.end;
 
         match polled {
-            BoxEvent::RawStart(header) => reported.push(Reported::PassedOn {
-                header,
-                began_at,
-                payload: Vec::new(),
-                ended: false,
-            }),
+            BoxEvent::RawStart(header) => {
+                assert_eq!(
+                    bytes_read_from,
+                    u64::try_from(header.encoded_len()).expect("a header beyond `u64` was read"),
+                    "the extent of a box starting is not the header it was read from"
+                );
+                reported.push(Reported::PassedOn {
+                    header,
+                    began_at,
+                    payload: Vec::new(),
+                    ended: false,
+                });
+            }
             BoxEvent::RawPayload(part) => {
                 assert!(!part.is_empty(), "an empty payload event was reported");
-                let open = reported.last_mut().expect("a payload before any box started");
+                assert_eq!(
+                    bytes_read_from,
+                    u64::try_from(part.len()).expect("a payload part beyond `u64` was read"),
+                    "the extent of a payload part is not the bytes it carries"
+                );
+                let open = reported
+                    .last_mut()
+                    .expect("a payload before any box started");
 
                 match open {
                     Reported::PassedOn { payload, .. } => payload.extend_from_slice(&part),
                     Reported::Value { .. } => panic!("a payload of a box read into a value"),
                 }
             }
-            BoxEvent::RawEnd => match reported.last_mut().expect("an end before any box started") {
-                Reported::PassedOn { ended, .. } => *ended = true,
-                Reported::Value { .. } => panic!("an end of a box read into a value"),
-            },
+            BoxEvent::RawEnd => {
+                assert_eq!(
+                    bytes_read_from, 0,
+                    "the extent of a box ending covers bytes of the input"
+                );
+
+                match reported.last_mut().expect("an end before any box started") {
+                    Reported::PassedOn { ended, .. } => *ended = true,
+                    Reported::Value { .. } => panic!("an end of a box read into a value"),
+                }
+            }
             BoxEvent::FileType(_ftyp) => reported.push(Reported::Value {
                 box_type: BoxType::compact(*b"ftyp"),
                 began_at,
@@ -159,20 +217,6 @@ fn drain(reader: &mut BoxReader, reported: &mut Vec<Reported>) {
             unknown => panic!("the reader reported an event this run cannot check: {unknown:?}"),
         }
     }
-}
-
-/// Cuts `bytes` at the cycled `lengths`, each one byte longer than it reads
-fn cut_into(bytes: &[u8], lengths: [u8; 4]) -> impl Iterator<Item = &[u8]> {
-    let mut rest = bytes;
-
-    lengths.into_iter().cycle().map_while(move |length| {
-        if rest.is_empty() {
-            return None;
-        }
-        let (taken, remainder) = rest.split_at((usize::from(length) + 1).min(rest.len()));
-        rest = remainder;
-        Some(taken)
-    })
 }
 
 fn agrees_with_the_boxes_iterator(bytes: &[u8], run: &Run) {
