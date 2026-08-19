@@ -341,12 +341,14 @@ impl Default for BoxWriter {
 
 /// Returns the failure of a box the events carried `written` payload bytes of
 ///
-/// The box declares a total, which is what makes it unfinished; the fallback is
-/// a degenerate value in place of a panic the lints forbid.
+/// The box declares a total, which is what makes it unfinished.
 fn unfinished(header: BoxHeader, written: u64) -> BoxWriterError {
     let header_len = u64::try_from(header.encoded_len()).unwrap_or(u64::MAX);
 
     BoxWriterError::UnfinishedBox {
+        // Why not unreachable: only a box declaring a total is unfinished, so
+        // the total is always there, and the fallback is a degenerate value in
+        // place of a panic the lints forbid.
         needed: header.size().total_bytes().unwrap_or(header_len),
         available: header_len.saturating_add(written),
     }
