@@ -25,6 +25,11 @@ use isobmff_sequence::{BoxEvent, BoxReader};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
 
+#[path = "helpers/cut.rs"]
+mod cut;
+
+use cut::cut_into;
+
 /// Input of one run: bytes to read, and the lengths to cut them into
 ///
 /// A corpus file is four bytes of `cut_lengths` followed by the bytes
@@ -32,11 +37,10 @@ use libfuzzer_sys::fuzz_target;
 /// reads, so a cut is 1 to 256 bytes and the feeding always advances.
 #[derive(Arbitrary, Debug)]
 struct Input<'bytes> {
-    // Why not put `bytes` first, and why a slice rather than a `Vec`: only the
-    // last field is taken by `arbitrary_take_rest`, and of the two only
-    // `&[u8]` takes the rest verbatim — a `Vec<u8>` reads a byte of its own
-    // before each element it keeps, which leaves the seed files unreadable as a
-    // hexdump of the input.
+    // Why not put `bytes` first, and why a slice: only the last field is handed
+    // what is left, and only `&[u8]` takes it verbatim — a `Vec<u8>` reads a
+    // byte of its own before each element, so a seed stops at its first even
+    // byte.
     cut_lengths: [u8; 4],
     bytes: &'bytes [u8],
 }
@@ -213,20 +217,6 @@ fn drain(reader: &mut BoxReader, reported: &mut Vec<Reported>, covered: &mut u64
             unknown => panic!("the reader reported an event this run cannot check: {unknown:?}"),
         }
     }
-}
-
-/// Cuts `bytes` at the cycled `lengths`, each one byte longer than it reads
-fn cut_into(bytes: &[u8], lengths: [u8; 4]) -> impl Iterator<Item = &[u8]> {
-    let mut rest = bytes;
-
-    lengths.into_iter().cycle().map_while(move |length| {
-        if rest.is_empty() {
-            return None;
-        }
-        let (taken, remainder) = rest.split_at((usize::from(length) + 1).min(rest.len()));
-        rest = remainder;
-        Some(taken)
-    })
 }
 
 fn agrees_with_the_boxes_iterator(bytes: &[u8], run: &Run) {

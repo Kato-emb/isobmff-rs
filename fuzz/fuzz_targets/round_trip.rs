@@ -22,6 +22,11 @@ use isobmff_sequence::{BoxEvent, BoxReader, BoxWriter};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
 
+#[path = "helpers/cut.rs"]
+mod cut;
+
+use cut::cut_into;
+
 /// Input of one run: bytes to read, the lengths to cut them into, and the lengths to drain by
 ///
 /// A corpus file is four bytes of `cut_lengths`, four of `drain_lengths`, and
@@ -30,15 +35,17 @@ use libfuzzer_sys::fuzz_target;
 /// the run always advances.
 #[derive(Arbitrary, Debug)]
 struct Input<'bytes> {
-    // Why not put `bytes` first, and why a slice rather than a `Vec`: only the
-    // last field is taken by `arbitrary_take_rest`, and of the two only
-    // `&[u8]` takes the rest verbatim — a `Vec<u8>` reads a byte of its own
-    // before each element it keeps, which leaves the seed files unreadable as a
-    // hexdump of the input.
+    // Why not put `bytes` first, and why a slice: only the last field is handed
+    // what is left, and only `&[u8]` takes it verbatim — a `Vec<u8>` reads a
+    // byte of its own before each element, so a seed stops at its first even
+    // byte.
     cut_lengths: [u8; 4],
     drain_lengths: [u8; 4],
     bytes: &'bytes [u8],
 }
+
+/// Longest buffer a drain offers, the widest a byte of `drain_lengths` reads as
+const MAX_BUFFER_LEN: usize = 256;
 
 /// Everything one pass of the reader over a file reported
 struct Reading {
@@ -75,6 +82,7 @@ fuzz_target!(|input: Input<'_>| {
 fn events_of<'input>(arriving: impl IntoIterator<Item = &'input [u8]>) -> Reading {
     let mut reader = BoxReader::new();
     let mut events = Vec::new();
+    let mut failed = false;
 
     for input in arriving {
         // Why drain before leaving on the failure: the events made before it are
@@ -84,20 +92,19 @@ fn events_of<'input>(arriving: impl IntoIterator<Item = &'input [u8]>) -> Readin
         drain(&mut reader, &mut events);
 
         if outcome.is_err() {
-            return Reading {
-                events,
-                failed: true,
-            };
+            failed = true;
+            break;
         }
     }
 
-    let outcome = reader.finish();
-    drain(&mut reader, &mut events);
+    if !failed {
+        let outcome = reader.finish();
+        drain(&mut reader, &mut events);
 
-    Reading {
-        events,
-        failed: outcome.is_err(),
+        failed = outcome.is_err();
     }
+
+    Reading { events, failed }
 }
 
 /// Takes every event the reader has made, fusing the payload parts of one box
@@ -118,11 +125,12 @@ fn drain(reader: &mut BoxReader, events: &mut Vec<BoxEvent>) {
 /// the writer takes: it would end the file inside that box, which the writer
 /// reports as unfinished rather than laying down.
 fn whole_boxes(mut events: Vec<BoxEvent>) -> Vec<BoxEvent> {
-    let closed = events
-        .iter()
-        .rposition(|event| !matches!(*event, BoxEvent::RawStart(..) | BoxEvent::RawPayload(..)));
-
-    events.truncate(closed.map_or(0, |last| last + 1));
+    while matches!(
+        events.last(),
+        Some(BoxEvent::RawStart(..) | BoxEvent::RawPayload(..))
+    ) {
+        events.pop();
+    }
 
     events
 }
@@ -131,8 +139,8 @@ fn whole_boxes(mut events: Vec<BoxEvent>) -> Vec<BoxEvent> {
 fn file_of(events: &[BoxEvent], lengths: [u8; 4]) -> Vec<u8> {
     let mut writer = BoxWriter::new();
     let mut buffer_lengths = lengths.into_iter().cycle();
+    let mut buffer = [0; MAX_BUFFER_LEN];
     let mut file = Vec::new();
-    let mut covered = 0;
 
     for event in events {
         writer
@@ -142,30 +150,26 @@ fn file_of(events: &[BoxEvent], lengths: [u8; 4]) -> Vec<u8> {
         let extent = writer
             .event_extent()
             .expect("an event was handed over, so it has an extent");
+        let began_at = laid_down(&file);
+
+        drain_into(&mut writer, &mut buffer_lengths, &mut buffer, &mut file);
 
         assert_eq!(
-            extent.start,
-            laid_down(&file),
-            "an event does not begin where the one before it ended"
-        );
-
-        drain_into(&mut writer, &mut buffer_lengths, &mut file);
-
-        assert_eq!(
-            extent.end,
-            laid_down(&file),
+            extent,
+            began_at..laid_down(&file),
             "the extent of an event is not the bytes it was written to"
         );
-        covered = extent.end;
     }
+
+    let laid_down_by_the_events = laid_down(&file);
 
     writer
         .finish()
         .expect("the writer rejected the file it had laid down whole boxes for");
-    drain_into(&mut writer, &mut buffer_lengths, &mut file);
+    drain_into(&mut writer, &mut buffer_lengths, &mut buffer, &mut file);
 
     assert_eq!(
-        covered,
+        laid_down_by_the_events,
         laid_down(&file),
         "the extents leave out bytes of the file the writer laid down"
     );
@@ -174,34 +178,25 @@ fn file_of(events: &[BoxEvent], lengths: [u8; 4]) -> Vec<u8> {
 }
 
 /// Takes what the writer has made into `file`, a buffer of the next length at a time
-fn drain_into(writer: &mut BoxWriter, lengths: &mut impl Iterator<Item = u8>, file: &mut Vec<u8>) {
+fn drain_into(
+    writer: &mut BoxWriter,
+    lengths: &mut impl Iterator<Item = u8>,
+    buffer: &mut [u8; MAX_BUFFER_LEN],
+    file: &mut Vec<u8>,
+) {
     loop {
         let length = lengths.next().expect("the lengths are cycled");
-        let mut buffer = vec![0; usize::from(length) + 1];
-        let taken = writer.poll_output(&mut buffer);
+        let offered = &mut buffer[..usize::from(length) + 1];
+        let taken = writer.poll_output(offered);
 
-        match buffer.get(..taken) {
-            Some([]) | None => return,
-            Some(bytes) => file.extend_from_slice(bytes),
+        if taken == 0 {
+            return;
         }
+        file.extend_from_slice(&offered[..taken]);
     }
 }
 
 /// How far into the file the writer has laid bytes down
 fn laid_down(file: &[u8]) -> u64 {
     u64::try_from(file.len()).expect("a file beyond `u64` was laid down")
-}
-
-/// Cuts `bytes` at the cycled `lengths`, each one byte longer than it reads
-fn cut_into(bytes: &[u8], lengths: [u8; 4]) -> impl Iterator<Item = &[u8]> {
-    let mut rest = bytes;
-
-    lengths.into_iter().cycle().map_while(move |length| {
-        if rest.is_empty() {
-            return None;
-        }
-        let (taken, remainder) = rest.split_at((usize::from(length) + 1).min(rest.len()));
-        rest = remainder;
-        Some(taken)
-    })
 }

@@ -20,11 +20,10 @@ use libfuzzer_sys::fuzz_target;
 /// themselves, verbatim.
 #[derive(Arbitrary, Debug)]
 struct Input<'bytes> {
-    // Why not put `bytes` first, and why a slice rather than a `Vec`: only the
-    // last field is taken by `arbitrary_take_rest`, and of the two only
-    // `&[u8]` takes the rest verbatim — a `Vec<u8>` reads a byte of its own
-    // before each element it keeps, which leaves the seed files unreadable as a
-    // hexdump of the input.
+    // Why not put `bytes` first, and why a slice: only the last field is handed
+    // what is left, and only `&[u8]` takes it verbatim — a `Vec<u8>` reads a
+    // byte of its own before each element, so a seed stops at its first even
+    // byte.
     prefix_length: u16,
     bytes: &'bytes [u8],
 }
