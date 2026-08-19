@@ -8,19 +8,21 @@
 #[path = "helpers/sequence.rs"]
 pub mod sequence;
 
+use core::ops::Range;
+
 use isobmff_core::{BoxHeader, boxes};
-use isobmff_sequence::{BoxEvent, BoxEventAt};
+use isobmff_sequence::BoxEvent;
 
 use sequence::{events_of, file_passed_on, payloads_fused};
 
 /// Each box the reader reported, as its header and the payload it passed on
-fn boxes_reported(events: &[BoxEventAt]) -> Vec<(BoxHeader, Vec<u8>)> {
+fn boxes_reported(events: &[(Range<u64>, BoxEvent)]) -> Vec<(BoxHeader, Vec<u8>)> {
     let mut reported: Vec<(BoxHeader, Vec<u8>)> = Vec::new();
 
-    for event in events {
-        if let BoxEvent::RawStart(header) = *event.event() {
+    for (_extent, event) in events {
+        if let BoxEvent::RawStart(header) = *event {
             reported.push((header, Vec::new()));
-        } else if let BoxEvent::RawPayload(ref bytes) = *event.event() {
+        } else if let BoxEvent::RawPayload(ref bytes) = *event {
             if let Some((_header, payload)) = reported.last_mut() {
                 payload.extend_from_slice(bytes);
             }
@@ -31,12 +33,12 @@ fn boxes_reported(events: &[BoxEventAt]) -> Vec<(BoxHeader, Vec<u8>)> {
 }
 
 /// Where each box the reader reported said it begins
-fn offsets_reported(events: &[BoxEventAt]) -> Vec<u64> {
+fn offsets_reported(events: &[(Range<u64>, BoxEvent)]) -> Vec<u64> {
     let mut offsets = Vec::new();
 
-    for event in events {
-        if let BoxEvent::RawStart(_header) = *event.event() {
-            offsets.push(event.file_offset());
+    for (extent, event) in events {
+        if let BoxEvent::RawStart(_header) = *event {
+            offsets.push(extent.start);
         }
     }
 
@@ -78,7 +80,7 @@ fn the_boxes_reported_are_the_ones_the_boxes_iterator_splits_out() {
 }
 
 #[test]
-fn the_offset_a_box_carries_is_where_it_begins_in_the_file() {
+fn the_extent_of_a_box_begins_where_that_box_begins_in_the_file() {
     let file = file_passed_on().unwrap();
     let mut walked = 0_u64;
     let beginnings = boxes(&file)

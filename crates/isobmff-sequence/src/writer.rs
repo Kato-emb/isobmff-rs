@@ -3,6 +3,7 @@
 use alloc::vec::Vec;
 use core::error;
 use core::fmt;
+use core::ops::Range;
 
 use isobmff_core::{BoxHeader, BoxType, BoxWrite, EncodeError};
 
@@ -47,9 +48,11 @@ use crate::event::BoxEvent;
 ///   length and is closed by [`RawEnd`](BoxEvent::RawEnd) like any other. Nothing
 ///   may follow it: it runs to the end of the file by definition, so an event
 ///   after it is [`PastEndOfFile`](BoxWriterError::PastEndOfFile).
-/// * The offsets [`BoxReader`](crate::BoxReader) reports are not this writer's
-///   input — a [`BoxEvent`] carries none, see [`BoxEventAt`](crate::BoxEventAt) —
-///   so boxes may be dropped from an event stream or added to it.
+/// * A [`BoxEvent`] carries no position, so the extents
+///   [`BoxReader`](crate::BoxReader) reported are not this writer's input: boxes
+///   may be dropped from an event stream or added to it, and where the events
+///   land is the writer's own count. [`event_extent`](Self::event_extent) names
+///   it for the event last handed over.
 /// * An `Err` leaves the writer failed for good,
 ///   [`AlreadyFinished`](BoxWriterError::AlreadyFinished) aside: every later
 ///   [`handle_event`](Self::handle_event) and [`finish`](Self::finish) reports
@@ -90,11 +93,14 @@ use crate::event::BoxEvent;
 /// ];
 /// let mut writer = BoxWriter::new();
 /// let mut file = Vec::new();
+/// let mut extents = Vec::new();
 /// let mut buffer = [0; 8];
 ///
-/// // Events are handed over one at a time, and what they made is drained
+/// // Events are handed over one at a time, each with the bytes of the file it
+/// // was written to, and what they made is drained
 /// for event in events {
 ///     writer.handle_event(event).unwrap();
+///     extents.push(writer.event_extent().unwrap());
 ///     loop {
 ///         let written = writer.poll_output(&mut buffer);
 ///         if written == 0 {
@@ -110,22 +116,33 @@ use crate::event::BoxEvent;
 /// // The `ftyp` wrote itself as a whole box, and the `mdat` came back out as it
 /// // went in
 /// assert_eq!(file, *b"\0\0\0\x14ftypiso6\0\0\x02\0iso6\0\0\0\x0cmdatSAMP");
+///
+/// // Each event landed where the one before it ended, as the reader reports the
+/// // same file
+/// assert_eq!(extents, [0..20, 20..28, 28..32, 32..32]);
 /// ```
 #[derive(Debug)]
 pub struct BoxWriter {
     state: State,
     output: Vec<u8>,
     taken: usize,
+    position: u64,
+    event_extent: Option<Range<u64>>,
 }
 
 impl BoxWriter {
     /// Creates a writer waiting at the start of a file
+    ///
+    /// The extents the writer reports count from the first byte it lays down,
+    /// which it takes as offset zero.
     #[must_use]
     pub const fn new() -> Self {
         Self {
             state: State::Between,
             output: Vec::new(),
             taken: 0,
+            position: 0,
+            event_extent: None,
         }
     }
 
@@ -167,25 +184,27 @@ impl BoxWriter {
             State::Between | State::Payload { .. } => {}
         }
 
-        match event {
+        let began_at = self.position;
+        let length = match event {
             BoxEvent::FileType(ftyp) => self.write_whole(&ftyp),
             BoxEvent::SegmentType(styp) => self.write_whole(&styp),
             BoxEvent::Movie(moov) => self.write_whole(&moov),
             BoxEvent::MovieFragment(moof) => self.write_whole(&moof),
             BoxEvent::RawStart(header) => {
                 let mut scratch = [0; BoxHeader::MAX_ENCODED_LEN];
+                let header_len = u64::try_from(header.encoded_len()).unwrap_or(u64::MAX);
 
                 self.output.extend_from_slice(header.encode(&mut scratch));
                 self.state = State::Payload { header, written: 0 };
 
-                Ok(())
+                Ok(header_len)
             }
             BoxEvent::RawPayload(payload) => {
                 let State::Payload { header, written } = self.state else {
                     return Err(self.fail(BoxWriterError::NoBoxOpen));
                 };
-                let offered =
-                    written.saturating_add(u64::try_from(payload.len()).unwrap_or(u64::MAX));
+                let length = u64::try_from(payload.len()).unwrap_or(u64::MAX);
+                let offered = written.saturating_add(length);
 
                 if let Some(declared) = header.payload_len() {
                     if offered > declared {
@@ -208,7 +227,7 @@ impl BoxWriter {
                     written: offered,
                 };
 
-                Ok(())
+                Ok(length)
             }
             BoxEvent::RawEnd => {
                 let State::Payload { header, written } = self.state else {
@@ -222,16 +241,36 @@ impl BoxWriter {
                     Some(_reached) => {
                         self.state = State::Between;
 
-                        Ok(())
+                        Ok(0)
                     }
                     None => {
                         self.state = State::EndOfFile;
 
-                        Ok(())
+                        Ok(0)
                     }
                 }
             }
-        }
+        }?;
+
+        self.position = self.position.saturating_add(length);
+        self.event_extent = Some(began_at..self.position);
+
+        Ok(())
+    }
+
+    /// Returns the bytes of the file the event last handed over was written to
+    ///
+    /// The extent counts from the first byte the writer laid down, and covers
+    /// the bytes that event is made of — see [`BoxEvent`]. They are the extent
+    /// of the event whether they were drained by
+    /// [`poll_output`](Self::poll_output) or are still held.
+    ///
+    /// It is the event [`handle_event`](Self::handle_event) took last that it
+    /// names, and `None` until the first is taken. The events partition the
+    /// output, so the end of one is where the next begins.
+    #[must_use]
+    pub fn event_extent(&self) -> Option<Range<u64>> {
+        self.event_extent.clone()
     }
 
     /// Fills `buffer` with the bytes the events handed over so far made
@@ -291,8 +330,8 @@ impl BoxWriter {
         }
     }
 
-    /// Lays down the whole box `value` forms
-    fn write_whole<Value: BoxWrite>(&mut self, value: &Value) -> Result<(), BoxWriterError> {
+    /// Lays down the whole box `value` forms, and reports the bytes it took
+    fn write_whole<Value: BoxWrite>(&mut self, value: &Value) -> Result<u64, BoxWriterError> {
         let needed = value.encoded_len();
         let Ok(length) = usize::try_from(needed) else {
             // Why not an error of its own for a box beyond `usize`: such a total
@@ -312,7 +351,7 @@ impl BoxWriter {
             .map(|_nothing_beyond| ());
 
         match encoded {
-            Ok(()) => Ok(()),
+            Ok(()) => Ok(needed),
             Err(error) => Err(self.encode_failure::<Value>(error)),
         }
     }
@@ -775,6 +814,44 @@ mod tests {
             drained(&mut writer, 64),
             *b"\0\0\0\x14ftypiso6\0\0\x02\0iso6"
         );
+    }
+
+    #[test]
+    fn the_extent_reported_is_the_one_of_the_event_handed_over_last() {
+        let mut writer = BoxWriter::new();
+
+        assert_eq!(writer.event_extent(), None);
+
+        writer
+            .handle_event(BoxEvent::RawStart(compact_header(*b"free", 12)))
+            .unwrap();
+
+        assert_eq!(writer.event_extent(), Some(0..8));
+
+        writer
+            .handle_event(BoxEvent::RawPayload(Vec::from(*b"AAAA")))
+            .unwrap();
+
+        assert_eq!(writer.event_extent(), Some(8..12));
+
+        writer.handle_event(BoxEvent::RawEnd).unwrap();
+
+        assert_eq!(writer.event_extent(), Some(12..12));
+    }
+
+    #[test]
+    fn the_extent_of_an_event_covers_the_bytes_it_made_though_the_ones_before_it_were_drained() {
+        let mut writer = BoxWriter::new();
+
+        writer
+            .handle_event(BoxEvent::FileType(file_type()))
+            .unwrap();
+        drained(&mut writer, 64);
+        writer
+            .handle_event(BoxEvent::RawStart(compact_header(*b"free", 8)))
+            .unwrap();
+
+        assert_eq!(writer.event_extent(), Some(20..28));
     }
 
     #[test]

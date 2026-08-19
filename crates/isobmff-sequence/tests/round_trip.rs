@@ -8,7 +8,7 @@
 #[path = "helpers/sequence.rs"]
 pub mod sequence;
 
-use isobmff_sequence::{BoxEvent, BoxEventAt, BoxReaderError};
+use isobmff_sequence::{BoxEvent, BoxReaderError};
 
 use sequence::{
     bytes_of, events_of, file_passed_on, file_type, fragmented_file, movie, movie_fragment,
@@ -27,7 +27,7 @@ fn every_file() -> Option<Vec<Vec<u8>>> {
 fn events_to_write(file: &[u8], cut_length: usize) -> Result<Vec<BoxEvent>, BoxReaderError> {
     Ok(events_of(file, cut_length)?
         .into_iter()
-        .map(BoxEventAt::into_event)
+        .map(|(_extent, event)| event)
         .collect())
 }
 

@@ -9,11 +9,11 @@
 pub mod sequence;
 
 use isobmff_core::{BoxEncode as _, BoxType, BoxWrite};
-use isobmff_sequence::{BoxEvent, BoxEventAt, BoxReader, BoxReaderError};
+use isobmff_sequence::{BoxEvent, BoxReader, BoxReaderError};
 
 use sequence::{
     MEDIA_DATA, events_of, file_type, fragmented_file, media_data_header, movie, movie_fragment,
-    payloads_fused,
+    payloads_fused, polled,
 };
 
 #[test]
@@ -33,15 +33,21 @@ fn the_boxes_a_file_is_framed_by_are_values_and_its_media_data_is_passed_on() {
     assert_eq!(
         events_of(&file, file.len()).unwrap(),
         vec![
-            BoxEventAt::new(0, BoxEvent::FileType(file_type())),
-            BoxEventAt::new(movie_at, BoxEvent::Movie(movie)),
-            BoxEventAt::new(fragment_at, BoxEvent::MovieFragment(movie_fragment)),
-            BoxEventAt::new(media_data_at, BoxEvent::RawStart(media_data_header)),
-            BoxEventAt::new(
-                media_data_payload_at,
+            (0..movie_at, BoxEvent::FileType(file_type())),
+            (movie_at..fragment_at, BoxEvent::Movie(movie)),
+            (
+                fragment_at..media_data_at,
+                BoxEvent::MovieFragment(movie_fragment)
+            ),
+            (
+                media_data_at..media_data_payload_at,
+                BoxEvent::RawStart(media_data_header)
+            ),
+            (
+                media_data_payload_at..media_data_end,
                 BoxEvent::RawPayload(Vec::from(MEDIA_DATA))
             ),
-            BoxEventAt::new(media_data_end, BoxEvent::RawEnd),
+            (media_data_end..media_data_end, BoxEvent::RawEnd),
         ]
     );
 }
@@ -78,8 +84,11 @@ fn a_value_declaring_more_than_the_limit_stops_the_reader_where_it_stands() {
             && reported_limit == limit
     ));
     assert_eq!(
-        reader.poll_event(),
-        Some(BoxEventAt::new(0, BoxEvent::FileType(file_type())))
+        polled(&mut reader),
+        Some((
+            0..file_type().encoded_len(),
+            BoxEvent::FileType(file_type())
+        ))
     );
     assert_eq!(reader.poll_event(), None);
     assert!(matches!(
