@@ -6,6 +6,7 @@
 // Why `pub` on what the binaries import: each of them drives a part of this
 // module, and a part left undriven reads as dead code under `pub(crate)`.
 
+use core::ops::Range;
 use isobmff_boxes::{
     FileTypeBox, HandlerBox, MediaBox, MediaHeaderBox, MediaInformationBox, MovieBox,
     MovieFragmentBox, MovieFragmentHeaderBox, MovieHeaderBox, SampleDescriptionBox, SampleTableBox,
@@ -16,9 +17,8 @@ use isobmff_core::{
     AnyBox, BoxHeader, BoxSize, BoxType, BoxWrite, FourCC, FullBoxFlags, LanguageCode,
     NullTerminatedString, QuickTimeDateTime, Uuid,
 };
-use isobmff_sequence::{
-    BoxEvent, BoxEventAt, BoxReader, BoxReaderError, BoxWriter, BoxWriterError,
-};
+
+use isobmff_sequence::{BoxEvent, BoxReader, BoxReaderError, BoxWriter, BoxWriterError};
 
 /// Time every header of the synthetic files declares
 const EPOCH: QuickTimeDateTime = QuickTimeDateTime::from_seconds(0);
@@ -65,39 +65,52 @@ pub fn written(value: &impl BoxWrite) -> Option<Vec<u8>> {
 ///
 /// The failure the reader reports for the file, the events made before it
 /// dropped along with it
-pub fn events_of(file: &[u8], cut_length: usize) -> Result<Vec<BoxEventAt>, BoxReaderError> {
+pub fn events_of(
+    file: &[u8],
+    cut_length: usize,
+) -> Result<Vec<(Range<u64>, BoxEvent)>, BoxReaderError> {
     let mut reader = BoxReader::new();
     let mut events = Vec::new();
 
     for arriving in file.chunks(cut_length) {
         reader.handle_input(arriving)?;
-        while let Some(event) = reader.poll_event() {
+        while let Some(event) = polled(&mut reader) {
             events.push(event);
         }
     }
     reader.finish()?;
-    while let Some(event) = reader.poll_event() {
+    while let Some(event) = polled(&mut reader) {
         events.push(event);
     }
 
     Ok(events)
 }
 
+/// The next event the reader reports, with the bytes of the file it was read from
+pub fn polled(reader: &mut BoxReader) -> Option<(Range<u64>, BoxEvent)> {
+    let event = reader.poll_event()?;
+    let extent = reader.event_extent()?;
+
+    Some((extent, event))
+}
+
 /// The steps with the payload of each box passed on fused back into one
 ///
 /// What is left is what the file says rather than how it was cut, each step with
-/// the offset it begins at
-pub fn payloads_fused(events: Vec<BoxEventAt>) -> Vec<(u64, BoxEvent)> {
-    let mut fused: Vec<(u64, BoxEvent)> = Vec::new();
+/// the bytes of the file it was read from — the fused payload with the extent of
+/// the whole run
+pub fn payloads_fused(events: Vec<(Range<u64>, BoxEvent)>) -> Vec<(Range<u64>, BoxEvent)> {
+    let mut fused: Vec<(Range<u64>, BoxEvent)> = Vec::new();
 
-    for event in events {
-        let step = (event.file_offset(), event.into_event());
-
+    for step in events {
         match (fused.last_mut(), step) {
             (
-                Some((_began_at, BoxEvent::RawPayload(gathered))),
-                (_next_at, BoxEvent::RawPayload(bytes)),
-            ) => gathered.extend_from_slice(&bytes),
+                Some((gathered_extent, BoxEvent::RawPayload(gathered))),
+                (extent, BoxEvent::RawPayload(bytes)),
+            ) => {
+                gathered_extent.end = extent.end;
+                gathered.extend_from_slice(&bytes);
+            }
             (_not_two_payloads, step) => fused.push(step),
         }
     }

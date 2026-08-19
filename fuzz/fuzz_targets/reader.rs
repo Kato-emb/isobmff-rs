@@ -42,12 +42,12 @@ enum Reported {
     /// Box passed on as it lies, gathered back from its raw events
     PassedOn {
         header: BoxHeader,
-        file_offset: u64,
+        began_at: u64,
         payload: Vec<u8>,
         ended: bool,
     },
     /// Box read into a value, which publishes no bytes of its own
-    Value { box_type: BoxType, file_offset: u64 },
+    Value { box_type: BoxType, began_at: u64 },
 }
 
 /// Everything one pass of the reader over an input reported
@@ -115,12 +115,15 @@ fn read<'input>(arriving: impl IntoIterator<Item = &'input [u8]>) -> Run {
 /// Takes every event the reader has made, folding it into the boxes gathered
 fn drain(reader: &mut BoxReader, reported: &mut Vec<Reported>) {
     while let Some(polled) = reader.poll_event() {
-        let file_offset = polled.file_offset();
+        let began_at = reader
+            .event_extent()
+            .expect("an event was taken, so it has an extent")
+            .start;
 
-        match polled.into_event() {
+        match polled {
             BoxEvent::RawStart(header) => reported.push(Reported::PassedOn {
                 header,
-                file_offset,
+                began_at,
                 payload: Vec::new(),
                 ended: false,
             }),
@@ -139,19 +142,19 @@ fn drain(reader: &mut BoxReader, reported: &mut Vec<Reported>) {
             },
             BoxEvent::FileType(_ftyp) => reported.push(Reported::Value {
                 box_type: BoxType::compact(*b"ftyp"),
-                file_offset,
+                began_at,
             }),
             BoxEvent::SegmentType(_styp) => reported.push(Reported::Value {
                 box_type: BoxType::compact(*b"styp"),
-                file_offset,
+                began_at,
             }),
             BoxEvent::Movie(_moov) => reported.push(Reported::Value {
                 box_type: BoxType::compact(*b"moov"),
-                file_offset,
+                began_at,
             }),
             BoxEvent::MovieFragment(_moof) => reported.push(Reported::Value {
                 box_type: BoxType::compact(*b"moof"),
-                file_offset,
+                began_at,
             }),
             unknown => panic!("the reader reported an event this run cannot check: {unknown:?}"),
         }
@@ -206,11 +209,10 @@ fn agrees_with_the_boxes_iterator(bytes: &[u8], run: &Run) {
     let mut offset = 0;
 
     for (reported, framed) in run.reported.iter().zip(&iterated) {
-        let (Reported::PassedOn { file_offset, .. } | Reported::Value { file_offset, .. }) =
-            *reported;
+        let (Reported::PassedOn { began_at, .. } | Reported::Value { began_at, .. }) = *reported;
 
         assert_eq!(
-            file_offset, offset as u64,
+            began_at, offset as u64,
             "a box was reported at an offset it does not begin at"
         );
 
