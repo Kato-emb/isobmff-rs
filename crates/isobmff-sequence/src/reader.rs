@@ -8,7 +8,7 @@ use core::mem;
 
 use isobmff_core::{BoxHeader, BoxHeaderError, BoxType, CompactType, DecodeError, FourCC};
 
-use crate::event::{BoxEvent, ValueBox};
+use crate::event::{BoxEvent, BoxEventAt, ValueBox};
 
 /// Shortest header a box can carry: the `size` and `type` fields alone
 const MIN_HEADER_LEN: usize = 8;
@@ -62,8 +62,9 @@ fn take_payload<'input>(remaining: Option<u64>, input: &mut &'input [u8]) -> &'i
 /// Reads the sequence of boxes a file is formed as, taking the input as it arrives
 ///
 /// The reader is handed the input as it arrives and reports the boxes it frames
-/// as owned [`BoxEvent`]s. It reaches for no source of its own: when to read and
-/// from where stay with the caller.
+/// as owned [`BoxEvent`]s, each wrapped in the [`BoxEventAt`] naming where in the
+/// file it begins. It reaches for no source of its own: when to read and from
+/// where stay with the caller.
 ///
 /// The boxes a file is framed by — `ftyp`, `styp`, `moov`, and `moof` — are read
 /// into values. Every other box is passed on as it lies, an `mdat` and a box no
@@ -72,7 +73,7 @@ fn take_payload<'input>(remaining: Option<u64>, input: &mut &'input [u8]) -> &'i
 ///
 /// # Contract
 ///
-/// * [`handle_read`](Self::handle_read) takes the input whole and owns what it
+/// * [`handle_input`](Self::handle_input) takes the input whole and owns what it
 ///   made of it, so the buffer is the caller's again once the call returns. The
 ///   events are taken one at a time from [`poll_event`](Self::poll_event),
 ///   which reports `None` once the input handed over so far is used up.
@@ -96,13 +97,14 @@ fn take_payload<'input>(remaining: Option<u64>, input: &mut &'input [u8]) -> &'i
 ///   what may be gathered is checked against the payload length a box declares.
 ///   See [`with_payload_limit`](Self::with_payload_limit).
 /// * Where a payload is cut into [`RawPayload`](BoxEvent::RawPayload) events
-///   follows how the caller cut the file. What does not follow it: the
-///   [`RawStart`](BoxEvent::RawStart) and [`RawEnd`](BoxEvent::RawEnd) events,
-///   the offsets they carry, and the payload bytes those events hold end to
-///   end.
+///   follows how the caller cut the file, and so does the offset each of those
+///   events begins at. What does not follow it: the
+///   [`RawStart`](BoxEvent::RawStart) and [`RawEnd`](BoxEvent::RawEnd) events
+///   with the offsets they begin at, and the payload bytes those events hold end
+///   to end.
 /// * An `Err` leaves the reader failed for good,
 ///   [`AlreadyFinished`](BoxReaderError::AlreadyFinished) aside: every later
-///   [`handle_read`](Self::handle_read) and [`finish`](Self::finish) reports
+///   [`handle_input`](Self::handle_input) and [`finish`](Self::finish) reports
 ///   [`AlreadyFailed`](BoxReaderError::AlreadyFailed). The events made before it
 ///   are still there to take, and no further one is ever made.
 /// * [`finish`](Self::finish) declares the file over. Events are still taken
@@ -116,7 +118,7 @@ fn take_payload<'input>(remaining: Option<u64>, input: &mut &'input [u8]) -> &'i
 /// ```
 /// use isobmff_boxes::FileTypeBox;
 /// use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize, FourCC};
-/// use isobmff_sequence::{BoxEvent, BoxReader};
+/// use isobmff_sequence::{BoxEvent, BoxEventAt, BoxReader};
 ///
 /// // A file opening with an `ftyp` box and carrying one `mdat`, arriving cut
 /// // across both of them
@@ -130,7 +132,7 @@ fn take_payload<'input>(remaining: Option<u64>, input: &mut &'input [u8]) -> &'i
 ///
 /// // Input is handed over whole, then what it completed is drained
 /// for input in arriving {
-///     reader.handle_read(input).unwrap();
+///     reader.handle_input(input).unwrap();
 ///     while let Some(event) = reader.poll_event() {
 ///         events.push(event);
 ///     }
@@ -150,23 +152,24 @@ fn take_payload<'input>(remaining: Option<u64>, input: &mut &'input [u8]) -> &'i
 /// assert_eq!(
 ///     events,
 ///     [
-///         BoxEvent::FileType {
-///             ftyp: FileTypeBox::new(FourCC::new(*b"iso6"), 512, vec![FourCC::new(*b"iso6")]),
-///             file_offset: 0
-///         },
-///         BoxEvent::RawStart {
-///             header: mdat,
-///             file_offset: 20
-///         },
-///         BoxEvent::RawPayload(b"SAMP".to_vec()),
-///         BoxEvent::RawEnd,
+///         BoxEventAt::new(
+///             0,
+///             BoxEvent::FileType(FileTypeBox::new(
+///                 FourCC::new(*b"iso6"),
+///                 512,
+///                 vec![FourCC::new(*b"iso6")]
+///             ))
+///         ),
+///         BoxEventAt::new(20, BoxEvent::RawStart(mdat)),
+///         BoxEventAt::new(28, BoxEvent::RawPayload(b"SAMP".to_vec())),
+///         BoxEventAt::new(32, BoxEvent::RawEnd),
 ///     ]
 /// );
 /// ```
 #[derive(Debug)]
 pub struct BoxReader {
     state: State,
-    events: VecDeque<BoxEvent>,
+    events: VecDeque<BoxEventAt>,
     file_offset: u64,
     payload_limit: u64,
 }
@@ -232,7 +235,7 @@ impl BoxReader {
     ///   declared over by [`finish`](Self::finish).
     /// * [`AlreadyFailed`](BoxReaderError::AlreadyFailed): a previous call
     ///   failed, and the reader takes no more input.
-    pub fn handle_read(&mut self, input: &[u8]) -> Result<(), BoxReaderError> {
+    pub fn handle_input(&mut self, input: &[u8]) -> Result<(), BoxReaderError> {
         let mut unread = input;
 
         loop {
@@ -265,10 +268,10 @@ impl BoxReader {
                             header,
                             remaining: payload_len,
                         };
-                        self.events.push_back(BoxEvent::RawStart {
-                            header,
-                            file_offset: partial.began_at,
-                        });
+                        self.events.push_back(BoxEventAt::new(
+                            partial.began_at,
+                            BoxEvent::RawStart(header),
+                        ));
                         continue;
                     };
 
@@ -294,7 +297,8 @@ impl BoxReader {
                 State::Payload { header, remaining } => {
                     if remaining == Some(0) {
                         self.state = State::Header(PartialHeader::new(self.file_offset));
-                        self.events.push_back(BoxEvent::RawEnd);
+                        self.events
+                            .push_back(BoxEventAt::new(self.file_offset, BoxEvent::RawEnd));
                         continue;
                     }
                     if unread.is_empty() {
@@ -310,9 +314,11 @@ impl BoxReader {
                                 .saturating_sub(u64::try_from(payload.len()).unwrap_or(u64::MAX))
                         }),
                     };
+                    self.events.push_back(BoxEventAt::new(
+                        self.file_offset,
+                        BoxEvent::RawPayload(Vec::from(payload)),
+                    ));
                     self.advance(payload.len());
-                    self.events
-                        .push_back(BoxEvent::RawPayload(Vec::from(payload)));
                 }
                 State::Gathering {
                     header,
@@ -325,8 +331,8 @@ impl BoxReader {
                         let payload = mem::take(gathered);
 
                         self.state = State::Header(PartialHeader::new(self.file_offset));
-                        match value_box.read(&payload, began_at) {
-                            Ok(event) => self.events.push_back(event),
+                        match value_box.read(&payload) {
+                            Ok(event) => self.events.push_back(BoxEventAt::new(began_at, event)),
                             Err(error) => {
                                 return Err(self.fail(BoxReaderError::Decode {
                                     box_type: header.box_type(),
@@ -355,10 +361,10 @@ impl BoxReader {
     ///
     /// Reports `None` once it is used up: more input is needed, or
     /// [`finish`](Self::finish) is. Failure is reported by
-    /// [`handle_read`](Self::handle_read) and [`finish`](Self::finish) alone, so
+    /// [`handle_input`](Self::handle_input) and [`finish`](Self::finish) alone, so
     /// this call never fails — a failed reader hands over the events it had
     /// already made, then `None` from there on.
-    pub fn poll_event(&mut self) -> Option<BoxEvent> {
+    pub fn poll_event(&mut self) -> Option<BoxEventAt> {
         self.events.pop_front()
     }
 
@@ -406,7 +412,8 @@ impl BoxReader {
                     })),
                     None => {
                         self.state = State::Finished;
-                        self.events.push_back(BoxEvent::RawEnd);
+                        self.events
+                            .push_back(BoxEventAt::new(self.file_offset, BoxEvent::RawEnd));
                         Ok(())
                     }
                 }
@@ -658,7 +665,9 @@ mod tests {
         Uuid,
     };
 
-    use super::{BoxEvent, BoxReader, BoxReaderError, DecodeError, header_len_from_prefix};
+    use super::{
+        BoxEvent, BoxEventAt, BoxReader, BoxReaderError, DecodeError, header_len_from_prefix,
+    };
 
     /// Every form a header takes: the two size fields against the two box types
     const EVERY_HEADER_FORM: [&[u8]; 6] = [
@@ -697,12 +706,19 @@ mod tests {
         .unwrap()
     }
 
-    /// The box that begins at `file_offset`, as the reader reports it
-    fn started(header: BoxHeader, file_offset: u64) -> BoxEvent {
-        BoxEvent::RawStart {
-            header,
-            file_offset,
-        }
+    /// The box `header` introduces, beginning `file_offset` bytes into the file
+    fn started(header: BoxHeader, file_offset: u64) -> BoxEventAt {
+        BoxEventAt::new(file_offset, BoxEvent::RawStart(header))
+    }
+
+    /// The part of a payload that lay `file_offset` bytes into the file
+    fn passed_on(payload: &[u8], file_offset: u64) -> BoxEventAt {
+        BoxEventAt::new(file_offset, BoxEvent::RawPayload(Vec::from(payload)))
+    }
+
+    /// The end of a box, at the offset just past it
+    fn ended(file_offset: u64) -> BoxEventAt {
+        BoxEventAt::new(file_offset, BoxEvent::RawEnd)
     }
 
     /// Brands a fragmented file declares itself readable as
@@ -729,12 +745,12 @@ mod tests {
     }
 
     /// Every event a reader reports for `input`, handed over `cut_length` bytes at a time
-    fn events_of(input: &[u8], cut_length: usize) -> Vec<BoxEvent> {
+    fn events_of(input: &[u8], cut_length: usize) -> Vec<BoxEventAt> {
         let mut reader = BoxReader::new();
         let mut events = Vec::new();
 
         for arriving in input.chunks(cut_length) {
-            reader.handle_read(arriving).unwrap();
+            reader.handle_input(arriving).unwrap();
             while let Some(event) = reader.poll_event() {
                 events.push(event);
             }
@@ -767,8 +783,8 @@ mod tests {
             events_of(b"\0\0\0\x0cfreeAAAA", 12),
             vec![
                 started(compact_header(*b"free", 12), 0),
-                BoxEvent::RawPayload(Vec::from(*b"AAAA")),
-                BoxEvent::RawEnd,
+                passed_on(b"AAAA", 8),
+                ended(12),
             ]
         );
     }
@@ -777,7 +793,7 @@ mod tests {
     fn a_box_with_no_payload_is_reported_as_a_start_and_an_end() {
         assert_eq!(
             events_of(b"\0\0\0\x08skip", 8),
-            vec![started(compact_header(*b"skip", 8), 0), BoxEvent::RawEnd]
+            vec![started(compact_header(*b"skip", 8), 0), ended(8)]
         );
     }
 
@@ -787,9 +803,9 @@ mod tests {
             events_of(b"\0\0\0\x0cfreeAAAA", 5),
             vec![
                 started(compact_header(*b"free", 12), 0),
-                BoxEvent::RawPayload(Vec::from(*b"AA")),
-                BoxEvent::RawPayload(Vec::from(*b"AA")),
-                BoxEvent::RawEnd,
+                passed_on(b"AA", 8),
+                passed_on(b"AA", 10),
+                ended(12),
             ]
         );
     }
@@ -800,11 +816,11 @@ mod tests {
             events_of(b"\0\0\0\x0cfreeAAAA\0\0\0\x08skip", 5),
             vec![
                 started(compact_header(*b"free", 12), 0),
-                BoxEvent::RawPayload(Vec::from(*b"AA")),
-                BoxEvent::RawPayload(Vec::from(*b"AA")),
-                BoxEvent::RawEnd,
+                passed_on(b"AA", 8),
+                passed_on(b"AA", 10),
+                ended(12),
                 started(compact_header(*b"skip", 8), 12),
-                BoxEvent::RawEnd,
+                ended(20),
             ]
         );
     }
@@ -826,10 +842,10 @@ mod tests {
             events_of(&input, 3),
             vec![
                 started(header, 0),
-                BoxEvent::RawPayload(Vec::from(*b"!")),
-                BoxEvent::RawEnd,
+                passed_on(b"!", 32),
+                ended(33),
                 started(compact_header(*b"skip", 8), 33),
-                BoxEvent::RawEnd,
+                ended(41),
             ]
         );
     }
@@ -843,9 +859,9 @@ mod tests {
                     BoxHeader::new(BoxType::compact(*b"mdat"), BoxSize::ToEndOfFile).unwrap(),
                     0
                 ),
-                BoxEvent::RawPayload(Vec::from(*b"PAYL")),
-                BoxEvent::RawPayload(Vec::from(*b"OAD")),
-                BoxEvent::RawEnd,
+                passed_on(b"PAYL", 8),
+                passed_on(b"OAD", 12),
+                ended(15),
             ]
         );
     }
@@ -854,12 +870,12 @@ mod tests {
     fn empty_input_completes_nothing_and_leaves_the_reader_where_it_was() {
         let mut reader = BoxReader::new();
 
-        reader.handle_read(b"\0\0\0\x08fr").unwrap();
-        reader.handle_read(b"").unwrap();
+        reader.handle_input(b"\0\0\0\x08fr").unwrap();
+        reader.handle_input(b"").unwrap();
 
         assert_eq!(reader.poll_event(), None);
 
-        reader.handle_read(b"ee").unwrap();
+        reader.handle_input(b"ee").unwrap();
 
         assert_eq!(
             reader.poll_event(),
@@ -871,18 +887,15 @@ mod tests {
     fn empty_input_arriving_inside_a_payload_asks_for_more() {
         let mut reader = BoxReader::new();
 
-        reader.handle_read(b"\0\0\0\x0cfreeAA").unwrap();
+        reader.handle_input(b"\0\0\0\x0cfreeAA").unwrap();
         while reader.poll_event().is_some() {}
-        reader.handle_read(b"").unwrap();
+        reader.handle_input(b"").unwrap();
 
         assert_eq!(reader.poll_event(), None);
 
-        reader.handle_read(b"AA").unwrap();
+        reader.handle_input(b"AA").unwrap();
 
-        assert_eq!(
-            reader.poll_event(),
-            Some(BoxEvent::RawPayload(Vec::from(*b"AA")))
-        );
+        assert_eq!(reader.poll_event(), Some(passed_on(b"AA", 10)));
     }
 
     #[test]
@@ -890,7 +903,7 @@ mod tests {
         let mut reader = BoxReader::new();
 
         reader
-            .handle_read(&[0x00, 0x00, 0x00, 0x01, b'm', b'd', b'a', b't', 0x00])
+            .handle_input(&[0x00, 0x00, 0x00, 0x01, b'm', b'd', b'a', b't', 0x00])
             .unwrap();
 
         assert!(matches!(
@@ -906,7 +919,7 @@ mod tests {
     fn a_file_stopping_inside_a_box_is_rejected_as_unfinished() {
         let mut reader = BoxReader::new();
 
-        reader.handle_read(b"\0\0\0\x10freeAAAA").unwrap();
+        reader.handle_input(b"\0\0\0\x10freeAAAA").unwrap();
 
         assert!(matches!(
             reader.finish(),
@@ -922,14 +935,14 @@ mod tests {
         let mut reader = BoxReader::new();
 
         assert!(matches!(
-            reader.handle_read(b"\0\0\0\x04free"),
+            reader.handle_input(b"\0\0\0\x04free"),
             Err(BoxReaderError::Header(BoxHeaderError::SizeBelowHeader {
                 declared: 4,
                 header_length: 8
             }))
         ));
         assert!(matches!(
-            reader.handle_read(b"\0\0\0\x08skip"),
+            reader.handle_input(b"\0\0\0\x08skip"),
             Err(BoxReaderError::AlreadyFailed)
         ));
         assert!(matches!(
@@ -942,7 +955,7 @@ mod tests {
     fn a_reader_that_failed_while_finishing_takes_no_more_input() {
         let mut reader = BoxReader::new();
 
-        reader.handle_read(b"\0\0\0\x10freeAAAA").unwrap();
+        reader.handle_input(b"\0\0\0\x10freeAAAA").unwrap();
 
         assert!(matches!(
             reader.finish(),
@@ -952,7 +965,7 @@ mod tests {
             })
         ));
         assert!(matches!(
-            reader.handle_read(b"AAAA"),
+            reader.handle_input(b"AAAA"),
             Err(BoxReaderError::AlreadyFailed)
         ));
         assert!(matches!(
@@ -965,13 +978,17 @@ mod tests {
     fn a_failed_reader_hands_over_the_events_it_had_already_made() {
         let mut reader = BoxReader::new();
 
-        assert!(reader.handle_read(b"\0\0\0\x08free\0\0\0\x04free").is_err());
+        assert!(
+            reader
+                .handle_input(b"\0\0\0\x08free\0\0\0\x04free")
+                .is_err()
+        );
 
         assert_eq!(
             reader.poll_event(),
             Some(started(compact_header(*b"free", 8), 0))
         );
-        assert_eq!(reader.poll_event(), Some(BoxEvent::RawEnd));
+        assert_eq!(reader.poll_event(), Some(ended(8)));
         assert_eq!(reader.poll_event(), None);
     }
 
@@ -979,14 +996,14 @@ mod tests {
     fn the_events_a_finished_file_had_made_are_still_taken_after_it() {
         let mut reader = BoxReader::new();
 
-        reader.handle_read(b"\0\0\0\x08free").unwrap();
+        reader.handle_input(b"\0\0\0\x08free").unwrap();
         reader.finish().unwrap();
 
         assert_eq!(
             reader.poll_event(),
             Some(started(compact_header(*b"free", 8), 0))
         );
-        assert_eq!(reader.poll_event(), Some(BoxEvent::RawEnd));
+        assert_eq!(reader.poll_event(), Some(ended(8)));
         assert_eq!(reader.poll_event(), None);
     }
 
@@ -997,7 +1014,7 @@ mod tests {
         reader.finish().unwrap();
 
         assert!(matches!(
-            reader.handle_read(b"\0\0\0\x08free"),
+            reader.handle_input(b"\0\0\0\x08free"),
             Err(BoxReaderError::AlreadyFinished)
         ));
     }
@@ -1021,14 +1038,8 @@ mod tests {
         assert_eq!(
             events_of(&file, file.len()),
             vec![
-                BoxEvent::FileType {
-                    ftyp: file_type(),
-                    file_offset: 0
-                },
-                BoxEvent::MovieFragment {
-                    moof: movie_fragment(),
-                    file_offset: 20
-                },
+                BoxEventAt::new(0, BoxEvent::FileType(file_type())),
+                BoxEventAt::new(20, BoxEvent::MovieFragment(movie_fragment())),
             ]
         );
     }
@@ -1037,10 +1048,7 @@ mod tests {
     fn a_segment_declares_its_brands_in_a_value_of_its_own() {
         assert_eq!(
             events_of(&written(&segment_type()), 3),
-            vec![BoxEvent::SegmentType {
-                styp: segment_type(),
-                file_offset: 0
-            }]
+            vec![BoxEventAt::new(0, BoxEvent::SegmentType(segment_type()))]
         );
     }
 
@@ -1064,18 +1072,15 @@ mod tests {
         let (last, head) = ftyp.split_last().unwrap();
         let mut reader = BoxReader::new();
 
-        reader.handle_read(head).unwrap();
+        reader.handle_input(head).unwrap();
 
         assert_eq!(reader.poll_event(), None);
 
-        reader.handle_read(&[*last]).unwrap();
+        reader.handle_input(&[*last]).unwrap();
 
         assert_eq!(
             reader.poll_event(),
-            Some(BoxEvent::FileType {
-                ftyp: file_type(),
-                file_offset: 0
-            })
+            Some(BoxEventAt::new(0, BoxEvent::FileType(file_type())))
         );
     }
 
@@ -1084,7 +1089,7 @@ mod tests {
         let mut reader = BoxReader::with_payload_limit(4);
 
         assert!(matches!(
-            reader.handle_read(&written(&file_type())),
+            reader.handle_input(&written(&file_type())),
             Err(BoxReaderError::PayloadLimitExceeded {
                 box_type,
                 declared: 12,
@@ -1098,7 +1103,7 @@ mod tests {
         let mut reader = BoxReader::with_payload_limit(0);
         let mut events = Vec::new();
 
-        reader.handle_read(b"\0\0\0\x10mdatPAYLOAD!").unwrap();
+        reader.handle_input(b"\0\0\0\x10mdatPAYLOAD!").unwrap();
         reader.finish().unwrap();
         while let Some(event) = reader.poll_event() {
             events.push(event);
@@ -1108,8 +1113,8 @@ mod tests {
             events,
             vec![
                 started(compact_header(*b"mdat", 16), 0),
-                BoxEvent::RawPayload(Vec::from(*b"PAYLOAD!")),
-                BoxEvent::RawEnd,
+                passed_on(b"PAYLOAD!", 8),
+                ended(16),
             ]
         );
     }
@@ -1123,9 +1128,9 @@ mod tests {
                     BoxHeader::new(BoxType::compact(*b"moov"), BoxSize::ToEndOfFile).unwrap(),
                     0
                 ),
-                BoxEvent::RawPayload(Vec::from(*b"PAYL")),
-                BoxEvent::RawPayload(Vec::from(*b"OAD")),
-                BoxEvent::RawEnd,
+                passed_on(b"PAYL", 8),
+                passed_on(b"OAD", 12),
+                ended(15),
             ]
         );
     }
@@ -1135,11 +1140,11 @@ mod tests {
         let mut reader = BoxReader::new();
 
         assert!(matches!(
-            reader.handle_read(b"\0\0\0\x0cmoofAAAA"),
+            reader.handle_input(b"\0\0\0\x0cmoofAAAA"),
             Err(BoxReaderError::Decode { box_type, .. }) if box_type == BoxType::compact(*b"moof")
         ));
         assert!(matches!(
-            reader.handle_read(b"\0\0\0\x08free"),
+            reader.handle_input(b"\0\0\0\x08free"),
             Err(BoxReaderError::AlreadyFailed)
         ));
         assert_eq!(reader.poll_event(), None);
@@ -1151,7 +1156,7 @@ mod tests {
         let (_last, head) = ftyp.split_last().unwrap();
         let mut reader = BoxReader::new();
 
-        reader.handle_read(head).unwrap();
+        reader.handle_input(head).unwrap();
 
         assert!(matches!(
             reader.finish(),

@@ -83,7 +83,7 @@ fn read<'input>(arriving: impl IntoIterator<Item = &'input [u8]>) -> Run {
         // Why drain before reporting the failure: the events made before it are
         // still the reader's to hand over, and dropping them would leave a box
         // half gathered for the comparison against the iterator.
-        let outcome = reader.handle_read(input);
+        let outcome = reader.handle_input(input);
         drain(&mut reader, &mut reported);
 
         if let Err(reported) = outcome {
@@ -114,12 +114,11 @@ fn read<'input>(arriving: impl IntoIterator<Item = &'input [u8]>) -> Run {
 
 /// Takes every event the reader has made, folding it into the boxes gathered
 fn drain(reader: &mut BoxReader, reported: &mut Vec<Reported>) {
-    while let Some(event) = reader.poll_event() {
-        match event {
-            BoxEvent::RawStart {
-                header,
-                file_offset,
-            } => reported.push(Reported::PassedOn {
+    while let Some(polled) = reader.poll_event() {
+        let file_offset = polled.file_offset();
+
+        match polled.into_event() {
+            BoxEvent::RawStart(header) => reported.push(Reported::PassedOn {
                 header,
                 file_offset,
                 payload: Vec::new(),
@@ -138,19 +137,19 @@ fn drain(reader: &mut BoxReader, reported: &mut Vec<Reported>) {
                 Reported::PassedOn { ended, .. } => *ended = true,
                 Reported::Value { .. } => panic!("an end of a box read into a value"),
             },
-            BoxEvent::FileType { file_offset, .. } => reported.push(Reported::Value {
+            BoxEvent::FileType(_ftyp) => reported.push(Reported::Value {
                 box_type: BoxType::compact(*b"ftyp"),
                 file_offset,
             }),
-            BoxEvent::SegmentType { file_offset, .. } => reported.push(Reported::Value {
+            BoxEvent::SegmentType(_styp) => reported.push(Reported::Value {
                 box_type: BoxType::compact(*b"styp"),
                 file_offset,
             }),
-            BoxEvent::Movie { file_offset, .. } => reported.push(Reported::Value {
+            BoxEvent::Movie(_moov) => reported.push(Reported::Value {
                 box_type: BoxType::compact(*b"moov"),
                 file_offset,
             }),
-            BoxEvent::MovieFragment { file_offset, .. } => reported.push(Reported::Value {
+            BoxEvent::MovieFragment(_moof) => reported.push(Reported::Value {
                 box_type: BoxType::compact(*b"moof"),
                 file_offset,
             }),

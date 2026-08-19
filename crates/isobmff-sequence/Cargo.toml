@@ -1,7 +1,7 @@
 [package]
 name = "isobmff-sequence"
 version = "0.0.0"
-description = "Sans-IO reader for the sequence of boxes an ISO base media file is formed as"
+description = "Sans-IO reader and writer for the sequence of boxes an ISO base media file is formed as"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
