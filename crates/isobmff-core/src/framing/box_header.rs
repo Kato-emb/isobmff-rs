@@ -1,10 +1,10 @@
 //! [`BoxHeader`], the box header of ISO/IEC 14496-12 §4.2
 
-use crate::box_size::{BoxSize, CompactSize, ExtendedSize};
-use crate::box_type::{BoxType, CompactType};
+use crate::data_types::fourcc::FourCC;
+use crate::data_types::uuid::Uuid;
 use crate::error::{Error, byte_count};
-use crate::fourcc::FourCC;
-use crate::uuid::Uuid;
+use crate::framing::box_size::{BoxSize, CompactSize, ExtendedSize};
+use crate::framing::box_type::{BoxType, CompactType};
 
 /// Value of the `size` field that moves the total into the `largesize` field
 const EXTENDED_SIZE_MARKER: u32 = 1;
@@ -303,9 +303,9 @@ impl BoxHeader {
 #[cfg(test)]
 mod tests {
     use super::{BoxHeader, Error};
-    use crate::box_size::{BoxSize, CompactSize, ExtendedSize};
-    use crate::box_type::BoxType;
-    use crate::uuid::Uuid;
+    use crate::data_types::uuid::Uuid;
+    use crate::framing::box_size::{BoxSize, CompactSize, ExtendedSize};
+    use crate::framing::box_type::BoxType;
 
     const USER_TYPE: Uuid = Uuid::new([
         0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32,

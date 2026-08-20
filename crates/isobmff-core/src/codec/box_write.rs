@@ -1,10 +1,10 @@
 //! [`BoxWrite`], the whole box of ISO/IEC 14496-12 §4.2 written from a value
 
-use crate::box_definition::BoxDefinition;
-use crate::box_encode::BoxEncode;
-use crate::box_header::BoxHeader;
-use crate::box_type::BoxType;
+use crate::codec::box_definition::BoxDefinition;
+use crate::codec::box_encode::BoxEncode;
 use crate::error::{Error, byte_count};
+use crate::framing::box_header::BoxHeader;
+use crate::framing::box_type::BoxType;
 
 /// Returns the length of the whole box `payload` forms under `box_type`
 pub(crate) fn encoded_len_of(box_type: BoxType, payload: &(impl BoxEncode + ?Sized)) -> u64 {
@@ -150,11 +150,11 @@ mod tests {
     use alloc::vec;
 
     use super::BoxWrite;
-    use crate::box_definition::BoxDefinition;
-    use crate::box_encode::BoxEncode;
-    use crate::box_type::BoxType;
+    use crate::codec::box_definition::BoxDefinition;
+    use crate::codec::box_encode::BoxEncode;
+    use crate::data_types::uuid::Uuid;
     use crate::error::{Error, byte_count};
-    use crate::uuid::Uuid;
+    use crate::framing::box_type::BoxType;
 
     /// Box whose payload is as long as it is told to be, and is written as zeros
     struct PaddingBox {

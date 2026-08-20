@@ -2,8 +2,8 @@
 
 use core::iter::FusedIterator;
 
-use crate::box_header::BoxHeader;
 use crate::error::{Error, byte_count};
+use crate::framing::box_header::BoxHeader;
 
 /// Box as it lies in an input: its header, and the payload the header spans
 ///
@@ -156,9 +156,9 @@ mod tests {
     use alloc::vec::Vec;
 
     use super::{Error, RawBox, boxes};
-    use crate::box_header::BoxHeader;
-    use crate::box_size::{BoxSize, CompactSize};
-    use crate::box_type::BoxType;
+    use crate::framing::box_header::BoxHeader;
+    use crate::framing::box_size::{BoxSize, CompactSize};
+    use crate::framing::box_type::BoxType;
 
     /// Header of a box declaring `total` in the compact `size` field
     fn compact_header(box_type: [u8; 4], total: u32) -> BoxHeader {

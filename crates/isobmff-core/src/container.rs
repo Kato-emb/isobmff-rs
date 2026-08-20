@@ -3,10 +3,10 @@
 use alloc::vec::Vec;
 
 use crate::any_box::AnyBox;
-use crate::box_decode::BoxDecode;
-use crate::box_definition::BoxDefinition;
+use crate::codec::box_decode::BoxDecode;
+use crate::codec::box_definition::BoxDefinition;
 use crate::error::Error;
-use crate::raw_box::RawBox;
+use crate::framing::raw_box::RawBox;
 
 /// Children of one box type, gathered as a container reads its payload
 ///
@@ -277,12 +277,12 @@ mod tests {
 
     use super::{ChildBoxes, OtherBoxes};
     use crate::any_box::AnyBox;
-    use crate::box_decode::BoxDecode;
-    use crate::box_definition::BoxDefinition;
-    use crate::box_type::BoxType;
+    use crate::codec::box_decode::BoxDecode;
+    use crate::codec::box_definition::BoxDefinition;
+    use crate::codec::field::FieldReader;
     use crate::error::Error;
-    use crate::field::FieldReader;
-    use crate::raw_box::boxes;
+    use crate::framing::box_type::BoxType;
+    use crate::framing::raw_box::boxes;
 
     /// Box whose payload is one 32-bit sequence number
     #[derive(PartialEq, Debug)]

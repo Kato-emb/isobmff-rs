@@ -14,44 +14,27 @@ extern crate alloc;
 
 #[cfg(feature = "alloc")]
 mod any_box;
-mod box_decode;
-mod box_definition;
-mod box_encode;
-mod box_header;
-mod box_size;
-mod box_type;
-mod box_write;
+mod codec;
 #[cfg(feature = "alloc")]
 mod container;
 mod data_types;
 mod error;
-mod field;
-mod fourcc;
-mod full_box;
-mod language_code;
-#[cfg(feature = "alloc")]
-mod null_terminated_string;
-mod raw_box;
-mod uuid;
+mod framing;
 
 #[cfg(feature = "alloc")]
 pub use any_box::AnyBox;
-pub use box_decode::BoxDecode;
-pub use box_definition::BoxDefinition;
-pub use box_encode::BoxEncode;
-pub use box_header::BoxHeader;
-pub use box_size::{BoxSize, CompactSize, ExtendedSize};
-pub use box_type::{BoxType, CompactType};
-pub use box_write::BoxWrite;
+pub use codec::{
+    BoxDecode, BoxDefinition, BoxEncode, BoxWrite, FieldReader, FieldWidth, FieldWriter,
+};
 #[cfg(feature = "alloc")]
 pub use container::{ChildBoxes, OtherBoxes};
-pub use data_types::{I8F8, I16F16, Matrix, QuickTimeDateTime, U16F16};
-pub use error::{Category, Error, ErrorKind};
-pub use field::{FieldReader, FieldWidth, FieldWriter};
-pub use fourcc::FourCC;
-pub use full_box::{FullBoxFields, FullBoxFlags};
-pub use language_code::LanguageCode;
 #[cfg(feature = "alloc")]
-pub use null_terminated_string::NullTerminatedString;
-pub use raw_box::{Boxes, RawBox, boxes};
-pub use uuid::Uuid;
+pub use data_types::NullTerminatedString;
+pub use data_types::{
+    FourCC, FullBoxFields, FullBoxFlags, I8F8, I16F16, LanguageCode, Matrix, QuickTimeDateTime,
+    U16F16, Uuid,
+};
+pub use error::{Category, Error, ErrorKind};
+pub use framing::{
+    BoxHeader, BoxSize, BoxType, Boxes, CompactSize, CompactType, ExtendedSize, RawBox, boxes,
+};
