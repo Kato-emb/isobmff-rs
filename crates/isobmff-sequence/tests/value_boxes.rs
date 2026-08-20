@@ -9,7 +9,7 @@
 pub mod sequence;
 
 use isobmff_core::{BoxEncode as _, BoxType, BoxWrite};
-use isobmff_sequence::{BoxEvent, BoxReader, BoxReaderError};
+use isobmff_sequence::{BoxEvent, BoxReader, Error};
 
 use sequence::{
     MEDIA_DATA, events_of, file_type, fragmented_file, media_data_header, movie, movie_fragment,
@@ -73,16 +73,9 @@ fn a_value_declaring_more_than_the_limit_stops_the_reader_where_it_stands() {
     let file = fragmented_file().unwrap();
     let mut reader = BoxReader::with_payload_limit(limit);
 
-    assert!(matches!(
-        reader.handle_input(&file),
-        Err(BoxReaderError::PayloadLimitExceeded {
-            box_type,
-            declared: reported_declared,
-            limit: reported_limit
-        }) if box_type == BoxType::compact(*b"moov")
-            && reported_declared == declared
-            && reported_limit == limit
-    ));
+    let failure = Error::payload_limit_exceeded(BoxType::compact(*b"moov"), declared, limit);
+
+    assert_eq!(reader.handle_input(&file), Err(failure));
     assert_eq!(
         polled(&mut reader),
         Some((
@@ -91,8 +84,5 @@ fn a_value_declaring_more_than_the_limit_stops_the_reader_where_it_stands() {
         ))
     );
     assert_eq!(reader.poll_event(), None);
-    assert!(matches!(
-        reader.handle_input(&file),
-        Err(BoxReaderError::AlreadyFailed)
-    ));
+    assert_eq!(reader.handle_input(&file), Err(failure));
 }

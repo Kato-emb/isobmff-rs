@@ -3,8 +3,8 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FieldReadError,
-    FieldReader, FieldWriter, FullBoxFields, FullBoxFlags,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FullBoxFields,
+    FullBoxFlags,
 };
 
 /// Length of the fields that precede the optional ones
@@ -275,22 +275,23 @@ impl BoxDefinition for TrackRunBox {
 impl BoxDecode for TrackRunBox {
     /// # Errors
     ///
-    /// * [`UnsupportedVersion`](DecodeError::UnsupportedVersion): the box
+    /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box
     ///   declares a version other than 0 or 1.
-    /// * [`UnsupportedFlags`](DecodeError::UnsupportedFlags): the box declares a
+    /// * [`UnsupportedFlags`](isobmff_core::ErrorKind::UnsupportedFlags): the box declares a
     ///   flag this box does not read, which stands for a field it cannot place.
-    /// * [`ConflictingFlags`](DecodeError::ConflictingFlags): the box states the
+    /// * [`ConflictingFlags`](isobmff_core::ErrorKind::ConflictingFlags): the box states the
     ///   flags of its first sample and of every sample at once.
-    /// * [`UnsupportedEntryCount`](DecodeError::UnsupportedEntryCount): the rows
+    /// * [`UnsupportedEntryCount`](isobmff_core::ErrorKind::UnsupportedEntryCount): the rows
     ///   are empty and the `sample_count` is past the rows this box reads.
-    /// * [`Field`](DecodeError::Field): the payload ends inside a field the flags
-    ///   state, or holds bytes past the rows the `sample_count` declares.
-    fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
+    /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload) or
+    ///   [`TrailingPayload`](isobmff_core::ErrorKind::TrailingPayload): the payload ends inside a
+    ///   field the flags state, or holds bytes past the rows the `sample_count` declares.
+    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
         let mut reader = FieldReader::new(payload);
         let full_box = FullBoxFields::from_bytes(reader.read_bytes::<4>()?);
         let version = full_box.version();
         if version > 1 {
-            return Err(DecodeError::UnsupportedVersion(version));
+            return Err(Error::unsupported_version(version));
         }
 
         let flags = full_box.flags().bits();
@@ -299,11 +300,11 @@ impl BoxDecode for TrackRunBox {
         // box does not read stands for a field it cannot place in a row.
         let undefined = flags & !DEFINED_FLAGS;
         if undefined != 0 {
-            return Err(DecodeError::UnsupportedFlags(undefined));
+            return Err(Error::unsupported_flags(undefined));
         }
         let carries = |flag: u32| flags & flag != 0;
         if carries(FIRST_SAMPLE_FLAGS_PRESENT) && carries(SAMPLE_FLAGS_PRESENT) {
-            return Err(DecodeError::ConflictingFlags(
+            return Err(Error::conflicting_flags(
                 FIRST_SAMPLE_FLAGS_PRESENT | SAMPLE_FLAGS_PRESENT,
             ));
         }
@@ -331,18 +332,15 @@ impl BoxDecode for TrackRunBox {
         if rows_len > remaining {
             let available = byte_count(payload.len());
 
-            return Err(DecodeError::Field(FieldReadError::UnexpectedEof {
-                needed: available.saturating_sub(remaining).saturating_add(rows_len),
+            return Err(Error::truncated_payload(
+                available.saturating_sub(remaining).saturating_add(rows_len),
                 available,
-            }));
+            ));
         }
 
         let declared = u64::from(sample_count);
         if row_len == 0 && declared > MAXIMUM_EMPTY_ROWS {
-            return Err(DecodeError::UnsupportedEntryCount {
-                declared,
-                limit: MAXIMUM_EMPTY_ROWS,
-            });
+            return Err(Error::unsupported_entry_count(declared, MAXIMUM_EMPTY_ROWS));
         }
 
         // Why not with_capacity: the count is bounded above, by the payload for
@@ -405,10 +403,10 @@ impl BoxEncode for TrackRunBox {
         length.saturating_add(rows)
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
+    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
         let expected = self.payload_len();
         let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
-        let mismatch = EncodeError::BufferLengthMismatch { expected, actual };
+        let mismatch = Error::buffer_length_mismatch(expected, actual);
         if actual != expected {
             return Err(mismatch);
         }
@@ -476,7 +474,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, DecodeError, FieldReadError};
+    use isobmff_core::{BoxDecode, BoxEncode, Error};
 
     use super::{MAXIMUM_EMPTY_ROWS, TrackRunBox, TrackRunSample};
 
@@ -605,20 +603,20 @@ mod tests {
     fn a_payload_stating_the_flags_of_its_first_sample_and_of_every_sample_is_rejected() {
         let payload = b"\0\0\x04\x04\0\0\0\x01\0\0\0\0\0\0\0\0";
 
-        assert!(matches!(
+        assert_eq!(
             TrackRunBox::decode_payload(payload),
-            Err(DecodeError::ConflictingFlags(0x0000_0404))
-        ));
+            Err(Error::conflicting_flags(0x0000_0404))
+        );
     }
 
     #[test]
     fn a_flag_the_box_does_not_read_is_rejected() {
         let payload = b"\0\0\x10\0\0\0\0\0";
 
-        assert!(matches!(
+        assert_eq!(
             TrackRunBox::decode_payload(payload),
-            Err(DecodeError::UnsupportedFlags(0x0000_1000))
-        ));
+            Err(Error::unsupported_flags(0x0000_1000))
+        );
     }
 
     #[test]
@@ -629,13 +627,10 @@ mod tests {
 
         let payload = b"\0\0\x01\0\xff\xff\xff\xff";
 
-        assert!(matches!(
+        assert_eq!(
             TrackRunBox::decode_payload(payload),
-            Err(DecodeError::Field(FieldReadError::UnexpectedEof {
-                needed: NEEDED,
-                available: 8
-            }))
-        ));
+            Err(Error::truncated_payload(NEEDED, 8))
+        );
     }
 
     /// Payload of a run stating no per-sample field, so that its rows are empty
@@ -662,13 +657,13 @@ mod tests {
     fn a_count_of_empty_rows_past_the_rows_the_box_holds_is_rejected() {
         let past_the_limit = u32::try_from(MAXIMUM_EMPTY_ROWS.saturating_add(1)).unwrap();
 
-        assert!(matches!(
+        assert_eq!(
             TrackRunBox::decode_payload(&empty_rows(past_the_limit)),
-            Err(DecodeError::UnsupportedEntryCount {
-                declared,
-                limit: MAXIMUM_EMPTY_ROWS
-            }) if declared == u64::from(past_the_limit)
-        ));
+            Err(Error::unsupported_entry_count(
+                u64::from(past_the_limit),
+                MAXIMUM_EMPTY_ROWS
+            ))
+        );
     }
 
     #[test]
@@ -676,12 +671,10 @@ mod tests {
         let mut payload = encoded_payload(&track_run());
         payload.extend_from_slice(&[0; 8]);
 
-        assert!(matches!(
+        assert_eq!(
             TrackRunBox::decode_payload(&payload),
-            Err(DecodeError::Field(FieldReadError::TrailingBytes {
-                remaining: 8
-            }))
-        ));
+            Err(Error::trailing_payload(28, 36))
+        );
     }
 
     #[test]
@@ -689,9 +682,9 @@ mod tests {
         let mut payload = encoded_payload(&track_run());
         *payload.first_mut().unwrap() = 2;
 
-        assert!(matches!(
+        assert_eq!(
             TrackRunBox::decode_payload(&payload),
-            Err(DecodeError::UnsupportedVersion(2))
-        ));
+            Err(Error::unsupported_version(2))
+        );
     }
 }

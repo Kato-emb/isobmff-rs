@@ -1,8 +1,8 @@
 //! [`FieldReader`] and [`FieldWriter`], the fields a box payload of ISO/IEC 14496-12 §4.2 is made of
 
-use core::error;
-use core::fmt;
 use core::mem;
+
+use crate::error::{Error, byte_count};
 
 /// Width a box settles for a field it carries at more than one size
 ///
@@ -50,7 +50,7 @@ pub enum FieldWidth {
 /// # Examples
 ///
 /// ```
-/// use isobmff_core::{FieldReadError, FieldReader};
+/// use isobmff_core::{Error, FieldReader};
 ///
 /// // A payload of a 32-bit identifier and a 16-bit count
 /// let mut reader = FieldReader::new(b"\0\0\0\x07\0\x02");
@@ -64,10 +64,7 @@ pub enum FieldWidth {
 /// let mut truncated = FieldReader::new(b"\0\0\0");
 /// assert_eq!(
 ///     truncated.read_u32(),
-///     Err(FieldReadError::UnexpectedEof {
-///         needed: 4,
-///         available: 3
-///     })
+///     Err(Error::truncated_payload(4, 3))
 /// );
 /// ```
 #[derive(Debug)]
@@ -90,17 +87,14 @@ impl<'payload> FieldReader<'payload> {
     ///
     /// # Errors
     ///
-    /// * [`UnexpectedEof`](FieldReadError::UnexpectedEof): the payload ends
+    /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload ends
     ///   inside the field.
-    pub fn read_bytes<const N: usize>(&mut self) -> Result<&'payload [u8; N], FieldReadError> {
+    pub fn read_bytes<const N: usize>(&mut self) -> Result<&'payload [u8; N], Error> {
         let needed = self.consumed.saturating_add(byte_count(N));
         let rest = self.rest;
-        let (field, tail) =
-            rest.split_first_chunk::<N>()
-                .ok_or_else(|| FieldReadError::UnexpectedEof {
-                    needed,
-                    available: self.consumed.saturating_add(byte_count(rest.len())),
-                })?;
+        let (field, tail) = rest.split_first_chunk::<N>().ok_or_else(|| {
+            Error::truncated_payload(needed, self.consumed.saturating_add(byte_count(rest.len())))
+        })?;
 
         self.rest = tail;
         self.consumed = needed;
@@ -112,9 +106,9 @@ impl<'payload> FieldReader<'payload> {
     ///
     /// # Errors
     ///
-    /// * [`UnexpectedEof`](FieldReadError::UnexpectedEof): the payload ends
+    /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload ends
     ///   inside the field.
-    pub fn read_u16(&mut self) -> Result<u16, FieldReadError> {
+    pub fn read_u16(&mut self) -> Result<u16, Error> {
         Ok(u16::from_be_bytes(*self.read_bytes::<2>()?))
     }
 
@@ -122,9 +116,9 @@ impl<'payload> FieldReader<'payload> {
     ///
     /// # Errors
     ///
-    /// * [`UnexpectedEof`](FieldReadError::UnexpectedEof): the payload ends
+    /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload ends
     ///   inside the field.
-    pub fn read_i16(&mut self) -> Result<i16, FieldReadError> {
+    pub fn read_i16(&mut self) -> Result<i16, Error> {
         Ok(i16::from_be_bytes(*self.read_bytes::<2>()?))
     }
 
@@ -132,9 +126,9 @@ impl<'payload> FieldReader<'payload> {
     ///
     /// # Errors
     ///
-    /// * [`UnexpectedEof`](FieldReadError::UnexpectedEof): the payload ends
+    /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload ends
     ///   inside the field.
-    pub fn read_u32(&mut self) -> Result<u32, FieldReadError> {
+    pub fn read_u32(&mut self) -> Result<u32, Error> {
         Ok(u32::from_be_bytes(*self.read_bytes::<4>()?))
     }
 
@@ -142,9 +136,9 @@ impl<'payload> FieldReader<'payload> {
     ///
     /// # Errors
     ///
-    /// * [`UnexpectedEof`](FieldReadError::UnexpectedEof): the payload ends
+    /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload ends
     ///   inside the field.
-    pub fn read_i32(&mut self) -> Result<i32, FieldReadError> {
+    pub fn read_i32(&mut self) -> Result<i32, Error> {
         Ok(i32::from_be_bytes(*self.read_bytes::<4>()?))
     }
 
@@ -152,9 +146,9 @@ impl<'payload> FieldReader<'payload> {
     ///
     /// # Errors
     ///
-    /// * [`UnexpectedEof`](FieldReadError::UnexpectedEof): the payload ends
+    /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload ends
     ///   inside the field.
-    pub fn read_u64(&mut self) -> Result<u64, FieldReadError> {
+    pub fn read_u64(&mut self) -> Result<u64, Error> {
         Ok(u64::from_be_bytes(*self.read_bytes::<8>()?))
     }
 
@@ -162,9 +156,9 @@ impl<'payload> FieldReader<'payload> {
     ///
     /// # Errors
     ///
-    /// * [`UnexpectedEof`](FieldReadError::UnexpectedEof): the payload ends
+    /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload ends
     ///   inside the field.
-    pub fn read_unsigned(&mut self, width: FieldWidth) -> Result<u64, FieldReadError> {
+    pub fn read_unsigned(&mut self, width: FieldWidth) -> Result<u64, Error> {
         match width {
             FieldWidth::Compact => Ok(u64::from(self.read_u32()?)),
             FieldWidth::Extended => self.read_u64(),
@@ -184,16 +178,17 @@ impl<'payload> FieldReader<'payload> {
     ///
     /// # Errors
     ///
-    /// * [`TrailingBytes`](FieldReadError::TrailingBytes): the payload holds
+    /// * [`TrailingPayload`](crate::ErrorKind::TrailingPayload): the payload holds
     ///   bytes past the fields of the box.
-    pub fn finish(self) -> Result<(), FieldReadError> {
+    pub fn finish(self) -> Result<(), Error> {
         if self.rest.is_empty() {
             return Ok(());
         }
 
-        Err(FieldReadError::TrailingBytes {
-            remaining: byte_count(self.rest.len()),
-        })
+        Err(Error::trailing_payload(
+            self.consumed,
+            self.consumed.saturating_add(byte_count(self.rest.len())),
+        ))
     }
 }
 
@@ -212,7 +207,7 @@ impl<'payload> FieldReader<'payload> {
 /// # Examples
 ///
 /// ```
-/// use isobmff_core::{FieldWriteError, FieldWriter};
+/// use isobmff_core::{Error, FieldWriter};
 ///
 /// // A payload of a 32-bit identifier and a 16-bit count
 /// let mut buffer = [0; 6];
@@ -228,10 +223,7 @@ impl<'payload> FieldReader<'payload> {
 /// let mut narrow = [0; 3];
 /// assert_eq!(
 ///     FieldWriter::new(&mut narrow).write_u32(7),
-///     Err(FieldWriteError::UnexpectedEof {
-///         needed: 4,
-///         available: 3
-///     })
+///     Err(Error::truncated_buffer(4, 3))
 /// );
 /// ```
 #[derive(Debug)]
@@ -254,16 +246,16 @@ impl<'buffer> FieldWriter<'buffer> {
     ///
     /// # Errors
     ///
-    /// * [`UnexpectedEof`](FieldWriteError::UnexpectedEof): the buffer ends
+    /// * [`TruncatedBuffer`](crate::ErrorKind::TruncatedBuffer): the buffer ends
     ///   inside the field.
-    pub fn write_bytes<const N: usize>(&mut self, bytes: &[u8; N]) -> Result<(), FieldWriteError> {
+    pub fn write_bytes<const N: usize>(&mut self, bytes: &[u8; N]) -> Result<(), Error> {
         let needed = self.written.saturating_add(byte_count(N));
         let available = self.written.saturating_add(byte_count(self.rest.len()));
         // Why not leaving the buffer in place: the field does not fit, so the
         // box abandons the writer, and what is held back would be a buffer no
         // field can be written into anyway.
         let Some((field, tail)) = mem::take(&mut self.rest).split_first_chunk_mut::<N>() else {
-            return Err(FieldWriteError::UnexpectedEof { needed, available });
+            return Err(Error::truncated_buffer(needed, available));
         };
 
         *field = *bytes;
@@ -277,9 +269,9 @@ impl<'buffer> FieldWriter<'buffer> {
     ///
     /// # Errors
     ///
-    /// * [`UnexpectedEof`](FieldWriteError::UnexpectedEof): the buffer ends
+    /// * [`TruncatedBuffer`](crate::ErrorKind::TruncatedBuffer): the buffer ends
     ///   inside the field.
-    pub fn write_u16(&mut self, value: u16) -> Result<(), FieldWriteError> {
+    pub fn write_u16(&mut self, value: u16) -> Result<(), Error> {
         self.write_bytes(&value.to_be_bytes())
     }
 
@@ -287,9 +279,9 @@ impl<'buffer> FieldWriter<'buffer> {
     ///
     /// # Errors
     ///
-    /// * [`UnexpectedEof`](FieldWriteError::UnexpectedEof): the buffer ends
+    /// * [`TruncatedBuffer`](crate::ErrorKind::TruncatedBuffer): the buffer ends
     ///   inside the field.
-    pub fn write_i16(&mut self, value: i16) -> Result<(), FieldWriteError> {
+    pub fn write_i16(&mut self, value: i16) -> Result<(), Error> {
         self.write_bytes(&value.to_be_bytes())
     }
 
@@ -297,9 +289,9 @@ impl<'buffer> FieldWriter<'buffer> {
     ///
     /// # Errors
     ///
-    /// * [`UnexpectedEof`](FieldWriteError::UnexpectedEof): the buffer ends
+    /// * [`TruncatedBuffer`](crate::ErrorKind::TruncatedBuffer): the buffer ends
     ///   inside the field.
-    pub fn write_u32(&mut self, value: u32) -> Result<(), FieldWriteError> {
+    pub fn write_u32(&mut self, value: u32) -> Result<(), Error> {
         self.write_bytes(&value.to_be_bytes())
     }
 
@@ -307,9 +299,9 @@ impl<'buffer> FieldWriter<'buffer> {
     ///
     /// # Errors
     ///
-    /// * [`UnexpectedEof`](FieldWriteError::UnexpectedEof): the buffer ends
+    /// * [`TruncatedBuffer`](crate::ErrorKind::TruncatedBuffer): the buffer ends
     ///   inside the field.
-    pub fn write_i32(&mut self, value: i32) -> Result<(), FieldWriteError> {
+    pub fn write_i32(&mut self, value: i32) -> Result<(), Error> {
         self.write_bytes(&value.to_be_bytes())
     }
 
@@ -317,9 +309,9 @@ impl<'buffer> FieldWriter<'buffer> {
     ///
     /// # Errors
     ///
-    /// * [`UnexpectedEof`](FieldWriteError::UnexpectedEof): the buffer ends
+    /// * [`TruncatedBuffer`](crate::ErrorKind::TruncatedBuffer): the buffer ends
     ///   inside the field.
-    pub fn write_u64(&mut self, value: u64) -> Result<(), FieldWriteError> {
+    pub fn write_u64(&mut self, value: u64) -> Result<(), Error> {
         self.write_bytes(&value.to_be_bytes())
     }
 
@@ -327,15 +319,14 @@ impl<'buffer> FieldWriter<'buffer> {
     ///
     /// # Errors
     ///
-    /// * [`UnexpectedEof`](FieldWriteError::UnexpectedEof): the buffer ends
+    /// * [`TruncatedBuffer`](crate::ErrorKind::TruncatedBuffer): the buffer ends
     ///   inside the field.
-    /// * [`OutOfRange`](FieldWriteError::OutOfRange): `value` is wider than the
+    /// * [`OutOfRange`](crate::ErrorKind::OutOfRange): `value` is wider than the
     ///   field, which leaves nothing to write.
-    pub fn write_unsigned(&mut self, width: FieldWidth, value: u64) -> Result<(), FieldWriteError> {
+    pub fn write_unsigned(&mut self, width: FieldWidth, value: u64) -> Result<(), Error> {
         match width {
             FieldWidth::Compact => {
-                let narrow = u32::try_from(value)
-                    .map_err(|_| FieldWriteError::OutOfRange { value, width })?;
+                let narrow = u32::try_from(value).map_err(|_| Error::out_of_range(value, width))?;
 
                 self.write_u32(narrow)
             }
@@ -357,132 +348,23 @@ impl<'buffer> FieldWriter<'buffer> {
     ///
     /// # Errors
     ///
-    /// * [`TrailingBytes`](FieldWriteError::TrailingBytes): the buffer holds
+    /// * [`TrailingBuffer`](crate::ErrorKind::TrailingBuffer): the buffer holds
     ///   bytes past the fields the box wrote.
-    pub fn finish(self) -> Result<(), FieldWriteError> {
+    pub fn finish(self) -> Result<(), Error> {
         if self.rest.is_empty() {
             return Ok(());
         }
 
-        Err(FieldWriteError::TrailingBytes {
-            remaining: byte_count(self.rest.len()),
-        })
+        Err(Error::trailing_buffer(
+            self.written,
+            self.written.saturating_add(byte_count(self.rest.len())),
+        ))
     }
 }
-
-/// Returns a length of bytes as the count a failure of this module carries
-fn byte_count(length: usize) -> u64 {
-    // Why not unwrap: a usize above `u64::MAX` needs a 128-bit target to exist,
-    // and saturating keeps the panic-free path.
-    u64::try_from(length).unwrap_or(u64::MAX)
-}
-
-/// Reason the fields of a box do not read off its payload
-///
-/// A box reports this as [`DecodeError::Field`](crate::DecodeError::Field),
-/// which the `?` of a [`decode_payload`](crate::BoxDecode::decode_payload)
-/// implementation converts to.
-#[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum FieldReadError {
-    /// Payload ends inside a field
-    UnexpectedEof {
-        /// Bytes the fields read so far require
-        needed: u64,
-        /// Bytes the payload offered
-        available: u64,
-    },
-    /// Payload holds bytes past the fields of the box
-    TrailingBytes {
-        /// Bytes left over once every field was read
-        remaining: u64,
-    },
-}
-
-impl fmt::Display for FieldReadError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            Self::UnexpectedEof { needed, available } => write!(
-                formatter,
-                "box payload of {needed} bytes cut short by an input of {available}"
-            ),
-            Self::TrailingBytes { remaining } => write!(
-                formatter,
-                "box payload leaves {remaining} bytes past the fields it holds"
-            ),
-        }
-    }
-}
-
-impl error::Error for FieldReadError {}
-
-/// Reason the fields of a box do not write into the buffer of its payload
-///
-/// The first two say the same thing about a box: the length its payload
-/// declares and the fields it writes do not agree. Which of the two is wrong
-/// is the box's to settle — the buffer is the length that was declared. The
-/// third is about one field alone, and no buffer would make it write.
-///
-/// A box reports this as [`EncodeError::Field`](crate::EncodeError::Field),
-/// which the `?` of an [`encode_payload`](crate::BoxEncode::encode_payload)
-/// implementation converts to.
-#[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum FieldWriteError {
-    /// Buffer ends inside a field
-    UnexpectedEof {
-        /// Bytes the fields written so far require
-        needed: u64,
-        /// Bytes the buffer offered
-        available: u64,
-    },
-    /// Buffer holds bytes past the fields the box wrote
-    TrailingBytes {
-        /// Bytes left over once every field was written
-        remaining: u64,
-    },
-    /// Value is wider than the field it was given to
-    OutOfRange {
-        /// Value the field was given
-        value: u64,
-        /// Width of the field that was given it
-        width: FieldWidth,
-    },
-}
-
-impl fmt::Display for FieldWriteError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            Self::UnexpectedEof { needed, available } => write!(
-                formatter,
-                "fields of the box need {needed} bytes but its buffer holds {available}"
-            ),
-            Self::TrailingBytes { remaining } => write!(
-                formatter,
-                "buffer holds {remaining} bytes past the fields the box wrote"
-            ),
-            Self::OutOfRange { value, width } => {
-                let bytes = match width {
-                    FieldWidth::Compact => 4,
-                    FieldWidth::Extended => 8,
-                };
-
-                write!(
-                    formatter,
-                    "value {value} does not fit the {bytes} bytes of the field it was given to"
-                )
-            }
-        }
-    }
-}
-
-impl error::Error for FieldWriteError {}
 
 #[cfg(test)]
 mod tests {
-    use alloc::string::ToString as _;
-
-    use super::{FieldReadError, FieldReader, FieldWidth, FieldWriteError, FieldWriter};
+    use super::{Error, FieldReader, FieldWidth, FieldWriter};
 
     #[test]
     fn fields_are_read_off_the_front_in_the_order_they_are_asked_for() {
@@ -498,13 +380,7 @@ mod tests {
         let mut reader = FieldReader::new(b"\x01\x02\x03\x04\x05\x06");
 
         assert_eq!(reader.read_u32(), Ok(0x0102_0304));
-        assert_eq!(
-            reader.read_u32(),
-            Err(FieldReadError::UnexpectedEof {
-                needed: 8,
-                available: 6
-            })
-        );
+        assert_eq!(reader.read_u32(), Err(Error::truncated_payload(8, 6)));
     }
 
     #[test]
@@ -512,10 +388,7 @@ mod tests {
         let mut reader = FieldReader::new(b"\x01\x02\x03\x04\x05");
 
         assert_eq!(reader.read_u32(), Ok(0x0102_0304));
-        assert_eq!(
-            reader.finish(),
-            Err(FieldReadError::TrailingBytes { remaining: 1 })
-        );
+        assert_eq!(reader.finish(), Err(Error::trailing_payload(4, 5)));
     }
 
     #[test]
@@ -554,10 +427,7 @@ mod tests {
         assert_eq!(writer.write_u32(0x0102_0304), Ok(()));
         assert_eq!(
             writer.write_u32(0x0506_0708),
-            Err(FieldWriteError::UnexpectedEof {
-                needed: 8,
-                available: 6
-            })
+            Err(Error::truncated_buffer(8, 6))
         );
     }
 
@@ -567,10 +437,7 @@ mod tests {
         let mut writer = FieldWriter::new(&mut buffer);
 
         assert_eq!(writer.write_u32(0x0102_0304), Ok(()));
-        assert_eq!(
-            writer.finish(),
-            Err(FieldWriteError::TrailingBytes { remaining: 1 })
-        );
+        assert_eq!(writer.finish(), Err(Error::trailing_buffer(4, 5)));
     }
 
     #[test]
@@ -591,10 +458,7 @@ mod tests {
         assert_eq!(
             FieldWriter::new(&mut buffer)
                 .write_unsigned(FieldWidth::Compact, u64::from(u32::MAX) + 1),
-            Err(FieldWriteError::OutOfRange {
-                value: 0x1_0000_0000,
-                width: FieldWidth::Compact
-            })
+            Err(Error::out_of_range(0x1_0000_0000, FieldWidth::Compact))
         );
         assert_eq!(buffer, [0xff; 4]);
     }
@@ -608,49 +472,5 @@ mod tests {
         writer.into_remainder().copy_from_slice(b"tail");
 
         assert_eq!(&buffer, b"\0\x02tail");
-    }
-
-    #[test]
-    fn display_of_a_read_failure_names_both_lengths() {
-        let truncated = FieldReadError::UnexpectedEof {
-            needed: 16,
-            available: 12,
-        };
-        let trailing = FieldReadError::TrailingBytes { remaining: 4 };
-
-        assert_eq!(
-            truncated.to_string(),
-            "box payload of 16 bytes cut short by an input of 12"
-        );
-        assert_eq!(
-            trailing.to_string(),
-            "box payload leaves 4 bytes past the fields it holds"
-        );
-    }
-
-    #[test]
-    fn display_of_a_write_failure_names_both_lengths() {
-        let exhausted = FieldWriteError::UnexpectedEof {
-            needed: 16,
-            available: 12,
-        };
-        let trailing = FieldWriteError::TrailingBytes { remaining: 4 };
-        let out_of_range = FieldWriteError::OutOfRange {
-            value: 0x1_0000_0000,
-            width: FieldWidth::Compact,
-        };
-
-        assert_eq!(
-            exhausted.to_string(),
-            "fields of the box need 16 bytes but its buffer holds 12"
-        );
-        assert_eq!(
-            trailing.to_string(),
-            "buffer holds 4 bytes past the fields the box wrote"
-        );
-        assert_eq!(
-            out_of_range.to_string(),
-            "value 4294967296 does not fit the 4 bytes of the field it was given to"
-        );
     }
 }

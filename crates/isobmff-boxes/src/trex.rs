@@ -1,8 +1,8 @@
 //! [`TrackExtendsBox`] (`trex`), ISO/IEC 14496-12 §8.8.3
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FieldReader,
-    FieldWriter, FullBoxFields, FullBoxFlags,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FullBoxFields,
+    FullBoxFlags,
 };
 
 /// Length of the payload, which has no version-dependent field
@@ -81,15 +81,16 @@ impl BoxDefinition for TrackExtendsBox {
 impl BoxDecode for TrackExtendsBox {
     /// # Errors
     ///
-    /// * [`UnsupportedVersion`](DecodeError::UnsupportedVersion): the box
+    /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box
     ///   declares a version other than 0.
-    /// * [`Field`](DecodeError::Field): the payload ends inside a field, or
-    ///   holds bytes past the fields of the box.
-    fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
+    /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload) or
+    ///   [`TrailingPayload`](isobmff_core::ErrorKind::TrailingPayload): the payload ends inside a
+    ///   field, or holds bytes past the fields of the box.
+    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
         let mut reader = FieldReader::new(payload);
         let version = FullBoxFields::from_bytes(reader.read_bytes::<4>()?).version();
         if version != 0 {
-            return Err(DecodeError::UnsupportedVersion(version));
+            return Err(Error::unsupported_version(version));
         }
 
         let track_id = reader.read_u32()?;
@@ -114,13 +115,10 @@ impl BoxEncode for TrackExtendsBox {
         PAYLOAD_LEN
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
+    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
         let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
         if actual != PAYLOAD_LEN {
-            return Err(EncodeError::BufferLengthMismatch {
-                expected: PAYLOAD_LEN,
-                actual,
-            });
+            return Err(Error::buffer_length_mismatch(PAYLOAD_LEN, actual));
         }
 
         let mut writer = FieldWriter::new(buffer);
@@ -139,7 +137,7 @@ impl BoxEncode for TrackExtendsBox {
 mod tests {
     use alloc::vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, DecodeError, FieldReadError};
+    use isobmff_core::{BoxDecode, BoxEncode, Error};
 
     use super::TrackExtendsBox;
 
@@ -161,20 +159,17 @@ mod tests {
         let mut payload = vec![0; 24];
         *payload.first_mut().unwrap() = 1;
 
-        assert!(matches!(
+        assert_eq!(
             TrackExtendsBox::decode_payload(&payload),
-            Err(DecodeError::UnsupportedVersion(1))
-        ));
+            Err(Error::unsupported_version(1))
+        );
     }
 
     #[test]
     fn a_payload_shorter_than_the_fields_is_rejected() {
-        assert!(matches!(
+        assert_eq!(
             TrackExtendsBox::decode_payload(&[0; 23]),
-            Err(DecodeError::Field(FieldReadError::UnexpectedEof {
-                needed: 24,
-                available: 23
-            }))
-        ));
+            Err(Error::truncated_payload(24, 23))
+        );
     }
 }

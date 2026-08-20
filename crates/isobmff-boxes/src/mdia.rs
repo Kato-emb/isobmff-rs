@@ -1,8 +1,8 @@
 //! [`MediaBox`] (`mdia`), ISO/IEC 14496-12 §8.4.1
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, DecodeError,
-    EncodeError, OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, Error,
+    OtherBoxes, boxes,
 };
 
 use crate::hdlr::HandlerBox;
@@ -72,13 +72,14 @@ impl BoxDefinition for MediaBox {
 impl BoxDecode for MediaBox {
     /// # Errors
     ///
-    /// * [`Framing`](DecodeError::Framing): a child does not frame as a box.
-    /// * [`MissingMandatoryBox`](DecodeError::MissingMandatoryBox): no `mdhd`,
+    /// * The failures of [`boxes`]: a child does not frame as a box.
+    /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox): no `mdhd`,
     ///   `hdlr`, or `minf`.
-    /// * [`DuplicateBox`](DecodeError::DuplicateBox): more than one of any of
+    /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one of any of
     ///   them.
-    /// * [`Child`](DecodeError::Child): one of them does not decode.
-    fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
+    /// * Whatever the child reports, on the [`containers`](Error::containers) path: one of them
+    ///   does not decode.
+    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
         let mut mdhd_boxes = ChildBoxes::new();
         let mut hdlr_boxes = ChildBoxes::new();
         let mut minf_boxes = ChildBoxes::new();
@@ -125,11 +126,11 @@ impl BoxEncode for MediaBox {
             .saturating_add(others)
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
+    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
         let expected = self.payload_len();
         let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
         if actual != expected {
-            return Err(EncodeError::BufferLengthMismatch { expected, actual });
+            return Err(Error::buffer_length_mismatch(expected, actual));
         }
 
         let mut rest = self.mdhd.encode(buffer)?;
@@ -150,7 +151,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_core::{
-        BoxDecode, BoxEncode, DecodeError, FourCC, LanguageCode, NullTerminatedString,
+        BoxDecode, BoxEncode, BoxType, Error, FourCC, LanguageCode, NullTerminatedString,
         QuickTimeDateTime,
     };
 
@@ -205,10 +206,10 @@ mod tests {
         ]
         .concat();
 
-        assert!(matches!(
+        assert_eq!(
             MediaBox::decode_payload(&payload),
-            Err(DecodeError::MissingMandatoryBox(_))
-        ));
+            Err(Error::missing_mandatory_box(BoxType::compact(*b"hdlr")))
+        );
     }
 
     #[test]
@@ -218,6 +219,9 @@ mod tests {
 
         let error = MediaBox::decode_payload(&payload).unwrap_err();
 
-        assert!(matches!(error, DecodeError::Child { .. }));
+        assert_eq!(
+            error,
+            Error::unsupported_version(2).in_container(BoxType::compact(*b"mdhd"))
+        );
     }
 }

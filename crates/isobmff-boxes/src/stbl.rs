@@ -1,8 +1,8 @@
 //! [`SampleTableBox`] (`stbl`), ISO/IEC 14496-12 §8.5.1
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, DecodeError,
-    EncodeError, OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, Error,
+    OtherBoxes, boxes,
 };
 
 use crate::stsd::SampleDescriptionBox;
@@ -53,11 +53,12 @@ impl BoxDefinition for SampleTableBox {
 impl BoxDecode for SampleTableBox {
     /// # Errors
     ///
-    /// * [`Framing`](DecodeError::Framing): a child does not frame as a box.
-    /// * [`MissingMandatoryBox`](DecodeError::MissingMandatoryBox): no `stsd`.
-    /// * [`DuplicateBox`](DecodeError::DuplicateBox): more than one `stsd`.
-    /// * [`Child`](DecodeError::Child): the `stsd` does not decode.
-    fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
+    /// * The failures of [`boxes`]: a child does not frame as a box.
+    /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox): no `stsd`.
+    /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one `stsd`.
+    /// * Whatever the child reports, on the [`containers`](Error::containers) path: the `stsd` does
+    ///   not decode.
+    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
         let mut stsd_boxes = ChildBoxes::new();
         let mut other_boxes = OtherBoxes::new();
 
@@ -90,11 +91,11 @@ impl BoxEncode for SampleTableBox {
         self.stsd.encoded_len().saturating_add(others)
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
+    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
         let expected = self.payload_len();
         let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
         if actual != expected {
-            return Err(EncodeError::BufferLengthMismatch { expected, actual });
+            return Err(Error::buffer_length_mismatch(expected, actual));
         }
 
         let mut rest = self.stsd.encode(buffer)?;
@@ -111,7 +112,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{AnyBox, BoxDecode, BoxEncode, BoxType, DecodeError};
+    use isobmff_core::{AnyBox, BoxDecode, BoxEncode, BoxType, Error};
 
     use super::SampleTableBox;
     use crate::stsd::SampleDescriptionBox;
@@ -160,10 +161,10 @@ mod tests {
 
     #[test]
     fn a_box_holding_no_sample_description_is_rejected() {
-        assert!(matches!(
+        assert_eq!(
             SampleTableBox::decode_payload(b""),
-            Err(DecodeError::MissingMandatoryBox(_))
-        ));
+            Err(Error::missing_mandatory_box(BoxType::compact(*b"stsd")))
+        );
     }
 
     #[test]
@@ -174,9 +175,9 @@ mod tests {
         ]
         .concat();
 
-        assert!(matches!(
+        assert_eq!(
             SampleTableBox::decode_payload(&payload),
-            Err(DecodeError::DuplicateBox(_))
-        ));
+            Err(Error::duplicate_box(BoxType::compact(*b"stsd")))
+        );
     }
 }

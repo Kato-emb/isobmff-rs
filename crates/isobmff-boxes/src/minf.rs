@@ -1,8 +1,8 @@
 //! [`MediaInformationBox`] (`minf`), ISO/IEC 14496-12 §8.4.4
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, DecodeError,
-    EncodeError, OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, Error,
+    OtherBoxes, boxes,
 };
 
 use crate::stbl::SampleTableBox;
@@ -53,11 +53,12 @@ impl BoxDefinition for MediaInformationBox {
 impl BoxDecode for MediaInformationBox {
     /// # Errors
     ///
-    /// * [`Framing`](DecodeError::Framing): a child does not frame as a box.
-    /// * [`MissingMandatoryBox`](DecodeError::MissingMandatoryBox): no `stbl`.
-    /// * [`DuplicateBox`](DecodeError::DuplicateBox): more than one `stbl`.
-    /// * [`Child`](DecodeError::Child): the `stbl` does not decode.
-    fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
+    /// * The failures of [`boxes`]: a child does not frame as a box.
+    /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox): no `stbl`.
+    /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one `stbl`.
+    /// * Whatever the child reports, on the [`containers`](Error::containers) path: the `stbl` does
+    ///   not decode.
+    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
         let mut stbl_boxes = ChildBoxes::new();
         let mut other_boxes = OtherBoxes::new();
 
@@ -90,11 +91,11 @@ impl BoxEncode for MediaInformationBox {
         self.stbl.encoded_len().saturating_add(others)
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
+    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
         let expected = self.payload_len();
         let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
         if actual != expected {
-            return Err(EncodeError::BufferLengthMismatch { expected, actual });
+            return Err(Error::buffer_length_mismatch(expected, actual));
         }
 
         let mut rest = self.stbl.encode(buffer)?;
@@ -111,7 +112,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, DecodeError};
+    use isobmff_core::{BoxDecode, BoxEncode, BoxType, Error};
 
     use super::MediaInformationBox;
     use crate::stbl::SampleTableBox;
@@ -162,9 +163,9 @@ mod tests {
 
     #[test]
     fn a_box_holding_no_sample_table_is_rejected() {
-        assert!(matches!(
+        assert_eq!(
             MediaInformationBox::decode_payload(b""),
-            Err(DecodeError::MissingMandatoryBox(_))
-        ));
+            Err(Error::missing_mandatory_box(BoxType::compact(*b"stbl")))
+        );
     }
 }

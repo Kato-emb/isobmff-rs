@@ -3,8 +3,9 @@
 use alloc::vec::Vec;
 
 use crate::any_box::AnyBox;
-use crate::box_decode::{BoxDecode, DecodeError};
+use crate::box_decode::BoxDecode;
 use crate::box_definition::BoxDefinition;
+use crate::error::Error;
 use crate::raw_box::RawBox;
 
 /// Children of one box type, gathered as a container reads its payload
@@ -29,7 +30,7 @@ use crate::raw_box::RawBox;
 /// # Examples
 ///
 /// ```
-/// use isobmff_core::{BoxDecode, BoxDefinition, BoxType, ChildBoxes, DecodeError, OtherBoxes};
+/// use isobmff_core::{BoxDecode, BoxDefinition, BoxType, ChildBoxes, Error, OtherBoxes};
 /// use isobmff_core::{FieldReader, boxes};
 ///
 /// // A box whose payload is one 32-bit sequence number
@@ -43,7 +44,7 @@ use crate::raw_box::RawBox;
 /// }
 ///
 /// impl BoxDecode for SequenceNumberBox {
-///     fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
+///     fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
 ///         let mut reader = FieldReader::new(payload);
 ///         let sequence_number = reader.read_u32()?;
 ///         reader.finish()?;
@@ -74,10 +75,10 @@ use crate::raw_box::RawBox;
 /// assert_eq!(other_boxes.as_slice().len(), 1);
 ///
 /// // A container holding none of a child it must hold does not read
-/// assert!(matches!(
+/// assert_eq!(
 ///     ChildBoxes::new().exactly_one::<SequenceNumberBox>(),
-///     Err(DecodeError::MissingMandatoryBox(_))
-/// ));
+///     Err(Error::missing_mandatory_box(SequenceNumberBox::BOX_TYPE))
+/// );
 /// ```
 #[derive(Default, Debug)]
 pub struct ChildBoxes<'payload> {
@@ -111,26 +112,28 @@ impl<'payload> ChildBoxes<'payload> {
     ///
     /// # Errors
     ///
-    /// * [`MissingMandatoryBox`](DecodeError::MissingMandatoryBox): no child of
+    /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox): no child of
     ///   the type was gathered.
-    /// * [`DuplicateBox`](DecodeError::DuplicateBox): more than one was.
-    /// * [`Child`](DecodeError::Child): the child does not decode.
-    pub fn exactly_one<Child>(self) -> Result<Child, DecodeError>
+    /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): more than one was.
+    /// * Whatever the child reports, with its box type on the
+    ///   [`containers`](Error::containers) path of the failure.
+    pub fn exactly_one<Child>(self) -> Result<Child, Error>
     where
         Child: BoxDecode + BoxDefinition,
     {
         self.zero_or_one::<Child>()?
-            .ok_or(DecodeError::MissingMandatoryBox(Child::BOX_TYPE))
+            .ok_or(Error::missing_mandatory_box(Child::BOX_TYPE))
     }
 
     /// Returns the child of a quantity of `Zero or one`, if it was there
     ///
     /// # Errors
     ///
-    /// * [`DuplicateBox`](DecodeError::DuplicateBox): more than one child of
+    /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): more than one child of
     ///   the type was gathered.
-    /// * [`Child`](DecodeError::Child): the child does not decode.
-    pub fn zero_or_one<Child>(self) -> Result<Option<Child>, DecodeError>
+    /// * Whatever the child reports, with its box type on the
+    ///   [`containers`](Error::containers) path of the failure.
+    pub fn zero_or_one<Child>(self) -> Result<Option<Child>, Error>
     where
         Child: BoxDecode + BoxDefinition,
     {
@@ -139,7 +142,7 @@ impl<'payload> ChildBoxes<'payload> {
             return Ok(None);
         };
         if children.next().is_some() {
-            return Err(DecodeError::DuplicateBox(Child::BOX_TYPE));
+            return Err(Error::duplicate_box(Child::BOX_TYPE));
         }
 
         Ok(Some(decode::<Child>(child)?))
@@ -149,15 +152,16 @@ impl<'payload> ChildBoxes<'payload> {
     ///
     /// # Errors
     ///
-    /// * [`MissingMandatoryBox`](DecodeError::MissingMandatoryBox): no child of
+    /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox): no child of
     ///   the type was gathered.
-    /// * [`Child`](DecodeError::Child): one of the children does not decode.
-    pub fn one_or_more<Child>(self) -> Result<Vec<Child>, DecodeError>
+    /// * Whatever one of the children reports, with its box type on the
+    ///   [`containers`](Error::containers) path of the failure.
+    pub fn one_or_more<Child>(self) -> Result<Vec<Child>, Error>
     where
         Child: BoxDecode + BoxDefinition,
     {
         if self.children.is_empty() {
-            return Err(DecodeError::MissingMandatoryBox(Child::BOX_TYPE));
+            return Err(Error::missing_mandatory_box(Child::BOX_TYPE));
         }
 
         self.zero_or_more()
@@ -167,8 +171,9 @@ impl<'payload> ChildBoxes<'payload> {
     ///
     /// # Errors
     ///
-    /// * [`Child`](DecodeError::Child): one of the children does not decode.
-    pub fn zero_or_more<Child>(self) -> Result<Vec<Child>, DecodeError>
+    /// * Whatever one of the children reports, with its box type on the
+    ///   [`containers`](Error::containers) path of the failure.
+    pub fn zero_or_more<Child>(self) -> Result<Vec<Child>, Error>
     where
         Child: BoxDecode + BoxDefinition,
     {
@@ -177,12 +182,11 @@ impl<'payload> ChildBoxes<'payload> {
 }
 
 /// Reads one child, naming it in whatever failure it reports
-fn decode<Child>(child: RawBox<'_>) -> Result<Child, DecodeError>
+fn decode<Child>(child: RawBox<'_>) -> Result<Child, Error>
 where
     Child: BoxDecode + BoxDefinition,
 {
-    Child::decode_payload(child.payload())
-        .map_err(|error| DecodeError::child(Child::BOX_TYPE, error))
+    Child::decode_payload(child.payload()).map_err(|error| error.in_container(Child::BOX_TYPE))
 }
 
 /// Children of a container that no field of it claims
@@ -273,9 +277,10 @@ mod tests {
 
     use super::{ChildBoxes, OtherBoxes};
     use crate::any_box::AnyBox;
-    use crate::box_decode::{BoxDecode, DecodeError};
+    use crate::box_decode::BoxDecode;
     use crate::box_definition::BoxDefinition;
     use crate::box_type::BoxType;
+    use crate::error::Error;
     use crate::field::FieldReader;
     use crate::raw_box::boxes;
 
@@ -288,7 +293,7 @@ mod tests {
     }
 
     impl BoxDecode for SequenceNumberBox {
-        fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
+        fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
             let mut reader = FieldReader::new(payload);
             let sequence_number = reader.read_u32()?;
             reader.finish()?;
@@ -319,12 +324,10 @@ mod tests {
 
     #[test]
     fn a_quantity_of_exactly_one_refuses_a_container_holding_none() {
-        assert!(matches!(
+        assert_eq!(
             ChildBoxes::new().exactly_one::<SequenceNumberBox>(),
-            Err(DecodeError::MissingMandatoryBox(
-                SequenceNumberBox::BOX_TYPE
-            ))
-        ));
+            Err(Error::missing_mandatory_box(SequenceNumberBox::BOX_TYPE))
+        );
     }
 
     #[test]
@@ -341,24 +344,24 @@ mod tests {
     fn a_quantity_of_at_most_one_refuses_a_second_child() {
         let payload = b"\0\0\0\x0csqnc\0\0\0\x07\0\0\0\x0csqnc\0\0\0\x09";
 
-        assert!(matches!(
+        assert_eq!(
             gathered(payload).exactly_one::<SequenceNumberBox>(),
-            Err(DecodeError::DuplicateBox(SequenceNumberBox::BOX_TYPE))
-        ));
-        assert!(matches!(
+            Err(Error::duplicate_box(SequenceNumberBox::BOX_TYPE))
+        );
+        assert_eq!(
             gathered(payload).zero_or_one::<SequenceNumberBox>(),
-            Err(DecodeError::DuplicateBox(SequenceNumberBox::BOX_TYPE))
-        ));
+            Err(Error::duplicate_box(SequenceNumberBox::BOX_TYPE))
+        );
     }
 
     #[test]
     fn a_count_the_quantity_forbids_is_reported_before_any_child_is_read() {
         let payload = b"\0\0\0\x09sqnc!\0\0\0\x09sqnc!";
 
-        assert!(matches!(
+        assert_eq!(
             gathered(payload).zero_or_one::<SequenceNumberBox>(),
-            Err(DecodeError::DuplicateBox(_))
-        ));
+            Err(Error::duplicate_box(SequenceNumberBox::BOX_TYPE))
+        );
     }
 
     #[test]
@@ -405,22 +408,20 @@ mod tests {
 
     #[test]
     fn a_quantity_of_one_or_more_refuses_a_container_holding_none() {
-        assert!(matches!(
+        assert_eq!(
             ChildBoxes::new().one_or_more::<SequenceNumberBox>(),
-            Err(DecodeError::MissingMandatoryBox(
-                SequenceNumberBox::BOX_TYPE
-            ))
-        ));
+            Err(Error::missing_mandatory_box(SequenceNumberBox::BOX_TYPE))
+        );
     }
 
     #[test]
-    fn a_child_that_does_not_read_is_named_by_the_box_type_it_was_read_as() {
+    fn a_child_that_does_not_read_names_itself_on_the_path_of_the_failure() {
         let children = gathered(b"\0\0\0\x09sqnc!");
 
-        assert!(matches!(
+        assert_eq!(
             children.exactly_one::<SequenceNumberBox>(),
-            Err(DecodeError::Child { box_type, .. }) if box_type == SequenceNumberBox::BOX_TYPE
-        ));
+            Err(Error::truncated_payload(4, 1).in_container(SequenceNumberBox::BOX_TYPE))
+        );
     }
 
     #[test]
