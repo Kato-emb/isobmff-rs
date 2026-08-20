@@ -1,8 +1,8 @@
 //! [`TrackFragmentBaseMediaDecodeTimeBox`] (`tfdt`), ISO/IEC 14496-12 §8.8.12
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FieldReader,
-    FieldWidth, FieldWriter, FullBoxFields, FullBoxFlags,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWidth, FieldWriter,
+    FullBoxFields, FullBoxFlags,
 };
 
 /// Length of the payload when version 0 carries the time in 32 bits
@@ -69,15 +69,16 @@ impl BoxDefinition for TrackFragmentBaseMediaDecodeTimeBox {
 impl BoxDecode for TrackFragmentBaseMediaDecodeTimeBox {
     /// # Errors
     ///
-    /// * [`UnsupportedVersion`](DecodeError::UnsupportedVersion): the box
+    /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box
     ///   declares a version other than 0 or 1.
-    /// * [`Field`](DecodeError::Field): the payload ends inside a field, or
-    ///   holds bytes past the fields of the box.
-    fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
+    /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload) or
+    ///   [`TrailingPayload`](isobmff_core::ErrorKind::TrailingPayload): the payload ends inside a
+    ///   field, or holds bytes past the fields of the box.
+    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
         let mut reader = FieldReader::new(payload);
         let version = FullBoxFields::from_bytes(reader.read_bytes::<4>()?).version();
         if version > 1 {
-            return Err(DecodeError::UnsupportedVersion(version));
+            return Err(Error::unsupported_version(version));
         }
 
         let base_media_decode_time = reader.read_unsigned(Self::field_width(version))?;
@@ -98,11 +99,11 @@ impl BoxEncode for TrackFragmentBaseMediaDecodeTimeBox {
         }
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
+    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
         let expected = self.payload_len();
         let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
         if actual != expected {
-            return Err(EncodeError::BufferLengthMismatch { expected, actual });
+            return Err(Error::buffer_length_mismatch(expected, actual));
         }
 
         let version = self.version();
@@ -120,7 +121,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, DecodeError, FieldReadError};
+    use isobmff_core::{BoxDecode, BoxEncode, Error};
 
     use super::TrackFragmentBaseMediaDecodeTimeBox;
 
@@ -169,10 +170,10 @@ mod tests {
         let mut payload = vec![0; 8];
         *payload.first_mut().unwrap() = 2;
 
-        assert!(matches!(
+        assert_eq!(
             TrackFragmentBaseMediaDecodeTimeBox::decode_payload(&payload),
-            Err(DecodeError::UnsupportedVersion(2))
-        ));
+            Err(Error::unsupported_version(2))
+        );
     }
 
     #[test]
@@ -181,12 +182,9 @@ mod tests {
             u64::from(u32::MAX) + 1,
         ));
 
-        assert!(matches!(
+        assert_eq!(
             TrackFragmentBaseMediaDecodeTimeBox::decode_payload(payload.get(..11).unwrap()),
-            Err(DecodeError::Field(FieldReadError::UnexpectedEof {
-                needed: 12,
-                available: 11
-            }))
-        ));
+            Err(Error::truncated_payload(12, 11))
+        );
     }
 }

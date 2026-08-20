@@ -3,8 +3,8 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FieldReader,
-    FieldWriter, FullBoxFields, FullBoxFlags, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter,
+    FullBoxFields, FullBoxFlags, boxes,
 };
 
 /// Length of the fields that precede the entries
@@ -48,18 +48,18 @@ impl BoxDefinition for SampleDescriptionBox {
 impl BoxDecode for SampleDescriptionBox {
     /// # Errors
     ///
-    /// * [`UnsupportedVersion`](DecodeError::UnsupportedVersion): the box
+    /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box
     ///   declares a version other than 0.
-    /// * [`Field`](DecodeError::Field): the payload ends before the fields that
-    ///   precede the entries.
-    /// * [`Framing`](DecodeError::Framing): an entry does not frame as a box.
-    /// * [`EntryCountMismatch`](DecodeError::EntryCountMismatch): the
+    /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
+    ///   payload ends before the fields that precede the entries.
+    /// * The failures of [`boxes`]: an entry does not frame as a box.
+    /// * [`EntryCountMismatch`](isobmff_core::ErrorKind::EntryCountMismatch): the
     ///   `entry_count` field disagrees with the entries that follow it.
-    fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
+    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
         let mut reader = FieldReader::new(payload);
         let version = FullBoxFields::from_bytes(reader.read_bytes::<4>()?).version();
         if version != 0 {
-            return Err(DecodeError::UnsupportedVersion(version));
+            return Err(Error::unsupported_version(version));
         }
 
         let declared = u64::from(reader.read_u32()?);
@@ -75,7 +75,7 @@ impl BoxDecode for SampleDescriptionBox {
 
         let actual = u64::try_from(entries.len()).unwrap_or(u64::MAX);
         if actual != declared {
-            return Err(DecodeError::EntryCountMismatch { declared, actual });
+            return Err(Error::entry_count_mismatch(declared, actual));
         }
 
         Ok(Self { entries })
@@ -91,10 +91,10 @@ impl BoxEncode for SampleDescriptionBox {
         FIXED_FIELDS_LEN.saturating_add(entries)
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
+    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
         let expected = self.payload_len();
         let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
-        let mismatch = EncodeError::BufferLengthMismatch { expected, actual };
+        let mismatch = Error::buffer_length_mismatch(expected, actual);
         if actual != expected {
             return Err(mismatch);
         }
@@ -120,7 +120,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{AnyBox, BoxDecode, BoxEncode, BoxType, DecodeError};
+    use isobmff_core::{AnyBox, BoxDecode, BoxEncode, BoxType, Error};
 
     use super::SampleDescriptionBox;
 
@@ -174,30 +174,27 @@ mod tests {
             .unwrap()
             .copy_from_slice(&4_u32.to_be_bytes());
 
-        assert!(matches!(
+        assert_eq!(
             SampleDescriptionBox::decode_payload(&payload),
-            Err(DecodeError::EntryCountMismatch {
-                declared: 4,
-                actual: 1
-            })
-        ));
+            Err(Error::entry_count_mismatch(4, 1))
+        );
     }
 
     #[test]
     fn an_entry_that_does_not_frame_as_a_box_is_rejected() {
         let payload = b"\0\0\0\0\0\0\0\x01\0\0\0\x20avc1";
 
-        assert!(matches!(
+        assert_eq!(
             SampleDescriptionBox::decode_payload(payload),
-            Err(DecodeError::Framing(_))
-        ));
+            Err(Error::truncated_box(32, 8))
+        );
     }
 
     #[test]
     fn a_version_the_box_does_not_read_is_rejected() {
-        assert!(matches!(
+        assert_eq!(
             SampleDescriptionBox::decode_payload(b"\x01\0\0\0\0\0\0\0"),
-            Err(DecodeError::UnsupportedVersion(1))
-        ));
+            Err(Error::unsupported_version(1))
+        );
     }
 }

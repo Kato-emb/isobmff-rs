@@ -1,8 +1,8 @@
 //! [`MediaHeaderBox`] (`mdhd`), ISO/IEC 14496-12 §8.4.2
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FieldReader,
-    FieldWidth, FieldWriter, FullBoxFields, FullBoxFlags, LanguageCode, QuickTimeDateTime,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWidth, FieldWriter,
+    FullBoxFields, FullBoxFlags, LanguageCode, QuickTimeDateTime,
 };
 
 /// Length of the payload when version 0 carries the times in 32 bits
@@ -119,15 +119,16 @@ impl BoxDefinition for MediaHeaderBox {
 impl BoxDecode for MediaHeaderBox {
     /// # Errors
     ///
-    /// * [`UnsupportedVersion`](DecodeError::UnsupportedVersion): the box
+    /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box
     ///   declares a version other than 0 or 1.
-    /// * [`Field`](DecodeError::Field): the payload ends inside a field, or
-    ///   holds bytes past the fields of the box.
-    fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
+    /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload) or
+    ///   [`TrailingPayload`](isobmff_core::ErrorKind::TrailingPayload): the payload ends inside a
+    ///   field, or holds bytes past the fields of the box.
+    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
         let mut reader = FieldReader::new(payload);
         let version = FullBoxFields::from_bytes(reader.read_bytes::<4>()?).version();
         if version > 1 {
-            return Err(DecodeError::UnsupportedVersion(version));
+            return Err(Error::unsupported_version(version));
         }
         let field_width = Self::field_width(version);
 
@@ -159,11 +160,11 @@ impl BoxEncode for MediaHeaderBox {
         }
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
+    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
         let expected = self.payload_len();
         let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
         if actual != expected {
-            return Err(EncodeError::BufferLengthMismatch { expected, actual });
+            return Err(Error::buffer_length_mismatch(expected, actual));
         }
 
         let version = self.version();
@@ -187,9 +188,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{
-        BoxDecode, BoxEncode, DecodeError, FieldReadError, LanguageCode, QuickTimeDateTime,
-    };
+    use isobmff_core::{BoxDecode, BoxEncode, Error, LanguageCode, QuickTimeDateTime};
 
     use super::MediaHeaderBox;
 
@@ -244,19 +243,17 @@ mod tests {
         let mut payload = vec![0; 24];
         *payload.first_mut().unwrap() = 2;
 
-        assert!(matches!(
+        assert_eq!(
             MediaHeaderBox::decode_payload(&payload),
-            Err(DecodeError::UnsupportedVersion(2))
-        ));
+            Err(Error::unsupported_version(2))
+        );
     }
 
     #[test]
     fn a_payload_longer_than_its_version_requires_is_rejected() {
-        assert!(matches!(
+        assert_eq!(
             MediaHeaderBox::decode_payload(&[0; 25]),
-            Err(DecodeError::Field(FieldReadError::TrailingBytes {
-                remaining: 1
-            }))
-        ));
+            Err(Error::trailing_payload(24, 25))
+        );
     }
 }

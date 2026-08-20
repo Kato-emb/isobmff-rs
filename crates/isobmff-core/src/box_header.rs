@@ -1,10 +1,8 @@
-//! [`BoxHeader`] and [`BoxHeaderError`], the box header of ISO/IEC 14496-12 §4.2
-
-use core::error;
-use core::fmt;
+//! [`BoxHeader`], the box header of ISO/IEC 14496-12 §4.2
 
 use crate::box_size::{BoxSize, CompactSize, ExtendedSize};
 use crate::box_type::{BoxType, CompactType};
+use crate::error::{Error, byte_count};
 use crate::fourcc::FourCC;
 use crate::uuid::Uuid;
 
@@ -195,18 +193,16 @@ impl BoxHeader {
     ///
     /// # Errors
     ///
-    /// * [`TruncatedHeader`](BoxHeaderError::TruncatedHeader): `input` ends inside
+    /// * [`TruncatedHeader`](crate::ErrorKind::TruncatedHeader): `input` ends inside
     ///   the header. A caller that reads in chunks can extend `input` to
     ///   `needed` bytes and decode again; once `input` holds the eight bytes
     ///   the `size` and `type` fields occupy, `needed` is the length of the
     ///   whole header, so one such extension always suffices.
-    /// * [`SizeBelowHeader`](BoxHeaderError::SizeBelowHeader): the declared total
+    /// * [`SizeBelowHeader`](crate::ErrorKind::SizeBelowHeader): the declared total
     ///   is smaller than the header it prefixes.
-    pub fn decode(input: &[u8]) -> Result<(Self, &[u8]), BoxHeaderError> {
-        let truncated_at = |needed: u8| BoxHeaderError::TruncatedHeader {
-            needed: usize::from(needed),
-            available: input.len(),
-        };
+    pub fn decode(input: &[u8]) -> Result<(Self, &[u8]), Error> {
+        let truncated_at =
+            |needed: u8| Error::truncated_header(u64::from(needed), byte_count(input.len()));
 
         let (size_field, after_size) = input
             .split_first_chunk::<4>()
@@ -239,10 +235,10 @@ impl BoxHeader {
             }
         };
 
-        let size_below_header = BoxHeaderError::SizeBelowHeader {
-            declared: large_size.unwrap_or(u64::from(declared)),
-            header_length: u64::from(header_length),
-        };
+        let size_below_header = Error::size_below_header(
+            u64::from(header_length),
+            large_size.unwrap_or(u64::from(declared)),
+        );
 
         let size = match large_size {
             Some(large_size) => ExtendedSize::new(large_size)
@@ -304,56 +300,9 @@ impl BoxHeader {
     }
 }
 
-/// Reason a byte sequence does not decode as a box header
-///
-/// These are the failures of [`BoxHeader::decode`], and only those. Framing a
-/// whole box reaches past the header and can fail in one way more, which
-/// [`RawBoxError`](crate::RawBoxError) adds; reading what a frame holds is a
-/// layer further in again, and reports [`DecodeError`](crate::DecodeError).
-#[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum BoxHeaderError {
-    /// Input ends inside the header
-    TruncatedHeader {
-        /// Bytes the header occupies, as far as the fields read so far tell
-        needed: usize,
-        /// Bytes the input offered
-        available: usize,
-    },
-    /// Declared total is smaller than the header it prefixes
-    SizeBelowHeader {
-        /// Total the `size` or `largesize` field declares
-        declared: u64,
-        /// Bytes the header occupies
-        header_length: u64,
-    },
-}
-
-impl fmt::Display for BoxHeaderError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            Self::TruncatedHeader { needed, available } => write!(
-                formatter,
-                "box header of {needed} bytes cut short by an input of {available}"
-            ),
-            Self::SizeBelowHeader {
-                declared,
-                header_length,
-            } => write!(
-                formatter,
-                "box declares a total of {declared} bytes, below its {header_length}-byte header"
-            ),
-        }
-    }
-}
-
-impl error::Error for BoxHeaderError {}
-
 #[cfg(test)]
 mod tests {
-    use alloc::string::ToString as _;
-
-    use super::{BoxHeader, BoxHeaderError};
+    use super::{BoxHeader, Error};
     use crate::box_size::{BoxSize, CompactSize, ExtendedSize};
     use crate::box_type::BoxType;
     use crate::uuid::Uuid;
@@ -390,10 +339,7 @@ mod tests {
     fn input_shorter_than_the_size_and_type_fields_is_rejected_as_truncated() {
         assert_eq!(
             BoxHeader::decode(&[0x00, 0x00, 0x00]),
-            Err(BoxHeaderError::TruncatedHeader {
-                needed: 8,
-                available: 3
-            })
+            Err(Error::truncated_header(8, 3))
         );
     }
 
@@ -405,10 +351,7 @@ mod tests {
 
         assert_eq!(
             BoxHeader::decode(&input),
-            Err(BoxHeaderError::TruncatedHeader {
-                needed: 16,
-                available: 12
-            })
+            Err(Error::truncated_header(16, 12))
         );
     }
 
@@ -420,10 +363,7 @@ mod tests {
 
         assert_eq!(
             BoxHeader::decode(&input),
-            Err(BoxHeaderError::TruncatedHeader {
-                needed: 32,
-                available: 12
-            })
+            Err(Error::truncated_header(32, 12))
         );
     }
 
@@ -433,10 +373,7 @@ mod tests {
 
         assert_eq!(
             BoxHeader::decode(&input),
-            Err(BoxHeaderError::TruncatedHeader {
-                needed: 24,
-                available: 8
-            })
+            Err(Error::truncated_header(24, 8))
         );
     }
 
@@ -446,10 +383,7 @@ mod tests {
 
         assert_eq!(
             BoxHeader::decode(&input),
-            Err(BoxHeaderError::SizeBelowHeader {
-                declared: 4,
-                header_length: 8
-            })
+            Err(Error::size_below_header(8, 4))
         );
     }
 
@@ -462,10 +396,7 @@ mod tests {
 
         assert_eq!(
             BoxHeader::decode(&input),
-            Err(BoxHeaderError::SizeBelowHeader {
-                declared: 8,
-                header_length: 16
-            })
+            Err(Error::size_below_header(16, 8))
         );
     }
 
@@ -478,10 +409,7 @@ mod tests {
 
         assert_eq!(
             BoxHeader::decode(&input),
-            Err(BoxHeaderError::SizeBelowHeader {
-                declared: 20,
-                header_length: 24
-            })
+            Err(Error::size_below_header(24, 20))
         );
     }
 
@@ -495,10 +423,7 @@ mod tests {
 
         assert_eq!(
             BoxHeader::decode(&input),
-            Err(BoxHeaderError::SizeBelowHeader {
-                declared: 16,
-                header_length: 32
-            })
+            Err(Error::size_below_header(32, 16))
         );
     }
 
@@ -608,31 +533,5 @@ mod tests {
         let header = BoxHeader::new(BoxType::Extended(USER_TYPE), BoxSize::ToEndOfFile);
 
         assert_eq!(header.map(BoxHeader::size), Some(BoxSize::ToEndOfFile));
-    }
-
-    #[test]
-    fn display_of_a_truncated_header_names_both_lengths() {
-        let error = BoxHeaderError::TruncatedHeader {
-            needed: 16,
-            available: 12,
-        };
-
-        assert_eq!(
-            error.to_string(),
-            "box header of 16 bytes cut short by an input of 12"
-        );
-    }
-
-    #[test]
-    fn display_of_a_size_below_its_header_names_both_totals() {
-        let error = BoxHeaderError::SizeBelowHeader {
-            declared: 20,
-            header_length: 24,
-        };
-
-        assert_eq!(
-            error.to_string(),
-            "box declares a total of 20 bytes, below its 24-byte header"
-        );
     }
 }

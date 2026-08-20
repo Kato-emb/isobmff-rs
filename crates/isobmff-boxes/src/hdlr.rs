@@ -1,8 +1,8 @@
 //! [`HandlerBox`] (`hdlr`), ISO/IEC 14496-12 §8.4.3
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FieldReader,
-    FieldWriter, FourCC, FullBoxFields, FullBoxFlags, NullTerminatedString,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FourCC,
+    FullBoxFields, FullBoxFlags, NullTerminatedString,
 };
 
 /// Length of the fields that precede the `name`
@@ -70,16 +70,16 @@ impl BoxDefinition for HandlerBox {
 impl BoxDecode for HandlerBox {
     /// # Errors
     ///
-    /// * [`UnsupportedVersion`](DecodeError::UnsupportedVersion): the box
+    /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box
     ///   declares a version other than 0.
-    /// * [`Field`](DecodeError::Field): the payload ends before the fields that
-    ///   precede the `name`.
-    /// * [`InvalidUtf8`](DecodeError::InvalidUtf8): the `name` is not UTF-8.
-    fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
+    /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
+    ///   payload ends before the fields that precede the `name`.
+    /// * [`InvalidUtf8`](isobmff_core::ErrorKind::InvalidUtf8): the `name` is not UTF-8.
+    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
         let mut reader = FieldReader::new(payload);
         let version = FullBoxFields::from_bytes(reader.read_bytes::<4>()?).version();
         if version != 0 {
-            return Err(DecodeError::UnsupportedVersion(version));
+            return Err(Error::unsupported_version(version));
         }
 
         let pre_defined = reader.read_u32()?;
@@ -99,11 +99,11 @@ impl BoxEncode for HandlerBox {
         FIXED_FIELDS_LEN.saturating_add(self.name.encoded_len())
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
+    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
         let expected = self.payload_len();
         let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
         if actual != expected {
-            return Err(EncodeError::BufferLengthMismatch { expected, actual });
+            return Err(Error::buffer_length_mismatch(expected, actual));
         }
 
         let mut writer = FieldWriter::new(buffer);
@@ -122,9 +122,7 @@ mod tests {
     use alloc::string::String;
     use alloc::vec;
 
-    use isobmff_core::{
-        BoxDecode, BoxEncode, DecodeError, FieldReadError, FourCC, NullTerminatedString,
-    };
+    use isobmff_core::{BoxDecode, BoxEncode, Error, FourCC, NullTerminatedString};
 
     use super::HandlerBox;
 
@@ -166,13 +164,10 @@ mod tests {
 
     #[test]
     fn a_payload_ending_before_the_name_is_rejected_as_truncated() {
-        assert!(matches!(
+        assert_eq!(
             HandlerBox::decode_payload(&[0; 23]),
-            Err(DecodeError::Field(FieldReadError::UnexpectedEof {
-                needed: 24,
-                available: 23
-            }))
-        ));
+            Err(Error::truncated_payload(24, 23))
+        );
     }
 
     #[test]
@@ -180,9 +175,9 @@ mod tests {
         let mut payload = vec![0; 24];
         payload.push(0xff);
 
-        assert!(matches!(
+        assert_eq!(
             HandlerBox::decode_payload(&payload),
-            Err(DecodeError::InvalidUtf8(_))
-        ));
+            Err(Error::invalid_utf8(0))
+        );
     }
 }

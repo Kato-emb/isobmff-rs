@@ -2,12 +2,10 @@
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
-use core::error;
-use core::fmt;
 use core::mem;
 use core::ops::Range;
 
-use isobmff_core::{BoxHeader, BoxHeaderError, BoxType, CompactType, DecodeError, FourCC};
+use isobmff_core::{BoxHeader, CompactType, Error, FourCC};
 
 use crate::event::{BoxEvent, ValueBox};
 
@@ -107,14 +105,14 @@ fn take_payload<'input>(remaining: Option<u64>, input: &mut &'input [u8]) -> &'i
 ///   with the extents they cover, and the payload bytes those events hold end to
 ///   end.
 /// * An `Err` leaves the reader failed for good,
-///   [`AlreadyFinished`](BoxReaderError::AlreadyFinished) aside: every later
+///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside: every later
 ///   [`handle_input`](Self::handle_input) and [`finish`](Self::finish) reports
-///   [`AlreadyFailed`](BoxReaderError::AlreadyFailed). The events made before it
-///   are still there to take, and no further one is ever made.
+///   that same failure again. The events made before it are still there to take,
+///   and no further one is ever made.
 /// * [`finish`](Self::finish) declares the file over. Events are still taken
 ///   after it, but input handed over then, or a second
 ///   [`finish`](Self::finish), is
-///   [`AlreadyFinished`](BoxReaderError::AlreadyFinished). A file being over is
+///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished). A file being over is
 ///   not a failure, so that is what every later call reports as well.
 ///
 /// # Examples
@@ -205,7 +203,7 @@ impl BoxReader {
     /// A box read into a value is gathered whole before it is read, so the
     /// payload it declares is memory the reader is about to take. One declaring
     /// more than `payload_limit` bytes of payload is
-    /// [`PayloadLimitExceeded`](BoxReaderError::PayloadLimitExceeded) instead,
+    /// [`PayloadLimitExceeded`](crate::ErrorKind::PayloadLimitExceeded) instead,
     /// reported before a byte of it is gathered.
     ///
     /// The limit bounds one box rather than the file: it is checked against the
@@ -233,24 +231,22 @@ impl BoxReader {
     ///
     /// # Errors
     ///
-    /// * [`Header`](BoxReaderError::Header): a header does not decode, as
-    ///   [`BoxHeader::decode`] reports it.
-    /// * [`PayloadLimitExceeded`](BoxReaderError::PayloadLimitExceeded): a box
-    ///   read into a value declares a payload past the limit the reader was
-    ///   given.
-    /// * [`Decode`](BoxReaderError::Decode): the payload of a box read into a
-    ///   value does not decode.
-    /// * [`AlreadyFinished`](BoxReaderError::AlreadyFinished): the file was
-    ///   declared over by [`finish`](Self::finish).
-    /// * [`AlreadyFailed`](BoxReaderError::AlreadyFailed): a previous call
-    ///   failed, and the reader takes no more input.
-    pub fn handle_input(&mut self, input: &[u8]) -> Result<(), BoxReaderError> {
+    /// * The failures of [`BoxHeader::decode`]: a header does not decode.
+    /// * [`PayloadLimitExceeded`](crate::ErrorKind::PayloadLimitExceeded): a box read into
+    ///   a value declares a payload past the limit the reader was given.
+    /// * Whatever the payload of a box read into a value reports, with the type
+    ///   of that box on the [`containers`](Error::containers) path.
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the file was declared
+    ///   over by [`finish`](Self::finish).
+    /// * The failure of a previous call, which the reader keeps and reports
+    ///   again for every call after it.
+    pub fn handle_input(&mut self, input: &[u8]) -> Result<(), Error> {
         let mut unread = input;
 
         loop {
             match self.state {
-                State::Failed => return Err(BoxReaderError::AlreadyFailed),
-                State::Finished => return Err(BoxReaderError::AlreadyFinished),
+                State::Failed(failure) => return Err(failure),
+                State::Finished => return Err(Error::already_finished()),
                 State::Header(mut partial) => {
                     let available = unread.len();
                     let gathered = partial.take_from(&mut unread);
@@ -282,11 +278,11 @@ impl BoxReader {
                     };
 
                     if declared > self.payload_limit {
-                        return Err(self.fail(BoxReaderError::PayloadLimitExceeded {
-                            box_type: header.box_type(),
+                        return Err(self.fail(Error::payload_limit_exceeded(
+                            header.box_type(),
                             declared,
-                            limit: self.payload_limit,
-                        }));
+                            self.payload_limit,
+                        )));
                     }
 
                     self.state = State::Gathering {
@@ -334,10 +330,7 @@ impl BoxReader {
                         match value_box.read(&payload) {
                             Ok(event) => self.push_event(event),
                             Err(error) => {
-                                return Err(self.fail(BoxReaderError::Decode {
-                                    box_type: header.box_type(),
-                                    source: error,
-                                }));
+                                return Err(self.fail(error.in_container(header.box_type())));
                             }
                         }
                         continue;
@@ -403,37 +396,37 @@ impl BoxReader {
     ///
     /// # Errors
     ///
-    /// * [`UnfinishedHeader`](BoxReaderError::UnfinishedHeader): the file ended
+    /// * [`UnfinishedHeader`](crate::ErrorKind::UnfinishedHeader): the file ended
     ///   inside a box header.
-    /// * [`UnfinishedBox`](BoxReaderError::UnfinishedBox): the file ended before
+    /// * [`UnfinishedBox`](crate::ErrorKind::UnfinishedBox): the file ended before
     ///   the declared total of a box was reached, whether that box was being
     ///   passed on or gathered into a value.
-    /// * [`AlreadyFinished`](BoxReaderError::AlreadyFinished): the file was
-    ///   already declared over.
-    /// * [`AlreadyFailed`](BoxReaderError::AlreadyFailed): a previous call
-    ///   failed, and the reader takes no more input.
-    pub fn finish(&mut self) -> Result<(), BoxReaderError> {
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    ///   file was already declared over.
+    /// * The failure of a previous call, which the reader keeps and reports
+    ///   again for every call after it.
+    pub fn finish(&mut self) -> Result<(), Error> {
         match self.state {
-            State::Failed => Err(BoxReaderError::AlreadyFailed),
-            State::Finished => Err(BoxReaderError::AlreadyFinished),
+            State::Failed(failure) => Err(failure),
+            State::Finished => Err(Error::already_finished()),
             State::Header(partial) if partial.filled == 0 => {
                 self.state = State::Finished;
                 Ok(())
             }
-            State::Header(partial) => Err(self.fail(BoxReaderError::UnfinishedHeader {
-                needed: partial.needed,
-                available: partial.filled,
-            })),
+            State::Header(partial) => Err(self.fail(Error::unfinished_header(
+                u64::try_from(partial.needed).unwrap_or(u64::MAX),
+                u64::try_from(partial.filled).unwrap_or(u64::MAX),
+            ))),
             State::Payload { header, remaining } => {
                 let unfinished = remaining
                     .filter(|remaining| *remaining != 0)
                     .zip(header.size().total_bytes());
 
                 match unfinished {
-                    Some((remaining, total)) => Err(self.fail(BoxReaderError::UnfinishedBox {
-                        needed: total,
-                        available: total.saturating_sub(remaining),
-                    })),
+                    Some((remaining, total)) => Err(self.fail(Error::unfinished_box(
+                        total,
+                        total.saturating_sub(remaining),
+                    ))),
                     None => {
                         self.state = State::Finished;
                         self.push_event(BoxEvent::RawEnd);
@@ -451,10 +444,10 @@ impl BoxReader {
                     .unwrap_or(u64::MAX)
                     .saturating_add(u64::try_from(gathered.len()).unwrap_or(u64::MAX));
 
-                Err(self.fail(BoxReaderError::UnfinishedBox {
-                    needed: read_so_far.saturating_add(remaining),
-                    available: read_so_far,
-                }))
+                Err(self.fail(Error::unfinished_box(
+                    read_so_far.saturating_add(remaining),
+                    read_so_far,
+                )))
             }
         }
     }
@@ -479,8 +472,8 @@ impl BoxReader {
     }
 
     /// Fails the reader for good, and hands the failure back to report
-    fn fail(&mut self, failure: BoxReaderError) -> BoxReaderError {
-        self.state = State::Failed;
+    fn fail(&mut self, failure: Error) -> Error {
+        self.state = State::Failed(failure);
 
         failure
     }
@@ -513,8 +506,8 @@ enum State {
     },
     /// Told the file is over, and taking no more input
     Finished,
-    /// Failed, and taking no more input
-    Failed,
+    /// Failed, and reporting that same failure for every call after it
+    Failed(Error),
 }
 
 /// Header bytes gathered so far, for a header the input cut across
@@ -541,7 +534,7 @@ impl PartialHeader {
     ///
     /// Returns `Ok(None)` when `input` runs out first, having taken what it
     /// offered.
-    fn take_from(&mut self, input: &mut &[u8]) -> Result<Option<BoxHeader>, BoxReaderError> {
+    fn take_from(&mut self, input: &mut &[u8]) -> Result<Option<BoxHeader>, Error> {
         self.gather(input);
         if self.filled < MIN_HEADER_LEN {
             return Ok(None);
@@ -564,15 +557,7 @@ impl PartialHeader {
             return Ok(None);
         };
 
-        // Why nest rather than re-declare the one failure that reaches here:
-        // `BoxHeaderError` is `non_exhaustive` and comes from another crate, so
-        // a match on it cannot be complete, and the wildcard arm that closes it
-        // would have to name some other failure in place of the one that was
-        // actually reported.
-        match BoxHeader::decode(gathered) {
-            Ok((header, _nothing_beyond)) => Ok(Some(header)),
-            Err(error) => Err(BoxReaderError::Header(error)),
-        }
+        BoxHeader::decode(gathered).map(|(header, _nothing_beyond)| Some(header))
     }
 
     /// Takes off `input` as many bytes as the length being reached for is short
@@ -591,111 +576,17 @@ impl PartialHeader {
     }
 }
 
-/// Reason input does not read as a sequence of boxes
-#[non_exhaustive]
-#[derive(Debug)]
-pub enum BoxReaderError {
-    /// Header of a box does not decode
-    Header(BoxHeaderError),
-    /// File ended inside a box header
-    UnfinishedHeader {
-        /// Bytes the header occupies, as far as the bytes read so far tell
-        needed: usize,
-        /// Bytes of the header the file carried
-        available: usize,
-    },
-    /// File ended before the declared total of a box was reached
-    UnfinishedBox {
-        /// Bytes the box occupies, as the `size` or `largesize` field declares
-        needed: u64,
-        /// Bytes of the box the file carried, header included
-        available: u64,
-    },
-    /// Box read into a value declares a payload past the limit the reader holds
-    PayloadLimitExceeded {
-        /// Box type of the box that declared it
-        box_type: BoxType,
-        /// Bytes of payload the box declares, its header not counted
-        declared: u64,
-        /// Bytes of payload the reader gathers for one box at most
-        limit: u64,
-    },
-    /// Payload of a box read into a value does not decode
-    Decode {
-        /// Box type of the box that failed
-        box_type: BoxType,
-        /// Failure the box reported
-        source: DecodeError,
-    },
-    /// File was declared over, and takes no more input
-    AlreadyFinished,
-    /// Reader failed, and takes no more input
-    AlreadyFailed,
-}
-
-impl fmt::Display for BoxReaderError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            Self::Header(_) => formatter.write_str("box header does not decode"),
-            Self::UnfinishedHeader { needed, available } => write!(
-                formatter,
-                "input ended {available} bytes into a box header of {needed}"
-            ),
-            Self::UnfinishedBox { needed, available } => write!(
-                formatter,
-                "input ended {available} bytes into a box of {needed}"
-            ),
-            Self::PayloadLimitExceeded {
-                box_type,
-                declared,
-                limit,
-            } => write!(
-                formatter,
-                "{box_type} box declares a payload of {declared} bytes, past the {limit}-byte limit"
-            ),
-            Self::Decode { box_type, .. } => write!(formatter, "{box_type} box does not decode"),
-            Self::AlreadyFinished => {
-                formatter.write_str("file was declared over and takes no more input")
-            }
-            Self::AlreadyFailed => formatter.write_str("reader failed and takes no more input"),
-        }
-    }
-}
-
-impl From<BoxHeaderError> for BoxReaderError {
-    fn from(error: BoxHeaderError) -> Self {
-        Self::Header(error)
-    }
-}
-
-impl error::Error for BoxReaderError {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match *self {
-            Self::Header(ref error) => Some(error),
-            Self::Decode { ref source, .. } => Some(source),
-            Self::UnfinishedHeader { .. }
-            | Self::UnfinishedBox { .. }
-            | Self::PayloadLimitExceeded { .. }
-            | Self::AlreadyFinished
-            | Self::AlreadyFailed => None,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use alloc::string::{String, ToString};
     use alloc::vec;
     use alloc::vec::Vec;
-    use core::error::Error as _;
 
     use isobmff_boxes::{FileTypeBox, MovieFragmentBox, MovieFragmentHeaderBox, SegmentTypeBox};
     use isobmff_core::{
-        BoxHeader, BoxHeaderError, BoxSize, BoxType, BoxWrite, CompactSize, ExtendedSize, FourCC,
-        Uuid,
+        BoxHeader, BoxSize, BoxType, BoxWrite, CompactSize, Error, ExtendedSize, FourCC, Uuid,
     };
 
-    use super::{BoxEvent, BoxReader, BoxReaderError, DecodeError, Range, header_len_from_prefix};
+    use super::{BoxEvent, BoxReader, Range, header_len_from_prefix};
 
     /// Every form a header takes: the two size fields against the two box types
     const EVERY_HEADER_FORM: [&[u8]; 6] = [
@@ -973,13 +864,7 @@ mod tests {
             .handle_input(&[0x00, 0x00, 0x00, 0x01, b'm', b'd', b'a', b't', 0x00])
             .unwrap();
 
-        assert!(matches!(
-            reader.finish(),
-            Err(BoxReaderError::UnfinishedHeader {
-                needed: 16,
-                available: 9
-            })
-        ));
+        assert_eq!(reader.finish(), Err(Error::unfinished_header(16, 9)));
     }
 
     #[test]
@@ -988,57 +873,29 @@ mod tests {
 
         reader.handle_input(b"\0\0\0\x10freeAAAA").unwrap();
 
-        assert!(matches!(
-            reader.finish(),
-            Err(BoxReaderError::UnfinishedBox {
-                needed: 16,
-                available: 12
-            })
-        ));
+        assert_eq!(reader.finish(), Err(Error::unfinished_box(16, 12)));
     }
 
     #[test]
-    fn a_failed_reader_takes_no_more_input() {
+    fn a_failed_reader_reports_the_same_failure_for_every_call_after_it() {
         let mut reader = BoxReader::new();
+        let failure = Error::size_below_header(8, 4);
 
-        assert!(matches!(
-            reader.handle_input(b"\0\0\0\x04free"),
-            Err(BoxReaderError::Header(BoxHeaderError::SizeBelowHeader {
-                declared: 4,
-                header_length: 8
-            }))
-        ));
-        assert!(matches!(
-            reader.handle_input(b"\0\0\0\x08skip"),
-            Err(BoxReaderError::AlreadyFailed)
-        ));
-        assert!(matches!(
-            reader.finish(),
-            Err(BoxReaderError::AlreadyFailed)
-        ));
+        assert_eq!(reader.handle_input(b"\0\0\0\x04free"), Err(failure));
+        assert_eq!(reader.handle_input(b"\0\0\0\x08skip"), Err(failure));
+        assert_eq!(reader.finish(), Err(failure));
     }
 
     #[test]
-    fn a_reader_that_failed_while_finishing_takes_no_more_input() {
+    fn a_reader_that_failed_while_finishing_reports_that_failure_again() {
         let mut reader = BoxReader::new();
+        let failure = Error::unfinished_box(16, 12);
 
         reader.handle_input(b"\0\0\0\x10freeAAAA").unwrap();
 
-        assert!(matches!(
-            reader.finish(),
-            Err(BoxReaderError::UnfinishedBox {
-                needed: 16,
-                available: 12
-            })
-        ));
-        assert!(matches!(
-            reader.handle_input(b"AAAA"),
-            Err(BoxReaderError::AlreadyFailed)
-        ));
-        assert!(matches!(
-            reader.finish(),
-            Err(BoxReaderError::AlreadyFailed)
-        ));
+        assert_eq!(reader.finish(), Err(failure));
+        assert_eq!(reader.handle_input(b"AAAA"), Err(failure));
+        assert_eq!(reader.finish(), Err(failure));
     }
 
     #[test]
@@ -1080,10 +937,10 @@ mod tests {
 
         reader.finish().unwrap();
 
-        assert!(matches!(
+        assert_eq!(
             reader.handle_input(b"\0\0\0\x08free"),
-            Err(BoxReaderError::AlreadyFinished)
-        ));
+            Err(Error::already_finished())
+        );
     }
 
     #[test]
@@ -1092,10 +949,7 @@ mod tests {
 
         reader.finish().unwrap();
 
-        assert!(matches!(
-            reader.finish(),
-            Err(BoxReaderError::AlreadyFinished)
-        ));
+        assert_eq!(reader.finish(), Err(Error::already_finished()));
     }
 
     #[test]
@@ -1155,14 +1009,14 @@ mod tests {
     fn a_value_declaring_a_payload_past_the_limit_is_rejected() {
         let mut reader = BoxReader::with_payload_limit(4);
 
-        assert!(matches!(
+        assert_eq!(
             reader.handle_input(&written(&file_type())),
-            Err(BoxReaderError::PayloadLimitExceeded {
-                box_type,
-                declared: 12,
-                limit: 4
-            }) if box_type == BoxType::compact(*b"ftyp")
-        ));
+            Err(Error::payload_limit_exceeded(
+                BoxType::compact(*b"ftyp"),
+                12,
+                4
+            ))
+        );
     }
 
     #[test]
@@ -1206,14 +1060,10 @@ mod tests {
     fn a_value_whose_payload_does_not_decode_fails_the_reader_and_reports_no_part_of_it() {
         let mut reader = BoxReader::new();
 
-        assert!(matches!(
-            reader.handle_input(b"\0\0\0\x0cmoofAAAA"),
-            Err(BoxReaderError::Decode { box_type, .. }) if box_type == BoxType::compact(*b"moof")
-        ));
-        assert!(matches!(
-            reader.handle_input(b"\0\0\0\x08free"),
-            Err(BoxReaderError::AlreadyFailed)
-        ));
+        let failure = Error::truncated_header(8, 4).in_container(BoxType::compact(*b"moof"));
+
+        assert_eq!(reader.handle_input(b"\0\0\0\x0cmoofAAAA"), Err(failure));
+        assert_eq!(reader.handle_input(b"\0\0\0\x08free"), Err(failure));
         assert_eq!(reader.poll_event(), None);
     }
 
@@ -1225,80 +1075,7 @@ mod tests {
 
         reader.handle_input(head).unwrap();
 
-        assert!(matches!(
-            reader.finish(),
-            Err(BoxReaderError::UnfinishedBox {
-                needed: 20,
-                available: 19
-            })
-        ));
+        assert_eq!(reader.finish(), Err(Error::unfinished_box(20, 19)));
         assert_eq!(reader.poll_event(), None);
-    }
-
-    #[test]
-    fn display_of_a_payload_past_the_limit_names_both_lengths() {
-        let error = BoxReaderError::PayloadLimitExceeded {
-            box_type: BoxType::compact(*b"moov"),
-            declared: 32,
-            limit: 16,
-        };
-
-        assert_eq!(
-            error.to_string(),
-            "moov box declares a payload of 32 bytes, past the 16-byte limit"
-        );
-    }
-
-    #[test]
-    fn display_of_a_value_that_does_not_decode_leaves_the_reason_to_its_source() {
-        let error = BoxReaderError::Decode {
-            box_type: BoxType::compact(*b"moof"),
-            source: DecodeError::MissingMandatoryBox(BoxType::compact(*b"mfhd")),
-        };
-
-        assert_eq!(error.to_string(), "moof box does not decode");
-        assert_eq!(
-            error.source().map(ToString::to_string),
-            Some(String::from("container holds no mandatory mfhd box"))
-        );
-    }
-
-    #[test]
-    fn display_of_an_unfinished_header_names_both_lengths() {
-        let error = BoxReaderError::UnfinishedHeader {
-            needed: 16,
-            available: 9,
-        };
-
-        assert_eq!(
-            error.to_string(),
-            "input ended 9 bytes into a box header of 16"
-        );
-    }
-
-    #[test]
-    fn display_of_an_unfinished_box_names_both_lengths() {
-        let error = BoxReaderError::UnfinishedBox {
-            needed: 16,
-            available: 12,
-        };
-
-        assert_eq!(error.to_string(), "input ended 12 bytes into a box of 16");
-    }
-
-    #[test]
-    fn display_of_a_header_that_does_not_decode_leaves_the_reason_to_its_source() {
-        let error = BoxReaderError::Header(BoxHeaderError::SizeBelowHeader {
-            declared: 4,
-            header_length: 8,
-        });
-
-        assert_eq!(error.to_string(), "box header does not decode");
-        assert_eq!(
-            error.source().map(ToString::to_string),
-            Some(String::from(
-                "box declares a total of 4 bytes, below its 8-byte header"
-            ))
-        );
     }
 }

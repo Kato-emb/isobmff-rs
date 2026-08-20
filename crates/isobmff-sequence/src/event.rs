@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox, SegmentTypeBox};
-use isobmff_core::{BoxDecode, BoxDefinition, BoxHeader, BoxType, DecodeError};
+use isobmff_core::{BoxDecode, BoxDefinition, BoxHeader, BoxType, Error};
 
 /// Step of the sequence of boxes, owning the box or the bytes it carries
 ///
@@ -79,7 +79,7 @@ impl ValueBox {
     ///
     /// The failure [`BoxDecode::decode_payload`] reports for the box `self`
     /// names.
-    pub(crate) fn read(self, payload: &[u8]) -> Result<BoxEvent, DecodeError> {
+    pub(crate) fn read(self, payload: &[u8]) -> Result<BoxEvent, Error> {
         match self {
             Self::FileType => Ok(BoxEvent::FileType(FileTypeBox::decode_payload(payload)?)),
             Self::SegmentType => Ok(BoxEvent::SegmentType(SegmentTypeBox::decode_payload(

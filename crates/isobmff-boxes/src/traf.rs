@@ -3,8 +3,8 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, DecodeError,
-    EncodeError, OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, Error,
+    OtherBoxes, boxes,
 };
 
 use crate::tfdt::TrackFragmentBaseMediaDecodeTimeBox;
@@ -93,14 +93,15 @@ impl BoxDefinition for TrackFragmentBox {
 impl BoxDecode for TrackFragmentBox {
     /// # Errors
     ///
-    /// * [`Framing`](DecodeError::Framing): a child does not frame as a box.
-    /// * [`MissingMandatoryBox`](DecodeError::MissingMandatoryBox): no `tfhd`.
-    /// * [`DuplicateBox`](DecodeError::DuplicateBox): more than one `tfhd`, or
+    /// * The failures of [`boxes`]: a child does not frame as a box.
+    /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox): no `tfhd`.
+    /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one `tfhd`, or
     ///   more than one `tfdt`.
-    /// * [`ForbiddenChildBox`](DecodeError::ForbiddenChildBox): the `tfhd` states
+    /// * [`ForbiddenChildBox`](isobmff_core::ErrorKind::ForbiddenChildBox): the `tfhd` states
     ///   `duration-is-empty` and a `trun` follows it.
-    /// * [`Child`](DecodeError::Child): a child does not decode.
-    fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
+    /// * Whatever the child reports, on the [`containers`](Error::containers) path: a child does
+    ///   not decode.
+    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
         let mut tfhd_boxes = ChildBoxes::new();
         let mut tfdt_boxes = ChildBoxes::new();
         let mut trun_boxes = ChildBoxes::new();
@@ -126,7 +127,7 @@ impl BoxDecode for TrackFragmentBox {
         // a run is there at all, and a fragment that declares an empty duration
         // would have every run of an input it goes on to refuse decoded first.
         if tfhd.duration_is_empty() && !trun_boxes.is_empty() {
-            return Err(DecodeError::ForbiddenChildBox(TrackRunBox::BOX_TYPE));
+            return Err(Error::forbidden_child_box(TrackRunBox::BOX_TYPE));
         }
 
         Ok(Self {
@@ -159,11 +160,11 @@ impl BoxEncode for TrackFragmentBox {
             .saturating_add(others)
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
+    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
         let expected = self.payload_len();
         let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
         if actual != expected {
-            return Err(EncodeError::BufferLengthMismatch { expected, actual });
+            return Err(Error::buffer_length_mismatch(expected, actual));
         }
 
         let mut rest = self.tfhd.encode(buffer)?;
@@ -187,8 +188,8 @@ pub(crate) mod tests {
     use alloc::vec::Vec;
 
     use isobmff_core::{
-        BoxDecode, BoxDefinition as _, BoxEncode, BoxType, BoxWrite as _, DecodeError,
-        FullBoxFlags, boxes,
+        BoxDecode, BoxDefinition as _, BoxEncode, BoxType, BoxWrite as _, Error, FullBoxFlags,
+        boxes,
     };
 
     use super::TrackFragmentBox;
@@ -302,18 +303,18 @@ pub(crate) mod tests {
 
         let payload = [encoded_payload(&empty), encoded_run].concat();
 
-        assert!(matches!(
+        assert_eq!(
             TrackFragmentBox::decode_payload(&payload),
-            Err(DecodeError::ForbiddenChildBox(TrackRunBox::BOX_TYPE))
-        ));
+            Err(Error::forbidden_child_box(TrackRunBox::BOX_TYPE))
+        );
     }
 
     #[test]
     fn a_box_holding_no_fragment_header_is_rejected() {
-        assert!(matches!(
+        assert_eq!(
             TrackFragmentBox::decode_payload(b""),
-            Err(DecodeError::MissingMandatoryBox(_))
-        ));
+            Err(Error::missing_mandatory_box(BoxType::compact(*b"tfhd")))
+        );
     }
 
     #[test]

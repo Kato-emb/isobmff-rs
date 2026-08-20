@@ -29,6 +29,8 @@ mod event;
 mod reader;
 mod writer;
 
+pub use isobmff_core::{Category, Error, ErrorKind};
+
 pub use event::BoxEvent;
-pub use reader::{BoxReader, BoxReaderError};
-pub use writer::{BoxWriter, BoxWriterError};
+pub use reader::BoxReader;
+pub use writer::BoxWriter;

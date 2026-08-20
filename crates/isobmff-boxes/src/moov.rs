@@ -3,8 +3,8 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, DecodeError,
-    EncodeError, OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, Error,
+    OtherBoxes, boxes,
 };
 
 use crate::mvex::MovieExtendsBox;
@@ -85,13 +85,14 @@ impl BoxDefinition for MovieBox {
 impl BoxDecode for MovieBox {
     /// # Errors
     ///
-    /// * [`Framing`](DecodeError::Framing): a child does not frame as a box.
-    /// * [`MissingMandatoryBox`](DecodeError::MissingMandatoryBox): no `mvhd`,
+    /// * The failures of [`boxes`]: a child does not frame as a box.
+    /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox): no `mvhd`,
     ///   or no `trak` at all.
-    /// * [`DuplicateBox`](DecodeError::DuplicateBox): more than one `mvhd` or
+    /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one `mvhd` or
     ///   `mvex`.
-    /// * [`Child`](DecodeError::Child): one of the children does not decode.
-    fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
+    /// * Whatever the child reports, on the [`containers`](Error::containers) path: one of the
+    ///   children does not decode.
+    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
         let mut mvhd_boxes = ChildBoxes::new();
         let mut trak_boxes = ChildBoxes::new();
         let mut mvex_boxes = ChildBoxes::new();
@@ -142,11 +143,11 @@ impl BoxEncode for MovieBox {
             .saturating_add(others)
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
+    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
         let expected = self.payload_len();
         let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
         if actual != expected {
-            return Err(EncodeError::BufferLengthMismatch { expected, actual });
+            return Err(Error::buffer_length_mismatch(expected, actual));
         }
 
         let mut rest = self.mvhd.encode(buffer)?;
@@ -169,7 +170,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, BoxWrite as _, DecodeError};
+    use isobmff_core::{BoxDecode, BoxEncode, BoxType, BoxWrite as _, Error};
 
     use super::MovieBox;
     use crate::mvex::tests::movie_extends;
@@ -216,19 +217,19 @@ mod tests {
         let whole = encoded_payload(&movie());
         let header_len = usize::try_from(movie().mvhd().encoded_len()).unwrap();
 
-        assert!(matches!(
+        assert_eq!(
             MovieBox::decode_payload(whole.get(..header_len).unwrap()),
-            Err(DecodeError::MissingMandatoryBox(_))
-        ));
+            Err(Error::missing_mandatory_box(BoxType::compact(*b"trak")))
+        );
     }
 
     #[test]
     fn a_second_movie_header_is_rejected() {
         let payload = [encoded_payload(&movie()), encoded_payload(&movie())].concat();
 
-        assert!(matches!(
+        assert_eq!(
             MovieBox::decode_payload(&payload),
-            Err(DecodeError::DuplicateBox(_))
-        ));
+            Err(Error::duplicate_box(BoxType::compact(*b"mvhd")))
+        );
     }
 }

@@ -3,8 +3,7 @@
 use alloc::string::{String, ToString as _};
 use core::str;
 
-use crate::box_decode::DecodeError;
-use crate::box_encode::EncodeError;
+use crate::error::{Error, byte_count};
 
 /// Text field of a box, as the spec's `string` type carries it
 ///
@@ -70,8 +69,8 @@ impl NullTerminatedString {
     ///
     /// # Errors
     ///
-    /// * [`InvalidUtf8`](DecodeError::InvalidUtf8): the text is not UTF-8.
-    pub fn from_slice(bytes: &[u8]) -> Result<Self, DecodeError> {
+    /// * [`InvalidUtf8`](crate::ErrorKind::InvalidUtf8): the text is not UTF-8.
+    pub fn from_slice(bytes: &[u8]) -> Result<Self, Error> {
         let text = match bytes.iter().position(|byte| *byte == 0) {
             // Why not unwrap: the index `position` reports is within `bytes`, so
             // the range always slices, and a degenerate value stands in for the
@@ -82,7 +81,7 @@ impl NullTerminatedString {
 
         Ok(Self(
             str::from_utf8(text)
-                .map_err(DecodeError::InvalidUtf8)?
+                .map_err(|error| Error::invalid_utf8(error.valid_up_to()))?
                 .to_string(),
         ))
     }
@@ -104,17 +103,11 @@ impl NullTerminatedString {
     ///
     /// # Errors
     ///
-    /// * [`BufferTooShort`](EncodeError::BufferTooShort): `buffer` is shorter
+    /// * [`TruncatedBuffer`](crate::ErrorKind::TruncatedBuffer): `buffer` is shorter
     ///   than [`encoded_len`](Self::encoded_len).
-    pub fn encode<'buffer>(
-        &self,
-        buffer: &'buffer mut [u8],
-    ) -> Result<&'buffer mut [u8], EncodeError> {
+    pub fn encode<'buffer>(&self, buffer: &'buffer mut [u8]) -> Result<&'buffer mut [u8], Error> {
         let needed = self.encoded_len();
-        let too_short = EncodeError::BufferTooShort {
-            needed,
-            available: u64::try_from(buffer.len()).unwrap_or(u64::MAX),
-        };
+        let too_short = Error::truncated_buffer(needed, byte_count(buffer.len()));
 
         let (whole, rest) = usize::try_from(needed)
             .ok()
@@ -135,8 +128,7 @@ mod tests {
     use alloc::vec;
 
     use super::NullTerminatedString;
-    use crate::box_decode::DecodeError;
-    use crate::box_encode::EncodeError;
+    use crate::error::Error;
 
     #[test]
     fn a_field_holding_only_a_terminator_reads_as_the_empty_string() {
@@ -164,10 +156,10 @@ mod tests {
 
     #[test]
     fn text_that_is_not_utf8_is_rejected() {
-        assert!(matches!(
+        assert_eq!(
             NullTerminatedString::from_slice(b"\xff\0"),
-            Err(DecodeError::InvalidUtf8(_))
-        ));
+            Err(Error::invalid_utf8(0))
+        );
     }
 
     #[test]
@@ -187,10 +179,7 @@ mod tests {
 
         assert_eq!(
             field.encode(&mut [0; 4]),
-            Err(EncodeError::BufferTooShort {
-                needed: 5,
-                available: 4
-            })
+            Err(Error::truncated_buffer(5, 4))
         );
     }
 

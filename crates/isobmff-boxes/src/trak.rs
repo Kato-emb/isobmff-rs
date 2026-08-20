@@ -1,8 +1,8 @@
 //! [`TrackBox`] (`trak`), ISO/IEC 14496-12 §8.3.1
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, DecodeError,
-    EncodeError, OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, Error,
+    OtherBoxes, boxes,
 };
 
 use crate::mdia::MediaBox;
@@ -61,12 +61,13 @@ impl BoxDefinition for TrackBox {
 impl BoxDecode for TrackBox {
     /// # Errors
     ///
-    /// * [`Framing`](DecodeError::Framing): a child does not frame as a box.
-    /// * [`MissingMandatoryBox`](DecodeError::MissingMandatoryBox): no `tkhd` or
+    /// * The failures of [`boxes`]: a child does not frame as a box.
+    /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox): no `tkhd` or
     ///   `mdia`.
-    /// * [`DuplicateBox`](DecodeError::DuplicateBox): more than one of either.
-    /// * [`Child`](DecodeError::Child): one of them does not decode.
-    fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
+    /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one of either.
+    /// * Whatever the child reports, on the [`containers`](Error::containers) path: one of them
+    ///   does not decode.
+    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
         let mut tkhd_boxes = ChildBoxes::new();
         let mut mdia_boxes = ChildBoxes::new();
         let mut other_boxes = OtherBoxes::new();
@@ -108,11 +109,11 @@ impl BoxEncode for TrackBox {
             .saturating_add(others)
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
+    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
         let expected = self.payload_len();
         let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
         if actual != expected {
-            return Err(EncodeError::BufferLengthMismatch { expected, actual });
+            return Err(Error::buffer_length_mismatch(expected, actual));
         }
 
         let mut rest = self.tkhd.encode(buffer)?;
@@ -132,7 +133,7 @@ pub(crate) mod tests {
     use alloc::vec::Vec;
 
     use isobmff_core::{
-        BoxDecode, BoxEncode, DecodeError, FourCC, FullBoxFlags, LanguageCode,
+        BoxDecode, BoxEncode, BoxType, Error, FourCC, FullBoxFlags, LanguageCode,
         NullTerminatedString, QuickTimeDateTime,
     };
 
@@ -194,9 +195,9 @@ pub(crate) mod tests {
         let whole = encoded_payload(&track());
         let track_header_len = usize::try_from(track().tkhd().payload_len()).unwrap() + 8;
 
-        assert!(matches!(
+        assert_eq!(
             TrackBox::decode_payload(whole.get(..track_header_len).unwrap()),
-            Err(DecodeError::MissingMandatoryBox(_))
-        ));
+            Err(Error::missing_mandatory_box(BoxType::compact(*b"mdia")))
+        );
     }
 }

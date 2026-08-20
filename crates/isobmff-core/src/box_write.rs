@@ -1,9 +1,10 @@
 //! [`BoxWrite`], the whole box of ISO/IEC 14496-12 §4.2 written from a value
 
 use crate::box_definition::BoxDefinition;
-use crate::box_encode::{BoxEncode, EncodeError};
+use crate::box_encode::BoxEncode;
 use crate::box_header::BoxHeader;
 use crate::box_type::BoxType;
+use crate::error::{Error, byte_count};
 
 /// Returns the length of the whole box `payload` forms under `box_type`
 pub(crate) fn encoded_len_of(box_type: BoxType, payload: &(impl BoxEncode + ?Sized)) -> u64 {
@@ -22,14 +23,9 @@ pub(crate) fn encode_into<'buffer>(
     box_type: BoxType,
     payload: &(impl BoxEncode + ?Sized),
     buffer: &'buffer mut [u8],
-) -> Result<&'buffer mut [u8], EncodeError> {
+) -> Result<&'buffer mut [u8], Error> {
     let needed = encoded_len_of(box_type, payload);
-    let too_short = EncodeError::BufferTooShort {
-        needed,
-        // Why not unwrap: a usize above `u64::MAX` needs a 128-bit target to
-        // exist, and saturating keeps the panic-free path.
-        available: u64::try_from(buffer.len()).unwrap_or(u64::MAX),
-    };
+    let too_short = Error::truncated_buffer(needed, byte_count(buffer.len()));
 
     let header = BoxHeader::with_payload_len(box_type, payload.payload_len()).ok_or(too_short)?;
     let mut scratch = [0; BoxHeader::MAX_ENCODED_LEN];
@@ -67,7 +63,7 @@ pub(crate) fn encode_into<'buffer>(
 /// # Examples
 ///
 /// ```
-/// use isobmff_core::{BoxDefinition, BoxEncode, BoxType, BoxWrite, EncodeError};
+/// use isobmff_core::{BoxDefinition, BoxEncode, BoxType, BoxWrite, Error};
 ///
 /// // A box whose payload is one 32-bit sequence number
 /// struct SequenceNumberBox {
@@ -83,11 +79,11 @@ pub(crate) fn encode_into<'buffer>(
 ///         4
 ///     }
 ///
-///     fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
-///         let mismatch = EncodeError::BufferLengthMismatch {
-///             expected: 4,
-///             actual: u64::try_from(buffer.len()).unwrap_or(u64::MAX),
-///         };
+///     fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
+///         let mismatch = Error::buffer_length_mismatch(
+///             4,
+///             u64::try_from(buffer.len()).unwrap_or(u64::MAX),
+///         );
 ///         let field = buffer.first_chunk_mut::<4>().ok_or(mismatch)?;
 ///         *field = self.sequence_number.to_be_bytes();
 ///
@@ -112,10 +108,7 @@ pub(crate) fn encode_into<'buffer>(
 /// // A buffer the box does not fit in is refused
 /// assert_eq!(
 ///     sequence.encode(&mut [0; 11]),
-///     Err(EncodeError::BufferTooShort {
-///         needed: 12,
-///         available: 11
-///     })
+///     Err(Error::truncated_buffer(12, 11))
 /// );
 /// ```
 pub trait BoxWrite: BoxDefinition + BoxEncode {
@@ -141,11 +134,11 @@ pub trait BoxWrite: BoxDefinition + BoxEncode {
     ///
     /// # Errors
     ///
-    /// * [`BufferTooShort`](EncodeError::BufferTooShort): `buffer` is shorter
+    /// * [`TruncatedBuffer`](crate::ErrorKind::TruncatedBuffer): `buffer` is shorter
     ///   than [`encoded_len`](Self::encoded_len).
     /// * What [`encode_payload`](BoxEncode::encode_payload) reports, for the
     ///   payload written after the header.
-    fn encode<'buffer>(&self, buffer: &'buffer mut [u8]) -> Result<&'buffer mut [u8], EncodeError> {
+    fn encode<'buffer>(&self, buffer: &'buffer mut [u8]) -> Result<&'buffer mut [u8], Error> {
         encode_into(Self::BOX_TYPE, self, buffer)
     }
 }
@@ -158,8 +151,9 @@ mod tests {
 
     use super::BoxWrite;
     use crate::box_definition::BoxDefinition;
-    use crate::box_encode::{BoxEncode, EncodeError};
+    use crate::box_encode::BoxEncode;
     use crate::box_type::BoxType;
+    use crate::error::{Error, byte_count};
     use crate::uuid::Uuid;
 
     /// Box whose payload is as long as it is told to be, and is written as zeros
@@ -176,13 +170,10 @@ mod tests {
             self.payload_len
         }
 
-        fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
-            let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
+        fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
+            let actual = byte_count(buffer.len());
             if actual != self.payload_len {
-                return Err(EncodeError::BufferLengthMismatch {
-                    expected: self.payload_len,
-                    actual,
-                });
+                return Err(Error::buffer_length_mismatch(self.payload_len, actual));
             }
 
             buffer.fill(0);
@@ -203,7 +194,7 @@ mod tests {
             0
         }
 
-        fn encode_payload(&self, _buffer: &mut [u8]) -> Result<(), EncodeError> {
+        fn encode_payload(&self, _buffer: &mut [u8]) -> Result<(), Error> {
             Ok(())
         }
     }
@@ -237,10 +228,7 @@ mod tests {
 
         assert_eq!(
             padding.encode(&mut [0; 11]),
-            Err(EncodeError::BufferTooShort {
-                needed: 12,
-                available: 11
-            })
+            Err(Error::truncated_buffer(12, 11))
         );
     }
 
@@ -252,10 +240,7 @@ mod tests {
 
         assert_eq!(
             padding.encode(&mut [0; 16]),
-            Err(EncodeError::BufferTooShort {
-                needed: u64::MAX,
-                available: 16
-            })
+            Err(Error::truncated_buffer(u64::MAX, 16))
         );
     }
 }

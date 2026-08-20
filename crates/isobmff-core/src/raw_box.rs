@@ -1,10 +1,9 @@
-//! [`RawBox`], [`boxes`], and [`RawBoxError`], the box framing of ISO/IEC 14496-12 §4.2
+//! [`RawBox`] and [`boxes`], a box of ISO/IEC 14496-12 §4.2 as the bytes it was framed as
 
-use core::error;
-use core::fmt;
 use core::iter::FusedIterator;
 
-use crate::box_header::{BoxHeader, BoxHeaderError};
+use crate::box_header::BoxHeader;
+use crate::error::{Error, byte_count};
 
 /// Box as it lies in an input: its header, and the payload the header spans
 ///
@@ -62,13 +61,13 @@ impl<'a> RawBox<'a> {
     ///
     /// # Errors
     ///
-    /// * [`Header`](RawBoxError::Header): the header itself does not decode, as
-    ///   [`BoxHeader::decode`] reports it.
-    /// * [`TruncatedBox`](RawBoxError::TruncatedBox): the declared total
+    /// * The failures of [`BoxHeader::decode`], for the header that introduces
+    ///   the box.
+    /// * [`TruncatedBox`](crate::ErrorKind::TruncatedBox): the declared total
     ///   overruns `input`. A caller that reads in chunks can extend `input` to
     ///   `needed` bytes and split again, so long as a slice that long can exist
     ///   on the target.
-    pub fn split_first(input: &[u8]) -> Result<(RawBox<'_>, &[u8]), RawBoxError> {
+    pub fn split_first(input: &[u8]) -> Result<(RawBox<'_>, &[u8]), Error> {
         let (header, after_header) = BoxHeader::decode(input)?;
 
         let Some(total) = header.size().total_bytes() else {
@@ -89,12 +88,7 @@ impl<'a> RawBox<'a> {
             .and_then(|total| input.split_at_checked(total));
 
         let Some((_framed, rest)) = split else {
-            return Err(RawBoxError::TruncatedBox {
-                needed: total,
-                // Why not unwrap: a usize above `u64::MAX` needs a 128-bit
-                // target to exist, and saturating keeps the panic-free path.
-                available: u64::try_from(input.len()).unwrap_or(u64::MAX),
-            });
+            return Err(Error::truncated_box(total, byte_count(input.len())));
         };
 
         let payload = after_header
@@ -134,7 +128,7 @@ pub struct Boxes<'a> {
 }
 
 impl<'a> Iterator for Boxes<'a> {
-    type Item = Result<RawBox<'a>, RawBoxError>;
+    type Item = Result<RawBox<'a>, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.done || self.remaining.is_empty() {
@@ -156,53 +150,13 @@ impl<'a> Iterator for Boxes<'a> {
 
 impl FusedIterator for Boxes<'_> {}
 
-/// Reason a byte sequence does not frame a box
-///
-/// Framing reaches past the header, so it fails in every way decoding the
-/// header does and in one way more: a total the input does not reach. A header
-/// failure is carried as [`BoxHeader::decode`] reported it, word for word.
-#[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum RawBoxError {
-    /// Header that introduces the box does not decode
-    Header(BoxHeaderError),
-    /// Declared total overruns the input
-    TruncatedBox {
-        /// Bytes the box occupies, as the `size` or `largesize` field declares
-        needed: u64,
-        /// Bytes the input offered
-        available: u64,
-    },
-}
-
-impl From<BoxHeaderError> for RawBoxError {
-    fn from(error: BoxHeaderError) -> Self {
-        Self::Header(error)
-    }
-}
-
-impl fmt::Display for RawBoxError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            Self::Header(error) => error.fmt(formatter),
-            Self::TruncatedBox { needed, available } => write!(
-                formatter,
-                "box of {needed} bytes cut short by an input of {available}"
-            ),
-        }
-    }
-}
-
-impl error::Error for RawBoxError {}
-
 #[cfg(test)]
 mod tests {
-    use alloc::string::ToString as _;
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use super::{RawBox, RawBoxError, boxes};
-    use crate::box_header::{BoxHeader, BoxHeaderError};
+    use super::{Error, RawBox, boxes};
+    use crate::box_header::BoxHeader;
     use crate::box_size::{BoxSize, CompactSize};
     use crate::box_type::BoxType;
 
@@ -254,10 +208,7 @@ mod tests {
 
         assert_eq!(
             RawBox::split_first(input),
-            Err(RawBoxError::TruncatedBox {
-                needed: 16,
-                available: 12
-            })
+            Err(Error::truncated_box(16, 12))
         );
     }
 
@@ -270,10 +221,7 @@ mod tests {
 
         assert_eq!(
             RawBox::split_first(&input),
-            Err(RawBoxError::TruncatedBox {
-                needed: u64::MAX,
-                available: 16
-            })
+            Err(Error::truncated_box(u64::MAX, 16))
         );
     }
 
@@ -281,10 +229,7 @@ mod tests {
     fn an_input_ending_inside_the_header_fails_as_the_header_decode_does() {
         assert_eq!(
             RawBox::split_first(&[0x00, 0x00, 0x00]),
-            Err(RawBoxError::Header(BoxHeaderError::TruncatedHeader {
-                needed: 8,
-                available: 3,
-            }))
+            Err(Error::truncated_header(8, 3))
         );
     }
 
@@ -326,10 +271,7 @@ mod tests {
                     header: compact_header(*b"free", 8),
                     payload: b"",
                 }),
-                Err(RawBoxError::TruncatedBox {
-                    needed: 32,
-                    available: 8
-                }),
+                Err(Error::truncated_box(32, 8)),
             ]
         );
         assert_eq!(iterator.next(), None);
@@ -353,32 +295,6 @@ mod tests {
                     payload: b"",
                 }),
             ]
-        );
-    }
-
-    #[test]
-    fn display_of_a_truncated_box_names_both_lengths() {
-        let error = RawBoxError::TruncatedBox {
-            needed: 32,
-            available: 24,
-        };
-
-        assert_eq!(
-            error.to_string(),
-            "box of 32 bytes cut short by an input of 24"
-        );
-    }
-
-    #[test]
-    fn display_of_a_header_failure_reads_as_the_header_error_itself() {
-        let header_error = BoxHeaderError::TruncatedHeader {
-            needed: 16,
-            available: 12,
-        };
-
-        assert_eq!(
-            RawBoxError::Header(header_error).to_string(),
-            header_error.to_string()
         );
     }
 }

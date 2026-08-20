@@ -5,8 +5,8 @@
 //! `#[path = "helpers/vendor.rs"] mod vendor;`.
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FieldReader,
-    FieldWidth, FieldWriter, FullBoxFields, FullBoxFlags, Uuid,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWidth, FieldWriter,
+    FullBoxFields, FullBoxFlags, Uuid,
 };
 
 /// Returns the length as the payload traits count it
@@ -15,11 +15,8 @@ fn byte_count(length: usize) -> u64 {
 }
 
 /// Returns the mismatch for a buffer that is not the room the payload asked for
-fn buffer_length_mismatch(expected: u64, buffer: &[u8]) -> EncodeError {
-    EncodeError::BufferLengthMismatch {
-        expected,
-        actual: byte_count(buffer.len()),
-    }
+fn buffer_length_mismatch(expected: u64, buffer: &[u8]) -> Error {
+    Error::buffer_length_mismatch(expected, byte_count(buffer.len()))
 }
 
 /// Vendor box whose payload is one 32-bit sequence number
@@ -33,7 +30,7 @@ impl BoxDefinition for SequenceNumberBox {
 }
 
 impl BoxDecode for SequenceNumberBox {
-    fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
+    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
         let mut reader = FieldReader::new(payload);
         let sequence_number = reader.read_u32()?;
         reader.finish()?;
@@ -47,7 +44,7 @@ impl BoxEncode for SequenceNumberBox {
         4
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
+    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
         if byte_count(buffer.len()) != self.payload_len() {
             return Err(buffer_length_mismatch(self.payload_len(), buffer));
         }
@@ -69,7 +66,7 @@ impl BoxDefinition for OpaqueDataBox {
 }
 
 impl BoxDecode for OpaqueDataBox {
-    fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
+    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
         Ok(Self {
             data: payload.to_vec(),
         })
@@ -81,7 +78,7 @@ impl BoxEncode for OpaqueDataBox {
         byte_count(self.data.len())
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
+    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
         if buffer.len() != self.data.len() {
             return Err(buffer_length_mismatch(self.payload_len(), buffer));
         }
@@ -142,7 +139,7 @@ impl BoxDefinition for ExpiryBox {
 }
 
 impl BoxDecode for ExpiryBox {
-    fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
+    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
         let mut reader = FieldReader::new(payload);
         let full_box = FullBoxFields::from_bytes(reader.read_bytes::<4>()?);
         let expiry_time = reader.read_unsigned(Self::field_width(full_box.version()))?;
@@ -160,7 +157,7 @@ impl BoxEncode for ExpiryBox {
         Self::payload_len_at_version(self.full_box.version())
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
+    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
         if byte_count(buffer.len()) != self.payload_len() {
             return Err(buffer_length_mismatch(self.payload_len(), buffer));
         }
@@ -187,7 +184,7 @@ impl BoxDefinition for VendorMarkerBox {
 }
 
 impl BoxDecode for VendorMarkerBox {
-    fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
+    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
         FieldReader::new(payload).finish()?;
 
         Ok(Self)
@@ -199,7 +196,7 @@ impl BoxEncode for VendorMarkerBox {
         0
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
+    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
         if !buffer.is_empty() {
             return Err(buffer_length_mismatch(self.payload_len(), buffer));
         }

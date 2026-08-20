@@ -9,13 +9,12 @@
 mod vendor;
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, CompactSize, EncodeError,
-    RawBox,
+    BoxDecode, BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, CompactSize, Error, RawBox,
 };
 use vendor::{ExpiryBox, OpaqueDataBox, SequenceNumberBox, VendorMarkerBox};
 
 /// Writes `value` into a buffer of exactly the payload length it declares
-fn encoded(value: &impl BoxEncode) -> Result<Vec<u8>, EncodeError> {
+fn encoded(value: &impl BoxEncode) -> Result<Vec<u8>, Error> {
     let mut buffer = vec![0; usize::try_from(value.payload_len()).unwrap_or(usize::MAX)];
     value.encode_payload(&mut buffer)?;
 

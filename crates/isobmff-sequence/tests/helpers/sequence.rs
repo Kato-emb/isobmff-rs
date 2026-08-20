@@ -18,7 +18,7 @@ use isobmff_core::{
     NullTerminatedString, QuickTimeDateTime, Uuid,
 };
 
-use isobmff_sequence::{BoxEvent, BoxReader, BoxReaderError, BoxWriter, BoxWriterError};
+use isobmff_sequence::{BoxEvent, BoxReader, BoxWriter, Error};
 
 /// Time every header of the synthetic files declares
 const EPOCH: QuickTimeDateTime = QuickTimeDateTime::from_seconds(0);
@@ -65,10 +65,7 @@ pub fn written(value: &impl BoxWrite) -> Option<Vec<u8>> {
 ///
 /// The failure the reader reports for the file, the events made before it
 /// dropped along with it
-pub fn events_of(
-    file: &[u8],
-    cut_length: usize,
-) -> Result<Vec<(Range<u64>, BoxEvent)>, BoxReaderError> {
+pub fn events_of(file: &[u8], cut_length: usize) -> Result<Vec<(Range<u64>, BoxEvent)>, Error> {
     let mut reader = BoxReader::new();
     let mut events = Vec::new();
 
@@ -124,7 +121,7 @@ pub fn payloads_fused(events: Vec<(Range<u64>, BoxEvent)>) -> Vec<(Range<u64>, B
 ///
 /// The failure the writer reports for the events, the bytes made before it
 /// dropped along with it
-pub fn bytes_of(events: Vec<BoxEvent>, buffer_length: usize) -> Result<Vec<u8>, BoxWriterError> {
+pub fn bytes_of(events: Vec<BoxEvent>, buffer_length: usize) -> Result<Vec<u8>, Error> {
     let mut writer = BoxWriter::new();
     let mut buffer = vec![0; buffer_length];
     let mut file = Vec::new();

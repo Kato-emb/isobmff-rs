@@ -1,8 +1,8 @@
 //! [`TrackFragmentHeaderBox`] (`tfhd`), ISO/IEC 14496-12 §8.8.7
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, DecodeError, EncodeError, FieldReader,
-    FieldWriter, FullBoxFields, FullBoxFlags,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FullBoxFields,
+    FullBoxFlags,
 };
 
 /// Length of the fields every fragment header carries
@@ -208,16 +208,17 @@ impl BoxDefinition for TrackFragmentHeaderBox {
 impl BoxDecode for TrackFragmentHeaderBox {
     /// # Errors
     ///
-    /// * [`UnsupportedVersion`](DecodeError::UnsupportedVersion): the box
+    /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box
     ///   declares a version other than 0.
-    /// * [`Field`](DecodeError::Field): the payload ends inside a field the
-    ///   flags state, or holds bytes past the fields they state.
-    fn decode_payload(payload: &[u8]) -> Result<Self, DecodeError> {
+    /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload) or
+    ///   [`TrailingPayload`](isobmff_core::ErrorKind::TrailingPayload): the payload ends inside a
+    ///   field the flags state, or holds bytes past the fields they state.
+    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
         let mut reader = FieldReader::new(payload);
         let full_box = FullBoxFields::from_bytes(reader.read_bytes::<4>()?);
         let version = full_box.version();
         if version != 0 {
-            return Err(DecodeError::UnsupportedVersion(version));
+            return Err(Error::unsupported_version(version));
         }
 
         let flags = full_box.flags();
@@ -283,11 +284,11 @@ impl BoxEncode for TrackFragmentHeaderBox {
         length
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), EncodeError> {
+    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
         let expected = self.payload_len();
         let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
         if actual != expected {
-            return Err(EncodeError::BufferLengthMismatch { expected, actual });
+            return Err(Error::buffer_length_mismatch(expected, actual));
         }
 
         let mut writer = FieldWriter::new(buffer);
@@ -317,7 +318,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, DecodeError, FieldReadError, FullBoxFlags};
+    use isobmff_core::{BoxDecode, BoxEncode, Error, FullBoxFlags};
 
     use super::TrackFragmentHeaderBox;
 
@@ -431,10 +432,10 @@ mod tests {
         let mut payload = encoded_payload(&every_field());
         *payload.first_mut().unwrap() = 1;
 
-        assert!(matches!(
+        assert_eq!(
             TrackFragmentHeaderBox::decode_payload(&payload),
-            Err(DecodeError::UnsupportedVersion(1))
-        ));
+            Err(Error::unsupported_version(1))
+        );
     }
 
     #[test]
@@ -442,24 +443,19 @@ mod tests {
         let mut payload = encoded_payload(&every_field());
         payload.extend_from_slice(&[0; 4]);
 
-        assert!(matches!(
+        assert_eq!(
             TrackFragmentHeaderBox::decode_payload(&payload),
-            Err(DecodeError::Field(FieldReadError::TrailingBytes {
-                remaining: 4
-            }))
-        ));
+            Err(Error::trailing_payload(32, 36))
+        );
     }
 
     #[test]
     fn a_payload_shorter_than_the_fields_its_flags_state_is_rejected() {
         let payload = encoded_payload(&every_field());
 
-        assert!(matches!(
+        assert_eq!(
             TrackFragmentHeaderBox::decode_payload(payload.get(..27).unwrap()),
-            Err(DecodeError::Field(FieldReadError::UnexpectedEof {
-                needed: 28,
-                available: 27
-            }))
-        ));
+            Err(Error::truncated_payload(28, 27))
+        );
     }
 }
