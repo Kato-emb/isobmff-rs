@@ -161,11 +161,9 @@ impl BoxDecode for TrackHeaderBox {
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box
     ///   declares a version other than 0 or 1.
-    /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload) or
-    ///   [`TrailingPayload`](isobmff_core::ErrorKind::TrailingPayload): the payload ends inside a
-    ///   field, or holds bytes past the fields of the box.
-    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
-        let mut reader = FieldReader::new(payload);
+    /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the payload
+    ///   ends inside a field of the box.
+    fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let full_box = FullBoxFields::from_bytes(reader.read_bytes::<4>()?);
         let version = full_box.version();
         if version > 1 {
@@ -186,7 +184,6 @@ impl BoxDecode for TrackHeaderBox {
         let matrix = Matrix::from_bytes(reader.read_bytes::<36>()?);
         let width = U16F16::from_raw(reader.read_u32()?);
         let height = U16F16::from_raw(reader.read_u32()?);
-        reader.finish()?;
 
         Ok(Self {
             flags: full_box.flags(),
@@ -213,16 +210,9 @@ impl BoxEncode for TrackHeaderBox {
         }
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
-        let expected = self.payload_len();
-        let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
-        if actual != expected {
-            return Err(Error::buffer_length_mismatch(expected, actual));
-        }
-
+    fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         let version = self.version();
         let field_width = Self::field_width(version);
-        let mut writer = FieldWriter::new(buffer);
 
         writer.write_bytes(&FullBoxFields::new(version, self.flags).to_bytes())?;
         writer.write_unsigned(field_width, self.creation_time.seconds())?;

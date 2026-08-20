@@ -8,6 +8,7 @@ use core::fmt;
 use crate::codec::box_definition::BoxDefinition;
 use crate::codec::box_encode::BoxEncode;
 use crate::codec::box_write::{encode_into, encoded_len_of};
+use crate::codec::field::FieldWriter;
 use crate::error::{Error, byte_count};
 use crate::framing::box_type::BoxType;
 
@@ -58,13 +59,15 @@ impl BoxEncode for OpaquePayload {
         u64::try_from(self.0.len()).unwrap_or(u64::MAX)
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
-        let actual = byte_count(buffer.len());
-        if actual != self.payload_len() {
-            return Err(Error::buffer_length_mismatch(self.payload_len(), actual));
-        }
+    fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+        let field = writer.take_remainder();
+        // Why not copy_from_slice over the whole field: it panics where the
+        // lengths differ, and a caller reaches this method with a cursor of its
+        // own as readily as with the one `encode_payload` sizes.
+        let too_short = Error::truncated_buffer(self.payload_len(), byte_count(field.len()));
+        let (payload, _) = field.split_at_mut_checked(self.0.len()).ok_or(too_short)?;
 
-        buffer.copy_from_slice(&self.0);
+        payload.copy_from_slice(&self.0);
 
         Ok(())
     }
@@ -88,7 +91,7 @@ impl BoxEncode for OpaquePayload {
 ///
 /// ```
 /// use isobmff_core::{AnyBox, BoxDefinition, BoxType};
-/// # use isobmff_core::{BoxEncode, Error};
+/// # use isobmff_core::{BoxEncode, Error, FieldWriter};
 /// #
 /// # #[derive(Clone, PartialEq, Debug)]
 /// # struct SequenceNumberBox {
@@ -104,15 +107,8 @@ impl BoxEncode for OpaquePayload {
 /// #         4
 /// #     }
 /// #
-/// #     fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
-/// #         let mismatch = Error::buffer_length_mismatch(
-/// #             4,
-/// #             u64::try_from(buffer.len()).unwrap_or(u64::MAX),
-/// #         );
-/// #         let field = buffer.first_chunk_mut::<4>().ok_or(mismatch)?;
-/// #         *field = self.sequence_number.to_be_bytes();
-/// #
-/// #         Ok(())
+/// #     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+/// #         writer.write_u32(self.sequence_number)
 /// #     }
 /// # }
 /// #
@@ -258,8 +254,8 @@ impl BoxEncode for AnyBox {
         self.payload.payload_len()
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
-        self.payload.encode_payload(buffer)
+    fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+        self.payload.encode_fields(writer)
     }
 }
 
@@ -283,7 +279,8 @@ mod tests {
     use crate::codec::box_definition::BoxDefinition;
     use crate::codec::box_encode::BoxEncode;
     use crate::codec::box_write::BoxWrite as _;
-    use crate::error::{Error, byte_count};
+    use crate::codec::field::FieldWriter;
+    use crate::error::Error;
     use crate::framing::box_type::BoxType;
 
     /// Box whose payload is one byte, standing in for a type the reader has
@@ -299,16 +296,20 @@ mod tests {
             1
         }
 
-        fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
-            let mismatch = Error::buffer_length_mismatch(1, byte_count(buffer.len()));
-            if buffer.len() != 1 {
-                return Err(mismatch);
-            }
-            let field = buffer.first_chunk_mut::<1>().ok_or(mismatch)?;
-            *field = [self.0];
-
-            Ok(())
+        fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+            writer.write_bytes(&[self.0])
         }
+    }
+
+    #[test]
+    fn a_raw_payload_given_a_field_of_another_length_is_refused() {
+        let raw = AnyBox::from_raw_bytes(BoxType::compact(*b"skip"), vec![1, 2, 3, 4]);
+        let mut buffer = [0; 2];
+
+        assert_eq!(
+            raw.encode_fields(&mut FieldWriter::new(&mut buffer)),
+            Err(Error::truncated_buffer(4, 2))
+        );
     }
 
     #[test]

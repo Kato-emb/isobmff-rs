@@ -93,8 +93,7 @@ impl BoxDecode for FileTypeBox {
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
     ///   payload ends inside a field, which includes a `compatible_brands` list
     ///   whose length is not a multiple of four.
-    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
-        let mut reader = FieldReader::new(payload);
+    fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let major_brand = FourCC::new(*reader.read_bytes::<4>()?);
         let minor_version = reader.read_u32()?;
 
@@ -115,14 +114,7 @@ impl BoxEncode for FileTypeBox {
             .saturating_add(FIXED_FIELDS_LEN)
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
-        let expected = self.payload_len();
-        let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
-        if actual != expected {
-            return Err(Error::buffer_length_mismatch(expected, actual));
-        }
-
-        let mut writer = FieldWriter::new(buffer);
+    fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         writer.write_bytes(self.major_brand.as_bytes())?;
         writer.write_u32(self.minor_version)?;
         for brand in &self.compatible_brands {
@@ -198,16 +190,6 @@ mod tests {
         assert_eq!(
             FileTypeBox::decode_payload(b"isom\0\0\0\0iso"),
             Err(Error::truncated_payload(12, 11))
-        );
-    }
-
-    #[test]
-    fn a_buffer_with_room_to_spare_is_refused_as_a_short_one_is() {
-        let file_type = FileTypeBox::new(FourCC::new(*b"isom"), 0, Vec::new());
-
-        assert_eq!(
-            file_type.encode_payload(&mut [0; 32]),
-            Err(Error::buffer_length_mismatch(8, 32))
         );
     }
 
