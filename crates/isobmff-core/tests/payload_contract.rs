@@ -9,8 +9,27 @@
 #[path = "helpers/vendor.rs"]
 mod vendor;
 
-use isobmff_core::{BoxDecode, BoxEncode, Error};
+use isobmff_core::{BoxDecode, BoxEncode, Error, FieldWriter};
 use vendor::{ExpiryBox, OpaqueDataBox, SequenceNumberBox, VendorMarkerBox};
+
+/// Vendor box whose declared length and whose fields disagree on purpose
+///
+/// A box states its payload length apart from the fields it writes, so the two
+/// can differ; this one differs by the length it is built with, which is what
+/// the payload traits hold a box to.
+struct MisdeclaredBox {
+    declared_len: u64,
+}
+
+impl BoxEncode for MisdeclaredBox {
+    fn payload_len(&self) -> u64 {
+        self.declared_len
+    }
+
+    fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+        writer.write_u32(7)
+    }
+}
 
 #[test]
 fn a_payload_ending_inside_a_field_is_rejected_as_truncated() {
@@ -74,5 +93,25 @@ fn a_buffer_longer_than_the_declared_payload_is_rejected_as_well() {
     assert_eq!(
         value.encode_payload(&mut buffer),
         Err(Error::buffer_length_mismatch(11, 32))
+    );
+}
+
+#[test]
+fn a_box_declaring_more_than_its_fields_write_leaves_the_buffer_unfilled() {
+    let value = MisdeclaredBox { declared_len: 8 };
+
+    assert_eq!(
+        value.encode_payload(&mut [0; 8]),
+        Err(Error::trailing_buffer(4, 8))
+    );
+}
+
+#[test]
+fn a_box_declaring_less_than_its_fields_write_runs_out_of_buffer() {
+    let value = MisdeclaredBox { declared_len: 2 };
+
+    assert_eq!(
+        value.encode_payload(&mut [0; 2]),
+        Err(Error::truncated_buffer(4, 2))
     );
 }

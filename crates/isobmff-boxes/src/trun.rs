@@ -3,8 +3,8 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FullBoxFields,
-    FullBoxFlags,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWidth, FieldWriter,
+    FullBoxFields, FullBoxFlags,
 };
 
 /// Length of the fields that precede the optional ones
@@ -117,11 +117,6 @@ impl TrackRunSample {
     pub const fn sample_composition_time_offset(&self) -> Option<i64> {
         self.sample_composition_time_offset
     }
-}
-
-/// Returns a length of bytes as the counts of this module are held
-fn byte_count(length: usize) -> u64 {
-    u64::try_from(length).unwrap_or(u64::MAX)
 }
 
 /// Returns the flags stating which of the per-sample fields one row carries
@@ -283,11 +278,10 @@ impl BoxDecode for TrackRunBox {
     ///   flags of its first sample and of every sample at once.
     /// * [`UnsupportedEntryCount`](isobmff_core::ErrorKind::UnsupportedEntryCount): the rows
     ///   are empty and the `sample_count` is past the rows this box reads.
-    /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload) or
-    ///   [`TrailingPayload`](isobmff_core::ErrorKind::TrailingPayload): the payload ends inside a
-    ///   field the flags state, or holds bytes past the rows the `sample_count` declares.
-    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
-        let mut reader = FieldReader::new(payload);
+    /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the payload
+    ///   ends inside a field the flags state, or holds fewer rows than the
+    ///   `sample_count` declares.
+    fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let full_box = FullBoxFields::from_bytes(reader.read_bytes::<4>()?);
         let version = full_box.version();
         if version > 1 {
@@ -323,20 +317,11 @@ impl BoxDecode for TrackRunBox {
 
         let row_len =
             u64::from((flags & PER_SAMPLE_FLAGS).count_ones()).saturating_mul(OPTIONAL_FIELD_LEN);
-        let rows_len = row_len.saturating_mul(u64::from(sample_count));
-        let remaining = byte_count(reader.remainder().len());
         // Why not reading the rows and letting the reader report the shortfall:
         // the count comes from the input, so a row length of four bytes lets a
         // twelve-byte payload declare four billion rows, and the reading would
         // hold a gigabyte of them before the payload ran out.
-        if rows_len > remaining {
-            let available = byte_count(payload.len());
-
-            return Err(Error::truncated_payload(
-                available.saturating_sub(remaining).saturating_add(rows_len),
-                available,
-            ));
-        }
+        reader.require(row_len.saturating_mul(u64::from(sample_count)))?;
 
         let declared = u64::from(sample_count);
         if row_len == 0 && declared > MAXIMUM_EMPTY_ROWS {
@@ -380,7 +365,6 @@ impl BoxDecode for TrackRunBox {
                 sample_composition_time_offset,
             });
         }
-        reader.finish()?;
 
         Ok(Self {
             data_offset,
@@ -403,14 +387,7 @@ impl BoxEncode for TrackRunBox {
         length.saturating_add(rows)
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
-        let expected = self.payload_len();
-        let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
-        let mismatch = Error::buffer_length_mismatch(expected, actual);
-        if actual != expected {
-            return Err(mismatch);
-        }
-
+    fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         let bits = per_sample_field_flags(&self.samples)
             | self.data_offset.map_or(0, |_| DATA_OFFSET_PRESENT)
             | self
@@ -428,16 +405,20 @@ impl BoxEncode for TrackRunBox {
         let version = if signed { 1 } else { 0 };
 
         // Why not unwrap: the bits are the flags this box defines, which lie
-        // inside the field by construction, and the payload traits allow a
-        // failure that can no longer happen to be reported as the mismatch.
-        let flags = FullBoxFlags::new(bits).ok_or(mismatch)?;
-        let mut writer = FieldWriter::new(buffer);
+        // inside the field by construction, so the failure named here is one the
+        // call cannot reach.
+        let flags = FullBoxFlags::new(bits)
+            .ok_or_else(|| Error::out_of_range(u64::from(bits), FieldWidth::Compact))?;
 
         writer.write_bytes(&FullBoxFields::new(version, flags).to_bytes())?;
+        let sample_count = u64::try_from(self.samples.len()).unwrap_or(u64::MAX);
         // Why not saturate silently: a row count past `u32` cannot be written at
         // all, and the box has already declared a length built from it, so this
         // stands for a `Vec` no target can hold.
-        writer.write_u32(u32::try_from(self.samples.len()).map_err(|_| mismatch)?)?;
+        writer.write_u32(
+            u32::try_from(sample_count)
+                .map_err(|_| Error::out_of_range(sample_count, FieldWidth::Compact))?,
+        )?;
         if let Some(data_offset) = self.data_offset {
             writer.write_i32(data_offset)?;
         }
@@ -457,10 +438,16 @@ impl BoxEncode for TrackRunBox {
                 writer.write_u32(field)?;
             }
             if let Some(offset) = sample.sample_composition_time_offset {
+                // Why not unwrap: `TrackRunSample::new` bounds an offset to
+                // what the two versions carry between them and `TrackRunBox::new`
+                // refuses a run mixing offsets no one version holds, so the
+                // version settled above carries every offset the rows have.
+                let out_of_range =
+                    || Error::out_of_range(offset.unsigned_abs(), FieldWidth::Compact);
                 if version == 0 {
-                    writer.write_u32(u32::try_from(offset).map_err(|_| mismatch)?)?;
+                    writer.write_u32(u32::try_from(offset).map_err(|_| out_of_range())?)?;
                 } else {
-                    writer.write_i32(i32::try_from(offset).map_err(|_| mismatch)?)?;
+                    writer.write_i32(i32::try_from(offset).map_err(|_| out_of_range())?)?;
                 }
             }
         }

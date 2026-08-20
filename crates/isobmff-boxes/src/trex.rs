@@ -83,11 +83,9 @@ impl BoxDecode for TrackExtendsBox {
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box
     ///   declares a version other than 0.
-    /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload) or
-    ///   [`TrailingPayload`](isobmff_core::ErrorKind::TrailingPayload): the payload ends inside a
-    ///   field, or holds bytes past the fields of the box.
-    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
-        let mut reader = FieldReader::new(payload);
+    /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the payload
+    ///   ends inside a field of the box.
+    fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let version = FullBoxFields::from_bytes(reader.read_bytes::<4>()?).version();
         if version != 0 {
             return Err(Error::unsupported_version(version));
@@ -98,7 +96,6 @@ impl BoxDecode for TrackExtendsBox {
         let default_sample_duration = reader.read_u32()?;
         let default_sample_size = reader.read_u32()?;
         let default_sample_flags = reader.read_u32()?;
-        reader.finish()?;
 
         Ok(Self {
             track_id,
@@ -115,13 +112,7 @@ impl BoxEncode for TrackExtendsBox {
         PAYLOAD_LEN
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
-        let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
-        if actual != PAYLOAD_LEN {
-            return Err(Error::buffer_length_mismatch(PAYLOAD_LEN, actual));
-        }
-
-        let mut writer = FieldWriter::new(buffer);
+    fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         writer.write_bytes(&FullBoxFields::new(0, FullBoxFlags::ZERO).to_bytes())?;
         writer.write_u32(self.track_id)?;
         writer.write_u32(self.default_sample_description_index)?;

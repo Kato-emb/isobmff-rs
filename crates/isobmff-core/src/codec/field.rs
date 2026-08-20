@@ -42,10 +42,11 @@ pub enum FieldWidth {
 /// end of the payload names both what the fields required up to it and what
 /// the payload offered.
 ///
-/// A box whose payload is fixed calls [`finish`](Self::finish) once its fields
-/// are read, which refuses a payload with bytes to spare. One whose last field
-/// runs to the end of the payload takes what is left with
-/// [`remainder`](Self::remainder) instead.
+/// A box whose payload is fixed has every byte of it claimed by a field, which
+/// is what [`decode_payload`](crate::BoxDecode::decode_payload) holds it to
+/// once the fields are read. One whose last field runs to the end of the
+/// payload claims what is left with
+/// [`take_remainder`](Self::take_remainder).
 ///
 /// # Examples
 ///
@@ -165,13 +166,48 @@ impl<'payload> FieldReader<'payload> {
         }
     }
 
+    /// Requires the payload to hold `bytes` more than the fields have taken
+    ///
+    /// A box asks this where the payload states how much is coming — a count of
+    /// rows and the length of one. Nothing is taken and nothing is read: the
+    /// cursor stands where it stood.
+    ///
+    /// # Errors
+    ///
+    /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload holds
+    ///   fewer than `bytes` past the fields already read.
+    pub fn require(&self, bytes: u64) -> Result<(), Error> {
+        let needed = self.consumed.saturating_add(bytes);
+        let available = self.consumed.saturating_add(byte_count(self.rest.len()));
+        if needed > available {
+            return Err(Error::truncated_payload(needed, available));
+        }
+
+        Ok(())
+    }
+
     /// Returns the bytes of the payload no field has taken
     ///
-    /// A box reads its last field out of these when the field runs to the end
-    /// of the payload, which is how a variable-length field is bounded.
+    /// The cursor stands where it stood, so this is what a box reads a run of
+    /// fields against — whether one more of them is there at all. A field that
+    /// runs to the end of the payload claims those bytes with
+    /// [`take_remainder`](Self::take_remainder) instead.
     #[must_use]
     pub fn remainder(&self) -> &'payload [u8] {
         self.rest
+    }
+
+    /// Takes the rest of the payload as the field that runs to its end
+    ///
+    /// This is how a variable-length field is bounded: the field is whatever no
+    /// field before it took. The cursor reaches the end of the payload, so
+    /// nothing is left for [`finish`](Self::finish) to refuse.
+    #[must_use]
+    pub fn take_remainder(&mut self) -> &'payload [u8] {
+        let rest = mem::take(&mut self.rest);
+        self.consumed = self.consumed.saturating_add(byte_count(rest.len()));
+
+        rest
     }
 
     /// Reports the payload as read whole, which every field of a fixed box has claimed
@@ -200,9 +236,10 @@ impl<'payload> FieldReader<'payload> {
 ///
 /// The buffer is the one [`payload_len`](crate::BoxEncode::payload_len)
 /// declared, so a box that fills it exactly has written the payload it
-/// promised. [`finish`](Self::finish) is where the two are held against each
-/// other: a buffer with bytes to spare means the declared length is longer
-/// than the fields, as running out of buffer mid-field means it is shorter.
+/// promised. [`encode_payload`](crate::BoxEncode::encode_payload) is where the
+/// two are held against each other: a buffer with bytes to spare means the
+/// declared length is longer than the fields, as running out of buffer
+/// mid-field means it is shorter.
 ///
 /// # Examples
 ///
@@ -334,22 +371,26 @@ impl<'buffer> FieldWriter<'buffer> {
         }
     }
 
-    /// Returns the buffer no field has written into
+    /// Takes the rest of the buffer for the field that runs to its end
     ///
-    /// A box writes its last field into these bytes when the field runs to the
-    /// end of the payload, which the cursor no longer tracks once they are
-    /// handed over.
+    /// The mirror of [`FieldReader::take_remainder`]: the bytes are the field,
+    /// and the cursor reaches the end of the buffer, so nothing is left for
+    /// [`finish`](Self::finish) to refuse. What the field does not write into
+    /// keeps whatever the buffer held.
     #[must_use]
-    pub fn into_remainder(self) -> &'buffer mut [u8] {
-        self.rest
+    pub fn take_remainder(&mut self) -> &'buffer mut [u8] {
+        let rest = mem::take(&mut self.rest);
+        self.written = self.written.saturating_add(byte_count(rest.len()));
+
+        rest
     }
 
-    /// Reports the buffer as written whole, which every field of a fixed box has filled
+    /// Reports the buffer as written whole, which every field of a fixed box has claimed
     ///
     /// # Errors
     ///
     /// * [`TrailingBuffer`](crate::ErrorKind::TrailingBuffer): the buffer holds
-    ///   bytes past the fields the box wrote.
+    ///   bytes past the fields the box claimed.
     pub fn finish(self) -> Result<(), Error> {
         if self.rest.is_empty() {
             return Ok(());
@@ -409,6 +450,31 @@ mod tests {
     }
 
     #[test]
+    fn a_field_running_to_the_end_of_the_payload_claims_what_is_left_of_it() {
+        let mut reader = FieldReader::new(b"\0\x02rest of the payload");
+
+        assert_eq!(reader.read_u16(), Ok(2));
+        assert_eq!(reader.take_remainder(), b"rest of the payload");
+        assert_eq!(reader.finish(), Ok(()));
+    }
+
+    #[test]
+    fn a_payload_that_cannot_cover_what_it_declares_is_refused_before_it_is_read() {
+        let mut reader = FieldReader::new(b"\0\x03\x01\x02");
+
+        assert_eq!(reader.read_u16(), Ok(3));
+        assert_eq!(reader.require(12), Err(Error::truncated_payload(14, 4)));
+    }
+
+    #[test]
+    fn a_payload_holding_what_it_declares_is_let_on_to_the_fields() {
+        let mut reader = FieldReader::new(b"\0\x03\x01\x02");
+
+        assert_eq!(reader.read_u16(), Ok(3));
+        assert_eq!(reader.require(2), Ok(()));
+    }
+
+    #[test]
     fn fields_are_written_onto_the_front_in_the_order_they_are_given() {
         let mut buffer = [0; 10];
         let mut writer = FieldWriter::new(&mut buffer);
@@ -464,13 +530,14 @@ mod tests {
     }
 
     #[test]
-    fn the_bytes_no_field_wrote_into_are_what_a_variable_field_writes_to() {
+    fn a_field_running_to_the_end_of_the_buffer_claims_what_is_left_of_it() {
         let mut buffer = [0; 6];
         let mut writer = FieldWriter::new(&mut buffer);
 
         assert_eq!(writer.write_u16(2), Ok(()));
-        writer.into_remainder().copy_from_slice(b"tail");
+        writer.take_remainder().copy_from_slice(b"tail");
 
+        assert_eq!(writer.finish(), Ok(()));
         assert_eq!(&buffer, b"\0\x02tail");
     }
 }

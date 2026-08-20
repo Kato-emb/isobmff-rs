@@ -121,11 +121,9 @@ impl BoxDecode for MediaHeaderBox {
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box
     ///   declares a version other than 0 or 1.
-    /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload) or
-    ///   [`TrailingPayload`](isobmff_core::ErrorKind::TrailingPayload): the payload ends inside a
-    ///   field, or holds bytes past the fields of the box.
-    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
-        let mut reader = FieldReader::new(payload);
+    /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the payload
+    ///   ends inside a field of the box.
+    fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let version = FullBoxFields::from_bytes(reader.read_bytes::<4>()?).version();
         if version > 1 {
             return Err(Error::unsupported_version(version));
@@ -138,7 +136,6 @@ impl BoxDecode for MediaHeaderBox {
         let duration = reader.read_unsigned(field_width)?;
         let language = LanguageCode::from_raw(reader.read_u16()?);
         let pre_defined = reader.read_u16()?;
-        reader.finish()?;
 
         Ok(Self {
             creation_time,
@@ -160,16 +157,9 @@ impl BoxEncode for MediaHeaderBox {
         }
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
-        let expected = self.payload_len();
-        let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
-        if actual != expected {
-            return Err(Error::buffer_length_mismatch(expected, actual));
-        }
-
+    fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         let version = self.version();
         let field_width = Self::field_width(version);
-        let mut writer = FieldWriter::new(buffer);
 
         writer.write_bytes(&FullBoxFields::new(version, FullBoxFlags::ZERO).to_bytes())?;
         writer.write_unsigned(field_width, self.creation_time.seconds())?;

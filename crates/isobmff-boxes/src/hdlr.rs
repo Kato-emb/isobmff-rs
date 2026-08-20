@@ -75,8 +75,7 @@ impl BoxDecode for HandlerBox {
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
     ///   payload ends before the fields that precede the `name`.
     /// * [`InvalidUtf8`](isobmff_core::ErrorKind::InvalidUtf8): the `name` is not UTF-8.
-    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
-        let mut reader = FieldReader::new(payload);
+    fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let version = FullBoxFields::from_bytes(reader.read_bytes::<4>()?).version();
         if version != 0 {
             return Err(Error::unsupported_version(version));
@@ -89,7 +88,7 @@ impl BoxDecode for HandlerBox {
         Ok(Self {
             pre_defined,
             handler_type,
-            name: NullTerminatedString::from_slice(reader.remainder())?,
+            name: NullTerminatedString::from_slice(reader.take_remainder())?,
         })
     }
 }
@@ -99,19 +98,12 @@ impl BoxEncode for HandlerBox {
         FIXED_FIELDS_LEN.saturating_add(self.name.encoded_len())
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
-        let expected = self.payload_len();
-        let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
-        if actual != expected {
-            return Err(Error::buffer_length_mismatch(expected, actual));
-        }
-
-        let mut writer = FieldWriter::new(buffer);
+    fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         writer.write_bytes(&FullBoxFields::new(0, FullBoxFlags::ZERO).to_bytes())?;
         writer.write_u32(self.pre_defined)?;
         writer.write_bytes(self.handler_type.as_bytes())?;
         writer.write_bytes(&[0; 12])?;
-        self.name.encode(writer.into_remainder())?;
+        self.name.encode(writer.take_remainder())?;
 
         Ok(())
     }

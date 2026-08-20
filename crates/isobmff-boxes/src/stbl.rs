@@ -2,7 +2,7 @@
 
 use isobmff_core::{
     AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, Error,
-    OtherBoxes, boxes,
+    FieldReader, FieldWriter, OtherBoxes, boxes,
 };
 
 use crate::stsd::SampleDescriptionBox;
@@ -58,11 +58,11 @@ impl BoxDecode for SampleTableBox {
     /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one `stsd`.
     /// * Whatever the child reports, on the [`containers`](Error::containers) path: the `stsd` does
     ///   not decode.
-    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
+    fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let mut stsd_boxes = ChildBoxes::new();
         let mut other_boxes = OtherBoxes::new();
 
-        for child in boxes(payload) {
+        for child in boxes(reader.take_remainder()) {
             let child = child?;
             if child.header().box_type() == SampleDescriptionBox::BOX_TYPE {
                 stsd_boxes.push(child);
@@ -91,14 +91,8 @@ impl BoxEncode for SampleTableBox {
         self.stsd.encoded_len().saturating_add(others)
     }
 
-    fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
-        let expected = self.payload_len();
-        let actual = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
-        if actual != expected {
-            return Err(Error::buffer_length_mismatch(expected, actual));
-        }
-
-        let mut rest = self.stsd.encode(buffer)?;
+    fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+        let mut rest = self.stsd.encode(writer.take_remainder())?;
         for other in self.other_boxes.as_slice() {
             rest = other.encode(rest)?;
         }

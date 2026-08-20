@@ -44,12 +44,10 @@ use crate::framing::raw_box::RawBox;
 /// }
 ///
 /// impl BoxDecode for SequenceNumberBox {
-///     fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
-///         let mut reader = FieldReader::new(payload);
-///         let sequence_number = reader.read_u32()?;
-///         reader.finish()?;
-///
-///         Ok(Self { sequence_number })
+///     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
+///         Ok(Self {
+///             sequence_number: reader.read_u32()?,
+///         })
 ///     }
 /// }
 ///
@@ -293,12 +291,8 @@ mod tests {
     }
 
     impl BoxDecode for SequenceNumberBox {
-        fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
-            let mut reader = FieldReader::new(payload);
-            let sequence_number = reader.read_u32()?;
-            reader.finish()?;
-
-            Ok(Self(sequence_number))
+        fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
+            Ok(Self(reader.read_u32()?))
         }
     }
 
