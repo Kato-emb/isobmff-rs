@@ -96,10 +96,7 @@ impl BoxEncode for SampleDescriptionBox {
         // Why not saturate silently: an entry count past `u32` cannot be written
         // at all, and the box has already declared a length built from it, so
         // this stands for a `Vec` no target can hold.
-        writer.write_u32(
-            u32::try_from(entry_count)
-                .map_err(|_| Error::out_of_range(entry_count, FieldWidth::Compact))?,
-        )?;
+        writer.write_unsigned(FieldWidth::Compact, entry_count)?;
 
         let mut rest = writer.take_remainder();
         for entry in &self.entries {

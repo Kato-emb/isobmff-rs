@@ -177,13 +177,15 @@ impl<'payload> FieldReader<'payload> {
     /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload holds
     ///   fewer than `bytes` past the fields already read.
     pub fn require(&self, bytes: u64) -> Result<(), Error> {
-        let needed = self.consumed.saturating_add(bytes);
-        let available = self.consumed.saturating_add(byte_count(self.rest.len()));
-        if needed > available {
-            return Err(Error::truncated_payload(needed, available));
+        let remaining = byte_count(self.rest.len());
+        if bytes <= remaining {
+            return Ok(());
         }
 
-        Ok(())
+        Err(Error::truncated_payload(
+            self.consumed.saturating_add(bytes),
+            self.consumed.saturating_add(remaining),
+        ))
     }
 
     /// Returns the bytes of the payload no field has taken

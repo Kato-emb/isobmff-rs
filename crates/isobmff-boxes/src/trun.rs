@@ -280,7 +280,9 @@ impl BoxDecode for TrackRunBox {
     ///   are empty and the `sample_count` is past the rows this box reads.
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the payload
     ///   ends inside a field the flags state, or holds fewer rows than the
-    ///   `sample_count` declares.
+    ///   `sample_count` declares. Bytes past those rows are the
+    ///   [`TrailingPayload`](isobmff_core::ErrorKind::TrailingPayload) the payload
+    ///   contract refuses.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let full_box = FullBoxFields::from_bytes(reader.read_bytes::<4>()?);
         let version = full_box.version();
@@ -415,10 +417,7 @@ impl BoxEncode for TrackRunBox {
         // Why not saturate silently: a row count past `u32` cannot be written at
         // all, and the box has already declared a length built from it, so this
         // stands for a `Vec` no target can hold.
-        writer.write_u32(
-            u32::try_from(sample_count)
-                .map_err(|_| Error::out_of_range(sample_count, FieldWidth::Compact))?,
-        )?;
+        writer.write_unsigned(FieldWidth::Compact, sample_count)?;
         if let Some(data_offset) = self.data_offset {
             writer.write_i32(data_offset)?;
         }
@@ -442,12 +441,11 @@ impl BoxEncode for TrackRunBox {
                 // what the two versions carry between them and `TrackRunBox::new`
                 // refuses a run mixing offsets no one version holds, so the
                 // version settled above carries every offset the rows have.
-                let out_of_range =
-                    || Error::out_of_range(offset.unsigned_abs(), FieldWidth::Compact);
+                let out_of_range = Error::out_of_range(offset.unsigned_abs(), FieldWidth::Compact);
                 if version == 0 {
-                    writer.write_u32(u32::try_from(offset).map_err(|_| out_of_range())?)?;
+                    writer.write_u32(u32::try_from(offset).map_err(|_| out_of_range)?)?;
                 } else {
-                    writer.write_i32(i32::try_from(offset).map_err(|_| out_of_range())?)?;
+                    writer.write_i32(i32::try_from(offset).map_err(|_| out_of_range)?)?;
                 }
             }
         }

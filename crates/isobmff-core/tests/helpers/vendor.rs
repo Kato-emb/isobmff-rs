@@ -66,7 +66,13 @@ impl BoxEncode for OpaqueDataBox {
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        writer.take_remainder().copy_from_slice(&self.data);
+        let field = writer.take_remainder();
+        let too_short = Error::truncated_buffer(self.payload_len(), byte_count(field.len()));
+        let (data, _) = field
+            .split_at_mut_checked(self.data.len())
+            .ok_or(too_short)?;
+
+        data.copy_from_slice(&self.data);
 
         Ok(())
     }

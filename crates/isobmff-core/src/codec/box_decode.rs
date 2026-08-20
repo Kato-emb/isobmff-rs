@@ -48,9 +48,8 @@ pub trait BoxDecode: Sized {
     /// The Syntax subclause of a box lays out the fields its payload is made
     /// of; an implementation is that layout in Rust, reading each field off
     /// `reader` in the order the box declares it. A field that runs to the end
-    /// of the payload claims what is left with
-    /// [`take_remainder`](FieldReader::take_remainder), which is the only way a
-    /// field is bounded by the payload rather than by its own width.
+    /// of the payload takes what is left with
+    /// [`take_remainder`](FieldReader::take_remainder).
     ///
     /// What the payload is, and that every byte of it belongs to a field, is
     /// settled by [`decode_payload`](Self::decode_payload) around this call.

@@ -9,7 +9,7 @@ use crate::codec::box_definition::BoxDefinition;
 use crate::codec::box_encode::BoxEncode;
 use crate::codec::box_write::{encode_into, encoded_len_of};
 use crate::codec::field::FieldWriter;
-use crate::error::Error;
+use crate::error::{Error, byte_count};
 use crate::framing::box_type::BoxType;
 
 /// Box payload once its type is erased
@@ -60,7 +60,14 @@ impl BoxEncode for OpaquePayload {
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        writer.take_remainder().copy_from_slice(&self.0);
+        let field = writer.take_remainder();
+        // Why not copy_from_slice over the whole field: it panics where the
+        // lengths differ, and a caller reaches this method with a cursor of its
+        // own as readily as with the one `encode_payload` sizes.
+        let too_short = Error::truncated_buffer(self.payload_len(), byte_count(field.len()));
+        let (payload, _) = field.split_at_mut_checked(self.0.len()).ok_or(too_short)?;
+
+        payload.copy_from_slice(&self.0);
 
         Ok(())
     }
@@ -292,6 +299,17 @@ mod tests {
         fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
             writer.write_bytes(&[self.0])
         }
+    }
+
+    #[test]
+    fn a_raw_payload_given_a_field_of_another_length_is_refused() {
+        let raw = AnyBox::from_raw_bytes(BoxType::compact(*b"skip"), vec![1, 2, 3, 4]);
+        let mut buffer = [0; 2];
+
+        assert_eq!(
+            raw.encode_fields(&mut FieldWriter::new(&mut buffer)),
+            Err(Error::truncated_buffer(4, 2))
+        );
     }
 
     #[test]

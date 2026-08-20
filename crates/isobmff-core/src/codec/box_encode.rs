@@ -44,9 +44,8 @@ pub trait BoxEncode {
     ///
     /// The value declares this before a byte is written, so a caller can size
     /// the buffer and settle the total the header declares.
-    /// [`encode_payload`](Self::encode_payload) holds the length against the
-    /// buffer it is given and against the bytes the fields claim, so a length
-    /// that agrees with neither is a failure rather than a short write.
+    /// [`encode_payload`](Self::encode_payload) is where the declaration is held
+    /// to what the buffer and the fields turn out to be.
     #[must_use]
     fn payload_len(&self) -> u64;
 
