@@ -1,6 +1,6 @@
 //! [`BoxDefinition`], the box type of ISO/IEC 14496-12 §4.2 a Definition subclause assigns
 
-use crate::box_type::BoxType;
+use crate::framing::box_type::BoxType;
 
 /// Box type the spec assigns to `Self`
 ///

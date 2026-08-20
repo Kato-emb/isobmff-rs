@@ -5,11 +5,11 @@ use alloc::vec::Vec;
 use core::any::Any;
 use core::fmt;
 
-use crate::box_definition::BoxDefinition;
-use crate::box_encode::BoxEncode;
-use crate::box_type::BoxType;
-use crate::box_write::{encode_into, encoded_len_of};
+use crate::codec::box_definition::BoxDefinition;
+use crate::codec::box_encode::BoxEncode;
+use crate::codec::box_write::{encode_into, encoded_len_of};
 use crate::error::{Error, byte_count};
+use crate::framing::box_type::BoxType;
 
 /// Box payload once its type is erased
 ///
@@ -280,11 +280,11 @@ mod tests {
     use alloc::vec;
 
     use super::AnyBox;
-    use crate::box_definition::BoxDefinition;
-    use crate::box_encode::BoxEncode;
-    use crate::box_type::BoxType;
-    use crate::box_write::BoxWrite as _;
+    use crate::codec::box_definition::BoxDefinition;
+    use crate::codec::box_encode::BoxEncode;
+    use crate::codec::box_write::BoxWrite as _;
     use crate::error::{Error, byte_count};
+    use crate::framing::box_type::BoxType;
 
     /// Box whose payload is one byte, standing in for a type the reader has
     #[derive(Clone, PartialEq, Debug)]

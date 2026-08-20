@@ -3,9 +3,9 @@
 use core::error;
 use core::fmt;
 
-use crate::box_type::BoxType;
-use crate::field::FieldWidth;
-use crate::fourcc::FourCC;
+use crate::codec::field::FieldWidth;
+use crate::data_types::fourcc::FourCC;
+use crate::framing::box_type::BoxType;
 
 /// Boxes a failure holds of the path out of the containers it was read in
 const CONTAINER_DEPTH: usize = 8;
@@ -909,9 +909,9 @@ mod tests {
     use alloc::vec::Vec;
 
     use super::{Category, Error};
-    use crate::box_type::BoxType;
-    use crate::field::FieldWidth;
-    use crate::fourcc::FourCC;
+    use crate::codec::field::FieldWidth;
+    use crate::data_types::fourcc::FourCC;
+    use crate::framing::box_type::BoxType;
 
     #[test]
     fn a_failure_names_the_boxes_it_was_reached_through_outermost_first() {
