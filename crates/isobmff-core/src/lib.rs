@@ -24,7 +24,7 @@ mod framing;
 #[cfg(feature = "alloc")]
 pub use any_box::AnyBox;
 pub use codec::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxWrite, FieldReader, FieldWidth, FieldWriter,
+    BoxDecode, BoxDefinition, BoxEncode, BoxRead, BoxWrite, FieldReader, FieldWidth, FieldWriter,
 };
 #[cfg(feature = "alloc")]
 pub use container::{ChildBoxes, OtherBoxes};

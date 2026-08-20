@@ -9,7 +9,7 @@
 mod vendor;
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, CompactSize, Error, RawBox,
+    BoxDecode, BoxDefinition, BoxEncode, BoxHeader, BoxRead, BoxSize, BoxType, CompactSize, Error,
 };
 use vendor::{ExpiryBox, OpaqueDataBox, SequenceNumberBox, VendorMarkerBox};
 
@@ -91,34 +91,26 @@ fn a_value_too_wide_for_the_first_version_writes_at_the_version_that_holds_it() 
 }
 
 #[test]
-fn a_box_framed_under_its_declared_type_splits_back_into_the_value() {
+fn a_box_framed_under_its_declared_type_reads_back_as_the_value() {
     let value = SequenceNumberBox { sequence_number: 7 };
     let input = framed(SequenceNumberBox::BOX_TYPE, &encoded(&value).unwrap()).unwrap();
 
-    let (split, rest) = RawBox::split_first(&input).unwrap();
-
-    assert_eq!(rest, b"");
-    assert_eq!(split.header().box_type(), SequenceNumberBox::BOX_TYPE);
     assert_eq!(
-        SequenceNumberBox::decode_payload(split.payload()).unwrap(),
-        value
+        SequenceNumberBox::decode(&input).unwrap(),
+        (value, b"".as_slice())
     );
 }
 
 #[test]
-fn a_box_declared_under_a_user_type_frames_and_splits_the_same_way() {
+fn a_box_declared_under_a_user_type_reads_back_the_same_way() {
     let input = framed(
         VendorMarkerBox::BOX_TYPE,
         &encoded(&VendorMarkerBox).unwrap(),
     )
     .unwrap();
 
-    let (split, rest) = RawBox::split_first(&input).unwrap();
-
-    assert_eq!(rest, b"");
-    assert_eq!(split.header().box_type(), VendorMarkerBox::BOX_TYPE);
     assert_eq!(
-        VendorMarkerBox::decode_payload(split.payload()).unwrap(),
-        VendorMarkerBox
+        VendorMarkerBox::decode(&input).unwrap(),
+        (VendorMarkerBox, b"".as_slice())
     );
 }
