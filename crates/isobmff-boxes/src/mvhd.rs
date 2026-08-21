@@ -26,7 +26,7 @@ const PAYLOAD_LEN_VERSION_1: u64 = 112;
 ///
 /// ```
 /// use isobmff_boxes::MovieHeaderBox;
-/// use isobmff_core::{BoxDecode, BoxWrite, QuickTimeDateTime};
+/// use isobmff_core::{BoxRead, BoxWrite, QuickTimeDateTime};
 ///
 /// // A movie of five seconds at millisecond resolution, with one track
 /// let epoch = QuickTimeDateTime::from_seconds(0);
@@ -43,10 +43,10 @@ const PAYLOAD_LEN_VERSION_1: u64 = 112;
 /// let long_movie = MovieHeaderBox::new(epoch, epoch, 1_000, u64::from(u32::MAX) + 1, 2);
 /// assert_eq!(long_movie.encoded_len(), 120);
 ///
-/// // Either way the box reads back as the value that wrote it
+/// // The whole box reads back as the value that wrote it, leaving nothing over
 /// assert_eq!(
-///     MovieHeaderBox::decode_payload(buffer.get(8..).unwrap()).unwrap(),
-///     movie_header
+///     MovieHeaderBox::decode(&buffer).unwrap(),
+///     (movie_header, b"".as_slice())
 /// );
 /// ```
 #[doc(alias = "mvhd")]

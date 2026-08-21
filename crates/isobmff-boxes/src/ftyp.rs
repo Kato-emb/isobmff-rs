@@ -23,7 +23,7 @@ const BRAND_LEN: u64 = 4;
 ///
 /// ```
 /// use isobmff_boxes::FileTypeBox;
-/// use isobmff_core::{BoxDecode, BoxWrite, FourCC};
+/// use isobmff_core::{BoxRead, BoxWrite, FourCC};
 ///
 /// // The brands of a fragmented MP4 file
 /// let file_type = FileTypeBox::new(
@@ -37,8 +37,11 @@ const BRAND_LEN: u64 = 4;
 /// file_type.encode(&mut buffer).unwrap();
 /// assert_eq!(buffer, b"\0\0\0\x18ftypiso6\0\0\x02\0iso6dash");
 ///
-/// // And reads back from them
-/// assert_eq!(FileTypeBox::decode_payload(&buffer[8..]).unwrap(), file_type);
+/// // And the whole box reads back from them, leaving nothing over
+/// assert_eq!(
+///     FileTypeBox::decode(&buffer).unwrap(),
+///     (file_type, b"".as_slice())
+/// );
 /// ```
 #[doc(alias = "ftyp")]
 #[non_exhaustive]
@@ -130,7 +133,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode as _, BoxWrite as _, Error, FourCC};
+    use isobmff_core::{BoxDecode, BoxEncode as _, BoxRead as _, BoxWrite as _, Error, FourCC};
 
     use super::FileTypeBox;
 
@@ -160,8 +163,8 @@ mod tests {
         let whole = encoded(&file_type);
 
         assert_eq!(
-            FileTypeBox::decode_payload(whole.get(8..).unwrap()).unwrap(),
-            file_type
+            FileTypeBox::decode(&whole).unwrap(),
+            (file_type, b"".as_slice())
         );
     }
 
