@@ -144,6 +144,15 @@ impl Error {
         )
     }
 
+    /// Returns the failure of a box read as a type the input does not hold there
+    #[must_use]
+    pub const fn box_type_mismatch(expected: BoxType, found: BoxType) -> Self {
+        Self {
+            detail: Detail::FoundBoxType(found),
+            ..Self::about(ErrorKind::BoxTypeMismatch, expected)
+        }
+    }
+
     /// Returns the failure of a payload that ends inside a field
     #[must_use]
     pub const fn truncated_payload(needed: u64, available: u64) -> Self {
@@ -349,6 +358,21 @@ impl Error {
         self.box_type
     }
 
+    /// Returns the type the input holds, for the kinds that name what was there
+    #[must_use]
+    pub const fn found_box_type(self) -> Option<BoxType> {
+        match self.detail {
+            Detail::FoundBoxType(found) => Some(found),
+            Detail::Nothing
+            | Detail::Bytes { .. }
+            | Detail::Entries { .. }
+            | Detail::Version(_)
+            | Detail::Flags(_)
+            | Detail::OutOfRange { .. }
+            | Detail::ValidUpTo(_) => None,
+        }
+    }
+
     /// Returns the bytes the failure required, for the kinds that count bytes
     ///
     /// For [`OutOfRange`](ErrorKind::OutOfRange) this is the width of the field
@@ -362,7 +386,8 @@ impl Error {
             | Detail::Entries { .. }
             | Detail::Version(_)
             | Detail::Flags(_)
-            | Detail::ValidUpTo(_) => None,
+            | Detail::ValidUpTo(_)
+            | Detail::FoundBoxType(_) => None,
         }
     }
 
@@ -379,7 +404,8 @@ impl Error {
             | Detail::Version(_)
             | Detail::Flags(_)
             | Detail::OutOfRange { .. }
-            | Detail::ValidUpTo(_) => None,
+            | Detail::ValidUpTo(_)
+            | Detail::FoundBoxType(_) => None,
         }
     }
 
@@ -393,7 +419,8 @@ impl Error {
             | Detail::Version(_)
             | Detail::Flags(_)
             | Detail::OutOfRange { .. }
-            | Detail::ValidUpTo(_) => None,
+            | Detail::ValidUpTo(_)
+            | Detail::FoundBoxType(_) => None,
         }
     }
 
@@ -407,7 +434,8 @@ impl Error {
             | Detail::Version(_)
             | Detail::Flags(_)
             | Detail::OutOfRange { .. }
-            | Detail::ValidUpTo(_) => None,
+            | Detail::ValidUpTo(_)
+            | Detail::FoundBoxType(_) => None,
         }
     }
 
@@ -421,7 +449,8 @@ impl Error {
             | Detail::Entries { .. }
             | Detail::Flags(_)
             | Detail::OutOfRange { .. }
-            | Detail::ValidUpTo(_) => None,
+            | Detail::ValidUpTo(_)
+            | Detail::FoundBoxType(_) => None,
         }
     }
 
@@ -435,7 +464,8 @@ impl Error {
             | Detail::Entries { .. }
             | Detail::Version(_)
             | Detail::OutOfRange { .. }
-            | Detail::ValidUpTo(_) => None,
+            | Detail::ValidUpTo(_)
+            | Detail::FoundBoxType(_) => None,
         }
     }
 
@@ -449,7 +479,8 @@ impl Error {
             | Detail::Entries { .. }
             | Detail::Version(_)
             | Detail::Flags(_)
-            | Detail::ValidUpTo(_) => None,
+            | Detail::ValidUpTo(_)
+            | Detail::FoundBoxType(_) => None,
         }
     }
 
@@ -463,7 +494,8 @@ impl Error {
             | Detail::Entries { .. }
             | Detail::Version(_)
             | Detail::Flags(_)
-            | Detail::OutOfRange { .. } => None,
+            | Detail::OutOfRange { .. }
+            | Detail::FoundBoxType(_) => None,
         }
     }
 }
@@ -488,6 +520,7 @@ impl fmt::Display for Error {
         let needed = self.needed_bytes().unwrap_or_default();
         let available = self.available_bytes().unwrap_or_default();
         let named = Named(self.box_type);
+        let found = Named(self.found_box_type());
         match self.kind {
             ErrorKind::TruncatedHeader => write!(
                 formatter,
@@ -508,6 +541,10 @@ impl fmt::Display for Error {
             ErrorKind::UnfinishedBox => {
                 write!(formatter, "box of {needed} bytes closed off at {available}")
             }
+            ErrorKind::BoxTypeMismatch => write!(
+                formatter,
+                "input holds a {found}box where a {named}box was expected"
+            ),
             ErrorKind::TruncatedPayload => write!(
                 formatter,
                 "box payload of {needed} bytes cut short by an input of {available}"
@@ -634,6 +671,9 @@ impl fmt::Debug for Error {
             Detail::ValidUpTo(valid_up_to) => {
                 fields.field("valid_up_to", &valid_up_to);
             }
+            Detail::FoundBoxType(found) => {
+                fields.field("found_box_type", &found);
+            }
         }
 
         fields.finish()
@@ -686,6 +726,11 @@ pub enum ErrorKind {
     /// occupies, [`available_bytes`](Error::available_bytes) the length
     /// it was closed off at, header included.
     UnfinishedBox,
+    /// Box read as one type is of another
+    ///
+    /// [`box_type`](Error::box_type) is the type the box was read as,
+    /// [`found_box_type`](Error::found_box_type) the type the input holds.
+    BoxTypeMismatch,
     /// Payload of a box ends inside a field
     ///
     /// [`needed_bytes`](Error::needed_bytes) is the length the fields
@@ -801,6 +846,7 @@ impl ErrorKind {
             | Self::TruncatedBox
             | Self::UnfinishedHeader
             | Self::UnfinishedBox
+            | Self::BoxTypeMismatch
             | Self::TruncatedPayload
             | Self::TrailingPayload
             | Self::ConflictingFlags
@@ -899,6 +945,8 @@ enum Detail {
     OutOfRange { value: u64, width: u64 },
     /// Text that read before the byte that did not, in bytes
     ValidUpTo(usize),
+    /// Box type an input holds where another was to be read
+    FoundBoxType(BoxType),
 }
 
 #[cfg(test)]
@@ -1004,6 +1052,16 @@ mod tests {
     }
 
     #[test]
+    fn a_failure_of_a_box_read_as_another_type_names_both_types() {
+        let error =
+            Error::box_type_mismatch(BoxType::compact(*b"moov"), BoxType::compact(*b"moof"));
+
+        assert_eq!(error.box_type(), Some(BoxType::compact(*b"moov")));
+        assert_eq!(error.found_box_type(), Some(BoxType::compact(*b"moof")));
+        assert_eq!(Error::no_box_open().found_box_type(), None);
+    }
+
+    #[test]
     fn a_failure_of_a_full_box_carries_what_the_box_declared() {
         assert_eq!(Error::unsupported_version(2).version(), Some(2));
         assert_eq!(
@@ -1038,6 +1096,11 @@ mod tests {
         assert_eq!(
             Error::payload_limit_exceeded(BoxType::compact(*b"moov"), 32, 16).to_string(),
             "moov box declares 32 payload bytes, past the 16-byte limit"
+        );
+        assert_eq!(
+            Error::box_type_mismatch(BoxType::compact(*b"moov"), BoxType::compact(*b"moof"))
+                .to_string(),
+            "input holds a moof box where a moov box was expected"
         );
     }
 

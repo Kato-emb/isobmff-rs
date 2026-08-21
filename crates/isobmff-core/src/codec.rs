@@ -5,17 +5,19 @@
 //! Syntax and Semantics subclauses. The traits here are where a box states
 //! both — the type it is known by, and the payload read into a value and
 //! written back from one — over a reader and a writer that take a payload one
-//! field at a time. Writing the whole box follows from the two, and asks
-//! nothing further of the box.
+//! field at a time. Reading and writing the whole box follow from the two, and
+//! ask nothing further of the box.
 
 pub(crate) mod box_decode;
 pub(crate) mod box_definition;
 pub(crate) mod box_encode;
+pub(crate) mod box_read;
 pub(crate) mod box_write;
 pub(crate) mod field;
 
 pub use box_decode::BoxDecode;
 pub use box_definition::BoxDefinition;
 pub use box_encode::BoxEncode;
+pub use box_read::BoxRead;
 pub use box_write::BoxWrite;
 pub use field::{FieldReader, FieldWidth, FieldWriter};
