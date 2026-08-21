@@ -148,11 +148,8 @@ impl Error {
     #[must_use]
     pub const fn box_type_mismatch(expected: BoxType, found: BoxType) -> Self {
         Self {
-            kind: ErrorKind::BoxTypeMismatch,
-            containers: [None; CONTAINER_DEPTH],
-            dropped_containers: false,
-            box_type: Some(expected),
             detail: Detail::FoundBoxType(found),
+            ..Self::about(ErrorKind::BoxTypeMismatch, expected)
         }
     }
 

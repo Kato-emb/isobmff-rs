@@ -80,12 +80,11 @@ use crate::framing::raw_box::RawBox;
 pub trait BoxRead: BoxDefinition + BoxDecode {
     /// Reads the whole box at the front of `input` and returns what is left
     ///
-    /// The box is framed first and read after: the header settles how far the
-    /// box reaches, the type it declares is held against
-    /// [`BOX_TYPE`](BoxDefinition::BOX_TYPE), and the payload the header spans
-    /// is what [`decode_payload`](BoxDecode::decode_payload) reads. What lies
-    /// past the box is returned as the remainder, so a caller reading boxes laid
-    /// end to end passes that remainder to the next read.
+    /// The box is framed first and read after, so a header that frames nothing
+    /// is refused before the type it declares is held against
+    /// [`BOX_TYPE`](BoxDefinition::BOX_TYPE). What lies past the box is returned
+    /// as the remainder, so a caller reading boxes laid end to end passes that
+    /// remainder to the next read.
     ///
     /// A box declaring [`ToEndOfFile`](crate::BoxSize::ToEndOfFile) spans the
     /// rest of `input` and leaves an empty remainder, so `input` has to end
@@ -95,8 +94,7 @@ pub trait BoxRead: BoxDefinition + BoxDecode {
     ///
     /// * The failures of [`RawBox::split_first`]: `input` does not frame a box.
     /// * [`BoxTypeMismatch`](crate::ErrorKind::BoxTypeMismatch): the box at the
-    ///   front of `input` declares another type. The payload goes unread, so a
-    ///   caller may frame the box again as the type it is.
+    ///   front of `input` declares another type.
     /// * What [`decode_payload`](BoxDecode::decode_payload) reports, for the
     ///   payload the header spans.
     fn decode(input: &[u8]) -> Result<(Self, &[u8]), Error> {
