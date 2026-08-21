@@ -145,8 +145,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_core::{
-        BoxDecode, BoxEncode, BoxType, Error, FourCC, LanguageCode, NullTerminatedString,
-        QuickTimeDateTime,
+        BoxDecode, BoxEncode, BoxType, Error, FourCC, LanguageCode, NullTerminatedString, UtcTime,
     };
 
     use super::MediaBox;
@@ -160,8 +159,8 @@ mod tests {
     fn media() -> MediaBox {
         MediaBox::new(
             MediaHeaderBox::new(
-                QuickTimeDateTime::from_seconds(0),
-                QuickTimeDateTime::from_seconds(0),
+                UtcTime::from_seconds(0),
+                UtcTime::from_seconds(0),
                 90_000,
                 90_000,
                 LanguageCode::UND,

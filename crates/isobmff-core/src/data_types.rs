@@ -17,7 +17,7 @@ pub(crate) mod language_code;
 pub(crate) mod matrix;
 #[cfg(feature = "alloc")]
 pub(crate) mod null_terminated_string;
-pub(crate) mod quick_time_date_time;
+pub(crate) mod utc_time;
 pub(crate) mod uuid;
 
 pub use fixed_point::{I8F8, I16F16, U16F16};
@@ -27,5 +27,5 @@ pub use language_code::LanguageCode;
 pub use matrix::Matrix;
 #[cfg(feature = "alloc")]
 pub use null_terminated_string::NullTerminatedString;
-pub use quick_time_date_time::QuickTimeDateTime;
+pub use utc_time::UtcTime;
 pub use uuid::Uuid;

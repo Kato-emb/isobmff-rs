@@ -15,13 +15,13 @@ use isobmff_boxes::{
 };
 use isobmff_core::{
     AnyBox, BoxHeader, BoxSize, BoxType, BoxWrite, FourCC, FullBoxFlags, LanguageCode,
-    NullTerminatedString, QuickTimeDateTime, Uuid,
+    NullTerminatedString, UtcTime, Uuid,
 };
 
 use isobmff_sequence::{BoxEvent, BoxReader, BoxWriter, Error};
 
 /// Time every header of the synthetic files declares
-const EPOCH: QuickTimeDateTime = QuickTimeDateTime::from_seconds(0);
+const EPOCH: UtcTime = UtcTime::from_seconds(0);
 
 /// Ticks a second the media of the synthetic files is timed in
 const TIMESCALE: u32 = 90_000;

@@ -2,7 +2,7 @@
 
 use isobmff_core::{
     BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWidth, FieldWriter,
-    FullBoxFields, FullBoxFlags, I8F8, I16F16, Matrix, QuickTimeDateTime,
+    FullBoxFields, FullBoxFlags, I8F8, I16F16, Matrix, UtcTime,
 };
 
 /// Length of the payload when version 0 carries the times in 32 bits
@@ -26,10 +26,10 @@ const PAYLOAD_LEN_VERSION_1: u64 = 112;
 ///
 /// ```
 /// use isobmff_boxes::MovieHeaderBox;
-/// use isobmff_core::{BoxDecode, BoxWrite, QuickTimeDateTime};
+/// use isobmff_core::{BoxDecode, BoxWrite, UtcTime};
 ///
 /// // A movie of five seconds at millisecond resolution, with one track
-/// let epoch = QuickTimeDateTime::from_seconds(0);
+/// let epoch = UtcTime::from_seconds(0);
 /// let movie_header = MovieHeaderBox::new(epoch, epoch, 1_000, 5_000, 2);
 ///
 /// // Times that fit in 32 bits are written at version 0
@@ -53,8 +53,8 @@ const PAYLOAD_LEN_VERSION_1: u64 = 112;
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct MovieHeaderBox {
-    creation_time: QuickTimeDateTime,
-    modification_time: QuickTimeDateTime,
+    creation_time: UtcTime,
+    modification_time: UtcTime,
     timescale: u32,
     duration: u64,
     rate: I16F16,
@@ -72,8 +72,8 @@ impl MovieHeaderBox {
     /// `pre_defined` is left zero.
     #[must_use]
     pub const fn new(
-        creation_time: QuickTimeDateTime,
-        modification_time: QuickTimeDateTime,
+        creation_time: UtcTime,
+        modification_time: UtcTime,
         timescale: u32,
         duration: u64,
         next_track_id: u32,
@@ -93,13 +93,13 @@ impl MovieHeaderBox {
 
     /// Returns the time the presentation was created
     #[must_use]
-    pub const fn creation_time(&self) -> QuickTimeDateTime {
+    pub const fn creation_time(&self) -> UtcTime {
         self.creation_time
     }
 
     /// Returns the time the presentation was last modified
     #[must_use]
-    pub const fn modification_time(&self) -> QuickTimeDateTime {
+    pub const fn modification_time(&self) -> UtcTime {
         self.modification_time
     }
 
@@ -187,8 +187,8 @@ impl BoxDecode for MovieHeaderBox {
         }
         let field_width = Self::field_width(version);
 
-        let creation_time = QuickTimeDateTime::from_seconds(reader.read_unsigned(field_width)?);
-        let modification_time = QuickTimeDateTime::from_seconds(reader.read_unsigned(field_width)?);
+        let creation_time = UtcTime::from_seconds(reader.read_unsigned(field_width)?);
+        let modification_time = UtcTime::from_seconds(reader.read_unsigned(field_width)?);
         let timescale = reader.read_u32()?;
         let duration = reader.read_unsigned(field_width)?;
         let rate = I16F16::from_raw(reader.read_i32()?);
@@ -251,15 +251,15 @@ pub(crate) mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, BoxWrite as _, Error, QuickTimeDateTime};
+    use isobmff_core::{BoxDecode, BoxEncode, BoxWrite as _, Error, UtcTime};
 
     use super::MovieHeaderBox;
 
     /// Movie header carrying the times a file written at the epoch declares
     pub(crate) fn movie_header(duration: u64) -> MovieHeaderBox {
         MovieHeaderBox::new(
-            QuickTimeDateTime::from_seconds(1),
-            QuickTimeDateTime::from_seconds(2),
+            UtcTime::from_seconds(1),
+            UtcTime::from_seconds(2),
             1_000,
             duration,
             3,

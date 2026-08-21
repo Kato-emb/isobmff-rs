@@ -2,7 +2,7 @@
 
 use isobmff_core::{
     BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWidth, FieldWriter,
-    FullBoxFields, FullBoxFlags, LanguageCode, QuickTimeDateTime,
+    FullBoxFields, FullBoxFlags, LanguageCode, UtcTime,
 };
 
 /// Length of the payload when version 0 carries the times in 32 bits
@@ -24,8 +24,8 @@ const PAYLOAD_LEN_VERSION_1: u64 = 36;
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct MediaHeaderBox {
-    creation_time: QuickTimeDateTime,
-    modification_time: QuickTimeDateTime,
+    creation_time: UtcTime,
+    modification_time: UtcTime,
     timescale: u32,
     duration: u64,
     language: LanguageCode,
@@ -36,8 +36,8 @@ impl MediaHeaderBox {
     /// Creates the box from the declarations of one track's media
     #[must_use]
     pub const fn new(
-        creation_time: QuickTimeDateTime,
-        modification_time: QuickTimeDateTime,
+        creation_time: UtcTime,
+        modification_time: UtcTime,
         timescale: u32,
         duration: u64,
         language: LanguageCode,
@@ -54,13 +54,13 @@ impl MediaHeaderBox {
 
     /// Returns the time the media was created
     #[must_use]
-    pub const fn creation_time(&self) -> QuickTimeDateTime {
+    pub const fn creation_time(&self) -> UtcTime {
         self.creation_time
     }
 
     /// Returns the time the media was last modified
     #[must_use]
-    pub const fn modification_time(&self) -> QuickTimeDateTime {
+    pub const fn modification_time(&self) -> UtcTime {
         self.modification_time
     }
 
@@ -130,8 +130,8 @@ impl BoxDecode for MediaHeaderBox {
         }
         let field_width = Self::field_width(version);
 
-        let creation_time = QuickTimeDateTime::from_seconds(reader.read_unsigned(field_width)?);
-        let modification_time = QuickTimeDateTime::from_seconds(reader.read_unsigned(field_width)?);
+        let creation_time = UtcTime::from_seconds(reader.read_unsigned(field_width)?);
+        let modification_time = UtcTime::from_seconds(reader.read_unsigned(field_width)?);
         let timescale = reader.read_u32()?;
         let duration = reader.read_unsigned(field_width)?;
         let language = LanguageCode::from_raw(reader.read_u16()?);
@@ -178,15 +178,15 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, Error, LanguageCode, QuickTimeDateTime};
+    use isobmff_core::{BoxDecode, BoxEncode, Error, LanguageCode, UtcTime};
 
     use super::MediaHeaderBox;
 
     /// Media header of a track whose language is left undetermined
     fn media_header(duration: u64) -> MediaHeaderBox {
         MediaHeaderBox::new(
-            QuickTimeDateTime::from_seconds(1),
-            QuickTimeDateTime::from_seconds(2),
+            UtcTime::from_seconds(1),
+            UtcTime::from_seconds(2),
             90_000,
             duration,
             LanguageCode::UND,
