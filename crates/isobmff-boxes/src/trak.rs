@@ -127,8 +127,8 @@ pub(crate) mod tests {
     use alloc::vec::Vec;
 
     use isobmff_core::{
-        BoxDecode, BoxEncode, BoxType, Error, FourCC, FullBoxFlags, LanguageCode,
-        NullTerminatedString, QuickTimeDateTime,
+        BoxDecode, BoxEncode, BoxType, Error, FourCC, FullBoxFlags, LanguageCode, Mp4EpochSeconds,
+        NullTerminatedString,
     };
 
     use super::TrackBox;
@@ -145,15 +145,15 @@ pub(crate) mod tests {
         TrackBox::new(
             TrackHeaderBox::new(
                 FullBoxFlags::new(0x3).unwrap(),
-                QuickTimeDateTime::from_seconds(0),
-                QuickTimeDateTime::from_seconds(0),
+                Mp4EpochSeconds::from_seconds(0),
+                Mp4EpochSeconds::from_seconds(0),
                 1,
                 90_000,
             ),
             MediaBox::new(
                 MediaHeaderBox::new(
-                    QuickTimeDateTime::from_seconds(0),
-                    QuickTimeDateTime::from_seconds(0),
+                    Mp4EpochSeconds::from_seconds(0),
+                    Mp4EpochSeconds::from_seconds(0),
                     90_000,
                     90_000,
                     LanguageCode::UND,
