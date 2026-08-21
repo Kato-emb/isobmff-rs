@@ -31,7 +31,7 @@ pub use container::{ChildBoxes, OtherBoxes};
 #[cfg(feature = "alloc")]
 pub use data_types::NullTerminatedString;
 pub use data_types::{
-    FourCC, FullBoxFields, FullBoxFlags, I8F8, I16F16, LanguageCode, Matrix, QuickTimeDateTime,
+    FourCC, FullBoxFields, FullBoxFlags, I8F8, I16F16, LanguageCode, Matrix, Mp4EpochSeconds,
     U16F16, Uuid,
 };
 pub use error::{Category, Error, ErrorKind};

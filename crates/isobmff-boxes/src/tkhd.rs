@@ -2,7 +2,7 @@
 
 use isobmff_core::{
     BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWidth, FieldWriter,
-    FullBoxFields, FullBoxFlags, I8F8, Matrix, QuickTimeDateTime, U16F16,
+    FullBoxFields, FullBoxFlags, I8F8, Matrix, Mp4EpochSeconds, U16F16,
 };
 
 /// Length of the payload when version 0 carries the times in 32 bits
@@ -26,8 +26,8 @@ const PAYLOAD_LEN_VERSION_1: u64 = 96;
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct TrackHeaderBox {
     flags: FullBoxFlags,
-    creation_time: QuickTimeDateTime,
-    modification_time: QuickTimeDateTime,
+    creation_time: Mp4EpochSeconds,
+    modification_time: Mp4EpochSeconds,
     track_id: u32,
     duration: u64,
     layer: i16,
@@ -47,8 +47,8 @@ impl TrackHeaderBox {
     #[must_use]
     pub const fn new(
         flags: FullBoxFlags,
-        creation_time: QuickTimeDateTime,
-        modification_time: QuickTimeDateTime,
+        creation_time: Mp4EpochSeconds,
+        modification_time: Mp4EpochSeconds,
         track_id: u32,
         duration: u64,
     ) -> Self {
@@ -75,13 +75,13 @@ impl TrackHeaderBox {
 
     /// Returns the time the track was created
     #[must_use]
-    pub const fn creation_time(&self) -> QuickTimeDateTime {
+    pub const fn creation_time(&self) -> Mp4EpochSeconds {
         self.creation_time
     }
 
     /// Returns the time the track was last modified
     #[must_use]
-    pub const fn modification_time(&self) -> QuickTimeDateTime {
+    pub const fn modification_time(&self) -> Mp4EpochSeconds {
         self.modification_time
     }
 
@@ -171,8 +171,8 @@ impl BoxDecode for TrackHeaderBox {
         }
         let field_width = Self::field_width(version);
 
-        let creation_time = QuickTimeDateTime::from_seconds(reader.read_unsigned(field_width)?);
-        let modification_time = QuickTimeDateTime::from_seconds(reader.read_unsigned(field_width)?);
+        let creation_time = Mp4EpochSeconds::from_seconds(reader.read_unsigned(field_width)?);
+        let modification_time = Mp4EpochSeconds::from_seconds(reader.read_unsigned(field_width)?);
         let track_id = reader.read_u32()?;
         let _reserved = reader.read_bytes::<4>()?;
         let duration = reader.read_unsigned(field_width)?;
@@ -238,7 +238,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, Error, FullBoxFlags, QuickTimeDateTime};
+    use isobmff_core::{BoxDecode, BoxEncode, Error, FullBoxFlags, Mp4EpochSeconds};
 
     use super::TrackHeaderBox;
 
@@ -251,8 +251,8 @@ mod tests {
     fn track_header(duration: u64) -> TrackHeaderBox {
         TrackHeaderBox::new(
             enabled_in_movie(),
-            QuickTimeDateTime::from_seconds(1),
-            QuickTimeDateTime::from_seconds(2),
+            Mp4EpochSeconds::from_seconds(1),
+            Mp4EpochSeconds::from_seconds(2),
             1,
             duration,
         )
