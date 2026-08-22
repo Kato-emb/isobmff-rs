@@ -69,21 +69,7 @@ impl BoxEncode for MediaDataBox {
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        let field = writer.take_remainder();
-        // Why not copy_from_slice over the whole field: it panics where the
-        // lengths differ, and a caller reaches this method with a cursor of its
-        // own as readily as with the one `encode_payload` sizes.
-        let too_short = Error::truncated_buffer(
-            self.payload_len(),
-            u64::try_from(field.len()).unwrap_or(u64::MAX),
-        );
-        let (payload, _) = field
-            .split_at_mut_checked(self.data.len())
-            .ok_or(too_short)?;
-
-        payload.copy_from_slice(&self.data);
-
-        Ok(())
+        writer.write_slice(&self.data)
     }
 }
 
