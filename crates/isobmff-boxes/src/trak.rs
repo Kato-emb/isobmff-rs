@@ -135,8 +135,7 @@ pub(crate) mod tests {
     use crate::hdlr::HandlerBox;
     use crate::mdhd::MediaHeaderBox;
     use crate::mdia::MediaBox;
-    use crate::minf::MediaInformationBox;
-    use crate::stbl::tests::sample_table;
+    use crate::minf::tests::media_information;
     use crate::tkhd::TrackHeaderBox;
 
     /// Track box of a video track, with every mandatory child in place
@@ -161,7 +160,7 @@ pub(crate) mod tests {
                     FourCC::new(*b"vide"),
                     NullTerminatedString::new(String::from("VideoHandler")).unwrap(),
                 ),
-                MediaInformationBox::new(sample_table()),
+                media_information(),
             ),
         )
     }

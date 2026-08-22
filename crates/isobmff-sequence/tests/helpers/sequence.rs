@@ -8,11 +8,12 @@
 
 use core::ops::Range;
 use isobmff_boxes::{
-    ChunkOffsetBox, FileTypeBox, HandlerBox, MediaBox, MediaHeaderBox, MediaInformationBox,
-    MovieBox, MovieFragmentBox, MovieFragmentHeaderBox, MovieHeaderBox, SampleDescriptionBox,
-    SampleSizeBox, SampleSizes, SampleTableBox, SampleToChunkBox, SegmentTypeBox, TimeToSampleBox,
-    TrackBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
-    TrackHeaderBox,
+    ChunkOffsetBox, DataEntry, DataEntryUrlBox, DataInformationBox, DataReferenceBox, FileTypeBox,
+    HandlerBox, MediaBox, MediaHeaderBox, MediaInformationBox, MediaInformationHeader, MovieBox,
+    MovieFragmentBox, MovieFragmentHeaderBox, MovieHeaderBox, SampleDescriptionBox, SampleSizeBox,
+    SampleSizes, SampleTableBox, SampleToChunkBox, SegmentTypeBox, TimeToSampleBox, TrackBox,
+    TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox, TrackHeaderBox,
+    VideoMediaHeaderBox,
 };
 use isobmff_core::{
     AnyBox, BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, FourCC, FullBoxFlags,
@@ -179,13 +180,19 @@ pub fn movie() -> Option<MovieBox> {
             FourCC::new(*b"vide"),
             NullTerminatedString::new(String::from("VideoHandler"))?,
         ),
-        MediaInformationBox::new(SampleTableBox::new(
-            sample_description,
-            TimeToSampleBox::new(Vec::new()),
-            SampleToChunkBox::new(Vec::new()),
-            SampleSizeBox::new(SampleSizes::PerSample(Vec::new())),
-            ChunkOffsetBox::new(Vec::new()),
-        )),
+        MediaInformationBox::new(
+            MediaInformationHeader::Video(VideoMediaHeaderBox::new(0, [0; 3])),
+            DataInformationBox::new(DataReferenceBox::new(vec![DataEntry::Url(
+                DataEntryUrlBox::new(None),
+            )])),
+            SampleTableBox::new(
+                sample_description,
+                TimeToSampleBox::new(Vec::new()),
+                SampleToChunkBox::new(Vec::new()),
+                SampleSizeBox::new(SampleSizes::PerSample(Vec::new())),
+                ChunkOffsetBox::new(Vec::new()),
+            ),
+        ),
     );
     let track = TrackBox::new(
         TrackHeaderBox::new(FullBoxFlags::new(1)?, EPOCH, EPOCH, 1, 0),
