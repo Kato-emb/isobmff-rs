@@ -2,7 +2,7 @@
 
 use core::iter::FusedIterator;
 
-use crate::error::{Error, byte_count};
+use crate::error::Error;
 use crate::framing::box_header::BoxHeader;
 
 /// Box as it lies in an input: its header, and the payload the header spans
@@ -88,7 +88,7 @@ impl<'a> RawBox<'a> {
             .and_then(|total| input.split_at_checked(total));
 
         let Some((_framed, rest)) = split else {
-            return Err(Error::truncated_box(total, byte_count(input.len())));
+            return Err(Error::truncated_box(total, input.len() as u64));
         };
 
         let payload = after_header

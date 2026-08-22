@@ -10,13 +10,6 @@ use crate::framing::box_type::BoxType;
 /// Boxes a failure holds of the path out of the containers it was read in
 const CONTAINER_DEPTH: usize = 8;
 
-/// Returns a length of bytes as the count a failure carries
-pub(crate) fn byte_count(length: usize) -> u64 {
-    // Why not unwrap: a usize above `u64::MAX` needs a 128-bit target to exist,
-    // and saturating keeps the panic-free path.
-    u64::try_from(length).unwrap_or(u64::MAX)
-}
-
 /// Reason a box does not read off bytes, or does not write into them
 ///
 /// What went wrong is one [`kind`](Self::kind), and what a caller does about it

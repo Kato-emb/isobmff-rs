@@ -2,7 +2,7 @@
 
 use crate::codec::box_definition::BoxDefinition;
 use crate::codec::box_encode::BoxEncode;
-use crate::error::{Error, byte_count};
+use crate::error::Error;
 use crate::framing::box_header::BoxHeader;
 use crate::framing::box_type::BoxType;
 
@@ -11,9 +11,7 @@ pub(crate) fn encoded_len_of(box_type: BoxType, payload: &(impl BoxEncode + ?Siz
     let payload_len = payload.payload_len();
 
     match BoxHeader::with_payload_len(box_type, payload_len) {
-        Some(header) => u64::try_from(header.encoded_len())
-            .unwrap_or(u64::MAX)
-            .saturating_add(payload_len),
+        Some(header) => (header.encoded_len() as u64).saturating_add(payload_len),
         None => u64::MAX,
     }
 }
@@ -25,7 +23,7 @@ pub(crate) fn encode_into<'buffer>(
     buffer: &'buffer mut [u8],
 ) -> Result<&'buffer mut [u8], Error> {
     let needed = encoded_len_of(box_type, payload);
-    let too_short = Error::truncated_buffer(needed, byte_count(buffer.len()));
+    let too_short = Error::truncated_buffer(needed, buffer.len() as u64);
 
     let header = BoxHeader::with_payload_len(box_type, payload.payload_len()).ok_or(too_short)?;
     let mut scratch = [0; BoxHeader::MAX_ENCODED_LEN];

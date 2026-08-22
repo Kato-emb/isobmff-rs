@@ -3,7 +3,7 @@
 use alloc::string::{String, ToString as _};
 use core::str;
 
-use crate::error::{Error, byte_count};
+use crate::error::Error;
 
 /// Text field of a box, as the spec's `string` type carries it
 ///
@@ -89,11 +89,7 @@ impl NullTerminatedString {
     /// Returns the length the field occupies, terminator included
     #[must_use]
     pub fn encoded_len(&self) -> u64 {
-        // Why not unwrap: a usize above `u64::MAX` needs a 128-bit target to
-        // exist, and saturating keeps the panic-free path.
-        u64::try_from(self.0.len())
-            .unwrap_or(u64::MAX)
-            .saturating_add(1)
+        (self.0.len() as u64).saturating_add(1)
     }
 
     /// Writes the field and its terminator into the front of `buffer` and
@@ -107,7 +103,7 @@ impl NullTerminatedString {
     ///   than [`encoded_len`](Self::encoded_len).
     pub fn encode<'buffer>(&self, buffer: &'buffer mut [u8]) -> Result<&'buffer mut [u8], Error> {
         let needed = self.encoded_len();
-        let too_short = Error::truncated_buffer(needed, byte_count(buffer.len()));
+        let too_short = Error::truncated_buffer(needed, buffer.len() as u64);
 
         let (whole, rest) = usize::try_from(needed)
             .ok()
