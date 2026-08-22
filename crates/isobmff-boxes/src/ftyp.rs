@@ -111,8 +111,7 @@ impl BoxDecode for FileTypeBox {
 
 impl BoxEncode for FileTypeBox {
     fn payload_len(&self) -> u64 {
-        u64::try_from(self.compatible_brands.len())
-            .unwrap_or(u64::MAX)
+        (self.compatible_brands.len() as u64)
             .saturating_mul(BRAND_LEN)
             .saturating_add(FIXED_FIELDS_LEN)
     }

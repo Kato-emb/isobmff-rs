@@ -97,7 +97,7 @@ impl BoxDecode for ChunkOffsetBox {
             });
         }
 
-        let actual = u64::try_from(entries.len()).unwrap_or(u64::MAX);
+        let actual = entries.len() as u64;
         if actual != declared {
             return Err(Error::entry_count_mismatch(declared, actual));
         }
@@ -108,16 +108,14 @@ impl BoxDecode for ChunkOffsetBox {
 
 impl BoxEncode for ChunkOffsetBox {
     fn payload_len(&self) -> u64 {
-        let entries = u64::try_from(self.entries.len())
-            .unwrap_or(u64::MAX)
-            .saturating_mul(ENTRY_LEN);
+        let entries = (self.entries.len() as u64).saturating_mul(ENTRY_LEN);
 
         FIXED_FIELDS_LEN.saturating_add(entries)
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         writer.write_bytes(&FullBoxFields::new(0, FullBoxFlags::ZERO).to_bytes())?;
-        let entry_count = u64::try_from(self.entries.len()).unwrap_or(u64::MAX);
+        let entry_count = self.entries.len() as u64;
         // Why not saturate silently: an entry count past `u32` cannot be written
         // at all, and the box has already declared a length built from it, so
         // this stands for a `Vec` no target can hold.

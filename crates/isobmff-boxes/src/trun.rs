@@ -384,7 +384,7 @@ impl BoxEncode for TrackRunBox {
 
         let row = u64::from(per_sample_field_flags(&self.samples).count_ones())
             .saturating_mul(OPTIONAL_FIELD_LEN);
-        let rows = row.saturating_mul(u64::try_from(self.samples.len()).unwrap_or(u64::MAX));
+        let rows = row.saturating_mul(self.samples.len() as u64);
 
         length.saturating_add(rows)
     }
@@ -413,7 +413,7 @@ impl BoxEncode for TrackRunBox {
             .ok_or_else(|| Error::out_of_range(u64::from(bits), FieldWidth::Compact))?;
 
         writer.write_bytes(&FullBoxFields::new(version, flags).to_bytes())?;
-        let sample_count = u64::try_from(self.samples.len()).unwrap_or(u64::MAX);
+        let sample_count = self.samples.len() as u64;
         // Why not saturate silently: a row count past `u32` cannot be written at
         // all, and the box has already declared a length built from it, so this
         // stands for a `Vec` no target can hold.
