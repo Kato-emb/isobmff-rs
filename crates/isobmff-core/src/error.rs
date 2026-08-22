@@ -253,6 +253,24 @@ impl Error {
         Self::about(ErrorKind::ForbiddenChildBox, box_type)
     }
 
+    /// Returns the failure of a container holding none of the boxes it must hold one of
+    #[must_use]
+    pub const fn missing_alternative_box(alternatives: &'static [BoxType]) -> Self {
+        Self::new(
+            ErrorKind::MissingAlternativeBox,
+            Detail::Alternatives(alternatives),
+        )
+    }
+
+    /// Returns the failure of a container holding more than one of the boxes it may hold one of
+    #[must_use]
+    pub const fn duplicate_alternative_box(alternatives: &'static [BoxType]) -> Self {
+        Self::new(
+            ErrorKind::DuplicateAlternativeBox,
+            Detail::Alternatives(alternatives),
+        )
+    }
+
     /// Returns the failure of a count that disagrees with the entries it frames
     #[must_use]
     pub const fn entry_count_mismatch(declared: u64, actual: u64) -> Self {
@@ -263,6 +281,12 @@ impl Error {
                 available: actual,
             },
         )
+    }
+
+    /// Returns the failure of a container holding a box this implementation does not read
+    #[must_use]
+    pub const fn unsupported_box(box_type: BoxType) -> Self {
+        Self::about(ErrorKind::UnsupportedBox, box_type)
     }
 
     /// Returns the failure of a full box declaring a version the box does not read
@@ -362,7 +386,24 @@ impl Error {
             | Detail::Version(_)
             | Detail::Flags(_)
             | Detail::OutOfRange { .. }
-            | Detail::ValidUpTo(_) => None,
+            | Detail::ValidUpTo(_)
+            | Detail::Alternatives(_) => None,
+        }
+    }
+
+    /// Returns the box types a failure names one of, for the kinds that name a set
+    #[must_use]
+    pub const fn alternatives(self) -> Option<&'static [BoxType]> {
+        match self.detail {
+            Detail::Alternatives(alternatives) => Some(alternatives),
+            Detail::Nothing
+            | Detail::Bytes { .. }
+            | Detail::Entries { .. }
+            | Detail::Version(_)
+            | Detail::Flags(_)
+            | Detail::OutOfRange { .. }
+            | Detail::ValidUpTo(_)
+            | Detail::FoundBoxType(_) => None,
         }
     }
 
@@ -380,7 +421,8 @@ impl Error {
             | Detail::Version(_)
             | Detail::Flags(_)
             | Detail::ValidUpTo(_)
-            | Detail::FoundBoxType(_) => None,
+            | Detail::FoundBoxType(_)
+            | Detail::Alternatives(_) => None,
         }
     }
 
@@ -398,7 +440,8 @@ impl Error {
             | Detail::Flags(_)
             | Detail::OutOfRange { .. }
             | Detail::ValidUpTo(_)
-            | Detail::FoundBoxType(_) => None,
+            | Detail::FoundBoxType(_)
+            | Detail::Alternatives(_) => None,
         }
     }
 
@@ -413,7 +456,8 @@ impl Error {
             | Detail::Flags(_)
             | Detail::OutOfRange { .. }
             | Detail::ValidUpTo(_)
-            | Detail::FoundBoxType(_) => None,
+            | Detail::FoundBoxType(_)
+            | Detail::Alternatives(_) => None,
         }
     }
 
@@ -428,7 +472,8 @@ impl Error {
             | Detail::Flags(_)
             | Detail::OutOfRange { .. }
             | Detail::ValidUpTo(_)
-            | Detail::FoundBoxType(_) => None,
+            | Detail::FoundBoxType(_)
+            | Detail::Alternatives(_) => None,
         }
     }
 
@@ -443,7 +488,8 @@ impl Error {
             | Detail::Flags(_)
             | Detail::OutOfRange { .. }
             | Detail::ValidUpTo(_)
-            | Detail::FoundBoxType(_) => None,
+            | Detail::FoundBoxType(_)
+            | Detail::Alternatives(_) => None,
         }
     }
 
@@ -458,7 +504,8 @@ impl Error {
             | Detail::Version(_)
             | Detail::OutOfRange { .. }
             | Detail::ValidUpTo(_)
-            | Detail::FoundBoxType(_) => None,
+            | Detail::FoundBoxType(_)
+            | Detail::Alternatives(_) => None,
         }
     }
 
@@ -473,7 +520,8 @@ impl Error {
             | Detail::Version(_)
             | Detail::Flags(_)
             | Detail::ValidUpTo(_)
-            | Detail::FoundBoxType(_) => None,
+            | Detail::FoundBoxType(_)
+            | Detail::Alternatives(_) => None,
         }
     }
 
@@ -488,7 +536,8 @@ impl Error {
             | Detail::Version(_)
             | Detail::Flags(_)
             | Detail::OutOfRange { .. }
-            | Detail::FoundBoxType(_) => None,
+            | Detail::FoundBoxType(_)
+            | Detail::Alternatives(_) => None,
         }
     }
 }
@@ -514,6 +563,7 @@ impl fmt::Display for Error {
         let available = self.available_bytes().unwrap_or_default();
         let named = Named(self.box_type);
         let found = Named(self.found_box_type());
+        let listed = Listed(self.alternatives().unwrap_or_default());
         match self.kind {
             ErrorKind::TruncatedHeader => write!(
                 formatter,
@@ -602,6 +652,18 @@ impl fmt::Display for Error {
                 formatter,
                 "container holds a {named}box that a field of it forbids"
             ),
+            ErrorKind::MissingAlternativeBox => write!(
+                formatter,
+                "container holds none of the {listed} boxes, one of which it must hold"
+            ),
+            ErrorKind::DuplicateAlternativeBox => write!(
+                formatter,
+                "container holds more than one of the {listed} boxes, of which one may appear"
+            ),
+            ErrorKind::UnsupportedBox => write!(
+                formatter,
+                "container holds a {named}box, which this implementation does not read"
+            ),
             ErrorKind::EntryCountMismatch => write!(
                 formatter,
                 "box declares {} entries but holds {}",
@@ -666,6 +728,9 @@ impl fmt::Debug for Error {
             }
             Detail::FoundBoxType(found) => {
                 fields.field("found_box_type", &found);
+            }
+            Detail::Alternatives(alternatives) => {
+                fields.field("alternatives", &alternatives);
             }
         }
 
@@ -767,6 +832,16 @@ pub enum ErrorKind {
     /// [`box_type`](Error::box_type) is the type of the child that is
     /// forbidden.
     ForbiddenChildBox,
+    /// Container holds none of the boxes the spec has it hold exactly one of
+    ///
+    /// [`alternatives`](Error::alternatives) is the box types the
+    /// container must hold one of.
+    MissingAlternativeBox,
+    /// Container holds more than one of the boxes the spec has it hold exactly one of
+    ///
+    /// [`alternatives`](Error::alternatives) is the box types the
+    /// container may hold one of.
+    DuplicateAlternativeBox,
     /// Count a box declares does not match the entries it frames for itself
     ///
     /// [`needed_entries`](Error::needed_entries) is the count the
@@ -774,6 +849,11 @@ pub enum ErrorKind {
     /// [`available_entries`](Error::available_entries) the count the
     /// payload holds.
     EntryCountMismatch,
+    /// Container holds a box this implementation does not read
+    ///
+    /// [`box_type`](Error::box_type) is the type of the child that is
+    /// not read.
+    UnsupportedBox,
     /// Full box declares a version the box does not read
     ///
     /// [`version`](Error::version) is the version the box declares.
@@ -847,8 +927,11 @@ impl ErrorKind {
             | Self::MissingMandatoryBox
             | Self::DuplicateBox
             | Self::ForbiddenChildBox
+            | Self::MissingAlternativeBox
+            | Self::DuplicateAlternativeBox
             | Self::EntryCountMismatch => Category::Malformed,
-            Self::UnsupportedVersion
+            Self::UnsupportedBox
+            | Self::UnsupportedVersion
             | Self::UnsupportedFlags
             | Self::UnsupportedEntryCount
             | Self::PayloadLimitExceeded => Category::Unsupported,
@@ -907,6 +990,24 @@ impl fmt::Display for Named {
     }
 }
 
+/// Box types a failure names one of, as `Display` lists them
+struct Listed(&'static [BoxType]);
+
+impl fmt::Display for Listed {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Some((first, rest)) = self.0.split_first() else {
+            return Ok(());
+        };
+
+        write!(formatter, "{first}")?;
+        for box_type in rest {
+            write!(formatter, ", {box_type}")?;
+        }
+
+        Ok(())
+    }
+}
+
 /// Boxes a failure was reached through, as `Debug` lists them
 struct Containers(Error);
 
@@ -940,6 +1041,8 @@ enum Detail {
     ValidUpTo(usize),
     /// Box type an input holds where another was to be read
     FoundBoxType(BoxType),
+    /// Box types a container holds exactly one of
+    Alternatives(&'static [BoxType]),
 }
 
 #[cfg(test)]
@@ -953,6 +1056,19 @@ mod tests {
     use crate::codec::field::FieldWidth;
     use crate::data_types::fourcc::FourCC;
     use crate::framing::box_type::BoxType;
+
+    /// Box types the sample table of ISO/IEC 14496-12 §8.7.3.1 states its sample sizes with
+    const SAMPLE_SIZE_BOXES: &[BoxType] = &[BoxType::compact(*b"stsz"), BoxType::compact(*b"stz2")];
+
+    /// Box types the media information box of ISO/IEC 14496-12 §8.4.5 takes its media
+    /// header from
+    const MEDIA_HEADER_BOXES: &[BoxType] = &[
+        BoxType::compact(*b"vmhd"),
+        BoxType::compact(*b"smhd"),
+        BoxType::compact(*b"hmhd"),
+        BoxType::compact(*b"nmhd"),
+        BoxType::compact(*b"sthd"),
+    ];
 
     #[test]
     fn a_failure_names_the_boxes_it_was_reached_through_outermost_first() {
@@ -1003,6 +1119,14 @@ mod tests {
             Error::unsupported_version(2).category(),
             Category::Unsupported
         );
+        assert_eq!(
+            Error::unsupported_box(BoxType::compact(*b"stz2")).category(),
+            Category::Unsupported
+        );
+        assert_eq!(
+            Error::missing_alternative_box(SAMPLE_SIZE_BOXES).category(),
+            Category::Malformed
+        );
         assert_eq!(Error::no_box_open().category(), Category::Usage);
         assert_eq!(
             Error::buffer_length_mismatch(4, 8).category(),
@@ -1034,6 +1158,15 @@ mod tests {
         assert_eq!(error.needed_entries(), Some(4));
         assert_eq!(error.available_entries(), Some(2));
         assert_eq!(error.needed_bytes(), None);
+    }
+
+    #[test]
+    fn a_failure_about_a_slot_several_box_types_fill_names_them_all() {
+        let error = Error::missing_alternative_box(SAMPLE_SIZE_BOXES);
+
+        assert_eq!(error.alternatives(), Some(SAMPLE_SIZE_BOXES));
+        assert_eq!(error.box_type(), None);
+        assert_eq!(Error::no_box_open().alternatives(), None);
     }
 
     #[test]
@@ -1094,6 +1227,23 @@ mod tests {
             Error::box_type_mismatch(BoxType::compact(*b"moov"), BoxType::compact(*b"moof"))
                 .to_string(),
             "input holds a moof box where a moov box was expected"
+        );
+        assert_eq!(
+            Error::unsupported_box(BoxType::compact(*b"stz2")).to_string(),
+            "container holds a stz2 box, which this implementation does not read"
+        );
+    }
+
+    #[test]
+    fn display_of_a_failure_about_a_slot_several_box_types_fill_names_them_all() {
+        assert_eq!(
+            Error::missing_alternative_box(SAMPLE_SIZE_BOXES).to_string(),
+            "container holds none of the stsz, stz2 boxes, one of which it must hold"
+        );
+        assert_eq!(
+            Error::duplicate_alternative_box(MEDIA_HEADER_BOXES).to_string(),
+            "container holds more than one of the vmhd, smhd, hmhd, nmhd, sthd boxes, \
+             of which one may appear"
         );
     }
 
