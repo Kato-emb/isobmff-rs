@@ -136,8 +136,8 @@ pub trait BoxDecode: Sized {
     /// # Examples
     ///
     /// ```
-    /// use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader};
-    /// use isobmff_core::FieldWriter;
+    /// use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxType};
+    /// use isobmff_core::{Error, FieldReader, FieldWriter};
     ///
     /// // A box whose payload is one 32-bit sequence number
     /// #[derive(PartialEq, Debug)]

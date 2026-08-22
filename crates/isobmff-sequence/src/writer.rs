@@ -356,7 +356,7 @@ impl BoxWriter {
     }
 
     /// Fails the writer on a value that does not write, and names the box it forms
-    fn encode_failure<Value: BoxDefinition + BoxEncode>(&mut self, source: Error) -> Error {
+    fn encode_failure<Value: BoxDefinition>(&mut self, source: Error) -> Error {
         self.fail(source.in_container(Value::BOX_TYPE))
     }
 

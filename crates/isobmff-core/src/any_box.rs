@@ -6,8 +6,7 @@ use core::any::Any;
 use core::fmt;
 
 use crate::codec::box_definition::BoxDefinition;
-use crate::codec::box_encode::BoxEncode;
-use crate::codec::box_encode::{encode_into, encoded_len_of};
+use crate::codec::box_encode::{BoxEncode, encode_into, encoded_len_of};
 use crate::codec::field::FieldWriter;
 use crate::error::Error;
 use crate::framing::box_type::BoxType;
