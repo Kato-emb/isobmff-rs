@@ -54,8 +54,9 @@ pub trait BoxEncode {
     /// The mirror of [`BoxDecode::decode_fields`](crate::BoxDecode::decode_fields):
     /// the Syntax subclause of the box lays out the fields, and an
     /// implementation writes each onto `writer` in the order the box declares
-    /// it. A field that runs to the end of the payload takes what is left with
-    /// [`take_remainder`](FieldWriter::take_remainder).
+    /// it. A field of bytes writes whole with
+    /// [`write_slice`](FieldWriter::write_slice), and a run of child boxes
+    /// takes what is left with [`take_remainder`](FieldWriter::take_remainder).
     ///
     /// The buffer behind `writer` is exactly [`payload_len`](Self::payload_len)
     /// bytes long, which [`encode_payload`](Self::encode_payload) settles

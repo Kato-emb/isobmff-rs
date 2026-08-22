@@ -304,6 +304,30 @@ impl<'buffer> FieldWriter<'buffer> {
         Ok(())
     }
 
+    /// Writes the next field, which occupies the length of `bytes`
+    ///
+    /// # Errors
+    ///
+    /// * [`TruncatedBuffer`](crate::ErrorKind::TruncatedBuffer): the buffer ends
+    ///   inside the field.
+    pub fn write_slice(&mut self, bytes: &[u8]) -> Result<(), Error> {
+        let needed = self.written.saturating_add(byte_count(bytes.len()));
+        let available = self.written.saturating_add(byte_count(self.rest.len()));
+        // Why not leaving the buffer in place: the field does not fit, so the
+        // box abandons the writer, and what is held back would be a buffer no
+        // field can be written into anyway.
+        let Some((field, tail)) = mem::take(&mut self.rest).split_at_mut_checked(bytes.len())
+        else {
+            return Err(Error::truncated_buffer(needed, available));
+        };
+
+        field.copy_from_slice(bytes);
+        self.rest = tail;
+        self.written = needed;
+
+        Ok(())
+    }
+
     /// Writes the next field as a 16-bit unsigned integer
     ///
     /// # Errors
@@ -496,6 +520,29 @@ mod tests {
         assert_eq!(
             writer.write_u32(0x0506_0708),
             Err(Error::truncated_buffer(8, 6))
+        );
+    }
+
+    #[test]
+    fn a_slice_field_writes_the_bytes_it_carries() {
+        let mut buffer = [0; 6];
+        let mut writer = FieldWriter::new(&mut buffer);
+
+        assert_eq!(writer.write_u16(2), Ok(()));
+        assert_eq!(writer.write_slice(b"rest"), Ok(()));
+        assert_eq!(writer.finish(), Ok(()));
+        assert_eq!(buffer, *b"\0\x02rest");
+    }
+
+    #[test]
+    fn a_slice_field_running_past_the_buffer_names_what_the_fields_required() {
+        let mut buffer = [0; 4];
+        let mut writer = FieldWriter::new(&mut buffer);
+
+        assert_eq!(writer.write_u16(2), Ok(()));
+        assert_eq!(
+            writer.write_slice(b"abc"),
+            Err(Error::truncated_buffer(5, 4))
         );
     }
 

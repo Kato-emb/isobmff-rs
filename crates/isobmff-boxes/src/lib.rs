@@ -15,6 +15,7 @@ extern crate alloc;
 
 mod ftyp;
 mod hdlr;
+mod mdat;
 mod mdhd;
 mod mdia;
 mod mfhd;
@@ -36,6 +37,7 @@ mod trun;
 
 pub use ftyp::FileTypeBox;
 pub use hdlr::HandlerBox;
+pub use mdat::MediaDataBox;
 pub use mdhd::MediaHeaderBox;
 pub use mdia::MediaBox;
 pub use mfhd::MovieFragmentHeaderBox;
