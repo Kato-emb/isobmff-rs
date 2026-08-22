@@ -11,6 +11,20 @@ use crate::stsd::SampleDescriptionBox;
 use crate::stsz::SampleSizeBox;
 use crate::stts::TimeToSampleBox;
 
+/// Type of the `stz2` box of ISO/IEC 14496-12 §8.7.3.3, which states the sample sizes
+/// in fields under 32 bits wide
+const COMPACT_SAMPLE_SIZE_BOX: BoxType = BoxType::compact(*b"stz2");
+
+/// Type of the `co64` box of ISO/IEC 14496-12 §8.7.5, which states the chunk offsets
+/// in 64 bits
+const CHUNK_LARGE_OFFSET_BOX: BoxType = BoxType::compact(*b"co64");
+
+/// Box types a sample table states the sizes of its samples with, of which it holds one
+const SAMPLE_SIZE_BOXES: &[BoxType] = &[SampleSizeBox::BOX_TYPE, COMPACT_SAMPLE_SIZE_BOX];
+
+/// Box types a sample table states the offsets of its chunks with, of which it holds one
+const CHUNK_OFFSET_BOXES: &[BoxType] = &[ChunkOffsetBox::BOX_TYPE, CHUNK_LARGE_OFFSET_BOX];
+
 /// Box that holds every table locating and describing the samples of a track
 ///
 /// [`SampleTableBox`] (`stbl`), ISO/IEC 14496-12 §8.5.1. The tables a track
@@ -23,8 +37,8 @@ use crate::stts::TimeToSampleBox;
 /// references no data hold no children at all, and such a box does not decode
 /// into this type — the raw walk still reads it. The variants that state two of
 /// the tables otherwise, `stz2` for the sizes and `co64` for the offsets, have
-/// no type here yet, so a `stbl` stating them that way fails as one holding no
-/// `stsz` or no `stco`.
+/// no type here yet, so a `stbl` stating them that way is reported as holding a
+/// box this implementation does not read rather than as missing a table.
 ///
 /// # Examples
 ///
@@ -131,7 +145,11 @@ impl BoxDecode for SampleTableBox {
     ///
     /// * The failures of [`boxes`]: a child does not frame as a box.
     /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox): no
-    ///   `stsd`, `stts`, `stsc`, `stsz`, or `stco`.
+    ///   `stsd`, `stts`, or `stsc`.
+    /// * [`MissingAlternativeBox`](isobmff_core::ErrorKind::MissingAlternativeBox):
+    ///   neither `stsz` nor `stz2`, or neither `stco` nor `co64`.
+    /// * [`UnsupportedBox`](isobmff_core::ErrorKind::UnsupportedBox): a `stz2` or a
+    ///   `co64`, which this implementation does not read.
     /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one of
     ///   any of them.
     /// * Whatever a child reports, on the [`containers`](Error::containers) path: one
@@ -158,6 +176,8 @@ impl BoxDecode for SampleTableBox {
                 sample_size_boxes.push(child);
             } else if box_type == ChunkOffsetBox::BOX_TYPE {
                 chunk_offset_boxes.push(child);
+            } else if box_type == COMPACT_SAMPLE_SIZE_BOX || box_type == CHUNK_LARGE_OFFSET_BOX {
+                return Err(Error::unsupported_box(box_type));
             } else {
                 other_boxes.keep(child);
             }
@@ -167,8 +187,8 @@ impl BoxDecode for SampleTableBox {
             stsd: sample_description_boxes.exactly_one()?,
             stts: time_to_sample_boxes.exactly_one()?,
             stsc: sample_to_chunk_boxes.exactly_one()?,
-            stsz: sample_size_boxes.exactly_one()?,
-            stco: chunk_offset_boxes.exactly_one()?,
+            stsz: sample_size_boxes.exactly_one_of(SAMPLE_SIZE_BOXES)?,
+            stco: chunk_offset_boxes.exactly_one_of(CHUNK_OFFSET_BOXES)?,
             other_boxes,
         })
     }
@@ -214,7 +234,7 @@ pub(crate) mod tests {
 
     use isobmff_core::{AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Error};
 
-    use super::SampleTableBox;
+    use super::{CHUNK_OFFSET_BOXES, SAMPLE_SIZE_BOXES, SampleTableBox};
     use crate::stco::ChunkOffsetBox;
     use crate::stsc::SampleToChunkBox;
     use crate::stsd::SampleDescriptionBox;
@@ -281,25 +301,73 @@ pub(crate) mod tests {
     fn a_box_missing_one_of_the_tables_it_must_hold_is_rejected() {
         let table = sample_table();
         let children = [
-            (BoxType::compact(*b"stsd"), encoded_child(table.stsd())),
-            (BoxType::compact(*b"stts"), encoded_child(table.stts())),
-            (BoxType::compact(*b"stsc"), encoded_child(table.stsc())),
-            (BoxType::compact(*b"stsz"), encoded_child(table.stsz())),
-            (BoxType::compact(*b"stco"), encoded_child(table.stco())),
+            (
+                BoxType::compact(*b"stsd"),
+                encoded_child(table.stsd()),
+                Error::missing_mandatory_box(BoxType::compact(*b"stsd")),
+            ),
+            (
+                BoxType::compact(*b"stts"),
+                encoded_child(table.stts()),
+                Error::missing_mandatory_box(BoxType::compact(*b"stts")),
+            ),
+            (
+                BoxType::compact(*b"stsc"),
+                encoded_child(table.stsc()),
+                Error::missing_mandatory_box(BoxType::compact(*b"stsc")),
+            ),
+            (
+                BoxType::compact(*b"stsz"),
+                encoded_child(table.stsz()),
+                Error::missing_alternative_box(SAMPLE_SIZE_BOXES),
+            ),
+            (
+                BoxType::compact(*b"stco"),
+                encoded_child(table.stco()),
+                Error::missing_alternative_box(CHUNK_OFFSET_BOXES),
+            ),
         ];
 
-        for (missing, _) in &children {
+        for (missing, _, reported) in &children {
             let payload: Vec<u8> = children
                 .iter()
-                .filter(|(box_type, _)| box_type != missing)
-                .flat_map(|(_, bytes)| bytes.clone())
+                .filter(|(box_type, ..)| box_type != missing)
+                .flat_map(|(_, bytes, _)| bytes.clone())
                 .collect();
 
-            assert_eq!(
-                SampleTableBox::decode_payload(&payload),
-                Err(Error::missing_mandatory_box(*missing))
-            );
+            assert_eq!(SampleTableBox::decode_payload(&payload), Err(*reported));
         }
+    }
+
+    #[test]
+    fn a_box_holding_a_table_this_implementation_does_not_read_is_rejected() {
+        let table = sample_table();
+        let unread = |fourcc: [u8; 4]| [vec![0, 0, 0, 0x10], fourcc.to_vec(), vec![0; 8]].concat();
+        let stating_sizes_compactly = [
+            encoded_child(table.stsd()),
+            encoded_child(table.stts()),
+            encoded_child(table.stsc()),
+            unread(*b"stz2"),
+            encoded_child(table.stco()),
+        ]
+        .concat();
+        let stating_offsets_largely = [
+            encoded_child(table.stsd()),
+            encoded_child(table.stts()),
+            encoded_child(table.stsc()),
+            encoded_child(table.stsz()),
+            unread(*b"co64"),
+        ]
+        .concat();
+
+        assert_eq!(
+            SampleTableBox::decode_payload(&stating_sizes_compactly),
+            Err(Error::unsupported_box(BoxType::compact(*b"stz2")))
+        );
+        assert_eq!(
+            SampleTableBox::decode_payload(&stating_offsets_largely),
+            Err(Error::unsupported_box(BoxType::compact(*b"co64")))
+        );
     }
 
     #[test]
