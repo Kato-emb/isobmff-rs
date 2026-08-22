@@ -8,10 +8,11 @@
 
 use core::ops::Range;
 use isobmff_boxes::{
-    FileTypeBox, HandlerBox, MediaBox, MediaHeaderBox, MediaInformationBox, MovieBox,
-    MovieFragmentBox, MovieFragmentHeaderBox, MovieHeaderBox, SampleDescriptionBox, SampleTableBox,
-    SegmentTypeBox, TrackBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
-    TrackFragmentHeaderBox, TrackHeaderBox,
+    ChunkOffsetBox, FileTypeBox, HandlerBox, MediaBox, MediaHeaderBox, MediaInformationBox,
+    MovieBox, MovieFragmentBox, MovieFragmentHeaderBox, MovieHeaderBox, SampleDescriptionBox,
+    SampleSizeBox, SampleSizes, SampleTableBox, SampleToChunkBox, SegmentTypeBox, TimeToSampleBox,
+    TrackBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
+    TrackHeaderBox,
 };
 use isobmff_core::{
     AnyBox, BoxHeader, BoxSize, BoxType, BoxWrite, FourCC, FullBoxFlags, LanguageCode,
@@ -178,7 +179,13 @@ pub fn movie() -> Option<MovieBox> {
             FourCC::new(*b"vide"),
             NullTerminatedString::new(String::from("VideoHandler"))?,
         ),
-        MediaInformationBox::new(SampleTableBox::new(sample_description)),
+        MediaInformationBox::new(SampleTableBox::new(
+            sample_description,
+            TimeToSampleBox::new(Vec::new()),
+            SampleToChunkBox::new(Vec::new()),
+            SampleSizeBox::new(SampleSizes::PerSample(Vec::new())),
+            ChunkOffsetBox::new(Vec::new()),
+        )),
     );
     let track = TrackBox::new(
         TrackHeaderBox::new(FullBoxFlags::new(1)?, EPOCH, EPOCH, 1, 0),
