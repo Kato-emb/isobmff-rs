@@ -583,7 +583,8 @@ mod tests {
 
     use isobmff_boxes::{FileTypeBox, MovieFragmentBox, MovieFragmentHeaderBox, SegmentTypeBox};
     use isobmff_core::{
-        BoxHeader, BoxSize, BoxType, BoxWrite, CompactSize, Error, ExtendedSize, FourCC, Uuid,
+        BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, CompactSize, Error, ExtendedSize,
+        FourCC, Uuid,
     };
 
     use super::{BoxEvent, BoxReader, Range, header_len_from_prefix};
@@ -666,7 +667,7 @@ mod tests {
     }
 
     /// The bytes a box occupies, its header and its payload
-    fn written(value: &impl BoxWrite) -> Vec<u8> {
+    fn written(value: &(impl BoxDefinition + BoxEncode)) -> Vec<u8> {
         let mut bytes = vec![0; usize::try_from(value.encoded_len()).unwrap()];
         value.encode(&mut bytes).unwrap();
 

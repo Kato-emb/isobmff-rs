@@ -3,8 +3,8 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, Error,
-    FieldReader, FieldWriter, OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
+    FieldWriter, OtherBoxes, boxes,
 };
 
 use crate::mvex::MovieExtendsBox;
@@ -164,7 +164,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, BoxType, BoxWrite as _, Error};
+    use isobmff_core::{BoxDecode, BoxEncode, BoxType, Error};
 
     use super::MovieBox;
     use crate::mvex::tests::movie_extends;

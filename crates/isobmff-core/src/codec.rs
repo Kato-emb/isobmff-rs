@@ -11,13 +11,9 @@
 pub(crate) mod box_decode;
 pub(crate) mod box_definition;
 pub(crate) mod box_encode;
-pub(crate) mod box_read;
-pub(crate) mod box_write;
 pub(crate) mod field;
 
 pub use box_decode::BoxDecode;
 pub use box_definition::BoxDefinition;
 pub use box_encode::BoxEncode;
-pub use box_read::BoxRead;
-pub use box_write::BoxWrite;
 pub use field::{FieldReader, FieldWidth, FieldWriter};

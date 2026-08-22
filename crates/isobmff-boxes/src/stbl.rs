@@ -1,8 +1,8 @@
 //! [`SampleTableBox`] (`stbl`), ISO/IEC 14496-12 §8.5.1
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, Error,
-    FieldReader, FieldWriter, OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
+    FieldWriter, OtherBoxes, boxes,
 };
 
 use crate::stco::ChunkOffsetBox;
@@ -33,7 +33,7 @@ use crate::stts::TimeToSampleBox;
 ///     ChunkOffsetBox, SampleDescriptionBox, SampleSizeBox, SampleSizes, SampleTableBox,
 ///     SampleToChunkBox, TimeToSampleBox,
 /// };
-/// use isobmff_core::{BoxRead, BoxWrite};
+/// use isobmff_core::{BoxDecode, BoxEncode};
 ///
 /// // A fragmented movie describes its samples in its fragments, so these are empty
 /// let sample_table = SampleTableBox::new(
@@ -212,7 +212,7 @@ pub(crate) mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{AnyBox, BoxDecode, BoxEncode, BoxType, BoxWrite, Error};
+    use isobmff_core::{AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Error};
 
     use super::SampleTableBox;
     use crate::stco::ChunkOffsetBox;
@@ -241,7 +241,7 @@ pub(crate) mod tests {
     }
 
     /// Writes one child whole, header and payload, as it lies in a sample table
-    fn encoded_child(child: &impl BoxWrite) -> Vec<u8> {
+    fn encoded_child(child: &(impl BoxDefinition + BoxEncode)) -> Vec<u8> {
         let mut buffer = vec![0; usize::try_from(child.encoded_len()).unwrap()];
         child.encode(&mut buffer).unwrap();
 

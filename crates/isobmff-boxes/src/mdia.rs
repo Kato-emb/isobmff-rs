@@ -1,8 +1,8 @@
 //! [`MediaBox`] (`mdia`), ISO/IEC 14496-12 §8.4.1
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, Error,
-    FieldReader, FieldWriter, OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
+    FieldWriter, OtherBoxes, boxes,
 };
 
 use crate::hdlr::HandlerBox;
