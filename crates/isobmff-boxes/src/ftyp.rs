@@ -23,7 +23,7 @@ const BRAND_LEN: u64 = 4;
 ///
 /// ```
 /// use isobmff_boxes::FileTypeBox;
-/// use isobmff_core::{BoxRead, BoxWrite, FourCC};
+/// use isobmff_core::{BoxDecode, BoxEncode, FourCC};
 ///
 /// // The brands of a fragmented MP4 file
 /// let file_type = FileTypeBox::new(
@@ -133,7 +133,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode as _, BoxRead as _, BoxWrite as _, Error, FourCC};
+    use isobmff_core::{BoxDecode, BoxEncode as _, Error, FourCC};
 
     use super::FileTypeBox;
 

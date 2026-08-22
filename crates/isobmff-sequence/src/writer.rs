@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use isobmff_core::{BoxHeader, BoxWrite, Error};
+use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader, Error};
 
 use crate::event::BoxEvent;
 
@@ -327,12 +327,15 @@ impl BoxWriter {
     }
 
     /// Lays down the whole box `value` forms, and reports the bytes it took
-    fn write_whole<Value: BoxWrite>(&mut self, value: &Value) -> Result<u64, Error> {
+    fn write_whole<Value: BoxDefinition + BoxEncode>(
+        &mut self,
+        value: &Value,
+    ) -> Result<u64, Error> {
         let needed = value.encoded_len();
         let Ok(length) = usize::try_from(needed) else {
             // Why not an error of its own for a box beyond `usize`: such a total
             // exceeds every buffer this target can hold, which is what
-            // `BoxWrite::encode` reports as a short buffer for the same reason.
+            // `BoxEncode::encode` reports as a short buffer for the same reason.
             return Err(self.encode_failure::<Value>(Error::truncated_buffer(
                 needed,
                 u64::try_from(usize::MAX).unwrap_or(u64::MAX),
@@ -353,7 +356,7 @@ impl BoxWriter {
     }
 
     /// Fails the writer on a value that does not write, and names the box it forms
-    fn encode_failure<Value: BoxWrite>(&mut self, source: Error) -> Error {
+    fn encode_failure<Value: BoxDefinition>(&mut self, source: Error) -> Error {
         self.fail(source.in_container(Value::BOX_TYPE))
     }
 

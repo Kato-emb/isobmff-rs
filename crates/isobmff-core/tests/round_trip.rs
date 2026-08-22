@@ -8,7 +8,7 @@
 #[path = "helpers/vendor.rs"]
 mod vendor;
 
-use isobmff_core::{BoxDecode, BoxEncode, BoxRead, BoxWrite, Error};
+use isobmff_core::{BoxDecode, BoxEncode, Error};
 use vendor::{ExpiryBox, OpaqueDataBox, SequenceNumberBox, VendorMarkerBox};
 
 /// Writes `value` into a buffer of exactly the payload length it declares

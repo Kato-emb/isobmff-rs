@@ -3,8 +3,8 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxWrite as _, ChildBoxes, Error,
-    FieldReader, FieldWriter, OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
+    FieldWriter, OtherBoxes, boxes,
 };
 
 use crate::tfdt::TrackFragmentBaseMediaDecodeTimeBox;
@@ -182,8 +182,7 @@ pub(crate) mod tests {
     use alloc::vec::Vec;
 
     use isobmff_core::{
-        BoxDecode, BoxDefinition as _, BoxEncode, BoxType, BoxWrite as _, Error, FullBoxFlags,
-        boxes,
+        BoxDecode, BoxDefinition as _, BoxEncode, BoxType, Error, FullBoxFlags, boxes,
     };
 
     use super::TrackFragmentBox;

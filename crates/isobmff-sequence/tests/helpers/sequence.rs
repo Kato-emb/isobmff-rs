@@ -15,8 +15,8 @@ use isobmff_boxes::{
     TrackHeaderBox,
 };
 use isobmff_core::{
-    AnyBox, BoxHeader, BoxSize, BoxType, BoxWrite, FourCC, FullBoxFlags, LanguageCode,
-    Mp4EpochSeconds, NullTerminatedString, Uuid,
+    AnyBox, BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, FourCC, FullBoxFlags,
+    LanguageCode, Mp4EpochSeconds, NullTerminatedString, Uuid,
 };
 
 use isobmff_sequence::{BoxEvent, BoxReader, BoxWriter, Error};
@@ -53,7 +53,7 @@ fn framed(box_type: BoxType, payload: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// The bytes a box occupies, its header and its payload
-pub fn written(value: &impl BoxWrite) -> Option<Vec<u8>> {
+pub fn written(value: &(impl BoxDefinition + BoxEncode)) -> Option<Vec<u8>> {
     let mut bytes = vec![0; usize::try_from(value.encoded_len()).ok()?];
     value.encode(&mut bytes).ok()?;
 

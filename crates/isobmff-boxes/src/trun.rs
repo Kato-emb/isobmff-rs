@@ -163,7 +163,7 @@ fn per_sample_field_flags(samples: &[TrackRunSample]) -> u32 {
 ///
 /// ```
 /// use isobmff_boxes::{TrackRunBox, TrackRunSample};
-/// use isobmff_core::BoxWrite;
+/// use isobmff_core::BoxEncode;
 ///
 /// // Two samples, each stating its own size and nothing else
 /// let samples = vec![

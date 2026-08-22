@@ -8,7 +8,7 @@
 #[path = "helpers/sequence.rs"]
 pub mod sequence;
 
-use isobmff_core::{BoxEncode as _, BoxType, BoxWrite};
+use isobmff_core::{BoxEncode as _, BoxType};
 use isobmff_sequence::{BoxEvent, BoxReader, Error};
 
 use sequence::{

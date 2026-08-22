@@ -16,7 +16,7 @@ use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldRea
 ///
 /// ```
 /// use isobmff_boxes::MediaDataBox;
-/// use isobmff_core::{BoxRead, BoxWrite};
+/// use isobmff_core::{BoxDecode, BoxEncode};
 ///
 /// // Media data owns the bytes the metadata describes
 /// let media_data = MediaDataBox::new(vec![0xDE, 0xAD, 0xBE, 0xEF]);
@@ -78,7 +78,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode as _, BoxEncode as _, BoxRead as _, BoxWrite as _};
+    use isobmff_core::{BoxDecode as _, BoxEncode as _};
 
     use super::MediaDataBox;
 

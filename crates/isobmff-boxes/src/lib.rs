@@ -2,7 +2,7 @@
 //!
 //! A box in this crate implements the traits `isobmff-core` defines, so it
 //! reads with [`BoxDecode`](isobmff_core::BoxDecode) and writes with
-//! [`BoxWrite`](isobmff_core::BoxWrite) like any other box.
+//! [`BoxEncode`](isobmff_core::BoxEncode) like any other box.
 //!
 //! # `no_std`
 //!

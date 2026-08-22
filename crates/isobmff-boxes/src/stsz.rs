@@ -77,7 +77,7 @@ pub enum SampleSizes {
 /// use core::num::NonZeroU32;
 ///
 /// use isobmff_boxes::{SampleSizeBox, SampleSizes};
-/// use isobmff_core::BoxWrite;
+/// use isobmff_core::BoxEncode;
 ///
 /// // A track whose samples all occupy the same number of bytes
 /// let uniform = SampleSizeBox::new(SampleSizes::Uniform {

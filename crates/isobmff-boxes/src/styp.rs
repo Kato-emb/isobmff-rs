@@ -109,7 +109,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxWrite as _, Error, FourCC};
+    use isobmff_core::{BoxDecode, BoxEncode as _, Error, FourCC};
 
     use super::SegmentTypeBox;
 

@@ -26,7 +26,7 @@ const PAYLOAD_LEN_VERSION_1: u64 = 112;
 ///
 /// ```
 /// use isobmff_boxes::MovieHeaderBox;
-/// use isobmff_core::{BoxRead, BoxWrite, Mp4EpochSeconds};
+/// use isobmff_core::{BoxDecode, BoxEncode, Mp4EpochSeconds};
 ///
 /// // A movie of five seconds at millisecond resolution, with one track
 /// let epoch = Mp4EpochSeconds::from_seconds(0);
@@ -251,7 +251,7 @@ pub(crate) mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, BoxWrite as _, Error, Mp4EpochSeconds};
+    use isobmff_core::{BoxDecode, BoxEncode, Error, Mp4EpochSeconds};
 
     use super::MovieHeaderBox;
 

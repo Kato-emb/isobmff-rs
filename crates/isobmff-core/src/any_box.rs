@@ -6,8 +6,7 @@ use core::any::Any;
 use core::fmt;
 
 use crate::codec::box_definition::BoxDefinition;
-use crate::codec::box_encode::BoxEncode;
-use crate::codec::box_write::{encode_into, encoded_len_of};
+use crate::codec::box_encode::{BoxEncode, encode_into, encoded_len_of};
 use crate::codec::field::FieldWriter;
 use crate::error::Error;
 use crate::framing::box_type::BoxType;
@@ -178,7 +177,7 @@ impl AnyBox {
 
     /// Writes the whole box into the front of `buffer` and returns what is left
     ///
-    /// This is [`BoxWrite::encode`](crate::BoxWrite::encode) under the same
+    /// This is [`BoxEncode::encode`](crate::BoxEncode::encode) under the same
     /// contract, which `AnyBox` cannot have as that trait: the box type is a
     /// value here rather than the constant [`BoxDefinition`] declares. An `Err`
     /// may leave `buffer` written to in part, as it does there.
@@ -267,7 +266,6 @@ mod tests {
     use super::AnyBox;
     use crate::codec::box_definition::BoxDefinition;
     use crate::codec::box_encode::BoxEncode;
-    use crate::codec::box_write::BoxWrite as _;
     use crate::codec::field::FieldWriter;
     use crate::error::Error;
     use crate::framing::box_type::BoxType;
