@@ -2,7 +2,7 @@
 
 use core::mem;
 
-use crate::error::{Error, byte_count};
+use crate::error::Error;
 
 /// Width a box settles for a field it carries at more than one size
 ///
@@ -91,10 +91,10 @@ impl<'payload> FieldReader<'payload> {
     /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload ends
     ///   inside the field.
     pub fn read_bytes<const N: usize>(&mut self) -> Result<&'payload [u8; N], Error> {
-        let needed = self.consumed.saturating_add(byte_count(N));
+        let needed = self.consumed.saturating_add(N as u64);
         let rest = self.rest;
         let (field, tail) = rest.split_first_chunk::<N>().ok_or_else(|| {
-            Error::truncated_payload(needed, self.consumed.saturating_add(byte_count(rest.len())))
+            Error::truncated_payload(needed, self.consumed.saturating_add(rest.len() as u64))
         })?;
 
         self.rest = tail;
@@ -177,7 +177,7 @@ impl<'payload> FieldReader<'payload> {
     /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload holds
     ///   fewer than `bytes` past the fields already read.
     pub fn require(&self, bytes: u64) -> Result<(), Error> {
-        let remaining = byte_count(self.rest.len());
+        let remaining = self.rest.len() as u64;
         if bytes <= remaining {
             return Ok(());
         }
@@ -207,7 +207,7 @@ impl<'payload> FieldReader<'payload> {
     #[must_use]
     pub fn take_remainder(&mut self) -> &'payload [u8] {
         let rest = mem::take(&mut self.rest);
-        self.consumed = self.consumed.saturating_add(byte_count(rest.len()));
+        self.consumed = self.consumed.saturating_add(rest.len() as u64);
 
         rest
     }
@@ -225,7 +225,7 @@ impl<'payload> FieldReader<'payload> {
 
         Err(Error::trailing_payload(
             self.consumed,
-            self.consumed.saturating_add(byte_count(self.rest.len())),
+            self.consumed.saturating_add(self.rest.len() as u64),
         ))
     }
 }
@@ -288,8 +288,8 @@ impl<'buffer> FieldWriter<'buffer> {
     /// * [`TruncatedBuffer`](crate::ErrorKind::TruncatedBuffer): the buffer ends
     ///   inside the field.
     pub fn write_bytes<const N: usize>(&mut self, bytes: &[u8; N]) -> Result<(), Error> {
-        let needed = self.written.saturating_add(byte_count(N));
-        let available = self.written.saturating_add(byte_count(self.rest.len()));
+        let needed = self.written.saturating_add(N as u64);
+        let available = self.written.saturating_add(self.rest.len() as u64);
         // Why not leaving the buffer in place: the field does not fit, so the
         // box abandons the writer, and what is held back would be a buffer no
         // field can be written into anyway.
@@ -311,8 +311,8 @@ impl<'buffer> FieldWriter<'buffer> {
     /// * [`TruncatedBuffer`](crate::ErrorKind::TruncatedBuffer): the buffer ends
     ///   inside the field.
     pub fn write_slice(&mut self, bytes: &[u8]) -> Result<(), Error> {
-        let needed = self.written.saturating_add(byte_count(bytes.len()));
-        let available = self.written.saturating_add(byte_count(self.rest.len()));
+        let needed = self.written.saturating_add(bytes.len() as u64);
+        let available = self.written.saturating_add(self.rest.len() as u64);
         // Why not leaving the buffer in place: the field does not fit, so the
         // box abandons the writer, and what is held back would be a buffer no
         // field can be written into anyway.
@@ -406,7 +406,7 @@ impl<'buffer> FieldWriter<'buffer> {
     #[must_use]
     pub fn take_remainder(&mut self) -> &'buffer mut [u8] {
         let rest = mem::take(&mut self.rest);
-        self.written = self.written.saturating_add(byte_count(rest.len()));
+        self.written = self.written.saturating_add(rest.len() as u64);
 
         rest
     }
@@ -424,7 +424,7 @@ impl<'buffer> FieldWriter<'buffer> {
 
         Err(Error::trailing_buffer(
             self.written,
-            self.written.saturating_add(byte_count(self.rest.len())),
+            self.written.saturating_add(self.rest.len() as u64),
         ))
     }
 }

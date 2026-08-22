@@ -54,9 +54,7 @@ impl fmt::Debug for OpaquePayload {
 
 impl BoxEncode for OpaquePayload {
     fn payload_len(&self) -> u64 {
-        // Why not unwrap: a usize above `u64::MAX` needs a 128-bit target to
-        // exist, and saturating keeps the panic-free path.
-        u64::try_from(self.0.len()).unwrap_or(u64::MAX)
+        self.0.len() as u64
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {

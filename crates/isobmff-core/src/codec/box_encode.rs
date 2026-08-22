@@ -1,7 +1,7 @@
 //! [`BoxEncode`], the box payload of ISO/IEC 14496-12 §4.2 written from a value
 
 use crate::codec::field::FieldWriter;
-use crate::error::{Error, byte_count};
+use crate::error::Error;
 
 /// Value that writes itself as the payload of a box
 ///
@@ -98,7 +98,7 @@ pub trait BoxEncode {
     ///   themselves.
     fn encode_payload(&self, buffer: &mut [u8]) -> Result<(), Error> {
         let declared = self.payload_len();
-        let offered = byte_count(buffer.len());
+        let offered = buffer.len() as u64;
         if offered != declared {
             return Err(Error::buffer_length_mismatch(declared, offered));
         }

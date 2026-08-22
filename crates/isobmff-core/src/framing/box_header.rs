@@ -2,7 +2,7 @@
 
 use crate::data_types::fourcc::FourCC;
 use crate::data_types::uuid::Uuid;
-use crate::error::{Error, byte_count};
+use crate::error::Error;
 use crate::framing::box_size::{BoxSize, CompactSize, ExtendedSize};
 use crate::framing::box_type::{BoxType, CompactType};
 
@@ -202,7 +202,7 @@ impl BoxHeader {
     ///   is smaller than the header it prefixes.
     pub fn decode(input: &[u8]) -> Result<(Self, &[u8]), Error> {
         let truncated_at =
-            |needed: u8| Error::truncated_header(u64::from(needed), byte_count(input.len()));
+            |needed: u8| Error::truncated_header(u64::from(needed), input.len() as u64);
 
         let (size_field, after_size) = input
             .split_first_chunk::<4>()

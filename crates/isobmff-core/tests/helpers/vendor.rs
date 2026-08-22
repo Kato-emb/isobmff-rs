@@ -9,11 +9,6 @@ use isobmff_core::{
     FullBoxFields, FullBoxFlags, Uuid,
 };
 
-/// Returns the length as the payload traits count it
-fn byte_count(length: usize) -> u64 {
-    u64::try_from(length).unwrap_or(u64::MAX)
-}
-
 /// Vendor box whose payload is one 32-bit sequence number
 #[derive(PartialEq, Eq, Debug)]
 pub(crate) struct SequenceNumberBox {
@@ -62,7 +57,7 @@ impl BoxDecode for OpaqueDataBox {
 
 impl BoxEncode for OpaqueDataBox {
     fn payload_len(&self) -> u64 {
-        byte_count(self.data.len())
+        self.data.len() as u64
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
