@@ -136,8 +136,7 @@ pub(crate) mod tests {
     use crate::mdhd::MediaHeaderBox;
     use crate::mdia::MediaBox;
     use crate::minf::MediaInformationBox;
-    use crate::stbl::SampleTableBox;
-    use crate::stsd::SampleDescriptionBox;
+    use crate::stbl::tests::sample_table;
     use crate::tkhd::TrackHeaderBox;
 
     /// Track box of a video track, with every mandatory child in place
@@ -162,9 +161,7 @@ pub(crate) mod tests {
                     FourCC::new(*b"vide"),
                     NullTerminatedString::new(String::from("VideoHandler")).unwrap(),
                 ),
-                MediaInformationBox::new(SampleTableBox::new(
-                    SampleDescriptionBox::new(Vec::new()),
-                )),
+                MediaInformationBox::new(sample_table()),
             ),
         )
     }

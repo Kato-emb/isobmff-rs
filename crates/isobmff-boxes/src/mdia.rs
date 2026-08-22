@@ -153,8 +153,7 @@ mod tests {
     use crate::hdlr::HandlerBox;
     use crate::mdhd::MediaHeaderBox;
     use crate::minf::MediaInformationBox;
-    use crate::stbl::SampleTableBox;
-    use crate::stsd::SampleDescriptionBox;
+    use crate::stbl::tests::sample_table;
 
     /// Media box of a video track, with every mandatory child in place
     fn media() -> MediaBox {
@@ -170,7 +169,7 @@ mod tests {
                 FourCC::new(*b"vide"),
                 NullTerminatedString::new(String::from("VideoHandler")).unwrap(),
             ),
-            MediaInformationBox::new(SampleTableBox::new(SampleDescriptionBox::new(Vec::new()))),
+            MediaInformationBox::new(sample_table()),
         )
     }
 

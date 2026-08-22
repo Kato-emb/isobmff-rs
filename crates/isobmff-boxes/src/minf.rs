@@ -109,12 +109,11 @@ mod tests {
     use isobmff_core::{BoxDecode, BoxEncode, BoxType, Error};
 
     use super::MediaInformationBox;
-    use crate::stbl::SampleTableBox;
-    use crate::stsd::SampleDescriptionBox;
+    use crate::stbl::tests::sample_table;
 
     /// Media information holding only the sample table
     fn media_information() -> MediaInformationBox {
-        MediaInformationBox::new(SampleTableBox::new(SampleDescriptionBox::new(Vec::new())))
+        MediaInformationBox::new(sample_table())
     }
 
     /// Writes the payload of the box and returns the bytes it occupies
