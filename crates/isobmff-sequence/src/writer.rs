@@ -188,7 +188,7 @@ impl BoxWriter {
             BoxEvent::MovieFragment(moof) => self.write_whole(&moof),
             BoxEvent::RawStart(header) => {
                 let mut scratch = [0; BoxHeader::MAX_ENCODED_LEN];
-                let header_len = u64::try_from(header.encoded_len()).unwrap_or(u64::MAX);
+                let header_len = header.encoded_len() as u64;
 
                 self.output.extend_from_slice(header.encode(&mut scratch));
                 self.state = State::Payload { header, written: 0 };
@@ -199,7 +199,7 @@ impl BoxWriter {
                 let State::Payload { header, written } = self.state else {
                     return Err(self.fail(Error::no_box_open()));
                 };
-                let length = u64::try_from(payload.len()).unwrap_or(u64::MAX);
+                let length = payload.len() as u64;
                 let offered = written.saturating_add(length);
 
                 if let Some(declared) = header.payload_len() {
@@ -336,10 +336,9 @@ impl BoxWriter {
             // Why not an error of its own for a box beyond `usize`: such a total
             // exceeds every buffer this target can hold, which is what
             // `BoxEncode::encode` reports as a short buffer for the same reason.
-            return Err(self.encode_failure::<Value>(Error::truncated_buffer(
-                needed,
-                u64::try_from(usize::MAX).unwrap_or(u64::MAX),
-            )));
+            return Err(
+                self.encode_failure::<Value>(Error::truncated_buffer(needed, usize::MAX as u64))
+            );
         };
         let written = self.output.len();
 
@@ -378,7 +377,7 @@ impl Default for BoxWriter {
 ///
 /// The box declares a total, which is what makes it unfinished.
 fn unfinished(header: BoxHeader, written: u64) -> Error {
-    let header_len = u64::try_from(header.encoded_len()).unwrap_or(u64::MAX);
+    let header_len = header.encoded_len() as u64;
 
     Error::unfinished_box(
         // Why not unreachable: only a box declaring a total is unfinished, so

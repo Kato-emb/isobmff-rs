@@ -65,7 +65,7 @@ impl BoxDecode for MediaDataBox {
 
 impl BoxEncode for MediaDataBox {
     fn payload_len(&self) -> u64 {
-        u64::try_from(self.data.len()).unwrap_or(u64::MAX)
+        self.data.len() as u64
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {

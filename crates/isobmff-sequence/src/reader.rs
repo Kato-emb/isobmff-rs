@@ -309,10 +309,8 @@ impl BoxReader {
 
                     self.state = State::Payload {
                         header,
-                        remaining: remaining.map(|remaining| {
-                            remaining
-                                .saturating_sub(u64::try_from(payload.len()).unwrap_or(u64::MAX))
-                        }),
+                        remaining: remaining
+                            .map(|remaining| remaining.saturating_sub(payload.len() as u64)),
                     };
                     self.advance(payload.len());
                     self.push_event(BoxEvent::RawPayload(Vec::from(payload)));
@@ -342,8 +340,7 @@ impl BoxReader {
                     let payload = take_payload(Some(*remaining), &mut unread);
 
                     gathered.extend_from_slice(payload);
-                    *remaining =
-                        remaining.saturating_sub(u64::try_from(payload.len()).unwrap_or(u64::MAX));
+                    *remaining = remaining.saturating_sub(payload.len() as u64);
                     self.advance(payload.len());
                 }
             }
@@ -414,8 +411,8 @@ impl BoxReader {
                 Ok(())
             }
             State::Header(partial) => Err(self.fail(Error::unfinished_header(
-                u64::try_from(partial.needed).unwrap_or(u64::MAX),
-                u64::try_from(partial.filled).unwrap_or(u64::MAX),
+                partial.needed as u64,
+                partial.filled as u64,
             ))),
             State::Payload { header, remaining } => {
                 let unfinished = remaining
@@ -440,9 +437,8 @@ impl BoxReader {
                 ref gathered,
                 ..
             } => {
-                let read_so_far = u64::try_from(header.encoded_len())
-                    .unwrap_or(u64::MAX)
-                    .saturating_add(u64::try_from(gathered.len()).unwrap_or(u64::MAX));
+                let read_so_far =
+                    (header.encoded_len() as u64).saturating_add(gathered.len() as u64);
 
                 Err(self.fail(Error::unfinished_box(
                     read_so_far.saturating_add(remaining),
@@ -466,9 +462,7 @@ impl BoxReader {
 
     /// Counts `taken` bytes as read, moving the position the next box begins at
     fn advance(&mut self, taken: usize) {
-        self.position = self
-            .position
-            .saturating_add(u64::try_from(taken).unwrap_or(u64::MAX));
+        self.position = self.position.saturating_add(taken as u64);
     }
 
     /// Fails the reader for good, and hands the failure back to report

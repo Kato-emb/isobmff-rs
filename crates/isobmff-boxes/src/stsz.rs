@@ -153,7 +153,7 @@ impl BoxDecode for SampleSizeBox {
         }
 
         let declared = u64::from(sample_count);
-        let actual = u64::try_from(entries.len()).unwrap_or(u64::MAX);
+        let actual = entries.len() as u64;
         if actual != declared {
             return Err(Error::entry_count_mismatch(declared, actual));
         }
@@ -168,9 +168,7 @@ impl BoxEncode for SampleSizeBox {
     fn payload_len(&self) -> u64 {
         let entries = match &self.sample_sizes {
             SampleSizes::Uniform { .. } => 0,
-            SampleSizes::PerSample(entries) => u64::try_from(entries.len())
-                .unwrap_or(u64::MAX)
-                .saturating_mul(ENTRY_LEN),
+            SampleSizes::PerSample(entries) => (entries.len() as u64).saturating_mul(ENTRY_LEN),
         };
 
         FIXED_FIELDS_LEN.saturating_add(entries)
@@ -189,7 +187,7 @@ impl BoxEncode for SampleSizeBox {
             }
             SampleSizes::PerSample(entries) => {
                 writer.write_u32(0)?;
-                let sample_count = u64::try_from(entries.len()).unwrap_or(u64::MAX);
+                let sample_count = entries.len() as u64;
                 // Why not saturate silently: a sample count past `u32` cannot be
                 // written at all, and the box has already declared a length built
                 // from it, so this stands for a `Vec` no target can hold.
