@@ -6,6 +6,7 @@ use crate::any_box::AnyBox;
 use crate::codec::box_decode::BoxDecode;
 use crate::codec::box_definition::BoxDefinition;
 use crate::error::Error;
+use crate::framing::box_type::BoxType;
 use crate::framing::raw_box::RawBox;
 
 /// Children of one box type, gathered as a container reads its payload
@@ -18,6 +19,14 @@ use crate::framing::raw_box::RawBox;
 /// [`one_or_more`](Self::one_or_more), [`zero_or_more`](Self::zero_or_more).
 /// Each hands back the field the quantity calls for and reports the counts the
 /// quantity forbids.
+///
+/// `Exactly one variant must be present` states a quantity across box types:
+/// §8.7.3.1 writes the sample sizes as either a `stsz` or a `stz2`, and §8.7.5.1
+/// the chunk offsets as either a `stco` or a `co64` — one slot, two ways of
+/// writing the one table it holds. The gathering of the variant this container
+/// reads finishes with
+/// [`exactly_one_variant`](Self::exactly_one_variant), which names the whole
+/// slot in what it reports.
 ///
 /// Reading is left until then. The children are gathered as the bytes they were
 /// framed as, so a count the quantity already forbids is reported without a
@@ -121,6 +130,26 @@ impl<'payload> ChildBoxes<'payload> {
     {
         self.zero_or_one::<Child>()?
             .ok_or(Error::missing_mandatory_box(Child::BOX_TYPE))
+    }
+
+    /// Returns the one child of a quantity of `Exactly one variant`
+    ///
+    /// `variants` is every box type that writes the slot, which the failure
+    /// names; this gathering holds the variant the container reads.
+    ///
+    /// # Errors
+    ///
+    /// * [`MissingAlternativeBox`](crate::ErrorKind::MissingAlternativeBox): no child
+    ///   of the type was gathered.
+    /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): more than one was.
+    /// * Whatever the child reports, with its box type on the
+    ///   [`containers`](Error::containers) path of the failure.
+    pub fn exactly_one_variant<Child>(self, variants: &'static [BoxType]) -> Result<Child, Error>
+    where
+        Child: BoxDecode + BoxDefinition,
+    {
+        self.zero_or_one::<Child>()?
+            .ok_or(Error::missing_alternative_box(variants))
     }
 
     /// Returns the child of a quantity of `Zero or one`, if it was there
