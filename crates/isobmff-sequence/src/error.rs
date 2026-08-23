@@ -279,39 +279,17 @@ impl fmt::Debug for Error {
         fields.field("kind", &self.kind());
         fields.field("category", &self.category());
 
-        match self.representation {
-            Representation::Box(box_error) => {
-                fields.field("box_error", &box_error);
-            }
-            Representation::UnfinishedHeader { needed, available }
-            | Representation::UnfinishedBox { needed, available } => {
-                fields.field("needed_bytes", &needed);
-                fields.field("available_bytes", &available);
-            }
-            Representation::PayloadPastDeclared {
-                box_type,
-                declared,
-                offered,
-            } => {
-                fields.field("box_type", &box_type);
-                fields.field("needed_bytes", &declared);
-                fields.field("available_bytes", &offered);
-            }
-            Representation::PayloadLimitExceeded {
-                box_type,
-                declared,
-                limit,
-            } => {
-                fields.field("box_type", &box_type);
-                fields.field("needed_bytes", &declared);
-                fields.field("available_bytes", &limit);
-            }
-            Representation::BoxStillOpen { box_type } => {
-                fields.field("box_type", &box_type);
-            }
-            Representation::NoBoxOpen
-            | Representation::PastEndOfFile
-            | Representation::AlreadyFinished => {}
+        if let Some(box_error) = self.box_error() {
+            fields.field("box_error", &box_error);
+        }
+        if let Some(box_type) = self.box_type() {
+            fields.field("box_type", &box_type);
+        }
+        if let Some(needed) = self.needed_bytes() {
+            fields.field("needed_bytes", &needed);
+        }
+        if let Some(available) = self.available_bytes() {
+            fields.field("available_bytes", &available);
         }
 
         fields.finish()
@@ -523,6 +501,16 @@ mod tests {
         assert_eq!(
             format!("{error:?}"),
             "Error { kind: AlreadyFinished, category: Usage }"
+        );
+    }
+
+    #[test]
+    fn debug_names_the_values_a_kind_carries() {
+        let error = Error::payload_past_declared(BoxType::compact(*b"mdat"), 4, 9);
+
+        assert_eq!(
+            format!("{error:?}"),
+            "Error { kind: PayloadPastDeclared, category: Usage, box_type: Compact(CompactType(FourCC(\"mdat\"))), needed_bytes: 4, available_bytes: 9 }"
         );
     }
 }
