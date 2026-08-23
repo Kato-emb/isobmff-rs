@@ -6,10 +6,10 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{
     ChunkOffsetBox, DataEntry, DataEntryUrlBox, DataInformationBox, DataReferenceBox, FileTypeBox,
-    HandlerBox, MediaBox, MediaHeaderBox, MediaInformationBox, MediaInformationHeader, MovieBox,
-    MovieExtendsBox, MovieFragmentBox, MovieFragmentHeaderBox, MovieHeaderBox,
-    SampleDescriptionBox, SampleSizeBox, SampleSizes, SampleTableBox, SampleToChunkBox,
-    SegmentTypeBox, TimeToSampleBox, TrackBox, TrackExtendsBox,
+    HandlerBox, MediaBox, MediaDataBox, MediaHeaderBox, MediaInformationBox,
+    MediaInformationHeader, MovieBox, MovieExtendsBox, MovieFragmentBox, MovieFragmentHeaderBox,
+    MovieHeaderBox, SampleDescriptionBox, SampleSizeBox, SampleSizes, SampleTableBox,
+    SampleToChunkBox, SegmentTypeBox, TimeToSampleBox, TrackBox, TrackExtendsBox,
     TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox, TrackHeaderBox,
     VideoMediaHeaderBox,
 };
@@ -77,6 +77,11 @@ fn segment_type() -> SegmentTypeBox {
 }
 
 /// Track of video the synthetic movies declare, holding no sample of its own
+///
+/// The `track_id` is the one field to pin: the sample tables are empty, and the
+/// rest — the handler, the flags, the sample entry, the durations — is filler no
+/// caller may read anything into. A test that turns on one of those states it
+/// itself rather than reaching for this.
 pub fn track(track_id: u32) -> TrackBox {
     let sample_description = SampleDescriptionBox::new(vec![AnyBox::from_raw_bytes(
         BoxType::compact(*b"avc1"),
@@ -109,7 +114,7 @@ pub fn track(track_id: u32) -> TrackBox {
     )
 }
 
-/// Movie of one track that continues in no fragment, holding every sample of its own
+/// Movie of one track that no `trex` states the defaults of a fragment for
 pub fn unfragmented_movie() -> MovieBox {
     MovieBox::new(
         MovieHeaderBox::new(EPOCH, EPOCH, TIMESCALE, 0, 2),
@@ -120,6 +125,8 @@ pub fn unfragmented_movie() -> MovieBox {
 }
 
 /// Movie of one track continued in fragments, which fall back on `trex`
+///
+/// The track takes the id `trex` names, so the two cannot state different ones.
 pub fn fragmented_movie(trex: TrackExtendsBox) -> MovieBox {
     MovieBox::new(
         MovieHeaderBox::new(EPOCH, EPOCH, TIMESCALE, 0, 2),
@@ -151,12 +158,16 @@ pub fn media_data_header() -> BoxHeader {
 }
 
 /// A synthetic fragmented file: the brands, the movie, one fragment, its media data
+///
+/// The movie declares no `mvex`, which §8.8.1 has for a presentation continued in
+/// fragments. The box layer never reads it, so the file is enough to frame; a
+/// reader of the samples themselves needs [`fragmented_movie`].
 pub fn fragmented_file() -> Vec<u8> {
     [
         written(&file_type()),
         written(&unfragmented_movie()),
         written(&movie_fragment()),
-        framed(BoxType::compact(*b"mdat"), &MEDIA_DATA),
+        written(&MediaDataBox::new(MEDIA_DATA.to_vec())),
     ]
     .concat()
 }
@@ -166,7 +177,7 @@ pub fn segment_file() -> Vec<u8> {
     [
         written(&segment_type()),
         written(&movie_fragment()),
-        framed(BoxType::compact(*b"mdat"), &MEDIA_DATA),
+        written(&MediaDataBox::new(MEDIA_DATA.to_vec())),
     ]
     .concat()
 }
@@ -181,7 +192,7 @@ pub fn file_passed_on() -> Vec<u8> {
 
     file.extend_from_slice(&framed(BoxType::compact(*b"skip"), &[0xa5; 40]));
     file.extend_from_slice(&framed(BoxType::Extended(USER_TYPE), b"vendor!!"));
-    file.extend_from_slice(&framed(BoxType::compact(*b"mdat"), &[0x11; 64]));
+    file.extend_from_slice(&written(&MediaDataBox::new(MEDIA_DATA.to_vec())));
     file.extend_from_slice(&laid_out(unbounded, &[0x22; 48]));
 
     file

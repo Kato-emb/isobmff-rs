@@ -17,10 +17,13 @@ isobmff-boxes.workspace = true
 isobmff-core.workspace = true
 isobmff-sequence.workspace = true
 
-# The whole workspace set is copied out because Cargo refuses `[lints] workspace
-# = true` beside a per-lint override: "cannot override `workspace.lints` in
-# `lints`". Relaxing two lints therefore costs restating the rest. A lint added
-# to the workspace root has to be added here too.
+# A crate that states any `[lints]` table of its own inherits none of the
+# workspace's, and Cargo refuses to have both: `[lints] workspace = true` beside
+# a per-lint override is "cannot override `workspace.lints` in `lints`". So the
+# set is restated here in full. The three relaxed below are allow-by-default and
+# would be relaxed by their absence alone; they are spelled out so the copy lines
+# up key for key with the workspace root, where a lint added has to be added here
+# too.
 [lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"

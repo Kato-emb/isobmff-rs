@@ -58,6 +58,8 @@ mod tests {
     /// states where the media data lies past its own start: over the fragment and
     /// the header of the `mdat` beside it.
     fn fragmented_file() -> Vec<u8> {
+        let track_extends =
+            TrackExtendsBox::new(1, 1, SAMPLE_DURATION, u32::try_from(SAMPLE_LEN).unwrap(), 0);
         let media_data = MediaDataBox::new(MEDIA_DATA.to_vec());
         let header_len = BoxHeader::with_payload_len(
             MediaDataBox::BOX_TYPE,
@@ -74,13 +76,7 @@ mod tests {
 
         [
             written(&file_type()),
-            written(&fragmented_movie(TrackExtendsBox::new(
-                1,
-                1,
-                SAMPLE_DURATION,
-                u32::try_from(SAMPLE_LEN).unwrap(),
-                0,
-            ))),
+            written(&fragmented_movie(track_extends)),
             written(&movie_fragment(data_offset)),
             written(&media_data),
         ]

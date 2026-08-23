@@ -185,17 +185,13 @@ enum State {
 ///
 /// ```
 /// use isobmff::{
-///     MovieFragmentBox, MovieFragmentHeaderBox, SampleReader, TrackFragmentBox,
-///     TrackFragmentHeaderBox, TrackRunBox, TrackRunSample,
+///     MovieFragmentBox, MovieFragmentHeaderBox, SampleReader, TrackExtendsBox,
+///     TrackFragmentBox, TrackFragmentHeaderBox, TrackRunBox, TrackRunSample,
 /// };
-/// # use isobmff::{MovieBox, TrackExtendsBox};
 /// # use isobmff_test_support::fragmented_movie;
-/// # fn movie() -> MovieBox {
-/// #     fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0))
-/// # }
-/// // A reader set up from a movie whose one track is fragmented, its samples
-/// // lasting 1024 units each
-/// let mut reader = SampleReader::new(&movie()).unwrap();
+/// // A movie whose one track is fragmented, its samples lasting 1024 units each
+/// let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0));
+/// let mut reader = SampleReader::new(&movie).unwrap();
 ///
 /// // One fragment of two samples, anchored at the fragment itself and starting
 /// // 96 bytes into it — past the fragment and the header of the `mdat` beside it
@@ -612,7 +608,7 @@ mod tests {
         TrackRunSample,
     };
     use isobmff_core::{BoxDecode as _, BoxEncode as _, FullBoxFlags, Mp4EpochSeconds};
-    use isobmff_test_support::track;
+    use isobmff_test_support::{track, written};
 
     use super::{MovieBox, MovieFragmentBox, Sample, SampleError, SampleReader};
 
@@ -648,11 +644,7 @@ mod tests {
         let mut payload = vec![0; usize::try_from(declared.payload_len()).unwrap()];
         declared.encode_payload(&mut payload).unwrap();
 
-        let repeated = track(1);
-        let mut encoded_track = vec![0; usize::try_from(repeated.encoded_len()).unwrap()];
-        repeated.encode(&mut encoded_track).unwrap();
-
-        MovieBox::decode_payload(&[payload, encoded_track].concat()).unwrap()
+        MovieBox::decode_payload(&[payload, written(&track(1))].concat()).unwrap()
     }
 
     /// Fragment header of one track, carrying the flags and defaults given
