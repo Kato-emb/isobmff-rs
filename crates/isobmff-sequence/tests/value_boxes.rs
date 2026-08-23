@@ -5,30 +5,27 @@
     reason = "an integration test binary ships no items, so its tests are the crate root"
 )]
 
-#[path = "helpers/sequence.rs"]
-pub mod sequence;
-
 use isobmff_core::{BoxEncode as _, BoxType};
 use isobmff_sequence::{BoxEvent, BoxReader, Error};
 
-use sequence::{
-    MEDIA_DATA, events_of, file_type, fragmented_file, media_data_header, movie, movie_fragment,
-    payloads_fused, polled,
+use isobmff_test_support::{
+    MEDIA_DATA, events_of, file_type, fragmented_file, media_data_header, movie_fragment,
+    payloads_fused, polled, unfragmented_movie,
 };
 
 #[test]
 fn the_boxes_a_file_is_framed_by_are_values_and_its_media_data_is_passed_on() {
-    let movie = movie().unwrap();
-    let movie_fragment = movie_fragment().unwrap();
+    let movie = unfragmented_movie();
+    let movie_fragment = movie_fragment();
     let movie_at = file_type().encoded_len();
     let fragment_at = movie_at.saturating_add(movie.encoded_len());
     let media_data_at = fragment_at.saturating_add(movie_fragment.encoded_len());
-    let media_data_header = media_data_header().unwrap();
+    let media_data_header = media_data_header();
     let media_data_payload_at =
         media_data_at.saturating_add(u64::try_from(media_data_header.encoded_len()).unwrap());
     let media_data_end =
         media_data_payload_at.saturating_add(u64::try_from(MEDIA_DATA.len()).unwrap());
-    let file = fragmented_file().unwrap();
+    let file = fragmented_file();
 
     assert_eq!(
         events_of(&file, file.len()).unwrap(),
@@ -54,7 +51,7 @@ fn the_boxes_a_file_is_framed_by_are_values_and_its_media_data_is_passed_on() {
 
 #[test]
 fn the_events_reported_do_not_turn_on_where_the_fragmented_file_was_cut() {
-    let file = fragmented_file().unwrap();
+    let file = fragmented_file();
     let whole = payloads_fused(events_of(&file, file.len()).unwrap());
 
     for cut_length in 1..=file.len() {
@@ -68,9 +65,9 @@ fn the_events_reported_do_not_turn_on_where_the_fragmented_file_was_cut() {
 
 #[test]
 fn a_value_declaring_more_than_the_limit_stops_the_reader_where_it_stands() {
-    let declared = movie().unwrap().payload_len();
+    let declared = unfragmented_movie().payload_len();
     let limit = declared.saturating_sub(1);
-    let file = fragmented_file().unwrap();
+    let file = fragmented_file();
     let mut reader = BoxReader::with_payload_limit(limit);
 
     let failure = Error::payload_limit_exceeded(BoxType::compact(*b"moov"), declared, limit);

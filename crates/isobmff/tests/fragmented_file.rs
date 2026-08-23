@@ -3,23 +3,13 @@
 #[cfg(test)]
 mod tests {
     use isobmff::{
-        BoxDefinition, BoxEncode, BoxHeader, ChunkOffsetBox, DataEntry, DataEntryUrlBox,
-        DataInformationBox, DataReferenceBox, FileTypeBox, FourCC, FullBoxFlags, HandlerBox,
-        LanguageCode, MediaBox, MediaDataBox, MediaHeaderBox, MediaInformationBox,
-        MediaInformationHeader, MovieBox, MovieExtendsBox, MovieFragmentBox,
-        MovieFragmentHeaderBox, MovieHeaderBox, Mp4EpochSeconds, NullTerminatedString, Sample,
-        SampleDescriptionBox, SampleReader, SampleSizeBox, SampleSizes, SampleTableBox,
-        SampleToChunkBox, TimeToSampleBox, TrackBox, TrackExtendsBox,
-        TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
-        TrackHeaderBox, TrackRunBox, TrackRunSample, VideoMediaHeaderBox,
+        BoxDefinition, BoxEncode, BoxHeader, MediaDataBox, MovieFragmentBox,
+        MovieFragmentHeaderBox, Sample, SampleReader, TrackExtendsBox,
+        TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox, TrackRunBox,
+        TrackRunSample,
     };
     use isobmff_sequence::{BoxEvent, BoxReader};
-
-    /// Time every header of the synthetic file declares
-    const EPOCH: Mp4EpochSeconds = Mp4EpochSeconds::from_seconds(0);
-
-    /// Ticks a second the media of the synthetic file is timed in
-    const TIMESCALE: u32 = 90_000;
+    use isobmff_test_support::{file_type, fragmented_movie, written};
 
     /// Bytes each sample of the synthetic file occupies
     const SAMPLE_LEN: usize = 8;
@@ -35,60 +25,6 @@ mod tests {
         0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
         0x17, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
     ];
-
-    /// The bytes a box occupies, its header and its payload
-    fn written(value: &(impl BoxDefinition + BoxEncode)) -> Vec<u8> {
-        let mut bytes = vec![0; usize::try_from(value.encoded_len()).unwrap()];
-        value.encode(&mut bytes).unwrap();
-
-        bytes
-    }
-
-    /// Brands the file declares itself readable as
-    fn file_type() -> FileTypeBox {
-        FileTypeBox::new(
-            FourCC::new(*b"iso6"),
-            512,
-            vec![FourCC::new(*b"iso6"), FourCC::new(*b"dash")],
-        )
-    }
-
-    /// Movie the file declares: one fragmented track of video
-    fn movie() -> MovieBox {
-        let media = MediaBox::new(
-            MediaHeaderBox::new(EPOCH, EPOCH, TIMESCALE, 0, LanguageCode::UND),
-            HandlerBox::new(
-                FourCC::new(*b"vide"),
-                NullTerminatedString::new(String::from("VideoHandler")).unwrap(),
-            ),
-            MediaInformationBox::new(
-                MediaInformationHeader::Video(VideoMediaHeaderBox::new(0, [0; 3])),
-                DataInformationBox::new(DataReferenceBox::new(vec![DataEntry::Url(
-                    DataEntryUrlBox::new(None),
-                )])),
-                SampleTableBox::new(
-                    SampleDescriptionBox::new(Vec::new()),
-                    TimeToSampleBox::new(Vec::new()),
-                    SampleToChunkBox::new(Vec::new()),
-                    SampleSizeBox::new(SampleSizes::PerSample(Vec::new())),
-                    ChunkOffsetBox::new(Vec::new()),
-                ),
-            ),
-        );
-        let track = TrackBox::new(
-            TrackHeaderBox::new(FullBoxFlags::new(1).unwrap(), EPOCH, EPOCH, 1, 0),
-            media,
-        );
-        let track_extends =
-            TrackExtendsBox::new(1, 1, SAMPLE_DURATION, u32::try_from(SAMPLE_LEN).unwrap(), 0);
-
-        MovieBox::new(
-            MovieHeaderBox::new(EPOCH, EPOCH, TIMESCALE, 0, 2),
-            vec![track],
-            MovieExtendsBox::new(vec![track_extends]),
-        )
-        .unwrap()
-    }
 
     /// Fragment the file carries, its three samples lying `data_offset` past its start
     fn movie_fragment(data_offset: i32) -> MovieFragmentBox {
@@ -122,6 +58,8 @@ mod tests {
     /// states where the media data lies past its own start: over the fragment and
     /// the header of the `mdat` beside it.
     fn fragmented_file() -> Vec<u8> {
+        let track_extends =
+            TrackExtendsBox::new(1, 1, SAMPLE_DURATION, u32::try_from(SAMPLE_LEN).unwrap(), 0);
         let media_data = MediaDataBox::new(MEDIA_DATA.to_vec());
         let header_len = BoxHeader::with_payload_len(
             MediaDataBox::BOX_TYPE,
@@ -138,7 +76,7 @@ mod tests {
 
         [
             written(&file_type()),
-            written(&movie()),
+            written(&fragmented_movie(track_extends)),
             written(&movie_fragment(data_offset)),
             written(&media_data),
         ]

@@ -9,6 +9,7 @@ dependencies = [
  "isobmff-boxes",
  "isobmff-core",
  "isobmff-sequence",
+ "isobmff-test-support",
 ]
 
 [[package]]
@@ -28,4 +29,14 @@ version = "0.0.0"
 dependencies = [
  "isobmff-boxes",
  "isobmff-core",
+ "isobmff-test-support",
+]
+
+[[package]]
+name = "isobmff-test-support"
+version = "0.0.0"
+dependencies = [
+ "isobmff-boxes",
+ "isobmff-core",
+ "isobmff-sequence",
 ]

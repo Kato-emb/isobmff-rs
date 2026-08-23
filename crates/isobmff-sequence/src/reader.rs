@@ -579,10 +579,8 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_boxes::{FileTypeBox, MovieFragmentBox, MovieFragmentHeaderBox, SegmentTypeBox};
-    use isobmff_core::{
-        BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, CompactSize, ExtendedSize, FourCC,
-        Uuid,
-    };
+    use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize, ExtendedSize, FourCC, Uuid};
+    use isobmff_test_support::written;
 
     use super::{BoxEvent, BoxReader, Error, Range, header_len_from_prefix};
 
@@ -661,14 +659,6 @@ mod tests {
     /// Fragment adding to no track, the shortest `moof` a file can carry
     fn movie_fragment() -> MovieFragmentBox {
         MovieFragmentBox::new(MovieFragmentHeaderBox::new(1), Vec::new())
-    }
-
-    /// The bytes a box occupies, its header and its payload
-    fn written(value: &(impl BoxDefinition + BoxEncode)) -> Vec<u8> {
-        let mut bytes = vec![0; usize::try_from(value.encoded_len()).unwrap()];
-        value.encode(&mut bytes).unwrap();
-
-        bytes
     }
 
     /// The next event the reader reports, with the bytes it was read from

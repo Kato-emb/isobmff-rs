@@ -17,6 +17,7 @@ isobmff-core.workspace = true
 
 [dev-dependencies]
 isobmff-sequence.workspace = true
+isobmff-test-support.workspace = true
 
 [lints]
 workspace = true

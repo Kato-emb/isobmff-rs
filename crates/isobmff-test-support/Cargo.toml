@@ -1,7 +1,8 @@
 [package]
-name = "isobmff-sequence"
+name = "isobmff-test-support"
 version = "0.0.0"
-description = "Sans-IO reader and writer for the sequence of boxes an ISO base media file is formed as"
+description = "Synthetic files and the machinery to drive them, shared by the tests of this workspace"
+publish = false
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -14,9 +15,7 @@ exclude.workspace = true
 [dependencies]
 isobmff-boxes.workspace = true
 isobmff-core.workspace = true
-
-[dev-dependencies]
-isobmff-test-support.workspace = true
+isobmff-sequence.workspace = true
 
 [lints]
 workspace = true
