@@ -36,9 +36,6 @@ mod tests {
         0x17, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
     ];
 
-    /// Flags of a fragment whose offsets are anchored at the movie fragment
-    const ANCHORED_AT_THE_MOVIE_FRAGMENT: u32 = 0x0002_0000;
-
     /// The bytes a box occupies, its header and its payload
     fn written(value: &(impl BoxDefinition + BoxEncode)) -> Vec<u8> {
         let mut bytes = vec![0; usize::try_from(value.encoded_len()).unwrap()];
@@ -100,7 +97,7 @@ mod tests {
             .collect();
         let track_fragment = TrackFragmentBox::new(
             TrackFragmentHeaderBox::new(
-                FullBoxFlags::new(ANCHORED_AT_THE_MOVIE_FRAGMENT).unwrap(),
+                TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
                 1,
                 None,
                 None,

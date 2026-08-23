@@ -190,11 +190,6 @@ pub(crate) mod tests {
     use crate::tfhd::TrackFragmentHeaderBox;
     use crate::trun::{TrackRunBox, TrackRunSample};
 
-    /// Flags of a fragment declaring that it holds no samples
-    fn duration_is_empty() -> FullBoxFlags {
-        FullBoxFlags::new(0x0001_0000).unwrap()
-    }
-
     /// Fragment header of a track whose samples all last the same time
     fn track_fragment_header(flags: FullBoxFlags, track_id: u32) -> TrackFragmentHeaderBox {
         TrackFragmentHeaderBox::new(flags, track_id, None, None, Some(1_024), None, None).unwrap()
@@ -274,7 +269,7 @@ pub(crate) mod tests {
     fn a_fragment_declaring_an_empty_duration_alongside_a_run_cannot_be_built() {
         assert_eq!(
             TrackFragmentBox::new(
-                track_fragment_header(duration_is_empty(), 1),
+                track_fragment_header(TrackFragmentHeaderBox::DURATION_IS_EMPTY, 1),
                 None,
                 vec![track_run()]
             ),
@@ -285,7 +280,7 @@ pub(crate) mod tests {
     #[test]
     fn a_payload_holding_a_run_the_empty_duration_forbids_is_rejected() {
         let empty = TrackFragmentBox::new(
-            track_fragment_header(duration_is_empty(), 1),
+            track_fragment_header(TrackFragmentHeaderBox::DURATION_IS_EMPTY, 1),
             None,
             Vec::new(),
         )
