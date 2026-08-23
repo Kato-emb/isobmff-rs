@@ -32,6 +32,9 @@ const DEFAULT_SAMPLE_FLAGS_PRESENT: u32 = 0x0000_0020;
 /// Flag stating that the fragment of this box holds no samples
 const DURATION_IS_EMPTY: u32 = 0x0001_0000;
 
+/// Flag stating that the data offsets of this fragment are anchored at the `moof`
+const DEFAULT_BASE_IS_MOOF: u32 = 0x0002_0000;
+
 /// Every flag stating that a field of this box is present
 const PRESENCE_FLAGS: u32 = BASE_DATA_OFFSET_PRESENT
     | SAMPLE_DESCRIPTION_INDEX_PRESENT
@@ -162,6 +165,16 @@ impl TrackFragmentHeaderBox {
     #[must_use]
     pub const fn duration_is_empty(&self) -> bool {
         self.flags.bits() & DURATION_IS_EMPTY != 0
+    }
+
+    /// Returns whether the data offsets of this fragment are anchored at the `moof`
+    ///
+    /// §8.8.7.1 has this flag ignored where
+    /// [`base_data_offset`](Self::base_data_offset) is given, which anchors them
+    /// explicitly instead.
+    #[must_use]
+    pub const fn default_base_is_moof(&self) -> bool {
+        self.flags.bits() & DEFAULT_BASE_IS_MOOF != 0
     }
 
     /// Returns the track this fragment carries samples of
@@ -385,6 +398,25 @@ mod tests {
             track_fragment_header.flags(),
             FullBoxFlags::new(0x0002_0008).unwrap()
         );
+    }
+
+    #[test]
+    fn a_fragment_anchored_at_the_movie_fragment_says_so() {
+        let anchored_at_the_movie_fragment = FullBoxFlags::new(0x0002_0000).unwrap();
+
+        let track_fragment_header = TrackFragmentHeaderBox::new(
+            anchored_at_the_movie_fragment,
+            1,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(track_fragment_header.default_base_is_moof());
+        assert!(!every_field().default_base_is_moof());
     }
 
     #[test]
