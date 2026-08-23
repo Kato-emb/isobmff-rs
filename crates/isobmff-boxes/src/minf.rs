@@ -31,8 +31,9 @@ const MEDIA_HEADER_BOXES: &[BoxType] = &[
 /// holds — so the slot takes any of these, and exactly one of them.
 ///
 /// The variants are the headers ISO/IEC 14496-12 itself defines. §8.4.5 lets a
-/// derived specification define one of its own, which no variant here names,
-/// and a `minf` headed by one of those does not decode.
+/// derived specification define one of its own, which no variant here names — a
+/// `minf` headed by one of those states no header and keeps it among the
+/// children no field claims.
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum MediaInformationHeader {
@@ -98,14 +99,16 @@ impl MediaInformationHeader {
 /// kind selects, the `dinf` that says where the media data lives, and the `stbl`
 /// that locates the samples within it.
 ///
-/// The media header is one of the five ISO/IEC 14496-12 defines. §8.4.5 lets a
-/// derived specification define a header of its own, which no type here names,
-/// and a `minf` headed by one of those does not decode into this type — the raw
-/// walk still reads it.
+/// The media header slot is filled when the header is one of the five ISO/IEC
+/// 14496-12 defines. §8.4.5 lets a derived specification define a header of its
+/// own, which no type here names — a `minf` headed by one of those keeps it
+/// among [`other_boxes`](Self::other_boxes) and the slot reads back [`None`].
+/// A box built with [`new`](Self::new) always states one of the five.
 ///
 /// On encode the children are written in the order the spec lists them — the
 /// media header, `dinf`, `stbl` — and then the children no field claims, so a
-/// round-trip settles the order rather than preserving it.
+/// round-trip settles the order rather than preserving it. A header kept among
+/// those children is written after the `stbl` with them.
 ///
 /// # Examples
 ///
@@ -151,7 +154,7 @@ impl MediaInformationHeader {
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Debug)]
 pub struct MediaInformationBox {
-    media_information_header: MediaInformationHeader,
+    media_information_header: Option<MediaInformationHeader>,
     dinf: DataInformationBox,
     stbl: SampleTableBox,
     other_boxes: OtherBoxes,
@@ -166,17 +169,19 @@ impl MediaInformationBox {
         stbl: SampleTableBox,
     ) -> Self {
         Self {
-            media_information_header,
+            media_information_header: Some(media_information_header),
             dinf,
             stbl,
             other_boxes: OtherBoxes::new(),
         }
     }
 
-    /// Returns the header the kind of media this track carries states
+    /// Returns the header the kind of media this track carries states, or
+    /// [`None`] when the box was read with a header no variant of
+    /// [`MediaInformationHeader`] names
     #[must_use]
-    pub const fn media_information_header(&self) -> &MediaInformationHeader {
-        &self.media_information_header
+    pub const fn media_information_header(&self) -> Option<&MediaInformationHeader> {
+        self.media_information_header.as_ref()
     }
 
     /// Returns where the media data of the track lies
@@ -208,9 +213,6 @@ impl BoxDecode for MediaInformationBox {
     /// * The failures of [`boxes`]: a child does not frame as a box.
     /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox): no
     ///   `dinf` or no `stbl`.
-    /// * [`MissingAlternativeBox`](isobmff_core::ErrorKind::MissingAlternativeBox): no
-    ///   media header of the five §8.4.5.2, §12.1.2, §12.2.2, §12.4.2, and §12.6.2
-    ///   define.
     /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one
     ///   `dinf`, more than one `stbl`, or more than one media header of one type.
     /// * [`DuplicateAlternativeBox`](isobmff_core::ErrorKind::DuplicateAlternativeBox):
@@ -239,8 +241,8 @@ impl BoxDecode for MediaInformationBox {
         }
 
         let media_information_header = match media_header_boxes.as_slice() {
-            [] => return Err(Error::missing_alternative_box(MEDIA_HEADER_BOXES)),
-            [stated] => MediaInformationHeader::decode(*stated)?,
+            [] => None,
+            [stated] => Some(MediaInformationHeader::decode(*stated)?),
             [first, rest @ ..] => {
                 let box_type = first.header().box_type();
                 let of_one_kind = rest
@@ -275,16 +277,18 @@ impl BoxEncode for MediaInformationBox {
             });
 
         self.media_information_header
-            .encoded_len()
+            .as_ref()
+            .map_or(0, MediaInformationHeader::encoded_len)
             .saturating_add(self.dinf.encoded_len())
             .saturating_add(self.stbl.encoded_len())
             .saturating_add(others)
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        let mut rest = self
-            .media_information_header
-            .encode(writer.take_remainder())?;
+        let mut rest = writer.take_remainder();
+        if let Some(media_information_header) = &self.media_information_header {
+            rest = media_information_header.encode(rest)?;
+        }
         rest = self.dinf.encode(rest)?;
         rest = self.stbl.encode(rest)?;
         for other in self.other_boxes.as_slice() {
@@ -364,18 +368,33 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_box_headed_by_a_media_header_no_variant_here_names_is_rejected() {
+    fn a_box_headed_by_a_media_header_no_variant_here_names_states_none_and_keeps_it() {
         let derived_media_header = vec![0, 0, 0, 0x0c, b'g', b'm', b'h', b'd', 0, 0, 0, 0];
         let payload = [
-            derived_media_header,
+            derived_media_header.clone(),
             encoded_child(&data_information()),
             encoded_child(&sample_table()),
         ]
         .concat();
 
+        let media_information = MediaInformationBox::decode_payload(&payload).unwrap();
+
+        assert_eq!(media_information.media_information_header(), None);
         assert_eq!(
-            MediaInformationBox::decode_payload(&payload),
-            Err(Error::missing_alternative_box(MEDIA_HEADER_BOXES))
+            media_information
+                .other_boxes()
+                .first()
+                .map(AnyBox::box_type),
+            Some(BoxType::compact(*b"gmhd"))
+        );
+        assert_eq!(
+            encoded_payload(&media_information),
+            [
+                encoded_child(&data_information()),
+                encoded_child(&sample_table()),
+                derived_media_header,
+            ]
+            .concat()
         );
     }
 
@@ -411,32 +430,26 @@ pub(crate) mod tests {
     fn a_box_missing_one_of_the_children_it_must_hold_is_rejected() {
         let children = [
             (
-                BoxType::compact(*b"vmhd"),
-                encoded_child(&video_media_header()),
-                Error::missing_alternative_box(MEDIA_HEADER_BOXES),
-            ),
-            (
                 BoxType::compact(*b"dinf"),
                 encoded_child(&data_information()),
-                Error::missing_mandatory_box(BoxType::compact(*b"dinf")),
             ),
-            (
-                BoxType::compact(*b"stbl"),
-                encoded_child(&sample_table()),
-                Error::missing_mandatory_box(BoxType::compact(*b"stbl")),
-            ),
+            (BoxType::compact(*b"stbl"), encoded_child(&sample_table())),
         ];
 
-        for (missing, _, reported) in &children {
-            let payload: Vec<u8> = children
-                .iter()
-                .filter(|(box_type, ..)| box_type != missing)
-                .flat_map(|(_, bytes, _)| bytes.clone())
-                .collect();
+        for (missing, _) in &children {
+            let payload: Vec<u8> = [(
+                BoxType::compact(*b"vmhd"),
+                encoded_child(&video_media_header()),
+            )]
+            .iter()
+            .chain(&children)
+            .filter(|(box_type, _)| box_type != missing)
+            .flat_map(|(_, bytes)| bytes.clone())
+            .collect();
 
             assert_eq!(
                 MediaInformationBox::decode_payload(&payload),
-                Err(*reported)
+                Err(Error::missing_mandatory_box(*missing))
             );
         }
     }
