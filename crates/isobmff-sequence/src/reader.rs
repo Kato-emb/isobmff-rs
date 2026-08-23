@@ -5,8 +5,9 @@ use alloc::vec::Vec;
 use core::mem;
 use core::ops::Range;
 
-use isobmff_core::{BoxHeader, CompactType, Error, FourCC};
+use isobmff_core::{BoxHeader, CompactType, FourCC};
 
+use crate::error::Error;
 use crate::event::{BoxEvent, ValueBox};
 
 /// Shortest header a box can carry: the `size` and `type` fields alone
@@ -231,11 +232,13 @@ impl BoxReader {
     ///
     /// # Errors
     ///
-    /// * The failures of [`BoxHeader::decode`]: a header does not decode.
+    /// * The failures of [`BoxHeader::decode`], carried on
+    ///   [`Box`](crate::ErrorKind::Box): a header does not decode.
     /// * [`PayloadLimitExceeded`](crate::ErrorKind::PayloadLimitExceeded): a box read into
     ///   a value declares a payload past the limit the reader was given.
-    /// * Whatever the payload of a box read into a value reports, with the type
-    ///   of that box on the [`containers`](Error::containers) path.
+    /// * Whatever the payload of a box read into a value reports, carried on
+    ///   [`Box`](crate::ErrorKind::Box) with the type of that box on its
+    ///   [`containers`](isobmff_core::Error::containers) path.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the file was declared
     ///   over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the reader keeps and reports
@@ -262,7 +265,7 @@ impl BoxReader {
                             self.state = State::Header(partial);
                             return Ok(());
                         }
-                        Err(error) => return Err(self.fail(error)),
+                        Err(error) => return Err(self.fail(error.into())),
                     };
                     let payload_len = header.payload_len();
 
@@ -328,7 +331,7 @@ impl BoxReader {
                         match value_box.read(&payload) {
                             Ok(event) => self.push_event(event),
                             Err(error) => {
-                                return Err(self.fail(error.in_container(header.box_type())));
+                                return Err(self.fail(error.in_container(header.box_type()).into()));
                             }
                         }
                         continue;
@@ -528,7 +531,7 @@ impl PartialHeader {
     ///
     /// Returns `Ok(None)` when `input` runs out first, having taken what it
     /// offered.
-    fn take_from(&mut self, input: &mut &[u8]) -> Result<Option<BoxHeader>, Error> {
+    fn take_from(&mut self, input: &mut &[u8]) -> Result<Option<BoxHeader>, isobmff_core::Error> {
         self.gather(input);
         if self.filled < MIN_HEADER_LEN {
             return Ok(None);
@@ -577,11 +580,11 @@ mod tests {
 
     use isobmff_boxes::{FileTypeBox, MovieFragmentBox, MovieFragmentHeaderBox, SegmentTypeBox};
     use isobmff_core::{
-        BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, CompactSize, Error, ExtendedSize,
-        FourCC, Uuid,
+        BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, CompactSize, ExtendedSize, FourCC,
+        Uuid,
     };
 
-    use super::{BoxEvent, BoxReader, Range, header_len_from_prefix};
+    use super::{BoxEvent, BoxReader, Error, Range, header_len_from_prefix};
 
     /// Every form a header takes: the two size fields against the two box types
     const EVERY_HEADER_FORM: [&[u8]; 6] = [
@@ -874,7 +877,7 @@ mod tests {
     #[test]
     fn a_failed_reader_reports_the_same_failure_for_every_call_after_it() {
         let mut reader = BoxReader::new();
-        let failure = Error::size_below_header(8, 4);
+        let failure = Error::from(isobmff_core::Error::size_below_header(8, 4));
 
         assert_eq!(reader.handle_input(b"\0\0\0\x04free"), Err(failure));
         assert_eq!(reader.handle_input(b"\0\0\0\x08skip"), Err(failure));
@@ -1055,7 +1058,9 @@ mod tests {
     fn a_value_whose_payload_does_not_decode_fails_the_reader_and_reports_no_part_of_it() {
         let mut reader = BoxReader::new();
 
-        let failure = Error::truncated_header(8, 4).in_container(BoxType::compact(*b"moof"));
+        let failure = Error::from(
+            isobmff_core::Error::truncated_header(8, 4).in_container(BoxType::compact(*b"moof")),
+        );
 
         assert_eq!(reader.handle_input(b"\0\0\0\x0cmoofAAAA"), Err(failure));
         assert_eq!(reader.handle_input(b"\0\0\0\x08free"), Err(failure));

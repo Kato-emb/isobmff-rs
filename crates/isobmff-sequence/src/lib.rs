@@ -25,12 +25,12 @@
 
 extern crate alloc;
 
+mod error;
 mod event;
 mod reader;
 mod writer;
 
-pub use isobmff_core::{Category, Error, ErrorKind};
-
+pub use error::{Error, ErrorKind};
 pub use event::BoxEvent;
 pub use reader::BoxReader;
 pub use writer::BoxWriter;

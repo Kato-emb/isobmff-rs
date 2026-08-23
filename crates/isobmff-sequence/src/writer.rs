@@ -3,8 +3,9 @@
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader, Error};
+use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader};
 
+use crate::error::Error;
 use crate::event::BoxEvent;
 
 /// Writes the sequence of boxes a file is formed as, taking the events as they come
@@ -161,8 +162,9 @@ impl BoxWriter {
     ///   before its declared total was reached.
     /// * [`PastEndOfFile`](crate::ErrorKind::PastEndOfFile): an event came after
     ///   the box running to the end of the file was closed.
-    /// * Whatever a value reports as it writes, with the type of the box it
-    ///   forms on the [`containers`](Error::containers) path.
+    /// * Whatever a value reports as it writes, carried on
+    ///   [`Box`](crate::ErrorKind::Box) with the type of the box it forms on its
+    ///   [`containers`](isobmff_core::Error::containers) path.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the file was
     ///   declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
@@ -337,7 +339,10 @@ impl BoxWriter {
             // exceeds every buffer this target can hold, which is what
             // `BoxEncode::encode` reports as a short buffer for the same reason.
             return Err(
-                self.encode_failure::<Value>(Error::truncated_buffer(needed, usize::MAX as u64))
+                self.encode_failure::<Value>(isobmff_core::Error::truncated_buffer(
+                    needed,
+                    usize::MAX as u64,
+                )),
             );
         };
         let written = self.output.len();
@@ -355,8 +360,8 @@ impl BoxWriter {
     }
 
     /// Fails the writer on a value that does not write, and names the box it forms
-    fn encode_failure<Value: BoxDefinition>(&mut self, source: Error) -> Error {
-        self.fail(source.in_container(Value::BOX_TYPE))
+    fn encode_failure<Value: BoxDefinition>(&mut self, source: isobmff_core::Error) -> Error {
+        self.fail(source.in_container(Value::BOX_TYPE).into())
     }
 
     /// Fails the writer for good, and hands the failure back to report
@@ -409,9 +414,9 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_boxes::FileTypeBox;
-    use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize, Error, FourCC};
+    use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize, FourCC};
 
-    use super::{BoxEvent, BoxWriter};
+    use super::{BoxEvent, BoxWriter, Error};
 
     /// Header of a box declaring `total` in the compact `size` field
     fn compact_header(box_type: [u8; 4], total: u32) -> BoxHeader {
