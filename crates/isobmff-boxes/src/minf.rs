@@ -64,6 +64,10 @@ impl MediaInformationHeader {
         } else if box_type == NullMediaHeaderBox::BOX_TYPE {
             NullMediaHeaderBox::decode_payload(payload).map(Self::Null)
         } else {
+            // Why not a type check here too: the caller reads this for a child
+            // it has already matched against `MEDIA_HEADER_BOXES`, so the last of
+            // the five is what is left, and a check would state a failure the
+            // call cannot reach.
             SubtitleMediaHeaderBox::decode_payload(payload).map(Self::Subtitle)
         }
         .map_err(|error| error.in_container(box_type))
@@ -370,12 +374,9 @@ pub(crate) mod tests {
     #[test]
     fn a_box_headed_by_a_media_header_no_variant_here_names_states_none_and_keeps_it() {
         let derived_media_header = vec![0, 0, 0, 0x0c, b'g', b'm', b'h', b'd', 0, 0, 0, 0];
-        let payload = [
-            derived_media_header.clone(),
-            encoded_child(&data_information()),
-            encoded_child(&sample_table()),
-        ]
-        .concat();
+        let dinf = encoded_child(&data_information());
+        let stbl = encoded_child(&sample_table());
+        let payload = [derived_media_header.clone(), dinf.clone(), stbl.clone()].concat();
 
         let media_information = MediaInformationBox::decode_payload(&payload).unwrap();
 
@@ -389,12 +390,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             encoded_payload(&media_information),
-            [
-                encoded_child(&data_information()),
-                encoded_child(&sample_table()),
-                derived_media_header,
-            ]
-            .concat()
+            [dinf, stbl, derived_media_header].concat()
         );
     }
 
@@ -428,29 +424,17 @@ pub(crate) mod tests {
 
     #[test]
     fn a_box_missing_one_of_the_children_it_must_hold_is_rejected() {
-        let children = [
-            (
-                BoxType::compact(*b"dinf"),
-                encoded_child(&data_information()),
-            ),
-            (BoxType::compact(*b"stbl"), encoded_child(&sample_table())),
-        ];
+        let header = encoded_child(&video_media_header());
+        let dinf = encoded_child(&data_information());
+        let stbl = encoded_child(&sample_table());
 
-        for (missing, _) in &children {
-            let payload: Vec<u8> = [(
-                BoxType::compact(*b"vmhd"),
-                encoded_child(&video_media_header()),
-            )]
-            .iter()
-            .chain(&children)
-            .filter(|(box_type, _)| box_type != missing)
-            .flat_map(|(_, bytes)| bytes.clone())
-            .collect();
-
-            assert_eq!(
-                MediaInformationBox::decode_payload(&payload),
-                Err(Error::missing_mandatory_box(*missing))
-            );
-        }
+        assert_eq!(
+            MediaInformationBox::decode_payload(&[header.clone(), stbl].concat()),
+            Err(Error::missing_mandatory_box(BoxType::compact(*b"dinf")))
+        );
+        assert_eq!(
+            MediaInformationBox::decode_payload(&[header, dinf].concat()),
+            Err(Error::missing_mandatory_box(BoxType::compact(*b"stbl")))
+        );
     }
 }

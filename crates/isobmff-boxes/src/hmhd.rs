@@ -123,25 +123,17 @@ impl BoxEncode for HintMediaHeaderBox {
 #[cfg(test)]
 mod tests {
     use alloc::vec;
-    use alloc::vec::Vec;
 
     use isobmff_core::{BoxDecode, BoxEncode, Error};
 
     use super::HintMediaHeaderBox;
 
-    /// Writes the payload of the box and returns the bytes it occupies
-    fn encoded_payload(hint_media_header: &HintMediaHeaderBox) -> Vec<u8> {
-        let mut buffer = vec![0; usize::try_from(hint_media_header.payload_len()).unwrap()];
-        hint_media_header.encode_payload(&mut buffer).unwrap();
-
-        buffer
-    }
-
     #[test]
     fn a_box_reads_back_as_the_value_that_wrote_it() {
         let hint_media_header = HintMediaHeaderBox::new(1500, 1200, 800_000, 600_000);
+        let mut payload = vec![0; 20];
 
-        let payload = encoded_payload(&hint_media_header);
+        hint_media_header.encode_payload(&mut payload).unwrap();
 
         assert_eq!(
             payload,

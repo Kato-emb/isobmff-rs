@@ -10,7 +10,7 @@ use isobmff_core::{
 };
 
 /// Length of the version and the flags every entry opens with
-const FULL_BOX_FIELDS_LEN: u64 = 4;
+const FIXED_FIELDS_LEN: u64 = 4;
 
 /// Flag §8.7.2.3 gives the media data lying in the file this entry is read from
 const SELF_CONTAINED: FullBoxFlags = match FullBoxFlags::new(1) {
@@ -39,11 +39,12 @@ impl DataEntry {
     /// Reads the entry `child` holds, for a child of one of the two types
     pub(crate) fn decode(child: RawBox<'_>) -> Result<Self, Error> {
         let box_type = child.header().box_type();
+        let payload = child.payload();
 
         if box_type == DataEntryUrlBox::BOX_TYPE {
-            DataEntryUrlBox::decode_payload(child.payload()).map(Self::Url)
+            DataEntryUrlBox::decode_payload(payload).map(Self::Url)
         } else if box_type == DataEntryUrnBox::BOX_TYPE {
-            DataEntryUrnBox::decode_payload(child.payload()).map(Self::Urn)
+            DataEntryUrnBox::decode_payload(payload).map(Self::Urn)
         } else {
             return Err(Error::forbidden_child_box(box_type));
         }
@@ -138,7 +139,7 @@ impl BoxDecode for DataEntryUrlBox {
 
 impl BoxEncode for DataEntryUrlBox {
     fn payload_len(&self) -> u64 {
-        FULL_BOX_FIELDS_LEN.saturating_add(
+        FIXED_FIELDS_LEN.saturating_add(
             self.location
                 .as_ref()
                 .map_or(0, NullTerminatedString::encoded_len),
@@ -218,21 +219,11 @@ impl BoxDecode for DataEntryUrnBox {
             return Err(Error::unsupported_version(version));
         }
 
-        let strings = reader.take_remainder();
-        // Why not unwrap: the index `position` reports is within `strings`, so
-        // both ranges always slice, and a degenerate value stands in for the
-        // panic the lints forbid.
-        let (name, rest) = match strings.iter().position(|byte| *byte == 0) {
-            Some(terminator) => (
-                strings.get(..terminator).unwrap_or(&[]),
-                strings.get(terminator.saturating_add(1)..).unwrap_or(&[]),
-            ),
-            None => (strings, [].as_slice()),
-        };
+        let mut strings = reader.take_remainder().splitn(2, |byte| *byte == 0);
 
         Ok(Self {
-            name: NullTerminatedString::from_slice(name)?,
-            location: match rest {
+            name: NullTerminatedString::from_slice(strings.next().unwrap_or_default())?,
+            location: match strings.next().unwrap_or_default() {
                 [] => None,
                 location => Some(NullTerminatedString::from_slice(location)?),
             },
@@ -242,7 +233,7 @@ impl BoxDecode for DataEntryUrnBox {
 
 impl BoxEncode for DataEntryUrnBox {
     fn payload_len(&self) -> u64 {
-        FULL_BOX_FIELDS_LEN
+        FIXED_FIELDS_LEN
             .saturating_add(self.name.encoded_len())
             .saturating_add(
                 self.location

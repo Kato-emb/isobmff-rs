@@ -79,7 +79,6 @@ impl BoxEncode for SoundMediaHeaderBox {
 #[cfg(test)]
 pub(crate) mod tests {
     use alloc::vec;
-    use alloc::vec::Vec;
 
     use isobmff_core::{BoxDecode, BoxEncode, Error, I8F8};
 
@@ -90,19 +89,12 @@ pub(crate) mod tests {
         SoundMediaHeaderBox::new(I8F8::ZERO)
     }
 
-    /// Writes the payload of the box and returns the bytes it occupies
-    fn encoded_payload(sound_media_header: &SoundMediaHeaderBox) -> Vec<u8> {
-        let mut buffer = vec![0; usize::try_from(sound_media_header.payload_len()).unwrap()];
-        sound_media_header.encode_payload(&mut buffer).unwrap();
-
-        buffer
-    }
-
     #[test]
     fn a_box_reads_back_as_the_value_that_wrote_it() {
         let sound_media_header = SoundMediaHeaderBox::new(I8F8::from_raw(-256));
+        let mut payload = vec![0; 8];
 
-        let payload = encoded_payload(&sound_media_header);
+        sound_media_header.encode_payload(&mut payload).unwrap();
 
         assert_eq!(payload, b"\0\0\0\0\xff\0\0\0");
         assert_eq!(
