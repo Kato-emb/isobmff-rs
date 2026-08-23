@@ -188,65 +188,10 @@ enum State {
 ///     MovieFragmentBox, MovieFragmentHeaderBox, SampleReader, TrackFragmentBox,
 ///     TrackFragmentHeaderBox, TrackRunBox, TrackRunSample,
 /// };
-/// # use isobmff::{
-/// #     ChunkOffsetBox, DataEntry, DataEntryUrlBox, DataInformationBox, DataReferenceBox, FourCC,
-/// #     FullBoxFlags, HandlerBox, LanguageCode, MediaBox, MediaHeaderBox, MediaInformationBox,
-/// #     MediaInformationHeader, MovieBox, MovieExtendsBox, MovieHeaderBox, Mp4EpochSeconds,
-/// #     NullTerminatedString, SampleDescriptionBox, SampleSizeBox, SampleSizes, SampleTableBox,
-/// #     SampleToChunkBox, TimeToSampleBox, TrackBox, TrackExtendsBox, TrackHeaderBox,
-/// #     VideoMediaHeaderBox,
-/// # };
+/// # use isobmff::{MovieBox, TrackExtendsBox};
+/// # use isobmff_test_support::fragmented_movie;
 /// # fn movie() -> MovieBox {
-/// #     let sample_table = SampleTableBox::new(
-/// #         SampleDescriptionBox::new(vec![]),
-/// #         TimeToSampleBox::new(vec![]),
-/// #         SampleToChunkBox::new(vec![]),
-/// #         SampleSizeBox::new(SampleSizes::PerSample(vec![])),
-/// #         ChunkOffsetBox::new(vec![]),
-/// #     );
-/// #     let media_information = MediaInformationBox::new(
-/// #         MediaInformationHeader::Video(VideoMediaHeaderBox::new(0, [0, 0, 0])),
-/// #         DataInformationBox::new(DataReferenceBox::new(vec![DataEntry::Url(
-/// #             DataEntryUrlBox::new(None),
-/// #         )])),
-/// #         sample_table,
-/// #     );
-/// #     let media = MediaBox::new(
-/// #         MediaHeaderBox::new(
-/// #             Mp4EpochSeconds::from_seconds(0),
-/// #             Mp4EpochSeconds::from_seconds(0),
-/// #             90_000,
-/// #             0,
-/// #             LanguageCode::from_letters(b"und").unwrap(),
-/// #         ),
-/// #         HandlerBox::new(
-/// #             FourCC::new(*b"vide"),
-/// #             NullTerminatedString::new(String::from("")).unwrap(),
-/// #         ),
-/// #         media_information,
-/// #     );
-/// #     let track = TrackBox::new(
-/// #         TrackHeaderBox::new(
-/// #             FullBoxFlags::new(3).unwrap(),
-/// #             Mp4EpochSeconds::from_seconds(0),
-/// #             Mp4EpochSeconds::from_seconds(0),
-/// #             1,
-/// #             0,
-/// #         ),
-/// #         media,
-/// #     );
-/// #     MovieBox::new(
-/// #         MovieHeaderBox::new(
-/// #             Mp4EpochSeconds::from_seconds(0),
-/// #             Mp4EpochSeconds::from_seconds(0),
-/// #             1_000,
-/// #             0,
-/// #             2,
-/// #         ),
-/// #         vec![track],
-/// #         Some(MovieExtendsBox::new(vec![TrackExtendsBox::new(1, 1, 1_024, 0, 0)]).unwrap()),
-/// #     )
-/// #     .unwrap()
+/// #     fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0))
 /// # }
 /// // A reader set up from a movie whose one track is fragmented, its samples
 /// // lasting 1024 units each
@@ -658,70 +603,21 @@ impl SampleReader {
 
 #[cfg(test)]
 mod tests {
-    use alloc::string::String;
     use alloc::vec;
     use alloc::vec::Vec;
 
     use isobmff_boxes::{
-        ChunkOffsetBox, DataEntry, DataEntryUrlBox, DataInformationBox, DataReferenceBox,
-        HandlerBox, MediaBox, MediaHeaderBox, MediaInformationBox, MediaInformationHeader,
-        MovieExtendsBox, MovieFragmentHeaderBox, MovieHeaderBox, SampleDescriptionBox,
-        SampleSizeBox, SampleSizes, SampleTableBox, SampleToChunkBox, TimeToSampleBox, TrackBox,
-        TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
-        TrackFragmentHeaderBox, TrackHeaderBox, TrackRunBox, TrackRunSample, VideoMediaHeaderBox,
+        MovieExtendsBox, MovieFragmentHeaderBox, MovieHeaderBox, TrackExtendsBox,
+        TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox, TrackRunBox,
+        TrackRunSample,
     };
-    use isobmff_core::{
-        BoxDecode as _, BoxEncode as _, FourCC, FullBoxFlags, LanguageCode, Mp4EpochSeconds,
-        NullTerminatedString,
-    };
+    use isobmff_core::{BoxDecode as _, BoxEncode as _, FullBoxFlags, Mp4EpochSeconds};
+    use isobmff_test_support::track;
 
     use super::{MovieBox, MovieFragmentBox, Sample, SampleError, SampleReader};
 
     /// Bytes the movie fragment of most of these tests is given
     const MOVIE_FRAGMENT_LEN: u64 = 100;
-
-    /// Track of a fragmented movie, which holds no samples of its own
-    fn track(track_id: u32) -> TrackBox {
-        let sample_table = SampleTableBox::new(
-            SampleDescriptionBox::new(vec![]),
-            TimeToSampleBox::new(vec![]),
-            SampleToChunkBox::new(vec![]),
-            SampleSizeBox::new(SampleSizes::PerSample(vec![])),
-            ChunkOffsetBox::new(vec![]),
-        );
-        let media_information = MediaInformationBox::new(
-            MediaInformationHeader::Video(VideoMediaHeaderBox::new(0, [0, 0, 0])),
-            DataInformationBox::new(DataReferenceBox::new(vec![DataEntry::Url(
-                DataEntryUrlBox::new(None),
-            )])),
-            sample_table,
-        );
-        let media = MediaBox::new(
-            MediaHeaderBox::new(
-                Mp4EpochSeconds::from_seconds(0),
-                Mp4EpochSeconds::from_seconds(0),
-                90_000,
-                0,
-                LanguageCode::from_letters(b"und").unwrap(),
-            ),
-            HandlerBox::new(
-                FourCC::new(*b"vide"),
-                NullTerminatedString::new(String::from("")).unwrap(),
-            ),
-            media_information,
-        );
-
-        TrackBox::new(
-            TrackHeaderBox::new(
-                FullBoxFlags::new(3).unwrap(),
-                Mp4EpochSeconds::from_seconds(0),
-                Mp4EpochSeconds::from_seconds(0),
-                track_id,
-                0,
-            ),
-            media,
-        )
-    }
 
     /// Movie declaring the given tracks, fragmented by the given extends boxes
     fn movie(track_ids: &[u32], trex: Vec<TrackExtendsBox>) -> MovieBox {

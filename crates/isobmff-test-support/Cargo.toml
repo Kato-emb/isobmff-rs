@@ -1,0 +1,81 @@
+[package]
+name = "isobmff-test-support"
+version = "0.0.0"
+description = "Synthetic files and the machinery to drive them, shared by the tests of this workspace"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+readme.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+exclude.workspace = true
+
+[dependencies]
+isobmff-boxes.workspace = true
+isobmff-core.workspace = true
+isobmff-sequence.workspace = true
+
+# The whole workspace set is copied out because Cargo refuses `[lints] workspace
+# = true` beside a per-lint override: "cannot override `workspace.lints` in
+# `lints`". Relaxing two lints therefore costs restating the rest. A lint added
+# to the workspace root has to be added here too.
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unnameable_types = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unused_lifetimes = "warn"
+unused_qualifications = "warn"
+
+[lints.clippy]
+# A fixture that will not build is a bug in the fixture, and there is nobody to
+# report it to: every caller is a test that would only unwrap the report.
+unwrap_used = "allow"
+expect_used = "allow"
+
+# Follows from the two above: what those unwraps would panic on is the fixture
+# failing to build, which no caller can act on, so there is no contract to state.
+missing_panics_doc = "allow"
+
+# A fixture must not reach for indexing or unchecked arithmetic to get its bytes
+# laid out, so the rest of the panic-freedom set stays denied.
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_precision_loss = "deny"
+cast_sign_loss = "deny"
+float_arithmetic = "deny"
+host_endian_bytes = "deny"
+little_endian_bytes = "deny"
+iter_over_hash_type = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+mod_module_files = "deny"
+min_ident_chars = "deny"
+allow_attributes_without_reason = "deny"
+exhaustive_structs = "deny"
+exhaustive_enums = "deny"
+wildcard_enum_match_arm = "deny"
+std_instead_of_core = "warn"
+std_instead_of_alloc = "warn"
+alloc_instead_of_core = "warn"
+tests_outside_test_module = "warn"
+missing_errors_doc = "warn"
+too_long_first_doc_paragraph = "warn"
+doc_markdown = "warn"
+doc_link_with_quotes = "warn"
+
+[lints.rustdoc]
+unescaped_backticks = "warn"
