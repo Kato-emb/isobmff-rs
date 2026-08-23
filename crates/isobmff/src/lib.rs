@@ -1,0 +1,56 @@
+//! Sans-IO reader for the samples an ISO base media file carries in movie fragments
+//!
+//! A presentation is carried as samples — ISO/IEC 14496-12 §3.1.14 has a sample
+//! as all the data associated with a single timestamp. [`SampleReader`] takes a
+//! fragmented presentation as it arrives, the movie fragments and the media data
+//! beside them, and reports the [`Sample`]s they carry: where each one lies is
+//! resolved from the offsets a fragment states, and what is true of it from the
+//! defaults the fragment and the track set. It reaches for no source of its own:
+//! when to read and from where stay with the caller.
+//!
+//! # Taking a file apart
+//!
+//! This crate reads samples, not files. Framing a file into boxes is the work of
+//! `isobmff-sequence`, a layer beside this one rather than beneath it: neither
+//! knows the other, and the caller wires them together. A `BoxReader` reports a
+//! `moof` read into a value and the payload of an `mdat` as it lies, which is
+//! what the two `handle_*` calls here take, so the wiring is a match on two of
+//! its events. A caller holding the presentation in memory has no need of it at
+//! all: [`boxes`] frames it, and the samples read from there just the same.
+//!
+//! Both layers report where a box lay in what they were handed, counting from
+//! the first byte that arrived. This one is handed those extents resolved
+//! against the origin the presentation was read from, which is the caller's to
+//! add.
+//!
+//! # Everything in one place
+//!
+//! The crates this one is built on are re-exported whole, so a caller reaching
+//! for the box layer or the traits beneath it names `isobmff` alone:
+//! [`isobmff_core`] for the framing and the field codecs, [`isobmff_boxes`] for
+//! the catalog of boxes. Their names are re-exported as they stand, so
+//! documentation written against either crate reads against this one.
+//!
+//! The one name that could not stand is [`Error`], which [`isobmff_core`] holds:
+//! the failures of this layer are [`SampleError`] and [`SampleErrorKind`], named
+//! apart at the source rather than shadowed here.
+//!
+//! # `no_std`
+//!
+//! The crate is `no_std` but needs `alloc`: a sample owns the bytes it carries,
+//! and the claims of a fragment are held until the data that meets them arrives.
+
+#![no_std]
+
+extern crate alloc;
+
+mod error;
+mod reader;
+mod sample;
+
+pub use error::{SampleError, SampleErrorKind};
+pub use reader::SampleReader;
+pub use sample::Sample;
+
+pub use isobmff_boxes::*;
+pub use isobmff_core::*;

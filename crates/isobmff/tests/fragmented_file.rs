@@ -1,0 +1,229 @@
+//! The samples of a fragmented file, read through the box layer beside this one
+
+#![allow(
+    clippy::tests_outside_test_module,
+    reason = "an integration test binary ships no items, so its tests are the crate root"
+)]
+
+use isobmff::{
+    BoxDefinition, BoxEncode, BoxHeader, ChunkOffsetBox, DataEntry, DataEntryUrlBox,
+    DataInformationBox, DataReferenceBox, FileTypeBox, FourCC, FullBoxFlags, HandlerBox,
+    LanguageCode, MediaBox, MediaDataBox, MediaHeaderBox, MediaInformationBox,
+    MediaInformationHeader, MovieBox, MovieExtendsBox, MovieFragmentBox, MovieFragmentHeaderBox,
+    MovieHeaderBox, Mp4EpochSeconds, NullTerminatedString, Sample, SampleDescriptionBox,
+    SampleReader, SampleSizeBox, SampleSizes, SampleTableBox, SampleToChunkBox, TimeToSampleBox,
+    TrackBox, TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
+    TrackFragmentHeaderBox, TrackHeaderBox, TrackRunBox, TrackRunSample, VideoMediaHeaderBox,
+};
+use isobmff_sequence::{BoxEvent, BoxReader};
+
+/// Time every header of the synthetic file declares
+const EPOCH: Mp4EpochSeconds = Mp4EpochSeconds::from_seconds(0);
+
+/// Ticks a second the media of the synthetic file is timed in
+const TIMESCALE: u32 = 90_000;
+
+/// Bytes each sample of the synthetic file occupies
+const SAMPLE_LEN: usize = 8;
+
+/// Ticks each sample of the synthetic file lasts
+const SAMPLE_DURATION: u32 = 3_000;
+
+/// Decode time the fragment of the synthetic file starts at
+const BASE_MEDIA_DECODE_TIME: u64 = 90_000;
+
+/// Media data the fragment of the synthetic file addresses: three samples
+const MEDIA_DATA: [u8; 24] = [
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+    0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+];
+
+/// Flags of a fragment whose offsets are anchored at the movie fragment
+const ANCHORED_AT_THE_MOVIE_FRAGMENT: u32 = 0x0002_0000;
+
+/// The bytes a box occupies, its header and its payload
+fn written(value: &(impl BoxDefinition + BoxEncode)) -> Option<Vec<u8>> {
+    let mut bytes = vec![0; usize::try_from(value.encoded_len()).ok()?];
+    value.encode(&mut bytes).ok()?;
+
+    Some(bytes)
+}
+
+/// Brands the file declares itself readable as
+fn file_type() -> FileTypeBox {
+    FileTypeBox::new(
+        FourCC::new(*b"iso6"),
+        512,
+        vec![FourCC::new(*b"iso6"), FourCC::new(*b"dash")],
+    )
+}
+
+/// Movie the file declares: one fragmented track of video
+fn movie() -> Option<MovieBox> {
+    let media = MediaBox::new(
+        MediaHeaderBox::new(EPOCH, EPOCH, TIMESCALE, 0, LanguageCode::UND),
+        HandlerBox::new(
+            FourCC::new(*b"vide"),
+            NullTerminatedString::new(String::from("VideoHandler"))?,
+        ),
+        MediaInformationBox::new(
+            MediaInformationHeader::Video(VideoMediaHeaderBox::new(0, [0; 3])),
+            DataInformationBox::new(DataReferenceBox::new(vec![DataEntry::Url(
+                DataEntryUrlBox::new(None),
+            )])),
+            SampleTableBox::new(
+                SampleDescriptionBox::new(Vec::new()),
+                TimeToSampleBox::new(Vec::new()),
+                SampleToChunkBox::new(Vec::new()),
+                SampleSizeBox::new(SampleSizes::PerSample(Vec::new())),
+                ChunkOffsetBox::new(Vec::new()),
+            ),
+        ),
+    );
+    let track = TrackBox::new(
+        TrackHeaderBox::new(FullBoxFlags::new(1)?, EPOCH, EPOCH, 1, 0),
+        media,
+    );
+    let track_extends =
+        TrackExtendsBox::new(1, 1, SAMPLE_DURATION, u32::try_from(SAMPLE_LEN).ok()?, 0);
+
+    MovieBox::new(
+        MovieHeaderBox::new(EPOCH, EPOCH, TIMESCALE, 0, 2),
+        vec![track],
+        MovieExtendsBox::new(vec![track_extends]),
+    )
+}
+
+/// Fragment the file carries, its three samples lying `data_offset` past its start
+fn movie_fragment(data_offset: i32) -> Option<MovieFragmentBox> {
+    let samples = (0..3)
+        .map(|_| TrackRunSample::new(None, None, None, None))
+        .collect::<Option<Vec<_>>>()?;
+    let track_fragment = TrackFragmentBox::new(
+        TrackFragmentHeaderBox::new(
+            FullBoxFlags::new(ANCHORED_AT_THE_MOVIE_FRAGMENT)?,
+            1,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )?,
+        Some(TrackFragmentBaseMediaDecodeTimeBox::new(
+            BASE_MEDIA_DECODE_TIME,
+        )),
+        vec![TrackRunBox::new(Some(data_offset), None, samples)?],
+    )?;
+
+    Some(MovieFragmentBox::new(
+        MovieFragmentHeaderBox::new(1),
+        vec![track_fragment],
+    ))
+}
+
+/// A synthetic fragmented file: the brands, the movie, one fragment, its media data
+///
+/// The offsets of the fragment are anchored at the fragment itself, so the run
+/// states where the media data lies past its own start: over the fragment and
+/// the header of the `mdat` beside it.
+fn fragmented_file() -> Option<Vec<u8>> {
+    let media_data = MediaDataBox::new(MEDIA_DATA.to_vec());
+    let header_len = BoxHeader::with_payload_len(
+        MediaDataBox::BOX_TYPE,
+        u64::try_from(MEDIA_DATA.len()).ok()?,
+    )?
+    .encoded_len();
+    let placeholder = movie_fragment(0)?;
+    let data_offset = i32::try_from(
+        placeholder
+            .encoded_len()
+            .saturating_add(u64::try_from(header_len).ok()?),
+    )
+    .ok()?;
+
+    Some(
+        [
+            written(&file_type())?,
+            written(&movie()?)?,
+            written(&movie_fragment(data_offset)?)?,
+            written(&media_data)?,
+        ]
+        .concat(),
+    )
+}
+
+/// The samples the file carries, read off it `cut_length` bytes at a time
+fn samples_of(file: &[u8], cut_length: usize) -> Option<Vec<Sample>> {
+    let mut box_reader = BoxReader::new();
+    let mut sample_reader = None;
+    let mut samples = Vec::new();
+
+    for arriving in file.chunks(cut_length) {
+        box_reader.handle_input(arriving).ok()?;
+
+        while let Some(event) = box_reader.poll_event() {
+            let extent = box_reader.event_extent()?;
+
+            match event {
+                BoxEvent::Movie(movie) => sample_reader = Some(SampleReader::new(&movie).ok()?),
+                BoxEvent::MovieFragment(movie_fragment) => sample_reader
+                    .as_mut()?
+                    .handle_movie_fragment(movie_fragment, extent)
+                    .ok()?,
+                BoxEvent::RawPayload(payload) => sample_reader
+                    .as_mut()?
+                    .handle_media_data(&payload, extent)
+                    .ok()?,
+                // Why not the wildcard on its own: `BoxEvent` is
+                // `#[non_exhaustive]`, so the arm cannot go, and
+                // `wildcard_enum_match_arm` refuses one that stands for variants
+                // this match could have named.
+                BoxEvent::FileType(_)
+                | BoxEvent::SegmentType(_)
+                | BoxEvent::RawStart(_)
+                | BoxEvent::RawEnd
+                | _ => {}
+            }
+
+            while let Some(sample) = sample_reader.as_mut().and_then(SampleReader::poll_sample) {
+                samples.push(sample);
+            }
+        }
+    }
+
+    box_reader.finish().ok()?;
+    sample_reader?.finish().ok()?;
+
+    Some(samples)
+}
+
+/// The samples the synthetic file was built to carry
+fn declared_samples() -> Vec<Sample> {
+    let mut decode_time = BASE_MEDIA_DECODE_TIME;
+
+    MEDIA_DATA
+        .chunks(SAMPLE_LEN)
+        .map(|data| {
+            let sample = Sample::new(1, decode_time, SAMPLE_DURATION, None, 0, 1, data.to_vec());
+            decode_time = decode_time.saturating_add(u64::from(SAMPLE_DURATION));
+
+            sample
+        })
+        .collect()
+}
+
+#[test]
+fn the_samples_of_a_fragmented_file_are_read_through_the_reader_of_its_boxes() {
+    let file = fragmented_file().unwrap();
+
+    assert_eq!(samples_of(&file, file.len()).unwrap(), declared_samples());
+}
+
+#[test]
+fn the_samples_are_the_same_however_the_file_was_cut() {
+    let file = fragmented_file().unwrap();
+
+    for cut_length in [1, 3, 7, 64, file.len().saturating_sub(1)] {
+        assert_eq!(samples_of(&file, cut_length).unwrap(), declared_samples());
+    }
+}

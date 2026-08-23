@@ -16,6 +16,7 @@ exclude = []
 [workspace.dependencies]
 isobmff-boxes = { path = "crates/isobmff-boxes", version = "0.0.0" }
 isobmff-core = { path = "crates/isobmff-core", version = "0.0.0" }
+isobmff-sequence = { path = "crates/isobmff-sequence", version = "0.0.0" }
 
 [workspace.lints.rust]
 # Memory safety: the parser is fed untrusted input, so safety must not rest on
