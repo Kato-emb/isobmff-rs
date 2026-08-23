@@ -31,7 +31,7 @@ use isobmff_core::Category;
 /// assert_eq!(failure.box_error(), None);
 ///
 /// // A failure of one box is carried through whole
-/// let missing = Error::missing_mandatory_box(BoxType::compact(*b"mvex"));
+/// let missing = Error::missing_mandatory_box(BoxType::compact(*b"trex"));
 /// let carried = SampleError::from(missing);
 /// assert_eq!(
 ///     carried.kind(),
@@ -39,7 +39,7 @@ use isobmff_core::Category;
 /// );
 /// assert_eq!(
 ///     carried.box_error().and_then(|box_error| box_error.box_type()),
-///     Some(BoxType::compact(*b"mvex"))
+///     Some(BoxType::compact(*b"trex"))
 /// );
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -123,6 +123,14 @@ impl SampleError {
         }
     }
 
+    /// Returns the failure of a movie that carries no `mvex`, and so no fragments
+    #[must_use]
+    pub const fn missing_movie_extends() -> Self {
+        Self {
+            representation: Representation::MissingMovieExtends,
+        }
+    }
+
     /// Returns what went wrong
     #[must_use]
     pub const fn kind(self) -> SampleErrorKind {
@@ -138,6 +146,7 @@ impl SampleError {
             Representation::DataOffsetOverflow { .. } => SampleErrorKind::DataOffsetOverflow,
             Representation::ExtentLengthMismatch { .. } => SampleErrorKind::ExtentLengthMismatch,
             Representation::AlreadyFinished => SampleErrorKind::AlreadyFinished,
+            Representation::MissingMovieExtends => SampleErrorKind::MissingMovieExtends,
         }
     }
 
@@ -152,9 +161,9 @@ impl SampleError {
             | Representation::UnfinishedSample { .. }
             | Representation::DecodeTimeOverflow { .. }
             | Representation::DataOffsetOverflow { .. } => Category::Malformed,
-            Representation::ExtentLengthMismatch { .. } | Representation::AlreadyFinished => {
-                Category::Usage
-            }
+            Representation::ExtentLengthMismatch { .. }
+            | Representation::AlreadyFinished
+            | Representation::MissingMovieExtends => Category::Usage,
         }
     }
 
@@ -173,7 +182,8 @@ impl SampleError {
             | Representation::DecodeTimeOverflow { .. }
             | Representation::DataOffsetOverflow { .. }
             | Representation::ExtentLengthMismatch { .. }
-            | Representation::AlreadyFinished => None,
+            | Representation::AlreadyFinished
+            | Representation::MissingMovieExtends => None,
         }
     }
 
@@ -189,7 +199,8 @@ impl SampleError {
             | Representation::DataOffsetOverflow { track_id } => Some(track_id as u64),
             Representation::Box(_)
             | Representation::ExtentLengthMismatch { .. }
-            | Representation::AlreadyFinished => None,
+            | Representation::AlreadyFinished
+            | Representation::MissingMovieExtends => None,
         }
     }
 
@@ -205,7 +216,8 @@ impl SampleError {
             | Representation::UnknownTrackId { .. }
             | Representation::DecodeTimeOverflow { .. }
             | Representation::DataOffsetOverflow { .. }
-            | Representation::AlreadyFinished => None,
+            | Representation::AlreadyFinished
+            | Representation::MissingMovieExtends => None,
         }
     }
 
@@ -221,7 +233,8 @@ impl SampleError {
             | Representation::UnknownTrackId { .. }
             | Representation::DecodeTimeOverflow { .. }
             | Representation::DataOffsetOverflow { .. }
-            | Representation::AlreadyFinished => None,
+            | Representation::AlreadyFinished
+            | Representation::MissingMovieExtends => None,
         }
     }
 }
@@ -280,6 +293,7 @@ impl fmt::Display for SampleError {
             Representation::AlreadyFinished => {
                 formatter.write_str("samples were declared over and take nothing more")
             }
+            Representation::MissingMovieExtends => formatter.write_str("the movie carries no mvex"),
         }
     }
 }
@@ -319,7 +333,8 @@ impl error::Error for SampleError {
             | Representation::DecodeTimeOverflow { .. }
             | Representation::DataOffsetOverflow { .. }
             | Representation::ExtentLengthMismatch { .. }
-            | Representation::AlreadyFinished => None,
+            | Representation::AlreadyFinished
+            | Representation::MissingMovieExtends => None,
         }
     }
 }
@@ -383,6 +398,8 @@ pub enum SampleErrorKind {
     ExtentLengthMismatch,
     /// Samples were declared over, and take nothing more
     AlreadyFinished,
+    /// Movie carries no `mvex`, and so continues in no fragments the reader could read
+    MissingMovieExtends,
 }
 
 /// Values a failure carries, keyed by what went wrong
@@ -414,6 +431,8 @@ enum Representation {
     ExtentLengthMismatch { needed: u64, available: u64 },
     /// Call made after the samples were declared over
     AlreadyFinished,
+    /// Movie carrying no `mvex`, and so no fragments
+    MissingMovieExtends,
 }
 
 #[cfg(test)]
@@ -502,6 +521,10 @@ mod tests {
         assert_eq!(
             SampleError::already_finished().to_string(),
             "samples were declared over and take nothing more"
+        );
+        assert_eq!(
+            SampleError::missing_movie_extends().to_string(),
+            "the movie carries no mvex"
         );
     }
 

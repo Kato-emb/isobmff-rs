@@ -4,8 +4,7 @@ use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use isobmff_boxes::{MovieBox, MovieExtendsBox, MovieFragmentBox, TrackExtendsBox};
-use isobmff_core::BoxDefinition as _;
+use isobmff_boxes::{MovieBox, MovieFragmentBox};
 
 use crate::error::SampleError;
 use crate::sample::Sample;
@@ -351,48 +350,34 @@ impl SampleReader {
     /// A `trex` for a track the movie does not declare sets no defaults anyone
     /// falls back on, and is passed over. Two tracks declaring the same
     /// `track_id`, which §8.3.2.3 has identify a track uniquely, leave the first
-    /// of them standing.
+    /// of them standing — a movie
+    /// [`MovieBox::new`](isobmff_boxes::MovieBox::new) refuses to build, but a
+    /// decoded one may carry.
     ///
     /// # Errors
     ///
-    /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox),
-    ///   carried on [`Box`](crate::SampleErrorKind::Box): the movie carries no
-    ///   `mvex`, so it is not fragmented at all, or one of its tracks has no
-    ///   `trex` to set the defaults its fragments fall back on — which §8.8.3
-    ///   has as mandatory for every track of a fragmented movie.
+    /// * [`MissingMovieExtends`](crate::SampleErrorKind::MissingMovieExtends):
+    ///   the movie carries no `mvex`, and so continues in no fragments.
     pub fn with_sample_size_limit(
         movie: &MovieBox,
         sample_size_limit: u64,
     ) -> Result<Self, SampleError> {
         let Some(mvex) = movie.mvex() else {
-            return Err(
-                isobmff_core::Error::missing_mandatory_box(MovieExtendsBox::BOX_TYPE).into(),
-            );
+            return Err(SampleError::missing_movie_extends());
         };
 
         let mut tracks = BTreeMap::new();
         for trak in movie.trak() {
             let track_id = trak.tkhd().track_id();
-            if tracks.contains_key(&track_id) {
-                continue;
-            }
-
-            let Some(trex) = mvex.trex().iter().find(|trex| trex.track_id() == track_id) else {
-                return Err(
-                    isobmff_core::Error::missing_mandatory_box(TrackExtendsBox::BOX_TYPE).into(),
-                );
-            };
-
-            tracks.insert(
-                track_id,
-                Track {
+            if let Some(trex) = mvex.trex().iter().find(|trex| trex.track_id() == track_id) {
+                tracks.entry(track_id).or_insert(Track {
                     default_sample_description_index: trex.default_sample_description_index(),
                     default_sample_duration: trex.default_sample_duration(),
                     default_sample_size: trex.default_sample_size(),
                     default_sample_flags: trex.default_sample_flags(),
                     decode_time: 0,
-                },
-            );
+                });
+            }
         }
 
         Ok(Self {
@@ -669,20 +654,17 @@ mod tests {
     use isobmff_boxes::{
         ChunkOffsetBox, DataEntry, DataEntryUrlBox, DataInformationBox, DataReferenceBox,
         HandlerBox, MediaBox, MediaHeaderBox, MediaInformationBox, MediaInformationHeader,
-        MovieFragmentHeaderBox, MovieHeaderBox, SampleDescriptionBox, SampleSizeBox, SampleSizes,
-        SampleTableBox, SampleToChunkBox, TimeToSampleBox, TrackBox,
-        TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
-        TrackHeaderBox, TrackRunBox, TrackRunSample, VideoMediaHeaderBox,
+        MovieExtendsBox, MovieFragmentHeaderBox, MovieHeaderBox, SampleDescriptionBox,
+        SampleSizeBox, SampleSizes, SampleTableBox, SampleToChunkBox, TimeToSampleBox, TrackBox,
+        TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
+        TrackFragmentHeaderBox, TrackHeaderBox, TrackRunBox, TrackRunSample, VideoMediaHeaderBox,
     };
     use isobmff_core::{
-        BoxDefinition as _, FourCC, FullBoxFlags, LanguageCode, Mp4EpochSeconds,
+        BoxDecode as _, BoxEncode as _, FourCC, FullBoxFlags, LanguageCode, Mp4EpochSeconds,
         NullTerminatedString,
     };
 
-    use super::{
-        MovieBox, MovieExtendsBox, MovieFragmentBox, Sample, SampleError, SampleReader,
-        TrackExtendsBox,
-    };
+    use super::{MovieBox, MovieFragmentBox, Sample, SampleError, SampleReader};
 
     /// Bytes the movie fragment of most of these tests is given
     const MOVIE_FRAGMENT_LEN: u64 = 100;
@@ -749,6 +731,21 @@ mod tests {
     /// Movie of one track whose samples last 1024 units and occupy 4 bytes each
     fn one_track_movie() -> MovieBox {
         movie(&[1], vec![TrackExtendsBox::new(1, 1, 1_024, 4, 0)])
+    }
+
+    /// Movie of two tracks colliding on one `track_id`
+    fn movie_of_one_track_id_twice() -> MovieBox {
+        // Why not MovieBox::new: it refuses a movie declaring one track_id twice,
+        // so a reader only ever meets the collision through a decode.
+        let declared = one_track_movie();
+        let mut payload = vec![0; usize::try_from(declared.payload_len()).unwrap()];
+        declared.encode_payload(&mut payload).unwrap();
+
+        let repeated = declared.trak().first().unwrap();
+        let mut encoded_track = vec![0; usize::try_from(repeated.encoded_len()).unwrap()];
+        repeated.encode(&mut encoded_track).unwrap();
+
+        MovieBox::decode_payload(&[payload, encoded_track].concat()).unwrap()
     }
 
     /// Fragment header of one track, carrying the flags and defaults given
@@ -1187,21 +1184,7 @@ mod tests {
     fn a_movie_carrying_no_extends_box_is_not_fragmented_at_all() {
         assert_eq!(
             SampleReader::new(&movie(&[1], vec![])).unwrap_err(),
-            SampleError::from(isobmff_core::Error::missing_mandatory_box(
-                MovieExtendsBox::BOX_TYPE
-            ))
-        );
-    }
-
-    #[test]
-    fn a_track_whose_defaults_no_extends_box_sets_is_refused() {
-        let one_of_two_tracks = movie(&[1, 2], vec![TrackExtendsBox::new(1, 1, 1_024, 4, 0)]);
-
-        assert_eq!(
-            SampleReader::new(&one_of_two_tracks).unwrap_err(),
-            SampleError::from(isobmff_core::Error::missing_mandatory_box(
-                TrackExtendsBox::BOX_TYPE
-            ))
+            SampleError::missing_movie_extends()
         );
     }
 
@@ -1237,20 +1220,7 @@ mod tests {
 
     #[test]
     fn two_tracks_declaring_one_id_leave_the_first_of_them_standing() {
-        let twice = MovieBox::new(
-            MovieHeaderBox::new(
-                Mp4EpochSeconds::from_seconds(0),
-                Mp4EpochSeconds::from_seconds(0),
-                1_000,
-                0,
-                2,
-            ),
-            vec![track(1), track(1)],
-            MovieExtendsBox::new(vec![TrackExtendsBox::new(1, 1, 1_024, 4, 0)]),
-        )
-        .unwrap();
-
-        let mut reader = SampleReader::new(&twice).unwrap();
+        let mut reader = SampleReader::new(&movie_of_one_track_id_twice()).unwrap();
         reader
             .handle_movie_fragment(one_sample_movie_fragment(), 0..MOVIE_FRAGMENT_LEN)
             .unwrap();

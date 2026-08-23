@@ -1,5 +1,6 @@
 //! [`MovieBox`] (`moov`), ISO/IEC 14496-12 §8.2.1
 
+use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
 use isobmff_core::{
@@ -10,12 +11,20 @@ use isobmff_core::{
 use crate::mvex::MovieExtendsBox;
 use crate::mvhd::MovieHeaderBox;
 use crate::trak::TrackBox;
+use crate::trex::TrackExtendsBox;
 
 /// Box that holds every declaration a presentation is made of
 ///
 /// [`MovieBox`] (`moov`), ISO/IEC 14496-12 §8.2.1. It carries the movie header,
 /// one `trak` per track, and — when the presentation continues in fragments —
 /// the `mvex` that says so.
+///
+/// §8.8.3 has one `trex` for each track of a fragmented movie, so this box
+/// refuses a track left without one, in [`new`](Self::new) as in
+/// [`decode_payload`](BoxDecode::decode_payload). A `track_id` identifies a
+/// track over the whole presentation (§8.3.2.3), and that is held to in
+/// [`new`](Self::new) alone: a decoded movie whose tracks collide on a
+/// `track_id` reads as it came.
 ///
 /// On encode the children are written in the order the spec lists them —
 /// `mvhd`, then the tracks, then `mvex` — and then the children no field
@@ -35,6 +44,9 @@ impl MovieBox {
     ///
     /// Returns `None` for an empty `trak`, which the spec does not allow: a
     /// presentation is made of at least one track.
+    ///
+    /// Returns `None` when two tracks declare the same `track_id`, and — where
+    /// the movie is fragmented — when a track is left without its `trex`.
     #[must_use]
     pub fn new(
         mvhd: MovieHeaderBox,
@@ -42,6 +54,20 @@ impl MovieBox {
         mvex: Option<MovieExtendsBox>,
     ) -> Option<Self> {
         if trak.is_empty() {
+            return None;
+        }
+
+        let mut declared = BTreeSet::new();
+        if !trak
+            .iter()
+            .all(|track| declared.insert(track.tkhd().track_id()))
+        {
+            return None;
+        }
+
+        if let Some(mvex) = &mvex
+            && !every_track_has_a_trex(&trak, mvex)
+        {
             return None;
         }
 
@@ -78,6 +104,15 @@ impl MovieBox {
     }
 }
 
+/// Returns whether every track of the movie has its own `trex`
+fn every_track_has_a_trex(trak: &[TrackBox], mvex: &MovieExtendsBox) -> bool {
+    trak.iter().all(|track| {
+        mvex.trex()
+            .iter()
+            .any(|trex| trex.track_id() == track.tkhd().track_id())
+    })
+}
+
 impl BoxDefinition for MovieBox {
     const BOX_TYPE: BoxType = BoxType::compact(*b"moov");
 }
@@ -87,7 +122,8 @@ impl BoxDecode for MovieBox {
     ///
     /// * The failures of [`boxes`]: a child does not frame as a box.
     /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox): no `mvhd`,
-    ///   or no `trak` at all.
+    ///   no `trak` at all, or — naming the `moov` it was read from — a track of a
+    ///   fragmented movie without its `trex`.
     /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one `mvhd` or
     ///   `mvex`.
     /// * Whatever the child reports, on the [`containers`](Error::containers) path: one of the
@@ -113,10 +149,21 @@ impl BoxDecode for MovieBox {
             }
         }
 
+        let mvhd = mvhd_boxes.exactly_one()?;
+        let trak = trak_boxes.one_or_more()?;
+        let mvex: Option<MovieExtendsBox> = mvex_boxes.zero_or_one()?;
+
+        if let Some(mvex) = &mvex
+            && !every_track_has_a_trex(&trak, mvex)
+        {
+            return Err(Error::missing_mandatory_box(TrackExtendsBox::BOX_TYPE)
+                .in_container(Self::BOX_TYPE));
+        }
+
         Ok(Self {
-            mvhd: mvhd_boxes.exactly_one()?,
-            trak: trak_boxes.one_or_more()?,
-            mvex: mvex_boxes.zero_or_one()?,
+            mvhd,
+            trak,
+            mvex,
             other_boxes,
         })
     }
@@ -166,7 +213,7 @@ mod tests {
 
     use isobmff_core::{BoxDecode, BoxEncode, BoxType, Error};
 
-    use super::MovieBox;
+    use super::{MovieBox, MovieExtendsBox, TrackExtendsBox};
     use crate::mvex::tests::movie_extends;
     use crate::mvhd::tests::movie_header;
     use crate::trak::tests::track;
@@ -215,6 +262,60 @@ mod tests {
             MovieBox::decode_payload(whole.get(..header_len).unwrap()),
             Err(Error::missing_mandatory_box(BoxType::compact(*b"trak")))
         );
+    }
+
+    #[test]
+    fn a_movie_declaring_one_track_id_twice_cannot_be_built() {
+        assert_eq!(
+            MovieBox::new(movie_header(0), vec![track(), track()], None),
+            None
+        );
+    }
+
+    #[test]
+    fn a_fragmented_movie_leaving_a_track_without_its_extends_box_cannot_be_built() {
+        let extends_of_another_track =
+            MovieExtendsBox::new(vec![TrackExtendsBox::new(7, 1, 0, 0, 0)]).unwrap();
+
+        assert_eq!(
+            MovieBox::new(
+                movie_header(0),
+                vec![track()],
+                Some(extends_of_another_track)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_fragmented_movie_leaving_a_track_without_its_extends_box_is_rejected() {
+        let extends_of_another_track =
+            MovieExtendsBox::new(vec![TrackExtendsBox::new(7, 1, 0, 0, 0)]).unwrap();
+        let mut encoded_extends =
+            vec![0; usize::try_from(extends_of_another_track.encoded_len()).unwrap()];
+        extends_of_another_track
+            .encode(&mut encoded_extends)
+            .unwrap();
+
+        let payload = [encoded_payload(&movie()), encoded_extends].concat();
+
+        assert_eq!(
+            MovieBox::decode_payload(&payload),
+            Err(Error::missing_mandatory_box(BoxType::compact(*b"trex"))
+                .in_container(BoxType::compact(*b"moov")))
+        );
+    }
+
+    #[test]
+    fn a_decoded_movie_declaring_one_track_id_twice_keeps_both_tracks() {
+        let header_len = usize::try_from(movie().mvhd().encoded_len()).unwrap();
+        let tracks = encoded_payload(&movie()).split_off(header_len);
+
+        let payload = [encoded_payload(&movie()), tracks].concat();
+
+        let decoded = MovieBox::decode_payload(&payload).unwrap();
+
+        assert_eq!(decoded.trak(), [track(), track()]);
     }
 
     #[test]
