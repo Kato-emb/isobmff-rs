@@ -65,10 +65,10 @@ impl MovieBox {
             return None;
         }
 
-        if let Some(mvex) = &mvex
-            && !every_track_has_a_trex(&trak, mvex)
-        {
-            return None;
+        if let Some(mvex) = &mvex {
+            if !every_track_has_a_trex(&trak, mvex) {
+                return None;
+            }
         }
 
         Some(Self {
@@ -153,11 +153,11 @@ impl BoxDecode for MovieBox {
         let trak = trak_boxes.one_or_more()?;
         let mvex: Option<MovieExtendsBox> = mvex_boxes.zero_or_one()?;
 
-        if let Some(mvex) = &mvex
-            && !every_track_has_a_trex(&trak, mvex)
-        {
-            return Err(Error::missing_mandatory_box(TrackExtendsBox::BOX_TYPE)
-                .in_container(Self::BOX_TYPE));
+        if let Some(mvex) = &mvex {
+            if !every_track_has_a_trex(&trak, mvex) {
+                return Err(Error::missing_mandatory_box(TrackExtendsBox::BOX_TYPE)
+                    .in_container(Self::BOX_TYPE));
+            }
         }
 
         Ok(Self {
