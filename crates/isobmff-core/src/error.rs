@@ -70,17 +70,6 @@ impl Error {
         }
     }
 
-    /// Returns a failure of `kind` about the box `box_type` names, counting bytes
-    const fn about_bytes(kind: ErrorKind, box_type: BoxType, needed: u64, available: u64) -> Self {
-        Self {
-            kind,
-            containers: [None; CONTAINER_DEPTH],
-            dropped_containers: false,
-            box_type: Some(box_type),
-            detail: Detail::Bytes { needed, available },
-        }
-    }
-
     /// Returns a failure of `kind` about the box `box_type` names
     const fn about(kind: ErrorKind, box_type: BoxType) -> Self {
         Self {
@@ -119,24 +108,6 @@ impl Error {
         Self::new(ErrorKind::TruncatedBox, Detail::Bytes { needed, available })
     }
 
-    /// Returns the failure of a file that ends inside the header of a box
-    #[must_use]
-    pub const fn unfinished_header(needed: u64, available: u64) -> Self {
-        Self::new(
-            ErrorKind::UnfinishedHeader,
-            Detail::Bytes { needed, available },
-        )
-    }
-
-    /// Returns the failure of a file that ends before the total a box declares
-    #[must_use]
-    pub const fn unfinished_box(needed: u64, available: u64) -> Self {
-        Self::new(
-            ErrorKind::UnfinishedBox,
-            Detail::Bytes { needed, available },
-        )
-    }
-
     /// Returns the failure of a box read as a type the input does not hold there
     #[must_use]
     pub const fn box_type_mismatch(expected: BoxType, found: BoxType) -> Self {
@@ -162,18 +133,6 @@ impl Error {
             ErrorKind::TrailingPayload,
             Detail::Bytes { needed, available },
         )
-    }
-
-    /// Returns the failure of more payload than the total a box declares leaves room for
-    #[must_use]
-    pub const fn payload_past_declared(box_type: BoxType, declared: u64, offered: u64) -> Self {
-        Self::about_bytes(ErrorKind::PayloadPastDeclared, box_type, declared, offered)
-    }
-
-    /// Returns the failure of a box declaring a payload past the limit a reader holds
-    #[must_use]
-    pub const fn payload_limit_exceeded(box_type: BoxType, declared: u64, limit: u64) -> Self {
-        Self::about_bytes(ErrorKind::PayloadLimitExceeded, box_type, declared, limit)
     }
 
     /// Returns the failure of a buffer that ends inside what is written into it
@@ -311,30 +270,6 @@ impl Error {
                 available: limit,
             },
         )
-    }
-
-    /// Returns the failure of a payload, or an end, offered while no box is open
-    #[must_use]
-    pub const fn no_box_open() -> Self {
-        Self::new(ErrorKind::NoBoxOpen, Detail::Nothing)
-    }
-
-    /// Returns the failure of a box started while the box before it is still open
-    #[must_use]
-    pub const fn box_still_open(box_type: BoxType) -> Self {
-        Self::about(ErrorKind::BoxStillOpen, box_type)
-    }
-
-    /// Returns the failure of something offered after the file was closed off
-    #[must_use]
-    pub const fn past_end_of_file() -> Self {
-        Self::new(ErrorKind::PastEndOfFile, Detail::Nothing)
-    }
-
-    /// Returns the failure of a call made after the file was declared over
-    #[must_use]
-    pub const fn already_finished() -> Self {
-        Self::new(ErrorKind::AlreadyFinished, Detail::Nothing)
     }
 
     /// Returns the failure with `container` added to the boxes it was reached through
@@ -577,13 +512,6 @@ impl fmt::Display for Error {
                 formatter,
                 "box of {needed} bytes cut short by an input of {available}"
             ),
-            ErrorKind::UnfinishedHeader => write!(
-                formatter,
-                "file ends {available} bytes into a box header of {needed}"
-            ),
-            ErrorKind::UnfinishedBox => {
-                write!(formatter, "box of {needed} bytes closed off at {available}")
-            }
             ErrorKind::BoxTypeMismatch => write!(
                 formatter,
                 "input holds a {found}box where a {named}box was expected"
@@ -597,24 +525,6 @@ impl fmt::Display for Error {
                 "box payload leaves {} bytes past the fields it holds",
                 available.saturating_sub(needed)
             ),
-            ErrorKind::PayloadPastDeclared => write!(
-                formatter,
-                "{named}box declares {needed} payload bytes, and {available} were offered"
-            ),
-            ErrorKind::PayloadLimitExceeded => write!(
-                formatter,
-                "{named}box declares {needed} payload bytes, past the {available}-byte limit"
-            ),
-            ErrorKind::NoBoxOpen => {
-                formatter.write_str("no box is open to carry a payload or an end")
-            }
-            ErrorKind::BoxStillOpen => write!(formatter, "{named}box is still open"),
-            ErrorKind::PastEndOfFile => {
-                formatter.write_str("box running to the end of the file was closed already")
-            }
-            ErrorKind::AlreadyFinished => {
-                formatter.write_str("file was declared over and takes nothing more")
-            }
             ErrorKind::TruncatedBuffer => write!(
                 formatter,
                 "value of {needed} bytes needs a buffer at least that long, not {available}"
@@ -742,11 +652,12 @@ impl error::Error for Error {}
 
 /// What a failure of reading or writing a box is
 ///
-/// The vocabulary is the whole of it: reading one box off a slice, laying a
-/// sequence of them down, and the calls a caller makes in the wrong order all
-/// name their failure here. Each kind states which of the values an
-/// [`Error`] carries it brings, and falls in one [`Category`],
-/// which [`Error::category`](Error::category) reports.
+/// The vocabulary is this crate's own: reading one box off a slice and writing
+/// one into a buffer name their failures here. A layer above holds kinds of its
+/// own for the failures it detects, and carries these through whole rather than
+/// translating them. Each kind states which of the values an [`Error`] carries
+/// it brings, and falls in one [`Category`], which
+/// [`Error::category`](Error::category) reports.
 ///
 /// The situations a box reaches are added to as ISO/IEC 14496-12 is read
 /// further, so a match on this must leave room for kinds that are not here yet.
@@ -771,19 +682,6 @@ pub enum ErrorKind {
     /// occupies, [`available_bytes`](Error::available_bytes) the length
     /// the input offered.
     TruncatedBox,
-    /// File ends inside the header of a box, with no more input to come
-    ///
-    /// [`needed_bytes`](Error::needed_bytes) is the length the header
-    /// reaches, [`available_bytes`](Error::available_bytes) the length
-    /// the file carried.
-    UnfinishedHeader,
-    /// Box is closed off before the total it declares is reached
-    ///
-    /// The file ended inside the box, or the events laying it down closed it
-    /// early. [`needed_bytes`](Error::needed_bytes) is the length the box
-    /// occupies, [`available_bytes`](Error::available_bytes) the length
-    /// it was closed off at, header included.
-    UnfinishedBox,
     /// Box read as one type is of another
     ///
     /// [`box_type`](Error::box_type) is the type the box was read as,
@@ -801,13 +699,6 @@ pub enum ErrorKind {
     /// took, [`available_bytes`](Error::available_bytes) the length the
     /// payload holds.
     TrailingPayload,
-    /// More payload is offered for a box than the total it declares leaves room for
-    ///
-    /// [`box_type`](Error::box_type) is the box that declared it,
-    /// [`needed_bytes`](Error::needed_bytes) the payload it declares, and
-    /// [`available_bytes`](Error::available_bytes) the payload offered
-    /// for it.
-    PayloadPastDeclared,
     /// Full box declares flags the spec does not allow together
     ///
     /// [`flags`](Error::flags) is the flags the box declares.
@@ -868,13 +759,6 @@ pub enum ErrorKind {
     /// declares, [`available_entries`](Error::available_entries) the
     /// count the box reads.
     UnsupportedEntryCount,
-    /// Box read into a value declares a payload past the limit the reader holds
-    ///
-    /// [`box_type`](Error::box_type) is the box that declared it,
-    /// [`needed_bytes`](Error::needed_bytes) the payload it declares, and
-    /// [`available_bytes`](Error::available_bytes) the payload the reader
-    /// gathers for one box at most.
-    PayloadLimitExceeded,
     /// Buffer ends inside the value being written into it
     ///
     /// [`needed_bytes`](Error::needed_bytes) is the length the value
@@ -898,16 +782,6 @@ pub enum ErrorKind {
     /// [`value`](Error::value) is the value the field was given,
     /// [`needed_bytes`](Error::needed_bytes) the width of that field.
     OutOfRange,
-    /// Payload, or the end of a box, came while no box was open
-    NoBoxOpen,
-    /// Box started while the box before it was still open
-    ///
-    /// [`box_type`](Error::box_type) is the box left open.
-    BoxStillOpen,
-    /// Something came after the box running to the end of the file was closed
-    PastEndOfFile,
-    /// File was declared over, and takes nothing more
-    AlreadyFinished,
 }
 
 impl ErrorKind {
@@ -917,8 +791,6 @@ impl ErrorKind {
             Self::TruncatedHeader
             | Self::SizeBelowHeader
             | Self::TruncatedBox
-            | Self::UnfinishedHeader
-            | Self::UnfinishedBox
             | Self::BoxTypeMismatch
             | Self::TruncatedPayload
             | Self::TrailingPayload
@@ -933,17 +805,11 @@ impl ErrorKind {
             Self::UnsupportedBox
             | Self::UnsupportedVersion
             | Self::UnsupportedFlags
-            | Self::UnsupportedEntryCount
-            | Self::PayloadLimitExceeded => Category::Unsupported,
+            | Self::UnsupportedEntryCount => Category::Unsupported,
             Self::TruncatedBuffer
             | Self::TrailingBuffer
             | Self::BufferLengthMismatch
-            | Self::OutOfRange
-            | Self::PayloadPastDeclared
-            | Self::NoBoxOpen
-            | Self::BoxStillOpen
-            | Self::PastEndOfFile
-            | Self::AlreadyFinished => Category::Usage,
+            | Self::OutOfRange => Category::Usage,
         }
     }
 }
@@ -959,8 +825,8 @@ impl ErrorKind {
 pub enum Category {
     /// Boxes do not form what the format requires, and the file cannot stand as it is
     ///
-    /// The file being read is malformed, or the events offered would lay down
-    /// one that is.
+    /// The file being read is malformed, or what is being written would lay
+    /// down one that is.
     Malformed,
     /// Format allows what the file holds, and this implementation does not read it
     ///
@@ -1127,7 +993,6 @@ mod tests {
             Error::missing_alternative_box(SAMPLE_SIZE_BOXES).category(),
             Category::Malformed
         );
-        assert_eq!(Error::no_box_open().category(), Category::Usage);
         assert_eq!(
             Error::buffer_length_mismatch(4, 8).category(),
             Category::Usage
@@ -1166,7 +1031,7 @@ mod tests {
 
         assert_eq!(error.alternatives(), Some(SAMPLE_SIZE_BOXES));
         assert_eq!(error.box_type(), None);
-        assert_eq!(Error::no_box_open().alternatives(), None);
+        assert_eq!(Error::truncated_header(8, 4).alternatives(), None);
     }
 
     #[test]
@@ -1174,7 +1039,7 @@ mod tests {
         let error = Error::missing_mandatory_box(BoxType::compact(*b"mvhd"));
 
         assert_eq!(error.box_type(), Some(BoxType::compact(*b"mvhd")));
-        assert_eq!(Error::no_box_open().box_type(), None);
+        assert_eq!(Error::truncated_header(8, 4).box_type(), None);
     }
 
     #[test]
@@ -1184,7 +1049,7 @@ mod tests {
 
         assert_eq!(error.box_type(), Some(BoxType::compact(*b"moov")));
         assert_eq!(error.found_box_type(), Some(BoxType::compact(*b"moof")));
-        assert_eq!(Error::no_box_open().found_box_type(), None);
+        assert_eq!(Error::truncated_header(8, 4).found_box_type(), None);
     }
 
     #[test]
@@ -1210,18 +1075,6 @@ mod tests {
         assert_eq!(
             Error::forbidden_child_box(BoxType::compact(*b"trun")).to_string(),
             "container holds a trun box that a field of it forbids"
-        );
-        assert_eq!(
-            Error::box_still_open(BoxType::compact(*b"mdat")).to_string(),
-            "mdat box is still open"
-        );
-        assert_eq!(
-            Error::payload_past_declared(BoxType::compact(*b"mdat"), 4, 9).to_string(),
-            "mdat box declares 4 payload bytes, and 9 were offered"
-        );
-        assert_eq!(
-            Error::payload_limit_exceeded(BoxType::compact(*b"moov"), 32, 16).to_string(),
-            "moov box declares 32 payload bytes, past the 16-byte limit"
         );
         assert_eq!(
             Error::box_type_mismatch(BoxType::compact(*b"moov"), BoxType::compact(*b"moof"))
@@ -1280,22 +1133,6 @@ mod tests {
     }
 
     #[test]
-    fn display_of_a_call_the_api_does_not_take_says_which_call_it_was() {
-        assert_eq!(
-            Error::no_box_open().to_string(),
-            "no box is open to carry a payload or an end"
-        );
-        assert_eq!(
-            Error::past_end_of_file().to_string(),
-            "box running to the end of the file was closed already"
-        );
-        assert_eq!(
-            Error::already_finished().to_string(),
-            "file was declared over and takes nothing more"
-        );
-    }
-
-    #[test]
     fn display_of_a_failure_that_counts_bytes_names_both_lengths() {
         assert_eq!(
             Error::truncated_header(16, 12).to_string(),
@@ -1324,14 +1161,6 @@ mod tests {
         assert_eq!(
             Error::buffer_length_mismatch(4, 8).to_string(),
             "box payload of 4 bytes needs a buffer of that length, not 8"
-        );
-        assert_eq!(
-            Error::unfinished_header(16, 9).to_string(),
-            "file ends 9 bytes into a box header of 16"
-        );
-        assert_eq!(
-            Error::unfinished_box(16, 12).to_string(),
-            "box of 16 bytes closed off at 12"
         );
         assert_eq!(
             Error::out_of_range(0x1_0000_0000, FieldWidth::Compact).to_string(),
