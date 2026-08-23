@@ -29,12 +29,6 @@ const DEFAULT_SAMPLE_SIZE_PRESENT: u32 = 0x0000_0010;
 /// Flag stating that `default_sample_flags` is present
 const DEFAULT_SAMPLE_FLAGS_PRESENT: u32 = 0x0000_0020;
 
-/// Flag stating that the fragment of this box holds no samples
-const DURATION_IS_EMPTY: u32 = 0x0001_0000;
-
-/// Flag stating that the data offsets of this fragment are anchored at the `moof`
-const DEFAULT_BASE_IS_MOOF: u32 = 0x0002_0000;
-
 /// Every flag stating that a field of this box is present
 const PRESENCE_FLAGS: u32 = BASE_DATA_OFFSET_PRESENT
     | SAMPLE_DESCRIPTION_INDEX_PRESENT
@@ -51,9 +45,10 @@ const PRESENCE_FLAGS: u32 = BASE_DATA_OFFSET_PRESENT
 ///
 /// Five of the `flags` state which of those fields the box carries, so they are
 /// derived from the fields themselves. What is held is the rest —
-/// `duration-is-empty`, `default-base-is-moof`, and whatever bits the spec has
-/// yet to define — and [`flags`](Self::flags) returns all of them together, as
-/// the wire carries them.
+/// [`duration-is-empty`](Self::DURATION_IS_EMPTY),
+/// [`default-base-is-moof`](Self::DEFAULT_BASE_IS_MOOF), and whatever bits the
+/// spec has yet to define — and [`flags`](Self::flags) returns all of them
+/// together, as the wire carries them.
 ///
 /// A bit the spec has yet to define is carried through, but a payload holding
 /// the field such a bit would speak for is not: the fields this box reads stop
@@ -105,6 +100,24 @@ pub struct TrackFragmentHeaderBox {
 }
 
 impl TrackFragmentHeaderBox {
+    /// Flag stating that the fragment of this box holds no samples
+    pub const DURATION_IS_EMPTY: FullBoxFlags = match FullBoxFlags::new(0x0001_0000) {
+        Some(flags) => flags,
+        // Why not unwrap: the value lies within the 24 bits the field carries, so
+        // the flags always build, and a degenerate value stands in for the panic
+        // the lints forbid.
+        None => FullBoxFlags::ZERO,
+    };
+
+    /// Flag stating that the data offsets of this fragment are anchored at the `moof`
+    pub const DEFAULT_BASE_IS_MOOF: FullBoxFlags = match FullBoxFlags::new(0x0002_0000) {
+        Some(flags) => flags,
+        // Why not unwrap: the value lies within the 24 bits the field carries, so
+        // the flags always build, and a degenerate value stands in for the panic
+        // the lints forbid.
+        None => FullBoxFlags::ZERO,
+    };
+
     /// Creates the box from the track it heads and the defaults it sets
     ///
     /// The flags stating which fields are present are derived from the fields
@@ -164,7 +177,7 @@ impl TrackFragmentHeaderBox {
     /// `trun`.
     #[must_use]
     pub const fn duration_is_empty(&self) -> bool {
-        self.flags.bits() & DURATION_IS_EMPTY != 0
+        self.flags.bits() & Self::DURATION_IS_EMPTY.bits() != 0
     }
 
     /// Returns whether the data offsets of this fragment are anchored at the `moof`
@@ -174,7 +187,7 @@ impl TrackFragmentHeaderBox {
     /// explicitly instead.
     #[must_use]
     pub const fn default_base_is_moof(&self) -> bool {
-        self.flags.bits() & DEFAULT_BASE_IS_MOOF != 0
+        self.flags.bits() & Self::DEFAULT_BASE_IS_MOOF.bits() != 0
     }
 
     /// Returns the track this fragment carries samples of
@@ -381,10 +394,8 @@ mod tests {
 
     #[test]
     fn the_flags_no_field_speaks_for_stand_beside_the_flags_that_state_a_field() {
-        let anchored_at_the_movie_fragment = FullBoxFlags::new(0x0002_0000).unwrap();
-
         let track_fragment_header = TrackFragmentHeaderBox::new(
-            anchored_at_the_movie_fragment,
+            TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
             1,
             None,
             None,
@@ -402,10 +413,8 @@ mod tests {
 
     #[test]
     fn a_fragment_anchored_at_the_movie_fragment_says_so() {
-        let anchored_at_the_movie_fragment = FullBoxFlags::new(0x0002_0000).unwrap();
-
         let track_fragment_header = TrackFragmentHeaderBox::new(
-            anchored_at_the_movie_fragment,
+            TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
             1,
             None,
             None,
