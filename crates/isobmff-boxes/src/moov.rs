@@ -57,18 +57,14 @@ impl MovieBox {
             return None;
         }
 
-        let mut declared = BTreeSet::new();
-        if !trak
-            .iter()
-            .all(|track| declared.insert(track.tkhd().track_id()))
-        {
+        let declared_track_ids: BTreeSet<u32> =
+            trak.iter().map(|track| track.tkhd().track_id()).collect();
+        if declared_track_ids.len() != trak.len() {
             return None;
         }
 
-        if let Some(mvex) = &mvex {
-            if !every_track_has_a_trex(&trak, mvex) {
-                return None;
-            }
+        if a_track_lacks_its_trex(&trak, mvex.as_ref()) {
+            return None;
         }
 
         Some(Self {
@@ -104,13 +100,19 @@ impl MovieBox {
     }
 }
 
-/// Returns whether every track of the movie has its own `trex`
-fn every_track_has_a_trex(trak: &[TrackBox], mvex: &MovieExtendsBox) -> bool {
-    trak.iter().all(|track| {
-        mvex.trex()
-            .iter()
-            .any(|trex| trex.track_id() == track.tkhd().track_id())
-    })
+/// Returns whether a track of the movie is left without its own `trex`
+fn a_track_lacks_its_trex(trak: &[TrackBox], mvex: Option<&MovieExtendsBox>) -> bool {
+    let Some(mvex) = mvex else {
+        return false;
+    };
+
+    // Why not scanning the `trex` per track: both counts follow from the payload
+    // length, so the scan would cost the product of two figures an input settles.
+    let extended_track_ids: BTreeSet<u32> =
+        mvex.trex().iter().map(TrackExtendsBox::track_id).collect();
+
+    trak.iter()
+        .any(|track| !extended_track_ids.contains(&track.tkhd().track_id()))
 }
 
 impl BoxDefinition for MovieBox {
@@ -122,8 +124,7 @@ impl BoxDecode for MovieBox {
     ///
     /// * The failures of [`boxes`]: a child does not frame as a box.
     /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox): no `mvhd`,
-    ///   no `trak` at all, or — naming the `moov` it was read from — a track of a
-    ///   fragmented movie without its `trex`.
+    ///   no `trak` at all, or a track of a fragmented movie without its `trex`.
     /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one `mvhd` or
     ///   `mvex`.
     /// * Whatever the child reports, on the [`containers`](Error::containers) path: one of the
@@ -151,13 +152,10 @@ impl BoxDecode for MovieBox {
 
         let mvhd = mvhd_boxes.exactly_one()?;
         let trak = trak_boxes.one_or_more()?;
-        let mvex: Option<MovieExtendsBox> = mvex_boxes.zero_or_one()?;
+        let mvex = mvex_boxes.zero_or_one()?;
 
-        if let Some(mvex) = &mvex {
-            if !every_track_has_a_trex(&trak, mvex) {
-                return Err(Error::missing_mandatory_box(TrackExtendsBox::BOX_TYPE)
-                    .in_container(Self::BOX_TYPE));
-            }
+        if a_track_lacks_its_trex(&trak, mvex.as_ref()) {
+            return Err(Error::missing_mandatory_box(TrackExtendsBox::BOX_TYPE));
         }
 
         Ok(Self {
@@ -211,7 +209,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, BoxType, Error};
+    use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxType, Error};
 
     use super::{MovieBox, MovieExtendsBox, TrackExtendsBox};
     use crate::mvex::tests::movie_extends;
@@ -221,6 +219,19 @@ mod tests {
     /// Movie with one track, as a progressive file declares it
     fn movie() -> MovieBox {
         MovieBox::new(movie_header(5_000), vec![track()], None).unwrap()
+    }
+
+    /// Extends box setting the defaults of a track the movie does not declare
+    fn extends_of_another_track() -> MovieExtendsBox {
+        MovieExtendsBox::new(vec![TrackExtendsBox::new(7, 1, 0, 0, 0)]).unwrap()
+    }
+
+    /// Writes one child whole and returns the bytes it occupies
+    fn encoded_child(child: &(impl BoxDefinition + BoxEncode)) -> Vec<u8> {
+        let mut buffer = vec![0; usize::try_from(child.encoded_len()).unwrap()];
+        child.encode(&mut buffer).unwrap();
+
+        buffer
     }
 
     /// Writes the payload of the box and returns the bytes it occupies
@@ -274,14 +285,11 @@ mod tests {
 
     #[test]
     fn a_fragmented_movie_leaving_a_track_without_its_extends_box_cannot_be_built() {
-        let extends_of_another_track =
-            MovieExtendsBox::new(vec![TrackExtendsBox::new(7, 1, 0, 0, 0)]).unwrap();
-
         assert_eq!(
             MovieBox::new(
                 movie_header(0),
                 vec![track()],
-                Some(extends_of_another_track)
+                Some(extends_of_another_track())
             ),
             None
         );
@@ -289,29 +297,21 @@ mod tests {
 
     #[test]
     fn a_fragmented_movie_leaving_a_track_without_its_extends_box_is_rejected() {
-        let extends_of_another_track =
-            MovieExtendsBox::new(vec![TrackExtendsBox::new(7, 1, 0, 0, 0)]).unwrap();
-        let mut encoded_extends =
-            vec![0; usize::try_from(extends_of_another_track.encoded_len()).unwrap()];
-        extends_of_another_track
-            .encode(&mut encoded_extends)
-            .unwrap();
-
-        let payload = [encoded_payload(&movie()), encoded_extends].concat();
+        let payload = [
+            encoded_payload(&movie()),
+            encoded_child(&extends_of_another_track()),
+        ]
+        .concat();
 
         assert_eq!(
             MovieBox::decode_payload(&payload),
-            Err(Error::missing_mandatory_box(BoxType::compact(*b"trex"))
-                .in_container(BoxType::compact(*b"moov")))
+            Err(Error::missing_mandatory_box(BoxType::compact(*b"trex")))
         );
     }
 
     #[test]
     fn a_decoded_movie_declaring_one_track_id_twice_keeps_both_tracks() {
-        let header_len = usize::try_from(movie().mvhd().encoded_len()).unwrap();
-        let tracks = encoded_payload(&movie()).split_off(header_len);
-
-        let payload = [encoded_payload(&movie()), tracks].concat();
+        let payload = [encoded_payload(&movie()), encoded_child(&track())].concat();
 
         let decoded = MovieBox::decode_payload(&payload).unwrap();
 

@@ -366,10 +366,21 @@ impl SampleReader {
             return Err(SampleError::missing_movie_extends());
         };
 
+        // Why not scanning the `trex` per track: both counts follow from the
+        // length of the `moov`, so the scan would cost the product of two figures
+        // an input settles.
+        let mut defaults = BTreeMap::new();
+        for trex in mvex.trex() {
+            defaults.entry(trex.track_id()).or_insert(trex);
+        }
+
         let mut tracks = BTreeMap::new();
         for trak in movie.trak() {
             let track_id = trak.tkhd().track_id();
-            if let Some(trex) = mvex.trex().iter().find(|trex| trex.track_id() == track_id) {
+            // Why not reporting the track whose `trex` is missing: MovieBox
+            // refuses a fragmented movie that leaves one without it, so what is
+            // passed over here is a `trex` of a track the movie never declared.
+            if let Some(trex) = defaults.get(&track_id) {
                 tracks.entry(track_id).or_insert(Track {
                     default_sample_description_index: trex.default_sample_description_index(),
                     default_sample_duration: trex.default_sample_duration(),
@@ -741,7 +752,7 @@ mod tests {
         let mut payload = vec![0; usize::try_from(declared.payload_len()).unwrap()];
         declared.encode_payload(&mut payload).unwrap();
 
-        let repeated = declared.trak().first().unwrap();
+        let repeated = track(1);
         let mut encoded_track = vec![0; usize::try_from(repeated.encoded_len()).unwrap()];
         repeated.encode(&mut encoded_track).unwrap();
 
