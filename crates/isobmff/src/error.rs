@@ -1,17 +1,24 @@
-//! [`SampleError`], the reason the samples of a presentation do not read
+//! [`SampleError`], the reason the samples of a presentation do not read or write
 
 use core::error;
 use core::fmt;
 
 use isobmff_core::Category;
 
-/// Reason the samples of a presentation do not read
+/// Bytes one `trun` row states for a sample, the width of its `sample_size`
+const LARGEST_SAMPLE_SIZE: u64 = u32::MAX as u64;
+
+/// Furthest past its base a `trun` places its data, the width of its `data_offset`
+const FURTHEST_DATA_OFFSET: u64 = i32::MAX.unsigned_abs() as u64;
+
+/// Reason the samples of a presentation do not read or write
 ///
 /// What went wrong is one [`kind`](Self::kind): a failure of the samples
 /// themselves — data that lies behind what was read, a sample that never
-/// arrived whole — or a failure of one box, which [`isobmff_core::Error`] names
-/// and this type carries through whole, as [`box_error`](Self::box_error). What
-/// a caller does about either is one [`category`](Self::category).
+/// arrived whole, a sample that states more than a fragment carries — or a
+/// failure of one box, which [`isobmff_core::Error`] names and this type carries
+/// through whole, as [`box_error`](Self::box_error). What a caller does about
+/// either is one [`category`](Self::category).
 ///
 /// The values a failure of the samples carries follow from its kind, and each
 /// kind names its own on [`SampleErrorKind`]. A carried box failure keeps its
@@ -131,6 +138,94 @@ impl SampleError {
         }
     }
 
+    /// Returns the failure of a sample or a close offered while no fragment is open
+    #[must_use]
+    pub const fn no_fragment_open() -> Self {
+        Self {
+            representation: Representation::NoFragmentOpen,
+        }
+    }
+
+    /// Returns the failure of a fragment begun or the samples declared over while one is open
+    #[must_use]
+    pub const fn fragment_still_open() -> Self {
+        Self {
+            representation: Representation::FragmentStillOpen,
+        }
+    }
+
+    /// Returns the failure of a sample longer than a `trun` row states
+    #[must_use]
+    pub const fn sample_size_out_of_range(track_id: u32, declared: u64) -> Self {
+        Self {
+            representation: Representation::SampleSizeOutOfRange { track_id, declared },
+        }
+    }
+
+    /// Returns the failure of sample data lying further into a fragment than a `trun` reaches
+    #[must_use]
+    pub const fn data_offset_out_of_range(track_id: u32, offset: u64) -> Self {
+        Self {
+            representation: Representation::DataOffsetOutOfRange { track_id, offset },
+        }
+    }
+
+    /// Returns the failure of a composition time offset neither version of a `trun` writes
+    #[must_use]
+    pub const fn composition_time_offset_out_of_range(track_id: u32, offset: i64) -> Self {
+        Self {
+            representation: Representation::CompositionTimeOffsetOutOfRange { track_id, offset },
+        }
+    }
+
+    /// Returns the failure of a sample that does not carry on from the one before it
+    #[must_use]
+    pub const fn decode_time_mismatch(track_id: u32, stated: u64, reached: u64) -> Self {
+        Self {
+            representation: Representation::DecodeTimeMismatch {
+                track_id,
+                stated,
+                reached,
+            },
+        }
+    }
+
+    /// Returns the failure of one fragment of a track described by two `stsd` entries
+    #[must_use]
+    pub const fn sample_description_index_mismatch(
+        track_id: u32,
+        stated: u32,
+        established: u32,
+    ) -> Self {
+        Self {
+            representation: Representation::SampleDescriptionIndexMismatch {
+                track_id,
+                stated,
+                established,
+            },
+        }
+    }
+
+    /// Returns the failure of a fragment starting before the track it belongs to reached
+    #[must_use]
+    pub const fn backward_decode_time(track_id: u32, stated: u64, reached: u64) -> Self {
+        Self {
+            representation: Representation::BackwardDecodeTime {
+                track_id,
+                stated,
+                reached,
+            },
+        }
+    }
+
+    /// Returns the failure of samples that do not build the boxes of a fragment
+    #[must_use]
+    pub const fn fragment_not_representable() -> Self {
+        Self {
+            representation: Representation::FragmentNotRepresentable,
+        }
+    }
+
     /// Returns what went wrong
     #[must_use]
     pub const fn kind(self) -> SampleErrorKind {
@@ -147,6 +242,17 @@ impl SampleError {
             Representation::ExtentLengthMismatch { .. } => SampleErrorKind::ExtentLengthMismatch,
             Representation::AlreadyFinished => SampleErrorKind::AlreadyFinished,
             Representation::MissingMovieExtends => SampleErrorKind::MissingMovieExtends,
+            Representation::NoFragmentOpen => SampleErrorKind::NoFragmentOpen,
+            Representation::FragmentStillOpen => SampleErrorKind::FragmentStillOpen,
+            Representation::SampleSizeOutOfRange { .. }
+            | Representation::DataOffsetOutOfRange { .. }
+            | Representation::CompositionTimeOffsetOutOfRange { .. } => SampleErrorKind::OutOfRange,
+            Representation::DecodeTimeMismatch { .. } => SampleErrorKind::DecodeTimeMismatch,
+            Representation::SampleDescriptionIndexMismatch { .. } => {
+                SampleErrorKind::SampleDescriptionIndexMismatch
+            }
+            Representation::BackwardDecodeTime { .. } => SampleErrorKind::BackwardDecodeTime,
+            Representation::FragmentNotRepresentable => SampleErrorKind::FragmentNotRepresentable,
         }
     }
 
@@ -156,14 +262,23 @@ impl SampleError {
         match self.representation {
             Representation::Box(box_error) => box_error.category(),
             Representation::BackwardDataOffset { .. }
-            | Representation::SampleSizeLimitExceeded { .. } => Category::Unsupported,
+            | Representation::SampleSizeLimitExceeded { .. }
+            | Representation::SampleSizeOutOfRange { .. }
+            | Representation::DataOffsetOutOfRange { .. }
+            | Representation::CompositionTimeOffsetOutOfRange { .. } => Category::Unsupported,
             Representation::UnknownTrackId { .. }
             | Representation::UnfinishedSample { .. }
             | Representation::DecodeTimeOverflow { .. }
             | Representation::DataOffsetOverflow { .. } => Category::Malformed,
             Representation::ExtentLengthMismatch { .. }
             | Representation::AlreadyFinished
-            | Representation::MissingMovieExtends => Category::Usage,
+            | Representation::MissingMovieExtends
+            | Representation::NoFragmentOpen
+            | Representation::FragmentStillOpen
+            | Representation::DecodeTimeMismatch { .. }
+            | Representation::SampleDescriptionIndexMismatch { .. }
+            | Representation::BackwardDecodeTime { .. }
+            | Representation::FragmentNotRepresentable => Category::Usage,
         }
     }
 
@@ -183,7 +298,16 @@ impl SampleError {
             | Representation::DataOffsetOverflow { .. }
             | Representation::ExtentLengthMismatch { .. }
             | Representation::AlreadyFinished
-            | Representation::MissingMovieExtends => None,
+            | Representation::MissingMovieExtends
+            | Representation::NoFragmentOpen
+            | Representation::FragmentStillOpen
+            | Representation::SampleSizeOutOfRange { .. }
+            | Representation::DataOffsetOutOfRange { .. }
+            | Representation::CompositionTimeOffsetOutOfRange { .. }
+            | Representation::DecodeTimeMismatch { .. }
+            | Representation::SampleDescriptionIndexMismatch { .. }
+            | Representation::BackwardDecodeTime { .. }
+            | Representation::FragmentNotRepresentable => None,
         }
     }
 
@@ -196,11 +320,20 @@ impl SampleError {
             | Representation::UnknownTrackId { track_id }
             | Representation::UnfinishedSample { track_id, .. }
             | Representation::DecodeTimeOverflow { track_id }
-            | Representation::DataOffsetOverflow { track_id } => Some(track_id as u64),
+            | Representation::DataOffsetOverflow { track_id }
+            | Representation::SampleSizeOutOfRange { track_id, .. }
+            | Representation::DataOffsetOutOfRange { track_id, .. }
+            | Representation::CompositionTimeOffsetOutOfRange { track_id, .. }
+            | Representation::DecodeTimeMismatch { track_id, .. }
+            | Representation::SampleDescriptionIndexMismatch { track_id, .. }
+            | Representation::BackwardDecodeTime { track_id, .. } => Some(track_id as u64),
             Representation::Box(_)
             | Representation::ExtentLengthMismatch { .. }
             | Representation::AlreadyFinished
-            | Representation::MissingMovieExtends => None,
+            | Representation::MissingMovieExtends
+            | Representation::NoFragmentOpen
+            | Representation::FragmentStillOpen
+            | Representation::FragmentNotRepresentable => None,
         }
     }
 
@@ -208,16 +341,25 @@ impl SampleError {
     #[must_use]
     pub const fn needed_bytes(self) -> Option<u64> {
         match self.representation {
-            Representation::SampleSizeLimitExceeded { declared, .. } => Some(declared),
+            Representation::SampleSizeLimitExceeded { declared, .. }
+            | Representation::SampleSizeOutOfRange { declared, .. } => Some(declared),
             Representation::UnfinishedSample { needed, .. }
             | Representation::ExtentLengthMismatch { needed, .. } => Some(needed),
+            Representation::DataOffsetOutOfRange { offset, .. } => Some(offset),
             Representation::Box(_)
             | Representation::BackwardDataOffset { .. }
             | Representation::UnknownTrackId { .. }
             | Representation::DecodeTimeOverflow { .. }
             | Representation::DataOffsetOverflow { .. }
             | Representation::AlreadyFinished
-            | Representation::MissingMovieExtends => None,
+            | Representation::MissingMovieExtends
+            | Representation::NoFragmentOpen
+            | Representation::FragmentStillOpen
+            | Representation::CompositionTimeOffsetOutOfRange { .. }
+            | Representation::DecodeTimeMismatch { .. }
+            | Representation::SampleDescriptionIndexMismatch { .. }
+            | Representation::BackwardDecodeTime { .. }
+            | Representation::FragmentNotRepresentable => None,
         }
     }
 
@@ -229,12 +371,21 @@ impl SampleError {
             Representation::SampleSizeLimitExceeded { limit, .. } => Some(limit),
             Representation::UnfinishedSample { available, .. }
             | Representation::ExtentLengthMismatch { available, .. } => Some(available),
+            Representation::SampleSizeOutOfRange { .. } => Some(LARGEST_SAMPLE_SIZE),
+            Representation::DataOffsetOutOfRange { .. } => Some(FURTHEST_DATA_OFFSET),
             Representation::Box(_)
             | Representation::UnknownTrackId { .. }
             | Representation::DecodeTimeOverflow { .. }
             | Representation::DataOffsetOverflow { .. }
             | Representation::AlreadyFinished
-            | Representation::MissingMovieExtends => None,
+            | Representation::MissingMovieExtends
+            | Representation::NoFragmentOpen
+            | Representation::FragmentStillOpen
+            | Representation::CompositionTimeOffsetOutOfRange { .. }
+            | Representation::DecodeTimeMismatch { .. }
+            | Representation::SampleDescriptionIndexMismatch { .. }
+            | Representation::BackwardDecodeTime { .. }
+            | Representation::FragmentNotRepresentable => None,
         }
     }
 }
@@ -294,6 +445,49 @@ impl fmt::Display for SampleError {
                 formatter.write_str("samples were declared over and take nothing more")
             }
             Representation::MissingMovieExtends => formatter.write_str("the movie carries no mvex"),
+            Representation::NoFragmentOpen => {
+                formatter.write_str("no fragment is open to carry a sample or be closed")
+            }
+            Representation::FragmentStillOpen => formatter.write_str("fragment is still open"),
+            Representation::SampleSizeOutOfRange { track_id, declared } => write!(
+                formatter,
+                "track {track_id} states a sample of {declared} bytes, past the {LARGEST_SAMPLE_SIZE} a trun row carries"
+            ),
+            Representation::DataOffsetOutOfRange { track_id, offset } => write!(
+                formatter,
+                "sample data of track {track_id} lies {offset} bytes into the fragment, past the {FURTHEST_DATA_OFFSET} a trun carries"
+            ),
+            Representation::CompositionTimeOffsetOutOfRange { track_id, offset } => write!(
+                formatter,
+                "track {track_id} states a composition time offset of {offset}, which neither version of a trun writes"
+            ),
+            Representation::DecodeTimeMismatch {
+                track_id,
+                stated,
+                reached,
+            } => write!(
+                formatter,
+                "track {track_id} states decode time {stated} where the samples before it reach {reached}"
+            ),
+            Representation::SampleDescriptionIndexMismatch {
+                track_id,
+                stated,
+                established,
+            } => write!(
+                formatter,
+                "track {track_id} states sample description index {stated} where its fragment holds {established}"
+            ),
+            Representation::BackwardDecodeTime {
+                track_id,
+                stated,
+                reached,
+            } => write!(
+                formatter,
+                "track {track_id} goes back to decode time {stated} from the {reached} it reached"
+            ),
+            Representation::FragmentNotRepresentable => {
+                formatter.write_str("samples do not build the boxes of a fragment")
+            }
         }
     }
 }
@@ -334,7 +528,16 @@ impl error::Error for SampleError {
             | Representation::DataOffsetOverflow { .. }
             | Representation::ExtentLengthMismatch { .. }
             | Representation::AlreadyFinished
-            | Representation::MissingMovieExtends => None,
+            | Representation::MissingMovieExtends
+            | Representation::NoFragmentOpen
+            | Representation::FragmentStillOpen
+            | Representation::SampleSizeOutOfRange { .. }
+            | Representation::DataOffsetOutOfRange { .. }
+            | Representation::CompositionTimeOffsetOutOfRange { .. }
+            | Representation::DecodeTimeMismatch { .. }
+            | Representation::SampleDescriptionIndexMismatch { .. }
+            | Representation::BackwardDecodeTime { .. }
+            | Representation::FragmentNotRepresentable => None,
         }
     }
 }
@@ -342,11 +545,11 @@ impl error::Error for SampleError {
 /// What a failure of the samples of a presentation is
 ///
 /// The vocabulary is this crate's own: resolving where a sample lies, gathering
-/// it, and placing it on the media timeline name their failures here. A failure
-/// of one box is not translated: it keeps the kind
-/// [`isobmff_core::ErrorKind`] gives it, carried on [`Box`](Self::Box).
+/// it, placing it on the media timeline, and laying it out in a fragment name
+/// their failures here. A failure of one box is not translated: it keeps the
+/// kind [`isobmff_core::ErrorKind`] gives it, carried on [`Box`](Self::Box).
 ///
-/// The situations a reader reaches are added to as ISO/IEC 14496-12 is read
+/// The situations this layer reaches are added to as ISO/IEC 14496-12 is read
 /// further, so a match on this must leave room for kinds that are not here yet.
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -400,6 +603,45 @@ pub enum SampleErrorKind {
     AlreadyFinished,
     /// Movie carries no `mvex`, and so continues in no fragments the reader could read
     MissingMovieExtends,
+    /// Sample was offered, or a fragment closed, while no fragment was open
+    NoFragmentOpen,
+    /// Fragment was begun, or the samples declared over, while one was still open
+    FragmentStillOpen,
+    /// Sample states a value the field a fragment carries it in does not reach
+    ///
+    /// The length of a sample, how far into a fragment its data lies, and the
+    /// composition time offset it states are each written into a field of fixed
+    /// width, and a sample may state more than one of them carries. Which of
+    /// them it was is named by the `Display` of the failure.
+    /// [`value`](SampleError::value) is the track it belongs to, and for the two
+    /// that count bytes, [`needed_bytes`](SampleError::needed_bytes) is the
+    /// value the sample stated and
+    /// [`available_bytes`](SampleError::available_bytes) the width it did not
+    /// fit. A composition time offset carries neither, being no count of bytes.
+    OutOfRange,
+    /// Sample does not start where the one before it in its track ends
+    ///
+    /// A `trun` states how long a sample lasts and not when it is decoded, so
+    /// the decode times of the samples of one fragment are only written if each
+    /// carries on from the one before it. [`value`](SampleError::value) is the
+    /// track it belongs to.
+    DecodeTimeMismatch,
+    /// Samples of one fragment of one track are described by two `stsd` entries
+    ///
+    /// A `traf` states which entry describes its samples once, for all of them.
+    /// [`value`](SampleError::value) is the track they belong to.
+    SampleDescriptionIndexMismatch,
+    /// Fragment of a track starts before the samples written for it reach
+    ///
+    /// A `tfdt` is the sum of the durations of the samples before it
+    /// (ISO/IEC 14496-12 §8.8.12), which a decode time going back cannot be.
+    /// [`value`](SampleError::value) is the track it belongs to.
+    BackwardDecodeTime,
+    /// Samples do not build the boxes of a fragment
+    ///
+    /// The writer holds the samples it is given to what the boxes of a fragment
+    /// state, so this is never reached from samples a caller offers.
+    FragmentNotRepresentable,
 }
 
 /// Values a failure carries, keyed by what went wrong
@@ -433,6 +675,36 @@ enum Representation {
     AlreadyFinished,
     /// Movie carrying no `mvex`, and so no fragments
     MissingMovieExtends,
+    /// Sample offered, or a fragment closed, while no fragment was open
+    NoFragmentOpen,
+    /// Fragment begun, or the samples declared over, while one was still open
+    FragmentStillOpen,
+    /// Sample longer than a `trun` row states
+    SampleSizeOutOfRange { track_id: u32, declared: u64 },
+    /// Sample data lying further into a fragment than a `trun` reaches
+    DataOffsetOutOfRange { track_id: u32, offset: u64 },
+    /// Composition time offset neither version of a `trun` writes
+    CompositionTimeOffsetOutOfRange { track_id: u32, offset: i64 },
+    /// Sample that does not carry on from the one before it
+    DecodeTimeMismatch {
+        track_id: u32,
+        stated: u64,
+        reached: u64,
+    },
+    /// Fragment of one track described by two `stsd` entries
+    SampleDescriptionIndexMismatch {
+        track_id: u32,
+        stated: u32,
+        established: u32,
+    },
+    /// Fragment starting before the track it belongs to reached
+    BackwardDecodeTime {
+        track_id: u32,
+        stated: u64,
+        reached: u64,
+    },
+    /// Samples that do not build the boxes of a fragment
+    FragmentNotRepresentable,
 }
 
 #[cfg(test)]
