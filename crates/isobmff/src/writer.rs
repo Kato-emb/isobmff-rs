@@ -37,17 +37,6 @@ struct OpenRun {
 }
 
 impl OpenRun {
-    /// Creates an empty run of the media data of a fragment, starting at `data_offset`
-    const fn new(data_offset: u64) -> Self {
-        Self {
-            data_offset,
-            samples: Vec::new(),
-            carries_offsets: false,
-            holds_negative_offset: false,
-            holds_wide_offset: false,
-        }
-    }
-
     /// Returns whether this run still writes with a sample stating `offset` added to it
     ///
     /// A row carries a composition time offset only where every row of its run
@@ -107,7 +96,13 @@ impl OpenTrack {
                 run.push(sample);
             }
             _no_run_this_sample_carries_on => {
-                let mut started = OpenRun::new(data_offset);
+                let mut started = OpenRun {
+                    data_offset,
+                    samples: Vec::new(),
+                    carries_offsets: false,
+                    holds_negative_offset: false,
+                    holds_wide_offset: false,
+                };
                 started.push(sample);
                 self.runs.push(started);
             }
