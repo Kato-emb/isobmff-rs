@@ -1,14 +1,20 @@
 //! The samples of a fragmented file, read through the box layer beside this one
 
+// Why not inside `mod tests`: an inline `mod` adds its own name as a directory
+// segment, so a nested one looks for `tests/tests/helpers/reading.rs`. The
+// `cfg` is what keeps `allow-unwrap-in-tests` reaching the helper from out here.
+#[cfg(test)]
+#[path = "helpers/reading.rs"]
+mod reading;
+
 #[cfg(test)]
 mod tests {
+    use super::reading::samples_of;
     use isobmff::{
         BoxDefinition, BoxEncode, BoxHeader, MediaDataBox, MovieFragmentBox,
-        MovieFragmentHeaderBox, Sample, SampleReader, TrackExtendsBox,
-        TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox, TrackRunBox,
-        TrackRunSample,
+        MovieFragmentHeaderBox, Sample, TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox,
+        TrackFragmentBox, TrackFragmentHeaderBox, TrackRunBox, TrackRunSample,
     };
-    use isobmff_sequence::{BoxEvent, BoxReader};
     use isobmff_test_support::{file_type, fragmented_movie, written};
 
     /// Bytes each sample of the synthetic file occupies
@@ -81,56 +87,6 @@ mod tests {
             written(&media_data),
         ]
         .concat()
-    }
-
-    /// The samples the file carries, read off it `cut_length` bytes at a time
-    fn samples_of(file: &[u8], cut_length: usize) -> Vec<Sample> {
-        let mut box_reader = BoxReader::new();
-        let mut sample_reader = None;
-        let mut samples = Vec::new();
-
-        for arriving in file.chunks(cut_length) {
-            box_reader.handle_input(arriving).unwrap();
-
-            while let Some(event) = box_reader.poll_event() {
-                let extent = box_reader.event_extent().unwrap();
-
-                match event {
-                    BoxEvent::Movie(movie) => {
-                        sample_reader = Some(SampleReader::new(&movie).unwrap());
-                    }
-                    BoxEvent::MovieFragment(movie_fragment) => sample_reader
-                        .as_mut()
-                        .unwrap()
-                        .handle_movie_fragment(movie_fragment, extent)
-                        .unwrap(),
-                    BoxEvent::RawPayload(payload) => sample_reader
-                        .as_mut()
-                        .unwrap()
-                        .handle_media_data(&payload, extent)
-                        .unwrap(),
-                    // Why not the wildcard on its own: `BoxEvent` is
-                    // `#[non_exhaustive]`, so the arm cannot go, and
-                    // `wildcard_enum_match_arm` refuses one that stands for variants
-                    // this match could have named.
-                    BoxEvent::FileType(_)
-                    | BoxEvent::SegmentType(_)
-                    | BoxEvent::RawStart(_)
-                    | BoxEvent::RawEnd
-                    | _ => {}
-                }
-
-                while let Some(sample) = sample_reader.as_mut().and_then(SampleReader::poll_sample)
-                {
-                    samples.push(sample);
-                }
-            }
-        }
-
-        box_reader.finish().unwrap();
-        sample_reader.unwrap().finish().unwrap();
-
-        samples
     }
 
     /// The samples the synthetic file was built to carry
