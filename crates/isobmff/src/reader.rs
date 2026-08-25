@@ -347,7 +347,9 @@ impl SampleReader {
     /// `extent` is the bytes of the presentation the `moof` occupies, which the
     /// data offsets of its fragments are resolved against (§8.8.7.1). The
     /// samples it declares are reported once their data has arrived, from
-    /// [`poll_sample`](Self::poll_sample).
+    /// [`poll_sample`](Self::poll_sample). A sample declaring no bytes holds
+    /// every byte it claims as soon as it is claimed, and is reported without
+    /// any media data arriving for it.
     ///
     /// # Errors
     ///
@@ -374,7 +376,12 @@ impl SampleReader {
         self.read_so_far = self.read_so_far.max(extent.end);
 
         self.claim(&movie_fragment, extent.start)
-            .map_err(|failure| self.fail(failure))
+            .map_err(|failure| self.fail(failure))?;
+        // Why not reporting only where media data arrives: a fragment whose
+        // samples all declare no bytes is met by no media data at all.
+        self.report_whole();
+
+        Ok(())
     }
 
     /// Takes media data that arrived, and fills the samples claiming it
@@ -410,16 +417,7 @@ impl SampleReader {
         for pending in &mut self.pending {
             pending.take_from(data, &extent);
         }
-
-        while self.pending.front().is_some_and(PendingSample::is_whole) {
-            // Why not unwrap: the front was just found to be there, and this
-            // `else` stands for a `None` the loop does not reach.
-            let Some(whole) = self.pending.pop_front() else {
-                break;
-            };
-
-            self.ready.push_back(whole.into_sample());
-        }
+        self.report_whole();
 
         Ok(())
     }
@@ -587,6 +585,22 @@ impl SampleReader {
         }
 
         Ok(())
+    }
+
+    /// Hands over the samples at the front of the queue that hold every byte they claimed
+    ///
+    /// The samples are reported in the order the fragments declared them, so one
+    /// whole is held back while a sample declared before it is still short.
+    fn report_whole(&mut self) {
+        while self.pending.front().is_some_and(PendingSample::is_whole) {
+            // Why not unwrap: the front was just found to be there, and this
+            // `else` stands for a `None` the loop does not reach.
+            let Some(whole) = self.pending.pop_front() else {
+                break;
+            };
+
+            self.ready.push_back(whole.into_sample());
+        }
     }
 
     /// Fails the reader for good, and hands the failure back to report
@@ -1208,6 +1222,55 @@ mod tests {
         assert_eq!(
             drained(&mut reader),
             [sample(0, b"ABCD"), sample(1_024, b"EFGH")]
+        );
+    }
+
+    #[test]
+    fn samples_declaring_no_bytes_are_reported_before_any_media_data_arrives() {
+        let track_fragment = TrackFragmentBox::new(
+            track_fragment_header(
+                TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                1,
+                None,
+                None,
+                Some(0),
+            ),
+            None,
+            vec![run(Some(i32::try_from(MOVIE_FRAGMENT_LEN).unwrap()), 2)],
+        )
+        .unwrap();
+
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+        reader
+            .handle_movie_fragment(movie_fragment(vec![track_fragment]), 0..MOVIE_FRAGMENT_LEN)
+            .unwrap();
+        reader.finish().unwrap();
+
+        assert_eq!(drained(&mut reader), [sample(0, b""), sample(1_024, b"")]);
+    }
+
+    #[test]
+    fn a_sample_declaring_no_bytes_waits_on_the_ones_declared_before_it() {
+        let rows = vec![
+            TrackRunSample::new(None, Some(4), None, None).unwrap(),
+            TrackRunSample::new(None, Some(0), None, None).unwrap(),
+        ];
+        let trun =
+            TrackRunBox::new(Some(i32::try_from(MOVIE_FRAGMENT_LEN).unwrap()), None, rows).unwrap();
+
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+        reader
+            .handle_movie_fragment(
+                movie_fragment(vec![track_fragment(vec![trun])]),
+                0..MOVIE_FRAGMENT_LEN,
+            )
+            .unwrap();
+        assert_eq!(reader.poll_sample(), None);
+
+        reader.handle_media_data(b"ABCD", 100..104).unwrap();
+        assert_eq!(
+            drained(&mut reader),
+            [sample(0, b"ABCD"), sample(1_024, b"")]
         );
     }
 
