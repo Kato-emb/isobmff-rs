@@ -58,6 +58,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "isobmff"
+version = "0.0.0"
+dependencies = [
+ "isobmff-boxes",
+ "isobmff-core",
+]
+
+[[package]]
 name = "isobmff-boxes"
 version = "0.0.0"
 dependencies = [
@@ -72,8 +80,10 @@ version = "0.0.0"
 name = "isobmff-fuzz"
 version = "0.0.0"
 dependencies = [
+ "isobmff",
  "isobmff-core",
  "isobmff-sequence",
+ "isobmff-test-support",
  "libfuzzer-sys",
 ]
 
@@ -83,6 +93,15 @@ version = "0.0.0"
 dependencies = [
  "isobmff-boxes",
  "isobmff-core",
+]
+
+[[package]]
+name = "isobmff-test-support"
+version = "0.0.0"
+dependencies = [
+ "isobmff-boxes",
+ "isobmff-core",
+ "isobmff-sequence",
 ]
 
 [[package]]
