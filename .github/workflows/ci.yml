@@ -118,6 +118,8 @@ jobs:
       - run: cargo fuzz run boxes --target x86_64-unknown-linux-gnu -- -runs=65536
       - run: cargo fuzz run reader --target x86_64-unknown-linux-gnu -- -runs=65536
       - run: cargo fuzz run round_trip --target x86_64-unknown-linux-gnu -- -runs=65536
+      - run: cargo fuzz run sample_reader --target x86_64-unknown-linux-gnu -- -runs=65536
+      - run: cargo fuzz run sample_round_trip --target x86_64-unknown-linux-gnu -- -runs=65536
 
   docs:
     runs-on: ubuntu-latest

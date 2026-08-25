@@ -23,6 +23,12 @@ path = "../crates/isobmff-core"
 [dependencies.isobmff-sequence]
 path = "../crates/isobmff-sequence"
 
+[dependencies.isobmff]
+path = "../crates/isobmff"
+
+[dependencies.isobmff-test-support]
+path = "../crates/isobmff-test-support"
+
 [profile.release]
 debug = 1
 
@@ -43,6 +49,20 @@ bench = false
 [[bin]]
 name = "round_trip"
 path = "fuzz_targets/round_trip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sample_reader"
+path = "fuzz_targets/sample_reader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sample_round_trip"
+path = "fuzz_targets/sample_round_trip.rs"
 test = false
 doc = false
 bench = false
