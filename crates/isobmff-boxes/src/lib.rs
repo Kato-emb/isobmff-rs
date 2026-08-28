@@ -13,6 +13,7 @@
 
 extern crate alloc;
 
+mod btrt;
 mod data_entry;
 mod dinf;
 mod dref;
@@ -29,7 +30,9 @@ mod moov;
 mod mvex;
 mod mvhd;
 mod nmhd;
+mod sample_entry;
 mod smhd;
+mod srat;
 mod stbl;
 mod stco;
 mod sthd;
@@ -47,6 +50,7 @@ mod trex;
 mod trun;
 mod vmhd;
 
+pub use btrt::BitRateBox;
 pub use data_entry::{DataEntry, DataEntryUrlBox, DataEntryUrnBox};
 pub use dinf::DataInformationBox;
 pub use dref::DataReferenceBox;
@@ -63,7 +67,9 @@ pub use moov::MovieBox;
 pub use mvex::MovieExtendsBox;
 pub use mvhd::MovieHeaderBox;
 pub use nmhd::NullMediaHeaderBox;
+pub use sample_entry::{AudioSampleEntry, VisualSampleEntry};
 pub use smhd::SoundMediaHeaderBox;
+pub use srat::SamplingRateBox;
 pub use stbl::SampleTableBox;
 pub use stco::{ChunkOffsetBox, ChunkOffsetEntry};
 pub use sthd::SubtitleMediaHeaderBox;

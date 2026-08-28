@@ -1,6 +1,6 @@
 //! [`BoxEncode`], the box of ISO/IEC 14496-12 §4.2 written from a value
 
-use crate::codec::box_definition::BoxDefinition;
+use crate::codec::box_definition::BoxFormat;
 use crate::codec::field::FieldWriter;
 use crate::error::Error;
 use crate::framing::box_header::BoxHeader;
@@ -154,7 +154,7 @@ pub trait BoxEncode {
 
     /// Returns the length of the whole box, header included
     ///
-    /// [`BoxDefinition`] names the box type; between it and
+    /// [`BoxFormat`] names the box type; between it and
     /// [`payload_len`](Self::payload_len) the header is settled, since its
     /// remaining field is the total the payload length implies. A value with
     /// both therefore knows its whole wire form already, and this method
@@ -165,14 +165,14 @@ pub trait BoxEncode {
     #[must_use]
     fn encoded_len(&self) -> u64
     where
-        Self: BoxDefinition + Sized,
+        Self: BoxFormat + Sized,
     {
-        encoded_len_of(Self::BOX_TYPE, self)
+        encoded_len_of(self.box_type(), self)
     }
 
     /// Writes the whole box into the front of `buffer` and returns what is left
     ///
-    /// The header goes down under [`BOX_TYPE`](BoxDefinition::BOX_TYPE) and the
+    /// The header goes down under [`box_type`](BoxFormat::box_type) and the
     /// total that [`payload_len`](Self::payload_len) implies, and the payload
     /// follows as [`encode_payload`](Self::encode_payload) writes it — the
     /// whole wire form of the value, asking nothing further of the box. It is
@@ -188,9 +188,9 @@ pub trait BoxEncode {
     /// that reads as whole in front of bytes that are not. A caller that writes
     /// out what it has on failure would emit that.
     ///
-    /// [`AnyBox`](crate::AnyBox) carries its box type as a value rather than a
-    /// constant, so it cannot implement [`BoxDefinition`] and does not have
-    /// this method. It offers the same two operations as inherent methods.
+    /// [`AnyBox`](crate::AnyBox) carries a box of any type, so it does not
+    /// implement [`BoxFormat`] and does not have this method. It offers the
+    /// same two operations as inherent methods.
     ///
     /// # Errors
     ///
@@ -245,9 +245,9 @@ pub trait BoxEncode {
     /// ```
     fn encode<'buffer>(&self, buffer: &'buffer mut [u8]) -> Result<&'buffer mut [u8], Error>
     where
-        Self: BoxDefinition + Sized,
+        Self: BoxFormat + Sized,
     {
-        encode_into(Self::BOX_TYPE, self, buffer)
+        encode_into(self.box_type(), self, buffer)
     }
 }
 

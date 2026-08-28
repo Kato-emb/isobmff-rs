@@ -14,6 +14,6 @@ pub(crate) mod box_encode;
 pub(crate) mod field;
 
 pub use box_decode::BoxDecode;
-pub use box_definition::BoxDefinition;
+pub use box_definition::{BoxDefinition, BoxFormat};
 pub use box_encode::BoxEncode;
 pub use field::{FieldReader, FieldWidth, FieldWriter};

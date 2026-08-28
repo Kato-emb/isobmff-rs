@@ -23,14 +23,16 @@ mod framing;
 
 #[cfg(feature = "alloc")]
 pub use any_box::AnyBox;
-pub use codec::{BoxDecode, BoxDefinition, BoxEncode, FieldReader, FieldWidth, FieldWriter};
+pub use codec::{
+    BoxDecode, BoxDefinition, BoxEncode, BoxFormat, FieldReader, FieldWidth, FieldWriter,
+};
 #[cfg(feature = "alloc")]
 pub use container::{ChildBoxes, OtherBoxes};
 #[cfg(feature = "alloc")]
 pub use data_types::NullTerminatedString;
 pub use data_types::{
-    FourCC, FullBoxFields, FullBoxFlags, I8F8, I16F16, LanguageCode, Matrix, Mp4EpochSeconds,
-    U16F16, Uuid,
+    CompressorName, FourCC, FullBoxFields, FullBoxFlags, I8F8, I16F16, LanguageCode, Matrix,
+    Mp4EpochSeconds, U16F16, Uuid,
 };
 pub use error::{Category, Error, ErrorKind};
 pub use framing::{
