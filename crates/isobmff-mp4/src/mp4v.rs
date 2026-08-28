@@ -2,7 +2,7 @@
 
 use isobmff_boxes::VisualSampleEntry;
 use isobmff_core::{
-    AnyBox, BoxDefinition, BoxEncode, BoxType, FieldReader, FieldWriter, OtherBoxes,
+    AnyBox, BoxDefinition, BoxEncode, BoxType, FieldReader, FieldWriter, OtherBoxes, boxes,
 };
 
 use crate::error::Error;
@@ -66,11 +66,20 @@ impl MP4VisualSampleEntry {
     pub fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
         let mut reader = FieldReader::new(payload);
         let visual = VisualSampleEntry::decode_fields(&mut reader)?;
-        let (es, other_boxes) = crate::esds::sort_children(reader.take_remainder())?;
+        let mut es = None;
+        let mut other_boxes = OtherBoxes::new();
+        for child in boxes(reader.take_remainder()) {
+            let child = child?;
+            if child.header().box_type() == ESDBox::BOX_TYPE {
+                crate::esds::decode_child(&mut es, child)?;
+            } else {
+                other_boxes.keep(child);
+            }
+        }
 
         Ok(Self {
             visual,
-            es,
+            es: es.ok_or(isobmff_core::Error::missing_mandatory_box(ESDBox::BOX_TYPE))?,
             other_boxes,
         })
     }

@@ -7,9 +7,6 @@ use isobmff_core::{FieldReader, FieldWidth, FieldWriter};
 
 use crate::error::Error;
 
-/// Most bytes an expandable size may take
-const MAX_SIZE_LEN: usize = 4;
-
 /// Largest size an expandable size of four bytes states, 28 bits of it
 const MAX_BODY_LEN: u64 = (1 << 28) - 1;
 
@@ -83,6 +80,14 @@ impl RawDescriptor {
         Some(Self { tag, body })
     }
 
+    /// Creates a descriptor from a tag and body a size already read bounds
+    pub(crate) fn decoded(tag: DescriptorTag, body: &[u8]) -> Self {
+        Self {
+            tag,
+            body: body.to_vec(),
+        }
+    }
+
     /// Returns the tag naming the class of the descriptor
     #[must_use]
     pub const fn tag(&self) -> DescriptorTag {
@@ -124,11 +129,9 @@ impl RawDescriptor {
     ///
     /// * [`TruncatedBuffer`](isobmff_core::ErrorKind::TruncatedBuffer): `writer`
     ///   has less than [`encoded_len`](Self::encoded_len) bytes left.
-    pub fn encode(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+    pub fn encode(&self, writer: &mut FieldWriter<'_>) -> Result<(), isobmff_core::Error> {
         encode_header(writer, self.tag, self.body.len() as u64)?;
-        writer.write_slice(&self.body)?;
-
-        Ok(())
+        writer.write_slice(&self.body)
     }
 }
 
@@ -159,7 +162,7 @@ pub(crate) fn decode_header<'payload>(
     let tag = DescriptorTag(reader.read_bytes::<1>()?[0]);
 
     let mut size: u64 = 0;
-    for _ in 0..MAX_SIZE_LEN {
+    for _ in 0..4 {
         let byte = reader.read_bytes::<1>()?[0];
         size = (size << 7) | u64::from(byte & 0x7f);
         if byte & 0x80 == 0 {
@@ -179,9 +182,9 @@ pub(crate) fn encode_header(
     body_len: u64,
 ) -> Result<(), isobmff_core::Error> {
     if body_len > MAX_BODY_LEN {
-        // Why not a kind of this crate: `BoxEncode` reports a box failure, and
-        // the constructors bound every body, so this stands for a value no
-        // caller can build rather than a situation of its own.
+        // Why not a kind of this crate: writing reports box failures, and the
+        // situation is reachable only through a parent whose parts, each bounded
+        // by its constructor, sum past the limit together.
         return Err(isobmff_core::Error::out_of_range(
             body_len,
             FieldWidth::Compact,

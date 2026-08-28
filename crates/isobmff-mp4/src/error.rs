@@ -3,7 +3,7 @@
 use core::error;
 use core::fmt;
 
-use isobmff_core::Category;
+use isobmff_core::{BoxType, Category};
 
 use crate::descriptor::DescriptorTag;
 
@@ -123,15 +123,17 @@ impl Error {
         }
     }
 
-    /// Returns the tag that was expected, for a mismatch
+    /// Returns the failure with `container` added to the path of a box failure
+    ///
+    /// A failure of another kind names no box, and is returned as it was.
     #[must_use]
-    pub const fn expected_tag(self) -> Option<DescriptorTag> {
+    pub fn in_container(self, container: BoxType) -> Self {
         match self.representation {
-            Representation::DescriptorTagMismatch { expected, .. } => Some(expected),
-            Representation::MissingDescriptor { .. }
+            Representation::Box(box_error) => box_error.in_container(container).into(),
+            Representation::DescriptorTagMismatch { .. }
+            | Representation::MissingDescriptor { .. }
             | Representation::DuplicateDescriptor { .. }
-            | Representation::ExpandableSizeTooLong { .. }
-            | Representation::Box(_) => None,
+            | Representation::ExpandableSizeTooLong { .. } => self,
         }
     }
 }

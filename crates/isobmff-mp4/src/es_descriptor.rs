@@ -7,10 +7,6 @@ use isobmff_core::{FieldReader, FieldWriter};
 use crate::descriptor::{DescriptorTag, RawDescriptor, decode_header, encode_header, encoded_len};
 use crate::error::Error;
 
-/// `SLConfigDescriptor.predefined` ISO/IEC 14496-14 §4.1.2 requires of a
-/// stream stored in the file
-const SL_CONFIG_PREDEFINED_MP4: u8 = 2;
-
 /// Decoder configuration this crate reads and writes as the spec lays it out
 ///
 /// `DecoderConfigDescriptor`, ISO/IEC 14496-1 §7.2.6.6. The
@@ -39,9 +35,6 @@ impl DecoderConfigDescriptor {
 
     /// `streamType` of a visual stream, ISO/IEC 14496-1 Table 6
     pub const STREAM_TYPE_VISUAL: u8 = 0x04;
-
-    /// Length of the fields that precede the descriptors held
-    const FIXED_FIELDS_LEN: u64 = 13;
 
     /// Creates the descriptor for a stream stored in the file, `upStream` off
     ///
@@ -124,9 +117,9 @@ impl DecoderConfigDescriptor {
         let info = self
             .decoder_specific_info
             .as_ref()
-            .map_or(0, DecoderSpecificInfo::encoded_len);
+            .map_or(0, |info| info.0.encoded_len());
 
-        Self::FIXED_FIELDS_LEN
+        13_u64
             .saturating_add(info)
             .saturating_add(raw_descriptors_len(&self.other_descriptors))
     }
@@ -142,12 +135,13 @@ impl DecoderConfigDescriptor {
         let mut decoder_specific_info = None;
         let mut other_descriptors = Vec::new();
         while !reader.remainder().is_empty() {
-            let descriptor = RawDescriptor::decode(&mut reader)?;
-            if descriptor.tag() == DescriptorTag::DECODER_SPECIFIC_INFO {
+            let (tag, body) = decode_header(&mut reader)?;
+            let descriptor = RawDescriptor::decoded(tag, body);
+            if tag == DescriptorTag::DECODER_SPECIFIC_INFO {
                 if decoder_specific_info.is_some() {
-                    return Err(Error::duplicate_descriptor(descriptor.tag()));
+                    return Err(Error::duplicate_descriptor(tag));
                 }
-                decoder_specific_info = Some(DecoderSpecificInfo(descriptor.body().to_vec()));
+                decoder_specific_info = Some(DecoderSpecificInfo(descriptor));
             } else {
                 other_descriptors.push(descriptor);
             }
@@ -165,7 +159,7 @@ impl DecoderConfigDescriptor {
         })
     }
 
-    fn encode(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+    fn encode(&self, writer: &mut FieldWriter<'_>) -> Result<(), isobmff_core::Error> {
         encode_header(writer, DescriptorTag::DECODER_CONFIG, self.body_len())?;
         let up_stream = if self.up_stream { 0b10 } else { 0 };
         writer.write_bytes(&[
@@ -177,7 +171,7 @@ impl DecoderConfigDescriptor {
         writer.write_u32(self.max_bitrate)?;
         writer.write_u32(self.avg_bitrate)?;
         if let Some(info) = &self.decoder_specific_info {
-            info.encode(writer)?;
+            info.0.encode(writer)?;
         }
         for descriptor in &self.other_descriptors {
             descriptor.encode(writer)?;
@@ -193,7 +187,7 @@ impl DecoderConfigDescriptor {
 /// coding's — the `AudioSpecificConfig` of ISO/IEC 14496-3 for AAC — and are
 /// not read.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct DecoderSpecificInfo(Vec<u8>);
+pub struct DecoderSpecificInfo(RawDescriptor);
 
 impl DecoderSpecificInfo {
     /// Creates the descriptor from the bytes the coding lays out
@@ -202,29 +196,13 @@ impl DecoderSpecificInfo {
     /// size can state.
     #[must_use]
     pub fn new(bytes: Vec<u8>) -> Option<Self> {
-        RawDescriptor::new(DescriptorTag::DECODER_SPECIFIC_INFO, bytes)
-            .map(|descriptor| Self(descriptor.body().to_vec()))
+        RawDescriptor::new(DescriptorTag::DECODER_SPECIFIC_INFO, bytes).map(Self)
     }
 
     /// Returns the bytes the coding lays out
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-
-    fn encoded_len(&self) -> u64 {
-        encoded_len(self.0.len() as u64)
-    }
-
-    fn encode(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        encode_header(
-            writer,
-            DescriptorTag::DECODER_SPECIFIC_INFO,
-            self.0.len() as u64,
-        )?;
-        writer.write_slice(&self.0)?;
-
-        Ok(())
+        self.0.body()
     }
 }
 
@@ -244,7 +222,7 @@ pub struct SLConfigDescriptor {
 impl SLConfigDescriptor {
     /// The descriptor of a stream stored in the file, `predefined` 2
     pub const MP4: Self = Self {
-        predefined: SL_CONFIG_PREDEFINED_MP4,
+        predefined: 2,
         remainder: Vec::new(),
     };
 
@@ -274,12 +252,10 @@ impl SLConfigDescriptor {
         })
     }
 
-    fn encode(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+    fn encode(&self, writer: &mut FieldWriter<'_>) -> Result<(), isobmff_core::Error> {
         encode_header(writer, DescriptorTag::SL_CONFIG, self.body_len())?;
         writer.write_bytes(&[self.predefined])?;
-        writer.write_slice(&self.remainder)?;
-
-        Ok(())
+        writer.write_slice(&self.remainder)
     }
 }
 
@@ -392,16 +368,12 @@ impl ESDescriptor {
     }
 
     fn body_len(&self) -> u64 {
-        let depends_on = if self.depends_on_es_id.is_some() {
-            2
-        } else {
-            0
-        };
+        let depends_on = self.depends_on_es_id.map_or(0, |_| 2);
         let url = self
             .url
             .as_ref()
             .map_or(0, |url| (url.len() as u64).saturating_add(1));
-        let ocr = if self.ocr_es_id.is_some() { 2 } else { 0 };
+        let ocr = self.ocr_es_id.map_or(0, |_| 2);
 
         3_u64
             .saturating_add(depends_on)
@@ -462,21 +434,21 @@ impl ESDescriptor {
         let mut sl_config = None;
         let mut other_descriptors = Vec::new();
         while !reader.remainder().is_empty() {
-            let descriptor = RawDescriptor::decode(&mut reader)?;
-            match descriptor.tag() {
+            let (tag, body) = decode_header(&mut reader)?;
+            match tag {
                 DescriptorTag::DECODER_CONFIG => {
                     if decoder_config.is_some() {
-                        return Err(Error::duplicate_descriptor(descriptor.tag()));
+                        return Err(Error::duplicate_descriptor(tag));
                     }
-                    decoder_config = Some(DecoderConfigDescriptor::decode_body(descriptor.body())?);
+                    decoder_config = Some(DecoderConfigDescriptor::decode_body(body)?);
                 }
                 DescriptorTag::SL_CONFIG => {
                     if sl_config.is_some() {
-                        return Err(Error::duplicate_descriptor(descriptor.tag()));
+                        return Err(Error::duplicate_descriptor(tag));
                     }
-                    sl_config = Some(SLConfigDescriptor::decode_body(descriptor.body())?);
+                    sl_config = Some(SLConfigDescriptor::decode_body(body)?);
                 }
-                _other => other_descriptors.push(descriptor),
+                _other => other_descriptors.push(RawDescriptor::decoded(tag, body)),
             }
         }
 
@@ -497,9 +469,9 @@ impl ESDescriptor {
     ///
     /// # Errors
     ///
-    /// * [`Box`](crate::ErrorKind::Box): `writer` has less than
-    ///   [`encoded_len`](Self::encoded_len) bytes left.
-    pub fn encode(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+    /// * [`TruncatedBuffer`](isobmff_core::ErrorKind::TruncatedBuffer): `writer`
+    ///   has less than [`encoded_len`](Self::encoded_len) bytes left.
+    pub fn encode(&self, writer: &mut FieldWriter<'_>) -> Result<(), isobmff_core::Error> {
         encode_header(writer, DescriptorTag::ES, self.body_len())?;
         writer.write_u16(self.es_id)?;
         let mut flags = self.stream_priority & 0x1f;

@@ -2,14 +2,11 @@
 
 use isobmff_core::{
     BoxDefinition, BoxEncode, BoxType, FieldReader, FieldWriter, FullBoxFields, FullBoxFlags,
-    OtherBoxes, boxes,
+    RawBox,
 };
 
 use crate::error::Error;
 use crate::es_descriptor::ESDescriptor;
-
-/// Length of the version and flags the box opens with
-const FIXED_FIELDS_LEN: u64 = 4;
 
 /// Box an MPEG-4 sample entry holds to carry the descriptor of its stream
 ///
@@ -65,33 +62,24 @@ impl ESDBox {
     }
 }
 
-/// Sorts the children that follow the fields of a sample entry into the one
-/// `esds` it must hold and the boxes no field claims
+/// Reads the `esds` child of a sample entry into the slot it must fill once
 ///
 /// # Errors
 ///
-/// * [`Box`](crate::ErrorKind::Box): a child does not frame as a box; no
-///   `esds` is among the children, or more than one.
-/// * What [`ESDBox::decode_payload`] reports.
-pub(crate) fn sort_children(children: &[u8]) -> Result<(ESDBox, OtherBoxes), Error> {
-    let mut es = None;
-    let mut other_boxes = OtherBoxes::new();
-    for child in boxes(children) {
-        let child = child?;
-        let box_type = child.header().box_type();
-        if box_type == ESDBox::BOX_TYPE {
-            if es.is_some() {
-                return Err(isobmff_core::Error::duplicate_box(box_type).into());
-            }
-            es = Some(ESDBox::decode_payload(child.payload())?);
-        } else {
-            other_boxes.keep(child);
-        }
+/// * [`Box`](crate::ErrorKind::Box) of
+///   [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): `slot` was
+///   filled already.
+/// * What [`ESDBox::decode_payload`] reports, with `esds` on the
+///   [`containers`](isobmff_core::Error::containers) path of a box failure.
+pub(crate) fn decode_child(slot: &mut Option<ESDBox>, child: RawBox<'_>) -> Result<(), Error> {
+    if slot.is_some() {
+        return Err(isobmff_core::Error::duplicate_box(ESDBox::BOX_TYPE).into());
     }
+    let es = ESDBox::decode_payload(child.payload())
+        .map_err(|error| error.in_container(ESDBox::BOX_TYPE))?;
+    *slot = Some(es);
 
-    let es = es.ok_or(isobmff_core::Error::missing_mandatory_box(ESDBox::BOX_TYPE))?;
-
-    Ok((es, other_boxes))
+    Ok(())
 }
 
 impl BoxDefinition for ESDBox {
@@ -100,19 +88,12 @@ impl BoxDefinition for ESDBox {
 
 impl BoxEncode for ESDBox {
     fn payload_len(&self) -> u64 {
-        FIXED_FIELDS_LEN.saturating_add(self.es.encoded_len())
+        4_u64.saturating_add(self.es.encoded_len())
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), isobmff_core::Error> {
         writer.write_bytes(&FullBoxFields::new(0, FullBoxFlags::ZERO).to_bytes())?;
-        // Why not carry the crate's error: `BoxEncode` reports box failures,
-        // and writing a descriptor can fail only for want of buffer, which is
-        // one — so the box failure is taken back out of it.
-        self.es.encode(writer).map_err(|error| {
-            error
-                .box_error()
-                .unwrap_or_else(|| isobmff_core::Error::truncated_buffer(0, 0))
-        })
+        self.es.encode(writer)
     }
 }
 

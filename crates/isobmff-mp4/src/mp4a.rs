@@ -124,10 +124,7 @@ impl MP4AudioSampleEntry {
             let child = child?;
             let box_type = child.header().box_type();
             if box_type == ESDBox::BOX_TYPE {
-                if es.is_some() {
-                    return Err(isobmff_core::Error::duplicate_box(box_type).into());
-                }
-                es = Some(ESDBox::decode_payload(child.payload())?);
+                crate::esds::decode_child(&mut es, child)?;
             } else if box_type == SamplingRateBox::BOX_TYPE {
                 sampling_rate_boxes.push(child);
             } else {
@@ -188,7 +185,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_boxes::{AudioSampleEntry, SamplingRateBox};
-    use isobmff_core::{AnyBox, BoxEncode, BoxType};
+    use isobmff_core::{AnyBox, BoxEncode, BoxType, FourCC};
 
     use super::MP4AudioSampleEntry;
     use crate::error::Error;
@@ -261,6 +258,20 @@ mod tests {
             Err(Error::from(isobmff_core::Error::missing_mandatory_box(
                 BoxType::compact(*b"esds")
             )))
+        );
+    }
+
+    #[test]
+    fn a_failure_inside_the_descriptor_box_names_it_on_the_path() {
+        let payload = [vec![0; 28], b"\0\0\0\x0aesds\0\0".to_vec()].concat();
+
+        let failure = MP4AudioSampleEntry::decode_payload(&payload).unwrap_err();
+
+        assert_eq!(
+            failure
+                .box_error()
+                .map(|error| error.containers().collect::<Vec<_>>()),
+            Some(vec![FourCC::new(*b"esds")])
         );
     }
 

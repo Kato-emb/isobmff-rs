@@ -1,14 +1,11 @@
 //! [`MpegSampleEntry`] (`mp4s`), ISO/IEC 14496-14 §6.7
 
 use isobmff_core::{
-    AnyBox, BoxDefinition, BoxEncode, BoxType, FieldReader, FieldWriter, OtherBoxes,
+    AnyBox, BoxDefinition, BoxEncode, BoxType, FieldReader, FieldWriter, OtherBoxes, boxes,
 };
 
 use crate::error::Error;
 use crate::esds::ESDBox;
-
-/// Length of the `SampleEntry` fields the entry opens with
-const SAMPLE_ENTRY_LEN: u64 = 8;
 
 /// Sample entry of an MPEG-4 stream of any other type — scene description,
 /// object descriptor, clock reference
@@ -71,11 +68,20 @@ impl MpegSampleEntry {
         let mut reader = FieldReader::new(payload);
         let _reserved = reader.read_bytes::<6>()?;
         let data_reference_index = reader.read_u16()?;
-        let (es, other_boxes) = crate::esds::sort_children(reader.take_remainder())?;
+        let mut es = None;
+        let mut other_boxes = OtherBoxes::new();
+        for child in boxes(reader.take_remainder()) {
+            let child = child?;
+            if child.header().box_type() == ESDBox::BOX_TYPE {
+                crate::esds::decode_child(&mut es, child)?;
+            } else {
+                other_boxes.keep(child);
+            }
+        }
 
         Ok(Self {
             data_reference_index,
-            es,
+            es: es.ok_or(isobmff_core::Error::missing_mandatory_box(ESDBox::BOX_TYPE))?,
             other_boxes,
         })
     }
@@ -95,7 +101,7 @@ impl BoxEncode for MpegSampleEntry {
                 total.saturating_add(other.encoded_len())
             });
 
-        SAMPLE_ENTRY_LEN
+        8_u64
             .saturating_add(self.es.encoded_len())
             .saturating_add(others)
     }

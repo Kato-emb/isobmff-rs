@@ -23,9 +23,13 @@ fuzz_target!(|payload: &[u8]| {
     // Why not compare the bytes: expandable sizes and reserved bits are written
     // in one canonical form, so a file that used another reads as the same
     // value without writing back to the same bytes.
+    let read_back = MP4AudioSampleEntry::decode_payload(&written).unwrap();
+    assert_eq!(read_back, entry, "the entry reads back as another value");
+
+    let mut written_again = vec![0; length];
+    read_back.encode_payload(&mut written_again).unwrap();
     assert_eq!(
-        MP4AudioSampleEntry::decode_payload(&written).unwrap(),
-        entry,
-        "the entry reads back as another value"
+        written_again, written,
+        "the canonical form does not write back to itself"
     );
 });
