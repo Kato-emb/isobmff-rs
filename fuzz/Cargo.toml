@@ -17,8 +17,14 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
 
+[dependencies.isobmff-avc]
+path = "../crates/isobmff-avc"
+
 [dependencies.isobmff-core]
 path = "../crates/isobmff-core"
+
+[dependencies.isobmff-mp4]
+path = "../crates/isobmff-mp4"
 
 [dependencies.isobmff-sequence]
 path = "../crates/isobmff-sequence"
@@ -33,8 +39,22 @@ path = "../crates/isobmff-test-support"
 debug = 1
 
 [[bin]]
+name = "avc_sample_entry"
+path = "fuzz_targets/avc_sample_entry.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "boxes"
 path = "fuzz_targets/boxes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mp4_audio_sample_entry"
+path = "fuzz_targets/mp4_audio_sample_entry.rs"
 test = false
 doc = false
 bench = false

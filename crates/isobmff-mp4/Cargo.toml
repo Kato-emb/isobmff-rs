@@ -1,0 +1,19 @@
+[package]
+name = "isobmff-mp4"
+version = "0.0.0"
+description = "ISO/IEC 14496-14 MPEG-4 sample entries and elementary stream descriptors for ISO base media files, decoded into owned values"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+readme.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+exclude.workspace = true
+
+[dependencies]
+isobmff-boxes.workspace = true
+isobmff-core.workspace = true
+
+[lints]
+workspace = true

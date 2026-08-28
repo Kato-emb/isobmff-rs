@@ -1,0 +1,19 @@
+[package]
+name = "isobmff-avc"
+version = "0.0.0"
+description = "ISO/IEC 14496-15 AVC sample entries and decoder configuration for ISO base media files, decoded into owned values"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+readme.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+exclude.workspace = true
+
+[dependencies]
+isobmff-boxes.workspace = true
+isobmff-core.workspace = true
+
+[lints]
+workspace = true
