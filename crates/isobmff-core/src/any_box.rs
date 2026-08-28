@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use core::any::Any;
 use core::fmt;
 
-use crate::codec::box_definition::BoxDefinition;
+use crate::codec::box_definition::BoxFormat;
 use crate::codec::box_encode::{BoxEncode, encode_into, encoded_len_of};
 use crate::codec::field::FieldWriter;
 use crate::error::Error;
@@ -69,7 +69,7 @@ impl BoxEncode for OpaquePayload {
 ///
 /// Two kinds of box fit. One the reader has a type for arrives through
 /// [`From`], which takes the box type from the
-/// [`BOX_TYPE`](BoxDefinition::BOX_TYPE) of that type so the two can never be
+/// [`box_type`](BoxFormat::box_type) of that value so the two can never be
 /// paired wrongly; [`downcast_ref`](Self::downcast_ref) and
 /// [`downcast_mut`](Self::downcast_mut) reach it again. One the reader has no
 /// type for arrives through [`from_raw_bytes`](Self::from_raw_bytes) as the bytes it lies as, and
@@ -178,8 +178,8 @@ impl AnyBox {
     /// Writes the whole box into the front of `buffer` and returns what is left
     ///
     /// This is [`BoxEncode::encode`](crate::BoxEncode::encode) under the same
-    /// contract, which `AnyBox` cannot have as that trait: the box type is a
-    /// value here rather than the constant [`BoxDefinition`] declares. An `Err`
+    /// contract, which `AnyBox` cannot have as that trait: a box of any type
+    /// fits here, so no one [`BoxFormat`] names it. An `Err`
     /// may leave `buffer` written to in part, as it does there.
     ///
     /// # Errors
@@ -249,11 +249,11 @@ impl BoxEncode for AnyBox {
 
 impl<Payload> From<Payload> for AnyBox
 where
-    Payload: BoxDefinition + Any + BoxEncode + fmt::Debug + Clone + PartialEq + Send + Sync,
+    Payload: BoxFormat + Any + BoxEncode + fmt::Debug + Clone + PartialEq + Send + Sync,
 {
     fn from(payload: Payload) -> Self {
         Self {
-            box_type: Payload::BOX_TYPE,
+            box_type: payload.box_type(),
             payload: Box::new(payload),
         }
     }

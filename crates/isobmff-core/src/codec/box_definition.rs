@@ -1,4 +1,5 @@
-//! [`BoxDefinition`], the box type of ISO/IEC 14496-12 §4.2 a Definition subclause assigns
+//! [`BoxDefinition`] and [`BoxFormat`], the box type of ISO/IEC 14496-12 §4.2 a
+//! Definition subclause assigns, as a constant and as a value
 
 use crate::framing::box_type::BoxType;
 
@@ -48,4 +49,63 @@ use crate::framing::box_type::BoxType;
 pub trait BoxDefinition {
     /// Box type that names `Self` on the wire
     const BOX_TYPE: BoxType;
+}
+
+/// Box type that names a value on the wire
+///
+/// Most boxes know their type without a value in hand, and state it as the
+/// constant of [`BoxDefinition`]; every such type is a `BoxFormat` too, by the
+/// blanket implementation. Some do not: §8.5.2.2 declares a sample entry as
+/// `SampleEntry(format) extends Box(format)`, and a derived specification may
+/// lay one class over several codes — ISO/IEC 14496-15 §5.4.2 names
+/// `AVCSampleEntry` by `avc1` or `avc3`. Such a value settles its type only
+/// once it exists, and states it here.
+///
+/// Whatever the source, the type a value reports is the one its box is written
+/// under: [`BoxEncode::encode`](crate::BoxEncode::encode) and
+/// [`AnyBox`](crate::AnyBox) take it from here.
+///
+/// # Examples
+///
+/// ```
+/// use isobmff_core::{BoxDefinition, BoxFormat, BoxType};
+///
+/// // A box named by one code states it once, for the type
+/// struct FreeSpaceBox;
+///
+/// impl BoxDefinition for FreeSpaceBox {
+///     const BOX_TYPE: BoxType = BoxType::compact(*b"free");
+/// }
+///
+/// // A sample entry one class lays over two codes states it per value
+/// struct AVCSampleEntry {
+///     parameter_sets_in_band: bool,
+/// }
+///
+/// impl BoxFormat for AVCSampleEntry {
+///     fn box_type(&self) -> BoxType {
+///         if self.parameter_sets_in_band {
+///             BoxType::compact(*b"avc3")
+///         } else {
+///             BoxType::compact(*b"avc1")
+///         }
+///     }
+/// }
+///
+/// assert_eq!(FreeSpaceBox.box_type(), FreeSpaceBox::BOX_TYPE);
+/// assert_eq!(
+///     AVCSampleEntry { parameter_sets_in_band: true }.box_type(),
+///     BoxType::compact(*b"avc3")
+/// );
+/// ```
+pub trait BoxFormat {
+    /// Returns the box type this value is written under
+    #[must_use]
+    fn box_type(&self) -> BoxType;
+}
+
+impl<Definition: BoxDefinition> BoxFormat for Definition {
+    fn box_type(&self) -> BoxType {
+        Self::BOX_TYPE
+    }
 }

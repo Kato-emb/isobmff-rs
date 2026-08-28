@@ -20,18 +20,43 @@ const FIXED_FIELDS_LEN: u64 = 8;
 /// The `entry_count` field is not held: it counts the entries, so it is derived
 /// on the way out. On the way in a count that disagrees with the entries fails
 /// the box.
+///
+/// The box has a version 0 and a version 1, laid out alike; §12.2.3 requires
+/// version 1 of a box holding an `AudioSampleEntryV1`, and forbids version 0.
+/// The entries are not read, so the version is the caller's to state:
+/// [`new`](Self::new) writes version 0 and [`new_v1`](Self::new_v1) version 1.
 #[doc(alias = "stsd")]
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Debug)]
 pub struct SampleDescriptionBox {
+    version: u8,
     entries: Vec<AnyBox>,
 }
 
 impl SampleDescriptionBox {
-    /// Creates the box from the entries it describes the samples with
+    /// Creates a version 0 box from the entries it describes the samples with
     #[must_use]
     pub const fn new(entries: Vec<AnyBox>) -> Self {
-        Self { entries }
+        Self {
+            version: 0,
+            entries,
+        }
+    }
+
+    /// Creates a version 1 box from the entries it describes the samples with,
+    /// for entries that must lie in one
+    #[must_use]
+    pub const fn new_v1(entries: Vec<AnyBox>) -> Self {
+        Self {
+            version: 1,
+            entries,
+        }
+    }
+
+    /// Returns the version of the box, 0 or 1
+    #[must_use]
+    pub const fn version(&self) -> u8 {
+        self.version
     }
 
     /// Returns the entries, each naming a coding and carrying its own fields
@@ -49,7 +74,7 @@ impl BoxDecode for SampleDescriptionBox {
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box
-    ///   declares a version other than 0.
+    ///   declares a version other than 0 or 1.
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
     ///   payload ends before the fields that precede the entries.
     /// * The failures of [`boxes`]: an entry does not frame as a box.
@@ -57,7 +82,7 @@ impl BoxDecode for SampleDescriptionBox {
     ///   `entry_count` field disagrees with the entries that follow it.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let version = FullBoxFields::from_bytes(reader.read_bytes::<4>()?).version();
-        if version != 0 {
+        if version > 1 {
             return Err(Error::unsupported_version(version));
         }
 
@@ -77,7 +102,7 @@ impl BoxDecode for SampleDescriptionBox {
             return Err(Error::entry_count_mismatch(declared, actual));
         }
 
-        Ok(Self { entries })
+        Ok(Self { version, entries })
     }
 }
 
@@ -91,7 +116,7 @@ impl BoxEncode for SampleDescriptionBox {
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        writer.write_bytes(&FullBoxFields::new(0, FullBoxFlags::ZERO).to_bytes())?;
+        writer.write_bytes(&FullBoxFields::new(self.version, FullBoxFlags::ZERO).to_bytes())?;
         let entry_count = self.entries.len() as u64;
         // Why not saturate silently: an entry count past `u32` cannot be written
         // at all, and the box has already declared a length built from it, so
@@ -183,10 +208,23 @@ mod tests {
     }
 
     #[test]
+    fn a_version_1_box_reads_back_at_version_1() {
+        let description = SampleDescriptionBox::new_v1(vec![avc_entry()]);
+
+        let payload = encoded_payload(&description);
+
+        assert_eq!(payload.first(), Some(&1));
+        assert_eq!(
+            SampleDescriptionBox::decode_payload(&payload).unwrap(),
+            description
+        );
+    }
+
+    #[test]
     fn a_version_the_box_does_not_read_is_rejected() {
         assert_eq!(
-            SampleDescriptionBox::decode_payload(b"\x01\0\0\0\0\0\0\0"),
-            Err(Error::unsupported_version(1))
+            SampleDescriptionBox::decode_payload(b"\x02\0\0\0\0\0\0\0"),
+            Err(Error::unsupported_version(2))
         );
     }
 }
