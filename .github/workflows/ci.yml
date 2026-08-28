@@ -43,6 +43,7 @@ jobs:
       # a test binary needs std — so nothing else builds the tests and lints of
       # the very configuration the feature exists for.
       - run: cargo clippy -p isobmff-core --no-default-features --all-targets -- -D warnings
+      - run: cargo clippy -p isobmff --no-default-features --all-targets -- -D warnings
 
   test:
     strategy:
