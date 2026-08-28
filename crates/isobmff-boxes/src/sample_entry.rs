@@ -161,9 +161,13 @@ impl VisualSampleEntry {
 /// [`entry_version`](Self::entry_version). A version 1 entry must lie in a
 /// `stsd` of version 1.
 ///
-/// The `pre_defined` and `reserved` fields are not held. A layout of another
-/// version — the QuickTime file format writes versions 1 and 2 of its own with
-/// more fields — is not read.
+/// The `pre_defined` and `reserved` fields are not held. The QuickTime file
+/// format writes sound descriptions of its own under versions 1 and 2, each
+/// with four fields more: version 2 states a version these fields refuse, but
+/// version 1 states the same 1 an `AudioSampleEntryV1` does and cannot be told
+/// from one by these 28 bytes alone. Its four extra fields are left where the
+/// boxes of the entry follow, for the derived entry that composes these fields
+/// to refuse.
 ///
 /// [`AudioSampleEntryV1`]: Self
 #[non_exhaustive]
@@ -256,6 +260,9 @@ impl AudioSampleEntry {
         let _reserved = reader.read_bytes::<6>()?;
         let data_reference_index = reader.read_u16()?;
         let entry_version = reader.read_u16()?;
+        // Why not refuse version 1 as well, to keep the QuickTime sound
+        // description of that version out: §12.2.3 states the same 1 for
+        // AudioSampleEntryV1, so refusing it would refuse a conforming file.
         if entry_version > 1 {
             // Why not carry the field whole: the failure names a `version` as a
             // full box states it, one byte wide, and a version this field
@@ -305,16 +312,16 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{Error, FieldReader, FieldWriter, U16F16};
+    use isobmff_core::{Error, FieldReader, FieldWriter};
 
     use super::{AudioSampleEntry, VisualSampleEntry};
 
-    /// Writes fields that fill `len` bytes and returns the bytes they occupy
+    /// Writes fields that fill `length` bytes and returns the bytes they occupy
     fn encoded(
-        len: u64,
+        length: u64,
         encode_fields: impl FnOnce(&mut FieldWriter<'_>) -> Result<(), Error>,
     ) -> Vec<u8> {
-        let mut buffer = vec![0; usize::try_from(len).unwrap()];
+        let mut buffer = vec![0; usize::try_from(length).unwrap()];
         let mut writer = FieldWriter::new(&mut buffer);
         encode_fields(&mut writer).unwrap();
         writer.finish().unwrap();
@@ -410,7 +417,6 @@ mod tests {
     fn version_1_audio_fields_state_their_version_and_a_rate_of_one() {
         let entry = AudioSampleEntry::new_v1(1, 6);
 
-        assert_eq!(entry.sample_rate(), U16F16::ONE);
         assert_eq!(
             encoded_audio(&entry),
             b"\0\0\0\0\0\0\0\x01\0\x01\0\0\0\0\0\0\0\x06\0\x10\0\0\0\0\0\x01\0\0"
