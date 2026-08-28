@@ -161,13 +161,10 @@ impl VisualSampleEntry {
 /// [`entry_version`](Self::entry_version). A version 1 entry must lie in a
 /// `stsd` of version 1.
 ///
-/// The `pre_defined` and `reserved` fields are not held. The QuickTime file
-/// format writes sound descriptions of its own under versions 1 and 2, each
-/// with four fields more: version 2 states a version these fields refuse, but
-/// version 1 states the same 1 an `AudioSampleEntryV1` does and cannot be told
-/// from one by these 28 bytes alone. Its four extra fields are left where the
-/// boxes of the entry follow, for the derived entry that composes these fields
-/// to refuse.
+/// The `pre_defined` and `reserved` fields are not held. A QuickTime sound
+/// description of version 1 is read as an `AudioSampleEntryV1`, its four extra
+/// fields left where the boxes of the entry follow, for the derived entry that
+/// composes these fields to refuse.
 ///
 /// [`AudioSampleEntryV1`]: Self
 #[non_exhaustive]
@@ -415,10 +412,10 @@ mod tests {
 
     #[test]
     fn version_1_audio_fields_state_their_version_and_a_rate_of_one() {
-        let entry = AudioSampleEntry::new_v1(1, 6);
+        let bytes = encoded_audio(&AudioSampleEntry::new_v1(1, 6));
 
         assert_eq!(
-            encoded_audio(&entry),
+            bytes,
             b"\0\0\0\0\0\0\0\x01\0\x01\0\0\0\0\0\0\0\x06\0\x10\0\0\0\0\0\x01\0\0"
         );
     }

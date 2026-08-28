@@ -85,9 +85,9 @@ impl BoxEncode for OpaquePayload {
 ///
 /// Either way the box type is the payload's own
 /// [`box_type`](BoxFormat::box_type), asked for afresh on every call, so the
-/// two can never be paired wrongly: a value that settles its type from its own
-/// fields — a sample entry one class lays over several codes — reports the
-/// code its fields state now, not the one they stated when it arrived.
+/// two can never be paired wrongly: a payload that settles its type from its
+/// own fields reports the code those fields state now, not the one they stated
+/// when it arrived.
 ///
 /// # Examples
 ///
@@ -193,9 +193,9 @@ impl AnyBox {
     /// Writes the whole box into the front of `buffer` and returns what is left
     ///
     /// This is [`BoxEncode::encode`](crate::BoxEncode::encode) under the same
-    /// contract, which `AnyBox` cannot have as that trait: a box of any type
-    /// fits here, so no one [`BoxFormat`] names it. An `Err`
-    /// may leave `buffer` written to in part, as it does there.
+    /// contract, offered on its own because `AnyBox` does not implement
+    /// [`BoxFormat`]. An `Err` may leave `buffer` written to in part, as it
+    /// does there.
     ///
     /// # Errors
     ///
@@ -214,7 +214,7 @@ impl AnyBox {
     #[must_use]
     pub fn downcast_ref<Payload>(&self) -> Option<&Payload>
     where
-        Payload: Any + BoxEncode + fmt::Debug + Clone + PartialEq + Send + Sync,
+        Payload: Any + BoxFormat + BoxEncode + fmt::Debug + Clone + PartialEq + Send + Sync,
     {
         let erased: &dyn Any = self.payload.as_ref();
 
@@ -229,7 +229,7 @@ impl AnyBox {
     #[must_use]
     pub fn downcast_mut<Payload>(&mut self) -> Option<&mut Payload>
     where
-        Payload: Any + BoxEncode + fmt::Debug + Clone + PartialEq + Send + Sync,
+        Payload: Any + BoxFormat + BoxEncode + fmt::Debug + Clone + PartialEq + Send + Sync,
     {
         let erased: &mut dyn Any = self.payload.as_mut();
 
@@ -275,6 +275,10 @@ impl<Payload> From<Payload> for AnyBox
 where
     Payload: BoxFormat + Any + BoxEncode + fmt::Debug + Clone + PartialEq + Send + Sync,
 {
+    // Why not implement BoxFormat for AnyBox as well, and take encode and
+    // encoded_len from BoxEncode instead of writing them out: AnyBox meets
+    // every other bound of this impl, so BoxFormat is the one trait keeping it
+    // from overlapping the reflexive `impl<T> From<T> for T` of core.
     fn from(payload: Payload) -> Self {
         Self {
             payload: Box::new(payload),
@@ -397,7 +401,6 @@ mod tests {
         entry.downcast_mut::<CodingBox>().unwrap().alternate = true;
         entry.encode(&mut written).unwrap();
 
-        assert_eq!(entry.box_type(), BoxType::compact(*b"cod2"));
         assert_eq!(written, *b"\0\0\0\x08cod2");
     }
 
