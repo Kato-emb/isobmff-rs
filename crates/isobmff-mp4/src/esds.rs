@@ -2,6 +2,7 @@
 
 use isobmff_core::{
     BoxDefinition, BoxEncode, BoxType, FieldReader, FieldWriter, FullBoxFields, FullBoxFlags,
+    OtherBoxes, boxes,
 };
 
 use crate::error::Error;
@@ -62,6 +63,35 @@ impl ESDBox {
 
         Ok(Self { es })
     }
+}
+
+/// Sorts the children that follow the fields of a sample entry into the one
+/// `esds` it must hold and the boxes no field claims
+///
+/// # Errors
+///
+/// * [`Box`](crate::ErrorKind::Box): a child does not frame as a box; no
+///   `esds` is among the children, or more than one.
+/// * What [`ESDBox::decode_payload`] reports.
+pub(crate) fn sort_children(children: &[u8]) -> Result<(ESDBox, OtherBoxes), Error> {
+    let mut es = None;
+    let mut other_boxes = OtherBoxes::new();
+    for child in boxes(children) {
+        let child = child?;
+        let box_type = child.header().box_type();
+        if box_type == ESDBox::BOX_TYPE {
+            if es.is_some() {
+                return Err(isobmff_core::Error::duplicate_box(box_type).into());
+            }
+            es = Some(ESDBox::decode_payload(child.payload())?);
+        } else {
+            other_boxes.keep(child);
+        }
+    }
+
+    let es = es.ok_or(isobmff_core::Error::missing_mandatory_box(ESDBox::BOX_TYPE))?;
+
+    Ok((es, other_boxes))
 }
 
 impl BoxDefinition for ESDBox {
