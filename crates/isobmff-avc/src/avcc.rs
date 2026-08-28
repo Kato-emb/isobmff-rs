@@ -62,19 +62,12 @@ pub(crate) mod tests {
     use isobmff_core::{BoxDecode, BoxEncode, Error};
 
     use super::AVCConfigurationBox;
+    use crate::decoder_configuration_record::tests::{
+        picture_parameter_set, sequence_parameter_set,
+    };
     use crate::decoder_configuration_record::{
         AVCDecoderConfigurationRecord, HighProfileFields, LengthSizeMinusOne,
     };
-
-    /// SPS of a Constrained Baseline stream at level 3.0, as an encoder emits it
-    pub(crate) fn sequence_parameter_set() -> Vec<u8> {
-        vec![0x67, 0x42, 0xc0, 0x1e, 0xd9, 0x00, 0xb4, 0x3d, 0xa1]
-    }
-
-    /// PPS to go with [`sequence_parameter_set`]
-    pub(crate) fn picture_parameter_set() -> Vec<u8> {
-        vec![0x68, 0xce, 0x3c, 0x80]
-    }
 
     /// The `avcC` of a Constrained Baseline stream
     pub(crate) fn baseline_configuration() -> AVCConfigurationBox {
@@ -168,72 +161,6 @@ pub(crate) mod tests {
         assert_eq!(
             AVCConfigurationBox::decode_payload(b"\x01\x42\xc0\x1e\xff\xe1\0\x09\x67"),
             Err(Error::truncated_payload(17, 9))
-        );
-    }
-
-    #[test]
-    fn a_length_size_the_spec_forbids_still_reads() {
-        let configuration =
-            AVCConfigurationBox::decode_payload(b"\x01\x42\xc0\x1e\xfe\xe0\0").unwrap();
-
-        assert_eq!(
-            configuration
-                .avc_config()
-                .length_size_minus_one()
-                .length_size_minus_one(),
-            2
-        );
-        assert_eq!(LengthSizeMinusOne::new(2), None);
-    }
-
-    #[test]
-    fn high_profile_fields_are_refused_for_a_profile_that_has_none() {
-        assert_eq!(
-            AVCDecoderConfigurationRecord::new(
-                66,
-                0xc0,
-                0x1e,
-                LengthSizeMinusOne::FOUR_BYTES,
-                vec![sequence_parameter_set()],
-                vec![picture_parameter_set()],
-                Some(HighProfileFields::new(1, 0, 0, Vec::new()).unwrap()),
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn a_record_needs_a_first_sps_long_enough_to_state_the_profile() {
-        assert_eq!(
-            AVCDecoderConfigurationRecord::from_parameter_sets(
-                LengthSizeMinusOne::FOUR_BYTES,
-                vec![vec![0x67, 0x42, 0xc0]],
-                Vec::new(),
-                None,
-            ),
-            None
-        );
-        assert_eq!(
-            AVCDecoderConfigurationRecord::from_parameter_sets(
-                LengthSizeMinusOne::FOUR_BYTES,
-                Vec::new(),
-                Vec::new(),
-                None,
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn more_parameter_sets_than_the_record_can_count_are_refused() {
-        assert_eq!(
-            AVCDecoderConfigurationRecord::from_parameter_sets(
-                LengthSizeMinusOne::FOUR_BYTES,
-                vec![sequence_parameter_set(); 32],
-                Vec::new(),
-                None,
-            ),
-            None
         );
     }
 }

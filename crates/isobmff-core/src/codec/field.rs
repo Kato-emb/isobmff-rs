@@ -453,6 +453,8 @@ impl<'buffer> FieldWriter<'buffer> {
 
 #[cfg(test)]
 mod tests {
+    use super::{Error, FieldReader, FieldWidth, FieldWriter};
+
     #[test]
     fn a_field_of_a_run_time_length_is_read_and_leaves_what_follows() {
         let mut reader = FieldReader::new(b"\x01\x02\x03\x04\x05");
@@ -461,8 +463,6 @@ mod tests {
         assert_eq!(reader.remainder(), b"\x04\x05");
         assert_eq!(reader.read_slice(3), Err(Error::truncated_payload(6, 5)));
     }
-
-    use super::{Error, FieldReader, FieldWidth, FieldWriter};
 
     #[test]
     fn fields_are_read_off_the_front_in_the_order_they_are_asked_for() {

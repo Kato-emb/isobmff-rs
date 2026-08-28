@@ -1,5 +1,5 @@
-//! Whatever payload reads as an AVC sample entry writes back to the same
-//! bytes, and reads again as the same value
+//! Whatever payload reads as an AVC sample entry writes back to bytes that
+//! read again as the same value
 
 #![no_main]
 
@@ -20,10 +20,9 @@ fuzz_target!(|payload: &[u8]| {
         .encode_payload(&mut written)
         .expect("an entry that was read writes back");
 
-    assert_eq!(
-        written, payload,
-        "the entry writes back to other bytes than it was read from"
-    );
+    // Why not compare the bytes: reserved bits are masked on read and written
+    // as ones, so a file that cleared one reads as the same value without
+    // writing back to the same bytes.
     assert_eq!(
         AVCSampleEntry::decode_payload(AVCSampleEntryType::Avc1, &written).unwrap(),
         entry,

@@ -13,11 +13,8 @@ const HIGH_PROFILES: [u8; 4] = [100, 110, 122, 144];
 /// Most parameter sets a record can count, in the 5 bits it has for SPSs
 const MAX_SEQUENCE_PARAMETER_SETS: usize = 31;
 
-/// Length of the fields that precede the sequence parameter sets
-const FIXED_FIELDS_LEN: u64 = 6;
-
-/// Byte a NAL unit header takes, in front of the profile fields of an SPS
-const NAL_UNIT_HEADER_LEN: usize = 1;
+/// Length of the fields that precede the sequence parameter sets and their count
+const FIXED_FIELDS_LEN: u64 = 5;
 
 /// Length in bytes of the `NALUnitLength` field in front of every NAL unit of
 /// a sample, minus one
@@ -42,7 +39,7 @@ impl LengthSizeMinusOne {
     pub const fn new(length_size_minus_one: u8) -> Option<Self> {
         match length_size_minus_one {
             0 | 1 | 3 => Some(Self(length_size_minus_one)),
-            _other => None,
+            _ => None,
         }
     }
 
@@ -50,12 +47,6 @@ impl LengthSizeMinusOne {
     #[must_use]
     pub const fn length_size_minus_one(self) -> u8 {
         self.0
-    }
-
-    /// Returns the length in bytes of the `NALUnitLength` field
-    #[must_use]
-    pub const fn nal_unit_length_len(self) -> u8 {
-        self.0.saturating_add(1)
     }
 }
 
@@ -88,11 +79,11 @@ impl HighProfileFields {
         bit_depth_chroma_minus8: u8,
         sequence_parameter_set_ext: Vec<Vec<u8>>,
     ) -> Option<Self> {
-        if chroma_format > 0b11 || bit_depth_luma_minus8 > 0b111 || bit_depth_chroma_minus8 > 0b111
+        if chroma_format > 0b11
+            || bit_depth_luma_minus8 > 0b111
+            || bit_depth_chroma_minus8 > 0b111
+            || !nal_units_fit(&sequence_parameter_set_ext, usize::from(u8::MAX))
         {
-            return None;
-        }
-        if !nal_units_fit(&sequence_parameter_set_ext, usize::from(u8::MAX)) {
             return None;
         }
 
@@ -129,30 +120,32 @@ impl HighProfileFields {
     }
 
     fn encoded_len(&self) -> u64 {
-        4_u64.saturating_add(nal_units_len(&self.sequence_parameter_set_ext))
+        3_u64.saturating_add(nal_units_len(&self.sequence_parameter_set_ext))
     }
 
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let chroma_format = reader.read_bytes::<1>()?[0] & 0b11;
-        let bit_depth_luma_minus8 = reader.read_bytes::<1>()?[0] & 0b111;
-        let bit_depth_chroma_minus8 = reader.read_bytes::<1>()?[0] & 0b111;
-        let count = usize::from(reader.read_bytes::<1>()?[0]);
-        let sequence_parameter_set_ext = decode_nal_units(reader, count)?;
-
-        Ok(Self {
+        let [
             chroma_format,
             bit_depth_luma_minus8,
             bit_depth_chroma_minus8,
+        ] = *reader.read_bytes::<3>()?;
+        let sequence_parameter_set_ext = decode_nal_units(reader, u8::MAX)?;
+
+        Ok(Self {
+            chroma_format: chroma_format & 0b11,
+            bit_depth_luma_minus8: bit_depth_luma_minus8 & 0b111,
+            bit_depth_chroma_minus8: bit_depth_chroma_minus8 & 0b111,
             sequence_parameter_set_ext,
         })
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        writer.write_bytes(&[0b1111_1100 | self.chroma_format])?;
-        writer.write_bytes(&[0b1111_1000 | self.bit_depth_luma_minus8])?;
-        writer.write_bytes(&[0b1111_1000 | self.bit_depth_chroma_minus8])?;
-        writer.write_bytes(&[count_byte(self.sequence_parameter_set_ext.len())])?;
-        encode_nal_units(writer, &self.sequence_parameter_set_ext)
+        writer.write_bytes(&[
+            0b1111_1100 | self.chroma_format,
+            0b1111_1000 | self.bit_depth_luma_minus8,
+            0b1111_1000 | self.bit_depth_chroma_minus8,
+        ])?;
+        encode_nal_units(writer, 0, &self.sequence_parameter_set_ext)
     }
 }
 
@@ -206,8 +199,7 @@ impl AVCDecoderConfigurationRecord {
     ///
     /// `high_profile_fields` may be given only for a profile §5.3.3.1 lays the
     /// fields out for — 100, 110, 122, or 144. For such a profile it may be
-    /// left out, as many files leave it; the record is then written without
-    /// the fields, as it was read.
+    /// left out; the record is then written without the fields.
     ///
     /// Returns `None` when the fields are given for another profile, when
     /// there are more than 31 SPSs or 255 PPSs, or when a parameter set is
@@ -261,13 +253,11 @@ impl AVCDecoderConfigurationRecord {
         high_profile_fields: Option<HighProfileFields>,
     ) -> Option<Self> {
         let [
+            _nal_unit_header,
             avc_profile_indication,
             profile_compatibility,
             avc_level_indication,
-        ] = *sequence_parameter_sets
-            .first()?
-            .get(NAL_UNIT_HEADER_LEN..NAL_UNIT_HEADER_LEN + 3)?
-            .first_chunk::<3>()?;
+        ] = *sequence_parameter_sets.first()?.first_chunk::<4>()?;
 
         Self::new(
             avc_profile_indication,
@@ -333,7 +323,6 @@ impl AVCDecoderConfigurationRecord {
 
         FIXED_FIELDS_LEN
             .saturating_add(nal_units_len(&self.sequence_parameter_sets))
-            .saturating_add(1)
             .saturating_add(nal_units_len(&self.picture_parameter_sets))
             .saturating_add(high_profile)
     }
@@ -342,7 +331,7 @@ impl AVCDecoderConfigurationRecord {
     ///
     /// The record ends where the payload does: for a High profile, the fields
     /// §5.3.3.1 lays out after the PPSs are read when bytes remain and taken
-    /// as absent when none do, since files that leave them off are common.
+    /// as absent when none do.
     ///
     /// # Errors
     ///
@@ -357,16 +346,13 @@ impl AVCDecoderConfigurationRecord {
             profile_compatibility,
             avc_level_indication,
             length_size_minus_one,
-            sequence_parameter_set_count,
-        ] = *reader.read_bytes::<6>()?;
+        ] = *reader.read_bytes::<5>()?;
         if configuration_version != CONFIGURATION_VERSION {
             return Err(Error::unsupported_version(configuration_version));
         }
 
-        let sequence_parameter_sets =
-            decode_nal_units(reader, usize::from(sequence_parameter_set_count & 0b1_1111))?;
-        let picture_parameter_set_count = usize::from(reader.read_bytes::<1>()?[0]);
-        let picture_parameter_sets = decode_nal_units(reader, picture_parameter_set_count)?;
+        let sequence_parameter_sets = decode_nal_units(reader, 0b1_1111)?;
+        let picture_parameter_sets = decode_nal_units(reader, u8::MAX)?;
 
         let high_profile_fields =
             if HIGH_PROFILES.contains(&avc_profile_indication) && !reader.remainder().is_empty() {
@@ -399,11 +385,9 @@ impl AVCDecoderConfigurationRecord {
             self.profile_compatibility,
             self.avc_level_indication,
             0b1111_1100 | self.length_size_minus_one.0,
-            0b1110_0000 | count_byte(self.sequence_parameter_sets.len()),
         ])?;
-        encode_nal_units(writer, &self.sequence_parameter_sets)?;
-        writer.write_bytes(&[count_byte(self.picture_parameter_sets.len())])?;
-        encode_nal_units(writer, &self.picture_parameter_sets)?;
+        encode_nal_units(writer, 0b1110_0000, &self.sequence_parameter_sets)?;
+        encode_nal_units(writer, 0, &self.picture_parameter_sets)?;
 
         match &self.high_profile_fields {
             Some(fields) => fields.encode_fields(writer),
@@ -421,24 +405,20 @@ fn nal_units_fit(nal_units: &[Vec<u8>], max_count: usize) -> bool {
             .all(|nal_unit| u16::try_from(nal_unit.len()).is_ok())
 }
 
-/// Returns `count` as the byte the record counts NAL units in
-fn count_byte(count: usize) -> u8 {
-    // Why not fail: every constructor bounds the count to what the byte holds,
-    // so a degenerate value stands in for the panic the lints forbid.
-    u8::try_from(count).unwrap_or(u8::MAX)
-}
-
-/// Returns the length `nal_units` occupy, each behind its 16-bit length
+/// Returns the length `nal_units` occupy behind their count byte, each behind
+/// its 16-bit length
 fn nal_units_len(nal_units: &[Vec<u8>]) -> u64 {
-    nal_units.iter().fold(0_u64, |total, nal_unit| {
+    nal_units.iter().fold(1_u64, |total, nal_unit| {
         total
             .saturating_add(2)
             .saturating_add(nal_unit.len() as u64)
     })
 }
 
-/// Reads `count` NAL units, each behind its 16-bit length
-fn decode_nal_units(reader: &mut FieldReader<'_>, count: usize) -> Result<Vec<Vec<u8>>, Error> {
+/// Reads a count byte, of which `count_mask` are the bits that count, and that
+/// many NAL units, each behind its 16-bit length
+fn decode_nal_units(reader: &mut FieldReader<'_>, count_mask: u8) -> Result<Vec<Vec<u8>>, Error> {
+    let count = usize::from(reader.read_bytes::<1>()?[0] & count_mask);
     let mut nal_units = Vec::with_capacity(count);
     for _ in 0..count {
         let length = usize::from(reader.read_u16()?);
@@ -448,14 +428,96 @@ fn decode_nal_units(reader: &mut FieldReader<'_>, count: usize) -> Result<Vec<Ve
     Ok(nal_units)
 }
 
-/// Writes `nal_units`, each behind its 16-bit length
-fn encode_nal_units(writer: &mut FieldWriter<'_>, nal_units: &[Vec<u8>]) -> Result<(), Error> {
+/// Writes the count of `nal_units` with `reserved_bits` set above it, then each
+/// unit behind its 16-bit length
+fn encode_nal_units(
+    writer: &mut FieldWriter<'_>,
+    reserved_bits: u8,
+    nal_units: &[Vec<u8>],
+) -> Result<(), Error> {
+    // Why not fail: every constructor bounds the count to its byte and every
+    // NAL unit to `u16`, so a degenerate value stands in for the panic the
+    // lints forbid.
+    writer.write_bytes(&[reserved_bits | u8::try_from(nal_units.len()).unwrap_or(u8::MAX)])?;
     for nal_unit in nal_units {
-        // Why not fail: every constructor bounds a NAL unit to `u16`, so a
-        // degenerate value stands in for the panic the lints forbid.
         writer.write_u16(u16::try_from(nal_unit.len()).unwrap_or(u16::MAX))?;
         writer.write_slice(nal_unit)?;
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    use isobmff_core::FieldReader;
+
+    use super::{AVCDecoderConfigurationRecord, HighProfileFields, LengthSizeMinusOne};
+
+    /// SPS of a Constrained Baseline stream at level 3.0, as an encoder emits it
+    pub(crate) fn sequence_parameter_set() -> Vec<u8> {
+        vec![0x67, 0x42, 0xc0, 0x1e, 0xd9, 0x00, 0xb4, 0x3d, 0xa1]
+    }
+
+    /// PPS to go with [`sequence_parameter_set`]
+    pub(crate) fn picture_parameter_set() -> Vec<u8> {
+        vec![0x68, 0xce, 0x3c, 0x80]
+    }
+
+    #[test]
+    fn a_length_size_the_spec_forbids_still_reads() {
+        let record = AVCDecoderConfigurationRecord::decode_fields(&mut FieldReader::new(
+            b"\x01\x42\xc0\x1e\xfe\xe0\0",
+        ))
+        .unwrap();
+
+        assert_eq!(record.length_size_minus_one().length_size_minus_one(), 2);
+        assert_eq!(LengthSizeMinusOne::new(2), None);
+    }
+
+    #[test]
+    fn high_profile_fields_are_refused_for_a_profile_that_has_none() {
+        assert_eq!(
+            AVCDecoderConfigurationRecord::new(
+                66,
+                0xc0,
+                0x1e,
+                LengthSizeMinusOne::FOUR_BYTES,
+                vec![sequence_parameter_set()],
+                vec![picture_parameter_set()],
+                Some(HighProfileFields::new(1, 0, 0, Vec::new()).unwrap()),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_record_needs_a_first_sps_long_enough_to_state_the_profile() {
+        for sequence_parameter_sets in [vec![vec![0x67, 0x42, 0xc0]], Vec::new()] {
+            assert_eq!(
+                AVCDecoderConfigurationRecord::from_parameter_sets(
+                    LengthSizeMinusOne::FOUR_BYTES,
+                    sequence_parameter_sets,
+                    Vec::new(),
+                    None,
+                ),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn more_parameter_sets_than_the_record_can_count_are_refused() {
+        assert_eq!(
+            AVCDecoderConfigurationRecord::from_parameter_sets(
+                LengthSizeMinusOne::FOUR_BYTES,
+                vec![sequence_parameter_set(); 32],
+                Vec::new(),
+                None,
+            ),
+            None
+        );
+    }
 }

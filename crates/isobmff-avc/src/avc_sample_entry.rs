@@ -8,6 +8,9 @@ use isobmff_core::{
 
 use crate::avcc::AVCConfigurationBox;
 
+const AVC1: BoxType = BoxType::compact(*b"avc1");
+const AVC3: BoxType = BoxType::compact(*b"avc3");
+
 /// Code an AVC sample entry is named by, stating where its parameter sets lie
 ///
 /// ISO/IEC 14496-15 §5.4.2 lays one class over two codes: under `avc1` the
@@ -26,9 +29,9 @@ impl AVCSampleEntryType {
     /// Returns the code `box_type` names, when it names one of the two
     #[must_use]
     pub fn from_box_type(box_type: BoxType) -> Option<Self> {
-        if box_type == Self::Avc1.box_type() {
+        if box_type == AVC1 {
             Some(Self::Avc1)
-        } else if box_type == Self::Avc3.box_type() {
+        } else if box_type == AVC3 {
             Some(Self::Avc3)
         } else {
             None
@@ -39,8 +42,8 @@ impl AVCSampleEntryType {
     #[must_use]
     pub const fn box_type(self) -> BoxType {
         match self {
-            Self::Avc1 => BoxType::compact(*b"avc1"),
-            Self::Avc3 => BoxType::compact(*b"avc3"),
+            Self::Avc1 => AVC1,
+            Self::Avc3 => AVC3,
         }
     }
 }
@@ -52,10 +55,6 @@ impl AVCSampleEntryType {
 /// [`AVCConfigurationBox`]; a [`BitRateBox`] may follow, and any other box —
 /// `m4ds`, `pasp`, `colr`, the boxes a later specification adds — is kept as it
 /// came and written back.
-///
-/// The entry is named by either of two codes, so it states its box type per
-/// value through [`BoxFormat`] rather than as a constant; `AnyBox::from` and
-/// [`BoxEncode::encode`] take it from there.
 ///
 /// # Examples
 ///
@@ -148,11 +147,6 @@ impl AVCSampleEntry {
     }
 
     /// Reads the entry from the payload of a box named `entry_type`
-    ///
-    /// A `stsd` entry arrives as an [`AnyBox`]; its
-    /// [`box_type`](AnyBox::box_type) goes through
-    /// [`AVCSampleEntryType::from_box_type`] and its
-    /// [`raw_payload`](AnyBox::raw_payload) comes here.
     ///
     /// # Errors
     ///
