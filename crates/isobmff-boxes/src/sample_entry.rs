@@ -14,12 +14,8 @@ use isobmff_core::{CompressorName, Error, FieldReader, FieldWriter, U16F16};
 ///
 /// [`VisualSampleEntry`], ISO/IEC 14496-12 §12.1.3. The `pre_defined` and
 /// `reserved` fields are not held: they are written as the spec fixes them,
-/// and read past.
-///
-/// [`new`](Self::new) fills the template fields with the values the spec
-/// gives them — a resolution of 72 dpi, one frame per sample, a depth of
-/// `0x0018` for colour with no alpha — and leaves `compressorname` empty; a
-/// decoded entry holds whatever the file stated.
+/// and read past. A decoded entry holds whatever the file stated in the
+/// template fields; [`new`](Self::new) fills them with the spec's values.
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct VisualSampleEntry {
@@ -37,12 +33,6 @@ impl VisualSampleEntry {
     /// Length the fields occupy, the `SampleEntry` fields included
     pub const LEN: u64 = 78;
 
-    /// Resolution the spec gives as the template value, 72 dpi
-    const TEMPLATE_RESOLUTION: U16F16 = U16F16::from_raw(0x0048_0000);
-
-    /// Depth the spec gives as the template value, colour with no alpha
-    const TEMPLATE_DEPTH: u16 = 0x0018;
-
     /// Creates the fields for a picture of `width` by `height` pixels, with
     /// every template field at the value the spec gives it
     #[must_use]
@@ -51,11 +41,11 @@ impl VisualSampleEntry {
             data_reference_index,
             width,
             height,
-            horiz_resolution: Self::TEMPLATE_RESOLUTION,
-            vert_resolution: Self::TEMPLATE_RESOLUTION,
+            horiz_resolution: U16F16::from_raw(0x0048_0000),
+            vert_resolution: U16F16::from_raw(0x0048_0000),
             frame_count: 1,
             compressor_name: CompressorName::EMPTY,
-            depth: Self::TEMPLATE_DEPTH,
+            depth: 0x0018,
         }
     }
 
@@ -171,10 +161,9 @@ impl VisualSampleEntry {
 /// [`entry_version`](Self::entry_version). A version 1 entry must lie in a
 /// `stsd` of version 1.
 ///
-/// The `pre_defined` and `reserved` fields are not held: they are written as
-/// the spec fixes them, and read past. A layout of another version — the
-/// QuickTime file format writes versions 1 and 2 of its own with more fields —
-/// is not read.
+/// The `pre_defined` and `reserved` fields are not held. A layout of another
+/// version — the QuickTime file format writes versions 1 and 2 of its own with
+/// more fields — is not read.
 ///
 /// [`AudioSampleEntryV1`]: Self
 #[non_exhaustive]
@@ -191,23 +180,19 @@ impl AudioSampleEntry {
     /// Length the fields occupy, the `SampleEntry` fields included
     pub const LEN: u64 = 28;
 
-    /// Sample size in bits the spec gives as the template value
-    const TEMPLATE_SAMPLE_SIZE: u16 = 16;
-
     /// Creates the version 0 fields for audio of `channel_count` channels
     /// sampled `sample_rate` times a second, at the template sample size of 16
     /// bits
     ///
     /// The rate is stated whole, as the integer part of the 16.16 field it is
-    /// written to. A rate past `u16` cannot be stated this way; version 1
-    /// carries it in a `SamplingRateBox` instead.
+    /// written to.
     #[must_use]
     pub const fn new(data_reference_index: u16, channel_count: u16, sample_rate: u16) -> Self {
         Self {
             entry_version: 0,
             data_reference_index,
             channel_count,
-            sample_size: Self::TEMPLATE_SAMPLE_SIZE,
+            sample_size: 16,
             sample_rate: U16F16::from_raw((sample_rate as u32) << 16),
         }
     }
@@ -223,7 +208,7 @@ impl AudioSampleEntry {
             entry_version: 1,
             data_reference_index,
             channel_count,
-            sample_size: Self::TEMPLATE_SAMPLE_SIZE,
+            sample_size: 16,
             sample_rate: U16F16::ONE,
         }
     }
@@ -324,22 +309,25 @@ mod tests {
 
     use super::{AudioSampleEntry, VisualSampleEntry};
 
-    fn encoded_visual(entry: &VisualSampleEntry) -> Vec<u8> {
-        let mut buffer = vec![0; usize::try_from(VisualSampleEntry::LEN).unwrap()];
+    /// Writes fields that fill `len` bytes and returns the bytes they occupy
+    fn encoded(
+        len: u64,
+        encode_fields: impl FnOnce(&mut FieldWriter<'_>) -> Result<(), Error>,
+    ) -> Vec<u8> {
+        let mut buffer = vec![0; usize::try_from(len).unwrap()];
         let mut writer = FieldWriter::new(&mut buffer);
-        entry.encode_fields(&mut writer).unwrap();
+        encode_fields(&mut writer).unwrap();
         writer.finish().unwrap();
 
         buffer
     }
 
-    fn encoded_audio(entry: &AudioSampleEntry) -> Vec<u8> {
-        let mut buffer = vec![0; usize::try_from(AudioSampleEntry::LEN).unwrap()];
-        let mut writer = FieldWriter::new(&mut buffer);
-        entry.encode_fields(&mut writer).unwrap();
-        writer.finish().unwrap();
+    fn encoded_visual(entry: &VisualSampleEntry) -> Vec<u8> {
+        encoded(VisualSampleEntry::LEN, |writer| entry.encode_fields(writer))
+    }
 
-        buffer
+    fn encoded_audio(entry: &AudioSampleEntry) -> Vec<u8> {
+        encoded(AudioSampleEntry::LEN, |writer| entry.encode_fields(writer))
     }
 
     #[test]

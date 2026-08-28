@@ -9,8 +9,7 @@ use core::fmt;
 /// padding completes the 32. The field may be all zero.
 ///
 /// The value holds the 32 bytes as they lie, so a field reads back exactly as
-/// it was written even when its count exceeds the 31 bytes that follow it;
-/// [`displayed`](Self::displayed) caps the count there, as a display must.
+/// it was written even when its count exceeds the 31 bytes that follow it.
 ///
 /// # Examples
 ///

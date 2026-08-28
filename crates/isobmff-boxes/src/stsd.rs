@@ -213,7 +213,10 @@ mod tests {
 
         let payload = encoded_payload(&description);
 
-        assert_eq!(payload.first(), Some(&1));
+        assert_eq!(
+            payload,
+            b"\x01\0\0\0\0\0\0\x01\0\0\0\x0cavc1\xab\xab\xab\xab"
+        );
         assert_eq!(
             SampleDescriptionBox::decode_payload(&payload).unwrap(),
             description
