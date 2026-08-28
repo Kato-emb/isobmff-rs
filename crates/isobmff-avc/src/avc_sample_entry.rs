@@ -87,6 +87,8 @@ impl AVCSampleEntryType {
 /// assert_eq!(found, &entry);
 /// assert_eq!(found.entry_type(), AVCSampleEntryType::Avc3);
 /// ```
+#[doc(alias = "avc1")]
+#[doc(alias = "avc3")]
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Debug)]
 pub struct AVCSampleEntry {

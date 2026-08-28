@@ -103,7 +103,7 @@ impl<'payload> FieldReader<'payload> {
         Ok(field)
     }
 
-    /// Reads the next field, which occupies `len` bytes settled at run time
+    /// Reads the next field, which occupies `length` bytes settled at run time
     ///
     /// This is [`read_bytes`](Self::read_bytes) for a field whose length a
     /// field before it stated, as a parameter set lies behind its length.
@@ -112,10 +112,10 @@ impl<'payload> FieldReader<'payload> {
     ///
     /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload ends
     ///   inside the field.
-    pub fn read_slice(&mut self, len: usize) -> Result<&'payload [u8], Error> {
-        let needed = self.consumed.saturating_add(len as u64);
+    pub fn read_slice(&mut self, length: usize) -> Result<&'payload [u8], Error> {
+        let needed = self.consumed.saturating_add(length as u64);
         let rest = self.rest;
-        let (field, tail) = rest.split_at_checked(len).ok_or_else(|| {
+        let (field, tail) = rest.split_at_checked(length).ok_or_else(|| {
             Error::truncated_payload(needed, self.consumed.saturating_add(rest.len() as u64))
         })?;
 

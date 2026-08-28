@@ -12,10 +12,10 @@ fuzz_target!(|payload: &[u8]| {
         return;
     };
 
-    let Ok(len) = usize::try_from(entry.payload_len()) else {
+    let Ok(length) = usize::try_from(entry.payload_len()) else {
         return;
     };
-    let mut written = vec![0; len];
+    let mut written = vec![0; length];
     entry
         .encode_payload(&mut written)
         .expect("an entry that was read writes back");

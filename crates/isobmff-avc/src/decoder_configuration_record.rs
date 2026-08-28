@@ -119,10 +119,6 @@ impl HighProfileFields {
         &self.sequence_parameter_set_ext
     }
 
-    fn encoded_len(&self) -> u64 {
-        3_u64.saturating_add(nal_units_len(&self.sequence_parameter_set_ext))
-    }
-
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let [
             chroma_format,
@@ -166,14 +162,14 @@ impl HighProfileFields {
 /// use isobmff_avc::{AVCDecoderConfigurationRecord, LengthSizeMinusOne};
 ///
 /// // An SPS and a PPS as an encoder emits them, header byte first
-/// let sps = vec![0x67, 0x42, 0xc0, 0x1e, 0xd9];
-/// let pps = vec![0x68, 0xce, 0x3c, 0x80];
+/// let sequence_parameter_set = vec![0x67, 0x42, 0xc0, 0x1e, 0xd9];
+/// let picture_parameter_set = vec![0x68, 0xce, 0x3c, 0x80];
 ///
 /// // The profile fields are taken from the SPS
 /// let record = AVCDecoderConfigurationRecord::from_parameter_sets(
 ///     LengthSizeMinusOne::FOUR_BYTES,
-///     vec![sps],
-///     vec![pps],
+///     vec![sequence_parameter_set],
+///     vec![picture_parameter_set],
 ///     None,
 /// )
 /// .unwrap();
@@ -316,10 +312,9 @@ impl AVCDecoderConfigurationRecord {
     /// Returns the length the record occupies
     #[must_use]
     pub fn encoded_len(&self) -> u64 {
-        let high_profile = self
-            .high_profile_fields
-            .as_ref()
-            .map_or(0, HighProfileFields::encoded_len);
+        let high_profile = self.high_profile_fields.as_ref().map_or(0, |fields| {
+            3_u64.saturating_add(nal_units_len(&fields.sequence_parameter_set_ext))
+        });
 
         FIXED_FIELDS_LEN
             .saturating_add(nal_units_len(&self.sequence_parameter_sets))
