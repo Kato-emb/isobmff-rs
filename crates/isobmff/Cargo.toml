@@ -13,9 +13,9 @@ exclude.workspace = true
 
 [features]
 default = ["avc", "mp4"]
-# The sample entries of ISO/IEC 14496-15, the carriage of AVC video.
+# `isobmff::avc`, ISO/IEC 14496-15.
 avc = ["dep:isobmff-avc"]
-# The sample entries and descriptors of ISO/IEC 14496-14, the MP4 file format.
+# `isobmff::mp4`, ISO/IEC 14496-14.
 mp4 = ["dep:isobmff-mp4"]
 
 [dependencies]
