@@ -103,6 +103,28 @@ impl<'payload> FieldReader<'payload> {
         Ok(field)
     }
 
+    /// Reads the next field, which occupies `len` bytes settled at run time
+    ///
+    /// This is [`read_bytes`](Self::read_bytes) for a field whose length a
+    /// field before it stated, as a parameter set lies behind its length.
+    ///
+    /// # Errors
+    ///
+    /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload ends
+    ///   inside the field.
+    pub fn read_slice(&mut self, len: usize) -> Result<&'payload [u8], Error> {
+        let needed = self.consumed.saturating_add(len as u64);
+        let rest = self.rest;
+        let (field, tail) = rest.split_at_checked(len).ok_or_else(|| {
+            Error::truncated_payload(needed, self.consumed.saturating_add(rest.len() as u64))
+        })?;
+
+        self.rest = tail;
+        self.consumed = needed;
+
+        Ok(field)
+    }
+
     /// Reads the next field as a 16-bit unsigned integer
     ///
     /// # Errors
@@ -431,6 +453,15 @@ impl<'buffer> FieldWriter<'buffer> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_field_of_a_run_time_length_is_read_and_leaves_what_follows() {
+        let mut reader = FieldReader::new(b"\x01\x02\x03\x04\x05");
+
+        assert_eq!(reader.read_slice(3).unwrap(), b"\x01\x02\x03");
+        assert_eq!(reader.remainder(), b"\x04\x05");
+        assert_eq!(reader.read_slice(3), Err(Error::truncated_payload(6, 5)));
+    }
+
     use super::{Error, FieldReader, FieldWidth, FieldWriter};
 
     #[test]

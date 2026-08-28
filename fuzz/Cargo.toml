@@ -17,6 +17,9 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
 
+[dependencies.isobmff-avc]
+path = "../crates/isobmff-avc"
+
 [dependencies.isobmff-core]
 path = "../crates/isobmff-core"
 
@@ -31,6 +34,13 @@ path = "../crates/isobmff-test-support"
 
 [profile.release]
 debug = 1
+
+[[bin]]
+name = "avc_sample_entry"
+path = "fuzz_targets/avc_sample_entry.rs"
+test = false
+doc = false
+bench = false
 
 [[bin]]
 name = "boxes"

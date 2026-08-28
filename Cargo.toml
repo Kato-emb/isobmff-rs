@@ -14,6 +14,7 @@ categories = ["multimedia", "parser-implementations", "encoding"]
 exclude = []
 
 [workspace.dependencies]
+isobmff-avc = { path = "crates/isobmff-avc", version = "0.0.0" }
 isobmff-boxes = { path = "crates/isobmff-boxes", version = "0.0.0" }
 isobmff-core = { path = "crates/isobmff-core", version = "0.0.0" }
 isobmff-sequence = { path = "crates/isobmff-sequence", version = "0.0.0" }
