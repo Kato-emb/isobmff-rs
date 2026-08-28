@@ -542,13 +542,21 @@ pub(crate) mod tests {
     }
 
     /// The bytes of [`aac_descriptor`], as the spec lays them out
+    ///
+    /// Four descriptors, each behind its tag and one-byte size:
+    ///
+    /// * `ES_Descriptor` (0x03, 25 bytes): `ES_ID` 0, flags 0
+    /// * `DecoderConfigDescriptor` (0x04, 17 bytes): AAC (0x40), audio
+    ///   stream (0x15), `bufferSizeDB` 6144, both bit rates 128000
+    /// * `DecoderSpecificInfo` (0x05, 2 bytes): the `AudioSpecificConfig`
+    /// * `SLConfigDescriptor` (0x06, 1 byte): `predefined` 2
     pub(crate) fn aac_descriptor_bytes() -> Vec<u8> {
         vec![
-            0x03, 0x19, 0x00, 0x00, 0x00, // ES_Descriptor: ES_ID 0, no flags
-            0x04, 0x11, 0x40, 0x15, 0x00, 0x18, 0x00, // DecoderConfig: AAC, audio, 6144
-            0x00, 0x01, 0xf4, 0x00, 0x00, 0x01, 0xf4, 0x00, // 128000 / 128000
-            0x05, 0x02, 0x11, 0x90, // DecoderSpecificInfo
-            0x06, 0x01, 0x02, // SLConfig predefined 2
+            0x03, 0x19, 0x00, 0x00, 0x00, //
+            0x04, 0x11, 0x40, 0x15, 0x00, 0x18, 0x00, //
+            0x00, 0x01, 0xf4, 0x00, 0x00, 0x01, 0xf4, 0x00, //
+            0x05, 0x02, 0x11, 0x90, //
+            0x06, 0x01, 0x02,
         ]
     }
 
