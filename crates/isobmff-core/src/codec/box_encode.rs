@@ -188,9 +188,8 @@ pub trait BoxEncode {
     /// that reads as whole in front of bytes that are not. A caller that writes
     /// out what it has on failure would emit that.
     ///
-    /// [`AnyBox`](crate::AnyBox) carries a box of any type, so it does not
-    /// implement [`BoxFormat`] and does not have this method. It offers the
-    /// same two operations as inherent methods.
+    /// [`AnyBox`](crate::AnyBox) does not implement [`BoxFormat`], so it does
+    /// not have this method. It offers the same two operations on its own.
     ///
     /// # Errors
     ///

@@ -14,9 +14,9 @@ use crate::framing::box_type::BoxType;
 /// Box payload once its type is erased
 ///
 /// Blanket-implemented, so a payload joins by being what a box payload already
-/// is — writable, printable, copyable, comparable, and safe to carry between
-/// threads.
-trait ErasedPayload: Any + BoxEncode + fmt::Debug + Send + Sync {
+/// is — named by a box type, writable, printable, copyable, comparable, and
+/// safe to carry between threads.
+trait ErasedPayload: Any + BoxFormat + BoxEncode + fmt::Debug + Send + Sync {
     /// Clones the payload back into an erased one
     fn clone_erased(&self) -> Box<dyn ErasedPayload>;
 
@@ -26,7 +26,7 @@ trait ErasedPayload: Any + BoxEncode + fmt::Debug + Send + Sync {
 
 impl<Payload> ErasedPayload for Payload
 where
-    Payload: Any + BoxEncode + fmt::Debug + Clone + PartialEq + Send + Sync,
+    Payload: Any + BoxFormat + BoxEncode + fmt::Debug + Clone + PartialEq + Send + Sync,
 {
     fn clone_erased(&self) -> Box<dyn ErasedPayload> {
         Box::new(self.clone())
@@ -42,22 +42,32 @@ where
 }
 
 /// Payload of a box the reader has no type for, kept as the bytes it lies as
+/// under the box type that named it
 #[derive(Clone, PartialEq)]
-struct OpaquePayload(Vec<u8>);
+struct OpaquePayload {
+    box_type: BoxType,
+    bytes: Vec<u8>,
+}
 
 impl fmt::Debug for OpaquePayload {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "OpaquePayload({} bytes)", self.0.len())
+        write!(formatter, "OpaquePayload({} bytes)", self.bytes.len())
+    }
+}
+
+impl BoxFormat for OpaquePayload {
+    fn box_type(&self) -> BoxType {
+        self.box_type
     }
 }
 
 impl BoxEncode for OpaquePayload {
     fn payload_len(&self) -> u64 {
-        self.0.len() as u64
+        self.bytes.len() as u64
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        writer.write_slice(&self.0)
+        writer.write_slice(&self.bytes)
     }
 }
 
@@ -68,12 +78,16 @@ impl BoxEncode for OpaquePayload {
 /// without naming what it holds.
 ///
 /// Two kinds of box fit. One the reader has a type for arrives through
-/// [`From`], which takes the box type from the
-/// [`box_type`](BoxFormat::box_type) of that value so the two can never be
-/// paired wrongly; [`downcast_ref`](Self::downcast_ref) and
+/// [`From`]; [`downcast_ref`](Self::downcast_ref) and
 /// [`downcast_mut`](Self::downcast_mut) reach it again. One the reader has no
 /// type for arrives through [`from_raw_bytes`](Self::from_raw_bytes) as the bytes it lies as, and
 /// comes back out of [`raw_payload`](Self::raw_payload).
+///
+/// Either way the box type is the payload's own
+/// [`box_type`](BoxFormat::box_type), asked for afresh on every call, so the
+/// two can never be paired wrongly: a payload that settles its type from its
+/// own fields reports the code those fields state now, not the one they stated
+/// when it arrived.
 ///
 /// # Examples
 ///
@@ -122,9 +136,7 @@ impl BoxEncode for OpaquePayload {
 /// unknown.encode(rest).unwrap();
 /// assert_eq!(buffer, b"\0\0\0\x0csqnc\0\0\0\x09\0\0\0\x0cskip\x01\x02\x03\x04");
 /// ```
-#[derive(Debug)]
 pub struct AnyBox {
-    box_type: BoxType,
     payload: Box<dyn ErasedPayload>,
 }
 
@@ -144,15 +156,18 @@ impl AnyBox {
     #[must_use]
     pub fn from_raw_bytes(box_type: BoxType, payload: Vec<u8>) -> Self {
         Self {
-            box_type,
-            payload: Box::new(OpaquePayload(payload)),
+            payload: Box::new(OpaquePayload {
+                box_type,
+                bytes: payload,
+            }),
         }
     }
 
-    /// Returns the box type that names the payload carried
+    /// Returns the box type that names the payload carried, as the payload
+    /// states it
     #[must_use]
-    pub const fn box_type(&self) -> BoxType {
-        self.box_type
+    pub fn box_type(&self) -> BoxType {
+        self.payload.box_type()
     }
 
     /// Returns the payload as the bytes it lies as, for a box built by
@@ -166,21 +181,21 @@ impl AnyBox {
 
         erased
             .downcast_ref::<OpaquePayload>()
-            .map(|opaque| opaque.0.as_slice())
+            .map(|opaque| opaque.bytes.as_slice())
     }
 
     /// Returns the length of the whole box, header included
     #[must_use]
     pub fn encoded_len(&self) -> u64 {
-        encoded_len_of(self.box_type, self)
+        encoded_len_of(self.box_type(), self)
     }
 
     /// Writes the whole box into the front of `buffer` and returns what is left
     ///
     /// This is [`BoxEncode::encode`](crate::BoxEncode::encode) under the same
-    /// contract, which `AnyBox` cannot have as that trait: a box of any type
-    /// fits here, so no one [`BoxFormat`] names it. An `Err`
-    /// may leave `buffer` written to in part, as it does there.
+    /// contract, offered on its own because `AnyBox` does not implement
+    /// [`BoxFormat`]. An `Err` may leave `buffer` written to in part, as it
+    /// does there.
     ///
     /// # Errors
     ///
@@ -189,7 +204,7 @@ impl AnyBox {
     /// * What [`encode_payload`](BoxEncode::encode_payload) reports for the
     ///   payload carried.
     pub fn encode<'buffer>(&self, buffer: &'buffer mut [u8]) -> Result<&'buffer mut [u8], Error> {
-        encode_into(self.box_type, self, buffer)
+        encode_into(self.box_type(), self, buffer)
     }
 
     /// Returns a reference to the payload carried, when it is a `Payload`
@@ -199,7 +214,7 @@ impl AnyBox {
     #[must_use]
     pub fn downcast_ref<Payload>(&self) -> Option<&Payload>
     where
-        Payload: Any + BoxEncode + fmt::Debug + Clone + PartialEq + Send + Sync,
+        Payload: Any + BoxFormat + BoxEncode + fmt::Debug + Clone + PartialEq + Send + Sync,
     {
         let erased: &dyn Any = self.payload.as_ref();
 
@@ -214,7 +229,7 @@ impl AnyBox {
     #[must_use]
     pub fn downcast_mut<Payload>(&mut self) -> Option<&mut Payload>
     where
-        Payload: Any + BoxEncode + fmt::Debug + Clone + PartialEq + Send + Sync,
+        Payload: Any + BoxFormat + BoxEncode + fmt::Debug + Clone + PartialEq + Send + Sync,
     {
         let erased: &mut dyn Any = self.payload.as_mut();
 
@@ -222,10 +237,19 @@ impl AnyBox {
     }
 }
 
+impl fmt::Debug for AnyBox {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AnyBox")
+            .field("box_type", &self.box_type())
+            .field("payload", &self.payload)
+            .finish()
+    }
+}
+
 impl Clone for AnyBox {
     fn clone(&self) -> Self {
         Self {
-            box_type: self.box_type,
             payload: self.payload.clone_erased(),
         }
     }
@@ -233,7 +257,7 @@ impl Clone for AnyBox {
 
 impl PartialEq for AnyBox {
     fn eq(&self, other: &Self) -> bool {
-        self.box_type == other.box_type && self.payload.eq_erased(other.payload.as_ref())
+        self.payload.eq_erased(other.payload.as_ref())
     }
 }
 
@@ -251,9 +275,12 @@ impl<Payload> From<Payload> for AnyBox
 where
     Payload: BoxFormat + Any + BoxEncode + fmt::Debug + Clone + PartialEq + Send + Sync,
 {
+    // Why not implement BoxFormat for AnyBox as well, and take encode and
+    // encoded_len from BoxEncode instead of writing them out: AnyBox meets
+    // every other bound of this impl, so BoxFormat is the one trait keeping it
+    // from overlapping the reflexive `impl<T> From<T> for T` of core.
     fn from(payload: Payload) -> Self {
         Self {
-            box_type: payload.box_type(),
             payload: Box::new(payload),
         }
     }
@@ -264,7 +291,7 @@ mod tests {
     use alloc::vec;
 
     use super::AnyBox;
-    use crate::codec::box_definition::BoxDefinition;
+    use crate::codec::box_definition::{BoxDefinition, BoxFormat};
     use crate::codec::box_encode::BoxEncode;
     use crate::codec::field::FieldWriter;
     use crate::error::Error;
@@ -285,6 +312,33 @@ mod tests {
 
         fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
             writer.write_bytes(&[self.0])
+        }
+    }
+
+    /// Box one class lays over two codes, standing in for a sample entry that
+    /// settles its type from its own fields
+    #[derive(Clone, PartialEq, Debug)]
+    struct CodingBox {
+        alternate: bool,
+    }
+
+    impl BoxFormat for CodingBox {
+        fn box_type(&self) -> BoxType {
+            if self.alternate {
+                BoxType::compact(*b"cod2")
+            } else {
+                BoxType::compact(*b"cod1")
+            }
+        }
+    }
+
+    impl BoxEncode for CodingBox {
+        fn payload_len(&self) -> u64 {
+            0
+        }
+
+        fn encode_fields(&self, _writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+            Ok(())
         }
     }
 
@@ -337,6 +391,17 @@ mod tests {
             AnyBox::from_raw_bytes(MarkerBox::BOX_TYPE, vec![7]).downcast_ref::<MarkerBox>(),
             None
         );
+    }
+
+    #[test]
+    fn a_box_type_the_payload_settles_follows_an_edit_through_the_downcast() {
+        let mut entry = AnyBox::from(CodingBox { alternate: false });
+        let mut written = [0; 8];
+
+        entry.downcast_mut::<CodingBox>().unwrap().alternate = true;
+        entry.encode(&mut written).unwrap();
+
+        assert_eq!(written, *b"\0\0\0\x08cod2");
     }
 
     #[test]
