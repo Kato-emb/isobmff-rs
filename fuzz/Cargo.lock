@@ -91,9 +91,18 @@ dependencies = [
  "isobmff",
  "isobmff-avc",
  "isobmff-core",
+ "isobmff-mp4",
  "isobmff-sequence",
  "isobmff-test-support",
  "libfuzzer-sys",
+]
+
+[[package]]
+name = "isobmff-mp4"
+version = "0.0.0"
+dependencies = [
+ "isobmff-boxes",
+ "isobmff-core",
 ]
 
 [[package]]

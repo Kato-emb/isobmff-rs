@@ -23,6 +23,9 @@ path = "../crates/isobmff-avc"
 [dependencies.isobmff-core]
 path = "../crates/isobmff-core"
 
+[dependencies.isobmff-mp4]
+path = "../crates/isobmff-mp4"
+
 [dependencies.isobmff-sequence]
 path = "../crates/isobmff-sequence"
 
@@ -45,6 +48,13 @@ bench = false
 [[bin]]
 name = "boxes"
 path = "fuzz_targets/boxes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mp4_audio_sample_entry"
+path = "fuzz_targets/mp4_audio_sample_entry.rs"
 test = false
 doc = false
 bench = false

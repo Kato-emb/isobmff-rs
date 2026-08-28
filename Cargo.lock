@@ -32,6 +32,14 @@ name = "isobmff-core"
 version = "0.0.0"
 
 [[package]]
+name = "isobmff-mp4"
+version = "0.0.0"
+dependencies = [
+ "isobmff-boxes",
+ "isobmff-core",
+]
+
+[[package]]
 name = "isobmff-sequence"
 version = "0.0.0"
 dependencies = [
