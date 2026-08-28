@@ -38,6 +38,12 @@
 //! the failures of this layer are [`SampleError`] and [`SampleErrorKind`], named
 //! apart at the source rather than shadowed here.
 //!
+//! The sample entries other specifications define over ISO/IEC 14496-12 sit in
+//! a module per specification — [`avc`] for ISO/IEC 14496-15, [`mp4`] for
+//! ISO/IEC 14496-14 — each behind the Cargo feature of the same name, on by
+//! default. A caller that wants the base specification alone turns the default
+//! features off.
+//!
 //! # `no_std`
 //!
 //! The crate is `no_std` but needs `alloc`: a sample owns the bytes it carries,
@@ -60,3 +66,20 @@ pub use writer::SampleWriter;
 
 pub use isobmff_boxes::*;
 pub use isobmff_core::*;
+
+// Why not `pub use isobmff_avc as avc`: rustdoc renders that as one line under
+// Re-exports, with no module page and no `isobmff::avc::…` items to search, and
+// a flat glob would let `isobmff_mp4::Error` collide with `Error` above.
+/// Sample entries of ISO/IEC 14496-15, the carriage of AVC video — the
+/// `isobmff-avc` crate whole, behind the `avc` feature
+#[cfg(feature = "avc")]
+pub mod avc {
+    pub use isobmff_avc::*;
+}
+
+/// Sample entries and descriptors of ISO/IEC 14496-14, the MP4 file format —
+/// the `isobmff-mp4` crate whole, behind the `mp4` feature
+#[cfg(feature = "mp4")]
+pub mod mp4 {
+    pub use isobmff_mp4::*;
+}

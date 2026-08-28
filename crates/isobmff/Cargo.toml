@@ -11,13 +11,25 @@ keywords.workspace = true
 categories.workspace = true
 exclude.workspace = true
 
+[features]
+default = ["avc", "mp4"]
+# `isobmff::avc`, ISO/IEC 14496-15.
+avc = ["dep:isobmff-avc"]
+# `isobmff::mp4`, ISO/IEC 14496-14.
+mp4 = ["dep:isobmff-mp4"]
+
 [dependencies]
+isobmff-avc = { workspace = true, optional = true }
 isobmff-boxes.workspace = true
 isobmff-core.workspace = true
+isobmff-mp4 = { workspace = true, optional = true }
 
 [dev-dependencies]
 isobmff-sequence.workspace = true
 isobmff-test-support.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
 
 [lints]
 workspace = true

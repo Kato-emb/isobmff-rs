@@ -41,8 +41,10 @@ jobs:
       # The alloc feature is on by default, so the run above never reaches the
       # alloc-free path. The no-std job does, but it cannot pass --all-targets —
       # a test binary needs std — so nothing else builds the tests and lints of
-      # the very configuration the feature exists for.
+      # the very configuration the feature exists for. The same holds for the
+      # codec features of isobmff, off by no other run.
       - run: cargo clippy -p isobmff-core --no-default-features --all-targets -- -D warnings
+      - run: cargo clippy -p isobmff --no-default-features --all-targets -- -D warnings
 
   test:
     strategy:

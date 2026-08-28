@@ -6,8 +6,10 @@ version = 4
 name = "isobmff"
 version = "0.0.0"
 dependencies = [
+ "isobmff-avc",
  "isobmff-boxes",
  "isobmff-core",
+ "isobmff-mp4",
  "isobmff-sequence",
  "isobmff-test-support",
 ]
