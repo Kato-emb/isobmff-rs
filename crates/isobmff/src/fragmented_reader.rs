@@ -435,3 +435,154 @@ fn decoded<Value: BoxDecode>(payload: &[u8], box_type: BoxType) -> Result<Value,
     Value::decode_payload(payload)
         .map_err(|failure| FileError::from(failure.in_container(box_type)))
 }
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    use isobmff_core::{BoxType, FourCC};
+    use isobmff_test_support::{file_type, fragmented_movie, movie_fragment, written};
+
+    use super::{
+        BoxDefinition, BoxHeader, FileError, FileTypeBox, FragmentedReader, MovieBox, SampleReader,
+    };
+    use crate::{FileErrorKind, TrackExtendsBox};
+
+    /// Movie of one track continued in fragments, whose defaults a `trex` states
+    fn movie() -> MovieBox {
+        fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0))
+    }
+
+    /// The bytes of a box laid out by hand: the header its type and payload need, then the payload
+    fn framed(box_type: [u8; 4], payload: &[u8]) -> Vec<u8> {
+        let header = BoxHeader::with_payload_len(
+            BoxType::compact(box_type),
+            u64::try_from(payload.len()).unwrap(),
+        )
+        .unwrap();
+        let mut buffer = [0; BoxHeader::MAX_ENCODED_LEN];
+        let mut bytes = Vec::from(header.encode(&mut buffer));
+
+        bytes.extend_from_slice(payload);
+
+        bytes
+    }
+
+    #[test]
+    fn a_fragment_arriving_before_any_movie_is_rejected() {
+        let file = [written(&file_type()), written(&movie_fragment())].concat();
+        let mut reader = FragmentedReader::new();
+
+        assert_eq!(
+            reader.handle_input(&file),
+            Err(FileError::missing_mandatory_box(MovieBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn a_second_movie_is_rejected() {
+        let file = [written(&movie()), written(&movie())].concat();
+        let mut reader = FragmentedReader::new();
+
+        assert_eq!(
+            reader.handle_input(&file),
+            Err(FileError::duplicate_box(MovieBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn a_second_declaration_of_the_brands_is_rejected() {
+        let file = [written(&file_type()), written(&file_type())].concat();
+        let mut reader = FragmentedReader::new();
+
+        assert_eq!(
+            reader.handle_input(&file),
+            Err(FileError::duplicate_box(FileTypeBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn a_file_declaring_no_brands_is_read_all_the_same() {
+        let file = [written(&movie()), written(&movie_fragment())].concat();
+        let mut reader = FragmentedReader::new();
+
+        reader.handle_input(&file).unwrap();
+        reader.finish().unwrap();
+
+        assert_eq!(reader.file_type(), None);
+        assert_eq!(reader.movie(), Some(&movie()));
+    }
+
+    #[test]
+    fn a_box_of_the_layout_declaring_a_payload_past_the_limit_is_rejected() {
+        let mut reader = FragmentedReader::with_limits(4, SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT);
+
+        assert_eq!(
+            reader
+                .handle_input(&written(&file_type()))
+                .map_err(FileError::kind),
+            Err(FileErrorKind::PayloadLimitExceeded)
+        );
+    }
+
+    #[test]
+    fn a_box_the_layout_passes_over_is_not_bounded_by_the_limit() {
+        let file = framed(*b"mdat", &[0x11; 64]);
+        let mut reader = FragmentedReader::with_limits(0, SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT);
+
+        reader.handle_input(&file).unwrap();
+
+        assert_eq!(reader.finish(), Ok(()));
+    }
+
+    #[test]
+    fn a_box_of_the_layout_declaring_no_total_is_passed_over() {
+        let mut file = vec![0x00, 0x00, 0x00, 0x00];
+        file.extend_from_slice(b"moovPAYLOAD");
+
+        let mut reader = FragmentedReader::new();
+
+        reader.handle_input(&file).unwrap();
+        reader.finish().unwrap();
+
+        assert_eq!(reader.movie(), None);
+    }
+
+    #[test]
+    fn a_box_of_the_layout_whose_payload_does_not_decode_names_that_box() {
+        let mut reader = FragmentedReader::new();
+        let failure = reader.handle_input(&framed(*b"moov", b"AAAA"));
+
+        assert_eq!(
+            failure.map_err(|reported| reported
+                .box_error()
+                .map(|box_error| box_error.containers().collect::<Vec<_>>())),
+            Err(Some(vec![FourCC::new(*b"moov")]))
+        );
+    }
+
+    #[test]
+    fn a_failed_reader_reports_the_same_failure_for_every_call_after_it() {
+        let mut reader = FragmentedReader::new();
+        let failure = FileError::duplicate_box(FileTypeBox::BOX_TYPE);
+        let file = [written(&file_type()), written(&file_type())].concat();
+
+        assert_eq!(reader.handle_input(&file), Err(failure));
+        assert_eq!(reader.handle_input(&written(&movie())), Err(failure));
+        assert_eq!(reader.finish(), Err(failure));
+    }
+
+    #[test]
+    fn input_handed_over_after_finishing_is_rejected() {
+        let mut reader = FragmentedReader::new();
+
+        reader.finish().unwrap();
+
+        assert_eq!(
+            reader.handle_input(&written(&file_type())),
+            Err(FileError::already_finished())
+        );
+        assert_eq!(reader.finish(), Err(FileError::already_finished()));
+    }
+}

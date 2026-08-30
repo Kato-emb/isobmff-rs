@@ -383,3 +383,125 @@ impl Default for FragmentedWriter {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use isobmff_test_support::{file_type, fragmented_movie};
+
+    use super::{BoxDefinition, FileError, FileTypeBox, FragmentedWriter, MovieBox};
+    use crate::{Sample, TrackExtendsBox};
+
+    /// Movie of one track continued in fragments, whose defaults a `trex` states
+    fn movie() -> MovieBox {
+        fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0))
+    }
+
+    /// A sample of the track the movie declares
+    fn sample() -> Sample {
+        Sample::new(1, 0, 1_024, None, 0, 1, b"SAMP".to_vec())
+    }
+
+    #[test]
+    fn a_movie_handed_over_before_the_brands_is_rejected() {
+        let mut writer = FragmentedWriter::new();
+
+        assert_eq!(
+            writer.handle_movie(movie()),
+            Err(FileError::box_not_handed_over(FileTypeBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn a_second_declaration_of_the_brands_is_rejected() {
+        let mut writer = FragmentedWriter::new();
+
+        writer.handle_file_type(file_type()).unwrap();
+
+        assert_eq!(
+            writer.handle_file_type(file_type()),
+            Err(FileError::box_handed_over_twice(FileTypeBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn a_second_movie_is_rejected() {
+        let mut writer = FragmentedWriter::new();
+
+        writer.handle_file_type(file_type()).unwrap();
+        writer.handle_movie(movie()).unwrap();
+
+        assert_eq!(
+            writer.handle_movie(movie()),
+            Err(FileError::box_handed_over_twice(MovieBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn a_fragment_opened_before_the_movie_is_rejected() {
+        let mut writer = FragmentedWriter::new();
+
+        writer.handle_file_type(file_type()).unwrap();
+
+        assert_eq!(
+            writer.begin_fragment(1),
+            Err(FileError::box_not_handed_over(MovieBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn a_sample_handed_over_before_the_brands_is_rejected() {
+        let mut writer = FragmentedWriter::new();
+
+        assert_eq!(
+            writer.handle_sample(sample()),
+            Err(FileError::box_not_handed_over(FileTypeBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn a_file_declared_over_without_the_boxes_its_layout_requires_is_rejected() {
+        let mut writer = FragmentedWriter::new();
+
+        assert_eq!(
+            writer.finish(),
+            Err(FileError::box_not_handed_over(FileTypeBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn a_failed_writer_reports_the_same_failure_for_every_call_after_it() {
+        let mut writer = FragmentedWriter::new();
+        let failure = FileError::box_not_handed_over(FileTypeBox::BOX_TYPE);
+
+        assert_eq!(writer.handle_movie(movie()), Err(failure));
+        assert_eq!(writer.handle_file_type(file_type()), Err(failure));
+        assert_eq!(writer.finish(), Err(failure));
+    }
+
+    #[test]
+    fn a_failed_writer_hands_over_the_bytes_it_had_already_laid_down() {
+        let mut writer = FragmentedWriter::new();
+        let mut buffer = [0; 8];
+
+        writer.handle_file_type(file_type()).unwrap();
+
+        assert!(writer.handle_file_type(file_type()).is_err());
+        assert_eq!(writer.poll_output(&mut buffer), 8);
+        assert_eq!(&buffer[4..], b"ftyp");
+    }
+
+    #[test]
+    fn anything_handed_over_after_finishing_is_rejected() {
+        let mut writer = FragmentedWriter::new();
+
+        writer.handle_file_type(file_type()).unwrap();
+        writer.handle_movie(movie()).unwrap();
+        writer.finish().unwrap();
+
+        assert_eq!(
+            writer.handle_sample(sample()),
+            Err(FileError::already_finished())
+        );
+        assert_eq!(writer.finish(), Err(FileError::already_finished()));
+    }
+}
