@@ -151,11 +151,9 @@ impl BoxReader {
     /// [`poll_event`](Self::poll_event); empty input completes nothing and
     /// leaves the reader where it was.
     ///
-    /// How the caller cuts the file is its own to choose, and around a megabyte
-    /// at a time reads about twice as fast as handing the whole file over at
-    /// once: a payload is passed on as the input cut it, so one long chunk is
-    /// one long allocation, and a chunk far shorter than that pays for a box
-    /// event per few kilobytes instead.
+    /// How the caller cuts the file is its own to choose. Around a megabyte at
+    /// a time is what reads fastest; handing the whole file over at once is the
+    /// slowest way to offer it.
     ///
     /// # Errors
     ///
