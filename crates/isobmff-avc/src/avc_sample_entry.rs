@@ -103,11 +103,11 @@ pub struct AVCSampleEntry<Name: AVCCodingName> {
     _marker: PhantomData<Name>,
 }
 
-/// [`AVCSampleEntry`] named by [`Avc1`]
+/// [`AVCSampleEntry`] named by [`Avc1`], ISO/IEC 14496-15 §5.4.2
 #[doc(alias = "avc1")]
 pub type Avc1SampleEntry = AVCSampleEntry<Avc1>;
 
-/// [`AVCSampleEntry`] named by [`Avc3`]
+/// [`AVCSampleEntry`] named by [`Avc3`], ISO/IEC 14496-15 §5.4.2
 #[doc(alias = "avc3")]
 pub type Avc3SampleEntry = AVCSampleEntry<Avc3>;
 
