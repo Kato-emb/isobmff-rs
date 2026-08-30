@@ -10,11 +10,10 @@
 //! 3. the reader reads the file back rather than rejecting it
 //! 4. what it reads back is the events the file was written from
 //!
-//! Property 4 is the round trip fixed where the input itself cannot fix it: the
-//! bytes handed to the reader are not the bytes that come back out — a box read
-//! into a value is written behind the header its value settles rather than the
-//! one it arrived behind — so it is the second reading that the first is held
-//! against, not the input.
+//! Property 4 is the round trip fixed where the input itself cannot fix it: an
+//! input cut short leaves a box open, which the writer never lays down, so the
+//! file is what the whole boxes make of it rather than the input — and it is the
+//! second reading that the first is held against, not the bytes handed over.
 
 #![no_main]
 
@@ -111,7 +110,7 @@ fn events_of<'input>(arriving: impl IntoIterator<Item = &'input [u8]>) -> Readin
 fn drain(reader: &mut BoxReader, events: &mut Vec<BoxEvent>) {
     while let Some(polled) = reader.poll_event() {
         match (events.last_mut(), polled) {
-            (Some(BoxEvent::RawPayload(fused)), BoxEvent::RawPayload(part)) => {
+            (Some(BoxEvent::Payload(fused)), BoxEvent::Payload(part)) => {
                 fused.extend_from_slice(&part);
             }
             (_not_two_payload_parts, event) => events.push(event),
@@ -127,7 +126,7 @@ fn drain(reader: &mut BoxReader, events: &mut Vec<BoxEvent>) {
 fn whole_boxes(mut events: Vec<BoxEvent>) -> Vec<BoxEvent> {
     while matches!(
         events.last(),
-        Some(BoxEvent::RawStart(..) | BoxEvent::RawPayload(..))
+        Some(BoxEvent::Header(..) | BoxEvent::Payload(..))
     ) {
         events.pop();
     }

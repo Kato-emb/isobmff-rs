@@ -1,4 +1,4 @@
-//! The samples a writer laid out as fragments, read back off the file they make
+//! The samples a writer laid down as a fragmented file, read back off that file
 
 // Why not inside `mod tests`: an inline `mod` adds its own name as a directory
 // segment, so a nested one looks for `tests/tests/helpers/reading.rs`. The
@@ -11,11 +11,10 @@ mod reading;
 mod tests {
     use super::reading::samples_of;
     use isobmff::{
-        BoxDefinition, BoxHeader, MediaDataBox, MovieBox, MovieExtendsBox, MovieHeaderBox,
-        Mp4EpochSeconds, Sample, SampleWriter, TrackExtendsBox,
+        FragmentedWriter, MovieBox, MovieExtendsBox, MovieHeaderBox, Mp4EpochSeconds, Sample,
+        TrackExtendsBox,
     };
-    use isobmff_sequence::BoxEvent;
-    use isobmff_test_support::{bytes_of, file_type, track};
+    use isobmff_test_support::{file_type, track};
 
     /// Ticks a second the media of the movie is timed in
     const TIMESCALE: u32 = 90_000;
@@ -74,8 +73,12 @@ mod tests {
 
     /// The file the samples make: the brands, the movie, then fragment after fragment
     fn written_file(fragments: Vec<Vec<Sample>>) -> Vec<u8> {
-        let mut writer = SampleWriter::new();
-        let mut events = vec![BoxEvent::FileType(file_type()), BoxEvent::Movie(movie())];
+        let mut writer = FragmentedWriter::new();
+        let mut file = Vec::new();
+        let mut buffer = [0; 64];
+
+        writer.handle_file_type(file_type()).unwrap();
+        writer.handle_movie(movie()).unwrap();
 
         for (position, samples) in fragments.into_iter().enumerate() {
             let sequence_number = u32::try_from(position).unwrap().saturating_add(1);
@@ -85,21 +88,17 @@ mod tests {
                 writer.handle_sample(sample).unwrap();
             }
             writer.finish_fragment().unwrap();
-
-            while let Some((movie_fragment, media_data)) = writer.poll_fragment() {
-                let payload_len = u64::try_from(media_data.data().len()).unwrap();
-                let header =
-                    BoxHeader::with_payload_len(MediaDataBox::BOX_TYPE, payload_len).unwrap();
-
-                events.push(BoxEvent::MovieFragment(movie_fragment));
-                events.push(BoxEvent::RawStart(header));
-                events.push(BoxEvent::RawPayload(media_data.into_data()));
-                events.push(BoxEvent::RawEnd);
-            }
         }
         writer.finish().unwrap();
 
-        bytes_of(events, 64).unwrap()
+        loop {
+            let written = writer.poll_output(&mut buffer);
+
+            match buffer.get(..written) {
+                Some([]) | None => return file,
+                Some(bytes) => file.extend_from_slice(bytes),
+            }
+        }
     }
 
     /// The samples of `track_id`, in the order they lie in `samples`
