@@ -98,8 +98,6 @@ impl AVCCodingName for Avc3 {
 ///     .unwrap();
 /// assert_eq!(found, &entry);
 /// ```
-#[doc(alias = "avc1")]
-#[doc(alias = "avc3")]
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Debug)]
 pub struct AVCSampleEntry<Name: AVCCodingName> {
@@ -107,8 +105,16 @@ pub struct AVCSampleEntry<Name: AVCCodingName> {
     config: AVCConfigurationBox,
     bit_rate: Option<BitRateBox>,
     other_boxes: OtherBoxes,
-    coding_name: PhantomData<Name>,
+    _marker: PhantomData<Name>,
 }
+
+/// AVC sample entry named `avc1`, its parameter sets in the entry alone
+#[doc(alias = "avc1")]
+pub type Avc1SampleEntry = AVCSampleEntry<Avc1>;
+
+/// AVC sample entry named `avc3`, its parameter sets in the entry or the samples
+#[doc(alias = "avc3")]
+pub type Avc3SampleEntry = AVCSampleEntry<Avc3>;
 
 impl<Name: AVCCodingName> AVCSampleEntry<Name> {
     /// Creates the entry from the visual fields, the configuration, and the bit
@@ -124,7 +130,7 @@ impl<Name: AVCCodingName> AVCSampleEntry<Name> {
             config,
             bit_rate,
             other_boxes: OtherBoxes::new(),
-            coding_name: PhantomData,
+            _marker: PhantomData,
         }
     }
 
@@ -191,7 +197,7 @@ impl<Name: AVCCodingName> BoxDecode for AVCSampleEntry<Name> {
             config: configuration_boxes.exactly_one()?,
             bit_rate: bit_rate_boxes.zero_or_one()?,
             other_boxes,
-            coding_name: PhantomData,
+            _marker: PhantomData,
         })
     }
 }
