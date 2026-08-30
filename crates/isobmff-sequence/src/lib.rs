@@ -4,10 +4,11 @@
 //! 14496-12 §4.2. [`BoxReader`] takes that sequence as it arrives, cut anywhere,
 //! and reports it as [`BoxEvent`]s, each owning the bytes it carries.
 //! [`BoxWriter`] is the mirror of it: handed those events, it lays the sequence
-//! back down as bytes. The boxes a file is framed by are read into values, and
-//! every other box is carried as it lies. Neither reaches for a source or a
-//! destination: input is handed over and output is taken, leaving when and from
-//! where to read, and where to write, to the caller.
+//! back down as bytes. Every box is carried as it lies: this crate frames a file
+//! and reads no box into a value, so which boxes matter and what their payloads
+//! mean stay with the caller. Neither reaches for a source or a destination:
+//! input is handed over and output is taken, leaving when and from where to
+//! read, and where to write, to the caller.
 //!
 //! An event says what the file holds and not where it holds it. Where it lies is
 //! the extent each of the two names for the event it last handled —

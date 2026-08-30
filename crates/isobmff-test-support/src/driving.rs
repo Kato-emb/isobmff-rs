@@ -49,8 +49,8 @@ pub fn payloads_fused(events: Vec<(Range<u64>, BoxEvent)>) -> Vec<(Range<u64>, B
     for step in events {
         match (fused.last_mut(), step) {
             (
-                Some((gathered_extent, BoxEvent::RawPayload(gathered))),
-                (extent, BoxEvent::RawPayload(bytes)),
+                Some((gathered_extent, BoxEvent::Payload(gathered))),
+                (extent, BoxEvent::Payload(bytes)),
             ) => {
                 gathered_extent.end = extent.end;
                 gathered.extend_from_slice(&bytes);

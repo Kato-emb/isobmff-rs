@@ -5,14 +5,13 @@ mod tests {
     use isobmff_sequence::BoxEvent;
 
     use isobmff_test_support::{
-        bytes_of, events_of, file_passed_on, file_type, fragmented_file, movie_fragment,
-        segment_file, unfragmented_movie, written,
+        bytes_of, events_of, file_passed_on, fragmented_file, segment_file,
     };
 
     /// Every synthetic file the round trip is fixed for
     ///
-    /// Between them they carry every box read into a value, a box passed on as it
-    /// lies under each of the two box types, and a box running to the end of the file
+    /// Between them they carry a box under each of the two box types, a container
+    /// carried as it lies, and a box running to the end of the file
     fn every_file() -> Vec<Vec<u8>> {
         vec![fragmented_file(), segment_file(), file_passed_on()]
     }
@@ -52,29 +51,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn a_file_written_back_without_the_boxes_passed_on_holds_the_values_that_are_left() {
-        let file = fragmented_file();
-        let values_only = events_to_write(&file, file.len())
-            .into_iter()
-            .filter(|event| {
-                !matches!(
-                    *event,
-                    BoxEvent::RawStart(..) | BoxEvent::RawPayload(..) | BoxEvent::RawEnd
-                )
-            })
-            .collect();
-
-        assert_eq!(
-            bytes_of(values_only, file.len()).unwrap(),
-            [
-                written(&file_type()),
-                written(&unfragmented_movie()),
-                written(&movie_fragment()),
-            ]
-            .concat()
-        );
     }
 }

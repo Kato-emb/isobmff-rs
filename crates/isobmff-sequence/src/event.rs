@@ -2,22 +2,21 @@
 
 use alloc::vec::Vec;
 
-use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox, SegmentTypeBox};
-use isobmff_core::{BoxDecode, BoxDefinition, BoxHeader, BoxType, Error};
+use isobmff_core::BoxHeader;
 
-/// Step of the sequence of boxes, owning the box or the bytes it carries
+/// Step of the sequence of boxes, owning the bytes it carries
 ///
-/// A box read into a value is one step, once the box is whole: `ftyp`, `styp`,
-/// `moov`, and `moof`. Every other box is [`RawStart`](Self::RawStart), then as
-/// many [`RawPayload`](Self::RawPayload) steps as its payload was cut into, then
-/// [`RawEnd`](Self::RawEnd). A container among them is one box like any other:
-/// its payload is carried whole rather than descended into.
+/// A box is one [`Header`](Self::Header), then as many
+/// [`Payload`](Self::Payload) steps as its payload was cut into, then
+/// [`End`](Self::End). A container is one box like any other: its payload is
+/// carried as it lies rather than descended into, and so is the payload of a
+/// box a specification reads into a value.
 ///
-/// The bytes one step is made of: the whole box for a value, the header alone
-/// for a [`RawStart`](Self::RawStart), that part of the payload for a
-/// [`RawPayload`](Self::RawPayload), and none at all for a
-/// [`RawEnd`](Self::RawEnd), which stands where the box ended. The steps of a
-/// file lie end to end, so together they measure it.
+/// The bytes one step is made of: the header alone for a
+/// [`Header`](Self::Header), that part of the payload for a
+/// [`Payload`](Self::Payload), and none at all for an [`End`](Self::End), which
+/// stands where the box ended. The steps of a file lie end to end, so together
+/// they measure it.
 ///
 /// A step says what the file holds and not where it holds it, so the same step
 /// is what [`BoxReader`](crate::BoxReader) reports and what
@@ -28,67 +27,10 @@ use isobmff_core::{BoxDecode, BoxDefinition, BoxHeader, BoxType, Error};
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Debug)]
 pub enum BoxEvent {
-    /// Brands a file declares itself readable as
-    FileType(FileTypeBox),
-    /// Brands a segment declares itself readable as
-    SegmentType(SegmentTypeBox),
-    /// Metadata of the presentation a file holds
-    Movie(MovieBox),
-    /// Metadata of one fragment of a presentation
-    MovieFragment(MovieFragmentBox),
-    /// Header of a box carried as it lies, whole
-    RawStart(BoxHeader),
+    /// Header of the box that started
+    Header(BoxHeader),
     /// Part of the payload of the box that started, as it lay in the input
-    RawPayload(Vec<u8>),
+    Payload(Vec<u8>),
     /// End of the box that started, its declared total reached
-    RawEnd,
-}
-
-/// Box the reader reads into a value rather than passing on as it lies
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum ValueBox {
-    /// [`FileTypeBox`] (`ftyp`)
-    FileType,
-    /// [`SegmentTypeBox`] (`styp`)
-    SegmentType,
-    /// [`MovieBox`] (`moov`)
-    Movie,
-    /// [`MovieFragmentBox`] (`moof`)
-    MovieFragment,
-}
-
-impl ValueBox {
-    /// Returns the box `box_type` names, when it is one that reads into a value
-    pub(crate) fn of(box_type: BoxType) -> Option<Self> {
-        if box_type == FileTypeBox::BOX_TYPE {
-            Some(Self::FileType)
-        } else if box_type == SegmentTypeBox::BOX_TYPE {
-            Some(Self::SegmentType)
-        } else if box_type == MovieBox::BOX_TYPE {
-            Some(Self::Movie)
-        } else if box_type == MovieFragmentBox::BOX_TYPE {
-            Some(Self::MovieFragment)
-        } else {
-            None
-        }
-    }
-
-    /// Reads the payload of the box, whole, into the event that carries it
-    ///
-    /// # Errors
-    ///
-    /// The failure [`BoxDecode::decode_payload`] reports for the box `self`
-    /// names.
-    pub(crate) fn read(self, payload: &[u8]) -> Result<BoxEvent, Error> {
-        match self {
-            Self::FileType => Ok(BoxEvent::FileType(FileTypeBox::decode_payload(payload)?)),
-            Self::SegmentType => Ok(BoxEvent::SegmentType(SegmentTypeBox::decode_payload(
-                payload,
-            )?)),
-            Self::Movie => Ok(BoxEvent::Movie(MovieBox::decode_payload(payload)?)),
-            Self::MovieFragment => Ok(BoxEvent::MovieFragment(MovieFragmentBox::decode_payload(
-                payload,
-            )?)),
-        }
-    }
+    End,
 }

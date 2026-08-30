@@ -14,9 +14,9 @@ mod tests {
         let mut reported: Vec<(BoxHeader, Vec<u8>)> = Vec::new();
 
         for (_extent, event) in events {
-            if let BoxEvent::RawStart(header) = *event {
+            if let BoxEvent::Header(header) = *event {
                 reported.push((header, Vec::new()));
-            } else if let BoxEvent::RawPayload(ref bytes) = *event {
+            } else if let BoxEvent::Payload(ref bytes) = *event {
                 if let Some((_header, payload)) = reported.last_mut() {
                     payload.extend_from_slice(bytes);
                 }
@@ -31,7 +31,7 @@ mod tests {
         let mut offsets = Vec::new();
 
         for (extent, event) in events {
-            if let BoxEvent::RawStart(_header) = *event {
+            if let BoxEvent::Header(_header) = *event {
                 offsets.push(extent.start);
             }
         }

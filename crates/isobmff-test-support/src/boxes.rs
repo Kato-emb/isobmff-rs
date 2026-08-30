@@ -184,9 +184,6 @@ pub fn segment_file() -> Vec<u8> {
 
 /// A synthetic file of boxes passed on as they lie, its last box running to the end of it
 pub fn file_passed_on() -> Vec<u8> {
-    // Why hold no box the reader reads into a value: such a box is reported as
-    // that value and never as the bytes it was read from, which is what this file
-    // fixes. `isobmff-sequence/tests/value_boxes.rs` covers those.
     let unbounded = BoxHeader::new(BoxType::compact(*b"mdat"), BoxSize::ToEndOfFile).unwrap();
     let mut file = framed(BoxType::compact(*b"free"), b"");
 
