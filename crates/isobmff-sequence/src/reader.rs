@@ -4,43 +4,10 @@ use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use isobmff_core::{BoxHeader, CompactType, FourCC};
+use isobmff_core::{BoxHeader, ErrorKind as BoxErrorKind};
 
 use crate::error::Error;
 use crate::event::BoxEvent;
-
-/// Shortest header a box can carry: the `size` and `type` fields alone
-const MIN_HEADER_LEN: usize = 8;
-
-/// Total a `size` field declares when the real total is in the `largesize` field
-const EXTENDED_SIZE_MARKER: u32 = 1;
-
-/// Returns the length of the header that starts with the given bytes
-///
-/// The `size` and `type` fields settle whether a `largesize` and a `usertype`
-/// follow, so the bytes they occupy name the length of the whole header: 8, 16,
-/// 24, or 32. They name that length and nothing more — whether the bytes it
-/// spans are a header at all is settled by [`BoxHeader::decode`].
-const fn header_len_from_prefix(prefix: &[u8; MIN_HEADER_LEN]) -> usize {
-    let [
-        size_first,
-        size_second,
-        size_third,
-        size_fourth,
-        type_field @ ..,
-    ] = *prefix;
-
-    let declared = u32::from_be_bytes([size_first, size_second, size_third, size_fourth]);
-    let has_large_size = declared == EXTENDED_SIZE_MARKER;
-    let has_user_type = CompactType::new(FourCC::new(type_field)).is_none();
-
-    match (has_large_size, has_user_type) {
-        (false, false) => 8,
-        (true, false) => 16,
-        (false, true) => 24,
-        (true, true) => 32,
-    }
-}
 
 /// Takes off `input` the payload bytes the box that started has still to come
 ///
@@ -167,7 +134,10 @@ impl BoxReader {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            state: State::Header(PartialHeader::new()),
+            state: State::Header {
+                bytes: [0; BoxHeader::MAX_ENCODED_LEN],
+                filled: 0,
+            },
             events: VecDeque::new(),
             event_extent: None,
             position: 0,
@@ -180,6 +150,12 @@ impl BoxReader {
     /// The input is taken whole. What it completed is then taken from
     /// [`poll_event`](Self::poll_event); empty input completes nothing and
     /// leaves the reader where it was.
+    ///
+    /// How the caller cuts the file is its own to choose, and around a megabyte
+    /// at a time reads about twice as fast as handing the whole file over at
+    /// once: a payload is passed on as the input cut it, so one long chunk is
+    /// one long allocation, and a chunk far shorter than that pays for a box
+    /// event per few kilobytes instead.
     ///
     /// # Errors
     ///
@@ -196,23 +172,46 @@ impl BoxReader {
             match self.state {
                 State::Failed(failure) => return Err(failure),
                 State::Finished => return Err(Error::already_finished()),
-                State::Header(mut partial) => {
-                    let available = unread.len();
-                    let gathered = partial.take_from(&mut unread);
-                    // Why count here rather than under the event: a header the
-                    // input cut across takes bytes off every part of it while
-                    // completing no event, so counting only what an event took
-                    // would leave the offset short by the head of that header.
-                    self.advance(available.saturating_sub(unread.len()));
+                State::Header {
+                    mut bytes,
+                    mut filled,
+                } => {
+                    let header = loop {
+                        let reached = match BoxHeader::decode(bytes.get(..filled).unwrap_or(&[])) {
+                            Ok((header, _nothing_beyond)) => break header,
+                            Err(error) if error.kind() == BoxErrorKind::TruncatedHeader => error
+                                .needed_bytes()
+                                .and_then(|needed| usize::try_from(needed).ok())
+                                .unwrap_or(BoxHeader::MAX_ENCODED_LEN),
+                            Err(error) => return Err(self.fail(error.into())),
+                        };
+                        let wanted = reached.saturating_sub(filled).min(unread.len());
+                        let end = filled.saturating_add(wanted);
+                        // Why not unreachable: `reached` is a header length and
+                        // the buffer is the longest header a box can carry, and
+                        // the fallback is a degenerate value in place of a panic
+                        // the lints forbid.
+                        let Some(slot) = bytes.get_mut(filled..end) else {
+                            return Ok(());
+                        };
+                        let (taken, rest) = unread.split_at(wanted);
 
-                    let header = match gathered {
-                        Ok(Some(header)) => header,
-                        Ok(None) => {
-                            self.state = State::Header(partial);
+                        slot.copy_from_slice(taken);
+                        unread = rest;
+                        filled = end;
+                        // Why count here rather than under the event: a header
+                        // the input cut across takes bytes off every part of it
+                        // while completing no event, so counting only what an
+                        // event took would leave the offset short by the head of
+                        // that header.
+                        self.advance(wanted);
+
+                        if filled < reached {
+                            self.state = State::Header { bytes, filled };
                             return Ok(());
                         }
-                        Err(error) => return Err(self.fail(error.into())),
                     };
+
                     self.state = State::Payload {
                         header,
                         remaining: header.payload_len(),
@@ -221,7 +220,10 @@ impl BoxReader {
                 }
                 State::Payload { header, remaining } => {
                     if remaining == Some(0) {
-                        self.state = State::Header(PartialHeader::new());
+                        self.state = State::Header {
+                            bytes: [0; BoxHeader::MAX_ENCODED_LEN],
+                            filled: 0,
+                        };
                         self.push_event(BoxEvent::End);
                         continue;
                     }
@@ -301,14 +303,18 @@ impl BoxReader {
         match self.state {
             State::Failed(failure) => Err(failure),
             State::Finished => Err(Error::already_finished()),
-            State::Header(partial) if partial.filled == 0 => {
+            State::Header { filled: 0, .. } => {
                 self.state = State::Finished;
                 Ok(())
             }
-            State::Header(partial) => Err(self.fail(Error::unfinished_header(
-                partial.needed as u64,
-                partial.filled as u64,
-            ))),
+            State::Header { bytes, filled } => {
+                let reached = BoxHeader::decode(bytes.get(..filled).unwrap_or(&[]))
+                    .err()
+                    .and_then(|error| error.needed_bytes())
+                    .unwrap_or(BoxHeader::MAX_ENCODED_LEN as u64);
+
+                Err(self.fail(Error::unfinished_header(reached, filled as u64)))
+            }
             State::Payload { header, remaining } => {
                 let unfinished = remaining
                     .filter(|remaining| *remaining != 0)
@@ -363,8 +369,12 @@ impl Default for BoxReader {
 /// Where the reader stands between calls
 #[derive(Clone, Debug)]
 enum State {
-    /// Gathering the header of the box that starts next
-    Header(PartialHeader),
+    /// Gathering the header of the box that starts next, `filled` bytes of it
+    /// in `bytes` — the longest header a box can carry, so any form fits whole
+    Header {
+        bytes: [u8; BoxHeader::MAX_ENCODED_LEN],
+        filled: usize,
+    },
     /// Passing on the payload of the box that started, with `remaining` bytes
     /// of it still to come — `None` while the box declares no total
     Payload {
@@ -377,72 +387,6 @@ enum State {
     Failed(Error),
 }
 
-/// Header bytes gathered so far, for a header the input cut across
-///
-/// `needed` is the length the header reaches: the shortest header until the
-/// bytes gathered name the true one, and never past the longest a box can carry.
-#[derive(Clone, Copy, Debug)]
-struct PartialHeader {
-    bytes: [u8; BoxHeader::MAX_ENCODED_LEN],
-    filled: usize,
-    needed: usize,
-}
-
-impl PartialHeader {
-    const fn new() -> Self {
-        Self {
-            bytes: [0; BoxHeader::MAX_ENCODED_LEN],
-            filled: 0,
-            needed: MIN_HEADER_LEN,
-        }
-    }
-
-    /// Takes header bytes off `input`, and decodes the header once it is whole
-    ///
-    /// Returns `Ok(None)` when `input` runs out first, having taken what it
-    /// offered.
-    fn take_from(&mut self, input: &mut &[u8]) -> Result<Option<BoxHeader>, isobmff_core::Error> {
-        self.gather(input);
-        if self.filled < MIN_HEADER_LEN {
-            return Ok(None);
-        }
-        // Why not unreachable: the buffer is the longest header a box can carry,
-        // so a prefix of the shortest always splits off, and the fallback is a
-        // degenerate value in place of a panic the lints forbid.
-        let Some(prefix) = self.bytes.first_chunk() else {
-            return Ok(None);
-        };
-
-        self.needed = header_len_from_prefix(prefix);
-        self.gather(input);
-        if self.filled < self.needed {
-            return Ok(None);
-        }
-        // Why not unreachable: `gather` takes no more than `needed`, which is a
-        // header length and so never past the buffer, for the same reason.
-        let Some(gathered) = self.bytes.get(..self.filled) else {
-            return Ok(None);
-        };
-
-        BoxHeader::decode(gathered).map(|(header, _nothing_beyond)| Some(header))
-    }
-
-    /// Takes off `input` as many bytes as the length being reached for is short
-    fn gather(&mut self, input: &mut &[u8]) {
-        let wanted = self.needed.saturating_sub(self.filled).min(input.len());
-        let filled = self.filled.saturating_add(wanted);
-
-        let Some(slot) = self.bytes.get_mut(self.filled..filled) else {
-            return;
-        };
-        let (taken, rest) = input.split_at(wanted);
-
-        slot.copy_from_slice(taken);
-        self.filled = filled;
-        *input = rest;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use alloc::vec;
@@ -450,7 +394,7 @@ mod tests {
 
     use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize, ExtendedSize, Uuid};
 
-    use super::{BoxEvent, BoxReader, Error, Range, header_len_from_prefix};
+    use super::{BoxEvent, BoxReader, Error, Range};
 
     /// Every form a header takes: the two size fields against the two box types
     const EVERY_HEADER_FORM: [&[u8]; 6] = [
@@ -541,16 +485,24 @@ mod tests {
     }
 
     #[test]
-    fn the_length_a_prefix_names_is_the_bytes_the_header_decodes_from() {
+    fn a_header_of_any_form_is_read_however_the_input_was_cut() {
         for encoded in EVERY_HEADER_FORM {
-            let (_header, after_header) = BoxHeader::decode(encoded).unwrap();
-            let prefix = encoded.first_chunk().unwrap();
+            let (header, _nothing_beyond) = BoxHeader::decode(encoded).unwrap();
 
-            assert_eq!(
-                header_len_from_prefix(prefix),
-                encoded.len().checked_sub(after_header.len()).unwrap(),
-                "{encoded:02x?}"
-            );
+            for cut_length in 1..=encoded.len() {
+                let mut reader = BoxReader::new();
+
+                for arriving in encoded.chunks(cut_length) {
+                    reader.handle_input(arriving).unwrap();
+                }
+
+                assert_eq!(
+                    reader.poll_event(),
+                    Some(BoxEvent::Header(header)),
+                    "{encoded:02x?} cut every {cut_length}"
+                );
+                assert_eq!(reader.event_extent(), Some(0..encoded.len() as u64));
+            }
         }
     }
 
