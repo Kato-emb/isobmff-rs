@@ -300,3 +300,446 @@ fn settle_run(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use isobmff_boxes::{
+        MovieFragmentBox, MovieFragmentHeaderBox, TrackExtendsBox,
+        TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox, TrackRunBox,
+        TrackRunSample,
+    };
+    use isobmff_core::FullBoxFlags;
+
+    use crate::error::SampleError;
+    use crate::reader::SampleReader;
+    use crate::reader::tests::{
+        MOVIE_FRAGMENT_LEN, drained, movie, movie_fragment, movie_of_one_track_id_twice,
+        one_sample_movie_fragment, one_track_movie, read_one_fragment, run, sample, track_fragment,
+        track_fragment_header, two_track_movie,
+    };
+    use crate::sample::Sample;
+
+    #[test]
+    fn a_sample_takes_what_its_row_states_over_the_defaults_of_the_fragment_and_the_track() {
+        let rows =
+            vec![TrackRunSample::new(Some(512), Some(2), Some(0x0100_0000), Some(-8)).unwrap()];
+        let track_fragment = TrackFragmentBox::new(
+            track_fragment_header(
+                TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                1,
+                None,
+                Some(256),
+                Some(8),
+            ),
+            None,
+            vec![TrackRunBox::new(Some(100), None, rows).unwrap()],
+        )
+        .unwrap();
+
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+        reader
+            .handle_movie_fragment(movie_fragment(vec![track_fragment]), 0..MOVIE_FRAGMENT_LEN)
+            .unwrap();
+        reader.handle_media_data(b"AB", 100..102).unwrap();
+
+        assert_eq!(
+            drained(&mut reader),
+            [Sample::new(
+                1,
+                0,
+                512,
+                Some(-8),
+                0x0100_0000,
+                1,
+                b"AB".to_vec()
+            )]
+        );
+    }
+
+    #[test]
+    fn a_sample_takes_what_its_fragment_states_over_the_defaults_of_its_track() {
+        let track_fragment = TrackFragmentBox::new(
+            track_fragment_header(
+                TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                1,
+                None,
+                Some(256),
+                Some(2),
+            ),
+            None,
+            vec![run(Some(100), 2)],
+        )
+        .unwrap();
+
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+        reader
+            .handle_movie_fragment(movie_fragment(vec![track_fragment]), 0..MOVIE_FRAGMENT_LEN)
+            .unwrap();
+        reader.handle_media_data(b"ABCD", 100..104).unwrap();
+
+        assert_eq!(
+            drained(&mut reader),
+            [
+                Sample::new(1, 0, 256, None, 0, 1, b"AB".to_vec()),
+                Sample::new(1, 256, 256, None, 0, 1, b"CD".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_flags_of_the_first_sample_of_a_run_stand_in_for_the_defaults() {
+        let rows = vec![
+            TrackRunSample::new(None, None, None, None).unwrap(),
+            TrackRunSample::new(None, None, None, None).unwrap(),
+        ];
+        let track_fragment = TrackFragmentBox::new(
+            track_fragment_header(
+                TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                1,
+                None,
+                None,
+                None,
+            ),
+            None,
+            vec![TrackRunBox::new(Some(100), Some(0x0200_0000), rows).unwrap()],
+        )
+        .unwrap();
+
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+        reader
+            .handle_movie_fragment(movie_fragment(vec![track_fragment]), 0..MOVIE_FRAGMENT_LEN)
+            .unwrap();
+        reader.handle_media_data(b"ABCDEFGH", 100..108).unwrap();
+
+        assert_eq!(
+            drained(&mut reader),
+            [
+                Sample::new(1, 0, 1_024, None, 0x0200_0000, 1, b"ABCD".to_vec()),
+                sample(1_024, b"EFGH"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_track_starts_at_zero_where_its_first_fragment_states_no_decode_time() {
+        assert_eq!(read_one_fragment(1, b"ABCD"), [sample(0, b"ABCD")]);
+    }
+
+    #[test]
+    fn samples_are_placed_by_the_durations_of_the_samples_before_them() {
+        assert_eq!(
+            read_one_fragment(2, b"ABCDEFGH"),
+            [sample(0, b"ABCD"), sample(1_024, b"EFGH")]
+        );
+    }
+
+    #[test]
+    fn a_fragment_stating_no_decode_time_carries_on_from_the_one_before_it() {
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+
+        for (fragment_start, data_start) in [(0, 100), (200, 300)] {
+            reader
+                .handle_movie_fragment(
+                    one_sample_movie_fragment(),
+                    fragment_start..fragment_start + 100,
+                )
+                .unwrap();
+            reader
+                .handle_media_data(b"ABCD", data_start..data_start + 4)
+                .unwrap();
+        }
+
+        assert_eq!(
+            drained(&mut reader),
+            [sample(0, b"ABCD"), sample(1_024, b"ABCD")]
+        );
+    }
+
+    #[test]
+    fn a_decode_time_is_taken_as_stated_however_the_durations_read_so_far_sum() {
+        let stated = |base_media_decode_time| {
+            TrackFragmentBox::new(
+                track_fragment_header(
+                    TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                    1,
+                    None,
+                    None,
+                    None,
+                ),
+                Some(TrackFragmentBaseMediaDecodeTimeBox::new(
+                    base_media_decode_time,
+                )),
+                vec![run(Some(100), 1)],
+            )
+            .unwrap()
+        };
+
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+        for (fragment_start, data_start, decode_time) in [(0, 100, 90_000), (200, 300, 4_096)] {
+            reader
+                .handle_movie_fragment(
+                    movie_fragment(vec![stated(decode_time)]),
+                    fragment_start..fragment_start + 100,
+                )
+                .unwrap();
+            reader
+                .handle_media_data(b"ABCD", data_start..data_start + 4)
+                .unwrap();
+        }
+
+        assert_eq!(
+            drained(&mut reader),
+            [sample(90_000, b"ABCD"), sample(4_096, b"ABCD")]
+        );
+    }
+
+    #[test]
+    fn offsets_are_anchored_at_the_base_the_fragment_states() {
+        let track_fragment = TrackFragmentBox::new(
+            track_fragment_header(FullBoxFlags::ZERO, 1, Some(400), None, None),
+            None,
+            vec![run(Some(8), 1)],
+        )
+        .unwrap();
+
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+        reader
+            .handle_movie_fragment(movie_fragment(vec![track_fragment]), 0..MOVIE_FRAGMENT_LEN)
+            .unwrap();
+        reader.handle_media_data(b"ABCD", 408..412).unwrap();
+
+        assert_eq!(drained(&mut reader), [sample(0, b"ABCD")]);
+    }
+
+    #[test]
+    fn offsets_of_a_fragment_stating_no_anchor_at_all_are_anchored_at_the_movie_fragment() {
+        let track_fragment = TrackFragmentBox::new(
+            track_fragment_header(FullBoxFlags::ZERO, 1, None, None, None),
+            None,
+            vec![run(Some(100), 1)],
+        )
+        .unwrap();
+
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+        reader
+            .handle_movie_fragment(movie_fragment(vec![track_fragment]), 0..MOVIE_FRAGMENT_LEN)
+            .unwrap();
+        reader.handle_media_data(b"ABCD", 100..104).unwrap();
+
+        assert_eq!(drained(&mut reader), [sample(0, b"ABCD")]);
+    }
+
+    #[test]
+    fn offsets_of_a_later_track_fragment_stating_no_anchor_follow_the_data_before_it() {
+        let stating_no_anchor = |track_id, data_offset| {
+            TrackFragmentBox::new(
+                track_fragment_header(FullBoxFlags::ZERO, track_id, None, None, None),
+                None,
+                vec![run(data_offset, 1)],
+            )
+            .unwrap()
+        };
+        let two_tracks = two_track_movie();
+
+        let mut reader = SampleReader::new(&two_tracks).unwrap();
+        reader
+            .handle_movie_fragment(
+                movie_fragment(vec![
+                    stating_no_anchor(1, Some(100)),
+                    stating_no_anchor(2, None),
+                ]),
+                0..MOVIE_FRAGMENT_LEN,
+            )
+            .unwrap();
+        reader.handle_media_data(b"ABCDEFGH", 100..108).unwrap();
+
+        assert_eq!(
+            drained(&mut reader),
+            [
+                sample(0, b"ABCD"),
+                Sample::new(2, 0, 1_024, None, 0, 1, b"EFGH".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_run_stating_no_offset_starts_where_the_run_before_it_ended() {
+        let track_fragment = track_fragment(vec![run(Some(100), 1), run(None, 1)]);
+
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+        reader
+            .handle_movie_fragment(movie_fragment(vec![track_fragment]), 0..MOVIE_FRAGMENT_LEN)
+            .unwrap();
+        reader.handle_media_data(b"ABCDEFGH", 100..108).unwrap();
+
+        assert_eq!(
+            drained(&mut reader),
+            [sample(0, b"ABCD"), sample(1_024, b"EFGH")]
+        );
+    }
+
+    #[test]
+    fn a_movie_carrying_no_extends_box_is_not_fragmented_at_all() {
+        assert_eq!(
+            SampleReader::new(&movie(&[1], vec![])).unwrap_err(),
+            SampleError::missing_movie_extends()
+        );
+    }
+
+    #[test]
+    fn an_extends_box_for_a_track_the_movie_never_declared_is_passed_over() {
+        let with_a_spare = movie(
+            &[1],
+            vec![
+                TrackExtendsBox::new(1, 1, 1_024, 4, 0),
+                TrackExtendsBox::new(7, 1, 1_024, 4, 0),
+            ],
+        );
+
+        let mut reader = SampleReader::new(&with_a_spare).unwrap();
+        let of_the_spare = TrackFragmentBox::new(
+            track_fragment_header(
+                TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                7,
+                None,
+                None,
+                None,
+            ),
+            None,
+            vec![run(Some(100), 1)],
+        )
+        .unwrap();
+
+        assert_eq!(
+            reader.handle_movie_fragment(movie_fragment(vec![of_the_spare]), 0..MOVIE_FRAGMENT_LEN),
+            Err(SampleError::unknown_track_id(7))
+        );
+    }
+
+    #[test]
+    fn two_tracks_declaring_one_id_leave_the_first_of_them_standing() {
+        let mut reader = SampleReader::new(&movie_of_one_track_id_twice()).unwrap();
+        reader
+            .handle_movie_fragment(one_sample_movie_fragment(), 0..MOVIE_FRAGMENT_LEN)
+            .unwrap();
+        reader.handle_media_data(b"ABCD", 100..104).unwrap();
+
+        assert_eq!(drained(&mut reader), [sample(0, b"ABCD")]);
+    }
+
+    #[test]
+    fn a_fragment_of_a_track_the_movie_never_declared_is_refused() {
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+        let of_an_unknown_track = TrackFragmentBox::new(
+            track_fragment_header(
+                TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                3,
+                None,
+                None,
+                None,
+            ),
+            None,
+            vec![run(Some(100), 1)],
+        )
+        .unwrap();
+
+        assert_eq!(
+            reader.handle_movie_fragment(
+                movie_fragment(vec![of_an_unknown_track]),
+                0..MOVIE_FRAGMENT_LEN
+            ),
+            Err(SampleError::unknown_track_id(3))
+        );
+    }
+
+    #[test]
+    fn an_empty_duration_moves_the_timeline_on_without_a_sample() {
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+        let empty = TrackFragmentBox::new(
+            track_fragment_header(
+                TrackFragmentHeaderBox::DURATION_IS_EMPTY,
+                1,
+                None,
+                Some(4_096),
+                None,
+            ),
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        reader
+            .handle_movie_fragment(movie_fragment(vec![empty]), 0..MOVIE_FRAGMENT_LEN)
+            .unwrap();
+        assert_eq!(reader.poll_sample(), None);
+
+        reader
+            .handle_movie_fragment(one_sample_movie_fragment(), 100..200)
+            .unwrap();
+        reader.handle_media_data(b"ABCD", 200..204).unwrap();
+
+        assert_eq!(drained(&mut reader), [sample(4_096, b"ABCD")]);
+    }
+
+    #[test]
+    fn the_sequence_number_a_fragment_carries_is_neither_checked_nor_reported() {
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+        let out_of_order = MovieFragmentBox::new(
+            MovieFragmentHeaderBox::new(9),
+            vec![track_fragment(vec![run(Some(100), 1)])],
+        );
+
+        reader
+            .handle_movie_fragment(out_of_order, 0..MOVIE_FRAGMENT_LEN)
+            .unwrap();
+        reader.handle_media_data(b"ABCD", 100..104).unwrap();
+
+        assert_eq!(drained(&mut reader), [sample(0, b"ABCD")]);
+    }
+
+    #[test]
+    fn decode_times_running_past_what_64_bits_carry_are_refused() {
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+        let at_the_end_of_time = TrackFragmentBox::new(
+            track_fragment_header(
+                TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                1,
+                None,
+                Some(u32::MAX),
+                None,
+            ),
+            Some(TrackFragmentBaseMediaDecodeTimeBox::new(u64::MAX)),
+            vec![run(Some(100), 1)],
+        )
+        .unwrap();
+
+        assert_eq!(
+            reader.handle_movie_fragment(
+                movie_fragment(vec![at_the_end_of_time]),
+                0..MOVIE_FRAGMENT_LEN
+            ),
+            Err(SampleError::decode_time_overflow(1))
+        );
+    }
+
+    #[test]
+    fn data_offsets_running_past_what_64_bits_carry_are_refused() {
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+        let past_the_end_of_the_file = TrackFragmentBox::new(
+            track_fragment_header(FullBoxFlags::ZERO, 1, Some(u64::MAX), None, None),
+            None,
+            vec![run(None, 1)],
+        )
+        .unwrap();
+
+        assert_eq!(
+            reader.handle_movie_fragment(
+                movie_fragment(vec![past_the_end_of_the_file]),
+                0..MOVIE_FRAGMENT_LEN
+            ),
+            Err(SampleError::data_offset_overflow(1))
+        );
+    }
+}

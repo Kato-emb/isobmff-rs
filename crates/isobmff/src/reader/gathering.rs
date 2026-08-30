@@ -213,3 +213,213 @@ impl SampleGathering {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use isobmff_boxes::{TrackFragmentBox, TrackFragmentHeaderBox, TrackRunBox, TrackRunSample};
+    use isobmff_core::FullBoxFlags;
+
+    use crate::error::SampleError;
+    use crate::reader::SampleReader;
+    use crate::reader::tests::{
+        MOVIE_FRAGMENT_LEN, drained, movie_fragment, one_sample_movie_fragment, one_track_movie,
+        run, sample, track_fragment, track_fragment_header, two_track_movie,
+    };
+    use crate::sample::Sample;
+
+    #[test]
+    fn a_fragment_claiming_data_behind_what_was_read_is_refused() {
+        let track_fragment = TrackFragmentBox::new(
+            track_fragment_header(FullBoxFlags::ZERO, 1, Some(0), None, None),
+            None,
+            vec![run(Some(8), 1)],
+        )
+        .unwrap();
+
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+
+        assert_eq!(
+            reader.handle_movie_fragment(movie_fragment(vec![track_fragment]), 0..100),
+            Err(SampleError::backward_data_offset(8, 100))
+        );
+    }
+
+    #[test]
+    fn a_sample_declaring_more_bytes_than_the_limit_is_refused() {
+        let mut reader = SampleReader::with_sample_size_limit(&one_track_movie(), 3).unwrap();
+
+        assert_eq!(
+            reader.handle_movie_fragment(one_sample_movie_fragment(), 0..MOVIE_FRAGMENT_LEN),
+            Err(SampleError::sample_size_limit_exceeded(1, 4, 3))
+        );
+    }
+
+    #[test]
+    fn media_data_no_sample_claims_is_passed_over() {
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+        reader
+            .handle_movie_fragment(one_sample_movie_fragment(), 0..MOVIE_FRAGMENT_LEN)
+            .unwrap();
+
+        reader.handle_media_data(b"XXXX", 200..204).unwrap();
+        assert_eq!(reader.poll_sample(), None);
+    }
+
+    #[test]
+    fn media_data_that_arrived_already_leaves_the_sample_as_it_stands() {
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+        reader
+            .handle_movie_fragment(one_sample_movie_fragment(), 0..MOVIE_FRAGMENT_LEN)
+            .unwrap();
+
+        reader.handle_media_data(b"AB", 100..102).unwrap();
+        reader.handle_media_data(b"XXCD", 100..104).unwrap();
+
+        assert_eq!(drained(&mut reader), [sample(0, b"ABCD")]);
+    }
+
+    #[test]
+    fn a_sample_fills_from_its_start() {
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+        reader
+            .handle_movie_fragment(one_sample_movie_fragment(), 0..MOVIE_FRAGMENT_LEN)
+            .unwrap();
+
+        reader.handle_media_data(b"CD", 102..104).unwrap();
+        assert_eq!(reader.poll_sample(), None);
+
+        reader.handle_media_data(b"ABCD", 100..104).unwrap();
+        assert_eq!(drained(&mut reader), [sample(0, b"ABCD")]);
+    }
+
+    #[test]
+    fn a_fragment_is_taken_while_the_samples_of_the_one_before_it_are_still_short() {
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+        reader
+            .handle_movie_fragment(one_sample_movie_fragment(), 0..MOVIE_FRAGMENT_LEN)
+            .unwrap();
+        reader
+            .handle_movie_fragment(one_sample_movie_fragment(), 104..204)
+            .unwrap();
+
+        reader.handle_media_data(b"EFGH", 204..208).unwrap();
+        assert_eq!(reader.poll_sample(), None);
+
+        reader.handle_media_data(b"ABCD", 100..104).unwrap();
+        assert_eq!(
+            drained(&mut reader),
+            [sample(0, b"ABCD"), sample(1_024, b"EFGH")]
+        );
+    }
+
+    #[test]
+    fn samples_declaring_no_bytes_are_reported_before_any_media_data_arrives() {
+        let track_fragment = TrackFragmentBox::new(
+            track_fragment_header(
+                TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                1,
+                None,
+                None,
+                Some(0),
+            ),
+            None,
+            vec![run(Some(i32::try_from(MOVIE_FRAGMENT_LEN).unwrap()), 2)],
+        )
+        .unwrap();
+
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+        reader
+            .handle_movie_fragment(movie_fragment(vec![track_fragment]), 0..MOVIE_FRAGMENT_LEN)
+            .unwrap();
+        reader.finish().unwrap();
+
+        assert_eq!(drained(&mut reader), [sample(0, b""), sample(1_024, b"")]);
+    }
+
+    #[test]
+    fn a_sample_declaring_no_bytes_waits_on_the_ones_declared_before_it() {
+        let rows = vec![
+            TrackRunSample::new(None, Some(4), None, None).unwrap(),
+            TrackRunSample::new(None, Some(0), None, None).unwrap(),
+        ];
+        let trun =
+            TrackRunBox::new(Some(i32::try_from(MOVIE_FRAGMENT_LEN).unwrap()), None, rows).unwrap();
+
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+        reader
+            .handle_movie_fragment(
+                movie_fragment(vec![track_fragment(vec![trun])]),
+                0..MOVIE_FRAGMENT_LEN,
+            )
+            .unwrap();
+        assert_eq!(reader.poll_sample(), None);
+
+        reader.handle_media_data(b"ABCD", 100..104).unwrap();
+        assert_eq!(
+            drained(&mut reader),
+            [sample(0, b"ABCD"), sample(1_024, b"")]
+        );
+    }
+
+    #[test]
+    fn samples_are_reported_in_the_order_the_fragments_declare_them() {
+        let of_track = |track_id, data_offset| {
+            TrackFragmentBox::new(
+                track_fragment_header(
+                    TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                    track_id,
+                    None,
+                    None,
+                    None,
+                ),
+                None,
+                vec![run(Some(data_offset), 1)],
+            )
+            .unwrap()
+        };
+        let two_tracks = two_track_movie();
+
+        let mut reader = SampleReader::new(&two_tracks).unwrap();
+        reader
+            .handle_movie_fragment(
+                movie_fragment(vec![of_track(2, 104), of_track(1, 100)]),
+                0..MOVIE_FRAGMENT_LEN,
+            )
+            .unwrap();
+        reader.handle_media_data(b"ABCDEFGH", 100..108).unwrap();
+
+        assert_eq!(
+            drained(&mut reader),
+            [
+                Sample::new(2, 0, 1_024, None, 0, 1, b"EFGH".to_vec()),
+                sample(0, b"ABCD"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_sample_short_of_its_data_is_refused_when_the_samples_are_declared_over() {
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+        reader
+            .handle_movie_fragment(one_sample_movie_fragment(), 0..MOVIE_FRAGMENT_LEN)
+            .unwrap();
+        reader.handle_media_data(b"AB", 100..102).unwrap();
+
+        assert_eq!(
+            reader.finish(),
+            Err(SampleError::unfinished_sample(1, 4, 2))
+        );
+    }
+
+    #[test]
+    fn media_data_covering_a_different_number_of_bytes_than_it_holds_is_refused() {
+        let mut reader = SampleReader::new(&one_track_movie()).unwrap();
+
+        assert_eq!(
+            reader.handle_media_data(b"ABCD", 100..106),
+            Err(SampleError::extent_length_mismatch(6, 4))
+        );
+    }
+}
