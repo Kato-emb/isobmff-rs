@@ -1,5 +1,6 @@
 //! [`BoxWriter`], the sequence of boxes of ISO/IEC 14496-12 §4.2 written as the events come
 
+use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use core::ops::Range;
 
@@ -113,7 +114,9 @@ use crate::event::BoxEvent;
 #[derive(Debug)]
 pub struct BoxWriter {
     state: State,
-    output: Vec<u8>,
+    /// The bytes still to be drained, as the chunks the events made of them
+    output: VecDeque<Vec<u8>>,
+    /// How far into the chunk at the front of `output` the draining has reached
     taken: usize,
     position: u64,
     event_extent: Option<Range<u64>>,
@@ -128,7 +131,7 @@ impl BoxWriter {
     pub const fn new() -> Self {
         Self {
             state: State::Between,
-            output: Vec::new(),
+            output: VecDeque::new(),
             taken: 0,
             position: 0,
             event_extent: None,
@@ -175,7 +178,7 @@ impl BoxWriter {
                 let mut scratch = [0; BoxHeader::MAX_ENCODED_LEN];
                 let header_len = header.encoded_len() as u64;
 
-                self.output.extend_from_slice(header.encode(&mut scratch));
+                self.output.push_back(header.encode(&mut scratch).to_vec());
                 self.state = State::Payload { header, written: 0 };
 
                 Ok(header_len)
@@ -197,12 +200,7 @@ impl BoxWriter {
                     }
                 }
 
-                if self.output.is_empty() {
-                    self.output = payload;
-                    self.taken = 0;
-                } else {
-                    self.output.extend_from_slice(&payload);
-                }
+                self.output.push_back(payload);
                 self.state = State::Payload {
                     header,
                     written: offered,
@@ -262,23 +260,31 @@ impl BoxWriter {
     /// so this call never fails — a failed writer hands over the bytes it had
     /// already made, then nothing from there on.
     pub fn poll_output(&mut self, buffer: &mut [u8]) -> usize {
-        let pending = self.output.get(self.taken..).unwrap_or_default();
-        let wanted = pending.len().min(buffer.len());
-        let (Some(taking), Some(slot)) = (pending.get(..wanted), buffer.get_mut(..wanted)) else {
-            return 0;
-        };
+        let mut filled = 0;
 
-        slot.copy_from_slice(taking);
-        self.taken = self.taken.saturating_add(wanted);
-        if self.taken >= self.output.len() {
-            self.output.clear();
-            self.taken = 0;
-        } else if self.taken >= self.output.len().saturating_sub(self.taken) {
-            self.output.drain(..self.taken);
-            self.taken = 0;
+        while filled < buffer.len() {
+            let Some(chunk) = self.output.front() else {
+                break;
+            };
+            let pending = chunk.get(self.taken..).unwrap_or_default();
+            let wanted = pending.len().min(buffer.len().saturating_sub(filled));
+            let end = filled.saturating_add(wanted);
+            let (Some(taking), Some(slot)) = (pending.get(..wanted), buffer.get_mut(filled..end))
+            else {
+                break;
+            };
+
+            slot.copy_from_slice(taking);
+            filled = end;
+            self.taken = self.taken.saturating_add(wanted);
+
+            if self.taken == chunk.len() {
+                self.output.pop_front();
+                self.taken = 0;
+            }
         }
 
-        wanted
+        filled
     }
 
     /// Declares the file over
