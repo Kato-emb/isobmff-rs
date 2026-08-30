@@ -1,10 +1,12 @@
 //! Throughput of the layers a fragmented file is laid down and read back through
 //!
-//! Three measurements stand side by side: what every composition of samples
-//! costs through each layer, what the length of a fragment costs the writer, and
-//! what the length of an arriving chunk costs the reader. Each of them reports
-//! the bytes the samples carry, so the layers of one column are comparable, and
-//! checks what it moved against the count its composition declares.
+//! Four measurements stand side by side: what every composition of samples costs
+//! through each layer, what the length of a fragment costs the writer, what the
+//! length of an arriving chunk costs the reader, and what the length of a box
+//! costs the framing on its own. The first three report the bytes the samples
+//! carry, so the layers of one column are comparable; the fourth reports boxes,
+//! which is what its cost is paid by. Each of them checks what it moved against
+//! what its input declares.
 
 // Why not gathering the output: bytes drained into a growing buffer cost more to
 // collect than the writer costs to produce them — a first attempt at this
@@ -24,8 +26,8 @@ use core::hint::black_box;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 use isobmff::{
-    BoxEvent, BoxReader, FileTypeBox, FragmentedReader, FragmentedWriter, MovieBox, Sample,
-    SampleWriter, TrackExtendsBox,
+    BoxEvent, BoxHeader, BoxReader, BoxType, BoxWriter, FileTypeBox, FragmentedReader,
+    FragmentedWriter, MovieBox, Sample, SampleWriter, TrackExtendsBox,
 };
 use isobmff_test_support::{file_type, fragmented_movie};
 
@@ -166,6 +168,19 @@ const ARRIVING_CHUNK_LENS: [(&str, usize); 6] = [
     ("4KiB", 4 * 1024),
 ];
 
+/// Bytes the files of the fourth table come up to, whatever length the boxes they hold are
+const BOX_LENGTH_FILE_LEN: usize = 12 * 1024 * 1024;
+
+/// Payloads the boxes of the fourth table carry, over the range the fourth table reports
+const BOX_PAYLOAD_LENS: [(&str, usize); 6] = [
+    ("0B", 0),
+    ("8B", 8),
+    ("64B", 64),
+    ("512B", 512),
+    ("4KiB", 4 * 1024),
+    ("64KiB", 64 * 1024),
+];
+
 /// Movie the benchmarked files continue in fragments
 ///
 /// Every default the `trex` states is one no fragment falls back on, so what a
@@ -289,6 +304,81 @@ fn box_reader_boxes(file: &[u8], chunk_len: usize) -> usize {
     take(&mut reader);
 
     count
+}
+
+/// A file of `free` boxes of one payload length, and how many of them it holds
+///
+/// The file comes as near the length the table fixes as whole boxes reach.
+fn free_boxes(payload_len: usize) -> (Vec<u8>, usize) {
+    let header = BoxHeader::with_payload_len(
+        BoxType::compact(*b"free"),
+        u64::try_from(payload_len).unwrap(),
+    )
+    .unwrap();
+    let mut scratch = [0; BoxHeader::MAX_ENCODED_LEN];
+    let encoded = header.encode(&mut scratch).to_vec();
+    let box_len = encoded.len() + payload_len;
+    let box_count = BOX_LENGTH_FILE_LEN / box_len;
+    let mut file = Vec::with_capacity(box_count * box_len);
+
+    for _ in 0..box_count {
+        file.extend_from_slice(&encoded);
+        file.resize(file.len() + payload_len, 0xab);
+    }
+
+    (file, box_count)
+}
+
+/// The steps the boxes of the file are read back as
+fn box_events(file: &[u8]) -> Vec<BoxEvent> {
+    let mut reader = BoxReader::new();
+    let mut events = Vec::new();
+    let take = |reader: &mut BoxReader, events: &mut Vec<BoxEvent>| {
+        while let Some(event) = reader.poll_event() {
+            events.push(event);
+        }
+    };
+
+    for arriving in file.chunks(DEFAULT_ARRIVING_CHUNK_LEN) {
+        reader.handle_input(arriving).unwrap();
+        take(&mut reader, &mut events);
+    }
+    reader.finish().unwrap();
+    take(&mut reader, &mut events);
+
+    events
+}
+
+/// Drains what the box writer has ready, and reports how many bytes that was
+fn box_drained(writer: &mut BoxWriter, buffer: &mut [u8]) -> usize {
+    let mut total = 0;
+
+    loop {
+        let written = writer.poll_output(buffer);
+
+        if written == 0 {
+            return total;
+        }
+        total += written;
+        black_box(&buffer);
+    }
+}
+
+/// Lays the events down as a file, and reports how many bytes it came to
+///
+/// The box layer alone: what an event carries is written as it stands.
+fn box_writer_file(events: Vec<BoxEvent>) -> usize {
+    let mut writer = BoxWriter::new();
+    let mut buffer = [0; OUTPUT_BUFFER_LEN];
+    let mut total = 0;
+
+    for event in events {
+        writer.handle_event(event).unwrap();
+        total += box_drained(&mut writer, &mut buffer);
+    }
+    writer.finish().unwrap();
+
+    total + box_drained(&mut writer, &mut buffer)
 }
 
 /// The file the composition makes, laid down whole
@@ -461,5 +551,50 @@ fn chunk_length(criterion: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, composition, fragment_length, chunk_length);
+/// Measures what the length of a box costs the layer that frames it
+///
+/// The box layer alone, over a file of `free` boxes of one length: no samples are
+/// laid down and none are read.
+fn box_length(criterion: &mut Criterion) {
+    let mut group = criterion.benchmark_group("box_length");
+
+    // Why not the default sample size: the shortest boxes come to a million and
+    // a half of them to a file, which criterion would take a hundred samples of
+    group.sample_size(10);
+
+    for (name, payload_len) in BOX_PAYLOAD_LENS {
+        let (file, box_count) = free_boxes(payload_len);
+        let file_len = file.len();
+        let events = box_events(&file);
+
+        group.throughput(Throughput::Elements(u64::try_from(box_count).unwrap()));
+
+        group.bench_function(BenchmarkId::new("box_reader", name), |bencher| {
+            bencher.iter(|| {
+                assert_eq!(
+                    box_reader_boxes(&file, DEFAULT_ARRIVING_CHUNK_LEN),
+                    box_count
+                );
+            });
+        });
+
+        group.bench_function(BenchmarkId::new("box_writer", name), |bencher| {
+            bencher.iter_batched(
+                || events.clone(),
+                |events| assert_eq!(box_writer_file(events), file_len),
+                BatchSize::PerIteration,
+            );
+        });
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    composition,
+    fragment_length,
+    chunk_length,
+    box_length
+);
 criterion_main!(benches);
