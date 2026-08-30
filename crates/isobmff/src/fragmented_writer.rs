@@ -1,0 +1,385 @@
+//! [`FragmentedWriter`], a fragmented movie file laid down as the samples come
+
+use alloc::vec;
+use alloc::vec::Vec;
+
+use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox, MovieFragmentBox};
+use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader, BoxType, FieldWidth};
+use isobmff_sequence::{BoxEvent, BoxWriter};
+
+use crate::{FileError, Sample, SampleWriter};
+
+/// Where the writer stands between calls
+#[derive(Clone, Copy, Debug)]
+enum State {
+    /// Waiting for the brands the file opens with
+    Opening,
+    /// Waiting for the movie the fragments continue
+    Declaring,
+    /// Laying out fragment after fragment
+    Writing,
+    /// Told the samples are over, and taking nothing more
+    Finished,
+    /// Failed, and reporting that same failure for every call after it
+    Failed(FileError),
+}
+
+/// Lays a fragmented movie file down, taking the samples as they come
+///
+/// The mirror of [`FragmentedReader`](crate::FragmentedReader): it holds the
+/// layout of ISO/IEC 14496-12 Annex A.8 — the brands, the movie, then one movie
+/// fragment after another with the media data beside it — and lays it down
+/// through the box layer, so a caller hands over boxes and samples and takes
+/// bytes. A [`SampleWriter`] lays the samples of a fragment out; this writer
+/// settles what a fragment is written as and where it lands in the file. It
+/// reaches for no destination of its own: when to write and to where stay with
+/// the caller.
+///
+/// # Contract
+///
+/// * The layout is held to as the boxes are handed over: the `ftyp` first, the
+///   `moov` before any fragment. §4.3 has an `ftyp` placed as early as
+///   possible, and a writer can still mend its output, so one that never came
+///   is [`MissingMandatoryBox`](crate::FileErrorKind::MissingMandatoryBox) and
+///   one that came again is
+///   [`DuplicateBox`](crate::FileErrorKind::DuplicateBox).
+/// * A fragment is opened by [`begin_fragment`](Self::begin_fragment), carries
+///   the samples handed over next, and is laid down by
+///   [`finish_fragment`](Self::finish_fragment) as the `moof` and the `mdat`
+///   the sample layer made of it. What the samples themselves must hold to is
+///   [`SampleWriter`]'s contract, and this writer reports it as
+///   [`Sample`](crate::FileErrorKind::Sample).
+/// * The bytes are taken from [`poll_output`](Self::poll_output), which fills
+///   the buffer the caller offers and reports how much of it was filled. The
+///   caller drains before handing over more: bytes are held until they are
+///   taken, so writing on without polling has the writer hold the whole file.
+/// * An `Err` leaves the writer failed for good,
+///   [`AlreadyFinished`](crate::FileErrorKind::AlreadyFinished) aside: every
+///   later call reports that same failure again. The bytes made before it are
+///   still there to take.
+/// * [`finish`](Self::finish) declares the file over. Bytes are still taken
+///   after it, but anything handed over then, or a second
+///   [`finish`](Self::finish), is
+///   [`AlreadyFinished`](crate::FileErrorKind::AlreadyFinished).
+///
+/// # Examples
+///
+/// ```
+/// use isobmff::{FragmentedWriter, Sample, TrackExtendsBox};
+/// # use isobmff_test_support::{file_type, fragmented_movie};
+/// // A file opening with its brands and the movie its fragments continue
+/// let mut writer = FragmentedWriter::new();
+/// writer.handle_file_type(file_type()).unwrap();
+/// writer
+///     .handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0)))
+///     .unwrap();
+///
+/// // One fragment of two samples of track 1, lasting 1024 units each
+/// writer.begin_fragment(1).unwrap();
+/// writer
+///     .handle_sample(Sample::new(1, 0, 1_024, None, 0, 1, b"SAMP".to_vec()))
+///     .unwrap();
+/// writer
+///     .handle_sample(Sample::new(1, 1_024, 1_024, None, 0, 1, b"DATA".to_vec()))
+///     .unwrap();
+/// writer.finish_fragment().unwrap();
+/// writer.finish().unwrap();
+///
+/// // The bytes are drained through a buffer of the caller's own
+/// let mut file = Vec::new();
+/// let mut buffer = [0; 64];
+/// loop {
+///     let written = writer.poll_output(&mut buffer);
+///     if written == 0 {
+///         break;
+///     }
+///     file.extend_from_slice(&buffer[..written]);
+/// }
+///
+/// // The file opens with the brands, and the media data holds the samples end to end
+/// assert_eq!(&file[4..8], b"ftyp");
+/// assert!(file.ends_with(b"SAMPDATA"));
+/// ```
+#[derive(Debug)]
+pub struct FragmentedWriter {
+    boxes: BoxWriter,
+    samples: SampleWriter,
+    state: State,
+}
+
+impl FragmentedWriter {
+    /// Creates a writer waiting for the brands the file opens with
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            boxes: BoxWriter::new(),
+            samples: SampleWriter::new(),
+            state: State::Opening,
+        }
+    }
+
+    /// Takes the brands the file declares itself readable as, and lays them down
+    ///
+    /// # Errors
+    ///
+    /// * [`DuplicateBox`](crate::FileErrorKind::DuplicateBox): the brands were
+    ///   handed over already.
+    /// * [`Box`](crate::FileErrorKind::Box): the box does not write.
+    /// * [`Sequence`](crate::FileErrorKind::Sequence): what the framing of the
+    ///   file makes of it.
+    /// * [`AlreadyFinished`](crate::FileErrorKind::AlreadyFinished): the file
+    ///   was declared over by [`finish`](Self::finish).
+    /// * The failure of a previous call, which the writer keeps and reports
+    ///   again for every call after it.
+    pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), FileError> {
+        match self.state {
+            State::Opening => {}
+            State::Declaring | State::Writing => {
+                return Err(self.fail(FileError::box_handed_over_twice(FileTypeBox::BOX_TYPE)));
+            }
+            State::Finished => return Err(FileError::already_finished()),
+            State::Failed(failure) => return Err(failure),
+        }
+
+        self.write_value(&file_type, FileTypeBox::BOX_TYPE)?;
+        self.state = State::Declaring;
+
+        Ok(())
+    }
+
+    /// Takes the movie the fragments continue, and lays it down
+    ///
+    /// # Errors
+    ///
+    /// * [`MissingMandatoryBox`](crate::FileErrorKind::MissingMandatoryBox): the
+    ///   brands the file opens with were not handed over first.
+    /// * [`DuplicateBox`](crate::FileErrorKind::DuplicateBox): the movie was
+    ///   handed over already.
+    /// * [`Box`](crate::FileErrorKind::Box): the box does not write.
+    /// * [`Sequence`](crate::FileErrorKind::Sequence): what the framing of the
+    ///   file makes of it.
+    /// * [`AlreadyFinished`](crate::FileErrorKind::AlreadyFinished): the file
+    ///   was declared over by [`finish`](Self::finish).
+    /// * The failure of a previous call, which the writer keeps and reports
+    ///   again for every call after it.
+    pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), FileError> {
+        match self.state {
+            State::Declaring => {}
+            State::Opening => {
+                return Err(self.fail(FileError::box_not_handed_over(FileTypeBox::BOX_TYPE)));
+            }
+            State::Writing => {
+                return Err(self.fail(FileError::box_handed_over_twice(MovieBox::BOX_TYPE)));
+            }
+            State::Finished => return Err(FileError::already_finished()),
+            State::Failed(failure) => return Err(failure),
+        }
+
+        self.write_value(&movie, MovieBox::BOX_TYPE)?;
+        self.state = State::Writing;
+
+        Ok(())
+    }
+
+    /// Opens a fragment, which the samples handed over next are laid out in
+    ///
+    /// `sequence_number` is what its `mfhd` states, which §8.8.5 has increase
+    /// over the fragments of a presentation.
+    ///
+    /// # Errors
+    ///
+    /// * [`MissingMandatoryBox`](crate::FileErrorKind::MissingMandatoryBox): the
+    ///   brands or the movie were not handed over first.
+    /// * [`Sample`](crate::FileErrorKind::Sample): what the sample layer makes
+    ///   of the call.
+    /// * [`AlreadyFinished`](crate::FileErrorKind::AlreadyFinished): the file
+    ///   was declared over by [`finish`](Self::finish).
+    /// * The failure of a previous call, which the writer keeps and reports
+    ///   again for every call after it.
+    pub fn begin_fragment(&mut self, sequence_number: u32) -> Result<(), FileError> {
+        self.laying_out()?;
+
+        match self.samples.begin_fragment(sequence_number) {
+            Ok(()) => Ok(()),
+            Err(failure) => Err(self.fail(failure.into())),
+        }
+    }
+
+    /// Takes a sample, and places it in the fragment that is open
+    ///
+    /// # Errors
+    ///
+    /// * [`MissingMandatoryBox`](crate::FileErrorKind::MissingMandatoryBox): the
+    ///   brands or the movie were not handed over first.
+    /// * [`Sample`](crate::FileErrorKind::Sample): what the sample layer makes
+    ///   of the sample.
+    /// * [`AlreadyFinished`](crate::FileErrorKind::AlreadyFinished): the file
+    ///   was declared over by [`finish`](Self::finish).
+    /// * The failure of a previous call, which the writer keeps and reports
+    ///   again for every call after it.
+    pub fn handle_sample(&mut self, sample: Sample) -> Result<(), FileError> {
+        self.laying_out()?;
+
+        match self.samples.handle_sample(sample) {
+            Ok(()) => Ok(()),
+            Err(failure) => Err(self.fail(failure.into())),
+        }
+    }
+
+    /// Closes the fragment that is open, and lays it down
+    ///
+    /// The `moof` and the `mdat` the sample layer made of it are written here,
+    /// the media data moving into the file rather than being copied into it.
+    ///
+    /// # Errors
+    ///
+    /// * [`MissingMandatoryBox`](crate::FileErrorKind::MissingMandatoryBox): the
+    ///   brands or the movie were not handed over first.
+    /// * [`Sample`](crate::FileErrorKind::Sample): what the sample layer makes
+    ///   of the fragment.
+    /// * [`Box`](crate::FileErrorKind::Box): the `moof` does not write.
+    /// * [`Sequence`](crate::FileErrorKind::Sequence): what the framing of the
+    ///   file makes of the fragment.
+    /// * [`AlreadyFinished`](crate::FileErrorKind::AlreadyFinished): the file
+    ///   was declared over by [`finish`](Self::finish).
+    /// * The failure of a previous call, which the writer keeps and reports
+    ///   again for every call after it.
+    pub fn finish_fragment(&mut self) -> Result<(), FileError> {
+        self.laying_out()?;
+
+        if let Err(failure) = self.samples.finish_fragment() {
+            return Err(self.fail(failure.into()));
+        }
+
+        self.lay_down_fragments()
+    }
+
+    /// Fills `buffer` with the bytes the file has been laid down as so far
+    ///
+    /// Reports how many bytes of `buffer` were filled, `0` once they are used
+    /// up: more samples are needed, or the file is over. Failure is reported by
+    /// the calls that take the boxes and the samples, so this one never fails —
+    /// a failed writer hands over the bytes it had already made, then nothing
+    /// from there on.
+    pub fn poll_output(&mut self, buffer: &mut [u8]) -> usize {
+        self.boxes.poll_output(buffer)
+    }
+
+    /// Declares the file over
+    ///
+    /// # Errors
+    ///
+    /// * [`MissingMandatoryBox`](crate::FileErrorKind::MissingMandatoryBox): the
+    ///   brands or the movie the layout requires were never handed over, so the
+    ///   file the writer laid down is not one.
+    /// * [`Sample`](crate::FileErrorKind::Sample): a fragment was left open.
+    /// * [`Sequence`](crate::FileErrorKind::Sequence): the framing of the file
+    ///   was left inside a box.
+    /// * [`AlreadyFinished`](crate::FileErrorKind::AlreadyFinished): the file
+    ///   was already declared over.
+    /// * The failure of a previous call, which the writer keeps and reports
+    ///   again for every call after it.
+    pub fn finish(&mut self) -> Result<(), FileError> {
+        self.laying_out()?;
+
+        if let Err(failure) = self.samples.finish() {
+            return Err(self.fail(failure.into()));
+        }
+        self.lay_down_fragments()?;
+
+        if let Err(failure) = self.boxes.finish() {
+            return Err(self.fail(failure.into()));
+        }
+        self.state = State::Finished;
+
+        Ok(())
+    }
+
+    /// Returns `Ok` while the writer takes the samples of a fragment
+    ///
+    /// The layout is what the guard holds to: a fragment lands in a file that
+    /// declared its brands and the movie the fragment continues, so a call
+    /// reaching here before either names the box that is missing.
+    fn laying_out(&mut self) -> Result<(), FileError> {
+        match self.state {
+            State::Writing => Ok(()),
+            State::Opening => Err(self.fail(FileError::box_not_handed_over(FileTypeBox::BOX_TYPE))),
+            State::Declaring => Err(self.fail(FileError::box_not_handed_over(MovieBox::BOX_TYPE))),
+            State::Finished => Err(FileError::already_finished()),
+            State::Failed(failure) => Err(failure),
+        }
+    }
+
+    /// Lays down every fragment the sample layer has closed
+    fn lay_down_fragments(&mut self) -> Result<(), FileError> {
+        while let Some((movie_fragment, media_data)) = self.samples.poll_fragment() {
+            self.write_value(&movie_fragment, MovieFragmentBox::BOX_TYPE)?;
+            self.lay_down(MediaDataBox::BOX_TYPE, media_data.into_data())?;
+        }
+
+        Ok(())
+    }
+
+    /// Lays `value` down as the whole box it forms
+    fn write_value(&mut self, value: &impl BoxEncode, box_type: BoxType) -> Result<(), FileError> {
+        let payload_len = value.payload_len();
+        let Ok(length) = usize::try_from(payload_len) else {
+            // Why not a failure of its own for a payload beyond `usize`: such a
+            // length exceeds every buffer this target can hold, which is what
+            // `BoxEncode` reports as a buffer that does not match, for the same
+            // reason.
+            return Err(self.fail(FileError::from(
+                isobmff_core::Error::buffer_length_mismatch(payload_len, usize::MAX as u64)
+                    .in_container(box_type),
+            )));
+        };
+        let mut payload = vec![0; length];
+
+        if let Err(failure) = value.encode_payload(&mut payload) {
+            return Err(self.fail(FileError::from(failure.in_container(box_type))));
+        }
+
+        self.lay_down(box_type, payload)
+    }
+
+    /// Lays one box down through the framing of the file
+    fn lay_down(&mut self, box_type: BoxType, payload: Vec<u8>) -> Result<(), FileError> {
+        let payload_len = payload.len() as u64;
+        let Some(header) = BoxHeader::with_payload_len(box_type, payload_len) else {
+            // Why not a failure of its own for a box beyond what a `size` field
+            // carries: the header runs past 64 bits only where the payload
+            // already fills them, which is a length no buffer holds.
+            return Err(self.fail(FileError::from(isobmff_core::Error::out_of_range(
+                payload_len,
+                FieldWidth::Extended,
+            ))));
+        };
+        let mut steps = vec![BoxEvent::Header(header)];
+
+        if !payload.is_empty() {
+            steps.push(BoxEvent::Payload(payload));
+        }
+        steps.push(BoxEvent::End);
+
+        for step in steps {
+            if let Err(failure) = self.boxes.handle_event(step) {
+                return Err(self.fail(failure.into()));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Fails the writer for good, and hands the failure back to report
+    fn fail(&mut self, failure: FileError) -> FileError {
+        self.state = State::Failed(failure);
+
+        failure
+    }
+}
+
+impl Default for FragmentedWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
