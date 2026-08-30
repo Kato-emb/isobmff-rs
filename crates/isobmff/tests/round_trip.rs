@@ -93,7 +93,7 @@ mod tests {
 
                 events.push(BoxEvent::MovieFragment(movie_fragment));
                 events.push(BoxEvent::RawStart(header));
-                events.push(BoxEvent::RawPayload(media_data.data().to_vec()));
+                events.push(BoxEvent::RawPayload(media_data.into_data()));
                 events.push(BoxEvent::RawEnd);
             }
         }

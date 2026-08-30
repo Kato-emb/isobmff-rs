@@ -51,6 +51,12 @@ impl MediaDataBox {
     pub fn data(&self) -> &[u8] {
         &self.data
     }
+
+    /// Returns the media data, taken out of the box
+    #[must_use]
+    pub fn into_data(self) -> Vec<u8> {
+        self.data
+    }
 }
 
 impl BoxDefinition for MediaDataBox {
@@ -115,6 +121,13 @@ mod tests {
             MediaDataBox::decode_payload(b"\xDE\xAD\xBE\xEF").unwrap(),
             MediaDataBox::new(vec![0xDE, 0xAD, 0xBE, 0xEF])
         );
+    }
+
+    #[test]
+    fn the_data_leaves_the_box_as_the_buffer_it_was_built_from() {
+        let data = vec![0xDE, 0xAD, 0xBE, 0xEF];
+
+        assert_eq!(MediaDataBox::new(data.clone()).into_data(), data);
     }
 
     #[test]
