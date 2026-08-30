@@ -86,15 +86,16 @@ fuzz_target!(|input: Input<'_>| {
     let buffer_length = usize::from(input.buffer_length).saturating_add(1);
     let handed_over = laid_out(&input);
     let written = write(&handed_over);
+    let written_count = written.len();
 
-    let Some(file) = file_of(&movie, &written, buffer_length) else {
+    let Some(file) = file_of(&movie, written, buffer_length) else {
         return;
     };
     let Some(first_pass) = read_back(&movie, &file) else {
         return;
     };
 
-    let taken = &handed_over[..written.len().min(handed_over.len())];
+    let taken = &handed_over[..written_count.min(handed_over.len())];
     let samples: Vec<Sample> = taken
         .iter()
         .flat_map(|(_sequence_number, samples)| samples.iter().cloned())
@@ -117,7 +118,7 @@ fuzz_target!(|input: Input<'_>| {
 
     let again = regrouped(taken, &first_pass);
     let laid_out_again = write(&again);
-    let Some(file_again) = file_of(&movie, &laid_out_again, buffer_length) else {
+    let Some(file_again) = file_of(&movie, laid_out_again, buffer_length) else {
         return;
     };
     let Some(read_back_again) = read_back(&movie, &file_again) else {
@@ -277,7 +278,7 @@ fn a_sample() -> Sample {
 /// The file the pairs make: the brands, the movie, then fragment after fragment
 fn file_of(
     movie: &MovieBox,
-    laid_down: &[(MovieFragmentBox, MediaDataBox)],
+    laid_down: Vec<(MovieFragmentBox, MediaDataBox)>,
     buffer_length: usize,
 ) -> Option<Vec<u8>> {
     let mut events = vec![
@@ -289,10 +290,10 @@ fn file_of(
         let payload_len = u64::try_from(media_data.data().len()).ok()?;
         let header = BoxHeader::with_payload_len(MediaDataBox::BOX_TYPE, payload_len)?;
 
-        events.push(BoxEvent::MovieFragment(movie_fragment.clone()));
+        events.push(BoxEvent::MovieFragment(movie_fragment));
         events.push(BoxEvent::RawStart(header));
         if !media_data.data().is_empty() {
-            events.push(BoxEvent::RawPayload(media_data.data().to_vec()));
+            events.push(BoxEvent::RawPayload(media_data.into_data()));
         }
         events.push(BoxEvent::RawEnd);
     }
