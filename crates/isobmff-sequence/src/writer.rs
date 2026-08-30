@@ -114,7 +114,9 @@ use crate::event::BoxEvent;
 #[derive(Debug)]
 pub struct BoxWriter {
     state: State,
+    /// The bytes still to be drained, as the chunks the events made of them
     output: VecDeque<Vec<u8>>,
+    /// How far into the chunk at the front of `output` the draining has reached
     taken: usize,
     position: u64,
     event_extent: Option<Range<u64>>,
@@ -260,25 +262,26 @@ impl BoxWriter {
     pub fn poll_output(&mut self, buffer: &mut [u8]) -> usize {
         let mut filled = 0;
 
-        while let Some(chunk) = self.output.front() {
+        while filled < buffer.len() {
+            let Some(chunk) = self.output.front() else {
+                break;
+            };
             let pending = chunk.get(self.taken..).unwrap_or_default();
-            let room = buffer.len().saturating_sub(filled);
-            let wanted = pending.len().min(room);
+            let wanted = pending.len().min(buffer.len().saturating_sub(filled));
             let end = filled.saturating_add(wanted);
             let (Some(taking), Some(slot)) = (pending.get(..wanted), buffer.get_mut(filled..end))
             else {
-                return filled;
+                break;
             };
 
             slot.copy_from_slice(taking);
             filled = end;
             self.taken = self.taken.saturating_add(wanted);
 
-            if self.taken < chunk.len() {
-                return filled;
+            if self.taken == chunk.len() {
+                self.output.pop_front();
+                self.taken = 0;
             }
-            self.output.pop_front();
-            self.taken = 0;
         }
 
         filled
