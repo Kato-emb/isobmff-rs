@@ -50,8 +50,6 @@ struct Input<'bytes> {
     fragments: Vec<Fragment>,
     /// Which sample, counted over the whole run, states a decode time of its own
     decode_time_broken_at: Option<u8>,
-    /// Bytes the buffer laying the file down offers at a time
-    buffer_length: u8,
     // Why not put `sample_data` first, and why a slice: only the last field is
     // handed what is left, and only `&[u8]` takes it verbatim — a `Vec<u8>` reads
     // a byte of its own before each element, so a seed stops at its first even
@@ -82,9 +80,8 @@ fuzz_target!(|input: Input<'_>| {
     let Some(movie) = movie() else {
         return;
     };
-    let buffer_length = usize::from(input.buffer_length).saturating_add(1);
     let handed_over = laid_out(&input);
-    let (file, written_count) = file_of(&movie, &handed_over, buffer_length);
+    let (file, written_count) = file_of(&movie, &handed_over);
     let first_pass = read_back(&file);
 
     let taken = &handed_over[..written_count.min(handed_over.len())];
@@ -109,7 +106,7 @@ fuzz_target!(|input: Input<'_>| {
     );
 
     let again = regrouped(taken, &first_pass);
-    let (file_again, _closed_again) = file_of(&movie, &again, buffer_length);
+    let (file_again, _closed_again) = file_of(&movie, &again);
     let read_back_again = read_back(&file_again);
 
     assert_eq!(
@@ -187,11 +184,7 @@ fn laid_out(input: &Input<'_>) -> Vec<(u32, Vec<Sample>)> {
 ///
 /// A writer that refuses reports that same failure for every call after it and
 /// still hands over the bytes of the fragments it had closed.
-fn file_of(
-    movie: &MovieBox,
-    fragments: &[(u32, Vec<Sample>)],
-    buffer_length: usize,
-) -> (Vec<u8>, usize) {
+fn file_of(movie: &MovieBox, fragments: &[(u32, Vec<Sample>)]) -> (Vec<u8>, usize) {
     let mut writer = FragmentedWriter::new();
     let mut file = Vec::new();
     let mut closed = 0;
@@ -224,13 +217,13 @@ fn file_of(
                 break;
             }
         }
-        drained_into(&mut writer, buffer_length, &mut file);
+        drained_into(&mut writer, &mut file);
     }
 
     if refused.is_none() {
         refused = writer.finish().err();
     }
-    drained_into(&mut writer, buffer_length, &mut file);
+    drained_into(&mut writer, &mut file);
 
     match refused {
         Some(reported) => {
@@ -255,17 +248,10 @@ fn file_of(
     (file, closed)
 }
 
-/// Takes what the writer has laid down into `file`, a buffer at a time
-fn drained_into(writer: &mut FragmentedWriter, buffer_length: usize, file: &mut Vec<u8>) {
-    let mut buffer = vec![0; buffer_length];
-
-    loop {
-        let written = writer.poll_output(&mut buffer);
-
-        match buffer.get(..written) {
-            Some([]) | None => return,
-            Some(bytes) => file.extend_from_slice(bytes),
-        }
+/// Takes what the writer has laid down into `file`
+fn drained_into(writer: &mut FragmentedWriter, file: &mut Vec<u8>) {
+    while let Some(written) = writer.poll_output() {
+        file.extend_from_slice(&written);
     }
 }
 

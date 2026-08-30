@@ -9,8 +9,9 @@
 //!
 //! # The layers a file is read through
 //!
-//! Three layers stand between bytes and samples, each holding one clause of the
-//! specification.
+//! Four layers stand between a file and the samples it carries. Three of them
+//! are this crate's, each holding one clause of the specification; the fourth is
+//! the reading and writing itself, which holds none and stays with the caller.
 //!
 //! * **The boxes.** A file is a sequence of objects, called boxes (§4.2), and
 //!   framing that sequence is the work of [`BoxReader`] and [`BoxWriter`], which
@@ -26,6 +27,9 @@
 //!   [`SampleWriter`] lays samples out as the `moof` and `mdat` of one fragment.
 //!   Both are scoped to a fragment and carry no notion of a file, so the same
 //!   pair serves a media segment as it serves a file.
+//! * **The I/O.** Where the bytes come from and go to is the caller's: input is
+//!   handed over and output is taken, so a `File`, a socket, or a buffer already
+//!   in memory drives the three layers above the same way.
 //!
 //! A caller that holds a whole presentation in memory needs none of the layers:
 //! [`boxes`] frames it, and the samples read from there just the same.
@@ -85,6 +89,7 @@ pub use isobmff_boxes::*;
 pub use isobmff_core::*;
 pub use isobmff_sequence::{
     BoxEvent, BoxReader, BoxWriter, Error as SequenceError, ErrorKind as SequenceErrorKind,
+    EventBytes,
 };
 
 // Why not `pub use isobmff_avc as avc`: rustdoc renders that as one line under

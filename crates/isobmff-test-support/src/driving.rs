@@ -1,6 +1,5 @@
 //! The reader and the writer of the box layer, driven over a file
 
-use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Range;
 
@@ -62,35 +61,23 @@ pub fn payloads_fused(events: Vec<(Range<u64>, BoxEvent)>) -> Vec<(Range<u64>, B
     fused
 }
 
-/// The file a writer lays down for `events`, drained `buffer_length` bytes at a time
+/// The file a writer lays down for `events`
 ///
 /// # Errors
 ///
 /// The failure the writer reports for the events, the bytes made before it
 /// dropped along with it
-pub fn bytes_of(events: Vec<BoxEvent>, buffer_length: usize) -> Result<Vec<u8>, Error> {
+pub fn bytes_of(events: Vec<BoxEvent>) -> Result<Vec<u8>, Error> {
     let mut writer = BoxWriter::new();
-    let mut buffer = vec![0; buffer_length];
     let mut file = Vec::new();
 
     for event in events {
         writer.handle_event(event)?;
-        drained_into(&mut writer, &mut buffer, &mut file);
     }
     writer.finish()?;
-    drained_into(&mut writer, &mut buffer, &mut file);
+    while let Some(written) = writer.poll_output() {
+        file.extend_from_slice(&written);
+    }
 
     Ok(file)
-}
-
-/// Drains what the writer has made so far into `file`, through `buffer`
-fn drained_into(writer: &mut BoxWriter, buffer: &mut [u8], file: &mut Vec<u8>) {
-    loop {
-        let written = writer.poll_output(buffer);
-
-        match buffer.get(..written) {
-            Some([]) | None => return,
-            Some(bytes) => file.extend_from_slice(bytes),
-        }
-    }
 }

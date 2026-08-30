@@ -1,13 +1,12 @@
 //! [`BoxWriter`], the sequence of boxes of ISO/IEC 14496-12 §4.2 written as the events come
 
 use alloc::collections::VecDeque;
-use alloc::vec::Vec;
 use core::ops::Range;
 
 use isobmff_core::BoxHeader;
 
 use crate::error::Error;
-use crate::event::BoxEvent;
+use crate::event::{BoxEvent, EventBytes};
 
 /// Writes the sequence of boxes a file is formed as, taking the events as they come
 ///
@@ -22,18 +21,18 @@ use crate::event::BoxEvent;
 ///
 /// # Contract
 ///
-/// * [`handle_event`](Self::handle_event) takes the event whole and owns the
-///   bytes it made of it. Those bytes are taken from
-///   [`poll_output`](Self::poll_output), which fills the buffer the caller offers
-///   and reports how much of it was filled — `0` once the events handed over so
+/// * [`handle_event`](Self::handle_event) takes the event whole and makes the
+///   bytes it lays down. Those bytes are handed over by
+///   [`poll_output`](Self::poll_output) as one [`EventBytes`] an event, an
+///   [`End`](BoxEvent::End) making none — `None` once the events handed over so
 ///   far are written out.
 /// * The caller drains before handing over more events. Bytes are held until
 ///   they are taken, so writing on without polling has the writer hold the whole
 ///   file.
-/// * How the bytes of one box are split across
-///   [`poll_output`](Self::poll_output) calls follows the buffers the caller
-///   offers, and nothing else. The bytes themselves, end to end, do not follow
-///   them.
+/// * The payload of an event is handed on in the allocation it arrived in:
+///   [`EventBytes::into_vec`] gives back that same `Vec`, neither copied nor
+///   grown. The bytes of a header are held inline until they are asked for as a
+///   `Vec`.
 /// * A payload is carried by as many [`Payload`](BoxEvent::Payload) events as
 ///   the caller cares to send, and must measure what the box declares:
 ///   offering more is [`PayloadPastDeclared`](crate::ErrorKind::PayloadPastDeclared)
@@ -85,19 +84,14 @@ use crate::event::BoxEvent;
 /// let mut writer = BoxWriter::new();
 /// let mut file = Vec::new();
 /// let mut extents = Vec::new();
-/// let mut buffer = [0; 8];
 ///
 /// // Events are handed over one at a time, each with the bytes of the file it
 /// // was written to, and what they made is drained
 /// for event in events {
 ///     writer.handle_event(event).unwrap();
 ///     extents.push(writer.event_extent().unwrap());
-///     loop {
-///         let written = writer.poll_output(&mut buffer);
-///         if written == 0 {
-///             break;
-///         }
-///         file.extend_from_slice(&buffer[..written]);
+///     while let Some(written) = writer.poll_output() {
+///         file.extend_from_slice(&written);
 ///     }
 /// }
 ///
@@ -114,10 +108,8 @@ use crate::event::BoxEvent;
 #[derive(Debug)]
 pub struct BoxWriter {
     state: State,
-    /// The bytes still to be drained, as the chunks the events made of them
-    output: VecDeque<Vec<u8>>,
-    /// How far into the chunk at the front of `output` the draining has reached
-    taken: usize,
+    /// The bytes still to be drained, as the events made them
+    output: VecDeque<EventBytes>,
     position: u64,
     event_extent: Option<Range<u64>>,
 }
@@ -132,7 +124,6 @@ impl BoxWriter {
         Self {
             state: State::Between,
             output: VecDeque::new(),
-            taken: 0,
             position: 0,
             event_extent: None,
         }
@@ -160,76 +151,88 @@ impl BoxWriter {
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
     pub fn handle_event(&mut self, event: BoxEvent) -> Result<(), Error> {
-        match self.state {
-            State::Failed(failure) => return Err(failure),
-            State::Finished => return Err(Error::already_finished()),
-            State::EndOfFile => return Err(self.fail(Error::past_end_of_file())),
-            State::Payload { header, .. }
-                if !matches!(event, BoxEvent::Payload(_) | BoxEvent::End) =>
-            {
-                return Err(self.fail(Error::box_still_open(header.box_type())));
-            }
-            State::Between | State::Payload { .. } => {}
-        }
-
         let began_at = self.position;
-        let length = match event {
-            BoxEvent::Header(header) => {
-                let mut scratch = [0; BoxHeader::MAX_ENCODED_LEN];
+        let length = match (self.state, event) {
+            (State::Failed(failure), _) => return Err(failure),
+            (State::Finished, _) => return Err(Error::already_finished()),
+            (State::EndOfFile, _) => return Err(self.fail(Error::past_end_of_file())),
+            (
+                State::Payload { header, .. } | State::PayloadToEndOfFile { header },
+                BoxEvent::Header(_),
+            ) => return Err(self.fail(Error::box_still_open(header.box_type()))),
+            (State::Between, BoxEvent::Payload(_) | BoxEvent::End) => {
+                return Err(self.fail(Error::no_box_open()));
+            }
+            (State::Between, BoxEvent::Header(header)) => {
                 let header_len = header.encoded_len() as u64;
 
-                self.output.push_back(header.encode(&mut scratch).to_vec());
-                self.state = State::Payload { header, written: 0 };
-
-                Ok(header_len)
-            }
-            BoxEvent::Payload(payload) => {
-                let State::Payload { header, written } = self.state else {
-                    return Err(self.fail(Error::no_box_open()));
+                self.output.push_back(EventBytes::header(header));
+                self.state = match header.payload_len() {
+                    Some(declared) => State::Payload {
+                        header,
+                        declared,
+                        written: 0,
+                    },
+                    None => State::PayloadToEndOfFile { header },
                 };
+
+                header_len
+            }
+            (
+                State::Payload {
+                    header,
+                    declared,
+                    written,
+                },
+                BoxEvent::Payload(payload),
+            ) => {
                 let length = payload.len() as u64;
                 let offered = written.saturating_add(length);
 
-                if let Some(declared) = header.payload_len() {
-                    if offered > declared {
-                        return Err(self.fail(Error::payload_past_declared(
-                            header.box_type(),
-                            declared,
-                            offered,
-                        )));
-                    }
+                if offered > declared {
+                    return Err(self.fail(Error::payload_past_declared(
+                        header.box_type(),
+                        declared,
+                        offered,
+                    )));
                 }
-
-                self.output.push_back(payload);
+                self.output.push_back(EventBytes::payload(payload));
                 self.state = State::Payload {
                     header,
+                    declared,
                     written: offered,
                 };
 
-                Ok(length)
+                length
             }
-            BoxEvent::End => {
-                let State::Payload { header, written } = self.state else {
-                    return Err(self.fail(Error::no_box_open()));
-                };
+            (State::PayloadToEndOfFile { .. }, BoxEvent::Payload(payload)) => {
+                let length = payload.len() as u64;
 
-                match header.payload_len() {
-                    Some(declared) if written < declared => {
-                        Err(self.fail(unfinished(header, written)))
-                    }
-                    Some(_reached) => {
-                        self.state = State::Between;
+                self.output.push_back(EventBytes::payload(payload));
 
-                        Ok(0)
-                    }
-                    None => {
-                        self.state = State::EndOfFile;
-
-                        Ok(0)
-                    }
+                length
+            }
+            (
+                State::Payload {
+                    header,
+                    declared,
+                    written,
+                },
+                BoxEvent::End,
+            ) => {
+                if written < declared {
+                    return Err(self.fail(unfinished(header, declared, written)));
                 }
+                self.state = State::Between;
+
+                0
             }
-        }?;
+            (State::PayloadToEndOfFile { .. }, BoxEvent::End) => {
+                self.state = State::EndOfFile;
+
+                0
+            }
+        };
 
         self.position = self.position.saturating_add(length);
         self.event_extent = Some(began_at..self.position);
@@ -252,39 +255,16 @@ impl BoxWriter {
         self.event_extent.clone()
     }
 
-    /// Fills `buffer` with the bytes the events handed over so far made
+    /// Hands over the bytes the next event made
     ///
-    /// Reports how many bytes of `buffer` were filled, `0` once they are used
-    /// up: more events are needed, or the file is over. Failure is reported by
-    /// [`handle_event`](Self::handle_event) and [`finish`](Self::finish) alone,
-    /// so this call never fails — a failed writer hands over the bytes it had
-    /// already made, then nothing from there on.
-    pub fn poll_output(&mut self, buffer: &mut [u8]) -> usize {
-        let mut filled = 0;
-
-        while filled < buffer.len() {
-            let Some(chunk) = self.output.front() else {
-                break;
-            };
-            let pending = chunk.get(self.taken..).unwrap_or_default();
-            let wanted = pending.len().min(buffer.len().saturating_sub(filled));
-            let end = filled.saturating_add(wanted);
-            let (Some(taking), Some(slot)) = (pending.get(..wanted), buffer.get_mut(filled..end))
-            else {
-                break;
-            };
-
-            slot.copy_from_slice(taking);
-            filled = end;
-            self.taken = self.taken.saturating_add(wanted);
-
-            if self.taken == chunk.len() {
-                self.output.pop_front();
-                self.taken = 0;
-            }
-        }
-
-        filled
+    /// Reports `None` once the bytes made so far are taken: more events are
+    /// needed, or the file is over. A call hands over what one event made,
+    /// whole. Failure is reported by [`handle_event`](Self::handle_event) and
+    /// [`finish`](Self::finish) alone, so this call never fails — a failed
+    /// writer hands over the bytes it had already made, then nothing from there
+    /// on.
+    pub fn poll_output(&mut self) -> Option<EventBytes> {
+        self.output.pop_front()
     }
 
     /// Declares the file over
@@ -301,19 +281,19 @@ impl BoxWriter {
         match self.state {
             State::Failed(failure) => Err(failure),
             State::Finished => Err(Error::already_finished()),
-            State::Between | State::EndOfFile => {
+            State::Payload {
+                header,
+                declared,
+                written,
+            } if written < declared => Err(self.fail(unfinished(header, declared, written))),
+            State::Between
+            | State::Payload { .. }
+            | State::PayloadToEndOfFile { .. }
+            | State::EndOfFile => {
                 self.state = State::Finished;
 
                 Ok(())
             }
-            State::Payload { header, written } => match header.payload_len() {
-                Some(declared) if written < declared => Err(self.fail(unfinished(header, written))),
-                Some(_) | None => {
-                    self.state = State::Finished;
-
-                    Ok(())
-                }
-            },
         }
     }
 
@@ -331,17 +311,12 @@ impl Default for BoxWriter {
     }
 }
 
-/// Returns the failure of a box the events carried `written` payload bytes of
-///
-/// The box declares a total, which is what makes it unfinished.
-fn unfinished(header: BoxHeader, written: u64) -> Error {
+/// Returns the failure of a box declaring `declared` payload bytes that carried `written`
+fn unfinished(header: BoxHeader, declared: u64, written: u64) -> Error {
     let header_len = header.encoded_len() as u64;
 
     Error::unfinished_box(
-        // Why not unreachable: only a box declaring a total is unfinished, so
-        // the total is always there, and the fallback is a degenerate value in
-        // place of a panic the lints forbid.
-        header.size().total_bytes().unwrap_or(header_len),
+        header_len.saturating_add(declared),
         header_len.saturating_add(written),
     )
 }
@@ -351,8 +326,14 @@ fn unfinished(header: BoxHeader, written: u64) -> Error {
 enum State {
     /// Between boxes, ready for the one that starts next
     Between,
-    /// Laying down the payload of the box that started, `written` bytes of it so far
-    Payload { header: BoxHeader, written: u64 },
+    /// Laying down the `declared` payload bytes of the box that started, `written` so far
+    Payload {
+        header: BoxHeader,
+        declared: u64,
+        written: u64,
+    },
+    /// Laying down the payload of the box running to the end of the file
+    PayloadToEndOfFile { header: BoxHeader },
     /// Closed the box running to the end of the file, so nothing may follow it
     EndOfFile,
     /// Told the file is over, and taking no more events
@@ -368,7 +349,7 @@ mod tests {
 
     use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize};
 
-    use super::{BoxEvent, BoxWriter, Error};
+    use super::{BoxEvent, BoxWriter, Error, EventBytes};
 
     /// Header of a box declaring `total` in the compact `size` field
     fn compact_header(box_type: [u8; 4], total: u32) -> BoxHeader {
@@ -384,19 +365,15 @@ mod tests {
         BoxHeader::new(BoxType::compact(box_type), BoxSize::ToEndOfFile).unwrap()
     }
 
-    /// Everything the writer has laid down, drained `buffer_length` bytes at a time
-    fn drained(writer: &mut BoxWriter, buffer_length: usize) -> Vec<u8> {
-        let mut buffer = vec![0; buffer_length];
+    /// Everything the writer has laid down
+    fn drained(writer: &mut BoxWriter) -> Vec<u8> {
         let mut bytes = Vec::new();
 
-        loop {
-            let written = writer.poll_output(&mut buffer);
-
-            match buffer.get(..written) {
-                Some([]) | None => return bytes,
-                Some(taken) => bytes.extend_from_slice(taken),
-            }
+        while let Some(written) = writer.poll_output() {
+            bytes.extend_from_slice(&written);
         }
+
+        bytes
     }
 
     #[test]
@@ -415,11 +392,11 @@ mod tests {
         writer.handle_event(BoxEvent::End).unwrap();
         writer.finish().unwrap();
 
-        assert_eq!(drained(&mut writer, 64), *b"\0\0\0\x10mdatPAYLOAD!");
+        assert_eq!(drained(&mut writer), *b"\0\0\0\x10mdatPAYLOAD!");
     }
 
     #[test]
-    fn a_buffer_with_no_room_takes_nothing_and_leaves_the_bytes_where_they_are() {
+    fn the_bytes_of_an_event_come_out_one_event_at_a_time() {
         let mut writer = BoxWriter::new();
 
         writer
@@ -429,8 +406,31 @@ mod tests {
             .handle_event(BoxEvent::Payload(Vec::from(*b"PAYL")))
             .unwrap();
 
-        assert_eq!(writer.poll_output(&mut []), 0);
-        assert_eq!(drained(&mut writer, 64), *b"\0\0\0\x0cmdatPAYL");
+        assert_eq!(
+            writer.poll_output().map(EventBytes::into_vec),
+            Some(Vec::from(*b"\0\0\0\x0cmdat"))
+        );
+        assert_eq!(
+            writer.poll_output().map(EventBytes::into_vec),
+            Some(Vec::from(*b"PAYL"))
+        );
+        assert_eq!(writer.poll_output(), None);
+    }
+
+    #[test]
+    fn the_payload_of_an_event_is_handed_on_in_the_allocation_it_arrived_in() {
+        let mut writer = BoxWriter::new();
+        let payload = Vec::from(*b"PAYL");
+        let arrived_in = payload.as_ptr();
+
+        writer
+            .handle_event(BoxEvent::Header(compact_header(*b"mdat", 12)))
+            .unwrap();
+        writer.handle_event(BoxEvent::Payload(payload)).unwrap();
+        writer.poll_output().unwrap();
+        let handed_over = writer.poll_output().unwrap().into_vec();
+
+        assert_eq!(handed_over.as_ptr(), arrived_in);
     }
 
     #[test]
@@ -532,7 +532,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(writer.finish(), Ok(()));
-        assert_eq!(drained(&mut writer, 64), *b"\0\0\0\0mdatPAYL");
+        assert_eq!(drained(&mut writer), *b"\0\0\0\0mdatPAYL");
     }
 
     #[test]
@@ -547,7 +547,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(writer.finish(), Ok(()));
-        assert_eq!(drained(&mut writer, 64), *b"\0\0\0\x0cmdatPAYL");
+        assert_eq!(drained(&mut writer), *b"\0\0\0\x0cmdatPAYL");
     }
 
     #[test]
@@ -607,7 +607,7 @@ mod tests {
 
         assert!(writer.handle_event(BoxEvent::End).is_err());
 
-        assert_eq!(drained(&mut writer, 64), *b"\0\0\0\x0cmdatPA");
+        assert_eq!(drained(&mut writer), *b"\0\0\0\x0cmdatPA");
     }
 
     #[test]
@@ -622,7 +622,7 @@ mod tests {
             .unwrap();
         writer.finish().unwrap();
 
-        assert_eq!(drained(&mut writer, 64), *b"\0\0\0\x0cmdatPAYL");
+        assert_eq!(drained(&mut writer), *b"\0\0\0\x0cmdatPAYL");
     }
 
     #[test]
@@ -659,7 +659,7 @@ mod tests {
             .handle_event(BoxEvent::Payload(Vec::from(*b"PAYL")))
             .unwrap();
         writer.handle_event(BoxEvent::End).unwrap();
-        drained(&mut writer, 64);
+        drained(&mut writer);
         writer
             .handle_event(BoxEvent::Header(compact_header(*b"free", 8)))
             .unwrap();
