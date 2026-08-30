@@ -11,7 +11,7 @@
 // Why not gathering the output: bytes drained into a growing buffer cost more to
 // collect than the writer costs to produce them — a first attempt at this
 // measurement spent 78% of its time there and reported the harness, not the
-// library. Every byte written here goes through a buffer the caller reuses.
+// library.
 
 // Why not relaxing these in `clippy.toml`: `allow-unwrap-in-tests` reaches
 // inside `#[cfg(test)]` alone, which a bench target is compiled without, so
@@ -36,9 +36,6 @@ const SAMPLE_DURATION: u32 = 1_000;
 
 /// Track the samples of the benchmarked movies belong to
 const TRACK_ID: u32 = 1;
-
-/// Buffer the written bytes are drained through, as a caller writing to a file would
-const OUTPUT_BUFFER_LEN: usize = 64 * 1024;
 
 /// Chunk the arriving bytes are handed over in, except where a benchmark varies it
 const DEFAULT_ARRIVING_CHUNK_LEN: usize = 64 * 1024;
@@ -190,18 +187,15 @@ fn movie() -> MovieBox {
 }
 
 /// Drains what the writer has ready, and reports how many bytes that was
-fn drained(writer: &mut FragmentedWriter, buffer: &mut [u8]) -> usize {
+fn drained(writer: &mut FragmentedWriter) -> usize {
     let mut total = 0;
 
-    loop {
-        let written = writer.poll_output(buffer);
-
-        if written == 0 {
-            return total;
-        }
-        total += written;
-        black_box(&buffer);
+    while let Some(written) = writer.poll_output() {
+        total += written.len();
+        black_box(&written);
     }
+
+    total
 }
 
 /// Lays the fragments down as a whole file, and reports how many bytes it came to
@@ -211,7 +205,6 @@ fn fragmented_writer_file(
     fragments: Vec<Vec<Sample>>,
 ) -> usize {
     let mut writer = FragmentedWriter::new();
-    let mut buffer = [0; OUTPUT_BUFFER_LEN];
     let mut total = 0;
 
     writer.handle_file_type(file_type).unwrap();
@@ -225,11 +218,11 @@ fn fragmented_writer_file(
             writer.handle_sample(sample).unwrap();
         }
         writer.finish_fragment().unwrap();
-        total += drained(&mut writer, &mut buffer);
+        total += drained(&mut writer);
     }
     writer.finish().unwrap();
 
-    total + drained(&mut writer, &mut buffer)
+    total + drained(&mut writer)
 }
 
 /// Lays the fragments down as `moof` and `mdat` pairs, and reports the bytes they carry
@@ -350,18 +343,15 @@ fn box_events(file: &[u8]) -> Vec<BoxEvent> {
 }
 
 /// Drains what the box writer has ready, and reports how many bytes that was
-fn box_drained(writer: &mut BoxWriter, buffer: &mut [u8]) -> usize {
+fn box_drained(writer: &mut BoxWriter) -> usize {
     let mut total = 0;
 
-    loop {
-        let written = writer.poll_output(buffer);
-
-        if written == 0 {
-            return total;
-        }
-        total += written;
-        black_box(&buffer);
+    while let Some(written) = writer.poll_output() {
+        total += written.len();
+        black_box(&written);
     }
+
+    total
 }
 
 /// Lays the events down as a file, and reports how many bytes it came to
@@ -369,31 +359,24 @@ fn box_drained(writer: &mut BoxWriter, buffer: &mut [u8]) -> usize {
 /// The box layer alone: what an event carries is written as it stands.
 fn box_writer_file(events: Vec<BoxEvent>) -> usize {
     let mut writer = BoxWriter::new();
-    let mut buffer = [0; OUTPUT_BUFFER_LEN];
     let mut total = 0;
 
     for event in events {
         writer.handle_event(event).unwrap();
-        total += box_drained(&mut writer, &mut buffer);
+        total += box_drained(&mut writer);
     }
     writer.finish().unwrap();
 
-    total + box_drained(&mut writer, &mut buffer)
+    total + box_drained(&mut writer)
 }
 
 /// The file the composition makes, laid down whole
 fn written_file(composition: &Composition) -> Vec<u8> {
     let mut writer = FragmentedWriter::new();
     let mut file = Vec::with_capacity(composition.payload_len());
-    let mut buffer = [0; OUTPUT_BUFFER_LEN];
-    let mut gather = |writer: &mut FragmentedWriter, file: &mut Vec<u8>| {
-        loop {
-            let written = writer.poll_output(&mut buffer);
-
-            if written == 0 {
-                return;
-            }
-            file.extend_from_slice(buffer.get(..written).unwrap());
+    let gather = |writer: &mut FragmentedWriter, file: &mut Vec<u8>| {
+        while let Some(written) = writer.poll_output() {
+            file.extend_from_slice(&written);
         }
     };
 

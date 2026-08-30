@@ -32,6 +32,6 @@ mod reader;
 mod writer;
 
 pub use error::{Error, ErrorKind};
-pub use event::BoxEvent;
+pub use event::{BoxEvent, EventBytes};
 pub use reader::BoxReader;
 pub use writer::BoxWriter;

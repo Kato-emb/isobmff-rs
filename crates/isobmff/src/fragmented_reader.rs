@@ -119,15 +119,10 @@ enum State {
 /// writer.finish_fragment().unwrap();
 /// writer.finish().unwrap();
 ///
-/// // The file the writer laid down is drained through a buffer of the caller's own
+/// // The file the writer laid down is drained as it hands the bytes over
 /// let mut file = Vec::new();
-/// let mut buffer = [0; 64];
-/// loop {
-///     let written = writer.poll_output(&mut buffer);
-///     if written == 0 {
-///         break;
-///     }
-///     file.extend_from_slice(&buffer[..written]);
+/// while let Some(written) = writer.poll_output() {
+///     file.extend_from_slice(&written);
 /// }
 ///
 /// // The file is handed over as it arrives, in whatever lengths it comes

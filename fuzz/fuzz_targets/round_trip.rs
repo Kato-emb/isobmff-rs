@@ -26,12 +26,11 @@ mod cut;
 
 use cut::cut_into;
 
-/// Input of one run: bytes to read, the lengths to cut them into, and the lengths to drain by
+/// Input of one run: bytes to read, and the lengths to cut them into
 ///
-/// A corpus file is four bytes of `cut_lengths`, four of `drain_lengths`, and
-/// then the bytes themselves, verbatim. Both sets of lengths are cycled, each
-/// one byte longer than it reads, so a cut and a buffer are 1 to 256 bytes and
-/// the run always advances.
+/// A corpus file is four bytes of `cut_lengths` and then the bytes themselves,
+/// verbatim. The lengths are cycled, each one byte longer than it reads, so a
+/// cut is 1 to 256 bytes and the run always advances.
 #[derive(Arbitrary, Debug)]
 struct Input<'bytes> {
     // Why not put `bytes` first, and why a slice: only the last field is handed
@@ -39,12 +38,8 @@ struct Input<'bytes> {
     // byte of its own before each element, so a seed stops at its first even
     // byte.
     cut_lengths: [u8; 4],
-    drain_lengths: [u8; 4],
     bytes: &'bytes [u8],
 }
-
-/// Longest buffer a drain offers, the widest a byte of `drain_lengths` reads as
-const MAX_BUFFER_LEN: usize = 256;
 
 /// Everything one pass of the reader over a file reported
 struct Reading {
@@ -53,14 +48,10 @@ struct Reading {
 }
 
 fuzz_target!(|input: Input<'_>| {
-    let Input {
-        cut_lengths,
-        drain_lengths,
-        bytes,
-    } = input;
+    let Input { cut_lengths, bytes } = input;
 
     let events = whole_boxes(events_of(cut_into(bytes, cut_lengths)).events);
-    let file = file_of(&events, drain_lengths);
+    let file = file_of(&events);
     let read_back = events_of([file.as_slice()]);
 
     assert!(
@@ -134,11 +125,9 @@ fn whole_boxes(mut events: Vec<BoxEvent>) -> Vec<BoxEvent> {
     events
 }
 
-/// Hands `events` to a writer, drained by the cycled `lengths`, and gathers the file it lays down
-fn file_of(events: &[BoxEvent], lengths: [u8; 4]) -> Vec<u8> {
+/// Hands `events` to a writer and gathers the file it lays down
+fn file_of(events: &[BoxEvent]) -> Vec<u8> {
     let mut writer = BoxWriter::new();
-    let mut buffer_lengths = lengths.into_iter().cycle();
-    let mut buffer = [0; MAX_BUFFER_LEN];
     let mut file = Vec::new();
 
     for event in events {
@@ -151,7 +140,7 @@ fn file_of(events: &[BoxEvent], lengths: [u8; 4]) -> Vec<u8> {
             .expect("an event was handed over, so it has an extent");
         let began_at = laid_down(&file);
 
-        drain_into(&mut writer, &mut buffer_lengths, &mut buffer, &mut file);
+        drain_into(&mut writer, &mut file);
 
         assert_eq!(
             extent,
@@ -165,7 +154,7 @@ fn file_of(events: &[BoxEvent], lengths: [u8; 4]) -> Vec<u8> {
     writer
         .finish()
         .expect("the writer rejected the file it had laid down whole boxes for");
-    drain_into(&mut writer, &mut buffer_lengths, &mut buffer, &mut file);
+    drain_into(&mut writer, &mut file);
 
     assert_eq!(
         laid_down_by_the_events,
@@ -176,22 +165,10 @@ fn file_of(events: &[BoxEvent], lengths: [u8; 4]) -> Vec<u8> {
     file
 }
 
-/// Takes what the writer has made into `file`, a buffer of the next length at a time
-fn drain_into(
-    writer: &mut BoxWriter,
-    lengths: &mut impl Iterator<Item = u8>,
-    buffer: &mut [u8; MAX_BUFFER_LEN],
-    file: &mut Vec<u8>,
-) {
-    loop {
-        let length = lengths.next().expect("the lengths are cycled");
-        let offered = &mut buffer[..usize::from(length) + 1];
-        let taken = writer.poll_output(offered);
-
-        if taken == 0 {
-            return;
-        }
-        file.extend_from_slice(&offered[..taken]);
+/// Takes what the writer has made into `file`
+fn drain_into(writer: &mut BoxWriter, file: &mut Vec<u8>) {
+    while let Some(written) = writer.poll_output() {
+        file.extend_from_slice(&written);
     }
 }
 

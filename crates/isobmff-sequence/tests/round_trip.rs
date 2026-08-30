@@ -30,24 +30,9 @@ mod tests {
         for file in every_file() {
             for cut_length in 1..=file.len() {
                 assert_eq!(
-                    bytes_of(events_to_write(&file, cut_length), file.len()).unwrap(),
+                    bytes_of(events_to_write(&file, cut_length)).unwrap(),
                     file,
                     "cut every {cut_length} bytes"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn a_file_is_written_back_from_its_events_however_the_output_was_drained() {
-        for file in every_file() {
-            let events = events_to_write(&file, file.len());
-
-            for buffer_length in 1..=file.len() {
-                assert_eq!(
-                    bytes_of(events.clone(), buffer_length).unwrap(),
-                    file,
-                    "drained {buffer_length} bytes at a time"
                 );
             }
         }

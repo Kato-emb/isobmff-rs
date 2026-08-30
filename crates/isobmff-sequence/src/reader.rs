@@ -9,22 +9,6 @@ use isobmff_core::{BoxHeader, ErrorKind as BoxErrorKind};
 use crate::error::Error;
 use crate::event::BoxEvent;
 
-/// Takes off `input` the payload bytes the box that started has still to come
-///
-/// `remaining` is `None` for a box that declares no total, which only the end of
-/// the file ends: every byte `input` offers is taken.
-fn take_payload<'input>(remaining: Option<u64>, input: &mut &'input [u8]) -> &'input [u8] {
-    let wanted = remaining
-        .and_then(|remaining| usize::try_from(remaining).ok())
-        .unwrap_or(usize::MAX)
-        .min(input.len());
-    let (taken, rest) = input.split_at(wanted);
-
-    *input = rest;
-
-    taken
-}
-
 /// Reads the sequence of boxes a file is formed as, taking the input as it arrives
 ///
 /// The reader is handed the input as it arrives and reports the boxes it frames
@@ -134,7 +118,7 @@ impl BoxReader {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            state: State::GATHERING_HEADER,
+            state: State::Between,
             events: VecDeque::new(),
             event_extent: None,
             position: 0,
@@ -167,50 +151,84 @@ impl BoxReader {
             match self.state {
                 State::Failed(failure) => return Err(failure),
                 State::Finished => return Err(Error::already_finished()),
+                State::Between => match BoxHeader::decode(unread) {
+                    Ok((header, rest)) => {
+                        self.advance(unread.len().saturating_sub(rest.len()));
+                        unread = rest;
+                        self.begin(header);
+                    }
+                    Err(error) if error.kind() == BoxErrorKind::TruncatedHeader => {
+                        let (gathered, rest) =
+                            unread.split_at(unread.len().min(BoxHeader::MAX_ENCODED_LEN));
+                        let mut bytes = [0; BoxHeader::MAX_ENCODED_LEN];
+
+                        for (slot, byte) in bytes.iter_mut().zip(gathered) {
+                            *slot = *byte;
+                        }
+                        if gathered.is_empty() {
+                            return Ok(());
+                        }
+                        unread = rest;
+                        self.state = State::Header {
+                            bytes,
+                            filled: gathered.len(),
+                        };
+                        // Why count here and again while gathering, rather than
+                        // under the event: a header the input cut across takes
+                        // bytes off every part of it while completing no event,
+                        // so counting only what an event took would leave the
+                        // offset short by the head of that header.
+                        self.advance(gathered.len());
+                    }
+                    Err(error) => return Err(self.fail(error.into())),
+                },
                 State::Header { mut bytes, filled } => {
-                    let reached = match BoxHeader::decode(bytes.get(..filled).unwrap_or(&[])) {
+                    // Why not unreachable: `filled` counts the bytes gathered
+                    // into `bytes`, which is the longest header a box can carry,
+                    // and the fallback is an empty slice in place of a panic the
+                    // lints forbid.
+                    let gathered = bytes.get(..filled).unwrap_or_default();
+                    let needed = match BoxHeader::decode(gathered) {
                         Ok((header, _nothing_beyond)) => {
-                            self.state = State::Payload {
-                                header,
-                                remaining: header.payload_len(),
-                            };
-                            self.push_event(BoxEvent::Header(header));
+                            self.begin(header);
                             continue;
                         }
+                        // Why not unreachable: a truncated header reports what
+                        // it needs, and the fallback is the longest header a box
+                        // can carry in place of a panic the lints forbid.
                         Err(error) if error.kind() == BoxErrorKind::TruncatedHeader => error
                             .needed_bytes()
                             .and_then(|needed| usize::try_from(needed).ok())
                             .unwrap_or(BoxHeader::MAX_ENCODED_LEN),
                         Err(error) => return Err(self.fail(error.into())),
                     };
-                    let wanted = reached.saturating_sub(filled).min(unread.len());
+                    let wanted = unread.len().min(needed.saturating_sub(filled));
 
                     if wanted == 0 {
                         return Ok(());
                     }
 
-                    let end = filled.saturating_add(wanted);
-                    // Why not unreachable: `reached` is a header length and the
-                    // buffer is the longest header a box can carry, and the
-                    // fallback is a degenerate value in place of a panic the
-                    // lints forbid.
-                    let Some(slot) = bytes.get_mut(filled..end) else {
-                        return Ok(());
-                    };
-                    let (taken, rest) = unread.split_at(wanted);
+                    let (arrived, rest) = unread.split_at(wanted);
 
-                    slot.copy_from_slice(taken);
+                    for (slot, byte) in bytes.iter_mut().skip(filled).zip(arrived) {
+                        *slot = *byte;
+                    }
                     unread = rest;
-                    self.state = State::Header { bytes, filled: end };
-                    // Why count here rather than under the event: a header the
-                    // input cut across takes bytes off every part of it while
-                    // completing no event, so counting only what an event took
-                    // would leave the offset short by the head of that header.
+                    self.state = State::Header {
+                        bytes,
+                        filled: filled.saturating_add(wanted),
+                    };
                     self.advance(wanted);
                 }
-                State::Payload { header, remaining } => {
-                    if remaining == Some(0) {
-                        self.state = State::GATHERING_HEADER;
+                State::Payload {
+                    header,
+                    declared,
+                    taken,
+                } => {
+                    let remaining = declared.saturating_sub(taken);
+
+                    if remaining == 0 {
+                        self.state = State::Between;
                         self.push_event(BoxEvent::End);
                         continue;
                     }
@@ -218,13 +236,27 @@ impl BoxReader {
                         return Ok(());
                     }
 
-                    let payload = take_payload(remaining, &mut unread);
+                    let wanted = usize::try_from(remaining)
+                        .unwrap_or(usize::MAX)
+                        .min(unread.len());
+                    let (payload, rest) = unread.split_at(wanted);
 
+                    unread = rest;
                     self.state = State::Payload {
                         header,
-                        remaining: remaining
-                            .map(|remaining| remaining.saturating_sub(payload.len() as u64)),
+                        declared,
+                        taken: taken.saturating_add(payload.len() as u64),
                     };
+                    self.advance(payload.len());
+                    self.push_event(BoxEvent::Payload(Vec::from(payload)));
+                }
+                State::PayloadToEndOfFile => {
+                    if unread.is_empty() {
+                        return Ok(());
+                    }
+
+                    let payload = core::mem::take(&mut unread);
+
                     self.advance(payload.len());
                     self.push_event(BoxEvent::Payload(Vec::from(payload)));
                 }
@@ -290,37 +322,52 @@ impl BoxReader {
         match self.state {
             State::Failed(failure) => Err(failure),
             State::Finished => Err(Error::already_finished()),
-            State::Header { filled: 0, .. } => {
+            State::Between => {
                 self.state = State::Finished;
+
                 Ok(())
             }
             State::Header { bytes, filled } => {
-                let reached = BoxHeader::decode(bytes.get(..filled).unwrap_or(&[]))
+                let needed = BoxHeader::decode(bytes.get(..filled).unwrap_or_default())
                     .err()
                     .filter(|error| error.kind() == BoxErrorKind::TruncatedHeader)
                     .and_then(|error| error.needed_bytes())
                     .unwrap_or(BoxHeader::MAX_ENCODED_LEN as u64);
 
-                Err(self.fail(Error::unfinished_header(reached, filled as u64)))
+                Err(self.fail(Error::unfinished_header(needed, filled as u64)))
             }
-            State::Payload { header, remaining } => {
-                let unfinished = remaining
-                    .filter(|remaining| *remaining != 0)
-                    .zip(header.size().total_bytes());
+            State::Payload {
+                header,
+                declared,
+                taken,
+            } if taken < declared => {
+                let header_len = header.encoded_len() as u64;
 
-                match unfinished {
-                    Some((remaining, total)) => Err(self.fail(Error::unfinished_box(
-                        total,
-                        total.saturating_sub(remaining),
-                    ))),
-                    None => {
-                        self.state = State::Finished;
-                        self.push_event(BoxEvent::End);
-                        Ok(())
-                    }
-                }
+                Err(self.fail(Error::unfinished_box(
+                    header_len.saturating_add(declared),
+                    header_len.saturating_add(taken),
+                )))
+            }
+            State::Payload { .. } | State::PayloadToEndOfFile => {
+                self.state = State::Finished;
+                self.push_event(BoxEvent::End);
+
+                Ok(())
             }
         }
+    }
+
+    /// Starts the box `header` opens, and reports it
+    fn begin(&mut self, header: BoxHeader) {
+        self.state = match header.payload_len() {
+            Some(declared) => State::Payload {
+                header,
+                declared,
+                taken: 0,
+            },
+            None => State::PayloadToEndOfFile,
+        };
+        self.push_event(BoxEvent::Header(header));
     }
 
     /// Queues `event`, over the input read since the event before it
@@ -357,30 +404,27 @@ impl Default for BoxReader {
 /// Where the reader stands between calls
 #[derive(Clone, Debug)]
 enum State {
-    /// Gathering the header of the box that starts next, `filled` bytes of it
-    /// in `bytes` — the longest header a box can carry, so any form fits whole
+    /// Between boxes, ready for the header of the one that starts next
+    Between,
+    /// Gathering the header the input cut across, `filled` bytes of it in
+    /// `bytes` — the longest header a box can carry, so any form fits whole
     Header {
         bytes: [u8; BoxHeader::MAX_ENCODED_LEN],
         filled: usize,
     },
-    /// Passing on the payload of the box that started, with `remaining` bytes
-    /// of it still to come — `None` while the box declares no total
+    /// Passing on the `declared` payload bytes of the box that started, `taken` so far
     Payload {
         header: BoxHeader,
-        remaining: Option<u64>,
+        declared: u64,
+        taken: u64,
     },
+    /// Passing on the payload of the box running to the end of the file, which
+    /// takes every byte that arrives until the file is declared over
+    PayloadToEndOfFile,
     /// Told the file is over, and taking no more input
     Finished,
     /// Failed, and reporting that same failure for every call after it
     Failed(Error),
-}
-
-impl State {
-    /// Waiting for the header of the box that starts next, none of it gathered
-    const GATHERING_HEADER: Self = Self::Header {
-        bytes: [0; BoxHeader::MAX_ENCODED_LEN],
-        filled: 0,
-    };
 }
 
 #[cfg(test)]

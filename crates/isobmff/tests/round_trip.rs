@@ -75,7 +75,6 @@ mod tests {
     fn written_file(fragments: Vec<Vec<Sample>>) -> Vec<u8> {
         let mut writer = FragmentedWriter::new();
         let mut file = Vec::new();
-        let mut buffer = [0; 64];
 
         writer.handle_file_type(file_type()).unwrap();
         writer.handle_movie(movie()).unwrap();
@@ -91,14 +90,11 @@ mod tests {
         }
         writer.finish().unwrap();
 
-        loop {
-            let written = writer.poll_output(&mut buffer);
-
-            match buffer.get(..written) {
-                Some([]) | None => return file,
-                Some(bytes) => file.extend_from_slice(bytes),
-            }
+        while let Some(written) = writer.poll_output() {
+            file.extend_from_slice(&written);
         }
+
+        file
     }
 
     /// The samples of `track_id`, in the order they lie in `samples`

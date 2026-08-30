@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox, MovieFragmentBox};
 use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader, BoxType};
-use isobmff_sequence::{BoxEvent, BoxWriter};
+use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
 
 use crate::{FileError, Sample, SampleWriter};
 
@@ -48,10 +48,10 @@ enum State {
 ///   the sample layer made of it. What the samples themselves must hold to is
 ///   [`SampleWriter`]'s contract, and this writer reports it as
 ///   [`Sample`](crate::FileErrorKind::Sample).
-/// * The bytes are taken from [`poll_output`](Self::poll_output), which fills
-///   the buffer the caller offers and reports how much of it was filled. The
-///   caller drains before handing over more: bytes are held until they are
-///   taken, so writing on without polling has the writer hold the whole file.
+/// * The bytes are taken from [`poll_output`](Self::poll_output), one
+///   [`EventBytes`] a call, owned by whoever takes them. The caller drains
+///   before handing over more: bytes are held until they are taken, so writing
+///   on without polling has the writer hold the whole file.
 /// * An `Err` leaves the writer failed for good,
 ///   [`AlreadyFinished`](crate::FileErrorKind::AlreadyFinished) aside: every
 ///   later call reports that same failure again. The bytes made before it are
@@ -84,15 +84,10 @@ enum State {
 /// writer.finish_fragment().unwrap();
 /// writer.finish().unwrap();
 ///
-/// // The bytes are drained through a buffer of the caller's own
+/// // The bytes are drained as the writer hands them over
 /// let mut file = Vec::new();
-/// let mut buffer = [0; 64];
-/// loop {
-///     let written = writer.poll_output(&mut buffer);
-///     if written == 0 {
-///         break;
-///     }
-///     file.extend_from_slice(&buffer[..written]);
+/// while let Some(written) = writer.poll_output() {
+///     file.extend_from_slice(&written);
 /// }
 ///
 /// // The file opens with the brands, and the media data holds the samples end to end
@@ -250,15 +245,14 @@ impl FragmentedWriter {
         self.lay_down_fragments()
     }
 
-    /// Fills `buffer` with the bytes the file has been laid down as so far
+    /// Hands over the bytes the file has been laid down as so far
     ///
-    /// Reports how many bytes of `buffer` were filled, `0` once they are used
-    /// up: more samples are needed, or the file is over. Failure is reported by
-    /// the calls that take the boxes and the samples, so this one never fails —
-    /// a failed writer hands over the bytes it had already made, then nothing
-    /// from there on.
-    pub fn poll_output(&mut self, buffer: &mut [u8]) -> usize {
-        self.boxes.poll_output(buffer)
+    /// Reports `None` once they are used up: more samples are needed, or the
+    /// file is over. Failure is reported by the calls that take the boxes and
+    /// the samples, so this one never fails — a failed writer hands over the
+    /// bytes it had already made, then nothing from there on.
+    pub fn poll_output(&mut self) -> Option<EventBytes> {
+        self.boxes.poll_output()
     }
 
     /// Declares the file over
@@ -473,13 +467,14 @@ mod tests {
     #[test]
     fn a_failed_writer_hands_over_the_bytes_it_had_already_laid_down() {
         let mut writer = FragmentedWriter::new();
-        let mut buffer = [0; 8];
 
         writer.handle_file_type(file_type()).unwrap();
 
         assert!(writer.handle_file_type(file_type()).is_err());
-        assert_eq!(writer.poll_output(&mut buffer), 8);
-        assert_eq!(&buffer[4..], b"ftyp");
+
+        let written = writer.poll_output().unwrap();
+
+        assert_eq!(*written, *b"\0\0\0\x18ftyp");
     }
 
     #[test]
