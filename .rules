@@ -40,6 +40,7 @@ Public identifiers take their vocabulary from ISO/IEC 14496-12, so that users wh
 * A module hosting one box is named by its fourcc (`mvhd`); a module hosting a box family is named by the spec term in snake_case (`chunk_offset` for `stco`/`co64`).
 * A fourcc is spec vocabulary, not an abbreviation: it names a field or a local as readily as a module, without the "Do not abbreviate variable names" rule reaching it. A fourcc invented for an example is not covered — spell the name out there.
 * Where no spec term exists or it collides with Rust (the spec's `Box`), build the closest compound from spec vocabulary (`RawBox`, `BoxDecode`) — never a synonym that renames a spec concept.
+* Where the spec names a closed set of codes as the values of a class parameter, each code becomes a marker type named by that fourcc (`Avc1`, `Avc3` for `AVCSampleEntry`, ISO/IEC 14496-15 §5.4.2) — no class is named for such a marker, so the fourcc is the closest spec vocabulary there is. The box type is the alias that fills the parameter (`Avc1SampleEntry`), so the `#[doc(alias)]` and the spec section go there, not on the marker.
 * Every box module doc and box type doc cite the spec section, e.g. ``//! [`MovieHeaderBox`] (`mvhd`), ISO/IEC 14496-12 §8.2.2``.
 
 # Pull request hygiene
