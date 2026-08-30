@@ -1,107 +1,16 @@
 //! [`SampleReader`], the samples of a fragmented presentation read as it arrives
 
-use alloc::collections::{BTreeMap, VecDeque};
-use alloc::vec::Vec;
+mod fragment;
+mod gathering;
+
 use core::ops::Range;
 
 use isobmff_boxes::{MovieBox, MovieFragmentBox};
 
 use crate::error::SampleError;
+use crate::reader::fragment::MovieTracks;
+use crate::reader::gathering::SampleGathering;
 use crate::sample::Sample;
-
-/// Defaults one track sets for its fragments, and where its timeline stands
-///
-/// The defaults are the ones the `trex` of the track declares (§8.8.3), which a
-/// `tfhd` overrides for one fragment and a `trun` row for one sample. The
-/// decode time is the running one: where the samples read so far leave the
-/// media timeline of this track, and so where a fragment carrying no `tfdt`
-/// starts.
-#[derive(Clone, Copy, Debug)]
-struct Track {
-    default_sample_description_index: u32,
-    default_sample_duration: u32,
-    default_sample_size: u32,
-    default_sample_flags: u32,
-    decode_time: u64,
-}
-
-/// Sample a fragment has claimed the data of, gathered as far as it has arrived
-///
-/// `extent` is the bytes of the presentation the sample was resolved to, and
-/// `data` holds them from its start: the length gathered is how far into the
-/// extent the sample is whole, so a claim is met when the two lengths meet.
-#[derive(Clone, Debug)]
-struct PendingSample {
-    track_id: u32,
-    decode_time: u64,
-    sample_duration: u32,
-    sample_composition_time_offset: Option<i64>,
-    sample_flags: u32,
-    sample_description_index: u32,
-    extent: Range<u64>,
-    data: Vec<u8>,
-}
-
-impl PendingSample {
-    /// Returns the bytes the sample was declared to occupy
-    fn declared_len(&self) -> u64 {
-        self.extent.end.saturating_sub(self.extent.start)
-    }
-
-    /// Returns the bytes of the sample that have arrived
-    fn gathered_len(&self) -> u64 {
-        self.data.len() as u64
-    }
-
-    /// Returns whether every byte the sample was declared to occupy has arrived
-    fn is_whole(&self) -> bool {
-        self.gathered_len() >= self.declared_len()
-    }
-
-    /// Takes off `arriving` the bytes of this sample that come next
-    ///
-    /// The sample fills from its start, so what is taken is the run beginning
-    /// where the bytes gathered so far end and reaching no further than the end
-    /// of the sample. A sample already whole, media data ending before what it
-    /// holds already, and media data starting past the point it fills from each
-    /// leave it as it stands.
-    fn take_from(&mut self, arriving: &[u8], extent: &Range<u64>) {
-        let filled_end = self.extent.start.saturating_add(self.gathered_len());
-        if self.is_whole() || !extent.contains(&filled_end) {
-            return;
-        }
-
-        let taken_from = filled_end.saturating_sub(extent.start);
-        let taken_to = extent.end.min(self.extent.end).saturating_sub(extent.start);
-        let (Ok(taken_from), Ok(taken_to)) =
-            (usize::try_from(taken_from), usize::try_from(taken_to))
-        else {
-            return;
-        };
-
-        if let Some(taken) = arriving.get(taken_from..taken_to) {
-            self.data.extend_from_slice(taken);
-        }
-    }
-
-    /// Returns the sample, now that every byte of it has arrived
-    fn into_sample(mut self) -> Sample {
-        // Why not leave the buffer as it stands: it grew as the data arrived, so
-        // it holds up to twice the sample where a caller cut the media data
-        // small, and the caller it is handed to has no way to take that back.
-        self.data.shrink_to_fit();
-
-        Sample::new(
-            self.track_id,
-            self.decode_time,
-            self.sample_duration,
-            self.sample_composition_time_offset,
-            self.sample_flags,
-            self.sample_description_index,
-            self.data,
-        )
-    }
-}
 
 /// Where the reader stands between calls
 #[derive(Clone, Copy, Debug)]
@@ -246,11 +155,8 @@ enum State {
 /// ```
 #[derive(Debug)]
 pub struct SampleReader {
-    tracks: BTreeMap<u32, Track>,
-    pending: VecDeque<PendingSample>,
-    ready: VecDeque<Sample>,
-    read_so_far: u64,
-    sample_size_limit: u64,
+    tracks: MovieTracks,
+    gathering: SampleGathering,
     state: State,
 }
 
@@ -303,41 +209,9 @@ impl SampleReader {
         movie: &MovieBox,
         sample_size_limit: u64,
     ) -> Result<Self, SampleError> {
-        let Some(mvex) = movie.mvex() else {
-            return Err(SampleError::missing_movie_extends());
-        };
-
-        // Why not scanning the `trex` per track: both counts follow from the
-        // length of the `moov`, so the scan would cost the product of two figures
-        // an input settles.
-        let mut defaults = BTreeMap::new();
-        for trex in mvex.trex() {
-            defaults.entry(trex.track_id()).or_insert(trex);
-        }
-
-        let mut tracks = BTreeMap::new();
-        for trak in movie.trak() {
-            let track_id = trak.tkhd().track_id();
-            // Why not reporting the track whose `trex` is missing: MovieBox
-            // refuses a fragmented movie that leaves one without it, so what is
-            // passed over here is a `trex` of a track the movie never declared.
-            if let Some(trex) = defaults.get(&track_id) {
-                tracks.entry(track_id).or_insert(Track {
-                    default_sample_description_index: trex.default_sample_description_index(),
-                    default_sample_duration: trex.default_sample_duration(),
-                    default_sample_size: trex.default_sample_size(),
-                    default_sample_flags: trex.default_sample_flags(),
-                    decode_time: 0,
-                });
-            }
-        }
-
         Ok(Self {
-            tracks,
-            pending: VecDeque::new(),
-            ready: VecDeque::new(),
-            read_so_far: 0,
-            sample_size_limit,
+            tracks: MovieTracks::of(movie)?,
+            gathering: SampleGathering::new(sample_size_limit),
             state: State::Reading,
         })
     }
@@ -350,6 +224,10 @@ impl SampleReader {
     /// [`poll_sample`](Self::poll_sample). A sample declaring no bytes holds
     /// every byte it claims as soon as it is claimed, and is reported without
     /// any media data arriving for it.
+    ///
+    /// The fragment is resolved whole before any of its claims is held, so a
+    /// fragment failing on more than one count is reported by whichever of them
+    /// resolving it reaches first.
     ///
     /// # Errors
     ///
@@ -373,15 +251,15 @@ impl SampleReader {
         extent: Range<u64>,
     ) -> Result<(), SampleError> {
         self.reading()?;
-        self.read_so_far = self.read_so_far.max(extent.end);
 
-        self.claim(&movie_fragment, extent.start)
+        let settled = self
+            .tracks
+            .settle(&movie_fragment, extent.start)
             .map_err(|failure| self.fail(failure))?;
-        // Why not reporting only where media data arrives: a fragment whose
-        // samples all declare no bytes is met by no media data at all.
-        self.report_whole();
 
-        Ok(())
+        self.gathering
+            .claim(settled, extent.end)
+            .map_err(|failure| self.fail(failure))
     }
 
     /// Takes media data that arrived, and fills the samples claiming it
@@ -407,19 +285,9 @@ impl SampleReader {
     ) -> Result<(), SampleError> {
         self.reading()?;
 
-        let covered = extent.end.saturating_sub(extent.start);
-        let offered = data.len() as u64;
-        if covered != offered {
-            return Err(self.fail(SampleError::extent_length_mismatch(covered, offered)));
-        }
-
-        self.read_so_far = self.read_so_far.max(extent.end);
-        for pending in &mut self.pending {
-            pending.take_from(data, &extent);
-        }
-        self.report_whole();
-
-        Ok(())
+        self.gathering
+            .fill(data, &extent)
+            .map_err(|failure| self.fail(failure))
     }
 
     /// Takes the next sample the fragments and media data handed over completed
@@ -429,7 +297,7 @@ impl SampleReader {
     /// fails — a failed reader hands over the samples it had already completed,
     /// then `None` from there on.
     pub fn poll_sample(&mut self) -> Option<Sample> {
-        self.ready.pop_front()
+        self.gathering.poll()
     }
 
     /// Declares the samples over
@@ -445,14 +313,9 @@ impl SampleReader {
     pub fn finish(&mut self) -> Result<(), SampleError> {
         self.reading()?;
 
-        if let Some(pending) = self.pending.front() {
-            let failure = SampleError::unfinished_sample(
-                pending.track_id,
-                pending.declared_len(),
-                pending.gathered_len(),
-            );
-            return Err(self.fail(failure));
-        }
+        self.gathering
+            .finish()
+            .map_err(|failure| self.fail(failure))?;
 
         self.state = State::Finished;
 
@@ -465,141 +328,6 @@ impl SampleReader {
             State::Reading => Ok(()),
             State::Finished => Err(SampleError::already_finished()),
             State::Failed(failure) => Err(failure),
-        }
-    }
-
-    /// Resolves the samples `movie_fragment` declares, and claims the data of each
-    ///
-    /// `moof_start` is where the fragment begins. §8.8.7.1 anchors the offsets
-    /// of a track fragment at the `base_data_offset` it states, at the fragment
-    /// itself where it sets `default-base-is-moof`, and where it states
-    /// neither, at the fragment for the first track fragment and at the end of
-    /// the data of the one before it for those that follow. §8.8.8 has a run
-    /// stating no offset of its own start where the run before it ended.
-    ///
-    /// A fragment declaring an empty duration carries no samples, and moves the
-    /// timeline of its track on by the default duration alone (§8.8.7.1).
-    fn claim(
-        &mut self,
-        movie_fragment: &MovieFragmentBox,
-        moof_start: u64,
-    ) -> Result<(), SampleError> {
-        let mut fragment_data_end = None;
-
-        for traf in movie_fragment.traf() {
-            let tfhd = traf.tfhd();
-            let track_id = tfhd.track_id();
-            let Some(track) = self.tracks.get(&track_id).copied() else {
-                return Err(SampleError::unknown_track_id(track_id));
-            };
-
-            let base_data_offset = if let Some(explicit) = tfhd.base_data_offset() {
-                explicit
-            } else if tfhd.default_base_is_moof() {
-                moof_start
-            } else {
-                fragment_data_end.unwrap_or(moof_start)
-            };
-
-            let mut decode_time = traf
-                .tfdt()
-                .map_or(track.decode_time, |tfdt| tfdt.base_media_decode_time());
-            let default_sample_duration = tfhd
-                .default_sample_duration()
-                .unwrap_or(track.default_sample_duration);
-            let default_sample_size = tfhd
-                .default_sample_size()
-                .unwrap_or(track.default_sample_size);
-            let default_sample_flags = tfhd
-                .default_sample_flags()
-                .unwrap_or(track.default_sample_flags);
-            let sample_description_index = tfhd
-                .sample_description_index()
-                .unwrap_or(track.default_sample_description_index);
-
-            let mut data_offset = base_data_offset;
-            if tfhd.duration_is_empty() {
-                decode_time = decode_time
-                    .checked_add(u64::from(default_sample_duration))
-                    .ok_or(SampleError::decode_time_overflow(track_id))?;
-            }
-
-            for trun in traf.trun() {
-                if let Some(stated) = trun.data_offset() {
-                    data_offset = base_data_offset
-                        .checked_add_signed(i64::from(stated))
-                        .ok_or(SampleError::data_offset_overflow(track_id))?;
-                }
-
-                let mut first_sample_flags = trun.first_sample_flags();
-                for row in trun.samples() {
-                    let declared = u64::from(row.sample_size().unwrap_or(default_sample_size));
-                    if declared > self.sample_size_limit {
-                        return Err(SampleError::sample_size_limit_exceeded(
-                            track_id,
-                            declared,
-                            self.sample_size_limit,
-                        ));
-                    }
-                    if data_offset < self.read_so_far {
-                        return Err(SampleError::backward_data_offset(
-                            data_offset,
-                            self.read_so_far,
-                        ));
-                    }
-
-                    let data_end = data_offset
-                        .checked_add(declared)
-                        .ok_or(SampleError::data_offset_overflow(track_id))?;
-                    let sample_duration = row.sample_duration().unwrap_or(default_sample_duration);
-
-                    self.pending.push_back(PendingSample {
-                        track_id,
-                        decode_time,
-                        sample_duration,
-                        sample_composition_time_offset: row.sample_composition_time_offset(),
-                        sample_flags: first_sample_flags
-                            .take()
-                            .or(row.sample_flags())
-                            .unwrap_or(default_sample_flags),
-                        sample_description_index,
-                        extent: data_offset..data_end,
-                        data: Vec::new(),
-                    });
-
-                    decode_time = decode_time
-                        .checked_add(u64::from(sample_duration))
-                        .ok_or(SampleError::decode_time_overflow(track_id))?;
-                    data_offset = data_end;
-                }
-            }
-
-            self.tracks.insert(
-                track_id,
-                Track {
-                    decode_time,
-                    ..track
-                },
-            );
-            fragment_data_end = Some(data_offset);
-        }
-
-        Ok(())
-    }
-
-    /// Hands over the samples at the front of the queue that hold every byte they claimed
-    ///
-    /// The samples are reported in the order the fragments declared them, so one
-    /// whole is held back while a sample declared before it is still short.
-    fn report_whole(&mut self) {
-        while self.pending.front().is_some_and(PendingSample::is_whole) {
-            // Why not unwrap: the front was just found to be there, and this
-            // `else` stands for a `None` the loop does not reach.
-            let Some(whole) = self.pending.pop_front() else {
-                break;
-            };
-
-            self.ready.push_back(whole.into_sample());
         }
     }
 
