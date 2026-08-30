@@ -43,7 +43,7 @@ fn laid_out(header: BoxHeader, payload: &[u8]) -> Vec<u8> {
 }
 
 /// Lays out one whole box: the header that `box_type` and `payload` need, then the payload
-fn framed(box_type: BoxType, payload: &[u8]) -> Vec<u8> {
+pub fn framed(box_type: BoxType, payload: &[u8]) -> Vec<u8> {
     let header =
         BoxHeader::with_payload_len(box_type, u64::try_from(payload.len()).unwrap()).unwrap();
 
@@ -146,15 +146,6 @@ pub fn movie_fragment() -> MovieFragmentBox {
     .unwrap();
 
     MovieFragmentBox::new(MovieFragmentHeaderBox::new(1), vec![track_fragment])
-}
-
-/// Header of the box the media data is framed as
-pub fn media_data_header() -> BoxHeader {
-    BoxHeader::with_payload_len(
-        BoxType::compact(*b"mdat"),
-        u64::try_from(MEDIA_DATA.len()).unwrap(),
-    )
-    .unwrap()
 }
 
 /// A synthetic fragmented file: the brands, the movie, one fragment, its media data

@@ -55,7 +55,10 @@ impl FileError {
     #[must_use]
     pub const fn missing_mandatory_box(box_type: BoxType) -> Self {
         Self {
-            representation: Representation::MissingBoxInFile { box_type },
+            representation: Representation::MissingBox {
+                box_type,
+                origin: Origin::File,
+            },
         }
     }
 
@@ -63,7 +66,10 @@ impl FileError {
     #[must_use]
     pub const fn duplicate_box(box_type: BoxType) -> Self {
         Self {
-            representation: Representation::DuplicateBoxInFile { box_type },
+            representation: Representation::DuplicateBox {
+                box_type,
+                origin: Origin::File,
+            },
         }
     }
 
@@ -71,7 +77,10 @@ impl FileError {
     #[must_use]
     pub const fn box_not_handed_over(box_type: BoxType) -> Self {
         Self {
-            representation: Representation::MissingBoxFromCaller { box_type },
+            representation: Representation::MissingBox {
+                box_type,
+                origin: Origin::Caller,
+            },
         }
     }
 
@@ -79,7 +88,10 @@ impl FileError {
     #[must_use]
     pub const fn box_handed_over_twice(box_type: BoxType) -> Self {
         Self {
-            representation: Representation::DuplicateBoxFromCaller { box_type },
+            representation: Representation::DuplicateBox {
+                box_type,
+                origin: Origin::Caller,
+            },
         }
     }
 
@@ -110,10 +122,8 @@ impl FileError {
             Representation::Sequence(failure) => FileErrorKind::Sequence(failure.kind()),
             Representation::Sample(failure) => FileErrorKind::Sample(failure.kind()),
             Representation::Box(box_error) => FileErrorKind::Box(box_error.kind()),
-            Representation::MissingBoxInFile { .. }
-            | Representation::MissingBoxFromCaller { .. } => FileErrorKind::MissingMandatoryBox,
-            Representation::DuplicateBoxInFile { .. }
-            | Representation::DuplicateBoxFromCaller { .. } => FileErrorKind::DuplicateBox,
+            Representation::MissingBox { .. } => FileErrorKind::MissingMandatoryBox,
+            Representation::DuplicateBox { .. } => FileErrorKind::DuplicateBox,
             Representation::PayloadLimitExceeded { .. } => FileErrorKind::PayloadLimitExceeded,
             Representation::AlreadyFinished => FileErrorKind::AlreadyFinished,
         }
@@ -126,13 +136,13 @@ impl FileError {
             Representation::Sequence(failure) => failure.category(),
             Representation::Sample(failure) => failure.category(),
             Representation::Box(box_error) => box_error.category(),
-            Representation::MissingBoxInFile { .. } | Representation::DuplicateBoxInFile { .. } => {
-                Category::Malformed
-            }
+            Representation::MissingBox { origin, .. }
+            | Representation::DuplicateBox { origin, .. } => match origin {
+                Origin::File => Category::Malformed,
+                Origin::Caller => Category::Usage,
+            },
             Representation::PayloadLimitExceeded { .. } => Category::Unsupported,
-            Representation::MissingBoxFromCaller { .. }
-            | Representation::DuplicateBoxFromCaller { .. }
-            | Representation::AlreadyFinished => Category::Usage,
+            Representation::AlreadyFinished => Category::Usage,
         }
     }
 
@@ -143,10 +153,8 @@ impl FileError {
             Representation::Sequence(failure) => Some(failure),
             Representation::Sample(_)
             | Representation::Box(_)
-            | Representation::MissingBoxInFile { .. }
-            | Representation::DuplicateBoxInFile { .. }
-            | Representation::MissingBoxFromCaller { .. }
-            | Representation::DuplicateBoxFromCaller { .. }
+            | Representation::MissingBox { .. }
+            | Representation::DuplicateBox { .. }
             | Representation::PayloadLimitExceeded { .. }
             | Representation::AlreadyFinished => None,
         }
@@ -159,10 +167,8 @@ impl FileError {
             Representation::Sample(failure) => Some(failure),
             Representation::Sequence(_)
             | Representation::Box(_)
-            | Representation::MissingBoxInFile { .. }
-            | Representation::DuplicateBoxInFile { .. }
-            | Representation::MissingBoxFromCaller { .. }
-            | Representation::DuplicateBoxFromCaller { .. }
+            | Representation::MissingBox { .. }
+            | Representation::DuplicateBox { .. }
             | Representation::PayloadLimitExceeded { .. }
             | Representation::AlreadyFinished => None,
         }
@@ -178,10 +184,8 @@ impl FileError {
             Representation::Box(box_error) => Some(box_error),
             Representation::Sequence(_)
             | Representation::Sample(_)
-            | Representation::MissingBoxInFile { .. }
-            | Representation::DuplicateBoxInFile { .. }
-            | Representation::MissingBoxFromCaller { .. }
-            | Representation::DuplicateBoxFromCaller { .. }
+            | Representation::MissingBox { .. }
+            | Representation::DuplicateBox { .. }
             | Representation::PayloadLimitExceeded { .. }
             | Representation::AlreadyFinished => None,
         }
@@ -191,10 +195,8 @@ impl FileError {
     #[must_use]
     pub const fn box_type(self) -> Option<BoxType> {
         match self.representation {
-            Representation::MissingBoxInFile { box_type }
-            | Representation::DuplicateBoxInFile { box_type }
-            | Representation::MissingBoxFromCaller { box_type }
-            | Representation::DuplicateBoxFromCaller { box_type }
+            Representation::MissingBox { box_type, .. }
+            | Representation::DuplicateBox { box_type, .. }
             | Representation::PayloadLimitExceeded { box_type, .. } => Some(box_type),
             Representation::Sequence(_)
             | Representation::Sample(_)
@@ -211,10 +213,8 @@ impl FileError {
             Representation::Sequence(_)
             | Representation::Sample(_)
             | Representation::Box(_)
-            | Representation::MissingBoxInFile { .. }
-            | Representation::DuplicateBoxInFile { .. }
-            | Representation::MissingBoxFromCaller { .. }
-            | Representation::DuplicateBoxFromCaller { .. }
+            | Representation::MissingBox { .. }
+            | Representation::DuplicateBox { .. }
             | Representation::AlreadyFinished => None,
         }
     }
@@ -227,10 +227,8 @@ impl FileError {
             Representation::Sequence(_)
             | Representation::Sample(_)
             | Representation::Box(_)
-            | Representation::MissingBoxInFile { .. }
-            | Representation::DuplicateBoxInFile { .. }
-            | Representation::MissingBoxFromCaller { .. }
-            | Representation::DuplicateBoxFromCaller { .. }
+            | Representation::MissingBox { .. }
+            | Representation::DuplicateBox { .. }
             | Representation::AlreadyFinished => None,
         }
     }
@@ -269,18 +267,14 @@ impl fmt::Display for FileError {
             Representation::Sequence(failure) => write!(formatter, "{failure}"),
             Representation::Sample(failure) => write!(formatter, "{failure}"),
             Representation::Box(box_error) => write!(formatter, "{box_error}"),
-            Representation::MissingBoxInFile { box_type } => {
-                write!(formatter, "file carries no {box_type} box")
-            }
-            Representation::DuplicateBoxInFile { box_type } => {
-                write!(formatter, "file carries a second {box_type} box")
-            }
-            Representation::MissingBoxFromCaller { box_type } => {
-                write!(formatter, "no {box_type} box was handed over first")
-            }
-            Representation::DuplicateBoxFromCaller { box_type } => {
-                write!(formatter, "a {box_type} box was handed over already")
-            }
+            Representation::MissingBox { box_type, origin } => match origin {
+                Origin::File => write!(formatter, "file carries no {box_type} box"),
+                Origin::Caller => write!(formatter, "no {box_type} box was handed over first"),
+            },
+            Representation::DuplicateBox { box_type, origin } => match origin {
+                Origin::File => write!(formatter, "file carries a second {box_type} box"),
+                Origin::Caller => write!(formatter, "a {box_type} box was handed over already"),
+            },
             Representation::PayloadLimitExceeded {
                 box_type,
                 declared,
@@ -332,10 +326,8 @@ impl error::Error for FileError {
             Representation::Sequence(failure) => Some(failure),
             Representation::Sample(failure) => Some(failure),
             Representation::Box(box_error) => Some(box_error),
-            Representation::MissingBoxInFile { .. }
-            | Representation::DuplicateBoxInFile { .. }
-            | Representation::MissingBoxFromCaller { .. }
-            | Representation::DuplicateBoxFromCaller { .. }
+            Representation::MissingBox { .. }
+            | Representation::DuplicateBox { .. }
             | Representation::PayloadLimitExceeded { .. }
             | Representation::AlreadyFinished => None,
         }
@@ -400,14 +392,10 @@ enum Representation {
     Sample(SampleError),
     /// Failure of one box, carried through whole
     Box(isobmff_core::Error),
-    /// File lacking a box its layout requires
-    MissingBoxInFile { box_type: BoxType },
-    /// File holding a second of a box its layout carries once
-    DuplicateBoxInFile { box_type: BoxType },
-    /// Box the layout requires before the one the caller handed over
-    MissingBoxFromCaller { box_type: BoxType },
-    /// Box handed over where the layout carries one
-    DuplicateBoxFromCaller { box_type: BoxType },
+    /// Box the layout requires that is not there
+    MissingBox { box_type: BoxType, origin: Origin },
+    /// Box the layout carries once that is there twice
+    DuplicateBox { box_type: BoxType, origin: Origin },
     /// Box declaring a payload past the limit a reader holds
     PayloadLimitExceeded {
         box_type: BoxType,
@@ -416,4 +404,13 @@ enum Representation {
     },
     /// Call made after the file was declared over
     AlreadyFinished,
+}
+
+/// Which side of the layout a box went missing on, or came again on
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Origin {
+    /// The file that was read, which the reader cannot mend
+    File,
+    /// The calls laying one down, which the caller can still mend
+    Caller,
 }

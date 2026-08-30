@@ -109,7 +109,7 @@ fuzz_target!(|input: Input<'_>| {
     );
 
     let again = regrouped(taken, &first_pass);
-    let (file_again, _written_again) = file_of(&movie, &again, buffer_length);
+    let (file_again, _closed_again) = file_of(&movie, &again, buffer_length);
     let read_back_again = read_back(&file_again);
 
     assert_eq!(

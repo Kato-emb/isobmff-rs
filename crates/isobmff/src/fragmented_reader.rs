@@ -39,7 +39,6 @@ impl ValueBox {
 #[derive(Debug)]
 struct Gathering {
     value_box: ValueBox,
-    header: BoxHeader,
     began_at: u64,
     payload: Vec<u8>,
 }
@@ -314,23 +313,22 @@ impl FragmentedReader {
             // bytes it was read from, and the fallback is a degenerate range in
             // place of a panic the lints forbid.
             let extent = self.boxes.event_extent().unwrap_or(0..0);
+            let outcome = match event {
+                BoxEvent::Header(header) => self.begin_box(header, extent),
+                BoxEvent::Payload(payload) => self.take_payload(payload, extent),
+                BoxEvent::End => self.close_box(extent),
+                // Why an arm at all: `BoxEvent` is `#[non_exhaustive]`, which
+                // `clippy::exhaustive_enums` asks of every public enum, so §4.2
+                // being settled at three steps does not close the match.
+                _later_step => Ok(()),
+            };
 
-            if let Err(failure) = self.step(event, extent) {
+            if let Err(failure) = outcome {
                 return Err(self.fail(failure));
             }
         }
 
         Ok(())
-    }
-
-    /// Takes one step of the framing of the file
-    fn step(&mut self, event: BoxEvent, extent: Range<u64>) -> Result<(), FileError> {
-        match event {
-            BoxEvent::Header(header) => self.begin_box(header, extent),
-            BoxEvent::Payload(payload) => self.take_payload(&payload, extent),
-            BoxEvent::End => self.close_box(extent),
-            _later_step => Ok(()),
-        }
     }
 
     /// Begins gathering the box `header` introduces, where the layout is made of it
@@ -350,7 +348,6 @@ impl FragmentedReader {
 
         self.gathering = Some(Gathering {
             value_box,
-            header,
             began_at: extent.start,
             // Why not reserve the declared length: the file declares it and the
             // limit only bounds it, so reserving would take memory for bytes
@@ -362,9 +359,13 @@ impl FragmentedReader {
     }
 
     /// Gathers `payload` into the box being read, or offers it to the samples
-    fn take_payload(&mut self, payload: &[u8], extent: Range<u64>) -> Result<(), FileError> {
+    fn take_payload(&mut self, mut payload: Vec<u8>, extent: Range<u64>) -> Result<(), FileError> {
         if let Some(gathering) = self.gathering.as_mut() {
-            gathering.payload.extend_from_slice(payload);
+            if gathering.payload.is_empty() {
+                gathering.payload = payload;
+            } else {
+                gathering.payload.append(&mut payload);
+            }
 
             return Ok(());
         }
@@ -374,7 +375,7 @@ impl FragmentedReader {
         };
 
         samples
-            .handle_media_data(payload, extent)
+            .handle_media_data(&payload, extent)
             .map_err(FileError::from)
     }
 
@@ -383,20 +384,19 @@ impl FragmentedReader {
         let Some(gathering) = self.gathering.take() else {
             return Ok(());
         };
-        let box_type = gathering.header.box_type();
 
         match gathering.value_box {
             ValueBox::FileType => {
                 if self.file_type.is_some() {
-                    return Err(FileError::duplicate_box(box_type));
+                    return Err(FileError::duplicate_box(FileTypeBox::BOX_TYPE));
                 }
-                self.file_type = Some(decoded::<FileTypeBox>(&gathering.payload, box_type)?);
+                self.file_type = Some(decoded::<FileTypeBox>(&gathering.payload)?);
             }
             ValueBox::Movie => {
                 if self.movie.is_some() {
-                    return Err(FileError::duplicate_box(box_type));
+                    return Err(FileError::duplicate_box(MovieBox::BOX_TYPE));
                 }
-                let movie = decoded::<MovieBox>(&gathering.payload, box_type)?;
+                let movie = decoded::<MovieBox>(&gathering.payload)?;
 
                 self.samples = Some(SampleReader::with_sample_size_limit(
                     &movie,
@@ -405,7 +405,7 @@ impl FragmentedReader {
                 self.movie = Some(movie);
             }
             ValueBox::MovieFragment => {
-                let movie_fragment = decoded::<MovieFragmentBox>(&gathering.payload, box_type)?;
+                let movie_fragment = decoded::<MovieFragmentBox>(&gathering.payload)?;
                 let Some(samples) = self.samples.as_mut() else {
                     return Err(FileError::missing_mandatory_box(MovieBox::BOX_TYPE));
                 };
@@ -432,9 +432,9 @@ impl Default for FragmentedReader {
 }
 
 /// Reads `payload` into the box it forms, naming that box on a failure
-fn decoded<Value: BoxDecode>(payload: &[u8], box_type: BoxType) -> Result<Value, FileError> {
+fn decoded<Value: BoxDecode + BoxDefinition>(payload: &[u8]) -> Result<Value, FileError> {
     Value::decode_payload(payload)
-        .map_err(|failure| FileError::from(failure.in_container(box_type)))
+        .map_err(|failure| FileError::from(failure.in_container(Value::BOX_TYPE)))
 }
 
 #[cfg(test)]
@@ -443,31 +443,14 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_core::{BoxType, FourCC};
-    use isobmff_test_support::{file_type, fragmented_movie, movie_fragment, written};
+    use isobmff_test_support::{file_type, fragmented_movie, framed, movie_fragment, written};
 
-    use super::{
-        BoxDefinition, BoxHeader, FileError, FileTypeBox, FragmentedReader, MovieBox, SampleReader,
-    };
+    use super::{BoxDefinition, FileError, FileTypeBox, FragmentedReader, MovieBox, SampleReader};
     use crate::{FileErrorKind, TrackExtendsBox};
 
     /// Movie of one track continued in fragments, whose defaults a `trex` states
     fn movie() -> MovieBox {
         fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0))
-    }
-
-    /// The bytes of a box laid out by hand: the header its type and payload need, then the payload
-    fn framed(box_type: [u8; 4], payload: &[u8]) -> Vec<u8> {
-        let header = BoxHeader::with_payload_len(
-            BoxType::compact(box_type),
-            u64::try_from(payload.len()).unwrap(),
-        )
-        .unwrap();
-        let mut buffer = [0; BoxHeader::MAX_ENCODED_LEN];
-        let mut bytes = Vec::from(header.encode(&mut buffer));
-
-        bytes.extend_from_slice(payload);
-
-        bytes
     }
 
     #[test]
@@ -529,7 +512,7 @@ mod tests {
 
     #[test]
     fn a_box_the_layout_passes_over_is_not_bounded_by_the_limit() {
-        let file = framed(*b"mdat", &[0x11; 64]);
+        let file = framed(BoxType::compact(*b"mdat"), &[0x11; 64]);
         let mut reader = FragmentedReader::with_limits(0, SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT);
 
         reader.handle_input(&file).unwrap();
@@ -553,7 +536,7 @@ mod tests {
     #[test]
     fn a_box_of_the_layout_whose_payload_does_not_decode_names_that_box() {
         let mut reader = FragmentedReader::new();
-        let failure = reader.handle_input(&framed(*b"moov", b"AAAA"));
+        let failure = reader.handle_input(&framed(BoxType::compact(*b"moov"), b"AAAA"));
 
         assert_eq!(
             failure.map_err(|reported| reported

@@ -4,7 +4,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox, MovieFragmentBox};
-use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader, BoxType, FieldWidth};
+use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader, BoxType};
 use isobmff_sequence::{BoxEvent, BoxWriter};
 
 use crate::{FileError, Sample, SampleWriter};
@@ -194,10 +194,11 @@ impl FragmentedWriter {
     pub fn begin_fragment(&mut self, sequence_number: u32) -> Result<(), FileError> {
         self.laying_out()?;
 
-        match self.samples.begin_fragment(sequence_number) {
-            Ok(()) => Ok(()),
-            Err(failure) => Err(self.fail(failure.into())),
+        if let Err(failure) = self.samples.begin_fragment(sequence_number) {
+            return Err(self.fail(failure.into()));
         }
+
+        Ok(())
     }
 
     /// Takes a sample, and places it in the fragment that is open
@@ -215,10 +216,11 @@ impl FragmentedWriter {
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), FileError> {
         self.laying_out()?;
 
-        match self.samples.handle_sample(sample) {
-            Ok(()) => Ok(()),
-            Err(failure) => Err(self.fail(failure.into())),
+        if let Err(failure) = self.samples.handle_sample(sample) {
+            return Err(self.fail(failure.into()));
         }
+
+        Ok(())
     }
 
     /// Closes the fragment that is open, and lays it down
@@ -315,14 +317,7 @@ impl FragmentedWriter {
     fn write_value(&mut self, value: &impl BoxEncode, box_type: BoxType) -> Result<(), FileError> {
         let payload_len = value.payload_len();
         let Ok(length) = usize::try_from(payload_len) else {
-            // Why not a failure of its own for a payload beyond `usize`: such a
-            // length exceeds every buffer this target can hold, which is what
-            // `BoxEncode` reports as a buffer that does not match, for the same
-            // reason.
-            return Err(self.fail(FileError::from(
-                isobmff_core::Error::buffer_length_mismatch(payload_len, usize::MAX as u64)
-                    .in_container(box_type),
-            )));
+            return Err(self.fail(past_every_buffer(box_type, payload_len)));
         };
         let mut payload = vec![0; length];
 
@@ -337,25 +332,20 @@ impl FragmentedWriter {
     fn lay_down(&mut self, box_type: BoxType, payload: Vec<u8>) -> Result<(), FileError> {
         let payload_len = payload.len() as u64;
         let Some(header) = BoxHeader::with_payload_len(box_type, payload_len) else {
-            // Why not a failure of its own for a box beyond what a `size` field
-            // carries: the header runs past 64 bits only where the payload
-            // already fills them, which is a length no buffer holds.
-            return Err(self.fail(FileError::from(isobmff_core::Error::out_of_range(
-                payload_len,
-                FieldWidth::Extended,
-            ))));
+            return Err(self.fail(past_every_buffer(box_type, payload_len)));
         };
-        let mut steps = vec![BoxEvent::Header(header)];
 
+        self.lay_down_step(BoxEvent::Header(header))?;
         if !payload.is_empty() {
-            steps.push(BoxEvent::Payload(payload));
+            self.lay_down_step(BoxEvent::Payload(payload))?;
         }
-        steps.push(BoxEvent::End);
+        self.lay_down_step(BoxEvent::End)
+    }
 
-        for step in steps {
-            if let Err(failure) = self.boxes.handle_event(step) {
-                return Err(self.fail(failure.into()));
-            }
+    /// Hands one step of the framing over, failing the writer where it is refused
+    fn lay_down_step(&mut self, step: BoxEvent) -> Result<(), FileError> {
+        if let Err(failure) = self.boxes.handle_event(step) {
+            return Err(self.fail(failure.into()));
         }
 
         Ok(())
@@ -373,6 +363,17 @@ impl Default for FragmentedWriter {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Reports a box longer than any buffer on this target, as `isobmff-core` names it
+fn past_every_buffer(box_type: BoxType, payload_len: u64) -> FileError {
+    // Why not a failure of its own: a payload past `usize`, and a header that
+    // cannot measure one, both exceed every buffer this target can hold, which
+    // is the short buffer `isobmff_core::BoxEncode::encode` folds them into.
+    FileError::from(
+        isobmff_core::Error::truncated_buffer(payload_len, usize::MAX as u64)
+            .in_container(box_type),
+    )
 }
 
 #[cfg(test)]
