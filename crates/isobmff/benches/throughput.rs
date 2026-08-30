@@ -21,19 +21,13 @@
 )]
 
 use core::hint::black_box;
-use criterion::{
-    BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
-    measurement::WallTime,
-};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 use isobmff::{
-    BoxEvent, BoxReader, FileTypeBox, FragmentedReader, FragmentedWriter, MovieBox,
-    MovieExtendsBox, MovieHeaderBox, Mp4EpochSeconds, Sample, SampleWriter, TrackExtendsBox,
+    BoxEvent, BoxReader, FileTypeBox, FragmentedReader, FragmentedWriter, MovieBox, Sample,
+    SampleWriter, TrackExtendsBox,
 };
-use isobmff_test_support::{file_type, track};
-
-/// Ticks a second the media of the benchmarked movies is timed in
-const TIMESCALE: u32 = 90_000;
+use isobmff_test_support::{file_type, fragmented_movie};
 
 /// Ticks every sample of the benchmarked movies lasts
 const SAMPLE_DURATION: u32 = 1_000;
@@ -45,13 +39,11 @@ const TRACK_ID: u32 = 1;
 const OUTPUT_BUFFER_LEN: usize = 64 * 1024;
 
 /// Chunk the arriving bytes are handed over in, except where a benchmark varies it
-const ARRIVING_CHUNK_LEN: usize = 64 * 1024;
+const DEFAULT_ARRIVING_CHUNK_LEN: usize = 64 * 1024;
 
 /// A file to measure over: samples of one length, so many to a fragment, so many fragments
 #[derive(Clone, Copy)]
 struct Composition {
-    /// How the composition is named in the report
-    name: &'static str,
     /// Bytes every sample carries
     sample_len: usize,
     /// Samples one fragment holds
@@ -69,6 +61,11 @@ impl Composition {
     /// Bytes the samples of the whole file carry, the header of no box counted
     const fn payload_len(&self) -> usize {
         self.sample_len * self.sample_count()
+    }
+
+    /// Boxes the file holds at its top level: the brands, the movie, then a pair per fragment
+    const fn box_count(&self) -> usize {
+        2 + 2 * self.fragment_count
     }
 
     /// The samples of the file, fragment by fragment
@@ -99,47 +96,65 @@ impl Composition {
 }
 
 /// The compositions the first table reports, from long samples to short ones
-const COMPOSITIONS: [Composition; 5] = [
-    Composition {
-        name: "video-64KiB-x30",
-        sample_len: 64 * 1024,
-        samples_per_fragment: 30,
-        fragment_count: 32,
-    },
-    Composition {
-        name: "video-64KiB-x300",
-        sample_len: 64 * 1024,
-        samples_per_fragment: 300,
-        fragment_count: 3,
-    },
-    Composition {
-        name: "audio-512B-x430",
-        sample_len: 512,
-        samples_per_fragment: 430,
-        fragment_count: 276,
-    },
-    Composition {
-        name: "audio-512B-x4300",
-        sample_len: 512,
-        samples_per_fragment: 4300,
-        fragment_count: 27,
-    },
-    Composition {
-        name: "tiny-64B-x1000",
-        sample_len: 64,
-        samples_per_fragment: 1000,
-        fragment_count: 196,
-    },
+const COMPOSITIONS: [(&str, Composition); 5] = [
+    (
+        "video-64KiB-x30",
+        Composition {
+            sample_len: 64 * 1024,
+            samples_per_fragment: 30,
+            fragment_count: 32,
+        },
+    ),
+    (
+        "video-64KiB-x300",
+        Composition {
+            sample_len: 64 * 1024,
+            samples_per_fragment: 300,
+            fragment_count: 3,
+        },
+    ),
+    (
+        "audio-512B-x430",
+        Composition {
+            sample_len: 512,
+            samples_per_fragment: 430,
+            fragment_count: 276,
+        },
+    ),
+    (
+        "audio-512B-x4300",
+        Composition {
+            sample_len: 512,
+            samples_per_fragment: 4300,
+            fragment_count: 27,
+        },
+    ),
+    (
+        "tiny-64B-x1000",
+        Composition {
+            sample_len: 64,
+            samples_per_fragment: 1000,
+            fragment_count: 196,
+        },
+    ),
 ];
+
+/// The composition the second table splits into fragments seven ways
+const FRAGMENT_LENGTH_BASE: Composition = Composition {
+    sample_len: 64 * 1024,
+    samples_per_fragment: 960,
+    fragment_count: 1,
+};
+
+/// The composition the third table hands over in seven chunk lengths
+const CHUNK_LENGTH_BASE: Composition = Composition {
+    sample_len: 64 * 1024,
+    samples_per_fragment: 30,
+    fragment_count: 32,
+};
 
 /// Samples one fragment holds, over the range the second table reports
 const SAMPLES_PER_FRAGMENT: [usize; 7] = [1, 16, 30, 60, 120, 240, 960];
-
-/// Samples the second table lays down, however they are split into fragments
-const FRAGMENT_LENGTH_SAMPLE_COUNT: usize = 960;
-
-/// Bytes every sample of the second table carries
-const FRAGMENT_LENGTH_SAMPLE_LEN: usize = 64 * 1024;
 
 /// Chunks the arriving bytes are handed over in, over the range the third table reports
 const ARRIVING_CHUNK_LENS: [(&str, usize); 6] = [
@@ -156,14 +171,7 @@ const ARRIVING_CHUNK_LENS: [(&str, usize); 6] = [
 /// Every default the `trex` states is one no fragment falls back on, so what a
 /// fragment writes is what the samples handed over stated.
 fn movie() -> MovieBox {
-    let epoch = Mp4EpochSeconds::from_seconds(0);
-
-    MovieBox::new(
-        MovieHeaderBox::new(epoch, epoch, TIMESCALE, 0, 2),
-        vec![track(TRACK_ID)],
-        MovieExtendsBox::new(vec![TrackExtendsBox::new(TRACK_ID, 9, 1, 1, u32::MAX)]),
-    )
-    .unwrap()
+    fragmented_movie(TrackExtendsBox::new(TRACK_ID, 9, 1, 1, u32::MAX))
 }
 
 /// Drains what the writer has ready, and reports how many bytes that was
@@ -286,8 +294,18 @@ fn box_reader_boxes(file: &[u8], chunk_len: usize) -> usize {
 /// The file the composition makes, laid down whole
 fn written_file(composition: &Composition) -> Vec<u8> {
     let mut writer = FragmentedWriter::new();
-    let mut file = Vec::new();
+    let mut file = Vec::with_capacity(composition.payload_len());
     let mut buffer = [0; OUTPUT_BUFFER_LEN];
+    let mut gather = |writer: &mut FragmentedWriter, file: &mut Vec<u8>| {
+        loop {
+            let written = writer.poll_output(&mut buffer);
+
+            if written == 0 {
+                return;
+            }
+            file.extend_from_slice(buffer.get(..written).unwrap());
+        }
+    };
 
     writer.handle_file_type(file_type()).unwrap();
     writer.handle_movie(movie()).unwrap();
@@ -300,39 +318,95 @@ fn written_file(composition: &Composition) -> Vec<u8> {
             writer.handle_sample(sample).unwrap();
         }
         writer.finish_fragment().unwrap();
+        gather(&mut writer, &mut file);
     }
     writer.finish().unwrap();
+    gather(&mut writer, &mut file);
 
-    loop {
-        let written = writer.poll_output(&mut buffer);
-
-        match buffer.get(..written) {
-            Some([]) | None => return file,
-            Some(bytes) => file.extend_from_slice(bytes),
-        }
-    }
+    file
 }
 
 /// Measures the two layers down and the two layers up, for every composition
-fn composition(criterion: &mut Criterion<WallTime>) {
+fn composition(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("composition");
 
-    for composition in COMPOSITIONS {
+    for (name, composition) in COMPOSITIONS {
         let file = written_file(&composition);
         let file_len = file.len();
         let payload_len = composition.payload_len();
         let sample_count = composition.sample_count();
+        let box_count = composition.box_count();
 
         group.throughput(Throughput::Bytes(u64::try_from(payload_len).unwrap()));
 
+        group.bench_function(BenchmarkId::new("fragmented_writer", name), |bencher| {
+            bencher.iter_batched(
+                || (file_type(), movie(), composition.samples()),
+                |(file_type, movie, fragments)| {
+                    assert_eq!(
+                        fragmented_writer_file(file_type, movie, fragments),
+                        file_len
+                    )
+                },
+                BatchSize::PerIteration,
+            );
+        });
+
+        group.bench_function(BenchmarkId::new("sample_writer", name), |bencher| {
+            bencher.iter_batched(
+                || composition.samples(),
+                |fragments| assert_eq!(sample_writer_fragments(fragments), payload_len),
+                BatchSize::PerIteration,
+            );
+        });
+
+        group.bench_function(BenchmarkId::new("fragmented_reader", name), |bencher| {
+            bencher.iter(|| {
+                assert_eq!(
+                    fragmented_reader_samples(&file, DEFAULT_ARRIVING_CHUNK_LEN),
+                    (sample_count, payload_len)
+                );
+            });
+        });
+
+        group.bench_function(BenchmarkId::new("box_reader", name), |bencher| {
+            bencher.iter(|| {
+                assert_eq!(
+                    box_reader_boxes(&file, DEFAULT_ARRIVING_CHUNK_LEN),
+                    box_count
+                );
+            });
+        });
+    }
+
+    group.finish();
+}
+
+/// Measures what splitting the same samples into longer or shorter fragments costs
+fn fragment_length(criterion: &mut Criterion) {
+    let mut group = criterion.benchmark_group("fragment_length");
+
+    group.throughput(Throughput::Bytes(
+        u64::try_from(FRAGMENT_LENGTH_BASE.payload_len()).unwrap(),
+    ));
+
+    for samples_per_fragment in SAMPLES_PER_FRAGMENT {
+        let composition = Composition {
+            samples_per_fragment,
+            fragment_count: FRAGMENT_LENGTH_BASE.sample_count() / samples_per_fragment,
+            ..FRAGMENT_LENGTH_BASE
+        };
+        let payload_len = composition.payload_len();
+        let file_len = fragmented_writer_file(file_type(), movie(), composition.samples());
+
         group.bench_function(
-            BenchmarkId::new("fragmented_writer", composition.name),
+            BenchmarkId::new("fragmented_writer", samples_per_fragment),
             |bencher| {
                 bencher.iter_batched(
-                    || composition.samples(),
-                    |fragments| {
+                    || (file_type(), movie(), composition.samples()),
+                    |(file_type, movie, fragments)| {
                         assert_eq!(
-                            fragmented_writer_file(file_type(), movie(), fragments),
+                            fragmented_writer_file(file_type, movie, fragments),
                             file_len
                         )
                     },
@@ -340,61 +414,6 @@ fn composition(criterion: &mut Criterion<WallTime>) {
                 );
             },
         );
-
-        group.bench_function(
-            BenchmarkId::new("sample_writer", composition.name),
-            |bencher| {
-                bencher.iter_batched(
-                    || composition.samples(),
-                    |fragments| assert_eq!(sample_writer_fragments(fragments), payload_len),
-                    BatchSize::PerIteration,
-                );
-            },
-        );
-
-        group.bench_function(
-            BenchmarkId::new("fragmented_reader", composition.name),
-            |bencher| {
-                bencher.iter(|| {
-                    assert_eq!(
-                        fragmented_reader_samples(&file, ARRIVING_CHUNK_LEN),
-                        (sample_count, payload_len)
-                    );
-                });
-            },
-        );
-
-        group.bench_function(
-            BenchmarkId::new("box_reader", composition.name),
-            |bencher| {
-                bencher.iter(|| {
-                    assert_eq!(
-                        box_reader_boxes(&file, ARRIVING_CHUNK_LEN),
-                        2 + 2 * composition.fragment_count
-                    );
-                });
-            },
-        );
-    }
-
-    group.finish();
-}
-
-/// Measures what splitting the same samples into longer or shorter fragments costs
-fn fragment_length(criterion: &mut Criterion<WallTime>) {
-    let mut group = criterion.benchmark_group("fragment_length");
-    let payload_len = FRAGMENT_LENGTH_SAMPLE_COUNT * FRAGMENT_LENGTH_SAMPLE_LEN;
-
-    group.throughput(Throughput::Bytes(u64::try_from(payload_len).unwrap()));
-
-    for samples_per_fragment in SAMPLES_PER_FRAGMENT {
-        let composition = Composition {
-            name: "fragment-length",
-            sample_len: FRAGMENT_LENGTH_SAMPLE_LEN,
-            samples_per_fragment,
-            fragment_count: FRAGMENT_LENGTH_SAMPLE_COUNT / samples_per_fragment,
-        };
-        let file_len = written_file(&composition).len();
 
         group.bench_function(
             BenchmarkId::new("sample_writer", samples_per_fragment),
@@ -406,35 +425,18 @@ fn fragment_length(criterion: &mut Criterion<WallTime>) {
                 );
             },
         );
-
-        group.bench_function(
-            BenchmarkId::new("fragmented_writer", samples_per_fragment),
-            |bencher| {
-                bencher.iter_batched(
-                    || composition.samples(),
-                    |fragments| {
-                        assert_eq!(
-                            fragmented_writer_file(file_type(), movie(), fragments),
-                            file_len
-                        )
-                    },
-                    BatchSize::PerIteration,
-                );
-            },
-        );
     }
 
     group.finish();
 }
 
 /// Measures what handing the same file over in longer or shorter chunks costs
-fn chunk_length(criterion: &mut Criterion<WallTime>) {
+fn chunk_length(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("chunk_length");
-    let composition = COMPOSITIONS[0];
-    let file = written_file(&composition);
-    let payload_len = composition.payload_len();
-    let sample_count = composition.sample_count();
-    let box_count = 2 + 2 * composition.fragment_count;
+    let file = written_file(&CHUNK_LENGTH_BASE);
+    let payload_len = CHUNK_LENGTH_BASE.payload_len();
+    let sample_count = CHUNK_LENGTH_BASE.sample_count();
+    let box_count = CHUNK_LENGTH_BASE.box_count();
     let chunk_lens = [("whole-file", file.len())]
         .into_iter()
         .chain(ARRIVING_CHUNK_LENS);

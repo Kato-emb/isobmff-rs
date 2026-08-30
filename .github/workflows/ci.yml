@@ -60,8 +60,9 @@ jobs:
       - run: cargo nextest run --workspace --all-features --no-tests=pass
       - run: cargo test --doc --workspace --all-features
       # A bench is not run here — a number taken on a shared runner says nothing.
-      # This only keeps a bench that stopped compiling from reaching main, and one
-      # host proves that, so the other two legs of the matrix skip it.
+      # This only keeps a bench that stopped linking from reaching main, and one
+      # host proves that. The other two legs skip the bench binary alone: criterion
+      # is an unconditional dev-dependency, so they compile it for the tests anyway.
       - if: matrix.os == 'ubuntu-latest'
         run: cargo bench --workspace --all-features --no-run
 
