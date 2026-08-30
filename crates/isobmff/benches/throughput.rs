@@ -13,6 +13,11 @@
 // measurement spent 78% of its time there and reported the harness, not the
 // library.
 
+// Why not black_box the bytes a writer hands over: taking the address of an
+// owned value forces it onto the stack and blocks its drop from being optimized,
+// which the buffer this measurement used to drain through never paid — reading it
+// against that buffer would charge the library for the harness.
+
 // Why not relaxing these in `clippy.toml`: `allow-unwrap-in-tests` reaches
 // inside `#[cfg(test)]` alone, which a bench target is compiled without, so
 // nothing short of an attribute here relaxes them.
@@ -192,7 +197,7 @@ fn drained(writer: &mut FragmentedWriter) -> usize {
 
     while let Some(written) = writer.poll_output() {
         total += written.len();
-        black_box(&written);
+        black_box(written.len());
     }
 
     total
@@ -348,7 +353,7 @@ fn box_drained(writer: &mut BoxWriter) -> usize {
 
     while let Some(written) = writer.poll_output() {
         total += written.len();
-        black_box(&written);
+        black_box(written.len());
     }
 
     total

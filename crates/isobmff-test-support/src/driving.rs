@@ -70,18 +70,14 @@ pub fn payloads_fused(events: Vec<(Range<u64>, BoxEvent)>) -> Vec<(Range<u64>, B
 pub fn bytes_of(events: Vec<BoxEvent>) -> Result<Vec<u8>, Error> {
     let mut writer = BoxWriter::new();
     let mut file = Vec::new();
-    let drain = |writer: &mut BoxWriter, file: &mut Vec<u8>| {
-        while let Some(written) = writer.poll_output() {
-            file.extend_from_slice(&written);
-        }
-    };
 
     for event in events {
         writer.handle_event(event)?;
-        drain(&mut writer, &mut file);
     }
     writer.finish()?;
-    drain(&mut writer, &mut file);
+    while let Some(written) = writer.poll_output() {
+        file.extend_from_slice(&written);
+    }
 
     Ok(file)
 }

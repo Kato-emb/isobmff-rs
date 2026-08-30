@@ -158,27 +158,13 @@ impl BoxReader {
                         self.begin(header);
                     }
                     Err(error) if error.kind() == BoxErrorKind::TruncatedHeader => {
-                        let (gathered, rest) =
-                            unread.split_at(unread.len().min(BoxHeader::MAX_ENCODED_LEN));
-                        let mut bytes = [0; BoxHeader::MAX_ENCODED_LEN];
-
-                        for (slot, byte) in bytes.iter_mut().zip(gathered) {
-                            *slot = *byte;
-                        }
-                        if gathered.is_empty() {
+                        if unread.is_empty() {
                             return Ok(());
                         }
-                        unread = rest;
                         self.state = State::Header {
-                            bytes,
-                            filled: gathered.len(),
+                            bytes: [0; BoxHeader::MAX_ENCODED_LEN],
+                            filled: 0,
                         };
-                        // Why count here and again while gathering, rather than
-                        // under the event: a header the input cut across takes
-                        // bytes off every part of it while completing no event,
-                        // so counting only what an event took would leave the
-                        // offset short by the head of that header.
-                        self.advance(gathered.len());
                     }
                     Err(error) => return Err(self.fail(error.into())),
                 },
@@ -218,6 +204,10 @@ impl BoxReader {
                         bytes,
                         filled: filled.saturating_add(wanted),
                     };
+                    // Why count here rather than under the event: a header the
+                    // input cut across takes bytes off every part of it while
+                    // completing no event, so counting only what an event took
+                    // would leave the offset short by the head of that header.
                     self.advance(wanted);
                 }
                 State::Payload {
