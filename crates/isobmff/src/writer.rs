@@ -193,13 +193,13 @@ enum State {
 /// [`finish_fragment`](Self::finish_fragment), and reports the `moof` and the
 /// `mdat` they make as a pair from [`poll_fragment`](Self::poll_fragment). It
 /// writes nothing itself: what the two boxes are laid down as, and where, stay
-/// with the caller — `BoxWriter` of `isobmff-sequence` writes them as a file,
-/// and [`BoxEncode`](isobmff_core::BoxEncode) writes either on its own.
+/// with the caller — [`FragmentedWriter`](crate::FragmentedWriter) lays them
+/// down as a fragmented file, and [`BoxEncode`](isobmff_core::BoxEncode) writes
+/// either on its own.
 ///
-/// The init segment the fragments continue is the caller's too: `ftyp` and
-/// `moov` are built from the box layer, and the `trex` of a track sets defaults
-/// this writer never leans on — every default a fragment falls back on is
-/// stated by its own `tfhd`.
+/// The brands and the movie the fragments continue are the caller's too, and the
+/// `trex` of a track sets defaults this writer never leans on — every default a
+/// fragment falls back on is stated by its own `tfhd`.
 ///
 /// # Layout
 ///

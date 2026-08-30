@@ -125,16 +125,16 @@ enum State {
 ///
 /// The two halves of a fragmented presentation reach it separately —
 /// [`handle_movie_fragment`](Self::handle_movie_fragment) takes a `moof` read
-/// into a value, [`handle_media_data`](Self::handle_media_data) takes bytes —
-/// so wiring it to
-/// [`BoxReader`](https://docs.rs/isobmff-sequence/latest/isobmff_sequence/struct.BoxReader.html)
-/// is a match on two of its events.
+/// into a value, [`handle_media_data`](Self::handle_media_data) takes bytes.
+/// The reader is scoped to a fragment and carries no notion of a file, so what
+/// a file is laid out as stays with [`FragmentedReader`](crate::FragmentedReader),
+/// which drives one of these from the boxes it frames.
 ///
 /// # Contract
 ///
 /// * Extents count from the start of the presentation, wherever the caller read
-///   it from. A box layer reports where an event lay in what it was handed, so
-///   the caller adds the origin it read from before passing it on.
+///   it from. A layer framing the file reports where a box lay in what it was
+///   handed, so the caller adds the origin it read from before passing it on.
 /// * The extent handed to
 ///   [`handle_media_data`](Self::handle_media_data) is the extent of the bytes
 ///   handed with it, and covers as many bytes as they hold. Which box those

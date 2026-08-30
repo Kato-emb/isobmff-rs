@@ -2,13 +2,12 @@
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
-use core::mem;
 use core::ops::Range;
 
 use isobmff_core::{BoxHeader, CompactType, FourCC};
 
 use crate::error::Error;
-use crate::event::{BoxEvent, ValueBox};
+use crate::event::BoxEvent;
 
 /// Shortest header a box can carry: the `size` and `type` fields alone
 const MIN_HEADER_LEN: usize = 8;
@@ -66,10 +65,9 @@ fn take_payload<'input>(remaining: Option<u64>, input: &mut &'input [u8]) -> &'i
 /// [`event_extent`](Self::event_extent). It reaches for no source of its own:
 /// when to read and from where stay with the caller.
 ///
-/// The boxes a file is framed by — `ftyp`, `styp`, `moov`, and `moof` — are read
-/// into values. Every other box is passed on as it lies, an `mdat` and a box no
-/// specification this crate reads names alike, and which of those matter is the
-/// caller's.
+/// Every box is passed on as it lies: the reader frames the file and reads no
+/// box into a value, so which boxes matter and what their payloads mean stay
+/// with the caller.
 ///
 /// # Contract
 ///
@@ -80,31 +78,20 @@ fn take_payload<'input>(remaining: Option<u64>, input: &mut &'input [u8]) -> &'i
 /// * The caller drains before handing over more input. Events are held until
 ///   they are taken, so reading on without polling has the reader hold the
 ///   whole file.
-/// * A [`RawPayload`](BoxEvent::RawPayload) is never empty. A box with no
-///   payload is a [`RawStart`](BoxEvent::RawStart) followed by a
-///   [`RawEnd`](BoxEvent::RawEnd).
+/// * A [`Payload`](BoxEvent::Payload) is never empty. A box with no payload is
+///   a [`Header`](BoxEvent::Header) followed by an [`End`](BoxEvent::End).
 /// * The events partition the input: each one covers the bytes it was made
 ///   from, and the extent of one ends where the extent of the next begins.
 ///   [`event_extent`](Self::event_extent) names it for the event last taken.
-/// * The boxes read into values are reported as
-///   [`FileType`](BoxEvent::FileType), [`SegmentType`](BoxEvent::SegmentType),
-///   [`Movie`](BoxEvent::Movie), and [`MovieFragment`](BoxEvent::MovieFragment),
-///   and never as the raw events.
-/// * A box read into a value makes no event until it is whole: nothing of it is
-///   reported while its payload arrives, and the payload of a box that never
-///   completed is dropped rather than reported in part. The events the boxes
-///   before it made are taken as ever.
 /// * A box declaring no total —
-///   [`ToEndOfFile`](isobmff_core::BoxSize::ToEndOfFile) — is passed on as it
-///   lies even where its type is one that reads into a value, since the limit on
-///   what may be gathered is checked against the payload length a box declares.
-///   See [`with_payload_limit`](Self::with_payload_limit).
-/// * Where a payload is cut into [`RawPayload`](BoxEvent::RawPayload) events
-///   follows how the caller cut the file, and so does the extent each of those
-///   events covers. What does not follow it: the
-///   [`RawStart`](BoxEvent::RawStart) and [`RawEnd`](BoxEvent::RawEnd) events
-///   with the extents they cover, and the payload bytes those events hold end to
-///   end.
+///   [`ToEndOfFile`](isobmff_core::BoxSize::ToEndOfFile) — takes every byte
+///   that arrives after its header, and only [`finish`](Self::finish) closes
+///   it.
+/// * Where a payload is cut into [`Payload`](BoxEvent::Payload) events follows
+///   how the caller cut the file, and so does the extent each of those events
+///   covers. What does not follow it: the [`Header`](BoxEvent::Header) and
+///   [`End`](BoxEvent::End) events with the extents they cover, and the payload
+///   bytes those events hold end to end.
 /// * An `Err` leaves the reader failed for good,
 ///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside: every later
 ///   [`handle_input`](Self::handle_input) and [`finish`](Self::finish) reports
@@ -119,8 +106,7 @@ fn take_payload<'input>(remaining: Option<u64>, input: &mut &'input [u8]) -> &'i
 /// # Examples
 ///
 /// ```
-/// use isobmff_boxes::FileTypeBox;
-/// use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize, FourCC};
+/// use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize};
 /// use isobmff_sequence::{BoxEvent, BoxReader};
 ///
 /// // A file opening with an `ftyp` box and carrying one `mdat`, arriving cut
@@ -146,27 +132,21 @@ fn take_payload<'input>(remaining: Option<u64>, input: &mut &'input [u8]) -> &'i
 /// reader.finish().unwrap();
 /// assert_eq!(reader.poll_event(), None);
 ///
-/// // The `ftyp` is gathered across the cuts and read into a value, while the
-/// // `mdat` is passed on as it lies
-/// let mdat = BoxHeader::new(
-///     BoxType::compact(*b"mdat"),
-///     BoxSize::Compact(CompactSize::new(12).unwrap()),
-/// )
-/// .unwrap();
+/// // Both boxes are framed and passed on as they lie, the `ftyp` payload
+/// // arriving in the two parts the cuts made of it
+/// let whole_box = |box_type, total| {
+///     BoxHeader::new(box_type, BoxSize::Compact(CompactSize::new(total).unwrap())).unwrap()
+/// };
 /// assert_eq!(
 ///     events,
 ///     [
-///         (
-///             0..20,
-///             BoxEvent::FileType(FileTypeBox::new(
-///                 FourCC::new(*b"iso6"),
-///                 512,
-///                 vec![FourCC::new(*b"iso6")]
-///             ))
-///         ),
-///         (20..28, BoxEvent::RawStart(mdat)),
-///         (28..32, BoxEvent::RawPayload(b"SAMP".to_vec())),
-///         (32..32, BoxEvent::RawEnd),
+///         (0..8, BoxEvent::Header(whole_box(BoxType::compact(*b"ftyp"), 20))),
+///         (8..15, BoxEvent::Payload(b"iso6\0\0\x02".to_vec())),
+///         (15..20, BoxEvent::Payload(b"\0iso6".to_vec())),
+///         (20..20, BoxEvent::End),
+///         (20..28, BoxEvent::Header(whole_box(BoxType::compact(*b"mdat"), 12))),
+///         (28..32, BoxEvent::Payload(b"SAMP".to_vec())),
+///         (32..32, BoxEvent::End),
 ///     ]
 /// );
 /// ```
@@ -177,50 +157,21 @@ pub struct BoxReader {
     event_extent: Option<Range<u64>>,
     position: u64,
     queued_position: u64,
-    payload_limit: u64,
 }
 
 impl BoxReader {
-    /// Payload a box read into a value may declare, where the caller names no limit
-    ///
-    /// Sixteen mebibytes. A caller reading files whose `moov` reaches past that —
-    /// a progressive presentation holds a table entry per sample — names a limit
-    /// of its own with [`with_payload_limit`](Self::with_payload_limit).
-    pub const DEFAULT_PAYLOAD_LIMIT: u64 = 16 * 1024 * 1024;
-
     /// Creates a reader waiting at the start of a file
     ///
-    /// What a box read into a value may declare is bounded by
-    /// [`DEFAULT_PAYLOAD_LIMIT`](Self::DEFAULT_PAYLOAD_LIMIT). The extents the
-    /// reader reports count from the first byte handed to it, which it takes as
-    /// offset zero.
+    /// The extents the reader reports count from the first byte handed to it,
+    /// which it takes as offset zero.
     #[must_use]
     pub const fn new() -> Self {
-        Self::with_payload_limit(Self::DEFAULT_PAYLOAD_LIMIT)
-    }
-
-    /// Creates a reader gathering no more than `payload_limit` bytes for one box
-    ///
-    /// A box read into a value is gathered whole before it is read, so the
-    /// payload it declares is memory the reader is about to take. One declaring
-    /// more than `payload_limit` bytes of payload is
-    /// [`PayloadLimitExceeded`](crate::ErrorKind::PayloadLimitExceeded) instead,
-    /// reported before a byte of it is gathered.
-    ///
-    /// The limit bounds one box rather than the file: it is checked against the
-    /// payload length a box declares, not against its total and not against what
-    /// the boxes before it took. A box passed on as it lies is not bounded by it
-    /// at all — an `mdat` of any length reads as ever, its payload handed on
-    /// rather than held.
-    #[must_use]
-    pub const fn with_payload_limit(payload_limit: u64) -> Self {
         Self {
             state: State::Header(PartialHeader::new()),
             events: VecDeque::new(),
             event_extent: None,
             position: 0,
             queued_position: 0,
-            payload_limit,
         }
     }
 
@@ -234,11 +185,6 @@ impl BoxReader {
     ///
     /// * The failures of [`BoxHeader::decode`], carried on
     ///   [`Box`](crate::ErrorKind::Box): a header does not decode.
-    /// * [`PayloadLimitExceeded`](crate::ErrorKind::PayloadLimitExceeded): a box read into
-    ///   a value declares a payload past the limit the reader was given.
-    /// * Whatever the payload of a box read into a value reports, carried on
-    ///   [`Box`](crate::ErrorKind::Box) with the type of that box on its
-    ///   [`containers`](isobmff_core::Error::containers) path.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the file was declared
     ///   over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the reader keeps and reports
@@ -267,41 +213,16 @@ impl BoxReader {
                         }
                         Err(error) => return Err(self.fail(error.into())),
                     };
-                    let payload_len = header.payload_len();
-
-                    let Some((value_box, declared)) =
-                        ValueBox::of(header.box_type()).zip(payload_len)
-                    else {
-                        self.state = State::Payload {
-                            header,
-                            remaining: payload_len,
-                        };
-                        self.push_event(BoxEvent::RawStart(header));
-                        continue;
-                    };
-
-                    if declared > self.payload_limit {
-                        return Err(self.fail(Error::payload_limit_exceeded(
-                            header.box_type(),
-                            declared,
-                            self.payload_limit,
-                        )));
-                    }
-
-                    self.state = State::Gathering {
+                    self.state = State::Payload {
                         header,
-                        value_box,
-                        // Why not reserve the declared length: the file declares
-                        // it and the limit only bounds it, so reserving would take
-                        // memory for bytes that may never arrive.
-                        gathered: Vec::new(),
-                        remaining: declared,
+                        remaining: header.payload_len(),
                     };
+                    self.push_event(BoxEvent::Header(header));
                 }
                 State::Payload { header, remaining } => {
                     if remaining == Some(0) {
                         self.state = State::Header(PartialHeader::new());
-                        self.push_event(BoxEvent::RawEnd);
+                        self.push_event(BoxEvent::End);
                         continue;
                     }
                     if unread.is_empty() {
@@ -316,35 +237,7 @@ impl BoxReader {
                             .map(|remaining| remaining.saturating_sub(payload.len() as u64)),
                     };
                     self.advance(payload.len());
-                    self.push_event(BoxEvent::RawPayload(Vec::from(payload)));
-                }
-                State::Gathering {
-                    header,
-                    value_box,
-                    ref mut remaining,
-                    ref mut gathered,
-                } => {
-                    if *remaining == 0 {
-                        let payload = mem::take(gathered);
-
-                        self.state = State::Header(PartialHeader::new());
-                        match value_box.read(&payload) {
-                            Ok(event) => self.push_event(event),
-                            Err(error) => {
-                                return Err(self.fail(error.in_container(header.box_type()).into()));
-                            }
-                        }
-                        continue;
-                    }
-                    if unread.is_empty() {
-                        return Ok(());
-                    }
-
-                    let payload = take_payload(Some(*remaining), &mut unread);
-
-                    gathered.extend_from_slice(payload);
-                    *remaining = remaining.saturating_sub(payload.len() as u64);
-                    self.advance(payload.len());
+                    self.push_event(BoxEvent::Payload(Vec::from(payload)));
                 }
             }
         }
@@ -388,19 +281,18 @@ impl BoxReader {
     /// Declares the file over, and closes the box left open
     ///
     /// A box is left open either because the file reached its declared total
-    /// without the [`RawEnd`](BoxEvent::RawEnd) that follows having been made,
-    /// or because it declares no total at all —
+    /// without the [`End`](BoxEvent::End) that follows having been made, or
+    /// because it declares no total at all —
     /// [`ToEndOfFile`](isobmff_core::BoxSize::ToEndOfFile), which only the end
-    /// of the file ends. Both are closed with a [`RawEnd`](BoxEvent::RawEnd),
-    /// taken from [`poll_event`](Self::poll_event) like any other event.
+    /// of the file ends. Both are closed with an [`End`](BoxEvent::End), taken
+    /// from [`poll_event`](Self::poll_event) like any other event.
     ///
     /// # Errors
     ///
     /// * [`UnfinishedHeader`](crate::ErrorKind::UnfinishedHeader): the file ended
     ///   inside a box header.
     /// * [`UnfinishedBox`](crate::ErrorKind::UnfinishedBox): the file ended before
-    ///   the declared total of a box was reached, whether that box was being
-    ///   passed on or gathered into a value.
+    ///   the declared total of a box was reached.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was already declared over.
     /// * The failure of a previous call, which the reader keeps and reports
@@ -429,24 +321,10 @@ impl BoxReader {
                     ))),
                     None => {
                         self.state = State::Finished;
-                        self.push_event(BoxEvent::RawEnd);
+                        self.push_event(BoxEvent::End);
                         Ok(())
                     }
                 }
-            }
-            State::Gathering {
-                header,
-                remaining,
-                ref gathered,
-                ..
-            } => {
-                let read_so_far =
-                    (header.encoded_len() as u64).saturating_add(gathered.len() as u64);
-
-                Err(self.fail(Error::unfinished_box(
-                    read_so_far.saturating_add(remaining),
-                    read_so_far,
-                )))
             }
         }
     }
@@ -492,14 +370,6 @@ enum State {
     Payload {
         header: BoxHeader,
         remaining: Option<u64>,
-    },
-    /// Gathering the payload of a box that reads into a value, with `remaining`
-    /// bytes of it still to come
-    Gathering {
-        header: BoxHeader,
-        value_box: ValueBox,
-        gathered: Vec<u8>,
-        remaining: u64,
     },
     /// Told the file is over, and taking no more input
     Finished,
@@ -578,9 +448,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_boxes::{FileTypeBox, MovieFragmentBox, MovieFragmentHeaderBox, SegmentTypeBox};
-    use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize, ExtendedSize, FourCC, Uuid};
-    use isobmff_test_support::written;
+    use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize, ExtendedSize, Uuid};
 
     use super::{BoxEvent, BoxReader, Error, Range, header_len_from_prefix};
 
@@ -627,7 +495,7 @@ mod tests {
 
         (
             began_at..began_at.checked_add(header_length).unwrap(),
-            BoxEvent::RawStart(header),
+            BoxEvent::Header(header),
         )
     }
 
@@ -637,28 +505,13 @@ mod tests {
 
         (
             began_at..began_at.checked_add(length).unwrap(),
-            BoxEvent::RawPayload(Vec::from(payload)),
+            BoxEvent::Payload(Vec::from(payload)),
         )
     }
 
     /// The end of a box, standing empty just past it
     fn ended(ends_at: u64) -> (Range<u64>, BoxEvent) {
-        (ends_at..ends_at, BoxEvent::RawEnd)
-    }
-
-    /// Brands a fragmented file declares itself readable as
-    fn file_type() -> FileTypeBox {
-        FileTypeBox::new(FourCC::new(*b"iso6"), 512, vec![FourCC::new(*b"iso6")])
-    }
-
-    /// Brands a segment of a fragmented file declares itself readable as
-    fn segment_type() -> SegmentTypeBox {
-        SegmentTypeBox::new(FourCC::new(*b"msdh"), 0, vec![FourCC::new(*b"msdh")])
-    }
-
-    /// Fragment adding to no track, the shortest `moof` a file can carry
-    fn movie_fragment() -> MovieFragmentBox {
-        MovieFragmentBox::new(MovieFragmentHeaderBox::new(1), Vec::new())
+        (ends_at..ends_at, BoxEvent::End)
     }
 
     /// The next event the reader reports, with the bytes it was read from
@@ -710,15 +563,15 @@ mod tests {
         assert_eq!(reader.event_extent(), None);
         assert_eq!(
             reader.poll_event(),
-            Some(BoxEvent::RawStart(compact_header(*b"free", 12)))
+            Some(BoxEvent::Header(compact_header(*b"free", 12)))
         );
         assert_eq!(reader.event_extent(), Some(0..8));
         assert_eq!(
             reader.poll_event(),
-            Some(BoxEvent::RawPayload(Vec::from(*b"AAAA")))
+            Some(BoxEvent::Payload(Vec::from(*b"AAAA")))
         );
         assert_eq!(reader.event_extent(), Some(8..12));
-        assert_eq!(reader.poll_event(), Some(BoxEvent::RawEnd));
+        assert_eq!(reader.poll_event(), Some(BoxEvent::End));
         assert_eq!(reader.poll_event(), None);
         assert_eq!(reader.event_extent(), Some(12..12));
     }
@@ -938,134 +791,5 @@ mod tests {
         reader.finish().unwrap();
 
         assert_eq!(reader.finish(), Err(Error::already_finished()));
-    }
-
-    #[test]
-    fn a_box_that_reads_into_a_value_is_reported_as_that_value() {
-        let file = [written(&file_type()), written(&movie_fragment())].concat();
-
-        assert_eq!(
-            events_of(&file, file.len()),
-            vec![
-                (0..20, BoxEvent::FileType(file_type())),
-                (20..44, BoxEvent::MovieFragment(movie_fragment())),
-            ]
-        );
-    }
-
-    #[test]
-    fn a_segment_declares_its_brands_in_a_value_of_its_own() {
-        assert_eq!(
-            events_of(&written(&segment_type()), 3),
-            vec![(0..20, BoxEvent::SegmentType(segment_type()))]
-        );
-    }
-
-    #[test]
-    fn a_value_is_the_same_however_the_input_cut_the_payload_it_was_gathered_from() {
-        let file = [written(&file_type()), written(&movie_fragment())].concat();
-        let whole = events_of(&file, file.len());
-
-        for cut_length in 1..=file.len() {
-            assert_eq!(
-                events_of(&file, cut_length),
-                whole,
-                "cut every {cut_length} bytes"
-            );
-        }
-    }
-
-    #[test]
-    fn no_event_is_made_while_the_payload_of_a_value_arrives() {
-        let ftyp = written(&file_type());
-        let (last, head) = ftyp.split_last().unwrap();
-        let mut reader = BoxReader::new();
-
-        reader.handle_input(head).unwrap();
-
-        assert_eq!(reader.poll_event(), None);
-
-        reader.handle_input(&[*last]).unwrap();
-
-        assert_eq!(
-            polled(&mut reader),
-            Some((0..20, BoxEvent::FileType(file_type())))
-        );
-    }
-
-    #[test]
-    fn a_value_declaring_a_payload_past_the_limit_is_rejected() {
-        let mut reader = BoxReader::with_payload_limit(4);
-
-        assert_eq!(
-            reader.handle_input(&written(&file_type())),
-            Err(Error::payload_limit_exceeded(
-                BoxType::compact(*b"ftyp"),
-                12,
-                4
-            ))
-        );
-    }
-
-    #[test]
-    fn a_box_passed_on_as_it_lies_is_not_bounded_by_the_limit() {
-        let mut reader = BoxReader::with_payload_limit(0);
-        let mut events = Vec::new();
-
-        reader.handle_input(b"\0\0\0\x10mdatPAYLOAD!").unwrap();
-        reader.finish().unwrap();
-        while let Some(event) = polled(&mut reader) {
-            events.push(event);
-        }
-
-        assert_eq!(
-            events,
-            vec![
-                started(compact_header(*b"mdat", 16), 0),
-                passed_on(b"PAYLOAD!", 8),
-                ended(16),
-            ]
-        );
-    }
-
-    #[test]
-    fn a_box_declaring_no_total_is_passed_on_as_it_lies_though_its_type_reads_into_a_value() {
-        assert_eq!(
-            events_of(b"\0\0\0\0moovPAYLOAD", 4),
-            vec![
-                started(
-                    BoxHeader::new(BoxType::compact(*b"moov"), BoxSize::ToEndOfFile).unwrap(),
-                    0
-                ),
-                passed_on(b"PAYL", 8),
-                passed_on(b"OAD", 12),
-                ended(15),
-            ]
-        );
-    }
-
-    #[test]
-    fn a_value_whose_payload_does_not_decode_fails_the_reader_and_reports_no_part_of_it() {
-        let mut reader = BoxReader::new();
-
-        let failure = Error::from(
-            isobmff_core::Error::truncated_header(8, 4).in_container(BoxType::compact(*b"moof")),
-        );
-
-        assert_eq!(reader.handle_input(b"\0\0\0\x0cmoofAAAA"), Err(failure));
-        assert_eq!(reader.handle_input(b"\0\0\0\x08free"), Err(failure));
-        assert_eq!(reader.poll_event(), None);
-    }
-
-    #[test]
-    fn a_file_stopping_inside_a_value_is_rejected_as_unfinished() {
-        let ftyp = written(&file_type());
-        let (_last, head) = ftyp.split_last().unwrap();
-        let mut reader = BoxReader::new();
-
-        reader.handle_input(head).unwrap();
-
-        assert_eq!(reader.finish(), Err(Error::unfinished_box(20, 19)));
-        assert_eq!(reader.poll_event(), None);
     }
 }

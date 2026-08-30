@@ -1,4 +1,4 @@
-//! The samples of a fragmented file, read through the box layer beside this one
+//! The samples of a fragmented file laid out by hand, read back through its layout
 
 // Why not inside `mod tests`: an inline `mod` adds its own name as a directory
 // segment, so a nested one looks for `tests/tests/helpers/reading.rs`. The
@@ -106,7 +106,7 @@ mod tests {
     }
 
     #[test]
-    fn the_samples_of_a_fragmented_file_are_read_through_the_reader_of_its_boxes() {
+    fn the_samples_of_a_fragmented_file_are_read_off_the_bytes_it_lies_as() {
         let file = fragmented_file();
 
         assert_eq!(samples_of(&file, file.len()), declared_samples());

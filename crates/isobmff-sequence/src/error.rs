@@ -76,18 +76,6 @@ impl Error {
         }
     }
 
-    /// Returns the failure of a box declaring a payload past the limit a reader holds
-    #[must_use]
-    pub const fn payload_limit_exceeded(box_type: BoxType, declared: u64, limit: u64) -> Self {
-        Self {
-            representation: Representation::PayloadLimitExceeded {
-                box_type,
-                declared,
-                limit,
-            },
-        }
-    }
-
     /// Returns the failure of a payload, or an end, offered while no box is open
     #[must_use]
     pub const fn no_box_open() -> Self {
@@ -128,7 +116,6 @@ impl Error {
             Representation::UnfinishedHeader { .. } => ErrorKind::UnfinishedHeader,
             Representation::UnfinishedBox { .. } => ErrorKind::UnfinishedBox,
             Representation::PayloadPastDeclared { .. } => ErrorKind::PayloadPastDeclared,
-            Representation::PayloadLimitExceeded { .. } => ErrorKind::PayloadLimitExceeded,
             Representation::NoBoxOpen => ErrorKind::NoBoxOpen,
             Representation::BoxStillOpen { .. } => ErrorKind::BoxStillOpen,
             Representation::PastEndOfFile => ErrorKind::PastEndOfFile,
@@ -144,7 +131,6 @@ impl Error {
             Representation::UnfinishedHeader { .. } | Representation::UnfinishedBox { .. } => {
                 Category::Malformed
             }
-            Representation::PayloadLimitExceeded { .. } => Category::Unsupported,
             Representation::PayloadPastDeclared { .. }
             | Representation::NoBoxOpen
             | Representation::BoxStillOpen { .. }
@@ -164,7 +150,6 @@ impl Error {
             Representation::UnfinishedHeader { .. }
             | Representation::UnfinishedBox { .. }
             | Representation::PayloadPastDeclared { .. }
-            | Representation::PayloadLimitExceeded { .. }
             | Representation::NoBoxOpen
             | Representation::BoxStillOpen { .. }
             | Representation::PastEndOfFile
@@ -177,7 +162,6 @@ impl Error {
     pub const fn box_type(self) -> Option<BoxType> {
         match self.representation {
             Representation::PayloadPastDeclared { box_type, .. }
-            | Representation::PayloadLimitExceeded { box_type, .. }
             | Representation::BoxStillOpen { box_type } => Some(box_type),
             Representation::Box(_)
             | Representation::UnfinishedHeader { .. }
@@ -194,8 +178,7 @@ impl Error {
         match self.representation {
             Representation::UnfinishedHeader { needed, .. }
             | Representation::UnfinishedBox { needed, .. } => Some(needed),
-            Representation::PayloadPastDeclared { declared, .. }
-            | Representation::PayloadLimitExceeded { declared, .. } => Some(declared),
+            Representation::PayloadPastDeclared { declared, .. } => Some(declared),
             Representation::Box(_)
             | Representation::NoBoxOpen
             | Representation::BoxStillOpen { .. }
@@ -211,7 +194,6 @@ impl Error {
             Representation::UnfinishedHeader { available, .. }
             | Representation::UnfinishedBox { available, .. } => Some(available),
             Representation::PayloadPastDeclared { offered, .. } => Some(offered),
-            Representation::PayloadLimitExceeded { limit, .. } => Some(limit),
             Representation::Box(_)
             | Representation::NoBoxOpen
             | Representation::BoxStillOpen { .. }
@@ -248,14 +230,6 @@ impl fmt::Display for Error {
             } => write!(
                 formatter,
                 "{box_type} box declares {declared} payload bytes, and {offered} were offered"
-            ),
-            Representation::PayloadLimitExceeded {
-                box_type,
-                declared,
-                limit,
-            } => write!(
-                formatter,
-                "{box_type} box declares {declared} payload bytes, past the {limit}-byte limit"
             ),
             Representation::NoBoxOpen => {
                 formatter.write_str("no box is open to carry a payload or an end")
@@ -304,7 +278,6 @@ impl error::Error for Error {
             Representation::UnfinishedHeader { .. }
             | Representation::UnfinishedBox { .. }
             | Representation::PayloadPastDeclared { .. }
-            | Representation::PayloadLimitExceeded { .. }
             | Representation::NoBoxOpen
             | Representation::BoxStillOpen { .. }
             | Representation::PastEndOfFile
@@ -351,13 +324,6 @@ pub enum ErrorKind {
     /// [`available_bytes`](Error::available_bytes) the payload offered
     /// for it.
     PayloadPastDeclared,
-    /// Box read into a value declares a payload past the limit the reader holds
-    ///
-    /// [`box_type`](Error::box_type) is the box that declared it,
-    /// [`needed_bytes`](Error::needed_bytes) the payload it declares, and
-    /// [`available_bytes`](Error::available_bytes) the payload the reader
-    /// gathers for one box at most.
-    PayloadLimitExceeded,
     /// Payload, or the end of a box, came while no box was open
     NoBoxOpen,
     /// Box started while the box before it was still open
@@ -385,12 +351,6 @@ enum Representation {
         declared: u64,
         offered: u64,
     },
-    /// Box declaring a payload past the limit a reader holds
-    PayloadLimitExceeded {
-        box_type: BoxType,
-        declared: u64,
-        limit: u64,
-    },
     /// Payload, or an end, offered while no box is open
     NoBoxOpen,
     /// Box started while the box before it is still open
@@ -415,10 +375,6 @@ mod tests {
         assert_eq!(
             Error::unfinished_header(16, 9).category(),
             Category::Malformed
-        );
-        assert_eq!(
-            Error::payload_limit_exceeded(BoxType::compact(*b"moov"), 32, 16).category(),
-            Category::Unsupported
         );
         assert_eq!(Error::no_box_open().category(), Category::Usage);
         assert_eq!(
@@ -463,10 +419,6 @@ mod tests {
         assert_eq!(
             Error::payload_past_declared(BoxType::compact(*b"mdat"), 4, 9).to_string(),
             "mdat box declares 4 payload bytes, and 9 were offered"
-        );
-        assert_eq!(
-            Error::payload_limit_exceeded(BoxType::compact(*b"moov"), 32, 16).to_string(),
-            "moov box declares 32 payload bytes, past the 16-byte limit"
         );
         assert_eq!(
             Error::no_box_open().to_string(),

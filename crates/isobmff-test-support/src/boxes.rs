@@ -43,7 +43,7 @@ fn laid_out(header: BoxHeader, payload: &[u8]) -> Vec<u8> {
 }
 
 /// Lays out one whole box: the header that `box_type` and `payload` need, then the payload
-fn framed(box_type: BoxType, payload: &[u8]) -> Vec<u8> {
+pub fn framed(box_type: BoxType, payload: &[u8]) -> Vec<u8> {
     let header =
         BoxHeader::with_payload_len(box_type, u64::try_from(payload.len()).unwrap()).unwrap();
 
@@ -148,15 +148,6 @@ pub fn movie_fragment() -> MovieFragmentBox {
     MovieFragmentBox::new(MovieFragmentHeaderBox::new(1), vec![track_fragment])
 }
 
-/// Header of the box the media data is framed as
-pub fn media_data_header() -> BoxHeader {
-    BoxHeader::with_payload_len(
-        BoxType::compact(*b"mdat"),
-        u64::try_from(MEDIA_DATA.len()).unwrap(),
-    )
-    .unwrap()
-}
-
 /// A synthetic fragmented file: the brands, the movie, one fragment, its media data
 ///
 /// The movie declares no `mvex`, which §8.8.1 has for a presentation continued in
@@ -182,11 +173,8 @@ pub fn segment_file() -> Vec<u8> {
     .concat()
 }
 
-/// A synthetic file of boxes passed on as they lie, its last box running to the end of it
-pub fn file_passed_on() -> Vec<u8> {
-    // Why hold no box the reader reads into a value: such a box is reported as
-    // that value and never as the bytes it was read from, which is what this file
-    // fixes. `isobmff-sequence/tests/value_boxes.rs` covers those.
+/// A synthetic file of boxes no specification here reads, its last running to the end of it
+pub fn file_running_to_its_end() -> Vec<u8> {
     let unbounded = BoxHeader::new(BoxType::compact(*b"mdat"), BoxSize::ToEndOfFile).unwrap();
     let mut file = framed(BoxType::compact(*b"free"), b"");
 

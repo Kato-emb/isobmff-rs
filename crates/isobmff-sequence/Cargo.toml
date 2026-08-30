@@ -12,7 +12,6 @@ categories.workspace = true
 exclude.workspace = true
 
 [dependencies]
-isobmff-boxes.workspace = true
 isobmff-core.workspace = true
 
 [dev-dependencies]

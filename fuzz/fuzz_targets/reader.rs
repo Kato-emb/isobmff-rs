@@ -4,23 +4,17 @@
 //!
 //! 1. no call panics, and no event carries a payload part that is empty
 //! 2. the extents partition the input the reader got through: each one begins
-//!    where the one before it ended, and a box passed on lies over the header,
-//!    the payload parts, and the empty end it was read as
+//!    where the one before it ended, and a box lies over the header, the
+//!    payload parts, and the empty end it was read as
 //! 3. where the input is cut does not change the boxes it reads, nor where they lie
-//! 4. the boxes read agree with the [`boxes`] iterator over the input — box type,
-//!    header, payload, and the offset each box begins at — as far as the reader
-//!    got through it
+//! 4. the boxes read agree with the [`boxes`] iterator over the input — header,
+//!    payload, and the offset each box begins at — as far as the reader got
+//!    through it
 //! 5. input the iterator rejects the reader rejects as well
-//!
-//! Where the reader alone rejects, property 4 holds over the boxes it did report
-//! rather than the whole input: reading a box into a value decodes its payload,
-//! which the iterator never looks at. That the boxes the iterator splits out
-//! re-encode to the spans they came from is the `boxes` target's property, not
-//! this one's.
 
 #![no_main]
 
-use isobmff_core::{BoxHeader, BoxType, boxes};
+use isobmff_core::{BoxHeader, boxes};
 use isobmff_sequence::{BoxEvent, BoxReader};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
@@ -45,18 +39,13 @@ struct Input<'bytes> {
     bytes: &'bytes [u8],
 }
 
-/// One box as the reader reported it
+/// One box as the reader reported it, gathered back from its events
 #[derive(PartialEq, Debug)]
-enum Reported {
-    /// Box passed on as it lies, gathered back from its raw events
-    PassedOn {
-        header: BoxHeader,
-        began_at: u64,
-        payload: Vec<u8>,
-        ended: bool,
-    },
-    /// Box read into a value, which publishes no bytes of its own
-    Value { box_type: BoxType, began_at: u64 },
+struct Reported {
+    header: BoxHeader,
+    began_at: u64,
+    payload: Vec<u8>,
+    ended: bool,
 }
 
 /// Everything one pass of the reader over an input reported
@@ -123,10 +112,7 @@ fn read<'input>(arriving: impl IntoIterator<Item = &'input [u8]>) -> Run {
     // Why not keep the box left unclosed: it spans bytes the reader never got
     // through, so comparing it against the iterator would hold a partial box up
     // against a whole one.
-    reported.retain(|reported| match *reported {
-        Reported::PassedOn { ended, .. } => ended,
-        Reported::Value { .. } => true,
-    });
+    reported.retain(|reported| reported.ended);
 
     Run {
         reported,
@@ -158,62 +144,39 @@ fn drain(reader: &mut BoxReader, reported: &mut Vec<Reported>, covered: &mut u64
         *covered = extent.end;
 
         match polled {
-            BoxEvent::RawStart(header) => {
+            BoxEvent::Header(header) => {
                 assert_eq!(
                     bytes_read_from,
                     u64::try_from(header.encoded_len()).expect("a header beyond `u64` was read"),
                     "the extent of a box starting is not the header it was read from"
                 );
-                reported.push(Reported::PassedOn {
+                reported.push(Reported {
                     header,
                     began_at,
                     payload: Vec::new(),
                     ended: false,
                 });
             }
-            BoxEvent::RawPayload(part) => {
+            BoxEvent::Payload(part) => {
                 assert!(!part.is_empty(), "an empty payload event was reported");
                 assert_eq!(
                     bytes_read_from,
                     u64::try_from(part.len()).expect("a payload part beyond `u64` was read"),
                     "the extent of a payload part is not the bytes it carries"
                 );
-                let open = reported
+                reported
                     .last_mut()
-                    .expect("a payload before any box started");
-
-                match open {
-                    Reported::PassedOn { payload, .. } => payload.extend_from_slice(&part),
-                    Reported::Value { .. } => panic!("a payload of a box read into a value"),
-                }
+                    .expect("a payload before any box started")
+                    .payload
+                    .extend_from_slice(&part);
             }
-            BoxEvent::RawEnd => {
+            BoxEvent::End => {
                 assert_eq!(
                     bytes_read_from, 0,
                     "the extent of a box ending covers bytes of the input"
                 );
-
-                match reported.last_mut().expect("an end before any box started") {
-                    Reported::PassedOn { ended, .. } => *ended = true,
-                    Reported::Value { .. } => panic!("an end of a box read into a value"),
-                }
+                reported.last_mut().expect("an end before any box started").ended = true;
             }
-            BoxEvent::FileType(_ftyp) => reported.push(Reported::Value {
-                box_type: BoxType::compact(*b"ftyp"),
-                began_at,
-            }),
-            BoxEvent::SegmentType(_styp) => reported.push(Reported::Value {
-                box_type: BoxType::compact(*b"styp"),
-                began_at,
-            }),
-            BoxEvent::Movie(_moov) => reported.push(Reported::Value {
-                box_type: BoxType::compact(*b"moov"),
-                began_at,
-            }),
-            BoxEvent::MovieFragment(_moof) => reported.push(Reported::Value {
-                box_type: BoxType::compact(*b"moof"),
-                began_at,
-            }),
             unknown => panic!("the reader reported an event this run cannot check: {unknown:?}"),
         }
     }
@@ -253,34 +216,20 @@ fn agrees_with_the_boxes_iterator(bytes: &[u8], run: &Run) {
     let mut offset = 0;
 
     for (reported, framed) in run.reported.iter().zip(&iterated) {
-        let (Reported::PassedOn { began_at, .. } | Reported::Value { began_at, .. }) = *reported;
-
         assert_eq!(
-            began_at, offset as u64,
+            reported.began_at, offset as u64,
             "a box was reported at an offset it does not begin at"
         );
-
-        match reported {
-            Reported::PassedOn {
-                header, payload, ..
-            } => {
-                assert_eq!(
-                    *header,
-                    framed.header(),
-                    "the reader and the iterator disagree on the header of a box"
-                );
-                assert_eq!(
-                    payload.as_slice(),
-                    framed.payload(),
-                    "the reader and the iterator disagree on the payload of a box"
-                );
-            }
-            Reported::Value { box_type, .. } => assert_eq!(
-                *box_type,
-                framed.header().box_type(),
-                "a box was read into a value of another box type"
-            ),
-        }
+        assert_eq!(
+            reported.header,
+            framed.header(),
+            "the reader and the iterator disagree on the header of a box"
+        );
+        assert_eq!(
+            reported.payload.as_slice(),
+            framed.payload(),
+            "the reader and the iterator disagree on the payload of a box"
+        );
 
         offset += framed.header().encoded_len() + framed.payload().len();
     }

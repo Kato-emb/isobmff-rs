@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader};
+use isobmff_core::BoxHeader;
 
 use crate::error::Error;
 use crate::event::BoxEvent;
@@ -15,13 +15,9 @@ use crate::event::BoxEvent;
 /// stay with the caller. What [`BoxReader`](crate::BoxReader) reports, this
 /// writes, so an event stream read from one file writes back as that file.
 ///
-/// A box read into a value — [`FileType`](BoxEvent::FileType),
-/// [`SegmentType`](BoxEvent::SegmentType), [`Movie`](BoxEvent::Movie),
-/// [`MovieFragment`](BoxEvent::MovieFragment) — writes as a whole box, its header
-/// settled by the payload the value forms. A box carried as it lies writes the
-/// header of its [`RawStart`](BoxEvent::RawStart) as it stands, so the framing
-/// stays the caller's: the writer neither shortens nor widens the `size` field it
-/// was handed.
+/// A box writes the header of its [`Header`](BoxEvent::Header) as it stands, so
+/// the framing stays the caller's: the writer neither shortens nor widens the
+/// `size` field it was handed.
 ///
 /// # Contract
 ///
@@ -37,14 +33,14 @@ use crate::event::BoxEvent;
 ///   [`poll_output`](Self::poll_output) calls follows the buffers the caller
 ///   offers, and nothing else. The bytes themselves, end to end, do not follow
 ///   them.
-/// * A payload is carried by as many [`RawPayload`](BoxEvent::RawPayload) events
-///   as the caller cares to send, and must measure what the box declares:
+/// * A payload is carried by as many [`Payload`](BoxEvent::Payload) events as
+///   the caller cares to send, and must measure what the box declares:
 ///   offering more is [`PayloadPastDeclared`](crate::ErrorKind::PayloadPastDeclared)
 ///   and closing early is [`UnfinishedBox`](crate::ErrorKind::UnfinishedBox). The
 ///   writer does not correct the header it was handed to match what arrived.
 /// * A box declaring no total —
 ///   [`ToEndOfFile`](isobmff_core::BoxSize::ToEndOfFile) — takes payload of any
-///   length and is closed by [`RawEnd`](BoxEvent::RawEnd) like any other. Nothing
+///   length and is closed by [`End`](BoxEvent::End) like any other. Nothing
 ///   may follow it: it runs to the end of the file by definition, so an event
 ///   after it is [`PastEndOfFile`](crate::ErrorKind::PastEndOfFile).
 /// * A [`BoxEvent`] carries no position, so the extents
@@ -70,25 +66,20 @@ use crate::event::BoxEvent;
 /// # Examples
 ///
 /// ```
-/// use isobmff_boxes::FileTypeBox;
-/// use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize, FourCC};
+/// use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize};
 /// use isobmff_sequence::{BoxEvent, BoxWriter};
 ///
 /// // A file opening with an `ftyp` box and carrying one `mdat`
-/// let mdat = BoxHeader::new(
-///     BoxType::compact(*b"mdat"),
-///     BoxSize::Compact(CompactSize::new(12).unwrap()),
-/// )
-/// .unwrap();
+/// let whole_box = |box_type, total| {
+///     BoxHeader::new(box_type, BoxSize::Compact(CompactSize::new(total).unwrap())).unwrap()
+/// };
 /// let events = [
-///     BoxEvent::FileType(FileTypeBox::new(
-///         FourCC::new(*b"iso6"),
-///         512,
-///         vec![FourCC::new(*b"iso6")],
-///     )),
-///     BoxEvent::RawStart(mdat),
-///     BoxEvent::RawPayload(b"SAMP".to_vec()),
-///     BoxEvent::RawEnd,
+///     BoxEvent::Header(whole_box(BoxType::compact(*b"ftyp"), 20)),
+///     BoxEvent::Payload(b"iso6\0\0\x02\0iso6".to_vec()),
+///     BoxEvent::End,
+///     BoxEvent::Header(whole_box(BoxType::compact(*b"mdat"), 12)),
+///     BoxEvent::Payload(b"SAMP".to_vec()),
+///     BoxEvent::End,
 /// ];
 /// let mut writer = BoxWriter::new();
 /// let mut file = Vec::new();
@@ -112,13 +103,12 @@ use crate::event::BoxEvent;
 /// // Every box was closed, so the file ends here
 /// writer.finish().unwrap();
 ///
-/// // The `ftyp` wrote itself as a whole box, and the `mdat` came back out as it
-/// // went in
+/// // Both boxes came back out as they went in
 /// assert_eq!(file, *b"\0\0\0\x14ftypiso6\0\0\x02\0iso6\0\0\0\x0cmdatSAMP");
 ///
 /// // Each event landed where the one before it ended, as the reader reports the
 /// // same file
-/// assert_eq!(extents, [0..20, 20..28, 28..32, 32..32]);
+/// assert_eq!(extents, [0..8, 8..20, 20..20, 20..28, 28..32, 32..32]);
 /// ```
 #[derive(Debug)]
 pub struct BoxWriter {
@@ -162,9 +152,6 @@ impl BoxWriter {
     ///   before its declared total was reached.
     /// * [`PastEndOfFile`](crate::ErrorKind::PastEndOfFile): an event came after
     ///   the box running to the end of the file was closed.
-    /// * Whatever a value reports as it writes, carried on
-    ///   [`Box`](crate::ErrorKind::Box) with the type of the box it forms on its
-    ///   [`containers`](isobmff_core::Error::containers) path.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the file was
     ///   declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
@@ -175,7 +162,7 @@ impl BoxWriter {
             State::Finished => return Err(Error::already_finished()),
             State::EndOfFile => return Err(self.fail(Error::past_end_of_file())),
             State::Payload { header, .. }
-                if !matches!(event, BoxEvent::RawPayload(_) | BoxEvent::RawEnd) =>
+                if !matches!(event, BoxEvent::Payload(_) | BoxEvent::End) =>
             {
                 return Err(self.fail(Error::box_still_open(header.box_type())));
             }
@@ -184,11 +171,7 @@ impl BoxWriter {
 
         let began_at = self.position;
         let length = match event {
-            BoxEvent::FileType(ftyp) => self.write_whole(&ftyp),
-            BoxEvent::SegmentType(styp) => self.write_whole(&styp),
-            BoxEvent::Movie(moov) => self.write_whole(&moov),
-            BoxEvent::MovieFragment(moof) => self.write_whole(&moof),
-            BoxEvent::RawStart(header) => {
+            BoxEvent::Header(header) => {
                 let mut scratch = [0; BoxHeader::MAX_ENCODED_LEN];
                 let header_len = header.encoded_len() as u64;
 
@@ -197,7 +180,7 @@ impl BoxWriter {
 
                 Ok(header_len)
             }
-            BoxEvent::RawPayload(payload) => {
+            BoxEvent::Payload(payload) => {
                 let State::Payload { header, written } = self.state else {
                     return Err(self.fail(Error::no_box_open()));
                 };
@@ -227,7 +210,7 @@ impl BoxWriter {
 
                 Ok(length)
             }
-            BoxEvent::RawEnd => {
+            BoxEvent::End => {
                 let State::Payload { header, written } = self.state else {
                     return Err(self.fail(Error::no_box_open()));
                 };
@@ -328,42 +311,6 @@ impl BoxWriter {
         }
     }
 
-    /// Lays down the whole box `value` forms, and reports the bytes it took
-    fn write_whole<Value: BoxDefinition + BoxEncode>(
-        &mut self,
-        value: &Value,
-    ) -> Result<u64, Error> {
-        let needed = value.encoded_len();
-        let Ok(length) = usize::try_from(needed) else {
-            // Why not an error of its own for a box beyond `usize`: such a total
-            // exceeds every buffer this target can hold, which is what
-            // `BoxEncode::encode` reports as a short buffer for the same reason.
-            return Err(
-                self.encode_failure::<Value>(isobmff_core::Error::truncated_buffer(
-                    needed,
-                    usize::MAX as u64,
-                )),
-            );
-        };
-        let written = self.output.len();
-
-        self.output.resize(written.saturating_add(length), 0);
-
-        let encoded = value
-            .encode(self.output.get_mut(written..).unwrap_or_default())
-            .map(|_nothing_beyond| ());
-
-        match encoded {
-            Ok(()) => Ok(needed),
-            Err(error) => Err(self.encode_failure::<Value>(error)),
-        }
-    }
-
-    /// Fails the writer on a value that does not write, and names the box it forms
-    fn encode_failure<Value: BoxDefinition>(&mut self, source: isobmff_core::Error) -> Error {
-        self.fail(source.in_container(Value::BOX_TYPE).into())
-    }
-
     /// Fails the writer for good, and hands the failure back to report
     fn fail(&mut self, failure: Error) -> Error {
         self.state = State::Failed(failure);
@@ -413,8 +360,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_boxes::FileTypeBox;
-    use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize, FourCC};
+    use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize};
 
     use super::{BoxEvent, BoxWriter, Error};
 
@@ -430,11 +376,6 @@ mod tests {
     /// Header of a box running to the end of the file
     fn unbounded_header(box_type: [u8; 4]) -> BoxHeader {
         BoxHeader::new(BoxType::compact(box_type), BoxSize::ToEndOfFile).unwrap()
-    }
-
-    /// Brands a file declares itself readable as
-    fn file_type() -> FileTypeBox {
-        FileTypeBox::new(FourCC::new(*b"iso6"), 512, vec![FourCC::new(*b"iso6")])
     }
 
     /// Everything the writer has laid down, drained `buffer_length` bytes at a time
@@ -453,33 +394,19 @@ mod tests {
     }
 
     #[test]
-    fn a_value_writes_as_the_whole_box_it_forms() {
+    fn a_box_writes_the_header_and_the_payload_it_came_with() {
         let mut writer = BoxWriter::new();
 
         writer
-            .handle_event(BoxEvent::FileType(file_type()))
-            .unwrap();
-
-        assert_eq!(
-            drained(&mut writer, 64),
-            *b"\0\0\0\x14ftypiso6\0\0\x02\0iso6"
-        );
-    }
-
-    #[test]
-    fn a_box_passed_on_writes_the_header_and_the_payload_it_came_with() {
-        let mut writer = BoxWriter::new();
-
-        writer
-            .handle_event(BoxEvent::RawStart(compact_header(*b"mdat", 16)))
+            .handle_event(BoxEvent::Header(compact_header(*b"mdat", 16)))
             .unwrap();
         writer
-            .handle_event(BoxEvent::RawPayload(Vec::from(*b"PAYL")))
+            .handle_event(BoxEvent::Payload(Vec::from(*b"PAYL")))
             .unwrap();
         writer
-            .handle_event(BoxEvent::RawPayload(Vec::from(*b"OAD!")))
+            .handle_event(BoxEvent::Payload(Vec::from(*b"OAD!")))
             .unwrap();
-        writer.handle_event(BoxEvent::RawEnd).unwrap();
+        writer.handle_event(BoxEvent::End).unwrap();
         writer.finish().unwrap();
 
         assert_eq!(drained(&mut writer, 64), *b"\0\0\0\x10mdatPAYLOAD!");
@@ -490,14 +417,14 @@ mod tests {
         let mut writer = BoxWriter::new();
 
         writer
-            .handle_event(BoxEvent::FileType(file_type()))
+            .handle_event(BoxEvent::Header(compact_header(*b"mdat", 12)))
+            .unwrap();
+        writer
+            .handle_event(BoxEvent::Payload(Vec::from(*b"PAYL")))
             .unwrap();
 
         assert_eq!(writer.poll_output(&mut []), 0);
-        assert_eq!(
-            drained(&mut writer, 64),
-            *b"\0\0\0\x14ftypiso6\0\0\x02\0iso6"
-        );
+        assert_eq!(drained(&mut writer, 64), *b"\0\0\0\x0cmdatPAYL");
     }
 
     #[test]
@@ -505,11 +432,11 @@ mod tests {
         let mut writer = BoxWriter::new();
 
         writer
-            .handle_event(BoxEvent::RawStart(compact_header(*b"mdat", 12)))
+            .handle_event(BoxEvent::Header(compact_header(*b"mdat", 12)))
             .unwrap();
 
         assert_eq!(
-            writer.handle_event(BoxEvent::RawPayload(vec![0x11; 5])),
+            writer.handle_event(BoxEvent::Payload(vec![0x11; 5])),
             Err(Error::payload_past_declared(
                 BoxType::compact(*b"mdat"),
                 4,
@@ -523,14 +450,14 @@ mod tests {
         let mut writer = BoxWriter::new();
 
         writer
-            .handle_event(BoxEvent::RawStart(compact_header(*b"mdat", 12)))
+            .handle_event(BoxEvent::Header(compact_header(*b"mdat", 12)))
             .unwrap();
         writer
-            .handle_event(BoxEvent::RawPayload(Vec::from(*b"PA")))
+            .handle_event(BoxEvent::Payload(Vec::from(*b"PA")))
             .unwrap();
 
         assert_eq!(
-            writer.handle_event(BoxEvent::RawEnd),
+            writer.handle_event(BoxEvent::End),
             Err(Error::unfinished_box(12, 10))
         );
     }
@@ -540,7 +467,7 @@ mod tests {
         let mut writer = BoxWriter::new();
 
         assert_eq!(
-            writer.handle_event(BoxEvent::RawPayload(Vec::from(*b"PAYL"))),
+            writer.handle_event(BoxEvent::Payload(Vec::from(*b"PAYL"))),
             Err(Error::no_box_open())
         );
     }
@@ -550,7 +477,7 @@ mod tests {
         let mut writer = BoxWriter::new();
 
         assert_eq!(
-            writer.handle_event(BoxEvent::RawEnd),
+            writer.handle_event(BoxEvent::End),
             Err(Error::no_box_open())
         );
     }
@@ -560,25 +487,11 @@ mod tests {
         let mut writer = BoxWriter::new();
 
         writer
-            .handle_event(BoxEvent::RawStart(compact_header(*b"mdat", 12)))
+            .handle_event(BoxEvent::Header(compact_header(*b"mdat", 12)))
             .unwrap();
 
         assert_eq!(
-            writer.handle_event(BoxEvent::RawStart(compact_header(*b"free", 8))),
-            Err(Error::box_still_open(BoxType::compact(*b"mdat")))
-        );
-    }
-
-    #[test]
-    fn a_value_arriving_while_a_box_is_open_is_rejected() {
-        let mut writer = BoxWriter::new();
-
-        writer
-            .handle_event(BoxEvent::RawStart(compact_header(*b"mdat", 12)))
-            .unwrap();
-
-        assert_eq!(
-            writer.handle_event(BoxEvent::FileType(file_type())),
+            writer.handle_event(BoxEvent::Header(compact_header(*b"free", 8))),
             Err(Error::box_still_open(BoxType::compact(*b"mdat")))
         );
     }
@@ -588,15 +501,15 @@ mod tests {
         let mut writer = BoxWriter::new();
 
         writer
-            .handle_event(BoxEvent::RawStart(unbounded_header(*b"mdat")))
+            .handle_event(BoxEvent::Header(unbounded_header(*b"mdat")))
             .unwrap();
         writer
-            .handle_event(BoxEvent::RawPayload(Vec::from(*b"PAYL")))
+            .handle_event(BoxEvent::Payload(Vec::from(*b"PAYL")))
             .unwrap();
-        writer.handle_event(BoxEvent::RawEnd).unwrap();
+        writer.handle_event(BoxEvent::End).unwrap();
 
         assert_eq!(
-            writer.handle_event(BoxEvent::FileType(file_type())),
+            writer.handle_event(BoxEvent::Header(compact_header(*b"free", 8))),
             Err(Error::past_end_of_file())
         );
     }
@@ -606,10 +519,10 @@ mod tests {
         let mut writer = BoxWriter::new();
 
         writer
-            .handle_event(BoxEvent::RawStart(unbounded_header(*b"mdat")))
+            .handle_event(BoxEvent::Header(unbounded_header(*b"mdat")))
             .unwrap();
         writer
-            .handle_event(BoxEvent::RawPayload(Vec::from(*b"PAYL")))
+            .handle_event(BoxEvent::Payload(Vec::from(*b"PAYL")))
             .unwrap();
 
         assert_eq!(writer.finish(), Ok(()));
@@ -621,10 +534,10 @@ mod tests {
         let mut writer = BoxWriter::new();
 
         writer
-            .handle_event(BoxEvent::RawStart(compact_header(*b"mdat", 12)))
+            .handle_event(BoxEvent::Header(compact_header(*b"mdat", 12)))
             .unwrap();
         writer
-            .handle_event(BoxEvent::RawPayload(Vec::from(*b"PAYL")))
+            .handle_event(BoxEvent::Payload(Vec::from(*b"PAYL")))
             .unwrap();
 
         assert_eq!(writer.finish(), Ok(()));
@@ -636,10 +549,10 @@ mod tests {
         let mut writer = BoxWriter::new();
 
         writer
-            .handle_event(BoxEvent::RawStart(compact_header(*b"mdat", 12)))
+            .handle_event(BoxEvent::Header(compact_header(*b"mdat", 12)))
             .unwrap();
         writer
-            .handle_event(BoxEvent::RawPayload(Vec::from(*b"PA")))
+            .handle_event(BoxEvent::Payload(Vec::from(*b"PA")))
             .unwrap();
 
         assert_eq!(writer.finish(), Err(Error::unfinished_box(12, 10)));
@@ -650,9 +563,9 @@ mod tests {
         let mut writer = BoxWriter::new();
         let failure = Error::no_box_open();
 
-        assert_eq!(writer.handle_event(BoxEvent::RawEnd), Err(failure));
+        assert_eq!(writer.handle_event(BoxEvent::End), Err(failure));
         assert_eq!(
-            writer.handle_event(BoxEvent::FileType(file_type())),
+            writer.handle_event(BoxEvent::Header(compact_header(*b"free", 8))),
             Err(failure)
         );
         assert_eq!(writer.finish(), Err(failure));
@@ -664,12 +577,12 @@ mod tests {
         let failure = Error::unfinished_box(12, 8);
 
         writer
-            .handle_event(BoxEvent::RawStart(compact_header(*b"mdat", 12)))
+            .handle_event(BoxEvent::Header(compact_header(*b"mdat", 12)))
             .unwrap();
 
         assert_eq!(writer.finish(), Err(failure));
         assert_eq!(
-            writer.handle_event(BoxEvent::RawPayload(Vec::from(*b"PAYL"))),
+            writer.handle_event(BoxEvent::Payload(Vec::from(*b"PAYL"))),
             Err(failure)
         );
         assert_eq!(writer.finish(), Err(failure));
@@ -680,13 +593,13 @@ mod tests {
         let mut writer = BoxWriter::new();
 
         writer
-            .handle_event(BoxEvent::RawStart(compact_header(*b"mdat", 12)))
+            .handle_event(BoxEvent::Header(compact_header(*b"mdat", 12)))
             .unwrap();
         writer
-            .handle_event(BoxEvent::RawPayload(Vec::from(*b"PA")))
+            .handle_event(BoxEvent::Payload(Vec::from(*b"PA")))
             .unwrap();
 
-        assert!(writer.handle_event(BoxEvent::RawEnd).is_err());
+        assert!(writer.handle_event(BoxEvent::End).is_err());
 
         assert_eq!(drained(&mut writer, 64), *b"\0\0\0\x0cmdatPA");
     }
@@ -696,14 +609,14 @@ mod tests {
         let mut writer = BoxWriter::new();
 
         writer
-            .handle_event(BoxEvent::FileType(file_type()))
+            .handle_event(BoxEvent::Header(compact_header(*b"mdat", 12)))
+            .unwrap();
+        writer
+            .handle_event(BoxEvent::Payload(Vec::from(*b"PAYL")))
             .unwrap();
         writer.finish().unwrap();
 
-        assert_eq!(
-            drained(&mut writer, 64),
-            *b"\0\0\0\x14ftypiso6\0\0\x02\0iso6"
-        );
+        assert_eq!(drained(&mut writer, 64), *b"\0\0\0\x0cmdatPAYL");
     }
 
     #[test]
@@ -713,18 +626,18 @@ mod tests {
         assert_eq!(writer.event_extent(), None);
 
         writer
-            .handle_event(BoxEvent::RawStart(compact_header(*b"free", 12)))
+            .handle_event(BoxEvent::Header(compact_header(*b"free", 12)))
             .unwrap();
 
         assert_eq!(writer.event_extent(), Some(0..8));
 
         writer
-            .handle_event(BoxEvent::RawPayload(Vec::from(*b"AAAA")))
+            .handle_event(BoxEvent::Payload(Vec::from(*b"AAAA")))
             .unwrap();
 
         assert_eq!(writer.event_extent(), Some(8..12));
 
-        writer.handle_event(BoxEvent::RawEnd).unwrap();
+        writer.handle_event(BoxEvent::End).unwrap();
 
         assert_eq!(writer.event_extent(), Some(12..12));
     }
@@ -734,14 +647,18 @@ mod tests {
         let mut writer = BoxWriter::new();
 
         writer
-            .handle_event(BoxEvent::FileType(file_type()))
+            .handle_event(BoxEvent::Header(compact_header(*b"mdat", 12)))
             .unwrap();
+        writer
+            .handle_event(BoxEvent::Payload(Vec::from(*b"PAYL")))
+            .unwrap();
+        writer.handle_event(BoxEvent::End).unwrap();
         drained(&mut writer, 64);
         writer
-            .handle_event(BoxEvent::RawStart(compact_header(*b"free", 8)))
+            .handle_event(BoxEvent::Header(compact_header(*b"free", 8)))
             .unwrap();
 
-        assert_eq!(writer.event_extent(), Some(20..28));
+        assert_eq!(writer.event_extent(), Some(12..20));
     }
 
     #[test]
@@ -751,7 +668,7 @@ mod tests {
         writer.finish().unwrap();
 
         assert_eq!(
-            writer.handle_event(BoxEvent::FileType(file_type())),
+            writer.handle_event(BoxEvent::Header(compact_header(*b"free", 8))),
             Err(Error::already_finished())
         );
     }

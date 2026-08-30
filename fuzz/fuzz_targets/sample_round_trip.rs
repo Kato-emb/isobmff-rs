@@ -1,12 +1,12 @@
-//! Round-trip properties of [`SampleWriter`] against [`SampleReader`]
+//! Round-trip properties of [`FragmentedWriter`] against [`FragmentedReader`]
 //!
-//! One run lays samples out as movie fragments, reads back the file they make,
-//! and checks four properties of the same input:
+//! One run lays samples down as a fragmented file, reads that file back, and
+//! checks four properties of the same input:
 //!
 //! 1. no call panics: a writer that refuses a sample reports that same failure
-//!    for every call after it, and still hands over the fragments it had closed
+//!    for every call after it, and still hands over the bytes it had laid down
 //! 2. the samples of one track are read back as they were handed over
-//! 3. neither layer rejects the file the writer laid down
+//! 3. the reader does not reject the file the writer laid down
 //! 4. laying the samples read back out again reads back those same samples: the
 //!    order the tracks arrive in is settled by the first pass, which gathers the
 //!    samples of a track into one run, so the second pass is a fixed point of the
@@ -19,11 +19,10 @@
 #![no_main]
 
 use isobmff::{
-    BoxDefinition, BoxHeader, MediaDataBox, MovieBox, MovieFragmentBox, Sample, SampleError,
-    SampleErrorKind, SampleReader, SampleWriter, TrackExtendsBox,
+    FileError, FileErrorKind, FragmentedReader, FragmentedWriter, MovieBox, Sample,
+    TrackExtendsBox,
 };
-use isobmff_sequence::{BoxEvent, BoxReader};
-use isobmff_test_support::{bytes_of, file_type};
+use isobmff_test_support::file_type;
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
 
@@ -85,15 +84,8 @@ fuzz_target!(|input: Input<'_>| {
     };
     let buffer_length = usize::from(input.buffer_length).saturating_add(1);
     let handed_over = laid_out(&input);
-    let written = write(&handed_over);
-    let written_count = written.len();
-
-    let Some(file) = file_of(&movie, written, buffer_length) else {
-        return;
-    };
-    let Some(first_pass) = read_back(&movie, &file) else {
-        return;
-    };
+    let (file, written_count) = file_of(&movie, &handed_over, buffer_length);
+    let first_pass = read_back(&file);
 
     let taken = &handed_over[..written_count.min(handed_over.len())];
     let samples: Vec<Sample> = taken
@@ -117,13 +109,8 @@ fuzz_target!(|input: Input<'_>| {
     );
 
     let again = regrouped(taken, &first_pass);
-    let laid_out_again = write(&again);
-    let Some(file_again) = file_of(&movie, laid_out_again, buffer_length) else {
-        return;
-    };
-    let Some(read_back_again) = read_back(&movie, &file_again) else {
-        return;
-    };
+    let (file_again, _closed_again) = file_of(&movie, &again, buffer_length);
+    let read_back_again = read_back(&file_again);
 
     assert_eq!(
         first_pass, read_back_again,
@@ -196,11 +183,26 @@ fn laid_out(input: &Input<'_>) -> Vec<(u32, Vec<Sample>)> {
         .collect()
 }
 
-/// Hands the fragments to a writer and gathers the pairs it laid them out as
-fn write(fragments: &[(u32, Vec<Sample>)]) -> Vec<(MovieFragmentBox, MediaDataBox)> {
-    let mut writer = SampleWriter::new();
+/// Lays the fragments down as a fragmented file, and reports how many were closed
+///
+/// A writer that refuses reports that same failure for every call after it and
+/// still hands over the bytes of the fragments it had closed.
+fn file_of(
+    movie: &MovieBox,
+    fragments: &[(u32, Vec<Sample>)],
+    buffer_length: usize,
+) -> (Vec<u8>, usize) {
+    let mut writer = FragmentedWriter::new();
+    let mut file = Vec::new();
     let mut closed = 0;
     let mut refused = None;
+
+    writer
+        .handle_file_type(file_type())
+        .expect("a writer waiting for the brands refused them");
+    writer
+        .handle_movie(movie.clone())
+        .expect("a writer waiting for the movie refused it");
 
     for (sequence_number, samples) in fragments {
         let mut outcome = writer.begin_fragment(*sequence_number);
@@ -222,11 +224,13 @@ fn write(fragments: &[(u32, Vec<Sample>)]) -> Vec<(MovieFragmentBox, MediaDataBo
                 break;
             }
         }
+        drained_into(&mut writer, buffer_length, &mut file);
     }
 
     if refused.is_none() {
         refused = writer.finish().err();
     }
+    drained_into(&mut writer, buffer_length, &mut file);
 
     match refused {
         Some(reported) => {
@@ -238,28 +242,31 @@ fn write(fragments: &[(u32, Vec<Sample>)]) -> Vec<(MovieFragmentBox, MediaDataBo
             assert_eq!(
                 writer.finish(),
                 Err(reported),
-                "a refused writer reported another failure when the fragments were declared over"
+                "a refused writer reported another failure when the file was declared over"
             );
         }
         None => assert_eq!(
-            writer.handle_sample(a_sample()).map_err(SampleError::kind),
-            Err(SampleErrorKind::AlreadyFinished),
-            "the writer took a sample after the fragments were declared over"
+            writer.handle_sample(a_sample()).map_err(FileError::kind),
+            Err(FileErrorKind::AlreadyFinished),
+            "the writer took a sample after the file was declared over"
         ),
     }
 
-    let mut laid_down = Vec::new();
-    while let Some(pair) = writer.poll_fragment() {
-        laid_down.push(pair);
+    (file, closed)
+}
+
+/// Takes what the writer has laid down into `file`, a buffer at a time
+fn drained_into(writer: &mut FragmentedWriter, buffer_length: usize, file: &mut Vec<u8>) {
+    let mut buffer = vec![0; buffer_length];
+
+    loop {
+        let written = writer.poll_output(&mut buffer);
+
+        match buffer.get(..written) {
+            Some([]) | None => return,
+            Some(bytes) => file.extend_from_slice(bytes),
+        }
     }
-
-    assert_eq!(
-        laid_down.len(),
-        closed,
-        "the writer handed over another number of fragments than it closed"
-    );
-
-    laid_down
 }
 
 /// A sample of the first track, for the calls a refused or finished writer takes
@@ -275,78 +282,31 @@ fn a_sample() -> Sample {
     )
 }
 
-/// The file the pairs make: the brands, the movie, then fragment after fragment
-fn file_of(
-    movie: &MovieBox,
-    laid_down: Vec<(MovieFragmentBox, MediaDataBox)>,
-    buffer_length: usize,
-) -> Option<Vec<u8>> {
-    let mut events = vec![
-        BoxEvent::FileType(file_type()),
-        BoxEvent::Movie(movie.clone()),
-    ];
-
-    for (movie_fragment, media_data) in laid_down {
-        let payload_len = u64::try_from(media_data.data().len()).ok()?;
-        let header = BoxHeader::with_payload_len(MediaDataBox::BOX_TYPE, payload_len)?;
-
-        events.push(BoxEvent::MovieFragment(movie_fragment));
-        events.push(BoxEvent::RawStart(header));
-        if !media_data.data().is_empty() {
-            events.push(BoxEvent::RawPayload(media_data.into_data()));
-        }
-        events.push(BoxEvent::RawEnd);
-    }
-
-    bytes_of(events, buffer_length).ok()
-}
-
-/// The samples `file` carries, read through the box layer beside this one
+/// The samples `file` carries, read back through the layout it was laid down as
 ///
-/// Reports `None` where the movie continues in no fragments, and panics where
-/// either layer rejects the file — which is the property this target holds the
-/// writer to.
-fn read_back(movie: &MovieBox, file: &[u8]) -> Option<Vec<Sample>> {
-    let mut box_reader = BoxReader::new();
-    let mut sample_reader = SampleReader::new(movie).ok()?;
+/// Panics where the reader rejects the file, which is the property this target
+/// holds the writer to.
+fn read_back(file: &[u8]) -> Vec<Sample> {
+    let mut reader = FragmentedReader::new();
     let mut samples = Vec::new();
 
     assert!(
-        box_reader.handle_input(file).is_ok(),
-        "the box layer rejects the file the writer laid down"
+        reader.handle_input(file).is_ok(),
+        "the reader rejects the file the writer laid down"
     );
-
-    while let Some(event) = box_reader.poll_event() {
-        let extent = box_reader
-            .event_extent()
-            .expect("an event was taken, so it has an extent");
-        let taken = match event {
-            BoxEvent::MovieFragment(movie_fragment) => {
-                sample_reader.handle_movie_fragment(movie_fragment, extent)
-            }
-            BoxEvent::RawPayload(payload) => sample_reader.handle_media_data(&payload, extent),
-            _passed_over => Ok(()),
-        };
-
-        assert!(
-            taken.is_ok(),
-            "the sample layer rejects a fragment the writer laid out"
-        );
-        while let Some(sample) = sample_reader.poll_sample() {
-            samples.push(sample);
-        }
+    while let Some(sample) = reader.poll_sample() {
+        samples.push(sample);
     }
 
     assert!(
-        box_reader.finish().is_ok(),
-        "the box layer rejects the end of the file the writer laid down"
+        reader.finish().is_ok(),
+        "the reader rejects the end of the file the writer laid down"
     );
-    assert!(
-        sample_reader.finish().is_ok(),
-        "the sample layer is left short of the data the file laid down"
-    );
+    while let Some(sample) = reader.poll_sample() {
+        samples.push(sample);
+    }
 
-    Some(samples)
+    samples
 }
 
 /// The samples read back, gathered into the fragments they were laid out as
