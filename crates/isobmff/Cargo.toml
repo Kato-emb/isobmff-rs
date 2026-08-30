@@ -26,7 +26,14 @@ isobmff-mp4 = { workspace = true, optional = true }
 isobmff-sequence.workspace = true
 
 [dev-dependencies]
+criterion = { version = "0.8", default-features = false, features = [
+    "cargo_bench_support",
+] }
 isobmff-test-support.workspace = true
+
+[[bench]]
+name = "throughput"
+harness = false
 
 [package.metadata.docs.rs]
 all-features = true
