@@ -15,5 +15,8 @@ exclude.workspace = true
 isobmff-boxes.workspace = true
 isobmff-core.workspace = true
 
+[dev-dependencies]
+isobmff-test-support.workspace = true
+
 [lints]
 workspace = true

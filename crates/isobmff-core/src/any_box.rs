@@ -315,8 +315,8 @@ mod tests {
         }
     }
 
-    /// Box one class lays over two codes, standing in for a sample entry that
-    /// settles its type from its own fields
+    /// Box standing in for one whose code the spec leaves open, settling its
+    /// type from its own fields
     #[derive(Clone, PartialEq, Debug)]
     struct CodingBox {
         alternate: bool,

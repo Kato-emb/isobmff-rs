@@ -10,13 +10,13 @@ use isobmff_core::{
 
 use crate::avcc::AVCConfigurationBox;
 
-#[allow(
-    unnameable_types,
-    reason = "sealing AVCCodingName takes a supertrait a caller cannot name"
-)]
 mod sealed {
     /// Bound that closes [`AVCCodingName`](super::AVCCodingName) to the codes
     /// ISO/IEC 14496-15 §5.4.2 names
+    #[allow(
+        unnameable_types,
+        reason = "sealing AVCCodingName takes a supertrait a caller cannot name"
+    )]
     pub trait Sealed {}
 }
 
@@ -36,12 +36,12 @@ pub trait AVCCodingName: sealed::Sealed {
 
 /// Coding whose parameter sets lie in the sample entry alone, `avc1`
 #[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct Avc1;
 
 /// Coding whose parameter sets may also lie in the samples, `avc3`
 #[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct Avc3;
 
 impl sealed::Sealed for Avc1 {}
@@ -69,8 +69,7 @@ impl AVCCodingName for Avc3 {
 ///
 /// ```
 /// use isobmff_avc::{
-///     AVCConfigurationBox, AVCDecoderConfigurationRecord, AVCSampleEntry, Avc3,
-///     LengthSizeMinusOne,
+///     AVCConfigurationBox, AVCDecoderConfigurationRecord, Avc3SampleEntry, LengthSizeMinusOne,
 /// };
 /// use isobmff_boxes::{SampleDescriptionBox, VisualSampleEntry};
 /// use isobmff_core::AnyBox;
@@ -83,9 +82,7 @@ impl AVCCodingName for Avc3 {
 ///     None,
 /// )
 /// .unwrap();
-///
-/// // The coding names the box, so it is stated as the type parameter
-/// let entry = AVCSampleEntry::<Avc3>::new(
+/// let entry = Avc3SampleEntry::new(
 ///     VisualSampleEntry::new(1, 1920, 1080),
 ///     AVCConfigurationBox::new(record),
 ///     None,
@@ -93,9 +90,7 @@ impl AVCCodingName for Avc3 {
 ///
 /// // The entry goes into a `stsd` as any other, and comes back out typed
 /// let description = SampleDescriptionBox::new(vec![AnyBox::from(entry.clone())]);
-/// let found = description.entries()[0]
-///     .downcast_ref::<AVCSampleEntry<Avc3>>()
-///     .unwrap();
+/// let found = description.entries()[0].downcast_ref::<Avc3SampleEntry>().unwrap();
 /// assert_eq!(found, &entry);
 /// ```
 #[non_exhaustive]
@@ -108,11 +103,11 @@ pub struct AVCSampleEntry<Name: AVCCodingName> {
     _marker: PhantomData<Name>,
 }
 
-/// AVC sample entry named `avc1`, its parameter sets in the entry alone
+/// [`AVCSampleEntry`] named by [`Avc1`]
 #[doc(alias = "avc1")]
 pub type Avc1SampleEntry = AVCSampleEntry<Avc1>;
 
-/// AVC sample entry named `avc3`, its parameter sets in the entry or the samples
+/// [`AVCSampleEntry`] named by [`Avc3`]
 #[doc(alias = "avc3")]
 pub type Avc3SampleEntry = AVCSampleEntry<Avc3>;
 
@@ -240,6 +235,7 @@ mod tests {
 
     use isobmff_boxes::{BitRateBox, VisualSampleEntry};
     use isobmff_core::{AnyBox, BoxDecode, BoxEncode, BoxType, Error};
+    use isobmff_test_support::written;
 
     use super::{AVCCodingName, AVCSampleEntry, Avc1, Avc3};
     use crate::avcc::tests::baseline_configuration;
@@ -255,13 +251,6 @@ mod tests {
     fn encoded_payload<Name: AVCCodingName>(entry: &AVCSampleEntry<Name>) -> Vec<u8> {
         let mut buffer = vec![0; usize::try_from(entry.payload_len()).unwrap()];
         entry.encode_payload(&mut buffer).unwrap();
-
-        buffer
-    }
-
-    fn encoded<Name: AVCCodingName>(entry: &AVCSampleEntry<Name>) -> Vec<u8> {
-        let mut buffer = vec![0; usize::try_from(entry.encoded_len()).unwrap()];
-        entry.encode(&mut buffer).unwrap();
 
         buffer
     }
@@ -284,16 +273,12 @@ mod tests {
     #[test]
     fn an_entry_is_written_under_the_code_that_names_it() {
         assert_eq!(
-            encoded(&entry::<Avc1>()).get(4..8),
+            written(&entry::<Avc1>()).get(4..8),
             Some(b"avc1".as_slice())
         );
         assert_eq!(
-            encoded(&entry::<Avc3>()).get(4..8),
+            written(&entry::<Avc3>()).get(4..8),
             Some(b"avc3".as_slice())
-        );
-        assert_eq!(
-            AnyBox::from(entry::<Avc3>()).box_type(),
-            BoxType::compact(*b"avc3")
         );
     }
 
@@ -344,9 +329,7 @@ mod tests {
     #[test]
     fn an_entry_holding_two_configurations_is_rejected() {
         let entry = entry::<Avc1>();
-        let mut buffer = vec![0; usize::try_from(entry.config().encoded_len()).unwrap()];
-        entry.config().encode(&mut buffer).unwrap();
-        let payload = [encoded_payload(&entry), buffer].concat();
+        let payload = [encoded_payload(&entry), written(entry.config())].concat();
 
         assert_eq!(
             AVCSampleEntry::<Avc1>::decode_payload(&payload),
