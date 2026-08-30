@@ -1,7 +1,7 @@
 [package]
 name = "isobmff"
 version = "0.0.0"
-description = "Sans-IO reader and writer for the samples an ISO base media file carries in movie fragments"
+description = "Sans-IO reader and writer for a fragmented ISO base media file and the samples it carries"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
