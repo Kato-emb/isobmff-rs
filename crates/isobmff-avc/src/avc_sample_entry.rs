@@ -1,56 +1,65 @@
 //! [`AVCSampleEntry`] (`avc1`, `avc3`), ISO/IEC 14496-15 §5.4.2
 
+use core::marker::PhantomData;
+
 use isobmff_boxes::{BitRateBox, VisualSampleEntry};
 use isobmff_core::{
-    AnyBox, BoxDefinition, BoxEncode, BoxFormat, BoxType, ChildBoxes, Error, FieldReader,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
     FieldWriter, OtherBoxes, boxes,
 };
 
 use crate::avcc::AVCConfigurationBox;
 
-const AVC1: BoxType = BoxType::compact(*b"avc1");
-const AVC3: BoxType = BoxType::compact(*b"avc3");
-
-/// Code an AVC sample entry is named by, stating where its parameter sets lie
-///
-/// ISO/IEC 14496-15 §5.4.2 lays one class over two codes: under `avc1` the
-/// parameter sets lie in the sample entry alone, under `avc3` they may also lie
-/// in the samples, as NAL units of the stream.
-#[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum AVCSampleEntryType {
-    /// `avc1`: parameter sets in the sample entry only
-    Avc1,
-    /// `avc3`: parameter sets in the sample entry or in the samples
-    Avc3,
+mod sealed {
+    /// Bound that closes [`AVCCodingName`](super::AVCCodingName) to the codes
+    /// ISO/IEC 14496-15 §5.4.2 names
+    #[allow(
+        unnameable_types,
+        reason = "sealing AVCCodingName takes a supertrait a caller cannot name"
+    )]
+    pub trait Sealed {}
 }
 
-impl AVCSampleEntryType {
-    /// Returns the code `box_type` names, when it names one of the two
-    #[must_use]
-    pub fn from_box_type(box_type: BoxType) -> Option<Self> {
-        if box_type == AVC1 {
-            Some(Self::Avc1)
-        } else if box_type == AVC3 {
-            Some(Self::Avc3)
-        } else {
-            None
-        }
-    }
+/// Coding an AVC sample entry is named by, stating where its parameter sets lie
+///
+/// ISO/IEC 14496-15 §5.4.2 lays one class over two codes: under [`Avc1`] the
+/// parameter sets lie in the sample entry alone, under [`Avc3`] they may also
+/// lie in the samples, as NAL units of the stream. This is the `codingname` of
+/// ISO/IEC 14496-12 §12.1.3, which names the box a sample entry is written as.
+///
+/// The trait is sealed: the clause states the two codes, and no other type
+/// joins them.
+pub trait AVCCodingName: sealed::Sealed {
+    /// Box type an entry of this coding is written under
+    const BOX_TYPE: BoxType;
+}
 
-    /// Returns the box type the code is written as
-    #[must_use]
-    pub const fn box_type(self) -> BoxType {
-        match self {
-            Self::Avc1 => AVC1,
-            Self::Avc3 => AVC3,
-        }
-    }
+/// Coding whose parameter sets lie in the sample entry alone, `avc1`
+#[non_exhaustive]
+#[derive(Clone, PartialEq, Debug)]
+pub struct Avc1;
+
+/// Coding whose parameter sets may also lie in the samples, `avc3`
+#[non_exhaustive]
+#[derive(Clone, PartialEq, Debug)]
+pub struct Avc3;
+
+impl sealed::Sealed for Avc1 {}
+
+impl sealed::Sealed for Avc3 {}
+
+impl AVCCodingName for Avc1 {
+    const BOX_TYPE: BoxType = BoxType::compact(*b"avc1");
+}
+
+impl AVCCodingName for Avc3 {
+    const BOX_TYPE: BoxType = BoxType::compact(*b"avc3");
 }
 
 /// Sample entry of an AVC video track
 ///
-/// [`AVCSampleEntry`] (`avc1` or `avc3`), ISO/IEC 14496-15 §5.4.2. The entry
+/// [`AVCSampleEntry`] (`avc1` or `avc3`), ISO/IEC 14496-15 §5.4.2. The coding
+/// the entry is named by is the type parameter, [`Avc1`] or [`Avc3`]. The entry
 /// opens with the fields of a [`VisualSampleEntry`] and holds an
 /// [`AVCConfigurationBox`]; a [`BitRateBox`] may follow, and any other box —
 /// `m4ds`, `pasp`, `colr`, the boxes a later specification adds — is kept as it
@@ -60,8 +69,7 @@ impl AVCSampleEntryType {
 ///
 /// ```
 /// use isobmff_avc::{
-///     AVCConfigurationBox, AVCDecoderConfigurationRecord, AVCSampleEntry, AVCSampleEntryType,
-///     LengthSizeMinusOne,
+///     AVCConfigurationBox, AVCDecoderConfigurationRecord, Avc3SampleEntry, LengthSizeMinusOne,
 /// };
 /// use isobmff_boxes::{SampleDescriptionBox, VisualSampleEntry};
 /// use isobmff_core::AnyBox;
@@ -74,8 +82,7 @@ impl AVCSampleEntryType {
 ///     None,
 /// )
 /// .unwrap();
-/// let entry = AVCSampleEntry::new(
-///     AVCSampleEntryType::Avc3,
+/// let entry = Avc3SampleEntry::new(
 ///     VisualSampleEntry::new(1, 1920, 1080),
 ///     AVCConfigurationBox::new(record),
 ///     None,
@@ -83,45 +90,43 @@ impl AVCSampleEntryType {
 ///
 /// // The entry goes into a `stsd` as any other, and comes back out typed
 /// let description = SampleDescriptionBox::new(vec![AnyBox::from(entry.clone())]);
-/// let found = description.entries()[0].downcast_ref::<AVCSampleEntry>().unwrap();
+/// let found = description.entries()[0].downcast_ref::<Avc3SampleEntry>().unwrap();
 /// assert_eq!(found, &entry);
-/// assert_eq!(found.entry_type(), AVCSampleEntryType::Avc3);
 /// ```
-#[doc(alias = "avc1")]
-#[doc(alias = "avc3")]
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Debug)]
-pub struct AVCSampleEntry {
-    entry_type: AVCSampleEntryType,
+pub struct AVCSampleEntry<Name: AVCCodingName> {
     visual: VisualSampleEntry,
     config: AVCConfigurationBox,
     bit_rate: Option<BitRateBox>,
     other_boxes: OtherBoxes,
+    _marker: PhantomData<Name>,
 }
 
-impl AVCSampleEntry {
-    /// Creates the entry from the code that names it, the visual fields, the
-    /// configuration, and the bit rate when one is stated
+/// [`AVCSampleEntry`] named by [`Avc1`], ISO/IEC 14496-15 §5.4.2
+#[doc(alias = "avc1")]
+pub type Avc1SampleEntry = AVCSampleEntry<Avc1>;
+
+/// [`AVCSampleEntry`] named by [`Avc3`], ISO/IEC 14496-15 §5.4.2
+#[doc(alias = "avc3")]
+pub type Avc3SampleEntry = AVCSampleEntry<Avc3>;
+
+impl<Name: AVCCodingName> AVCSampleEntry<Name> {
+    /// Creates the entry from the visual fields, the configuration, and the bit
+    /// rate when one is stated
     #[must_use]
     pub const fn new(
-        entry_type: AVCSampleEntryType,
         visual: VisualSampleEntry,
         config: AVCConfigurationBox,
         bit_rate: Option<BitRateBox>,
     ) -> Self {
         Self {
-            entry_type,
             visual,
             config,
             bit_rate,
             other_boxes: OtherBoxes::new(),
+            _marker: PhantomData,
         }
-    }
-
-    /// Returns the code the entry is named by
-    #[must_use]
-    pub const fn entry_type(&self) -> AVCSampleEntryType {
-        self.entry_type
     }
 
     /// Returns the fields the entry opens with
@@ -147,9 +152,13 @@ impl AVCSampleEntry {
     pub fn other_boxes(&self) -> &[AnyBox] {
         self.other_boxes.as_slice()
     }
+}
 
-    /// Reads the entry from the payload of a box named `entry_type`
-    ///
+impl<Name: AVCCodingName> BoxDefinition for AVCSampleEntry<Name> {
+    const BOX_TYPE: BoxType = Name::BOX_TYPE;
+}
+
+impl<Name: AVCCodingName> BoxDecode for AVCSampleEntry<Name> {
     /// # Errors
     ///
     /// * What [`VisualSampleEntry::decode_fields`] reports for the fields.
@@ -160,9 +169,8 @@ impl AVCSampleEntry {
     ///   `avcC` or `btrt` does.
     /// * What [`AVCConfigurationBox`] or [`BitRateBox`] reports, with its box
     ///   type on the [`containers`](Error::containers) path of the failure.
-    pub fn decode_payload(entry_type: AVCSampleEntryType, payload: &[u8]) -> Result<Self, Error> {
-        let mut reader = FieldReader::new(payload);
-        let visual = VisualSampleEntry::decode_fields(&mut reader)?;
+    fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
+        let visual = VisualSampleEntry::decode_fields(reader)?;
 
         let mut configuration_boxes = ChildBoxes::new();
         let mut bit_rate_boxes = ChildBoxes::new();
@@ -180,22 +188,16 @@ impl AVCSampleEntry {
         }
 
         Ok(Self {
-            entry_type,
             visual,
             config: configuration_boxes.exactly_one()?,
             bit_rate: bit_rate_boxes.zero_or_one()?,
             other_boxes,
+            _marker: PhantomData,
         })
     }
 }
 
-impl BoxFormat for AVCSampleEntry {
-    fn box_type(&self) -> BoxType {
-        self.entry_type.box_type()
-    }
-}
-
-impl BoxEncode for AVCSampleEntry {
+impl<Name: AVCCodingName> BoxEncode for AVCSampleEntry<Name> {
     fn payload_len(&self) -> u64 {
         let bit_rate = self.bit_rate.as_ref().map_or(0, BoxEncode::encoded_len);
         let others = self
@@ -232,21 +234,21 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_boxes::{BitRateBox, VisualSampleEntry};
-    use isobmff_core::{AnyBox, BoxEncode, BoxType, Error};
+    use isobmff_core::{AnyBox, BoxDecode, BoxEncode, BoxType, Error};
+    use isobmff_test_support::written;
 
-    use super::{AVCSampleEntry, AVCSampleEntryType};
+    use super::{AVCCodingName, AVCSampleEntry, Avc1, Avc3};
     use crate::avcc::tests::baseline_configuration;
 
-    fn entry(entry_type: AVCSampleEntryType) -> AVCSampleEntry {
+    fn entry<Name: AVCCodingName>() -> AVCSampleEntry<Name> {
         AVCSampleEntry::new(
-            entry_type,
             VisualSampleEntry::new(1, 1280, 720),
             baseline_configuration(),
             Some(BitRateBox::new(0, 4_000_000, 2_500_000)),
         )
     }
 
-    fn encoded_payload(entry: &AVCSampleEntry) -> Vec<u8> {
+    fn encoded_payload<Name: AVCCodingName>(entry: &AVCSampleEntry<Name>) -> Vec<u8> {
         let mut buffer = vec![0; usize::try_from(entry.payload_len()).unwrap()];
         entry.encode_payload(&mut buffer).unwrap();
 
@@ -255,52 +257,42 @@ mod tests {
 
     #[test]
     fn an_entry_reads_back_as_the_value_that_wrote_it_under_either_code() {
-        for entry_type in [AVCSampleEntryType::Avc1, AVCSampleEntryType::Avc3] {
-            let entry = entry(entry_type);
+        let avc1 = entry::<Avc1>();
+        let avc3 = entry::<Avc3>();
 
-            let payload = encoded_payload(&entry);
-
-            assert_eq!(
-                AVCSampleEntry::decode_payload(entry_type, &payload).unwrap(),
-                entry
-            );
-        }
+        assert_eq!(
+            AVCSampleEntry::<Avc1>::decode_payload(&encoded_payload(&avc1)).unwrap(),
+            avc1
+        );
+        assert_eq!(
+            AVCSampleEntry::<Avc3>::decode_payload(&encoded_payload(&avc3)).unwrap(),
+            avc3
+        );
     }
 
     #[test]
     fn an_entry_is_written_under_the_code_that_names_it() {
-        let entry = entry(AVCSampleEntryType::Avc3);
-        let mut buffer = vec![0; usize::try_from(entry.encoded_len()).unwrap()];
-
-        entry.encode(&mut buffer).unwrap();
-
-        assert_eq!(buffer.get(4..8), Some(b"avc3".as_slice()));
-        assert_eq!(AnyBox::from(entry).box_type(), BoxType::compact(*b"avc3"));
-    }
-
-    #[test]
-    fn the_code_is_told_from_the_box_type_of_a_stsd_entry() {
         assert_eq!(
-            AVCSampleEntryType::from_box_type(BoxType::compact(*b"avc1")),
-            Some(AVCSampleEntryType::Avc1)
+            written(&entry::<Avc1>()).get(4..8),
+            Some(b"avc1".as_slice())
         );
         assert_eq!(
-            AVCSampleEntryType::from_box_type(BoxType::compact(*b"hvc1")),
-            None
+            written(&entry::<Avc3>()).get(4..8),
+            Some(b"avc3".as_slice())
         );
     }
 
     #[test]
     fn a_child_no_field_claims_is_kept_and_written_back() {
         let payload = [
-            encoded_payload(&entry(AVCSampleEntryType::Avc1)),
+            encoded_payload(&entry::<Avc1>()),
             vec![
                 0, 0, 0, 0x10, b'p', b'a', b's', b'p', 0, 0, 0, 1, 0, 0, 0, 1,
             ],
         ]
         .concat();
 
-        let entry = AVCSampleEntry::decode_payload(AVCSampleEntryType::Avc1, &payload).unwrap();
+        let entry = AVCSampleEntry::<Avc1>::decode_payload(&payload).unwrap();
 
         assert_eq!(
             entry.other_boxes().first().map(AnyBox::box_type),
@@ -311,16 +303,13 @@ mod tests {
 
     #[test]
     fn an_entry_without_a_bit_rate_box_reads_without_one() {
-        let entry = AVCSampleEntry::new(
-            AVCSampleEntryType::Avc1,
+        let entry = AVCSampleEntry::<Avc1>::new(
             VisualSampleEntry::new(1, 16, 16),
             baseline_configuration(),
             None,
         );
 
-        let read_back =
-            AVCSampleEntry::decode_payload(AVCSampleEntryType::Avc1, &encoded_payload(&entry))
-                .unwrap();
+        let read_back = AVCSampleEntry::<Avc1>::decode_payload(&encoded_payload(&entry)).unwrap();
 
         assert_eq!(read_back, entry);
         assert_eq!(read_back.bit_rate(), None);
@@ -332,20 +321,18 @@ mod tests {
         payload.extend_from_slice(b"\0\0\0\x08free");
 
         assert_eq!(
-            AVCSampleEntry::decode_payload(AVCSampleEntryType::Avc1, &payload),
+            AVCSampleEntry::<Avc1>::decode_payload(&payload),
             Err(Error::missing_mandatory_box(BoxType::compact(*b"avcC")))
         );
     }
 
     #[test]
     fn an_entry_holding_two_configurations_is_rejected() {
-        let entry = entry(AVCSampleEntryType::Avc1);
-        let mut buffer = vec![0; usize::try_from(entry.config().encoded_len()).unwrap()];
-        entry.config().encode(&mut buffer).unwrap();
-        let payload = [encoded_payload(&entry), buffer].concat();
+        let entry = entry::<Avc1>();
+        let payload = [encoded_payload(&entry), written(entry.config())].concat();
 
         assert_eq!(
-            AVCSampleEntry::decode_payload(AVCSampleEntryType::Avc1, &payload),
+            AVCSampleEntry::<Avc1>::decode_payload(&payload),
             Err(Error::duplicate_box(BoxType::compact(*b"avcC")))
         );
     }

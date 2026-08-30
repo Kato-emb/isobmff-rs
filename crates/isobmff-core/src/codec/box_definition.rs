@@ -55,11 +55,13 @@ pub trait BoxDefinition {
 ///
 /// Most boxes know their type without a value in hand, and state it as the
 /// constant of [`BoxDefinition`]; every such type is a `BoxFormat` too, by the
-/// blanket implementation. Some do not: §8.5.2.2 declares a sample entry as
-/// `SampleEntry(format) extends Box(format)`, and a derived specification may
-/// lay one class over several codes — ISO/IEC 14496-15 §5.4.2 names
-/// `AVCSampleEntry` by `avc1` or `avc3`. Such a value settles its type only
-/// once it exists, and states it here.
+/// blanket implementation. Some do not: the spec declares classes whose box
+/// type is a parameter of the class — `SampleEntry(format)` §8.5.2.2,
+/// `TrackReferenceTypeBox(reference_type)` §8.3.3.2 and
+/// `TrackGroupTypeBox(track_group_type)` §8.3.4 — and leaves the codes those
+/// take open, for a registration or a derived specification to name one no
+/// type here stands for. Such a value carries the code it was read under and
+/// settles its type only once it exists, so it states that type here.
 ///
 /// Whatever the source, the type a value reports is the one its box is written
 /// under: [`BoxEncode::encode`](crate::BoxEncode::encode) and
@@ -71,31 +73,28 @@ pub trait BoxDefinition {
 /// use isobmff_core::{BoxDefinition, BoxFormat, BoxType};
 ///
 /// // A box named by one code states it once, for the type
-/// struct FreeSpaceBox;
+/// struct MediaDataBox;
 ///
-/// impl BoxDefinition for FreeSpaceBox {
-///     const BOX_TYPE: BoxType = BoxType::compact(*b"free");
+/// impl BoxDefinition for MediaDataBox {
+///     const BOX_TYPE: BoxType = BoxType::compact(*b"mdat");
 /// }
 ///
-/// // A sample entry one class lays over two codes states it per value
-/// struct AVCSampleEntry {
-///     parameter_sets_in_band: bool,
+/// // A track reference is named by the reference type it carries, which
+/// // §8.3.3.2 leaves open, so the code travels in the value
+/// struct TrackReferenceTypeBox {
+///     reference_type: BoxType,
 /// }
 ///
-/// impl BoxFormat for AVCSampleEntry {
+/// impl BoxFormat for TrackReferenceTypeBox {
 ///     fn box_type(&self) -> BoxType {
-///         if self.parameter_sets_in_band {
-///             BoxType::compact(*b"avc3")
-///         } else {
-///             BoxType::compact(*b"avc1")
-///         }
+///         self.reference_type
 ///     }
 /// }
 ///
-/// assert_eq!(FreeSpaceBox.box_type(), FreeSpaceBox::BOX_TYPE);
+/// assert_eq!(MediaDataBox.box_type(), MediaDataBox::BOX_TYPE);
 /// assert_eq!(
-///     AVCSampleEntry { parameter_sets_in_band: true }.box_type(),
-///     BoxType::compact(*b"avc3")
+///     TrackReferenceTypeBox { reference_type: BoxType::compact(*b"hint") }.box_type(),
+///     BoxType::compact(*b"hint")
 /// );
 /// ```
 pub trait BoxFormat {
