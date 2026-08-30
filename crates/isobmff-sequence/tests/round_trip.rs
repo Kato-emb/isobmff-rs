@@ -5,7 +5,7 @@ mod tests {
     use isobmff_sequence::BoxEvent;
 
     use isobmff_test_support::{
-        bytes_of, events_of, file_passed_on, fragmented_file, segment_file,
+        bytes_of, events_of, file_running_to_its_end, fragmented_file, segment_file,
     };
 
     /// Every synthetic file the round trip is fixed for
@@ -13,7 +13,7 @@ mod tests {
     /// Between them they carry a box under each of the two box types, a container
     /// carried as it lies, and a box running to the end of the file
     fn every_file() -> Vec<Vec<u8>> {
-        vec![fragmented_file(), segment_file(), file_passed_on()]
+        vec![fragmented_file(), segment_file(), file_running_to_its_end()]
     }
 
     /// The events the reader reports for `file`, as the writer takes them

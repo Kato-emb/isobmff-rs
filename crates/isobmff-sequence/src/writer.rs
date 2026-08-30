@@ -394,7 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn a_box_passed_on_writes_the_header_and_the_payload_it_came_with() {
+    fn a_box_writes_the_header_and_the_payload_it_came_with() {
         let mut writer = BoxWriter::new();
 
         writer

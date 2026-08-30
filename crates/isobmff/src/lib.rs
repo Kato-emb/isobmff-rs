@@ -30,9 +30,10 @@
 //! A caller that holds a whole presentation in memory needs none of the layers:
 //! [`boxes`] frames it, and the samples read from there just the same.
 //!
-//! Where a box lay is reported by the two layers beneath as an extent counting
-//! from the first byte handed over. The layout layer resolves them itself, so a
-//! caller of it hands over bytes and takes samples and never sees one.
+//! Where a box lay is reported by the box layer as an extent counting from the
+//! first byte handed over, and the sample layer resolves the offsets a fragment
+//! declares against it. The layout layer passes them between the two itself, so
+//! a caller of it hands over bytes and takes samples and never sees one.
 //!
 //! # Everything in one place
 //!

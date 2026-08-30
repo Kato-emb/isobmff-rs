@@ -186,8 +186,7 @@ fn laid_out(input: &Input<'_>) -> Vec<(u32, Vec<Sample>)> {
 /// Lays the fragments down as a fragmented file, and reports how many were closed
 ///
 /// A writer that refuses reports that same failure for every call after it and
-/// still hands over the bytes of the fragments it had closed, which is the
-/// property the calls after the refusal hold it to.
+/// still hands over the bytes of the fragments it had closed.
 fn file_of(
     movie: &MovieBox,
     fragments: &[(u32, Vec<Sample>)],

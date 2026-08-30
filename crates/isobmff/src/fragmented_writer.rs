@@ -37,11 +37,10 @@ enum State {
 ///
 /// # Contract
 ///
-/// * The layout is held to as the boxes are handed over: the `ftyp` first, the
-///   `moov` before any fragment. §4.3 has an `ftyp` placed as early as
-///   possible, and a writer can still mend its output, so one that never came
-///   is [`MissingMandatoryBox`](crate::FileErrorKind::MissingMandatoryBox) and
-///   one that came again is
+/// * The layout is held to as the boxes are handed over: the `ftyp` first, as
+///   early as §4.3 asks, the `moov` before any fragment. One that never came is
+///   [`MissingMandatoryBox`](crate::FileErrorKind::MissingMandatoryBox) and one
+///   that came again is
 ///   [`DuplicateBox`](crate::FileErrorKind::DuplicateBox).
 /// * A fragment is opened by [`begin_fragment`](Self::begin_fragment), carries
 ///   the samples handed over next, and is laid down by
@@ -125,8 +124,6 @@ impl FragmentedWriter {
     /// * [`DuplicateBox`](crate::FileErrorKind::DuplicateBox): the brands were
     ///   handed over already.
     /// * [`Box`](crate::FileErrorKind::Box): the box does not write.
-    /// * [`Sequence`](crate::FileErrorKind::Sequence): what the framing of the
-    ///   file makes of it.
     /// * [`AlreadyFinished`](crate::FileErrorKind::AlreadyFinished): the file
     ///   was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
@@ -156,8 +153,6 @@ impl FragmentedWriter {
     /// * [`DuplicateBox`](crate::FileErrorKind::DuplicateBox): the movie was
     ///   handed over already.
     /// * [`Box`](crate::FileErrorKind::Box): the box does not write.
-    /// * [`Sequence`](crate::FileErrorKind::Sequence): what the framing of the
-    ///   file makes of it.
     /// * [`AlreadyFinished`](crate::FileErrorKind::AlreadyFinished): the file
     ///   was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
@@ -237,9 +232,8 @@ impl FragmentedWriter {
     ///   brands or the movie were not handed over first.
     /// * [`Sample`](crate::FileErrorKind::Sample): what the sample layer makes
     ///   of the fragment.
-    /// * [`Box`](crate::FileErrorKind::Box): the `moof` does not write.
-    /// * [`Sequence`](crate::FileErrorKind::Sequence): what the framing of the
-    ///   file makes of the fragment.
+    /// * [`Box`](crate::FileErrorKind::Box): the `moof` or the `mdat` does not
+    ///   write.
     /// * [`AlreadyFinished`](crate::FileErrorKind::AlreadyFinished): the file
     ///   was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
@@ -273,8 +267,6 @@ impl FragmentedWriter {
     ///   brands or the movie the layout requires were never handed over, so the
     ///   file the writer laid down is not one.
     /// * [`Sample`](crate::FileErrorKind::Sample): a fragment was left open.
-    /// * [`Sequence`](crate::FileErrorKind::Sequence): the framing of the file
-    ///   was left inside a box.
     /// * [`AlreadyFinished`](crate::FileErrorKind::AlreadyFinished): the file
     ///   was already declared over.
     /// * The failure of a previous call, which the writer keeps and reports
@@ -296,11 +288,10 @@ impl FragmentedWriter {
     }
 
     /// Returns `Ok` while the writer takes the samples of a fragment
-    ///
-    /// The layout is what the guard holds to: a fragment lands in a file that
-    /// declared its brands and the movie the fragment continues, so a call
-    /// reaching here before either names the box that is missing.
     fn laying_out(&mut self) -> Result<(), FileError> {
+        // Why not one failure for both: a fragment lands in a file that declared
+        // its brands and the movie it continues, so the state names which of the
+        // two the layout is still waiting for.
         match self.state {
             State::Writing => Ok(()),
             State::Opening => Err(self.fail(FileError::box_not_handed_over(FileTypeBox::BOX_TYPE))),

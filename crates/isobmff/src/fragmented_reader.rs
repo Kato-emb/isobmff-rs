@@ -82,9 +82,9 @@ enum State {
 ///   carrying a second `moov` is
 ///   [`DuplicateBox`](crate::FileErrorKind::DuplicateBox), and so is one
 ///   carrying a second `ftyp`.
-/// * A file carrying no `ftyp` reads all the same. §4.3 has one placed as early
-///   as possible, and a reader cannot mend a file it was handed; the mirror of
-///   this holds a writer to it, where the output is still the caller's to fix.
+/// * A file carrying no `ftyp` reads all the same, though §4.3 has one placed
+///   as early as possible. The mirror of this holds a writer to it — see
+///   [`FragmentedWriter`](crate::FragmentedWriter).
 /// * A box read into a value is gathered whole before it is read, so what it
 ///   declares is bounded — see [`with_limits`](Self::with_limits). A box
 ///   declaring no total at all is passed over rather than gathered, whatever its
@@ -120,6 +120,7 @@ enum State {
 /// writer.finish_fragment().unwrap();
 /// writer.finish().unwrap();
 ///
+/// // The file the writer laid down is drained through a buffer of the caller's own
 /// let mut file = Vec::new();
 /// let mut buffer = [0; 64];
 /// loop {

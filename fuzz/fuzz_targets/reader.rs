@@ -4,8 +4,8 @@
 //!
 //! 1. no call panics, and no event carries a payload part that is empty
 //! 2. the extents partition the input the reader got through: each one begins
-//!    where the one before it ended, and a box passed on lies over the header,
-//!    the payload parts, and the empty end it was read as
+//!    where the one before it ended, and a box lies over the header, the
+//!    payload parts, and the empty end it was read as
 //! 3. where the input is cut does not change the boxes it reads, nor where they lie
 //! 4. the boxes read agree with the [`boxes`] iterator over the input — header,
 //!    payload, and the offset each box begins at — as far as the reader got

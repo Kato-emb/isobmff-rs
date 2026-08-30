@@ -7,7 +7,7 @@ mod tests {
     use isobmff_core::{BoxHeader, boxes};
     use isobmff_sequence::BoxEvent;
 
-    use isobmff_test_support::{events_of, file_passed_on, payloads_fused};
+    use isobmff_test_support::{events_of, file_running_to_its_end, payloads_fused};
 
     /// Each box the reader reported, as its header and the payload it passed on
     fn boxes_reported(events: &[(Range<u64>, BoxEvent)]) -> Vec<(BoxHeader, Vec<u8>)> {
@@ -41,7 +41,7 @@ mod tests {
 
     #[test]
     fn the_events_reported_do_not_turn_on_where_the_file_was_cut() {
-        let file = file_passed_on();
+        let file = file_running_to_its_end();
         let whole = payloads_fused(events_of(&file, file.len()).unwrap());
 
         for cut_length in 1..=file.len() {
@@ -55,7 +55,7 @@ mod tests {
 
     #[test]
     fn the_boxes_reported_are_the_ones_the_boxes_iterator_splits_out() {
-        let file = file_passed_on();
+        let file = file_running_to_its_end();
         let split = boxes(&file)
             .map(|framed| {
                 let framed = framed.unwrap();
@@ -75,7 +75,7 @@ mod tests {
 
     #[test]
     fn the_extent_of_a_box_begins_where_that_box_begins_in_the_file() {
-        let file = file_passed_on();
+        let file = file_running_to_its_end();
         let mut walked = 0_u64;
         let beginnings = boxes(&file)
             .map(|framed| {

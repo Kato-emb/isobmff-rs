@@ -182,8 +182,8 @@ pub fn segment_file() -> Vec<u8> {
     .concat()
 }
 
-/// A synthetic file of boxes passed on as they lie, its last box running to the end of it
-pub fn file_passed_on() -> Vec<u8> {
+/// A synthetic file of boxes no specification here reads, its last running to the end of it
+pub fn file_running_to_its_end() -> Vec<u8> {
     let unbounded = BoxHeader::new(BoxType::compact(*b"mdat"), BoxSize::ToEndOfFile).unwrap();
     let mut file = framed(BoxType::compact(*b"free"), b"");
 
