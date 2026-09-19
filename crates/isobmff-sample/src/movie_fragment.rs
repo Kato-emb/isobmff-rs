@@ -38,7 +38,8 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// entry that describes it (§8.5.2.3).
 ///
 /// The extents come out in the order the fragment declares them, and stop at
-/// the first failure, which is the last item.
+/// the first failure, which is the last item. They borrow nothing: the boxes
+/// and `decode_times` are the caller's again once the call returns.
 ///
 /// # Errors
 ///
@@ -65,7 +66,7 @@ pub fn sample_extents(
     movie: &MovieBox,
     moof_start: u64,
     decode_times: &mut TrackDecodeTimes,
-) -> Result<impl Iterator<Item = Result<SampleExtent, SampleError>>, SampleError> {
+) -> Result<impl Iterator<Item = Result<SampleExtent, SampleError>> + use<>, SampleError> {
     let mut reached = decode_times.clone();
     let track_fragments = movie_fragment
         .traf()
