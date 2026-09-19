@@ -1,5 +1,6 @@
 //! [`MpegSampleEntry`] (`mp4s`), ISO/IEC 14496-14 §6.7
 
+use isobmff_boxes::SampleEntry;
 use isobmff_core::{
     AnyBox, BoxDefinition, BoxEncode, BoxType, FieldReader, FieldWriter, OtherBoxes, boxes,
 };
@@ -11,9 +12,8 @@ use crate::esds::ESDBox;
 /// object descriptor, clock reference
 ///
 /// [`MpegSampleEntry`] (`mp4s`), ISO/IEC 14496-14 §6.7. The entry opens with
-/// the fields of the plain `SampleEntry` of ISO/IEC 14496-12 §8.5.2 — six
-/// reserved bytes and `data_reference_index` — and holds an [`ESDBox`]; any
-/// other box is kept as it came and written back.
+/// the fields of the plain [`SampleEntry`] of ISO/IEC 14496-12 §8.5.2.2 and
+/// holds an [`ESDBox`]; any other box is kept as it came and written back.
 ///
 /// The payload is read by [`decode_payload`](Self::decode_payload) rather than
 /// [`BoxDecode`](isobmff_core::BoxDecode), for the reason [`ESDBox`] gives.
@@ -21,7 +21,7 @@ use crate::esds::ESDBox;
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Debug)]
 pub struct MpegSampleEntry {
-    data_reference_index: u16,
+    sample_entry: SampleEntry,
     es: ESDBox,
     other_boxes: OtherBoxes,
 }
@@ -32,7 +32,7 @@ impl MpegSampleEntry {
     #[must_use]
     pub const fn new(data_reference_index: u16, es: ESDBox) -> Self {
         Self {
-            data_reference_index,
+            sample_entry: SampleEntry::new(data_reference_index),
             es,
             other_boxes: OtherBoxes::new(),
         }
@@ -41,7 +41,7 @@ impl MpegSampleEntry {
     /// Returns the index of the data reference the samples are read through
     #[must_use]
     pub const fn data_reference_index(&self) -> u16 {
-        self.data_reference_index
+        self.sample_entry.data_reference_index()
     }
 
     /// Returns the descriptor box, `esds`
@@ -66,8 +66,7 @@ impl MpegSampleEntry {
     /// * What [`ESDBox::decode_payload`] reports.
     pub fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
         let mut reader = FieldReader::new(payload);
-        let _reserved = reader.read_bytes::<6>()?;
-        let data_reference_index = reader.read_u16()?;
+        let sample_entry = SampleEntry::from_bytes(reader.read_bytes::<8>()?);
         let mut es = None;
         let mut other_boxes = OtherBoxes::new();
         for child in boxes(reader.take_remainder()) {
@@ -80,7 +79,7 @@ impl MpegSampleEntry {
         }
 
         Ok(Self {
-            data_reference_index,
+            sample_entry,
             es: es.ok_or(isobmff_core::Error::missing_mandatory_box(ESDBox::BOX_TYPE))?,
             other_boxes,
         })
@@ -107,8 +106,7 @@ impl BoxEncode for MpegSampleEntry {
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), isobmff_core::Error> {
-        writer.write_bytes(&[0; 6])?;
-        writer.write_u16(self.data_reference_index)?;
+        writer.write_bytes(&self.sample_entry.to_bytes())?;
         let mut rest = self.es.encode(writer.take_remainder())?;
         for other in self.other_boxes.as_slice() {
             rest = other.encode(rest)?;
