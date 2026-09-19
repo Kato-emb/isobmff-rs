@@ -14,7 +14,10 @@ use core::ops::Range;
 ///
 /// The times are measured in the time scale of the track, the one its `mdhd`
 /// declares (§8.4.2). They are not converted: a caller placing samples of two
-/// tracks on one timeline reads that time scale off the `moov` itself.
+/// tracks on one timeline reads that time scale off the `moov` itself. A sample
+/// the file states no composition time offset for — a track without a `ctts`
+/// (§8.6.1.3), a `trun` row without the field (§8.8.8) — is composed when it is
+/// decoded, and carries an offset of zero.
 ///
 /// The `sample_flags` are carried as the wire holds them, the bit layout of
 /// §8.8.3.1.
@@ -24,7 +27,7 @@ pub struct Sample {
     track_id: u32,
     decode_time: u64,
     sample_duration: u32,
-    sample_composition_time_offset: Option<i64>,
+    sample_composition_time_offset: i64,
     sample_flags: u32,
     sample_description_index: u32,
     data: Vec<u8>,
@@ -37,7 +40,7 @@ impl Sample {
         track_id: u32,
         decode_time: u64,
         sample_duration: u32,
-        sample_composition_time_offset: Option<i64>,
+        sample_composition_time_offset: i64,
         sample_flags: u32,
         sample_description_index: u32,
         data: Vec<u8>,
@@ -73,7 +76,7 @@ impl Sample {
 
     /// Returns the offset from the decode time of this sample to its composition time
     #[must_use]
-    pub const fn sample_composition_time_offset(&self) -> Option<i64> {
+    pub const fn sample_composition_time_offset(&self) -> i64 {
         self.sample_composition_time_offset
     }
 
@@ -116,7 +119,7 @@ pub struct SampleExtent {
     track_id: u32,
     decode_time: u64,
     sample_duration: u32,
-    sample_composition_time_offset: Option<i64>,
+    sample_composition_time_offset: i64,
     sample_flags: u32,
     sample_description_index: u32,
     data_reference_index: u32,
@@ -134,7 +137,7 @@ impl SampleExtent {
         track_id: u32,
         decode_time: u64,
         sample_duration: u32,
-        sample_composition_time_offset: Option<i64>,
+        sample_composition_time_offset: i64,
         sample_flags: u32,
         sample_description_index: u32,
         data_reference_index: u32,
@@ -172,7 +175,7 @@ impl SampleExtent {
 
     /// Returns the offset from the decode time of the sample to its composition time
     #[must_use]
-    pub const fn sample_composition_time_offset(&self) -> Option<i64> {
+    pub const fn sample_composition_time_offset(&self) -> i64 {
         self.sample_composition_time_offset
     }
 
