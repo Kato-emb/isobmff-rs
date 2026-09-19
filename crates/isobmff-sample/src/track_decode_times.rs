@@ -26,7 +26,7 @@ use crate::sample::SampleExtent;
 /// assert_eq!(decode_times.decode_time(1), 0);
 ///
 /// // The last sample resolved leaves the track where the next one starts
-/// let last = SampleExtent::new(1, 3_000, 1_000, None, 0, 1, 1, 64..128);
+/// let last = SampleExtent::new(1, 3_000, 1_000, 0, 0, 1, 1, 64..128);
 /// decode_times.advance(&last)?;
 /// assert_eq!(decode_times.decode_time(1), 4_000);
 /// assert_eq!(decode_times.decode_time(2), 0);
@@ -78,7 +78,7 @@ mod tests {
     use super::TrackDecodeTimes;
 
     fn extent(track_id: u32, decode_time: u64, sample_duration: u32) -> SampleExtent {
-        SampleExtent::new(track_id, decode_time, sample_duration, None, 0, 1, 1, 0..0)
+        SampleExtent::new(track_id, decode_time, sample_duration, 0, 0, 1, 1, 0..0)
     }
 
     #[test]
