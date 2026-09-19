@@ -67,7 +67,7 @@ pub use moov::MovieBox;
 pub use mvex::MovieExtendsBox;
 pub use mvhd::MovieHeaderBox;
 pub use nmhd::NullMediaHeaderBox;
-pub use sample_entry::{AudioSampleEntry, VisualSampleEntry};
+pub use sample_entry::{AudioSampleEntry, SampleEntry, VisualSampleEntry};
 pub use smhd::SoundMediaHeaderBox;
 pub use srat::SamplingRateBox;
 pub use stbl::SampleTableBox;

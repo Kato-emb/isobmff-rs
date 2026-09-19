@@ -1,14 +1,131 @@
-//! [`VisualSampleEntry`] (ISO/IEC 14496-12 §12.1.3) and [`AudioSampleEntry`]
-//! (§12.2.3), the sample entry classes a coding derives its own from
+//! [`SampleEntry`] (ISO/IEC 14496-12 §8.5.2.2), [`VisualSampleEntry`] (§12.1.3)
+//! and [`AudioSampleEntry`] (§12.2.3), the sample entry classes a coding derives
+//! its own from
 //!
-//! Neither is a box of its own: §8.5.2.2 declares `SampleEntry(format)` as an
+//! None is a box of its own: §8.5.2.2 declares `SampleEntry(format)` as an
 //! abstract class, and a derived specification names the concrete class by the
 //! coding it stands for — `avc1`, `mp4a`. The types here are the fields those
 //! classes open with, read and written by the derived entry that composes them.
 //! The boxes a sample entry may hold after its fields — `clap`, `pasp`, `srat`,
 //! `btrt`, the ones a coding adds — are the derived entry's to sort.
 
-use isobmff_core::{CompressorName, Error, FieldReader, FieldWriter, U16F16};
+use alloc::vec;
+
+use isobmff_core::{
+    AnyBox, BoxEncode as _, CompressorName, Error, FieldReader, FieldWriter, U16F16,
+};
+
+/// Fields every sample entry opens with
+///
+/// [`SampleEntry`], ISO/IEC 14496-12 §8.5.2.2: whichever coding an entry stands
+/// for, its payload begins with six reserved bytes and the
+/// `data_reference_index`, the entry of the `dref` — counted from one — that
+/// names the resource the samples described lie in (§8.7.2). The reserved bytes
+/// are not held: they are written as the spec fixes them, and read past.
+///
+/// An entry a reader has no type for is carried as an [`AnyBox`], and these
+/// fields are read off it through [`TryFrom`].
+///
+/// # Examples
+///
+/// ```
+/// use isobmff_boxes::SampleEntry;
+/// use isobmff_core::{AnyBox, BoxType};
+///
+/// // The fields lie at the front of every entry, whichever its coding
+/// let payload = [0, 0, 0, 0, 0, 0, 0, 2, 0xab, 0xcd];
+/// let (fields, rest) = payload.split_first_chunk::<8>().unwrap();
+/// let sample_entry = SampleEntry::from_bytes(fields);
+/// assert_eq!(sample_entry.data_reference_index(), 2);
+/// assert_eq!(rest, [0xab, 0xcd]);
+///
+/// // Written back, the fields yield the bytes they were read from
+/// assert_eq!(sample_entry.to_bytes(), *fields);
+///
+/// // An entry carried untyped yields them as well
+/// let entry = AnyBox::from_raw_bytes(BoxType::compact(*b"avc1"), payload.to_vec());
+/// assert_eq!(SampleEntry::try_from(&entry)?, sample_entry);
+/// # Ok::<(), isobmff_core::Error>(())
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct SampleEntry {
+    data_reference_index: u16,
+}
+
+impl SampleEntry {
+    /// Length the fields occupy
+    pub const LEN: u64 = 8;
+
+    /// Creates the fields for samples read through entry `data_reference_index` of the `dref`
+    #[must_use]
+    pub const fn new(data_reference_index: u16) -> Self {
+        Self {
+            data_reference_index,
+        }
+    }
+
+    /// Returns the index of the data reference the samples are read through
+    #[must_use]
+    pub const fn data_reference_index(self) -> u16 {
+        self.data_reference_index
+    }
+
+    /// Reads the fields from the eight bytes that open a sample entry payload
+    #[must_use]
+    pub const fn from_bytes(bytes: &[u8; 8]) -> Self {
+        let [_, _, _, _, _, _, high, low] = *bytes;
+
+        Self {
+            data_reference_index: u16::from_be_bytes([high, low]),
+        }
+    }
+
+    /// Returns the eight bytes the fields occupy on the wire
+    #[must_use]
+    pub const fn to_bytes(self) -> [u8; 8] {
+        let [high, low] = self.data_reference_index.to_be_bytes();
+
+        [0, 0, 0, 0, 0, 0, high, low]
+    }
+}
+
+impl TryFrom<&AnyBox> for SampleEntry {
+    type Error = Error;
+
+    /// Reads the fields off the front of `entry`, whichever coding it stands for
+    ///
+    /// An entry carried as the bytes it lies as is read in place; one built
+    /// from a payload type is written out first.
+    ///
+    /// # Errors
+    ///
+    /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
+    ///   entry ends before the fields do, with its box type on the
+    ///   [`containers`](Error::containers) path of the failure.
+    /// * What [`encode_payload`](isobmff_core::BoxEncode::encode_payload)
+    ///   reports for an entry built from a payload type, with its box type on
+    ///   the [`containers`](Error::containers) path of the failure.
+    fn try_from(entry: &AnyBox) -> Result<Self, Error> {
+        let fields = |payload: &[u8]| {
+            payload
+                .first_chunk::<8>()
+                .map(Self::from_bytes)
+                .ok_or(Error::truncated_payload(Self::LEN, payload.len() as u64))
+        };
+        let read = match entry.raw_payload() {
+            Some(raw) => fields(raw),
+            None => {
+                let mut written =
+                    vec![0; usize::try_from(entry.payload_len()).unwrap_or(usize::MAX)];
+                entry
+                    .encode_payload(&mut written)
+                    .and_then(|()| fields(&written))
+            }
+        };
+
+        read.map_err(|error| error.in_container(entry.box_type()))
+    }
+}
 
 /// Fields a visual sample entry opens with
 ///
@@ -19,7 +136,7 @@ use isobmff_core::{CompressorName, Error, FieldReader, FieldWriter, U16F16};
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct VisualSampleEntry {
-    data_reference_index: u16,
+    sample_entry: SampleEntry,
     width: u16,
     height: u16,
     horiz_resolution: U16F16,
@@ -38,7 +155,7 @@ impl VisualSampleEntry {
     #[must_use]
     pub const fn new(data_reference_index: u16, width: u16, height: u16) -> Self {
         Self {
-            data_reference_index,
+            sample_entry: SampleEntry::new(data_reference_index),
             width,
             height,
             horiz_resolution: U16F16::from_raw(0x0048_0000),
@@ -52,7 +169,7 @@ impl VisualSampleEntry {
     /// Returns the index of the data reference the samples are read through
     #[must_use]
     pub const fn data_reference_index(&self) -> u16 {
-        self.data_reference_index
+        self.sample_entry.data_reference_index()
     }
 
     /// Returns the width in pixels the coding delivers
@@ -104,8 +221,7 @@ impl VisualSampleEntry {
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
     ///   payload ends before the fields do.
     pub fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let _reserved = reader.read_bytes::<6>()?;
-        let data_reference_index = reader.read_u16()?;
+        let sample_entry = SampleEntry::from_bytes(reader.read_bytes::<8>()?);
         let _pre_defined = reader.read_bytes::<16>()?;
         let width = reader.read_u16()?;
         let height = reader.read_u16()?;
@@ -118,7 +234,7 @@ impl VisualSampleEntry {
         let _pre_defined = reader.read_i16()?;
 
         Ok(Self {
-            data_reference_index,
+            sample_entry,
             width,
             height,
             horiz_resolution,
@@ -137,8 +253,7 @@ impl VisualSampleEntry {
     /// * [`TruncatedBuffer`](isobmff_core::ErrorKind::TruncatedBuffer): `writer`
     ///   has less than [`LEN`](Self::LEN) bytes left.
     pub fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        writer.write_bytes(&[0; 6])?;
-        writer.write_u16(self.data_reference_index)?;
+        writer.write_bytes(&self.sample_entry.to_bytes())?;
         writer.write_bytes(&[0; 16])?;
         writer.write_u16(self.width)?;
         writer.write_u16(self.height)?;
@@ -171,7 +286,7 @@ impl VisualSampleEntry {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct AudioSampleEntry {
     entry_version: u16,
-    data_reference_index: u16,
+    sample_entry: SampleEntry,
     channel_count: u16,
     sample_size: u16,
     sample_rate: U16F16,
@@ -191,7 +306,7 @@ impl AudioSampleEntry {
     pub const fn new(data_reference_index: u16, channel_count: u16, sample_rate: u16) -> Self {
         Self {
             entry_version: 0,
-            data_reference_index,
+            sample_entry: SampleEntry::new(data_reference_index),
             channel_count,
             sample_size: 16,
             sample_rate: U16F16::from_raw((sample_rate as u32) << 16),
@@ -207,7 +322,7 @@ impl AudioSampleEntry {
     pub const fn new_v1(data_reference_index: u16, channel_count: u16) -> Self {
         Self {
             entry_version: 1,
-            data_reference_index,
+            sample_entry: SampleEntry::new(data_reference_index),
             channel_count,
             sample_size: 16,
             sample_rate: U16F16::ONE,
@@ -223,7 +338,7 @@ impl AudioSampleEntry {
     /// Returns the index of the data reference the samples are read through
     #[must_use]
     pub const fn data_reference_index(&self) -> u16 {
-        self.data_reference_index
+        self.sample_entry.data_reference_index()
     }
 
     /// Returns the number of channels, 1 for mono or 2 for stereo
@@ -254,8 +369,7 @@ impl AudioSampleEntry {
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the
     ///   entry opens with a version other than 0 or 1.
     pub fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let _reserved = reader.read_bytes::<6>()?;
-        let data_reference_index = reader.read_u16()?;
+        let sample_entry = SampleEntry::from_bytes(reader.read_bytes::<8>()?);
         let entry_version = reader.read_u16()?;
         // Why not refuse version 1 as well, to keep the QuickTime sound
         // description of that version out: §12.2.3 states the same 1 for
@@ -277,7 +391,7 @@ impl AudioSampleEntry {
 
         Ok(Self {
             entry_version,
-            data_reference_index,
+            sample_entry,
             channel_count,
             sample_size,
             sample_rate,
@@ -292,8 +406,7 @@ impl AudioSampleEntry {
     /// * [`TruncatedBuffer`](isobmff_core::ErrorKind::TruncatedBuffer): `writer`
     ///   has less than [`LEN`](Self::LEN) bytes left.
     pub fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        writer.write_bytes(&[0; 6])?;
-        writer.write_u16(self.data_reference_index)?;
+        writer.write_bytes(&self.sample_entry.to_bytes())?;
         writer.write_u16(self.entry_version)?;
         writer.write_bytes(&[0; 6])?;
         writer.write_u16(self.channel_count)?;
@@ -309,9 +422,29 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{Error, FieldReader, FieldWriter};
+    use isobmff_core::{
+        AnyBox, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter,
+    };
 
-    use super::{AudioSampleEntry, VisualSampleEntry};
+    use super::{AudioSampleEntry, SampleEntry, VisualSampleEntry};
+
+    /// Entry of a coding that adds nothing to the visual fields
+    #[derive(Clone, PartialEq, Debug)]
+    struct VisualSampleEntryBox(VisualSampleEntry);
+
+    impl BoxDefinition for VisualSampleEntryBox {
+        const BOX_TYPE: BoxType = BoxType::compact(*b"vsmp");
+    }
+
+    impl BoxEncode for VisualSampleEntryBox {
+        fn payload_len(&self) -> u64 {
+            VisualSampleEntry::LEN
+        }
+
+        fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+            self.0.encode_fields(writer)
+        }
+    }
 
     /// Writes fields that fill `length` bytes and returns the bytes they occupy
     fn encoded(
@@ -332,6 +465,33 @@ mod tests {
 
     fn encoded_audio(entry: &AudioSampleEntry) -> Vec<u8> {
         encoded(AudioSampleEntry::LEN, |writer| entry.encode_fields(writer))
+    }
+
+    #[test]
+    fn the_fields_of_an_entry_carried_as_bytes_are_read_in_place() {
+        let entry = AnyBox::from_raw_bytes(
+            BoxType::compact(*b"avc1"),
+            vec![0, 0, 0, 0, 0, 0, 0, 3, 0xab],
+        );
+
+        assert_eq!(SampleEntry::try_from(&entry), Ok(SampleEntry::new(3)));
+    }
+
+    #[test]
+    fn the_fields_of_an_entry_built_from_a_type_are_read_off_what_it_writes() {
+        let entry = AnyBox::from(VisualSampleEntryBox(VisualSampleEntry::new(5, 16, 16)));
+
+        assert_eq!(SampleEntry::try_from(&entry), Ok(SampleEntry::new(5)));
+    }
+
+    #[test]
+    fn an_entry_ending_before_its_fields_is_rejected_as_that_box_truncated() {
+        let entry = AnyBox::from_raw_bytes(BoxType::compact(*b"avc1"), vec![0; 4]);
+
+        assert_eq!(
+            SampleEntry::try_from(&entry),
+            Err(Error::truncated_payload(8, 4).in_container(BoxType::compact(*b"avc1")))
+        );
     }
 
     #[test]
