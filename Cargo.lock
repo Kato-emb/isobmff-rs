@@ -219,7 +219,9 @@ dependencies = [
 name = "isobmff-sample"
 version = "0.0.0"
 dependencies = [
+ "isobmff-boxes",
  "isobmff-core",
+ "isobmff-test-support",
 ]
 
 [[package]]
