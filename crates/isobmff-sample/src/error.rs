@@ -8,10 +8,11 @@ use isobmff_core::Category;
 /// Reason the samples of a presentation do not resolve
 ///
 /// What went wrong is one [`kind`](Self::kind): a failure of the samples
-/// themselves — a timeline run past what its field carries — or a failure of
-/// one box, which [`isobmff_core::Error`] names and this type carries through
-/// whole, as [`box_error`](Self::box_error). What a caller does about either is
-/// one [`category`](Self::category).
+/// themselves — a fragment of a track the movie never declared, a timeline or
+/// an offset run past what its field carries — or a failure of one box, which
+/// [`isobmff_core::Error`] names and this type carries through whole, as
+/// [`box_error`](Self::box_error). What a caller does about either is one
+/// [`category`](Self::category).
 ///
 /// The values a failure of the samples carries follow from its kind, and each
 /// kind names its own on [`SampleErrorKind`]. A carried box failure keeps its
@@ -57,12 +58,56 @@ impl SampleError {
         }
     }
 
+    /// Returns the failure of a data offset running past what 64 bits carry
+    #[must_use]
+    pub const fn data_offset_overflow(track_id: u32) -> Self {
+        Self {
+            representation: Representation::DataOffsetOverflow { track_id },
+        }
+    }
+
+    /// Returns the failure of a fragment carrying samples of a track the movie never declared
+    #[must_use]
+    pub const fn unknown_track_id(track_id: u32) -> Self {
+        Self {
+            representation: Representation::UnknownTrackId { track_id },
+        }
+    }
+
+    /// Returns the failure of a fragment describing its samples by an `stsd` entry the track has none of
+    #[must_use]
+    pub const fn unknown_sample_description_index(
+        track_id: u32,
+        sample_description_index: u32,
+    ) -> Self {
+        Self {
+            representation: Representation::UnknownSampleDescriptionIndex {
+                track_id,
+                sample_description_index,
+            },
+        }
+    }
+
+    /// Returns the failure of a movie that carries no `mvex`, and so no fragments
+    #[must_use]
+    pub const fn missing_movie_extends() -> Self {
+        Self {
+            representation: Representation::MissingMovieExtends,
+        }
+    }
+
     /// Returns what went wrong
     #[must_use]
     pub const fn kind(self) -> SampleErrorKind {
         match self.representation {
             Representation::Box(box_error) => SampleErrorKind::Box(box_error.kind()),
             Representation::DecodeTimeOverflow { .. } => SampleErrorKind::DecodeTimeOverflow,
+            Representation::DataOffsetOverflow { .. } => SampleErrorKind::DataOffsetOverflow,
+            Representation::UnknownTrackId { .. } => SampleErrorKind::UnknownTrackId,
+            Representation::UnknownSampleDescriptionIndex { .. } => {
+                SampleErrorKind::UnknownSampleDescriptionIndex
+            }
+            Representation::MissingMovieExtends => SampleErrorKind::MissingMovieExtends,
         }
     }
 
@@ -71,7 +116,11 @@ impl SampleError {
     pub const fn category(self) -> Category {
         match self.representation {
             Representation::Box(box_error) => box_error.category(),
-            Representation::DecodeTimeOverflow { .. } => Category::Malformed,
+            Representation::DecodeTimeOverflow { .. }
+            | Representation::DataOffsetOverflow { .. }
+            | Representation::UnknownTrackId { .. }
+            | Representation::UnknownSampleDescriptionIndex { .. }
+            | Representation::MissingMovieExtends => Category::Malformed,
         }
     }
 
@@ -83,7 +132,11 @@ impl SampleError {
     pub const fn box_error(self) -> Option<isobmff_core::Error> {
         match self.representation {
             Representation::Box(box_error) => Some(box_error),
-            Representation::DecodeTimeOverflow { .. } => None,
+            Representation::DecodeTimeOverflow { .. }
+            | Representation::DataOffsetOverflow { .. }
+            | Representation::UnknownTrackId { .. }
+            | Representation::UnknownSampleDescriptionIndex { .. }
+            | Representation::MissingMovieExtends => None,
         }
     }
 
@@ -91,8 +144,27 @@ impl SampleError {
     #[must_use]
     pub const fn track_id(self) -> Option<u32> {
         match self.representation {
-            Representation::DecodeTimeOverflow { track_id } => Some(track_id),
-            Representation::Box(_) => None,
+            Representation::DecodeTimeOverflow { track_id }
+            | Representation::DataOffsetOverflow { track_id }
+            | Representation::UnknownTrackId { track_id }
+            | Representation::UnknownSampleDescriptionIndex { track_id, .. } => Some(track_id),
+            Representation::Box(_) | Representation::MissingMovieExtends => None,
+        }
+    }
+
+    /// Returns the `stsd` entry the failure names, for the kinds that name one
+    #[must_use]
+    pub const fn sample_description_index(self) -> Option<u32> {
+        match self.representation {
+            Representation::UnknownSampleDescriptionIndex {
+                sample_description_index,
+                ..
+            } => Some(sample_description_index),
+            Representation::Box(_)
+            | Representation::DecodeTimeOverflow { .. }
+            | Representation::DataOffsetOverflow { .. }
+            | Representation::UnknownTrackId { .. }
+            | Representation::MissingMovieExtends => None,
         }
     }
 }
@@ -114,6 +186,21 @@ impl fmt::Display for SampleError {
                 formatter,
                 "decode time of track {track_id} runs past what 64 bits carry"
             ),
+            Representation::DataOffsetOverflow { track_id } => write!(
+                formatter,
+                "data offset of track {track_id} runs past what 64 bits carry"
+            ),
+            Representation::UnknownTrackId { track_id } => {
+                write!(formatter, "movie declares no track {track_id}")
+            }
+            Representation::UnknownSampleDescriptionIndex {
+                track_id,
+                sample_description_index,
+            } => write!(
+                formatter,
+                "track {track_id} has no stsd entry {sample_description_index}"
+            ),
+            Representation::MissingMovieExtends => formatter.write_str("the movie carries no mvex"),
         }
     }
 }
@@ -130,6 +217,9 @@ impl fmt::Debug for SampleError {
         if let Some(track_id) = self.track_id() {
             fields.field("track_id", &track_id);
         }
+        if let Some(sample_description_index) = self.sample_description_index() {
+            fields.field("sample_description_index", &sample_description_index);
+        }
 
         fields.finish()
     }
@@ -140,7 +230,11 @@ impl error::Error for SampleError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match &self.representation {
             Representation::Box(box_error) => Some(box_error),
-            Representation::DecodeTimeOverflow { .. } => None,
+            Representation::DecodeTimeOverflow { .. }
+            | Representation::DataOffsetOverflow { .. }
+            | Representation::UnknownTrackId { .. }
+            | Representation::UnknownSampleDescriptionIndex { .. }
+            | Representation::MissingMovieExtends => None,
         }
     }
 }
@@ -166,6 +260,27 @@ pub enum SampleErrorKind {
     ///
     /// [`track_id`](SampleError::track_id) is the track they belong to.
     DecodeTimeOverflow,
+    /// Data offsets of a track run past what 64 bits carry
+    ///
+    /// [`track_id`](SampleError::track_id) is the track they belong to.
+    DataOffsetOverflow,
+    /// Fragment carries samples of a track the movie never declared
+    ///
+    /// A track is declared by a `trak` and, for its fragments, a `trex`
+    /// (ISO/IEC 14496-12 §8.8.3); a fragment of a track missing either is
+    /// refused. [`track_id`](SampleError::track_id) is the track it names.
+    UnknownTrackId,
+    /// Fragment describes its samples by an `stsd` entry the track has none of
+    ///
+    /// [`track_id`](SampleError::track_id) is the track it belongs to, and
+    /// [`sample_description_index`](SampleError::sample_description_index) the
+    /// entry it names, counted from one.
+    UnknownSampleDescriptionIndex,
+    /// Movie carries no `mvex`, and so continues in no fragments
+    ///
+    /// A movie continued in fragments declares so by its `mvex` (ISO/IEC
+    /// 14496-12 §8.8.1); a fragment of a movie carrying none is refused.
+    MissingMovieExtends,
 }
 
 /// Values a failure carries, keyed by what went wrong
@@ -175,6 +290,17 @@ enum Representation {
     Box(isobmff_core::Error),
     /// Decode time running past what 64 bits carry
     DecodeTimeOverflow { track_id: u32 },
+    /// Data offset running past what 64 bits carry
+    DataOffsetOverflow { track_id: u32 },
+    /// Fragment carrying samples of a track the movie never declared
+    UnknownTrackId { track_id: u32 },
+    /// Fragment describing its samples by an `stsd` entry the track has none of
+    UnknownSampleDescriptionIndex {
+        track_id: u32,
+        sample_description_index: u32,
+    },
+    /// Movie carrying no `mvex`, and so no fragments
+    MissingMovieExtends,
 }
 
 #[cfg(test)]
@@ -193,8 +319,26 @@ mod tests {
             Category::Malformed
         );
         assert_eq!(
+            SampleError::unknown_track_id(3).category(),
+            Category::Malformed
+        );
+        assert_eq!(
             SampleError::from(isobmff_core::Error::unsupported_version(2)).category(),
             Category::Unsupported
+        );
+    }
+
+    #[test]
+    fn a_failure_carries_only_the_values_its_kind_names() {
+        let error = SampleError::unknown_sample_description_index(2, 7);
+
+        assert_eq!(error.track_id(), Some(2));
+        assert_eq!(error.sample_description_index(), Some(7));
+        assert_eq!(error.box_error(), None);
+        assert_eq!(SampleError::missing_movie_extends().track_id(), None);
+        assert_eq!(
+            SampleError::unknown_track_id(3).sample_description_index(),
+            None
         );
     }
 
@@ -214,6 +358,22 @@ mod tests {
             SampleError::decode_time_overflow(1).to_string(),
             "decode time of track 1 runs past what 64 bits carry"
         );
+        assert_eq!(
+            SampleError::data_offset_overflow(1).to_string(),
+            "data offset of track 1 runs past what 64 bits carry"
+        );
+        assert_eq!(
+            SampleError::unknown_track_id(3).to_string(),
+            "movie declares no track 3"
+        );
+        assert_eq!(
+            SampleError::unknown_sample_description_index(2, 7).to_string(),
+            "track 2 has no stsd entry 7"
+        );
+        assert_eq!(
+            SampleError::missing_movie_extends().to_string(),
+            "the movie carries no mvex"
+        );
     }
 
     #[test]
@@ -231,6 +391,10 @@ mod tests {
         assert_eq!(
             format!("{:?}", SampleError::decode_time_overflow(1)),
             "SampleError { kind: DecodeTimeOverflow, category: Malformed, track_id: 1 }"
+        );
+        assert_eq!(
+            format!("{:?}", SampleError::missing_movie_extends()),
+            "SampleError { kind: MissingMovieExtends, category: Malformed }"
         );
     }
 }

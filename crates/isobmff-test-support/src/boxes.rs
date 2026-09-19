@@ -78,15 +78,21 @@ fn segment_type() -> SegmentTypeBox {
 
 /// Track of video the synthetic movies declare, holding no sample of its own
 ///
-/// The `track_id` is the one field to pin: the sample tables are empty, and the
-/// rest — the handler, the flags, the sample entry, the durations — is filler no
-/// caller may read anything into. A test that turns on one of those states it
-/// itself rather than reaching for this.
+/// The `track_id` is the one field to pin, and the sample entry states a
+/// `data_reference_index` of 1, the file itself, and nothing past it. The rest
+/// — the handler, the flags, the durations — is filler no caller may read
+/// anything into, and the sample tables are empty. A test that turns on one of
+/// those states it itself rather than reaching for this.
 pub fn track(track_id: u32) -> TrackBox {
-    let sample_description = SampleDescriptionBox::new(vec![AnyBox::from_raw_bytes(
-        BoxType::compact(*b"avc1"),
-        vec![0xab; 4],
-    )]);
+    track_described_by(
+        track_id,
+        AnyBox::from_raw_bytes(BoxType::compact(*b"avc1"), vec![0, 0, 0, 0, 0, 0, 0, 1]),
+    )
+}
+
+/// Track of [`track`], its samples described by the one `stsd` entry given
+pub fn track_described_by(track_id: u32, entry: AnyBox) -> TrackBox {
+    let sample_description = SampleDescriptionBox::new(vec![entry]);
     let media = MediaBox::new(
         MediaHeaderBox::new(EPOCH, EPOCH, TIMESCALE, 0, LanguageCode::UND),
         HandlerBox::new(

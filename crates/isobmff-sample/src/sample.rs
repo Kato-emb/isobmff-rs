@@ -122,7 +122,7 @@ pub struct SampleExtent {
     sample_composition_time_offset: i64,
     sample_flags: u32,
     sample_description_index: u32,
-    data_reference_index: u32,
+    data_reference_index: u16,
     extent: Range<u64>,
 }
 
@@ -140,7 +140,7 @@ impl SampleExtent {
         sample_composition_time_offset: i64,
         sample_flags: u32,
         sample_description_index: u32,
-        data_reference_index: u32,
+        data_reference_index: u16,
         extent: Range<u64>,
     ) -> Self {
         Self {
@@ -193,7 +193,7 @@ impl SampleExtent {
 
     /// Returns the `dref` entry naming the resource the bytes of the sample lie in
     #[must_use]
-    pub const fn data_reference_index(&self) -> u32 {
+    pub const fn data_reference_index(&self) -> u16 {
         self.data_reference_index
     }
 

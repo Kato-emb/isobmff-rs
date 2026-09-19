@@ -10,9 +10,11 @@
 //!
 //! * **Sample resolution.** [`SampleExtent`] is what a declaration of either
 //!   form resolves to: the properties of a sample and the extent of the file
-//!   its bytes lie in. [`TrackDecodeTimes`] is what §8.8 carries from one
-//!   fragment to the next — where each track's decode time stands when a
-//!   fragment states none (§8.8.12) — and is the caller's to own.
+//!   its bytes lie in. [`movie_fragment::sample_extents`] resolves a `moof`
+//!   against its movie — the `trex` and the `stsd` of each track (§8.8); it
+//!   holds no state across calls, and what §8.8 carries from one fragment to
+//!   the next — where each track's decode time stands when a fragment states
+//!   none (§8.8.12) — is a [`TrackDecodeTimes`] the caller owns and hands in.
 //! * **Sample gathering.** [`Sample`] is a [`SampleExtent`] joined with the
 //!   bytes it names.
 //!
@@ -32,6 +34,7 @@
 extern crate alloc;
 
 mod error;
+pub mod movie_fragment;
 mod sample;
 mod track_decode_times;
 
