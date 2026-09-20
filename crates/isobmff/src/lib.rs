@@ -84,9 +84,9 @@
 //! # `no_std`
 //!
 //! The crate is `no_std` but needs `alloc`: a box read into a value is gathered
-//! whole, a sample owns the bytes it carries, the extents of a fragment are held
-//! until the data that meets them arrives, and the samples of a fragment being
-//! written are held until it is closed.
+//! whole, a sample owns the bytes it carries, the extents a movie or a fragment
+//! declares are held until the data that meets them arrives, and the samples of
+//! a fragment being written are held until it is closed.
 
 #![no_std]
 

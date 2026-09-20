@@ -48,7 +48,9 @@ mod tests {
         for arriving in file.chunks(cut_length) {
             reader.handle_input(offset, arriving).unwrap();
             offset = offset.saturating_add(u64::try_from(arriving.len()).unwrap());
-            samples.extend(core::iter::from_fn(|| reader.poll_sample()));
+            while let Some(sample) = reader.poll_sample() {
+                samples.push(sample);
+            }
         }
 
         samples
@@ -63,10 +65,14 @@ mod tests {
             reader
                 .handle_data(wanted.start, fetched(file, &wanted))
                 .unwrap();
-            samples.extend(core::iter::from_fn(|| reader.poll_sample()));
+            while let Some(sample) = reader.poll_sample() {
+                samples.push(sample);
+            }
         }
         reader.finish().unwrap();
-        samples.extend(core::iter::from_fn(|| reader.poll_sample()));
+        while let Some(sample) = reader.poll_sample() {
+            samples.push(sample);
+        }
 
         samples
     }
@@ -98,27 +104,12 @@ mod tests {
     }
 
     #[test]
-    fn the_bytes_the_reader_wants_fetched_in_turn_complete_every_sample_the_movie_declares() {
-        let movie_first = non_fragmented_file(&CHUNKS, true);
-        let movie_last = non_fragmented_file(&CHUNKS, false);
-
-        assert_eq!(
-            samples_of(&movie_last, movie_last.len()),
-            samples_of(&movie_first, movie_first.len())
-        );
-        assert_eq!(
-            samples_of(&movie_last, movie_last.len()),
-            declared_samples()
-        );
-    }
-
-    #[test]
-    fn the_samples_are_the_same_however_the_file_was_cut() {
+    fn the_bytes_the_reader_wants_fetched_in_turn_complete_every_sample_however_the_file_was_cut() {
         for file in [
             non_fragmented_file(&CHUNKS, true),
             non_fragmented_file(&CHUNKS, false),
         ] {
-            for cut_length in [1, 3, 7, 64, file.len().saturating_sub(1)] {
+            for cut_length in [1, 3, 7, 64, file.len().saturating_sub(1), file.len()] {
                 assert_eq!(samples_of(&file, cut_length), declared_samples());
             }
         }

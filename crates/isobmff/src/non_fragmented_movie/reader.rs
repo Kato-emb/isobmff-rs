@@ -328,23 +328,26 @@ impl NonFragmentedReader {
     /// Reads every box the framing has finished framing so far
     fn read_framed(&mut self) -> Result<(), StructureError> {
         while let Some(event) = self.boxes.poll_event() {
-            // Why not unreachable: an event was taken, so the framing names the
-            // bytes it was read from, and the fallback is a degenerate position
-            // in place of a panic the lints forbid.
-            let start = self
-                .boxes
-                .event_extent()
-                .map_or(0, |extent| extent.start)
-                .saturating_add(self.origin);
             match event {
                 BoxEvent::Header(header) => self.begin_box(header),
                 BoxEvent::Payload(payload) => match &mut self.open {
                     Some(Open::FileType(reader)) => reader.handle_payload(payload),
                     Some(Open::Movie(reader)) => reader.handle_payload(payload),
-                    Some(Open::MediaData) => self
-                        .samples
-                        .handle_data(start, &payload)
-                        .map_err(StructureError::from),
+                    Some(Open::MediaData) => {
+                        // Why not unreachable: an event was taken, so the
+                        // framing names the bytes it was read from, and the
+                        // fallback is a degenerate position in place of a
+                        // panic the lints forbid.
+                        let start = self
+                            .boxes
+                            .event_extent()
+                            .map_or(0, |extent| extent.start)
+                            .saturating_add(self.origin);
+
+                        self.samples
+                            .handle_data(start, &payload)
+                            .map_err(StructureError::from)
+                    }
                     None => Ok(()),
                 },
                 BoxEvent::End => self.close_box(),
@@ -372,8 +375,8 @@ impl NonFragmentedReader {
             )?)),
             Disposition::MediaData => Some(Open::MediaData),
             // Why not unreachable: the structure of a non-fragmented movie file
-            // answers with no fragment, and passing one over is what it answers
-            // a `moof` with, in place of a panic the lints forbid.
+            // never answers with a fragment, and `None` stands in place of a
+            // panic the lints forbid.
             Disposition::MovieFragment | Disposition::Skip => None,
         };
 

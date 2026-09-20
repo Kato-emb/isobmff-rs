@@ -16,13 +16,10 @@ mod tests {
         TrackFragmentBox, TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox,
         TrackRunSample,
     };
-    use isobmff_test_support::{file_type, fragmented_movie, written};
+    use isobmff_test_support::{SAMPLE_DURATION, file_type, fragmented_movie, written};
 
     /// Bytes each sample of the synthetic file occupies
     const SAMPLE_LEN: usize = 8;
-
-    /// Ticks each sample of the synthetic file lasts
-    const SAMPLE_DURATION: u32 = 3_000;
 
     /// Decode time the fragment of the synthetic file starts at
     const BASE_MEDIA_DECODE_TIME: u64 = 90_000;
