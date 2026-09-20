@@ -1,4 +1,4 @@
-//! [`TrackFragmentHeaderBox`] (`tfhd`) and [`TrackFragmentFlags`], the `tf_flags` no field speaks for, ISO/IEC 14496-12 §8.8.7
+//! [`TrackFragmentHeaderBox`] (`tfhd`) and [`TrackFragmentFlags`], the `tf_flags` a caller states, ISO/IEC 14496-12 §8.8.7
 
 use isobmff_core::{
     BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FullBoxFields,
@@ -50,8 +50,8 @@ const DEFAULT_BASE_IS_MOOF: u32 = 0x0002_0000;
 /// [`TrackFragmentBox`](crate::TrackFragmentBox) states for the fragment it
 /// builds. What is left for a caller to state is
 /// [`default-base-is-moof`](Self::DEFAULT_BASE_IS_MOOF) and whatever bits the
-/// spec has yet to define, and this holds those alone: a value of it can build
-/// a header, so a header is built from one without a way to fail.
+/// spec has yet to define, which this holds alone and
+/// [`TrackFragmentHeaderBox::new`] takes.
 ///
 /// # Examples
 ///
@@ -106,9 +106,9 @@ impl TrackFragmentFlags {
 /// carries exactly one.
 ///
 /// Five of the `flags` state which of those fields the box carries, so they are
-/// derived from the fields themselves; `duration-is-empty` is stated by the
-/// [`TrackFragmentBox`](crate::TrackFragmentBox) that holds no runs; and what a
-/// caller states is a [`TrackFragmentFlags`] —
+/// derived from the fields themselves; `duration-is-empty` is stated by
+/// [`TrackFragmentBox::with_empty_duration`](crate::TrackFragmentBox::with_empty_duration);
+/// and what a caller states is a [`TrackFragmentFlags`] —
 /// [`default-base-is-moof`](TrackFragmentFlags::DEFAULT_BASE_IS_MOOF) and
 /// whatever bits the spec has yet to define. [`flags`](Self::flags) returns all
 /// of them together, as the wire carries them.
@@ -187,7 +187,7 @@ impl TrackFragmentHeaderBox {
         }
     }
 
-    /// Returns the box stating `duration-is-empty` on top of what it states
+    /// Returns the box with `duration-is-empty` added to its flags
     pub(crate) const fn with_empty_duration(mut self) -> Self {
         self.flags = flags_of(self.flags.bits() | DURATION_IS_EMPTY);
 
@@ -202,8 +202,9 @@ impl TrackFragmentHeaderBox {
 
     /// Returns whether the fragment states that it holds no samples
     ///
-    /// [`TrackFragmentBox`](crate::TrackFragmentBox) refuses this alongside a
-    /// `trun`.
+    /// A `traf` read by [`decode_payload`](BoxDecode::decode_payload) of
+    /// [`TrackFragmentBox`](crate::TrackFragmentBox) is refused when it states
+    /// this alongside a `trun`.
     #[must_use]
     pub const fn duration_is_empty(&self) -> bool {
         self.flags.bits() & DURATION_IS_EMPTY != 0
@@ -264,8 +265,8 @@ const fn presence(present: bool, flag: u32) -> u32 {
 /// Returns `bits` as the flags of the box, which they fit by construction
 const fn flags_of(bits: u32) -> FullBoxFlags {
     // Why not FullBoxFlags::new: it answers with an `Option` for bits past the
-    // field, which flags that already fit it, joined with presence bits below
-    // them, cannot reach; the field is built from its bytes instead.
+    // field, which flags that already fit it, joined with bits the field
+    // defines, cannot reach; the field is built from its bytes instead.
     FullBoxFields::from_bytes(&bits.to_be_bytes()).flags()
 }
 
@@ -481,7 +482,7 @@ mod tests {
     }
 
     #[test]
-    fn flags_stating_a_field_or_an_empty_duration_cannot_be_built() {
+    fn flags_stating_a_field_an_empty_duration_or_a_bit_past_the_field_cannot_be_built() {
         assert_eq!(TrackFragmentFlags::new(0x0000_0002), None);
         assert_eq!(TrackFragmentFlags::new(0x0001_0000), None);
         assert_eq!(TrackFragmentFlags::new(0x0100_0000), None);

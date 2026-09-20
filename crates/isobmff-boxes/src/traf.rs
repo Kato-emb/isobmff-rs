@@ -60,8 +60,9 @@ impl TrackFragmentBox {
 
     /// Creates the box of a fragment holding no samples, whose `tfhd` states `duration-is-empty`
     ///
-    /// Such a fragment adds the default duration of its track to the timeline
-    /// and nothing else (ISO/IEC 14496-12 §8.8.7.1), so it carries no run.
+    /// Such a fragment adds the default sample duration its `tfhd` or the
+    /// `trex` of its track states to the timeline, and no sample (§8.8.7.1),
+    /// so §8.8.8 has it carry no run.
     #[must_use]
     pub const fn with_empty_duration(
         tfhd: TrackFragmentHeaderBox,
@@ -280,11 +281,17 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_fragment_of_empty_duration_states_so_and_holds_no_run() {
+    fn a_fragment_of_empty_duration_states_so_holds_no_run_and_reads_back() {
         let empty = TrackFragmentBox::with_empty_duration(track_fragment_header(1), None);
 
-        assert!(empty.tfhd().duration_is_empty());
-        assert_eq!(empty.trun(), []);
+        assert_eq!(
+            empty,
+            TrackFragmentBox::new(
+                track_fragment_header(1).with_empty_duration(),
+                None,
+                Vec::new()
+            )
+        );
         assert_eq!(
             TrackFragmentBox::decode_payload(&encoded_payload(&empty)).unwrap(),
             empty

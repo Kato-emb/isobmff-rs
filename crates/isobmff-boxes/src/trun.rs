@@ -495,7 +495,7 @@ mod tests {
 
     use isobmff_core::{BoxDecode, BoxEncode, Error};
 
-    use super::{MAXIMUM_EMPTY_ROWS, TrackRunBox, TrackRunSample};
+    use super::{CompositionTimeOffset, MAXIMUM_EMPTY_ROWS, TrackRunBox, TrackRunSample};
 
     /// Row stating the size of its sample and the offset to its composition time
     fn sample(sample_size: u32, sample_composition_time_offset: i64) -> TrackRunSample {
@@ -519,6 +519,12 @@ mod tests {
         track_run.encode_payload(&mut buffer).unwrap();
 
         buffer
+    }
+
+    #[test]
+    fn an_offset_outside_what_either_version_writes_is_refused() {
+        assert_eq!(CompositionTimeOffset::new(i64::from(u32::MAX) + 1), None);
+        assert_eq!(CompositionTimeOffset::new(i64::from(i32::MIN) - 1), None);
     }
 
     #[test]

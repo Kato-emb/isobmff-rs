@@ -1,4 +1,4 @@
-//! [`TrackRunBuilder`], the rows of one track run gathered before the header they fall under is known
+//! [`TrackRunBuilder`] and [`TrackRunRow`], the rows of one track run gathered before the header they fall under is known
 
 use alloc::vec::Vec;
 
@@ -63,13 +63,12 @@ impl TrackRunRow {
 
 /// Gathers the rows of one track run, and writes the run against the header its fragment states
 ///
-/// A [`TrackRunBox`] states once, for every row, which fields the rows carry,
-/// and its version once for every composition time offset; a caller laying
-/// samples down one at a time knows neither until the run is over. The
-/// builder takes the rows with every field stated and settles both when the
-/// run is [built](Self::build): a field the header states a default for, which
-/// every row of the run agrees with, is left out of the rows, and the flags
-/// only the first row differs on are its `first_sample_flags` (ISO/IEC
+/// The builder takes rows with every field stated and settles, when the run
+/// is [built](Self::build), the two things a [`TrackRunBox`] states once for
+/// every row — which fields the rows carry, and the version its composition
+/// time offsets are written in: a field the header states a default for,
+/// which every row of the run agrees with, is left out of the rows, and the
+/// flags only the first row differs on are its `first_sample_flags` (ISO/IEC
 /// 14496-12 §8.8.8).
 ///
 /// The two versions of the box write the offsets unsigned and signed, so one
@@ -248,16 +247,6 @@ mod tests {
     }
 
     #[test]
-    fn an_offset_outside_what_either_version_writes_is_refused() {
-        assert_eq!(CompositionTimeOffset::new(i64::from(u32::MAX) + 1), None);
-        assert_eq!(CompositionTimeOffset::new(i64::from(i32::MIN) - 1), None);
-        assert_eq!(
-            CompositionTimeOffset::new(-8).map(CompositionTimeOffset::get),
-            Some(-8)
-        );
-    }
-
-    #[test]
     fn a_row_no_version_writes_beside_the_rows_held_is_handed_back() {
         let wide = row(0, i64::from(u32::MAX));
         let negative = row(0, -8);
@@ -290,14 +279,17 @@ mod tests {
 
     #[test]
     fn a_field_a_row_differs_from_its_default_on_is_stated_by_every_row() {
-        let run = built(&[row(0, 0), row(0, 0)], &header(Some(512), None, Some(0)));
+        let run = built(
+            &[row(0, 0), row(0, 0)],
+            &header(Some(512), Some(4), Some(0)),
+        );
 
         assert_eq!(
             run,
             TrackRunBox::new(
                 None,
                 None,
-                vec![TrackRunSample::new(Some(1_024), Some(4), None, None).unwrap(); 2]
+                vec![TrackRunSample::new(Some(1_024), None, None, None).unwrap(); 2]
             )
             .unwrap()
         );
