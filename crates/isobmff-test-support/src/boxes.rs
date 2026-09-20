@@ -89,15 +89,16 @@ pub fn track(track_id: u32) -> TrackBox {
 
 /// Track of [`track`], its samples described by the one `stsd` entry given
 pub fn track_described_by(track_id: u32, entry: AnyBox) -> TrackBox {
-    let sample_table = SampleTableBox::new(
-        SampleDescriptionBox::new(vec![entry]),
-        TimeToSampleBox::new(Vec::new()),
-        SampleToChunkBox::new(Vec::new()),
-        SampleSizeBox::new(SampleSizes::PerSample(Vec::new())),
-        ChunkOffsetBox::new(Vec::new()),
-    );
+    track_laid_out(
+        track_id,
+        self_contained_data_reference(),
+        empty_sample_table(entry),
+    )
+}
 
-    track_laid_out(track_id, self_contained_data_reference(), sample_table)
+/// Track of [`track`], its media lying in the resources `dref` names, and declaring no sample
+pub fn track_reading_from(track_id: u32, dref: DataReferenceBox) -> TrackBox {
+    track_laid_out(track_id, dref, empty_sample_table(sample_entry()))
 }
 
 /// Track of [`track`], its media lying in the resources `dref` names and laid out by `stbl`
@@ -137,14 +138,32 @@ pub fn sample_table(
     )
 }
 
+/// The `dref` of [`track`]: one entry, the file itself
+pub fn self_contained_data_reference() -> DataReferenceBox {
+    DataReferenceBox::new(vec![DataEntry::Url(DataEntryUrlBox::new(None))])
+}
+
+/// A `dref` of one entry, a file other than the one carrying the movie
+pub fn external_data_reference() -> DataReferenceBox {
+    DataReferenceBox::new(vec![DataEntry::Url(DataEntryUrlBox::new(Some(
+        NullTerminatedString::new(String::from("media.bin")).unwrap(),
+    )))])
+}
+
 /// The `stsd` entry of [`track`]: a `data_reference_index` of 1, and nothing past it
 fn sample_entry() -> AnyBox {
     AnyBox::from_raw_bytes(BoxType::compact(*b"avc1"), vec![0, 0, 0, 0, 0, 0, 0, 1])
 }
 
-/// The `dref` of [`track`]: one entry, the file itself
-fn self_contained_data_reference() -> DataReferenceBox {
-    DataReferenceBox::new(vec![DataEntry::Url(DataEntryUrlBox::new(None))])
+/// Sample table describing its samples by `entry` and declaring none
+fn empty_sample_table(entry: AnyBox) -> SampleTableBox {
+    SampleTableBox::new(
+        SampleDescriptionBox::new(vec![entry]),
+        TimeToSampleBox::new(Vec::new()),
+        SampleToChunkBox::new(Vec::new()),
+        SampleSizeBox::new(SampleSizes::PerSample(Vec::new())),
+        ChunkOffsetBox::new(Vec::new()),
+    )
 }
 
 /// Movie of one track that no `trex` states the defaults of a fragment for

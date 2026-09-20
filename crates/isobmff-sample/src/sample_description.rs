@@ -86,29 +86,14 @@ mod tests {
     use alloc::string::String;
     use alloc::vec;
 
-    use isobmff_boxes::{
-        ChunkOffsetBox, DataEntry, DataEntryUrlBox, DataEntryUrnBox, DataReferenceBox,
-        SampleSizeBox, SampleSizes, SampleToChunkBox, TimeToSampleBox, TrackBox,
-    };
+    use isobmff_boxes::{DataEntry, DataEntryUrnBox, DataReferenceBox};
     use isobmff_core::{AnyBox, BoxType, NullTerminatedString};
-    use isobmff_test_support::{sample_table, track, track_described_by, track_laid_out};
+    use isobmff_test_support::{
+        external_data_reference, track, track_described_by, track_reading_from,
+    };
 
     use super::SampleDescriptions;
     use crate::error::SampleError;
-
-    /// Track 1 whose media lies in the resources `dref` names, and declaring no sample
-    fn track_reading_from(dref: DataReferenceBox) -> TrackBox {
-        track_laid_out(
-            1,
-            dref,
-            sample_table(
-                TimeToSampleBox::new(vec![]),
-                SampleToChunkBox::new(vec![]),
-                SampleSizeBox::new(SampleSizes::PerSample(vec![])),
-                ChunkOffsetBox::new(vec![]),
-            ),
-        )
-    }
 
     #[test]
     fn an_entry_naming_the_file_itself_resolves_to_its_data_reference_index() {
@@ -151,7 +136,7 @@ mod tests {
 
     #[test]
     fn a_data_reference_the_track_has_none_of_is_refused() {
-        let trak = track_reading_from(DataReferenceBox::new(vec![]));
+        let trak = track_reading_from(1, DataReferenceBox::new(vec![]));
 
         assert_eq!(
             SampleDescriptions::new(&trak).data_reference_index(1),
@@ -161,13 +146,14 @@ mod tests {
 
     #[test]
     fn a_data_reference_to_an_external_file_is_refused() {
-        let location = || NullTerminatedString::new(String::from("media.bin")).unwrap();
-        let by_url = track_reading_from(DataReferenceBox::new(vec![DataEntry::Url(
-            DataEntryUrlBox::new(Some(location())),
-        )]));
-        let by_urn = track_reading_from(DataReferenceBox::new(vec![DataEntry::Urn(
-            DataEntryUrnBox::new(location(), None),
-        )]));
+        let by_url = track_reading_from(1, external_data_reference());
+        let by_urn = track_reading_from(
+            1,
+            DataReferenceBox::new(vec![DataEntry::Urn(DataEntryUrnBox::new(
+                NullTerminatedString::new(String::from("media.bin")).unwrap(),
+                None,
+            ))]),
+        );
 
         assert_eq!(
             SampleDescriptions::new(&by_url).data_reference_index(1),

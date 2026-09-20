@@ -28,7 +28,8 @@ use crate::sample_description::SampleDescriptions;
 /// which is what §8.6.2 and §8.6.1.3 have for a track stating no `stss` and
 /// no `ctts`: neither table is read yet, so a track stating either comes out
 /// as though it did not. A track declaring no sample — one carried in
-/// fragments — contributes nothing.
+/// fragments — contributes nothing, and a chunk its `stsc` lays no run over
+/// holds none.
 ///
 /// The extents of every track come out together in the order their bytes lie
 /// in the file, the samples of one chunk in sample order and the chunks of
@@ -43,8 +44,8 @@ use crate::sample_description::SampleDescriptions;
 ///
 /// * [`SampleCountMismatch`](crate::SampleErrorKind::SampleCountMismatch):
 ///   the tables of a track count different numbers of samples.
-/// * [`ChunkOutOfRange`](crate::SampleErrorKind::ChunkOutOfRange): the runs
-///   of chunks of a track do not cover its chunks in order from the first.
+/// * [`FirstChunkOutOfRange`](crate::SampleErrorKind::FirstChunkOutOfRange):
+///   a run of chunks of a track starts at a chunk outside the range open to it.
 /// * [`UnknownSampleDescriptionIndex`](crate::SampleErrorKind::UnknownSampleDescriptionIndex):
 ///   a run describes its samples by an `stsd` entry its track has none of.
 /// * The failures of [`SampleEntry::try_from`](isobmff_boxes::SampleEntry),
@@ -106,6 +107,12 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
         )
     });
     let mut runs = stbl.stsc().entries().iter().peekable();
+    if let Some(first) = runs.peek().filter(|run| run.first_chunk() != 1) {
+        return Err(SampleError::first_chunk_out_of_range(
+            track_id,
+            first.first_chunk(),
+        ));
+    }
     let mut current = None;
     let mut decode_time = 0_u64;
 
@@ -116,7 +123,7 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
             current = Some((run, data_reference_index));
         }
         let Some((run, data_reference_index)) = current else {
-            return Err(SampleError::chunk_out_of_range(track_id, chunk));
+            continue;
         };
         let mut data_offset = u64::from(offset.chunk_offset());
 
@@ -146,9 +153,9 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
         }
     }
     if let Some(run) = runs.next() {
-        return Err(SampleError::chunk_out_of_range(
+        return Err(SampleError::first_chunk_out_of_range(
             track_id,
-            u64::from(run.first_chunk()),
+            run.first_chunk(),
         ));
     }
     if sizes.next().is_some() || deltas.next().is_some() {
@@ -160,20 +167,21 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
 
 #[cfg(test)]
 mod tests {
-    use alloc::string::String;
     use alloc::vec;
     use alloc::vec::Vec;
     use core::num::NonZeroU32;
     use core::ops::Range;
 
     use isobmff_boxes::{
-        ChunkOffsetBox, ChunkOffsetEntry, DataEntry, DataEntryUrlBox, DataReferenceBox, MovieBox,
-        MovieHeaderBox, SampleDescriptionBox, SampleSizeBox, SampleSizeEntry, SampleSizes,
-        SampleTableBox, SampleToChunkBox, SampleToChunkEntry, TimeToSampleBox, TimeToSampleEntry,
-        TrackBox,
+        ChunkOffsetBox, ChunkOffsetEntry, MovieBox, MovieHeaderBox, SampleDescriptionBox,
+        SampleSizeBox, SampleSizeEntry, SampleSizes, SampleTableBox, SampleToChunkBox,
+        SampleToChunkEntry, TimeToSampleBox, TimeToSampleEntry, TrackBox,
     };
-    use isobmff_core::{AnyBox, BoxType, Mp4EpochSeconds, NullTerminatedString};
-    use isobmff_test_support::{sample_table, track_laid_out, unfragmented_movie};
+    use isobmff_core::{AnyBox, BoxType, Mp4EpochSeconds};
+    use isobmff_test_support::{
+        external_data_reference, sample_table, self_contained_data_reference, track_laid_out,
+        unfragmented_movie,
+    };
 
     use super::sample_extents;
     use crate::error::SampleError;
@@ -241,7 +249,7 @@ mod tests {
     ) -> TrackBox {
         track_laid_out(
             track_id,
-            DataReferenceBox::new(vec![DataEntry::Url(DataEntryUrlBox::new(None))]),
+            self_contained_data_reference(),
             sample_table(stts, stsc, stsz, stco),
         )
     }
@@ -346,7 +354,7 @@ mod tests {
             || AnyBox::from_raw_bytes(BoxType::compact(*b"avc1"), vec![0, 0, 0, 0, 0, 0, 0, 1]);
         let trak = track_laid_out(
             1,
-            DataReferenceBox::new(vec![DataEntry::Url(DataEntryUrlBox::new(None))]),
+            self_contained_data_reference(),
             SampleTableBox::new(
                 SampleDescriptionBox::new(vec![entry(), entry()]),
                 stts(&[(2, 100)]),
@@ -436,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn a_run_starting_at_a_chunk_the_track_has_none_of_is_refused() {
+    fn a_run_starting_past_the_last_chunk_is_refused() {
         let past_the_last_chunk = track_of(
             1,
             stts(&[(2, 100)]),
@@ -447,12 +455,12 @@ mod tests {
 
         assert_eq!(
             resolved(&movie(vec![past_the_last_chunk])),
-            Err(SampleError::chunk_out_of_range(1, 3))
+            Err(SampleError::first_chunk_out_of_range(1, 3))
         );
     }
 
     #[test]
-    fn a_run_starting_at_a_chunk_the_run_before_it_covers_is_refused() {
+    fn a_run_starting_at_or_before_the_start_of_the_run_before_it_is_refused() {
         let doubling_back = track_of(
             1,
             stts(&[(3, 100)]),
@@ -463,12 +471,12 @@ mod tests {
 
         assert_eq!(
             resolved(&movie(vec![doubling_back])),
-            Err(SampleError::chunk_out_of_range(1, 2))
+            Err(SampleError::first_chunk_out_of_range(1, 2))
         );
     }
 
     #[test]
-    fn a_chunk_no_run_reaches_is_refused() {
+    fn a_first_run_starting_anywhere_but_at_the_first_chunk_is_refused() {
         let starting_at_the_second_chunk = track_of(
             1,
             stts(&[(1, 100)]),
@@ -479,8 +487,15 @@ mod tests {
 
         assert_eq!(
             resolved(&movie(vec![starting_at_the_second_chunk])),
-            Err(SampleError::chunk_out_of_range(1, 1))
+            Err(SampleError::first_chunk_out_of_range(1, 2))
         );
+    }
+
+    #[test]
+    fn chunks_no_run_lays_over_hold_no_sample() {
+        let chunks_without_runs = track_of(1, stts(&[]), stsc(&[]), stsz(&[]), stco(&[100, 200]));
+
+        assert_eq!(resolved(&movie(vec![chunks_without_runs])), Ok(vec![]));
     }
 
     #[test]
@@ -501,12 +516,9 @@ mod tests {
 
     #[test]
     fn a_sample_of_a_track_reading_from_an_external_file_is_refused() {
-        let external = DataReferenceBox::new(vec![DataEntry::Url(DataEntryUrlBox::new(Some(
-            NullTerminatedString::new(String::from("media.bin")).unwrap(),
-        )))]);
         let trak = track_laid_out(
             1,
-            external,
+            external_data_reference(),
             sample_table(stts(&[(1, 100)]), stsc(&[(1, 1)]), stsz(&[4]), stco(&[100])),
         );
 
@@ -520,7 +532,7 @@ mod tests {
     fn the_extents_resolved_before_a_failure_come_out_ahead_of_it() {
         let then_a_track_out_of_range = movie(vec![
             track_chunked_at(&[100, 200]),
-            track_of(2, stts(&[]), stsc(&[(1, 1)]), stsz(&[]), stco(&[])),
+            track_of(2, stts(&[]), stsc(&[(2, 1)]), stsz(&[]), stco(&[])),
         ]);
 
         assert_eq!(
@@ -528,7 +540,7 @@ mod tests {
             [
                 Ok(extent(1, 0, 100, 100..104)),
                 Ok(extent(1, 100, 100, 200..204)),
-                Err(SampleError::chunk_out_of_range(2, 1)),
+                Err(SampleError::first_chunk_out_of_range(2, 2)),
             ]
         );
     }
