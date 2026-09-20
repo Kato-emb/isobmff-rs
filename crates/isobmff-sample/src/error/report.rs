@@ -200,44 +200,45 @@ impl fmt::Display for SampleError {
 
 impl fmt::Debug for SampleError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let values = self.representation.fields();
         let mut fields = formatter.debug_struct("SampleError");
         fields.field("kind", &self.kind());
         fields.field("category", &self.category());
 
-        if let Some(box_error) = self.box_error() {
+        if let Some(box_error) = values.box_error {
             fields.field("box_error", &box_error);
         }
-        if let Some(track_id) = self.track_id() {
+        if let Some(track_id) = values.track_id {
             fields.field("track_id", &track_id);
         }
-        if let Some(sample_description_index) = self.sample_description_index() {
+        if let Some(sample_description_index) = values.sample_description_index {
             fields.field("sample_description_index", &sample_description_index);
         }
-        if let Some(established) = self.established_sample_description_index() {
+        if let Some(established) = values.established_sample_description_index {
             fields.field("established_sample_description_index", &established);
         }
-        if let Some(data_reference_index) = self.data_reference_index() {
+        if let Some(data_reference_index) = values.data_reference_index {
             fields.field("data_reference_index", &data_reference_index);
         }
-        if let Some(first_chunk) = self.first_chunk() {
+        if let Some(first_chunk) = values.first_chunk {
             fields.field("first_chunk", &first_chunk);
         }
-        if let Some(needed) = self.needed_bytes() {
+        if let Some(needed) = values.needed_bytes {
             fields.field("needed_bytes", &needed);
         }
-        if let Some(available) = self.available_bytes() {
+        if let Some(available) = values.available_bytes {
             fields.field("available_bytes", &available);
         }
-        if let Some(stated) = self.stated_decode_time() {
+        if let Some(stated) = values.stated_decode_time {
             fields.field("stated_decode_time", &stated);
         }
-        if let Some(reached) = self.reached_decode_time() {
+        if let Some(reached) = values.reached_decode_time {
             fields.field("reached_decode_time", &reached);
         }
-        if let Some(data_offset) = self.data_offset() {
+        if let Some(data_offset) = values.data_offset {
             fields.field("data_offset", &data_offset);
         }
-        if let Some(composition_time_offset) = self.composition_time_offset() {
+        if let Some(composition_time_offset) = values.composition_time_offset {
             fields.field("composition_time_offset", &composition_time_offset);
         }
 
@@ -321,22 +322,13 @@ mod tests {
         assert_eq!(mismatch.sample_description_index(), Some(2));
         assert_eq!(mismatch.established_sample_description_index(), Some(1));
         assert_eq!(mismatch.stated_decode_time(), None);
-        assert_eq!(
-            SampleError::unknown_sample_description_index(2, 7)
-                .established_sample_description_index(),
-            None
-        );
+        assert_eq!(error.established_sample_description_index(), None);
 
         let gap = SampleError::decode_time_mismatch(1, 512, 1_024);
 
         assert_eq!(gap.stated_decode_time(), Some(512));
         assert_eq!(gap.reached_decode_time(), Some(1_024));
         assert_eq!(gap.data_offset(), None);
-
-        let backward = SampleError::backward_decode_time(1, 512, 1_024);
-
-        assert_eq!(backward.stated_decode_time(), Some(512));
-        assert_eq!(backward.reached_decode_time(), Some(1_024));
         assert_eq!(SampleError::no_fragment_open().track_id(), None);
     }
 
@@ -467,8 +459,8 @@ mod tests {
             "SampleError { kind: FirstChunkOutOfRange, category: Malformed, track_id: 1, first_chunk: 5 }"
         );
         assert_eq!(
-            format!("{:?}", SampleError::decode_time_mismatch(1, 512, 1_024)),
-            "SampleError { kind: DecodeTimeMismatch, category: Malformed, track_id: 1, stated_decode_time: 512, reached_decode_time: 1024 }"
+            format!("{:?}", SampleError::backward_decode_time(1, 512, 1_024)),
+            "SampleError { kind: BackwardDecodeTime, category: Malformed, track_id: 1, stated_decode_time: 512, reached_decode_time: 1024 }"
         );
         assert_eq!(
             format!("{:?}", SampleError::data_offset_out_of_range(1, 1 << 40)),
