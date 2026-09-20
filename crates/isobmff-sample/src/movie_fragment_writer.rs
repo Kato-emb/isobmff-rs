@@ -85,8 +85,8 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///   [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished) aside: every
 ///   later call reports that same failure again.
 /// * [`finish`](Self::finish) declares the samples over, and fails if a
-///   fragment is still open. Anything handed over then, or a second
-///   [`finish`](Self::finish), is
+///   fragment is still open. A fragment opened or closed, or a sample handed
+///   over then, or a second [`finish`](Self::finish), is
 ///   [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished).
 ///
 /// An empty `traf` stating a `tfdt` alone, which §8.8.12 allows for
@@ -106,7 +106,6 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// writer.handle_sample(Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec()))?;
 /// writer.handle_sample(Sample::new(1, 1_024, 1_024, 0, 0, 1, b"DATA".to_vec()))?;
 /// let (movie_fragment, media_data) = writer.finish_fragment()?;
-/// writer.finish()?;
 /// assert_eq!(media_data, b"SAMPDATA");
 ///
 /// // The samples share how long they last, so their `tfhd` states it for both
@@ -118,6 +117,7 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// let track_run = track_fragment.trun().first().unwrap();
 /// let past_the_fragment = movie_fragment.encoded_len() + 8;
 /// assert_eq!(track_run.data_offset(), Some(i32::try_from(past_the_fragment).unwrap()));
+/// writer.finish()?;
 /// # Ok::<(), isobmff_sample::SampleError>(())
 /// ```
 #[derive(Clone, Debug)]
@@ -347,15 +347,31 @@ mod tests {
         writer.finish_fragment().unwrap();
 
         assert_eq!(writer.finish(), Ok(()));
-        assert_eq!(writer.finish(), Err(SampleError::already_finished()));
-        assert_eq!(
-            writer.begin_fragment(2),
-            Err(SampleError::already_finished())
-        );
     }
 
     #[test]
-    fn declaring_the_samples_over_with_a_fragment_open_is_refused() {
+    fn anything_handed_over_after_the_samples_were_declared_over_is_refused() {
+        let mut writer = MovieFragmentWriter::new();
+
+        writer.finish().unwrap();
+
+        assert_eq!(
+            writer.begin_fragment(1),
+            Err(SampleError::already_finished())
+        );
+        assert_eq!(
+            writer.handle_sample(sample(1, 0, b"AAAA")),
+            Err(SampleError::already_finished())
+        );
+        assert_eq!(
+            writer.finish_fragment(),
+            Err(SampleError::already_finished())
+        );
+        assert_eq!(writer.finish(), Err(SampleError::already_finished()));
+    }
+
+    #[test]
+    fn the_samples_declared_over_while_a_fragment_is_open_is_refused() {
         let mut writer = MovieFragmentWriter::new();
 
         writer.begin_fragment(1).unwrap();
