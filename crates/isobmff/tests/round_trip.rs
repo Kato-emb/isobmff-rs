@@ -1,4 +1,4 @@
-//! The samples a writer laid down as a fragmented file, read back off that file
+//! The samples a writer laid down as a fragmented movie file, read back off that file
 
 // Why not inside `mod tests`: an inline `mod` adds its own name as a directory
 // segment, so a nested one looks for `tests/tests/helpers/reading.rs`. The
@@ -51,10 +51,10 @@ mod tests {
     /// versions of a `trun` write apart.
     fn declared_samples() -> Vec<Vec<Sample>> {
         let video = |decode_time, sample_flags, data: &[u8]| {
-            Sample::new(1, decode_time, 3_000, None, sample_flags, 1, data.to_vec())
+            Sample::new(1, decode_time, 3_000, 0, sample_flags, 1, data.to_vec())
         };
         let audio = |decode_time, offset, data: &[u8]| {
-            Sample::new(2, decode_time, 1_024, Some(offset), 0, 1, data.to_vec())
+            Sample::new(2, decode_time, 1_024, offset, 0, 1, data.to_vec())
         };
 
         vec![
@@ -129,12 +129,23 @@ mod tests {
     }
 
     #[test]
-    fn the_samples_are_read_back_the_same_however_the_file_was_cut() {
+    fn the_samples_of_each_track_are_read_back_the_same_however_the_file_was_cut() {
         let file = written_file(declared_samples());
         let whole = samples_of(&file, file.len());
 
         for cut_length in [1, 3, 7, 64, file.len().saturating_sub(1)] {
-            assert_eq!(samples_of(&file, cut_length), whole);
+            let cut = samples_of(&file, cut_length);
+
+            assert_eq!(
+                of_track(&cut, 1),
+                of_track(&whole, 1),
+                "cut at {cut_length}"
+            );
+            assert_eq!(
+                of_track(&cut, 2),
+                of_track(&whole, 2),
+                "cut at {cut_length}"
+            );
         }
     }
 }

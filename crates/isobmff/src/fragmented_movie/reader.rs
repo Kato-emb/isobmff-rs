@@ -43,10 +43,14 @@ use crate::{Disposition, FragmentedStructure, StructureError, WholeBoxReader};
 ///   A file carrying no `ftyp` reads all the same, as §4.3 allows.
 /// * A box read into a value is gathered whole before it is read, so what it
 ///   declares is bounded — see [`with_limits`](Self::with_limits).
-/// * The samples of a fragment are read in the order it declares them, out of
-///   the media data that follows it. [`wanted_extent`](Self::wanted_extent)
-///   names the bytes the earliest sample still lacks, which a caller handing
-///   the file over in order meets as they come.
+/// * The samples of a fragment are read out of the media data that follows
+///   it, and come out as their bytes arrive whole, as [`SampleReader`]'s
+///   contract has it: samples lying in the media data in the order the
+///   fragment declares them come out in that order, and those of two tracks
+///   interleaved in it come out as the cuts of the input make them whole.
+///   [`wanted_extent`](Self::wanted_extent) names the bytes the extent held
+///   longest still lacks, which a caller handing the file over in order meets
+///   as they come.
 /// * An `Err` leaves the reader failed for good,
 ///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The samples completed
@@ -60,9 +64,7 @@ use crate::{Disposition, FragmentedStructure, StructureError, WholeBoxReader};
 /// # Examples
 ///
 /// ```
-/// use isobmff::TrackExtendsBox;
-/// use isobmff::fragmented_movie::{FragmentedReader, FragmentedWriter};
-/// use isobmff_sample::Sample;
+/// use isobmff::{FragmentedReader, FragmentedWriter, Sample, TrackExtendsBox};
 /// # use isobmff_test_support::{file_type, fragmented_movie};
 /// // A file of one fragment carrying two samples of track 1
 /// let mut writer = FragmentedWriter::new();
@@ -416,13 +418,11 @@ mod tests {
 
     use isobmff_boxes::{FileTypeBox, MovieBox, TrackExtendsBox};
     use isobmff_core::{BoxDefinition, BoxType};
-    use isobmff_sample::Sample;
-    use isobmff_sample::SampleReader;
+    use isobmff_sample::{Sample, SampleReader};
     use isobmff_test_support::{file_type, fragmented_movie, framed, movie_fragment, written};
 
     use super::{FragmentedReader, StructureError};
-    use crate::StructureErrorKind;
-    use crate::fragmented_movie::FragmentedWriter;
+    use crate::{FragmentedWriter, StructureErrorKind};
 
     /// Movie of one track continued in fragments, whose defaults a `trex` states
     fn movie() -> MovieBox {

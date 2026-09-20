@@ -32,7 +32,7 @@ use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, 
 
 use isobmff::{
     BoxEvent, BoxHeader, BoxReader, BoxType, BoxWriter, FileTypeBox, FragmentedReader,
-    FragmentedWriter, MovieBox, Sample, SampleWriter, TrackExtendsBox,
+    FragmentedWriter, MovieBox, MovieFragmentWriter, Sample, TrackExtendsBox,
 };
 use isobmff_test_support::{file_type, fragmented_movie};
 
@@ -84,7 +84,7 @@ impl Composition {
                             TRACK_ID,
                             decode_time,
                             SAMPLE_DURATION,
-                            None,
+                            0,
                             0,
                             1,
                             vec![0xab; self.sample_len],
@@ -230,11 +230,11 @@ fn fragmented_writer_file(
     total + drained(&mut writer)
 }
 
-/// Lays the fragments down as `moof` and `mdat` pairs, and reports the bytes they carry
+/// Lays the fragments down as `moof` and media data pairs, and reports the bytes they carry
 ///
 /// The sample layer alone: the pairs are never framed as a file.
-fn sample_writer_fragments(fragments: Vec<Vec<Sample>>) -> usize {
-    let mut writer = SampleWriter::new();
+fn movie_fragment_writer_fragments(fragments: Vec<Vec<Sample>>) -> usize {
+    let mut writer = MovieFragmentWriter::new();
     let mut total = 0;
 
     for (position, samples) in fragments.into_iter().enumerate() {
@@ -244,12 +244,10 @@ fn sample_writer_fragments(fragments: Vec<Vec<Sample>>) -> usize {
         for sample in samples {
             writer.handle_sample(sample).unwrap();
         }
-        writer.finish_fragment().unwrap();
+        let (movie_fragment, media_data) = writer.finish_fragment().unwrap();
 
-        while let Some((movie_fragment, media_data)) = writer.poll_fragment() {
-            total += media_data.data().len();
-            black_box(&movie_fragment);
-        }
+        total += media_data.len();
+        black_box(&movie_fragment);
     }
     writer.finish().unwrap();
 
@@ -261,6 +259,7 @@ fn fragmented_reader_samples(file: &[u8], chunk_len: usize) -> (usize, usize) {
     let mut reader = FragmentedReader::new();
     let mut count = 0;
     let mut total = 0;
+    let mut offset = 0;
     let mut take = |reader: &mut FragmentedReader| {
         while let Some(sample) = reader.poll_sample() {
             count += 1;
@@ -270,7 +269,8 @@ fn fragmented_reader_samples(file: &[u8], chunk_len: usize) -> (usize, usize) {
     };
 
     for arriving in file.chunks(chunk_len) {
-        reader.handle_input(arriving).unwrap();
+        reader.handle_input(offset, arriving).unwrap();
+        offset += u64::try_from(arriving.len()).unwrap();
         take(&mut reader);
     }
     reader.finish().unwrap();
@@ -430,10 +430,10 @@ fn composition(criterion: &mut Criterion) {
             );
         });
 
-        group.bench_function(BenchmarkId::new("sample_writer", name), |bencher| {
+        group.bench_function(BenchmarkId::new("movie_fragment_writer", name), |bencher| {
             bencher.iter_batched(
                 || composition.samples(),
-                |fragments| assert_eq!(sample_writer_fragments(fragments), payload_len),
+                |fragments| assert_eq!(movie_fragment_writer_fragments(fragments), payload_len),
                 BatchSize::PerIteration,
             );
         });
@@ -494,11 +494,11 @@ fn fragment_length(criterion: &mut Criterion) {
         );
 
         group.bench_function(
-            BenchmarkId::new("sample_writer", samples_per_fragment),
+            BenchmarkId::new("movie_fragment_writer", samples_per_fragment),
             |bencher| {
                 bencher.iter_batched(
                     || composition.samples(),
-                    |fragments| assert_eq!(sample_writer_fragments(fragments), payload_len),
+                    |fragments| assert_eq!(movie_fragment_writer_fragments(fragments), payload_len),
                     BatchSize::PerIteration,
                 );
             },
