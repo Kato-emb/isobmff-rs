@@ -113,16 +113,16 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
             first.first_chunk(),
         ));
     }
-    let mut current = None;
+    let mut active_run = None;
     let mut decode_time = 0_u64;
 
     for (chunk, offset) in (1_u64..).zip(stbl.stco().entries()) {
         if let Some(run) = runs.next_if(|run| u64::from(run.first_chunk()) == chunk) {
             let data_reference_index =
                 descriptions.data_reference_index(run.sample_description_index())?;
-            current = Some((run, data_reference_index));
+            active_run = Some((run, data_reference_index));
         }
-        let Some((run, data_reference_index)) = current else {
+        let Some((run, data_reference_index)) = active_run else {
             continue;
         };
         let mut data_offset = u64::from(offset.chunk_offset());
