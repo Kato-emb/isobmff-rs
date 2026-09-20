@@ -69,12 +69,17 @@
 
 extern crate alloc;
 
+mod disposition;
 mod error;
 mod file_error;
+pub mod fragmented_movie;
 mod fragmented_reader;
+mod fragmented_structure;
 mod fragmented_writer;
 mod reader;
 mod sample;
+mod structure_error;
+mod whole_box;
 mod writer;
 
 pub use error::{SampleError, SampleErrorKind};
@@ -83,7 +88,12 @@ pub use fragmented_reader::FragmentedReader;
 pub use fragmented_writer::FragmentedWriter;
 pub use reader::SampleReader;
 pub use sample::Sample;
+pub use structure_error::{StructureError, StructureErrorKind};
 pub use writer::SampleWriter;
+
+pub(crate) use disposition::Disposition;
+pub(crate) use fragmented_structure::FragmentedStructure;
+pub(crate) use whole_box::{WholeBoxReader, whole_box_header, whole_payload};
 
 pub use isobmff_boxes::*;
 pub use isobmff_core::*;

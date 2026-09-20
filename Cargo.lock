@@ -183,6 +183,7 @@ dependencies = [
  "isobmff-boxes",
  "isobmff-core",
  "isobmff-mp4",
+ "isobmff-sample",
  "isobmff-sequence",
  "isobmff-test-support",
 ]
