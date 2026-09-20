@@ -83,6 +83,11 @@ use crate::sample::{Sample, SampleExtent};
 pub struct SampleReader {
     pending: VecDeque<PendingSample>,
     ready: VecDeque<Sample>,
+    // Why not counting the whole extents held when they are asked for: that
+    // is a walk over every held extent on every arrival, which a reader fed
+    // in order pays for nothing — the count is kept beside the queue so the
+    // walk is taken only where a whole extent waits behind a short one.
+    whole_held: usize,
     sample_size_limit: u64,
     state: State,
 }
@@ -121,6 +126,7 @@ impl SampleReader {
         Self {
             pending: VecDeque::new(),
             ready: VecDeque::new(),
+            whole_held: 0,
             sample_size_limit,
             state: State::Reading,
         }
@@ -151,6 +157,9 @@ impl SampleReader {
                 self.sample_size_limit,
             )));
         }
+        self.whole_held = self
+            .whole_held
+            .saturating_add(usize::from(pending.is_whole()));
         self.pending.push_back(pending);
         self.report_front();
 
@@ -171,20 +180,24 @@ impl SampleReader {
         // Why not checked_add: the caller read `data` out of a finite resource,
         // so its end cannot run past what 64 bits carry.
         let arriving = offset..offset.saturating_add(data.len() as u64);
-        let mut made_whole = false;
-        for pending in &mut self.pending {
-            let was_whole = pending.is_whole();
+        let mut made_whole: usize = 0;
+        for pending in self
+            .pending
+            .iter_mut()
+            .filter(|pending| !pending.is_whole())
+        {
             pending.take_from(data, &arriving);
-            made_whole |= !was_whole && pending.is_whole();
+            made_whole = made_whole.saturating_add(usize::from(pending.is_whole()));
         }
 
-        if made_whole {
+        if made_whole > 0 {
+            self.whole_held = self.whole_held.saturating_add(made_whole);
             // Why not sweeping every held extent each time: bytes read in order
             // make whole the extents at the front and no other, and popping
             // those costs nothing, where moving the rest up a slot costs the
             // whole queue.
             self.report_front();
-            if self.pending.iter().any(PendingSample::is_whole) {
+            if self.whole_held > 0 {
                 for pending in mem::take(&mut self.pending) {
                     if pending.is_whole() {
                         self.ready.push_back(pending.into_sample());
@@ -192,6 +205,7 @@ impl SampleReader {
                         self.pending.push_back(pending);
                     }
                 }
+                self.whole_held = 0;
             }
         }
 
@@ -245,6 +259,7 @@ impl SampleReader {
             let Some(front) = self.pending.pop_front() else {
                 break;
             };
+            self.whole_held = self.whole_held.saturating_sub(1);
             self.ready.push_back(front.into_sample());
         }
     }

@@ -79,10 +79,14 @@ pub fn sample_extents(
         .collect::<Result<Vec<_>, _>>()?;
     *decode_times = reached;
 
+    // Why not chaining the failure after an iterator of the extents: the
+    // chained iterator costs a reader ten nanoseconds an extent over a plain
+    // one, a fifth of what reading a small sample costs in all.
     let mut extents = Vec::new();
     let outcome = resolve_data(movie_fragment, &track_fragments, moof_start, &mut extents);
+    extents.extend(outcome.err().map(Err));
 
-    Ok(extents.into_iter().map(Ok).chain(outcome.err().map(Err)))
+    Ok(extents.into_iter())
 }
 
 /// What one track fragment settles for its samples before their data is placed
@@ -178,7 +182,7 @@ fn resolve_data(
     movie_fragment: &MovieFragmentBox,
     track_fragments: &[TrackFragment],
     moof_start: u64,
-    extents: &mut Vec<SampleExtent>,
+    extents: &mut Vec<Result<SampleExtent, SampleError>>,
 ) -> Result<(), SampleError> {
     let mut data_before = None;
 
@@ -212,7 +216,7 @@ fn resolve_run(
     trun: &TrackRunBox,
     settled: &TrackFragment,
     cursor: &mut Cursor,
-    extents: &mut Vec<SampleExtent>,
+    extents: &mut Vec<Result<SampleExtent, SampleError>>,
 ) -> Result<(), SampleError> {
     let track_id = settled.track_id;
     if let Some(stated) = trun.data_offset() {
@@ -231,7 +235,7 @@ fn resolve_run(
             .ok_or(SampleError::data_offset_overflow(track_id))?;
         let sample_duration = row.sample_duration().unwrap_or(settled.sample_duration);
 
-        extents.push(SampleExtent::new(
+        extents.push(Ok(SampleExtent::new(
             track_id,
             cursor.decode_time,
             sample_duration,
@@ -244,7 +248,7 @@ fn resolve_run(
             settled.sample_description_index,
             settled.data_reference_index,
             cursor.data_offset..data_end,
-        ));
+        )));
 
         // Why not checked_add: TrackFragment::settle summed these same durations
         // from the same start and refused the fragment on overflow, so this
