@@ -133,8 +133,13 @@ impl SampleSizeBox {
 
 /// The sizes of the samples of a track read one after another, however they are stated
 enum Sizes<'stsz> {
-    /// Size every sample shares, and how many samples have still to be read
-    Uniform { sample_size: u32, remaining: u32 },
+    /// Size every sample shares
+    Uniform {
+        /// Bytes every sample occupies
+        sample_size: u32,
+        /// Samples that have still to be read
+        remaining: u32,
+    },
     /// Entries stating one size per sample
     PerSample(slice::Iter<'stsz, SampleSizeEntry>),
 }
