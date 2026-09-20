@@ -16,9 +16,11 @@
 //!   Neither holds state across calls, and what §8.8 carries from one fragment
 //!   to the next — where each track's decode time stands when a fragment
 //!   states none (§8.8.12) — is a [`TrackDecodeTimes`] the caller owns and
-//!   hands in. Resolution has a mirror on the writing side:
+//!   hands in. Resolution has a mirror on the writing side, one per form:
 //!   [`MovieFragmentWriter`] takes [`Sample`]s and lays them out as the `moof`
-//!   and the media data of a movie fragment, placing each where it arrived.
+//!   and the media data of a movie fragment, placing each where it arrived,
+//!   and [`SampleTableWriter`] takes them chunk by chunk and lays them out as
+//!   the sample tables of a movie, handing the bytes of each straight back.
 //! * **Sample gathering.** [`SampleReader`] is handed [`SampleExtent`]s and
 //!   the input as it arrives, each piece with the offset it starts at, and
 //!   yields a [`Sample`]
@@ -48,10 +50,12 @@ mod sample;
 mod sample_description;
 mod sample_reader;
 pub mod sample_table;
+mod sample_table_writer;
 mod track_decode_times;
 
 pub use error::{SampleError, SampleErrorKind};
 pub use movie_fragment_writer::MovieFragmentWriter;
 pub use sample::{Sample, SampleExtent};
 pub use sample_reader::SampleReader;
+pub use sample_table_writer::{SampleTableWriter, SampleTables};
 pub use track_decode_times::TrackDecodeTimes;

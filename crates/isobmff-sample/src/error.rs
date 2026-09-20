@@ -4,8 +4,9 @@ use isobmff_core::Category;
 
 mod kind;
 mod report;
+mod representation;
 
-use crate::error::kind::Representation;
+use crate::error::representation::Representation;
 pub use kind::SampleErrorKind;
 
 /// Reason the samples of a presentation do not resolve
@@ -189,7 +190,7 @@ impl SampleError {
         }
     }
 
-    /// Returns the failure of a sample longer than the field a `trun` row states its length in reaches
+    /// Returns the failure of a sample longer than the field a `trun` row or an `stsz` entry states its length in reaches
     #[must_use]
     pub const fn sample_size_out_of_range(track_id: u32, declared: u64) -> Self {
         Self {
@@ -237,7 +238,7 @@ impl SampleError {
         }
     }
 
-    /// Returns the failure of a sample described by entry `stated` in a fragment describing its track by `established`
+    /// Returns the failure of a sample described by entry `stated` in a fragment or a chunk describing its track by `established`
     #[must_use]
     pub const fn sample_description_index_mismatch(
         track_id: u32,
@@ -249,6 +250,44 @@ impl SampleError {
                 track_id,
                 stated,
                 established,
+            },
+        }
+    }
+
+    /// Returns the failure of a sample handed over while no chunk was open
+    #[must_use]
+    pub const fn no_chunk_open() -> Self {
+        Self {
+            representation: Representation::NoChunkOpen,
+        }
+    }
+
+    /// Returns the failure of a sample of track `stated` handed over to a chunk of track `established`
+    #[must_use]
+    pub const fn track_id_mismatch(stated: u32, established: u32) -> Self {
+        Self {
+            representation: Representation::TrackIdMismatch {
+                stated,
+                established,
+            },
+        }
+    }
+
+    /// Returns the failure of a sample stating a composition time offset no sample table written here carries
+    #[must_use]
+    pub const fn unsupported_composition_time_offset(track_id: u32, offset: i64) -> Self {
+        Self {
+            representation: Representation::UnsupportedCompositionTimeOffset { track_id, offset },
+        }
+    }
+
+    /// Returns the failure of a sample stating flags no sample table written here carries
+    #[must_use]
+    pub const fn unsupported_sample_flags(track_id: u32, sample_flags: u32) -> Self {
+        Self {
+            representation: Representation::UnsupportedSampleFlags {
+                track_id,
+                sample_flags,
             },
         }
     }

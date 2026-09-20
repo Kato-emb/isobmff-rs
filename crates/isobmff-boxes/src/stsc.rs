@@ -89,6 +89,57 @@ impl SampleToChunkBox {
         Self { entries }
     }
 
+    /// Creates the box from what every chunk holds in turn, run-length coded
+    ///
+    /// Each chunk is `(samples_per_chunk, sample_description_index)`, and the
+    /// chunks are numbered from one in the order given. Chunks following one
+    /// another holding the same pair are one run, which one entry opens.
+    ///
+    /// # Errors
+    ///
+    /// * [`OutOfRange`](isobmff_core::ErrorKind::OutOfRange): a chunk holds
+    ///   more samples than the 32 bits of an entry count, or a run opens at a
+    ///   chunk numbered past them.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff_boxes::{SampleToChunkBox, SampleToChunkEntry};
+    ///
+    /// // Two chunks of four samples, then one of two, all described by entry 1
+    /// assert_eq!(
+    ///     SampleToChunkBox::from_chunks([(4, 1), (4, 1), (2, 1)]),
+    ///     Ok(SampleToChunkBox::new(vec![
+    ///         SampleToChunkEntry::new(1, 4, 1),
+    ///         SampleToChunkEntry::new(3, 2, 1),
+    ///     ]))
+    /// );
+    /// ```
+    pub fn from_chunks(chunks: impl IntoIterator<Item = (u64, u32)>) -> Result<Self, Error> {
+        let mut entries: Vec<SampleToChunkEntry> = Vec::new();
+        for (chunk, (sample_count, sample_description_index)) in (1_u64..).zip(chunks) {
+            let samples_per_chunk = u32::try_from(sample_count).map_err(|_past_the_field| {
+                Error::out_of_range(sample_count, FieldWidth::Compact)
+            })?;
+            let carries_on = entries.last().is_some_and(|run| {
+                run.samples_per_chunk == samples_per_chunk
+                    && run.sample_description_index == sample_description_index
+            });
+            if carries_on {
+                continue;
+            }
+            let first_chunk = u32::try_from(chunk)
+                .map_err(|_past_the_field| Error::out_of_range(chunk, FieldWidth::Compact))?;
+            entries.push(SampleToChunkEntry::new(
+                first_chunk,
+                samples_per_chunk,
+                sample_description_index,
+            ));
+        }
+
+        Ok(Self::new(entries))
+    }
+
     /// Returns the entries, in the order the runs of chunks follow one another
     #[must_use]
     pub fn entries(&self) -> &[SampleToChunkEntry] {
@@ -165,7 +216,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, Error};
+    use isobmff_core::{BoxDecode, BoxEncode, Error, FieldWidth};
 
     use super::{SampleToChunkBox, SampleToChunkEntry};
 
@@ -215,6 +266,30 @@ mod tests {
         assert_eq!(
             SampleToChunkBox::decode_payload(&payload).unwrap(),
             sample_to_chunk
+        );
+    }
+
+    #[test]
+    fn a_chunk_holding_more_samples_than_an_entry_counts_is_refused() {
+        assert_eq!(
+            SampleToChunkBox::from_chunks([(1 << 32, 1)]),
+            Err(Error::out_of_range(1 << 32, FieldWidth::Compact))
+        );
+    }
+
+    #[test]
+    fn chunks_following_one_another_holding_the_same_pair_are_one_run() {
+        assert_eq!(
+            SampleToChunkBox::from_chunks([(4, 1), (4, 1), (4, 2), (2, 2)]),
+            Ok(SampleToChunkBox::new(vec![
+                SampleToChunkEntry::new(1, 4, 1),
+                SampleToChunkEntry::new(3, 4, 2),
+                SampleToChunkEntry::new(4, 2, 2),
+            ]))
+        );
+        assert_eq!(
+            SampleToChunkBox::from_chunks([]),
+            Ok(SampleToChunkBox::new(Vec::new()))
         );
     }
 

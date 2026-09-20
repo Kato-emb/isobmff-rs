@@ -62,6 +62,42 @@ impl ChunkOffsetBox {
         Self { entries }
     }
 
+    /// Creates the box from the offset every chunk starts at, in chunk order
+    ///
+    /// # Errors
+    ///
+    /// * [`OutOfRange`](isobmff_core::ErrorKind::OutOfRange): a chunk starts
+    ///   past what the 32 bits of an entry reach, which only a `co64` states.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff_boxes::{ChunkOffsetBox, ChunkOffsetEntry};
+    ///
+    /// assert_eq!(
+    ///     ChunkOffsetBox::from_offsets([1_000, 2_000]),
+    ///     Ok(ChunkOffsetBox::new(vec![
+    ///         ChunkOffsetEntry::new(1_000),
+    ///         ChunkOffsetEntry::new(2_000),
+    ///     ]))
+    /// );
+    /// assert!(ChunkOffsetBox::from_offsets([1 << 32]).is_err());
+    /// ```
+    pub fn from_offsets(offsets: impl IntoIterator<Item = u64>) -> Result<Self, Error> {
+        let entries = offsets
+            .into_iter()
+            .map(|chunk_offset| {
+                u32::try_from(chunk_offset)
+                    .map(ChunkOffsetEntry::new)
+                    .map_err(|_past_the_field| {
+                        Error::out_of_range(chunk_offset, FieldWidth::Compact)
+                    })
+            })
+            .collect::<Result<_, _>>()?;
+
+        Ok(Self::new(entries))
+    }
+
     /// Returns the entries, in chunk order
     #[must_use]
     pub fn entries(&self) -> &[ChunkOffsetEntry] {
@@ -134,7 +170,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, Error};
+    use isobmff_core::{BoxDecode, BoxEncode, Error, FieldWidth};
 
     use super::{ChunkOffsetBox, ChunkOffsetEntry};
 
@@ -167,6 +203,14 @@ mod tests {
         let payload = encoded_payload(&ChunkOffsetBox::new(Vec::new()));
 
         assert_eq!(payload, b"\0\0\0\0\0\0\0\0");
+    }
+
+    #[test]
+    fn a_chunk_starting_past_what_an_entry_reaches_is_refused() {
+        assert_eq!(
+            ChunkOffsetBox::from_offsets([1_000, 1 << 32]),
+            Err(Error::out_of_range(1 << 32, FieldWidth::Compact))
+        );
     }
 
     #[test]

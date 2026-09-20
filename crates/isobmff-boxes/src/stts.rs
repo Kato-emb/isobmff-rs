@@ -74,6 +74,46 @@ impl TimeToSampleBox {
         Self { entries }
     }
 
+    /// Creates the box from the decode time delta of every sample in turn, run-length coded
+    ///
+    /// Samples following one another with the same delta are counted by one
+    /// entry, as far as one entry counts; a run past that is counted by the
+    /// next.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff_boxes::{TimeToSampleBox, TimeToSampleEntry};
+    ///
+    /// // Three samples lasting 100 units, then one lasting 50
+    /// assert_eq!(
+    ///     TimeToSampleBox::from_deltas([100, 100, 100, 50]),
+    ///     TimeToSampleBox::new(vec![
+    ///         TimeToSampleEntry::new(3, 100),
+    ///         TimeToSampleEntry::new(1, 50),
+    ///     ])
+    /// );
+    /// ```
+    #[must_use]
+    pub fn from_deltas(deltas: impl IntoIterator<Item = u32>) -> Self {
+        let mut entries: Vec<TimeToSampleEntry> = Vec::new();
+        for sample_delta in deltas {
+            let counted = entries
+                .last_mut()
+                .filter(|entry| entry.sample_delta == sample_delta)
+                .and_then(|entry| {
+                    entry.sample_count = entry.sample_count.checked_add(1)?;
+
+                    Some(())
+                });
+            if counted.is_none() {
+                entries.push(TimeToSampleEntry::new(1, sample_delta));
+            }
+        }
+
+        Self::new(entries)
+    }
+
     /// Returns the entries, in the order the decode timeline runs
     #[must_use]
     pub fn entries(&self) -> &[TimeToSampleEntry] {
@@ -236,6 +276,22 @@ mod tests {
         let payload = encoded_payload(&TimeToSampleBox::new(Vec::new()));
 
         assert_eq!(payload, b"\0\0\0\0\0\0\0\0");
+    }
+
+    #[test]
+    fn samples_following_one_another_with_one_delta_are_counted_by_one_entry() {
+        assert_eq!(
+            TimeToSampleBox::from_deltas([100, 100, 50, 100]),
+            TimeToSampleBox::new(vec![
+                TimeToSampleEntry::new(2, 100),
+                TimeToSampleEntry::new(1, 50),
+                TimeToSampleEntry::new(1, 100),
+            ])
+        );
+        assert_eq!(
+            TimeToSampleBox::from_deltas([]),
+            TimeToSampleBox::new(Vec::new())
+        );
     }
 
     #[test]
