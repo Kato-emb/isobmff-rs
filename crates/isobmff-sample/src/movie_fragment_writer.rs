@@ -81,8 +81,13 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///   [`SampleDescriptionIndexMismatch`](crate::SampleErrorKind::SampleDescriptionIndexMismatch).
 /// * A fragment of no samples is written as a `moof` of no `traf` beside an
 ///   empty payload.
-/// * An `Err` leaves the writer failed for good: every later call reports
-///   that same failure again.
+/// * An `Err` leaves the writer failed for good,
+///   [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished) aside: every
+///   later call reports that same failure again.
+/// * [`finish`](Self::finish) declares the samples over, and fails if a
+///   fragment is still open. Anything handed over then, or a second
+///   [`finish`](Self::finish), is
+///   [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished).
 ///
 /// An empty `traf` stating a `tfdt` alone, which §8.8.12 allows for
 /// establishing the duration of the sample before it, is not written: a track
@@ -101,6 +106,7 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// writer.handle_sample(Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec()))?;
 /// writer.handle_sample(Sample::new(1, 1_024, 1_024, 0, 0, 1, b"DATA".to_vec()))?;
 /// let (movie_fragment, media_data) = writer.finish_fragment()?;
+/// writer.finish()?;
 /// assert_eq!(media_data, b"SAMPDATA");
 ///
 /// // The samples share how long they last, so their `tfhd` states it for both
@@ -127,6 +133,8 @@ enum State {
     Between,
     /// Laying out a fragment that was opened, and taking the samples it carries
     Fragment(OpenFragment),
+    /// Told the samples are over, and taking nothing more
+    Finished,
     /// Failed, and reporting that same failure for every call after it
     Failed(SampleError),
 }
@@ -150,13 +158,14 @@ impl MovieFragmentWriter {
     ///
     /// * [`FragmentStillOpen`](crate::SampleErrorKind::FragmentStillOpen): the
     ///   fragment before it was not closed.
+    /// * [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished): the
+    ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
     pub fn begin_fragment(&mut self, sequence_number: u32) -> Result<(), SampleError> {
-        match self.state {
-            State::Between => {}
-            State::Fragment(_) => return Err(self.fail(SampleError::fragment_still_open())),
-            State::Failed(failure) => return Err(failure),
+        self.writing()?;
+        if matches!(self.state, State::Fragment(_)) {
+            return Err(self.fail(SampleError::fragment_still_open()));
         }
         self.state = State::Fragment(OpenFragment::new(sequence_number));
 
@@ -185,13 +194,14 @@ impl MovieFragmentWriter {
     ///   in.
     /// * [`DecodeTimeOverflow`](crate::SampleErrorKind::DecodeTimeOverflow):
     ///   the decode times of its track run past what 64 bits carry.
+    /// * [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished): the
+    ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), SampleError> {
-        let open = match &mut self.state {
-            State::Between => return Err(self.fail(SampleError::no_fragment_open())),
-            State::Fragment(open) => open,
-            State::Failed(failure) => return Err(*failure),
+        self.writing()?;
+        let State::Fragment(open) = &mut self.state else {
+            return Err(self.fail(SampleError::no_fragment_open()));
         };
         open.place(sample, &self.decode_times)
             .map_err(|failure| self.fail(failure))
@@ -214,17 +224,51 @@ impl MovieFragmentWriter {
     /// * [`CompositionTimeOffsetOutOfRange`](crate::SampleErrorKind::CompositionTimeOffsetOutOfRange):
     ///   a sample states a composition time offset neither version of a `trun`
     ///   writes.
+    /// * [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished): the
+    ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
     pub fn finish_fragment(&mut self) -> Result<(MovieFragmentBox, Vec<u8>), SampleError> {
-        let open = match mem::replace(&mut self.state, State::Between) {
-            State::Between => return Err(self.fail(SampleError::no_fragment_open())),
-            State::Fragment(open) => open,
-            State::Failed(failure) => return Err(self.fail(failure)),
+        self.writing()?;
+        // Why not leaving the state alone until the fragment is known to build:
+        // the boxes are built from the fragment whole, and the caller reached
+        // here through `writing`, so the only state this replaces without a
+        // fragment to take is the `Between` it puts back.
+        let State::Fragment(open) = mem::replace(&mut self.state, State::Between) else {
+            return Err(self.fail(SampleError::no_fragment_open()));
         };
 
         open.into_boxes(&mut self.decode_times)
             .map_err(|failure| self.fail(failure))
+    }
+
+    /// Declares the samples over
+    ///
+    /// # Errors
+    ///
+    /// * [`FragmentStillOpen`](crate::SampleErrorKind::FragmentStillOpen): a
+    ///   fragment was left open.
+    /// * [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished): the
+    ///   samples were already declared over.
+    /// * The failure of a previous call, which the writer keeps and reports
+    ///   again for every call after it.
+    pub fn finish(&mut self) -> Result<(), SampleError> {
+        self.writing()?;
+        if matches!(self.state, State::Fragment(_)) {
+            return Err(self.fail(SampleError::fragment_still_open()));
+        }
+        self.state = State::Finished;
+
+        Ok(())
+    }
+
+    /// Returns `Ok` while the writer still takes samples
+    const fn writing(&self) -> Result<(), SampleError> {
+        match self.state {
+            State::Between | State::Fragment(_) => Ok(()),
+            State::Finished => Err(SampleError::already_finished()),
+            State::Failed(failure) => Err(failure),
+        }
     }
 
     /// Fails the writer for good, and hands the failure back to report
@@ -295,6 +339,31 @@ mod tests {
     }
 
     #[test]
+    fn the_samples_are_declared_over_once_every_fragment_is_closed() {
+        let mut writer = MovieFragmentWriter::new();
+
+        writer.begin_fragment(1).unwrap();
+        writer.handle_sample(sample(1, 0, b"AAAA")).unwrap();
+        writer.finish_fragment().unwrap();
+
+        assert_eq!(writer.finish(), Ok(()));
+        assert_eq!(writer.finish(), Err(SampleError::already_finished()));
+        assert_eq!(
+            writer.begin_fragment(2),
+            Err(SampleError::already_finished())
+        );
+    }
+
+    #[test]
+    fn declaring_the_samples_over_with_a_fragment_open_is_refused() {
+        let mut writer = MovieFragmentWriter::new();
+
+        writer.begin_fragment(1).unwrap();
+
+        assert_eq!(writer.finish(), Err(SampleError::fragment_still_open()));
+    }
+
+    #[test]
     fn a_fragment_begun_while_one_is_open_is_refused() {
         let mut writer = MovieFragmentWriter::new();
 
@@ -324,6 +393,10 @@ mod tests {
         );
         assert_eq!(
             writer.begin_fragment(2),
+            Err(SampleError::decode_time_mismatch(1, 512, 1_024))
+        );
+        assert_eq!(
+            writer.finish(),
             Err(SampleError::decode_time_mismatch(1, 512, 1_024))
         );
     }
