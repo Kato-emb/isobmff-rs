@@ -14,8 +14,9 @@
 use std::ops::Range;
 
 use isobmff::{
-    FullBoxFlags, MovieBox, MovieFragmentBox, MovieFragmentHeaderBox, TrackExtendsBox,
-    TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox, TrackRunBox,
+    MovieBox, MovieFragmentBox, MovieFragmentHeaderBox, TrackExtendsBox,
+    TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentFlags,
+    TrackFragmentHeaderBox, TrackRunBox,
     TrackRunSample,
 };
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
@@ -245,12 +246,10 @@ pub fn lay_out(input: &Input<'_>) -> Option<LaidOut> {
                 .first()
                 .and_then(|track_run| track_run.rows.first());
             let states_defaults = matches!(track_fragment.stated_at, StatedAt::TrackFragment);
-            let flags = if track_fragment.duration_is_empty {
-                TrackFragmentHeaderBox::DURATION_IS_EMPTY
-            } else if matches!(track_fragment.anchor, Anchor::MovieFragment) {
-                TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF
+            let flags = if matches!(track_fragment.anchor, Anchor::MovieFragment) {
+                TrackFragmentFlags::DEFAULT_BASE_IS_MOOF
             } else {
-                FullBoxFlags::ZERO
+                TrackFragmentFlags::ZERO
             };
             let tfhd = TrackFragmentHeaderBox::new(
                 flags,
@@ -260,7 +259,7 @@ pub fn lay_out(input: &Input<'_>) -> Option<LaidOut> {
                 states_defaults.then(|| first_row.map_or(0, |row| u32::from(row.duration))),
                 states_defaults.then(|| first_row.map_or(0, |row| u32::from(row.size))),
                 states_defaults.then(|| first_row.map_or(0, |row| row.flags)),
-            )?;
+            );
             let declared_size_of = |row: &Row| match track_fragment.stated_at {
                 StatedAt::Row => u32::from(row.size),
                 StatedAt::TrackFragment => first_row.map_or(0, |row| u32::from(row.size)),
@@ -335,7 +334,11 @@ pub fn lay_out(input: &Input<'_>) -> Option<LaidOut> {
                 .base_media_decode_time
                 .map(TrackFragmentBaseMediaDecodeTimeBox::new);
 
-            track_fragments.push(TrackFragmentBox::new(tfhd, tfdt, runs)?);
+            track_fragments.push(if track_fragment.duration_is_empty {
+                TrackFragmentBox::with_empty_duration(tfhd, tfdt)
+            } else {
+                TrackFragmentBox::new(tfhd, tfdt, runs)
+            });
             data_before = Some(data_cursor);
         }
 
