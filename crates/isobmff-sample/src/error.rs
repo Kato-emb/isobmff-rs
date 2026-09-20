@@ -253,14 +253,6 @@ impl SampleError {
         }
     }
 
-    /// Returns the failure of samples that do not build the boxes of a fragment
-    #[must_use]
-    pub const fn fragment_not_representable() -> Self {
-        Self {
-            representation: Representation::FragmentNotRepresentable,
-        }
-    }
-
     /// Returns what went wrong
     #[must_use]
     pub const fn kind(self) -> SampleErrorKind {

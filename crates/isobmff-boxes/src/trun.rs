@@ -1,5 +1,9 @@
 //! [`TrackRunBox`] (`trun`), ISO/IEC 14496-12 §8.8.8
 
+mod builder;
+
+pub use builder::{CompositionTimeOffset, TrackRunBuilder, TrackRunRow};
+
 use alloc::vec::Vec;
 
 use isobmff_core::{
@@ -44,10 +48,10 @@ const DEFINED_FLAGS: u32 = DATA_OFFSET_PRESENT | FIRST_SAMPLE_FLAGS_PRESENT | PE
 const MAXIMUM_EMPTY_ROWS: u64 = 1 << 20;
 
 /// Widest composition time offset a row carries, which version 0 writes unsigned
-const COMPOSITION_TIME_OFFSET_MAXIMUM: i64 = u32::MAX as i64;
+pub(crate) const COMPOSITION_TIME_OFFSET_MAXIMUM: i64 = u32::MAX as i64;
 
 /// Lowest composition time offset a row carries, which version 1 writes signed
-const COMPOSITION_TIME_OFFSET_MINIMUM: i64 = i32::MIN as i64;
+pub(crate) const COMPOSITION_TIME_OFFSET_MINIMUM: i64 = i32::MIN as i64;
 
 /// One row of the table a track run documents, holding what it states per sample
 ///

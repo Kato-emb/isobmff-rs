@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{
     MediaDataBox, MovieFragmentBox, MovieFragmentHeaderBox, TrackFragmentBaseMediaDecodeTimeBox,
-    TrackFragmentBox, TrackFragmentHeaderBox, TrackRunBox, TrackRunSample,
+    TrackFragmentBox, TrackFragmentFlags, TrackFragmentHeaderBox, TrackRunBox, TrackRunSample,
 };
 use isobmff_core::BoxEncode as _;
 
@@ -344,7 +344,7 @@ fn build_track_fragment(
 ) -> Result<TrackFragmentBox, SampleError> {
     let defaults = Defaults::of(track);
     let header = TrackFragmentHeaderBox::new(
-        TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+        TrackFragmentFlags::DEFAULT_BASE_IS_MOOF,
         track.track_id,
         None,
         Some(track.sample_description_index),
@@ -352,12 +352,6 @@ fn build_track_fragment(
         defaults.sample_size,
         defaults.sample_flags,
     );
-    let Some(header) = header else {
-        // Why not unwrap: the only flags handed over are the anchor, and a
-        // `tfhd` refuses none but the bits stating a field is present, so this
-        // stands for a `None` the call does not reach.
-        return Err(SampleError::fragment_not_representable());
-    };
 
     let runs = track
         .runs
@@ -366,12 +360,11 @@ fn build_track_fragment(
         .map(|(position, run)| build_track_run(track, run, &defaults, base, position == 0))
         .collect::<Result<Vec<_>, _>>()?;
 
-    TrackFragmentBox::new(
+    Ok(TrackFragmentBox::new(
         header,
         Some(TrackFragmentBaseMediaDecodeTimeBox::new(track.decode_time)),
         runs,
-    )
-    .ok_or_else(SampleError::fragment_not_representable)
+    ))
 }
 
 /// Builds the `trun` one run of the samples of a track is written as
@@ -437,7 +430,7 @@ mod tests {
 
     use isobmff_boxes::{
         MediaDataBox, MovieFragmentBox, MovieFragmentHeaderBox, TrackFragmentBox,
-        TrackFragmentHeaderBox, TrackRunBox, TrackRunSample,
+        TrackFragmentFlags, TrackFragmentHeaderBox, TrackRunBox, TrackRunSample,
     };
     use isobmff_core::BoxEncode as _;
 
@@ -513,7 +506,7 @@ mod tests {
         default_sample_flags: Option<u32>,
     ) -> TrackFragmentHeaderBox {
         TrackFragmentHeaderBox::new(
-            TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+            TrackFragmentFlags::DEFAULT_BASE_IS_MOOF,
             1,
             None,
             Some(1),
@@ -521,7 +514,6 @@ mod tests {
             default_sample_size,
             default_sample_flags,
         )
-        .unwrap()
     }
 
     /// Every row the fragment of `track_id` carries, run after run

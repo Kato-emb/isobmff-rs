@@ -139,11 +139,6 @@ pub enum SampleErrorKind {
     /// and [`sample_description_index`](crate::SampleError::sample_description_index)
     /// the entry the sample that differed names.
     SampleDescriptionIndexMismatch,
-    /// Samples do not build the boxes of a fragment
-    ///
-    /// The writer holds the samples it is given to what the boxes of a fragment
-    /// state, so this is never reached from samples a caller hands over.
-    FragmentNotRepresentable,
 }
 
 /// Values a failure carries, keyed by what went wrong
@@ -220,8 +215,6 @@ pub(super) enum Representation {
         stated: u32,
         established: u32,
     },
-    /// Samples that do not build the boxes of a fragment
-    FragmentNotRepresentable,
 }
 
 impl Representation {
@@ -255,7 +248,6 @@ impl Representation {
             Self::SampleDescriptionIndexMismatch { .. } => {
                 SampleErrorKind::SampleDescriptionIndexMismatch
             }
-            Self::FragmentNotRepresentable => SampleErrorKind::FragmentNotRepresentable,
         }
     }
 
@@ -280,10 +272,9 @@ impl Representation {
             | Self::SampleSizeOutOfRange { .. }
             | Self::DataOffsetOutOfRange { .. }
             | Self::CompositionTimeOffsetOutOfRange { .. } => Category::Unsupported,
-            Self::AlreadyFinished
-            | Self::NoFragmentOpen
-            | Self::FragmentStillOpen
-            | Self::FragmentNotRepresentable => Category::Usage,
+            Self::AlreadyFinished | Self::NoFragmentOpen | Self::FragmentStillOpen => {
+                Category::Usage
+            }
         }
     }
 }

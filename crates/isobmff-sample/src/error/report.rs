@@ -34,8 +34,7 @@ impl SampleError {
             | Representation::CompositionTimeOffsetOutOfRange { .. }
             | Representation::DecodeTimeMismatch { .. }
             | Representation::BackwardDecodeTime { .. }
-            | Representation::SampleDescriptionIndexMismatch { .. }
-            | Representation::FragmentNotRepresentable => None,
+            | Representation::SampleDescriptionIndexMismatch { .. } => None,
         }
     }
 
@@ -63,8 +62,7 @@ impl SampleError {
             | Representation::MissingMovieExtends
             | Representation::AlreadyFinished
             | Representation::NoFragmentOpen
-            | Representation::FragmentStillOpen
-            | Representation::FragmentNotRepresentable => None,
+            | Representation::FragmentStillOpen => None,
         }
     }
 
@@ -98,8 +96,7 @@ impl SampleError {
             | Representation::DataOffsetOutOfRange { .. }
             | Representation::CompositionTimeOffsetOutOfRange { .. }
             | Representation::DecodeTimeMismatch { .. }
-            | Representation::BackwardDecodeTime { .. }
-            | Representation::FragmentNotRepresentable => None,
+            | Representation::BackwardDecodeTime { .. } => None,
         }
     }
 
@@ -133,8 +130,7 @@ impl SampleError {
             | Representation::CompositionTimeOffsetOutOfRange { .. }
             | Representation::DecodeTimeMismatch { .. }
             | Representation::BackwardDecodeTime { .. }
-            | Representation::SampleDescriptionIndexMismatch { .. }
-            | Representation::FragmentNotRepresentable => None,
+            | Representation::SampleDescriptionIndexMismatch { .. } => None,
         }
     }
 
@@ -162,8 +158,7 @@ impl SampleError {
             | Representation::CompositionTimeOffsetOutOfRange { .. }
             | Representation::DecodeTimeMismatch { .. }
             | Representation::BackwardDecodeTime { .. }
-            | Representation::SampleDescriptionIndexMismatch { .. }
-            | Representation::FragmentNotRepresentable => None,
+            | Representation::SampleDescriptionIndexMismatch { .. } => None,
         }
     }
 
@@ -191,8 +186,7 @@ impl SampleError {
             | Representation::CompositionTimeOffsetOutOfRange { .. }
             | Representation::DecodeTimeMismatch { .. }
             | Representation::BackwardDecodeTime { .. }
-            | Representation::SampleDescriptionIndexMismatch { .. }
-            | Representation::FragmentNotRepresentable => None,
+            | Representation::SampleDescriptionIndexMismatch { .. } => None,
         }
     }
 
@@ -221,8 +215,7 @@ impl SampleError {
             | Representation::CompositionTimeOffsetOutOfRange { .. }
             | Representation::DecodeTimeMismatch { .. }
             | Representation::BackwardDecodeTime { .. }
-            | Representation::SampleDescriptionIndexMismatch { .. }
-            | Representation::FragmentNotRepresentable => None,
+            | Representation::SampleDescriptionIndexMismatch { .. } => None,
         }
     }
 }
@@ -336,9 +329,6 @@ impl fmt::Display for SampleError {
                 formatter,
                 "track {track_id} describes a sample by stsd entry {stated} in a fragment describing it by {established}"
             ),
-            Representation::FragmentNotRepresentable => {
-                formatter.write_str("samples do not build the boxes of a fragment")
-            }
         }
     }
 }
@@ -399,8 +389,7 @@ impl error::Error for SampleError {
             | Representation::CompositionTimeOffsetOutOfRange { .. }
             | Representation::DecodeTimeMismatch { .. }
             | Representation::BackwardDecodeTime { .. }
-            | Representation::SampleDescriptionIndexMismatch { .. }
-            | Representation::FragmentNotRepresentable => None,
+            | Representation::SampleDescriptionIndexMismatch { .. } => None,
         }
     }
 }
@@ -555,10 +544,6 @@ mod tests {
         assert_eq!(
             SampleError::sample_description_index_mismatch(1, 2, 1).to_string(),
             "track 1 describes a sample by stsd entry 2 in a fragment describing it by 1"
-        );
-        assert_eq!(
-            SampleError::fragment_not_representable().to_string(),
-            "samples do not build the boxes of a fragment"
         );
     }
 
