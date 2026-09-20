@@ -1,6 +1,7 @@
 //! [`TimeToSampleBox`] (`stts`), ISO/IEC 14496-12 §8.6.1.2
 
 use alloc::vec::Vec;
+use core::slice;
 
 use isobmff_core::{
     BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWidth, FieldWriter,
@@ -77,6 +78,44 @@ impl TimeToSampleBox {
     #[must_use]
     pub fn entries(&self) -> &[TimeToSampleEntry] {
         &self.entries
+    }
+
+    /// Returns the decode time delta of every sample in turn
+    ///
+    /// The delta an entry states comes out once per sample the entry counts.
+    pub fn deltas(&self) -> impl Iterator<Item = u32> + '_ {
+        Deltas {
+            entries: self.entries.iter(),
+            sample_delta: 0,
+            remaining: 0,
+        }
+    }
+}
+
+/// The decode time deltas of the samples of a track read one after another
+struct Deltas<'stts> {
+    /// Entries still to be read
+    entries: slice::Iter<'stts, TimeToSampleEntry>,
+    /// Delta of the entry being read
+    sample_delta: u32,
+    /// Samples of the entry being read that have still to come out
+    remaining: u32,
+}
+
+impl Iterator for Deltas<'_> {
+    type Item = u32;
+
+    fn next(&mut self) -> Option<u32> {
+        loop {
+            if let Some(remaining) = self.remaining.checked_sub(1) {
+                self.remaining = remaining;
+
+                return Some(self.sample_delta);
+            }
+            let entry = self.entries.next()?;
+            self.sample_delta = entry.sample_delta;
+            self.remaining = entry.sample_count;
+        }
     }
 }
 
@@ -157,6 +196,20 @@ mod tests {
         time_to_sample.encode_payload(&mut buffer).unwrap();
 
         buffer
+    }
+
+    #[test]
+    fn the_delta_of_an_entry_is_read_once_per_sample_it_counts() {
+        let time_to_sample = TimeToSampleBox::new(vec![
+            TimeToSampleEntry::new(2, 100),
+            TimeToSampleEntry::new(0, 7),
+            TimeToSampleEntry::new(3, 50),
+        ]);
+
+        assert_eq!(
+            time_to_sample.deltas().collect::<Vec<_>>(),
+            [100, 100, 50, 50, 50]
+        );
     }
 
     #[test]

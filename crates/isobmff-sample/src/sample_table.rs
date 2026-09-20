@@ -1,7 +1,6 @@
 //! [`sample_extents`], the samples the sample tables of a movie declare resolved to where they lie, ISO/IEC 14496-12 §8.5.1 and §8.7
 
 use alloc::vec::Vec;
-use core::iter;
 
 use isobmff_boxes::{MovieBox, TrackBox};
 
@@ -76,12 +75,7 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
     let stbl = trak.mdia().minf().stbl();
     let descriptions = SampleDescriptions::new(trak);
     let mut sizes = stbl.stsz().sizes();
-    let mut deltas = stbl.stts().entries().iter().flat_map(|entry| {
-        iter::repeat_n(
-            entry.sample_delta(),
-            usize::try_from(entry.sample_count()).unwrap_or(usize::MAX),
-        )
-    });
+    let mut deltas = stbl.stts().deltas();
     let mut runs = stbl.stsc().entries().iter().peekable();
     if let Some(first) = runs.peek().filter(|run| run.first_chunk() != 1) {
         return Err(SampleError::first_chunk_out_of_range(
