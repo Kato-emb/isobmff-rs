@@ -160,8 +160,15 @@ impl<Value: BoxDecode + BoxDefinition> WholeBoxReader<Value> {
                 self.fail(isobmff_core::Error::box_type_mismatch(Value::BOX_TYPE, found).into())
             );
         }
-        if let Some(declared) = header.payload_len() {
-            self.within_limit(declared)?;
+        if let Some(declared) = header
+            .payload_len()
+            .filter(|declared| *declared > self.payload_limit)
+        {
+            return Err(self.fail(StructureError::payload_limit_exceeded(
+                Value::BOX_TYPE,
+                declared,
+                self.payload_limit,
+            )));
         }
         // Why not reserve the declared length: the file declares it and the
         // limit only bounds it, so reserving would take memory for bytes that
@@ -184,21 +191,28 @@ impl<Value: BoxDecode + BoxDefinition> WholeBoxReader<Value> {
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
     pub fn handle_payload(&mut self, mut payload: Vec<u8>) -> Result<(), StructureError> {
-        self.reading()?;
-        let State::Gathering(mut gathered) = mem::replace(&mut self.state, State::Between) else {
-            return Err(self.fail(StructureError::no_box_open()));
+        let gathered = match &mut self.state {
+            State::Gathering(gathered) => gathered,
+            State::Between => return Err(self.fail(StructureError::no_box_open())),
+            State::Finished => return Err(StructureError::already_finished()),
+            State::Failed(failure) => return Err(*failure),
         };
 
         // Why not checked_add: the framing cut the payload out of a finite
         // resource, so its length cannot run past what 64 bits carry.
         let reached = (gathered.len() as u64).saturating_add(payload.len() as u64);
-        self.within_limit(reached)?;
+        if reached > self.payload_limit {
+            return Err(self.fail(StructureError::payload_limit_exceeded(
+                Value::BOX_TYPE,
+                reached,
+                self.payload_limit,
+            )));
+        }
         if gathered.is_empty() {
-            gathered = payload;
+            *gathered = payload;
         } else {
             gathered.append(&mut payload);
         }
-        self.state = State::Gathering(gathered);
 
         Ok(())
     }
@@ -254,19 +268,6 @@ impl<Value: BoxDecode + BoxDefinition> WholeBoxReader<Value> {
         }
     }
 
-    /// Returns `Ok` while `reached` bytes of payload stay within the limit
-    fn within_limit(&mut self, reached: u64) -> Result<(), StructureError> {
-        if reached > self.payload_limit {
-            return Err(self.fail(StructureError::payload_limit_exceeded(
-                Value::BOX_TYPE,
-                reached,
-                self.payload_limit,
-            )));
-        }
-
-        Ok(())
-    }
-
     /// Fails the reader for good, and hands the failure back to report
     fn fail(&mut self, failure: StructureError) -> StructureError {
         self.state = State::Failed(failure);
@@ -299,25 +300,25 @@ mod tests {
         BoxHeader::with_payload_len(FileTypeBox::BOX_TYPE, payload_len).unwrap()
     }
 
-    /// The value read out of the steps `file` frames into, handed over `cut_length` bytes at a time
+    /// The values read out of the steps `file` frames into, handed over `cut_length` bytes at a time
     fn read_whole<Value: super::BoxDecode + BoxDefinition>(
         file: &[u8],
         cut_length: usize,
-    ) -> Result<Value, StructureError> {
+    ) -> Result<Vec<Value>, StructureError> {
         let mut reader = WholeBoxReader::<Value>::new();
-        let mut read = None;
+        let mut read = Vec::new();
 
         for (_extent, event) in events_of(file, cut_length).unwrap() {
             match event {
                 BoxEvent::Header(header) => reader.handle_header(header)?,
                 BoxEvent::Payload(payload) => reader.handle_payload(payload)?,
-                BoxEvent::End => read = Some(reader.handle_end()?),
+                BoxEvent::End => read.push(reader.handle_end()?),
                 _later_step => {}
             }
         }
         reader.finish()?;
 
-        Ok(read.unwrap())
+        Ok(read)
     }
 
     #[test]
@@ -327,7 +328,7 @@ mod tests {
         for cut_length in [1, 3, 7, file.len()] {
             assert_eq!(
                 read_whole::<FileTypeBox>(&file, cut_length),
-                Ok(file_type())
+                Ok(vec![file_type()])
             );
         }
     }
@@ -463,18 +464,10 @@ mod tests {
     #[test]
     fn a_reader_takes_one_box_after_another() {
         let file = [written(&file_type()), written(&file_type())].concat();
-        let mut reader = WholeBoxReader::<FileTypeBox>::new();
-        let mut read = Vec::new();
 
-        for (_extent, event) in events_of(&file, file.len()).unwrap() {
-            match event {
-                BoxEvent::Header(header) => reader.handle_header(header).unwrap(),
-                BoxEvent::Payload(payload) => reader.handle_payload(payload).unwrap(),
-                BoxEvent::End => read.push(reader.handle_end().unwrap()),
-                _later_step => {}
-            }
-        }
-
-        assert_eq!(read, vec![file_type(), file_type()]);
+        assert_eq!(
+            read_whole::<FileTypeBox>(&file, file.len()),
+            Ok(vec![file_type(), file_type()])
+        );
     }
 }

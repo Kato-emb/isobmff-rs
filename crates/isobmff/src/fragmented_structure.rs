@@ -18,11 +18,10 @@ use crate::{Disposition, StructureError};
 ///
 /// # Contract
 ///
-/// * The `ftyp` comes first, as early as §4.3 asks, and once: a file carrying
-///   none reads all the same, as §4.3 allows, but one carrying it after any
-///   other box is [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder),
-///   and one carrying it again is
-///   [`DuplicateBox`](crate::StructureErrorKind::DuplicateBox).
+/// * The `ftyp` comes first, as early as §4.3 asks: a file carrying none reads
+///   all the same, as §4.3 allows, but one carrying it after any other box —
+///   a second `ftyp` among them — is
+///   [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder).
 /// * The `moov` comes once, and before any fragment: a second is
 ///   [`DuplicateBox`](crate::StructureErrorKind::DuplicateBox), and a `moof`
 ///   arriving before it is
@@ -63,7 +62,6 @@ use crate::{Disposition, StructureError};
 /// ```
 #[derive(Clone, Copy, Debug)]
 pub struct FragmentedStructure {
-    file_type_declared: bool,
     state: State,
 }
 
@@ -96,7 +94,6 @@ impl FragmentedStructure {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            file_type_declared: false,
             state: State::Reading(Position::Start),
         }
     }
@@ -109,7 +106,7 @@ impl FragmentedStructure {
     ///   `ftyp` after another box, a `moof` before the `moov`, or an `mdat`
     ///   before any `moof`.
     /// * [`DuplicateBox`](crate::StructureErrorKind::DuplicateBox): a second
-    ///   `ftyp` or `moov`.
+    ///   `moov`.
     /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the structure keeps and reports
@@ -121,8 +118,11 @@ impl FragmentedStructure {
             State::Failed(failure) => return Err(failure),
         };
 
-        self.place(header.box_type(), position)
-            .map_err(|failure| self.fail(failure))
+        let (reached, disposition) =
+            place(position, header.box_type()).map_err(|failure| self.fail(failure))?;
+        self.state = State::Reading(reached);
+
+        Ok(disposition)
     }
 
     /// Declares the file over
@@ -150,69 +150,6 @@ impl FragmentedStructure {
         }
     }
 
-    /// Places the box `box_type` names where the file stands, and moves past it
-    fn place(
-        &mut self,
-        box_type: BoxType,
-        position: Position,
-    ) -> Result<Disposition, StructureError> {
-        if box_type == FileTypeBox::BOX_TYPE {
-            return match position {
-                Position::Start => {
-                    self.file_type_declared = true;
-                    self.state = State::Reading(Position::Opened);
-
-                    Ok(Disposition::FileType)
-                }
-                Position::Opened | Position::Declared | Position::Fragmenting => {
-                    Err(if self.file_type_declared {
-                        StructureError::duplicate_box(box_type)
-                    } else {
-                        StructureError::box_out_of_order(box_type)
-                    })
-                }
-            };
-        }
-        if box_type == MovieBox::BOX_TYPE {
-            return match position {
-                Position::Start | Position::Opened => {
-                    self.state = State::Reading(Position::Declared);
-
-                    Ok(Disposition::Movie)
-                }
-                Position::Declared | Position::Fragmenting => {
-                    Err(StructureError::duplicate_box(box_type))
-                }
-            };
-        }
-        if box_type == MovieFragmentBox::BOX_TYPE {
-            return match position {
-                Position::Declared | Position::Fragmenting => {
-                    self.state = State::Reading(Position::Fragmenting);
-
-                    Ok(Disposition::MovieFragment)
-                }
-                Position::Start | Position::Opened => {
-                    Err(StructureError::box_out_of_order(box_type))
-                }
-            };
-        }
-        if box_type == MediaDataBox::BOX_TYPE {
-            return match position {
-                Position::Fragmenting => Ok(Disposition::MediaData),
-                Position::Start | Position::Opened | Position::Declared => {
-                    Err(StructureError::box_out_of_order(box_type))
-                }
-            };
-        }
-
-        if matches!(position, Position::Start) {
-            self.state = State::Reading(Position::Opened);
-        }
-
-        Ok(Disposition::Skip)
-    }
-
     /// Fails the structure for good, and hands the failure back to report
     const fn fail(&mut self, failure: StructureError) -> StructureError {
         self.state = State::Failed(failure);
@@ -224,6 +161,37 @@ impl FragmentedStructure {
 impl Default for FragmentedStructure {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Places the box `box_type` names at `position`, and returns where the file stands past it
+const fn place(
+    position: Position,
+    box_type: BoxType,
+) -> Result<(Position, Disposition), StructureError> {
+    match (box_type, position) {
+        (FileTypeBox::BOX_TYPE, Position::Start) => Ok((Position::Opened, Disposition::FileType)),
+        (FileTypeBox::BOX_TYPE, Position::Opened | Position::Declared | Position::Fragmenting)
+        | (MovieFragmentBox::BOX_TYPE, Position::Start | Position::Opened)
+        | (MediaDataBox::BOX_TYPE, Position::Start | Position::Opened | Position::Declared) => {
+            Err(StructureError::box_out_of_order(box_type))
+        }
+        (MovieBox::BOX_TYPE, Position::Start | Position::Opened) => {
+            Ok((Position::Declared, Disposition::Movie))
+        }
+        (MovieBox::BOX_TYPE, Position::Declared | Position::Fragmenting) => {
+            Err(StructureError::duplicate_box(box_type))
+        }
+        (MovieFragmentBox::BOX_TYPE, Position::Declared | Position::Fragmenting) => {
+            Ok((Position::Fragmenting, Disposition::MovieFragment))
+        }
+        (MediaDataBox::BOX_TYPE, Position::Fragmenting) => {
+            Ok((Position::Fragmenting, Disposition::MediaData))
+        }
+        (_other, Position::Start) => Ok((Position::Opened, Disposition::Skip)),
+        (_other, Position::Opened | Position::Declared | Position::Fragmenting) => {
+            Ok((position, Disposition::Skip))
+        }
     }
 }
 
@@ -287,22 +255,11 @@ mod tests {
 
     #[test]
     fn brands_declared_after_another_box_are_out_of_order() {
-        assert_eq!(
-            dispositions_of(&[b"free", b"ftyp"]),
-            Err(StructureError::box_out_of_order(BoxType::compact(*b"ftyp")))
-        );
-        assert_eq!(
-            dispositions_of(&[b"moov", b"ftyp"]),
-            Err(StructureError::box_out_of_order(BoxType::compact(*b"ftyp")))
-        );
-    }
+        let out_of_order = Err(StructureError::box_out_of_order(BoxType::compact(*b"ftyp")));
 
-    #[test]
-    fn a_second_declaration_of_the_brands_is_rejected() {
-        assert_eq!(
-            dispositions_of(&[b"ftyp", b"moov", b"ftyp"]),
-            Err(StructureError::duplicate_box(BoxType::compact(*b"ftyp")))
-        );
+        assert_eq!(dispositions_of(&[b"free", b"ftyp"]), out_of_order);
+        assert_eq!(dispositions_of(&[b"moov", b"ftyp"]), out_of_order);
+        assert_eq!(dispositions_of(&[b"ftyp", b"ftyp"]), out_of_order);
     }
 
     #[test]
