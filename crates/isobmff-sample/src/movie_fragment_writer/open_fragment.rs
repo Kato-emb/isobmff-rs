@@ -5,8 +5,8 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{
     CompositionTimeOffset, MediaDataBox, MovieFragmentBox, MovieFragmentHeaderBox,
-    TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
-    TrackFragmentHeaderFlags, TrackRunBuilder, TrackRunRow,
+    StatedTrackRunSample, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
+    TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBuilder,
 };
 use isobmff_core::BoxEncode as _;
 
@@ -46,7 +46,7 @@ impl OpenTrack {
     /// ones it holds hands it back, and a new run starts with it.
     fn place(
         &mut self,
-        row: TrackRunRow,
+        row: StatedTrackRunSample,
         data_offset: u64,
         carries_on: bool,
     ) -> Result<(), SampleError> {
@@ -70,7 +70,7 @@ impl OpenTrack {
     }
 
     /// Returns every row of every run of the track, in the order they were placed
-    fn rows(&self) -> impl Iterator<Item = &TrackRunRow> {
+    fn rows(&self) -> impl Iterator<Item = &StatedTrackRunSample> {
         self.runs.iter().flat_map(|run| run.builder.rows())
     }
 }
@@ -122,7 +122,7 @@ impl OpenFragment {
             ));
         };
 
-        let row = TrackRunRow::new(
+        let row = StatedTrackRunSample::new(
             sample.sample_duration(),
             sample_size,
             sample.sample_flags(),
@@ -231,11 +231,11 @@ struct Defaults {
 impl Defaults {
     /// Returns what the samples of `track` share
     fn of(track: &OpenTrack) -> Self {
-        let flags = || track.rows().map(TrackRunRow::sample_flags);
+        let flags = || track.rows().map(StatedTrackRunSample::sample_flags);
 
         Self {
-            sample_duration: shared(track.rows().map(TrackRunRow::sample_duration)),
-            sample_size: shared(track.rows().map(TrackRunRow::sample_size)),
+            sample_duration: shared(track.rows().map(StatedTrackRunSample::sample_duration)),
+            sample_size: shared(track.rows().map(StatedTrackRunSample::sample_size)),
             sample_flags: shared(flags()).or_else(|| shared(flags().skip(1))),
         }
     }

@@ -1,4 +1,4 @@
-//! [`TrackRunBuilder`] and [`TrackRunRow`], the rows of one track run gathered before the header they fall under is known
+//! [`TrackRunBuilder`] and [`StatedTrackRunSample`], the samples of one track run gathered before the header they fall under is known
 
 use alloc::vec::Vec;
 
@@ -7,19 +7,19 @@ use crate::trun::{CompositionTimeOffset, TrackRunBox, TrackRunSample};
 
 /// One sample of a run as it is handed to a [`TrackRunBuilder`], every field stated
 ///
-/// A row of a [`TrackRunBox`] carries only the fields the header of its
-/// fragment leaves unstated; this states every one, and the builder settles
-/// which of them the row written carries.
+/// A [`TrackRunSample`] carries only the fields the header of its fragment
+/// leaves unstated; this states every one, and the builder settles which of
+/// them the sample written carries.
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct TrackRunRow {
+pub struct StatedTrackRunSample {
     sample_duration: u32,
     sample_size: u32,
     sample_flags: u32,
     sample_composition_time_offset: CompositionTimeOffset,
 }
 
-impl TrackRunRow {
+impl StatedTrackRunSample {
     /// Creates the row from what the sample states
     #[must_use]
     pub const fn new(
@@ -79,12 +79,12 @@ impl TrackRunRow {
 /// # Examples
 ///
 /// ```
-/// use isobmff_boxes::{CompositionTimeOffset, TrackFragmentHeaderFlags, TrackFragmentHeaderBox, TrackRunBuilder, TrackRunRow, TrackRunSample};
+/// use isobmff_boxes::{CompositionTimeOffset, TrackFragmentHeaderFlags, TrackFragmentHeaderBox, TrackRunBuilder, StatedTrackRunSample, TrackRunSample};
 ///
 /// // Two samples lasting 1024 units each, of different sizes
 /// let offset = CompositionTimeOffset::new(0).unwrap();
-/// let mut run = TrackRunBuilder::new(TrackRunRow::new(1_024, 4, 0, offset));
-/// run.push(TrackRunRow::new(1_024, 2, 0, offset)).unwrap();
+/// let mut run = TrackRunBuilder::new(StatedTrackRunSample::new(1_024, 4, 0, offset));
+/// run.push(StatedTrackRunSample::new(1_024, 2, 0, offset)).unwrap();
 ///
 /// // Against a header stating the duration and the flags, only the size is written per row
 /// let header = TrackFragmentHeaderBox::new(TrackFragmentHeaderFlags::ZERO, 1, None, None, Some(1_024), None, Some(0));
@@ -98,13 +98,13 @@ impl TrackRunRow {
 /// );
 ///
 /// // A row whose offset no version writes beside the ones held is handed back
-/// let mut signed = TrackRunBuilder::new(TrackRunRow::new(1_024, 4, 0, CompositionTimeOffset::new(-8).unwrap()));
-/// let wide = TrackRunRow::new(1_024, 4, 0, CompositionTimeOffset::new(i64::from(u32::MAX)).unwrap());
+/// let mut signed = TrackRunBuilder::new(StatedTrackRunSample::new(1_024, 4, 0, CompositionTimeOffset::new(-8).unwrap()));
+/// let wide = StatedTrackRunSample::new(1_024, 4, 0, CompositionTimeOffset::new(i64::from(u32::MAX)).unwrap());
 /// assert_eq!(signed.push(wide), Err(wide));
 /// ```
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct TrackRunBuilder {
-    rows: Vec<TrackRunRow>,
+    rows: Vec<StatedTrackRunSample>,
     holds_negative_offset: bool,
     holds_wide_offset: bool,
 }
@@ -112,7 +112,7 @@ pub struct TrackRunBuilder {
 impl TrackRunBuilder {
     /// Starts a run with its first row
     #[must_use]
-    pub fn new(first: TrackRunRow) -> Self {
+    pub fn new(first: StatedTrackRunSample) -> Self {
         let mut run = Self {
             rows: Vec::new(),
             holds_negative_offset: false,
@@ -129,7 +129,7 @@ impl TrackRunBuilder {
     ///
     /// The row itself, when its composition time offset is negative while a
     /// row held reaches past [`i32::MAX`], or the other way round.
-    pub fn push(&mut self, row: TrackRunRow) -> Result<(), TrackRunRow> {
+    pub fn push(&mut self, row: StatedTrackRunSample) -> Result<(), StatedTrackRunSample> {
         let offset = row.sample_composition_time_offset.get();
         if (offset.is_negative() && self.holds_wide_offset)
             || (offset > i64::from(i32::MAX) && self.holds_negative_offset)
@@ -143,7 +143,7 @@ impl TrackRunBuilder {
 
     /// Returns the rows of the run, in the order they were added
     #[must_use]
-    pub fn rows(&self) -> &[TrackRunRow] {
+    pub fn rows(&self) -> &[StatedTrackRunSample] {
         &self.rows
     }
 
@@ -192,7 +192,7 @@ impl TrackRunBuilder {
     }
 
     /// Holds `row`, and notes where its composition time offset falls
-    fn hold(&mut self, row: TrackRunRow) {
+    fn hold(&mut self, row: StatedTrackRunSample) {
         let offset = row.sample_composition_time_offset.get();
         self.holds_negative_offset |= offset.is_negative();
         self.holds_wide_offset |= offset > i64::from(i32::MAX);
@@ -204,13 +204,13 @@ impl TrackRunBuilder {
 mod tests {
     use alloc::vec;
 
-    use super::{TrackRunBuilder, TrackRunRow};
+    use super::{StatedTrackRunSample, TrackRunBuilder};
     use crate::tfhd::{TrackFragmentHeaderBox, TrackFragmentHeaderFlags};
     use crate::trun::{CompositionTimeOffset, TrackRunBox, TrackRunSample};
 
     /// Row of a sample lasting 1024 units and occupying 4 bytes, flagged `sample_flags`, composed at `offset`
-    fn row(sample_flags: u32, offset: i64) -> TrackRunRow {
-        TrackRunRow::new(
+    fn row(sample_flags: u32, offset: i64) -> StatedTrackRunSample {
+        StatedTrackRunSample::new(
             1_024,
             4,
             sample_flags,
@@ -236,7 +236,7 @@ mod tests {
     }
 
     /// Run of the rows given, built against `header` with no data offset
-    fn built(rows: &[TrackRunRow], header: &TrackFragmentHeaderBox) -> TrackRunBox {
+    fn built(rows: &[StatedTrackRunSample], header: &TrackFragmentHeaderBox) -> TrackRunBox {
         let (first, rest) = rows.split_first().unwrap();
         let mut run = TrackRunBuilder::new(*first);
         for row in rest {

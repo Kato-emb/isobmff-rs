@@ -2,7 +2,7 @@
 
 mod builder;
 
-pub use builder::{TrackRunBuilder, TrackRunRow};
+pub use builder::{StatedTrackRunSample, TrackRunBuilder};
 
 use alloc::vec::Vec;
 

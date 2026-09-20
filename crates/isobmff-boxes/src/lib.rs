@@ -84,5 +84,7 @@ pub use tkhd::TrackHeaderBox;
 pub use traf::TrackFragmentBox;
 pub use trak::TrackBox;
 pub use trex::TrackExtendsBox;
-pub use trun::{CompositionTimeOffset, TrackRunBox, TrackRunBuilder, TrackRunRow, TrackRunSample};
+pub use trun::{
+    CompositionTimeOffset, StatedTrackRunSample, TrackRunBox, TrackRunBuilder, TrackRunSample,
+};
 pub use vmhd::VideoMediaHeaderBox;
