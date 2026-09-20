@@ -97,6 +97,12 @@ impl Sample {
     pub fn data(&self) -> &[u8] {
         &self.data
     }
+
+    /// Takes the bytes this sample is carried as, leaving the properties behind
+    #[must_use]
+    pub fn into_data(self) -> Vec<u8> {
+        self.data
+    }
 }
 
 /// One sample of one track as the file declares it, and where its bytes lie

@@ -108,6 +108,54 @@ impl SampleSizeBox {
         Self { sample_sizes }
     }
 
+    /// Creates the box from the size of every sample in turn, stated the shorter way
+    ///
+    /// Sizes every sample shares are stated once, as [`Uniform`](SampleSizes::Uniform);
+    /// any other sizes, or none, are stated per sample, and so are sizes of
+    /// zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::num::NonZeroU32;
+    ///
+    /// use isobmff_boxes::{SampleSizeBox, SampleSizeEntry, SampleSizes};
+    ///
+    /// // A size every sample shares is stated once
+    /// assert_eq!(
+    ///     SampleSizeBox::from_sizes([4, 4, 4]),
+    ///     SampleSizeBox::new(SampleSizes::Uniform {
+    ///         sample_size: NonZeroU32::new(4).unwrap(),
+    ///         sample_count: 3,
+    ///     })
+    /// );
+    ///
+    /// // Sizes that differ are stated per sample
+    /// assert_eq!(
+    ///     SampleSizeBox::from_sizes([4, 2]),
+    ///     SampleSizeBox::new(SampleSizes::PerSample(vec![
+    ///         SampleSizeEntry::new(4),
+    ///         SampleSizeEntry::new(2),
+    ///     ]))
+    /// );
+    /// ```
+    #[must_use]
+    pub fn from_sizes(sizes: impl IntoIterator<Item = u32>) -> Self {
+        let entries: Vec<SampleSizeEntry> = sizes.into_iter().map(SampleSizeEntry::new).collect();
+        let shared = entries
+            .first()
+            .and_then(|first| NonZeroU32::new(first.entry_size))
+            .filter(|shared| entries.iter().all(|entry| entry.entry_size == shared.get()));
+
+        match (shared, u32::try_from(entries.len())) {
+            (Some(sample_size), Ok(sample_count)) => Self::new(SampleSizes::Uniform {
+                sample_size,
+                sample_count,
+            }),
+            _sizes_stated_per_sample => Self::new(SampleSizes::PerSample(entries)),
+        }
+    }
+
     /// Returns the sizes of the samples, as the box states them
     #[must_use]
     pub const fn sample_sizes(&self) -> &SampleSizes {
@@ -332,6 +380,37 @@ mod tests {
         ]));
 
         assert_eq!(sample_size.sizes().collect::<Vec<_>>(), [1_024, 512]);
+    }
+
+    #[test]
+    fn a_size_every_sample_shares_is_stated_once() {
+        assert_eq!(
+            SampleSizeBox::from_sizes([1_024; 8]),
+            SampleSizeBox::new(uniform_sizes())
+        );
+    }
+
+    #[test]
+    fn sizes_that_differ_are_stated_per_sample() {
+        assert_eq!(
+            SampleSizeBox::from_sizes([1_024, 512]),
+            SampleSizeBox::new(SampleSizes::PerSample(vec![
+                SampleSizeEntry::new(1_024),
+                SampleSizeEntry::new(512),
+            ]))
+        );
+    }
+
+    #[test]
+    fn sizes_of_zero_and_no_sizes_at_all_are_stated_per_sample() {
+        assert_eq!(
+            SampleSizeBox::from_sizes([0, 0]),
+            SampleSizeBox::new(SampleSizes::PerSample(vec![SampleSizeEntry::new(0); 2]))
+        );
+        assert_eq!(
+            SampleSizeBox::from_sizes([]),
+            SampleSizeBox::new(SampleSizes::PerSample(Vec::new()))
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@ use core::error;
 use core::fmt;
 
 use crate::error::SampleError;
-use crate::error::kind::Representation;
+use crate::error::representation::Representation;
 
 impl SampleError {
     /// Returns the failure of one box carried through, when it holds one
@@ -28,7 +28,7 @@ impl SampleError {
         self.representation.fields().sample_description_index
     }
 
-    /// Returns the `stsd` entry a fragment describes its track by, for the kinds that compare one
+    /// Returns the `stsd` entry a fragment or a chunk describes its track by, for the kinds that compare one
     #[must_use]
     pub const fn established_sample_description_index(self) -> Option<u32> {
         self.representation
@@ -82,6 +82,18 @@ impl SampleError {
     #[must_use]
     pub const fn composition_time_offset(self) -> Option<i64> {
         self.representation.fields().composition_time_offset
+    }
+
+    /// Returns the flags a sample states, for the kinds that name them
+    #[must_use]
+    pub const fn sample_flags(self) -> Option<u32> {
+        self.representation.fields().sample_flags
+    }
+
+    /// Returns the track a chunk holds, for the kinds that set one against the track a sample belongs to
+    #[must_use]
+    pub const fn established_track_id(self) -> Option<u32> {
+        self.representation.fields().established_track_id
     }
 }
 
@@ -158,7 +170,7 @@ impl fmt::Display for SampleError {
             Representation::FragmentStillOpen => formatter.write_str("fragment is still open"),
             Representation::SampleSizeOutOfRange { track_id, declared } => write!(
                 formatter,
-                "track {track_id} states a sample of {declared} bytes, past the {} a trun row carries",
+                "track {track_id} states a sample of {declared} bytes, past the {} a trun row or an stsz entry carries",
                 u32::MAX
             ),
             Representation::DataOffsetOutOfRange { track_id, offset } => write!(
@@ -192,7 +204,28 @@ impl fmt::Display for SampleError {
                 established,
             } => write!(
                 formatter,
-                "track {track_id} describes a sample by stsd entry {stated} in a fragment describing it by {established}"
+                "track {track_id} describes a sample by stsd entry {stated} in a fragment or a chunk describing it by {established}"
+            ),
+            Representation::NoChunkOpen => {
+                formatter.write_str("no chunk is open to carry a sample")
+            }
+            Representation::TrackIdMismatch {
+                stated,
+                established,
+            } => write!(
+                formatter,
+                "sample of track {stated} handed over to a chunk of track {established}"
+            ),
+            Representation::UnsupportedCompositionTimeOffset { track_id, offset } => write!(
+                formatter,
+                "track {track_id} states a composition time offset of {offset}, which no sample table written here carries"
+            ),
+            Representation::UnsupportedSampleFlags {
+                track_id,
+                sample_flags,
+            } => write!(
+                formatter,
+                "track {track_id} states sample flags {sample_flags:#010x}, which no sample table written here carries"
             ),
         }
     }
@@ -210,6 +243,9 @@ impl fmt::Debug for SampleError {
         }
         if let Some(track_id) = values.track_id {
             fields.field("track_id", &track_id);
+        }
+        if let Some(established_track_id) = values.established_track_id {
+            fields.field("established_track_id", &established_track_id);
         }
         if let Some(sample_description_index) = values.sample_description_index {
             fields.field("sample_description_index", &sample_description_index);
@@ -240,6 +276,9 @@ impl fmt::Debug for SampleError {
         }
         if let Some(composition_time_offset) = values.composition_time_offset {
             fields.field("composition_time_offset", &composition_time_offset);
+        }
+        if let Some(sample_flags) = values.sample_flags {
+            fields.field("sample_flags", &sample_flags);
         }
 
         fields.finish()
@@ -340,6 +379,16 @@ mod tests {
 
         assert_eq!(carried.box_error(), Some(box_error));
         assert_eq!(carried.track_id(), None);
+
+        let mismatched = SampleError::track_id_mismatch(2, 1);
+
+        assert_eq!(mismatched.track_id(), Some(2));
+        assert_eq!(mismatched.established_track_id(), Some(1));
+        assert_eq!(mismatched.sample_flags(), None);
+        assert_eq!(
+            SampleError::unsupported_sample_flags(1, 0x0200_0000).sample_flags(),
+            Some(0x0200_0000)
+        );
     }
 
     #[test]
@@ -402,7 +451,7 @@ mod tests {
         );
         assert_eq!(
             SampleError::sample_size_out_of_range(1, 1 << 40).to_string(),
-            "track 1 states a sample of 1099511627776 bytes, past the 4294967295 a trun row carries"
+            "track 1 states a sample of 1099511627776 bytes, past the 4294967295 a trun row or an stsz entry carries"
         );
         assert_eq!(
             SampleError::data_offset_out_of_range(1, 1 << 40).to_string(),
@@ -422,7 +471,23 @@ mod tests {
         );
         assert_eq!(
             SampleError::sample_description_index_mismatch(1, 2, 1).to_string(),
-            "track 1 describes a sample by stsd entry 2 in a fragment describing it by 1"
+            "track 1 describes a sample by stsd entry 2 in a fragment or a chunk describing it by 1"
+        );
+        assert_eq!(
+            SampleError::no_chunk_open().to_string(),
+            "no chunk is open to carry a sample"
+        );
+        assert_eq!(
+            SampleError::track_id_mismatch(2, 1).to_string(),
+            "sample of track 2 handed over to a chunk of track 1"
+        );
+        assert_eq!(
+            SampleError::unsupported_composition_time_offset(1, -8).to_string(),
+            "track 1 states a composition time offset of -8, which no sample table written here carries"
+        );
+        assert_eq!(
+            SampleError::unsupported_sample_flags(1, 0x0200_0000).to_string(),
+            "track 1 states sample flags 0x02000000, which no sample table written here carries"
         );
     }
 
@@ -479,6 +544,17 @@ mod tests {
                 SampleError::sample_description_index_mismatch(1, 2, 1)
             ),
             "SampleError { kind: SampleDescriptionIndexMismatch, category: Malformed, track_id: 1, sample_description_index: 2, established_sample_description_index: 1 }"
+        );
+        assert_eq!(
+            format!("{:?}", SampleError::track_id_mismatch(2, 1)),
+            "SampleError { kind: TrackIdMismatch, category: Malformed, track_id: 2, established_track_id: 1 }"
+        );
+        assert_eq!(
+            format!(
+                "{:?}",
+                SampleError::unsupported_sample_flags(1, 0x0200_0000)
+            ),
+            "SampleError { kind: UnsupportedSampleFlags, category: Unsupported, track_id: 1, sample_flags: 33554432 }"
         );
     }
 }
