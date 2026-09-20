@@ -200,13 +200,13 @@ pub(crate) mod tests {
 
     use super::TrackFragmentBox;
     use crate::tfdt::TrackFragmentBaseMediaDecodeTimeBox;
-    use crate::tfhd::{TrackFragmentFlags, TrackFragmentHeaderBox};
+    use crate::tfhd::{TrackFragmentHeaderBox, TrackFragmentHeaderFlags};
     use crate::trun::{TrackRunBox, TrackRunSample};
 
     /// Fragment header of a track whose samples all last the same time
     fn track_fragment_header(track_id: u32) -> TrackFragmentHeaderBox {
         TrackFragmentHeaderBox::new(
-            TrackFragmentFlags::ZERO,
+            TrackFragmentHeaderFlags::ZERO,
             track_id,
             None,
             None,

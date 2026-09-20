@@ -15,8 +15,8 @@ use std::ops::Range;
 
 use isobmff::{
     MovieBox, MovieFragmentBox, MovieFragmentHeaderBox, TrackExtendsBox,
-    TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentFlags,
-    TrackFragmentHeaderBox, TrackRunBox, TrackRunSample,
+    TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
+    TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
 };
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 
@@ -246,9 +246,9 @@ pub fn lay_out(input: &Input<'_>) -> Option<LaidOut> {
                 .and_then(|track_run| track_run.rows.first());
             let states_defaults = matches!(track_fragment.stated_at, StatedAt::TrackFragment);
             let flags = if matches!(track_fragment.anchor, Anchor::MovieFragment) {
-                TrackFragmentFlags::DEFAULT_BASE_IS_MOOF
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF
             } else {
-                TrackFragmentFlags::ZERO
+                TrackFragmentHeaderFlags::ZERO
             };
             let tfhd = TrackFragmentHeaderBox::new(
                 flags,

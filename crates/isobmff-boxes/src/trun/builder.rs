@@ -79,7 +79,7 @@ impl TrackRunRow {
 /// # Examples
 ///
 /// ```
-/// use isobmff_boxes::{CompositionTimeOffset, TrackFragmentFlags, TrackFragmentHeaderBox, TrackRunBuilder, TrackRunRow, TrackRunSample};
+/// use isobmff_boxes::{CompositionTimeOffset, TrackFragmentHeaderFlags, TrackFragmentHeaderBox, TrackRunBuilder, TrackRunRow, TrackRunSample};
 ///
 /// // Two samples lasting 1024 units each, of different sizes
 /// let offset = CompositionTimeOffset::new(0).unwrap();
@@ -87,7 +87,7 @@ impl TrackRunRow {
 /// run.push(TrackRunRow::new(1_024, 2, 0, offset)).unwrap();
 ///
 /// // Against a header stating the duration and the flags, only the size is written per row
-/// let header = TrackFragmentHeaderBox::new(TrackFragmentFlags::ZERO, 1, None, None, Some(1_024), None, Some(0));
+/// let header = TrackFragmentHeaderBox::new(TrackFragmentHeaderFlags::ZERO, 1, None, None, Some(1_024), None, Some(0));
 /// let track_run = run.build(Some(100), &header);
 /// assert_eq!(
 ///     track_run.samples(),
@@ -205,7 +205,7 @@ mod tests {
     use alloc::vec;
 
     use super::{TrackRunBuilder, TrackRunRow};
-    use crate::tfhd::{TrackFragmentFlags, TrackFragmentHeaderBox};
+    use crate::tfhd::{TrackFragmentHeaderBox, TrackFragmentHeaderFlags};
     use crate::trun::{CompositionTimeOffset, TrackRunBox, TrackRunSample};
 
     /// Row of a sample lasting 1024 units and occupying 4 bytes, flagged `sample_flags`, composed at `offset`
@@ -225,7 +225,7 @@ mod tests {
         default_sample_flags: Option<u32>,
     ) -> TrackFragmentHeaderBox {
         TrackFragmentHeaderBox::new(
-            TrackFragmentFlags::ZERO,
+            TrackFragmentHeaderFlags::ZERO,
             1,
             None,
             None,

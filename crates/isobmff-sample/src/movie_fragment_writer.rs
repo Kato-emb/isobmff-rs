@@ -41,7 +41,7 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///   resolves the samples of a fragment in the order it declares them, so
 ///   samples of two tracks handed over interleaved come back grouped by track.
 /// * Offsets are anchored at the fragment itself
-///   ([`default-base-is-moof`](isobmff_boxes::TrackFragmentFlags::DEFAULT_BASE_IS_MOOF),
+///   ([`default-base-is-moof`](isobmff_boxes::TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF),
 ///   ISO/IEC 14496-12 §8.8.7.1), and every `trun` states its own. They are
 ///   counted over the `moof` and the header of the `mdat`, so the two are laid
 ///   down as they come out: the media data of a fragment directly after the

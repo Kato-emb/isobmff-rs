@@ -5,8 +5,8 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{
     CompositionTimeOffset, MediaDataBox, MovieFragmentBox, MovieFragmentHeaderBox,
-    TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentFlags,
-    TrackFragmentHeaderBox, TrackRunBuilder, TrackRunRow,
+    TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
+    TrackFragmentHeaderFlags, TrackRunBuilder, TrackRunRow,
 };
 use isobmff_core::BoxEncode as _;
 
@@ -281,7 +281,7 @@ fn build_track_fragment(
 ) -> Result<TrackFragmentBox, SampleError> {
     let defaults = Defaults::of(track);
     let header = TrackFragmentHeaderBox::new(
-        TrackFragmentFlags::DEFAULT_BASE_IS_MOOF,
+        TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
         track.track_id,
         None,
         Some(track.sample_description_index),
@@ -321,8 +321,8 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_boxes::{
-        MovieFragmentBox, MovieFragmentHeaderBox, TrackFragmentBox, TrackFragmentFlags,
-        TrackFragmentHeaderBox, TrackRunBox, TrackRunSample,
+        MovieFragmentBox, MovieFragmentHeaderBox, TrackFragmentBox, TrackFragmentHeaderBox,
+        TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
     };
     use isobmff_core::BoxEncode as _;
 
@@ -399,7 +399,7 @@ mod tests {
         default_sample_flags: Option<u32>,
     ) -> TrackFragmentHeaderBox {
         TrackFragmentHeaderBox::new(
-            TrackFragmentFlags::DEFAULT_BASE_IS_MOOF,
+            TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
             1,
             None,
             Some(1),

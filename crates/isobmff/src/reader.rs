@@ -95,7 +95,7 @@ enum State {
 /// ```
 /// use isobmff::{
 ///     MovieFragmentBox, MovieFragmentHeaderBox, SampleReader, TrackExtendsBox,
-///     TrackFragmentBox, TrackFragmentFlags, TrackFragmentHeaderBox, TrackRunBox,
+///     TrackFragmentBox, TrackFragmentHeaderFlags, TrackFragmentHeaderBox, TrackRunBox,
 ///     TrackRunSample,
 /// };
 /// # use isobmff_test_support::fragmented_movie;
@@ -107,7 +107,7 @@ enum State {
 /// // 96 bytes into it — past the fragment and the header of the `mdat` beside it
 /// let track_fragment = TrackFragmentBox::new(
 ///     TrackFragmentHeaderBox::new(
-///         TrackFragmentFlags::DEFAULT_BASE_IS_MOOF,
+///         TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
 ///         1,
 ///         None,
 ///         None,
@@ -345,7 +345,7 @@ mod tests {
 
     use isobmff_boxes::{
         MovieExtendsBox, MovieFragmentHeaderBox, MovieHeaderBox, TrackExtendsBox, TrackFragmentBox,
-        TrackFragmentFlags, TrackFragmentHeaderBox, TrackRunBox, TrackRunSample,
+        TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
     };
     use isobmff_core::{BoxDecode as _, BoxEncode as _, Mp4EpochSeconds};
     use isobmff_test_support::{track, written};
@@ -389,7 +389,7 @@ mod tests {
 
     /// Fragment header of one track, carrying the flags and defaults given
     pub(super) fn track_fragment_header(
-        flags: TrackFragmentFlags,
+        flags: TrackFragmentHeaderFlags,
         track_id: u32,
         base_data_offset: Option<u64>,
         default_sample_duration: Option<u32>,
@@ -419,7 +419,7 @@ mod tests {
     pub(super) fn track_fragment(trun: Vec<TrackRunBox>) -> TrackFragmentBox {
         TrackFragmentBox::new(
             track_fragment_header(
-                TrackFragmentFlags::DEFAULT_BASE_IS_MOOF,
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                 1,
                 None,
                 None,
@@ -514,7 +514,7 @@ mod tests {
 
         let oversized = TrackFragmentBox::new(
             track_fragment_header(
-                TrackFragmentFlags::DEFAULT_BASE_IS_MOOF,
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                 1,
                 None,
                 None,

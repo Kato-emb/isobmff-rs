@@ -10,8 +10,8 @@ use isobmff_boxes::{
     MediaInformationHeader, MovieBox, MovieExtendsBox, MovieFragmentBox, MovieFragmentHeaderBox,
     MovieHeaderBox, SampleDescriptionBox, SampleSizeBox, SampleSizes, SampleTableBox,
     SampleToChunkBox, SegmentTypeBox, TimeToSampleBox, TrackBox, TrackExtendsBox,
-    TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentFlags,
-    TrackFragmentHeaderBox, TrackHeaderBox, VideoMediaHeaderBox,
+    TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
+    TrackFragmentHeaderFlags, TrackHeaderBox, VideoMediaHeaderBox,
 };
 use isobmff_core::{
     AnyBox, BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, FourCC, FullBoxFlags,
@@ -191,7 +191,15 @@ pub fn fragmented_movie(trex: TrackExtendsBox) -> MovieBox {
 /// Fragment adding time to the track the movie declared, and no sample
 pub fn movie_fragment() -> MovieFragmentBox {
     let track_fragment = TrackFragmentBox::new(
-        TrackFragmentHeaderBox::new(TrackFragmentFlags::ZERO, 1, None, None, None, None, None),
+        TrackFragmentHeaderBox::new(
+            TrackFragmentHeaderFlags::ZERO,
+            1,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
         Some(TrackFragmentBaseMediaDecodeTimeBox::new(0)),
         Vec::new(),
     );

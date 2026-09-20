@@ -218,7 +218,7 @@ impl SampleGathering {
 mod tests {
     use alloc::vec;
 
-    use isobmff_boxes::{TrackFragmentBox, TrackFragmentFlags, TrackRunBox, TrackRunSample};
+    use isobmff_boxes::{TrackFragmentBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample};
 
     use crate::error::SampleError;
     use crate::reader::SampleReader;
@@ -231,7 +231,7 @@ mod tests {
     #[test]
     fn a_fragment_claiming_data_behind_what_was_read_is_refused() {
         let track_fragment = TrackFragmentBox::new(
-            track_fragment_header(TrackFragmentFlags::ZERO, 1, Some(0), None, None),
+            track_fragment_header(TrackFragmentHeaderFlags::ZERO, 1, Some(0), None, None),
             None,
             vec![run(Some(8), 1)],
         );
@@ -316,7 +316,7 @@ mod tests {
     fn samples_declaring_no_bytes_are_reported_before_any_media_data_arrives() {
         let track_fragment = TrackFragmentBox::new(
             track_fragment_header(
-                TrackFragmentFlags::DEFAULT_BASE_IS_MOOF,
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                 1,
                 None,
                 None,
@@ -365,7 +365,7 @@ mod tests {
         let of_track = |track_id, data_offset| {
             TrackFragmentBox::new(
                 track_fragment_header(
-                    TrackFragmentFlags::DEFAULT_BASE_IS_MOOF,
+                    TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                     track_id,
                     None,
                     None,

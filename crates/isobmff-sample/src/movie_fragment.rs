@@ -262,7 +262,7 @@ mod tests {
     use isobmff_boxes::{
         MovieBox, MovieExtendsBox, MovieFragmentBox, MovieFragmentHeaderBox, MovieHeaderBox,
         TrackBox, TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
-        TrackFragmentFlags, TrackFragmentHeaderBox, TrackRunBox, TrackRunSample,
+        TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
     };
     use isobmff_core::{BoxDecode as _, BoxEncode as _, Mp4EpochSeconds};
     use isobmff_test_support::{
@@ -303,7 +303,7 @@ mod tests {
 
     /// Fragment header of one track, carrying the flags and defaults given
     fn track_fragment_header(
-        flags: TrackFragmentFlags,
+        flags: TrackFragmentHeaderFlags,
         track_id: u32,
         base_data_offset: Option<u64>,
         default_sample_duration: Option<u32>,
@@ -333,7 +333,7 @@ mod tests {
     fn track_fragment(track_id: u32, trun: Vec<TrackRunBox>) -> TrackFragmentBox {
         TrackFragmentBox::new(
             track_fragment_header(
-                TrackFragmentFlags::DEFAULT_BASE_IS_MOOF,
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                 track_id,
                 None,
                 None,
@@ -391,7 +391,7 @@ mod tests {
             vec![TrackRunSample::new(Some(512), Some(2), Some(0x0100_0000), Some(-8)).unwrap()];
         let track_fragment = TrackFragmentBox::new(
             track_fragment_header(
-                TrackFragmentFlags::DEFAULT_BASE_IS_MOOF,
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                 1,
                 None,
                 Some(256),
@@ -420,7 +420,7 @@ mod tests {
     fn a_sample_takes_what_its_fragment_states_over_the_defaults_of_its_track() {
         let track_fragment = TrackFragmentBox::new(
             track_fragment_header(
-                TrackFragmentFlags::DEFAULT_BASE_IS_MOOF,
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                 1,
                 None,
                 Some(256),
@@ -476,7 +476,7 @@ mod tests {
     fn a_decode_time_is_taken_as_stated_however_the_track_stands() {
         let stated = TrackFragmentBox::new(
             track_fragment_header(
-                TrackFragmentFlags::DEFAULT_BASE_IS_MOOF,
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                 1,
                 None,
                 None,
@@ -499,7 +499,7 @@ mod tests {
     #[test]
     fn offsets_are_anchored_at_the_base_the_fragment_states() {
         let track_fragment = TrackFragmentBox::new(
-            track_fragment_header(TrackFragmentFlags::ZERO, 1, Some(400), None, None),
+            track_fragment_header(TrackFragmentHeaderFlags::ZERO, 1, Some(400), None, None),
             None,
             vec![run(Some(8), 1)],
         );
@@ -526,7 +526,7 @@ mod tests {
     #[test]
     fn offsets_of_a_fragment_stating_no_anchor_at_all_are_anchored_at_the_movie_fragment() {
         let track_fragment = TrackFragmentBox::new(
-            track_fragment_header(TrackFragmentFlags::ZERO, 1, None, None, None),
+            track_fragment_header(TrackFragmentHeaderFlags::ZERO, 1, None, None, None),
             None,
             vec![run(Some(100), 1)],
         );
@@ -541,7 +541,7 @@ mod tests {
     fn offsets_of_a_later_track_fragment_stating_no_anchor_follow_the_data_before_it() {
         let stating_no_anchor = |track_id, data_offset| {
             TrackFragmentBox::new(
-                track_fragment_header(TrackFragmentFlags::ZERO, track_id, None, None, None),
+                track_fragment_header(TrackFragmentHeaderFlags::ZERO, track_id, None, None, None),
                 None,
                 vec![run(data_offset, 1)],
             )
@@ -609,7 +609,7 @@ mod tests {
     fn a_fragment_described_by_an_entry_its_track_has_none_of_is_refused() {
         let by_a_second_entry = TrackFragmentBox::new(
             TrackFragmentHeaderBox::new(
-                TrackFragmentFlags::DEFAULT_BASE_IS_MOOF,
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                 1,
                 None,
                 Some(2),
@@ -640,7 +640,7 @@ mod tests {
     #[test]
     fn an_empty_duration_moves_the_timeline_on_without_a_sample() {
         let empty = TrackFragmentBox::with_empty_duration(
-            track_fragment_header(TrackFragmentFlags::ZERO, 1, None, Some(4_096), None),
+            track_fragment_header(TrackFragmentHeaderFlags::ZERO, 1, None, Some(4_096), None),
             None,
         );
 
@@ -722,7 +722,13 @@ mod tests {
         let then_past_the_end_of_the_file = movie_fragment(vec![
             track_fragment(1, vec![run(Some(100), 1)]),
             TrackFragmentBox::new(
-                track_fragment_header(TrackFragmentFlags::ZERO, 2, Some(u64::MAX), None, None),
+                track_fragment_header(
+                    TrackFragmentHeaderFlags::ZERO,
+                    2,
+                    Some(u64::MAX),
+                    None,
+                    None,
+                ),
                 None,
                 vec![run(None, 1)],
             ),
@@ -750,7 +756,7 @@ mod tests {
     fn decode_times_running_past_what_64_bits_carry_are_refused() {
         let at_the_end_of_time = TrackFragmentBox::new(
             track_fragment_header(
-                TrackFragmentFlags::DEFAULT_BASE_IS_MOOF,
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                 1,
                 None,
                 Some(u32::MAX),
@@ -772,7 +778,13 @@ mod tests {
     #[test]
     fn data_offsets_running_past_what_64_bits_carry_are_refused() {
         let past_the_end_of_the_file = TrackFragmentBox::new(
-            track_fragment_header(TrackFragmentFlags::ZERO, 1, Some(u64::MAX), None, None),
+            track_fragment_header(
+                TrackFragmentHeaderFlags::ZERO,
+                1,
+                Some(u64::MAX),
+                None,
+                None,
+            ),
             None,
             vec![run(None, 1)],
         );

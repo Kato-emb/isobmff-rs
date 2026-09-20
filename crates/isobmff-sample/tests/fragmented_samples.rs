@@ -4,7 +4,7 @@
 mod tests {
     use isobmff_boxes::{
         MovieFragmentBox, MovieFragmentHeaderBox, TrackExtendsBox, TrackFragmentBox,
-        TrackFragmentFlags, TrackFragmentHeaderBox, TrackRunBox, TrackRunSample,
+        TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
     };
     use isobmff_sample::movie_fragment::sample_extents;
     use isobmff_sample::{Sample, SampleReader, TrackDecodeTimes};
@@ -23,7 +23,7 @@ mod tests {
             .collect();
         let track_fragment = TrackFragmentBox::new(
             TrackFragmentHeaderBox::new(
-                TrackFragmentFlags::DEFAULT_BASE_IS_MOOF,
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                 1,
                 None,
                 None,
