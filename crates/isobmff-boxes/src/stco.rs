@@ -74,6 +74,7 @@ impl ChunkOffsetBox {
     /// ```
     /// use isobmff_boxes::{ChunkOffsetBox, ChunkOffsetEntry};
     ///
+    /// // Two chunks, each starting where 32 bits reach
     /// assert_eq!(
     ///     ChunkOffsetBox::from_offsets([1_000, 2_000]),
     ///     Ok(ChunkOffsetBox::new(vec![
@@ -81,6 +82,8 @@ impl ChunkOffsetBox {
     ///         ChunkOffsetEntry::new(2_000),
     ///     ]))
     /// );
+    ///
+    /// // A chunk starting past them is refused
     /// assert!(ChunkOffsetBox::from_offsets([1 << 32]).is_err());
     /// ```
     pub fn from_offsets(offsets: impl IntoIterator<Item = u64>) -> Result<Self, Error> {
