@@ -24,6 +24,10 @@
 //!   arrived. Bytes no extent names are dropped, and the extent it still lacks
 //!   is reported for a caller that can seek to fetch.
 //!
+//! Resolution has a mirror on the writing side: [`MovieFragmentWriter`] takes
+//! [`Sample`]s and lays them out as the `moof` and the media data of a movie
+//! fragment (§8.8), placing each where it arrived.
+//!
 //! Neither layer frames a box or reaches for the file: the boxes come in as
 //! values and the bytes as slices, so where either is read from stays with the
 //! caller.
@@ -41,6 +45,7 @@ extern crate alloc;
 
 mod error;
 pub mod movie_fragment;
+mod movie_fragment_writer;
 mod sample;
 mod sample_description;
 mod sample_reader;
@@ -48,6 +53,7 @@ pub mod sample_table;
 mod track_decode_times;
 
 pub use error::{SampleError, SampleErrorKind};
+pub use movie_fragment_writer::MovieFragmentWriter;
 pub use sample::{Sample, SampleExtent};
 pub use sample_reader::SampleReader;
 pub use track_decode_times::TrackDecodeTimes;
