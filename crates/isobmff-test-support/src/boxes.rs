@@ -84,15 +84,25 @@ fn segment_type() -> SegmentTypeBox {
 /// anything into, and the sample tables are empty. A test that turns on one of
 /// those states it itself rather than reaching for this.
 pub fn track(track_id: u32) -> TrackBox {
-    track_described_by(
-        track_id,
-        AnyBox::from_raw_bytes(BoxType::compact(*b"avc1"), vec![0, 0, 0, 0, 0, 0, 0, 1]),
-    )
+    track_described_by(track_id, sample_entry())
 }
 
 /// Track of [`track`], its samples described by the one `stsd` entry given
 pub fn track_described_by(track_id: u32, entry: AnyBox) -> TrackBox {
-    let sample_description = SampleDescriptionBox::new(vec![entry]);
+    track_laid_out(
+        track_id,
+        self_contained_data_reference(),
+        empty_sample_table(entry),
+    )
+}
+
+/// Track of [`track`], its media lying in the resources `dref` names, and declaring no sample
+pub fn track_reading_from(track_id: u32, dref: DataReferenceBox) -> TrackBox {
+    track_laid_out(track_id, dref, empty_sample_table(sample_entry()))
+}
+
+/// Track of [`track`], its media lying in the resources `dref` names and laid out by `stbl`
+pub fn track_laid_out(track_id: u32, dref: DataReferenceBox, stbl: SampleTableBox) -> TrackBox {
     let media = MediaBox::new(
         MediaHeaderBox::new(EPOCH, EPOCH, TIMESCALE, 0, LanguageCode::UND),
         HandlerBox::new(
@@ -101,22 +111,58 @@ pub fn track_described_by(track_id: u32, entry: AnyBox) -> TrackBox {
         ),
         MediaInformationBox::new(
             MediaInformationHeader::Video(VideoMediaHeaderBox::new(0, [0; 3])),
-            DataInformationBox::new(DataReferenceBox::new(vec![DataEntry::Url(
-                DataEntryUrlBox::new(None),
-            )])),
-            SampleTableBox::new(
-                sample_description,
-                TimeToSampleBox::new(Vec::new()),
-                SampleToChunkBox::new(Vec::new()),
-                SampleSizeBox::new(SampleSizes::PerSample(Vec::new())),
-                ChunkOffsetBox::new(Vec::new()),
-            ),
+            DataInformationBox::new(dref),
+            stbl,
         ),
     );
 
     TrackBox::new(
         TrackHeaderBox::new(FullBoxFlags::new(1).unwrap(), EPOCH, EPOCH, track_id, 0),
         media,
+    )
+}
+
+/// Sample table describing its samples by the one `stsd` entry of [`track`], laid out by the four tables given
+pub fn sample_table(
+    stts: TimeToSampleBox,
+    stsc: SampleToChunkBox,
+    stsz: SampleSizeBox,
+    stco: ChunkOffsetBox,
+) -> SampleTableBox {
+    SampleTableBox::new(
+        SampleDescriptionBox::new(vec![sample_entry()]),
+        stts,
+        stsc,
+        stsz,
+        stco,
+    )
+}
+
+/// The `dref` of [`track`]: one entry, the file itself
+pub fn self_contained_data_reference() -> DataReferenceBox {
+    DataReferenceBox::new(vec![DataEntry::Url(DataEntryUrlBox::new(None))])
+}
+
+/// A `dref` of one entry, a file other than the one carrying the movie
+pub fn external_data_reference() -> DataReferenceBox {
+    DataReferenceBox::new(vec![DataEntry::Url(DataEntryUrlBox::new(Some(
+        NullTerminatedString::new(String::from("media.bin")).unwrap(),
+    )))])
+}
+
+/// The `stsd` entry of [`track`]: a `data_reference_index` of 1, and nothing past it
+fn sample_entry() -> AnyBox {
+    AnyBox::from_raw_bytes(BoxType::compact(*b"avc1"), vec![0, 0, 0, 0, 0, 0, 0, 1])
+}
+
+/// Sample table describing its samples by `entry` and declaring none
+fn empty_sample_table(entry: AnyBox) -> SampleTableBox {
+    SampleTableBox::new(
+        SampleDescriptionBox::new(vec![entry]),
+        TimeToSampleBox::new(Vec::new()),
+        SampleToChunkBox::new(Vec::new()),
+        SampleSizeBox::new(SampleSizes::PerSample(Vec::new())),
+        ChunkOffsetBox::new(Vec::new()),
     )
 }
 

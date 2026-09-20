@@ -75,7 +75,7 @@ impl SampleError {
         }
     }
 
-    /// Returns the failure of a fragment describing its samples by an `stsd` entry the track has none of
+    /// Returns the failure of samples described by an `stsd` entry their track has none of
     #[must_use]
     pub const fn unknown_sample_description_index(
         track_id: u32,
@@ -94,6 +94,47 @@ impl SampleError {
     pub const fn missing_movie_extends() -> Self {
         Self {
             representation: Representation::MissingMovieExtends,
+        }
+    }
+
+    /// Returns the failure of an `stsd` entry naming a `dref` entry the track has none of
+    #[must_use]
+    pub const fn unknown_data_reference_index(track_id: u32, data_reference_index: u16) -> Self {
+        Self {
+            representation: Representation::UnknownDataReferenceIndex {
+                track_id,
+                data_reference_index,
+            },
+        }
+    }
+
+    /// Returns the failure of a `dref` entry naming a resource other than the file itself
+    #[must_use]
+    pub const fn external_data_reference(track_id: u32, data_reference_index: u16) -> Self {
+        Self {
+            representation: Representation::ExternalDataReference {
+                track_id,
+                data_reference_index,
+            },
+        }
+    }
+
+    /// Returns the failure of the sample tables of a track counting different numbers of samples
+    #[must_use]
+    pub const fn sample_count_mismatch(track_id: u32) -> Self {
+        Self {
+            representation: Representation::SampleCountMismatch { track_id },
+        }
+    }
+
+    /// Returns the failure of a run of chunks starting at a chunk outside the range open to it
+    #[must_use]
+    pub const fn first_chunk_out_of_range(track_id: u32, first_chunk: u32) -> Self {
+        Self {
+            representation: Representation::FirstChunkOutOfRange {
+                track_id,
+                first_chunk,
+            },
         }
     }
 
@@ -141,6 +182,12 @@ impl SampleError {
                 SampleErrorKind::UnknownSampleDescriptionIndex
             }
             Representation::MissingMovieExtends => SampleErrorKind::MissingMovieExtends,
+            Representation::UnknownDataReferenceIndex { .. } => {
+                SampleErrorKind::UnknownDataReferenceIndex
+            }
+            Representation::ExternalDataReference { .. } => SampleErrorKind::ExternalDataReference,
+            Representation::SampleCountMismatch { .. } => SampleErrorKind::SampleCountMismatch,
+            Representation::FirstChunkOutOfRange { .. } => SampleErrorKind::FirstChunkOutOfRange,
             Representation::SampleSizeLimitExceeded { .. } => {
                 SampleErrorKind::SampleSizeLimitExceeded
             }
@@ -159,8 +206,12 @@ impl SampleError {
             | Representation::UnknownTrackId { .. }
             | Representation::UnknownSampleDescriptionIndex { .. }
             | Representation::MissingMovieExtends
+            | Representation::UnknownDataReferenceIndex { .. }
+            | Representation::SampleCountMismatch { .. }
+            | Representation::FirstChunkOutOfRange { .. }
             | Representation::UnfinishedSample { .. } => Category::Malformed,
-            Representation::SampleSizeLimitExceeded { .. } => Category::Unsupported,
+            Representation::ExternalDataReference { .. }
+            | Representation::SampleSizeLimitExceeded { .. } => Category::Unsupported,
             Representation::AlreadyFinished => Category::Usage,
         }
     }
@@ -178,6 +229,10 @@ impl SampleError {
             | Representation::UnknownTrackId { .. }
             | Representation::UnknownSampleDescriptionIndex { .. }
             | Representation::MissingMovieExtends
+            | Representation::UnknownDataReferenceIndex { .. }
+            | Representation::ExternalDataReference { .. }
+            | Representation::SampleCountMismatch { .. }
+            | Representation::FirstChunkOutOfRange { .. }
             | Representation::SampleSizeLimitExceeded { .. }
             | Representation::UnfinishedSample { .. }
             | Representation::AlreadyFinished => None,
@@ -192,6 +247,10 @@ impl SampleError {
             | Representation::DataOffsetOverflow { track_id }
             | Representation::UnknownTrackId { track_id }
             | Representation::UnknownSampleDescriptionIndex { track_id, .. }
+            | Representation::UnknownDataReferenceIndex { track_id, .. }
+            | Representation::ExternalDataReference { track_id, .. }
+            | Representation::SampleCountMismatch { track_id }
+            | Representation::FirstChunkOutOfRange { track_id, .. }
             | Representation::SampleSizeLimitExceeded { track_id, .. }
             | Representation::UnfinishedSample { track_id, .. } => Some(track_id),
             Representation::Box(_)
@@ -213,6 +272,56 @@ impl SampleError {
             | Representation::DataOffsetOverflow { .. }
             | Representation::UnknownTrackId { .. }
             | Representation::MissingMovieExtends
+            | Representation::UnknownDataReferenceIndex { .. }
+            | Representation::ExternalDataReference { .. }
+            | Representation::SampleCountMismatch { .. }
+            | Representation::FirstChunkOutOfRange { .. }
+            | Representation::SampleSizeLimitExceeded { .. }
+            | Representation::UnfinishedSample { .. }
+            | Representation::AlreadyFinished => None,
+        }
+    }
+
+    /// Returns the `dref` entry the failure names, for the kinds that name one
+    #[must_use]
+    pub const fn data_reference_index(self) -> Option<u16> {
+        match self.representation {
+            Representation::UnknownDataReferenceIndex {
+                data_reference_index,
+                ..
+            }
+            | Representation::ExternalDataReference {
+                data_reference_index,
+                ..
+            } => Some(data_reference_index),
+            Representation::Box(_)
+            | Representation::DecodeTimeOverflow { .. }
+            | Representation::DataOffsetOverflow { .. }
+            | Representation::UnknownTrackId { .. }
+            | Representation::UnknownSampleDescriptionIndex { .. }
+            | Representation::MissingMovieExtends
+            | Representation::SampleCountMismatch { .. }
+            | Representation::FirstChunkOutOfRange { .. }
+            | Representation::SampleSizeLimitExceeded { .. }
+            | Representation::UnfinishedSample { .. }
+            | Representation::AlreadyFinished => None,
+        }
+    }
+
+    /// Returns the chunk a run of chunks starts at, counted from one, for the kinds that name one
+    #[must_use]
+    pub const fn first_chunk(self) -> Option<u32> {
+        match self.representation {
+            Representation::FirstChunkOutOfRange { first_chunk, .. } => Some(first_chunk),
+            Representation::Box(_)
+            | Representation::DecodeTimeOverflow { .. }
+            | Representation::DataOffsetOverflow { .. }
+            | Representation::UnknownTrackId { .. }
+            | Representation::UnknownSampleDescriptionIndex { .. }
+            | Representation::MissingMovieExtends
+            | Representation::UnknownDataReferenceIndex { .. }
+            | Representation::ExternalDataReference { .. }
+            | Representation::SampleCountMismatch { .. }
             | Representation::SampleSizeLimitExceeded { .. }
             | Representation::UnfinishedSample { .. }
             | Representation::AlreadyFinished => None,
@@ -231,6 +340,10 @@ impl SampleError {
             | Representation::UnknownTrackId { .. }
             | Representation::UnknownSampleDescriptionIndex { .. }
             | Representation::MissingMovieExtends
+            | Representation::UnknownDataReferenceIndex { .. }
+            | Representation::ExternalDataReference { .. }
+            | Representation::SampleCountMismatch { .. }
+            | Representation::FirstChunkOutOfRange { .. }
             | Representation::AlreadyFinished => None,
         }
     }
@@ -247,6 +360,10 @@ impl SampleError {
             | Representation::UnknownTrackId { .. }
             | Representation::UnknownSampleDescriptionIndex { .. }
             | Representation::MissingMovieExtends
+            | Representation::UnknownDataReferenceIndex { .. }
+            | Representation::ExternalDataReference { .. }
+            | Representation::SampleCountMismatch { .. }
+            | Representation::FirstChunkOutOfRange { .. }
             | Representation::AlreadyFinished => None,
         }
     }
@@ -284,6 +401,31 @@ impl fmt::Display for SampleError {
                 "track {track_id} has no stsd entry {sample_description_index}"
             ),
             Representation::MissingMovieExtends => formatter.write_str("the movie carries no mvex"),
+            Representation::UnknownDataReferenceIndex {
+                track_id,
+                data_reference_index,
+            } => write!(
+                formatter,
+                "track {track_id} has no dref entry {data_reference_index}"
+            ),
+            Representation::ExternalDataReference {
+                track_id,
+                data_reference_index,
+            } => write!(
+                formatter,
+                "dref entry {data_reference_index} of track {track_id} names an external file"
+            ),
+            Representation::SampleCountMismatch { track_id } => write!(
+                formatter,
+                "sample tables of track {track_id} count different numbers of samples"
+            ),
+            Representation::FirstChunkOutOfRange {
+                track_id,
+                first_chunk,
+            } => write!(
+                formatter,
+                "run of chunks of track {track_id} starts at chunk {first_chunk}, out of the range open to it"
+            ),
             Representation::SampleSizeLimitExceeded {
                 track_id,
                 declared,
@@ -322,6 +464,12 @@ impl fmt::Debug for SampleError {
         if let Some(sample_description_index) = self.sample_description_index() {
             fields.field("sample_description_index", &sample_description_index);
         }
+        if let Some(data_reference_index) = self.data_reference_index() {
+            fields.field("data_reference_index", &data_reference_index);
+        }
+        if let Some(first_chunk) = self.first_chunk() {
+            fields.field("first_chunk", &first_chunk);
+        }
         if let Some(needed) = self.needed_bytes() {
             fields.field("needed_bytes", &needed);
         }
@@ -343,6 +491,10 @@ impl error::Error for SampleError {
             | Representation::UnknownTrackId { .. }
             | Representation::UnknownSampleDescriptionIndex { .. }
             | Representation::MissingMovieExtends
+            | Representation::UnknownDataReferenceIndex { .. }
+            | Representation::ExternalDataReference { .. }
+            | Representation::SampleCountMismatch { .. }
+            | Representation::FirstChunkOutOfRange { .. }
             | Representation::SampleSizeLimitExceeded { .. }
             | Representation::UnfinishedSample { .. }
             | Representation::AlreadyFinished => None,
@@ -381,17 +533,51 @@ pub enum SampleErrorKind {
     /// (ISO/IEC 14496-12 §8.8.3); a fragment of a track missing either is
     /// refused. [`track_id`](SampleError::track_id) is the track it names.
     UnknownTrackId,
-    /// Fragment describes its samples by an `stsd` entry the track has none of
+    /// Samples are described by an `stsd` entry their track has none of
     ///
-    /// [`track_id`](SampleError::track_id) is the track it belongs to, and
+    /// A sample table names the entry by the run of chunks (ISO/IEC 14496-12
+    /// §8.7.4), a fragment by its `tfhd` or the `trex` of the track (§8.8.7).
+    /// [`track_id`](SampleError::track_id) is the track they belong to, and
     /// [`sample_description_index`](SampleError::sample_description_index) the
-    /// entry it names, counted from one.
+    /// entry named, counted from one.
     UnknownSampleDescriptionIndex,
     /// Movie carries no `mvex`, and so continues in no fragments
     ///
     /// A movie continued in fragments declares so by its `mvex` (ISO/IEC
     /// 14496-12 §8.8.1); a fragment of a movie carrying none is refused.
     MissingMovieExtends,
+    /// Sample entry names a `dref` entry the track has none of
+    ///
+    /// [`track_id`](SampleError::track_id) is the track it belongs to, and
+    /// [`data_reference_index`](SampleError::data_reference_index) the entry
+    /// it names, counted from one.
+    UnknownDataReferenceIndex,
+    /// Data reference names a resource other than the file itself
+    ///
+    /// A `dref` entry flagged self-contained has the media data in the file
+    /// that carries the movie (ISO/IEC 14496-12 §8.7.2); any other sends the
+    /// reader to an external file, which no resolver here follows yet, so a
+    /// sample described through one is refused.
+    /// [`track_id`](SampleError::track_id) is the track it belongs to, and
+    /// [`data_reference_index`](SampleError::data_reference_index) the entry,
+    /// counted from one.
+    ExternalDataReference,
+    /// Sample tables of a track count different numbers of samples
+    ///
+    /// The `stts`, the `stsz`, and the `stsc` laid over the `stco` each count
+    /// the samples of the track (ISO/IEC 14496-12 §8.6.1.2, §8.7.3.2, §8.7.4),
+    /// and a track whose tables disagree is refused.
+    /// [`track_id`](SampleError::track_id) is the track.
+    SampleCountMismatch,
+    /// Run of chunks starts at a chunk outside the range open to it
+    ///
+    /// The first run an `stsc` states starts at chunk 1, and each run after it
+    /// at a chunk past the start of the one before, no later than the last
+    /// chunk the `stco` places (ISO/IEC 14496-12 §8.7.4.3).
+    /// [`track_id`](SampleError::track_id) is the track, and
+    /// [`first_chunk`](SampleError::first_chunk) the chunk the run states it
+    /// starts at.
+    FirstChunkOutOfRange,
     /// Sample is declared past the limit the reader holds
     ///
     /// [`track_id`](SampleError::track_id) is the track it belongs to,
@@ -421,13 +607,27 @@ enum Representation {
     DataOffsetOverflow { track_id: u32 },
     /// Fragment carrying samples of a track the movie never declared
     UnknownTrackId { track_id: u32 },
-    /// Fragment describing its samples by an `stsd` entry the track has none of
+    /// Samples described by an `stsd` entry their track has none of
     UnknownSampleDescriptionIndex {
         track_id: u32,
         sample_description_index: u32,
     },
     /// Movie carrying no `mvex`, and so no fragments
     MissingMovieExtends,
+    /// Sample entry naming a `dref` entry the track has none of
+    UnknownDataReferenceIndex {
+        track_id: u32,
+        data_reference_index: u16,
+    },
+    /// Data reference naming a resource other than the file itself
+    ExternalDataReference {
+        track_id: u32,
+        data_reference_index: u16,
+    },
+    /// Sample tables of a track counting different numbers of samples
+    SampleCountMismatch { track_id: u32 },
+    /// Run of chunks starting at a chunk outside the range open to it
+    FirstChunkOutOfRange { track_id: u32, first_chunk: u32 },
     /// Sample declared past the limit a reader holds
     SampleSizeLimitExceeded {
         track_id: u32,
@@ -467,6 +667,14 @@ mod tests {
             SampleError::sample_size_limit_exceeded(1, 32, 16).category(),
             Category::Unsupported
         );
+        assert_eq!(
+            SampleError::external_data_reference(1, 2).category(),
+            Category::Unsupported
+        );
+        assert_eq!(
+            SampleError::first_chunk_out_of_range(1, 3).category(),
+            Category::Malformed
+        );
         assert_eq!(SampleError::already_finished().category(), Category::Usage);
         assert_eq!(
             SampleError::from(isobmff_core::Error::unsupported_version(2)).category(),
@@ -491,6 +699,20 @@ mod tests {
         assert_eq!(SampleError::missing_movie_extends().track_id(), None);
         assert_eq!(
             SampleError::unknown_track_id(3).sample_description_index(),
+            None
+        );
+
+        let external = SampleError::external_data_reference(1, 2);
+
+        assert_eq!(external.track_id(), Some(1));
+        assert_eq!(external.data_reference_index(), Some(2));
+        assert_eq!(external.first_chunk(), None);
+        assert_eq!(
+            SampleError::first_chunk_out_of_range(1, 3).first_chunk(),
+            Some(3)
+        );
+        assert_eq!(
+            SampleError::sample_count_mismatch(1).data_reference_index(),
             None
         );
     }
@@ -526,6 +748,22 @@ mod tests {
         assert_eq!(
             SampleError::missing_movie_extends().to_string(),
             "the movie carries no mvex"
+        );
+        assert_eq!(
+            SampleError::unknown_data_reference_index(2, 3).to_string(),
+            "track 2 has no dref entry 3"
+        );
+        assert_eq!(
+            SampleError::external_data_reference(2, 3).to_string(),
+            "dref entry 3 of track 2 names an external file"
+        );
+        assert_eq!(
+            SampleError::sample_count_mismatch(2).to_string(),
+            "sample tables of track 2 count different numbers of samples"
+        );
+        assert_eq!(
+            SampleError::first_chunk_out_of_range(2, 5).to_string(),
+            "run of chunks of track 2 starts at chunk 5, out of the range open to it"
         );
         assert_eq!(
             SampleError::sample_size_limit_exceeded(1, 32, 16).to_string(),
@@ -564,6 +802,14 @@ mod tests {
         assert_eq!(
             format!("{:?}", SampleError::sample_size_limit_exceeded(1, 32, 16)),
             "SampleError { kind: SampleSizeLimitExceeded, category: Unsupported, track_id: 1, needed_bytes: 32, available_bytes: 16 }"
+        );
+        assert_eq!(
+            format!("{:?}", SampleError::external_data_reference(1, 2)),
+            "SampleError { kind: ExternalDataReference, category: Unsupported, track_id: 1, data_reference_index: 2 }"
+        );
+        assert_eq!(
+            format!("{:?}", SampleError::first_chunk_out_of_range(1, 5)),
+            "SampleError { kind: FirstChunkOutOfRange, category: Malformed, track_id: 1, first_chunk: 5 }"
         );
     }
 }
