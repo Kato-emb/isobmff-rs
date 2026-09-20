@@ -11,8 +11,8 @@
 //!
 //! Seven layers stand between a file and the samples it carries, joined only
 //! by the values that pass between them: a box event, a typed box, an extent,
-//! a sample, a disposition. No layer holds another's machine. Listed by how
-//! far each stands from the layout of a file:
+//! a sample, a disposition. No layer but the stack holds another's machine.
+//! Listed from the framing up to the caller:
 //!
 //! 1. **Framing.** A file is a sequence of objects, called boxes (§4.2), and
 //!    framing that sequence is the work of [`BoxReader`] and [`BoxWriter`],
@@ -39,21 +39,22 @@
 //!    as media data, or passed over. The fragmented movie file of Annex A.8 —
 //!    the brands, the movie, then one movie fragment after another with the
 //!    media data beside it — is the one structure this crate holds so far. It
-//!    is the only layer that knows the layout of a file, and the order a file
-//!    breaks is its failure.
+//!    is the only layer that knows how a file is put together, and the order
+//!    a file breaks is its failure.
 //! 6. **Stack.** [`FragmentedReader`] and [`FragmentedWriter`] wire layers 1
 //!    to 5 into one machine per structure and direction. A stack holds no rule
-//!    and no failure of its own: it adds the offset a caller hands over to the
-//!    extents the framing reports, and passes every value between the layers,
-//!    so a caller hands over bytes and takes samples, or hands over samples and
-//!    takes bytes, and never sees one.
+//!    and no failure kind of its own: a reading stack adds the offset a caller
+//!    hands over to the extents the framing reports, and either passes every
+//!    value between the layers, so a caller hands over bytes and takes
+//!    samples, or hands over samples and takes bytes, and never sees one.
 //! 7. **The I/O.** Where the bytes come from and go to is the caller's: input
 //!    is handed over with the offset it lies at, output is taken, and what the
 //!    reader says it still lacks is fetched or not, so a `File`, a socket, or a
 //!    buffer already in memory drives the six layers above the same way.
 //!
-//! A caller that holds a whole presentation in memory needs none of the layers:
-//! [`boxes`] frames it, and the samples read from there just the same.
+//! A caller that holds a whole presentation in memory needs none of the
+//! machines: [`boxes`] frames it, [`sample_table::sample_extents`] names where
+//! its samples lie, and their bytes are sliced from there.
 //!
 //! # Everything in one place
 //!

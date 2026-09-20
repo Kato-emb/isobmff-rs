@@ -85,8 +85,7 @@ pub struct SampleReader {
     ready: VecDeque<Sample>,
     // Why not counting the whole extents held when they are asked for: that
     // is a walk over every held extent on every arrival, which a reader fed
-    // in order pays for nothing — the count is kept beside the queue so the
-    // walk is taken only where a whole extent waits behind a short one.
+    // in order pays for nothing.
     whole_held: usize,
     sample_size_limit: u64,
     state: State,

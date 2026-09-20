@@ -44,11 +44,12 @@ use crate::{Disposition, FragmentedStructure, StructureError, WholeBoxReader};
 /// * A box read into a value is gathered whole before it is read, so what it
 ///   declares is bounded — see [`with_limits`](Self::with_limits).
 /// * The samples of a fragment are read out of the media data that follows
-///   it, and come out as their bytes arrive whole: those of one track in the
-///   order the fragment declares them, those of two tracks interleaved in the
-///   media data as the cuts of the input make them whole.
-///   [`wanted_extent`](Self::wanted_extent) names the bytes the earliest
-///   sample still lacks, which a caller handing the file over in order meets
+///   it, and come out as their bytes arrive whole, as [`SampleReader`]'s
+///   contract has it: samples lying in the media data in the order the
+///   fragment declares them come out in that order, and those of two tracks
+///   interleaved in it come out as the cuts of the input make them whole.
+///   [`wanted_extent`](Self::wanted_extent) names the bytes the extent held
+///   longest still lacks, which a caller handing the file over in order meets
 ///   as they come.
 /// * An `Err` leaves the reader failed for good,
 ///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished) aside:

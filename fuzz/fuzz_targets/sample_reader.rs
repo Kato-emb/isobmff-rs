@@ -20,9 +20,10 @@
 //!    at the data before it, every run following the one before it — and the media
 //!    data meets every claim, no sample is left short of its data, and the samples
 //!    read are the samples declared, each carrying the bytes it was declared over
-//! 6. where every fragment lies as the movie has it, no fragment states a decode
-//!    time of its own and none declares an empty duration, the samples of one
-//!    track follow one another by their durations, the first of them at zero
+//! 6. where every fragment lies as the movie has it and the media data meets
+//!    every claim, no fragment states a decode time of its own and none
+//!    declares an empty duration, the samples of one track follow one another
+//!    by their durations, the first of them at zero
 //! 7. once the samples are declared over nothing more is taken, and the samples
 //!    completed before that are still handed over
 //!
