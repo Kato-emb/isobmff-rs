@@ -9,7 +9,8 @@ use isobmff_core::Category;
 ///
 /// What went wrong is one [`kind`](Self::kind): a failure of the samples
 /// themselves — a fragment of a track the movie never declared, a timeline or
-/// an offset run past what its field carries — or a failure of one box, which
+/// an offset run past what its field carries, a sample that never arrived
+/// whole — or a failure of one box, which
 /// [`isobmff_core::Error`] names and this type carries through whole, as
 /// [`box_error`](Self::box_error). What a caller does about either is one
 /// [`category`](Self::category).
@@ -96,6 +97,38 @@ impl SampleError {
         }
     }
 
+    /// Returns the failure of a sample declared past the limit a reader holds
+    #[must_use]
+    pub const fn sample_size_limit_exceeded(track_id: u32, declared: u64, limit: u64) -> Self {
+        Self {
+            representation: Representation::SampleSizeLimitExceeded {
+                track_id,
+                declared,
+                limit,
+            },
+        }
+    }
+
+    /// Returns the failure of a sample whose bytes never arrived whole
+    #[must_use]
+    pub const fn unfinished_sample(track_id: u32, needed: u64, available: u64) -> Self {
+        Self {
+            representation: Representation::UnfinishedSample {
+                track_id,
+                needed,
+                available,
+            },
+        }
+    }
+
+    /// Returns the failure of a call made after the samples were declared over
+    #[must_use]
+    pub const fn already_finished() -> Self {
+        Self {
+            representation: Representation::AlreadyFinished,
+        }
+    }
+
     /// Returns what went wrong
     #[must_use]
     pub const fn kind(self) -> SampleErrorKind {
@@ -108,6 +141,11 @@ impl SampleError {
                 SampleErrorKind::UnknownSampleDescriptionIndex
             }
             Representation::MissingMovieExtends => SampleErrorKind::MissingMovieExtends,
+            Representation::SampleSizeLimitExceeded { .. } => {
+                SampleErrorKind::SampleSizeLimitExceeded
+            }
+            Representation::UnfinishedSample { .. } => SampleErrorKind::UnfinishedSample,
+            Representation::AlreadyFinished => SampleErrorKind::AlreadyFinished,
         }
     }
 
@@ -120,7 +158,10 @@ impl SampleError {
             | Representation::DataOffsetOverflow { .. }
             | Representation::UnknownTrackId { .. }
             | Representation::UnknownSampleDescriptionIndex { .. }
-            | Representation::MissingMovieExtends => Category::Malformed,
+            | Representation::MissingMovieExtends
+            | Representation::UnfinishedSample { .. } => Category::Malformed,
+            Representation::SampleSizeLimitExceeded { .. } => Category::Unsupported,
+            Representation::AlreadyFinished => Category::Usage,
         }
     }
 
@@ -136,7 +177,10 @@ impl SampleError {
             | Representation::DataOffsetOverflow { .. }
             | Representation::UnknownTrackId { .. }
             | Representation::UnknownSampleDescriptionIndex { .. }
-            | Representation::MissingMovieExtends => None,
+            | Representation::MissingMovieExtends
+            | Representation::SampleSizeLimitExceeded { .. }
+            | Representation::UnfinishedSample { .. }
+            | Representation::AlreadyFinished => None,
         }
     }
 
@@ -147,8 +191,12 @@ impl SampleError {
             Representation::DecodeTimeOverflow { track_id }
             | Representation::DataOffsetOverflow { track_id }
             | Representation::UnknownTrackId { track_id }
-            | Representation::UnknownSampleDescriptionIndex { track_id, .. } => Some(track_id),
-            Representation::Box(_) | Representation::MissingMovieExtends => None,
+            | Representation::UnknownSampleDescriptionIndex { track_id, .. }
+            | Representation::SampleSizeLimitExceeded { track_id, .. }
+            | Representation::UnfinishedSample { track_id, .. } => Some(track_id),
+            Representation::Box(_)
+            | Representation::MissingMovieExtends
+            | Representation::AlreadyFinished => None,
         }
     }
 
@@ -164,7 +212,42 @@ impl SampleError {
             | Representation::DecodeTimeOverflow { .. }
             | Representation::DataOffsetOverflow { .. }
             | Representation::UnknownTrackId { .. }
-            | Representation::MissingMovieExtends => None,
+            | Representation::MissingMovieExtends
+            | Representation::SampleSizeLimitExceeded { .. }
+            | Representation::UnfinishedSample { .. }
+            | Representation::AlreadyFinished => None,
+        }
+    }
+
+    /// Returns the bytes the failure required, for the kinds that count bytes
+    #[must_use]
+    pub const fn needed_bytes(self) -> Option<u64> {
+        match self.representation {
+            Representation::SampleSizeLimitExceeded { declared, .. } => Some(declared),
+            Representation::UnfinishedSample { needed, .. } => Some(needed),
+            Representation::Box(_)
+            | Representation::DecodeTimeOverflow { .. }
+            | Representation::DataOffsetOverflow { .. }
+            | Representation::UnknownTrackId { .. }
+            | Representation::UnknownSampleDescriptionIndex { .. }
+            | Representation::MissingMovieExtends
+            | Representation::AlreadyFinished => None,
+        }
+    }
+
+    /// Returns the bytes the failure had to hand, for the kinds that count bytes
+    #[must_use]
+    pub const fn available_bytes(self) -> Option<u64> {
+        match self.representation {
+            Representation::SampleSizeLimitExceeded { limit, .. } => Some(limit),
+            Representation::UnfinishedSample { available, .. } => Some(available),
+            Representation::Box(_)
+            | Representation::DecodeTimeOverflow { .. }
+            | Representation::DataOffsetOverflow { .. }
+            | Representation::UnknownTrackId { .. }
+            | Representation::UnknownSampleDescriptionIndex { .. }
+            | Representation::MissingMovieExtends
+            | Representation::AlreadyFinished => None,
         }
     }
 }
@@ -201,6 +284,25 @@ impl fmt::Display for SampleError {
                 "track {track_id} has no stsd entry {sample_description_index}"
             ),
             Representation::MissingMovieExtends => formatter.write_str("the movie carries no mvex"),
+            Representation::SampleSizeLimitExceeded {
+                track_id,
+                declared,
+                limit,
+            } => write!(
+                formatter,
+                "track {track_id} declares a sample of {declared} bytes, past the {limit}-byte limit"
+            ),
+            Representation::UnfinishedSample {
+                track_id,
+                needed,
+                available,
+            } => write!(
+                formatter,
+                "sample of track {track_id} takes {needed} bytes, and {available} arrived"
+            ),
+            Representation::AlreadyFinished => {
+                formatter.write_str("samples were declared over and take nothing more")
+            }
         }
     }
 }
@@ -220,6 +322,12 @@ impl fmt::Debug for SampleError {
         if let Some(sample_description_index) = self.sample_description_index() {
             fields.field("sample_description_index", &sample_description_index);
         }
+        if let Some(needed) = self.needed_bytes() {
+            fields.field("needed_bytes", &needed);
+        }
+        if let Some(available) = self.available_bytes() {
+            fields.field("available_bytes", &available);
+        }
 
         fields.finish()
     }
@@ -234,7 +342,10 @@ impl error::Error for SampleError {
             | Representation::DataOffsetOverflow { .. }
             | Representation::UnknownTrackId { .. }
             | Representation::UnknownSampleDescriptionIndex { .. }
-            | Representation::MissingMovieExtends => None,
+            | Representation::MissingMovieExtends
+            | Representation::SampleSizeLimitExceeded { .. }
+            | Representation::UnfinishedSample { .. }
+            | Representation::AlreadyFinished => None,
         }
     }
 }
@@ -281,6 +392,22 @@ pub enum SampleErrorKind {
     /// A movie continued in fragments declares so by its `mvex` (ISO/IEC
     /// 14496-12 §8.8.1); a fragment of a movie carrying none is refused.
     MissingMovieExtends,
+    /// Sample is declared past the limit the reader holds
+    ///
+    /// [`track_id`](SampleError::track_id) is the track it belongs to,
+    /// [`needed_bytes`](SampleError::needed_bytes) the length it declares, and
+    /// [`available_bytes`](SampleError::available_bytes) the length the reader
+    /// gathers for one sample at most.
+    SampleSizeLimitExceeded,
+    /// Samples were declared over while the bytes of one had still to arrive
+    ///
+    /// [`track_id`](SampleError::track_id) is the track it belongs to,
+    /// [`needed_bytes`](SampleError::needed_bytes) the length it takes, and
+    /// [`available_bytes`](SampleError::available_bytes) the length that
+    /// arrived.
+    UnfinishedSample,
+    /// Samples were declared over, and take nothing more
+    AlreadyFinished,
 }
 
 /// Values a failure carries, keyed by what went wrong
@@ -301,6 +428,20 @@ enum Representation {
     },
     /// Movie carrying no `mvex`, and so no fragments
     MissingMovieExtends,
+    /// Sample declared past the limit a reader holds
+    SampleSizeLimitExceeded {
+        track_id: u32,
+        declared: u64,
+        limit: u64,
+    },
+    /// Sample whose bytes never arrived whole
+    UnfinishedSample {
+        track_id: u32,
+        needed: u64,
+        available: u64,
+    },
+    /// Call made after the samples were declared over
+    AlreadyFinished,
 }
 
 #[cfg(test)]
@@ -323,6 +464,11 @@ mod tests {
             Category::Malformed
         );
         assert_eq!(
+            SampleError::sample_size_limit_exceeded(1, 32, 16).category(),
+            Category::Unsupported
+        );
+        assert_eq!(SampleError::already_finished().category(), Category::Usage);
+        assert_eq!(
             SampleError::from(isobmff_core::Error::unsupported_version(2)).category(),
             Category::Unsupported
         );
@@ -335,6 +481,13 @@ mod tests {
         assert_eq!(error.track_id(), Some(2));
         assert_eq!(error.sample_description_index(), Some(7));
         assert_eq!(error.box_error(), None);
+        assert_eq!(error.needed_bytes(), None);
+
+        let unfinished = SampleError::unfinished_sample(2, 1_024, 512);
+
+        assert_eq!(unfinished.needed_bytes(), Some(1_024));
+        assert_eq!(unfinished.available_bytes(), Some(512));
+        assert_eq!(unfinished.sample_description_index(), None);
         assert_eq!(SampleError::missing_movie_extends().track_id(), None);
         assert_eq!(
             SampleError::unknown_track_id(3).sample_description_index(),
@@ -374,6 +527,18 @@ mod tests {
             SampleError::missing_movie_extends().to_string(),
             "the movie carries no mvex"
         );
+        assert_eq!(
+            SampleError::sample_size_limit_exceeded(1, 32, 16).to_string(),
+            "track 1 declares a sample of 32 bytes, past the 16-byte limit"
+        );
+        assert_eq!(
+            SampleError::unfinished_sample(2, 1_024, 512).to_string(),
+            "sample of track 2 takes 1024 bytes, and 512 arrived"
+        );
+        assert_eq!(
+            SampleError::already_finished().to_string(),
+            "samples were declared over and take nothing more"
+        );
     }
 
     #[test]
@@ -395,6 +560,10 @@ mod tests {
         assert_eq!(
             format!("{:?}", SampleError::missing_movie_extends()),
             "SampleError { kind: MissingMovieExtends, category: Malformed }"
+        );
+        assert_eq!(
+            format!("{:?}", SampleError::sample_size_limit_exceeded(1, 32, 16)),
+            "SampleError { kind: SampleSizeLimitExceeded, category: Unsupported, track_id: 1, needed_bytes: 32, available_bytes: 16 }"
         );
     }
 }
