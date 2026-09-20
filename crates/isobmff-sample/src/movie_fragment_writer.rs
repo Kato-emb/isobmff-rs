@@ -27,8 +27,7 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///
 /// # Layout
 ///
-/// The order the samples arrive in is the only order the writer has, so it is
-/// the one it lays them out in.
+/// Samples are laid out in the order they arrive.
 ///
 /// * The media data holds the samples in the order they were handed over. A
 ///   caller interleaving two tracks states that by handing them over
@@ -182,7 +181,8 @@ impl MovieFragmentWriter {
     ///   the sample is described by another `stsd` entry than its fragment
     ///   states for the track.
     /// * [`SampleSizeOutOfRange`](crate::SampleErrorKind::SampleSizeOutOfRange):
-    ///   the sample is longer than a `trun` row states.
+    ///   the sample is longer than the 32 bits a `trun` row states its length
+    ///   in.
     /// * [`DecodeTimeOverflow`](crate::SampleErrorKind::DecodeTimeOverflow):
     ///   the decode times of its track run past what 64 bits carry.
     /// * The failure of a previous call, which the writer keeps and reports
@@ -199,9 +199,7 @@ impl MovieFragmentWriter {
 
     /// Closes the fragment that is open, and hands back the `moof` and the `mdat` payload it is written as
     ///
-    /// The `moof` and the payload are settled here, both held whole, so no
-    /// offset is written before the length it counts from is known. The
-    /// offsets count over the header
+    /// The offsets count over the header
     /// [`MediaDataBox`](isobmff_boxes::MediaDataBox) writes for a payload of
     /// that length, so the payload is laid down as that box, directly after
     /// the `moof`. Where the samples leave the timeline of each track is kept

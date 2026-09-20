@@ -273,7 +273,7 @@ impl Defaults {
     }
 }
 
-/// Returns the value `values` holds throughout, where every one of them is that value
+/// Returns the value every item of `values` is, when they are all one value
 fn shared<Values: Iterator<Item = u32>>(mut values: Values) -> Option<u32> {
     let first = values.next()?;
 
@@ -286,15 +286,15 @@ fn shared<Values: Iterator<Item = u32>>(mut values: Values) -> Option<u32> {
 /// of the `moof` — the anchor `default-base-is-moof` establishes (ISO/IEC
 /// 14496-12 §8.8.7.1). `None` builds the same boxes with every offset zero,
 /// which states the length of the `moof` that those offsets are counted from.
-// Why not measuring with a base of zero and dropping the `Option`: the offsets
-// are checked against the field that carries them as they are built, and a
-// fragment past that field would then be refused naming the offset it holds in
-// the media data rather than the one that did not fit.
 fn build_movie_fragment(
     sequence_number: u32,
     tracks: &[OpenTrack],
     base: Option<u64>,
 ) -> Result<MovieFragmentBox, SampleError> {
+    // Why not measuring with a base of zero and dropping the `Option`: the
+    // offsets are checked against the field that carries them as they are
+    // built, and a fragment past that field would then be refused naming the
+    // offset it holds in the media data rather than the one that did not fit.
     let track_fragments = tracks
         .iter()
         .map(|track| build_track_fragment(track, base))
@@ -356,9 +356,7 @@ fn build_track_run(
 ) -> Result<TrackRunBox, SampleError> {
     let data_offset = match base {
         Some(base) => {
-            let offset = base
-                .checked_add(run.data_offset)
-                .ok_or(SampleError::data_offset_overflow(track.track_id))?;
+            let offset = base.saturating_add(run.data_offset);
 
             i32::try_from(offset).map_err(|_past_the_field| {
                 SampleError::data_offset_out_of_range(track.track_id, offset)
@@ -458,6 +456,16 @@ mod tests {
             .iter()
             .find(|track_fragment| track_fragment.tfhd().track_id() == track_id)
             .unwrap()
+    }
+
+    /// Offset the first run of `movie_fragment` states, past the fragment and the header of its `mdat`
+    fn data_offset_of(movie_fragment: &MovieFragmentBox) -> i32 {
+        i32::try_from(
+            movie_fragment
+                .encoded_len()
+                .saturating_add(MEDIA_DATA_HEADER_LEN),
+        )
+        .unwrap()
     }
 
     /// Rows each run of the fragment of `track_id` carries
@@ -629,16 +637,17 @@ mod tests {
         let track_fragment = track_fragment_of(&movie_fragment, 1);
 
         assert_eq!(
-            track_fragment.tfhd().default_sample_flags(),
-            Some(0x0101_0000)
+            *track_fragment.tfhd(),
+            track_fragment_header(Some(1_024), Some(4), Some(0x0101_0000))
         );
         assert_eq!(
-            track_fragment.trun().first().unwrap().first_sample_flags(),
-            Some(0x0200_0000)
-        );
-        assert_eq!(
-            rows_of(&movie_fragment, 1),
-            vec![TrackRunSample::new(None, None, None, None).unwrap(); 3]
+            track_fragment.trun(),
+            [TrackRunBox::new(
+                Some(data_offset_of(&movie_fragment)),
+                Some(0x0200_0000),
+                vec![TrackRunSample::new(None, None, None, None).unwrap(); 3],
+            )
+            .unwrap()]
         );
     }
 
@@ -651,18 +660,22 @@ mod tests {
         ]);
         let track_fragment = track_fragment_of(&movie_fragment, 1);
 
-        assert_eq!(track_fragment.tfhd().default_sample_flags(), None);
         assert_eq!(
-            track_fragment.trun().first().unwrap().first_sample_flags(),
-            None
+            *track_fragment.tfhd(),
+            track_fragment_header(Some(1_024), Some(4), None)
         );
         assert_eq!(
-            rows_of(&movie_fragment, 1),
-            [
-                TrackRunSample::new(None, None, Some(0x0200_0000), None).unwrap(),
-                TrackRunSample::new(None, None, Some(0x0101_0000), None).unwrap(),
-                TrackRunSample::new(None, None, Some(0x0100_0000), None).unwrap(),
-            ]
+            track_fragment.trun(),
+            [TrackRunBox::new(
+                Some(data_offset_of(&movie_fragment)),
+                None,
+                vec![
+                    TrackRunSample::new(None, None, Some(0x0200_0000), None).unwrap(),
+                    TrackRunSample::new(None, None, Some(0x0101_0000), None).unwrap(),
+                    TrackRunSample::new(None, None, Some(0x0100_0000), None).unwrap(),
+                ],
+            )
+            .unwrap()]
         );
     }
 

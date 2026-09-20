@@ -16,17 +16,15 @@
 //!   Neither holds state across calls, and what §8.8 carries from one fragment
 //!   to the next — where each track's decode time stands when a fragment
 //!   states none (§8.8.12) — is a [`TrackDecodeTimes`] the caller owns and
-//!   hands in.
+//!   hands in. Resolution has a mirror on the writing side:
+//!   [`MovieFragmentWriter`] takes [`Sample`]s and lays them out as the `moof`
+//!   and the media data of a movie fragment, placing each where it arrived.
 //! * **Sample gathering.** [`SampleReader`] is handed [`SampleExtent`]s and
 //!   the input as it arrives, each piece with the offset it starts at, and
 //!   yields a [`Sample`]
 //!   — an extent joined with the bytes it names — once those bytes have
 //!   arrived. Bytes no extent names are dropped, and the extent it still lacks
 //!   is reported for a caller that can seek to fetch.
-//!
-//! Resolution has a mirror on the writing side: [`MovieFragmentWriter`] takes
-//! [`Sample`]s and lays them out as the `moof` and the media data of a movie
-//! fragment (§8.8), placing each where it arrived.
 //!
 //! Neither layer frames a box or reaches for the file: the boxes come in as
 //! values and the bytes as slices, so where either is read from stays with the

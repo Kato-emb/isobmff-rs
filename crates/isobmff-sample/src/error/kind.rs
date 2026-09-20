@@ -106,10 +106,10 @@ pub enum SampleErrorKind {
     SampleSizeOutOfRange,
     /// Sample lies further into its fragment than the signed 32 bits of a `trun` offset reach
     ///
-    /// The offsets of this writer are anchored at the `moof` (ISO/IEC 14496-12
-    /// §8.8.7.1), so a fragment whose media data runs past what that field
-    /// counts to is refused. [`track_id`](crate::SampleError::track_id) is the
-    /// track it belongs to.
+    /// [`MovieFragmentWriter`](crate::MovieFragmentWriter) anchors its offsets
+    /// at the `moof` (ISO/IEC 14496-12 §8.8.7.1), so a fragment whose media
+    /// data runs past what that field counts to is refused.
+    /// [`track_id`](crate::SampleError::track_id) is the track it belongs to.
     DataOffsetOutOfRange,
     /// Sample states a composition time offset neither version of a `trun` writes
     ///
