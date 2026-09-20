@@ -66,7 +66,7 @@ impl SampleError {
         self.representation.fields().stated_decode_time
     }
 
-    /// Returns the decode time the samples before reach, for the kinds that compare one
+    /// Returns the decode time the samples before it reach, for the kinds that compare one
     #[must_use]
     pub const fn reached_decode_time(self) -> Option<u64> {
         self.representation.fields().reached_decode_time
@@ -274,6 +274,7 @@ mod tests {
         assert_eq!(error.sample_description_index(), Some(7));
         assert_eq!(error.box_error(), None);
         assert_eq!(error.needed_bytes(), None);
+        assert_eq!(error.established_sample_description_index(), None);
 
         let unfinished = SampleError::unfinished_sample(2, 1_024, 512);
 
@@ -322,7 +323,6 @@ mod tests {
         assert_eq!(mismatch.sample_description_index(), Some(2));
         assert_eq!(mismatch.established_sample_description_index(), Some(1));
         assert_eq!(mismatch.stated_decode_time(), None);
-        assert_eq!(error.established_sample_description_index(), None);
 
         let gap = SampleError::decode_time_mismatch(1, 512, 1_024);
 
