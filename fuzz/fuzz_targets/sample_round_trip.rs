@@ -9,7 +9,7 @@
 //! 3. the reader does not reject the file the writer laid down
 //! 4. laying the samples read back out again reads back those same samples: the
 //!    order the tracks arrive in is settled by the first pass, which gathers the
-//!    samples of a track into one run, so the second pass is a fixed point of the
+//!    samples of a track into one `traf`, so the second pass is a fixed point of the
 //!    whole presentation rather than of one track at a time
 //!
 //! The defaults the movie states are ones no fragment falls back on, so a sample
@@ -19,7 +19,7 @@
 #![no_main]
 
 use isobmff::{
-    FileError, FileErrorKind, FragmentedReader, FragmentedWriter, MovieBox, Sample,
+    FragmentedReader, FragmentedWriter, MovieBox, Sample, StructureError, StructureErrorKind,
     TrackExtendsBox,
 };
 use isobmff_test_support::file_type;
@@ -71,7 +71,7 @@ struct Stated {
     second_track: bool,
     duration: u16,
     flags: u32,
-    composition_time_offset: Option<i16>,
+    composition_time_offset: i16,
     /// Bytes of the sample data this sample takes
     length: u8,
 }
@@ -167,7 +167,7 @@ fn laid_out(input: &Input<'_>) -> Vec<(u32, Vec<Sample>)> {
                         track_id_of(position),
                         decode_time,
                         u32::from(stated.duration),
-                        stated.composition_time_offset.map(i64::from),
+                        i64::from(stated.composition_time_offset),
                         stated.flags,
                         SAMPLE_DESCRIPTION_INDEX,
                         data.to_vec(),
@@ -239,8 +239,8 @@ fn file_of(movie: &MovieBox, fragments: &[(u32, Vec<Sample>)]) -> (Vec<u8>, usiz
             );
         }
         None => assert_eq!(
-            writer.handle_sample(a_sample()).map_err(FileError::kind),
-            Err(FileErrorKind::AlreadyFinished),
+            writer.handle_sample(a_sample()).map_err(StructureError::kind),
+            Err(StructureErrorKind::AlreadyFinished),
             "the writer took a sample after the file was declared over"
         ),
     }
@@ -257,18 +257,10 @@ fn drained_into(writer: &mut FragmentedWriter, file: &mut Vec<u8>) {
 
 /// A sample of the first track, for the calls a refused or finished writer takes
 fn a_sample() -> Sample {
-    Sample::new(
-        track_id_of(0),
-        0,
-        1,
-        None,
-        0,
-        SAMPLE_DESCRIPTION_INDEX,
-        Vec::new(),
-    )
+    Sample::new(track_id_of(0), 0, 1, 0, 0, SAMPLE_DESCRIPTION_INDEX, Vec::new())
 }
 
-/// The samples `file` carries, read back through the layout it was laid down as
+/// The samples `file` carries, read back through the structure it was laid down as
 ///
 /// Panics where the reader rejects the file, which is the property this target
 /// holds the writer to.
@@ -277,7 +269,7 @@ fn read_back(file: &[u8]) -> Vec<Sample> {
     let mut samples = Vec::new();
 
     assert!(
-        reader.handle_input(file).is_ok(),
+        reader.handle_input(0, file).is_ok(),
         "the reader rejects the file the writer laid down"
     );
     while let Some(sample) = reader.poll_sample() {

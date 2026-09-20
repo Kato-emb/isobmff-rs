@@ -60,9 +60,7 @@ use crate::{Disposition, FragmentedStructure, StructureError, WholeBoxReader};
 /// # Examples
 ///
 /// ```
-/// use isobmff::TrackExtendsBox;
-/// use isobmff::fragmented_movie::{FragmentedReader, FragmentedWriter};
-/// use isobmff_sample::Sample;
+/// use isobmff::{FragmentedReader, FragmentedWriter, Sample, TrackExtendsBox};
 /// # use isobmff_test_support::{file_type, fragmented_movie};
 /// // A file of one fragment carrying two samples of track 1
 /// let mut writer = FragmentedWriter::new();
@@ -416,13 +414,11 @@ mod tests {
 
     use isobmff_boxes::{FileTypeBox, MovieBox, TrackExtendsBox};
     use isobmff_core::{BoxDefinition, BoxType};
-    use isobmff_sample::Sample;
-    use isobmff_sample::SampleReader;
+    use isobmff_sample::{Sample, SampleReader};
     use isobmff_test_support::{file_type, fragmented_movie, framed, movie_fragment, written};
 
     use super::{FragmentedReader, StructureError};
-    use crate::StructureErrorKind;
-    use crate::fragmented_movie::FragmentedWriter;
+    use crate::{FragmentedWriter, StructureErrorKind};
 
     /// Movie of one track continued in fragments, whose defaults a `trex` states
     fn movie() -> MovieBox {

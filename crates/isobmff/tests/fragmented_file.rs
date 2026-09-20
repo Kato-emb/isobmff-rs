@@ -1,4 +1,4 @@
-//! The samples of a fragmented file laid out by hand, read back through its layout
+//! The samples of a fragmented file laid out by hand, read back through its structure
 
 // Why not inside `mod tests`: an inline `mod` adds its own name as a directory
 // segment, so a nested one looks for `tests/tests/helpers/reading.rs`. The
@@ -95,8 +95,7 @@ mod tests {
         MEDIA_DATA
             .chunks(SAMPLE_LEN)
             .map(|data| {
-                let sample =
-                    Sample::new(1, decode_time, SAMPLE_DURATION, None, 0, 1, data.to_vec());
+                let sample = Sample::new(1, decode_time, SAMPLE_DURATION, 0, 0, 1, data.to_vec());
                 decode_time = decode_time.saturating_add(u64::from(SAMPLE_DURATION));
 
                 sample

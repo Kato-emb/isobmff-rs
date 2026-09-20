@@ -9,49 +9,66 @@
 //!
 //! # The layers a file is read through
 //!
-//! Four layers stand between a file and the samples it carries. Three of them
-//! are this crate's, each holding one clause of the specification; the fourth is
-//! the reading and writing itself, which holds none and stays with the caller.
+//! Seven layers stand between a file and the samples it carries, each one
+//! machine, joined only by the values that pass between them: a box event, a
+//! typed box, an extent, a sample, a disposition. No layer holds another's
+//! machine. Listed by how far each stands from the layout of a file:
 //!
-//! * **The boxes.** A file is a sequence of objects, called boxes (§4.2), and
-//!   framing that sequence is the work of [`BoxReader`] and [`BoxWriter`], which
-//!   `isobmff-sequence` holds. They read no box into a value: which boxes matter
-//!   is not theirs to say.
-//! * **The layout.** [`FragmentedReader`] and [`FragmentedWriter`] hold the
-//!   layout of a fragmented movie file (§8.8, Annex A.8) — the brands, the
-//!   movie, then one movie fragment after another with the media data beside it.
-//!   Knowing the layout is what settles which boxes are read into values, how
-//!   much payload may be gathered for one, and the order they come in.
-//! * **The samples.** [`SampleReader`] resolves where every sample of a movie
-//!   fragment lies and what is true of it (§8.8.7, §8.8.8, §8.8.12), and
-//!   [`SampleWriter`] lays samples out as the `moof` and `mdat` of one fragment.
-//!   Both are scoped to a fragment and carry no notion of a file, so the same
-//!   pair serves a media segment as it serves a file.
-//! * **The I/O.** Where the bytes come from and go to is the caller's: input is
-//!   handed over and output is taken, so a `File`, a socket, or a buffer already
-//!   in memory drives the three layers above the same way.
+//! 1. **Framing.** A file is a sequence of objects, called boxes (§4.2), and
+//!    framing that sequence is the work of [`BoxReader`] and [`BoxWriter`],
+//!    which `isobmff-sequence` holds. They read no box into a value: which
+//!    boxes matter is not theirs to say.
+//! 2. **Box values.** The events of one box gathered whole and read into its
+//!    value, bounded by a limit on what the box may declare. A module of this
+//!    crate, where a box event and [`BoxDecode`] first meet.
+//! 3. **Sample resolution.** Where every sample of a presentation lies and what
+//!    is true of it, resolved out of the boxes that declare it into a
+//!    [`SampleExtent`]: the sample tables of a movie (§8.7) through
+//!    [`sample_table::sample_extents`], or a movie fragment against the movie
+//!    it continues (§8.8) through [`movie_fragment::sample_extents`]. The
+//!    writing side is the mirror: [`MovieFragmentWriter`] lays samples out as
+//!    a `moof` and the media data beside it, and [`SampleTableWriter`] as the
+//!    sample tables of a movie. `isobmff-sample` holds this layer and the next.
+//! 4. **Sample gathering.** [`SampleReader`] holds the extents it is handed and
+//!    fills them out of the bytes that arrive, each piece with the offset it
+//!    starts at; a [`Sample`] comes out once its bytes have, and the extent it
+//!    still lacks is named for a caller that can seek to fetch it. Bytes no
+//!    extent names are dropped.
+//! 5. **Structure.** The order of the top-level boxes of one kind of file, and
+//!    what is to be done with each: read into a value, offered to the samples
+//!    as media data, or passed over. The fragmented movie file of Annex A.8 —
+//!    the brands, the movie, then one movie fragment after another with the
+//!    media data beside it — is the one structure this crate holds so far. It
+//!    is the only layer that knows the layout of a file, and the order a file
+//!    breaks is its failure.
+//! 6. **Stack.** [`FragmentedReader`] and [`FragmentedWriter`] wire layers 1
+//!    to 5 into one machine per structure and direction. A stack holds no rule
+//!    and no failure of its own: it adds the offset a caller hands over to the
+//!    extents the framing reports, and passes every value between the layers,
+//!    so a caller hands over bytes and takes samples, or hands over samples and
+//!    takes bytes, and never sees one.
+//! 7. **The I/O.** Where the bytes come from and go to is the caller's: input
+//!    is handed over with the offset it lies at, output is taken, and what the
+//!    reader says it still lacks is fetched or not, so a `File`, a socket, or a
+//!    buffer already in memory drives the six layers above the same way.
 //!
 //! A caller that holds a whole presentation in memory needs none of the layers:
 //! [`boxes`] frames it, and the samples read from there just the same.
 //!
-//! Where a box lay is reported by the box layer as an extent counting from the
-//! first byte handed over, and the sample layer resolves the offsets a fragment
-//! declares against it. The layout layer passes them between the two itself, so
-//! a caller of it hands over bytes and takes samples and never sees one.
-//!
 //! # Everything in one place
 //!
 //! The crates this one is built on are re-exported whole, so a caller reaching
-//! for the box layer or the traits beneath it names `isobmff` alone:
-//! [`isobmff_core`] for the framing and the field codecs, [`isobmff_boxes`] for
-//! the catalog of boxes. Their names are re-exported as they stand, so
-//! documentation written against either crate reads against this one.
+//! for any layer names `isobmff` alone: [`isobmff_core`] for the framing and
+//! the field codecs, [`isobmff_boxes`] for the catalog of boxes,
+//! [`isobmff_sample`] for the sample layers. Their names are re-exported as
+//! they stand, so documentation written against any of them reads against this
+//! one.
 //!
 //! The names that could not stand are [`Error`] and [`ErrorKind`], which
 //! [`isobmff_core`] holds: the failures of the framing are re-exported as
-//! [`SequenceError`] and [`SequenceErrorKind`], and the failures of the two
-//! layers named here are [`FileError`] and [`SampleError`], named apart at the
-//! source rather than shadowed.
+//! [`SequenceError`] and [`SequenceErrorKind`], and the failures of the sample
+//! layers are [`SampleError`] and of the layers this crate holds
+//! [`StructureError`], both named apart at the source rather than shadowed.
 //!
 //! The sample entries other specifications define over ISO/IEC 14496-12 sit in
 //! a module per specification — [`avc`] for ISO/IEC 14496-15, [`mp4`] for
@@ -61,35 +78,23 @@
 //!
 //! # `no_std`
 //!
-//! The crate is `no_std` but needs `alloc`: a sample owns the bytes it carries,
-//! the claims of a fragment are held until the data that meets them arrives, and
-//! the samples of a fragment being written are held until it is closed.
+//! The crate is `no_std` but needs `alloc`: a box read into a value is gathered
+//! whole, a sample owns the bytes it carries, the extents of a fragment are held
+//! until the data that meets them arrives, and the samples of a fragment being
+//! written are held until it is closed.
 
 #![no_std]
 
 extern crate alloc;
 
 mod disposition;
-mod error;
-mod file_error;
-pub mod fragmented_movie;
-mod fragmented_reader;
+mod fragmented_movie;
 mod fragmented_structure;
-mod fragmented_writer;
-mod reader;
-mod sample;
 mod structure_error;
 mod whole_box;
-mod writer;
 
-pub use error::{SampleError, SampleErrorKind};
-pub use file_error::{FileError, FileErrorKind};
-pub use fragmented_reader::FragmentedReader;
-pub use fragmented_writer::FragmentedWriter;
-pub use reader::SampleReader;
-pub use sample::Sample;
+pub use fragmented_movie::{FragmentedReader, FragmentedWriter};
 pub use structure_error::{StructureError, StructureErrorKind};
-pub use writer::SampleWriter;
 
 pub(crate) use disposition::Disposition;
 pub(crate) use fragmented_structure::FragmentedStructure;
@@ -97,6 +102,7 @@ pub(crate) use whole_box::{WholeBoxReader, whole_box_header, whole_payload};
 
 pub use isobmff_boxes::*;
 pub use isobmff_core::*;
+pub use isobmff_sample::*;
 pub use isobmff_sequence::{
     BoxEvent, BoxReader, BoxWriter, Error as SequenceError, ErrorKind as SequenceErrorKind,
     EventBytes,

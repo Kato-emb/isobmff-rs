@@ -43,6 +43,9 @@ const MAX_ROWS: usize = 8;
 /// Bytes the header of a movie fragment takes
 const HEADER_LEN: u64 = 8;
 
+/// The `stsd` entry every sample of a run is described by, the one entry the movie carries
+const SAMPLE_DESCRIPTION_INDEX: u32 = 1;
+
 /// Input of one run: the movie, the fragments continuing it, and the media data
 #[derive(Arbitrary, Debug)]
 pub struct Input<'bytes> {
@@ -66,7 +69,6 @@ pub struct Input<'bytes> {
 /// Defaults the `trex` of one track states for the fragments that follow
 #[derive(Arbitrary, Debug)]
 pub struct TrackDefaults {
-    sample_description_index: u32,
     sample_duration: u16,
     sample_size: u8,
     sample_flags: u32,
@@ -92,7 +94,8 @@ pub struct TrackFragment {
     /// Whether the fragment declares an empty duration, and so carries no run
     duration_is_empty: bool,
     base_media_decode_time: Option<u64>,
-    sample_description_index: Option<u32>,
+    /// Whether the fragment states the `stsd` entry itself rather than leaving it to the `trex`
+    states_sample_description_index: bool,
     stated_at: StatedAt,
     runs: Vec<TrackRun>,
 }
@@ -190,7 +193,7 @@ pub fn lay_out(input: &Input<'_>) -> Option<LaidOut> {
         .map(|(position, defaults)| {
             TrackExtendsBox::new(
                 track_id_of(position),
-                defaults.sample_description_index,
+                SAMPLE_DESCRIPTION_INDEX,
                 u32::from(defaults.sample_duration),
                 u32::from(defaults.sample_size),
                 defaults.sample_flags,
@@ -254,7 +257,9 @@ pub fn lay_out(input: &Input<'_>) -> Option<LaidOut> {
                 flags,
                 track_id,
                 base_data_offset,
-                track_fragment.sample_description_index,
+                track_fragment
+                    .states_sample_description_index
+                    .then_some(SAMPLE_DESCRIPTION_INDEX),
                 states_defaults.then(|| first_row.map_or(0, |row| u32::from(row.duration))),
                 states_defaults.then(|| first_row.map_or(0, |row| u32::from(row.size))),
                 states_defaults.then(|| first_row.map_or(0, |row| row.flags)),

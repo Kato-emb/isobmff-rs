@@ -11,7 +11,7 @@ use crate::{FragmentedStructure, StructureError, whole_box_header, whole_payload
 
 /// Lays a fragmented movie file down, taking the samples as they come
 ///
-/// The mirror of [`FragmentedReader`](crate::fragmented_movie::FragmentedReader):
+/// The mirror of [`FragmentedReader`](crate::FragmentedReader):
 /// it wires the layers that write a fragmented movie file of ISO/IEC 14496-12
 /// Annex A.8 — the structure that holds the order of the top-level boxes, the
 /// writing of each box whole, the laying out of the samples of a fragment as
@@ -51,9 +51,7 @@ use crate::{FragmentedStructure, StructureError, whole_box_header, whole_payload
 /// # Examples
 ///
 /// ```
-/// use isobmff::TrackExtendsBox;
-/// use isobmff::fragmented_movie::FragmentedWriter;
-/// use isobmff_sample::Sample;
+/// use isobmff::{FragmentedWriter, Sample, TrackExtendsBox};
 /// # use isobmff_test_support::{file_type, fragmented_movie};
 /// // A file opening with its brands and the movie its fragments continue
 /// let mut writer = FragmentedWriter::new();

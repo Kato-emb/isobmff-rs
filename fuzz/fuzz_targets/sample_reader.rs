@@ -1,38 +1,48 @@
-//! Reading properties of [`SampleReader`]
+//! Reading properties of [`sample_extents`] feeding [`SampleReader`]
 //!
 //! One run lays out a movie, the fragments that continue it, and the media data
-//! their samples claim, and checks seven properties of the same input:
+//! their samples claim, resolves each fragment against the movie and hands the
+//! extents and the media data to one reader, and checks seven properties of the
+//! same input:
 //!
-//! 1. no call panics, and a failure is reported again by every call after it
+//! 1. no call panics, and a failure of the reader is reported again by every
+//!    call after it
 //! 2. how the media data is cut into the parts it arrives in does not change the
-//!    samples read, and neither does handing every part over twice
-//! 3. handing the parts over in reverse reads a prefix of what handing them over
-//!    in order reads: a sample fills from its start, so bytes arriving before the
-//!    ones they follow are passed over
+//!    samples read, and neither does handing every part over twice; where every
+//!    fragment lies as the movie has it, the cut does not change their order
+//!    either, the extents arriving in the order of their bytes
+//! 3. handing the parts over in reverse reads samples among those handing them
+//!    over in order reads: a sample fills from its start, so bytes arriving
+//!    before the ones they follow are passed over
 //! 4. every sample read belongs to a track the movie declares, and no more
 //!    samples are read than the fragments declared rows for
 //! 5. where every fragment lies as the movie has it — anchored at the fragment or
 //!    at the data before it, every run following the one before it — and the media
 //!    data meets every claim, no sample is left short of its data, and the samples
 //!    read are the samples declared, each carrying the bytes it was declared over
-//! 6. where no fragment states a decode time of its own and none declares an
-//!    empty duration, the samples of one track follow one another by their
-//!    durations, the first of them at zero
+//! 6. where every fragment lies as the movie has it, no fragment states a decode
+//!    time of its own and none declares an empty duration, the samples of one
+//!    track follow one another by their durations, the first of them at zero
 //! 7. once the samples are declared over nothing more is taken, and the samples
 //!    completed before that are still handed over
 //!
 //! What a fragment states about its samples is checked against what it declared,
-//! never against the inheritance the reader resolves it through — the input states
-//! each property in one place, which [`presentation`] lays out. That the row of a
-//! run stands in front of the `tfhd` and the `tfhd` in front of the `trex`
-//! (§8.8.7, §8.8.8) is the subject of the unit tests, which state the layers apart.
+//! never against the inheritance the resolver settles it through — the input
+//! states each property in one place, which [`presentation`] lays out. That the
+//! row of a run stands in front of the `tfhd` and the `tfhd` in front of the
+//! `trex` (§8.8.7, §8.8.8) is the subject of the unit tests, which state the
+//! layers apart.
 
 #![no_main]
 
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-use isobmff::{MovieBox, MovieFragmentBox, Sample, SampleError, SampleErrorKind, SampleReader};
+use isobmff::movie_fragment::sample_extents;
+use isobmff::{
+    MovieBox, MovieFragmentBox, Sample, SampleError, SampleErrorKind, SampleReader,
+    TrackDecodeTimes,
+};
 use libfuzzer_sys::fuzz_target;
 
 #[path = "sample_reader/presentation.rs"]
@@ -63,11 +73,19 @@ enum Step<'data> {
     MediaData(Range<u64>, &'data [u8]),
 }
 
-/// Everything one pass of the reader over a presentation reported
+/// Everything one pass over a presentation reported
 #[derive(PartialEq, Debug)]
 struct Reading {
     samples: Vec<Sample>,
     failure: Option<SampleError>,
+}
+
+/// What a step of the presentation failed at
+enum Failed {
+    /// The resolver refused the fragment, and the reader stands as it stood
+    Resolving(SampleError),
+    /// The reader refused, and reports the failure again from here on
+    Gathering(SampleError),
 }
 
 fuzz_target!(|input: Input<'_>| {
@@ -83,29 +101,33 @@ fuzz_target!(|input: Input<'_>| {
         )
     };
 
-    let Some(in_order) = read_with(input.cut_lengths, Arrival::InOrder) else {
-        return;
-    };
-    let Some(twice) = read_with(input.cut_lengths, Arrival::Twice) else {
-        return;
-    };
-    let Some(cut_smaller) = read_with(SMALLEST_PARTS, Arrival::InOrder) else {
-        return;
-    };
-    let Some(reversed) = read_with(input.cut_lengths, Arrival::Reversed) else {
-        return;
-    };
+    let in_order = read_with(input.cut_lengths, Arrival::InOrder);
+    let twice = read_with(input.cut_lengths, Arrival::Twice);
+    let cut_smaller = read_with(SMALLEST_PARTS, Arrival::InOrder);
+    let reversed = read_with(input.cut_lengths, Arrival::Reversed);
 
     assert_eq!(
         in_order, twice,
         "handing every part of the media data over twice changed the samples read"
     );
-    assert_eq!(
-        in_order, cut_smaller,
-        "how the media data was cut changed the samples read"
-    );
+    if laid_out.met_as_declared {
+        assert_eq!(
+            in_order, cut_smaller,
+            "how the media data was cut changed the samples read, or their order"
+        );
+    } else {
+        assert_eq!(
+            in_order.failure, cut_smaller.failure,
+            "how the media data was cut changed the failure reported"
+        );
+        assert_eq!(
+            sorted(&in_order.samples),
+            sorted(&cut_smaller.samples),
+            "how the media data was cut changed the samples read"
+        );
+    }
     assert!(
-        in_order.samples.starts_with(&reversed.samples),
+        is_among(&reversed.samples, &in_order.samples),
         "media data arriving in reverse read samples the whole of it does not"
     );
 
@@ -136,7 +158,7 @@ fuzz_target!(|input: Input<'_>| {
         }
     }
 
-    if follows_by_durations(&input) {
+    if laid_out.met_as_declared && follows_by_durations(&input) {
         samples_follow_by_their_durations(&in_order.samples);
     }
 });
@@ -188,37 +210,48 @@ fn steps<'data>(
 }
 
 /// Hands the steps of a presentation to a reader and gathers what it reports
-///
-/// Reports `None` where the movie continues in no fragments at all, which leaves
-/// the reader nothing to build from.
-fn read(movie: &MovieBox, sample_size_limit: u64, steps: Vec<Step<'_>>) -> Option<Reading> {
-    let mut reader = SampleReader::with_sample_size_limit(movie, sample_size_limit).ok()?;
+fn read(movie: &MovieBox, sample_size_limit: u64, steps: Vec<Step<'_>>) -> Reading {
+    let mut reader = SampleReader::with_sample_size_limit(sample_size_limit);
+    let mut decode_times = TrackDecodeTimes::new();
     let mut samples = Vec::new();
     let mut failure = None;
 
     for step in steps {
         let outcome = match step {
-            Step::Fragment(movie_fragment, extent) => {
-                reader.handle_movie_fragment(movie_fragment, extent)
-            }
-            Step::MediaData(extent, data) => reader.handle_media_data(data, extent),
+            Step::Fragment(movie_fragment, extent) => declare(
+                &movie_fragment,
+                movie,
+                extent.start,
+                &mut decode_times,
+                &mut reader,
+            ),
+            Step::MediaData(extent, data) => reader
+                .handle_data(extent.start, data)
+                .map_err(Failed::Gathering),
         };
 
         drain(&mut reader, &mut samples);
 
-        if let Err(reported) = outcome {
-            assert_eq!(
-                reader.handle_media_data(&[], 0..0),
-                Err(reported),
-                "a failed reader took media data instead of reporting its failure again"
-            );
-            assert_eq!(
-                reader.finish(),
-                Err(reported),
-                "a failed reader reported another failure when the samples were declared over"
-            );
-            failure = Some(reported);
-            break;
+        match outcome {
+            Ok(()) => {}
+            Err(Failed::Resolving(reported)) => {
+                failure = Some(reported);
+                break;
+            }
+            Err(Failed::Gathering(reported)) => {
+                assert_eq!(
+                    reader.handle_data(0, &[]),
+                    Err(reported),
+                    "a failed reader took media data instead of reporting its failure again"
+                );
+                assert_eq!(
+                    reader.finish(),
+                    Err(reported),
+                    "a failed reader reported another failure when the samples were declared over"
+                );
+                failure = Some(reported);
+                break;
+            }
         }
     }
 
@@ -229,9 +262,7 @@ fn read(movie: &MovieBox, sample_size_limit: u64, steps: Vec<Step<'_>>) -> Optio
 
         match over {
             Ok(()) => assert_eq!(
-                reader
-                    .handle_media_data(&[], 0..0)
-                    .map_err(SampleError::kind),
+                reader.handle_data(0, &[]).map_err(SampleError::kind),
                 Err(SampleErrorKind::AlreadyFinished),
                 "the reader took media data after the samples were declared over"
             ),
@@ -239,7 +270,27 @@ fn read(movie: &MovieBox, sample_size_limit: u64, steps: Vec<Step<'_>>) -> Optio
         }
     }
 
-    Some(Reading { samples, failure })
+    Reading { samples, failure }
+}
+
+/// Hands the reader the extents `movie_fragment` declares, resolved against `movie`
+fn declare(
+    movie_fragment: &MovieFragmentBox,
+    movie: &MovieBox,
+    moof_start: u64,
+    decode_times: &mut TrackDecodeTimes,
+    reader: &mut SampleReader,
+) -> Result<(), Failed> {
+    let extents = sample_extents(movie_fragment, movie, moof_start, decode_times)
+        .map_err(Failed::Resolving)?;
+
+    for extent in extents {
+        reader
+            .handle_sample_extent(extent.map_err(Failed::Resolving)?)
+            .map_err(Failed::Gathering)?;
+    }
+
+    Ok(())
 }
 
 /// Takes every sample the reader has completed
@@ -255,6 +306,30 @@ fn declares(movie: &MovieBox, track_id: u32) -> bool {
         .trak()
         .iter()
         .any(|trak| trak.tkhd().track_id() == track_id)
+}
+
+/// The samples in one order whatever order they were read in
+fn sorted(samples: &[Sample]) -> Vec<Sample> {
+    let mut sorted = samples.to_vec();
+
+    sorted.sort_by(|left, right| {
+        (left.track_id(), left.decode_time(), left.data())
+            .cmp(&(right.track_id(), right.decode_time(), right.data()))
+    });
+
+    sorted
+}
+
+/// Returns whether every one of `read` is among `whole`, each one taken once
+fn is_among(read: &[Sample], whole: &[Sample]) -> bool {
+    let mut left = whole.to_vec();
+
+    read.iter().all(|sample| {
+        left.iter()
+            .position(|candidate| candidate == sample)
+            .map(|position| left.swap_remove(position))
+            .is_some()
+    })
 }
 
 /// The samples read, by the track each belongs to and the bytes it carries
