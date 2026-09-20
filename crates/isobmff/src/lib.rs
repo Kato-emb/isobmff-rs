@@ -41,9 +41,9 @@
 //!    fragmented movie file of Annex A.8 — the brands, the movie, then one
 //!    movie fragment after another with the media data beside it — and the
 //!    non-fragmented movie file of §8.2.1 — the brands, the one movie, and
-//!    the media data it declares, lying before the movie or after it. It is
-//!    the only layer that knows how a file is put together, and the order a
-//!    file breaks is its failure.
+//!    the media data it declares, lying before the movie or after it. The
+//!    structure is the only layer that knows how a file is put together, and
+//!    the order a file breaks is its failure.
 //! 6. **Stack.** [`FragmentedReader`], [`FragmentedWriter`] and
 //!    [`NonFragmentedReader`] wire layers 1 to 5 into one machine per
 //!    structure and direction. A stack holds no rule and no failure kind of

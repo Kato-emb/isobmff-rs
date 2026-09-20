@@ -1,4 +1,4 @@
-//! The samples of a non-fragmented file laid out by hand, read back through its structure with the movie before and after the media data
+//! The samples of a non-fragmented file, read back through its structure with the movie before and after the media data
 
 #[cfg(test)]
 mod tests {
@@ -56,7 +56,7 @@ mod tests {
         samples
     }
 
-    /// The samples `file` carries, read off it in order `cut_length` bytes at a time, and the wants met off it afterwards
+    /// The samples `file` carries, read off it `cut_length` bytes at a time and then off the bytes it wants fetched
     fn samples_of(file: &[u8], cut_length: usize) -> Vec<Sample> {
         let mut reader = NonFragmentedReader::new();
         let mut samples = handed_over_in_order(&mut reader, file, cut_length);

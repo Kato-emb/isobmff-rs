@@ -28,9 +28,9 @@ use crate::{Disposition, StructureError};
 ///   [`DuplicateBox`](crate::StructureErrorKind::DuplicateBox), and a file
 ///   declared over without one is
 ///   [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox).
-/// * The `mdat` comes anywhere after the `ftyp`, as many times as it does.
+/// * The `mdat` comes anywhere past the `ftyp`, any number of times (§8.1.1).
 /// * Every other box is passed over, wherever it lies — a `moof` among them,
-///   which continues a movie this structure has no fragments of.
+///   whose samples are not read.
 /// * An `Err` leaves the structure failed for good,
 ///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished) aside:
 ///   every later call reports that same failure again.

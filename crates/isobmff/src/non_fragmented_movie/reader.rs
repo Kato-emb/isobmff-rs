@@ -33,7 +33,8 @@ use crate::{Disposition, StructureError, WholeBoxReader};
 /// * The boxes the structure reads into values are there to read once they
 ///   have arrived: [`file_type`](Self::file_type) and [`movie`](Self::movie).
 ///   The media data is offered to the samples, and every other box is passed
-///   over.
+///   over — a `moof` among them: the samples a fragment carries are not read
+///   here, but by [`FragmentedReader`](crate::FragmentedReader).
 /// * The order the boxes come in, and what a file that breaks it is reported
 ///   as, are the structure's: an `ftyp` after another box is
 ///   [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder), a second
@@ -374,10 +375,11 @@ impl NonFragmentedReader {
                 self.payload_limit,
             )?)),
             Disposition::MediaData => Some(Open::MediaData),
+            Disposition::Skip => None,
             // Why not unreachable: the structure of a non-fragmented movie file
             // never answers with a fragment, and `None` stands in place of a
             // panic the lints forbid.
-            Disposition::MovieFragment | Disposition::Skip => None,
+            Disposition::MovieFragment => None,
         };
 
         Ok(())
@@ -513,7 +515,7 @@ mod tests {
     }
 
     #[test]
-    fn a_movie_declared_over_with_its_samples_short_of_their_bytes_is_rejected() {
+    fn a_file_declared_over_with_a_sample_short_of_its_bytes_is_rejected() {
         let file = non_fragmented_file(&[&[b"SAMP"]], false);
         let mut reader = NonFragmentedReader::new();
 
