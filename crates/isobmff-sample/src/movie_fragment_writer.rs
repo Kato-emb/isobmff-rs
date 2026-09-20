@@ -41,7 +41,7 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///   resolves the samples of a fragment in the order it declares them, so
 ///   samples of two tracks handed over interleaved come back grouped by track.
 /// * Offsets are anchored at the fragment itself
-///   ([`default-base-is-moof`](isobmff_boxes::TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF),
+///   ([`default-base-is-moof`](isobmff_boxes::TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF),
 ///   ISO/IEC 14496-12 §8.8.7.1), and every `trun` states its own. They are
 ///   counted over the `moof` and the header of the `mdat`, so the two are laid
 ///   down as they come out: the media data of a fragment directly after the
@@ -56,7 +56,8 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// * A run whose samples all compose when they are decoded states no
 ///   composition time offset; one holding any other offset states one for
 ///   every row, and is cut where the two versions of a `trun` would disagree
-///   on how to write them (§8.8.8).
+///   on how to write them (§8.8.8), as
+///   [`TrackRunBuilder`](isobmff_boxes::TrackRunBuilder) has it.
 ///
 /// # Contract
 ///
@@ -192,6 +193,9 @@ impl MovieFragmentWriter {
     /// * [`SampleSizeOutOfRange`](crate::SampleErrorKind::SampleSizeOutOfRange):
     ///   the sample is longer than the 32 bits a `trun` row states its length
     ///   in.
+    /// * [`CompositionTimeOffsetOutOfRange`](crate::SampleErrorKind::CompositionTimeOffsetOutOfRange):
+    ///   the sample states a composition time offset neither version of a
+    ///   `trun` writes.
     /// * [`DecodeTimeOverflow`](crate::SampleErrorKind::DecodeTimeOverflow):
     ///   the decode times of its track run past what 64 bits carry.
     /// * [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished): the
@@ -221,9 +225,6 @@ impl MovieFragmentWriter {
     ///   fragment was open to close.
     /// * [`DataOffsetOutOfRange`](crate::SampleErrorKind::DataOffsetOutOfRange):
     ///   a sample lies further into the fragment than a `trun` reaches.
-    /// * [`CompositionTimeOffsetOutOfRange`](crate::SampleErrorKind::CompositionTimeOffsetOutOfRange):
-    ///   a sample states a composition time offset neither version of a `trun`
-    ///   writes.
     /// * [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports

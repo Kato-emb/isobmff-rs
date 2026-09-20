@@ -13,7 +13,8 @@ mod tests {
     use isobmff::{
         BoxDefinition, BoxEncode, BoxHeader, MediaDataBox, MovieFragmentBox,
         MovieFragmentHeaderBox, Sample, TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox,
-        TrackFragmentBox, TrackFragmentHeaderBox, TrackRunBox, TrackRunSample,
+        TrackFragmentBox, TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox,
+        TrackRunSample,
     };
     use isobmff_test_support::{file_type, fragmented_movie, written};
 
@@ -39,21 +40,19 @@ mod tests {
             .collect();
         let track_fragment = TrackFragmentBox::new(
             TrackFragmentHeaderBox::new(
-                TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                 1,
                 None,
                 None,
                 None,
                 None,
                 None,
-            )
-            .unwrap(),
+            ),
             Some(TrackFragmentBaseMediaDecodeTimeBox::new(
                 BASE_MEDIA_DECODE_TIME,
             )),
             vec![TrackRunBox::new(Some(data_offset), None, samples).unwrap()],
-        )
-        .unwrap();
+        );
 
         MovieFragmentBox::new(MovieFragmentHeaderBox::new(1), vec![track_fragment])
     }

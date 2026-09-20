@@ -95,7 +95,8 @@ enum State {
 /// ```
 /// use isobmff::{
 ///     MovieFragmentBox, MovieFragmentHeaderBox, SampleReader, TrackExtendsBox,
-///     TrackFragmentBox, TrackFragmentHeaderBox, TrackRunBox, TrackRunSample,
+///     TrackFragmentBox, TrackFragmentHeaderFlags, TrackFragmentHeaderBox, TrackRunBox,
+///     TrackRunSample,
 /// };
 /// # use isobmff_test_support::fragmented_movie;
 /// // A movie whose one track is fragmented, its samples lasting 1024 units each
@@ -106,15 +107,14 @@ enum State {
 /// // 96 bytes into it — past the fragment and the header of the `mdat` beside it
 /// let track_fragment = TrackFragmentBox::new(
 ///     TrackFragmentHeaderBox::new(
-///         TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+///         TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
 ///         1,
 ///         None,
 ///         None,
 ///         None,
 ///         None,
 ///         None,
-///     )
-///     .unwrap(),
+///     ),
 ///     None,
 ///     vec![
 ///         TrackRunBox::new(
@@ -127,8 +127,7 @@ enum State {
 ///         )
 ///         .unwrap(),
 ///     ],
-/// )
-/// .unwrap();
+/// );
 /// let movie_fragment =
 ///     MovieFragmentBox::new(MovieFragmentHeaderBox::new(1), vec![track_fragment]);
 ///
@@ -346,9 +345,9 @@ mod tests {
 
     use isobmff_boxes::{
         MovieExtendsBox, MovieFragmentHeaderBox, MovieHeaderBox, TrackExtendsBox, TrackFragmentBox,
-        TrackFragmentHeaderBox, TrackRunBox, TrackRunSample,
+        TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
     };
-    use isobmff_core::{BoxDecode as _, BoxEncode as _, FullBoxFlags, Mp4EpochSeconds};
+    use isobmff_core::{BoxDecode as _, BoxEncode as _, Mp4EpochSeconds};
     use isobmff_test_support::{track, written};
 
     use super::{MovieBox, MovieFragmentBox, Sample, SampleError, SampleReader};
@@ -390,7 +389,7 @@ mod tests {
 
     /// Fragment header of one track, carrying the flags and defaults given
     pub(super) fn track_fragment_header(
-        flags: FullBoxFlags,
+        flags: TrackFragmentHeaderFlags,
         track_id: u32,
         base_data_offset: Option<u64>,
         default_sample_duration: Option<u32>,
@@ -405,7 +404,6 @@ mod tests {
             default_sample_size,
             None,
         )
-        .unwrap()
     }
 
     /// Run of samples that take the size and duration of their defaults
@@ -421,7 +419,7 @@ mod tests {
     pub(super) fn track_fragment(trun: Vec<TrackRunBox>) -> TrackFragmentBox {
         TrackFragmentBox::new(
             track_fragment_header(
-                TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                 1,
                 None,
                 None,
@@ -430,7 +428,6 @@ mod tests {
             None,
             trun,
         )
-        .unwrap()
     }
 
     /// Movie fragment carrying the given track fragments
@@ -517,7 +514,7 @@ mod tests {
 
         let oversized = TrackFragmentBox::new(
             track_fragment_header(
-                TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                 1,
                 None,
                 None,
@@ -525,8 +522,7 @@ mod tests {
             ),
             None,
             vec![run(Some(200), 1)],
-        )
-        .unwrap();
+        );
         reader
             .handle_movie_fragment(movie_fragment(vec![oversized]), 104..204)
             .unwrap_err();

@@ -1,5 +1,9 @@
 //! [`TrackRunBox`] (`trun`), ISO/IEC 14496-12 §8.8.8
 
+mod builder;
+
+pub use builder::{StatedTrackRunSample, TrackRunBuilder};
+
 use alloc::vec::Vec;
 
 use isobmff_core::{
@@ -49,6 +53,35 @@ const COMPOSITION_TIME_OFFSET_MAXIMUM: i64 = u32::MAX as i64;
 /// Lowest composition time offset a row carries, which version 1 writes signed
 const COMPOSITION_TIME_OFFSET_MINIMUM: i64 = i32::MIN as i64;
 
+/// Composition time offset one of the two versions of a `trun` writes
+///
+/// Version 0 of the box writes the offset unsigned in 32 bits and version 1
+/// signed (ISO/IEC 14496-12 §8.8.8), so a value in
+/// `-2_147_483_648..=4_294_967_295` is one a row can carry, and this holds
+/// such a value alone.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct CompositionTimeOffset(i64);
+
+impl CompositionTimeOffset {
+    /// Creates the offset from its value
+    ///
+    /// Returns `None` when `offset` lies outside what either version writes.
+    #[must_use]
+    pub const fn new(offset: i64) -> Option<Self> {
+        if offset < COMPOSITION_TIME_OFFSET_MINIMUM || offset > COMPOSITION_TIME_OFFSET_MAXIMUM {
+            return None;
+        }
+
+        Some(Self(offset))
+    }
+
+    /// Returns the value of the offset
+    #[must_use]
+    pub const fn get(self) -> i64 {
+        self.0
+    }
+}
+
 /// One row of the table a track run documents, holding what it states per sample
 ///
 /// Which fields a row carries is stated once for the whole run, so every row of
@@ -81,8 +114,9 @@ impl TrackRunSample {
         sample_flags: Option<u32>,
         sample_composition_time_offset: Option<i64>,
     ) -> Option<Self> {
-        let carried = COMPOSITION_TIME_OFFSET_MINIMUM..=COMPOSITION_TIME_OFFSET_MAXIMUM;
-        if sample_composition_time_offset.is_some_and(|offset| !carried.contains(&offset)) {
+        if sample_composition_time_offset
+            .is_some_and(|offset| CompositionTimeOffset::new(offset).is_none())
+        {
             return None;
         }
 
@@ -461,7 +495,7 @@ mod tests {
 
     use isobmff_core::{BoxDecode, BoxEncode, Error};
 
-    use super::{MAXIMUM_EMPTY_ROWS, TrackRunBox, TrackRunSample};
+    use super::{CompositionTimeOffset, MAXIMUM_EMPTY_ROWS, TrackRunBox, TrackRunSample};
 
     /// Row stating the size of its sample and the offset to its composition time
     fn sample(sample_size: u32, sample_composition_time_offset: i64) -> TrackRunSample {
@@ -485,6 +519,12 @@ mod tests {
         track_run.encode_payload(&mut buffer).unwrap();
 
         buffer
+    }
+
+    #[test]
+    fn an_offset_outside_what_either_version_writes_is_refused() {
+        assert_eq!(CompositionTimeOffset::new(i64::from(u32::MAX) + 1), None);
+        assert_eq!(CompositionTimeOffset::new(i64::from(i32::MIN) - 1), None);
     }
 
     #[test]

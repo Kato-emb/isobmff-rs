@@ -307,10 +307,9 @@ mod tests {
 
     use isobmff_boxes::{
         MovieFragmentBox, MovieFragmentHeaderBox, TrackExtendsBox,
-        TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox, TrackRunBox,
-        TrackRunSample,
+        TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderFlags,
+        TrackRunBox, TrackRunSample,
     };
-    use isobmff_core::FullBoxFlags;
 
     use crate::error::SampleError;
     use crate::reader::SampleReader;
@@ -327,7 +326,7 @@ mod tests {
             vec![TrackRunSample::new(Some(512), Some(2), Some(0x0100_0000), Some(-8)).unwrap()];
         let track_fragment = TrackFragmentBox::new(
             track_fragment_header(
-                TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                 1,
                 None,
                 Some(256),
@@ -335,8 +334,7 @@ mod tests {
             ),
             None,
             vec![TrackRunBox::new(Some(100), None, rows).unwrap()],
-        )
-        .unwrap();
+        );
 
         let mut reader = SampleReader::new(&one_track_movie()).unwrap();
         reader
@@ -362,7 +360,7 @@ mod tests {
     fn a_sample_takes_what_its_fragment_states_over_the_defaults_of_its_track() {
         let track_fragment = TrackFragmentBox::new(
             track_fragment_header(
-                TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                 1,
                 None,
                 Some(256),
@@ -370,8 +368,7 @@ mod tests {
             ),
             None,
             vec![run(Some(100), 2)],
-        )
-        .unwrap();
+        );
 
         let mut reader = SampleReader::new(&one_track_movie()).unwrap();
         reader
@@ -396,7 +393,7 @@ mod tests {
         ];
         let track_fragment = TrackFragmentBox::new(
             track_fragment_header(
-                TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                 1,
                 None,
                 None,
@@ -404,8 +401,7 @@ mod tests {
             ),
             None,
             vec![TrackRunBox::new(Some(100), Some(0x0200_0000), rows).unwrap()],
-        )
-        .unwrap();
+        );
 
         let mut reader = SampleReader::new(&one_track_movie()).unwrap();
         reader
@@ -462,7 +458,7 @@ mod tests {
         let stated = |base_media_decode_time| {
             TrackFragmentBox::new(
                 track_fragment_header(
-                    TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                    TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                     1,
                     None,
                     None,
@@ -473,7 +469,6 @@ mod tests {
                 )),
                 vec![run(Some(100), 1)],
             )
-            .unwrap()
         };
 
         let mut reader = SampleReader::new(&one_track_movie()).unwrap();
@@ -498,11 +493,10 @@ mod tests {
     #[test]
     fn offsets_are_anchored_at_the_base_the_fragment_states() {
         let track_fragment = TrackFragmentBox::new(
-            track_fragment_header(FullBoxFlags::ZERO, 1, Some(400), None, None),
+            track_fragment_header(TrackFragmentHeaderFlags::ZERO, 1, Some(400), None, None),
             None,
             vec![run(Some(8), 1)],
-        )
-        .unwrap();
+        );
 
         let mut reader = SampleReader::new(&one_track_movie()).unwrap();
         reader
@@ -516,11 +510,10 @@ mod tests {
     #[test]
     fn offsets_of_a_fragment_stating_no_anchor_at_all_are_anchored_at_the_movie_fragment() {
         let track_fragment = TrackFragmentBox::new(
-            track_fragment_header(FullBoxFlags::ZERO, 1, None, None, None),
+            track_fragment_header(TrackFragmentHeaderFlags::ZERO, 1, None, None, None),
             None,
             vec![run(Some(100), 1)],
-        )
-        .unwrap();
+        );
 
         let mut reader = SampleReader::new(&one_track_movie()).unwrap();
         reader
@@ -535,11 +528,10 @@ mod tests {
     fn offsets_of_a_later_track_fragment_stating_no_anchor_follow_the_data_before_it() {
         let stating_no_anchor = |track_id, data_offset| {
             TrackFragmentBox::new(
-                track_fragment_header(FullBoxFlags::ZERO, track_id, None, None, None),
+                track_fragment_header(TrackFragmentHeaderFlags::ZERO, track_id, None, None, None),
                 None,
                 vec![run(data_offset, 1)],
             )
-            .unwrap()
         };
         let two_tracks = two_track_movie();
 
@@ -601,7 +593,7 @@ mod tests {
         let mut reader = SampleReader::new(&with_a_spare).unwrap();
         let of_the_spare = TrackFragmentBox::new(
             track_fragment_header(
-                TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                 7,
                 None,
                 None,
@@ -609,8 +601,7 @@ mod tests {
             ),
             None,
             vec![run(Some(100), 1)],
-        )
-        .unwrap();
+        );
 
         assert_eq!(
             reader.handle_movie_fragment(movie_fragment(vec![of_the_spare]), 0..MOVIE_FRAGMENT_LEN),
@@ -634,7 +625,7 @@ mod tests {
         let mut reader = SampleReader::new(&one_track_movie()).unwrap();
         let of_an_unknown_track = TrackFragmentBox::new(
             track_fragment_header(
-                TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                 3,
                 None,
                 None,
@@ -642,8 +633,7 @@ mod tests {
             ),
             None,
             vec![run(Some(100), 1)],
-        )
-        .unwrap();
+        );
 
         assert_eq!(
             reader.handle_movie_fragment(
@@ -657,18 +647,10 @@ mod tests {
     #[test]
     fn an_empty_duration_moves_the_timeline_on_without_a_sample() {
         let mut reader = SampleReader::new(&one_track_movie()).unwrap();
-        let empty = TrackFragmentBox::new(
-            track_fragment_header(
-                TrackFragmentHeaderBox::DURATION_IS_EMPTY,
-                1,
-                None,
-                Some(4_096),
-                None,
-            ),
+        let empty = TrackFragmentBox::with_empty_duration(
+            track_fragment_header(TrackFragmentHeaderFlags::ZERO, 1, None, Some(4_096), None),
             None,
-            vec![],
-        )
-        .unwrap();
+        );
 
         reader
             .handle_movie_fragment(movie_fragment(vec![empty]), 0..MOVIE_FRAGMENT_LEN)
@@ -704,7 +686,7 @@ mod tests {
         let mut reader = SampleReader::new(&one_track_movie()).unwrap();
         let at_the_end_of_time = TrackFragmentBox::new(
             track_fragment_header(
-                TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                 1,
                 None,
                 Some(u32::MAX),
@@ -712,8 +694,7 @@ mod tests {
             ),
             Some(TrackFragmentBaseMediaDecodeTimeBox::new(u64::MAX)),
             vec![run(Some(100), 1)],
-        )
-        .unwrap();
+        );
 
         assert_eq!(
             reader.handle_movie_fragment(
@@ -728,11 +709,16 @@ mod tests {
     fn data_offsets_running_past_what_64_bits_carry_are_refused() {
         let mut reader = SampleReader::new(&one_track_movie()).unwrap();
         let past_the_end_of_the_file = TrackFragmentBox::new(
-            track_fragment_header(FullBoxFlags::ZERO, 1, Some(u64::MAX), None, None),
+            track_fragment_header(
+                TrackFragmentHeaderFlags::ZERO,
+                1,
+                Some(u64::MAX),
+                None,
+                None,
+            ),
             None,
             vec![run(None, 1)],
-        )
-        .unwrap();
+        );
 
         assert_eq!(
             reader.handle_movie_fragment(

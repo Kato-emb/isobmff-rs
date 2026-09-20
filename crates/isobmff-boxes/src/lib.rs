@@ -79,10 +79,12 @@ pub use stsz::{SampleSizeBox, SampleSizeEntry, SampleSizes};
 pub use stts::{TimeToSampleBox, TimeToSampleEntry};
 pub use styp::SegmentTypeBox;
 pub use tfdt::TrackFragmentBaseMediaDecodeTimeBox;
-pub use tfhd::TrackFragmentHeaderBox;
+pub use tfhd::{TrackFragmentHeaderBox, TrackFragmentHeaderFlags};
 pub use tkhd::TrackHeaderBox;
 pub use traf::TrackFragmentBox;
 pub use trak::TrackBox;
 pub use trex::TrackExtendsBox;
-pub use trun::{TrackRunBox, TrackRunSample};
+pub use trun::{
+    CompositionTimeOffset, StatedTrackRunSample, TrackRunBox, TrackRunBuilder, TrackRunSample,
+};
 pub use vmhd::VideoMediaHeaderBox;

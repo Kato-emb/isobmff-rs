@@ -218,8 +218,7 @@ impl SampleGathering {
 mod tests {
     use alloc::vec;
 
-    use isobmff_boxes::{TrackFragmentBox, TrackFragmentHeaderBox, TrackRunBox, TrackRunSample};
-    use isobmff_core::FullBoxFlags;
+    use isobmff_boxes::{TrackFragmentBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample};
 
     use crate::error::SampleError;
     use crate::reader::SampleReader;
@@ -232,11 +231,10 @@ mod tests {
     #[test]
     fn a_fragment_claiming_data_behind_what_was_read_is_refused() {
         let track_fragment = TrackFragmentBox::new(
-            track_fragment_header(FullBoxFlags::ZERO, 1, Some(0), None, None),
+            track_fragment_header(TrackFragmentHeaderFlags::ZERO, 1, Some(0), None, None),
             None,
             vec![run(Some(8), 1)],
-        )
-        .unwrap();
+        );
 
         let mut reader = SampleReader::new(&one_track_movie()).unwrap();
 
@@ -318,7 +316,7 @@ mod tests {
     fn samples_declaring_no_bytes_are_reported_before_any_media_data_arrives() {
         let track_fragment = TrackFragmentBox::new(
             track_fragment_header(
-                TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                 1,
                 None,
                 None,
@@ -326,8 +324,7 @@ mod tests {
             ),
             None,
             vec![run(Some(i32::try_from(MOVIE_FRAGMENT_LEN).unwrap()), 2)],
-        )
-        .unwrap();
+        );
 
         let mut reader = SampleReader::new(&one_track_movie()).unwrap();
         reader
@@ -368,7 +365,7 @@ mod tests {
         let of_track = |track_id, data_offset| {
             TrackFragmentBox::new(
                 track_fragment_header(
-                    TrackFragmentHeaderBox::DEFAULT_BASE_IS_MOOF,
+                    TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
                     track_id,
                     None,
                     None,
@@ -377,7 +374,6 @@ mod tests {
                 None,
                 vec![run(Some(data_offset), 1)],
             )
-            .unwrap()
         };
         let two_tracks = two_track_movie();
 
