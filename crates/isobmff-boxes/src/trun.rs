@@ -86,9 +86,7 @@ impl CompositionTimeOffset {
 ///
 /// Which fields a row carries is stated once for the whole run, so every row of
 /// one [`TrackRunBox`] carries the same ones, and a field no row carries falls
-/// back on the default the `tfhd` or the `trex` sets. The composition time
-/// offset is a [`CompositionTimeOffset`], so a row only ever carries one that
-/// a version of the box writes.
+/// back on the default the `tfhd` or the `trex` sets.
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct TrackRunSample {
@@ -458,8 +456,10 @@ impl BoxEncode for TrackRunBox {
             {
                 writer.write_u32(field)?;
             }
-            if let Some(offset) = sample.sample_composition_time_offset {
-                let offset = offset.get();
+            if let Some(offset) = sample
+                .sample_composition_time_offset
+                .map(CompositionTimeOffset::get)
+            {
                 // Why not unwrap: a `CompositionTimeOffset` lies within what the
                 // two versions carry between them and `TrackRunBox::new` refuses
                 // a run mixing offsets no one version holds, so the version
