@@ -338,8 +338,8 @@ mod tests {
     #[test]
     fn a_sample_declaring_no_bytes_waits_on_the_ones_declared_before_it() {
         let rows = vec![
-            TrackRunSample::new(None, Some(4), None, None).unwrap(),
-            TrackRunSample::new(None, Some(0), None, None).unwrap(),
+            TrackRunSample::new(None, Some(4), None, None),
+            TrackRunSample::new(None, Some(0), None, None),
         ];
         let trun =
             TrackRunBox::new(Some(i32::try_from(MOVIE_FRAGMENT_LEN).unwrap()), None, rows).unwrap();

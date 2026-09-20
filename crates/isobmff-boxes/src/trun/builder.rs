@@ -92,8 +92,8 @@ impl StatedTrackRunSample {
 /// assert_eq!(
 ///     track_run.samples(),
 ///     [
-///         TrackRunSample::new(None, Some(4), None, None).unwrap(),
-///         TrackRunSample::new(None, Some(2), None, None).unwrap(),
+///         TrackRunSample::new(None, Some(4), None, None),
+///         TrackRunSample::new(None, Some(2), None, None),
 ///     ]
 /// );
 ///
@@ -180,7 +180,7 @@ impl TrackRunBuilder {
                 sample_size: carries_size.then_some(row.sample_size),
                 sample_flags: carries_flags.then_some(row.sample_flags),
                 sample_composition_time_offset: carries_offsets
-                    .then_some(row.sample_composition_time_offset.get()),
+                    .then_some(row.sample_composition_time_offset),
             })
             .collect();
 
@@ -271,7 +271,7 @@ mod tests {
             TrackRunBox::new(
                 None,
                 None,
-                vec![TrackRunSample::new(None, None, None, None).unwrap(); 2]
+                vec![TrackRunSample::new(None, None, None, None); 2]
             )
             .unwrap()
         );
@@ -289,7 +289,7 @@ mod tests {
             TrackRunBox::new(
                 None,
                 None,
-                vec![TrackRunSample::new(Some(1_024), None, None, None).unwrap(); 2]
+                vec![TrackRunSample::new(Some(1_024), None, None, None); 2]
             )
             .unwrap()
         );
@@ -307,7 +307,7 @@ mod tests {
             TrackRunBox::new(
                 None,
                 Some(0x0200_0000),
-                vec![TrackRunSample::new(None, None, None, None).unwrap(); 2]
+                vec![TrackRunSample::new(None, None, None, None); 2]
             )
             .unwrap()
         );
@@ -326,8 +326,8 @@ mod tests {
                 None,
                 None,
                 vec![
-                    TrackRunSample::new(None, None, Some(0x0101_0000), None).unwrap(),
-                    TrackRunSample::new(None, None, Some(0x0200_0000), None).unwrap(),
+                    TrackRunSample::new(None, None, Some(0x0101_0000), None),
+                    TrackRunSample::new(None, None, Some(0x0200_0000), None),
                 ]
             )
             .unwrap()
@@ -347,8 +347,18 @@ mod tests {
                 None,
                 None,
                 vec![
-                    TrackRunSample::new(None, None, None, Some(0)).unwrap(),
-                    TrackRunSample::new(None, None, None, Some(8)).unwrap(),
+                    TrackRunSample::new(
+                        None,
+                        None,
+                        None,
+                        Some(CompositionTimeOffset::new(0).unwrap())
+                    ),
+                    TrackRunSample::new(
+                        None,
+                        None,
+                        None,
+                        Some(CompositionTimeOffset::new(8).unwrap())
+                    ),
                 ]
             )
             .unwrap()

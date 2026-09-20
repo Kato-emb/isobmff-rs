@@ -14,7 +14,7 @@
 use std::ops::Range;
 
 use isobmff::{
-    MovieBox, MovieFragmentBox, MovieFragmentHeaderBox, TrackExtendsBox,
+    CompositionTimeOffset, MovieBox, MovieFragmentBox, MovieFragmentHeaderBox, TrackExtendsBox,
     TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
     TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
 };
@@ -282,10 +282,9 @@ pub fn lay_out(input: &Input<'_>) -> Option<LaidOut> {
                         stated_by_the_row.then(|| u32::from(row.duration)),
                         stated_by_the_row.then(|| u32::from(row.size)),
                         stated_by_the_row.then_some(row.flags),
-                        track_run
-                            .states_composition_time_offset
-                            .then(|| i64::from(row.composition_time_offset)),
-                    )?;
+                        CompositionTimeOffset::new(i64::from(row.composition_time_offset))
+                            .filter(|_stated| track_run.states_composition_time_offset),
+                    );
 
                     samples.push(sample);
                     sizes.push(declared_size_of(row));

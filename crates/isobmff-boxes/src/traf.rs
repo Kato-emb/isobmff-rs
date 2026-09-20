@@ -221,7 +221,7 @@ pub(crate) mod tests {
         TrackRunBox::new(
             Some(0),
             None,
-            vec![TrackRunSample::new(None, Some(1_024), None, None).unwrap()],
+            vec![TrackRunSample::new(None, Some(1_024), None, None)],
         )
         .unwrap()
     }

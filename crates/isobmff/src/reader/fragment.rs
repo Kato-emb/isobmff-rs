@@ -5,7 +5,8 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use isobmff_boxes::{
-    MovieBox, MovieFragmentBox, TrackFragmentBox, TrackFragmentHeaderBox, TrackRunBox,
+    CompositionTimeOffset, MovieBox, MovieFragmentBox, TrackFragmentBox, TrackFragmentHeaderBox,
+    TrackRunBox,
 };
 
 use crate::error::SampleError;
@@ -282,7 +283,9 @@ fn settle_run(
             track_id,
             decode_time: cursor.decode_time,
             sample_duration,
-            sample_composition_time_offset: row.sample_composition_time_offset(),
+            sample_composition_time_offset: row
+                .sample_composition_time_offset()
+                .map(CompositionTimeOffset::get),
             sample_flags: first_sample_flags
                 .take()
                 .or(row.sample_flags())
@@ -306,7 +309,7 @@ mod tests {
     use alloc::vec;
 
     use isobmff_boxes::{
-        MovieFragmentBox, MovieFragmentHeaderBox, TrackExtendsBox,
+        CompositionTimeOffset, MovieFragmentBox, MovieFragmentHeaderBox, TrackExtendsBox,
         TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderFlags,
         TrackRunBox, TrackRunSample,
     };
@@ -322,8 +325,12 @@ mod tests {
 
     #[test]
     fn a_sample_takes_what_its_row_states_over_the_defaults_of_the_fragment_and_the_track() {
-        let rows =
-            vec![TrackRunSample::new(Some(512), Some(2), Some(0x0100_0000), Some(-8)).unwrap()];
+        let rows = vec![TrackRunSample::new(
+            Some(512),
+            Some(2),
+            Some(0x0100_0000),
+            Some(CompositionTimeOffset::new(-8).unwrap()),
+        )];
         let track_fragment = TrackFragmentBox::new(
             track_fragment_header(
                 TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
@@ -388,8 +395,8 @@ mod tests {
     #[test]
     fn the_flags_of_the_first_sample_of_a_run_stand_in_for_the_defaults() {
         let rows = vec![
-            TrackRunSample::new(None, None, None, None).unwrap(),
-            TrackRunSample::new(None, None, None, None).unwrap(),
+            TrackRunSample::new(None, None, None, None),
+            TrackRunSample::new(None, None, None, None),
         ];
         let track_fragment = TrackFragmentBox::new(
             track_fragment_header(

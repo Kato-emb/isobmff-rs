@@ -121,8 +121,8 @@ enum State {
 ///             Some(96),
 ///             None,
 ///             vec![
-///                 TrackRunSample::new(None, Some(4), None, None).unwrap(),
-///                 TrackRunSample::new(None, Some(4), None, None).unwrap(),
+///                 TrackRunSample::new(None, Some(4), None, None),
+///                 TrackRunSample::new(None, Some(4), None, None),
 ///             ],
 ///         )
 ///         .unwrap(),
@@ -409,7 +409,7 @@ mod tests {
     /// Run of samples that take the size and duration of their defaults
     pub(super) fn run(data_offset: Option<i32>, sample_count: u32) -> TrackRunBox {
         let rows = (0..sample_count)
-            .map(|_| TrackRunSample::new(None, None, None, None).unwrap())
+            .map(|_| TrackRunSample::new(None, None, None, None))
             .collect();
 
         TrackRunBox::new(data_offset, None, rows).unwrap()
