@@ -1,4 +1,4 @@
-//! [`SampleErrorKind`], what a failure of the samples of a presentation is, and the values each kind carries
+//! [`SampleErrorKind`], what a failure of the samples of a presentation is
 
 use isobmff_core::Category;
 
@@ -17,28 +17,28 @@ pub enum SampleErrorKind {
     /// Failure of one box, carried through as `isobmff-core` names it
     ///
     /// The values that failure carries, and the boxes it was reached through,
-    /// are on [`box_error`](super::SampleError::box_error).
+    /// are on [`box_error`](crate::SampleError::box_error).
     Box(isobmff_core::ErrorKind),
     /// Decode times of a track run past what 64 bits carry
     ///
-    /// [`track_id`](super::SampleError::track_id) is the track they belong to.
+    /// [`track_id`](crate::SampleError::track_id) is the track they belong to.
     DecodeTimeOverflow,
     /// Data offsets of a track run past what 64 bits carry
     ///
-    /// [`track_id`](super::SampleError::track_id) is the track they belong to.
+    /// [`track_id`](crate::SampleError::track_id) is the track they belong to.
     DataOffsetOverflow,
     /// Fragment carries samples of a track the movie never declared
     ///
     /// A track is declared by a `trak` and, for its fragments, a `trex`
     /// (ISO/IEC 14496-12 §8.8.3); a fragment of a track missing either is
-    /// refused. [`track_id`](super::SampleError::track_id) is the track it names.
+    /// refused. [`track_id`](crate::SampleError::track_id) is the track it names.
     UnknownTrackId,
     /// Samples are described by an `stsd` entry their track has none of
     ///
     /// A sample table names the entry by the run of chunks (ISO/IEC 14496-12
     /// §8.7.4), a fragment by its `tfhd` or the `trex` of the track (§8.8.7).
-    /// [`track_id`](super::SampleError::track_id) is the track they belong to, and
-    /// [`sample_description_index`](super::SampleError::sample_description_index) the
+    /// [`track_id`](crate::SampleError::track_id) is the track they belong to, and
+    /// [`sample_description_index`](crate::SampleError::sample_description_index) the
     /// entry named, counted from one.
     UnknownSampleDescriptionIndex,
     /// Movie carries no `mvex`, and so continues in no fragments
@@ -48,8 +48,8 @@ pub enum SampleErrorKind {
     MissingMovieExtends,
     /// Sample entry names a `dref` entry the track has none of
     ///
-    /// [`track_id`](super::SampleError::track_id) is the track it belongs to, and
-    /// [`data_reference_index`](super::SampleError::data_reference_index) the entry
+    /// [`track_id`](crate::SampleError::track_id) is the track it belongs to, and
+    /// [`data_reference_index`](crate::SampleError::data_reference_index) the entry
     /// it names, counted from one.
     UnknownDataReferenceIndex,
     /// Data reference names a resource other than the file itself
@@ -58,8 +58,8 @@ pub enum SampleErrorKind {
     /// that carries the movie (ISO/IEC 14496-12 §8.7.2); any other sends the
     /// reader to an external file, which no resolver here follows yet, so a
     /// sample described through one is refused.
-    /// [`track_id`](super::SampleError::track_id) is the track it belongs to, and
-    /// [`data_reference_index`](super::SampleError::data_reference_index) the entry,
+    /// [`track_id`](crate::SampleError::track_id) is the track it belongs to, and
+    /// [`data_reference_index`](crate::SampleError::data_reference_index) the entry,
     /// counted from one.
     ExternalDataReference,
     /// Sample tables of a track count different numbers of samples
@@ -67,29 +67,29 @@ pub enum SampleErrorKind {
     /// The `stts`, the `stsz`, and the `stsc` laid over the `stco` each count
     /// the samples of the track (ISO/IEC 14496-12 §8.6.1.2, §8.7.3.2, §8.7.4),
     /// and a track whose tables disagree is refused.
-    /// [`track_id`](super::SampleError::track_id) is the track.
+    /// [`track_id`](crate::SampleError::track_id) is the track.
     SampleCountMismatch,
     /// Run of chunks starts at a chunk outside the range open to it
     ///
     /// The first run an `stsc` states starts at chunk 1, and each run after it
     /// at a chunk past the start of the one before, no later than the last
     /// chunk the `stco` places (ISO/IEC 14496-12 §8.7.4.3).
-    /// [`track_id`](super::SampleError::track_id) is the track, and
-    /// [`first_chunk`](super::SampleError::first_chunk) the chunk the run states it
+    /// [`track_id`](crate::SampleError::track_id) is the track, and
+    /// [`first_chunk`](crate::SampleError::first_chunk) the chunk the run states it
     /// starts at.
     FirstChunkOutOfRange,
     /// Sample is declared past the limit the reader holds
     ///
-    /// [`track_id`](super::SampleError::track_id) is the track it belongs to,
-    /// [`needed_bytes`](super::SampleError::needed_bytes) the length it declares, and
-    /// [`available_bytes`](super::SampleError::available_bytes) the length the reader
+    /// [`track_id`](crate::SampleError::track_id) is the track it belongs to,
+    /// [`needed_bytes`](crate::SampleError::needed_bytes) the length it declares, and
+    /// [`available_bytes`](crate::SampleError::available_bytes) the length the reader
     /// gathers for one sample at most.
     SampleSizeLimitExceeded,
     /// Samples were declared over while the bytes of one had still to arrive
     ///
-    /// [`track_id`](super::SampleError::track_id) is the track it belongs to,
-    /// [`needed_bytes`](super::SampleError::needed_bytes) the length it takes, and
-    /// [`available_bytes`](super::SampleError::available_bytes) the length that
+    /// [`track_id`](crate::SampleError::track_id) is the track it belongs to,
+    /// [`needed_bytes`](crate::SampleError::needed_bytes) the length it takes, and
+    /// [`available_bytes`](crate::SampleError::available_bytes) the length that
     /// arrived.
     UnfinishedSample,
     /// Samples were declared over, and take nothing more

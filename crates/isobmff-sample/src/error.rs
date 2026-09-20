@@ -7,7 +7,7 @@ use isobmff_core::Category;
 
 mod kind;
 
-use kind::Representation;
+use crate::error::kind::Representation;
 pub use kind::SampleErrorKind;
 
 /// Reason the samples of a presentation do not resolve
