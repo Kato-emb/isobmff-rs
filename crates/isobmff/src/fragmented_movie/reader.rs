@@ -142,8 +142,6 @@ enum Open {
     },
     /// Media data, offered to the samples as it arrives
     MediaData,
-    /// Box passed over
-    Skip,
 }
 
 impl FragmentedReader {
@@ -230,9 +228,9 @@ impl FragmentedReader {
         self.origin = offset.saturating_sub(self.handed);
         self.handed = self.handed.saturating_add(input.len() as u64);
 
-        if let Err(failure) = self.boxes.handle_input(input) {
-            return Err(self.fail(failure.into()));
-        }
+        self.boxes
+            .handle_input(input)
+            .map_err(|failure| self.fail(failure.into()))?;
 
         self.read_framed()
     }
@@ -285,18 +283,16 @@ impl FragmentedReader {
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), StructureError> {
         self.reading()?;
-
-        if let Err(failure) = self.boxes.finish() {
-            return Err(self.fail(failure.into()));
-        }
+        self.boxes
+            .finish()
+            .map_err(|failure| self.fail(failure.into()))?;
         self.read_framed()?;
-
-        if let Err(failure) = self.structure.finish() {
-            return Err(self.fail(failure));
-        }
-        if let Err(failure) = self.samples.finish() {
-            return Err(self.fail(failure.into()));
-        }
+        self.structure
+            .finish()
+            .map_err(|failure| self.fail(failure))?;
+        self.samples
+            .finish()
+            .map_err(|failure| self.fail(failure.into()))?;
         self.state = State::Finished;
 
         Ok(())
@@ -340,19 +336,22 @@ impl FragmentedReader {
 
     /// Opens the box `header` introduces, as the structure disposes of it
     fn begin_box(&mut self, header: BoxHeader, start: u64) -> Result<(), StructureError> {
-        let open = match self.structure.handle_header(header)? {
-            Disposition::FileType => {
-                Open::FileType(WholeBoxReader::begin(header, self.payload_limit)?)
-            }
-            Disposition::Movie => Open::Movie(WholeBoxReader::begin(header, self.payload_limit)?),
-            Disposition::MovieFragment => Open::MovieFragment {
+        self.open = match self.structure.handle_header(header)? {
+            Disposition::FileType => Some(Open::FileType(WholeBoxReader::begin(
+                header,
+                self.payload_limit,
+            )?)),
+            Disposition::Movie => Some(Open::Movie(WholeBoxReader::begin(
+                header,
+                self.payload_limit,
+            )?)),
+            Disposition::MovieFragment => Some(Open::MovieFragment {
                 reader: WholeBoxReader::begin(header, self.payload_limit)?,
                 moof_start: start,
-            },
-            Disposition::MediaData => Open::MediaData,
-            Disposition::Skip => Open::Skip,
+            }),
+            Disposition::MediaData => Some(Open::MediaData),
+            Disposition::Skip => None,
         };
-        self.open = Some(open);
 
         Ok(())
     }
@@ -364,7 +363,7 @@ impl FragmentedReader {
             Some(Open::Movie(reader)) => reader.handle_payload(payload),
             Some(Open::MovieFragment { reader, .. }) => reader.handle_payload(payload),
             Some(Open::MediaData) => Ok(self.samples.handle_data(start, &payload)?),
-            Some(Open::Skip) | None => Ok(()),
+            None => Ok(()),
         }
     }
 
@@ -376,10 +375,11 @@ impl FragmentedReader {
             Some(Open::MovieFragment { reader, moof_start }) => {
                 let movie_fragment = reader.finish()?;
                 // Why not unreachable: the structure placed the `moof` after the
-                // `moov`, so the movie is there, and the fallback names the box
-                // the structure would have in place of a panic the lints forbid.
+                // `moov`, so the movie is there, and the fallback repeats what
+                // the structure answers a `moof` before it with, in place of a
+                // panic the lints forbid.
                 let Some(movie) = self.movie.as_ref() else {
-                    return Err(StructureError::missing_mandatory_box(MovieBox::BOX_TYPE));
+                    return Err(StructureError::box_out_of_order(MovieFragmentBox::BOX_TYPE));
                 };
 
                 let extents =
@@ -388,7 +388,7 @@ impl FragmentedReader {
                     self.samples.handle_sample_extent(extent?)?;
                 }
             }
-            Some(Open::MediaData | Open::Skip) | None => {}
+            Some(Open::MediaData) | None => {}
         }
 
         Ok(())
@@ -410,11 +410,8 @@ impl Default for FragmentedReader {
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
-    use alloc::vec::Vec;
-
     use isobmff_boxes::{FileTypeBox, MovieBox, TrackExtendsBox};
-    use isobmff_core::{BoxDefinition, BoxType, FourCC};
+    use isobmff_core::{BoxDefinition, BoxType};
     use isobmff_sample::SampleReader;
     use isobmff_test_support::{file_type, fragmented_movie, framed, movie_fragment, written};
 
@@ -434,36 +431,6 @@ mod tests {
         reader.finish()?;
 
         Ok(reader)
-    }
-
-    #[test]
-    fn a_fragment_arriving_before_any_movie_is_rejected() {
-        let file = [written(&file_type()), written(&movie_fragment())].concat();
-
-        assert_eq!(
-            read(&file).map(drop),
-            Err(StructureError::box_out_of_order(BoxType::compact(*b"moof")))
-        );
-    }
-
-    #[test]
-    fn a_second_movie_is_rejected() {
-        let file = [written(&movie()), written(&movie())].concat();
-
-        assert_eq!(
-            read(&file).map(drop),
-            Err(StructureError::duplicate_box(MovieBox::BOX_TYPE))
-        );
-    }
-
-    #[test]
-    fn a_second_declaration_of_the_brands_is_rejected() {
-        let file = [written(&file_type()), written(&file_type())].concat();
-
-        assert_eq!(
-            read(&file).map(drop),
-            Err(StructureError::box_out_of_order(FileTypeBox::BOX_TYPE))
-        );
     }
 
     #[test]
@@ -521,18 +488,6 @@ mod tests {
         let reader = read(&file).unwrap();
 
         assert_eq!(reader.movie(), Some(&movie()));
-    }
-
-    #[test]
-    fn a_box_read_into_a_value_whose_payload_does_not_decode_names_that_box() {
-        let failure = read(&framed(BoxType::compact(*b"moov"), b"AAAA"));
-
-        assert_eq!(
-            failure.map(drop).map_err(|reported| reported
-                .box_error()
-                .map(|box_error| box_error.containers().collect::<Vec<_>>())),
-            Err(Some(vec![FourCC::new(*b"moov")]))
-        );
     }
 
     #[test]

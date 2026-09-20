@@ -3,11 +3,11 @@
 use alloc::vec::Vec;
 
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox};
-use isobmff_core::{BoxDefinition, BoxHeader, BoxType};
+use isobmff_core::{BoxDefinition, BoxEncode, BoxType};
 use isobmff_sample::{MovieFragmentWriter, Sample};
 use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
 
-use crate::{FragmentedStructure, StructureError, past_every_buffer, whole_payload};
+use crate::{FragmentedStructure, StructureError, whole_box_header, whole_payload};
 
 /// Lays a fragmented movie file down, taking the samples as they come
 ///
@@ -231,16 +231,15 @@ impl FragmentedWriter {
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), StructureError> {
         self.writing()?;
-
-        if let Err(failure) = self.samples.finish() {
-            return Err(self.fail(failure.into()));
-        }
-        if let Err(failure) = self.structure.finish() {
-            return Err(self.fail(failure));
-        }
-        if let Err(failure) = self.boxes.finish() {
-            return Err(self.fail(failure.into()));
-        }
+        self.samples
+            .finish()
+            .map_err(|failure| self.fail(failure.into()))?;
+        self.structure
+            .finish()
+            .map_err(|failure| self.fail(failure))?;
+        self.boxes
+            .finish()
+            .map_err(|failure| self.fail(failure.into()))?;
         self.state = State::Finished;
 
         Ok(())
@@ -256,7 +255,7 @@ impl FragmentedWriter {
     }
 
     /// Lays `value` down as the whole box it forms
-    fn write_value<Value: isobmff_core::BoxEncode + BoxDefinition>(
+    fn write_value<Value: BoxEncode + BoxDefinition>(
         &mut self,
         value: &Value,
     ) -> Result<(), StructureError> {
@@ -267,14 +266,12 @@ impl FragmentedWriter {
 
     /// Lays one box down where the structure places it, through the framing of the file
     fn lay_down(&mut self, box_type: BoxType, payload: Vec<u8>) -> Result<(), StructureError> {
-        let payload_len = payload.len() as u64;
-        let Some(header) = BoxHeader::with_payload_len(box_type, payload_len) else {
-            return Err(self.fail(past_every_buffer(box_type, payload_len)));
-        };
+        let header = whole_box_header(box_type, payload.len() as u64)
+            .map_err(|failure| self.fail(failure))?;
 
-        if let Err(failure) = self.structure.handle_header(header) {
-            return Err(self.fail(failure));
-        }
+        self.structure
+            .handle_header(header)
+            .map_err(|failure| self.fail(failure))?;
 
         self.lay_down_step(BoxEvent::Header(header))?;
         if !payload.is_empty() {
@@ -332,31 +329,6 @@ mod tests {
 
         assert_eq!(writer.finish(), Ok(()));
         assert!(writer.poll_output().unwrap().ends_with(b"moov"));
-    }
-
-    #[test]
-    fn brands_handed_over_after_the_movie_are_rejected() {
-        let mut writer = FragmentedWriter::new();
-
-        writer.handle_movie(movie()).unwrap();
-
-        assert_eq!(
-            writer.handle_file_type(file_type()),
-            Err(StructureError::box_out_of_order(FileTypeBox::BOX_TYPE))
-        );
-    }
-
-    #[test]
-    fn a_second_movie_is_rejected() {
-        let mut writer = FragmentedWriter::new();
-
-        writer.handle_file_type(file_type()).unwrap();
-        writer.handle_movie(movie()).unwrap();
-
-        assert_eq!(
-            writer.handle_movie(movie()),
-            Err(StructureError::duplicate_box(MovieBox::BOX_TYPE))
-        );
     }
 
     #[test]

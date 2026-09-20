@@ -93,7 +93,7 @@ pub use writer::SampleWriter;
 
 pub(crate) use disposition::Disposition;
 pub(crate) use fragmented_structure::FragmentedStructure;
-pub(crate) use whole_box::{WholeBoxReader, past_every_buffer, whole_payload};
+pub(crate) use whole_box::{WholeBoxReader, whole_box_header, whole_payload};
 
 pub use isobmff_boxes::*;
 pub use isobmff_core::*;

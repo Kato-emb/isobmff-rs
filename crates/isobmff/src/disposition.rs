@@ -7,11 +7,6 @@
 /// passed on as media data, or it is passed over. Which boxes are read into
 /// values is the structure's to say, so each such box is a variant of its own,
 /// and the value it is read into is the one the variant is named after.
-///
-/// The boxes a structure reads into values are added to as ISO/IEC 14496-12 is
-/// read further, so a match on this must leave room for variants that are not
-/// here yet.
-#[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Disposition {
     /// Box is read whole into a [`FileTypeBox`](isobmff_boxes::FileTypeBox)

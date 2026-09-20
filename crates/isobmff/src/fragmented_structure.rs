@@ -139,12 +139,6 @@ impl FragmentedStructure {
     }
 }
 
-impl Default for FragmentedStructure {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Places the box `box_type` names at `position`, and returns where the file stands past it
 const fn place(
     position: Position,

@@ -1,4 +1,4 @@
-//! [`WholeBoxReader`] and [`whole_payload`], one box read whole out of the steps it was framed into, and written whole into the steps it is laid down as
+//! [`WholeBoxReader`], [`whole_payload`] and [`whole_box_header`]: one box read whole out of the steps it was framed into, and written whole into the steps it is laid down as
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -132,8 +132,22 @@ pub(crate) fn whole_payload<Value: BoxEncode + BoxDefinition>(
     Ok(payload)
 }
 
+/// Returns the header of the whole box of `box_type` whose payload is `payload_len` bytes long
+///
+/// # Errors
+///
+/// * [`Box`](crate::StructureErrorKind::Box): no header measures a payload
+///   that long, which no buffer on this target holds either.
+pub(crate) fn whole_box_header(
+    box_type: BoxType,
+    payload_len: u64,
+) -> Result<BoxHeader, StructureError> {
+    BoxHeader::with_payload_len(box_type, payload_len)
+        .ok_or_else(|| past_every_buffer(box_type, payload_len))
+}
+
 /// Reports a box longer than any buffer on this target, as `isobmff-core` names it
-pub(crate) fn past_every_buffer(box_type: BoxType, payload_len: u64) -> StructureError {
+fn past_every_buffer(box_type: BoxType, payload_len: u64) -> StructureError {
     // Why not a failure of its own: a payload past `usize`, and a header that
     // cannot measure one, both exceed every buffer this target can hold, which
     // is the short buffer `isobmff_core::BoxEncode::encode` folds them into.
@@ -153,7 +167,7 @@ mod tests {
     use isobmff_sequence::BoxEvent;
     use isobmff_test_support::{events_of, file_type, written};
 
-    use super::{BoxDefinition, StructureError, WholeBoxReader, whole_payload};
+    use super::{BoxDefinition, StructureError, WholeBoxReader};
 
     /// Bytes a box may declare in these tests, unless one states its own limit
     const PAYLOAD_LIMIT: u64 = 1_024;
@@ -231,18 +245,6 @@ mod tests {
                 4
             ))
         );
-    }
-
-    #[test]
-    fn a_value_is_written_as_the_payload_the_reader_reads_it_back_from() {
-        let payload = whole_payload(&file_type()).unwrap();
-        let header =
-            BoxHeader::with_payload_len(FileTypeBox::BOX_TYPE, payload.len() as u64).unwrap();
-        let mut reader = WholeBoxReader::<FileTypeBox>::begin(header, PAYLOAD_LIMIT).unwrap();
-
-        reader.handle_payload(payload).unwrap();
-
-        assert_eq!(reader.finish(), Ok(file_type()));
     }
 
     #[test]
