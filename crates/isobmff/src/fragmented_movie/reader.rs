@@ -1,6 +1,5 @@
 //! [`FragmentedReader`], a fragmented movie file read as it arrives
 
-use alloc::vec::Vec;
 use core::ops::Range;
 
 use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox};
@@ -228,11 +227,14 @@ impl FragmentedReader {
         self.origin = offset.saturating_sub(self.handed);
         self.handed = self.handed.saturating_add(input.len() as u64);
 
-        self.boxes
-            .handle_input(input)
-            .map_err(|failure| self.fail(failure.into()))?;
+        // Why not failing before the events are read: the framing keeps the
+        // events it made before failing, and the samples they complete are
+        // the caller's to take, so they are read first and the failure kept
+        // for after them.
+        let framed = self.boxes.handle_input(input);
+        self.read_framed()?;
 
-        self.read_framed()
+        framed.map_err(|failure| self.fail(failure.into()))
     }
 
     /// Takes the next sample the file handed over so far completed
@@ -314,24 +316,32 @@ impl FragmentedReader {
     fn read_framed(&mut self) -> Result<(), StructureError> {
         while let Some(event) = self.boxes.poll_event() {
             // Why not unreachable: an event was taken, so the framing names the
-            // bytes it was read from, and the fallback is a degenerate range in
-            // place of a panic the lints forbid.
-            let extent = self.boxes.event_extent().unwrap_or(0..0);
-            let extent =
-                extent.start.saturating_add(self.origin)..extent.end.saturating_add(self.origin);
-            let outcome = match event {
-                BoxEvent::Header(header) => self.begin_box(header, extent.start),
-                BoxEvent::Payload(payload) => self.take_payload(payload, extent.start),
+            // bytes it was read from, and the fallback is a degenerate position
+            // in place of a panic the lints forbid.
+            let start = self
+                .boxes
+                .event_extent()
+                .map_or(0, |extent| extent.start)
+                .saturating_add(self.origin);
+            match event {
+                BoxEvent::Header(header) => self.begin_box(header, start),
+                BoxEvent::Payload(payload) => match &mut self.open {
+                    Some(Open::FileType(reader)) => reader.handle_payload(payload),
+                    Some(Open::Movie(reader)) => reader.handle_payload(payload),
+                    Some(Open::MovieFragment { reader, .. }) => reader.handle_payload(payload),
+                    Some(Open::MediaData) => self
+                        .samples
+                        .handle_data(start, &payload)
+                        .map_err(StructureError::from),
+                    None => Ok(()),
+                },
                 BoxEvent::End => self.close_box(),
                 // Why an arm at all: `BoxEvent` is `#[non_exhaustive]`, which
                 // `clippy::exhaustive_enums` asks of every public enum, so §4.2
                 // being settled at three steps does not close the match.
                 _later_step => Ok(()),
-            };
-
-            if let Err(failure) = outcome {
-                return Err(self.fail(failure));
             }
+            .map_err(|failure| self.fail(failure))?;
         }
 
         Ok(())
@@ -357,17 +367,6 @@ impl FragmentedReader {
         };
 
         Ok(())
-    }
-
-    /// Gathers `payload` into the box that is open, or offers it to the samples
-    fn take_payload(&mut self, payload: Vec<u8>, start: u64) -> Result<(), StructureError> {
-        match &mut self.open {
-            Some(Open::FileType(reader)) => reader.handle_payload(payload),
-            Some(Open::Movie(reader)) => reader.handle_payload(payload),
-            Some(Open::MovieFragment { reader, .. }) => reader.handle_payload(payload),
-            Some(Open::MediaData) => Ok(self.samples.handle_data(start, &payload)?),
-            None => Ok(()),
-        }
     }
 
     /// Reads the box that ended into its value, and resolves a fragment against the movie
@@ -413,13 +412,17 @@ impl Default for FragmentedReader {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use isobmff_boxes::{FileTypeBox, MovieBox, TrackExtendsBox};
     use isobmff_core::{BoxDefinition, BoxType};
+    use isobmff_sample::Sample;
     use isobmff_sample::SampleReader;
     use isobmff_test_support::{file_type, fragmented_movie, framed, movie_fragment, written};
 
     use super::{FragmentedReader, StructureError};
     use crate::StructureErrorKind;
+    use crate::fragmented_movie::FragmentedWriter;
 
     /// Movie of one track continued in fragments, whose defaults a `trex` states
     fn movie() -> MovieBox {
@@ -491,6 +494,36 @@ mod tests {
         let reader = read(&file).unwrap();
 
         assert_eq!(reader.movie(), Some(&movie()));
+    }
+
+    #[test]
+    fn the_samples_completed_before_a_framing_failure_are_still_taken() {
+        let mut writer = FragmentedWriter::new();
+        let mut file = Vec::new();
+
+        writer.handle_movie(movie()).unwrap();
+        writer.begin_fragment(1).unwrap();
+        writer
+            .handle_sample(Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec()))
+            .unwrap();
+        writer.finish_fragment().unwrap();
+        while let Some(written) = writer.poll_output() {
+            file.extend_from_slice(&written);
+        }
+        file.extend_from_slice(b"\0\0\0\x04free");
+
+        let mut reader = FragmentedReader::new();
+
+        assert_eq!(
+            reader.handle_input(0, &file).map_err(StructureError::kind),
+            Err(StructureErrorKind::Sequence(
+                isobmff_sequence::ErrorKind::Box(isobmff_core::ErrorKind::SizeBelowHeader)
+            ))
+        );
+        assert_eq!(
+            reader.poll_sample().map(Sample::into_data),
+            Some(b"SAMP".to_vec())
+        );
     }
 
     #[test]
