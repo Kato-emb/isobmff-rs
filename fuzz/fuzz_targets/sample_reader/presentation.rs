@@ -16,8 +16,7 @@ use std::ops::Range;
 use isobmff::{
     MovieBox, MovieFragmentBox, MovieFragmentHeaderBox, TrackExtendsBox,
     TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentFlags,
-    TrackFragmentHeaderBox, TrackRunBox,
-    TrackRunSample,
+    TrackFragmentHeaderBox, TrackRunBox, TrackRunSample,
 };
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 
