@@ -109,20 +109,28 @@ pub enum SampleErrorKind {
     /// [`MovieFragmentWriter`](crate::MovieFragmentWriter) anchors its offsets
     /// at the `moof` (ISO/IEC 14496-12 §8.8.7.1), so a fragment whose media
     /// data runs past what that field counts to is refused.
-    /// [`track_id`](crate::SampleError::track_id) is the track it belongs to.
+    /// [`track_id`](crate::SampleError::track_id) is the track it belongs to,
+    /// and [`data_offset`](crate::SampleError::data_offset) how far into the
+    /// fragment the sample lies.
     DataOffsetOutOfRange,
     /// Sample states a composition time offset neither version of a `trun` writes
     ///
     /// Version 0 writes the offset unsigned in 32 bits and version 1 signed
     /// (ISO/IEC 14496-12 §8.8.8), so one past either is refused.
-    /// [`track_id`](crate::SampleError::track_id) is the track it belongs to.
+    /// [`track_id`](crate::SampleError::track_id) is the track it belongs to,
+    /// and [`composition_time_offset`](crate::SampleError::composition_time_offset)
+    /// the offset it states.
     CompositionTimeOffsetOutOfRange,
     /// Sample does not start where the one before it in its track ends
     ///
     /// A `trun` states how long a sample lasts and not when it is decoded, so
     /// the decode times of the samples of one fragment are only written if each
     /// carries on from the one before it.
-    /// [`track_id`](crate::SampleError::track_id) is the track it belongs to.
+    /// [`track_id`](crate::SampleError::track_id) is the track it belongs to,
+    /// [`stated_decode_time`](crate::SampleError::stated_decode_time) the decode
+    /// time the sample states, and
+    /// [`reached_decode_time`](crate::SampleError::reached_decode_time) the one
+    /// the samples before it reach.
     DecodeTimeMismatch,
     /// Fragment of a track starts before the samples written for it reach
     ///
@@ -130,14 +138,20 @@ pub enum SampleErrorKind {
     /// §8.8.12 has it as the sum of the durations of the samples before it,
     /// and a fragment starting past that sum is written as it stands, but one
     /// starting short of it is refused.
-    /// [`track_id`](crate::SampleError::track_id) is the track it belongs to.
+    /// [`track_id`](crate::SampleError::track_id) is the track it belongs to,
+    /// [`stated_decode_time`](crate::SampleError::stated_decode_time) the decode
+    /// time the fragment starts at, and
+    /// [`reached_decode_time`](crate::SampleError::reached_decode_time) the one
+    /// the samples written reach.
     BackwardDecodeTime,
     /// Samples of one fragment of one track are described by two `stsd` entries
     ///
     /// A `traf` states which entry describes its samples once, for all of them.
     /// [`track_id`](crate::SampleError::track_id) is the track they belong to,
-    /// and [`sample_description_index`](crate::SampleError::sample_description_index)
-    /// the entry the sample that differed names.
+    /// [`sample_description_index`](crate::SampleError::sample_description_index)
+    /// the entry the sample that differed names, and
+    /// [`established_sample_description_index`](crate::SampleError::established_sample_description_index)
+    /// the one the fragment describes the track by.
     SampleDescriptionIndexMismatch,
 }
 
@@ -217,6 +231,40 @@ pub(super) enum Representation {
     },
 }
 
+/// Values a failure carries, laid flat, with `None` where its kind carries no such value
+pub(super) struct Fields {
+    pub(super) box_error: Option<isobmff_core::Error>,
+    pub(super) track_id: Option<u32>,
+    pub(super) sample_description_index: Option<u32>,
+    pub(super) established_sample_description_index: Option<u32>,
+    pub(super) data_reference_index: Option<u16>,
+    pub(super) first_chunk: Option<u32>,
+    pub(super) needed_bytes: Option<u64>,
+    pub(super) available_bytes: Option<u64>,
+    pub(super) stated_decode_time: Option<u64>,
+    pub(super) reached_decode_time: Option<u64>,
+    pub(super) data_offset: Option<u64>,
+    pub(super) composition_time_offset: Option<i64>,
+}
+
+impl Fields {
+    /// Values of a failure that carries none
+    const EMPTY: Self = Self {
+        box_error: None,
+        track_id: None,
+        sample_description_index: None,
+        established_sample_description_index: None,
+        data_reference_index: None,
+        first_chunk: None,
+        needed_bytes: None,
+        available_bytes: None,
+        stated_decode_time: None,
+        reached_decode_time: None,
+        data_offset: None,
+        composition_time_offset: None,
+    };
+}
+
 impl Representation {
     /// Returns what went wrong
     pub(super) const fn kind(self) -> SampleErrorKind {
@@ -275,6 +323,115 @@ impl Representation {
             Self::AlreadyFinished | Self::NoFragmentOpen | Self::FragmentStillOpen => {
                 Category::Usage
             }
+        }
+    }
+
+    /// Returns the values the failure carries, laid flat
+    pub(super) const fn fields(self) -> Fields {
+        match self {
+            Self::Box(box_error) => Fields {
+                box_error: Some(box_error),
+                ..Fields::EMPTY
+            },
+            Self::DecodeTimeOverflow { track_id }
+            | Self::DataOffsetOverflow { track_id }
+            | Self::UnknownTrackId { track_id }
+            | Self::SampleCountMismatch { track_id } => Fields {
+                track_id: Some(track_id),
+                ..Fields::EMPTY
+            },
+            Self::UnknownSampleDescriptionIndex {
+                track_id,
+                sample_description_index,
+            } => Fields {
+                track_id: Some(track_id),
+                sample_description_index: Some(sample_description_index),
+                ..Fields::EMPTY
+            },
+            Self::MissingMovieExtends
+            | Self::AlreadyFinished
+            | Self::NoFragmentOpen
+            | Self::FragmentStillOpen => Fields::EMPTY,
+            Self::UnknownDataReferenceIndex {
+                track_id,
+                data_reference_index,
+            }
+            | Self::ExternalDataReference {
+                track_id,
+                data_reference_index,
+            } => Fields {
+                track_id: Some(track_id),
+                data_reference_index: Some(data_reference_index),
+                ..Fields::EMPTY
+            },
+            Self::FirstChunkOutOfRange {
+                track_id,
+                first_chunk,
+            } => Fields {
+                track_id: Some(track_id),
+                first_chunk: Some(first_chunk),
+                ..Fields::EMPTY
+            },
+            Self::SampleSizeLimitExceeded {
+                track_id,
+                declared,
+                limit,
+            } => Fields {
+                track_id: Some(track_id),
+                needed_bytes: Some(declared),
+                available_bytes: Some(limit),
+                ..Fields::EMPTY
+            },
+            Self::UnfinishedSample {
+                track_id,
+                needed,
+                available,
+            } => Fields {
+                track_id: Some(track_id),
+                needed_bytes: Some(needed),
+                available_bytes: Some(available),
+                ..Fields::EMPTY
+            },
+            Self::SampleSizeOutOfRange { track_id, declared } => Fields {
+                track_id: Some(track_id),
+                needed_bytes: Some(declared),
+                ..Fields::EMPTY
+            },
+            Self::DataOffsetOutOfRange { track_id, offset } => Fields {
+                track_id: Some(track_id),
+                data_offset: Some(offset),
+                ..Fields::EMPTY
+            },
+            Self::CompositionTimeOffsetOutOfRange { track_id, offset } => Fields {
+                track_id: Some(track_id),
+                composition_time_offset: Some(offset),
+                ..Fields::EMPTY
+            },
+            Self::DecodeTimeMismatch {
+                track_id,
+                stated,
+                reached,
+            }
+            | Self::BackwardDecodeTime {
+                track_id,
+                stated,
+                reached,
+            } => Fields {
+                track_id: Some(track_id),
+                stated_decode_time: Some(stated),
+                reached_decode_time: Some(reached),
+                ..Fields::EMPTY
+            },
+            Self::SampleDescriptionIndexMismatch {
+                track_id,
+                stated,
+                established,
+            } => Fields {
+                track_id: Some(track_id),
+                sample_description_index: Some(stated),
+                established_sample_description_index: Some(established),
+                ..Fields::EMPTY
+            },
         }
     }
 }

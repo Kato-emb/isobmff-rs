@@ -13,210 +13,75 @@ impl SampleError {
     /// are read off the [`isobmff_core::Error`] itself.
     #[must_use]
     pub const fn box_error(self) -> Option<isobmff_core::Error> {
-        match self.representation {
-            Representation::Box(box_error) => Some(box_error),
-            Representation::DecodeTimeOverflow { .. }
-            | Representation::DataOffsetOverflow { .. }
-            | Representation::UnknownTrackId { .. }
-            | Representation::UnknownSampleDescriptionIndex { .. }
-            | Representation::MissingMovieExtends
-            | Representation::UnknownDataReferenceIndex { .. }
-            | Representation::ExternalDataReference { .. }
-            | Representation::SampleCountMismatch { .. }
-            | Representation::FirstChunkOutOfRange { .. }
-            | Representation::SampleSizeLimitExceeded { .. }
-            | Representation::UnfinishedSample { .. }
-            | Representation::AlreadyFinished
-            | Representation::NoFragmentOpen
-            | Representation::FragmentStillOpen
-            | Representation::SampleSizeOutOfRange { .. }
-            | Representation::DataOffsetOutOfRange { .. }
-            | Representation::CompositionTimeOffsetOutOfRange { .. }
-            | Representation::DecodeTimeMismatch { .. }
-            | Representation::BackwardDecodeTime { .. }
-            | Representation::SampleDescriptionIndexMismatch { .. } => None,
-        }
+        self.representation.fields().box_error
     }
 
     /// Returns the track the failure is about, for the kinds that name one
     #[must_use]
     pub const fn track_id(self) -> Option<u32> {
-        match self.representation {
-            Representation::DecodeTimeOverflow { track_id }
-            | Representation::DataOffsetOverflow { track_id }
-            | Representation::UnknownTrackId { track_id }
-            | Representation::UnknownSampleDescriptionIndex { track_id, .. }
-            | Representation::UnknownDataReferenceIndex { track_id, .. }
-            | Representation::ExternalDataReference { track_id, .. }
-            | Representation::SampleCountMismatch { track_id }
-            | Representation::FirstChunkOutOfRange { track_id, .. }
-            | Representation::SampleSizeLimitExceeded { track_id, .. }
-            | Representation::UnfinishedSample { track_id, .. }
-            | Representation::SampleSizeOutOfRange { track_id, .. }
-            | Representation::DataOffsetOutOfRange { track_id, .. }
-            | Representation::CompositionTimeOffsetOutOfRange { track_id, .. }
-            | Representation::DecodeTimeMismatch { track_id, .. }
-            | Representation::BackwardDecodeTime { track_id, .. }
-            | Representation::SampleDescriptionIndexMismatch { track_id, .. } => Some(track_id),
-            Representation::Box(_)
-            | Representation::MissingMovieExtends
-            | Representation::AlreadyFinished
-            | Representation::NoFragmentOpen
-            | Representation::FragmentStillOpen => None,
-        }
+        self.representation.fields().track_id
     }
 
     /// Returns the `stsd` entry the failure names, for the kinds that name one
     #[must_use]
     pub const fn sample_description_index(self) -> Option<u32> {
-        match self.representation {
-            Representation::UnknownSampleDescriptionIndex {
-                sample_description_index,
-                ..
-            }
-            | Representation::SampleDescriptionIndexMismatch {
-                stated: sample_description_index,
-                ..
-            } => Some(sample_description_index),
-            Representation::Box(_)
-            | Representation::DecodeTimeOverflow { .. }
-            | Representation::DataOffsetOverflow { .. }
-            | Representation::UnknownTrackId { .. }
-            | Representation::MissingMovieExtends
-            | Representation::UnknownDataReferenceIndex { .. }
-            | Representation::ExternalDataReference { .. }
-            | Representation::SampleCountMismatch { .. }
-            | Representation::FirstChunkOutOfRange { .. }
-            | Representation::SampleSizeLimitExceeded { .. }
-            | Representation::UnfinishedSample { .. }
-            | Representation::AlreadyFinished
-            | Representation::NoFragmentOpen
-            | Representation::FragmentStillOpen
-            | Representation::SampleSizeOutOfRange { .. }
-            | Representation::DataOffsetOutOfRange { .. }
-            | Representation::CompositionTimeOffsetOutOfRange { .. }
-            | Representation::DecodeTimeMismatch { .. }
-            | Representation::BackwardDecodeTime { .. } => None,
-        }
+        self.representation.fields().sample_description_index
+    }
+
+    /// Returns the `stsd` entry a fragment describes its track by, for the kinds that compare one
+    #[must_use]
+    pub const fn established_sample_description_index(self) -> Option<u32> {
+        self.representation
+            .fields()
+            .established_sample_description_index
     }
 
     /// Returns the `dref` entry the failure names, for the kinds that name one
     #[must_use]
     pub const fn data_reference_index(self) -> Option<u16> {
-        match self.representation {
-            Representation::UnknownDataReferenceIndex {
-                data_reference_index,
-                ..
-            }
-            | Representation::ExternalDataReference {
-                data_reference_index,
-                ..
-            } => Some(data_reference_index),
-            Representation::Box(_)
-            | Representation::DecodeTimeOverflow { .. }
-            | Representation::DataOffsetOverflow { .. }
-            | Representation::UnknownTrackId { .. }
-            | Representation::UnknownSampleDescriptionIndex { .. }
-            | Representation::MissingMovieExtends
-            | Representation::SampleCountMismatch { .. }
-            | Representation::FirstChunkOutOfRange { .. }
-            | Representation::SampleSizeLimitExceeded { .. }
-            | Representation::UnfinishedSample { .. }
-            | Representation::AlreadyFinished
-            | Representation::NoFragmentOpen
-            | Representation::FragmentStillOpen
-            | Representation::SampleSizeOutOfRange { .. }
-            | Representation::DataOffsetOutOfRange { .. }
-            | Representation::CompositionTimeOffsetOutOfRange { .. }
-            | Representation::DecodeTimeMismatch { .. }
-            | Representation::BackwardDecodeTime { .. }
-            | Representation::SampleDescriptionIndexMismatch { .. } => None,
-        }
+        self.representation.fields().data_reference_index
     }
 
     /// Returns the chunk a run of chunks starts at, counted from one, for the kinds that name one
     #[must_use]
     pub const fn first_chunk(self) -> Option<u32> {
-        match self.representation {
-            Representation::FirstChunkOutOfRange { first_chunk, .. } => Some(first_chunk),
-            Representation::Box(_)
-            | Representation::DecodeTimeOverflow { .. }
-            | Representation::DataOffsetOverflow { .. }
-            | Representation::UnknownTrackId { .. }
-            | Representation::UnknownSampleDescriptionIndex { .. }
-            | Representation::MissingMovieExtends
-            | Representation::UnknownDataReferenceIndex { .. }
-            | Representation::ExternalDataReference { .. }
-            | Representation::SampleCountMismatch { .. }
-            | Representation::SampleSizeLimitExceeded { .. }
-            | Representation::UnfinishedSample { .. }
-            | Representation::AlreadyFinished
-            | Representation::NoFragmentOpen
-            | Representation::FragmentStillOpen
-            | Representation::SampleSizeOutOfRange { .. }
-            | Representation::DataOffsetOutOfRange { .. }
-            | Representation::CompositionTimeOffsetOutOfRange { .. }
-            | Representation::DecodeTimeMismatch { .. }
-            | Representation::BackwardDecodeTime { .. }
-            | Representation::SampleDescriptionIndexMismatch { .. } => None,
-        }
+        self.representation.fields().first_chunk
     }
 
     /// Returns the bytes the failure required, for the kinds that count bytes
     #[must_use]
     pub const fn needed_bytes(self) -> Option<u64> {
-        match self.representation {
-            Representation::SampleSizeLimitExceeded { declared, .. }
-            | Representation::SampleSizeOutOfRange { declared, .. } => Some(declared),
-            Representation::UnfinishedSample { needed, .. } => Some(needed),
-            Representation::Box(_)
-            | Representation::DecodeTimeOverflow { .. }
-            | Representation::DataOffsetOverflow { .. }
-            | Representation::UnknownTrackId { .. }
-            | Representation::UnknownSampleDescriptionIndex { .. }
-            | Representation::MissingMovieExtends
-            | Representation::UnknownDataReferenceIndex { .. }
-            | Representation::ExternalDataReference { .. }
-            | Representation::SampleCountMismatch { .. }
-            | Representation::FirstChunkOutOfRange { .. }
-            | Representation::AlreadyFinished
-            | Representation::NoFragmentOpen
-            | Representation::FragmentStillOpen
-            | Representation::DataOffsetOutOfRange { .. }
-            | Representation::CompositionTimeOffsetOutOfRange { .. }
-            | Representation::DecodeTimeMismatch { .. }
-            | Representation::BackwardDecodeTime { .. }
-            | Representation::SampleDescriptionIndexMismatch { .. } => None,
-        }
+        self.representation.fields().needed_bytes
     }
 
     /// Returns the bytes the failure had to hand, for the kinds that count bytes
     #[must_use]
     pub const fn available_bytes(self) -> Option<u64> {
-        match self.representation {
-            Representation::SampleSizeLimitExceeded { limit, .. } => Some(limit),
-            Representation::UnfinishedSample { available, .. } => Some(available),
+        self.representation.fields().available_bytes
+    }
 
-            Representation::Box(_)
-            | Representation::DecodeTimeOverflow { .. }
-            | Representation::DataOffsetOverflow { .. }
-            | Representation::UnknownTrackId { .. }
-            | Representation::UnknownSampleDescriptionIndex { .. }
-            | Representation::MissingMovieExtends
-            | Representation::UnknownDataReferenceIndex { .. }
-            | Representation::ExternalDataReference { .. }
-            | Representation::SampleCountMismatch { .. }
-            | Representation::FirstChunkOutOfRange { .. }
-            | Representation::AlreadyFinished
-            | Representation::NoFragmentOpen
-            | Representation::FragmentStillOpen
-            | Representation::SampleSizeOutOfRange { .. }
-            | Representation::DataOffsetOutOfRange { .. }
-            | Representation::CompositionTimeOffsetOutOfRange { .. }
-            | Representation::DecodeTimeMismatch { .. }
-            | Representation::BackwardDecodeTime { .. }
-            | Representation::SampleDescriptionIndexMismatch { .. } => None,
-        }
+    /// Returns the decode time a sample or a fragment states, for the kinds that compare one
+    #[must_use]
+    pub const fn stated_decode_time(self) -> Option<u64> {
+        self.representation.fields().stated_decode_time
+    }
+
+    /// Returns the decode time the samples before reach, for the kinds that compare one
+    #[must_use]
+    pub const fn reached_decode_time(self) -> Option<u64> {
+        self.representation.fields().reached_decode_time
+    }
+
+    /// Returns how far into its fragment a sample lies, in bytes, for the kinds that place one
+    #[must_use]
+    pub const fn data_offset(self) -> Option<u64> {
+        self.representation.fields().data_offset
+    }
+
+    /// Returns the composition time offset a sample states, for the kinds that name one
+    #[must_use]
+    pub const fn composition_time_offset(self) -> Option<i64> {
+        self.representation.fields().composition_time_offset
     }
 }
 
@@ -348,6 +213,9 @@ impl fmt::Debug for SampleError {
         if let Some(sample_description_index) = self.sample_description_index() {
             fields.field("sample_description_index", &sample_description_index);
         }
+        if let Some(established) = self.established_sample_description_index() {
+            fields.field("established_sample_description_index", &established);
+        }
         if let Some(data_reference_index) = self.data_reference_index() {
             fields.field("data_reference_index", &data_reference_index);
         }
@@ -360,6 +228,18 @@ impl fmt::Debug for SampleError {
         if let Some(available) = self.available_bytes() {
             fields.field("available_bytes", &available);
         }
+        if let Some(stated) = self.stated_decode_time() {
+            fields.field("stated_decode_time", &stated);
+        }
+        if let Some(reached) = self.reached_decode_time() {
+            fields.field("reached_decode_time", &reached);
+        }
+        if let Some(data_offset) = self.data_offset() {
+            fields.field("data_offset", &data_offset);
+        }
+        if let Some(composition_time_offset) = self.composition_time_offset() {
+            fields.field("composition_time_offset", &composition_time_offset);
+        }
 
         fields.finish()
     }
@@ -368,28 +248,10 @@ impl fmt::Debug for SampleError {
 impl error::Error for SampleError {
     /// Returns the failure of one box carried through, when it holds one
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match &self.representation {
-            Representation::Box(box_error) => Some(box_error),
-            Representation::DecodeTimeOverflow { .. }
-            | Representation::DataOffsetOverflow { .. }
-            | Representation::UnknownTrackId { .. }
-            | Representation::UnknownSampleDescriptionIndex { .. }
-            | Representation::MissingMovieExtends
-            | Representation::UnknownDataReferenceIndex { .. }
-            | Representation::ExternalDataReference { .. }
-            | Representation::SampleCountMismatch { .. }
-            | Representation::FirstChunkOutOfRange { .. }
-            | Representation::SampleSizeLimitExceeded { .. }
-            | Representation::UnfinishedSample { .. }
-            | Representation::AlreadyFinished
-            | Representation::NoFragmentOpen
-            | Representation::FragmentStillOpen
-            | Representation::SampleSizeOutOfRange { .. }
-            | Representation::DataOffsetOutOfRange { .. }
-            | Representation::CompositionTimeOffsetOutOfRange { .. }
-            | Representation::DecodeTimeMismatch { .. }
-            | Representation::BackwardDecodeTime { .. }
-            | Representation::SampleDescriptionIndexMismatch { .. } => None,
+        if let Representation::Box(box_error) = &self.representation {
+            Some(box_error)
+        } else {
+            None
         }
     }
 }
@@ -442,14 +304,39 @@ mod tests {
         assert_eq!(too_long.track_id(), Some(1));
         assert_eq!(too_long.needed_bytes(), Some(1 << 40));
         assert_eq!(too_long.available_bytes(), None);
+
+        let too_far = SampleError::data_offset_out_of_range(1, 1 << 40);
+
+        assert_eq!(too_far.needed_bytes(), None);
+        assert_eq!(too_far.data_offset(), Some(1 << 40));
+        assert_eq!(too_far.composition_time_offset(), None);
         assert_eq!(
-            SampleError::data_offset_out_of_range(1, 1 << 40).needed_bytes(),
+            SampleError::composition_time_offset_out_of_range(1, -(1 << 40))
+                .composition_time_offset(),
+            Some(-(1 << 40))
+        );
+
+        let mismatch = SampleError::sample_description_index_mismatch(1, 2, 1);
+
+        assert_eq!(mismatch.sample_description_index(), Some(2));
+        assert_eq!(mismatch.established_sample_description_index(), Some(1));
+        assert_eq!(mismatch.stated_decode_time(), None);
+        assert_eq!(
+            SampleError::unknown_sample_description_index(2, 7)
+                .established_sample_description_index(),
             None
         );
-        assert_eq!(
-            SampleError::sample_description_index_mismatch(1, 2, 1).sample_description_index(),
-            Some(2)
-        );
+
+        let gap = SampleError::decode_time_mismatch(1, 512, 1_024);
+
+        assert_eq!(gap.stated_decode_time(), Some(512));
+        assert_eq!(gap.reached_decode_time(), Some(1_024));
+        assert_eq!(gap.data_offset(), None);
+
+        let backward = SampleError::backward_decode_time(1, 512, 1_024);
+
+        assert_eq!(backward.stated_decode_time(), Some(512));
+        assert_eq!(backward.reached_decode_time(), Some(1_024));
         assert_eq!(SampleError::no_fragment_open().track_id(), None);
     }
 
@@ -578,6 +465,28 @@ mod tests {
         assert_eq!(
             format!("{:?}", SampleError::first_chunk_out_of_range(1, 5)),
             "SampleError { kind: FirstChunkOutOfRange, category: Malformed, track_id: 1, first_chunk: 5 }"
+        );
+        assert_eq!(
+            format!("{:?}", SampleError::decode_time_mismatch(1, 512, 1_024)),
+            "SampleError { kind: DecodeTimeMismatch, category: Malformed, track_id: 1, stated_decode_time: 512, reached_decode_time: 1024 }"
+        );
+        assert_eq!(
+            format!("{:?}", SampleError::data_offset_out_of_range(1, 1 << 40)),
+            "SampleError { kind: DataOffsetOutOfRange, category: Unsupported, track_id: 1, data_offset: 1099511627776 }"
+        );
+        assert_eq!(
+            format!(
+                "{:?}",
+                SampleError::composition_time_offset_out_of_range(1, -(1 << 40))
+            ),
+            "SampleError { kind: CompositionTimeOffsetOutOfRange, category: Unsupported, track_id: 1, composition_time_offset: -1099511627776 }"
+        );
+        assert_eq!(
+            format!(
+                "{:?}",
+                SampleError::sample_description_index_mismatch(1, 2, 1)
+            ),
+            "SampleError { kind: SampleDescriptionIndexMismatch, category: Malformed, track_id: 1, sample_description_index: 2, established_sample_description_index: 1 }"
         );
     }
 }
