@@ -69,20 +69,28 @@
 
 extern crate alloc;
 
+mod disposition;
 mod error;
 mod file_error;
 mod fragmented_reader;
+mod fragmented_structure;
 mod fragmented_writer;
 mod reader;
 mod sample;
+mod structure_error;
+mod whole_box_reader;
 mod writer;
 
+pub use disposition::Disposition;
 pub use error::{SampleError, SampleErrorKind};
 pub use file_error::{FileError, FileErrorKind};
 pub use fragmented_reader::FragmentedReader;
+pub use fragmented_structure::FragmentedStructure;
 pub use fragmented_writer::FragmentedWriter;
 pub use reader::SampleReader;
 pub use sample::Sample;
+pub use structure_error::{StructureError, StructureErrorKind};
+pub use whole_box_reader::WholeBoxReader;
 pub use writer::SampleWriter;
 
 pub use isobmff_boxes::*;
