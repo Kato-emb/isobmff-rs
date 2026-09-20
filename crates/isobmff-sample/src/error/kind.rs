@@ -94,6 +94,56 @@ pub enum SampleErrorKind {
     UnfinishedSample,
     /// Samples were declared over, and take nothing more
     AlreadyFinished,
+    /// Sample was handed over, or a fragment closed, while no fragment was open
+    NoFragmentOpen,
+    /// Fragment was begun while the one before it was still open
+    FragmentStillOpen,
+    /// Sample is longer than the 32 bits a `trun` row states its length in
+    ///
+    /// [`track_id`](crate::SampleError::track_id) is the track it belongs to,
+    /// and [`needed_bytes`](crate::SampleError::needed_bytes) the length it
+    /// carries.
+    SampleSizeOutOfRange,
+    /// Sample lies further into its fragment than the signed 32 bits of a `trun` offset reach
+    ///
+    /// [`MovieFragmentWriter`](crate::MovieFragmentWriter) anchors its offsets
+    /// at the `moof` (ISO/IEC 14496-12 §8.8.7.1), so a fragment whose media
+    /// data runs past what that field counts to is refused.
+    /// [`track_id`](crate::SampleError::track_id) is the track it belongs to.
+    DataOffsetOutOfRange,
+    /// Sample states a composition time offset neither version of a `trun` writes
+    ///
+    /// Version 0 writes the offset unsigned in 32 bits and version 1 signed
+    /// (ISO/IEC 14496-12 §8.8.8), so one past either is refused.
+    /// [`track_id`](crate::SampleError::track_id) is the track it belongs to.
+    CompositionTimeOffsetOutOfRange,
+    /// Sample does not start where the one before it in its track ends
+    ///
+    /// A `trun` states how long a sample lasts and not when it is decoded, so
+    /// the decode times of the samples of one fragment are only written if each
+    /// carries on from the one before it.
+    /// [`track_id`](crate::SampleError::track_id) is the track it belongs to.
+    DecodeTimeMismatch,
+    /// Fragment of a track starts before the samples written for it reach
+    ///
+    /// The decode time a `tfdt` states never goes back: ISO/IEC 14496-12
+    /// §8.8.12 has it as the sum of the durations of the samples before it,
+    /// and a fragment starting past that sum is written as it stands, but one
+    /// starting short of it is refused.
+    /// [`track_id`](crate::SampleError::track_id) is the track it belongs to.
+    BackwardDecodeTime,
+    /// Samples of one fragment of one track are described by two `stsd` entries
+    ///
+    /// A `traf` states which entry describes its samples once, for all of them.
+    /// [`track_id`](crate::SampleError::track_id) is the track they belong to,
+    /// and [`sample_description_index`](crate::SampleError::sample_description_index)
+    /// the entry the sample that differed names.
+    SampleDescriptionIndexMismatch,
+    /// Samples do not build the boxes of a fragment
+    ///
+    /// The writer holds the samples it is given to what the boxes of a fragment
+    /// state, so this is never reached from samples a caller hands over.
+    FragmentNotRepresentable,
 }
 
 /// Values a failure carries, keyed by what went wrong
@@ -142,6 +192,36 @@ pub(super) enum Representation {
     },
     /// Call made after the samples were declared over
     AlreadyFinished,
+    /// Sample handed over, or a fragment closed, while no fragment was open
+    NoFragmentOpen,
+    /// Fragment begun while the one before it was still open
+    FragmentStillOpen,
+    /// Sample longer than the field a `trun` row states its length in reaches
+    SampleSizeOutOfRange { track_id: u32, declared: u64 },
+    /// Sample lying further into its fragment than the offset a `trun` states reaches
+    DataOffsetOutOfRange { track_id: u32, offset: u64 },
+    /// Sample stating a composition time offset neither version of a `trun` writes
+    CompositionTimeOffsetOutOfRange { track_id: u32, offset: i64 },
+    /// Sample not starting where the one before it in its track ends
+    DecodeTimeMismatch {
+        track_id: u32,
+        stated: u64,
+        reached: u64,
+    },
+    /// Fragment of a track starting before the samples written for it reach
+    BackwardDecodeTime {
+        track_id: u32,
+        stated: u64,
+        reached: u64,
+    },
+    /// Samples of one fragment of one track described by two `stsd` entries
+    SampleDescriptionIndexMismatch {
+        track_id: u32,
+        stated: u32,
+        established: u32,
+    },
+    /// Samples that do not build the boxes of a fragment
+    FragmentNotRepresentable,
 }
 
 impl Representation {
@@ -163,6 +243,19 @@ impl Representation {
             Self::SampleSizeLimitExceeded { .. } => SampleErrorKind::SampleSizeLimitExceeded,
             Self::UnfinishedSample { .. } => SampleErrorKind::UnfinishedSample,
             Self::AlreadyFinished => SampleErrorKind::AlreadyFinished,
+            Self::NoFragmentOpen => SampleErrorKind::NoFragmentOpen,
+            Self::FragmentStillOpen => SampleErrorKind::FragmentStillOpen,
+            Self::SampleSizeOutOfRange { .. } => SampleErrorKind::SampleSizeOutOfRange,
+            Self::DataOffsetOutOfRange { .. } => SampleErrorKind::DataOffsetOutOfRange,
+            Self::CompositionTimeOffsetOutOfRange { .. } => {
+                SampleErrorKind::CompositionTimeOffsetOutOfRange
+            }
+            Self::DecodeTimeMismatch { .. } => SampleErrorKind::DecodeTimeMismatch,
+            Self::BackwardDecodeTime { .. } => SampleErrorKind::BackwardDecodeTime,
+            Self::SampleDescriptionIndexMismatch { .. } => {
+                SampleErrorKind::SampleDescriptionIndexMismatch
+            }
+            Self::FragmentNotRepresentable => SampleErrorKind::FragmentNotRepresentable,
         }
     }
 
@@ -178,11 +271,19 @@ impl Representation {
             | Self::UnknownDataReferenceIndex { .. }
             | Self::SampleCountMismatch { .. }
             | Self::FirstChunkOutOfRange { .. }
-            | Self::UnfinishedSample { .. } => Category::Malformed,
-            Self::ExternalDataReference { .. } | Self::SampleSizeLimitExceeded { .. } => {
-                Category::Unsupported
-            }
-            Self::AlreadyFinished => Category::Usage,
+            | Self::UnfinishedSample { .. }
+            | Self::DecodeTimeMismatch { .. }
+            | Self::BackwardDecodeTime { .. }
+            | Self::SampleDescriptionIndexMismatch { .. } => Category::Malformed,
+            Self::ExternalDataReference { .. }
+            | Self::SampleSizeLimitExceeded { .. }
+            | Self::SampleSizeOutOfRange { .. }
+            | Self::DataOffsetOutOfRange { .. }
+            | Self::CompositionTimeOffsetOutOfRange { .. } => Category::Unsupported,
+            Self::AlreadyFinished
+            | Self::NoFragmentOpen
+            | Self::FragmentStillOpen
+            | Self::FragmentNotRepresentable => Category::Usage,
         }
     }
 }
@@ -216,6 +317,15 @@ mod tests {
             Category::Malformed
         );
         assert_eq!(SampleError::already_finished().category(), Category::Usage);
+        assert_eq!(
+            SampleError::decode_time_mismatch(1, 512, 1_024).category(),
+            Category::Malformed
+        );
+        assert_eq!(
+            SampleError::sample_size_out_of_range(1, 1 << 40).category(),
+            Category::Unsupported
+        );
+        assert_eq!(SampleError::no_fragment_open().category(), Category::Usage);
         assert_eq!(
             SampleError::from(isobmff_core::Error::unsupported_version(2)).category(),
             Category::Unsupported
