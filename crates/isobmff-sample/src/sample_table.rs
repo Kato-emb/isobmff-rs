@@ -1,11 +1,9 @@
 //! [`sample_extents`], the samples the sample tables of a movie declare resolved to where they lie, ISO/IEC 14496-12 §8.5.1 and §8.7
 
-use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::iter;
 
-use isobmff_boxes::{MovieBox, SampleSizeBox, SampleSizeEntry, SampleSizes, TrackBox};
-use isobmff_core::BoxDefinition as _;
+use isobmff_boxes::{MovieBox, TrackBox};
 
 use crate::error::SampleError;
 use crate::sample::SampleExtent;
@@ -55,9 +53,6 @@ use crate::sample_description::SampleDescriptions;
 ///   the `stsd` entry names a `dref` entry its track has none of.
 /// * [`ExternalDataReference`](crate::SampleErrorKind::ExternalDataReference):
 ///   the `dref` entry names a resource other than the file itself.
-/// * [`UnsupportedBox`](isobmff_core::ErrorKind::UnsupportedBox), carried on
-///   [`Box`](crate::SampleErrorKind::Box): the `stsz` states its sizes a way
-///   added to [`SampleSizes`] after this resolver, which it does not read.
 /// * [`DecodeTimeOverflow`](crate::SampleErrorKind::DecodeTimeOverflow): the
 ///   decode times of a track run past what 64 bits carry.
 /// * [`DataOffsetOverflow`](crate::SampleErrorKind::DataOffsetOverflow): the
@@ -80,26 +75,7 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
     let track_id = trak.tkhd().track_id();
     let stbl = trak.mdia().minf().stbl();
     let descriptions = SampleDescriptions::new(trak);
-    let mut sizes: Box<dyn Iterator<Item = u32> + '_> = match stbl.stsz().sample_sizes() {
-        SampleSizes::Uniform {
-            sample_size,
-            sample_count,
-        } => Box::new(iter::repeat_n(
-            sample_size.get(),
-            usize::try_from(*sample_count).unwrap_or(usize::MAX),
-        )),
-        SampleSizes::PerSample(entries) => {
-            Box::new(entries.iter().map(SampleSizeEntry::entry_size))
-        }
-        // Why not unreachable!: the enum is non-exhaustive, so a way of stating
-        // the sizes added later lands here, and a failure the caller reads
-        // beats a panic.
-        _ => {
-            return Err(SampleError::from(isobmff_core::Error::unsupported_box(
-                SampleSizeBox::BOX_TYPE,
-            )));
-        }
-    };
+    let mut sizes = stbl.stsz().sizes();
     let mut deltas = stbl.stts().entries().iter().flat_map(|entry| {
         iter::repeat_n(
             entry.sample_delta(),

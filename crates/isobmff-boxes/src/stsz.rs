@@ -2,6 +2,7 @@
 
 use alloc::vec::Vec;
 use core::num::NonZeroU32;
+use core::slice;
 
 use isobmff_core::{
     BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWidth, FieldWriter,
@@ -111,6 +112,60 @@ impl SampleSizeBox {
     #[must_use]
     pub const fn sample_sizes(&self) -> &SampleSizes {
         &self.sample_sizes
+    }
+
+    /// Returns how many samples the track holds
+    #[must_use]
+    pub fn sample_count(&self) -> u32 {
+        match &self.sample_sizes {
+            SampleSizes::Uniform { sample_count, .. } => *sample_count,
+            // Why not saturate silently: a sample count past `u32` cannot be
+            // written at all, so this stands for a `Vec` no target can hold.
+            SampleSizes::PerSample(entries) => u32::try_from(entries.len()).unwrap_or(u32::MAX),
+        }
+    }
+
+    /// Returns the size of every sample in turn, however the box states them
+    ///
+    /// A size every sample shares comes out once per sample, so the sizes are
+    /// read the same way whichever way the box states them.
+    pub fn sizes(&self) -> impl Iterator<Item = u32> + '_ {
+        match &self.sample_sizes {
+            SampleSizes::Uniform {
+                sample_size,
+                sample_count,
+            } => Sizes::Uniform {
+                sample_size: sample_size.get(),
+                remaining: *sample_count,
+            },
+            SampleSizes::PerSample(entries) => Sizes::PerSample(entries.iter()),
+        }
+    }
+}
+
+/// The sizes of the samples of a track read one after another, however they are stated
+enum Sizes<'stsz> {
+    /// Size every sample shares, and how many samples have still to be read
+    Uniform { sample_size: u32, remaining: u32 },
+    /// Entries stating one size per sample
+    PerSample(slice::Iter<'stsz, SampleSizeEntry>),
+}
+
+impl Iterator for Sizes<'_> {
+    type Item = u32;
+
+    fn next(&mut self) -> Option<u32> {
+        match self {
+            Self::Uniform {
+                sample_size,
+                remaining,
+            } => {
+                *remaining = remaining.checked_sub(1)?;
+
+                Some(*sample_size)
+            }
+            Self::PerSample(entries) => entries.next().map(SampleSizeEntry::entry_size),
+        }
     }
 }
 
@@ -267,6 +322,25 @@ mod tests {
             SampleSizeBox::decode_payload(&payload).unwrap(),
             SampleSizeBox::new(SampleSizes::PerSample(Vec::new()))
         );
+    }
+
+    #[test]
+    fn a_size_every_sample_shares_is_read_once_per_sample() {
+        let sample_size = SampleSizeBox::new(uniform_sizes());
+
+        assert_eq!(sample_size.sample_count(), 8);
+        assert_eq!(sample_size.sizes().collect::<Vec<_>>(), [1_024; 8]);
+    }
+
+    #[test]
+    fn sizes_stated_per_sample_are_read_in_the_order_stated() {
+        let sample_size = SampleSizeBox::new(SampleSizes::PerSample(vec![
+            SampleSizeEntry::new(1_024),
+            SampleSizeEntry::new(512),
+        ]));
+
+        assert_eq!(sample_size.sample_count(), 2);
+        assert_eq!(sample_size.sizes().collect::<Vec<_>>(), [1_024, 512]);
     }
 
     #[test]
