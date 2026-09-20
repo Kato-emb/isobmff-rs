@@ -7,7 +7,8 @@ use isobmff_core::{BoxDefinition, BoxEncode, BoxType};
 use isobmff_sample::{MovieFragmentWriter, Sample};
 use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
 
-use crate::{FragmentedStructure, StructureError, whole_box_header, whole_payload};
+use super::FragmentedStructure;
+use crate::{StructureError, whole_box_header, whole_payload};
 
 /// Lays a fragmented movie file down, taking the samples as they come
 ///

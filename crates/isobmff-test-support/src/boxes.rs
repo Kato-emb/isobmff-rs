@@ -27,6 +27,9 @@ const TIMESCALE: u32 = 90_000;
 /// Media data the fragment of the synthetic files addresses
 pub const MEDIA_DATA: [u8; 64] = [0x11; 64];
 
+/// Ticks each sample of the synthetic non-fragmented file lasts
+pub const SAMPLE_DURATION: u32 = 3_000;
+
 /// User type the vendor box of the file of boxes passed on is declared under
 const USER_TYPE: Uuid = Uuid::new([
     0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10,
@@ -220,6 +223,74 @@ pub fn fragmented_file() -> Vec<u8> {
         written(&MediaDataBox::new(MEDIA_DATA.to_vec())),
     ]
     .concat()
+}
+
+/// A synthetic non-fragmented file of one track: the brands, the movie, and one `mdat` per chunk
+///
+/// `chunks` holds the bytes of each sample, chunk by chunk, and every sample
+/// lasts [`SAMPLE_DURATION`] ticks. The movie lies before the media data where
+/// `movie_first` is set and after it otherwise, and declares the same samples
+/// at the same offsets either way: a reader of the two files meets the same
+/// sample tables, once ahead of the bytes they name and once behind them.
+pub fn non_fragmented_file(chunks: &[&[&[u8]]], movie_first: bool) -> Vec<u8> {
+    let brands = written(&file_type());
+    let media_data: Vec<MediaDataBox> = chunks
+        .iter()
+        .map(|chunk| MediaDataBox::new(chunk.concat()))
+        .collect();
+    let movie_declaring = |chunk_offsets: Vec<u64>| {
+        let sizes = chunks
+            .iter()
+            .flat_map(|chunk| chunk.iter())
+            .map(|sample| u32::try_from(sample.len()).unwrap());
+        let stbl = sample_table(
+            TimeToSampleBox::from_deltas(sizes.clone().map(|_size| SAMPLE_DURATION)),
+            SampleToChunkBox::from_chunks(
+                chunks
+                    .iter()
+                    .map(|chunk| (u64::try_from(chunk.len()).unwrap(), 1)),
+            )
+            .unwrap(),
+            SampleSizeBox::from_sizes(sizes),
+            ChunkOffsetBox::from_offsets(chunk_offsets).unwrap(),
+        );
+
+        written(
+            &MovieBox::new(
+                MovieHeaderBox::new(EPOCH, EPOCH, TIMESCALE, 0, 2),
+                vec![track_laid_out(1, self_contained_data_reference(), stbl)],
+                None,
+            )
+            .unwrap(),
+        )
+    };
+    // Why not laying the movie out once: the chunk offsets it declares lie past
+    // the movie itself where it comes first, so its length is needed before its
+    // offsets are, and the offsets are held in fields of a fixed width, so the
+    // length is the same whatever they hold.
+    let movie_len = movie_declaring(vec![0; chunks.len()]).len();
+    let mut chunk_start = u64::try_from(brands.len()).unwrap();
+    if movie_first {
+        chunk_start = chunk_start.saturating_add(u64::try_from(movie_len).unwrap());
+    }
+    let chunk_offsets = media_data
+        .iter()
+        .map(|mdat| {
+            let header_len = mdat.encoded_len().saturating_sub(mdat.payload_len());
+            let chunk_offset = chunk_start.saturating_add(header_len);
+            chunk_start = chunk_start.saturating_add(mdat.encoded_len());
+
+            chunk_offset
+        })
+        .collect();
+    let movie = movie_declaring(chunk_offsets);
+    let media_data = media_data.iter().map(written).collect::<Vec<_>>().concat();
+
+    if movie_first {
+        [brands, movie, media_data].concat()
+    } else {
+        [brands, media_data, movie].concat()
+    }
 }
 
 /// A synthetic segment: the brands of the segment, one fragment, its media data
