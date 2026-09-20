@@ -5,7 +5,7 @@
 //! fragment states about its samples is stated in one place — the row of a track
 //! run, the `tfhd` of the fragment, or the `trex` of the track — so what the
 //! samples were declared as is known without resolving the inheritance the
-//! reader resolves them through.
+//! resolver settles them through.
 //!
 //! Reached from the target with `#[path = "sample_reader/presentation.rs"] mod
 //! presentation;`. A file under `fuzz_targets/` is a target only where the
@@ -23,7 +23,7 @@ use libfuzzer_sys::arbitrary::{self, Arbitrary};
 #[path = "../helpers/movie.rs"]
 mod movie;
 
-use movie::{movie_of, track_id_of};
+use movie::{SAMPLE_DESCRIPTION_INDEX, movie_of, track_id_of};
 
 /// Tracks the movie of a run declares
 const TRACK_COUNT: usize = 2;
@@ -42,9 +42,6 @@ const MAX_ROWS: usize = 8;
 
 /// Bytes the header of a movie fragment takes
 const HEADER_LEN: u64 = 8;
-
-/// The `stsd` entry every sample of a run is described by, the one entry the movie carries
-const SAMPLE_DESCRIPTION_INDEX: u32 = 1;
 
 /// Input of one run: the movie, the fragments continuing it, and the media data
 #[derive(Arbitrary, Debug)]
@@ -156,10 +153,10 @@ pub struct Row {
 /// One movie fragment as it lies in the presentation
 pub struct Placed {
     pub movie_fragment: MovieFragmentBox,
-    /// Bytes of the presentation the `moof` occupies
-    pub extent: Range<u64>,
-    /// Where the data its samples claim lies, and the media data that meets it
-    pub data: Option<(Range<u64>, Range<usize>)>,
+    /// Where the `moof` begins in the presentation
+    pub moof_start: u64,
+    /// Where the data its samples claim begins, and the media data that meets it
+    pub data: Option<(u64, Range<usize>)>,
 }
 
 /// One sample as the fragments declared it
@@ -177,10 +174,13 @@ pub struct LaidOut {
     declared: Vec<Declared>,
     /// Rows the fragments carry, however they lie
     pub rows: usize,
+    /// Whether every fragment lies as the movie has it
+    pub lies_as_declared: bool,
     /// Whether every fragment lies as the movie has it, every claim met
     pub met_as_declared: bool,
 }
 
+/// Lays `input` out as the presentation the fragments and their media data make
 ///
 /// Reports `None` where the boxes of the input do not build: a fragment stating
 /// what a box cannot carry is an input this run passes over rather than a failure
@@ -205,6 +205,7 @@ pub fn lay_out(input: &Input<'_>) -> Option<LaidOut> {
     let mut fragments = Vec::new();
     let mut declared = Vec::new();
     let mut rows = 0;
+    let mut all_lie_as_declared = true;
     let mut met_as_declared = true;
     let mut cursor: u64 = 0;
     let mut media_data_taken: usize = 0;
@@ -367,11 +368,9 @@ pub fn lay_out(input: &Input<'_>) -> Option<LaidOut> {
             }
             media_data_taken = laid_down;
 
-            Some((
-                claim_start..claim_start.saturating_add(u64::try_from(arrived).ok()?),
-                laid_down.saturating_sub(arrived)..laid_down,
-            ))
+            Some((claim_start, laid_down.saturating_sub(arrived)..laid_down))
         } else {
+            all_lie_as_declared = false;
             met_as_declared = false;
             None
         };
@@ -381,7 +380,7 @@ pub fn lay_out(input: &Input<'_>) -> Option<LaidOut> {
                 MovieFragmentHeaderBox::new(fragment.sequence_number),
                 track_fragments,
             ),
-            extent: moof_start..moof_end,
+            moof_start,
             data,
         });
         cursor = data_cursor;
@@ -392,6 +391,7 @@ pub fn lay_out(input: &Input<'_>) -> Option<LaidOut> {
         fragments,
         declared,
         rows,
+        lies_as_declared: all_lie_as_declared,
         met_as_declared,
     })
 }

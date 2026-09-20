@@ -10,6 +10,9 @@ use isobmff_test_support::track;
 /// Ticks a second the movie is timed in
 const TIMESCALE: u32 = 1_000;
 
+/// The `stsd` entry every sample of a run is described by, the one entry each track carries
+pub const SAMPLE_DESCRIPTION_INDEX: u32 = 1;
+
 /// The id the track at `position` among the tracks of a movie takes
 ///
 /// The ids count from one: §8.3.2.3 has zero name no track.

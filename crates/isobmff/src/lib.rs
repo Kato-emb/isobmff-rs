@@ -9,10 +9,10 @@
 //!
 //! # The layers a file is read through
 //!
-//! Seven layers stand between a file and the samples it carries, each one
-//! machine, joined only by the values that pass between them: a box event, a
-//! typed box, an extent, a sample, a disposition. No layer holds another's
-//! machine. Listed by how far each stands from the layout of a file:
+//! Seven layers stand between a file and the samples it carries, joined only
+//! by the values that pass between them: a box event, a typed box, an extent,
+//! a sample, a disposition. No layer holds another's machine. Listed by how
+//! far each stands from the layout of a file:
 //!
 //! 1. **Framing.** A file is a sequence of objects, called boxes (§4.2), and
 //!    framing that sequence is the work of [`BoxReader`] and [`BoxWriter`],

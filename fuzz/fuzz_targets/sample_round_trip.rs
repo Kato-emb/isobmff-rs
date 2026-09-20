@@ -29,7 +29,7 @@ use libfuzzer_sys::fuzz_target;
 #[path = "helpers/movie.rs"]
 mod movie;
 
-use movie::{movie_of, track_id_of};
+use movie::{SAMPLE_DESCRIPTION_INDEX, movie_of, track_id_of};
 
 /// Tracks the samples of a run are laid out over
 const TRACK_COUNT: usize = 2;
@@ -39,9 +39,6 @@ const MAX_FRAGMENTS: usize = 4;
 
 /// Samples one fragment carries at most
 const MAX_SAMPLES: usize = 8;
-
-/// The `stsd` entry every sample of a run is described by
-const SAMPLE_DESCRIPTION_INDEX: u32 = 1;
 
 /// Input of one run: the samples of each fragment, and the bytes they are carried as
 #[derive(Arbitrary, Debug)]

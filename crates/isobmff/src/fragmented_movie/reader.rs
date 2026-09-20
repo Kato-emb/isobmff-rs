@@ -43,10 +43,13 @@ use crate::{Disposition, FragmentedStructure, StructureError, WholeBoxReader};
 ///   A file carrying no `ftyp` reads all the same, as §4.3 allows.
 /// * A box read into a value is gathered whole before it is read, so what it
 ///   declares is bounded — see [`with_limits`](Self::with_limits).
-/// * The samples of a fragment are read in the order it declares them, out of
-///   the media data that follows it. [`wanted_extent`](Self::wanted_extent)
-///   names the bytes the earliest sample still lacks, which a caller handing
-///   the file over in order meets as they come.
+/// * The samples of a fragment are read out of the media data that follows
+///   it, and come out as their bytes arrive whole: those of one track in the
+///   order the fragment declares them, those of two tracks interleaved in the
+///   media data as the cuts of the input make them whole.
+///   [`wanted_extent`](Self::wanted_extent) names the bytes the earliest
+///   sample still lacks, which a caller handing the file over in order meets
+///   as they come.
 /// * An `Err` leaves the reader failed for good,
 ///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The samples completed
