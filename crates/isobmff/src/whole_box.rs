@@ -1,9 +1,10 @@
-//! [`WholeBoxReader`], one box gathered whole out of the steps it was framed into and read into a value
+//! [`WholeBoxReader`] and [`whole_payload`], one box read whole out of the steps it was framed into, and written whole into the steps it is laid down as
 
+use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use isobmff_core::{BoxDecode, BoxDefinition, BoxHeader};
+use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxHeader, BoxType};
 
 use crate::StructureError;
 
@@ -31,36 +32,8 @@ use crate::StructureError;
 /// * A failure leaves the reader as it stood: the caller drops it, since the
 ///   box it was reading is lost.
 ///
-/// # Examples
-///
-/// ```
-/// use isobmff::{BoxEvent, BoxReader, FileTypeBox, WholeBoxReader};
-/// # use isobmff_test_support::{file_type, written};
-///
-/// // The steps of an `ftyp` as the framing reports them, cut anywhere
-/// let mut boxes = BoxReader::new();
-/// boxes.handle_input(&written(&file_type()))?;
-/// boxes.finish()?;
-///
-/// // The reader is begun on the header, handed the payload, and finished at the end
-/// let mut reader = None;
-/// let mut read = None;
-/// while let Some(event) = boxes.poll_event() {
-///     match event {
-///         BoxEvent::Header(header) => {
-///             reader = Some(WholeBoxReader::<FileTypeBox>::begin(header, 1_024)?);
-///         }
-///         BoxEvent::Payload(payload) => reader.as_mut().unwrap().handle_payload(payload)?,
-///         BoxEvent::End => read = Some(reader.take().unwrap().finish()?),
-///         _later_step => {}
-///     }
-/// }
-///
-/// assert_eq!(read, Some(file_type()));
-/// # Ok::<(), Box<dyn core::error::Error>>(())
-/// ```
 #[derive(Clone, Debug)]
-pub struct WholeBoxReader<Value> {
+pub(crate) struct WholeBoxReader<Value> {
     payload_limit: u64,
     payload: Vec<u8>,
     value: PhantomData<Value>,
@@ -73,7 +46,7 @@ impl<Value: BoxDecode + BoxDefinition> WholeBoxReader<Value> {
     ///
     /// * [`PayloadLimitExceeded`](crate::StructureErrorKind::PayloadLimitExceeded):
     ///   the box declares more payload than `payload_limit`.
-    pub fn begin(header: BoxHeader, payload_limit: u64) -> Result<Self, StructureError> {
+    pub(crate) fn begin(header: BoxHeader, payload_limit: u64) -> Result<Self, StructureError> {
         if let Some(declared) = header
             .payload_len()
             .filter(|declared| *declared > payload_limit)
@@ -101,7 +74,7 @@ impl<Value: BoxDecode + BoxDefinition> WholeBoxReader<Value> {
     ///
     /// * [`PayloadLimitExceeded`](crate::StructureErrorKind::PayloadLimitExceeded):
     ///   a box declaring no total reaches past the limit the reader gathers.
-    pub fn handle_payload(&mut self, mut payload: Vec<u8>) -> Result<(), StructureError> {
+    pub(crate) fn handle_payload(&mut self, mut payload: Vec<u8>) -> Result<(), StructureError> {
         // Why not checked_add: the framing cut the payload out of a finite
         // resource, so its length cannot run past what 64 bits carry.
         let reached = (self.payload.len() as u64).saturating_add(payload.len() as u64);
@@ -127,10 +100,47 @@ impl<Value: BoxDecode + BoxDefinition> WholeBoxReader<Value> {
     ///
     /// * [`Box`](crate::StructureErrorKind::Box): the payload does not read
     ///   as a `Value`, with the box named as the container.
-    pub fn finish(self) -> Result<Value, StructureError> {
+    pub(crate) fn finish(self) -> Result<Value, StructureError> {
         Value::decode_payload(&self.payload)
             .map_err(|failure| failure.in_container(Value::BOX_TYPE).into())
     }
+}
+
+/// Encodes `value` as the payload of the whole box it forms, naming that box on a failure
+///
+/// The mirror of [`WholeBoxReader`]: the payload comes back in one allocation
+/// sized to what the value declares, for a writer to lay down between the
+/// header and the end of the box.
+///
+/// # Errors
+///
+/// * [`Box`](crate::StructureErrorKind::Box): the value does not write, or
+///   declares a payload longer than any buffer on this target holds.
+pub(crate) fn whole_payload<Value: BoxEncode + BoxDefinition>(
+    value: &Value,
+) -> Result<Vec<u8>, StructureError> {
+    let payload_len = value.payload_len();
+    let Ok(length) = usize::try_from(payload_len) else {
+        return Err(past_every_buffer(Value::BOX_TYPE, payload_len));
+    };
+    let mut payload = vec![0; length];
+
+    value
+        .encode_payload(&mut payload)
+        .map_err(|failure| failure.in_container(Value::BOX_TYPE))?;
+
+    Ok(payload)
+}
+
+/// Reports a box longer than any buffer on this target, as `isobmff-core` names it
+pub(crate) fn past_every_buffer(box_type: BoxType, payload_len: u64) -> StructureError {
+    // Why not a failure of its own: a payload past `usize`, and a header that
+    // cannot measure one, both exceed every buffer this target can hold, which
+    // is the short buffer `isobmff_core::BoxEncode::encode` folds them into.
+    StructureError::from(
+        isobmff_core::Error::truncated_buffer(payload_len, usize::MAX as u64)
+            .in_container(box_type),
+    )
 }
 
 #[cfg(test)]
@@ -143,7 +153,7 @@ mod tests {
     use isobmff_sequence::BoxEvent;
     use isobmff_test_support::{events_of, file_type, written};
 
-    use super::{BoxDefinition, StructureError, WholeBoxReader};
+    use super::{BoxDefinition, StructureError, WholeBoxReader, whole_payload};
 
     /// Bytes a box may declare in these tests, unless one states its own limit
     const PAYLOAD_LIMIT: u64 = 1_024;
@@ -221,6 +231,18 @@ mod tests {
                 4
             ))
         );
+    }
+
+    #[test]
+    fn a_value_is_written_as_the_payload_the_reader_reads_it_back_from() {
+        let payload = whole_payload(&file_type()).unwrap();
+        let header =
+            BoxHeader::with_payload_len(FileTypeBox::BOX_TYPE, payload.len() as u64).unwrap();
+        let mut reader = WholeBoxReader::<FileTypeBox>::begin(header, PAYLOAD_LIMIT).unwrap();
+
+        reader.handle_payload(payload).unwrap();
+
+        assert_eq!(reader.finish(), Ok(file_type()));
     }
 
     #[test]

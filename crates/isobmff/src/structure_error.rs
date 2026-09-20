@@ -4,26 +4,29 @@ use core::error;
 use core::fmt;
 
 use isobmff_core::{BoxType, Category};
+use isobmff_sample::SampleError;
 
 /// Reason a file does not read through the layers this crate holds
 ///
 /// What went wrong is one [`kind`](Self::kind): a failure of the structure of
 /// the file — a box it requires that never came, one that came twice, one
 /// that came out of the order the structure keeps, a box reaching past the
-/// limit a reader gathers for one — or a failure of one box, which
-/// [`isobmff_core::Error`] names and this type carries through whole, as
-/// [`box_error`](Self::box_error). What a caller does about any of them is one
-/// [`category`](Self::category).
+/// limit a reader gathers for one — or a failure of a layer beneath, which
+/// this type carries through whole rather than translating:
+/// [`sequence_error`](Self::sequence_error) for the framing of the file,
+/// [`sample_error`](Self::sample_error) for the samples it carries, and
+/// [`box_error`](Self::box_error) for one box that did not decode. What a
+/// caller does about any of them is one [`category`](Self::category).
 ///
 /// The values a failure of this crate's own carries follow from its kind, and
-/// each kind names its own on [`StructureErrorKind`]. A carried box failure
-/// keeps its values and its container path on [`box_error`](Self::box_error),
-/// so the accessors here report `None` for it.
+/// each kind names its own on [`StructureErrorKind`]. A carried failure keeps
+/// its own values, so the accessors here report `None` for it.
 ///
 /// # Examples
 ///
 /// ```
-/// use isobmff::{BoxType, Category, ErrorKind, StructureError, StructureErrorKind};
+/// use isobmff::{BoxType, Category, StructureError, StructureErrorKind};
+/// use isobmff_sample::{SampleError, SampleErrorKind};
 ///
 /// // A failure of the structure names its own kind
 /// let failure = StructureError::missing_mandatory_box(BoxType::compact(*b"moov"));
@@ -31,13 +34,16 @@ use isobmff_core::{BoxType, Category};
 /// assert_eq!(failure.category(), Category::Malformed);
 /// assert_eq!(failure.box_type(), Some(BoxType::compact(*b"moov")));
 ///
-/// // A failure of one box is carried through whole
-/// let carried = StructureError::from(isobmff::Error::unsupported_version(2));
+/// // A failure of the samples is carried through whole
+/// let carried = StructureError::from(SampleError::unknown_track_id(3));
 /// assert_eq!(
 ///     carried.kind(),
-///     StructureErrorKind::Box(ErrorKind::UnsupportedVersion)
+///     StructureErrorKind::Sample(SampleErrorKind::UnknownTrackId)
 /// );
-/// assert_eq!(carried.box_error().and_then(|box_error| box_error.version()), Some(2));
+/// assert_eq!(
+///     carried.sample_error().map(SampleError::kind),
+///     Some(SampleErrorKind::UnknownTrackId)
+/// );
 /// assert_eq!(carried.box_type(), None);
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -94,6 +100,8 @@ impl StructureError {
     #[must_use]
     pub const fn kind(self) -> StructureErrorKind {
         match self.representation {
+            Representation::Sequence(failure) => StructureErrorKind::Sequence(failure.kind()),
+            Representation::Sample(failure) => StructureErrorKind::Sample(failure.kind()),
             Representation::Box(box_error) => StructureErrorKind::Box(box_error.kind()),
             Representation::MissingMandatoryBox { .. } => StructureErrorKind::MissingMandatoryBox,
             Representation::DuplicateBox { .. } => StructureErrorKind::DuplicateBox,
@@ -107,6 +115,8 @@ impl StructureError {
     #[must_use]
     pub const fn category(self) -> Category {
         match self.representation {
+            Representation::Sequence(failure) => failure.category(),
+            Representation::Sample(failure) => failure.category(),
             Representation::Box(box_error) => box_error.category(),
             Representation::MissingMandatoryBox { .. }
             | Representation::DuplicateBox { .. }
@@ -114,6 +124,18 @@ impl StructureError {
             Representation::PayloadLimitExceeded { .. } => Category::Unsupported,
             Representation::AlreadyFinished => Category::Usage,
         }
+    }
+
+    /// Returns the failure of the framing of the file, when it holds one
+    #[must_use]
+    pub const fn sequence_error(self) -> Option<isobmff_sequence::Error> {
+        self.representation.fields().sequence_error
+    }
+
+    /// Returns the failure of the samples the file carries, when it holds one
+    #[must_use]
+    pub const fn sample_error(self) -> Option<SampleError> {
+        self.representation.fields().sample_error
     }
 
     /// Returns the failure of one box carried through, when it holds one
@@ -144,6 +166,24 @@ impl StructureError {
     }
 }
 
+impl From<isobmff_sequence::Error> for StructureError {
+    /// Carries the failure of the framing of the file through as it stands
+    fn from(failure: isobmff_sequence::Error) -> Self {
+        Self {
+            representation: Representation::Sequence(failure),
+        }
+    }
+}
+
+impl From<SampleError> for StructureError {
+    /// Carries the failure of the samples through as it stands
+    fn from(failure: SampleError) -> Self {
+        Self {
+            representation: Representation::Sample(failure),
+        }
+    }
+}
+
 impl From<isobmff_core::Error> for StructureError {
     /// Carries the failure of one box through as it stands
     fn from(box_error: isobmff_core::Error) -> Self {
@@ -156,6 +196,8 @@ impl From<isobmff_core::Error> for StructureError {
 impl fmt::Display for StructureError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.representation {
+            Representation::Sequence(failure) => write!(formatter, "{failure}"),
+            Representation::Sample(failure) => write!(formatter, "{failure}"),
             Representation::Box(box_error) => write!(formatter, "{box_error}"),
             Representation::MissingMandatoryBox { box_type } => {
                 write!(formatter, "file carries no {box_type} box")
@@ -189,6 +231,12 @@ impl fmt::Debug for StructureError {
         fields.field("kind", &self.kind());
         fields.field("category", &self.category());
 
+        if let Some(failure) = values.sequence_error {
+            fields.field("sequence_error", &failure);
+        }
+        if let Some(failure) = values.sample_error {
+            fields.field("sample_error", &failure);
+        }
         if let Some(box_error) = values.box_error {
             fields.field("box_error", &box_error);
         }
@@ -207,12 +255,17 @@ impl fmt::Debug for StructureError {
 }
 
 impl error::Error for StructureError {
-    /// Returns the failure of one box carried through, when it holds one
+    /// Returns the failure of the layer beneath, when it holds one
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        if let Representation::Box(box_error) = &self.representation {
-            Some(box_error)
-        } else {
-            None
+        match &self.representation {
+            Representation::Sequence(failure) => Some(failure),
+            Representation::Sample(failure) => Some(failure),
+            Representation::Box(box_error) => Some(box_error),
+            Representation::MissingMandatoryBox { .. }
+            | Representation::DuplicateBox { .. }
+            | Representation::BoxOutOfOrder { .. }
+            | Representation::PayloadLimitExceeded { .. }
+            | Representation::AlreadyFinished => None,
         }
     }
 }
@@ -221,8 +274,9 @@ impl error::Error for StructureError {
 ///
 /// The vocabulary is this crate's own: the boxes a structure is made of, the
 /// order it keeps them in, and reading one of them whole name their failures
-/// here. A failure of one box is not translated: it keeps the kind
-/// [`isobmff_core::ErrorKind`] gives it, carried on [`Box`](Self::Box).
+/// here. A failure of a layer beneath is not translated: it keeps the kind
+/// that layer gives it, carried on [`Sequence`](Self::Sequence),
+/// [`Sample`](Self::Sample), or [`Box`](Self::Box).
 ///
 /// The situations a structure reaches are added to as ISO/IEC 14496-12 is
 /// read further, so a match on this must leave room for kinds that are not
@@ -230,6 +284,16 @@ impl error::Error for StructureError {
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum StructureErrorKind {
+    /// Failure of the framing of the file, carried through as `isobmff-sequence` names it
+    ///
+    /// The values that failure carries are on
+    /// [`sequence_error`](StructureError::sequence_error).
+    Sequence(isobmff_sequence::ErrorKind),
+    /// Failure of the samples the file carries, carried through as `isobmff-sample` names it
+    ///
+    /// The values that failure carries are on
+    /// [`sample_error`](StructureError::sample_error).
+    Sample(isobmff_sample::SampleErrorKind),
     /// Failure of one box, carried through as `isobmff-core` names it
     ///
     /// The values that failure carries, and the boxes it was reached through,
@@ -265,6 +329,10 @@ pub enum StructureErrorKind {
 /// Values a failure carries, keyed by what went wrong
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Representation {
+    /// Failure of the framing of the file, carried through whole
+    Sequence(isobmff_sequence::Error),
+    /// Failure of the samples the file carries, carried through whole
+    Sample(SampleError),
     /// Failure of one box, carried through whole
     Box(isobmff_core::Error),
     /// Box the structure requires that is not there
@@ -285,6 +353,8 @@ enum Representation {
 
 /// Values a failure carries, laid flat, with `None` where its kind carries no such value
 struct Fields {
+    sequence_error: Option<isobmff_sequence::Error>,
+    sample_error: Option<SampleError>,
     box_error: Option<isobmff_core::Error>,
     box_type: Option<BoxType>,
     needed_bytes: Option<u64>,
@@ -294,6 +364,8 @@ struct Fields {
 impl Fields {
     /// Values of a failure that carries none
     const EMPTY: Self = Self {
+        sequence_error: None,
+        sample_error: None,
         box_error: None,
         box_type: None,
         needed_bytes: None,
@@ -305,6 +377,14 @@ impl Representation {
     /// Returns the values the failure carries, laid flat
     const fn fields(self) -> Fields {
         match self {
+            Self::Sequence(failure) => Fields {
+                sequence_error: Some(failure),
+                ..Fields::EMPTY
+            },
+            Self::Sample(failure) => Fields {
+                sample_error: Some(failure),
+                ..Fields::EMPTY
+            },
             Self::Box(box_error) => Fields {
                 box_error: Some(box_error),
                 ..Fields::EMPTY
@@ -336,6 +416,7 @@ mod tests {
     use alloc::string::ToString as _;
 
     use isobmff_core::{BoxType, Category};
+    use isobmff_sample::SampleError;
 
     use super::{StructureError, StructureErrorKind};
 
@@ -382,18 +463,30 @@ mod tests {
     }
 
     #[test]
-    fn a_failure_of_one_box_keeps_its_values_and_the_boxes_it_was_reached_through() {
+    fn a_failure_of_a_layer_beneath_is_carried_through_whole() {
+        let sequence_error = isobmff_sequence::Error::unfinished_box(16, 8);
+        let carried = StructureError::from(sequence_error);
+
+        assert_eq!(
+            carried.kind(),
+            StructureErrorKind::Sequence(isobmff_sequence::ErrorKind::UnfinishedBox)
+        );
+        assert_eq!(carried.sequence_error(), Some(sequence_error));
+        assert_eq!(carried.sample_error(), None);
+        assert_eq!(carried.needed_bytes(), None);
+
+        let sample_error = SampleError::unknown_track_id(3);
+        let carried = StructureError::from(sample_error);
+
+        assert_eq!(carried.sample_error(), Some(sample_error));
+        assert_eq!(carried.box_error(), None);
+
         let box_error = isobmff_core::Error::missing_mandatory_box(BoxType::compact(*b"trex"))
             .in_container(BoxType::compact(*b"mvex"));
         let carried = StructureError::from(box_error);
 
-        assert_eq!(
-            carried.kind(),
-            StructureErrorKind::Box(isobmff_core::ErrorKind::MissingMandatoryBox)
-        );
         assert_eq!(carried.box_error(), Some(box_error));
         assert_eq!(carried.box_type(), None);
-        assert_eq!(carried.needed_bytes(), None);
     }
 
     #[test]
@@ -421,12 +514,12 @@ mod tests {
     }
 
     #[test]
-    fn display_of_a_failure_of_one_box_reads_as_that_failure() {
-        let box_error = isobmff_core::Error::unsupported_version(2);
+    fn display_of_a_carried_failure_reads_as_that_failure() {
+        let sample_error = SampleError::unknown_track_id(3);
 
         assert_eq!(
-            StructureError::from(box_error).to_string(),
-            box_error.to_string()
+            StructureError::from(sample_error).to_string(),
+            sample_error.to_string()
         );
     }
 

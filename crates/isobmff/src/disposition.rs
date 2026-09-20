@@ -13,7 +13,7 @@
 /// here yet.
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum Disposition {
+pub(crate) enum Disposition {
     /// Box is read whole into a [`FileTypeBox`](isobmff_boxes::FileTypeBox)
     FileType,
     /// Box is read whole into a [`MovieBox`](isobmff_boxes::MovieBox)

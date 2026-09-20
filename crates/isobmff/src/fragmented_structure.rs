@@ -38,34 +38,8 @@ use crate::{Disposition, StructureError};
 /// * [`finish`](Self::finish) declares the file over. A header handed over
 ///   then, or a second [`finish`](Self::finish), is
 ///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished).
-///
-/// # Examples
-///
-/// ```
-/// use isobmff::{BoxHeader, BoxType, Disposition, FragmentedStructure};
-///
-/// let header = |fourcc: &[u8; 4]| {
-///     BoxHeader::with_payload_len(BoxType::compact(*fourcc), 16).unwrap()
-/// };
-/// let mut structure = FragmentedStructure::new();
-///
-/// // The brands and the movie are read into values
-/// assert_eq!(structure.handle_header(header(b"ftyp"))?, Disposition::FileType);
-/// assert_eq!(structure.handle_header(header(b"moov"))?, Disposition::Movie);
-///
-/// // A fragment is read into a value, and the media data beside it passed on
-/// assert_eq!(structure.handle_header(header(b"moof"))?, Disposition::MovieFragment);
-/// assert_eq!(structure.handle_header(header(b"mdat"))?, Disposition::MediaData);
-///
-/// // Any other box is passed over
-/// assert_eq!(structure.handle_header(header(b"free"))?, Disposition::Skip);
-///
-/// // The file is declared over
-/// structure.finish()?;
-/// # Ok::<(), isobmff::StructureError>(())
-/// ```
 #[derive(Clone, Copy, Debug)]
-pub struct FragmentedStructure {
+pub(crate) struct FragmentedStructure {
     state: State,
 }
 
@@ -96,7 +70,7 @@ enum Position {
 impl FragmentedStructure {
     /// Creates a structure waiting at the start of a fragmented movie file
     #[must_use]
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             state: State::Reading(Position::Start),
         }
@@ -115,7 +89,10 @@ impl FragmentedStructure {
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the structure keeps and reports
     ///   again for every call after it.
-    pub fn handle_header(&mut self, header: BoxHeader) -> Result<Disposition, StructureError> {
+    pub(crate) fn handle_header(
+        &mut self,
+        header: BoxHeader,
+    ) -> Result<Disposition, StructureError> {
         let position = match self.state {
             State::Reading(position) => position,
             State::Finished => return Err(StructureError::already_finished()),
@@ -139,7 +116,7 @@ impl FragmentedStructure {
     ///   file was already declared over.
     /// * The failure of a previous call, which the structure keeps and reports
     ///   again for every call after it.
-    pub fn finish(&mut self) -> Result<(), StructureError> {
+    pub(crate) fn finish(&mut self) -> Result<(), StructureError> {
         match self.state {
             State::Reading(Position::Declared | Position::Fragmenting) => {
                 self.state = State::Finished;
