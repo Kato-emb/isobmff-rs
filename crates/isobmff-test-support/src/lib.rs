@@ -24,6 +24,7 @@ mod driving;
 
 pub use boxes::{
     MEDIA_DATA, file_running_to_its_end, file_type, fragmented_file, fragmented_movie, framed,
-    movie_fragment, segment_file, track, track_described_by, unfragmented_movie, written,
+    movie_fragment, sample_table, segment_file, track, track_described_by, track_laid_out,
+    unfragmented_movie, written,
 };
 pub use driving::{bytes_of, events_of, payloads_fused, polled};

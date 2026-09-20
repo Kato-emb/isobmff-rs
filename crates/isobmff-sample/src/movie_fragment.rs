@@ -2,13 +2,11 @@
 
 use alloc::vec::Vec;
 
-use isobmff_boxes::{
-    MovieBox, MovieFragmentBox, SampleDescriptionBox, SampleEntry, TrackFragmentBox, TrackRunBox,
-};
-use isobmff_core::BoxDefinition as _;
+use isobmff_boxes::{MovieBox, MovieFragmentBox, TrackFragmentBox, TrackRunBox};
 
 use crate::error::SampleError;
 use crate::sample::SampleExtent;
+use crate::sample_description::SampleDescriptions;
 use crate::track_decode_times::TrackDecodeTimes;
 
 /// Resolves the samples `movie_fragment` declares against `movie`, in the order it declares them
@@ -35,7 +33,7 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// whether or not the extents are taken. A failure returned outright leaves
 /// `decode_times` as it was. A row stating no composition time offset has one
 /// of zero. The `data_reference_index` of each sample is read off the `stsd`
-/// entry that describes it (§8.5.2.3).
+/// entry that describes it (§8.5.2.3), which has to name the file itself.
 ///
 /// The extents come out in the order the fragment declares them, and stop at
 /// the first failure, which is the last item. They borrow nothing: the boxes
@@ -51,9 +49,13 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///   carries samples of a track the movie declares no `trak` or `trex` for.
 /// * [`UnknownSampleDescriptionIndex`](crate::SampleErrorKind::UnknownSampleDescriptionIndex):
 ///   a `traf` describes its samples by an `stsd` entry its track has none of.
-/// * The failures of [`SampleEntry::try_from`], carried on
-///   [`Box`](crate::SampleErrorKind::Box): the `stsd` entry does not read as a
-///   sample entry, with `stsd` added to the containers.
+/// * The failures of [`SampleEntry::try_from`](isobmff_boxes::SampleEntry),
+///   carried on [`Box`](crate::SampleErrorKind::Box): the `stsd` entry does
+///   not read as a sample entry, with `stsd` added to the containers.
+/// * [`UnknownDataReferenceIndex`](crate::SampleErrorKind::UnknownDataReferenceIndex):
+///   the `stsd` entry names a `dref` entry its track has none of.
+/// * [`ExternalDataReference`](crate::SampleErrorKind::ExternalDataReference):
+///   the `dref` entry names a resource other than the file itself.
 /// * [`DecodeTimeOverflow`](crate::SampleErrorKind::DecodeTimeOverflow): the
 ///   decode times of a track run past what 64 bits carry.
 ///
@@ -123,11 +125,8 @@ impl TrackFragment {
         let sample_duration = tfhd
             .default_sample_duration()
             .unwrap_or(trex.default_sample_duration());
-        let data_reference_index = data_reference_index(
-            trak.mdia().minf().stbl().stsd(),
-            track_id,
-            sample_description_index,
-        )?;
+        let data_reference_index =
+            SampleDescriptions::new(trak).data_reference_index(sample_description_index)?;
         let decode_time = traf.tfdt().map_or(reached.decode_time(track_id), |tfdt| {
             tfdt.base_media_decode_time()
         });
@@ -159,26 +158,6 @@ impl TrackFragment {
             decode_time,
         })
     }
-}
-
-/// Returns the `data_reference_index` of entry `sample_description_index` of `stsd`, counted from one
-fn data_reference_index(
-    stsd: &SampleDescriptionBox,
-    track_id: u32,
-    sample_description_index: u32,
-) -> Result<u16, SampleError> {
-    let entry = usize::try_from(sample_description_index)
-        .ok()
-        .and_then(|index| index.checked_sub(1))
-        .and_then(|index| stsd.entries().get(index))
-        .ok_or(SampleError::unknown_sample_description_index(
-            track_id,
-            sample_description_index,
-        ))?;
-    let sample_entry = SampleEntry::try_from(entry)
-        .map_err(|error| error.in_container(SampleDescriptionBox::BOX_TYPE))?;
-
-    Ok(sample_entry.data_reference_index())
 }
 
 /// Where the samples of a track fragment settle as its runs are walked
@@ -276,20 +255,23 @@ fn resolve_run(
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::String;
     use alloc::vec;
     use alloc::vec::Vec;
     use core::ops::Range;
 
     use isobmff_boxes::{
-        MovieBox, MovieExtendsBox, MovieFragmentBox, MovieFragmentHeaderBox, MovieHeaderBox,
-        TrackBox, TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
-        TrackFragmentHeaderBox, TrackRunBox, TrackRunSample,
+        ChunkOffsetBox, DataEntry, DataEntryUrlBox, DataReferenceBox, MovieBox, MovieExtendsBox,
+        MovieFragmentBox, MovieFragmentHeaderBox, MovieHeaderBox, SampleSizeBox, SampleSizes,
+        SampleToChunkBox, TimeToSampleBox, TrackBox, TrackExtendsBox,
+        TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox, TrackRunBox,
+        TrackRunSample,
     };
     use isobmff_core::{
-        AnyBox, BoxDecode as _, BoxEncode as _, BoxType, FullBoxFlags, Mp4EpochSeconds,
+        BoxDecode as _, BoxEncode as _, FullBoxFlags, Mp4EpochSeconds, NullTerminatedString,
     };
     use isobmff_test_support::{
-        fragmented_movie, track, track_described_by, unfragmented_movie, written,
+        fragmented_movie, sample_table, track, track_laid_out, unfragmented_movie, written,
     };
 
     use super::sample_extents;
@@ -660,19 +642,24 @@ mod tests {
     }
 
     #[test]
-    fn an_entry_ending_before_its_data_reference_index_fails_as_that_box() {
-        let cut_short = AnyBox::from_raw_bytes(BoxType::compact(*b"avc1"), vec![0; 4]);
+    fn a_fragment_of_a_track_reading_from_an_external_file_is_refused() {
+        let external = DataReferenceBox::new(vec![DataEntry::Url(DataEntryUrlBox::new(Some(
+            NullTerminatedString::new(String::from("media.bin")).unwrap(),
+        )))]);
+        let trak = track_laid_out(
+            1,
+            external,
+            sample_table(
+                TimeToSampleBox::new(vec![]),
+                SampleToChunkBox::new(vec![]),
+                SampleSizeBox::new(SampleSizes::PerSample(vec![])),
+                ChunkOffsetBox::new(vec![]),
+            ),
+        );
 
         assert_eq!(
-            resolved(
-                &one_sample_movie_fragment(),
-                &movie(vec![track_described_by(1, cut_short)])
-            ),
-            Err(SampleError::from(
-                isobmff_core::Error::truncated_payload(8, 4)
-                    .in_container(BoxType::compact(*b"avc1"))
-                    .in_container(BoxType::compact(*b"stsd"))
-            ))
+            resolved(&one_sample_movie_fragment(), &movie(vec![trak])),
+            Err(SampleError::external_data_reference(1, 1))
         );
     }
 
