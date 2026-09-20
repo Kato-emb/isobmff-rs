@@ -1,6 +1,6 @@
-//! [`Disposition`], what a structure has done with a top-level box
+//! [`Disposition`], what a structure makes of a top-level box
 
-/// What a structure has done with a top-level box of a file
+/// What a structure makes of a top-level box of a file
 ///
 /// A structure is handed the header of each top-level box and answers with
 /// one of these: the box is read whole into the value it names, its payload is

@@ -44,7 +44,9 @@ use crate::{Disposition, StructureError};
 /// ```
 /// use isobmff::{BoxHeader, BoxType, Disposition, FragmentedStructure};
 ///
-/// let header = |fourcc: &[u8; 4]| BoxHeader::with_payload_len(BoxType::compact(*fourcc), 16).unwrap();
+/// let header = |fourcc: &[u8; 4]| {
+///     BoxHeader::with_payload_len(BoxType::compact(*fourcc), 16).unwrap()
+/// };
 /// let mut structure = FragmentedStructure::new();
 ///
 /// // The brands and the movie are read into values
@@ -57,6 +59,8 @@ use crate::{Disposition, StructureError};
 ///
 /// // Any other box is passed over
 /// assert_eq!(structure.handle_header(header(b"free"))?, Disposition::Skip);
+///
+/// // The file is declared over
 /// structure.finish()?;
 /// # Ok::<(), isobmff::StructureError>(())
 /// ```

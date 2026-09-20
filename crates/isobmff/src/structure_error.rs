@@ -9,9 +9,8 @@ use isobmff_core::{BoxType, Category};
 ///
 /// What went wrong is one [`kind`](Self::kind): a failure of the structure of
 /// the file — a box it requires that never came, one that came twice, one
-/// that came out of the order the structure keeps — a failure of reading a
-/// box whole — a payload past the limit the reader gathers, a box handed over
-/// while another was open — or a failure of one box, which
+/// that came out of the order the structure keeps, a box reaching past the
+/// limit a reader gathers for one — or a failure of one box, which
 /// [`isobmff_core::Error`] names and this type carries through whole, as
 /// [`box_error`](Self::box_error). What a caller does about any of them is one
 /// [`category`](Self::category).
@@ -55,7 +54,7 @@ impl StructureError {
         }
     }
 
-    /// Returns the failure of a file holding a box its structure carries once
+    /// Returns the failure of a file holding twice a box its structure carries once
     #[must_use]
     pub const fn duplicate_box(box_type: BoxType) -> Self {
         Self {
@@ -83,22 +82,6 @@ impl StructureError {
         }
     }
 
-    /// Returns the failure of payload, or the end of a box, handed over while no box was open
-    #[must_use]
-    pub const fn no_box_open() -> Self {
-        Self {
-            representation: Representation::NoBoxOpen,
-        }
-    }
-
-    /// Returns the failure of a box handed over while the box before it was still open
-    #[must_use]
-    pub const fn box_still_open(box_type: BoxType) -> Self {
-        Self {
-            representation: Representation::BoxStillOpen { box_type },
-        }
-    }
-
     /// Returns the failure of a call made after the file was declared over
     #[must_use]
     pub const fn already_finished() -> Self {
@@ -116,8 +99,6 @@ impl StructureError {
             Representation::DuplicateBox { .. } => StructureErrorKind::DuplicateBox,
             Representation::BoxOutOfOrder { .. } => StructureErrorKind::BoxOutOfOrder,
             Representation::PayloadLimitExceeded { .. } => StructureErrorKind::PayloadLimitExceeded,
-            Representation::NoBoxOpen => StructureErrorKind::NoBoxOpen,
-            Representation::BoxStillOpen { .. } => StructureErrorKind::BoxStillOpen,
             Representation::AlreadyFinished => StructureErrorKind::AlreadyFinished,
         }
     }
@@ -131,9 +112,7 @@ impl StructureError {
             | Representation::DuplicateBox { .. }
             | Representation::BoxOutOfOrder { .. } => Category::Malformed,
             Representation::PayloadLimitExceeded { .. } => Category::Unsupported,
-            Representation::NoBoxOpen
-            | Representation::BoxStillOpen { .. }
-            | Representation::AlreadyFinished => Category::Usage,
+            Representation::AlreadyFinished => Category::Usage,
         }
     }
 
@@ -196,15 +175,6 @@ impl fmt::Display for StructureError {
                 formatter,
                 "{box_type} box reaches {reached} payload bytes, past the {limit}-byte limit"
             ),
-            Representation::NoBoxOpen => {
-                formatter.write_str("payload, or the end of a box, came while no box was open")
-            }
-            Representation::BoxStillOpen { box_type } => {
-                write!(
-                    formatter,
-                    "a box came while the {box_type} box was still open"
-                )
-            }
             Representation::AlreadyFinished => {
                 formatter.write_str("file was declared over and takes nothing more")
             }
@@ -288,12 +258,6 @@ pub enum StructureErrorKind {
     /// reached — and [`available_bytes`](StructureError::available_bytes)
     /// the payload the reader gathers for one box at most.
     PayloadLimitExceeded,
-    /// Payload, or the end of a box, came while no box was open
-    NoBoxOpen,
-    /// Box started while the box before it was still open
-    ///
-    /// [`box_type`](StructureError::box_type) is the box left open.
-    BoxStillOpen,
     /// File was declared over, and takes nothing more
     AlreadyFinished,
 }
@@ -315,10 +279,6 @@ enum Representation {
         reached: u64,
         limit: u64,
     },
-    /// Payload, or the end of a box, handed over while no box was open
-    NoBoxOpen,
-    /// Box handed over while the box before it was still open
-    BoxStillOpen { box_type: BoxType },
     /// Call made after the file was declared over
     AlreadyFinished,
 }
@@ -351,8 +311,7 @@ impl Representation {
             },
             Self::MissingMandatoryBox { box_type }
             | Self::DuplicateBox { box_type }
-            | Self::BoxOutOfOrder { box_type }
-            | Self::BoxStillOpen { box_type } => Fields {
+            | Self::BoxOutOfOrder { box_type } => Fields {
                 box_type: Some(box_type),
                 ..Fields::EMPTY
             },
@@ -366,7 +325,7 @@ impl Representation {
                 available_bytes: Some(limit),
                 ..Fields::EMPTY
             },
-            Self::NoBoxOpen | Self::AlreadyFinished => Fields::EMPTY,
+            Self::AlreadyFinished => Fields::EMPTY,
         }
     }
 }
@@ -393,7 +352,10 @@ mod tests {
             StructureError::payload_limit_exceeded(MOOV, 32, 16).category(),
             Category::Unsupported
         );
-        assert_eq!(StructureError::no_box_open().category(), Category::Usage);
+        assert_eq!(
+            StructureError::already_finished().category(),
+            Category::Usage
+        );
         assert_eq!(
             StructureError::from(isobmff_core::Error::unsupported_version(2)).category(),
             Category::Unsupported
@@ -416,8 +378,7 @@ mod tests {
         assert_eq!(exceeded.needed_bytes(), Some(32));
         assert_eq!(exceeded.available_bytes(), Some(16));
 
-        assert_eq!(StructureError::no_box_open().box_type(), None);
-        assert_eq!(StructureError::box_still_open(MOOV).box_type(), Some(MOOV));
+        assert_eq!(StructureError::already_finished().box_type(), None);
     }
 
     #[test]
@@ -454,14 +415,6 @@ mod tests {
             "moov box reaches 32 payload bytes, past the 16-byte limit"
         );
         assert_eq!(
-            StructureError::no_box_open().to_string(),
-            "payload, or the end of a box, came while no box was open"
-        );
-        assert_eq!(
-            StructureError::box_still_open(MOOV).to_string(),
-            "a box came while the moov box was still open"
-        );
-        assert_eq!(
             StructureError::already_finished().to_string(),
             "file was declared over and takes nothing more"
         );
@@ -484,8 +437,8 @@ mod tests {
             "StructureError { kind: PayloadLimitExceeded, category: Unsupported, box_type: Compact(CompactType(FourCC(\"moov\"))), needed_bytes: 32, available_bytes: 16 }"
         );
         assert_eq!(
-            format!("{:?}", StructureError::no_box_open()),
-            "StructureError { kind: NoBoxOpen, category: Usage }"
+            format!("{:?}", StructureError::already_finished()),
+            "StructureError { kind: AlreadyFinished, category: Usage }"
         );
     }
 }
