@@ -1,4 +1,4 @@
-//! [`sample_extents`], the samples a movie declares in its sample tables resolved into extents, ISO/IEC 14496-12 §8.7
+//! [`sample_extents`], the samples the sample tables of a movie declare resolved to where they lie, ISO/IEC 14496-12 §8.5.1 and §8.7
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -57,7 +57,7 @@ use crate::sample_description::SampleDescriptions;
 ///   the `dref` entry names a resource other than the file itself.
 /// * [`UnsupportedBox`](isobmff_core::ErrorKind::UnsupportedBox), carried on
 ///   [`Box`](crate::SampleErrorKind::Box): the `stsz` states its sizes a way
-///   this resolver does not read.
+///   added to [`SampleSizes`] after this resolver, which it does not read.
 /// * [`DecodeTimeOverflow`](crate::SampleErrorKind::DecodeTimeOverflow): the
 ///   decode times of a track run past what 64 bits carry.
 /// * [`DataOffsetOverflow`](crate::SampleErrorKind::DataOffsetOverflow): the
@@ -91,9 +91,9 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
         SampleSizes::PerSample(entries) => {
             Box::new(entries.iter().map(SampleSizeEntry::entry_size))
         }
-        // Why not leave the arm out: the enum is non-exhaustive, so a way of
-        // stating the sizes added later lands here, and a failure the caller
-        // reads beats a panic.
+        // Why not unreachable!: the enum is non-exhaustive, so a way of stating
+        // the sizes added later lands here, and a failure the caller reads
+        // beats a panic.
         _ => {
             return Err(SampleError::from(isobmff_core::Error::unsupported_box(
                 SampleSizeBox::BOX_TYPE,
@@ -468,10 +468,21 @@ mod tests {
             stsz(&[4; 3]),
             stco(&[100, 200, 300]),
         );
+        let starting_twice = track_of(
+            1,
+            stts(&[(3, 100)]),
+            stsc(&[(1, 1), (3, 1), (3, 1)]),
+            stsz(&[4; 3]),
+            stco(&[100, 200, 300]),
+        );
 
         assert_eq!(
             resolved(&movie(vec![doubling_back])),
             Err(SampleError::first_chunk_out_of_range(1, 2))
+        );
+        assert_eq!(
+            resolved(&movie(vec![starting_twice])),
+            Err(SampleError::first_chunk_out_of_range(1, 3))
         );
     }
 

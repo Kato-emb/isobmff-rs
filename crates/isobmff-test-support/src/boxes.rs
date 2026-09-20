@@ -122,7 +122,7 @@ pub fn track_laid_out(track_id: u32, dref: DataReferenceBox, stbl: SampleTableBo
     )
 }
 
-/// Sample table of [`track`], its samples laid out by the four tables given
+/// Sample table describing its samples by the one `stsd` entry of [`track`], laid out by the four tables given
 pub fn sample_table(
     stts: TimeToSampleBox,
     stsc: SampleToChunkBox,

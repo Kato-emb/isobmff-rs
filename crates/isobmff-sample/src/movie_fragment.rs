@@ -255,23 +255,19 @@ fn resolve_run(
 
 #[cfg(test)]
 mod tests {
-    use alloc::string::String;
     use alloc::vec;
     use alloc::vec::Vec;
     use core::ops::Range;
 
     use isobmff_boxes::{
-        ChunkOffsetBox, DataEntry, DataEntryUrlBox, DataReferenceBox, MovieBox, MovieExtendsBox,
-        MovieFragmentBox, MovieFragmentHeaderBox, MovieHeaderBox, SampleSizeBox, SampleSizes,
-        SampleToChunkBox, TimeToSampleBox, TrackBox, TrackExtendsBox,
-        TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox, TrackRunBox,
-        TrackRunSample,
+        MovieBox, MovieExtendsBox, MovieFragmentBox, MovieFragmentHeaderBox, MovieHeaderBox,
+        TrackBox, TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
+        TrackFragmentHeaderBox, TrackRunBox, TrackRunSample,
     };
-    use isobmff_core::{
-        BoxDecode as _, BoxEncode as _, FullBoxFlags, Mp4EpochSeconds, NullTerminatedString,
-    };
+    use isobmff_core::{BoxDecode as _, BoxEncode as _, FullBoxFlags, Mp4EpochSeconds};
     use isobmff_test_support::{
-        fragmented_movie, sample_table, track, track_laid_out, unfragmented_movie, written,
+        external_data_reference, fragmented_movie, track, track_reading_from, unfragmented_movie,
+        written,
     };
 
     use super::sample_extents;
@@ -643,22 +639,10 @@ mod tests {
 
     #[test]
     fn a_fragment_of_a_track_reading_from_an_external_file_is_refused() {
-        let external = DataReferenceBox::new(vec![DataEntry::Url(DataEntryUrlBox::new(Some(
-            NullTerminatedString::new(String::from("media.bin")).unwrap(),
-        )))]);
-        let trak = track_laid_out(
-            1,
-            external,
-            sample_table(
-                TimeToSampleBox::new(vec![]),
-                SampleToChunkBox::new(vec![]),
-                SampleSizeBox::new(SampleSizes::PerSample(vec![])),
-                ChunkOffsetBox::new(vec![]),
-            ),
-        );
+        let external = track_reading_from(1, external_data_reference());
 
         assert_eq!(
-            resolved(&one_sample_movie_fragment(), &movie(vec![trak])),
+            resolved(&one_sample_movie_fragment(), &movie(vec![external])),
             Err(SampleError::external_data_reference(1, 1))
         );
     }

@@ -1,4 +1,4 @@
-//! [`SampleDescriptions`], the resource the samples a track describes one way lie in
+//! [`SampleDescriptions`], the `stsd` entries of a track and the resource each has its samples lie in
 
 use isobmff_boxes::{DataEntry, DataReferenceBox, SampleDescriptionBox, SampleEntry, TrackBox};
 use isobmff_core::BoxDefinition as _;
@@ -8,14 +8,13 @@ use crate::error::SampleError;
 /// The sample descriptions of one track, and the resource each has its samples lie in
 ///
 /// A sample is described by one entry of the `stsd` of its track (ISO/IEC
-/// 14496-12 §8.5.2), counted from one, and every entry opens with the
+/// 14496-12 §8.5.2), counted from one, and every entry carries the
 /// `data_reference_index` naming the entry of the `dref` (§8.7.2) the bytes of
 /// those samples lie in. Both declaration forms name their samples' entry — a
 /// sample table by the run of chunks (§8.7.4), a movie fragment by the `tfhd`
 /// or the `trex` (§8.8.7) — and resolve it here to the data reference, which
-/// in this first cut has to be the file itself: an entry sending the reader to
-/// an external file is refused, so that every extent resolved lies in the one
-/// resource the samples are read out of.
+/// has to be the file itself: an entry sending the reader to an external file
+/// is refused.
 pub(crate) struct SampleDescriptions<'track> {
     track_id: u32,
     stsd: &'track SampleDescriptionBox,

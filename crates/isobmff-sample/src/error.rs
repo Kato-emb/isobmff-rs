@@ -539,7 +539,7 @@ pub enum SampleErrorKind {
     /// §8.7.4), a fragment by its `tfhd` or the `trex` of the track (§8.8.7).
     /// [`track_id`](SampleError::track_id) is the track they belong to, and
     /// [`sample_description_index`](SampleError::sample_description_index) the
-    /// entry it names, counted from one.
+    /// entry named, counted from one.
     UnknownSampleDescriptionIndex,
     /// Movie carries no `mvex`, and so continues in no fragments
     ///
