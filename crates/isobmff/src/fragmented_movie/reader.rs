@@ -34,8 +34,8 @@ use crate::{Disposition, FragmentedStructure, StructureError, WholeBoxReader};
 ///   have arrived: [`file_type`](Self::file_type) and [`movie`](Self::movie).
 ///   The media data is offered to the samples, and every other box is passed
 ///   over.
-/// * What the structure holds the order of the boxes to, and reports on a
-///   file that breaks it, is the structure's: an `ftyp` after another box, a
+/// * The order the boxes come in, and what a file that breaks it is reported
+///   as, are the structure's: an `ftyp` after another box, a
 ///   `moof` before the `moov`, an `mdat` before any `moof` are
 ///   [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder), a second
 ///   `moov` is [`DuplicateBox`](crate::StructureErrorKind::DuplicateBox), and
@@ -46,8 +46,8 @@ use crate::{Disposition, FragmentedStructure, StructureError, WholeBoxReader};
 ///   declares is bounded — see [`with_limits`](Self::with_limits).
 /// * The samples of a fragment are read in the order it declares them, out of
 ///   the media data that follows it. [`wanted_extent`](Self::wanted_extent)
-///   names the bytes the earliest sample still lacks; a caller reading the
-///   file in order never needs it, since a fragment precedes its data.
+///   names the bytes the earliest sample still lacks, which a caller handing
+///   the file over in order meets as they come.
 /// * An `Err` leaves the reader failed for good,
 ///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The samples completed
@@ -248,8 +248,8 @@ impl FragmentedReader {
     /// Returns the bytes the earliest sample still held lacks, if any is held
     ///
     /// A fragment precedes the media data it addresses, so a caller handing the
-    /// file over in order meets every extent as it comes; one that skipped
-    /// ahead fetches what this names.
+    /// file over in order meets every extent as it comes: what this names is
+    /// media data still to arrive.
     #[must_use]
     pub fn wanted_extent(&self) -> Option<Range<u64>> {
         self.samples.wanted_extent()
@@ -273,10 +273,13 @@ impl FragmentedReader {
     ///
     /// * [`Sequence`](crate::StructureErrorKind::Sequence): the file ended
     ///   inside a box.
+    /// * [`Box`](crate::StructureErrorKind::Box): a box read into a value,
+    ///   declaring no total, does not decode.
     /// * [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox):
     ///   the file carried no `moov`.
-    /// * [`Sample`](crate::StructureErrorKind::Sample): a sample a fragment
-    ///   declared is short of the data it claimed.
+    /// * [`Sample`](crate::StructureErrorKind::Sample): what the samples make
+    ///   of a fragment declaring no total, or a sample a fragment declared is
+    ///   short of the data it claimed.
     /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
     ///   file was already declared over.
     /// * The failure of a previous call, which the reader keeps and reports

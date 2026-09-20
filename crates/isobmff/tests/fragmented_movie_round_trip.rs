@@ -1,4 +1,4 @@
-//! The samples a writer laid down as a fragmented movie file, read back off that file through the new layers
+//! The samples a writer laid down as a fragmented movie file, read back off that file
 
 #[cfg(test)]
 mod tests {

@@ -31,7 +31,6 @@ use crate::StructureError;
 ///   container the failure was reached through.
 /// * A failure leaves the reader as it stood: the caller drops it, since the
 ///   box it was reading is lost.
-///
 #[derive(Clone, Debug)]
 pub(crate) struct WholeBoxReader<Value> {
     payload_limit: u64,

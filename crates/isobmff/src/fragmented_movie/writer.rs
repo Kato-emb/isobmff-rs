@@ -114,7 +114,7 @@ impl FragmentedWriter {
     /// # Errors
     ///
     /// * [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder): a box
-    ///   was laid down before them.
+    ///   was handed over before them.
     /// * [`Box`](crate::StructureErrorKind::Box): the box does not write.
     /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
