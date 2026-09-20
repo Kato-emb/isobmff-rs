@@ -264,6 +264,15 @@ impl SampleReader {
 
         failure
     }
+
+    /// Returns the bytes the reader has taken memory for, held or ready to take
+    #[cfg(test)]
+    fn held_bytes(&self) -> usize {
+        let held = self.pending.iter().map(|pending| pending.data.capacity());
+        let ready = self.ready.iter().map(|sample| sample.data().len());
+
+        held.chain(ready).sum()
+    }
 }
 
 impl Default for SampleReader {
@@ -441,6 +450,28 @@ mod tests {
 
         assert_eq!(reader.poll_sample(), None);
         assert_eq!(reader.wanted_extent(), Some(100..104));
+    }
+
+    #[test]
+    fn the_reader_holds_no_more_than_the_bytes_its_extents_name() {
+        let mut reader = holding([
+            extent(0, 100..104),
+            extent(1_024, 104..108),
+            extent(2_048, 1_000..1_004),
+        ]);
+        assert_eq!(reader.held_bytes(), 0);
+
+        reader.handle_data(2_000, &[0xab; 4_096]).unwrap();
+        assert_eq!(reader.held_bytes(), 0);
+
+        reader.handle_data(0, &[0xab; 106]).unwrap();
+        assert_eq!(reader.held_bytes(), 4 + 4);
+
+        reader.handle_data(100, &[0xab; 2_048]).unwrap();
+        assert_eq!(reader.held_bytes(), 4 + 4 + 4);
+
+        assert_eq!(drained(&mut reader).len(), 3);
+        assert_eq!(reader.held_bytes(), 0);
     }
 
     #[test]
