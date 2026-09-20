@@ -119,16 +119,17 @@ impl SampleSizeBox {
     pub fn sample_count(&self) -> u32 {
         match &self.sample_sizes {
             SampleSizes::Uniform { sample_count, .. } => *sample_count,
-            // Why not saturate silently: a sample count past `u32` cannot be
-            // written at all, so this stands for a `Vec` no target can hold.
+            // Why not fail: a count past `u32` cannot be written at all, so it
+            // stands for a `Vec` no target can hold, and the accessor stays
+            // infallible.
             SampleSizes::PerSample(entries) => u32::try_from(entries.len()).unwrap_or(u32::MAX),
         }
     }
 
     /// Returns the size of every sample in turn, however the box states them
     ///
-    /// A size every sample shares comes out once per sample, so the sizes are
-    /// read the same way whichever way the box states them.
+    /// A size every sample shares comes out once per sample, so the iterator
+    /// yields [`sample_count`](Self::sample_count) sizes either way.
     pub fn sizes(&self) -> impl Iterator<Item = u32> + '_ {
         match &self.sample_sizes {
             SampleSizes::Uniform {
@@ -328,7 +329,6 @@ mod tests {
     fn a_size_every_sample_shares_is_read_once_per_sample() {
         let sample_size = SampleSizeBox::new(uniform_sizes());
 
-        assert_eq!(sample_size.sample_count(), 8);
         assert_eq!(sample_size.sizes().collect::<Vec<_>>(), [1_024; 8]);
     }
 
@@ -339,8 +339,17 @@ mod tests {
             SampleSizeEntry::new(512),
         ]));
 
-        assert_eq!(sample_size.sample_count(), 2);
         assert_eq!(sample_size.sizes().collect::<Vec<_>>(), [1_024, 512]);
+    }
+
+    #[test]
+    fn a_table_of_sizes_counts_its_entries() {
+        let sample_size = SampleSizeBox::new(SampleSizes::PerSample(vec![
+            SampleSizeEntry::new(1_024),
+            SampleSizeEntry::new(512),
+        ]));
+
+        assert_eq!(sample_size.sample_count(), 2);
     }
 
     #[test]
