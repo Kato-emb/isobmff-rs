@@ -2,7 +2,9 @@
 
 use alloc::vec::Vec;
 
-use isobmff_boxes::{MovieBox, MovieFragmentBox, TrackFragmentBox, TrackRunBox};
+use isobmff_boxes::{
+    CompositionTimeOffset, MovieBox, MovieFragmentBox, TrackFragmentBox, TrackRunBox,
+};
 
 use crate::error::SampleError;
 use crate::sample::SampleExtent;
@@ -233,7 +235,8 @@ fn resolve_run(
             track_id,
             cursor.decode_time,
             sample_duration,
-            row.sample_composition_time_offset().unwrap_or(0),
+            row.sample_composition_time_offset()
+                .map_or(0, CompositionTimeOffset::get),
             first_sample_flags
                 .take()
                 .or(row.sample_flags())
@@ -260,9 +263,10 @@ mod tests {
     use core::ops::Range;
 
     use isobmff_boxes::{
-        MovieBox, MovieExtendsBox, MovieFragmentBox, MovieFragmentHeaderBox, MovieHeaderBox,
-        TrackBox, TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
-        TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
+        CompositionTimeOffset, MovieBox, MovieExtendsBox, MovieFragmentBox, MovieFragmentHeaderBox,
+        MovieHeaderBox, TrackBox, TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox,
+        TrackFragmentBox, TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox,
+        TrackRunSample,
     };
     use isobmff_core::{BoxDecode as _, BoxEncode as _, Mp4EpochSeconds};
     use isobmff_test_support::{
@@ -323,7 +327,7 @@ mod tests {
     /// Run of samples that take the size and duration of their defaults
     fn run(data_offset: Option<i32>, sample_count: u32) -> TrackRunBox {
         let rows = (0..sample_count)
-            .map(|_| TrackRunSample::new(None, None, None, None).unwrap())
+            .map(|_| TrackRunSample::new(None, None, None, None))
             .collect();
 
         TrackRunBox::new(data_offset, None, rows).unwrap()
@@ -387,8 +391,12 @@ mod tests {
 
     #[test]
     fn a_sample_takes_what_its_row_states_over_the_defaults_of_the_fragment_and_the_track() {
-        let rows =
-            vec![TrackRunSample::new(Some(512), Some(2), Some(0x0100_0000), Some(-8)).unwrap()];
+        let rows = vec![TrackRunSample::new(
+            Some(512),
+            Some(2),
+            Some(0x0100_0000),
+            Some(CompositionTimeOffset::new(-8).unwrap()),
+        )];
         let track_fragment = TrackFragmentBox::new(
             track_fragment_header(
                 TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
@@ -442,8 +450,8 @@ mod tests {
     #[test]
     fn the_flags_of_the_first_sample_of_a_run_stand_in_for_the_defaults() {
         let rows = vec![
-            TrackRunSample::new(None, None, None, None).unwrap(),
-            TrackRunSample::new(None, None, None, None).unwrap(),
+            TrackRunSample::new(None, None, None, None),
+            TrackRunSample::new(None, None, None, None),
         ];
         let track_fragment = track_fragment(
             1,

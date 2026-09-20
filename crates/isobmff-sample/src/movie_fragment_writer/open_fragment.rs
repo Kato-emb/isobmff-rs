@@ -521,7 +521,7 @@ mod tests {
         );
         assert_eq!(
             rows_of(&movie_fragment, 1),
-            vec![TrackRunSample::new(None, None, None, None).unwrap(); 2]
+            vec![TrackRunSample::new(None, None, None, None); 2]
         );
     }
 
@@ -535,8 +535,8 @@ mod tests {
         assert_eq!(
             rows_of(&movie_fragment, 1),
             [
-                TrackRunSample::new(Some(1_024), Some(4), None, None).unwrap(),
-                TrackRunSample::new(Some(512), Some(2), None, None).unwrap(),
+                TrackRunSample::new(Some(1_024), Some(4), None, None),
+                TrackRunSample::new(Some(512), Some(2), None, None),
             ]
         );
     }
@@ -559,7 +559,7 @@ mod tests {
             [TrackRunBox::new(
                 Some(data_offset_of(&movie_fragment)),
                 Some(0x0200_0000),
-                vec![TrackRunSample::new(None, None, None, None).unwrap(); 3],
+                vec![TrackRunSample::new(None, None, None, None); 3],
             )
             .unwrap()]
         );
@@ -584,9 +584,9 @@ mod tests {
                 Some(data_offset_of(&movie_fragment)),
                 None,
                 vec![
-                    TrackRunSample::new(None, None, Some(0x0200_0000), None).unwrap(),
-                    TrackRunSample::new(None, None, Some(0x0101_0000), None).unwrap(),
-                    TrackRunSample::new(None, None, Some(0x0100_0000), None).unwrap(),
+                    TrackRunSample::new(None, None, Some(0x0200_0000), None),
+                    TrackRunSample::new(None, None, Some(0x0101_0000), None),
+                    TrackRunSample::new(None, None, Some(0x0100_0000), None),
                 ],
             )
             .unwrap()]

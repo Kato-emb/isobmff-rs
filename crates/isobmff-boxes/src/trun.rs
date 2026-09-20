@@ -86,46 +86,33 @@ impl CompositionTimeOffset {
 ///
 /// Which fields a row carries is stated once for the whole run, so every row of
 /// one [`TrackRunBox`] carries the same ones, and a field no row carries falls
-/// back on the default the `tfhd` or the `trex` sets.
-///
-/// The composition time offset is held signed and wide enough for either version
-/// of the box to write it: version 0 carries it as an unsigned 32-bit field and
-/// version 1 as a signed one, so [`new`](Self::new) refuses a value neither can
-/// carry.
+/// back on the default the `tfhd` or the `trex` sets. The composition time
+/// offset is a [`CompositionTimeOffset`], so a row only ever carries one that
+/// a version of the box writes.
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct TrackRunSample {
     sample_duration: Option<u32>,
     sample_size: Option<u32>,
     sample_flags: Option<u32>,
-    sample_composition_time_offset: Option<i64>,
+    sample_composition_time_offset: Option<CompositionTimeOffset>,
 }
 
 impl TrackRunSample {
     /// Creates one row from the fields the run states for its sample
-    ///
-    /// Returns `None` when `sample_composition_time_offset` lies outside
-    /// `-2_147_483_648..=4_294_967_295`, the offsets the two versions of the box
-    /// write between them.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         sample_duration: Option<u32>,
         sample_size: Option<u32>,
         sample_flags: Option<u32>,
-        sample_composition_time_offset: Option<i64>,
-    ) -> Option<Self> {
-        if sample_composition_time_offset
-            .is_some_and(|offset| CompositionTimeOffset::new(offset).is_none())
-        {
-            return None;
-        }
-
-        Some(Self {
+        sample_composition_time_offset: Option<CompositionTimeOffset>,
+    ) -> Self {
+        Self {
             sample_duration,
             sample_size,
             sample_flags,
             sample_composition_time_offset,
-        })
+        }
     }
 
     /// Returns how long this sample lasts, in the media time scale
@@ -148,7 +135,7 @@ impl TrackRunSample {
 
     /// Returns the offset from the decode time of this sample to its composition time
     #[must_use]
-    pub const fn sample_composition_time_offset(&self) -> Option<i64> {
+    pub const fn sample_composition_time_offset(&self) -> Option<CompositionTimeOffset> {
         self.sample_composition_time_offset
     }
 }
@@ -201,8 +188,8 @@ fn per_sample_field_flags(samples: &[TrackRunSample]) -> u32 {
 ///
 /// // Two samples, each stating its own size and nothing else
 /// let samples = vec![
-///     TrackRunSample::new(None, Some(1_024), None, None).unwrap(),
-///     TrackRunSample::new(None, Some(2_048), None, None).unwrap(),
+///     TrackRunSample::new(None, Some(1_024), None, None),
+///     TrackRunSample::new(None, Some(2_048), None, None),
 /// ];
 /// let track_run = TrackRunBox::new(Some(0), None, samples).unwrap();
 ///
@@ -215,8 +202,8 @@ fn per_sample_field_flags(samples: &[TrackRunSample]) -> u32 {
 ///         None,
 ///         None,
 ///         vec![
-///             TrackRunSample::new(None, Some(1_024), None, None).unwrap(),
-///             TrackRunSample::new(Some(512), Some(2_048), None, None).unwrap(),
+///             TrackRunSample::new(None, Some(1_024), None, None),
+///             TrackRunSample::new(Some(512), Some(2_048), None, None),
 ///         ]
 ///     ),
 ///     None
@@ -264,6 +251,7 @@ impl TrackRunBox {
             samples
                 .iter()
                 .filter_map(TrackRunSample::sample_composition_time_offset)
+                .map(CompositionTimeOffset::get)
         };
         let signed = offsets().any(i64::is_negative);
         let past_the_signed_range = offsets().any(|offset| offset > i64::from(i32::MAX));
@@ -386,10 +374,10 @@ impl BoxDecode for TrackRunBox {
             };
             let sample_composition_time_offset = if carries(SAMPLE_COMPOSITION_TIME_OFFSETS_PRESENT)
             {
-                Some(match version {
+                Some(CompositionTimeOffset(match version {
                     0 => i64::from(reader.read_u32()?),
                     _ => i64::from(reader.read_i32()?),
-                })
+                }))
             } else {
                 None
             };
@@ -434,7 +422,7 @@ impl BoxEncode for TrackRunBox {
             .samples
             .iter()
             .filter_map(TrackRunSample::sample_composition_time_offset)
-            .any(i64::is_negative);
+            .any(|offset| offset.get().is_negative());
         // Why not version 1 throughout: §8.6.1.3 asks for the unsigned form
         // wherever it carries the offsets, which the readers of earlier brands
         // accept.
@@ -471,10 +459,11 @@ impl BoxEncode for TrackRunBox {
                 writer.write_u32(field)?;
             }
             if let Some(offset) = sample.sample_composition_time_offset {
-                // Why not unwrap: `TrackRunSample::new` bounds an offset to
-                // what the two versions carry between them and `TrackRunBox::new`
-                // refuses a run mixing offsets no one version holds, so the
-                // version settled above carries every offset the rows have.
+                let offset = offset.get();
+                // Why not unwrap: a `CompositionTimeOffset` lies within what the
+                // two versions carry between them and `TrackRunBox::new` refuses
+                // a run mixing offsets no one version holds, so the version
+                // settled above carries every offset the rows have.
                 let out_of_range = Error::out_of_range(offset.unsigned_abs(), FieldWidth::Compact);
                 if version == 0 {
                     writer.write_u32(u32::try_from(offset).map_err(|_| out_of_range)?)?;
@@ -503,9 +492,8 @@ mod tests {
             None,
             Some(sample_size),
             None,
-            Some(sample_composition_time_offset),
+            Some(CompositionTimeOffset::new(sample_composition_time_offset).unwrap()),
         )
-        .unwrap()
     }
 
     /// Run of two samples anchored at the start of the data of its fragment
@@ -576,18 +564,6 @@ mod tests {
     }
 
     #[test]
-    fn a_row_carrying_an_offset_no_version_writes_cannot_be_built() {
-        assert_eq!(
-            TrackRunSample::new(None, None, None, Some(i64::from(u32::MAX) + 1)),
-            None
-        );
-        assert_eq!(
-            TrackRunSample::new(None, None, None, Some(i64::from(i32::MIN) - 1)),
-            None
-        );
-    }
-
-    #[test]
     fn a_run_mixing_a_negative_offset_with_one_past_the_signed_range_cannot_be_built() {
         assert_eq!(
             TrackRunBox::new(
@@ -607,7 +583,7 @@ mod tests {
                 None,
                 vec![
                     sample(1_024, 0),
-                    TrackRunSample::new(None, Some(2_048), None, None).unwrap()
+                    TrackRunSample::new(None, Some(2_048), None, None)
                 ]
             ),
             None
@@ -616,7 +592,7 @@ mod tests {
 
     #[test]
     fn a_run_stating_the_flags_of_its_first_sample_and_of_every_sample_cannot_be_built() {
-        let flagged = TrackRunSample::new(None, None, Some(0x0100_0000), None).unwrap();
+        let flagged = TrackRunSample::new(None, None, Some(0x0100_0000), None);
 
         assert_eq!(
             TrackRunBox::new(None, Some(0x0200_0000), vec![flagged]),

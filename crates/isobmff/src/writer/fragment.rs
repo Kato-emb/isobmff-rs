@@ -4,9 +4,9 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use isobmff_boxes::{
-    MediaDataBox, MovieFragmentBox, MovieFragmentHeaderBox, TrackFragmentBaseMediaDecodeTimeBox,
-    TrackFragmentBox, TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox,
-    TrackRunSample,
+    CompositionTimeOffset, MediaDataBox, MovieFragmentBox, MovieFragmentHeaderBox,
+    TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
+    TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
 };
 use isobmff_core::BoxEncode as _;
 
@@ -393,7 +393,16 @@ fn build_track_run(
         .samples
         .iter()
         .map(|sample| {
-            TrackRunSample::new(
+            let sample_composition_time_offset = sample
+                .sample_composition_time_offset
+                .map(|offset| {
+                    CompositionTimeOffset::new(offset).ok_or_else(|| {
+                        SampleError::composition_time_offset_out_of_range(track.track_id, offset)
+                    })
+                })
+                .transpose()?;
+
+            Ok(TrackRunSample::new(
                 defaults
                     .sample_duration
                     .is_none()
@@ -403,20 +412,10 @@ fn build_track_run(
                     .sample_flags
                     .is_none()
                     .then_some(sample.sample_flags),
-                sample.sample_composition_time_offset,
-            )
-            .ok_or_else(|| {
-                SampleError::composition_time_offset_out_of_range(
-                    track.track_id,
-                    // Why not the offset alone: a row is refused for its
-                    // composition time offset and nothing else, so the offset is
-                    // there whenever this is reached, and the fallback stands for
-                    // a `None` the call does not reach.
-                    sample.sample_composition_time_offset.unwrap_or_default(),
-                )
-            })
+                sample_composition_time_offset,
+            ))
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, SampleError>>()?;
 
     let first_sample_flags = defaults.first_sample_flags.filter(|_leading| leads);
 
@@ -430,8 +429,9 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_boxes::{
-        MediaDataBox, MovieFragmentBox, MovieFragmentHeaderBox, TrackFragmentBox,
-        TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
+        CompositionTimeOffset, MediaDataBox, MovieFragmentBox, MovieFragmentHeaderBox,
+        TrackFragmentBox, TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox,
+        TrackRunSample,
     };
     use isobmff_core::BoxEncode as _;
 
@@ -632,7 +632,7 @@ mod tests {
         );
         assert_eq!(
             rows_of(&movie_fragment, 1),
-            vec![TrackRunSample::new(None, None, None, None).unwrap(); 2]
+            vec![TrackRunSample::new(None, None, None, None); 2]
         );
     }
 
@@ -646,8 +646,8 @@ mod tests {
         assert_eq!(
             rows_of(&movie_fragment, 1),
             [
-                TrackRunSample::new(Some(1_024), Some(4), None, None).unwrap(),
-                TrackRunSample::new(Some(512), Some(2), None, None).unwrap(),
+                TrackRunSample::new(Some(1_024), Some(4), None, None),
+                TrackRunSample::new(Some(512), Some(2), None, None),
             ]
         );
     }
@@ -671,7 +671,7 @@ mod tests {
         );
         assert_eq!(
             rows_of(&movie_fragment, 1),
-            vec![TrackRunSample::new(None, None, None, None).unwrap(); 3]
+            vec![TrackRunSample::new(None, None, None, None); 3]
         );
     }
 
@@ -692,9 +692,9 @@ mod tests {
         assert_eq!(
             rows_of(&movie_fragment, 1),
             [
-                TrackRunSample::new(None, None, Some(0x0200_0000), None).unwrap(),
-                TrackRunSample::new(None, None, Some(0x0101_0000), None).unwrap(),
-                TrackRunSample::new(None, None, Some(0x0100_0000), None).unwrap(),
+                TrackRunSample::new(None, None, Some(0x0200_0000), None),
+                TrackRunSample::new(None, None, Some(0x0101_0000), None),
+                TrackRunSample::new(None, None, Some(0x0100_0000), None),
             ]
         );
     }
@@ -708,8 +708,13 @@ mod tests {
         assert_eq!(
             rows_of(&movie_fragment, 1),
             [
-                TrackRunSample::new(None, None, None, None).unwrap(),
-                TrackRunSample::new(None, None, None, Some(8)).unwrap(),
+                TrackRunSample::new(None, None, None, None),
+                TrackRunSample::new(
+                    None,
+                    None,
+                    None,
+                    Some(CompositionTimeOffset::new(8).unwrap())
+                ),
             ]
         );
     }

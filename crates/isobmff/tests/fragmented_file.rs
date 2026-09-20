@@ -36,7 +36,7 @@ mod tests {
     /// Fragment the file carries, its three samples lying `data_offset` past its start
     fn movie_fragment(data_offset: i32) -> MovieFragmentBox {
         let samples = (0..3)
-            .map(|_| TrackRunSample::new(None, None, None, None).unwrap())
+            .map(|_| TrackRunSample::new(None, None, None, None))
             .collect();
         let track_fragment = TrackFragmentBox::new(
             TrackFragmentHeaderBox::new(

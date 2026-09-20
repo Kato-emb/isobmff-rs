@@ -19,7 +19,7 @@ mod tests {
     /// Fragment of `sample_count` samples of track 1, their data just past the `moof` and its `mdat` header
     fn movie_fragment(sample_count: u32) -> MovieFragmentBox {
         let rows = (0..sample_count)
-            .map(|_| TrackRunSample::new(None, None, None, None).unwrap())
+            .map(|_| TrackRunSample::new(None, None, None, None))
             .collect();
         let track_fragment = TrackFragmentBox::new(
             TrackFragmentHeaderBox::new(
