@@ -3,38 +3,7 @@
 use alloc::vec::Vec;
 
 use crate::tfhd::TrackFragmentHeaderBox;
-use crate::trun::{
-    COMPOSITION_TIME_OFFSET_MAXIMUM, COMPOSITION_TIME_OFFSET_MINIMUM, TrackRunBox, TrackRunSample,
-};
-
-/// Composition time offset one of the two versions of a `trun` writes
-///
-/// Version 0 of the box writes the offset unsigned in 32 bits and version 1
-/// signed (ISO/IEC 14496-12 §8.8.8), so a value between
-/// `-2_147_483_648..=4_294_967_295` is one a row can carry, and this holds
-/// such a value alone.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct CompositionTimeOffset(i64);
-
-impl CompositionTimeOffset {
-    /// Creates the offset from its value
-    ///
-    /// Returns `None` when `offset` lies outside what either version writes.
-    #[must_use]
-    pub const fn new(offset: i64) -> Option<Self> {
-        if offset < COMPOSITION_TIME_OFFSET_MINIMUM || offset > COMPOSITION_TIME_OFFSET_MAXIMUM {
-            return None;
-        }
-
-        Some(Self(offset))
-    }
-
-    /// Returns the value of the offset
-    #[must_use]
-    pub const fn get(self) -> i64 {
-        self.0
-    }
-}
+use crate::trun::{CompositionTimeOffset, TrackRunBox, TrackRunSample};
 
 /// One sample of a run as it is handed to a [`TrackRunBuilder`], every field stated
 ///
@@ -188,18 +157,18 @@ impl TrackRunBuilder {
     #[must_use]
     pub fn build(&self, data_offset: Option<i32>, tfhd: &TrackFragmentHeaderBox) -> TrackRunBox {
         let rows = || self.rows.iter();
-        let differs = |default: Option<u32>, field: fn(&TrackRunRow) -> u32| {
-            default.is_none_or(|default| rows().any(|row| field(row) != default))
-        };
-        let carries_duration =
-            differs(tfhd.default_sample_duration(), TrackRunRow::sample_duration);
-        let carries_size = differs(tfhd.default_sample_size(), TrackRunRow::sample_size);
+        let carries_duration = tfhd
+            .default_sample_duration()
+            .is_none_or(|default| rows().any(|row| row.sample_duration != default));
+        let carries_size = tfhd
+            .default_sample_size()
+            .is_none_or(|default| rows().any(|row| row.sample_size != default));
         let carries_offsets = rows().any(|row| row.sample_composition_time_offset.get() != 0);
         let (carries_flags, first_sample_flags) = match tfhd.default_sample_flags() {
             Some(default) if rows().skip(1).all(|row| row.sample_flags == default) => (
                 false,
-                rows()
-                    .next()
+                self.rows
+                    .first()
                     .map(|first| first.sample_flags)
                     .filter(|first| *first != default),
             ),
@@ -236,9 +205,9 @@ impl TrackRunBuilder {
 mod tests {
     use alloc::vec;
 
-    use super::{CompositionTimeOffset, TrackRunBuilder, TrackRunRow};
+    use super::{TrackRunBuilder, TrackRunRow};
     use crate::tfhd::{TrackFragmentFlags, TrackFragmentHeaderBox};
-    use crate::trun::{TrackRunBox, TrackRunSample};
+    use crate::trun::{CompositionTimeOffset, TrackRunBox, TrackRunSample};
 
     /// Row of a sample lasting 1024 units and occupying 4 bytes, flagged `sample_flags`, composed at `offset`
     fn row(sample_flags: u32, offset: i64) -> TrackRunRow {

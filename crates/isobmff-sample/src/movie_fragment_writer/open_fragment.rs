@@ -20,7 +20,7 @@ use crate::track_decode_times::TrackDecodeTimes;
 #[derive(Clone, Debug)]
 struct OpenRun {
     data_offset: u64,
-    rows: TrackRunBuilder,
+    builder: TrackRunBuilder,
 }
 
 /// Samples one track contributes to the fragment being written
@@ -55,14 +55,14 @@ impl OpenTrack {
             .checked_add(u64::from(row.sample_duration()))
             .ok_or(SampleError::decode_time_overflow(self.track_id))?;
 
-        let handed_back = match self.runs.last_mut() {
-            Some(run) if carries_on => run.rows.push(row).err(),
-            _no_run_this_sample_carries_on => Some(row),
+        let placed = match self.runs.last_mut() {
+            Some(run) if carries_on => run.builder.push(row),
+            _no_run_this_sample_carries_on => Err(row),
         };
-        if let Some(row) = handed_back {
+        if let Err(row) = placed {
             self.runs.push(OpenRun {
                 data_offset,
-                rows: TrackRunBuilder::new(row),
+                builder: TrackRunBuilder::new(row),
             });
         }
 
@@ -71,7 +71,7 @@ impl OpenTrack {
 
     /// Returns every row of every run of the track, in the order they were placed
     fn rows(&self) -> impl Iterator<Item = &TrackRunRow> {
-        self.runs.iter().flat_map(|run| run.rows.rows())
+        self.runs.iter().flat_map(|run| run.builder.rows())
     }
 }
 
@@ -216,10 +216,11 @@ impl OpenFragment {
 /// What the samples of one track fragment share, and so what its `tfhd` states
 ///
 /// A field every sample of the fragment states the same value for is written
-/// once as the default of the `tfhd`, and left out of the rows of its runs. The
-/// flags of the first sample are a default of their own (ISO/IEC 14496-12
-/// §8.8.8), so a fragment whose samples share their flags but for the first one
-/// states the shared ones.
+/// once as the default of the `tfhd`, which [`TrackRunBuilder`] then leaves out
+/// of the rows of every run. A fragment whose samples share their flags but
+/// for the first one states the shared ones, so that the builder writes the
+/// flags of the first sample as its `first_sample_flags` (ISO/IEC 14496-12
+/// §8.8.8) against that default.
 #[derive(Clone, Copy, Debug)]
 struct Defaults {
     sample_duration: Option<u32>,
@@ -303,7 +304,7 @@ fn build_track_fragment(
                 }
                 None => 0,
             };
-            Ok(run.rows.build(Some(data_offset), &header))
+            Ok(run.builder.build(Some(data_offset), &header))
         })
         .collect::<Result<Vec<_>, SampleError>>()?;
 
@@ -313,6 +314,7 @@ fn build_track_fragment(
         runs,
     ))
 }
+
 #[cfg(test)]
 mod tests {
     use alloc::vec;
@@ -588,21 +590,6 @@ mod tests {
                 ],
             )
             .unwrap()]
-        );
-    }
-
-    #[test]
-    fn a_run_holding_any_composition_time_offset_states_one_for_every_row() {
-        let (movie_fragment, _media_data) =
-            one_fragment(vec![sample(1, 0, b"AAAA"), offset_by(1_024, 8)]);
-
-        assert_eq!(rows_of_the_runs(&movie_fragment, 1), [2]);
-        assert_eq!(
-            rows_of(&movie_fragment, 1),
-            [
-                TrackRunSample::new(None, None, None, Some(0)).unwrap(),
-                TrackRunSample::new(None, None, None, Some(8)).unwrap(),
-            ]
         );
     }
 

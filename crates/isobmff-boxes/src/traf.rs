@@ -18,10 +18,13 @@ use crate::trun::TrackRunBox;
 /// a fragment adding nothing but time to a track carries no run at all.
 ///
 /// A `tfhd` stating `duration-is-empty` declares that the fragment holds no
-/// samples, and §8.8.8 has such a fragment hold no track runs — so the flag is
-/// stated by this box, for a fragment built by
-/// [`with_empty_duration`](Self::with_empty_duration) and no other, and
-/// [`decode_payload`](BoxDecode::decode_payload) refuses the two together.
+/// samples, and §8.8.8 has such a fragment hold no track runs — so
+/// [`with_empty_duration`](Self::with_empty_duration) states the flag and
+/// holds no run, a header built by
+/// [`TrackFragmentHeaderBox::new`](TrackFragmentHeaderBox::new) never states
+/// it, and [`decode_payload`](BoxDecode::decode_payload) refuses the two
+/// together. A header read off the wire may state it, and a box built from one
+/// with runs by [`new`](Self::new) is one no decoder reads back.
 ///
 /// The `sdtp`, `sbgp`, `subs`, `saiz`, and `saio` children have no fields yet, so
 /// they are kept in [`other_boxes`](Self::other_boxes) and written back unread.

@@ -164,31 +164,17 @@ impl TrackFragmentHeaderBox {
         default_sample_flags: Option<u32>,
     ) -> Self {
         let bits = flags.bits()
-            | if base_data_offset.is_some() {
-                BASE_DATA_OFFSET_PRESENT
-            } else {
-                0
-            }
-            | if sample_description_index.is_some() {
-                SAMPLE_DESCRIPTION_INDEX_PRESENT
-            } else {
-                0
-            }
-            | if default_sample_duration.is_some() {
-                DEFAULT_SAMPLE_DURATION_PRESENT
-            } else {
-                0
-            }
-            | if default_sample_size.is_some() {
-                DEFAULT_SAMPLE_SIZE_PRESENT
-            } else {
-                0
-            }
-            | if default_sample_flags.is_some() {
-                DEFAULT_SAMPLE_FLAGS_PRESENT
-            } else {
-                0
-            };
+            | presence(base_data_offset.is_some(), BASE_DATA_OFFSET_PRESENT)
+            | presence(
+                sample_description_index.is_some(),
+                SAMPLE_DESCRIPTION_INDEX_PRESENT,
+            )
+            | presence(
+                default_sample_duration.is_some(),
+                DEFAULT_SAMPLE_DURATION_PRESENT,
+            )
+            | presence(default_sample_size.is_some(), DEFAULT_SAMPLE_SIZE_PRESENT)
+            | presence(default_sample_flags.is_some(), DEFAULT_SAMPLE_FLAGS_PRESENT);
 
         Self {
             flags: flags_of(bits),
@@ -270,14 +256,17 @@ impl TrackFragmentHeaderBox {
     }
 }
 
+/// Returns `flag` when the field it states is `present`, and no bit otherwise
+const fn presence(present: bool, flag: u32) -> u32 {
+    if present { flag } else { 0 }
+}
+
 /// Returns `bits` as the flags of the box, which they fit by construction
 const fn flags_of(bits: u32) -> FullBoxFlags {
     // Why not FullBoxFlags::new: it answers with an `Option` for bits past the
     // field, which flags that already fit it, joined with presence bits below
     // them, cannot reach; the field is built from its bytes instead.
-    let [_, high, middle, low] = bits.to_be_bytes();
-
-    FullBoxFields::from_bytes(&[0, high, middle, low]).flags()
+    FullBoxFields::from_bytes(&bits.to_be_bytes()).flags()
 }
 
 impl BoxDefinition for TrackFragmentHeaderBox {
