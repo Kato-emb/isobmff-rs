@@ -1,10 +1,10 @@
-//! [`SampleError`] as a caller reads it: the values a failure carries, and how it prints
+//! [`SampleError`] as a caller reads it: what its representation carries, and how it prints
 
 use core::error;
 use core::fmt;
 
+use crate::error::SampleError;
 use crate::error::kind::Representation;
-use crate::error::{FURTHEST_DATA_OFFSET, LARGEST_SAMPLE_SIZE, SampleError};
 
 impl SampleError {
     /// Returns the failure of one box carried through, when it holds one
@@ -174,7 +174,6 @@ impl SampleError {
             Representation::SampleSizeLimitExceeded { declared, .. }
             | Representation::SampleSizeOutOfRange { declared, .. } => Some(declared),
             Representation::UnfinishedSample { needed, .. } => Some(needed),
-            Representation::DataOffsetOutOfRange { offset, .. } => Some(offset),
             Representation::Box(_)
             | Representation::DecodeTimeOverflow { .. }
             | Representation::DataOffsetOverflow { .. }
@@ -188,6 +187,7 @@ impl SampleError {
             | Representation::AlreadyFinished
             | Representation::NoFragmentOpen
             | Representation::FragmentStillOpen
+            | Representation::DataOffsetOutOfRange { .. }
             | Representation::CompositionTimeOffsetOutOfRange { .. }
             | Representation::DecodeTimeMismatch { .. }
             | Representation::BackwardDecodeTime { .. }
@@ -202,8 +202,7 @@ impl SampleError {
         match self.representation {
             Representation::SampleSizeLimitExceeded { limit, .. } => Some(limit),
             Representation::UnfinishedSample { available, .. } => Some(available),
-            Representation::SampleSizeOutOfRange { .. } => Some(LARGEST_SAMPLE_SIZE),
-            Representation::DataOffsetOutOfRange { .. } => Some(FURTHEST_DATA_OFFSET),
+
             Representation::Box(_)
             | Representation::DecodeTimeOverflow { .. }
             | Representation::DataOffsetOverflow { .. }
@@ -217,6 +216,8 @@ impl SampleError {
             | Representation::AlreadyFinished
             | Representation::NoFragmentOpen
             | Representation::FragmentStillOpen
+            | Representation::SampleSizeOutOfRange { .. }
+            | Representation::DataOffsetOutOfRange { .. }
             | Representation::CompositionTimeOffsetOutOfRange { .. }
             | Representation::DecodeTimeMismatch { .. }
             | Representation::BackwardDecodeTime { .. }
@@ -299,11 +300,13 @@ impl fmt::Display for SampleError {
             Representation::FragmentStillOpen => formatter.write_str("fragment is still open"),
             Representation::SampleSizeOutOfRange { track_id, declared } => write!(
                 formatter,
-                "track {track_id} states a sample of {declared} bytes, past the {LARGEST_SAMPLE_SIZE} a trun row carries"
+                "track {track_id} states a sample of {declared} bytes, past the {} a trun row carries",
+                u32::MAX
             ),
             Representation::DataOffsetOutOfRange { track_id, offset } => write!(
                 formatter,
-                "sample data of track {track_id} lies {offset} bytes into the fragment, past the {FURTHEST_DATA_OFFSET} a trun carries"
+                "sample data of track {track_id} lies {offset} bytes into the fragment, past the {} a trun carries",
+                i32::MAX
             ),
             Representation::CompositionTimeOffsetOutOfRange { track_id, offset } => write!(
                 formatter,
@@ -449,7 +452,11 @@ mod tests {
 
         assert_eq!(too_long.track_id(), Some(1));
         assert_eq!(too_long.needed_bytes(), Some(1 << 40));
-        assert_eq!(too_long.available_bytes(), Some(u64::from(u32::MAX)));
+        assert_eq!(too_long.available_bytes(), None);
+        assert_eq!(
+            SampleError::data_offset_out_of_range(1, 1 << 40).needed_bytes(),
+            None
+        );
         assert_eq!(
             SampleError::sample_description_index_mismatch(1, 2, 1).sample_description_index(),
             Some(2)

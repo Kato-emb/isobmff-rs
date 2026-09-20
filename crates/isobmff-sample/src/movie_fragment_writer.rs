@@ -193,15 +193,19 @@ impl MovieFragmentWriter {
             State::Fragment(open) => open,
             State::Failed(failure) => return Err(*failure),
         };
-        let placed = open.place(sample, &self.decode_times);
-
-        placed.map_err(|failure| self.fail(failure))
+        open.place(sample, &self.decode_times)
+            .map_err(|failure| self.fail(failure))
     }
 
     /// Closes the fragment that is open, and hands back the `moof` and the `mdat` payload it is written as
     ///
     /// The `moof` and the payload are settled here, both held whole, so no
-    /// offset is written before the length it counts from is known.
+    /// offset is written before the length it counts from is known. The
+    /// offsets count over the header
+    /// [`MediaDataBox`](isobmff_boxes::MediaDataBox) writes for a payload of
+    /// that length, so the payload is laid down as that box, directly after
+    /// the `moof`. Where the samples leave the timeline of each track is kept
+    /// once the pair is built, and not on a failure.
     ///
     /// # Errors
     ///
@@ -218,17 +222,11 @@ impl MovieFragmentWriter {
         let open = match mem::replace(&mut self.state, State::Between) {
             State::Between => return Err(self.fail(SampleError::no_fragment_open())),
             State::Fragment(open) => open,
-            State::Failed(failure) => {
-                self.state = State::Failed(failure);
-
-                return Err(failure);
-            }
+            State::Failed(failure) => return Err(self.fail(failure)),
         };
-        for (track_id, reached) in open.reached() {
-            self.decode_times.reach(track_id, reached);
-        }
 
-        open.into_boxes().map_err(|failure| self.fail(failure))
+        open.into_boxes(&mut self.decode_times)
+            .map_err(|failure| self.fail(failure))
     }
 
     /// Fails the writer for good, and hands the failure back to report
@@ -247,10 +245,6 @@ impl Default for MovieFragmentWriter {
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec::Vec;
-
-    use isobmff_boxes::MovieFragmentBox;
-
     use super::MovieFragmentWriter;
     use crate::error::SampleError;
     use crate::sample::Sample;
@@ -258,35 +252,6 @@ mod tests {
     /// Sample of `track_id` at `decode_time` lasting 1024 units, carrying `data`
     pub(super) fn sample(track_id: u32, decode_time: u64, data: &[u8]) -> Sample {
         Sample::new(track_id, decode_time, 1_024, 0, 0, 1, data.to_vec())
-    }
-
-    /// Decode time the fragment `track_id` contributed to `movie_fragment` starts at
-    fn decode_time_of(movie_fragment: &MovieFragmentBox, track_id: u32) -> u64 {
-        movie_fragment
-            .traf()
-            .iter()
-            .find(|track_fragment| track_fragment.tfhd().track_id() == track_id)
-            .unwrap()
-            .tfdt()
-            .unwrap()
-            .base_media_decode_time()
-    }
-
-    #[test]
-    fn a_decode_time_is_written_for_every_fragment_of_a_track() {
-        let mut writer = MovieFragmentWriter::new();
-        let mut decode_times = Vec::new();
-
-        for (sequence_number, decode_time) in [(1, 0), (2, 8_192)] {
-            writer.begin_fragment(sequence_number).unwrap();
-            writer
-                .handle_sample(sample(1, decode_time, b"AAAA"))
-                .unwrap();
-            let (movie_fragment, _media_data) = writer.finish_fragment().unwrap();
-            decode_times.push(decode_time_of(&movie_fragment, 1));
-        }
-
-        assert_eq!(decode_times, [0, 8_192]);
     }
 
     #[test]

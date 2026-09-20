@@ -98,19 +98,18 @@ pub enum SampleErrorKind {
     NoFragmentOpen,
     /// Fragment was begun while the one before it was still open
     FragmentStillOpen,
-    /// Sample is longer than the field a `trun` row states its length in reaches
+    /// Sample is longer than the 32 bits a `trun` row states its length in
     ///
     /// [`track_id`](crate::SampleError::track_id) is the track it belongs to,
-    /// [`needed_bytes`](crate::SampleError::needed_bytes) the length it
-    /// carries, and [`available_bytes`](crate::SampleError::available_bytes)
-    /// the length the field reaches.
+    /// and [`needed_bytes`](crate::SampleError::needed_bytes) the length it
+    /// carries.
     SampleSizeOutOfRange,
-    /// Sample lies further into its fragment than the offset a `trun` states reaches
+    /// Sample lies further into its fragment than the signed 32 bits of a `trun` offset reach
     ///
-    /// [`track_id`](crate::SampleError::track_id) is the track it belongs to,
-    /// [`needed_bytes`](crate::SampleError::needed_bytes) how far in it lies,
-    /// and [`available_bytes`](crate::SampleError::available_bytes) how far the
-    /// field reaches.
+    /// The offsets of this writer are anchored at the `moof` (ISO/IEC 14496-12
+    /// §8.8.7.1), so a fragment whose media data runs past what that field
+    /// counts to is refused. [`track_id`](crate::SampleError::track_id) is the
+    /// track it belongs to.
     DataOffsetOutOfRange,
     /// Sample states a composition time offset neither version of a `trun` writes
     ///
@@ -127,8 +126,10 @@ pub enum SampleErrorKind {
     DecodeTimeMismatch,
     /// Fragment of a track starts before the samples written for it reach
     ///
-    /// A `tfdt` is the sum of the durations of the samples before it (ISO/IEC
-    /// 14496-12 §8.8.12), which a decode time going back cannot be.
+    /// The decode time a `tfdt` states never goes back: ISO/IEC 14496-12
+    /// §8.8.12 has it as the sum of the durations of the samples before it,
+    /// and a fragment starting past that sum is written as it stands, but one
+    /// starting short of it is refused.
     /// [`track_id`](crate::SampleError::track_id) is the track it belongs to.
     BackwardDecodeTime,
     /// Samples of one fragment of one track are described by two `stsd` entries

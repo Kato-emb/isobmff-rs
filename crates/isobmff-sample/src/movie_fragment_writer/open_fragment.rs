@@ -78,6 +78,11 @@ impl OpenTrack {
         data_offset: u64,
         carries_on: bool,
     ) -> Result<(), SampleError> {
+        self.reached = self
+            .reached
+            .checked_add(u64::from(sample.sample_duration))
+            .ok_or(SampleError::decode_time_overflow(self.track_id))?;
+
         match self.runs.last_mut() {
             Some(run) if carries_on && run.takes(sample.sample_composition_time_offset) => {
                 run.push(sample);
@@ -93,11 +98,6 @@ impl OpenTrack {
                 self.runs.push(started);
             }
         }
-
-        self.reached = self
-            .reached
-            .checked_add(u64::from(sample.sample_duration))
-            .ok_or(SampleError::decode_time_overflow(self.track_id))?;
 
         Ok(())
     }
@@ -211,15 +211,15 @@ impl OpenFragment {
         Ok(())
     }
 
-    /// Returns where the samples of the fragment leave the timeline of each track it carries
-    pub(super) fn reached(&self) -> impl Iterator<Item = (u32, u64)> + use<'_> {
-        self.tracks
-            .iter()
-            .map(|track| (track.track_id, track.reached))
-    }
-
     /// Builds the `moof` and the `mdat` payload the fragment is written as, now that its samples are over
-    pub(super) fn into_boxes(self) -> Result<(MovieFragmentBox, Vec<u8>), SampleError> {
+    ///
+    /// Once both are built, `decode_times` is moved to where the samples of
+    /// the fragment leave the timeline of each track it carries; a failure
+    /// leaves it as it was.
+    pub(super) fn into_boxes(
+        self,
+        decode_times: &mut TrackDecodeTimes,
+    ) -> Result<(MovieFragmentBox, Vec<u8>), SampleError> {
         let measured = build_movie_fragment(self.sequence_number, &self.tracks, None)?;
         let media_data = MediaDataBox::new(self.media_data);
         let header_len = media_data
@@ -227,6 +227,9 @@ impl OpenFragment {
             .saturating_sub(media_data.data().len() as u64);
         let base = measured.encoded_len().saturating_add(header_len);
         let movie_fragment = build_movie_fragment(self.sequence_number, &self.tracks, Some(base))?;
+        for track in &self.tracks {
+            decode_times.reach(track.track_id, track.reached);
+        }
 
         Ok((movie_fragment, media_data.into_data()))
     }
@@ -353,9 +356,9 @@ fn build_track_run(
 ) -> Result<TrackRunBox, SampleError> {
     let data_offset = match base {
         Some(base) => {
-            let offset = base.checked_add(run.data_offset).ok_or_else(|| {
-                SampleError::data_offset_out_of_range(track.track_id, run.data_offset)
-            })?;
+            let offset = base
+                .checked_add(run.data_offset)
+                .ok_or(SampleError::data_offset_overflow(track.track_id))?;
 
             i32::try_from(offset).map_err(|_past_the_field| {
                 SampleError::data_offset_out_of_range(track.track_id, offset)
@@ -368,28 +371,26 @@ fn build_track_run(
         .iter()
         .any(|sample| sample.sample_composition_time_offset != 0);
 
-    let rows = run
-        .samples
-        .iter()
-        .map(|sample| {
-            TrackRunSample::new(
-                defaults
-                    .sample_duration
-                    .is_none()
-                    .then_some(sample.sample_duration),
-                defaults.sample_size.is_none().then_some(sample.sample_size),
-                defaults
-                    .sample_flags
-                    .is_none()
-                    .then_some(sample.sample_flags),
-                carries_offsets.then_some(sample.sample_composition_time_offset),
-            )
-            .ok_or(SampleError::composition_time_offset_out_of_range(
-                track.track_id,
-                sample.sample_composition_time_offset,
-            ))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut rows = Vec::with_capacity(run.samples.len());
+    for sample in &run.samples {
+        let row = TrackRunSample::new(
+            defaults
+                .sample_duration
+                .is_none()
+                .then_some(sample.sample_duration),
+            defaults.sample_size.is_none().then_some(sample.sample_size),
+            defaults
+                .sample_flags
+                .is_none()
+                .then_some(sample.sample_flags),
+            carries_offsets.then_some(sample.sample_composition_time_offset),
+        )
+        .ok_or(SampleError::composition_time_offset_out_of_range(
+            track.track_id,
+            sample.sample_composition_time_offset,
+        ))?;
+        rows.push(row);
+    }
 
     let first_sample_flags = defaults.first_sample_flags.filter(|_leading| leads);
 
@@ -494,6 +495,28 @@ mod tests {
             .flat_map(|track_run| track_run.samples())
             .cloned()
             .collect()
+    }
+
+    #[test]
+    fn a_decode_time_is_written_for_every_fragment_of_a_track() {
+        let mut writer = MovieFragmentWriter::new();
+        let mut decode_times = Vec::new();
+
+        for (sequence_number, decode_time) in [(1, 0), (2, 8_192)] {
+            writer.begin_fragment(sequence_number).unwrap();
+            writer
+                .handle_sample(sample(1, decode_time, b"AAAA"))
+                .unwrap();
+            let (movie_fragment, _media_data) = writer.finish_fragment().unwrap();
+            decode_times.push(
+                track_fragment_of(&movie_fragment, 1)
+                    .tfdt()
+                    .unwrap()
+                    .base_media_decode_time(),
+            );
+        }
+
+        assert_eq!(decode_times, [0, 8_192]);
     }
 
     #[test]

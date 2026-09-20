@@ -8,12 +8,6 @@ mod report;
 use crate::error::kind::Representation;
 pub use kind::SampleErrorKind;
 
-/// Bytes a `trun` row states a sample of at most, ISO/IEC 14496-12 §8.8.8
-const LARGEST_SAMPLE_SIZE: u64 = u32::MAX as u64;
-
-/// Bytes into a fragment a `trun` states its data at most, ISO/IEC 14496-12 §8.8.8
-const FURTHEST_DATA_OFFSET: u64 = i32::MAX as u64;
-
 /// Reason the samples of a presentation do not resolve
 ///
 /// What went wrong is one [`kind`](Self::kind): a failure of the samples
