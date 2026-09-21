@@ -1,7 +1,7 @@
 //! Reading the samples of a file through the stack that holds its structure
 //!
 //! The whole of what a caller writes to read a fragmented file: bytes go in as
-//! they arrive, each cut with the offset it starts at, and the samples come out.
+//! they arrive, and the samples come out.
 
 use isobmff::{FragmentedReader, Sample};
 
@@ -9,11 +9,9 @@ use isobmff::{FragmentedReader, Sample};
 pub(crate) fn samples_of(file: &[u8], cut_length: usize) -> Vec<Sample> {
     let mut reader = FragmentedReader::new();
     let mut samples = Vec::new();
-    let mut offset = 0;
 
     for arriving in file.chunks(cut_length) {
-        reader.handle_input(offset, arriving).unwrap();
-        offset = offset.saturating_add(u64::try_from(arriving.len()).unwrap());
+        reader.handle_input(arriving).unwrap();
         while let Some(sample) = reader.poll_sample() {
             samples.push(sample);
         }

@@ -259,7 +259,6 @@ fn fragmented_reader_samples(file: &[u8], chunk_len: usize) -> (usize, usize) {
     let mut reader = FragmentedReader::new();
     let mut count = 0;
     let mut total = 0;
-    let mut offset = 0;
     let mut take = |reader: &mut FragmentedReader| {
         while let Some(sample) = reader.poll_sample() {
             count += 1;
@@ -269,8 +268,7 @@ fn fragmented_reader_samples(file: &[u8], chunk_len: usize) -> (usize, usize) {
     };
 
     for arriving in file.chunks(chunk_len) {
-        reader.handle_input(offset, arriving).unwrap();
-        offset += u64::try_from(arriving.len()).unwrap();
+        reader.handle_input(arriving).unwrap();
         take(&mut reader);
     }
     reader.finish().unwrap();

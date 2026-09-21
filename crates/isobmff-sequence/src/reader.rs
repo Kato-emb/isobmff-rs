@@ -275,9 +275,10 @@ impl BoxReader {
     /// Returns the bytes of the file the event last taken was read from
     ///
     /// The extent counts from the first byte handed to the reader, and covers
-    /// the bytes that event was read from — see [`BoxEvent`]. A sample layer
-    /// resolves the offsets a box declares against it, adding the origin the
-    /// file was read from.
+    /// the bytes that event was read from — see [`BoxEvent`]. A file handed
+    /// over from its first byte thus has every extent a file offset, the
+    /// coordinate a box declares its own in, so a sample layer reads the two
+    /// against each other as they stand.
     ///
     /// It is the event [`poll_event`](Self::poll_event) reported last that it
     /// names, and `None` until the first is taken. Where in the file the reader

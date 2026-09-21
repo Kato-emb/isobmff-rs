@@ -43,11 +43,9 @@ mod tests {
         cut_length: usize,
     ) -> Vec<Sample> {
         let mut samples = Vec::new();
-        let mut offset = 0;
 
         for arriving in file.chunks(cut_length) {
-            reader.handle_input(offset, arriving).unwrap();
-            offset = offset.saturating_add(u64::try_from(arriving.len()).unwrap());
+            reader.handle_input(arriving).unwrap();
             while let Some(sample) = reader.poll_sample() {
                 samples.push(sample);
             }
