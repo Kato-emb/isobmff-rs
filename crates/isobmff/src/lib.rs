@@ -115,6 +115,7 @@ extern crate std;
 #[cfg(feature = "std")]
 mod driver_error;
 mod fragmented_movie;
+mod media_segment;
 mod non_fragmented_movie;
 mod structure_error;
 mod whole_box;
@@ -124,6 +125,9 @@ pub use driver_error::{DriverError, DriverErrorKind};
 #[cfg(feature = "std")]
 pub use fragmented_movie::{FragmentedDemuxer, FragmentedMuxer};
 pub use fragmented_movie::{FragmentedReader, FragmentedWriter};
+#[cfg(feature = "std")]
+pub use media_segment::{MediaSegmentDemuxer, MediaSegmentMuxer};
+pub use media_segment::{MediaSegmentReader, MediaSegmentWriter};
 #[cfg(feature = "std")]
 pub use non_fragmented_movie::{NonFragmentedDemuxer, NonFragmentedMuxer};
 pub use non_fragmented_movie::{NonFragmentedReader, NonFragmentedWriter};
