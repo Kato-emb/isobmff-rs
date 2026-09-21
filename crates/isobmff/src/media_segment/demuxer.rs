@@ -218,12 +218,12 @@ mod tests {
     use std::io::{self, Read, Seek, SeekFrom};
 
     use isobmff_boxes::{
-        MovieBox, MovieFragmentBox, MovieFragmentHeaderBox, TrackExtendsBox, TrackFragmentBox,
-        TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
+        MovieFragmentBox, MovieFragmentHeaderBox, TrackFragmentBox, TrackFragmentHeaderBox,
+        TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
     };
-    use isobmff_test_support::{fragmented_movie, written};
+    use isobmff_test_support::written;
 
-    use super::super::tests::{sample, segment_of_one_sample};
+    use super::super::tests::{movie, sample, segment_of_one_sample};
     use super::MediaSegmentDemuxer;
     use crate::{DriverErrorKind, Sample, StructureErrorKind};
 
@@ -248,11 +248,6 @@ mod tests {
 
             self.0.seek(from)
         }
-    }
-
-    /// Movie of one track continued in fragments, whose defaults a `trex` states
-    fn movie() -> MovieBox {
-        fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0))
     }
 
     /// The segment of one sample, followed by a fragment addressing `size` bytes at that sample's start

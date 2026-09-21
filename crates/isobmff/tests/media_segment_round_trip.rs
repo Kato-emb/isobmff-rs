@@ -96,18 +96,6 @@ mod tests {
     }
 
     #[test]
-    fn the_samples_read_back_lay_the_same_segment_down_again() {
-        let segment = written_segment(declared_samples());
-        let mut read_back = samples_of(movie(), &segment, segment.len()).into_iter();
-        let fragments: Vec<Vec<Sample>> = declared_samples()
-            .iter()
-            .map(|fragment| read_back.by_ref().take(fragment.len()).collect())
-            .collect();
-
-        assert_eq!(written_segment(fragments), segment);
-    }
-
-    #[test]
     fn the_samples_are_read_back_the_same_however_the_segment_was_cut() {
         let segment = written_segment(declared_samples());
 

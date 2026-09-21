@@ -15,9 +15,8 @@ use crate::StructureError;
 /// it. This machine holds that order. Handed the type of each top-level box
 /// as it comes, it answers with the [`NonFragmentedDisposition`] of that
 /// box — read whole into a value, passed on as media data, or passed over —
-/// and fails
-/// on a box the order does not place there. It reads no box itself: what is
-/// done with a disposition stays with the caller.
+/// and fails on a box the order does not place there. It reads no box
+/// itself: what is done with a disposition stays with the caller.
 ///
 /// # Contract
 ///
@@ -44,12 +43,6 @@ pub(crate) struct NonFragmentedStructure {
 }
 
 /// What the structure of a non-fragmented movie file makes of a top-level box
-///
-/// The structure is handed the type of each top-level box and answers with
-/// one of these: the box is read whole into the value it names, its payload is
-/// passed on as media data, or it is passed over. Which boxes are read into
-/// values is the structure's to say, so each such box is a variant of its own,
-/// and the value it is read into is the one the variant is named after.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum NonFragmentedDisposition {
     /// Box is read whole into a [`FileTypeBox`]

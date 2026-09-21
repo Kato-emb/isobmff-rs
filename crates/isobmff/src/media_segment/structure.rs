@@ -20,9 +20,10 @@ use crate::StructureError;
 /// # Contract
 ///
 /// * The `styp` comes first, as §8.16.2 asks: a segment carrying none reads
-///   all the same, and one carrying it after any other box has it passed
-///   over, as §8.16.2 allows — the segments of a presentation concatenated
-///   into one file carry one each.
+///   all the same, but one carrying it after any other box — a second `styp`
+///   among them, as the segments of a presentation concatenated into one
+///   file carry — is
+///   [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder).
 /// * The `moof` comes any number of times, and at least once: a segment
 ///   declared over without one is
 ///   [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox).
@@ -44,12 +45,6 @@ pub(crate) struct MediaSegmentStructure {
 }
 
 /// What the structure of a media segment makes of a top-level box
-///
-/// The structure is handed the type of each top-level box and answers with
-/// one of these: the box is read whole into the value it names, its payload is
-/// passed on as media data, or it is passed over. Which boxes are read into
-/// values is the structure's to say, so each such box is a variant of its own,
-/// and the value it is read into is the one the variant is named after.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum MediaSegmentDisposition {
     /// Box is read whole into a [`SegmentTypeBox`]
@@ -97,8 +92,8 @@ impl MediaSegmentStructure {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder): an
-    ///   `mdat` before any `moof`.
+    /// * [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder): a
+    ///   `styp` after another box, or an `mdat` before any `moof`.
     /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the structure keeps and reports
@@ -162,6 +157,10 @@ const fn place(
         (SegmentTypeBox::BOX_TYPE, Position::Start) => {
             Ok((Position::Opened, MediaSegmentDisposition::SegmentType))
         }
+        (SegmentTypeBox::BOX_TYPE, Position::Opened | Position::Fragmenting)
+        | (MediaDataBox::BOX_TYPE, Position::Start | Position::Opened) => {
+            Err(StructureError::box_out_of_order(box_type))
+        }
         (
             MovieFragmentBox::BOX_TYPE,
             Position::Start | Position::Opened | Position::Fragmenting,
@@ -169,9 +168,6 @@ const fn place(
             Position::Fragmenting,
             MediaSegmentDisposition::MovieFragment,
         )),
-        (MediaDataBox::BOX_TYPE, Position::Start | Position::Opened) => {
-            Err(StructureError::box_out_of_order(box_type))
-        }
         (MediaDataBox::BOX_TYPE, Position::Fragmenting) => {
             Ok((Position::Fragmenting, MediaSegmentDisposition::MediaData))
         }
@@ -207,7 +203,7 @@ mod tests {
     fn the_boxes_of_a_media_segment_are_read_passed_on_or_passed_over_in_turn() {
         assert_eq!(
             dispositions_of(&[
-                b"styp", b"sidx", b"moof", b"mdat", b"free", b"moof", b"mdat", b"mdat", b"mfra",
+                b"styp", b"sidx", b"moof", b"mdat", b"moov", b"moof", b"mdat", b"mdat", b"mfra",
             ]),
             Ok(vec![
                 MediaSegmentDisposition::SegmentType,
@@ -235,37 +231,12 @@ mod tests {
     }
 
     #[test]
-    fn brands_declared_after_another_box_are_passed_over() {
-        assert_eq!(
-            dispositions_of(&[b"styp", b"moof", b"mdat", b"styp", b"moof", b"mdat"]),
-            Ok(vec![
-                MediaSegmentDisposition::SegmentType,
-                MediaSegmentDisposition::MovieFragment,
-                MediaSegmentDisposition::MediaData,
-                MediaSegmentDisposition::Skip,
-                MediaSegmentDisposition::MovieFragment,
-                MediaSegmentDisposition::MediaData,
-            ])
-        );
-        assert_eq!(
-            dispositions_of(&[b"free", b"styp"]),
-            Ok(vec![
-                MediaSegmentDisposition::Skip,
-                MediaSegmentDisposition::Skip,
-            ])
-        );
-    }
+    fn brands_declared_after_another_box_are_out_of_order() {
+        let out_of_order = Err(StructureError::box_out_of_order(BoxType::compact(*b"styp")));
 
-    #[test]
-    fn a_movie_among_the_boxes_is_passed_over() {
-        assert_eq!(
-            dispositions_of(&[b"styp", b"moov", b"moof"]),
-            Ok(vec![
-                MediaSegmentDisposition::SegmentType,
-                MediaSegmentDisposition::Skip,
-                MediaSegmentDisposition::MovieFragment,
-            ])
-        );
+        assert_eq!(dispositions_of(&[b"free", b"styp"]), out_of_order);
+        assert_eq!(dispositions_of(&[b"moof", b"styp"]), out_of_order);
+        assert_eq!(dispositions_of(&[b"styp", b"styp"]), out_of_order);
     }
 
     #[test]

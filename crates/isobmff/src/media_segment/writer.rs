@@ -26,9 +26,9 @@ use crate::{StructureError, whole_box_header, whole_payload};
 ///
 /// * The order of the boxes is the structure's, held to as they are handed
 ///   over: the `styp` first if at all, then the fragments. A `styp` handed
-///   over after a fragment is laid down as it stands, as §8.16.2 allows of
-///   segments concatenated into one file. A segment declared over without a
-///   fragment is
+///   over after a fragment is
+///   [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder), and a
+///   segment declared over without a fragment is
 ///   [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox).
 /// * A fragment is opened by [`begin_fragment`](Self::begin_fragment),
 ///   carries the samples handed over next, and is laid down by
@@ -113,6 +113,8 @@ impl MediaSegmentWriter {
     ///
     /// # Errors
     ///
+    /// * [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder): a
+    ///   fragment was laid down before them.
     /// * [`Box`](crate::StructureErrorKind::Box): the box does not write.
     /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
@@ -287,7 +289,7 @@ impl Default for MediaSegmentWriter {
 
 #[cfg(test)]
 mod tests {
-    use isobmff_boxes::MovieFragmentBox;
+    use isobmff_boxes::{MovieFragmentBox, SegmentTypeBox};
     use isobmff_core::BoxDefinition;
     use isobmff_sample::SampleErrorKind;
     use isobmff_test_support::segment_type;
@@ -308,16 +310,16 @@ mod tests {
     }
 
     #[test]
-    fn brands_handed_over_after_a_fragment_are_laid_down_as_they_stand() {
+    fn brands_handed_over_after_a_fragment_are_rejected() {
         let mut writer = MediaSegmentWriter::new();
 
         writer.begin_fragment(1).unwrap();
         writer.finish_fragment().unwrap();
-        writer.handle_segment_type(segment_type()).unwrap();
-        writer.begin_fragment(2).unwrap();
-        writer.finish_fragment().unwrap();
 
-        assert_eq!(writer.finish(), Ok(()));
+        assert_eq!(
+            writer.handle_segment_type(segment_type()),
+            Err(StructureError::box_out_of_order(SegmentTypeBox::BOX_TYPE))
+        );
     }
 
     #[test]

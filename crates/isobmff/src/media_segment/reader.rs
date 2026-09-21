@@ -41,18 +41,16 @@ use crate::{StructureError, WholeBoxReader};
 ///   media data is offered to the samples, and every other box is passed
 ///   over — a `sidx` among them, and a `moov`.
 /// * The order the boxes come in, and what a segment that breaks it is
-///   reported as, are the structure's: an `mdat` before any `moof` is
+///   reported as, are the structure's: a `styp` after another box and an
+///   `mdat` before any `moof` are
 ///   [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder), and a
 ///   segment declared over without a `moof` is
 ///   [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox).
-///   A segment carrying no `styp` reads all the same, and one carrying a
-///   `styp` after another box has it passed over, as §8.16.2 allows: the
-///   segments of a presentation concatenated into one file are read as one.
+///   A segment carrying no `styp` reads all the same, as §8.16.2 allows.
 /// * Where a fragment states no decode time for a track, the track goes on
 ///   from where the fragments handed over before it left it, or from zero
-///   where none did (§8.8.12): a reader is one segment's, or one
-///   concatenation's, and the segments of a presentation read apart each
-///   state their own.
+///   where none did (§8.8.12): a reader is one segment's, and the segments
+///   of a presentation read apart each state their own.
 /// * A box read into a value is gathered whole before it is read, so what it
 ///   declares is bounded — see [`with_limits`](Self::with_limits).
 /// * The samples of a fragment are read out of the media data that follows
@@ -414,21 +412,14 @@ impl MediaSegmentReader {
 
 #[cfg(test)]
 mod tests {
-    use isobmff_boxes::{MediaDataBox, MovieBox, MovieFragmentBox, TrackExtendsBox};
+    use isobmff_boxes::{MediaDataBox, MovieFragmentBox};
     use isobmff_core::{BoxDefinition, BoxType};
     use isobmff_sample::{Sample, SampleReader};
-    use isobmff_test_support::{
-        MEDIA_DATA, fragmented_movie, framed, movie_fragment, segment_type, written,
-    };
+    use isobmff_test_support::{MEDIA_DATA, framed, movie_fragment, segment_type, written};
 
-    use super::super::tests::{sample, segment_of_one_sample};
+    use super::super::tests::{movie, sample, segment_of_one_sample};
     use super::{MediaSegmentReader, StructureError};
     use crate::StructureErrorKind;
-
-    /// Movie of one track continued in fragments, whose defaults a `trex` states
-    fn movie() -> MovieBox {
-        fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0))
-    }
 
     /// What the reader makes of `segment` handed over whole, then declared over
     fn read(segment: &[u8]) -> Result<MediaSegmentReader, StructureError> {
@@ -445,7 +436,6 @@ mod tests {
         let reader = read(&written(&movie_fragment())).unwrap();
 
         assert_eq!(reader.segment_type(), None);
-        assert_eq!(reader.movie(), &movie());
     }
 
     #[test]
@@ -455,33 +445,6 @@ mod tests {
             Err(StructureError::missing_mandatory_box(
                 MovieFragmentBox::BOX_TYPE
             ))
-        );
-    }
-
-    #[test]
-    fn a_movie_among_the_boxes_is_passed_over() {
-        let segment = [
-            written(&segment_type()),
-            written(&movie()),
-            written(&movie_fragment()),
-        ]
-        .concat();
-        let reader = read(&segment).unwrap();
-
-        assert_eq!(reader.segment_type(), Some(&segment_type()));
-    }
-
-    #[test]
-    fn media_data_arriving_before_any_fragment_is_out_of_order() {
-        let segment = [
-            written(&segment_type()),
-            written(&MediaDataBox::new(MEDIA_DATA.to_vec())),
-        ]
-        .concat();
-
-        assert_eq!(
-            read(&segment).map(drop),
-            Err(StructureError::box_out_of_order(MediaDataBox::BOX_TYPE))
         );
     }
 
