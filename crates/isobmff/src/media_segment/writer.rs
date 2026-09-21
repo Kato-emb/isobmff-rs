@@ -26,7 +26,7 @@ use crate::{StructureError, whole_box_header, whole_payload};
 ///
 /// * The order of the boxes is the structure's, held to as they are handed
 ///   over: the `styp` first if at all, then the fragments. A `styp` handed
-///   over after a fragment is
+///   over after another box is
 ///   [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder), and a
 ///   segment declared over without a fragment is
 ///   [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox).
@@ -113,8 +113,8 @@ impl MediaSegmentWriter {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder): a
-    ///   fragment was laid down before them.
+    /// * [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder): a box
+    ///   was laid down before them.
     /// * [`Box`](crate::StructureErrorKind::Box): the box does not write.
     /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).

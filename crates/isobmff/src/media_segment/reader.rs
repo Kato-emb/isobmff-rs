@@ -49,8 +49,7 @@ use crate::{StructureError, WholeBoxReader};
 ///   A segment carrying no `styp` reads all the same, as §8.16.2 allows.
 /// * Where a fragment states no decode time for a track, the track goes on
 ///   from where the fragments handed over before it left it, or from zero
-///   where none did (§8.8.12): a reader is one segment's, and the segments
-///   of a presentation read apart each state their own.
+///   where none did (§8.8.12): a reader is one segment's.
 /// * A box read into a value is gathered whole before it is read, so what it
 ///   declares is bounded — see [`with_limits`](Self::with_limits).
 /// * The samples of a fragment are read out of the media data that follows

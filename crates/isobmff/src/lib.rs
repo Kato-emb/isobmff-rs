@@ -11,8 +11,8 @@
 //! when to read or write, and from or to where, stay with the caller. Where
 //! the caller has `std::io` to hand, the `std` feature drives each of them:
 //! [`FragmentedDemuxer`], [`NonFragmentedDemuxer`] and [`MediaSegmentDemuxer`]
-//! read a file off a `Read + Seek`, [`FragmentedMuxer`],
-//! [`NonFragmentedMuxer`] and [`MediaSegmentMuxer`] write one to a `Write`.
+//! read one off a `Read + Seek`, [`FragmentedMuxer`], [`NonFragmentedMuxer`]
+//! and [`MediaSegmentMuxer`] write one to a `Write`.
 //!
 //! # The layers a file is read through
 //!
