@@ -4,11 +4,11 @@ use alloc::vec::Vec;
 use core::mem;
 
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox};
-use isobmff_core::{BoxDefinition, BoxHeader};
+use isobmff_core::{BoxDefinition, BoxHeader, BoxType};
 use isobmff_sample::{Sample, SampleError, SampleTableWriter};
 use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
 
-use super::NonFragmentedStructure;
+use super::{NonFragmentedDisposition, NonFragmentedStructure};
 use crate::{StructureError, compact_box_header, whole_box_header, whole_payload};
 
 /// Lays a non-fragmented movie file down, taking the samples as they come
@@ -163,9 +163,7 @@ impl NonFragmentedWriter {
         let payload = whole_payload(&file_type).map_err(|failure| self.fail(failure))?;
         let header = whole_box_header(FileTypeBox::BOX_TYPE, payload.len() as u64)
             .map_err(|failure| self.fail(failure))?;
-        self.structure
-            .handle_box_type(FileTypeBox::BOX_TYPE)
-            .map_err(|failure| self.fail(failure))?;
+        self.place(FileTypeBox::BOX_TYPE)?;
 
         self.frame(header, alloc::vec![payload])
     }
@@ -190,9 +188,7 @@ impl NonFragmentedWriter {
         // is refused where it is handed over, before chunks are laid down
         // against the first, and the structure places a `moov` the same
         // before the media data as after it.
-        self.structure
-            .handle_box_type(MovieBox::BOX_TYPE)
-            .map_err(|failure| self.fail(failure))?;
+        self.place(MovieBox::BOX_TYPE)?;
         self.movie = Some(movie);
 
         Ok(())
@@ -219,9 +215,7 @@ impl NonFragmentedWriter {
         // offset is stated before it is, so the chunk goes down under the
         // compact header whatever its length, and is refused where that form
         // cannot declare it.
-        self.structure
-            .handle_box_type(MediaDataBox::BOX_TYPE)
-            .map_err(|failure| self.fail(failure))?;
+        self.place(MediaDataBox::BOX_TYPE)?;
         let header =
             compact_box_header(MediaDataBox::BOX_TYPE, 0).map_err(|failure| self.fail(failure))?;
         // Why not checked_add: the framing already carries where the file
@@ -320,6 +314,26 @@ impl NonFragmentedWriter {
         self.state = State::Finished;
 
         Ok(())
+    }
+
+    /// Places the box `box_type` names where the structure has it, failing the writer where it is refused
+    ///
+    /// A box the structure passes over has no place in the file to be laid
+    /// down at, and is refused as
+    /// [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder).
+    fn place(&mut self, box_type: BoxType) -> Result<(), StructureError> {
+        match self
+            .structure
+            .handle_box_type(box_type)
+            .map_err(|failure| self.fail(failure))?
+        {
+            NonFragmentedDisposition::FileType
+            | NonFragmentedDisposition::Movie
+            | NonFragmentedDisposition::MediaData => Ok(()),
+            NonFragmentedDisposition::Skip => {
+                Err(self.fail(StructureError::box_out_of_order(box_type)))
+            }
+        }
     }
 
     /// Returns `Ok` while the writer still takes boxes and samples
