@@ -15,4 +15,4 @@ pub use muxer::NonFragmentedMuxer;
 pub use reader::NonFragmentedReader;
 pub use writer::NonFragmentedWriter;
 
-use structure::NonFragmentedStructure;
+use structure::{NonFragmentedDisposition, NonFragmentedStructure};

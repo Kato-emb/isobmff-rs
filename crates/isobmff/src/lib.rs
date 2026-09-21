@@ -112,7 +112,6 @@ extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
-mod disposition;
 #[cfg(feature = "std")]
 mod driver_error;
 mod fragmented_movie;
@@ -130,7 +129,6 @@ pub use non_fragmented_movie::{NonFragmentedDemuxer, NonFragmentedMuxer};
 pub use non_fragmented_movie::{NonFragmentedReader, NonFragmentedWriter};
 pub use structure_error::{StructureError, StructureErrorKind};
 
-pub(crate) use disposition::Disposition;
 pub(crate) use whole_box::{WholeBoxReader, compact_box_header, whole_box_header, whole_payload};
 
 pub use isobmff_boxes::*;

@@ -7,8 +7,8 @@ use isobmff_sample::sample_table::sample_extents;
 use isobmff_sample::{Sample, SampleReader};
 use isobmff_sequence::{BoxEvent, BoxReader};
 
-use super::NonFragmentedStructure;
-use crate::{Disposition, StructureError, WholeBoxReader};
+use super::{NonFragmentedDisposition, NonFragmentedStructure};
+use crate::{StructureError, WholeBoxReader};
 
 /// Reads the samples a non-fragmented movie file carries, taking it as it arrives
 ///
@@ -320,30 +320,23 @@ impl NonFragmentedReader {
     fn read_framed(&mut self) -> Result<(), StructureError> {
         while let Some(event) = self.boxes.poll_event() {
             match event {
-                BoxEvent::Header(header) => {
-                    self.structure
-                        .handle_box_type(header.box_type())
-                        .and_then(|disposition| {
-                            self.open = match disposition {
-                                Disposition::FileType => Some(Open::FileType(
-                                    WholeBoxReader::begin(header, self.payload_limit)?,
-                                )),
-                                Disposition::Movie => Some(Open::Movie(WholeBoxReader::begin(
-                                    header,
-                                    self.payload_limit,
-                                )?)),
-                                Disposition::MediaData => Some(Open::MediaData),
-                                Disposition::Skip => None,
-                                // Why not unreachable: the structure of a
-                                // non-fragmented movie file never answers with
-                                // a fragment, and `None` stands in place of a
-                                // panic the lints forbid.
-                                Disposition::MovieFragment => None,
-                            };
+                BoxEvent::Header(header) => self
+                    .structure
+                    .handle_box_type(header.box_type())
+                    .and_then(|disposition| {
+                        self.open = match disposition {
+                            NonFragmentedDisposition::FileType => Some(Open::FileType(
+                                WholeBoxReader::begin(header, self.payload_limit)?,
+                            )),
+                            NonFragmentedDisposition::Movie => Some(Open::Movie(
+                                WholeBoxReader::begin(header, self.payload_limit)?,
+                            )),
+                            NonFragmentedDisposition::MediaData => Some(Open::MediaData),
+                            NonFragmentedDisposition::Skip => None,
+                        };
 
-                            Ok(())
-                        })
-                }
+                        Ok(())
+                    }),
                 BoxEvent::Payload(payload) => match &mut self.open {
                     Some(Open::FileType(reader)) => reader.handle_payload(payload),
                     Some(Open::Movie(reader)) => reader.handle_payload(payload),

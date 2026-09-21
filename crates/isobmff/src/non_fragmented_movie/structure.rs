@@ -1,9 +1,9 @@
-//! [`NonFragmentedStructure`], the order of the top-level boxes of a non-fragmented movie file, ISO/IEC 14496-12 §4.3, §8.1.1 and §8.2.1
+//! [`NonFragmentedStructure`] and [`NonFragmentedDisposition`], the order of the top-level boxes of a non-fragmented movie file, ISO/IEC 14496-12 §4.3, §8.1.1 and §8.2.1
 
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox};
 use isobmff_core::{BoxDefinition, BoxType};
 
-use crate::{Disposition, StructureError};
+use crate::StructureError;
 
 /// Holds the structure of a non-fragmented movie file, one top-level box at a time
 ///
@@ -13,8 +13,9 @@ use crate::{Disposition, StructureError};
 /// lies close to the start of the file or close to its end, and §8.2.1 asks
 /// for neither, so the media data may come before the movie that declares
 /// it. This machine holds that order. Handed the type of each top-level box
-/// as it comes, it answers with the [`Disposition`] of that box — read
-/// whole into a value, passed on as media data, or passed over — and fails
+/// as it comes, it answers with the [`NonFragmentedDisposition`] of that
+/// box — read whole into a value, passed on as media data, or passed over —
+/// and fails
 /// on a box the order does not place there. It reads no box itself: what is
 /// done with a disposition stays with the caller.
 ///
@@ -40,6 +41,25 @@ use crate::{Disposition, StructureError};
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct NonFragmentedStructure {
     state: State,
+}
+
+/// What the structure of a non-fragmented movie file makes of a top-level box
+///
+/// The structure is handed the type of each top-level box and answers with
+/// one of these: the box is read whole into the value it names, its payload is
+/// passed on as media data, or it is passed over. Which boxes are read into
+/// values is the structure's to say, so each such box is a variant of its own,
+/// and the value it is read into is the one the variant is named after.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum NonFragmentedDisposition {
+    /// Box is read whole into a [`FileTypeBox`]
+    FileType,
+    /// Box is read whole into a [`MovieBox`]
+    Movie,
+    /// Payload of the box is media data, passed on as it arrives
+    MediaData,
+    /// Box is passed over, payload and all
+    Skip,
 }
 
 /// Where the structure stands between calls
@@ -88,7 +108,7 @@ impl NonFragmentedStructure {
     pub(crate) fn handle_box_type(
         &mut self,
         box_type: BoxType,
-    ) -> Result<Disposition, StructureError> {
+    ) -> Result<NonFragmentedDisposition, StructureError> {
         let position = match self.state {
             State::Reading(position) => position,
             State::Finished => return Err(StructureError::already_finished()),
@@ -139,24 +159,28 @@ impl NonFragmentedStructure {
 const fn place(
     position: Position,
     box_type: BoxType,
-) -> Result<(Position, Disposition), StructureError> {
+) -> Result<(Position, NonFragmentedDisposition), StructureError> {
     match (box_type, position) {
-        (FileTypeBox::BOX_TYPE, Position::Start) => Ok((Position::Opened, Disposition::FileType)),
+        (FileTypeBox::BOX_TYPE, Position::Start) => {
+            Ok((Position::Opened, NonFragmentedDisposition::FileType))
+        }
         (FileTypeBox::BOX_TYPE, Position::Opened | Position::Declared) => {
             Err(StructureError::box_out_of_order(box_type))
         }
         (MovieBox::BOX_TYPE, Position::Start | Position::Opened) => {
-            Ok((Position::Declared, Disposition::Movie))
+            Ok((Position::Declared, NonFragmentedDisposition::Movie))
         }
         (MovieBox::BOX_TYPE, Position::Declared) => Err(StructureError::duplicate_box(box_type)),
         (MediaDataBox::BOX_TYPE, Position::Start | Position::Opened) => {
-            Ok((Position::Opened, Disposition::MediaData))
+            Ok((Position::Opened, NonFragmentedDisposition::MediaData))
         }
         (MediaDataBox::BOX_TYPE, Position::Declared) => {
-            Ok((Position::Declared, Disposition::MediaData))
+            Ok((Position::Declared, NonFragmentedDisposition::MediaData))
         }
-        (_other, Position::Start) => Ok((Position::Opened, Disposition::Skip)),
-        (_other, Position::Opened | Position::Declared) => Ok((position, Disposition::Skip)),
+        (_other, Position::Start) => Ok((Position::Opened, NonFragmentedDisposition::Skip)),
+        (_other, Position::Opened | Position::Declared) => {
+            Ok((position, NonFragmentedDisposition::Skip))
+        }
     }
 }
 
@@ -167,10 +191,12 @@ mod tests {
 
     use isobmff_core::BoxType;
 
-    use super::{Disposition, NonFragmentedStructure, StructureError};
+    use super::{NonFragmentedDisposition, NonFragmentedStructure, StructureError};
 
     /// The dispositions of the boxes named, in order, stopping at the first failure
-    fn dispositions_of(fourccs: &[&[u8; 4]]) -> Result<Vec<Disposition>, StructureError> {
+    fn dispositions_of(
+        fourccs: &[&[u8; 4]],
+    ) -> Result<Vec<NonFragmentedDisposition>, StructureError> {
         let mut structure = NonFragmentedStructure::new();
 
         fourccs
@@ -186,14 +212,14 @@ mod tests {
                 b"ftyp", b"free", b"moov", b"free", b"mdat", b"mdat", b"skip", b"moof",
             ]),
             Ok(vec![
-                Disposition::FileType,
-                Disposition::Skip,
-                Disposition::Movie,
-                Disposition::Skip,
-                Disposition::MediaData,
-                Disposition::MediaData,
-                Disposition::Skip,
-                Disposition::Skip,
+                NonFragmentedDisposition::FileType,
+                NonFragmentedDisposition::Skip,
+                NonFragmentedDisposition::Movie,
+                NonFragmentedDisposition::Skip,
+                NonFragmentedDisposition::MediaData,
+                NonFragmentedDisposition::MediaData,
+                NonFragmentedDisposition::Skip,
+                NonFragmentedDisposition::Skip,
             ])
         );
     }
@@ -203,12 +229,12 @@ mod tests {
         assert_eq!(
             dispositions_of(&[b"ftyp", b"mdat", b"free", b"mdat", b"moov", b"mdat"]),
             Ok(vec![
-                Disposition::FileType,
-                Disposition::MediaData,
-                Disposition::Skip,
-                Disposition::MediaData,
-                Disposition::Movie,
-                Disposition::MediaData,
+                NonFragmentedDisposition::FileType,
+                NonFragmentedDisposition::MediaData,
+                NonFragmentedDisposition::Skip,
+                NonFragmentedDisposition::MediaData,
+                NonFragmentedDisposition::Movie,
+                NonFragmentedDisposition::MediaData,
             ])
         );
     }
@@ -217,7 +243,10 @@ mod tests {
     fn a_file_declaring_no_brands_is_read_all_the_same() {
         assert_eq!(
             dispositions_of(&[b"mdat", b"moov"]),
-            Ok(vec![Disposition::MediaData, Disposition::Movie])
+            Ok(vec![
+                NonFragmentedDisposition::MediaData,
+                NonFragmentedDisposition::Movie
+            ])
         );
     }
 

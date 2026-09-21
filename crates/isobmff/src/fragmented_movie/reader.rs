@@ -8,8 +8,8 @@ use isobmff_sample::movie_fragment::sample_extents;
 use isobmff_sample::{Sample, SampleReader, TrackDecodeTimes};
 use isobmff_sequence::{BoxEvent, BoxReader};
 
-use super::FragmentedStructure;
-use crate::{Disposition, StructureError, WholeBoxReader};
+use super::{FragmentedDisposition, FragmentedStructure};
+use crate::{StructureError, WholeBoxReader};
 
 /// Reads the samples a fragmented movie file carries, taking it as it arrives
 ///
@@ -364,20 +364,20 @@ impl FragmentedReader {
     /// Opens the box `header` introduces, as the structure disposes of it
     fn begin_box(&mut self, header: BoxHeader, start: u64) -> Result<(), StructureError> {
         self.open = match self.structure.handle_box_type(header.box_type())? {
-            Disposition::FileType => Some(Open::FileType(WholeBoxReader::begin(
+            FragmentedDisposition::FileType => Some(Open::FileType(WholeBoxReader::begin(
                 header,
                 self.payload_limit,
             )?)),
-            Disposition::Movie => Some(Open::Movie(WholeBoxReader::begin(
+            FragmentedDisposition::Movie => Some(Open::Movie(WholeBoxReader::begin(
                 header,
                 self.payload_limit,
             )?)),
-            Disposition::MovieFragment => Some(Open::MovieFragment {
+            FragmentedDisposition::MovieFragment => Some(Open::MovieFragment {
                 reader: WholeBoxReader::begin(header, self.payload_limit)?,
                 moof_start: start,
             }),
-            Disposition::MediaData => Some(Open::MediaData),
-            Disposition::Skip => None,
+            FragmentedDisposition::MediaData => Some(Open::MediaData),
+            FragmentedDisposition::Skip => None,
         };
 
         Ok(())
