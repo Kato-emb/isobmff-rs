@@ -7,7 +7,7 @@ use isobmff_sample::Sample;
 use isobmff_sequence::EventBytes;
 
 use super::NonFragmentedWriter;
-use crate::{DriverError, Muxing, PollOutput};
+use crate::{DriverError, Muxer, PollOutput};
 
 /// Lays a non-fragmented movie file down on a sink, taking the samples as they come
 ///
@@ -61,7 +61,7 @@ use crate::{DriverError, Muxing, PollOutput};
 /// ```
 #[derive(Debug)]
 pub struct NonFragmentedMuxer<W> {
-    muxing: Muxing<W, NonFragmentedWriter>,
+    muxer: Muxer<W, NonFragmentedWriter>,
 }
 
 impl<W: Write> NonFragmentedMuxer<W> {
@@ -69,7 +69,7 @@ impl<W: Write> NonFragmentedMuxer<W> {
     #[must_use]
     pub const fn new(sink: W) -> Self {
         Self {
-            muxing: Muxing::new(sink, NonFragmentedWriter::new()),
+            muxer: Muxer::new(sink, NonFragmentedWriter::new()),
         }
     }
 
@@ -81,7 +81,7 @@ impl<W: Write> NonFragmentedMuxer<W> {
     ///   [`NonFragmentedWriter::handle_file_type`] makes of the call.
     /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes.
     pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), DriverError> {
-        self.muxing
+        self.muxer
             .drive(|writer| writer.handle_file_type(file_type))
     }
 
@@ -92,7 +92,7 @@ impl<W: Write> NonFragmentedMuxer<W> {
     /// * [`Structure`](crate::DriverErrorKind::Structure): what
     ///   [`NonFragmentedWriter::handle_movie`] makes of the call.
     pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), DriverError> {
-        self.muxing.drive(|writer| writer.handle_movie(movie))
+        self.muxer.drive(|writer| writer.handle_movie(movie))
     }
 
     /// Opens a chunk, which the samples handed over next are laid out in, writing the chunk open before it
@@ -103,7 +103,7 @@ impl<W: Write> NonFragmentedMuxer<W> {
     ///   [`NonFragmentedWriter::begin_chunk`] makes of the call.
     /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes.
     pub fn begin_chunk(&mut self) -> Result<(), DriverError> {
-        self.muxing.drive(NonFragmentedWriter::begin_chunk)
+        self.muxer.drive(NonFragmentedWriter::begin_chunk)
     }
 
     /// Takes a sample, and places it at the end of the chunk that is open
@@ -113,7 +113,7 @@ impl<W: Write> NonFragmentedMuxer<W> {
     /// * [`Structure`](crate::DriverErrorKind::Structure): what
     ///   [`NonFragmentedWriter::handle_sample`] makes of the call.
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), DriverError> {
-        self.muxing.drive(|writer| writer.handle_sample(sample))
+        self.muxer.drive(|writer| writer.handle_sample(sample))
     }
 
     /// Declares the file over, writing the chunk that is open and then the movie, and flushes the sink
@@ -125,7 +125,7 @@ impl<W: Write> NonFragmentedMuxer<W> {
     /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes, or
     ///   does not flush.
     pub fn finish(&mut self) -> Result<(), DriverError> {
-        self.muxing.finish(NonFragmentedWriter::finish)
+        self.muxer.finish(NonFragmentedWriter::finish)
     }
 }
 

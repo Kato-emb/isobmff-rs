@@ -1,4 +1,4 @@
-//! [`ReadSamples`], [`PollOutput`], [`Demuxing`] and [`Muxing`], what every demuxer and muxer does the same way whatever the structure
+//! [`ReadSamples`], [`PollOutput`], [`Demuxer`] and [`Muxer`], what every demuxer and muxer does the same way whatever the structure
 
 use alloc::vec::Vec;
 use core::ops::Range;
@@ -48,7 +48,7 @@ pub(crate) trait PollOutput {
 /// and the samples come out as `Iterator` items. The contract is each
 /// demuxer's own.
 #[derive(Debug)]
-pub(crate) struct Demuxing<S, R> {
+pub(crate) struct Demuxer<S, R> {
     source: S,
     reader: R,
     cut: Vec<u8>,
@@ -66,7 +66,7 @@ enum State {
     Over(Option<DriverError>),
 }
 
-impl<S: Read + Seek, R: ReadSamples> Demuxing<S, R> {
+impl<S: Read + Seek, R: ReadSamples> Demuxer<S, R> {
     /// Creates a demuxer over `source` driving `reader`, the file beginning where the source stands
     ///
     /// # Errors
@@ -147,7 +147,7 @@ impl<S: Read + Seek, R: ReadSamples> Demuxing<S, R> {
     }
 }
 
-impl<S: Read + Seek, R: ReadSamples> Iterator for Demuxing<S, R> {
+impl<S: Read + Seek, R: ReadSamples> Iterator for Demuxer<S, R> {
     type Item = Result<Sample, DriverError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -171,12 +171,12 @@ impl<S: Read + Seek, R: ReadSamples> Iterator for Demuxing<S, R> {
 /// writer, and what the writer made of it is written to the sink before the
 /// step reports. The contract is each muxer's own.
 #[derive(Debug)]
-pub(crate) struct Muxing<S, W> {
+pub(crate) struct Muxer<S, W> {
     sink: S,
     writer: W,
 }
 
-impl<S: Write, W: PollOutput> Muxing<S, W> {
+impl<S: Write, W: PollOutput> Muxer<S, W> {
     /// Creates a muxer writing to `sink` what `writer` makes of each step
     pub(crate) const fn new(sink: S, writer: W) -> Self {
         Self { sink, writer }
@@ -236,7 +236,7 @@ mod tests {
     use isobmff_sample::Sample;
     use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
 
-    use super::{CUT_LENGTH, Demuxing, Muxing, PollOutput, ReadSamples};
+    use super::{CUT_LENGTH, Demuxer, Muxer, PollOutput, ReadSamples};
     use crate::{DriverError, DriverErrorKind, StructureError, StructureErrorKind};
 
     /// Reader answering as scripted, and recording what it was handed
@@ -357,11 +357,11 @@ mod tests {
         core::iter::from_fn(|| boxes.poll_output()).collect()
     }
 
-    /// What `demuxing` yields, kind for kind, until it is over
+    /// What `demuxer` yields, kind for kind, until it is over
     fn yielded(
-        demuxing: &mut Demuxing<impl Read + Seek, Scripted>,
+        demuxer: &mut Demuxer<impl Read + Seek, Scripted>,
     ) -> Vec<Result<Sample, DriverErrorKind>> {
-        demuxing
+        demuxer
             .map(|sample| sample.map_err(|failure| failure.kind()))
             .collect()
     }
@@ -371,7 +371,7 @@ mod tests {
      {
         let first_cut = vec![0x11; usize::try_from(CUT_LENGTH).unwrap()];
         let past_the_cut = b"PASTCUT!".to_vec();
-        let mut demuxing = Demuxing::new(
+        let mut demuxer = Demuxer::new(
             io::Cursor::new([first_cut.clone(), past_the_cut.clone()].concat()),
             Scripted {
                 wanted: Some(2..6),
@@ -380,9 +380,9 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(yielded(&mut demuxing), []);
+        assert_eq!(yielded(&mut demuxer), []);
         assert_eq!(
-            demuxing.reader().inputs,
+            demuxer.reader().inputs,
             [first_cut.clone(), past_the_cut.clone()]
         );
         let fetched: Vec<u8> = first_cut
@@ -391,14 +391,14 @@ mod tests {
             .chain(past_the_cut.iter().take(2))
             .copied()
             .collect();
-        assert_eq!(demuxing.reader().data, [(2, fetched)]);
+        assert_eq!(demuxer.reader().data, [(2, fetched)]);
     }
 
     #[test]
     fn the_file_begins_where_the_source_stands() {
         let mut source = io::Cursor::new(b"junkFILE".to_vec());
         source.set_position(4);
-        let mut demuxing = Demuxing::new(
+        let mut demuxer = Demuxer::new(
             source,
             Scripted {
                 wanted: Some(1..3),
@@ -407,14 +407,14 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(yielded(&mut demuxing), []);
-        assert_eq!(demuxing.reader().inputs, [b"FILE".to_vec()]);
-        assert_eq!(demuxing.reader().data, [(1, b"ILE".to_vec())]);
+        assert_eq!(yielded(&mut demuxer), []);
+        assert_eq!(demuxer.reader().inputs, [b"FILE".to_vec()]);
+        assert_eq!(demuxer.reader().data, [(1, b"ILE".to_vec())]);
     }
 
     #[test]
     fn a_source_shrunk_below_what_was_read_is_reported_as_ending() {
-        let mut demuxing = Demuxing::new(
+        let mut demuxer = Demuxer::new(
             Shrinking(io::Cursor::new(b"FILE".to_vec())),
             Scripted {
                 wanted: Some(0..4),
@@ -424,24 +424,24 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            yielded(&mut demuxing),
+            yielded(&mut demuxer),
             [Err(DriverErrorKind::Io(io::ErrorKind::UnexpectedEof))]
         );
     }
 
     #[test]
     fn the_end_of_the_source_declares_the_file_over() {
-        let mut demuxing =
-            Demuxing::new(io::Cursor::new(b"FILE".to_vec()), Scripted::default()).unwrap();
+        let mut demuxer =
+            Demuxer::new(io::Cursor::new(b"FILE".to_vec()), Scripted::default()).unwrap();
 
-        assert_eq!(yielded(&mut demuxing), []);
-        assert!(demuxing.reader().finished);
-        assert!(demuxing.next().is_none());
+        assert_eq!(yielded(&mut demuxer), []);
+        assert!(demuxer.reader().finished);
+        assert!(demuxer.next().is_none());
     }
 
     #[test]
     fn the_samples_completed_before_a_failure_come_first_and_the_failure_once() {
-        let mut demuxing = Demuxing::new(
+        let mut demuxer = Demuxer::new(
             io::Cursor::new(b"FILE".to_vec()),
             Scripted {
                 completed_by_input: vec![sample(b"S1"), sample(b"S2")],
@@ -452,7 +452,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            yielded(&mut demuxing),
+            yielded(&mut demuxer),
             [
                 Ok(sample(b"S1")),
                 Ok(sample(b"S2")),
@@ -461,14 +461,14 @@ mod tests {
                 )),
             ]
         );
-        assert!(demuxing.next().is_none());
+        assert!(demuxer.next().is_none());
     }
 
     #[test]
     fn the_bytes_a_step_made_before_failing_are_written_and_the_steps_failure_reported() {
-        let mut muxing = Muxing::new(Recording::default(), Queued::default());
+        let mut muxer = Muxer::new(Recording::default(), Queued::default());
 
-        let driven = muxing.drive(|writer| {
+        let driven = muxer.drive(|writer| {
             writer.output.extend(framed(b"MADE"));
 
             Err(StructureError::already_finished())
@@ -478,14 +478,14 @@ mod tests {
             driven.map_err(|failure| failure.structure_error()),
             Err(Some(StructureError::already_finished()))
         );
-        assert_eq!(muxing.sink.written, b"\0\0\0\x0cfreeMADE");
+        assert_eq!(muxer.sink.written, b"\0\0\0\x0cfreeMADE");
     }
 
     #[test]
     fn a_sink_refusing_the_bytes_is_reported_as_the_sink_failing() {
-        let mut muxing = Muxing::new(&mut [][..], Queued::default());
+        let mut muxer = Muxer::new(&mut [][..], Queued::default());
 
-        let driven = muxing.drive(|writer| {
+        let driven = muxer.drive(|writer| {
             writer.output.extend(framed(b"MADE"));
 
             Ok(())
@@ -499,9 +499,9 @@ mod tests {
 
     #[test]
     fn the_writers_own_failure_is_reported_ahead_of_the_sinks() {
-        let mut muxing = Muxing::new(&mut [][..], Queued::default());
+        let mut muxer = Muxer::new(&mut [][..], Queued::default());
 
-        let driven = muxing.drive(|writer| {
+        let driven = muxer.drive(|writer| {
             writer.output.extend(framed(b"MADE"));
 
             Err(StructureError::already_finished())
@@ -517,16 +517,16 @@ mod tests {
 
     #[test]
     fn finishing_writes_the_last_step_and_flushes_the_sink() {
-        let mut muxing = Muxing::new(Recording::default(), Queued::default());
+        let mut muxer = Muxer::new(Recording::default(), Queued::default());
 
-        let finished: Result<(), DriverError> = muxing.finish(|writer| {
+        let finished: Result<(), DriverError> = muxer.finish(|writer| {
             writer.output.extend(framed(b"LAST"));
 
             Ok(())
         });
 
         assert_eq!(finished.map_err(|failure| failure.kind()), Ok(()));
-        assert_eq!(muxing.sink.written, b"\0\0\0\x0cfreeLAST");
-        assert!(muxing.sink.flushed);
+        assert_eq!(muxer.sink.written, b"\0\0\0\x0cfreeLAST");
+        assert!(muxer.sink.flushed);
     }
 }

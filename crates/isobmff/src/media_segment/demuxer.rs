@@ -7,7 +7,7 @@ use isobmff_boxes::{MovieBox, SegmentTypeBox};
 use isobmff_sample::Sample;
 
 use super::MediaSegmentReader;
-use crate::{Demuxing, DriverError, ReadSamples, StructureError};
+use crate::{Demuxer, DriverError, ReadSamples, StructureError};
 
 /// Reads the samples a media segment carries off a source that seeks
 ///
@@ -72,7 +72,7 @@ use crate::{Demuxing, DriverError, ReadSamples, StructureError};
 /// ```
 #[derive(Debug)]
 pub struct MediaSegmentDemuxer<S> {
-    demuxing: Demuxing<S, MediaSegmentReader>,
+    demuxer: Demuxer<S, MediaSegmentReader>,
 }
 
 impl<S: Read + Seek> MediaSegmentDemuxer<S> {
@@ -98,20 +98,20 @@ impl<S: Read + Seek> MediaSegmentDemuxer<S> {
     ///   where it stands.
     pub fn with_reader(source: S, reader: MediaSegmentReader) -> Result<Self, DriverError> {
         Ok(Self {
-            demuxing: Demuxing::new(source, reader)?,
+            demuxer: Demuxer::new(source, reader)?,
         })
     }
 
     /// Returns the brands the segment declares itself readable as, once they have come
     #[must_use]
     pub const fn segment_type(&self) -> Option<&SegmentTypeBox> {
-        self.demuxing.reader().segment_type()
+        self.demuxer.reader().segment_type()
     }
 
     /// Returns the movie the fragments of the segment continue
     #[must_use]
     pub const fn movie(&self) -> &MovieBox {
-        self.demuxing.reader().movie()
+        self.demuxer.reader().movie()
     }
 }
 
@@ -119,7 +119,7 @@ impl<S: Read + Seek> Iterator for MediaSegmentDemuxer<S> {
     type Item = Result<Sample, DriverError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.demuxing.next()
+        self.demuxer.next()
     }
 }
 

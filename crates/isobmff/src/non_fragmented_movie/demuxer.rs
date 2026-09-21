@@ -7,7 +7,7 @@ use isobmff_boxes::{FileTypeBox, MovieBox};
 use isobmff_sample::Sample;
 
 use super::NonFragmentedReader;
-use crate::{Demuxing, DriverError, ReadSamples, StructureError};
+use crate::{Demuxer, DriverError, ReadSamples, StructureError};
 
 /// Reads the samples a non-fragmented movie file carries off a source that seeks
 ///
@@ -65,7 +65,7 @@ use crate::{Demuxing, DriverError, ReadSamples, StructureError};
 /// ```
 #[derive(Debug)]
 pub struct NonFragmentedDemuxer<S> {
-    demuxing: Demuxing<S, NonFragmentedReader>,
+    demuxer: Demuxer<S, NonFragmentedReader>,
 }
 
 impl<S: Read + Seek> NonFragmentedDemuxer<S> {
@@ -91,20 +91,20 @@ impl<S: Read + Seek> NonFragmentedDemuxer<S> {
     ///   where it stands.
     pub fn with_reader(source: S, reader: NonFragmentedReader) -> Result<Self, DriverError> {
         Ok(Self {
-            demuxing: Demuxing::new(source, reader)?,
+            demuxer: Demuxer::new(source, reader)?,
         })
     }
 
     /// Returns the brands the file declares itself readable as, once they have come
     #[must_use]
     pub const fn file_type(&self) -> Option<&FileTypeBox> {
-        self.demuxing.reader().file_type()
+        self.demuxer.reader().file_type()
     }
 
     /// Returns the movie whose sample tables declare the samples of the file, once it has come
     #[must_use]
     pub const fn movie(&self) -> Option<&MovieBox> {
-        self.demuxing.reader().movie()
+        self.demuxer.reader().movie()
     }
 }
 
@@ -112,7 +112,7 @@ impl<S: Read + Seek> Iterator for NonFragmentedDemuxer<S> {
     type Item = Result<Sample, DriverError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.demuxing.next()
+        self.demuxer.next()
     }
 }
 

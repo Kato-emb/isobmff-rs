@@ -7,7 +7,7 @@ use isobmff_boxes::{FileTypeBox, MovieBox};
 use isobmff_sample::Sample;
 
 use super::FragmentedReader;
-use crate::{Demuxing, DriverError, ReadSamples, StructureError};
+use crate::{Demuxer, DriverError, ReadSamples, StructureError};
 
 /// Reads the samples a fragmented movie file carries off a source that seeks
 ///
@@ -73,7 +73,7 @@ use crate::{Demuxing, DriverError, ReadSamples, StructureError};
 /// ```
 #[derive(Debug)]
 pub struct FragmentedDemuxer<S> {
-    demuxing: Demuxing<S, FragmentedReader>,
+    demuxer: Demuxer<S, FragmentedReader>,
 }
 
 impl<S: Read + Seek> FragmentedDemuxer<S> {
@@ -98,20 +98,20 @@ impl<S: Read + Seek> FragmentedDemuxer<S> {
     ///   where it stands.
     pub fn with_reader(source: S, reader: FragmentedReader) -> Result<Self, DriverError> {
         Ok(Self {
-            demuxing: Demuxing::new(source, reader)?,
+            demuxer: Demuxer::new(source, reader)?,
         })
     }
 
     /// Returns the brands the file declares itself readable as, once they have come
     #[must_use]
     pub const fn file_type(&self) -> Option<&FileTypeBox> {
-        self.demuxing.reader().file_type()
+        self.demuxer.reader().file_type()
     }
 
     /// Returns the movie the fragments of the file continue, once it has come
     #[must_use]
     pub const fn movie(&self) -> Option<&MovieBox> {
-        self.demuxing.reader().movie()
+        self.demuxer.reader().movie()
     }
 }
 
@@ -119,7 +119,7 @@ impl<S: Read + Seek> Iterator for FragmentedDemuxer<S> {
     type Item = Result<Sample, DriverError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.demuxing.next()
+        self.demuxer.next()
     }
 }
 

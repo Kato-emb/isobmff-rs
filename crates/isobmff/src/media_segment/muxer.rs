@@ -7,7 +7,7 @@ use isobmff_sample::Sample;
 use isobmff_sequence::EventBytes;
 
 use super::MediaSegmentWriter;
-use crate::{DriverError, Muxing, PollOutput};
+use crate::{DriverError, Muxer, PollOutput};
 
 /// Lays a media segment down on a sink, taking the samples as they come
 ///
@@ -54,7 +54,7 @@ use crate::{DriverError, Muxing, PollOutput};
 /// ```
 #[derive(Debug)]
 pub struct MediaSegmentMuxer<W> {
-    muxing: Muxing<W, MediaSegmentWriter>,
+    muxer: Muxer<W, MediaSegmentWriter>,
 }
 
 impl<W: Write> MediaSegmentMuxer<W> {
@@ -62,7 +62,7 @@ impl<W: Write> MediaSegmentMuxer<W> {
     #[must_use]
     pub const fn new(sink: W) -> Self {
         Self {
-            muxing: Muxing::new(sink, MediaSegmentWriter::new()),
+            muxer: Muxer::new(sink, MediaSegmentWriter::new()),
         }
     }
 
@@ -74,7 +74,7 @@ impl<W: Write> MediaSegmentMuxer<W> {
     ///   [`MediaSegmentWriter::handle_segment_type`] makes of the call.
     /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes.
     pub fn handle_segment_type(&mut self, segment_type: SegmentTypeBox) -> Result<(), DriverError> {
-        self.muxing
+        self.muxer
             .drive(|writer| writer.handle_segment_type(segment_type))
     }
 
@@ -85,7 +85,7 @@ impl<W: Write> MediaSegmentMuxer<W> {
     /// * [`Structure`](crate::DriverErrorKind::Structure): what
     ///   [`MediaSegmentWriter::begin_fragment`] makes of the call.
     pub fn begin_fragment(&mut self, sequence_number: u32) -> Result<(), DriverError> {
-        self.muxing
+        self.muxer
             .drive(|writer| writer.begin_fragment(sequence_number))
     }
 
@@ -96,7 +96,7 @@ impl<W: Write> MediaSegmentMuxer<W> {
     /// * [`Structure`](crate::DriverErrorKind::Structure): what
     ///   [`MediaSegmentWriter::handle_sample`] makes of the call.
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), DriverError> {
-        self.muxing.drive(|writer| writer.handle_sample(sample))
+        self.muxer.drive(|writer| writer.handle_sample(sample))
     }
 
     /// Closes the fragment that is open, and writes it
@@ -107,7 +107,7 @@ impl<W: Write> MediaSegmentMuxer<W> {
     ///   [`MediaSegmentWriter::finish_fragment`] makes of the call.
     /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes.
     pub fn finish_fragment(&mut self) -> Result<(), DriverError> {
-        self.muxing.drive(MediaSegmentWriter::finish_fragment)
+        self.muxer.drive(MediaSegmentWriter::finish_fragment)
     }
 
     /// Declares the segment over, and flushes the sink
@@ -118,7 +118,7 @@ impl<W: Write> MediaSegmentMuxer<W> {
     ///   [`MediaSegmentWriter::finish`] makes of the call.
     /// * [`Io`](crate::DriverErrorKind::Io): the sink does not flush.
     pub fn finish(&mut self) -> Result<(), DriverError> {
-        self.muxing.finish(MediaSegmentWriter::finish)
+        self.muxer.finish(MediaSegmentWriter::finish)
     }
 }
 
