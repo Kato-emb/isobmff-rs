@@ -161,10 +161,9 @@ pub(crate) fn compact_box_header(
     payload_len: u64,
 ) -> Result<BoxHeader, StructureError> {
     BoxHeader::compact(box_type, payload_len).ok_or_else(|| {
-        StructureError::from(
-            isobmff_core::Error::out_of_range(payload_len, FieldWidth::Compact)
-                .in_container(box_type),
-        )
+        isobmff_core::Error::out_of_range(payload_len, FieldWidth::Compact)
+            .in_container(box_type)
+            .into()
     })
 }
 
@@ -189,8 +188,7 @@ mod tests {
     use isobmff_sequence::BoxEvent;
     use isobmff_test_support::{events_of, file_type, written};
 
-    use super::{BoxDefinition, StructureError, WholeBoxReader, compact_box_header};
-    use crate::StructureErrorKind;
+    use super::{BoxDefinition, FieldWidth, StructureError, WholeBoxReader, compact_box_header};
 
     /// Bytes a box may declare in these tests, unless one states its own limit
     const PAYLOAD_LIMIT: u64 = 1_024;
@@ -288,8 +286,12 @@ mod tests {
     #[test]
     fn a_compact_header_is_refused_for_a_payload_only_the_extended_form_declares() {
         assert_eq!(
-            compact_box_header(MediaDataBox::BOX_TYPE, 1 << 32).map_err(StructureError::kind),
-            Err(StructureErrorKind::Box(isobmff_core::ErrorKind::OutOfRange))
+            compact_box_header(MediaDataBox::BOX_TYPE, u32::MAX.into()),
+            Err(
+                isobmff_core::Error::out_of_range(u32::MAX.into(), FieldWidth::Compact)
+                    .in_container(MediaDataBox::BOX_TYPE)
+                    .into()
+            )
         );
     }
 }
