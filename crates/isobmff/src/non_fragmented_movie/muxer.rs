@@ -138,20 +138,10 @@ impl PollOutput for NonFragmentedWriter {
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
-    use std::io;
 
-    use isobmff_boxes::{MediaDataBox, MovieBox};
-    use isobmff_core::BoxDefinition;
-    use isobmff_sample::Sample;
-    use isobmff_test_support::{SAMPLE_DURATION, file_type, written};
+    use isobmff_test_support::{file_type, written};
 
     use super::NonFragmentedMuxer;
-    use crate::{DriverErrorKind, StructureError, StructureErrorKind};
-
-    /// One sample of track 1, the first of its chunk
-    fn sample() -> Sample {
-        Sample::new(1, 0, SAMPLE_DURATION, 0, 0, 1, b"SAMP".to_vec())
-    }
 
     #[test]
     fn the_bytes_the_writer_made_of_a_call_are_written_before_the_call_reports() {
@@ -161,49 +151,5 @@ mod tests {
         muxer.handle_file_type(file_type()).unwrap();
 
         assert_eq!(file, written(&file_type()));
-    }
-
-    #[test]
-    fn the_bytes_made_before_a_refusal_are_written_and_the_refusal_reported() {
-        let mut file = Vec::new();
-        let mut muxer = NonFragmentedMuxer::new(&mut file);
-        muxer.begin_chunk().unwrap();
-        muxer.handle_sample(sample()).unwrap();
-
-        let refused = muxer.finish();
-
-        assert_eq!(
-            refused.map_err(|failure| failure.structure_error()),
-            Err(Some(StructureError::missing_mandatory_box(
-                MovieBox::BOX_TYPE
-            )))
-        );
-        assert_eq!(file, written(&MediaDataBox::new(b"SAMP".to_vec())));
-    }
-
-    #[test]
-    fn a_sink_taking_no_byte_is_reported_as_the_sink_failing() {
-        let mut muxer = NonFragmentedMuxer::new(&mut [][..]);
-
-        assert_eq!(
-            muxer
-                .handle_file_type(file_type())
-                .map_err(|failure| failure.kind()),
-            Err(DriverErrorKind::Io(io::ErrorKind::WriteZero))
-        );
-    }
-
-    #[test]
-    fn the_writers_own_failure_is_reported_ahead_of_the_sinks() {
-        let mut muxer = NonFragmentedMuxer::new(&mut [][..]);
-        muxer.begin_chunk().unwrap();
-        muxer.handle_sample(sample()).unwrap();
-
-        assert_eq!(
-            muxer.finish().map_err(|failure| failure.kind()),
-            Err(DriverErrorKind::Structure(
-                StructureErrorKind::MissingMandatoryBox
-            ))
-        );
     }
 }

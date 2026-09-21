@@ -131,14 +131,10 @@ impl PollOutput for MediaSegmentWriter {
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
-    use std::io;
 
-    use isobmff_boxes::MovieFragmentBox;
-    use isobmff_core::BoxDefinition;
     use isobmff_test_support::{segment_type, written};
 
     use super::MediaSegmentMuxer;
-    use crate::{DriverErrorKind, StructureError};
 
     #[test]
     fn the_bytes_the_writer_made_of_a_call_are_written_before_the_call_reports() {
@@ -148,34 +144,5 @@ mod tests {
         muxer.handle_segment_type(segment_type()).unwrap();
 
         assert_eq!(segment, written(&segment_type()));
-    }
-
-    #[test]
-    fn a_refusal_of_the_writer_is_reported_and_leaves_what_was_written() {
-        let mut segment = Vec::new();
-        let mut muxer = MediaSegmentMuxer::new(&mut segment);
-        muxer.handle_segment_type(segment_type()).unwrap();
-
-        let refused = muxer.finish();
-
-        assert_eq!(
-            refused.map_err(|failure| failure.structure_error()),
-            Err(Some(StructureError::missing_mandatory_box(
-                MovieFragmentBox::BOX_TYPE
-            )))
-        );
-        assert_eq!(segment, written(&segment_type()));
-    }
-
-    #[test]
-    fn a_sink_taking_no_byte_is_reported_as_the_sink_failing() {
-        let mut muxer = MediaSegmentMuxer::new(&mut [][..]);
-
-        assert_eq!(
-            muxer
-                .handle_segment_type(segment_type())
-                .map_err(|failure| failure.kind()),
-            Err(DriverErrorKind::Io(io::ErrorKind::WriteZero))
-        );
     }
 }

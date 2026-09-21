@@ -149,7 +149,7 @@ impl ReadSamples for MediaSegmentReader {
 mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
-    use std::io::{self, Read, Seek, SeekFrom};
+    use std::io;
 
     use isobmff_boxes::{
         MovieFragmentBox, MovieFragmentHeaderBox, TrackFragmentBox, TrackFragmentHeaderBox,
@@ -159,33 +159,10 @@ mod tests {
 
     use super::super::tests::{movie, sample, segment_of_one_sample};
     use super::MediaSegmentDemuxer;
-    use crate::{DriverErrorKind, Sample, StructureErrorKind};
+    use crate::Sample;
 
-    /// Source holding nothing past any position it is sought back to
-    struct Shrinking(io::Cursor<Vec<u8>>);
-
-    impl Read for Shrinking {
-        fn read(&mut self, into: &mut [u8]) -> io::Result<usize> {
-            self.0.read(into)
-        }
-    }
-
-    impl Seek for Shrinking {
-        fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
-            if let SeekFrom::Start(position) = from {
-                if position < self.0.position() {
-                    self.0
-                        .get_mut()
-                        .truncate(usize::try_from(position).unwrap());
-                }
-            }
-
-            self.0.seek(from)
-        }
-    }
-
-    /// The segment of one sample, followed by a fragment addressing `size` bytes at that sample's start
-    fn segment_addressing_back(size: u32) -> Vec<u8> {
+    /// The segment of one sample, followed by a fragment addressing that sample's bytes again
+    fn segment_addressing_back() -> Vec<u8> {
         let mut segment = segment_of_one_sample();
         let media_data_start = segment.len().saturating_sub(4) as u64;
         let track_fragment = TrackFragmentBox::new(
@@ -195,7 +172,7 @@ mod tests {
                 Some(media_data_start),
                 None,
                 None,
-                Some(size),
+                Some(4),
                 None,
             ),
             None,
@@ -214,94 +191,20 @@ mod tests {
         segment
     }
 
-    /// What `demuxer` yields, kind for kind, until it is over
-    fn yielded(
-        demuxer: &mut MediaSegmentDemuxer<impl Read + Seek>,
-    ) -> Vec<Result<Sample, DriverErrorKind>> {
-        demuxer
-            .map(|sample| sample.map_err(|failure| failure.kind()))
-            .collect()
-    }
-
     #[test]
     fn a_fragment_addressing_media_data_before_it_has_the_bytes_fetched() {
-        let mut demuxer =
-            MediaSegmentDemuxer::new(io::Cursor::new(segment_addressing_back(4)), movie()).unwrap();
-
-        assert_eq!(
-            yielded(&mut demuxer),
-            [
-                Ok(sample()),
-                Ok(Sample::new(1, 1_024, 1_024, 0, 0, 1, b"SAMP".to_vec()))
-            ]
-        );
-    }
-
-    #[test]
-    fn the_segment_begins_where_the_source_stands() {
-        let mut source =
-            io::Cursor::new([b"junk".as_slice(), &segment_addressing_back(4)].concat());
-        source.set_position(4);
-        let mut demuxer = MediaSegmentDemuxer::new(source, movie()).unwrap();
-
-        assert_eq!(
-            yielded(&mut demuxer),
-            [
-                Ok(sample()),
-                Ok(Sample::new(1, 1_024, 1_024, 0, 0, 1, b"SAMP".to_vec()))
-            ]
-        );
-    }
-
-    #[test]
-    fn a_source_ending_before_the_bytes_the_reader_lacks_is_the_readers_to_report() {
-        let mut demuxer =
-            MediaSegmentDemuxer::new(io::Cursor::new(segment_addressing_back(4_096)), movie())
+        let read_back: Vec<Sample> =
+            MediaSegmentDemuxer::new(io::Cursor::new(segment_addressing_back()), movie())
+                .unwrap()
+                .collect::<Result<_, _>>()
                 .unwrap();
 
         assert_eq!(
-            yielded(&mut demuxer),
+            read_back,
             [
-                Ok(sample()),
-                Err(DriverErrorKind::Structure(StructureErrorKind::Sample(
-                    isobmff_sample::SampleErrorKind::UnfinishedSample
-                )))
+                sample(),
+                Sample::new(1, 1_024, 1_024, 0, 0, 1, b"SAMP".to_vec())
             ]
         );
-    }
-
-    #[test]
-    fn a_source_shrunk_below_what_was_read_is_reported_as_ending() {
-        let mut demuxer = MediaSegmentDemuxer::new(
-            Shrinking(io::Cursor::new(segment_addressing_back(4))),
-            movie(),
-        )
-        .unwrap();
-
-        assert_eq!(
-            yielded(&mut demuxer),
-            [
-                Ok(sample()),
-                Err(DriverErrorKind::Io(io::ErrorKind::UnexpectedEof))
-            ]
-        );
-    }
-
-    #[test]
-    fn the_samples_completed_before_a_failure_come_first_and_the_failure_once() {
-        let mut segment = segment_of_one_sample();
-        segment.extend_from_slice(b"\0\0\0\x04free");
-        let mut demuxer = MediaSegmentDemuxer::new(io::Cursor::new(segment), movie()).unwrap();
-
-        assert_eq!(
-            yielded(&mut demuxer),
-            [
-                Ok(sample()),
-                Err(DriverErrorKind::Structure(StructureErrorKind::Sequence(
-                    isobmff_sequence::ErrorKind::Box(isobmff_core::ErrorKind::SizeBelowHeader)
-                )))
-            ]
-        );
-        assert!(demuxer.next().is_none());
     }
 }

@@ -140,86 +140,19 @@ impl ReadSamples for NonFragmentedReader {
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
     use alloc::vec::Vec;
-    use std::io::{self, Read, Seek, SeekFrom};
+    use std::io;
 
-    use isobmff_boxes::{
-        ChunkOffsetBox, MediaDataBox, MovieBox, MovieHeaderBox, SampleSizeBox, SampleToChunkBox,
-        TimeToSampleBox,
-    };
-    use isobmff_core::Mp4EpochSeconds;
-    use isobmff_test_support::{
-        SAMPLE_DURATION, non_fragmented_file, sample_table, self_contained_data_reference,
-        track_laid_out, written,
-    };
+    use isobmff_test_support::{SAMPLE_DURATION, non_fragmented_file};
 
     use super::NonFragmentedDemuxer;
-    use crate::{DriverErrorKind, Sample, StructureErrorKind};
-
-    /// Source holding nothing past any position it is sought back to
-    struct Shrinking(io::Cursor<Vec<u8>>);
-
-    impl Read for Shrinking {
-        fn read(&mut self, into: &mut [u8]) -> io::Result<usize> {
-            self.0.read(into)
-        }
-    }
-
-    impl Seek for Shrinking {
-        fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
-            if let SeekFrom::Start(position) = from {
-                if position < self.0.position() {
-                    self.0
-                        .get_mut()
-                        .truncate(usize::try_from(position).unwrap());
-                }
-            }
-
-            self.0.seek(from)
-        }
-    }
-
-    /// A file of one `mdat` of `SAMP`, its movie after it declaring one sample of `size` bytes there
-    fn file_declaring_a_sample_of(size: u32) -> Vec<u8> {
-        let media_data = written(&MediaDataBox::new(b"SAMP".to_vec()));
-        let stbl = sample_table(
-            TimeToSampleBox::from_deltas([SAMPLE_DURATION]),
-            SampleToChunkBox::from_chunks([(1, 1)]).unwrap(),
-            SampleSizeBox::from_sizes([size]),
-            ChunkOffsetBox::from_offsets([8]).unwrap(),
-        );
-        let epoch = Mp4EpochSeconds::from_seconds(0);
-        let movie = MovieBox::new(
-            MovieHeaderBox::new(epoch, epoch, 90_000, 0, 2),
-            vec![track_laid_out(1, self_contained_data_reference(), stbl)],
-            None,
-        )
-        .unwrap();
-
-        [media_data, written(&movie)].concat()
-    }
-
-    /// What `demuxer` yields, kind for kind, until it is over
-    fn yielded(
-        demuxer: &mut NonFragmentedDemuxer<impl Read + Seek>,
-    ) -> Vec<Result<Vec<u8>, DriverErrorKind>> {
-        demuxer
-            .map(|sample| {
-                sample
-                    .map(Sample::into_data)
-                    .map_err(|failure| failure.kind())
-            })
-            .collect()
-    }
+    use crate::Sample;
 
     #[test]
-    fn the_file_begins_where_the_source_stands() {
+    fn a_movie_lying_after_its_media_data_has_the_bytes_fetched() {
         let file = non_fragmented_file(&[&[b"SAMP"]], false);
-        let mut source = io::Cursor::new([b"junk".as_slice(), &file].concat());
-        source.set_position(4);
 
-        let read_back: Vec<Sample> = NonFragmentedDemuxer::new(source)
+        let read_back: Vec<Sample> = NonFragmentedDemuxer::new(io::Cursor::new(file))
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
@@ -235,62 +168,6 @@ mod tests {
                 1,
                 b"SAMP".to_vec()
             )]
-        );
-    }
-
-    #[test]
-    fn a_source_ending_before_the_bytes_the_reader_lacks_is_the_readers_to_report() {
-        let file = file_declaring_a_sample_of(4_096);
-        let mut demuxer = NonFragmentedDemuxer::new(io::Cursor::new(file)).unwrap();
-
-        assert_eq!(
-            yielded(&mut demuxer),
-            [Err(DriverErrorKind::Structure(StructureErrorKind::Sample(
-                isobmff_sample::SampleErrorKind::UnfinishedSample
-            )))]
-        );
-    }
-
-    #[test]
-    fn a_source_shrunk_below_what_was_read_is_reported_as_ending() {
-        let file = file_declaring_a_sample_of(4);
-        let mut demuxer = NonFragmentedDemuxer::new(Shrinking(io::Cursor::new(file))).unwrap();
-
-        assert_eq!(
-            yielded(&mut demuxer),
-            [Err(DriverErrorKind::Io(io::ErrorKind::UnexpectedEof))]
-        );
-    }
-
-    #[test]
-    fn the_samples_completed_before_a_failure_come_first_and_the_failure_once() {
-        let mut file = non_fragmented_file(&[&[b"SAMP"]], true);
-        file.extend_from_slice(b"\0\0\0\x04free");
-        let mut demuxer = NonFragmentedDemuxer::new(io::Cursor::new(file)).unwrap();
-
-        assert_eq!(
-            yielded(&mut demuxer),
-            [
-                Ok(b"SAMP".to_vec()),
-                Err(DriverErrorKind::Structure(StructureErrorKind::Sequence(
-                    isobmff_sequence::ErrorKind::Box(isobmff_core::ErrorKind::SizeBelowHeader)
-                )))
-            ]
-        );
-        assert!(demuxer.next().is_none());
-    }
-
-    #[test]
-    fn a_source_ending_inside_the_media_data_is_the_readers_to_report() {
-        let mut file = non_fragmented_file(&[&[b"SAMP"]], true);
-        file.truncate(file.len().saturating_sub(2));
-        let mut demuxer = NonFragmentedDemuxer::new(io::Cursor::new(file)).unwrap();
-
-        assert_eq!(
-            yielded(&mut demuxer),
-            [Err(DriverErrorKind::Structure(
-                StructureErrorKind::Sequence(isobmff_sequence::ErrorKind::UnfinishedBox)
-            ))]
         );
     }
 }

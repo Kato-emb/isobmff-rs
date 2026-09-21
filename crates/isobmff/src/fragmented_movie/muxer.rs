@@ -143,14 +143,10 @@ impl PollOutput for FragmentedWriter {
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
-    use std::io;
 
-    use isobmff_boxes::{FileTypeBox, TrackExtendsBox};
-    use isobmff_core::BoxDefinition;
-    use isobmff_test_support::{file_type, fragmented_movie, written};
+    use isobmff_test_support::{file_type, written};
 
     use super::FragmentedMuxer;
-    use crate::{DriverErrorKind, StructureError};
 
     #[test]
     fn the_bytes_the_writer_made_of_a_call_are_written_before_the_call_reports() {
@@ -160,35 +156,5 @@ mod tests {
         muxer.handle_file_type(file_type()).unwrap();
 
         assert_eq!(file, written(&file_type()));
-    }
-
-    #[test]
-    fn a_refusal_of_the_writer_is_reported_and_leaves_what_was_written() {
-        let mut file = Vec::new();
-        let mut muxer = FragmentedMuxer::new(&mut file);
-        let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0));
-        muxer.handle_movie(movie.clone()).unwrap();
-
-        let refused = muxer.handle_file_type(file_type());
-
-        assert_eq!(
-            refused.map_err(|failure| failure.structure_error()),
-            Err(Some(StructureError::box_out_of_order(
-                FileTypeBox::BOX_TYPE
-            )))
-        );
-        assert_eq!(file, written(&movie));
-    }
-
-    #[test]
-    fn a_sink_taking_no_byte_is_reported_as_the_sink_failing() {
-        let mut muxer = FragmentedMuxer::new(&mut [][..]);
-
-        assert_eq!(
-            muxer
-                .handle_file_type(file_type())
-                .map_err(|failure| failure.kind()),
-            Err(DriverErrorKind::Io(io::ErrorKind::WriteZero))
-        );
     }
 }

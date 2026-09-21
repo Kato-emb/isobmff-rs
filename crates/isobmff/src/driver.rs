@@ -223,3 +223,310 @@ impl<S: Write, W: PollOutput> Muxing<S, W> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use alloc::collections::VecDeque;
+    use alloc::vec;
+    use alloc::vec::Vec;
+    use core::ops::Range;
+    use std::io::{self, Read, Seek, SeekFrom, Write};
+
+    use isobmff_core::{BoxHeader, BoxType};
+    use isobmff_sample::Sample;
+    use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
+
+    use super::{CUT_LENGTH, Demuxing, Muxing, PollOutput, ReadSamples};
+    use crate::{DriverError, DriverErrorKind, StructureError, StructureErrorKind};
+
+    /// Reader answering as scripted, and recording what it was handed
+    #[derive(Default)]
+    struct Scripted {
+        wanted: Option<Range<u64>>,
+        completed_by_input: Vec<Sample>,
+        finish: Option<StructureError>,
+        inputs: Vec<Vec<u8>>,
+        data: Vec<(u64, Vec<u8>)>,
+        samples: VecDeque<Sample>,
+        finished: bool,
+    }
+
+    impl ReadSamples for Scripted {
+        fn handle_input(&mut self, input: &[u8]) -> Result<(), StructureError> {
+            self.inputs.push(input.to_vec());
+            self.samples.extend(self.completed_by_input.drain(..));
+
+            Ok(())
+        }
+
+        fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), StructureError> {
+            self.data.push((offset, data.to_vec()));
+            self.wanted = None;
+
+            Ok(())
+        }
+
+        fn poll_sample(&mut self) -> Option<Sample> {
+            self.samples.pop_front()
+        }
+
+        fn wanted_extent(&self) -> Option<Range<u64>> {
+            self.wanted.clone()
+        }
+
+        fn finish(&mut self) -> Result<(), StructureError> {
+            self.finished = true;
+
+            self.finish.take().map_or(Ok(()), Err)
+        }
+    }
+
+    /// Source holding nothing past any position it is sought back to
+    struct Shrinking(io::Cursor<Vec<u8>>);
+
+    impl Read for Shrinking {
+        fn read(&mut self, into: &mut [u8]) -> io::Result<usize> {
+            self.0.read(into)
+        }
+    }
+
+    impl Seek for Shrinking {
+        fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
+            if let SeekFrom::Start(position) = from {
+                if position < self.0.position() {
+                    self.0
+                        .get_mut()
+                        .truncate(usize::try_from(position).unwrap());
+                }
+            }
+
+            self.0.seek(from)
+        }
+    }
+
+    /// Writer handing over what it was scripted to, step by step
+    #[derive(Default)]
+    struct Queued {
+        output: VecDeque<EventBytes>,
+    }
+
+    impl PollOutput for Queued {
+        fn poll_output(&mut self) -> Option<EventBytes> {
+            self.output.pop_front()
+        }
+    }
+
+    /// Sink recording what was written to it, and whether it was flushed
+    #[derive(Default)]
+    struct Recording {
+        written: Vec<u8>,
+        flushed: bool,
+    }
+
+    impl Write for Recording {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.written.extend_from_slice(bytes);
+
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.flushed = true;
+
+            Ok(())
+        }
+    }
+
+    /// A sample of track 1 carrying `data`
+    fn sample(data: &[u8]) -> Sample {
+        Sample::new(1, 0, 1, 0, 0, 1, data.to_vec())
+    }
+
+    /// The bytes a `free` box of `payload` is framed as, one `EventBytes` a step
+    fn framed(payload: &[u8]) -> Vec<EventBytes> {
+        let mut boxes = BoxWriter::new();
+        let header =
+            BoxHeader::with_payload_len(BoxType::compact(*b"free"), payload.len() as u64).unwrap();
+
+        boxes.handle_event(BoxEvent::Header(header)).unwrap();
+        boxes
+            .handle_event(BoxEvent::Payload(payload.to_vec()))
+            .unwrap();
+        boxes.handle_event(BoxEvent::End).unwrap();
+
+        core::iter::from_fn(|| boxes.poll_output()).collect()
+    }
+
+    /// What `demuxing` yields, kind for kind, until it is over
+    fn yielded(
+        demuxing: &mut Demuxing<impl Read + Seek, Scripted>,
+    ) -> Vec<Result<Sample, DriverErrorKind>> {
+        demuxing
+            .map(|sample| sample.map_err(|failure| failure.kind()))
+            .collect()
+    }
+
+    #[test]
+    fn a_want_before_what_was_handed_over_is_fetched_by_seeking_and_reading_goes_on_from_where_it_stood()
+     {
+        let first_cut = vec![0x11; usize::try_from(CUT_LENGTH).unwrap()];
+        let past_the_cut = b"PASTCUT!".to_vec();
+        let mut demuxing = Demuxing::new(
+            io::Cursor::new([first_cut.clone(), past_the_cut.clone()].concat()),
+            Scripted {
+                wanted: Some(2..6),
+                ..Scripted::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(yielded(&mut demuxing), []);
+        assert_eq!(
+            demuxing.reader().inputs,
+            [first_cut.clone(), past_the_cut.clone()]
+        );
+        let fetched: Vec<u8> = first_cut
+            .iter()
+            .skip(2)
+            .chain(past_the_cut.iter().take(2))
+            .copied()
+            .collect();
+        assert_eq!(demuxing.reader().data, [(2, fetched)]);
+    }
+
+    #[test]
+    fn the_file_begins_where_the_source_stands() {
+        let mut source = io::Cursor::new(b"junkFILE".to_vec());
+        source.set_position(4);
+        let mut demuxing = Demuxing::new(
+            source,
+            Scripted {
+                wanted: Some(1..3),
+                ..Scripted::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(yielded(&mut demuxing), []);
+        assert_eq!(demuxing.reader().inputs, [b"FILE".to_vec()]);
+        assert_eq!(demuxing.reader().data, [(1, b"ILE".to_vec())]);
+    }
+
+    #[test]
+    fn a_source_shrunk_below_what_was_read_is_reported_as_ending() {
+        let mut demuxing = Demuxing::new(
+            Shrinking(io::Cursor::new(b"FILE".to_vec())),
+            Scripted {
+                wanted: Some(0..4),
+                ..Scripted::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            yielded(&mut demuxing),
+            [Err(DriverErrorKind::Io(io::ErrorKind::UnexpectedEof))]
+        );
+    }
+
+    #[test]
+    fn the_end_of_the_source_declares_the_file_over() {
+        let mut demuxing =
+            Demuxing::new(io::Cursor::new(b"FILE".to_vec()), Scripted::default()).unwrap();
+
+        assert_eq!(yielded(&mut demuxing), []);
+        assert!(demuxing.reader().finished);
+        assert!(demuxing.next().is_none());
+    }
+
+    #[test]
+    fn the_samples_completed_before_a_failure_come_first_and_the_failure_once() {
+        let mut demuxing = Demuxing::new(
+            io::Cursor::new(b"FILE".to_vec()),
+            Scripted {
+                completed_by_input: vec![sample(b"S1"), sample(b"S2")],
+                finish: Some(StructureError::already_finished()),
+                ..Scripted::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            yielded(&mut demuxing),
+            [
+                Ok(sample(b"S1")),
+                Ok(sample(b"S2")),
+                Err(DriverErrorKind::Structure(
+                    StructureErrorKind::AlreadyFinished
+                )),
+            ]
+        );
+        assert!(demuxing.next().is_none());
+    }
+
+    #[test]
+    fn the_bytes_a_step_made_before_failing_are_written_and_the_steps_failure_reported() {
+        let mut muxing = Muxing::new(Recording::default(), Queued::default());
+
+        let driven = muxing.drive(|writer| {
+            writer.output.extend(framed(b"MADE"));
+
+            Err(StructureError::already_finished())
+        });
+
+        assert_eq!(
+            driven.map_err(|failure| failure.structure_error()),
+            Err(Some(StructureError::already_finished()))
+        );
+        assert_eq!(muxing.sink.written, b"\0\0\0\x0cfreeMADE");
+    }
+
+    #[test]
+    fn a_sink_refusing_the_bytes_is_reported_as_the_sink_failing() {
+        let mut muxing = Muxing::new(&mut [][..], Queued::default());
+
+        let driven = muxing.drive(|writer| {
+            writer.output.extend(framed(b"MADE"));
+
+            Ok(())
+        });
+
+        assert_eq!(
+            driven.map_err(|failure| failure.kind()),
+            Err(DriverErrorKind::Io(io::ErrorKind::WriteZero))
+        );
+    }
+
+    #[test]
+    fn the_writers_own_failure_is_reported_ahead_of_the_sinks() {
+        let mut muxing = Muxing::new(&mut [][..], Queued::default());
+
+        let driven = muxing.drive(|writer| {
+            writer.output.extend(framed(b"MADE"));
+
+            Err(StructureError::already_finished())
+        });
+
+        assert_eq!(
+            driven.map_err(|failure| failure.kind()),
+            Err(DriverErrorKind::Structure(
+                StructureErrorKind::AlreadyFinished
+            ))
+        );
+    }
+
+    #[test]
+    fn finishing_writes_the_last_step_and_flushes_the_sink() {
+        let mut muxing = Muxing::new(Recording::default(), Queued::default());
+
+        let finished: Result<(), DriverError> = muxing.finish(|writer| {
+            writer.output.extend(framed(b"LAST"));
+
+            Ok(())
+        });
+
+        assert_eq!(finished.map_err(|failure| failure.kind()), Ok(()));
+        assert_eq!(muxing.sink.written, b"\0\0\0\x0cfreeLAST");
+        assert!(muxing.sink.flushed);
+    }
+}
