@@ -252,8 +252,7 @@ impl MediaSegmentWriter {
 
     /// Lays one box down where the structure places it, through the framing of the segment
     ///
-    /// A box the structure passes over has no place in the segment to be laid
-    /// down at, and is refused as
+    /// A box the structure passes over is refused as
     /// [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder).
     fn lay_down(&mut self, box_type: BoxType, payload: Vec<u8>) -> Result<(), StructureError> {
         let header = whole_box_header(box_type, payload.len() as u64)

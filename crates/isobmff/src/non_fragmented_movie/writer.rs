@@ -318,8 +318,7 @@ impl NonFragmentedWriter {
 
     /// Admits the box `box_type` names into the file where the structure places it, failing the writer where it is refused
     ///
-    /// A box the structure passes over has no place in the file to be laid
-    /// down at, and is refused as
+    /// A box the structure passes over is refused as
     /// [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder).
     fn admit(&mut self, box_type: BoxType) -> Result<(), StructureError> {
         match self

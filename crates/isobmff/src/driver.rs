@@ -12,15 +12,14 @@ use crate::{DriverError, StructureError};
 /// Bytes handed over to the reader at a time
 const CUT_LENGTH: u64 = 1024 * 1024;
 
-/// Reads samples out of a file handed over as it arrives, as a demuxer drives a reader
+/// The five verbs of a reader a demuxer drives
 ///
-/// The verbs every structure's reader answers to, each the reader's own of
-/// the same name, with its contract.
+/// Each is the reader's own of the same name, with its contract.
 pub(crate) trait ReadSamples {
-    /// Takes the next cut of the file, the continuation of what was handed over before it
+    /// Takes the next cut of the file and reads the samples it completes
     fn handle_input(&mut self, input: &[u8]) -> Result<(), StructureError>;
 
-    /// Takes bytes of the file fetched for what [`wanted_extent`](Self::wanted_extent) named
+    /// Takes bytes of the file fetched for what [`wanted_extent`](Self::wanted_extent) named, and reads the samples they complete
     fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), StructureError>;
 
     /// Takes the next sample the file handed over so far completed
@@ -33,10 +32,9 @@ pub(crate) trait ReadSamples {
     fn finish(&mut self) -> Result<(), StructureError>;
 }
 
-/// The one verb every structure's writer shares, as a muxer drives it
+/// The one verb of a writer a muxer takes its bytes by
 ///
-/// What a writer takes differs per structure; what it makes of it is taken
-/// the same way.
+/// It is the writer's own of the same name, with its contract.
 pub(crate) trait PollOutput {
     /// Hands over the bytes the file has been laid down as so far
     fn poll_output(&mut self) -> Option<EventBytes>;
@@ -186,8 +184,12 @@ impl<S: Write, W: PollOutput> Muxing<S, W> {
 
     /// Makes `step` of the writer, and writes what the writer made of it whether it failed or not
     ///
-    /// The bytes made before a refusal reach the sink, and the writer's
-    /// failure is reported ahead of the sink's.
+    /// # Errors
+    ///
+    /// * [`Structure`](crate::DriverErrorKind::Structure): what the writer
+    ///   makes of the step, reported ahead of the sink's failure; the bytes
+    ///   made before the refusal reach the sink all the same.
+    /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes.
     pub(crate) fn drive(
         &mut self,
         step: impl FnOnce(&mut W) -> Result<(), StructureError>,
@@ -204,6 +206,13 @@ impl<S: Write, W: PollOutput> Muxing<S, W> {
     }
 
     /// Makes `step` of the writer as the last, and flushes the sink
+    ///
+    /// # Errors
+    ///
+    /// * [`Structure`](crate::DriverErrorKind::Structure): what the writer
+    ///   makes of the step.
+    /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes, or
+    ///   does not flush.
     pub(crate) fn finish(
         &mut self,
         step: impl FnOnce(&mut W) -> Result<(), StructureError>,
