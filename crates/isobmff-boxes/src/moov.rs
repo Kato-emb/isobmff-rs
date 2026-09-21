@@ -8,6 +8,7 @@ use isobmff_core::{
     FieldWriter, OtherBoxes, boxes,
 };
 
+use crate::mdia::MediaBox;
 use crate::mvex::MovieExtendsBox;
 use crate::mvhd::MovieHeaderBox;
 use crate::trak::TrackBox;
@@ -85,6 +86,21 @@ impl MovieBox {
     #[must_use]
     pub fn trak(&self) -> &[TrackBox] {
         &self.trak
+    }
+
+    /// Returns the media of the track `track_id` names, to be changed in place, or `None` for a track the movie does not declare
+    ///
+    /// What identifies the track — its `tkhd` — is not reached this way, so
+    /// what [`new`](Self::new) settled about the tracks, that their ids are
+    /// distinct and each has its `trex` where the movie is fragmented, holds
+    /// on. The rest of the movie, the children no field claims among it,
+    /// stays as it is.
+    #[must_use]
+    pub fn mdia_mut(&mut self, track_id: u32) -> Option<&mut MediaBox> {
+        self.trak
+            .iter_mut()
+            .find(|track| track.tkhd().track_id() == track_id)
+            .map(TrackBox::mdia_mut)
     }
 
     /// Returns the declaration that the movie continues in fragments, if it does
@@ -209,11 +225,17 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxType, Error};
+    use isobmff_core::{AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Error};
 
     use super::{MovieBox, MovieExtendsBox, TrackExtendsBox};
     use crate::mvex::tests::movie_extends;
     use crate::mvhd::tests::movie_header;
+    use crate::stbl::SampleTableBox;
+    use crate::stco::ChunkOffsetBox;
+    use crate::stsc::SampleToChunkBox;
+    use crate::stsd::SampleDescriptionBox;
+    use crate::stsz::SampleSizeBox;
+    use crate::stts::TimeToSampleBox;
     use crate::trak::tests::track;
 
     /// Movie with one track, as a progressive file declares it
@@ -316,6 +338,38 @@ mod tests {
         let decoded = MovieBox::decode_payload(&payload).unwrap();
 
         assert_eq!(decoded.trak(), [track(), track()]);
+    }
+
+    #[test]
+    fn the_sample_tables_of_a_track_are_replaced_in_place_and_the_rest_of_the_movie_kept() {
+        let unclaimed = AnyBox::from_raw_bytes(BoxType::compact(*b"udta"), vec![0x11; 4]);
+        let mut unclaimed_bytes = vec![0; usize::try_from(unclaimed.encoded_len()).unwrap()];
+        unclaimed.encode(&mut unclaimed_bytes).unwrap();
+        let payload = [encoded_payload(&movie()), unclaimed_bytes].concat();
+        let mut decoded = MovieBox::decode_payload(&payload).unwrap();
+        let laid_out = SampleTableBox::new(
+            SampleDescriptionBox::new(Vec::new()),
+            TimeToSampleBox::from_deltas([3_000]),
+            SampleToChunkBox::from_chunks([(1, 1)]).unwrap(),
+            SampleSizeBox::from_sizes([4]),
+            ChunkOffsetBox::from_offsets([1_000]).unwrap(),
+        );
+
+        *decoded.mdia_mut(1).unwrap().minf_mut().stbl_mut() = laid_out.clone();
+
+        assert_eq!(
+            decoded
+                .trak()
+                .first()
+                .map(|track| track.mdia().minf().stbl()),
+            Some(&laid_out)
+        );
+        assert_eq!(decoded.other_boxes(), [unclaimed]);
+    }
+
+    #[test]
+    fn the_media_of_a_track_the_movie_does_not_declare_is_none() {
+        assert_eq!(movie().mdia_mut(7), None);
     }
 
     #[test]
