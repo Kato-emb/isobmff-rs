@@ -229,6 +229,29 @@ impl FragmentedReader {
         framed.map_err(|failure| self.fail(failure.into()))
     }
 
+    /// Takes bytes of the file fetched for what [`wanted_extent`](Self::wanted_extent) named, and reads the samples they complete
+    ///
+    /// The bytes are offered to the samples alone, as the media data of the
+    /// file is: `offset` is where the first of them lies in the file, counted
+    /// from its first byte as a base data offset is (ISO/IEC 14496-12
+    /// §8.8.7), and what they completed is then taken from
+    /// [`poll_sample`](Self::poll_sample). The file handed over in order
+    /// through [`handle_input`](Self::handle_input) goes on from where it
+    /// stood.
+    ///
+    /// # Errors
+    ///
+    /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
+    ///   file was declared over by [`finish`](Self::finish).
+    /// * The failure of a previous call, which the reader keeps and reports
+    ///   again for every call after it.
+    pub fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), StructureError> {
+        self.reading()?;
+        self.samples
+            .handle_data(offset, data)
+            .map_err(|failure| self.fail(failure.into()))
+    }
+
     /// Takes the next sample the file handed over so far completed
     ///
     /// Reports `None` once they are used up: more of the file is needed. Failure
@@ -243,7 +266,10 @@ impl FragmentedReader {
     ///
     /// A fragment precedes the media data it addresses, so a caller handing the
     /// file over in order meets every extent as it comes: what this names is
-    /// media data still to arrive.
+    /// media data still to arrive. A fragment addressing media data lying
+    /// before it (§8.8.7 has a base data offset name any byte of the file)
+    /// names bytes already passed by, which a caller that can seek fetches
+    /// and hands to [`handle_data`](Self::handle_data).
     #[must_use]
     pub fn wanted_extent(&self) -> Option<Range<u64>> {
         self.samples.wanted_extent()
@@ -400,15 +426,14 @@ impl Default for FragmentedReader {
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec::Vec;
-
     use isobmff_boxes::{FileTypeBox, MovieBox, TrackExtendsBox};
     use isobmff_core::{BoxDefinition, BoxType};
     use isobmff_sample::{Sample, SampleReader};
     use isobmff_test_support::{file_type, fragmented_movie, framed, movie_fragment, written};
 
+    use super::super::tests::{file_of_one_sample, sample};
     use super::{FragmentedReader, StructureError};
-    use crate::{FragmentedWriter, StructureErrorKind};
+    use crate::StructureErrorKind;
 
     /// Movie of one track continued in fragments, whose defaults a `trex` states
     fn movie() -> MovieBox {
@@ -484,18 +509,7 @@ mod tests {
 
     #[test]
     fn the_samples_completed_before_a_framing_failure_are_still_taken() {
-        let mut writer = FragmentedWriter::new();
-        let mut file = Vec::new();
-
-        writer.handle_movie(movie()).unwrap();
-        writer.begin_fragment(1).unwrap();
-        writer
-            .handle_sample(Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec()))
-            .unwrap();
-        writer.finish_fragment().unwrap();
-        while let Some(written) = writer.poll_output() {
-            file.extend_from_slice(&written);
-        }
+        let mut file = file_of_one_sample();
         file.extend_from_slice(b"\0\0\0\x04free");
 
         let mut reader = FragmentedReader::new();
@@ -513,6 +527,21 @@ mod tests {
     }
 
     #[test]
+    fn the_bytes_the_reader_wants_fetched_complete_the_sample_as_the_media_data_would() {
+        let mut file = file_of_one_sample();
+        let media_data = file.split_off(file.len().saturating_sub(4));
+
+        let mut reader = FragmentedReader::new();
+        reader.handle_input(&file).unwrap();
+        let wanted = reader.wanted_extent().unwrap();
+        reader.handle_data(wanted.start, &media_data).unwrap();
+
+        let media_data_start = file.len() as u64;
+        assert_eq!(wanted, media_data_start..media_data_start.saturating_add(4));
+        assert_eq!(reader.poll_sample(), Some(sample()));
+    }
+
+    #[test]
     fn a_failed_reader_reports_the_same_failure_for_every_call_after_it() {
         let mut reader = FragmentedReader::new();
         let failure = StructureError::box_out_of_order(FileTypeBox::BOX_TYPE);
@@ -520,6 +549,7 @@ mod tests {
 
         assert_eq!(reader.handle_input(&file), Err(failure));
         assert_eq!(reader.handle_input(&written(&movie())), Err(failure));
+        assert_eq!(reader.handle_data(0, b"SAMP"), Err(failure));
         assert_eq!(reader.finish(), Err(failure));
     }
 
@@ -529,6 +559,10 @@ mod tests {
 
         assert_eq!(
             reader.handle_input(&written(&file_type())),
+            Err(StructureError::already_finished())
+        );
+        assert_eq!(
+            reader.handle_data(0, b"SAMP"),
             Err(StructureError::already_finished())
         );
         assert_eq!(reader.finish(), Err(StructureError::already_finished()));

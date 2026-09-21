@@ -7,7 +7,10 @@
 //! one; [`FragmentedWriter`] and [`NonFragmentedWriter`] go the other way,
 //! laying samples down as a file of either kind. None reaches for a source or
 //! a sink of its own: when to read or write, and from or to where, stay with
-//! the caller.
+//! the caller. Where the caller has `std::io` to hand, the `std` feature
+//! drives each of them: [`FragmentedDemuxer`] and [`NonFragmentedDemuxer`]
+//! read a file off a `Read + Seek`, [`FragmentedMuxer`] and
+//! [`NonFragmentedMuxer`] write one to a `Write`.
 //!
 //! # The layers a file is read through
 //!
@@ -60,7 +63,13 @@
 //!    reader says it still lacks is fetched or not, so a `File`, a socket, or a
 //!    buffer already in memory drives the six layers above the same way. Where
 //!    the file lies in its resource, and how a file offset becomes a seek or a
-//!    range, is settled here and in none of them.
+//!    range, is settled here and in none of them. The `std` feature holds one
+//!    such driver per stack: a demuxer reads the file off a `Read + Seek` a
+//!    cut at a time, seeks to what the reader lacks wherever the file passed
+//!    it by, and yields the samples; a muxer writes what the writer makes of
+//!    each call to a `Write`. What either cannot carry through — a source or
+//!    a sink failing, or a layer beneath refusing the file — is
+//!    [`DriverError`].
 //!
 //! A caller that holds a whole presentation in memory needs none of the
 //! machines: [`boxes`] frames it, [`sample_table::sample_extents`] names where
@@ -93,19 +102,31 @@
 //! whole, a sample owns the bytes it carries, the extents a movie or a fragment
 //! declares are held until the data that meets them arrives, the samples of a
 //! fragment or a chunk being written are held until it is laid down, and the
-//! movie a non-fragmented file is written against until the file is over.
+//! movie a non-fragmented file is written against until the file is over. The
+//! `std` feature, off by default, adds the demuxers and the muxers alone: the
+//! six layers beneath them are the same with it or without.
 
 #![no_std]
 
 extern crate alloc;
+#[cfg(feature = "std")]
+extern crate std;
 
 mod disposition;
+#[cfg(feature = "std")]
+mod driver_error;
 mod fragmented_movie;
 mod non_fragmented_movie;
 mod structure_error;
 mod whole_box;
 
+#[cfg(feature = "std")]
+pub use driver_error::{DriverError, DriverErrorKind};
+#[cfg(feature = "std")]
+pub use fragmented_movie::{FragmentedDemuxer, FragmentedMuxer};
 pub use fragmented_movie::{FragmentedReader, FragmentedWriter};
+#[cfg(feature = "std")]
+pub use non_fragmented_movie::{NonFragmentedDemuxer, NonFragmentedMuxer};
 pub use non_fragmented_movie::{NonFragmentedReader, NonFragmentedWriter};
 pub use structure_error::{StructureError, StructureErrorKind};
 

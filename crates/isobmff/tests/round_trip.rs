@@ -15,6 +15,11 @@ mod tests {
         TrackExtendsBox,
     };
     use isobmff_test_support::{file_type, track};
+    #[cfg(feature = "std")]
+    use {
+        isobmff::{FragmentedDemuxer, FragmentedMuxer},
+        std::io,
+    };
 
     /// Ticks a second the media of the movie is timed in
     const TIMESCALE: u32 = 90_000;
@@ -147,5 +152,32 @@ mod tests {
                 "cut at {cut_length}"
             );
         }
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn the_samples_the_muxer_wrote_to_a_sink_are_read_back_off_it_by_the_demuxer() {
+        let mut file = Vec::new();
+        let mut muxer = FragmentedMuxer::new(&mut file);
+        muxer.handle_file_type(file_type()).unwrap();
+        muxer.handle_movie(movie()).unwrap();
+        for (position, samples) in declared_samples().into_iter().enumerate() {
+            let sequence_number = u32::try_from(position).unwrap().saturating_add(1);
+
+            muxer.begin_fragment(sequence_number).unwrap();
+            for sample in samples {
+                muxer.handle_sample(sample).unwrap();
+            }
+            muxer.finish_fragment().unwrap();
+        }
+        muxer.finish().unwrap();
+
+        let read_back: Vec<Sample> = FragmentedDemuxer::new(io::Cursor::new(&file))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+
+        assert_eq!(file, written_file(declared_samples()));
+        assert_eq!(read_back, samples_of(&file, file.len()));
     }
 }

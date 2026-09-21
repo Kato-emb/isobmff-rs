@@ -12,6 +12,8 @@ mod tests {
     use super::reading::{fetched, handed_over_in_order, samples_of};
     use isobmff::{NonFragmentedReader, Sample};
     use isobmff_test_support::{SAMPLE_DURATION, non_fragmented_file};
+    #[cfg(feature = "std")]
+    use {isobmff::NonFragmentedDemuxer, std::io};
 
     /// The samples of the synthetic file, chunk by chunk
     const CHUNKS: [&[&[u8]]; 3] = [
@@ -71,6 +73,21 @@ mod tests {
             for cut_length in [1, 3, 7, 64, file.len().saturating_sub(1), file.len()] {
                 assert_eq!(samples_of(&file, cut_length), declared_samples());
             }
+        }
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn a_source_that_seeks_has_every_sample_read_off_it_wherever_the_movie_lies() {
+        for movie_first in [true, false] {
+            let file = non_fragmented_file(&CHUNKS, movie_first);
+
+            let read_back: Vec<Sample> = NonFragmentedDemuxer::new(io::Cursor::new(file))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+
+            assert_eq!(read_back, declared_samples());
         }
     }
 }

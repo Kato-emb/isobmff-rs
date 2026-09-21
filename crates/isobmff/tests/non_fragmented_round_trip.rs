@@ -14,6 +14,11 @@ mod tests {
         BoxEvent, BoxType, MovieBox, MovieHeaderBox, Mp4EpochSeconds, NonFragmentedWriter, Sample,
     };
     use isobmff_test_support::{events_of, file_type, track};
+    #[cfg(feature = "std")]
+    use {
+        isobmff::{NonFragmentedDemuxer, NonFragmentedMuxer},
+        std::io,
+    };
 
     /// Ticks a second the media of the movie is timed in
     const TIMESCALE: u32 = 90_000;
@@ -99,5 +104,29 @@ mod tests {
             [b"ftyp", b"mdat", b"mdat", b"mdat", b"mdat", b"moov"]
                 .map(|fourcc| BoxType::compact(*fourcc))
         );
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn the_samples_the_muxer_wrote_to_a_sink_are_read_back_off_it_by_the_demuxer() {
+        let mut file = Vec::new();
+        let mut muxer = NonFragmentedMuxer::new(&mut file);
+        muxer.handle_file_type(file_type()).unwrap();
+        muxer.handle_movie(movie()).unwrap();
+        for chunk in declared_chunks() {
+            muxer.begin_chunk().unwrap();
+            for sample in chunk {
+                muxer.handle_sample(sample).unwrap();
+            }
+        }
+        muxer.finish().unwrap();
+
+        let read_back: Vec<Sample> = NonFragmentedDemuxer::new(io::Cursor::new(&file))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+
+        assert_eq!(file, written_file(declared_chunks()));
+        assert_eq!(read_back, declared_chunks().concat());
     }
 }
