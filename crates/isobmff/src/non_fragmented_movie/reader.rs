@@ -3,7 +3,6 @@
 use core::ops::Range;
 
 use isobmff_boxes::{FileTypeBox, MovieBox};
-use isobmff_core::BoxHeader;
 use isobmff_sample::sample_table::sample_extents;
 use isobmff_sample::{Sample, SampleReader};
 use isobmff_sequence::{BoxEvent, BoxReader};
@@ -330,7 +329,30 @@ impl NonFragmentedReader {
     fn read_framed(&mut self) -> Result<(), StructureError> {
         while let Some(event) = self.boxes.poll_event() {
             match event {
-                BoxEvent::Header(header) => self.begin_box(header),
+                BoxEvent::Header(header) => {
+                    self.structure
+                        .handle_header(header)
+                        .and_then(|disposition| {
+                            self.open = match disposition {
+                                Disposition::FileType => Some(Open::FileType(
+                                    WholeBoxReader::begin(header, self.payload_limit)?,
+                                )),
+                                Disposition::Movie => Some(Open::Movie(WholeBoxReader::begin(
+                                    header,
+                                    self.payload_limit,
+                                )?)),
+                                Disposition::MediaData => Some(Open::MediaData),
+                                Disposition::Skip => None,
+                                // Why not unreachable: the structure of a
+                                // non-fragmented movie file never answers with
+                                // a fragment, and `None` stands in place of a
+                                // panic the lints forbid.
+                                Disposition::MovieFragment => None,
+                            };
+
+                            Ok(())
+                        })
+                }
                 BoxEvent::Payload(payload) => match &mut self.open {
                     Some(Open::FileType(reader)) => reader.handle_payload(payload),
                     Some(Open::Movie(reader)) => reader.handle_payload(payload),
@@ -351,52 +373,26 @@ impl NonFragmentedReader {
                     }
                     None => Ok(()),
                 },
-                BoxEvent::End => self.close_box(),
+                BoxEvent::End => match self.open.take() {
+                    Some(Open::FileType(reader)) => reader
+                        .finish()
+                        .map(|file_type| self.file_type = Some(file_type)),
+                    Some(Open::Movie(reader)) => reader.finish().and_then(|movie| {
+                        for extent in sample_extents(&movie) {
+                            self.samples.handle_sample_extent(extent?)?;
+                        }
+                        self.movie = Some(movie);
+
+                        Ok(())
+                    }),
+                    Some(Open::MediaData) | None => Ok(()),
+                },
                 // Why an arm at all: `BoxEvent` is `#[non_exhaustive]`, which
                 // `clippy::exhaustive_enums` asks of every public enum, so §4.2
                 // being settled at three steps does not close the match.
                 _later_step => Ok(()),
             }
             .map_err(|failure| self.fail(failure))?;
-        }
-
-        Ok(())
-    }
-
-    /// Opens the box `header` introduces, as the structure disposes of it
-    fn begin_box(&mut self, header: BoxHeader) -> Result<(), StructureError> {
-        self.open = match self.structure.handle_header(header)? {
-            Disposition::FileType => Some(Open::FileType(WholeBoxReader::begin(
-                header,
-                self.payload_limit,
-            )?)),
-            Disposition::Movie => Some(Open::Movie(WholeBoxReader::begin(
-                header,
-                self.payload_limit,
-            )?)),
-            Disposition::MediaData => Some(Open::MediaData),
-            Disposition::Skip => None,
-            // Why not unreachable: the structure of a non-fragmented movie file
-            // never answers with a fragment, and `None` stands in place of a
-            // panic the lints forbid.
-            Disposition::MovieFragment => None,
-        };
-
-        Ok(())
-    }
-
-    /// Reads the box that ended into its value, and resolves the sample tables of the movie
-    fn close_box(&mut self) -> Result<(), StructureError> {
-        match self.open.take() {
-            Some(Open::FileType(reader)) => self.file_type = Some(reader.finish()?),
-            Some(Open::Movie(reader)) => {
-                let movie = reader.finish()?;
-                for extent in sample_extents(&movie) {
-                    self.samples.handle_sample_extent(extent?)?;
-                }
-                self.movie = Some(movie);
-            }
-            Some(Open::MediaData) | None => {}
         }
 
         Ok(())
