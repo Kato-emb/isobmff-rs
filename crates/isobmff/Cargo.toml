@@ -17,6 +17,8 @@ default = ["avc", "mp4"]
 avc = ["dep:isobmff-avc"]
 # `isobmff::mp4`, ISO/IEC 14496-14.
 mp4 = ["dep:isobmff-mp4"]
+# The demuxers and muxers, driving the readers and writers over `std::io`.
+std = []
 
 [dependencies]
 isobmff-avc = { workspace = true, optional = true }

@@ -17,6 +17,8 @@ mod tests {
         TrackRunSample,
     };
     use isobmff_test_support::{SAMPLE_DURATION, file_type, fragmented_movie, written};
+    #[cfg(feature = "std")]
+    use {isobmff::FragmentedDemuxer, std::io};
 
     /// Bytes each sample of the synthetic file occupies
     const SAMPLE_LEN: usize = 8;
@@ -114,5 +116,16 @@ mod tests {
         for cut_length in [1, 3, 7, 64, file.len().saturating_sub(1)] {
             assert_eq!(samples_of(&file, cut_length), declared_samples());
         }
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn a_source_that_seeks_has_every_sample_read_off_it() {
+        let read_back: Vec<Sample> = FragmentedDemuxer::new(io::Cursor::new(fragmented_file()))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+
+        assert_eq!(read_back, declared_samples());
     }
 }
