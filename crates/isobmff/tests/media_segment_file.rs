@@ -91,7 +91,7 @@ mod tests {
 
         for (position, media_data) in MEDIA_DATA.iter().enumerate() {
             let sequence_number = u32::try_from(position).unwrap().saturating_add(1);
-            let header_len = BoxHeader::with_payload_len(
+            let header_length = BoxHeader::with_payload_len(
                 MediaDataBox::BOX_TYPE,
                 u64::try_from(media_data.len()).unwrap(),
             )
@@ -100,7 +100,7 @@ mod tests {
             let data_offset = i32::try_from(
                 movie_fragment(sequence_number, decode_time, media_data, 0)
                     .encoded_len()
-                    .saturating_add(u64::try_from(header_len).unwrap()),
+                    .saturating_add(u64::try_from(header_length).unwrap()),
             )
             .unwrap();
 
