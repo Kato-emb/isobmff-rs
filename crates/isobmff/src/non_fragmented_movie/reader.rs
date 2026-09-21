@@ -25,10 +25,13 @@ use crate::{Disposition, StructureError, WholeBoxReader};
 ///
 /// # Contract
 ///
-/// * The file is handed over in order, cut anywhere, each cut with the offset
-///   in the file it starts at, and the samples it completed are taken from
+/// * The file is handed over from its first byte, in order and cut anywhere,
+///   and the samples it completed are taken from
 ///   [`poll_sample`](Self::poll_sample). The caller drains before handing
-///   over more: samples are held until they are taken.
+///   over more: samples are held until they are taken. Where the file lies in
+///   its resource is the caller's: every offset the reader reports is a file
+///   offset, counting from the first byte of the file as the boxes count
+///   theirs (§8.7.5, §8.8.7).
 /// * The boxes the structure reads into values are there to read once they
 ///   have arrived: [`file_type`](Self::file_type) and [`movie`](Self::movie).
 ///   The media data is offered to the samples, and every other box is passed
@@ -73,10 +76,8 @@ use crate::{Disposition, StructureError, WholeBoxReader};
 /// // The file is handed over as it arrives: the media data comes before any
 /// // sample has claimed it, so no sample is completed yet
 /// let mut reader = NonFragmentedReader::new();
-/// let mut offset = 0;
 /// for arriving in file.chunks(7) {
-///     reader.handle_input(offset, arriving)?;
-///     offset += arriving.len() as u64;
+///     reader.handle_input(arriving)?;
 /// }
 /// assert_eq!(reader.poll_sample(), None);
 ///
@@ -107,8 +108,6 @@ pub struct NonFragmentedReader {
     file_type: Option<FileTypeBox>,
     movie: Option<MovieBox>,
     payload_limit: u64,
-    handed: u64,
-    origin: u64,
     state: State,
 }
 
@@ -176,18 +175,16 @@ impl NonFragmentedReader {
             file_type: None,
             movie: None,
             payload_limit,
-            handed: 0,
-            origin: 0,
             state: State::Reading,
         }
     }
 
-    /// Takes the next cut of the file, lying at `offset` in it, and reads the samples it completes
+    /// Takes the next cut of the file and reads the samples it completes
     ///
     /// The input is taken whole, as the continuation of what was handed over
-    /// before it; `offset` is where its first byte lies in the file, which is
-    /// what the extents of the samples are resolved against. What the input
-    /// completed is then taken from [`poll_sample`](Self::poll_sample).
+    /// before it, the first cut starting at the first byte of the file. What
+    /// the input completed is then taken from
+    /// [`poll_sample`](Self::poll_sample).
     ///
     /// # Errors
     ///
@@ -206,16 +203,8 @@ impl NonFragmentedReader {
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
-    pub fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), StructureError> {
+    pub fn handle_input(&mut self, input: &[u8]) -> Result<(), StructureError> {
         self.reading()?;
-
-        // Why not checked arithmetic: a caller handing the file over in order
-        // keeps `offset` at the bytes handed over before, plus where the file
-        // begins in its resource, so the difference cannot go below zero, and
-        // it read the bytes out of a finite resource, so the sum cannot run
-        // past what 64 bits carry.
-        self.origin = offset.saturating_sub(self.handed);
-        self.handed = self.handed.saturating_add(input.len() as u64);
 
         // Why not failing before the events are read: the framing keeps the
         // events it made before failing, and the samples they complete are
@@ -230,8 +219,10 @@ impl NonFragmentedReader {
     /// Takes bytes of the file fetched for what [`wanted_extent`](Self::wanted_extent) named, and reads the samples they complete
     ///
     /// The bytes are offered to the samples alone, as the media data of the
-    /// file is: `offset` is where the first of them lies in the file, and what
-    /// they completed is then taken from [`poll_sample`](Self::poll_sample).
+    /// file is: `offset` is where the first of them lies in the file, counted
+    /// from its first byte as a chunk offset is (ISO/IEC 14496-12 §8.7.5),
+    /// and what they completed is then taken from
+    /// [`poll_sample`](Self::poll_sample).
     /// The file handed over in order through
     /// [`handle_input`](Self::handle_input) goes on from where it stood.
     ///
@@ -361,11 +352,7 @@ impl NonFragmentedReader {
                         // framing names the bytes it was read from, and the
                         // fallback is a degenerate position in place of a
                         // panic the lints forbid.
-                        let start = self
-                            .boxes
-                            .event_extent()
-                            .map_or(0, |extent| extent.start)
-                            .saturating_add(self.origin);
+                        let start = self.boxes.event_extent().map_or(0, |extent| extent.start);
 
                         self.samples
                             .handle_data(start, &payload)
@@ -428,7 +415,7 @@ mod tests {
     fn read(file: &[u8]) -> Result<NonFragmentedReader, StructureError> {
         let mut reader = NonFragmentedReader::new();
 
-        reader.handle_input(0, file)?;
+        reader.handle_input(file)?;
         reader.finish()?;
 
         Ok(reader)
@@ -457,7 +444,7 @@ mod tests {
 
         assert_eq!(
             reader
-                .handle_input(0, &written(&file_type()))
+                .handle_input(&written(&file_type()))
                 .map_err(StructureError::kind),
             Err(StructureErrorKind::PayloadLimitExceeded)
         );
@@ -476,7 +463,7 @@ mod tests {
             SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT,
         );
 
-        reader.handle_input(0, &file).unwrap();
+        reader.handle_input(&file).unwrap();
 
         assert_eq!(reader.finish(), Ok(()));
     }
@@ -499,7 +486,7 @@ mod tests {
         let mut reader = NonFragmentedReader::new();
 
         assert_eq!(
-            reader.handle_input(0, &file).map_err(StructureError::kind),
+            reader.handle_input(&file).map_err(StructureError::kind),
             Err(StructureErrorKind::Sequence(
                 isobmff_sequence::ErrorKind::Box(isobmff_core::ErrorKind::SizeBelowHeader)
             ))
@@ -515,7 +502,7 @@ mod tests {
         let file = non_fragmented_file(&[&[b"SAMP"]], false);
         let mut reader = NonFragmentedReader::new();
 
-        reader.handle_input(0, &file).unwrap();
+        reader.handle_input(&file).unwrap();
 
         assert_eq!(
             reader.finish().map_err(StructureError::kind),
@@ -531,9 +518,9 @@ mod tests {
         let failure = StructureError::box_out_of_order(FileTypeBox::BOX_TYPE);
         let file = [written(&file_type()), written(&file_type())].concat();
 
-        assert_eq!(reader.handle_input(0, &file), Err(failure));
+        assert_eq!(reader.handle_input(&file), Err(failure));
         assert_eq!(
-            reader.handle_input(0, &written(&unfragmented_movie())),
+            reader.handle_input(&written(&unfragmented_movie())),
             Err(failure)
         );
         assert_eq!(reader.handle_data(0, b"SAMP"), Err(failure));
@@ -545,7 +532,7 @@ mod tests {
         let mut reader = read(&written(&unfragmented_movie())).unwrap();
 
         assert_eq!(
-            reader.handle_input(0, &written(&file_type())),
+            reader.handle_input(&written(&file_type())),
             Err(StructureError::already_finished())
         );
         assert_eq!(

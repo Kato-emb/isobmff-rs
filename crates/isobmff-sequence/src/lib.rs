@@ -14,8 +14,9 @@
 //! the extent each of the two names for the event it last handled —
 //! [`BoxReader::event_extent`] and [`BoxWriter::event_extent`] — a contiguous
 //! subset of the bytes of a resource, ISO/IEC 14496-12 §8.11.3. It counts from
-//! the first byte handed over, which the caller resolves against the origin the
-//! file was read from.
+//! the first byte handed over, so a file handed over from its first byte has
+//! every extent a file offset, the coordinate the boxes declare their own in
+//! (§8.7.5, §8.8.7).
 //!
 //! # `no_std`
 //!

@@ -47,14 +47,18 @@
 //! 6. **Stack.** [`FragmentedReader`], [`FragmentedWriter`] and
 //!    [`NonFragmentedReader`] wire layers 1 to 5 into one machine per
 //!    structure and direction. A stack holds no rule and no failure kind of
-//!    its own: a reading stack adds the offset a caller hands over to the
-//!    extents the framing reports, and either passes every value between the
-//!    layers, so a caller hands over bytes and takes samples, or hands over
-//!    samples and takes bytes, and never sees one.
-//! 7. **The I/O.** Where the bytes come from and go to is the caller's: input
-//!    is handed over with the offset it lies at, output is taken, and what the
+//!    its own: it passes every value between the layers, so a caller hands
+//!    over bytes and takes samples, or hands over samples and takes bytes, and
+//!    never sees one. Every offset above the framing is a file offset — the
+//!    extents the framing reports for a file handed over from its first byte,
+//!    the chunk offsets and base data offsets the boxes declare (§8.7.5,
+//!    §8.8.7) — and no layer here knows any other.
+//! 7. **The I/O.** Where the bytes come from and go to is the caller's: the
+//!    file is handed over from its first byte, output is taken, and what the
 //!    reader says it still lacks is fetched or not, so a `File`, a socket, or a
-//!    buffer already in memory drives the six layers above the same way.
+//!    buffer already in memory drives the six layers above the same way. Where
+//!    the file lies in its resource, and how a file offset becomes a seek or a
+//!    range, is settled here and in none of them.
 //!
 //! A caller that holds a whole presentation in memory needs none of the
 //! machines: [`boxes`] frames it, [`sample_table::sample_extents`] names where
