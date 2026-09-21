@@ -31,11 +31,12 @@ use crate::sample::{Sample, SampleExtent};
 /// * The samples are taken one at a time from
 ///   [`poll_sample`](Self::poll_sample), in the order their bytes arrived
 ///   whole: input that makes a sample whole hands over every whole sample
-///   held, in the order they were held, and input that makes none whole
-///   hands over nothing. An extent naming no bytes is whole as soon as it is
-///   held, and is handed over at once when nothing short is held before it.
-///   Bytes arriving in the order the extents were held thus yield the samples
-///   in that order.
+///   held that carries bytes, in the order they were held, and input that
+///   makes none whole hands over nothing. An extent naming no bytes is whole
+///   as soon as it is held, and is handed over once nothing short is held
+///   before it — at once, or with whatever input clears the way. Bytes
+///   arriving in the order the extents were held thus yield the samples in
+///   that order.
 /// * A sample fills from its start: input reaching it takes from the byte it
 ///   lacks next up to the end of the input or of the sample, and input
 ///   starting past that byte, or ending before it, leaves the sample as it
@@ -156,9 +157,6 @@ impl SampleReader {
                 self.sample_size_limit,
             )));
         }
-        self.whole_held = self
-            .whole_held
-            .saturating_add(usize::from(pending.is_whole()));
         self.pending.push_back(pending);
         self.report_front();
 
@@ -198,7 +196,7 @@ impl SampleReader {
             self.report_front();
             if self.whole_held > 0 {
                 for pending in mem::take(&mut self.pending) {
-                    if pending.is_whole() {
+                    if pending.is_whole() && pending.declared_len() > 0 {
                         self.ready.push_back(pending.into_sample());
                     } else {
                         self.pending.push_back(pending);
@@ -258,7 +256,13 @@ impl SampleReader {
             let Some(front) = self.pending.pop_front() else {
                 break;
             };
-            self.whole_held = self.whole_held.saturating_sub(1);
+            // Why not counting an extent naming no bytes among the whole held:
+            // it is whole where it is held and leaves only from the front, so
+            // it never calls for a sweep of the queue, and counted behind a
+            // short front it would set one off that hands over nothing.
+            self.whole_held = self
+                .whole_held
+                .saturating_sub(usize::from(front.declared_len() > 0));
             self.ready.push_back(front.into_sample());
         }
     }
@@ -569,7 +573,7 @@ mod tests {
     }
 
     #[test]
-    fn input_making_a_sample_whole_hands_over_every_whole_sample_in_the_order_held() {
+    fn input_making_a_sample_whole_hands_over_every_whole_sample_held_that_carries_bytes() {
         let mut reader = holding([
             extent(0, 100..104),
             extent(1_024, 104..104),
@@ -578,11 +582,26 @@ mod tests {
 
         reader.handle_data(104, b"EFGH").unwrap();
 
+        assert_eq!(drained(&mut reader), [sample(2_048, b"EFGH")]);
+        assert_eq!(reader.wanted_extent(), Some(100..104));
+    }
+
+    #[test]
+    fn an_extent_naming_no_bytes_is_not_handed_over_ahead_of_a_short_one_held_before_it() {
+        let mut reader = holding([
+            extent(0, 100..104),
+            extent(1_024, 104..108),
+            extent(2_048, 108..108),
+        ]);
+
+        reader.handle_data(100, b"ABCD").unwrap();
+        assert_eq!(drained(&mut reader), [sample(0, b"ABCD")]);
+
+        reader.handle_data(104, b"EFGH").unwrap();
         assert_eq!(
             drained(&mut reader),
-            [sample(1_024, b""), sample(2_048, b"EFGH")]
+            [sample(1_024, b"EFGH"), sample(2_048, b"")]
         );
-        assert_eq!(reader.wanted_extent(), Some(100..104));
     }
 
     #[test]
