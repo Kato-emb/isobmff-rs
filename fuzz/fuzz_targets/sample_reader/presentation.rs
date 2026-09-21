@@ -338,12 +338,16 @@ pub fn lay_out(input: &Input<'_>) -> Option<LaidOut> {
                 .base_media_decode_time
                 .map(TrackFragmentBaseMediaDecodeTimeBox::new);
 
+            // Why not the claim cursor for every track fragment: one carrying
+            // no run defines no data, so the data of the next one anchored at
+            // "where the data before it ended" (§8.8.7.1) starts where this
+            // one was anchored, which is where the resolver places it.
+            data_before = Some(if runs.is_empty() { anchor } else { data_cursor });
             track_fragments.push(if track_fragment.duration_is_empty {
                 TrackFragmentBox::with_empty_duration(tfhd, tfdt)
             } else {
                 TrackFragmentBox::new(tfhd, tfdt, runs)
             });
-            data_before = Some(data_cursor);
         }
 
         rows += fragment_declared.len();
