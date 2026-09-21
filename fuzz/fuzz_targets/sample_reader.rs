@@ -9,10 +9,8 @@
 //!    after it, and a fragment the resolver refuses ends the presentation there
 //! 2. how the media data is cut into the parts it arrives in does not change the
 //!    samples read, and neither does handing every part over twice; where every
-//!    fragment lies as the movie has it, the cut does not change the order of
-//!    the samples carrying bytes either, the extents being held in the order of
-//!    their bytes — a sample carrying none is whole as soon as it is held and
-//!    comes out with whatever input next makes a sample whole
+//!    fragment lies as the movie has it, the cut does not change their order
+//!    either, the extents being held in the order of their bytes
 //! 3. handing the parts over in reverse reads samples among those handing them
 //!    over in order reads: a sample fills from its start, so bytes arriving
 //!    before the ones they follow are passed over
@@ -21,13 +19,11 @@
 //! 5. where every fragment lies as the movie has it — anchored at the fragment or
 //!    at the data before it, every run following the one before it — and the media
 //!    data meets every claim, no sample is left short of its data, and the samples
-//!    read are the samples declared, each carrying the bytes it was declared over,
-//!    those carrying any in the order they were declared
+//!    read are the samples declared, each carrying the bytes it was declared over
 //! 6. where every fragment lies as the movie has it and the media data meets
 //!    every claim, no fragment states a decode time of its own and none
 //!    declares an empty duration, the samples of one track follow one another
-//!    by their durations, the first of them at zero, taken in the order of
-//!    their decode times
+//!    by their durations, the first of them at zero
 //! 7. once the samples are declared over nothing more is taken, and the samples
 //!    completed before that are still handed over
 //!
@@ -41,7 +37,6 @@
 #![no_main]
 
 use std::collections::{BTreeMap, HashMap};
-use std::hash::Hash;
 
 use isobmff::movie_fragment::sample_extents;
 use isobmff::{
@@ -102,24 +97,25 @@ fuzz_target!(|input: Input<'_>| {
     let twice = read_with(input.cut_lengths, Arrival::Twice);
     let cut_smaller = read_with(SMALLEST_PARTS, Arrival::InOrder);
     let reversed = read_with(input.cut_lengths, Arrival::Reversed);
+
     assert_eq!(
         in_order, twice,
         "handing every part of the media data over twice changed the samples read"
     );
-    assert_eq!(
-        in_order.failure, cut_smaller.failure,
-        "how the media data was cut changed the failure reported"
-    );
-    assert_eq!(
-        counted(&in_order.samples),
-        counted(&cut_smaller.samples),
-        "how the media data was cut changed the samples read"
-    );
     if laid_out.lies_as_declared {
         assert_eq!(
-            carrying_bytes(&in_order.samples),
-            carrying_bytes(&cut_smaller.samples),
-            "how the media data was cut changed the order of the samples carrying bytes"
+            in_order, cut_smaller,
+            "how the media data was cut changed the samples read, or their order"
+        );
+    } else {
+        assert_eq!(
+            in_order.failure, cut_smaller.failure,
+            "how the media data was cut changed the failure reported"
+        );
+        assert_eq!(
+            counted(&in_order.samples),
+            counted(&cut_smaller.samples),
+            "how the media data was cut changed the samples read"
         );
     }
     let whole = counted(&in_order.samples);
@@ -149,21 +145,10 @@ fuzz_target!(|input: Input<'_>| {
         );
 
         if in_order.failure.is_none() {
-            let declared = laid_out.declared_as(input.media_data);
-
             assert_eq!(
-                counted(&reported(&in_order.samples)),
-                counted(&declared),
+                reported(&in_order.samples),
+                laid_out.declared_as(input.media_data),
                 "the samples read are not the samples the fragments declared"
-            );
-            assert_eq!(
-                reported(&carrying_bytes(&in_order.samples)),
-                declared
-                    .iter()
-                    .filter(|(_track_id, data)| !data.is_empty())
-                    .cloned()
-                    .collect::<Vec<_>>(),
-                "the samples carrying bytes were not read in the order the fragments declared them"
             );
         }
     }
@@ -311,7 +296,7 @@ fn declares(movie: &MovieBox, track_id: u32) -> bool {
 }
 
 /// The samples by how many times each was read, whatever order they came out in
-fn counted<Read: Eq + Hash>(samples: &[Read]) -> HashMap<&Read, usize> {
+fn counted(samples: &[Sample]) -> HashMap<&Sample, usize> {
     let mut counted = HashMap::new();
 
     for sample in samples {
@@ -319,20 +304,6 @@ fn counted<Read: Eq + Hash>(samples: &[Read]) -> HashMap<&Read, usize> {
     }
 
     counted
-}
-
-/// The samples carrying any bytes, in the order they were read
-///
-/// A sample carrying none is whole the moment its extent is held and comes out
-/// with the next input that makes any sample whole, so where it stands among
-/// the others follows the cut; the samples carrying bytes come out as their
-/// last byte arrives, which in-order input settles.
-fn carrying_bytes(samples: &[Sample]) -> Vec<Sample> {
-    samples
-        .iter()
-        .filter(|sample| !sample.data().is_empty())
-        .cloned()
-        .collect()
 }
 
 /// The samples read, by the track each belongs to and the bytes it carries
@@ -344,17 +315,10 @@ fn reported(samples: &[Sample]) -> Vec<(u32, Vec<u8>)> {
 }
 
 /// Checks that the samples of every track follow one another by their durations
-///
-/// The samples are taken in the order of their decode times rather than the
-/// order they were read in, which a sample carrying no bytes may run ahead of;
-/// of those decoded at once, the ones lasting no time come first, as the
-/// timeline has them.
 fn samples_follow_by_their_durations(samples: &[Sample]) {
     let mut next_of_track: BTreeMap<u32, u64> = BTreeMap::new();
-    let mut by_decode_time: Vec<&Sample> = samples.iter().collect();
-    by_decode_time.sort_by_key(|sample| (sample.decode_time(), sample.sample_duration()));
 
-    for sample in by_decode_time {
+    for sample in samples {
         let decoded_at = next_of_track.get(&sample.track_id()).copied().unwrap_or(0);
 
         assert_eq!(

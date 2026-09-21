@@ -21,9 +21,10 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// `default-base-is-moof` anchors them at `moof_start`, where the `moof`
 /// begins in the file, and one stating neither anchors them at the `moof` for
 /// the first track fragment and at the end of the data of the track fragment
-/// before it for those that follow. A run stating no `data_offset` starts
-/// where the run before it ended, and the first run of a track fragment at
-/// its anchor.
+/// before it for those that follow — which is the anchor of that track
+/// fragment if it carried no run. A run stating no `data_offset` starts where
+/// the run before it ended, and the first run of a track fragment at its
+/// anchor.
 ///
 /// When the samples are decoded follows §8.8.12: a track fragment carrying a
 /// `tfdt` starts its samples there, and one carrying none carries on from where
@@ -568,6 +569,35 @@ mod tests {
                 &movie(vec![track(1), track(2)])
             ),
             Ok(vec![extent(1, 0, 100..104), extent(2, 0, 104..108)])
+        );
+    }
+
+    #[test]
+    fn a_track_fragment_after_one_carrying_no_run_is_anchored_where_that_one_was() {
+        let carrying_no_run = TrackFragmentBox::with_empty_duration(
+            track_fragment_header(
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
+                1,
+                None,
+                Some(4_096),
+                None,
+            ),
+            None,
+        );
+        let stating_no_anchor = TrackFragmentBox::new(
+            track_fragment_header(TrackFragmentHeaderFlags::ZERO, 2, None, None, None),
+            None,
+            vec![run(Some(100), 1)],
+        );
+
+        assert_eq!(
+            resolved_from(
+                &movie_fragment(vec![carrying_no_run, stating_no_anchor]),
+                &movie(vec![track(1), track(2)]),
+                1_000,
+                &mut TrackDecodeTimes::new(),
+            ),
+            Ok(vec![extent(2, 0, 1_100..1_104)])
         );
     }
 
