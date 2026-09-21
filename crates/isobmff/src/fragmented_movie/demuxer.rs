@@ -1,16 +1,13 @@
 //! [`FragmentedDemuxer`], a fragmented movie file read off a source that seeks
 
-use alloc::vec::Vec;
-use std::io::{self, Read, Seek, SeekFrom};
+use core::ops::Range;
+use std::io::{Read, Seek};
 
 use isobmff_boxes::{FileTypeBox, MovieBox};
 use isobmff_sample::Sample;
 
 use super::FragmentedReader;
-use crate::DriverError;
-
-/// Bytes handed over to the reader at a time
-const CUT_LENGTH: u64 = 1024 * 1024;
+use crate::{Demuxing, DriverError, ReadSamples, StructureError};
 
 /// Reads the samples a fragmented movie file carries off a source that seeks
 ///
@@ -76,21 +73,7 @@ const CUT_LENGTH: u64 = 1024 * 1024;
 /// ```
 #[derive(Debug)]
 pub struct FragmentedDemuxer<S> {
-    source: S,
-    reader: FragmentedReader,
-    cut: Vec<u8>,
-    origin: u64,
-    handed: u64,
-    state: State,
-}
-
-/// Where the demuxer stands between samples
-#[derive(Debug)]
-enum State {
-    /// Reading the file off the source
-    Reading,
-    /// Over, holding the failure still to report if it ended in one
-    Over(Option<DriverError>),
+    demuxing: Demuxing<S, FragmentedReader>,
 }
 
 impl<S: Read + Seek> FragmentedDemuxer<S> {
@@ -113,83 +96,22 @@ impl<S: Read + Seek> FragmentedDemuxer<S> {
     ///
     /// * [`Io`](crate::DriverErrorKind::Io): the source does not report
     ///   where it stands.
-    pub fn with_reader(mut source: S, reader: FragmentedReader) -> Result<Self, DriverError> {
-        let origin = source.stream_position()?;
-
+    pub fn with_reader(source: S, reader: FragmentedReader) -> Result<Self, DriverError> {
         Ok(Self {
-            source,
-            reader,
-            cut: Vec::new(),
-            origin,
-            handed: 0,
-            state: State::Reading,
+            demuxing: Demuxing::new(source, reader)?,
         })
     }
 
     /// Returns the brands the file declares itself readable as, once they have come
     #[must_use]
     pub const fn file_type(&self) -> Option<&FileTypeBox> {
-        self.reader.file_type()
+        self.demuxing.reader().file_type()
     }
 
     /// Returns the movie the fragments of the file continue, once it has come
     #[must_use]
     pub const fn movie(&self) -> Option<&MovieBox> {
-        self.reader.movie()
-    }
-
-    /// Reads on: fetches what the reader lacks if the file passed it by, else hands over the next cut
-    fn read_on(&mut self) -> Result<(), DriverError> {
-        let passed_by = self
-            .reader
-            .wanted_extent()
-            .filter(|wanted| wanted.start < self.handed);
-        if let Some(wanted) = passed_by {
-            // Why not checked_add: the want lies before `handed`, a position
-            // the source already stood at, so neither sum can run past what
-            // 64 bits carry.
-            self.source
-                .seek(SeekFrom::Start(self.origin.saturating_add(wanted.start)))?;
-            // Why not the want alone: a fragment holds every extent it
-            // addresses at once, and a cut read from the first fills the ones
-            // behind it too, where fetching them one at a time costs a seek
-            // and a sweep of the extents held per sample.
-            let length = wanted.end.saturating_sub(wanted.start).max(CUT_LENGTH);
-            if self.read_cut(length)? == 0 {
-                // Why not carrying on: the want lies before what was handed
-                // over in order, so a source holding nothing there has shrunk
-                // since, and reading on would ask for the same bytes without end.
-                return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into());
-            }
-            self.reader.handle_data(wanted.start, &self.cut)?;
-            self.source
-                .seek(SeekFrom::Start(self.origin.saturating_add(self.handed)))?;
-
-            return Ok(());
-        }
-
-        let read = self.read_cut(CUT_LENGTH)?;
-        if read == 0 {
-            self.reader.finish()?;
-            self.state = State::Over(None);
-        } else {
-            self.reader.handle_input(&self.cut)?;
-            self.handed = self.handed.saturating_add(read);
-        }
-
-        Ok(())
-    }
-
-    /// Reads up to `length` bytes off the source into the cut, and returns how many came
-    fn read_cut(&mut self, length: u64) -> io::Result<u64> {
-        self.cut.clear();
-        let read = self
-            .source
-            .by_ref()
-            .take(length)
-            .read_to_end(&mut self.cut)?;
-
-        Ok(read as u64)
+        self.demuxing.reader().movie()
     }
 }
 
@@ -197,17 +119,29 @@ impl<S: Read + Seek> Iterator for FragmentedDemuxer<S> {
     type Item = Result<Sample, DriverError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if let Some(sample) = self.reader.poll_sample() {
-                return Some(Ok(sample));
-            }
-            if let State::Over(failure) = &mut self.state {
-                return failure.take().map(Err);
-            }
-            if let Err(failure) = self.read_on() {
-                self.state = State::Over(Some(failure));
-            }
-        }
+        self.demuxing.next()
+    }
+}
+
+impl ReadSamples for FragmentedReader {
+    fn handle_input(&mut self, input: &[u8]) -> Result<(), StructureError> {
+        FragmentedReader::handle_input(self, input)
+    }
+
+    fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), StructureError> {
+        FragmentedReader::handle_data(self, offset, data)
+    }
+
+    fn poll_sample(&mut self) -> Option<Sample> {
+        FragmentedReader::poll_sample(self)
+    }
+
+    fn wanted_extent(&self) -> Option<Range<u64>> {
+        FragmentedReader::wanted_extent(self)
+    }
+
+    fn finish(&mut self) -> Result<(), StructureError> {
+        FragmentedReader::finish(self)
     }
 }
 
