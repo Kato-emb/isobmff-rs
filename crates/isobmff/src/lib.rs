@@ -3,14 +3,16 @@
 //! A presentation is carried as samples — ISO/IEC 14496-12 §3.1.14 has a sample
 //! as all the data associated with a single timestamp. [`FragmentedReader`]
 //! takes a fragmented movie file as it arrives and reports the [`Sample`]s it
-//! carries, and [`NonFragmentedReader`] does the same for a non-fragmented
-//! one; [`FragmentedWriter`] and [`NonFragmentedWriter`] go the other way,
-//! laying samples down as a file of either kind. None reaches for a source or
-//! a sink of its own: when to read or write, and from or to where, stay with
-//! the caller. Where the caller has `std::io` to hand, the `std` feature
-//! drives each of them: [`FragmentedDemuxer`] and [`NonFragmentedDemuxer`]
-//! read a file off a `Read + Seek`, [`FragmentedMuxer`] and
-//! [`NonFragmentedMuxer`] write one to a `Write`.
+//! carries, [`NonFragmentedReader`] does the same for a non-fragmented one,
+//! and [`MediaSegmentReader`] for a media segment delivered apart from the
+//! movie it continues; [`FragmentedWriter`], [`NonFragmentedWriter`] and
+//! [`MediaSegmentWriter`] go the other way, laying samples down as a file or
+//! a segment of each kind. None reaches for a source or a sink of its own:
+//! when to read or write, and from or to where, stay with the caller. Where
+//! the caller has `std::io` to hand, the `std` feature drives each of them:
+//! [`FragmentedDemuxer`], [`NonFragmentedDemuxer`] and [`MediaSegmentDemuxer`]
+//! read a file off a `Read + Seek`, [`FragmentedMuxer`],
+//! [`NonFragmentedMuxer`] and [`MediaSegmentMuxer`] write one to a `Write`.
 //!
 //! # The layers a file is read through
 //!
@@ -41,23 +43,25 @@
 //!    extent names are dropped.
 //! 5. **Structure.** The order of the top-level boxes of one kind of file, and
 //!    what is to be done with each: read into a value, offered to the samples
-//!    as media data, or passed over. Two structures are held so far: the
+//!    as media data, or passed over. Three structures are held: the
 //!    fragmented movie file of Annex A.8 — the brands, the movie, then one
-//!    movie fragment after another with the media data beside it — and the
+//!    movie fragment after another with the media data beside it — the
 //!    non-fragmented movie file of §8.2.1 — the brands, the one movie, and
-//!    the media data it declares, lying before the movie or after it. The
-//!    structure is the only layer that knows how a file is put together, and
-//!    the order a file breaks is its failure.
+//!    the media data it declares, lying before the movie or after it — and
+//!    the media segment of §8.16 — the brands, then the fragments and their
+//!    media data, the movie they continue held apart from it. The structure
+//!    is the only layer that knows how a file is put together, and the order
+//!    a file breaks is its failure.
 //! 6. **Stack.** [`FragmentedReader`], [`FragmentedWriter`],
-//!    [`NonFragmentedReader`] and [`NonFragmentedWriter`] wire layers 1 to 5
-//!    into one machine per structure and direction. A stack holds no rule
-//!    and no failure kind of its own: it passes every value between the
-//!    layers, so a caller hands over bytes and takes samples, or hands over
-//!    samples and takes bytes, and never sees one. Every offset above the
-//!    framing is a file offset — the extents the framing reports for a file
-//!    handed over from its first byte, the chunk offsets and base data
-//!    offsets the boxes declare (§8.7.5, §8.8.7) — and no layer here knows
-//!    any other.
+//!    [`NonFragmentedReader`], [`NonFragmentedWriter`], [`MediaSegmentReader`]
+//!    and [`MediaSegmentWriter`] wire layers 1 to 5 into one machine per
+//!    structure and direction. A stack holds no rule and no failure kind of
+//!    its own: it passes every value between the layers, so a caller hands
+//!    over bytes and takes samples, or hands over samples and takes bytes,
+//!    and never sees one. Every offset above the framing is a file offset —
+//!    the extents the framing reports for a file handed over from its first
+//!    byte, the chunk offsets and base data offsets the boxes declare
+//!    (§8.7.5, §8.8.7) — and no layer here knows any other.
 //! 7. **The I/O.** Where the bytes come from and go to is the caller's: the
 //!    file is handed over from its first byte, output is taken, and what the
 //!    reader says it still lacks is fetched or not, so a `File`, a socket, or a
