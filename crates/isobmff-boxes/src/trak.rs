@@ -47,6 +47,12 @@ impl TrackBox {
         &self.mdia
     }
 
+    /// Returns the media of the track, to be changed in place
+    #[must_use]
+    pub(crate) const fn mdia_mut(&mut self) -> &mut MediaBox {
+        &mut self.mdia
+    }
+
     /// Returns the children no field of this box claims, in the order they came
     #[must_use]
     pub fn other_boxes(&self) -> &[AnyBox] {

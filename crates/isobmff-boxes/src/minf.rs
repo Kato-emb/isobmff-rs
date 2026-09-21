@@ -200,6 +200,12 @@ impl MediaInformationBox {
         &self.stbl
     }
 
+    /// Returns the tables that locate and describe the track's samples, to be changed in place
+    #[must_use]
+    pub const fn stbl_mut(&mut self) -> &mut SampleTableBox {
+        &mut self.stbl
+    }
+
     /// Returns the children no field of this box claims, in the order they came
     #[must_use]
     pub fn other_boxes(&self) -> &[AnyBox] {

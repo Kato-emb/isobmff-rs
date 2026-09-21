@@ -58,6 +58,12 @@ impl MediaBox {
         &self.minf
     }
 
+    /// Returns the declarations specific to that kind of media, to be changed in place
+    #[must_use]
+    pub const fn minf_mut(&mut self) -> &mut MediaInformationBox {
+        &mut self.minf
+    }
+
     /// Returns the children no field of this box claims, in the order they came
     #[must_use]
     pub fn other_boxes(&self) -> &[AnyBox] {
