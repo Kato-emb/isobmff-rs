@@ -23,7 +23,9 @@ use crate::{DriverError, StructureError};
 ///   of a call is written before the call reports, the bytes made before a
 ///   refusal included; a sink refusing them is
 ///   [`Io`](crate::DriverErrorKind::Io), reported after the writer's own
-///   failure if both fail.
+///   failure if both fail. The sink is written to a box header or a sample
+///   at a time, as the writer hands them over; one that is costly to write
+///   to in small pieces is the caller's to wrap in a `BufWriter`.
 /// * [`finish`](Self::finish) declares the file over, writes the movie the
 ///   writer lays down last, and flushes the sink.
 ///
@@ -150,7 +152,7 @@ impl<W: Write> NonFragmentedMuxer<W> {
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
-    use std::io::{self, Write};
+    use std::io;
 
     use isobmff_boxes::{MediaDataBox, MovieBox};
     use isobmff_core::BoxDefinition;
@@ -163,19 +165,6 @@ mod tests {
     /// One sample of track 1, the first of its chunk
     fn sample() -> Sample {
         Sample::new(1, 0, SAMPLE_DURATION, 0, 0, 1, b"SAMP".to_vec())
-    }
-
-    /// Sink refusing every byte
-    struct Refusing;
-
-    impl Write for Refusing {
-        fn write(&mut self, _bytes: &[u8]) -> io::Result<usize> {
-            Err(io::ErrorKind::BrokenPipe.into())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
     }
 
     #[test]
@@ -207,20 +196,20 @@ mod tests {
     }
 
     #[test]
-    fn a_sink_refusing_the_bytes_is_reported_as_such() {
-        let mut muxer = NonFragmentedMuxer::new(Refusing);
+    fn a_sink_taking_no_byte_is_reported_as_such() {
+        let mut muxer = NonFragmentedMuxer::new(&mut [][..]);
 
         assert_eq!(
             muxer
                 .handle_file_type(file_type())
                 .map_err(|failure| failure.kind()),
-            Err(DriverErrorKind::Io(io::ErrorKind::BrokenPipe))
+            Err(DriverErrorKind::Io(io::ErrorKind::WriteZero))
         );
     }
 
     #[test]
     fn the_writers_own_failure_is_reported_ahead_of_the_sinks() {
-        let mut muxer = NonFragmentedMuxer::new(Refusing);
+        let mut muxer = NonFragmentedMuxer::new(&mut [][..]);
         muxer.begin_chunk().unwrap();
         muxer.handle_sample(sample()).unwrap();
 

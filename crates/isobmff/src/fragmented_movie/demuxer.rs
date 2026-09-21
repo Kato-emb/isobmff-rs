@@ -31,11 +31,13 @@ const CUT_LENGTH: u64 = 1024 * 1024;
 ///   file lays them down. The boxes the reader read into values are there to
 ///   read once they have come: [`file_type`](Self::file_type) and
 ///   [`movie`](Self::movie).
-/// * The bytes fetched for a want are read off the source whole; a source
-///   ending before them is [`Io`](crate::DriverErrorKind::Io) with
-///   [`UnexpectedEof`](io::ErrorKind::UnexpectedEof). A source ending before
-///   a want lying ahead is the reader's to report at the end of the file, as
-///   [`Structure`](crate::DriverErrorKind::Structure).
+/// * The bytes fetched for a want come off the source a cut at a time, as
+///   the file does, so every extent the cut reaches is filled by it. A
+///   source ending before bytes the reader lacks is the reader's to report
+///   at the end of the file, as
+///   [`Structure`](crate::DriverErrorKind::Structure); one ending before
+///   where it had already been read to is [`Io`](crate::DriverErrorKind::Io)
+///   with [`UnexpectedEof`](io::ErrorKind::UnexpectedEof).
 /// * A failure ends the iteration: the samples the reader had completed
 ///   before it come first, then the failure once, then `None` for good. The
 ///   end of the file is the same without the failure.
@@ -144,11 +146,18 @@ impl<S: Read + Seek> FragmentedDemuxer<S> {
         if let Some(wanted) = passed_by {
             // Why not checked_add: the want names bytes of a file the reader
             // is reading off a finite source, and a want past what the source
-            // holds is reported as the source ending, not as arithmetic.
+            // holds is the reader's to report once the file is over.
             self.source
                 .seek(SeekFrom::Start(self.origin.saturating_add(wanted.start)))?;
-            let length = wanted.end.saturating_sub(wanted.start);
-            if self.read_cut(length)? < length {
+            // Why not the want alone: a movie lying after its media data
+            // holds every extent at once, and a cut read from the first fills
+            // the ones behind it too, where fetching them one at a time
+            // costs a seek and a sweep of the extents held per sample.
+            let length = wanted.end.saturating_sub(wanted.start).max(CUT_LENGTH);
+            if self.read_cut(length)? == 0 {
+                // Why not carrying on: the want lies before what was handed
+                // over in order, so a source holding nothing there has shrunk
+                // since, and reading on would ask for the same bytes without end.
                 return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into());
             }
             self.reader.handle_data(wanted.start, &self.cut)?;
@@ -205,43 +214,50 @@ impl<S: Read + Seek> Iterator for FragmentedDemuxer<S> {
 mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
-    use std::io;
+    use std::io::{self, Read, Seek, SeekFrom};
 
     use isobmff_boxes::{
-        MovieFragmentBox, MovieFragmentHeaderBox, TrackExtendsBox, TrackFragmentBox,
-        TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
+        MovieFragmentBox, MovieFragmentHeaderBox, TrackFragmentBox, TrackFragmentHeaderBox,
+        TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
     };
-    use isobmff_test_support::{fragmented_movie, written};
+    use isobmff_test_support::written;
 
+    use super::super::tests::{file_of_one_sample, sample};
     use super::FragmentedDemuxer;
-    use crate::{DriverErrorKind, FragmentedWriter, Sample, StructureErrorKind};
+    use crate::{DriverErrorKind, Sample, StructureErrorKind};
 
-    /// A file of one fragment carrying `sample`, with no brands
-    fn file_of(sample: Sample) -> Vec<u8> {
-        let mut writer = FragmentedWriter::new();
-        let mut file = Vec::new();
+    /// Source holding nothing past any position it is sought back to
+    struct Shrinking(io::Cursor<Vec<u8>>);
 
-        writer
-            .handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0)))
-            .unwrap();
-        writer.begin_fragment(1).unwrap();
-        writer.handle_sample(sample).unwrap();
-        writer.finish_fragment().unwrap();
-        writer.finish().unwrap();
-        while let Some(written) = writer.poll_output() {
-            file.extend_from_slice(&written);
+    impl Read for Shrinking {
+        fn read(&mut self, into: &mut [u8]) -> io::Result<usize> {
+            self.0.read(into)
         }
-
-        file
     }
 
-    /// A fragment of one sample of `size` bytes, lying at `base_data_offset` in the file
-    fn fragment_addressing(base_data_offset: u64, size: u32) -> MovieFragmentBox {
+    impl Seek for Shrinking {
+        fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
+            if let SeekFrom::Start(position) = from {
+                if position < self.0.position() {
+                    self.0
+                        .get_mut()
+                        .truncate(usize::try_from(position).unwrap());
+                }
+            }
+
+            self.0.seek(from)
+        }
+    }
+
+    /// The file of one sample, followed by a fragment addressing `size` bytes at that sample's start
+    fn file_addressing_back(size: u32) -> Vec<u8> {
+        let mut file = file_of_one_sample();
+        let media_data_start = file.len().saturating_sub(4) as u64;
         let track_fragment = TrackFragmentBox::new(
             TrackFragmentHeaderBox::new(
                 TrackFragmentHeaderFlags::ZERO,
                 1,
-                Some(base_data_offset),
+                Some(media_data_start),
                 None,
                 None,
                 Some(size),
@@ -257,29 +273,29 @@ mod tests {
                 .unwrap(),
             ],
         );
+        let fragment = MovieFragmentBox::new(MovieFragmentHeaderBox::new(2), vec![track_fragment]);
+        file.extend_from_slice(&written(&fragment));
 
-        MovieFragmentBox::new(MovieFragmentHeaderBox::new(2), vec![track_fragment])
+        file
     }
 
-    /// What the demuxer yields off `file`, kind for kind, until it is over
-    fn yielded(file: Vec<u8>) -> Vec<Result<Sample, DriverErrorKind>> {
-        FragmentedDemuxer::new(io::Cursor::new(file))
-            .unwrap()
+    /// What `demuxer` yields, kind for kind, until it is over
+    fn yielded(
+        demuxer: &mut FragmentedDemuxer<impl Read + Seek>,
+    ) -> Vec<Result<Sample, DriverErrorKind>> {
+        demuxer
             .map(|sample| sample.map_err(|failure| failure.kind()))
             .collect()
     }
 
     #[test]
     fn a_fragment_addressing_media_data_before_it_has_the_bytes_fetched() {
-        let first = Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec());
-        let mut file = file_of(first.clone());
-        let media_data_start = file.len().saturating_sub(4) as u64;
-        file.extend_from_slice(&written(&fragment_addressing(media_data_start, 4)));
+        let mut demuxer = FragmentedDemuxer::new(io::Cursor::new(file_addressing_back(4))).unwrap();
 
         assert_eq!(
-            yielded(file),
+            yielded(&mut demuxer),
             [
-                Ok(first),
+                Ok(sample()),
                 Ok(Sample::new(1, 1_024, 1_024, 0, 0, 1, b"SAMP".to_vec()))
             ]
         );
@@ -287,38 +303,44 @@ mod tests {
 
     #[test]
     fn the_file_begins_where_the_source_stands() {
-        let sample = Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec());
-        let mut file = file_of(sample.clone());
-        let media_data_start = file.len().saturating_sub(4) as u64;
-        file.extend_from_slice(&written(&fragment_addressing(media_data_start, 4)));
-        let mut source = io::Cursor::new([b"junk".as_slice(), &file].concat());
+        let mut source = io::Cursor::new([b"junk".as_slice(), &file_addressing_back(4)].concat());
         source.set_position(4);
-
-        let read_back: Vec<Sample> = FragmentedDemuxer::new(source)
-            .unwrap()
-            .collect::<Result<_, _>>()
-            .unwrap();
+        let mut demuxer = FragmentedDemuxer::new(source).unwrap();
 
         assert_eq!(
-            read_back,
+            yielded(&mut demuxer),
             [
-                sample,
-                Sample::new(1, 1_024, 1_024, 0, 0, 1, b"SAMP".to_vec())
+                Ok(sample()),
+                Ok(Sample::new(1, 1_024, 1_024, 0, 0, 1, b"SAMP".to_vec()))
             ]
         );
     }
 
     #[test]
-    fn a_source_ending_before_the_bytes_the_reader_lacks_is_reported_as_such() {
-        let first = Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec());
-        let mut file = file_of(first.clone());
-        let media_data_start = file.len().saturating_sub(4) as u64;
-        file.extend_from_slice(&written(&fragment_addressing(media_data_start, 4_096)));
+    fn a_source_ending_before_the_bytes_the_reader_lacks_is_the_readers_to_report() {
+        let mut demuxer =
+            FragmentedDemuxer::new(io::Cursor::new(file_addressing_back(4_096))).unwrap();
 
         assert_eq!(
-            yielded(file),
+            yielded(&mut demuxer),
             [
-                Ok(first),
+                Ok(sample()),
+                Err(DriverErrorKind::Structure(StructureErrorKind::Sample(
+                    isobmff_sample::SampleErrorKind::UnfinishedSample
+                )))
+            ]
+        );
+    }
+
+    #[test]
+    fn a_source_shrunk_below_what_was_read_is_reported_as_ending() {
+        let mut demuxer =
+            FragmentedDemuxer::new(Shrinking(io::Cursor::new(file_addressing_back(4)))).unwrap();
+
+        assert_eq!(
+            yielded(&mut demuxer),
+            [
+                Ok(sample()),
                 Err(DriverErrorKind::Io(io::ErrorKind::UnexpectedEof))
             ]
         );
@@ -326,20 +348,14 @@ mod tests {
 
     #[test]
     fn the_samples_completed_before_a_failure_come_first_and_the_failure_once() {
-        let sample = Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec());
-        let mut file = file_of(sample.clone());
+        let mut file = file_of_one_sample();
         file.extend_from_slice(b"\0\0\0\x04free");
         let mut demuxer = FragmentedDemuxer::new(io::Cursor::new(file)).unwrap();
 
-        let until_over: Vec<_> = demuxer
-            .by_ref()
-            .map(|sample| sample.map_err(|failure| failure.kind()))
-            .collect();
-
         assert_eq!(
-            until_over,
+            yielded(&mut demuxer),
             [
-                Ok(sample),
+                Ok(sample()),
                 Err(DriverErrorKind::Structure(StructureErrorKind::Sequence(
                     isobmff_sequence::ErrorKind::Box(isobmff_core::ErrorKind::SizeBelowHeader)
                 )))
@@ -350,11 +366,12 @@ mod tests {
 
     #[test]
     fn a_source_ending_inside_the_media_data_is_the_readers_to_report() {
-        let mut file = file_of(Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec()));
+        let mut file = file_of_one_sample();
         file.truncate(file.len().saturating_sub(2));
+        let mut demuxer = FragmentedDemuxer::new(io::Cursor::new(file)).unwrap();
 
         assert_eq!(
-            yielded(file),
+            yielded(&mut demuxer),
             [Err(DriverErrorKind::Structure(
                 StructureErrorKind::Sequence(isobmff_sequence::ErrorKind::UnfinishedBox)
             ))]

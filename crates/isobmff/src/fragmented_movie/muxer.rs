@@ -23,7 +23,9 @@ use crate::{DriverError, StructureError};
 ///   of a call is written before the call reports, the bytes made before a
 ///   refusal included; a sink refusing them is
 ///   [`Io`](crate::DriverErrorKind::Io), reported after the writer's own
-///   failure if both fail.
+///   failure if both fail. The sink is written to a box header or a sample
+///   at a time, as the writer hands them over; one that is costly to write
+///   to in small pieces is the caller's to wrap in a `BufWriter`.
 /// * [`finish`](Self::finish) declares the file over and flushes the sink.
 ///
 /// # Examples
@@ -155,27 +157,14 @@ impl<W: Write> FragmentedMuxer<W> {
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
-    use std::io::{self, Write};
+    use std::io;
 
     use isobmff_boxes::{FileTypeBox, TrackExtendsBox};
     use isobmff_core::BoxDefinition;
     use isobmff_test_support::{file_type, fragmented_movie, written};
 
     use super::FragmentedMuxer;
-    use crate::{DriverErrorKind, StructureError, StructureErrorKind};
-
-    /// Sink refusing every byte
-    struct Refusing;
-
-    impl Write for Refusing {
-        fn write(&mut self, _bytes: &[u8]) -> io::Result<usize> {
-            Err(io::ErrorKind::BrokenPipe.into())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
+    use crate::{DriverErrorKind, StructureError};
 
     #[test]
     fn the_bytes_the_writer_made_of_a_call_are_written_before_the_call_reports() {
@@ -188,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn the_bytes_made_before_a_refusal_are_written_and_the_refusal_reported() {
+    fn a_refusal_of_the_writer_is_reported_and_leaves_what_was_written() {
         let mut file = Vec::new();
         let mut muxer = FragmentedMuxer::new(&mut file);
         let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0));
@@ -206,26 +195,14 @@ mod tests {
     }
 
     #[test]
-    fn a_sink_refusing_the_bytes_is_reported_as_such() {
-        let mut muxer = FragmentedMuxer::new(Refusing);
+    fn a_sink_taking_no_byte_is_reported_as_such() {
+        let mut muxer = FragmentedMuxer::new(&mut [][..]);
 
         assert_eq!(
             muxer
                 .handle_file_type(file_type())
                 .map_err(|failure| failure.kind()),
-            Err(DriverErrorKind::Io(io::ErrorKind::BrokenPipe))
-        );
-    }
-
-    #[test]
-    fn the_writers_own_failure_is_reported_ahead_of_the_sinks() {
-        let mut muxer = FragmentedMuxer::new(Refusing);
-
-        assert_eq!(
-            muxer.finish().map_err(|failure| failure.kind()),
-            Err(DriverErrorKind::Structure(
-                StructureErrorKind::MissingMandatoryBox
-            ))
+            Err(DriverErrorKind::Io(io::ErrorKind::WriteZero))
         );
     }
 }

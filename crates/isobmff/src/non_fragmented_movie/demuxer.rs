@@ -27,15 +27,18 @@ const CUT_LENGTH: u64 = 1024 * 1024;
 ///   larger resource is read by seeking the source to it first.
 /// * The samples come as `Iterator` items, in the order the reader completes
 ///   them — a movie lying before its media data has them come as the file
-///   lays them down; one lying after it has them come as the bytes each
-///   lacks are fetched, which is the order the movie declares them. The
-///   boxes the reader read into values are there to read once they have
-///   come: [`file_type`](Self::file_type) and [`movie`](Self::movie).
-/// * The bytes fetched for a want are read off the source whole; a source
-///   ending before them is [`Io`](crate::DriverErrorKind::Io) with
-///   [`UnexpectedEof`](io::ErrorKind::UnexpectedEof). A source ending before
-///   a want lying ahead is the reader's to report at the end of the file, as
-///   [`Structure`](crate::DriverErrorKind::Structure).
+///   lays them down; one lying after it has them come in the order the
+///   reader holds their extents, as the bytes fetched for the extent held
+///   longest complete them. The boxes the reader read into values are there
+///   to read once they have come: [`file_type`](Self::file_type) and
+///   [`movie`](Self::movie).
+/// * The bytes fetched for a want come off the source a cut at a time, as
+///   the file does, so every extent the cut reaches is filled by it. A
+///   source ending before bytes the reader lacks is the reader's to report
+///   at the end of the file, as
+///   [`Structure`](crate::DriverErrorKind::Structure); one ending before
+///   where it had already been read to is [`Io`](crate::DriverErrorKind::Io)
+///   with [`UnexpectedEof`](io::ErrorKind::UnexpectedEof).
 /// * A failure ends the iteration: the samples the reader had completed
 ///   before it come first, then the failure once, then `None` for good. The
 ///   end of the file is the same without the failure.
@@ -136,11 +139,18 @@ impl<S: Read + Seek> NonFragmentedDemuxer<S> {
         if let Some(wanted) = passed_by {
             // Why not checked_add: the want names bytes of a file the reader
             // is reading off a finite source, and a want past what the source
-            // holds is reported as the source ending, not as arithmetic.
+            // holds is the reader's to report once the file is over.
             self.source
                 .seek(SeekFrom::Start(self.origin.saturating_add(wanted.start)))?;
-            let length = wanted.end.saturating_sub(wanted.start);
-            if self.read_cut(length)? < length {
+            // Why not the want alone: a movie lying after its media data
+            // holds every extent at once, and a cut read from the first fills
+            // the ones behind it too, where fetching them one at a time
+            // costs a seek and a sweep of the extents held per sample.
+            let length = wanted.end.saturating_sub(wanted.start).max(CUT_LENGTH);
+            if self.read_cut(length)? == 0 {
+                // Why not carrying on: the want lies before what was handed
+                // over in order, so a source holding nothing there has shrunk
+                // since, and reading on would ask for the same bytes without end.
                 return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into());
             }
             self.reader.handle_data(wanted.start, &self.cut)?;
@@ -197,7 +207,7 @@ impl<S: Read + Seek> Iterator for NonFragmentedDemuxer<S> {
 mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
-    use std::io;
+    use std::io::{self, Read, Seek, SeekFrom};
 
     use isobmff_boxes::{
         ChunkOffsetBox, MediaDataBox, MovieBox, MovieHeaderBox, SampleSizeBox, SampleToChunkBox,
@@ -212,10 +222,54 @@ mod tests {
     use super::NonFragmentedDemuxer;
     use crate::{DriverErrorKind, Sample, StructureErrorKind};
 
-    /// What the demuxer yields off `file`, kind for kind, until it is over
-    fn yielded(file: Vec<u8>) -> Vec<Result<Vec<u8>, DriverErrorKind>> {
-        NonFragmentedDemuxer::new(io::Cursor::new(file))
-            .unwrap()
+    /// Source holding nothing past any position it is sought back to
+    struct Shrinking(io::Cursor<Vec<u8>>);
+
+    impl Read for Shrinking {
+        fn read(&mut self, into: &mut [u8]) -> io::Result<usize> {
+            self.0.read(into)
+        }
+    }
+
+    impl Seek for Shrinking {
+        fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
+            if let SeekFrom::Start(position) = from {
+                if position < self.0.position() {
+                    self.0
+                        .get_mut()
+                        .truncate(usize::try_from(position).unwrap());
+                }
+            }
+
+            self.0.seek(from)
+        }
+    }
+
+    /// A file of one `mdat` of `SAMP`, its movie after it declaring one sample of `size` bytes there
+    fn file_declaring_a_sample_of(size: u32) -> Vec<u8> {
+        let media_data = written(&MediaDataBox::new(b"SAMP".to_vec()));
+        let stbl = sample_table(
+            TimeToSampleBox::from_deltas([SAMPLE_DURATION]),
+            SampleToChunkBox::from_chunks([(1, 1)]).unwrap(),
+            SampleSizeBox::from_sizes([size]),
+            ChunkOffsetBox::from_offsets([8]).unwrap(),
+        );
+        let epoch = Mp4EpochSeconds::from_seconds(0);
+        let movie = MovieBox::new(
+            MovieHeaderBox::new(epoch, epoch, 90_000, 0, 2),
+            vec![track_laid_out(1, self_contained_data_reference(), stbl)],
+            None,
+        )
+        .unwrap();
+
+        [media_data, written(&movie)].concat()
+    }
+
+    /// What `demuxer` yields, kind for kind, until it is over
+    fn yielded(
+        demuxer: &mut NonFragmentedDemuxer<impl Read + Seek>,
+    ) -> Vec<Result<Vec<u8>, DriverErrorKind>> {
+        demuxer
             .map(|sample| {
                 sample
                     .map(Sample::into_data)
@@ -250,24 +304,25 @@ mod tests {
     }
 
     #[test]
-    fn a_source_ending_before_the_bytes_the_reader_lacks_is_reported_as_such() {
-        let media_data = written(&MediaDataBox::new(b"SAMP".to_vec()));
-        let stbl = sample_table(
-            TimeToSampleBox::from_deltas([SAMPLE_DURATION]),
-            SampleToChunkBox::from_chunks([(1, 1)]).unwrap(),
-            SampleSizeBox::from_sizes([4_096]),
-            ChunkOffsetBox::from_offsets([8]).unwrap(),
-        );
-        let epoch = Mp4EpochSeconds::from_seconds(0);
-        let movie = MovieBox::new(
-            MovieHeaderBox::new(epoch, epoch, 90_000, 0, 2),
-            vec![track_laid_out(1, self_contained_data_reference(), stbl)],
-            None,
-        )
-        .unwrap();
+    fn a_source_ending_before_the_bytes_the_reader_lacks_is_the_readers_to_report() {
+        let file = file_declaring_a_sample_of(4_096);
+        let mut demuxer = NonFragmentedDemuxer::new(io::Cursor::new(file)).unwrap();
 
         assert_eq!(
-            yielded([media_data, written(&movie)].concat()),
+            yielded(&mut demuxer),
+            [Err(DriverErrorKind::Structure(StructureErrorKind::Sample(
+                isobmff_sample::SampleErrorKind::UnfinishedSample
+            )))]
+        );
+    }
+
+    #[test]
+    fn a_source_shrunk_below_what_was_read_is_reported_as_ending() {
+        let file = file_declaring_a_sample_of(4);
+        let mut demuxer = NonFragmentedDemuxer::new(Shrinking(io::Cursor::new(file))).unwrap();
+
+        assert_eq!(
+            yielded(&mut demuxer),
             [Err(DriverErrorKind::Io(io::ErrorKind::UnexpectedEof))]
         );
     }
@@ -278,17 +333,8 @@ mod tests {
         file.extend_from_slice(b"\0\0\0\x04free");
         let mut demuxer = NonFragmentedDemuxer::new(io::Cursor::new(file)).unwrap();
 
-        let until_over: Vec<_> = demuxer
-            .by_ref()
-            .map(|sample| {
-                sample
-                    .map(Sample::into_data)
-                    .map_err(|failure| failure.kind())
-            })
-            .collect();
-
         assert_eq!(
-            until_over,
+            yielded(&mut demuxer),
             [
                 Ok(b"SAMP".to_vec()),
                 Err(DriverErrorKind::Structure(StructureErrorKind::Sequence(
@@ -303,9 +349,10 @@ mod tests {
     fn a_source_ending_inside_the_media_data_is_the_readers_to_report() {
         let mut file = non_fragmented_file(&[&[b"SAMP"]], true);
         file.truncate(file.len().saturating_sub(2));
+        let mut demuxer = NonFragmentedDemuxer::new(io::Cursor::new(file)).unwrap();
 
         assert_eq!(
-            yielded(file),
+            yielded(&mut demuxer),
             [Err(DriverErrorKind::Structure(
                 StructureErrorKind::Sequence(isobmff_sequence::ErrorKind::UnfinishedBox)
             ))]

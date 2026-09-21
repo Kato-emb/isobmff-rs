@@ -426,15 +426,14 @@ impl Default for FragmentedReader {
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec::Vec;
-
     use isobmff_boxes::{FileTypeBox, MovieBox, TrackExtendsBox};
     use isobmff_core::{BoxDefinition, BoxType};
     use isobmff_sample::{Sample, SampleReader};
     use isobmff_test_support::{file_type, fragmented_movie, framed, movie_fragment, written};
 
+    use super::super::tests::{file_of_one_sample, sample};
     use super::{FragmentedReader, StructureError};
-    use crate::{FragmentedWriter, StructureErrorKind};
+    use crate::StructureErrorKind;
 
     /// Movie of one track continued in fragments, whose defaults a `trex` states
     fn movie() -> MovieBox {
@@ -510,18 +509,7 @@ mod tests {
 
     #[test]
     fn the_samples_completed_before_a_framing_failure_are_still_taken() {
-        let mut writer = FragmentedWriter::new();
-        let mut file = Vec::new();
-
-        writer.handle_movie(movie()).unwrap();
-        writer.begin_fragment(1).unwrap();
-        writer
-            .handle_sample(Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec()))
-            .unwrap();
-        writer.finish_fragment().unwrap();
-        while let Some(written) = writer.poll_output() {
-            file.extend_from_slice(&written);
-        }
+        let mut file = file_of_one_sample();
         file.extend_from_slice(b"\0\0\0\x04free");
 
         let mut reader = FragmentedReader::new();
@@ -540,18 +528,7 @@ mod tests {
 
     #[test]
     fn the_bytes_the_reader_wants_fetched_complete_the_sample_as_the_media_data_would() {
-        let mut writer = FragmentedWriter::new();
-        let mut file = Vec::new();
-
-        writer.handle_movie(movie()).unwrap();
-        writer.begin_fragment(1).unwrap();
-        writer
-            .handle_sample(Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec()))
-            .unwrap();
-        writer.finish_fragment().unwrap();
-        while let Some(written) = writer.poll_output() {
-            file.extend_from_slice(&written);
-        }
+        let mut file = file_of_one_sample();
         let media_data = file.split_off(file.len().saturating_sub(4));
 
         let mut reader = FragmentedReader::new();
@@ -561,10 +538,7 @@ mod tests {
 
         let media_data_start = file.len() as u64;
         assert_eq!(wanted, media_data_start..media_data_start.saturating_add(4));
-        assert_eq!(
-            reader.poll_sample(),
-            Some(Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec()))
-        );
+        assert_eq!(reader.poll_sample(), Some(sample()));
     }
 
     #[test]
