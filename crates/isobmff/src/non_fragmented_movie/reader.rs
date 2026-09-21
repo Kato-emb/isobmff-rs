@@ -322,7 +322,7 @@ impl NonFragmentedReader {
             match event {
                 BoxEvent::Header(header) => {
                     self.structure
-                        .handle_header(header)
+                        .handle_box_type(header.box_type())
                         .and_then(|disposition| {
                             self.open = match disposition {
                                 Disposition::FileType => Some(Open::FileType(

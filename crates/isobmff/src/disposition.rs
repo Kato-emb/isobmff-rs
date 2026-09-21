@@ -2,7 +2,7 @@
 
 /// What a structure makes of a top-level box of a file
 ///
-/// A structure is handed the header of each top-level box and answers with
+/// A structure is handed the type of each top-level box and answers with
 /// one of these: the box is read whole into the value it names, its payload is
 /// passed on as media data, or it is passed over. Which boxes are read into
 /// values is the structure's to say, so each such box is a variant of its own,

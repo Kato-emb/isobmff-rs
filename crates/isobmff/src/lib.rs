@@ -4,9 +4,10 @@
 //! as all the data associated with a single timestamp. [`FragmentedReader`]
 //! takes a fragmented movie file as it arrives and reports the [`Sample`]s it
 //! carries, and [`NonFragmentedReader`] does the same for a non-fragmented
-//! one; [`FragmentedWriter`] goes the other way, laying samples down as a
-//! fragmented movie file. None reaches for a source or a sink of its own: when
-//! to read or write, and from or to where, stay with the caller.
+//! one; [`FragmentedWriter`] and [`NonFragmentedWriter`] go the other way,
+//! laying samples down as a file of either kind. None reaches for a source or
+//! a sink of its own: when to read or write, and from or to where, stay with
+//! the caller.
 //!
 //! # The layers a file is read through
 //!
@@ -44,15 +45,16 @@
 //!    the media data it declares, lying before the movie or after it. The
 //!    structure is the only layer that knows how a file is put together, and
 //!    the order a file breaks is its failure.
-//! 6. **Stack.** [`FragmentedReader`], [`FragmentedWriter`] and
-//!    [`NonFragmentedReader`] wire layers 1 to 5 into one machine per
-//!    structure and direction. A stack holds no rule and no failure kind of
-//!    its own: it passes every value between the layers, so a caller hands
-//!    over bytes and takes samples, or hands over samples and takes bytes, and
-//!    never sees one. Every offset above the framing is a file offset — the
-//!    extents the framing reports for a file handed over from its first byte,
-//!    the chunk offsets and base data offsets the boxes declare (§8.7.5,
-//!    §8.8.7) — and no layer here knows any other.
+//! 6. **Stack.** [`FragmentedReader`], [`FragmentedWriter`],
+//!    [`NonFragmentedReader`] and [`NonFragmentedWriter`] wire layers 1 to 5
+//!    into one machine per structure and direction. A stack holds no rule
+//!    and no failure kind of its own: it passes every value between the
+//!    layers, so a caller hands over bytes and takes samples, or hands over
+//!    samples and takes bytes, and never sees one. Every offset above the
+//!    framing is a file offset — the extents the framing reports for a file
+//!    handed over from its first byte, the chunk offsets and base data
+//!    offsets the boxes declare (§8.7.5, §8.8.7) — and no layer here knows
+//!    any other.
 //! 7. **The I/O.** Where the bytes come from and go to is the caller's: the
 //!    file is handed over from its first byte, output is taken, and what the
 //!    reader says it still lacks is fetched or not, so a `File`, a socket, or a
@@ -89,8 +91,9 @@
 //!
 //! The crate is `no_std` but needs `alloc`: a box read into a value is gathered
 //! whole, a sample owns the bytes it carries, the extents a movie or a fragment
-//! declares are held until the data that meets them arrives, and the samples of
-//! a fragment being written are held until it is closed.
+//! declares are held until the data that meets them arrives, the samples of a
+//! fragment or a chunk being written are held until it is laid down, and the
+//! movie a non-fragmented file is written against until the file is over.
 
 #![no_std]
 
@@ -103,11 +106,11 @@ mod structure_error;
 mod whole_box;
 
 pub use fragmented_movie::{FragmentedReader, FragmentedWriter};
-pub use non_fragmented_movie::NonFragmentedReader;
+pub use non_fragmented_movie::{NonFragmentedReader, NonFragmentedWriter};
 pub use structure_error::{StructureError, StructureErrorKind};
 
 pub(crate) use disposition::Disposition;
-pub(crate) use whole_box::{WholeBoxReader, whole_box_header, whole_payload};
+pub(crate) use whole_box::{WholeBoxReader, compact_box_header, whole_box_header, whole_payload};
 
 pub use isobmff_boxes::*;
 pub use isobmff_core::*;

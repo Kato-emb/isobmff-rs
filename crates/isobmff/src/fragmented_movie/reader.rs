@@ -337,7 +337,7 @@ impl FragmentedReader {
 
     /// Opens the box `header` introduces, as the structure disposes of it
     fn begin_box(&mut self, header: BoxHeader, start: u64) -> Result<(), StructureError> {
-        self.open = match self.structure.handle_header(header)? {
+        self.open = match self.structure.handle_box_type(header.box_type())? {
             Disposition::FileType => Some(Open::FileType(WholeBoxReader::begin(
                 header,
                 self.payload_limit,

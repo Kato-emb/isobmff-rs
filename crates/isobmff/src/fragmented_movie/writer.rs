@@ -269,7 +269,7 @@ impl FragmentedWriter {
             .map_err(|failure| self.fail(failure))?;
 
         self.structure
-            .handle_header(header)
+            .handle_box_type(box_type)
             .map_err(|failure| self.fail(failure))?;
 
         self.lay_down_step(BoxEvent::Header(header))?;

@@ -1,7 +1,7 @@
 //! [`FragmentedStructure`], the order of the top-level boxes of a fragmented movie file, ISO/IEC 14496-12 Annex A.8
 
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox, MovieFragmentBox};
-use isobmff_core::{BoxDefinition, BoxHeader, BoxType};
+use isobmff_core::{BoxDefinition, BoxType};
 
 use crate::{Disposition, StructureError};
 
@@ -10,7 +10,7 @@ use crate::{Disposition, StructureError};
 /// A fragmented movie file is laid out as ISO/IEC 14496-12 Annex A.8 has it:
 /// the brands it declares itself readable as, the movie its fragments
 /// continue, then one movie fragment after another with the media data each
-/// of them addresses. This machine holds that order. Handed the header of each
+/// of them addresses. This machine holds that order. Handed the type of each
 /// top-level box as it comes, it answers with the [`Disposition`] of that box
 /// — read whole into a value, passed on as media data, or passed over — and
 /// fails on a box the order does not place there. It reads no box itself:
@@ -76,7 +76,7 @@ impl FragmentedStructure {
         }
     }
 
-    /// Takes the header of the next top-level box, and returns what to do with that box
+    /// Takes the type of the next top-level box, and returns what to do with that box
     ///
     /// # Errors
     ///
@@ -89,9 +89,9 @@ impl FragmentedStructure {
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the structure keeps and reports
     ///   again for every call after it.
-    pub(crate) fn handle_header(
+    pub(crate) fn handle_box_type(
         &mut self,
-        header: BoxHeader,
+        box_type: BoxType,
     ) -> Result<Disposition, StructureError> {
         let position = match self.state {
             State::Reading(position) => position,
@@ -100,7 +100,7 @@ impl FragmentedStructure {
         };
 
         let (reached, disposition) =
-            place(position, header.box_type()).map_err(|failure| self.fail(failure))?;
+            place(position, box_type).map_err(|failure| self.fail(failure))?;
         self.state = State::Reading(reached);
 
         Ok(disposition)
@@ -175,14 +175,9 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxHeader, BoxType};
+    use isobmff_core::BoxType;
 
     use super::{Disposition, FragmentedStructure, StructureError};
-
-    /// Header of a top-level box of `fourcc`, whose payload is not looked at
-    fn header(fourcc: &[u8; 4]) -> BoxHeader {
-        BoxHeader::with_payload_len(BoxType::compact(*fourcc), 16).unwrap()
-    }
 
     /// The dispositions of the boxes named, in order, stopping at the first failure
     fn dispositions_of(fourccs: &[&[u8; 4]]) -> Result<Vec<Disposition>, StructureError> {
@@ -190,7 +185,7 @@ mod tests {
 
         fourccs
             .iter()
-            .map(|fourcc| structure.handle_header(header(fourcc)))
+            .map(|fourcc| structure.handle_box_type(BoxType::compact(**fourcc)))
             .collect()
     }
 
@@ -269,7 +264,9 @@ mod tests {
     fn a_file_declared_over_without_a_movie_is_rejected() {
         let mut structure = FragmentedStructure::new();
 
-        structure.handle_header(header(b"ftyp")).unwrap();
+        structure
+            .handle_box_type(BoxType::compact(*b"ftyp"))
+            .unwrap();
 
         assert_eq!(
             structure.finish(),
@@ -283,7 +280,9 @@ mod tests {
     fn a_file_of_the_movie_alone_is_a_fragmented_movie_file() {
         let mut structure = FragmentedStructure::new();
 
-        structure.handle_header(header(b"moov")).unwrap();
+        structure
+            .handle_box_type(BoxType::compact(*b"moov"))
+            .unwrap();
 
         assert_eq!(structure.finish(), Ok(()));
     }
@@ -293,8 +292,14 @@ mod tests {
         let mut structure = FragmentedStructure::new();
         let failure = StructureError::box_out_of_order(BoxType::compact(*b"moof"));
 
-        assert_eq!(structure.handle_header(header(b"moof")), Err(failure));
-        assert_eq!(structure.handle_header(header(b"moov")), Err(failure));
+        assert_eq!(
+            structure.handle_box_type(BoxType::compact(*b"moof")),
+            Err(failure)
+        );
+        assert_eq!(
+            structure.handle_box_type(BoxType::compact(*b"moov")),
+            Err(failure)
+        );
         assert_eq!(structure.finish(), Err(failure));
     }
 
@@ -302,11 +307,13 @@ mod tests {
     fn a_header_handed_over_after_finishing_is_rejected() {
         let mut structure = FragmentedStructure::new();
 
-        structure.handle_header(header(b"moov")).unwrap();
+        structure
+            .handle_box_type(BoxType::compact(*b"moov"))
+            .unwrap();
         structure.finish().unwrap();
 
         assert_eq!(
-            structure.handle_header(header(b"moof")),
+            structure.handle_box_type(BoxType::compact(*b"moof")),
             Err(StructureError::already_finished())
         );
         assert_eq!(structure.finish(), Err(StructureError::already_finished()));
