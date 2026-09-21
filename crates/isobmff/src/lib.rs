@@ -1,11 +1,12 @@
-//! Sans-IO reader and writer for a fragmented ISO base media file and the samples it carries
+//! Sans-IO readers and writers for an ISO base media file and the samples it carries
 //!
 //! A presentation is carried as samples — ISO/IEC 14496-12 §3.1.14 has a sample
 //! as all the data associated with a single timestamp. [`FragmentedReader`]
 //! takes a fragmented movie file as it arrives and reports the [`Sample`]s it
-//! carries; [`FragmentedWriter`] goes the other way, laying samples down as such
-//! a file. Neither reaches for a source or a sink of its own: when to read or
-//! write, and from or to where, stay with the caller.
+//! carries, and [`NonFragmentedReader`] does the same for a non-fragmented
+//! one; [`FragmentedWriter`] goes the other way, laying samples down as a
+//! fragmented movie file. None reaches for a source or a sink of its own: when
+//! to read or write, and from or to where, stay with the caller.
 //!
 //! # The layers a file is read through
 //!
@@ -36,17 +37,20 @@
 //!    extent names are dropped.
 //! 5. **Structure.** The order of the top-level boxes of one kind of file, and
 //!    what is to be done with each: read into a value, offered to the samples
-//!    as media data, or passed over. The fragmented movie file of Annex A.8 —
-//!    the brands, the movie, then one movie fragment after another with the
-//!    media data beside it — is the one structure this crate holds so far. It
-//!    is the only layer that knows how a file is put together, and the order
-//!    a file breaks is its failure.
-//! 6. **Stack.** [`FragmentedReader`] and [`FragmentedWriter`] wire layers 1
-//!    to 5 into one machine per structure and direction. A stack holds no rule
-//!    and no failure kind of its own: a reading stack adds the offset a caller
-//!    hands over to the extents the framing reports, and either passes every
-//!    value between the layers, so a caller hands over bytes and takes
-//!    samples, or hands over samples and takes bytes, and never sees one.
+//!    as media data, or passed over. Two structures are held so far: the
+//!    fragmented movie file of Annex A.8 — the brands, the movie, then one
+//!    movie fragment after another with the media data beside it — and the
+//!    non-fragmented movie file of §8.2.1 — the brands, the one movie, and
+//!    the media data it declares, lying before the movie or after it. The
+//!    structure is the only layer that knows how a file is put together, and
+//!    the order a file breaks is its failure.
+//! 6. **Stack.** [`FragmentedReader`], [`FragmentedWriter`] and
+//!    [`NonFragmentedReader`] wire layers 1 to 5 into one machine per
+//!    structure and direction. A stack holds no rule and no failure kind of
+//!    its own: a reading stack adds the offset a caller hands over to the
+//!    extents the framing reports, and either passes every value between the
+//!    layers, so a caller hands over bytes and takes samples, or hands over
+//!    samples and takes bytes, and never sees one.
 //! 7. **The I/O.** Where the bytes come from and go to is the caller's: input
 //!    is handed over with the offset it lies at, output is taken, and what the
 //!    reader says it still lacks is fetched or not, so a `File`, a socket, or a
@@ -80,9 +84,9 @@
 //! # `no_std`
 //!
 //! The crate is `no_std` but needs `alloc`: a box read into a value is gathered
-//! whole, a sample owns the bytes it carries, the extents of a fragment are held
-//! until the data that meets them arrives, and the samples of a fragment being
-//! written are held until it is closed.
+//! whole, a sample owns the bytes it carries, the extents a movie or a fragment
+//! declares are held until the data that meets them arrives, and the samples of
+//! a fragment being written are held until it is closed.
 
 #![no_std]
 
@@ -90,15 +94,15 @@ extern crate alloc;
 
 mod disposition;
 mod fragmented_movie;
-mod fragmented_structure;
+mod non_fragmented_movie;
 mod structure_error;
 mod whole_box;
 
 pub use fragmented_movie::{FragmentedReader, FragmentedWriter};
+pub use non_fragmented_movie::NonFragmentedReader;
 pub use structure_error::{StructureError, StructureErrorKind};
 
 pub(crate) use disposition::Disposition;
-pub(crate) use fragmented_structure::FragmentedStructure;
 pub(crate) use whole_box::{WholeBoxReader, whole_box_header, whole_payload};
 
 pub use isobmff_boxes::*;
