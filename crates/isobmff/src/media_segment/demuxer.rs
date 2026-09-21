@@ -35,7 +35,7 @@ use crate::{Demuxing, DriverError, ReadSamples, StructureError};
 ///   segment, as [`Structure`](crate::DriverErrorKind::Structure); one
 ///   ending before where it had already been read to is
 ///   [`Io`](crate::DriverErrorKind::Io) with
-///   [`UnexpectedEof`](io::ErrorKind::UnexpectedEof).
+///   [`UnexpectedEof`](std::io::ErrorKind::UnexpectedEof).
 /// * A failure ends the iteration: the samples the reader had completed
 ///   before it come first, then the failure once, then `None` for good. The
 ///   end of the segment is the same without the failure.
