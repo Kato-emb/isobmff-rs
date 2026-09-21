@@ -22,10 +22,11 @@ use crate::{DriverError, StructureError};
 ///   [`Structure`](crate::DriverErrorKind::Structure). What the writer made
 ///   of a call is written before the call reports, the bytes made before a
 ///   refusal included; a sink refusing them is
-///   [`Io`](crate::DriverErrorKind::Io), reported after the writer's own
-///   failure if both fail. The sink is written to a box header or a sample
-///   at a time, as the writer hands them over; one that is costly to write
-///   to in small pieces is the caller's to wrap in a `BufWriter`.
+///   [`Io`](crate::DriverErrorKind::Io), unless the writer refused the call
+///   too, whose failure is the one reported. The sink is written to a box
+///   header, a box payload, or one sample of a chunk at a time, as the
+///   writer hands them over; one that is costly to write to in small pieces
+///   is the caller's to wrap in a `BufWriter`.
 /// * [`finish`](Self::finish) declares the file over, writes the movie the
 ///   writer lays down last, and flushes the sink.
 ///
@@ -90,7 +91,6 @@ impl<W: Write> NonFragmentedMuxer<W> {
     ///
     /// * [`Structure`](crate::DriverErrorKind::Structure): what
     ///   [`NonFragmentedWriter::handle_movie`] makes of the call.
-    /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes.
     pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), DriverError> {
         self.drive(|writer| writer.handle_movie(movie))
     }
@@ -112,7 +112,6 @@ impl<W: Write> NonFragmentedMuxer<W> {
     ///
     /// * [`Structure`](crate::DriverErrorKind::Structure): what
     ///   [`NonFragmentedWriter::handle_sample`] makes of the call.
-    /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes.
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), DriverError> {
         self.drive(|writer| writer.handle_sample(sample))
     }
@@ -196,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn a_sink_taking_no_byte_is_reported_as_such() {
+    fn a_sink_taking_no_byte_is_reported_as_the_sink_failing() {
         let mut muxer = NonFragmentedMuxer::new(&mut [][..]);
 
         assert_eq!(

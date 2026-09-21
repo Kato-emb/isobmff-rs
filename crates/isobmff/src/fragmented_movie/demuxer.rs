@@ -32,7 +32,8 @@ const CUT_LENGTH: u64 = 1024 * 1024;
 ///   read once they have come: [`file_type`](Self::file_type) and
 ///   [`movie`](Self::movie).
 /// * The bytes fetched for a want come off the source a cut at a time, as
-///   the file does, so every extent the cut reaches is filled by it. A
+///   the file does — a cut reaching at least to the end of the want — so
+///   every extent the cut reaches is filled by it. A
 ///   source ending before bytes the reader lacks is the reader's to report
 ///   at the end of the file, as
 ///   [`Structure`](crate::DriverErrorKind::Structure); one ending before
@@ -144,15 +145,15 @@ impl<S: Read + Seek> FragmentedDemuxer<S> {
             .wanted_extent()
             .filter(|wanted| wanted.start < self.handed);
         if let Some(wanted) = passed_by {
-            // Why not checked_add: the want names bytes of a file the reader
-            // is reading off a finite source, and a want past what the source
-            // holds is the reader's to report once the file is over.
+            // Why not checked_add: the want lies before `handed`, a position
+            // the source already stood at, so neither sum can run past what
+            // 64 bits carry.
             self.source
                 .seek(SeekFrom::Start(self.origin.saturating_add(wanted.start)))?;
-            // Why not the want alone: a movie lying after its media data
-            // holds every extent at once, and a cut read from the first fills
-            // the ones behind it too, where fetching them one at a time
-            // costs a seek and a sweep of the extents held per sample.
+            // Why not the want alone: a fragment holds every extent it
+            // addresses at once, and a cut read from the first fills the ones
+            // behind it too, where fetching them one at a time costs a seek
+            // and a sweep of the extents held per sample.
             let length = wanted.end.saturating_sub(wanted.start).max(CUT_LENGTH);
             if self.read_cut(length)? == 0 {
                 // Why not carrying on: the want lies before what was handed
