@@ -1,0 +1,503 @@
+//! [`NonFragmentedWriter`], a non-fragmented movie file laid down as the samples come
+
+use alloc::vec::Vec;
+
+use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox};
+use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader};
+use isobmff_sample::{Sample, SampleError, SampleTableWriter};
+use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
+
+use super::NonFragmentedStructure;
+use crate::{StructureError, compact_box_header, whole_box_header, whole_payload};
+
+/// Lays a non-fragmented movie file down, taking the samples as they come
+///
+/// The mirror of [`NonFragmentedReader`](crate::NonFragmentedReader): it
+/// wires the layers that write a non-fragmented movie file — the structure
+/// that holds the order of the top-level boxes, the writing of each box
+/// whole, the laying out of the samples as the sample tables of the movie
+/// (ISO/IEC 14496-12 §8.7), and the framing of the file — so a caller hands
+/// over boxes and samples and takes bytes. It holds no rule of its own, and
+/// reaches for no destination: when to write and to where stay with the
+/// caller.
+///
+/// The file is only ever appended to. The media data goes down as the
+/// samples come, one `mdat` per chunk with its length declared (§8.1.1), and
+/// the movie goes down last, once every chunk offset it states is known: a
+/// file with its movie first is a rearrangement of this one, not a mode of
+/// the writer.
+///
+/// # Contract
+///
+/// * The order of the boxes is the structure's, held to as they are handed
+///   over: the `ftyp` first if at all, the `moov` once. A box handed over out
+///   of that order is [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder)
+///   or [`DuplicateBox`](crate::StructureErrorKind::DuplicateBox), and a file
+///   declared over without a `moov` is
+///   [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox).
+/// * The movie handed to [`handle_movie`](Self::handle_movie) is a template:
+///   what it declares of each track is laid down as it stands, but for the
+///   sample tables, which the writer fills in from the samples of that track
+///   at [`finish`](Self::finish) — the `stsd` kept, the four tables laying
+///   the samples out replaced. Durations stay the caller's. A sample of a
+///   track the movie does not declare is
+///   [`Sample`](crate::StructureErrorKind::Sample) at
+///   [`finish`](Self::finish), where the two meet.
+/// * A chunk is opened by [`begin_chunk`](Self::begin_chunk), carries the
+///   samples handed over next, and is laid down as one `mdat` when the next
+///   chunk is opened or the file is declared over. What the samples must
+///   hold to — one track per chunk, a decode timeline that carries on from
+///   sample to sample, no composition offsets or flags the four tables cannot
+///   state — is [`SampleTableWriter`]'s contract, reported as
+///   [`Sample`](crate::StructureErrorKind::Sample).
+/// * The bytes are taken from [`poll_output`](Self::poll_output), one
+///   [`EventBytes`] a call, owned by whoever takes them. The caller drains
+///   before handing over more: bytes are held until they are taken, so
+///   writing on without polling has the writer hold the whole file. The
+///   samples of the chunk that is open are held until it is laid down.
+/// * An `Err` leaves the writer failed for good,
+///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished) aside:
+///   every later call reports that same failure again. The bytes made before
+///   it are still there to take.
+/// * [`finish`](Self::finish) declares the file over. Bytes are still taken
+///   after it, but anything handed over then, or a second
+///   [`finish`](Self::finish), is
+///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished).
+///
+/// # Examples
+///
+/// ```
+/// use isobmff::{NonFragmentedReader, NonFragmentedWriter, Sample};
+/// # use isobmff_test_support::{file_type, unfragmented_movie};
+/// // A file opening with its brands, whose movie declares one track and no sample yet
+/// let mut writer = NonFragmentedWriter::new();
+/// writer.handle_file_type(file_type())?;
+/// writer.handle_movie(unfragmented_movie())?;
+///
+/// // Two chunks of track 1, each laid down as its own `mdat`
+/// writer.begin_chunk()?;
+/// writer.handle_sample(Sample::new(1, 0, 3_000, 0, 0, 1, b"SAMP".to_vec()))?;
+/// writer.handle_sample(Sample::new(1, 3_000, 3_000, 0, 0, 1, b"DATA".to_vec()))?;
+/// writer.begin_chunk()?;
+/// writer.handle_sample(Sample::new(1, 6_000, 3_000, 0, 0, 1, b"LAST".to_vec()))?;
+/// writer.finish()?;
+///
+/// // The bytes are drained as the writer hands them over
+/// let mut file = Vec::new();
+/// while let Some(written) = writer.poll_output() {
+///     file.extend_from_slice(&written);
+/// }
+///
+/// // The file opens with the brands
+/// assert_eq!(&file[4..8], b"ftyp");
+///
+/// // Read back, the movie comes last, names where the samples lie, and they come out as laid down
+/// let mut reader = NonFragmentedReader::new();
+/// reader.handle_input(&file)?;
+/// while let Some(wanted) = reader.wanted_extent() {
+///     reader.handle_data(wanted.start, &file[wanted.start as usize..wanted.end as usize])?;
+/// }
+/// reader.finish()?;
+/// assert_eq!(reader.movie().map(|moov| moov.trak().len()), Some(1));
+/// let read_back: Vec<Vec<u8>> = core::iter::from_fn(|| reader.poll_sample())
+///     .map(Sample::into_data)
+///     .collect();
+/// assert_eq!(read_back, [b"SAMP".to_vec(), b"DATA".to_vec(), b"LAST".to_vec()]);
+/// # Ok::<(), isobmff::StructureError>(())
+/// ```
+#[derive(Debug)]
+pub struct NonFragmentedWriter {
+    boxes: BoxWriter,
+    structure: NonFragmentedStructure,
+    samples: SampleTableWriter,
+    movie: Option<MovieBox>,
+    chunk: Option<Vec<u8>>,
+    laid_down: u64,
+    state: State,
+}
+
+/// Where the writer stands between calls
+#[derive(Clone, Copy, Debug)]
+enum State {
+    /// Laying the file down as the boxes and the samples come
+    Writing,
+    /// Told the file is over, and taking nothing more
+    Finished,
+    /// Failed, and reporting that same failure for every call after it
+    Failed(StructureError),
+}
+
+impl NonFragmentedWriter {
+    /// Creates a writer waiting at the start of a non-fragmented movie file
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            boxes: BoxWriter::new(),
+            structure: NonFragmentedStructure::new(),
+            samples: SampleTableWriter::new(),
+            movie: None,
+            chunk: None,
+            laid_down: 0,
+            state: State::Writing,
+        }
+    }
+
+    /// Takes the brands the file declares itself readable as, and lays them down
+    ///
+    /// # Errors
+    ///
+    /// * [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder): a box
+    ///   was handed over before them.
+    /// * [`Box`](crate::StructureErrorKind::Box): the box does not write.
+    /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
+    ///   file was declared over by [`finish`](Self::finish).
+    /// * The failure of a previous call, which the writer keeps and reports
+    ///   again for every call after it.
+    pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), StructureError> {
+        self.writing()?;
+        let payload = whole_payload(&file_type).map_err(|failure| self.fail(failure))?;
+        let header = whole_box_header(FileTypeBox::BOX_TYPE, payload.len() as u64)
+            .map_err(|failure| self.fail(failure))?;
+
+        self.lay_down(header, payload)
+    }
+
+    /// Takes the movie as a template, to be laid down last with its sample tables filled in
+    ///
+    /// The movie is declared to the structure here, where it is handed over,
+    /// and written at [`finish`](Self::finish), once the samples have been.
+    ///
+    /// # Errors
+    ///
+    /// * [`DuplicateBox`](crate::StructureErrorKind::DuplicateBox): a movie
+    ///   was handed over already.
+    /// * [`Box`](crate::StructureErrorKind::Box): the movie declares a
+    ///   payload no header measures.
+    /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
+    ///   file was declared over by [`finish`](Self::finish).
+    /// * The failure of a previous call, which the writer keeps and reports
+    ///   again for every call after it.
+    pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), StructureError> {
+        self.writing()?;
+        // Why not declaring the movie to the structure at `finish`: a second
+        // movie is refused where it is handed over, before chunks are laid
+        // down against the first, and the structure places a `moov` the same
+        // before the media data as after it.
+        let header = whole_box_header(MovieBox::BOX_TYPE, movie.payload_len())
+            .map_err(|failure| self.fail(failure))?;
+        self.structure
+            .handle_header(header)
+            .map_err(|failure| self.fail(failure))?;
+        self.movie = Some(movie);
+
+        Ok(())
+    }
+
+    /// Opens a chunk, which the samples handed over next are laid out in, laying down the chunk open before it
+    ///
+    /// # Errors
+    ///
+    /// * [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder): brands
+    ///   were laid down after the chunk before this one.
+    /// * [`Box`](crate::StructureErrorKind::Box): the chunk before this one
+    ///   is longer than the `size` field of its `mdat` declares.
+    /// * [`Sample`](crate::StructureErrorKind::Sample): what the sample layer
+    ///   makes of the call.
+    /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
+    ///   file was declared over by [`finish`](Self::finish).
+    /// * The failure of a previous call, which the writer keeps and reports
+    ///   again for every call after it.
+    pub fn begin_chunk(&mut self) -> Result<(), StructureError> {
+        self.writing()?;
+        self.lay_down_chunk()?;
+        // Why not measuring the header once the chunk is whole: the chunk
+        // offset is stated before it is, so the chunk goes down under the
+        // compact header whatever its length, and is refused where that form
+        // cannot declare it.
+        let header =
+            compact_box_header(MediaDataBox::BOX_TYPE, 0).map_err(|failure| self.fail(failure))?;
+        // Why not checked_add: the bytes laid down were framed out of values
+        // that fit in memory, so their sum cannot run past what 64 bits carry.
+        let chunk_offset = self.laid_down.saturating_add(header.encoded_len() as u64);
+        self.samples
+            .begin_chunk(chunk_offset)
+            .map_err(|failure| self.fail(failure.into()))?;
+        self.chunk = Some(Vec::new());
+
+        Ok(())
+    }
+
+    /// Takes a sample, and places it at the end of the chunk that is open
+    ///
+    /// # Errors
+    ///
+    /// * [`Sample`](crate::StructureErrorKind::Sample): what the sample layer
+    ///   makes of the sample.
+    /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
+    ///   file was declared over by [`finish`](Self::finish).
+    /// * The failure of a previous call, which the writer keeps and reports
+    ///   again for every call after it.
+    pub fn handle_sample(&mut self, sample: Sample) -> Result<(), StructureError> {
+        self.writing()?;
+        let data = self
+            .samples
+            .handle_sample(sample)
+            .map_err(|failure| self.fail(failure.into()))?;
+        // Why not unreachable: the sample layer refused the sample if no chunk
+        // was open, so one is open here, and the fallback opens the chunk it
+        // would have needed in place of a panic the lints forbid.
+        self.chunk
+            .get_or_insert_with(Vec::new)
+            .extend_from_slice(&data);
+
+        Ok(())
+    }
+
+    /// Hands over the bytes the file has been laid down as so far
+    ///
+    /// Reports `None` once they are used up: more samples are needed, or the
+    /// file is over. Failure is reported by the calls that take the boxes and
+    /// the samples, so this one never fails — a failed writer hands over the
+    /// bytes it had already made, then nothing from there on.
+    pub fn poll_output(&mut self) -> Option<EventBytes> {
+        self.boxes.poll_output()
+    }
+
+    /// Declares the file over, laying down the chunk that is open and then the movie
+    ///
+    /// # Errors
+    ///
+    /// * [`Box`](crate::StructureErrorKind::Box): the chunk that was open is
+    ///   longer than the `size` field of its `mdat` declares, the sample
+    ///   tables of a track do not fit their boxes, or the movie does not
+    ///   write.
+    /// * [`Sample`](crate::StructureErrorKind::Sample): what the sample layer
+    ///   makes of the samples as a whole, or a sample belongs to a track the
+    ///   movie does not declare.
+    /// * [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox):
+    ///   the movie was never handed over, so the file laid down is not a
+    ///   non-fragmented movie file.
+    /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
+    ///   file was already declared over.
+    /// * The failure of a previous call, which the writer keeps and reports
+    ///   again for every call after it.
+    pub fn finish(&mut self) -> Result<(), StructureError> {
+        self.writing()?;
+        self.lay_down_chunk()?;
+        let tables = self
+            .samples
+            .finish()
+            .map_err(|failure| self.fail(failure.into()))?;
+        self.structure
+            .finish()
+            .map_err(|failure| self.fail(failure))?;
+        // Why not unreachable: the structure declared the file over only with
+        // the movie in it, so one was handed over, and the fallback repeats
+        // what the structure answers a file without one with, in place of a
+        // panic the lints forbid.
+        let Some(mut movie) = self.movie.take() else {
+            return Err(self.fail(StructureError::missing_mandatory_box(MovieBox::BOX_TYPE)));
+        };
+        for (track_id, tables) in tables {
+            let Some(mdia) = movie.mdia_mut(track_id) else {
+                return Err(self.fail(SampleError::unknown_track_id(track_id).into()));
+            };
+            let stbl = mdia.minf_mut().stbl_mut();
+            *stbl = tables.into_sample_table(stbl.stsd().clone());
+        }
+        let payload = whole_payload(&movie).map_err(|failure| self.fail(failure))?;
+        let header = whole_box_header(MovieBox::BOX_TYPE, payload.len() as u64)
+            .map_err(|failure| self.fail(failure))?;
+        self.frame(header, payload)?;
+        self.boxes
+            .finish()
+            .map_err(|failure| self.fail(failure.into()))?;
+        self.state = State::Finished;
+
+        Ok(())
+    }
+
+    /// Returns `Ok` while the writer still takes boxes and samples
+    const fn writing(&self) -> Result<(), StructureError> {
+        match self.state {
+            State::Writing => Ok(()),
+            State::Finished => Err(StructureError::already_finished()),
+            State::Failed(failure) => Err(failure),
+        }
+    }
+
+    /// Lays the chunk that is open down as an `mdat`, if one is open
+    fn lay_down_chunk(&mut self) -> Result<(), StructureError> {
+        let Some(media_data) = self.chunk.take() else {
+            return Ok(());
+        };
+        let header = compact_box_header(MediaDataBox::BOX_TYPE, media_data.len() as u64)
+            .map_err(|failure| self.fail(failure))?;
+
+        self.lay_down(header, media_data)
+    }
+
+    /// Lays one box down where the structure places it, through the framing of the file
+    fn lay_down(&mut self, header: BoxHeader, payload: Vec<u8>) -> Result<(), StructureError> {
+        self.structure
+            .handle_header(header)
+            .map_err(|failure| self.fail(failure))?;
+
+        self.frame(header, payload)
+    }
+
+    /// Hands one box over to the framing of the file, and counts it as laid down
+    fn frame(&mut self, header: BoxHeader, payload: Vec<u8>) -> Result<(), StructureError> {
+        // Why not checked_add: the bytes laid down were framed out of values
+        // that fit in memory, so their sum cannot run past what 64 bits carry.
+        self.laid_down = self
+            .laid_down
+            .saturating_add(header.encoded_len() as u64)
+            .saturating_add(payload.len() as u64);
+
+        self.frame_step(BoxEvent::Header(header))?;
+        if !payload.is_empty() {
+            self.frame_step(BoxEvent::Payload(payload))?;
+        }
+        self.frame_step(BoxEvent::End)
+    }
+
+    /// Hands one step of the framing over, failing the writer where it is refused
+    fn frame_step(&mut self, step: BoxEvent) -> Result<(), StructureError> {
+        self.boxes
+            .handle_event(step)
+            .map_err(|failure| self.fail(failure.into()))
+    }
+
+    /// Fails the writer for good, and hands the failure back to report
+    const fn fail(&mut self, failure: StructureError) -> StructureError {
+        self.state = State::Failed(failure);
+
+        failure
+    }
+}
+
+impl Default for NonFragmentedWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use isobmff_boxes::{FileTypeBox, MovieBox};
+    use isobmff_core::BoxDefinition;
+    use isobmff_sample::{Sample, SampleErrorKind};
+    use isobmff_test_support::{file_type, unfragmented_movie};
+
+    use super::{NonFragmentedWriter, StructureError};
+    use crate::StructureErrorKind;
+
+    /// A sample of the track the movie declares
+    fn sample() -> Sample {
+        Sample::new(1, 0, 3_000, 0, 0, 1, b"SAMP".to_vec())
+    }
+
+    #[test]
+    fn a_file_declaring_no_brands_is_laid_down_all_the_same() {
+        let mut writer = NonFragmentedWriter::new();
+
+        writer.handle_movie(unfragmented_movie()).unwrap();
+
+        assert_eq!(writer.finish(), Ok(()));
+        assert!(writer.poll_output().unwrap().ends_with(b"moov"));
+    }
+
+    #[test]
+    fn a_second_movie_is_rejected() {
+        let mut writer = NonFragmentedWriter::new();
+
+        writer.handle_movie(unfragmented_movie()).unwrap();
+
+        assert_eq!(
+            writer.handle_movie(unfragmented_movie()),
+            Err(StructureError::duplicate_box(MovieBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn a_sample_handed_over_while_no_chunk_is_open_is_rejected() {
+        let mut writer = NonFragmentedWriter::new();
+
+        assert_eq!(
+            writer.handle_sample(sample()).map_err(StructureError::kind),
+            Err(StructureErrorKind::Sample(SampleErrorKind::NoChunkOpen))
+        );
+    }
+
+    #[test]
+    fn a_sample_of_a_track_the_movie_does_not_declare_is_rejected_when_the_file_is_declared_over() {
+        let mut writer = NonFragmentedWriter::new();
+
+        writer.handle_movie(unfragmented_movie()).unwrap();
+        writer.begin_chunk().unwrap();
+        writer
+            .handle_sample(Sample::new(7, 0, 3_000, 0, 0, 1, b"SAMP".to_vec()))
+            .unwrap();
+
+        assert_eq!(
+            writer.finish().map_err(StructureError::kind),
+            Err(StructureErrorKind::Sample(SampleErrorKind::UnknownTrackId))
+        );
+    }
+
+    #[test]
+    fn a_file_declared_over_without_a_movie_is_rejected() {
+        let mut writer = NonFragmentedWriter::new();
+
+        writer.handle_file_type(file_type()).unwrap();
+
+        assert_eq!(
+            writer.finish(),
+            Err(StructureError::missing_mandatory_box(MovieBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn a_failed_writer_reports_the_same_failure_for_every_call_after_it() {
+        let mut writer = NonFragmentedWriter::new();
+        let failure = StructureError::box_out_of_order(FileTypeBox::BOX_TYPE);
+
+        writer.handle_movie(unfragmented_movie()).unwrap();
+
+        assert_eq!(writer.handle_file_type(file_type()), Err(failure));
+        assert_eq!(writer.begin_chunk(), Err(failure));
+        assert_eq!(writer.handle_sample(sample()), Err(failure));
+        assert_eq!(writer.finish(), Err(failure));
+    }
+
+    #[test]
+    fn a_failed_writer_hands_over_the_bytes_it_had_already_laid_down() {
+        let mut writer = NonFragmentedWriter::new();
+
+        writer.handle_file_type(file_type()).unwrap();
+
+        assert!(writer.handle_file_type(file_type()).is_err());
+
+        assert_eq!(*writer.poll_output().unwrap(), *b"\0\0\0\x18ftyp");
+    }
+
+    #[test]
+    fn anything_handed_over_after_finishing_is_rejected() {
+        let mut writer = NonFragmentedWriter::new();
+
+        writer.handle_file_type(file_type()).unwrap();
+        writer.handle_movie(unfragmented_movie()).unwrap();
+        writer.finish().unwrap();
+
+        assert_eq!(
+            writer.begin_chunk(),
+            Err(StructureError::already_finished())
+        );
+        assert_eq!(
+            writer.handle_sample(sample()),
+            Err(StructureError::already_finished())
+        );
+        assert_eq!(writer.finish(), Err(StructureError::already_finished()));
+    }
+}

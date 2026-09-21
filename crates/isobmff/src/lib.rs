@@ -4,9 +4,10 @@
 //! as all the data associated with a single timestamp. [`FragmentedReader`]
 //! takes a fragmented movie file as it arrives and reports the [`Sample`]s it
 //! carries, and [`NonFragmentedReader`] does the same for a non-fragmented
-//! one; [`FragmentedWriter`] goes the other way, laying samples down as a
-//! fragmented movie file. None reaches for a source or a sink of its own: when
-//! to read or write, and from or to where, stay with the caller.
+//! one; [`FragmentedWriter`] and [`NonFragmentedWriter`] go the other way,
+//! laying samples down as a file of either kind. None reaches for a source or
+//! a sink of its own: when to read or write, and from or to where, stay with
+//! the caller.
 //!
 //! # The layers a file is read through
 //!
@@ -44,9 +45,9 @@
 //!    the media data it declares, lying before the movie or after it. The
 //!    structure is the only layer that knows how a file is put together, and
 //!    the order a file breaks is its failure.
-//! 6. **Stack.** [`FragmentedReader`], [`FragmentedWriter`] and
-//!    [`NonFragmentedReader`] wire layers 1 to 5 into one machine per
-//!    structure and direction. A stack holds no rule and no failure kind of
+//! 6. **Stack.** [`FragmentedReader`], [`FragmentedWriter`],
+//!    [`NonFragmentedReader`] and [`NonFragmentedWriter`] wire layers 1 to 5
+//!    into one machine per structure and direction. A stack holds no rule and no failure kind of
 //!    its own: it passes every value between the layers, so a caller hands
 //!    over bytes and takes samples, or hands over samples and takes bytes, and
 //!    never sees one. Every offset above the framing is a file offset — the
@@ -103,11 +104,11 @@ mod structure_error;
 mod whole_box;
 
 pub use fragmented_movie::{FragmentedReader, FragmentedWriter};
-pub use non_fragmented_movie::NonFragmentedReader;
+pub use non_fragmented_movie::{NonFragmentedReader, NonFragmentedWriter};
 pub use structure_error::{StructureError, StructureErrorKind};
 
 pub(crate) use disposition::Disposition;
-pub(crate) use whole_box::{WholeBoxReader, whole_box_header, whole_payload};
+pub(crate) use whole_box::{WholeBoxReader, compact_box_header, whole_box_header, whole_payload};
 
 pub use isobmff_boxes::*;
 pub use isobmff_core::*;

@@ -1,10 +1,10 @@
-//! [`WholeBoxReader`], [`whole_payload`] and [`whole_box_header`]: one box read whole out of the steps it was framed into, and written whole into the steps it is laid down as
+//! [`WholeBoxReader`], [`whole_payload`], [`whole_box_header`] and [`compact_box_header`]: one box read whole out of the steps it was framed into, and written whole into the steps it is laid down as
 
 use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxHeader, BoxType};
+use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, FieldWidth};
 
 use crate::StructureError;
 
@@ -145,6 +145,34 @@ pub(crate) fn whole_box_header(
         .ok_or_else(|| past_every_buffer(box_type, payload_len))
 }
 
+/// Returns the header of the whole box of `box_type` whose payload is `payload_len` bytes long, in the compact form alone
+///
+/// A writer that states where a payload lies before the payload is whole —
+/// the chunk offsets of a sample table name the media data before the `mdat`
+/// holding it is closed — counts on the header keeping the length the compact
+/// form has, so a payload the compact form cannot declare is refused rather
+/// than given the longer header that would move it.
+///
+/// # Errors
+///
+/// * [`Box`](crate::StructureErrorKind::Box): the total the box declares does
+///   not fit the 32 bits of the `size` field, reported as
+///   [`OutOfRange`](isobmff_core::ErrorKind::OutOfRange) of the box.
+pub(crate) fn compact_box_header(
+    box_type: BoxType,
+    payload_len: u64,
+) -> Result<BoxHeader, StructureError> {
+    let header = whole_box_header(box_type, payload_len)?;
+    if !matches!(header.size(), BoxSize::Compact(_)) {
+        return Err(StructureError::from(
+            isobmff_core::Error::out_of_range(payload_len, FieldWidth::Compact)
+                .in_container(box_type),
+        ));
+    }
+
+    Ok(header)
+}
+
 /// Reports a box longer than any buffer on this target, as `isobmff-core` names it
 fn past_every_buffer(box_type: BoxType, payload_len: u64) -> StructureError {
     // Why not a failure of its own: a payload past `usize`, and a header that
@@ -161,12 +189,13 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_boxes::{FileTypeBox, MovieBox};
+    use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox};
     use isobmff_core::{BoxHeader, BoxSize, FourCC};
     use isobmff_sequence::BoxEvent;
     use isobmff_test_support::{events_of, file_type, written};
 
-    use super::{BoxDefinition, StructureError, WholeBoxReader};
+    use super::{BoxDefinition, StructureError, WholeBoxReader, compact_box_header};
+    use crate::StructureErrorKind;
 
     /// Bytes a box may declare in these tests, unless one states its own limit
     const PAYLOAD_LIMIT: u64 = 1_024;
@@ -258,6 +287,17 @@ mod tests {
                 .box_error()
                 .map(|box_error| box_error.containers().collect::<Vec<_>>())),
             Err(Some(vec![FourCC::new(*b"moov")]))
+        );
+    }
+
+    #[test]
+    fn a_compact_header_is_refused_for_a_payload_only_the_extended_form_declares() {
+        let compact = compact_box_header(MediaDataBox::BOX_TYPE, 4).unwrap();
+
+        assert_eq!(compact.encoded_len(), 8);
+        assert_eq!(
+            compact_box_header(MediaDataBox::BOX_TYPE, 1 << 32).map_err(StructureError::kind),
+            Err(StructureErrorKind::Box(isobmff_core::ErrorKind::OutOfRange))
         );
     }
 }
