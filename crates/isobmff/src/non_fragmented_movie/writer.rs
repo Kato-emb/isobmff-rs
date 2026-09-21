@@ -24,23 +24,27 @@ use crate::{StructureError, compact_box_header, whole_box_header, whole_payload}
 ///
 /// The file is only ever appended to. The media data goes down as the
 /// samples come, one `mdat` per chunk with its length declared (§8.1.1), and
-/// the movie goes down last, once every chunk offset it states is known: a
-/// file with its movie first is a rearrangement of this one, not a mode of
-/// the writer.
+/// the movie goes down last, once every chunk offset it states is known
+/// (§8.7.5): a file with its movie first is a transform of this one, not a
+/// mode of the writer.
 ///
 /// # Contract
 ///
 /// * The order of the boxes is the structure's, held to as they are handed
-///   over: the `ftyp` first if at all, the `moov` once. A box handed over out
-///   of that order is [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder)
-///   or [`DuplicateBox`](crate::StructureErrorKind::DuplicateBox), and a file
+///   over — a box takes its place in the order where it is handed over or
+///   opened, whether its bytes go down then or later: the `ftyp` first if at
+///   all, before any chunk, the `moov` once. A box handed over out of that
+///   order is [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder) or
+///   [`DuplicateBox`](crate::StructureErrorKind::DuplicateBox), and a file
 ///   declared over without a `moov` is
 ///   [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox).
 /// * The movie handed to [`handle_movie`](Self::handle_movie) is a template:
 ///   what it declares of each track is laid down as it stands, but for the
 ///   sample tables, which the writer fills in from the samples of that track
 ///   at [`finish`](Self::finish) — the `stsd` kept, the four tables laying
-///   the samples out replaced. Durations stay the caller's. A sample of a
+///   the samples out replaced, and every other box the `stbl` carried
+///   dropped. A track no sample was handed over to keeps the sample tables
+///   it was handed over with. Durations stay the caller's. A sample of a
 ///   track the movie does not declare is
 ///   [`Sample`](crate::StructureErrorKind::Sample) at
 ///   [`finish`](Self::finish), where the two meet.
@@ -55,7 +59,7 @@ use crate::{StructureError, compact_box_header, whole_box_header, whole_payload}
 /// * The bytes are taken from [`poll_output`](Self::poll_output), one
 ///   [`EventBytes`] a call, owned by whoever takes them: the media data of a
 ///   chunk comes sample by sample, each in the allocation it was handed over
-///   in. The caller drains before handing over more: bytes are held until
+///   in, an empty one passed over. The caller drains before handing over more: bytes are held until
 ///   they are taken, so writing on without polling has the writer hold the
 ///   whole file. The samples of the chunk that is open are held until it is
 ///   laid down.
@@ -95,7 +99,7 @@ use crate::{StructureError, compact_box_header, whole_box_header, whole_payload}
 /// // The file opens with the brands
 /// assert_eq!(&file[4..8], b"ftyp");
 ///
-/// // Read back, the movie comes last, names where the samples lie, and they come out as laid down
+/// // Read back, the samples come out as they were laid down
 /// let mut reader = NonFragmentedReader::new();
 /// reader.handle_input(&file)?;
 /// while let Some(wanted) = reader.wanted_extent() {
@@ -159,14 +163,18 @@ impl NonFragmentedWriter {
         let payload = whole_payload(&file_type).map_err(|failure| self.fail(failure))?;
         let header = whole_box_header(FileTypeBox::BOX_TYPE, payload.len() as u64)
             .map_err(|failure| self.fail(failure))?;
+        self.structure
+            .handle_header(header)
+            .map_err(|failure| self.fail(failure))?;
 
-        self.lay_down(header, alloc::vec![payload])
+        self.frame(header, alloc::vec![payload])
     }
 
     /// Takes the movie as a template, to be laid down last with its sample tables filled in
     ///
-    /// The movie is declared to the structure here, where it is handed over,
-    /// and written at [`finish`](Self::finish), once the samples have been.
+    /// The movie takes its place in the order of the boxes here — a second
+    /// one is refused, and brands after it are out of order — and its bytes
+    /// go down at [`finish`](Self::finish), once the samples have.
     ///
     /// # Errors
     ///
@@ -178,11 +186,12 @@ impl NonFragmentedWriter {
     ///   again for every call after it.
     pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), StructureError> {
         self.writing()?;
-        // Why not declaring the movie to the structure at `finish`: a second
-        // movie is refused where it is handed over, before chunks are laid
-        // down against the first, and the structure places a `moov` the same
-        // before the media data as after it. The structure reads the type of
-        // the box alone, so the header measures nothing.
+        // Why not placing the movie in the order at `finish`: a second movie
+        // is refused where it is handed over, before chunks are laid down
+        // against the first, and the structure places a `moov` the same
+        // before the media data as after it.
+        // Why not measuring the movie here: its tables are not in it until
+        // `finish`, and the structure reads the type of the box alone.
         let header =
             whole_box_header(MovieBox::BOX_TYPE, 0).map_err(|failure| self.fail(failure))?;
         self.structure
@@ -195,14 +204,14 @@ impl NonFragmentedWriter {
 
     /// Opens a chunk, which the samples handed over next are laid out in, laying down the chunk open before it
     ///
+    /// The `mdat` of the chunk takes its place in the order of the boxes
+    /// here, and its bytes go down when the next chunk is opened or the file
+    /// is declared over.
+    ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder): brands
-    ///   were laid down after the chunk before this one.
     /// * [`Box`](crate::StructureErrorKind::Box): the chunk before this one
-    ///   is longer than the `size` field of its `mdat` declares.
-    /// * [`Sample`](crate::StructureErrorKind::Sample): what the sample layer
-    ///   makes of the call.
+    ///   is longer than the `size` field of an `mdat` can state.
     /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
@@ -216,8 +225,11 @@ impl NonFragmentedWriter {
         // cannot declare it.
         let header =
             compact_box_header(MediaDataBox::BOX_TYPE, 0).map_err(|failure| self.fail(failure))?;
-        // Why not checked_add: the bytes laid down were framed out of values
-        // that fit in memory, so their sum cannot run past what 64 bits carry.
+        self.structure
+            .handle_header(header)
+            .map_err(|failure| self.fail(failure))?;
+        // Why not checked_add: the framing already carries where the file
+        // ends in 64 bits, and a compact header is eight bytes past it.
         let chunk_offset = self
             .boxes
             .event_extent()
@@ -262,18 +274,15 @@ impl NonFragmentedWriter {
 
     /// Declares the file over, laying down the chunk that is open and then the movie
     ///
-    /// The movie was declared to the structure when it was handed over, so
-    /// the structure closes the file before the movie is framed.
-    ///
     /// # Errors
     ///
     /// * [`Box`](crate::StructureErrorKind::Box): the chunk that was open is
-    ///   longer than the `size` field of its `mdat` declares, the sample
-    ///   tables of a track do not fit their boxes, or the movie does not
-    ///   write.
+    ///   longer than the `size` field of an `mdat` can state, or the movie
+    ///   does not write.
     /// * [`Sample`](crate::StructureErrorKind::Sample): what the sample layer
-    ///   makes of the samples as a whole, or a sample belongs to a track the
-    ///   movie does not declare.
+    ///   makes of the samples as a whole — a chunk opened past what an `stco`
+    ///   entry reaches among them — or a sample belongs to a track the movie
+    ///   does not declare.
     /// * [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox):
     ///   the movie was never handed over, so the file laid down is not a
     ///   non-fragmented movie file.
@@ -284,7 +293,7 @@ impl NonFragmentedWriter {
     pub fn finish(&mut self) -> Result<(), StructureError> {
         self.writing()?;
         self.lay_down_chunk()?;
-        let tables = self
+        let tables_per_track = self
             .samples
             .finish()
             .map_err(|failure| self.fail(failure.into()))?;
@@ -292,18 +301,18 @@ impl NonFragmentedWriter {
             .finish()
             .map_err(|failure| self.fail(failure))?;
         // Why not unreachable: the structure declared the file over only with
-        // the movie in it, so one was handed over, and the fallback repeats
-        // what the structure answers a file without one with, in place of a
-        // panic the lints forbid.
+        // the movie in it, so one was handed over, and the fallback is the
+        // structure's own answer to a file without one, in place of a panic
+        // the lints forbid.
         let Some(mut movie) = self.movie.take() else {
             return Err(self.fail(StructureError::missing_mandatory_box(MovieBox::BOX_TYPE)));
         };
-        for (track_id, laid_out) in tables {
+        for (track_id, tables) in tables_per_track {
             let Some(mdia) = movie.mdia_mut(track_id) else {
                 return Err(self.fail(SampleError::unknown_track_id(track_id).into()));
             };
             let stbl = mdia.minf_mut().stbl_mut();
-            *stbl = laid_out.into_sample_table(stbl.stsd().clone());
+            *stbl = tables.into_sample_table(stbl.stsd().clone());
         }
         let payload = whole_payload(&movie).map_err(|failure| self.fail(failure))?;
         let header = whole_box_header(MovieBox::BOX_TYPE, payload.len() as u64)
@@ -340,16 +349,7 @@ impl NonFragmentedWriter {
         let header = compact_box_header(MediaDataBox::BOX_TYPE, media_data_len)
             .map_err(|failure| self.fail(failure))?;
 
-        self.lay_down(header, media_data)
-    }
-
-    /// Lays one box down where the structure places it, through the framing of the file
-    fn lay_down(&mut self, header: BoxHeader, payload: Vec<Vec<u8>>) -> Result<(), StructureError> {
-        self.structure
-            .handle_header(header)
-            .map_err(|failure| self.fail(failure))?;
-
-        self.frame(header, payload)
+        self.frame(header, media_data)
     }
 
     /// Hands one box over to the framing of the file, its payload in the pieces it came in
@@ -425,6 +425,19 @@ mod tests {
 
         assert_eq!(file.get(4..8), Some(b"mdat".as_slice()));
         assert_eq!(file.get(16..20), Some(b"moov".as_slice()));
+    }
+
+    #[test]
+    fn brands_handed_over_after_a_chunk_was_opened_are_out_of_order() {
+        let mut writer = NonFragmentedWriter::new();
+
+        writer.handle_movie(unfragmented_movie()).unwrap();
+        writer.begin_chunk().unwrap();
+
+        assert_eq!(
+            writer.handle_file_type(file_type()),
+            Err(StructureError::box_out_of_order(FileTypeBox::BOX_TYPE))
+        );
     }
 
     #[test]

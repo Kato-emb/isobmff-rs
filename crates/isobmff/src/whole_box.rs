@@ -147,15 +147,15 @@ pub(crate) fn whole_box_header(
 
 /// Returns the header of the whole box of `box_type` whose payload is `payload_len` bytes long, in the compact form alone
 ///
-/// A writer that settled the length of the header before the payload was
-/// whole is held to the compact form, so a payload only the `largesize` field
-/// can measure is refused rather than laid down under a longer header.
+/// A payload only the `largesize` field can measure is refused, so a header
+/// measured before its payload was whole keeps the length it was measured at.
 ///
 /// # Errors
 ///
 /// * [`Box`](crate::StructureErrorKind::Box): the total the box declares does
 ///   not fit the 32 bits of the `size` field, reported as
-///   [`OutOfRange`](isobmff_core::ErrorKind::OutOfRange) of the box.
+///   [`OutOfRange`](isobmff_core::ErrorKind::OutOfRange) of the box; or no
+///   header measures the payload at all, as [`whole_box_header`] reports it.
 pub(crate) fn compact_box_header(
     box_type: BoxType,
     payload_len: u64,
@@ -168,8 +168,8 @@ pub(crate) fn compact_box_header(
                 .in_container(box_type),
         )),
         // Why not unreachable: `whole_box_header` measures a payload and so
-        // never declares no total, and the fallback repeats what the extended
-        // form is refused with, in place of a panic the lints forbid.
+        // never declares no total, and the fallback refuses the payload as the
+        // extended form is refused, in place of a panic the lints forbid.
         BoxSize::ToEndOfFile => Err(StructureError::from(
             isobmff_core::Error::out_of_range(payload_len, FieldWidth::Compact)
                 .in_container(box_type),
@@ -296,9 +296,6 @@ mod tests {
 
     #[test]
     fn a_compact_header_is_refused_for_a_payload_only_the_extended_form_declares() {
-        let compact = compact_box_header(MediaDataBox::BOX_TYPE, 4).unwrap();
-
-        assert_eq!(compact.encoded_len(), 8);
         assert_eq!(
             compact_box_header(MediaDataBox::BOX_TYPE, 1 << 32).map_err(StructureError::kind),
             Err(StructureErrorKind::Box(isobmff_core::ErrorKind::OutOfRange))

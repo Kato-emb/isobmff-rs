@@ -47,13 +47,14 @@
 //!    the order a file breaks is its failure.
 //! 6. **Stack.** [`FragmentedReader`], [`FragmentedWriter`],
 //!    [`NonFragmentedReader`] and [`NonFragmentedWriter`] wire layers 1 to 5
-//!    into one machine per structure and direction. A stack holds no rule and no failure kind of
-//!    its own: it passes every value between the layers, so a caller hands
-//!    over bytes and takes samples, or hands over samples and takes bytes, and
-//!    never sees one. Every offset above the framing is a file offset — the
-//!    extents the framing reports for a file handed over from its first byte,
-//!    the chunk offsets and base data offsets the boxes declare (§8.7.5,
-//!    §8.8.7) — and no layer here knows any other.
+//!    into one machine per structure and direction. A stack holds no rule
+//!    and no failure kind of its own: it passes every value between the
+//!    layers, so a caller hands over bytes and takes samples, or hands over
+//!    samples and takes bytes, and never sees one. Every offset above the
+//!    framing is a file offset — the extents the framing reports for a file
+//!    handed over from its first byte, the chunk offsets and base data
+//!    offsets the boxes declare (§8.7.5, §8.8.7) — and no layer here knows
+//!    any other.
 //! 7. **The I/O.** Where the bytes come from and go to is the caller's: the
 //!    file is handed over from its first byte, output is taken, and what the
 //!    reader says it still lacks is fetched or not, so a `File`, a socket, or a
@@ -90,8 +91,9 @@
 //!
 //! The crate is `no_std` but needs `alloc`: a box read into a value is gathered
 //! whole, a sample owns the bytes it carries, the extents a movie or a fragment
-//! declares are held until the data that meets them arrives, and the samples of
-//! a fragment being written are held until it is closed.
+//! declares are held until the data that meets them arrives, the samples of a
+//! fragment or a chunk being written are held until it is laid down, and the
+//! movie a non-fragmented file is written against until the file is over.
 
 #![no_std]
 

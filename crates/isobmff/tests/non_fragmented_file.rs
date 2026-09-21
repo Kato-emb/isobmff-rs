@@ -1,8 +1,8 @@
 //! The samples of a non-fragmented file, read back through its structure with the movie before and after the media data
 
 // Why not inside `mod tests`: an inline `mod` adds its own name as a directory
-// segment, so a nested one looks for `tests/tests/helpers/…`. The `cfg` is
-// what keeps `allow-unwrap-in-tests` reaching the helper from out here.
+// segment, so a nested one looks for `tests/tests/helpers/non_fragmented_reading.rs`.
+// The `cfg` is what keeps `allow-unwrap-in-tests` reaching the helper from out here.
 #[cfg(test)]
 #[path = "helpers/non_fragmented_reading.rs"]
 mod reading;
