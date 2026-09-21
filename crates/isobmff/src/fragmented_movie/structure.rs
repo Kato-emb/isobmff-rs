@@ -1,9 +1,9 @@
-//! [`FragmentedStructure`], the order of the top-level boxes of a fragmented movie file, ISO/IEC 14496-12 Annex A.8
+//! [`FragmentedStructure`] and [`FragmentedDisposition`], the order of the top-level boxes of a fragmented movie file, ISO/IEC 14496-12 Annex A.8
 
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox, MovieFragmentBox};
 use isobmff_core::{BoxDefinition, BoxType};
 
-use crate::{Disposition, StructureError};
+use crate::StructureError;
 
 /// Holds the structure of a fragmented movie file, one top-level box at a time
 ///
@@ -11,10 +11,10 @@ use crate::{Disposition, StructureError};
 /// the brands it declares itself readable as, the movie its fragments
 /// continue, then one movie fragment after another with the media data each
 /// of them addresses. This machine holds that order. Handed the type of each
-/// top-level box as it comes, it answers with the [`Disposition`] of that box
-/// — read whole into a value, passed on as media data, or passed over — and
-/// fails on a box the order does not place there. It reads no box itself:
-/// what is done with a disposition stays with the caller.
+/// top-level box as it comes, it answers with the [`FragmentedDisposition`]
+/// of that box — read whole into a value, passed on as media data, or passed
+/// over — and fails on a box the order does not place there. It reads no box
+/// itself: what is done with a disposition stays with the caller.
 ///
 /// # Contract
 ///
@@ -41,6 +41,21 @@ use crate::{Disposition, StructureError};
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FragmentedStructure {
     state: State,
+}
+
+/// What the structure of a fragmented movie file makes of a top-level box
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum FragmentedDisposition {
+    /// Box is read whole into a [`FileTypeBox`]
+    FileType,
+    /// Box is read whole into a [`MovieBox`]
+    Movie,
+    /// Box is read whole into a [`MovieFragmentBox`]
+    MovieFragment,
+    /// Payload of the box is media data, passed on as it arrives
+    MediaData,
+    /// Box is passed over, payload and all
+    Skip,
 }
 
 /// Where the structure stands between calls
@@ -92,7 +107,7 @@ impl FragmentedStructure {
     pub(crate) fn handle_box_type(
         &mut self,
         box_type: BoxType,
-    ) -> Result<Disposition, StructureError> {
+    ) -> Result<FragmentedDisposition, StructureError> {
         let position = match self.state {
             State::Reading(position) => position,
             State::Finished => return Err(StructureError::already_finished()),
@@ -143,29 +158,31 @@ impl FragmentedStructure {
 const fn place(
     position: Position,
     box_type: BoxType,
-) -> Result<(Position, Disposition), StructureError> {
+) -> Result<(Position, FragmentedDisposition), StructureError> {
     match (box_type, position) {
-        (FileTypeBox::BOX_TYPE, Position::Start) => Ok((Position::Opened, Disposition::FileType)),
+        (FileTypeBox::BOX_TYPE, Position::Start) => {
+            Ok((Position::Opened, FragmentedDisposition::FileType))
+        }
         (FileTypeBox::BOX_TYPE, Position::Opened | Position::Declared | Position::Fragmenting)
         | (MovieFragmentBox::BOX_TYPE, Position::Start | Position::Opened)
         | (MediaDataBox::BOX_TYPE, Position::Start | Position::Opened | Position::Declared) => {
             Err(StructureError::box_out_of_order(box_type))
         }
         (MovieBox::BOX_TYPE, Position::Start | Position::Opened) => {
-            Ok((Position::Declared, Disposition::Movie))
+            Ok((Position::Declared, FragmentedDisposition::Movie))
         }
         (MovieBox::BOX_TYPE, Position::Declared | Position::Fragmenting) => {
             Err(StructureError::duplicate_box(box_type))
         }
         (MovieFragmentBox::BOX_TYPE, Position::Declared | Position::Fragmenting) => {
-            Ok((Position::Fragmenting, Disposition::MovieFragment))
+            Ok((Position::Fragmenting, FragmentedDisposition::MovieFragment))
         }
         (MediaDataBox::BOX_TYPE, Position::Fragmenting) => {
-            Ok((Position::Fragmenting, Disposition::MediaData))
+            Ok((Position::Fragmenting, FragmentedDisposition::MediaData))
         }
-        (_other, Position::Start) => Ok((Position::Opened, Disposition::Skip)),
+        (_other, Position::Start) => Ok((Position::Opened, FragmentedDisposition::Skip)),
         (_other, Position::Opened | Position::Declared | Position::Fragmenting) => {
-            Ok((position, Disposition::Skip))
+            Ok((position, FragmentedDisposition::Skip))
         }
     }
 }
@@ -177,10 +194,10 @@ mod tests {
 
     use isobmff_core::BoxType;
 
-    use super::{Disposition, FragmentedStructure, StructureError};
+    use super::{FragmentedDisposition, FragmentedStructure, StructureError};
 
     /// The dispositions of the boxes named, in order, stopping at the first failure
-    fn dispositions_of(fourccs: &[&[u8; 4]]) -> Result<Vec<Disposition>, StructureError> {
+    fn dispositions_of(fourccs: &[&[u8; 4]]) -> Result<Vec<FragmentedDisposition>, StructureError> {
         let mut structure = FragmentedStructure::new();
 
         fourccs
@@ -197,16 +214,16 @@ mod tests {
                 b"mfra",
             ]),
             Ok(vec![
-                Disposition::FileType,
-                Disposition::Skip,
-                Disposition::Movie,
-                Disposition::Skip,
-                Disposition::MovieFragment,
-                Disposition::MediaData,
-                Disposition::MovieFragment,
-                Disposition::MediaData,
-                Disposition::MediaData,
-                Disposition::Skip,
+                FragmentedDisposition::FileType,
+                FragmentedDisposition::Skip,
+                FragmentedDisposition::Movie,
+                FragmentedDisposition::Skip,
+                FragmentedDisposition::MovieFragment,
+                FragmentedDisposition::MediaData,
+                FragmentedDisposition::MovieFragment,
+                FragmentedDisposition::MediaData,
+                FragmentedDisposition::MediaData,
+                FragmentedDisposition::Skip,
             ])
         );
     }
@@ -216,9 +233,9 @@ mod tests {
         assert_eq!(
             dispositions_of(&[b"moov", b"moof", b"mdat"]),
             Ok(vec![
-                Disposition::Movie,
-                Disposition::MovieFragment,
-                Disposition::MediaData,
+                FragmentedDisposition::Movie,
+                FragmentedDisposition::MovieFragment,
+                FragmentedDisposition::MediaData,
             ])
         );
     }

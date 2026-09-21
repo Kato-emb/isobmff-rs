@@ -70,8 +70,8 @@ pub fn file_type() -> FileTypeBox {
     )
 }
 
-/// Brands a segment of a fragmented file declares itself readable as
-fn segment_type() -> SegmentTypeBox {
+/// Brands a media segment declares itself readable as
+pub fn segment_type() -> SegmentTypeBox {
     SegmentTypeBox::new(
         FourCC::new(*b"msdh"),
         0,

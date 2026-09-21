@@ -15,7 +15,7 @@ pub use muxer::FragmentedMuxer;
 pub use reader::FragmentedReader;
 pub use writer::FragmentedWriter;
 
-use structure::FragmentedStructure;
+use structure::{FragmentedDisposition, FragmentedStructure};
 
 #[cfg(test)]
 mod tests {
