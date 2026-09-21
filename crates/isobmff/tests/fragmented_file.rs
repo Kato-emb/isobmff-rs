@@ -65,7 +65,7 @@ mod tests {
         let track_extends =
             TrackExtendsBox::new(1, 1, SAMPLE_DURATION, u32::try_from(SAMPLE_LEN).unwrap(), 0);
         let media_data = MediaDataBox::new(MEDIA_DATA.to_vec());
-        let header_len = BoxHeader::with_payload_len(
+        let header_length = BoxHeader::with_payload_len(
             MediaDataBox::BOX_TYPE,
             u64::try_from(MEDIA_DATA.len()).unwrap(),
         )
@@ -74,7 +74,7 @@ mod tests {
         let data_offset = i32::try_from(
             movie_fragment(0)
                 .encoded_len()
-                .saturating_add(u64::try_from(header_len).unwrap()),
+                .saturating_add(u64::try_from(header_length).unwrap()),
         )
         .unwrap();
 

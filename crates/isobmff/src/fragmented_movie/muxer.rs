@@ -4,9 +4,10 @@ use std::io::Write;
 
 use isobmff_boxes::{FileTypeBox, MovieBox};
 use isobmff_sample::Sample;
+use isobmff_sequence::EventBytes;
 
 use super::FragmentedWriter;
-use crate::{DriverError, StructureError};
+use crate::{DriverError, Muxer, PollOutput};
 
 /// Lays a fragmented movie file down on a sink, taking the samples as they come
 ///
@@ -54,8 +55,7 @@ use crate::{DriverError, StructureError};
 /// ```
 #[derive(Debug)]
 pub struct FragmentedMuxer<W> {
-    sink: W,
-    writer: FragmentedWriter,
+    muxer: Muxer<W, FragmentedWriter>,
 }
 
 impl<W: Write> FragmentedMuxer<W> {
@@ -63,8 +63,7 @@ impl<W: Write> FragmentedMuxer<W> {
     #[must_use]
     pub const fn new(sink: W) -> Self {
         Self {
-            sink,
-            writer: FragmentedWriter::new(),
+            muxer: Muxer::new(sink, FragmentedWriter::new()),
         }
     }
 
@@ -76,7 +75,8 @@ impl<W: Write> FragmentedMuxer<W> {
     ///   [`FragmentedWriter::handle_file_type`] makes of the call.
     /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes.
     pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), DriverError> {
-        self.drive(|writer| writer.handle_file_type(file_type))
+        self.muxer
+            .drive(|writer| writer.handle_file_type(file_type))
     }
 
     /// Takes the movie the fragments continue, and writes it
@@ -87,7 +87,7 @@ impl<W: Write> FragmentedMuxer<W> {
     ///   [`FragmentedWriter::handle_movie`] makes of the call.
     /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes.
     pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), DriverError> {
-        self.drive(|writer| writer.handle_movie(movie))
+        self.muxer.drive(|writer| writer.handle_movie(movie))
     }
 
     /// Opens a fragment, which the samples handed over next are laid out in
@@ -97,7 +97,8 @@ impl<W: Write> FragmentedMuxer<W> {
     /// * [`Structure`](crate::DriverErrorKind::Structure): what
     ///   [`FragmentedWriter::begin_fragment`] makes of the call.
     pub fn begin_fragment(&mut self, sequence_number: u32) -> Result<(), DriverError> {
-        self.drive(|writer| writer.begin_fragment(sequence_number))
+        self.muxer
+            .drive(|writer| writer.begin_fragment(sequence_number))
     }
 
     /// Takes a sample, and places it in the fragment that is open
@@ -107,7 +108,7 @@ impl<W: Write> FragmentedMuxer<W> {
     /// * [`Structure`](crate::DriverErrorKind::Structure): what
     ///   [`FragmentedWriter::handle_sample`] makes of the call.
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), DriverError> {
-        self.drive(|writer| writer.handle_sample(sample))
+        self.muxer.drive(|writer| writer.handle_sample(sample))
     }
 
     /// Closes the fragment that is open, and writes it
@@ -118,7 +119,7 @@ impl<W: Write> FragmentedMuxer<W> {
     ///   [`FragmentedWriter::finish_fragment`] makes of the call.
     /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes.
     pub fn finish_fragment(&mut self) -> Result<(), DriverError> {
-        self.drive(FragmentedWriter::finish_fragment)
+        self.muxer.drive(FragmentedWriter::finish_fragment)
     }
 
     /// Declares the file over, and flushes the sink
@@ -129,40 +130,23 @@ impl<W: Write> FragmentedMuxer<W> {
     ///   [`FragmentedWriter::finish`] makes of the call.
     /// * [`Io`](crate::DriverErrorKind::Io): the sink does not flush.
     pub fn finish(&mut self) -> Result<(), DriverError> {
-        self.drive(FragmentedWriter::finish)?;
-        self.sink.flush()?;
-
-        Ok(())
+        self.muxer.finish(FragmentedWriter::finish)
     }
+}
 
-    /// Makes `step` of the writer, and writes what the writer made of it whether it failed or not
-    fn drive(
-        &mut self,
-        step: impl FnOnce(&mut FragmentedWriter) -> Result<(), StructureError>,
-    ) -> Result<(), DriverError> {
-        let stepped = step(&mut self.writer);
-        let mut written = Ok(());
-        while let Some(bytes) = self.writer.poll_output() {
-            written = written.and_then(|()| self.sink.write_all(&bytes));
-        }
-        stepped?;
-        written?;
-
-        Ok(())
+impl PollOutput for FragmentedWriter {
+    fn poll_output(&mut self) -> Option<EventBytes> {
+        FragmentedWriter::poll_output(self)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
-    use std::io;
 
-    use isobmff_boxes::{FileTypeBox, TrackExtendsBox};
-    use isobmff_core::BoxDefinition;
-    use isobmff_test_support::{file_type, fragmented_movie, written};
+    use isobmff_test_support::{file_type, written};
 
     use super::FragmentedMuxer;
-    use crate::{DriverErrorKind, StructureError};
 
     #[test]
     fn the_bytes_the_writer_made_of_a_call_are_written_before_the_call_reports() {
@@ -172,35 +156,5 @@ mod tests {
         muxer.handle_file_type(file_type()).unwrap();
 
         assert_eq!(file, written(&file_type()));
-    }
-
-    #[test]
-    fn a_refusal_of_the_writer_is_reported_and_leaves_what_was_written() {
-        let mut file = Vec::new();
-        let mut muxer = FragmentedMuxer::new(&mut file);
-        let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0));
-        muxer.handle_movie(movie.clone()).unwrap();
-
-        let refused = muxer.handle_file_type(file_type());
-
-        assert_eq!(
-            refused.map_err(|failure| failure.structure_error()),
-            Err(Some(StructureError::box_out_of_order(
-                FileTypeBox::BOX_TYPE
-            )))
-        );
-        assert_eq!(file, written(&movie));
-    }
-
-    #[test]
-    fn a_sink_taking_no_byte_is_reported_as_the_sink_failing() {
-        let mut muxer = FragmentedMuxer::new(&mut [][..]);
-
-        assert_eq!(
-            muxer
-                .handle_file_type(file_type())
-                .map_err(|failure| failure.kind()),
-            Err(DriverErrorKind::Io(io::ErrorKind::WriteZero))
-        );
     }
 }

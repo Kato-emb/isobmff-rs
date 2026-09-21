@@ -7,7 +7,7 @@ use isobmff_core::{BoxDefinition, BoxEncode, BoxType};
 use isobmff_sample::{MovieFragmentWriter, Sample};
 use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
 
-use super::MediaSegmentStructure;
+use super::{MediaSegmentDisposition, MediaSegmentStructure};
 use crate::{StructureError, whole_box_header, whole_payload};
 
 /// Lays a media segment down, taking the samples as they come
@@ -251,13 +251,25 @@ impl MediaSegmentWriter {
     }
 
     /// Lays one box down where the structure places it, through the framing of the segment
+    ///
+    /// A box the structure passes over is refused as
+    /// [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder).
     fn lay_down(&mut self, box_type: BoxType, payload: Vec<u8>) -> Result<(), StructureError> {
         let header = whole_box_header(box_type, payload.len() as u64)
             .map_err(|failure| self.fail(failure))?;
 
-        self.structure
+        match self
+            .structure
             .handle_box_type(box_type)
-            .map_err(|failure| self.fail(failure))?;
+            .map_err(|failure| self.fail(failure))?
+        {
+            MediaSegmentDisposition::SegmentType
+            | MediaSegmentDisposition::MovieFragment
+            | MediaSegmentDisposition::MediaData => {}
+            MediaSegmentDisposition::Skip => {
+                return Err(self.fail(StructureError::box_out_of_order(box_type)));
+            }
+        }
 
         self.lay_down_step(BoxEvent::Header(header))?;
         if !payload.is_empty() {

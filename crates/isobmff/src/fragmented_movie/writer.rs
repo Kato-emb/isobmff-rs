@@ -7,7 +7,7 @@ use isobmff_core::{BoxDefinition, BoxEncode, BoxType};
 use isobmff_sample::{MovieFragmentWriter, Sample};
 use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
 
-use super::FragmentedStructure;
+use super::{FragmentedDisposition, FragmentedStructure};
 use crate::{StructureError, whole_box_header, whole_payload};
 
 /// Lays a fragmented movie file down, taking the samples as they come
@@ -264,13 +264,26 @@ impl FragmentedWriter {
     }
 
     /// Lays one box down where the structure places it, through the framing of the file
+    ///
+    /// A box the structure passes over is refused as
+    /// [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder).
     fn lay_down(&mut self, box_type: BoxType, payload: Vec<u8>) -> Result<(), StructureError> {
         let header = whole_box_header(box_type, payload.len() as u64)
             .map_err(|failure| self.fail(failure))?;
 
-        self.structure
+        match self
+            .structure
             .handle_box_type(box_type)
-            .map_err(|failure| self.fail(failure))?;
+            .map_err(|failure| self.fail(failure))?
+        {
+            FragmentedDisposition::FileType
+            | FragmentedDisposition::Movie
+            | FragmentedDisposition::MovieFragment
+            | FragmentedDisposition::MediaData => {}
+            FragmentedDisposition::Skip => {
+                return Err(self.fail(StructureError::box_out_of_order(box_type)));
+            }
+        }
 
         self.lay_down_step(BoxEvent::Header(header))?;
         if !payload.is_empty() {

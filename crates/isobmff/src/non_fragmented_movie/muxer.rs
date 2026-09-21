@@ -4,9 +4,10 @@ use std::io::Write;
 
 use isobmff_boxes::{FileTypeBox, MovieBox};
 use isobmff_sample::Sample;
+use isobmff_sequence::EventBytes;
 
 use super::NonFragmentedWriter;
-use crate::{DriverError, StructureError};
+use crate::{DriverError, Muxer, PollOutput};
 
 /// Lays a non-fragmented movie file down on a sink, taking the samples as they come
 ///
@@ -60,8 +61,7 @@ use crate::{DriverError, StructureError};
 /// ```
 #[derive(Debug)]
 pub struct NonFragmentedMuxer<W> {
-    sink: W,
-    writer: NonFragmentedWriter,
+    muxer: Muxer<W, NonFragmentedWriter>,
 }
 
 impl<W: Write> NonFragmentedMuxer<W> {
@@ -69,8 +69,7 @@ impl<W: Write> NonFragmentedMuxer<W> {
     #[must_use]
     pub const fn new(sink: W) -> Self {
         Self {
-            sink,
-            writer: NonFragmentedWriter::new(),
+            muxer: Muxer::new(sink, NonFragmentedWriter::new()),
         }
     }
 
@@ -82,7 +81,8 @@ impl<W: Write> NonFragmentedMuxer<W> {
     ///   [`NonFragmentedWriter::handle_file_type`] makes of the call.
     /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes.
     pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), DriverError> {
-        self.drive(|writer| writer.handle_file_type(file_type))
+        self.muxer
+            .drive(|writer| writer.handle_file_type(file_type))
     }
 
     /// Takes the movie the file is laid down against, to be written last
@@ -92,7 +92,7 @@ impl<W: Write> NonFragmentedMuxer<W> {
     /// * [`Structure`](crate::DriverErrorKind::Structure): what
     ///   [`NonFragmentedWriter::handle_movie`] makes of the call.
     pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), DriverError> {
-        self.drive(|writer| writer.handle_movie(movie))
+        self.muxer.drive(|writer| writer.handle_movie(movie))
     }
 
     /// Opens a chunk, which the samples handed over next are laid out in, writing the chunk open before it
@@ -103,7 +103,7 @@ impl<W: Write> NonFragmentedMuxer<W> {
     ///   [`NonFragmentedWriter::begin_chunk`] makes of the call.
     /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes.
     pub fn begin_chunk(&mut self) -> Result<(), DriverError> {
-        self.drive(NonFragmentedWriter::begin_chunk)
+        self.muxer.drive(NonFragmentedWriter::begin_chunk)
     }
 
     /// Takes a sample, and places it at the end of the chunk that is open
@@ -113,7 +113,7 @@ impl<W: Write> NonFragmentedMuxer<W> {
     /// * [`Structure`](crate::DriverErrorKind::Structure): what
     ///   [`NonFragmentedWriter::handle_sample`] makes of the call.
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), DriverError> {
-        self.drive(|writer| writer.handle_sample(sample))
+        self.muxer.drive(|writer| writer.handle_sample(sample))
     }
 
     /// Declares the file over, writing the chunk that is open and then the movie, and flushes the sink
@@ -125,46 +125,23 @@ impl<W: Write> NonFragmentedMuxer<W> {
     /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes, or
     ///   does not flush.
     pub fn finish(&mut self) -> Result<(), DriverError> {
-        self.drive(NonFragmentedWriter::finish)?;
-        self.sink.flush()?;
-
-        Ok(())
+        self.muxer.finish(NonFragmentedWriter::finish)
     }
+}
 
-    /// Makes `step` of the writer, and writes what the writer made of it whether it failed or not
-    fn drive(
-        &mut self,
-        step: impl FnOnce(&mut NonFragmentedWriter) -> Result<(), StructureError>,
-    ) -> Result<(), DriverError> {
-        let stepped = step(&mut self.writer);
-        let mut written = Ok(());
-        while let Some(bytes) = self.writer.poll_output() {
-            written = written.and_then(|()| self.sink.write_all(&bytes));
-        }
-        stepped?;
-        written?;
-
-        Ok(())
+impl PollOutput for NonFragmentedWriter {
+    fn poll_output(&mut self) -> Option<EventBytes> {
+        NonFragmentedWriter::poll_output(self)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
-    use std::io;
 
-    use isobmff_boxes::{MediaDataBox, MovieBox};
-    use isobmff_core::BoxDefinition;
-    use isobmff_sample::Sample;
-    use isobmff_test_support::{SAMPLE_DURATION, file_type, written};
+    use isobmff_test_support::{file_type, written};
 
     use super::NonFragmentedMuxer;
-    use crate::{DriverErrorKind, StructureError, StructureErrorKind};
-
-    /// One sample of track 1, the first of its chunk
-    fn sample() -> Sample {
-        Sample::new(1, 0, SAMPLE_DURATION, 0, 0, 1, b"SAMP".to_vec())
-    }
 
     #[test]
     fn the_bytes_the_writer_made_of_a_call_are_written_before_the_call_reports() {
@@ -174,49 +151,5 @@ mod tests {
         muxer.handle_file_type(file_type()).unwrap();
 
         assert_eq!(file, written(&file_type()));
-    }
-
-    #[test]
-    fn the_bytes_made_before_a_refusal_are_written_and_the_refusal_reported() {
-        let mut file = Vec::new();
-        let mut muxer = NonFragmentedMuxer::new(&mut file);
-        muxer.begin_chunk().unwrap();
-        muxer.handle_sample(sample()).unwrap();
-
-        let refused = muxer.finish();
-
-        assert_eq!(
-            refused.map_err(|failure| failure.structure_error()),
-            Err(Some(StructureError::missing_mandatory_box(
-                MovieBox::BOX_TYPE
-            )))
-        );
-        assert_eq!(file, written(&MediaDataBox::new(b"SAMP".to_vec())));
-    }
-
-    #[test]
-    fn a_sink_taking_no_byte_is_reported_as_the_sink_failing() {
-        let mut muxer = NonFragmentedMuxer::new(&mut [][..]);
-
-        assert_eq!(
-            muxer
-                .handle_file_type(file_type())
-                .map_err(|failure| failure.kind()),
-            Err(DriverErrorKind::Io(io::ErrorKind::WriteZero))
-        );
-    }
-
-    #[test]
-    fn the_writers_own_failure_is_reported_ahead_of_the_sinks() {
-        let mut muxer = NonFragmentedMuxer::new(&mut [][..]);
-        muxer.begin_chunk().unwrap();
-        muxer.handle_sample(sample()).unwrap();
-
-        assert_eq!(
-            muxer.finish().map_err(|failure| failure.kind()),
-            Err(DriverErrorKind::Structure(
-                StructureErrorKind::MissingMandatoryBox
-            ))
-        );
     }
 }

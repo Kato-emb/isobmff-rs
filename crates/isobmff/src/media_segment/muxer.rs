@@ -4,9 +4,10 @@ use std::io::Write;
 
 use isobmff_boxes::SegmentTypeBox;
 use isobmff_sample::Sample;
+use isobmff_sequence::EventBytes;
 
 use super::MediaSegmentWriter;
-use crate::{DriverError, StructureError};
+use crate::{DriverError, Muxer, PollOutput};
 
 /// Lays a media segment down on a sink, taking the samples as they come
 ///
@@ -53,8 +54,7 @@ use crate::{DriverError, StructureError};
 /// ```
 #[derive(Debug)]
 pub struct MediaSegmentMuxer<W> {
-    sink: W,
-    writer: MediaSegmentWriter,
+    muxer: Muxer<W, MediaSegmentWriter>,
 }
 
 impl<W: Write> MediaSegmentMuxer<W> {
@@ -62,8 +62,7 @@ impl<W: Write> MediaSegmentMuxer<W> {
     #[must_use]
     pub const fn new(sink: W) -> Self {
         Self {
-            sink,
-            writer: MediaSegmentWriter::new(),
+            muxer: Muxer::new(sink, MediaSegmentWriter::new()),
         }
     }
 
@@ -75,7 +74,8 @@ impl<W: Write> MediaSegmentMuxer<W> {
     ///   [`MediaSegmentWriter::handle_segment_type`] makes of the call.
     /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes.
     pub fn handle_segment_type(&mut self, segment_type: SegmentTypeBox) -> Result<(), DriverError> {
-        self.drive(|writer| writer.handle_segment_type(segment_type))
+        self.muxer
+            .drive(|writer| writer.handle_segment_type(segment_type))
     }
 
     /// Opens a fragment, which the samples handed over next are laid out in
@@ -85,7 +85,8 @@ impl<W: Write> MediaSegmentMuxer<W> {
     /// * [`Structure`](crate::DriverErrorKind::Structure): what
     ///   [`MediaSegmentWriter::begin_fragment`] makes of the call.
     pub fn begin_fragment(&mut self, sequence_number: u32) -> Result<(), DriverError> {
-        self.drive(|writer| writer.begin_fragment(sequence_number))
+        self.muxer
+            .drive(|writer| writer.begin_fragment(sequence_number))
     }
 
     /// Takes a sample, and places it in the fragment that is open
@@ -95,7 +96,7 @@ impl<W: Write> MediaSegmentMuxer<W> {
     /// * [`Structure`](crate::DriverErrorKind::Structure): what
     ///   [`MediaSegmentWriter::handle_sample`] makes of the call.
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), DriverError> {
-        self.drive(|writer| writer.handle_sample(sample))
+        self.muxer.drive(|writer| writer.handle_sample(sample))
     }
 
     /// Closes the fragment that is open, and writes it
@@ -106,7 +107,7 @@ impl<W: Write> MediaSegmentMuxer<W> {
     ///   [`MediaSegmentWriter::finish_fragment`] makes of the call.
     /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes.
     pub fn finish_fragment(&mut self) -> Result<(), DriverError> {
-        self.drive(MediaSegmentWriter::finish_fragment)
+        self.muxer.drive(MediaSegmentWriter::finish_fragment)
     }
 
     /// Declares the segment over, and flushes the sink
@@ -117,40 +118,23 @@ impl<W: Write> MediaSegmentMuxer<W> {
     ///   [`MediaSegmentWriter::finish`] makes of the call.
     /// * [`Io`](crate::DriverErrorKind::Io): the sink does not flush.
     pub fn finish(&mut self) -> Result<(), DriverError> {
-        self.drive(MediaSegmentWriter::finish)?;
-        self.sink.flush()?;
-
-        Ok(())
+        self.muxer.finish(MediaSegmentWriter::finish)
     }
+}
 
-    /// Makes `step` of the writer, and writes what the writer made of it whether it failed or not
-    fn drive(
-        &mut self,
-        step: impl FnOnce(&mut MediaSegmentWriter) -> Result<(), StructureError>,
-    ) -> Result<(), DriverError> {
-        let stepped = step(&mut self.writer);
-        let mut written = Ok(());
-        while let Some(bytes) = self.writer.poll_output() {
-            written = written.and_then(|()| self.sink.write_all(&bytes));
-        }
-        stepped?;
-        written?;
-
-        Ok(())
+impl PollOutput for MediaSegmentWriter {
+    fn poll_output(&mut self) -> Option<EventBytes> {
+        MediaSegmentWriter::poll_output(self)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
-    use std::io;
 
-    use isobmff_boxes::MovieFragmentBox;
-    use isobmff_core::BoxDefinition;
     use isobmff_test_support::{segment_type, written};
 
     use super::MediaSegmentMuxer;
-    use crate::{DriverErrorKind, StructureError};
 
     #[test]
     fn the_bytes_the_writer_made_of_a_call_are_written_before_the_call_reports() {
@@ -160,34 +144,5 @@ mod tests {
         muxer.handle_segment_type(segment_type()).unwrap();
 
         assert_eq!(segment, written(&segment_type()));
-    }
-
-    #[test]
-    fn a_refusal_of_the_writer_is_reported_and_leaves_what_was_written() {
-        let mut segment = Vec::new();
-        let mut muxer = MediaSegmentMuxer::new(&mut segment);
-        muxer.handle_segment_type(segment_type()).unwrap();
-
-        let refused = muxer.finish();
-
-        assert_eq!(
-            refused.map_err(|failure| failure.structure_error()),
-            Err(Some(StructureError::missing_mandatory_box(
-                MovieFragmentBox::BOX_TYPE
-            )))
-        );
-        assert_eq!(segment, written(&segment_type()));
-    }
-
-    #[test]
-    fn a_sink_taking_no_byte_is_reported_as_the_sink_failing() {
-        let mut muxer = MediaSegmentMuxer::new(&mut [][..]);
-
-        assert_eq!(
-            muxer
-                .handle_segment_type(segment_type())
-                .map_err(|failure| failure.kind()),
-            Err(DriverErrorKind::Io(io::ErrorKind::WriteZero))
-        );
     }
 }

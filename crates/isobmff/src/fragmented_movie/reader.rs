@@ -3,7 +3,7 @@
 use core::ops::Range;
 
 use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox};
-use isobmff_core::{BoxDefinition, BoxHeader};
+use isobmff_core::BoxDefinition;
 use isobmff_sample::movie_fragment::sample_extents;
 use isobmff_sample::{Sample, SampleReader, TrackDecodeTimes};
 use isobmff_sequence::{BoxEvent, BoxReader};
@@ -338,7 +338,27 @@ impl FragmentedReader {
             // in place of a panic the lints forbid.
             let start = self.boxes.event_extent().map_or(0, |extent| extent.start);
             match event {
-                BoxEvent::Header(header) => self.begin_box(header, start),
+                BoxEvent::Header(header) => self
+                    .structure
+                    .handle_box_type(header.box_type())
+                    .and_then(|disposition| {
+                        self.open = match disposition {
+                            FragmentedDisposition::FileType => Some(Open::FileType(
+                                WholeBoxReader::begin(header, self.payload_limit)?,
+                            )),
+                            FragmentedDisposition::Movie => Some(Open::Movie(
+                                WholeBoxReader::begin(header, self.payload_limit)?,
+                            )),
+                            FragmentedDisposition::MovieFragment => Some(Open::MovieFragment {
+                                reader: WholeBoxReader::begin(header, self.payload_limit)?,
+                                moof_start: start,
+                            }),
+                            FragmentedDisposition::MediaData => Some(Open::MediaData),
+                            FragmentedDisposition::Skip => None,
+                        };
+
+                        Ok(())
+                    }),
                 BoxEvent::Payload(payload) => match &mut self.open {
                     Some(Open::FileType(reader)) => reader.handle_payload(payload),
                     Some(Open::Movie(reader)) => reader.handle_payload(payload),
@@ -349,62 +369,46 @@ impl FragmentedReader {
                         .map_err(StructureError::from),
                     None => Ok(()),
                 },
-                BoxEvent::End => self.close_box(),
+                BoxEvent::End => match self.open.take() {
+                    Some(Open::FileType(reader)) => reader
+                        .finish()
+                        .map(|file_type| self.file_type = Some(file_type)),
+                    Some(Open::Movie(reader)) => {
+                        reader.finish().map(|movie| self.movie = Some(movie))
+                    }
+                    Some(Open::MovieFragment { reader, moof_start }) => {
+                        reader.finish().and_then(|movie_fragment| {
+                            // Why not unreachable: the structure placed the `moof`
+                            // after the `moov`, so the movie is there, and the
+                            // fallback repeats what the structure answers a `moof`
+                            // before it with, in place of a panic the lints forbid.
+                            let Some(movie) = self.movie.as_ref() else {
+                                return Err(StructureError::box_out_of_order(
+                                    MovieFragmentBox::BOX_TYPE,
+                                ));
+                            };
+
+                            let extents = sample_extents(
+                                &movie_fragment,
+                                movie,
+                                moof_start,
+                                &mut self.decode_times,
+                            )?;
+                            for extent in extents {
+                                self.samples.handle_sample_extent(extent?)?;
+                            }
+
+                            Ok(())
+                        })
+                    }
+                    Some(Open::MediaData) | None => Ok(()),
+                },
                 // Why an arm at all: `BoxEvent` is `#[non_exhaustive]`, which
                 // `clippy::exhaustive_enums` asks of every public enum, so §4.2
                 // being settled at three steps does not close the match.
                 _later_step => Ok(()),
             }
             .map_err(|failure| self.fail(failure))?;
-        }
-
-        Ok(())
-    }
-
-    /// Opens the box `header` introduces, as the structure disposes of it
-    fn begin_box(&mut self, header: BoxHeader, start: u64) -> Result<(), StructureError> {
-        self.open = match self.structure.handle_box_type(header.box_type())? {
-            FragmentedDisposition::FileType => Some(Open::FileType(WholeBoxReader::begin(
-                header,
-                self.payload_limit,
-            )?)),
-            FragmentedDisposition::Movie => Some(Open::Movie(WholeBoxReader::begin(
-                header,
-                self.payload_limit,
-            )?)),
-            FragmentedDisposition::MovieFragment => Some(Open::MovieFragment {
-                reader: WholeBoxReader::begin(header, self.payload_limit)?,
-                moof_start: start,
-            }),
-            FragmentedDisposition::MediaData => Some(Open::MediaData),
-            FragmentedDisposition::Skip => None,
-        };
-
-        Ok(())
-    }
-
-    /// Reads the box that ended into its value, and resolves a fragment against the movie
-    fn close_box(&mut self) -> Result<(), StructureError> {
-        match self.open.take() {
-            Some(Open::FileType(reader)) => self.file_type = Some(reader.finish()?),
-            Some(Open::Movie(reader)) => self.movie = Some(reader.finish()?),
-            Some(Open::MovieFragment { reader, moof_start }) => {
-                let movie_fragment = reader.finish()?;
-                // Why not unreachable: the structure placed the `moof` after the
-                // `moov`, so the movie is there, and the fallback repeats what
-                // the structure answers a `moof` before it with, in place of a
-                // panic the lints forbid.
-                let Some(movie) = self.movie.as_ref() else {
-                    return Err(StructureError::box_out_of_order(MovieFragmentBox::BOX_TYPE));
-                };
-
-                let extents =
-                    sample_extents(&movie_fragment, movie, moof_start, &mut self.decode_times)?;
-                for extent in extents {
-                    self.samples.handle_sample_extent(extent?)?;
-                }
-            }
-            Some(Open::MediaData) | None => {}
         }
 
         Ok(())
