@@ -4,7 +4,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, FieldWidth};
+use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxHeader, BoxType, FieldWidth};
 
 use crate::StructureError;
 
@@ -152,29 +152,19 @@ pub(crate) fn whole_box_header(
 ///
 /// # Errors
 ///
-/// * [`Box`](crate::StructureErrorKind::Box): the total the box declares does
-///   not fit the 32 bits of the `size` field, reported as
-///   [`OutOfRange`](isobmff_core::ErrorKind::OutOfRange) of the box; or no
-///   header measures the payload at all, as [`whole_box_header`] reports it.
+/// * [`Box`](crate::StructureErrorKind::Box): the total of header and
+///   payload does not fit the 32 bits of the `size` field, reported as
+///   [`OutOfRange`](isobmff_core::ErrorKind::OutOfRange) of the box with the
+///   payload's length, not the total, as the value.
 pub(crate) fn compact_box_header(
     box_type: BoxType,
     payload_len: u64,
 ) -> Result<BoxHeader, StructureError> {
-    let header = whole_box_header(box_type, payload_len)?;
-    match header.size() {
-        BoxSize::Compact(_) => Ok(header),
-        BoxSize::Extended(total) => Err(StructureError::from(
-            isobmff_core::Error::out_of_range(total.get(), FieldWidth::Compact)
-                .in_container(box_type),
-        )),
-        // Why not unreachable: `whole_box_header` measures a payload and so
-        // never declares no total, and the fallback refuses the payload as the
-        // extended form is refused, in place of a panic the lints forbid.
-        BoxSize::ToEndOfFile => Err(StructureError::from(
-            isobmff_core::Error::out_of_range(payload_len, FieldWidth::Compact)
-                .in_container(box_type),
-        )),
-    }
+    BoxHeader::compact(box_type, payload_len).ok_or_else(|| {
+        isobmff_core::Error::out_of_range(payload_len, FieldWidth::Compact)
+            .in_container(box_type)
+            .into()
+    })
 }
 
 /// Reports a box longer than any buffer on this target, as `isobmff-core` names it
@@ -198,8 +188,7 @@ mod tests {
     use isobmff_sequence::BoxEvent;
     use isobmff_test_support::{events_of, file_type, written};
 
-    use super::{BoxDefinition, StructureError, WholeBoxReader, compact_box_header};
-    use crate::StructureErrorKind;
+    use super::{BoxDefinition, FieldWidth, StructureError, WholeBoxReader, compact_box_header};
 
     /// Bytes a box may declare in these tests, unless one states its own limit
     const PAYLOAD_LIMIT: u64 = 1_024;
@@ -297,8 +286,12 @@ mod tests {
     #[test]
     fn a_compact_header_is_refused_for_a_payload_only_the_extended_form_declares() {
         assert_eq!(
-            compact_box_header(MediaDataBox::BOX_TYPE, 1 << 32).map_err(StructureError::kind),
-            Err(StructureErrorKind::Box(isobmff_core::ErrorKind::OutOfRange))
+            compact_box_header(MediaDataBox::BOX_TYPE, u32::MAX.into()),
+            Err(
+                isobmff_core::Error::out_of_range(u32::MAX.into(), FieldWidth::Compact)
+                    .in_container(MediaDataBox::BOX_TYPE)
+                    .into()
+            )
         );
     }
 }
