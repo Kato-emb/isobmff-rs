@@ -59,9 +59,6 @@ impl MediaBox {
     }
 
     /// Returns the declarations specific to that kind of media, to be changed in place
-    ///
-    /// The rest of the box, the children no field claims among it, stays as
-    /// it is.
     #[must_use]
     pub const fn minf_mut(&mut self) -> &mut MediaInformationBox {
         &mut self.minf

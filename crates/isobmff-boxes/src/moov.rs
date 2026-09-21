@@ -90,11 +90,10 @@ impl MovieBox {
 
     /// Returns the media of the track `track_id` names, to be changed in place, or `None` for a track the movie does not declare
     ///
-    /// What identifies the track — its `tkhd` — is not reached this way, so
-    /// what [`new`](Self::new) settled about the tracks, that their ids are
-    /// distinct and each has its `trex` where the movie is fragmented, holds
-    /// on. The rest of the movie, the children no field claims among it,
-    /// stays as it is.
+    /// The track's `tkhd` is not reached this way, so what [`new`](Self::new)
+    /// settled — distinct `track_id`s, and a `trex` for each track where the
+    /// movie is fragmented — still holds. A decoded movie whose tracks collide
+    /// on `track_id` yields the first of them, in the order they came.
     #[must_use]
     pub fn mdia_mut(&mut self, track_id: u32) -> Option<&mut MediaBox> {
         self.trak
@@ -342,10 +341,10 @@ mod tests {
 
     #[test]
     fn the_sample_tables_of_a_track_are_replaced_in_place_and_the_rest_of_the_movie_kept() {
-        let unclaimed = AnyBox::from_raw_bytes(BoxType::compact(*b"udta"), vec![0x11; 4]);
-        let mut unclaimed_bytes = vec![0; usize::try_from(unclaimed.encoded_len()).unwrap()];
-        unclaimed.encode(&mut unclaimed_bytes).unwrap();
-        let payload = [encoded_payload(&movie()), unclaimed_bytes].concat();
+        let unclaimed = vec![
+            0, 0, 0, 0x0c, b'u', b'd', b't', b'a', 0x11, 0x11, 0x11, 0x11,
+        ];
+        let payload = [encoded_payload(&movie()), unclaimed].concat();
         let mut decoded = MovieBox::decode_payload(&payload).unwrap();
         let laid_out = SampleTableBox::new(
             SampleDescriptionBox::new(Vec::new()),
@@ -364,11 +363,17 @@ mod tests {
                 .map(|track| track.mdia().minf().stbl()),
             Some(&laid_out)
         );
-        assert_eq!(decoded.other_boxes(), [unclaimed]);
+        assert_eq!(
+            decoded.other_boxes(),
+            [AnyBox::from_raw_bytes(
+                BoxType::compact(*b"udta"),
+                vec![0x11; 4]
+            )]
+        );
     }
 
     #[test]
-    fn the_media_of_a_track_the_movie_does_not_declare_is_none() {
+    fn the_media_of_a_track_the_movie_does_not_declare_yields_nothing() {
         assert_eq!(movie().mdia_mut(7), None);
     }
 
