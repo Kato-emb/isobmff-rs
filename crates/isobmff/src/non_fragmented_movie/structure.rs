@@ -1,7 +1,7 @@
 //! [`NonFragmentedStructure`], the order of the top-level boxes of a non-fragmented movie file, ISO/IEC 14496-12 §4.3, §8.1.1 and §8.2.1
 
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox};
-use isobmff_core::{BoxDefinition, BoxHeader, BoxType};
+use isobmff_core::{BoxDefinition, BoxType};
 
 use crate::{Disposition, StructureError};
 
@@ -12,8 +12,8 @@ use crate::{Disposition, StructureError};
 /// beside it, of which there may be any number (§8.1.1). The movie normally
 /// lies close to the start of the file or close to its end, and §8.2.1 asks
 /// for neither, so the media data may come before the movie that declares
-/// it. This machine holds that order. Handed the header of each top-level
-/// box as it comes, it answers with the [`Disposition`] of that box — read
+/// it. This machine holds that order. Handed the type of each top-level box
+/// as it comes, it answers with the [`Disposition`] of that box — read
 /// whole into a value, passed on as media data, or passed over — and fails
 /// on a box the order does not place there. It reads no box itself: what is
 /// done with a disposition stays with the caller.
@@ -73,7 +73,7 @@ impl NonFragmentedStructure {
         }
     }
 
-    /// Takes the header of the next top-level box, and returns what to do with that box
+    /// Takes the type of the next top-level box, and returns what to do with that box
     ///
     /// # Errors
     ///
@@ -85,9 +85,9 @@ impl NonFragmentedStructure {
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the structure keeps and reports
     ///   again for every call after it.
-    pub(crate) fn handle_header(
+    pub(crate) fn handle_box_type(
         &mut self,
-        header: BoxHeader,
+        box_type: BoxType,
     ) -> Result<Disposition, StructureError> {
         let position = match self.state {
             State::Reading(position) => position,
@@ -96,7 +96,7 @@ impl NonFragmentedStructure {
         };
 
         let (reached, disposition) =
-            place(position, header.box_type()).map_err(|failure| self.fail(failure))?;
+            place(position, box_type).map_err(|failure| self.fail(failure))?;
         self.state = State::Reading(reached);
 
         Ok(disposition)
@@ -165,14 +165,9 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxHeader, BoxType};
+    use isobmff_core::BoxType;
 
     use super::{Disposition, NonFragmentedStructure, StructureError};
-
-    /// Header of a top-level box of `fourcc`, whose payload is not looked at
-    fn header(fourcc: &[u8; 4]) -> BoxHeader {
-        BoxHeader::with_payload_len(BoxType::compact(*fourcc), 16).unwrap()
-    }
 
     /// The dispositions of the boxes named, in order, stopping at the first failure
     fn dispositions_of(fourccs: &[&[u8; 4]]) -> Result<Vec<Disposition>, StructureError> {
@@ -180,7 +175,7 @@ mod tests {
 
         fourccs
             .iter()
-            .map(|fourcc| structure.handle_header(header(fourcc)))
+            .map(|fourcc| structure.handle_box_type(BoxType::compact(**fourcc)))
             .collect()
     }
 
@@ -252,8 +247,12 @@ mod tests {
         let mut brands_alone = NonFragmentedStructure::new();
         let mut media_data_alone = NonFragmentedStructure::new();
 
-        brands_alone.handle_header(header(b"ftyp")).unwrap();
-        media_data_alone.handle_header(header(b"mdat")).unwrap();
+        brands_alone
+            .handle_box_type(BoxType::compact(*b"ftyp"))
+            .unwrap();
+        media_data_alone
+            .handle_box_type(BoxType::compact(*b"mdat"))
+            .unwrap();
 
         assert_eq!(brands_alone.finish(), missing);
         assert_eq!(media_data_alone.finish(), missing);
@@ -263,7 +262,9 @@ mod tests {
     fn a_file_of_the_movie_alone_is_a_non_fragmented_movie_file() {
         let mut structure = NonFragmentedStructure::new();
 
-        structure.handle_header(header(b"moov")).unwrap();
+        structure
+            .handle_box_type(BoxType::compact(*b"moov"))
+            .unwrap();
 
         assert_eq!(structure.finish(), Ok(()));
     }
@@ -273,10 +274,18 @@ mod tests {
         let mut structure = NonFragmentedStructure::new();
         let failure = StructureError::box_out_of_order(BoxType::compact(*b"ftyp"));
 
-        structure.handle_header(header(b"mdat")).unwrap();
+        structure
+            .handle_box_type(BoxType::compact(*b"mdat"))
+            .unwrap();
 
-        assert_eq!(structure.handle_header(header(b"ftyp")), Err(failure));
-        assert_eq!(structure.handle_header(header(b"moov")), Err(failure));
+        assert_eq!(
+            structure.handle_box_type(BoxType::compact(*b"ftyp")),
+            Err(failure)
+        );
+        assert_eq!(
+            structure.handle_box_type(BoxType::compact(*b"moov")),
+            Err(failure)
+        );
         assert_eq!(structure.finish(), Err(failure));
     }
 
@@ -284,11 +293,13 @@ mod tests {
     fn a_header_handed_over_after_finishing_is_rejected() {
         let mut structure = NonFragmentedStructure::new();
 
-        structure.handle_header(header(b"moov")).unwrap();
+        structure
+            .handle_box_type(BoxType::compact(*b"moov"))
+            .unwrap();
         structure.finish().unwrap();
 
         assert_eq!(
-            structure.handle_header(header(b"mdat")),
+            structure.handle_box_type(BoxType::compact(*b"mdat")),
             Err(StructureError::already_finished())
         );
         assert_eq!(structure.finish(), Err(StructureError::already_finished()));

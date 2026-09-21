@@ -164,7 +164,7 @@ impl NonFragmentedWriter {
         let header = whole_box_header(FileTypeBox::BOX_TYPE, payload.len() as u64)
             .map_err(|failure| self.fail(failure))?;
         self.structure
-            .handle_header(header)
+            .handle_box_type(FileTypeBox::BOX_TYPE)
             .map_err(|failure| self.fail(failure))?;
 
         self.frame(header, alloc::vec![payload])
@@ -190,12 +190,8 @@ impl NonFragmentedWriter {
         // is refused where it is handed over, before chunks are laid down
         // against the first, and the structure places a `moov` the same
         // before the media data as after it.
-        // Why not measuring the movie here: its tables are not in it until
-        // `finish`, and the structure reads the type of the box alone.
-        let header =
-            whole_box_header(MovieBox::BOX_TYPE, 0).map_err(|failure| self.fail(failure))?;
         self.structure
-            .handle_header(header)
+            .handle_box_type(MovieBox::BOX_TYPE)
             .map_err(|failure| self.fail(failure))?;
         self.movie = Some(movie);
 
@@ -223,11 +219,11 @@ impl NonFragmentedWriter {
         // offset is stated before it is, so the chunk goes down under the
         // compact header whatever its length, and is refused where that form
         // cannot declare it.
+        self.structure
+            .handle_box_type(MediaDataBox::BOX_TYPE)
+            .map_err(|failure| self.fail(failure))?;
         let header =
             compact_box_header(MediaDataBox::BOX_TYPE, 0).map_err(|failure| self.fail(failure))?;
-        self.structure
-            .handle_header(header)
-            .map_err(|failure| self.fail(failure))?;
         // Why not checked_add: the framing already carries where the file
         // ends in 64 bits, and a compact header is eight bytes past it.
         let chunk_offset = self
