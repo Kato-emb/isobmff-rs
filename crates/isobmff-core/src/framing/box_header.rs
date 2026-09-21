@@ -163,24 +163,52 @@ impl BoxHeader {
     /// ```
     #[must_use]
     pub fn with_payload_len(box_type: BoxType, payload_len: u64) -> Option<Self> {
-        let has_user_type = matches!(box_type, BoxType::Extended(_));
-
-        let compact = payload_len
-            .checked_add(u64::from(header_length(false, has_user_type)))
-            .and_then(|total| u32::try_from(total).ok())
-            .and_then(CompactSize::new);
-        if let Some(size) = compact {
-            return Some(Self {
-                box_type,
-                size: BoxSize::Compact(size),
-            });
+        if let Some(compact) = Self::compact(box_type, payload_len) {
+            return Some(compact);
         }
 
+        let has_user_type = matches!(box_type, BoxType::Extended(_));
         let total = payload_len.checked_add(u64::from(header_length(true, has_user_type)))?;
 
         Some(Self {
             box_type,
             size: BoxSize::Extended(ExtendedSize::new(total)?),
+        })
+    }
+
+    /// Creates the header that introduces a payload of the given length in the `size` field alone
+    ///
+    /// The total goes in the 32-bit `size` field, and `None` is returned where
+    /// it does not fit there — the header
+    /// [`with_payload_len`](Self::with_payload_len) would move to the
+    /// `largesize` field — so a caller that has settled on the length of the
+    /// compact header learns that the payload has outgrown it. A `usertype`
+    /// field is included whenever `box_type` carries one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff_core::{BoxHeader, BoxType};
+    ///
+    /// // A payload the `size` field can declare gets the eight-byte header
+    /// let header = BoxHeader::compact(BoxType::compact(*b"mdat"), 4).unwrap();
+    /// assert_eq!(header, BoxHeader::with_payload_len(BoxType::compact(*b"mdat"), 4).unwrap());
+    /// assert_eq!(header.encoded_len(), 8);
+    ///
+    /// // A payload only `largesize` can declare gets no header
+    /// assert_eq!(BoxHeader::compact(BoxType::compact(*b"mdat"), u32::MAX.into()), None);
+    /// ```
+    #[must_use]
+    pub fn compact(box_type: BoxType, payload_len: u64) -> Option<Self> {
+        let has_user_type = matches!(box_type, BoxType::Extended(_));
+        let size = payload_len
+            .checked_add(u64::from(header_length(false, has_user_type)))
+            .and_then(|total| u32::try_from(total).ok())
+            .and_then(CompactSize::new)?;
+
+        Some(Self {
+            box_type,
+            size: BoxSize::Compact(size),
         })
     }
 
@@ -509,6 +537,18 @@ mod tests {
         );
 
         assert_eq!(header.and_then(BoxHeader::payload_len), Some(8));
+    }
+
+    #[test]
+    fn a_compact_header_is_made_for_a_payload_the_size_field_declares_and_for_no_other() {
+        let mdat = BoxType::compact(*b"mdat");
+        let longest_compact = u64::from(u32::MAX) - 8;
+
+        assert_eq!(
+            BoxHeader::compact(mdat, longest_compact),
+            BoxHeader::with_payload_len(mdat, longest_compact)
+        );
+        assert_eq!(BoxHeader::compact(mdat, longest_compact + 1), None);
     }
 
     #[test]
