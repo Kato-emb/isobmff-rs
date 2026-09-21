@@ -1,9 +1,15 @@
 //! The samples of a non-fragmented file, read back through its structure with the movie before and after the media data
 
+// Why not inside `mod tests`: an inline `mod` adds its own name as a directory
+// segment, so a nested one looks for `tests/tests/helpers/…`. The `cfg` is
+// what keeps `allow-unwrap-in-tests` reaching the helper from out here.
+#[cfg(test)]
+#[path = "helpers/non_fragmented_reading.rs"]
+mod reading;
+
 #[cfg(test)]
 mod tests {
-    use core::ops::Range;
-
+    use super::reading::{fetched, handed_over_in_order, samples_of};
     use isobmff::{NonFragmentedReader, Sample};
     use isobmff_test_support::{SAMPLE_DURATION, non_fragmented_file};
 
@@ -28,51 +34,6 @@ mod tests {
                 sample
             })
             .collect()
-    }
-
-    /// The bytes of `file` lying at `extent`
-    fn fetched<'file>(file: &'file [u8], extent: &Range<u64>) -> &'file [u8] {
-        file.get(usize::try_from(extent.start).unwrap()..usize::try_from(extent.end).unwrap())
-            .unwrap()
-    }
-
-    /// Hands `file` over in order, `cut_length` bytes at a time, and returns the samples that completed
-    fn handed_over_in_order(
-        reader: &mut NonFragmentedReader,
-        file: &[u8],
-        cut_length: usize,
-    ) -> Vec<Sample> {
-        let mut samples = Vec::new();
-
-        for arriving in file.chunks(cut_length) {
-            reader.handle_input(arriving).unwrap();
-            while let Some(sample) = reader.poll_sample() {
-                samples.push(sample);
-            }
-        }
-
-        samples
-    }
-
-    /// The samples `file` carries, read off it `cut_length` bytes at a time and then off the bytes it wants fetched
-    fn samples_of(file: &[u8], cut_length: usize) -> Vec<Sample> {
-        let mut reader = NonFragmentedReader::new();
-        let mut samples = handed_over_in_order(&mut reader, file, cut_length);
-
-        while let Some(wanted) = reader.wanted_extent() {
-            reader
-                .handle_data(wanted.start, fetched(file, &wanted))
-                .unwrap();
-            while let Some(sample) = reader.poll_sample() {
-                samples.push(sample);
-            }
-        }
-        reader.finish().unwrap();
-        while let Some(sample) = reader.poll_sample() {
-            samples.push(sample);
-        }
-
-        samples
     }
 
     #[test]

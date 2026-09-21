@@ -147,11 +147,9 @@ pub(crate) fn whole_box_header(
 
 /// Returns the header of the whole box of `box_type` whose payload is `payload_len` bytes long, in the compact form alone
 ///
-/// A writer that states where a payload lies before the payload is whole —
-/// the chunk offsets of a sample table name the media data before the `mdat`
-/// holding it is closed — counts on the header keeping the length the compact
-/// form has, so a payload the compact form cannot declare is refused rather
-/// than given the longer header that would move it.
+/// A writer that settled the length of the header before the payload was
+/// whole is held to the compact form, so a payload only the `largesize` field
+/// can measure is refused rather than laid down under a longer header.
 ///
 /// # Errors
 ///
@@ -163,14 +161,20 @@ pub(crate) fn compact_box_header(
     payload_len: u64,
 ) -> Result<BoxHeader, StructureError> {
     let header = whole_box_header(box_type, payload_len)?;
-    if !matches!(header.size(), BoxSize::Compact(_)) {
-        return Err(StructureError::from(
+    match header.size() {
+        BoxSize::Compact(_) => Ok(header),
+        BoxSize::Extended(total) => Err(StructureError::from(
+            isobmff_core::Error::out_of_range(total.get(), FieldWidth::Compact)
+                .in_container(box_type),
+        )),
+        // Why not unreachable: `whole_box_header` measures a payload and so
+        // never declares no total, and the fallback repeats what the extended
+        // form is refused with, in place of a panic the lints forbid.
+        BoxSize::ToEndOfFile => Err(StructureError::from(
             isobmff_core::Error::out_of_range(payload_len, FieldWidth::Compact)
                 .in_container(box_type),
-        ));
+        )),
     }
-
-    Ok(header)
 }
 
 /// Reports a box longer than any buffer on this target, as `isobmff-core` names it

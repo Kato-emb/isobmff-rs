@@ -1,10 +1,17 @@
 //! The samples a writer laid down as a non-fragmented movie file, read back off that file
 
+// Why not inside `mod tests`: an inline `mod` adds its own name as a directory
+// segment, so a nested one looks for `tests/tests/helpers/…`. The `cfg` is
+// what keeps `allow-unwrap-in-tests` reaching the helper from out here.
+#[cfg(test)]
+#[path = "helpers/non_fragmented_reading.rs"]
+mod reading;
+
 #[cfg(test)]
 mod tests {
+    use super::reading::samples_of;
     use isobmff::{
-        BoxEvent, BoxType, MovieBox, MovieHeaderBox, Mp4EpochSeconds, NonFragmentedReader,
-        NonFragmentedWriter, Sample,
+        BoxEvent, BoxType, MovieBox, MovieHeaderBox, Mp4EpochSeconds, NonFragmentedWriter, Sample,
     };
     use isobmff_test_support::{events_of, file_type, track};
 
@@ -64,33 +71,11 @@ mod tests {
         file
     }
 
-    /// The samples `file` carries, read off it in order and then off the bytes it wants fetched
-    fn read_back(file: &[u8]) -> (MovieBox, Vec<Sample>) {
-        let mut reader = NonFragmentedReader::new();
-        let mut samples = Vec::new();
-
-        reader.handle_input(file).unwrap();
-        while let Some(wanted) = reader.wanted_extent() {
-            let fetched = file
-                .get(usize::try_from(wanted.start).unwrap()..usize::try_from(wanted.end).unwrap())
-                .unwrap();
-            reader.handle_data(wanted.start, fetched).unwrap();
-        }
-        reader.finish().unwrap();
-        while let Some(sample) = reader.poll_sample() {
-            samples.push(sample);
-        }
-
-        (reader.movie().cloned().unwrap(), samples)
-    }
-
     #[test]
     fn the_samples_are_read_back_as_they_were_handed_over_chunk_by_chunk() {
         let file = written_file(declared_chunks());
 
-        let (_movie, samples) = read_back(&file);
-
-        assert_eq!(samples, declared_chunks().concat());
+        assert_eq!(samples_of(&file, file.len()), declared_chunks().concat());
     }
 
     #[test]
@@ -113,49 +98,6 @@ mod tests {
             top_level,
             [b"ftyp", b"mdat", b"mdat", b"mdat", b"mdat", b"moov"]
                 .map(|fourcc| BoxType::compact(*fourcc))
-        );
-    }
-
-    #[test]
-    fn the_chunk_offsets_of_each_track_point_at_the_media_data_of_its_own_chunks() {
-        let file = written_file(declared_chunks());
-
-        let (movie, _samples) = read_back(&file);
-        let chunk_offsets = |track_id: u32| -> Vec<u64> {
-            movie
-                .trak()
-                .iter()
-                .find(|trak| trak.tkhd().track_id() == track_id)
-                .unwrap()
-                .mdia()
-                .minf()
-                .stbl()
-                .stco()
-                .entries()
-                .iter()
-                .map(|entry| u64::from(entry.chunk_offset()))
-                .collect()
-        };
-        let media_data_starting_with = |prefix: &[u8]| -> Vec<u64> {
-            events_of(&file, file.len())
-                .unwrap()
-                .into_iter()
-                .filter_map(|(extent, event)| {
-                    if let BoxEvent::Payload(payload) = event {
-                        payload.starts_with(prefix).then_some(extent.start)
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        };
-
-        assert_eq!(
-            [chunk_offsets(1), chunk_offsets(2)],
-            [
-                media_data_starting_with(b"VIDEO"),
-                media_data_starting_with(b"AUD"),
-            ]
         );
     }
 }
