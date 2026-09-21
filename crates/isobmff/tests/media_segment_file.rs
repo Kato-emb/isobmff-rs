@@ -49,13 +49,17 @@ mod tests {
         ))
     }
 
-    /// The `position`th fragment, its samples lying `data_offset` past its start
-    fn movie_fragment(position: usize, data_offset: i32) -> MovieFragmentBox {
-        let sample_count = MEDIA_DATA[position].len() / SAMPLE_LEN;
-        let samples = (0..sample_count)
-            .map(|_| TrackRunSample::new(None, None, None, None))
+    /// A fragment declaring one sample per `SAMPLE_LEN` of `media_data`, lying `data_offset` past its start
+    fn movie_fragment(
+        sequence_number: u32,
+        decode_time: u64,
+        media_data: &[u8],
+        data_offset: i32,
+    ) -> MovieFragmentBox {
+        let samples = media_data
+            .chunks(SAMPLE_LEN)
+            .map(|_sample| TrackRunSample::new(None, None, None, None))
             .collect();
-        let sequence_number = u32::try_from(position).unwrap().saturating_add(1);
         let track_fragment = TrackFragmentBox::new(
             TrackFragmentHeaderBox::new(
                 TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
@@ -66,9 +70,7 @@ mod tests {
                 None,
                 None,
             ),
-            Some(TrackFragmentBaseMediaDecodeTimeBox::new(decode_time_of(
-                position,
-            ))),
+            Some(TrackFragmentBaseMediaDecodeTimeBox::new(decode_time)),
             vec![TrackRunBox::new(Some(data_offset), None, samples).unwrap()],
         );
 
@@ -78,17 +80,6 @@ mod tests {
         )
     }
 
-    /// Decode time the `position`th fragment starts at
-    fn decode_time_of(position: usize) -> u64 {
-        let samples_before: usize = MEDIA_DATA[..position]
-            .iter()
-            .map(|media_data| media_data.len() / SAMPLE_LEN)
-            .sum();
-
-        BASE_MEDIA_DECODE_TIME
-            .saturating_add(u64::from(SAMPLE_DURATION).saturating_mul(samples_before as u64))
-    }
-
     /// A synthetic media segment: the brands, then two fragments each with its media data
     ///
     /// The offsets of a fragment are anchored at the fragment itself, so each run
@@ -96,8 +87,10 @@ mod tests {
     /// the header of the `mdat` beside it.
     fn media_segment() -> Vec<u8> {
         let mut segment = written(&segment_type());
+        let mut decode_time = BASE_MEDIA_DECODE_TIME;
 
         for (position, media_data) in MEDIA_DATA.iter().enumerate() {
+            let sequence_number = u32::try_from(position).unwrap().saturating_add(1);
             let header_len = BoxHeader::with_payload_len(
                 MediaDataBox::BOX_TYPE,
                 u64::try_from(media_data.len()).unwrap(),
@@ -105,14 +98,22 @@ mod tests {
             .unwrap()
             .encoded_len();
             let data_offset = i32::try_from(
-                movie_fragment(position, 0)
+                movie_fragment(sequence_number, decode_time, media_data, 0)
                     .encoded_len()
                     .saturating_add(u64::try_from(header_len).unwrap()),
             )
             .unwrap();
 
-            segment.extend_from_slice(&written(&movie_fragment(position, data_offset)));
+            segment.extend_from_slice(&written(&movie_fragment(
+                sequence_number,
+                decode_time,
+                media_data,
+                data_offset,
+            )));
             segment.extend_from_slice(&written(&MediaDataBox::new(media_data.to_vec())));
+            decode_time = decode_time.saturating_add(
+                u64::from(SAMPLE_DURATION).saturating_mul((media_data.len() / SAMPLE_LEN) as u64),
+            );
         }
 
         segment
