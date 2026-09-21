@@ -1,4 +1,4 @@
-//! [`ReadSamples`], [`PollOutput`], [`Demuxing`] and [`drive`], what every demuxer and muxer does the same way whatever the structure
+//! [`ReadSamples`], [`PollOutput`], [`Demuxing`] and [`Muxing`], what every demuxer and muxer does the same way whatever the structure
 
 use alloc::vec::Vec;
 use core::ops::Range;
@@ -33,10 +33,10 @@ pub(crate) trait ReadSamples {
     fn finish(&mut self) -> Result<(), StructureError>;
 }
 
-/// Hands over the bytes a file has been laid down as, as a muxer drives a writer
+/// The one verb every structure's writer shares, as a muxer drives it
 ///
-/// The one verb every structure's writer shares: what it takes differs per
-/// structure, what it makes of it is taken the same way.
+/// What a writer takes differs per structure; what it makes of it is taken
+/// the same way.
 pub(crate) trait PollOutput {
     /// Hands over the bytes the file has been laid down as so far
     fn poll_output(&mut self) -> Option<EventBytes>;
@@ -47,10 +47,8 @@ pub(crate) trait PollOutput {
 /// What every demuxer is beneath its own name: the source is read a cut at
 /// a time and each cut handed to the reader, the bytes the reader names as
 /// lacking are fetched by seeking to them wherever the file passed them by,
-/// and the samples come out as `Iterator` items. The file begins where the
-/// source stands when the demuxer is created. A failure ends the iteration:
-/// the samples the reader had completed before it come first, then the
-/// failure once, then `None` for good.
+/// and the samples come out as `Iterator` items. The contract is each
+/// demuxer's own.
 #[derive(Debug)]
 pub(crate) struct Demuxing<S, R> {
     source: S,
@@ -169,22 +167,50 @@ impl<S: Read + Seek, R: ReadSamples> Iterator for Demuxing<S, R> {
     }
 }
 
-/// Makes `step` of `writer`, and writes what the writer made of it to `sink` whether it failed or not
+/// A writing stack driven onto a sink, a step at a time
 ///
-/// What every verb of a muxer is: the bytes made before a refusal reach the
-/// sink, the writer's failure is reported ahead of the sink's.
-pub(crate) fn drive<W: PollOutput>(
-    writer: &mut W,
-    sink: &mut impl Write,
-    step: impl FnOnce(&mut W) -> Result<(), StructureError>,
-) -> Result<(), DriverError> {
-    let stepped = step(writer);
-    let mut written = Ok(());
-    while let Some(bytes) = writer.poll_output() {
-        written = written.and_then(|()| sink.write_all(&bytes));
-    }
-    stepped?;
-    written?;
+/// What every muxer is beneath its own name: each verb is a step of the
+/// writer, and what the writer made of it is written to the sink before the
+/// step reports. The contract is each muxer's own.
+#[derive(Debug)]
+pub(crate) struct Muxing<S, W> {
+    sink: S,
+    writer: W,
+}
 
-    Ok(())
+impl<S: Write, W: PollOutput> Muxing<S, W> {
+    /// Creates a muxer writing to `sink` what `writer` makes of each step
+    pub(crate) const fn new(sink: S, writer: W) -> Self {
+        Self { sink, writer }
+    }
+
+    /// Makes `step` of the writer, and writes what the writer made of it whether it failed or not
+    ///
+    /// The bytes made before a refusal reach the sink, and the writer's
+    /// failure is reported ahead of the sink's.
+    pub(crate) fn drive(
+        &mut self,
+        step: impl FnOnce(&mut W) -> Result<(), StructureError>,
+    ) -> Result<(), DriverError> {
+        let stepped = step(&mut self.writer);
+        let mut written = Ok(());
+        while let Some(bytes) = self.writer.poll_output() {
+            written = written.and_then(|()| self.sink.write_all(&bytes));
+        }
+        stepped?;
+        written?;
+
+        Ok(())
+    }
+
+    /// Makes `step` of the writer as the last, and flushes the sink
+    pub(crate) fn finish(
+        &mut self,
+        step: impl FnOnce(&mut W) -> Result<(), StructureError>,
+    ) -> Result<(), DriverError> {
+        self.drive(step)?;
+        self.sink.flush()?;
+
+        Ok(())
+    }
 }

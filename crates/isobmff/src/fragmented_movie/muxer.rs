@@ -7,7 +7,7 @@ use isobmff_sample::Sample;
 use isobmff_sequence::EventBytes;
 
 use super::FragmentedWriter;
-use crate::{DriverError, PollOutput, drive};
+use crate::{DriverError, Muxing, PollOutput};
 
 /// Lays a fragmented movie file down on a sink, taking the samples as they come
 ///
@@ -55,8 +55,7 @@ use crate::{DriverError, PollOutput, drive};
 /// ```
 #[derive(Debug)]
 pub struct FragmentedMuxer<W> {
-    sink: W,
-    writer: FragmentedWriter,
+    muxing: Muxing<W, FragmentedWriter>,
 }
 
 impl<W: Write> FragmentedMuxer<W> {
@@ -64,8 +63,7 @@ impl<W: Write> FragmentedMuxer<W> {
     #[must_use]
     pub const fn new(sink: W) -> Self {
         Self {
-            sink,
-            writer: FragmentedWriter::new(),
+            muxing: Muxing::new(sink, FragmentedWriter::new()),
         }
     }
 
@@ -77,9 +75,8 @@ impl<W: Write> FragmentedMuxer<W> {
     ///   [`FragmentedWriter::handle_file_type`] makes of the call.
     /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes.
     pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), DriverError> {
-        drive(&mut self.writer, &mut self.sink, |writer| {
-            writer.handle_file_type(file_type)
-        })
+        self.muxing
+            .drive(|writer| writer.handle_file_type(file_type))
     }
 
     /// Takes the movie the fragments continue, and writes it
@@ -90,9 +87,7 @@ impl<W: Write> FragmentedMuxer<W> {
     ///   [`FragmentedWriter::handle_movie`] makes of the call.
     /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes.
     pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), DriverError> {
-        drive(&mut self.writer, &mut self.sink, |writer| {
-            writer.handle_movie(movie)
-        })
+        self.muxing.drive(|writer| writer.handle_movie(movie))
     }
 
     /// Opens a fragment, which the samples handed over next are laid out in
@@ -102,9 +97,8 @@ impl<W: Write> FragmentedMuxer<W> {
     /// * [`Structure`](crate::DriverErrorKind::Structure): what
     ///   [`FragmentedWriter::begin_fragment`] makes of the call.
     pub fn begin_fragment(&mut self, sequence_number: u32) -> Result<(), DriverError> {
-        drive(&mut self.writer, &mut self.sink, |writer| {
-            writer.begin_fragment(sequence_number)
-        })
+        self.muxing
+            .drive(|writer| writer.begin_fragment(sequence_number))
     }
 
     /// Takes a sample, and places it in the fragment that is open
@@ -114,9 +108,7 @@ impl<W: Write> FragmentedMuxer<W> {
     /// * [`Structure`](crate::DriverErrorKind::Structure): what
     ///   [`FragmentedWriter::handle_sample`] makes of the call.
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), DriverError> {
-        drive(&mut self.writer, &mut self.sink, |writer| {
-            writer.handle_sample(sample)
-        })
+        self.muxing.drive(|writer| writer.handle_sample(sample))
     }
 
     /// Closes the fragment that is open, and writes it
@@ -127,11 +119,7 @@ impl<W: Write> FragmentedMuxer<W> {
     ///   [`FragmentedWriter::finish_fragment`] makes of the call.
     /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes.
     pub fn finish_fragment(&mut self) -> Result<(), DriverError> {
-        drive(
-            &mut self.writer,
-            &mut self.sink,
-            FragmentedWriter::finish_fragment,
-        )
+        self.muxing.drive(FragmentedWriter::finish_fragment)
     }
 
     /// Declares the file over, and flushes the sink
@@ -142,10 +130,7 @@ impl<W: Write> FragmentedMuxer<W> {
     ///   [`FragmentedWriter::finish`] makes of the call.
     /// * [`Io`](crate::DriverErrorKind::Io): the sink does not flush.
     pub fn finish(&mut self) -> Result<(), DriverError> {
-        drive(&mut self.writer, &mut self.sink, FragmentedWriter::finish)?;
-        self.sink.flush()?;
-
-        Ok(())
+        self.muxing.finish(FragmentedWriter::finish)
     }
 }
 

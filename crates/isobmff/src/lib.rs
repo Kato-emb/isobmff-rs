@@ -140,7 +140,7 @@ pub use non_fragmented_movie::{NonFragmentedReader, NonFragmentedWriter};
 pub use structure_error::{StructureError, StructureErrorKind};
 
 #[cfg(feature = "std")]
-pub(crate) use driver::{Demuxing, PollOutput, ReadSamples, drive};
+pub(crate) use driver::{Demuxing, Muxing, PollOutput, ReadSamples};
 pub(crate) use whole_box::{WholeBoxReader, compact_box_header, whole_box_header, whole_payload};
 
 pub use isobmff_boxes::*;

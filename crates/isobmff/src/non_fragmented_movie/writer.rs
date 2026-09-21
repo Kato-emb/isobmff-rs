@@ -163,7 +163,7 @@ impl NonFragmentedWriter {
         let payload = whole_payload(&file_type).map_err(|failure| self.fail(failure))?;
         let header = whole_box_header(FileTypeBox::BOX_TYPE, payload.len() as u64)
             .map_err(|failure| self.fail(failure))?;
-        self.place(FileTypeBox::BOX_TYPE)?;
+        self.admit(FileTypeBox::BOX_TYPE)?;
 
         self.frame(header, alloc::vec![payload])
     }
@@ -188,7 +188,7 @@ impl NonFragmentedWriter {
         // is refused where it is handed over, before chunks are laid down
         // against the first, and the structure places a `moov` the same
         // before the media data as after it.
-        self.place(MovieBox::BOX_TYPE)?;
+        self.admit(MovieBox::BOX_TYPE)?;
         self.movie = Some(movie);
 
         Ok(())
@@ -215,7 +215,7 @@ impl NonFragmentedWriter {
         // offset is stated before it is, so the chunk goes down under the
         // compact header whatever its length, and is refused where that form
         // cannot declare it.
-        self.place(MediaDataBox::BOX_TYPE)?;
+        self.admit(MediaDataBox::BOX_TYPE)?;
         let header =
             compact_box_header(MediaDataBox::BOX_TYPE, 0).map_err(|failure| self.fail(failure))?;
         // Why not checked_add: the framing already carries where the file
@@ -316,12 +316,12 @@ impl NonFragmentedWriter {
         Ok(())
     }
 
-    /// Places the box `box_type` names where the structure has it, failing the writer where it is refused
+    /// Admits the box `box_type` names into the file where the structure places it, failing the writer where it is refused
     ///
     /// A box the structure passes over has no place in the file to be laid
     /// down at, and is refused as
     /// [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder).
-    fn place(&mut self, box_type: BoxType) -> Result<(), StructureError> {
+    fn admit(&mut self, box_type: BoxType) -> Result<(), StructureError> {
         match self
             .structure
             .handle_box_type(box_type)
