@@ -317,7 +317,7 @@ mod tests {
     }
 
     /// Sink recording what was written to it, and whether it was flushed
-    #[derive(Default)]
+    #[derive(Default, PartialEq, Debug)]
     struct Recording {
         written: Vec<u8>,
         flushed: bool,
@@ -478,7 +478,13 @@ mod tests {
             driven.map_err(|failure| failure.structure_error()),
             Err(Some(StructureError::already_finished()))
         );
-        assert_eq!(muxer.sink.written, b"\0\0\0\x0cfreeMADE");
+        assert_eq!(
+            muxer.sink,
+            Recording {
+                written: b"\0\0\0\x0cfreeMADE".to_vec(),
+                flushed: false,
+            }
+        );
     }
 
     #[test]
@@ -526,7 +532,12 @@ mod tests {
         });
 
         assert_eq!(finished.map_err(|failure| failure.kind()), Ok(()));
-        assert_eq!(muxer.sink.written, b"\0\0\0\x0cfreeLAST");
-        assert!(muxer.sink.flushed);
+        assert_eq!(
+            muxer.sink,
+            Recording {
+                written: b"\0\0\0\x0cfreeLAST".to_vec(),
+                flushed: true,
+            }
+        );
     }
 }
