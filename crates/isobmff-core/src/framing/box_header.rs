@@ -174,14 +174,13 @@ impl BoxHeader {
         })
     }
 
-    /// Creates the header introducing a payload of the given length, its total in the `size` field alone
+    /// Creates the header that introduces a payload of the given length, with the total in the `size` field alone
     ///
     /// The total goes in the 32-bit `size` field, and `None` is returned where
-    /// it does not fit there — where
-    /// [`with_payload_len`](Self::with_payload_len) would move it to the
-    /// `largesize` field — so a caller that settled on the length of the
-    /// compact header learns that the payload has outgrown it. A `usertype`
-    /// field is included whenever `box_type` carries one.
+    /// it does not fit there, where
+    /// [`with_payload_len`](Self::with_payload_len) would reach for the
+    /// `largesize` field. A `usertype` field is included whenever `box_type`
+    /// carries one.
     ///
     /// # Examples
     ///
