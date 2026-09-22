@@ -3,7 +3,7 @@
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox, MovieFragmentBox};
 use isobmff_core::{BoxDefinition, BoxType};
 
-use crate::StructureError;
+use crate::Error;
 
 /// Holds the structure of a fragmented movie file, one top-level box at a time
 ///
@@ -21,23 +21,23 @@ use crate::StructureError;
 /// * The `ftyp` comes first, as early as §4.3 asks: a file carrying none reads
 ///   all the same, as §4.3 allows, but one carrying it after any other box —
 ///   a second `ftyp` among them — is
-///   [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder).
+///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder).
 /// * The `moov` comes once, and before any fragment: a second is
-///   [`DuplicateBox`](crate::StructureErrorKind::DuplicateBox), and a `moof`
+///   [`DuplicateBox`](crate::ErrorKind::DuplicateBox), and a `moof`
 ///   arriving before it is
-///   [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder). A file
+///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder). A file
 ///   declared over without one is
-///   [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox).
+///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
 /// * The `mdat` comes after a fragment: one arriving before any `moof` is
-///   [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder). How many
+///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder). How many
 ///   follow a fragment is not counted.
 /// * Every other box is passed over, wherever it lies.
 /// * An `Err` leaves the structure failed for good,
-///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished) aside:
+///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside:
 ///   every later call reports that same failure again.
 /// * [`finish`](Self::finish) declares the file over. A header handed over
 ///   then, or a second [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished).
+///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FragmentedStructure {
     state: State,
@@ -66,7 +66,7 @@ enum State {
     /// Told the file is over, and taking no more headers
     Finished,
     /// Failed, and reporting that same failure for every call after it
-    Failed(StructureError),
+    Failed(Error),
 }
 
 /// How far into the order of a fragmented movie file the boxes so far reach
@@ -95,22 +95,22 @@ impl FragmentedStructure {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder): an
+    /// * [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder): an
     ///   `ftyp` after another box, a `moof` before the `moov`, or an `mdat`
     ///   before any `moof`.
-    /// * [`DuplicateBox`](crate::StructureErrorKind::DuplicateBox): a second
+    /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): a second
     ///   `moov`.
-    /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the structure keeps and reports
     ///   again for every call after it.
     pub(crate) fn handle_box_type(
         &mut self,
         box_type: BoxType,
-    ) -> Result<FragmentedDisposition, StructureError> {
+    ) -> Result<FragmentedDisposition, Error> {
         let position = match self.state {
             State::Reading(position) => position,
-            State::Finished => return Err(StructureError::already_finished()),
+            State::Finished => return Err(Error::already_finished()),
             State::Failed(failure) => return Err(failure),
         };
 
@@ -125,13 +125,13 @@ impl FragmentedStructure {
     ///
     /// # Errors
     ///
-    /// * [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox):
+    /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox):
     ///   the file carried no `moov`.
-    /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was already declared over.
     /// * The failure of a previous call, which the structure keeps and reports
     ///   again for every call after it.
-    pub(crate) fn finish(&mut self) -> Result<(), StructureError> {
+    pub(crate) fn finish(&mut self) -> Result<(), Error> {
         match self.state {
             State::Reading(Position::Declared | Position::Fragmenting) => {
                 self.state = State::Finished;
@@ -139,15 +139,15 @@ impl FragmentedStructure {
                 Ok(())
             }
             State::Reading(Position::Start | Position::Opened) => {
-                Err(self.fail(StructureError::missing_mandatory_box(MovieBox::BOX_TYPE)))
+                Err(self.fail(Error::missing_mandatory_box(MovieBox::BOX_TYPE)))
             }
-            State::Finished => Err(StructureError::already_finished()),
+            State::Finished => Err(Error::already_finished()),
             State::Failed(failure) => Err(failure),
         }
     }
 
     /// Fails the structure for good, and hands the failure back to report
-    const fn fail(&mut self, failure: StructureError) -> StructureError {
+    const fn fail(&mut self, failure: Error) -> Error {
         self.state = State::Failed(failure);
 
         failure
@@ -158,7 +158,7 @@ impl FragmentedStructure {
 const fn place(
     position: Position,
     box_type: BoxType,
-) -> Result<(Position, FragmentedDisposition), StructureError> {
+) -> Result<(Position, FragmentedDisposition), Error> {
     match (box_type, position) {
         (FileTypeBox::BOX_TYPE, Position::Start) => {
             Ok((Position::Opened, FragmentedDisposition::FileType))
@@ -166,13 +166,13 @@ const fn place(
         (FileTypeBox::BOX_TYPE, Position::Opened | Position::Declared | Position::Fragmenting)
         | (MovieFragmentBox::BOX_TYPE, Position::Start | Position::Opened)
         | (MediaDataBox::BOX_TYPE, Position::Start | Position::Opened | Position::Declared) => {
-            Err(StructureError::box_out_of_order(box_type))
+            Err(Error::box_out_of_order(box_type))
         }
         (MovieBox::BOX_TYPE, Position::Start | Position::Opened) => {
             Ok((Position::Declared, FragmentedDisposition::Movie))
         }
         (MovieBox::BOX_TYPE, Position::Declared | Position::Fragmenting) => {
-            Err(StructureError::duplicate_box(box_type))
+            Err(Error::duplicate_box(box_type))
         }
         (MovieFragmentBox::BOX_TYPE, Position::Declared | Position::Fragmenting) => {
             Ok((Position::Fragmenting, FragmentedDisposition::MovieFragment))
@@ -194,10 +194,10 @@ mod tests {
 
     use isobmff_core::BoxType;
 
-    use super::{FragmentedDisposition, FragmentedStructure, StructureError};
+    use super::{Error, FragmentedDisposition, FragmentedStructure};
 
     /// The dispositions of the boxes named, in order, stopping at the first failure
-    fn dispositions_of(fourccs: &[&[u8; 4]]) -> Result<Vec<FragmentedDisposition>, StructureError> {
+    fn dispositions_of(fourccs: &[&[u8; 4]]) -> Result<Vec<FragmentedDisposition>, Error> {
         let mut structure = FragmentedStructure::new();
 
         fourccs
@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn brands_declared_after_another_box_are_out_of_order() {
-        let out_of_order = Err(StructureError::box_out_of_order(BoxType::compact(*b"ftyp")));
+        let out_of_order = Err(Error::box_out_of_order(BoxType::compact(*b"ftyp")));
 
         assert_eq!(dispositions_of(&[b"free", b"ftyp"]), out_of_order);
         assert_eq!(dispositions_of(&[b"moov", b"ftyp"]), out_of_order);
@@ -253,7 +253,7 @@ mod tests {
     fn a_second_movie_is_rejected() {
         assert_eq!(
             dispositions_of(&[b"ftyp", b"moov", b"moof", b"moov"]),
-            Err(StructureError::duplicate_box(BoxType::compact(*b"moov")))
+            Err(Error::duplicate_box(BoxType::compact(*b"moov")))
         );
     }
 
@@ -261,7 +261,7 @@ mod tests {
     fn a_fragment_arriving_before_the_movie_is_out_of_order() {
         assert_eq!(
             dispositions_of(&[b"ftyp", b"moof"]),
-            Err(StructureError::box_out_of_order(BoxType::compact(*b"moof")))
+            Err(Error::box_out_of_order(BoxType::compact(*b"moof")))
         );
     }
 
@@ -269,11 +269,11 @@ mod tests {
     fn media_data_arriving_before_any_fragment_is_out_of_order() {
         assert_eq!(
             dispositions_of(&[b"ftyp", b"moov", b"mdat"]),
-            Err(StructureError::box_out_of_order(BoxType::compact(*b"mdat")))
+            Err(Error::box_out_of_order(BoxType::compact(*b"mdat")))
         );
         assert_eq!(
             dispositions_of(&[b"mdat"]),
-            Err(StructureError::box_out_of_order(BoxType::compact(*b"mdat")))
+            Err(Error::box_out_of_order(BoxType::compact(*b"mdat")))
         );
     }
 
@@ -287,9 +287,7 @@ mod tests {
 
         assert_eq!(
             structure.finish(),
-            Err(StructureError::missing_mandatory_box(BoxType::compact(
-                *b"moov"
-            )))
+            Err(Error::missing_mandatory_box(BoxType::compact(*b"moov")))
         );
     }
 
@@ -307,7 +305,7 @@ mod tests {
     #[test]
     fn a_failed_structure_reports_the_same_failure_for_every_call_after_it() {
         let mut structure = FragmentedStructure::new();
-        let failure = StructureError::box_out_of_order(BoxType::compact(*b"moof"));
+        let failure = Error::box_out_of_order(BoxType::compact(*b"moof"));
 
         assert_eq!(
             structure.handle_box_type(BoxType::compact(*b"moof")),
@@ -331,8 +329,8 @@ mod tests {
 
         assert_eq!(
             structure.handle_box_type(BoxType::compact(*b"moof")),
-            Err(StructureError::already_finished())
+            Err(Error::already_finished())
         );
-        assert_eq!(structure.finish(), Err(StructureError::already_finished()));
+        assert_eq!(structure.finish(), Err(Error::already_finished()));
     }
 }

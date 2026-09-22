@@ -3,7 +3,7 @@
 use isobmff_boxes::{MediaDataBox, MovieFragmentBox, SegmentTypeBox};
 use isobmff_core::{BoxDefinition, BoxType};
 
-use crate::StructureError;
+use crate::Error;
 
 /// Holds the structure of a media segment, one top-level box at a time
 ///
@@ -23,22 +23,22 @@ use crate::StructureError;
 ///   all the same, but one carrying it after any other box — a second `styp`
 ///   among them, as the segments of a presentation concatenated into one
 ///   file carry — is
-///   [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder).
+///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder).
 /// * The `moof` comes any number of times, and at least once: a segment
 ///   declared over without one is
-///   [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox).
+///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
 /// * The `mdat` comes after a fragment: one arriving before any `moof` is
-///   [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder). How many
+///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder). How many
 ///   follow a fragment is not counted.
 /// * Every other box is passed over, wherever it lies — a `sidx` among them,
 ///   whose index is not read, and a `moov`, since the movie a segment
 ///   continues is held apart from it.
 /// * An `Err` leaves the structure failed for good,
-///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished) aside:
+///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside:
 ///   every later call reports that same failure again.
 /// * [`finish`](Self::finish) declares the segment over. A header handed
 ///   over then, or a second [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished).
+///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MediaSegmentStructure {
     state: State,
@@ -65,7 +65,7 @@ enum State {
     /// Told the segment is over, and taking no more headers
     Finished,
     /// Failed, and reporting that same failure for every call after it
-    Failed(StructureError),
+    Failed(Error),
 }
 
 /// How far into the order of a media segment the boxes so far reach
@@ -92,19 +92,19 @@ impl MediaSegmentStructure {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder): a
+    /// * [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder): a
     ///   `styp` after another box, or an `mdat` before any `moof`.
-    /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the structure keeps and reports
     ///   again for every call after it.
     pub(crate) fn handle_box_type(
         &mut self,
         box_type: BoxType,
-    ) -> Result<MediaSegmentDisposition, StructureError> {
+    ) -> Result<MediaSegmentDisposition, Error> {
         let position = match self.state {
             State::Reading(position) => position,
-            State::Finished => return Err(StructureError::already_finished()),
+            State::Finished => return Err(Error::already_finished()),
             State::Failed(failure) => return Err(failure),
         };
 
@@ -119,29 +119,29 @@ impl MediaSegmentStructure {
     ///
     /// # Errors
     ///
-    /// * [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox):
+    /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox):
     ///   the segment carried no `moof`.
-    /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   segment was already declared over.
     /// * The failure of a previous call, which the structure keeps and reports
     ///   again for every call after it.
-    pub(crate) fn finish(&mut self) -> Result<(), StructureError> {
+    pub(crate) fn finish(&mut self) -> Result<(), Error> {
         match self.state {
             State::Reading(Position::Fragmenting) => {
                 self.state = State::Finished;
 
                 Ok(())
             }
-            State::Reading(Position::Start | Position::Opened) => Err(self.fail(
-                StructureError::missing_mandatory_box(MovieFragmentBox::BOX_TYPE),
-            )),
-            State::Finished => Err(StructureError::already_finished()),
+            State::Reading(Position::Start | Position::Opened) => {
+                Err(self.fail(Error::missing_mandatory_box(MovieFragmentBox::BOX_TYPE)))
+            }
+            State::Finished => Err(Error::already_finished()),
             State::Failed(failure) => Err(failure),
         }
     }
 
     /// Fails the structure for good, and hands the failure back to report
-    const fn fail(&mut self, failure: StructureError) -> StructureError {
+    const fn fail(&mut self, failure: Error) -> Error {
         self.state = State::Failed(failure);
 
         failure
@@ -152,14 +152,14 @@ impl MediaSegmentStructure {
 const fn place(
     position: Position,
     box_type: BoxType,
-) -> Result<(Position, MediaSegmentDisposition), StructureError> {
+) -> Result<(Position, MediaSegmentDisposition), Error> {
     match (box_type, position) {
         (SegmentTypeBox::BOX_TYPE, Position::Start) => {
             Ok((Position::Opened, MediaSegmentDisposition::SegmentType))
         }
         (SegmentTypeBox::BOX_TYPE, Position::Opened | Position::Fragmenting)
         | (MediaDataBox::BOX_TYPE, Position::Start | Position::Opened) => {
-            Err(StructureError::box_out_of_order(box_type))
+            Err(Error::box_out_of_order(box_type))
         }
         (
             MovieFragmentBox::BOX_TYPE,
@@ -185,12 +185,10 @@ mod tests {
 
     use isobmff_core::BoxType;
 
-    use super::{MediaSegmentDisposition, MediaSegmentStructure, StructureError};
+    use super::{Error, MediaSegmentDisposition, MediaSegmentStructure};
 
     /// The dispositions of the boxes named, in order, stopping at the first failure
-    fn dispositions_of(
-        fourccs: &[&[u8; 4]],
-    ) -> Result<Vec<MediaSegmentDisposition>, StructureError> {
+    fn dispositions_of(fourccs: &[&[u8; 4]]) -> Result<Vec<MediaSegmentDisposition>, Error> {
         let mut structure = MediaSegmentStructure::new();
 
         fourccs
@@ -232,7 +230,7 @@ mod tests {
 
     #[test]
     fn brands_declared_after_another_box_are_out_of_order() {
-        let out_of_order = Err(StructureError::box_out_of_order(BoxType::compact(*b"styp")));
+        let out_of_order = Err(Error::box_out_of_order(BoxType::compact(*b"styp")));
 
         assert_eq!(dispositions_of(&[b"free", b"styp"]), out_of_order);
         assert_eq!(dispositions_of(&[b"moof", b"styp"]), out_of_order);
@@ -243,11 +241,11 @@ mod tests {
     fn media_data_arriving_before_any_fragment_is_out_of_order() {
         assert_eq!(
             dispositions_of(&[b"styp", b"mdat"]),
-            Err(StructureError::box_out_of_order(BoxType::compact(*b"mdat")))
+            Err(Error::box_out_of_order(BoxType::compact(*b"mdat")))
         );
         assert_eq!(
             dispositions_of(&[b"mdat"]),
-            Err(StructureError::box_out_of_order(BoxType::compact(*b"mdat")))
+            Err(Error::box_out_of_order(BoxType::compact(*b"mdat")))
         );
     }
 
@@ -261,9 +259,7 @@ mod tests {
 
         assert_eq!(
             structure.finish(),
-            Err(StructureError::missing_mandatory_box(BoxType::compact(
-                *b"moof"
-            )))
+            Err(Error::missing_mandatory_box(BoxType::compact(*b"moof")))
         );
     }
 
@@ -281,7 +277,7 @@ mod tests {
     #[test]
     fn a_failed_structure_reports_the_same_failure_for_every_call_after_it() {
         let mut structure = MediaSegmentStructure::new();
-        let failure = StructureError::box_out_of_order(BoxType::compact(*b"mdat"));
+        let failure = Error::box_out_of_order(BoxType::compact(*b"mdat"));
 
         assert_eq!(
             structure.handle_box_type(BoxType::compact(*b"mdat")),
@@ -305,8 +301,8 @@ mod tests {
 
         assert_eq!(
             structure.handle_box_type(BoxType::compact(*b"moof")),
-            Err(StructureError::already_finished())
+            Err(Error::already_finished())
         );
-        assert_eq!(structure.finish(), Err(StructureError::already_finished()));
+        assert_eq!(structure.finish(), Err(Error::already_finished()));
     }
 }

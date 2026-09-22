@@ -94,15 +94,15 @@
 
 extern crate alloc;
 
+mod error;
 mod fragmented_movie;
 mod media_segment;
 mod non_fragmented_movie;
-mod structure_error;
 mod whole_box;
 
+pub use error::{Error, ErrorKind};
 pub use fragmented_movie::{FragmentedReader, FragmentedWriter};
 pub use media_segment::{MediaSegmentReader, MediaSegmentWriter};
 pub use non_fragmented_movie::{NonFragmentedReader, NonFragmentedWriter};
-pub use structure_error::{StructureError, StructureErrorKind};
 
 pub(crate) use whole_box::{WholeBoxReader, compact_box_header, whole_box_header, whole_payload};

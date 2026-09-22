@@ -25,10 +25,9 @@
 
 #![no_main]
 
-use isobmff::{
-    FragmentedReader, FragmentedWriter, MovieBox, Sample, StructureError, StructureErrorKind,
-    TrackExtendsBox,
-};
+use isobmff::boxes::{MovieBox, TrackExtendsBox};
+use isobmff::sample::Sample;
+use isobmff::structure::{Error, ErrorKind, FragmentedReader, FragmentedWriter};
 use isobmff_test_support::file_type;
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
@@ -227,8 +226,8 @@ fn file_of(movie: &MovieBox, fragments: &[(u32, Vec<Sample>)]) -> (Vec<u8>, usiz
             );
         }
         None => assert_eq!(
-            writer.handle_sample(a_sample()).map_err(StructureError::kind),
-            Err(StructureErrorKind::AlreadyFinished),
+            writer.handle_sample(a_sample()).map_err(Error::kind),
+            Err(ErrorKind::AlreadyFinished),
             "the writer took a sample after the file was declared over"
         ),
     }

@@ -6,7 +6,7 @@ use std::io::{Read, Seek, Write};
 use isobmff_boxes::{FileTypeBox, MovieBox};
 use isobmff_sample::Sample;
 use isobmff_sequence::EventBytes;
-use isobmff_structure::{NonFragmentedReader, NonFragmentedWriter, StructureError};
+use isobmff_structure::{NonFragmentedReader, NonFragmentedWriter};
 
 use super::driver::{Demuxer, Muxer, PollOutput, ReadSamples};
 use crate::Error;
@@ -119,11 +119,11 @@ impl<S: Read + Seek> Iterator for NonFragmentedDemuxer<S> {
 }
 
 impl ReadSamples for NonFragmentedReader {
-    fn handle_input(&mut self, input: &[u8]) -> Result<(), StructureError> {
+    fn handle_input(&mut self, input: &[u8]) -> Result<(), isobmff_structure::Error> {
         NonFragmentedReader::handle_input(self, input)
     }
 
-    fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), StructureError> {
+    fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), isobmff_structure::Error> {
         NonFragmentedReader::handle_data(self, offset, data)
     }
 
@@ -135,7 +135,7 @@ impl ReadSamples for NonFragmentedReader {
         NonFragmentedReader::wanted_extent(self)
     }
 
-    fn finish(&mut self) -> Result<(), StructureError> {
+    fn finish(&mut self) -> Result<(), isobmff_structure::Error> {
         NonFragmentedReader::finish(self)
     }
 }

@@ -6,7 +6,7 @@ use std::io::{Read, Seek, Write};
 use isobmff_boxes::{MovieBox, SegmentTypeBox};
 use isobmff_sample::Sample;
 use isobmff_sequence::EventBytes;
-use isobmff_structure::{MediaSegmentReader, MediaSegmentWriter, StructureError};
+use isobmff_structure::{MediaSegmentReader, MediaSegmentWriter};
 
 use super::driver::{Demuxer, Muxer, PollOutput, ReadSamples};
 use crate::Error;
@@ -128,11 +128,11 @@ impl<S: Read + Seek> Iterator for MediaSegmentDemuxer<S> {
 }
 
 impl ReadSamples for MediaSegmentReader {
-    fn handle_input(&mut self, input: &[u8]) -> Result<(), StructureError> {
+    fn handle_input(&mut self, input: &[u8]) -> Result<(), isobmff_structure::Error> {
         MediaSegmentReader::handle_input(self, input)
     }
 
-    fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), StructureError> {
+    fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), isobmff_structure::Error> {
         MediaSegmentReader::handle_data(self, offset, data)
     }
 
@@ -144,7 +144,7 @@ impl ReadSamples for MediaSegmentReader {
         MediaSegmentReader::wanted_extent(self)
     }
 
-    fn finish(&mut self) -> Result<(), StructureError> {
+    fn finish(&mut self) -> Result<(), isobmff_structure::Error> {
         MediaSegmentReader::finish(self)
     }
 }

@@ -3,7 +3,7 @@
 use isobmff_boxes::{DataEntry, DataReferenceBox, SampleDescriptionBox, SampleEntry, TrackBox};
 use isobmff_core::BoxDefinition as _;
 
-use crate::error::SampleError;
+use crate::error::Error;
 
 /// The sample descriptions of one track, and the resource each has its samples lie in
 ///
@@ -37,24 +37,21 @@ impl<'track> SampleDescriptions<'track> {
     ///
     /// # Errors
     ///
-    /// * [`UnknownSampleDescriptionIndex`](crate::SampleErrorKind::UnknownSampleDescriptionIndex):
+    /// * [`UnknownSampleDescriptionIndex`](crate::ErrorKind::UnknownSampleDescriptionIndex):
     ///   the track has no such `stsd` entry.
     /// * The failures of [`SampleEntry::try_from`], carried on
-    ///   [`Box`](crate::SampleErrorKind::Box): the entry does not read as a
+    ///   [`Box`](crate::ErrorKind::Box): the entry does not read as a
     ///   sample entry, with `stsd` added to the containers.
-    /// * [`UnknownDataReferenceIndex`](crate::SampleErrorKind::UnknownDataReferenceIndex):
+    /// * [`UnknownDataReferenceIndex`](crate::ErrorKind::UnknownDataReferenceIndex):
     ///   the entry names a `dref` entry the track has none of.
-    /// * [`ExternalDataReference`](crate::SampleErrorKind::ExternalDataReference):
+    /// * [`ExternalDataReference`](crate::ErrorKind::ExternalDataReference):
     ///   the `dref` entry names a resource other than the file itself.
-    pub(crate) fn data_reference_index(
-        &self,
-        sample_description_index: u32,
-    ) -> Result<u16, SampleError> {
+    pub(crate) fn data_reference_index(&self, sample_description_index: u32) -> Result<u16, Error> {
         let entry = usize::try_from(sample_description_index)
             .ok()
             .and_then(|index| index.checked_sub(1))
             .and_then(|index| self.stsd.entries().get(index))
-            .ok_or(SampleError::unknown_sample_description_index(
+            .ok_or(Error::unknown_sample_description_index(
                 self.track_id,
                 sample_description_index,
             ))?;
@@ -64,7 +61,7 @@ impl<'track> SampleDescriptions<'track> {
         let data_entry = usize::from(data_reference_index)
             .checked_sub(1)
             .and_then(|index| self.dref.entries().get(index))
-            .ok_or(SampleError::unknown_data_reference_index(
+            .ok_or(Error::unknown_data_reference_index(
                 self.track_id,
                 data_reference_index,
             ))?;
@@ -72,7 +69,7 @@ impl<'track> SampleDescriptions<'track> {
         if matches!(data_entry, DataEntry::Url(url) if url.location().is_none()) {
             Ok(data_reference_index)
         } else {
-            Err(SampleError::external_data_reference(
+            Err(Error::external_data_reference(
                 self.track_id,
                 data_reference_index,
             ))
@@ -92,7 +89,7 @@ mod tests {
     };
 
     use super::SampleDescriptions;
-    use crate::error::SampleError;
+    use crate::error::Error;
 
     #[test]
     fn an_entry_naming_the_file_itself_resolves_to_its_data_reference_index() {
@@ -110,11 +107,11 @@ mod tests {
 
         assert_eq!(
             SampleDescriptions::new(&trak).data_reference_index(2),
-            Err(SampleError::unknown_sample_description_index(1, 2))
+            Err(Error::unknown_sample_description_index(1, 2))
         );
         assert_eq!(
             SampleDescriptions::new(&trak).data_reference_index(0),
-            Err(SampleError::unknown_sample_description_index(1, 0))
+            Err(Error::unknown_sample_description_index(1, 0))
         );
     }
 
@@ -125,7 +122,7 @@ mod tests {
 
         assert_eq!(
             SampleDescriptions::new(&trak).data_reference_index(1),
-            Err(SampleError::from(
+            Err(Error::from(
                 isobmff_core::Error::truncated_payload(8, 4)
                     .in_container(BoxType::compact(*b"avc1"))
                     .in_container(BoxType::compact(*b"stsd"))
@@ -139,7 +136,7 @@ mod tests {
 
         assert_eq!(
             SampleDescriptions::new(&trak).data_reference_index(1),
-            Err(SampleError::unknown_data_reference_index(1, 1))
+            Err(Error::unknown_data_reference_index(1, 1))
         );
     }
 
@@ -156,11 +153,11 @@ mod tests {
 
         assert_eq!(
             SampleDescriptions::new(&by_url).data_reference_index(1),
-            Err(SampleError::external_data_reference(1, 1))
+            Err(Error::external_data_reference(1, 1))
         );
         assert_eq!(
             SampleDescriptions::new(&by_urn).data_reference_index(1),
-            Err(SampleError::external_data_reference(1, 1))
+            Err(Error::external_data_reference(1, 1))
         );
     }
 }

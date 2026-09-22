@@ -6,7 +6,7 @@ use isobmff_boxes::{
     CompositionTimeOffset, MovieBox, MovieFragmentBox, TrackFragmentBox, TrackRunBox,
 };
 
-use crate::error::SampleError;
+use crate::error::Error;
 use crate::sample::SampleExtent;
 use crate::sample_description::SampleDescriptions;
 use crate::track_decode_times::TrackDecodeTimes;
@@ -46,32 +46,32 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///
 /// Returned outright, before `decode_times` moves:
 ///
-/// * [`MissingMovieExtends`](crate::SampleErrorKind::MissingMovieExtends): a
+/// * [`MissingMovieExtends`](crate::ErrorKind::MissingMovieExtends): a
 ///   `traf` continues a movie that carries no `mvex`, and so no fragments.
-/// * [`UnknownTrackId`](crate::SampleErrorKind::UnknownTrackId): a `traf`
+/// * [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId): a `traf`
 ///   carries samples of a track the movie declares no `trak` or `trex` for.
-/// * [`UnknownSampleDescriptionIndex`](crate::SampleErrorKind::UnknownSampleDescriptionIndex):
+/// * [`UnknownSampleDescriptionIndex`](crate::ErrorKind::UnknownSampleDescriptionIndex):
 ///   a `traf` describes its samples by an `stsd` entry its track has none of.
 /// * The failures of [`SampleEntry::try_from`](isobmff_boxes::SampleEntry),
-///   carried on [`Box`](crate::SampleErrorKind::Box): the `stsd` entry does
+///   carried on [`Box`](crate::ErrorKind::Box): the `stsd` entry does
 ///   not read as a sample entry, with `stsd` added to the containers.
-/// * [`UnknownDataReferenceIndex`](crate::SampleErrorKind::UnknownDataReferenceIndex):
+/// * [`UnknownDataReferenceIndex`](crate::ErrorKind::UnknownDataReferenceIndex):
 ///   the `stsd` entry names a `dref` entry its track has none of.
-/// * [`ExternalDataReference`](crate::SampleErrorKind::ExternalDataReference):
+/// * [`ExternalDataReference`](crate::ErrorKind::ExternalDataReference):
 ///   the `dref` entry names a resource other than the file itself.
-/// * [`DecodeTimeOverflow`](crate::SampleErrorKind::DecodeTimeOverflow): the
+/// * [`DecodeTimeOverflow`](crate::ErrorKind::DecodeTimeOverflow): the
 ///   decode times of a track run past what 64 bits carry.
 ///
 /// Returned as the last of the extents:
 ///
-/// * [`DataOffsetOverflow`](crate::SampleErrorKind::DataOffsetOverflow): the
+/// * [`DataOffsetOverflow`](crate::ErrorKind::DataOffsetOverflow): the
 ///   offsets a fragment states run past what 64 bits carry.
 pub fn sample_extents(
     movie_fragment: &MovieFragmentBox,
     movie: &MovieBox,
     moof_start: u64,
     decode_times: &mut TrackDecodeTimes,
-) -> Result<impl Iterator<Item = Result<SampleExtent, SampleError>> + use<>, SampleError> {
+) -> Result<impl Iterator<Item = Result<SampleExtent, Error>> + use<>, Error> {
     let mut reached = decode_times.clone();
     let track_fragments = movie_fragment
         .traf()
@@ -117,9 +117,9 @@ impl TrackFragment {
         traf: &TrackFragmentBox,
         movie: &MovieBox,
         reached: &mut TrackDecodeTimes,
-    ) -> Result<Self, SampleError> {
+    ) -> Result<Self, Error> {
         let Some(mvex) = movie.mvex() else {
-            return Err(SampleError::missing_movie_extends());
+            return Err(Error::missing_movie_extends());
         };
         let tfhd = traf.tfhd();
         let track_id = tfhd.track_id();
@@ -129,7 +129,7 @@ impl TrackFragment {
             .find(|trak| trak.tkhd().track_id() == track_id);
         let trex = mvex.trex().iter().find(|trex| trex.track_id() == track_id);
         let (Some(trak), Some(trex)) = (trak, trex) else {
-            return Err(SampleError::unknown_track_id(track_id));
+            return Err(Error::unknown_track_id(track_id));
         };
 
         let sample_description_index = tfhd
@@ -144,7 +144,7 @@ impl TrackFragment {
             tfdt.base_media_decode_time()
         });
 
-        let overflow = || SampleError::decode_time_overflow(track_id);
+        let overflow = || Error::decode_time_overflow(track_id);
         let mut end = decode_time;
         if tfhd.duration_is_empty() {
             end = end
@@ -189,8 +189,8 @@ fn resolve_data(
     movie_fragment: &MovieFragmentBox,
     track_fragments: &[TrackFragment],
     moof_start: u64,
-    extents: &mut Vec<Result<SampleExtent, SampleError>>,
-) -> Result<(), SampleError> {
+    extents: &mut Vec<Result<SampleExtent, Error>>,
+) -> Result<(), Error> {
     let mut data_before = None;
 
     for (traf, settled) in movie_fragment.traf().iter().zip(track_fragments) {
@@ -223,14 +223,14 @@ fn resolve_run(
     trun: &TrackRunBox,
     settled: &TrackFragment,
     cursor: &mut Cursor,
-    extents: &mut Vec<Result<SampleExtent, SampleError>>,
-) -> Result<(), SampleError> {
+    extents: &mut Vec<Result<SampleExtent, Error>>,
+) -> Result<(), Error> {
     let track_id = settled.track_id;
     if let Some(stated) = trun.data_offset() {
         cursor.data_offset = cursor
             .base
             .checked_add_signed(i64::from(stated))
-            .ok_or(SampleError::data_offset_overflow(track_id))?;
+            .ok_or(Error::data_offset_overflow(track_id))?;
     }
 
     let mut first_sample_flags = trun.first_sample_flags();
@@ -239,7 +239,7 @@ fn resolve_run(
         let data_end = cursor
             .data_offset
             .checked_add(declared)
-            .ok_or(SampleError::data_offset_overflow(track_id))?;
+            .ok_or(Error::data_offset_overflow(track_id))?;
         let sample_duration = row.sample_duration().unwrap_or(settled.sample_duration);
 
         extents.push(Ok(SampleExtent::new(
@@ -286,7 +286,7 @@ mod tests {
     };
 
     use super::sample_extents;
-    use crate::error::SampleError;
+    use crate::error::Error;
     use crate::sample::SampleExtent;
     use crate::track_decode_times::TrackDecodeTimes;
 
@@ -378,7 +378,7 @@ mod tests {
     fn resolved(
         movie_fragment: &MovieFragmentBox,
         movie: &MovieBox,
-    ) -> Result<Vec<SampleExtent>, SampleError> {
+    ) -> Result<Vec<SampleExtent>, Error> {
         resolved_from(movie_fragment, movie, 0, &mut TrackDecodeTimes::new())
     }
 
@@ -388,7 +388,7 @@ mod tests {
         movie: &MovieBox,
         moof_start: u64,
         decode_times: &mut TrackDecodeTimes,
-    ) -> Result<Vec<SampleExtent>, SampleError> {
+    ) -> Result<Vec<SampleExtent>, Error> {
         sample_extents(movie_fragment, movie, moof_start, decode_times)?.collect()
     }
 
@@ -624,7 +624,7 @@ mod tests {
     fn a_movie_carrying_no_extends_box_is_not_fragmented_at_all() {
         assert_eq!(
             resolved(&one_sample_movie_fragment(), &unfragmented_movie()),
-            Err(SampleError::missing_movie_extends())
+            Err(Error::missing_movie_extends())
         );
     }
 
@@ -634,7 +634,7 @@ mod tests {
 
         assert_eq!(
             resolved(&of_an_unknown_track, &one_track_movie()),
-            Err(SampleError::unknown_track_id(3))
+            Err(Error::unknown_track_id(3))
         );
     }
 
@@ -671,7 +671,7 @@ mod tests {
 
         assert_eq!(
             resolved(&movie_fragment(vec![by_a_second_entry]), &one_track_movie()),
-            Err(SampleError::unknown_sample_description_index(1, 2))
+            Err(Error::unknown_sample_description_index(1, 2))
         );
     }
 
@@ -681,7 +681,7 @@ mod tests {
 
         assert_eq!(
             resolved(&one_sample_movie_fragment(), &movie(vec![external])),
-            Err(SampleError::external_data_reference(1, 1))
+            Err(Error::external_data_reference(1, 1))
         );
     }
 
@@ -746,7 +746,7 @@ mod tests {
                 0,
                 &mut decode_times
             ),
-            Err(SampleError::unknown_track_id(3))
+            Err(Error::unknown_track_id(3))
         );
         assert_eq!(decode_times.decode_time(1), 0);
     }
@@ -793,7 +793,7 @@ mod tests {
             .collect::<Vec<_>>(),
             [
                 Ok(extent(1, 0, 100..104)),
-                Err(SampleError::data_offset_overflow(2))
+                Err(Error::data_offset_overflow(2))
             ]
         );
         assert_eq!(decode_times.decode_time(1), 1_024);
@@ -819,7 +819,7 @@ mod tests {
                 &movie_fragment(vec![at_the_end_of_time]),
                 &one_track_movie()
             ),
-            Err(SampleError::decode_time_overflow(1))
+            Err(Error::decode_time_overflow(1))
         );
     }
 
@@ -842,7 +842,7 @@ mod tests {
                 &movie_fragment(vec![past_the_end_of_the_file]),
                 &one_track_movie()
             ),
-            Err(SampleError::data_offset_overflow(1))
+            Err(Error::data_offset_overflow(1))
         );
     }
 }

@@ -9,7 +9,7 @@ use isobmff_sample::{Sample, SampleReader, TrackDecodeTimes};
 use isobmff_sequence::{BoxEvent, BoxReader};
 
 use super::{FragmentedDisposition, FragmentedStructure};
-use crate::{StructureError, WholeBoxReader};
+use crate::{Error, WholeBoxReader};
 
 /// Reads the samples a fragmented movie file carries, taking it as it arrives
 ///
@@ -40,10 +40,10 @@ use crate::{StructureError, WholeBoxReader};
 /// * The order the boxes come in, and what a file that breaks it is reported
 ///   as, are the structure's: an `ftyp` after another box, a
 ///   `moof` before the `moov`, an `mdat` before any `moof` are
-///   [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder), a second
-///   `moov` is [`DuplicateBox`](crate::StructureErrorKind::DuplicateBox), and
+///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder), a second
+///   `moov` is [`DuplicateBox`](crate::ErrorKind::DuplicateBox), and
 ///   a file declared over without a `moov` is
-///   [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox).
+///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
 ///   A file carrying no `ftyp` reads all the same, as §4.3 allows.
 /// * A box read into a value is gathered whole before it is read, so what it
 ///   declares is bounded — see [`with_limits`](Self::with_limits).
@@ -57,14 +57,14 @@ use crate::{StructureError, WholeBoxReader};
 ///   front of those held still lacks, which a caller handing the file over
 ///   in order meets as they come.
 /// * An `Err` leaves the reader failed for good,
-///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished) aside:
+///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The samples completed
 ///   before it are still there to take.
 /// * [`finish`](Self::finish) declares the file over, and reports what any
 ///   layer makes of the end of it: a box left open, the `moov` never come, a
 ///   sample short of the data it claimed. Samples are still taken after it,
 ///   but anything handed over then, or a second [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished).
+///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished).
 ///
 /// # Examples
 ///
@@ -106,7 +106,7 @@ use crate::{StructureError, WholeBoxReader};
 /// let second = reader.poll_sample().unwrap();
 /// assert_eq!((second.data(), second.decode_time()), (b"DATA".as_slice(), 1_024));
 /// assert_eq!(reader.poll_sample(), None);
-/// # Ok::<(), isobmff_structure::StructureError>(())
+/// # Ok::<(), isobmff_structure::Error>(())
 /// ```
 #[derive(Debug)]
 pub struct FragmentedReader {
@@ -129,7 +129,7 @@ enum State {
     /// Told the file is over, and taking no more input
     Finished,
     /// Failed, and reporting that same failure for every call after it
-    Failed(StructureError),
+    Failed(Error),
 }
 
 /// The top-level box that started, held as its disposition has it until it ends
@@ -175,7 +175,7 @@ impl FragmentedReader {
     /// Both bound memory the reader is about to take, and both bound one box or
     /// one sample rather than the file. A box read into a value that declares
     /// more than `payload_limit` bytes of payload is
-    /// [`PayloadLimitExceeded`](crate::StructureErrorKind::PayloadLimitExceeded)
+    /// [`PayloadLimitExceeded`](crate::ErrorKind::PayloadLimitExceeded)
     /// before a byte of it is gathered; a sample declaring more than
     /// `sample_size_limit` bytes is what
     /// [`SampleReader::with_sample_size_limit`](SampleReader::with_sample_size_limit)
@@ -204,22 +204,22 @@ impl FragmentedReader {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder),
-    ///   [`DuplicateBox`](crate::StructureErrorKind::DuplicateBox): what the
+    /// * [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder),
+    ///   [`DuplicateBox`](crate::ErrorKind::DuplicateBox): what the
     ///   structure makes of a top-level box arriving where it does.
-    /// * [`PayloadLimitExceeded`](crate::StructureErrorKind::PayloadLimitExceeded):
+    /// * [`PayloadLimitExceeded`](crate::ErrorKind::PayloadLimitExceeded):
     ///   a box read into a value reaches past the limit the reader gathers.
-    /// * [`Sequence`](crate::StructureErrorKind::Sequence): what the framing
+    /// * [`Sequence`](crate::ErrorKind::Sequence): what the framing
     ///   of the file makes of the input.
-    /// * [`Box`](crate::StructureErrorKind::Box): a box read into a value
+    /// * [`Box`](crate::ErrorKind::Box): a box read into a value
     ///   does not decode.
-    /// * [`Sample`](crate::StructureErrorKind::Sample): what the samples make
+    /// * [`Sample`](crate::ErrorKind::Sample): what the samples make
     ///   of a fragment or the media data beside it.
-    /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
-    pub fn handle_input(&mut self, input: &[u8]) -> Result<(), StructureError> {
+    pub fn handle_input(&mut self, input: &[u8]) -> Result<(), Error> {
         self.reading()?;
 
         // Why not failing before the events are read: the framing keeps the
@@ -244,11 +244,11 @@ impl FragmentedReader {
     ///
     /// # Errors
     ///
-    /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
-    pub fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), StructureError> {
+    pub fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), Error> {
         self.reading()?;
         self.samples
             .handle_data(offset, data)
@@ -294,20 +294,20 @@ impl FragmentedReader {
     ///
     /// # Errors
     ///
-    /// * [`Sequence`](crate::StructureErrorKind::Sequence): the file ended
+    /// * [`Sequence`](crate::ErrorKind::Sequence): the file ended
     ///   inside a box.
-    /// * [`Box`](crate::StructureErrorKind::Box): a box read into a value,
+    /// * [`Box`](crate::ErrorKind::Box): a box read into a value,
     ///   declaring no total, does not decode.
-    /// * [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox):
+    /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox):
     ///   the file carried no `moov`.
-    /// * [`Sample`](crate::StructureErrorKind::Sample): what the samples make
+    /// * [`Sample`](crate::ErrorKind::Sample): what the samples make
     ///   of a fragment declaring no total, or a sample a fragment declared is
     ///   short of the data it claimed.
-    /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was already declared over.
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
-    pub fn finish(&mut self) -> Result<(), StructureError> {
+    pub fn finish(&mut self) -> Result<(), Error> {
         self.reading()?;
         self.boxes
             .finish()
@@ -325,16 +325,16 @@ impl FragmentedReader {
     }
 
     /// Returns `Ok` while the reader still takes what arrives
-    const fn reading(&self) -> Result<(), StructureError> {
+    const fn reading(&self) -> Result<(), Error> {
         match self.state {
             State::Reading => Ok(()),
-            State::Finished => Err(StructureError::already_finished()),
+            State::Finished => Err(Error::already_finished()),
             State::Failed(failure) => Err(failure),
         }
     }
 
     /// Reads every box the framing has finished framing so far
-    fn read_framed(&mut self) -> Result<(), StructureError> {
+    fn read_framed(&mut self) -> Result<(), Error> {
         while let Some(event) = self.boxes.poll_event() {
             // Why not unreachable: an event was taken, so the framing names the
             // bytes it was read from, and the fallback is a degenerate position
@@ -369,7 +369,7 @@ impl FragmentedReader {
                     Some(Open::MediaData) => self
                         .samples
                         .handle_data(start, &payload)
-                        .map_err(StructureError::from),
+                        .map_err(Error::from),
                     None => Ok(()),
                 },
                 BoxEvent::End => match self.open.take() {
@@ -386,9 +386,7 @@ impl FragmentedReader {
                             // fallback repeats what the structure answers a `moof`
                             // before it with, in place of a panic the lints forbid.
                             let Some(movie) = self.movie.as_ref() else {
-                                return Err(StructureError::box_out_of_order(
-                                    MovieFragmentBox::BOX_TYPE,
-                                ));
+                                return Err(Error::box_out_of_order(MovieFragmentBox::BOX_TYPE));
                             };
 
                             let extents = sample_extents(
@@ -416,7 +414,7 @@ impl FragmentedReader {
     }
 
     /// Fails the reader for good, and hands the failure back to report
-    const fn fail(&mut self, failure: StructureError) -> StructureError {
+    const fn fail(&mut self, failure: Error) -> Error {
         self.state = State::Failed(failure);
 
         failure
@@ -437,8 +435,8 @@ mod tests {
     use isobmff_test_support::{file_type, fragmented_movie, framed, movie_fragment, written};
 
     use super::super::tests::{file_of_one_sample, sample};
-    use super::{FragmentedReader, StructureError};
-    use crate::StructureErrorKind;
+    use super::{Error, FragmentedReader};
+    use crate::ErrorKind;
 
     /// Movie of one track continued in fragments, whose defaults a `trex` states
     fn movie() -> MovieBox {
@@ -446,7 +444,7 @@ mod tests {
     }
 
     /// What the reader makes of `file` handed over whole, then declared over
-    fn read(file: &[u8]) -> Result<FragmentedReader, StructureError> {
+    fn read(file: &[u8]) -> Result<FragmentedReader, Error> {
         let mut reader = FragmentedReader::new();
 
         reader.handle_input(file)?;
@@ -468,7 +466,7 @@ mod tests {
     fn a_file_declared_over_without_a_movie_is_rejected() {
         assert_eq!(
             read(&written(&file_type())).map(drop),
-            Err(StructureError::missing_mandatory_box(MovieBox::BOX_TYPE))
+            Err(Error::missing_mandatory_box(MovieBox::BOX_TYPE))
         );
     }
 
@@ -479,8 +477,8 @@ mod tests {
         assert_eq!(
             reader
                 .handle_input(&written(&file_type()))
-                .map_err(StructureError::kind),
-            Err(StructureErrorKind::PayloadLimitExceeded)
+                .map_err(Error::kind),
+            Err(ErrorKind::PayloadLimitExceeded)
         );
     }
 
@@ -520,10 +518,10 @@ mod tests {
         let mut reader = FragmentedReader::new();
 
         assert_eq!(
-            reader.handle_input(&file).map_err(StructureError::kind),
-            Err(StructureErrorKind::Sequence(
-                isobmff_sequence::ErrorKind::Box(isobmff_core::ErrorKind::SizeBelowHeader)
-            ))
+            reader.handle_input(&file).map_err(Error::kind),
+            Err(ErrorKind::Sequence(isobmff_sequence::ErrorKind::Box(
+                isobmff_core::ErrorKind::SizeBelowHeader
+            )))
         );
         assert_eq!(
             reader.poll_sample().map(Sample::into_data),
@@ -549,7 +547,7 @@ mod tests {
     #[test]
     fn a_failed_reader_reports_the_same_failure_for_every_call_after_it() {
         let mut reader = FragmentedReader::new();
-        let failure = StructureError::box_out_of_order(FileTypeBox::BOX_TYPE);
+        let failure = Error::box_out_of_order(FileTypeBox::BOX_TYPE);
         let file = [written(&file_type()), written(&file_type())].concat();
 
         assert_eq!(reader.handle_input(&file), Err(failure));
@@ -564,12 +562,12 @@ mod tests {
 
         assert_eq!(
             reader.handle_input(&written(&file_type())),
-            Err(StructureError::already_finished())
+            Err(Error::already_finished())
         );
         assert_eq!(
             reader.handle_data(0, b"SAMP"),
-            Err(StructureError::already_finished())
+            Err(Error::already_finished())
         );
-        assert_eq!(reader.finish(), Err(StructureError::already_finished()));
+        assert_eq!(reader.finish(), Err(Error::already_finished()));
     }
 }

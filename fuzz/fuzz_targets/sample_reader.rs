@@ -38,10 +38,9 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use isobmff::movie_fragment::sample_extents;
-use isobmff::{
-    MovieBox, Sample, SampleError, SampleErrorKind, SampleExtent, SampleReader, TrackDecodeTimes,
-};
+use isobmff::boxes::MovieBox;
+use isobmff::sample::movie_fragment::sample_extents;
+use isobmff::sample::{Error, ErrorKind, Sample, SampleExtent, SampleReader, TrackDecodeTimes};
 use libfuzzer_sys::fuzz_target;
 
 #[path = "sample_reader/presentation.rs"]
@@ -76,7 +75,7 @@ enum Step<'data> {
 #[derive(PartialEq, Debug)]
 struct Reading {
     samples: Vec<Sample>,
-    failure: Option<SampleError>,
+    failure: Option<Error>,
 }
 
 fuzz_target!(|input: Input<'_>| {
@@ -139,8 +138,8 @@ fuzz_target!(|input: Input<'_>| {
 
     if laid_out.met_as_declared {
         assert_ne!(
-            in_order.failure.map(SampleError::kind),
-            Some(SampleErrorKind::UnfinishedSample),
+            in_order.failure.map(Error::kind),
+            Some(ErrorKind::UnfinishedSample),
             "a sample was left short of data every claim of it was met by"
         );
 
@@ -162,7 +161,7 @@ fuzz_target!(|input: Input<'_>| {
 ///
 /// A fragment the resolver refuses ends the presentation: the fragments before
 /// it are what the reader is handed, and the refusal is reported with them.
-fn resolved(laid_out: &LaidOut) -> (Vec<Vec<SampleExtent>>, Option<SampleError>) {
+fn resolved(laid_out: &LaidOut) -> (Vec<Vec<SampleExtent>>, Option<Error>) {
     let mut decode_times = TrackDecodeTimes::new();
     let mut extents = Vec::new();
 
@@ -230,7 +229,7 @@ fn steps<'data>(
 ///
 /// Where the resolver refused a fragment, the presentation ends there and the
 /// samples are never declared over.
-fn read(sample_size_limit: u64, steps: Vec<Step<'_>>, refused: Option<SampleError>) -> Reading {
+fn read(sample_size_limit: u64, steps: Vec<Step<'_>>, refused: Option<Error>) -> Reading {
     let mut reader = SampleReader::with_sample_size_limit(sample_size_limit);
     let mut samples = Vec::new();
     let mut failure = None;
@@ -266,8 +265,8 @@ fn read(sample_size_limit: u64, steps: Vec<Step<'_>>, refused: Option<SampleErro
 
         match over {
             Ok(()) => assert_eq!(
-                reader.handle_data(0, &[]).map_err(SampleError::kind),
-                Err(SampleErrorKind::AlreadyFinished),
+                reader.handle_data(0, &[]).map_err(Error::kind),
+                Err(ErrorKind::AlreadyFinished),
                 "the reader took media data after the samples were declared over"
             ),
             Err(reported) => failure = Some(reported),

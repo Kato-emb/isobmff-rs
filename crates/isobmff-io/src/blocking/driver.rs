@@ -6,7 +6,6 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 
 use isobmff_sample::Sample;
 use isobmff_sequence::EventBytes;
-use isobmff_structure::StructureError;
 
 use crate::Error;
 
@@ -18,10 +17,10 @@ const CUT_LENGTH: u64 = 1024 * 1024;
 /// Each is the reader's own of the same name, with its contract.
 pub(crate) trait ReadSamples {
     /// Takes the next cut of the file and reads the samples it completes
-    fn handle_input(&mut self, input: &[u8]) -> Result<(), StructureError>;
+    fn handle_input(&mut self, input: &[u8]) -> Result<(), isobmff_structure::Error>;
 
     /// Takes bytes of the file fetched for what [`wanted_extent`](Self::wanted_extent) named, and reads the samples they complete
-    fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), StructureError>;
+    fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), isobmff_structure::Error>;
 
     /// Takes the next sample the file handed over so far completed
     fn poll_sample(&mut self) -> Option<Sample>;
@@ -30,7 +29,7 @@ pub(crate) trait ReadSamples {
     fn wanted_extent(&self) -> Option<Range<u64>>;
 
     /// Declares the file over
-    fn finish(&mut self) -> Result<(), StructureError>;
+    fn finish(&mut self) -> Result<(), isobmff_structure::Error>;
 }
 
 /// The one verb of a writer a muxer takes its bytes by
@@ -193,7 +192,7 @@ impl<S: Write, W: PollOutput> Muxer<S, W> {
     /// * [`Io`](crate::ErrorKind::Io): the sink refuses the bytes.
     pub(crate) fn drive(
         &mut self,
-        step: impl FnOnce(&mut W) -> Result<(), StructureError>,
+        step: impl FnOnce(&mut W) -> Result<(), isobmff_structure::Error>,
     ) -> Result<(), Error> {
         let stepped = step(&mut self.writer);
         let mut written = Ok(());
@@ -216,7 +215,7 @@ impl<S: Write, W: PollOutput> Muxer<S, W> {
     ///   does not flush.
     pub(crate) fn finish(
         &mut self,
-        step: impl FnOnce(&mut W) -> Result<(), StructureError>,
+        step: impl FnOnce(&mut W) -> Result<(), isobmff_structure::Error>,
     ) -> Result<(), Error> {
         self.drive(step)?;
         self.sink.flush()?;
@@ -238,7 +237,6 @@ mod tests {
     use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
 
     use super::{CUT_LENGTH, Demuxer, Muxer, PollOutput, ReadSamples};
-    use isobmff_structure::{StructureError, StructureErrorKind};
 
     use crate::{Error, ErrorKind};
 
@@ -247,7 +245,7 @@ mod tests {
     struct Scripted {
         wanted: Option<Range<u64>>,
         completed_by_input: Vec<Sample>,
-        finish: Option<StructureError>,
+        finish: Option<isobmff_structure::Error>,
         inputs: Vec<Vec<u8>>,
         data: Vec<(u64, Vec<u8>)>,
         samples: VecDeque<Sample>,
@@ -255,14 +253,18 @@ mod tests {
     }
 
     impl ReadSamples for Scripted {
-        fn handle_input(&mut self, input: &[u8]) -> Result<(), StructureError> {
+        fn handle_input(&mut self, input: &[u8]) -> Result<(), isobmff_structure::Error> {
             self.inputs.push(input.to_vec());
             self.samples.extend(self.completed_by_input.drain(..));
 
             Ok(())
         }
 
-        fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), StructureError> {
+        fn handle_data(
+            &mut self,
+            offset: u64,
+            data: &[u8],
+        ) -> Result<(), isobmff_structure::Error> {
             self.data.push((offset, data.to_vec()));
             self.wanted = None;
 
@@ -277,7 +279,7 @@ mod tests {
             self.wanted.clone()
         }
 
-        fn finish(&mut self) -> Result<(), StructureError> {
+        fn finish(&mut self) -> Result<(), isobmff_structure::Error> {
             self.finished = true;
 
             self.finish.take().map_or(Ok(()), Err)
@@ -448,7 +450,7 @@ mod tests {
             io::Cursor::new(b"FILE".to_vec()),
             Scripted {
                 completed_by_input: vec![sample(b"S1"), sample(b"S2")],
-                finish: Some(StructureError::already_finished()),
+                finish: Some(isobmff_structure::Error::already_finished()),
                 ..Scripted::default()
             },
         )
@@ -459,7 +461,9 @@ mod tests {
             [
                 Ok(sample(b"S1")),
                 Ok(sample(b"S2")),
-                Err(ErrorKind::Structure(StructureErrorKind::AlreadyFinished)),
+                Err(ErrorKind::Structure(
+                    isobmff_structure::ErrorKind::AlreadyFinished
+                )),
             ]
         );
         assert!(demuxer.next().is_none());
@@ -472,12 +476,12 @@ mod tests {
         let driven = muxer.drive(|writer| {
             writer.output.extend(framed(b"MADE"));
 
-            Err(StructureError::already_finished())
+            Err(isobmff_structure::Error::already_finished())
         });
 
         assert_eq!(
             driven.map_err(|failure| failure.structure_error()),
-            Err(Some(StructureError::already_finished()))
+            Err(Some(isobmff_structure::Error::already_finished()))
         );
         assert_eq!(
             muxer.sink,
@@ -511,12 +515,14 @@ mod tests {
         let driven = muxer.drive(|writer| {
             writer.output.extend(framed(b"MADE"));
 
-            Err(StructureError::already_finished())
+            Err(isobmff_structure::Error::already_finished())
         });
 
         assert_eq!(
             driven.map_err(|failure| failure.kind()),
-            Err(ErrorKind::Structure(StructureErrorKind::AlreadyFinished))
+            Err(ErrorKind::Structure(
+                isobmff_structure::ErrorKind::AlreadyFinished
+            ))
         );
     }
 

@@ -10,7 +10,7 @@ use isobmff_boxes::{
 };
 use isobmff_core::BoxEncode as _;
 
-use crate::error::SampleError;
+use crate::error::Error;
 use crate::sample::Sample;
 use crate::track_decode_times::TrackDecodeTimes;
 
@@ -49,11 +49,11 @@ impl OpenTrack {
         row: StatedTrackRunSample,
         data_offset: u64,
         carries_on: bool,
-    ) -> Result<(), SampleError> {
+    ) -> Result<(), Error> {
         self.reached = self
             .reached
             .checked_add(u64::from(row.sample_duration()))
-            .ok_or(SampleError::decode_time_overflow(self.track_id))?;
+            .ok_or(Error::decode_time_overflow(self.track_id))?;
 
         let placed = match self.runs.last_mut() {
             Some(run) if carries_on => run.builder.push(row),
@@ -109,15 +109,15 @@ impl OpenFragment {
         &mut self,
         sample: Sample,
         decode_times: &TrackDecodeTimes,
-    ) -> Result<(), SampleError> {
+    ) -> Result<(), Error> {
         let track_id = sample.track_id();
         let offered = sample.data().len() as u64;
         let Ok(sample_size) = u32::try_from(offered) else {
-            return Err(SampleError::sample_size_out_of_range(track_id, offered));
+            return Err(Error::sample_size_out_of_range(track_id, offered));
         };
         let offset = sample.sample_composition_time_offset();
         let Some(sample_composition_time_offset) = CompositionTimeOffset::new(offset) else {
-            return Err(SampleError::composition_time_offset_out_of_range(
+            return Err(Error::composition_time_offset_out_of_range(
                 track_id, offset,
             ));
         };
@@ -144,14 +144,14 @@ impl OpenFragment {
         {
             Some(track) => {
                 if track.sample_description_index != sample_description_index {
-                    return Err(SampleError::sample_description_index_mismatch(
+                    return Err(Error::sample_description_index_mismatch(
                         track_id,
                         sample_description_index,
                         track.sample_description_index,
                     ));
                 }
                 if track.reached != decode_time {
-                    return Err(SampleError::decode_time_mismatch(
+                    return Err(Error::decode_time_mismatch(
                         track_id,
                         decode_time,
                         track.reached,
@@ -163,11 +163,7 @@ impl OpenFragment {
             None => {
                 let reached = decode_times.decode_time(track_id);
                 if decode_time < reached {
-                    return Err(SampleError::backward_decode_time(
-                        track_id,
-                        decode_time,
-                        reached,
-                    ));
+                    return Err(Error::backward_decode_time(track_id, decode_time, reached));
                 }
 
                 let mut track = OpenTrack {
@@ -197,7 +193,7 @@ impl OpenFragment {
     pub(super) fn into_boxes(
         self,
         decode_times: &mut TrackDecodeTimes,
-    ) -> Result<(MovieFragmentBox, Vec<u8>), SampleError> {
+    ) -> Result<(MovieFragmentBox, Vec<u8>), Error> {
         let measured = build_movie_fragment(self.sequence_number, &self.tracks, None)?;
         let media_data = MediaDataBox::new(self.media_data);
         let header_len = media_data
@@ -258,7 +254,7 @@ fn build_movie_fragment(
     sequence_number: u32,
     tracks: &[OpenTrack],
     base: Option<u64>,
-) -> Result<MovieFragmentBox, SampleError> {
+) -> Result<MovieFragmentBox, Error> {
     // Why not measuring with a base of zero and dropping the `Option`: the
     // offsets are checked against the field that carries them as they are
     // built, and a fragment past that field would then be refused naming the
@@ -275,10 +271,7 @@ fn build_movie_fragment(
 }
 
 /// Builds the `traf` the samples of one track of one fragment are written as
-fn build_track_fragment(
-    track: &OpenTrack,
-    base: Option<u64>,
-) -> Result<TrackFragmentBox, SampleError> {
+fn build_track_fragment(track: &OpenTrack, base: Option<u64>) -> Result<TrackFragmentBox, Error> {
     let defaults = Defaults::of(track);
     let header = TrackFragmentHeaderBox::new(
         TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
@@ -299,14 +292,14 @@ fn build_track_fragment(
                     let offset = base.saturating_add(run.data_offset);
 
                     i32::try_from(offset).map_err(|_past_the_field| {
-                        SampleError::data_offset_out_of_range(track.track_id, offset)
+                        Error::data_offset_out_of_range(track.track_id, offset)
                     })?
                 }
                 None => 0,
             };
             Ok(run.builder.build(Some(data_offset), &header))
         })
-        .collect::<Result<Vec<_>, SampleError>>()?;
+        .collect::<Result<Vec<_>, Error>>()?;
 
     Ok(TrackFragmentBox::new(
         header,
@@ -326,7 +319,7 @@ mod tests {
     };
     use isobmff_core::BoxEncode as _;
 
-    use crate::error::SampleError;
+    use crate::error::Error;
     use crate::movie_fragment_writer::MovieFragmentWriter;
     use crate::movie_fragment_writer::tests::sample;
     use crate::sample::Sample;
@@ -612,7 +605,7 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(offset_by(0, past_the_field)),
-            Err(SampleError::composition_time_offset_out_of_range(
+            Err(Error::composition_time_offset_out_of_range(
                 1,
                 past_the_field
             ))
@@ -639,7 +632,7 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(sample(1, 512, b"BBBB")),
-            Err(SampleError::decode_time_mismatch(1, 512, 1_024))
+            Err(Error::decode_time_mismatch(1, 512, 1_024))
         );
     }
 
@@ -653,7 +646,7 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(described_by_the_second),
-            Err(SampleError::sample_description_index_mismatch(1, 2, 1))
+            Err(Error::sample_description_index_mismatch(1, 2, 1))
         );
     }
 
@@ -666,7 +659,7 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(at_the_end_of_time),
-            Err(SampleError::decode_time_overflow(1))
+            Err(Error::decode_time_overflow(1))
         );
     }
 }

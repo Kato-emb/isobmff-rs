@@ -1,12 +1,12 @@
-//! [`SampleError`] as a caller reads it: what its representation carries, and how it prints
+//! [`Error`] as a caller reads it: what its representation carries, and how it prints
 
 use core::error;
 use core::fmt;
 
-use crate::error::SampleError;
+use crate::error::Error;
 use crate::error::representation::Representation;
 
-impl SampleError {
+impl Error {
     /// Returns the failure of one box carried through, when it holds one
     ///
     /// The values that failure carries, and the boxes it was reached through,
@@ -97,7 +97,7 @@ impl SampleError {
     }
 }
 
-impl fmt::Display for SampleError {
+impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.representation {
             Representation::Box(box_error) => write!(formatter, "{box_error}"),
@@ -231,10 +231,10 @@ impl fmt::Display for SampleError {
     }
 }
 
-impl fmt::Debug for SampleError {
+impl fmt::Debug for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let values = self.representation.fields();
-        let mut fields = formatter.debug_struct("SampleError");
+        let mut fields = formatter.debug_struct("Error");
         fields.field("kind", &self.kind());
         fields.field("category", &self.category());
 
@@ -285,7 +285,7 @@ impl fmt::Debug for SampleError {
     }
 }
 
-impl error::Error for SampleError {
+impl error::Error for Error {
     /// Returns the failure of one box carried through, when it holds one
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         if let Representation::Box(box_error) = &self.representation {
@@ -303,11 +303,11 @@ mod tests {
 
     use isobmff_core::BoxType;
 
-    use crate::error::SampleError;
+    use crate::error::Error;
 
     #[test]
     fn a_failure_carries_only_the_values_its_kind_names() {
-        let error = SampleError::unknown_sample_description_index(2, 7);
+        let error = Error::unknown_sample_description_index(2, 7);
 
         assert_eq!(error.track_id(), Some(2));
         assert_eq!(error.sample_description_index(), Some(7));
@@ -315,78 +315,68 @@ mod tests {
         assert_eq!(error.needed_bytes(), None);
         assert_eq!(error.established_sample_description_index(), None);
 
-        let unfinished = SampleError::unfinished_sample(2, 1_024, 512);
+        let unfinished = Error::unfinished_sample(2, 1_024, 512);
 
         assert_eq!(unfinished.needed_bytes(), Some(1_024));
         assert_eq!(unfinished.available_bytes(), Some(512));
         assert_eq!(unfinished.sample_description_index(), None);
-        assert_eq!(SampleError::missing_movie_extends().track_id(), None);
-        assert_eq!(
-            SampleError::unknown_track_id(3).sample_description_index(),
-            None
-        );
+        assert_eq!(Error::missing_movie_extends().track_id(), None);
+        assert_eq!(Error::unknown_track_id(3).sample_description_index(), None);
 
-        let external = SampleError::external_data_reference(1, 2);
+        let external = Error::external_data_reference(1, 2);
 
         assert_eq!(external.track_id(), Some(1));
         assert_eq!(external.data_reference_index(), Some(2));
         assert_eq!(external.first_chunk(), None);
-        assert_eq!(
-            SampleError::first_chunk_out_of_range(1, 3).first_chunk(),
-            Some(3)
-        );
-        assert_eq!(
-            SampleError::sample_count_mismatch(1).data_reference_index(),
-            None
-        );
+        assert_eq!(Error::first_chunk_out_of_range(1, 3).first_chunk(), Some(3));
+        assert_eq!(Error::sample_count_mismatch(1).data_reference_index(), None);
 
-        let too_long = SampleError::sample_size_out_of_range(1, 1 << 40);
+        let too_long = Error::sample_size_out_of_range(1, 1 << 40);
 
         assert_eq!(too_long.track_id(), Some(1));
         assert_eq!(too_long.needed_bytes(), Some(1 << 40));
         assert_eq!(too_long.available_bytes(), None);
 
-        let too_far = SampleError::data_offset_out_of_range(1, 1 << 40);
+        let too_far = Error::data_offset_out_of_range(1, 1 << 40);
 
         assert_eq!(too_far.needed_bytes(), None);
         assert_eq!(too_far.data_offset(), Some(1 << 40));
         assert_eq!(too_far.composition_time_offset(), None);
         assert_eq!(
-            SampleError::composition_time_offset_out_of_range(1, -(1 << 40))
-                .composition_time_offset(),
+            Error::composition_time_offset_out_of_range(1, -(1 << 40)).composition_time_offset(),
             Some(-(1 << 40))
         );
 
-        let mismatch = SampleError::sample_description_index_mismatch(1, 2, 1);
+        let mismatch = Error::sample_description_index_mismatch(1, 2, 1);
 
         assert_eq!(mismatch.sample_description_index(), Some(2));
         assert_eq!(mismatch.established_sample_description_index(), Some(1));
         assert_eq!(mismatch.stated_decode_time(), None);
 
-        let gap = SampleError::decode_time_mismatch(1, 512, 1_024);
+        let gap = Error::decode_time_mismatch(1, 512, 1_024);
 
         assert_eq!(gap.stated_decode_time(), Some(512));
         assert_eq!(gap.reached_decode_time(), Some(1_024));
         assert_eq!(gap.data_offset(), None);
-        assert_eq!(SampleError::no_fragment_open().track_id(), None);
+        assert_eq!(Error::no_fragment_open().track_id(), None);
     }
 
     #[test]
     fn a_failure_of_one_box_keeps_its_values_and_the_boxes_it_was_reached_through() {
         let box_error = isobmff_core::Error::missing_mandatory_box(BoxType::compact(*b"trex"))
             .in_container(BoxType::compact(*b"mvex"));
-        let carried = SampleError::from(box_error);
+        let carried = Error::from(box_error);
 
         assert_eq!(carried.box_error(), Some(box_error));
         assert_eq!(carried.track_id(), None);
 
-        let mismatched = SampleError::track_id_mismatch(2, 1);
+        let mismatched = Error::track_id_mismatch(2, 1);
 
         assert_eq!(mismatched.track_id(), Some(2));
         assert_eq!(mismatched.established_track_id(), Some(1));
         assert_eq!(mismatched.sample_flags(), None);
         assert_eq!(
-            SampleError::unsupported_sample_flags(1, 0x0200_0000).sample_flags(),
+            Error::unsupported_sample_flags(1, 0x0200_0000).sample_flags(),
             Some(0x0200_0000)
         );
     }
@@ -394,99 +384,99 @@ mod tests {
     #[test]
     fn display_of_a_failure_of_the_samples_states_the_reason() {
         assert_eq!(
-            SampleError::decode_time_overflow(1).to_string(),
+            Error::decode_time_overflow(1).to_string(),
             "decode time of track 1 runs past what 64 bits carry"
         );
         assert_eq!(
-            SampleError::data_offset_overflow(1).to_string(),
+            Error::data_offset_overflow(1).to_string(),
             "data offset of track 1 runs past what 64 bits carry"
         );
         assert_eq!(
-            SampleError::unknown_track_id(3).to_string(),
+            Error::unknown_track_id(3).to_string(),
             "movie declares no track 3"
         );
         assert_eq!(
-            SampleError::unknown_sample_description_index(2, 7).to_string(),
+            Error::unknown_sample_description_index(2, 7).to_string(),
             "track 2 has no stsd entry 7"
         );
         assert_eq!(
-            SampleError::missing_movie_extends().to_string(),
+            Error::missing_movie_extends().to_string(),
             "the movie carries no mvex"
         );
         assert_eq!(
-            SampleError::unknown_data_reference_index(2, 3).to_string(),
+            Error::unknown_data_reference_index(2, 3).to_string(),
             "track 2 has no dref entry 3"
         );
         assert_eq!(
-            SampleError::external_data_reference(2, 3).to_string(),
+            Error::external_data_reference(2, 3).to_string(),
             "dref entry 3 of track 2 names an external file"
         );
         assert_eq!(
-            SampleError::sample_count_mismatch(2).to_string(),
+            Error::sample_count_mismatch(2).to_string(),
             "sample tables of track 2 count different numbers of samples"
         );
         assert_eq!(
-            SampleError::first_chunk_out_of_range(2, 5).to_string(),
+            Error::first_chunk_out_of_range(2, 5).to_string(),
             "run of chunks of track 2 starts at chunk 5, out of the range open to it"
         );
         assert_eq!(
-            SampleError::sample_size_limit_exceeded(1, 32, 16).to_string(),
+            Error::sample_size_limit_exceeded(1, 32, 16).to_string(),
             "track 1 declares a sample of 32 bytes, past the 16-byte limit"
         );
         assert_eq!(
-            SampleError::unfinished_sample(2, 1_024, 512).to_string(),
+            Error::unfinished_sample(2, 1_024, 512).to_string(),
             "sample of track 2 takes 1024 bytes, and 512 arrived"
         );
         assert_eq!(
-            SampleError::already_finished().to_string(),
+            Error::already_finished().to_string(),
             "samples were declared over and take nothing more"
         );
         assert_eq!(
-            SampleError::no_fragment_open().to_string(),
+            Error::no_fragment_open().to_string(),
             "no fragment is open to carry a sample or be closed"
         );
         assert_eq!(
-            SampleError::fragment_still_open().to_string(),
+            Error::fragment_still_open().to_string(),
             "fragment is still open"
         );
         assert_eq!(
-            SampleError::sample_size_out_of_range(1, 1 << 40).to_string(),
+            Error::sample_size_out_of_range(1, 1 << 40).to_string(),
             "track 1 states a sample of 1099511627776 bytes, past the 4294967295 a trun row or an stsz entry carries"
         );
         assert_eq!(
-            SampleError::data_offset_out_of_range(1, 1 << 40).to_string(),
+            Error::data_offset_out_of_range(1, 1 << 40).to_string(),
             "sample data of track 1 lies 1099511627776 bytes into the fragment, past the 2147483647 a trun carries"
         );
         assert_eq!(
-            SampleError::composition_time_offset_out_of_range(1, 1 << 40).to_string(),
+            Error::composition_time_offset_out_of_range(1, 1 << 40).to_string(),
             "track 1 states a composition time offset of 1099511627776, which neither version of a trun writes"
         );
         assert_eq!(
-            SampleError::decode_time_mismatch(1, 512, 1_024).to_string(),
+            Error::decode_time_mismatch(1, 512, 1_024).to_string(),
             "track 1 states decode time 512 where the samples before it reach 1024"
         );
         assert_eq!(
-            SampleError::backward_decode_time(1, 512, 1_024).to_string(),
+            Error::backward_decode_time(1, 512, 1_024).to_string(),
             "track 1 goes back to decode time 512 after reaching 1024"
         );
         assert_eq!(
-            SampleError::sample_description_index_mismatch(1, 2, 1).to_string(),
+            Error::sample_description_index_mismatch(1, 2, 1).to_string(),
             "track 1 describes a sample by stsd entry 2 in a fragment or a chunk describing it by 1"
         );
         assert_eq!(
-            SampleError::no_chunk_open().to_string(),
+            Error::no_chunk_open().to_string(),
             "no chunk is open to carry a sample"
         );
         assert_eq!(
-            SampleError::track_id_mismatch(2, 1).to_string(),
+            Error::track_id_mismatch(2, 1).to_string(),
             "sample of track 2 handed over to a chunk of track 1"
         );
         assert_eq!(
-            SampleError::unsupported_composition_time_offset(1, -8).to_string(),
+            Error::unsupported_composition_time_offset(1, -8).to_string(),
             "track 1 states a composition time offset of -8, which no sample table written here carries"
         );
         assert_eq!(
-            SampleError::unsupported_sample_flags(1, 0x0200_0000).to_string(),
+            Error::unsupported_sample_flags(1, 0x0200_0000).to_string(),
             "track 1 states sample flags 0x02000000, which no sample table written here carries"
         );
     }
@@ -495,66 +485,57 @@ mod tests {
     fn display_of_a_failure_of_one_box_reads_as_that_failure() {
         let box_error = isobmff_core::Error::missing_mandatory_box(BoxType::compact(*b"mvex"));
 
-        assert_eq!(
-            SampleError::from(box_error).to_string(),
-            box_error.to_string()
-        );
+        assert_eq!(Error::from(box_error).to_string(), box_error.to_string());
     }
 
     #[test]
     fn debug_names_the_values_a_kind_carries_and_leaves_out_the_rest() {
         assert_eq!(
-            format!("{:?}", SampleError::decode_time_overflow(1)),
-            "SampleError { kind: DecodeTimeOverflow, category: Malformed, track_id: 1 }"
+            format!("{:?}", Error::decode_time_overflow(1)),
+            "Error { kind: DecodeTimeOverflow, category: Malformed, track_id: 1 }"
         );
         assert_eq!(
-            format!("{:?}", SampleError::missing_movie_extends()),
-            "SampleError { kind: MissingMovieExtends, category: Malformed }"
+            format!("{:?}", Error::missing_movie_extends()),
+            "Error { kind: MissingMovieExtends, category: Malformed }"
         );
         assert_eq!(
-            format!("{:?}", SampleError::sample_size_limit_exceeded(1, 32, 16)),
-            "SampleError { kind: SampleSizeLimitExceeded, category: Unsupported, track_id: 1, needed_bytes: 32, available_bytes: 16 }"
+            format!("{:?}", Error::sample_size_limit_exceeded(1, 32, 16)),
+            "Error { kind: SampleSizeLimitExceeded, category: Unsupported, track_id: 1, needed_bytes: 32, available_bytes: 16 }"
         );
         assert_eq!(
-            format!("{:?}", SampleError::external_data_reference(1, 2)),
-            "SampleError { kind: ExternalDataReference, category: Unsupported, track_id: 1, data_reference_index: 2 }"
+            format!("{:?}", Error::external_data_reference(1, 2)),
+            "Error { kind: ExternalDataReference, category: Unsupported, track_id: 1, data_reference_index: 2 }"
         );
         assert_eq!(
-            format!("{:?}", SampleError::first_chunk_out_of_range(1, 5)),
-            "SampleError { kind: FirstChunkOutOfRange, category: Malformed, track_id: 1, first_chunk: 5 }"
+            format!("{:?}", Error::first_chunk_out_of_range(1, 5)),
+            "Error { kind: FirstChunkOutOfRange, category: Malformed, track_id: 1, first_chunk: 5 }"
         );
         assert_eq!(
-            format!("{:?}", SampleError::backward_decode_time(1, 512, 1_024)),
-            "SampleError { kind: BackwardDecodeTime, category: Malformed, track_id: 1, stated_decode_time: 512, reached_decode_time: 1024 }"
+            format!("{:?}", Error::backward_decode_time(1, 512, 1_024)),
+            "Error { kind: BackwardDecodeTime, category: Malformed, track_id: 1, stated_decode_time: 512, reached_decode_time: 1024 }"
         );
         assert_eq!(
-            format!("{:?}", SampleError::data_offset_out_of_range(1, 1 << 40)),
-            "SampleError { kind: DataOffsetOutOfRange, category: Unsupported, track_id: 1, data_offset: 1099511627776 }"
-        );
-        assert_eq!(
-            format!(
-                "{:?}",
-                SampleError::composition_time_offset_out_of_range(1, -(1 << 40))
-            ),
-            "SampleError { kind: CompositionTimeOffsetOutOfRange, category: Unsupported, track_id: 1, composition_time_offset: -1099511627776 }"
+            format!("{:?}", Error::data_offset_out_of_range(1, 1 << 40)),
+            "Error { kind: DataOffsetOutOfRange, category: Unsupported, track_id: 1, data_offset: 1099511627776 }"
         );
         assert_eq!(
             format!(
                 "{:?}",
-                SampleError::sample_description_index_mismatch(1, 2, 1)
+                Error::composition_time_offset_out_of_range(1, -(1 << 40))
             ),
-            "SampleError { kind: SampleDescriptionIndexMismatch, category: Malformed, track_id: 1, sample_description_index: 2, established_sample_description_index: 1 }"
+            "Error { kind: CompositionTimeOffsetOutOfRange, category: Unsupported, track_id: 1, composition_time_offset: -1099511627776 }"
         );
         assert_eq!(
-            format!("{:?}", SampleError::track_id_mismatch(2, 1)),
-            "SampleError { kind: TrackIdMismatch, category: Malformed, track_id: 2, established_track_id: 1 }"
+            format!("{:?}", Error::sample_description_index_mismatch(1, 2, 1)),
+            "Error { kind: SampleDescriptionIndexMismatch, category: Malformed, track_id: 1, sample_description_index: 2, established_sample_description_index: 1 }"
         );
         assert_eq!(
-            format!(
-                "{:?}",
-                SampleError::unsupported_sample_flags(1, 0x0200_0000)
-            ),
-            "SampleError { kind: UnsupportedSampleFlags, category: Unsupported, track_id: 1, sample_flags: 33554432 }"
+            format!("{:?}", Error::track_id_mismatch(2, 1)),
+            "Error { kind: TrackIdMismatch, category: Malformed, track_id: 2, established_track_id: 1 }"
+        );
+        assert_eq!(
+            format!("{:?}", Error::unsupported_sample_flags(1, 0x0200_0000)),
+            "Error { kind: UnsupportedSampleFlags, category: Unsupported, track_id: 1, sample_flags: 33554432 }"
         );
     }
 }

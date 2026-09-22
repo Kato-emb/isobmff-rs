@@ -32,7 +32,7 @@
 //! values and the bytes as slices, so where either is read from stays with the
 //! caller.
 //!
-//! What either layer fails on is a [`SampleError`].
+//! What either layer fails on is an [`Error`].
 //!
 //! # `no_std`
 //!
@@ -53,7 +53,7 @@ pub mod sample_table;
 mod sample_table_writer;
 mod track_decode_times;
 
-pub use error::{SampleError, SampleErrorKind};
+pub use error::{Error, ErrorKind};
 pub use movie_fragment_writer::MovieFragmentWriter;
 pub use sample::{Sample, SampleExtent};
 pub use sample_reader::SampleReader;
