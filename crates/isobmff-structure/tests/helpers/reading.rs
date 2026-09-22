@@ -3,7 +3,8 @@
 //! The whole of what a caller writes to read a fragmented file: bytes go in as
 //! they arrive, and the samples come out.
 
-use isobmff::{FragmentedReader, Sample};
+use isobmff_sample::Sample;
+use isobmff_structure::FragmentedReader;
 
 /// The samples `file` carries, read off it `cut_length` bytes at a time
 pub(crate) fn samples_of(file: &[u8], cut_length: usize) -> Vec<Sample> {

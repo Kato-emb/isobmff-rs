@@ -1,0 +1,35 @@
+[package]
+name = "isobmff-structure"
+version = "0.0.0"
+description = "Sans-IO readers and writers for the structures of an ISO base media file, and the boxes they are framed from"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+readme.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+exclude.workspace = true
+
+[dependencies]
+isobmff-boxes.workspace = true
+isobmff-core.workspace = true
+isobmff-sample.workspace = true
+isobmff-sequence.workspace = true
+
+[dev-dependencies]
+criterion = { version = "0.8", default-features = false, features = [
+    "cargo_bench_support",
+] }
+isobmff-test-support.workspace = true
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[[bench]]
+name = "non_fragmented"
+harness = false
+
+[lints]
+workspace = true

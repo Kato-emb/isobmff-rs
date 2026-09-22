@@ -21,6 +21,7 @@ extern crate alloc;
 
 mod boxes;
 mod driving;
+mod presentations;
 
 pub use boxes::{
     MEDIA_DATA, SAMPLE_DURATION, external_data_reference, file_running_to_its_end, file_type,
@@ -29,3 +30,8 @@ pub use boxes::{
     track_laid_out, track_reading_from, unfragmented_movie, written,
 };
 pub use driving::{bytes_of, events_of, payloads_fused, polled};
+pub use presentations::{
+    SAMPLE_CHUNKS, fragmented_file_samples, fragmented_file_with_samples,
+    non_fragmented_file_samples, presentation_movie, segment_file_samples,
+    segment_file_with_samples,
+};

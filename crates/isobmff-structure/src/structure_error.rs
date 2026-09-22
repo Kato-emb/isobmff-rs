@@ -25,7 +25,8 @@ use isobmff_sample::SampleError;
 /// # Examples
 ///
 /// ```
-/// use isobmff::{BoxType, Category, StructureError, StructureErrorKind};
+/// use isobmff_core::{BoxType, Category};
+/// use isobmff_structure::{StructureError, StructureErrorKind};
 /// use isobmff_sample::{SampleError, SampleErrorKind};
 ///
 /// // A failure of the structure names its own kind

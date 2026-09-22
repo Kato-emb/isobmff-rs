@@ -75,7 +75,8 @@ use crate::{StructureError, compact_box_header, whole_box_header, whole_payload}
 /// # Examples
 ///
 /// ```
-/// use isobmff::{NonFragmentedReader, NonFragmentedWriter, Sample};
+/// use isobmff_sample::Sample;
+/// use isobmff_structure::{NonFragmentedReader, NonFragmentedWriter};
 /// # use isobmff_test_support::{file_type, unfragmented_movie};
 /// // A file opening with its brands, whose movie declares one track and no sample yet
 /// let mut writer = NonFragmentedWriter::new();
@@ -110,7 +111,7 @@ use crate::{StructureError, compact_box_header, whole_box_header, whole_payload}
 ///     .map(Sample::into_data)
 ///     .collect();
 /// assert_eq!(read_back, [b"SAMP".to_vec(), b"DATA".to_vec(), b"LAST".to_vec()]);
-/// # Ok::<(), isobmff::StructureError>(())
+/// # Ok::<(), isobmff_structure::StructureError>(())
 /// ```
 #[derive(Debug)]
 pub struct NonFragmentedWriter {

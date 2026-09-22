@@ -5,8 +5,8 @@ use std::io::Write;
 use isobmff_boxes::{FileTypeBox, MovieBox};
 use isobmff_sample::Sample;
 use isobmff_sequence::EventBytes;
+use isobmff_structure::FragmentedWriter;
 
-use super::FragmentedWriter;
 use crate::{DriverError, Muxer, PollOutput};
 
 /// Lays a fragmented movie file down on a sink, taking the samples as they come

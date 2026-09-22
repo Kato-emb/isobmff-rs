@@ -178,13 +178,13 @@ dependencies = [
 name = "isobmff"
 version = "0.0.0"
 dependencies = [
- "criterion",
  "isobmff-avc",
  "isobmff-boxes",
  "isobmff-core",
  "isobmff-mp4",
  "isobmff-sample",
  "isobmff-sequence",
+ "isobmff-structure",
  "isobmff-test-support",
 ]
 
@@ -234,11 +234,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "isobmff-structure"
+version = "0.0.0"
+dependencies = [
+ "criterion",
+ "isobmff-boxes",
+ "isobmff-core",
+ "isobmff-sample",
+ "isobmff-sequence",
+ "isobmff-test-support",
+]
+
+[[package]]
 name = "isobmff-test-support"
 version = "0.0.0"
 dependencies = [
  "isobmff-boxes",
  "isobmff-core",
+ "isobmff-sample",
  "isobmff-sequence",
 ]
 

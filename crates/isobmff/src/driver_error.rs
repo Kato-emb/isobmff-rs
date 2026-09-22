@@ -4,7 +4,7 @@ use core::error;
 use core::fmt;
 use std::io;
 
-use crate::{StructureError, StructureErrorKind};
+use isobmff_structure::{StructureError, StructureErrorKind};
 
 /// Reason a file does not read or write through a demuxer or a muxer
 ///
