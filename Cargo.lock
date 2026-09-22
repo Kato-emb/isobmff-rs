@@ -209,6 +209,18 @@ name = "isobmff-core"
 version = "0.0.0"
 
 [[package]]
+name = "isobmff-io"
+version = "0.0.0"
+dependencies = [
+ "isobmff-boxes",
+ "isobmff-core",
+ "isobmff-sample",
+ "isobmff-sequence",
+ "isobmff-structure",
+ "isobmff-test-support",
+]
+
+[[package]]
 name = "isobmff-mp4"
 version = "0.0.0"
 dependencies = [

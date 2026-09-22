@@ -10,7 +10,7 @@
 //! samples down as a file or a segment of each kind. None reaches for a source
 //! or a sink of its own: when to read or write, and from or to where, stay with
 //! the caller. A caller that has an I/O to hand drives any of them through the
-//! demuxers and the muxers of `isobmff`.
+//! demuxers and the muxers of `isobmff-io`.
 //!
 //! # The layers a file is read through
 //!
@@ -74,7 +74,7 @@
 //!    buffer already in memory drives the six layers above the same way. Where
 //!    the file lies in its resource, and how a file offset becomes a seek or a
 //!    range, is settled here and in none of them. This crate holds no such
-//!    driver: the demuxers and the muxers of `isobmff`, one of each per stack,
+//!    driver: the demuxers and the muxers of `isobmff-io`, one of each per stack,
 //!    are the layer.
 //!
 //! A caller that holds a whole presentation in memory needs none of the

@@ -8,7 +8,7 @@ use isobmff_sample::Sample;
 use isobmff_sequence::EventBytes;
 use isobmff_structure::StructureError;
 
-use crate::DriverError;
+use crate::Error;
 
 /// Bytes handed over to the reader at a time
 const CUT_LENGTH: u64 = 1024 * 1024;
@@ -64,7 +64,7 @@ enum State {
     /// Reading the file off the source
     Reading,
     /// Over, holding the failure still to report if it ended in one
-    Over(Option<DriverError>),
+    Over(Option<Error>),
 }
 
 impl<S: Read + Seek, R: ReadSamples> Demuxer<S, R> {
@@ -72,9 +72,9 @@ impl<S: Read + Seek, R: ReadSamples> Demuxer<S, R> {
     ///
     /// # Errors
     ///
-    /// * [`Io`](crate::DriverErrorKind::Io): the source does not report
+    /// * [`Io`](crate::ErrorKind::Io): the source does not report
     ///   where it stands.
-    pub(crate) fn new(mut source: S, reader: R) -> Result<Self, DriverError> {
+    pub(crate) fn new(mut source: S, reader: R) -> Result<Self, Error> {
         let origin = source.stream_position()?;
 
         Ok(Self {
@@ -93,7 +93,7 @@ impl<S: Read + Seek, R: ReadSamples> Demuxer<S, R> {
     }
 
     /// Reads on: fetches what the reader lacks if the file passed it by, else hands over the next cut
-    fn read_on(&mut self) -> Result<(), DriverError> {
+    fn read_on(&mut self) -> Result<(), Error> {
         let passed_by = self
             .reader
             .wanted_extent()
@@ -149,7 +149,7 @@ impl<S: Read + Seek, R: ReadSamples> Demuxer<S, R> {
 }
 
 impl<S: Read + Seek, R: ReadSamples> Iterator for Demuxer<S, R> {
-    type Item = Result<Sample, DriverError>;
+    type Item = Result<Sample, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -187,14 +187,14 @@ impl<S: Write, W: PollOutput> Muxer<S, W> {
     ///
     /// # Errors
     ///
-    /// * [`Structure`](crate::DriverErrorKind::Structure): what the writer
+    /// * [`Structure`](crate::ErrorKind::Structure): what the writer
     ///   makes of the step, reported ahead of the sink's failure; the bytes
     ///   made before the refusal reach the sink all the same.
-    /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes.
+    /// * [`Io`](crate::ErrorKind::Io): the sink refuses the bytes.
     pub(crate) fn drive(
         &mut self,
         step: impl FnOnce(&mut W) -> Result<(), StructureError>,
-    ) -> Result<(), DriverError> {
+    ) -> Result<(), Error> {
         let stepped = step(&mut self.writer);
         let mut written = Ok(());
         while let Some(bytes) = self.writer.poll_output() {
@@ -210,14 +210,14 @@ impl<S: Write, W: PollOutput> Muxer<S, W> {
     ///
     /// # Errors
     ///
-    /// * [`Structure`](crate::DriverErrorKind::Structure): what the writer
+    /// * [`Structure`](crate::ErrorKind::Structure): what the writer
     ///   makes of the step.
-    /// * [`Io`](crate::DriverErrorKind::Io): the sink refuses the bytes, or
+    /// * [`Io`](crate::ErrorKind::Io): the sink refuses the bytes, or
     ///   does not flush.
     pub(crate) fn finish(
         &mut self,
         step: impl FnOnce(&mut W) -> Result<(), StructureError>,
-    ) -> Result<(), DriverError> {
+    ) -> Result<(), Error> {
         self.drive(step)?;
         self.sink.flush()?;
 
@@ -240,7 +240,7 @@ mod tests {
     use super::{CUT_LENGTH, Demuxer, Muxer, PollOutput, ReadSamples};
     use isobmff_structure::{StructureError, StructureErrorKind};
 
-    use crate::{DriverError, DriverErrorKind};
+    use crate::{Error, ErrorKind};
 
     /// Reader answering as scripted, and recording what it was handed
     #[derive(Default)]
@@ -363,7 +363,7 @@ mod tests {
     /// What `demuxer` yields, kind for kind, until it is over
     fn yielded(
         demuxer: &mut Demuxer<impl Read + Seek, Scripted>,
-    ) -> Vec<Result<Sample, DriverErrorKind>> {
+    ) -> Vec<Result<Sample, ErrorKind>> {
         demuxer
             .map(|sample| sample.map_err(|failure| failure.kind()))
             .collect()
@@ -428,7 +428,7 @@ mod tests {
 
         assert_eq!(
             yielded(&mut demuxer),
-            [Err(DriverErrorKind::Io(io::ErrorKind::UnexpectedEof))]
+            [Err(ErrorKind::Io(io::ErrorKind::UnexpectedEof))]
         );
     }
 
@@ -459,7 +459,7 @@ mod tests {
             [
                 Ok(sample(b"S1")),
                 Ok(sample(b"S2")),
-                Err(DriverErrorKind::Structure(
+                Err(ErrorKind::Structure(
                     StructureErrorKind::AlreadyFinished
                 )),
             ]
@@ -502,7 +502,7 @@ mod tests {
 
         assert_eq!(
             driven.map_err(|failure| failure.kind()),
-            Err(DriverErrorKind::Io(io::ErrorKind::WriteZero))
+            Err(ErrorKind::Io(io::ErrorKind::WriteZero))
         );
     }
 
@@ -518,7 +518,7 @@ mod tests {
 
         assert_eq!(
             driven.map_err(|failure| failure.kind()),
-            Err(DriverErrorKind::Structure(
+            Err(ErrorKind::Structure(
                 StructureErrorKind::AlreadyFinished
             ))
         );
@@ -528,7 +528,7 @@ mod tests {
     fn finishing_writes_the_last_step_and_flushes_the_sink() {
         let mut muxer = Muxer::new(Recording::default(), Queued::default());
 
-        let finished: Result<(), DriverError> = muxer.finish(|writer| {
+        let finished: Result<(), Error> = muxer.finish(|writer| {
             writer.output.extend(framed(b"LAST"));
 
             Ok(())
