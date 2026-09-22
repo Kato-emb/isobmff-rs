@@ -6,3 +6,10 @@
 //! down from. What each takes and refuses is its own contract.
 
 mod driver;
+mod fragmented_movie;
+mod media_segment;
+mod non_fragmented_movie;
+
+pub use fragmented_movie::{FragmentedDemuxer, FragmentedMuxer};
+pub use media_segment::{MediaSegmentDemuxer, MediaSegmentMuxer};
+pub use non_fragmented_movie::{NonFragmentedDemuxer, NonFragmentedMuxer};

@@ -459,9 +459,7 @@ mod tests {
             [
                 Ok(sample(b"S1")),
                 Ok(sample(b"S2")),
-                Err(ErrorKind::Structure(
-                    StructureErrorKind::AlreadyFinished
-                )),
+                Err(ErrorKind::Structure(StructureErrorKind::AlreadyFinished)),
             ]
         );
         assert!(demuxer.next().is_none());
@@ -518,9 +516,7 @@ mod tests {
 
         assert_eq!(
             driven.map_err(|failure| failure.kind()),
-            Err(ErrorKind::Structure(
-                StructureErrorKind::AlreadyFinished
-            ))
+            Err(ErrorKind::Structure(StructureErrorKind::AlreadyFinished))
         );
     }
 
