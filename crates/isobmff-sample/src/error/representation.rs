@@ -2,7 +2,7 @@
 
 use isobmff_core::Category;
 
-use crate::error::kind::SampleErrorKind;
+use crate::error::kind::ErrorKind;
 
 /// Values a failure carries, keyed by what went wrong
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -128,41 +128,39 @@ impl Fields {
 
 impl Representation {
     /// Returns what went wrong
-    pub(super) const fn kind(self) -> SampleErrorKind {
+    pub(super) const fn kind(self) -> ErrorKind {
         match self {
-            Self::Box(box_error) => SampleErrorKind::Box(box_error.kind()),
-            Self::DecodeTimeOverflow { .. } => SampleErrorKind::DecodeTimeOverflow,
-            Self::DataOffsetOverflow { .. } => SampleErrorKind::DataOffsetOverflow,
-            Self::UnknownTrackId { .. } => SampleErrorKind::UnknownTrackId,
-            Self::UnknownSampleDescriptionIndex { .. } => {
-                SampleErrorKind::UnknownSampleDescriptionIndex
-            }
-            Self::MissingMovieExtends => SampleErrorKind::MissingMovieExtends,
-            Self::UnknownDataReferenceIndex { .. } => SampleErrorKind::UnknownDataReferenceIndex,
-            Self::ExternalDataReference { .. } => SampleErrorKind::ExternalDataReference,
-            Self::SampleCountMismatch { .. } => SampleErrorKind::SampleCountMismatch,
-            Self::FirstChunkOutOfRange { .. } => SampleErrorKind::FirstChunkOutOfRange,
-            Self::SampleSizeLimitExceeded { .. } => SampleErrorKind::SampleSizeLimitExceeded,
-            Self::UnfinishedSample { .. } => SampleErrorKind::UnfinishedSample,
-            Self::AlreadyFinished => SampleErrorKind::AlreadyFinished,
-            Self::NoFragmentOpen => SampleErrorKind::NoFragmentOpen,
-            Self::FragmentStillOpen => SampleErrorKind::FragmentStillOpen,
-            Self::SampleSizeOutOfRange { .. } => SampleErrorKind::SampleSizeOutOfRange,
-            Self::DataOffsetOutOfRange { .. } => SampleErrorKind::DataOffsetOutOfRange,
+            Self::Box(box_error) => ErrorKind::Box(box_error.kind()),
+            Self::DecodeTimeOverflow { .. } => ErrorKind::DecodeTimeOverflow,
+            Self::DataOffsetOverflow { .. } => ErrorKind::DataOffsetOverflow,
+            Self::UnknownTrackId { .. } => ErrorKind::UnknownTrackId,
+            Self::UnknownSampleDescriptionIndex { .. } => ErrorKind::UnknownSampleDescriptionIndex,
+            Self::MissingMovieExtends => ErrorKind::MissingMovieExtends,
+            Self::UnknownDataReferenceIndex { .. } => ErrorKind::UnknownDataReferenceIndex,
+            Self::ExternalDataReference { .. } => ErrorKind::ExternalDataReference,
+            Self::SampleCountMismatch { .. } => ErrorKind::SampleCountMismatch,
+            Self::FirstChunkOutOfRange { .. } => ErrorKind::FirstChunkOutOfRange,
+            Self::SampleSizeLimitExceeded { .. } => ErrorKind::SampleSizeLimitExceeded,
+            Self::UnfinishedSample { .. } => ErrorKind::UnfinishedSample,
+            Self::AlreadyFinished => ErrorKind::AlreadyFinished,
+            Self::NoFragmentOpen => ErrorKind::NoFragmentOpen,
+            Self::FragmentStillOpen => ErrorKind::FragmentStillOpen,
+            Self::SampleSizeOutOfRange { .. } => ErrorKind::SampleSizeOutOfRange,
+            Self::DataOffsetOutOfRange { .. } => ErrorKind::DataOffsetOutOfRange,
             Self::CompositionTimeOffsetOutOfRange { .. } => {
-                SampleErrorKind::CompositionTimeOffsetOutOfRange
+                ErrorKind::CompositionTimeOffsetOutOfRange
             }
-            Self::DecodeTimeMismatch { .. } => SampleErrorKind::DecodeTimeMismatch,
-            Self::BackwardDecodeTime { .. } => SampleErrorKind::BackwardDecodeTime,
+            Self::DecodeTimeMismatch { .. } => ErrorKind::DecodeTimeMismatch,
+            Self::BackwardDecodeTime { .. } => ErrorKind::BackwardDecodeTime,
             Self::SampleDescriptionIndexMismatch { .. } => {
-                SampleErrorKind::SampleDescriptionIndexMismatch
+                ErrorKind::SampleDescriptionIndexMismatch
             }
-            Self::NoChunkOpen => SampleErrorKind::NoChunkOpen,
-            Self::TrackIdMismatch { .. } => SampleErrorKind::TrackIdMismatch,
+            Self::NoChunkOpen => ErrorKind::NoChunkOpen,
+            Self::TrackIdMismatch { .. } => ErrorKind::TrackIdMismatch,
             Self::UnsupportedCompositionTimeOffset { .. } => {
-                SampleErrorKind::UnsupportedCompositionTimeOffset
+                ErrorKind::UnsupportedCompositionTimeOffset
             }
-            Self::UnsupportedSampleFlags { .. } => SampleErrorKind::UnsupportedSampleFlags,
+            Self::UnsupportedSampleFlags { .. } => ErrorKind::UnsupportedSampleFlags,
         }
     }
 
@@ -329,51 +327,48 @@ impl Representation {
 mod tests {
     use isobmff_core::Category;
 
-    use crate::error::SampleError;
+    use crate::error::Error;
 
     #[test]
     fn a_kind_falls_in_the_category_its_situation_asks_for() {
         assert_eq!(
-            SampleError::decode_time_overflow(3).category(),
+            Error::decode_time_overflow(3).category(),
             Category::Malformed
         );
+        assert_eq!(Error::unknown_track_id(3).category(), Category::Malformed);
         assert_eq!(
-            SampleError::unknown_track_id(3).category(),
-            Category::Malformed
-        );
-        assert_eq!(
-            SampleError::sample_size_limit_exceeded(1, 32, 16).category(),
+            Error::sample_size_limit_exceeded(1, 32, 16).category(),
             Category::Unsupported
         );
         assert_eq!(
-            SampleError::external_data_reference(1, 2).category(),
+            Error::external_data_reference(1, 2).category(),
             Category::Unsupported
         );
         assert_eq!(
-            SampleError::first_chunk_out_of_range(1, 3).category(),
+            Error::first_chunk_out_of_range(1, 3).category(),
             Category::Malformed
         );
-        assert_eq!(SampleError::already_finished().category(), Category::Usage);
+        assert_eq!(Error::already_finished().category(), Category::Usage);
         assert_eq!(
-            SampleError::decode_time_mismatch(1, 512, 1_024).category(),
+            Error::decode_time_mismatch(1, 512, 1_024).category(),
             Category::Malformed
         );
         assert_eq!(
-            SampleError::sample_size_out_of_range(1, 1 << 40).category(),
+            Error::sample_size_out_of_range(1, 1 << 40).category(),
             Category::Unsupported
         );
-        assert_eq!(SampleError::no_fragment_open().category(), Category::Usage);
-        assert_eq!(SampleError::no_chunk_open().category(), Category::Usage);
+        assert_eq!(Error::no_fragment_open().category(), Category::Usage);
+        assert_eq!(Error::no_chunk_open().category(), Category::Usage);
         assert_eq!(
-            SampleError::track_id_mismatch(2, 1).category(),
+            Error::track_id_mismatch(2, 1).category(),
             Category::Malformed
         );
         assert_eq!(
-            SampleError::unsupported_sample_flags(1, 0x0200_0000).category(),
+            Error::unsupported_sample_flags(1, 0x0200_0000).category(),
             Category::Unsupported
         );
         assert_eq!(
-            SampleError::from(isobmff_core::Error::unsupported_version(2)).category(),
+            Error::from(isobmff_core::Error::unsupported_version(2)).category(),
             Category::Unsupported
         );
     }

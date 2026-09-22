@@ -9,7 +9,7 @@ use isobmff_boxes::{
     TimeToSampleBox,
 };
 
-use crate::error::SampleError;
+use crate::error::Error;
 use crate::sample::Sample;
 
 /// Lays the samples of a presentation out as the sample tables of a movie
@@ -43,34 +43,34 @@ use crate::sample::Sample;
 /// # Contract
 ///
 /// * Handing a sample over while no chunk is open is
-///   [`NoChunkOpen`](crate::SampleErrorKind::NoChunkOpen), and one of another
+///   [`NoChunkOpen`](crate::ErrorKind::NoChunkOpen), and one of another
 ///   track than the chunk holds is
-///   [`TrackIdMismatch`](crate::SampleErrorKind::TrackIdMismatch). A chunk no
+///   [`TrackIdMismatch`](crate::ErrorKind::TrackIdMismatch). A chunk no
 ///   sample was handed over to is not recorded.
 /// * The decode timeline of a track starts at zero and states how long each
 ///   sample lasts, never when it is decoded, so a sample of a track has to
 ///   start where the one before it ends — the first at zero — which is
 ///   otherwise
-///   [`DecodeTimeMismatch`](crate::SampleErrorKind::DecodeTimeMismatch).
+///   [`DecodeTimeMismatch`](crate::ErrorKind::DecodeTimeMismatch).
 /// * The samples of a chunk are all described by one `stsd` entry, which the
 ///   run of chunks states for them (§8.7.4): a chunk mixing two is
-///   [`SampleDescriptionIndexMismatch`](crate::SampleErrorKind::SampleDescriptionIndexMismatch).
+///   [`SampleDescriptionIndexMismatch`](crate::ErrorKind::SampleDescriptionIndexMismatch).
 /// * The four tables state neither composition time offsets nor sample flags,
 ///   which the `ctts`, the `stss` and the `sdtp` would, so a sample stating an offset
 ///   other than zero or any flag is refused:
-///   [`UnsupportedCompositionTimeOffset`](crate::SampleErrorKind::UnsupportedCompositionTimeOffset)
-///   and [`UnsupportedSampleFlags`](crate::SampleErrorKind::UnsupportedSampleFlags).
+///   [`UnsupportedCompositionTimeOffset`](crate::ErrorKind::UnsupportedCompositionTimeOffset)
+///   and [`UnsupportedSampleFlags`](crate::ErrorKind::UnsupportedSampleFlags).
 /// * A chunk holding more samples than an `stsc` entry counts, or numbered
 ///   past what one reaches, is reported by [`finish`](Self::finish), where the
 ///   tables are built: the failure of the box, carried on
-///   [`Box`](crate::SampleErrorKind::Box).
+///   [`Box`](crate::ErrorKind::Box).
 /// * An `Err` leaves the writer failed for good,
-///   [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished) aside: every
+///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside: every
 ///   later call reports that same failure again.
 /// * [`finish`](Self::finish) declares the samples over and hands back the
 ///   tables. A chunk opened or a sample handed over then, or a second
 ///   [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished).
+///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished).
 ///
 /// # Examples
 ///
@@ -99,7 +99,7 @@ use crate::sample::Sample;
 ///     *tables[&2].chunk_offsets(),
 ///     ChunkOffsets::Stco(ChunkOffsetBox::new(vec![ChunkOffsetEntry::new(1_008)]))
 /// );
-/// # Ok::<(), isobmff_sample::SampleError>(())
+/// # Ok::<(), isobmff_sample::Error>(())
 /// ```
 #[derive(Clone, Debug)]
 pub struct SampleTableWriter {
@@ -165,7 +165,7 @@ enum State {
     /// Told the samples are over, and taking nothing more
     Finished,
     /// Failed, and reporting that same failure for every call after it
-    Failed(SampleError),
+    Failed(Error),
 }
 
 /// Chunk being written, and what its samples settled once the first arrived
@@ -181,7 +181,7 @@ impl OpenChunk {
         &mut self,
         sample: Sample,
         tracks: &mut BTreeMap<u32, OpenTrack>,
-    ) -> Result<Vec<u8>, SampleError> {
+    ) -> Result<Vec<u8>, Error> {
         let track_id = sample.track_id();
         let held = self.held.get_or_insert(HeldSamples {
             track_id,
@@ -189,10 +189,10 @@ impl OpenChunk {
             sample_count: 0,
         });
         if held.track_id != track_id {
-            return Err(SampleError::track_id_mismatch(track_id, held.track_id));
+            return Err(Error::track_id_mismatch(track_id, held.track_id));
         }
         if held.sample_description_index != sample.sample_description_index() {
-            return Err(SampleError::sample_description_index_mismatch(
+            return Err(Error::sample_description_index_mismatch(
                 track_id,
                 sample.sample_description_index(),
                 held.sample_description_index,
@@ -229,26 +229,26 @@ struct OpenTrack {
 
 impl OpenTrack {
     /// Places `sample` on the tables of this track, and hands its bytes back
-    fn place(&mut self, sample: Sample) -> Result<Vec<u8>, SampleError> {
+    fn place(&mut self, sample: Sample) -> Result<Vec<u8>, Error> {
         let track_id = sample.track_id();
         if sample.sample_composition_time_offset() != 0 {
-            return Err(SampleError::unsupported_composition_time_offset(
+            return Err(Error::unsupported_composition_time_offset(
                 track_id,
                 sample.sample_composition_time_offset(),
             ));
         }
         if sample.sample_flags() != 0 {
-            return Err(SampleError::unsupported_sample_flags(
+            return Err(Error::unsupported_sample_flags(
                 track_id,
                 sample.sample_flags(),
             ));
         }
         let offered = sample.data().len() as u64;
         let Ok(sample_size) = u32::try_from(offered) else {
-            return Err(SampleError::sample_size_out_of_range(track_id, offered));
+            return Err(Error::sample_size_out_of_range(track_id, offered));
         };
         if sample.decode_time() != self.reached {
-            return Err(SampleError::decode_time_mismatch(
+            return Err(Error::decode_time_mismatch(
                 track_id,
                 sample.decode_time(),
                 self.reached,
@@ -257,7 +257,7 @@ impl OpenTrack {
         self.reached = self
             .reached
             .checked_add(u64::from(sample.sample_duration()))
-            .ok_or(SampleError::decode_time_overflow(track_id))?;
+            .ok_or(Error::decode_time_overflow(track_id))?;
         self.deltas.push(sample.sample_duration());
         self.sizes.push(sample_size);
 
@@ -265,7 +265,7 @@ impl OpenTrack {
     }
 
     /// Builds the tables of the track, now that its samples are over
-    fn into_tables(self) -> Result<SampleTables, SampleError> {
+    fn into_tables(self) -> Result<SampleTables, Error> {
         Ok(SampleTables {
             stts: TimeToSampleBox::from_deltas(self.deltas),
             stsc: SampleToChunkBox::from_chunks(self.chunks)?,
@@ -292,11 +292,11 @@ impl SampleTableWriter {
     ///
     /// # Errors
     ///
-    /// * [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
-    pub fn begin_chunk(&mut self, chunk_offset: u64) -> Result<(), SampleError> {
+    pub fn begin_chunk(&mut self, chunk_offset: u64) -> Result<(), Error> {
         self.writing()?;
         self.close_chunk();
         self.state = State::Chunk(OpenChunk {
@@ -311,31 +311,31 @@ impl SampleTableWriter {
     ///
     /// # Errors
     ///
-    /// * [`NoChunkOpen`](crate::SampleErrorKind::NoChunkOpen): no chunk was
+    /// * [`NoChunkOpen`](crate::ErrorKind::NoChunkOpen): no chunk was
     ///   opened to carry it.
-    /// * [`TrackIdMismatch`](crate::SampleErrorKind::TrackIdMismatch): the
+    /// * [`TrackIdMismatch`](crate::ErrorKind::TrackIdMismatch): the
     ///   sample belongs to another track than the chunk holds.
-    /// * [`SampleDescriptionIndexMismatch`](crate::SampleErrorKind::SampleDescriptionIndexMismatch):
+    /// * [`SampleDescriptionIndexMismatch`](crate::ErrorKind::SampleDescriptionIndexMismatch):
     ///   the sample is described by another `stsd` entry than the chunk holds.
-    /// * [`DecodeTimeMismatch`](crate::SampleErrorKind::DecodeTimeMismatch):
+    /// * [`DecodeTimeMismatch`](crate::ErrorKind::DecodeTimeMismatch):
     ///   the sample does not start where the one before it in its track ends.
-    /// * [`DecodeTimeOverflow`](crate::SampleErrorKind::DecodeTimeOverflow):
+    /// * [`DecodeTimeOverflow`](crate::ErrorKind::DecodeTimeOverflow):
     ///   the decode times of its track run past what 64 bits carry.
-    /// * [`SampleSizeOutOfRange`](crate::SampleErrorKind::SampleSizeOutOfRange):
+    /// * [`SampleSizeOutOfRange`](crate::ErrorKind::SampleSizeOutOfRange):
     ///   the sample is longer than the 32 bits an `stsz` entry states its
     ///   length in.
-    /// * [`UnsupportedCompositionTimeOffset`](crate::SampleErrorKind::UnsupportedCompositionTimeOffset):
+    /// * [`UnsupportedCompositionTimeOffset`](crate::ErrorKind::UnsupportedCompositionTimeOffset):
     ///   the sample states a composition time offset other than zero.
-    /// * [`UnsupportedSampleFlags`](crate::SampleErrorKind::UnsupportedSampleFlags):
+    /// * [`UnsupportedSampleFlags`](crate::ErrorKind::UnsupportedSampleFlags):
     ///   the sample states any flag.
-    /// * [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
-    pub fn handle_sample(&mut self, sample: Sample) -> Result<Vec<u8>, SampleError> {
+    pub fn handle_sample(&mut self, sample: Sample) -> Result<Vec<u8>, Error> {
         self.writing()?;
         let State::Chunk(chunk) = &mut self.state else {
-            return Err(self.fail(SampleError::no_chunk_open()));
+            return Err(self.fail(Error::no_chunk_open()));
         };
         chunk
             .place(sample, &mut self.tracks)
@@ -349,13 +349,13 @@ impl SampleTableWriter {
     /// # Errors
     ///
     /// * [`OutOfRange`](isobmff_core::ErrorKind::OutOfRange), carried on
-    ///   [`Box`](crate::SampleErrorKind::Box): a chunk holds more samples than
+    ///   [`Box`](crate::ErrorKind::Box): a chunk holds more samples than
     ///   an `stsc` entry counts, or is numbered past what one reaches.
-    /// * [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   samples were already declared over.
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
-    pub fn finish(&mut self) -> Result<BTreeMap<u32, SampleTables>, SampleError> {
+    pub fn finish(&mut self) -> Result<BTreeMap<u32, SampleTables>, Error> {
         self.writing()?;
         self.close_chunk();
         self.state = State::Finished;
@@ -383,16 +383,16 @@ impl SampleTableWriter {
     }
 
     /// Returns `Ok` while the writer still takes samples
-    const fn writing(&self) -> Result<(), SampleError> {
+    const fn writing(&self) -> Result<(), Error> {
         match self.state {
             State::Between | State::Chunk(_) => Ok(()),
-            State::Finished => Err(SampleError::already_finished()),
+            State::Finished => Err(Error::already_finished()),
             State::Failed(failure) => Err(failure),
         }
     }
 
     /// Fails the writer for good, and hands the failure back to report
-    fn fail(&mut self, failure: SampleError) -> SampleError {
+    fn fail(&mut self, failure: Error) -> Error {
         self.state = State::Failed(failure);
 
         failure
@@ -419,7 +419,7 @@ mod tests {
     };
 
     use super::{OpenTrack, SampleTableWriter, SampleTables};
-    use crate::error::SampleError;
+    use crate::error::Error;
     use crate::sample::Sample;
 
     /// Sample of `track_id` at `decode_time` lasting 1024 units, carrying `data`
@@ -569,7 +569,7 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(sample(1, 0, b"AAAA")),
-            Err(SampleError::no_chunk_open())
+            Err(Error::no_chunk_open())
         );
     }
 
@@ -582,7 +582,7 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(sample(2, 0, b"BBBB")),
-            Err(SampleError::track_id_mismatch(2, 1))
+            Err(Error::track_id_mismatch(2, 1))
         );
     }
 
@@ -596,7 +596,7 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(described_by_the_second),
-            Err(SampleError::sample_description_index_mismatch(1, 2, 1))
+            Err(Error::sample_description_index_mismatch(1, 2, 1))
         );
     }
 
@@ -608,7 +608,7 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(sample(1, 512, b"AAAA")),
-            Err(SampleError::decode_time_mismatch(1, 512, 0))
+            Err(Error::decode_time_mismatch(1, 512, 0))
         );
     }
 
@@ -622,7 +622,7 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(sample(1, 512, b"BBBB")),
-            Err(SampleError::decode_time_mismatch(1, 512, 1_024))
+            Err(Error::decode_time_mismatch(1, 512, 1_024))
         );
     }
 
@@ -636,7 +636,7 @@ mod tests {
 
         assert_eq!(
             track.place(at_the_end_of_time),
-            Err(SampleError::decode_time_overflow(1))
+            Err(Error::decode_time_overflow(1))
         );
     }
 
@@ -649,7 +649,7 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(composed_later),
-            Err(SampleError::unsupported_composition_time_offset(1, 8))
+            Err(Error::unsupported_composition_time_offset(1, 8))
         );
     }
 
@@ -662,7 +662,7 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(flagged),
-            Err(SampleError::unsupported_sample_flags(1, 0x0200_0000))
+            Err(Error::unsupported_sample_flags(1, 0x0200_0000))
         );
     }
 
@@ -695,15 +695,12 @@ mod tests {
 
         writer.finish().unwrap();
 
-        assert_eq!(
-            writer.begin_chunk(1_000),
-            Err(SampleError::already_finished())
-        );
+        assert_eq!(writer.begin_chunk(1_000), Err(Error::already_finished()));
         assert_eq!(
             writer.handle_sample(sample(1, 0, b"AAAA")),
-            Err(SampleError::already_finished())
+            Err(Error::already_finished())
         );
-        assert_eq!(writer.finish(), Err(SampleError::already_finished()));
+        assert_eq!(writer.finish(), Err(Error::already_finished()));
     }
 
     #[test]
@@ -716,15 +713,15 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(sample(1, 1_024, b"CCCC")),
-            Err(SampleError::decode_time_mismatch(1, 512, 1_024))
+            Err(Error::decode_time_mismatch(1, 512, 1_024))
         );
         assert_eq!(
             writer.begin_chunk(2_000),
-            Err(SampleError::decode_time_mismatch(1, 512, 1_024))
+            Err(Error::decode_time_mismatch(1, 512, 1_024))
         );
         assert_eq!(
             writer.finish(),
-            Err(SampleError::decode_time_mismatch(1, 512, 1_024))
+            Err(Error::decode_time_mismatch(1, 512, 1_024))
         );
     }
 }

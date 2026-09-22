@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{MovieBox, TrackBox};
 
-use crate::error::SampleError;
+use crate::error::Error;
 use crate::sample::SampleExtent;
 use crate::sample_description::SampleDescriptions;
 
@@ -39,26 +39,26 @@ use crate::sample_description::SampleDescriptions;
 ///
 /// Returned as the last of the extents:
 ///
-/// * [`SampleCountMismatch`](crate::SampleErrorKind::SampleCountMismatch):
+/// * [`SampleCountMismatch`](crate::ErrorKind::SampleCountMismatch):
 ///   the tables of a track count different numbers of samples.
-/// * [`FirstChunkOutOfRange`](crate::SampleErrorKind::FirstChunkOutOfRange):
+/// * [`FirstChunkOutOfRange`](crate::ErrorKind::FirstChunkOutOfRange):
 ///   a run of chunks of a track starts at a chunk outside the range open to it.
-/// * [`UnknownSampleDescriptionIndex`](crate::SampleErrorKind::UnknownSampleDescriptionIndex):
+/// * [`UnknownSampleDescriptionIndex`](crate::ErrorKind::UnknownSampleDescriptionIndex):
 ///   a run describes its samples by an `stsd` entry its track has none of.
 /// * The failures of [`SampleEntry::try_from`](isobmff_boxes::SampleEntry),
-///   carried on [`Box`](crate::SampleErrorKind::Box): the `stsd` entry does
+///   carried on [`Box`](crate::ErrorKind::Box): the `stsd` entry does
 ///   not read as a sample entry, with `stsd` added to the containers.
-/// * [`UnknownDataReferenceIndex`](crate::SampleErrorKind::UnknownDataReferenceIndex):
+/// * [`UnknownDataReferenceIndex`](crate::ErrorKind::UnknownDataReferenceIndex):
 ///   the `stsd` entry names a `dref` entry its track has none of.
-/// * [`ExternalDataReference`](crate::SampleErrorKind::ExternalDataReference):
+/// * [`ExternalDataReference`](crate::ErrorKind::ExternalDataReference):
 ///   the `dref` entry names a resource other than the file itself.
-/// * [`DecodeTimeOverflow`](crate::SampleErrorKind::DecodeTimeOverflow): the
+/// * [`DecodeTimeOverflow`](crate::ErrorKind::DecodeTimeOverflow): the
 ///   decode times of a track run past what 64 bits carry.
-/// * [`DataOffsetOverflow`](crate::SampleErrorKind::DataOffsetOverflow): the
+/// * [`DataOffsetOverflow`](crate::ErrorKind::DataOffsetOverflow): the
 ///   offsets of a track run past what 64 bits carry.
 pub fn sample_extents(
     movie: &MovieBox,
-) -> impl Iterator<Item = Result<SampleExtent, SampleError>> + use<> {
+) -> impl Iterator<Item = Result<SampleExtent, Error>> + use<> {
     let mut extents = Vec::new();
     let outcome = movie
         .trak()
@@ -70,7 +70,7 @@ pub fn sample_extents(
 }
 
 /// Resolves the samples the sample table of `trak` declares into `extents`, in sample order
-fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(), SampleError> {
+fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(), Error> {
     let track_id = trak.tkhd().track_id();
     let stbl = trak.mdia().minf().stbl();
     let descriptions = SampleDescriptions::new(trak);
@@ -78,7 +78,7 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
     let mut deltas = stbl.stts().deltas();
     let mut runs = stbl.stsc().entries().iter().peekable();
     if let Some(first) = runs.peek().filter(|run| run.first_chunk() != 1) {
-        return Err(SampleError::first_chunk_out_of_range(
+        return Err(Error::first_chunk_out_of_range(
             track_id,
             first.first_chunk(),
         ));
@@ -99,11 +99,11 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
 
         for _ in 0..run.samples_per_chunk() {
             let (Some(size), Some(delta)) = (sizes.next(), deltas.next()) else {
-                return Err(SampleError::sample_count_mismatch(track_id));
+                return Err(Error::sample_count_mismatch(track_id));
             };
             let data_end = data_offset
                 .checked_add(u64::from(size))
-                .ok_or(SampleError::data_offset_overflow(track_id))?;
+                .ok_or(Error::data_offset_overflow(track_id))?;
 
             extents.push(SampleExtent::new(
                 track_id,
@@ -118,18 +118,15 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
 
             decode_time = decode_time
                 .checked_add(u64::from(delta))
-                .ok_or(SampleError::decode_time_overflow(track_id))?;
+                .ok_or(Error::decode_time_overflow(track_id))?;
             data_offset = data_end;
         }
     }
     if let Some(run) = runs.next() {
-        return Err(SampleError::first_chunk_out_of_range(
-            track_id,
-            run.first_chunk(),
-        ));
+        return Err(Error::first_chunk_out_of_range(track_id, run.first_chunk()));
     }
     if sizes.next().is_some() || deltas.next().is_some() {
-        return Err(SampleError::sample_count_mismatch(track_id));
+        return Err(Error::sample_count_mismatch(track_id));
     }
 
     Ok(())
@@ -155,7 +152,7 @@ mod tests {
     };
 
     use super::sample_extents;
-    use crate::error::SampleError;
+    use crate::error::Error;
     use crate::sample::SampleExtent;
 
     /// Movie of the given tracks, continued in no fragment
@@ -249,7 +246,7 @@ mod tests {
     }
 
     /// Resolves the samples of `movie`, whole
-    fn resolved(movie: &MovieBox) -> Result<Vec<SampleExtent>, SampleError> {
+    fn resolved(movie: &MovieBox) -> Result<Vec<SampleExtent>, Error> {
         sample_extents(movie).collect()
     }
 
@@ -430,7 +427,7 @@ mod tests {
         ] {
             assert_eq!(
                 resolved(&movie(vec![trak])),
-                Err(SampleError::sample_count_mismatch(1))
+                Err(Error::sample_count_mismatch(1))
             );
         }
     }
@@ -447,7 +444,7 @@ mod tests {
 
         assert_eq!(
             resolved(&movie(vec![past_the_last_chunk])),
-            Err(SampleError::first_chunk_out_of_range(1, 3))
+            Err(Error::first_chunk_out_of_range(1, 3))
         );
     }
 
@@ -470,11 +467,11 @@ mod tests {
 
         assert_eq!(
             resolved(&movie(vec![doubling_back])),
-            Err(SampleError::first_chunk_out_of_range(1, 2))
+            Err(Error::first_chunk_out_of_range(1, 2))
         );
         assert_eq!(
             resolved(&movie(vec![starting_twice])),
-            Err(SampleError::first_chunk_out_of_range(1, 3))
+            Err(Error::first_chunk_out_of_range(1, 3))
         );
     }
 
@@ -490,7 +487,7 @@ mod tests {
 
         assert_eq!(
             resolved(&movie(vec![starting_at_the_second_chunk])),
-            Err(SampleError::first_chunk_out_of_range(1, 2))
+            Err(Error::first_chunk_out_of_range(1, 2))
         );
     }
 
@@ -513,7 +510,7 @@ mod tests {
 
         assert_eq!(
             resolved(&movie(vec![trak])),
-            Err(SampleError::unknown_sample_description_index(1, 2))
+            Err(Error::unknown_sample_description_index(1, 2))
         );
     }
 
@@ -527,7 +524,7 @@ mod tests {
 
         assert_eq!(
             resolved(&movie(vec![trak])),
-            Err(SampleError::external_data_reference(1, 1))
+            Err(Error::external_data_reference(1, 1))
         );
     }
 
@@ -543,7 +540,7 @@ mod tests {
             [
                 Ok(extent(1, 0, 100, 100..104)),
                 Ok(extent(1, 100, 100, 200..204)),
-                Err(SampleError::first_chunk_out_of_range(2, 2)),
+                Err(Error::first_chunk_out_of_range(2, 2)),
             ]
         );
     }

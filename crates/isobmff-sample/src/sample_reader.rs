@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use core::mem;
 use core::ops::Range;
 
-use crate::error::SampleError;
+use crate::error::Error;
 use crate::sample::{Sample, SampleExtent};
 
 /// Reads samples out of the bytes of a file, given where each of them lies
@@ -53,14 +53,14 @@ use crate::sample::{Sample, SampleExtent};
 ///   A caller reading the file in order never needs it; one that can seek
 ///   fetches what it names, and the next want appears once that one is met.
 /// * An `Err` leaves the reader failed for good,
-///   [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished) aside: every
+///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside: every
 ///   later call that can fail reports that same failure again. The samples
 ///   made before it are still there to take, and no further one is ever made.
 /// * [`finish`](Self::finish) declares the samples over, and fails if an
 ///   extent held is short of its bytes. Samples are still taken after it, but
 ///   an extent or input handed over then, or a second
 ///   [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished).
+///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished).
 ///
 /// # Examples
 ///
@@ -83,7 +83,7 @@ use crate::sample::{Sample, SampleExtent};
 /// );
 /// assert_eq!(reader.wanted_extent(), None);
 /// reader.finish()?;
-/// # Ok::<(), isobmff_sample::SampleError>(())
+/// # Ok::<(), isobmff_sample::Error>(())
 /// ```
 #[derive(Clone, Debug)]
 pub struct SampleReader {
@@ -128,7 +128,7 @@ impl SampleReader {
     /// A sample is gathered whole before it is reported, so the length its
     /// extent names is memory the reader is about to take. An extent naming
     /// more than `sample_size_limit` bytes is
-    /// [`SampleSizeLimitExceeded`](crate::SampleErrorKind::SampleSizeLimitExceeded)
+    /// [`SampleSizeLimitExceeded`](crate::ErrorKind::SampleSizeLimitExceeded)
     /// instead, refused before a byte of it is gathered.
     ///
     /// The limit bounds one sample rather than the presentation: it is checked
@@ -150,13 +150,13 @@ impl SampleReader {
     ///
     /// # Errors
     ///
-    /// * [`SampleSizeLimitExceeded`](crate::SampleErrorKind::SampleSizeLimitExceeded):
+    /// * [`SampleSizeLimitExceeded`](crate::ErrorKind::SampleSizeLimitExceeded):
     ///   the extent names more bytes than the limit the reader was given.
-    /// * [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
-    pub fn handle_sample_extent(&mut self, extent: SampleExtent) -> Result<(), SampleError> {
+    pub fn handle_sample_extent(&mut self, extent: SampleExtent) -> Result<(), Error> {
         self.reading()?;
         let first = self.pending.len();
         let held = self.admit(extent);
@@ -179,17 +179,17 @@ impl SampleReader {
     ///
     /// # Errors
     ///
-    /// * [`SampleSizeLimitExceeded`](crate::SampleErrorKind::SampleSizeLimitExceeded):
+    /// * [`SampleSizeLimitExceeded`](crate::ErrorKind::SampleSizeLimitExceeded):
     ///   an extent names more bytes than the limit the reader was given.
     /// * The failure among `extents`, where one is.
-    /// * [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
     pub fn handle_sample_extents(
         &mut self,
-        extents: impl IntoIterator<Item = Result<SampleExtent, SampleError>>,
-    ) -> Result<(), SampleError> {
+        extents: impl IntoIterator<Item = Result<SampleExtent, Error>>,
+    ) -> Result<(), Error> {
         self.reading()?;
         let mut extents = extents.into_iter();
         self.pending.reserve(extents.size_hint().0);
@@ -223,11 +223,11 @@ impl SampleReader {
     ///
     /// # Errors
     ///
-    /// * [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
-    pub fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), SampleError> {
+    pub fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), Error> {
         self.reading()?;
 
         // Why not checked_add: the caller read `data` out of a finite resource,
@@ -286,17 +286,17 @@ impl SampleReader {
     ///
     /// # Errors
     ///
-    /// * [`UnfinishedSample`](crate::SampleErrorKind::UnfinishedSample): an
+    /// * [`UnfinishedSample`](crate::ErrorKind::UnfinishedSample): an
     ///   extent held is short of the bytes it names.
-    /// * [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   samples were already declared over.
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
-    pub fn finish(&mut self) -> Result<(), SampleError> {
+    pub fn finish(&mut self) -> Result<(), Error> {
         self.reading()?;
 
         match self.pending.front() {
-            Some(short) => Err(self.fail(SampleError::unfinished_sample(
+            Some(short) => Err(self.fail(Error::unfinished_sample(
                 short.extent.track_id(),
                 short.declared_len(),
                 short.gathered_len(),
@@ -310,14 +310,14 @@ impl SampleReader {
     }
 
     /// Holds `extent` behind the extents held before it, refusing one past the limit
-    fn admit(&mut self, extent: SampleExtent) -> Result<(), SampleError> {
+    fn admit(&mut self, extent: SampleExtent) -> Result<(), Error> {
         let pending = PendingSample {
             extent,
             data: Vec::new(),
         };
         let declared = pending.declared_len();
         if declared > self.sample_size_limit {
-            return Err(self.fail(SampleError::sample_size_limit_exceeded(
+            return Err(self.fail(Error::sample_size_limit_exceeded(
                 pending.extent.track_id(),
                 declared,
                 self.sample_size_limit,
@@ -367,16 +367,16 @@ impl SampleReader {
     }
 
     /// Returns `Ok` while the reader still takes extents and bytes
-    const fn reading(&self) -> Result<(), SampleError> {
+    const fn reading(&self) -> Result<(), Error> {
         match self.state {
             State::Reading => Ok(()),
-            State::Finished => Err(SampleError::already_finished()),
+            State::Finished => Err(Error::already_finished()),
             State::Failed(failure) => Err(failure),
         }
     }
 
     /// Fails the reader for good, and hands the failure back to report
-    const fn fail(&mut self, failure: SampleError) -> SampleError {
+    const fn fail(&mut self, failure: Error) -> Error {
         self.state = State::Failed(failure);
 
         failure
@@ -406,7 +406,7 @@ enum State {
     /// Told the samples are over, and taking no more
     Finished,
     /// Failed, and reporting that same failure for every call after it
-    Failed(SampleError),
+    Failed(Error),
 }
 
 /// Sample an extent names, gathered as far as its bytes have arrived
@@ -488,7 +488,7 @@ mod tests {
     use core::ops::Range;
 
     use super::SampleReader;
-    use crate::error::SampleError;
+    use crate::error::Error;
     use crate::sample::{Sample, SampleExtent};
 
     /// Extent of a sample of track 1 as the tests here declare it
@@ -597,7 +597,7 @@ mod tests {
     fn the_failure_a_resolver_stopped_at_fails_the_reader_after_the_extents_before_it_held_in_order()
      {
         let mut reader = SampleReader::new();
-        let stopped_at = SampleError::data_offset_overflow(1);
+        let stopped_at = Error::data_offset_overflow(1);
 
         assert_eq!(
             reader.handle_sample_extents([
@@ -811,7 +811,7 @@ mod tests {
 
         assert_eq!(
             reader.handle_sample_extent(extent(0, 100..104)),
-            Err(SampleError::sample_size_limit_exceeded(1, 4, 3))
+            Err(Error::sample_size_limit_exceeded(1, 4, 3))
         );
     }
 
@@ -820,10 +820,7 @@ mod tests {
         let mut reader = holding([extent(0, 100..104)]);
         reader.handle_data(100, b"AB").unwrap();
 
-        assert_eq!(
-            reader.finish(),
-            Err(SampleError::unfinished_sample(1, 4, 2))
-        );
+        assert_eq!(reader.finish(), Err(Error::unfinished_sample(1, 4, 2)));
     }
 
     #[test]
@@ -840,10 +837,7 @@ mod tests {
         let mut reader = holding([extent(0, 100..104), extent(1_024, 104..108)]);
         reader.handle_data(100, b"ABCD").unwrap();
 
-        assert_eq!(
-            reader.finish(),
-            Err(SampleError::unfinished_sample(1, 4, 0))
-        );
+        assert_eq!(reader.finish(), Err(Error::unfinished_sample(1, 4, 0)));
         assert_eq!(drained(&mut reader), [sample(0, b"ABCD")]);
     }
 
@@ -854,12 +848,12 @@ mod tests {
 
         assert_eq!(
             reader.handle_sample_extent(extent(0, 100..104)),
-            Err(SampleError::already_finished())
+            Err(Error::already_finished())
         );
         assert_eq!(
             reader.handle_data(100, b"ABCD"),
-            Err(SampleError::already_finished())
+            Err(Error::already_finished())
         );
-        assert_eq!(reader.finish(), Err(SampleError::already_finished()));
+        assert_eq!(reader.finish(), Err(Error::already_finished()));
     }
 }

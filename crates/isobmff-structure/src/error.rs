@@ -1,10 +1,9 @@
-//! [`StructureError`], the reason a file does not read through the layers this crate holds
+//! [`Error`], the reason a file does not read through the layers this crate holds
 
 use core::error;
 use core::fmt;
 
 use isobmff_core::{BoxType, Category};
-use isobmff_sample::SampleError;
 
 /// Reason a file does not read through the layers this crate holds
 ///
@@ -19,40 +18,39 @@ use isobmff_sample::SampleError;
 /// caller does about any of them is one [`category`](Self::category).
 ///
 /// The values a failure of this crate's own carries follow from its kind, and
-/// each kind names its own on [`StructureErrorKind`]. A carried failure keeps
+/// each kind names its own on [`ErrorKind`]. A carried failure keeps
 /// its own values, so the accessors here report `None` for it.
 ///
 /// # Examples
 ///
 /// ```
 /// use isobmff_core::{BoxType, Category};
-/// use isobmff_structure::{StructureError, StructureErrorKind};
-/// use isobmff_sample::{SampleError, SampleErrorKind};
+/// use isobmff_structure::{Error, ErrorKind};
 ///
 /// // A failure of the structure names its own kind
-/// let failure = StructureError::missing_mandatory_box(BoxType::compact(*b"moov"));
-/// assert_eq!(failure.kind(), StructureErrorKind::MissingMandatoryBox);
+/// let failure = Error::missing_mandatory_box(BoxType::compact(*b"moov"));
+/// assert_eq!(failure.kind(), ErrorKind::MissingMandatoryBox);
 /// assert_eq!(failure.category(), Category::Malformed);
 /// assert_eq!(failure.box_type(), Some(BoxType::compact(*b"moov")));
 ///
 /// // A failure of the samples is carried through whole
-/// let carried = StructureError::from(SampleError::unknown_track_id(3));
+/// let carried = Error::from(isobmff_sample::Error::unknown_track_id(3));
 /// assert_eq!(
 ///     carried.kind(),
-///     StructureErrorKind::Sample(SampleErrorKind::UnknownTrackId)
+///     ErrorKind::Sample(isobmff_sample::ErrorKind::UnknownTrackId)
 /// );
 /// assert_eq!(
-///     carried.sample_error().map(SampleError::kind),
-///     Some(SampleErrorKind::UnknownTrackId)
+///     carried.sample_error().map(isobmff_sample::Error::kind),
+///     Some(isobmff_sample::ErrorKind::UnknownTrackId)
 /// );
 /// assert_eq!(carried.box_type(), None);
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct StructureError {
+pub struct Error {
     representation: Representation,
 }
 
-impl StructureError {
+impl Error {
     /// Returns the failure of a file lacking a box its structure requires
     #[must_use]
     pub const fn missing_mandatory_box(box_type: BoxType) -> Self {
@@ -99,16 +97,16 @@ impl StructureError {
 
     /// Returns what went wrong
     #[must_use]
-    pub const fn kind(self) -> StructureErrorKind {
+    pub const fn kind(self) -> ErrorKind {
         match self.representation {
-            Representation::Sequence(failure) => StructureErrorKind::Sequence(failure.kind()),
-            Representation::Sample(failure) => StructureErrorKind::Sample(failure.kind()),
-            Representation::Box(box_error) => StructureErrorKind::Box(box_error.kind()),
-            Representation::MissingMandatoryBox { .. } => StructureErrorKind::MissingMandatoryBox,
-            Representation::DuplicateBox { .. } => StructureErrorKind::DuplicateBox,
-            Representation::BoxOutOfOrder { .. } => StructureErrorKind::BoxOutOfOrder,
-            Representation::PayloadLimitExceeded { .. } => StructureErrorKind::PayloadLimitExceeded,
-            Representation::AlreadyFinished => StructureErrorKind::AlreadyFinished,
+            Representation::Sequence(failure) => ErrorKind::Sequence(failure.kind()),
+            Representation::Sample(failure) => ErrorKind::Sample(failure.kind()),
+            Representation::Box(box_error) => ErrorKind::Box(box_error.kind()),
+            Representation::MissingMandatoryBox { .. } => ErrorKind::MissingMandatoryBox,
+            Representation::DuplicateBox { .. } => ErrorKind::DuplicateBox,
+            Representation::BoxOutOfOrder { .. } => ErrorKind::BoxOutOfOrder,
+            Representation::PayloadLimitExceeded { .. } => ErrorKind::PayloadLimitExceeded,
+            Representation::AlreadyFinished => ErrorKind::AlreadyFinished,
         }
     }
 
@@ -135,7 +133,7 @@ impl StructureError {
 
     /// Returns the failure of the samples the file carries, when it holds one
     #[must_use]
-    pub const fn sample_error(self) -> Option<SampleError> {
+    pub const fn sample_error(self) -> Option<isobmff_sample::Error> {
         self.representation.fields().sample_error
     }
 
@@ -167,7 +165,7 @@ impl StructureError {
     }
 }
 
-impl From<isobmff_sequence::Error> for StructureError {
+impl From<isobmff_sequence::Error> for Error {
     /// Carries the failure of the framing of the file through as it stands
     fn from(failure: isobmff_sequence::Error) -> Self {
         Self {
@@ -176,16 +174,16 @@ impl From<isobmff_sequence::Error> for StructureError {
     }
 }
 
-impl From<SampleError> for StructureError {
+impl From<isobmff_sample::Error> for Error {
     /// Carries the failure of the samples through as it stands
-    fn from(failure: SampleError) -> Self {
+    fn from(failure: isobmff_sample::Error) -> Self {
         Self {
             representation: Representation::Sample(failure),
         }
     }
 }
 
-impl From<isobmff_core::Error> for StructureError {
+impl From<isobmff_core::Error> for Error {
     /// Carries the failure of one box through as it stands
     fn from(box_error: isobmff_core::Error) -> Self {
         Self {
@@ -194,7 +192,7 @@ impl From<isobmff_core::Error> for StructureError {
     }
 }
 
-impl fmt::Display for StructureError {
+impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.representation {
             Representation::Sequence(failure) => write!(formatter, "{failure}"),
@@ -225,10 +223,10 @@ impl fmt::Display for StructureError {
     }
 }
 
-impl fmt::Debug for StructureError {
+impl fmt::Debug for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let values = self.representation.fields();
-        let mut fields = formatter.debug_struct("StructureError");
+        let mut fields = formatter.debug_struct("Error");
         fields.field("kind", &self.kind());
         fields.field("category", &self.category());
 
@@ -255,7 +253,7 @@ impl fmt::Debug for StructureError {
     }
 }
 
-impl error::Error for StructureError {
+impl error::Error for Error {
     /// Returns the failure of the layer beneath, when it holds one
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match &self.representation {
@@ -284,43 +282,43 @@ impl error::Error for StructureError {
 /// here yet.
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum StructureErrorKind {
+pub enum ErrorKind {
     /// Failure of the framing of the file, carried through as `isobmff-sequence` names it
     ///
     /// The values that failure carries are on
-    /// [`sequence_error`](StructureError::sequence_error).
+    /// [`sequence_error`](Error::sequence_error).
     Sequence(isobmff_sequence::ErrorKind),
     /// Failure of the samples the file carries, carried through as `isobmff-sample` names it
     ///
     /// The values that failure carries are on
-    /// [`sample_error`](StructureError::sample_error).
-    Sample(isobmff_sample::SampleErrorKind),
+    /// [`sample_error`](Error::sample_error).
+    Sample(isobmff_sample::ErrorKind),
     /// Failure of one box, carried through as `isobmff-core` names it
     ///
     /// The values that failure carries, and the boxes it was reached through,
-    /// are on [`box_error`](StructureError::box_error).
+    /// are on [`box_error`](Error::box_error).
     Box(isobmff_core::ErrorKind),
     /// Box the structure requires is not there
     ///
     /// The file was declared over without it.
-    /// [`box_type`](StructureError::box_type) is the box that is missing.
+    /// [`box_type`](Error::box_type) is the box that is missing.
     MissingMandatoryBox,
     /// Box the structure carries once is there twice
     ///
-    /// [`box_type`](StructureError::box_type) is the box that came again.
+    /// [`box_type`](Error::box_type) is the box that came again.
     DuplicateBox,
     /// Box lies out of the order the structure keeps
     ///
     /// It came before a box the structure places ahead of it, or after one it
-    /// places behind it. [`box_type`](StructureError::box_type) is the box
+    /// places behind it. [`box_type`](Error::box_type) is the box
     /// that came out of order.
     BoxOutOfOrder,
     /// Box read whole reaches past the limit the reader gathers
     ///
-    /// [`box_type`](StructureError::box_type) is the box,
-    /// [`needed_bytes`](StructureError::needed_bytes) the payload it
+    /// [`box_type`](Error::box_type) is the box,
+    /// [`needed_bytes`](Error::needed_bytes) the payload it
     /// declares — or, for a box declaring no total, the payload it has
-    /// reached — and [`available_bytes`](StructureError::available_bytes)
+    /// reached — and [`available_bytes`](Error::available_bytes)
     /// the payload the reader gathers for one box at most.
     PayloadLimitExceeded,
     /// File was declared over, and takes nothing more
@@ -333,7 +331,7 @@ enum Representation {
     /// Failure of the framing of the file, carried through whole
     Sequence(isobmff_sequence::Error),
     /// Failure of the samples the file carries, carried through whole
-    Sample(SampleError),
+    Sample(isobmff_sample::Error),
     /// Failure of one box, carried through whole
     Box(isobmff_core::Error),
     /// Box the structure requires that is not there
@@ -355,7 +353,7 @@ enum Representation {
 /// Values a failure carries, laid flat, with `None` where its kind carries no such value
 struct Fields {
     sequence_error: Option<isobmff_sequence::Error>,
-    sample_error: Option<SampleError>,
+    sample_error: Option<isobmff_sample::Error>,
     box_error: Option<isobmff_core::Error>,
     box_type: Option<BoxType>,
     needed_bytes: Option<u64>,
@@ -417,9 +415,8 @@ mod tests {
     use alloc::string::ToString as _;
 
     use isobmff_core::{BoxType, Category};
-    use isobmff_sample::SampleError;
 
-    use super::{StructureError, StructureErrorKind};
+    use super::{Error, ErrorKind};
 
     /// The `moov` box, which most of the structure's failures name
     const MOOV: BoxType = BoxType::compact(*b"moov");
@@ -427,64 +424,61 @@ mod tests {
     #[test]
     fn a_kind_falls_in_the_category_its_situation_asks_for() {
         assert_eq!(
-            StructureError::missing_mandatory_box(MOOV).category(),
+            Error::missing_mandatory_box(MOOV).category(),
             Category::Malformed
         );
         assert_eq!(
-            StructureError::payload_limit_exceeded(MOOV, 32, 16).category(),
+            Error::payload_limit_exceeded(MOOV, 32, 16).category(),
             Category::Unsupported
         );
+        assert_eq!(Error::already_finished().category(), Category::Usage);
         assert_eq!(
-            StructureError::already_finished().category(),
-            Category::Usage
-        );
-        assert_eq!(
-            StructureError::from(isobmff_core::Error::unsupported_version(2)).category(),
+            Error::from(isobmff_core::Error::unsupported_version(2)).category(),
             Category::Unsupported
         );
     }
 
     #[test]
     fn a_failure_carries_only_the_values_its_kind_names() {
-        let missing = StructureError::missing_mandatory_box(MOOV);
+        let missing = Error::missing_mandatory_box(MOOV);
 
-        assert_eq!(missing.kind(), StructureErrorKind::MissingMandatoryBox);
+        assert_eq!(missing.kind(), ErrorKind::MissingMandatoryBox);
         assert_eq!(missing.box_type(), Some(MOOV));
         assert_eq!(missing.needed_bytes(), None);
         assert_eq!(missing.box_error(), None);
 
-        let exceeded = StructureError::payload_limit_exceeded(MOOV, 32, 16);
+        let exceeded = Error::payload_limit_exceeded(MOOV, 32, 16);
 
-        assert_eq!(exceeded.kind(), StructureErrorKind::PayloadLimitExceeded);
+        assert_eq!(exceeded.kind(), ErrorKind::PayloadLimitExceeded);
         assert_eq!(exceeded.box_type(), Some(MOOV));
         assert_eq!(exceeded.needed_bytes(), Some(32));
         assert_eq!(exceeded.available_bytes(), Some(16));
 
-        assert_eq!(StructureError::already_finished().box_type(), None);
+        assert_eq!(Error::already_finished().box_type(), None);
     }
 
     #[test]
     fn a_failure_of_a_layer_beneath_is_carried_through_whole() {
         let sequence_error = isobmff_sequence::Error::unfinished_box(16, 8);
-        let carried = StructureError::from(sequence_error);
+        let carried = Error::from(sequence_error);
 
         assert_eq!(
             carried.kind(),
-            StructureErrorKind::Sequence(isobmff_sequence::ErrorKind::UnfinishedBox)
+            ErrorKind::Sequence(isobmff_sequence::ErrorKind::UnfinishedBox)
         );
         assert_eq!(carried.sequence_error(), Some(sequence_error));
         assert_eq!(carried.sample_error(), None);
         assert_eq!(carried.needed_bytes(), None);
 
-        let sample_error = SampleError::unknown_track_id(3);
-        let carried = StructureError::from(sample_error);
+        let sample_error = isobmff_sample::Error::unknown_track_id(3);
+        let carried = Error::from(sample_error);
 
         assert_eq!(carried.sample_error(), Some(sample_error));
         assert_eq!(carried.box_error(), None);
 
         let box_error = isobmff_core::Error::missing_mandatory_box(BoxType::compact(*b"trex"))
             .in_container(BoxType::compact(*b"mvex"));
-        let carried = StructureError::from(box_error);
+        let carried = Error::from(box_error);
 
         assert_eq!(carried.box_error(), Some(box_error));
         assert_eq!(carried.box_type(), None);
@@ -493,33 +487,33 @@ mod tests {
     #[test]
     fn display_of_a_failure_of_the_structure_states_the_reason() {
         assert_eq!(
-            StructureError::missing_mandatory_box(MOOV).to_string(),
+            Error::missing_mandatory_box(MOOV).to_string(),
             "file carries no moov box"
         );
         assert_eq!(
-            StructureError::duplicate_box(MOOV).to_string(),
+            Error::duplicate_box(MOOV).to_string(),
             "file carries a second moov box"
         );
         assert_eq!(
-            StructureError::box_out_of_order(MOOV).to_string(),
+            Error::box_out_of_order(MOOV).to_string(),
             "file carries a moov box out of the order its structure keeps"
         );
         assert_eq!(
-            StructureError::payload_limit_exceeded(MOOV, 32, 16).to_string(),
+            Error::payload_limit_exceeded(MOOV, 32, 16).to_string(),
             "moov box reaches 32 payload bytes, past the 16-byte limit"
         );
         assert_eq!(
-            StructureError::already_finished().to_string(),
+            Error::already_finished().to_string(),
             "file was declared over and takes nothing more"
         );
     }
 
     #[test]
     fn display_of_a_carried_failure_reads_as_that_failure() {
-        let sample_error = SampleError::unknown_track_id(3);
+        let sample_error = isobmff_sample::Error::unknown_track_id(3);
 
         assert_eq!(
-            StructureError::from(sample_error).to_string(),
+            Error::from(sample_error).to_string(),
             sample_error.to_string()
         );
     }
@@ -527,12 +521,12 @@ mod tests {
     #[test]
     fn debug_names_the_values_a_kind_carries_and_leaves_out_the_rest() {
         assert_eq!(
-            format!("{:?}", StructureError::payload_limit_exceeded(MOOV, 32, 16)),
-            "StructureError { kind: PayloadLimitExceeded, category: Unsupported, box_type: Compact(CompactType(FourCC(\"moov\"))), needed_bytes: 32, available_bytes: 16 }"
+            format!("{:?}", Error::payload_limit_exceeded(MOOV, 32, 16)),
+            "Error { kind: PayloadLimitExceeded, category: Unsupported, box_type: Compact(CompactType(FourCC(\"moov\"))), needed_bytes: 32, available_bytes: 16 }"
         );
         assert_eq!(
-            format!("{:?}", StructureError::already_finished()),
-            "StructureError { kind: AlreadyFinished, category: Usage }"
+            format!("{:?}", Error::already_finished()),
+            "Error { kind: AlreadyFinished, category: Usage }"
         );
     }
 }

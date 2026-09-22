@@ -1,4 +1,4 @@
-//! [`SampleError`], the reason the samples of a presentation do not resolve
+//! [`Error`], the reason the samples of a presentation do not resolve
 
 use isobmff_core::Category;
 
@@ -7,7 +7,7 @@ mod report;
 mod representation;
 
 use crate::error::representation::Representation;
-pub use kind::SampleErrorKind;
+pub use kind::ErrorKind;
 
 /// Reason the samples of a presentation do not resolve
 ///
@@ -20,7 +20,7 @@ pub use kind::SampleErrorKind;
 /// [`category`](Self::category).
 ///
 /// The values a failure of the samples carries follow from its kind, and each
-/// kind names its own on [`SampleErrorKind`]. A carried box failure keeps its
+/// kind names its own on [`ErrorKind`]. A carried box failure keeps its
 /// values and its container path on [`box_error`](Self::box_error), so the
 /// accessors here report `None` for it.
 ///
@@ -28,21 +28,21 @@ pub use kind::SampleErrorKind;
 ///
 /// ```
 /// use isobmff_core::{BoxType, Category};
-/// use isobmff_sample::{SampleError, SampleErrorKind};
+/// use isobmff_sample::{Error, ErrorKind};
 ///
 /// // A failure of the samples names its own kind
-/// let failure = SampleError::decode_time_overflow(3);
-/// assert_eq!(failure.kind(), SampleErrorKind::DecodeTimeOverflow);
+/// let failure = Error::decode_time_overflow(3);
+/// assert_eq!(failure.kind(), ErrorKind::DecodeTimeOverflow);
 /// assert_eq!(failure.category(), Category::Malformed);
 /// assert_eq!(failure.track_id(), Some(3));
 /// assert_eq!(failure.box_error(), None);
 ///
 /// // A failure of one box is carried through whole
 /// let missing = isobmff_core::Error::missing_mandatory_box(BoxType::compact(*b"trex"));
-/// let carried = SampleError::from(missing);
+/// let carried = Error::from(missing);
 /// assert_eq!(
 ///     carried.kind(),
-///     SampleErrorKind::Box(isobmff_core::ErrorKind::MissingMandatoryBox)
+///     ErrorKind::Box(isobmff_core::ErrorKind::MissingMandatoryBox)
 /// );
 /// assert_eq!(
 ///     carried.box_error().and_then(|box_error| box_error.box_type()),
@@ -50,11 +50,11 @@ pub use kind::SampleErrorKind;
 /// );
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SampleError {
+pub struct Error {
     representation: Representation,
 }
 
-impl SampleError {
+impl Error {
     /// Returns the failure of a decode time running past what 64 bits carry
     #[must_use]
     pub const fn decode_time_overflow(track_id: u32) -> Self {
@@ -294,7 +294,7 @@ impl SampleError {
 
     /// Returns what went wrong
     #[must_use]
-    pub const fn kind(self) -> SampleErrorKind {
+    pub const fn kind(self) -> ErrorKind {
         self.representation.kind()
     }
 
@@ -305,7 +305,7 @@ impl SampleError {
     }
 }
 
-impl From<isobmff_core::Error> for SampleError {
+impl From<isobmff_core::Error> for Error {
     /// Carries the failure of one box through as it stands
     fn from(box_error: isobmff_core::Error) -> Self {
         Self {

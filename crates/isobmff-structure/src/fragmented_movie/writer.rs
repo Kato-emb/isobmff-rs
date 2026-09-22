@@ -8,7 +8,7 @@ use isobmff_sample::{MovieFragmentWriter, Sample};
 use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
 
 use super::{FragmentedDisposition, FragmentedStructure};
-use crate::{StructureError, whole_box_header, whole_payload};
+use crate::{Error, whole_box_header, whole_payload};
 
 /// Lays a fragmented movie file down, taking the samples as they come
 ///
@@ -26,28 +26,28 @@ use crate::{StructureError, whole_box_header, whole_payload};
 /// * The order of the boxes is the structure's, held to as they are handed
 ///   over: the `ftyp` first if at all, the `moov` once and before any
 ///   fragment. A box handed over out of that order is
-///   [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder) or
-///   [`DuplicateBox`](crate::StructureErrorKind::DuplicateBox), and a file
+///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder) or
+///   [`DuplicateBox`](crate::ErrorKind::DuplicateBox), and a file
 ///   declared over without a `moov` is
-///   [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox).
+///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
 /// * A fragment is opened by [`begin_fragment`](Self::begin_fragment),
 ///   carries the samples handed over next, and is laid down by
 ///   [`finish_fragment`](Self::finish_fragment) as the `moof` and the `mdat`
 ///   the sample layer made of it. What the samples themselves must hold to
 ///   is [`MovieFragmentWriter`]'s contract, reported as
-///   [`Sample`](crate::StructureErrorKind::Sample).
+///   [`Sample`](crate::ErrorKind::Sample).
 /// * The bytes are taken from [`poll_output`](Self::poll_output), one
 ///   [`EventBytes`] a call, owned by whoever takes them. The caller drains
 ///   before handing over more: bytes are held until they are taken, so
 ///   writing on without polling has the writer hold the whole file.
 /// * An `Err` leaves the writer failed for good,
-///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished) aside:
+///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The bytes made before
 ///   it are still there to take.
 /// * [`finish`](Self::finish) declares the file over. Bytes are still taken
 ///   after it, but anything handed over then, or a second
 ///   [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished).
+///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished).
 ///
 /// # Examples
 ///
@@ -77,7 +77,7 @@ use crate::{StructureError, whole_box_header, whole_payload};
 /// // The file opens with the brands, and the media data holds the samples end to end
 /// assert_eq!(&file[4..8], b"ftyp");
 /// assert!(file.ends_with(b"SAMPDATA"));
-/// # Ok::<(), isobmff_structure::StructureError>(())
+/// # Ok::<(), isobmff_structure::Error>(())
 /// ```
 #[derive(Debug)]
 pub struct FragmentedWriter {
@@ -95,7 +95,7 @@ enum State {
     /// Told the samples are over, and taking nothing more
     Finished,
     /// Failed, and reporting that same failure for every call after it
-    Failed(StructureError),
+    Failed(Error),
 }
 
 impl FragmentedWriter {
@@ -114,14 +114,14 @@ impl FragmentedWriter {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder): a box
+    /// * [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder): a box
     ///   was handed over before them.
-    /// * [`Box`](crate::StructureErrorKind::Box): the box does not write.
-    /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
+    /// * [`Box`](crate::ErrorKind::Box): the box does not write.
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
-    pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), StructureError> {
+    pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), Error> {
         self.writing()?;
         self.write_value(&file_type)
     }
@@ -130,14 +130,14 @@ impl FragmentedWriter {
     ///
     /// # Errors
     ///
-    /// * [`DuplicateBox`](crate::StructureErrorKind::DuplicateBox): the movie
+    /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): the movie
     ///   was handed over already.
-    /// * [`Box`](crate::StructureErrorKind::Box): the box does not write.
-    /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
+    /// * [`Box`](crate::ErrorKind::Box): the box does not write.
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
-    pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), StructureError> {
+    pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), Error> {
         self.writing()?;
         self.write_value(&movie)
     }
@@ -149,13 +149,13 @@ impl FragmentedWriter {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::StructureErrorKind::Sample): what the sample layer
+    /// * [`Sample`](crate::ErrorKind::Sample): what the sample layer
     ///   makes of the call.
-    /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
-    pub fn begin_fragment(&mut self, sequence_number: u32) -> Result<(), StructureError> {
+    pub fn begin_fragment(&mut self, sequence_number: u32) -> Result<(), Error> {
         self.writing()?;
         self.samples
             .begin_fragment(sequence_number)
@@ -166,13 +166,13 @@ impl FragmentedWriter {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::StructureErrorKind::Sample): what the sample layer
+    /// * [`Sample`](crate::ErrorKind::Sample): what the sample layer
     ///   makes of the sample.
-    /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
-    pub fn handle_sample(&mut self, sample: Sample) -> Result<(), StructureError> {
+    pub fn handle_sample(&mut self, sample: Sample) -> Result<(), Error> {
         self.writing()?;
         self.samples
             .handle_sample(sample)
@@ -186,17 +186,17 @@ impl FragmentedWriter {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder): the
+    /// * [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder): the
     ///   movie was not handed over first.
-    /// * [`Sample`](crate::StructureErrorKind::Sample): what the sample layer
+    /// * [`Sample`](crate::ErrorKind::Sample): what the sample layer
     ///   makes of the fragment.
-    /// * [`Box`](crate::StructureErrorKind::Box): the `moof` or the `mdat`
+    /// * [`Box`](crate::ErrorKind::Box): the `moof` or the `mdat`
     ///   does not write.
-    /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
-    pub fn finish_fragment(&mut self) -> Result<(), StructureError> {
+    pub fn finish_fragment(&mut self) -> Result<(), Error> {
         self.writing()?;
         let (movie_fragment, media_data) = self
             .samples
@@ -221,16 +221,16 @@ impl FragmentedWriter {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::StructureErrorKind::Sample): a fragment was left
+    /// * [`Sample`](crate::ErrorKind::Sample): a fragment was left
     ///   open.
-    /// * [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox):
+    /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox):
     ///   the movie was never handed over, so the file laid down is not a
     ///   fragmented movie file.
-    /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was already declared over.
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
-    pub fn finish(&mut self) -> Result<(), StructureError> {
+    pub fn finish(&mut self) -> Result<(), Error> {
         self.writing()?;
         self.samples
             .finish()
@@ -247,10 +247,10 @@ impl FragmentedWriter {
     }
 
     /// Returns `Ok` while the writer still takes boxes and samples
-    const fn writing(&self) -> Result<(), StructureError> {
+    const fn writing(&self) -> Result<(), Error> {
         match self.state {
             State::Writing => Ok(()),
-            State::Finished => Err(StructureError::already_finished()),
+            State::Finished => Err(Error::already_finished()),
             State::Failed(failure) => Err(failure),
         }
     }
@@ -259,7 +259,7 @@ impl FragmentedWriter {
     fn write_value<Value: BoxEncode + BoxDefinition>(
         &mut self,
         value: &Value,
-    ) -> Result<(), StructureError> {
+    ) -> Result<(), Error> {
         let payload = whole_payload(value).map_err(|failure| self.fail(failure))?;
 
         self.lay_down(Value::BOX_TYPE, payload)
@@ -268,8 +268,8 @@ impl FragmentedWriter {
     /// Lays one box down where the structure places it, through the framing of the file
     ///
     /// A box the structure passes over is refused as
-    /// [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder).
-    fn lay_down(&mut self, box_type: BoxType, payload: Vec<u8>) -> Result<(), StructureError> {
+    /// [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder).
+    fn lay_down(&mut self, box_type: BoxType, payload: Vec<u8>) -> Result<(), Error> {
         let header = whole_box_header(box_type, payload.len() as u64)
             .map_err(|failure| self.fail(failure))?;
 
@@ -283,7 +283,7 @@ impl FragmentedWriter {
             | FragmentedDisposition::MovieFragment
             | FragmentedDisposition::MediaData => {}
             FragmentedDisposition::Skip => {
-                return Err(self.fail(StructureError::box_out_of_order(box_type)));
+                return Err(self.fail(Error::box_out_of_order(box_type)));
             }
         }
 
@@ -295,14 +295,14 @@ impl FragmentedWriter {
     }
 
     /// Hands one step of the framing over, failing the writer where it is refused
-    fn lay_down_step(&mut self, step: BoxEvent) -> Result<(), StructureError> {
+    fn lay_down_step(&mut self, step: BoxEvent) -> Result<(), Error> {
         self.boxes
             .handle_event(step)
             .map_err(|failure| self.fail(failure.into()))
     }
 
     /// Fails the writer for good, and hands the failure back to report
-    const fn fail(&mut self, failure: StructureError) -> StructureError {
+    const fn fail(&mut self, failure: Error) -> Error {
         self.state = State::Failed(failure);
 
         failure
@@ -319,11 +319,11 @@ impl Default for FragmentedWriter {
 mod tests {
     use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox, TrackExtendsBox};
     use isobmff_core::BoxDefinition;
-    use isobmff_sample::{Sample, SampleErrorKind};
+    use isobmff_sample::Sample;
     use isobmff_test_support::{file_type, fragmented_movie};
 
-    use super::{FragmentedWriter, StructureError};
-    use crate::StructureErrorKind;
+    use super::{Error, FragmentedWriter};
+    use crate::ErrorKind;
 
     /// Movie of one track continued in fragments, whose defaults a `trex` states
     fn movie() -> MovieBox {
@@ -354,7 +354,7 @@ mod tests {
 
         assert_eq!(
             writer.finish_fragment(),
-            Err(StructureError::box_out_of_order(MovieFragmentBox::BOX_TYPE))
+            Err(Error::box_out_of_order(MovieFragmentBox::BOX_TYPE))
         );
     }
 
@@ -363,8 +363,8 @@ mod tests {
         let mut writer = FragmentedWriter::new();
 
         assert_eq!(
-            writer.handle_sample(sample()).map_err(StructureError::kind),
-            Err(StructureErrorKind::Sample(SampleErrorKind::NoFragmentOpen))
+            writer.handle_sample(sample()).map_err(Error::kind),
+            Err(ErrorKind::Sample(isobmff_sample::ErrorKind::NoFragmentOpen))
         );
     }
 
@@ -376,14 +376,14 @@ mod tests {
 
         assert_eq!(
             writer.finish(),
-            Err(StructureError::missing_mandatory_box(MovieBox::BOX_TYPE))
+            Err(Error::missing_mandatory_box(MovieBox::BOX_TYPE))
         );
     }
 
     #[test]
     fn a_failed_writer_reports_the_same_failure_for_every_call_after_it() {
         let mut writer = FragmentedWriter::new();
-        let failure = StructureError::box_out_of_order(FileTypeBox::BOX_TYPE);
+        let failure = Error::box_out_of_order(FileTypeBox::BOX_TYPE);
 
         writer.handle_movie(movie()).unwrap();
 
@@ -413,8 +413,8 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(sample()),
-            Err(StructureError::already_finished())
+            Err(Error::already_finished())
         );
-        assert_eq!(writer.finish(), Err(StructureError::already_finished()));
+        assert_eq!(writer.finish(), Err(Error::already_finished()));
     }
 }

@@ -4,8 +4,6 @@ use core::error;
 use core::fmt;
 use std::io;
 
-use isobmff_structure::{StructureError, StructureErrorKind};
-
 /// Reason a file does not read or write through a demuxer or a muxer
 ///
 /// A demuxer or a muxer holds no rule of its own, so what went wrong is one of
@@ -13,7 +11,7 @@ use isobmff_structure::{StructureError, StructureErrorKind};
 /// the sink failed, which [`io_error`](Self::io_error) holds as `std::io`
 /// reports it, or the layers the file is read or written through refused it,
 /// which [`structure_error`](Self::structure_error) holds as
-/// [`StructureError`] reports it. Which of the two it is, and what that one
+/// [`isobmff_structure::Error`] reports it. Which of the two it is, and what that one
 /// makes of it, is one [`kind`](Self::kind).
 ///
 /// # Examples
@@ -23,7 +21,6 @@ use isobmff_structure::{StructureError, StructureErrorKind};
 ///
 /// use isobmff_core::BoxType;
 /// use isobmff_io::{Error, ErrorKind};
-/// use isobmff_structure::{StructureError, StructureErrorKind};
 ///
 /// // A failure of the source is carried through as `std::io` reports it
 /// let failure = Error::from(io::Error::from(io::ErrorKind::UnexpectedEof));
@@ -31,10 +28,10 @@ use isobmff_structure::{StructureError, StructureErrorKind};
 /// assert_eq!(failure.structure_error(), None);
 ///
 /// // A failure of the layers beneath is carried through as they report it
-/// let failure = Error::from(StructureError::missing_mandatory_box(BoxType::compact(*b"moov")));
+/// let failure = Error::from(isobmff_structure::Error::missing_mandatory_box(BoxType::compact(*b"moov")));
 /// assert_eq!(
 ///     failure.kind(),
-///     ErrorKind::Structure(StructureErrorKind::MissingMandatoryBox)
+///     ErrorKind::Structure(isobmff_structure::ErrorKind::MissingMandatoryBox)
 /// );
 /// assert!(failure.io_error().is_none());
 /// ```
@@ -63,7 +60,7 @@ impl Error {
 
     /// Returns the failure of the layers the file is read or written through, when it holds one
     #[must_use]
-    pub const fn structure_error(&self) -> Option<StructureError> {
+    pub const fn structure_error(&self) -> Option<isobmff_structure::Error> {
         match self.representation {
             Representation::Io(_) => None,
             Representation::Structure(failure) => Some(failure),
@@ -80,9 +77,9 @@ impl From<io::Error> for Error {
     }
 }
 
-impl From<StructureError> for Error {
+impl From<isobmff_structure::Error> for Error {
     /// Carries the failure of the layers beneath through as it stands
-    fn from(failure: StructureError) -> Self {
+    fn from(failure: isobmff_structure::Error) -> Self {
         Self {
             representation: Representation::Structure(failure),
         }
@@ -138,7 +135,7 @@ pub enum ErrorKind {
     ///
     /// The failure itself is on
     /// [`structure_error`](Error::structure_error).
-    Structure(StructureErrorKind),
+    Structure(isobmff_structure::ErrorKind),
 }
 
 /// The failure carried, keyed by where it came from
@@ -146,5 +143,5 @@ enum Representation {
     /// The source or the sink failed
     Io(io::Error),
     /// The layers beneath refused the file
-    Structure(StructureError),
+    Structure(isobmff_structure::Error),
 }

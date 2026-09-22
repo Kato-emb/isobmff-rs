@@ -3,7 +3,7 @@
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox};
 use isobmff_core::{BoxDefinition, BoxType};
 
-use crate::StructureError;
+use crate::Error;
 
 /// Holds the structure of a non-fragmented movie file, one top-level box at a time
 ///
@@ -23,20 +23,20 @@ use crate::StructureError;
 /// * The `ftyp` comes first, as early as §4.3 asks: a file carrying none reads
 ///   all the same, as §4.3 allows, but one carrying it after any other box —
 ///   a second `ftyp` among them — is
-///   [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder).
+///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder).
 /// * The `moov` comes once, before or after the media data: a second is
-///   [`DuplicateBox`](crate::StructureErrorKind::DuplicateBox), and a file
+///   [`DuplicateBox`](crate::ErrorKind::DuplicateBox), and a file
 ///   declared over without one is
-///   [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox).
+///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
 /// * The `mdat` comes anywhere past the `ftyp`, any number of times (§8.1.1).
 /// * Every other box is passed over, wherever it lies — a `moof` among them,
 ///   whose samples are not read.
 /// * An `Err` leaves the structure failed for good,
-///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished) aside:
+///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside:
 ///   every later call reports that same failure again.
 /// * [`finish`](Self::finish) declares the file over. A header handed over
 ///   then, or a second [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished).
+///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct NonFragmentedStructure {
     state: State,
@@ -63,7 +63,7 @@ enum State {
     /// Told the file is over, and taking no more headers
     Finished,
     /// Failed, and reporting that same failure for every call after it
-    Failed(StructureError),
+    Failed(Error),
 }
 
 /// How far into the order of a non-fragmented movie file the boxes so far reach
@@ -90,21 +90,21 @@ impl NonFragmentedStructure {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder): an
+    /// * [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder): an
     ///   `ftyp` after another box.
-    /// * [`DuplicateBox`](crate::StructureErrorKind::DuplicateBox): a second
+    /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): a second
     ///   `moov`.
-    /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the structure keeps and reports
     ///   again for every call after it.
     pub(crate) fn handle_box_type(
         &mut self,
         box_type: BoxType,
-    ) -> Result<NonFragmentedDisposition, StructureError> {
+    ) -> Result<NonFragmentedDisposition, Error> {
         let position = match self.state {
             State::Reading(position) => position,
-            State::Finished => return Err(StructureError::already_finished()),
+            State::Finished => return Err(Error::already_finished()),
             State::Failed(failure) => return Err(failure),
         };
 
@@ -119,13 +119,13 @@ impl NonFragmentedStructure {
     ///
     /// # Errors
     ///
-    /// * [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox):
+    /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox):
     ///   the file carried no `moov`.
-    /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was already declared over.
     /// * The failure of a previous call, which the structure keeps and reports
     ///   again for every call after it.
-    pub(crate) fn finish(&mut self) -> Result<(), StructureError> {
+    pub(crate) fn finish(&mut self) -> Result<(), Error> {
         match self.state {
             State::Reading(Position::Declared) => {
                 self.state = State::Finished;
@@ -133,15 +133,15 @@ impl NonFragmentedStructure {
                 Ok(())
             }
             State::Reading(Position::Start | Position::Opened) => {
-                Err(self.fail(StructureError::missing_mandatory_box(MovieBox::BOX_TYPE)))
+                Err(self.fail(Error::missing_mandatory_box(MovieBox::BOX_TYPE)))
             }
-            State::Finished => Err(StructureError::already_finished()),
+            State::Finished => Err(Error::already_finished()),
             State::Failed(failure) => Err(failure),
         }
     }
 
     /// Fails the structure for good, and hands the failure back to report
-    const fn fail(&mut self, failure: StructureError) -> StructureError {
+    const fn fail(&mut self, failure: Error) -> Error {
         self.state = State::Failed(failure);
 
         failure
@@ -152,18 +152,18 @@ impl NonFragmentedStructure {
 const fn place(
     position: Position,
     box_type: BoxType,
-) -> Result<(Position, NonFragmentedDisposition), StructureError> {
+) -> Result<(Position, NonFragmentedDisposition), Error> {
     match (box_type, position) {
         (FileTypeBox::BOX_TYPE, Position::Start) => {
             Ok((Position::Opened, NonFragmentedDisposition::FileType))
         }
         (FileTypeBox::BOX_TYPE, Position::Opened | Position::Declared) => {
-            Err(StructureError::box_out_of_order(box_type))
+            Err(Error::box_out_of_order(box_type))
         }
         (MovieBox::BOX_TYPE, Position::Start | Position::Opened) => {
             Ok((Position::Declared, NonFragmentedDisposition::Movie))
         }
-        (MovieBox::BOX_TYPE, Position::Declared) => Err(StructureError::duplicate_box(box_type)),
+        (MovieBox::BOX_TYPE, Position::Declared) => Err(Error::duplicate_box(box_type)),
         (MediaDataBox::BOX_TYPE, Position::Start | Position::Opened) => {
             Ok((Position::Opened, NonFragmentedDisposition::MediaData))
         }
@@ -184,12 +184,10 @@ mod tests {
 
     use isobmff_core::BoxType;
 
-    use super::{NonFragmentedDisposition, NonFragmentedStructure, StructureError};
+    use super::{Error, NonFragmentedDisposition, NonFragmentedStructure};
 
     /// The dispositions of the boxes named, in order, stopping at the first failure
-    fn dispositions_of(
-        fourccs: &[&[u8; 4]],
-    ) -> Result<Vec<NonFragmentedDisposition>, StructureError> {
+    fn dispositions_of(fourccs: &[&[u8; 4]]) -> Result<Vec<NonFragmentedDisposition>, Error> {
         let mut structure = NonFragmentedStructure::new();
 
         fourccs
@@ -245,7 +243,7 @@ mod tests {
 
     #[test]
     fn brands_declared_after_another_box_are_out_of_order() {
-        let out_of_order = Err(StructureError::box_out_of_order(BoxType::compact(*b"ftyp")));
+        let out_of_order = Err(Error::box_out_of_order(BoxType::compact(*b"ftyp")));
 
         assert_eq!(dispositions_of(&[b"free", b"ftyp"]), out_of_order);
         assert_eq!(dispositions_of(&[b"mdat", b"ftyp"]), out_of_order);
@@ -257,15 +255,13 @@ mod tests {
     fn a_second_movie_is_rejected() {
         assert_eq!(
             dispositions_of(&[b"ftyp", b"moov", b"mdat", b"moov"]),
-            Err(StructureError::duplicate_box(BoxType::compact(*b"moov")))
+            Err(Error::duplicate_box(BoxType::compact(*b"moov")))
         );
     }
 
     #[test]
     fn a_file_declared_over_without_a_movie_is_rejected() {
-        let missing = Err(StructureError::missing_mandatory_box(BoxType::compact(
-            *b"moov",
-        )));
+        let missing = Err(Error::missing_mandatory_box(BoxType::compact(*b"moov")));
         let mut brands_alone = NonFragmentedStructure::new();
         let mut media_data_alone = NonFragmentedStructure::new();
 
@@ -294,7 +290,7 @@ mod tests {
     #[test]
     fn a_failed_structure_reports_the_same_failure_for_every_call_after_it() {
         let mut structure = NonFragmentedStructure::new();
-        let failure = StructureError::box_out_of_order(BoxType::compact(*b"ftyp"));
+        let failure = Error::box_out_of_order(BoxType::compact(*b"ftyp"));
 
         structure
             .handle_box_type(BoxType::compact(*b"mdat"))
@@ -322,8 +318,8 @@ mod tests {
 
         assert_eq!(
             structure.handle_box_type(BoxType::compact(*b"mdat")),
-            Err(StructureError::already_finished())
+            Err(Error::already_finished())
         );
-        assert_eq!(structure.finish(), Err(StructureError::already_finished()));
+        assert_eq!(structure.finish(), Err(Error::already_finished()));
     }
 }
