@@ -213,11 +213,11 @@ impl SampleReader {
         let mut made_whole: usize = 0;
         let held_in_order = self.held_in_order;
         for pending in self.pending.iter_mut() {
-            if held_in_order && pending.lacking().start >= arriving.end {
-                break;
-            }
             if pending.is_whole() {
                 continue;
+            }
+            if held_in_order && pending.lacking().start >= arriving.end {
+                break;
             }
             pending.take_from(data, &arriving);
             made_whole = made_whole.saturating_add(usize::from(pending.is_whole()));
@@ -300,13 +300,19 @@ impl SampleReader {
                 self.sample_size_limit,
             )));
         }
-        // Why the start of what is lacked and not the start of the extent: input fills
-        // every extent it reaches up to its own end, so extents held in the
-        // order of their bytes stay in the order of the bytes they lack, and
-        // the fill stops at the first extent lacking bytes past the input.
-        self.held_in_order = self.pending.back().is_none_or(|back| {
-            self.held_in_order && back.lacking().start <= pending.lacking().start
-        });
+        // Why the start of what is lacked and not the start of the extent, and
+        // why the extents already whole are passed over: input fills every
+        // short extent it reaches up to its own end, so short extents held in
+        // the order of their bytes stay in the order of the bytes they lack,
+        // and the fill stops at the first short extent lacking bytes past the
+        // input. An extent naming no bytes is whole where it is held and
+        // waits behind the short ones, keeping a start the fills leave behind.
+        if !pending.is_whole() {
+            let last_short = self.pending.iter().rev().find(|held| !held.is_whole());
+            self.held_in_order = last_short.is_none_or(|last| {
+                self.held_in_order && last.lacking().start <= pending.lacking().start
+            });
+        }
         self.pending.push_back(pending);
 
         Ok(())
@@ -550,6 +556,18 @@ mod tests {
 
         assert_eq!(drained(&mut reader), [sample(1_024, b"ABCD")]);
         assert_eq!(reader.wanted_extent(), Some(200..204));
+    }
+
+    #[test]
+    fn an_extent_naming_no_bytes_held_behind_a_short_one_does_not_hide_the_extents_held_after_it() {
+        let mut reader = holding([extent(0, 0..100), extent(1_024, 10..10)]);
+        reader.handle_data(0, &[0xab; 30]).unwrap();
+
+        reader.handle_sample_extent(extent(2_048, 20..25)).unwrap();
+        reader.handle_data(20, b"ABCDE").unwrap();
+
+        assert_eq!(drained(&mut reader), [sample(2_048, b"ABCDE")]);
+        assert_eq!(reader.wanted_extent(), Some(30..100));
     }
 
     #[test]
