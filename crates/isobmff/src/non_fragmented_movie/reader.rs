@@ -358,9 +358,7 @@ impl NonFragmentedReader {
                         .finish()
                         .map(|file_type| self.file_type = Some(file_type)),
                     Some(Open::Movie(reader)) => reader.finish().and_then(|movie| {
-                        for extent in sample_extents(&movie) {
-                            self.samples.handle_sample_extent(extent?)?;
-                        }
+                        self.samples.handle_sample_extents(sample_extents(&movie))?;
                         self.movie = Some(movie);
 
                         Ok(())

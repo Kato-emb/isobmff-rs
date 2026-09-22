@@ -126,8 +126,10 @@ jobs:
       - run: cargo fuzz run avc_sample_entry --target x86_64-unknown-linux-gnu -- -runs=65536
       - run: cargo fuzz run boxes --target x86_64-unknown-linux-gnu -- -runs=65536
       - run: cargo fuzz run mp4_audio_sample_entry --target x86_64-unknown-linux-gnu -- -runs=65536
+      - run: cargo fuzz run non_fragmented_round_trip --target x86_64-unknown-linux-gnu -- -runs=65536
       - run: cargo fuzz run reader --target x86_64-unknown-linux-gnu -- -runs=65536
       - run: cargo fuzz run round_trip --target x86_64-unknown-linux-gnu -- -runs=65536
+      - run: cargo fuzz run sample_gathering --target x86_64-unknown-linux-gnu -- -runs=65536
       - run: cargo fuzz run sample_reader --target x86_64-unknown-linux-gnu -- -runs=65536
       - run: cargo fuzz run sample_round_trip --target x86_64-unknown-linux-gnu -- -runs=65536
 

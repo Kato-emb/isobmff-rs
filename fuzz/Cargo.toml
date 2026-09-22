@@ -53,6 +53,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "non_fragmented_round_trip"
+path = "fuzz_targets/non_fragmented_round_trip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "mp4_audio_sample_entry"
 path = "fuzz_targets/mp4_audio_sample_entry.rs"
 test = false
@@ -69,6 +76,13 @@ bench = false
 [[bin]]
 name = "round_trip"
 path = "fuzz_targets/round_trip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sample_gathering"
+path = "fuzz_targets/sample_gathering.rs"
 test = false
 doc = false
 bench = false

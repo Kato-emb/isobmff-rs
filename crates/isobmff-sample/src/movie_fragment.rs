@@ -80,10 +80,16 @@ pub fn sample_extents(
         .collect::<Result<Vec<_>, _>>()?;
     *decode_times = reached;
 
+    let rows = movie_fragment
+        .traf()
+        .iter()
+        .flat_map(|traf| traf.trun())
+        .map(|trun| trun.samples().len())
+        .sum::<usize>();
     // Why not chaining the failure after an iterator of the extents: the
     // chained iterator costs a reader ten nanoseconds an extent over a plain
     // one, a fifth of what reading a small sample costs in all.
-    let mut extents = Vec::new();
+    let mut extents = Vec::with_capacity(rows.saturating_add(1));
     let outcome = resolve_data(movie_fragment, &track_fragments, moof_start, &mut extents);
     extents.extend(outcome.err().map(Err));
 
