@@ -85,8 +85,9 @@ pub mod structure {
     pub use isobmff_structure::*;
 }
 
-/// The demuxers and the muxers driving the readers and writers over an I/O —
-/// the `isobmff-io` crate whole, behind the `io` feature
+/// The demuxers and the muxers driving the readers and writers over an I/O,
+/// over `futures::io` at the root and over `std::io` in `blocking` — the
+/// `isobmff-io` crate whole, behind the `io` feature
 #[cfg(feature = "io")]
 pub mod io {
     pub use isobmff_io::*;

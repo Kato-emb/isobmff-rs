@@ -1,14 +1,12 @@
 //! [`NonFragmentedDemuxer`] and [`NonFragmentedMuxer`], a non-fragmented movie file read off a source that seeks and written to a sink, ISO/IEC 14496-12 §8.2.1 and §8.7
 
-use core::ops::Range;
 use std::io::{Read, Seek, Write};
 
 use isobmff_boxes::{FileTypeBox, MovieBox};
 use isobmff_sample::Sample;
-use isobmff_sequence::EventBytes;
 use isobmff_structure::{NonFragmentedReader, NonFragmentedWriter};
 
-use super::driver::{Demuxer, Muxer, PollOutput, ReadSamples};
+use super::driver::{Demuxer, Muxer};
 use crate::Error;
 
 /// Reads the samples a non-fragmented movie file carries off a source that seeks
@@ -115,28 +113,6 @@ impl<S: Read + Seek> Iterator for NonFragmentedDemuxer<S> {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.demuxer.next()
-    }
-}
-
-impl ReadSamples for NonFragmentedReader {
-    fn handle_input(&mut self, input: &[u8]) -> Result<(), isobmff_structure::Error> {
-        NonFragmentedReader::handle_input(self, input)
-    }
-
-    fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), isobmff_structure::Error> {
-        NonFragmentedReader::handle_data(self, offset, data)
-    }
-
-    fn poll_sample(&mut self) -> Option<Sample> {
-        NonFragmentedReader::poll_sample(self)
-    }
-
-    fn wanted_extent(&self) -> Option<Range<u64>> {
-        NonFragmentedReader::wanted_extent(self)
-    }
-
-    fn finish(&mut self) -> Result<(), isobmff_structure::Error> {
-        NonFragmentedReader::finish(self)
     }
 }
 
@@ -258,12 +234,6 @@ impl<W: Write> NonFragmentedMuxer<W> {
     ///   does not flush.
     pub fn finish(&mut self) -> Result<(), Error> {
         self.muxer.finish(NonFragmentedWriter::finish)
-    }
-}
-
-impl PollOutput for NonFragmentedWriter {
-    fn poll_output(&mut self) -> Option<EventBytes> {
-        NonFragmentedWriter::poll_output(self)
     }
 }
 
