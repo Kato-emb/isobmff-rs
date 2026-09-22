@@ -11,8 +11,8 @@ use std::io;
 /// the sink failed, which [`io_error`](Self::io_error) holds as `std::io`
 /// reports it, or the layers the file is read or written through refused it,
 /// which [`structure_error`](Self::structure_error) holds as
-/// [`isobmff_structure::Error`] reports it. Which of the two it is, and what that one
-/// makes of it, is one [`kind`](Self::kind).
+/// [`isobmff_structure::Error`] reports it. Which of the two it is, and what
+/// that one makes of it, is one [`kind`](Self::kind).
 ///
 /// # Examples
 ///
@@ -28,7 +28,9 @@ use std::io;
 /// assert_eq!(failure.structure_error(), None);
 ///
 /// // A failure of the layers beneath is carried through as they report it
-/// let failure = Error::from(isobmff_structure::Error::missing_mandatory_box(BoxType::compact(*b"moov")));
+/// let failure = Error::from(isobmff_structure::Error::missing_mandatory_box(
+///     BoxType::compact(*b"moov"),
+/// ));
 /// assert_eq!(
 ///     failure.kind(),
 ///     ErrorKind::Structure(isobmff_structure::ErrorKind::MissingMandatoryBox)

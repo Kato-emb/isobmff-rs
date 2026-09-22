@@ -21,29 +21,34 @@
 //! `isobmff_structure::FragmentedReader` are the same type, so documentation
 //! written against any of those crates reads against this one.
 //!
-//! | module | crate | what it holds |
+//! | module | crate | of the seven layers |
 //! |---|---|---|
-//! | [`core`] | `isobmff-core` | the framing of a box and the codecs its fields are read and written by, which every box is defined over |
-//! | [`sequence`] | `isobmff-sequence` | layer 1: a file framed as the sequence of boxes it is |
-//! | [`boxes`] | `isobmff-boxes` | the catalog of boxes, each read into a value that owns its bytes |
-//! | [`sample`] | `isobmff-sample` | layers 3 and 4: where every sample of a presentation lies, and the samples themselves |
-//! | [`structure`] | `isobmff-structure` | layers 2, 5 and 6: the order the boxes of a file stand in, and the stacks that read and write one |
-//! | `io` | `isobmff-io` | layer 7: the demuxers and the muxers, one of each per stack, behind the `io` feature |
-//! | [`avc`] | `isobmff-avc` | sample entries of ISO/IEC 14496-15, behind the `avc` feature |
-//! | [`mp4`] | `isobmff-mp4` | sample entries and descriptors of ISO/IEC 14496-14, behind the `mp4` feature |
+//! | [`core`] | `isobmff-core` | what all of them are defined over |
+//! | [`sequence`] | `isobmff-sequence` | layer 1 |
+//! | [`boxes`] | `isobmff-boxes` | the catalog layer 2 reads a box into |
+//! | [`sample`] | `isobmff-sample` | layers 3 and 4 |
+//! | [`structure`] | `isobmff-structure` | layers 2, 5 and 6 |
+//! | `io` | `isobmff-io` | layer 7 |
+//! | [`avc`] | `isobmff-avc` | none: the sample entries of ISO/IEC 14496-15 |
+//! | [`mp4`] | `isobmff-mp4` | none: the sample entries and descriptors of ISO/IEC 14496-14 |
 //!
-//! The seven layers a file is read through, and what passes between them, are
-//! [`structure`]'s to describe. Each crate names the failures of its own layers
-//! `Error` and `ErrorKind`, and carries the failures of the layers beneath
-//! through whole rather than translating them, so [`structure::Error`] reaches
-//! [`sample::Error`] and [`sequence::Error`] reaches [`core::Error`].
+//! What each module holds is its own summary below; what the seven layers are,
+//! and what passes between them, [`isobmff_structure`] describes. `avc` and
+//! `mp4` are on by default and `io` is not, so a caller that wants the base
+//! specification alone turns the default features off, and one that wants a
+//! demuxer or a muxer asks for `io`.
+//!
+//! Each crate names the failures of its own layers `Error` and `ErrorKind`, and
+//! carries the failures of the layers beneath through whole rather than
+//! translating them, so [`structure::Error`] reaches [`sample::Error`] and
+//! [`sequence::Error`] reaches [`core::Error`].
 //!
 //! # `no_std`
 //!
-//! The crate is `no_std` but needs `alloc`, for the reasons [`structure`]
-//! states of the layers beneath. The `io` feature, off by default, adds
-//! `isobmff::io` alone, which needs `std`: the six layers beneath it are the
-//! same with it or without.
+//! The crate is `no_std` but needs `alloc`, for the reasons
+//! [`isobmff_structure`] states of the layers beneath. The `io` feature, off by
+//! default, adds `isobmff::io` alone, which needs `std`: the six layers beneath
+//! it are the same with it or without.
 
 #![no_std]
 
