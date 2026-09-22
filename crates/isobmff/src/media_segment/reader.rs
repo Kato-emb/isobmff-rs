@@ -53,12 +53,13 @@ use crate::{StructureError, WholeBoxReader};
 ///   declares is bounded — see [`with_limits`](Self::with_limits).
 /// * The samples of a fragment are read out of the media data that follows
 ///   it, and come out as their bytes arrive whole, as [`SampleReader`]'s
-///   contract has it: samples lying in the media data in the order the
-///   fragment declares them come out in that order, and those of two tracks
-///   interleaved in it come out as the cuts of the input make them whole.
-///   [`wanted_extent`](Self::wanted_extent) names the bytes the extent held
-///   longest still lacks, which a caller handing the segment over in order
-///   meets as they come.
+///   contract has it: the extents of a fragment are held in the order of
+///   their bytes, so a segment handed over in order yields the samples of each
+///   fragment in the order they lie in it, whatever order the fragment
+///   declares them in and wherever the input is cut.
+///   [`wanted_extent`](Self::wanted_extent) names the bytes the extent at the
+///   front of those held still lacks, which a caller handing the segment
+///   over in order meets as they come.
 /// * An `Err` leaves the reader failed for good,
 ///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The samples completed
@@ -262,7 +263,7 @@ impl MediaSegmentReader {
         self.samples.poll_sample()
     }
 
-    /// Returns the bytes the earliest sample still held lacks, if any is held
+    /// Returns the bytes the extent at the front of those held still lacks, if any is held
     ///
     /// A fragment precedes the media data it addresses, so a caller handing the
     /// segment over in order meets every extent as it comes: what this names

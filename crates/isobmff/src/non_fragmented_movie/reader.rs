@@ -52,9 +52,9 @@ use crate::{StructureError, WholeBoxReader};
 ///   in the order the file lays them down. Media data arriving before the
 ///   movie is dropped, since no sample has claimed it yet, so a movie lying
 ///   after its media data completes no sample by itself: from then on
-///   [`wanted_extent`](Self::wanted_extent) names the bytes the sample held
-///   longest still lacks, for a caller that can seek to fetch and hand to
-///   [`handle_data`](Self::handle_data).
+///   [`wanted_extent`](Self::wanted_extent) names the bytes the extent at
+///   the front of those held still lacks, for a caller that can seek to
+///   fetch and hand to [`handle_data`](Self::handle_data).
 /// * An `Err` leaves the reader failed for good,
 ///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The samples completed
@@ -249,7 +249,7 @@ impl NonFragmentedReader {
         self.samples.poll_sample()
     }
 
-    /// Returns the bytes the earliest sample still held lacks, if any is held
+    /// Returns the bytes the extent at the front of those held still lacks, if any is held
     ///
     /// A movie lying before its media data names bytes still to arrive, which a
     /// caller handing the file over in order meets as they come; one lying

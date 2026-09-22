@@ -102,53 +102,15 @@ mod tests {
         file
     }
 
-    /// The samples of `track_id`, in the order they lie in `samples`
-    fn of_track(samples: &[Sample], track_id: u32) -> Vec<Sample> {
-        samples
-            .iter()
-            .filter(|sample| sample.track_id() == track_id)
-            .cloned()
-            .collect()
-    }
-
     #[test]
-    fn the_samples_of_each_track_are_read_back_as_they_were_handed_over() {
+    fn the_samples_are_read_back_as_they_were_handed_over_however_the_file_was_cut() {
         let file = written_file(declared_samples());
-        let read_back = samples_of(&file, file.len());
         let handed_over = declared_samples().concat();
 
-        assert_eq!(of_track(&read_back, 1), of_track(&handed_over, 1));
-        assert_eq!(of_track(&read_back, 2), of_track(&handed_over, 2));
-        assert_eq!(read_back.len(), handed_over.len());
-    }
-
-    #[test]
-    fn the_samples_of_one_fragment_are_read_back_track_by_track() {
-        let file = written_file(declared_samples());
-        let tracks: Vec<u32> = samples_of(&file, file.len())
-            .iter()
-            .map(Sample::track_id)
-            .collect();
-
-        assert_eq!(tracks, [1, 1, 1, 2, 1, 2]);
-    }
-
-    #[test]
-    fn the_samples_of_each_track_are_read_back_the_same_however_the_file_was_cut() {
-        let file = written_file(declared_samples());
-        let whole = samples_of(&file, file.len());
-
-        for cut_length in [1, 3, 7, 64, file.len().saturating_sub(1)] {
-            let cut = samples_of(&file, cut_length);
-
+        for cut_length in [file.len(), 1, 3, 7, 64, file.len().saturating_sub(1)] {
             assert_eq!(
-                of_track(&cut, 1),
-                of_track(&whole, 1),
-                "cut at {cut_length}"
-            );
-            assert_eq!(
-                of_track(&cut, 2),
-                of_track(&whole, 2),
+                samples_of(&file, cut_length),
+                handed_over,
                 "cut at {cut_length}"
             );
         }

@@ -32,20 +32,21 @@ use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, 
 
 use isobmff::{
     BoxEvent, BoxHeader, BoxReader, BoxType, BoxWriter, FileTypeBox, FragmentedReader,
-    FragmentedWriter, MovieBox, MovieFragmentWriter, Sample, TrackExtendsBox,
+    FragmentedWriter, MovieBox, MovieExtendsBox, MovieFragmentWriter, MovieHeaderBox,
+    Mp4EpochSeconds, Sample, TrackExtendsBox,
 };
-use isobmff_test_support::{file_type, fragmented_movie};
+use isobmff_test_support::{file_type, track};
 
 /// Ticks every sample of the benchmarked movies lasts
 const SAMPLE_DURATION: u32 = 1_000;
 
-/// Track the samples of the benchmarked movies belong to
-const TRACK_ID: u32 = 1;
+/// Ticks a second the benchmarked movies are timed in
+const TIMESCALE: u32 = 90_000;
 
 /// Chunk the arriving bytes are handed over in, except where a benchmark varies it
 const DEFAULT_ARRIVING_CHUNK_LEN: usize = 64 * 1024;
 
-/// A file to measure over: samples of one length, so many to a fragment, so many fragments
+/// A file to measure over: samples of one length, so many to a fragment, so many fragments, over so many tracks
 #[derive(Clone, Copy)]
 struct Composition {
     /// Bytes every sample carries
@@ -54,6 +55,8 @@ struct Composition {
     samples_per_fragment: usize,
     /// Fragments the file holds
     fragment_count: usize,
+    /// Tracks the samples take turns over, sample by sample
+    track_count: usize,
 }
 
 impl Composition {
@@ -72,24 +75,56 @@ impl Composition {
         2 + 2 * self.fragment_count
     }
 
-    /// The samples of the file, fragment by fragment
+    /// The ids of the tracks, counting from one
+    fn track_ids(&self) -> impl Iterator<Item = u32> {
+        1..=u32::try_from(self.track_count).unwrap()
+    }
+
+    /// Movie the file continues in fragments
+    ///
+    /// Every default the `trex` states is one no fragment falls back on, so
+    /// what a fragment writes is what the samples handed over stated.
+    fn movie(&self) -> MovieBox {
+        let epoch = Mp4EpochSeconds::from_seconds(0);
+
+        MovieBox::new(
+            MovieHeaderBox::new(
+                epoch,
+                epoch,
+                TIMESCALE,
+                0,
+                u32::try_from(self.track_count).unwrap() + 1,
+            ),
+            self.track_ids().map(track).collect(),
+            MovieExtendsBox::new(
+                self.track_ids()
+                    .map(|track_id| TrackExtendsBox::new(track_id, 9, 1, 1, u32::MAX))
+                    .collect(),
+            ),
+        )
+        .unwrap()
+    }
+
+    /// The samples of the file, fragment by fragment, the tracks taking turns
     fn samples(&self) -> Vec<Vec<Sample>> {
-        let mut decode_time = 0;
+        let mut decode_times = vec![0; self.track_count];
 
         (0..self.fragment_count)
             .map(|_| {
                 (0..self.samples_per_fragment)
-                    .map(|_| {
+                    .map(|position| {
+                        let track = position % self.track_count;
+                        let decode_time = decode_times.get_mut(track).unwrap();
                         let sample = Sample::new(
-                            TRACK_ID,
-                            decode_time,
+                            u32::try_from(track).unwrap() + 1,
+                            *decode_time,
                             SAMPLE_DURATION,
                             0,
                             0,
                             1,
                             vec![0xab; self.sample_len],
                         );
-                        decode_time += u64::from(SAMPLE_DURATION);
+                        *decode_time += u64::from(SAMPLE_DURATION);
 
                         sample
                     })
@@ -99,14 +134,15 @@ impl Composition {
     }
 }
 
-/// The compositions the first table reports, from long samples to short ones
-const COMPOSITIONS: [(&str, Composition); 5] = [
+/// The compositions the first table reports, from long samples to short ones, then two tracks interleaved
+const COMPOSITIONS: [(&str, Composition); 8] = [
     (
         "video-64KiB-x30",
         Composition {
             sample_len: 64 * 1024,
             samples_per_fragment: 30,
             fragment_count: 32,
+            track_count: 1,
         },
     ),
     (
@@ -115,6 +151,7 @@ const COMPOSITIONS: [(&str, Composition); 5] = [
             sample_len: 64 * 1024,
             samples_per_fragment: 300,
             fragment_count: 3,
+            track_count: 1,
         },
     ),
     (
@@ -123,6 +160,7 @@ const COMPOSITIONS: [(&str, Composition); 5] = [
             sample_len: 512,
             samples_per_fragment: 430,
             fragment_count: 276,
+            track_count: 1,
         },
     ),
     (
@@ -131,6 +169,7 @@ const COMPOSITIONS: [(&str, Composition); 5] = [
             sample_len: 512,
             samples_per_fragment: 4300,
             fragment_count: 27,
+            track_count: 1,
         },
     ),
     (
@@ -139,6 +178,34 @@ const COMPOSITIONS: [(&str, Composition); 5] = [
             sample_len: 64,
             samples_per_fragment: 1000,
             fragment_count: 196,
+            track_count: 1,
+        },
+    ),
+    (
+        "audio-512B-x430-2-tracks",
+        Composition {
+            sample_len: 512,
+            samples_per_fragment: 430,
+            fragment_count: 276,
+            track_count: 2,
+        },
+    ),
+    (
+        "audio-512B-x4300-2-tracks",
+        Composition {
+            sample_len: 512,
+            samples_per_fragment: 4300,
+            fragment_count: 27,
+            track_count: 2,
+        },
+    ),
+    (
+        "tiny-64B-x1000-2-tracks",
+        Composition {
+            sample_len: 64,
+            samples_per_fragment: 1000,
+            fragment_count: 196,
+            track_count: 2,
         },
     ),
 ];
@@ -148,6 +215,7 @@ const FRAGMENT_LENGTH_BASE: Composition = Composition {
     sample_len: 64 * 1024,
     samples_per_fragment: 960,
     fragment_count: 1,
+    track_count: 1,
 };
 
 /// The composition the third table hands over in seven chunk lengths
@@ -155,6 +223,7 @@ const CHUNK_LENGTH_BASE: Composition = Composition {
     sample_len: 64 * 1024,
     samples_per_fragment: 30,
     fragment_count: 32,
+    track_count: 1,
 };
 
 /// Samples one fragment holds, over the range the second table reports
@@ -182,14 +251,6 @@ const BOX_PAYLOAD_LENS: [(&str, usize); 6] = [
     ("4KiB", 4 * 1024),
     ("64KiB", 64 * 1024),
 ];
-
-/// Movie the benchmarked files continue in fragments
-///
-/// Every default the `trex` states is one no fragment falls back on, so what a
-/// fragment writes is what the samples handed over stated.
-fn movie() -> MovieBox {
-    fragmented_movie(TrackExtendsBox::new(TRACK_ID, 9, 1, 1, u32::MAX))
-}
 
 /// Drains what the writer has ready, and reports how many bytes that was
 fn drained(writer: &mut FragmentedWriter) -> usize {
@@ -384,7 +445,7 @@ fn written_file(composition: &Composition) -> Vec<u8> {
     };
 
     writer.handle_file_type(file_type()).unwrap();
-    writer.handle_movie(movie()).unwrap();
+    writer.handle_movie(composition.movie()).unwrap();
 
     for (position, samples) in composition.samples().into_iter().enumerate() {
         writer
@@ -417,7 +478,7 @@ fn composition(criterion: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new("fragmented_writer", name), |bencher| {
             bencher.iter_batched(
-                || (file_type(), movie(), composition.samples()),
+                || (file_type(), composition.movie(), composition.samples()),
                 |(file_type, movie, fragments)| {
                     assert_eq!(
                         fragmented_writer_file(file_type, movie, fragments),
@@ -473,13 +534,14 @@ fn fragment_length(criterion: &mut Criterion) {
             ..FRAGMENT_LENGTH_BASE
         };
         let payload_len = composition.payload_len();
-        let file_len = fragmented_writer_file(file_type(), movie(), composition.samples());
+        let file_len =
+            fragmented_writer_file(file_type(), composition.movie(), composition.samples());
 
         group.bench_function(
             BenchmarkId::new("fragmented_writer", samples_per_fragment),
             |bencher| {
                 bencher.iter_batched(
-                    || (file_type(), movie(), composition.samples()),
+                    || (file_type(), composition.movie(), composition.samples()),
                     |(file_type, movie, fragments)| {
                         assert_eq!(
                             fragmented_writer_file(file_type, movie, fragments),

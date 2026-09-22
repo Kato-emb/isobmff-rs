@@ -5,12 +5,19 @@
 //!
 //! 1. no call panics: a writer that refuses a sample reports that same failure
 //!    for every call after it, and still hands over the bytes it had laid down
-//! 2. the samples of one track are read back as they were handed over
+//! 2. the samples are read back as they were handed over: the samples carrying
+//!    bytes in that very order, the reader handing the samples of a fragment
+//!    back in the order of their bytes, and those of one track in that order
+//!    among themselves — a sample naming no bytes shares its byte with the
+//!    samples around it, and is held only to its place among those of its
+//!    track
 //! 3. the reader does not reject the file the writer laid down
-//! 4. laying the samples read back out again reads back those same samples: the
-//!    order the tracks arrive in is settled by the first pass, which gathers the
-//!    samples of a track into one `traf`, so the second pass is a fixed point of the
-//!    whole presentation rather than of one track at a time
+//! 4. laying the samples read back out again reads back those same samples,
+//!    held to as property 2 is and no closer: a sample naming no bytes is
+//!    placed where it arrived, and the first pass hands it back behind the
+//!    sample lying at its byte where the fragment declares that one first,
+//!    rather than behind the one it followed in, so the second file may place
+//!    it at another byte and declare its tie the other way round
 //!
 //! The defaults the movie states are ones no fragment falls back on, so a sample
 //! read back holding one of them would mean its fragment left the property to the
@@ -87,29 +94,13 @@ fuzz_target!(|input: Input<'_>| {
         .flat_map(|(_sequence_number, samples)| samples.iter().cloned())
         .collect();
 
-    for position in 0..TRACK_COUNT {
-        let track_id = track_id_of(position);
-
-        assert_eq!(
-            of_track(&first_pass, track_id),
-            of_track(&samples, track_id),
-            "the samples of a track were not read back as they were handed over"
-        );
-    }
-    assert_eq!(
-        first_pass.len(),
-        samples.len(),
-        "the file reads back another number of samples than it was laid out from"
-    );
+    read_back_as_handed_over(&first_pass, &samples);
 
     let again = regrouped(taken, &first_pass);
     let (file_again, _closed_again) = file_of(&movie, &again);
     let read_back_again = read_back(&file_again);
 
-    assert_eq!(
-        first_pass, read_back_again,
-        "laying the samples read back out again read back other samples"
-    );
+    read_back_as_handed_over(&read_back_again, &first_pass);
 });
 
 /// Movie of two fragmented tracks, stating defaults no fragment falls back on
@@ -296,6 +287,38 @@ fn regrouped(laid_out: &[(u32, Vec<Sample>)], read_back: &[Sample]) -> Vec<(u32,
 
             (*sequence_number, taken.to_vec())
         })
+        .collect()
+}
+
+/// Checks that `read_back` is `handed_over` in the order of the file, samples naming no bytes among their track
+fn read_back_as_handed_over(read_back: &[Sample], handed_over: &[Sample]) {
+    assert_eq!(
+        carrying_bytes(read_back),
+        carrying_bytes(handed_over),
+        "the samples carrying bytes were not read back in the order they were handed over"
+    );
+    for position in 0..TRACK_COUNT {
+        let track_id = track_id_of(position);
+
+        assert_eq!(
+            of_track(read_back, track_id),
+            of_track(handed_over, track_id),
+            "the samples of a track were not read back as they were handed over"
+        );
+    }
+    assert_eq!(
+        read_back.len(),
+        handed_over.len(),
+        "the file reads back another number of samples than it was laid out from"
+    );
+}
+
+/// The samples carrying a byte at least, in the order they lie in `samples`
+fn carrying_bytes(samples: &[Sample]) -> Vec<Sample> {
+    samples
+        .iter()
+        .filter(|sample| !sample.data().is_empty())
+        .cloned()
         .collect()
 }
 

@@ -37,12 +37,12 @@ mod tests {
         .unwrap()
     }
 
-    /// The samples the two tracks carry, fragment by fragment, each fragment track by track
+    /// The samples the two tracks carry, fragment by fragment, the tracks interleaved in the first
     ///
     /// The segment starts partway into the presentation, so the first sample of
     /// each track states a decode time no fragment before it led up to. The
-    /// samples of a fragment are handed over track by track, the order a
-    /// fragment declares them in, so what is read back is what was handed over.
+    /// audio sample of the first fragment lies between two video samples, so
+    /// the fragment declares its samples in another order than they lie in.
     fn declared_samples() -> Vec<Vec<Sample>> {
         let video =
             |decode_time, data: &[u8]| Sample::new(1, decode_time, 3_000, 0, 0, 1, data.to_vec());
@@ -53,8 +53,8 @@ mod tests {
         vec![
             vec![
                 video(90_000, b"VIDEO_01"),
-                video(93_000, b"VIDEO_02"),
                 audio(30_720, 512, b"AUD1"),
+                video(93_000, b"VIDEO_02"),
             ],
             vec![video(96_000, b"VIDEO_03"), audio(31_744, -256, b"AUD2")],
         ]
@@ -86,20 +86,10 @@ mod tests {
     }
 
     #[test]
-    fn the_samples_are_read_back_as_they_were_handed_over() {
+    fn the_samples_are_read_back_as_they_were_handed_over_however_the_segment_was_cut() {
         let segment = written_segment(declared_samples());
 
-        assert_eq!(
-            samples_of(movie(), &segment, segment.len()),
-            declared_samples().concat()
-        );
-    }
-
-    #[test]
-    fn the_samples_are_read_back_the_same_however_the_segment_was_cut() {
-        let segment = written_segment(declared_samples());
-
-        for cut_length in [1, 3, 7, 64, segment.len().saturating_sub(1)] {
+        for cut_length in [segment.len(), 1, 3, 7, 64, segment.len().saturating_sub(1)] {
             assert_eq!(
                 samples_of(movie(), &segment, cut_length),
                 declared_samples().concat(),
