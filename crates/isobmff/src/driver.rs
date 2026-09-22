@@ -25,7 +25,7 @@ pub(crate) trait ReadSamples {
     /// Takes the next sample the file handed over so far completed
     fn poll_sample(&mut self) -> Option<Sample>;
 
-    /// Returns the bytes the earliest sample still held lacks, if any is held
+    /// Returns the bytes the extent at the front of those held still lacks, if any is held
     fn wanted_extent(&self) -> Option<Range<u64>>;
 
     /// Declares the file over

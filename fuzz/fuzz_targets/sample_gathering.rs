@@ -3,8 +3,9 @@
 //! One run declares extents over a file and hands the reader pieces of that
 //! file, each with the offset it lies at, in whatever order the input has them,
 //! and checks four properties of the same input, once as given, once with every
-//! piece handed over twice, and once with every piece cut in two, the extents
-//! held one at a time and then together:
+//! piece handed over twice, and once with every piece cut in two, each run of
+//! extents held one at a time and then together — which holds the run in the
+//! order of their bytes, so the model follows that order:
 //!
 //! 1. no call panics, a failure of the reader is reported again by every call
 //!    after it, and once the samples are declared over nothing more is taken
@@ -16,7 +17,7 @@
 //!    they were held, at the step that made them whole, and an extent naming
 //!    no bytes once nothing short is held before it
 //! 3. the samples are declared over without failure exactly when every extent
-//!    held was met, the failure naming the extent held longest that was not,
+//!    held was met, the failure naming the short extent at the front of those held,
 //!    and no want is named then
 //! 4. an extent naming more bytes than the limit is refused, and none is held
 //!    after it
@@ -75,7 +76,8 @@ enum Step {
 
 /// One step as the reader and the model take it
 enum Handed<'file> {
-    Extent(SampleExtent),
+    /// A run of extents, held one at a time or together
+    Extents(Vec<SampleExtent>),
     Data(u64, &'file [u8]),
 }
 
@@ -102,18 +104,15 @@ fuzz_target!(|input: Input<'_>| {
 
     for pass in [Pass::AsGiven, Pass::Twice, Pass::Cut] {
         let handed = handed_over(&steps, input.file, pass);
-        let expected = modelled(sample_size_limit, &handed, input.file);
 
-        assert_eq!(
-            read(sample_size_limit, &handed, false),
-            expected,
-            "the reader did not do with the extents held one at a time what the contract states"
-        );
-        assert_eq!(
-            read(sample_size_limit, &handed, true),
-            expected,
-            "the reader did not do with the extents held together what the contract states for each"
-        );
+        for together in [false, true] {
+            assert_eq!(
+                read(sample_size_limit, &handed, together),
+                modelled(sample_size_limit, &handed, input.file, together),
+                "the reader did not do with the extents held {} what the contract states for each",
+                if together { "together" } else { "one at a time" }
+            );
+        }
     }
 });
 
@@ -131,6 +130,7 @@ enum Pass {
 /// The steps as the reader takes them, the pieces of the file handed over as `pass` has them
 fn handed_over<'file>(steps: &[Step], file: &'file [u8], pass: Pass) -> Vec<Handed<'file>> {
     let mut handed = Vec::new();
+    let mut run = Vec::new();
 
     for step in steps {
         match *step {
@@ -145,7 +145,7 @@ fn handed_over<'file>(steps: &[Step], file: &'file [u8], pass: Pass) -> Vec<Hand
             } => {
                 let start = u64::from(start);
 
-                handed.push(Handed::Extent(SampleExtent::new(
+                run.push(SampleExtent::new(
                     u32::from(track_id),
                     u64::from(decode_time),
                     u32::from(sample_duration),
@@ -154,7 +154,7 @@ fn handed_over<'file>(steps: &[Step], file: &'file [u8], pass: Pass) -> Vec<Hand
                     1,
                     1,
                     start..start.saturating_add(u64::from(len)),
-                )));
+                ));
             }
             Step::Data {
                 offset,
@@ -166,6 +166,9 @@ fn handed_over<'file>(steps: &[Step], file: &'file [u8], pass: Pass) -> Vec<Hand
                 let piece = &file[from..to];
                 let offset = u64::from(offset);
 
+                if !run.is_empty() {
+                    handed.push(Handed::Extents(std::mem::take(&mut run)));
+                }
                 match pass {
                     Pass::AsGiven => handed.push(Handed::Data(offset, piece)),
                     Pass::Twice => {
@@ -186,32 +189,30 @@ fn handed_over<'file>(steps: &[Step], file: &'file [u8], pass: Pass) -> Vec<Hand
             }
         }
     }
+    if !run.is_empty() {
+        handed.push(Handed::Extents(run));
+    }
 
     handed
 }
 
 /// Hands the steps to a reader and gathers what it reports
 ///
-/// Extents following one another are handed over in one call where `together`
-/// is set, and one at a time otherwise.
+/// A run of extents is handed over in one call where `together` is set, and
+/// one at a time otherwise.
 fn read(sample_size_limit: u64, handed: &[Handed<'_>], together: bool) -> Reading {
     let mut reader = SampleReader::with_sample_size_limit(sample_size_limit);
     let mut samples = Vec::new();
     let mut failure = None;
-    let mut steps = handed.iter().peekable();
 
-    while let Some(step) = steps.next() {
+    for step in handed {
         let outcome = match step {
-            Handed::Extent(extent) if together => {
-                let mut extents = vec![Ok(extent.clone())];
-                while let Some(Handed::Extent(next)) = steps.peek() {
-                    extents.push(Ok(next.clone()));
-                    steps.next();
-                }
-
-                reader.handle_sample_extents(extents)
+            Handed::Extents(run) if together => {
+                reader.handle_sample_extents(run.iter().cloned().map(Ok))
             }
-            Handed::Extent(extent) => reader.handle_sample_extent(extent.clone()),
+            Handed::Extents(run) => run
+                .iter()
+                .try_for_each(|extent| reader.handle_sample_extent(extent.clone())),
             Handed::Data(offset, data) => reader.handle_data(*offset, data),
         };
 
@@ -266,27 +267,37 @@ fn drain(reader: &mut SampleReader, samples: &mut Vec<Sample>) {
 }
 
 /// What the contract states the reader reports for the steps, each extent followed on its own
-fn modelled(sample_size_limit: u64, handed: &[Handed<'_>], file: &[u8]) -> Reading {
+///
+/// A run of extents held `together` is held in the order of their bytes, up
+/// to the first past the limit, which is refused before anything after it.
+fn modelled(sample_size_limit: u64, handed: &[Handed<'_>], file: &[u8], together: bool) -> Reading {
     let mut followed: Vec<Followed> = Vec::new();
     let mut failure = None;
 
     for (step, handed) in handed.iter().enumerate() {
         match handed {
-            Handed::Extent(extent) => {
-                let declared = declared_len(extent);
-                if declared > sample_size_limit {
+            Handed::Extents(run) => {
+                let admitted = run
+                    .iter()
+                    .position(|extent| declared_len(extent) > sample_size_limit)
+                    .unwrap_or(run.len());
+                let mut held: Vec<&SampleExtent> = run[..admitted].iter().collect();
+                if together {
+                    held.sort_by_key(|extent| extent.extent().start);
+                }
+                followed.extend(held.into_iter().map(|extent| Followed {
+                    extent: extent.clone(),
+                    gathered: 0,
+                    whole_at: (declared_len(extent) == 0).then_some(step),
+                }));
+                if let Some(refused) = run.get(admitted) {
                     failure = Some(SampleError::sample_size_limit_exceeded(
-                        extent.track_id(),
-                        declared,
+                        refused.track_id(),
+                        declared_len(refused),
                         sample_size_limit,
                     ));
                     break;
                 }
-                followed.push(Followed {
-                    extent: extent.clone(),
-                    gathered: 0,
-                    whole_at: (declared == 0).then_some(step),
-                });
             }
             Handed::Data(offset, data) => {
                 let arriving = *offset..offset.saturating_add(data.len() as u64);

@@ -24,12 +24,14 @@ use crate::sample::{Sample, SampleExtent};
 /// # Contract
 ///
 /// * [`handle_sample_extent`](Self::handle_sample_extent) holds the extent
-///   from then on, [`handle_sample_extents`](Self::handle_sample_extents)
-///   holds each of several in turn, and [`handle_data`](Self::handle_data)
-///   fills every held extent the input reaches. Bytes no held extent names
-///   are dropped, so input arriving before the extent that names it is not
-///   kept for it, and the extent is reported as lacking those bytes once it
-///   arrives.
+///   from then on, behind those held before it;
+///   [`handle_sample_extents`](Self::handle_sample_extents) holds several
+///   behind those held before them, in the order of their bytes, those
+///   starting at the same byte in the order they came; and
+///   [`handle_data`](Self::handle_data) fills every held extent the input
+///   reaches. Bytes no held extent names are dropped, so input arriving
+///   before the extent that names it is not kept for it, and the extent is
+///   reported as lacking those bytes once it arrives.
 /// * The samples are taken one at a time from
 ///   [`poll_sample`](Self::poll_sample), in the order their bytes arrived
 ///   whole: input that makes a sample whole hands over every whole sample
@@ -37,18 +39,19 @@ use crate::sample::{Sample, SampleExtent};
 ///   makes none whole hands over nothing. An extent naming no bytes is whole
 ///   as soon as it is held, and is handed over once nothing short is held
 ///   before it — at once, or with whatever input clears the way. Bytes
-///   arriving in the order the extents were held thus yield the samples in
-///   that order.
+///   arriving in the order the extents are held thus yield the samples in
+///   that order, and bytes arriving in the order of the file, wherever cut,
+///   yield the samples of extents held together in that order.
 /// * A sample fills from its start: input reaching it takes from the byte it
 ///   lacks next up to the end of the input or of the sample, and input
 ///   starting past that byte, or ending before it, leaves the sample as it
 ///   stands.
 /// * Two extents naming the same bytes are held and filled apart, each
 ///   yielding its own sample.
-/// * [`wanted_extent`](Self::wanted_extent) names the bytes the extent held
-///   longest still lacks, and `None` once no extent is held. A caller reading
-///   the file in order never needs it; one that can seek fetches what it
-///   names, and the next want appears once that one is met.
+/// * [`wanted_extent`](Self::wanted_extent) names the bytes the extent at
+///   the front of those held still lacks, and `None` once no extent is held.
+///   A caller reading the file in order never needs it; one that can seek
+///   fetches what it names, and the next want appears once that one is met.
 /// * An `Err` leaves the reader failed for good,
 ///   [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished) aside: every
 ///   later call that can fail reports that same failure again. The samples
@@ -93,11 +96,10 @@ pub struct SampleReader {
     // Why not an index of the extents by the bytes they lack: keeping one costs
     // every extent a few tree operations, which a reader fed in order pays for
     // nothing, where the order the extents are held in is an index already
-    // wherever it is the order of their bytes — every movie, whose sample
-    // tables resolve sorted by offset, and every fragment whose runs lie in
-    // the file in the order they are declared. A fragment interleaving its
-    // tracks run by run, or a `trun` pointing behind the run before it, is
-    // read the long way.
+    // wherever it is the order of their bytes — which extents held together
+    // are put in, and extents held one at a time keep only where they come
+    // in it. The long way is left for what is held behind a short extent
+    // lying past it, one at a time or together.
     held_in_order: bool,
     sample_size_limit: u64,
     state: State,
@@ -156,17 +158,21 @@ impl SampleReader {
     ///   again for every call after it.
     pub fn handle_sample_extent(&mut self, extent: SampleExtent) -> Result<(), SampleError> {
         self.reading()?;
-        self.hold(extent)?;
+        let first = self.pending.len();
+        let held = self.admit(extent);
+        self.held_in_order_from(first);
         self.report_front();
 
-        Ok(())
+        held
     }
 
-    /// Holds each extent of `extents` in turn, as [`handle_sample_extent`](Self::handle_sample_extent) holds one
+    /// Holds the extents of `extents` together, in the order of their bytes
     ///
-    /// The extents are held in the order they come, up to the first the
-    /// reader refuses or the first that is a failure, which fails the reader
-    /// as one of its own would, the extents before it held. The iterators
+    /// The extents are held behind those held before them, ordered by the
+    /// byte each starts at — those starting at the same byte in the order
+    /// they came — up to the first the reader refuses or the first that is a
+    /// failure, which fails the reader as one of its own would, the extents
+    /// before it held. The iterators
     /// [`sample_table::sample_extents`](crate::sample_table::sample_extents)
     /// and [`movie_fragment::sample_extents`](crate::movie_fragment::sample_extents)
     /// return are handed over as they are.
@@ -187,10 +193,27 @@ impl SampleReader {
         self.reading()?;
         let mut extents = extents.into_iter();
         self.pending.reserve(extents.size_hint().0);
+        let first = self.pending.len();
+        let mut in_order = true;
+        let mut last_start = None;
         let held = extents.try_for_each(|extent| {
             let extent = extent.map_err(|failure| self.fail(failure))?;
-            self.hold(extent)
+            let start = extent.extent().start;
+            in_order &= last_start.is_none_or(|last| last <= start);
+            last_start = Some(start);
+
+            self.admit(extent)
         });
+        // Why not sorting outright: making the queue contiguous first moves
+        // every extent held wherever the ring has wrapped, which a batch
+        // already in order — as a fragment of one track laid down run after
+        // run declares — never needs.
+        if !in_order {
+            if let Some(batch) = self.pending.make_contiguous().get_mut(first..) {
+                batch.sort_by_key(|held| held.extent.extent().start);
+            }
+        }
+        self.held_in_order_from(first);
         self.report_front();
 
         held
@@ -253,7 +276,7 @@ impl SampleReader {
         self.ready.pop_front()
     }
 
-    /// Returns the bytes the extent held longest still lacks, if any extent is held
+    /// Returns the bytes the extent at the front of those held still lacks, if any extent is held
     #[must_use]
     pub fn wanted_extent(&self) -> Option<Range<u64>> {
         self.pending.front().map(PendingSample::lacking)
@@ -287,7 +310,7 @@ impl SampleReader {
     }
 
     /// Holds `extent` behind the extents held before it, refusing one past the limit
-    fn hold(&mut self, extent: SampleExtent) -> Result<(), SampleError> {
+    fn admit(&mut self, extent: SampleExtent) -> Result<(), SampleError> {
         let pending = PendingSample {
             extent,
             data: Vec::new(),
@@ -300,6 +323,13 @@ impl SampleReader {
                 self.sample_size_limit,
             )));
         }
+        self.pending.push_back(pending);
+
+        Ok(())
+    }
+
+    /// Keeps `held_in_order` where the first short extent held from `first` on lies at or past the last short one before it, the batch itself in order
+    fn held_in_order_from(&mut self, first: usize) {
         // Why the start of what is lacked and not the start of the extent, and
         // why the extents already whole are passed over: input fills every
         // short extent it reaches up to its own end, so short extents held in
@@ -307,15 +337,16 @@ impl SampleReader {
         // and the fill stops at the first short extent lacking bytes past the
         // input. An extent naming no bytes is whole where it is held and
         // waits behind the short ones, keeping a start the fills leave behind.
-        if !pending.is_whole() {
-            let last_short = self.pending.iter().rev().find(|held| !held.is_whole());
-            self.held_in_order = last_short.is_none_or(|last| {
-                self.held_in_order && last.lacking().start <= pending.lacking().start
-            });
-        }
-        self.pending.push_back(pending);
-
-        Ok(())
+        let before = self
+            .pending
+            .range(..first)
+            .rev()
+            .find(|held| !held.is_whole());
+        let batch = self.pending.range(first..).find(|held| !held.is_whole());
+        self.held_in_order = before.is_none_or(|before| {
+            self.held_in_order
+                && batch.is_none_or(|batch| before.lacking().start <= batch.lacking().start)
+        });
     }
 
     /// Hands over the whole samples at the front of the queue, in the order they were held
@@ -516,14 +547,15 @@ mod tests {
     }
 
     #[test]
-    fn extents_handed_over_together_are_held_in_the_order_they_come() {
+    fn extents_handed_over_together_are_held_in_the_order_of_their_bytes() {
         let mut reader = SampleReader::new();
 
         reader
-            .handle_sample_extents([Ok(extent(0, 100..104)), Ok(extent(1_024, 104..108))])
+            .handle_sample_extents([Ok(extent(1_024, 104..108)), Ok(extent(0, 100..104))])
             .unwrap();
-        reader.handle_data(100, b"ABCDEFGH").unwrap();
+        assert_eq!(reader.wanted_extent(), Some(100..104));
 
+        reader.handle_data(100, b"ABCDEFGH").unwrap();
         assert_eq!(
             drained(&mut reader),
             [sample(0, b"ABCD"), sample(1_024, b"EFGH")]
@@ -531,21 +563,53 @@ mod tests {
     }
 
     #[test]
-    fn the_failure_a_resolver_stopped_at_fails_the_reader_after_the_extents_before_it() {
+    fn extents_handed_over_together_starting_at_the_same_byte_keep_the_order_they_came() {
+        let mut reader = SampleReader::new();
+
+        reader
+            .handle_sample_extents([Ok(extent(1_024, 100..104)), Ok(extent(0, 100..104))])
+            .unwrap();
+        reader.handle_data(100, b"ABCD").unwrap();
+
+        assert_eq!(
+            drained(&mut reader),
+            [sample(1_024, b"ABCD"), sample(0, b"ABCD")]
+        );
+    }
+
+    #[test]
+    fn extents_handed_over_together_behind_one_lying_past_them_are_filled_all_the_same() {
+        let mut reader = holding([extent(2_048, 200..204)]);
+
+        reader
+            .handle_sample_extents([Ok(extent(1_024, 104..108)), Ok(extent(0, 100..104))])
+            .unwrap();
+        reader.handle_data(100, b"ABCDEFGH").unwrap();
+
+        assert_eq!(
+            drained(&mut reader),
+            [sample(0, b"ABCD"), sample(1_024, b"EFGH")]
+        );
+        assert_eq!(reader.wanted_extent(), Some(200..204));
+    }
+
+    #[test]
+    fn the_failure_a_resolver_stopped_at_fails_the_reader_after_the_extents_before_it_held_in_order()
+     {
         let mut reader = SampleReader::new();
         let stopped_at = SampleError::data_offset_overflow(1);
 
         assert_eq!(
             reader.handle_sample_extents([
+                Ok(extent(1_024, 104..108)),
                 Ok(extent(0, 100..100)),
-                Ok(extent(1_024, 100..104)),
                 Err(stopped_at)
             ]),
             Err(stopped_at)
         );
         assert_eq!(drained(&mut reader), [sample(0, b"")]);
-        assert_eq!(reader.wanted_extent(), Some(100..104));
-        assert_eq!(reader.handle_data(100, b"ABCD"), Err(stopped_at));
+        assert_eq!(reader.wanted_extent(), Some(104..108));
+        assert_eq!(reader.handle_data(104, b"ABCD"), Err(stopped_at));
     }
 
     #[test]

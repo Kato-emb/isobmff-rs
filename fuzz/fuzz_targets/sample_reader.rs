@@ -66,8 +66,8 @@ enum Arrival {
 /// What a caller hands the reader next
 #[derive(Clone)]
 enum Step<'data> {
-    /// An extent a fragment declares, handed over before the media data it lies in
-    Extent(SampleExtent),
+    /// The extents a fragment declares, handed over together before the media data they lie in
+    Extents(Vec<SampleExtent>),
     /// Media data that arrived, and where in the presentation it starts
     MediaData(u64, &'data [u8]),
 }
@@ -196,7 +196,7 @@ fn steps<'data>(
     let mut steps = Vec::new();
 
     for (placed, of_fragment) in laid_out.fragments.iter().zip(extents) {
-        steps.extend(of_fragment.iter().cloned().map(Step::Extent));
+        steps.push(Step::Extents(of_fragment.clone()));
 
         let Some((mut start, held)) = placed.data.clone() else {
             continue;
@@ -237,7 +237,7 @@ fn read(sample_size_limit: u64, steps: Vec<Step<'_>>, refused: Option<SampleErro
 
     for step in steps {
         let outcome = match step {
-            Step::Extent(extent) => reader.handle_sample_extent(extent),
+            Step::Extents(extents) => reader.handle_sample_extents(extents.into_iter().map(Ok)),
             Step::MediaData(offset, data) => reader.handle_data(offset, data),
         };
 
