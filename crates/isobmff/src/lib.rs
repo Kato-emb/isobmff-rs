@@ -9,8 +9,8 @@
 //! [`MediaSegmentWriter`] go the other way, laying samples down as a file or
 //! a segment of each kind. None reaches for a source or a sink of its own:
 //! when to read or write, and from or to where, stay with the caller. Where
-//! the caller has an I/O to hand, the `io` feature adds [`io`], the demuxers
-//! and the muxers that drive each of them over it.
+//! the caller has an I/O to hand, the `io` feature adds `isobmff::io`, the
+//! demuxers and the muxers that drive each of them over it.
 //!
 //! # Everything in one place
 //!
@@ -40,8 +40,8 @@
 //!
 //! The crate is `no_std` but needs `alloc`, for the reasons
 //! [`isobmff_structure`] states of the layers beneath. The `io` feature, off
-//! by default, adds [`io`] alone, which needs `std`: the six layers beneath it
-//! are the same with it or without.
+//! by default, adds `isobmff::io` alone, which needs `std`: the six layers
+//! beneath it are the same with it or without.
 
 #![no_std]
 
