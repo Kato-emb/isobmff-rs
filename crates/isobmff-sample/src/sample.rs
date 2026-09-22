@@ -204,6 +204,7 @@ impl SampleExtent {
     }
 
     /// Returns the bytes of the resource the sample occupies
+    #[inline]
     #[must_use]
     pub fn extent(&self) -> Range<u64> {
         self.extent.clone()
