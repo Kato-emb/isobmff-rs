@@ -9,10 +9,8 @@
 //! [`MediaSegmentWriter`] go the other way, laying samples down as a file or
 //! a segment of each kind. None reaches for a source or a sink of its own:
 //! when to read or write, and from or to where, stay with the caller. Where
-//! the caller has `std::io` to hand, the `std` feature drives each of them:
-//! [`FragmentedDemuxer`], [`NonFragmentedDemuxer`] and [`MediaSegmentDemuxer`]
-//! read one off a `Read + Seek`, [`FragmentedMuxer`], [`NonFragmentedMuxer`]
-//! and [`MediaSegmentMuxer`] write one to a `Write`.
+//! the caller has an I/O to hand, the `io` feature adds [`io`], the demuxers
+//! and the muxers that drive each of them over it.
 //!
 //! # Everything in one place
 //!
@@ -41,38 +39,13 @@
 //! # `no_std`
 //!
 //! The crate is `no_std` but needs `alloc`, for the reasons
-//! [`isobmff_structure`] states of the layers beneath. The `std` feature, off
-//! by default, adds the demuxers and the muxers alone: the six layers beneath
-//! them are the same with it or without.
+//! [`isobmff_structure`] states of the layers beneath. The `io` feature, off
+//! by default, adds [`io`] alone, which needs `std`: the six layers beneath it
+//! are the same with it or without.
 
 #![no_std]
 
 extern crate alloc;
-#[cfg(feature = "std")]
-extern crate std;
-
-#[cfg(feature = "std")]
-mod driver;
-#[cfg(feature = "std")]
-mod driver_error;
-#[cfg(feature = "std")]
-mod fragmented_movie;
-#[cfg(feature = "std")]
-mod media_segment;
-#[cfg(feature = "std")]
-mod non_fragmented_movie;
-
-#[cfg(feature = "std")]
-pub use driver_error::{DriverError, DriverErrorKind};
-#[cfg(feature = "std")]
-pub use fragmented_movie::{FragmentedDemuxer, FragmentedMuxer};
-#[cfg(feature = "std")]
-pub use media_segment::{MediaSegmentDemuxer, MediaSegmentMuxer};
-#[cfg(feature = "std")]
-pub use non_fragmented_movie::{NonFragmentedDemuxer, NonFragmentedMuxer};
-
-#[cfg(feature = "std")]
-pub(crate) use driver::{Demuxer, Muxer, PollOutput, ReadSamples};
 
 pub use isobmff_boxes::*;
 pub use isobmff_core::*;
@@ -98,4 +71,11 @@ pub mod avc {
 #[cfg(feature = "mp4")]
 pub mod mp4 {
     pub use isobmff_mp4::*;
+}
+
+/// The demuxers and the muxers driving the readers and writers over an I/O —
+/// the `isobmff-io` crate whole, behind the `io` feature
+#[cfg(feature = "io")]
+pub mod io {
+    pub use isobmff_io::*;
 }

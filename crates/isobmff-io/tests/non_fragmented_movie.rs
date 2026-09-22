@@ -1,18 +1,29 @@
-//! The samples a muxer laid down as a non-fragmented movie file, read back off that file by the demuxer
-
-// Why not `cfg(all(test, feature = "std"))` on the module: the
-// `tests_outside_test_module` lint reads the module attribute literally and
-// fires on anything but a bare `cfg(test)`.
-#![cfg(feature = "std")]
+//! The samples of a non-fragmented movie file, read off a source that seeks wherever the movie lies and read back off one a muxer laid down
 
 #[cfg(test)]
 mod tests {
     use std::io;
 
-    use isobmff::{NonFragmentedDemuxer, NonFragmentedMuxer, Sample};
+    use isobmff_io::blocking::{NonFragmentedDemuxer, NonFragmentedMuxer};
+    use isobmff_sample::Sample;
     use isobmff_test_support::{
-        SAMPLE_CHUNKS, file_type, non_fragmented_file_samples, unfragmented_movie,
+        SAMPLE_CHUNKS, file_type, non_fragmented_file, non_fragmented_file_samples,
+        unfragmented_movie,
     };
+
+    #[test]
+    fn a_source_that_seeks_has_every_sample_read_off_it_wherever_the_movie_lies() {
+        for movie_first in [true, false] {
+            let file = non_fragmented_file(&SAMPLE_CHUNKS, movie_first);
+
+            let read_back: Vec<Sample> = NonFragmentedDemuxer::new(io::Cursor::new(file))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+
+            assert_eq!(read_back, non_fragmented_file_samples());
+        }
+    }
 
     #[test]
     fn the_samples_the_muxer_wrote_to_a_sink_are_read_back_off_it_by_the_demuxer() {

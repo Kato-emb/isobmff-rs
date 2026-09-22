@@ -15,15 +15,16 @@ exclude.workspace = true
 default = ["avc", "mp4"]
 # `isobmff::avc`, ISO/IEC 14496-15.
 avc = ["dep:isobmff-avc"]
+# `isobmff::io`, the demuxers and the muxers driving the readers and writers.
+io = ["dep:isobmff-io"]
 # `isobmff::mp4`, ISO/IEC 14496-14.
 mp4 = ["dep:isobmff-mp4"]
-# The demuxers and muxers, driving the readers and writers over `std::io`.
-std = []
 
 [dependencies]
 isobmff-avc = { workspace = true, optional = true }
 isobmff-boxes.workspace = true
 isobmff-core.workspace = true
+isobmff-io = { workspace = true, optional = true }
 isobmff-mp4 = { workspace = true, optional = true }
 isobmff-sample.workspace = true
 isobmff-sequence.workspace = true

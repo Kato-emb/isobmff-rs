@@ -1,16 +1,27 @@
-//! The samples a muxer laid down as a media segment, read back off that segment by the demuxer
-
-// Why not `cfg(all(test, feature = "std"))` on the module: the
-// `tests_outside_test_module` lint reads the module attribute literally and
-// fires on anything but a bare `cfg(test)`.
-#![cfg(feature = "std")]
+//! The samples of a media segment, read off a source that seeks against the movie it continues and read back off one a muxer laid down
 
 #[cfg(test)]
 mod tests {
     use std::io;
 
-    use isobmff::{MediaSegmentDemuxer, MediaSegmentMuxer, Sample};
-    use isobmff_test_support::{presentation_movie, segment_file_samples, segment_type};
+    use isobmff_io::blocking::{MediaSegmentDemuxer, MediaSegmentMuxer};
+    use isobmff_sample::Sample;
+    use isobmff_test_support::{
+        presentation_movie, segment_file_samples, segment_file_with_samples, segment_type,
+    };
+
+    #[test]
+    fn a_source_that_seeks_has_every_sample_read_off_it() {
+        let read_back: Vec<Sample> = MediaSegmentDemuxer::new(
+            io::Cursor::new(segment_file_with_samples()),
+            presentation_movie(),
+        )
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+
+        assert_eq!(read_back, segment_file_samples());
+    }
 
     #[test]
     fn the_samples_the_muxer_wrote_to_a_sink_are_read_back_off_it_by_the_demuxer() {

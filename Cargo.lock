@@ -181,6 +181,7 @@ dependencies = [
  "isobmff-avc",
  "isobmff-boxes",
  "isobmff-core",
+ "isobmff-io",
  "isobmff-mp4",
  "isobmff-sample",
  "isobmff-sequence",
