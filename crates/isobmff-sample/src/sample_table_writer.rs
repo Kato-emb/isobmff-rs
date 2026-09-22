@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use core::mem;
 
 use isobmff_boxes::{
-    ChunkOffsetBox, SampleDescriptionBox, SampleSizeBox, SampleTableBox, SampleToChunkBox,
+    ChunkOffsets, SampleDescriptionBox, SampleSizeBox, SampleTableBox, SampleToChunkBox,
     TimeToSampleBox,
 };
 
@@ -19,8 +19,8 @@ use crate::sample::Sample;
 /// of each straight back, to be laid down where the caller opened the chunk.
 /// What it keeps is what the sample tables of a track state about them: the
 /// decode timeline (`stts`, §8.6.1.2), the chunks the samples lie in (`stsc`,
-/// §8.7.4), their sizes (`stsz`, §8.7.3) and where each chunk starts (`stco`,
-/// §8.7.5), which [`finish`](Self::finish) hands back per track as
+/// §8.7.4), their sizes (`stsz`, §8.7.3) and where each chunk starts (`stco`
+/// or `co64`, §8.7.5), which [`finish`](Self::finish) hands back per track as
 /// [`SampleTables`]. The `stsd` of each track, and the movie the tables go
 /// into, stay with the caller.
 ///
@@ -38,7 +38,7 @@ use crate::sample::Sample;
 ///   hand the samples back in that order.
 /// * Each table is stated the way its box chooses from the values laid down:
 ///   [`SampleSizeBox::from_sizes`], [`TimeToSampleBox::from_deltas`],
-///   [`SampleToChunkBox::from_chunks`] and [`ChunkOffsetBox::from_offsets`].
+///   [`SampleToChunkBox::from_chunks`] and [`ChunkOffsets::from_offsets`].
 ///
 /// # Contract
 ///
@@ -60,10 +60,10 @@ use crate::sample::Sample;
 ///   other than zero or any flag is refused:
 ///   [`UnsupportedCompositionTimeOffset`](crate::SampleErrorKind::UnsupportedCompositionTimeOffset)
 ///   and [`UnsupportedSampleFlags`](crate::SampleErrorKind::UnsupportedSampleFlags).
-/// * A chunk opened past what an `stco` entry reaches, holding more samples
-///   than an `stsc` entry counts, or numbered past what one reaches, is
-///   reported by [`finish`](Self::finish), where the tables are built: the
-///   failure of the box, carried on [`Box`](crate::SampleErrorKind::Box).
+/// * A chunk holding more samples than an `stsc` entry counts, or numbered
+///   past what one reaches, is reported by [`finish`](Self::finish), where the
+///   tables are built: the failure of the box, carried on
+///   [`Box`](crate::SampleErrorKind::Box).
 /// * An `Err` leaves the writer failed for good,
 ///   [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished) aside: every
 ///   later call reports that same failure again.
@@ -75,7 +75,9 @@ use crate::sample::Sample;
 /// # Examples
 ///
 /// ```
-/// use isobmff_boxes::{ChunkOffsetBox, ChunkOffsetEntry, SampleToChunkBox, SampleToChunkEntry};
+/// use isobmff_boxes::{
+///     ChunkOffsetBox, ChunkOffsetEntry, ChunkOffsets, SampleToChunkBox, SampleToChunkEntry,
+/// };
 /// use isobmff_sample::{Sample, SampleTableWriter};
 ///
 /// let mut writer = SampleTableWriter::new();
@@ -94,8 +96,8 @@ use crate::sample::Sample;
 ///     SampleToChunkBox::new(vec![SampleToChunkEntry::new(1, 2, 1)])
 /// );
 /// assert_eq!(
-///     *tables[&2].stco(),
-///     ChunkOffsetBox::new(vec![ChunkOffsetEntry::new(1_008)])
+///     *tables[&2].chunk_offsets(),
+///     ChunkOffsets::Stco(ChunkOffsetBox::new(vec![ChunkOffsetEntry::new(1_008)]))
 /// );
 /// # Ok::<(), isobmff_sample::SampleError>(())
 /// ```
@@ -118,7 +120,7 @@ pub struct SampleTables {
     stts: TimeToSampleBox,
     stsc: SampleToChunkBox,
     stsz: SampleSizeBox,
-    stco: ChunkOffsetBox,
+    chunk_offsets: ChunkOffsets,
 }
 
 impl SampleTables {
@@ -140,16 +142,16 @@ impl SampleTables {
         &self.stsz
     }
 
-    /// Returns where every chunk of the track lies
+    /// Returns where every chunk of the track lies, at the width the offsets called for
     #[must_use]
-    pub const fn stco(&self) -> &ChunkOffsetBox {
-        &self.stco
+    pub const fn chunk_offsets(&self) -> &ChunkOffsets {
+        &self.chunk_offsets
     }
 
     /// Makes the `stbl` of the track out of these tables and the `stsd` describing its samples
     #[must_use]
     pub fn into_sample_table(self, stsd: SampleDescriptionBox) -> SampleTableBox {
-        SampleTableBox::new(stsd, self.stts, self.stsc, self.stsz, self.stco)
+        SampleTableBox::new(stsd, self.stts, self.stsc, self.stsz, self.chunk_offsets)
     }
 }
 
@@ -268,7 +270,7 @@ impl OpenTrack {
             stts: TimeToSampleBox::from_deltas(self.deltas),
             stsc: SampleToChunkBox::from_chunks(self.chunks)?,
             stsz: SampleSizeBox::from_sizes(self.sizes),
-            stco: ChunkOffsetBox::from_offsets(self.chunk_offsets)?,
+            chunk_offsets: ChunkOffsets::from_offsets(self.chunk_offsets),
         })
     }
 }
@@ -347,9 +349,8 @@ impl SampleTableWriter {
     /// # Errors
     ///
     /// * [`OutOfRange`](isobmff_core::ErrorKind::OutOfRange), carried on
-    ///   [`Box`](crate::SampleErrorKind::Box): a chunk was opened past what an
-    ///   `stco` entry reaches, holds more samples than an `stsc` entry counts,
-    ///   or is numbered past what one reaches.
+    ///   [`Box`](crate::SampleErrorKind::Box): a chunk holds more samples than
+    ///   an `stsc` entry counts, or is numbered past what one reaches.
     /// * [`AlreadyFinished`](crate::SampleErrorKind::AlreadyFinished): the
     ///   samples were already declared over.
     /// * The failure of a previous call, which the writer keeps and reports
@@ -412,10 +413,10 @@ mod tests {
     use core::num::NonZeroU32;
 
     use isobmff_boxes::{
-        ChunkOffsetBox, ChunkOffsetEntry, SampleSizeBox, SampleSizeEntry, SampleSizes,
-        SampleToChunkBox, SampleToChunkEntry, TimeToSampleBox, TimeToSampleEntry,
+        ChunkLargeOffsetBox, ChunkLargeOffsetEntry, ChunkOffsetBox, ChunkOffsetEntry, ChunkOffsets,
+        SampleSizeBox, SampleSizeEntry, SampleSizes, SampleToChunkBox, SampleToChunkEntry,
+        TimeToSampleBox, TimeToSampleEntry,
     };
-    use isobmff_core::{Error, FieldWidth};
 
     use super::{OpenTrack, SampleTableWriter, SampleTables};
     use crate::error::SampleError;
@@ -474,10 +475,10 @@ mod tests {
                         SampleSizeEntry::new(2),
                         SampleSizeEntry::new(4),
                     ])),
-                    stco: ChunkOffsetBox::new(vec![
+                    chunk_offsets: ChunkOffsets::Stco(ChunkOffsetBox::new(vec![
                         ChunkOffsetEntry::new(1_000),
                         ChunkOffsetEntry::new(2_000),
-                    ]),
+                    ])),
                 }
             )])
         );
@@ -506,10 +507,10 @@ mod tests {
                             sample_size: NonZeroU32::new(4).unwrap(),
                             sample_count: 2,
                         }),
-                        stco: ChunkOffsetBox::new(vec![
+                        chunk_offsets: ChunkOffsets::Stco(ChunkOffsetBox::new(vec![
                             ChunkOffsetEntry::new(1_000),
                             ChunkOffsetEntry::new(3_000),
-                        ]),
+                        ])),
                     }
                 ),
                 (
@@ -521,7 +522,9 @@ mod tests {
                             sample_size: NonZeroU32::new(4).unwrap(),
                             sample_count: 2,
                         }),
-                        stco: ChunkOffsetBox::new(vec![ChunkOffsetEntry::new(2_000)]),
+                        chunk_offsets: ChunkOffsets::Stco(ChunkOffsetBox::new(vec![
+                            ChunkOffsetEntry::new(2_000),
+                        ])),
                     }
                 ),
             ])
@@ -547,7 +550,9 @@ mod tests {
                         sample_size: NonZeroU32::new(4).unwrap(),
                         sample_count: 1,
                     }),
-                    stco: ChunkOffsetBox::new(vec![ChunkOffsetEntry::new(2_000)]),
+                    chunk_offsets: ChunkOffsets::Stco(ChunkOffsetBox::new(vec![
+                        ChunkOffsetEntry::new(2_000),
+                    ])),
                 }
             )])
         );
@@ -662,18 +667,25 @@ mod tests {
     }
 
     #[test]
-    fn a_chunk_opened_past_what_an_stco_entry_reaches_is_reported_by_finish() {
-        let mut writer = SampleTableWriter::new();
-
-        writer.begin_chunk(1 << 32).unwrap();
-        writer.handle_sample(sample(1, 0, b"AAAA")).unwrap();
+    fn a_chunk_opened_past_what_32_bits_reach_is_placed_in_a_co64() {
+        let tables = laid_out(vec![(1 << 32, vec![sample(1, 0, b"AAAA")])]);
 
         assert_eq!(
-            writer.finish(),
-            Err(SampleError::from(Error::out_of_range(
-                1 << 32,
-                FieldWidth::Compact
-            )))
+            tables,
+            BTreeMap::from([(
+                1,
+                SampleTables {
+                    stts: TimeToSampleBox::new(vec![TimeToSampleEntry::new(1, 1_024)]),
+                    stsc: SampleToChunkBox::new(vec![SampleToChunkEntry::new(1, 1, 1)]),
+                    stsz: SampleSizeBox::new(SampleSizes::Uniform {
+                        sample_size: NonZeroU32::new(4).unwrap(),
+                        sample_count: 1,
+                    }),
+                    chunk_offsets: ChunkOffsets::Co64(ChunkLargeOffsetBox::new(vec![
+                        ChunkLargeOffsetEntry::new(1 << 32),
+                    ])),
+                }
+            )])
         );
     }
 

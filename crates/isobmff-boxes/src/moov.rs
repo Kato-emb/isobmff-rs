@@ -227,10 +227,10 @@ mod tests {
     use isobmff_core::{AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Error};
 
     use super::{MovieBox, MovieExtendsBox, TrackExtendsBox};
+    use crate::chunk_offset::ChunkOffsets;
     use crate::mvex::tests::movie_extends;
     use crate::mvhd::tests::movie_header;
     use crate::stbl::SampleTableBox;
-    use crate::stco::ChunkOffsetBox;
     use crate::stsc::SampleToChunkBox;
     use crate::stsd::SampleDescriptionBox;
     use crate::stsz::SampleSizeBox;
@@ -351,7 +351,7 @@ mod tests {
             TimeToSampleBox::from_deltas([3_000]),
             SampleToChunkBox::from_chunks([(1, 1)]).unwrap(),
             SampleSizeBox::from_sizes([4]),
-            ChunkOffsetBox::from_offsets([1_000]).unwrap(),
+            ChunkOffsets::from_offsets([1_000]),
         );
 
         *decoded.mdia_mut(1).unwrap().minf_mut().stbl_mut() = laid_out.clone();

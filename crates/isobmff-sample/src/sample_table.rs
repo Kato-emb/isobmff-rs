@@ -16,10 +16,10 @@ use crate::sample_description::SampleDescriptions;
 /// summed from zero (§8.6.1.2); the `stsc` states which chunk it lies in and
 /// which `stsd` entry describes it, by runs of chunks holding the same number
 /// of samples (§8.7.4); the `stsz` states how many bytes it occupies
-/// (§8.7.3.2); and the `stco` states where its chunk starts in the file, the
-/// samples of a chunk lying one after another from there (§8.7.5). The
-/// `data_reference_index` of each sample is read off the `stsd` entry that
-/// describes it (§8.5.2.3), which has to name the file itself.
+/// (§8.7.3.2); and the `stco` or the `co64` states where its chunk starts in
+/// the file, the samples of a chunk lying one after another from there
+/// (§8.7.5). The `data_reference_index` of each sample is read off the `stsd`
+/// entry that describes it (§8.5.2.3), which has to name the file itself.
 ///
 /// A sample comes out a sync sample with a composition time offset of zero,
 /// which is what §8.6.2 and §8.6.1.3 have for a track stating no `stss` and
@@ -86,7 +86,7 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
     let mut active_run = None;
     let mut decode_time = 0_u64;
 
-    for (chunk, offset) in (1_u64..).zip(stbl.stco().entries()) {
+    for (chunk, chunk_offset) in (1_u64..).zip(stbl.chunk_offsets().offsets()) {
         if let Some(run) = runs.next_if(|run| u64::from(run.first_chunk()) == chunk) {
             let data_reference_index =
                 descriptions.data_reference_index(run.sample_description_index())?;
@@ -95,7 +95,7 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
         let Some((run, data_reference_index)) = active_run else {
             continue;
         };
-        let mut data_offset = u64::from(offset.chunk_offset());
+        let mut data_offset = chunk_offset;
 
         for _ in 0..run.samples_per_chunk() {
             let (Some(size), Some(delta)) = (sizes.next(), deltas.next()) else {
@@ -143,9 +143,10 @@ mod tests {
     use core::ops::Range;
 
     use isobmff_boxes::{
-        ChunkOffsetBox, ChunkOffsetEntry, MovieBox, MovieHeaderBox, SampleDescriptionBox,
-        SampleSizeBox, SampleSizeEntry, SampleSizes, SampleTableBox, SampleToChunkBox,
-        SampleToChunkEntry, TimeToSampleBox, TimeToSampleEntry, TrackBox,
+        ChunkLargeOffsetBox, ChunkLargeOffsetEntry, ChunkOffsetBox, ChunkOffsetEntry, ChunkOffsets,
+        MovieBox, MovieHeaderBox, SampleDescriptionBox, SampleSizeBox, SampleSizeEntry,
+        SampleSizes, SampleTableBox, SampleToChunkBox, SampleToChunkEntry, TimeToSampleBox,
+        TimeToSampleEntry, TrackBox,
     };
     use isobmff_core::{AnyBox, BoxType, Mp4EpochSeconds};
     use isobmff_test_support::{
@@ -204,9 +205,11 @@ mod tests {
         ))
     }
 
-    /// Chunks starting at the offsets given
-    fn stco(offsets: &[u32]) -> ChunkOffsetBox {
-        ChunkOffsetBox::new(offsets.iter().copied().map(ChunkOffsetEntry::new).collect())
+    /// Chunks starting at the offsets given, stated in 32 bits
+    fn stco(offsets: &[u32]) -> ChunkOffsets {
+        ChunkOffsets::Stco(ChunkOffsetBox::new(
+            offsets.iter().copied().map(ChunkOffsetEntry::new).collect(),
+        ))
     }
 
     /// Track `track_id` of the file itself, its samples laid out by the four tables
@@ -215,12 +218,12 @@ mod tests {
         stts: TimeToSampleBox,
         stsc: SampleToChunkBox,
         stsz: SampleSizeBox,
-        stco: ChunkOffsetBox,
+        chunk_offsets: ChunkOffsets,
     ) -> TrackBox {
         track_laid_out(
             track_id,
             self_contained_data_reference(),
-            sample_table(stts, stsc, stsz, stco),
+            sample_table(stts, stsc, stsz, chunk_offsets),
         )
     }
 
@@ -292,6 +295,25 @@ mod tests {
                 extent(1, 400, 100, 400..404),
                 extent(1, 500, 100, 404..408),
             ])
+        );
+    }
+
+    #[test]
+    fn a_track_stating_its_chunk_offsets_in_64_bits_resolves_as_one_stating_them_in_32() {
+        let in_64_bits = track_of(
+            1,
+            stts(&[(2, 100)]),
+            stsc(&[(1, 1)]),
+            stsz(&[4, 4]),
+            ChunkOffsets::Co64(ChunkLargeOffsetBox::new(vec![
+                ChunkLargeOffsetEntry::new(100),
+                ChunkLargeOffsetEntry::new(200),
+            ])),
+        );
+
+        assert_eq!(
+            resolved(&movie(vec![in_64_bits])),
+            resolved(&movie(vec![track_chunked_at(&[100, 200])]))
         );
     }
 

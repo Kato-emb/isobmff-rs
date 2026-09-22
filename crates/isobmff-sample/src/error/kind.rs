@@ -62,7 +62,7 @@ pub enum SampleErrorKind {
     ExternalDataReference,
     /// Sample tables of a track count different numbers of samples
     ///
-    /// The `stts`, the `stsz`, and the `stsc` laid over the `stco` each count
+    /// The `stts`, the `stsz`, and the `stsc` laid over the chunk offsets each count
     /// the samples of the track (ISO/IEC 14496-12 §8.6.1.2, §8.7.3.2, §8.7.4),
     /// and a track whose tables disagree is refused.
     /// [`track_id`](crate::SampleError::track_id) is the track.
@@ -71,7 +71,7 @@ pub enum SampleErrorKind {
     ///
     /// The first run an `stsc` states starts at chunk 1, and each run after it
     /// at a chunk past the start of the one before, no later than the last
-    /// chunk the `stco` places (ISO/IEC 14496-12 §8.7.4.3).
+    /// chunk the `stco` or the `co64` places (ISO/IEC 14496-12 §8.7.4.3).
     /// [`track_id`](crate::SampleError::track_id) is the track, and
     /// [`first_chunk`](crate::SampleError::first_chunk) the chunk the run states it
     /// starts at.
