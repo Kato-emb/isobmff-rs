@@ -5,8 +5,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use isobmff_boxes::{
-    ChunkOffsetBox, DataEntry, DataEntryUrlBox, DataInformationBox, DataReferenceBox, FileTypeBox,
-    HandlerBox, MediaBox, MediaDataBox, MediaHeaderBox, MediaInformationBox,
+    ChunkOffsetBox, ChunkOffsets, DataEntry, DataEntryUrlBox, DataInformationBox, DataReferenceBox,
+    FileTypeBox, HandlerBox, MediaBox, MediaDataBox, MediaHeaderBox, MediaInformationBox,
     MediaInformationHeader, MovieBox, MovieExtendsBox, MovieFragmentBox, MovieFragmentHeaderBox,
     MovieHeaderBox, SampleDescriptionBox, SampleSizeBox, SampleSizes, SampleTableBox,
     SampleToChunkBox, SegmentTypeBox, TimeToSampleBox, TrackBox, TrackExtendsBox,
@@ -130,14 +130,14 @@ pub fn sample_table(
     stts: TimeToSampleBox,
     stsc: SampleToChunkBox,
     stsz: SampleSizeBox,
-    stco: ChunkOffsetBox,
+    chunk_offsets: ChunkOffsets,
 ) -> SampleTableBox {
     SampleTableBox::new(
         SampleDescriptionBox::new(vec![sample_entry()]),
         stts,
         stsc,
         stsz,
-        stco,
+        chunk_offsets,
     )
 }
 
@@ -165,7 +165,7 @@ fn empty_sample_table(entry: AnyBox) -> SampleTableBox {
         TimeToSampleBox::new(Vec::new()),
         SampleToChunkBox::new(Vec::new()),
         SampleSizeBox::new(SampleSizes::PerSample(Vec::new())),
-        ChunkOffsetBox::new(Vec::new()),
+        ChunkOffsets::Stco(ChunkOffsetBox::new(Vec::new())),
     )
 }
 
@@ -253,7 +253,7 @@ pub fn non_fragmented_file(chunks: &[&[&[u8]]], movie_first: bool) -> Vec<u8> {
             TimeToSampleBox::from_deltas(sizes.iter().map(|_size| SAMPLE_DURATION)),
             SampleToChunkBox::from_chunks(samples_per_chunk.iter().copied()).unwrap(),
             SampleSizeBox::from_sizes(sizes.iter().copied()),
-            ChunkOffsetBox::from_offsets(chunk_offsets).unwrap(),
+            ChunkOffsets::from_offsets(chunk_offsets),
         );
 
         MovieBox::new(
@@ -267,8 +267,8 @@ pub fn non_fragmented_file(chunks: &[&[&[u8]]], movie_first: bool) -> Vec<u8> {
     if movie_first {
         // Why not building the movie once: the chunk offsets it declares lie
         // past the movie itself, so its length is needed before its offsets
-        // are, and the offsets are held in fields of a fixed width, so the
-        // length is the same whatever they hold.
+        // are. The placeholders and the offsets of these fixtures all fit 32
+        // bits, so both movies state them in a `stco` of the same length.
         let movie_len = movie_declaring(vec![0; chunks.len()]).encoded_len();
         chunk_start = chunk_start.saturating_add(movie_len);
     }

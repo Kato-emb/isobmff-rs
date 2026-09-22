@@ -14,6 +14,7 @@
 extern crate alloc;
 
 mod btrt;
+mod chunk_offset;
 mod data_entry;
 mod dinf;
 mod dref;
@@ -34,7 +35,6 @@ mod sample_entry;
 mod smhd;
 mod srat;
 mod stbl;
-mod stco;
 mod sthd;
 mod stsc;
 mod stsd;
@@ -51,6 +51,9 @@ mod trun;
 mod vmhd;
 
 pub use btrt::BitRateBox;
+pub use chunk_offset::{
+    ChunkLargeOffsetBox, ChunkLargeOffsetEntry, ChunkOffsetBox, ChunkOffsetEntry, ChunkOffsets,
+};
 pub use data_entry::{DataEntry, DataEntryUrlBox, DataEntryUrnBox};
 pub use dinf::DataInformationBox;
 pub use dref::DataReferenceBox;
@@ -71,7 +74,6 @@ pub use sample_entry::{AudioSampleEntry, SampleEntry, VisualSampleEntry};
 pub use smhd::SoundMediaHeaderBox;
 pub use srat::SamplingRateBox;
 pub use stbl::SampleTableBox;
-pub use stco::{ChunkOffsetBox, ChunkOffsetEntry};
 pub use sthd::SubtitleMediaHeaderBox;
 pub use stsc::{SampleToChunkBox, SampleToChunkEntry};
 pub use stsd::SampleDescriptionBox;

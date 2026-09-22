@@ -118,9 +118,10 @@ impl MediaInformationHeader {
 ///
 /// ```
 /// use isobmff_boxes::{
-///     ChunkOffsetBox, DataEntry, DataEntryUrlBox, DataInformationBox, DataReferenceBox,
-///     MediaInformationBox, MediaInformationHeader, SampleDescriptionBox, SampleSizeBox,
-///     SampleSizes, SampleTableBox, SampleToChunkBox, TimeToSampleBox, VideoMediaHeaderBox,
+///     ChunkOffsetBox, ChunkOffsets, DataEntry, DataEntryUrlBox, DataInformationBox,
+///     DataReferenceBox, MediaInformationBox, MediaInformationHeader, SampleDescriptionBox,
+///     SampleSizeBox, SampleSizes, SampleTableBox, SampleToChunkBox, TimeToSampleBox,
+///     VideoMediaHeaderBox,
 /// };
 /// use isobmff_core::{BoxDecode, BoxEncode};
 ///
@@ -139,7 +140,7 @@ impl MediaInformationHeader {
 ///     TimeToSampleBox::new(Vec::new()),
 ///     SampleToChunkBox::new(Vec::new()),
 ///     SampleSizeBox::new(SampleSizes::PerSample(Vec::new())),
-///     ChunkOffsetBox::new(Vec::new()),
+///     ChunkOffsets::Stco(ChunkOffsetBox::new(Vec::new())),
 /// );
 ///
 /// let media_information =

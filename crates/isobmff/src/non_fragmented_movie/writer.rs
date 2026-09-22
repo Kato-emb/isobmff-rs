@@ -270,9 +270,9 @@ impl NonFragmentedWriter {
     ///   longer than the `size` field of an `mdat` can state, or the movie
     ///   does not write.
     /// * [`Sample`](crate::StructureErrorKind::Sample): what the sample layer
-    ///   makes of the samples as a whole — a chunk opened past what an `stco`
-    ///   entry reaches among them — or a sample belongs to a track the movie
-    ///   does not declare.
+    ///   makes of the samples as a whole — a chunk holding more samples than an
+    ///   `stsc` entry counts among them — or a sample belongs to a track the
+    ///   movie does not declare.
     /// * [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox):
     ///   the movie was never handed over, so the file laid down is not a
     ///   non-fragmented movie file.
