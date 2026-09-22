@@ -30,7 +30,7 @@
 
 use core::ops::Range;
 
-use isobmff::{Sample, SampleError, SampleErrorKind, SampleExtent, SampleReader};
+use isobmff::sample::{Error, ErrorKind, Sample, SampleExtent, SampleReader};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
 
@@ -85,7 +85,7 @@ enum Handed<'file> {
 #[derive(PartialEq, Debug)]
 struct Reading {
     samples: Vec<Sample>,
-    failure: Option<SampleError>,
+    failure: Option<Error>,
 }
 
 /// An extent held, as the model follows it through the steps
@@ -244,8 +244,8 @@ fn read(sample_size_limit: u64, handed: &[Handed<'_>], together: bool) -> Readin
         }
         None => {
             assert_eq!(
-                reader.handle_data(0, &[]).map_err(SampleError::kind),
-                Err(SampleErrorKind::AlreadyFinished),
+                reader.handle_data(0, &[]).map_err(Error::kind),
+                Err(ErrorKind::AlreadyFinished),
                 "the reader took media data after the samples were declared over"
             );
             assert_eq!(
@@ -291,7 +291,7 @@ fn modelled(sample_size_limit: u64, handed: &[Handed<'_>], file: &[u8], together
                     whole_at: (declared_len(extent) == 0).then_some(step),
                 }));
                 if let Some(refused) = run.get(admitted) {
-                    failure = Some(SampleError::sample_size_limit_exceeded(
+                    failure = Some(Error::sample_size_limit_exceeded(
                         refused.track_id(),
                         declared_len(refused),
                         sample_size_limit,
@@ -321,7 +321,7 @@ fn modelled(sample_size_limit: u64, handed: &[Handed<'_>], file: &[u8], together
             .iter()
             .find(|pending| pending.whole_at.is_none())
             .map(|short| {
-                SampleError::unfinished_sample(
+                Error::unfinished_sample(
                     short.extent.track_id(),
                     declared_len(&short.extent),
                     short.gathered,

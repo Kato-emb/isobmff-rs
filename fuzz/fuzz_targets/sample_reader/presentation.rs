@@ -13,7 +13,7 @@
 
 use std::ops::Range;
 
-use isobmff::{
+use isobmff::boxes::{
     CompositionTimeOffset, MovieBox, MovieFragmentBox, MovieFragmentHeaderBox, TrackExtendsBox,
     TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
     TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,

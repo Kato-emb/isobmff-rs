@@ -21,10 +21,10 @@
 
 #![no_main]
 
-use isobmff::{
-    MovieBox, MovieHeaderBox, Mp4EpochSeconds, NonFragmentedReader, NonFragmentedWriter, Sample,
-    StructureError, StructureErrorKind,
-};
+use isobmff::boxes::{MovieBox, MovieHeaderBox};
+use isobmff::core::Mp4EpochSeconds;
+use isobmff::sample::Sample;
+use isobmff::structure::{Error, ErrorKind, NonFragmentedReader, NonFragmentedWriter};
 use isobmff_test_support::{file_type, non_fragmented_file, track};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
@@ -86,8 +86,8 @@ fuzz_target!(|input: Input<'_>| {
 
     if !finished {
         assert_eq!(
-            read_back(&file, cut_length).map_err(StructureError::kind),
-            Err(StructureErrorKind::MissingMandatoryBox),
+            read_back(&file, cut_length).map_err(Error::kind),
+            Err(ErrorKind::MissingMandatoryBox),
             "the bytes a refused writer laid down read as a file carrying a movie"
         );
         return;
@@ -234,8 +234,8 @@ fn file_of(chunks: &[Vec<Sample>]) -> (Vec<u8>, bool) {
         }
         None => {
             assert_eq!(
-                writer.handle_sample(a_sample()).map_err(StructureError::kind),
-                Err(StructureErrorKind::AlreadyFinished),
+                writer.handle_sample(a_sample()).map_err(Error::kind),
+                Err(ErrorKind::AlreadyFinished),
                 "the writer took a sample after the file was declared over"
             );
 
@@ -273,7 +273,7 @@ fn movie_first_file_of(chunks: &[Vec<Sample>]) -> Vec<u8> {
 }
 
 /// The samples `file` carries, read off it `cut_length` bytes at a time and then off the bytes it wants fetched
-fn read_back(file: &[u8], cut_length: usize) -> Result<Vec<Sample>, StructureError> {
+fn read_back(file: &[u8], cut_length: usize) -> Result<Vec<Sample>, Error> {
     let mut reader = NonFragmentedReader::new();
     let mut samples = Vec::new();
 
