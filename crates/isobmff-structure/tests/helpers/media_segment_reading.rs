@@ -4,7 +4,9 @@
 //! continues is handed over first, bytes go in as they arrive, and the samples
 //! come out.
 
-use isobmff::{MediaSegmentReader, MovieBox, Sample};
+use isobmff_boxes::MovieBox;
+use isobmff_sample::Sample;
+use isobmff_structure::MediaSegmentReader;
 
 /// The samples `segment` carries against `movie`, read off it `cut_length` bytes at a time
 pub(crate) fn samples_of(movie: MovieBox, segment: &[u8], cut_length: usize) -> Vec<Sample> {

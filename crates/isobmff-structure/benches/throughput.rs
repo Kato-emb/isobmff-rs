@@ -30,11 +30,11 @@
 use core::hint::black_box;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
-use isobmff::{
-    BoxEvent, BoxHeader, BoxReader, BoxType, BoxWriter, FileTypeBox, FragmentedReader,
-    FragmentedWriter, MovieBox, MovieExtendsBox, MovieFragmentWriter, MovieHeaderBox,
-    Mp4EpochSeconds, Sample, TrackExtendsBox,
-};
+use isobmff_boxes::{FileTypeBox, MovieBox, MovieExtendsBox, MovieHeaderBox, TrackExtendsBox};
+use isobmff_core::{BoxHeader, BoxType, Mp4EpochSeconds};
+use isobmff_sample::{MovieFragmentWriter, Sample};
+use isobmff_sequence::{BoxEvent, BoxReader, BoxWriter};
+use isobmff_structure::{FragmentedReader, FragmentedWriter};
 use isobmff_test_support::{file_type, track};
 
 /// Ticks every sample of the benchmarked movies lasts

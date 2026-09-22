@@ -5,9 +5,9 @@ use std::io::{Read, Seek};
 
 use isobmff_boxes::{MovieBox, SegmentTypeBox};
 use isobmff_sample::Sample;
+use isobmff_structure::{MediaSegmentReader, StructureError};
 
-use super::MediaSegmentReader;
-use crate::{Demuxer, DriverError, ReadSamples, StructureError};
+use crate::{Demuxer, DriverError, ReadSamples};
 
 /// Reads the samples a media segment carries off a source that seeks
 ///
@@ -152,14 +152,40 @@ mod tests {
     use std::io;
 
     use isobmff_boxes::{
-        MovieFragmentBox, MovieFragmentHeaderBox, TrackFragmentBox, TrackFragmentHeaderBox,
-        TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
+        MovieBox, MovieFragmentBox, MovieFragmentHeaderBox, TrackExtendsBox, TrackFragmentBox,
+        TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
     };
-    use isobmff_test_support::written;
+    use isobmff_sample::Sample;
+    use isobmff_structure::MediaSegmentWriter;
+    use isobmff_test_support::{fragmented_movie, written};
 
-    use super::super::tests::{movie, sample, segment_of_one_sample};
     use super::MediaSegmentDemuxer;
-    use crate::Sample;
+
+    /// Movie of one track the segments continue, whose defaults a `trex` states
+    fn movie() -> MovieBox {
+        fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0))
+    }
+
+    /// One sample of track 1, the first of its fragment
+    fn sample() -> Sample {
+        Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec())
+    }
+
+    /// A segment of one fragment carrying [`sample`], with no brands
+    fn segment_of_one_sample() -> Vec<u8> {
+        let mut writer = MediaSegmentWriter::new();
+        let mut segment = Vec::new();
+
+        writer.begin_fragment(1).unwrap();
+        writer.handle_sample(sample()).unwrap();
+        writer.finish_fragment().unwrap();
+        writer.finish().unwrap();
+        while let Some(written) = writer.poll_output() {
+            segment.extend_from_slice(&written);
+        }
+
+        segment
+    }
 
     /// The segment of one sample, followed by a fragment addressing that sample's bytes again
     fn segment_addressing_back() -> Vec<u8> {

@@ -6,7 +6,8 @@
 
 use core::ops::Range;
 
-use isobmff::{NonFragmentedReader, Sample};
+use isobmff_sample::Sample;
+use isobmff_structure::NonFragmentedReader;
 
 /// The bytes of `file` lying at `extent`
 pub(crate) fn fetched<'file>(file: &'file [u8], extent: &Range<u64>) -> &'file [u8] {

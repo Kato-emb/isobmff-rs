@@ -1,71 +1,67 @@
-//! [`MediaSegmentReader`], a media segment read as it arrives
+//! [`FragmentedReader`], a fragmented movie file read as it arrives
 
 use core::ops::Range;
 
-use isobmff_boxes::{MovieBox, MovieFragmentBox, SegmentTypeBox};
+use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox};
+use isobmff_core::BoxDefinition;
 use isobmff_sample::movie_fragment::sample_extents;
 use isobmff_sample::{Sample, SampleReader, TrackDecodeTimes};
 use isobmff_sequence::{BoxEvent, BoxReader};
 
-use super::{MediaSegmentDisposition, MediaSegmentStructure};
+use super::{FragmentedDisposition, FragmentedStructure};
 use crate::{StructureError, WholeBoxReader};
 
-/// Reads the samples a media segment carries, taking it as it arrives
+/// Reads the samples a fragmented movie file carries, taking it as it arrives
 ///
-/// A media segment carries a portion of a presentation for delivery apart
-/// from the movie that declares it (ISO/IEC 14496-12 §8.16.1): the brands it
-/// declares itself readable as, then one movie fragment after another with
-/// the media data each of them addresses. This reader wires the layers that
-/// read one: the framing of the segment into boxes, the structure that says
-/// what each top-level box is, the reading of the boxes it names into values,
-/// the resolution of each fragment against the movie into the extents of its
-/// samples, and the gathering of those samples out of the media data. The
-/// movie is the caller's to hand over, since the segment carries none. It
-/// holds no rule of its own; a caller hands over bytes and takes
-/// [`Sample`]s. It reaches for no source of its own: when to read and from
-/// where stay with the caller.
+/// A fragmented movie file is laid out as ISO/IEC 14496-12 Annex A.8 has it:
+/// the brands it declares itself readable as, the movie its fragments
+/// continue, then one movie fragment after another with the media data each
+/// of them addresses. This reader wires the layers that read one: the framing
+/// of the file into boxes, the structure that says what each top-level box
+/// is, the reading of the boxes it names into values, the resolution of each
+/// fragment against the movie into the extents of its samples, and the
+/// gathering of those samples out of the media data. It holds no rule of its
+/// own; a caller hands over bytes and takes [`Sample`]s. It reaches for no
+/// source of its own: when to read and from where stay with the caller.
 ///
 /// # Contract
 ///
-/// * The segment is handed over from its first byte, in order and cut
-///   anywhere, and the samples it completed are taken from
+/// * The file is handed over from its first byte, in order and cut anywhere,
+///   and the samples it completed are taken from
 ///   [`poll_sample`](Self::poll_sample). The caller drains before handing
-///   over more: samples are held until they are taken. Where the segment
-///   lies in its resource is the caller's: every offset the reader reports
-///   is an offset into the segment, counting from the first byte of it as
-///   the boxes count theirs (§8.8.7).
-/// * The fragments are resolved against the movie the reader was created
-///   with, which is there to read at [`movie`](Self::movie). The brands are
-///   there once they have arrived: [`segment_type`](Self::segment_type). The
-///   media data is offered to the samples, and every other box is passed
-///   over — a `sidx` among them, and a `moov`.
-/// * The order the boxes come in, and what a segment that breaks it is
-///   reported as, are the structure's: a `styp` after another box and an
-///   `mdat` before any `moof` are
-///   [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder), and a
-///   segment declared over without a `moof` is
+///   over more: samples are held until they are taken. Where the file lies in
+///   its resource is the caller's: every offset the reader reports is a file
+///   offset, counting from the first byte of the file as the boxes count
+///   theirs (§8.7.5, §8.8.7).
+/// * The boxes the structure reads into values are there to read once they
+///   have arrived: [`file_type`](Self::file_type) and [`movie`](Self::movie).
+///   The media data is offered to the samples, and every other box is passed
+///   over.
+/// * The order the boxes come in, and what a file that breaks it is reported
+///   as, are the structure's: an `ftyp` after another box, a
+///   `moof` before the `moov`, an `mdat` before any `moof` are
+///   [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder), a second
+///   `moov` is [`DuplicateBox`](crate::StructureErrorKind::DuplicateBox), and
+///   a file declared over without a `moov` is
 ///   [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox).
-///   A segment carrying no `styp` reads all the same, as §8.16.2 allows.
-/// * Where a fragment states no decode time for a track, the track goes on
-///   from where the fragments handed over before it left it, or from zero
-///   where none did (§8.8.12): a reader is one segment's.
+///   A file carrying no `ftyp` reads all the same, as §4.3 allows.
 /// * A box read into a value is gathered whole before it is read, so what it
 ///   declares is bounded — see [`with_limits`](Self::with_limits).
 /// * The samples of a fragment are read out of the media data that follows
 ///   it, and come out as their bytes arrive whole, as [`SampleReader`]'s
 ///   contract has it: the extents of a fragment are held in the order of
-///   their bytes, so a segment handed over in order yields the samples of each
+///   their bytes, so a file handed over in order yields the samples of each
 ///   fragment in the order they lie in it, whatever order the fragment
 ///   declares them in and wherever the input is cut.
 ///   [`wanted_extent`](Self::wanted_extent) names the bytes the extent at the
-///   front of those held still lacks, which a caller handing the segment
-///   over in order meets as they come.
+///   front of those held still lacks, which a caller handing the file over
+///   in order meets as they come.
 /// * An `Err` leaves the reader failed for good,
 ///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The samples completed
 ///   before it are still there to take.
-/// * [`finish`](Self::finish) declares the segment over, and reports what
-///   any layer makes of the end of it: a box left open, no `moof` come, a
+/// * [`finish`](Self::finish) declares the file over, and reports what any
+///   layer makes of the end of it: a box left open, the `moov` never come, a
 ///   sample short of the data it claimed. Samples are still taken after it,
 ///   but anything handed over then, or a second [`finish`](Self::finish), is
 ///   [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished).
@@ -73,33 +69,36 @@ use crate::{StructureError, WholeBoxReader};
 /// # Examples
 ///
 /// ```
-/// use isobmff::{MediaSegmentReader, MediaSegmentWriter, Sample, TrackExtendsBox};
-/// # use isobmff_test_support::{fragmented_movie, segment_type};
-/// // A segment of one fragment carrying two samples of track 1
-/// let mut writer = MediaSegmentWriter::new();
-/// writer.handle_segment_type(segment_type())?;
+/// use isobmff_boxes::TrackExtendsBox;
+/// use isobmff_sample::Sample;
+/// use isobmff_structure::{FragmentedReader, FragmentedWriter};
+/// # use isobmff_test_support::{file_type, fragmented_movie};
+/// // A file of one fragment carrying two samples of track 1
+/// let mut writer = FragmentedWriter::new();
+/// writer.handle_file_type(file_type())?;
+/// writer.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0)))?;
 /// writer.begin_fragment(1)?;
 /// writer.handle_sample(Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec()))?;
 /// writer.handle_sample(Sample::new(1, 1_024, 1_024, 0, 0, 1, b"DATA".to_vec()))?;
 /// writer.finish_fragment()?;
 /// writer.finish()?;
 ///
-/// // The segment the writer laid down is drained as it hands the bytes over
-/// let mut segment = Vec::new();
+/// // The file the writer laid down is drained as it hands the bytes over
+/// let mut file = Vec::new();
 /// while let Some(written) = writer.poll_output() {
-///     segment.extend_from_slice(&written);
+///     file.extend_from_slice(&written);
 /// }
 ///
-/// // The segment is handed over as it arrives, against the movie it continues
-/// let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0));
-/// let mut reader = MediaSegmentReader::new(movie);
-/// for arriving in segment.chunks(7) {
+/// // The file is handed over as it arrives, in whatever lengths it comes
+/// let mut reader = FragmentedReader::new();
+/// for arriving in file.chunks(7) {
 ///     reader.handle_input(arriving)?;
 /// }
 /// reader.finish()?;
 ///
-/// // The brands the segment declared are there to read
-/// assert_eq!(reader.segment_type().map(|styp| styp.major_brand()), Some(segment_type().major_brand()));
+/// // The brands and the movie the file declared are there to read
+/// assert_eq!(reader.file_type().map(|ftyp| ftyp.major_brand()), Some(file_type().major_brand()));
+/// assert_eq!(reader.movie().map(|moov| moov.trak().len()), Some(1));
 ///
 /// // The samples come back as they were laid out
 /// let first = reader.poll_sample().unwrap();
@@ -107,17 +106,17 @@ use crate::{StructureError, WholeBoxReader};
 /// let second = reader.poll_sample().unwrap();
 /// assert_eq!((second.data(), second.decode_time()), (b"DATA".as_slice(), 1_024));
 /// assert_eq!(reader.poll_sample(), None);
-/// # Ok::<(), isobmff::StructureError>(())
+/// # Ok::<(), isobmff_structure::StructureError>(())
 /// ```
 #[derive(Debug)]
-pub struct MediaSegmentReader {
+pub struct FragmentedReader {
     boxes: BoxReader,
-    structure: MediaSegmentStructure,
+    structure: FragmentedStructure,
     samples: SampleReader,
     decode_times: TrackDecodeTimes,
     open: Option<Open>,
-    segment_type: Option<SegmentTypeBox>,
-    movie: MovieBox,
+    file_type: Option<FileTypeBox>,
+    movie: Option<MovieBox>,
     payload_limit: u64,
     state: State,
 }
@@ -125,9 +124,9 @@ pub struct MediaSegmentReader {
 /// Where the reader stands between calls
 #[derive(Clone, Copy, Debug)]
 enum State {
-    /// Taking the segment as it arrives
+    /// Taking the file as it arrives
     Reading,
-    /// Told the segment is over, and taking no more input
+    /// Told the file is over, and taking no more input
     Finished,
     /// Failed, and reporting that same failure for every call after it
     Failed(StructureError),
@@ -137,8 +136,10 @@ enum State {
 #[derive(Debug)]
 enum Open {
     /// Brands being read whole
-    SegmentType(WholeBoxReader<SegmentTypeBox>),
-    /// Fragment being read whole, and where in the segment it began
+    FileType(WholeBoxReader<FileTypeBox>),
+    /// Movie being read whole
+    Movie(WholeBoxReader<MovieBox>),
+    /// Fragment being read whole, and where in the file it began
     MovieFragment {
         reader: WholeBoxReader<MovieFragmentBox>,
         moof_start: u64,
@@ -147,74 +148,75 @@ enum Open {
     MediaData,
 }
 
-impl MediaSegmentReader {
+impl FragmentedReader {
     /// Payload a box read into a value may declare, where the caller names no limit
     ///
-    /// Sixteen mebibytes. A caller reading segments whose `moof` reaches past
-    /// that names a limit of its own with [`with_limits`](Self::with_limits).
+    /// Sixteen mebibytes. A caller reading files whose `moov` reaches past that
+    /// — a presentation of many tracks states a sample entry for each — names a
+    /// limit of its own with [`with_limits`](Self::with_limits).
     pub const DEFAULT_PAYLOAD_LIMIT: u64 = 16 * 1024 * 1024;
 
-    /// Creates a reader waiting at the start of a media segment continuing `movie`
+    /// Creates a reader waiting at the start of a fragmented movie file
     ///
     /// What a box read into a value may declare is bounded by
     /// [`DEFAULT_PAYLOAD_LIMIT`](Self::DEFAULT_PAYLOAD_LIMIT), and what one
     /// sample may declare by
     /// [`SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT`](SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT).
     #[must_use]
-    pub const fn new(movie: MovieBox) -> Self {
+    pub const fn new() -> Self {
         Self::with_limits(
-            movie,
             Self::DEFAULT_PAYLOAD_LIMIT,
             SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT,
         )
     }
 
-    /// Creates a reader of a segment continuing `movie`, holding it to `payload_limit` and `sample_size_limit`
+    /// Creates a reader holding the file to `payload_limit` and `sample_size_limit`
     ///
     /// Both bound memory the reader is about to take, and both bound one box or
-    /// one sample rather than the segment. A box read into a value that
-    /// declares more than `payload_limit` bytes of payload is
+    /// one sample rather than the file. A box read into a value that declares
+    /// more than `payload_limit` bytes of payload is
     /// [`PayloadLimitExceeded`](crate::StructureErrorKind::PayloadLimitExceeded)
     /// before a byte of it is gathered; a sample declaring more than
     /// `sample_size_limit` bytes is what
     /// [`SampleReader::with_sample_size_limit`](SampleReader::with_sample_size_limit)
     /// makes of it.
     #[must_use]
-    pub const fn with_limits(movie: MovieBox, payload_limit: u64, sample_size_limit: u64) -> Self {
+    pub const fn with_limits(payload_limit: u64, sample_size_limit: u64) -> Self {
         Self {
             boxes: BoxReader::new(),
-            structure: MediaSegmentStructure::new(),
+            structure: FragmentedStructure::new(),
             samples: SampleReader::with_sample_size_limit(sample_size_limit),
             decode_times: TrackDecodeTimes::new(),
             open: None,
-            segment_type: None,
-            movie,
+            file_type: None,
+            movie: None,
             payload_limit,
             state: State::Reading,
         }
     }
 
-    /// Takes the next cut of the segment and reads the samples it completes
+    /// Takes the next cut of the file and reads the samples it completes
     ///
     /// The input is taken whole, as the continuation of what was handed over
-    /// before it, the first cut starting at the first byte of the segment.
-    /// What the input completed is then taken from
+    /// before it, the first cut starting at the first byte of the file. What
+    /// the input completed is then taken from
     /// [`poll_sample`](Self::poll_sample).
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder): what
-    ///   the structure makes of a top-level box arriving where it does.
+    /// * [`BoxOutOfOrder`](crate::StructureErrorKind::BoxOutOfOrder),
+    ///   [`DuplicateBox`](crate::StructureErrorKind::DuplicateBox): what the
+    ///   structure makes of a top-level box arriving where it does.
     /// * [`PayloadLimitExceeded`](crate::StructureErrorKind::PayloadLimitExceeded):
     ///   a box read into a value reaches past the limit the reader gathers.
     /// * [`Sequence`](crate::StructureErrorKind::Sequence): what the framing
-    ///   of the segment makes of the input.
+    ///   of the file makes of the input.
     /// * [`Box`](crate::StructureErrorKind::Box): a box read into a value
     ///   does not decode.
     /// * [`Sample`](crate::StructureErrorKind::Sample): what the samples make
     ///   of a fragment or the media data beside it.
     /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
-    ///   segment was declared over by [`finish`](Self::finish).
+    ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
     pub fn handle_input(&mut self, input: &[u8]) -> Result<(), StructureError> {
@@ -230,20 +232,20 @@ impl MediaSegmentReader {
         framed.map_err(|failure| self.fail(failure.into()))
     }
 
-    /// Takes bytes of the segment fetched for what [`wanted_extent`](Self::wanted_extent) named, and reads the samples they complete
+    /// Takes bytes of the file fetched for what [`wanted_extent`](Self::wanted_extent) named, and reads the samples they complete
     ///
     /// The bytes are offered to the samples alone, as the media data of the
-    /// segment is: `offset` is where the first of them lies in the segment,
-    /// counted from its first byte as a base data offset is (ISO/IEC 14496-12
+    /// file is: `offset` is where the first of them lies in the file, counted
+    /// from its first byte as a base data offset is (ISO/IEC 14496-12
     /// §8.8.7), and what they completed is then taken from
-    /// [`poll_sample`](Self::poll_sample). The segment handed over in order
+    /// [`poll_sample`](Self::poll_sample). The file handed over in order
     /// through [`handle_input`](Self::handle_input) goes on from where it
     /// stood.
     ///
     /// # Errors
     ///
     /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
-    ///   segment was declared over by [`finish`](Self::finish).
+    ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
     pub fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), StructureError> {
@@ -253,12 +255,12 @@ impl MediaSegmentReader {
             .map_err(|failure| self.fail(failure.into()))
     }
 
-    /// Takes the next sample the segment handed over so far completed
+    /// Takes the next sample the file handed over so far completed
     ///
-    /// Reports `None` once they are used up: more of the segment is needed.
-    /// Failure is reported by the calls that take it, so this one never fails
-    /// — a failed reader hands over the samples it had already completed, then
-    /// `None` from there on.
+    /// Reports `None` once they are used up: more of the file is needed. Failure
+    /// is reported by the calls that take it, so this one never fails — a failed
+    /// reader hands over the samples it had already completed, then `None` from
+    /// there on.
     pub fn poll_sample(&mut self) -> Option<Sample> {
         self.samples.poll_sample()
     }
@@ -266,9 +268,9 @@ impl MediaSegmentReader {
     /// Returns the bytes the extent at the front of those held still lacks, if any is held
     ///
     /// A fragment precedes the media data it addresses, so a caller handing the
-    /// segment over in order meets every extent as it comes: what this names
-    /// is media data still to arrive. A fragment addressing media data lying
-    /// before it (§8.8.7 has a base data offset name any byte of the segment)
+    /// file over in order meets every extent as it comes: what this names is
+    /// media data still to arrive. A fragment addressing media data lying
+    /// before it (§8.8.7 has a base data offset name any byte of the file)
     /// names bytes already passed by, which a caller that can seek fetches
     /// and hands to [`handle_data`](Self::handle_data).
     #[must_use]
@@ -276,33 +278,33 @@ impl MediaSegmentReader {
         self.samples.wanted_extent()
     }
 
-    /// Returns the brands the segment declares itself readable as, once they have arrived
+    /// Returns the brands the file declares itself readable as, once they have arrived
     #[must_use]
-    pub const fn segment_type(&self) -> Option<&SegmentTypeBox> {
-        self.segment_type.as_ref()
+    pub const fn file_type(&self) -> Option<&FileTypeBox> {
+        self.file_type.as_ref()
     }
 
-    /// Returns the movie the fragments of the segment continue
+    /// Returns the movie the fragments of the file continue, once it has arrived
     #[must_use]
-    pub const fn movie(&self) -> &MovieBox {
-        &self.movie
+    pub const fn movie(&self) -> Option<&MovieBox> {
+        self.movie.as_ref()
     }
 
-    /// Declares the segment over
+    /// Declares the file over
     ///
     /// # Errors
     ///
-    /// * [`Sequence`](crate::StructureErrorKind::Sequence): the segment ended
+    /// * [`Sequence`](crate::StructureErrorKind::Sequence): the file ended
     ///   inside a box.
     /// * [`Box`](crate::StructureErrorKind::Box): a box read into a value,
     ///   declaring no total, does not decode.
     /// * [`MissingMandatoryBox`](crate::StructureErrorKind::MissingMandatoryBox):
-    ///   the segment carried no `moof`.
+    ///   the file carried no `moov`.
     /// * [`Sample`](crate::StructureErrorKind::Sample): what the samples make
     ///   of a fragment declaring no total, or a sample a fragment declared is
     ///   short of the data it claimed.
     /// * [`AlreadyFinished`](crate::StructureErrorKind::AlreadyFinished): the
-    ///   segment was already declared over.
+    ///   file was already declared over.
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), StructureError> {
@@ -344,21 +346,25 @@ impl MediaSegmentReader {
                     .handle_box_type(header.box_type())
                     .and_then(|disposition| {
                         self.open = match disposition {
-                            MediaSegmentDisposition::SegmentType => Some(Open::SegmentType(
+                            FragmentedDisposition::FileType => Some(Open::FileType(
                                 WholeBoxReader::begin(header, self.payload_limit)?,
                             )),
-                            MediaSegmentDisposition::MovieFragment => Some(Open::MovieFragment {
+                            FragmentedDisposition::Movie => Some(Open::Movie(
+                                WholeBoxReader::begin(header, self.payload_limit)?,
+                            )),
+                            FragmentedDisposition::MovieFragment => Some(Open::MovieFragment {
                                 reader: WholeBoxReader::begin(header, self.payload_limit)?,
                                 moof_start: start,
                             }),
-                            MediaSegmentDisposition::MediaData => Some(Open::MediaData),
-                            MediaSegmentDisposition::Skip => None,
+                            FragmentedDisposition::MediaData => Some(Open::MediaData),
+                            FragmentedDisposition::Skip => None,
                         };
 
                         Ok(())
                     }),
                 BoxEvent::Payload(payload) => match &mut self.open {
-                    Some(Open::SegmentType(reader)) => reader.handle_payload(payload),
+                    Some(Open::FileType(reader)) => reader.handle_payload(payload),
+                    Some(Open::Movie(reader)) => reader.handle_payload(payload),
                     Some(Open::MovieFragment { reader, .. }) => reader.handle_payload(payload),
                     Some(Open::MediaData) => self
                         .samples
@@ -367,14 +373,27 @@ impl MediaSegmentReader {
                     None => Ok(()),
                 },
                 BoxEvent::End => match self.open.take() {
-                    Some(Open::SegmentType(reader)) => reader
+                    Some(Open::FileType(reader)) => reader
                         .finish()
-                        .map(|segment_type| self.segment_type = Some(segment_type)),
+                        .map(|file_type| self.file_type = Some(file_type)),
+                    Some(Open::Movie(reader)) => {
+                        reader.finish().map(|movie| self.movie = Some(movie))
+                    }
                     Some(Open::MovieFragment { reader, moof_start }) => {
                         reader.finish().and_then(|movie_fragment| {
+                            // Why not unreachable: the structure placed the `moof`
+                            // after the `moov`, so the movie is there, and the
+                            // fallback repeats what the structure answers a `moof`
+                            // before it with, in place of a panic the lints forbid.
+                            let Some(movie) = self.movie.as_ref() else {
+                                return Err(StructureError::box_out_of_order(
+                                    MovieFragmentBox::BOX_TYPE,
+                                ));
+                            };
+
                             let extents = sample_extents(
                                 &movie_fragment,
-                                &self.movie,
+                                movie,
                                 moof_start,
                                 &mut self.decode_times,
                             )?;
@@ -404,52 +423,62 @@ impl MediaSegmentReader {
     }
 }
 
+impl Default for FragmentedReader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use isobmff_boxes::{MediaDataBox, MovieFragmentBox};
+    use isobmff_boxes::{FileTypeBox, MovieBox, TrackExtendsBox};
     use isobmff_core::{BoxDefinition, BoxType};
     use isobmff_sample::{Sample, SampleReader};
-    use isobmff_test_support::{MEDIA_DATA, framed, movie_fragment, segment_type, written};
+    use isobmff_test_support::{file_type, fragmented_movie, framed, movie_fragment, written};
 
-    use super::super::tests::{movie, sample, segment_of_one_sample};
-    use super::{MediaSegmentReader, StructureError};
+    use super::super::tests::{file_of_one_sample, sample};
+    use super::{FragmentedReader, StructureError};
     use crate::StructureErrorKind;
 
-    /// What the reader makes of `segment` handed over whole, then declared over
-    fn read(segment: &[u8]) -> Result<MediaSegmentReader, StructureError> {
-        let mut reader = MediaSegmentReader::new(movie());
+    /// Movie of one track continued in fragments, whose defaults a `trex` states
+    fn movie() -> MovieBox {
+        fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0))
+    }
 
-        reader.handle_input(segment)?;
+    /// What the reader makes of `file` handed over whole, then declared over
+    fn read(file: &[u8]) -> Result<FragmentedReader, StructureError> {
+        let mut reader = FragmentedReader::new();
+
+        reader.handle_input(file)?;
         reader.finish()?;
 
         Ok(reader)
     }
 
     #[test]
-    fn a_segment_declaring_no_brands_is_read_all_the_same() {
-        let reader = read(&written(&movie_fragment())).unwrap();
+    fn a_file_declaring_no_brands_is_read_all_the_same() {
+        let file = [written(&movie()), written(&movie_fragment())].concat();
+        let reader = read(&file).unwrap();
 
-        assert_eq!(reader.segment_type(), None);
+        assert_eq!(reader.file_type(), None);
+        assert_eq!(reader.movie(), Some(&movie()));
     }
 
     #[test]
-    fn a_segment_declared_over_without_a_fragment_is_rejected() {
+    fn a_file_declared_over_without_a_movie_is_rejected() {
         assert_eq!(
-            read(&written(&segment_type())).map(drop),
-            Err(StructureError::missing_mandatory_box(
-                MovieFragmentBox::BOX_TYPE
-            ))
+            read(&written(&file_type())).map(drop),
+            Err(StructureError::missing_mandatory_box(MovieBox::BOX_TYPE))
         );
     }
 
     #[test]
     fn a_box_read_into_a_value_declaring_a_payload_past_the_limit_is_rejected() {
-        let mut reader =
-            MediaSegmentReader::with_limits(movie(), 4, SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT);
+        let mut reader = FragmentedReader::with_limits(4, SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT);
 
         assert_eq!(
             reader
-                .handle_input(&written(&segment_type()))
+                .handle_input(&written(&file_type()))
                 .map_err(StructureError::kind),
             Err(StructureErrorKind::PayloadLimitExceeded)
         );
@@ -457,32 +486,41 @@ mod tests {
 
     #[test]
     fn a_box_passed_over_is_not_bounded_by_the_limit() {
-        let fragment = written(&movie_fragment());
-        let segment = [
-            fragment.clone(),
+        let movie = written(&movie());
+        let file = [
+            movie.clone(),
             framed(BoxType::compact(*b"free"), &[0x11; 4_096]),
         ]
         .concat();
-        let mut reader = MediaSegmentReader::with_limits(
-            movie(),
-            fragment.len() as u64,
+        let mut reader = FragmentedReader::with_limits(
+            movie.len() as u64,
             SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT,
         );
 
-        reader.handle_input(&segment).unwrap();
+        reader.handle_input(&file).unwrap();
 
         assert_eq!(reader.finish(), Ok(()));
     }
 
     #[test]
-    fn the_samples_completed_before_a_framing_failure_are_still_taken() {
-        let mut segment = segment_of_one_sample();
-        segment.extend_from_slice(b"\0\0\0\x04free");
+    fn a_box_read_into_a_value_declaring_no_total_is_read_to_the_end_of_the_file() {
+        let mut file = written(&movie());
+        file.splice(..4, [0x00, 0x00, 0x00, 0x00]);
 
-        let mut reader = MediaSegmentReader::new(movie());
+        let reader = read(&file).unwrap();
+
+        assert_eq!(reader.movie(), Some(&movie()));
+    }
+
+    #[test]
+    fn the_samples_completed_before_a_framing_failure_are_still_taken() {
+        let mut file = file_of_one_sample();
+        file.extend_from_slice(b"\0\0\0\x04free");
+
+        let mut reader = FragmentedReader::new();
 
         assert_eq!(
-            reader.handle_input(&segment).map_err(StructureError::kind),
+            reader.handle_input(&file).map_err(StructureError::kind),
             Err(StructureErrorKind::Sequence(
                 isobmff_sequence::ErrorKind::Box(isobmff_core::ErrorKind::SizeBelowHeader)
             ))
@@ -495,40 +533,37 @@ mod tests {
 
     #[test]
     fn the_bytes_the_reader_wants_fetched_complete_the_sample_as_the_media_data_would() {
-        let mut segment = segment_of_one_sample();
-        let media_data = segment.split_off(segment.len().saturating_sub(4));
+        let mut file = file_of_one_sample();
+        let media_data = file.split_off(file.len().saturating_sub(4));
 
-        let mut reader = MediaSegmentReader::new(movie());
-        reader.handle_input(&segment).unwrap();
+        let mut reader = FragmentedReader::new();
+        reader.handle_input(&file).unwrap();
         let wanted = reader.wanted_extent().unwrap();
         reader.handle_data(wanted.start, &media_data).unwrap();
 
-        let media_data_start = segment.len() as u64;
+        let media_data_start = file.len() as u64;
         assert_eq!(wanted, media_data_start..media_data_start.saturating_add(4));
         assert_eq!(reader.poll_sample(), Some(sample()));
     }
 
     #[test]
     fn a_failed_reader_reports_the_same_failure_for_every_call_after_it() {
-        let mut reader = MediaSegmentReader::new(movie());
-        let failure = StructureError::box_out_of_order(MediaDataBox::BOX_TYPE);
-        let segment = written(&MediaDataBox::new(MEDIA_DATA.to_vec()));
+        let mut reader = FragmentedReader::new();
+        let failure = StructureError::box_out_of_order(FileTypeBox::BOX_TYPE);
+        let file = [written(&file_type()), written(&file_type())].concat();
 
-        assert_eq!(reader.handle_input(&segment), Err(failure));
-        assert_eq!(
-            reader.handle_input(&written(&movie_fragment())),
-            Err(failure)
-        );
+        assert_eq!(reader.handle_input(&file), Err(failure));
+        assert_eq!(reader.handle_input(&written(&movie())), Err(failure));
         assert_eq!(reader.handle_data(0, b"SAMP"), Err(failure));
         assert_eq!(reader.finish(), Err(failure));
     }
 
     #[test]
     fn input_handed_over_after_finishing_is_rejected() {
-        let mut reader = read(&written(&movie_fragment())).unwrap();
+        let mut reader = read(&written(&movie())).unwrap();
 
         assert_eq!(
-            reader.handle_input(&written(&movie_fragment())),
+            reader.handle_input(&written(&file_type())),
             Err(StructureError::already_finished())
         );
         assert_eq!(

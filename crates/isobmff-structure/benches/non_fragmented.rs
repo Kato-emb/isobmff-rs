@@ -24,8 +24,10 @@
 use core::hint::black_box;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
-use isobmff::sample_table::sample_extents;
-use isobmff::{FileTypeBox, MovieBox, NonFragmentedReader, NonFragmentedWriter, Sample};
+use isobmff_boxes::{FileTypeBox, MovieBox};
+use isobmff_sample::Sample;
+use isobmff_sample::sample_table::sample_extents;
+use isobmff_structure::{NonFragmentedReader, NonFragmentedWriter};
 use isobmff_test_support::{SAMPLE_DURATION, file_type, non_fragmented_file, unfragmented_movie};
 
 /// Track the samples of the benchmarked movies belong to

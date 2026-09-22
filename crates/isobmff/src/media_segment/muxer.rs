@@ -5,8 +5,8 @@ use std::io::Write;
 use isobmff_boxes::SegmentTypeBox;
 use isobmff_sample::Sample;
 use isobmff_sequence::EventBytes;
+use isobmff_structure::MediaSegmentWriter;
 
-use super::MediaSegmentWriter;
 use crate::{DriverError, Muxer, PollOutput};
 
 /// Lays a media segment down on a sink, taking the samples as they come

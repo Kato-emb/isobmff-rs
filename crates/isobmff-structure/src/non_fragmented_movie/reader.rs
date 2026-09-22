@@ -68,7 +68,7 @@ use crate::{StructureError, WholeBoxReader};
 /// # Examples
 ///
 /// ```
-/// use isobmff::NonFragmentedReader;
+/// use isobmff_structure::NonFragmentedReader;
 /// # use isobmff_test_support::non_fragmented_file;
 /// // A file of two chunks of one track, its movie lying after its media data
 /// let file = non_fragmented_file(&[&[b"SAMP", b"DATA"], &[b"LAST"]], false);
@@ -97,7 +97,7 @@ use crate::{StructureError, WholeBoxReader};
 /// let third = reader.poll_sample().unwrap();
 /// assert_eq!((third.data(), third.decode_time()), (b"LAST".as_slice(), 6_000));
 /// assert_eq!(reader.poll_sample(), None);
-/// # Ok::<(), isobmff::StructureError>(())
+/// # Ok::<(), isobmff_structure::StructureError>(())
 /// ```
 #[derive(Debug)]
 pub struct NonFragmentedReader {

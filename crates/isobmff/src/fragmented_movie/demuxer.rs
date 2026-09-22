@@ -5,9 +5,9 @@ use std::io::{Read, Seek};
 
 use isobmff_boxes::{FileTypeBox, MovieBox};
 use isobmff_sample::Sample;
+use isobmff_structure::{FragmentedReader, StructureError};
 
-use super::FragmentedReader;
-use crate::{Demuxer, DriverError, ReadSamples, StructureError};
+use crate::{Demuxer, DriverError, ReadSamples};
 
 /// Reads the samples a fragmented movie file carries off a source that seeks
 ///
@@ -152,14 +152,38 @@ mod tests {
     use std::io;
 
     use isobmff_boxes::{
-        MovieFragmentBox, MovieFragmentHeaderBox, TrackFragmentBox, TrackFragmentHeaderBox,
-        TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
+        MovieFragmentBox, MovieFragmentHeaderBox, TrackExtendsBox, TrackFragmentBox,
+        TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
     };
-    use isobmff_test_support::written;
+    use isobmff_sample::Sample;
+    use isobmff_structure::FragmentedWriter;
+    use isobmff_test_support::{fragmented_movie, written};
 
-    use super::super::tests::{file_of_one_sample, sample};
     use super::FragmentedDemuxer;
-    use crate::Sample;
+
+    /// One sample of track 1, the first of its fragment
+    fn sample() -> Sample {
+        Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec())
+    }
+
+    /// A file of one fragment carrying [`sample`], with no brands
+    fn file_of_one_sample() -> Vec<u8> {
+        let mut writer = FragmentedWriter::new();
+        let mut file = Vec::new();
+
+        writer
+            .handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0)))
+            .unwrap();
+        writer.begin_fragment(1).unwrap();
+        writer.handle_sample(sample()).unwrap();
+        writer.finish_fragment().unwrap();
+        writer.finish().unwrap();
+        while let Some(written) = writer.poll_output() {
+            file.extend_from_slice(&written);
+        }
+
+        file
+    }
 
     /// The file of one sample, followed by a fragment addressing that sample's bytes again
     fn file_addressing_back() -> Vec<u8> {

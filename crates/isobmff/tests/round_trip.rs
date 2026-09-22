@@ -1,137 +1,29 @@
-//! The samples a writer laid down as a fragmented movie file, read back off that file
+//! The samples a muxer laid down as a fragmented movie file, read back off that file by the demuxer
 
-// Why not inside `mod tests`: an inline `mod` adds its own name as a directory
-// segment, so a nested one looks for `tests/tests/helpers/reading.rs`. The
-// `cfg` is what keeps `allow-unwrap-in-tests` reaching the helper from out here.
-#[cfg(test)]
-#[path = "helpers/reading.rs"]
-mod reading;
+// Why not `cfg(all(test, feature = "std"))` on the module: the
+// `tests_outside_test_module` lint reads the module attribute literally and
+// fires on anything but a bare `cfg(test)`.
+#![cfg(feature = "std")]
 
 #[cfg(test)]
 mod tests {
-    use super::reading::samples_of;
-    use isobmff::{
-        FragmentedWriter, MovieBox, MovieExtendsBox, MovieHeaderBox, Mp4EpochSeconds, Sample,
-        TrackExtendsBox,
-    };
-    use isobmff_test_support::{file_type, track};
-    #[cfg(feature = "std")]
-    use {
-        isobmff::{FragmentedDemuxer, FragmentedMuxer},
-        std::io,
-    };
+    use std::io;
 
-    /// Ticks a second the media of the movie is timed in
-    const TIMESCALE: u32 = 90_000;
+    use isobmff::{FragmentedDemuxer, FragmentedMuxer, Sample};
+    use isobmff_test_support::{file_type, fragmented_file_samples, presentation_movie};
 
-    /// Flags the samples of the video track state, but for the first of a fragment
-    const NOT_A_SYNC_SAMPLE: u32 = 0x0101_0000;
-
-    /// Flags the first sample of a fragment of the video track states
-    const SYNC_SAMPLE: u32 = 0x0200_0000;
-
-    /// Movie of two tracks continued in fragments
-    ///
-    /// Every default the `trex` boxes state is one no fragment this writer lays
-    /// out falls back on: a `tfhd` states its own. A sample read back holding one
-    /// of these values would mean the fragment left it to the movie.
-    fn movie() -> MovieBox {
-        let epoch = Mp4EpochSeconds::from_seconds(0);
-        let never_fallen_back_on = |track_id| TrackExtendsBox::new(track_id, 9, 1, 1, u32::MAX);
-
-        MovieBox::new(
-            MovieHeaderBox::new(epoch, epoch, TIMESCALE, 0, 3),
-            vec![track(1), track(2)],
-            MovieExtendsBox::new(vec![never_fallen_back_on(1), never_fallen_back_on(2)]),
-        )
-        .unwrap()
-    }
-
-    /// The samples the two tracks carry, fragment by fragment
-    ///
-    /// The video track holds three samples in the first fragment, interleaved
-    /// with the audio track so its own run is broken in two, and states flags
-    /// only its first sample differs on. The audio samples state composition time
-    /// offsets, positive in one fragment and negative in the other, which the two
-    /// versions of a `trun` write apart.
-    fn declared_samples() -> Vec<Vec<Sample>> {
-        let video = |decode_time, sample_flags, data: &[u8]| {
-            Sample::new(1, decode_time, 3_000, 0, sample_flags, 1, data.to_vec())
-        };
-        let audio = |decode_time, offset, data: &[u8]| {
-            Sample::new(2, decode_time, 1_024, offset, 0, 1, data.to_vec())
-        };
-
-        vec![
-            vec![
-                video(0, SYNC_SAMPLE, b"VIDEO_01"),
-                video(3_000, NOT_A_SYNC_SAMPLE, b"VIDEO_02"),
-                audio(0, 512, b"AUD1"),
-                video(6_000, NOT_A_SYNC_SAMPLE, b"VIDEO_03"),
-            ],
-            vec![
-                video(9_000, SYNC_SAMPLE, b"VIDEO_04"),
-                audio(1_024, -256, b"AUD2"),
-            ],
-        ]
-    }
-
-    /// The file the samples make: the brands, the movie, then fragment after fragment
-    fn written_file(fragments: Vec<Vec<Sample>>) -> Vec<u8> {
-        let mut writer = FragmentedWriter::new();
-        let mut file = Vec::new();
-
-        writer.handle_file_type(file_type()).unwrap();
-        writer.handle_movie(movie()).unwrap();
-
-        for (position, samples) in fragments.into_iter().enumerate() {
-            let sequence_number = u32::try_from(position).unwrap().saturating_add(1);
-
-            writer.begin_fragment(sequence_number).unwrap();
-            for sample in samples {
-                writer.handle_sample(sample).unwrap();
-            }
-            writer.finish_fragment().unwrap();
-        }
-        writer.finish().unwrap();
-
-        while let Some(written) = writer.poll_output() {
-            file.extend_from_slice(&written);
-        }
-
-        file
-    }
-
-    #[test]
-    fn the_samples_are_read_back_as_they_were_handed_over_however_the_file_was_cut() {
-        let file = written_file(declared_samples());
-        let handed_over = declared_samples().concat();
-
-        for cut_length in [file.len(), 1, 3, 7, 64, file.len().saturating_sub(1)] {
-            assert_eq!(
-                samples_of(&file, cut_length),
-                handed_over,
-                "cut at {cut_length}"
-            );
-        }
-    }
-
-    #[cfg(feature = "std")]
     #[test]
     fn the_samples_the_muxer_wrote_to_a_sink_are_read_back_off_it_by_the_demuxer() {
         let mut file = Vec::new();
         let mut muxer = FragmentedMuxer::new(&mut file);
-        muxer.handle_file_type(file_type()).unwrap();
-        muxer.handle_movie(movie()).unwrap();
-        for (position, samples) in declared_samples().into_iter().enumerate() {
-            let sequence_number = u32::try_from(position).unwrap().saturating_add(1);
 
-            muxer.begin_fragment(sequence_number).unwrap();
-            for sample in samples {
-                muxer.handle_sample(sample).unwrap();
-            }
-            muxer.finish_fragment().unwrap();
+        muxer.handle_file_type(file_type()).unwrap();
+        muxer.handle_movie(presentation_movie()).unwrap();
+        muxer.begin_fragment(1).unwrap();
+        for sample in fragmented_file_samples() {
+            muxer.handle_sample(sample).unwrap();
         }
+        muxer.finish_fragment().unwrap();
         muxer.finish().unwrap();
 
         let read_back: Vec<Sample> = FragmentedDemuxer::new(io::Cursor::new(&file))
@@ -139,7 +31,6 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
 
-        assert_eq!(file, written_file(declared_samples()));
-        assert_eq!(read_back, samples_of(&file, file.len()));
+        assert_eq!(read_back, fragmented_file_samples());
     }
 }

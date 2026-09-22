@@ -5,9 +5,9 @@ use std::io::{Read, Seek};
 
 use isobmff_boxes::{FileTypeBox, MovieBox};
 use isobmff_sample::Sample;
+use isobmff_structure::{NonFragmentedReader, StructureError};
 
-use super::NonFragmentedReader;
-use crate::{Demuxer, DriverError, ReadSamples, StructureError};
+use crate::{Demuxer, DriverError, ReadSamples};
 
 /// Reads the samples a non-fragmented movie file carries off a source that seeks
 ///

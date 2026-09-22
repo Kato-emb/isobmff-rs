@@ -6,8 +6,9 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 
 use isobmff_sample::Sample;
 use isobmff_sequence::EventBytes;
+use isobmff_structure::StructureError;
 
-use crate::{DriverError, StructureError};
+use crate::DriverError;
 
 /// Bytes handed over to the reader at a time
 const CUT_LENGTH: u64 = 1024 * 1024;
@@ -237,7 +238,9 @@ mod tests {
     use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
 
     use super::{CUT_LENGTH, Demuxer, Muxer, PollOutput, ReadSamples};
-    use crate::{DriverError, DriverErrorKind, StructureError, StructureErrorKind};
+    use isobmff_structure::{StructureError, StructureErrorKind};
+
+    use crate::{DriverError, DriverErrorKind};
 
     /// Reader answering as scripted, and recording what it was handed
     #[derive(Default)]
