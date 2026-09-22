@@ -45,8 +45,6 @@
 
 #![no_std]
 
-extern crate alloc;
-
 pub use isobmff_boxes::*;
 pub use isobmff_core::*;
 pub use isobmff_sample::*;

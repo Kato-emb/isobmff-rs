@@ -134,7 +134,7 @@ pub enum ErrorKind {
     ///
     /// The failure itself is on [`io_error`](Error::io_error).
     Io(io::ErrorKind),
-    /// Failure of the layers the file is read or written through, carried through as this crate names it
+    /// Failure of the layers the file is read or written through, carried through as `isobmff-structure` names it
     ///
     /// The failure itself is on
     /// [`structure_error`](Error::structure_error).

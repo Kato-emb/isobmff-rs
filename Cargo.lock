@@ -186,7 +186,6 @@ dependencies = [
  "isobmff-sample",
  "isobmff-sequence",
  "isobmff-structure",
- "isobmff-test-support",
 ]
 
 [[package]]

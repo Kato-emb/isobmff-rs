@@ -30,9 +30,6 @@ isobmff-sample.workspace = true
 isobmff-sequence.workspace = true
 isobmff-structure.workspace = true
 
-[dev-dependencies]
-isobmff-test-support.workspace = true
-
 [package.metadata.docs.rs]
 all-features = true
 
