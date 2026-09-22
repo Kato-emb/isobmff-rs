@@ -1,4 +1,4 @@
-//! [`DriverError`], the reason a file does not read or write through a demuxer or a muxer
+//! [`Error`], the reason a file does not read or write through a demuxer or a muxer
 
 use core::error;
 use core::fmt;
@@ -21,32 +21,34 @@ use isobmff_structure::{StructureError, StructureErrorKind};
 /// ```
 /// use std::io;
 ///
-/// use isobmff::{BoxType, DriverError, DriverErrorKind, StructureError, StructureErrorKind};
+/// use isobmff_core::BoxType;
+/// use isobmff_io::{Error, ErrorKind};
+/// use isobmff_structure::{StructureError, StructureErrorKind};
 ///
 /// // A failure of the source is carried through as `std::io` reports it
-/// let failure = DriverError::from(io::Error::from(io::ErrorKind::UnexpectedEof));
-/// assert_eq!(failure.kind(), DriverErrorKind::Io(io::ErrorKind::UnexpectedEof));
+/// let failure = Error::from(io::Error::from(io::ErrorKind::UnexpectedEof));
+/// assert_eq!(failure.kind(), ErrorKind::Io(io::ErrorKind::UnexpectedEof));
 /// assert_eq!(failure.structure_error(), None);
 ///
 /// // A failure of the layers beneath is carried through as they report it
-/// let failure = DriverError::from(StructureError::missing_mandatory_box(BoxType::compact(*b"moov")));
+/// let failure = Error::from(StructureError::missing_mandatory_box(BoxType::compact(*b"moov")));
 /// assert_eq!(
 ///     failure.kind(),
-///     DriverErrorKind::Structure(StructureErrorKind::MissingMandatoryBox)
+///     ErrorKind::Structure(StructureErrorKind::MissingMandatoryBox)
 /// );
 /// assert!(failure.io_error().is_none());
 /// ```
-pub struct DriverError {
+pub struct Error {
     representation: Representation,
 }
 
-impl DriverError {
+impl Error {
     /// Returns what went wrong
     #[must_use]
-    pub fn kind(&self) -> DriverErrorKind {
+    pub fn kind(&self) -> ErrorKind {
         match &self.representation {
-            Representation::Io(failure) => DriverErrorKind::Io(failure.kind()),
-            Representation::Structure(failure) => DriverErrorKind::Structure(failure.kind()),
+            Representation::Io(failure) => ErrorKind::Io(failure.kind()),
+            Representation::Structure(failure) => ErrorKind::Structure(failure.kind()),
         }
     }
 
@@ -69,7 +71,7 @@ impl DriverError {
     }
 }
 
-impl From<io::Error> for DriverError {
+impl From<io::Error> for Error {
     /// Carries the failure of the source or the sink through as it stands
     fn from(failure: io::Error) -> Self {
         Self {
@@ -78,7 +80,7 @@ impl From<io::Error> for DriverError {
     }
 }
 
-impl From<StructureError> for DriverError {
+impl From<StructureError> for Error {
     /// Carries the failure of the layers beneath through as it stands
     fn from(failure: StructureError) -> Self {
         Self {
@@ -87,7 +89,7 @@ impl From<StructureError> for DriverError {
     }
 }
 
-impl fmt::Display for DriverError {
+impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.representation {
             Representation::Io(failure) => write!(formatter, "{failure}"),
@@ -96,9 +98,9 @@ impl fmt::Display for DriverError {
     }
 }
 
-impl fmt::Debug for DriverError {
+impl fmt::Debug for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut fields = formatter.debug_struct("DriverError");
+        let mut fields = formatter.debug_struct("Error");
         fields.field("kind", &self.kind());
         match &self.representation {
             Representation::Io(failure) => fields.field("io_error", failure),
@@ -109,7 +111,7 @@ impl fmt::Debug for DriverError {
     }
 }
 
-impl error::Error for DriverError {
+impl error::Error for Error {
     /// Returns the failure carried through
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match &self.representation {
@@ -127,15 +129,15 @@ impl error::Error for DriverError {
 /// match on this must leave room for kinds that are not here yet.
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum DriverErrorKind {
+pub enum ErrorKind {
     /// Failure of the source or the sink, carried through as `std::io` names it
     ///
-    /// The failure itself is on [`io_error`](DriverError::io_error).
+    /// The failure itself is on [`io_error`](Error::io_error).
     Io(io::ErrorKind),
-    /// Failure of the layers the file is read or written through, carried through as this crate names it
+    /// Failure of the layers the file is read or written through, carried through as `isobmff-structure` names it
     ///
     /// The failure itself is on
-    /// [`structure_error`](DriverError::structure_error).
+    /// [`structure_error`](Error::structure_error).
     Structure(StructureErrorKind),
 }
 
