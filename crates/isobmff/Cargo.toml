@@ -38,6 +38,10 @@ isobmff-test-support.workspace = true
 name = "throughput"
 harness = false
 
+[[bench]]
+name = "non_fragmented"
+harness = false
+
 [package.metadata.docs.rs]
 all-features = true
 

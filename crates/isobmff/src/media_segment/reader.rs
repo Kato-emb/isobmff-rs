@@ -377,9 +377,7 @@ impl MediaSegmentReader {
                                 moof_start,
                                 &mut self.decode_times,
                             )?;
-                            for extent in extents {
-                                self.samples.handle_sample_extent(extent?)?;
-                            }
+                            self.samples.handle_sample_extents(extents)?;
 
                             Ok(())
                         })
