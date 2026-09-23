@@ -279,7 +279,7 @@ mod tests {
         AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, Mp4EpochSeconds,
     };
 
-    use super::{MovieBox, MovieExtendsBox, TrackBox, TrackExtendsBox};
+    use super::{MovieBox, MovieExtendsBox, MovieHeaderBox, TrackExtendsBox};
     use crate::chunk_offset::ChunkOffsets;
     use crate::data_types::SampleFlags;
     use crate::mvex::tests::movie_extends;
@@ -289,15 +289,7 @@ mod tests {
     use crate::stsc::SampleToChunkBox;
     use crate::stsd::SampleDescriptionBox;
     use crate::stts::TimeToSampleBox;
-    use crate::trak::tests::track;
-
-    /// Video track declaring `track_id`, its samples left to the fragments
-    fn video_track(track_id: u32) -> TrackBox {
-        let entry =
-            AnyBox::from_raw_bytes(BoxType::compact(*b"avc1"), vec![0, 0, 0, 0, 0, 0, 0, 1]);
-
-        TrackBox::new_video(track_id, 90_000, 1920, 1080, entry)
-    }
+    use crate::trak::tests::{track, video_track};
 
     /// Movie with one track, as a progressive file declares it
     fn movie() -> MovieBox {
@@ -351,19 +343,15 @@ mod tests {
     fn a_fragmented_movie_extends_each_track_and_numbers_the_next_past_the_largest() {
         let movie = MovieBox::new_fragmented(1_000, vec![video_track(9), video_track(3)]).unwrap();
         let epoch = Mp4EpochSeconds::from_seconds(0);
-        let mvhd = movie.mvhd();
 
         assert_eq!(
             MovieBox::decode_payload(&encoded_payload(&movie)).unwrap(),
             movie
         );
         assert_eq!(
-            (mvhd.creation_time(), mvhd.modification_time()),
-            (epoch, epoch)
+            movie.mvhd(),
+            &MovieHeaderBox::new(epoch, epoch, 1_000, 0, 10)
         );
-        assert_eq!(mvhd.timescale(), 1_000);
-        assert_eq!(mvhd.duration(), 0);
-        assert_eq!(mvhd.next_track_id(), 10);
         assert_eq!(
             movie.mvex().unwrap().trex(),
             [

@@ -11,8 +11,7 @@ mod reading;
 mod tests {
     use super::reading::samples_of;
     use isobmff_boxes::{
-        DegradationPriorityEntry, MovieBox, MovieExtendsBox, MovieHeaderBox, PaddingBitsEntry,
-        SampleDependencyTypeEntry, SampleFlags, TrackBox, TrackExtendsBox,
+        MovieBox, MovieExtendsBox, MovieHeaderBox, SampleFlags, TrackBox, TrackExtendsBox,
     };
     use isobmff_core::{AnyBox, BoxType, Mp4EpochSeconds};
     use isobmff_sample::Sample;
@@ -21,22 +20,6 @@ mod tests {
 
     /// Ticks a second the media of the movie is timed in
     const TIMESCALE: u32 = 90_000;
-
-    /// Flags the samples of the video track state, but for the first of a fragment
-    const NOT_A_SYNC_SAMPLE: SampleFlags = SampleFlags::new(
-        SampleDependencyTypeEntry::new(0, 1, 0, 0).unwrap(),
-        PaddingBitsEntry::new(0).unwrap(),
-        true,
-        DegradationPriorityEntry::new(0),
-    );
-
-    /// Flags the first sample of a fragment of the video track states
-    const SYNC_SAMPLE: SampleFlags = SampleFlags::new(
-        SampleDependencyTypeEntry::new(0, 2, 0, 0).unwrap(),
-        PaddingBitsEntry::new(0).unwrap(),
-        false,
-        DegradationPriorityEntry::new(0),
-    );
 
     /// Movie of two tracks continued in fragments
     ///
@@ -81,13 +64,13 @@ mod tests {
 
         vec![
             vec![
-                video(0, SYNC_SAMPLE, b"VIDEO_01"),
-                video(3_000, NOT_A_SYNC_SAMPLE, b"VIDEO_02"),
+                video(0, SampleFlags::SYNC_SAMPLE, b"VIDEO_01"),
+                video(3_000, SampleFlags::NON_SYNC_SAMPLE, b"VIDEO_02"),
                 audio(0, 512, b"AUD1"),
-                video(6_000, NOT_A_SYNC_SAMPLE, b"VIDEO_03"),
+                video(6_000, SampleFlags::NON_SYNC_SAMPLE, b"VIDEO_03"),
             ],
             vec![
-                video(9_000, SYNC_SAMPLE, b"VIDEO_04"),
+                video(9_000, SampleFlags::SYNC_SAMPLE, b"VIDEO_04"),
                 audio(1_024, -256, b"AUD2"),
             ],
         ]

@@ -246,14 +246,14 @@ pub(crate) mod tests {
     };
 
     use super::TrackBox;
-    use crate::data_entry::{DataEntry, DataEntryUrlBox};
+    use crate::dinf::tests::data_information;
     use crate::hdlr::HandlerBox;
     use crate::mdhd::MediaHeaderBox;
     use crate::mdia::MediaBox;
     use crate::minf::MediaInformationHeader;
     use crate::minf::tests::media_information;
     use crate::tkhd::TrackHeaderBox;
-    use crate::vmhd::VideoMediaHeaderBox;
+    use crate::vmhd::tests::video_media_header;
 
     /// Track box of a video track, with every mandatory child in place
     pub(crate) fn track() -> TrackBox {
@@ -284,6 +284,16 @@ pub(crate) mod tests {
         )
     }
 
+    /// Sample entry of an `avc1` coding, read through the first data reference
+    fn sample_entry() -> AnyBox {
+        AnyBox::from_raw_bytes(BoxType::compact(*b"avc1"), vec![0, 0, 0, 0, 0, 0, 0, 1])
+    }
+
+    /// Video track declaring `track_id`, its samples left to the fragments
+    pub(crate) fn video_track(track_id: u32) -> TrackBox {
+        TrackBox::new_video(track_id, 90_000, 1920, 1080, sample_entry())
+    }
+
     /// Writes the payload of the box and returns the bytes it occupies
     fn encoded_payload(track: &TrackBox) -> Vec<u8> {
         let mut buffer = vec![0; usize::try_from(track.payload_len()).unwrap()];
@@ -312,11 +322,8 @@ pub(crate) mod tests {
 
     #[test]
     fn a_video_track_states_what_it_varies_and_fills_the_rest_for_fragments() {
-        let entry =
-            AnyBox::from_raw_bytes(BoxType::compact(*b"avc1"), vec![0, 0, 0, 0, 0, 0, 0, 1]);
-        let track = TrackBox::new_video(1, 90_000, 1920, 1080, entry.clone());
+        let track = video_track(1);
         let epoch = Mp4EpochSeconds::from_seconds(0);
-        let (tkhd, mdhd, hdlr) = (track.tkhd(), track.mdia().mdhd(), track.mdia().hdlr());
         let minf = track.mdia().minf();
         let stbl = minf.stbl();
 
@@ -324,35 +331,35 @@ pub(crate) mod tests {
             TrackBox::decode_payload(&encoded_payload(&track)).unwrap(),
             track
         );
-        assert_eq!(tkhd.flags(), FullBoxFlags::new(0x7).unwrap());
         assert_eq!(
-            (tkhd.creation_time(), tkhd.modification_time()),
-            (epoch, epoch)
+            track.tkhd(),
+            &TrackHeaderBox::new(
+                FullBoxFlags::new(0x7).unwrap(),
+                epoch,
+                epoch,
+                1,
+                0,
+                U16F16::from_integer(1920),
+                U16F16::from_integer(1080),
+            )
         );
-        assert_eq!(tkhd.track_id(), 1);
-        assert_eq!(tkhd.duration(), 0);
         assert_eq!(
-            (tkhd.width(), tkhd.height()),
-            (U16F16::from_integer(1920), U16F16::from_integer(1080))
+            track.mdia().mdhd(),
+            &MediaHeaderBox::new(epoch, epoch, 90_000, 0, LanguageCode::UND)
         );
         assert_eq!(
-            (mdhd.creation_time(), mdhd.modification_time()),
-            (epoch, epoch)
+            track.mdia().hdlr(),
+            &HandlerBox::new(
+                FourCC::new(*b"vide"),
+                NullTerminatedString::new(String::from("VideoHandler")).unwrap(),
+            )
         );
-        assert_eq!(mdhd.timescale(), 90_000);
-        assert_eq!(mdhd.duration(), 0);
-        assert_eq!(mdhd.language(), LanguageCode::UND);
-        assert_eq!(hdlr.handler_type(), FourCC::new(*b"vide"));
-        assert_eq!(hdlr.name().as_str(), "VideoHandler");
         assert_eq!(
             minf.media_information_header(),
-            Some(&MediaInformationHeader::Video(VideoMediaHeaderBox::new()))
+            Some(&MediaInformationHeader::Video(video_media_header()))
         );
-        assert_eq!(
-            minf.dinf().dref().entries(),
-            [DataEntry::Url(DataEntryUrlBox::new(None))]
-        );
-        assert_eq!(stbl.stsd().entries(), [entry]);
+        assert_eq!(minf.dinf(), &data_information());
+        assert_eq!(stbl.stsd().entries(), [sample_entry()]);
         assert!(stbl.stts().entries().is_empty());
         assert!(stbl.stsc().entries().is_empty());
         assert_eq!(stbl.sample_sizes().sizes().count(), 0);
