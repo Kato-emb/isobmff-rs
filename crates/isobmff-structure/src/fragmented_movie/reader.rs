@@ -31,7 +31,8 @@ use crate::{Error, WholeBoxReader};
 ///
 /// # Contract
 ///
-/// * The file is handed over from its first byte, in order and cut anywhere,
+/// * The file is handed over from its first byte, or from the offset
+///   [`resume_at`](Self::resume_at) names, in order and cut anywhere,
 ///   and the samples it completed are taken from
 ///   [`poll_sample`](Self::poll_sample). The caller drains before handing
 ///   over more: samples are held until they are taken. Where the file lies in
@@ -50,7 +51,8 @@ use crate::{Error, WholeBoxReader};
 ///   then handed over. The movie and the indexes read so far stand; the
 ///   extents held and the samples not yet taken are dropped, and where each
 ///   track stands on its timeline is no longer known until a `tfdt` states
-///   it.
+///   it; a fragment stating none for such a track is
+///   [`Sample`](crate::ErrorKind::Sample).
 /// * The order the boxes come in, and what a file that breaks it is reported
 ///   as, are the structure's: an `ftyp` after another box, a
 ///   `moof` before the `moov`, an `mdat` before any `moof` are
@@ -78,7 +80,8 @@ use crate::{Error, WholeBoxReader};
 ///   layer makes of the end of it: a box left open, the `moov` never come, a
 ///   sample short of the data it claimed. Samples are still taken after it,
 ///   but anything handed over then, or a second [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished).
+///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished), until
+///   [`resume_at`](Self::resume_at) restarts the reading.
 ///
 /// # Examples
 ///
@@ -222,9 +225,9 @@ impl FragmentedReader {
     /// Takes the next cut of the file and reads the samples it completes
     ///
     /// The input is taken whole, as the continuation of what was handed over
-    /// before it, the first cut starting at the first byte of the file. What
-    /// the input completed is then taken from
-    /// [`poll_sample`](Self::poll_sample).
+    /// before it, the first cut starting at the first byte of the file, or at
+    /// the offset the last [`resume_at`](Self::resume_at) named. What the
+    /// input completed is then taken from [`poll_sample`](Self::poll_sample).
     ///
     /// # Errors
     ///
@@ -238,7 +241,7 @@ impl FragmentedReader {
     /// * [`Box`](crate::ErrorKind::Box): a box read into a value
     ///   does not decode.
     /// * [`Sample`](crate::ErrorKind::Sample): what the samples make
-    ///   of a fragment or the media data beside it.
+    ///   of a fragment, a `sidx`, or the media data beside it.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the reader keeps and reports
@@ -316,8 +319,8 @@ impl FragmentedReader {
 
     /// Returns the subsegments of every `sidx` read so far, in the order they were read
     ///
-    /// A `sidx` read again, as the reading resumes at it a second time, is
-    /// held once. Each is placed in the file from the first byte after its `sidx`, as
+    /// A `sidx` read again, as the reading resumes at or before it, is held
+    /// once. Each is placed in the file from the first byte after its `sidx`, as
     /// [`subsegments`] places them.
     #[must_use]
     pub fn segment_indexes(&self) -> &[SegmentIndex] {
@@ -370,8 +373,8 @@ impl FragmentedReader {
     /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox):
     ///   the file carried no `moov`.
     /// * [`Sample`](crate::ErrorKind::Sample): what the samples make
-    ///   of a fragment declaring no total, or a sample a fragment declared is
-    ///   short of the data it claimed.
+    ///   of a fragment or a `sidx` declaring no total, or a sample a fragment
+    ///   declared is short of the data it claimed.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was already declared over.
     /// * The failure of a previous call, which the reader keeps and reports
@@ -408,8 +411,8 @@ impl FragmentedReader {
             // Why not unreachable: an event was taken, so the framing names the
             // bytes it was read from, and the fallback is a degenerate position
             // in place of a panic the lints forbid. Why not checked_add: the base
-            // is where the framing restarted in the file, and the extent lies in
-            // the bytes handed over past it, so both name one finite file.
+            // is an offset the caller vouches for, and a change of coordinates
+            // carries no failure kind, so a base past any real file saturates.
             let start = self
                 .boxes
                 .event_extent()

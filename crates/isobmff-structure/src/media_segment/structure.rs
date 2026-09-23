@@ -204,7 +204,7 @@ const fn place(
     }
 }
 
-/// Returns where the segment stands past a box that does not move the order on, standing at `position`
+/// Returns where the segment stands past a box the order is not built of, standing at `position`
 ///
 /// Any box closes the start of the segment, past which the `styp` is out of
 /// order.

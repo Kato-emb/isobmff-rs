@@ -228,7 +228,7 @@ const fn place(
     }
 }
 
-/// Returns where the file stands past a box that does not move the order on, standing at `position`
+/// Returns where the file stands past a box the order is not built of, standing at `position`
 ///
 /// Any box closes the start of the file, past which the `ftyp` is out of order.
 const fn passed_over(position: Position) -> Position {

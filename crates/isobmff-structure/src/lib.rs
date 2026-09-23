@@ -65,11 +65,12 @@
 //!    its own: it passes every value between the layers, so a caller hands
 //!    over bytes and takes samples, or hands over samples and takes bytes,
 //!    and never sees one. Every offset above the framing is a file offset —
-//!    the extents the framing reports for a file handed over from its first
-//!    byte, the chunk offsets and base data offsets the boxes declare
+//!    the extents the framing reports, counted from the first byte of the
+//!    file or from the offset the stack last resumed at, the chunk offsets and base data offsets the boxes declare
 //!    (§8.7.5, §8.8.7) — and no layer here knows any other.
 //! 7. **The I/O.** Where the bytes come from and go to is the caller's: the
-//!    file is handed over from its first byte, output is taken, and what the
+//!    file is handed over from its first byte, or from a resume point an index
+//!    names, output is taken, and what the
 //!    reader says it still lacks is fetched or not, so a `File`, a socket, or a
 //!    buffer already in memory drives the six layers above the same way. Where
 //!    the file lies in its resource, and how a file offset becomes a seek or a

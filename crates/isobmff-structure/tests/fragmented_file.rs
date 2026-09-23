@@ -153,7 +153,7 @@ mod tests {
     }
 
     #[test]
-    fn resuming_at_a_fragment_stating_no_decode_time_is_refused() {
+    fn resuming_at_a_fragment_stating_no_decode_time_fails_for_the_missing_decode_time() {
         let file = indexed_fragmented_file_without_decode_times();
 
         let mut reader = read_whole(&file);
