@@ -7,10 +7,10 @@ use isobmff_core::{
     FullBoxFields, FullBoxFlags,
 };
 
-/// Length of the fields that precede the references when version 0 carries the times in 32 bits
+/// Length of the fields that precede the references when version 0 carries the time and the offset in 32 bits
 const FIXED_FIELDS_LEN_VERSION_0: u64 = 24;
 
-/// Length of the fields that precede the references when version 1 carries the times in 64 bits
+/// Length of the fields that precede the references when version 1 carries the time and the offset in 64 bits
 const FIXED_FIELDS_LEN_VERSION_1: u64 = 32;
 
 /// Length of one reference of the table
@@ -112,7 +112,7 @@ impl SegmentIndexReference {
         self.starts_with_sap
     }
 
-    /// Returns the type of the first SAP of the subsegment, 0 when none is stated
+    /// Returns the type of the first SAP of the subsegment, 0 when the type is unknown or no SAP information is given
     #[must_use]
     pub const fn sap_type(&self) -> u8 {
         self.sap_type
@@ -128,7 +128,8 @@ impl SegmentIndexReference {
 /// Box that indexes the subsegments of a segment by their bytes and times
 ///
 /// [`SegmentIndexBox`] (`sidx`), ISO/IEC 14496-12 §8.16.3. The references run
-/// back to back from the anchor — the first byte after this box — plus
+/// back to back from the anchor — the first byte after this box, in the file
+/// holding it — plus
 /// `first_offset`, and their presentation times run on from
 /// `earliest_presentation_time` by the duration of each.
 ///
@@ -176,7 +177,7 @@ impl SegmentIndexBox {
         })
     }
 
-    /// Returns the ID of the stream the box indexes, a track ID for ISO media
+    /// Returns the ID of the stream the box indexes, a track ID in files based on ISO/IEC 14496-12
     #[must_use]
     pub const fn reference_id(&self) -> u32 {
         self.reference_id
@@ -206,7 +207,7 @@ impl SegmentIndexBox {
         &self.references
     }
 
-    /// Returns the version whose field width carries the times and the offset of this box
+    /// Returns the version whose field width carries the time and the offset of this box
     const fn version(&self) -> u8 {
         if self.earliest_presentation_time <= u32::MAX as u64
             && self.first_offset <= u32::MAX as u64
@@ -217,7 +218,7 @@ impl SegmentIndexBox {
         }
     }
 
-    /// Returns the width the given version carries the times and the offset at
+    /// Returns the width the given version carries the time and the offset at
     const fn field_width(version: u8) -> FieldWidth {
         match version {
             0 => FieldWidth::Compact,

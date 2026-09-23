@@ -90,7 +90,7 @@ impl TrackFragmentRandomAccessEntry {
 /// [`TrackFragmentRandomAccessBox`] (`tfra`), ISO/IEC 14496-12 §8.8.10. A
 /// reader looks a time up in it and restarts at the `moof` the entry names,
 /// without reading the fragments before it. A box with no entries states that
-/// every sample of the track may be a sync sample.
+/// every sample of the track is a sync sample.
 ///
 /// The version is not held: it selects how wide the time and the `moof` offset
 /// of every entry are written, so [`encode_payload`](BoxEncode::encode_payload)
@@ -122,7 +122,7 @@ impl TrackFragmentRandomAccessBox {
         self.track_id
     }
 
-    /// Returns the entries, in the order of their times
+    /// Returns the entries, in the order they came
     #[must_use]
     pub fn entries(&self) -> &[TrackFragmentRandomAccessEntry] {
         &self.entries
@@ -145,7 +145,7 @@ impl TrackFragmentRandomAccessBox {
         }
     }
 
-    /// Returns the `length_size_of_*` field of the traf, trun and sample numbers, in that order
+    /// Returns the `length_size_of_*` fields of the traf, trun and sample numbers, in that order
     fn length_sizes(&self) -> [u8; 3] {
         let (traf_numbers, trun_numbers, sample_numbers) = self.entries.iter().fold(
             (0, 0, 0),

@@ -11,12 +11,12 @@ const PAYLOAD_LEN: u64 = 8;
 /// Box that closes an `mfra` with the number of bytes the `mfra` occupies
 ///
 /// [`MovieFragmentRandomAccessOffsetBox`] (`mfro`), ISO/IEC 14496-12 §8.8.11.
-/// It is the last box of its `mfra`, and the `mfra` is the last box of the
-/// file, so a reader finds the `mfra` by reading this box off the last 16
-/// bytes of the file and stepping back `size` bytes from its end.
+/// It is the last box of its `mfra`, so when the `mfra` is also the last box
+/// of the file a reader finds it by reading this box off the last 16 bytes
+/// and stepping back `size` bytes from the end.
 ///
-/// Neither the version nor the `flags` are held — the spec declares both zero
-/// for this box.
+/// Neither the version nor the `flags` are held — the spec defines only
+/// version 0 and declares the flags zero for this box.
 #[doc(alias = "mfro")]
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]

@@ -14,7 +14,7 @@ use crate::tfra::TrackFragmentRandomAccessBox;
 ///
 /// [`MovieFragmentRandomAccessBox`] (`mfra`), ISO/IEC 14496-12 §8.8.9. It
 /// usually sits at the end of the file and holds at most one `tfra` per track;
-/// a track without one may have every sample be a sync sample. The spec notes
+/// a track without one is not stated to have every sample be a sync sample. The spec notes
 /// that the table may be stale, so an entry is where to look rather than a
 /// promise of what is there.
 ///
