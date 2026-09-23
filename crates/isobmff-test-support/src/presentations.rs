@@ -69,9 +69,9 @@ fn fragment_over(sequence_number: u32, decode_time: u64, media_data: &[u8]) -> M
                 None,
                 None,
             ),
-            Some(TrackFragmentBaseMediaDecodeTimeBox::new(decode_time)),
             vec![TrackRunBox::new(Some(data_offset), None, samples).unwrap()],
-        );
+        )
+        .with_tfdt(TrackFragmentBaseMediaDecodeTimeBox::new(decode_time));
 
         MovieFragmentBox::new(
             MovieFragmentHeaderBox::new(sequence_number),

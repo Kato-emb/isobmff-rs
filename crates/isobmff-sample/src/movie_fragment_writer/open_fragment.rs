@@ -301,11 +301,8 @@ fn build_track_fragment(track: &OpenTrack, base: Option<u64>) -> Result<TrackFra
         })
         .collect::<Result<Vec<_>, Error>>()?;
 
-    Ok(TrackFragmentBox::new(
-        header,
-        Some(TrackFragmentBaseMediaDecodeTimeBox::new(track.decode_time)),
-        runs,
-    ))
+    Ok(TrackFragmentBox::new(header, runs)
+        .with_tfdt(TrackFragmentBaseMediaDecodeTimeBox::new(track.decode_time)))
 }
 
 #[cfg(test)]

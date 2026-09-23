@@ -31,7 +31,6 @@ mod tests {
                 None,
                 None,
             ),
-            None,
             vec![TrackRunBox::new(Some(i32::try_from(MOOF_LEN + 8).unwrap()), None, rows).unwrap()],
         );
 
