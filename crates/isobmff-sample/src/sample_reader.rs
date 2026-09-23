@@ -310,6 +310,21 @@ impl SampleReader {
         }
     }
 
+    /// Drops every extent held and every sample not yet taken, to be handed the samples of another stretch of the file
+    ///
+    /// The limit stays as the reader was given it, and a reader whose samples
+    /// were declared over by [`finish`](Self::finish) takes extents and bytes
+    /// again. A reader that failed stays failed.
+    pub fn clear(&mut self) {
+        self.pending.clear();
+        self.ready.clear();
+        self.whole_held = 0;
+        self.held_in_order = true;
+        if matches!(self.state, State::Finished) {
+            self.state = State::Reading;
+        }
+    }
+
     /// Holds `extent` behind the extents held before it, refusing one past the limit
     fn admit(&mut self, extent: SampleExtent) -> Result<(), Error> {
         let pending = PendingSample {
@@ -530,6 +545,49 @@ mod tests {
         }
 
         samples
+    }
+
+    #[test]
+    fn a_cleared_reader_holds_nothing_and_reads_the_next_stretch_under_the_same_limit() {
+        let mut reader = SampleReader::with_sample_size_limit(8);
+        reader
+            .handle_sample_extents([Ok(extent(0, 100..104)), Ok(extent(1_024, 104..108))])
+            .unwrap();
+        reader.handle_data(100, b"ABCD").unwrap();
+
+        reader.clear();
+
+        assert_eq!(reader.wanted_extent(), None);
+        assert_eq!(reader.poll_sample(), None);
+
+        reader
+            .handle_sample_extents([Ok(extent(8_192, 500..504))])
+            .unwrap();
+        reader.handle_data(500, b"WXYZ").unwrap();
+
+        assert_eq!(drained(&mut reader), [sample(8_192, b"WXYZ")]);
+        assert_eq!(
+            reader.handle_sample_extent(extent(9_216, 504..513)),
+            Err(Error::sample_size_limit_exceeded(1, 9, 8))
+        );
+    }
+
+    #[test]
+    fn a_reader_declared_over_takes_extents_again_once_cleared_and_a_failed_one_stays_failed() {
+        let mut finished = SampleReader::new();
+        finished.finish().unwrap();
+
+        finished.clear();
+
+        assert_eq!(finished.handle_sample_extent(extent(0, 100..104)), Ok(()));
+
+        let mut failed = SampleReader::new();
+        failed.handle_sample_extent(extent(0, 100..104)).unwrap();
+        let unfinished = failed.finish().unwrap_err();
+
+        failed.clear();
+
+        assert_eq!(failed.handle_data(100, b"ABCD"), Err(unfinished));
     }
 
     #[test]

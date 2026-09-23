@@ -63,6 +63,22 @@ impl Error {
         }
     }
 
+    /// Returns the failure of a presentation time running past what 64 bits carry
+    #[must_use]
+    pub const fn presentation_time_overflow(track_id: u32) -> Self {
+        Self {
+            representation: Representation::PresentationTimeOverflow { track_id },
+        }
+    }
+
+    /// Returns the failure of a track fragment stating no decode time where the time its track stands at is not known
+    #[must_use]
+    pub const fn missing_decode_time(track_id: u32) -> Self {
+        Self {
+            representation: Representation::MissingDecodeTime { track_id },
+        }
+    }
+
     /// Returns the failure of a data offset running past what 64 bits carry
     #[must_use]
     pub const fn data_offset_overflow(track_id: u32) -> Self {

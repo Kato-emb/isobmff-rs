@@ -54,7 +54,7 @@ mod tests {
                 .collect();
 
         assert_eq!(media_data, b"AAAAAAAABBBBCC");
-        assert_eq!(decode_times.decode_time(1), 7_500);
+        assert_eq!(decode_times.decode_time(1), Some(7_500));
         assert_eq!(
             extents,
             [

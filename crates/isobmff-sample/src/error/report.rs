@@ -105,6 +105,14 @@ impl fmt::Display for Error {
                 formatter,
                 "decode time of track {track_id} runs past what 64 bits carry"
             ),
+            Representation::PresentationTimeOverflow { track_id } => write!(
+                formatter,
+                "presentation time of track {track_id} runs past what 64 bits carry"
+            ),
+            Representation::MissingDecodeTime { track_id } => write!(
+                formatter,
+                "fragment of track {track_id} states no decode time, and where the track stands is not known"
+            ),
             Representation::DataOffsetOverflow { track_id } => write!(
                 formatter,
                 "data offset of track {track_id} runs past what 64 bits carry"
@@ -381,6 +389,14 @@ mod tests {
         assert_eq!(
             Error::decode_time_overflow(1).to_string(),
             "decode time of track 1 runs past what 64 bits carry"
+        );
+        assert_eq!(
+            Error::presentation_time_overflow(1).to_string(),
+            "presentation time of track 1 runs past what 64 bits carry"
+        );
+        assert_eq!(
+            Error::missing_decode_time(1).to_string(),
+            "fragment of track 1 states no decode time, and where the track stands is not known"
         );
         assert_eq!(
             Error::data_offset_overflow(1).to_string(),

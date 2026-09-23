@@ -21,6 +21,21 @@ pub enum ErrorKind {
     ///
     /// [`track_id`](crate::Error::track_id) is the track they belong to.
     DecodeTimeOverflow,
+    /// Presentation times of a track run past what 64 bits carry
+    ///
+    /// A `sidx` states the presentation time of its first subsegment and the
+    /// duration of each (ISO/IEC 14496-12 §8.16.3), which sum to when each
+    /// subsegment starts. [`track_id`](crate::Error::track_id) is the stream
+    /// the index names by its `reference_ID`.
+    PresentationTimeOverflow,
+    /// Track fragment states no decode time, and where its track stands is not known
+    ///
+    /// A `traf` carrying no `tfdt` carries on from the durations of every
+    /// sample of its track before it (ISO/IEC 14496-12 §8.8.12), which a
+    /// reader that did not start at the first fragment has not summed; see
+    /// [`TrackDecodeTimes::unknown`](crate::TrackDecodeTimes::unknown).
+    /// [`track_id`](crate::Error::track_id) is the track it belongs to.
+    MissingDecodeTime,
     /// Data offsets of a track run past what 64 bits carry
     ///
     /// [`track_id`](crate::Error::track_id) is the track they belong to.
