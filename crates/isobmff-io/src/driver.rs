@@ -28,16 +28,6 @@ async fn seek<S: AsyncSeek + Unpin>(source: &mut S, position: SeekFrom) -> io::R
     poll_fn(|context| Pin::new(&mut *source).poll_seek(context, position)).await
 }
 
-/// Hands `bytes` to `sink`, and returns how many it took
-async fn write<S: AsyncWrite + Unpin>(sink: &mut S, bytes: &[u8]) -> io::Result<usize> {
-    poll_fn(|context| Pin::new(&mut *sink).poll_write(context, bytes)).await
-}
-
-/// Flushes `sink`
-async fn flush<S: AsyncWrite + Unpin>(sink: &mut S) -> io::Result<()> {
-    poll_fn(|context| Pin::new(&mut *sink).poll_flush(context)).await
-}
-
 /// A reading stack driven over an asynchronous source that seeks, a cut at a time
 ///
 /// What every asynchronous demuxer is beneath its own name: the source is
@@ -261,7 +251,7 @@ impl<S: AsyncWrite + Unpin, W: PollOutput> Muxer<S, W> {
             self.make(step);
         }
         self.write_pending().await?;
-        flush(&mut self.sink).await?;
+        poll_fn(|context| Pin::new(&mut self.sink).poll_flush(context)).await?;
 
         Ok(())
     }
@@ -299,7 +289,8 @@ impl<S: AsyncWrite + Unpin, W: PollOutput> Muxer<S, W> {
             // would leave the sink holding a part no count of the driver's
             // names, where `poll_write` takes bytes only as it reports them,
             // and the count moves before the next await.
-            let written = write(&mut self.sink, rest).await?;
+            let written =
+                poll_fn(|context| Pin::new(&mut self.sink).poll_write(context, rest)).await?;
             if written == 0 {
                 return Err(io::Error::from(io::ErrorKind::WriteZero));
             }
@@ -426,11 +417,11 @@ mod tests {
         }
     }
 
-    /// Sink taking one byte at a time, and standing still the first `hesitations` times
+    /// Sink taking one byte at a time, and standing still once it holds `hesitate_at` of them
     #[derive(Default, Debug)]
     struct Trickle {
         recording: Recording,
-        hesitations: usize,
+        hesitate_at: Option<usize>,
     }
 
     impl AsyncWrite for Trickle {
@@ -439,8 +430,8 @@ mod tests {
             context: &mut Context<'_>,
             bytes: &[u8],
         ) -> Poll<io::Result<usize>> {
-            if self.hesitations > 0 {
-                self.hesitations = self.hesitations.saturating_sub(1);
+            if self.hesitate_at == Some(self.recording.written.len()) {
+                self.hesitate_at = None;
                 context.waker().wake_by_ref();
 
                 return Poll::Pending;
@@ -491,11 +482,11 @@ mod tests {
         })
     }
 
-    /// A muxer onto a sink standing still once, and taking one byte at a time after that
+    /// A muxer onto a sink taking one byte at a time, which stands still part way through the first chunk
     fn trickling() -> Muxer<Trickle, Queued> {
         Muxer::new(
             Trickle {
-                hesitations: 1,
+                hesitate_at: Some(3),
                 ..Trickle::default()
             },
             Queued::default(),
@@ -704,7 +695,7 @@ mod tests {
     }
 
     #[test]
-    fn a_step_dropped_where_the_sink_stood_still_writes_every_byte_once() {
+    fn a_step_dropped_with_a_chunk_part_written_writes_every_byte_once() {
         let mut muxer = trickling();
 
         assert!(
@@ -715,6 +706,8 @@ mod tests {
             }))
             .is_none()
         );
+        assert_eq!(muxer.sink.recording.written, b"\0\0\0".to_vec());
+
         let driven = block_on(muxer.drive(|writer| {
             writer.output.extend(framed(b"MORE"));
 
@@ -729,7 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_step_dropped_where_the_sink_stood_still_is_reported_by_the_call_that_follows() {
+    fn a_refused_step_dropped_with_a_chunk_part_written_is_reported_by_the_call_that_follows() {
         let mut muxer = trickling();
         let mut steps = 0;
 
@@ -758,7 +751,7 @@ mod tests {
     }
 
     #[test]
-    fn a_finish_dropped_where_the_sink_stood_still_makes_its_step_once() {
+    fn a_finish_dropped_with_a_chunk_part_written_makes_its_step_once() {
         let mut muxer = trickling();
         let mut steps = 0;
 
