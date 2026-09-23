@@ -62,11 +62,11 @@ impl Sample {
         }
     }
 
-    /// Returns the same sample laid down at `decode_time`
+    /// Returns the same sample, decoded at `decode_time`
     ///
-    /// The composition time offset is relative to the decode time, so it stays
-    /// as it is: the sample is composed as long after `decode_time` as it was
-    /// after the decode time it had.
+    /// The composition time offset and every other field are kept, so the
+    /// sample is composed as long after `decode_time` as it was after its
+    /// previous decode time.
     #[must_use]
     pub fn with_decode_time(self, decode_time: u64) -> Self {
         Self {
@@ -239,7 +239,7 @@ mod tests {
     use super::Sample;
 
     #[test]
-    fn a_sample_laid_down_at_another_decode_time_keeps_everything_else() {
+    fn a_sample_decoded_at_another_decode_time_keeps_everything_else() {
         let sample = Sample::new(
             1,
             3_000,
