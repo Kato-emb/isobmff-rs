@@ -236,6 +236,7 @@ mod tests {
     use crate::stsd::SampleDescriptionBox;
     use crate::stts::TimeToSampleBox;
     use crate::trak::tests::track;
+    use crate::trex::SampleFlags;
 
     /// Movie with one track, as a progressive file declares it
     fn movie() -> MovieBox {
@@ -244,7 +245,7 @@ mod tests {
 
     /// Extends box setting the defaults of a track the movie does not declare
     fn extends_of_another_track() -> MovieExtendsBox {
-        MovieExtendsBox::new(vec![TrackExtendsBox::new(7, 1, 0, 0, 0)]).unwrap()
+        MovieExtendsBox::new(vec![TrackExtendsBox::new(7, 1, 0, 0, SampleFlags::ZERO)]).unwrap()
     }
 
     /// Writes one child whole and returns the bytes it occupies

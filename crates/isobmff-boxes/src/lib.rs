@@ -98,7 +98,7 @@ pub use tfhd::{TrackFragmentHeaderBox, TrackFragmentHeaderFlags};
 pub use tkhd::TrackHeaderBox;
 pub use traf::TrackFragmentBox;
 pub use trak::TrackBox;
-pub use trex::TrackExtendsBox;
+pub use trex::{SampleFlags, TrackExtendsBox};
 pub use trun::{
     CompositionTimeOffset, StatedTrackRunSample, TrackRunBox, TrackRunBuilder, TrackRunSample,
 };
