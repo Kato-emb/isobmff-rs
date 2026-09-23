@@ -46,9 +46,10 @@ impl PaddingBitsEntry {
 /// Box that states how many bits at the end of each sample of a track are padding
 ///
 /// [`PaddingBitsBox`] (`padb`), ISO/IEC 14496-12 §8.7.6. The table holds one
-/// entry per sample, which the wire packs two to a byte; the second half of
-/// the last byte of a table counting an odd number of samples is read as
-/// nothing and written as zero.
+/// entry per sample, which the wire packs two to a byte: the earlier sample of
+/// each pair in the high half (`pad1`), the later in the low half (`pad2`). The
+/// low half of the last byte of a table counting an odd number of samples is
+/// read as nothing and written as zero.
 ///
 /// The `sample_count` field is not held: it counts the entries, so it is
 /// derived on the way out. On the way in a count that disagrees with the
@@ -103,6 +104,10 @@ impl BoxDecode for PaddingBitsBox {
             ));
         }
 
+        // Why not the low half first, as GPAC's C implementation packs a pair:
+        // §8.7.6 lays `pad1` out ahead of `pad2`, so a table GPAC wrote reads
+        // here with each pair swapped, and its last entry lost when the count
+        // is odd.
         let mut entries: Vec<PaddingBitsEntry> = packed
             .iter()
             .flat_map(|byte| [byte >> 4, *byte])
