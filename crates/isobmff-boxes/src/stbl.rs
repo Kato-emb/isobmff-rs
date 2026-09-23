@@ -548,9 +548,7 @@ pub(crate) mod tests {
             ),
             (
                 BoxType::compact(*b"stsz"),
-                encoded_child(&SampleSizeBox::new(
-                    SampleSizeEntries::PerSample(Vec::new()),
-                )),
+                encoded_child(&SampleSizeBox::from_sizes([])),
                 Error::missing_alternative_box(SAMPLE_SIZE_BOXES),
             ),
             (
@@ -614,9 +612,7 @@ pub(crate) mod tests {
         .concat();
         let one_way_twice = [
             encoded_payload(&sample_table()),
-            encoded_child(&SampleSizeBox::new(
-                SampleSizeEntries::PerSample(Vec::new()),
-            )),
+            encoded_child(&SampleSizeBox::from_sizes([])),
         ]
         .concat();
 

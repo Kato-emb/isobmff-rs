@@ -7,11 +7,10 @@ use isobmff_core::{
     FullBoxFields, FullBoxFlags,
 };
 
+use crate::nibbles;
+
 /// Length of the fields that precede the entries
 const FIXED_FIELDS_LEN: u64 = 12;
-
-/// Mask of the 4 bits one entry of a table of 4-bit entries occupies
-const FOUR_BITS: u8 = 0x0f;
 
 /// Width of the entries of a [`CompactSampleSizeBox`]
 ///
@@ -208,24 +207,11 @@ impl BoxDecode for CompactSampleSizeBox {
 
         let mut entries = Vec::new();
         match field_size {
-            FieldSize::Four => {
-                let packed = reader.take_remainder();
-                if declared.div_ceil(2) != packed.len() as u64 {
-                    return Err(Error::entry_count_mismatch(
-                        declared,
-                        (packed.len() as u64).saturating_mul(2),
-                    ));
-                }
-                entries.extend(
-                    packed
-                        .iter()
-                        .flat_map(|byte| [byte >> 4, byte & FOUR_BITS])
-                        .map(|entry_size| CompactSampleSizeEntry::new(u16::from(entry_size))),
-                );
-                if declared % 2 == 1 {
-                    entries.pop();
-                }
-            }
+            FieldSize::Four => entries.extend(
+                nibbles::unpack(reader.take_remainder(), declared)
+                    .into_iter()
+                    .map(|entry_size| CompactSampleSizeEntry::new(u16::from(entry_size))),
+            ),
             FieldSize::Eight => entries.extend(
                 reader
                     .take_remainder()
@@ -273,20 +259,14 @@ impl BoxEncode for CompactSampleSizeBox {
         writer.write_unsigned(FieldWidth::Compact, sample_count)?;
 
         // Why not narrowing with `try_from`: `new` and `from_sizes` keep every
-        // entry within the width, so the bits masked away are zero and the
-        // write cannot fail on them.
+        // entry within the width, so the bits left out are zero and the write
+        // cannot fail on them.
         let low_byte = |entry: &CompactSampleSizeEntry| {
             let [_, low] = entry.entry_size.to_be_bytes();
             low
         };
         match self.field_size {
-            FieldSize::Four => {
-                for pair in self.entries.chunks(2) {
-                    let first = pair.first().map_or(0, low_byte) & FOUR_BITS;
-                    let second = pair.get(1).map_or(0, low_byte) & FOUR_BITS;
-                    writer.write_bytes(&[first << 4 | second])?;
-                }
-            }
+            FieldSize::Four => nibbles::pack(writer, self.entries.iter().map(low_byte))?,
             FieldSize::Eight => {
                 for entry in &self.entries {
                     writer.write_bytes(&[low_byte(entry)])?;

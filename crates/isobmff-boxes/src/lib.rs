@@ -31,6 +31,7 @@ mod moof;
 mod moov;
 mod mvex;
 mod mvhd;
+mod nibbles;
 mod nmhd;
 mod padb;
 mod sample_entry;
