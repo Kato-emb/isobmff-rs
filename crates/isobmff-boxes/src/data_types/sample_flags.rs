@@ -10,7 +10,7 @@ use crate::{DegradationPriorityEntry, PaddingBitsEntry, SampleDependencyTypeEntr
 const RESERVED_BITS: u32 = 0xf000_0000;
 
 /// Bit of the `sample_flags` stating `sample_is_non_sync_sample`
-const NON_SYNC_SAMPLE: u32 = 0x0001_0000;
+const NON_SYNC_SAMPLE_BIT: u32 = 0x0001_0000;
 
 /// The `sample_flags` of a sample, which cannot state a reserved bit
 ///
@@ -44,6 +44,46 @@ pub struct SampleFlags(u32);
 impl SampleFlags {
     /// Flags of a sync sample whose other fields are all 0
     pub const ZERO: Self = Self(0);
+
+    /// Flags of a sample that depends on no other and can be decoded first
+    ///
+    /// The sample is a sync sample (ISO/IEC 14496-12 §8.6.2) whose
+    /// `sample_depends_on` is 2 (§8.8.3.1); its other fields are 0.
+    pub const SYNC_SAMPLE: Self = match (
+        SampleDependencyTypeEntry::new(0, 2, 0, 0),
+        PaddingBitsEntry::new(0),
+    ) {
+        (Some(sample_dependency_type), Some(padding_bits)) => Self::new(
+            sample_dependency_type,
+            padding_bits,
+            false,
+            DegradationPriorityEntry::new(0),
+        ),
+        // Why not unwrap: every field is within its range, so the entries
+        // always build, and a degenerate value stands in for the panic the
+        // lints forbid.
+        (None, _) | (_, None) => Self::ZERO,
+    };
+
+    /// Flags of a sample that depends on others
+    ///
+    /// The sample is left out of the sync samples (ISO/IEC 14496-12 §8.6.2)
+    /// and its `sample_depends_on` is 1 (§8.8.3.1); its other fields are 0.
+    pub const NON_SYNC_SAMPLE: Self = match (
+        SampleDependencyTypeEntry::new(0, 1, 0, 0),
+        PaddingBitsEntry::new(0),
+    ) {
+        (Some(sample_dependency_type), Some(padding_bits)) => Self::new(
+            sample_dependency_type,
+            padding_bits,
+            true,
+            DegradationPriorityEntry::new(0),
+        ),
+        // Why not unwrap: every field is within its range, so the entries
+        // always build, and a degenerate value stands in for the panic the
+        // lints forbid.
+        (None, _) | (_, None) => Self::ZERO,
+    };
 
     /// Creates the flags from the fields they state
     #[must_use]
@@ -111,7 +151,7 @@ impl SampleFlags {
     /// Returns whether the sample is left out of the sync samples
     #[must_use]
     pub const fn sample_is_non_sync_sample(self) -> bool {
-        self.0 & NON_SYNC_SAMPLE != 0
+        self.0 & NON_SYNC_SAMPLE_BIT != 0
     }
 
     /// Returns the priority an `stdp` entry states for the sample
@@ -170,6 +210,17 @@ mod tests {
                 true,
                 degradation_priority
             )
+        );
+    }
+
+    #[test]
+    fn a_sync_and_a_non_sync_sample_carry_the_words_the_layout_gives_them() {
+        assert_eq!(
+            (
+                SampleFlags::SYNC_SAMPLE.bits(),
+                SampleFlags::NON_SYNC_SAMPLE.bits()
+            ),
+            (0x0200_0000, 0x0101_0000)
         );
     }
 
