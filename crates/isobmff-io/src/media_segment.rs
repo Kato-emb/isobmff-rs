@@ -10,7 +10,7 @@ use isobmff_structure::{MediaSegmentReader, MediaSegmentWriter};
 
 use crate::Error;
 use crate::driver::{Demuxer, Muxer};
-use crate::stack::{PollOutput, ReadSamples};
+use crate::stack::{PollOutput, ReadSamples, ResumeSamples};
 
 /// Reads the samples a media segment carries off an asynchronous source that seeks
 ///
@@ -152,6 +152,12 @@ impl ReadSamples for MediaSegmentReader {
 
     fn finish(&mut self) -> Result<(), isobmff_structure::Error> {
         MediaSegmentReader::finish(self)
+    }
+}
+
+impl ResumeSamples for MediaSegmentReader {
+    fn resume_at(&mut self, offset: u64) -> Result<(), isobmff_structure::Error> {
+        MediaSegmentReader::resume_at(self, offset)
     }
 }
 

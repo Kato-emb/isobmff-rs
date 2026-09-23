@@ -10,7 +10,7 @@ use isobmff_structure::{FragmentedReader, FragmentedWriter};
 
 use crate::Error;
 use crate::driver::{Demuxer, Muxer};
-use crate::stack::{PollOutput, ReadSamples};
+use crate::stack::{PollOutput, ReadSamples, ResumeSamples};
 
 /// Reads the samples a fragmented movie file carries off an asynchronous source that seeks
 ///
@@ -151,6 +151,12 @@ impl ReadSamples for FragmentedReader {
 
     fn finish(&mut self) -> Result<(), isobmff_structure::Error> {
         FragmentedReader::finish(self)
+    }
+}
+
+impl ResumeSamples for FragmentedReader {
+    fn resume_at(&mut self, offset: u64) -> Result<(), isobmff_structure::Error> {
+        FragmentedReader::resume_at(self, offset)
     }
 }
 

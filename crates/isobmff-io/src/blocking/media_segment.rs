@@ -3,7 +3,7 @@
 use std::io::{Read, Seek, Write};
 
 use isobmff_boxes::{MovieBox, SegmentTypeBox};
-use isobmff_sample::Sample;
+use isobmff_sample::{Sample, SegmentIndex};
 use isobmff_structure::{MediaSegmentReader, MediaSegmentWriter};
 
 use super::driver::{Demuxer, Muxer};
@@ -37,8 +37,14 @@ use crate::Error;
 ///   [`Io`](crate::ErrorKind::Io) with
 ///   [`UnexpectedEof`](std::io::ErrorKind::UnexpectedEof).
 /// * A failure ends the iteration: the samples the reader had completed
-///   before it come first, then the failure once, then `None` for good. The
-///   end of the segment is the same without the failure.
+///   before it come first, then the failure once, then `None` for good,
+///   unless the reading is resumed. The end of the segment is the same
+///   without the failure.
+/// * Where an index points is the caller's to choose: the indexes the
+///   segment carries are there to read once they have come —
+///   [`segment_indexes`](Self::segment_indexes) — and
+///   [`resume_at`](Self::resume_at) restarts the reading at an offset one of
+///   them names.
 ///
 /// # Examples
 ///
@@ -114,6 +120,35 @@ impl<S: Read + Seek> MediaSegmentDemuxer<S> {
     #[must_use]
     pub const fn movie(&self) -> &MovieBox {
         self.demuxer.reader().movie()
+    }
+
+    /// Returns the subsegments of every `sidx` read so far, as [`MediaSegmentReader::segment_indexes`] holds them
+    #[must_use]
+    pub fn segment_indexes(&self) -> &[SegmentIndex] {
+        self.demuxer.reader().segment_indexes()
+    }
+
+    /// Restarts the reading at `offset` of the segment, a place an index names
+    ///
+    /// The source is sought to `offset` from where the segment begins, and
+    /// the reader is resumed there as [`MediaSegmentReader::resume_at`]
+    /// resumes it: the samples not yet taken are dropped, and the ones that
+    /// come next are those the segment carries from `offset` on — the `moof`
+    /// or `sidx` it is to start with. The demuxer resumes from reading and
+    /// from the end of the segment alike, and from a failure of the source.
+    ///
+    /// # Errors
+    ///
+    /// * [`Io`](crate::ErrorKind::Io): `offset` lies past what a seek
+    ///   names, which leaves the demuxer as it was, or the source does not
+    ///   seek there.
+    /// * [`Structure`](crate::ErrorKind::Structure): what
+    ///   [`MediaSegmentReader::resume_at`] makes of the call.
+    ///
+    /// A failure after the seek is asked for ends the samples, until a
+    /// resume succeeds.
+    pub fn resume_at(&mut self, offset: u64) -> Result<(), Error> {
+        self.demuxer.resume_at(offset)
     }
 }
 

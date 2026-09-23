@@ -33,6 +33,7 @@ mod driver;
 mod error;
 mod fragmented_movie;
 mod media_segment;
+mod movie_fragment_random_access;
 mod non_fragmented_movie;
 mod stack;
 

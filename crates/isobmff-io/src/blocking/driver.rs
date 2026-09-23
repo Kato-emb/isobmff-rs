@@ -6,7 +6,10 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use isobmff_sample::Sample;
 
 use crate::Error;
-use crate::stack::{CUT_LENGTH, PollOutput, ReadSamples};
+use crate::movie_fragment_random_access::{
+    PROBE_LEN, opens_movie_fragment_random_access, start_named_by,
+};
+use crate::stack::{CUT_LENGTH, PollOutput, ReadSamples, ResumeSamples};
 
 /// A reading stack driven over a source that seeks, a cut at a time
 ///
@@ -105,6 +108,55 @@ impl<S: Read + Seek, R: ReadSamples> Demuxer<S, R> {
         Ok(())
     }
 
+    /// Finds where the `mfra` closing the file begins, from the `mfro` closing it, and leaves the source where it stood
+    ///
+    /// # Errors
+    ///
+    /// * [`Io`](crate::ErrorKind::Io): the source does not seek from its
+    ///   end, or does not read; a source not sought back to where it stood
+    ///   ends the samples.
+    pub(crate) fn locate_movie_fragment_random_access(&mut self) -> Result<Option<u64>, Error> {
+        let located = self.probe_end();
+        // Why not leaving the source where the probe failed: reading on
+        // takes the bytes from where the source stands, so a source left
+        // elsewhere would hand the reader bytes out of place.
+        if let Err(failure) = self
+            .source
+            .seek(SeekFrom::Start(self.origin.saturating_add(self.handed)))
+        {
+            self.state = State::Over(None);
+
+            return Err(failure.into());
+        }
+
+        Ok(located?)
+    }
+
+    /// Reads the `mfro` off the end of the file, and the header of the box it names
+    fn probe_end(&mut self) -> io::Result<Option<u64>> {
+        let file_len = self
+            .source
+            .seek(SeekFrom::End(0))?
+            .saturating_sub(self.origin);
+        let Some(tail_start) = file_len.checked_sub(PROBE_LEN) else {
+            return Ok(None);
+        };
+        self.source
+            .seek(SeekFrom::Start(self.origin.saturating_add(tail_start)))?;
+        self.read_cut(PROBE_LEN)?;
+        let Some(start) = start_named_by(&self.cut, file_len) else {
+            return Ok(None);
+        };
+        self.source
+            .seek(SeekFrom::Start(self.origin.saturating_add(start)))?;
+        self.read_cut(PROBE_LEN)?;
+
+        Ok(
+            opens_movie_fragment_random_access(&self.cut, file_len.saturating_sub(start))
+                .then_some(start),
+        )
+    }
+
     /// Reads up to `length` bytes off the source into the cut, and returns how many came
     fn read_cut(&mut self, length: u64) -> io::Result<u64> {
         self.cut.clear();
@@ -115,6 +167,33 @@ impl<S: Read + Seek, R: ReadSamples> Demuxer<S, R> {
             .read_to_end(&mut self.cut)?;
 
         Ok(read as u64)
+    }
+}
+
+impl<S: Read + Seek, R: ResumeSamples> Demuxer<S, R> {
+    /// Moves the source to `offset` of the file and restarts the reader there
+    ///
+    /// # Errors
+    ///
+    /// * [`Io`](crate::ErrorKind::Io): `offset` lies past what a seek
+    ///   names, or the source does not seek there.
+    /// * [`Structure`](crate::ErrorKind::Structure): what the reader's
+    ///   `resume_at` makes of the call.
+    ///
+    /// A failure after the offset is checked ends the samples.
+    pub(crate) fn resume_at(&mut self, offset: u64) -> Result<(), Error> {
+        let position = self
+            .origin
+            .checked_add(offset)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+
+        self.state = State::Over(None);
+        self.source.seek(SeekFrom::Start(position))?;
+        self.reader.resume_at(offset)?;
+        self.handed = offset;
+        self.state = State::Reading;
+
+        Ok(())
     }
 }
 
@@ -357,6 +436,65 @@ mod tests {
             ]
         );
         assert!(demuxer.next().is_none());
+    }
+
+    #[test]
+    fn a_demuxer_resumed_past_the_end_hands_the_reader_the_file_from_the_offset_on() {
+        let mut source = io::Cursor::new(b"junkFILE".to_vec());
+        source.set_position(4);
+        let mut demuxer = Demuxer::new(source, Scripted::default()).unwrap();
+        assert_eq!(yielded(&mut demuxer), []);
+
+        demuxer.resume_at(2).unwrap();
+
+        assert_eq!(yielded(&mut demuxer), []);
+        assert_eq!(demuxer.reader().resumed_at, [2]);
+        assert_eq!(demuxer.reader().inputs, [b"FILE".to_vec(), b"LE".to_vec()]);
+    }
+
+    #[test]
+    fn a_locate_leaves_the_file_read_on_from_where_it_was_handed_over_to() {
+        let first_cut = vec![0x11; CUT_LENGTH];
+        let past_the_cut = b"PASTCUT!".to_vec();
+        let mut demuxer = Demuxer::new(
+            io::Cursor::new([first_cut.clone(), past_the_cut.clone()].concat()),
+            Scripted {
+                completed_by_input: vec![sample(b"S1")],
+                ..Scripted::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            demuxer.next().map(|sample| sample.unwrap()),
+            Some(sample(b"S1"))
+        );
+
+        assert_eq!(
+            demuxer
+                .locate_movie_fragment_random_access()
+                .map_err(|failure| failure.kind()),
+            Ok(None)
+        );
+
+        assert_eq!(yielded(&mut demuxer), []);
+        assert_eq!(demuxer.reader().inputs, [first_cut, past_the_cut]);
+    }
+
+    #[test]
+    fn an_offset_past_what_a_seek_names_is_refused_and_leaves_the_demuxer_reading() {
+        let mut source = io::Cursor::new(b"junkFILE".to_vec());
+        source.set_position(4);
+        let mut demuxer = Demuxer::new(source, Scripted::default()).unwrap();
+
+        assert_eq!(
+            demuxer
+                .resume_at(u64::MAX)
+                .map_err(|failure| failure.kind()),
+            Err(ErrorKind::Io(io::ErrorKind::InvalidInput))
+        );
+        assert_eq!(yielded(&mut demuxer), []);
+        assert_eq!(demuxer.reader().resumed_at, []);
+        assert_eq!(demuxer.reader().inputs, [b"FILE".to_vec()]);
     }
 
     #[test]
