@@ -145,7 +145,7 @@ impl<S: Read + Seek> MediaSegmentDemuxer<S> {
     /// * [`Structure`](crate::ErrorKind::Structure): what
     ///   [`MediaSegmentReader::resume_at`] makes of the call.
     ///
-    /// A failure after the seek is asked for ends the samples, until a
+    /// A failure after the offset is checked ends the samples, until a
     /// resume succeeds.
     pub fn resume_at(&mut self, offset: u64) -> Result<(), Error> {
         self.demuxer.resume_at(offset)

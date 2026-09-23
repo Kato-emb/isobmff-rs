@@ -9,7 +9,8 @@ mod tests {
     use isobmff_io::blocking::{MediaSegmentDemuxer, MediaSegmentMuxer};
     use isobmff_sample::Sample;
     use isobmff_test_support::{
-        presentation_movie, segment_file_samples, segment_file_with_samples, segment_type,
+        indexed_segment_file, presentation_movie, segment_file_samples, segment_file_with_samples,
+        segment_type,
     };
 
     #[test]
@@ -94,5 +95,62 @@ mod tests {
         });
 
         assert_eq!(read_back, segment_file_samples());
+    }
+
+    #[test]
+    fn the_sidx_read_in_order_names_the_subsegment_a_time_is_read_from() {
+        let file = indexed_segment_file();
+        let second = file.fragment_samples.get(1).unwrap();
+        let mut demuxer =
+            MediaSegmentDemuxer::new(io::Cursor::new(file.bytes.clone()), presentation_movie())
+                .unwrap();
+        assert_eq!(
+            demuxer.by_ref().collect::<Result<Vec<_>, _>>().unwrap(),
+            file.fragment_samples.concat()
+        );
+
+        let subsegment = demuxer
+            .segment_indexes()
+            .first()
+            .unwrap()
+            .subsegment_at(second.first().unwrap().decode_time())
+            .unwrap();
+        demuxer.resume_at(subsegment.extent().start).unwrap();
+
+        assert_eq!(demuxer.collect::<Result<Vec<_>, _>>().unwrap(), *second);
+    }
+
+    #[test]
+    fn the_sidx_an_asynchronous_demuxer_read_in_order_names_the_subsegment_a_time_is_read_from() {
+        let file = indexed_segment_file();
+        let second = file.fragment_samples.get(1).unwrap();
+
+        let read_back = block_on(async {
+            let mut demuxer = isobmff_io::MediaSegmentDemuxer::new(
+                Cursor::new(file.bytes.clone()),
+                presentation_movie(),
+            )
+            .await
+            .unwrap();
+            while let Some(sample) = demuxer.next().await {
+                sample.unwrap();
+            }
+
+            let subsegment = demuxer
+                .segment_indexes()
+                .first()
+                .unwrap()
+                .subsegment_at(second.first().unwrap().decode_time())
+                .unwrap();
+            demuxer.resume_at(subsegment.extent().start).await.unwrap();
+            let mut read_back = Vec::new();
+            while let Some(sample) = demuxer.next().await {
+                read_back.push(sample.unwrap());
+            }
+
+            read_back
+        });
+
+        assert_eq!(read_back, *second);
     }
 }

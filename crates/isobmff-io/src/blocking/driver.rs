@@ -171,7 +171,7 @@ impl<S: Read + Seek, R: ReadSamples> Demuxer<S, R> {
 }
 
 impl<S: Read + Seek, R: ResumeSamples> Demuxer<S, R> {
-    /// Moves the source to `offset` of the file and restarts the reader there
+    /// Restarts the reader at `offset` of the file, and moves the source there
     ///
     /// # Errors
     ///
@@ -188,9 +188,9 @@ impl<S: Read + Seek, R: ResumeSamples> Demuxer<S, R> {
             .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
 
         self.state = State::Over(None);
-        self.source.seek(SeekFrom::Start(position))?;
         self.reader.resume_at(offset)?;
         self.handed = offset;
+        self.source.seek(SeekFrom::Start(position))?;
         self.state = State::Reading;
 
         Ok(())

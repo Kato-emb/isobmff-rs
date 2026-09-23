@@ -145,7 +145,10 @@ impl<S: Read + Seek> FragmentedDemuxer<S> {
     /// it: the samples not yet taken are dropped, and the ones that come next
     /// are those the file carries from `offset` on — the `moof`, `sidx` or
     /// `mfra` it is to start with. The demuxer resumes from reading and from
-    /// the end of the file alike, and from a failure of the source.
+    /// the end of the file alike, and from a failure of the source. The movie
+    /// the fragments continue is to have come before the resume: fragments
+    /// read on from a resume before it continue no movie, which the reader
+    /// reports at the end of the file.
     ///
     /// # Errors
     ///
@@ -155,7 +158,7 @@ impl<S: Read + Seek> FragmentedDemuxer<S> {
     /// * [`Structure`](crate::ErrorKind::Structure): what
     ///   [`FragmentedReader::resume_at`] makes of the call.
     ///
-    /// A failure after the seek is asked for ends the samples, until a
+    /// A failure after the offset is checked ends the samples, until a
     /// resume succeeds.
     pub fn resume_at(&mut self, offset: u64) -> Result<(), Error> {
         self.demuxer.resume_at(offset)
@@ -187,20 +190,23 @@ impl<S: Read + Seek> FragmentedDemuxer<S> {
     /// use isobmff_sample::movie_fragment_random_access::sync_sample_at;
     /// # use isobmff_test_support::indexed_fragmented_file;
     /// # let file = indexed_fragmented_file();
-    /// # let (bytes, second_moof) = (file.bytes, file.moof_offsets[1]);
+    /// # let (bytes, time) = (file.bytes, file.fragment_samples[1][0].decode_time());
     /// let mut demuxer = FragmentedDemuxer::new(Cursor::new(bytes))?;
+    ///
+    /// // The movie is read as the first sample comes
+    /// demuxer.next().expect("the file carries samples")?;
     ///
     /// // The `mfra` closing the file is read, with no sample coming out of it
     /// let mfra = demuxer.locate_movie_fragment_random_access()?.expect("the file closes with an mfra");
     /// demuxer.resume_at(mfra)?;
     /// assert!(demuxer.next().is_none());
     ///
-    /// // The fragment holding the last sync sample at or before a time is read from its `moof` on
+    /// // The fragment holding the last sync sample at or before `time` is read from its `moof` on
     /// let tfra = &demuxer.movie_fragment_random_access().expect("the mfra has been read").tfra()[0];
-    /// let moof_offset = sync_sample_at(tfra, 93_000).expect("a sync sample lies before").moof_offset();
-    /// assert_eq!(moof_offset, second_moof);
-    /// demuxer.resume_at(moof_offset)?;
-    /// assert!(demuxer.next().is_some());
+    /// let sync_sample = sync_sample_at(tfra, time).expect("a sync sample lies at or before");
+    /// demuxer.resume_at(sync_sample.moof_offset())?;
+    /// let resumed = demuxer.next().expect("the fragment carries samples")?;
+    /// assert_eq!(resumed.decode_time(), time);
     /// # Ok::<(), isobmff_io::Error>(())
     /// ```
     pub fn locate_movie_fragment_random_access(&mut self) -> Result<Option<u64>, Error> {

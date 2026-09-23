@@ -10,6 +10,15 @@
 //! a fragmented movie file (ISO/IEC 14496-12 Annex A.8), a non-fragmented one
 //! (§8.2.1 and §8.7), and a media segment (§8.16).
 //!
+//! A demuxer of a fragmented movie file or of a media segment reads the file
+//! from a place an index names as well as from its start: the indexes it
+//! passes — a `sidx` (§8.16.3), and in a fragmented movie file an `mfra`
+//! (§8.8.9) — are there to read as values, and `resume_at` restarts the
+//! reading at the offset of the fragment the caller looked a time up in.
+//! Where to look and where to resume are the caller's: the demuxer of a
+//! fragmented movie file reads the end of the file for its `mfra` when asked
+//! (`locate_movie_fragment_random_access`), and never on its own.
+//!
 //! The I/O a driver stands over settles where it lives: every driver over
 //! `std::io` is in [`blocking`], and the crate root holds the ones over
 //! `futures::io`. The verbs of the two are the same names, the asynchronous
