@@ -13,7 +13,7 @@ use structure::{FragmentedDisposition, FragmentedStructure};
 mod tests {
     use alloc::vec::Vec;
 
-    use isobmff_boxes::TrackExtendsBox;
+    use isobmff_boxes::{SampleFlags, TrackExtendsBox};
     use isobmff_sample::Sample;
     use isobmff_test_support::fragmented_movie;
 
@@ -21,7 +21,7 @@ mod tests {
 
     /// One sample of track 1, the first of its fragment
     pub(super) fn sample() -> Sample {
-        Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec())
+        Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec())
     }
 
     /// A file of one fragment carrying [`sample`], with no brands
@@ -30,7 +30,13 @@ mod tests {
         let mut file = Vec::new();
 
         writer
-            .handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0)))
+            .handle_movie(fragmented_movie(TrackExtendsBox::new(
+                1,
+                1,
+                1_024,
+                0,
+                SampleFlags::ZERO,
+            )))
             .unwrap();
         writer.begin_fragment(1).unwrap();
         writer.handle_sample(sample()).unwrap();

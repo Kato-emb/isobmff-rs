@@ -176,13 +176,4 @@ pub enum ErrorKind {
     /// [`established_track_id`](crate::Error::established_track_id) the
     /// one the chunk holds.
     TrackIdMismatch,
-    /// Sample sets a reserved bit of its flags, which no sample table carries
-    ///
-    /// A sample table states the fields of the `sample_flags` (ISO/IEC
-    /// 14496-12 §8.8.3.1) in tables of their own, and none of them holds the
-    /// 4 reserved bits, so a sample setting one is refused.
-    /// [`track_id`](crate::Error::track_id) is the track it belongs to,
-    /// and [`sample_flags`](crate::Error::sample_flags) the flags it
-    /// states.
-    UnsupportedSampleFlags,
 }

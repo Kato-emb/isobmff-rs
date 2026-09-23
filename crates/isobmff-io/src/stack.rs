@@ -42,6 +42,7 @@ pub(crate) mod tests {
     use alloc::vec::Vec;
     use core::ops::Range;
 
+    use isobmff_boxes::SampleFlags;
     use isobmff_core::{BoxHeader, BoxType};
     use isobmff_sample::Sample;
     use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
@@ -108,7 +109,7 @@ pub(crate) mod tests {
 
     /// A sample of track 1 carrying `data`
     pub(crate) fn sample(data: &[u8]) -> Sample {
-        Sample::new(1, 0, 1, 0, 0, 1, data.to_vec())
+        Sample::new(1, 0, 1, 0, SampleFlags::ZERO, 1, data.to_vec())
     }
 
     /// The bytes a `free` box of `payload` is framed as, one `EventBytes` a step

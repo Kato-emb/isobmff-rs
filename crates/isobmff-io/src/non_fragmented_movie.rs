@@ -179,6 +179,7 @@ impl ReadSamples for NonFragmentedReader {
 /// use futures_executor::block_on;
 /// use futures_util::io::Cursor;
 ///
+/// use isobmff_boxes::SampleFlags;
 /// use isobmff_io::{NonFragmentedDemuxer, NonFragmentedMuxer};
 /// use isobmff_sample::Sample;
 /// # use isobmff_test_support::{file_type, unfragmented_movie};
@@ -191,10 +192,10 @@ impl ReadSamples for NonFragmentedReader {
 ///
 ///     // Two chunks of track 1, written to the file as they come
 ///     muxer.begin_chunk().await?;
-///     muxer.handle_sample(Sample::new(1, 0, 3_000, 0, 0, 1, b"SAMP".to_vec())).await?;
-///     muxer.handle_sample(Sample::new(1, 3_000, 3_000, 0, 0, 1, b"DATA".to_vec())).await?;
+///     muxer.handle_sample(Sample::new(1, 0, 3_000, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec())).await?;
+///     muxer.handle_sample(Sample::new(1, 3_000, 3_000, 0, SampleFlags::ZERO, 1, b"DATA".to_vec())).await?;
 ///     muxer.begin_chunk().await?;
-///     muxer.handle_sample(Sample::new(1, 6_000, 3_000, 0, 0, 1, b"LAST".to_vec())).await?;
+///     muxer.handle_sample(Sample::new(1, 6_000, 3_000, 0, SampleFlags::ZERO, 1, b"LAST".to_vec())).await?;
 ///     muxer.finish().await?;
 ///
 ///     // Read back, the samples come out as they were laid down
@@ -301,6 +302,7 @@ mod tests {
 
     use futures_executor::block_on;
     use futures_util::io::Cursor;
+    use isobmff_boxes::SampleFlags;
     use isobmff_sample::Sample;
     use isobmff_test_support::{SAMPLE_DURATION, file_type, non_fragmented_file, written};
 
@@ -327,7 +329,7 @@ mod tests {
                 0,
                 SAMPLE_DURATION,
                 0,
-                0,
+                SampleFlags::ZERO,
                 1,
                 b"SAMP".to_vec()
             )]

@@ -30,6 +30,9 @@
 
 use core::ops::Range;
 
+use isobmff::boxes::{
+    DegradationPriorityEntry, PaddingBitsEntry, SampleDependencyTypeEntry, SampleFlags,
+};
 use isobmff::sample::{Error, ErrorKind, Sample, SampleExtent, SampleReader};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
@@ -110,7 +113,11 @@ fuzz_target!(|input: Input<'_>| {
                 read(sample_size_limit, &handed, together),
                 modelled(sample_size_limit, &handed, input.file, together),
                 "the reader did not do with the extents held {} what the contract states for each",
-                if together { "together" } else { "one at a time" }
+                if together {
+                    "together"
+                } else {
+                    "one at a time"
+                }
             );
         }
     }
@@ -150,7 +157,12 @@ fn handed_over<'file>(steps: &[Step], file: &'file [u8], pass: Pass) -> Vec<Hand
                     u64::from(decode_time),
                     u32::from(sample_duration),
                     i64::from(sample_composition_time_offset),
-                    u32::from(sample_flags),
+                    SampleFlags::new(
+                        SampleDependencyTypeEntry::default(),
+                        PaddingBitsEntry::default(),
+                        false,
+                        DegradationPriorityEntry::new(u16::from(sample_flags)),
+                    ),
                     1,
                     1,
                     start..start.saturating_add(u64::from(len)),
@@ -302,7 +314,10 @@ fn modelled(sample_size_limit: u64, handed: &[Handed<'_>], file: &[u8], together
             Handed::Data(offset, data) => {
                 let arriving = *offset..offset.saturating_add(data.len() as u64);
 
-                for pending in followed.iter_mut().filter(|pending| pending.whole_at.is_none()) {
+                for pending in followed
+                    .iter_mut()
+                    .filter(|pending| pending.whole_at.is_none())
+                {
                     let named = pending.extent.extent();
                     let lacking_from = named.start.saturating_add(pending.gathered);
                     if arriving.contains(&lacking_from) {

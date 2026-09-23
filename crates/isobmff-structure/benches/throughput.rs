@@ -30,7 +30,10 @@
 use core::hint::black_box;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
-use isobmff_boxes::{FileTypeBox, MovieBox, MovieExtendsBox, MovieHeaderBox, TrackExtendsBox};
+use isobmff_boxes::{
+    DegradationPriorityEntry, FileTypeBox, MovieBox, MovieExtendsBox, MovieHeaderBox,
+    PaddingBitsEntry, SampleDependencyTypeEntry, SampleFlags, TrackExtendsBox,
+};
 use isobmff_core::{BoxHeader, BoxType, Mp4EpochSeconds};
 use isobmff_sample::{MovieFragmentWriter, Sample};
 use isobmff_sequence::{BoxEvent, BoxReader, BoxWriter};
@@ -42,6 +45,14 @@ const SAMPLE_DURATION: u32 = 1_000;
 
 /// Ticks a second the benchmarked movies are timed in
 const TIMESCALE: u32 = 90_000;
+
+/// Flags stating every field a `sample_flags` word carries at its highest value
+const EVERY_FIELD_AT_ITS_HIGHEST: SampleFlags = SampleFlags::new(
+    SampleDependencyTypeEntry::new(3, 3, 3, 3).unwrap(),
+    PaddingBitsEntry::new(7).unwrap(),
+    true,
+    DegradationPriorityEntry::new(u16::MAX),
+);
 
 /// Chunk the arriving bytes are handed over in, except where a benchmark varies it
 const DEFAULT_ARRIVING_CHUNK_LEN: usize = 64 * 1024;
@@ -98,7 +109,9 @@ impl Composition {
             self.track_ids().map(track).collect(),
             MovieExtendsBox::new(
                 self.track_ids()
-                    .map(|track_id| TrackExtendsBox::new(track_id, 9, 1, 1, u32::MAX))
+                    .map(|track_id| {
+                        TrackExtendsBox::new(track_id, 9, 1, 1, EVERY_FIELD_AT_ITS_HIGHEST)
+                    })
                     .collect(),
             ),
         )
@@ -120,7 +133,7 @@ impl Composition {
                             *decode_time,
                             SAMPLE_DURATION,
                             0,
-                            0,
+                            SampleFlags::ZERO,
                             1,
                             vec![0xab; self.sample_len],
                         );

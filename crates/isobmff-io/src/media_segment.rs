@@ -53,7 +53,7 @@ use crate::stack::{PollOutput, ReadSamples};
 /// use futures_executor::block_on;
 /// use futures_util::io::Cursor;
 ///
-/// use isobmff_boxes::TrackExtendsBox;
+/// use isobmff_boxes::{SampleFlags, TrackExtendsBox};
 /// use isobmff_io::{MediaSegmentDemuxer, MediaSegmentMuxer};
 /// use isobmff_sample::Sample;
 /// # use isobmff_test_support::{fragmented_movie, segment_type};
@@ -63,13 +63,13 @@ use crate::stack::{PollOutput, ReadSamples};
 ///     let mut muxer = MediaSegmentMuxer::new(&mut segment);
 ///     muxer.handle_segment_type(segment_type()).await?;
 ///     muxer.begin_fragment(1).await?;
-///     muxer.handle_sample(Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec())).await?;
-///     muxer.handle_sample(Sample::new(1, 1_024, 1_024, 0, 0, 1, b"DATA".to_vec())).await?;
+///     muxer.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec())).await?;
+///     muxer.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec())).await?;
 ///     muxer.finish_fragment().await?;
 ///     muxer.finish().await?;
 ///
 ///     // The samples are read off the segment as they were laid out
-///     let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0));
+///     let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO));
 ///     let mut demuxer = MediaSegmentDemuxer::new(Cursor::new(segment), movie).await?;
 ///     let mut read_back = Vec::new();
 ///     while let Some(sample) = demuxer.next().await {
@@ -186,6 +186,7 @@ impl ReadSamples for MediaSegmentReader {
 /// ```
 /// use futures_executor::block_on;
 ///
+/// use isobmff_boxes::SampleFlags;
 /// use isobmff_io::MediaSegmentMuxer;
 /// use isobmff_sample::Sample;
 /// # use isobmff_test_support::segment_type;
@@ -199,8 +200,8 @@ impl ReadSamples for MediaSegmentReader {
 ///
 ///     // One fragment of two samples of track 1, written to the segment as it is closed
 ///     muxer.begin_fragment(1).await?;
-///     muxer.handle_sample(Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec())).await?;
-///     muxer.handle_sample(Sample::new(1, 1_024, 1_024, 0, 0, 1, b"DATA".to_vec())).await?;
+///     muxer.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec())).await?;
+///     muxer.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec())).await?;
 ///     muxer.finish_fragment().await?;
 ///     muxer.finish().await
 /// })

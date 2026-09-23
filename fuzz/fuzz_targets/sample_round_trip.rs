@@ -25,11 +25,14 @@
 
 #![no_main]
 
-use isobmff::boxes::{MovieBox, TrackExtendsBox};
+use isobmff::boxes::{
+    DegradationPriorityEntry, MovieBox, PaddingBitsEntry, SampleDependencyTypeEntry, SampleFlags,
+    TrackExtendsBox,
+};
 use isobmff::sample::Sample;
 use isobmff::structure::{Error, ErrorKind, FragmentedReader, FragmentedWriter};
 use isobmff_test_support::file_type;
-use libfuzzer_sys::arbitrary::{self, Arbitrary};
+use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
 
 #[path = "helpers/movie.rs"]
@@ -73,7 +76,8 @@ struct Stated {
     /// Whether the sample belongs to the second of the tracks the movie declares
     second_track: bool,
     duration: u16,
-    flags: u32,
+    #[arbitrary(with = sample_flags)]
+    flags: SampleFlags,
     composition_time_offset: i16,
     /// Bytes of the sample data this sample takes
     length: u8,
@@ -102,10 +106,21 @@ fuzz_target!(|input: Input<'_>| {
     read_back_as_handed_over(&read_back_again, &first_pass);
 });
 
+/// Reads a `sample_flags` word, passing over one that sets a reserved bit
+fn sample_flags(unstructured: &mut Unstructured<'_>) -> arbitrary::Result<SampleFlags> {
+    SampleFlags::from_bits(unstructured.arbitrary()?).ok_or(arbitrary::Error::IncorrectFormat)
+}
+
 /// Movie of two fragmented tracks, stating defaults no fragment falls back on
 fn movie() -> Option<MovieBox> {
+    let every_field_at_its_highest = SampleFlags::new(
+        SampleDependencyTypeEntry::new(3, 3, 3, 3)?,
+        PaddingBitsEntry::new(7)?,
+        true,
+        DegradationPriorityEntry::new(u16::MAX),
+    );
     let never_fallen_back_on =
-        |position| TrackExtendsBox::new(track_id_of(position), 9, 1, 1, u32::MAX);
+        |position| TrackExtendsBox::new(track_id_of(position), 9, 1, 1, every_field_at_its_highest);
 
     movie_of((0..TRACK_COUNT).map(never_fallen_back_on).collect())
 }
@@ -244,7 +259,15 @@ fn drained_into(writer: &mut FragmentedWriter, file: &mut Vec<u8>) {
 
 /// A sample of the first track, for the calls a refused or finished writer takes
 fn a_sample() -> Sample {
-    Sample::new(track_id_of(0), 0, 1, 0, 0, SAMPLE_DESCRIPTION_INDEX, Vec::new())
+    Sample::new(
+        track_id_of(0),
+        0,
+        1,
+        0,
+        SampleFlags::ZERO,
+        SAMPLE_DESCRIPTION_INDEX,
+        Vec::new(),
+    )
 }
 
 /// The samples `file` carries, read back through the structure it was laid down as

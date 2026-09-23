@@ -2,12 +2,11 @@
 
 use alloc::vec::Vec;
 
-use isobmff_boxes::{CompositionTimeOffset, MovieBox, TrackBox};
+use isobmff_boxes::{CompositionTimeOffset, MovieBox, SampleFlags, TrackBox};
 
 use crate::error::Error;
 use crate::sample::SampleExtent;
 use crate::sample_description::SampleDescriptions;
-use crate::sample_flags::SampleFlagFields;
 
 /// Resolves the samples the sample tables of `movie` declare, in the order their bytes lie in the file
 ///
@@ -28,7 +27,7 @@ use crate::sample_flags::SampleFlagFields;
 /// fields of the `sample_flags` laid out as §8.8.3.1 lays them out in a movie
 /// fragment. A track carrying none of them has every sample composed when it
 /// is decoded and every sample a sync sample, so its samples come out with a
-/// composition time offset of zero and `sample_flags` of zero, and a table
+/// composition time offset of zero and [`SampleFlags::ZERO`], and a table
 /// missing on its own leaves its fields zero, or the sample a sync sample for
 /// the `stss`. A track declaring no sample — one carried in fragments —
 /// contributes nothing, and a chunk its `stsc` lays no run over holds none.
@@ -138,12 +137,8 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
                     .next_if(|entry| u64::from(entry.sample_number()) == sample_number)
                     .is_some()
             });
-            let sample_flags = SampleFlagFields {
-                dependency,
-                padding,
-                sample_is_non_sync_sample: !is_sync_sample,
-                degradation_priority,
-            };
+            let sample_flags =
+                SampleFlags::new(dependency, padding, !is_sync_sample, degradation_priority);
             let data_end = data_offset
                 .checked_add(u64::from(size))
                 .ok_or(Error::data_offset_overflow(track_id))?;
@@ -153,7 +148,7 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
                 decode_time,
                 delta,
                 offset,
-                sample_flags.to_sample_flags(),
+                sample_flags,
                 run.sample_description_index(),
                 data_reference_index,
                 data_offset..data_end,
@@ -208,10 +203,10 @@ mod tests {
         ChunkLargeOffsetBox, ChunkLargeOffsetEntry, ChunkOffsetBox, ChunkOffsetEntry, ChunkOffsets,
         CompactSampleSizeBox, CompositionOffsetBox, CompositionTimeOffset, DegradationPriorityBox,
         DegradationPriorityEntry, MovieBox, MovieHeaderBox, PaddingBitsBox, PaddingBitsEntry,
-        SampleDependencyTypeBox, SampleDependencyTypeEntry, SampleDescriptionBox, SampleSizeBox,
-        SampleSizeEntries, SampleSizeEntry, SampleSizes, SampleTableBox, SampleToChunkBox,
-        SampleToChunkEntry, SyncSampleBox, SyncSampleEntry, TimeToSampleBox, TimeToSampleEntry,
-        TrackBox,
+        SampleDependencyTypeBox, SampleDependencyTypeEntry, SampleDescriptionBox, SampleFlags,
+        SampleSizeBox, SampleSizeEntries, SampleSizeEntry, SampleSizes, SampleTableBox,
+        SampleToChunkBox, SampleToChunkEntry, SyncSampleBox, SyncSampleEntry, TimeToSampleBox,
+        TimeToSampleEntry, TrackBox,
     };
     use isobmff_core::{AnyBox, BoxType, Mp4EpochSeconds};
     use isobmff_test_support::{
@@ -345,7 +340,16 @@ mod tests {
         sample_duration: u32,
         data: Range<u64>,
     ) -> SampleExtent {
-        SampleExtent::new(track_id, decode_time, sample_duration, 0, 0, 1, 1, data)
+        SampleExtent::new(
+            track_id,
+            decode_time,
+            sample_duration,
+            0,
+            SampleFlags::ZERO,
+            1,
+            1,
+            data,
+        )
     }
 
     /// Resolves the samples of `movie`, whole
@@ -485,7 +489,7 @@ mod tests {
         assert_eq!(
             resolved(&movie(vec![trak])),
             Ok(vec![
-                SampleExtent::new(1, 0, 100, 0, 0, 2, 1, 100..104),
+                SampleExtent::new(1, 0, 100, 0, SampleFlags::ZERO, 2, 1, 100..104),
                 extent(1, 100, 100, 200..204),
             ])
         );
@@ -519,32 +523,65 @@ mod tests {
 
     #[test]
     fn the_optional_tables_state_the_offset_and_the_flags_of_each_sample() {
+        let dependencies = [
+            SampleDependencyTypeEntry::new(2, 2, 1, 2).unwrap(),
+            SampleDependencyTypeEntry::new(0, 1, 0, 0).unwrap(),
+            SampleDependencyTypeEntry::new(3, 1, 2, 1).unwrap(),
+        ];
+        let paddings = [
+            PaddingBitsEntry::new(5).unwrap(),
+            PaddingBitsEntry::new(0).unwrap(),
+            PaddingBitsEntry::new(7).unwrap(),
+        ];
+        let priorities = [
+            DegradationPriorityEntry::new(3),
+            DegradationPriorityEntry::new(0),
+            DegradationPriorityEntry::new(0xffff),
+        ];
         let trak = three_samples_stating(|stbl| {
             stbl.with_ctts(ctts(&[8, -2, 0]))
                 .with_stss(stss(&[1, 3]))
-                .with_sdtp(SampleDependencyTypeBox::new(vec![
-                    SampleDependencyTypeEntry::new(2, 2, 1, 2).unwrap(),
-                    SampleDependencyTypeEntry::new(0, 1, 0, 0).unwrap(),
-                    SampleDependencyTypeEntry::new(3, 1, 2, 1).unwrap(),
-                ]))
-                .with_padb(PaddingBitsBox::new(vec![
-                    PaddingBitsEntry::new(5).unwrap(),
-                    PaddingBitsEntry::new(0).unwrap(),
-                    PaddingBitsEntry::new(7).unwrap(),
-                ]))
-                .with_stdp(DegradationPriorityBox::new(vec![
-                    DegradationPriorityEntry::new(3),
-                    DegradationPriorityEntry::new(0),
-                    DegradationPriorityEntry::new(0xffff),
-                ]))
+                .with_sdtp(SampleDependencyTypeBox::new(dependencies.to_vec()))
+                .with_padb(PaddingBitsBox::new(paddings.to_vec()))
+                .with_stdp(DegradationPriorityBox::new(priorities.to_vec()))
         });
+        let [first_dependency, second_dependency, third_dependency] = dependencies;
+        let [first_padding, second_padding, third_padding] = paddings;
+        let [first_priority, second_priority, third_priority] = priorities;
 
         assert_eq!(
             resolved(&movie(vec![trak])),
             Ok(vec![
-                SampleExtent::new(1, 0, 100, 8, 0x0a6a_0003, 1, 1, 100..104),
-                SampleExtent::new(1, 100, 100, -2, 0x0101_0000, 1, 1, 104..108),
-                SampleExtent::new(1, 200, 100, 0, 0x0d9e_ffff, 1, 1, 108..112),
+                SampleExtent::new(
+                    1,
+                    0,
+                    100,
+                    8,
+                    SampleFlags::new(first_dependency, first_padding, false, first_priority),
+                    1,
+                    1,
+                    100..104
+                ),
+                SampleExtent::new(
+                    1,
+                    100,
+                    100,
+                    -2,
+                    SampleFlags::new(second_dependency, second_padding, true, second_priority),
+                    1,
+                    1,
+                    104..108
+                ),
+                SampleExtent::new(
+                    1,
+                    200,
+                    100,
+                    0,
+                    SampleFlags::new(third_dependency, third_padding, false, third_priority),
+                    1,
+                    1,
+                    108..112
+                ),
             ])
         );
     }
@@ -554,20 +591,26 @@ mod tests {
         let listing_no_sync_sample = three_samples_stating(|stbl| stbl.with_stss(stss(&[])));
         let composing_the_second_late =
             three_samples_stating(|stbl| stbl.with_ctts(ctts(&[0, 16, 0])));
+        let non_sync = SampleFlags::new(
+            SampleDependencyTypeEntry::default(),
+            PaddingBitsEntry::default(),
+            true,
+            DegradationPriorityEntry::default(),
+        );
 
         assert_eq!(
             resolved(&movie(vec![listing_no_sync_sample])),
             Ok(vec![
-                SampleExtent::new(1, 0, 100, 0, 0x0001_0000, 1, 1, 100..104),
-                SampleExtent::new(1, 100, 100, 0, 0x0001_0000, 1, 1, 104..108),
-                SampleExtent::new(1, 200, 100, 0, 0x0001_0000, 1, 1, 108..112),
+                SampleExtent::new(1, 0, 100, 0, non_sync, 1, 1, 100..104),
+                SampleExtent::new(1, 100, 100, 0, non_sync, 1, 1, 104..108),
+                SampleExtent::new(1, 200, 100, 0, non_sync, 1, 1, 108..112),
             ])
         );
         assert_eq!(
             resolved(&movie(vec![composing_the_second_late])),
             Ok(vec![
                 extent(1, 0, 100, 100..104),
-                SampleExtent::new(1, 100, 100, 16, 0, 1, 1, 104..108),
+                SampleExtent::new(1, 100, 100, 16, SampleFlags::ZERO, 1, 1, 104..108),
                 extent(1, 200, 100, 108..112),
             ])
         );

@@ -69,10 +69,7 @@ use crate::sample_table_writer::open_track::OpenTrack;
 ///   [`SampleDescriptionIndexMismatch`](crate::ErrorKind::SampleDescriptionIndexMismatch).
 /// * A sample stating a composition time offset no version of a `ctts`
 ///   writes is
-///   [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange),
-///   and one setting a reserved bit of its `sample_flags`, which no table
-///   states,
-///   [`UnsupportedSampleFlags`](crate::ErrorKind::UnsupportedSampleFlags).
+///   [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange).
 /// * A chunk holding more samples than an `stsc` entry counts, or numbered
 ///   past what one reaches, is reported by [`finish`](Self::finish), where the
 ///   tables are built: the failure of the box, carried on
@@ -92,7 +89,8 @@ use crate::sample_table_writer::open_track::OpenTrack;
 ///
 /// ```
 /// use isobmff_boxes::{
-///     ChunkOffsetBox, ChunkOffsetEntry, ChunkOffsets, SampleToChunkBox, SampleToChunkEntry,
+///     ChunkOffsetBox, ChunkOffsetEntry, ChunkOffsets, SampleFlags, SampleToChunkBox,
+///     SampleToChunkEntry,
 /// };
 /// use isobmff_sample::{Sample, SampleTableWriter};
 ///
@@ -100,10 +98,10 @@ use crate::sample_table_writer::open_track::OpenTrack;
 ///
 /// // Two samples of track 1 in a chunk at 1000, then one of track 2 in a chunk at 1008
 /// writer.begin_chunk(1_000)?;
-/// assert_eq!(writer.handle_sample(Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec()))?, b"SAMP");
-/// assert_eq!(writer.handle_sample(Sample::new(1, 1_024, 1_024, 0, 0, 1, b"DATA".to_vec()))?, b"DATA");
+/// assert_eq!(writer.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?, b"SAMP");
+/// assert_eq!(writer.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?, b"DATA");
 /// writer.begin_chunk(1_008)?;
-/// writer.handle_sample(Sample::new(2, 0, 512, 0, 0, 1, b"MORE".to_vec()))?;
+/// writer.handle_sample(Sample::new(2, 0, 512, 0, SampleFlags::ZERO, 1, b"MORE".to_vec()))?;
 ///
 /// // Each track gets the tables its samples were laid out in
 /// let tables = writer.finish()?;
@@ -339,8 +337,6 @@ impl SampleTableWriter {
     /// * [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange):
     ///   the sample states a composition time offset neither version of a
     ///   `ctts` writes.
-    /// * [`UnsupportedSampleFlags`](crate::ErrorKind::UnsupportedSampleFlags):
-    ///   the sample sets a reserved bit of its `sample_flags`.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
@@ -431,8 +427,8 @@ mod tests {
 
     use isobmff_boxes::{
         ChunkLargeOffsetBox, ChunkLargeOffsetEntry, ChunkOffsetBox, ChunkOffsetEntry, ChunkOffsets,
-        SampleSizeBox, SampleSizeEntries, SampleSizeEntry, SampleSizes, SampleToChunkBox,
-        SampleToChunkEntry, TimeToSampleBox, TimeToSampleEntry,
+        SampleFlags, SampleSizeBox, SampleSizeEntries, SampleSizeEntry, SampleSizes,
+        SampleToChunkBox, SampleToChunkEntry, TimeToSampleBox, TimeToSampleEntry,
     };
 
     use super::{SampleTableWriter, SampleTables};
@@ -441,7 +437,15 @@ mod tests {
 
     /// Sample of `track_id` at `decode_time` lasting 1024 units, carrying `data`
     pub(super) fn sample(track_id: u32, decode_time: u64, data: &[u8]) -> Sample {
-        Sample::new(track_id, decode_time, 1_024, 0, 0, 1, data.to_vec())
+        Sample::new(
+            track_id,
+            decode_time,
+            1_024,
+            0,
+            SampleFlags::ZERO,
+            1,
+            data.to_vec(),
+        )
     }
 
     /// Lays `chunks` out, each `(chunk_offset, samples)`, and hands back the tables
@@ -633,7 +637,8 @@ mod tests {
 
     #[test]
     fn samples_of_one_chunk_described_by_two_entries_are_refused() {
-        let described_by_the_second = Sample::new(1, 1_024, 1_024, 0, 0, 2, b"BBBB".to_vec());
+        let described_by_the_second =
+            Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 2, b"BBBB".to_vec());
         let mut writer = SampleTableWriter::new();
 
         writer.begin_chunk(1_000).unwrap();

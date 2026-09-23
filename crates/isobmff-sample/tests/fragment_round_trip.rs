@@ -2,7 +2,10 @@
 
 #[cfg(test)]
 mod tests {
-    use isobmff_boxes::TrackExtendsBox;
+    use isobmff_boxes::{
+        DegradationPriorityEntry, PaddingBitsEntry, SampleDependencyTypeEntry, SampleFlags,
+        TrackExtendsBox,
+    };
     use isobmff_core::BoxEncode as _;
     use isobmff_sample::movie_fragment::sample_extents;
     use isobmff_sample::{MovieFragmentWriter, Sample, SampleExtent, TrackDecodeTimes};
@@ -16,11 +19,23 @@ mod tests {
 
     #[test]
     fn the_samples_a_fragment_is_written_from_resolve_back_out_of_it() {
-        let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 0, 0, 0));
+        let independent = SampleFlags::new(
+            SampleDependencyTypeEntry::new(0, 2, 0, 0).unwrap(),
+            PaddingBitsEntry::default(),
+            false,
+            DegradationPriorityEntry::default(),
+        );
+        let dependent = SampleFlags::new(
+            SampleDependencyTypeEntry::new(0, 1, 0, 0).unwrap(),
+            PaddingBitsEntry::default(),
+            true,
+            DegradationPriorityEntry::default(),
+        );
+        let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 0, 0, SampleFlags::ZERO));
         let samples = [
-            Sample::new(1, 0, 3_000, 0, 0x0200_0000, 1, b"AAAAAAAA".to_vec()),
-            Sample::new(1, 3_000, 3_000, 8, 0x0101_0000, 1, b"BBBB".to_vec()),
-            Sample::new(1, 6_000, 1_500, -8, 0x0101_0000, 1, b"CC".to_vec()),
+            Sample::new(1, 0, 3_000, 0, independent, 1, b"AAAAAAAA".to_vec()),
+            Sample::new(1, 3_000, 3_000, 8, dependent, 1, b"BBBB".to_vec()),
+            Sample::new(1, 6_000, 1_500, -8, dependent, 1, b"CC".to_vec()),
         ];
         let mut writer = MovieFragmentWriter::new();
 
@@ -48,7 +63,7 @@ mod tests {
                     0,
                     3_000,
                     0,
-                    0x0200_0000,
+                    independent,
                     1,
                     1,
                     data_start..data_start + 8
@@ -58,7 +73,7 @@ mod tests {
                     3_000,
                     3_000,
                     8,
-                    0x0101_0000,
+                    dependent,
                     1,
                     1,
                     data_start + 8..data_start + 12
@@ -68,7 +83,7 @@ mod tests {
                     6_000,
                     1_500,
                     -8,
-                    0x0101_0000,
+                    dependent,
                     1,
                     1,
                     data_start + 12..data_start + 14

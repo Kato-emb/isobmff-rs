@@ -14,11 +14,11 @@
 use std::ops::Range;
 
 use isobmff::boxes::{
-    CompositionTimeOffset, MovieBox, MovieFragmentBox, MovieFragmentHeaderBox, TrackExtendsBox,
-    TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
+    CompositionTimeOffset, MovieBox, MovieFragmentBox, MovieFragmentHeaderBox, SampleFlags,
+    TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
     TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
 };
-use libfuzzer_sys::arbitrary::{self, Arbitrary};
+use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
 
 #[path = "../helpers/movie.rs"]
 mod movie;
@@ -68,7 +68,8 @@ pub struct Input<'bytes> {
 pub struct TrackDefaults {
     sample_duration: u16,
     sample_size: u8,
-    sample_flags: u32,
+    #[arbitrary(with = sample_flags)]
+    sample_flags: SampleFlags,
 }
 
 /// One movie fragment: where it lies, and the track fragments it carries
@@ -124,7 +125,8 @@ pub enum StatedAt {
 pub struct TrackRun {
     offset: TrackRunOffset,
     /// Flags the first sample takes, where the rows of the track run state none
-    first_sample_flags: Option<u32>,
+    #[arbitrary(with = first_sample_flags)]
+    first_sample_flags: Option<SampleFlags>,
     /// Whether the rows state an offset from their decode time to their composition time
     states_composition_time_offset: bool,
     rows: Vec<Row>,
@@ -146,8 +148,25 @@ pub enum TrackRunOffset {
 pub struct Row {
     size: u8,
     duration: u16,
-    flags: u32,
+    #[arbitrary(with = sample_flags)]
+    flags: SampleFlags,
     composition_time_offset: i16,
+}
+
+/// Reads a `sample_flags` word, passing over one that sets a reserved bit
+fn sample_flags(unstructured: &mut Unstructured<'_>) -> arbitrary::Result<SampleFlags> {
+    SampleFlags::from_bits(unstructured.arbitrary()?).ok_or(arbitrary::Error::IncorrectFormat)
+}
+
+/// Reads an optional `sample_flags` word, as `Option<u32>` reads one
+fn first_sample_flags(
+    unstructured: &mut Unstructured<'_>,
+) -> arbitrary::Result<Option<SampleFlags>> {
+    if unstructured.arbitrary()? {
+        sample_flags(unstructured).map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 /// One movie fragment as it lies in the presentation
@@ -263,7 +282,7 @@ pub fn lay_out(input: &Input<'_>) -> Option<LaidOut> {
                     .then_some(SAMPLE_DESCRIPTION_INDEX),
                 states_defaults.then(|| first_row.map_or(0, |row| u32::from(row.duration))),
                 states_defaults.then(|| first_row.map_or(0, |row| u32::from(row.size))),
-                states_defaults.then(|| first_row.map_or(0, |row| row.flags)),
+                states_defaults.then(|| first_row.map_or(SampleFlags::ZERO, |row| row.flags)),
             );
             let declared_size_of = |row: &Row| match track_fragment.stated_at {
                 StatedAt::Row => u32::from(row.size),

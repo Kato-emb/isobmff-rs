@@ -69,17 +69,17 @@ use crate::{Error, WholeBoxReader};
 /// # Examples
 ///
 /// ```
-/// use isobmff_boxes::TrackExtendsBox;
+/// use isobmff_boxes::{SampleFlags, TrackExtendsBox};
 /// use isobmff_sample::Sample;
 /// use isobmff_structure::{FragmentedReader, FragmentedWriter};
 /// # use isobmff_test_support::{file_type, fragmented_movie};
 /// // A file of one fragment carrying two samples of track 1
 /// let mut writer = FragmentedWriter::new();
 /// writer.handle_file_type(file_type())?;
-/// writer.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0)))?;
+/// writer.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO)))?;
 /// writer.begin_fragment(1)?;
-/// writer.handle_sample(Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec()))?;
-/// writer.handle_sample(Sample::new(1, 1_024, 1_024, 0, 0, 1, b"DATA".to_vec()))?;
+/// writer.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
+/// writer.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
 /// writer.finish_fragment()?;
 /// writer.finish()?;
 ///
@@ -429,7 +429,7 @@ impl Default for FragmentedReader {
 
 #[cfg(test)]
 mod tests {
-    use isobmff_boxes::{FileTypeBox, MovieBox, TrackExtendsBox};
+    use isobmff_boxes::{FileTypeBox, MovieBox, SampleFlags, TrackExtendsBox};
     use isobmff_core::{BoxDefinition, BoxType};
     use isobmff_sample::{Sample, SampleReader};
     use isobmff_test_support::{file_type, fragmented_movie, framed, movie_fragment, written};
@@ -440,7 +440,7 @@ mod tests {
 
     /// Movie of one track continued in fragments, whose defaults a `trex` states
     fn movie() -> MovieBox {
-        fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0))
+        fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO))
     }
 
     /// What the reader makes of `file` handed over whole, then declared over

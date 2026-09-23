@@ -4,7 +4,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use isobmff_boxes::{
-    CompositionTimeOffset, MediaDataBox, MovieFragmentBox, MovieFragmentHeaderBox,
+    CompositionTimeOffset, MediaDataBox, MovieFragmentBox, MovieFragmentHeaderBox, SampleFlags,
     StatedTrackRunSample, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
     TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBuilder,
 };
@@ -221,7 +221,7 @@ impl OpenFragment {
 struct Defaults {
     sample_duration: Option<u32>,
     sample_size: Option<u32>,
-    sample_flags: Option<u32>,
+    sample_flags: Option<SampleFlags>,
 }
 
 impl Defaults {
@@ -238,7 +238,7 @@ impl Defaults {
 }
 
 /// Returns the value every item of `values` is, when they are all one value
-fn shared<Values: Iterator<Item = u32>>(mut values: Values) -> Option<u32> {
+fn shared<Value: PartialEq, Values: Iterator<Item = Value>>(mut values: Values) -> Option<Value> {
     let first = values.next()?;
 
     values.all(|value| value == first).then_some(first)
@@ -311,7 +311,8 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_boxes::{
-        MovieFragmentBox, MovieFragmentHeaderBox, TrackFragmentBox, TrackFragmentHeaderBox,
+        DegradationPriorityEntry, MovieFragmentBox, MovieFragmentHeaderBox, PaddingBitsEntry,
+        SampleDependencyTypeEntry, SampleFlags, TrackFragmentBox, TrackFragmentHeaderBox,
         TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
     };
     use isobmff_core::BoxEncode as _;
@@ -331,14 +332,24 @@ mod tests {
             decode_time,
             1_024,
             sample_composition_time_offset,
-            0,
+            SampleFlags::ZERO,
             1,
             b"AAAA".to_vec(),
         )
     }
 
+    /// Flags stating `sample_depends_on` and `sample_is_non_sync_sample`, every other field 0
+    fn flags(sample_depends_on: u8, sample_is_non_sync_sample: bool) -> SampleFlags {
+        SampleFlags::new(
+            SampleDependencyTypeEntry::new(0, sample_depends_on, 0, 0).unwrap(),
+            PaddingBitsEntry::default(),
+            sample_is_non_sync_sample,
+            DegradationPriorityEntry::default(),
+        )
+    }
+
     /// Sample of track 1 at `decode_time` stating `sample_flags`
-    fn flagged(decode_time: u64, sample_flags: u32) -> Sample {
+    fn flagged(decode_time: u64, sample_flags: SampleFlags) -> Sample {
         Sample::new(1, decode_time, 1_024, 0, sample_flags, 1, b"AAAA".to_vec())
     }
 
@@ -386,7 +397,7 @@ mod tests {
     fn track_fragment_header(
         default_sample_duration: Option<u32>,
         default_sample_size: Option<u32>,
-        default_sample_flags: Option<u32>,
+        default_sample_flags: Option<SampleFlags>,
     ) -> TrackFragmentHeaderBox {
         TrackFragmentHeaderBox::new(
             TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
@@ -507,7 +518,7 @@ mod tests {
 
         assert_eq!(
             *header,
-            track_fragment_header(Some(1_024), Some(4), Some(0))
+            track_fragment_header(Some(1_024), Some(4), Some(SampleFlags::ZERO))
         );
         assert_eq!(
             rows_of(&movie_fragment, 1),
@@ -517,11 +528,14 @@ mod tests {
 
     #[test]
     fn what_the_samples_do_not_share_is_stated_by_every_row() {
-        let shorter = Sample::new(1, 1_024, 512, 0, 0, 1, b"BB".to_vec());
+        let shorter = Sample::new(1, 1_024, 512, 0, SampleFlags::ZERO, 1, b"BB".to_vec());
         let (movie_fragment, _media_data) = one_fragment(vec![sample(1, 0, b"AAAA"), shorter]);
         let header = track_fragment_of(&movie_fragment, 1).tfhd();
 
-        assert_eq!(*header, track_fragment_header(None, None, Some(0)));
+        assert_eq!(
+            *header,
+            track_fragment_header(None, None, Some(SampleFlags::ZERO))
+        );
         assert_eq!(
             rows_of(&movie_fragment, 1),
             [
@@ -534,21 +548,21 @@ mod tests {
     #[test]
     fn flags_only_the_first_sample_differs_on_are_written_as_its_own() {
         let (movie_fragment, _media_data) = one_fragment(vec![
-            flagged(0, 0x0200_0000),
-            flagged(1_024, 0x0101_0000),
-            flagged(2_048, 0x0101_0000),
+            flagged(0, flags(2, false)),
+            flagged(1_024, flags(1, true)),
+            flagged(2_048, flags(1, true)),
         ]);
         let track_fragment = track_fragment_of(&movie_fragment, 1);
 
         assert_eq!(
             *track_fragment.tfhd(),
-            track_fragment_header(Some(1_024), Some(4), Some(0x0101_0000))
+            track_fragment_header(Some(1_024), Some(4), Some(flags(1, true)))
         );
         assert_eq!(
             track_fragment.trun(),
             [TrackRunBox::new(
                 Some(data_offset_of(&movie_fragment)),
-                Some(0x0200_0000),
+                Some(flags(2, false)),
                 vec![TrackRunSample::new(None, None, None, None); 3],
             )
             .unwrap()]
@@ -558,9 +572,9 @@ mod tests {
     #[test]
     fn flags_no_two_samples_share_are_written_by_every_row() {
         let (movie_fragment, _media_data) = one_fragment(vec![
-            flagged(0, 0x0200_0000),
-            flagged(1_024, 0x0101_0000),
-            flagged(2_048, 0x0100_0000),
+            flagged(0, flags(2, false)),
+            flagged(1_024, flags(1, true)),
+            flagged(2_048, flags(1, false)),
         ]);
         let track_fragment = track_fragment_of(&movie_fragment, 1);
 
@@ -574,9 +588,9 @@ mod tests {
                 Some(data_offset_of(&movie_fragment)),
                 None,
                 vec![
-                    TrackRunSample::new(None, None, Some(0x0200_0000), None),
-                    TrackRunSample::new(None, None, Some(0x0101_0000), None),
-                    TrackRunSample::new(None, None, Some(0x0100_0000), None),
+                    TrackRunSample::new(None, None, Some(flags(2, false)), None),
+                    TrackRunSample::new(None, None, Some(flags(1, true)), None),
+                    TrackRunSample::new(None, None, Some(flags(1, false)), None),
                 ],
             )
             .unwrap()]
@@ -635,7 +649,8 @@ mod tests {
 
     #[test]
     fn samples_of_one_fragment_described_by_two_entries_are_refused() {
-        let described_by_the_second = Sample::new(1, 1_024, 1_024, 0, 0, 2, b"BBBB".to_vec());
+        let described_by_the_second =
+            Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 2, b"BBBB".to_vec());
         let mut writer = MovieFragmentWriter::new();
 
         writer.begin_fragment(1).unwrap();
@@ -649,7 +664,15 @@ mod tests {
 
     #[test]
     fn decode_times_running_past_what_64_bits_carry_are_refused() {
-        let at_the_end_of_time = Sample::new(1, u64::MAX, 1_024, 0, 0, 1, b"AAAA".to_vec());
+        let at_the_end_of_time = Sample::new(
+            1,
+            u64::MAX,
+            1_024,
+            0,
+            SampleFlags::ZERO,
+            1,
+            b"AAAA".to_vec(),
+        );
         let mut writer = MovieFragmentWriter::new();
 
         writer.begin_fragment(1).unwrap();

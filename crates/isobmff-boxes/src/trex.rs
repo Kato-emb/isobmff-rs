@@ -57,7 +57,7 @@ impl SampleFlags {
 
     /// Creates the flags from the fields they state
     #[must_use]
-    pub fn new(
+    pub const fn new(
         sample_dependency_type: SampleDependencyTypeEntry,
         padding_bits: PaddingBitsEntry,
         sample_is_non_sync_sample: bool,
@@ -68,7 +68,7 @@ impl SampleFlags {
         let low = sample_dependency_type.sample_is_depended_on() << 6
             | sample_dependency_type.sample_has_redundancy() << 4
             | padding_bits.pad() << 1
-            | u8::from(sample_is_non_sync_sample);
+            | sample_is_non_sync_sample as u8;
         let [priority_high, priority_low] = degradation_priority.priority().to_be_bytes();
 
         Self(u32::from_be_bytes([high, low, priority_high, priority_low]))

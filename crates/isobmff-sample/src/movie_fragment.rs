@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use isobmff_boxes::{
-    CompositionTimeOffset, MovieBox, MovieFragmentBox, TrackFragmentBox, TrackRunBox,
+    CompositionTimeOffset, MovieBox, MovieFragmentBox, SampleFlags, TrackFragmentBox, TrackRunBox,
 };
 
 use crate::error::Error;
@@ -106,7 +106,7 @@ struct TrackFragment {
     sample_description_index: u32,
     sample_duration: u32,
     sample_size: u32,
-    sample_flags: u32,
+    sample_flags: SampleFlags,
     data_reference_index: u16,
     decode_time: u64,
 }
@@ -274,10 +274,11 @@ mod tests {
     use core::ops::Range;
 
     use isobmff_boxes::{
-        CompositionTimeOffset, MovieBox, MovieExtendsBox, MovieFragmentBox, MovieFragmentHeaderBox,
-        MovieHeaderBox, TrackBox, TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox,
-        TrackFragmentBox, TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox,
-        TrackRunSample,
+        CompositionTimeOffset, DegradationPriorityEntry, MovieBox, MovieExtendsBox,
+        MovieFragmentBox, MovieFragmentHeaderBox, MovieHeaderBox, PaddingBitsEntry,
+        SampleDependencyTypeEntry, SampleFlags, TrackBox, TrackExtendsBox,
+        TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
+        TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
     };
     use isobmff_core::{BoxDecode as _, BoxEncode as _, Mp4EpochSeconds};
     use isobmff_test_support::{
@@ -294,7 +295,9 @@ mod tests {
     fn movie(trak: Vec<TrackBox>) -> MovieBox {
         let trex = trak
             .iter()
-            .map(|trak| TrackExtendsBox::new(trak.tkhd().track_id(), 1, 1_024, 4, 0))
+            .map(|trak| {
+                TrackExtendsBox::new(trak.tkhd().track_id(), 1, 1_024, 4, SampleFlags::ZERO)
+            })
             .collect();
 
         MovieBox::new(
@@ -313,7 +316,7 @@ mod tests {
 
     /// Movie of one track whose samples last 1024 units and occupy 4 bytes each
     fn one_track_movie() -> MovieBox {
-        fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 4, 0))
+        fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 4, SampleFlags::ZERO))
     }
 
     /// Fragment header of one track, carrying the flags and defaults given
@@ -332,6 +335,16 @@ mod tests {
             default_sample_duration,
             default_sample_size,
             None,
+        )
+    }
+
+    /// Flags of a sync sample stating `sample_depends_on`, every other field 0
+    fn depending_on(sample_depends_on: u8) -> SampleFlags {
+        SampleFlags::new(
+            SampleDependencyTypeEntry::new(0, sample_depends_on, 0, 0).unwrap(),
+            PaddingBitsEntry::default(),
+            false,
+            DegradationPriorityEntry::default(),
         )
     }
 
@@ -370,7 +383,16 @@ mod tests {
 
     /// Extent of a sample of `track_id` as the defaults of the movies here settle it
     fn extent(track_id: u32, decode_time: u64, data: Range<u64>) -> SampleExtent {
-        SampleExtent::new(track_id, decode_time, 1_024, 0, 0, 1, 1, data)
+        SampleExtent::new(
+            track_id,
+            decode_time,
+            1_024,
+            0,
+            SampleFlags::ZERO,
+            1,
+            1,
+            data,
+        )
     }
 
     /// Resolves `movie_fragment` at the start of the file against a movie no fragment was resolved for
@@ -404,7 +426,7 @@ mod tests {
         let rows = vec![TrackRunSample::new(
             Some(512),
             Some(2),
-            Some(0x0100_0000),
+            Some(depending_on(1)),
             Some(CompositionTimeOffset::new(-8).unwrap()),
         )];
         let track_fragment = TrackFragmentBox::new(
@@ -425,7 +447,7 @@ mod tests {
                 0,
                 512,
                 -8,
-                0x0100_0000,
+                depending_on(1),
                 1,
                 1,
                 100..102
@@ -449,8 +471,8 @@ mod tests {
         assert_eq!(
             resolved(&movie_fragment(vec![track_fragment]), &one_track_movie()),
             Ok(vec![
-                SampleExtent::new(1, 0, 256, 0, 0, 1, 1, 100..102),
-                SampleExtent::new(1, 256, 256, 0, 0, 1, 1, 102..104),
+                SampleExtent::new(1, 0, 256, 0, SampleFlags::ZERO, 1, 1, 100..102),
+                SampleExtent::new(1, 256, 256, 0, SampleFlags::ZERO, 1, 1, 102..104),
             ])
         );
     }
@@ -463,13 +485,13 @@ mod tests {
         ];
         let track_fragment = track_fragment(
             1,
-            vec![TrackRunBox::new(Some(100), Some(0x0200_0000), rows).unwrap()],
+            vec![TrackRunBox::new(Some(100), Some(depending_on(2)), rows).unwrap()],
         );
 
         assert_eq!(
             resolved(&movie_fragment(vec![track_fragment]), &one_track_movie()),
             Ok(vec![
-                SampleExtent::new(1, 0, 1_024, 0, 0x0200_0000, 1, 1, 100..104),
+                SampleExtent::new(1, 0, 1_024, 0, depending_on(2), 1, 1, 100..104),
                 extent(1, 1_024, 104..108),
             ])
         );

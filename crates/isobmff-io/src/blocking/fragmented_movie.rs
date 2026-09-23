@@ -45,7 +45,7 @@ use crate::Error;
 /// ```
 /// use std::io::Cursor;
 ///
-/// use isobmff_boxes::TrackExtendsBox;
+/// use isobmff_boxes::{SampleFlags, TrackExtendsBox};
 /// use isobmff_io::blocking::{FragmentedDemuxer, FragmentedMuxer};
 /// use isobmff_sample::Sample;
 /// # use isobmff_test_support::{file_type, fragmented_movie};
@@ -53,10 +53,10 @@ use crate::Error;
 /// let mut file = Vec::new();
 /// let mut muxer = FragmentedMuxer::new(&mut file);
 /// muxer.handle_file_type(file_type())?;
-/// muxer.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0)))?;
+/// muxer.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO)))?;
 /// muxer.begin_fragment(1)?;
-/// muxer.handle_sample(Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec()))?;
-/// muxer.handle_sample(Sample::new(1, 1_024, 1_024, 0, 0, 1, b"DATA".to_vec()))?;
+/// muxer.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
+/// muxer.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
 /// muxer.finish_fragment()?;
 /// muxer.finish()?;
 ///
@@ -149,7 +149,7 @@ impl<S: Read + Seek> Iterator for FragmentedDemuxer<S> {
 /// # Examples
 ///
 /// ```
-/// use isobmff_boxes::TrackExtendsBox;
+/// use isobmff_boxes::{SampleFlags, TrackExtendsBox};
 /// use isobmff_io::blocking::FragmentedMuxer;
 /// use isobmff_sample::Sample;
 /// # use isobmff_test_support::{file_type, fragmented_movie};
@@ -157,12 +157,12 @@ impl<S: Read + Seek> Iterator for FragmentedDemuxer<S> {
 /// let mut file = Vec::new();
 /// let mut muxer = FragmentedMuxer::new(&mut file);
 /// muxer.handle_file_type(file_type())?;
-/// muxer.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0)))?;
+/// muxer.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO)))?;
 ///
 /// // One fragment of two samples of track 1, written to the file as it is closed
 /// muxer.begin_fragment(1)?;
-/// muxer.handle_sample(Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec()))?;
-/// muxer.handle_sample(Sample::new(1, 1_024, 1_024, 0, 0, 1, b"DATA".to_vec()))?;
+/// muxer.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
+/// muxer.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
 /// muxer.finish_fragment()?;
 /// muxer.finish()?;
 ///
@@ -259,8 +259,8 @@ mod tests {
     use std::io;
 
     use isobmff_boxes::{
-        MovieFragmentBox, MovieFragmentHeaderBox, TrackFragmentBox, TrackFragmentHeaderBox,
-        TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
+        MovieFragmentBox, MovieFragmentHeaderBox, SampleFlags, TrackFragmentBox,
+        TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
     };
     use isobmff_sample::Sample;
     use isobmff_test_support::{
@@ -319,7 +319,7 @@ mod tests {
                 .saturating_add(u64::from(repeated.sample_duration())),
             repeated.sample_duration(),
             0,
-            0,
+            SampleFlags::ZERO,
             1,
             repeated.data().to_vec(),
         );

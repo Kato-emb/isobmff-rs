@@ -8,7 +8,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use isobmff_boxes::{
-    MediaDataBox, MovieBox, MovieFragmentBox, MovieFragmentHeaderBox, TrackExtendsBox,
+    MediaDataBox, MovieBox, MovieFragmentBox, MovieFragmentHeaderBox, SampleFlags, TrackExtendsBox,
     TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
     TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
 };
@@ -103,7 +103,15 @@ fn samples_over<'data>(
         .into_iter()
         .flat_map(|data| data.chunks(SAMPLE_LEN))
         .map(|data| {
-            let sample = Sample::new(1, decode_time, SAMPLE_DURATION, 0, 0, 1, data.to_vec());
+            let sample = Sample::new(
+                1,
+                decode_time,
+                SAMPLE_DURATION,
+                0,
+                SampleFlags::ZERO,
+                1,
+                data.to_vec(),
+            );
             decode_time = decode_time.saturating_add(u64::from(SAMPLE_DURATION));
 
             sample
@@ -118,7 +126,7 @@ pub fn presentation_movie() -> MovieBox {
         1,
         SAMPLE_DURATION,
         u32::try_from(SAMPLE_LEN).unwrap(),
-        0,
+        SampleFlags::ZERO,
     ))
 }
 
@@ -176,7 +184,15 @@ pub fn non_fragmented_file_samples() -> Vec<Sample> {
         .iter()
         .flat_map(|chunk| chunk.iter())
         .map(|data| {
-            let sample = Sample::new(1, decode_time, SAMPLE_DURATION, 0, 0, 1, data.to_vec());
+            let sample = Sample::new(
+                1,
+                decode_time,
+                SAMPLE_DURATION,
+                0,
+                SampleFlags::ZERO,
+                1,
+                data.to_vec(),
+            );
             decode_time = decode_time.saturating_add(u64::from(SAMPLE_DURATION));
 
             sample

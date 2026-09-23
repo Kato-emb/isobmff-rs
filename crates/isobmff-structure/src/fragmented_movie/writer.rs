@@ -52,19 +52,19 @@ use crate::{Error, whole_box_header, whole_payload};
 /// # Examples
 ///
 /// ```
-/// use isobmff_boxes::TrackExtendsBox;
+/// use isobmff_boxes::{SampleFlags, TrackExtendsBox};
 /// use isobmff_sample::Sample;
 /// use isobmff_structure::FragmentedWriter;
 /// # use isobmff_test_support::{file_type, fragmented_movie};
 /// // A file opening with its brands and the movie its fragments continue
 /// let mut writer = FragmentedWriter::new();
 /// writer.handle_file_type(file_type())?;
-/// writer.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0)))?;
+/// writer.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO)))?;
 ///
 /// // One fragment of two samples of track 1, lasting 1024 units each
 /// writer.begin_fragment(1)?;
-/// writer.handle_sample(Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec()))?;
-/// writer.handle_sample(Sample::new(1, 1_024, 1_024, 0, 0, 1, b"DATA".to_vec()))?;
+/// writer.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
+/// writer.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
 /// writer.finish_fragment()?;
 /// writer.finish()?;
 ///
@@ -317,7 +317,7 @@ impl Default for FragmentedWriter {
 
 #[cfg(test)]
 mod tests {
-    use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox, TrackExtendsBox};
+    use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox, SampleFlags, TrackExtendsBox};
     use isobmff_core::BoxDefinition;
     use isobmff_sample::Sample;
     use isobmff_test_support::{file_type, fragmented_movie};
@@ -327,12 +327,12 @@ mod tests {
 
     /// Movie of one track continued in fragments, whose defaults a `trex` states
     fn movie() -> MovieBox {
-        fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0))
+        fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO))
     }
 
     /// A sample of the track the movie declares
     fn sample() -> Sample {
-        Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec())
+        Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec())
     }
 
     #[test]

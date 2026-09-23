@@ -10,7 +10,7 @@ mod reading;
 #[cfg(test)]
 mod tests {
     use super::reading::samples_of;
-    use isobmff_boxes::{MovieBox, MovieHeaderBox};
+    use isobmff_boxes::{MovieBox, MovieHeaderBox, SampleFlags};
     use isobmff_core::{BoxType, Mp4EpochSeconds};
     use isobmff_sample::Sample;
     use isobmff_sequence::BoxEvent;
@@ -34,10 +34,28 @@ mod tests {
 
     /// The samples the two tracks carry, chunk by chunk, the tracks taking turns
     fn two_track_chunks() -> Vec<Vec<Sample>> {
-        let video =
-            |decode_time, data: &[u8]| Sample::new(1, decode_time, 3_000, 0, 0, 1, data.to_vec());
-        let audio =
-            |decode_time, data: &[u8]| Sample::new(2, decode_time, 1_024, 0, 0, 1, data.to_vec());
+        let video = |decode_time, data: &[u8]| {
+            Sample::new(
+                1,
+                decode_time,
+                3_000,
+                0,
+                SampleFlags::ZERO,
+                1,
+                data.to_vec(),
+            )
+        };
+        let audio = |decode_time, data: &[u8]| {
+            Sample::new(
+                2,
+                decode_time,
+                1_024,
+                0,
+                SampleFlags::ZERO,
+                1,
+                data.to_vec(),
+            )
+        };
 
         vec![
             vec![video(0, b"VIDEO_01"), video(3_000, b"VIDEO_02")],

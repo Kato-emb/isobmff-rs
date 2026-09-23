@@ -284,17 +284,6 @@ impl Error {
         }
     }
 
-    /// Returns the failure of a sample setting a reserved bit of its flags, which no sample table carries
-    #[must_use]
-    pub const fn unsupported_sample_flags(track_id: u32, sample_flags: u32) -> Self {
-        Self {
-            representation: Representation::UnsupportedSampleFlags {
-                track_id,
-                sample_flags,
-            },
-        }
-    }
-
     /// Returns what went wrong
     #[must_use]
     pub const fn kind(self) -> ErrorKind {

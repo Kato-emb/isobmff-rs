@@ -175,7 +175,10 @@ fn drain(reader: &mut BoxReader, reported: &mut Vec<Reported>, covered: &mut u64
                     bytes_read_from, 0,
                     "the extent of a box ending covers bytes of the input"
                 );
-                reported.last_mut().expect("an end before any box started").ended = true;
+                reported
+                    .last_mut()
+                    .expect("an end before any box started")
+                    .ended = true;
             }
             unknown => panic!("the reader reported an event this run cannot check: {unknown:?}"),
         }

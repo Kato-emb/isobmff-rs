@@ -3,7 +3,8 @@
 #[cfg(test)]
 mod tests {
     use isobmff_boxes::{
-        MovieFragmentBox, MovieFragmentHeaderBox, TrackExtendsBox, TrackFragmentBox,
+        DegradationPriorityEntry, MovieFragmentBox, MovieFragmentHeaderBox, PaddingBitsEntry,
+        SampleDependencyTypeEntry, SampleFlags, TrackExtendsBox, TrackFragmentBox,
         TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
     };
     use isobmff_sample::movie_fragment::sample_extents;
@@ -37,14 +38,22 @@ mod tests {
         MovieFragmentBox::new(MovieFragmentHeaderBox::new(1), vec![track_fragment])
     }
 
+    /// Flags of a sync sample that depends on no other, which the `trex` of the movie states
+    const INDEPENDENT: SampleFlags = SampleFlags::new(
+        SampleDependencyTypeEntry::new(0, 2, 0, 0).unwrap(),
+        PaddingBitsEntry::new(0).unwrap(),
+        false,
+        DegradationPriorityEntry::new(0),
+    );
+
     /// Sample of track 1 as the `trex` of the movie settles it, carrying `data`
     fn sample(decode_time: u64, data: &[u8]) -> Sample {
-        Sample::new(1, decode_time, 3_000, 0, 0x0200_0000, 1, data.to_vec())
+        Sample::new(1, decode_time, 3_000, 0, INDEPENDENT, 1, data.to_vec())
     }
 
     #[test]
     fn the_samples_a_fragment_declares_are_read_out_of_the_media_data_that_follows_it() {
-        let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 3_000, 16, 0x0200_0000));
+        let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 3_000, 16, INDEPENDENT));
         let mut decode_times = TrackDecodeTimes::new();
         let mut reader = SampleReader::new();
         let mut samples = Vec::new();
