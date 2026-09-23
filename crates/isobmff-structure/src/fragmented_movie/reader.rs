@@ -316,7 +316,8 @@ impl FragmentedReader {
 
     /// Returns the subsegments of every `sidx` read so far, in the order they were read
     ///
-    /// Each is placed in the file from the first byte after its `sidx`, as
+    /// A `sidx` read again, as the reading resumes at it a second time, is
+    /// held once. Each is placed in the file from the first byte after its `sidx`, as
     /// [`subsegments`] places them.
     #[must_use]
     pub fn segment_indexes(&self) -> &[SegmentIndex] {
@@ -486,7 +487,10 @@ impl FragmentedReader {
                         })
                     }
                     Some(Open::SegmentIndex(reader)) => reader.finish().and_then(|sidx| {
-                        self.segment_indexes.push(subsegments(&sidx, start)?);
+                        let segment_index = subsegments(&sidx, start)?;
+                        if !self.segment_indexes.contains(&segment_index) {
+                            self.segment_indexes.push(segment_index);
+                        }
 
                         Ok(())
                     }),

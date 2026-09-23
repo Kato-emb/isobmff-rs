@@ -151,15 +151,16 @@ impl MediaSegmentStructure {
     ///   again for every call after it.
     pub(crate) fn finish(&mut self) -> Result<(), Error> {
         match self.state {
-            State::Reading(Position::Fragmenting) | State::Resuming(Position::Fragmenting) => {
-                self.state = State::Finished(Position::Fragmenting);
+            State::Reading(position) | State::Resuming(position) => match position {
+                Position::Fragmenting => {
+                    self.state = State::Finished(position);
 
-                Ok(())
-            }
-            State::Reading(Position::Start | Position::Opened)
-            | State::Resuming(Position::Start | Position::Opened) => {
-                Err(self.fail(Error::missing_mandatory_box(MovieFragmentBox::BOX_TYPE)))
-            }
+                    Ok(())
+                }
+                Position::Start | Position::Opened => {
+                    Err(self.fail(Error::missing_mandatory_box(MovieFragmentBox::BOX_TYPE)))
+                }
+            },
             State::Finished(_position) => Err(Error::already_finished()),
             State::Failed(failure) => Err(failure),
         }

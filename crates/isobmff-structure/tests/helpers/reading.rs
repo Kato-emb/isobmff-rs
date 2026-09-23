@@ -13,12 +13,18 @@ pub(crate) fn samples_of(file: &[u8], cut_length: usize) -> Vec<Sample> {
 
     for arriving in file.chunks(cut_length) {
         reader.handle_input(arriving).unwrap();
-        while let Some(sample) = reader.poll_sample() {
-            samples.push(sample);
-        }
+        samples.extend(drained(&mut reader));
     }
 
     reader.finish().unwrap();
+    samples.extend(drained(&mut reader));
+
+    samples
+}
+
+/// Takes every sample the reader has completed
+pub(crate) fn drained(reader: &mut FragmentedReader) -> Vec<Sample> {
+    let mut samples = Vec::new();
     while let Some(sample) = reader.poll_sample() {
         samples.push(sample);
     }

@@ -9,23 +9,12 @@ mod reading;
 
 #[cfg(test)]
 mod tests {
-    use isobmff_sample::Sample;
     use isobmff_structure::MediaSegmentReader;
     use isobmff_test_support::{
         indexed_segment_file, presentation_movie, segment_file_samples, segment_file_with_samples,
     };
 
-    use super::reading::samples_of;
-
-    /// Takes every sample the reader has completed
-    fn drained(reader: &mut MediaSegmentReader) -> Vec<Sample> {
-        let mut samples = Vec::new();
-        while let Some(sample) = reader.poll_sample() {
-            samples.push(sample);
-        }
-
-        samples
-    }
+    use super::reading::{drained, samples_of};
 
     #[test]
     fn the_samples_of_a_media_segment_are_read_off_the_bytes_it_lies_as() {

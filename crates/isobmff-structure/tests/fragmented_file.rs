@@ -10,24 +10,14 @@ mod reading;
 #[cfg(test)]
 mod tests {
     use isobmff_core::BoxType;
-    use isobmff_sample::Sample;
+    use isobmff_sequence::BoxEvent;
     use isobmff_structure::{Error, ErrorKind, FragmentedReader};
     use isobmff_test_support::{
-        IndexedFile, fragmented_file_samples, fragmented_file_with_samples,
+        IndexedFile, events_of, fragmented_file_samples, fragmented_file_with_samples,
         indexed_fragmented_file, indexed_fragmented_file_without_decode_times,
     };
 
-    use super::reading::samples_of;
-
-    /// Takes every sample the reader has completed
-    fn drained(reader: &mut FragmentedReader) -> Vec<Sample> {
-        let mut samples = Vec::new();
-        while let Some(sample) = reader.poll_sample() {
-            samples.push(sample);
-        }
-
-        samples
-    }
+    use super::reading::{drained, samples_of};
 
     /// Reader that read `file` whole and was declared over
     fn read_whole(file: &IndexedFile) -> FragmentedReader {
@@ -116,6 +106,29 @@ mod tests {
         let second_samples = file.fragment_samples.get(1).unwrap();
         assert_eq!(&drained(&mut finished), second_samples);
         assert_eq!(&drained(&mut reading), second_samples);
+    }
+
+    #[test]
+    fn an_index_read_again_on_resuming_at_it_is_held_once() {
+        let file = indexed_fragmented_file();
+        let segment_index = events_of(&file.bytes, file.bytes.len())
+            .unwrap()
+            .into_iter()
+            .find_map(|(extent, event)| {
+                if let BoxEvent::Header(header) = event {
+                    (header.box_type() == BoxType::compact(*b"sidx")).then_some(extent.start)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+
+        let mut reader = read_whole(&file);
+        drained(&mut reader);
+        resumed_at(&mut reader, &file, segment_index).unwrap();
+
+        assert_eq!(reader.segment_indexes().len(), 1);
+        assert_eq!(drained(&mut reader), file.fragment_samples.concat());
     }
 
     #[test]

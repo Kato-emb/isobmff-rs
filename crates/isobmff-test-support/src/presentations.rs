@@ -15,12 +15,14 @@ use isobmff_boxes::{
     TrackFragmentHeaderFlags, TrackFragmentRandomAccessBox, TrackFragmentRandomAccessEntry,
     TrackRunBox, TrackRunSample,
 };
-use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader, boxes};
+use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader};
 use isobmff_sample::Sample;
+use isobmff_sequence::BoxEvent;
 
 use crate::boxes::{
     SAMPLE_DURATION, TIMESCALE, file_type, fragmented_movie, segment_type, written,
 };
+use crate::driving::events_of;
 
 /// Bytes each sample of these files occupies
 const SAMPLE_LEN: usize = 8;
@@ -230,18 +232,14 @@ pub struct IndexedFile {
     pub fragment_samples: Vec<Vec<Sample>>,
 }
 
-/// Lays out `head`, a `sidx` indexing the fragments that follow it, the fragments, and then `tail` of the moof offsets
+/// Lays out `head`, then a `sidx` indexing the fragments that follow it, then the fragments
 ///
 /// The `sidx` references each fragment whole from the first byte after
 /// itself, starting at the earliest presentation time of the first. The
 /// fragments state their decode times in a `tfdt` where `with_decode_times`
-/// says so. The offsets and samples are checked against the bytes: every
-/// `moof` the file frames lies where the offsets say.
-fn indexed(
-    head: Vec<u8>,
-    with_decode_times: bool,
-    tail: impl FnOnce(&[u64]) -> Vec<u8>,
-) -> IndexedFile {
+/// says so. The offsets are checked against the bytes: every `moof` the file
+/// frames lies where they say.
+fn indexed(head: Vec<u8>, with_decode_times: bool) -> IndexedFile {
     let mut decode_time = BASE_MEDIA_DECODE_TIME;
     let mut fragments = Vec::new();
     let mut fragment_samples = Vec::new();
@@ -285,19 +283,16 @@ fn indexed(
         moof_offsets.push(u64::try_from(bytes.len()).unwrap());
         bytes.extend_from_slice(&fragment);
     }
-    bytes.extend_from_slice(&tail(&moof_offsets));
 
-    let mut framed_at: usize = 0;
-    let framed_moof_offsets: Vec<u64> = boxes(&bytes)
-        .filter_map(|framed| {
-            let framed = framed.unwrap();
-            let start = framed_at;
-            framed_at = framed_at
-                .saturating_add(framed.header().encoded_len())
-                .saturating_add(framed.payload().len());
-
-            (framed.header().box_type() == MovieFragmentBox::BOX_TYPE)
-                .then(|| u64::try_from(start).unwrap())
+    let framed_moof_offsets: Vec<u64> = events_of(&bytes, bytes.len())
+        .unwrap()
+        .into_iter()
+        .filter_map(|(extent, event)| {
+            if let BoxEvent::Header(header) = event {
+                (header.box_type() == MovieFragmentBox::BOX_TYPE).then_some(extent.start)
+            } else {
+                None
+            }
         })
         .collect();
     assert_eq!(framed_moof_offsets, moof_offsets);
@@ -309,51 +304,48 @@ fn indexed(
     }
 }
 
-/// The `mfra` of track 1 listing the first sample of each fragment at `moof_offsets` as a sync sample
-fn random_access_over(moof_offsets: &[u64]) -> Vec<u8> {
-    let mut time = BASE_MEDIA_DECODE_TIME;
-    let entries = moof_offsets
+/// Appends to `file` the `mfra` of track 1, listing the first sample of each of its fragments as a sync sample
+fn with_random_access(mut file: IndexedFile) -> IndexedFile {
+    let entries = file
+        .moof_offsets
         .iter()
-        .zip(SEGMENT_MEDIA_DATA)
-        .map(|(&moof_offset, media_data)| {
-            let entry = TrackFragmentRandomAccessEntry::new(
-                time,
+        .zip(&file.fragment_samples)
+        .map(|(&moof_offset, samples)| {
+            TrackFragmentRandomAccessEntry::new(
+                samples.first().unwrap().decode_time(),
                 moof_offset,
                 NonZeroU32::MIN,
                 NonZeroU32::MIN,
                 NonZeroU32::MIN,
-            );
-            let samples = u64::try_from(media_data.len() / SAMPLE_LEN).unwrap();
-            time = time.saturating_add(u64::from(SAMPLE_DURATION).saturating_mul(samples));
-
-            entry
+            )
         })
         .collect();
 
-    written(&MovieFragmentRandomAccessBox::new(vec![
-        TrackFragmentRandomAccessBox::new(1, entries),
-    ]))
+    file.bytes
+        .extend_from_slice(&written(&MovieFragmentRandomAccessBox::new(vec![
+            TrackFragmentRandomAccessBox::new(1, entries),
+        ])));
+
+    file
 }
 
 /// A fragmented file laid out by hand with both indexes: `ftyp moov sidx moof mdat moof mdat mfra`
 pub fn indexed_fragmented_file() -> IndexedFile {
-    indexed(
+    with_random_access(indexed(
         [written(&file_type()), written(&presentation_movie())].concat(),
         true,
-        random_access_over,
-    )
+    ))
 }
 
 /// [`indexed_fragmented_file`] with fragments stating no `tfdt`, so their decode times follow only from the fragments before them
 pub fn indexed_fragmented_file_without_decode_times() -> IndexedFile {
-    indexed(
+    with_random_access(indexed(
         [written(&file_type()), written(&presentation_movie())].concat(),
         false,
-        random_access_over,
-    )
+    ))
 }
 
 /// A media segment laid out by hand with its index: `styp sidx moof mdat moof mdat`
 pub fn indexed_segment_file() -> IndexedFile {
-    indexed(written(&segment_type()), true, |_moof_offsets| Vec::new())
+    indexed(written(&segment_type()), true)
 }

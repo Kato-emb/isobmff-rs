@@ -168,16 +168,16 @@ impl FragmentedStructure {
     ///   again for every call after it.
     pub(crate) fn finish(&mut self) -> Result<(), Error> {
         match self.state {
-            State::Reading(position @ (Position::Declared | Position::Fragmenting))
-            | State::Resuming(position @ (Position::Declared | Position::Fragmenting)) => {
-                self.state = State::Finished(position);
+            State::Reading(position) | State::Resuming(position) => match position {
+                Position::Declared | Position::Fragmenting => {
+                    self.state = State::Finished(position);
 
-                Ok(())
-            }
-            State::Reading(Position::Start | Position::Opened)
-            | State::Resuming(Position::Start | Position::Opened) => {
-                Err(self.fail(Error::missing_mandatory_box(MovieBox::BOX_TYPE)))
-            }
+                    Ok(())
+                }
+                Position::Start | Position::Opened => {
+                    Err(self.fail(Error::missing_mandatory_box(MovieBox::BOX_TYPE)))
+                }
+            },
             State::Finished(_position) => Err(Error::already_finished()),
             State::Failed(failure) => Err(failure),
         }
