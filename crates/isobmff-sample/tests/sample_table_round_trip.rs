@@ -2,8 +2,6 @@
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use isobmff_boxes::{MovieBox, MovieHeaderBox, SampleDescriptionBox};
     use isobmff_core::{AnyBox, BoxType, Mp4EpochSeconds};
     use isobmff_sample::sample_table::sample_extents;
@@ -35,8 +33,8 @@ mod tests {
         )
     }
 
-    /// Lays `chunks` out, each `(chunk_offset, samples)`, and hands back the tables
-    fn laid_out(chunks: &[(u64, Vec<Sample>)]) -> BTreeMap<u32, SampleTables> {
+    /// Lays `chunks` out, each `(chunk_offset, samples)`, and hands back the tables of each track in turn
+    fn laid_out(chunks: &[(u64, Vec<Sample>)]) -> Vec<(u32, SampleTables)> {
         let mut writer = SampleTableWriter::new();
 
         for (chunk_offset, samples) in chunks {
@@ -46,11 +44,11 @@ mod tests {
             }
         }
 
-        writer.finish().unwrap()
+        writer.finish().unwrap().into_iter().collect()
     }
 
     /// Movie of one track per entry of `tables`, each laid out by its tables
-    fn movie_of(tables: BTreeMap<u32, SampleTables>) -> MovieBox {
+    fn movie_of(tables: Vec<(u32, SampleTables)>) -> MovieBox {
         MovieBox::new(
             MovieHeaderBox::new(
                 Mp4EpochSeconds::from_seconds(0),
