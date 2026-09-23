@@ -27,10 +27,12 @@ struct OpenRun {
 ///
 /// `decode_time` is where the fragment places the track, which its `tfdt`
 /// states, and `reached` where the samples added so far leave its media
-/// timeline.
+/// timeline. `origin` is the decode time the first of those samples states,
+/// which the samples after it are checked against in the times they state.
 #[derive(Clone, Debug)]
 struct OpenTrack {
     track_id: u32,
+    origin: u64,
     decode_time: u64,
     reached: u64,
     sample_description_index: u32,
@@ -79,9 +81,13 @@ impl OpenTrack {
 ///
 /// The tracks lie in the order they first appeared, which is the order their
 /// `traf` boxes are written in, and `placed_tracks` names where each one lies.
+/// `placement` is where the fragment places a track: at the decode time it
+/// knows for the track, or where the first sample of a track it does not know
+/// states.
 #[derive(Clone, Debug)]
 pub(super) struct OpenFragment {
     sequence_number: u32,
+    placement: TrackDecodeTimes,
     tracks: Vec<OpenTrack>,
     placed_tracks: BTreeMap<u32, usize>,
     media_data: Vec<u8>,
@@ -89,10 +95,11 @@ pub(super) struct OpenFragment {
 }
 
 impl OpenFragment {
-    /// Opens a fragment carrying no samples yet, which `mfhd` numbers `sequence_number`
-    pub(super) const fn new(sequence_number: u32) -> Self {
+    /// Opens a fragment carrying no samples yet, numbered `sequence_number` by its `mfhd` and placing its tracks at `placement`
+    pub(super) const fn new(sequence_number: u32, placement: TrackDecodeTimes) -> Self {
         Self {
             sequence_number,
+            placement,
             tracks: Vec::new(),
             placed_tracks: BTreeMap::new(),
             media_data: Vec::new(),
@@ -150,28 +157,30 @@ impl OpenFragment {
                         track.sample_description_index,
                     ));
                 }
-                if track.reached != decode_time {
-                    return Err(Error::decode_time_mismatch(
-                        track_id,
-                        decode_time,
-                        track.reached,
-                    ));
+                let expected = track
+                    .origin
+                    .checked_add(track.reached.saturating_sub(track.decode_time))
+                    .ok_or(Error::decode_time_overflow(track_id))?;
+                if expected != decode_time {
+                    return Err(Error::decode_time_mismatch(track_id, decode_time, expected));
                 }
 
                 track.place(row, data_offset, carries_on)?;
             }
             None => {
+                let placed = self.placement.decode_time(track_id).unwrap_or(decode_time);
                 if let Some(reached) = decode_times
                     .decode_time(track_id)
-                    .filter(|reached| decode_time < *reached)
+                    .filter(|reached| placed < *reached)
                 {
-                    return Err(Error::backward_decode_time(track_id, decode_time, reached));
+                    return Err(Error::backward_decode_time(track_id, placed, reached));
                 }
 
                 let mut track = OpenTrack {
                     track_id,
-                    decode_time,
-                    reached: decode_time,
+                    origin: decode_time,
+                    decode_time: placed,
+                    reached: placed,
                     sample_description_index,
                     runs: Vec::new(),
                 };
@@ -340,6 +349,24 @@ mod tests {
         )
     }
 
+    /// Sample of `track_id` at `decode_time` lasting `sample_duration`, stating `sample_composition_time_offset`
+    fn timed(
+        track_id: u32,
+        decode_time: u64,
+        sample_duration: u32,
+        sample_composition_time_offset: i64,
+    ) -> Sample {
+        Sample::new(
+            track_id,
+            decode_time,
+            sample_duration,
+            sample_composition_time_offset,
+            SampleFlags::ZERO,
+            1,
+            b"AAAA".to_vec(),
+        )
+    }
+
     /// Flags stating `sample_depends_on` and `sample_is_non_sync_sample`, every other field 0
     fn flags(sample_depends_on: u8, sample_is_non_sync_sample: bool) -> SampleFlags {
         SampleFlags::new(
@@ -442,6 +469,66 @@ mod tests {
         }
 
         assert_eq!(decode_times, [0, 8_192]);
+    }
+
+    #[test]
+    fn a_fragment_opened_continuing_places_every_track_where_it_reached() {
+        let first_fragment = [timed(1, 0, 3_000, 0), timed(2, 0, 1_024, 0)];
+        let mut continuing = MovieFragmentWriter::new();
+        let mut stated = MovieFragmentWriter::new();
+        for writer in [&mut continuing, &mut stated] {
+            writer.begin_fragment(1).unwrap();
+            for sample in first_fragment.clone() {
+                writer.handle_sample(sample).unwrap();
+            }
+            writer.finish_fragment().unwrap();
+        }
+
+        continuing.begin_fragment_continuing(2).unwrap();
+        for sample in [
+            timed(1, 90_000, 3_000, 3_000),
+            timed(2, 30_720, 1_024, 0),
+            timed(1, 93_000, 1_500, 0),
+        ] {
+            continuing.handle_sample(sample).unwrap();
+        }
+        stated.begin_fragment(2).unwrap();
+        for sample in [
+            timed(1, 3_000, 3_000, 3_000),
+            timed(2, 1_024, 1_024, 0),
+            timed(1, 6_000, 1_500, 0),
+        ] {
+            stated.handle_sample(sample).unwrap();
+        }
+        let (movie_fragment, _media_data) = continuing.finish_fragment().unwrap();
+
+        let decode_times: Vec<u64> = movie_fragment
+            .traf()
+            .iter()
+            .map(|track_fragment| track_fragment.tfdt().unwrap().base_media_decode_time())
+            .collect();
+        assert_eq!(decode_times, [3_000, 1_024]);
+        assert_eq!(
+            Ok((movie_fragment, b"AAAAAAAAAAAA".to_vec())),
+            stated.finish_fragment()
+        );
+    }
+
+    #[test]
+    fn a_first_fragment_opened_continuing_places_its_tracks_at_zero() {
+        let mut writer = MovieFragmentWriter::new();
+
+        writer.begin_fragment_continuing(1).unwrap();
+        writer.handle_sample(sample(1, 90_000, b"AAAA")).unwrap();
+        let (movie_fragment, _media_data) = writer.finish_fragment().unwrap();
+
+        assert_eq!(
+            track_fragment_of(&movie_fragment, 1)
+                .tfdt()
+                .unwrap()
+                .base_media_decode_time(),
+            0
+        );
     }
 
     #[test]
@@ -646,6 +733,22 @@ mod tests {
         assert_eq!(
             writer.handle_sample(sample(1, 512, b"BBBB")),
             Err(Error::decode_time_mismatch(1, 512, 1_024))
+        );
+    }
+
+    #[test]
+    fn a_mismatch_in_a_fragment_opened_continuing_is_reported_in_the_times_the_samples_state() {
+        let mut writer = MovieFragmentWriter::new();
+
+        writer.begin_fragment(1).unwrap();
+        writer.handle_sample(sample(1, 0, b"AAAA")).unwrap();
+        writer.finish_fragment().unwrap();
+        writer.begin_fragment_continuing(2).unwrap();
+        writer.handle_sample(sample(1, 90_000, b"BBBB")).unwrap();
+
+        assert_eq!(
+            writer.handle_sample(sample(1, 90_512, b"CCCC")),
+            Err(Error::decode_time_mismatch(1, 90_512, 91_024))
         );
     }
 

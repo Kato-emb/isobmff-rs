@@ -15,7 +15,8 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// Lays the samples of a presentation out as movie fragments
 ///
 /// The writer takes the samples of a fragment between
-/// [`begin_fragment`](Self::begin_fragment) and
+/// [`begin_fragment`](Self::begin_fragment) or
+/// [`begin_fragment_continuing`](Self::begin_fragment_continuing) and
 /// [`finish_fragment`](Self::finish_fragment), which hands back the `moof`
 /// they are declared by and the payload of the `mdat` that carries them. It
 /// writes nothing itself: what the two are laid down as, and where, stay with
@@ -43,8 +44,8 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///   counted over the `moof` and the header of the `mdat`, so the two are laid
 ///   down as they come out: the media data of a fragment directly after the
 ///   fragment itself.
-/// * A `tfdt` is always written, stating the decode time of the first sample
-///   of its `traf`.
+/// * A `tfdt` is always written, stating the decode time the fragment places
+///   the first sample of its `traf` at.
 /// * What the samples of a `traf` share — how long they last, how long they
 ///   are, their flags — is written once as a default of its `tfhd`, and left
 ///   out of the rows. What they do not share is stated per row, except flags
@@ -58,7 +59,8 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///
 /// # Contract
 ///
-/// * A fragment is opened by [`begin_fragment`](Self::begin_fragment) and
+/// * A fragment is opened by [`begin_fragment`](Self::begin_fragment) or
+///   [`begin_fragment_continuing`](Self::begin_fragment_continuing) and
 ///   closed by [`finish_fragment`](Self::finish_fragment). Handing a sample
 ///   over or closing a fragment while none is open is
 ///   [`NoFragmentOpen`](crate::ErrorKind::NoFragmentOpen), and opening
@@ -71,9 +73,18 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///   ends: a `trun` states how long a sample lasts and not when it is decoded,
 ///   so a gap is
 ///   [`DecodeTimeMismatch`](crate::ErrorKind::DecodeTimeMismatch).
-///   Between fragments a gap is written as it stands — the `tfdt` states it —
+///   Between fragments opened by [`begin_fragment`](Self::begin_fragment) a
+///   gap is written as it stands — the `tfdt` states it —
 ///   but a track never goes back, which is
 ///   [`BackwardDecodeTime`](crate::ErrorKind::BackwardDecodeTime).
+/// * A fragment opened by
+///   [`begin_fragment`](Self::begin_fragment) places a track where its first
+///   sample states. One opened by
+///   [`begin_fragment_continuing`](Self::begin_fragment_continuing) places it
+///   where the samples written for it reach, zero for a track none was
+///   written for, whatever its first sample states: the samples after it are
+///   read only for how far they lie from that first one, which the fragment
+///   keeps.
 /// * The samples of one `traf` are all described by one `stsd` entry, which
 ///   the `tfhd` states for them: a fragment mixing two is
 ///   [`SampleDescriptionIndexMismatch`](crate::ErrorKind::SampleDescriptionIndexMismatch).
@@ -162,13 +173,30 @@ impl MovieFragmentWriter {
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
     pub fn begin_fragment(&mut self, sequence_number: u32) -> Result<(), Error> {
-        self.writing()?;
-        if matches!(self.state, State::Fragment(_)) {
-            return Err(self.fail(Error::fragment_still_open()));
-        }
-        self.state = State::Fragment(OpenFragment::new(sequence_number));
+        self.open_fragment(sequence_number, TrackDecodeTimes::unknown())
+    }
 
-        Ok(())
+    /// Opens a fragment in which every track continues where the samples written for it reach
+    ///
+    /// The first sample of a track the fragment carries is placed where the
+    /// samples written for the track reach — zero for a track none was
+    /// written for — whatever decode time it states, and every later one by
+    /// how far its stated decode time lies from that of the first. The `tfdt`
+    /// of the track states that reached time, and the durations and the
+    /// composition time offsets of the samples are written as handed over.
+    /// `sequence_number` is what its `mfhd` states, as for
+    /// [`begin_fragment`](Self::begin_fragment).
+    ///
+    /// # Errors
+    ///
+    /// * [`FragmentStillOpen`](crate::ErrorKind::FragmentStillOpen): the
+    ///   fragment before it was not closed.
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    ///   samples were declared over by [`finish`](Self::finish).
+    /// * The failure of a previous call, which the writer keeps and reports
+    ///   again for every call after it.
+    pub fn begin_fragment_continuing(&mut self, sequence_number: u32) -> Result<(), Error> {
+        self.open_fragment(sequence_number, self.decode_times.clone())
     }
 
     /// Takes a sample, and places it in the fragment that is open
@@ -261,6 +289,21 @@ impl MovieFragmentWriter {
         Ok(())
     }
 
+    /// Opens a fragment numbered `sequence_number` whose tracks `placement` places
+    fn open_fragment(
+        &mut self,
+        sequence_number: u32,
+        placement: TrackDecodeTimes,
+    ) -> Result<(), Error> {
+        self.writing()?;
+        if matches!(self.state, State::Fragment(_)) {
+            return Err(self.fail(Error::fragment_still_open()));
+        }
+        self.state = State::Fragment(OpenFragment::new(sequence_number, placement));
+
+        Ok(())
+    }
+
     /// Returns `Ok` while the writer still takes samples
     const fn writing(&self) -> Result<(), Error> {
         match self.state {
@@ -329,6 +372,27 @@ mod tests {
         assert_eq!(
             writer.handle_sample(sample(1, 512, b"BBBB")),
             Err(Error::backward_decode_time(1, 512, 1_024))
+        );
+    }
+
+    #[test]
+    fn a_fragment_opened_after_one_opened_continuing_carries_on_from_where_it_placed_the_track() {
+        let mut writer = MovieFragmentWriter::new();
+
+        writer.begin_fragment(1).unwrap();
+        writer.handle_sample(sample(1, 0, b"AAAA")).unwrap();
+        writer.finish_fragment().unwrap();
+        writer.begin_fragment_continuing(2).unwrap();
+        writer.handle_sample(sample(1, 90_000, b"BBBB")).unwrap();
+        writer.finish_fragment().unwrap();
+        let mut going_back = writer.clone();
+        writer.begin_fragment(3).unwrap();
+        going_back.begin_fragment(3).unwrap();
+
+        assert_eq!(writer.handle_sample(sample(1, 2_048, b"CCCC")), Ok(()));
+        assert_eq!(
+            going_back.handle_sample(sample(1, 2_047, b"CCCC")),
+            Err(Error::backward_decode_time(1, 2_047, 2_048))
         );
     }
 

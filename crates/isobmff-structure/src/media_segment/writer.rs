@@ -30,14 +30,17 @@ use crate::{Error, whole_box_header, whole_payload};
 ///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder), and a
 ///   segment declared over without a fragment is
 ///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
-/// * A fragment is opened by [`begin_fragment`](Self::begin_fragment),
+/// * A fragment is opened by [`begin_fragment`](Self::begin_fragment) or
+///   [`begin_fragment_continuing`](Self::begin_fragment_continuing),
 ///   carries the samples handed over next, and is laid down by
 ///   [`finish_fragment`](Self::finish_fragment) as the `moof` and the `mdat`
 ///   the sample layer made of it. What the samples themselves must hold to
 ///   is [`MovieFragmentWriter`]'s contract, reported as
 ///   [`Sample`](crate::ErrorKind::Sample); a segment written apart
-///   from the ones before it starts the decode time of each track where its
-///   first sample states, since every fragment states one.
+///   from the ones before it starts each track where its first sample
+///   states, since every fragment states a `tfdt`, or at zero where the first
+///   fragment carrying the track was opened by
+///   [`begin_fragment_continuing`](Self::begin_fragment_continuing).
 /// * The bytes are taken from [`poll_output`](Self::poll_output), one
 ///   [`EventBytes`] a call, owned by whoever takes them. The caller drains
 ///   before handing over more: bytes are held until they are taken, so
@@ -144,6 +147,26 @@ impl MediaSegmentWriter {
         self.writing()?;
         self.samples
             .begin_fragment(sequence_number)
+            .map_err(|failure| self.fail(failure.into()))
+    }
+
+    /// Opens a fragment in which every track continues where the samples written for it reach, as [`MovieFragmentWriter::begin_fragment_continuing`] places them
+    ///
+    /// `sequence_number` is what its `mfhd` states, as for
+    /// [`begin_fragment`](Self::begin_fragment).
+    ///
+    /// # Errors
+    ///
+    /// * [`Sample`](crate::ErrorKind::Sample): what the sample layer
+    ///   makes of the call.
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    ///   segment was declared over by [`finish`](Self::finish).
+    /// * The failure of a previous call, which the writer keeps and reports
+    ///   again for every call after it.
+    pub fn begin_fragment_continuing(&mut self, sequence_number: u32) -> Result<(), Error> {
+        self.writing()?;
+        self.samples
+            .begin_fragment_continuing(sequence_number)
             .map_err(|failure| self.fail(failure.into()))
     }
 

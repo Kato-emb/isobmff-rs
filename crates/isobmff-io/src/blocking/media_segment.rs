@@ -243,6 +243,17 @@ impl<W: Write> MediaSegmentMuxer<W> {
             .drive(|writer| writer.begin_fragment(sequence_number))
     }
 
+    /// Opens a fragment in which every track continues where the samples written for it reach
+    ///
+    /// # Errors
+    ///
+    /// * [`Structure`](crate::ErrorKind::Structure): what
+    ///   [`MediaSegmentWriter::begin_fragment_continuing`] makes of the call.
+    pub fn begin_fragment_continuing(&mut self, sequence_number: u32) -> Result<(), Error> {
+        self.muxer
+            .drive(|writer| writer.begin_fragment_continuing(sequence_number))
+    }
+
     /// Takes a sample, and places it in the fragment that is open
     ///
     /// # Errors

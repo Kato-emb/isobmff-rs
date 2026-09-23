@@ -13,7 +13,7 @@ mod tests {
     use isobmff_boxes::{MovieBox, MovieExtendsBox, MovieHeaderBox, SampleFlags, TrackExtendsBox};
     use isobmff_core::Mp4EpochSeconds;
     use isobmff_sample::Sample;
-    use isobmff_structure::MediaSegmentWriter;
+    use isobmff_structure::{Error, MediaSegmentWriter};
     use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, segment_type, track};
 
     /// Ticks a second the media of the movie is timed in
@@ -73,8 +73,11 @@ mod tests {
         ]
     }
 
-    /// The segment the samples make: the brands, then fragment after fragment
-    fn written_segment(fragments: Vec<Vec<Sample>>) -> Vec<u8> {
+    /// The segment the samples make: the brands, then fragment after fragment, each opened by `begin`
+    fn written_segment(
+        fragments: Vec<Vec<Sample>>,
+        begin: fn(&mut MediaSegmentWriter, u32) -> Result<(), Error>,
+    ) -> Vec<u8> {
         let mut writer = MediaSegmentWriter::new();
         let mut segment = Vec::new();
 
@@ -83,7 +86,7 @@ mod tests {
         for (position, samples) in fragments.into_iter().enumerate() {
             let sequence_number = u32::try_from(position).unwrap().saturating_add(1);
 
-            writer.begin_fragment(sequence_number).unwrap();
+            begin(&mut writer, sequence_number).unwrap();
             for sample in samples {
                 writer.handle_sample(sample).unwrap();
             }
@@ -100,7 +103,7 @@ mod tests {
 
     #[test]
     fn the_samples_are_read_back_as_they_were_handed_over_however_the_segment_was_cut() {
-        let segment = written_segment(two_track_fragments());
+        let segment = written_segment(two_track_fragments(), MediaSegmentWriter::begin_fragment);
 
         for cut_length in [segment.len(), 1, 3, 7, 64, segment.len().saturating_sub(1)] {
             assert_eq!(
@@ -109,5 +112,42 @@ mod tests {
                 "cut at {cut_length}"
             );
         }
+    }
+
+    #[test]
+    fn samples_read_off_a_segment_and_written_continuing_read_back_from_where_each_track_reached() {
+        let segment = written_segment(two_track_fragments(), MediaSegmentWriter::begin_fragment);
+        let mut read_out = samples_of(movie(), &segment, segment.len()).into_iter();
+        let fragments = two_track_fragments()
+            .iter()
+            .map(|samples| read_out.by_ref().take(samples.len()).collect())
+            .collect();
+        let continued = written_segment(fragments, MediaSegmentWriter::begin_fragment_continuing);
+        let moved_to_zero = |sample: Sample| {
+            let origin = if sample.track_id() == 1 {
+                90_000
+            } else {
+                30_720
+            };
+
+            Sample::new(
+                sample.track_id(),
+                sample.decode_time().saturating_sub(origin),
+                sample.sample_duration(),
+                sample.sample_composition_time_offset(),
+                sample.sample_flags(),
+                sample.sample_description_index(),
+                sample.into_data(),
+            )
+        };
+
+        assert_eq!(
+            samples_of(movie(), &continued, continued.len()),
+            two_track_fragments()
+                .concat()
+                .into_iter()
+                .map(moved_to_zero)
+                .collect::<Vec<_>>()
+        );
     }
 }
