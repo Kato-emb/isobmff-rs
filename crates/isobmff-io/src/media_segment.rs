@@ -9,7 +9,8 @@ use isobmff_sequence::EventBytes;
 use isobmff_structure::{MediaSegmentReader, MediaSegmentWriter};
 
 use crate::Error;
-use crate::driver::{Demuxer, Muxer, PollOutput, ReadSamples};
+use crate::driver::{Demuxer, Muxer};
+use crate::stack::{PollOutput, ReadSamples};
 
 /// Reads the samples a media segment carries off an asynchronous source that seeks
 ///

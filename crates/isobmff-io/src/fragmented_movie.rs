@@ -9,7 +9,8 @@ use isobmff_sequence::EventBytes;
 use isobmff_structure::{FragmentedReader, FragmentedWriter};
 
 use crate::Error;
-use crate::driver::{Demuxer, Muxer, PollOutput, ReadSamples};
+use crate::driver::{Demuxer, Muxer};
+use crate::stack::{PollOutput, ReadSamples};
 
 /// Reads the samples a fragmented movie file carries off an asynchronous source that seeks
 ///

@@ -6,7 +6,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use isobmff_sample::Sample;
 
 use crate::Error;
-use crate::driver::{CUT_LENGTH, PollOutput, ReadSamples};
+use crate::stack::{CUT_LENGTH, PollOutput, ReadSamples};
 
 /// A reading stack driven over a source that seeks, a cut at a time
 ///
@@ -205,7 +205,7 @@ mod tests {
 
     use super::{CUT_LENGTH, Demuxer, Muxer};
 
-    use crate::driver::tests::{Queued, Scripted, framed, sample};
+    use crate::stack::tests::{Queued, Scripted, framed, sample};
     use crate::{Error, ErrorKind};
 
     /// Source holding nothing past any position it is sought back to

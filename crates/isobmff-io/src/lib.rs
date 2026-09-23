@@ -34,6 +34,7 @@ mod error;
 mod fragmented_movie;
 mod media_segment;
 mod non_fragmented_movie;
+mod stack;
 
 pub mod blocking;
 
