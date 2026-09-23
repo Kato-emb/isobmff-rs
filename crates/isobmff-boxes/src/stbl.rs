@@ -1,26 +1,20 @@
 //! [`SampleTableBox`] (`stbl`), ISO/IEC 14496-12 §8.5.1
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
-    FieldWriter, OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxVariants, ChildBoxes, Error,
+    FieldReader, FieldWriter, OtherBoxes, boxes,
 };
 
-use crate::chunk_offset::{ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsets};
+use crate::chunk_offset::ChunkOffsets;
 use crate::ctts::CompositionOffsetBox;
 use crate::padb::PaddingBitsBox;
-use crate::sample_size::{CompactSampleSizeBox, SampleSizeBox, SampleSizes};
+use crate::sample_size::SampleSizes;
 use crate::sdtp::SampleDependencyTypeBox;
 use crate::stdp::DegradationPriorityBox;
 use crate::stsc::SampleToChunkBox;
 use crate::stsd::SampleDescriptionBox;
 use crate::stss::SyncSampleBox;
 use crate::stts::TimeToSampleBox;
-
-/// Box types a sample table states the sizes of its samples with, of which it holds one
-const SAMPLE_SIZE_BOXES: &[BoxType] = &[SampleSizeBox::BOX_TYPE, CompactSampleSizeBox::BOX_TYPE];
-
-/// Box types a sample table states the offsets of its chunks with, of which it holds one
-const CHUNK_OFFSET_BOXES: &[BoxType] = &[ChunkOffsetBox::BOX_TYPE, ChunkLargeOffsetBox::BOX_TYPE];
 
 /// Box that holds every table locating and describing the samples of a track
 ///
@@ -276,9 +270,9 @@ impl BoxDecode for SampleTableBox {
                 time_to_sample_boxes.push(child);
             } else if box_type == SampleToChunkBox::BOX_TYPE {
                 sample_to_chunk_boxes.push(child);
-            } else if SAMPLE_SIZE_BOXES.contains(&box_type) {
+            } else if SampleSizes::VARIANTS.contains(&box_type) {
                 sample_size_boxes.push(child);
-            } else if CHUNK_OFFSET_BOXES.contains(&box_type) {
+            } else if ChunkOffsets::VARIANTS.contains(&box_type) {
                 chunk_offset_boxes.push(child);
             } else if box_type == CompositionOffsetBox::BOX_TYPE {
                 composition_offset_boxes.push(child);
@@ -299,12 +293,8 @@ impl BoxDecode for SampleTableBox {
             stsd: sample_description_boxes.exactly_one()?,
             stts: time_to_sample_boxes.exactly_one()?,
             stsc: sample_to_chunk_boxes.exactly_one()?,
-            sample_sizes: SampleSizes::decode(
-                sample_size_boxes.exactly_one_variant(SAMPLE_SIZE_BOXES)?,
-            )?,
-            chunk_offsets: ChunkOffsets::decode(
-                chunk_offset_boxes.exactly_one_variant(CHUNK_OFFSET_BOXES)?,
-            )?,
+            sample_sizes: sample_size_boxes.exactly_one_variant()?,
+            chunk_offsets: chunk_offset_boxes.exactly_one_variant()?,
             ctts: composition_offset_boxes.zero_or_one()?,
             stss: sync_sample_boxes.zero_or_one()?,
             padb: padding_bits_boxes.zero_or_one()?,
@@ -373,9 +363,11 @@ pub(crate) mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, boxes};
+    use isobmff_core::{
+        AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxVariants as _, Error, boxes,
+    };
 
-    use super::{CHUNK_OFFSET_BOXES, SAMPLE_SIZE_BOXES, SampleTableBox};
+    use super::SampleTableBox;
     use crate::chunk_offset::{ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsets};
     use crate::ctts::{CompositionOffsetBox, CompositionOffsetEntry};
     use crate::padb::{PaddingBitsBox, PaddingBitsEntry};
@@ -549,12 +541,12 @@ pub(crate) mod tests {
             (
                 BoxType::compact(*b"stsz"),
                 encoded_child(&SampleSizeBox::from_sizes([])),
-                Error::missing_alternative_box(SAMPLE_SIZE_BOXES),
+                Error::missing_alternative_box(SampleSizes::VARIANTS),
             ),
             (
                 BoxType::compact(*b"stco"),
                 encoded_child(&ChunkOffsetBox::new(Vec::new())),
-                Error::missing_alternative_box(CHUNK_OFFSET_BOXES),
+                Error::missing_alternative_box(ChunkOffsets::VARIANTS),
             ),
         ];
 
@@ -589,7 +581,7 @@ pub(crate) mod tests {
 
         assert_eq!(
             SampleTableBox::decode_payload(&payload),
-            Err(Error::duplicate_alternative_box(CHUNK_OFFSET_BOXES))
+            Err(Error::duplicate_alternative_box(ChunkOffsets::VARIANTS))
         );
     }
 
@@ -618,7 +610,7 @@ pub(crate) mod tests {
 
         assert_eq!(
             SampleTableBox::decode_payload(&both_ways),
-            Err(Error::duplicate_alternative_box(SAMPLE_SIZE_BOXES))
+            Err(Error::duplicate_alternative_box(SampleSizes::VARIANTS))
         );
         assert_eq!(
             SampleTableBox::decode_payload(&one_way_twice),

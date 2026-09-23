@@ -10,7 +10,7 @@ pub use stz2::{CompactSampleSizeBox, CompactSampleSizeEntry, FieldSize};
 
 use core::slice;
 
-use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, Error, RawBox};
+use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxVariants, Error, RawBox};
 
 /// The sizes of the samples of a track, stated in one table or the other
 ///
@@ -37,23 +37,6 @@ impl SampleSizes {
         }
     }
 
-    /// Reads the table `child` holds, for a child of one of the two types
-    pub(crate) fn decode(child: RawBox<'_>) -> Result<Self, Error> {
-        let box_type = child.header().box_type();
-        let payload = child.payload();
-
-        if box_type == SampleSizeBox::BOX_TYPE {
-            SampleSizeBox::decode_payload(payload).map(Self::Stsz)
-        } else {
-            // Why not a type check here too: the caller reads this for a child
-            // it has already matched against `SAMPLE_SIZE_BOXES`, so the other
-            // of the two is what is left, and a check would state a failure the
-            // call cannot reach.
-            CompactSampleSizeBox::decode_payload(payload).map(Self::Stz2)
-        }
-        .map_err(|error| error.in_container(box_type))
-    }
-
     /// Returns the length this table occupies, header and payload
     pub(crate) fn encoded_len(&self) -> u64 {
         match self {
@@ -70,6 +53,24 @@ impl SampleSizes {
         match self {
             Self::Stsz(stsz) => stsz.encode(buffer),
             Self::Stz2(stz2) => stz2.encode(buffer),
+        }
+    }
+}
+
+impl BoxVariants for SampleSizes {
+    const VARIANTS: &'static [BoxType] = &[SampleSizeBox::BOX_TYPE, CompactSampleSizeBox::BOX_TYPE];
+
+    fn decode_variant(child: RawBox<'_>) -> Result<Self, Error> {
+        let box_type = child.header().box_type();
+        let payload = child.payload();
+
+        if box_type == SampleSizeBox::BOX_TYPE {
+            SampleSizeBox::decode_payload(payload).map(Self::Stsz)
+        } else {
+            // Why not a type check here too: `decode_variant` leaves routing a child
+            // of one of `VARIANTS` to its caller, so the other of the two is what is left,
+            // and a check would state a failure no correctly routed call can reach.
+            CompactSampleSizeBox::decode_payload(payload).map(Self::Stz2)
         }
     }
 }

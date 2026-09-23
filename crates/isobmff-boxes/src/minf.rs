@@ -1,8 +1,8 @@
 //! [`MediaInformationBox`] (`minf`), ISO/IEC 14496-12 §8.4.4
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
-    FieldWriter, OtherBoxes, RawBox, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxVariants, ChildBoxes, Error,
+    FieldReader, FieldWriter, OtherBoxes, RawBox, boxes,
 };
 
 use crate::dinf::DataInformationBox;
@@ -12,15 +12,6 @@ use crate::smhd::SoundMediaHeaderBox;
 use crate::stbl::SampleTableBox;
 use crate::sthd::SubtitleMediaHeaderBox;
 use crate::vmhd::VideoMediaHeaderBox;
-
-/// Box types the media information box takes its media header from
-const MEDIA_HEADER_BOXES: &[BoxType] = &[
-    VideoMediaHeaderBox::BOX_TYPE,
-    SoundMediaHeaderBox::BOX_TYPE,
-    HintMediaHeaderBox::BOX_TYPE,
-    NullMediaHeaderBox::BOX_TYPE,
-    SubtitleMediaHeaderBox::BOX_TYPE,
-];
 
 /// Header the kind of media a track carries puts in its `minf`
 ///
@@ -48,29 +39,6 @@ pub enum MediaInformationHeader {
 }
 
 impl MediaInformationHeader {
-    /// Reads the header `child` holds, for a child of one of the five types
-    fn decode(child: RawBox<'_>) -> Result<Self, Error> {
-        let box_type = child.header().box_type();
-        let payload = child.payload();
-
-        if box_type == VideoMediaHeaderBox::BOX_TYPE {
-            VideoMediaHeaderBox::decode_payload(payload).map(Self::Video)
-        } else if box_type == SoundMediaHeaderBox::BOX_TYPE {
-            SoundMediaHeaderBox::decode_payload(payload).map(Self::Sound)
-        } else if box_type == HintMediaHeaderBox::BOX_TYPE {
-            HintMediaHeaderBox::decode_payload(payload).map(Self::Hint)
-        } else if box_type == NullMediaHeaderBox::BOX_TYPE {
-            NullMediaHeaderBox::decode_payload(payload).map(Self::Null)
-        } else {
-            // Why not a type check here too: the caller reads this for a child
-            // it has already matched against `MEDIA_HEADER_BOXES`, so the last of
-            // the five is what is left, and a check would state a failure the
-            // call cannot reach.
-            SubtitleMediaHeaderBox::decode_payload(payload).map(Self::Subtitle)
-        }
-        .map_err(|error| error.in_container(box_type))
-    }
-
     /// Returns the length this header occupies, header and payload
     fn encoded_len(&self) -> u64 {
         match self {
@@ -90,6 +58,36 @@ impl MediaInformationHeader {
             Self::Hint(hmhd) => hmhd.encode(buffer),
             Self::Null(nmhd) => nmhd.encode(buffer),
             Self::Subtitle(sthd) => sthd.encode(buffer),
+        }
+    }
+}
+
+impl BoxVariants for MediaInformationHeader {
+    const VARIANTS: &'static [BoxType] = &[
+        VideoMediaHeaderBox::BOX_TYPE,
+        SoundMediaHeaderBox::BOX_TYPE,
+        HintMediaHeaderBox::BOX_TYPE,
+        NullMediaHeaderBox::BOX_TYPE,
+        SubtitleMediaHeaderBox::BOX_TYPE,
+    ];
+
+    fn decode_variant(child: RawBox<'_>) -> Result<Self, Error> {
+        let box_type = child.header().box_type();
+        let payload = child.payload();
+
+        if box_type == VideoMediaHeaderBox::BOX_TYPE {
+            VideoMediaHeaderBox::decode_payload(payload).map(Self::Video)
+        } else if box_type == SoundMediaHeaderBox::BOX_TYPE {
+            SoundMediaHeaderBox::decode_payload(payload).map(Self::Sound)
+        } else if box_type == HintMediaHeaderBox::BOX_TYPE {
+            HintMediaHeaderBox::decode_payload(payload).map(Self::Hint)
+        } else if box_type == NullMediaHeaderBox::BOX_TYPE {
+            NullMediaHeaderBox::decode_payload(payload).map(Self::Null)
+        } else {
+            // Why not a type check here too: `decode_variant` leaves routing a child
+            // of one of `VARIANTS` to its caller, so the last of the five is what is left,
+            // and a check would state a failure no correctly routed call can reach.
+            SubtitleMediaHeaderBox::decode_payload(payload).map(Self::Subtitle)
         }
     }
 }
@@ -239,7 +237,7 @@ impl BoxDecode for MediaInformationBox {
             let child = child?;
             let box_type = child.header().box_type();
 
-            if MEDIA_HEADER_BOXES.contains(&box_type) {
+            if MediaInformationHeader::VARIANTS.contains(&box_type) {
                 media_header_boxes.push(child);
             } else if box_type == DataInformationBox::BOX_TYPE {
                 data_information_boxes.push(child);
@@ -253,8 +251,7 @@ impl BoxDecode for MediaInformationBox {
         let media_information_header = if media_header_boxes.is_empty() {
             None
         } else {
-            let stated = media_header_boxes.exactly_one_variant(MEDIA_HEADER_BOXES)?;
-            Some(MediaInformationHeader::decode(stated)?)
+            Some(media_header_boxes.exactly_one_variant()?)
         };
 
         Ok(Self {
@@ -304,9 +301,11 @@ pub(crate) mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Error};
+    use isobmff_core::{
+        AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxVariants as _, Error,
+    };
 
-    use super::{MEDIA_HEADER_BOXES, MediaInformationBox, MediaInformationHeader};
+    use super::{MediaInformationBox, MediaInformationHeader};
     use crate::dinf::tests::data_information;
     use crate::smhd::tests::sound_media_header;
     use crate::stbl::tests::sample_table;
@@ -400,7 +399,9 @@ pub(crate) mod tests {
 
         assert_eq!(
             MediaInformationBox::decode_payload(&payload),
-            Err(Error::duplicate_alternative_box(MEDIA_HEADER_BOXES))
+            Err(Error::duplicate_alternative_box(
+                MediaInformationHeader::VARIANTS
+            ))
         );
     }
 

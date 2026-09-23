@@ -5,8 +5,8 @@ use alloc::vec::Vec;
 use crate::any_box::AnyBox;
 use crate::codec::box_decode::BoxDecode;
 use crate::codec::box_definition::BoxDefinition;
+use crate::codec::box_variants::BoxVariants;
 use crate::error::Error;
-use crate::framing::box_type::BoxType;
 use crate::framing::raw_box::RawBox;
 
 /// Children of one box type, gathered as a container reads its payload
@@ -24,9 +24,9 @@ use crate::framing::raw_box::RawBox;
 /// §8.7.3.1 writes the sample sizes as either a `stsz` or a `stz2`, and §8.7.5.1
 /// the chunk offsets as either a `stco` or a `co64` — one slot, several ways of
 /// writing the one child it holds. The gathering of such a slot takes a child
-/// of every variant and finishes with
-/// [`exactly_one_variant`](Self::exactly_one_variant), which hands back the one
-/// child stated, unread, for the slot to read as the variant its type names.
+/// of every type in [`BoxVariants::VARIANTS`] and finishes with
+/// [`exactly_one_variant`](Self::exactly_one_variant), which reads the one
+/// child stated as the variant its type names.
 ///
 /// Reading is left until then. The children are gathered as the bytes they were
 /// framed as, so a count the quantity already forbids is reported without a
@@ -34,8 +34,8 @@ use crate::framing::raw_box::RawBox;
 ///
 /// Routing a box type to the gathering that claims it belongs to the container.
 /// A child of another type pushed here is read as the type the finish asks for,
-/// or handed back as one of the variants, which is a fault of the container
-/// rather than one this type reports.
+/// or as one of the variants, which is a fault of the container rather than
+/// one this type reports.
 ///
 /// # Examples
 ///
@@ -133,10 +133,10 @@ impl<'payload> ChildBoxes<'payload> {
             .ok_or(Error::missing_mandatory_box(Child::BOX_TYPE))
     }
 
-    /// Returns the one child of a quantity of `Exactly one variant must be present`, unread
+    /// Returns the slot a quantity of `Exactly one variant must be present` fills
     ///
-    /// `variants` is every box type that writes the slot, which this gathering
-    /// holds the children of and the failures name.
+    /// The gathering holds the children of every type in
+    /// [`Slot::VARIANTS`](BoxVariants::VARIANTS), which the failures name.
     ///
     /// # Errors
     ///
@@ -146,13 +146,16 @@ impl<'payload> ChildBoxes<'payload> {
     ///   one type.
     /// * [`DuplicateAlternativeBox`](crate::ErrorKind::DuplicateAlternativeBox): more
     ///   than one was, of more than one type.
-    pub fn exactly_one_variant(
-        self,
-        variants: &'static [BoxType],
-    ) -> Result<RawBox<'payload>, Error> {
+    /// * Whatever the child reports, with its box type on the
+    ///   [`containers`](Error::containers) path of the failure.
+    pub fn exactly_one_variant<Slot: BoxVariants>(self) -> Result<Slot, Error> {
+        let variants = Slot::VARIANTS;
         match self.children.as_slice() {
             [] => Err(Error::missing_alternative_box(variants)),
-            [stated] => Ok(*stated),
+            [stated] => {
+                let box_type = stated.header().box_type();
+                Slot::decode_variant(*stated).map_err(|error| error.in_container(box_type))
+            }
             [first, rest @ ..] => {
                 let box_type = first.header().box_type();
                 let of_one_type = rest
@@ -322,10 +325,11 @@ mod tests {
     use crate::any_box::AnyBox;
     use crate::codec::box_decode::BoxDecode;
     use crate::codec::box_definition::BoxDefinition;
+    use crate::codec::box_variants::BoxVariants;
     use crate::codec::field::FieldReader;
     use crate::error::Error;
     use crate::framing::box_type::BoxType;
-    use crate::framing::raw_box::boxes;
+    use crate::framing::raw_box::{RawBox, boxes};
 
     /// Box whose payload is one 32-bit sequence number
     #[derive(PartialEq, Debug)]
@@ -393,20 +397,34 @@ mod tests {
         );
     }
 
-    /// Box types of a slot stated either as a `sqnc` or as a `sqn2`
-    const SEQUENCE_NUMBER_BOXES: &[BoxType] =
-        &[SequenceNumberBox::BOX_TYPE, BoxType::compact(*b"sqn2")];
+    /// Sequence number stated by a `sqnc` or, as a box of the same payload, by a `sqn2`
+    #[derive(PartialEq, Debug)]
+    enum SequenceNumber {
+        Primary(SequenceNumberBox),
+        Alternative(SequenceNumberBox),
+    }
+
+    impl BoxVariants for SequenceNumber {
+        const VARIANTS: &'static [BoxType] =
+            &[SequenceNumberBox::BOX_TYPE, BoxType::compact(*b"sqn2")];
+
+        fn decode_variant(child: RawBox<'_>) -> Result<Self, Error> {
+            let sequence_number = SequenceNumberBox::decode_payload(child.payload())?;
+            if child.header().box_type() == SequenceNumberBox::BOX_TYPE {
+                Ok(Self::Primary(sequence_number))
+            } else {
+                Ok(Self::Alternative(sequence_number))
+            }
+        }
+    }
 
     #[test]
-    fn a_quantity_of_exactly_one_variant_hands_back_the_child_stated() {
-        let payload = b"\0\0\0\x0csqn2\0\0\0\x07";
-        let children = gathered(payload);
+    fn a_quantity_of_exactly_one_variant_reads_the_child_stated_as_its_variant() {
+        let children = gathered(b"\0\0\0\x0csqn2\0\0\0\x07");
 
         assert_eq!(
-            children
-                .exactly_one_variant(SEQUENCE_NUMBER_BOXES)
-                .map(|child| child.header().box_type()),
-            Ok(BoxType::compact(*b"sqn2"))
+            children.exactly_one_variant::<SequenceNumber>(),
+            Ok(SequenceNumber::Alternative(SequenceNumberBox(7)))
         );
     }
 
@@ -416,16 +434,26 @@ mod tests {
         let of_two_types = b"\0\0\0\x0csqnc\0\0\0\x07\0\0\0\x0csqn2\0\0\0\x09";
 
         assert_eq!(
-            ChildBoxes::new().exactly_one_variant(SEQUENCE_NUMBER_BOXES),
-            Err(Error::missing_alternative_box(SEQUENCE_NUMBER_BOXES))
+            ChildBoxes::new().exactly_one_variant::<SequenceNumber>(),
+            Err(Error::missing_alternative_box(SequenceNumber::VARIANTS))
         );
         assert_eq!(
-            gathered(of_one_type).exactly_one_variant(SEQUENCE_NUMBER_BOXES),
+            gathered(of_one_type).exactly_one_variant::<SequenceNumber>(),
             Err(Error::duplicate_box(SequenceNumberBox::BOX_TYPE))
         );
         assert_eq!(
-            gathered(of_two_types).exactly_one_variant(SEQUENCE_NUMBER_BOXES),
-            Err(Error::duplicate_alternative_box(SEQUENCE_NUMBER_BOXES))
+            gathered(of_two_types).exactly_one_variant::<SequenceNumber>(),
+            Err(Error::duplicate_alternative_box(SequenceNumber::VARIANTS))
+        );
+    }
+
+    #[test]
+    fn a_variant_whose_payload_fails_to_read_is_named_on_the_path_of_the_failure() {
+        let children = gathered(b"\0\0\0\x09sqn2!");
+
+        assert_eq!(
+            children.exactly_one_variant::<SequenceNumber>(),
+            Err(Error::truncated_payload(4, 1).in_container(BoxType::compact(*b"sqn2")))
         );
     }
 

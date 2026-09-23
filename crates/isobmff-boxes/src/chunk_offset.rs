@@ -5,8 +5,8 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWidth, FieldWriter,
-    FullBoxFields, FullBoxFlags, RawBox,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxVariants, Error, FieldReader, FieldWidth,
+    FieldWriter, FullBoxFields, FullBoxFlags, RawBox,
 };
 
 /// Length of the fields that precede the entries
@@ -92,23 +92,6 @@ impl ChunkOffsets {
         }
     }
 
-    /// Reads the table `child` holds, for a child of one of the two types
-    pub(crate) fn decode(child: RawBox<'_>) -> Result<Self, Error> {
-        let box_type = child.header().box_type();
-        let payload = child.payload();
-
-        if box_type == ChunkOffsetBox::BOX_TYPE {
-            ChunkOffsetBox::decode_payload(payload).map(Self::Stco)
-        } else {
-            // Why not a type check here too: the caller reads this for a child
-            // it has already matched against `CHUNK_OFFSET_BOXES`, so the other
-            // of the two is what is left, and a check would state a failure the
-            // call cannot reach.
-            ChunkLargeOffsetBox::decode_payload(payload).map(Self::Co64)
-        }
-        .map_err(|error| error.in_container(box_type))
-    }
-
     /// Returns the length this table occupies, header and payload
     pub(crate) fn encoded_len(&self) -> u64 {
         match self {
@@ -125,6 +108,24 @@ impl ChunkOffsets {
         match self {
             Self::Stco(stco) => stco.encode(buffer),
             Self::Co64(co64) => co64.encode(buffer),
+        }
+    }
+}
+
+impl BoxVariants for ChunkOffsets {
+    const VARIANTS: &'static [BoxType] = &[ChunkOffsetBox::BOX_TYPE, ChunkLargeOffsetBox::BOX_TYPE];
+
+    fn decode_variant(child: RawBox<'_>) -> Result<Self, Error> {
+        let box_type = child.header().box_type();
+        let payload = child.payload();
+
+        if box_type == ChunkOffsetBox::BOX_TYPE {
+            ChunkOffsetBox::decode_payload(payload).map(Self::Stco)
+        } else {
+            // Why not a type check here too: `decode_variant` leaves routing a child
+            // of one of `VARIANTS` to its caller, so the other of the two is what is left,
+            // and a check would state a failure no correctly routed call can reach.
+            ChunkLargeOffsetBox::decode_payload(payload).map(Self::Co64)
         }
     }
 }
@@ -382,7 +383,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, Error, boxes};
+    use isobmff_core::{BoxDecode, BoxEncode, BoxVariants as _, Error, boxes};
 
     use super::{
         ChunkLargeOffsetBox, ChunkLargeOffsetEntry, ChunkOffsetBox, ChunkOffsetEntry, ChunkOffsets,
@@ -401,7 +402,7 @@ mod tests {
         let mut buffer = vec![0; usize::try_from(chunk_offsets.encoded_len()).unwrap()];
         chunk_offsets.encode(&mut buffer).unwrap();
 
-        ChunkOffsets::decode(boxes(&buffer).next().unwrap().unwrap()).unwrap()
+        ChunkOffsets::decode_variant(boxes(&buffer).next().unwrap().unwrap()).unwrap()
     }
 
     #[test]
