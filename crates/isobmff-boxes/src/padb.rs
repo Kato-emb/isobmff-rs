@@ -99,10 +99,6 @@ impl BoxDecode for PaddingBitsBox {
 
         let declared = u64::from(reader.read_u32()?);
 
-        // Why not the low half first, as GPAC's C implementation packs a pair:
-        // §8.7.6 lays `pad1` out ahead of `pad2`, so a table GPAC wrote reads
-        // here with each pair swapped, and its last entry lost when the count
-        // is odd.
         let entries: Vec<PaddingBitsEntry> = nibbles::unpack(reader.take_remainder(), declared)
             .into_iter()
             .map(|pad| PaddingBitsEntry {

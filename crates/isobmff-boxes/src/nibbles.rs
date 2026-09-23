@@ -14,6 +14,10 @@ const LOW_HALF: u8 = 0x0f;
 /// many as that table takes; any other count comes out as the bytes hold it,
 /// for the caller to check against `declared`.
 pub(crate) fn unpack(packed: &[u8], declared: u64) -> Vec<u8> {
+    // Why not the low half first, as GPAC's C implementation packs a `padb`
+    // pair: §8.7.6 lays `pad1` out ahead of `pad2` and §8.7.3.3 writes
+    // `entry[i]<<4 + entry[i+1]`, so a `padb` GPAC wrote reads here with each
+    // pair swapped, and its last entry lost when the count is odd.
     let mut values: Vec<u8> = packed
         .iter()
         .flat_map(|byte| [byte >> 4, byte & LOW_HALF])

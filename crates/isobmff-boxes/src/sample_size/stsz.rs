@@ -39,7 +39,7 @@ impl SampleSizeEntry {
     }
 }
 
-/// The sizes of the samples of a track, stated one way or the other
+/// The sizes a [`SampleSizeBox`] states, one shared by every sample or one per sample
 ///
 /// ISO/IEC 14496-12 §8.7.3.2 states them as a size every sample shares, or as a
 /// table of one size per sample. The wire marks the second by writing the shared

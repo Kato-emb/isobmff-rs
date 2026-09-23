@@ -16,8 +16,8 @@ use crate::sample_flags::SampleFlagFields;
 /// `stts` states when it is decoded, as a delta from the sample before it
 /// summed from zero (§8.6.1.2); the `stsc` states which chunk it lies in and
 /// which `stsd` entry describes it, by runs of chunks holding the same number
-/// of samples (§8.7.4); the `stsz` or the `stz2` states how many bytes it occupies
-/// (§8.7.3.2); and the `stco` or the `co64` states where its chunk starts in
+/// of samples (§8.7.4); the `stsz` or the `stz2` states how many bytes it
+/// occupies (§8.7.3); and the `stco` or the `co64` states where its chunk starts in
 /// the file, the samples of a chunk lying one after another from there
 /// (§8.7.5). The `data_reference_index` of each sample is read off the `stsd`
 /// entry that describes it (§8.5.2.3), which has to name the file itself.

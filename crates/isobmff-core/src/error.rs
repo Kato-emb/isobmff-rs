@@ -1038,7 +1038,7 @@ mod tests {
             Category::Unsupported
         );
         assert_eq!(
-            Error::unsupported_box(BoxType::compact(*b"stz2")).category(),
+            Error::unsupported_box(BoxType::compact(*b"sgpd")).category(),
             Category::Unsupported
         );
         assert_eq!(
@@ -1139,8 +1139,8 @@ mod tests {
             "input holds a moof box where a moov box was expected"
         );
         assert_eq!(
-            Error::unsupported_box(BoxType::compact(*b"stz2")).to_string(),
-            "container holds a stz2 box, which this implementation does not read"
+            Error::unsupported_box(BoxType::compact(*b"sgpd")).to_string(),
+            "container holds a sgpd box, which this implementation does not read"
         );
     }
 

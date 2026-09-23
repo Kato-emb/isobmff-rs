@@ -23,7 +23,7 @@ use crate::sample_table_writer::open_track::OpenTrack;
 /// of each straight back, to be laid down where the caller opened the chunk.
 /// What it keeps is what the sample tables of a track state about them: the
 /// decode timeline (`stts`, §8.6.1.2), the chunks the samples lie in (`stsc`,
-/// §8.7.4), their sizes (an `stsz`, §8.7.3.2, never a `stz2`) and where each
+/// §8.7.4), their sizes (a `stsz`, §8.7.3.2, never a `stz2`) and where each
 /// chunk starts (`stco` or `co64`, §8.7.5), and the optional tables stating their composition time
 /// offsets (`ctts`, §8.6.1.3) and the fields of their `sample_flags` (`sdtp`,
 /// `padb`, `stss` and `stdp`, §8.8.3.1), which [`finish`](Self::finish) hands
@@ -157,7 +157,7 @@ impl SampleTables {
         &self.stsc
     }
 
-    /// Returns how many bytes each sample occupies, which the writer states in an `stsz`
+    /// Returns how many bytes each sample occupies, which the writer states in a `stsz`
     #[must_use]
     pub const fn sample_sizes(&self) -> &SampleSizes {
         &self.sample_sizes
