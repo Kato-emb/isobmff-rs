@@ -1,14 +1,12 @@
 //! [`MediaSegmentDemuxer`] and [`MediaSegmentMuxer`], a media segment read off a source that seeks and written to a sink, ISO/IEC 14496-12 §8.16
 
-use core::ops::Range;
 use std::io::{Read, Seek, Write};
 
 use isobmff_boxes::{MovieBox, SegmentTypeBox};
 use isobmff_sample::Sample;
-use isobmff_sequence::EventBytes;
 use isobmff_structure::{MediaSegmentReader, MediaSegmentWriter};
 
-use super::driver::{Demuxer, Muxer, PollOutput, ReadSamples};
+use super::driver::{Demuxer, Muxer};
 use crate::Error;
 
 /// Reads the samples a media segment carries off a source that seeks
@@ -127,28 +125,6 @@ impl<S: Read + Seek> Iterator for MediaSegmentDemuxer<S> {
     }
 }
 
-impl ReadSamples for MediaSegmentReader {
-    fn handle_input(&mut self, input: &[u8]) -> Result<(), isobmff_structure::Error> {
-        MediaSegmentReader::handle_input(self, input)
-    }
-
-    fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), isobmff_structure::Error> {
-        MediaSegmentReader::handle_data(self, offset, data)
-    }
-
-    fn poll_sample(&mut self) -> Option<Sample> {
-        MediaSegmentReader::poll_sample(self)
-    }
-
-    fn wanted_extent(&self) -> Option<Range<u64>> {
-        MediaSegmentReader::wanted_extent(self)
-    }
-
-    fn finish(&mut self) -> Result<(), isobmff_structure::Error> {
-        MediaSegmentReader::finish(self)
-    }
-}
-
 /// Lays a media segment down on a sink, taking the samples as they come
 ///
 /// The driver of [`MediaSegmentWriter`] over `std::io`: it takes the brands
@@ -260,12 +236,6 @@ impl<W: Write> MediaSegmentMuxer<W> {
     /// * [`Io`](crate::ErrorKind::Io): the sink does not flush.
     pub fn finish(&mut self) -> Result<(), Error> {
         self.muxer.finish(MediaSegmentWriter::finish)
-    }
-}
-
-impl PollOutput for MediaSegmentWriter {
-    fn poll_output(&mut self) -> Option<EventBytes> {
-        MediaSegmentWriter::poll_output(self)
     }
 }
 
