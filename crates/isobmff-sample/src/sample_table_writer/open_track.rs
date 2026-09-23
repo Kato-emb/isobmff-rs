@@ -86,12 +86,12 @@ impl OpenTrack {
         let fields = &self.sample_flags;
         let stss = fields
             .iter()
-            .any(|sample| sample.is_non_sync_sample)
+            .any(|sample| sample.sample_is_non_sync_sample)
             .then(|| {
                 SyncSampleBox::new(
                     (1..)
                         .zip(fields)
-                        .filter(|(_, sample)| !sample.is_non_sync_sample)
+                        .filter(|(_, sample)| !sample.sample_is_non_sync_sample)
                         .map(|(sample_number, _)| SyncSampleEntry::new(sample_number))
                         .collect(),
                 )

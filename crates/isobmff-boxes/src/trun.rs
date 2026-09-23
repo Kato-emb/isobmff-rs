@@ -47,18 +47,18 @@ const DEFINED_FLAGS: u32 = DATA_OFFSET_PRESENT | FIRST_SAMPLE_FLAGS_PRESENT | PE
 /// Rows this box reads from a run whose rows are empty
 const MAXIMUM_EMPTY_ROWS: u64 = 1 << 20;
 
-/// Widest composition time offset a row carries, which version 0 writes unsigned
+/// Widest composition time offset a `trun` row or a `ctts` entry carries, which version 0 writes unsigned
 const COMPOSITION_TIME_OFFSET_MAXIMUM: i64 = u32::MAX as i64;
 
-/// Lowest composition time offset a row carries, which version 1 writes signed
+/// Lowest composition time offset a `trun` row or a `ctts` entry carries, which version 1 writes signed
 const COMPOSITION_TIME_OFFSET_MINIMUM: i64 = i32::MIN as i64;
 
-/// Composition time offset one of the two versions of a `trun` writes
+/// Composition time offset one of the two versions of a `trun` or a `ctts` writes
 ///
-/// Version 0 of the box writes the offset unsigned in 32 bits and version 1
-/// signed (ISO/IEC 14496-12 §8.8.8), so a value in
-/// `-2_147_483_648..=4_294_967_295` is one a row can carry, and this holds
-/// such a value alone.
+/// Version 0 of either box writes the offset unsigned in 32 bits and version 1
+/// signed (ISO/IEC 14496-12 §8.8.8, §8.6.1.3), so a value in
+/// `-2_147_483_648..=4_294_967_295` is one a row or an entry can carry, and
+/// this holds such a value alone.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct CompositionTimeOffset(i64);
 
@@ -112,9 +112,9 @@ impl CompositionTimeOffset {
 
     /// Writes the offset the way `version` writes it
     pub(crate) fn write(self, writer: &mut FieldWriter<'_>, version: u8) -> Result<(), Error> {
-        // Why not unwrap: the version comes from `version_writing` over offsets
-        // the constructors of both boxes have checked it holds, so the failure
-        // named here is one the call cannot reach.
+        // Why not unwrap: the constructors keep every offset within the version
+        // `version_writing` picks, and where one slips through, the fallback
+        // version 1 is refused here rather than written truncated.
         let out_of_range = Error::out_of_range(self.0.unsigned_abs(), FieldWidth::Compact);
         if version == 0 {
             writer.write_u32(u32::try_from(self.0).map_err(|_| out_of_range)?)

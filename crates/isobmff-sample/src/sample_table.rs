@@ -22,7 +22,7 @@ use crate::sample_flags::SampleFlagFields;
 /// (§8.7.5). The `data_reference_index` of each sample is read off the `stsd`
 /// entry that describes it (§8.5.2.3), which has to name the file itself.
 ///
-/// Five optional tables state the rest, one entry per sample: the `ctts`
+/// Five optional tables state the rest: the `ctts`
 /// states the composition time offset (§8.6.1.3), and the `sdtp` (§8.6.4),
 /// the `padb` (§8.7.6), the `stss` (§8.6.2) and the `stdp` (§8.5.3) state the
 /// fields of the `sample_flags` laid out as §8.8.3.1 lays them out in a movie
@@ -48,7 +48,7 @@ use crate::sample_flags::SampleFlagFields;
 ///   the tables of a track count different numbers of samples.
 /// * [`SyncSampleOutOfRange`](crate::ErrorKind::SyncSampleOutOfRange):
 ///   the `stss` of a track lists a sample number no later than the one
-///   before it, or past the samples of the track.
+///   before it, or outside the samples of the track (0 or past the last).
 /// * [`FirstChunkOutOfRange`](crate::ErrorKind::FirstChunkOutOfRange):
 ///   a run of chunks of a track starts at a chunk outside the range open to it.
 /// * [`UnknownSampleDescriptionIndex`](crate::ErrorKind::UnknownSampleDescriptionIndex):
@@ -141,7 +141,7 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
             let sample_flags = SampleFlagFields {
                 dependency,
                 padding,
-                is_non_sync_sample: !is_sync_sample,
+                sample_is_non_sync_sample: !is_sync_sample,
                 degradation_priority,
             };
             let data_end = data_offset

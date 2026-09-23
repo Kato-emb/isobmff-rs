@@ -39,7 +39,7 @@ const CHUNK_OFFSET_BOXES: &[BoxType] = &[ChunkOffsetBox::BOX_TYPE, ChunkLargeOff
 /// [`new`](Self::new) leaves out and the `with_` methods set. Every other child
 /// is kept in [`other_boxes`](Self::other_boxes) and written back unread.
 ///
-/// Decoding asks for all five. §8.5.1 lets the `stbl` of a track that
+/// Decoding asks for all five required tables. §8.5.1 lets the `stbl` of a track that
 /// references no data hold no children at all, and such a box does not decode
 /// into this type — the raw walk still reads it. The chunk offsets are taken
 /// from whichever of `stco` and `co64` the box holds, and the one it holds is

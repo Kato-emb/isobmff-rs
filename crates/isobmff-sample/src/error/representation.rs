@@ -10,17 +10,11 @@ pub(super) enum Representation {
     /// Failure of one box, carried through whole
     Box(isobmff_core::Error),
     /// Decode time running past what 64 bits carry
-    DecodeTimeOverflow {
-        track_id: u32,
-    },
+    DecodeTimeOverflow { track_id: u32 },
     /// Data offset running past what 64 bits carry
-    DataOffsetOverflow {
-        track_id: u32,
-    },
+    DataOffsetOverflow { track_id: u32 },
     /// Fragment carrying samples of a track the movie never declared
-    UnknownTrackId {
-        track_id: u32,
-    },
+    UnknownTrackId { track_id: u32 },
     /// Samples described by an `stsd` entry their track has none of
     UnknownSampleDescriptionIndex {
         track_id: u32,
@@ -39,18 +33,11 @@ pub(super) enum Representation {
         data_reference_index: u16,
     },
     /// Sample tables of a track counting different numbers of samples
-    SampleCountMismatch {
-        track_id: u32,
-    },
+    SampleCountMismatch { track_id: u32 },
     /// Run of chunks starting at a chunk outside the range open to it
-    FirstChunkOutOfRange {
-        track_id: u32,
-        first_chunk: u32,
-    },
-    SyncSampleOutOfRange {
-        track_id: u32,
-        sample_number: u32,
-    },
+    FirstChunkOutOfRange { track_id: u32, first_chunk: u32 },
+    /// Sync sample listed out of order or outside the samples of its track
+    SyncSampleOutOfRange { track_id: u32, sample_number: u32 },
     /// Sample declared past the limit a reader holds
     SampleSizeLimitExceeded {
         track_id: u32,
@@ -70,20 +57,11 @@ pub(super) enum Representation {
     /// Fragment begun while the one before it was still open
     FragmentStillOpen,
     /// Sample longer than the field a `trun` row or an `stsz` entry states its length in reaches
-    SampleSizeOutOfRange {
-        track_id: u32,
-        declared: u64,
-    },
+    SampleSizeOutOfRange { track_id: u32, declared: u64 },
     /// Sample lying further into its fragment than the offset a `trun` states reaches
-    DataOffsetOutOfRange {
-        track_id: u32,
-        offset: u64,
-    },
+    DataOffsetOutOfRange { track_id: u32, offset: u64 },
     /// Sample stating a composition time offset no version of a `trun` or a `ctts` writes
-    CompositionTimeOffsetOutOfRange {
-        track_id: u32,
-        offset: i64,
-    },
+    CompositionTimeOffsetOutOfRange { track_id: u32, offset: i64 },
     /// Sample not starting where the one before it in its track ends
     DecodeTimeMismatch {
         track_id: u32,
@@ -105,15 +83,9 @@ pub(super) enum Representation {
     /// Sample handed over while no chunk was open
     NoChunkOpen,
     /// Sample belonging to another track than the chunk that is open holds
-    TrackIdMismatch {
-        stated: u32,
-        established: u32,
-    },
+    TrackIdMismatch { stated: u32, established: u32 },
     /// Sample setting a reserved bit of its flags, which no sample table carries
-    UnsupportedSampleFlags {
-        track_id: u32,
-        sample_flags: u32,
-    },
+    UnsupportedSampleFlags { track_id: u32, sample_flags: u32 },
 }
 
 /// Values a failure carries, laid flat, with `None` where its kind carries no such value

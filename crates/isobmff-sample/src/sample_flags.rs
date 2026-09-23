@@ -19,7 +19,7 @@ const THREE_BITS: u8 = 0b111;
 pub(crate) struct SampleFlagFields {
     pub(crate) dependency: SampleDependencyTypeEntry,
     pub(crate) padding: PaddingBitsEntry,
-    pub(crate) is_non_sync_sample: bool,
+    pub(crate) sample_is_non_sync_sample: bool,
     pub(crate) degradation_priority: DegradationPriorityEntry,
 }
 
@@ -42,7 +42,7 @@ impl SampleFlagFields {
                 (low >> 4) & TWO_BITS,
             )?,
             padding: PaddingBitsEntry::new((low >> 1) & THREE_BITS)?,
-            is_non_sync_sample: low & 1 != 0,
+            sample_is_non_sync_sample: low & 1 != 0,
             degradation_priority: DegradationPriorityEntry::new(u16::from_be_bytes([
                 priority_high,
                 priority_low,
@@ -57,7 +57,7 @@ impl SampleFlagFields {
         let low = dependency.sample_is_depended_on() << 6
             | dependency.sample_has_redundancy() << 4
             | self.padding.pad() << 1
-            | u8::from(self.is_non_sync_sample);
+            | u8::from(self.sample_is_non_sync_sample);
         let [priority_high, priority_low] = self.degradation_priority.priority().to_be_bytes();
 
         u32::from_be_bytes([high, low, priority_high, priority_low])
@@ -75,7 +75,7 @@ mod tests {
         let fields = SampleFlagFields {
             dependency: SampleDependencyTypeEntry::new(3, 2, 1, 2).unwrap(),
             padding: PaddingBitsEntry::new(5).unwrap(),
-            is_non_sync_sample: true,
+            sample_is_non_sync_sample: true,
             degradation_priority: DegradationPriorityEntry::new(0xbeef),
         };
 
