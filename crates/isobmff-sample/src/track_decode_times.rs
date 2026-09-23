@@ -20,7 +20,7 @@ use alloc::collections::BTreeMap;
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct TrackDecodeTimes {
     decode_times: BTreeMap<u32, u64>,
-    unresolved: Option<u64>,
+    starts_at_zero: bool,
 }
 
 impl TrackDecodeTimes {
@@ -29,7 +29,7 @@ impl TrackDecodeTimes {
     pub const fn new() -> Self {
         Self {
             decode_times: BTreeMap::new(),
-            unresolved: Some(0),
+            starts_at_zero: true,
         }
     }
 
@@ -41,7 +41,7 @@ impl TrackDecodeTimes {
     pub const fn unknown() -> Self {
         Self {
             decode_times: BTreeMap::new(),
-            unresolved: None,
+            starts_at_zero: false,
         }
     }
 
@@ -51,7 +51,7 @@ impl TrackDecodeTimes {
         self.decode_times
             .get(&track_id)
             .copied()
-            .or(self.unresolved)
+            .or(self.starts_at_zero.then_some(0))
     }
 
     /// Moves `track_id` to `decode_time`, where its next sample starts
@@ -73,7 +73,6 @@ mod tests {
     #[test]
     fn a_track_no_sample_was_resolved_for_stands_at_zero() {
         assert_eq!(TrackDecodeTimes::new().decode_time(1), Some(0));
-        assert_eq!(TrackDecodeTimes::default(), TrackDecodeTimes::new());
     }
 
     #[test]

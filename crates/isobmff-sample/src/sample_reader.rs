@@ -316,12 +316,14 @@ impl SampleReader {
     /// were declared over by [`finish`](Self::finish) takes extents and bytes
     /// again. A reader that failed stays failed.
     pub fn clear(&mut self) {
-        self.pending.clear();
-        self.ready.clear();
-        self.whole_held = 0;
-        self.held_in_order = true;
-        if matches!(self.state, State::Finished) {
-            self.state = State::Reading;
+        let failed = match self.state {
+            State::Failed(failure) => Some(failure),
+            State::Reading | State::Finished => None,
+        };
+
+        *self = Self::with_sample_size_limit(self.sample_size_limit);
+        if let Some(failure) = failed {
+            self.state = State::Failed(failure);
         }
     }
 
@@ -573,14 +575,17 @@ mod tests {
     }
 
     #[test]
-    fn a_reader_declared_over_takes_extents_again_once_cleared_and_a_failed_one_stays_failed() {
+    fn a_reader_declared_over_takes_extents_again_once_cleared() {
         let mut finished = SampleReader::new();
         finished.finish().unwrap();
 
         finished.clear();
 
         assert_eq!(finished.handle_sample_extent(extent(0, 100..104)), Ok(()));
+    }
 
+    #[test]
+    fn a_failed_reader_stays_failed_once_cleared() {
         let mut failed = SampleReader::new();
         failed.handle_sample_extent(extent(0, 100..104)).unwrap();
         let unfinished = failed.finish().unwrap_err();

@@ -57,10 +57,13 @@ impl SegmentIndex {
     pub fn subsegment_at(&self, time: u64) -> Option<&Subsegment> {
         let after = self
             .subsegments
-            .partition_point(|subsegment| subsegment.earliest_presentation_time <= time);
+            .partition_point(|subsegment| subsegment.presentation_time.start <= time);
         let candidate = self.subsegments.get(after.checked_sub(1)?)?;
 
-        (time < candidate.presentation_end()).then_some(candidate)
+        candidate
+            .presentation_time
+            .contains(&time)
+            .then_some(candidate)
     }
 }
 
@@ -69,7 +72,7 @@ impl SegmentIndex {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Subsegment {
     extent: Range<u64>,
-    earliest_presentation_time: u64,
+    presentation_time: Range<u64>,
     reference: SegmentIndexReference,
 }
 
@@ -80,10 +83,13 @@ impl Subsegment {
         self.extent.clone()
     }
 
-    /// Returns the earliest presentation time of the subsegment, in the time scale of its index
+    /// Returns the presentation times the subsegment covers, in the time scale of its index
+    ///
+    /// The range starts at the earliest presentation time of the subsegment and
+    /// runs on by its duration.
     #[must_use]
-    pub const fn earliest_presentation_time(&self) -> u64 {
-        self.earliest_presentation_time
+    pub fn presentation_time(&self) -> Range<u64> {
+        self.presentation_time.clone()
     }
 
     /// Returns the reference of the `sidx` the subsegment was resolved from
@@ -93,14 +99,6 @@ impl Subsegment {
     #[must_use]
     pub const fn reference(&self) -> &SegmentIndexReference {
         &self.reference
-    }
-
-    /// Returns the presentation time the subsegment ends at
-    fn presentation_end(&self) -> u64 {
-        // Why not checked_add: subsegments summed these same times and refused
-        // the index on overflow, so this cannot saturate.
-        self.earliest_presentation_time
-            .saturating_add(u64::from(self.reference.subsegment_duration()))
     }
 }
 
@@ -140,7 +138,7 @@ pub fn subsegments(sidx: &SegmentIndexBox, anchor: u64) -> Result<SegmentIndex, 
 
         subsegments.push(Subsegment {
             extent: start..end,
-            earliest_presentation_time,
+            presentation_time: earliest_presentation_time..presentation_end,
             reference: *reference,
         });
 
@@ -196,15 +194,15 @@ mod tests {
         .unwrap()
     }
 
-    /// Subsegment over `extent`, starting at `earliest_presentation_time`, resolved from `reference`
+    /// Subsegment over `extent` and `presentation_time`, resolved from `reference`
     fn subsegment(
         extent: Range<u64>,
-        earliest_presentation_time: u64,
+        presentation_time: Range<u64>,
         reference: SegmentIndexReference,
     ) -> Subsegment {
         Subsegment {
             extent,
-            earliest_presentation_time,
+            presentation_time,
             reference,
         }
     }
@@ -235,9 +233,9 @@ mod tests {
                 timescale: 90_000,
                 earliest_presentation_time: 9_000,
                 subsegments: vec![
-                    subsegment(1_200..2_200, 9_000, reference(1_000, 3_000)),
-                    subsegment(2_200..4_200, 12_000, reference(2_000, 3_000)),
-                    subsegment(4_200..4_700, 15_000, reference(500, 1_500)),
+                    subsegment(1_200..2_200, 9_000..12_000, reference(1_000, 3_000)),
+                    subsegment(2_200..4_200, 12_000..15_000, reference(2_000, 3_000)),
+                    subsegment(4_200..4_700, 15_000..16_500, reference(500, 1_500)),
                 ],
             }
         );
@@ -249,7 +247,7 @@ mod tests {
         let starting_at = |time: u64| {
             resolved
                 .subsegment_at(time)
-                .map(Subsegment::earliest_presentation_time)
+                .map(|subsegment| subsegment.presentation_time().start)
         };
 
         assert_eq!(starting_at(9_000), Some(9_000));

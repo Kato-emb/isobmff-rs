@@ -66,4 +66,5 @@ pub use movie_fragment_writer::MovieFragmentWriter;
 pub use sample::{Sample, SampleExtent};
 pub use sample_reader::SampleReader;
 pub use sample_table_writer::{SampleTableWriter, SampleTables};
+pub use segment_index::{SegmentIndex, Subsegment};
 pub use track_decode_times::TrackDecodeTimes;

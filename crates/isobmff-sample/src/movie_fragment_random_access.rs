@@ -45,17 +45,12 @@ mod tests {
         )
     }
 
-    /// Table of track 1 listing sync samples at 0, 3000 and 6000, out of order
-    fn table() -> TrackFragmentRandomAccessBox {
-        TrackFragmentRandomAccessBox::new(
-            1,
-            vec![entry(3_000, 5_000), entry(0, 1_000), entry(6_000, 9_000)],
-        )
-    }
-
     #[test]
     fn a_time_is_looked_up_in_the_latest_sync_sample_at_or_before_it() {
-        let table = table();
+        let table = TrackFragmentRandomAccessBox::new(
+            1,
+            vec![entry(3_000, 5_000), entry(0, 1_000), entry(6_000, 9_000)],
+        );
 
         assert_eq!(sync_sample_at(&table, 0), Some(&entry(0, 1_000)));
         assert_eq!(sync_sample_at(&table, 2_999), Some(&entry(0, 1_000)));
