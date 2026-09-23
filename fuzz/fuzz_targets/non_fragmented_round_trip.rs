@@ -94,9 +94,8 @@ fuzz_target!(|input: Input<'_>| {
     }
 
     let samples = handed_over.concat();
-    let read = read_back(&file, cut_length).unwrap_or_else(|failure| {
-        panic!("the reader rejects the file the writer laid down: {failure}")
-    });
+    let read = read_back(&file, cut_length)
+        .unwrap_or_else(|failure| panic!("the reader rejects the file the writer laid down: {failure}"));
     assert_eq!(
         read, samples,
         "the samples were not read back as they were handed over"

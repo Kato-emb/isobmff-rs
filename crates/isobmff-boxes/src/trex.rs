@@ -5,6 +5,8 @@ use isobmff_core::{
     FullBoxFlags,
 };
 
+use crate::padb::PAD_MAXIMUM;
+use crate::sdtp::FIELD_MAXIMUM;
 use crate::{DegradationPriorityEntry, PaddingBitsEntry, SampleDependencyTypeEntry};
 
 /// Length of the payload, which has no version-dependent field
@@ -12,12 +14,6 @@ const PAYLOAD_LEN: u64 = 24;
 
 /// Bits of the `sample_flags` §8.8.3.1 reserves, which are 0
 const RESERVED_BITS: u32 = 0xf000_0000;
-
-/// Mask of the 2 bits one answer of an `sdtp` entry occupies
-const TWO_BITS: u8 = 0b11;
-
-/// Mask of the 3 bits `sample_padding_value` occupies
-const THREE_BITS: u8 = 0b111;
 
 /// Bit of the `sample_flags` stating `sample_is_non_sync_sample`
 const NON_SYNC_SAMPLE: u32 = 0x0001_0000;
@@ -100,10 +96,10 @@ impl SampleFlags {
         // always builds, and a degenerate value stands in for the panic the
         // lints forbid.
         SampleDependencyTypeEntry::new(
-            (high >> 2) & TWO_BITS,
-            high & TWO_BITS,
+            (high >> 2) & FIELD_MAXIMUM,
+            high & FIELD_MAXIMUM,
             low >> 6,
-            (low >> 4) & TWO_BITS,
+            (low >> 4) & FIELD_MAXIMUM,
         )
         .unwrap_or_default()
     }
@@ -115,7 +111,7 @@ impl SampleFlags {
         // Why not unwrap: the value is masked to its 3 bits, so the entry always
         // builds, and a degenerate value stands in for the panic the lints
         // forbid.
-        PaddingBitsEntry::new((low >> 1) & THREE_BITS).unwrap_or_default()
+        PaddingBitsEntry::new((low >> 1) & PAD_MAXIMUM).unwrap_or_default()
     }
 
     /// Returns whether the sample is left out of the sync samples
@@ -276,19 +272,6 @@ mod tests {
 
     #[test]
     fn each_field_lies_where_the_layout_places_it() {
-        let sample_flags = SampleFlags::new(
-            SampleDependencyTypeEntry::new(3, 2, 1, 2).unwrap(),
-            PaddingBitsEntry::new(5).unwrap(),
-            true,
-            DegradationPriorityEntry::new(0xbeef),
-        );
-
-        assert_eq!(sample_flags.bits(), 0x0e6b_beef);
-        assert_eq!(SampleFlags::from_bits(0x0e6b_beef), Some(sample_flags));
-    }
-
-    #[test]
-    fn each_field_reads_back_as_the_value_that_stated_it() {
         let sample_dependency_type = SampleDependencyTypeEntry::new(3, 2, 1, 2).unwrap();
         let padding_bits = PaddingBitsEntry::new(5).unwrap();
         let degradation_priority = DegradationPriorityEntry::new(0xbeef);
@@ -300,6 +283,8 @@ mod tests {
             degradation_priority,
         );
 
+        assert_eq!(sample_flags.bits(), 0x0e6b_beef);
+        assert_eq!(SampleFlags::from_bits(0x0e6b_beef), Some(sample_flags));
         assert_eq!(
             (
                 sample_flags.sample_dependency_type(),

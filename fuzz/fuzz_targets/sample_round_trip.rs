@@ -25,20 +25,20 @@
 
 #![no_main]
 
-use isobmff::boxes::{
-    DegradationPriorityEntry, MovieBox, PaddingBitsEntry, SampleDependencyTypeEntry, SampleFlags,
-    TrackExtendsBox,
-};
+use isobmff::boxes::{MovieBox, SampleFlags, TrackExtendsBox};
 use isobmff::sample::Sample;
 use isobmff::structure::{Error, ErrorKind, FragmentedReader, FragmentedWriter};
-use isobmff_test_support::file_type;
-use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
+use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type};
+use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
 
 #[path = "helpers/movie.rs"]
 mod movie;
+#[path = "helpers/sample_flags.rs"]
+mod sample_flags;
 
 use movie::{SAMPLE_DESCRIPTION_INDEX, movie_of, track_id_of};
+use sample_flags::sample_flags;
 
 /// Tracks the samples of a run are laid out over
 const TRACK_COUNT: usize = 2;
@@ -106,21 +106,10 @@ fuzz_target!(|input: Input<'_>| {
     read_back_as_handed_over(&read_back_again, &first_pass);
 });
 
-/// Reads a `sample_flags` word, passing over one that sets a reserved bit
-fn sample_flags(unstructured: &mut Unstructured<'_>) -> arbitrary::Result<SampleFlags> {
-    SampleFlags::from_bits(unstructured.arbitrary()?).ok_or(arbitrary::Error::IncorrectFormat)
-}
-
 /// Movie of two fragmented tracks, stating defaults no fragment falls back on
 fn movie() -> Option<MovieBox> {
-    let every_field_at_its_highest = SampleFlags::new(
-        SampleDependencyTypeEntry::new(3, 3, 3, 3)?,
-        PaddingBitsEntry::new(7)?,
-        true,
-        DegradationPriorityEntry::new(u16::MAX),
-    );
     let never_fallen_back_on =
-        |position| TrackExtendsBox::new(track_id_of(position), 9, 1, 1, every_field_at_its_highest);
+        |position| TrackExtendsBox::new(track_id_of(position), 9, 1, 1, EVERY_FIELD_AT_ITS_HIGHEST);
 
     movie_of((0..TRACK_COUNT).map(never_fallen_back_on).collect())
 }

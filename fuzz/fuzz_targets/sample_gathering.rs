@@ -113,11 +113,7 @@ fuzz_target!(|input: Input<'_>| {
                 read(sample_size_limit, &handed, together),
                 modelled(sample_size_limit, &handed, input.file, together),
                 "the reader did not do with the extents held {} what the contract states for each",
-                if together {
-                    "together"
-                } else {
-                    "one at a time"
-                }
+                if together { "together" } else { "one at a time" }
             );
         }
     }
@@ -314,10 +310,7 @@ fn modelled(sample_size_limit: u64, handed: &[Handed<'_>], file: &[u8], together
             Handed::Data(offset, data) => {
                 let arriving = *offset..offset.saturating_add(data.len() as u64);
 
-                for pending in followed
-                    .iter_mut()
-                    .filter(|pending| pending.whole_at.is_none())
-                {
+                for pending in followed.iter_mut().filter(|pending| pending.whole_at.is_none()) {
                     let named = pending.extent.extent();
                     let lacking_from = named.start.saturating_add(pending.gathered);
                     if arriving.contains(&lacking_from) {

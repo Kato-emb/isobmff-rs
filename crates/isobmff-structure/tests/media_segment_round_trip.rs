@@ -10,25 +10,14 @@ mod reading;
 #[cfg(test)]
 mod tests {
     use super::reading::samples_of;
-    use isobmff_boxes::{
-        DegradationPriorityEntry, MovieBox, MovieExtendsBox, MovieHeaderBox, PaddingBitsEntry,
-        SampleDependencyTypeEntry, SampleFlags, TrackExtendsBox,
-    };
+    use isobmff_boxes::{MovieBox, MovieExtendsBox, MovieHeaderBox, SampleFlags, TrackExtendsBox};
     use isobmff_core::Mp4EpochSeconds;
     use isobmff_sample::Sample;
     use isobmff_structure::MediaSegmentWriter;
-    use isobmff_test_support::{segment_type, track};
+    use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, segment_type, track};
 
     /// Ticks a second the media of the movie is timed in
     const TIMESCALE: u32 = 90_000;
-
-    /// Flags stating every field a `sample_flags` word carries at its highest value
-    const EVERY_FIELD_AT_ITS_HIGHEST: SampleFlags = SampleFlags::new(
-        SampleDependencyTypeEntry::new(3, 3, 3, 3).unwrap(),
-        PaddingBitsEntry::new(7).unwrap(),
-        true,
-        DegradationPriorityEntry::new(u16::MAX),
-    );
 
     /// Movie of two tracks the segment continues, which no fragment falls back on
     fn movie() -> MovieBox {

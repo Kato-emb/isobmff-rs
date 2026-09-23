@@ -17,7 +17,7 @@ mod tests {
     use isobmff_core::Mp4EpochSeconds;
     use isobmff_sample::Sample;
     use isobmff_structure::FragmentedWriter;
-    use isobmff_test_support::{file_type, track};
+    use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type, track};
 
     /// Ticks a second the media of the movie is timed in
     const TIMESCALE: u32 = 90_000;
@@ -36,14 +36,6 @@ mod tests {
         PaddingBitsEntry::new(0).unwrap(),
         false,
         DegradationPriorityEntry::new(0),
-    );
-
-    /// Flags stating every field a `sample_flags` word carries at its highest value
-    const EVERY_FIELD_AT_ITS_HIGHEST: SampleFlags = SampleFlags::new(
-        SampleDependencyTypeEntry::new(3, 3, 3, 3).unwrap(),
-        PaddingBitsEntry::new(7).unwrap(),
-        true,
-        DegradationPriorityEntry::new(u16::MAX),
     );
 
     /// Movie of two tracks continued in fragments

@@ -22,8 +22,11 @@ use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
 
 #[path = "../helpers/movie.rs"]
 mod movie;
+#[path = "../helpers/sample_flags.rs"]
+mod sample_flags;
 
 use movie::{SAMPLE_DESCRIPTION_INDEX, movie_of, track_id_of};
+use sample_flags::sample_flags;
 
 /// Tracks the movie of a run declares
 const TRACK_COUNT: usize = 2;
@@ -153,20 +156,14 @@ pub struct Row {
     composition_time_offset: i16,
 }
 
-/// Reads a `sample_flags` word, passing over one that sets a reserved bit
-fn sample_flags(unstructured: &mut Unstructured<'_>) -> arbitrary::Result<SampleFlags> {
-    SampleFlags::from_bits(unstructured.arbitrary()?).ok_or(arbitrary::Error::IncorrectFormat)
-}
-
-/// Reads an optional `sample_flags` word, as `Option<u32>` reads one
+/// Reads an optional `sample_flags` word, passing over one that sets a reserved bit
 fn first_sample_flags(
     unstructured: &mut Unstructured<'_>,
 ) -> arbitrary::Result<Option<SampleFlags>> {
-    if unstructured.arbitrary()? {
-        sample_flags(unstructured).map(Some)
-    } else {
-        Ok(None)
-    }
+    unstructured
+        .arbitrary::<Option<u32>>()?
+        .map(|bits| SampleFlags::from_bits(bits).ok_or(arbitrary::Error::IncorrectFormat))
+        .transpose()
 }
 
 /// One movie fragment as it lies in the presentation
