@@ -62,9 +62,10 @@ pub enum ErrorKind {
     ExternalDataReference,
     /// Sample tables of a track count different numbers of samples
     ///
-    /// The `stts`, the `stsz`, and the `stsc` laid over the chunk offsets each count
-    /// the samples of the track (ISO/IEC 14496-12 §8.6.1.2, §8.7.3.2, §8.7.4),
-    /// and a track whose tables disagree is refused.
+    /// The `stts`, the `stsz` or the `stz2`, the `stsc` laid over the chunk
+    /// offsets, and any `ctts`, `sdtp`, `padb` or `stdp` each count the samples
+    /// of the track (ISO/IEC 14496-12 §8.6.1, §8.7.3, §8.7.4, §8.6.4, §8.7.6,
+    /// §8.5.3), and a track whose tables disagree is refused.
     /// [`track_id`](crate::Error::track_id) is the track.
     SampleCountMismatch,
     /// Run of chunks starts at a chunk outside the range open to it

@@ -96,27 +96,26 @@ impl BoxDecode for PaddingBitsBox {
         }
 
         let declared = u64::from(reader.read_u32()?);
-        let packed = reader.take_remainder();
-        if declared.div_ceil(2) != packed.len() as u64 {
-            return Err(Error::entry_count_mismatch(
-                declared,
-                (packed.len() as u64).saturating_mul(2),
-            ));
-        }
 
         // Why not the low half first, as GPAC's C implementation packs a pair:
         // §8.7.6 lays `pad1` out ahead of `pad2`, so a table GPAC wrote reads
         // here with each pair swapped, and its last entry lost when the count
         // is odd.
-        let mut entries: Vec<PaddingBitsEntry> = packed
+        let mut entries: Vec<PaddingBitsEntry> = reader
+            .take_remainder()
             .iter()
             .flat_map(|byte| [byte >> 4, *byte])
             .map(|pad| PaddingBitsEntry {
                 pad: pad & PAD_MAXIMUM,
             })
             .collect();
-        if declared % 2 == 1 {
+        if entries.len() as u64 == declared.saturating_add(1) {
             entries.pop();
+        }
+
+        let actual = entries.len() as u64;
+        if actual != declared {
+            return Err(Error::entry_count_mismatch(declared, actual));
         }
 
         Ok(Self { entries })

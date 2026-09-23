@@ -254,6 +254,15 @@ impl Error {
         Self::new(ErrorKind::UnsupportedVersion, Detail::Version(version))
     }
 
+    /// Returns the failure of a box declaring a field size the box does not read
+    #[must_use]
+    pub const fn unsupported_field_size(field_size: u8) -> Self {
+        Self::new(
+            ErrorKind::UnsupportedFieldSize,
+            Detail::FieldSize(field_size),
+        )
+    }
+
     /// Returns the failure of a full box declaring flags the box does not read
     #[must_use]
     pub const fn unsupported_flags(flags: u32) -> Self {
@@ -322,7 +331,8 @@ impl Error {
             | Detail::Flags(_)
             | Detail::OutOfRange { .. }
             | Detail::ValidUpTo(_)
-            | Detail::Alternatives(_) => None,
+            | Detail::Alternatives(_)
+            | Detail::FieldSize(_) => None,
         }
     }
 
@@ -338,7 +348,8 @@ impl Error {
             | Detail::Flags(_)
             | Detail::OutOfRange { .. }
             | Detail::ValidUpTo(_)
-            | Detail::FoundBoxType(_) => None,
+            | Detail::FoundBoxType(_)
+            | Detail::FieldSize(_) => None,
         }
     }
 
@@ -357,7 +368,8 @@ impl Error {
             | Detail::Flags(_)
             | Detail::ValidUpTo(_)
             | Detail::FoundBoxType(_)
-            | Detail::Alternatives(_) => None,
+            | Detail::Alternatives(_)
+            | Detail::FieldSize(_) => None,
         }
     }
 
@@ -376,7 +388,8 @@ impl Error {
             | Detail::OutOfRange { .. }
             | Detail::ValidUpTo(_)
             | Detail::FoundBoxType(_)
-            | Detail::Alternatives(_) => None,
+            | Detail::Alternatives(_)
+            | Detail::FieldSize(_) => None,
         }
     }
 
@@ -392,7 +405,8 @@ impl Error {
             | Detail::OutOfRange { .. }
             | Detail::ValidUpTo(_)
             | Detail::FoundBoxType(_)
-            | Detail::Alternatives(_) => None,
+            | Detail::Alternatives(_)
+            | Detail::FieldSize(_) => None,
         }
     }
 
@@ -408,7 +422,8 @@ impl Error {
             | Detail::OutOfRange { .. }
             | Detail::ValidUpTo(_)
             | Detail::FoundBoxType(_)
-            | Detail::Alternatives(_) => None,
+            | Detail::Alternatives(_)
+            | Detail::FieldSize(_) => None,
         }
     }
 
@@ -424,7 +439,8 @@ impl Error {
             | Detail::OutOfRange { .. }
             | Detail::ValidUpTo(_)
             | Detail::FoundBoxType(_)
-            | Detail::Alternatives(_) => None,
+            | Detail::Alternatives(_)
+            | Detail::FieldSize(_) => None,
         }
     }
 
@@ -437,6 +453,24 @@ impl Error {
             | Detail::Bytes { .. }
             | Detail::Entries { .. }
             | Detail::Version(_)
+            | Detail::OutOfRange { .. }
+            | Detail::ValidUpTo(_)
+            | Detail::FoundBoxType(_)
+            | Detail::Alternatives(_)
+            | Detail::FieldSize(_) => None,
+        }
+    }
+
+    /// Returns the width in bits a box declared its entries in, for the kinds that name one
+    #[must_use]
+    pub const fn field_size(self) -> Option<u8> {
+        match self.detail {
+            Detail::FieldSize(field_size) => Some(field_size),
+            Detail::Nothing
+            | Detail::Bytes { .. }
+            | Detail::Entries { .. }
+            | Detail::Version(_)
+            | Detail::Flags(_)
             | Detail::OutOfRange { .. }
             | Detail::ValidUpTo(_)
             | Detail::FoundBoxType(_)
@@ -456,7 +490,8 @@ impl Error {
             | Detail::Flags(_)
             | Detail::ValidUpTo(_)
             | Detail::FoundBoxType(_)
-            | Detail::Alternatives(_) => None,
+            | Detail::Alternatives(_)
+            | Detail::FieldSize(_) => None,
         }
     }
 
@@ -472,7 +507,8 @@ impl Error {
             | Detail::Flags(_)
             | Detail::OutOfRange { .. }
             | Detail::FoundBoxType(_)
-            | Detail::Alternatives(_) => None,
+            | Detail::Alternatives(_)
+            | Detail::FieldSize(_) => None,
         }
     }
 }
@@ -585,6 +621,11 @@ impl fmt::Display for Error {
                 "full box declares version {}, which this box does not read",
                 self.version().unwrap_or_default()
             ),
+            ErrorKind::UnsupportedFieldSize => write!(
+                formatter,
+                "box declares entries {} bits wide, which this box does not read",
+                self.field_size().unwrap_or_default()
+            ),
             ErrorKind::UnsupportedFlags => write!(
                 formatter,
                 "full box declares flags {:#08x}, which this box does not read",
@@ -628,6 +669,9 @@ impl fmt::Debug for Error {
             }
             Detail::Flags(flags) => {
                 fields.field("flags", &flags);
+            }
+            Detail::FieldSize(field_size) => {
+                fields.field("field_size", &field_size);
             }
             Detail::OutOfRange { value, width } => {
                 fields.field("value", &value);
@@ -753,6 +797,11 @@ pub enum ErrorKind {
     ///
     /// [`flags`](Error::flags) is the flags the box declares.
     UnsupportedFlags,
+    /// Box declares its entries in a width the box does not read
+    ///
+    /// [`field_size`](Error::field_size) is the width in bits the box
+    /// declares.
+    UnsupportedFieldSize,
     /// Count a box declares is past the entries the box reads
     ///
     /// [`needed_entries`](Error::needed_entries) is the count the field
@@ -805,6 +854,7 @@ impl ErrorKind {
             Self::UnsupportedBox
             | Self::UnsupportedVersion
             | Self::UnsupportedFlags
+            | Self::UnsupportedFieldSize
             | Self::UnsupportedEntryCount => Category::Unsupported,
             Self::TruncatedBuffer
             | Self::TrailingBuffer
@@ -901,6 +951,8 @@ enum Detail {
     Version(u8),
     /// Flags a full box declared
     Flags(u32),
+    /// Width in bits a box declared its entries in
+    FieldSize(u8),
     /// Value a field was given, against the bytes of that field
     OutOfRange { value: u64, width: u64 },
     /// Text that read before the byte that did not, in bytes
@@ -986,7 +1038,11 @@ mod tests {
             Category::Unsupported
         );
         assert_eq!(
-            Error::unsupported_box(BoxType::compact(*b"stz2")).category(),
+            Error::unsupported_box(BoxType::compact(*b"sgpd")).category(),
+            Category::Unsupported
+        );
+        assert_eq!(
+            Error::unsupported_field_size(12).category(),
             Category::Unsupported
         );
         assert_eq!(
@@ -1060,6 +1116,7 @@ mod tests {
             Some(0x0000_0404)
         );
         assert_eq!(Error::invalid_utf8(3).valid_up_to(), Some(3));
+        assert_eq!(Error::unsupported_field_size(12).field_size(), Some(12));
     }
 
     #[test]
@@ -1082,8 +1139,8 @@ mod tests {
             "input holds a moof box where a moov box was expected"
         );
         assert_eq!(
-            Error::unsupported_box(BoxType::compact(*b"stz2")).to_string(),
-            "container holds a stz2 box, which this implementation does not read"
+            Error::unsupported_box(BoxType::compact(*b"sgpd")).to_string(),
+            "container holds a sgpd box, which this implementation does not read"
         );
     }
 
@@ -1113,6 +1170,10 @@ mod tests {
         assert_eq!(
             Error::conflicting_flags(0x0000_0404).to_string(),
             "full box declares flags 0x000404, which the spec does not allow together"
+        );
+        assert_eq!(
+            Error::unsupported_field_size(12).to_string(),
+            "box declares entries 12 bits wide, which this box does not read"
         );
         assert_eq!(
             Error::invalid_utf8(3).to_string(),

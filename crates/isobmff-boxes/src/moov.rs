@@ -230,10 +230,10 @@ mod tests {
     use crate::chunk_offset::ChunkOffsets;
     use crate::mvex::tests::movie_extends;
     use crate::mvhd::tests::movie_header;
+    use crate::sample_size::{SampleSizeBox, SampleSizes};
     use crate::stbl::SampleTableBox;
     use crate::stsc::SampleToChunkBox;
     use crate::stsd::SampleDescriptionBox;
-    use crate::stsz::SampleSizeBox;
     use crate::stts::TimeToSampleBox;
     use crate::trak::tests::track;
 
@@ -350,7 +350,7 @@ mod tests {
             SampleDescriptionBox::new(Vec::new()),
             TimeToSampleBox::from_deltas([3_000]),
             SampleToChunkBox::from_chunks([(1, 1)]).unwrap(),
-            SampleSizeBox::from_sizes([4]),
+            SampleSizes::Stsz(SampleSizeBox::from_sizes([4])),
             ChunkOffsets::from_offsets([1_000]),
         );
 

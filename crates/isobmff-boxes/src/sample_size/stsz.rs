@@ -39,7 +39,7 @@ impl SampleSizeEntry {
     }
 }
 
-/// The sizes of the samples of a track, stated one way or the other
+/// The sizes a [`SampleSizeBox`] states, one shared by every sample or one per sample
 ///
 /// ISO/IEC 14496-12 §8.7.3.2 states them as a size every sample shares, or as a
 /// table of one size per sample. The wire marks the second by writing the shared
@@ -47,7 +47,7 @@ impl SampleSizeEntry {
 /// are held apart here, and neither can be written as the other.
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum SampleSizes {
+pub enum SampleSizeEntries {
     /// Every sample of the track occupies the same number of bytes
     Uniform {
         /// Bytes each sample of the track occupies
@@ -63,10 +63,10 @@ pub enum SampleSizes {
 ///
 /// [`SampleSizeBox`] (`stsz`), ISO/IEC 14496-12 §8.7.3.2. The sizes come either
 /// as one shared by every sample or as a table of one per sample —
-/// [`SampleSizes`] is that choice — and either way the box counts the samples
+/// [`SampleSizeEntries`] is that choice — and either way the box counts the samples
 /// of the track. A track whose samples all live in fragments states no sizes
-/// here at all. A `stz2` states the same thing with narrower fields, and is a
-/// box of its own.
+/// here at all. A [`CompactSampleSizeBox`](super::CompactSampleSizeBox) states
+/// the same thing with narrower fields, and is a box of its own.
 ///
 /// The `sample_count` of a per-sample table is not held: it counts the entries,
 /// so it is derived on the way out. On the way in a count that disagrees with
@@ -77,11 +77,11 @@ pub enum SampleSizes {
 /// ```
 /// use core::num::NonZeroU32;
 ///
-/// use isobmff_boxes::{SampleSizeBox, SampleSizes};
+/// use isobmff_boxes::{SampleSizeBox, SampleSizeEntries};
 /// use isobmff_core::BoxEncode;
 ///
 /// // A track whose samples all occupy the same number of bytes
-/// let uniform = SampleSizeBox::new(SampleSizes::Uniform {
+/// let uniform = SampleSizeBox::new(SampleSizeEntries::Uniform {
 ///     sample_size: NonZeroU32::new(1_024).unwrap(),
 ///     sample_count: 8,
 /// });
@@ -90,7 +90,7 @@ pub enum SampleSizes {
 /// assert_eq!(uniform.encoded_len(), 20);
 ///
 /// // A track whose samples are all described by fragments states none here
-/// let fragmented = SampleSizeBox::new(SampleSizes::PerSample(Vec::new()));
+/// let fragmented = SampleSizeBox::new(SampleSizeEntries::PerSample(Vec::new()));
 ///
 /// assert_eq!(fragmented.encoded_len(), 20);
 /// ```
@@ -98,19 +98,19 @@ pub enum SampleSizes {
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct SampleSizeBox {
-    sample_sizes: SampleSizes,
+    entries: SampleSizeEntries,
 }
 
 impl SampleSizeBox {
     /// Creates the box from the sizes it states for the samples
     #[must_use]
-    pub const fn new(sample_sizes: SampleSizes) -> Self {
-        Self { sample_sizes }
+    pub const fn new(entries: SampleSizeEntries) -> Self {
+        Self { entries }
     }
 
     /// Creates the box from the size of every sample in turn, stated the shorter way
     ///
-    /// Sizes every sample shares are stated once, as [`Uniform`](SampleSizes::Uniform);
+    /// Sizes every sample shares are stated once, as [`Uniform`](SampleSizeEntries::Uniform);
     /// any other sizes, or none, are stated per sample, and so are sizes of
     /// zero.
     ///
@@ -119,12 +119,12 @@ impl SampleSizeBox {
     /// ```
     /// use core::num::NonZeroU32;
     ///
-    /// use isobmff_boxes::{SampleSizeBox, SampleSizeEntry, SampleSizes};
+    /// use isobmff_boxes::{SampleSizeBox, SampleSizeEntry, SampleSizeEntries};
     ///
     /// // A size every sample shares is stated once
     /// assert_eq!(
     ///     SampleSizeBox::from_sizes([4, 4, 4]),
-    ///     SampleSizeBox::new(SampleSizes::Uniform {
+    ///     SampleSizeBox::new(SampleSizeEntries::Uniform {
     ///         sample_size: NonZeroU32::new(4).unwrap(),
     ///         sample_count: 3,
     ///     })
@@ -133,7 +133,7 @@ impl SampleSizeBox {
     /// // Sizes that differ are stated per sample
     /// assert_eq!(
     ///     SampleSizeBox::from_sizes([4, 2]),
-    ///     SampleSizeBox::new(SampleSizes::PerSample(vec![
+    ///     SampleSizeBox::new(SampleSizeEntries::PerSample(vec![
     ///         SampleSizeEntry::new(4),
     ///         SampleSizeEntry::new(2),
     ///     ]))
@@ -148,33 +148,33 @@ impl SampleSizeBox {
             .filter(|shared| entries.iter().all(|entry| entry.entry_size == shared.get()));
 
         match (shared, u32::try_from(entries.len())) {
-            (Some(sample_size), Ok(sample_count)) => Self::new(SampleSizes::Uniform {
+            (Some(sample_size), Ok(sample_count)) => Self::new(SampleSizeEntries::Uniform {
                 sample_size,
                 sample_count,
             }),
-            _sizes_stated_per_sample => Self::new(SampleSizes::PerSample(entries)),
+            _sizes_stated_per_sample => Self::new(SampleSizeEntries::PerSample(entries)),
         }
     }
 
     /// Returns the sizes of the samples, as the box states them
     #[must_use]
-    pub const fn sample_sizes(&self) -> &SampleSizes {
-        &self.sample_sizes
+    pub const fn entries(&self) -> &SampleSizeEntries {
+        &self.entries
     }
 
     /// Returns the size of every sample in turn, however the box states them
     ///
     /// A size every sample shares comes out once per sample.
     pub fn sizes(&self) -> impl Iterator<Item = u32> + '_ {
-        match &self.sample_sizes {
-            SampleSizes::Uniform {
+        match &self.entries {
+            SampleSizeEntries::Uniform {
                 sample_size,
                 sample_count,
             } => Sizes::Uniform {
                 sample_size: sample_size.get(),
                 remaining: *sample_count,
             },
-            SampleSizes::PerSample(entries) => Sizes::PerSample(entries.iter()),
+            SampleSizeEntries::PerSample(entries) => Sizes::PerSample(entries.iter()),
         }
     }
 }
@@ -234,7 +234,7 @@ impl BoxDecode for SampleSizeBox {
 
         if let Some(sample_size) = NonZeroU32::new(sample_size) {
             return Ok(Self {
-                sample_sizes: SampleSizes::Uniform {
+                entries: SampleSizeEntries::Uniform {
                     sample_size,
                     sample_count,
                 },
@@ -255,16 +255,18 @@ impl BoxDecode for SampleSizeBox {
         }
 
         Ok(Self {
-            sample_sizes: SampleSizes::PerSample(entries),
+            entries: SampleSizeEntries::PerSample(entries),
         })
     }
 }
 
 impl BoxEncode for SampleSizeBox {
     fn payload_len(&self) -> u64 {
-        let entries = match &self.sample_sizes {
-            SampleSizes::Uniform { .. } => 0,
-            SampleSizes::PerSample(entries) => (entries.len() as u64).saturating_mul(ENTRY_LEN),
+        let entries = match &self.entries {
+            SampleSizeEntries::Uniform { .. } => 0,
+            SampleSizeEntries::PerSample(entries) => {
+                (entries.len() as u64).saturating_mul(ENTRY_LEN)
+            }
         };
 
         FIXED_FIELDS_LEN.saturating_add(entries)
@@ -273,15 +275,15 @@ impl BoxEncode for SampleSizeBox {
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         writer.write_bytes(&FullBoxFields::new(0, FullBoxFlags::ZERO).to_bytes())?;
 
-        match &self.sample_sizes {
-            SampleSizes::Uniform {
+        match &self.entries {
+            SampleSizeEntries::Uniform {
                 sample_size,
                 sample_count,
             } => {
                 writer.write_u32(sample_size.get())?;
                 writer.write_u32(*sample_count)?;
             }
-            SampleSizes::PerSample(entries) => {
+            SampleSizeEntries::PerSample(entries) => {
                 writer.write_u32(0)?;
                 let sample_count = entries.len() as u64;
                 // Why not saturate silently: a sample count past `u32` cannot be
@@ -307,11 +309,11 @@ mod tests {
 
     use isobmff_core::{BoxDecode, BoxEncode, Error};
 
-    use super::{SampleSizeBox, SampleSizeEntry, SampleSizes};
+    use super::{SampleSizeBox, SampleSizeEntries, SampleSizeEntry};
 
     /// Sizes shared by a track of eight samples
-    fn uniform_sizes() -> SampleSizes {
-        SampleSizes::Uniform {
+    fn uniform_sizes() -> SampleSizeEntries {
+        SampleSizeEntries::Uniform {
             sample_size: NonZeroU32::new(1_024).unwrap(),
             sample_count: 8,
         }
@@ -340,7 +342,7 @@ mod tests {
 
     #[test]
     fn a_box_stating_a_size_per_sample_reads_back_as_the_value_that_wrote_it() {
-        let sample_size = SampleSizeBox::new(SampleSizes::PerSample(vec![
+        let sample_size = SampleSizeBox::new(SampleSizeEntries::PerSample(vec![
             SampleSizeEntry::new(1_024),
             SampleSizeEntry::new(512),
         ]));
@@ -356,12 +358,14 @@ mod tests {
 
     #[test]
     fn a_box_stating_the_sizes_of_no_samples_declares_a_count_of_zero() {
-        let payload = encoded_payload(&SampleSizeBox::new(SampleSizes::PerSample(Vec::new())));
+        let payload = encoded_payload(&SampleSizeBox::new(
+            SampleSizeEntries::PerSample(Vec::new()),
+        ));
 
         assert_eq!(payload, b"\0\0\0\0\0\0\0\0\0\0\0\0");
         assert_eq!(
             SampleSizeBox::decode_payload(&payload).unwrap(),
-            SampleSizeBox::new(SampleSizes::PerSample(Vec::new()))
+            SampleSizeBox::new(SampleSizeEntries::PerSample(Vec::new()))
         );
     }
 
@@ -374,7 +378,7 @@ mod tests {
 
     #[test]
     fn sizes_stated_per_sample_are_read_in_the_order_stated() {
-        let sample_size = SampleSizeBox::new(SampleSizes::PerSample(vec![
+        let sample_size = SampleSizeBox::new(SampleSizeEntries::PerSample(vec![
             SampleSizeEntry::new(1_024),
             SampleSizeEntry::new(512),
         ]));
@@ -394,7 +398,7 @@ mod tests {
     fn sizes_that_differ_are_stated_per_sample() {
         assert_eq!(
             SampleSizeBox::from_sizes([1_024, 512]),
-            SampleSizeBox::new(SampleSizes::PerSample(vec![
+            SampleSizeBox::new(SampleSizeEntries::PerSample(vec![
                 SampleSizeEntry::new(1_024),
                 SampleSizeEntry::new(512),
             ]))
@@ -405,17 +409,20 @@ mod tests {
     fn sizes_of_zero_and_no_sizes_at_all_are_stated_per_sample() {
         assert_eq!(
             SampleSizeBox::from_sizes([0, 0]),
-            SampleSizeBox::new(SampleSizes::PerSample(vec![SampleSizeEntry::new(0); 2]))
+            SampleSizeBox::new(SampleSizeEntries::PerSample(vec![
+                SampleSizeEntry::new(0);
+                2
+            ]))
         );
         assert_eq!(
             SampleSizeBox::from_sizes([]),
-            SampleSizeBox::new(SampleSizes::PerSample(Vec::new()))
+            SampleSizeBox::new(SampleSizeEntries::PerSample(Vec::new()))
         );
     }
 
     #[test]
     fn a_count_that_disagrees_with_the_entries_is_rejected() {
-        let mut payload = encoded_payload(&SampleSizeBox::new(SampleSizes::PerSample(vec![
+        let mut payload = encoded_payload(&SampleSizeBox::new(SampleSizeEntries::PerSample(vec![
             SampleSizeEntry::new(1_024),
         ])));
         payload
