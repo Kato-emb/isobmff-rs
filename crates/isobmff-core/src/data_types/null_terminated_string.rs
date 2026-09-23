@@ -38,14 +38,15 @@ use crate::error::Error;
 /// // A string carrying a NUL of its own could not be read back whole
 /// assert_eq!(NullTerminatedString::new(String::from("Video\0Handler")), None);
 /// ```
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Default, PartialEq, Eq, Hash, Debug)]
 pub struct NullTerminatedString(String);
 
 impl NullTerminatedString {
     /// Creates the field from the text it carries
     ///
     /// Returns `None` when `value` holds a NUL, which the terminator written
-    /// after it could not be told apart from.
+    /// after it could not be told apart from. The field that carries no text is
+    /// [`default`](Self::default): the empty string, one NUL byte on the wire.
     #[must_use]
     pub fn new(value: String) -> Option<Self> {
         if value.as_bytes().contains(&0) {
