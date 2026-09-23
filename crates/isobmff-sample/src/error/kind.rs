@@ -157,7 +157,11 @@ pub enum ErrorKind {
     /// [`stated_decode_time`](crate::Error::stated_decode_time) the decode
     /// time the sample states, and
     /// [`reached_decode_time`](crate::Error::reached_decode_time) the one
-    /// the samples before it reach.
+    /// the samples before it reach. In a fragment opened by
+    /// [`begin_fragment_continuing`](crate::MovieFragmentWriter::begin_fragment_continuing)
+    /// the reached one is counted, like the stated one, from the decode time
+    /// the first sample of the track in the fragment states, not from where
+    /// the fragment places it.
     DecodeTimeMismatch,
     /// Fragment of a track starts before the samples written for it reach
     ///

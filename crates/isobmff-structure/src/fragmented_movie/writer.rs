@@ -35,7 +35,8 @@ use crate::{Error, whole_box_header, whole_payload};
 ///   `major_brand` and its one `compatible_brands` entry, with
 ///   `minor_version` 0, the brand the widest layout it lays down requires
 ///   (§8.8.7.1, Annex E.9).
-/// * A fragment is opened by [`begin_fragment`](Self::begin_fragment),
+/// * A fragment is opened by [`begin_fragment`](Self::begin_fragment) or
+///   [`begin_fragment_continuing`](Self::begin_fragment_continuing),
 ///   carries the samples handed over next, and is laid down by
 ///   [`finish_fragment`](Self::finish_fragment) as the `moof` and the `mdat`
 ///   the sample layer made of it. What the samples themselves must hold to
@@ -166,6 +167,26 @@ impl FragmentedWriter {
         self.writing()?;
         self.samples
             .begin_fragment(sequence_number)
+            .map_err(|failure| self.fail(failure.into()))
+    }
+
+    /// Opens a fragment in which every track continues where the samples written for it reach, as [`MovieFragmentWriter::begin_fragment_continuing`] places them
+    ///
+    /// `sequence_number` is what its `mfhd` states, as for
+    /// [`begin_fragment`](Self::begin_fragment).
+    ///
+    /// # Errors
+    ///
+    /// * [`Sample`](crate::ErrorKind::Sample): what the sample layer
+    ///   makes of the call.
+    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    ///   file was declared over by [`finish`](Self::finish).
+    /// * The failure of a previous call, which the writer keeps and reports
+    ///   again for every call after it.
+    pub fn begin_fragment_continuing(&mut self, sequence_number: u32) -> Result<(), Error> {
+        self.writing()?;
+        self.samples
+            .begin_fragment_continuing(sequence_number)
             .map_err(|failure| self.fail(failure.into()))
     }
 

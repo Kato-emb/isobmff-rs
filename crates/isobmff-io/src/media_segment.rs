@@ -296,6 +296,20 @@ impl<W: AsyncWrite + Unpin> MediaSegmentMuxer<W> {
             .await
     }
 
+    /// Opens a fragment in which every track continues where the samples written for it reach
+    ///
+    /// # Errors
+    ///
+    /// * [`Structure`](crate::ErrorKind::Structure): what
+    ///   [`MediaSegmentWriter::begin_fragment_continuing`] makes of the call.
+    /// * [`Io`](crate::ErrorKind::Io): the sink refuses bytes a
+    ///   dropped call left over.
+    pub async fn begin_fragment_continuing(&mut self, sequence_number: u32) -> Result<(), Error> {
+        self.muxer
+            .drive(|writer| writer.begin_fragment_continuing(sequence_number))
+            .await
+    }
+
     /// Takes a sample, and places it in the fragment that is open
     ///
     /// # Errors
