@@ -1,12 +1,42 @@
 //! [`TrackBox`] (`trak`), ISO/IEC 14496-12 §8.3.1
 
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+
 use isobmff_core::{
     AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
-    FieldWriter, OtherBoxes, boxes,
+    FieldWriter, FourCC, FullBoxFlags, LanguageCode, Mp4EpochSeconds, NullTerminatedString,
+    OtherBoxes, U16F16, boxes,
 };
 
+use crate::chunk_offset::{ChunkOffsetBox, ChunkOffsets};
+use crate::data_entry::{DataEntry, DataEntryUrlBox};
+use crate::dinf::DataInformationBox;
+use crate::dref::DataReferenceBox;
+use crate::hdlr::HandlerBox;
+use crate::mdhd::MediaHeaderBox;
 use crate::mdia::MediaBox;
+use crate::minf::{MediaInformationBox, MediaInformationHeader};
+use crate::sample_size::{SampleSizeBox, SampleSizeEntries, SampleSizes};
+use crate::stbl::SampleTableBox;
+use crate::stsc::SampleToChunkBox;
+use crate::stsd::SampleDescriptionBox;
+use crate::stts::TimeToSampleBox;
 use crate::tkhd::TrackHeaderBox;
+use crate::vmhd::VideoMediaHeaderBox;
+
+/// Flags of the `tkhd` of a video track: enabled, in the movie and in the preview
+const VIDEO_TRACK_HEADER_FLAGS: FullBoxFlags = match FullBoxFlags::new(0x7) {
+    Some(flags) => flags,
+    // Why not unwrap: 0x7 is within the 24 bits the field carries, so the flags
+    // always build, and a degenerate value stands in for the panic the lints
+    // forbid.
+    None => FullBoxFlags::ZERO,
+};
+
+/// Name the `hdlr` of a video track carries
+const VIDEO_HANDLER_NAME: &str = "VideoHandler";
 
 /// Box that holds everything declaring one track
 ///
@@ -33,6 +63,89 @@ impl TrackBox {
             mdia,
             other_boxes: OtherBoxes::new(),
         }
+    }
+
+    /// Creates the box of a video track from the declarations a video track varies
+    ///
+    /// [`new`](Self::new) states every field; `new_video` states the ones a
+    /// video track varies and fills the rest with the values of a track
+    /// continued in fragments, whose samples the movie fragments carry:
+    ///
+    /// * `tkhd` (ISO/IEC 14496-12 §8.3.2.3): the flags `track_enabled`,
+    ///   `track_in_movie` and `track_in_preview`, a `creation_time`,
+    ///   `modification_time` and `duration` of 0,
+    ///   and the template values of [`TrackHeaderBox::new`].
+    /// * `mdhd` (§8.4.2): a `creation_time`, `modification_time` and
+    ///   `duration` of 0, and the language `und`.
+    /// * `hdlr` (§8.4.3): the handler type `vide`, named `VideoHandler`.
+    /// * `minf` (§8.4.4): a `vmhd` (§12.1.2) of template values, a `dref`
+    ///   (§8.7.2) whose one entry places the media data in this file, and an
+    ///   `stbl` (§8.5.1) whose `stsd` holds `sample_entry` alone and whose `stts`,
+    ///   `stsc`, `stsz` and `stco` are empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff_boxes::TrackBox;
+    /// use isobmff_core::{AnyBox, BoxDecode, BoxEncode, BoxType};
+    ///
+    /// // The sample entry of the coding, read through the first data reference
+    /// let entry = AnyBox::from_raw_bytes(BoxType::compact(*b"avc1"), vec![0, 0, 0, 0, 0, 0, 0, 1]);
+    ///
+    /// // A 1920 by 1080 video track on a 90 kHz timescale
+    /// let track = TrackBox::new_video(1, 90_000, 1920, 1080, entry);
+    /// assert_eq!(track.mdia().mdhd().timescale(), 90_000);
+    ///
+    /// // The whole box reads back as the value that wrote it
+    /// let mut buffer = vec![0; usize::try_from(track.encoded_len()).unwrap()];
+    /// track.encode(&mut buffer).unwrap();
+    /// assert_eq!(TrackBox::decode(&buffer).unwrap(), (track, b"".as_slice()));
+    /// ```
+    #[must_use]
+    pub fn new_video(
+        track_id: u32,
+        timescale: u32,
+        width: u16,
+        height: u16,
+        sample_entry: AnyBox,
+    ) -> Self {
+        let epoch = Mp4EpochSeconds::from_seconds(0);
+        let tkhd = TrackHeaderBox::new(
+            VIDEO_TRACK_HEADER_FLAGS,
+            epoch,
+            epoch,
+            track_id,
+            0,
+            U16F16::from_integer(width),
+            U16F16::from_integer(height),
+        );
+        let stbl = SampleTableBox::new(
+            SampleDescriptionBox::new(vec![sample_entry]),
+            TimeToSampleBox::new(Vec::new()),
+            SampleToChunkBox::new(Vec::new()),
+            SampleSizes::Stsz(SampleSizeBox::new(SampleSizeEntries::PerSample(Vec::new()))),
+            ChunkOffsets::Stco(ChunkOffsetBox::new(Vec::new())),
+        );
+        let minf = MediaInformationBox::new(
+            MediaInformationHeader::Video(VideoMediaHeaderBox::new()),
+            DataInformationBox::new(DataReferenceBox::new(vec![DataEntry::Url(
+                DataEntryUrlBox::new(None),
+            )])),
+            stbl,
+        );
+        let mdia = MediaBox::new(
+            MediaHeaderBox::new(epoch, epoch, timescale, 0, LanguageCode::UND),
+            HandlerBox::new(
+                FourCC::new(*b"vide"),
+                // Why not unwrap: the name holds no NUL, so the string always
+                // builds, and the empty name stands in for the panic the lints
+                // forbid.
+                NullTerminatedString::new(String::from(VIDEO_HANDLER_NAME)).unwrap_or_default(),
+            ),
+            minf,
+        );
+
+        Self::new(tkhd, mdia)
     }
 
     /// Returns the declarations the track applies as a whole
@@ -133,16 +246,25 @@ pub(crate) mod tests {
     use alloc::vec::Vec;
 
     use isobmff_core::{
-        BoxDecode, BoxEncode, BoxType, Error, FourCC, FullBoxFlags, LanguageCode, Mp4EpochSeconds,
-        NullTerminatedString, U16F16,
+        AnyBox, BoxDecode, BoxEncode, BoxType, Error, FourCC, FullBoxFlags, LanguageCode,
+        Mp4EpochSeconds, NullTerminatedString, U16F16,
     };
 
     use super::TrackBox;
+    use crate::chunk_offset::{ChunkOffsetBox, ChunkOffsets};
+    use crate::dinf::tests::data_information;
     use crate::hdlr::HandlerBox;
     use crate::mdhd::MediaHeaderBox;
     use crate::mdia::MediaBox;
     use crate::minf::tests::media_information;
+    use crate::minf::{MediaInformationBox, MediaInformationHeader};
+    use crate::sample_size::{SampleSizeBox, SampleSizeEntries, SampleSizes};
+    use crate::stbl::SampleTableBox;
+    use crate::stsc::SampleToChunkBox;
+    use crate::stsd::SampleDescriptionBox;
+    use crate::stts::TimeToSampleBox;
     use crate::tkhd::TrackHeaderBox;
+    use crate::vmhd::tests::video_media_header;
 
     /// Track box of a video track, with every mandatory child in place
     pub(crate) fn track() -> TrackBox {
@@ -173,6 +295,16 @@ pub(crate) mod tests {
         )
     }
 
+    /// Sample entry of an `avc1` coding, read through the first data reference
+    fn sample_entry() -> AnyBox {
+        AnyBox::from_raw_bytes(BoxType::compact(*b"avc1"), vec![0, 0, 0, 0, 0, 0, 0, 1])
+    }
+
+    /// Video track declaring `track_id`, its samples left to the fragments
+    pub(crate) fn video_track(track_id: u32) -> TrackBox {
+        TrackBox::new_video(track_id, 90_000, 1920, 1080, sample_entry())
+    }
+
     /// Writes the payload of the box and returns the bytes it occupies
     fn encoded_payload(track: &TrackBox) -> Vec<u8> {
         let mut buffer = vec![0; usize::try_from(track.payload_len()).unwrap()];
@@ -196,6 +328,55 @@ pub(crate) mod tests {
         assert_eq!(
             TrackBox::decode_payload(whole.get(..track_header_len).unwrap()),
             Err(Error::missing_mandatory_box(BoxType::compact(*b"mdia")))
+        );
+    }
+
+    #[test]
+    fn a_video_track_states_what_it_varies_and_fills_the_rest_for_fragments() {
+        let epoch = Mp4EpochSeconds::from_seconds(0);
+        let sample_table = SampleTableBox::new(
+            SampleDescriptionBox::new(vec![sample_entry()]),
+            TimeToSampleBox::new(Vec::new()),
+            SampleToChunkBox::new(Vec::new()),
+            SampleSizes::Stsz(SampleSizeBox::new(SampleSizeEntries::PerSample(Vec::new()))),
+            ChunkOffsets::Stco(ChunkOffsetBox::new(Vec::new())),
+        );
+
+        assert_eq!(
+            video_track(1),
+            TrackBox::new(
+                TrackHeaderBox::new(
+                    FullBoxFlags::new(0x7).unwrap(),
+                    epoch,
+                    epoch,
+                    1,
+                    0,
+                    U16F16::from_integer(1920),
+                    U16F16::from_integer(1080),
+                ),
+                MediaBox::new(
+                    MediaHeaderBox::new(epoch, epoch, 90_000, 0, LanguageCode::UND),
+                    HandlerBox::new(
+                        FourCC::new(*b"vide"),
+                        NullTerminatedString::new(String::from("VideoHandler")).unwrap(),
+                    ),
+                    MediaInformationBox::new(
+                        MediaInformationHeader::Video(video_media_header()),
+                        data_information(),
+                        sample_table,
+                    ),
+                ),
+            )
+        );
+    }
+
+    #[test]
+    fn a_video_track_reads_back_as_the_value_that_wrote_it() {
+        let track = video_track(1);
+
+        assert_eq!(
+            TrackBox::decode_payload(&encoded_payload(&track)).unwrap(),
+            track
         );
     }
 }

@@ -4,6 +4,12 @@
 //! reads with [`BoxDecode`](isobmff_core::BoxDecode) and writes with
 //! [`BoxEncode`](isobmff_core::BoxEncode) like any other box.
 //!
+//! A box is built by `new`, which states every field the spec gives no
+//! template value; `with_<field>` states a field at a value other than its
+//! template, and `new_<what>`, such as [`TrackBox::new_video`] or
+//! [`SampleDescriptionBox::new_v1`], states the fields one variant of the box
+//! varies and fills the rest.
+//!
 //! # `no_std`
 //!
 //! The crate is `no_std` but needs `alloc`: every box owns what it was read
