@@ -16,7 +16,7 @@ use isobmff_boxes::{
 };
 use isobmff_core::{
     AnyBox, BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, FourCC, FullBoxFlags,
-    LanguageCode, Mp4EpochSeconds, NullTerminatedString, Uuid,
+    LanguageCode, Mp4EpochSeconds, NullTerminatedString, U16F16, Uuid,
 };
 
 /// Time every header of the synthetic files declares
@@ -122,14 +122,22 @@ pub fn track_laid_out(track_id: u32, dref: DataReferenceBox, stbl: SampleTableBo
             NullTerminatedString::new(String::from("VideoHandler")).unwrap(),
         ),
         MediaInformationBox::new(
-            MediaInformationHeader::Video(VideoMediaHeaderBox::new(0, [0; 3])),
+            MediaInformationHeader::Video(VideoMediaHeaderBox::default()),
             DataInformationBox::new(dref),
             stbl,
         ),
     );
 
     TrackBox::new(
-        TrackHeaderBox::new(FullBoxFlags::new(1).unwrap(), EPOCH, EPOCH, track_id, 0),
+        TrackHeaderBox::new(
+            FullBoxFlags::new(1).unwrap(),
+            EPOCH,
+            EPOCH,
+            track_id,
+            0,
+            U16F16::from_integer(1920),
+            U16F16::from_integer(1080),
+        ),
         media,
     )
 }

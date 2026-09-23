@@ -69,7 +69,9 @@ impl MovieHeaderBox {
     ///
     /// The `rate`, `volume`, and `matrix` take the template values the spec
     /// gives them — normal speed, full volume, and the unity matrix — and
-    /// `pre_defined` is left zero.
+    /// `pre_defined` is left zero; [`with_rate`](Self::with_rate),
+    /// [`with_volume`](Self::with_volume), and [`with_matrix`](Self::with_matrix)
+    /// state other values.
     #[must_use]
     pub const fn new(
         creation_time: Mp4EpochSeconds,
@@ -89,6 +91,24 @@ impl MovieHeaderBox {
             pre_defined: [0; 6],
             next_track_id,
         }
+    }
+
+    /// Sets the playback rate
+    #[must_use]
+    pub const fn with_rate(self, rate: I16F16) -> Self {
+        Self { rate, ..self }
+    }
+
+    /// Sets the playback volume
+    #[must_use]
+    pub const fn with_volume(self, volume: I8F8) -> Self {
+        Self { volume, ..self }
+    }
+
+    /// Sets the transformation matrix the presentation is rendered under
+    #[must_use]
+    pub const fn with_matrix(self, matrix: Matrix) -> Self {
+        Self { matrix, ..self }
     }
 
     /// Returns the time the presentation was created
@@ -251,7 +271,7 @@ pub(crate) mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, Error, Mp4EpochSeconds};
+    use isobmff_core::{BoxDecode, BoxEncode, Error, I8F8, I16F16, Matrix, Mp4EpochSeconds};
 
     use super::MovieHeaderBox;
 
@@ -293,7 +313,10 @@ pub(crate) mod tests {
     #[test]
     fn a_box_reads_back_as_the_value_that_wrote_it_at_either_version() {
         for duration in [u64::from(u32::MAX), u64::from(u32::MAX) + 1] {
-            let movie_header = movie_header(duration);
+            let movie_header = movie_header(duration)
+                .with_rate(I16F16::from_integer(-2))
+                .with_volume(I8F8::from_raw(0x0080))
+                .with_matrix(Matrix::from_raw([1, -2, 3, -4, 5, -6, 7, -8, 9]));
 
             let payload = encoded_payload(&movie_header);
 

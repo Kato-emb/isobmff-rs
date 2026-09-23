@@ -25,9 +25,20 @@ pub struct SoundMediaHeaderBox {
 }
 
 impl SoundMediaHeaderBox {
-    /// Creates the box from the place its track takes between the channels
+    /// Creates the box with the template value the spec gives its one field
+    ///
+    /// The `balance` is centre; [`with_balance`](Self::with_balance) states
+    /// another value.
     #[must_use]
-    pub const fn new(balance: I8F8) -> Self {
+    pub const fn new() -> Self {
+        Self {
+            balance: I8F8::ZERO,
+        }
+    }
+
+    /// Sets where a mono track sits between the two channels
+    #[must_use]
+    pub const fn with_balance(self, balance: I8F8) -> Self {
         Self { balance }
     }
 
@@ -35,6 +46,12 @@ impl SoundMediaHeaderBox {
     #[must_use]
     pub const fn balance(&self) -> I8F8 {
         self.balance
+    }
+}
+
+impl Default for SoundMediaHeaderBox {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -86,12 +103,12 @@ pub(crate) mod tests {
 
     /// Media header of an audio track sitting at the centre of the stereo space
     pub(crate) fn sound_media_header() -> SoundMediaHeaderBox {
-        SoundMediaHeaderBox::new(I8F8::ZERO)
+        SoundMediaHeaderBox::default()
     }
 
     #[test]
     fn a_box_reads_back_as_the_value_that_wrote_it() {
-        let sound_media_header = SoundMediaHeaderBox::new(I8F8::from_raw(-256));
+        let sound_media_header = SoundMediaHeaderBox::new().with_balance(I8F8::from_integer(-1));
         let mut payload = vec![0; 8];
 
         sound_media_header.encode_payload(&mut payload).unwrap();

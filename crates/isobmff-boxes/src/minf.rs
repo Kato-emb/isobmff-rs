@@ -123,7 +123,7 @@ impl BoxVariants for MediaInformationHeader {
 /// use isobmff_core::{BoxDecode, BoxEncode};
 ///
 /// // A video track composing its image over what is under it
-/// let media_header = MediaInformationHeader::Video(VideoMediaHeaderBox::new(0, [0; 3]));
+/// let media_header = MediaInformationHeader::Video(VideoMediaHeaderBox::default());
 ///
 /// // Its media data lies in the very file this box is written to
 /// let data_information =

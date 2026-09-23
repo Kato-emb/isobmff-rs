@@ -134,7 +134,7 @@ pub(crate) mod tests {
 
     use isobmff_core::{
         BoxDecode, BoxEncode, BoxType, Error, FourCC, FullBoxFlags, LanguageCode, Mp4EpochSeconds,
-        NullTerminatedString,
+        NullTerminatedString, U16F16,
     };
 
     use super::TrackBox;
@@ -153,6 +153,8 @@ pub(crate) mod tests {
                 Mp4EpochSeconds::from_seconds(0),
                 1,
                 90_000,
+                U16F16::from_integer(1920),
+                U16F16::from_integer(1080),
             ),
             MediaBox::new(
                 MediaHeaderBox::new(
