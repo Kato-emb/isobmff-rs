@@ -352,10 +352,30 @@ mod tests {
         }
     }
 
-    /// Source standing still the first `hesitations` times it is read off
+    /// Source standing still once before every read and every seek
     struct Hesitant<S> {
         source: S,
-        hesitations: usize,
+        standing_still: bool,
+    }
+
+    impl<S> Hesitant<S> {
+        /// Creates a source standing still before whatever it is asked for next
+        const fn new(source: S) -> Self {
+            Self {
+                source,
+                standing_still: false,
+            }
+        }
+
+        /// Reports whether it stands still here, and stands ready for what comes next
+        fn stands_still(&mut self, context: &Context<'_>) -> bool {
+            self.standing_still = !self.standing_still;
+            if self.standing_still {
+                context.waker().wake_by_ref();
+            }
+
+            self.standing_still
+        }
     }
 
     impl<S: AsyncRead + Unpin> AsyncRead for Hesitant<S> {
@@ -364,10 +384,7 @@ mod tests {
             context: &mut Context<'_>,
             into: &mut [u8],
         ) -> Poll<io::Result<usize>> {
-            if self.hesitations > 0 {
-                self.hesitations = self.hesitations.saturating_sub(1);
-                context.waker().wake_by_ref();
-
+            if self.stands_still(context) {
                 return Poll::Pending;
             }
 
@@ -381,6 +398,10 @@ mod tests {
             context: &mut Context<'_>,
             from: SeekFrom,
         ) -> Poll<io::Result<u64>> {
+            if self.stands_still(context) {
+                return Poll::Pending;
+            }
+
             Pin::new(&mut self.source).poll_seek(context, from)
         }
     }
@@ -597,10 +618,7 @@ mod tests {
     #[test]
     fn a_read_dropped_where_the_source_stood_still_loses_no_sample() {
         let mut demuxer = block_on(Demuxer::new(
-            Hesitant {
-                source: Cursor::new(b"FILE".to_vec()),
-                hesitations: 1,
-            },
+            Hesitant::new(Cursor::new(b"FILE".to_vec())),
             Scripted {
                 completed_by_input: vec![sample(b"S1"), sample(b"S2")],
                 ..Scripted::default()
@@ -615,6 +633,37 @@ mod tests {
             [Ok(sample(b"S1")), Ok(sample(b"S2"))]
         );
         assert_eq!(demuxer.reader().inputs, [b"FILE".to_vec()]);
+    }
+
+    #[test]
+    fn a_demuxer_dropped_at_every_await_fetches_what_the_file_passed_by_and_reads_it_once() {
+        let mut source = Hesitant::new(Cursor::new(b"junkFILE".to_vec()));
+        source.source.set_position(4);
+        let mut demuxer = block_on(Demuxer::new(
+            source,
+            Scripted {
+                wanted: Some(1..3),
+                completed_by_input: vec![sample(b"S1"), sample(b"S2")],
+                ..Scripted::default()
+            },
+        ))
+        .unwrap();
+
+        let mut yielded = Vec::new();
+        loop {
+            // The source stands still at every await, so each future is dropped
+            // where it stood and the call that follows carries it on
+            match poll_once(demuxer.next()) {
+                None => continue,
+                Some(None) => break,
+                Some(Some(sample)) => yielded.push(sample.map_err(|failure| failure.kind())),
+            }
+        }
+
+        assert_eq!(yielded, [Ok(sample(b"S1")), Ok(sample(b"S2"))]);
+        assert_eq!(demuxer.reader().inputs, [b"FILE".to_vec()]);
+        assert_eq!(demuxer.reader().data, [(1, b"ILE".to_vec())]);
+        assert!(demuxer.reader().finished);
     }
 
     #[test]
