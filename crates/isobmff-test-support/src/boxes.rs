@@ -203,9 +203,9 @@ pub fn movie_fragment() -> MovieFragmentBox {
             None,
             None,
         ),
-        Some(TrackFragmentBaseMediaDecodeTimeBox::new(0)),
         Vec::new(),
-    );
+    )
+    .with_tfdt(TrackFragmentBaseMediaDecodeTimeBox::new(0));
 
     MovieFragmentBox::new(MovieFragmentHeaderBox::new(1), vec![track_fragment])
 }

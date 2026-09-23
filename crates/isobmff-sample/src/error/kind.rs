@@ -76,6 +76,14 @@ pub enum ErrorKind {
     /// [`first_chunk`](crate::Error::first_chunk) the chunk the run states it
     /// starts at.
     FirstChunkOutOfRange,
+    /// Sync sample is listed out of order, or past the samples of its track
+    ///
+    /// An `stss` lists the sync samples of a track in strictly increasing
+    /// order of sample number (ISO/IEC 14496-12 §8.6.2), each a sample the
+    /// track holds. [`track_id`](crate::Error::track_id) is the track, and
+    /// [`sample_number`](crate::Error::sample_number) the sample number
+    /// listed, counted from one.
+    SyncSampleOutOfRange,
     /// Sample is declared past the limit the reader holds
     ///
     /// [`track_id`](crate::Error::track_id) is the track it belongs to,
@@ -111,10 +119,13 @@ pub enum ErrorKind {
     /// and [`data_offset`](crate::Error::data_offset) how far into the
     /// fragment the sample lies.
     DataOffsetOutOfRange,
-    /// Sample states a composition time offset neither version of a `trun` writes
+    /// Sample states a composition time offset no version of a `trun` or a `ctts` writes
     ///
-    /// Version 0 writes the offset unsigned in 32 bits and version 1 signed
-    /// (ISO/IEC 14496-12 §8.8.8), so one past either is refused.
+    /// Version 0 of either box writes the offset unsigned in 32 bits and
+    /// version 1 signed (ISO/IEC 14496-12 §8.8.8, §8.6.1.3), so one past both
+    /// is refused. A `ctts` states the offsets of a whole track in one version,
+    /// so a track stating a negative offset and one past [`i32::MAX`] is
+    /// refused too, naming the widest.
     /// [`track_id`](crate::Error::track_id) is the track it belongs to,
     /// and [`composition_time_offset`](crate::Error::composition_time_offset)
     /// the offset it states.
@@ -164,21 +175,11 @@ pub enum ErrorKind {
     /// [`established_track_id`](crate::Error::established_track_id) the
     /// one the chunk holds.
     TrackIdMismatch,
-    /// Sample states a composition time offset, which no sample table written here carries
+    /// Sample sets a reserved bit of its flags, which no sample table carries
     ///
-    /// A sample table states the offsets in a `ctts` (ISO/IEC 14496-12
-    /// §8.6.1.3), which is not written yet, so a sample composed anywhere but
-    /// when it is decoded is refused.
-    /// [`track_id`](crate::Error::track_id) is the track it belongs to,
-    /// and [`composition_time_offset`](crate::Error::composition_time_offset)
-    /// the offset it states.
-    UnsupportedCompositionTimeOffset,
-    /// Sample states flags, which no sample table written here carries
-    ///
-    /// A sample table states which samples are sync samples in an `stss`
-    /// (ISO/IEC 14496-12 §8.6.2) and what a sample depends on in an `sdtp`
-    /// (§8.6.4), neither of which is written yet, so a sample stating any flag
-    /// is refused.
+    /// A sample table states the fields of the `sample_flags` (ISO/IEC
+    /// 14496-12 §8.8.3.1) in tables of their own, and none of them holds the
+    /// 4 reserved bits, so a sample setting one is refused.
     /// [`track_id`](crate::Error::track_id) is the track it belongs to,
     /// and [`sample_flags`](crate::Error::sample_flags) the flags it
     /// states.

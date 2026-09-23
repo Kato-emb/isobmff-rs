@@ -343,10 +343,14 @@ pub fn lay_out(input: &Input<'_>) -> Option<LaidOut> {
             // data before it (§8.8.7.1) starts where this one was anchored, as
             // the resolver has it.
             data_before = Some(if runs.is_empty() { anchor } else { data_cursor });
-            track_fragments.push(if track_fragment.duration_is_empty {
-                TrackFragmentBox::with_empty_duration(tfhd, tfdt)
+            let traf = if track_fragment.duration_is_empty {
+                TrackFragmentBox::with_empty_duration(tfhd)
             } else {
-                TrackFragmentBox::new(tfhd, tfdt, runs)
+                TrackFragmentBox::new(tfhd, runs)
+            };
+            track_fragments.push(match tfdt {
+                Some(tfdt) => traf.with_tfdt(tfdt),
+                None => traf,
             });
         }
 

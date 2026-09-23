@@ -287,7 +287,6 @@ mod tests {
                 Some(u32::try_from(sample_len).unwrap()),
                 None,
             ),
-            None,
             vec![
                 TrackRunBox::new(
                     Some(0),

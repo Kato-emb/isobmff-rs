@@ -48,6 +48,12 @@ impl Error {
         self.representation.fields().first_chunk
     }
 
+    /// Returns the sample number the failure names, counted from one, for the kinds that name one
+    #[must_use]
+    pub const fn sample_number(self) -> Option<u32> {
+        self.representation.fields().sample_number
+    }
+
     /// Returns the bytes the failure required, for the kinds that count bytes
     #[must_use]
     pub const fn needed_bytes(self) -> Option<u64> {
@@ -145,6 +151,13 @@ impl fmt::Display for Error {
                 formatter,
                 "run of chunks of track {track_id} starts at chunk {first_chunk}, out of the range open to it"
             ),
+            Representation::SyncSampleOutOfRange {
+                track_id,
+                sample_number,
+            } => write!(
+                formatter,
+                "sync sample {sample_number} of track {track_id} is listed out of order or past its samples"
+            ),
             Representation::SampleSizeLimitExceeded {
                 track_id,
                 declared,
@@ -180,7 +193,7 @@ impl fmt::Display for Error {
             ),
             Representation::CompositionTimeOffsetOutOfRange { track_id, offset } => write!(
                 formatter,
-                "track {track_id} states a composition time offset of {offset}, which neither version of a trun writes"
+                "track {track_id} states a composition time offset of {offset}, which no version of a trun or a ctts writes"
             ),
             Representation::DecodeTimeMismatch {
                 track_id,
@@ -216,16 +229,12 @@ impl fmt::Display for Error {
                 formatter,
                 "sample of track {stated} handed over to a chunk of track {established}"
             ),
-            Representation::UnsupportedCompositionTimeOffset { track_id, offset } => write!(
-                formatter,
-                "track {track_id} states a composition time offset of {offset}, which no sample table written here carries"
-            ),
             Representation::UnsupportedSampleFlags {
                 track_id,
                 sample_flags,
             } => write!(
                 formatter,
-                "track {track_id} states sample flags {sample_flags:#010x}, which no sample table written here carries"
+                "track {track_id} states sample flags {sample_flags:#010x}, setting a reserved bit no sample table carries"
             ),
         }
     }
@@ -258,6 +267,9 @@ impl fmt::Debug for Error {
         }
         if let Some(first_chunk) = values.first_chunk {
             fields.field("first_chunk", &first_chunk);
+        }
+        if let Some(sample_number) = values.sample_number {
+            fields.field("sample_number", &sample_number);
         }
         if let Some(needed) = values.needed_bytes {
             fields.field("needed_bytes", &needed);
@@ -329,6 +341,10 @@ mod tests {
         assert_eq!(external.data_reference_index(), Some(2));
         assert_eq!(external.first_chunk(), None);
         assert_eq!(Error::first_chunk_out_of_range(1, 3).first_chunk(), Some(3));
+        assert_eq!(
+            Error::sync_sample_out_of_range(1, 3).sample_number(),
+            Some(3)
+        );
         assert_eq!(Error::sample_count_mismatch(1).data_reference_index(), None);
 
         let too_long = Error::sample_size_out_of_range(1, 1 << 40);
@@ -376,8 +392,8 @@ mod tests {
         assert_eq!(mismatched.established_track_id(), Some(1));
         assert_eq!(mismatched.sample_flags(), None);
         assert_eq!(
-            Error::unsupported_sample_flags(1, 0x0200_0000).sample_flags(),
-            Some(0x0200_0000)
+            Error::unsupported_sample_flags(1, 0x1000_0000).sample_flags(),
+            Some(0x1000_0000)
         );
     }
 
@@ -420,6 +436,10 @@ mod tests {
             "run of chunks of track 2 starts at chunk 5, out of the range open to it"
         );
         assert_eq!(
+            Error::sync_sample_out_of_range(2, 5).to_string(),
+            "sync sample 5 of track 2 is listed out of order or past its samples"
+        );
+        assert_eq!(
             Error::sample_size_limit_exceeded(1, 32, 16).to_string(),
             "track 1 declares a sample of 32 bytes, past the 16-byte limit"
         );
@@ -449,7 +469,7 @@ mod tests {
         );
         assert_eq!(
             Error::composition_time_offset_out_of_range(1, 1 << 40).to_string(),
-            "track 1 states a composition time offset of 1099511627776, which neither version of a trun writes"
+            "track 1 states a composition time offset of 1099511627776, which no version of a trun or a ctts writes"
         );
         assert_eq!(
             Error::decode_time_mismatch(1, 512, 1_024).to_string(),
@@ -472,12 +492,8 @@ mod tests {
             "sample of track 2 handed over to a chunk of track 1"
         );
         assert_eq!(
-            Error::unsupported_composition_time_offset(1, -8).to_string(),
-            "track 1 states a composition time offset of -8, which no sample table written here carries"
-        );
-        assert_eq!(
-            Error::unsupported_sample_flags(1, 0x0200_0000).to_string(),
-            "track 1 states sample flags 0x02000000, which no sample table written here carries"
+            Error::unsupported_sample_flags(1, 0x1000_0000).to_string(),
+            "track 1 states sample flags 0x10000000, setting a reserved bit no sample table carries"
         );
     }
 
@@ -511,6 +527,10 @@ mod tests {
             "Error { kind: FirstChunkOutOfRange, category: Malformed, track_id: 1, first_chunk: 5 }"
         );
         assert_eq!(
+            format!("{:?}", Error::sync_sample_out_of_range(1, 5)),
+            "Error { kind: SyncSampleOutOfRange, category: Malformed, track_id: 1, sample_number: 5 }"
+        );
+        assert_eq!(
             format!("{:?}", Error::backward_decode_time(1, 512, 1_024)),
             "Error { kind: BackwardDecodeTime, category: Malformed, track_id: 1, stated_decode_time: 512, reached_decode_time: 1024 }"
         );
@@ -534,8 +554,8 @@ mod tests {
             "Error { kind: TrackIdMismatch, category: Malformed, track_id: 2, established_track_id: 1 }"
         );
         assert_eq!(
-            format!("{:?}", Error::unsupported_sample_flags(1, 0x0200_0000)),
-            "Error { kind: UnsupportedSampleFlags, category: Unsupported, track_id: 1, sample_flags: 33554432 }"
+            format!("{:?}", Error::unsupported_sample_flags(1, 0x1000_0000)),
+            "Error { kind: UnsupportedSampleFlags, category: Unsupported, track_id: 1, sample_flags: 268435456 }"
         );
     }
 }

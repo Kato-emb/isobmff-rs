@@ -354,7 +354,6 @@ mod tests {
                 None,
                 None,
             ),
-            None,
             trun,
         )
     }
@@ -416,7 +415,6 @@ mod tests {
                 Some(256),
                 Some(8),
             ),
-            None,
             vec![TrackRunBox::new(Some(100), None, rows).unwrap()],
         );
 
@@ -445,7 +443,6 @@ mod tests {
                 Some(256),
                 Some(2),
             ),
-            None,
             vec![run(Some(100), 2)],
         );
 
@@ -501,9 +498,9 @@ mod tests {
                 None,
                 None,
             ),
-            Some(TrackFragmentBaseMediaDecodeTimeBox::new(4_096)),
             vec![run(Some(100), 1)],
-        );
+        )
+        .with_tfdt(TrackFragmentBaseMediaDecodeTimeBox::new(4_096));
         assert_eq!(
             resolved_from(
                 &movie_fragment(vec![stated]),
@@ -519,7 +516,6 @@ mod tests {
     fn offsets_are_anchored_at_the_base_the_fragment_states() {
         let track_fragment = TrackFragmentBox::new(
             track_fragment_header(TrackFragmentHeaderFlags::ZERO, 1, Some(400), None, None),
-            None,
             vec![run(Some(8), 1)],
         );
 
@@ -546,7 +542,6 @@ mod tests {
     fn offsets_of_a_fragment_stating_no_anchor_at_all_are_anchored_at_the_movie_fragment() {
         let track_fragment = TrackFragmentBox::new(
             track_fragment_header(TrackFragmentHeaderFlags::ZERO, 1, None, None, None),
-            None,
             vec![run(Some(100), 1)],
         );
 
@@ -561,7 +556,6 @@ mod tests {
         let stating_no_anchor = |track_id, data_offset| {
             TrackFragmentBox::new(
                 track_fragment_header(TrackFragmentHeaderFlags::ZERO, track_id, None, None, None),
-                None,
                 vec![run(data_offset, 1)],
             )
         };
@@ -580,19 +574,15 @@ mod tests {
 
     #[test]
     fn a_track_fragment_after_one_carrying_no_run_is_anchored_where_that_one_was() {
-        let carrying_no_run = TrackFragmentBox::with_empty_duration(
-            track_fragment_header(
-                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
-                1,
-                None,
-                Some(4_096),
-                None,
-            ),
+        let carrying_no_run = TrackFragmentBox::with_empty_duration(track_fragment_header(
+            TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
+            1,
             None,
-        );
+            Some(4_096),
+            None,
+        ));
         let stating_no_anchor = TrackFragmentBox::new(
             track_fragment_header(TrackFragmentHeaderFlags::ZERO, 2, None, None, None),
-            None,
             vec![run(Some(100), 1)],
         );
 
@@ -665,7 +655,6 @@ mod tests {
                 None,
                 None,
             ),
-            None,
             vec![run(Some(100), 1)],
         );
 
@@ -687,10 +676,13 @@ mod tests {
 
     #[test]
     fn an_empty_duration_moves_the_timeline_on_without_a_sample() {
-        let empty = TrackFragmentBox::with_empty_duration(
-            track_fragment_header(TrackFragmentHeaderFlags::ZERO, 1, None, Some(4_096), None),
+        let empty = TrackFragmentBox::with_empty_duration(track_fragment_header(
+            TrackFragmentHeaderFlags::ZERO,
+            1,
             None,
-        );
+            Some(4_096),
+            None,
+        ));
 
         let mut decode_times = track_1_at(1_024);
 
@@ -777,7 +769,6 @@ mod tests {
                     None,
                     None,
                 ),
-                None,
                 vec![run(None, 1)],
             ),
         ]);
@@ -810,9 +801,9 @@ mod tests {
                 Some(u32::MAX),
                 None,
             ),
-            Some(TrackFragmentBaseMediaDecodeTimeBox::new(u64::MAX)),
             vec![run(Some(100), 1)],
-        );
+        )
+        .with_tfdt(TrackFragmentBaseMediaDecodeTimeBox::new(u64::MAX));
 
         assert_eq!(
             resolved(
@@ -833,7 +824,6 @@ mod tests {
                 None,
                 None,
             ),
-            None,
             vec![run(None, 1)],
         );
 
