@@ -12,9 +12,9 @@ mod tests {
     use super::reading::samples_of;
     use isobmff_boxes::{
         DegradationPriorityEntry, MovieBox, MovieExtendsBox, MovieHeaderBox, PaddingBitsEntry,
-        SampleDependencyTypeEntry, SampleFlags, TrackExtendsBox,
+        SampleDependencyTypeEntry, SampleFlags, TrackBox, TrackExtendsBox,
     };
-    use isobmff_core::Mp4EpochSeconds;
+    use isobmff_core::{AnyBox, BoxType, Mp4EpochSeconds};
     use isobmff_sample::Sample;
     use isobmff_structure::FragmentedWriter;
     use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type, track};
@@ -94,12 +94,12 @@ mod tests {
     }
 
     /// The file the samples make: the brands, the movie, then fragment after fragment
-    fn written_file(fragments: Vec<Vec<Sample>>) -> Vec<u8> {
+    fn written_file(movie: MovieBox, fragments: Vec<Vec<Sample>>) -> Vec<u8> {
         let mut writer = FragmentedWriter::new();
         let mut file = Vec::new();
 
         writer.handle_file_type(file_type()).unwrap();
-        writer.handle_movie(movie()).unwrap();
+        writer.handle_movie(movie).unwrap();
 
         for (position, samples) in fragments.into_iter().enumerate() {
             let sequence_number = u32::try_from(position).unwrap().saturating_add(1);
@@ -121,7 +121,7 @@ mod tests {
 
     #[test]
     fn the_samples_are_read_back_as_they_were_handed_over_however_the_file_was_cut() {
-        let file = written_file(two_track_fragments());
+        let file = written_file(movie(), two_track_fragments());
         let handed_over = two_track_fragments().concat();
 
         for cut_length in [file.len(), 1, 3, 7, 64, file.len().saturating_sub(1)] {
@@ -131,5 +131,28 @@ mod tests {
                 "cut at {cut_length}"
             );
         }
+    }
+
+    #[test]
+    fn a_sync_sample_of_a_video_track_filled_for_fragments_is_read_back() {
+        let entry =
+            AnyBox::from_raw_bytes(BoxType::compact(*b"avc1"), vec![0, 0, 0, 0, 0, 0, 0, 1]);
+        let track = TrackBox::new_video(1, TIMESCALE, 1920, 1080, entry);
+        let sample = Sample::new(
+            1,
+            0,
+            3_000,
+            0,
+            SampleFlags::SYNC_SAMPLE,
+            1,
+            b"VIDEO_01".to_vec(),
+        );
+
+        let file = written_file(
+            MovieBox::new_fragmented(TIMESCALE, vec![track]).unwrap(),
+            vec![vec![sample.clone()]],
+        );
+
+        assert_eq!(samples_of(&file, file.len()), [sample]);
     }
 }
