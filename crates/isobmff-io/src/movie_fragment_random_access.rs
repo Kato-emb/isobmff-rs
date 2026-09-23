@@ -44,11 +44,11 @@ impl Probe {
         }
     }
 
-    /// Takes the bytes read at [`start`](Self::start), fewer than [`PROBE_LEN`] where the file ends before
+    /// Takes the bytes read at [`start`](Self::start), fewer than [`PROBE_LEN`] where the file ends within them
     ///
-    /// An `mfro` steps back by its `size` from the end of the file, and the
-    /// bytes there are to open an `mfra` spanning that many; an `mfra`
-    /// declaring that it runs to the end of the file spans them.
+    /// The search settles on the offset an `mfro` steps back to by its `size`
+    /// from the end of the file, when an `mfra` header opens there whose size
+    /// is that `size` or runs to the end of the file.
     pub(crate) fn handle(self, bytes: &[u8]) -> Probed {
         match self {
             Self::Closing { file_len } => {
@@ -85,6 +85,8 @@ mod tests {
     use super::{Probe, Probed};
 
     /// Where the search settles in a file `file_len` long, the bytes of each part it reads handed over in turn
+    ///
+    /// `None` when no search starts, or it does not settle on the parts handed over.
     fn settled(file_len: u64, parts: &[&[u8]]) -> Option<Option<u64>> {
         let mut probe = Probe::new(file_len)?;
         for bytes in parts {
@@ -98,7 +100,7 @@ mod tests {
     }
 
     #[test]
-    fn an_mfro_names_the_mfra_spanning_the_bytes_it_steps_back_over() {
+    fn an_mfro_names_the_mfra_spanning_the_bytes_it_steps_back_over_and_no_other_box() {
         let mfra = written(&MovieFragmentRandomAccessBox::new(vec![]));
         let size = u64::try_from(mfra.len()).unwrap();
         let mfro = written(&MovieFragmentRandomAccessOffsetBox::new(
@@ -120,6 +122,10 @@ mod tests {
 
         assert_eq!(settled(100, &[b"\0\0\0\x10freeFREEFREE"]), Some(None));
         assert_eq!(settled(23, &[&mfro]), Some(None));
-        assert_eq!(settled(15, &[]), None);
+    }
+
+    #[test]
+    fn a_file_too_short_for_an_mfro_starts_no_search() {
+        assert!(Probe::new(15).is_none());
     }
 }

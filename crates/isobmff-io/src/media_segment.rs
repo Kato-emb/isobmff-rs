@@ -42,12 +42,12 @@ use crate::stack::{PollOutput, ReadSamples, ResumeSamples};
 ///   [`Io`](crate::ErrorKind::Io) with
 ///   [`UnexpectedEof`](std::io::ErrorKind::UnexpectedEof).
 /// * A failure ends the samples: the ones the reader had completed before it
-///   come first, then the failure once, then `None` for good, unless the
+///   come first, then the failure once, then `None` until the
 ///   reading is resumed. The end of the segment is the same without the
 ///   failure.
-/// * Where an index points is the caller's to choose: the indexes the
-///   segment carries are there to read once they have come —
-///   [`segment_indexes`](Self::segment_indexes) — and
+/// * Where an index points is the caller's to choose. The indexes the
+///   segment carries are there to read once they have come:
+///   [`segment_indexes`](Self::segment_indexes).
 ///   [`resume_at`](Self::resume_at) restarts the reading at an offset one of
 ///   them names.
 /// * Every `async fn` here is cancellation safe: a future dropped where the
@@ -157,9 +157,10 @@ impl<S: AsyncRead + AsyncSeek + Unpin> MediaSegmentDemuxer<S> {
     ///
     /// # Errors
     ///
-    /// * [`Io`](crate::ErrorKind::Io): `offset` lies past what a seek
-    ///   names, which leaves the demuxer as it was, or the source does not
-    ///   seek there.
+    /// * [`Io`](crate::ErrorKind::Io): `offset`, counted from where the
+    ///   source stood when the demuxer was created, lies past `u64::MAX`,
+    ///   which leaves the demuxer as it was, or the source does not seek
+    ///   there.
     /// * [`Structure`](crate::ErrorKind::Structure): what
     ///   [`MediaSegmentReader::resume_at`] makes of the call.
     ///

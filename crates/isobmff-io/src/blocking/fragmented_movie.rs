@@ -37,18 +37,18 @@ use crate::Error;
 ///   where it had already been read to is [`Io`](crate::ErrorKind::Io)
 ///   with [`UnexpectedEof`](std::io::ErrorKind::UnexpectedEof).
 /// * A failure ends the iteration: the samples the reader had completed
-///   before it come first, then the failure once, then `None` for good,
-///   unless the reading is resumed. The end of the file is the same without
+///   before it come first, then the failure once, then `None` until the
+///   reading is resumed. The end of the file is the same without
 ///   the failure.
-/// * Where an index points is the caller's to choose: the indexes the file
-///   carries are there to read once they have come —
+/// * Where an index points is the caller's to choose. The indexes the file
+///   carries are there to read once they have come:
 ///   [`segment_indexes`](Self::segment_indexes) and
-///   [`movie_fragment_random_access`](Self::movie_fragment_random_access) —
+///   [`movie_fragment_random_access`](Self::movie_fragment_random_access).
 ///   [`resume_at`](Self::resume_at) restarts the reading at an offset one of
 ///   them names, and
 ///   [`locate_movie_fragment_random_access`](Self::locate_movie_fragment_random_access)
-///   finds the `mfra` at the end of the file when asked. The demuxer seeks
-///   for an index on its own never.
+///   finds the `mfra` at the end of the file when asked; the demuxer never
+///   seeks an index out on its own.
 ///
 /// # Examples
 ///
@@ -140,21 +140,21 @@ impl<S: Read + Seek> FragmentedDemuxer<S> {
 
     /// Restarts the reading at `offset` of the file, a place an index names
     ///
-    /// The source is sought to `offset` from where the file begins, and the
-    /// reader is resumed there as [`FragmentedReader::resume_at`] resumes
-    /// it: the samples not yet taken are dropped, and the ones that come next
-    /// are those the file carries from `offset` on — the `moof`, `sidx` or
-    /// `mfra` it is to start with. The demuxer resumes from reading and from
-    /// the end of the file alike, and from a failure of the source. The movie
-    /// the fragments continue is to have come before the resume: fragments
-    /// read on from a resume before it continue no movie, which the reader
-    /// reports at the end of the file.
+    /// The reader is resumed at `offset` as [`FragmentedReader::resume_at`]
+    /// resumes it, and the source is sought there from where the file
+    /// begins: the samples not yet taken are dropped, and the ones that come
+    /// next are those the file carries from `offset` on — the `moof`, `sidx`
+    /// or `mfra` it is to start with. The demuxer resumes from reading and from
+    /// the end of the file alike, and from a failure of the source. Resuming
+    /// before the `moov` has been read leaves the fragments with no movie to
+    /// continue, which the reader reports as the file ends.
     ///
     /// # Errors
     ///
-    /// * [`Io`](crate::ErrorKind::Io): `offset` lies past what a seek
-    ///   names, which leaves the demuxer as it was, or the source does not
-    ///   seek there.
+    /// * [`Io`](crate::ErrorKind::Io): `offset`, counted from where the
+    ///   source stood when the demuxer was created, lies past `u64::MAX`,
+    ///   which leaves the demuxer as it was, or the source does not seek
+    ///   there.
     /// * [`Structure`](crate::ErrorKind::Structure): what
     ///   [`FragmentedReader::resume_at`] makes of the call.
     ///
@@ -171,15 +171,15 @@ impl<S: Read + Seek> FragmentedDemuxer<S> {
     /// and closes with an `mfra` when its last bytes are an `mfro` whose
     /// `size` steps back to the header of an `mfra` spanning the rest of it
     /// (§8.8.11); `None` comes back otherwise. The `mfra` is not read into a
-    /// value: [`resume_at`](Self::resume_at) its offset and reading the file
-    /// to its end does, and it is there to read on
-    /// [`movie_fragment_random_access`](Self::movie_fragment_random_access).
+    /// value here: resume at its offset and read the file to its end, and
+    /// [`movie_fragment_random_access`](Self::movie_fragment_random_access)
+    /// returns it.
     ///
     /// # Errors
     ///
     /// * [`Io`](crate::ErrorKind::Io): the source does not seek from its
-    ///   end or does not read there, or does not seek back to where it
-    ///   stood, which ends the samples.
+    ///   end, does not seek or read where the `mfro` and the `mfra` lie, or
+    ///   does not seek back to where it stood, which ends the samples.
     ///
     /// # Examples
     ///
@@ -487,7 +487,8 @@ mod tests {
     }
 
     #[test]
-    fn a_source_that_does_not_seek_from_its_end_fails_the_locate_as_the_source() {
+    fn a_source_that_does_not_seek_from_its_end_fails_the_locate_as_the_source_and_the_samples_read_on()
+     {
         let mut demuxer =
             FragmentedDemuxer::new(Unmeasured(io::Cursor::new(indexed_fragmented_file().bytes)))
                 .unwrap();

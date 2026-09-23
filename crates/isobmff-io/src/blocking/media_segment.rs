@@ -37,12 +37,12 @@ use crate::Error;
 ///   [`Io`](crate::ErrorKind::Io) with
 ///   [`UnexpectedEof`](std::io::ErrorKind::UnexpectedEof).
 /// * A failure ends the iteration: the samples the reader had completed
-///   before it come first, then the failure once, then `None` for good,
-///   unless the reading is resumed. The end of the segment is the same
+///   before it come first, then the failure once, then `None` until the
+///   reading is resumed. The end of the segment is the same
 ///   without the failure.
-/// * Where an index points is the caller's to choose: the indexes the
-///   segment carries are there to read once they have come —
-///   [`segment_indexes`](Self::segment_indexes) — and
+/// * Where an index points is the caller's to choose. The indexes the
+///   segment carries are there to read once they have come:
+///   [`segment_indexes`](Self::segment_indexes).
 ///   [`resume_at`](Self::resume_at) restarts the reading at an offset one of
 ///   them names.
 ///
@@ -130,18 +130,19 @@ impl<S: Read + Seek> MediaSegmentDemuxer<S> {
 
     /// Restarts the reading at `offset` of the segment, a place an index names
     ///
-    /// The source is sought to `offset` from where the segment begins, and
-    /// the reader is resumed there as [`MediaSegmentReader::resume_at`]
-    /// resumes it: the samples not yet taken are dropped, and the ones that
+    /// The reader is resumed at `offset` as [`MediaSegmentReader::resume_at`]
+    /// resumes it, and the source is sought there from where the segment
+    /// begins: the samples not yet taken are dropped, and the ones that
     /// come next are those the segment carries from `offset` on — the `moof`
     /// or `sidx` it is to start with. The demuxer resumes from reading and
     /// from the end of the segment alike, and from a failure of the source.
     ///
     /// # Errors
     ///
-    /// * [`Io`](crate::ErrorKind::Io): `offset` lies past what a seek
-    ///   names, which leaves the demuxer as it was, or the source does not
-    ///   seek there.
+    /// * [`Io`](crate::ErrorKind::Io): `offset`, counted from where the
+    ///   source stood when the demuxer was created, lies past `u64::MAX`,
+    ///   which leaves the demuxer as it was, or the source does not seek
+    ///   there.
     /// * [`Structure`](crate::ErrorKind::Structure): what
     ///   [`MediaSegmentReader::resume_at`] makes of the call.
     ///

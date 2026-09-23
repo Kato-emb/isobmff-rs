@@ -122,7 +122,9 @@ impl<S: Read + Seek, R: ReadSamples> Demuxer<S, R> {
             .source
             .seek(SeekFrom::Start(self.origin.saturating_add(self.handed)))
         {
-            self.state = State::Over(None);
+            if let State::Reading = self.state {
+                self.state = State::Over(None);
+            }
 
             return Err(failure.into());
         }
@@ -170,7 +172,8 @@ impl<S: Read + Seek, R: ResumeSamples> Demuxer<S, R> {
     /// # Errors
     ///
     /// * [`Io`](crate::ErrorKind::Io): `offset` lies past what a seek
-    ///   names, or the source does not seek there.
+    ///   names, which leaves the demuxer as it was, or the source does not
+    ///   seek there.
     /// * [`Structure`](crate::ErrorKind::Structure): what the reader's
     ///   `resume_at` makes of the call.
     ///

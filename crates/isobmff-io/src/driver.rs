@@ -55,8 +55,8 @@ pub(crate) struct Demuxer<S, R> {
 
 /// How far a search for the `mfra` closing the file has come
 ///
-/// The part it reads, whether the source stands at its next byte, and how
-/// many of its first bytes the cut holds.
+/// The part it reads, whether the source was sought to the start of that
+/// part, and how many of its first bytes the cut holds.
 #[derive(Clone, Copy, Debug)]
 struct Locating {
     probe: Probe,
@@ -138,7 +138,7 @@ impl<S: AsyncRead + AsyncSeek + Unpin, R: ReadSamples> Demuxer<S, R> {
     /// Finds where the `mfra` closing the file begins, from the `mfro` closing it
     ///
     /// The source is left elsewhere, and the demuxer seeks it back to where
-    /// the file was handed over to as it reads on.
+    /// its reading stood as it reads on.
     ///
     /// # Errors
     ///
@@ -149,8 +149,8 @@ impl<S: AsyncRead + AsyncSeek + Unpin, R: ReadSamples> Demuxer<S, R> {
     ) -> Result<Option<u64>, Error> {
         // Why not seeking back once the search is done: a future dropped
         // part way would leave the source moved with nothing to seek it back,
-        // where a state seeking on its own carries the reading on whichever
-        // call follows.
+        // whereas a state that seeks before it reads has whichever call
+        // follows seek it back.
         self.state = match mem::replace(&mut self.state, State::Restoring) {
             State::Reading => State::Restoring,
             State::Fetched(wanted) => State::Fetching(wanted),
@@ -919,7 +919,8 @@ mod tests {
             Some(Ok(sample(b"S1")))
         );
 
-        for _ in 0..4 {
+        let awaits_given_up = 4;
+        for _ in 0..awaits_given_up {
             assert!(poll_once(demuxer.locate_movie_fragment_random_access()).is_none());
         }
 
