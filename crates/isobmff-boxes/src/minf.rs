@@ -1,7 +1,5 @@
 //! [`MediaInformationBox`] (`minf`), ISO/IEC 14496-12 §8.4.4
 
-use alloc::vec::Vec;
-
 use isobmff_core::{
     AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
     FieldWriter, OtherBoxes, RawBox, boxes,
@@ -120,7 +118,8 @@ impl MediaInformationHeader {
 /// use isobmff_boxes::{
 ///     ChunkOffsetBox, ChunkOffsets, DataEntry, DataEntryUrlBox, DataInformationBox,
 ///     DataReferenceBox, MediaInformationBox, MediaInformationHeader, SampleDescriptionBox,
-///     SampleSizeBox, SampleSizes, SampleTableBox, SampleToChunkBox, TimeToSampleBox,
+///     SampleSizeBox, SampleSizeEntries, SampleSizes, SampleTableBox, SampleToChunkBox,
+///     TimeToSampleBox,
 ///     VideoMediaHeaderBox,
 /// };
 /// use isobmff_core::{BoxDecode, BoxEncode};
@@ -139,7 +138,7 @@ impl MediaInformationHeader {
 ///     SampleDescriptionBox::new(Vec::new()),
 ///     TimeToSampleBox::new(Vec::new()),
 ///     SampleToChunkBox::new(Vec::new()),
-///     SampleSizeBox::new(SampleSizes::PerSample(Vec::new())),
+///     SampleSizes::Stsz(SampleSizeBox::new(SampleSizeEntries::PerSample(Vec::new()))),
 ///     ChunkOffsets::Stco(ChunkOffsetBox::new(Vec::new())),
 /// );
 ///
@@ -231,7 +230,7 @@ impl BoxDecode for MediaInformationBox {
     /// * Whatever a child reports, on the [`containers`](Error::containers) path: one
     ///   of them does not decode.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let mut media_header_boxes = Vec::new();
+        let mut media_header_boxes = ChildBoxes::new();
         let mut data_information_boxes = ChildBoxes::new();
         let mut sample_table_boxes = ChildBoxes::new();
         let mut other_boxes = OtherBoxes::new();
@@ -251,21 +250,11 @@ impl BoxDecode for MediaInformationBox {
             }
         }
 
-        let media_information_header = match media_header_boxes.as_slice() {
-            [] => None,
-            [stated] => Some(MediaInformationHeader::decode(*stated)?),
-            [first, rest @ ..] => {
-                let box_type = first.header().box_type();
-                let of_one_kind = rest
-                    .iter()
-                    .all(|other| other.header().box_type() == box_type);
-
-                return Err(if of_one_kind {
-                    Error::duplicate_box(box_type)
-                } else {
-                    Error::duplicate_alternative_box(MEDIA_HEADER_BOXES)
-                });
-            }
+        let media_information_header = if media_header_boxes.is_empty() {
+            None
+        } else {
+            let stated = media_header_boxes.exactly_one_variant(MEDIA_HEADER_BOXES)?;
+            Some(MediaInformationHeader::decode(stated)?)
         };
 
         Ok(Self {

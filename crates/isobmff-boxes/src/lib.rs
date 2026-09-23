@@ -34,6 +34,7 @@ mod mvhd;
 mod nmhd;
 mod padb;
 mod sample_entry;
+mod sample_size;
 mod sdtp;
 mod smhd;
 mod srat;
@@ -43,7 +44,6 @@ mod sthd;
 mod stsc;
 mod stsd;
 mod stss;
-mod stsz;
 mod stts;
 mod styp;
 mod tfdt;
@@ -78,6 +78,10 @@ pub use mvhd::MovieHeaderBox;
 pub use nmhd::NullMediaHeaderBox;
 pub use padb::{PaddingBitsBox, PaddingBitsEntry};
 pub use sample_entry::{AudioSampleEntry, SampleEntry, VisualSampleEntry};
+pub use sample_size::{
+    CompactSampleSizeBox, CompactSampleSizeEntry, FieldSize, SampleSizeBox, SampleSizeEntries,
+    SampleSizeEntry, SampleSizes,
+};
 pub use sdtp::{SampleDependencyTypeBox, SampleDependencyTypeEntry};
 pub use smhd::SoundMediaHeaderBox;
 pub use srat::SamplingRateBox;
@@ -87,7 +91,6 @@ pub use sthd::SubtitleMediaHeaderBox;
 pub use stsc::{SampleToChunkBox, SampleToChunkEntry};
 pub use stsd::SampleDescriptionBox;
 pub use stss::{SyncSampleBox, SyncSampleEntry};
-pub use stsz::{SampleSizeBox, SampleSizeEntry, SampleSizes};
 pub use stts::{TimeToSampleBox, TimeToSampleEntry};
 pub use styp::SegmentTypeBox;
 pub use tfdt::TrackFragmentBaseMediaDecodeTimeBox;
