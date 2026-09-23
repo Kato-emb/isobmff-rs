@@ -10,11 +10,11 @@ mod reading;
 #[cfg(test)]
 mod tests {
     use super::reading::samples_of;
-    use isobmff_boxes::{MovieBox, MovieHeaderBox, SampleFlags};
-    use isobmff_core::{BoxType, Mp4EpochSeconds};
+    use isobmff_boxes::{FileTypeBox, MovieBox, MovieHeaderBox, SampleFlags};
+    use isobmff_core::{BoxType, FourCC, Mp4EpochSeconds};
     use isobmff_sample::Sample;
     use isobmff_sequence::BoxEvent;
-    use isobmff_structure::NonFragmentedWriter;
+    use isobmff_structure::{NonFragmentedReader, NonFragmentedWriter};
     use isobmff_test_support::{events_of, file_type, track};
 
     /// Ticks a second the media of the movie is timed in
@@ -69,12 +69,14 @@ mod tests {
         ]
     }
 
-    /// The file the chunks make: the brands, one `mdat` per chunk, then the movie
-    fn written_file(chunks: Vec<Vec<Sample>>) -> Vec<u8> {
+    /// The file the chunks make: the brands if any are handed over, one `mdat` per chunk, then the movie
+    fn written_file(brands: Option<FileTypeBox>, chunks: Vec<Vec<Sample>>) -> Vec<u8> {
         let mut writer = NonFragmentedWriter::new();
         let mut file = Vec::new();
 
-        writer.handle_file_type(file_type()).unwrap();
+        if let Some(brands) = brands {
+            writer.handle_file_type(brands).unwrap();
+        }
         writer.handle_movie(movie()).unwrap();
         for chunk in chunks {
             writer.begin_chunk().unwrap();
@@ -93,14 +95,14 @@ mod tests {
 
     #[test]
     fn the_samples_are_read_back_as_they_were_handed_over_chunk_by_chunk() {
-        let file = written_file(two_track_chunks());
+        let file = written_file(Some(file_type()), two_track_chunks());
 
         assert_eq!(samples_of(&file, file.len()), two_track_chunks().concat());
     }
 
     #[test]
     fn each_chunk_is_laid_down_as_its_own_media_data_box_and_the_movie_comes_last() {
-        let file = written_file(two_track_chunks());
+        let file = written_file(Some(file_type()), two_track_chunks());
 
         let top_level: Vec<BoxType> = events_of(&file, file.len())
             .unwrap()
@@ -119,5 +121,39 @@ mod tests {
             [b"ftyp", b"mdat", b"mdat", b"mdat", b"mdat", b"moov"]
                 .map(|fourcc| BoxType::compact(*fourcc))
         );
+    }
+
+    #[test]
+    fn a_file_handed_no_brands_is_read_back_declaring_the_brand_its_layout_requires() {
+        let file = written_file(None, two_track_chunks());
+
+        let mut reader = NonFragmentedReader::new();
+        reader.handle_input(&file).unwrap();
+
+        assert_eq!(
+            reader.file_type(),
+            Some(&FileTypeBox::new(
+                FourCC::new(*b"iso4"),
+                0,
+                vec![FourCC::new(*b"iso4")]
+            ))
+        );
+    }
+
+    #[test]
+    fn a_file_handed_no_brands_whose_chunk_comes_before_the_movie_is_read_back() {
+        let sample = Sample::new(1, 0, 3_000, 0, SampleFlags::ZERO, 1, b"VIDEO_01".to_vec());
+        let mut writer = NonFragmentedWriter::new();
+        let mut file = Vec::new();
+
+        writer.begin_chunk().unwrap();
+        writer.handle_sample(sample.clone()).unwrap();
+        writer.handle_movie(movie()).unwrap();
+        writer.finish().unwrap();
+        while let Some(written) = writer.poll_output() {
+            file.extend_from_slice(&written);
+        }
+
+        assert_eq!(samples_of(&file, file.len()), [sample]);
     }
 }

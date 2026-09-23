@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use core::mem;
 
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox};
-use isobmff_core::{BoxDefinition, BoxHeader, BoxType};
+use isobmff_core::{BoxDefinition, BoxHeader, BoxType, FourCC};
 use isobmff_sample::{Sample, SampleTableWriter};
 use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
 
@@ -32,12 +32,17 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 ///
 /// * The order of the boxes is the structure's, held to as they are handed
 ///   over — a box takes its place in the order where it is handed over or
-///   opened, whether its bytes go down then or later: the `ftyp` first if at
-///   all, before any chunk, the `moov` once. A box handed over out of that
+///   opened, whether its bytes go down then or later: the `ftyp` first,
+///   before any chunk, the `moov` once. A box handed over out of that
 ///   order is [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder) or
 ///   [`DuplicateBox`](crate::ErrorKind::DuplicateBox), and a file
 ///   declared over without a `moov` is
 ///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
+/// * The `ftyp` handed over is laid down as it stands. Where none was handed
+///   over, the writer lays its own down before the `moov` or before any
+///   chunk, whichever takes its place first: `iso4` as its `major_brand` and
+///   its one `compatible_brands` entry, with `minor_version` 0, the brand the
+///   widest layout it lays down requires (Annex E.7).
 /// * The movie handed to [`handle_movie`](Self::handle_movie) is a template:
 ///   what it declares of each track is laid down as it stands, but for the
 ///   sample tables, which the writer fills in from the samples of that track
@@ -162,12 +167,7 @@ impl NonFragmentedWriter {
     ///   again for every call after it.
     pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), Error> {
         self.writing()?;
-        let payload = whole_payload(&file_type).map_err(|failure| self.fail(failure))?;
-        let header = whole_box_header(FileTypeBox::BOX_TYPE, payload.len() as u64)
-            .map_err(|failure| self.fail(failure))?;
-        self.admit(FileTypeBox::BOX_TYPE)?;
-
-        self.frame(header, alloc::vec![payload])
+        self.lay_down_file_type(&file_type)
     }
 
     /// Takes the movie as a template, to be laid down last with its sample tables filled in
@@ -186,6 +186,9 @@ impl NonFragmentedWriter {
     ///   again for every call after it.
     pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), Error> {
         self.writing()?;
+        if self.structure.is_at_start() {
+            self.lay_down_file_type(&default_file_type())?;
+        }
         // Why not placing the movie in the order at `finish`: a second movie
         // is refused where it is handed over, before chunks are laid down
         // against the first, and the structure places a `moov` the same
@@ -212,6 +215,9 @@ impl NonFragmentedWriter {
     ///   again for every call after it.
     pub fn begin_chunk(&mut self) -> Result<(), Error> {
         self.writing()?;
+        if self.structure.is_at_start() {
+            self.lay_down_file_type(&default_file_type())?;
+        }
         self.lay_down_chunk()?;
         // Why not measuring the header once the chunk is whole: the chunk
         // offset is stated before it is, so the chunk goes down under the
@@ -318,6 +324,16 @@ impl NonFragmentedWriter {
         Ok(())
     }
 
+    /// Lays `file_type` down as the first box of the file, failing the writer where it is refused
+    fn lay_down_file_type(&mut self, file_type: &FileTypeBox) -> Result<(), Error> {
+        let payload = whole_payload(file_type).map_err(|failure| self.fail(failure))?;
+        let header = whole_box_header(FileTypeBox::BOX_TYPE, payload.len() as u64)
+            .map_err(|failure| self.fail(failure))?;
+        self.admit(FileTypeBox::BOX_TYPE)?;
+
+        self.frame(header, alloc::vec![payload])
+    }
+
     /// Admits the box `box_type` names into the file where the structure places it, failing the writer where it is refused
     ///
     /// A box the structure passes over is refused as
@@ -391,16 +407,21 @@ impl Default for NonFragmentedWriter {
     }
 }
 
+/// Brands the writer declares where none were handed over, those the widest layout it lays down requires
+fn default_file_type() -> FileTypeBox {
+    FileTypeBox::new(FourCC::new(*b"iso4"), 0, alloc::vec![FourCC::new(*b"iso4")])
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
 
     use isobmff_boxes::{FileTypeBox, MovieBox, SampleFlags};
-    use isobmff_core::BoxDefinition;
+    use isobmff_core::{BoxDecode, BoxDefinition};
     use isobmff_sample::Sample;
     use isobmff_test_support::{file_type, unfragmented_movie};
 
-    use super::{Error, NonFragmentedWriter};
+    use super::{Error, NonFragmentedWriter, default_file_type};
     use crate::ErrorKind;
 
     /// A sample of the track the movie declares
@@ -408,32 +429,74 @@ mod tests {
         Sample::new(1, 0, 3_000, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec())
     }
 
+    /// The bytes the writer has laid down, drained to the end
+    fn drained(writer: &mut NonFragmentedWriter) -> Vec<u8> {
+        let mut file = Vec::new();
+        while let Some(written) = writer.poll_output() {
+            file.extend_from_slice(&written);
+        }
+
+        file
+    }
+
     #[test]
-    fn a_file_declaring_no_brands_is_laid_down_all_the_same() {
+    fn a_file_handed_no_brands_opens_with_the_brands_the_writer_declares() {
         let mut writer = NonFragmentedWriter::new();
 
         writer.handle_movie(unfragmented_movie()).unwrap();
+        writer.finish().unwrap();
+        let file = drained(&mut writer);
 
-        assert_eq!(writer.finish(), Ok(()));
-        assert!(writer.poll_output().unwrap().ends_with(b"moov"));
+        assert_eq!(
+            FileTypeBox::decode(&file).map(|(file_type, rest)| (file_type, rest.get(4..8))),
+            Ok((default_file_type(), Some(b"moov".as_slice())))
+        );
+    }
+
+    #[test]
+    fn a_file_handed_no_brands_whose_chunk_comes_first_opens_with_the_brands_the_writer_declares() {
+        let mut writer = NonFragmentedWriter::new();
+
+        writer.begin_chunk().unwrap();
+        writer.handle_sample(sample()).unwrap();
+        writer.handle_movie(unfragmented_movie()).unwrap();
+        writer.finish().unwrap();
+        let file = drained(&mut writer);
+
+        assert_eq!(
+            FileTypeBox::decode(&file).map(|(file_type, rest)| (file_type, rest.get(4..8))),
+            Ok((default_file_type(), Some(b"mdat".as_slice())))
+        );
+    }
+
+    #[test]
+    fn the_brands_handed_over_are_laid_down_as_they_stand() {
+        let mut writer = NonFragmentedWriter::new();
+
+        writer.handle_file_type(file_type()).unwrap();
+        writer.handle_movie(unfragmented_movie()).unwrap();
+        writer.finish().unwrap();
+        let file = drained(&mut writer);
+
+        assert_eq!(
+            FileTypeBox::decode(&file).map(|(file_type, rest)| (file_type, rest.get(4..8))),
+            Ok((file_type(), Some(b"moov".as_slice())))
+        );
     }
 
     #[test]
     fn a_chunk_no_sample_was_handed_over_to_leaves_no_media_data_box() {
         let mut writer = NonFragmentedWriter::new();
-        let mut file = Vec::new();
 
         writer.handle_movie(unfragmented_movie()).unwrap();
         writer.begin_chunk().unwrap();
         writer.begin_chunk().unwrap();
         writer.handle_sample(sample()).unwrap();
         writer.finish().unwrap();
-        while let Some(written) = writer.poll_output() {
-            file.extend_from_slice(&written);
-        }
+        let file = drained(&mut writer);
 
-        assert_eq!(file.get(4..8), Some(b"mdat".as_slice()));
-        assert_eq!(file.get(16..20), Some(b"moov".as_slice()));
+        assert_eq!(file.get(24..28), Some(b"mdat".as_slice()));
+        assert_eq!(file.get(36..40), Some(b"moov".as_slice()));
     }
 
     #[test]

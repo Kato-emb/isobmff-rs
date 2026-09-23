@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox};
-use isobmff_core::{BoxDefinition, BoxEncode, BoxType};
+use isobmff_core::{BoxDefinition, BoxEncode, BoxType, FourCC};
 use isobmff_sample::{MovieFragmentWriter, Sample};
 use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
 
@@ -24,12 +24,17 @@ use crate::{Error, whole_box_header, whole_payload};
 /// # Contract
 ///
 /// * The order of the boxes is the structure's, held to as they are handed
-///   over: the `ftyp` first if at all, the `moov` once and before any
-///   fragment. A box handed over out of that order is
+///   over: the `ftyp` first, the `moov` once and before any fragment. A
+///   box handed over out of that order is
 ///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder) or
 ///   [`DuplicateBox`](crate::ErrorKind::DuplicateBox), and a file
 ///   declared over without a `moov` is
 ///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
+/// * The `ftyp` handed over is laid down as it stands. Where none was handed
+///   over, the writer lays its own down before the `moov`: `iso6` as its
+///   `major_brand` and its one `compatible_brands` entry, with
+///   `minor_version` 0, the brand the widest layout it lays down requires
+///   (§8.8.7.1, Annex E.9).
 /// * A fragment is opened by [`begin_fragment`](Self::begin_fragment),
 ///   carries the samples handed over next, and is laid down by
 ///   [`finish_fragment`](Self::finish_fragment) as the `moof` and the `mdat`
@@ -55,10 +60,9 @@ use crate::{Error, whole_box_header, whole_payload};
 /// use isobmff_boxes::{SampleFlags, TrackExtendsBox};
 /// use isobmff_sample::Sample;
 /// use isobmff_structure::FragmentedWriter;
-/// # use isobmff_test_support::{file_type, fragmented_movie};
-/// // A file opening with its brands and the movie its fragments continue
+/// # use isobmff_test_support::fragmented_movie;
+/// // A file handed no brands, only the movie its fragments continue
 /// let mut writer = FragmentedWriter::new();
-/// writer.handle_file_type(file_type())?;
 /// writer.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO)))?;
 ///
 /// // One fragment of two samples of track 1, lasting 1024 units each
@@ -74,7 +78,7 @@ use crate::{Error, whole_box_header, whole_payload};
 ///     file.extend_from_slice(&written);
 /// }
 ///
-/// // The file opens with the brands, and the media data holds the samples end to end
+/// // The file opens with the brands the writer declares, and the media data holds the samples end to end
 /// assert_eq!(&file[4..8], b"ftyp");
 /// assert!(file.ends_with(b"SAMPDATA"));
 /// # Ok::<(), isobmff_structure::Error>(())
@@ -139,6 +143,9 @@ impl FragmentedWriter {
     ///   again for every call after it.
     pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), Error> {
         self.writing()?;
+        if self.structure.is_at_start() {
+            self.write_value(&default_file_type())?;
+        }
         self.write_value(&movie)
     }
 
@@ -315,14 +322,21 @@ impl Default for FragmentedWriter {
     }
 }
 
+/// Brands the writer declares where none were handed over, those the widest layout it lays down requires
+fn default_file_type() -> FileTypeBox {
+    FileTypeBox::new(FourCC::new(*b"iso6"), 0, alloc::vec![FourCC::new(*b"iso6")])
+}
+
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox, SampleFlags, TrackExtendsBox};
-    use isobmff_core::BoxDefinition;
+    use isobmff_core::{BoxDecode, BoxDefinition};
     use isobmff_sample::Sample;
     use isobmff_test_support::{file_type, fragmented_movie};
 
-    use super::{Error, FragmentedWriter};
+    use super::{Error, FragmentedWriter, default_file_type};
     use crate::ErrorKind;
 
     /// Movie of one track continued in fragments, whose defaults a `trex` states
@@ -335,14 +349,43 @@ mod tests {
         Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec())
     }
 
+    /// The bytes the writer has laid down, drained to the end
+    fn drained(writer: &mut FragmentedWriter) -> Vec<u8> {
+        let mut file = Vec::new();
+        while let Some(written) = writer.poll_output() {
+            file.extend_from_slice(&written);
+        }
+
+        file
+    }
+
     #[test]
-    fn a_file_declaring_no_brands_is_laid_down_all_the_same() {
+    fn a_file_handed_no_brands_opens_with_the_brands_the_writer_declares() {
         let mut writer = FragmentedWriter::new();
 
         writer.handle_movie(movie()).unwrap();
+        writer.finish().unwrap();
+        let file = drained(&mut writer);
 
-        assert_eq!(writer.finish(), Ok(()));
-        assert!(writer.poll_output().unwrap().ends_with(b"moov"));
+        assert_eq!(
+            FileTypeBox::decode(&file).map(|(file_type, rest)| (file_type, rest.get(4..8))),
+            Ok((default_file_type(), Some(b"moov".as_slice())))
+        );
+    }
+
+    #[test]
+    fn the_brands_handed_over_are_laid_down_as_they_stand() {
+        let mut writer = FragmentedWriter::new();
+
+        writer.handle_file_type(file_type()).unwrap();
+        writer.handle_movie(movie()).unwrap();
+        writer.finish().unwrap();
+        let file = drained(&mut writer);
+
+        assert_eq!(
+            FileTypeBox::decode(&file).map(|(file_type, rest)| (file_type, rest.get(4..8))),
+            Ok((file_type(), Some(b"moov".as_slice())))
+        );
     }
 
     #[test]

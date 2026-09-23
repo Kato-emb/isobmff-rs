@@ -11,11 +11,12 @@ mod reading;
 mod tests {
     use super::reading::samples_of;
     use isobmff_boxes::{
-        MovieBox, MovieExtendsBox, MovieHeaderBox, SampleFlags, TrackBox, TrackExtendsBox,
+        FileTypeBox, MovieBox, MovieExtendsBox, MovieHeaderBox, SampleFlags, TrackBox,
+        TrackExtendsBox,
     };
-    use isobmff_core::{AnyBox, BoxType, Mp4EpochSeconds};
+    use isobmff_core::{AnyBox, BoxType, FourCC, Mp4EpochSeconds};
     use isobmff_sample::Sample;
-    use isobmff_structure::FragmentedWriter;
+    use isobmff_structure::{FragmentedReader, FragmentedWriter};
     use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type, track};
 
     /// Ticks a second the media of the movie is timed in
@@ -76,12 +77,18 @@ mod tests {
         ]
     }
 
-    /// The file the samples make: the brands, the movie, then fragment after fragment
-    fn written_file(movie: MovieBox, fragments: Vec<Vec<Sample>>) -> Vec<u8> {
+    /// The file the samples make: the brands if any are handed over, the movie, then fragment after fragment
+    fn written_file(
+        brands: Option<FileTypeBox>,
+        movie: MovieBox,
+        fragments: Vec<Vec<Sample>>,
+    ) -> Vec<u8> {
         let mut writer = FragmentedWriter::new();
         let mut file = Vec::new();
 
-        writer.handle_file_type(file_type()).unwrap();
+        if let Some(brands) = brands {
+            writer.handle_file_type(brands).unwrap();
+        }
         writer.handle_movie(movie).unwrap();
 
         for (position, samples) in fragments.into_iter().enumerate() {
@@ -104,7 +111,7 @@ mod tests {
 
     #[test]
     fn the_samples_are_read_back_as_they_were_handed_over_however_the_file_was_cut() {
-        let file = written_file(movie(), two_track_fragments());
+        let file = written_file(Some(file_type()), movie(), two_track_fragments());
         let handed_over = two_track_fragments().concat();
 
         for cut_length in [file.len(), 1, 3, 7, 64, file.len().saturating_sub(1)] {
@@ -132,10 +139,28 @@ mod tests {
         );
 
         let file = written_file(
+            Some(file_type()),
             MovieBox::new_fragmented(TIMESCALE, vec![track]).unwrap(),
             vec![vec![sample.clone()]],
         );
 
         assert_eq!(samples_of(&file, file.len()), [sample]);
+    }
+
+    #[test]
+    fn a_file_handed_no_brands_is_read_back_declaring_the_brand_its_layout_requires() {
+        let file = written_file(None, movie(), two_track_fragments());
+
+        let mut reader = FragmentedReader::new();
+        reader.handle_input(&file).unwrap();
+
+        assert_eq!(
+            reader.file_type(),
+            Some(&FileTypeBox::new(
+                FourCC::new(*b"iso6"),
+                0,
+                vec![FourCC::new(*b"iso6")]
+            ))
+        );
     }
 }
