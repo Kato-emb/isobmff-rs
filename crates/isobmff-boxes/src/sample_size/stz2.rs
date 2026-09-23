@@ -7,10 +7,11 @@ use isobmff_core::{
     FullBoxFields, FullBoxFlags,
 };
 
-use crate::nibbles;
-
 /// Length of the fields that precede the entries
 const FIXED_FIELDS_LEN: u64 = 12;
+
+/// Mask of the low half of a byte, which the second of two 4-bit entries occupies
+const LOW_HALF: u8 = 0x0f;
 
 /// Width of the entries of a [`CompactSampleSizeBox`]
 ///
@@ -190,11 +191,18 @@ impl BoxDecode for CompactSampleSizeBox {
 
         let mut entries = Vec::new();
         match field_size {
-            FieldSize::Four => entries.extend(
-                nibbles::unpack(reader.take_remainder(), declared)
-                    .into_iter()
-                    .map(|entry_size| CompactSampleSizeEntry::new(u16::from(entry_size))),
-            ),
+            FieldSize::Four => {
+                entries.extend(
+                    reader
+                        .take_remainder()
+                        .iter()
+                        .flat_map(|byte| [byte >> 4, byte & LOW_HALF])
+                        .map(|entry_size| CompactSampleSizeEntry::new(u16::from(entry_size))),
+                );
+                if entries.len() as u64 == declared.saturating_add(1) {
+                    entries.pop();
+                }
+            }
             FieldSize::Eight => entries.extend(
                 reader
                     .take_remainder()
@@ -254,7 +262,13 @@ impl BoxEncode for CompactSampleSizeBox {
             low
         };
         match self.field_size {
-            FieldSize::Four => nibbles::pack(writer, self.entries.iter().map(low_byte))?,
+            FieldSize::Four => {
+                for pair in self.entries.chunks(2) {
+                    let first = pair.first().map_or(0, low_byte);
+                    let second = pair.get(1).map_or(0, low_byte);
+                    writer.write_bytes(&[first << 4 | second])?;
+                }
+            }
             FieldSize::Eight => {
                 for entry in &self.entries {
                     writer.write_bytes(&[low_byte(entry)])?;

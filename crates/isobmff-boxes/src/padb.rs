@@ -7,8 +7,6 @@ use isobmff_core::{
     FullBoxFields, FullBoxFlags,
 };
 
-use crate::nibbles;
-
 /// Length of the fields that precede the entries
 const FIXED_FIELDS_LEN: u64 = 8;
 
@@ -99,12 +97,21 @@ impl BoxDecode for PaddingBitsBox {
 
         let declared = u64::from(reader.read_u32()?);
 
-        let entries: Vec<PaddingBitsEntry> = nibbles::unpack(reader.take_remainder(), declared)
-            .into_iter()
+        // Why not the low half first, as GPAC's C implementation packs a pair:
+        // §8.7.6 lays `pad1` out ahead of `pad2`, so a table GPAC wrote reads
+        // here with each pair swapped, and its last entry lost when the count
+        // is odd.
+        let mut entries: Vec<PaddingBitsEntry> = reader
+            .take_remainder()
+            .iter()
+            .flat_map(|byte| [byte >> 4, *byte])
             .map(|pad| PaddingBitsEntry {
                 pad: pad & PAD_MAXIMUM,
             })
             .collect();
+        if entries.len() as u64 == declared.saturating_add(1) {
+            entries.pop();
+        }
 
         let actual = entries.len() as u64;
         if actual != declared {
@@ -128,7 +135,13 @@ impl BoxEncode for PaddingBitsBox {
         // this stands for a `Vec` no target can hold.
         writer.write_unsigned(FieldWidth::Compact, sample_count)?;
 
-        nibbles::pack(writer, self.entries.iter().map(PaddingBitsEntry::pad))
+        for pair in self.entries.chunks(2) {
+            let pad1 = pair.first().map_or(0, PaddingBitsEntry::pad);
+            let pad2 = pair.get(1).map_or(0, PaddingBitsEntry::pad);
+            writer.write_bytes(&[pad1 << 4 | pad2])?;
+        }
+
+        Ok(())
     }
 }
 
