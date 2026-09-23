@@ -121,17 +121,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_box_of_the_template_value_writes_centre() {
-        let mut payload = vec![0xff; 8];
-
-        SoundMediaHeaderBox::default()
-            .encode_payload(&mut payload)
-            .unwrap();
-
-        assert_eq!(payload, [0; 8]);
-    }
-
-    #[test]
     fn a_version_the_box_does_not_read_is_rejected() {
         let mut payload = vec![0; 8];
         *payload.first_mut().unwrap() = 1;

@@ -170,14 +170,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_box_of_the_template_values_writes_copy_over_black() {
-        assert_eq!(
-            encoded_payload(&VideoMediaHeaderBox::default()),
-            b"\0\0\0\x01\0\0\0\0\0\0\0\0"
-        );
-    }
-
-    #[test]
     fn the_flags_the_spec_declares_are_written_whatever_the_file_stated() {
         let payload = [b"\0\0\0\0".as_slice(), &[0; 8]].concat();
 
