@@ -193,7 +193,7 @@ impl fmt::Display for Error {
             ),
             Representation::CompositionTimeOffsetOutOfRange { track_id, offset } => write!(
                 formatter,
-                "track {track_id} states a composition time offset of {offset}, which neither version of a trun writes"
+                "track {track_id} states a composition time offset of {offset}, which no version of a trun or a ctts writes"
             ),
             Representation::DecodeTimeMismatch {
                 track_id,
@@ -229,16 +229,12 @@ impl fmt::Display for Error {
                 formatter,
                 "sample of track {stated} handed over to a chunk of track {established}"
             ),
-            Representation::UnsupportedCompositionTimeOffset { track_id, offset } => write!(
-                formatter,
-                "track {track_id} states a composition time offset of {offset}, which no sample table written here carries"
-            ),
             Representation::UnsupportedSampleFlags {
                 track_id,
                 sample_flags,
             } => write!(
                 formatter,
-                "track {track_id} states sample flags {sample_flags:#010x}, which no sample table written here carries"
+                "track {track_id} states sample flags {sample_flags:#010x}, setting a reserved bit no sample table carries"
             ),
         }
     }
@@ -396,8 +392,8 @@ mod tests {
         assert_eq!(mismatched.established_track_id(), Some(1));
         assert_eq!(mismatched.sample_flags(), None);
         assert_eq!(
-            Error::unsupported_sample_flags(1, 0x0200_0000).sample_flags(),
-            Some(0x0200_0000)
+            Error::unsupported_sample_flags(1, 0x1000_0000).sample_flags(),
+            Some(0x1000_0000)
         );
     }
 
@@ -473,7 +469,7 @@ mod tests {
         );
         assert_eq!(
             Error::composition_time_offset_out_of_range(1, 1 << 40).to_string(),
-            "track 1 states a composition time offset of 1099511627776, which neither version of a trun writes"
+            "track 1 states a composition time offset of 1099511627776, which no version of a trun or a ctts writes"
         );
         assert_eq!(
             Error::decode_time_mismatch(1, 512, 1_024).to_string(),
@@ -496,12 +492,8 @@ mod tests {
             "sample of track 2 handed over to a chunk of track 1"
         );
         assert_eq!(
-            Error::unsupported_composition_time_offset(1, -8).to_string(),
-            "track 1 states a composition time offset of -8, which no sample table written here carries"
-        );
-        assert_eq!(
-            Error::unsupported_sample_flags(1, 0x0200_0000).to_string(),
-            "track 1 states sample flags 0x02000000, which no sample table written here carries"
+            Error::unsupported_sample_flags(1, 0x1000_0000).to_string(),
+            "track 1 states sample flags 0x10000000, setting a reserved bit no sample table carries"
         );
     }
 
@@ -562,8 +554,8 @@ mod tests {
             "Error { kind: TrackIdMismatch, category: Malformed, track_id: 2, established_track_id: 1 }"
         );
         assert_eq!(
-            format!("{:?}", Error::unsupported_sample_flags(1, 0x0200_0000)),
-            "Error { kind: UnsupportedSampleFlags, category: Unsupported, track_id: 1, sample_flags: 33554432 }"
+            format!("{:?}", Error::unsupported_sample_flags(1, 0x1000_0000)),
+            "Error { kind: UnsupportedSampleFlags, category: Unsupported, track_id: 1, sample_flags: 268435456 }"
         );
     }
 }

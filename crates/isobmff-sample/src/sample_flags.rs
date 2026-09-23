@@ -80,7 +80,10 @@ mod tests {
         };
 
         assert_eq!(fields.to_sample_flags(), 0x0e6b_beef);
-        assert_eq!(SampleFlagFields::from_sample_flags(0x0e6b_beef), Some(fields));
+        assert_eq!(
+            SampleFlagFields::from_sample_flags(0x0e6b_beef),
+            Some(fields)
+        );
     }
 
     #[test]

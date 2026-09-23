@@ -216,12 +216,11 @@ mod tests {
 
     use isobmff_boxes::{
         ChunkLargeOffsetBox, ChunkLargeOffsetEntry, ChunkOffsetBox, ChunkOffsetEntry, ChunkOffsets,
-        CompositionOffsetBox, CompositionOffsetEntry, CompositionTimeOffset,
-        DegradationPriorityBox, DegradationPriorityEntry, MovieBox, MovieHeaderBox,
-        PaddingBitsBox, PaddingBitsEntry, SampleDependencyTypeBox, SampleDependencyTypeEntry,
-        SampleDescriptionBox, SampleSizeBox, SampleSizeEntry, SampleSizes, SampleTableBox,
-        SampleToChunkBox, SampleToChunkEntry, SyncSampleBox, SyncSampleEntry, TimeToSampleBox,
-        TimeToSampleEntry, TrackBox,
+        CompositionOffsetBox, CompositionTimeOffset, DegradationPriorityBox,
+        DegradationPriorityEntry, MovieBox, MovieHeaderBox, PaddingBitsBox, PaddingBitsEntry,
+        SampleDependencyTypeBox, SampleDependencyTypeEntry, SampleDescriptionBox, SampleSizeBox,
+        SampleSizeEntry, SampleSizes, SampleTableBox, SampleToChunkBox, SampleToChunkEntry,
+        SyncSampleBox, SyncSampleEntry, TimeToSampleBox, TimeToSampleEntry, TrackBox,
     };
     use isobmff_core::{AnyBox, BoxType, Mp4EpochSeconds};
     use isobmff_test_support::{

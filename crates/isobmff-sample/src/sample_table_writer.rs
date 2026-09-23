@@ -1,16 +1,20 @@
 //! [`SampleTableWriter`], the samples of a presentation laid out as the sample tables of a movie, ISO/IEC 14496-12 §8.5.1 and §8.7
 
+mod open_track;
+
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::mem;
 
 use isobmff_boxes::{
-    ChunkOffsets, SampleDescriptionBox, SampleSizeBox, SampleTableBox, SampleToChunkBox,
-    TimeToSampleBox,
+    ChunkOffsets, CompositionOffsetBox, DegradationPriorityBox, PaddingBitsBox,
+    SampleDependencyTypeBox, SampleDescriptionBox, SampleSizeBox, SampleTableBox, SampleToChunkBox,
+    SyncSampleBox, TimeToSampleBox,
 };
 
 use crate::error::Error;
 use crate::sample::Sample;
+use crate::sample_table_writer::open_track::OpenTrack;
 
 /// Lays the samples of a presentation out as the sample tables of a movie
 ///
@@ -20,9 +24,11 @@ use crate::sample::Sample;
 /// What it keeps is what the sample tables of a track state about them: the
 /// decode timeline (`stts`, §8.6.1.2), the chunks the samples lie in (`stsc`,
 /// §8.7.4), their sizes (`stsz`, §8.7.3) and where each chunk starts (`stco`
-/// or `co64`, §8.7.5), which [`finish`](Self::finish) hands back per track as
-/// [`SampleTables`]. The `stsd` of each track, and the movie the tables go
-/// into, stay with the caller.
+/// or `co64`, §8.7.5), and the optional tables stating their composition time
+/// offsets (`ctts`, §8.6.1.3) and the fields of their `sample_flags` (`sdtp`,
+/// `padb`, `stss` and `stdp`, §8.8.3.1), which [`finish`](Self::finish) hands
+/// back per track as [`SampleTables`]. The `stsd` of each track, and the movie
+/// the tables go into, stay with the caller.
 ///
 /// # Layout
 ///
@@ -39,6 +45,11 @@ use crate::sample::Sample;
 /// * Each table is stated the way its box chooses from the values laid down:
 ///   [`SampleSizeBox::from_sizes`], [`TimeToSampleBox::from_deltas`],
 ///   [`SampleToChunkBox::from_chunks`] and [`ChunkOffsets::from_offsets`].
+/// * An optional table is left out when every sample of the track states what
+///   its absence does: the `ctts` when every offset is zero, the `stss` when
+///   every sample is a sync sample, and the `sdtp`, the `padb` and the `stdp`
+///   when every field they state is zero. A track whose samples are none of
+///   them sync samples carries an `stss` listing none.
 ///
 /// # Contract
 ///
@@ -55,15 +66,19 @@ use crate::sample::Sample;
 /// * The samples of a chunk are all described by one `stsd` entry, which the
 ///   run of chunks states for them (§8.7.4): a chunk mixing two is
 ///   [`SampleDescriptionIndexMismatch`](crate::ErrorKind::SampleDescriptionIndexMismatch).
-/// * The four tables state neither composition time offsets nor sample flags,
-///   which the `ctts`, the `stss` and the `sdtp` would, so a sample stating an offset
-///   other than zero or any flag is refused:
-///   [`UnsupportedCompositionTimeOffset`](crate::ErrorKind::UnsupportedCompositionTimeOffset)
-///   and [`UnsupportedSampleFlags`](crate::ErrorKind::UnsupportedSampleFlags).
+/// * A sample stating a composition time offset no version of a `ctts`
+///   writes is
+///   [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange),
+///   and one setting a reserved bit of its `sample_flags`, which no table
+///   states,
+///   [`UnsupportedSampleFlags`](crate::ErrorKind::UnsupportedSampleFlags).
 /// * A chunk holding more samples than an `stsc` entry counts, or numbered
 ///   past what one reaches, is reported by [`finish`](Self::finish), where the
 ///   tables are built: the failure of the box, carried on
-///   [`Box`](crate::ErrorKind::Box).
+///   [`Box`](crate::ErrorKind::Box). So is a track stating a negative
+///   composition time offset and one past [`i32::MAX`], which no one version
+///   of a `ctts` writes both of:
+///   [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange).
 /// * An `Err` leaves the writer failed for good,
 ///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside: every
 ///   later call reports that same failure again.
@@ -113,7 +128,7 @@ pub struct SampleTableWriter {
 /// must hold, every one but the `stsd`, which describes the samples rather
 /// than laying them out, and which
 /// [`into_sample_table`](Self::into_sample_table) takes to make the `stbl`
-/// whole.
+/// whole — and the optional tables the samples called for.
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct SampleTables {
@@ -121,6 +136,11 @@ pub struct SampleTables {
     stsc: SampleToChunkBox,
     stsz: SampleSizeBox,
     chunk_offsets: ChunkOffsets,
+    ctts: Option<CompositionOffsetBox>,
+    stss: Option<SyncSampleBox>,
+    sdtp: Option<SampleDependencyTypeBox>,
+    padb: Option<PaddingBitsBox>,
+    stdp: Option<DegradationPriorityBox>,
 }
 
 impl SampleTables {
@@ -148,10 +168,58 @@ impl SampleTables {
         &self.chunk_offsets
     }
 
+    /// Returns the offset from the decode time of every sample to its composition time, unless every one is zero
+    #[must_use]
+    pub const fn ctts(&self) -> Option<&CompositionOffsetBox> {
+        self.ctts.as_ref()
+    }
+
+    /// Returns which samples are sync samples, unless every one is
+    #[must_use]
+    pub const fn stss(&self) -> Option<&SyncSampleBox> {
+        self.stss.as_ref()
+    }
+
+    /// Returns how each sample depends on the others, unless no sample states it
+    #[must_use]
+    pub const fn sdtp(&self) -> Option<&SampleDependencyTypeBox> {
+        self.sdtp.as_ref()
+    }
+
+    /// Returns how many bits at the end of each sample are padding, unless no sample has any
+    #[must_use]
+    pub const fn padb(&self) -> Option<&PaddingBitsBox> {
+        self.padb.as_ref()
+    }
+
+    /// Returns the degradation priority of each sample, unless every one is zero
+    #[must_use]
+    pub const fn stdp(&self) -> Option<&DegradationPriorityBox> {
+        self.stdp.as_ref()
+    }
+
     /// Makes the `stbl` of the track out of these tables and the `stsd` describing its samples
     #[must_use]
     pub fn into_sample_table(self, stsd: SampleDescriptionBox) -> SampleTableBox {
-        SampleTableBox::new(stsd, self.stts, self.stsc, self.stsz, self.chunk_offsets)
+        let mut stbl =
+            SampleTableBox::new(stsd, self.stts, self.stsc, self.stsz, self.chunk_offsets);
+        if let Some(ctts) = self.ctts {
+            stbl = stbl.with_ctts(ctts);
+        }
+        if let Some(stss) = self.stss {
+            stbl = stbl.with_stss(stss);
+        }
+        if let Some(sdtp) = self.sdtp {
+            stbl = stbl.with_sdtp(sdtp);
+        }
+        if let Some(padb) = self.padb {
+            stbl = stbl.with_padb(padb);
+        }
+        if let Some(stdp) = self.stdp {
+            stbl = stbl.with_stdp(stdp);
+        }
+
+        stbl
     }
 }
 
@@ -213,68 +281,6 @@ struct HeldSamples {
     sample_count: u64,
 }
 
-/// What the samples of one track handed over so far state, table by table
-///
-/// `reached` is where those samples leave the decode timeline of the track,
-/// and `chunks` holds `(sample_count, sample_description_index)` per chunk
-/// closed, as [`SampleToChunkBox::from_chunks`] takes them.
-#[derive(Clone, Debug, Default)]
-struct OpenTrack {
-    reached: u64,
-    deltas: Vec<u32>,
-    sizes: Vec<u32>,
-    chunks: Vec<(u64, u32)>,
-    chunk_offsets: Vec<u64>,
-}
-
-impl OpenTrack {
-    /// Places `sample` on the tables of this track, and hands its bytes back
-    fn place(&mut self, sample: Sample) -> Result<Vec<u8>, Error> {
-        let track_id = sample.track_id();
-        if sample.sample_composition_time_offset() != 0 {
-            return Err(Error::unsupported_composition_time_offset(
-                track_id,
-                sample.sample_composition_time_offset(),
-            ));
-        }
-        if sample.sample_flags() != 0 {
-            return Err(Error::unsupported_sample_flags(
-                track_id,
-                sample.sample_flags(),
-            ));
-        }
-        let offered = sample.data().len() as u64;
-        let Ok(sample_size) = u32::try_from(offered) else {
-            return Err(Error::sample_size_out_of_range(track_id, offered));
-        };
-        if sample.decode_time() != self.reached {
-            return Err(Error::decode_time_mismatch(
-                track_id,
-                sample.decode_time(),
-                self.reached,
-            ));
-        }
-        self.reached = self
-            .reached
-            .checked_add(u64::from(sample.sample_duration()))
-            .ok_or(Error::decode_time_overflow(track_id))?;
-        self.deltas.push(sample.sample_duration());
-        self.sizes.push(sample_size);
-
-        Ok(sample.into_data())
-    }
-
-    /// Builds the tables of the track, now that its samples are over
-    fn into_tables(self) -> Result<SampleTables, Error> {
-        Ok(SampleTables {
-            stts: TimeToSampleBox::from_deltas(self.deltas),
-            stsc: SampleToChunkBox::from_chunks(self.chunks)?,
-            stsz: SampleSizeBox::from_sizes(self.sizes),
-            chunk_offsets: ChunkOffsets::from_offsets(self.chunk_offsets),
-        })
-    }
-}
-
 impl SampleTableWriter {
     /// Creates a writer waiting for the first chunk
     #[must_use]
@@ -324,10 +330,11 @@ impl SampleTableWriter {
     /// * [`SampleSizeOutOfRange`](crate::ErrorKind::SampleSizeOutOfRange):
     ///   the sample is longer than the 32 bits an `stsz` entry states its
     ///   length in.
-    /// * [`UnsupportedCompositionTimeOffset`](crate::ErrorKind::UnsupportedCompositionTimeOffset):
-    ///   the sample states a composition time offset other than zero.
+    /// * [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange):
+    ///   the sample states a composition time offset neither version of a
+    ///   `ctts` writes.
     /// * [`UnsupportedSampleFlags`](crate::ErrorKind::UnsupportedSampleFlags):
-    ///   the sample states any flag.
+    ///   the sample sets a reserved bit of its `sample_flags`.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
@@ -351,6 +358,10 @@ impl SampleTableWriter {
     /// * [`OutOfRange`](isobmff_core::ErrorKind::OutOfRange), carried on
     ///   [`Box`](crate::ErrorKind::Box): a chunk holds more samples than
     ///   an `stsc` entry counts, or is numbered past what one reaches.
+    /// * [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange):
+    ///   a track states a negative composition time offset and one past
+    ///   [`i32::MAX`], which no one version of a `ctts` writes both of; the
+    ///   failure names the widest.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   samples were already declared over.
     /// * The failure of a previous call, which the writer keeps and reports
@@ -362,7 +373,7 @@ impl SampleTableWriter {
 
         mem::take(&mut self.tracks)
             .into_iter()
-            .map(|(track_id, track)| Ok((track_id, track.into_tables()?)))
+            .map(|(track_id, track)| Ok((track_id, track.into_tables(track_id)?)))
             .collect::<Result<_, _>>()
             .map_err(|failure| self.fail(failure))
     }
@@ -418,17 +429,17 @@ mod tests {
         TimeToSampleBox, TimeToSampleEntry,
     };
 
-    use super::{OpenTrack, SampleTableWriter, SampleTables};
+    use super::{SampleTableWriter, SampleTables};
     use crate::error::Error;
     use crate::sample::Sample;
 
     /// Sample of `track_id` at `decode_time` lasting 1024 units, carrying `data`
-    fn sample(track_id: u32, decode_time: u64, data: &[u8]) -> Sample {
+    pub(super) fn sample(track_id: u32, decode_time: u64, data: &[u8]) -> Sample {
         Sample::new(track_id, decode_time, 1_024, 0, 0, 1, data.to_vec())
     }
 
     /// Lays `chunks` out, each `(chunk_offset, samples)`, and hands back the tables
-    fn laid_out(chunks: Vec<(u64, Vec<Sample>)>) -> BTreeMap<u32, SampleTables> {
+    pub(super) fn laid_out(chunks: Vec<(u64, Vec<Sample>)>) -> BTreeMap<u32, SampleTables> {
         let mut writer = SampleTableWriter::new();
 
         for (chunk_offset, samples) in chunks {
@@ -479,6 +490,11 @@ mod tests {
                         ChunkOffsetEntry::new(1_000),
                         ChunkOffsetEntry::new(2_000),
                     ])),
+                    ctts: None,
+                    stss: None,
+                    sdtp: None,
+                    padb: None,
+                    stdp: None,
                 }
             )])
         );
@@ -511,6 +527,11 @@ mod tests {
                             ChunkOffsetEntry::new(1_000),
                             ChunkOffsetEntry::new(3_000),
                         ])),
+                        ctts: None,
+                        stss: None,
+                        sdtp: None,
+                        padb: None,
+                        stdp: None,
                     }
                 ),
                 (
@@ -525,6 +546,11 @@ mod tests {
                         chunk_offsets: ChunkOffsets::Stco(ChunkOffsetBox::new(vec![
                             ChunkOffsetEntry::new(2_000),
                         ])),
+                        ctts: None,
+                        stss: None,
+                        sdtp: None,
+                        padb: None,
+                        stdp: None,
                     }
                 ),
             ])
@@ -553,6 +579,11 @@ mod tests {
                     chunk_offsets: ChunkOffsets::Stco(ChunkOffsetBox::new(vec![
                         ChunkOffsetEntry::new(2_000),
                     ])),
+                    ctts: None,
+                    stss: None,
+                    sdtp: None,
+                    padb: None,
+                    stdp: None,
                 }
             )])
         );
@@ -601,72 +632,6 @@ mod tests {
     }
 
     #[test]
-    fn a_track_starting_anywhere_but_at_zero_is_refused() {
-        let mut writer = SampleTableWriter::new();
-
-        writer.begin_chunk(1_000).unwrap();
-
-        assert_eq!(
-            writer.handle_sample(sample(1, 512, b"AAAA")),
-            Err(Error::decode_time_mismatch(1, 512, 0))
-        );
-    }
-
-    #[test]
-    fn a_sample_that_does_not_start_where_the_one_before_it_ends_is_refused() {
-        let mut writer = SampleTableWriter::new();
-
-        writer.begin_chunk(1_000).unwrap();
-        writer.handle_sample(sample(1, 0, b"AAAA")).unwrap();
-        writer.begin_chunk(2_000).unwrap();
-
-        assert_eq!(
-            writer.handle_sample(sample(1, 512, b"BBBB")),
-            Err(Error::decode_time_mismatch(1, 512, 1_024))
-        );
-    }
-
-    #[test]
-    fn decode_times_running_past_what_64_bits_carry_are_refused() {
-        let at_the_end_of_time = Sample::new(1, u64::MAX, 1, 0, 0, 1, b"AAAA".to_vec());
-        let mut track = OpenTrack {
-            reached: u64::MAX,
-            ..OpenTrack::default()
-        };
-
-        assert_eq!(
-            track.place(at_the_end_of_time),
-            Err(Error::decode_time_overflow(1))
-        );
-    }
-
-    #[test]
-    fn a_sample_composed_anywhere_but_when_it_is_decoded_is_refused() {
-        let composed_later = Sample::new(1, 0, 1_024, 8, 0, 1, b"AAAA".to_vec());
-        let mut writer = SampleTableWriter::new();
-
-        writer.begin_chunk(1_000).unwrap();
-
-        assert_eq!(
-            writer.handle_sample(composed_later),
-            Err(Error::unsupported_composition_time_offset(1, 8))
-        );
-    }
-
-    #[test]
-    fn a_sample_stating_any_flag_is_refused() {
-        let flagged = Sample::new(1, 0, 1_024, 0, 0x0200_0000, 1, b"AAAA".to_vec());
-        let mut writer = SampleTableWriter::new();
-
-        writer.begin_chunk(1_000).unwrap();
-
-        assert_eq!(
-            writer.handle_sample(flagged),
-            Err(Error::unsupported_sample_flags(1, 0x0200_0000))
-        );
-    }
-
-    #[test]
     fn a_chunk_opened_past_what_32_bits_reach_is_placed_in_a_co64() {
         let tables = laid_out(vec![(1 << 32, vec![sample(1, 0, b"AAAA")])]);
 
@@ -684,6 +649,11 @@ mod tests {
                     chunk_offsets: ChunkOffsets::Co64(ChunkLargeOffsetBox::new(vec![
                         ChunkLargeOffsetEntry::new(1 << 32),
                     ])),
+                    ctts: None,
+                    stss: None,
+                    sdtp: None,
+                    padb: None,
+                    stdp: None,
                 }
             )])
         );

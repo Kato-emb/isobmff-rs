@@ -217,7 +217,7 @@ impl Error {
         }
     }
 
-    /// Returns the failure of a sample stating a composition time offset neither version of a `trun` writes
+    /// Returns the failure of a sample stating a composition time offset no version of a `trun` or a `ctts` writes
     #[must_use]
     pub const fn composition_time_offset_out_of_range(track_id: u32, offset: i64) -> Self {
         Self {
@@ -284,15 +284,7 @@ impl Error {
         }
     }
 
-    /// Returns the failure of a sample stating a composition time offset no sample table written here carries
-    #[must_use]
-    pub const fn unsupported_composition_time_offset(track_id: u32, offset: i64) -> Self {
-        Self {
-            representation: Representation::UnsupportedCompositionTimeOffset { track_id, offset },
-        }
-    }
-
-    /// Returns the failure of a sample stating flags no sample table written here carries
+    /// Returns the failure of a sample setting a reserved bit of its flags, which no sample table carries
     #[must_use]
     pub const fn unsupported_sample_flags(track_id: u32, sample_flags: u32) -> Self {
         Self {
