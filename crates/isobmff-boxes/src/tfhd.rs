@@ -5,7 +5,7 @@ use isobmff_core::{
     FullBoxFlags,
 };
 
-use crate::trex::{SampleFlags, read_sample_flags};
+use crate::data_types::{SampleFlags, read_sample_flags};
 
 /// Length of the fields every fragment header carries
 const FIXED_FIELDS_LEN: u64 = 8;

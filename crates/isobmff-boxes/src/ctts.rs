@@ -8,7 +8,7 @@ use isobmff_core::{
     FullBoxFields, FullBoxFlags,
 };
 
-use crate::trun::CompositionTimeOffset;
+use crate::data_types::CompositionTimeOffset;
 
 /// Length of the fields that precede the entries
 const FIXED_FIELDS_LEN: u64 = 8;
@@ -256,7 +256,7 @@ mod tests {
     use isobmff_core::{BoxDecode, BoxEncode, Error};
 
     use super::{CompositionOffsetBox, CompositionOffsetEntry};
-    use crate::trun::CompositionTimeOffset;
+    use crate::data_types::CompositionTimeOffset;
 
     /// Offset of `value` units, which lies within what either version writes
     fn offset(value: i64) -> CompositionTimeOffset {

@@ -1,10 +1,8 @@
 //! [`TrackRunBox`] (`trun`), ISO/IEC 14496-12 §8.8.8
 
 mod builder;
-mod composition_time_offset;
 
 pub use builder::{StatedTrackRunSample, TrackRunBuilder};
-pub use composition_time_offset::CompositionTimeOffset;
 
 use alloc::vec::Vec;
 
@@ -13,7 +11,7 @@ use isobmff_core::{
     FullBoxFields, FullBoxFlags,
 };
 
-use crate::trex::{SampleFlags, read_sample_flags};
+use crate::data_types::{CompositionTimeOffset, SampleFlags, read_sample_flags};
 
 /// Length of the fields that precede the optional ones
 const FIXED_FIELDS_LEN: u64 = 8;

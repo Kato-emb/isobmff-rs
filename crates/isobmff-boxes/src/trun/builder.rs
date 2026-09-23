@@ -2,9 +2,9 @@
 
 use alloc::vec::Vec;
 
+use crate::data_types::{CompositionTimeOffset, SampleFlags};
 use crate::tfhd::TrackFragmentHeaderBox;
-use crate::trex::SampleFlags;
-use crate::trun::{CompositionTimeOffset, TrackRunBox, TrackRunSample};
+use crate::trun::{TrackRunBox, TrackRunSample};
 
 /// One sample of a run as it is handed to a [`TrackRunBuilder`], every field stated
 ///
@@ -206,8 +206,9 @@ mod tests {
     use alloc::vec;
 
     use super::{StatedTrackRunSample, TrackRunBuilder};
+    use crate::data_types::CompositionTimeOffset;
     use crate::tfhd::{TrackFragmentHeaderBox, TrackFragmentHeaderFlags};
-    use crate::trun::{CompositionTimeOffset, TrackRunBox, TrackRunSample};
+    use crate::trun::{TrackRunBox, TrackRunSample};
     use crate::{
         DegradationPriorityEntry, PaddingBitsEntry, SampleDependencyTypeEntry, SampleFlags,
     };

@@ -124,7 +124,8 @@ pub(crate) mod tests {
     use isobmff_core::{BoxDecode, BoxEncode, BoxType, Error};
 
     use super::MovieExtendsBox;
-    use crate::trex::{SampleFlags, TrackExtendsBox};
+    use crate::data_types::SampleFlags;
+    use crate::trex::TrackExtendsBox;
 
     /// Movie extends box declaring the defaults of one track
     pub(crate) fn movie_extends() -> MovieExtendsBox {

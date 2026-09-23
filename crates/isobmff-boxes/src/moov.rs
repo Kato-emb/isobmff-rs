@@ -228,6 +228,7 @@ mod tests {
 
     use super::{MovieBox, MovieExtendsBox, TrackExtendsBox};
     use crate::chunk_offset::ChunkOffsets;
+    use crate::data_types::SampleFlags;
     use crate::mvex::tests::movie_extends;
     use crate::mvhd::tests::movie_header;
     use crate::sample_size::{SampleSizeBox, SampleSizes};
@@ -236,7 +237,6 @@ mod tests {
     use crate::stsd::SampleDescriptionBox;
     use crate::stts::TimeToSampleBox;
     use crate::trak::tests::track;
-    use crate::trex::SampleFlags;
 
     /// Movie with one track, as a progressive file declares it
     fn movie() -> MovieBox {
