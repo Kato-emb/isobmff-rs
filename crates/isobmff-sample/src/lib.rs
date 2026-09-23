@@ -21,6 +21,12 @@
 //!   and the media data of a movie fragment, placing each where it arrived,
 //!   and [`SampleTableWriter`] takes them chunk by chunk and lays them out as
 //!   the sample tables of a movie, handing the bytes of each straight back.
+//!   Beside resolution, the indexes a file may carry are looked up by time:
+//!   [`segment_index::subsegments`] places the subsegments a `sidx` indexes
+//!   in the file (§8.16.3), and [`movie_fragment_random_access::sync_sample_at`]
+//!   finds the sync sample a `tfra` lists for a time (§8.8.10). Either names
+//!   where in the file to start reading, and a caller starting past the first
+//!   fragment resolves with [`TrackDecodeTimes::unknown`].
 //! * **Sample gathering.** [`SampleReader`] is handed [`SampleExtent`]s and
 //!   the input as it arrives, each piece with the offset it starts at, and
 //!   yields a [`Sample`]
@@ -45,12 +51,14 @@ extern crate alloc;
 
 mod error;
 pub mod movie_fragment;
+pub mod movie_fragment_random_access;
 mod movie_fragment_writer;
 mod sample;
 mod sample_description;
 mod sample_reader;
 pub mod sample_table;
 mod sample_table_writer;
+pub mod segment_index;
 mod track_decode_times;
 
 pub use error::{Error, ErrorKind};
@@ -58,4 +66,5 @@ pub use movie_fragment_writer::MovieFragmentWriter;
 pub use sample::{Sample, SampleExtent};
 pub use sample_reader::SampleReader;
 pub use sample_table_writer::{SampleTableWriter, SampleTables};
+pub use segment_index::{SegmentIndex, Subsegment};
 pub use track_decode_times::TrackDecodeTimes;

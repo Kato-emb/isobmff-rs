@@ -161,8 +161,10 @@ impl OpenFragment {
                 track.place(row, data_offset, carries_on)?;
             }
             None => {
-                let reached = decode_times.decode_time(track_id);
-                if decode_time < reached {
+                if let Some(reached) = decode_times
+                    .decode_time(track_id)
+                    .filter(|reached| decode_time < *reached)
+                {
                     return Err(Error::backward_decode_time(track_id, decode_time, reached));
                 }
 

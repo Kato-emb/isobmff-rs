@@ -28,7 +28,8 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///
 /// When the samples are decoded follows §8.8.12: a track fragment carrying a
 /// `tfdt` starts its samples there, and one carrying none carries on from where
-/// `decode_times` has its track. Before the extents are returned,
+/// `decode_times` has its track, which a `tfdt` settles again for times
+/// created by [`TrackDecodeTimes::unknown`]. Before the extents are returned,
 /// `decode_times` is moved to where every track fragment leaves its track —
 /// the end of its last sample, or the default duration on from where it
 /// started for a fragment declaring an empty duration, which carries no
@@ -59,6 +60,9 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///   the `stsd` entry names a `dref` entry its track has none of.
 /// * [`ExternalDataReference`](crate::ErrorKind::ExternalDataReference):
 ///   the `dref` entry names a resource other than the file itself.
+/// * [`MissingDecodeTime`](crate::ErrorKind::MissingDecodeTime): a `traf`
+///   carries no `tfdt`, and `decode_times` does not know where its track
+///   stands.
 /// * [`DecodeTimeOverflow`](crate::ErrorKind::DecodeTimeOverflow): the
 ///   decode times of a track run past what 64 bits carry.
 ///
@@ -140,9 +144,12 @@ impl TrackFragment {
             .unwrap_or(trex.default_sample_duration());
         let data_reference_index =
             SampleDescriptions::new(trak).data_reference_index(sample_description_index)?;
-        let decode_time = traf.tfdt().map_or(reached.decode_time(track_id), |tfdt| {
-            tfdt.base_media_decode_time()
-        });
+        let decode_time = match traf.tfdt() {
+            Some(tfdt) => tfdt.base_media_decode_time(),
+            None => reached
+                .decode_time(track_id)
+                .ok_or(Error::missing_decode_time(track_id))?,
+        };
 
         let overflow = || Error::decode_time_overflow(track_id);
         let mut end = decode_time;
@@ -717,7 +724,7 @@ mod tests {
             ),
             Ok(vec![])
         );
-        assert_eq!(decode_times.decode_time(1), 5_120);
+        assert_eq!(decode_times.decode_time(1), Some(5_120));
     }
 
     #[test]
@@ -741,8 +748,8 @@ mod tests {
                 extent(1, 2_048, 108..112),
             ])
         );
-        assert_eq!(decode_times.decode_time(1), 3_072);
-        assert_eq!(decode_times.decode_time(2), 0);
+        assert_eq!(decode_times.decode_time(1), Some(3_072));
+        assert_eq!(decode_times.decode_time(2), Some(0));
     }
 
     #[test]
@@ -762,7 +769,31 @@ mod tests {
             ),
             Err(Error::unknown_track_id(3))
         );
-        assert_eq!(decode_times.decode_time(1), 0);
+        assert_eq!(decode_times.decode_time(1), Some(0));
+    }
+
+    #[test]
+    fn where_no_track_stands_anywhere_known_only_a_stated_decode_time_resolves() {
+        let mut decode_times = TrackDecodeTimes::unknown();
+        let stating_none = one_sample_movie_fragment();
+        let stating_one = movie_fragment(vec![
+            track_fragment(1, vec![run(Some(100), 1)])
+                .with_tfdt(TrackFragmentBaseMediaDecodeTimeBox::new(8_192)),
+        ]);
+
+        assert_eq!(
+            resolved_from(&stating_none, &one_track_movie(), 0, &mut decode_times),
+            Err(Error::missing_decode_time(1))
+        );
+        assert_eq!(decode_times, TrackDecodeTimes::unknown());
+        assert_eq!(
+            resolved_from(&stating_one, &one_track_movie(), 0, &mut decode_times),
+            Ok(vec![extent(1, 8_192, 100..104)])
+        );
+        assert_eq!(
+            resolved_from(&stating_none, &one_track_movie(), 0, &mut decode_times),
+            Ok(vec![extent(1, 9_216, 100..104)])
+        );
     }
 
     #[test]
@@ -809,8 +840,8 @@ mod tests {
                 Err(Error::data_offset_overflow(2))
             ]
         );
-        assert_eq!(decode_times.decode_time(1), 1_024);
-        assert_eq!(decode_times.decode_time(2), 1_024);
+        assert_eq!(decode_times.decode_time(1), Some(1_024));
+        assert_eq!(decode_times.decode_time(2), Some(1_024));
     }
 
     #[test]

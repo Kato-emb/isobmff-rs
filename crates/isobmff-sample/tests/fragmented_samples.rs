@@ -61,7 +61,7 @@ mod tests {
         for (fragment, moof_start) in [(0, MOOF_START), (1, MOOF_START + MOOF_LEN + 8 + 64)] {
             let extents =
                 sample_extents(&movie_fragment(4), &movie, moof_start, &mut decode_times).unwrap();
-            assert_eq!(decode_times.decode_time(1), (fragment + 1) * 12_000);
+            assert_eq!(decode_times.decode_time(1), Some((fragment + 1) * 12_000));
             for extent in extents {
                 reader.handle_sample_extent(extent.unwrap()).unwrap();
             }

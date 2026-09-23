@@ -11,6 +11,10 @@ pub(super) enum Representation {
     Box(isobmff_core::Error),
     /// Decode time running past what 64 bits carry
     DecodeTimeOverflow { track_id: u32 },
+    /// Presentation time running past what 64 bits carry
+    PresentationTimeOverflow { track_id: u32 },
+    /// Track fragment stating no decode time where the time its track stands at is not known
+    MissingDecodeTime { track_id: u32 },
     /// Data offset running past what 64 bits carry
     DataOffsetOverflow { track_id: u32 },
     /// Fragment carrying samples of a track the movie never declared
@@ -130,6 +134,8 @@ impl Representation {
         match self {
             Self::Box(box_error) => ErrorKind::Box(box_error.kind()),
             Self::DecodeTimeOverflow { .. } => ErrorKind::DecodeTimeOverflow,
+            Self::PresentationTimeOverflow { .. } => ErrorKind::PresentationTimeOverflow,
+            Self::MissingDecodeTime { .. } => ErrorKind::MissingDecodeTime,
             Self::DataOffsetOverflow { .. } => ErrorKind::DataOffsetOverflow,
             Self::UnknownTrackId { .. } => ErrorKind::UnknownTrackId,
             Self::UnknownSampleDescriptionIndex { .. } => ErrorKind::UnknownSampleDescriptionIndex,
@@ -164,6 +170,7 @@ impl Representation {
         match self {
             Self::Box(box_error) => box_error.category(),
             Self::DecodeTimeOverflow { .. }
+            | Self::PresentationTimeOverflow { .. }
             | Self::DataOffsetOverflow { .. }
             | Self::UnknownTrackId { .. }
             | Self::UnknownSampleDescriptionIndex { .. }
@@ -178,6 +185,7 @@ impl Representation {
             | Self::SampleDescriptionIndexMismatch { .. }
             | Self::TrackIdMismatch { .. } => Category::Malformed,
             Self::ExternalDataReference { .. }
+            | Self::MissingDecodeTime { .. }
             | Self::SampleSizeLimitExceeded { .. }
             | Self::SampleSizeOutOfRange { .. }
             | Self::DataOffsetOutOfRange { .. }
@@ -197,6 +205,8 @@ impl Representation {
                 ..Fields::EMPTY
             },
             Self::DecodeTimeOverflow { track_id }
+            | Self::PresentationTimeOverflow { track_id }
+            | Self::MissingDecodeTime { track_id }
             | Self::DataOffsetOverflow { track_id }
             | Self::UnknownTrackId { track_id }
             | Self::SampleCountMismatch { track_id } => Fields {
@@ -329,6 +339,14 @@ mod tests {
             Category::Malformed
         );
         assert_eq!(Error::unknown_track_id(3).category(), Category::Malformed);
+        assert_eq!(
+            Error::presentation_time_overflow(3).category(),
+            Category::Malformed
+        );
+        assert_eq!(
+            Error::missing_decode_time(3).category(),
+            Category::Unsupported
+        );
         assert_eq!(
             Error::sample_size_limit_exceeded(1, 32, 16).category(),
             Category::Unsupported
