@@ -1,6 +1,7 @@
 //! [`TrackFragmentRandomAccessBox`] (`tfra`), ISO/IEC 14496-12 §8.8.10
 
 use alloc::vec::Vec;
+use core::num::NonZeroU32;
 
 use isobmff_core::{
     BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWidth, FieldWriter,
@@ -30,9 +31,9 @@ const LENGTH_SIZE_MASK: u8 = 0b11;
 pub struct TrackFragmentRandomAccessEntry {
     time: u64,
     moof_offset: u64,
-    traf_number: u32,
-    trun_number: u32,
-    sample_number: u32,
+    traf_number: NonZeroU32,
+    trun_number: NonZeroU32,
+    sample_number: NonZeroU32,
 }
 
 impl TrackFragmentRandomAccessEntry {
@@ -41,9 +42,9 @@ impl TrackFragmentRandomAccessEntry {
     pub const fn new(
         time: u64,
         moof_offset: u64,
-        traf_number: u32,
-        trun_number: u32,
-        sample_number: u32,
+        traf_number: NonZeroU32,
+        trun_number: NonZeroU32,
+        sample_number: NonZeroU32,
     ) -> Self {
         Self {
             time,
@@ -68,19 +69,19 @@ impl TrackFragmentRandomAccessEntry {
 
     /// Returns the number of the `traf` holding the sync sample, counted from 1 in its `moof`
     #[must_use]
-    pub const fn traf_number(&self) -> u32 {
+    pub const fn traf_number(&self) -> NonZeroU32 {
         self.traf_number
     }
 
     /// Returns the number of the `trun` holding the sync sample, counted from 1 in its `traf`
     #[must_use]
-    pub const fn trun_number(&self) -> u32 {
+    pub const fn trun_number(&self) -> NonZeroU32 {
         self.trun_number
     }
 
     /// Returns the number of the sync sample, counted from 1 in its `trun`
     #[must_use]
-    pub const fn sample_number(&self) -> u32 {
+    pub const fn sample_number(&self) -> NonZeroU32 {
         self.sample_number
     }
 }
@@ -151,9 +152,9 @@ impl TrackFragmentRandomAccessBox {
             (0, 0, 0),
             |(traf_number, trun_number, sample_number), entry| {
                 (
-                    traf_number.max(entry.traf_number),
-                    trun_number.max(entry.trun_number),
-                    sample_number.max(entry.sample_number),
+                    traf_number.max(entry.traf_number.get()),
+                    trun_number.max(entry.trun_number.get()),
+                    sample_number.max(entry.sample_number.get()),
                 )
             },
         );
@@ -172,18 +173,23 @@ fn number_len(length_size: u8) -> usize {
     usize::from(length_size & LENGTH_SIZE_MASK).saturating_add(1)
 }
 
-/// Reads a number written in the bytes its `length_size_of_*` field states
-fn read_number(reader: &mut FieldReader<'_>, length_size: u8) -> Result<u32, Error> {
+/// Reads a number counted from 1, written in the bytes its `length_size_of_*` field states
+fn read_number(reader: &mut FieldReader<'_>, length_size: u8) -> Result<NonZeroU32, Error> {
     let bytes = reader.read_slice(number_len(length_size))?;
-
-    Ok(bytes
+    let number = bytes
         .iter()
-        .fold(0, |number, &byte| number << 8 | u32::from(byte)))
+        .fold(0, |number, &byte| number << 8 | u32::from(byte));
+
+    NonZeroU32::new(number).ok_or(Error::zero_index())
 }
 
 /// Writes a number in the bytes its `length_size_of_*` field states
-fn write_number(writer: &mut FieldWriter<'_>, number: u32, length_size: u8) -> Result<(), Error> {
-    let bytes = number.to_be_bytes();
+fn write_number(
+    writer: &mut FieldWriter<'_>,
+    number: NonZeroU32,
+    length_size: u8,
+) -> Result<(), Error> {
+    let bytes = number.get().to_be_bytes();
     let skipped = bytes.len().saturating_sub(number_len(length_size));
 
     writer.write_slice(bytes.get(skipped..).unwrap_or(&bytes))
@@ -200,6 +206,8 @@ impl BoxDecode for TrackFragmentRandomAccessBox {
     ///   declares a version other than 0 or 1.
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the payload
     ///   ends inside a field of the box or inside one of its entries.
+    /// * [`ZeroIndex`](isobmff_core::ErrorKind::ZeroIndex): an entry states a
+    ///   `traf_number`, `trun_number` or `sample_number` of 0.
     /// * [`EntryCountMismatch`](isobmff_core::ErrorKind::EntryCountMismatch): the
     ///   `number_of_entry` field disagrees with the entries that follow it.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
@@ -282,19 +290,34 @@ impl BoxEncode for TrackFragmentRandomAccessBox {
 pub(crate) mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
+    use core::num::NonZeroU32;
 
     use isobmff_core::{BoxDecode, BoxEncode, Error};
 
     use super::{TrackFragmentRandomAccessBox, TrackFragmentRandomAccessEntry};
 
+    /// Entry of the sync sample at `time`, in the `moof` at `moof_offset`, at the numbers given
+    fn entry(
+        time: u64,
+        moof_offset: u64,
+        traf_number: u32,
+        trun_number: u32,
+        sample_number: u32,
+    ) -> TrackFragmentRandomAccessEntry {
+        TrackFragmentRandomAccessEntry::new(
+            time,
+            moof_offset,
+            NonZeroU32::new(traf_number).unwrap(),
+            NonZeroU32::new(trun_number).unwrap(),
+            NonZeroU32::new(sample_number).unwrap(),
+        )
+    }
+
     /// Random access box of track 1 listing two sync samples, one per fragment
     pub(crate) fn track_fragment_random_access() -> TrackFragmentRandomAccessBox {
         TrackFragmentRandomAccessBox::new(
             1,
-            vec![
-                TrackFragmentRandomAccessEntry::new(0, 1_000, 1, 1, 1),
-                TrackFragmentRandomAccessEntry::new(3_000, 5_000, 1, 1, 1),
-            ],
+            vec![entry(0, 1_000, 1, 1, 1), entry(3_000, 5_000, 1, 1, 1)],
         )
     }
 
@@ -310,9 +333,7 @@ pub(crate) mod tests {
     fn an_entry_is_written_in_the_fewest_bytes_its_columns_need() {
         let random_access = TrackFragmentRandomAccessBox::new(
             7,
-            vec![TrackFragmentRandomAccessEntry::new(
-                0x0102, 0x0304, 0x0506, 0x07, 0x08_090a,
-            )],
+            vec![entry(0x0102, 0x0304, 0x0506, 0x07, 0x08_090a)],
         );
 
         let payload = encoded_payload(&random_access);
@@ -337,10 +358,7 @@ pub(crate) mod tests {
             for (time, version) in times {
                 let random_access = TrackFragmentRandomAccessBox::new(
                     1,
-                    vec![
-                        TrackFragmentRandomAccessEntry::new(0, 0, 1, 1, 1),
-                        TrackFragmentRandomAccessEntry::new(time, 0, largest, 1, largest),
-                    ],
+                    vec![entry(0, 0, 1, 1, 1), entry(time, 0, largest, 1, largest)],
                 );
 
                 let payload = encoded_payload(&random_access);
@@ -364,10 +382,7 @@ pub(crate) mod tests {
 
         assert_eq!(
             random_access,
-            TrackFragmentRandomAccessBox::new(
-                1,
-                vec![TrackFragmentRandomAccessEntry::new(9, 8, 1, 2, 3)]
-            )
+            TrackFragmentRandomAccessBox::new(1, vec![entry(9, 8, 1, 2, 3)])
         );
         assert_eq!(encoded_payload(&random_access).get(11), Some(&0));
     }
@@ -396,6 +411,17 @@ pub(crate) mod tests {
         assert_eq!(
             TrackFragmentRandomAccessBox::decode_payload(&payload),
             Err(Error::entry_count_mismatch(3, 2))
+        );
+    }
+
+    #[test]
+    fn a_number_counted_from_1_that_reads_0_is_rejected() {
+        let payload = b"\0\0\0\0\0\0\0\x01\0\0\0\0\0\0\0\x01\
+                        \0\0\0\x09\0\0\0\x08\x01\x01\0";
+
+        assert_eq!(
+            TrackFragmentRandomAccessBox::decode_payload(payload),
+            Err(Error::zero_index())
         );
     }
 

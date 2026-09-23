@@ -194,6 +194,12 @@ impl Error {
         Self::new(ErrorKind::InvalidUtf8, Detail::ValidUpTo(valid_up_to))
     }
 
+    /// Returns the failure of a field the spec counts from 1 holding 0
+    #[must_use]
+    pub const fn zero_index() -> Self {
+        Self::new(ErrorKind::ZeroIndex, Detail::Nothing)
+    }
+
     /// Returns the failure of a container lacking a child the spec marks mandatory
     #[must_use]
     pub const fn missing_mandatory_box(box_type: BoxType) -> Self {
@@ -587,6 +593,9 @@ impl fmt::Display for Error {
             ErrorKind::InvalidUtf8 => {
                 formatter.write_str("box payload holds a string that is not UTF-8")
             }
+            ErrorKind::ZeroIndex => {
+                formatter.write_str("box holds 0 in a field the spec counts from 1")
+            }
             ErrorKind::MissingMandatoryBox => {
                 write!(formatter, "container holds no mandatory {named}box")
             }
@@ -752,6 +761,8 @@ pub enum ErrorKind {
     /// [`valid_up_to`](Error::valid_up_to) is the length of text that
     /// reads before the byte that does not.
     InvalidUtf8,
+    /// Field the spec counts from 1 holds 0
+    ZeroIndex,
     /// Container lacks a child box the spec marks mandatory
     ///
     /// [`box_type`](Error::box_type) is the type of the child that is
@@ -845,6 +856,7 @@ impl ErrorKind {
             | Self::TrailingPayload
             | Self::ConflictingFlags
             | Self::InvalidUtf8
+            | Self::ZeroIndex
             | Self::MissingMandatoryBox
             | Self::DuplicateBox
             | Self::ForbiddenChildBox
@@ -1053,6 +1065,7 @@ mod tests {
             Error::buffer_length_mismatch(4, 8).category(),
             Category::Usage
         );
+        assert_eq!(Error::zero_index().category(), Category::Malformed);
     }
 
     #[test]
@@ -1178,6 +1191,10 @@ mod tests {
         assert_eq!(
             Error::invalid_utf8(3).to_string(),
             "box payload holds a string that is not UTF-8"
+        );
+        assert_eq!(
+            Error::zero_index().to_string(),
+            "box holds 0 in a field the spec counts from 1"
         );
     }
 
