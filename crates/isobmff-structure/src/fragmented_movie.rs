@@ -24,7 +24,7 @@ mod tests {
         Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec())
     }
 
-    /// A file of one fragment carrying [`sample`], with no brands
+    /// A file of one fragment carrying [`sample`], handed no brands
     pub(super) fn file_of_one_sample() -> Vec<u8> {
         let mut writer = FragmentedWriter::new();
         let mut file = Vec::new();

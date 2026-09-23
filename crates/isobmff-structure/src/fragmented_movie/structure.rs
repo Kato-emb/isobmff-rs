@@ -91,6 +91,12 @@ impl FragmentedStructure {
         }
     }
 
+    /// Returns whether no box has been placed yet, where the `ftyp` may still come
+    #[must_use]
+    pub(crate) const fn is_at_start(&self) -> bool {
+        matches!(self.state, State::Reading(Position::Start))
+    }
+
     /// Takes the type of the next top-level box, and returns what to do with that box
     ///
     /// # Errors
@@ -226,6 +232,23 @@ mod tests {
                 FragmentedDisposition::Skip,
             ])
         );
+    }
+
+    #[test]
+    fn only_a_structure_no_box_was_placed_in_yet_stands_at_the_start() {
+        let mut structure = FragmentedStructure::new();
+
+        assert!(structure.is_at_start());
+
+        structure
+            .handle_box_type(BoxType::compact(*b"moov"))
+            .unwrap();
+
+        assert!(!structure.is_at_start());
+
+        structure.finish().unwrap();
+
+        assert!(!structure.is_at_start());
     }
 
     #[test]
