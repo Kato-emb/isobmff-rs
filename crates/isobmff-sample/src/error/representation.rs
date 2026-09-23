@@ -36,6 +36,7 @@ pub(super) enum Representation {
     SampleCountMismatch { track_id: u32 },
     /// Run of chunks starting at a chunk outside the range open to it
     FirstChunkOutOfRange { track_id: u32, first_chunk: u32 },
+    SyncSampleOutOfRange { track_id: u32, sample_number: u32 },
     /// Sample declared past the limit a reader holds
     SampleSizeLimitExceeded {
         track_id: u32,
@@ -97,6 +98,7 @@ pub(super) struct Fields {
     pub(super) established_sample_description_index: Option<u32>,
     pub(super) data_reference_index: Option<u16>,
     pub(super) first_chunk: Option<u32>,
+    pub(super) sample_number: Option<u32>,
     pub(super) needed_bytes: Option<u64>,
     pub(super) available_bytes: Option<u64>,
     pub(super) stated_decode_time: Option<u64>,
@@ -116,6 +118,7 @@ impl Fields {
         established_sample_description_index: None,
         data_reference_index: None,
         first_chunk: None,
+        sample_number: None,
         needed_bytes: None,
         available_bytes: None,
         stated_decode_time: None,
@@ -140,6 +143,7 @@ impl Representation {
             Self::ExternalDataReference { .. } => ErrorKind::ExternalDataReference,
             Self::SampleCountMismatch { .. } => ErrorKind::SampleCountMismatch,
             Self::FirstChunkOutOfRange { .. } => ErrorKind::FirstChunkOutOfRange,
+            Self::SyncSampleOutOfRange { .. } => ErrorKind::SyncSampleOutOfRange,
             Self::SampleSizeLimitExceeded { .. } => ErrorKind::SampleSizeLimitExceeded,
             Self::UnfinishedSample { .. } => ErrorKind::UnfinishedSample,
             Self::AlreadyFinished => ErrorKind::AlreadyFinished,
@@ -176,6 +180,7 @@ impl Representation {
             | Self::UnknownDataReferenceIndex { .. }
             | Self::SampleCountMismatch { .. }
             | Self::FirstChunkOutOfRange { .. }
+            | Self::SyncSampleOutOfRange { .. }
             | Self::UnfinishedSample { .. }
             | Self::DecodeTimeMismatch { .. }
             | Self::BackwardDecodeTime { .. }
@@ -240,6 +245,14 @@ impl Representation {
             } => Fields {
                 track_id: Some(track_id),
                 first_chunk: Some(first_chunk),
+                ..Fields::EMPTY
+            },
+            Self::SyncSampleOutOfRange {
+                track_id,
+                sample_number,
+            } => Fields {
+                track_id: Some(track_id),
+                sample_number: Some(sample_number),
                 ..Fields::EMPTY
             },
             Self::SampleSizeLimitExceeded {
@@ -346,6 +359,10 @@ mod tests {
         );
         assert_eq!(
             Error::first_chunk_out_of_range(1, 3).category(),
+            Category::Malformed
+        );
+        assert_eq!(
+            Error::sync_sample_out_of_range(1, 3).category(),
             Category::Malformed
         );
         assert_eq!(Error::already_finished().category(), Category::Usage);

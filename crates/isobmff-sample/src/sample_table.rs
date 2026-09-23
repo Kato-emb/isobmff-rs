@@ -2,11 +2,12 @@
 
 use alloc::vec::Vec;
 
-use isobmff_boxes::{MovieBox, TrackBox};
+use isobmff_boxes::{CompositionTimeOffset, MovieBox, TrackBox};
 
 use crate::error::Error;
 use crate::sample::SampleExtent;
 use crate::sample_description::SampleDescriptions;
+use crate::sample_flags::SampleFlagFields;
 
 /// Resolves the samples the sample tables of `movie` declare, in the order their bytes lie in the file
 ///
@@ -21,12 +22,16 @@ use crate::sample_description::SampleDescriptions;
 /// (§8.7.5). The `data_reference_index` of each sample is read off the `stsd`
 /// entry that describes it (§8.5.2.3), which has to name the file itself.
 ///
-/// A sample comes out a sync sample with a composition time offset of zero,
-/// which is what §8.6.2 and §8.6.1.3 have for a track stating no `stss` and
-/// no `ctts`: neither table is read yet, so a track stating either comes out
-/// as though it did not. A track declaring no sample — one carried in
-/// fragments — contributes nothing, and a chunk its `stsc` lays no run over
-/// holds none.
+/// Five optional tables state the rest, one entry per sample: the `ctts`
+/// states the composition time offset (§8.6.1.3), and the `sdtp` (§8.6.4),
+/// the `padb` (§8.7.6), the `stss` (§8.6.2) and the `stdp` (§8.5.3) state the
+/// fields of the `sample_flags` laid out as §8.8.3.1 lays them out in a movie
+/// fragment. A track carrying none of them has every sample composed when it
+/// is decoded and every sample a sync sample, so its samples come out with a
+/// composition time offset of zero and `sample_flags` of zero, and a table
+/// missing on its own leaves its fields zero, or the sample a sync sample for
+/// the `stss`. A track declaring no sample — one carried in fragments —
+/// contributes nothing, and a chunk its `stsc` lays no run over holds none.
 ///
 /// The extents of every track come out together in the order their bytes lie
 /// in the file, the samples of one chunk in sample order and the chunks of
@@ -41,6 +46,9 @@ use crate::sample_description::SampleDescriptions;
 ///
 /// * [`SampleCountMismatch`](crate::ErrorKind::SampleCountMismatch):
 ///   the tables of a track count different numbers of samples.
+/// * [`SyncSampleOutOfRange`](crate::ErrorKind::SyncSampleOutOfRange):
+///   the `stss` of a track lists a sample number no later than the one
+///   before it, or past the samples of the track.
 /// * [`FirstChunkOutOfRange`](crate::ErrorKind::FirstChunkOutOfRange):
 ///   a run of chunks of a track starts at a chunk outside the range open to it.
 /// * [`UnknownSampleDescriptionIndex`](crate::ErrorKind::UnknownSampleDescriptionIndex):
@@ -83,8 +91,16 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
             first.first_chunk(),
         ));
     }
+    let mut offsets = stbl
+        .ctts()
+        .map(|ctts| ctts.offsets().map(CompositionTimeOffset::get));
+    let mut dependencies = stbl.sdtp().map(|sdtp| sdtp.entries().iter().copied());
+    let mut paddings = stbl.padb().map(|padb| padb.entries().iter().copied());
+    let mut priorities = stbl.stdp().map(|stdp| stdp.entries().iter().copied());
+    let mut sync_samples = stbl.stss().map(|stss| stss.entries().iter().peekable());
     let mut active_run = None;
     let mut decode_time = 0_u64;
+    let mut sample_number = 0_u64;
 
     for (chunk, chunk_offset) in (1_u64..).zip(stbl.chunk_offsets().offsets()) {
         if let Some(run) = runs.next_if(|run| u64::from(run.first_chunk()) == chunk) {
@@ -98,8 +114,45 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
         let mut data_offset = chunk_offset;
 
         for _ in 0..run.samples_per_chunk() {
-            let (Some(size), Some(delta)) = (sizes.next(), deltas.next()) else {
+            let (
+                Some(size),
+                Some(delta),
+                Some(offset),
+                Some(dependency),
+                Some(padding),
+                Some(degradation_priority),
+            ) = (
+                sizes.next(),
+                deltas.next(),
+                next_stated(&mut offsets),
+                next_stated(&mut dependencies),
+                next_stated(&mut paddings),
+                next_stated(&mut priorities),
+            )
+            else {
                 return Err(Error::sample_count_mismatch(track_id));
+            };
+            sample_number = sample_number.saturating_add(1);
+            let is_sync_sample = match sync_samples.as_mut() {
+                None => true,
+                Some(listed) => match listed
+                    .next_if(|entry| u64::from(entry.sample_number()) <= sample_number)
+                {
+                    Some(entry) if u64::from(entry.sample_number()) == sample_number => true,
+                    Some(entry) => {
+                        return Err(Error::sync_sample_out_of_range(
+                            track_id,
+                            entry.sample_number(),
+                        ));
+                    }
+                    None => false,
+                },
+            };
+            let sample_flags = SampleFlagFields {
+                dependency,
+                padding,
+                is_non_sync_sample: !is_sync_sample,
+                degradation_priority,
             };
             let data_end = data_offset
                 .checked_add(u64::from(size))
@@ -109,8 +162,8 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
                 track_id,
                 decode_time,
                 delta,
-                0,
-                0,
+                offset,
+                sample_flags.to_sample_flags(),
                 run.sample_description_index(),
                 data_reference_index,
                 data_offset..data_end,
@@ -125,11 +178,33 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
     if let Some(run) = runs.next() {
         return Err(Error::first_chunk_out_of_range(track_id, run.first_chunk()));
     }
-    if sizes.next().is_some() || deltas.next().is_some() {
+    if sizes.next().is_some()
+        || deltas.next().is_some()
+        || offsets.as_mut().and_then(Iterator::next).is_some()
+        || dependencies.as_mut().and_then(Iterator::next).is_some()
+        || paddings.as_mut().and_then(Iterator::next).is_some()
+        || priorities.as_mut().and_then(Iterator::next).is_some()
+    {
         return Err(Error::sample_count_mismatch(track_id));
+    }
+    if let Some(entry) = sync_samples.as_mut().and_then(Iterator::next) {
+        return Err(Error::sync_sample_out_of_range(
+            track_id,
+            entry.sample_number(),
+        ));
     }
 
     Ok(())
+}
+
+/// Returns what the table states for the next sample, or its default when the track carries no such table
+///
+/// `None` when the table has run out of samples.
+fn next_stated<Entry: Default>(table: &mut Option<impl Iterator<Item = Entry>>) -> Option<Entry> {
+    match table {
+        Some(entries) => entries.next(),
+        None => Some(Entry::default()),
+    }
 }
 
 #[cfg(test)]
@@ -141,8 +216,11 @@ mod tests {
 
     use isobmff_boxes::{
         ChunkLargeOffsetBox, ChunkLargeOffsetEntry, ChunkOffsetBox, ChunkOffsetEntry, ChunkOffsets,
-        MovieBox, MovieHeaderBox, SampleDescriptionBox, SampleSizeBox, SampleSizeEntry,
-        SampleSizes, SampleTableBox, SampleToChunkBox, SampleToChunkEntry, TimeToSampleBox,
+        CompositionOffsetBox, CompositionOffsetEntry, CompositionTimeOffset,
+        DegradationPriorityBox, DegradationPriorityEntry, MovieBox, MovieHeaderBox,
+        PaddingBitsBox, PaddingBitsEntry, SampleDependencyTypeBox, SampleDependencyTypeEntry,
+        SampleDescriptionBox, SampleSizeBox, SampleSizeEntry, SampleSizes, SampleTableBox,
+        SampleToChunkBox, SampleToChunkEntry, SyncSampleBox, SyncSampleEntry, TimeToSampleBox,
         TimeToSampleEntry, TrackBox,
     };
     use isobmff_core::{AnyBox, BoxType, Mp4EpochSeconds};
@@ -232,6 +310,41 @@ mod tests {
             stsc(&[(1, 1)]),
             stsz(&vec![4; offsets.len()]),
             stco(offsets),
+        )
+    }
+
+    /// Track 1 of three four-byte samples lasting 100 units in a chunk at 100, its sample table put through `stating`
+    fn three_samples_stating(stating: impl FnOnce(SampleTableBox) -> SampleTableBox) -> TrackBox {
+        track_laid_out(
+            1,
+            self_contained_data_reference(),
+            stating(sample_table(
+                stts(&[(3, 100)]),
+                stsc(&[(1, 3)]),
+                stsz(&[4; 3]),
+                stco(&[100]),
+            )),
+        )
+    }
+
+    /// Composition time offsets stated one per sample
+    fn ctts(offsets: &[i64]) -> CompositionOffsetBox {
+        CompositionOffsetBox::from_offsets(
+            offsets
+                .iter()
+                .map(|&offset| CompositionTimeOffset::new(offset).unwrap()),
+        )
+        .unwrap()
+    }
+
+    /// Sync samples listed by their numbers
+    fn stss(sample_numbers: &[u32]) -> SyncSampleBox {
+        SyncSampleBox::new(
+            sample_numbers
+                .iter()
+                .copied()
+                .map(SyncSampleEntry::new)
+                .collect(),
         )
     }
 
@@ -389,6 +502,108 @@ mod tests {
                 extent(2, 3_000, 1_000, 408..416),
             ])
         );
+    }
+
+    #[test]
+    fn the_optional_tables_state_the_offset_and_the_flags_of_each_sample() {
+        let trak = three_samples_stating(|stbl| {
+            stbl.with_ctts(ctts(&[8, -2, 0]))
+                .with_stss(stss(&[1, 3]))
+                .with_sdtp(SampleDependencyTypeBox::new(vec![
+                    SampleDependencyTypeEntry::new(2, 2, 1, 2).unwrap(),
+                    SampleDependencyTypeEntry::new(0, 1, 0, 0).unwrap(),
+                    SampleDependencyTypeEntry::new(3, 1, 2, 1).unwrap(),
+                ]))
+                .with_padb(PaddingBitsBox::new(vec![
+                    PaddingBitsEntry::new(5).unwrap(),
+                    PaddingBitsEntry::new(0).unwrap(),
+                    PaddingBitsEntry::new(7).unwrap(),
+                ]))
+                .with_stdp(DegradationPriorityBox::new(vec![
+                    DegradationPriorityEntry::new(3),
+                    DegradationPriorityEntry::new(0),
+                    DegradationPriorityEntry::new(0xffff),
+                ]))
+        });
+
+        assert_eq!(
+            resolved(&movie(vec![trak])),
+            Ok(vec![
+                SampleExtent::new(1, 0, 100, 8, 0x0a6a_0003, 1, 1, 100..104),
+                SampleExtent::new(1, 100, 100, -2, 0x0101_0000, 1, 1, 104..108),
+                SampleExtent::new(1, 200, 100, 0, 0x0d9e_ffff, 1, 1, 108..112),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_table_missing_on_its_own_leaves_its_fields_as_a_track_stating_none_has_them() {
+        let listing_no_sync_sample = three_samples_stating(|stbl| stbl.with_stss(stss(&[])));
+        let composing_the_second_late =
+            three_samples_stating(|stbl| stbl.with_ctts(ctts(&[0, 16, 0])));
+
+        assert_eq!(
+            resolved(&movie(vec![listing_no_sync_sample])),
+            Ok(vec![
+                SampleExtent::new(1, 0, 100, 0, 0x0001_0000, 1, 1, 100..104),
+                SampleExtent::new(1, 100, 100, 0, 0x0001_0000, 1, 1, 104..108),
+                SampleExtent::new(1, 200, 100, 0, 0x0001_0000, 1, 1, 108..112),
+            ])
+        );
+        assert_eq!(
+            resolved(&movie(vec![composing_the_second_late])),
+            Ok(vec![
+                extent(1, 0, 100, 100..104),
+                SampleExtent::new(1, 100, 100, 16, 0, 1, 1, 104..108),
+                extent(1, 200, 100, 108..112),
+            ])
+        );
+    }
+
+    #[test]
+    fn an_optional_table_counting_other_than_the_samples_of_its_track_is_refused() {
+        let tracks = [
+            three_samples_stating(|stbl| stbl.with_ctts(ctts(&[8, 8]))),
+            three_samples_stating(|stbl| stbl.with_ctts(ctts(&[8; 4]))),
+            three_samples_stating(|stbl| {
+                stbl.with_sdtp(SampleDependencyTypeBox::new(vec![
+                    SampleDependencyTypeEntry::default();
+                    2
+                ]))
+            }),
+            three_samples_stating(|stbl| {
+                stbl.with_padb(PaddingBitsBox::new(vec![PaddingBitsEntry::default(); 4]))
+            }),
+            three_samples_stating(|stbl| {
+                stbl.with_stdp(DegradationPriorityBox::new(vec![
+                    DegradationPriorityEntry::default();
+                    2
+                ]))
+            }),
+        ];
+
+        for trak in tracks {
+            assert_eq!(
+                resolved(&movie(vec![trak])),
+                Err(Error::sample_count_mismatch(1))
+            );
+        }
+    }
+
+    #[test]
+    fn a_sync_sample_listed_out_of_order_or_past_the_samples_is_refused() {
+        let listings = [
+            (stss(&[2, 2]), Error::sync_sample_out_of_range(1, 2)),
+            (stss(&[3, 1]), Error::sync_sample_out_of_range(1, 1)),
+            (stss(&[0]), Error::sync_sample_out_of_range(1, 0)),
+            (stss(&[1, 4]), Error::sync_sample_out_of_range(1, 4)),
+        ];
+
+        for (listing, refused) in listings {
+            let trak = three_samples_stating(|stbl| stbl.with_stss(listing));
+
+            assert_eq!(resolved(&movie(vec![trak])), Err(refused));
+        }
     }
 
     #[test]

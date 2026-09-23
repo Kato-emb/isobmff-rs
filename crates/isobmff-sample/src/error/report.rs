@@ -48,6 +48,12 @@ impl Error {
         self.representation.fields().first_chunk
     }
 
+    /// Returns the sample number the failure names, counted from one, for the kinds that name one
+    #[must_use]
+    pub const fn sample_number(self) -> Option<u32> {
+        self.representation.fields().sample_number
+    }
+
     /// Returns the bytes the failure required, for the kinds that count bytes
     #[must_use]
     pub const fn needed_bytes(self) -> Option<u64> {
@@ -144,6 +150,13 @@ impl fmt::Display for Error {
             } => write!(
                 formatter,
                 "run of chunks of track {track_id} starts at chunk {first_chunk}, out of the range open to it"
+            ),
+            Representation::SyncSampleOutOfRange {
+                track_id,
+                sample_number,
+            } => write!(
+                formatter,
+                "sync sample {sample_number} of track {track_id} is listed out of order or past its samples"
             ),
             Representation::SampleSizeLimitExceeded {
                 track_id,
@@ -259,6 +272,9 @@ impl fmt::Debug for Error {
         if let Some(first_chunk) = values.first_chunk {
             fields.field("first_chunk", &first_chunk);
         }
+        if let Some(sample_number) = values.sample_number {
+            fields.field("sample_number", &sample_number);
+        }
         if let Some(needed) = values.needed_bytes {
             fields.field("needed_bytes", &needed);
         }
@@ -329,6 +345,10 @@ mod tests {
         assert_eq!(external.data_reference_index(), Some(2));
         assert_eq!(external.first_chunk(), None);
         assert_eq!(Error::first_chunk_out_of_range(1, 3).first_chunk(), Some(3));
+        assert_eq!(
+            Error::sync_sample_out_of_range(1, 3).sample_number(),
+            Some(3)
+        );
         assert_eq!(Error::sample_count_mismatch(1).data_reference_index(), None);
 
         let too_long = Error::sample_size_out_of_range(1, 1 << 40);
@@ -420,6 +440,10 @@ mod tests {
             "run of chunks of track 2 starts at chunk 5, out of the range open to it"
         );
         assert_eq!(
+            Error::sync_sample_out_of_range(2, 5).to_string(),
+            "sync sample 5 of track 2 is listed out of order or past its samples"
+        );
+        assert_eq!(
             Error::sample_size_limit_exceeded(1, 32, 16).to_string(),
             "track 1 declares a sample of 32 bytes, past the 16-byte limit"
         );
@@ -509,6 +533,10 @@ mod tests {
         assert_eq!(
             format!("{:?}", Error::first_chunk_out_of_range(1, 5)),
             "Error { kind: FirstChunkOutOfRange, category: Malformed, track_id: 1, first_chunk: 5 }"
+        );
+        assert_eq!(
+            format!("{:?}", Error::sync_sample_out_of_range(1, 5)),
+            "Error { kind: SyncSampleOutOfRange, category: Malformed, track_id: 1, sample_number: 5 }"
         );
         assert_eq!(
             format!("{:?}", Error::backward_decode_time(1, 512, 1_024)),

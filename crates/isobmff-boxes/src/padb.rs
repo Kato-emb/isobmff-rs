@@ -18,7 +18,7 @@ const PAD_MAXIMUM: u8 = 0b111;
 /// The entry states how many bits at the end of the sample it is indexed by
 /// are padding.
 #[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
 pub struct PaddingBitsEntry {
     pad: u8,
 }

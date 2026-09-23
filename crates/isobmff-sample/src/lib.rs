@@ -48,6 +48,7 @@ pub mod movie_fragment;
 mod movie_fragment_writer;
 mod sample;
 mod sample_description;
+mod sample_flags;
 mod sample_reader;
 pub mod sample_table;
 mod sample_table_writer;

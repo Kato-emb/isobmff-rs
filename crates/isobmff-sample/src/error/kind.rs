@@ -76,6 +76,14 @@ pub enum ErrorKind {
     /// [`first_chunk`](crate::Error::first_chunk) the chunk the run states it
     /// starts at.
     FirstChunkOutOfRange,
+    /// Sync sample is listed out of order, or past the samples of its track
+    ///
+    /// An `stss` lists the sync samples of a track in strictly increasing
+    /// order of sample number (ISO/IEC 14496-12 §8.6.2), each a sample the
+    /// track holds. [`track_id`](crate::Error::track_id) is the track, and
+    /// [`sample_number`](crate::Error::sample_number) the sample number
+    /// listed, counted from one.
+    SyncSampleOutOfRange,
     /// Sample is declared past the limit the reader holds
     ///
     /// [`track_id`](crate::Error::track_id) is the track it belongs to,

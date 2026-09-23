@@ -19,7 +19,7 @@ const FIELD_MAXIMUM: u8 = 0b11;
 /// around it, each field in the 2 bits §8.6.4 gives it, where 0 leaves the
 /// answer unknown.
 #[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
 pub struct SampleDependencyTypeEntry {
     is_leading: u8,
     sample_depends_on: u8,

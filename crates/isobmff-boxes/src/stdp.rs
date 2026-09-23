@@ -19,7 +19,7 @@ const ENTRY_LEN: u64 = 2;
 /// whose meaning and range the specifications derived from ISO/IEC 14496-12
 /// define.
 #[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
 pub struct DegradationPriorityEntry {
     priority: u16,
 }

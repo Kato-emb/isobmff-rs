@@ -142,6 +142,17 @@ impl Error {
         }
     }
 
+    /// Returns the failure of a sync sample listed out of order or past the samples of its track
+    #[must_use]
+    pub const fn sync_sample_out_of_range(track_id: u32, sample_number: u32) -> Self {
+        Self {
+            representation: Representation::SyncSampleOutOfRange {
+                track_id,
+                sample_number,
+            },
+        }
+    }
+
     /// Returns the failure of a sample declared past the limit a reader holds
     #[must_use]
     pub const fn sample_size_limit_exceeded(track_id: u32, declared: u64, limit: u64) -> Self {
