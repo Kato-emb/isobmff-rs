@@ -8,7 +8,7 @@ use core::mem;
 
 use isobmff_boxes::{
     ChunkOffsets, CompositionOffsetBox, DegradationPriorityBox, PaddingBitsBox,
-    SampleDependencyTypeBox, SampleDescriptionBox, SampleSizeBox, SampleTableBox, SampleToChunkBox,
+    SampleDependencyTypeBox, SampleDescriptionBox, SampleSizes, SampleTableBox, SampleToChunkBox,
     SyncSampleBox, TimeToSampleBox,
 };
 
@@ -23,8 +23,8 @@ use crate::sample_table_writer::open_track::OpenTrack;
 /// of each straight back, to be laid down where the caller opened the chunk.
 /// What it keeps is what the sample tables of a track state about them: the
 /// decode timeline (`stts`, §8.6.1.2), the chunks the samples lie in (`stsc`,
-/// §8.7.4), their sizes (`stsz`, §8.7.3) and where each chunk starts (`stco`
-/// or `co64`, §8.7.5), and the optional tables stating their composition time
+/// §8.7.4), their sizes (an `stsz`, §8.7.3.2, never a `stz2`) and where each
+/// chunk starts (`stco` or `co64`, §8.7.5), and the optional tables stating their composition time
 /// offsets (`ctts`, §8.6.1.3) and the fields of their `sample_flags` (`sdtp`,
 /// `padb`, `stss` and `stdp`, §8.8.3.1), which [`finish`](Self::finish) hands
 /// back per track as [`SampleTables`]. The `stsd` of each track, and the movie
@@ -43,8 +43,9 @@ use crate::sample_table_writer::open_track::OpenTrack;
 ///   [`sample_table::sample_extents`](crate::sample_table::sample_extents) to
 ///   hand the samples back in that order.
 /// * Each table is stated the way its box chooses from the values laid down:
-///   [`SampleSizeBox::from_sizes`], [`TimeToSampleBox::from_deltas`],
-///   [`SampleToChunkBox::from_chunks`] and [`ChunkOffsets::from_offsets`].
+///   [`SampleSizeBox::from_sizes`](isobmff_boxes::SampleSizeBox::from_sizes),
+///   [`TimeToSampleBox::from_deltas`], [`SampleToChunkBox::from_chunks`] and
+///   [`ChunkOffsets::from_offsets`].
 /// * An optional table is left out when every sample of the track states what
 ///   its absence does: the `ctts` when every offset is zero, the `stss` when
 ///   every sample is a sync sample, and the `sdtp`, the `padb` and the `stdp`
@@ -134,7 +135,7 @@ pub struct SampleTableWriter {
 pub struct SampleTables {
     stts: TimeToSampleBox,
     stsc: SampleToChunkBox,
-    stsz: SampleSizeBox,
+    sample_sizes: SampleSizes,
     chunk_offsets: ChunkOffsets,
     ctts: Option<CompositionOffsetBox>,
     stss: Option<SyncSampleBox>,
@@ -156,10 +157,10 @@ impl SampleTables {
         &self.stsc
     }
 
-    /// Returns how many bytes each sample occupies
+    /// Returns how many bytes each sample occupies, which the writer states in an `stsz`
     #[must_use]
-    pub const fn stsz(&self) -> &SampleSizeBox {
-        &self.stsz
+    pub const fn sample_sizes(&self) -> &SampleSizes {
+        &self.sample_sizes
     }
 
     /// Returns where every chunk of the track lies, at the width the offsets called for
@@ -201,8 +202,13 @@ impl SampleTables {
     /// Makes the `stbl` of the track out of these tables and the `stsd` describing its samples
     #[must_use]
     pub fn into_sample_table(self, stsd: SampleDescriptionBox) -> SampleTableBox {
-        let mut stbl =
-            SampleTableBox::new(stsd, self.stts, self.stsc, self.stsz, self.chunk_offsets);
+        let mut stbl = SampleTableBox::new(
+            stsd,
+            self.stts,
+            self.stsc,
+            self.sample_sizes,
+            self.chunk_offsets,
+        );
         if let Some(ctts) = self.ctts {
             stbl = stbl.with_ctts(ctts);
         }
@@ -425,8 +431,8 @@ mod tests {
 
     use isobmff_boxes::{
         ChunkLargeOffsetBox, ChunkLargeOffsetEntry, ChunkOffsetBox, ChunkOffsetEntry, ChunkOffsets,
-        SampleSizeBox, SampleSizeEntry, SampleSizes, SampleToChunkBox, SampleToChunkEntry,
-        TimeToSampleBox, TimeToSampleEntry,
+        SampleSizeBox, SampleSizeEntries, SampleSizeEntry, SampleSizes, SampleToChunkBox,
+        SampleToChunkEntry, TimeToSampleBox, TimeToSampleEntry,
     };
 
     use super::{SampleTableWriter, SampleTables};
@@ -481,11 +487,13 @@ mod tests {
                         SampleToChunkEntry::new(1, 2, 1),
                         SampleToChunkEntry::new(2, 1, 1),
                     ]),
-                    stsz: SampleSizeBox::new(SampleSizes::PerSample(vec![
-                        SampleSizeEntry::new(4),
-                        SampleSizeEntry::new(2),
-                        SampleSizeEntry::new(4),
-                    ])),
+                    sample_sizes: SampleSizes::Stsz(SampleSizeBox::new(
+                        SampleSizeEntries::PerSample(vec![
+                            SampleSizeEntry::new(4),
+                            SampleSizeEntry::new(2),
+                            SampleSizeEntry::new(4),
+                        ])
+                    )),
                     chunk_offsets: ChunkOffsets::Stco(ChunkOffsetBox::new(vec![
                         ChunkOffsetEntry::new(1_000),
                         ChunkOffsetEntry::new(2_000),
@@ -519,10 +527,12 @@ mod tests {
                     SampleTables {
                         stts: TimeToSampleBox::new(vec![TimeToSampleEntry::new(2, 1_024)]),
                         stsc: SampleToChunkBox::new(vec![SampleToChunkEntry::new(1, 1, 1)]),
-                        stsz: SampleSizeBox::new(SampleSizes::Uniform {
-                            sample_size: NonZeroU32::new(4).unwrap(),
-                            sample_count: 2,
-                        }),
+                        sample_sizes: SampleSizes::Stsz(SampleSizeBox::new(
+                            SampleSizeEntries::Uniform {
+                                sample_size: NonZeroU32::new(4).unwrap(),
+                                sample_count: 2,
+                            }
+                        )),
                         chunk_offsets: ChunkOffsets::Stco(ChunkOffsetBox::new(vec![
                             ChunkOffsetEntry::new(1_000),
                             ChunkOffsetEntry::new(3_000),
@@ -539,10 +549,12 @@ mod tests {
                     SampleTables {
                         stts: TimeToSampleBox::new(vec![TimeToSampleEntry::new(2, 1_024)]),
                         stsc: SampleToChunkBox::new(vec![SampleToChunkEntry::new(1, 2, 1)]),
-                        stsz: SampleSizeBox::new(SampleSizes::Uniform {
-                            sample_size: NonZeroU32::new(4).unwrap(),
-                            sample_count: 2,
-                        }),
+                        sample_sizes: SampleSizes::Stsz(SampleSizeBox::new(
+                            SampleSizeEntries::Uniform {
+                                sample_size: NonZeroU32::new(4).unwrap(),
+                                sample_count: 2,
+                            }
+                        )),
                         chunk_offsets: ChunkOffsets::Stco(ChunkOffsetBox::new(vec![
                             ChunkOffsetEntry::new(2_000),
                         ])),
@@ -572,10 +584,12 @@ mod tests {
                 SampleTables {
                     stts: TimeToSampleBox::new(vec![TimeToSampleEntry::new(1, 1_024)]),
                     stsc: SampleToChunkBox::new(vec![SampleToChunkEntry::new(1, 1, 1)]),
-                    stsz: SampleSizeBox::new(SampleSizes::Uniform {
-                        sample_size: NonZeroU32::new(4).unwrap(),
-                        sample_count: 1,
-                    }),
+                    sample_sizes: SampleSizes::Stsz(SampleSizeBox::new(
+                        SampleSizeEntries::Uniform {
+                            sample_size: NonZeroU32::new(4).unwrap(),
+                            sample_count: 1,
+                        }
+                    )),
                     chunk_offsets: ChunkOffsets::Stco(ChunkOffsetBox::new(vec![
                         ChunkOffsetEntry::new(2_000),
                     ])),
@@ -642,10 +656,12 @@ mod tests {
                 SampleTables {
                     stts: TimeToSampleBox::new(vec![TimeToSampleEntry::new(1, 1_024)]),
                     stsc: SampleToChunkBox::new(vec![SampleToChunkEntry::new(1, 1, 1)]),
-                    stsz: SampleSizeBox::new(SampleSizes::Uniform {
-                        sample_size: NonZeroU32::new(4).unwrap(),
-                        sample_count: 1,
-                    }),
+                    sample_sizes: SampleSizes::Stsz(SampleSizeBox::new(
+                        SampleSizeEntries::Uniform {
+                            sample_size: NonZeroU32::new(4).unwrap(),
+                            sample_count: 1,
+                        }
+                    )),
                     chunk_offsets: ChunkOffsets::Co64(ChunkLargeOffsetBox::new(vec![
                         ChunkLargeOffsetEntry::new(1 << 32),
                     ])),

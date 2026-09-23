@@ -4,8 +4,8 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{
     ChunkOffsets, CompositionOffsetBox, CompositionTimeOffset, DegradationPriorityBox,
-    PaddingBitsBox, SampleDependencyTypeBox, SampleSizeBox, SampleToChunkBox, SyncSampleBox,
-    SyncSampleEntry, TimeToSampleBox,
+    PaddingBitsBox, SampleDependencyTypeBox, SampleSizeBox, SampleSizes, SampleToChunkBox,
+    SyncSampleBox, SyncSampleEntry, TimeToSampleBox,
 };
 
 use crate::error::Error;
@@ -111,7 +111,7 @@ impl OpenTrack {
         Ok(SampleTables {
             stts: TimeToSampleBox::from_deltas(self.deltas),
             stsc: SampleToChunkBox::from_chunks(self.chunks)?,
-            stsz: SampleSizeBox::from_sizes(self.sizes),
+            sample_sizes: SampleSizes::Stsz(SampleSizeBox::from_sizes(self.sizes)),
             chunk_offsets: ChunkOffsets::from_offsets(self.chunk_offsets),
             ctts,
             stss,
@@ -139,7 +139,8 @@ mod tests {
         ChunkOffsetBox, ChunkOffsetEntry, ChunkOffsets, CompositionOffsetBox,
         CompositionTimeOffset, DegradationPriorityBox, DegradationPriorityEntry, PaddingBitsBox,
         PaddingBitsEntry, SampleDependencyTypeBox, SampleDependencyTypeEntry, SampleSizeBox,
-        SampleToChunkBox, SampleToChunkEntry, SyncSampleBox, SyncSampleEntry, TimeToSampleBox,
+        SampleSizes, SampleToChunkBox, SampleToChunkEntry, SyncSampleBox, SyncSampleEntry,
+        TimeToSampleBox,
     };
 
     use crate::error::Error;
@@ -250,7 +251,7 @@ mod tests {
                 SampleTables {
                     stts: TimeToSampleBox::from_deltas([1_024; 3]),
                     stsc: SampleToChunkBox::new(vec![SampleToChunkEntry::new(1, 3, 1)]),
-                    stsz: SampleSizeBox::from_sizes([4; 3]),
+                    sample_sizes: SampleSizes::Stsz(SampleSizeBox::from_sizes([4; 3])),
                     chunk_offsets: ChunkOffsets::Stco(ChunkOffsetBox::new(vec![
                         ChunkOffsetEntry::new(1_000)
                     ])),

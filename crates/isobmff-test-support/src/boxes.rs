@@ -8,8 +8,8 @@ use isobmff_boxes::{
     ChunkOffsetBox, ChunkOffsets, DataEntry, DataEntryUrlBox, DataInformationBox, DataReferenceBox,
     FileTypeBox, HandlerBox, MediaBox, MediaDataBox, MediaHeaderBox, MediaInformationBox,
     MediaInformationHeader, MovieBox, MovieExtendsBox, MovieFragmentBox, MovieFragmentHeaderBox,
-    MovieHeaderBox, SampleDescriptionBox, SampleSizeBox, SampleSizes, SampleTableBox,
-    SampleToChunkBox, SegmentTypeBox, TimeToSampleBox, TrackBox, TrackExtendsBox,
+    MovieHeaderBox, SampleDescriptionBox, SampleSizeBox, SampleSizeEntries, SampleSizes,
+    SampleTableBox, SampleToChunkBox, SegmentTypeBox, TimeToSampleBox, TrackBox, TrackExtendsBox,
     TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
     TrackFragmentHeaderFlags, TrackHeaderBox, VideoMediaHeaderBox,
 };
@@ -129,14 +129,14 @@ pub fn track_laid_out(track_id: u32, dref: DataReferenceBox, stbl: SampleTableBo
 pub fn sample_table(
     stts: TimeToSampleBox,
     stsc: SampleToChunkBox,
-    stsz: SampleSizeBox,
+    sample_sizes: SampleSizes,
     chunk_offsets: ChunkOffsets,
 ) -> SampleTableBox {
     SampleTableBox::new(
         SampleDescriptionBox::new(vec![sample_entry()]),
         stts,
         stsc,
-        stsz,
+        sample_sizes,
         chunk_offsets,
     )
 }
@@ -164,7 +164,7 @@ fn empty_sample_table(entry: AnyBox) -> SampleTableBox {
         SampleDescriptionBox::new(vec![entry]),
         TimeToSampleBox::new(Vec::new()),
         SampleToChunkBox::new(Vec::new()),
-        SampleSizeBox::new(SampleSizes::PerSample(Vec::new())),
+        SampleSizes::Stsz(SampleSizeBox::new(SampleSizeEntries::PerSample(Vec::new()))),
         ChunkOffsets::Stco(ChunkOffsetBox::new(Vec::new())),
     )
 }
@@ -252,7 +252,7 @@ pub fn non_fragmented_file(chunks: &[&[&[u8]]], movie_first: bool) -> Vec<u8> {
         let stbl = sample_table(
             TimeToSampleBox::from_deltas(sizes.iter().map(|_size| SAMPLE_DURATION)),
             SampleToChunkBox::from_chunks(samples_per_chunk.iter().copied()).unwrap(),
-            SampleSizeBox::from_sizes(sizes.iter().copied()),
+            SampleSizes::Stsz(SampleSizeBox::from_sizes(sizes.iter().copied())),
             ChunkOffsets::from_offsets(chunk_offsets),
         );
 

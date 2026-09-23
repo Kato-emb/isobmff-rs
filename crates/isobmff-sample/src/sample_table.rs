@@ -16,7 +16,7 @@ use crate::sample_flags::SampleFlagFields;
 /// `stts` states when it is decoded, as a delta from the sample before it
 /// summed from zero (§8.6.1.2); the `stsc` states which chunk it lies in and
 /// which `stsd` entry describes it, by runs of chunks holding the same number
-/// of samples (§8.7.4); the `stsz` states how many bytes it occupies
+/// of samples (§8.7.4); the `stsz` or the `stz2` states how many bytes it occupies
 /// (§8.7.3.2); and the `stco` or the `co64` states where its chunk starts in
 /// the file, the samples of a chunk lying one after another from there
 /// (§8.7.5). The `data_reference_index` of each sample is read off the `stsd`
@@ -82,7 +82,7 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
     let track_id = trak.tkhd().track_id();
     let stbl = trak.mdia().minf().stbl();
     let descriptions = SampleDescriptions::new(trak);
-    let mut sizes = stbl.stsz().sizes();
+    let mut sizes = stbl.sample_sizes().sizes();
     let mut deltas = stbl.stts().deltas();
     let mut runs = stbl.stsc().entries().iter().peekable();
     if let Some(first) = runs.peek().filter(|run| run.first_chunk() != 1) {
@@ -206,11 +206,12 @@ mod tests {
 
     use isobmff_boxes::{
         ChunkLargeOffsetBox, ChunkLargeOffsetEntry, ChunkOffsetBox, ChunkOffsetEntry, ChunkOffsets,
-        CompositionOffsetBox, CompositionTimeOffset, DegradationPriorityBox,
+        CompactSampleSizeBox, CompositionOffsetBox, CompositionTimeOffset, DegradationPriorityBox,
         DegradationPriorityEntry, MovieBox, MovieHeaderBox, PaddingBitsBox, PaddingBitsEntry,
         SampleDependencyTypeBox, SampleDependencyTypeEntry, SampleDescriptionBox, SampleSizeBox,
-        SampleSizeEntry, SampleSizes, SampleTableBox, SampleToChunkBox, SampleToChunkEntry,
-        SyncSampleBox, SyncSampleEntry, TimeToSampleBox, TimeToSampleEntry, TrackBox,
+        SampleSizeEntries, SampleSizeEntry, SampleSizes, SampleTableBox, SampleToChunkBox,
+        SampleToChunkEntry, SyncSampleBox, SyncSampleEntry, TimeToSampleBox, TimeToSampleEntry,
+        TrackBox,
     };
     use isobmff_core::{AnyBox, BoxType, Mp4EpochSeconds};
     use isobmff_test_support::{
@@ -263,10 +264,10 @@ mod tests {
     }
 
     /// Sizes stated one per sample
-    fn stsz(sizes: &[u32]) -> SampleSizeBox {
-        SampleSizeBox::new(SampleSizes::PerSample(
+    fn stsz(sizes: &[u32]) -> SampleSizes {
+        SampleSizes::Stsz(SampleSizeBox::new(SampleSizeEntries::PerSample(
             sizes.iter().copied().map(SampleSizeEntry::new).collect(),
-        ))
+        )))
     }
 
     /// Chunks starting at the offsets given, stated in 32 bits
@@ -281,13 +282,13 @@ mod tests {
         track_id: u32,
         stts: TimeToSampleBox,
         stsc: SampleToChunkBox,
-        stsz: SampleSizeBox,
+        sample_sizes: SampleSizes,
         chunk_offsets: ChunkOffsets,
     ) -> TrackBox {
         track_laid_out(
             track_id,
             self_contained_data_reference(),
-            sample_table(stts, stsc, stsz, chunk_offsets),
+            sample_table(stts, stsc, sample_sizes, chunk_offsets),
         )
     }
 
@@ -422,10 +423,10 @@ mod tests {
             1,
             stts(&[(3, 100)]),
             stsc(&[(1, 3)]),
-            SampleSizeBox::new(SampleSizes::Uniform {
+            SampleSizes::Stsz(SampleSizeBox::new(SampleSizeEntries::Uniform {
                 sample_size: NonZeroU32::new(4).unwrap(),
                 sample_count: 3,
-            }),
+            })),
             stco(&[100]),
         );
 
@@ -436,6 +437,29 @@ mod tests {
                 extent(1, 100, 100, 104..108),
                 extent(1, 200, 100, 108..112),
             ])
+        );
+    }
+
+    #[test]
+    fn a_track_stating_its_sample_sizes_in_a_stz2_resolves_as_one_stating_them_in_a_stsz() {
+        let in_a_stz2 = track_of(
+            1,
+            stts(&[(3, 100)]),
+            stsc(&[(1, 3)]),
+            SampleSizes::Stz2(CompactSampleSizeBox::from_sizes([4, 12, 7])),
+            stco(&[100]),
+        );
+        let in_a_stsz = track_of(
+            1,
+            stts(&[(3, 100)]),
+            stsc(&[(1, 3)]),
+            stsz(&[4, 12, 7]),
+            stco(&[100]),
+        );
+
+        assert_eq!(
+            resolved(&movie(vec![in_a_stz2])),
+            resolved(&movie(vec![in_a_stsz]))
         );
     }
 
