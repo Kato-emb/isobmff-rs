@@ -153,6 +153,15 @@ mod tests {
     }
 
     #[test]
+    fn a_file_stating_no_decode_time_read_in_order_starts_its_timeline_at_zero() {
+        let file = indexed_fragmented_file_without_decode_times();
+
+        let mut reader = read_whole(&file);
+
+        assert_eq!(drained(&mut reader), file.fragment_samples.concat());
+    }
+
+    #[test]
     fn resuming_at_a_fragment_stating_no_decode_time_fails_for_the_missing_decode_time() {
         let file = indexed_fragmented_file_without_decode_times();
 

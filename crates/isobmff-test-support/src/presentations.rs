@@ -237,10 +237,18 @@ pub struct IndexedFile {
 /// The `sidx` references each fragment whole from the first byte after
 /// itself, starting at the earliest presentation time of the first. The
 /// fragments state their decode times in a `tfdt` where `with_decode_times`
-/// says so. The offsets are checked against the bytes: every `moof` the file
-/// frames lies where they say.
+/// says so; the timeline starts at 90 000 where they do, and at zero where
+/// they do not, as a reader of such a file places its first sample
+/// (§8.8.12). The samples, the `sidx` and the fragments share that start. The
+/// offsets are checked against the bytes: every `moof` the file frames lies
+/// where they say.
 fn indexed(head: Vec<u8>, with_decode_times: bool) -> IndexedFile {
-    let mut decode_time = BASE_MEDIA_DECODE_TIME;
+    let earliest_decode_time = if with_decode_times {
+        BASE_MEDIA_DECODE_TIME
+    } else {
+        0
+    };
+    let mut decode_time = earliest_decode_time;
     let mut fragments = Vec::new();
     let mut fragment_samples = Vec::new();
     let mut references = Vec::new();
@@ -273,9 +281,8 @@ fn indexed(head: Vec<u8>, with_decode_times: bool) -> IndexedFile {
         fragments.push(fragment);
         fragment_samples.push(samples);
     }
-    let segment_index = written(
-        &SegmentIndexBox::new(1, TIMESCALE, BASE_MEDIA_DECODE_TIME, 0, references).unwrap(),
-    );
+    let segment_index =
+        written(&SegmentIndexBox::new(1, TIMESCALE, earliest_decode_time, 0, references).unwrap());
 
     let mut moof_offsets = Vec::new();
     let mut bytes = [head, segment_index].concat();
