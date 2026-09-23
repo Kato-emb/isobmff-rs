@@ -62,6 +62,19 @@ impl Sample {
         }
     }
 
+    /// Returns the same sample laid down at `decode_time`
+    ///
+    /// The composition time offset is relative to the decode time, so it stays
+    /// as it is: the sample is composed as long after `decode_time` as it was
+    /// after the decode time it had.
+    #[must_use]
+    pub fn with_decode_time(self, decode_time: u64) -> Self {
+        Self {
+            decode_time,
+            ..self
+        }
+    }
+
     /// Returns the track this sample belongs to
     #[must_use]
     pub const fn track_id(&self) -> u32 {
@@ -214,5 +227,40 @@ impl SampleExtent {
     #[must_use]
     pub fn extent(&self) -> Range<u64> {
         self.extent.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use isobmff_boxes::SampleFlags;
+
+    use super::Sample;
+
+    #[test]
+    fn a_sample_laid_down_at_another_decode_time_keeps_everything_else() {
+        let sample = Sample::new(
+            1,
+            3_000,
+            1_500,
+            -500,
+            SampleFlags::SYNC_SAMPLE,
+            2,
+            vec![0xab],
+        );
+
+        assert_eq!(
+            sample.with_decode_time(9_000),
+            Sample::new(
+                1,
+                9_000,
+                1_500,
+                -500,
+                SampleFlags::SYNC_SAMPLE,
+                2,
+                vec![0xab]
+            )
+        );
     }
 }
