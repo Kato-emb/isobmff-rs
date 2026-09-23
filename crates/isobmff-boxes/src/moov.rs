@@ -5,9 +5,10 @@ use alloc::vec::Vec;
 
 use isobmff_core::{
     AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
-    FieldWriter, OtherBoxes, boxes,
+    FieldWriter, Mp4EpochSeconds, OtherBoxes, boxes,
 };
 
+use crate::data_types::SampleFlags;
 use crate::mdia::MediaBox;
 use crate::mvex::MovieExtendsBox;
 use crate::mvhd::MovieHeaderBox;
@@ -74,6 +75,56 @@ impl MovieBox {
             mvex,
             other_boxes: OtherBoxes::new(),
         })
+    }
+
+    /// Creates the box of a movie continued in fragments from its timescale and tracks
+    ///
+    /// [`new`](Self::new) states every field; `new_fragmented` states the ones
+    /// a movie continued in fragments (ISO/IEC 14496-12 Annex A.8) varies and
+    /// fills the rest:
+    ///
+    /// * `mvhd` (§8.2.2): times and `duration` of 0, a `next_track_id` one
+    ///   greater than the largest `track_id` of `tracks` — all 1s where that is
+    ///   the largest `u32` — and the template values of [`MovieHeaderBox::new`].
+    /// * `mvex` (§8.8.1): one `trex` (§8.8.3) for each track, whose samples
+    ///   default to the first sample description, a duration and a size of 0,
+    ///   and [`SampleFlags::ZERO`].
+    ///
+    /// Returns `None` where [`new`](Self::new) would: for an empty `tracks`,
+    /// and when two tracks declare the same `track_id`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff_boxes::{MovieBox, TrackBox};
+    /// use isobmff_core::{AnyBox, BoxType};
+    ///
+    /// // One video track, its samples to come in fragments
+    /// let entry = AnyBox::from_raw_bytes(BoxType::compact(*b"avc1"), vec![0, 0, 0, 0, 0, 0, 0, 1]);
+    /// let track = TrackBox::new_video(1, 90_000, 1920, 1080, entry);
+    /// let movie = MovieBox::new_fragmented(1_000, vec![track]).unwrap();
+    /// assert_eq!(movie.mvhd().next_track_id(), 2);
+    /// assert_eq!(movie.mvex().unwrap().trex()[0].track_id(), 1);
+    ///
+    /// // A movie is made of at least one track
+    /// assert_eq!(MovieBox::new_fragmented(1_000, Vec::new()), None);
+    /// ```
+    #[must_use]
+    pub fn new_fragmented(timescale: u32, tracks: Vec<TrackBox>) -> Option<Self> {
+        let track_ids = tracks.iter().map(|track| track.tkhd().track_id());
+        let next_track_id = track_ids.clone().max()?.saturating_add(1);
+        let mvex = MovieExtendsBox::new(
+            track_ids
+                .map(|track_id| TrackExtendsBox::new(track_id, 1, 0, 0, SampleFlags::ZERO))
+                .collect(),
+        )?;
+        let epoch = Mp4EpochSeconds::from_seconds(0);
+
+        Self::new(
+            MovieHeaderBox::new(epoch, epoch, timescale, 0, next_track_id),
+            tracks,
+            Some(mvex),
+        )
     }
 
     /// Returns the declarations the presentation applies as a whole
@@ -224,9 +275,11 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Error};
+    use isobmff_core::{
+        AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, Mp4EpochSeconds,
+    };
 
-    use super::{MovieBox, MovieExtendsBox, TrackExtendsBox};
+    use super::{MovieBox, MovieExtendsBox, TrackBox, TrackExtendsBox};
     use crate::chunk_offset::ChunkOffsets;
     use crate::data_types::SampleFlags;
     use crate::mvex::tests::movie_extends;
@@ -237,6 +290,14 @@ mod tests {
     use crate::stsd::SampleDescriptionBox;
     use crate::stts::TimeToSampleBox;
     use crate::trak::tests::track;
+
+    /// Video track declaring `track_id`, its samples left to the fragments
+    fn video_track(track_id: u32) -> TrackBox {
+        let entry =
+            AnyBox::from_raw_bytes(BoxType::compact(*b"avc1"), vec![0, 0, 0, 0, 0, 0, 0, 1]);
+
+        TrackBox::new_video(track_id, 90_000, 1920, 1080, entry)
+    }
 
     /// Movie with one track, as a progressive file declares it
     fn movie() -> MovieBox {
@@ -284,6 +345,48 @@ mod tests {
         let payload = encoded_payload(&fragmented);
 
         assert_eq!(MovieBox::decode_payload(&payload).unwrap(), fragmented);
+    }
+
+    #[test]
+    fn a_fragmented_movie_extends_each_track_and_numbers_the_next_past_the_largest() {
+        let movie = MovieBox::new_fragmented(1_000, vec![video_track(9), video_track(3)]).unwrap();
+        let epoch = Mp4EpochSeconds::from_seconds(0);
+        let mvhd = movie.mvhd();
+
+        assert_eq!(
+            MovieBox::decode_payload(&encoded_payload(&movie)).unwrap(),
+            movie
+        );
+        assert_eq!(
+            (mvhd.creation_time(), mvhd.modification_time()),
+            (epoch, epoch)
+        );
+        assert_eq!(mvhd.timescale(), 1_000);
+        assert_eq!(mvhd.duration(), 0);
+        assert_eq!(mvhd.next_track_id(), 10);
+        assert_eq!(
+            movie.mvex().unwrap().trex(),
+            [
+                TrackExtendsBox::new(9, 1, 0, 0, SampleFlags::ZERO),
+                TrackExtendsBox::new(3, 1, 0, 0, SampleFlags::ZERO),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_fragmented_movie_of_no_tracks_or_of_one_track_id_twice_cannot_be_built() {
+        assert_eq!(MovieBox::new_fragmented(1_000, Vec::new()), None);
+        assert_eq!(
+            MovieBox::new_fragmented(1_000, vec![video_track(1), video_track(1)]),
+            None
+        );
+    }
+
+    #[test]
+    fn a_fragmented_movie_holding_the_largest_track_id_leaves_the_next_at_all_ones() {
+        let movie = MovieBox::new_fragmented(1_000, vec![video_track(u32::MAX)]).unwrap();
+
+        assert_eq!(movie.mvhd().next_track_id(), u32::MAX);
     }
 
     #[test]
