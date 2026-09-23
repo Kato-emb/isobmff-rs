@@ -23,7 +23,7 @@ use isobmff_core::{
 const EPOCH: Mp4EpochSeconds = Mp4EpochSeconds::from_seconds(0);
 
 /// Ticks a second the media of the synthetic files is timed in
-const TIMESCALE: u32 = 90_000;
+pub(crate) const TIMESCALE: u32 = 90_000;
 
 /// Media data the fragment of the synthetic files addresses
 pub const MEDIA_DATA: [u8; 64] = [0x11; 64];

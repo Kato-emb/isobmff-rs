@@ -1,6 +1,6 @@
 //! [`MediaSegmentStructure`] and [`MediaSegmentDisposition`], the order of the top-level boxes of a media segment, ISO/IEC 14496-12 §8.16
 
-use isobmff_boxes::{MediaDataBox, MovieFragmentBox, SegmentTypeBox};
+use isobmff_boxes::{MediaDataBox, MovieFragmentBox, SegmentIndexBox, SegmentTypeBox};
 use isobmff_core::{BoxDefinition, BoxType};
 
 use crate::Error;
@@ -30,9 +30,16 @@ use crate::Error;
 /// * The `mdat` comes after a fragment: one arriving before any `moof` is
 ///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder). How many
 ///   follow a fragment is not counted.
-/// * Every other box is passed over, wherever it lies — a `sidx` among them,
-///   whose index is not read, and a `moov`, since the movie a segment
-///   continues is held apart from it.
+/// * A `sidx` is read into a value wherever it lies, and moves the order on as
+///   a box passed over does.
+/// * Every other box is passed over, wherever it lies — a `moov` among them,
+///   since the movie a segment continues is held apart from it.
+/// * [`resume`](Self::resume) restarts the order part-way into the segment,
+///   at a box an index points at: the next box is a `moof` or a `sidx`,
+///   placed as it would be where the boxes before the resume left the order,
+///   and any other is [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder).
+///   The structure resumes from the segment declared over as well, and a
+///   failed one stays failed.
 /// * An `Err` leaves the structure failed for good,
 ///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside:
 ///   every later call reports that same failure again.
@@ -51,6 +58,8 @@ pub(crate) enum MediaSegmentDisposition {
     SegmentType,
     /// Box is read whole into a [`MovieFragmentBox`]
     MovieFragment,
+    /// Box is read whole into a [`SegmentIndexBox`]
+    SegmentIndex,
     /// Payload of the box is media data, passed on as it arrives
     MediaData,
     /// Box is passed over, payload and all
@@ -62,8 +71,10 @@ pub(crate) enum MediaSegmentDisposition {
 enum State {
     /// Taking headers, standing where the boxes so far have brought it
     Reading(Position),
-    /// Told the segment is over, and taking no more headers
-    Finished,
+    /// Restarted part-way into the segment, where the boxes before it had brought it, taking a box an index points at next
+    Resuming(Position),
+    /// Told the segment is over, where the boxes so far had brought it, and taking no more headers
+    Finished(Position),
     /// Failed, and reporting that same failure for every call after it
     Failed(Error),
 }
@@ -102,17 +113,30 @@ impl MediaSegmentStructure {
         &mut self,
         box_type: BoxType,
     ) -> Result<MediaSegmentDisposition, Error> {
-        let position = match self.state {
-            State::Reading(position) => position,
-            State::Finished => return Err(Error::already_finished()),
-            State::Failed(failure) => return Err(failure),
+        let placed = match (self.state, box_type) {
+            (State::Reading(position), _)
+            | (State::Resuming(position), MovieFragmentBox::BOX_TYPE | SegmentIndexBox::BOX_TYPE) => {
+                place(position, box_type)
+            }
+            (State::Resuming(_position), _other) => Err(Error::box_out_of_order(box_type)),
+            (State::Finished(_position), _any) => return Err(Error::already_finished()),
+            (State::Failed(failure), _any) => return Err(failure),
         };
 
-        let (reached, disposition) =
-            place(position, box_type).map_err(|failure| self.fail(failure))?;
+        let (reached, disposition) = placed.map_err(|failure| self.fail(failure))?;
         self.state = State::Reading(reached);
 
         Ok(disposition)
+    }
+
+    /// Restarts the order part-way into the segment, where the next box is one an index points at
+    pub(crate) const fn resume(&mut self) {
+        match self.state {
+            State::Reading(position) | State::Resuming(position) | State::Finished(position) => {
+                self.state = State::Resuming(position);
+            }
+            State::Failed(_failure) => {}
+        }
     }
 
     /// Declares the segment over
@@ -127,15 +151,16 @@ impl MediaSegmentStructure {
     ///   again for every call after it.
     pub(crate) fn finish(&mut self) -> Result<(), Error> {
         match self.state {
-            State::Reading(Position::Fragmenting) => {
-                self.state = State::Finished;
+            State::Reading(Position::Fragmenting) | State::Resuming(Position::Fragmenting) => {
+                self.state = State::Finished(Position::Fragmenting);
 
                 Ok(())
             }
-            State::Reading(Position::Start | Position::Opened) => {
+            State::Reading(Position::Start | Position::Opened)
+            | State::Resuming(Position::Start | Position::Opened) => {
                 Err(self.fail(Error::missing_mandatory_box(MovieFragmentBox::BOX_TYPE)))
             }
-            State::Finished => Err(Error::already_finished()),
+            State::Finished(_position) => Err(Error::already_finished()),
             State::Failed(failure) => Err(failure),
         }
     }
@@ -171,10 +196,21 @@ const fn place(
         (MediaDataBox::BOX_TYPE, Position::Fragmenting) => {
             Ok((Position::Fragmenting, MediaSegmentDisposition::MediaData))
         }
-        (_other, Position::Start) => Ok((Position::Opened, MediaSegmentDisposition::Skip)),
-        (_other, Position::Opened | Position::Fragmenting) => {
-            Ok((position, MediaSegmentDisposition::Skip))
+        (SegmentIndexBox::BOX_TYPE, _any) => {
+            Ok((passed_over(position), MediaSegmentDisposition::SegmentIndex))
         }
+        (_other, _any) => Ok((passed_over(position), MediaSegmentDisposition::Skip)),
+    }
+}
+
+/// Returns where the segment stands past a box that does not move the order on, standing at `position`
+///
+/// Any box closes the start of the segment, past which the `styp` is out of
+/// order.
+const fn passed_over(position: Position) -> Position {
+    match position {
+        Position::Start => Position::Opened,
+        Position::Opened | Position::Fragmenting => position,
     }
 }
 
@@ -197,6 +233,67 @@ mod tests {
             .collect()
     }
 
+    /// The dispositions of the boxes named, in order, after `before` and a resume, stopping at the first failure
+    fn dispositions_resuming_after(
+        before: &[&[u8; 4]],
+        fourccs: &[&[u8; 4]],
+    ) -> Result<Vec<MediaSegmentDisposition>, Error> {
+        let mut structure = MediaSegmentStructure::new();
+        for fourcc in before {
+            structure.handle_box_type(BoxType::compact(**fourcc))?;
+        }
+
+        structure.resume();
+
+        fourccs
+            .iter()
+            .map(|fourcc| structure.handle_box_type(BoxType::compact(**fourcc)))
+            .collect()
+    }
+
+    #[test]
+    fn a_resumed_segment_goes_on_from_a_fragment_or_an_index() {
+        assert_eq!(
+            dispositions_resuming_after(&[b"styp", b"moof", b"mdat"], &[b"moof", b"mdat"]),
+            Ok(vec![
+                MediaSegmentDisposition::MovieFragment,
+                MediaSegmentDisposition::MediaData,
+            ])
+        );
+        assert_eq!(
+            dispositions_resuming_after(&[b"styp"], &[b"sidx", b"moof"]),
+            Ok(vec![
+                MediaSegmentDisposition::SegmentIndex,
+                MediaSegmentDisposition::MovieFragment,
+            ])
+        );
+    }
+
+    #[test]
+    fn a_resumed_segment_starting_on_a_box_no_index_points_at_is_out_of_order() {
+        assert_eq!(
+            dispositions_resuming_after(&[b"styp", b"moof"], &[b"mdat"]),
+            Err(Error::box_out_of_order(BoxType::compact(*b"mdat")))
+        );
+    }
+
+    #[test]
+    fn a_segment_declared_over_resumes_and_is_declared_over_again() {
+        let mut structure = MediaSegmentStructure::new();
+        structure
+            .handle_box_type(BoxType::compact(*b"moof"))
+            .unwrap();
+        structure.finish().unwrap();
+
+        structure.resume();
+
+        assert_eq!(
+            structure.handle_box_type(BoxType::compact(*b"moof")),
+            Ok(MediaSegmentDisposition::MovieFragment)
+        );
+        assert_eq!(structure.finish(), Ok(()));
+    }
+
     #[test]
     fn the_boxes_of_a_media_segment_are_read_passed_on_or_passed_over_in_turn() {
         assert_eq!(
@@ -205,7 +302,7 @@ mod tests {
             ]),
             Ok(vec![
                 MediaSegmentDisposition::SegmentType,
-                MediaSegmentDisposition::Skip,
+                MediaSegmentDisposition::SegmentIndex,
                 MediaSegmentDisposition::MovieFragment,
                 MediaSegmentDisposition::MediaData,
                 MediaSegmentDisposition::Skip,

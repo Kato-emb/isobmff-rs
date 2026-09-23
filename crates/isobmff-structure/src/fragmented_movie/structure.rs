@@ -1,6 +1,9 @@
 //! [`FragmentedStructure`] and [`FragmentedDisposition`], the order of the top-level boxes of a fragmented movie file, ISO/IEC 14496-12 Annex A.8
 
-use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox, MovieFragmentBox};
+use isobmff_boxes::{
+    FileTypeBox, MediaDataBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox,
+    SegmentIndexBox,
+};
 use isobmff_core::{BoxDefinition, BoxType};
 
 use crate::Error;
@@ -31,7 +34,17 @@ use crate::Error;
 /// * The `mdat` comes after a fragment: one arriving before any `moof` is
 ///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder). How many
 ///   follow a fragment is not counted.
+/// * A `sidx` and an `mfra` are read into values wherever they lie, and move
+///   the order on as a box passed over does.
 /// * Every other box is passed over, wherever it lies.
+/// * [`resume`](Self::resume) restarts the order part-way into the file, at a
+///   box an index points at: the next box is a `moof`, a `sidx` or an `mfra`,
+///   placed as it would be where the boxes before the resume left the order,
+///   and any other is [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder).
+///   What those boxes established stands: a `moof` still needs the `moov`
+///   to have come, and a second `moov` is still a duplicate. The structure
+///   resumes from the file declared over as well, and a failed one stays
+///   failed.
 /// * An `Err` leaves the structure failed for good,
 ///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside:
 ///   every later call reports that same failure again.
@@ -52,6 +65,10 @@ pub(crate) enum FragmentedDisposition {
     Movie,
     /// Box is read whole into a [`MovieFragmentBox`]
     MovieFragment,
+    /// Box is read whole into a [`SegmentIndexBox`]
+    SegmentIndex,
+    /// Box is read whole into a [`MovieFragmentRandomAccessBox`]
+    MovieFragmentRandomAccess,
     /// Payload of the box is media data, passed on as it arrives
     MediaData,
     /// Box is passed over, payload and all
@@ -63,8 +80,10 @@ pub(crate) enum FragmentedDisposition {
 enum State {
     /// Taking headers, standing where the boxes so far have brought it
     Reading(Position),
-    /// Told the file is over, and taking no more headers
-    Finished,
+    /// Restarted part-way into the file, where the boxes before it had brought it, taking a box an index points at next
+    Resuming(Position),
+    /// Told the file is over, where the boxes so far had brought it, and taking no more headers
+    Finished(Position),
     /// Failed, and reporting that same failure for every call after it
     Failed(Error),
 }
@@ -108,17 +127,33 @@ impl FragmentedStructure {
         &mut self,
         box_type: BoxType,
     ) -> Result<FragmentedDisposition, Error> {
-        let position = match self.state {
-            State::Reading(position) => position,
-            State::Finished => return Err(Error::already_finished()),
-            State::Failed(failure) => return Err(failure),
+        let placed = match (self.state, box_type) {
+            (State::Reading(position), _)
+            | (
+                State::Resuming(position),
+                MovieFragmentBox::BOX_TYPE
+                | SegmentIndexBox::BOX_TYPE
+                | MovieFragmentRandomAccessBox::BOX_TYPE,
+            ) => place(position, box_type),
+            (State::Resuming(_position), _other) => Err(Error::box_out_of_order(box_type)),
+            (State::Finished(_position), _any) => return Err(Error::already_finished()),
+            (State::Failed(failure), _any) => return Err(failure),
         };
 
-        let (reached, disposition) =
-            place(position, box_type).map_err(|failure| self.fail(failure))?;
+        let (reached, disposition) = placed.map_err(|failure| self.fail(failure))?;
         self.state = State::Reading(reached);
 
         Ok(disposition)
+    }
+
+    /// Restarts the order part-way into the file, where the next box is one an index points at
+    pub(crate) const fn resume(&mut self) {
+        match self.state {
+            State::Reading(position) | State::Resuming(position) | State::Finished(position) => {
+                self.state = State::Resuming(position);
+            }
+            State::Failed(_failure) => {}
+        }
     }
 
     /// Declares the file over
@@ -133,15 +168,17 @@ impl FragmentedStructure {
     ///   again for every call after it.
     pub(crate) fn finish(&mut self) -> Result<(), Error> {
         match self.state {
-            State::Reading(Position::Declared | Position::Fragmenting) => {
-                self.state = State::Finished;
+            State::Reading(position @ (Position::Declared | Position::Fragmenting))
+            | State::Resuming(position @ (Position::Declared | Position::Fragmenting)) => {
+                self.state = State::Finished(position);
 
                 Ok(())
             }
-            State::Reading(Position::Start | Position::Opened) => {
+            State::Reading(Position::Start | Position::Opened)
+            | State::Resuming(Position::Start | Position::Opened) => {
                 Err(self.fail(Error::missing_mandatory_box(MovieBox::BOX_TYPE)))
             }
-            State::Finished => Err(Error::already_finished()),
+            State::Finished(_position) => Err(Error::already_finished()),
             State::Failed(failure) => Err(failure),
         }
     }
@@ -180,10 +217,24 @@ const fn place(
         (MediaDataBox::BOX_TYPE, Position::Fragmenting) => {
             Ok((Position::Fragmenting, FragmentedDisposition::MediaData))
         }
-        (_other, Position::Start) => Ok((Position::Opened, FragmentedDisposition::Skip)),
-        (_other, Position::Opened | Position::Declared | Position::Fragmenting) => {
-            Ok((position, FragmentedDisposition::Skip))
+        (SegmentIndexBox::BOX_TYPE, _any) => {
+            Ok((passed_over(position), FragmentedDisposition::SegmentIndex))
         }
+        (MovieFragmentRandomAccessBox::BOX_TYPE, _any) => Ok((
+            passed_over(position),
+            FragmentedDisposition::MovieFragmentRandomAccess,
+        )),
+        (_other, _any) => Ok((passed_over(position), FragmentedDisposition::Skip)),
+    }
+}
+
+/// Returns where the file stands past a box that does not move the order on, standing at `position`
+///
+/// Any box closes the start of the file, past which the `ftyp` is out of order.
+const fn passed_over(position: Position) -> Position {
+    match position {
+        Position::Start => Position::Opened,
+        Position::Opened | Position::Declared | Position::Fragmenting => position,
     }
 }
 
@@ -206,24 +257,101 @@ mod tests {
             .collect()
     }
 
+    /// The dispositions of the boxes named, in order, after `before` and a resume, stopping at the first failure
+    fn dispositions_resuming_after(
+        before: &[&[u8; 4]],
+        fourccs: &[&[u8; 4]],
+    ) -> Result<Vec<FragmentedDisposition>, Error> {
+        let mut structure = FragmentedStructure::new();
+        for fourcc in before {
+            structure.handle_box_type(BoxType::compact(**fourcc))?;
+        }
+
+        structure.resume();
+
+        fourccs
+            .iter()
+            .map(|fourcc| structure.handle_box_type(BoxType::compact(**fourcc)))
+            .collect()
+    }
+
+    #[test]
+    fn a_resumed_file_goes_on_from_a_fragment_or_an_index() {
+        assert_eq!(
+            dispositions_resuming_after(&[b"ftyp", b"moov", b"moof"], &[b"moof", b"mdat"]),
+            Ok(vec![
+                FragmentedDisposition::MovieFragment,
+                FragmentedDisposition::MediaData,
+            ])
+        );
+        assert_eq!(
+            dispositions_resuming_after(&[b"ftyp", b"moov"], &[b"mfra"]),
+            Ok(vec![FragmentedDisposition::MovieFragmentRandomAccess])
+        );
+        assert_eq!(
+            dispositions_resuming_after(&[b"ftyp", b"moov"], &[b"sidx", b"moof"]),
+            Ok(vec![
+                FragmentedDisposition::SegmentIndex,
+                FragmentedDisposition::MovieFragment,
+            ])
+        );
+    }
+
+    #[test]
+    fn a_resumed_file_starting_on_a_box_no_index_points_at_is_out_of_order() {
+        assert_eq!(
+            dispositions_resuming_after(&[b"ftyp", b"moov", b"moof"], &[b"mdat"]),
+            Err(Error::box_out_of_order(BoxType::compact(*b"mdat")))
+        );
+    }
+
+    #[test]
+    fn a_resumed_file_keeps_the_order_the_boxes_before_the_resume_established() {
+        assert_eq!(
+            dispositions_resuming_after(&[b"ftyp"], &[b"moof"]),
+            Err(Error::box_out_of_order(BoxType::compact(*b"moof")))
+        );
+        assert_eq!(
+            dispositions_resuming_after(&[b"moov"], &[b"moof", b"moov"]),
+            Err(Error::duplicate_box(BoxType::compact(*b"moov")))
+        );
+    }
+
+    #[test]
+    fn a_file_declared_over_resumes_and_is_declared_over_again() {
+        let mut structure = FragmentedStructure::new();
+        structure
+            .handle_box_type(BoxType::compact(*b"moov"))
+            .unwrap();
+        structure.finish().unwrap();
+
+        structure.resume();
+
+        assert_eq!(
+            structure.handle_box_type(BoxType::compact(*b"mfra")),
+            Ok(FragmentedDisposition::MovieFragmentRandomAccess)
+        );
+        assert_eq!(structure.finish(), Ok(()));
+    }
+
     #[test]
     fn the_boxes_of_a_fragmented_movie_file_are_read_passed_on_or_passed_over_in_turn() {
         assert_eq!(
             dispositions_of(&[
-                b"ftyp", b"free", b"moov", b"free", b"moof", b"mdat", b"moof", b"mdat", b"mdat",
+                b"ftyp", b"free", b"moov", b"sidx", b"moof", b"mdat", b"moof", b"mdat", b"mdat",
                 b"mfra",
             ]),
             Ok(vec![
                 FragmentedDisposition::FileType,
                 FragmentedDisposition::Skip,
                 FragmentedDisposition::Movie,
-                FragmentedDisposition::Skip,
+                FragmentedDisposition::SegmentIndex,
                 FragmentedDisposition::MovieFragment,
                 FragmentedDisposition::MediaData,
                 FragmentedDisposition::MovieFragment,
                 FragmentedDisposition::MediaData,
                 FragmentedDisposition::MediaData,
-                FragmentedDisposition::Skip,
+                FragmentedDisposition::MovieFragmentRandomAccess,
             ])
         );
     }

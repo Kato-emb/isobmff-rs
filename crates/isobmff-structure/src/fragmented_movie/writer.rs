@@ -282,7 +282,9 @@ impl FragmentedWriter {
             | FragmentedDisposition::Movie
             | FragmentedDisposition::MovieFragment
             | FragmentedDisposition::MediaData => {}
-            FragmentedDisposition::Skip => {
+            FragmentedDisposition::SegmentIndex
+            | FragmentedDisposition::MovieFragmentRandomAccess
+            | FragmentedDisposition::Skip => {
                 return Err(self.fail(Error::box_out_of_order(box_type)));
             }
         }
