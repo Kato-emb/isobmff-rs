@@ -60,7 +60,7 @@ const COMPOSITION_TIME_OFFSET_MINIMUM: i64 = i32::MIN as i64;
 /// `-2_147_483_648..=4_294_967_295` is one a row can carry, and this holds
 /// such a value alone.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct CompositionTimeOffset(pub(crate) i64);
+pub struct CompositionTimeOffset(i64);
 
 impl CompositionTimeOffset {
     /// Creates the offset from its value
@@ -79,6 +79,48 @@ impl CompositionTimeOffset {
     #[must_use]
     pub const fn get(self) -> i64 {
         self.0
+    }
+
+    /// Returns the version of a `trun` or a `ctts` that writes every one of `offsets`
+    ///
+    /// Version 1 when one of them is negative, and version 0 otherwise.
+    /// Returns `None` when one is negative while another lies past
+    /// [`i32::MAX`], which leaves no version able to write both.
+    pub(crate) fn version_writing(offsets: impl Iterator<Item = Self> + Clone) -> Option<u8> {
+        let signed = offsets.clone().any(|offset| offset.0.is_negative());
+        let past_the_signed_range = offsets
+            .into_iter()
+            .any(|offset| offset.0 > i64::from(i32::MAX));
+
+        // Why not version 1 throughout: §8.6.1.3 asks for the unsigned form
+        // wherever it carries the offsets, which the readers of earlier brands
+        // accept.
+        match (signed, past_the_signed_range) {
+            (true, true) => None,
+            (true, false) => Some(1),
+            (false, _) => Some(0),
+        }
+    }
+
+    /// Reads the offset the way `version` writes it
+    pub(crate) fn read(reader: &mut FieldReader<'_>, version: u8) -> Result<Self, Error> {
+        Ok(Self(match version {
+            0 => i64::from(reader.read_u32()?),
+            _ => i64::from(reader.read_i32()?),
+        }))
+    }
+
+    /// Writes the offset the way `version` writes it
+    pub(crate) fn write(self, writer: &mut FieldWriter<'_>, version: u8) -> Result<(), Error> {
+        // Why not unwrap: the version comes from `version_writing` over offsets
+        // the constructors of both boxes have checked it holds, so the failure
+        // named here is one the call cannot reach.
+        let out_of_range = Error::out_of_range(self.0.unsigned_abs(), FieldWidth::Compact);
+        if version == 0 {
+            writer.write_u32(u32::try_from(self.0).map_err(|_| out_of_range)?)
+        } else {
+            writer.write_i32(i32::try_from(self.0).map_err(|_| out_of_range)?)
+        }
     }
 }
 
@@ -245,17 +287,11 @@ impl TrackRunBox {
             return None;
         }
 
-        let offsets = || {
+        CompositionTimeOffset::version_writing(
             samples
                 .iter()
-                .filter_map(TrackRunSample::sample_composition_time_offset)
-                .map(CompositionTimeOffset::get)
-        };
-        let signed = offsets().any(i64::is_negative);
-        let past_the_signed_range = offsets().any(|offset| offset > i64::from(i32::MAX));
-        if signed && past_the_signed_range {
-            return None;
-        }
+                .filter_map(TrackRunSample::sample_composition_time_offset),
+        )?;
 
         Some(Self {
             data_offset,
@@ -372,10 +408,7 @@ impl BoxDecode for TrackRunBox {
             };
             let sample_composition_time_offset = if carries(SAMPLE_COMPOSITION_TIME_OFFSETS_PRESENT)
             {
-                Some(CompositionTimeOffset(match version {
-                    0 => i64::from(reader.read_u32()?),
-                    _ => i64::from(reader.read_i32()?),
-                }))
+                Some(CompositionTimeOffset::read(reader, version)?)
             } else {
                 None
             };
@@ -416,15 +449,15 @@ impl BoxEncode for TrackRunBox {
                 .first_sample_flags
                 .map_or(0, |_| FIRST_SAMPLE_FLAGS_PRESENT);
 
-        let signed = self
-            .samples
-            .iter()
-            .filter_map(TrackRunSample::sample_composition_time_offset)
-            .any(|offset| offset.get().is_negative());
-        // Why not version 1 throughout: §8.6.1.3 asks for the unsigned form
-        // wherever it carries the offsets, which the readers of earlier brands
-        // accept.
-        let version = if signed { 1 } else { 0 };
+        // Why not unwrap: `TrackRunBox::new` refuses rows no one version writes,
+        // and were one to slip through, version 1 refuses the offset past its
+        // range when it is written.
+        let version = CompositionTimeOffset::version_writing(
+            self.samples
+                .iter()
+                .filter_map(TrackRunSample::sample_composition_time_offset),
+        )
+        .unwrap_or(1);
 
         // Why not unwrap: the bits are the flags this box defines, which lie
         // inside the field by construction, so the failure named here is one the
@@ -456,20 +489,8 @@ impl BoxEncode for TrackRunBox {
             {
                 writer.write_u32(field)?;
             }
-            if let Some(offset) = sample
-                .sample_composition_time_offset
-                .map(CompositionTimeOffset::get)
-            {
-                // Why not unwrap: a `CompositionTimeOffset` lies within what the
-                // two versions carry between them and `TrackRunBox::new` refuses
-                // a run mixing offsets no one version holds, so the version
-                // settled above carries every offset the rows have.
-                let out_of_range = Error::out_of_range(offset.unsigned_abs(), FieldWidth::Compact);
-                if version == 0 {
-                    writer.write_u32(u32::try_from(offset).map_err(|_| out_of_range)?)?;
-                } else {
-                    writer.write_i32(i32::try_from(offset).map_err(|_| out_of_range)?)?;
-                }
+            if let Some(offset) = sample.sample_composition_time_offset {
+                offset.write(writer, version)?;
             }
         }
 

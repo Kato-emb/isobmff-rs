@@ -133,21 +133,11 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
                 return Err(Error::sample_count_mismatch(track_id));
             };
             sample_number = sample_number.saturating_add(1);
-            let is_sync_sample = match sync_samples.as_mut() {
-                None => true,
-                Some(listed) => match listed
-                    .next_if(|entry| u64::from(entry.sample_number()) <= sample_number)
-                {
-                    Some(entry) if u64::from(entry.sample_number()) == sample_number => true,
-                    Some(entry) => {
-                        return Err(Error::sync_sample_out_of_range(
-                            track_id,
-                            entry.sample_number(),
-                        ));
-                    }
-                    None => false,
-                },
-            };
+            let is_sync_sample = sync_samples.as_mut().is_none_or(|listed| {
+                listed
+                    .next_if(|entry| u64::from(entry.sample_number()) == sample_number)
+                    .is_some()
+            });
             let sample_flags = SampleFlagFields {
                 dependency,
                 padding,

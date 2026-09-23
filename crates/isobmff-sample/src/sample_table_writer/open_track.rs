@@ -73,18 +73,17 @@ impl OpenTrack {
         let ctts = if self.offsets.iter().all(|offset| offset.get() == 0) {
             None
         } else {
-            let Some(ctts) = CompositionOffsetBox::from_offsets(self.offsets.iter().copied())
-            else {
-                let widest = self.offsets.iter().map(|offset| offset.get()).max();
-                return Err(Error::composition_time_offset_out_of_range(
-                    track_id,
-                    widest.unwrap_or_default(),
-                ));
-            };
+            let widest = || self.offsets.iter().map(|offset| offset.get()).max();
+            let ctts = CompositionOffsetBox::from_offsets(self.offsets.iter().copied())
+                .ok_or_else(|| {
+                    Error::composition_time_offset_out_of_range(
+                        track_id,
+                        widest().unwrap_or_default(),
+                    )
+                })?;
             Some(ctts)
         };
         let fields = &self.sample_flags;
-        let unstated = SampleFlagFields::default();
         let stss = fields
             .iter()
             .any(|sample| sample.is_non_sync_sample)
@@ -97,29 +96,17 @@ impl OpenTrack {
                         .collect(),
                 )
             });
-        let sdtp = fields
-            .iter()
-            .any(|sample| sample.dependency != unstated.dependency)
-            .then(|| {
-                SampleDependencyTypeBox::new(
-                    fields.iter().map(|sample| sample.dependency).collect(),
-                )
-            });
-        let padb = fields
-            .iter()
-            .any(|sample| sample.padding != unstated.padding)
-            .then(|| PaddingBitsBox::new(fields.iter().map(|sample| sample.padding).collect()));
-        let stdp = fields
-            .iter()
-            .any(|sample| sample.degradation_priority != unstated.degradation_priority)
-            .then(|| {
-                DegradationPriorityBox::new(
-                    fields
-                        .iter()
-                        .map(|sample| sample.degradation_priority)
-                        .collect(),
-                )
-            });
+        let sdtp = stated(fields.iter().map(|sample| sample.dependency).collect())
+            .map(SampleDependencyTypeBox::new);
+        let padb =
+            stated(fields.iter().map(|sample| sample.padding).collect()).map(PaddingBitsBox::new);
+        let stdp = stated(
+            fields
+                .iter()
+                .map(|sample| sample.degradation_priority)
+                .collect(),
+        )
+        .map(DegradationPriorityBox::new);
 
         Ok(SampleTables {
             stts: TimeToSampleBox::from_deltas(self.deltas),
@@ -133,6 +120,14 @@ impl OpenTrack {
             stdp,
         })
     }
+}
+
+/// Returns the entries of a table, unless every one states what the absence of the table does
+fn stated<Entry: Default + PartialEq>(entries: Vec<Entry>) -> Option<Vec<Entry>> {
+    entries
+        .iter()
+        .any(|entry| *entry != Entry::default())
+        .then_some(entries)
 }
 
 #[cfg(test)]

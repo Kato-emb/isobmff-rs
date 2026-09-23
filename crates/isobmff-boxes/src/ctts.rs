@@ -103,12 +103,7 @@ impl CompositionOffsetBox {
     /// both.
     #[must_use]
     pub fn new(entries: Vec<CompositionOffsetEntry>) -> Option<Self> {
-        let offsets = || entries.iter().map(|entry| entry.sample_offset.get());
-        let signed = offsets().any(i64::is_negative);
-        let past_the_signed_range = offsets().any(|offset| offset > i64::from(i32::MAX));
-        if signed && past_the_signed_range {
-            return None;
-        }
+        CompositionTimeOffset::version_writing(entries.iter().map(|entry| entry.sample_offset))?;
 
         Some(Self { entries })
     }
@@ -150,7 +145,7 @@ impl CompositionOffsetBox {
     pub fn offsets(&self) -> impl Iterator<Item = CompositionTimeOffset> + '_ {
         Offsets {
             entries: self.entries.iter(),
-            sample_offset: CompositionTimeOffset(0),
+            sample_offset: None,
             remaining: 0,
         }
     }
@@ -160,8 +155,8 @@ impl CompositionOffsetBox {
 struct Offsets<'ctts> {
     /// Entries still to be read
     entries: slice::Iter<'ctts, CompositionOffsetEntry>,
-    /// Offset of the entry being read
-    sample_offset: CompositionTimeOffset,
+    /// Offset of the entry being read, `None` before the first
+    sample_offset: Option<CompositionTimeOffset>,
     /// Samples of the entry being read that have still to come out
     remaining: u32,
 }
@@ -174,10 +169,10 @@ impl Iterator for Offsets<'_> {
             if let Some(remaining) = self.remaining.checked_sub(1) {
                 self.remaining = remaining;
 
-                return Some(self.sample_offset);
+                return self.sample_offset;
             }
             let entry = self.entries.next()?;
-            self.sample_offset = entry.sample_offset;
+            self.sample_offset = Some(entry.sample_offset);
             self.remaining = entry.sample_count;
         }
     }
@@ -206,14 +201,9 @@ impl BoxDecode for CompositionOffsetBox {
 
         let mut entries = Vec::new();
         while !reader.remainder().is_empty() {
-            let sample_count = reader.read_u32()?;
-            let sample_offset = match version {
-                0 => i64::from(reader.read_u32()?),
-                _ => i64::from(reader.read_i32()?),
-            };
             entries.push(CompositionOffsetEntry {
-                sample_count,
-                sample_offset: CompositionTimeOffset(sample_offset),
+                sample_count: reader.read_u32()?,
+                sample_offset: CompositionTimeOffset::read(reader, version)?,
             });
         }
 
@@ -234,13 +224,13 @@ impl BoxEncode for CompositionOffsetBox {
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        let signed = self
-            .entries
-            .iter()
-            .any(|entry| entry.sample_offset.get().is_negative());
-        // Why not version 1 throughout: §8.6.1.3 asks for version 0 wherever it
-        // carries the offsets, which readers of earlier brands accept.
-        let version = if signed { 1 } else { 0 };
+        // Why not unwrap: `CompositionOffsetBox::new` refuses entries no one
+        // version writes, and were one to slip through, version 1 refuses the
+        // offset past its range when it is written.
+        let version = CompositionTimeOffset::version_writing(
+            self.entries.iter().map(|entry| entry.sample_offset),
+        )
+        .unwrap_or(1);
 
         writer.write_bytes(&FullBoxFields::new(version, FullBoxFlags::ZERO).to_bytes())?;
         let entry_count = self.entries.len() as u64;
@@ -251,17 +241,7 @@ impl BoxEncode for CompositionOffsetBox {
 
         for entry in &self.entries {
             writer.write_u32(entry.sample_count)?;
-            let offset = entry.sample_offset.get();
-            // Why not unwrap: a `CompositionTimeOffset` lies within what the two
-            // versions carry between them and `CompositionOffsetBox::new` refuses
-            // a table mixing offsets no one version holds, so the version settled
-            // above carries every offset the entries have.
-            let out_of_range = Error::out_of_range(offset.unsigned_abs(), FieldWidth::Compact);
-            if version == 0 {
-                writer.write_u32(u32::try_from(offset).map_err(|_| out_of_range)?)?;
-            } else {
-                writer.write_i32(i32::try_from(offset).map_err(|_| out_of_range)?)?;
-            }
+            entry.sample_offset.write(writer, version)?;
         }
 
         Ok(())
