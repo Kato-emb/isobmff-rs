@@ -279,7 +279,7 @@ impl BoxDecode for TrackFragmentHeaderBox {
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box
     ///   declares a version other than 0.
     /// * [`UnsupportedFlags`](isobmff_core::ErrorKind::UnsupportedFlags): the
-    ///   `default_sample_flags` set a bit ISO/IEC 14496-12 §8.8.3.1 reserves.
+    ///   `default_sample_flags` set a bit §8.8.3.1 reserves.
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the payload
     ///   ends inside a field the flags state.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {

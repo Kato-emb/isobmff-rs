@@ -23,10 +23,10 @@ use isobmff_boxes::SampleFlags;
 ///
 /// The `sample_flags` are a [`SampleFlags`], the fields §8.8.3.1 lays out,
 /// which cannot state a reserved bit. A sample table states those fields in
-/// tables of their own —
-/// `sdtp`, `padb`, `stss` and `stdp` — and a field the track carries no table
-/// for is zero, but for the sync samples: every sample of a track without an
-/// `stss` (§8.6.2) is one, and leaves `sample_is_non_sync_sample` clear.
+/// tables of their own — `sdtp`, `padb`, `stss` and `stdp` — and a field the
+/// track carries no table for is zero, but for the sync samples: every sample
+/// of a track without an `stss` (§8.6.2) is one, and leaves
+/// `sample_is_non_sync_sample` clear.
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Sample {
