@@ -4,13 +4,13 @@ use core::ops::Range;
 
 use futures_io::{AsyncRead, AsyncSeek, AsyncWrite};
 use isobmff_boxes::{MovieBox, SegmentTypeBox};
-use isobmff_sample::Sample;
+use isobmff_sample::{Sample, SegmentIndex};
 use isobmff_sequence::EventBytes;
 use isobmff_structure::{MediaSegmentReader, MediaSegmentWriter};
 
 use crate::Error;
 use crate::driver::{Demuxer, Muxer};
-use crate::stack::{PollOutput, ReadSamples};
+use crate::stack::{PollOutput, ReadSamples, ResumeSamples};
 
 /// Reads the samples a media segment carries off an asynchronous source that seeks
 ///
@@ -42,8 +42,14 @@ use crate::stack::{PollOutput, ReadSamples};
 ///   [`Io`](crate::ErrorKind::Io) with
 ///   [`UnexpectedEof`](std::io::ErrorKind::UnexpectedEof).
 /// * A failure ends the samples: the ones the reader had completed before it
-///   come first, then the failure once, then `None` for good. The end of the
-///   segment is the same without the failure.
+///   come first, then the failure once, then `None` until the
+///   reading is resumed. The end of the segment is the same without the
+///   failure.
+/// * Where an index points is the caller's to choose. The indexes the
+///   segment carries are there to read once they have come:
+///   [`segment_indexes`](Self::segment_indexes).
+///   [`resume_at`](Self::resume_at) restarts the reading at an offset one of
+///   them names.
 /// * Every `async fn` here is cancellation safe: a future dropped where the
 ///   source stood still is carried on by the call that follows.
 ///
@@ -127,9 +133,41 @@ impl<S: AsyncRead + AsyncSeek + Unpin> MediaSegmentDemuxer<S> {
         self.demuxer.reader().movie()
     }
 
+    /// Returns the subsegments of every `sidx` read so far, as [`MediaSegmentReader::segment_indexes`] holds them
+    #[must_use]
+    pub fn segment_indexes(&self) -> &[SegmentIndex] {
+        self.demuxer.reader().segment_indexes()
+    }
+
     /// Takes the next sample the segment carries, reading on until one comes
     pub async fn next(&mut self) -> Option<Result<Sample, Error>> {
         self.demuxer.next().await
+    }
+
+    /// Restarts the reading at `offset` of the segment, a place an index names
+    ///
+    /// The reader is resumed at `offset` as [`MediaSegmentReader::resume_at`]
+    /// resumes it, and the source is sought there from where the segment
+    /// begins: the samples not yet taken are dropped, and the ones that come
+    /// next are those the segment carries from `offset` on — the `moof` or
+    /// `sidx` it is to start with. The demuxer resumes from reading and from
+    /// the end of the segment alike, and from a failure of the source. A
+    /// future dropped before the source moved there is carried on by the call
+    /// that follows, [`next`](Self::next) included.
+    ///
+    /// # Errors
+    ///
+    /// * [`Io`](crate::ErrorKind::Io): `offset`, counted from where the
+    ///   source stood when the demuxer was created, lies past `u64::MAX`,
+    ///   which leaves the demuxer as it was, or the source does not seek
+    ///   there.
+    /// * [`Structure`](crate::ErrorKind::Structure): what
+    ///   [`MediaSegmentReader::resume_at`] makes of the call.
+    ///
+    /// A failure after the offset is checked ends the samples, until a
+    /// resume succeeds.
+    pub async fn resume_at(&mut self, offset: u64) -> Result<(), Error> {
+        self.demuxer.resume_at(offset).await
     }
 }
 
@@ -152,6 +190,12 @@ impl ReadSamples for MediaSegmentReader {
 
     fn finish(&mut self) -> Result<(), isobmff_structure::Error> {
         MediaSegmentReader::finish(self)
+    }
+}
+
+impl ResumeSamples for MediaSegmentReader {
+    fn resume_at(&mut self, offset: u64) -> Result<(), isobmff_structure::Error> {
+        MediaSegmentReader::resume_at(self, offset)
     }
 }
 

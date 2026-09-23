@@ -7,6 +7,7 @@ use alloc::collections::VecDeque;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::future::poll_fn;
+use core::mem;
 use core::ops::Range;
 use core::pin::Pin;
 use std::io::{self, SeekFrom};
@@ -16,7 +17,8 @@ use isobmff_sample::Sample;
 use isobmff_sequence::EventBytes;
 
 use crate::Error;
-use crate::stack::{CUT_LENGTH, PollOutput, ReadSamples};
+use crate::movie_fragment_random_access::{PROBE_LEN, Probe, Probed};
+use crate::stack::{CUT_LENGTH, PollOutput, ReadSamples, ResumeSamples};
 
 /// Reads off `source` into `into`, and returns how many bytes came
 async fn read<S: AsyncRead + Unpin>(source: &mut S, into: &mut [u8]) -> io::Result<usize> {
@@ -48,6 +50,18 @@ pub(crate) struct Demuxer<S, R> {
     origin: u64,
     handed: u64,
     state: State,
+    locating: Option<Locating>,
+}
+
+/// How far a search for the `mfra` closing the file has come
+///
+/// The part it reads, whether the source was sought to the start of that
+/// part, and how many of its first bytes the cut holds.
+#[derive(Clone, Copy, Debug)]
+struct Locating {
+    probe: Probe,
+    sought: bool,
+    probed: usize,
 }
 
 /// Where the demuxer stands between samples
@@ -82,6 +96,7 @@ impl<S: AsyncRead + AsyncSeek + Unpin, R: ReadSamples> Demuxer<S, R> {
             origin,
             handed: 0,
             state: State::Reading,
+            locating: None,
         })
     }
 
@@ -92,6 +107,7 @@ impl<S: AsyncRead + AsyncSeek + Unpin, R: ReadSamples> Demuxer<S, R> {
 
     /// Takes the next sample the file carries, reading on until one comes
     pub(crate) async fn next(&mut self) -> Option<Result<Sample, Error>> {
+        self.locating = None;
         loop {
             if let Some(sample) = self.reader.poll_sample() {
                 return Some(Ok(sample));
@@ -115,6 +131,96 @@ impl<S: AsyncRead + AsyncSeek + Unpin, R: ReadSamples> Demuxer<S, R> {
 
             if let Err(failure) = stepped {
                 self.state = State::Over(Some(failure));
+            }
+        }
+    }
+
+    /// Finds where the `mfra` closing the file begins, from the `mfro` closing it
+    ///
+    /// The source is left elsewhere, and the demuxer seeks it back to where
+    /// its reading stood as it reads on.
+    ///
+    /// # Errors
+    ///
+    /// * [`Io`](crate::ErrorKind::Io): the source does not seek from its
+    ///   end, or does not read.
+    pub(crate) async fn locate_movie_fragment_random_access(
+        &mut self,
+    ) -> Result<Option<u64>, Error> {
+        // Why not seeking back once the search is done: a future dropped
+        // part way would leave the source moved with nothing to seek it back,
+        // whereas a state that seeks before it reads has whichever call
+        // follows seek it back.
+        self.state = match mem::replace(&mut self.state, State::Restoring) {
+            State::Reading => State::Restoring,
+            State::Fetched(wanted) => State::Fetching(wanted),
+            standing @ (State::Fetching(_) | State::Restoring | State::Over(_)) => standing,
+        };
+
+        let located = self.locate().await;
+        self.locating = None;
+
+        located
+    }
+
+    /// Carries the search for the `mfra` on from where it stands, until it settles
+    async fn locate(&mut self) -> Result<Option<u64>, Error> {
+        let probe_len = usize::try_from(PROBE_LEN).unwrap_or_default();
+        loop {
+            let Some(Locating {
+                probe,
+                sought,
+                probed,
+            }) = self.locating
+            else {
+                let end = seek(&mut self.source, SeekFrom::End(0)).await?;
+                let Some(probe) = Probe::new(end.saturating_sub(self.origin)) else {
+                    return Ok(None);
+                };
+                self.locating = Some(Locating {
+                    probe,
+                    sought: false,
+                    probed: 0,
+                });
+
+                continue;
+            };
+
+            if !sought {
+                let position = self.origin.saturating_add(probe.start());
+                seek(&mut self.source, SeekFrom::Start(position)).await?;
+                self.locating = Some(Locating {
+                    probe,
+                    sought: true,
+                    probed,
+                });
+
+                continue;
+            }
+
+            if probed < probe_len {
+                let into = self.cut.get_mut(probed..probe_len).unwrap_or_default();
+                let filled = read(&mut self.source, into).await?;
+                if filled > 0 {
+                    self.locating = Some(Locating {
+                        probe,
+                        sought,
+                        probed: probed.saturating_add(filled),
+                    });
+
+                    continue;
+                }
+            }
+
+            match probe.handle(self.cut.get(..probed).unwrap_or_default()) {
+                Probed::Next(next) => {
+                    self.locating = Some(Locating {
+                        probe: next,
+                        sought: false,
+                        probed: 0,
+                    });
+                }
+                Probed::Settled(located) => return Ok(located),
             }
         }
     }
@@ -172,13 +278,50 @@ impl<S: AsyncRead + AsyncSeek + Unpin, R: ReadSamples> Demuxer<S, R> {
 
     /// Moves the source to `offset` of the file, and stands in `next` there
     async fn seek_to(&mut self, offset: u64, next: State) -> Result<(), Error> {
-        // Why not checked_add: the offset is one the file was read to, or a
-        // want lying before it, so neither sum can run past what 64 bits carry.
+        // Why not checked_add: the offset is one the file was read to, a want
+        // lying before it, or a resume point checked as it was taken, so no
+        // sum can run past what 64 bits carry.
         let position = SeekFrom::Start(self.origin.saturating_add(offset));
         seek(&mut self.source, position).await?;
         self.state = next;
 
         Ok(())
+    }
+}
+
+impl<S: AsyncRead + AsyncSeek + Unpin, R: ResumeSamples> Demuxer<S, R> {
+    /// Restarts the reader at `offset` of the file, and moves the source there
+    ///
+    /// The reader is restarted before the first await, so a future dropped
+    /// before the source moved is carried on by the call that follows,
+    /// `next` included.
+    ///
+    /// # Errors
+    ///
+    /// * [`Io`](crate::ErrorKind::Io): `offset` lies past what a seek
+    ///   names, which leaves the demuxer as it was, or the source does not
+    ///   seek there.
+    /// * [`Structure`](crate::ErrorKind::Structure): what the reader's
+    ///   `resume_at` makes of the call.
+    ///
+    /// A failure after the offset is checked ends the samples.
+    pub(crate) async fn resume_at(&mut self, offset: u64) -> Result<(), Error> {
+        if self.origin.checked_add(offset).is_none() {
+            return Err(io::Error::from(io::ErrorKind::InvalidInput).into());
+        }
+
+        self.locating = None;
+        self.state = State::Over(None);
+        self.reader.resume_at(offset)?;
+        self.handed = offset;
+        self.state = State::Restoring;
+
+        let restored = self.seek_to(self.handed, State::Reading).await;
+        if restored.is_err() {
+            self.state = State::Over(None);
+        }
+
+        restored
     }
 }
 
@@ -313,7 +456,9 @@ mod tests {
     use futures_executor::block_on;
     use futures_io::{AsyncRead, AsyncSeek, AsyncWrite};
     use futures_util::io::Cursor;
+    use isobmff_boxes::MovieFragmentRandomAccessBox;
     use isobmff_sample::Sample;
+    use isobmff_test_support::written;
 
     use super::{Demuxer, Muxer};
 
@@ -503,6 +648,47 @@ mod tests {
         })
     }
 
+    /// Polls what `call` makes of `demuxer` until it gives, dropping each future where it stood
+    fn carried_on<D, T>(demuxer: &mut D, mut call: impl AsyncFnMut(&mut D) -> T) -> T {
+        loop {
+            if let Some(given) = poll_once(call(demuxer)) {
+                return given;
+            }
+        }
+    }
+
+    /// What `demuxer` hands over, kind for kind, until it is over, dropping each future where it stood
+    fn yielded_carried_on(
+        demuxer: &mut Demuxer<impl AsyncRead + AsyncSeek + Unpin, Scripted>,
+    ) -> Vec<Result<Sample, ErrorKind>> {
+        let mut yielded = Vec::new();
+        while let Some(sample) = carried_on(demuxer, async |demuxer| demuxer.next().await) {
+            yielded.push(sample.map_err(|failure| failure.kind()));
+        }
+
+        yielded
+    }
+
+    /// The two cuts of a file a cut long and then some, closing with an `mfra`
+    fn file_closing_with_an_mfra() -> [Vec<u8>; 2] {
+        [
+            vec![0x11; CUT_LENGTH],
+            written(&MovieFragmentRandomAccessBox::new(vec![])),
+        ]
+    }
+
+    /// A demuxer over `file` on a source standing still at every await, completing one sample with the first cut
+    fn hesitant_over(file: Vec<u8>) -> Demuxer<Hesitant<Cursor<Vec<u8>>>, Scripted> {
+        block_on(Demuxer::new(
+            Hesitant::new(Cursor::new(file)),
+            Scripted {
+                completed_by_input: vec![sample(b"S1")],
+                ..Scripted::default()
+            },
+        ))
+        .unwrap()
+    }
+
     /// A muxer onto a sink taking one byte at a time, which stands still part way through the first chunk
     fn trickling() -> Muxer<Trickle, Queued> {
         Muxer::new(
@@ -649,21 +835,97 @@ mod tests {
         ))
         .unwrap();
 
-        let mut yielded = Vec::new();
-        loop {
-            // The source stands still at every await, so each future is dropped
-            // where it stood and the call that follows carries it on
-            match poll_once(demuxer.next()) {
-                None => continue,
-                Some(None) => break,
-                Some(Some(sample)) => yielded.push(sample.map_err(|failure| failure.kind())),
-            }
-        }
-
-        assert_eq!(yielded, [Ok(sample(b"S1")), Ok(sample(b"S2"))]);
+        assert_eq!(
+            yielded_carried_on(&mut demuxer),
+            [Ok(sample(b"S1")), Ok(sample(b"S2"))]
+        );
         assert_eq!(demuxer.reader().inputs, [b"FILE".to_vec()]);
         assert_eq!(demuxer.reader().data, [(1, b"ILE".to_vec())]);
         assert!(demuxer.reader().finished);
+    }
+
+    #[test]
+    fn a_demuxer_resumed_past_the_end_hands_the_reader_the_file_from_the_offset_on() {
+        let mut source = Cursor::new(b"junkFILE".to_vec());
+        source.set_position(4);
+        let mut demuxer = block_on(Demuxer::new(source, Scripted::default())).unwrap();
+        assert_eq!(yielded(&mut demuxer), []);
+
+        block_on(demuxer.resume_at(2)).unwrap();
+
+        assert_eq!(yielded(&mut demuxer), []);
+        assert_eq!(demuxer.reader().resumed_at, [2]);
+        assert_eq!(demuxer.reader().inputs, [b"FILE".to_vec(), b"LE".to_vec()]);
+    }
+
+    #[test]
+    fn an_offset_past_what_a_seek_names_is_refused_and_leaves_the_demuxer_reading() {
+        let mut source = Cursor::new(b"junkFILE".to_vec());
+        source.set_position(4);
+        let mut demuxer = block_on(Demuxer::new(source, Scripted::default())).unwrap();
+
+        assert_eq!(
+            block_on(demuxer.resume_at(u64::MAX)).map_err(|failure| failure.kind()),
+            Err(ErrorKind::Io(io::ErrorKind::InvalidInput))
+        );
+        assert_eq!(yielded(&mut demuxer), []);
+        assert_eq!(demuxer.reader().resumed_at, []);
+        assert_eq!(demuxer.reader().inputs, [b"FILE".to_vec()]);
+    }
+
+    #[test]
+    fn a_resume_dropped_before_the_source_moved_is_carried_on_by_the_next_sample() {
+        let mut source = Hesitant::new(Cursor::new(b"junkFILE".to_vec()));
+        source.source.set_position(4);
+        let mut demuxer = block_on(Demuxer::new(source, Scripted::default())).unwrap();
+        assert_eq!(yielded_carried_on(&mut demuxer), []);
+
+        assert!(poll_once(demuxer.resume_at(2)).is_none());
+
+        assert_eq!(yielded_carried_on(&mut demuxer), []);
+        assert_eq!(demuxer.reader().resumed_at, [2]);
+        assert_eq!(demuxer.reader().inputs, [b"FILE".to_vec(), b"LE".to_vec()]);
+    }
+
+    #[test]
+    fn a_locate_dropped_at_every_await_finds_the_mfra_and_the_file_reads_on_once() {
+        let [first_cut, mfra] = file_closing_with_an_mfra();
+        let mut demuxer = hesitant_over([first_cut.clone(), mfra.clone()].concat());
+        assert_eq!(
+            carried_on(&mut demuxer, async |demuxer| demuxer.next().await)
+                .map(|sample| sample.map_err(|failure| failure.kind())),
+            Some(Ok(sample(b"S1")))
+        );
+
+        let located = carried_on(&mut demuxer, async |demuxer| {
+            demuxer.locate_movie_fragment_random_access().await
+        });
+
+        assert_eq!(
+            located.map_err(|failure| failure.kind()),
+            Ok(Some(CUT_LENGTH as u64))
+        );
+        assert_eq!(yielded_carried_on(&mut demuxer), []);
+        assert_eq!(demuxer.reader().inputs, [first_cut, mfra]);
+    }
+
+    #[test]
+    fn a_locate_given_up_part_way_leaves_the_file_read_on_from_where_it_was_handed_over_to() {
+        let [first_cut, mfra] = file_closing_with_an_mfra();
+        let mut demuxer = hesitant_over([first_cut.clone(), mfra.clone()].concat());
+        assert_eq!(
+            carried_on(&mut demuxer, async |demuxer| demuxer.next().await)
+                .map(|sample| sample.map_err(|failure| failure.kind())),
+            Some(Ok(sample(b"S1")))
+        );
+
+        let awaits_given_up = 4;
+        for _ in 0..awaits_given_up {
+            assert!(poll_once(demuxer.locate_movie_fragment_random_access()).is_none());
+        }
+
+        assert_eq!(yielded_carried_on(&mut demuxer), []);
+        assert_eq!(demuxer.reader().inputs, [first_cut, mfra]);
     }
 
     #[test]

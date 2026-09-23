@@ -3,14 +3,14 @@
 use core::ops::Range;
 
 use futures_io::{AsyncRead, AsyncSeek, AsyncWrite};
-use isobmff_boxes::{FileTypeBox, MovieBox};
-use isobmff_sample::Sample;
+use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentRandomAccessBox};
+use isobmff_sample::{Sample, SegmentIndex};
 use isobmff_sequence::EventBytes;
 use isobmff_structure::{FragmentedReader, FragmentedWriter};
 
 use crate::Error;
 use crate::driver::{Demuxer, Muxer};
-use crate::stack::{PollOutput, ReadSamples};
+use crate::stack::{PollOutput, ReadSamples, ResumeSamples};
 
 /// Reads the samples a fragmented movie file carries off an asynchronous source that seeks
 ///
@@ -41,8 +41,18 @@ use crate::stack::{PollOutput, ReadSamples};
 ///   where it had already been read to is [`Io`](crate::ErrorKind::Io)
 ///   with [`UnexpectedEof`](std::io::ErrorKind::UnexpectedEof).
 /// * A failure ends the samples: the ones the reader had completed before it
-///   come first, then the failure once, then `None` for good. The end of the
-///   file is the same without the failure.
+///   come first, then the failure once, then `None` until the
+///   reading is resumed. The end of the file is the same without the
+///   failure.
+/// * Where an index points is the caller's to choose. The indexes the file
+///   carries are there to read once they have come:
+///   [`segment_indexes`](Self::segment_indexes) and
+///   [`movie_fragment_random_access`](Self::movie_fragment_random_access).
+///   [`resume_at`](Self::resume_at) restarts the reading at an offset one of
+///   them names, and
+///   [`locate_movie_fragment_random_access`](Self::locate_movie_fragment_random_access)
+///   finds the `mfra` at the end of the file when asked; the demuxer never
+///   seeks an index out on its own.
 /// * Every `async fn` here is cancellation safe: a future dropped where the
 ///   source stood still is carried on by the call that follows.
 ///
@@ -126,9 +136,105 @@ impl<S: AsyncRead + AsyncSeek + Unpin> FragmentedDemuxer<S> {
         self.demuxer.reader().movie()
     }
 
+    /// Returns the subsegments of every `sidx` read so far, as [`FragmentedReader::segment_indexes`] holds them
+    #[must_use]
+    pub fn segment_indexes(&self) -> &[SegmentIndex] {
+        self.demuxer.reader().segment_indexes()
+    }
+
+    /// Returns the random access tables of the file once its `mfra` has been read, as [`FragmentedReader::movie_fragment_random_access`] holds them
+    #[must_use]
+    pub const fn movie_fragment_random_access(&self) -> Option<&MovieFragmentRandomAccessBox> {
+        self.demuxer.reader().movie_fragment_random_access()
+    }
+
     /// Takes the next sample the file carries, reading on until one comes
     pub async fn next(&mut self) -> Option<Result<Sample, Error>> {
         self.demuxer.next().await
+    }
+
+    /// Restarts the reading at `offset` of the file, a place an index names
+    ///
+    /// The reader is resumed at `offset` as [`FragmentedReader::resume_at`]
+    /// resumes it, and the source is sought there from where the file
+    /// begins: the samples not yet taken are dropped, and the ones that come
+    /// next are those the file carries from `offset` on — the `moof`, `sidx`
+    /// or `mfra` it is to start with. The demuxer resumes from reading and
+    /// from the end of the file alike, and from a failure of the source.
+    /// Resuming before the `moov` has been read leaves the fragments with no
+    /// movie to continue, which the reader reports as the file ends. A future
+    /// dropped before the source moved there is carried on by the call that
+    /// follows, [`next`](Self::next) included.
+    ///
+    /// # Errors
+    ///
+    /// * [`Io`](crate::ErrorKind::Io): `offset`, counted from where the
+    ///   source stood when the demuxer was created, lies past `u64::MAX`,
+    ///   which leaves the demuxer as it was, or the source does not seek
+    ///   there.
+    /// * [`Structure`](crate::ErrorKind::Structure): what
+    ///   [`FragmentedReader::resume_at`] makes of the call.
+    ///
+    /// A failure after the offset is checked ends the samples, until a
+    /// resume succeeds.
+    pub async fn resume_at(&mut self, offset: u64) -> Result<(), Error> {
+        self.demuxer.resume_at(offset).await
+    }
+
+    /// Finds the offset of the `mfra` closing the file, by the `mfro` in its last 16 bytes
+    ///
+    /// The source is read at its end, and sought back to where the reading
+    /// stood as the samples read on; a source that does not seek back fails
+    /// the next [`next`](Self::next). The file ends where the source does,
+    /// and closes with an `mfra` when its last bytes are an `mfro` whose
+    /// `size` steps back to the header of an `mfra` spanning the rest of it
+    /// (§8.8.11); `None` comes back otherwise. The `mfra` is not read into a
+    /// value here: resume at its offset and read the file to its end, and
+    /// [`movie_fragment_random_access`](Self::movie_fragment_random_access)
+    /// returns it.
+    /// A future dropped part way is carried on by the call to this that
+    /// follows, and given up by a call to [`next`](Self::next) or
+    /// [`resume_at`](Self::resume_at).
+    ///
+    /// # Errors
+    ///
+    /// * [`Io`](crate::ErrorKind::Io): the source does not seek from its
+    ///   end, or does not seek or read where the `mfro` and the `mfra` lie.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use futures_executor::block_on;
+    /// use futures_util::io::Cursor;
+    ///
+    /// use isobmff_io::FragmentedDemuxer;
+    /// use isobmff_sample::movie_fragment_random_access::sync_sample_at;
+    /// # use isobmff_test_support::indexed_fragmented_file;
+    /// # let file = indexed_fragmented_file();
+    /// # let (bytes, time) = (file.bytes, file.fragment_samples[1][0].decode_time());
+    /// block_on(async {
+    ///     let mut demuxer = FragmentedDemuxer::new(Cursor::new(bytes)).await?;
+    ///
+    ///     // The movie is read as the first sample comes
+    ///     demuxer.next().await.expect("the file carries samples")?;
+    ///
+    ///     // The `mfra` closing the file is read, with no sample coming out of it
+    ///     let mfra = demuxer.locate_movie_fragment_random_access().await?.expect("the file closes with an mfra");
+    ///     demuxer.resume_at(mfra).await?;
+    ///     assert!(demuxer.next().await.is_none());
+    ///
+    ///     // The fragment holding the last sync sample at or before `time` is read from its `moof` on
+    ///     let tfra = &demuxer.movie_fragment_random_access().expect("the mfra has been read").tfra()[0];
+    ///     let sync_sample = sync_sample_at(tfra, time).expect("a sync sample lies at or before");
+    ///     demuxer.resume_at(sync_sample.moof_offset()).await?;
+    ///     let resumed = demuxer.next().await.expect("the fragment carries samples")?;
+    ///     assert_eq!(resumed.decode_time(), time);
+    /// #   Ok::<(), isobmff_io::Error>(())
+    /// })
+    /// # .unwrap();
+    /// ```
+    pub async fn locate_movie_fragment_random_access(&mut self) -> Result<Option<u64>, Error> {
+        self.demuxer.locate_movie_fragment_random_access().await
     }
 }
 
@@ -151,6 +257,12 @@ impl ReadSamples for FragmentedReader {
 
     fn finish(&mut self) -> Result<(), isobmff_structure::Error> {
         FragmentedReader::finish(self)
+    }
+}
+
+impl ResumeSamples for FragmentedReader {
+    fn resume_at(&mut self, offset: u64) -> Result<(), isobmff_structure::Error> {
+        FragmentedReader::resume_at(self, offset)
     }
 }
 

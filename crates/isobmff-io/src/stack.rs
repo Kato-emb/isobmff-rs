@@ -1,4 +1,4 @@
-//! [`ReadSamples`] and [`PollOutput`], what a driver asks of the stack beneath it
+//! [`ReadSamples`], [`ResumeSamples`] and [`PollOutput`], what a driver asks of the stack beneath it
 
 use core::ops::Range;
 
@@ -28,6 +28,16 @@ pub(crate) trait ReadSamples {
     fn finish(&mut self) -> Result<(), isobmff_structure::Error>;
 }
 
+/// The verb of a reader a demuxer restarts at a resume point an index names
+///
+/// It is the reader's own of the same name, with its contract: the readers of
+/// the structures an index points into have it, and the reader of a
+/// non-fragmented movie does not.
+pub(crate) trait ResumeSamples: ReadSamples {
+    /// Restarts the reading at `offset`, the file offset the input handed over next starts at
+    fn resume_at(&mut self, offset: u64) -> Result<(), isobmff_structure::Error>;
+}
+
 /// The one verb of a writer a muxer takes its bytes by
 ///
 /// It is the writer's own of the same name, with its contract.
@@ -47,7 +57,7 @@ pub(crate) mod tests {
     use isobmff_sample::Sample;
     use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
 
-    use super::{PollOutput, ReadSamples};
+    use super::{PollOutput, ReadSamples, ResumeSamples};
 
     /// Reader answering as scripted, and recording what it was handed
     #[derive(Default)]
@@ -59,6 +69,7 @@ pub(crate) mod tests {
         pub(crate) data: Vec<(u64, Vec<u8>)>,
         pub(crate) samples: VecDeque<Sample>,
         pub(crate) finished: bool,
+        pub(crate) resumed_at: Vec<u64>,
     }
 
     impl ReadSamples for Scripted {
@@ -92,6 +103,17 @@ pub(crate) mod tests {
             self.finished = true;
 
             self.finish.take().map_or(Ok(()), Err)
+        }
+    }
+
+    impl ResumeSamples for Scripted {
+        fn resume_at(&mut self, offset: u64) -> Result<(), isobmff_structure::Error> {
+            self.resumed_at.push(offset);
+            self.samples.clear();
+            self.wanted = None;
+            self.finished = false;
+
+            Ok(())
         }
     }
 
