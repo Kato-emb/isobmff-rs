@@ -10,6 +10,12 @@ use isobmff_core::{
 /// Length of the fields that precede the entries
 const FIXED_FIELDS_LEN: u64 = 16;
 
+/// Length of the time and the `moof` offset of one entry when version 0 carries them in 32 bits
+const TIME_AND_OFFSET_LEN_VERSION_0: u64 = 8;
+
+/// Length of the time and the `moof` offset of one entry when version 1 carries them in 64 bits
+const TIME_AND_OFFSET_LEN_VERSION_1: u64 = 16;
+
 /// Mask of the 2 bits one `length_size_of_*` field occupies
 const LENGTH_SIZE_MASK: u8 = 0b11;
 
@@ -205,12 +211,13 @@ impl BoxDecode for TrackFragmentRandomAccessBox {
         let track_id = reader.read_u32()?;
         let &[_, _, _, length_sizes] = reader.read_bytes::<4>()?;
         let declared = u64::from(reader.read_u32()?);
+        let width = Self::field_width(version);
 
         let mut entries = Vec::new();
         while !reader.remainder().is_empty() {
             entries.push(TrackFragmentRandomAccessEntry {
-                time: reader.read_unsigned(Self::field_width(version))?,
-                moof_offset: reader.read_unsigned(Self::field_width(version))?,
+                time: reader.read_unsigned(width)?,
+                moof_offset: reader.read_unsigned(width)?,
                 traf_number: read_number(reader, length_sizes >> 4)?,
                 trun_number: read_number(reader, length_sizes >> 2)?,
                 sample_number: read_number(reader, length_sizes)?,
@@ -228,7 +235,11 @@ impl BoxDecode for TrackFragmentRandomAccessBox {
 
 impl BoxEncode for TrackFragmentRandomAccessBox {
     fn payload_len(&self) -> u64 {
-        let time_and_offset = if self.version() == 0 { 8 } else { 16 };
+        let time_and_offset = if self.version() == 0 {
+            TIME_AND_OFFSET_LEN_VERSION_0
+        } else {
+            TIME_AND_OFFSET_LEN_VERSION_1
+        };
         let numbers = self.length_sizes().map(number_len).iter().sum::<usize>() as u64;
         let entry_len = numbers.saturating_add(time_and_offset);
         let entries = (self.entries.len() as u64).saturating_mul(entry_len);
@@ -238,6 +249,7 @@ impl BoxEncode for TrackFragmentRandomAccessBox {
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         let version = self.version();
+        let width = Self::field_width(version);
         let [traf_length_size, trun_length_size, sample_length_size] = self.length_sizes();
 
         writer.write_bytes(&FullBoxFields::new(version, FullBoxFlags::ZERO).to_bytes())?;
@@ -255,8 +267,8 @@ impl BoxEncode for TrackFragmentRandomAccessBox {
         writer.write_unsigned(FieldWidth::Compact, number_of_entry)?;
 
         for entry in &self.entries {
-            writer.write_unsigned(Self::field_width(version), entry.time)?;
-            writer.write_unsigned(Self::field_width(version), entry.moof_offset)?;
+            writer.write_unsigned(width, entry.time)?;
+            writer.write_unsigned(width, entry.moof_offset)?;
             write_number(writer, entry.traf_number, traf_length_size)?;
             write_number(writer, entry.trun_number, trun_length_size)?;
             write_number(writer, entry.sample_number, sample_length_size)?;

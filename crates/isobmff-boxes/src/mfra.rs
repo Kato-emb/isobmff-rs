@@ -147,27 +147,28 @@ mod tests {
     use crate::tfra::TrackFragmentRandomAccessBox;
     use crate::tfra::tests::track_fragment_random_access;
 
-    /// Writes the box and returns the bytes it occupies
-    fn encoded(random_access: &MovieFragmentRandomAccessBox) -> Vec<u8> {
-        let mut buffer = vec![0; usize::try_from(random_access.encoded_len()).unwrap()];
-        random_access.encode(&mut buffer).unwrap();
+    /// Random access box covering two tracks, the second with no sync sample listed
+    fn movie_fragment_random_access() -> MovieFragmentRandomAccessBox {
+        MovieFragmentRandomAccessBox::new(vec![
+            track_fragment_random_access(),
+            TrackFragmentRandomAccessBox::new(2, Vec::new()),
+        ])
+    }
+
+    /// Writes the payload of the box and returns the bytes it occupies
+    fn encoded_payload(random_access: &MovieFragmentRandomAccessBox) -> Vec<u8> {
+        let mut buffer = vec![0; usize::try_from(random_access.payload_len()).unwrap()];
+        random_access.encode_payload(&mut buffer).unwrap();
 
         buffer
     }
 
-    /// Returns the payload of a box written whole
-    fn payload_of(encoded: &[u8]) -> &[u8] {
-        encoded.get(8..).unwrap()
-    }
-
     #[test]
     fn the_last_child_is_an_offset_box_stating_the_bytes_the_box_occupies() {
-        let random_access = MovieFragmentRandomAccessBox::new(vec![
-            track_fragment_random_access(),
-            TrackFragmentRandomAccessBox::new(2, Vec::new()),
-        ]);
+        let random_access = movie_fragment_random_access();
+        let mut encoded = vec![0; usize::try_from(random_access.encoded_len()).unwrap()];
+        random_access.encode(&mut encoded).unwrap();
 
-        let encoded = encoded(&random_access);
         let last_16_bytes = encoded.get(encoded.len() - 16..).unwrap();
 
         assert_eq!(
@@ -181,16 +182,11 @@ mod tests {
 
     #[test]
     fn a_box_reads_back_as_the_value_that_wrote_it() {
-        let random_access = MovieFragmentRandomAccessBox::new(vec![
-            track_fragment_random_access(),
-            TrackFragmentRandomAccessBox::new(2, Vec::new()),
-        ]);
-
-        let encoded = encoded(&random_access);
+        let payload = encoded_payload(&movie_fragment_random_access());
 
         assert_eq!(
-            MovieFragmentRandomAccessBox::decode_payload(payload_of(&encoded)).unwrap(),
-            random_access
+            MovieFragmentRandomAccessBox::decode_payload(&payload).unwrap(),
+            movie_fragment_random_access()
         );
     }
 
@@ -198,11 +194,11 @@ mod tests {
     fn a_box_covering_no_track_reads_back_as_the_value_that_wrote_it() {
         let random_access = MovieFragmentRandomAccessBox::new(Vec::new());
 
-        let encoded = encoded(&random_access);
+        let payload = encoded_payload(&random_access);
 
-        assert_eq!(encoded, b"\0\0\0\x18mfra\0\0\0\x10mfro\0\0\0\0\0\0\0\x18");
+        assert_eq!(payload, b"\0\0\0\x10mfro\0\0\0\0\0\0\0\x18");
         assert_eq!(
-            MovieFragmentRandomAccessBox::decode_payload(payload_of(&encoded)).unwrap(),
+            MovieFragmentRandomAccessBox::decode_payload(&payload).unwrap(),
             random_access
         );
     }
@@ -219,14 +215,13 @@ mod tests {
     fn the_children_this_box_has_no_field_for_are_kept_unread_ahead_of_the_offset_box() {
         let unknown = b"\0\0\0\x08free";
         let payload = [
-            payload_of(&encoded(&MovieFragmentRandomAccessBox::new(Vec::new()))),
+            encoded_payload(&MovieFragmentRandomAccessBox::new(Vec::new())).as_slice(),
             unknown,
         ]
         .concat();
 
         let random_access = MovieFragmentRandomAccessBox::decode_payload(&payload).unwrap();
-        let encoded = encoded(&random_access);
-        let box_types: Vec<BoxType> = boxes(payload_of(&encoded))
+        let box_types: Vec<BoxType> = boxes(&encoded_payload(&random_access))
             .map(|child| child.unwrap().header().box_type())
             .collect();
 
