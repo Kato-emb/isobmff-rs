@@ -23,9 +23,11 @@
 
 extern crate alloc;
 
+mod avc_sample;
 mod avc_sample_entry;
 mod avcc;
 mod decoder_configuration_record;
+mod error;
 
 pub use avc_sample_entry::{
     AVCCodingName, AVCSampleEntry, Avc1, Avc1SampleEntry, Avc3, Avc3SampleEntry,
@@ -34,3 +36,4 @@ pub use avcc::AVCConfigurationBox;
 pub use decoder_configuration_record::{
     AVCDecoderConfigurationRecord, HighProfileFields, LengthSizeMinusOne,
 };
+pub use error::{Error, ErrorKind};
