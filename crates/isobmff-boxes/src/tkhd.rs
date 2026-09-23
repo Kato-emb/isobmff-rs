@@ -21,6 +21,29 @@ const PAYLOAD_LEN_VERSION_1: u64 = 96;
 /// The version is not held: it selects how wide the times are written, so
 /// [`encode_payload`](BoxEncode::encode_payload) picks the narrower one whenever
 /// the times fit in 32 bits.
+///
+/// # Examples
+///
+/// ```
+/// use isobmff_boxes::TrackHeaderBox;
+/// use isobmff_core::{BoxDecode, BoxEncode, FullBoxFlags, Mp4EpochSeconds, U16F16};
+///
+/// // A 1920 by 1080 video track, enabled and in the movie, placed in front of the others
+/// let epoch = Mp4EpochSeconds::from_seconds(0);
+/// let flags = FullBoxFlags::new(0x3).unwrap();
+/// let width = U16F16::from_integer(1920);
+/// let height = U16F16::from_integer(1080);
+/// let track_header = TrackHeaderBox::new(flags, epoch, epoch, 1, 5_000, width, height)
+///     .with_layer(-1);
+///
+/// // The whole box reads back as the value that wrote it, leaving nothing over
+/// let mut buffer = vec![0; 92];
+/// track_header.encode(&mut buffer).unwrap();
+/// assert_eq!(
+///     TrackHeaderBox::decode(&buffer).unwrap(),
+///     (track_header, b"".as_slice())
+/// );
+/// ```
 #[doc(alias = "tkhd")]
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -41,9 +64,14 @@ pub struct TrackHeaderBox {
 impl TrackHeaderBox {
     /// Creates the box from the declarations that have no template value
     ///
-    /// The `layer`, `alternate_group`, `volume`, `width`, and `height` are left
-    /// at zero and the `matrix` takes the unity matrix the spec gives it. A
-    /// track that is audio, or that has a visual size, states those afterwards.
+    /// A track that is not visual passes zero for `width` and `height`. The
+    /// `layer`, `alternate_group`, and `volume` are left at zero — an audio
+    /// track states the full volume the spec gives it as `I8F8::ONE` — and the
+    /// `matrix` takes the unity matrix the spec gives it;
+    /// [`with_layer`](Self::with_layer),
+    /// [`with_alternate_group`](Self::with_alternate_group),
+    /// [`with_volume`](Self::with_volume), and [`with_matrix`](Self::with_matrix)
+    /// state other values.
     #[must_use]
     pub const fn new(
         flags: FullBoxFlags,
@@ -51,6 +79,8 @@ impl TrackHeaderBox {
         modification_time: Mp4EpochSeconds,
         track_id: u32,
         duration: u64,
+        width: U16F16,
+        height: U16F16,
     ) -> Self {
         Self {
             flags,
@@ -62,9 +92,36 @@ impl TrackHeaderBox {
             alternate_group: 0,
             volume: I8F8::ZERO,
             matrix: Matrix::UNITY,
-            width: U16F16::ZERO,
-            height: U16F16::ZERO,
+            width,
+            height,
         }
+    }
+
+    /// Sets the front-to-back ordering of this track against the others
+    #[must_use]
+    pub const fn with_layer(self, layer: i16) -> Self {
+        Self { layer, ..self }
+    }
+
+    /// Sets the group of tracks only one of which is played at a time
+    #[must_use]
+    pub const fn with_alternate_group(self, alternate_group: i16) -> Self {
+        Self {
+            alternate_group,
+            ..self
+        }
+    }
+
+    /// Sets the playback volume of the track
+    #[must_use]
+    pub const fn with_volume(self, volume: I8F8) -> Self {
+        Self { volume, ..self }
+    }
+
+    /// Sets the transformation matrix the track is rendered under
+    #[must_use]
+    pub const fn with_matrix(self, matrix: Matrix) -> Self {
+        Self { matrix, ..self }
     }
 
     /// Returns the flags stating where the track takes part
@@ -238,7 +295,9 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, Error, FullBoxFlags, Mp4EpochSeconds};
+    use isobmff_core::{
+        BoxDecode, BoxEncode, Error, FullBoxFlags, I8F8, Matrix, Mp4EpochSeconds, U16F16,
+    };
 
     use super::TrackHeaderBox;
 
@@ -255,6 +314,8 @@ mod tests {
             Mp4EpochSeconds::from_seconds(2),
             1,
             duration,
+            U16F16::from_integer(1920),
+            U16F16::from_integer(1080),
         )
     }
 
@@ -269,7 +330,11 @@ mod tests {
     #[test]
     fn a_box_reads_back_as_the_value_that_wrote_it_at_either_version() {
         for duration in [u64::from(u32::MAX), u64::from(u32::MAX) + 1] {
-            let track_header = track_header(duration);
+            let track_header = track_header(duration)
+                .with_layer(-1)
+                .with_alternate_group(2)
+                .with_volume(I8F8::from_raw(0x0080))
+                .with_matrix(Matrix::from_raw([1, -2, 3, -4, 5, -6, 7, -8, 9]));
 
             let payload = encoded_payload(&track_header);
 

@@ -152,18 +152,68 @@ impl VisualSampleEntry {
 
     /// Creates the fields for a picture of `width` by `height` pixels, with
     /// every template field at the value the spec gives it
+    ///
+    /// The resolutions are 72 pixels per inch, the `frame_count` is 1, the
+    /// `compressor_name` is empty, and the `depth` is `0x0018`;
+    /// [`with_horiz_resolution`](Self::with_horiz_resolution),
+    /// [`with_vert_resolution`](Self::with_vert_resolution),
+    /// [`with_frame_count`](Self::with_frame_count),
+    /// [`with_compressor_name`](Self::with_compressor_name), and
+    /// [`with_depth`](Self::with_depth) state other values.
     #[must_use]
     pub const fn new(data_reference_index: u16, width: u16, height: u16) -> Self {
         Self {
             sample_entry: SampleEntry::new(data_reference_index),
             width,
             height,
-            horiz_resolution: U16F16::from_raw(0x0048_0000),
-            vert_resolution: U16F16::from_raw(0x0048_0000),
+            horiz_resolution: U16F16::from_integer(72),
+            vert_resolution: U16F16::from_integer(72),
             frame_count: 1,
             compressor_name: CompressorName::EMPTY,
             depth: 0x0018,
         }
+    }
+
+    /// Sets the horizontal resolution in pixels per inch
+    #[must_use]
+    pub const fn with_horiz_resolution(self, horiz_resolution: U16F16) -> Self {
+        Self {
+            horiz_resolution,
+            ..self
+        }
+    }
+
+    /// Sets the vertical resolution in pixels per inch
+    #[must_use]
+    pub const fn with_vert_resolution(self, vert_resolution: U16F16) -> Self {
+        Self {
+            vert_resolution,
+            ..self
+        }
+    }
+
+    /// Sets how many frames of compressed video each sample holds
+    #[must_use]
+    pub const fn with_frame_count(self, frame_count: u16) -> Self {
+        Self {
+            frame_count,
+            ..self
+        }
+    }
+
+    /// Sets the name of the compressor, for information
+    #[must_use]
+    pub const fn with_compressor_name(self, compressor_name: CompressorName) -> Self {
+        Self {
+            compressor_name,
+            ..self
+        }
+    }
+
+    /// Sets the depth
+    #[must_use]
+    pub const fn with_depth(self, depth: u16) -> Self {
+        Self { depth, ..self }
     }
 
     /// Returns the index of the data reference the samples are read through
@@ -296,20 +346,20 @@ impl AudioSampleEntry {
     /// Length the fields occupy, the `SampleEntry` fields included
     pub const LEN: u64 = 28;
 
-    /// Creates the version 0 fields for audio of `channel_count` channels
-    /// sampled `sample_rate` times a second, at the template sample size of 16
-    /// bits
+    /// Creates the version 0 fields for audio sampled `sample_rate` times a
+    /// second, with every template field at the value the spec gives it
     ///
-    /// The rate is stated whole, as the integer part of the 16.16 field it is
-    /// written to.
+    /// The `channel_count` is 2 and the `sample_size` is 16 bits;
+    /// [`with_channel_count`](Self::with_channel_count) and
+    /// [`with_sample_size`](Self::with_sample_size) state other values.
     #[must_use]
-    pub const fn new(data_reference_index: u16, channel_count: u16, sample_rate: u16) -> Self {
+    pub const fn new(data_reference_index: u16, sample_rate: U16F16) -> Self {
         Self {
             entry_version: 0,
             sample_entry: SampleEntry::new(data_reference_index),
-            channel_count,
+            channel_count: 2,
             sample_size: 16,
-            sample_rate: U16F16::from_raw((sample_rate as u32) << 16),
+            sample_rate,
         }
     }
 
@@ -326,6 +376,24 @@ impl AudioSampleEntry {
             channel_count,
             sample_size: 16,
             sample_rate: U16F16::ONE,
+        }
+    }
+
+    /// Sets the number of channels
+    #[must_use]
+    pub const fn with_channel_count(self, channel_count: u16) -> Self {
+        Self {
+            channel_count,
+            ..self
+        }
+    }
+
+    /// Sets the sample size in bits
+    #[must_use]
+    pub const fn with_sample_size(self, sample_size: u16) -> Self {
+        Self {
+            sample_size,
+            ..self
         }
     }
 
@@ -423,7 +491,8 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_core::{
-        AnyBox, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter,
+        AnyBox, BoxDefinition, BoxEncode, BoxType, CompressorName, Error, FieldReader, FieldWriter,
+        U16F16,
     };
 
     use super::{AudioSampleEntry, SampleEntry, VisualSampleEntry};
@@ -496,7 +565,12 @@ mod tests {
 
     #[test]
     fn visual_fields_read_back_as_the_value_that_wrote_them() {
-        let entry = VisualSampleEntry::new(1, 1920, 1080);
+        let entry = VisualSampleEntry::new(1, 1920, 1080)
+            .with_horiz_resolution(U16F16::from_integer(300))
+            .with_vert_resolution(U16F16::from_integer(150))
+            .with_frame_count(2)
+            .with_compressor_name(CompressorName::new(b"AVC Coding").unwrap())
+            .with_depth(0x0020);
 
         let bytes = encoded_visual(&entry);
 
@@ -548,7 +622,9 @@ mod tests {
     #[test]
     fn audio_fields_read_back_as_the_value_that_wrote_them_at_either_version() {
         for entry in [
-            AudioSampleEntry::new(1, 2, 48_000),
+            AudioSampleEntry::new(1, U16F16::from_integer(48_000))
+                .with_channel_count(1)
+                .with_sample_size(24),
             AudioSampleEntry::new_v1(1, 6),
         ] {
             let bytes = encoded_audio(&entry);
@@ -562,7 +638,7 @@ mod tests {
 
     #[test]
     fn version_0_audio_fields_carry_the_rate_above_the_point() {
-        let bytes = encoded_audio(&AudioSampleEntry::new(1, 2, 48_000));
+        let bytes = encoded_audio(&AudioSampleEntry::new(1, U16F16::from_integer(48_000)));
 
         assert_eq!(
             bytes,
@@ -582,7 +658,7 @@ mod tests {
 
     #[test]
     fn an_audio_entry_version_the_fields_do_not_read_is_rejected() {
-        let mut bytes = encoded_audio(&AudioSampleEntry::new(1, 2, 44_100));
+        let mut bytes = encoded_audio(&AudioSampleEntry::new(1, U16F16::from_integer(44_100)));
         bytes
             .get_mut(8..10)
             .unwrap()

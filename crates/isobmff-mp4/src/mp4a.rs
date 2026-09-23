@@ -23,7 +23,7 @@ use crate::esds::ESDBox;
 ///
 /// ```
 /// use isobmff_boxes::{AudioSampleEntry, SampleDescriptionBox};
-/// use isobmff_core::AnyBox;
+/// use isobmff_core::{AnyBox, U16F16};
 /// use isobmff_mp4::{
 ///     DecoderConfigDescriptor, DecoderSpecificInfo, ESDBox, ESDescriptor, MP4AudioSampleEntry,
 /// };
@@ -39,7 +39,7 @@ use crate::esds::ESDBox;
 /// )
 /// .unwrap();
 /// let entry = MP4AudioSampleEntry::new(
-///     AudioSampleEntry::new(1, 2, 48_000),
+///     AudioSampleEntry::new(1, U16F16::from_integer(48_000)),
 ///     ESDBox::new(ESDescriptor::for_mp4_file(decoder_config)),
 ///     None,
 /// );
@@ -185,7 +185,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_boxes::{AudioSampleEntry, SamplingRateBox};
-    use isobmff_core::{AnyBox, BoxEncode, BoxType, FourCC};
+    use isobmff_core::{AnyBox, BoxEncode, BoxType, FourCC, U16F16};
 
     use super::MP4AudioSampleEntry;
     use crate::error::Error;
@@ -194,7 +194,7 @@ mod tests {
 
     fn entry() -> MP4AudioSampleEntry {
         MP4AudioSampleEntry::new(
-            AudioSampleEntry::new(1, 2, 48_000),
+            AudioSampleEntry::new(1, U16F16::from_integer(48_000)),
             ESDBox::new(aac_descriptor()),
             None,
         )

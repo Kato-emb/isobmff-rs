@@ -39,13 +39,32 @@ pub struct VideoMediaHeaderBox {
 }
 
 impl VideoMediaHeaderBox {
-    /// Creates the box from the composition mode and the colours it works from
+    /// Creates the box with the template values the spec gives every field
+    ///
+    /// The `graphics_mode` is `copy` and the `op_color` is all zero;
+    /// [`with_graphics_mode`](Self::with_graphics_mode) and
+    /// [`with_op_color`](Self::with_op_color) state other values.
     #[must_use]
-    pub const fn new(graphics_mode: u16, op_color: [u16; OP_COLOR_CHANNELS]) -> Self {
+    pub const fn new() -> Self {
+        Self {
+            graphics_mode: 0,
+            op_color: [0; OP_COLOR_CHANNELS],
+        }
+    }
+
+    /// Sets the mode the video of this track is composed with
+    #[must_use]
+    pub const fn with_graphics_mode(self, graphics_mode: u16) -> Self {
         Self {
             graphics_mode,
-            op_color,
+            ..self
         }
+    }
+
+    /// Sets the red, green, and blue a composition mode works from
+    #[must_use]
+    pub const fn with_op_color(self, op_color: [u16; OP_COLOR_CHANNELS]) -> Self {
+        Self { op_color, ..self }
     }
 
     /// Returns the mode the video of this track is composed with
@@ -58,6 +77,12 @@ impl VideoMediaHeaderBox {
     #[must_use]
     pub const fn op_color(&self) -> [u16; OP_COLOR_CHANNELS] {
         self.op_color
+    }
+}
+
+impl Default for VideoMediaHeaderBox {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -118,7 +143,7 @@ pub(crate) mod tests {
 
     /// Media header of a video track composing its image over what is under it
     pub(crate) fn video_media_header() -> VideoMediaHeaderBox {
-        VideoMediaHeaderBox::new(0, [0; 3])
+        VideoMediaHeaderBox::default()
     }
 
     /// Writes the payload of the box and returns the bytes it occupies
@@ -131,7 +156,9 @@ pub(crate) mod tests {
 
     #[test]
     fn a_box_reads_back_as_the_value_that_wrote_it() {
-        let video_media_header = VideoMediaHeaderBox::new(1, [0x1234, 0x5678, 0x9abc]);
+        let video_media_header = VideoMediaHeaderBox::new()
+            .with_graphics_mode(1)
+            .with_op_color([0x1234, 0x5678, 0x9abc]);
 
         let payload = encoded_payload(&video_media_header);
 
@@ -139,6 +166,14 @@ pub(crate) mod tests {
         assert_eq!(
             VideoMediaHeaderBox::decode_payload(&payload).unwrap(),
             video_media_header
+        );
+    }
+
+    #[test]
+    fn a_box_of_the_template_values_writes_copy_over_black() {
+        assert_eq!(
+            encoded_payload(&VideoMediaHeaderBox::default()),
+            b"\0\0\0\x01\0\0\0\0\0\0\0\0"
         );
     }
 
