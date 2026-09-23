@@ -39,6 +39,13 @@ path = "../crates/isobmff-test-support"
 debug = 1
 
 [[bin]]
+name = "avc_sample"
+path = "fuzz_targets/avc_sample.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "avc_sample_entry"
 path = "fuzz_targets/avc_sample_entry.rs"
 test = false

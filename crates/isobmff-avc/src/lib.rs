@@ -1,5 +1,5 @@
-//! Sample entries and decoder configuration of ISO/IEC 14496-15, the carriage
-//! of AVC video in ISO base media files
+//! Sample entries, decoder configuration, and sample format of ISO/IEC
+//! 14496-15, the carriage of AVC video in ISO base media files
 //!
 //! An AVC track describes its samples with an [`AVCSampleEntry`] — [`Avc1`]
 //! when the parameter sets lie in the entry alone, [`Avc3`] when they may also
@@ -13,6 +13,12 @@
 //! AVC coding decodes here through
 //! [`BoxDecode`](isobmff_core::BoxDecode), the coding it names stated as the
 //! type parameter, and goes back in through `AnyBox::from`.
+//!
+//! A sample of an AVC track is its NAL units one after another, each behind a
+//! `NALUnitLength` field of the length the record states:
+//! [`LengthSizeMinusOne::frame`] lays NAL units out as a sample, and
+//! [`LengthSizeMinusOne::nal_units`] reads them back. A sample is not a box,
+//! so what goes wrong in one is reported by this crate's own [`Error`].
 //!
 //! # `no_std`
 //!
