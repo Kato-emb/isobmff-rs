@@ -38,7 +38,9 @@ pub enum ErrorKind {
     MissingDecodeTime,
     /// Data offsets of a track run past what 64 bits carry
     ///
-    /// [`track_id`](crate::Error::track_id) is the track they belong to.
+    /// [`track_id`](crate::Error::track_id) is the track they belong to; for
+    /// the subsegments of a `sidx` (ISO/IEC 14496-12 §8.16.3), the stream the
+    /// index names by its `reference_ID`.
     DataOffsetOverflow,
     /// Fragment carries samples of a track the movie never declared
     ///

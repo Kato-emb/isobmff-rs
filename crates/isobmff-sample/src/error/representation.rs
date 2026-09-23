@@ -13,7 +13,7 @@ pub(super) enum Representation {
     DecodeTimeOverflow { track_id: u32 },
     /// Presentation time running past what 64 bits carry
     PresentationTimeOverflow { track_id: u32 },
-    /// Track fragment stating no decode time where its track stands nowhere known
+    /// Track fragment stating no decode time where the time its track stands at is not known
     MissingDecodeTime { track_id: u32 },
     /// Data offset running past what 64 bits carry
     DataOffsetOverflow { track_id: u32 },

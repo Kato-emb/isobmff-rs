@@ -9,10 +9,10 @@ use crate::error::Error;
 
 /// Subsegments a `sidx` indexes, placed in the file and on the presentation timeline
 ///
-/// The times are in the `timescale` of the index, which is the time scale of
-/// the track it names in files based on ISO/IEC 14496-12, and are
-/// presentation times: they count on from the `earliest_presentation_time`
-/// the index states.
+/// The times are in the `timescale` of the index, which is recommended to
+/// match the time scale of the track it names, the one its `mdhd` declares,
+/// and are presentation times: they count on from the
+/// `earliest_presentation_time` the index states.
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct SegmentIndex {
@@ -105,7 +105,7 @@ impl Subsegment {
 /// Resolves the references of `sidx` to the subsegments they point at, counting from `anchor`
 ///
 /// `anchor` is where the file continues past the `sidx` — the first byte
-/// after the box in the file holding it (ISO/IEC 14496-12 §8.16.3.3). The
+/// after the box in the file holding it (ISO/IEC 14496-12 §8.16.3.1). The
 /// first subsegment starts `first_offset` bytes on from it, each after it
 /// where the one before ends, and each starts on the presentation timeline
 /// where the one before ends.

@@ -21,7 +21,7 @@
 //!   and the media data of a movie fragment, placing each where it arrived,
 //!   and [`SampleTableWriter`] takes them chunk by chunk and lays them out as
 //!   the sample tables of a movie, handing the bytes of each straight back.
-//!   Beside it, the indexes a file may carry are looked up by time:
+//!   Beside resolution, the indexes a file may carry are looked up by time:
 //!   [`segment_index::subsegments`] places the subsegments a `sidx` indexes
 //!   in the file (§8.16.3), and [`movie_fragment_random_access::sync_sample_at`]
 //!   finds the sync sample a `tfra` lists for a time (§8.8.10). Either names
