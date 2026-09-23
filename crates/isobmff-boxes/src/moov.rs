@@ -342,23 +342,28 @@ mod tests {
 
     #[test]
     fn a_fragmented_movie_extends_each_track_and_numbers_the_next_past_the_largest() {
-        let movie = MovieBox::new_fragmented(1_000, vec![video_track(9), video_track(3)]).unwrap();
         let epoch = Mp4EpochSeconds::from_seconds(0);
+
+        assert_eq!(
+            MovieBox::new_fragmented(1_000, vec![video_track(9), video_track(3)]),
+            MovieBox::new(
+                MovieHeaderBox::new(epoch, epoch, 1_000, 0, 10),
+                vec![video_track(9), video_track(3)],
+                MovieExtendsBox::new(vec![
+                    TrackExtendsBox::new(9, 1, 0, 0, SampleFlags::ZERO),
+                    TrackExtendsBox::new(3, 1, 0, 0, SampleFlags::ZERO),
+                ]),
+            )
+        );
+    }
+
+    #[test]
+    fn a_fragmented_movie_reads_back_as_the_value_that_wrote_it() {
+        let movie = MovieBox::new_fragmented(1_000, vec![video_track(9), video_track(3)]).unwrap();
 
         assert_eq!(
             MovieBox::decode_payload(&encoded_payload(&movie)).unwrap(),
             movie
-        );
-        assert_eq!(
-            movie.mvhd(),
-            &MovieHeaderBox::new(epoch, epoch, 1_000, 0, 10)
-        );
-        assert_eq!(
-            movie.mvex().unwrap().trex(),
-            [
-                TrackExtendsBox::new(9, 1, 0, 0, SampleFlags::ZERO),
-                TrackExtendsBox::new(3, 1, 0, 0, SampleFlags::ZERO),
-            ]
         );
     }
 

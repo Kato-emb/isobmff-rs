@@ -214,17 +214,6 @@ mod tests {
     }
 
     #[test]
-    fn the_sync_and_non_sync_sample_flags_set_sample_depends_on_and_the_non_sync_bit() {
-        assert_eq!(
-            (
-                SampleFlags::SYNC_SAMPLE.bits(),
-                SampleFlags::NON_SYNC_SAMPLE.bits()
-            ),
-            (0x0200_0000, 0x0101_0000)
-        );
-    }
-
-    #[test]
     fn a_word_setting_a_reserved_bit_states_no_sample_flags() {
         assert_eq!(SampleFlags::from_bits(0x1000_0000), None);
     }

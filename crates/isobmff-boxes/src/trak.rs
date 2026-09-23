@@ -251,12 +251,18 @@ pub(crate) mod tests {
     };
 
     use super::TrackBox;
+    use crate::chunk_offset::{ChunkOffsetBox, ChunkOffsets};
     use crate::dinf::tests::data_information;
     use crate::hdlr::HandlerBox;
     use crate::mdhd::MediaHeaderBox;
     use crate::mdia::MediaBox;
-    use crate::minf::MediaInformationHeader;
     use crate::minf::tests::media_information;
+    use crate::minf::{MediaInformationBox, MediaInformationHeader};
+    use crate::sample_size::{SampleSizeBox, SampleSizeEntries, SampleSizes};
+    use crate::stbl::SampleTableBox;
+    use crate::stsc::SampleToChunkBox;
+    use crate::stsd::SampleDescriptionBox;
+    use crate::stts::TimeToSampleBox;
     use crate::tkhd::TrackHeaderBox;
     use crate::vmhd::tests::video_media_header;
 
@@ -327,47 +333,50 @@ pub(crate) mod tests {
 
     #[test]
     fn a_video_track_states_what_it_varies_and_fills_the_rest_for_fragments() {
-        let track = video_track(1);
         let epoch = Mp4EpochSeconds::from_seconds(0);
-        let minf = track.mdia().minf();
-        let stbl = minf.stbl();
+        let sample_table = SampleTableBox::new(
+            SampleDescriptionBox::new(vec![sample_entry()]),
+            TimeToSampleBox::new(Vec::new()),
+            SampleToChunkBox::new(Vec::new()),
+            SampleSizes::Stsz(SampleSizeBox::new(SampleSizeEntries::PerSample(Vec::new()))),
+            ChunkOffsets::Stco(ChunkOffsetBox::new(Vec::new())),
+        );
+
+        assert_eq!(
+            video_track(1),
+            TrackBox::new(
+                TrackHeaderBox::new(
+                    FullBoxFlags::new(0x7).unwrap(),
+                    epoch,
+                    epoch,
+                    1,
+                    0,
+                    U16F16::from_integer(1920),
+                    U16F16::from_integer(1080),
+                ),
+                MediaBox::new(
+                    MediaHeaderBox::new(epoch, epoch, 90_000, 0, LanguageCode::UND),
+                    HandlerBox::new(
+                        FourCC::new(*b"vide"),
+                        NullTerminatedString::new(String::from("VideoHandler")).unwrap(),
+                    ),
+                    MediaInformationBox::new(
+                        MediaInformationHeader::Video(video_media_header()),
+                        data_information(),
+                        sample_table,
+                    ),
+                ),
+            )
+        );
+    }
+
+    #[test]
+    fn a_video_track_reads_back_as_the_value_that_wrote_it() {
+        let track = video_track(1);
 
         assert_eq!(
             TrackBox::decode_payload(&encoded_payload(&track)).unwrap(),
             track
         );
-        assert_eq!(
-            track.tkhd(),
-            &TrackHeaderBox::new(
-                FullBoxFlags::new(0x7).unwrap(),
-                epoch,
-                epoch,
-                1,
-                0,
-                U16F16::from_integer(1920),
-                U16F16::from_integer(1080),
-            )
-        );
-        assert_eq!(
-            track.mdia().mdhd(),
-            &MediaHeaderBox::new(epoch, epoch, 90_000, 0, LanguageCode::UND)
-        );
-        assert_eq!(
-            track.mdia().hdlr(),
-            &HandlerBox::new(
-                FourCC::new(*b"vide"),
-                NullTerminatedString::new(String::from("VideoHandler")).unwrap(),
-            )
-        );
-        assert_eq!(
-            minf.media_information_header(),
-            Some(&MediaInformationHeader::Video(video_media_header()))
-        );
-        assert_eq!(minf.dinf(), &data_information());
-        assert_eq!(stbl.stsd().entries(), [sample_entry()]);
-        assert!(stbl.stts().entries().is_empty());
-        assert!(stbl.stsc().entries().is_empty());
-        assert_eq!(stbl.sample_sizes().sizes().count(), 0);
-        assert_eq!(stbl.chunk_offsets().offsets().count(), 0);
     }
 }
