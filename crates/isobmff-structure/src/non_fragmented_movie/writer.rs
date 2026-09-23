@@ -40,9 +40,9 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 ///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
 /// * The `ftyp` handed over is laid down as it stands. Where none was handed
 ///   over, the writer lays its own down before the `moov` or before any
-///   chunk, whichever takes its place first: `iso4`, minor version 0,
-///   compatible `iso4`, the brand the widest layout it lays down requires
-///   (§8.6.4, Annex E.7).
+///   chunk, whichever takes its place first: `iso4` as its `major_brand` and
+///   its one `compatible_brands` entry, with `minor_version` 0, the brand the
+///   widest layout it lays down requires (Annex E.7).
 /// * The movie handed to [`handle_movie`](Self::handle_movie) is a template:
 ///   what it declares of each track is laid down as it stands, but for the
 ///   sample tables, which the writer fills in from the samples of that track

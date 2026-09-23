@@ -24,15 +24,17 @@ use crate::{Error, whole_box_header, whole_payload};
 /// # Contract
 ///
 /// * The order of the boxes is the structure's, held to as they are handed
-///   over: the `ftyp` first, the `moov` once and before any fragment. A box handed over out of that order is
+///   over: the `ftyp` first, the `moov` once and before any fragment. A
+///   box handed over out of that order is
 ///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder) or
 ///   [`DuplicateBox`](crate::ErrorKind::DuplicateBox), and a file
 ///   declared over without a `moov` is
 ///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
 /// * The `ftyp` handed over is laid down as it stands. Where none was handed
-///   over, the writer lays its own down before the `moov`: `iso6`, minor
-///   version 0, compatible `iso6`, the brand the widest layout it lays down
-///   requires (§8.8.7.1, Annex E.9).
+///   over, the writer lays its own down before the `moov`: `iso6` as its
+///   `major_brand` and its one `compatible_brands` entry, with
+///   `minor_version` 0, the brand the widest layout it lays down requires
+///   (§8.8.7.1, Annex E.9).
 /// * A fragment is opened by [`begin_fragment`](Self::begin_fragment),
 ///   carries the samples handed over next, and is laid down by
 ///   [`finish_fragment`](Self::finish_fragment) as the `moof` and the `mdat`
