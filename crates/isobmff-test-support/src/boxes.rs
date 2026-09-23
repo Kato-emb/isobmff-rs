@@ -6,9 +6,10 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{
     ChunkOffsetBox, ChunkOffsets, DataEntry, DataEntryUrlBox, DataInformationBox, DataReferenceBox,
-    FileTypeBox, HandlerBox, MediaBox, MediaDataBox, MediaHeaderBox, MediaInformationBox,
-    MediaInformationHeader, MovieBox, MovieExtendsBox, MovieFragmentBox, MovieFragmentHeaderBox,
-    MovieHeaderBox, SampleDescriptionBox, SampleSizeBox, SampleSizeEntries, SampleSizes,
+    DegradationPriorityEntry, FileTypeBox, HandlerBox, MediaBox, MediaDataBox, MediaHeaderBox,
+    MediaInformationBox, MediaInformationHeader, MovieBox, MovieExtendsBox, MovieFragmentBox,
+    MovieFragmentHeaderBox, MovieHeaderBox, PaddingBitsEntry, SampleDependencyTypeEntry,
+    SampleDescriptionBox, SampleFlags, SampleSizeBox, SampleSizeEntries, SampleSizes,
     SampleTableBox, SampleToChunkBox, SegmentTypeBox, TimeToSampleBox, TrackBox, TrackExtendsBox,
     TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
     TrackFragmentHeaderFlags, TrackHeaderBox, VideoMediaHeaderBox,
@@ -29,6 +30,14 @@ pub const MEDIA_DATA: [u8; 64] = [0x11; 64];
 
 /// Ticks each sample of the synthetic files lasts
 pub const SAMPLE_DURATION: u32 = 3_000;
+
+/// Sample flags stating every field at its highest value, which no synthetic sample states
+pub const EVERY_FIELD_AT_ITS_HIGHEST: SampleFlags = SampleFlags::new(
+    SampleDependencyTypeEntry::new(3, 3, 3, 3).unwrap(),
+    PaddingBitsEntry::new(7).unwrap(),
+    true,
+    DegradationPriorityEntry::new(u16::MAX),
+);
 
 /// User type the vendor box of the file of boxes passed on is declared under
 const USER_TYPE: Uuid = Uuid::new([

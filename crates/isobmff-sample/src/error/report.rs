@@ -90,12 +90,6 @@ impl Error {
         self.representation.fields().composition_time_offset
     }
 
-    /// Returns the flags a sample states, for the kinds that name them
-    #[must_use]
-    pub const fn sample_flags(self) -> Option<u32> {
-        self.representation.fields().sample_flags
-    }
-
     /// Returns the track a chunk holds, for the kinds that set one against the track a sample belongs to
     #[must_use]
     pub const fn established_track_id(self) -> Option<u32> {
@@ -229,13 +223,6 @@ impl fmt::Display for Error {
                 formatter,
                 "sample of track {stated} handed over to a chunk of track {established}"
             ),
-            Representation::UnsupportedSampleFlags {
-                track_id,
-                sample_flags,
-            } => write!(
-                formatter,
-                "track {track_id} states sample flags {sample_flags:#010x}, setting a reserved bit no sample table carries"
-            ),
         }
     }
 }
@@ -288,9 +275,6 @@ impl fmt::Debug for Error {
         }
         if let Some(composition_time_offset) = values.composition_time_offset {
             fields.field("composition_time_offset", &composition_time_offset);
-        }
-        if let Some(sample_flags) = values.sample_flags {
-            fields.field("sample_flags", &sample_flags);
         }
 
         fields.finish()
@@ -390,11 +374,6 @@ mod tests {
 
         assert_eq!(mismatched.track_id(), Some(2));
         assert_eq!(mismatched.established_track_id(), Some(1));
-        assert_eq!(mismatched.sample_flags(), None);
-        assert_eq!(
-            Error::unsupported_sample_flags(1, 0x1000_0000).sample_flags(),
-            Some(0x1000_0000)
-        );
     }
 
     #[test]
@@ -491,10 +470,6 @@ mod tests {
             Error::track_id_mismatch(2, 1).to_string(),
             "sample of track 2 handed over to a chunk of track 1"
         );
-        assert_eq!(
-            Error::unsupported_sample_flags(1, 0x1000_0000).to_string(),
-            "track 1 states sample flags 0x10000000, setting a reserved bit no sample table carries"
-        );
     }
 
     #[test]
@@ -552,10 +527,6 @@ mod tests {
         assert_eq!(
             format!("{:?}", Error::track_id_mismatch(2, 1)),
             "Error { kind: TrackIdMismatch, category: Malformed, track_id: 2, established_track_id: 1 }"
-        );
-        assert_eq!(
-            format!("{:?}", Error::unsupported_sample_flags(1, 0x1000_0000)),
-            "Error { kind: UnsupportedSampleFlags, category: Unsupported, track_id: 1, sample_flags: 268435456 }"
         );
     }
 }

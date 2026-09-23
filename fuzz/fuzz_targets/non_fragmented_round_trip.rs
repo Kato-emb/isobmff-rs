@@ -21,7 +21,7 @@
 
 #![no_main]
 
-use isobmff::boxes::{MovieBox, MovieHeaderBox};
+use isobmff::boxes::{MovieBox, MovieHeaderBox, SampleFlags};
 use isobmff::core::Mp4EpochSeconds;
 use isobmff::sample::Sample;
 use isobmff::structure::{Error, ErrorKind, NonFragmentedReader, NonFragmentedWriter};
@@ -171,7 +171,7 @@ fn laid_out(input: &Input<'_>) -> Vec<Vec<Sample>> {
                         decode_time,
                         u32::from(stated.duration),
                         0,
-                        0,
+                        SampleFlags::ZERO,
                         SAMPLE_DESCRIPTION_INDEX,
                         data.to_vec(),
                     ))
@@ -253,7 +253,15 @@ fn drained_into(writer: &mut NonFragmentedWriter, file: &mut Vec<u8>) {
 
 /// A sample of the first track, for the calls a refused or finished writer takes
 fn a_sample() -> Sample {
-    Sample::new(TRACK_IDS[0], 0, 1, 0, 0, SAMPLE_DESCRIPTION_INDEX, Vec::new())
+    Sample::new(
+        TRACK_IDS[0],
+        0,
+        1,
+        0,
+        SampleFlags::ZERO,
+        SAMPLE_DESCRIPTION_INDEX,
+        Vec::new(),
+    )
 }
 
 /// The chunks carrying samples, laid down again with the movie before the media data by the fixture

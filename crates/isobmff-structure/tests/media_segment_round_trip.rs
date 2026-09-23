@@ -10,11 +10,11 @@ mod reading;
 #[cfg(test)]
 mod tests {
     use super::reading::samples_of;
-    use isobmff_boxes::{MovieBox, MovieExtendsBox, MovieHeaderBox, TrackExtendsBox};
+    use isobmff_boxes::{MovieBox, MovieExtendsBox, MovieHeaderBox, SampleFlags, TrackExtendsBox};
     use isobmff_core::Mp4EpochSeconds;
     use isobmff_sample::Sample;
     use isobmff_structure::MediaSegmentWriter;
-    use isobmff_test_support::{segment_type, track};
+    use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, segment_type, track};
 
     /// Ticks a second the media of the movie is timed in
     const TIMESCALE: u32 = 90_000;
@@ -22,7 +22,8 @@ mod tests {
     /// Movie of two tracks the segment continues, which no fragment falls back on
     fn movie() -> MovieBox {
         let epoch = Mp4EpochSeconds::from_seconds(0);
-        let never_fallen_back_on = |track_id| TrackExtendsBox::new(track_id, 9, 1, 1, u32::MAX);
+        let never_fallen_back_on =
+            |track_id| TrackExtendsBox::new(track_id, 9, 1, 1, EVERY_FIELD_AT_ITS_HIGHEST);
 
         MovieBox::new(
             MovieHeaderBox::new(epoch, epoch, TIMESCALE, 0, 3),
@@ -39,10 +40,27 @@ mod tests {
     /// audio sample of the first fragment lies between two video samples, so
     /// the fragment declares its samples in another order than they lie in.
     fn two_track_fragments() -> Vec<Vec<Sample>> {
-        let video =
-            |decode_time, data: &[u8]| Sample::new(1, decode_time, 3_000, 0, 0, 1, data.to_vec());
+        let video = |decode_time, data: &[u8]| {
+            Sample::new(
+                1,
+                decode_time,
+                3_000,
+                0,
+                SampleFlags::ZERO,
+                1,
+                data.to_vec(),
+            )
+        };
         let audio = |decode_time, offset, data: &[u8]| {
-            Sample::new(2, decode_time, 1_024, offset, 0, 1, data.to_vec())
+            Sample::new(
+                2,
+                decode_time,
+                1_024,
+                offset,
+                SampleFlags::ZERO,
+                1,
+                data.to_vec(),
+            )
         };
 
         vec![

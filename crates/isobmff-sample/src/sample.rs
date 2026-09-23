@@ -3,6 +3,8 @@
 use alloc::vec::Vec;
 use core::ops::Range;
 
+use isobmff_boxes::SampleFlags;
+
 /// One sample of one track, with the bytes it is carried as
 ///
 /// A sample is what a presentation is made of — ISO/IEC 14496-12 §3.1.14 has it
@@ -19,11 +21,12 @@ use core::ops::Range;
 /// (§8.6.1.3), a `trun` row without the field (§8.8.8) — is composed when it is
 /// decoded, and carries an offset of zero.
 ///
-/// The `sample_flags` are carried as the wire holds them, the bit layout of
-/// §8.8.3.1. A sample table states their fields in tables of their own —
-/// `sdtp`, `padb`, `stss` and `stdp` — and a field the track carries no table
-/// for is zero, but for the sync samples: every sample of a track without an
-/// `stss` (§8.6.2) is one, and leaves `sample_is_non_sync_sample` clear.
+/// The `sample_flags` are a [`SampleFlags`], the fields §8.8.3.1 lays out,
+/// which cannot state a reserved bit. A sample table states those fields in
+/// tables of their own — `sdtp`, `padb`, `stss` and `stdp` — and a field the
+/// track carries no table for is zero, but for the sync samples: every sample
+/// of a track without an `stss` (§8.6.2) is one, and leaves
+/// `sample_is_non_sync_sample` clear.
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Sample {
@@ -31,7 +34,7 @@ pub struct Sample {
     decode_time: u64,
     sample_duration: u32,
     sample_composition_time_offset: i64,
-    sample_flags: u32,
+    sample_flags: SampleFlags,
     sample_description_index: u32,
     data: Vec<u8>,
 }
@@ -44,7 +47,7 @@ impl Sample {
         decode_time: u64,
         sample_duration: u32,
         sample_composition_time_offset: i64,
-        sample_flags: u32,
+        sample_flags: SampleFlags,
         sample_description_index: u32,
         data: Vec<u8>,
     ) -> Self {
@@ -85,7 +88,7 @@ impl Sample {
 
     /// Returns the flags of this sample, which state how it may be decoded
     #[must_use]
-    pub const fn sample_flags(&self) -> u32 {
+    pub const fn sample_flags(&self) -> SampleFlags {
         self.sample_flags
     }
 
@@ -129,7 +132,7 @@ pub struct SampleExtent {
     decode_time: u64,
     sample_duration: u32,
     sample_composition_time_offset: i64,
-    sample_flags: u32,
+    sample_flags: SampleFlags,
     sample_description_index: u32,
     data_reference_index: u16,
     extent: Range<u64>,
@@ -147,7 +150,7 @@ impl SampleExtent {
         decode_time: u64,
         sample_duration: u32,
         sample_composition_time_offset: i64,
-        sample_flags: u32,
+        sample_flags: SampleFlags,
         sample_description_index: u32,
         data_reference_index: u16,
         extent: Range<u64>,
@@ -190,7 +193,7 @@ impl SampleExtent {
 
     /// Returns the flags of the sample, which state how it may be decoded
     #[must_use]
-    pub const fn sample_flags(&self) -> u32 {
+    pub const fn sample_flags(&self) -> SampleFlags {
         self.sample_flags
     }
 

@@ -73,7 +73,7 @@ use crate::{Error, WholeBoxReader};
 /// # Examples
 ///
 /// ```
-/// use isobmff_boxes::TrackExtendsBox;
+/// use isobmff_boxes::{SampleFlags, TrackExtendsBox};
 /// use isobmff_sample::Sample;
 /// use isobmff_structure::{MediaSegmentReader, MediaSegmentWriter};
 /// # use isobmff_test_support::{fragmented_movie, segment_type};
@@ -81,8 +81,8 @@ use crate::{Error, WholeBoxReader};
 /// let mut writer = MediaSegmentWriter::new();
 /// writer.handle_segment_type(segment_type())?;
 /// writer.begin_fragment(1)?;
-/// writer.handle_sample(Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec()))?;
-/// writer.handle_sample(Sample::new(1, 1_024, 1_024, 0, 0, 1, b"DATA".to_vec()))?;
+/// writer.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
+/// writer.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
 /// writer.finish_fragment()?;
 /// writer.finish()?;
 ///
@@ -93,7 +93,7 @@ use crate::{Error, WholeBoxReader};
 /// }
 ///
 /// // The segment is handed over as it arrives, against the movie it continues
-/// let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0));
+/// let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO));
 /// let mut reader = MediaSegmentReader::new(movie);
 /// for arriving in segment.chunks(7) {
 ///     reader.handle_input(arriving)?;

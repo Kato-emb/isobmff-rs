@@ -65,13 +65,14 @@ use crate::sample::{Sample, SampleExtent};
 /// # Examples
 ///
 /// ```
+/// use isobmff_boxes::SampleFlags;
 /// use isobmff_sample::{Sample, SampleExtent, SampleReader};
 ///
 /// let mut reader = SampleReader::new();
 ///
 /// // Bytes arriving before the extent that names them are dropped
 /// reader.handle_data(100, b"ABCD")?;
-/// reader.handle_sample_extent(SampleExtent::new(1, 0, 1_024, 0, 0, 1, 1, 100..104))?;
+/// reader.handle_sample_extent(SampleExtent::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, 1, 100..104))?;
 /// assert_eq!(reader.poll_sample(), None);
 ///
 /// // The reader names what it lacks, and the sample is whole once handed it
@@ -79,7 +80,7 @@ use crate::sample::{Sample, SampleExtent};
 /// reader.handle_data(100, b"ABCD")?;
 /// assert_eq!(
 ///     reader.poll_sample(),
-///     Some(Sample::new(1, 0, 1_024, 0, 0, 1, b"ABCD".to_vec()))
+///     Some(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"ABCD".to_vec()))
 /// );
 /// assert_eq!(reader.wanted_extent(), None);
 /// reader.finish()?;
@@ -487,18 +488,28 @@ mod tests {
     use alloc::vec::Vec;
     use core::ops::Range;
 
+    use isobmff_boxes::SampleFlags;
+
     use super::SampleReader;
     use crate::error::Error;
     use crate::sample::{Sample, SampleExtent};
 
     /// Extent of a sample of track 1 as the tests here declare it
     fn extent(decode_time: u64, data: Range<u64>) -> SampleExtent {
-        SampleExtent::new(1, decode_time, 1_024, 0, 0, 1, 1, data)
+        SampleExtent::new(1, decode_time, 1_024, 0, SampleFlags::ZERO, 1, 1, data)
     }
 
     /// Sample of track 1 as [`extent`] declares it
     fn sample(decode_time: u64, data: &[u8]) -> Sample {
-        Sample::new(1, decode_time, 1_024, 0, 0, 1, data.to_vec())
+        Sample::new(
+            1,
+            decode_time,
+            1_024,
+            0,
+            SampleFlags::ZERO,
+            1,
+            data.to_vec(),
+        )
     }
 
     /// Reader holding the extents given, none of them met

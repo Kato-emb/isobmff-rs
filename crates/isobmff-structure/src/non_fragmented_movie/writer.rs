@@ -75,6 +75,7 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 /// # Examples
 ///
 /// ```
+/// use isobmff_boxes::SampleFlags;
 /// use isobmff_sample::Sample;
 /// use isobmff_structure::{NonFragmentedReader, NonFragmentedWriter};
 /// # use isobmff_test_support::{file_type, unfragmented_movie};
@@ -85,10 +86,10 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 ///
 /// // Two chunks of track 1, each laid down as its own `mdat`
 /// writer.begin_chunk()?;
-/// writer.handle_sample(Sample::new(1, 0, 3_000, 0, 0, 1, b"SAMP".to_vec()))?;
-/// writer.handle_sample(Sample::new(1, 3_000, 3_000, 0, 0, 1, b"DATA".to_vec()))?;
+/// writer.handle_sample(Sample::new(1, 0, 3_000, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
+/// writer.handle_sample(Sample::new(1, 3_000, 3_000, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
 /// writer.begin_chunk()?;
-/// writer.handle_sample(Sample::new(1, 6_000, 3_000, 0, 0, 1, b"LAST".to_vec()))?;
+/// writer.handle_sample(Sample::new(1, 6_000, 3_000, 0, SampleFlags::ZERO, 1, b"LAST".to_vec()))?;
 /// writer.finish()?;
 ///
 /// // The bytes are drained as the writer hands them over
@@ -394,7 +395,7 @@ impl Default for NonFragmentedWriter {
 mod tests {
     use alloc::vec::Vec;
 
-    use isobmff_boxes::{FileTypeBox, MovieBox};
+    use isobmff_boxes::{FileTypeBox, MovieBox, SampleFlags};
     use isobmff_core::BoxDefinition;
     use isobmff_sample::Sample;
     use isobmff_test_support::{file_type, unfragmented_movie};
@@ -404,7 +405,7 @@ mod tests {
 
     /// A sample of the track the movie declares
     fn sample() -> Sample {
-        Sample::new(1, 0, 3_000, 0, 0, 1, b"SAMP".to_vec())
+        Sample::new(1, 0, 3_000, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec())
     }
 
     #[test]
@@ -477,7 +478,15 @@ mod tests {
         writer.handle_movie(unfragmented_movie()).unwrap();
         writer.begin_chunk().unwrap();
         writer
-            .handle_sample(Sample::new(7, 0, 3_000, 0, 0, 1, b"SAMP".to_vec()))
+            .handle_sample(Sample::new(
+                7,
+                0,
+                3_000,
+                0,
+                SampleFlags::ZERO,
+                1,
+                b"SAMP".to_vec(),
+            ))
             .unwrap();
 
         assert_eq!(

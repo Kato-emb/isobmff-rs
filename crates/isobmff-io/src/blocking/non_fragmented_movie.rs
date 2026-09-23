@@ -143,6 +143,7 @@ impl<S: Read + Seek> Iterator for NonFragmentedDemuxer<S> {
 /// ```
 /// use std::io::Cursor;
 ///
+/// use isobmff_boxes::SampleFlags;
 /// use isobmff_io::blocking::{NonFragmentedDemuxer, NonFragmentedMuxer};
 /// use isobmff_sample::Sample;
 /// # use isobmff_test_support::{file_type, unfragmented_movie};
@@ -154,10 +155,10 @@ impl<S: Read + Seek> Iterator for NonFragmentedDemuxer<S> {
 ///
 /// // Two chunks of track 1, written to the file as they come
 /// muxer.begin_chunk()?;
-/// muxer.handle_sample(Sample::new(1, 0, 3_000, 0, 0, 1, b"SAMP".to_vec()))?;
-/// muxer.handle_sample(Sample::new(1, 3_000, 3_000, 0, 0, 1, b"DATA".to_vec()))?;
+/// muxer.handle_sample(Sample::new(1, 0, 3_000, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
+/// muxer.handle_sample(Sample::new(1, 3_000, 3_000, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
 /// muxer.begin_chunk()?;
-/// muxer.handle_sample(Sample::new(1, 6_000, 3_000, 0, 0, 1, b"LAST".to_vec()))?;
+/// muxer.handle_sample(Sample::new(1, 6_000, 3_000, 0, SampleFlags::ZERO, 1, b"LAST".to_vec()))?;
 /// muxer.finish()?;
 ///
 /// // Read back, the samples come out as they were laid down
@@ -242,6 +243,7 @@ mod tests {
     use alloc::vec::Vec;
     use std::io;
 
+    use isobmff_boxes::SampleFlags;
     use isobmff_sample::Sample;
     use isobmff_test_support::{SAMPLE_DURATION, file_type, non_fragmented_file, written};
 
@@ -263,7 +265,7 @@ mod tests {
                 0,
                 SAMPLE_DURATION,
                 0,
-                0,
+                SampleFlags::ZERO,
                 1,
                 b"SAMP".to_vec()
             )]

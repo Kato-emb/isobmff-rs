@@ -24,10 +24,10 @@ mod driving;
 mod presentations;
 
 pub use boxes::{
-    MEDIA_DATA, SAMPLE_DURATION, external_data_reference, file_running_to_its_end, file_type,
-    fragmented_file, fragmented_movie, framed, movie_fragment, non_fragmented_file, sample_table,
-    segment_file, segment_type, self_contained_data_reference, track, track_described_by,
-    track_laid_out, track_reading_from, unfragmented_movie, written,
+    EVERY_FIELD_AT_ITS_HIGHEST, MEDIA_DATA, SAMPLE_DURATION, external_data_reference,
+    file_running_to_its_end, file_type, fragmented_file, fragmented_movie, framed, movie_fragment,
+    non_fragmented_file, sample_table, segment_file, segment_type, self_contained_data_reference,
+    track, track_described_by, track_laid_out, track_reading_from, unfragmented_movie, written,
 };
 pub use driving::{bytes_of, events_of, payloads_fused, polled};
 pub use presentations::{

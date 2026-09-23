@@ -5,6 +5,8 @@ use isobmff_core::{
     FullBoxFlags,
 };
 
+use crate::data_types::{SampleFlags, read_sample_flags};
+
 /// Length of the fields every fragment header carries
 const FIXED_FIELDS_LEN: u64 = 8;
 
@@ -141,7 +143,7 @@ pub struct TrackFragmentHeaderBox {
     sample_description_index: Option<u32>,
     default_sample_duration: Option<u32>,
     default_sample_size: Option<u32>,
-    default_sample_flags: Option<u32>,
+    default_sample_flags: Option<SampleFlags>,
 }
 
 impl TrackFragmentHeaderBox {
@@ -158,7 +160,7 @@ impl TrackFragmentHeaderBox {
         sample_description_index: Option<u32>,
         default_sample_duration: Option<u32>,
         default_sample_size: Option<u32>,
-        default_sample_flags: Option<u32>,
+        default_sample_flags: Option<SampleFlags>,
     ) -> Self {
         let bits = flags.bits()
             | presence(base_data_offset.is_some(), BASE_DATA_OFFSET_PRESENT)
@@ -249,7 +251,7 @@ impl TrackFragmentHeaderBox {
 
     /// Returns the sample flags a sample of this fragment carries
     #[must_use]
-    pub const fn default_sample_flags(&self) -> Option<u32> {
+    pub const fn default_sample_flags(&self) -> Option<SampleFlags> {
         self.default_sample_flags
     }
 }
@@ -276,6 +278,8 @@ impl BoxDecode for TrackFragmentHeaderBox {
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box
     ///   declares a version other than 0.
+    /// * [`UnsupportedFlags`](isobmff_core::ErrorKind::UnsupportedFlags): the
+    ///   `default_sample_flags` set a bit §8.8.3.1 reserves.
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the payload
     ///   ends inside a field the flags state.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
@@ -310,7 +314,7 @@ impl BoxDecode for TrackFragmentHeaderBox {
             None
         };
         let default_sample_flags = if carries(DEFAULT_SAMPLE_FLAGS_PRESENT) {
-            Some(reader.read_u32()?)
+            Some(read_sample_flags(reader)?)
         } else {
             None
         };
@@ -357,7 +361,7 @@ impl BoxEncode for TrackFragmentHeaderBox {
             self.sample_description_index,
             self.default_sample_duration,
             self.default_sample_size,
-            self.default_sample_flags,
+            self.default_sample_flags.map(SampleFlags::bits),
         ]
         .into_iter()
         .flatten()
@@ -377,6 +381,9 @@ mod tests {
     use isobmff_core::{BoxDecode, BoxEncode, Error, FullBoxFlags};
 
     use super::{TrackFragmentHeaderBox, TrackFragmentHeaderFlags};
+    use crate::{
+        DegradationPriorityEntry, PaddingBitsEntry, SampleDependencyTypeEntry, SampleFlags,
+    };
 
     /// Fragment header carrying every optional field the box defines
     fn every_field() -> TrackFragmentHeaderBox {
@@ -387,7 +394,12 @@ mod tests {
             Some(1),
             Some(1_024),
             Some(512),
-            Some(0x0100_0000),
+            Some(SampleFlags::new(
+                SampleDependencyTypeEntry::new(0, 1, 0, 0).unwrap(),
+                PaddingBitsEntry::default(),
+                false,
+                DegradationPriorityEntry::default(),
+            )),
         )
     }
 
@@ -511,6 +523,17 @@ mod tests {
         assert_eq!(
             TrackFragmentHeaderBox::decode_payload(&payload),
             Err(Error::trailing_payload(32, 36))
+        );
+    }
+
+    #[test]
+    fn default_sample_flags_setting_a_reserved_bit_are_rejected() {
+        let mut payload = encoded_payload(&every_field());
+        *payload.get_mut(28).unwrap() = 0x10;
+
+        assert_eq!(
+            TrackFragmentHeaderBox::decode_payload(&payload),
+            Err(Error::unsupported_flags(0x1000_0000))
         );
     }
 

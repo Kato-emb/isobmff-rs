@@ -10,20 +10,33 @@ mod reading;
 #[cfg(test)]
 mod tests {
     use super::reading::samples_of;
-    use isobmff_boxes::{MovieBox, MovieExtendsBox, MovieHeaderBox, TrackExtendsBox};
+    use isobmff_boxes::{
+        DegradationPriorityEntry, MovieBox, MovieExtendsBox, MovieHeaderBox, PaddingBitsEntry,
+        SampleDependencyTypeEntry, SampleFlags, TrackExtendsBox,
+    };
     use isobmff_core::Mp4EpochSeconds;
     use isobmff_sample::Sample;
     use isobmff_structure::FragmentedWriter;
-    use isobmff_test_support::{file_type, track};
+    use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type, track};
 
     /// Ticks a second the media of the movie is timed in
     const TIMESCALE: u32 = 90_000;
 
     /// Flags the samples of the video track state, but for the first of a fragment
-    const NOT_A_SYNC_SAMPLE: u32 = 0x0101_0000;
+    const NOT_A_SYNC_SAMPLE: SampleFlags = SampleFlags::new(
+        SampleDependencyTypeEntry::new(0, 1, 0, 0).unwrap(),
+        PaddingBitsEntry::new(0).unwrap(),
+        true,
+        DegradationPriorityEntry::new(0),
+    );
 
     /// Flags the first sample of a fragment of the video track states
-    const SYNC_SAMPLE: u32 = 0x0200_0000;
+    const SYNC_SAMPLE: SampleFlags = SampleFlags::new(
+        SampleDependencyTypeEntry::new(0, 2, 0, 0).unwrap(),
+        PaddingBitsEntry::new(0).unwrap(),
+        false,
+        DegradationPriorityEntry::new(0),
+    );
 
     /// Movie of two tracks continued in fragments
     ///
@@ -32,7 +45,8 @@ mod tests {
     /// of these values would mean the fragment left it to the movie.
     fn movie() -> MovieBox {
         let epoch = Mp4EpochSeconds::from_seconds(0);
-        let never_fallen_back_on = |track_id| TrackExtendsBox::new(track_id, 9, 1, 1, u32::MAX);
+        let never_fallen_back_on =
+            |track_id| TrackExtendsBox::new(track_id, 9, 1, 1, EVERY_FIELD_AT_ITS_HIGHEST);
 
         MovieBox::new(
             MovieHeaderBox::new(epoch, epoch, TIMESCALE, 0, 3),
@@ -54,7 +68,15 @@ mod tests {
             Sample::new(1, decode_time, 3_000, 0, sample_flags, 1, data.to_vec())
         };
         let audio = |decode_time, offset, data: &[u8]| {
-            Sample::new(2, decode_time, 1_024, offset, 0, 1, data.to_vec())
+            Sample::new(
+                2,
+                decode_time,
+                1_024,
+                offset,
+                SampleFlags::ZERO,
+                1,
+                data.to_vec(),
+            )
         };
 
         vec![

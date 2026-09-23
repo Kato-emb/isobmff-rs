@@ -11,7 +11,7 @@ use isobmff_core::{
 const FIXED_FIELDS_LEN: u64 = 8;
 
 /// Largest number of padding bits one entry states
-const PAD_MAXIMUM: u8 = 0b111;
+pub(crate) const PAD_MAXIMUM: u8 = 0b111;
 
 /// One entry of the table a [`PaddingBitsBox`] holds
 ///

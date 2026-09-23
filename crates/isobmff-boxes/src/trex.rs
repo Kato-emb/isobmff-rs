@@ -5,6 +5,8 @@ use isobmff_core::{
     FullBoxFlags,
 };
 
+use crate::data_types::{SampleFlags, read_sample_flags};
+
 /// Length of the payload, which has no version-dependent field
 const PAYLOAD_LEN: u64 = 24;
 
@@ -21,7 +23,7 @@ pub struct TrackExtendsBox {
     default_sample_description_index: u32,
     default_sample_duration: u32,
     default_sample_size: u32,
-    default_sample_flags: u32,
+    default_sample_flags: SampleFlags,
 }
 
 impl TrackExtendsBox {
@@ -32,7 +34,7 @@ impl TrackExtendsBox {
         default_sample_description_index: u32,
         default_sample_duration: u32,
         default_sample_size: u32,
-        default_sample_flags: u32,
+        default_sample_flags: SampleFlags,
     ) -> Self {
         Self {
             track_id,
@@ -69,7 +71,7 @@ impl TrackExtendsBox {
 
     /// Returns the sample flags a sample of this track carries
     #[must_use]
-    pub const fn default_sample_flags(&self) -> u32 {
+    pub const fn default_sample_flags(&self) -> SampleFlags {
         self.default_sample_flags
     }
 }
@@ -83,6 +85,8 @@ impl BoxDecode for TrackExtendsBox {
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box
     ///   declares a version other than 0.
+    /// * [`UnsupportedFlags`](isobmff_core::ErrorKind::UnsupportedFlags): the
+    ///   `default_sample_flags` set a bit §8.8.3.1 reserves.
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the payload
     ///   ends inside a field of the box.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
@@ -95,7 +99,7 @@ impl BoxDecode for TrackExtendsBox {
         let default_sample_description_index = reader.read_u32()?;
         let default_sample_duration = reader.read_u32()?;
         let default_sample_size = reader.read_u32()?;
-        let default_sample_flags = reader.read_u32()?;
+        let default_sample_flags = read_sample_flags(reader)?;
 
         Ok(Self {
             track_id,
@@ -118,7 +122,7 @@ impl BoxEncode for TrackExtendsBox {
         writer.write_u32(self.default_sample_description_index)?;
         writer.write_u32(self.default_sample_duration)?;
         writer.write_u32(self.default_sample_size)?;
-        writer.write_u32(self.default_sample_flags)?;
+        writer.write_u32(self.default_sample_flags.bits())?;
 
         Ok(())
     }
@@ -131,10 +135,34 @@ mod tests {
     use isobmff_core::{BoxDecode, BoxEncode, Error};
 
     use super::TrackExtendsBox;
+    use crate::data_types::SampleFlags;
+    use crate::{DegradationPriorityEntry, PaddingBitsEntry, SampleDependencyTypeEntry};
+
+    #[test]
+    fn default_sample_flags_setting_a_reserved_bit_are_rejected() {
+        let mut payload = vec![0; 24];
+        *payload.get_mut(20).unwrap() = 0x80;
+
+        assert_eq!(
+            TrackExtendsBox::decode_payload(&payload),
+            Err(Error::unsupported_flags(0x8000_0000))
+        );
+    }
 
     #[test]
     fn a_box_reads_back_as_the_value_that_wrote_it() {
-        let track_extends = TrackExtendsBox::new(1, 1, 1_024, 0, 0x0001_0000);
+        let track_extends = TrackExtendsBox::new(
+            1,
+            1,
+            1_024,
+            0,
+            SampleFlags::new(
+                SampleDependencyTypeEntry::default(),
+                PaddingBitsEntry::default(),
+                true,
+                DegradationPriorityEntry::default(),
+            ),
+        );
         let mut payload = vec![0; 24];
 
         track_extends.encode_payload(&mut payload).unwrap();

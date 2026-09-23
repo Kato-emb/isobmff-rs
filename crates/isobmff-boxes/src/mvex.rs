@@ -124,11 +124,12 @@ pub(crate) mod tests {
     use isobmff_core::{BoxDecode, BoxEncode, BoxType, Error};
 
     use super::MovieExtendsBox;
+    use crate::data_types::SampleFlags;
     use crate::trex::TrackExtendsBox;
 
     /// Movie extends box declaring the defaults of one track
     pub(crate) fn movie_extends() -> MovieExtendsBox {
-        MovieExtendsBox::new(vec![TrackExtendsBox::new(1, 1, 0, 0, 0)]).unwrap()
+        MovieExtendsBox::new(vec![TrackExtendsBox::new(1, 1, 0, 0, SampleFlags::ZERO)]).unwrap()
     }
 
     /// Writes the payload of the box and returns the bytes it occupies
@@ -157,8 +158,8 @@ pub(crate) mod tests {
     #[test]
     fn every_track_default_is_kept_in_the_order_it_came() {
         let both = MovieExtendsBox::new(vec![
-            TrackExtendsBox::new(1, 1, 0, 0, 0),
-            TrackExtendsBox::new(2, 1, 1_024, 0, 0),
+            TrackExtendsBox::new(1, 1, 0, 0, SampleFlags::ZERO),
+            TrackExtendsBox::new(2, 1, 1_024, 0, SampleFlags::ZERO),
         ])
         .unwrap();
 

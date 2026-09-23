@@ -94,6 +94,7 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// # Examples
 ///
 /// ```
+/// use isobmff_boxes::SampleFlags;
 /// use isobmff_core::BoxEncode as _;
 /// use isobmff_sample::{MovieFragmentWriter, Sample};
 ///
@@ -101,8 +102,8 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///
 /// // One fragment of two samples of track 1, lasting 1024 units each
 /// writer.begin_fragment(1)?;
-/// writer.handle_sample(Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec()))?;
-/// writer.handle_sample(Sample::new(1, 1_024, 1_024, 0, 0, 1, b"DATA".to_vec()))?;
+/// writer.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
+/// writer.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
 /// let (movie_fragment, media_data) = writer.finish_fragment()?;
 /// assert_eq!(media_data, b"SAMPDATA");
 ///
@@ -285,13 +286,23 @@ impl Default for MovieFragmentWriter {
 
 #[cfg(test)]
 mod tests {
+    use isobmff_boxes::SampleFlags;
+
     use super::MovieFragmentWriter;
     use crate::error::Error;
     use crate::sample::Sample;
 
     /// Sample of `track_id` at `decode_time` lasting 1024 units, carrying `data`
     pub(super) fn sample(track_id: u32, decode_time: u64, data: &[u8]) -> Sample {
-        Sample::new(track_id, decode_time, 1_024, 0, 0, 1, data.to_vec())
+        Sample::new(
+            track_id,
+            decode_time,
+            1_024,
+            0,
+            SampleFlags::ZERO,
+            1,
+            data.to_vec(),
+        )
     }
 
     #[test]

@@ -30,12 +30,14 @@
 use core::hint::black_box;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
-use isobmff_boxes::{FileTypeBox, MovieBox, MovieExtendsBox, MovieHeaderBox, TrackExtendsBox};
+use isobmff_boxes::{
+    FileTypeBox, MovieBox, MovieExtendsBox, MovieHeaderBox, SampleFlags, TrackExtendsBox,
+};
 use isobmff_core::{BoxHeader, BoxType, Mp4EpochSeconds};
 use isobmff_sample::{MovieFragmentWriter, Sample};
 use isobmff_sequence::{BoxEvent, BoxReader, BoxWriter};
 use isobmff_structure::{FragmentedReader, FragmentedWriter};
-use isobmff_test_support::{file_type, track};
+use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type, track};
 
 /// Ticks every sample of the benchmarked movies lasts
 const SAMPLE_DURATION: u32 = 1_000;
@@ -98,7 +100,9 @@ impl Composition {
             self.track_ids().map(track).collect(),
             MovieExtendsBox::new(
                 self.track_ids()
-                    .map(|track_id| TrackExtendsBox::new(track_id, 9, 1, 1, u32::MAX))
+                    .map(|track_id| {
+                        TrackExtendsBox::new(track_id, 9, 1, 1, EVERY_FIELD_AT_ITS_HIGHEST)
+                    })
                     .collect(),
             ),
         )
@@ -120,7 +124,7 @@ impl Composition {
                             *decode_time,
                             SAMPLE_DURATION,
                             0,
-                            0,
+                            SampleFlags::ZERO,
                             1,
                             vec![0xab; self.sample_len],
                         );

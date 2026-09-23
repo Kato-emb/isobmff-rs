@@ -25,17 +25,20 @@
 
 #![no_main]
 
-use isobmff::boxes::{MovieBox, TrackExtendsBox};
+use isobmff::boxes::{MovieBox, SampleFlags, TrackExtendsBox};
 use isobmff::sample::Sample;
 use isobmff::structure::{Error, ErrorKind, FragmentedReader, FragmentedWriter};
-use isobmff_test_support::file_type;
+use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
 
 #[path = "helpers/movie.rs"]
 mod movie;
+#[path = "helpers/sample_flags.rs"]
+mod sample_flags;
 
 use movie::{SAMPLE_DESCRIPTION_INDEX, movie_of, track_id_of};
+use sample_flags::sample_flags;
 
 /// Tracks the samples of a run are laid out over
 const TRACK_COUNT: usize = 2;
@@ -73,7 +76,8 @@ struct Stated {
     /// Whether the sample belongs to the second of the tracks the movie declares
     second_track: bool,
     duration: u16,
-    flags: u32,
+    #[arbitrary(with = sample_flags)]
+    flags: SampleFlags,
     composition_time_offset: i16,
     /// Bytes of the sample data this sample takes
     length: u8,
@@ -105,7 +109,7 @@ fuzz_target!(|input: Input<'_>| {
 /// Movie of two fragmented tracks, stating defaults no fragment falls back on
 fn movie() -> Option<MovieBox> {
     let never_fallen_back_on =
-        |position| TrackExtendsBox::new(track_id_of(position), 9, 1, 1, u32::MAX);
+        |position| TrackExtendsBox::new(track_id_of(position), 9, 1, 1, EVERY_FIELD_AT_ITS_HIGHEST);
 
     movie_of((0..TRACK_COUNT).map(never_fallen_back_on).collect())
 }
@@ -244,7 +248,15 @@ fn drained_into(writer: &mut FragmentedWriter, file: &mut Vec<u8>) {
 
 /// A sample of the first track, for the calls a refused or finished writer takes
 fn a_sample() -> Sample {
-    Sample::new(track_id_of(0), 0, 1, 0, 0, SAMPLE_DESCRIPTION_INDEX, Vec::new())
+    Sample::new(
+        track_id_of(0),
+        0,
+        1,
+        0,
+        SampleFlags::ZERO,
+        SAMPLE_DESCRIPTION_INDEX,
+        Vec::new(),
+    )
 }
 
 /// The samples `file` carries, read back through the structure it was laid down as

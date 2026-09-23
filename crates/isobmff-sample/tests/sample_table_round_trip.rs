@@ -2,7 +2,10 @@
 
 #[cfg(test)]
 mod tests {
-    use isobmff_boxes::{MovieBox, MovieHeaderBox, SampleDescriptionBox};
+    use isobmff_boxes::{
+        DegradationPriorityEntry, MovieBox, MovieHeaderBox, PaddingBitsEntry,
+        SampleDependencyTypeEntry, SampleDescriptionBox, SampleFlags,
+    };
     use isobmff_core::{AnyBox, BoxType, Mp4EpochSeconds};
     use isobmff_sample::sample_table::sample_extents;
     use isobmff_sample::{Sample, SampleExtent, SampleTableWriter, SampleTables};
@@ -10,7 +13,14 @@ mod tests {
 
     /// Sample of `track_id` at `decode_time` lasting `sample_duration` units, carrying `data`
     fn sample(track_id: u32, decode_time: u64, sample_duration: u32, data: &[u8]) -> Sample {
-        stating(track_id, decode_time, sample_duration, 0, 0, data)
+        stating(
+            track_id,
+            decode_time,
+            sample_duration,
+            0,
+            SampleFlags::ZERO,
+            data,
+        )
     }
 
     /// Sample of `track_id` as [`sample`] makes it, stating `sample_composition_time_offset` and `sample_flags`
@@ -19,7 +29,7 @@ mod tests {
         decode_time: u64,
         sample_duration: u32,
         sample_composition_time_offset: i64,
-        sample_flags: u32,
+        sample_flags: SampleFlags,
         data: &[u8],
     ) -> Sample {
         Sample::new(
@@ -82,12 +92,51 @@ mod tests {
             (
                 1_000,
                 vec![
-                    stating(1, 0, 100, 200, 0x0a6a_0003, b"AAAAAAAA"),
-                    stating(1, 100, 100, -100, 0x0101_0000, b"BBBB"),
+                    stating(
+                        1,
+                        0,
+                        100,
+                        200,
+                        SampleFlags::new(
+                            SampleDependencyTypeEntry::new(2, 2, 1, 2).unwrap(),
+                            PaddingBitsEntry::new(5).unwrap(),
+                            false,
+                            DegradationPriorityEntry::new(3),
+                        ),
+                        b"AAAAAAAA",
+                    ),
+                    stating(
+                        1,
+                        100,
+                        100,
+                        -100,
+                        SampleFlags::new(
+                            SampleDependencyTypeEntry::new(0, 1, 0, 0).unwrap(),
+                            PaddingBitsEntry::default(),
+                            true,
+                            DegradationPriorityEntry::default(),
+                        ),
+                        b"BBBB",
+                    ),
                 ],
             ),
             (2_000, vec![sample(2, 0, 1_000, b"CC")]),
-            (3_000, vec![stating(1, 200, 50, 0, 0x0001_0000, b"DDDD")]),
+            (
+                3_000,
+                vec![stating(
+                    1,
+                    200,
+                    50,
+                    0,
+                    SampleFlags::new(
+                        SampleDependencyTypeEntry::default(),
+                        PaddingBitsEntry::default(),
+                        true,
+                        DegradationPriorityEntry::default(),
+                    ),
+                    b"DDDD",
+                )],
+            ),
             (
                 4_000,
                 vec![sample(2, 1_000, 1_000, b"EE"), sample(2, 2_000, 500, b"F")],

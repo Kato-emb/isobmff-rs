@@ -30,6 +30,9 @@
 
 use core::ops::Range;
 
+use isobmff::boxes::{
+    DegradationPriorityEntry, PaddingBitsEntry, SampleDependencyTypeEntry, SampleFlags,
+};
 use isobmff::sample::{Error, ErrorKind, Sample, SampleExtent, SampleReader};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
@@ -150,7 +153,12 @@ fn handed_over<'file>(steps: &[Step], file: &'file [u8], pass: Pass) -> Vec<Hand
                     u64::from(decode_time),
                     u32::from(sample_duration),
                     i64::from(sample_composition_time_offset),
-                    u32::from(sample_flags),
+                    SampleFlags::new(
+                        SampleDependencyTypeEntry::default(),
+                        PaddingBitsEntry::default(),
+                        false,
+                        DegradationPriorityEntry::new(u16::from(sample_flags)),
+                    ),
                     1,
                     1,
                     start..start.saturating_add(u64::from(len)),

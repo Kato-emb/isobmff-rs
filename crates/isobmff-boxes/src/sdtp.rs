@@ -11,7 +11,7 @@ use isobmff_core::{
 const FIXED_FIELDS_LEN: u64 = 4;
 
 /// Largest value one of the 2-bit fields of an entry holds
-const FIELD_MAXIMUM: u8 = 0b11;
+pub(crate) const FIELD_MAXIMUM: u8 = 0b11;
 
 /// One entry of the table a [`SampleDependencyTypeBox`] holds
 ///

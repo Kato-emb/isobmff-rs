@@ -370,6 +370,7 @@ pub(crate) mod tests {
     use super::SampleTableBox;
     use crate::chunk_offset::{ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsets};
     use crate::ctts::{CompositionOffsetBox, CompositionOffsetEntry};
+    use crate::data_types::CompositionTimeOffset;
     use crate::padb::{PaddingBitsBox, PaddingBitsEntry};
     use crate::sample_size::{CompactSampleSizeBox, SampleSizeBox, SampleSizeEntries, SampleSizes};
     use crate::sdtp::{SampleDependencyTypeBox, SampleDependencyTypeEntry};
@@ -378,7 +379,6 @@ pub(crate) mod tests {
     use crate::stsd::SampleDescriptionBox;
     use crate::stss::{SyncSampleBox, SyncSampleEntry};
     use crate::stts::TimeToSampleBox;
-    use crate::trun::CompositionTimeOffset;
 
     /// Sample table of a track whose samples are all described by fragments
     pub(crate) fn sample_table() -> SampleTableBox {

@@ -17,6 +17,7 @@ mod btrt;
 mod chunk_offset;
 mod ctts;
 mod data_entry;
+mod data_types;
 mod dinf;
 mod dref;
 mod ftyp;
@@ -61,6 +62,7 @@ pub use chunk_offset::{
 };
 pub use ctts::{CompositionOffsetBox, CompositionOffsetEntry};
 pub use data_entry::{DataEntry, DataEntryUrlBox, DataEntryUrnBox};
+pub use data_types::{CompositionTimeOffset, SampleFlags};
 pub use dinf::DataInformationBox;
 pub use dref::DataReferenceBox;
 pub use ftyp::FileTypeBox;
@@ -99,7 +101,5 @@ pub use tkhd::TrackHeaderBox;
 pub use traf::TrackFragmentBox;
 pub use trak::TrackBox;
 pub use trex::TrackExtendsBox;
-pub use trun::{
-    CompositionTimeOffset, StatedTrackRunSample, TrackRunBox, TrackRunBuilder, TrackRunSample,
-};
+pub use trun::{StatedTrackRunSample, TrackRunBox, TrackRunBuilder, TrackRunSample};
 pub use vmhd::VideoMediaHeaderBox;

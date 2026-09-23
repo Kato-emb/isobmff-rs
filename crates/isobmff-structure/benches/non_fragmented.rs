@@ -24,7 +24,7 @@
 use core::hint::black_box;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
-use isobmff_boxes::{FileTypeBox, MovieBox};
+use isobmff_boxes::{FileTypeBox, MovieBox, SampleFlags};
 use isobmff_sample::Sample;
 use isobmff_sample::sample_table::sample_extents;
 use isobmff_structure::{NonFragmentedReader, NonFragmentedWriter};
@@ -71,7 +71,7 @@ impl Composition {
                             decode_time,
                             SAMPLE_DURATION,
                             0,
-                            0,
+                            SampleFlags::ZERO,
                             1,
                             vec![0xab; self.sample_len],
                         );

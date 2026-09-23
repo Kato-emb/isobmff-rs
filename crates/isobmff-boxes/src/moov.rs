@@ -228,6 +228,7 @@ mod tests {
 
     use super::{MovieBox, MovieExtendsBox, TrackExtendsBox};
     use crate::chunk_offset::ChunkOffsets;
+    use crate::data_types::SampleFlags;
     use crate::mvex::tests::movie_extends;
     use crate::mvhd::tests::movie_header;
     use crate::sample_size::{SampleSizeBox, SampleSizes};
@@ -244,7 +245,7 @@ mod tests {
 
     /// Extends box setting the defaults of a track the movie does not declare
     fn extends_of_another_track() -> MovieExtendsBox {
-        MovieExtendsBox::new(vec![TrackExtendsBox::new(7, 1, 0, 0, 0)]).unwrap()
+        MovieExtendsBox::new(vec![TrackExtendsBox::new(7, 1, 0, 0, SampleFlags::ZERO)]).unwrap()
     }
 
     /// Writes one child whole and returns the bytes it occupies

@@ -52,7 +52,7 @@ use crate::stack::{PollOutput, ReadSamples};
 /// use futures_executor::block_on;
 /// use futures_util::io::Cursor;
 ///
-/// use isobmff_boxes::TrackExtendsBox;
+/// use isobmff_boxes::{SampleFlags, TrackExtendsBox};
 /// use isobmff_io::{FragmentedDemuxer, FragmentedMuxer};
 /// use isobmff_sample::Sample;
 /// # use isobmff_test_support::{file_type, fragmented_movie};
@@ -61,10 +61,10 @@ use crate::stack::{PollOutput, ReadSamples};
 ///     let mut file = Vec::new();
 ///     let mut muxer = FragmentedMuxer::new(&mut file);
 ///     muxer.handle_file_type(file_type()).await?;
-///     muxer.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0))).await?;
+///     muxer.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO))).await?;
 ///     muxer.begin_fragment(1).await?;
-///     muxer.handle_sample(Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec())).await?;
-///     muxer.handle_sample(Sample::new(1, 1_024, 1_024, 0, 0, 1, b"DATA".to_vec())).await?;
+///     muxer.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec())).await?;
+///     muxer.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec())).await?;
 ///     muxer.finish_fragment().await?;
 ///     muxer.finish().await?;
 ///
@@ -185,7 +185,7 @@ impl ReadSamples for FragmentedReader {
 /// ```
 /// use futures_executor::block_on;
 ///
-/// use isobmff_boxes::TrackExtendsBox;
+/// use isobmff_boxes::{SampleFlags, TrackExtendsBox};
 /// use isobmff_io::FragmentedMuxer;
 /// use isobmff_sample::Sample;
 /// # use isobmff_test_support::{file_type, fragmented_movie};
@@ -196,12 +196,12 @@ impl ReadSamples for FragmentedReader {
 ///     // A file opening with its brands and the movie its fragments continue
 ///     let mut muxer = FragmentedMuxer::new(&mut file);
 ///     muxer.handle_file_type(file_type()).await?;
-///     muxer.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, 0))).await?;
+///     muxer.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO))).await?;
 ///
 ///     // One fragment of two samples of track 1, written to the file as it is closed
 ///     muxer.begin_fragment(1).await?;
-///     muxer.handle_sample(Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec())).await?;
-///     muxer.handle_sample(Sample::new(1, 1_024, 1_024, 0, 0, 1, b"DATA".to_vec())).await?;
+///     muxer.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec())).await?;
+///     muxer.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec())).await?;
 ///     muxer.finish_fragment().await?;
 ///     muxer.finish().await
 /// })

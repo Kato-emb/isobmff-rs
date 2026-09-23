@@ -84,8 +84,6 @@ pub(super) enum Representation {
     NoChunkOpen,
     /// Sample belonging to another track than the chunk that is open holds
     TrackIdMismatch { stated: u32, established: u32 },
-    /// Sample setting a reserved bit of its flags, which no sample table carries
-    UnsupportedSampleFlags { track_id: u32, sample_flags: u32 },
 }
 
 /// Values a failure carries, laid flat, with `None` where its kind carries no such value
@@ -104,7 +102,6 @@ pub(super) struct Fields {
     pub(super) reached_decode_time: Option<u64>,
     pub(super) data_offset: Option<u64>,
     pub(super) composition_time_offset: Option<i64>,
-    pub(super) sample_flags: Option<u32>,
 }
 
 impl Fields {
@@ -124,7 +121,6 @@ impl Fields {
         reached_decode_time: None,
         data_offset: None,
         composition_time_offset: None,
-        sample_flags: None,
     };
 }
 
@@ -160,7 +156,6 @@ impl Representation {
             }
             Self::NoChunkOpen => ErrorKind::NoChunkOpen,
             Self::TrackIdMismatch { .. } => ErrorKind::TrackIdMismatch,
-            Self::UnsupportedSampleFlags { .. } => ErrorKind::UnsupportedSampleFlags,
         }
     }
 
@@ -186,8 +181,7 @@ impl Representation {
             | Self::SampleSizeLimitExceeded { .. }
             | Self::SampleSizeOutOfRange { .. }
             | Self::DataOffsetOutOfRange { .. }
-            | Self::CompositionTimeOffsetOutOfRange { .. }
-            | Self::UnsupportedSampleFlags { .. } => Category::Unsupported,
+            | Self::CompositionTimeOffsetOutOfRange { .. } => Category::Unsupported,
             Self::AlreadyFinished
             | Self::NoFragmentOpen
             | Self::FragmentStillOpen
@@ -285,14 +279,6 @@ impl Representation {
                 composition_time_offset: Some(offset),
                 ..Fields::EMPTY
             },
-            Self::UnsupportedSampleFlags {
-                track_id,
-                sample_flags,
-            } => Fields {
-                track_id: Some(track_id),
-                sample_flags: Some(sample_flags),
-                ..Fields::EMPTY
-            },
             Self::TrackIdMismatch {
                 stated,
                 established,
@@ -373,10 +359,6 @@ mod tests {
         assert_eq!(
             Error::track_id_mismatch(2, 1).category(),
             Category::Malformed
-        );
-        assert_eq!(
-            Error::unsupported_sample_flags(1, 0x1000_0000).category(),
-            Category::Unsupported
         );
         assert_eq!(
             Error::from(isobmff_core::Error::unsupported_version(2)).category(),

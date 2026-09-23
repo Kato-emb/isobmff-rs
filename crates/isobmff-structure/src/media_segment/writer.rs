@@ -54,6 +54,7 @@ use crate::{Error, whole_box_header, whole_payload};
 /// # Examples
 ///
 /// ```
+/// use isobmff_boxes::SampleFlags;
 /// use isobmff_sample::Sample;
 /// use isobmff_structure::MediaSegmentWriter;
 /// # use isobmff_test_support::segment_type;
@@ -63,8 +64,8 @@ use crate::{Error, whole_box_header, whole_payload};
 ///
 /// // One fragment of two samples of track 1, lasting 1024 units each
 /// writer.begin_fragment(1)?;
-/// writer.handle_sample(Sample::new(1, 0, 1_024, 0, 0, 1, b"SAMP".to_vec()))?;
-/// writer.handle_sample(Sample::new(1, 1_024, 1_024, 0, 0, 1, b"DATA".to_vec()))?;
+/// writer.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
+/// writer.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
 /// writer.finish_fragment()?;
 /// writer.finish()?;
 ///

@@ -2,8 +2,9 @@
 
 use alloc::vec::Vec;
 
+use crate::data_types::{CompositionTimeOffset, SampleFlags};
 use crate::tfhd::TrackFragmentHeaderBox;
-use crate::trun::{CompositionTimeOffset, TrackRunBox, TrackRunSample};
+use crate::trun::{TrackRunBox, TrackRunSample};
 
 /// One sample of a run as it is handed to a [`TrackRunBuilder`], every field stated
 ///
@@ -15,7 +16,7 @@ use crate::trun::{CompositionTimeOffset, TrackRunBox, TrackRunSample};
 pub struct StatedTrackRunSample {
     sample_duration: u32,
     sample_size: u32,
-    sample_flags: u32,
+    sample_flags: SampleFlags,
     sample_composition_time_offset: CompositionTimeOffset,
 }
 
@@ -25,7 +26,7 @@ impl StatedTrackRunSample {
     pub const fn new(
         sample_duration: u32,
         sample_size: u32,
-        sample_flags: u32,
+        sample_flags: SampleFlags,
         sample_composition_time_offset: CompositionTimeOffset,
     ) -> Self {
         Self {
@@ -50,7 +51,7 @@ impl StatedTrackRunSample {
 
     /// Returns the flags of the sample
     #[must_use]
-    pub const fn sample_flags(&self) -> u32 {
+    pub const fn sample_flags(&self) -> SampleFlags {
         self.sample_flags
     }
 
@@ -79,15 +80,15 @@ impl StatedTrackRunSample {
 /// # Examples
 ///
 /// ```
-/// use isobmff_boxes::{CompositionTimeOffset, TrackFragmentHeaderFlags, TrackFragmentHeaderBox, TrackRunBuilder, StatedTrackRunSample, TrackRunSample};
+/// use isobmff_boxes::{CompositionTimeOffset, SampleFlags, TrackFragmentHeaderFlags, TrackFragmentHeaderBox, TrackRunBuilder, StatedTrackRunSample, TrackRunSample};
 ///
 /// // Two samples lasting 1024 units each, of different sizes
 /// let offset = CompositionTimeOffset::new(0).unwrap();
-/// let mut run = TrackRunBuilder::new(StatedTrackRunSample::new(1_024, 4, 0, offset));
-/// run.push(StatedTrackRunSample::new(1_024, 2, 0, offset)).unwrap();
+/// let mut run = TrackRunBuilder::new(StatedTrackRunSample::new(1_024, 4, SampleFlags::ZERO, offset));
+/// run.push(StatedTrackRunSample::new(1_024, 2, SampleFlags::ZERO, offset)).unwrap();
 ///
 /// // Against a header stating the duration and the flags, only the size is written per row
-/// let header = TrackFragmentHeaderBox::new(TrackFragmentHeaderFlags::ZERO, 1, None, None, Some(1_024), None, Some(0));
+/// let header = TrackFragmentHeaderBox::new(TrackFragmentHeaderFlags::ZERO, 1, None, None, Some(1_024), None, Some(SampleFlags::ZERO));
 /// let track_run = run.build(Some(100), &header);
 /// assert_eq!(
 ///     track_run.samples(),
@@ -98,8 +99,8 @@ impl StatedTrackRunSample {
 /// );
 ///
 /// // A row whose offset no version writes beside the ones held is handed back
-/// let mut signed = TrackRunBuilder::new(StatedTrackRunSample::new(1_024, 4, 0, CompositionTimeOffset::new(-8).unwrap()));
-/// let wide = StatedTrackRunSample::new(1_024, 4, 0, CompositionTimeOffset::new(i64::from(u32::MAX)).unwrap());
+/// let mut signed = TrackRunBuilder::new(StatedTrackRunSample::new(1_024, 4, SampleFlags::ZERO, CompositionTimeOffset::new(-8).unwrap()));
+/// let wide = StatedTrackRunSample::new(1_024, 4, SampleFlags::ZERO, CompositionTimeOffset::new(i64::from(u32::MAX)).unwrap());
 /// assert_eq!(signed.push(wide), Err(wide));
 /// ```
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -205,11 +206,35 @@ mod tests {
     use alloc::vec;
 
     use super::{StatedTrackRunSample, TrackRunBuilder};
+    use crate::data_types::CompositionTimeOffset;
     use crate::tfhd::{TrackFragmentHeaderBox, TrackFragmentHeaderFlags};
-    use crate::trun::{CompositionTimeOffset, TrackRunBox, TrackRunSample};
+    use crate::trun::{TrackRunBox, TrackRunSample};
+    use crate::{
+        DegradationPriorityEntry, PaddingBitsEntry, SampleDependencyTypeEntry, SampleFlags,
+    };
+
+    /// Flags of a sync sample that depends on no other
+    fn independent() -> SampleFlags {
+        SampleFlags::new(
+            SampleDependencyTypeEntry::new(0, 2, 0, 0).unwrap(),
+            PaddingBitsEntry::default(),
+            false,
+            DegradationPriorityEntry::default(),
+        )
+    }
+
+    /// Flags of a sample that depends on others and is left out of the sync samples
+    fn dependent() -> SampleFlags {
+        SampleFlags::new(
+            SampleDependencyTypeEntry::new(0, 1, 0, 0).unwrap(),
+            PaddingBitsEntry::default(),
+            true,
+            DegradationPriorityEntry::default(),
+        )
+    }
 
     /// Row of a sample lasting 1024 units and occupying 4 bytes, flagged `sample_flags`, composed at `offset`
-    fn row(sample_flags: u32, offset: i64) -> StatedTrackRunSample {
+    fn row(sample_flags: SampleFlags, offset: i64) -> StatedTrackRunSample {
         StatedTrackRunSample::new(
             1_024,
             4,
@@ -222,7 +247,7 @@ mod tests {
     fn header(
         default_sample_duration: Option<u32>,
         default_sample_size: Option<u32>,
-        default_sample_flags: Option<u32>,
+        default_sample_flags: Option<SampleFlags>,
     ) -> TrackFragmentHeaderBox {
         TrackFragmentHeaderBox::new(
             TrackFragmentHeaderFlags::ZERO,
@@ -248,22 +273,25 @@ mod tests {
 
     #[test]
     fn a_row_no_version_writes_beside_the_rows_held_is_handed_back() {
-        let wide = row(0, i64::from(u32::MAX));
-        let negative = row(0, -8);
+        let wide = row(SampleFlags::ZERO, i64::from(u32::MAX));
+        let negative = row(SampleFlags::ZERO, -8);
         let mut holding_negative = TrackRunBuilder::new(negative);
         let mut holding_wide = TrackRunBuilder::new(wide);
 
         assert_eq!(holding_negative.push(wide), Err(wide));
         assert_eq!(holding_wide.push(negative), Err(negative));
-        assert_eq!(holding_negative.push(row(0, 8)), Ok(()));
-        assert_eq!(holding_negative.rows(), [negative, row(0, 8)]);
+        assert_eq!(holding_negative.push(row(SampleFlags::ZERO, 8)), Ok(()));
+        assert_eq!(
+            holding_negative.rows(),
+            [negative, row(SampleFlags::ZERO, 8)]
+        );
     }
 
     #[test]
     fn the_fields_the_header_defaults_cover_are_left_out_of_the_rows() {
         let run = built(
-            &[row(0, 0), row(0, 0)],
-            &header(Some(1_024), Some(4), Some(0)),
+            &[row(SampleFlags::ZERO, 0), row(SampleFlags::ZERO, 0)],
+            &header(Some(1_024), Some(4), Some(SampleFlags::ZERO)),
         );
 
         assert_eq!(
@@ -280,8 +308,8 @@ mod tests {
     #[test]
     fn a_field_a_row_differs_from_its_default_on_is_stated_by_every_row() {
         let run = built(
-            &[row(0, 0), row(0, 0)],
-            &header(Some(512), Some(4), Some(0)),
+            &[row(SampleFlags::ZERO, 0), row(SampleFlags::ZERO, 0)],
+            &header(Some(512), Some(4), Some(SampleFlags::ZERO)),
         );
 
         assert_eq!(
@@ -298,15 +326,15 @@ mod tests {
     #[test]
     fn flags_only_the_first_row_differs_on_are_its_own() {
         let run = built(
-            &[row(0x0200_0000, 0), row(0x0101_0000, 0)],
-            &header(Some(1_024), Some(4), Some(0x0101_0000)),
+            &[row(independent(), 0), row(dependent(), 0)],
+            &header(Some(1_024), Some(4), Some(dependent())),
         );
 
         assert_eq!(
             run,
             TrackRunBox::new(
                 None,
-                Some(0x0200_0000),
+                Some(independent()),
                 vec![TrackRunSample::new(None, None, None, None); 2]
             )
             .unwrap()
@@ -316,8 +344,8 @@ mod tests {
     #[test]
     fn flags_a_later_row_differs_on_are_stated_by_every_row() {
         let run = built(
-            &[row(0x0101_0000, 0), row(0x0200_0000, 0)],
-            &header(Some(1_024), Some(4), Some(0x0101_0000)),
+            &[row(dependent(), 0), row(independent(), 0)],
+            &header(Some(1_024), Some(4), Some(dependent())),
         );
 
         assert_eq!(
@@ -326,8 +354,8 @@ mod tests {
                 None,
                 None,
                 vec![
-                    TrackRunSample::new(None, None, Some(0x0101_0000), None),
-                    TrackRunSample::new(None, None, Some(0x0200_0000), None),
+                    TrackRunSample::new(None, None, Some(dependent()), None),
+                    TrackRunSample::new(None, None, Some(independent()), None),
                 ]
             )
             .unwrap()
@@ -337,8 +365,8 @@ mod tests {
     #[test]
     fn an_offset_other_than_zero_has_every_row_state_one() {
         let run = built(
-            &[row(0, 0), row(0, 8)],
-            &header(Some(1_024), Some(4), Some(0)),
+            &[row(SampleFlags::ZERO, 0), row(SampleFlags::ZERO, 8)],
+            &header(Some(1_024), Some(4), Some(SampleFlags::ZERO)),
         );
 
         assert_eq!(
