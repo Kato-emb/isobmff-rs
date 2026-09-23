@@ -48,7 +48,7 @@ impl SampleFlags {
     /// Flags of a sample that depends on no other and can be decoded first
     ///
     /// The sample is a sync sample (ISO/IEC 14496-12 §8.6.2) whose
-    /// `sample_depends_on` is 2 (§8.8.3.1); its other fields are 0.
+    /// `sample_depends_on` is 2 (§8.6.4.3); its other fields are 0.
     pub const SYNC_SAMPLE: Self = match (
         SampleDependencyTypeEntry::new(0, 2, 0, 0),
         PaddingBitsEntry::new(0),
@@ -68,7 +68,7 @@ impl SampleFlags {
     /// Flags of a sample that depends on others
     ///
     /// The sample is left out of the sync samples (ISO/IEC 14496-12 §8.6.2)
-    /// and its `sample_depends_on` is 1 (§8.8.3.1); its other fields are 0.
+    /// and its `sample_depends_on` is 1 (§8.6.4.3); its other fields are 0.
     pub const NON_SYNC_SAMPLE: Self = match (
         SampleDependencyTypeEntry::new(0, 1, 0, 0),
         PaddingBitsEntry::new(0),
@@ -214,7 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn a_sync_and_a_non_sync_sample_carry_the_words_the_layout_gives_them() {
+    fn the_sync_and_non_sync_sample_flags_set_sample_depends_on_and_the_non_sync_bit() {
         assert_eq!(
             (
                 SampleFlags::SYNC_SAMPLE.bits(),

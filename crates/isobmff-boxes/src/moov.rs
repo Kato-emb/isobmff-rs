@@ -83,9 +83,10 @@ impl MovieBox {
     /// a movie continued in fragments (ISO/IEC 14496-12 Annex A.8) varies and
     /// fills the rest:
     ///
-    /// * `mvhd` (§8.2.2): times and `duration` of 0, a `next_track_id` one
-    ///   greater than the largest `track_id` of `tracks` — all 1s where that is
-    ///   the largest `u32` — and the template values of [`MovieHeaderBox::new`].
+    /// * `mvhd` (§8.2.2): a `creation_time`, `modification_time` and
+    ///   `duration` of 0, a `next_track_id` one greater than the largest
+    ///   `track_id` of `tracks` — left at all 1s when that `track_id` is itself
+    ///   all 1s — and the template values of [`MovieHeaderBox::new`].
     /// * `mvex` (§8.8.1): one `trex` (§8.8.3) for each track, whose samples
     ///   default to the first sample description, a duration and a size of 0,
     ///   and [`SampleFlags::ZERO`].

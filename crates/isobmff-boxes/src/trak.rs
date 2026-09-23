@@ -72,13 +72,15 @@ impl TrackBox {
     /// continued in fragments, whose samples the movie fragments carry:
     ///
     /// * `tkhd` (ISO/IEC 14496-12 §8.3.2.3): the flags `track_enabled`,
-    ///   `track_in_movie` and `track_in_preview`, times and `duration` of 0,
+    ///   `track_in_movie` and `track_in_preview`, a `creation_time`,
+    ///   `modification_time` and `duration` of 0,
     ///   and the template values of [`TrackHeaderBox::new`].
-    /// * `mdhd` (§8.4.2): times and `duration` of 0, and the language `und`.
+    /// * `mdhd` (§8.4.2): a `creation_time`, `modification_time` and
+    ///   `duration` of 0, and the language `und`.
     /// * `hdlr` (§8.4.3): the handler type `vide`, named `VideoHandler`.
     /// * `minf` (§8.4.4): a `vmhd` (§12.1.2) of template values, a `dref`
     ///   (§8.7.2) whose one entry places the media data in this file, and an
-    ///   `stbl` whose `stsd` holds `sample_entry` alone and whose `stts`,
+    ///   `stbl` (§8.5.1) whose `stsd` holds `sample_entry` alone and whose `stts`,
     ///   `stsc`, `stsz` and `stco` are empty.
     ///
     /// # Examples
@@ -135,6 +137,9 @@ impl TrackBox {
             MediaHeaderBox::new(epoch, epoch, timescale, 0, LanguageCode::UND),
             HandlerBox::new(
                 FourCC::new(*b"vide"),
+                // Why not unwrap: the name holds no NUL, so the string always
+                // builds, and the empty name stands in for the panic the lints
+                // forbid.
                 NullTerminatedString::new(String::from(VIDEO_HANDLER_NAME)).unwrap_or_default(),
             ),
             minf,

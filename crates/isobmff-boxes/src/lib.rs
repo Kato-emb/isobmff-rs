@@ -5,9 +5,10 @@
 //! [`BoxEncode`](isobmff_core::BoxEncode) like any other box.
 //!
 //! A box is built by `new`, which states every field the spec gives no
-//! template value; `with_<field>` states a field other than its template value,
-//! and `new_<what>`, such as [`TrackBox::new_video`], states the fields one
-//! kind of box varies and fills the rest.
+//! template value; `with_<field>` states a field at a value other than its
+//! template, and `new_<what>`, such as [`TrackBox::new_video`] or
+//! [`SampleDescriptionBox::new_v1`], states the fields one variant of the box
+//! varies and fills the rest.
 //!
 //! # `no_std`
 //!
