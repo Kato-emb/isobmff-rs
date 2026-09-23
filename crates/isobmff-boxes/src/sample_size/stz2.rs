@@ -27,42 +27,12 @@ pub enum FieldSize {
 }
 
 impl FieldSize {
-    /// Returns the width the `field_size` field declares, for a value it takes
-    const fn from_bits(bits: u8) -> Option<Self> {
-        match bits {
-            4 => Some(Self::Four),
-            8 => Some(Self::Eight),
-            16 => Some(Self::Sixteen),
-            _ => None,
-        }
-    }
-
-    /// Returns the value the `field_size` field declares this width with
-    const fn bits(self) -> u8 {
-        match self {
-            Self::Four => 4,
-            Self::Eight => 8,
-            Self::Sixteen => 16,
-        }
-    }
-
     /// Returns the largest size an entry of this width states
     const fn maximum(self) -> u16 {
         match self {
             Self::Four => 0x0f,
             Self::Eight => 0xff,
             Self::Sixteen => u16::MAX,
-        }
-    }
-
-    /// Returns the narrowest width an entry stating `entry_size` fits
-    const fn narrowest(entry_size: u16) -> Self {
-        if entry_size <= Self::Four.maximum() {
-            Self::Four
-        } else if entry_size <= Self::Eight.maximum() {
-            Self::Eight
-        } else {
-            Self::Sixteen
         }
     }
 }
@@ -161,8 +131,16 @@ impl CompactSampleSizeBox {
             .max()
             .unwrap_or_default();
 
+        let field_size = if widest <= FieldSize::Four.maximum() {
+            FieldSize::Four
+        } else if widest <= FieldSize::Eight.maximum() {
+            FieldSize::Eight
+        } else {
+            FieldSize::Sixteen
+        };
+
         Self {
-            field_size: FieldSize::narrowest(widest),
+            field_size,
             entries,
         }
     }
@@ -202,7 +180,12 @@ impl BoxDecode for CompactSampleSizeBox {
         }
 
         let &[_, _, _, bits] = reader.read_bytes::<4>()?;
-        let field_size = FieldSize::from_bits(bits).ok_or(Error::unsupported_field_size(bits))?;
+        let field_size = match bits {
+            4 => FieldSize::Four,
+            8 => FieldSize::Eight,
+            16 => FieldSize::Sixteen,
+            _ => return Err(Error::unsupported_field_size(bits)),
+        };
         let declared = u64::from(reader.read_u32()?);
 
         let mut entries = Vec::new();
@@ -251,7 +234,12 @@ impl BoxEncode for CompactSampleSizeBox {
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         writer.write_bytes(&FullBoxFields::new(0, FullBoxFlags::ZERO).to_bytes())?;
-        writer.write_bytes(&[0, 0, 0, self.field_size.bits()])?;
+        let bits = match self.field_size {
+            FieldSize::Four => 4,
+            FieldSize::Eight => 8,
+            FieldSize::Sixteen => 16,
+        };
+        writer.write_bytes(&[0, 0, 0, bits])?;
         let sample_count = self.entries.len() as u64;
         // Why not saturate silently: a sample count past `u32` cannot be written
         // at all, and the box has already declared a length built from it, so
