@@ -2,9 +2,12 @@
 
 use core::ops::Range;
 
-use isobmff_boxes::{MovieBox, MovieFragmentBox, SegmentTypeBox};
+use alloc::vec::Vec;
+
+use isobmff_boxes::{MovieBox, MovieFragmentBox, SegmentIndexBox, SegmentTypeBox};
 use isobmff_sample::movie_fragment::sample_extents;
-use isobmff_sample::{Sample, SampleReader, TrackDecodeTimes};
+use isobmff_sample::segment_index::subsegments;
+use isobmff_sample::{Sample, SampleReader, SegmentIndex, TrackDecodeTimes};
 use isobmff_sequence::{BoxEvent, BoxReader};
 
 use super::{MediaSegmentDisposition, MediaSegmentStructure};
@@ -27,8 +30,8 @@ use crate::{Error, WholeBoxReader};
 ///
 /// # Contract
 ///
-/// * The segment is handed over from its first byte, in order and cut
-///   anywhere, and the samples it completed are taken from
+/// * The segment is handed over from its first byte, or from the offset
+///   [`resume_at`](Self::resume_at) names, in order and cut anywhere, and the samples it completed are taken from
 ///   [`poll_sample`](Self::poll_sample). The caller drains before handing
 ///   over more: samples are held until they are taken. Where the segment
 ///   lies in its resource is the caller's: every offset the reader reports
@@ -37,8 +40,17 @@ use crate::{Error, WholeBoxReader};
 /// * The fragments are resolved against the movie the reader was created
 ///   with, which is there to read at [`movie`](Self::movie). The brands are
 ///   there once they have arrived: [`segment_type`](Self::segment_type). The
-///   media data is offered to the samples, and every other box is passed
-///   over — a `sidx` among them, and a `moov`.
+///   indexes of every `sidx` are there once read, as
+///   [`segment_indexes`](Self::segment_indexes). The media data is offered
+///   to the samples, and every other box is passed over — a `moov` among
+///   them.
+/// * [`resume_at`](Self::resume_at) restarts the reading at an offset into
+///   the segment an index points at, a `moof` or a `sidx`, from where the
+///   segment is then handed over. The indexes read so far stand; the extents
+///   held and the samples not yet taken are dropped, and where each track
+///   stands on its timeline is no longer known until a `tfdt` states it; a
+///   fragment stating none for such a track is
+///   [`Sample`](crate::ErrorKind::Sample).
 /// * The order the boxes come in, and what a segment that breaks it is
 ///   reported as, are the structure's: a `styp` after another box and an
 ///   `mdat` before any `moof` are
@@ -48,7 +60,9 @@ use crate::{Error, WholeBoxReader};
 ///   A segment carrying no `styp` reads all the same, as §8.16.2 allows.
 /// * Where a fragment states no decode time for a track, the track goes on
 ///   from where the fragments handed over before it left it, or from zero
-///   where none did (§8.8.12): a reader is one segment's.
+///   where none did (§8.8.12): a reader is one segment's. After a
+///   [`resume_at`](Self::resume_at) it is [`Sample`](crate::ErrorKind::Sample)
+///   instead.
 /// * A box read into a value is gathered whole before it is read, so what it
 ///   declares is bounded — see [`with_limits`](Self::with_limits).
 /// * The samples of a fragment are read out of the media data that follows
@@ -68,7 +82,8 @@ use crate::{Error, WholeBoxReader};
 ///   any layer makes of the end of it: a box left open, no `moof` come, a
 ///   sample short of the data it claimed. Samples are still taken after it,
 ///   but anything handed over then, or a second [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished).
+///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished), until
+///   [`resume_at`](Self::resume_at) restarts the reading.
 ///
 /// # Examples
 ///
@@ -114,12 +129,14 @@ use crate::{Error, WholeBoxReader};
 #[derive(Debug)]
 pub struct MediaSegmentReader {
     boxes: BoxReader,
+    base: u64,
     structure: MediaSegmentStructure,
     samples: SampleReader,
     decode_times: TrackDecodeTimes,
     open: Option<Open>,
     segment_type: Option<SegmentTypeBox>,
     movie: MovieBox,
+    segment_indexes: Vec<SegmentIndex>,
     payload_limit: u64,
     state: State,
 }
@@ -145,6 +162,8 @@ enum Open {
         reader: WholeBoxReader<MovieFragmentBox>,
         moof_start: u64,
     },
+    /// Segment index being read whole
+    SegmentIndex(WholeBoxReader<SegmentIndexBox>),
     /// Media data, offered to the samples as it arrives
     MediaData,
 }
@@ -185,12 +204,14 @@ impl MediaSegmentReader {
     pub const fn with_limits(movie: MovieBox, payload_limit: u64, sample_size_limit: u64) -> Self {
         Self {
             boxes: BoxReader::new(),
+            base: 0,
             structure: MediaSegmentStructure::new(),
             samples: SampleReader::with_sample_size_limit(sample_size_limit),
             decode_times: TrackDecodeTimes::new(),
             open: None,
             segment_type: None,
             movie,
+            segment_indexes: Vec::new(),
             payload_limit,
             state: State::Reading,
         }
@@ -199,9 +220,9 @@ impl MediaSegmentReader {
     /// Takes the next cut of the segment and reads the samples it completes
     ///
     /// The input is taken whole, as the continuation of what was handed over
-    /// before it, the first cut starting at the first byte of the segment.
-    /// What the input completed is then taken from
-    /// [`poll_sample`](Self::poll_sample).
+    /// before it, the first cut starting at the first byte of the segment, or
+    /// at the offset the last [`resume_at`](Self::resume_at) named. What the
+    /// input completed is then taken from [`poll_sample`](Self::poll_sample).
     ///
     /// # Errors
     ///
@@ -214,7 +235,7 @@ impl MediaSegmentReader {
     /// * [`Box`](crate::ErrorKind::Box): a box read into a value
     ///   does not decode.
     /// * [`Sample`](crate::ErrorKind::Sample): what the samples make
-    ///   of a fragment or the media data beside it.
+    ///   of a fragment, a `sidx`, or the media data beside it.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the reader keeps and reports
@@ -290,6 +311,42 @@ impl MediaSegmentReader {
         &self.movie
     }
 
+    /// Returns the subsegments of every `sidx` read so far, in the order they were read
+    ///
+    /// A `sidx` read again, as the reading resumes at or before it, is held
+    /// once. Each is placed in the segment from the first byte after its `sidx`, as
+    /// [`subsegments`] places them.
+    #[must_use]
+    pub fn segment_indexes(&self) -> &[SegmentIndex] {
+        &self.segment_indexes
+    }
+
+    /// Restarts the reading at `offset`, the offset into the segment the input handed over next starts at
+    ///
+    /// The next box is to be one an index points at: a `moof` or a `sidx`.
+    /// The reader resumes from reading and from the segment declared over
+    /// alike, and takes the segment again from there.
+    ///
+    /// # Errors
+    ///
+    /// * The failure of a previous call, which the reader keeps and reports
+    ///   again for every call after it.
+    pub fn resume_at(&mut self, offset: u64) -> Result<(), Error> {
+        if let State::Failed(failure) = self.state {
+            return Err(failure);
+        }
+
+        self.boxes = BoxReader::new();
+        self.base = offset;
+        self.structure.resume();
+        self.samples.clear();
+        self.decode_times = TrackDecodeTimes::unknown();
+        self.open = None;
+        self.state = State::Reading;
+
+        Ok(())
+    }
+
     /// Declares the segment over
     ///
     /// # Errors
@@ -301,8 +358,8 @@ impl MediaSegmentReader {
     /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox):
     ///   the segment carried no `moof`.
     /// * [`Sample`](crate::ErrorKind::Sample): what the samples make
-    ///   of a fragment declaring no total, or a sample a fragment declared is
-    ///   short of the data it claimed.
+    ///   of a fragment or a `sidx` declaring no total, or a sample a fragment
+    ///   declared is short of the data it claimed.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   segment was already declared over.
     /// * The failure of a previous call, which the reader keeps and reports
@@ -338,8 +395,14 @@ impl MediaSegmentReader {
         while let Some(event) = self.boxes.poll_event() {
             // Why not unreachable: an event was taken, so the framing names the
             // bytes it was read from, and the fallback is a degenerate position
-            // in place of a panic the lints forbid.
-            let start = self.boxes.event_extent().map_or(0, |extent| extent.start);
+            // in place of a panic the lints forbid. Why not checked_add: the base
+            // is an offset the caller vouches for, and a change of coordinates
+            // carries no failure kind, so a base past any real segment saturates.
+            let start = self
+                .boxes
+                .event_extent()
+                .map_or(0, |extent| extent.start)
+                .saturating_add(self.base);
             match event {
                 BoxEvent::Header(header) => self
                     .structure
@@ -353,6 +416,9 @@ impl MediaSegmentReader {
                                 reader: WholeBoxReader::begin(header, self.payload_limit)?,
                                 moof_start: start,
                             }),
+                            MediaSegmentDisposition::SegmentIndex => Some(Open::SegmentIndex(
+                                WholeBoxReader::begin(header, self.payload_limit)?,
+                            )),
                             MediaSegmentDisposition::MediaData => Some(Open::MediaData),
                             MediaSegmentDisposition::Skip => None,
                         };
@@ -362,6 +428,7 @@ impl MediaSegmentReader {
                 BoxEvent::Payload(payload) => match &mut self.open {
                     Some(Open::SegmentType(reader)) => reader.handle_payload(payload),
                     Some(Open::MovieFragment { reader, .. }) => reader.handle_payload(payload),
+                    Some(Open::SegmentIndex(reader)) => reader.handle_payload(payload),
                     Some(Open::MediaData) => self
                         .samples
                         .handle_data(start, &payload)
@@ -385,6 +452,14 @@ impl MediaSegmentReader {
                             Ok(())
                         })
                     }
+                    Some(Open::SegmentIndex(reader)) => reader.finish().and_then(|sidx| {
+                        let segment_index = subsegments(&sidx, start)?;
+                        if !self.segment_indexes.contains(&segment_index) {
+                            self.segment_indexes.push(segment_index);
+                        }
+
+                        Ok(())
+                    }),
                     Some(Open::MediaData) | None => Ok(()),
                 },
                 // Why an arm at all: `BoxEvent` is `#[non_exhaustive]`, which

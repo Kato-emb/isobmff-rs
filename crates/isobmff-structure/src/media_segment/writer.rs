@@ -265,7 +265,7 @@ impl MediaSegmentWriter {
             MediaSegmentDisposition::SegmentType
             | MediaSegmentDisposition::MovieFragment
             | MediaSegmentDisposition::MediaData => {}
-            MediaSegmentDisposition::Skip => {
+            MediaSegmentDisposition::SegmentIndex | MediaSegmentDisposition::Skip => {
                 return Err(self.fail(Error::box_out_of_order(box_type)));
             }
         }
