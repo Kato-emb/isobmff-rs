@@ -422,7 +422,7 @@ mod tests {
     use isobmff_test_support::{file_type, unfragmented_movie};
 
     use super::{Error, NonFragmentedWriter, default_file_type};
-    use crate::{ErrorKind, NonFragmentedReader};
+    use crate::ErrorKind;
 
     /// A sample of the track the movie declares
     fn sample() -> Sample {
@@ -462,19 +462,11 @@ mod tests {
         writer.handle_movie(unfragmented_movie()).unwrap();
         writer.finish().unwrap();
         let file = drained(&mut writer);
-        let mut reader = NonFragmentedReader::new();
-        reader.handle_input(&file).unwrap();
-        let wanted = reader.wanted_extent().unwrap();
-        let fetched = usize::try_from(wanted.start).unwrap()..usize::try_from(wanted.end).unwrap();
-        reader
-            .handle_data(wanted.start, file.get(fetched).unwrap())
-            .unwrap();
 
         assert_eq!(
             FileTypeBox::decode(&file).map(|(file_type, rest)| (file_type, rest.get(4..8))),
             Ok((default_file_type(), Some(b"mdat".as_slice())))
         );
-        assert_eq!(reader.poll_sample(), Some(sample()));
     }
 
     #[test]

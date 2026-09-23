@@ -139,4 +139,21 @@ mod tests {
             ))
         );
     }
+
+    #[test]
+    fn a_file_handed_no_brands_whose_chunk_comes_before_the_movie_is_read_back() {
+        let sample = Sample::new(1, 0, 3_000, 0, SampleFlags::ZERO, 1, b"VIDEO_01".to_vec());
+        let mut writer = NonFragmentedWriter::new();
+        let mut file = Vec::new();
+
+        writer.begin_chunk().unwrap();
+        writer.handle_sample(sample.clone()).unwrap();
+        writer.handle_movie(movie()).unwrap();
+        writer.finish().unwrap();
+        while let Some(written) = writer.poll_output() {
+            file.extend_from_slice(&written);
+        }
+
+        assert_eq!(samples_of(&file, file.len()), [sample]);
+    }
 }
