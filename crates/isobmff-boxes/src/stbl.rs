@@ -8,8 +8,13 @@ use isobmff_core::{
 };
 
 use crate::chunk_offset::{ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsets};
+use crate::ctts::CompositionOffsetBox;
+use crate::padb::PaddingBitsBox;
+use crate::sdtp::SampleDependencyTypeBox;
+use crate::stdp::DegradationPriorityBox;
 use crate::stsc::SampleToChunkBox;
 use crate::stsd::SampleDescriptionBox;
+use crate::stss::SyncSampleBox;
 use crate::stsz::SampleSizeBox;
 use crate::stts::TimeToSampleBox;
 
@@ -28,8 +33,11 @@ const CHUNK_OFFSET_BOXES: &[BoxType] = &[ChunkOffsetBox::BOX_TYPE, ChunkLargeOff
 /// [`SampleTableBox`] (`stbl`), ISO/IEC 14496-12 §8.5.1. The tables a track
 /// that references data must state are promoted to fields of their own — the
 /// sample descriptions, the decode timeline, the grouping into chunks, the
-/// sample sizes, and the chunk offsets — and every other child is kept in
-/// [`other_boxes`](Self::other_boxes) and written back unread.
+/// sample sizes, and the chunk offsets — and so are the optional tables that
+/// state the composition time offsets, the sync samples, the padding bits,
+/// the degradation priorities, and the sample dependencies, which
+/// [`new`](Self::new) leaves out and the `with_` methods set. Every other child
+/// is kept in [`other_boxes`](Self::other_boxes) and written back unread.
 ///
 /// Decoding asks for all five. §8.5.1 lets the `stbl` of a track that
 /// references no data hold no children at all, and such a box does not decode
@@ -39,6 +47,11 @@ const CHUNK_OFFSET_BOXES: &[BoxType] = &[ChunkOffsetBox::BOX_TYPE, ChunkLargeOff
 /// has no type here yet, so a `stbl` stating them that way is reported as
 /// holding a box this implementation does not read rather than as missing a
 /// table.
+///
+/// On encode the children are written in the order the spec lists them — `stsd`,
+/// `stts`, `ctts`, `stsc`, `stsz`, the chunk offsets, `stss`, `padb`, `stdp`,
+/// then `sdtp` — and then the children no field claims, so a round-trip
+/// settles the order rather than preserving it.
 ///
 /// # Examples
 ///
@@ -76,11 +89,18 @@ pub struct SampleTableBox {
     stsc: SampleToChunkBox,
     stsz: SampleSizeBox,
     chunk_offsets: ChunkOffsets,
+    ctts: Option<CompositionOffsetBox>,
+    stss: Option<SyncSampleBox>,
+    padb: Option<PaddingBitsBox>,
+    stdp: Option<DegradationPriorityBox>,
+    sdtp: Option<SampleDependencyTypeBox>,
     other_boxes: OtherBoxes,
 }
 
 impl SampleTableBox {
     /// Creates the box from the tables that locate and describe the samples
+    ///
+    /// The box holds none of the optional tables; the `with_` methods set them.
     #[must_use]
     pub const fn new(
         stsd: SampleDescriptionBox,
@@ -95,7 +115,57 @@ impl SampleTableBox {
             stsc,
             stsz,
             chunk_offsets,
+            ctts: None,
+            stss: None,
+            padb: None,
+            stdp: None,
+            sdtp: None,
             other_boxes: OtherBoxes::new(),
+        }
+    }
+
+    /// Sets the offset from the decode time of every sample to its composition time
+    #[must_use]
+    pub fn with_ctts(self, ctts: CompositionOffsetBox) -> Self {
+        Self {
+            ctts: Some(ctts),
+            ..self
+        }
+    }
+
+    /// Sets which samples are sync samples
+    #[must_use]
+    pub fn with_stss(self, stss: SyncSampleBox) -> Self {
+        Self {
+            stss: Some(stss),
+            ..self
+        }
+    }
+
+    /// Sets how each sample depends on the others
+    #[must_use]
+    pub fn with_sdtp(self, sdtp: SampleDependencyTypeBox) -> Self {
+        Self {
+            sdtp: Some(sdtp),
+            ..self
+        }
+    }
+
+    /// Sets how many bits at the end of each sample are padding
+    #[must_use]
+    pub fn with_padb(self, padb: PaddingBitsBox) -> Self {
+        Self {
+            padb: Some(padb),
+            ..self
+        }
+    }
+
+    /// Sets the degradation priority of each sample
+    #[must_use]
+    pub fn with_stdp(self, stdp: DegradationPriorityBox) -> Self {
+        Self {
+            stdp: Some(stdp),
+            ..self
         }
     }
 
@@ -129,6 +199,42 @@ impl SampleTableBox {
         &self.chunk_offsets
     }
 
+    /// Returns the offset from the decode time of every sample to its composition time
+    ///
+    /// `None` when the box carries no `ctts`, which has every sample composed
+    /// when it is decoded.
+    #[must_use]
+    pub const fn ctts(&self) -> Option<&CompositionOffsetBox> {
+        self.ctts.as_ref()
+    }
+
+    /// Returns which samples are sync samples
+    ///
+    /// `None` when the box carries no `stss`, which has every sample a sync
+    /// sample.
+    #[must_use]
+    pub const fn stss(&self) -> Option<&SyncSampleBox> {
+        self.stss.as_ref()
+    }
+
+    /// Returns how each sample depends on the others, if the box states it
+    #[must_use]
+    pub const fn sdtp(&self) -> Option<&SampleDependencyTypeBox> {
+        self.sdtp.as_ref()
+    }
+
+    /// Returns how many bits at the end of each sample are padding, if the box states it
+    #[must_use]
+    pub const fn padb(&self) -> Option<&PaddingBitsBox> {
+        self.padb.as_ref()
+    }
+
+    /// Returns the degradation priority of each sample, if the box states it
+    #[must_use]
+    pub const fn stdp(&self) -> Option<&DegradationPriorityBox> {
+        self.stdp.as_ref()
+    }
+
     /// Returns the children no field of this box claims, in the order they came
     #[must_use]
     pub fn other_boxes(&self) -> &[AnyBox] {
@@ -151,7 +257,7 @@ impl BoxDecode for SampleTableBox {
     /// * [`UnsupportedBox`](isobmff_core::ErrorKind::UnsupportedBox): a `stz2`, which
     ///   this implementation does not read.
     /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one of
-    ///   any of them.
+    ///   any of them, or of any of the optional tables.
     /// * [`DuplicateAlternativeBox`](isobmff_core::ErrorKind::DuplicateAlternativeBox):
     ///   both a `stco` and a `co64`, of which §8.7.5 has the box hold one.
     /// * Whatever a child reports, on the [`containers`](Error::containers) path: one
@@ -162,6 +268,11 @@ impl BoxDecode for SampleTableBox {
         let mut sample_to_chunk_boxes = ChildBoxes::new();
         let mut sample_size_boxes = ChildBoxes::new();
         let mut chunk_offset_boxes = Vec::new();
+        let mut composition_offset_boxes = ChildBoxes::new();
+        let mut sync_sample_boxes = ChildBoxes::new();
+        let mut padding_bits_boxes = ChildBoxes::new();
+        let mut degradation_priority_boxes = ChildBoxes::new();
+        let mut sample_dependency_type_boxes = ChildBoxes::new();
         let mut other_boxes = OtherBoxes::new();
 
         for child in boxes(reader.take_remainder()) {
@@ -178,6 +289,16 @@ impl BoxDecode for SampleTableBox {
                 sample_size_boxes.push(child);
             } else if CHUNK_OFFSET_BOXES.contains(&box_type) {
                 chunk_offset_boxes.push(child);
+            } else if box_type == CompositionOffsetBox::BOX_TYPE {
+                composition_offset_boxes.push(child);
+            } else if box_type == SyncSampleBox::BOX_TYPE {
+                sync_sample_boxes.push(child);
+            } else if box_type == PaddingBitsBox::BOX_TYPE {
+                padding_bits_boxes.push(child);
+            } else if box_type == DegradationPriorityBox::BOX_TYPE {
+                degradation_priority_boxes.push(child);
+            } else if box_type == SampleDependencyTypeBox::BOX_TYPE {
+                sample_dependency_type_boxes.push(child);
             } else if box_type == COMPACT_SAMPLE_SIZE_BOX {
                 return Err(Error::unsupported_box(box_type));
             } else {
@@ -208,6 +329,11 @@ impl BoxDecode for SampleTableBox {
             stsc: sample_to_chunk_boxes.exactly_one()?,
             stsz: sample_size_boxes.exactly_one_variant(SAMPLE_SIZE_BOXES)?,
             chunk_offsets,
+            ctts: composition_offset_boxes.zero_or_one()?,
+            stss: sync_sample_boxes.zero_or_one()?,
+            padb: padding_bits_boxes.zero_or_one()?,
+            stdp: degradation_priority_boxes.zero_or_one()?,
+            sdtp: sample_dependency_type_boxes.zero_or_one()?,
             other_boxes,
         })
     }
@@ -226,18 +352,38 @@ impl BoxEncode for SampleTableBox {
         self.stsd
             .encoded_len()
             .saturating_add(self.stts.encoded_len())
+            .saturating_add(self.ctts.as_ref().map_or(0, BoxEncode::encoded_len))
             .saturating_add(self.stsc.encoded_len())
             .saturating_add(self.stsz.encoded_len())
             .saturating_add(self.chunk_offsets.encoded_len())
+            .saturating_add(self.stss.as_ref().map_or(0, BoxEncode::encoded_len))
+            .saturating_add(self.padb.as_ref().map_or(0, BoxEncode::encoded_len))
+            .saturating_add(self.stdp.as_ref().map_or(0, BoxEncode::encoded_len))
+            .saturating_add(self.sdtp.as_ref().map_or(0, BoxEncode::encoded_len))
             .saturating_add(others)
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         let mut rest = self.stsd.encode(writer.take_remainder())?;
         rest = self.stts.encode(rest)?;
+        if let Some(ctts) = &self.ctts {
+            rest = ctts.encode(rest)?;
+        }
         rest = self.stsc.encode(rest)?;
         rest = self.stsz.encode(rest)?;
         rest = self.chunk_offsets.encode(rest)?;
+        if let Some(stss) = &self.stss {
+            rest = stss.encode(rest)?;
+        }
+        if let Some(padb) = &self.padb {
+            rest = padb.encode(rest)?;
+        }
+        if let Some(stdp) = &self.stdp {
+            rest = stdp.encode(rest)?;
+        }
+        if let Some(sdtp) = &self.sdtp {
+            rest = sdtp.encode(rest)?;
+        }
         for other in self.other_boxes.as_slice() {
             rest = other.encode(rest)?;
         }
@@ -251,14 +397,20 @@ pub(crate) mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Error};
+    use isobmff_core::{AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, boxes};
 
     use super::{CHUNK_OFFSET_BOXES, SAMPLE_SIZE_BOXES, SampleTableBox};
     use crate::chunk_offset::{ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsets};
+    use crate::ctts::{CompositionOffsetBox, CompositionOffsetEntry};
+    use crate::padb::{PaddingBitsBox, PaddingBitsEntry};
+    use crate::sdtp::{SampleDependencyTypeBox, SampleDependencyTypeEntry};
+    use crate::stdp::{DegradationPriorityBox, DegradationPriorityEntry};
     use crate::stsc::SampleToChunkBox;
     use crate::stsd::SampleDescriptionBox;
+    use crate::stss::{SyncSampleBox, SyncSampleEntry};
     use crate::stsz::{SampleSizeBox, SampleSizes};
     use crate::stts::TimeToSampleBox;
+    use crate::trun::CompositionTimeOffset;
 
     /// Sample table of a track whose samples are all described by fragments
     pub(crate) fn sample_table() -> SampleTableBox {
@@ -269,6 +421,26 @@ pub(crate) mod tests {
             SampleSizeBox::new(SampleSizes::PerSample(Vec::new())),
             ChunkOffsets::Stco(ChunkOffsetBox::new(Vec::new())),
         )
+    }
+
+    /// Sample table stating every optional table for one sample
+    fn sample_table_with_every_optional_table() -> SampleTableBox {
+        sample_table()
+            .with_sdtp(SampleDependencyTypeBox::new(vec![
+                SampleDependencyTypeEntry::new(2, 2, 1, 2).unwrap(),
+            ]))
+            .with_stdp(DegradationPriorityBox::new(vec![
+                DegradationPriorityEntry::new(3),
+            ]))
+            .with_padb(PaddingBitsBox::new(vec![PaddingBitsEntry::new(5).unwrap()]))
+            .with_stss(SyncSampleBox::new(vec![SyncSampleEntry::new(1)]))
+            .with_ctts(
+                CompositionOffsetBox::new(vec![CompositionOffsetEntry::new(
+                    1,
+                    CompositionTimeOffset::new(-8).unwrap(),
+                )])
+                .unwrap(),
+            )
     }
 
     /// Writes the payload of the box and returns the bytes it occupies
@@ -298,11 +470,74 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_box_holding_every_optional_table_reads_back_as_the_value_that_wrote_it() {
+        let table = sample_table_with_every_optional_table();
+
+        let payload = encoded_payload(&table);
+
+        assert_eq!(SampleTableBox::decode_payload(&payload).unwrap(), table);
+    }
+
+    #[test]
+    fn the_children_are_written_in_the_order_the_spec_lists_them() {
+        let payload = encoded_payload(&sample_table_with_every_optional_table());
+
+        let box_types: Vec<BoxType> = boxes(&payload)
+            .map(|child| child.unwrap().header().box_type())
+            .collect();
+
+        assert_eq!(
+            box_types,
+            [
+                *b"stsd", *b"stts", *b"ctts", *b"stsc", *b"stsz", *b"stco", *b"stss", *b"padb",
+                *b"stdp", *b"sdtp",
+            ]
+            .map(BoxType::compact)
+        );
+    }
+
+    #[test]
+    fn a_second_optional_table_of_one_type_is_rejected() {
+        let table = sample_table_with_every_optional_table();
+        let seconds = [
+            (
+                encoded_child(table.ctts().unwrap()),
+                CompositionOffsetBox::BOX_TYPE,
+            ),
+            (
+                encoded_child(table.stss().unwrap()),
+                SyncSampleBox::BOX_TYPE,
+            ),
+            (
+                encoded_child(table.padb().unwrap()),
+                PaddingBitsBox::BOX_TYPE,
+            ),
+            (
+                encoded_child(table.stdp().unwrap()),
+                DegradationPriorityBox::BOX_TYPE,
+            ),
+            (
+                encoded_child(table.sdtp().unwrap()),
+                SampleDependencyTypeBox::BOX_TYPE,
+            ),
+        ];
+
+        for (second, box_type) in seconds {
+            let payload = [encoded_payload(&table), second].concat();
+
+            assert_eq!(
+                SampleTableBox::decode_payload(&payload),
+                Err(Error::duplicate_box(box_type))
+            );
+        }
+    }
+
+    #[test]
     fn a_child_no_field_claims_is_kept_and_written_back() {
         let payload = [
             encoded_payload(&sample_table()),
             vec![
-                0, 0, 0, 0x10, b's', b't', b's', b's', 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0x10, b's', b'u', b'b', b's', 0, 0, 0, 0, 0, 0, 0, 0,
             ],
         ]
         .concat();
@@ -311,7 +546,7 @@ pub(crate) mod tests {
 
         assert_eq!(
             sample_table.other_boxes().first().map(AnyBox::box_type),
-            Some(BoxType::compact(*b"stss"))
+            Some(BoxType::compact(*b"subs"))
         );
         assert_eq!(encoded_payload(&sample_table), payload);
     }

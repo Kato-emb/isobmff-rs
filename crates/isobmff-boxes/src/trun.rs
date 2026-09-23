@@ -60,7 +60,7 @@ const COMPOSITION_TIME_OFFSET_MINIMUM: i64 = i32::MIN as i64;
 /// `-2_147_483_648..=4_294_967_295` is one a row can carry, and this holds
 /// such a value alone.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct CompositionTimeOffset(i64);
+pub struct CompositionTimeOffset(pub(crate) i64);
 
 impl CompositionTimeOffset {
     /// Creates the offset from its value
