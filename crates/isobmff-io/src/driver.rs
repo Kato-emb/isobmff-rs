@@ -17,9 +17,7 @@ use isobmff_sample::Sample;
 use isobmff_sequence::EventBytes;
 
 use crate::Error;
-use crate::movie_fragment_random_access::{
-    PROBE_LEN, opens_movie_fragment_random_access, start_named_by,
-};
+use crate::movie_fragment_random_access::{PROBE_LEN, Probe, Probed};
 use crate::stack::{CUT_LENGTH, PollOutput, ReadSamples, ResumeSamples};
 
 /// Reads off `source` into `into`, and returns how many bytes came
@@ -56,26 +54,14 @@ pub(crate) struct Demuxer<S, R> {
 }
 
 /// How far a search for the `mfra` closing the file has come
-#[derive(Debug)]
-enum Locating {
-    /// Moving the source to its end, to learn how long the file is
-    Measuring,
-    /// Reading the first bytes of `part` of a file `file_len` long into `probed`, the source moved there once `sought`
-    Probing {
-        file_len: u64,
-        part: Part,
-        sought: bool,
-        probed: Vec<u8>,
-    },
-}
-
-/// A part of the file a search for the `mfra` reads the first bytes of
+///
+/// The part it reads, whether the source stands at its next byte, and how
+/// many of its first bytes the cut holds.
 #[derive(Clone, Copy, Debug)]
-enum Part {
-    /// The last bytes, where an `mfro` closes the file
-    Closing,
-    /// The bytes from `start` on, where the `mfro` says the `mfra` begins
-    From(u64),
+struct Locating {
+    probe: Probe,
+    sought: bool,
+    probed: usize,
 }
 
 /// Where the demuxer stands between samples
@@ -161,18 +147,15 @@ impl<S: AsyncRead + AsyncSeek + Unpin, R: ReadSamples> Demuxer<S, R> {
     pub(crate) async fn locate_movie_fragment_random_access(
         &mut self,
     ) -> Result<Option<u64>, Error> {
-        if self.locating.is_none() {
-            // Why not seeking back once the search is done: a future dropped
-            // part way would leave the source moved with nothing to seek it
-            // back, where a state seeking on its own carries the reading on
-            // whichever call follows.
-            self.state = match mem::replace(&mut self.state, State::Restoring) {
-                State::Reading => State::Restoring,
-                State::Fetched(wanted) => State::Fetching(wanted),
-                standing @ (State::Fetching(_) | State::Restoring | State::Over(_)) => standing,
-            };
-            self.locating = Some(Locating::Measuring);
-        }
+        // Why not seeking back once the search is done: a future dropped
+        // part way would leave the source moved with nothing to seek it back,
+        // where a state seeking on its own carries the reading on whichever
+        // call follows.
+        self.state = match mem::replace(&mut self.state, State::Restoring) {
+            State::Reading => State::Restoring,
+            State::Fetched(wanted) => State::Fetching(wanted),
+            standing @ (State::Fetching(_) | State::Restoring | State::Over(_)) => standing,
+        };
 
         let located = self.locate().await;
         self.locating = None;
@@ -182,78 +165,62 @@ impl<S: AsyncRead + AsyncSeek + Unpin, R: ReadSamples> Demuxer<S, R> {
 
     /// Carries the search for the `mfra` on from where it stands, until it settles
     async fn locate(&mut self) -> Result<Option<u64>, Error> {
+        let probe_len = usize::try_from(PROBE_LEN).unwrap_or_default();
         loop {
-            match &mut self.locating {
-                None | Some(Locating::Measuring) => {
-                    let end = seek(&mut self.source, SeekFrom::End(0)).await?;
-                    let file_len = end.saturating_sub(self.origin);
-                    if file_len < PROBE_LEN {
-                        return Ok(None);
-                    }
-                    self.locating = Some(Locating::Probing {
-                        file_len,
-                        part: Part::Closing,
+            let Some(Locating {
+                probe,
+                sought,
+                probed,
+            }) = self.locating
+            else {
+                let end = seek(&mut self.source, SeekFrom::End(0)).await?;
+                let Some(probe) = Probe::new(end.saturating_sub(self.origin)) else {
+                    return Ok(None);
+                };
+                self.locating = Some(Locating {
+                    probe,
+                    sought: false,
+                    probed: 0,
+                });
+
+                continue;
+            };
+
+            if !sought {
+                let position = self.origin.saturating_add(probe.start());
+                seek(&mut self.source, SeekFrom::Start(position)).await?;
+                self.locating = Some(Locating {
+                    probe,
+                    sought: true,
+                    probed,
+                });
+
+                continue;
+            }
+
+            if probed < probe_len {
+                let into = self.cut.get_mut(probed..probe_len).unwrap_or_default();
+                let filled = read(&mut self.source, into).await?;
+                if filled > 0 {
+                    self.locating = Some(Locating {
+                        probe,
+                        sought,
+                        probed: probed.saturating_add(filled),
+                    });
+
+                    continue;
+                }
+            }
+
+            match probe.handle(self.cut.get(..probed).unwrap_or_default()) {
+                Probed::Next(next) => {
+                    self.locating = Some(Locating {
+                        probe: next,
                         sought: false,
-                        probed: Vec::new(),
+                        probed: 0,
                     });
                 }
-                Some(Locating::Probing {
-                    file_len,
-                    part,
-                    sought: sought @ false,
-                    ..
-                }) => {
-                    let start = match *part {
-                        Part::Closing => file_len.saturating_sub(PROBE_LEN),
-                        Part::From(start) => start,
-                    };
-                    let position = SeekFrom::Start(self.origin.saturating_add(start));
-                    seek(&mut self.source, position).await?;
-                    *sought = true;
-                }
-                Some(Locating::Probing {
-                    file_len,
-                    part,
-                    probed,
-                    ..
-                }) => {
-                    let lacking = usize::try_from(PROBE_LEN)
-                        .unwrap_or_default()
-                        .saturating_sub(probed.len());
-                    let into = self.cut.get_mut(..lacking).unwrap_or_default();
-                    let filled = if into.is_empty() {
-                        0
-                    } else {
-                        read(&mut self.source, into).await?
-                    };
-                    if filled > 0 {
-                        probed.extend_from_slice(self.cut.get(..filled).unwrap_or_default());
-
-                        continue;
-                    }
-
-                    let file_len = *file_len;
-                    match *part {
-                        Part::Closing => {
-                            let Some(start) = start_named_by(probed, file_len) else {
-                                return Ok(None);
-                            };
-                            self.locating = Some(Locating::Probing {
-                                file_len,
-                                part: Part::From(start),
-                                sought: false,
-                                probed: Vec::new(),
-                            });
-                        }
-                        Part::From(start) => {
-                            return Ok(opens_movie_fragment_random_access(
-                                probed,
-                                file_len.saturating_sub(start),
-                            )
-                            .then_some(start));
-                        }
-                    }
-                }
+                Probed::Settled(located) => return Ok(located),
             }
         }
     }
@@ -349,7 +316,7 @@ impl<S: AsyncRead + AsyncSeek + Unpin, R: ResumeSamples> Demuxer<S, R> {
         self.handed = offset;
         self.state = State::Restoring;
 
-        let restored = self.seek_to(offset, State::Reading).await;
+        let restored = self.seek_to(self.handed, State::Reading).await;
         if restored.is_err() {
             self.state = State::Over(None);
         }
@@ -868,18 +835,10 @@ mod tests {
         ))
         .unwrap();
 
-        let mut yielded = Vec::new();
-        loop {
-            // The source stands still at every await, so each future is dropped
-            // where it stood and the call that follows carries it on
-            match poll_once(demuxer.next()) {
-                None => continue,
-                Some(None) => break,
-                Some(Some(sample)) => yielded.push(sample.map_err(|failure| failure.kind())),
-            }
-        }
-
-        assert_eq!(yielded, [Ok(sample(b"S1")), Ok(sample(b"S2"))]);
+        assert_eq!(
+            yielded_carried_on(&mut demuxer),
+            [Ok(sample(b"S1")), Ok(sample(b"S2"))]
+        );
         assert_eq!(demuxer.reader().inputs, [b"FILE".to_vec()]);
         assert_eq!(demuxer.reader().data, [(1, b"ILE".to_vec())]);
         assert!(demuxer.reader().finished);

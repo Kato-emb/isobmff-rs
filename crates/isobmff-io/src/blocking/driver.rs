@@ -6,9 +6,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use isobmff_sample::Sample;
 
 use crate::Error;
-use crate::movie_fragment_random_access::{
-    PROBE_LEN, opens_movie_fragment_random_access, start_named_by,
-};
+use crate::movie_fragment_random_access::{PROBE_LEN, Probe, Probed};
 use crate::stack::{CUT_LENGTH, PollOutput, ReadSamples, ResumeSamples};
 
 /// A reading stack driven over a source that seeks, a cut at a time
@@ -138,23 +136,19 @@ impl<S: Read + Seek, R: ReadSamples> Demuxer<S, R> {
             .source
             .seek(SeekFrom::End(0))?
             .saturating_sub(self.origin);
-        let Some(tail_start) = file_len.checked_sub(PROBE_LEN) else {
+        let Some(mut probe) = Probe::new(file_len) else {
             return Ok(None);
         };
-        self.source
-            .seek(SeekFrom::Start(self.origin.saturating_add(tail_start)))?;
-        self.read_cut(PROBE_LEN)?;
-        let Some(start) = start_named_by(&self.cut, file_len) else {
-            return Ok(None);
-        };
-        self.source
-            .seek(SeekFrom::Start(self.origin.saturating_add(start)))?;
-        self.read_cut(PROBE_LEN)?;
 
-        Ok(
-            opens_movie_fragment_random_access(&self.cut, file_len.saturating_sub(start))
-                .then_some(start),
-        )
+        loop {
+            self.source
+                .seek(SeekFrom::Start(self.origin.saturating_add(probe.start())))?;
+            self.read_cut(PROBE_LEN)?;
+            match probe.handle(&self.cut) {
+                Probed::Next(next) => probe = next,
+                Probed::Settled(located) => return Ok(located),
+            }
+        }
     }
 
     /// Reads up to `length` bytes off the source into the cut, and returns how many came
