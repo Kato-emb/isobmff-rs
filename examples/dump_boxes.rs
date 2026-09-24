@@ -29,7 +29,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let path = env::args().nth(1).ok_or("usage: dump_boxes <in.mp4>")?;
     let mut file = File::open(path)?;
 
-    // The file is handed over a cut at a time, and its events drained
     let mut reader = BoxReader::new();
     let mut cut = vec![0; 64 * 1024];
     let mut container: Option<(u64, Vec<u8>)> = None;
@@ -56,7 +55,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                         children.extend(payload);
                     }
                 }
-                // The children of a container, once its payload is whole
                 BoxEvent::End => {
                     if let Some((offset, children)) = container.take() {
                         print_children(&children, offset, 1)?;

@@ -13,10 +13,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .nth(1)
         .ok_or("usage: demux_fragmented <in.mp4>")?;
 
-    // The demuxer over the file
     let demuxer = FragmentedDemuxer::new(File::open(path)?)?;
 
-    // One line per sample, then the count
     let mut count: u64 = 0;
     for sample in demuxer {
         let sample = sample?;
