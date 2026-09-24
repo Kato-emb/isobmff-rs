@@ -252,6 +252,13 @@ name = "isobmff-core"
 version = "0.0.0"
 
 [[package]]
+name = "isobmff-examples"
+version = "0.0.0"
+dependencies = [
+ "isobmff",
+]
+
+[[package]]
 name = "isobmff-io"
 version = "0.0.0"
 dependencies = [

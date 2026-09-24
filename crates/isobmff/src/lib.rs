@@ -49,6 +49,13 @@
 //! [`isobmff_structure`] states of the layers beneath. The `io` feature, off by
 //! default, adds `isobmff::io` alone, which needs `std`: the six layers beneath
 //! it are the same with it or without.
+//!
+//! # Examples
+//!
+//! The [`examples`](https://github.com/Kato-emb/isobmff-rs/tree/main/examples)
+//! directory of the repository holds one program per use, each written
+//! against this crate alone with its `io` feature on, and run from a
+//! checkout as `cargo run -p isobmff-examples --example <name> -- <arguments>`.
 
 #![no_std]
 

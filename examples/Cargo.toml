@@ -1,0 +1,84 @@
+[package]
+name = "isobmff-examples"
+version = "0.0.0"
+description = "Runnable programs showing the uses of the isobmff crate, one per use"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+isobmff = { workspace = true, features = ["io"] }
+
+[[example]]
+name = "demux_fragmented"
+path = "demux_fragmented.rs"
+
+[[example]]
+name = "dump_boxes"
+path = "dump_boxes.rs"
+
+# Why not `workspace = true`: that table cannot be overridden in part, and an
+# example is a consumer, which prints and matches `non_exhaustive` enums with a
+# `_` arm — so it is the workspace table copied without print_stdout,
+# print_stderr and wildcard_enum_match_arm. Why each lint is on is stated there.
+[lints.rust]
+unsafe_code = "forbid"
+
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unnameable_types = "warn"
+
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unused_lifetimes = "warn"
+unused_qualifications = "warn"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_precision_loss = "deny"
+cast_sign_loss = "deny"
+
+float_arithmetic = "deny"
+
+host_endian_bytes = "deny"
+little_endian_bytes = "deny"
+
+iter_over_hash_type = "deny"
+
+dbg_macro = "deny"
+
+mod_module_files = "deny"
+min_ident_chars = "deny"
+
+allow_attributes_without_reason = "deny"
+
+exhaustive_structs = "deny"
+exhaustive_enums = "deny"
+
+std_instead_of_core = "warn"
+std_instead_of_alloc = "warn"
+alloc_instead_of_core = "warn"
+
+tests_outside_test_module = "warn"
+
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+too_long_first_doc_paragraph = "warn"
+doc_markdown = "warn"
+doc_link_with_quotes = "warn"
+
+[lints.rustdoc]
+unescaped_backticks = "warn"
