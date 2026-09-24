@@ -22,6 +22,13 @@ use isobmff::boxes::{
 use isobmff::io::blocking::{FragmentedMuxer, NonFragmentedDemuxer};
 use isobmff::sample::Sample;
 
+/// The samples of one track read ahead of the others, waiting their turn in decode time
+struct TrackQueue {
+    track_id: u32,
+    timescale: u32,
+    samples: Vec<Sample>,
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let usage = "usage: remux_to_fragmented <in.mp4> <out.mp4>";
     let mut arguments = env::args().skip(1);
@@ -42,7 +49,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         if sample_table.stss().is_some() {
             cut_tracks.push(track_id);
         }
-        queues.push((track_id, track.mdia().mdhd().timescale(), Vec::new()));
+        queues.push(TrackQueue {
+            track_id,
+            timescale: track.mdia().mdhd().timescale(),
+            samples: Vec::new(),
+        });
         *movie
             .mdia_mut(track_id)
             .ok_or("the movie lost a track it declares")?
@@ -78,32 +89,32 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut fragment = Vec::new();
     let mut carries_cut_track = false;
     loop {
-        while queues.iter().any(|(_, _, queue)| queue.is_empty()) {
+        while queues.iter().any(|queue| queue.samples.is_empty()) {
             let Some(sample) = samples.next() else {
                 break;
             };
             let sample = sample?;
             queues
                 .iter_mut()
-                .find(|(track_id, _, _)| *track_id == sample.track_id())
+                .find(|queue| queue.track_id == sample.track_id())
                 .ok_or("a sample of a track the movie does not declare")?
-                .2
+                .samples
                 .push(sample);
         }
-        let Some((_, _, queue)) = queues
+        let Some(queue) = queues
             .iter_mut()
-            .filter(|(_, _, queue)| !queue.is_empty())
-            .min_by(|(_, timescale, queue), (_, other_timescale, other)| {
-                let time = queue.first().map_or(0, Sample::decode_time);
-                let other_time = other.first().map_or(0, Sample::decode_time);
+            .filter(|queue| !queue.samples.is_empty())
+            .min_by(|queue, other| {
+                let time = queue.samples.first().map_or(0, Sample::decode_time);
+                let other_time = other.samples.first().map_or(0, Sample::decode_time);
                 u128::from(time)
-                    .saturating_mul(u128::from(*other_timescale))
-                    .cmp(&u128::from(other_time).saturating_mul(u128::from(*timescale)))
+                    .saturating_mul(u128::from(other.timescale))
+                    .cmp(&u128::from(other_time).saturating_mul(u128::from(queue.timescale)))
             })
         else {
             break;
         };
-        let sample = queue.remove(0);
+        let sample = queue.samples.remove(0);
         let is_cut_track = cut_tracks.contains(&sample.track_id());
         if is_cut_track && carries_cut_track && !sample.sample_flags().sample_is_non_sync_sample() {
             write_fragment(&mut fragment)?;
