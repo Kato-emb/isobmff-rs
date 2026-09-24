@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "examples"]
 
 [workspace.package]
 edition = "2024"
@@ -25,6 +25,8 @@ isobmff-sequence = { path = "crates/isobmff-sequence", version = "0.0.0" }
 isobmff-structure = { path = "crates/isobmff-structure", version = "0.0.0" }
 isobmff-test-support = { path = "crates/isobmff-test-support" }
 
+# examples/Cargo.toml carries a copy of these tables less three lints; keep it
+# in step.
 [workspace.lints.rust]
 # Memory safety: the parser is fed untrusted input, so safety must not rest on
 # reviewing unsafe blocks. forbid (not deny) cannot be lifted by an attribute;

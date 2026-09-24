@@ -91,8 +91,9 @@ jobs:
       # Not --all-targets: the test and doctest targets need std by design, and
       # building them here would fail for reasons unrelated to the crate.
       # isobmff-io is excluded, not merely unbuilt: it drives the layers beneath
-      # over an I/O, so std is what it is for.
-      - run: cargo check --workspace --exclude isobmff-io --target thumbv7em-none-eabihf
+      # over an I/O, so std is what it is for. isobmff-examples is excluded with
+      # it: it asks isobmff for `io`, which would bring isobmff-io back in.
+      - run: cargo check --workspace --exclude isobmff-io --exclude isobmff-examples --target thumbv7em-none-eabihf
       # The alloc feature is on by default, so every other job builds core with a
       # heap behind it. Only this run reaches the alloc-free path, and it runs on
       # the target that has no allocator to fall back on.
