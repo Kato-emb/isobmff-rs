@@ -10,6 +10,8 @@ license.workspace = true
 
 [dependencies]
 isobmff = { workspace = true, features = ["io"] }
+tokio = { version = "1", features = ["fs", "rt", "macros"] }
+tokio-util = { version = "0.7", features = ["compat"] }
 
 [[example]]
 name = "demux_fragmented"
@@ -54,6 +56,14 @@ path = "seek_fragmented.rs"
 [[example]]
 name = "seek_media_segment"
 path = "seek_media_segment.rs"
+
+[[example]]
+name = "extract_avc"
+path = "extract_avc.rs"
+
+[[example]]
+name = "demux_fragmented_tokio"
+path = "demux_fragmented_tokio.rs"
 
 # Why not `workspace = true`: that table cannot be overridden in part, and an
 # example is a consumer, which prints and matches `non_exhaustive` enums with a
