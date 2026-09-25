@@ -2,8 +2,8 @@
 //!
 //! The first track whose first sample entry is `avc1` is taken. The sequence and then the picture
 //! parameter sets of that entry's decoder configuration record come first, then the NAL units of
-//! every sample in turn, each behind the four-byte start code `00 00 00 01`. A fragmented file, and a sample described by
-//! another sample entry than the first, are refused.
+//! every sample in turn, each behind the four-byte start code `00 00 00 01`. A fragmented file,
+//! and a sample described by another sample entry than the first, are refused.
 //!
 //! Usage: `cargo run -p isobmff-examples --example extract_avc -- <in.mp4> <out.h264>`
 
