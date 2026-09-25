@@ -5,6 +5,8 @@ use isobmff_core::{
     FullBoxFields, FullBoxFlags, LanguageCode, Mp4EpochSeconds,
 };
 
+use crate::data_types::duration;
+
 /// Length of the payload when version 0 carries the times in 32 bits
 const PAYLOAD_LEN_VERSION_0: u64 = 24;
 
@@ -20,6 +22,11 @@ const PAYLOAD_LEN_VERSION_1: u64 = 36;
 /// The version is not held: it selects how wide the times are written, so
 /// [`encode_payload`](BoxEncode::encode_payload) picks the narrower one whenever
 /// the times fit in 32 bits.
+///
+/// A `duration` of `None` is one that cannot be determined, which §8.4.2.3 has
+/// written as all 1s. A version 0 box stating `0xFFFF_FFFF` reads as `None`, as
+/// nothing tells it from a duration of 2^32 − 1; that duration is written at
+/// version 1, so a value holding it reads back.
 #[doc(alias = "mdhd")]
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -27,7 +34,7 @@ pub struct MediaHeaderBox {
     creation_time: Mp4EpochSeconds,
     modification_time: Mp4EpochSeconds,
     timescale: u32,
-    duration: u64,
+    duration: Option<u64>,
     language: LanguageCode,
     pre_defined: u16,
 }
@@ -39,7 +46,7 @@ impl MediaHeaderBox {
         creation_time: Mp4EpochSeconds,
         modification_time: Mp4EpochSeconds,
         timescale: u32,
-        duration: u64,
+        duration: Option<u64>,
         language: LanguageCode,
     ) -> Self {
         Self {
@@ -50,6 +57,30 @@ impl MediaHeaderBox {
             language,
             pre_defined: 0,
         }
+    }
+
+    /// Sets the time the media was created
+    #[must_use]
+    pub const fn with_creation_time(self, creation_time: Mp4EpochSeconds) -> Self {
+        Self {
+            creation_time,
+            ..self
+        }
+    }
+
+    /// Sets the time the media was last modified
+    #[must_use]
+    pub const fn with_modification_time(self, modification_time: Mp4EpochSeconds) -> Self {
+        Self {
+            modification_time,
+            ..self
+        }
+    }
+
+    /// Sets the length of the track, in the track's own time scale, `None` where it cannot be determined
+    #[must_use]
+    pub const fn with_duration(self, duration: Option<u64>) -> Self {
+        Self { duration, ..self }
     }
 
     /// Returns the time the media was created
@@ -70,9 +101,9 @@ impl MediaHeaderBox {
         self.timescale
     }
 
-    /// Returns the length of the track, in the track's own time scale
+    /// Returns the length of the track, in the track's own time scale, or `None` where it cannot be determined
     #[must_use]
-    pub const fn duration(&self) -> u64 {
+    pub const fn duration(&self) -> Option<u64> {
         self.duration
     }
 
@@ -98,7 +129,7 @@ impl MediaHeaderBox {
         let widest = u32::MAX as u64;
         let fits_in_32_bits = self.creation_time.seconds() <= widest
             && self.modification_time.seconds() <= widest
-            && self.duration <= widest;
+            && duration::fits_in_32_bits(self.duration);
 
         if fits_in_32_bits { 0 } else { 1 }
     }
@@ -133,7 +164,7 @@ impl BoxDecode for MediaHeaderBox {
         let creation_time = Mp4EpochSeconds::from_seconds(reader.read_unsigned(field_width)?);
         let modification_time = Mp4EpochSeconds::from_seconds(reader.read_unsigned(field_width)?);
         let timescale = reader.read_u32()?;
-        let duration = reader.read_unsigned(field_width)?;
+        let duration = duration::read_duration(reader, field_width)?;
         let language = LanguageCode::from_raw(reader.read_u16()?);
         let pre_defined = reader.read_u16()?;
 
@@ -165,7 +196,7 @@ impl BoxEncode for MediaHeaderBox {
         writer.write_unsigned(field_width, self.creation_time.seconds())?;
         writer.write_unsigned(field_width, self.modification_time.seconds())?;
         writer.write_u32(self.timescale)?;
-        writer.write_unsigned(field_width, self.duration)?;
+        duration::write_duration(writer, field_width, self.duration)?;
         writer.write_u16(self.language.raw())?;
         writer.write_u16(self.pre_defined)?;
 
@@ -188,7 +219,7 @@ mod tests {
             Mp4EpochSeconds::from_seconds(1),
             Mp4EpochSeconds::from_seconds(2),
             90_000,
-            duration,
+            Some(duration),
             LanguageCode::UND,
         )
     }
@@ -203,8 +234,19 @@ mod tests {
 
     #[test]
     fn a_box_reads_back_as_the_value_that_wrote_it_at_either_version() {
-        for duration in [u64::from(u32::MAX), u64::from(u32::MAX) + 1] {
-            let media_header = media_header(duration);
+        let early = Mp4EpochSeconds::from_seconds(0);
+        let late = Mp4EpochSeconds::from_seconds(u64::from(u32::MAX) + 1);
+        let cases = [
+            (Some(u64::from(u32::MAX) - 1), early),
+            (Some(u64::from(u32::MAX)), early),
+            (None, early),
+            (None, late),
+        ];
+
+        for (duration, creation_time) in cases {
+            let media_header = media_header(0)
+                .with_duration(duration)
+                .with_creation_time(creation_time);
 
             let payload = encoded_payload(&media_header);
 
@@ -213,6 +255,20 @@ mod tests {
                 media_header
             );
         }
+    }
+
+    #[test]
+    fn each_time_and_the_duration_are_set_over_what_the_box_was_created_with() {
+        let created = Mp4EpochSeconds::from_seconds(10);
+        let modified = Mp4EpochSeconds::from_seconds(20);
+
+        assert_eq!(
+            media_header(5_000)
+                .with_creation_time(created)
+                .with_modification_time(modified)
+                .with_duration(None),
+            MediaHeaderBox::new(created, modified, 90_000, None, LanguageCode::UND)
+        );
     }
 
     #[test]

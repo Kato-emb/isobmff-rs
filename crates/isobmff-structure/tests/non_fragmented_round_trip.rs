@@ -25,7 +25,7 @@ mod tests {
         let epoch = Mp4EpochSeconds::from_seconds(0);
 
         MovieBox::new(
-            MovieHeaderBox::new(epoch, epoch, TIMESCALE, 0, 3),
+            MovieHeaderBox::new(epoch, epoch, TIMESCALE, Some(0), 3),
             vec![track(1), track(2)],
             None,
         )

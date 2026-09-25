@@ -122,7 +122,7 @@ impl MovieBox {
         let epoch = Mp4EpochSeconds::from_seconds(0);
 
         Self::new(
-            MovieHeaderBox::new(epoch, epoch, timescale, 0, next_track_id),
+            MovieHeaderBox::new(epoch, epoch, timescale, Some(0), next_track_id),
             tracks,
             Some(mvex),
         )
@@ -347,7 +347,7 @@ mod tests {
         assert_eq!(
             MovieBox::new_fragmented(1_000, vec![video_track(9), video_track(3)]),
             MovieBox::new(
-                MovieHeaderBox::new(epoch, epoch, 1_000, 0, 10),
+                MovieHeaderBox::new(epoch, epoch, 1_000, Some(0), 10),
                 vec![video_track(9), video_track(3)],
                 MovieExtendsBox::new(vec![
                     TrackExtendsBox::new(9, 1, 0, 0, SampleFlags::ZERO),

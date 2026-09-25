@@ -130,7 +130,7 @@ impl TrackBox {
             epoch,
             epoch,
             track_id,
-            0,
+            Some(0),
             U16F16::from_integer(width),
             U16F16::from_integer(height),
         );
@@ -149,7 +149,7 @@ impl TrackBox {
             stbl,
         );
         let mdia = MediaBox::new(
-            MediaHeaderBox::new(epoch, epoch, timescale, 0, LanguageCode::UND),
+            MediaHeaderBox::new(epoch, epoch, timescale, Some(0), LanguageCode::UND),
             HandlerBox::new(
                 FourCC::new(*b"vide"),
                 // Why not unwrap: the name holds no NUL, so the string always
@@ -305,7 +305,7 @@ pub(crate) mod tests {
                 Mp4EpochSeconds::from_seconds(0),
                 Mp4EpochSeconds::from_seconds(0),
                 1,
-                90_000,
+                Some(90_000),
                 U16F16::from_integer(1920),
                 U16F16::from_integer(1080),
             ),
@@ -314,7 +314,7 @@ pub(crate) mod tests {
                     Mp4EpochSeconds::from_seconds(0),
                     Mp4EpochSeconds::from_seconds(0),
                     90_000,
-                    90_000,
+                    Some(90_000),
                     LanguageCode::UND,
                 ),
                 HandlerBox::new(
@@ -439,12 +439,12 @@ pub(crate) mod tests {
                     epoch,
                     epoch,
                     1,
-                    0,
+                    Some(0),
                     U16F16::from_integer(1920),
                     U16F16::from_integer(1080),
                 ),
                 MediaBox::new(
-                    MediaHeaderBox::new(epoch, epoch, 90_000, 0, LanguageCode::UND),
+                    MediaHeaderBox::new(epoch, epoch, 90_000, Some(0), LanguageCode::UND),
                     HandlerBox::new(
                         FourCC::new(*b"vide"),
                         NullTerminatedString::new(String::from("VideoHandler")).unwrap(),

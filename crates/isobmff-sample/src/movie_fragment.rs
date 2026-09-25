@@ -312,7 +312,7 @@ mod tests {
                 Mp4EpochSeconds::from_seconds(0),
                 Mp4EpochSeconds::from_seconds(0),
                 1_000,
-                0,
+                Some(0),
                 2,
             ),
             trak,

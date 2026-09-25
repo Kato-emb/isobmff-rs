@@ -94,7 +94,7 @@ impl Composition {
                 epoch,
                 epoch,
                 TIMESCALE,
-                0,
+                Some(0),
                 u32::try_from(self.track_count).unwrap() + 1,
             ),
             self.track_ids().map(track).collect(),

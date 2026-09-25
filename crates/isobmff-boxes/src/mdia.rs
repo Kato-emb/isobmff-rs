@@ -167,7 +167,7 @@ mod tests {
                 Mp4EpochSeconds::from_seconds(0),
                 Mp4EpochSeconds::from_seconds(0),
                 90_000,
-                90_000,
+                Some(90_000),
                 LanguageCode::UND,
             ),
             HandlerBox::new(

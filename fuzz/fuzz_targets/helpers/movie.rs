@@ -34,7 +34,7 @@ pub fn movie_of(trex: Vec<TrackExtendsBox>) -> Option<MovieBox> {
         .collect::<Vec<_>>();
 
     MovieBox::new(
-        MovieHeaderBox::new(epoch, epoch, TIMESCALE, 0, next_track_id),
+        MovieHeaderBox::new(epoch, epoch, TIMESCALE, Some(0), next_track_id),
         trak,
         MovieExtendsBox::new(trex),
     )
