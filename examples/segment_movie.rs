@@ -56,8 +56,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             samples: Vec::new(),
         });
         *movie
-            .mdia_mut(track_id)
+            .trak_mut(track_id)
             .ok_or("the movie lost a track it declares")?
+            .mdia_mut()
             .minf_mut()
             .stbl_mut() = SampleTableBox::new(
             sample_table.stsd().clone(),

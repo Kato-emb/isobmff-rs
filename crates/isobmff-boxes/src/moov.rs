@@ -9,7 +9,6 @@ use isobmff_core::{
 };
 
 use crate::data_types::SampleFlags;
-use crate::mdia::MediaBox;
 use crate::mvex::MovieExtendsBox;
 use crate::mvhd::MovieHeaderBox;
 use crate::trak::TrackBox;
@@ -134,24 +133,30 @@ impl MovieBox {
         &self.mvhd
     }
 
+    /// Returns the declarations the presentation applies as a whole, to be changed in place
+    #[must_use]
+    pub const fn mvhd_mut(&mut self) -> &mut MovieHeaderBox {
+        &mut self.mvhd
+    }
+
     /// Returns the tracks the presentation is made of
     #[must_use]
     pub fn trak(&self) -> &[TrackBox] {
         &self.trak
     }
 
-    /// Returns the media of the track `track_id` names, to be changed in place, or `None` for a track the movie does not declare
+    /// Returns the track `track_id` names, to be changed in place, or `None` for a track the movie does not declare
     ///
-    /// The track's `tkhd` is not reached this way, so what [`new`](Self::new)
-    /// settled — distinct `track_id`s, and a `trex` for each track where the
-    /// movie is fragmented — still holds. A decoded movie whose tracks collide
-    /// on `track_id` yields the first of them, in the order they came.
+    /// What [`new`](Self::new) settled — distinct `track_id`s, and a `trex` for
+    /// each track where the movie is fragmented — holds of the tracks as they
+    /// were built; a change made through here that touches either is the
+    /// caller's to keep to them. A decoded movie whose tracks collide on
+    /// `track_id` yields the first of them, in the order they came.
     #[must_use]
-    pub fn mdia_mut(&mut self, track_id: u32) -> Option<&mut MediaBox> {
+    pub fn trak_mut(&mut self, track_id: u32) -> Option<&mut TrackBox> {
         self.trak
             .iter_mut()
             .find(|track| track.tkhd().track_id() == track_id)
-            .map(TrackBox::mdia_mut)
     }
 
     /// Returns the declaration that the movie continues in fragments, if it does
@@ -280,7 +285,7 @@ mod tests {
         AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, Mp4EpochSeconds,
     };
 
-    use super::{MovieBox, MovieExtendsBox, MovieHeaderBox, TrackExtendsBox};
+    use super::{MovieBox, MovieExtendsBox, MovieHeaderBox, TrackBox, TrackExtendsBox};
     use crate::chunk_offset::ChunkOffsets;
     use crate::data_types::SampleFlags;
     use crate::mvex::tests::movie_extends;
@@ -452,7 +457,12 @@ mod tests {
             ChunkOffsets::from_offsets([1_000]),
         );
 
-        *decoded.mdia_mut(1).unwrap().minf_mut().stbl_mut() = laid_out.clone();
+        *decoded
+            .trak_mut(1)
+            .unwrap()
+            .mdia_mut()
+            .minf_mut()
+            .stbl_mut() = laid_out.clone();
 
         assert_eq!(
             decoded
@@ -471,8 +481,29 @@ mod tests {
     }
 
     #[test]
-    fn the_media_of_a_track_the_movie_does_not_declare_yields_nothing() {
-        assert_eq!(movie().mdia_mut(7), None);
+    fn a_track_the_movie_does_not_declare_yields_nothing() {
+        assert_eq!(movie().trak_mut(7), None);
+    }
+
+    #[test]
+    fn a_duration_set_through_a_track_is_written_with_the_movie() {
+        let mut movie = movie();
+
+        let track_header = movie.trak_mut(1).unwrap().tkhd_mut();
+        *track_header = track_header.clone().with_duration(Some(7_000));
+
+        assert_eq!(
+            MovieBox::decode_payload(&encoded_payload(&movie)),
+            Ok(MovieBox::new(
+                movie_header(5_000),
+                vec![TrackBox::new(
+                    track().tkhd().clone().with_duration(Some(7_000)),
+                    track().mdia().clone(),
+                )],
+                None,
+            )
+            .unwrap())
+        );
     }
 
     #[test]

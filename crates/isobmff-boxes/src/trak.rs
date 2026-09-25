@@ -169,6 +169,12 @@ impl TrackBox {
         &self.tkhd
     }
 
+    /// Returns the declarations the track applies as a whole, to be changed in place
+    #[must_use]
+    pub const fn tkhd_mut(&mut self) -> &mut TrackHeaderBox {
+        &mut self.tkhd
+    }
+
     /// Returns the edits that map the track's media onto the movie's timeline, if the track has them
     #[must_use]
     pub const fn edts(&self) -> Option<&EditBox> {
@@ -181,9 +187,9 @@ impl TrackBox {
         &self.mdia
     }
 
-    /// Returns the media of the track, to be changed in place
+    /// Returns everything declaring the media the track carries, to be changed in place
     #[must_use]
-    pub(crate) const fn mdia_mut(&mut self) -> &mut MediaBox {
+    pub const fn mdia_mut(&mut self) -> &mut MediaBox {
         &mut self.mdia
     }
 

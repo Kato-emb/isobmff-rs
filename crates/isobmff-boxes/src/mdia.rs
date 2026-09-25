@@ -46,6 +46,12 @@ impl MediaBox {
         &self.mdhd
     }
 
+    /// Returns the declarations the track's media applies as a whole, to be changed in place
+    #[must_use]
+    pub const fn mdhd_mut(&mut self) -> &mut MediaHeaderBox {
+        &mut self.mdhd
+    }
+
     /// Returns the handler naming the kind of media the track carries
     #[must_use]
     pub const fn hdlr(&self) -> &HandlerBox {

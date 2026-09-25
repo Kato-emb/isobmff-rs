@@ -306,10 +306,10 @@ impl NonFragmentedWriter {
             return Err(self.fail(Error::missing_mandatory_box(MovieBox::BOX_TYPE)));
         };
         for (track_id, tables) in tables_per_track {
-            let Some(mdia) = movie.mdia_mut(track_id) else {
+            let Some(track) = movie.trak_mut(track_id) else {
                 return Err(self.fail(isobmff_sample::Error::unknown_track_id(track_id).into()));
             };
-            let stbl = mdia.minf_mut().stbl_mut();
+            let stbl = track.mdia_mut().minf_mut().stbl_mut();
             *stbl = tables.into_sample_table(stbl.stsd().clone());
         }
         let payload = whole_payload(&movie).map_err(|failure| self.fail(failure))?;
