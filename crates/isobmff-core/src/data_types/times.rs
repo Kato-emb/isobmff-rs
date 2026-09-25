@@ -22,9 +22,13 @@
 /// // 2082844800 seconds on from the epoch is where the Unix one starts
 /// let unix_epoch = Mp4EpochSeconds::from_seconds(2_082_844_800);
 /// assert_eq!(unix_epoch.seconds(), 2_082_844_800);
+/// assert_eq!(Mp4EpochSeconds::from_unix_seconds(0), Some(unix_epoch));
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Mp4EpochSeconds(u64);
+
+/// Seconds from 1904-01-01 UTC to the Unix epoch of 1970-01-01 UTC
+const UNIX_EPOCH_SECONDS: u64 = 2_082_844_800;
 
 impl Mp4EpochSeconds {
     /// Creates the time from the seconds since the epoch of 1904-01-01 UTC
@@ -33,9 +37,32 @@ impl Mp4EpochSeconds {
         Self(seconds)
     }
 
+    /// Creates the time from the seconds since the Unix epoch of 1970-01-01 UTC
+    ///
+    /// Seconds since 1970 reach no time before it, so a time between 1904 and
+    /// 1970 is stated with [`from_seconds`](Self::from_seconds). Returns `None`
+    /// for seconds so many that the count from 1904 does not fit in 64 bits.
+    #[must_use]
+    pub const fn from_unix_seconds(seconds: u64) -> Option<Self> {
+        match seconds.checked_add(UNIX_EPOCH_SECONDS) {
+            Some(seconds) => Some(Self(seconds)),
+            None => None,
+        }
+    }
+
     /// Returns the seconds since the epoch of 1904-01-01 UTC
     #[must_use]
     pub const fn seconds(self) -> u64 {
         self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Mp4EpochSeconds;
+
+    #[test]
+    fn unix_seconds_past_what_the_count_from_1904_holds_state_no_time() {
+        assert_eq!(Mp4EpochSeconds::from_unix_seconds(u64::MAX), None);
     }
 }

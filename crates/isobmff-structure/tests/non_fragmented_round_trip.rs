@@ -10,7 +10,7 @@ mod reading;
 #[cfg(test)]
 mod tests {
     use super::reading::samples_of;
-    use isobmff_boxes::{FileTypeBox, MovieBox, MovieHeaderBox, SampleFlags};
+    use isobmff_boxes::{FileTypeBox, HeaderDuration, MovieBox, MovieHeaderBox, SampleFlags};
     use isobmff_core::{BoxType, FourCC, Mp4EpochSeconds};
     use isobmff_sample::Sample;
     use isobmff_sequence::BoxEvent;
@@ -25,7 +25,7 @@ mod tests {
         let epoch = Mp4EpochSeconds::from_seconds(0);
 
         MovieBox::new(
-            MovieHeaderBox::new(epoch, epoch, TIMESCALE, 0, 3),
+            MovieHeaderBox::new(epoch, epoch, TIMESCALE, HeaderDuration::ZERO, 3),
             vec![track(1), track(2)],
             None,
         )

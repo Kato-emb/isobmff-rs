@@ -13,7 +13,7 @@ use std::io::BufWriter;
 
 use isobmff::boxes::{
     AudioSampleEntry, ChunkOffsetBox, ChunkOffsets, DataEntry, DataEntryUrlBox, DataInformationBox,
-    DataReferenceBox, HandlerBox, MediaBox, MediaHeaderBox, MediaInformationBox,
+    DataReferenceBox, HandlerBox, HeaderDuration, MediaBox, MediaHeaderBox, MediaInformationBox,
     MediaInformationHeader, MovieBox, MovieHeaderBox, SampleDescriptionBox, SampleFlags,
     SampleSizeBox, SampleSizeEntries, SampleSizes, SampleTableBox, SampleToChunkBox,
     SoundMediaHeaderBox, TimeToSampleBox, TrackBox, TrackHeaderBox,
@@ -64,6 +64,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         sample_table,
     );
     let epoch = Mp4EpochSeconds::from_seconds(0);
+    let duration = HeaderDuration::new(frames).ok_or("too many seconds")?;
     let handler_name =
         NullTerminatedString::new(String::from("SoundHandler")).ok_or("a NUL in the name")?;
     let media = MediaBox::new(
@@ -71,7 +72,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             epoch,
             epoch,
             u32::try_from(SAMPLE_RATE)?,
-            frames,
+            duration,
             LanguageCode::UND,
         ),
         HandlerBox::new(FourCC::new(*b"soun"), handler_name),
@@ -83,12 +84,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         epoch,
         epoch,
         TRACK_ID,
-        frames,
+        duration,
         U16F16::ZERO,
         U16F16::ZERO,
     )
     .with_volume(I8F8::ONE);
-    let movie_header = MovieHeaderBox::new(epoch, epoch, u32::try_from(SAMPLE_RATE)?, frames, 2);
+    let movie_header = MovieHeaderBox::new(epoch, epoch, u32::try_from(SAMPLE_RATE)?, duration, 2);
     let movie = MovieBox::new(movie_header, vec![TrackBox::new(track_header, media)], None)
         .ok_or("the movie declares no track")?;
 

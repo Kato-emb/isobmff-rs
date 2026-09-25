@@ -275,6 +275,12 @@ impl Error {
         Self::new(ErrorKind::UnsupportedFlags, Detail::Flags(flags))
     }
 
+    /// Returns the failure of a box stating a value the box does not read in one of its fields
+    #[must_use]
+    pub const fn unsupported_value() -> Self {
+        Self::new(ErrorKind::UnsupportedValue, Detail::Nothing)
+    }
+
     /// Returns the failure of a count past the entries a box reads
     #[must_use]
     pub const fn unsupported_entry_count(declared: u64, limit: u64) -> Self {
@@ -646,6 +652,8 @@ impl fmt::Display for Error {
                 self.needed_entries().unwrap_or_default(),
                 self.available_entries().unwrap_or_default()
             ),
+            ErrorKind::UnsupportedValue => formatter
+                .write_str("box states a value this box does not read in one of its fields"),
         }
     }
 }
@@ -819,6 +827,8 @@ pub enum ErrorKind {
     /// declares, [`available_entries`](Error::available_entries) the
     /// count the box reads.
     UnsupportedEntryCount,
+    /// Box states a value the box does not read in one of its fields
+    UnsupportedValue,
     /// Buffer ends inside the value being written into it
     ///
     /// [`needed_bytes`](Error::needed_bytes) is the length the value
@@ -867,7 +877,8 @@ impl ErrorKind {
             | Self::UnsupportedVersion
             | Self::UnsupportedFlags
             | Self::UnsupportedFieldSize
-            | Self::UnsupportedEntryCount => Category::Unsupported,
+            | Self::UnsupportedEntryCount
+            | Self::UnsupportedValue => Category::Unsupported,
             Self::TruncatedBuffer
             | Self::TrailingBuffer
             | Self::BufferLengthMismatch
@@ -1066,6 +1077,7 @@ mod tests {
             Category::Usage
         );
         assert_eq!(Error::zero_index().category(), Category::Malformed);
+        assert_eq!(Error::unsupported_value().category(), Category::Unsupported);
     }
 
     #[test]
@@ -1195,6 +1207,10 @@ mod tests {
         assert_eq!(
             Error::zero_index().to_string(),
             "box holds 0 in a field the spec counts from 1"
+        );
+        assert_eq!(
+            Error::unsupported_value().to_string(),
+            "box states a value this box does not read in one of its fields"
         );
     }
 

@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests {
     use isobmff_boxes::{
-        DegradationPriorityEntry, MovieBox, MovieHeaderBox, PaddingBitsEntry,
+        DegradationPriorityEntry, HeaderDuration, MovieBox, MovieHeaderBox, PaddingBitsEntry,
         SampleDependencyTypeEntry, SampleDescriptionBox, SampleFlags,
     };
     use isobmff_core::{AnyBox, BoxType, Mp4EpochSeconds};
@@ -64,7 +64,7 @@ mod tests {
                 Mp4EpochSeconds::from_seconds(0),
                 Mp4EpochSeconds::from_seconds(0),
                 1_000,
-                0,
+                HeaderDuration::ZERO,
                 3,
             ),
             tables

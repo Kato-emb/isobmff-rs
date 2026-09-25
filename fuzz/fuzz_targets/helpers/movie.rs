@@ -4,7 +4,7 @@
 //! A file under `fuzz_targets/` is a target only where the `[[bin]]` table names
 //! it, so this module is not one.
 
-use isobmff::boxes::{MovieBox, MovieExtendsBox, MovieHeaderBox, TrackExtendsBox};
+use isobmff::boxes::{HeaderDuration, MovieBox, MovieExtendsBox, MovieHeaderBox, TrackExtendsBox};
 use isobmff::core::Mp4EpochSeconds;
 use isobmff_test_support::track;
 
@@ -34,7 +34,7 @@ pub fn movie_of(trex: Vec<TrackExtendsBox>) -> Option<MovieBox> {
         .collect::<Vec<_>>();
 
     MovieBox::new(
-        MovieHeaderBox::new(epoch, epoch, TIMESCALE, 0, next_track_id),
+        MovieHeaderBox::new(epoch, epoch, TIMESCALE, HeaderDuration::ZERO, next_track_id),
         trak,
         MovieExtendsBox::new(trex),
     )

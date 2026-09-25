@@ -188,6 +188,19 @@ impl<'payload> FieldReader<'payload> {
         }
     }
 
+    /// Reads the next field as a signed integer of the width the box settled
+    ///
+    /// # Errors
+    ///
+    /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload ends
+    ///   inside the field.
+    pub fn read_signed(&mut self, width: FieldWidth) -> Result<i64, Error> {
+        match width {
+            FieldWidth::Compact => Ok(i64::from(self.read_i32()?)),
+            FieldWidth::Extended => Ok(i64::from_be_bytes(*self.read_bytes::<8>()?)),
+        }
+    }
+
     /// Requires the payload to hold `bytes` more than the fields have taken
     ///
     /// A box asks this where the payload states how much is coming — a count of
@@ -419,6 +432,29 @@ impl<'buffer> FieldWriter<'buffer> {
         }
     }
 
+    /// Writes the next field as a signed integer of the width the box settled
+    ///
+    /// # Errors
+    ///
+    /// * [`TruncatedBuffer`](crate::ErrorKind::TruncatedBuffer): the buffer ends
+    ///   inside the field.
+    /// * [`OutOfRange`](crate::ErrorKind::OutOfRange): `value` is wider than the
+    ///   field, which leaves nothing to write. The error's
+    ///   [`value`](Error::value) is the 64 bits of `value` in two's complement,
+    ///   so a negative `value` reads as 2^64 plus it.
+    pub fn write_signed(&mut self, width: FieldWidth, value: i64) -> Result<(), Error> {
+        match width {
+            FieldWidth::Compact => {
+                let narrow = i32::try_from(value).map_err(|_| {
+                    Error::out_of_range(u64::from_be_bytes(value.to_be_bytes()), width)
+                })?;
+
+                self.write_i32(narrow)
+            }
+            FieldWidth::Extended => self.write_bytes(&value.to_be_bytes()),
+        }
+    }
+
     /// Takes the rest of the buffer for the field that runs to its end
     ///
     /// The mirror of [`FieldReader::take_remainder`]: the bytes are the field,
@@ -605,6 +641,36 @@ mod tests {
             FieldWriter::new(&mut buffer)
                 .write_unsigned(FieldWidth::Compact, u64::from(u32::MAX) + 1),
             Err(Error::out_of_range(0x1_0000_0000, FieldWidth::Compact))
+        );
+        assert_eq!(buffer, [0xff; 4]);
+    }
+
+    #[test]
+    fn a_negative_field_of_either_width_reads_back_as_the_value_that_wrote_it() {
+        let mut buffer = [0; 12];
+        let mut writer = FieldWriter::new(&mut buffer);
+
+        assert_eq!(writer.write_signed(FieldWidth::Compact, -1), Ok(()));
+        assert_eq!(writer.write_signed(FieldWidth::Extended, i64::MIN), Ok(()));
+        assert_eq!(writer.finish(), Ok(()));
+
+        let mut reader = FieldReader::new(&buffer);
+        assert_eq!(reader.read_signed(FieldWidth::Compact), Ok(-1));
+        assert_eq!(reader.read_signed(FieldWidth::Extended), Ok(i64::MIN));
+        assert_eq!(reader.finish(), Ok(()));
+    }
+
+    #[test]
+    fn a_signed_value_wider_than_its_field_is_refused_before_a_byte_is_written() {
+        let mut buffer = [0xff; 4];
+
+        assert_eq!(
+            FieldWriter::new(&mut buffer)
+                .write_signed(FieldWidth::Compact, i64::from(i32::MIN) - 1),
+            Err(Error::out_of_range(
+                0xffff_ffff_7fff_ffff,
+                FieldWidth::Compact
+            ))
         );
         assert_eq!(buffer, [0xff; 4]);
     }

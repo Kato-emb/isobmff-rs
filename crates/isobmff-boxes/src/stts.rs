@@ -120,6 +120,20 @@ impl TimeToSampleBox {
         &self.entries
     }
 
+    /// Returns the length of the media, the sum of the decode time deltas of all its samples
+    ///
+    /// ISO/IEC 14496-12 §8.6.1.2.1 has the sum of all deltas give the length of
+    /// the media in the track, in its own time scale and with no edit list
+    /// applied. Returns `None` when the sum does not fit in 64 bits.
+    #[must_use]
+    pub fn media_duration(&self) -> Option<u64> {
+        self.entries.iter().try_fold(0_u64, |total, entry| {
+            let run = u64::from(entry.sample_count).checked_mul(u64::from(entry.sample_delta))?;
+
+            total.checked_add(run)
+        })
+    }
+
     /// Returns the decode time delta of every sample in turn
     ///
     /// The delta an entry states comes out once per sample the entry counts.
@@ -250,6 +264,18 @@ mod tests {
             time_to_sample.deltas().collect::<Vec<_>>(),
             [100, 100, 50, 50, 50]
         );
+    }
+
+    #[test]
+    fn the_media_lasts_the_sum_of_every_delta_while_it_fits_in_64_bits() {
+        let longest_run = TimeToSampleEntry::new(u32::MAX, u32::MAX);
+        let overflowing = TimeToSampleBox::new(vec![longest_run, longest_run]);
+
+        assert_eq!(
+            TimeToSampleBox::from_deltas([100, 100, 50]).media_duration(),
+            Some(250)
+        );
+        assert_eq!(overflowing.media_duration(), None);
     }
 
     #[test]

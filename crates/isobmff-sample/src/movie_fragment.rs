@@ -281,7 +281,7 @@ mod tests {
     use core::ops::Range;
 
     use isobmff_boxes::{
-        CompositionTimeOffset, DegradationPriorityEntry, MovieBox, MovieExtendsBox,
+        CompositionTimeOffset, DegradationPriorityEntry, HeaderDuration, MovieBox, MovieExtendsBox,
         MovieFragmentBox, MovieFragmentHeaderBox, MovieHeaderBox, PaddingBitsEntry,
         SampleDependencyTypeEntry, SampleFlags, TrackBox, TrackExtendsBox,
         TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
@@ -312,7 +312,7 @@ mod tests {
                 Mp4EpochSeconds::from_seconds(0),
                 Mp4EpochSeconds::from_seconds(0),
                 1_000,
-                0,
+                HeaderDuration::ZERO,
                 2,
             ),
             trak,

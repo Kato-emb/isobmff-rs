@@ -3,6 +3,7 @@
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::num::NonZeroU32;
 
 use isobmff_core::{
     AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
@@ -12,8 +13,10 @@ use isobmff_core::{
 
 use crate::chunk_offset::{ChunkOffsetBox, ChunkOffsets};
 use crate::data_entry::{DataEntry, DataEntryUrlBox};
+use crate::data_types::HeaderDuration;
 use crate::dinf::DataInformationBox;
 use crate::dref::DataReferenceBox;
+use crate::edts::EditBox;
 use crate::hdlr::HandlerBox;
 use crate::mdhd::MediaHeaderBox;
 use crate::mdia::MediaBox;
@@ -41,15 +44,19 @@ const VIDEO_HANDLER_NAME: &str = "VideoHandler";
 /// Box that holds everything declaring one track
 ///
 /// [`TrackBox`] (`trak`), ISO/IEC 14496-12 §8.3.1. Both children the spec marks
-/// mandatory are promoted to fields. An `edts`, which maps the track's media
-/// onto the movie's timeline, has no fields yet and is kept in
-/// [`other_boxes`](Self::other_boxes) — so the times this crate reports are the
-/// media's own, with no edit list applied.
+/// mandatory are promoted to fields, and so is the `edts` that maps the track's
+/// media onto the movie's timeline. The times this crate reports are the
+/// media's own: the edit list is read, not applied.
+///
+/// On encode the children are written in the order the spec lists them —
+/// `tkhd`, `edts`, `mdia` — and then the children no field claims, so a
+/// round-trip settles the order rather than preserving it.
 #[doc(alias = "trak")]
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Debug)]
 pub struct TrackBox {
     tkhd: TrackHeaderBox,
+    edts: Option<EditBox>,
     mdia: MediaBox,
     other_boxes: OtherBoxes,
 }
@@ -60,8 +67,18 @@ impl TrackBox {
     pub const fn new(tkhd: TrackHeaderBox, mdia: MediaBox) -> Self {
         Self {
             tkhd,
+            edts: None,
             mdia,
             other_boxes: OtherBoxes::new(),
+        }
+    }
+
+    /// Sets the edits that map the track's media onto the movie's timeline
+    #[must_use]
+    pub fn with_edts(self, edts: EditBox) -> Self {
+        Self {
+            edts: Some(edts),
+            ..self
         }
     }
 
@@ -115,7 +132,7 @@ impl TrackBox {
             epoch,
             epoch,
             track_id,
-            0,
+            HeaderDuration::ZERO,
             U16F16::from_integer(width),
             U16F16::from_integer(height),
         );
@@ -134,7 +151,13 @@ impl TrackBox {
             stbl,
         );
         let mdia = MediaBox::new(
-            MediaHeaderBox::new(epoch, epoch, timescale, 0, LanguageCode::UND),
+            MediaHeaderBox::new(
+                epoch,
+                epoch,
+                timescale,
+                HeaderDuration::ZERO,
+                LanguageCode::UND,
+            ),
             HandlerBox::new(
                 FourCC::new(*b"vide"),
                 // Why not unwrap: the name holds no NUL, so the string always
@@ -154,15 +177,56 @@ impl TrackBox {
         &self.tkhd
     }
 
+    /// Returns the declarations the track applies as a whole, to be changed in place
+    #[must_use]
+    pub const fn tkhd_mut(&mut self) -> &mut TrackHeaderBox {
+        &mut self.tkhd
+    }
+
+    /// States the duration of the track and of its media, and returns the track's
+    ///
+    /// The media is stated as [`MediaBox::state_duration`] states it. The
+    /// `tkhd` takes, as ISO/IEC 14496-12 §8.3.2.3 has it, the sum of the
+    /// `segment_duration` of the track's edits, or, for a track with no edit
+    /// list, the media's duration converted to `movie_timescale` and rounded up
+    /// to the next whole unit. It cannot be determined where the sum or the
+    /// conversion reaches [`u64::MAX`], or where the media's duration cannot be
+    /// determined or the media's time scale is 0.
+    pub(crate) fn state_duration(&mut self, movie_timescale: u32) -> HeaderDuration {
+        self.mdia.state_duration();
+        let media_header = self.mdia.mdhd();
+        let duration =
+            HeaderDuration::from_derived(match self.edts.as_ref().and_then(EditBox::elst) {
+                Some(elst) => elst.duration(),
+                None => media_header.duration().get().and_then(|media_duration| {
+                    let media_timescale = NonZeroU32::new(media_header.timescale())?;
+                    let scaled =
+                        u128::from(media_duration).checked_mul(u128::from(movie_timescale))?;
+
+                    u64::try_from(scaled.div_ceil(u128::from(media_timescale.get()))).ok()
+                }),
+            });
+
+        self.tkhd = self.tkhd.clone().with_duration(duration);
+
+        duration
+    }
+
+    /// Returns the edits that map the track's media onto the movie's timeline, if the track has them
+    #[must_use]
+    pub const fn edts(&self) -> Option<&EditBox> {
+        self.edts.as_ref()
+    }
+
     /// Returns everything declaring the media the track carries
     #[must_use]
     pub const fn mdia(&self) -> &MediaBox {
         &self.mdia
     }
 
-    /// Returns the media of the track, to be changed in place
+    /// Returns everything declaring the media the track carries, to be changed in place
     #[must_use]
-    pub(crate) const fn mdia_mut(&mut self) -> &mut MediaBox {
+    pub const fn mdia_mut(&mut self) -> &mut MediaBox {
         &mut self.mdia
     }
 
@@ -183,11 +247,13 @@ impl BoxDecode for TrackBox {
     /// * The failures of [`boxes`]: a child does not frame as a box.
     /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox): no `tkhd` or
     ///   `mdia`.
-    /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one of either.
+    /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one of either, or
+    ///   more than one `edts`.
     /// * Whatever the child reports, on the [`containers`](Error::containers) path: one of them
     ///   does not decode.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let mut tkhd_boxes = ChildBoxes::new();
+        let mut edts_boxes = ChildBoxes::new();
         let mut mdia_boxes = ChildBoxes::new();
         let mut other_boxes = OtherBoxes::new();
 
@@ -197,6 +263,8 @@ impl BoxDecode for TrackBox {
 
             if box_type == TrackHeaderBox::BOX_TYPE {
                 tkhd_boxes.push(child);
+            } else if box_type == EditBox::BOX_TYPE {
+                edts_boxes.push(child);
             } else if box_type == MediaBox::BOX_TYPE {
                 mdia_boxes.push(child);
             } else {
@@ -206,6 +274,7 @@ impl BoxDecode for TrackBox {
 
         Ok(Self {
             tkhd: tkhd_boxes.exactly_one()?,
+            edts: edts_boxes.zero_or_one()?,
             mdia: mdia_boxes.exactly_one()?,
             other_boxes,
         })
@@ -224,12 +293,16 @@ impl BoxEncode for TrackBox {
 
         self.tkhd
             .encoded_len()
+            .saturating_add(self.edts.as_ref().map_or(0, |edts| edts.encoded_len()))
             .saturating_add(self.mdia.encoded_len())
             .saturating_add(others)
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         let mut rest = self.tkhd.encode(writer.take_remainder())?;
+        if let Some(edts) = &self.edts {
+            rest = edts.encode(rest)?;
+        }
         rest = self.mdia.encode(rest)?;
         for other in self.other_boxes.as_slice() {
             rest = other.encode(rest)?;
@@ -246,13 +319,14 @@ pub(crate) mod tests {
     use alloc::vec::Vec;
 
     use isobmff_core::{
-        AnyBox, BoxDecode, BoxEncode, BoxType, Error, FourCC, FullBoxFlags, LanguageCode,
-        Mp4EpochSeconds, NullTerminatedString, U16F16,
+        AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FourCC, FullBoxFlags,
+        LanguageCode, Mp4EpochSeconds, NullTerminatedString, U16F16,
     };
 
-    use super::TrackBox;
+    use super::{HeaderDuration, TrackBox};
     use crate::chunk_offset::{ChunkOffsetBox, ChunkOffsets};
     use crate::dinf::tests::data_information;
+    use crate::edts::tests::edit;
     use crate::hdlr::HandlerBox;
     use crate::mdhd::MediaHeaderBox;
     use crate::mdia::MediaBox;
@@ -274,7 +348,7 @@ pub(crate) mod tests {
                 Mp4EpochSeconds::from_seconds(0),
                 Mp4EpochSeconds::from_seconds(0),
                 1,
-                90_000,
+                HeaderDuration::new(90_000).unwrap(),
                 U16F16::from_integer(1920),
                 U16F16::from_integer(1080),
             ),
@@ -283,7 +357,7 @@ pub(crate) mod tests {
                     Mp4EpochSeconds::from_seconds(0),
                     Mp4EpochSeconds::from_seconds(0),
                     90_000,
-                    90_000,
+                    HeaderDuration::new(90_000).unwrap(),
                     LanguageCode::UND,
                 ),
                 HandlerBox::new(
@@ -305,6 +379,14 @@ pub(crate) mod tests {
         TrackBox::new_video(track_id, 90_000, 1920, 1080, sample_entry())
     }
 
+    /// Writes one child whole and returns the bytes it occupies
+    fn encoded_child(child: &(impl BoxDefinition + BoxEncode)) -> Vec<u8> {
+        let mut buffer = vec![0; usize::try_from(child.encoded_len()).unwrap()];
+        child.encode(&mut buffer).unwrap();
+
+        buffer
+    }
+
     /// Writes the payload of the box and returns the bytes it occupies
     fn encoded_payload(track: &TrackBox) -> Vec<u8> {
         let mut buffer = vec![0; usize::try_from(track.payload_len()).unwrap()];
@@ -318,6 +400,56 @@ pub(crate) mod tests {
         let payload = encoded_payload(&track());
 
         assert_eq!(TrackBox::decode_payload(&payload).unwrap(), track());
+    }
+
+    #[test]
+    fn a_box_with_its_edits_reads_back_as_the_value_that_wrote_it() {
+        let edited = track().with_edts(edit());
+
+        assert_eq!(
+            TrackBox::decode_payload(&encoded_payload(&edited)).unwrap(),
+            edited
+        );
+    }
+
+    #[test]
+    fn edits_read_after_the_unclaimed_children_are_written_between_the_headers_and_the_media() {
+        let unclaimed = vec![0, 0, 0, 0x08, b'f', b'r', b'e', b'e'];
+        let payload = [
+            encoded_child(track().tkhd()),
+            encoded_child(track().mdia()),
+            unclaimed.clone(),
+            encoded_child(&edit()),
+        ]
+        .concat();
+
+        let decoded = TrackBox::decode_payload(&payload).unwrap();
+
+        assert_eq!(
+            encoded_payload(&decoded),
+            [
+                encoded_child(track().tkhd()),
+                encoded_child(&edit()),
+                encoded_child(track().mdia()),
+                unclaimed,
+            ]
+            .concat()
+        );
+    }
+
+    #[test]
+    fn a_second_edit_box_is_rejected() {
+        let payload = [
+            encoded_payload(&track()),
+            encoded_child(&edit()),
+            encoded_child(&edit()),
+        ]
+        .concat();
+
+        assert_eq!(
+            TrackBox::decode_payload(&payload),
+            Err(Error::duplicate_box(BoxType::compact(*b"edts")))
+        );
     }
 
     #[test]
@@ -350,12 +482,18 @@ pub(crate) mod tests {
                     epoch,
                     epoch,
                     1,
-                    0,
+                    HeaderDuration::ZERO,
                     U16F16::from_integer(1920),
                     U16F16::from_integer(1080),
                 ),
                 MediaBox::new(
-                    MediaHeaderBox::new(epoch, epoch, 90_000, 0, LanguageCode::UND),
+                    MediaHeaderBox::new(
+                        epoch,
+                        epoch,
+                        90_000,
+                        HeaderDuration::ZERO,
+                        LanguageCode::UND
+                    ),
                     HandlerBox::new(
                         FourCC::new(*b"vide"),
                         NullTerminatedString::new(String::from("VideoHandler")).unwrap(),
