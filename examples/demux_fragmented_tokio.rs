@@ -1,7 +1,6 @@
 //! Reads the samples a fragmented MP4 file carries on tokio, one line per sample
 //!
-//! The file is opened with `tokio::fs` and handed to the demuxer of `isobmff::io` inside the
-//! wrapper of `tokio-util`'s compatibility layer, which implements the `futures-io` traits.
+//! The output matches `demux_fragmented`: one line per sample, followed by the sample count.
 //!
 //! Usage: `cargo run -p isobmff-examples --example demux_fragmented_tokio -- <in.mp4>`
 
