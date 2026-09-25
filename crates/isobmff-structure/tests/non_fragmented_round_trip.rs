@@ -22,10 +22,15 @@ mod tests {
 
     /// Movie of two tracks declaring no sample yet, the template the writer fills in
     fn movie() -> MovieBox {
+        movie_timed_in(TIMESCALE)
+    }
+
+    /// Movie of [`movie`], the movie header counting in `timescale`
+    fn movie_timed_in(timescale: u32) -> MovieBox {
         let epoch = Mp4EpochSeconds::from_seconds(0);
 
         MovieBox::new(
-            MovieHeaderBox::new(epoch, epoch, TIMESCALE, HeaderDuration::ZERO, 3),
+            MovieHeaderBox::new(epoch, epoch, timescale, HeaderDuration::ZERO, 3),
             vec![track(1), track(2)],
             None,
         )
@@ -69,15 +74,19 @@ mod tests {
         ]
     }
 
-    /// The file the chunks make: the brands if any are handed over, one `mdat` per chunk, then the movie
-    fn written_file(brands: Option<FileTypeBox>, chunks: Vec<Vec<Sample>>) -> Vec<u8> {
+    /// The file the chunks make: the brands if any are handed over, one `mdat` per chunk, then `movie`
+    fn written_file(
+        brands: Option<FileTypeBox>,
+        movie: MovieBox,
+        chunks: Vec<Vec<Sample>>,
+    ) -> Vec<u8> {
         let mut writer = NonFragmentedWriter::new();
         let mut file = Vec::new();
 
         if let Some(brands) = brands {
             writer.handle_file_type(brands).unwrap();
         }
-        writer.handle_movie(movie()).unwrap();
+        writer.handle_movie(movie).unwrap();
         for chunk in chunks {
             writer.begin_chunk().unwrap();
             for sample in chunk {
@@ -95,14 +104,14 @@ mod tests {
 
     #[test]
     fn the_samples_are_read_back_as_they_were_handed_over_chunk_by_chunk() {
-        let file = written_file(Some(file_type()), two_track_chunks());
+        let file = written_file(Some(file_type()), movie(), two_track_chunks());
 
         assert_eq!(samples_of(&file, file.len()), two_track_chunks().concat());
     }
 
     #[test]
     fn each_chunk_is_laid_down_as_its_own_media_data_box_and_the_movie_comes_last() {
-        let file = written_file(Some(file_type()), two_track_chunks());
+        let file = written_file(Some(file_type()), movie(), two_track_chunks());
 
         let top_level: Vec<BoxType> = events_of(&file, file.len())
             .unwrap()
@@ -125,7 +134,7 @@ mod tests {
 
     #[test]
     fn a_file_handed_no_brands_is_read_back_declaring_the_brand_its_layout_requires() {
-        let file = written_file(None, two_track_chunks());
+        let file = written_file(None, movie(), two_track_chunks());
 
         let mut reader = NonFragmentedReader::new();
         reader.handle_input(&file).unwrap();
@@ -142,27 +151,8 @@ mod tests {
 
     #[test]
     fn the_durations_are_stated_from_the_samples_each_track_was_handed() {
-        let epoch = Mp4EpochSeconds::from_seconds(0);
-        let template = MovieBox::new(
-            MovieHeaderBox::new(epoch, epoch, 1_000, HeaderDuration::ZERO, 3),
-            vec![track(1), track(2)],
-            None,
-        )
-        .unwrap();
-        let mut writer = NonFragmentedWriter::new();
-        let mut file = Vec::new();
+        let file = written_file(None, movie_timed_in(1_000), two_track_chunks());
 
-        writer.handle_movie(template).unwrap();
-        for chunk in two_track_chunks() {
-            writer.begin_chunk().unwrap();
-            for sample in chunk {
-                writer.handle_sample(sample).unwrap();
-            }
-        }
-        writer.finish().unwrap();
-        while let Some(written) = writer.poll_output() {
-            file.extend_from_slice(&written);
-        }
         let mut reader = NonFragmentedReader::new();
         reader.handle_input(&file).unwrap();
         let read = reader.movie().unwrap();

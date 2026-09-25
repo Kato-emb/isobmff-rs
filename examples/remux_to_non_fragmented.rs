@@ -1,9 +1,10 @@
 //! Rewrites a fragmented MP4 file as a non-fragmented one, carrying every track over
 //!
-//! The movie header and the tracks of the source are kept, their modification time set to now, its
-//! `mvex` and every other box of the movie dropped, and the writer fills the sample tables of each
-//! track in from the samples. A chunk opens wherever the samples pass to another track or another
-//! sample description.
+//! The movie header and the tracks of the source are kept, the modification time of the `mvhd` and
+//! of each `tkhd` and `mdhd` set to now, its `mvex` and every other box of the movie dropped, and
+//! the writer fills the sample tables of each track in from the samples and states the durations
+//! from them. A chunk opens wherever the samples pass to another track or another sample
+//! description.
 //!
 //! Usage: `cargo run -p isobmff-examples --example remux_to_non_fragmented -- <in.mp4> <out.mp4>`
 

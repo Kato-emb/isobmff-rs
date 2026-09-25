@@ -53,8 +53,8 @@ mod tests {
     }
 
     #[test]
-    fn a_movie_the_muxer_laid_down_from_a_template_of_no_duration_is_read_back_lasting_its_samples()
-    {
+    fn a_movie_the_muxer_laid_down_from_a_template_of_no_duration_is_read_back_with_a_header_lasting_its_samples()
+     {
         let mut file = Vec::new();
         let mut muxer = NonFragmentedMuxer::new(&mut file);
         let samples = non_fragmented_file_samples();
