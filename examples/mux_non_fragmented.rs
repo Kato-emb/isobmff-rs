@@ -10,6 +10,7 @@ use core::error::Error;
 use std::env;
 use std::fs::File;
 use std::io::BufWriter;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use isobmff::boxes::{
     AudioSampleEntry, ChunkOffsetBox, ChunkOffsets, DataEntry, DataEntryUrlBox, DataInformationBox,
@@ -63,16 +64,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         )])),
         sample_table,
     );
-    let epoch = Mp4EpochSeconds::from_seconds(0);
-    let duration = HeaderDuration::new(frames).ok_or("too many seconds")?;
+    let now =
+        Mp4EpochSeconds::from_unix_seconds(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())
+            .ok_or("the clock is past what a header states")?;
     let handler_name =
         NullTerminatedString::new(String::from("SoundHandler")).ok_or("a NUL in the name")?;
     let media = MediaBox::new(
         MediaHeaderBox::new(
-            epoch,
-            epoch,
+            now,
+            now,
             u32::try_from(SAMPLE_RATE)?,
-            duration,
+            HeaderDuration::ZERO,
             LanguageCode::UND,
         ),
         HandlerBox::new(FourCC::new(*b"soun"), handler_name),
@@ -81,15 +83,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     let enabled_in_movie = FullBoxFlags::new(0x3).ok_or("flags past 24 bits")?;
     let track_header = TrackHeaderBox::new(
         enabled_in_movie,
-        epoch,
-        epoch,
+        now,
+        now,
         TRACK_ID,
-        duration,
+        HeaderDuration::ZERO,
         U16F16::ZERO,
         U16F16::ZERO,
     )
     .with_volume(I8F8::ONE);
-    let movie_header = MovieHeaderBox::new(epoch, epoch, u32::try_from(SAMPLE_RATE)?, duration, 2);
+    let movie_header = MovieHeaderBox::new(
+        now,
+        now,
+        u32::try_from(SAMPLE_RATE)?,
+        HeaderDuration::ZERO,
+        2,
+    );
     let movie = MovieBox::new(movie_header, vec![TrackBox::new(track_header, media)], None)
         .ok_or("the movie declares no track")?;
 
