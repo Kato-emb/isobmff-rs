@@ -8,7 +8,7 @@ use isobmff_core::{
     FieldWriter, Mp4EpochSeconds, OtherBoxes, boxes,
 };
 
-use crate::data_types::SampleFlags;
+use crate::data_types::{HeaderDuration, SampleFlags};
 use crate::mvex::MovieExtendsBox;
 use crate::mvhd::MovieHeaderBox;
 use crate::trak::TrackBox;
@@ -121,7 +121,7 @@ impl MovieBox {
         let epoch = Mp4EpochSeconds::from_seconds(0);
 
         Self::new(
-            MovieHeaderBox::new(epoch, epoch, timescale, Some(0), next_track_id),
+            MovieHeaderBox::new(epoch, epoch, timescale, HeaderDuration::ZERO, next_track_id),
             tracks,
             Some(mvex),
         )
@@ -171,21 +171,26 @@ impl MovieBox {
     ///   to the movie's time scale and rounded up to the next whole unit.
     /// * `mvhd` (§8.2.2.3): the duration of the longest track.
     ///
-    /// A duration is `None` — cannot be determined — where its sum does not fit
-    /// in 64 bits, or where its conversion does not fit or the media's time
-    /// scale is 0, and the movie's is `None` once any track's is.
+    /// A duration cannot be determined — it is
+    /// [`HeaderDuration::INDETERMINATE`](crate::HeaderDuration::INDETERMINATE)
+    /// — where its sum does not fit in 64 bits, or where its conversion does
+    /// not fit or the media's time scale is 0, and the movie's cannot be
+    /// determined once any track's cannot.
     pub fn state_durations(&mut self) {
         let movie_timescale = self.mvhd.timescale();
         let mut longest = Some(0_u64);
 
         for track in &mut self.trak {
-            let duration = track.state_duration(movie_timescale);
+            let duration = track.state_duration(movie_timescale).get();
             longest = longest
                 .zip(duration)
                 .map(|(longest, duration)| longest.max(duration));
         }
 
-        self.mvhd = self.mvhd.clone().with_duration(longest);
+        self.mvhd = self
+            .mvhd
+            .clone()
+            .with_duration(HeaderDuration::from_derived(longest));
     }
 
     /// Returns the declaration that the movie continues in fragments, if it does
@@ -314,7 +319,9 @@ mod tests {
         AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, LanguageCode, Mp4EpochSeconds,
     };
 
-    use super::{MovieBox, MovieExtendsBox, MovieHeaderBox, TrackBox, TrackExtendsBox};
+    use super::{
+        HeaderDuration, MovieBox, MovieExtendsBox, MovieHeaderBox, TrackBox, TrackExtendsBox,
+    };
     use crate::chunk_offset::ChunkOffsets;
     use crate::data_types::SampleFlags;
     use crate::edts::EditBox;
@@ -345,8 +352,13 @@ mod tests {
     ) -> TrackBox {
         let mut track = video_track(track_id);
         let epoch = Mp4EpochSeconds::from_seconds(0);
-        *track.mdia_mut().mdhd_mut() =
-            MediaHeaderBox::new(epoch, epoch, timescale, Some(0), LanguageCode::UND);
+        *track.mdia_mut().mdhd_mut() = MediaHeaderBox::new(
+            epoch,
+            epoch,
+            timescale,
+            HeaderDuration::ZERO,
+            LanguageCode::UND,
+        );
         *track.mdia_mut().minf_mut().stbl_mut() = SampleTableBox::new(
             SampleDescriptionBox::new(Vec::new()),
             TimeToSampleBox::from_deltas(deltas),
@@ -358,11 +370,16 @@ mod tests {
         track
     }
 
+    /// Duration of `value`, which is below all 1s
+    fn duration(value: u64) -> HeaderDuration {
+        HeaderDuration::new(value).unwrap()
+    }
+
     /// The track with the durations of its media and of itself as given
     fn with_durations(
         mut track: TrackBox,
-        media_duration: Option<u64>,
-        track_duration: Option<u64>,
+        media_duration: HeaderDuration,
+        track_duration: HeaderDuration,
     ) -> TrackBox {
         *track.mdia_mut().mdhd_mut() = track.mdia().mdhd().clone().with_duration(media_duration);
         *track.tkhd_mut() = track.tkhd().clone().with_duration(track_duration);
@@ -420,7 +437,7 @@ mod tests {
         assert_eq!(
             MovieBox::new_fragmented(1_000, vec![video_track(9), video_track(3)]),
             MovieBox::new(
-                MovieHeaderBox::new(epoch, epoch, 1_000, Some(0), 10),
+                MovieHeaderBox::new(epoch, epoch, 1_000, HeaderDuration::ZERO, 10),
                 vec![video_track(9), video_track(3)],
                 MovieExtendsBox::new(vec![
                     TrackExtendsBox::new(9, 1, 0, 0, SampleFlags::ZERO),
@@ -558,14 +575,14 @@ mod tests {
         let mut movie = movie();
 
         let edited = movie.trak_mut(1).unwrap();
-        *edited.tkhd_mut() = edited.tkhd().clone().with_duration(Some(7_000));
+        *edited.tkhd_mut() = edited.tkhd().clone().with_duration(duration(7_000));
 
         assert_eq!(
             MovieBox::decode_payload(&encoded_payload(&movie)),
             Ok(MovieBox::new(
                 movie_header(5_000),
                 vec![TrackBox::new(
-                    track().tkhd().clone().with_duration(Some(7_000)),
+                    track().tkhd().clone().with_duration(duration(7_000)),
                     track().mdia().clone(),
                 )],
                 None,
@@ -592,11 +609,11 @@ mod tests {
             MovieBox::new(
                 movie_header(667),
                 vec![
-                    with_durations(timed_track(1, 3, [1, 1]), Some(2), Some(667)),
+                    with_durations(timed_track(1, 3, [1, 1]), duration(2), duration(667)),
                     with_durations(
                         timed_track(2, 90_000, [3_000, 3_000]),
-                        Some(6_000),
-                        Some(67)
+                        duration(6_000),
+                        duration(67)
                     ),
                 ],
                 None,
@@ -622,8 +639,8 @@ mod tests {
             MovieBox::new(
                 movie_header(3_010),
                 vec![
-                    with_durations(edited, Some(2), Some(3_010)),
-                    with_durations(edit_box_alone, Some(2), Some(667)),
+                    with_durations(edited, duration(2), duration(3_010)),
+                    with_durations(edit_box_alone, duration(2), duration(667)),
                 ],
                 None,
             ),
@@ -634,7 +651,7 @@ mod tests {
     #[test]
     fn a_track_whose_duration_overflows_leaves_it_and_the_movie_not_determined() {
         let epoch = Mp4EpochSeconds::from_seconds(0);
-        let widest_scale = MovieHeaderBox::new(epoch, epoch, u32::MAX, Some(0), 3);
+        let widest_scale = MovieHeaderBox::new(epoch, epoch, u32::MAX, HeaderDuration::ZERO, 3);
         let overflowing = timed_track(1, 1, [1 << 31; 4]);
         let fitting = timed_track(2, u32::MAX, [5]);
         let mut movie = MovieBox::new(
@@ -648,10 +665,14 @@ mod tests {
 
         assert_eq!(
             MovieBox::new(
-                widest_scale.with_duration(None),
+                widest_scale.with_duration(HeaderDuration::INDETERMINATE),
                 vec![
-                    with_durations(overflowing, Some(1 << 33), None),
-                    with_durations(fitting, Some(5), Some(5)),
+                    with_durations(
+                        overflowing,
+                        duration(1 << 33),
+                        HeaderDuration::INDETERMINATE
+                    ),
+                    with_durations(fitting, duration(5), duration(5)),
                 ],
                 None,
             ),
@@ -663,7 +684,7 @@ mod tests {
     fn a_track_with_no_samples_lasts_0() {
         let mut movie = MovieBox::new(
             movie_header(5_000),
-            vec![with_durations(video_track(1), Some(9), Some(9))],
+            vec![with_durations(video_track(1), duration(9), duration(9))],
             None,
         )
         .unwrap();

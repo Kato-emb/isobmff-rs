@@ -74,7 +74,7 @@ pub use chunk_offset::{
 };
 pub use ctts::{CompositionOffsetBox, CompositionOffsetEntry};
 pub use data_entry::{DataEntry, DataEntryUrlBox, DataEntryUrnBox};
-pub use data_types::{CompositionTimeOffset, SampleFlags};
+pub use data_types::{CompositionTimeOffset, HeaderDuration, SampleFlags};
 pub use dinf::DataInformationBox;
 pub use dref::DataReferenceBox;
 pub use edts::EditBox;

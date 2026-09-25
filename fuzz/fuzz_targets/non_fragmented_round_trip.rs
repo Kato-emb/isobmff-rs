@@ -21,7 +21,7 @@
 
 #![no_main]
 
-use isobmff::boxes::{MovieBox, MovieHeaderBox, SampleFlags};
+use isobmff::boxes::{HeaderDuration, MovieBox, MovieHeaderBox, SampleFlags};
 use isobmff::core::Mp4EpochSeconds;
 use isobmff::sample::Sample;
 use isobmff::structure::{Error, ErrorKind, NonFragmentedReader, NonFragmentedWriter};
@@ -117,7 +117,7 @@ fn movie() -> MovieBox {
     let epoch = Mp4EpochSeconds::from_seconds(0);
 
     MovieBox::new(
-        MovieHeaderBox::new(epoch, epoch, TIMESCALE, Some(0), NEXT_TRACK_ID),
+        MovieHeaderBox::new(epoch, epoch, TIMESCALE, HeaderDuration::ZERO, NEXT_TRACK_ID),
         TRACK_IDS.map(track).to_vec(),
         None,
     )

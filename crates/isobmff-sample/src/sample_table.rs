@@ -202,11 +202,11 @@ mod tests {
     use isobmff_boxes::{
         ChunkLargeOffsetBox, ChunkLargeOffsetEntry, ChunkOffsetBox, ChunkOffsetEntry, ChunkOffsets,
         CompactSampleSizeBox, CompositionOffsetBox, CompositionTimeOffset, DegradationPriorityBox,
-        DegradationPriorityEntry, MovieBox, MovieHeaderBox, PaddingBitsBox, PaddingBitsEntry,
-        SampleDependencyTypeBox, SampleDependencyTypeEntry, SampleDescriptionBox, SampleFlags,
-        SampleSizeBox, SampleSizeEntries, SampleSizeEntry, SampleSizes, SampleTableBox,
-        SampleToChunkBox, SampleToChunkEntry, SyncSampleBox, SyncSampleEntry, TimeToSampleBox,
-        TimeToSampleEntry, TrackBox,
+        DegradationPriorityEntry, HeaderDuration, MovieBox, MovieHeaderBox, PaddingBitsBox,
+        PaddingBitsEntry, SampleDependencyTypeBox, SampleDependencyTypeEntry, SampleDescriptionBox,
+        SampleFlags, SampleSizeBox, SampleSizeEntries, SampleSizeEntry, SampleSizes,
+        SampleTableBox, SampleToChunkBox, SampleToChunkEntry, SyncSampleBox, SyncSampleEntry,
+        TimeToSampleBox, TimeToSampleEntry, TrackBox,
     };
     use isobmff_core::{AnyBox, BoxType, Mp4EpochSeconds};
     use isobmff_test_support::{
@@ -225,7 +225,7 @@ mod tests {
                 Mp4EpochSeconds::from_seconds(0),
                 Mp4EpochSeconds::from_seconds(0),
                 1_000,
-                Some(0),
+                HeaderDuration::ZERO,
                 2,
             ),
             trak,

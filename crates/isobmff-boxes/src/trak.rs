@@ -13,6 +13,7 @@ use isobmff_core::{
 
 use crate::chunk_offset::{ChunkOffsetBox, ChunkOffsets};
 use crate::data_entry::{DataEntry, DataEntryUrlBox};
+use crate::data_types::HeaderDuration;
 use crate::dinf::DataInformationBox;
 use crate::dref::DataReferenceBox;
 use crate::edts::EditBox;
@@ -131,7 +132,7 @@ impl TrackBox {
             epoch,
             epoch,
             track_id,
-            Some(0),
+            HeaderDuration::ZERO,
             U16F16::from_integer(width),
             U16F16::from_integer(height),
         );
@@ -150,7 +151,13 @@ impl TrackBox {
             stbl,
         );
         let mdia = MediaBox::new(
-            MediaHeaderBox::new(epoch, epoch, timescale, Some(0), LanguageCode::UND),
+            MediaHeaderBox::new(
+                epoch,
+                epoch,
+                timescale,
+                HeaderDuration::ZERO,
+                LanguageCode::UND,
+            ),
             HandlerBox::new(
                 FourCC::new(*b"vide"),
                 // Why not unwrap: the name holds no NUL, so the string always
@@ -182,20 +189,23 @@ impl TrackBox {
     /// `tkhd` takes, as ISO/IEC 14496-12 §8.3.2.3 has it, the sum of the
     /// `segment_duration` of the track's edits, or, for a track with no edit
     /// list, the media's duration converted to `movie_timescale` and rounded up
-    /// to the next whole unit. It is `None` where the sum does not fit in 64
-    /// bits, or where the conversion does not or the media's time scale is 0.
-    pub(crate) fn state_duration(&mut self, movie_timescale: u32) -> Option<u64> {
+    /// to the next whole unit. It cannot be determined where the sum does not
+    /// fit in 64 bits, or where the media's duration cannot be determined, the
+    /// conversion does not fit or the media's time scale is 0.
+    pub(crate) fn state_duration(&mut self, movie_timescale: u32) -> HeaderDuration {
         self.mdia.state_duration();
         let media_header = self.mdia.mdhd();
-        let duration = match self.edts.as_ref().and_then(EditBox::elst) {
-            Some(elst) => elst.duration(),
-            None => media_header.duration().and_then(|media_duration| {
-                let media_timescale = NonZeroU32::new(media_header.timescale())?;
-                let scaled = u128::from(media_duration).checked_mul(u128::from(movie_timescale))?;
+        let duration =
+            HeaderDuration::from_derived(match self.edts.as_ref().and_then(EditBox::elst) {
+                Some(elst) => elst.duration(),
+                None => media_header.duration().get().and_then(|media_duration| {
+                    let media_timescale = NonZeroU32::new(media_header.timescale())?;
+                    let scaled =
+                        u128::from(media_duration).checked_mul(u128::from(movie_timescale))?;
 
-                u64::try_from(scaled.div_ceil(u128::from(media_timescale.get()))).ok()
-            }),
-        };
+                    u64::try_from(scaled.div_ceil(u128::from(media_timescale.get()))).ok()
+                }),
+            });
 
         self.tkhd = self.tkhd.clone().with_duration(duration);
 
@@ -313,7 +323,7 @@ pub(crate) mod tests {
         LanguageCode, Mp4EpochSeconds, NullTerminatedString, U16F16,
     };
 
-    use super::TrackBox;
+    use super::{HeaderDuration, TrackBox};
     use crate::chunk_offset::{ChunkOffsetBox, ChunkOffsets};
     use crate::dinf::tests::data_information;
     use crate::edts::tests::edit;
@@ -338,7 +348,7 @@ pub(crate) mod tests {
                 Mp4EpochSeconds::from_seconds(0),
                 Mp4EpochSeconds::from_seconds(0),
                 1,
-                Some(90_000),
+                HeaderDuration::new(90_000).unwrap(),
                 U16F16::from_integer(1920),
                 U16F16::from_integer(1080),
             ),
@@ -347,7 +357,7 @@ pub(crate) mod tests {
                     Mp4EpochSeconds::from_seconds(0),
                     Mp4EpochSeconds::from_seconds(0),
                     90_000,
-                    Some(90_000),
+                    HeaderDuration::new(90_000).unwrap(),
                     LanguageCode::UND,
                 ),
                 HandlerBox::new(
@@ -472,12 +482,18 @@ pub(crate) mod tests {
                     epoch,
                     epoch,
                     1,
-                    Some(0),
+                    HeaderDuration::ZERO,
                     U16F16::from_integer(1920),
                     U16F16::from_integer(1080),
                 ),
                 MediaBox::new(
-                    MediaHeaderBox::new(epoch, epoch, 90_000, Some(0), LanguageCode::UND),
+                    MediaHeaderBox::new(
+                        epoch,
+                        epoch,
+                        90_000,
+                        HeaderDuration::ZERO,
+                        LanguageCode::UND
+                    ),
                     HandlerBox::new(
                         FourCC::new(*b"vide"),
                         NullTerminatedString::new(String::from("VideoHandler")).unwrap(),

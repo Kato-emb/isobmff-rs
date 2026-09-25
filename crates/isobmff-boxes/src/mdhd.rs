@@ -5,7 +5,7 @@ use isobmff_core::{
     FullBoxFields, FullBoxFlags, LanguageCode, Mp4EpochSeconds,
 };
 
-use crate::data_types::duration;
+use crate::data_types::HeaderDuration;
 
 /// Length of the payload when version 0 carries the times in 32 bits
 const PAYLOAD_LEN_VERSION_0: u64 = 24;
@@ -23,10 +23,8 @@ const PAYLOAD_LEN_VERSION_1: u64 = 36;
 /// [`encode_payload`](BoxEncode::encode_payload) picks the narrower one whenever
 /// the times fit in 32 bits.
 ///
-/// A `duration` of `None` is one that cannot be determined, which §8.4.2.3 has
-/// written as all 1s. A version 0 box stating `0xFFFF_FFFF` reads as `None`, as
-/// nothing tells it from a duration of 2^32 − 1; that duration is written at
-/// version 1, so a value holding it reads back.
+/// The `duration` is a [`HeaderDuration`], which states one that cannot be
+/// determined as well (§8.4.2.3).
 #[doc(alias = "mdhd")]
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -34,7 +32,7 @@ pub struct MediaHeaderBox {
     creation_time: Mp4EpochSeconds,
     modification_time: Mp4EpochSeconds,
     timescale: u32,
-    duration: Option<u64>,
+    duration: HeaderDuration,
     language: LanguageCode,
     pre_defined: u16,
 }
@@ -46,7 +44,7 @@ impl MediaHeaderBox {
         creation_time: Mp4EpochSeconds,
         modification_time: Mp4EpochSeconds,
         timescale: u32,
-        duration: Option<u64>,
+        duration: HeaderDuration,
         language: LanguageCode,
     ) -> Self {
         Self {
@@ -77,9 +75,9 @@ impl MediaHeaderBox {
         }
     }
 
-    /// Sets the length of the track, in the track's own time scale, `None` where it cannot be determined
+    /// Sets the length of the track, in the track's own time scale
     #[must_use]
-    pub const fn with_duration(self, duration: Option<u64>) -> Self {
+    pub const fn with_duration(self, duration: HeaderDuration) -> Self {
         Self { duration, ..self }
     }
 
@@ -101,9 +99,9 @@ impl MediaHeaderBox {
         self.timescale
     }
 
-    /// Returns the length of the track, in the track's own time scale, or `None` where it cannot be determined
+    /// Returns the length of the track, in the track's own time scale
     #[must_use]
-    pub const fn duration(&self) -> Option<u64> {
+    pub const fn duration(&self) -> HeaderDuration {
         self.duration
     }
 
@@ -129,7 +127,7 @@ impl MediaHeaderBox {
         let widest = u32::MAX as u64;
         let fits_in_32_bits = self.creation_time.seconds() <= widest
             && self.modification_time.seconds() <= widest
-            && duration::fits_in_32_bits(self.duration);
+            && self.duration.fits_in_32_bits();
 
         if fits_in_32_bits { 0 } else { 1 }
     }
@@ -164,7 +162,7 @@ impl BoxDecode for MediaHeaderBox {
         let creation_time = Mp4EpochSeconds::from_seconds(reader.read_unsigned(field_width)?);
         let modification_time = Mp4EpochSeconds::from_seconds(reader.read_unsigned(field_width)?);
         let timescale = reader.read_u32()?;
-        let duration = duration::read_duration(reader, field_width)?;
+        let duration = HeaderDuration::read(reader, field_width)?;
         let language = LanguageCode::from_raw(reader.read_u16()?);
         let pre_defined = reader.read_u16()?;
 
@@ -196,7 +194,7 @@ impl BoxEncode for MediaHeaderBox {
         writer.write_unsigned(field_width, self.creation_time.seconds())?;
         writer.write_unsigned(field_width, self.modification_time.seconds())?;
         writer.write_u32(self.timescale)?;
-        duration::write_duration(writer, field_width, self.duration)?;
+        self.duration.write(writer, field_width)?;
         writer.write_u16(self.language.raw())?;
         writer.write_u16(self.pre_defined)?;
 
@@ -211,7 +209,7 @@ mod tests {
 
     use isobmff_core::{BoxDecode, BoxEncode, Error, LanguageCode, Mp4EpochSeconds};
 
-    use super::MediaHeaderBox;
+    use super::{HeaderDuration, MediaHeaderBox};
 
     /// Media header of a track whose language is left undetermined
     fn media_header(duration: u64) -> MediaHeaderBox {
@@ -219,7 +217,7 @@ mod tests {
             Mp4EpochSeconds::from_seconds(1),
             Mp4EpochSeconds::from_seconds(2),
             90_000,
-            Some(duration),
+            HeaderDuration::new(duration).unwrap(),
             LanguageCode::UND,
         )
     }
@@ -237,10 +235,10 @@ mod tests {
         let early = Mp4EpochSeconds::from_seconds(0);
         let late = Mp4EpochSeconds::from_seconds(u64::from(u32::MAX) + 1);
         let cases = [
-            (Some(u64::from(u32::MAX) - 1), early),
-            (Some(u64::from(u32::MAX)), early),
-            (None, early),
-            (None, late),
+            (HeaderDuration::new(u64::from(u32::MAX) - 1).unwrap(), early),
+            (HeaderDuration::new(u64::from(u32::MAX)).unwrap(), early),
+            (HeaderDuration::INDETERMINATE, early),
+            (HeaderDuration::INDETERMINATE, late),
         ];
 
         for (duration, creation_time) in cases {
@@ -266,8 +264,14 @@ mod tests {
             media_header(5_000)
                 .with_creation_time(created)
                 .with_modification_time(modified)
-                .with_duration(None),
-            MediaHeaderBox::new(created, modified, 90_000, None, LanguageCode::UND)
+                .with_duration(HeaderDuration::INDETERMINATE),
+            MediaHeaderBox::new(
+                created,
+                modified,
+                90_000,
+                HeaderDuration::INDETERMINATE,
+                LanguageCode::UND
+            )
         );
     }
 

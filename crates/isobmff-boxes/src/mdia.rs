@@ -5,6 +5,7 @@ use isobmff_core::{
     FieldWriter, OtherBoxes, boxes,
 };
 
+use crate::data_types::HeaderDuration;
 use crate::hdlr::HandlerBox;
 use crate::mdhd::MediaHeaderBox;
 use crate::minf::MediaInformationBox;
@@ -55,14 +56,17 @@ impl MediaBox {
     /// States the duration of the media from its time-to-sample table
     ///
     /// The `mdhd` takes the sum of the `stts` deltas, which ISO/IEC 14496-12
-    /// §8.4.2.3 and §8.6.1.2.1 have be the length of the media, or `None` —
-    /// cannot be determined — where
-    /// [`media_duration`](crate::TimeToSampleBox::media_duration) is.
+    /// §8.4.2.3 and §8.6.1.2.1 have be the length of the media, or
+    /// [`HeaderDuration::INDETERMINATE`](crate::HeaderDuration::INDETERMINATE)
+    /// where [`media_duration`](crate::TimeToSampleBox::media_duration) is
+    /// `None` or the sum is [`u64::MAX`].
     pub fn state_duration(&mut self) {
         self.mdhd = self
             .mdhd
             .clone()
-            .with_duration(self.minf.stbl().stts().media_duration());
+            .with_duration(HeaderDuration::from_derived(
+                self.minf.stbl().stts().media_duration(),
+            ));
     }
 
     /// Returns the handler naming the kind of media the track carries
@@ -174,7 +178,7 @@ mod tests {
         NullTerminatedString,
     };
 
-    use super::MediaBox;
+    use super::{HeaderDuration, MediaBox};
     use crate::hdlr::HandlerBox;
     use crate::mdhd::MediaHeaderBox;
     use crate::minf::tests::media_information;
@@ -186,7 +190,7 @@ mod tests {
                 Mp4EpochSeconds::from_seconds(0),
                 Mp4EpochSeconds::from_seconds(0),
                 90_000,
-                Some(90_000),
+                HeaderDuration::new(90_000).unwrap(),
                 LanguageCode::UND,
             ),
             HandlerBox::new(

@@ -31,7 +31,8 @@ use core::hint::black_box;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 use isobmff_boxes::{
-    FileTypeBox, MovieBox, MovieExtendsBox, MovieHeaderBox, SampleFlags, TrackExtendsBox,
+    FileTypeBox, HeaderDuration, MovieBox, MovieExtendsBox, MovieHeaderBox, SampleFlags,
+    TrackExtendsBox,
 };
 use isobmff_core::{BoxHeader, BoxType, Mp4EpochSeconds};
 use isobmff_sample::{MovieFragmentWriter, Sample};
@@ -94,7 +95,7 @@ impl Composition {
                 epoch,
                 epoch,
                 TIMESCALE,
-                Some(0),
+                HeaderDuration::ZERO,
                 u32::try_from(self.track_count).unwrap() + 1,
             ),
             self.track_ids().map(track).collect(),

@@ -5,7 +5,7 @@ use isobmff_core::{
     FullBoxFields, FullBoxFlags, I8F8, I16F16, Matrix, Mp4EpochSeconds,
 };
 
-use crate::data_types::duration;
+use crate::data_types::HeaderDuration;
 
 /// Length of the payload when version 0 carries the times in 32 bits
 const PAYLOAD_LEN_VERSION_0: u64 = 100;
@@ -24,20 +24,18 @@ const PAYLOAD_LEN_VERSION_1: u64 = 112;
 /// the times fit in 32 bits. The `flags` are not held either — the spec declares
 /// them zero for this box.
 ///
-/// A `duration` of `None` is one that cannot be determined, which §8.2.2.3 has
-/// written as all 1s. A version 0 box stating `0xFFFF_FFFF` reads as `None`, as
-/// nothing tells it from a duration of 2^32 − 1; that duration is written at
-/// version 1, so a value holding it reads back.
+/// The `duration` is a [`HeaderDuration`], which states one that cannot be
+/// determined as well (§8.2.2.3).
 ///
 /// # Examples
 ///
 /// ```
-/// use isobmff_boxes::MovieHeaderBox;
+/// use isobmff_boxes::{HeaderDuration, MovieHeaderBox};
 /// use isobmff_core::{BoxDecode, BoxEncode, Mp4EpochSeconds};
 ///
 /// // A movie of five seconds at millisecond resolution, with one track
 /// let epoch = Mp4EpochSeconds::from_seconds(0);
-/// let movie_header = MovieHeaderBox::new(epoch, epoch, 1_000, Some(5_000), 2);
+/// let movie_header = MovieHeaderBox::new(epoch, epoch, 1_000, HeaderDuration::new(5_000).unwrap(), 2);
 ///
 /// // Times that fit in 32 bits are written at version 0
 /// assert_eq!(movie_header.encoded_len(), 108);
@@ -47,7 +45,7 @@ const PAYLOAD_LEN_VERSION_1: u64 = 112;
 /// assert_eq!(buffer.get(..12).unwrap(), b"\0\0\0lmvhd\0\0\0\0");
 ///
 /// // A duration past the 32-bit limit moves the times to version 1
-/// let long_movie = MovieHeaderBox::new(epoch, epoch, 1_000, Some(u64::from(u32::MAX) + 1), 2);
+/// let long_movie = MovieHeaderBox::new(epoch, epoch, 1_000, HeaderDuration::new(u64::from(u32::MAX) + 1).unwrap(), 2);
 /// assert_eq!(long_movie.encoded_len(), 120);
 ///
 /// // The whole box reads back as the value that wrote it, leaving nothing over
@@ -63,7 +61,7 @@ pub struct MovieHeaderBox {
     creation_time: Mp4EpochSeconds,
     modification_time: Mp4EpochSeconds,
     timescale: u32,
-    duration: Option<u64>,
+    duration: HeaderDuration,
     rate: I16F16,
     volume: I8F8,
     matrix: Matrix,
@@ -84,7 +82,7 @@ impl MovieHeaderBox {
         creation_time: Mp4EpochSeconds,
         modification_time: Mp4EpochSeconds,
         timescale: u32,
-        duration: Option<u64>,
+        duration: HeaderDuration,
         next_track_id: u32,
     ) -> Self {
         Self {
@@ -118,9 +116,9 @@ impl MovieHeaderBox {
         }
     }
 
-    /// Sets the length of the longest track, in the movie's time scale, `None` where it cannot be determined
+    /// Sets the length of the longest track, in the movie's time scale
     #[must_use]
-    pub const fn with_duration(self, duration: Option<u64>) -> Self {
+    pub const fn with_duration(self, duration: HeaderDuration) -> Self {
         Self { duration, ..self }
     }
 
@@ -160,9 +158,9 @@ impl MovieHeaderBox {
         self.timescale
     }
 
-    /// Returns the length of the longest track, in the movie's time scale, or `None` where it cannot be determined
+    /// Returns the length of the longest track, in the movie's time scale
     #[must_use]
-    pub const fn duration(&self) -> Option<u64> {
+    pub const fn duration(&self) -> HeaderDuration {
         self.duration
     }
 
@@ -206,7 +204,7 @@ impl MovieHeaderBox {
         let widest = u32::MAX as u64;
         let fits_in_32_bits = self.creation_time.seconds() <= widest
             && self.modification_time.seconds() <= widest
-            && duration::fits_in_32_bits(self.duration);
+            && self.duration.fits_in_32_bits();
 
         if fits_in_32_bits { 0 } else { 1 }
     }
@@ -241,7 +239,7 @@ impl BoxDecode for MovieHeaderBox {
         let creation_time = Mp4EpochSeconds::from_seconds(reader.read_unsigned(field_width)?);
         let modification_time = Mp4EpochSeconds::from_seconds(reader.read_unsigned(field_width)?);
         let timescale = reader.read_u32()?;
-        let duration = duration::read_duration(reader, field_width)?;
+        let duration = HeaderDuration::read(reader, field_width)?;
         let rate = I16F16::from_raw(reader.read_i32()?);
         let volume = I8F8::from_raw(reader.read_i16()?);
         let _reserved = reader.read_bytes::<10>()?;
@@ -283,7 +281,7 @@ impl BoxEncode for MovieHeaderBox {
         writer.write_unsigned(field_width, self.creation_time.seconds())?;
         writer.write_unsigned(field_width, self.modification_time.seconds())?;
         writer.write_u32(self.timescale)?;
-        duration::write_duration(writer, field_width, self.duration)?;
+        self.duration.write(writer, field_width)?;
         writer.write_i32(self.rate.raw())?;
         writer.write_i16(self.volume.raw())?;
         writer.write_bytes(&[0; 10])?;
@@ -304,7 +302,7 @@ pub(crate) mod tests {
 
     use isobmff_core::{BoxDecode, BoxEncode, Error, I8F8, I16F16, Matrix, Mp4EpochSeconds};
 
-    use super::MovieHeaderBox;
+    use super::{HeaderDuration, MovieHeaderBox};
 
     /// Movie header carrying the times a file written at the epoch declares
     pub(crate) fn movie_header(duration: u64) -> MovieHeaderBox {
@@ -312,7 +310,7 @@ pub(crate) mod tests {
             Mp4EpochSeconds::from_seconds(1),
             Mp4EpochSeconds::from_seconds(2),
             1_000,
-            Some(duration),
+            HeaderDuration::new(duration).unwrap(),
             3,
         )
     }
@@ -346,10 +344,10 @@ pub(crate) mod tests {
         let early = Mp4EpochSeconds::from_seconds(0);
         let late = Mp4EpochSeconds::from_seconds(u64::from(u32::MAX) + 1);
         let cases = [
-            (Some(u64::from(u32::MAX) - 1), early),
-            (Some(u64::from(u32::MAX)), early),
-            (None, early),
-            (None, late),
+            (HeaderDuration::new(u64::from(u32::MAX) - 1).unwrap(), early),
+            (HeaderDuration::new(u64::from(u32::MAX)).unwrap(), early),
+            (HeaderDuration::INDETERMINATE, early),
+            (HeaderDuration::INDETERMINATE, late),
         ];
 
         for (duration, creation_time) in cases {
@@ -378,8 +376,8 @@ pub(crate) mod tests {
             movie_header(5_000)
                 .with_creation_time(created)
                 .with_modification_time(modified)
-                .with_duration(None),
-            MovieHeaderBox::new(created, modified, 1_000, None, 3)
+                .with_duration(HeaderDuration::INDETERMINATE),
+            MovieHeaderBox::new(created, modified, 1_000, HeaderDuration::INDETERMINATE, 3)
         );
     }
 

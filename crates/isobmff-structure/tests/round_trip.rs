@@ -11,8 +11,8 @@ mod reading;
 mod tests {
     use super::reading::samples_of;
     use isobmff_boxes::{
-        FileTypeBox, MovieBox, MovieExtendsBox, MovieHeaderBox, SampleFlags, TrackBox,
-        TrackExtendsBox,
+        FileTypeBox, HeaderDuration, MovieBox, MovieExtendsBox, MovieHeaderBox, SampleFlags,
+        TrackBox, TrackExtendsBox,
     };
     use isobmff_core::{AnyBox, BoxType, FourCC, Mp4EpochSeconds};
     use isobmff_sample::Sample;
@@ -33,7 +33,7 @@ mod tests {
             |track_id| TrackExtendsBox::new(track_id, 9, 1, 1, EVERY_FIELD_AT_ITS_HIGHEST);
 
         MovieBox::new(
-            MovieHeaderBox::new(epoch, epoch, TIMESCALE, Some(0), 3),
+            MovieHeaderBox::new(epoch, epoch, TIMESCALE, HeaderDuration::ZERO, 3),
             vec![track(1), track(2)],
             MovieExtendsBox::new(vec![never_fallen_back_on(1), never_fallen_back_on(2)]),
         )

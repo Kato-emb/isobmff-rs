@@ -6,12 +6,12 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{
     ChunkOffsetBox, ChunkOffsets, DataEntry, DataEntryUrlBox, DataInformationBox, DataReferenceBox,
-    DegradationPriorityEntry, FileTypeBox, HandlerBox, MediaBox, MediaDataBox, MediaHeaderBox,
-    MediaInformationBox, MediaInformationHeader, MovieBox, MovieExtendsBox, MovieFragmentBox,
-    MovieFragmentHeaderBox, MovieHeaderBox, PaddingBitsEntry, SampleDependencyTypeEntry,
-    SampleDescriptionBox, SampleFlags, SampleSizeBox, SampleSizeEntries, SampleSizes,
-    SampleTableBox, SampleToChunkBox, SegmentTypeBox, TimeToSampleBox, TrackBox, TrackExtendsBox,
-    TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
+    DegradationPriorityEntry, FileTypeBox, HandlerBox, HeaderDuration, MediaBox, MediaDataBox,
+    MediaHeaderBox, MediaInformationBox, MediaInformationHeader, MovieBox, MovieExtendsBox,
+    MovieFragmentBox, MovieFragmentHeaderBox, MovieHeaderBox, PaddingBitsEntry,
+    SampleDependencyTypeEntry, SampleDescriptionBox, SampleFlags, SampleSizeBox, SampleSizeEntries,
+    SampleSizes, SampleTableBox, SampleToChunkBox, SegmentTypeBox, TimeToSampleBox, TrackBox,
+    TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
     TrackFragmentHeaderFlags, TrackHeaderBox, VideoMediaHeaderBox,
 };
 use isobmff_core::{
@@ -116,7 +116,13 @@ pub fn track_reading_from(track_id: u32, dref: DataReferenceBox) -> TrackBox {
 /// Track of [`track`], its media lying in the resources `dref` names and laid out by `stbl`
 pub fn track_laid_out(track_id: u32, dref: DataReferenceBox, stbl: SampleTableBox) -> TrackBox {
     let media = MediaBox::new(
-        MediaHeaderBox::new(EPOCH, EPOCH, TIMESCALE, Some(0), LanguageCode::UND),
+        MediaHeaderBox::new(
+            EPOCH,
+            EPOCH,
+            TIMESCALE,
+            HeaderDuration::ZERO,
+            LanguageCode::UND,
+        ),
         HandlerBox::new(
             FourCC::new(*b"vide"),
             NullTerminatedString::new(String::from("VideoHandler")).unwrap(),
@@ -134,7 +140,7 @@ pub fn track_laid_out(track_id: u32, dref: DataReferenceBox, stbl: SampleTableBo
             EPOCH,
             EPOCH,
             track_id,
-            Some(0),
+            HeaderDuration::ZERO,
             U16F16::from_integer(1920),
             U16F16::from_integer(1080),
         ),
@@ -189,7 +195,7 @@ fn empty_sample_table(entry: AnyBox) -> SampleTableBox {
 /// Movie of one track that no `trex` states the defaults of a fragment for
 pub fn unfragmented_movie() -> MovieBox {
     MovieBox::new(
-        MovieHeaderBox::new(EPOCH, EPOCH, TIMESCALE, Some(0), 2),
+        MovieHeaderBox::new(EPOCH, EPOCH, TIMESCALE, HeaderDuration::ZERO, 2),
         vec![track(1)],
         None,
     )
@@ -201,7 +207,7 @@ pub fn unfragmented_movie() -> MovieBox {
 /// The track takes the id `trex` names, so the two cannot state different ones.
 pub fn fragmented_movie(trex: TrackExtendsBox) -> MovieBox {
     MovieBox::new(
-        MovieHeaderBox::new(EPOCH, EPOCH, TIMESCALE, Some(0), 2),
+        MovieHeaderBox::new(EPOCH, EPOCH, TIMESCALE, HeaderDuration::ZERO, 2),
         vec![track(trex.track_id())],
         MovieExtendsBox::new(vec![trex]),
     )
@@ -274,7 +280,7 @@ pub fn non_fragmented_file(chunks: &[&[&[u8]]], movie_first: bool) -> Vec<u8> {
         );
 
         MovieBox::new(
-            MovieHeaderBox::new(EPOCH, EPOCH, TIMESCALE, Some(0), 2),
+            MovieHeaderBox::new(EPOCH, EPOCH, TIMESCALE, HeaderDuration::ZERO, 2),
             vec![track_laid_out(1, self_contained_data_reference(), stbl)],
             None,
         )
