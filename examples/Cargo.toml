@@ -39,6 +39,22 @@ path = "remux_to_non_fragmented.rs"
 name = "drive_non_fragmented_reader"
 path = "drive_non_fragmented_reader.rs"
 
+[[example]]
+name = "demux_media_segment"
+path = "demux_media_segment.rs"
+
+[[example]]
+name = "segment_movie"
+path = "segment_movie.rs"
+
+[[example]]
+name = "seek_fragmented"
+path = "seek_fragmented.rs"
+
+[[example]]
+name = "seek_media_segment"
+path = "seek_media_segment.rs"
+
 # Why not `workspace = true`: that table cannot be overridden in part, and an
 # example is a consumer, which prints and matches `non_exhaustive` enums with a
 # `_` arm — so it is the workspace table copied without print_stdout,
