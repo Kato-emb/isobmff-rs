@@ -2,7 +2,6 @@
 
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
-use core::num::NonZeroU32;
 
 use isobmff_core::{
     AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
@@ -10,7 +9,6 @@ use isobmff_core::{
 };
 
 use crate::data_types::SampleFlags;
-use crate::edts::EditBox;
 use crate::mvex::MovieExtendsBox;
 use crate::mvhd::MovieHeaderBox;
 use crate::trak::TrackBox;
@@ -181,21 +179,7 @@ impl MovieBox {
         let mut longest = Some(0_u64);
 
         for track in &mut self.trak {
-            track.mdia_mut().state_duration();
-            let media_header = track.mdia().mdhd();
-            let duration = match track.edts().and_then(EditBox::elst) {
-                Some(elst) => elst.duration(),
-                None => media_header.duration().and_then(|media_duration| {
-                    let media_timescale = NonZeroU32::new(media_header.timescale())?;
-                    let scaled =
-                        u128::from(media_duration).checked_mul(u128::from(movie_timescale))?;
-
-                    u64::try_from(scaled.div_ceil(u128::from(media_timescale.get()))).ok()
-                }),
-            };
-
-            let track_header = track.tkhd().clone().with_duration(duration);
-            *track.tkhd_mut() = track_header;
+            let duration = track.state_duration(movie_timescale);
             longest = longest
                 .zip(duration)
                 .map(|(longest, duration)| longest.max(duration));
@@ -380,10 +364,8 @@ mod tests {
         media_duration: Option<u64>,
         track_duration: Option<u64>,
     ) -> TrackBox {
-        let media_header = track.mdia().mdhd().clone().with_duration(media_duration);
-        *track.mdia_mut().mdhd_mut() = media_header;
-        let track_header = track.tkhd().clone().with_duration(track_duration);
-        *track.tkhd_mut() = track_header;
+        *track.mdia_mut().mdhd_mut() = track.mdia().mdhd().clone().with_duration(media_duration);
+        *track.tkhd_mut() = track.tkhd().clone().with_duration(track_duration);
 
         track
     }
@@ -575,8 +557,8 @@ mod tests {
     fn a_duration_set_through_a_track_is_written_with_the_movie() {
         let mut movie = movie();
 
-        let track_header = movie.trak_mut(1).unwrap().tkhd_mut();
-        *track_header = track_header.clone().with_duration(Some(7_000));
+        let edited = movie.trak_mut(1).unwrap();
+        *edited.tkhd_mut() = edited.tkhd().clone().with_duration(Some(7_000));
 
         assert_eq!(
             MovieBox::decode_payload(&encoded_payload(&movie)),

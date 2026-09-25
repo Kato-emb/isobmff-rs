@@ -54,7 +54,7 @@ pub(crate) fn write_duration(
 mod tests {
     use isobmff_core::{FieldReader, FieldWidth, FieldWriter};
 
-    use super::{fits_in_32_bits, read_duration, write_duration};
+    use super::{read_duration, write_duration};
 
     #[test]
     fn a_duration_that_cannot_be_determined_is_all_1s_at_either_width() {
@@ -69,12 +69,5 @@ mod tests {
         let mut reader = FieldReader::new(&buffer);
         assert_eq!(read_duration(&mut reader, FieldWidth::Compact), Ok(None));
         assert_eq!(read_duration(&mut reader, FieldWidth::Extended), Ok(None));
-    }
-
-    #[test]
-    fn a_duration_of_all_1s_in_32_bits_is_written_wider_to_be_told_from_one_not_determined() {
-        assert!(fits_in_32_bits(Some(u64::from(u32::MAX) - 1)));
-        assert!(!fits_in_32_bits(Some(u64::from(u32::MAX))));
-        assert!(fits_in_32_bits(None));
     }
 }

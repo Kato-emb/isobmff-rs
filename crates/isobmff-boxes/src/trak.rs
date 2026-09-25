@@ -3,6 +3,7 @@
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::num::NonZeroU32;
 
 use isobmff_core::{
     AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
@@ -173,6 +174,32 @@ impl TrackBox {
     #[must_use]
     pub const fn tkhd_mut(&mut self) -> &mut TrackHeaderBox {
         &mut self.tkhd
+    }
+
+    /// States the duration of the track and of its media, and returns the track's
+    ///
+    /// The media is stated as [`MediaBox::state_duration`] states it. The
+    /// `tkhd` takes, as ISO/IEC 14496-12 §8.3.2.3 has it, the sum of the
+    /// `segment_duration` of the track's edits, or, for a track with no edit
+    /// list, the media's duration converted to `movie_timescale` and rounded up
+    /// to the next whole unit — `None` where the sum or the conversion does not
+    /// fit in 64 bits, or the media's time scale is 0.
+    pub(crate) fn state_duration(&mut self, movie_timescale: u32) -> Option<u64> {
+        self.mdia.state_duration();
+        let media_header = self.mdia.mdhd();
+        let duration = match self.edts.as_ref().and_then(EditBox::elst) {
+            Some(elst) => elst.duration(),
+            None => media_header.duration().and_then(|media_duration| {
+                let media_timescale = NonZeroU32::new(media_header.timescale())?;
+                let scaled = u128::from(media_duration).checked_mul(u128::from(movie_timescale))?;
+
+                u64::try_from(scaled.div_ceil(u128::from(media_timescale.get()))).ok()
+            }),
+        };
+
+        self.tkhd = self.tkhd.clone().with_duration(duration);
+
+        duration
     }
 
     /// Returns the edits that map the track's media onto the movie's timeline, if the track has them
