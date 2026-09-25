@@ -52,6 +52,19 @@ impl MediaBox {
         &mut self.mdhd
     }
 
+    /// States the duration of the media from its time-to-sample table
+    ///
+    /// The `mdhd` takes the sum of the `stts` deltas, which ISO/IEC 14496-12
+    /// §8.4.2.3 and §8.6.1.2.1 have be the length of the media, or `None` —
+    /// cannot be determined — where
+    /// [`media_duration`](crate::TimeToSampleBox::media_duration) is.
+    pub fn state_duration(&mut self) {
+        self.mdhd = self
+            .mdhd
+            .clone()
+            .with_duration(self.minf.stbl().stts().media_duration());
+    }
+
     /// Returns the handler naming the kind of media the track carries
     #[must_use]
     pub const fn hdlr(&self) -> &HandlerBox {
