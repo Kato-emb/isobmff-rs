@@ -80,7 +80,7 @@ impl EditListEntry {
     }
 }
 
-/// Box that maps the media of a track onto the timeline of the movie
+/// Box that lists the edits laying out a track's timeline
 ///
 /// [`EditListBox`] (`elst`), ISO/IEC 14496-12 §8.6.6. The entries lay out the
 /// track's timeline segment by segment, each playing part of the media, holding

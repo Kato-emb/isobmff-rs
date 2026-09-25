@@ -275,7 +275,7 @@ impl Error {
         Self::new(ErrorKind::UnsupportedFlags, Detail::Flags(flags))
     }
 
-    /// Returns the failure of a box stating a value in a field the box does not read
+    /// Returns the failure of a box stating a value the box does not read in one of its fields
     #[must_use]
     pub const fn unsupported_value() -> Self {
         Self::new(ErrorKind::UnsupportedValue, Detail::Nothing)
@@ -652,9 +652,8 @@ impl fmt::Display for Error {
                 self.needed_entries().unwrap_or_default(),
                 self.available_entries().unwrap_or_default()
             ),
-            ErrorKind::UnsupportedValue => {
-                formatter.write_str("box states a value in a field this box does not read")
-            }
+            ErrorKind::UnsupportedValue => formatter
+                .write_str("box states a value this box does not read in one of its fields"),
         }
     }
 }
@@ -828,7 +827,7 @@ pub enum ErrorKind {
     /// declares, [`available_entries`](Error::available_entries) the
     /// count the box reads.
     UnsupportedEntryCount,
-    /// Box states a value in a field that the box does not read
+    /// Box states a value the box does not read in one of its fields
     UnsupportedValue,
     /// Buffer ends inside the value being written into it
     ///
@@ -1211,7 +1210,7 @@ mod tests {
         );
         assert_eq!(
             Error::unsupported_value().to_string(),
-            "box states a value in a field this box does not read"
+            "box states a value this box does not read in one of its fields"
         );
     }
 

@@ -171,9 +171,9 @@ impl MovieBox {
     ///   to the movie's time scale and rounded up to the next whole unit.
     /// * `mvhd` (§8.2.2.3): the duration of the longest track.
     ///
-    /// A duration is `None` — cannot be determined — where its sum or its
-    /// conversion does not fit in 64 bits or the media's time scale is 0, and
-    /// the movie's is `None` once any track's is.
+    /// A duration is `None` — cannot be determined — where its sum does not fit
+    /// in 64 bits, or where its conversion does not fit or the media's time
+    /// scale is 0, and the movie's is `None` once any track's is.
     pub fn state_durations(&mut self) {
         let movie_timescale = self.mvhd.timescale();
         let mut longest = Some(0_u64);

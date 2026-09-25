@@ -14,7 +14,7 @@ fn all_ones(width: FieldWidth) -> u64 {
     }
 }
 
-/// Returns whether the duration is written in 32 bits without reading back as one that cannot be determined
+/// Returns whether the duration can be written in 32 bits without reading back as one that cannot be determined
 pub(crate) const fn fits_in_32_bits(duration: Option<u64>) -> bool {
     match duration {
         Some(duration) => duration < ALL_ONES_COMPACT,

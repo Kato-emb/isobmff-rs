@@ -21,13 +21,13 @@ const PAYLOAD_LEN_VERSION_1: u64 = 112;
 ///
 /// The version is not held: it selects how wide the times are written, so
 /// [`encode_payload`](BoxEncode::encode_payload) picks the narrower one whenever
-/// the times fit in 32 bits.
+/// the times fit in 32 bits. The `flags` are not held either — the spec declares
+/// them zero for this box.
 ///
 /// A `duration` of `None` is one that cannot be determined, which §8.2.2.3 has
 /// written as all 1s. A version 0 box stating `0xFFFF_FFFF` reads as `None`, as
 /// nothing tells it from a duration of 2^32 − 1; that duration is written at
-/// version 1, so a value holding it reads back. The `flags` are not held either — the spec declares
-/// them zero for this box.
+/// version 1, so a value holding it reads back.
 ///
 /// # Examples
 ///
