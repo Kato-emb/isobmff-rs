@@ -24,8 +24,8 @@ const PAYLOAD_LEN_VERSION_1: u64 = 96;
 /// [`encode_payload`](BoxEncode::encode_payload) picks the narrower one whenever
 /// the times fit in 32 bits.
 ///
-/// The `duration` is a [`HeaderDuration`], which states one that cannot be
-/// determined as well (§8.3.2.3).
+/// The `duration` is a [`HeaderDuration`], which can also state that the
+/// duration cannot be determined (§8.3.2.3).
 ///
 /// # Examples
 ///

@@ -13,9 +13,8 @@ const ALL_ONES_COMPACT: u64 = u32::MAX as u64;
 /// [`INDETERMINATE`](Self::INDETERMINATE).
 ///
 /// A header written at version 0 stating `0xFFFF_FFFF` reads as
-/// [`INDETERMINATE`](Self::INDETERMINATE), as nothing tells it from a duration
-/// of 2^32 − 1; that duration is written at version 1, so a header holding it
-/// reads back.
+/// [`INDETERMINATE`](Self::INDETERMINATE); a duration of 2^32 − 1 is written at
+/// version 1, so a header holding it reads back.
 ///
 /// # Examples
 ///
@@ -41,8 +40,8 @@ impl HeaderDuration {
 
     /// Creates the duration from its value
     ///
-    /// Returns `None` for [`u64::MAX`], the all 1s that states a duration
-    /// cannot be determined.
+    /// Returns `None` when `duration` is [`u64::MAX`], the all 1s that states a
+    /// duration cannot be determined.
     #[must_use]
     pub const fn new(duration: u64) -> Option<Self> {
         if duration == u64::MAX {
@@ -52,7 +51,7 @@ impl HeaderDuration {
         Some(Self(duration))
     }
 
-    /// Creates the duration from one derived from the tables, `None` where the derivation overflowed
+    /// Creates the duration from one derived from other boxes
     ///
     /// A `duration` of `None`, or of [`u64::MAX`], cannot be determined.
     pub(crate) fn from_derived(duration: Option<u64>) -> Self {

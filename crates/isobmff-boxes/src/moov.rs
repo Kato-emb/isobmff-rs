@@ -173,9 +173,10 @@ impl MovieBox {
     ///
     /// A duration cannot be determined — it is
     /// [`HeaderDuration::INDETERMINATE`](crate::HeaderDuration::INDETERMINATE)
-    /// — where its sum does not fit in 64 bits, or where its conversion does
-    /// not fit or the media's time scale is 0, and the movie's cannot be
-    /// determined once any track's cannot.
+    /// — where its sum or conversion reaches [`u64::MAX`], the media's time
+    /// scale is 0, or, for a `tkhd` with no edit list, the `mdhd` duration
+    /// cannot be determined; the movie's cannot be determined once any track's
+    /// cannot.
     pub fn state_durations(&mut self) {
         let movie_timescale = self.mvhd.timescale();
         let mut longest = Some(0_u64);

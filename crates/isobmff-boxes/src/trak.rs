@@ -189,9 +189,9 @@ impl TrackBox {
     /// `tkhd` takes, as ISO/IEC 14496-12 §8.3.2.3 has it, the sum of the
     /// `segment_duration` of the track's edits, or, for a track with no edit
     /// list, the media's duration converted to `movie_timescale` and rounded up
-    /// to the next whole unit. It cannot be determined where the sum does not
-    /// fit in 64 bits, or where the media's duration cannot be determined, the
-    /// conversion does not fit or the media's time scale is 0.
+    /// to the next whole unit. It cannot be determined where the sum or the
+    /// conversion reaches [`u64::MAX`], or where the media's duration cannot be
+    /// determined or the media's time scale is 0.
     pub(crate) fn state_duration(&mut self, movie_timescale: u32) -> HeaderDuration {
         self.mdia.state_duration();
         let media_header = self.mdia.mdhd();

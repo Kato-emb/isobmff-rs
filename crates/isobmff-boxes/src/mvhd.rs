@@ -24,8 +24,8 @@ const PAYLOAD_LEN_VERSION_1: u64 = 112;
 /// the times fit in 32 bits. The `flags` are not held either — the spec declares
 /// them zero for this box.
 ///
-/// The `duration` is a [`HeaderDuration`], which states one that cannot be
-/// determined as well (§8.2.2.3).
+/// The `duration` is a [`HeaderDuration`], which can also state that the
+/// duration cannot be determined (§8.2.2.3).
 ///
 /// # Examples
 ///
