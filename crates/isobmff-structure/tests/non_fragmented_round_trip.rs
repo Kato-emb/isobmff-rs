@@ -141,6 +141,48 @@ mod tests {
     }
 
     #[test]
+    fn the_durations_are_stated_from_the_samples_each_track_was_handed() {
+        let epoch = Mp4EpochSeconds::from_seconds(0);
+        let template = MovieBox::new(
+            MovieHeaderBox::new(epoch, epoch, 1_000, HeaderDuration::ZERO, 3),
+            vec![track(1), track(2)],
+            None,
+        )
+        .unwrap();
+        let mut writer = NonFragmentedWriter::new();
+        let mut file = Vec::new();
+
+        writer.handle_movie(template).unwrap();
+        for chunk in two_track_chunks() {
+            writer.begin_chunk().unwrap();
+            for sample in chunk {
+                writer.handle_sample(sample).unwrap();
+            }
+        }
+        writer.finish().unwrap();
+        while let Some(written) = writer.poll_output() {
+            file.extend_from_slice(&written);
+        }
+        let mut reader = NonFragmentedReader::new();
+        reader.handle_input(&file).unwrap();
+        let read = reader.movie().unwrap();
+
+        let mut expected = read.clone();
+        let duration = |value| HeaderDuration::new(value).unwrap();
+        *expected.mvhd_mut() = read.mvhd().clone().with_duration(duration(100));
+        for (track_id, media_duration, track_duration) in [(1, 9_000, 100), (2, 4_096, 46)] {
+            let track = expected.trak_mut(track_id).unwrap();
+            *track.tkhd_mut() = track.tkhd().clone().with_duration(duration(track_duration));
+            *track.mdia_mut().mdhd_mut() = track
+                .mdia()
+                .mdhd()
+                .clone()
+                .with_duration(duration(media_duration));
+        }
+        assert_eq!(read, &expected);
+    }
+
+    #[test]
     fn a_file_handed_no_brands_whose_chunk_comes_before_the_movie_is_read_back() {
         let sample = Sample::new(1, 0, 3_000, 0, SampleFlags::ZERO, 1, b"VIDEO_01".to_vec());
         let mut writer = NonFragmentedWriter::new();

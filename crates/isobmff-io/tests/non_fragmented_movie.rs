@@ -6,11 +6,12 @@ mod tests {
 
     use futures_executor::block_on;
     use futures_util::io::Cursor;
+    use isobmff_boxes::{HeaderDuration, MovieBox};
     use isobmff_io::blocking::{NonFragmentedDemuxer, NonFragmentedMuxer};
     use isobmff_sample::Sample;
     use isobmff_test_support::{
-        SAMPLE_CHUNKS, file_type, non_fragmented_file, non_fragmented_file_samples,
-        unfragmented_movie,
+        SAMPLE_CHUNKS, SAMPLE_DURATION, file_type, non_fragmented_file,
+        non_fragmented_file_samples, unfragmented_movie,
     };
 
     #[test]
@@ -49,6 +50,37 @@ mod tests {
             .unwrap();
 
         assert_eq!(read_back, non_fragmented_file_samples());
+    }
+
+    #[test]
+    fn a_movie_the_muxer_laid_down_from_a_template_of_no_duration_is_read_back_lasting_its_samples()
+    {
+        let mut file = Vec::new();
+        let mut muxer = NonFragmentedMuxer::new(&mut file);
+        let samples = non_fragmented_file_samples();
+        let lasting = samples.len() as u64 * u64::from(SAMPLE_DURATION);
+
+        muxer.handle_movie(unfragmented_movie()).unwrap();
+        muxer.begin_chunk().unwrap();
+        for sample in samples {
+            muxer.handle_sample(sample).unwrap();
+        }
+        muxer.finish().unwrap();
+
+        let mut demuxer = NonFragmentedDemuxer::new(io::Cursor::new(&file)).unwrap();
+        for sample in &mut demuxer {
+            sample.unwrap();
+        }
+
+        assert_eq!(
+            demuxer.movie().map(MovieBox::mvhd),
+            Some(
+                &unfragmented_movie()
+                    .mvhd()
+                    .clone()
+                    .with_duration(HeaderDuration::new(lasting).unwrap())
+            )
+        );
     }
 
     #[test]

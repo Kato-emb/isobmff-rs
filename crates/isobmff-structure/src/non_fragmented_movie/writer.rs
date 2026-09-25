@@ -49,7 +49,12 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 ///   at [`finish`](Self::finish) — the `stsd` kept, the four tables laying
 ///   the samples out replaced, and every other box the `stbl` carried
 ///   dropped. A track no sample was handed over to keeps the sample tables
-///   it was handed over with. Durations stay the caller's. A sample of a
+///   it was handed over with. With the tables in, the durations of the
+///   `mdhd`, `tkhd` and `mvhd` are stated from them, as
+///   [`MovieBox::state_durations`] states them (ISO/IEC 14496-12 §8.4.2.3,
+///   §8.3.2.3, §8.2.2.3): an edit list handed over is laid down as it
+///   stands and the track lasts the sum of its edits, and a track whose
+///   tables are empty lasts 0. A sample of a
 ///   track the movie does not declare is
 ///   [`Sample`](crate::ErrorKind::Sample) at
 ///   [`finish`](Self::finish), where the two meet.
@@ -312,6 +317,7 @@ impl NonFragmentedWriter {
             let stbl = track.mdia_mut().minf_mut().stbl_mut();
             *stbl = tables.into_sample_table(stbl.stsd().clone());
         }
+        movie.state_durations();
         let payload = whole_payload(&movie).map_err(|failure| self.fail(failure))?;
         let header = whole_box_header(MovieBox::BOX_TYPE, payload.len() as u64)
             .map_err(|failure| self.fail(failure))?;
