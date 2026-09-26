@@ -11,12 +11,19 @@
 //!
 //! Every group also carries harness rows, which do what a row does short of
 //! calling the library: the writer's harness sets up the samples the writer row
-//! is handed and drops them, the reader's hands the file over chunk by chunk to
-//! nothing, and the resolver's is handed the movie. What a row costs the
-//! library is its value less that of the harness row of its side.
+//! is handed and hands them back, the reader's hands the file over chunk by
+//! chunk to nothing, and the resolver's is handed the movie. What a row costs
+//! the library is its value less the harness row of its side, which leaves in
+//! the row the disposal of what the library hands over, since draining and
+//! dropping the output is the caller's contract.
 
 // Why not gathering the output, and why not black_box the bytes a writer hands
 // over: the notes at the head of `fragmented.rs` hold for this file too.
+
+// Why not dropping the input in the routine: freeing sixty megabytes with nothing
+// allocated in between lets glibc trim the heap on every free, a cost the writer
+// rows never pay because their tables grow at the top of the heap; the input goes
+// back to criterion, which drops it outside the timing.
 
 use core::hint::black_box;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -33,7 +40,7 @@ const TRACK_ID: u32 = 1;
 /// Chunk the arriving bytes are handed over in
 const ARRIVING_CHUNK_LEN: usize = 64 * 1024;
 
-/// Bytes of payload from which a row's inputs are set up one at a time
+/// Bytes of input from which a row's inputs are set up one at a time
 const LARGE_INPUT_LEN: usize = 32 * 1024 * 1024;
 
 /// A file to measure over: samples of one length, so many to a chunk, so many chunks
@@ -146,12 +153,9 @@ const SAMPLE_COUNT_SAMPLES_PER_CHUNK: usize = 100;
 /// Samples one movie declares, over the range the second table reports
 const SAMPLE_COUNTS: [usize; 3] = [1_000, 10_000, 100_000];
 
-/// The layouts of the movie the reader is measured over, by name and by whether the movie lies first
-const LAYOUTS: [(&str, bool); 2] = [("movie-first", true), ("movie-last", false)];
-
-/// How many inputs criterion sets up ahead of a routine that is handed `payload_len` bytes
-const fn batch_size(payload_len: usize) -> BatchSize {
-    if payload_len < LARGE_INPUT_LEN {
+/// How many inputs criterion sets up ahead of a routine that is handed `input_len` bytes
+const fn batch_size(input_len: usize) -> BatchSize {
+    if input_len < LARGE_INPUT_LEN {
         BatchSize::SmallInput
     } else {
         BatchSize::LargeInput
@@ -264,7 +268,9 @@ fn composition(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("non_fragmented_composition");
 
     for (name, composition) in COMPOSITIONS {
-        let file_len = composition.file(false).len();
+        let movie_first = composition.file(true);
+        let movie_last = composition.file(false);
+        let file_len = movie_last.len();
         let payload_len = composition.payload_len();
         let sample_count = composition.sample_count();
 
@@ -275,7 +281,7 @@ fn composition(criterion: &mut Criterion) {
         group.bench_function(BenchmarkId::new("harness/writer", name), |bencher| {
             bencher.iter_batched(
                 || (file_type(), unfragmented_movie(), composition.samples()),
-                |inputs| drop(black_box(inputs)),
+                black_box,
                 batch_size(payload_len),
             );
         });
@@ -294,20 +300,16 @@ fn composition(criterion: &mut Criterion) {
         });
 
         group.bench_function(BenchmarkId::new("harness/reader", name), |bencher| {
-            let file = composition.file(true);
-
-            bencher.iter(|| handed_over(&file));
+            bencher.iter(|| handed_over(&movie_first));
         });
 
-        for (layout, movie_first) in LAYOUTS {
-            let file = composition.file(movie_first);
-
+        for (layout, file) in [("movie-first", &movie_first), ("movie-last", &movie_last)] {
             group.bench_function(
                 BenchmarkId::new(format!("non_fragmented_reader/{layout}"), name),
                 |bencher| {
                     bencher.iter(|| {
                         assert_eq!(
-                            non_fragmented_reader_samples(&file, ARRIVING_CHUNK_LEN),
+                            non_fragmented_reader_samples(file, ARRIVING_CHUNK_LEN),
                             (sample_count, payload_len)
                         );
                     });
@@ -338,27 +340,25 @@ fn sample_count(criterion: &mut Criterion) {
             chunk_count: sample_count / SAMPLE_COUNT_SAMPLES_PER_CHUNK,
         };
         let payload_len = composition.payload_len();
+        let movie_first = composition.file(true);
+        let movie_last = composition.file(false);
 
         group.throughput(Throughput::Elements(u64::try_from(sample_count).unwrap()));
 
         group.bench_function(
             BenchmarkId::new("harness/reader", sample_count),
             |bencher| {
-                let file = composition.file(true);
-
-                bencher.iter(|| handed_over(&file));
+                bencher.iter(|| handed_over(&movie_first));
             },
         );
 
-        for (layout, movie_first) in LAYOUTS {
-            let file = composition.file(movie_first);
-
+        for (layout, file) in [("movie-first", &movie_first), ("movie-last", &movie_last)] {
             group.bench_function(
                 BenchmarkId::new(format!("non_fragmented_reader/{layout}"), sample_count),
                 |bencher| {
                     bencher.iter(|| {
                         assert_eq!(
-                            non_fragmented_reader_samples(&file, 0),
+                            non_fragmented_reader_samples(file, 0),
                             (sample_count, payload_len)
                         );
                     });
@@ -366,7 +366,7 @@ fn sample_count(criterion: &mut Criterion) {
             );
         }
 
-        let movie = movie_of(&composition.file(true));
+        let movie = movie_of(&movie_first);
 
         group.bench_function(
             BenchmarkId::new("harness/sample_table_extents", sample_count),

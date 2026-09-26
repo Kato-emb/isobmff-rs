@@ -10,9 +10,10 @@
 //!
 //! Every group also carries harness rows, which do what a row does short of
 //! calling the library: a writer's harness sets up the samples the writer row
-//! is handed and drops them, a reader's hands the file over chunk by chunk to
-//! nothing. What a row costs the library is its value less that of the harness
-//! row of its side.
+//! is handed and hands them back, a reader's hands the file over chunk by chunk
+//! to nothing. What a row costs the library is its value less the harness row of
+//! its side, which leaves in the row the disposal of what the library hands
+//! over, since draining and dropping the output is the caller's contract.
 
 // Why not gathering the output: bytes drained into a growing buffer cost more to
 // collect than the writer costs to produce them — a first attempt at this
@@ -23,6 +24,11 @@
 // owned value forces it onto the stack and blocks its drop from being optimized,
 // which the buffer this measurement used to drain through never paid — reading it
 // against that buffer would charge the library for the harness.
+
+// Why not dropping the input in the routine: freeing sixty megabytes with nothing
+// allocated in between lets glibc trim the heap on every free, a cost the writer
+// rows never pay because their tables grow at the top of the heap; the input goes
+// back to criterion, which drops it outside the timing.
 
 use core::hint::black_box;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -46,7 +52,7 @@ const TIMESCALE: u32 = 90_000;
 /// Chunk the arriving bytes are handed over in, except where a benchmark varies it
 const DEFAULT_ARRIVING_CHUNK_LEN: usize = 64 * 1024;
 
-/// Bytes of payload from which a row's inputs are set up one at a time
+/// Bytes of input from which a row's inputs are set up one at a time
 const LARGE_INPUT_LEN: usize = 32 * 1024 * 1024;
 
 /// A file to measure over: samples of one length, so many to a fragment, so many fragments, over so many tracks
@@ -257,9 +263,9 @@ const BOX_PAYLOAD_LENS: [(&str, usize); 6] = [
     ("64KiB", 64 * 1024),
 ];
 
-/// How many inputs criterion sets up ahead of a routine that is handed `payload_len` bytes
-const fn batch_size(payload_len: usize) -> BatchSize {
-    if payload_len < LARGE_INPUT_LEN {
+/// How many inputs criterion sets up ahead of a routine that is handed `input_len` bytes
+const fn batch_size(input_len: usize) -> BatchSize {
+    if input_len < LARGE_INPUT_LEN {
         BatchSize::SmallInput
     } else {
         BatchSize::LargeInput
@@ -502,7 +508,7 @@ fn composition(criterion: &mut Criterion) {
         group.bench_function(BenchmarkId::new("harness/writer", name), |bencher| {
             bencher.iter_batched(
                 || (file_type(), composition.movie(), composition.samples()),
-                |inputs| drop(black_box(inputs)),
+                black_box,
                 batch_size(payload_len),
             );
         });
@@ -577,7 +583,7 @@ fn fragment_length(criterion: &mut Criterion) {
             |bencher| {
                 bencher.iter_batched(
                     || (file_type(), composition.movie(), composition.samples()),
-                    |inputs| drop(black_box(inputs)),
+                    black_box,
                     batch_size(payload_len),
                 );
             },
@@ -666,6 +672,7 @@ fn box_length(criterion: &mut Criterion) {
         let (file, box_count) = free_boxes(payload_len);
         let file_len = file.len();
         let events = box_events(&file);
+        let input_len = file_len + events.len() * size_of::<BoxEvent>();
 
         group.throughput(Throughput::Elements(u64::try_from(box_count).unwrap()));
 
@@ -683,18 +690,14 @@ fn box_length(criterion: &mut Criterion) {
         });
 
         group.bench_function(BenchmarkId::new("harness/writer", name), |bencher| {
-            bencher.iter_batched(
-                || events.clone(),
-                |events| drop(black_box(events)),
-                BatchSize::SmallInput,
-            );
+            bencher.iter_batched(|| events.clone(), black_box, batch_size(input_len));
         });
 
         group.bench_function(BenchmarkId::new("box_writer", name), |bencher| {
             bencher.iter_batched(
                 || events.clone(),
                 |events| assert_eq!(box_writer_file(events), file_len),
-                BatchSize::SmallInput,
+                batch_size(input_len),
             );
         });
     }
