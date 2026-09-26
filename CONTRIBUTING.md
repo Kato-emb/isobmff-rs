@@ -65,14 +65,14 @@ The benches live in `isobmff-benches` (`benches/`), which depends on the
 
 ### Writing a Bench
 
-- Give every group a `harness/<side>` id that does what the rows of that side
-  do short of calling the library (the same setup, the same chunking, the same
-  `black_box` calls), so a row can be read less its harness.
-- Apply `std::hint::black_box` to inputs and outputs only, never inside the
+- Give each side of every group a `harness/<side>` row, where `<side>` is
+  `writer`, `reader`, or the row the harness stands for, that does what the
+  rows of that side do short of calling the library (the same setup and the
+  same chunking), so a row can be read less its harness.
+- Apply `core::hint::black_box` to inputs and outputs only, never inside the
   code being measured.
 - Use `BatchSize::SmallInput`, or `LargeInput` for large inputs; never
   `PerIteration`.
-- Take real files from the corpus of `isobmff-test-support`.
 
 ### Numbers in a Pull Request
 
