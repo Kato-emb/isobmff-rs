@@ -40,7 +40,7 @@ const TRACK_ID: u32 = 1;
 /// Chunk the arriving bytes are handed over in
 const ARRIVING_CHUNK_LEN: usize = 64 * 1024;
 
-/// Bytes of input from which a row's inputs are set up one at a time
+/// Bytes of input from which criterion sets up a row's inputs in the smaller batches of `BatchSize::LargeInput`
 const LARGE_INPUT_LEN: usize = 32 * 1024 * 1024;
 
 /// A file to measure over: samples of one length, so many to a chunk, so many chunks

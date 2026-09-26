@@ -9,8 +9,8 @@
 //! what its input declares.
 //!
 //! Every group also carries harness rows, which do what a row does short of
-//! calling the library: a writer's harness sets up the samples the writer row
-//! is handed and hands them back, a reader's hands the file over chunk by chunk
+//! calling the library: a writer's harness sets up the input the writer row
+//! is handed and hands it back, a reader's hands the file over chunk by chunk
 //! to nothing. What a row costs the library is its value less the harness row of
 //! its side, which leaves in the row the disposal of what the library hands
 //! over, since draining and dropping the output is the caller's contract.
@@ -52,7 +52,7 @@ const TIMESCALE: u32 = 90_000;
 /// Chunk the arriving bytes are handed over in, except where a benchmark varies it
 const DEFAULT_ARRIVING_CHUNK_LEN: usize = 64 * 1024;
 
-/// Bytes of input from which a row's inputs are set up one at a time
+/// Bytes of input from which criterion sets up a row's inputs in the smaller batches of `BatchSize::LargeInput`
 const LARGE_INPUT_LEN: usize = 32 * 1024 * 1024;
 
 /// A file to measure over: samples of one length, so many to a fragment, so many fragments, over so many tracks
