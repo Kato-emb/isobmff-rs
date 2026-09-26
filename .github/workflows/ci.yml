@@ -59,12 +59,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo nextest run --workspace --all-features --no-tests=pass
       - run: cargo test --doc --workspace --all-features
-      # A bench is not run here — a number taken on a shared runner says nothing.
-      # This only keeps a bench that stopped linking from reaching main, and one
-      # host proves that. The other two legs skip the bench binary alone: criterion
-      # is an unconditional dev-dependency, so they compile it for the tests anyway.
+      # A bench is not timed here — a number taken on a shared runner says nothing.
+      # This runs each bench once, so a fixture that panics or an unwrap that fails
+      # is caught before main, and one host proves that. The other two legs skip
+      # it: nothing else they build compiles criterion.
       - if: matrix.os == 'ubuntu-latest'
-        run: cargo bench --workspace --all-features --no-run
+        run: cargo test -p isobmff-benches --benches
 
   msrv:
     runs-on: ubuntu-latest
@@ -93,7 +93,8 @@ jobs:
       # isobmff-io is excluded, not merely unbuilt: it drives the layers beneath
       # over an I/O, so std is what it is for. isobmff-examples is excluded with
       # it: it asks isobmff for `io`, which would bring isobmff-io back in.
-      - run: cargo check --workspace --exclude isobmff-io --exclude isobmff-examples --target thumbv7em-none-eabihf
+      # isobmff-benches is excluded too: criterion needs std.
+      - run: cargo check --workspace --exclude isobmff-io --exclude isobmff-examples --exclude isobmff-benches --target thumbv7em-none-eabihf
       # The alloc feature is on by default, so every other job builds core with a
       # heap behind it. Only this run reaches the alloc-free path, and it runs on
       # the target that has no allocator to fall back on.
