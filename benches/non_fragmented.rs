@@ -1,25 +1,22 @@
 //! Throughput of the layers a non-fragmented file is laid down and read back through
 //!
 //! Two measurements stand side by side with the fragmented ones of
-//! `throughput.rs`: what every composition of samples costs the writer, and the
+//! `fragmented.rs`: what every composition of samples costs the writer, and the
 //! reader with the movie lying before its media data or after it, and what the
 //! number of samples one movie declares costs the reader, which holds the
 //! extents of them all at once, and the resolver on its own. The first reports
 //! the bytes the samples carry, so its columns read against the fragmented
 //! ones; the second reports samples, which is what its cost is paid by. Each
 //! of them checks what it moved against what its input declares.
+//!
+//! Every group also carries harness rows, which do what a row does short of
+//! calling the library: the writer's harness sets up the samples the writer row
+//! is handed and drops them, the reader's hands the file over chunk by chunk to
+//! nothing, and the resolver's is handed the movie. What a row costs the
+//! library is its value less that of the harness row of its side.
 
 // Why not gathering the output, and why not black_box the bytes a writer hands
-// over: the notes at the head of `throughput.rs` hold for this file too.
-
-// Why not relaxing these in `clippy.toml`: `allow-unwrap-in-tests` reaches
-// inside `#[cfg(test)]` alone, which a bench target is compiled without, so
-// nothing short of an attribute here relaxes them.
-#![allow(
-    clippy::unwrap_used,
-    clippy::arithmetic_side_effects,
-    reason = "a bench that will not run is a bug in the bench, and its arithmetic is over lengths its own constants settle"
-)]
+// over: the notes at the head of `fragmented.rs` hold for this file too.
 
 use core::hint::black_box;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -35,6 +32,9 @@ const TRACK_ID: u32 = 1;
 
 /// Chunk the arriving bytes are handed over in
 const ARRIVING_CHUNK_LEN: usize = 64 * 1024;
+
+/// Bytes of payload from which a row's inputs are set up one at a time
+const LARGE_INPUT_LEN: usize = 32 * 1024 * 1024;
 
 /// A file to measure over: samples of one length, so many to a chunk, so many chunks
 #[derive(Clone, Copy)]
@@ -149,6 +149,22 @@ const SAMPLE_COUNTS: [usize; 3] = [1_000, 10_000, 100_000];
 /// The layouts of the movie the reader is measured over, by name and by whether the movie lies first
 const LAYOUTS: [(&str, bool); 2] = [("movie-first", true), ("movie-last", false)];
 
+/// How many inputs criterion sets up ahead of a routine that is handed `payload_len` bytes
+const fn batch_size(payload_len: usize) -> BatchSize {
+    if payload_len < LARGE_INPUT_LEN {
+        BatchSize::SmallInput
+    } else {
+        BatchSize::LargeInput
+    }
+}
+
+/// Hands the file over chunk by chunk to nothing, as a reader row would to its reader
+fn handed_over(file: &[u8]) {
+    for arriving in file.chunks(ARRIVING_CHUNK_LEN) {
+        black_box(arriving);
+    }
+}
+
 /// Drains what the writer has ready, and reports how many bytes that was
 fn drained(writer: &mut NonFragmentedWriter) -> usize {
     let mut total = 0;
@@ -252,7 +268,17 @@ fn composition(criterion: &mut Criterion) {
         let payload_len = composition.payload_len();
         let sample_count = composition.sample_count();
 
-        group.throughput(Throughput::Bytes(u64::try_from(payload_len).unwrap()));
+        group.throughput(Throughput::BytesDecimal(
+            u64::try_from(payload_len).unwrap(),
+        ));
+
+        group.bench_function(BenchmarkId::new("harness/writer", name), |bencher| {
+            bencher.iter_batched(
+                || (file_type(), unfragmented_movie(), composition.samples()),
+                |inputs| drop(black_box(inputs)),
+                batch_size(payload_len),
+            );
+        });
 
         group.bench_function(BenchmarkId::new("non_fragmented_writer", name), |bencher| {
             bencher.iter_batched(
@@ -263,8 +289,14 @@ fn composition(criterion: &mut Criterion) {
                         file_len
                     )
                 },
-                BatchSize::PerIteration,
+                batch_size(payload_len),
             );
+        });
+
+        group.bench_function(BenchmarkId::new("harness/reader", name), |bencher| {
+            let file = composition.file(true);
+
+            bencher.iter(|| handed_over(&file));
         });
 
         for (layout, movie_first) in LAYOUTS {
@@ -309,6 +341,15 @@ fn sample_count(criterion: &mut Criterion) {
 
         group.throughput(Throughput::Elements(u64::try_from(sample_count).unwrap()));
 
+        group.bench_function(
+            BenchmarkId::new("harness/reader", sample_count),
+            |bencher| {
+                let file = composition.file(true);
+
+                bencher.iter(|| handed_over(&file));
+            },
+        );
+
         for (layout, movie_first) in LAYOUTS {
             let file = composition.file(movie_first);
 
@@ -326,6 +367,13 @@ fn sample_count(criterion: &mut Criterion) {
         }
 
         let movie = movie_of(&composition.file(true));
+
+        group.bench_function(
+            BenchmarkId::new("harness/sample_table_extents", sample_count),
+            |bencher| {
+                bencher.iter(|| black_box(&movie));
+            },
+        );
 
         group.bench_function(
             BenchmarkId::new("sample_table_extents", sample_count),

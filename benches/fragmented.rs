@@ -7,6 +7,12 @@
 //! carry, so the layers of one column are comparable; the fourth reports boxes,
 //! which is what its cost is paid by. Each of them checks what it moved against
 //! what its input declares.
+//!
+//! Every group also carries harness rows, which do what a row does short of
+//! calling the library: a writer's harness sets up the samples the writer row
+//! is handed and drops them, a reader's hands the file over chunk by chunk to
+//! nothing. What a row costs the library is its value less that of the harness
+//! row of its side.
 
 // Why not gathering the output: bytes drained into a growing buffer cost more to
 // collect than the writer costs to produce them — a first attempt at this
@@ -17,15 +23,6 @@
 // owned value forces it onto the stack and blocks its drop from being optimized,
 // which the buffer this measurement used to drain through never paid — reading it
 // against that buffer would charge the library for the harness.
-
-// Why not relaxing these in `clippy.toml`: `allow-unwrap-in-tests` reaches
-// inside `#[cfg(test)]` alone, which a bench target is compiled without, so
-// nothing short of an attribute here relaxes them.
-#![allow(
-    clippy::unwrap_used,
-    clippy::arithmetic_side_effects,
-    reason = "a bench that will not run is a bug in the bench, and its arithmetic is over lengths its own constants settle"
-)]
 
 use core::hint::black_box;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -48,6 +45,9 @@ const TIMESCALE: u32 = 90_000;
 
 /// Chunk the arriving bytes are handed over in, except where a benchmark varies it
 const DEFAULT_ARRIVING_CHUNK_LEN: usize = 64 * 1024;
+
+/// Bytes of payload from which a row's inputs are set up one at a time
+const LARGE_INPUT_LEN: usize = 32 * 1024 * 1024;
 
 /// A file to measure over: samples of one length, so many to a fragment, so many fragments, over so many tracks
 #[derive(Clone, Copy)]
@@ -256,6 +256,22 @@ const BOX_PAYLOAD_LENS: [(&str, usize); 6] = [
     ("4KiB", 4 * 1024),
     ("64KiB", 64 * 1024),
 ];
+
+/// How many inputs criterion sets up ahead of a routine that is handed `payload_len` bytes
+const fn batch_size(payload_len: usize) -> BatchSize {
+    if payload_len < LARGE_INPUT_LEN {
+        BatchSize::SmallInput
+    } else {
+        BatchSize::LargeInput
+    }
+}
+
+/// Hands the file over chunk by chunk to nothing, as a reader row would to its reader
+fn handed_over(file: &[u8], chunk_len: usize) {
+    for arriving in file.chunks(chunk_len) {
+        black_box(arriving);
+    }
+}
 
 /// Drains what the writer has ready, and reports how many bytes that was
 fn drained(writer: &mut FragmentedWriter) -> usize {
@@ -470,7 +486,7 @@ fn written_file(composition: &Composition) -> Vec<u8> {
 
 /// Measures the two layers down and the two layers up, for every composition
 fn composition(criterion: &mut Criterion) {
-    let mut group = criterion.benchmark_group("composition");
+    let mut group = criterion.benchmark_group("fragmented_composition");
 
     for (name, composition) in COMPOSITIONS {
         let file = written_file(&composition);
@@ -479,7 +495,17 @@ fn composition(criterion: &mut Criterion) {
         let sample_count = composition.sample_count();
         let box_count = composition.box_count();
 
-        group.throughput(Throughput::Bytes(u64::try_from(payload_len).unwrap()));
+        group.throughput(Throughput::BytesDecimal(
+            u64::try_from(payload_len).unwrap(),
+        ));
+
+        group.bench_function(BenchmarkId::new("harness/writer", name), |bencher| {
+            bencher.iter_batched(
+                || (file_type(), composition.movie(), composition.samples()),
+                |inputs| drop(black_box(inputs)),
+                batch_size(payload_len),
+            );
+        });
 
         group.bench_function(BenchmarkId::new("fragmented_writer", name), |bencher| {
             bencher.iter_batched(
@@ -490,7 +516,7 @@ fn composition(criterion: &mut Criterion) {
                         file_len
                     )
                 },
-                BatchSize::PerIteration,
+                batch_size(payload_len),
             );
         });
 
@@ -498,8 +524,12 @@ fn composition(criterion: &mut Criterion) {
             bencher.iter_batched(
                 || composition.samples(),
                 |fragments| assert_eq!(movie_fragment_writer_fragments(fragments), payload_len),
-                BatchSize::PerIteration,
+                batch_size(payload_len),
             );
+        });
+
+        group.bench_function(BenchmarkId::new("harness/reader", name), |bencher| {
+            bencher.iter(|| handed_over(&file, DEFAULT_ARRIVING_CHUNK_LEN));
         });
 
         group.bench_function(BenchmarkId::new("fragmented_reader", name), |bencher| {
@@ -526,9 +556,9 @@ fn composition(criterion: &mut Criterion) {
 
 /// Measures what splitting the same samples into longer or shorter fragments costs
 fn fragment_length(criterion: &mut Criterion) {
-    let mut group = criterion.benchmark_group("fragment_length");
+    let mut group = criterion.benchmark_group("fragmented_fragment_length");
 
-    group.throughput(Throughput::Bytes(
+    group.throughput(Throughput::BytesDecimal(
         u64::try_from(FRAGMENT_LENGTH_BASE.payload_len()).unwrap(),
     ));
 
@@ -543,6 +573,17 @@ fn fragment_length(criterion: &mut Criterion) {
             fragmented_writer_file(file_type(), composition.movie(), composition.samples());
 
         group.bench_function(
+            BenchmarkId::new("harness/writer", samples_per_fragment),
+            |bencher| {
+                bencher.iter_batched(
+                    || (file_type(), composition.movie(), composition.samples()),
+                    |inputs| drop(black_box(inputs)),
+                    batch_size(payload_len),
+                );
+            },
+        );
+
+        group.bench_function(
             BenchmarkId::new("fragmented_writer", samples_per_fragment),
             |bencher| {
                 bencher.iter_batched(
@@ -553,7 +594,7 @@ fn fragment_length(criterion: &mut Criterion) {
                             file_len
                         )
                     },
-                    BatchSize::PerIteration,
+                    batch_size(payload_len),
                 );
             },
         );
@@ -564,7 +605,7 @@ fn fragment_length(criterion: &mut Criterion) {
                 bencher.iter_batched(
                     || composition.samples(),
                     |fragments| assert_eq!(movie_fragment_writer_fragments(fragments), payload_len),
-                    BatchSize::PerIteration,
+                    batch_size(payload_len),
                 );
             },
         );
@@ -575,7 +616,7 @@ fn fragment_length(criterion: &mut Criterion) {
 
 /// Measures what handing the same file over in longer or shorter chunks costs
 fn chunk_length(criterion: &mut Criterion) {
-    let mut group = criterion.benchmark_group("chunk_length");
+    let mut group = criterion.benchmark_group("fragmented_chunk_length");
     let file = written_file(&CHUNK_LENGTH_BASE);
     let payload_len = CHUNK_LENGTH_BASE.payload_len();
     let sample_count = CHUNK_LENGTH_BASE.sample_count();
@@ -584,9 +625,15 @@ fn chunk_length(criterion: &mut Criterion) {
         .into_iter()
         .chain(ARRIVING_CHUNK_LENS);
 
-    group.throughput(Throughput::Bytes(u64::try_from(payload_len).unwrap()));
+    group.throughput(Throughput::BytesDecimal(
+        u64::try_from(payload_len).unwrap(),
+    ));
 
     for (name, chunk_len) in chunk_lens {
+        group.bench_function(BenchmarkId::new("harness/reader", name), |bencher| {
+            bencher.iter(|| handed_over(&file, chunk_len));
+        });
+
         group.bench_function(BenchmarkId::new("fragmented_reader", name), |bencher| {
             bencher.iter(|| {
                 assert_eq!(
@@ -622,6 +669,10 @@ fn box_length(criterion: &mut Criterion) {
 
         group.throughput(Throughput::Elements(u64::try_from(box_count).unwrap()));
 
+        group.bench_function(BenchmarkId::new("harness/reader", name), |bencher| {
+            bencher.iter(|| handed_over(&file, DEFAULT_ARRIVING_CHUNK_LEN));
+        });
+
         group.bench_function(BenchmarkId::new("box_reader", name), |bencher| {
             bencher.iter(|| {
                 assert_eq!(
@@ -631,11 +682,19 @@ fn box_length(criterion: &mut Criterion) {
             });
         });
 
+        group.bench_function(BenchmarkId::new("harness/writer", name), |bencher| {
+            bencher.iter_batched(
+                || events.clone(),
+                |events| drop(black_box(events)),
+                BatchSize::SmallInput,
+            );
+        });
+
         group.bench_function(BenchmarkId::new("box_writer", name), |bencher| {
             bencher.iter_batched(
                 || events.clone(),
                 |events| assert_eq!(box_writer_file(events), file_len),
-                BatchSize::PerIteration,
+                BatchSize::SmallInput,
             );
         });
     }
