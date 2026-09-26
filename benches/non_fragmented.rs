@@ -13,17 +13,13 @@
 //! calling the library: the writer's harness sets up the samples the writer row
 //! is handed and hands them back, the reader's hands the file over chunk by
 //! chunk to nothing, and the resolver's is handed the movie. What a row costs
-//! the library is its value less the harness row of its side, which leaves in
-//! the row the disposal of what the library hands over, since draining and
-//! dropping the output is the caller's contract.
+//! the library is its value less the harness row of its side. The writer row
+//! hands back what the writer handed over, so its disposal is left out of the
+//! row as the harness leaves out that of the input.
 
-// Why not gathering the output, and why not black_box the bytes a writer hands
-// over: the notes at the head of `fragmented.rs` hold for this file too.
-
-// Why not dropping the input in the routine: freeing sixty megabytes with nothing
-// allocated in between lets glibc trim the heap on every free, a cost the writer
-// rows never pay because their tables grow at the top of the heap; the input goes
-// back to criterion, which drops it outside the timing.
+// Why not gathering the output into one buffer, why not black_box the bytes a
+// writer hands over, and why not dropping the input or the output in the
+// routine: the notes at the head of `fragmented.rs` hold for this file too.
 
 use core::hint::black_box;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -31,6 +27,7 @@ use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, 
 use isobmff::boxes::{FileTypeBox, MovieBox, SampleFlags};
 use isobmff::sample::Sample;
 use isobmff::sample::sample_table::sample_extents;
+use isobmff::sequence::EventBytes;
 use isobmff::structure::{NonFragmentedReader, NonFragmentedWriter};
 use isobmff_test_support::{SAMPLE_DURATION, file_type, non_fragmented_file, unfragmented_movie};
 
@@ -169,25 +166,26 @@ fn handed_over(file: &[u8]) {
     }
 }
 
-/// Drains what the writer has ready, and reports how many bytes that was
-fn drained(writer: &mut NonFragmentedWriter) -> usize {
+/// Drains what the writer has ready into `outputs`, and reports how many bytes that was
+fn drained(writer: &mut NonFragmentedWriter, outputs: &mut Vec<EventBytes>) -> usize {
     let mut total = 0;
 
     while let Some(written) = writer.poll_output() {
         total += written.len();
-        black_box(written.len());
+        outputs.push(written);
     }
 
     total
 }
 
-/// Lays the chunks down as a whole file, and reports how many bytes it came to
+/// Lays the chunks down as a whole file, and hands back what it came to and how many bytes that was
 fn non_fragmented_writer_file(
     file_type: FileTypeBox,
     movie: MovieBox,
     chunks: Vec<Vec<Sample>>,
-) -> usize {
+) -> (usize, Vec<EventBytes>) {
     let mut writer = NonFragmentedWriter::new();
+    let mut outputs = Vec::new();
     let mut total = 0;
 
     writer.handle_file_type(file_type).unwrap();
@@ -198,11 +196,12 @@ fn non_fragmented_writer_file(
         for sample in samples {
             writer.handle_sample(sample).unwrap();
         }
-        total += drained(&mut writer);
+        total += drained(&mut writer, &mut outputs);
     }
     writer.finish().unwrap();
+    total += drained(&mut writer, &mut outputs);
 
-    total + drained(&mut writer)
+    (total, outputs)
 }
 
 /// Reads the samples off the file, and reports how many there were and what they carry
@@ -290,10 +289,10 @@ fn composition(criterion: &mut Criterion) {
             bencher.iter_batched(
                 || (file_type(), unfragmented_movie(), composition.samples()),
                 |(file_type, movie, chunks)| {
-                    assert_eq!(
-                        non_fragmented_writer_file(file_type, movie, chunks),
-                        file_len
-                    )
+                    let (written_len, outputs) =
+                        non_fragmented_writer_file(file_type, movie, chunks);
+                    assert_eq!(written_len, file_len);
+                    outputs
                 },
                 batch_size(payload_len),
             );
