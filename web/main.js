@@ -2,7 +2,6 @@ const PAGE_LENGTH = 500;
 const HEX_LENGTH = 4096;
 const BOX_HEX_LENGTH = 512;
 const NARROW_HEX_WIDTH = 600;
-const TABS = ["overview", "boxes", "tracks", "samples"];
 const HANDLERS = { vide: "Video", soun: "Audio", hint: "Hint", meta: "Metadata", text: "Text", subt: "Subtitles", sbtl: "Subtitles" };
 const BOX_NAMES = {
   ftyp: "File type", styp: "Segment type", moov: "Movie", mvhd: "Movie header", trak: "Track",
@@ -26,6 +25,14 @@ const main = document.querySelector("#main");
 const list = document.querySelector("#list");
 const inspector = document.querySelector("#inspector");
 const numbers = new Intl.NumberFormat("en-US");
+const secondNumbers = new Intl.NumberFormat("en-US", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+
+const VIEWS = {
+  overview: { render: renderOverview },
+  boxes: { noun: "box", count: (data) => data.boxes.length, error: (data) => data.boxesError, render: renderBoxes, inspect: inspectBox },
+  tracks: { noun: "track", count: (data) => data.tracks.length, error: (data) => data.samplesError, render: renderTracks, inspect: inspectTrack },
+  samples: { noun: "sample", count: (data) => data.samples.length, error: (data) => data.samplesError, render: renderSamples, inspect: inspectSample },
+};
 
 let worker;
 const state = {
@@ -60,7 +67,7 @@ function element(tag, attributes = {}, ...children) {
 
 const grouped = (value) => numbers.format(value);
 const located = (value) => `${grouped(value)} (0x${value.toString(16)})`;
-const seconds = (value) => `${value.toFixed(3)} s`;
+const seconds = (value) => `${secondNumbers.format(value)} s`;
 const kind = (handlerType) => HANDLERS[handlerType] ?? handlerType;
 
 function bytes(value) {
@@ -104,19 +111,22 @@ function loaded(file, { boxes, movie }) {
   for (const sample of samples) {
     samplesByTrack.get(sample.track_id)?.push(sample);
   }
-  const facts = new Map(
+  const trackStatistics = new Map(
     tracks.map((track) => {
-      const own = samplesByTrack.get(track.track_id);
+      const trackSamples = samplesByTrack.get(track.track_id);
       let total = 0;
       let ticks = 0;
       let sync = 0;
-      for (const sample of own) {
+      for (const sample of trackSamples) {
         total += Number(sample.size);
         ticks += sample.sample_duration;
         sync += sample.sync ? 1 : 0;
       }
-      const lasting = ticks / track.timescale;
-      return [track.track_id, { samples: own.length, sync, total, lasting, bitrate: lasting ? (total * 8) / lasting / 1000 : 0 }];
+      const durationSeconds = ticks / track.timescale;
+      return [
+        track.track_id,
+        { samples: trackSamples.length, sync, total, durationSeconds, bitrate: durationSeconds ? (total * 8) / durationSeconds / 1000 : 0 },
+      ];
     }),
   );
   state.data = {
@@ -126,7 +136,7 @@ function loaded(file, { boxes, movie }) {
     tracks,
     samples,
     samplesByTrack,
-    facts,
+    trackStatistics,
     samplesError: movie.error ?? null,
   };
   Object.assign(state, { tab: "overview", chosen: null, collapsed: new Set(), track: null, page: 0 });
@@ -136,15 +146,15 @@ function loaded(file, { boxes, movie }) {
 
 function render({ keepScroll = false } = {}) {
   const { data, tab } = state;
+  const view = VIEWS[tab];
   const scrolled = list.querySelector(".scroll")?.scrollTop ?? 0;
-  const counts = data ? { boxes: data.boxes.length, tracks: data.tracks.length, samples: data.samples.length } : {};
   tabs.replaceChildren(
-    ...TABS.map((name) =>
+    ...Object.entries(VIEWS).map(([name, { count }]) =>
       element(
         "button",
         { type: "button", "data-tab": name, "aria-pressed": String(tab === name) },
         name,
-        counts[name] == null ? null : element("span", { class: "count" }, grouped(counts[name])),
+        data && count ? element("span", { class: "count" }, grouped(count(data))) : null,
       ),
     ),
   );
@@ -164,11 +174,11 @@ function render({ keepScroll = false } = {}) {
     );
     return;
   }
-  const error = { boxes: data.boxesError, tracks: data.samplesError, samples: data.samplesError }[tab];
+  const error = view.error?.(data);
   if (error) {
     list.replaceChildren(element("div", { class: "scroll" }, element("p", { class: "error" }, error)));
   } else {
-    ({ overview: renderOverview, boxes: renderBoxes, tracks: renderTracks, samples: renderSamples })[tab]();
+    view.render();
   }
   if (keepScroll) {
     list.querySelector(".scroll").scrollTop = scrolled;
@@ -177,12 +187,12 @@ function render({ keepScroll = false } = {}) {
 }
 
 function trackPairs(track) {
-  const facts = state.data.facts.get(track.track_id);
+  const statistics = state.data.trackStatistics.get(track.track_id);
   return [
-    ["Duration", seconds(facts.lasting)],
-    ["Samples", `${grouped(facts.samples)} (${grouped(facts.sync)} sync)`],
-    ["Size", bytes(facts.total)],
-    ["Bitrate", facts.lasting ? `${grouped(Math.round(facts.bitrate))} kbit/s` : "—"],
+    ["Duration", seconds(statistics.durationSeconds)],
+    ["Samples", `${grouped(statistics.samples)} (${grouped(statistics.sync)} sync)`],
+    ["Size", bytes(statistics.total)],
+    ["Bitrate", statistics.durationSeconds ? `${grouped(Math.round(statistics.bitrate))} kbit/s` : "—"],
     ["Timescale", `${grouped(track.timescale)} /s`],
   ];
 }
@@ -196,8 +206,8 @@ function card(label, value) {
 }
 
 function renderOverview() {
-  const { file, boxes, tracks, samples, facts, boxesError, samplesError } = state.data;
-  const longest = Math.max(0, ...[...facts.values()].map((fact) => fact.lasting));
+  const { file, boxes, tracks, samples, trackStatistics, boxesError, samplesError } = state.data;
+  const longest = Math.max(0, ...[...trackStatistics.values()].map((statistics) => statistics.durationSeconds));
   const sections = [
     element(
       "div",
@@ -206,7 +216,7 @@ function renderOverview() {
       card("Boxes", grouped(boxes.length)),
       card("Tracks", grouped(tracks.length)),
       card("Samples", grouped(samples.length)),
-      card("Duration", longest ? `${longest.toFixed(2)} s` : "—"),
+      card("Duration", longest ? seconds(longest) : "—"),
     ),
     element(
       "div",
@@ -325,7 +335,7 @@ function renderBoxes() {
 }
 
 function renderTracks() {
-  const { tracks, facts } = state.data;
+  const { tracks, trackStatistics } = state.data;
   list.replaceChildren(
     element(
       "div",
@@ -333,10 +343,17 @@ function renderTracks() {
       table(
         [["Track"], ["Kind"], ["Codec"], ["Duration", true], ["Samples"], ["Size", true]],
         tracks.map((track, index) => {
-          const fact = facts.get(track.track_id);
+          const statistics = trackStatistics.get(track.track_id);
           return [
             index,
-            [track.track_id, kind(track.handler_type), track.sample_entries.join(", "), seconds(fact.lasting), grouped(fact.samples), bytes(fact.total)],
+            [
+              track.track_id,
+              kind(track.handler_type),
+              track.sample_entries.join(", "),
+              seconds(statistics.durationSeconds),
+              grouped(statistics.samples),
+              bytes(statistics.total),
+            ],
           ];
         }),
       ),
@@ -436,64 +453,69 @@ function choose(index) {
   renderInspector();
 }
 
+async function inspectBox(data, chosen) {
+  const box = data.boxes[chosen];
+  const path = [box.box_type];
+  for (let index = chosen - 1, depth = box.depth; index >= 0 && depth > 0; index -= 1) {
+    if (data.boxes[index].depth === depth - 1) {
+      path.unshift(data.boxes[index].box_type);
+      depth -= 1;
+    }
+  }
+  return [
+    element("h2", {}, box.box_type),
+    element("div", { class: "subtitle" }, BOX_NAMES[box.box_type] ?? "Box"),
+    pairs([
+      ["Path", path.join(" › ")],
+      ["Offset", located(box.offset)],
+      ["Size", `${grouped(box.size)} (${bytes(box.size)})`],
+      ["Share of file", `${((Number(box.size) / data.file.size) * 100).toFixed(2)} %`],
+    ]),
+    await hex(box.offset, box.size, BOX_HEX_LENGTH),
+  ];
+}
+
+function inspectTrack(data, chosen) {
+  const track = data.tracks[chosen];
+  return [
+    element("h2", {}, `Track ${track.track_id}`),
+    element("div", { class: "subtitle" }, `${kind(track.handler_type)} · ${track.sample_entries.join(", ")}`),
+    pairs([
+      ["Handler", track.handler_type],
+      ["Header duration", track.duration == null ? "indeterminate" : `${grouped(track.duration)} ticks (${seconds(Number(track.duration) / track.timescale)})`],
+      ...trackPairs(track),
+    ]),
+  ];
+}
+
+async function inspectSample(data, chosen) {
+  const sample = chosenSamples()[chosen];
+  const track = data.tracks.find((candidate) => candidate.track_id === sample.track_id);
+  return [
+    element("h2", {}, "Sample"),
+    element("div", { class: "subtitle" }, `Track ${sample.track_id} · ${kind(track.handler_type)}`),
+    pairs([
+      ["Decode time", `${grouped(sample.decode_time)} ticks (${seconds(Number(sample.decode_time) / track.timescale)})`],
+      ["Duration", `${grouped(sample.sample_duration)} ticks`],
+      ["Composition offset", `${grouped(sample.sample_composition_time_offset)} ticks`],
+      ["Sync", sample.sync ? "yes" : "no"],
+      ["Description", `${sample.sample_description_index} (${track.sample_entries[sample.sample_description_index - 1] ?? "?"})`],
+      ["Offset", located(sample.offset)],
+      ["Size", grouped(sample.size)],
+    ]),
+    await hex(sample.offset, sample.size, HEX_LENGTH),
+  ];
+}
+
 async function renderInspector() {
   const { chosen, tab, data } = state;
+  const view = VIEWS[tab];
   inspector.classList.toggle("open", chosen != null);
-  if (chosen == null || !data) {
-    const noun = { boxes: "box", tracks: "track", samples: "sample" }[tab];
-    inspector.replaceChildren(noun ? element("p", { class: "muted" }, `Choose a ${noun} to see it here.`) : "");
+  if (chosen == null || !data || !view.inspect) {
+    inspector.replaceChildren(view.noun ? element("p", { class: "muted" }, `Choose a ${view.noun} to see it here.`) : "");
     return;
   }
-  let content;
-  if (tab === "boxes") {
-    const box = data.boxes[chosen];
-    const path = [box.box_type];
-    for (let index = chosen - 1, depth = box.depth; index >= 0 && depth > 0; index -= 1) {
-      if (data.boxes[index].depth === depth - 1) {
-        path.unshift(data.boxes[index].box_type);
-        depth -= 1;
-      }
-    }
-    content = [
-      element("h2", {}, box.box_type),
-      element("div", { class: "subtitle" }, BOX_NAMES[box.box_type] ?? "Box"),
-      pairs([
-        ["Path", path.join(" › ")],
-        ["Offset", located(box.offset)],
-        ["Size", `${grouped(box.size)} (${bytes(box.size)})`],
-        ["Share of file", `${((Number(box.size) / data.file.size) * 100).toFixed(2)} %`],
-      ]),
-      await hex(box.offset, box.size, BOX_HEX_LENGTH),
-    ];
-  } else if (tab === "tracks") {
-    const track = data.tracks[chosen];
-    content = [
-      element("h2", {}, `Track ${track.track_id}`),
-      element("div", { class: "subtitle" }, `${kind(track.handler_type)} · ${track.sample_entries.join(", ")}`),
-      pairs([
-        ["Handler", track.handler_type],
-        ["Header duration", track.duration == null ? "indeterminate" : `${grouped(track.duration)} ticks (${seconds(Number(track.duration) / track.timescale)})`],
-        ...trackPairs(track),
-      ]),
-    ];
-  } else {
-    const sample = chosenSamples()[chosen];
-    const track = data.tracks.find((candidate) => candidate.track_id === sample.track_id);
-    content = [
-      element("h2", {}, "Sample"),
-      element("div", { class: "subtitle" }, `Track ${sample.track_id} · ${kind(track.handler_type)}`),
-      pairs([
-        ["Decode time", `${grouped(sample.decode_time)} ticks (${seconds(Number(sample.decode_time) / track.timescale)})`],
-        ["Duration", `${grouped(sample.sample_duration)} ticks`],
-        ["Composition offset", `${grouped(sample.sample_composition_time_offset)} ticks`],
-        ["Sync", sample.sync ? "yes" : "no"],
-        ["Description", `${sample.sample_description_index} (${track.sample_entries[sample.sample_description_index - 1] ?? "?"})`],
-        ["Offset", located(sample.offset)],
-        ["Size", grouped(sample.size)],
-      ]),
-      await hex(sample.offset, sample.size, HEX_LENGTH),
-    ];
-  }
+  const content = await view.inspect(data, chosen);
   if (state.chosen === chosen && state.tab === tab && state.data === data) {
     inspector.replaceChildren(element("button", { type: "button", class: "close", "data-close": true }, "Close"), ...content);
   }
