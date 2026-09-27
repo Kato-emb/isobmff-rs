@@ -10,8 +10,8 @@
 //! of them checks what it moved against what its input declares.
 //!
 //! Every group also carries harness rows, which do what a row does short of
-//! calling the library: the writer's harness sets up the samples the writer row
-//! is handed and hands them back, the reader's hands the file over chunk by
+//! calling the library: the writer's harness sets up the input the writer row
+//! is handed and hands it back, the reader's hands the file over chunk by
 //! chunk to nothing, and the resolver's is handed the movie. What a row costs
 //! the library is its value less the harness row of its side. The writer row
 //! hands back what the writer handed over, so its disposal is left out of the
@@ -178,7 +178,7 @@ fn drained(writer: &mut NonFragmentedWriter, outputs: &mut Vec<EventBytes>) -> u
     total
 }
 
-/// Lays the chunks down as a whole file, and hands back what it came to and how many bytes that was
+/// Lays the chunks down as a whole file, and hands back how many bytes it came to and the outputs that carry them
 fn non_fragmented_writer_file(
     file_type: FileTypeBox,
     movie: MovieBox,

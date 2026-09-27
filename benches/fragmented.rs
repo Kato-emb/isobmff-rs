@@ -19,18 +19,18 @@
 // buffer cost more to collect than the writer costs to produce them — a first
 // attempt at this measurement spent 78% of its time there and reported the
 // harness, not the library. The outputs are kept as the writer handed them
-// over, which moves no byte.
+// over, which copies no payload byte.
 
 // Why not black_box the bytes a writer hands over: taking the address of an
-// owned value forces it onto the stack and blocks its drop from being optimized,
-// which the buffer this measurement used to drain through never paid — reading it
-// against that buffer would charge the library for the harness.
+// owned value forces it onto the stack, a copy a caller that keeps the output
+// never makes.
 
 // Why not dropping the input or the output in the routine: whether freeing them
 // makes glibc trim the heap depends on what the process freed before, since
 // glibc raises its trim threshold with the chunks it has unmapped, so a row
-// measured after another one read up to forty times slower; both go back to
-// criterion, which drops them outside the timing.
+// measured after another one read up to forty times slower; the harness row
+// hands its input back and a writer row its outputs, which criterion drops
+// outside the timing.
 
 use core::hint::black_box;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -293,7 +293,7 @@ fn drained(writer: &mut FragmentedWriter, outputs: &mut Vec<EventBytes>) -> usiz
     total
 }
 
-/// Lays the fragments down as a whole file, and hands back what it came to and how many bytes that was
+/// Lays the fragments down as a whole file, and hands back how many bytes it came to and the outputs that carry them
 fn fragmented_writer_file(
     file_type: FileTypeBox,
     movie: MovieBox,
@@ -322,7 +322,7 @@ fn fragmented_writer_file(
     (total, outputs)
 }
 
-/// Lays the fragments down as `moof` and media data pairs, and hands them back with the bytes they carry
+/// Lays the fragments down as `moof` and media data pairs, and hands them back with how many bytes of media data they carry
 ///
 /// The sample layer alone: the pairs are never framed as a file.
 fn movie_fragment_writer_fragments(
@@ -452,7 +452,7 @@ fn box_drained(writer: &mut BoxWriter, outputs: &mut Vec<EventBytes>) -> usize {
     total
 }
 
-/// Lays the events down as a file, and hands back what it came to and how many bytes that was
+/// Lays the events down as a file, and hands back how many bytes it came to and the outputs that carry them
 ///
 /// The box layer alone: what an event carries is written as it stands.
 fn box_writer_file(events: Vec<BoxEvent>) -> (usize, Vec<EventBytes>) {
