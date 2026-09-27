@@ -1,4 +1,4 @@
-import init, { dump_boxes } from "../npm/pkg/isobmff_wasm.js";
+import init, { dump_boxes } from "../crates/isobmff-wasm/pkg/isobmff_wasm.js";
 
 const ready = init();
 

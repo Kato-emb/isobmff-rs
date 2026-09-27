@@ -97,10 +97,10 @@ identical configurations by 30 % between runs.
 The site at <https://kato-emb.github.io/isobmff-rs/web/> runs the library in
 the browser. `pages.yml` deploys it on every push to `main`.
 
-- `npm/` is the crate `isobmff-wasm`, the library as `wasm-bindgen` exports
-  it. Its output, `npm/pkg/`, is not committed, and is not published to npm.
+- `crates/isobmff-wasm/` is the crate `isobmff-wasm`, the library as `wasm-bindgen` exports
+  it. Its output, `crates/isobmff-wasm/pkg/`, is not committed, and is not published to npm.
 - `web/` is the site: HTML, plain ES modules and a stylesheet, no bundler.
-  It imports `../npm/pkg/isobmff_wasm.js`, so the two directories keep their
+  It imports `../crates/isobmff-wasm/pkg/isobmff_wasm.js`, so the two directories keep their
   places relative to each other when served.
 - Build and serve it locally with a `wasm-bindgen` CLI of the version
   `Cargo.lock` pins for the `wasm-bindgen` crate
@@ -108,7 +108,7 @@ the browser. `pages.yml` deploys it on every push to `main`.
 
   ```sh
   cargo build -p isobmff-wasm --release --target wasm32-unknown-unknown
-  wasm-bindgen --target web --out-dir npm/pkg target/wasm32-unknown-unknown/release/isobmff_wasm.wasm
+  wasm-bindgen --target web --out-dir crates/isobmff-wasm/pkg target/wasm32-unknown-unknown/release/isobmff_wasm.wasm
   python3 -m http.server
   ```
 

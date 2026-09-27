@@ -9,4 +9,4 @@ fuzz/artifacts/
 
 # What wasm-bindgen generates from the isobmff-wasm crate, built again for each
 # deployment of the site.
-npm/pkg/
+crates/isobmff-wasm/pkg/
