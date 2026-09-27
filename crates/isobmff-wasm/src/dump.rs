@@ -1,5 +1,6 @@
 //! [`dump`], the tree of boxes a file is formed as
 
+use core::ops::Range;
 use std::io::{self, Read};
 
 use isobmff::core::{BoxHeader, BoxType, boxes};
@@ -25,7 +26,7 @@ const CONTAINERS: [BoxType; 12] = [
 ];
 
 /// One box of a file, where it lies and how deep it is held
-#[wasm_bindgen(getter_with_clone)]
+#[wasm_bindgen(getter_with_clone, inspectable)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct BoxRecord {
@@ -45,11 +46,46 @@ pub struct BoxRecord {
 ///
 /// The failure of `source`, the reason the box reader or [`boxes`] refuses
 /// what it reads, or a box that ends past `u64::MAX`.
-pub(crate) fn dump<S: Read>(mut source: S) -> Result<Vec<BoxRecord>, Error> {
-    let mut reader = BoxReader::new();
-    let mut cut = vec![0; 64 * 1024];
+pub(crate) fn dump<S: Read>(source: S) -> Result<Vec<BoxRecord>, Error> {
     let mut container: Option<(u64, Vec<u8>)> = None;
     let mut records = Vec::new();
+    read_boxes(source, |event, extent| {
+        match event {
+            BoxEvent::Header(header) => {
+                records.push(record(header, extent.start, 0));
+                container = CONTAINERS
+                    .contains(&header.box_type())
+                    .then(|| (extent.end, Vec::new()));
+            }
+            BoxEvent::Payload(payload) => {
+                if let Some((_, children)) = &mut container {
+                    children.extend(payload);
+                }
+            }
+            BoxEvent::End => {
+                if let Some((offset, children)) = container.take() {
+                    push_children(&mut records, &children, offset, 1)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    })?;
+    Ok(records)
+}
+
+/// Reads `source` to its end through a box reader, handing each event and the extent of the file it was read from to `on_event`
+///
+/// # Errors
+///
+/// The failure of `source`, the reason the box reader refuses what it reads,
+/// or the failure `on_event` returns, which ends the reading.
+pub(crate) fn read_boxes<S: Read>(
+    mut source: S,
+    mut on_event: impl FnMut(BoxEvent, Range<u64>) -> Result<(), Error>,
+) -> Result<(), Error> {
+    let mut reader = BoxReader::new();
+    let mut cut = vec![0; 64 * 1024];
     loop {
         let read = source.read(&mut cut)?;
         if read == 0 {
@@ -60,28 +96,10 @@ pub(crate) fn dump<S: Read>(mut source: S) -> Result<Vec<BoxRecord>, Error> {
                 .map_err(structure::Error::from)?;
         }
         while let Some((event, extent)) = reader.poll_event().zip(reader.event_extent()) {
-            match event {
-                BoxEvent::Header(header) => {
-                    records.push(record(header, extent.start, 0));
-                    container = CONTAINERS
-                        .contains(&header.box_type())
-                        .then(|| (extent.end, Vec::new()));
-                }
-                BoxEvent::Payload(payload) => {
-                    if let Some((_, children)) = &mut container {
-                        children.extend(payload);
-                    }
-                }
-                BoxEvent::End => {
-                    if let Some((offset, children)) = container.take() {
-                        push_children(&mut records, &children, offset, 1)?;
-                    }
-                }
-                _ => {}
-            }
+            on_event(event, extent)?;
         }
         if read == 0 {
-            return Ok(records);
+            return Ok(());
         }
     }
 }

@@ -11,9 +11,11 @@ use web_sys::Blob;
 
 use crate::source::BlobSource;
 
+mod demux;
 mod dump;
 mod source;
 
+pub use demux::{Demux, SampleRecord, TrackRecord};
 pub use dump::BoxRecord;
 
 /// Returns the boxes `blob` is formed as, each container followed by the boxes it holds
@@ -27,4 +29,17 @@ pub use dump::BoxRecord;
 #[wasm_bindgen]
 pub fn dump_boxes(blob: Blob) -> Result<Vec<BoxRecord>, JsError> {
     Ok(dump::dump(BlobSource::new(blob)?)?)
+}
+
+/// Returns the tracks of the movie `blob` carries and the samples its tables declare
+///
+/// # Errors
+///
+/// The failure of reading `blob`, the reason the library refuses the boxes it
+/// reads or the tables the `moov` and each `moof` declare, or a file that
+/// carries no `moov`, or none ahead of its first `moof` as a media segment
+/// delivered apart from its movie does.
+#[wasm_bindgen]
+pub fn demux(blob: Blob) -> Result<Demux, JsError> {
+    Ok(demux::demux(BlobSource::new(blob)?)?)
 }
