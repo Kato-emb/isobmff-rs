@@ -1,0 +1,57 @@
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Not cancel-in-progress: a deployment cut off halfway can leave the site partly replaced.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      # wasm-bindgen refuses a module built by a wasm-bindgen crate of another
+      # version, so the CLI is the one Cargo.lock pins.
+      - id: version
+        run: echo "wasm-bindgen=$(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "wasm-bindgen") | .version')" >> "$GITHUB_OUTPUT"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@${{ steps.version.outputs.wasm-bindgen }}
+      - run: cargo build -p isobmff-wasm --release --target wasm32-unknown-unknown
+      - run: wasm-bindgen --target web --out-dir npm/pkg target/wasm32-unknown-unknown/release/isobmff_wasm.wasm
+      # web/ imports ../npm/pkg/, so the two keep the paths they have in the repository.
+      - run: |
+          mkdir -p _site/npm
+          cp -r web _site/
+          cp -r npm/pkg _site/npm/
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}web/
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

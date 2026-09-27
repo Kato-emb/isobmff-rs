@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>isobmff-rs</title>
+    <link rel="stylesheet" href="style.css">
+    <script type="module" src="main.js"></script>
+  </head>
+  <body>
+    <h1>isobmff-rs</h1>
+    <p>
+      The boxes of an ISO base media file (MP4), read by the
+      <a href="https://github.com/Kato-emb/isobmff-rs">isobmff</a> crate in
+      the browser. The file does not leave the browser. Runs in current
+      Chrome, Edge, Firefox and Safari.
+    </p>
+    <input id="file" type="file">
+    <p id="status" role="status"></p>
+    <table id="boxes">
+      <thead>
+        <tr><th>box</th><th>offset</th><th>size</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </body>
+</html>

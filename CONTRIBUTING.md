@@ -92,10 +92,32 @@ request renames an id.
 Do not compare absolute values across tables: allocator state alone has moved
 identical configurations by 30 % between runs.
 
+## Web
+
+The site at <https://kato-emb.github.io/isobmff-rs/web/> runs the library in
+the browser. `pages.yml` deploys it on every push to `main`.
+
+- `npm/` is the crate `isobmff-wasm`, the library as `wasm-bindgen` exports
+  it. Its output, `npm/pkg/`, is not committed, and is not published to npm.
+- `web/` is the site: HTML, plain ES modules and a stylesheet, no bundler.
+  It imports `../npm/pkg/isobmff_wasm.js`, so the two directories keep their
+  places relative to each other when served.
+- Build and serve it locally with a `wasm-bindgen` CLI of the version
+  `Cargo.lock` pins for the `wasm-bindgen` crate
+  (`cargo install --locked wasm-bindgen-cli --version <version>`):
+
+  ```sh
+  cargo build -p isobmff-wasm --release --target wasm32-unknown-unknown
+  wasm-bindgen --target web --out-dir npm/pkg target/wasm32-unknown-unknown/release/isobmff_wasm.wasm
+  python3 -m http.server
+  ```
+
+  and open <http://localhost:8000/web/>.
+
 ## Repository Settings This Scheme Relies On
 
 Recorded here because they live outside the repository
-(Settings → General / Rules):
+(Settings → General / Rules / Pages):
 
 - Merge button: **squash merge only** — merge commits and rebase merging are
   disabled, so a PR merge always lands the validated title as the commit
@@ -109,3 +131,6 @@ Recorded here because they live outside the repository
   public the requirement is convention only. Apply it at public launch by
   importing `.github/rulesets/main.json` (Settings → Rules → Rulesets →
   New ruleset → Import a ruleset).
+- Pages: **Source = GitHub Actions** (Settings → Pages) — `pages.yml`
+  deploys the [site](#web) through the Pages actions, which fail until it is
+  set.

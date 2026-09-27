@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "examples", "benches"]
+members = ["crates/*", "examples", "benches", "npm"]
 
 [workspace.package]
 edition = "2024"
@@ -26,7 +26,7 @@ isobmff-structure = { path = "crates/isobmff-structure", version = "0.0.0" }
 isobmff-test-support = { path = "crates/isobmff-test-support" }
 
 # examples/Cargo.toml and benches/Cargo.toml carry a copy of these tables less
-# three lints each; keep them in step.
+# three lints each, npm/Cargo.toml less one; keep them in step.
 [workspace.lints.rust]
 # Memory safety: the parser is fed untrusted input, so safety must not rest on
 # reviewing unsafe blocks. forbid (not deny) cannot be lifted by an attribute;
