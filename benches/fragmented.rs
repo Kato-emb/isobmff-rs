@@ -7,37 +7,42 @@
 //! carry, so the layers of one column are comparable; the fourth reports boxes,
 //! which is what its cost is paid by. Each of them checks what it moved against
 //! what its input declares.
+//!
+//! Every group also carries harness rows, which do what a row does short of
+//! calling the library: a writer's harness sets up the input the writer row
+//! is handed and hands it back, a reader's hands the file over chunk by chunk
+//! to nothing. What a row costs the library is its value less the harness row of
+//! its side. A writer row hands back what the writer handed over, so its
+//! disposal is left out of the row as the harness leaves out that of the input.
 
-// Why not gathering the output: bytes drained into a growing buffer cost more to
-// collect than the writer costs to produce them — a first attempt at this
-// measurement spent 78% of its time there and reported the harness, not the
-// library.
+// Why not gathering the output into one buffer: bytes copied into a growing
+// buffer cost more to collect than the writer costs to produce them — a first
+// attempt at this measurement spent 78% of its time there and reported the
+// harness, not the library. The outputs are kept as the writer handed them
+// over, which copies no payload byte.
 
 // Why not black_box the bytes a writer hands over: taking the address of an
-// owned value forces it onto the stack and blocks its drop from being optimized,
-// which the buffer this measurement used to drain through never paid — reading it
-// against that buffer would charge the library for the harness.
+// owned value forces it onto the stack, a copy a caller that keeps the output
+// never makes.
 
-// Why not relaxing these in `clippy.toml`: `allow-unwrap-in-tests` reaches
-// inside `#[cfg(test)]` alone, which a bench target is compiled without, so
-// nothing short of an attribute here relaxes them.
-#![allow(
-    clippy::unwrap_used,
-    clippy::arithmetic_side_effects,
-    reason = "a bench that will not run is a bug in the bench, and its arithmetic is over lengths its own constants settle"
-)]
+// Why not dropping the input or the output in the routine: whether freeing them
+// makes glibc trim the heap depends on what the process freed before, since
+// glibc raises its trim threshold with the chunks it has unmapped, so a row
+// measured after another one read up to forty times slower; the harness row
+// hands its input back and a writer row its outputs, which criterion drops
+// outside the timing.
 
 use core::hint::black_box;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
-use isobmff_boxes::{
-    FileTypeBox, HeaderDuration, MovieBox, MovieExtendsBox, MovieHeaderBox, SampleFlags,
-    TrackExtendsBox,
+use isobmff::boxes::{
+    FileTypeBox, HeaderDuration, MovieBox, MovieExtendsBox, MovieFragmentBox, MovieHeaderBox,
+    SampleFlags, TrackExtendsBox,
 };
-use isobmff_core::{BoxHeader, BoxType, Mp4EpochSeconds};
-use isobmff_sample::{MovieFragmentWriter, Sample};
-use isobmff_sequence::{BoxEvent, BoxReader, BoxWriter};
-use isobmff_structure::{FragmentedReader, FragmentedWriter};
+use isobmff::core::{BoxHeader, BoxType, Mp4EpochSeconds};
+use isobmff::sample::{MovieFragmentWriter, Sample};
+use isobmff::sequence::{BoxEvent, BoxReader, BoxWriter, EventBytes};
+use isobmff::structure::{FragmentedReader, FragmentedWriter};
 use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type, track};
 
 /// Ticks every sample of the benchmarked movies lasts
@@ -48,6 +53,9 @@ const TIMESCALE: u32 = 90_000;
 
 /// Chunk the arriving bytes are handed over in, except where a benchmark varies it
 const DEFAULT_ARRIVING_CHUNK_LEN: usize = 64 * 1024;
+
+/// Bytes of input from which criterion sets up a row's inputs in the smaller batches of `BatchSize::LargeInput`
+const LARGE_INPUT_LEN: usize = 32 * 1024 * 1024;
 
 /// A file to measure over: samples of one length, so many to a fragment, so many fragments, over so many tracks
 #[derive(Clone, Copy)]
@@ -257,25 +265,42 @@ const BOX_PAYLOAD_LENS: [(&str, usize); 6] = [
     ("64KiB", 64 * 1024),
 ];
 
-/// Drains what the writer has ready, and reports how many bytes that was
-fn drained(writer: &mut FragmentedWriter) -> usize {
+/// How many inputs criterion sets up ahead of a routine that is handed `input_len` bytes
+const fn batch_size(input_len: usize) -> BatchSize {
+    if input_len < LARGE_INPUT_LEN {
+        BatchSize::SmallInput
+    } else {
+        BatchSize::LargeInput
+    }
+}
+
+/// Hands the file over chunk by chunk to nothing, as a reader row would to its reader
+fn handed_over(file: &[u8], chunk_len: usize) {
+    for arriving in file.chunks(chunk_len) {
+        black_box(arriving);
+    }
+}
+
+/// Drains what the writer has ready into `outputs`, and reports how many bytes that was
+fn drained(writer: &mut FragmentedWriter, outputs: &mut Vec<EventBytes>) -> usize {
     let mut total = 0;
 
     while let Some(written) = writer.poll_output() {
         total += written.len();
-        black_box(written.len());
+        outputs.push(written);
     }
 
     total
 }
 
-/// Lays the fragments down as a whole file, and reports how many bytes it came to
+/// Lays the fragments down as a whole file, and hands back how many bytes it came to and the outputs that carry them
 fn fragmented_writer_file(
     file_type: FileTypeBox,
     movie: MovieBox,
     fragments: Vec<Vec<Sample>>,
-) -> usize {
+) -> (usize, Vec<EventBytes>) {
     let mut writer = FragmentedWriter::new();
+    let mut outputs = Vec::new();
     let mut total = 0;
 
     writer.handle_file_type(file_type).unwrap();
@@ -289,18 +314,22 @@ fn fragmented_writer_file(
             writer.handle_sample(sample).unwrap();
         }
         writer.finish_fragment().unwrap();
-        total += drained(&mut writer);
+        total += drained(&mut writer, &mut outputs);
     }
     writer.finish().unwrap();
+    total += drained(&mut writer, &mut outputs);
 
-    total + drained(&mut writer)
+    (total, outputs)
 }
 
-/// Lays the fragments down as `moof` and media data pairs, and reports the bytes they carry
+/// Lays the fragments down as `moof` and media data pairs, and hands them back with how many bytes of media data they carry
 ///
 /// The sample layer alone: the pairs are never framed as a file.
-fn movie_fragment_writer_fragments(fragments: Vec<Vec<Sample>>) -> usize {
+fn movie_fragment_writer_fragments(
+    fragments: Vec<Vec<Sample>>,
+) -> (usize, Vec<(MovieFragmentBox, Vec<u8>)>) {
     let mut writer = MovieFragmentWriter::new();
+    let mut pairs = Vec::new();
     let mut total = 0;
 
     for (position, samples) in fragments.into_iter().enumerate() {
@@ -310,14 +339,14 @@ fn movie_fragment_writer_fragments(fragments: Vec<Vec<Sample>>) -> usize {
         for sample in samples {
             writer.handle_sample(sample).unwrap();
         }
-        let (movie_fragment, media_data) = writer.finish_fragment().unwrap();
+        let pair = writer.finish_fragment().unwrap();
 
-        total += media_data.len();
-        black_box(&movie_fragment);
+        total += pair.1.len();
+        pairs.push(pair);
     }
     writer.finish().unwrap();
 
-    total
+    (total, pairs)
 }
 
 /// Reads the samples off the file, and reports how many there were and what they carry
@@ -411,32 +440,34 @@ fn box_events(file: &[u8]) -> Vec<BoxEvent> {
     events
 }
 
-/// Drains what the box writer has ready, and reports how many bytes that was
-fn box_drained(writer: &mut BoxWriter) -> usize {
+/// Drains what the box writer has ready into `outputs`, and reports how many bytes that was
+fn box_drained(writer: &mut BoxWriter, outputs: &mut Vec<EventBytes>) -> usize {
     let mut total = 0;
 
     while let Some(written) = writer.poll_output() {
         total += written.len();
-        black_box(written.len());
+        outputs.push(written);
     }
 
     total
 }
 
-/// Lays the events down as a file, and reports how many bytes it came to
+/// Lays the events down as a file, and hands back how many bytes it came to and the outputs that carry them
 ///
 /// The box layer alone: what an event carries is written as it stands.
-fn box_writer_file(events: Vec<BoxEvent>) -> usize {
+fn box_writer_file(events: Vec<BoxEvent>) -> (usize, Vec<EventBytes>) {
     let mut writer = BoxWriter::new();
+    let mut outputs = Vec::new();
     let mut total = 0;
 
     for event in events {
         writer.handle_event(event).unwrap();
-        total += box_drained(&mut writer);
+        total += box_drained(&mut writer, &mut outputs);
     }
     writer.finish().unwrap();
+    total += box_drained(&mut writer, &mut outputs);
 
-    total + box_drained(&mut writer)
+    (total, outputs)
 }
 
 /// The file the composition makes, laid down whole
@@ -470,7 +501,7 @@ fn written_file(composition: &Composition) -> Vec<u8> {
 
 /// Measures the two layers down and the two layers up, for every composition
 fn composition(criterion: &mut Criterion) {
-    let mut group = criterion.benchmark_group("composition");
+    let mut group = criterion.benchmark_group("fragmented_composition");
 
     for (name, composition) in COMPOSITIONS {
         let file = written_file(&composition);
@@ -479,27 +510,45 @@ fn composition(criterion: &mut Criterion) {
         let sample_count = composition.sample_count();
         let box_count = composition.box_count();
 
-        group.throughput(Throughput::Bytes(u64::try_from(payload_len).unwrap()));
+        group.throughput(Throughput::BytesDecimal(
+            u64::try_from(payload_len).unwrap(),
+        ));
+
+        group.bench_function(BenchmarkId::new("harness/writer", name), |bencher| {
+            bencher.iter_batched(
+                || (file_type(), composition.movie(), composition.samples()),
+                black_box,
+                batch_size(payload_len),
+            );
+        });
 
         group.bench_function(BenchmarkId::new("fragmented_writer", name), |bencher| {
             bencher.iter_batched(
                 || (file_type(), composition.movie(), composition.samples()),
                 |(file_type, movie, fragments)| {
-                    assert_eq!(
-                        fragmented_writer_file(file_type, movie, fragments),
-                        file_len
-                    )
+                    let (written_len, outputs) =
+                        fragmented_writer_file(file_type, movie, fragments);
+                    assert_eq!(written_len, file_len);
+                    outputs
                 },
-                BatchSize::PerIteration,
+                batch_size(payload_len),
             );
         });
 
         group.bench_function(BenchmarkId::new("movie_fragment_writer", name), |bencher| {
             bencher.iter_batched(
                 || composition.samples(),
-                |fragments| assert_eq!(movie_fragment_writer_fragments(fragments), payload_len),
-                BatchSize::PerIteration,
+                |fragments| {
+                    let (written_len, pairs) = movie_fragment_writer_fragments(fragments);
+                    assert_eq!(written_len, payload_len);
+                    pairs
+                },
+                batch_size(payload_len),
             );
+        });
+
+        group.bench_function(BenchmarkId::new("harness/reader", name), |bencher| {
+            bencher.iter(|| handed_over(&file, DEFAULT_ARRIVING_CHUNK_LEN));
         });
 
         group.bench_function(BenchmarkId::new("fragmented_reader", name), |bencher| {
@@ -526,9 +575,9 @@ fn composition(criterion: &mut Criterion) {
 
 /// Measures what splitting the same samples into longer or shorter fragments costs
 fn fragment_length(criterion: &mut Criterion) {
-    let mut group = criterion.benchmark_group("fragment_length");
+    let mut group = criterion.benchmark_group("fragmented_fragment_length");
 
-    group.throughput(Throughput::Bytes(
+    group.throughput(Throughput::BytesDecimal(
         u64::try_from(FRAGMENT_LENGTH_BASE.payload_len()).unwrap(),
     ));
 
@@ -539,8 +588,19 @@ fn fragment_length(criterion: &mut Criterion) {
             ..FRAGMENT_LENGTH_BASE
         };
         let payload_len = composition.payload_len();
-        let file_len =
+        let (file_len, _) =
             fragmented_writer_file(file_type(), composition.movie(), composition.samples());
+
+        group.bench_function(
+            BenchmarkId::new("harness/writer", samples_per_fragment),
+            |bencher| {
+                bencher.iter_batched(
+                    || (file_type(), composition.movie(), composition.samples()),
+                    black_box,
+                    batch_size(payload_len),
+                );
+            },
+        );
 
         group.bench_function(
             BenchmarkId::new("fragmented_writer", samples_per_fragment),
@@ -548,12 +608,12 @@ fn fragment_length(criterion: &mut Criterion) {
                 bencher.iter_batched(
                     || (file_type(), composition.movie(), composition.samples()),
                     |(file_type, movie, fragments)| {
-                        assert_eq!(
-                            fragmented_writer_file(file_type, movie, fragments),
-                            file_len
-                        )
+                        let (written_len, outputs) =
+                            fragmented_writer_file(file_type, movie, fragments);
+                        assert_eq!(written_len, file_len);
+                        outputs
                     },
-                    BatchSize::PerIteration,
+                    batch_size(payload_len),
                 );
             },
         );
@@ -563,8 +623,12 @@ fn fragment_length(criterion: &mut Criterion) {
             |bencher| {
                 bencher.iter_batched(
                     || composition.samples(),
-                    |fragments| assert_eq!(movie_fragment_writer_fragments(fragments), payload_len),
-                    BatchSize::PerIteration,
+                    |fragments| {
+                        let (written_len, pairs) = movie_fragment_writer_fragments(fragments);
+                        assert_eq!(written_len, payload_len);
+                        pairs
+                    },
+                    batch_size(payload_len),
                 );
             },
         );
@@ -575,7 +639,7 @@ fn fragment_length(criterion: &mut Criterion) {
 
 /// Measures what handing the same file over in longer or shorter chunks costs
 fn chunk_length(criterion: &mut Criterion) {
-    let mut group = criterion.benchmark_group("chunk_length");
+    let mut group = criterion.benchmark_group("fragmented_chunk_length");
     let file = written_file(&CHUNK_LENGTH_BASE);
     let payload_len = CHUNK_LENGTH_BASE.payload_len();
     let sample_count = CHUNK_LENGTH_BASE.sample_count();
@@ -584,9 +648,15 @@ fn chunk_length(criterion: &mut Criterion) {
         .into_iter()
         .chain(ARRIVING_CHUNK_LENS);
 
-    group.throughput(Throughput::Bytes(u64::try_from(payload_len).unwrap()));
+    group.throughput(Throughput::BytesDecimal(
+        u64::try_from(payload_len).unwrap(),
+    ));
 
     for (name, chunk_len) in chunk_lens {
+        group.bench_function(BenchmarkId::new("harness/reader", name), |bencher| {
+            bencher.iter(|| handed_over(&file, chunk_len));
+        });
+
         group.bench_function(BenchmarkId::new("fragmented_reader", name), |bencher| {
             bencher.iter(|| {
                 assert_eq!(
@@ -607,7 +677,9 @@ fn chunk_length(criterion: &mut Criterion) {
 /// Measures what the length of a box costs the layer that frames it
 ///
 /// The box layer alone, over a file of `free` boxes of one length: no samples are
-/// laid down and none are read.
+/// laid down and none are read. A writer row also carries what keeping the
+/// outputs the writer hands over costs, which grows with their number, so the
+/// rows of the shortest boxes hold a part their harness does not subtract.
 fn box_length(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("box_length");
 
@@ -619,8 +691,13 @@ fn box_length(criterion: &mut Criterion) {
         let (file, box_count) = free_boxes(payload_len);
         let file_len = file.len();
         let events = box_events(&file);
+        let input_len = file_len + events.len() * size_of::<BoxEvent>();
 
         group.throughput(Throughput::Elements(u64::try_from(box_count).unwrap()));
+
+        group.bench_function(BenchmarkId::new("harness/reader", name), |bencher| {
+            bencher.iter(|| handed_over(&file, DEFAULT_ARRIVING_CHUNK_LEN));
+        });
 
         group.bench_function(BenchmarkId::new("box_reader", name), |bencher| {
             bencher.iter(|| {
@@ -631,11 +708,19 @@ fn box_length(criterion: &mut Criterion) {
             });
         });
 
+        group.bench_function(BenchmarkId::new("harness/writer", name), |bencher| {
+            bencher.iter_batched(|| events.clone(), black_box, batch_size(input_len));
+        });
+
         group.bench_function(BenchmarkId::new("box_writer", name), |bencher| {
             bencher.iter_batched(
                 || events.clone(),
-                |events| assert_eq!(box_writer_file(events), file_len),
-                BatchSize::PerIteration,
+                |events| {
+                    let (written_len, outputs) = box_writer_file(events);
+                    assert_eq!(written_len, file_len);
+                    outputs
+                },
+                batch_size(input_len),
             );
         });
     }

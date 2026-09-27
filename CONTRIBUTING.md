@@ -52,6 +52,46 @@ feat(parse)!: change the box iterator return type
 
 To add a type, update the `types` list in `.github/workflows/pr-title.yml`.
 
+## Benchmarks
+
+The benches live in `isobmff-benches` (`benches/`), which depends on the
+`isobmff` crate as a user does.
+
+- Run them with `cargo bench -p isobmff-benches`; narrow to one file with
+  `--bench <file>` and to groups or ids with a filter after `--`
+  (`cargo bench -p isobmff-benches --bench fragmented -- fragmented_composition`).
+- `cargo test -p isobmff-benches --benches` runs every bench once without
+  timing it, as CI does.
+
+### Writing a Bench
+
+- Give each side of every group a `harness/<side>` row, where `<side>` is
+  `writer`, `reader`, or the row the harness stands for, whose timed routine
+  does what the rows of that side do short of calling the library (the same
+  chunking and fetching, and handing its input back), so a row can be read
+  less its harness. The setup runs outside the timing, so it need not match.
+- Apply `core::hint::black_box` to inputs and outputs only, never inside the
+  code being measured.
+- Use `BatchSize::SmallInput`, or `LargeInput` for large inputs; never
+  `PerIteration`.
+
+### Numbers in a Pull Request
+
+Numbers go in the **Verification** section, stated with:
+
+- the CPU, OS and `rustc -V`;
+- the commit compared against;
+- the exact commands and criterion arguments run;
+- a statement that both sides ran on one machine in one session — numbers
+  from another machine are not shown.
+
+Save the base as `main-<sha7>` (`-- --save-baseline main-<sha7>`) and compare
+with `-- --baseline-lenient main-<sha7>`: `--baseline` fails when a pull
+request renames an id.
+
+Do not compare absolute values across tables: allocator state alone has moved
+identical configurations by 30 % between runs.
+
 ## Repository Settings This Scheme Relies On
 
 Recorded here because they live outside the repository

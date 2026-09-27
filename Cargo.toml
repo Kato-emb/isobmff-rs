@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "examples"]
+members = ["crates/*", "examples", "benches"]
 
 [workspace.package]
 edition = "2024"
@@ -25,8 +25,8 @@ isobmff-sequence = { path = "crates/isobmff-sequence", version = "0.0.0" }
 isobmff-structure = { path = "crates/isobmff-structure", version = "0.0.0" }
 isobmff-test-support = { path = "crates/isobmff-test-support" }
 
-# examples/Cargo.toml carries a copy of these tables less three lints; keep it
-# in step.
+# examples/Cargo.toml and benches/Cargo.toml carry a copy of these tables less
+# three lints each; keep them in step.
 [workspace.lints.rust]
 # Memory safety: the parser is fed untrusted input, so safety must not rest on
 # reviewing unsafe blocks. forbid (not deny) cannot be lifted by an attribute;
@@ -131,3 +131,7 @@ doc_link_with_quotes = "warn"
 # Doc quality: allow-by-default in rustdoc, so the docs job's -D warnings alone
 # never fires it — an unclosed backtick would ship to docs.rs as written.
 unescaped_backticks = "warn"
+
+[profile.bench]
+codegen-units = 1
+lto = false

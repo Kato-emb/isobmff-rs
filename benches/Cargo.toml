@@ -1,0 +1,91 @@
+[package]
+name = "isobmff-benches"
+version = "0.0.0"
+description = "Benchmarks of the layers, measured through the same dependency a user links"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+isobmff.workspace = true
+isobmff-test-support.workspace = true
+criterion = { version = "0.8", default-features = false, features = [
+    "cargo_bench_support",
+] }
+
+[[bench]]
+name = "fragmented"
+path = "fragmented.rs"
+harness = false
+
+[[bench]]
+name = "non_fragmented"
+path = "non_fragmented.rs"
+harness = false
+
+# Why not `workspace = true`: that table cannot be overridden in part, and a
+# bench that will not run is a bug in the bench, whose arithmetic is over
+# lengths its own constants settle — so it is the workspace table copied
+# without unwrap_used, expect_used and arithmetic_side_effects. Why each lint
+# is on is stated there.
+[lints.rust]
+unsafe_code = "forbid"
+
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unnameable_types = "warn"
+
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unused_lifetimes = "warn"
+unused_qualifications = "warn"
+
+[lints.clippy]
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_precision_loss = "deny"
+cast_sign_loss = "deny"
+
+float_arithmetic = "deny"
+
+host_endian_bytes = "deny"
+little_endian_bytes = "deny"
+
+iter_over_hash_type = "deny"
+
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+
+mod_module_files = "deny"
+min_ident_chars = "deny"
+
+allow_attributes_without_reason = "deny"
+
+exhaustive_structs = "deny"
+exhaustive_enums = "deny"
+wildcard_enum_match_arm = "deny"
+
+std_instead_of_core = "warn"
+std_instead_of_alloc = "warn"
+alloc_instead_of_core = "warn"
+
+tests_outside_test_module = "warn"
+
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+too_long_first_doc_paragraph = "warn"
+doc_markdown = "warn"
+doc_link_with_quotes = "warn"
+
+[lints.rustdoc]
+unescaped_backticks = "warn"

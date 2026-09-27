@@ -18,18 +18,7 @@ isobmff-sample.workspace = true
 isobmff-sequence.workspace = true
 
 [dev-dependencies]
-criterion = { version = "0.8", default-features = false, features = [
-    "cargo_bench_support",
-] }
 isobmff-test-support.workspace = true
-
-[[bench]]
-name = "throughput"
-harness = false
-
-[[bench]]
-name = "non_fragmented"
-harness = false
 
 [lints]
 workspace = true
