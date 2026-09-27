@@ -66,9 +66,10 @@ The benches live in `isobmff-benches` (`benches/`), which depends on the
 ### Writing a Bench
 
 - Give each side of every group a `harness/<side>` row, where `<side>` is
-  `writer`, `reader`, or the row the harness stands for, that does what the
-  rows of that side do short of calling the library (the same setup and the
-  same chunking), so a row can be read less its harness.
+  `writer`, `reader`, or the row the harness stands for, whose timed routine
+  does what the rows of that side do short of calling the library (the same
+  chunking and fetching, and handing its input back), so a row can be read
+  less its harness. The setup runs outside the timing, so it need not match.
 - Apply `core::hint::black_box` to inputs and outputs only, never inside the
   code being measured.
 - Use `BatchSize::SmallInput`, or `LargeInput` for large inputs; never

@@ -11,17 +11,19 @@
 //!
 //! Every group also carries harness rows, which do what a row does short of
 //! calling the library: the writer's harness sets up the input the writer row
-//! is handed and hands it back, the reader's hands the file over chunk by
-//! chunk to nothing, and the resolver's is handed the movie. What a row costs
-//! the library is its value less the harness row of its side. The writer row
-//! hands back what the writer handed over, so its disposal is left out of the
-//! row as the harness leaves out that of the input.
+//! is handed and hands it back, the reader's of each layout hands the file over
+//! chunk by chunk and then fetched want by want, the wants recorded from the
+//! reader beforehand, to nothing, and the resolver's is handed the movie. What
+//! a row costs the library is its value less the harness row of its side. The
+//! writer row hands back what the writer handed over, so its disposal is left
+//! out of the row as the harness leaves out that of the input.
 
 // Why not gathering the output into one buffer, why not black_box the bytes a
 // writer hands over, and why not dropping the input or the output in the
 // routine: the notes at the head of `fragmented.rs` hold for this file too.
 
 use core::hint::black_box;
+use core::ops::Range;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 use isobmff::boxes::{FileTypeBox, MovieBox, SampleFlags};
@@ -159,11 +161,23 @@ const fn batch_size(input_len: usize) -> BatchSize {
     }
 }
 
-/// Hands the file over chunk by chunk to nothing, as a reader row would to its reader
-fn handed_over(file: &[u8]) {
+/// Hands the file over chunk by chunk and then fetched want by want, to nothing, as a reader row would to its reader
+fn handed_over(file: &[u8], wants: &[Range<u64>], fetch_len: usize) {
     for arriving in file.chunks(ARRIVING_CHUNK_LEN) {
         black_box(arriving);
     }
+    for wanted in wants {
+        black_box(fetched(file, wanted, fetch_len));
+    }
+}
+
+/// The bytes fetched for `wanted`: from its start to its end or to `fetch_len` bytes on, whichever is further, as far as the file goes
+fn fetched<'file>(file: &'file [u8], wanted: &Range<u64>, fetch_len: usize) -> &'file [u8] {
+    let start = usize::try_from(wanted.start).unwrap();
+    let end = usize::try_from(wanted.end).unwrap();
+
+    file.get(start..end.max(start + fetch_len).min(file.len()))
+        .unwrap()
 }
 
 /// Drains what the writer has ready into `outputs`, and reports how many bytes that was
@@ -208,8 +222,7 @@ fn non_fragmented_writer_file(
 ///
 /// The file is handed over in order, a chunk at a time, and then whatever the
 /// reader still wants is fetched: nothing where the movie lay first, and every
-/// sample where it lay last, each fetch reaching from the want to its end or to
-/// `fetch_len` bytes on, whichever is further, as far as the file goes.
+/// sample where it lay last.
 fn non_fragmented_reader_samples(file: &[u8], fetch_len: usize) -> (usize, usize) {
     let mut reader = NonFragmentedReader::new();
     let mut count = 0;
@@ -227,19 +240,36 @@ fn non_fragmented_reader_samples(file: &[u8], fetch_len: usize) -> (usize, usize
         take(&mut reader);
     }
     while let Some(wanted) = reader.wanted_extent() {
-        let start = usize::try_from(wanted.start).unwrap();
-        let end = usize::try_from(wanted.end).unwrap();
-        let fetched = file
-            .get(start..end.max(start + fetch_len).min(file.len()))
+        reader
+            .handle_data(wanted.start, fetched(file, &wanted, fetch_len))
             .unwrap();
-
-        reader.handle_data(wanted.start, fetched).unwrap();
         take(&mut reader);
     }
     reader.finish().unwrap();
     take(&mut reader);
 
     (count, total)
+}
+
+/// The extents the reader wants once the file has been handed over, in the order it wants them
+fn wants_of(file: &[u8], fetch_len: usize) -> Vec<Range<u64>> {
+    let mut reader = NonFragmentedReader::new();
+    let mut wants = Vec::new();
+    let take = |reader: &mut NonFragmentedReader| while reader.poll_sample().is_some() {};
+
+    for arriving in file.chunks(ARRIVING_CHUNK_LEN) {
+        reader.handle_input(arriving).unwrap();
+        take(&mut reader);
+    }
+    while let Some(wanted) = reader.wanted_extent() {
+        reader
+            .handle_data(wanted.start, fetched(file, &wanted, fetch_len))
+            .unwrap();
+        take(&mut reader);
+        wants.push(wanted);
+    }
+
+    wants
 }
 
 /// The movie `file` declares, read off it
@@ -298,11 +328,16 @@ fn composition(criterion: &mut Criterion) {
             );
         });
 
-        group.bench_function(BenchmarkId::new("harness/reader", name), |bencher| {
-            bencher.iter(|| handed_over(&movie_first));
-        });
-
         for (layout, file) in [("movie-first", &movie_first), ("movie-last", &movie_last)] {
+            let wants = wants_of(file, ARRIVING_CHUNK_LEN);
+
+            group.bench_function(
+                BenchmarkId::new(format!("harness/reader/{layout}"), name),
+                |bencher| {
+                    bencher.iter(|| handed_over(file, &wants, ARRIVING_CHUNK_LEN));
+                },
+            );
+
             group.bench_function(
                 BenchmarkId::new(format!("non_fragmented_reader/{layout}"), name),
                 |bencher| {
@@ -344,14 +379,16 @@ fn sample_count(criterion: &mut Criterion) {
 
         group.throughput(Throughput::Elements(u64::try_from(sample_count).unwrap()));
 
-        group.bench_function(
-            BenchmarkId::new("harness/reader", sample_count),
-            |bencher| {
-                bencher.iter(|| handed_over(&movie_first));
-            },
-        );
-
         for (layout, file) in [("movie-first", &movie_first), ("movie-last", &movie_last)] {
+            let wants = wants_of(file, 0);
+
+            group.bench_function(
+                BenchmarkId::new(format!("harness/reader/{layout}"), sample_count),
+                |bencher| {
+                    bencher.iter(|| handed_over(file, &wants, 0));
+                },
+            );
+
             group.bench_function(
                 BenchmarkId::new(format!("non_fragmented_reader/{layout}"), sample_count),
                 |bencher| {
