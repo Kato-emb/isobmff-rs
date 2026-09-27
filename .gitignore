@@ -6,3 +6,7 @@ target
 # Crashing and slow inputs a fuzz run writes out; a finding is reproduced as a
 # unit test instead of being kept here.
 fuzz/artifacts/
+
+# What wasm-bindgen generates from the isobmff-wasm crate, built again for each
+# deployment of the site.
+crates/isobmff-wasm/pkg/

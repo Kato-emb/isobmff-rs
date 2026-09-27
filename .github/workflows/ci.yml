@@ -94,12 +94,26 @@ jobs:
       # over an I/O, so std is what it is for. isobmff-examples is excluded with
       # it: it asks isobmff for `io`, which would bring isobmff-io back in.
       # isobmff-benches is excluded as well: criterion, which it depends on,
-      # needs std.
-      - run: cargo check --workspace --exclude isobmff-io --exclude isobmff-examples --exclude isobmff-benches --target thumbv7em-none-eabihf
+      # needs std. So is isobmff-wasm: it asks for `io` too, and it is built for
+      # a browser, which the wasm job checks.
+      - run: cargo check --workspace --exclude isobmff-io --exclude isobmff-examples --exclude isobmff-benches --exclude isobmff-wasm --target thumbv7em-none-eabihf
       # The alloc feature is on by default, so every other job builds core with a
       # heap behind it. Only this run reaches the alloc-free path, and it runs on
       # the target that has no allocator to fall back on.
       - run: cargo check -p isobmff-core --no-default-features --target thumbv7em-none-eabihf
+
+  # The clippy job builds isobmff-wasm for the host, where wasm-bindgen expands
+  # its exports to stubs; only this target lints the code the site loads.
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy -p isobmff-wasm --target wasm32-unknown-unknown --all-targets -- -D warnings
 
   nightly:
     runs-on: ubuntu-latest
