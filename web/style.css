@@ -25,6 +25,19 @@ td:first-child {
   text-align: left;
 }
 
-td:first-child {
+#boxes td:first-child {
   padding-left: calc(var(--depth) * 2ch);
+}
+
+#samples tbody tr {
+  cursor: pointer;
+}
+
+#samples tr.chosen {
+  background: color-mix(in srgb, currentcolor 15%, transparent);
+}
+
+fieldset {
+  display: inline-block;
+  margin: 0.5rem 0;
 }

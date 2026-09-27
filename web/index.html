@@ -10,22 +10,63 @@
   <body>
     <h1>isobmff-rs</h1>
     <p>
-      The boxes of an ISO base media file (MP4), read by the
-      <a href="https://github.com/Kato-emb/isobmff-rs">isobmff</a> crate in
-      the browser. The file does not leave the browser. Runs in current
-      Chrome, Edge, Firefox and Safari.
+      The boxes, the tracks and the samples of an ISO base media file (MP4),
+      read by the <a href="https://github.com/Kato-emb/isobmff-rs">isobmff</a>
+      crate in the browser. The file does not leave the browser. Runs in
+      current Chrome, Edge, Firefox and Safari.
     </p>
     <input
       id="file"
       type="file"
       accept=".mp4,.m4v,.m4a,.m4s,.mov,.3gp,.3g2,.cmfv,.cmfa,.mp4a,video/mp4,audio/mp4"
     >
+    <fieldset id="operation">
+      <legend>Show</legend>
+      <label><input type="radio" name="operation" value="dump" checked> boxes</label>
+      <label><input type="radio" name="operation" value="demux"> tracks and samples</label>
+    </fieldset>
     <p id="status" role="status"></p>
-    <table id="boxes">
-      <thead>
-        <tr><th>box</th><th>offset</th><th>size</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
+
+    <section id="dump" hidden>
+      <table id="boxes">
+        <thead>
+          <tr><th>box</th><th>offset</th><th>size</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section id="demux" hidden>
+      <h2>Tracks</h2>
+      <table id="tracks">
+        <thead>
+          <tr>
+            <th>track</th><th>handler</th><th>timescale</th><th>duration</th>
+            <th>sample entries</th><th>samples</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+
+      <h2>Samples</h2>
+      <p>
+        <label>Track <select id="track"></select></label>
+        <button id="previous" type="button">Previous</button>
+        <span id="page"></span>
+        <button id="next" type="button">Next</button>
+      </p>
+      <table id="samples">
+        <thead>
+          <tr>
+            <th>track</th><th>decode time</th><th>duration</th>
+            <th>composition offset</th><th>sync</th><th>description</th>
+            <th>offset</th><th>size</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p>Choose a sample to see its bytes.</p>
+      <pre id="hex"></pre>
+    </section>
   </body>
 </html>
