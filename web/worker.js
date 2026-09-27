@@ -10,19 +10,28 @@ function plain(record) {
   return copy;
 }
 
+function attempt(read) {
+  try {
+    return { value: read() };
+  } catch (error) {
+    return { error: error.message ?? String(error) };
+  }
+}
+
 self.onmessage = async ({ data }) => {
   try {
     await ready;
-    if (data.request === "dump") {
-      self.postMessage({ reply: "dump", boxes: dump_boxes(data.file).map(plain) });
-    } else {
-      const demuxed = demux(data.file);
-      const tracks = demuxed.tracks.map(plain);
-      const samples = demuxed.samples.map(plain);
-      demuxed.free();
-      self.postMessage({ reply: "demux", tracks, samples });
-    }
   } catch (error) {
-    self.postMessage({ reply: "error", message: error.message ?? String(error) });
+    const failed = { error: error.message ?? String(error) };
+    self.postMessage({ boxes: failed, movie: failed });
+    return;
   }
+  const boxes = attempt(() => dump_boxes(data.file).map(plain));
+  const movie = attempt(() => {
+    const demuxed = demux(data.file);
+    const value = { tracks: demuxed.tracks.map(plain), samples: demuxed.samples.map(plain) };
+    demuxed.free();
+    return value;
+  });
+  self.postMessage({ boxes, movie });
 };
