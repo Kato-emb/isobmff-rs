@@ -79,12 +79,12 @@ function showBoxes(boxes) {
   dumpSection.hidden = false;
 }
 
-function showTracks(tracks, resolved) {
+function showTracks(tracks, sampleRecords) {
   const counts = new Map();
-  for (const sample of resolved) {
+  for (const sample of sampleRecords) {
     counts.set(sample.track_id, (counts.get(sample.track_id) ?? 0) + 1);
   }
-  samples = resolved;
+  samples = sampleRecords;
 
   status.textContent = `${tracks.length} tracks and ${samples.length} samples in ${file.name}`;
   rows(trackRows, tracks, (track) =>
