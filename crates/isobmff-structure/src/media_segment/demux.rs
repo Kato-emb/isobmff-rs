@@ -24,9 +24,10 @@ use crate::{Error, InOrderPosition, WholeBoxReader};
 /// the resolution of each fragment against the movie into the extents of its
 /// samples, and the gathering of those samples out of the media data. The
 /// movie is the caller's to hand over, since the segment carries none. It
-/// holds no rule of its own but where the input stands; a caller hands over
-/// bytes and takes [`Sample`]s. It reaches for no source of its own: when to
-/// read and from where stay with the caller.
+/// holds no rule of its own but one: of what the samples want, it names only
+/// what the input has passed by. A caller hands over bytes and takes
+/// [`Sample`]s. It reaches for no source of its own: when to read and from
+/// where stay with the caller.
 ///
 /// # Contract
 ///
@@ -576,17 +577,15 @@ mod tests {
     }
 
     #[test]
-    fn media_data_the_input_is_still_to_bring_is_not_wanted_but_completes_the_sample_handed_as_data()
-     {
+    fn media_data_the_input_is_still_to_bring_is_not_wanted_and_completes_the_sample_as_it_arrives()
+    {
         let mut segment = segment_of_one_sample();
         let media_data = segment.split_off(segment.len().saturating_sub(4));
 
         let mut demux_fsm = MediaSegmentDemuxFsm::new(movie());
         demux_fsm.handle_input(&segment).unwrap();
         let wanted = demux_fsm.wanted_extent();
-        demux_fsm
-            .handle_data(demux_fsm.input_offset(), &media_data)
-            .unwrap();
+        demux_fsm.handle_input(&media_data).unwrap();
 
         assert_eq!(wanted, None);
         assert_eq!(demux_fsm.poll_sample(), Some(sample()));

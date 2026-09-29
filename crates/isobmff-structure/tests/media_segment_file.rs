@@ -94,9 +94,7 @@ mod tests {
         let mut demux_fsm = MediaSegmentDemuxFsm::new(presentation_movie());
 
         let created = demux_fsm.input_offset();
-        demux_fsm
-            .handle_input(segment.bytes.get(..10).unwrap())
-            .unwrap();
+        demux_fsm.handle_input(&segment.bytes).unwrap();
         let handed = demux_fsm.input_offset();
         demux_fsm.resume_at(second).unwrap();
         let resumed = demux_fsm.input_offset();
@@ -109,9 +107,10 @@ mod tests {
             )
             .unwrap();
 
+        let segment_len = u64::try_from(segment.bytes.len()).unwrap();
         assert_eq!(
             [created, handed, resumed, demux_fsm.input_offset()],
-            [0, 10, second, u64::try_from(segment.bytes.len()).unwrap()]
+            [0, segment_len, second, segment_len]
         );
     }
 }

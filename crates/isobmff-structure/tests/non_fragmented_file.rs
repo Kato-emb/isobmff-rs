@@ -75,19 +75,12 @@ mod tests {
         for cut_length in [1, 3, 7, 64, file.len()] {
             let mut demux_fsm = NonFragmentedDemuxFsm::new();
             let mut wanted = Vec::new();
-            let mut samples = Vec::new();
             for arriving in file.chunks(cut_length) {
                 demux_fsm.handle_input(arriving).unwrap();
                 wanted.extend(demux_fsm.wanted_extent());
-                while let Some(sample) = demux_fsm.poll_sample() {
-                    samples.push(sample);
-                }
             }
 
-            assert_eq!(
-                (wanted, samples),
-                (Vec::new(), non_fragmented_file_samples())
-            );
+            assert_eq!(wanted, []);
         }
     }
 

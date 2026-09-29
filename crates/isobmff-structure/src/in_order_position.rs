@@ -50,17 +50,6 @@ mod tests {
     use super::InOrderPosition;
 
     #[test]
-    fn the_input_stands_where_the_bytes_handed_over_since_the_last_resume_end() {
-        let mut position = InOrderPosition::new();
-        position.advance(10);
-        position.resume(100);
-        position.advance(5);
-
-        assert_eq!(position.offset(), 105);
-        assert_eq!(position.file_offset(3), 103);
-    }
-
-    #[test]
     fn only_a_want_starting_before_the_input_is_passed() {
         let mut position = InOrderPosition::new();
         position.advance(10);

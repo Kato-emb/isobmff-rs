@@ -19,9 +19,10 @@ use crate::{Error, InOrderPosition, WholeBoxReader};
 /// that says what each top-level box is, the reading of the boxes it names
 /// into values, the resolution of the sample tables of the movie into the
 /// extents of its samples, and the gathering of those samples out of the
-/// media data. It holds no rule of its own but where the input stands; a
-/// caller hands over bytes and takes [`Sample`]s. It reaches for no source
-/// of its own: when to read and from where stay with the caller.
+/// media data. It holds no rule of its own but one: of what the samples
+/// want, it names only what the input has passed by. A caller hands over
+/// bytes and takes [`Sample`]s. It reaches for no source of its own: when to
+/// read and from where stay with the caller.
 ///
 /// # Contract
 ///
