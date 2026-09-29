@@ -54,4 +54,4 @@ pub use error::{Error, ErrorKind};
 pub use fragmented_movie::{FragmentedDemuxer, FragmentedMuxer};
 pub use media_segment::{MediaSegmentDemuxer, MediaSegmentMuxer};
 pub use non_fragmented_movie::{NonFragmentedDemuxer, NonFragmentedMuxer};
-pub use stack::Demux;
+pub use stack::{Demux, Mux};

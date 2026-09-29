@@ -10,7 +10,7 @@ use isobmff_structure::{NonFragmentedDemuxFsm, NonFragmentedMuxFsm};
 
 use crate::Error;
 use crate::driver::{Demuxer, Muxer};
-use crate::stack::{Demux, PollOutput};
+use crate::stack::{Demux, Mux};
 
 /// Reads the samples a non-fragmented movie file carries off an asynchronous source that seeks
 ///
@@ -294,7 +294,7 @@ impl<W: AsyncWrite + Unpin> NonFragmentedMuxer<W> {
     }
 }
 
-impl PollOutput for NonFragmentedMuxFsm {
+impl Mux for NonFragmentedMuxFsm {
     fn poll_output(&mut self) -> Option<EventBytes> {
         NonFragmentedMuxFsm::poll_output(self)
     }

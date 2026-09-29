@@ -10,7 +10,7 @@ use isobmff_structure::{FragmentedDemuxFsm, FragmentedMuxFsm};
 
 use crate::Error;
 use crate::driver::{Demuxer, Muxer};
-use crate::stack::{Demux, PollOutput, ResumeSamples};
+use crate::stack::{Demux, Mux, ResumeSamples};
 
 /// Reads the samples a fragmented movie file carries off an asynchronous source that seeks
 ///
@@ -434,7 +434,7 @@ impl<W: AsyncWrite + Unpin> FragmentedMuxer<W> {
     }
 }
 
-impl PollOutput for FragmentedMuxFsm {
+impl Mux for FragmentedMuxFsm {
     fn poll_output(&mut self) -> Option<EventBytes> {
         FragmentedMuxFsm::poll_output(self)
     }

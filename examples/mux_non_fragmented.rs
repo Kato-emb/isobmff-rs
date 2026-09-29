@@ -23,8 +23,9 @@ use isobmff::core::{
     AnyBox, BoxType, FieldWriter, FourCC, FullBoxFlags, I8F8, LanguageCode, Mp4EpochSeconds,
     NullTerminatedString, U16F16,
 };
-use isobmff::io::blocking::NonFragmentedMuxer;
+use isobmff::io::blocking::MuxDriver;
 use isobmff::sample::Sample;
+use isobmff::structure::NonFragmentedMuxFsm;
 
 const SAMPLE_RATE: u64 = 48_000;
 const FREQUENCY: u64 = 440;
@@ -101,12 +102,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     let movie = MovieBox::new(movie_header, vec![TrackBox::new(track_header, media)], None)
         .ok_or("the movie declares no track")?;
 
-    let mut muxer = NonFragmentedMuxer::new(BufWriter::new(File::create(path)?));
-    muxer.handle_movie(movie)?;
+    let mut mux_driver = MuxDriver::new(
+        BufWriter::new(File::create(path)?),
+        NonFragmentedMuxFsm::new(),
+    );
+    mux_driver.fsm_mut().handle_movie(movie)?;
     for start in (0..frames).step_by(usize::try_from(FRAMES_PER_SAMPLE)?) {
         let end = start.saturating_add(FRAMES_PER_SAMPLE).min(frames);
         if start % SAMPLE_RATE < FRAMES_PER_SAMPLE {
-            muxer.begin_chunk()?;
+            mux_driver.fsm_mut().begin_chunk()?;
+            mux_driver.flush()?;
         }
         let data = (start..end)
             .flat_map(|frame| {
@@ -120,7 +125,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             })
             .collect();
         let duration = u32::try_from(end.saturating_sub(start))?;
-        muxer.handle_sample(Sample::new(
+        mux_driver.fsm_mut().handle_sample(Sample::new(
             TRACK_ID,
             start,
             duration,
@@ -130,7 +135,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             data,
         ))?;
     }
-    muxer.finish()?;
+    mux_driver.fsm_mut().finish()?;
+    mux_driver.flush()?;
 
     Ok(())
 }

@@ -16,8 +16,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use isobmff::boxes::MovieBox;
 use isobmff::core::Mp4EpochSeconds;
-use isobmff::io::blocking::{DemuxDriver, NonFragmentedMuxer};
-use isobmff::structure::FragmentedDemuxFsm;
+use isobmff::io::blocking::{DemuxDriver, MuxDriver};
+use isobmff::structure::{FragmentedDemuxFsm, NonFragmentedMuxFsm};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let usage = "usage: remux_to_non_fragmented <in.mp4> <out.mp4>";
@@ -48,22 +48,27 @@ fn main() -> Result<(), Box<dyn Error>> {
     )
     .ok_or("the movie declares no track")?;
 
-    let mut muxer = NonFragmentedMuxer::new(BufWriter::new(File::create(output)?));
+    let mut mux_driver = MuxDriver::new(
+        BufWriter::new(File::create(output)?),
+        NonFragmentedMuxFsm::new(),
+    );
     if let Some(file_type) = driver.fsm().file_type() {
-        muxer.handle_file_type(file_type.clone())?;
+        mux_driver.fsm_mut().handle_file_type(file_type.clone())?;
     }
-    muxer.handle_movie(movie)?;
+    mux_driver.fsm_mut().handle_movie(movie)?;
     let mut chunk = None;
     for sample in first.into_iter().map(Ok).chain(driver) {
         let sample = sample?;
         let described_by = Some((sample.track_id(), sample.sample_description_index()));
         if chunk != described_by {
             chunk = described_by;
-            muxer.begin_chunk()?;
+            mux_driver.fsm_mut().begin_chunk()?;
+            mux_driver.flush()?;
         }
-        muxer.handle_sample(sample)?;
+        mux_driver.fsm_mut().handle_sample(sample)?;
     }
-    muxer.finish()?;
+    mux_driver.fsm_mut().finish()?;
+    mux_driver.flush()?;
 
     Ok(())
 }

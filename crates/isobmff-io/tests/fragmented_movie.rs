@@ -6,10 +6,10 @@ mod tests {
 
     use futures_executor::block_on;
     use futures_util::io::Cursor;
-    use isobmff_io::blocking::{DemuxDriver, FragmentedMuxer};
+    use isobmff_io::blocking::{DemuxDriver, MuxDriver};
     use isobmff_sample::Sample;
     use isobmff_sample::movie_fragment_random_access::sync_sample_at;
-    use isobmff_structure::FragmentedDemuxFsm;
+    use isobmff_structure::{FragmentedDemuxFsm, FragmentedMuxFsm};
     use isobmff_test_support::{
         file_type, fragmented_file_samples, fragmented_file_with_samples, indexed_fragmented_file,
         presentation_movie,
@@ -31,16 +31,18 @@ mod tests {
     #[test]
     fn the_samples_the_muxer_wrote_to_a_sink_are_read_back_off_it_by_the_demuxer() {
         let mut file = Vec::new();
-        let mut muxer = FragmentedMuxer::new(&mut file);
+        let mut mux_driver = MuxDriver::new(&mut file, FragmentedMuxFsm::new());
+        let mux_fsm = mux_driver.fsm_mut();
 
-        muxer.handle_file_type(file_type()).unwrap();
-        muxer.handle_movie(presentation_movie()).unwrap();
-        muxer.begin_fragment(1).unwrap();
+        mux_fsm.handle_file_type(file_type()).unwrap();
+        mux_fsm.handle_movie(presentation_movie()).unwrap();
+        mux_fsm.begin_fragment(1).unwrap();
         for sample in fragmented_file_samples() {
-            muxer.handle_sample(sample).unwrap();
+            mux_fsm.handle_sample(sample).unwrap();
         }
-        muxer.finish_fragment().unwrap();
-        muxer.finish().unwrap();
+        mux_fsm.finish_fragment().unwrap();
+        mux_fsm.finish().unwrap();
+        mux_driver.flush().unwrap();
 
         let read_back: Vec<Sample> =
             DemuxDriver::new(io::Cursor::new(&file), FragmentedDemuxFsm::new())

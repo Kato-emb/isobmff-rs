@@ -7,9 +7,9 @@ mod tests {
     use futures_executor::block_on;
     use futures_util::io::Cursor;
     use isobmff_boxes::{HeaderDuration, MovieBox};
-    use isobmff_io::blocking::{DemuxDriver, NonFragmentedMuxer};
+    use isobmff_io::blocking::{DemuxDriver, MuxDriver};
     use isobmff_sample::Sample;
-    use isobmff_structure::NonFragmentedDemuxFsm;
+    use isobmff_structure::{NonFragmentedDemuxFsm, NonFragmentedMuxFsm};
     use isobmff_test_support::{
         SAMPLE_CHUNKS, SAMPLE_DURATION, file_type, non_fragmented_file,
         non_fragmented_file_samples, unfragmented_movie,
@@ -33,18 +33,20 @@ mod tests {
     #[test]
     fn the_samples_the_muxer_wrote_to_a_sink_are_read_back_off_it_by_the_demuxer() {
         let mut file = Vec::new();
-        let mut muxer = NonFragmentedMuxer::new(&mut file);
+        let mut mux_driver = MuxDriver::new(&mut file, NonFragmentedMuxFsm::new());
+        let mux_fsm = mux_driver.fsm_mut();
         let mut samples = non_fragmented_file_samples().into_iter();
 
-        muxer.handle_file_type(file_type()).unwrap();
-        muxer.handle_movie(unfragmented_movie()).unwrap();
+        mux_fsm.handle_file_type(file_type()).unwrap();
+        mux_fsm.handle_movie(unfragmented_movie()).unwrap();
         for chunk in SAMPLE_CHUNKS {
-            muxer.begin_chunk().unwrap();
+            mux_fsm.begin_chunk().unwrap();
             for _sample in chunk {
-                muxer.handle_sample(samples.next().unwrap()).unwrap();
+                mux_fsm.handle_sample(samples.next().unwrap()).unwrap();
             }
         }
-        muxer.finish().unwrap();
+        mux_fsm.finish().unwrap();
+        mux_driver.flush().unwrap();
 
         let read_back: Vec<Sample> =
             DemuxDriver::new(io::Cursor::new(&file), NonFragmentedDemuxFsm::new())
@@ -59,16 +61,18 @@ mod tests {
     fn a_movie_the_muxer_laid_down_from_a_template_of_no_duration_is_read_back_with_a_header_lasting_its_samples()
      {
         let mut file = Vec::new();
-        let mut muxer = NonFragmentedMuxer::new(&mut file);
+        let mut mux_driver = MuxDriver::new(&mut file, NonFragmentedMuxFsm::new());
+        let mux_fsm = mux_driver.fsm_mut();
         let samples = non_fragmented_file_samples();
         let lasting = samples.len() as u64 * u64::from(SAMPLE_DURATION);
 
-        muxer.handle_movie(unfragmented_movie()).unwrap();
-        muxer.begin_chunk().unwrap();
+        mux_fsm.handle_movie(unfragmented_movie()).unwrap();
+        mux_fsm.begin_chunk().unwrap();
         for sample in samples {
-            muxer.handle_sample(sample).unwrap();
+            mux_fsm.handle_sample(sample).unwrap();
         }
-        muxer.finish().unwrap();
+        mux_fsm.finish().unwrap();
+        mux_driver.flush().unwrap();
 
         let mut driver =
             DemuxDriver::new(io::Cursor::new(&file), NonFragmentedDemuxFsm::new()).unwrap();

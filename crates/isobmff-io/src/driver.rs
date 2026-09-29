@@ -18,7 +18,7 @@ use isobmff_sequence::EventBytes;
 
 use crate::Error;
 use crate::movie_fragment_random_access::{PROBE_LEN, Probe, Probed};
-use crate::stack::{CUT_LENGTH, Demux, PollOutput, ResumeSamples};
+use crate::stack::{CUT_LENGTH, Demux, Mux, ResumeSamples};
 
 /// Reads off `source` into `into`, and returns how many bytes came
 async fn read<S: AsyncRead + Unpin>(source: &mut S, into: &mut [u8]) -> io::Result<usize> {
@@ -345,7 +345,7 @@ pub(crate) struct Muxer<S, W> {
     finished: bool,
 }
 
-impl<S: AsyncWrite + Unpin, W: PollOutput> Muxer<S, W> {
+impl<S: AsyncWrite + Unpin, W: Mux> Muxer<S, W> {
     /// Creates a muxer writing to `sink` what `writer` makes of each step
     pub(crate) const fn new(sink: S, writer: W) -> Self {
         Self {

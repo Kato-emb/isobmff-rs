@@ -19,9 +19,9 @@ use isobmff::boxes::{
     ChunkOffsetBox, ChunkOffsets, MovieBox, SampleSizeBox, SampleSizeEntries, SampleSizes,
     SampleTableBox, SampleToChunkBox, TimeToSampleBox,
 };
-use isobmff::io::blocking::{DemuxDriver, FragmentedMuxer};
+use isobmff::io::blocking::{DemuxDriver, MuxDriver};
 use isobmff::sample::Sample;
-use isobmff::structure::NonFragmentedDemuxFsm;
+use isobmff::structure::{FragmentedMuxFsm, NonFragmentedDemuxFsm};
 
 /// The samples of one track read ahead of the others, waiting their turn in decode time
 struct TrackQueue {
@@ -69,22 +69,27 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
     }
 
-    let mut muxer = FragmentedMuxer::new(BufWriter::new(File::create(output)?));
+    let mut mux_driver = MuxDriver::new(
+        BufWriter::new(File::create(output)?),
+        FragmentedMuxFsm::new(),
+    );
     if let Some(file_type) = driver.fsm().file_type() {
-        muxer.handle_file_type(file_type.clone())?;
+        mux_driver.fsm_mut().handle_file_type(file_type.clone())?;
     }
-    muxer.handle_movie(movie)?;
+    mux_driver.fsm_mut().handle_movie(movie)?;
     let mut sequence_number: u32 = 0;
     let mut write_fragment = |fragment: &mut Vec<Sample>| -> Result<(), Box<dyn Error>> {
         sequence_number = sequence_number
             .checked_add(1)
             .ok_or("more fragments than a sequence number counts")?;
-        muxer.begin_fragment(sequence_number)?;
+        let mux_fsm = mux_driver.fsm_mut();
+        mux_fsm.begin_fragment(sequence_number)?;
         fragment.sort_by_key(Sample::track_id);
         for sample in fragment.drain(..) {
-            muxer.handle_sample(sample)?;
+            mux_fsm.handle_sample(sample)?;
         }
-        Ok(muxer.finish_fragment()?)
+        mux_fsm.finish_fragment()?;
+        Ok(mux_driver.flush()?)
     };
 
     let mut samples = first.into_iter().map(Ok).chain(driver);
@@ -128,7 +133,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     if !fragment.is_empty() {
         write_fragment(&mut fragment)?;
     }
-    muxer.finish()?;
+    mux_driver.fsm_mut().finish()?;
+    mux_driver.flush()?;
 
     Ok(())
 }

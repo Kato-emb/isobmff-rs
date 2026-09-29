@@ -1,4 +1,4 @@
-//! [`Demux`], [`ResumeSamples`] and [`PollOutput`], what a driver asks of the stack beneath it
+//! [`Demux`], [`ResumeSamples`] and [`Mux`], what a driver asks of the stack beneath it
 
 use core::ops::Range;
 
@@ -55,16 +55,18 @@ pub(crate) trait ResumeSamples: Demux {
     fn resume_at(&mut self, offset: u64) -> Result<(), isobmff_structure::Error>;
 }
 
-/// The one verb of a writer a muxer takes its bytes by
+/// The verb of a mux FSM by which a mux driver takes the bytes the FSM made
 ///
-/// It is the writer's own of the same name, with its contract.
-pub(crate) trait PollOutput {
+/// It is the mux FSM's own of the same name, with its contract. The trait is
+/// sealed: the mux FSMs of [`isobmff_structure`] implement it, and no other
+/// type can.
+pub trait Mux: sealed::Sealed {
     /// Hands over the bytes the file has been laid down as so far
     fn poll_output(&mut self) -> Option<EventBytes>;
 }
 
 mod sealed {
-    /// The bound no type outside this crate can meet, which closes [`Demux`](super::Demux)
+    /// The bound no type outside this crate can meet, which closes [`Demux`](super::Demux) and [`Mux`](super::Mux)
     #[allow(
         unnameable_types,
         reason = "a supertrait no other crate can name is what seals the trait"
@@ -74,6 +76,9 @@ mod sealed {
     impl Sealed for isobmff_structure::FragmentedDemuxFsm {}
     impl Sealed for isobmff_structure::MediaSegmentDemuxFsm {}
     impl Sealed for isobmff_structure::NonFragmentedDemuxFsm {}
+    impl Sealed for isobmff_structure::FragmentedMuxFsm {}
+    impl Sealed for isobmff_structure::MediaSegmentMuxFsm {}
+    impl Sealed for isobmff_structure::NonFragmentedMuxFsm {}
 }
 
 #[cfg(test)]
@@ -87,7 +92,7 @@ pub(crate) mod tests {
     use isobmff_sample::Sample;
     use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
 
-    use super::{Demux, PollOutput, ResumeSamples, sealed};
+    use super::{Demux, Mux, ResumeSamples, sealed};
 
     /// Reader answering as scripted, and recording what it was handed
     #[derive(Default)]
@@ -167,7 +172,9 @@ pub(crate) mod tests {
         pub(crate) output: VecDeque<EventBytes>,
     }
 
-    impl PollOutput for Queued {
+    impl sealed::Sealed for Queued {}
+
+    impl Mux for Queued {
         fn poll_output(&mut self) -> Option<EventBytes> {
             self.output.pop_front()
         }

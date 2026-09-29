@@ -20,9 +20,9 @@ use isobmff::boxes::{
     ChunkOffsetBox, ChunkOffsets, MovieBox, SampleSizeBox, SampleSizeEntries, SampleSizes,
     SampleTableBox, SampleToChunkBox, SegmentTypeBox, TimeToSampleBox,
 };
-use isobmff::io::blocking::{DemuxDriver, FragmentedMuxer, MediaSegmentMuxer};
+use isobmff::io::blocking::{DemuxDriver, MuxDriver};
 use isobmff::sample::Sample;
-use isobmff::structure::NonFragmentedDemuxFsm;
+use isobmff::structure::{FragmentedMuxFsm, MediaSegmentMuxFsm, NonFragmentedDemuxFsm};
 
 /// The samples of one track read ahead of the others, waiting their turn in decode time
 struct TrackQueue {
@@ -71,13 +71,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let file_type = driver.fsm().file_type().cloned();
-    let mut initialization =
-        FragmentedMuxer::new(BufWriter::new(File::create(output.join("init.mp4"))?));
+    let mut initialization = MuxDriver::new(
+        BufWriter::new(File::create(output.join("init.mp4"))?),
+        FragmentedMuxFsm::new(),
+    );
+    let initialization_fsm = initialization.fsm_mut();
     if let Some(file_type) = &file_type {
-        initialization.handle_file_type(file_type.clone())?;
+        initialization_fsm.handle_file_type(file_type.clone())?;
     }
-    initialization.handle_movie(movie)?;
-    initialization.finish()?;
+    initialization_fsm.handle_movie(movie)?;
+    initialization_fsm.finish()?;
+    initialization.flush()?;
 
     let mut sequence_number: u32 = 0;
     let mut write_segment = |fragment: &mut Vec<Sample>| -> Result<(), Box<dyn Error>> {
@@ -85,21 +89,26 @@ fn main() -> Result<(), Box<dyn Error>> {
             .checked_add(1)
             .ok_or("more segments than a sequence number counts")?;
         let path = output.join(format!("{sequence_number:04}.m4s"));
-        let mut segment = MediaSegmentMuxer::new(BufWriter::new(File::create(path)?));
+        let mut segment = MuxDriver::new(
+            BufWriter::new(File::create(path)?),
+            MediaSegmentMuxFsm::new(),
+        );
+        let segment_fsm = segment.fsm_mut();
         if let Some(file_type) = &file_type {
-            segment.handle_segment_type(SegmentTypeBox::new(
+            segment_fsm.handle_segment_type(SegmentTypeBox::new(
                 file_type.major_brand(),
                 file_type.minor_version(),
                 file_type.compatible_brands().to_vec(),
             ))?;
         }
-        segment.begin_fragment(sequence_number)?;
+        segment_fsm.begin_fragment(sequence_number)?;
         fragment.sort_by_key(Sample::track_id);
         for sample in fragment.drain(..) {
-            segment.handle_sample(sample)?;
+            segment_fsm.handle_sample(sample)?;
         }
-        segment.finish_fragment()?;
-        Ok(segment.finish()?)
+        segment_fsm.finish_fragment()?;
+        segment_fsm.finish()?;
+        Ok(segment.flush()?)
     };
 
     let mut samples = first.into_iter().map(Ok).chain(driver);
