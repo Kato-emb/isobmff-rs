@@ -36,6 +36,17 @@ impl MovieFragmentRandomAccessOffsetBox {
     pub const fn size(&self) -> u32 {
         self.size
     }
+
+    /// Returns the offset at which the enclosing `mfra` begins in a file `file_len` bytes long
+    ///
+    /// When the `mfra` is the last box of the file, it begins
+    /// [`size`](Self::size) bytes before the end of the file. `None` when
+    /// `size` exceeds `file_len`. Whether an `mfra` stands at the returned
+    /// offset is not checked.
+    #[must_use]
+    pub fn movie_fragment_random_access_start(&self, file_len: u64) -> Option<u64> {
+        file_len.checked_sub(u64::from(self.size))
+    }
 }
 
 impl BoxDefinition for MovieFragmentRandomAccessOffsetBox {
@@ -94,6 +105,21 @@ mod tests {
             MovieFragmentRandomAccessOffsetBox::decode_payload(&payload).unwrap(),
             offset
         );
+    }
+
+    #[test]
+    fn the_mfra_begins_size_bytes_before_the_end_of_the_file() {
+        let offset = MovieFragmentRandomAccessOffsetBox::new(100);
+
+        assert_eq!(offset.movie_fragment_random_access_start(1000), Some(900));
+        assert_eq!(offset.movie_fragment_random_access_start(100), Some(0));
+    }
+
+    #[test]
+    fn a_size_past_the_start_of_the_file_locates_no_mfra() {
+        let offset = MovieFragmentRandomAccessOffsetBox::new(100);
+
+        assert_eq!(offset.movie_fragment_random_access_start(99), None);
     }
 
     #[test]
