@@ -16,7 +16,7 @@ mod tests {
     };
     use isobmff_core::{AnyBox, BoxType, FourCC, Mp4EpochSeconds};
     use isobmff_sample::Sample;
-    use isobmff_structure::{FragmentedReader, FragmentedWriter};
+    use isobmff_structure::{FragmentedDemuxFsm, FragmentedMuxFsm};
     use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type, track};
 
     /// Ticks a second the media of the movie is timed in
@@ -83,7 +83,7 @@ mod tests {
         movie: MovieBox,
         fragments: Vec<Vec<Sample>>,
     ) -> Vec<u8> {
-        let mut writer = FragmentedWriter::new();
+        let mut writer = FragmentedMuxFsm::new();
         let mut file = Vec::new();
 
         if let Some(brands) = brands {
@@ -151,7 +151,7 @@ mod tests {
     fn a_file_handed_no_brands_is_read_back_declaring_the_brand_its_layout_requires() {
         let file = written_file(None, movie(), two_track_fragments());
 
-        let mut reader = FragmentedReader::new();
+        let mut reader = FragmentedDemuxFsm::new();
         reader.handle_input(&file).unwrap();
 
         assert_eq!(

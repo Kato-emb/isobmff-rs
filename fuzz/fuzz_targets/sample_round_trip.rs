@@ -1,4 +1,4 @@
-//! Round-trip properties of [`FragmentedWriter`] against [`FragmentedReader`]
+//! Round-trip properties of [`FragmentedMuxFsm`] against [`FragmentedDemuxFsm`]
 //!
 //! One run lays samples down as a fragmented file, reads that file back, and
 //! checks four properties of the same input:
@@ -27,7 +27,7 @@
 
 use isobmff::boxes::{MovieBox, SampleFlags, TrackExtendsBox};
 use isobmff::sample::Sample;
-use isobmff::structure::{Error, ErrorKind, FragmentedReader, FragmentedWriter};
+use isobmff::structure::{Error, ErrorKind, FragmentedDemuxFsm, FragmentedMuxFsm};
 use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
@@ -176,7 +176,7 @@ fn laid_out(input: &Input<'_>) -> Vec<(u32, Vec<Sample>)> {
 /// A writer that refuses reports that same failure for every call after it and
 /// still hands over the bytes of the fragments it had closed.
 fn file_of(movie: &MovieBox, fragments: &[(u32, Vec<Sample>)]) -> (Vec<u8>, usize) {
-    let mut writer = FragmentedWriter::new();
+    let mut writer = FragmentedMuxFsm::new();
     let mut file = Vec::new();
     let mut closed = 0;
     let mut refused = None;
@@ -240,7 +240,7 @@ fn file_of(movie: &MovieBox, fragments: &[(u32, Vec<Sample>)]) -> (Vec<u8>, usiz
 }
 
 /// Takes what the writer has laid down into `file`
-fn drained_into(writer: &mut FragmentedWriter, file: &mut Vec<u8>) {
+fn drained_into(writer: &mut FragmentedMuxFsm, file: &mut Vec<u8>) {
     while let Some(written) = writer.poll_output() {
         file.extend_from_slice(&written);
     }
@@ -264,7 +264,7 @@ fn a_sample() -> Sample {
 /// Panics where the reader rejects the file, which is the property this target
 /// holds the writer to.
 fn read_back(file: &[u8]) -> Vec<Sample> {
-    let mut reader = FragmentedReader::new();
+    let mut reader = FragmentedDemuxFsm::new();
     let mut samples = Vec::new();
 
     assert!(

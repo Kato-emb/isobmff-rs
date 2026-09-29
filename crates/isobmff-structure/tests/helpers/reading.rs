@@ -4,11 +4,11 @@
 //! they arrive, and the samples come out.
 
 use isobmff_sample::Sample;
-use isobmff_structure::FragmentedReader;
+use isobmff_structure::FragmentedDemuxFsm;
 
 /// The samples `file` carries, read off it `cut_length` bytes at a time
 pub(crate) fn samples_of(file: &[u8], cut_length: usize) -> Vec<Sample> {
-    let mut reader = FragmentedReader::new();
+    let mut reader = FragmentedDemuxFsm::new();
     let mut samples = Vec::new();
 
     for arriving in file.chunks(cut_length) {
@@ -23,7 +23,7 @@ pub(crate) fn samples_of(file: &[u8], cut_length: usize) -> Vec<Sample> {
 }
 
 /// Takes every sample the reader has completed
-pub(crate) fn drained(reader: &mut FragmentedReader) -> Vec<Sample> {
+pub(crate) fn drained(reader: &mut FragmentedDemuxFsm) -> Vec<Sample> {
     let mut samples = Vec::new();
     while let Some(sample) = reader.poll_sample() {
         samples.push(sample);

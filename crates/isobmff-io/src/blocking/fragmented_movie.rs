@@ -4,14 +4,14 @@ use std::io::{Read, Seek, Write};
 
 use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentRandomAccessBox};
 use isobmff_sample::{Sample, SegmentIndex};
-use isobmff_structure::{FragmentedReader, FragmentedWriter};
+use isobmff_structure::{FragmentedDemuxFsm, FragmentedMuxFsm};
 
 use super::driver::{Demuxer, Muxer};
 use crate::Error;
 
 /// Reads the samples a fragmented movie file carries off a source that seeks
 ///
-/// The driver of [`FragmentedReader`] over `std::io`: it reads the file off
+/// The driver of [`FragmentedDemuxFsm`] over `std::io`: it reads the file off
 /// the source a cut at a time and hands each over, fetches the bytes the
 /// reader names as lacking wherever the file passed them by — the media data
 /// of a fragment addressing bytes before it — by seeking to them, and yields
@@ -85,13 +85,13 @@ use crate::Error;
 /// ```
 #[derive(Debug)]
 pub struct FragmentedDemuxer<S> {
-    demuxer: Demuxer<S, FragmentedReader>,
+    demuxer: Demuxer<S, FragmentedDemuxFsm>,
 }
 
 impl<S: Read + Seek> FragmentedDemuxer<S> {
     /// Creates a demuxer over `source`, the file beginning where it stands
     ///
-    /// The reader beneath is [`FragmentedReader::new`]; one holding the file
+    /// The reader beneath is [`FragmentedDemuxFsm::new`]; one holding the file
     /// to other limits is driven through [`with_reader`](Self::with_reader).
     ///
     /// # Errors
@@ -99,7 +99,7 @@ impl<S: Read + Seek> FragmentedDemuxer<S> {
     /// * [`Io`](crate::ErrorKind::Io): the source does not report
     ///   where it stands.
     pub fn new(source: S) -> Result<Self, Error> {
-        Self::with_reader(source, FragmentedReader::new())
+        Self::with_reader(source, FragmentedDemuxFsm::new())
     }
 
     /// Creates a demuxer over `source` driving `reader`, the file beginning where the source stands
@@ -108,7 +108,7 @@ impl<S: Read + Seek> FragmentedDemuxer<S> {
     ///
     /// * [`Io`](crate::ErrorKind::Io): the source does not report
     ///   where it stands.
-    pub fn with_reader(source: S, reader: FragmentedReader) -> Result<Self, Error> {
+    pub fn with_reader(source: S, reader: FragmentedDemuxFsm) -> Result<Self, Error> {
         Ok(Self {
             demuxer: Demuxer::new(source, reader)?,
         })
@@ -126,13 +126,13 @@ impl<S: Read + Seek> FragmentedDemuxer<S> {
         self.demuxer.reader().movie()
     }
 
-    /// Returns the subsegments of every `sidx` read so far, as [`FragmentedReader::segment_indexes`] holds them
+    /// Returns the subsegments of every `sidx` read so far, as [`FragmentedDemuxFsm::segment_indexes`] holds them
     #[must_use]
     pub fn segment_indexes(&self) -> &[SegmentIndex] {
         self.demuxer.reader().segment_indexes()
     }
 
-    /// Returns the random access tables of the file once its `mfra` has been read, as [`FragmentedReader::movie_fragment_random_access`] holds them
+    /// Returns the random access tables of the file once its `mfra` has been read, as [`FragmentedDemuxFsm::movie_fragment_random_access`] holds them
     #[must_use]
     pub const fn movie_fragment_random_access(&self) -> Option<&MovieFragmentRandomAccessBox> {
         self.demuxer.reader().movie_fragment_random_access()
@@ -140,7 +140,7 @@ impl<S: Read + Seek> FragmentedDemuxer<S> {
 
     /// Restarts the reading at `offset` of the file, a place an index names
     ///
-    /// The reader is resumed at `offset` as [`FragmentedReader::resume_at`]
+    /// The reader is resumed at `offset` as [`FragmentedDemuxFsm::resume_at`]
     /// resumes it, and the source is sought there from where the file
     /// begins: the samples not yet taken are dropped, and the ones that come
     /// next are those the file carries from `offset` on — the `moof`, `sidx`
@@ -156,7 +156,7 @@ impl<S: Read + Seek> FragmentedDemuxer<S> {
     ///   which leaves the demuxer as it was, or the source does not seek
     ///   there.
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`FragmentedReader::resume_at`] makes of the call.
+    ///   [`FragmentedDemuxFsm::resume_at`] makes of the call.
     ///
     /// A failure after the offset is checked ends the samples, until a
     /// resume succeeds.
@@ -224,7 +224,7 @@ impl<S: Read + Seek> Iterator for FragmentedDemuxer<S> {
 
 /// Lays a fragmented movie file down on a sink, taking the samples as they come
 ///
-/// The driver of [`FragmentedWriter`] over `std::io`: it takes the boxes and
+/// The driver of [`FragmentedMuxFsm`] over `std::io`: it takes the boxes and
 /// the samples as the writer does, and writes every byte the writer makes of
 /// them to the sink before the call returns. A caller hands over boxes and
 /// samples and nothing else moves.
@@ -232,7 +232,7 @@ impl<S: Read + Seek> Iterator for FragmentedDemuxer<S> {
 /// # Contract
 ///
 /// * The calls are the writer's, and what each takes and refuses is
-///   [`FragmentedWriter`]'s contract, carried through as
+///   [`FragmentedMuxFsm`]'s contract, carried through as
 ///   [`Structure`](crate::ErrorKind::Structure). What the writer made
 ///   of a call is written before the call reports, the bytes made before a
 ///   refusal included; a sink refusing them is
@@ -270,7 +270,7 @@ impl<S: Read + Seek> Iterator for FragmentedDemuxer<S> {
 /// ```
 #[derive(Debug)]
 pub struct FragmentedMuxer<W> {
-    muxer: Muxer<W, FragmentedWriter>,
+    muxer: Muxer<W, FragmentedMuxFsm>,
 }
 
 impl<W: Write> FragmentedMuxer<W> {
@@ -278,7 +278,7 @@ impl<W: Write> FragmentedMuxer<W> {
     #[must_use]
     pub const fn new(sink: W) -> Self {
         Self {
-            muxer: Muxer::new(sink, FragmentedWriter::new()),
+            muxer: Muxer::new(sink, FragmentedMuxFsm::new()),
         }
     }
 
@@ -287,7 +287,7 @@ impl<W: Write> FragmentedMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`FragmentedWriter::handle_file_type`] makes of the call.
+    ///   [`FragmentedMuxFsm::handle_file_type`] makes of the call.
     /// * [`Io`](crate::ErrorKind::Io): the sink refuses the bytes.
     pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), Error> {
         self.muxer
@@ -299,7 +299,7 @@ impl<W: Write> FragmentedMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`FragmentedWriter::handle_movie`] makes of the call.
+    ///   [`FragmentedMuxFsm::handle_movie`] makes of the call.
     /// * [`Io`](crate::ErrorKind::Io): the sink refuses the bytes.
     pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), Error> {
         self.muxer.drive(|writer| writer.handle_movie(movie))
@@ -310,7 +310,7 @@ impl<W: Write> FragmentedMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`FragmentedWriter::begin_fragment`] makes of the call.
+    ///   [`FragmentedMuxFsm::begin_fragment`] makes of the call.
     pub fn begin_fragment(&mut self, sequence_number: u32) -> Result<(), Error> {
         self.muxer
             .drive(|writer| writer.begin_fragment(sequence_number))
@@ -321,7 +321,7 @@ impl<W: Write> FragmentedMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`FragmentedWriter::begin_fragment_continuing`] makes of the call.
+    ///   [`FragmentedMuxFsm::begin_fragment_continuing`] makes of the call.
     pub fn begin_fragment_continuing(&mut self, sequence_number: u32) -> Result<(), Error> {
         self.muxer
             .drive(|writer| writer.begin_fragment_continuing(sequence_number))
@@ -332,7 +332,7 @@ impl<W: Write> FragmentedMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`FragmentedWriter::handle_sample`] makes of the call.
+    ///   [`FragmentedMuxFsm::handle_sample`] makes of the call.
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), Error> {
         self.muxer.drive(|writer| writer.handle_sample(sample))
     }
@@ -342,10 +342,10 @@ impl<W: Write> FragmentedMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`FragmentedWriter::finish_fragment`] makes of the call.
+    ///   [`FragmentedMuxFsm::finish_fragment`] makes of the call.
     /// * [`Io`](crate::ErrorKind::Io): the sink refuses the bytes.
     pub fn finish_fragment(&mut self) -> Result<(), Error> {
-        self.muxer.drive(FragmentedWriter::finish_fragment)
+        self.muxer.drive(FragmentedMuxFsm::finish_fragment)
     }
 
     /// Declares the file over, and flushes the sink
@@ -353,10 +353,10 @@ impl<W: Write> FragmentedMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`FragmentedWriter::finish`] makes of the call.
+    ///   [`FragmentedMuxFsm::finish`] makes of the call.
     /// * [`Io`](crate::ErrorKind::Io): the sink does not flush.
     pub fn finish(&mut self) -> Result<(), Error> {
-        self.muxer.finish(FragmentedWriter::finish)
+        self.muxer.finish(FragmentedMuxFsm::finish)
     }
 }
 

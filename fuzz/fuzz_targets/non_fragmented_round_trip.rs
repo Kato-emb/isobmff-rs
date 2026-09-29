@@ -1,4 +1,4 @@
-//! Round-trip properties of [`NonFragmentedWriter`] against [`NonFragmentedReader`]
+//! Round-trip properties of [`NonFragmentedMuxFsm`] against [`NonFragmentedDemuxFsm`]
 //!
 //! One run lays samples down as a non-fragmented file, chunk by chunk, reads
 //! that file back, and checks three properties of the same input:
@@ -24,7 +24,7 @@
 use isobmff::boxes::{HeaderDuration, MovieBox, MovieHeaderBox, SampleFlags};
 use isobmff::core::Mp4EpochSeconds;
 use isobmff::sample::Sample;
-use isobmff::structure::{Error, ErrorKind, NonFragmentedReader, NonFragmentedWriter};
+use isobmff::structure::{Error, ErrorKind, NonFragmentedDemuxFsm, NonFragmentedMuxFsm};
 use isobmff_test_support::{file_type, non_fragmented_file, track};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
@@ -187,7 +187,7 @@ fn laid_out(input: &Input<'_>) -> Vec<Vec<Sample>> {
 /// still hands over the bytes of the chunks it had laid down, which carry no
 /// movie.
 fn file_of(chunks: &[Vec<Sample>]) -> (Vec<u8>, bool) {
-    let mut writer = NonFragmentedWriter::new();
+    let mut writer = NonFragmentedMuxFsm::new();
     let mut file = Vec::new();
     let mut refused = None;
 
@@ -245,7 +245,7 @@ fn file_of(chunks: &[Vec<Sample>]) -> (Vec<u8>, bool) {
 }
 
 /// Takes what the writer has laid down into `file`
-fn drained_into(writer: &mut NonFragmentedWriter, file: &mut Vec<u8>) {
+fn drained_into(writer: &mut NonFragmentedMuxFsm, file: &mut Vec<u8>) {
     while let Some(written) = writer.poll_output() {
         file.extend_from_slice(&written);
     }
@@ -282,7 +282,7 @@ fn movie_first_file_of(chunks: &[Vec<Sample>]) -> Vec<u8> {
 
 /// The samples `file` carries, read off it `cut_length` bytes at a time and then off the bytes it wants fetched
 fn read_back(file: &[u8], cut_length: usize) -> Result<Vec<Sample>, Error> {
-    let mut reader = NonFragmentedReader::new();
+    let mut reader = NonFragmentedDemuxFsm::new();
     let mut samples = Vec::new();
 
     for arriving in file.chunks(cut_length) {
@@ -309,7 +309,7 @@ fn read_back(file: &[u8], cut_length: usize) -> Result<Vec<Sample>, Error> {
 }
 
 /// Takes every sample the reader has completed
-fn drain(reader: &mut NonFragmentedReader, samples: &mut Vec<Sample>) {
+fn drain(reader: &mut NonFragmentedDemuxFsm, samples: &mut Vec<Sample>) {
     while let Some(sample) = reader.poll_sample() {
         samples.push(sample);
     }

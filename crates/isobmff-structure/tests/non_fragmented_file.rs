@@ -10,13 +10,13 @@ mod reading;
 #[cfg(test)]
 mod tests {
     use super::reading::{fetched, handed_over_in_order, samples_of};
-    use isobmff_structure::NonFragmentedReader;
+    use isobmff_structure::NonFragmentedDemuxFsm;
     use isobmff_test_support::{SAMPLE_CHUNKS, non_fragmented_file, non_fragmented_file_samples};
 
     #[test]
     fn a_movie_before_its_media_data_has_every_sample_read_as_the_file_arrives() {
         let file = non_fragmented_file(&SAMPLE_CHUNKS, true);
-        let mut reader = NonFragmentedReader::new();
+        let mut reader = NonFragmentedDemuxFsm::new();
 
         let samples = handed_over_in_order(&mut reader, &file, file.len());
 
@@ -28,7 +28,7 @@ mod tests {
     #[test]
     fn a_movie_after_its_media_data_completes_no_sample_and_names_the_bytes_it_lacks() {
         let file = non_fragmented_file(&SAMPLE_CHUNKS, false);
-        let mut reader = NonFragmentedReader::new();
+        let mut reader = NonFragmentedDemuxFsm::new();
 
         let samples = handed_over_in_order(&mut reader, &file, file.len());
 

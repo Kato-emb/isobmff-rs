@@ -9,7 +9,7 @@ mod reading;
 
 #[cfg(test)]
 mod tests {
-    use isobmff_structure::MediaSegmentReader;
+    use isobmff_structure::MediaSegmentDemuxFsm;
     use isobmff_test_support::{
         indexed_segment_file, presentation_movie, segment_file_samples, segment_file_with_samples,
     };
@@ -41,7 +41,7 @@ mod tests {
     #[test]
     fn a_segment_read_in_order_yields_every_sample_and_an_index_pointing_at_its_fragments() {
         let segment = indexed_segment_file();
-        let mut reader = MediaSegmentReader::new(presentation_movie());
+        let mut reader = MediaSegmentDemuxFsm::new(presentation_movie());
 
         reader.handle_input(&segment.bytes).unwrap();
         reader.finish().unwrap();
@@ -65,7 +65,7 @@ mod tests {
     fn resuming_at_the_second_fragment_yields_its_samples_alone() {
         let segment = indexed_segment_file();
         let second = *segment.moof_offsets.get(1).unwrap();
-        let mut reader = MediaSegmentReader::new(presentation_movie());
+        let mut reader = MediaSegmentDemuxFsm::new(presentation_movie());
         reader.handle_input(&segment.bytes).unwrap();
         reader.finish().unwrap();
         drained(&mut reader);

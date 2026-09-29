@@ -4,14 +4,14 @@ use std::io::{Read, Seek, Write};
 
 use isobmff_boxes::{FileTypeBox, MovieBox};
 use isobmff_sample::Sample;
-use isobmff_structure::{NonFragmentedReader, NonFragmentedWriter};
+use isobmff_structure::{NonFragmentedDemuxFsm, NonFragmentedMuxFsm};
 
 use super::driver::{Demuxer, Muxer};
 use crate::Error;
 
 /// Reads the samples a non-fragmented movie file carries off a source that seeks
 ///
-/// The driver of [`NonFragmentedReader`] over `std::io`: it reads the file off
+/// The driver of [`NonFragmentedDemuxFsm`] over `std::io`: it reads the file off
 /// the source a cut at a time and hands each over, fetches the bytes the
 /// reader names as lacking wherever the file passed them by — the media data
 /// of a movie lying after it — by seeking to them, and yields the samples as
@@ -65,13 +65,13 @@ use crate::Error;
 /// ```
 #[derive(Debug)]
 pub struct NonFragmentedDemuxer<S> {
-    demuxer: Demuxer<S, NonFragmentedReader>,
+    demuxer: Demuxer<S, NonFragmentedDemuxFsm>,
 }
 
 impl<S: Read + Seek> NonFragmentedDemuxer<S> {
     /// Creates a demuxer over `source`, the file beginning where it stands
     ///
-    /// The reader beneath is [`NonFragmentedReader::new`]; one holding the
+    /// The reader beneath is [`NonFragmentedDemuxFsm::new`]; one holding the
     /// file to other limits is driven through
     /// [`with_reader`](Self::with_reader).
     ///
@@ -80,7 +80,7 @@ impl<S: Read + Seek> NonFragmentedDemuxer<S> {
     /// * [`Io`](crate::ErrorKind::Io): the source does not report
     ///   where it stands.
     pub fn new(source: S) -> Result<Self, Error> {
-        Self::with_reader(source, NonFragmentedReader::new())
+        Self::with_reader(source, NonFragmentedDemuxFsm::new())
     }
 
     /// Creates a demuxer over `source` driving `reader`, the file beginning where the source stands
@@ -89,7 +89,7 @@ impl<S: Read + Seek> NonFragmentedDemuxer<S> {
     ///
     /// * [`Io`](crate::ErrorKind::Io): the source does not report
     ///   where it stands.
-    pub fn with_reader(source: S, reader: NonFragmentedReader) -> Result<Self, Error> {
+    pub fn with_reader(source: S, reader: NonFragmentedDemuxFsm) -> Result<Self, Error> {
         Ok(Self {
             demuxer: Demuxer::new(source, reader)?,
         })
@@ -118,7 +118,7 @@ impl<S: Read + Seek> Iterator for NonFragmentedDemuxer<S> {
 
 /// Lays a non-fragmented movie file down on a sink, taking the samples as they come
 ///
-/// The driver of [`NonFragmentedWriter`] over `std::io`: it takes the boxes
+/// The driver of [`NonFragmentedMuxFsm`] over `std::io`: it takes the boxes
 /// and the samples as the writer does, and writes every byte the writer makes
 /// of them to the sink before the call returns. A caller hands over boxes and
 /// samples and nothing else moves.
@@ -126,7 +126,7 @@ impl<S: Read + Seek> Iterator for NonFragmentedDemuxer<S> {
 /// # Contract
 ///
 /// * The calls are the writer's, and what each takes and refuses is
-///   [`NonFragmentedWriter`]'s contract, carried through as
+///   [`NonFragmentedMuxFsm`]'s contract, carried through as
 ///   [`Structure`](crate::ErrorKind::Structure). What the writer made
 ///   of a call is written before the call reports, the bytes made before a
 ///   refusal included; a sink refusing them is
@@ -170,7 +170,7 @@ impl<S: Read + Seek> Iterator for NonFragmentedDemuxer<S> {
 /// ```
 #[derive(Debug)]
 pub struct NonFragmentedMuxer<W> {
-    muxer: Muxer<W, NonFragmentedWriter>,
+    muxer: Muxer<W, NonFragmentedMuxFsm>,
 }
 
 impl<W: Write> NonFragmentedMuxer<W> {
@@ -178,7 +178,7 @@ impl<W: Write> NonFragmentedMuxer<W> {
     #[must_use]
     pub const fn new(sink: W) -> Self {
         Self {
-            muxer: Muxer::new(sink, NonFragmentedWriter::new()),
+            muxer: Muxer::new(sink, NonFragmentedMuxFsm::new()),
         }
     }
 
@@ -187,7 +187,7 @@ impl<W: Write> NonFragmentedMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`NonFragmentedWriter::handle_file_type`] makes of the call.
+    ///   [`NonFragmentedMuxFsm::handle_file_type`] makes of the call.
     /// * [`Io`](crate::ErrorKind::Io): the sink refuses the bytes.
     pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), Error> {
         self.muxer
@@ -199,7 +199,7 @@ impl<W: Write> NonFragmentedMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`NonFragmentedWriter::handle_movie`] makes of the call.
+    ///   [`NonFragmentedMuxFsm::handle_movie`] makes of the call.
     pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), Error> {
         self.muxer.drive(|writer| writer.handle_movie(movie))
     }
@@ -209,10 +209,10 @@ impl<W: Write> NonFragmentedMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`NonFragmentedWriter::begin_chunk`] makes of the call.
+    ///   [`NonFragmentedMuxFsm::begin_chunk`] makes of the call.
     /// * [`Io`](crate::ErrorKind::Io): the sink refuses the bytes.
     pub fn begin_chunk(&mut self) -> Result<(), Error> {
-        self.muxer.drive(NonFragmentedWriter::begin_chunk)
+        self.muxer.drive(NonFragmentedMuxFsm::begin_chunk)
     }
 
     /// Takes a sample, and places it at the end of the chunk that is open
@@ -220,7 +220,7 @@ impl<W: Write> NonFragmentedMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`NonFragmentedWriter::handle_sample`] makes of the call.
+    ///   [`NonFragmentedMuxFsm::handle_sample`] makes of the call.
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), Error> {
         self.muxer.drive(|writer| writer.handle_sample(sample))
     }
@@ -230,11 +230,11 @@ impl<W: Write> NonFragmentedMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`NonFragmentedWriter::finish`] makes of the call.
+    ///   [`NonFragmentedMuxFsm::finish`] makes of the call.
     /// * [`Io`](crate::ErrorKind::Io): the sink refuses the bytes, or
     ///   does not flush.
     pub fn finish(&mut self) -> Result<(), Error> {
-        self.muxer.finish(NonFragmentedWriter::finish)
+        self.muxer.finish(NonFragmentedMuxFsm::finish)
     }
 }
 

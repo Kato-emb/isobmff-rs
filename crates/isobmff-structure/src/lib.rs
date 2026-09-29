@@ -1,12 +1,12 @@
 //! The order the boxes of an ISO base media file stand in, and the stacks that read and write one
 //!
 //! A presentation is carried as samples — ISO/IEC 14496-12 §3.1.14 has a sample
-//! as all the data associated with a single timestamp. [`FragmentedReader`]
+//! as all the data associated with a single timestamp. [`FragmentedDemuxFsm`]
 //! takes a fragmented movie file as it arrives and reports the
-//! [`Sample`](isobmff_sample::Sample)s it carries, [`NonFragmentedReader`] does
-//! the same for a non-fragmented one, and [`MediaSegmentReader`] for a media
-//! segment delivered apart from the movie it continues; [`FragmentedWriter`],
-//! [`NonFragmentedWriter`] and [`MediaSegmentWriter`] go the other way, laying
+//! [`Sample`](isobmff_sample::Sample)s it carries, [`NonFragmentedDemuxFsm`] does
+//! the same for a non-fragmented one, and [`MediaSegmentDemuxFsm`] for a media
+//! segment delivered apart from the movie it continues; [`FragmentedMuxFsm`],
+//! [`NonFragmentedMuxFsm`] and [`MediaSegmentMuxFsm`] go the other way, laying
 //! samples down as a file or a segment of each kind. None reaches for a source
 //! or a sink of its own: when to read or write, and from or to where, stay with
 //! the caller. A caller that has an I/O to hand drives any of them through the
@@ -58,9 +58,9 @@
 //!    media data, the movie they continue held apart from it. The structure
 //!    is the only layer that knows how a file is put together, and the order
 //!    a file breaks is its failure.
-//! 6. **Stack.** [`FragmentedReader`], [`FragmentedWriter`],
-//!    [`NonFragmentedReader`], [`NonFragmentedWriter`], [`MediaSegmentReader`]
-//!    and [`MediaSegmentWriter`] wire layers 1 to 5 into one machine per
+//! 6. **Stack.** [`FragmentedDemuxFsm`], [`FragmentedMuxFsm`],
+//!    [`NonFragmentedDemuxFsm`], [`NonFragmentedMuxFsm`], [`MediaSegmentDemuxFsm`]
+//!    and [`MediaSegmentMuxFsm`] wire layers 1 to 5 into one machine per
 //!    structure and direction. A stack holds no rule and no failure kind of
 //!    its own: it passes every value between the layers, so a caller hands
 //!    over bytes and takes samples, or hands over samples and takes bytes,
@@ -70,9 +70,9 @@
 //!    (§8.7.5, §8.8.7) — and no layer here knows any other.
 //! 7. **The I/O.** Where the bytes come from and go to is the caller's: the
 //!    file is handed over from its first byte, or from a resume point an index
-//!    names, output is taken, and what the
-//!    reader says it still lacks is fetched or not, so a `File`, a socket, or a
-//!    buffer already in memory drives the six layers above the same way. Where
+//!    names, output is taken, and what the demux FSM says it still lacks is
+//!    fetched or not, so a `File`, a socket, or a buffer already in memory
+//!    drives the six layers above the same way. Where
 //!    the file lies in its resource, and how a file offset becomes a seek or a
 //!    range, is settled here and in none of them. This crate holds no such
 //!    driver: the demuxers and the muxers of `isobmff-io`, one of each per stack,
@@ -102,8 +102,8 @@ mod non_fragmented_movie;
 mod whole_box;
 
 pub use error::{Error, ErrorKind};
-pub use fragmented_movie::{FragmentedReader, FragmentedWriter};
-pub use media_segment::{MediaSegmentReader, MediaSegmentWriter};
-pub use non_fragmented_movie::{NonFragmentedReader, NonFragmentedWriter};
+pub use fragmented_movie::{FragmentedDemuxFsm, FragmentedMuxFsm};
+pub use media_segment::{MediaSegmentDemuxFsm, MediaSegmentMuxFsm};
+pub use non_fragmented_movie::{NonFragmentedDemuxFsm, NonFragmentedMuxFsm};
 
 pub(crate) use whole_box::{WholeBoxReader, compact_box_header, whole_box_header, whole_payload};

@@ -1,13 +1,13 @@
-//! Sans-IO readers and writers for an ISO base media file and the samples it carries
+//! Sans-IO demux and mux FSMs for an ISO base media file and the samples it carries
 //!
 //! A presentation is carried as samples — ISO/IEC 14496-12 §3.1.14 has a sample
 //! as all the data associated with a single timestamp.
-//! [`structure::FragmentedReader`] takes a fragmented movie file as it arrives
+//! [`structure::FragmentedDemuxFsm`] takes a fragmented movie file as it arrives
 //! and reports the [`sample::Sample`]s it carries,
-//! [`structure::NonFragmentedReader`] does the same for a non-fragmented one,
-//! and [`structure::MediaSegmentReader`] for a media segment delivered apart
-//! from the movie it continues; [`structure::FragmentedWriter`],
-//! [`structure::NonFragmentedWriter`] and [`structure::MediaSegmentWriter`] go
+//! [`structure::NonFragmentedDemuxFsm`] does the same for a non-fragmented one,
+//! and [`structure::MediaSegmentDemuxFsm`] for a media segment delivered apart
+//! from the movie it continues; [`structure::FragmentedMuxFsm`],
+//! [`structure::NonFragmentedMuxFsm`] and [`structure::MediaSegmentMuxFsm`] go
 //! the other way, laying samples down as a file or a segment of each kind.
 //! None reaches for a source or a sink of its own: when to read or write, and
 //! from or to where, stay with the caller. Where the caller has an I/O to
@@ -17,8 +17,8 @@
 //! # One module per crate
 //!
 //! Every module here is one crate of the workspace re-exported whole, and this
-//! root holds nothing else: [`structure::FragmentedReader`] and
-//! `isobmff_structure::FragmentedReader` are the same type, so documentation
+//! root holds nothing else: [`structure::FragmentedDemuxFsm`] and
+//! `isobmff_structure::FragmentedDemuxFsm` are the same type, so documentation
 //! written against any of those crates reads against this one.
 //!
 //! | module | crate | of the seven layers |
@@ -92,7 +92,7 @@ pub mod structure {
     pub use isobmff_structure::*;
 }
 
-/// The demuxers and the muxers driving the readers and writers over an I/O,
+/// The demuxers and the muxers driving the demux and mux FSMs over an I/O,
 /// over `futures::io` at the root and over `std::io` in `blocking` — the
 /// `isobmff-io` crate whole, behind the `io` feature
 #[cfg(feature = "io")]

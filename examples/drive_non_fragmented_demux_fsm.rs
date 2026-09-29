@@ -1,26 +1,26 @@
-//! Reads the samples a non-fragmented MP4 file carries with the reader alone, one line per sample
+//! Reads the samples a non-fragmented MP4 file carries with the demux FSM alone, one line per sample
 //!
-//! No demuxer of the `io` feature is involved: the file is handed to the reader a cut at a time,
+//! No demuxer of the `io` feature is involved: the file is handed to the demux FSM a cut at a time,
 //! and the bytes it names that the file has already passed — the media data of a movie lying after
 //! it — are fetched through a second handle sought back to them.
 //!
-//! Usage: `cargo run -p isobmff-examples --example drive_non_fragmented_reader -- <in.mp4>`
+//! Usage: `cargo run -p isobmff-examples --example drive_non_fragmented_demux_fsm -- <in.mp4>`
 
 use core::error::Error;
 use std::env;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
-use isobmff::structure::NonFragmentedReader;
+use isobmff::structure::NonFragmentedDemuxFsm;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let path = env::args()
         .nth(1)
-        .ok_or("usage: drive_non_fragmented_reader <in.mp4>")?;
+        .ok_or("usage: drive_non_fragmented_demux_fsm <in.mp4>")?;
     let mut file = File::open(&path)?;
     let mut fetcher = File::open(path)?;
 
-    let mut reader = NonFragmentedReader::new();
+    let mut reader = NonFragmentedDemuxFsm::new();
     let mut cut = vec![0; 64 * 1024];
     let mut count: u64 = 0;
     let mut finished = false;

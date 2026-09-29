@@ -1,4 +1,4 @@
-//! [`MediaSegmentReader`], a media segment read as it arrives
+//! [`MediaSegmentDemuxFsm`], a media segment read as it arrives
 
 use core::ops::Range;
 
@@ -90,10 +90,10 @@ use crate::{Error, WholeBoxReader};
 /// ```
 /// use isobmff_boxes::{SampleFlags, TrackExtendsBox};
 /// use isobmff_sample::Sample;
-/// use isobmff_structure::{MediaSegmentReader, MediaSegmentWriter};
+/// use isobmff_structure::{MediaSegmentDemuxFsm, MediaSegmentMuxFsm};
 /// # use isobmff_test_support::{fragmented_movie, segment_type};
 /// // A segment of one fragment carrying two samples of track 1
-/// let mut writer = MediaSegmentWriter::new();
+/// let mut writer = MediaSegmentMuxFsm::new();
 /// writer.handle_segment_type(segment_type())?;
 /// writer.begin_fragment(1)?;
 /// writer.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
@@ -109,7 +109,7 @@ use crate::{Error, WholeBoxReader};
 ///
 /// // The segment is handed over as it arrives, against the movie it continues
 /// let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO));
-/// let mut reader = MediaSegmentReader::new(movie);
+/// let mut reader = MediaSegmentDemuxFsm::new(movie);
 /// for arriving in segment.chunks(7) {
 ///     reader.handle_input(arriving)?;
 /// }
@@ -127,7 +127,7 @@ use crate::{Error, WholeBoxReader};
 /// # Ok::<(), isobmff_structure::Error>(())
 /// ```
 #[derive(Debug)]
-pub struct MediaSegmentReader {
+pub struct MediaSegmentDemuxFsm {
     boxes: BoxReader,
     base: u64,
     structure: MediaSegmentStructure,
@@ -168,7 +168,7 @@ enum Open {
     MediaData,
 }
 
-impl MediaSegmentReader {
+impl MediaSegmentDemuxFsm {
     /// Payload a box read into a value may declare, where the caller names no limit
     ///
     /// Sixteen mebibytes. A caller reading segments whose `moof` reaches past
@@ -489,12 +489,12 @@ mod tests {
     use isobmff_test_support::{MEDIA_DATA, framed, movie_fragment, segment_type, written};
 
     use super::super::tests::{movie, sample, segment_of_one_sample};
-    use super::{Error, MediaSegmentReader};
+    use super::{Error, MediaSegmentDemuxFsm};
     use crate::ErrorKind;
 
     /// What the reader makes of `segment` handed over whole, then declared over
-    fn read(segment: &[u8]) -> Result<MediaSegmentReader, Error> {
-        let mut reader = MediaSegmentReader::new(movie());
+    fn read(segment: &[u8]) -> Result<MediaSegmentDemuxFsm, Error> {
+        let mut reader = MediaSegmentDemuxFsm::new(movie());
 
         reader.handle_input(segment)?;
         reader.finish()?;
@@ -520,7 +520,7 @@ mod tests {
     #[test]
     fn a_box_read_into_a_value_declaring_a_payload_past_the_limit_is_rejected() {
         let mut reader =
-            MediaSegmentReader::with_limits(movie(), 4, SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT);
+            MediaSegmentDemuxFsm::with_limits(movie(), 4, SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT);
 
         assert_eq!(
             reader
@@ -538,7 +538,7 @@ mod tests {
             framed(BoxType::compact(*b"free"), &[0x11; 4_096]),
         ]
         .concat();
-        let mut reader = MediaSegmentReader::with_limits(
+        let mut reader = MediaSegmentDemuxFsm::with_limits(
             movie(),
             fragment.len() as u64,
             SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT,
@@ -554,7 +554,7 @@ mod tests {
         let mut segment = segment_of_one_sample();
         segment.extend_from_slice(b"\0\0\0\x04free");
 
-        let mut reader = MediaSegmentReader::new(movie());
+        let mut reader = MediaSegmentDemuxFsm::new(movie());
 
         assert_eq!(
             reader.handle_input(&segment).map_err(Error::kind),
@@ -573,7 +573,7 @@ mod tests {
         let mut segment = segment_of_one_sample();
         let media_data = segment.split_off(segment.len().saturating_sub(4));
 
-        let mut reader = MediaSegmentReader::new(movie());
+        let mut reader = MediaSegmentDemuxFsm::new(movie());
         reader.handle_input(&segment).unwrap();
         let wanted = reader.wanted_extent().unwrap();
         reader.handle_data(wanted.start, &media_data).unwrap();
@@ -585,7 +585,7 @@ mod tests {
 
     #[test]
     fn a_failed_reader_reports_the_same_failure_for_every_call_after_it() {
-        let mut reader = MediaSegmentReader::new(movie());
+        let mut reader = MediaSegmentDemuxFsm::new(movie());
         let failure = Error::box_out_of_order(MediaDataBox::BOX_TYPE);
         let segment = written(&MediaDataBox::new(MEDIA_DATA.to_vec()));
 
