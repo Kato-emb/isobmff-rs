@@ -191,10 +191,10 @@ mod tests {
             .handle_input(file.bytes.get(usize::try_from(second).unwrap()..).unwrap())
             .unwrap();
 
-        let file_len = u64::try_from(file.bytes.len()).unwrap();
+        let file_length = u64::try_from(file.bytes.len()).unwrap();
         assert_eq!(
             [created, handed, resumed, demux_fsm.input_offset()],
-            [0, file_len, second, file_len]
+            [0, file_length, second, file_length]
         );
     }
 }

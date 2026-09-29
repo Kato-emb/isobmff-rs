@@ -107,10 +107,10 @@ mod tests {
             )
             .unwrap();
 
-        let segment_len = u64::try_from(segment.bytes.len()).unwrap();
+        let segment_length = u64::try_from(segment.bytes.len()).unwrap();
         assert_eq!(
             [created, handed, resumed, demux_fsm.input_offset()],
-            [0, segment_len, second, segment_len]
+            [0, segment_length, second, segment_length]
         );
     }
 }
