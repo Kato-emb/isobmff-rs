@@ -119,16 +119,18 @@ mod tests {
         let mut samples = non_fragmented_file_samples().into_iter();
 
         let read_back = block_on(async {
-            let mut muxer = isobmff_io::NonFragmentedMuxer::new(&mut file);
-            muxer.handle_file_type(file_type()).await.unwrap();
-            muxer.handle_movie(unfragmented_movie()).await.unwrap();
+            let mut mux_driver = isobmff_io::MuxDriver::new(&mut file, NonFragmentedMuxFsm::new());
+            let mux_fsm = mux_driver.fsm_mut();
+            mux_fsm.handle_file_type(file_type()).unwrap();
+            mux_fsm.handle_movie(unfragmented_movie()).unwrap();
             for chunk in SAMPLE_CHUNKS {
-                muxer.begin_chunk().await.unwrap();
+                mux_fsm.begin_chunk().unwrap();
                 for _sample in chunk {
-                    muxer.handle_sample(samples.next().unwrap()).await.unwrap();
+                    mux_fsm.handle_sample(samples.next().unwrap()).unwrap();
                 }
             }
-            muxer.finish().await.unwrap();
+            mux_fsm.finish().unwrap();
+            mux_driver.flush().await.unwrap();
 
             let mut driver =
                 isobmff_io::DemuxDriver::new(Cursor::new(&file), NonFragmentedDemuxFsm::new())

@@ -78,15 +78,17 @@ mod tests {
         let mut file = Vec::new();
 
         let read_back = block_on(async {
-            let mut muxer = isobmff_io::FragmentedMuxer::new(&mut file);
-            muxer.handle_file_type(file_type()).await.unwrap();
-            muxer.handle_movie(presentation_movie()).await.unwrap();
-            muxer.begin_fragment(1).await.unwrap();
+            let mut mux_driver = isobmff_io::MuxDriver::new(&mut file, FragmentedMuxFsm::new());
+            let mux_fsm = mux_driver.fsm_mut();
+            mux_fsm.handle_file_type(file_type()).unwrap();
+            mux_fsm.handle_movie(presentation_movie()).unwrap();
+            mux_fsm.begin_fragment(1).unwrap();
             for sample in fragmented_file_samples() {
-                muxer.handle_sample(sample).await.unwrap();
+                mux_fsm.handle_sample(sample).unwrap();
             }
-            muxer.finish_fragment().await.unwrap();
-            muxer.finish().await.unwrap();
+            mux_fsm.finish_fragment().unwrap();
+            mux_fsm.finish().unwrap();
+            mux_driver.flush().await.unwrap();
 
             let mut driver =
                 isobmff_io::DemuxDriver::new(Cursor::new(&file), FragmentedDemuxFsm::new())

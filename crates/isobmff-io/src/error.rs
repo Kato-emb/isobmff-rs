@@ -1,12 +1,12 @@
-//! [`Error`], the reason a file does not read or write through a demuxer or a muxer
+//! [`Error`], the reason a file does not read or write through a demux or a mux driver
 
 use core::error;
 use core::fmt;
 use std::io;
 
-/// Reason a file does not read or write through a demuxer or a muxer
+/// Reason a file does not read or write through a demux or a mux driver
 ///
-/// A demuxer or a muxer holds no rule of its own, so what went wrong is one of
+/// A driver holds no rule of its own, so what went wrong is one of
 /// two failures carried through whole rather than translated: the source or
 /// the sink failed, which [`io_error`](Self::io_error) holds as `std::io`
 /// reports it, or the layers the file is read or written through refused it,
@@ -120,9 +120,9 @@ impl error::Error for Error {
     }
 }
 
-/// What a failure of reading or writing a file through a demuxer or a muxer is
+/// What a failure of reading or writing a file through a demux or a mux driver is
 ///
-/// A demuxer or a muxer names no failure of its own: each kind carries the
+/// A driver names no failure of its own: each kind carries the
 /// kind of the failure beneath, so a caller reads what went wrong in one
 /// step. Where the failures may come from is added to as the drivers are, so a
 /// match on this must leave room for kinds that are not here yet.

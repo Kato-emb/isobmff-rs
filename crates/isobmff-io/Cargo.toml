@@ -1,7 +1,7 @@
 [package]
 name = "isobmff-io"
 version = "0.0.0"
-description = "Demuxers and muxers driving the readers and writers of an ISO base media file over an I/O"
+description = "Drivers running the demux and mux FSMs of an ISO base media file over an I/O"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true

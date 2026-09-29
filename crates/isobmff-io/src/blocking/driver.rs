@@ -5,10 +5,11 @@ use alloc::vec::Vec;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
 use isobmff_sample::Sample;
-use isobmff_sequence::EventBytes;
 
 use crate::Error;
-use crate::stack::{CUT_LENGTH, ClosingMovieFragmentRandomAccessOffset, Demux, Mux, Request};
+use crate::stack::{
+    CUT_LENGTH, ClosingMovieFragmentRandomAccessOffset, Demux, InFlight, Mux, Request,
+};
 
 /// Drives a demux FSM over a source that seeks, and yields the samples it completes
 ///
@@ -302,7 +303,7 @@ impl<S: Read + Seek, D: Demux> Iterator for DemuxDriver<S, D> {
 pub struct MuxDriver<S, W> {
     sink: S,
     fsm: W,
-    in_flight: Option<(EventBytes, usize)>,
+    in_flight: InFlight,
 }
 
 impl<S: Write, W: Mux> MuxDriver<S, W> {
@@ -312,7 +313,7 @@ impl<S: Write, W: Mux> MuxDriver<S, W> {
         Self {
             sink,
             fsm,
-            in_flight: None,
+            in_flight: InFlight::new(),
         }
     }
 
@@ -336,24 +337,9 @@ impl<S: Write, W: Mux> MuxDriver<S, W> {
     ///   none of it ([`WriteZero`](std::io::ErrorKind::WriteZero)), or does
     ///   not flush.
     pub fn flush(&mut self) -> Result<(), Error> {
-        loop {
-            if self.in_flight.is_none() {
-                self.in_flight = self.fsm.poll_output().map(|chunk| (chunk, 0));
-            }
-            let Some((chunk, taken)) = &mut self.in_flight else {
-                break;
-            };
-            let Some(rest) = chunk.get(*taken..).filter(|rest| !rest.is_empty()) else {
-                self.in_flight = None;
-
-                continue;
-            };
-            match self.sink.write(rest) {
-                Err(failure) if failure.kind() == io::ErrorKind::Interrupted => {}
-                Ok(0) => return Err(io::Error::from(io::ErrorKind::WriteZero).into()),
-                Ok(written) => *taken = taken.saturating_add(written),
-                Err(failure) => return Err(failure.into()),
-            }
+        while let Some(rest) = self.in_flight.rest(&mut self.fsm) {
+            let written = self.sink.write(rest);
+            self.in_flight.took(written)?;
         }
         self.sink.flush()?;
 
