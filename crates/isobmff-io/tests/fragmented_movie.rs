@@ -56,12 +56,14 @@ mod tests {
     #[test]
     fn an_asynchronous_source_that_seeks_has_every_sample_read_off_it() {
         let read_back = block_on(async {
-            let mut demuxer =
-                isobmff_io::FragmentedDemuxer::new(Cursor::new(fragmented_file_with_samples()))
-                    .await
-                    .unwrap();
+            let mut driver = isobmff_io::DemuxDriver::new(
+                Cursor::new(fragmented_file_with_samples()),
+                FragmentedDemuxFsm::new(),
+            )
+            .await
+            .unwrap();
             let mut read_back = Vec::new();
-            while let Some(sample) = demuxer.next().await {
+            while let Some(sample) = driver.next().await {
                 read_back.push(sample.unwrap());
             }
 
@@ -86,11 +88,12 @@ mod tests {
             muxer.finish_fragment().await.unwrap();
             muxer.finish().await.unwrap();
 
-            let mut demuxer = isobmff_io::FragmentedDemuxer::new(Cursor::new(&file))
-                .await
-                .unwrap();
+            let mut driver =
+                isobmff_io::DemuxDriver::new(Cursor::new(&file), FragmentedDemuxFsm::new())
+                    .await
+                    .unwrap();
             let mut read_back = Vec::new();
-            while let Some(sample) = demuxer.next().await {
+            while let Some(sample) = driver.next().await {
                 read_back.push(sample.unwrap());
             }
 
@@ -133,34 +136,40 @@ mod tests {
     }
 
     #[test]
-    fn the_mfra_an_asynchronous_demuxer_finds_at_the_end_of_the_file_names_the_fragment_a_time_is_read_from()
+    fn the_mfra_an_asynchronous_demux_driver_finds_at_the_end_of_the_file_names_the_fragment_a_time_is_read_from()
      {
         let file = indexed_fragmented_file();
         let second = file.fragment_samples.get(1).unwrap();
 
         let read_back = block_on(async {
-            let mut demuxer = isobmff_io::FragmentedDemuxer::new(Cursor::new(file.bytes.clone()))
-                .await
-                .unwrap();
-            demuxer.next().await.unwrap().unwrap();
+            let mut driver = isobmff_io::DemuxDriver::new(
+                Cursor::new(file.bytes.clone()),
+                FragmentedDemuxFsm::new(),
+            )
+            .await
+            .unwrap();
+            driver.next().await.unwrap().unwrap();
 
-            let mfra = demuxer
+            let mfra = driver
                 .locate_movie_fragment_random_access()
                 .await
                 .unwrap()
                 .unwrap();
-            demuxer.resume_at(mfra).await.unwrap();
-            assert!(demuxer.next().await.is_none());
-            let tfra = demuxer
+            driver.fsm_mut().resume_at(mfra).unwrap();
+            assert!(driver.next().await.is_none());
+            let tfra = driver
+                .fsm()
                 .movie_fragment_random_access()
                 .unwrap()
                 .tfra()
                 .first()
                 .unwrap();
-            let sync_sample = sync_sample_at(tfra, second.first().unwrap().decode_time()).unwrap();
-            demuxer.resume_at(sync_sample.moof_offset()).await.unwrap();
+            let moof_offset = sync_sample_at(tfra, second.first().unwrap().decode_time())
+                .unwrap()
+                .moof_offset();
+            driver.fsm_mut().resume_at(moof_offset).unwrap();
             let mut read_back = Vec::new();
-            while let Some(sample) = demuxer.next().await {
+            while let Some(sample) = driver.next().await {
                 read_back.push(sample.unwrap());
             }
 

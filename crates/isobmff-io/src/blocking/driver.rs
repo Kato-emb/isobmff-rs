@@ -4,13 +4,11 @@ use alloc::vec;
 use alloc::vec::Vec;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
-use isobmff_boxes::MovieFragmentRandomAccessOffsetBox;
-use isobmff_core::BoxDecode;
 use isobmff_sample::Sample;
 use isobmff_sequence::EventBytes;
 
 use crate::Error;
-use crate::stack::{CUT_LENGTH, Demux, Mux};
+use crate::stack::{CUT_LENGTH, ClosingMovieFragmentRandomAccessOffset, Demux, Mux, Request};
 
 /// Drives a demux FSM over a source that seeks, and yields the samples it completes
 ///
@@ -186,19 +184,15 @@ impl<S: Read + Seek, D: Demux> DemuxDriver<S, D> {
             .source
             .seek(SeekFrom::End(0))?
             .saturating_sub(self.origin);
-        let mut mfro = [0; 16];
-        let Some(mfro_start) = file_len.checked_sub(mfro.len() as u64) else {
+        let Some(closing) = ClosingMovieFragmentRandomAccessOffset::of(file_len) else {
             return Ok(None);
         };
-        // Why not checked_add: the sum is where the source reported its end
-        // less the length of an `mfro`, so it lies within 64 bits.
         self.source
-            .seek(SeekFrom::Start(self.origin.saturating_add(mfro_start)))?;
+            .seek(SeekFrom::Start(closing.position(self.origin)))?;
+        let mut mfro = [0; ClosingMovieFragmentRandomAccessOffset::LEN];
         self.source.read_exact(&mut mfro)?;
 
-        Ok(MovieFragmentRandomAccessOffsetBox::decode(&mfro)
-            .ok()
-            .and_then(|(mfro, _)| mfro.movie_fragment_random_access_start(file_len)))
+        Ok(closing.movie_fragment_random_access_start(&mfro))
     }
 
     /// Reads up to `length` bytes of the file at `offset` into the buffer, seeking the source there unless it stands there, and returns how many came
@@ -233,36 +227,17 @@ impl<S: Read + Seek, D: Demux> Iterator for DemuxDriver<S, D> {
             if let Some(sample) = self.fsm.poll_sample() {
                 return Some(Ok(sample));
             }
-            let handed = if let Some(wanted) = self.fsm.wanted_extent() {
-                let length = usize::try_from(wanted.end.saturating_sub(wanted.start))
-                    .map_or(CUT_LENGTH, |length| length.min(CUT_LENGTH));
-                match self.read_at(wanted.start, length) {
-                    Err(failure) => Err(failure.into()),
-                    Ok(0) => Err(io::Error::from(io::ErrorKind::UnexpectedEof).into()),
-                    Ok(read) => self
-                        .fsm
-                        .handle_data(wanted.start, self.buffer.get(..read).unwrap_or_default())
-                        .map_err(Error::from),
-                }
-            } else {
-                match self.read_at(self.fsm.input_offset(), CUT_LENGTH) {
-                    Err(failure) => Err(failure.into()),
-                    Ok(0) => match self.fsm.finish() {
-                        Err(failure)
-                            if failure.kind() == isobmff_structure::ErrorKind::AlreadyFinished =>
-                        {
-                            return None;
-                        }
-                        finished => finished.map_err(Error::from),
-                    },
-                    Ok(read) => self
-                        .fsm
-                        .handle_input(self.buffer.get(..read).unwrap_or_default())
-                        .map_err(Error::from),
-                }
-            };
-            if let Err(failure) = handed {
-                return Some(self.fsm.poll_sample().ok_or(failure));
+            let request = Request::of(&self.fsm);
+            let handed = self
+                .read_at(request.offset, request.length)
+                .map_err(Error::from)
+                .and_then(|read| {
+                    request.hand_over(&mut self.fsm, self.buffer.get(..read).unwrap_or_default())
+                });
+            match handed {
+                Ok(true) => {}
+                Ok(false) => return None,
+                Err(failure) => return Some(self.fsm.poll_sample().ok_or(failure)),
             }
         }
     }
@@ -409,7 +384,6 @@ mod tests {
     use super::{CUT_LENGTH, DemuxDriver, MuxDriver};
 
     use crate::ErrorKind;
-    use crate::stack::ResumeSamples;
     use crate::stack::tests::{Queued, Scripted, framed, sample};
 
     /// What a source was asked to do

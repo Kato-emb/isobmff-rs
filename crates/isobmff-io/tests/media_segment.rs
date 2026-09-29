@@ -56,14 +56,14 @@ mod tests {
     #[test]
     fn an_asynchronous_source_that_seeks_has_every_sample_read_off_it() {
         let read_back = block_on(async {
-            let mut demuxer = isobmff_io::MediaSegmentDemuxer::new(
+            let mut driver = isobmff_io::DemuxDriver::new(
                 Cursor::new(segment_file_with_samples()),
-                presentation_movie(),
+                MediaSegmentDemuxFsm::new(presentation_movie()),
             )
             .await
             .unwrap();
             let mut read_back = Vec::new();
-            while let Some(sample) = demuxer.next().await {
+            while let Some(sample) = driver.next().await {
                 read_back.push(sample.unwrap());
             }
 
@@ -87,12 +87,14 @@ mod tests {
             muxer.finish_fragment().await.unwrap();
             muxer.finish().await.unwrap();
 
-            let mut demuxer =
-                isobmff_io::MediaSegmentDemuxer::new(Cursor::new(&segment), presentation_movie())
-                    .await
-                    .unwrap();
+            let mut driver = isobmff_io::DemuxDriver::new(
+                Cursor::new(&segment),
+                MediaSegmentDemuxFsm::new(presentation_movie()),
+            )
+            .await
+            .unwrap();
             let mut read_back = Vec::new();
-            while let Some(sample) = demuxer.next().await {
+            while let Some(sample) = driver.next().await {
                 read_back.push(sample.unwrap());
             }
 
@@ -131,30 +133,34 @@ mod tests {
     }
 
     #[test]
-    fn the_sidx_an_asynchronous_demuxer_read_in_order_names_the_subsegment_a_time_is_read_from() {
+    fn the_sidx_an_asynchronous_demux_driver_read_in_order_names_the_subsegment_a_time_is_read_from()
+     {
         let file = indexed_segment_file();
         let second = file.fragment_samples.get(1).unwrap();
 
         let read_back = block_on(async {
-            let mut demuxer = isobmff_io::MediaSegmentDemuxer::new(
+            let mut driver = isobmff_io::DemuxDriver::new(
                 Cursor::new(file.bytes.clone()),
-                presentation_movie(),
+                MediaSegmentDemuxFsm::new(presentation_movie()),
             )
             .await
             .unwrap();
-            while let Some(sample) = demuxer.next().await {
+            while let Some(sample) = driver.next().await {
                 sample.unwrap();
             }
 
-            let subsegment = demuxer
+            let subsegment_start = driver
+                .fsm()
                 .segment_indexes()
                 .first()
                 .unwrap()
                 .subsegment_at(second.first().unwrap().decode_time())
-                .unwrap();
-            demuxer.resume_at(subsegment.extent().start).await.unwrap();
+                .unwrap()
+                .extent()
+                .start;
+            driver.fsm_mut().resume_at(subsegment_start).unwrap();
             let mut read_back = Vec::new();
-            while let Some(sample) = demuxer.next().await {
+            while let Some(sample) = driver.next().await {
                 read_back.push(sample.unwrap());
             }
 
