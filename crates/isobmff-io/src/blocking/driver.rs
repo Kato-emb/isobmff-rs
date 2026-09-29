@@ -41,8 +41,9 @@ use crate::stack::{CUT_LENGTH, Demux, PollOutput};
 ///   [`UnexpectedEof`](std::io::ErrorKind::UnexpectedEof): the file was read
 ///   past that offset before, so the source has shrunk since.
 /// * A failure of the source leaves the FSM as it was, and the next call
-///   makes the same read again. A failure of the FSM is the FSM's to report
-///   again for every call after it, as its contract has it.
+///   makes the same read again. A failure of the FSM comes after the samples
+///   it completed before failing, and is the FSM's to report again for every
+///   call after it, as its contract has it.
 /// * The FSM is reached between samples through [`fsm_mut`](Self::fsm_mut):
 ///   the `resume_at` of
 ///   [`FragmentedDemuxFsm`](isobmff_structure::FragmentedDemuxFsm::resume_at)
@@ -258,7 +259,7 @@ impl<S: Read + Seek, D: Demux> Iterator for DemuxDriver<S, D> {
                 }
             };
             if let Err(failure) = handed {
-                return Some(Err(failure));
+                return Some(self.fsm.poll_sample().ok_or(failure));
             }
         }
     }
@@ -736,6 +737,34 @@ mod tests {
                 1,
                 b"SAMP".to_vec()
             )]
+        );
+    }
+
+    #[test]
+    fn the_samples_a_read_completes_before_the_fsm_fails_on_it_come_before_the_failure() {
+        let mut file = non_fragmented_file(&[&[b"SAMP"]], true);
+        file.extend_from_slice(b"\0\0\0\x04free");
+        let mut driver =
+            DemuxDriver::new(io::Cursor::new(file), NonFragmentedDemuxFsm::new()).unwrap();
+
+        assert_eq!(
+            [next_yielded(&mut driver), next_yielded(&mut driver)],
+            [
+                Some(Ok(Sample::new(
+                    1,
+                    0,
+                    SAMPLE_DURATION,
+                    0,
+                    SampleFlags::ZERO,
+                    1,
+                    b"SAMP".to_vec()
+                ))),
+                Some(Err(ErrorKind::Structure(
+                    isobmff_structure::ErrorKind::Sequence(isobmff_sequence::ErrorKind::Box(
+                        isobmff_core::ErrorKind::SizeBelowHeader
+                    ))
+                ))),
+            ]
         );
     }
 
