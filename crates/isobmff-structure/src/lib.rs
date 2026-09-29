@@ -61,12 +61,13 @@
 //! 6. **Stack.** [`FragmentedDemuxFsm`], [`FragmentedMuxFsm`],
 //!    [`NonFragmentedDemuxFsm`], [`NonFragmentedMuxFsm`], [`MediaSegmentDemuxFsm`]
 //!    and [`MediaSegmentMuxFsm`] wire layers 1 to 5 into one machine per
-//!    structure and direction. A stack holds no failure kind of its own, and
-//!    no rule but where the input it takes in order stands: of what layer 4
-//!    wants, a demux FSM names only the extents that input has passed by. It
-//!    passes every value between the layers, so a caller hands over bytes and
-//!    takes samples, or hands over samples and takes bytes, and never sees
-//!    one. Every offset above the framing is a file offset —
+//!    structure and direction. A stack holds no failure kind of its own and
+//!    one rule: a demux FSM keeps where the input it takes in order stands,
+//!    and of what layer 4 wants names only an extent whose start that input
+//!    has passed. It passes every value between the layers, so a caller
+//!    hands over bytes and takes samples, or hands over samples and takes
+//!    bytes, and never sees one. Every offset above the framing is a file
+//!    offset —
 //!    the extents the framing reports, counted from the first byte of the
 //!    file or from the offset the stack last resumed at, the chunk offsets and base data offsets the boxes declare
 //!    (§8.7.5, §8.8.7) — and no layer here knows any other.

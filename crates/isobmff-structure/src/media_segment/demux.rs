@@ -24,10 +24,10 @@ use crate::{Error, InOrderPosition, WholeBoxReader};
 /// the resolution of each fragment against the movie into the extents of its
 /// samples, and the gathering of those samples out of the media data. The
 /// movie is the caller's to hand over, since the segment carries none. It
-/// holds no rule of its own but one: of what the samples want, it names only
-/// what the input has passed by. A caller hands over bytes and takes
-/// [`Sample`]s. It reaches for no source of its own: when to read and from
-/// where stay with the caller.
+/// holds no rule of its own but one: of the bytes the samples still lack, it
+/// names only those whose start the segment handed over in order has passed.
+/// A caller hands over bytes and takes [`Sample`]s. It reaches for no source
+/// of its own: when to read and from where stay with the caller.
 ///
 /// # Contract
 ///
@@ -73,8 +73,8 @@ use crate::{Error, InOrderPosition, WholeBoxReader};
 ///   fragment in the order they lie in it, whatever order the fragment
 ///   declares them in and wherever the input is cut.
 ///   [`wanted_extent`](Self::wanted_extent) names what the extent at the
-///   front of those held still lacks only where the input has passed it by,
-///   which a segment handed over in order never has.
+///   front of those held still lacks only once the input has passed its
+///   start, which a segment whose fragments precede their media data never has.
 /// * An `Err` leaves the reader failed for good,
 ///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The samples completed
@@ -291,8 +291,8 @@ impl MediaSegmentDemuxFsm {
     /// Returns the bytes the extent at the front of those held still lacks, once the input has passed its start
     ///
     /// An extent starting at or after [`input_offset`](Self::input_offset) is
-    /// not named: the segment handed over in order brings its bytes. A
-    /// fragment precedes the media data it addresses, so a segment handed
+    /// not named: the segment handed over in order brings its bytes. Where
+    /// each fragment precedes the media data it addresses, a segment handed
     /// over in order has none named. A fragment addressing media data lying
     /// before it (§8.8.7 has a base data offset name any byte of the segment)
     /// names bytes already passed by, which a caller that can seek fetches

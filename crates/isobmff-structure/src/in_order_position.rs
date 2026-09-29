@@ -50,12 +50,17 @@ mod tests {
     use super::InOrderPosition;
 
     #[test]
-    fn only_a_want_starting_before_the_input_is_passed() {
+    fn a_want_is_named_only_where_it_starts_before_the_input_offset() {
         let mut position = InOrderPosition::new();
         position.advance(10);
 
-        assert_eq!(position.passed(Some(9..20)), Some(9..20));
-        assert_eq!(position.passed(Some(10..20)), None);
-        assert_eq!(position.passed(None), None);
+        assert_eq!(
+            [
+                position.passed(Some(9..20)),
+                position.passed(Some(10..20)),
+                position.passed(None)
+            ],
+            [Some(9..20), None, None]
+        );
     }
 }

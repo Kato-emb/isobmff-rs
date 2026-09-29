@@ -19,10 +19,10 @@ use crate::{Error, InOrderPosition, WholeBoxReader};
 /// that says what each top-level box is, the reading of the boxes it names
 /// into values, the resolution of the sample tables of the movie into the
 /// extents of its samples, and the gathering of those samples out of the
-/// media data. It holds no rule of its own but one: of what the samples
-/// want, it names only what the input has passed by. A caller hands over
-/// bytes and takes [`Sample`]s. It reaches for no source of its own: when to
-/// read and from where stay with the caller.
+/// media data. It holds no rule of its own but one: of the bytes the samples
+/// still lack, it names only those whose start the file handed over in order
+/// has passed. A caller hands over bytes and takes [`Sample`]s. It reaches for
+/// no source of its own: when to read and from where stay with the caller.
 ///
 /// # Contract
 ///
@@ -53,9 +53,10 @@ use crate::{Error, InOrderPosition, WholeBoxReader};
 ///   in the order the file lays them down. Media data arriving before the
 ///   movie is dropped, since no sample has claimed it yet, so a movie lying
 ///   after its media data completes no sample by itself: from then on
-///   [`wanted_extent`](Self::wanted_extent) names the bytes the extent at
-///   the front of those held still lacks, for a caller that can seek to
-///   fetch and hand to [`handle_data`](Self::handle_data).
+///   [`wanted_extent`](Self::wanted_extent) names, once the input has passed
+///   its start, the bytes the extent at the front of those held still lacks,
+///   for a caller that can seek to fetch and hand to
+///   [`handle_data`](Self::handle_data).
 /// * An `Err` leaves the reader failed for good,
 ///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The samples completed
