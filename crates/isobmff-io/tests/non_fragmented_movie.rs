@@ -97,11 +97,12 @@ mod tests {
             let file = non_fragmented_file(&SAMPLE_CHUNKS, movie_first);
 
             let read_back = block_on(async {
-                let mut demuxer = isobmff_io::NonFragmentedDemuxer::new(Cursor::new(file))
-                    .await
-                    .unwrap();
+                let mut driver =
+                    isobmff_io::DemuxDriver::new(Cursor::new(file), NonFragmentedDemuxFsm::new())
+                        .await
+                        .unwrap();
                 let mut read_back = Vec::new();
-                while let Some(sample) = demuxer.next().await {
+                while let Some(sample) = driver.next().await {
                     read_back.push(sample.unwrap());
                 }
 
@@ -129,11 +130,12 @@ mod tests {
             }
             muxer.finish().await.unwrap();
 
-            let mut demuxer = isobmff_io::NonFragmentedDemuxer::new(Cursor::new(&file))
-                .await
-                .unwrap();
+            let mut driver =
+                isobmff_io::DemuxDriver::new(Cursor::new(&file), NonFragmentedDemuxFsm::new())
+                    .await
+                    .unwrap();
             let mut read_back = Vec::new();
-            while let Some(sample) = demuxer.next().await {
+            while let Some(sample) = driver.next().await {
                 read_back.push(sample.unwrap());
             }
 

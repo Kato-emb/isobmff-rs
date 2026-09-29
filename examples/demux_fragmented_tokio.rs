@@ -7,7 +7,8 @@
 use core::error::Error;
 use std::env;
 
-use isobmff::io::FragmentedDemuxer;
+use isobmff::io::DemuxDriver;
+use isobmff::structure::FragmentedDemuxFsm;
 use tokio::fs::File;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
@@ -17,10 +18,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .nth(1)
         .ok_or("usage: demux_fragmented_tokio <in.mp4>")?;
 
-    let mut demuxer = FragmentedDemuxer::new(File::open(path).await?.compat()).await?;
+    let mut driver =
+        DemuxDriver::new(File::open(path).await?.compat(), FragmentedDemuxFsm::new()).await?;
 
     let mut count: u64 = 0;
-    while let Some(sample) = demuxer.next().await {
+    while let Some(sample) = driver.next().await {
         let sample = sample?;
         println!(
             "track={} time={} size={} sync={}",
