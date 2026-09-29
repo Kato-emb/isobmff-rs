@@ -53,4 +53,63 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn the_input_stands_after_the_bytes_handed_over_so_far() {
+        let file = non_fragmented_file(&SAMPLE_CHUNKS, true);
+        let mut demux_fsm = NonFragmentedDemuxFsm::new();
+
+        let created = demux_fsm.input_offset();
+        demux_fsm.handle_input(&file).unwrap();
+
+        assert_eq!(
+            [created, demux_fsm.input_offset()],
+            [0, u64::try_from(file.len()).unwrap()]
+        );
+    }
+
+    #[test]
+    fn a_movie_before_its_media_data_names_nothing_wanted_however_the_file_is_cut() {
+        let file = non_fragmented_file(&SAMPLE_CHUNKS, true);
+
+        for cut_length in [1, 3, 7, 64, file.len()] {
+            let mut demux_fsm = NonFragmentedDemuxFsm::new();
+            let mut wanted = Vec::new();
+            let mut samples = Vec::new();
+            for arriving in file.chunks(cut_length) {
+                demux_fsm.handle_input(arriving).unwrap();
+                wanted.extend(demux_fsm.wanted_extent());
+                while let Some(sample) = demux_fsm.poll_sample() {
+                    samples.push(sample);
+                }
+            }
+
+            assert_eq!(
+                (wanted, samples),
+                (Vec::new(), non_fragmented_file_samples())
+            );
+        }
+    }
+
+    #[test]
+    fn a_movie_after_its_media_data_names_each_sample_it_lacks_once_in_turn() {
+        let file = non_fragmented_file(&SAMPLE_CHUNKS, false);
+        let mut demux_fsm = NonFragmentedDemuxFsm::new();
+        handed_over_in_order(&mut demux_fsm, &file, 7);
+
+        let mut wanted = Vec::new();
+        while let Some(extent) = demux_fsm.wanted_extent() {
+            let bytes = fetched(&file, &extent);
+            demux_fsm.handle_data(extent.start, bytes).unwrap();
+            wanted.push(bytes);
+        }
+
+        assert_eq!(
+            wanted,
+            SAMPLE_CHUNKS
+                .iter()
+                .flat_map(|chunk| chunk.iter().copied())
+                .collect::<Vec<_>>()
+        );
+    }
 }

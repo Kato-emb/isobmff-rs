@@ -86,4 +86,32 @@ mod tests {
             segment.fragment_samples.get(1).unwrap()
         );
     }
+
+    #[test]
+    fn the_input_stands_after_the_bytes_handed_over_since_the_reading_last_started() {
+        let segment = indexed_segment_file();
+        let second = *segment.moof_offsets.get(1).unwrap();
+        let mut demux_fsm = MediaSegmentDemuxFsm::new(presentation_movie());
+
+        let created = demux_fsm.input_offset();
+        demux_fsm
+            .handle_input(segment.bytes.get(..10).unwrap())
+            .unwrap();
+        let handed = demux_fsm.input_offset();
+        demux_fsm.resume_at(second).unwrap();
+        let resumed = demux_fsm.input_offset();
+        demux_fsm
+            .handle_input(
+                segment
+                    .bytes
+                    .get(usize::try_from(second).unwrap()..)
+                    .unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            [created, handed, resumed, demux_fsm.input_offset()],
+            [0, 10, second, u64::try_from(segment.bytes.len()).unwrap()]
+        );
+    }
 }

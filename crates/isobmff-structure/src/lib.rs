@@ -61,10 +61,12 @@
 //! 6. **Stack.** [`FragmentedDemuxFsm`], [`FragmentedMuxFsm`],
 //!    [`NonFragmentedDemuxFsm`], [`NonFragmentedMuxFsm`], [`MediaSegmentDemuxFsm`]
 //!    and [`MediaSegmentMuxFsm`] wire layers 1 to 5 into one machine per
-//!    structure and direction. A stack holds no rule and no failure kind of
-//!    its own: it passes every value between the layers, so a caller hands
-//!    over bytes and takes samples, or hands over samples and takes bytes,
-//!    and never sees one. Every offset above the framing is a file offset —
+//!    structure and direction. A stack holds no failure kind of its own, and
+//!    no rule but where the input it takes in order stands: of what layer 4
+//!    wants, a demux FSM names only the extents that input has passed by. It
+//!    passes every value between the layers, so a caller hands over bytes and
+//!    takes samples, or hands over samples and takes bytes, and never sees
+//!    one. Every offset above the framing is a file offset —
 //!    the extents the framing reports, counted from the first byte of the
 //!    file or from the offset the stack last resumed at, the chunk offsets and base data offsets the boxes declare
 //!    (§8.7.5, §8.8.7) — and no layer here knows any other.
@@ -97,6 +99,7 @@ extern crate alloc;
 
 mod error;
 mod fragmented_movie;
+mod in_order_position;
 mod media_segment;
 mod non_fragmented_movie;
 mod whole_box;
@@ -106,4 +109,5 @@ pub use fragmented_movie::{FragmentedDemuxFsm, FragmentedMuxFsm};
 pub use media_segment::{MediaSegmentDemuxFsm, MediaSegmentMuxFsm};
 pub use non_fragmented_movie::{NonFragmentedDemuxFsm, NonFragmentedMuxFsm};
 
+pub(crate) use in_order_position::InOrderPosition;
 pub(crate) use whole_box::{WholeBoxReader, compact_box_header, whole_box_header, whole_payload};

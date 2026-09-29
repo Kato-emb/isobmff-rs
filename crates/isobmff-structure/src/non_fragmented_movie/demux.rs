@@ -8,7 +8,7 @@ use isobmff_sample::{Sample, SampleReader};
 use isobmff_sequence::{BoxEvent, BoxReader};
 
 use super::{NonFragmentedDisposition, NonFragmentedStructure};
-use crate::{Error, WholeBoxReader};
+use crate::{Error, InOrderPosition, WholeBoxReader};
 
 /// Reads the samples a non-fragmented movie file carries, taking it as it arrives
 ///
@@ -19,9 +19,9 @@ use crate::{Error, WholeBoxReader};
 /// that says what each top-level box is, the reading of the boxes it names
 /// into values, the resolution of the sample tables of the movie into the
 /// extents of its samples, and the gathering of those samples out of the
-/// media data. It holds no rule of its own; a caller hands over bytes and
-/// takes [`Sample`]s. It reaches for no source of its own: when to read and
-/// from where stay with the caller.
+/// media data. It holds no rule of its own but where the input stands; a
+/// caller hands over bytes and takes [`Sample`]s. It reaches for no source
+/// of its own: when to read and from where stay with the caller.
 ///
 /// # Contract
 ///
@@ -102,6 +102,7 @@ use crate::{Error, WholeBoxReader};
 #[derive(Debug)]
 pub struct NonFragmentedDemuxFsm {
     boxes: BoxReader,
+    position: InOrderPosition,
     structure: NonFragmentedStructure,
     samples: SampleReader,
     open: Option<Open>,
@@ -169,6 +170,7 @@ impl NonFragmentedDemuxFsm {
     pub const fn with_limits(payload_limit: u64, sample_size_limit: u64) -> Self {
         Self {
             boxes: BoxReader::new(),
+            position: InOrderPosition::new(),
             structure: NonFragmentedStructure::new(),
             samples: SampleReader::with_sample_size_limit(sample_size_limit),
             open: None,
@@ -205,6 +207,7 @@ impl NonFragmentedDemuxFsm {
     ///   again for every call after it.
     pub fn handle_input(&mut self, input: &[u8]) -> Result<(), Error> {
         self.reading()?;
+        self.position.advance(input.len());
 
         // Why not failing before the events are read: the framing keeps the
         // events it made before failing, and the samples they complete are
@@ -249,15 +252,24 @@ impl NonFragmentedDemuxFsm {
         self.samples.poll_sample()
     }
 
-    /// Returns the bytes the extent at the front of those held still lacks, if any is held
+    /// Returns the bytes the extent at the front of those held still lacks, once the input has passed its start
     ///
-    /// A movie lying before its media data names bytes still to arrive, which a
-    /// caller handing the file over in order meets as they come; one lying
-    /// after it names bytes already passed by, which a caller that can seek
-    /// fetches and hands to [`handle_data`](Self::handle_data).
+    /// An extent starting at or after [`input_offset`](Self::input_offset) is
+    /// not named: the file handed over in order brings its bytes. A movie
+    /// lying before its media data has none named; one lying after it names
+    /// bytes already passed by, which a caller that can seek fetches and
+    /// hands to [`handle_data`](Self::handle_data).
     #[must_use]
     pub fn wanted_extent(&self) -> Option<Range<u64>> {
-        self.samples.wanted_extent()
+        self.position.passed(self.samples.wanted_extent())
+    }
+
+    /// Returns the file offset the next byte handed to [`handle_input`](Self::handle_input) lies at
+    ///
+    /// It is the number of bytes handed over in order so far.
+    #[must_use]
+    pub const fn input_offset(&self) -> u64 {
+        self.position.offset()
     }
 
     /// Returns the brands the file declares itself readable as, once they have arrived

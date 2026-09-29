@@ -11,7 +11,7 @@ use isobmff_sample::{Sample, SampleReader, SegmentIndex, TrackDecodeTimes};
 use isobmff_sequence::{BoxEvent, BoxReader};
 
 use super::{MediaSegmentDisposition, MediaSegmentStructure};
-use crate::{Error, WholeBoxReader};
+use crate::{Error, InOrderPosition, WholeBoxReader};
 
 /// Reads the samples a media segment carries, taking it as it arrives
 ///
@@ -24,9 +24,9 @@ use crate::{Error, WholeBoxReader};
 /// the resolution of each fragment against the movie into the extents of its
 /// samples, and the gathering of those samples out of the media data. The
 /// movie is the caller's to hand over, since the segment carries none. It
-/// holds no rule of its own; a caller hands over bytes and takes
-/// [`Sample`]s. It reaches for no source of its own: when to read and from
-/// where stay with the caller.
+/// holds no rule of its own but where the input stands; a caller hands over
+/// bytes and takes [`Sample`]s. It reaches for no source of its own: when to
+/// read and from where stay with the caller.
 ///
 /// # Contract
 ///
@@ -71,9 +71,9 @@ use crate::{Error, WholeBoxReader};
 ///   their bytes, so a segment handed over in order yields the samples of each
 ///   fragment in the order they lie in it, whatever order the fragment
 ///   declares them in and wherever the input is cut.
-///   [`wanted_extent`](Self::wanted_extent) names the bytes the extent at the
-///   front of those held still lacks, which a caller handing the segment
-///   over in order meets as they come.
+///   [`wanted_extent`](Self::wanted_extent) names what the extent at the
+///   front of those held still lacks only where the input has passed it by,
+///   which a segment handed over in order never has.
 /// * An `Err` leaves the reader failed for good,
 ///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The samples completed
@@ -129,7 +129,7 @@ use crate::{Error, WholeBoxReader};
 #[derive(Debug)]
 pub struct MediaSegmentDemuxFsm {
     boxes: BoxReader,
-    base: u64,
+    position: InOrderPosition,
     structure: MediaSegmentStructure,
     samples: SampleReader,
     decode_times: TrackDecodeTimes,
@@ -204,7 +204,7 @@ impl MediaSegmentDemuxFsm {
     pub const fn with_limits(movie: MovieBox, payload_limit: u64, sample_size_limit: u64) -> Self {
         Self {
             boxes: BoxReader::new(),
-            base: 0,
+            position: InOrderPosition::new(),
             structure: MediaSegmentStructure::new(),
             samples: SampleReader::with_sample_size_limit(sample_size_limit),
             decode_times: TrackDecodeTimes::new(),
@@ -242,6 +242,7 @@ impl MediaSegmentDemuxFsm {
     ///   again for every call after it.
     pub fn handle_input(&mut self, input: &[u8]) -> Result<(), Error> {
         self.reading()?;
+        self.position.advance(input.len());
 
         // Why not failing before the events are read: the framing keeps the
         // events it made before failing, and the samples they complete are
@@ -286,17 +287,27 @@ impl MediaSegmentDemuxFsm {
         self.samples.poll_sample()
     }
 
-    /// Returns the bytes the extent at the front of those held still lacks, if any is held
+    /// Returns the bytes the extent at the front of those held still lacks, once the input has passed its start
     ///
-    /// A fragment precedes the media data it addresses, so a caller handing the
-    /// segment over in order meets every extent as it comes: what this names
-    /// is media data still to arrive. A fragment addressing media data lying
+    /// An extent starting at or after [`input_offset`](Self::input_offset) is
+    /// not named: the segment handed over in order brings its bytes. A
+    /// fragment precedes the media data it addresses, so a segment handed
+    /// over in order has none named. A fragment addressing media data lying
     /// before it (§8.8.7 has a base data offset name any byte of the segment)
     /// names bytes already passed by, which a caller that can seek fetches
     /// and hands to [`handle_data`](Self::handle_data).
     #[must_use]
     pub fn wanted_extent(&self) -> Option<Range<u64>> {
-        self.samples.wanted_extent()
+        self.position.passed(self.samples.wanted_extent())
+    }
+
+    /// Returns the offset into the segment the next byte handed to [`handle_input`](Self::handle_input) lies at
+    ///
+    /// It is the offset the last [`resume_at`](Self::resume_at) named, or zero
+    /// before any, and the bytes handed over in order since.
+    #[must_use]
+    pub const fn input_offset(&self) -> u64 {
+        self.position.offset()
     }
 
     /// Returns the brands the segment declares itself readable as, once they have arrived
@@ -337,7 +348,7 @@ impl MediaSegmentDemuxFsm {
         }
 
         self.boxes = BoxReader::new();
-        self.base = offset;
+        self.position.resume(offset);
         self.structure.resume();
         self.samples.clear();
         self.decode_times = TrackDecodeTimes::unknown();
@@ -395,14 +406,10 @@ impl MediaSegmentDemuxFsm {
         while let Some(event) = self.boxes.poll_event() {
             // Why not unreachable: an event was taken, so the framing names the
             // bytes it was read from, and the fallback is a degenerate position
-            // in place of a panic the lints forbid. Why not checked_add: the base
-            // is an offset the caller vouches for, and a change of coordinates
-            // carries no failure kind, so a base past any real segment saturates.
+            // in place of a panic the lints forbid.
             let start = self
-                .boxes
-                .event_extent()
-                .map_or(0, |extent| extent.start)
-                .saturating_add(self.base);
+                .position
+                .file_offset(self.boxes.event_extent().map_or(0, |extent| extent.start));
             match event {
                 BoxEvent::Header(header) => self
                     .structure
@@ -569,17 +576,19 @@ mod tests {
     }
 
     #[test]
-    fn the_bytes_the_demux_fsm_wants_fetched_complete_the_sample_as_the_media_data_would() {
+    fn media_data_the_input_is_still_to_bring_is_not_wanted_but_completes_the_sample_handed_as_data()
+     {
         let mut segment = segment_of_one_sample();
         let media_data = segment.split_off(segment.len().saturating_sub(4));
 
         let mut demux_fsm = MediaSegmentDemuxFsm::new(movie());
         demux_fsm.handle_input(&segment).unwrap();
-        let wanted = demux_fsm.wanted_extent().unwrap();
-        demux_fsm.handle_data(wanted.start, &media_data).unwrap();
+        let wanted = demux_fsm.wanted_extent();
+        demux_fsm
+            .handle_data(demux_fsm.input_offset(), &media_data)
+            .unwrap();
 
-        let media_data_start = segment.len() as u64;
-        assert_eq!(wanted, media_data_start..media_data_start.saturating_add(4));
+        assert_eq!(wanted, None);
         assert_eq!(demux_fsm.poll_sample(), Some(sample()));
     }
 
