@@ -15,7 +15,7 @@ exclude.workspace = true
 default = ["avc", "mp4"]
 # `isobmff::avc`, ISO/IEC 14496-15.
 avc = ["dep:isobmff-avc"]
-# `isobmff::io`, the demuxers and the muxers driving the readers and writers.
+# `isobmff::io`, the demuxers and the muxers driving the demux and mux FSMs.
 io = ["dep:isobmff-io"]
 # `isobmff::mp4`, ISO/IEC 14496-14.
 mp4 = ["dep:isobmff-mp4"]
