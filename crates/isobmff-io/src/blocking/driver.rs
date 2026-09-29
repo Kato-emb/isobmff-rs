@@ -1,4 +1,4 @@
-//! [`DemuxDriver`] and [`Muxer`], a demux FSM driven over a source that seeks and a mux FSM driven onto a sink
+//! [`DemuxDriver`] and [`MuxDriver`], a demux FSM driven over a source that seeks and a mux FSM driven onto a sink
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -7,9 +7,10 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use isobmff_boxes::MovieFragmentRandomAccessOffsetBox;
 use isobmff_core::BoxDecode;
 use isobmff_sample::Sample;
+use isobmff_sequence::EventBytes;
 
 use crate::Error;
-use crate::stack::{CUT_LENGTH, Demux, PollOutput};
+use crate::stack::{CUT_LENGTH, Demux, Mux};
 
 /// Drives a demux FSM over a source that seeks, and yields the samples it completes
 ///
@@ -60,20 +61,22 @@ use crate::stack::{CUT_LENGTH, Demux, PollOutput};
 /// use std::io::Cursor;
 ///
 /// use isobmff_boxes::{SampleFlags, TrackExtendsBox};
-/// use isobmff_io::blocking::{DemuxDriver, FragmentedMuxer};
+/// use isobmff_io::blocking::{DemuxDriver, MuxDriver};
 /// use isobmff_sample::Sample;
-/// use isobmff_structure::FragmentedDemuxFsm;
+/// use isobmff_structure::{FragmentedDemuxFsm, FragmentedMuxFsm};
 /// # use isobmff_test_support::{file_type, fragmented_movie};
 /// // A file of one fragment carrying two samples of track 1
 /// let mut file = Vec::new();
-/// let mut muxer = FragmentedMuxer::new(&mut file);
-/// muxer.handle_file_type(file_type())?;
-/// muxer.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO)))?;
-/// muxer.begin_fragment(1)?;
-/// muxer.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
-/// muxer.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
-/// muxer.finish_fragment()?;
-/// muxer.finish()?;
+/// let mut mux_driver = MuxDriver::new(&mut file, FragmentedMuxFsm::new());
+/// let mux_fsm = mux_driver.fsm_mut();
+/// mux_fsm.handle_file_type(file_type())?;
+/// mux_fsm.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO)))?;
+/// mux_fsm.begin_fragment(1)?;
+/// mux_fsm.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
+/// mux_fsm.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
+/// mux_fsm.finish_fragment()?;
+/// mux_fsm.finish()?;
+/// mux_driver.flush()?;
 ///
 /// // The samples are read off the file as they were laid out
 /// let mut driver = DemuxDriver::new(Cursor::new(file), FragmentedDemuxFsm::new())?;
@@ -265,59 +268,118 @@ impl<S: Read + Seek, D: Demux> Iterator for DemuxDriver<S, D> {
     }
 }
 
-/// A writing stack driven onto a sink, a step at a time
+/// Drives a mux FSM onto a sink, and writes the bytes it made
 ///
-/// What every muxer is beneath its own name: each verb is a step of the
-/// writer, and what the writer made of it is written to the sink before the
-/// step reports. The contract is each muxer's own.
+/// The driver carries out what the FSM makes, and holds nothing the FSM
+/// holds: the boxes and the samples are handed to the FSM through
+/// [`fsm_mut`](Self::fsm_mut), whose verbs report at once what the FSM makes
+/// of each.
+///
+/// # Contract
+///
+/// * What each verb takes and refuses is the FSM's contract, reported by the
+///   verb itself. The bytes the FSM made before a refusal stay with it for
+///   the next [`flush`](Self::flush).
+/// * The FSM holds the bytes it made until a [`flush`](Self::flush) takes
+///   them, which writes them a chunk at a time, as the FSM hands them over,
+///   by `write`s made again where interrupted, and then flushes the sink.
+///   How much the FSM holds is the caller's to
+///   bound by flushing; a sink that is costly to write to in small pieces is
+///   the caller's to wrap in a `BufWriter`.
+/// * A sink refusing bytes is [`Io`](crate::ErrorKind::Io): the driver keeps
+///   the chunk the sink was taking and how much of it the sink took, and the
+///   next [`flush`](Self::flush) carries on from there, with no byte written
+///   twice and none lost.
+/// * The file is laid down whole once the FSM's `finish` has been called and
+///   a [`flush`](Self::flush) after it has succeeded.
+///
+/// # Examples
+///
+/// ```
+/// use isobmff_boxes::{SampleFlags, TrackExtendsBox};
+/// use isobmff_io::blocking::MuxDriver;
+/// use isobmff_sample::Sample;
+/// use isobmff_structure::FragmentedMuxFsm;
+/// # use isobmff_test_support::{file_type, fragmented_movie};
+/// // A file opening with its brands and the movie its fragments continue
+/// let mut file = Vec::new();
+/// let mut driver = MuxDriver::new(&mut file, FragmentedMuxFsm::new());
+/// let fsm = driver.fsm_mut();
+/// fsm.handle_file_type(file_type())?;
+/// fsm.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO)))?;
+///
+/// // One fragment of two samples of track 1, closed and the file declared over
+/// fsm.begin_fragment(1)?;
+/// fsm.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
+/// fsm.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
+/// fsm.finish_fragment()?;
+/// fsm.finish()?;
+///
+/// // What the FSM made is written to the file
+/// driver.flush()?;
+///
+/// // The file opens with the brands, and the media data holds the samples end to end
+/// assert_eq!(&file[4..8], b"ftyp");
+/// assert!(file.ends_with(b"SAMPDATA"));
+/// # Ok::<(), isobmff_io::Error>(())
+/// ```
 #[derive(Debug)]
-pub(crate) struct Muxer<S, W> {
+pub struct MuxDriver<S, W> {
     sink: S,
-    writer: W,
+    fsm: W,
+    in_flight: Option<(EventBytes, usize)>,
 }
 
-impl<S: Write, W: PollOutput> Muxer<S, W> {
-    /// Creates a muxer writing to `sink` what `writer` makes of each step
-    pub(crate) const fn new(sink: S, writer: W) -> Self {
-        Self { sink, writer }
-    }
-
-    /// Makes `step` of the writer, and writes what the writer made of it whether it failed or not
-    ///
-    /// # Errors
-    ///
-    /// * [`Structure`](crate::ErrorKind::Structure): what the writer
-    ///   makes of the step, reported ahead of the sink's failure; the bytes
-    ///   made before the refusal reach the sink all the same.
-    /// * [`Io`](crate::ErrorKind::Io): the sink refuses the bytes.
-    pub(crate) fn drive(
-        &mut self,
-        step: impl FnOnce(&mut W) -> Result<(), isobmff_structure::Error>,
-    ) -> Result<(), Error> {
-        let stepped = step(&mut self.writer);
-        let mut written = Ok(());
-        while let Some(bytes) = self.writer.poll_output() {
-            written = written.and_then(|()| self.sink.write_all(&bytes));
+impl<S: Write, W: Mux> MuxDriver<S, W> {
+    /// Creates a driver of `fsm` onto `sink`
+    #[must_use]
+    pub const fn new(sink: S, fsm: W) -> Self {
+        Self {
+            sink,
+            fsm,
+            in_flight: None,
         }
-        stepped?;
-        written?;
-
-        Ok(())
     }
 
-    /// Makes `step` of the writer as the last, and flushes the sink
+    /// Returns the FSM being driven
+    #[must_use]
+    pub const fn fsm(&self) -> &W {
+        &self.fsm
+    }
+
+    /// Returns the FSM being driven, for its verbs
+    #[must_use]
+    pub const fn fsm_mut(&mut self) -> &mut W {
+        &mut self.fsm
+    }
+
+    /// Writes every byte the FSM has made so far to the sink, and flushes the sink
     ///
     /// # Errors
     ///
-    /// * [`Structure`](crate::ErrorKind::Structure): what the writer
-    ///   makes of the step.
-    /// * [`Io`](crate::ErrorKind::Io): the sink refuses the bytes, or
-    ///   does not flush.
-    pub(crate) fn finish(
-        &mut self,
-        step: impl FnOnce(&mut W) -> Result<(), isobmff_structure::Error>,
-    ) -> Result<(), Error> {
-        self.drive(step)?;
+    /// * [`Io`](crate::ErrorKind::Io): the sink refuses a chunk or takes
+    ///   none of it ([`WriteZero`](std::io::ErrorKind::WriteZero)), or does
+    ///   not flush.
+    pub fn flush(&mut self) -> Result<(), Error> {
+        loop {
+            if self.in_flight.is_none() {
+                self.in_flight = self.fsm.poll_output().map(|chunk| (chunk, 0));
+            }
+            let Some((chunk, taken)) = &mut self.in_flight else {
+                break;
+            };
+            let Some(rest) = chunk.get(*taken..).filter(|rest| !rest.is_empty()) else {
+                self.in_flight = None;
+
+                continue;
+            };
+            match self.sink.write(rest) {
+                Err(failure) if failure.kind() == io::ErrorKind::Interrupted => {}
+                Ok(0) => return Err(io::Error::from(io::ErrorKind::WriteZero).into()),
+                Ok(written) => *taken = taken.saturating_add(written),
+                Err(failure) => return Err(failure.into()),
+            }
+        }
         self.sink.flush()?;
 
         Ok(())
@@ -344,11 +406,11 @@ mod tests {
         segment_file_with_samples, written,
     };
 
-    use super::{CUT_LENGTH, DemuxDriver, Muxer};
+    use super::{CUT_LENGTH, DemuxDriver, MuxDriver};
 
+    use crate::ErrorKind;
     use crate::stack::ResumeSamples;
     use crate::stack::tests::{Queued, Scripted, framed, sample};
-    use crate::{Error, ErrorKind};
 
     /// What a source was asked to do
     #[derive(PartialEq, Debug)]
@@ -439,18 +501,32 @@ mod tests {
         }
     }
 
-    /// Sink recording what was written to it, and whether it was flushed
+    /// Sink recording what was written to it and whether it was flushed
+    ///
+    /// Taking at most so many bytes at a write when asked to, and refusing
+    /// the write after each that took some.
     #[derive(Default, PartialEq, Debug)]
     struct Recording {
         written: Vec<u8>,
         flushed: bool,
+        taking_at_most: Option<usize>,
+        refusing: bool,
     }
 
     impl Write for Recording {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            self.written.extend_from_slice(bytes);
+            if self.refusing {
+                self.refusing = false;
 
-            Ok(bytes.len())
+                return Err(io::Error::from(io::ErrorKind::BrokenPipe));
+            }
+            let taken = self
+                .taking_at_most
+                .map_or(bytes, |most| bytes.get(..most).unwrap_or(bytes));
+            self.written.extend_from_slice(taken);
+            self.refusing = self.taking_at_most.is_some();
+
+            Ok(taken.len())
         }
 
         fn flush(&mut self) -> io::Result<()> {
@@ -872,78 +948,53 @@ mod tests {
     }
 
     #[test]
-    fn the_bytes_a_step_made_before_failing_are_written_and_the_steps_failure_reported() {
-        let mut muxer = Muxer::new(Recording::default(), Queued::default());
+    fn a_flush_writes_every_chunk_the_fsm_made_and_flushes_the_sink() {
+        let mut driver = MuxDriver::new(Recording::default(), Queued::default());
+        driver.fsm_mut().output.extend(framed(b"MADE"));
 
-        let driven = muxer.drive(|writer| {
-            writer.output.extend(framed(b"MADE"));
-
-            Err(isobmff_structure::Error::already_finished())
-        });
+        driver.flush().unwrap();
 
         assert_eq!(
-            driven.map_err(|failure| failure.structure_error()),
-            Err(Some(isobmff_structure::Error::already_finished()))
-        );
-        assert_eq!(
-            muxer.sink,
+            driver.sink,
             Recording {
                 written: b"\0\0\0\x0cfreeMADE".to_vec(),
-                flushed: false,
+                flushed: true,
+                taking_at_most: None,
+                refusing: false,
             }
         );
     }
 
     #[test]
-    fn a_sink_refusing_the_bytes_is_reported_as_the_sink_failing() {
-        let mut muxer = Muxer::new(&mut [][..], Queued::default());
-
-        let driven = muxer.drive(|writer| {
-            writer.output.extend(framed(b"MADE"));
-
-            Ok(())
-        });
-
-        assert_eq!(
-            driven.map_err(|failure| failure.kind()),
-            Err(ErrorKind::Io(io::ErrorKind::WriteZero))
-        );
-    }
-
-    #[test]
-    fn the_writers_own_failure_is_reported_ahead_of_the_sinks() {
-        let mut muxer = Muxer::new(&mut [][..], Queued::default());
-
-        let driven = muxer.drive(|writer| {
-            writer.output.extend(framed(b"MADE"));
-
-            Err(isobmff_structure::Error::already_finished())
-        });
-
-        assert_eq!(
-            driven.map_err(|failure| failure.kind()),
-            Err(ErrorKind::Structure(
-                isobmff_structure::ErrorKind::AlreadyFinished
-            ))
-        );
-    }
-
-    #[test]
-    fn finishing_writes_the_last_step_and_flushes_the_sink() {
-        let mut muxer = Muxer::new(Recording::default(), Queued::default());
-
-        let finished: Result<(), Error> = muxer.finish(|writer| {
-            writer.output.extend(framed(b"LAST"));
-
-            Ok(())
-        });
-
-        assert_eq!(finished.map_err(|failure| failure.kind()), Ok(()));
-        assert_eq!(
-            muxer.sink,
+    fn a_sink_failing_part_way_through_a_chunk_has_the_rest_written_by_the_next_flush() {
+        let mut driver = MuxDriver::new(
             Recording {
-                written: b"\0\0\0\x0cfreeLAST".to_vec(),
+                taking_at_most: Some(5),
+                ..Recording::default()
+            },
+            Queued::default(),
+        );
+        driver.fsm_mut().output.extend(framed(b"MADE"));
+
+        let mut failures = Vec::new();
+        while let Err(failure) = driver.flush() {
+            failures.push(failure.kind());
+        }
+
+        assert_eq!(
+            failures,
+            [
+                ErrorKind::Io(io::ErrorKind::BrokenPipe),
+                ErrorKind::Io(io::ErrorKind::BrokenPipe),
+            ]
+        );
+        assert_eq!(
+            driver.sink,
+            Recording {
+                written: b"\0\0\0\x0cfreeMADE".to_vec(),
                 flushed: true,
+                taking_at_most: Some(5),
+                refusing: true,
             }
         );
     }

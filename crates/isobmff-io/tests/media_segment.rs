@@ -6,9 +6,9 @@ mod tests {
 
     use futures_executor::block_on;
     use futures_util::io::Cursor;
-    use isobmff_io::blocking::{DemuxDriver, MediaSegmentMuxer};
+    use isobmff_io::blocking::{DemuxDriver, MuxDriver};
     use isobmff_sample::Sample;
-    use isobmff_structure::MediaSegmentDemuxFsm;
+    use isobmff_structure::{MediaSegmentDemuxFsm, MediaSegmentMuxFsm};
     use isobmff_test_support::{
         indexed_segment_file, presentation_movie, segment_file_samples, segment_file_with_samples,
         segment_type,
@@ -30,15 +30,17 @@ mod tests {
     #[test]
     fn the_samples_the_muxer_wrote_to_a_sink_are_read_back_off_it_by_the_demuxer() {
         let mut segment = Vec::new();
-        let mut muxer = MediaSegmentMuxer::new(&mut segment);
+        let mut mux_driver = MuxDriver::new(&mut segment, MediaSegmentMuxFsm::new());
+        let mux_fsm = mux_driver.fsm_mut();
 
-        muxer.handle_segment_type(segment_type()).unwrap();
-        muxer.begin_fragment(1).unwrap();
+        mux_fsm.handle_segment_type(segment_type()).unwrap();
+        mux_fsm.begin_fragment(1).unwrap();
         for sample in segment_file_samples() {
-            muxer.handle_sample(sample).unwrap();
+            mux_fsm.handle_sample(sample).unwrap();
         }
-        muxer.finish_fragment().unwrap();
-        muxer.finish().unwrap();
+        mux_fsm.finish_fragment().unwrap();
+        mux_fsm.finish().unwrap();
+        mux_driver.flush().unwrap();
 
         let read_back: Vec<Sample> = DemuxDriver::new(
             io::Cursor::new(&segment),

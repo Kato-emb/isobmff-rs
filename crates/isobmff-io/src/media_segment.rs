@@ -10,7 +10,7 @@ use isobmff_structure::{MediaSegmentDemuxFsm, MediaSegmentMuxFsm};
 
 use crate::Error;
 use crate::driver::{Demuxer, Muxer};
-use crate::stack::{Demux, PollOutput, ResumeSamples};
+use crate::stack::{Demux, Mux, ResumeSamples};
 
 /// Reads the samples a media segment carries off an asynchronous source that seeks
 ///
@@ -355,7 +355,7 @@ impl<W: AsyncWrite + Unpin> MediaSegmentMuxer<W> {
     }
 }
 
-impl PollOutput for MediaSegmentMuxFsm {
+impl Mux for MediaSegmentMuxFsm {
     fn poll_output(&mut self) -> Option<EventBytes> {
         MediaSegmentMuxFsm::poll_output(self)
     }
