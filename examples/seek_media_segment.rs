@@ -11,7 +11,8 @@ use core::error::Error;
 use std::env;
 use std::fs::File;
 
-use isobmff::io::blocking::{FragmentedDemuxer, MediaSegmentDemuxer};
+use isobmff::io::blocking::DemuxDriver;
+use isobmff::structure::{FragmentedDemuxFsm, MediaSegmentDemuxFsm};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let usage = "usage: seek_media_segment <initialization.mp4> <segment.m4s> <milliseconds>";
@@ -20,28 +21,30 @@ fn main() -> Result<(), Box<dyn Error>> {
     let segment_path = arguments.next().ok_or(usage)?;
     let milliseconds: u64 = arguments.next().ok_or(usage)?.parse()?;
 
-    let mut initialization = FragmentedDemuxer::new(File::open(initialization_path)?)?;
+    let mut initialization =
+        DemuxDriver::new(File::open(initialization_path)?, FragmentedDemuxFsm::new())?;
     initialization.next().transpose()?;
     let movie = initialization
+        .fsm()
         .movie()
         .ok_or("the initialization segment carries no movie")?
         .clone();
-    let mut demuxer = MediaSegmentDemuxer::new(File::open(segment_path)?, movie)?;
+    let mut driver = DemuxDriver::new(File::open(segment_path)?, MediaSegmentDemuxFsm::new(movie))?;
 
     let subsegment_start = loop {
-        let covering = demuxer.segment_indexes().iter().find_map(|index| {
+        let covering = driver.fsm().segment_indexes().iter().find_map(|index| {
             let time = milliseconds.checked_mul(u64::from(index.timescale()))? / 1_000;
             index.subsegment_at(time)
         });
         if let Some(subsegment) = covering {
             break subsegment.extent().start;
         }
-        demuxer.next().ok_or("no segment index covers the time")??;
+        driver.next().ok_or("no segment index covers the time")??;
     };
-    demuxer.resume_at(subsegment_start)?;
+    driver.fsm_mut().resume_at(subsegment_start)?;
 
     let mut count: u64 = 0;
-    for sample in demuxer {
+    for sample in driver {
         let sample = sample?;
         println!(
             "track={} time={} size={} sync={}",

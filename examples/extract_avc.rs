@@ -14,7 +14,8 @@ use std::io::{BufWriter, Write};
 
 use isobmff::avc::Avc1SampleEntry;
 use isobmff::core::{BoxDecode, BoxDefinition};
-use isobmff::io::blocking::NonFragmentedDemuxer;
+use isobmff::io::blocking::DemuxDriver;
+use isobmff::structure::NonFragmentedDemuxFsm;
 
 const START_CODE: [u8; 4] = [0, 0, 0, 1];
 
@@ -24,9 +25,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let input = arguments.next().ok_or(usage)?;
     let output = arguments.next().ok_or(usage)?;
 
-    let mut demuxer = NonFragmentedDemuxer::new(File::open(input)?)?;
-    let first = demuxer.next().transpose()?;
-    let movie = demuxer.movie().ok_or("the file carries no movie")?;
+    let mut driver = DemuxDriver::new(File::open(input)?, NonFragmentedDemuxFsm::new())?;
+    let first = driver.next().transpose()?;
+    let movie = driver.fsm().movie().ok_or("the file carries no movie")?;
     if movie.mvex().is_some() {
         return Err("the file is fragmented".into());
     }
@@ -55,7 +56,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         stream.write_all(parameter_set)?;
     }
     let mut count: u64 = 0;
-    for sample in first.into_iter().map(Ok).chain(demuxer) {
+    for sample in first.into_iter().map(Ok).chain(driver) {
         let sample = sample?;
         if sample.track_id() != track_id {
             continue;

@@ -16,7 +16,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use isobmff::boxes::MovieBox;
 use isobmff::core::Mp4EpochSeconds;
-use isobmff::io::blocking::{FragmentedDemuxer, NonFragmentedMuxer};
+use isobmff::io::blocking::{DemuxDriver, NonFragmentedMuxer};
+use isobmff::structure::FragmentedDemuxFsm;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let usage = "usage: remux_to_non_fragmented <in.mp4> <out.mp4>";
@@ -24,9 +25,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let input = arguments.next().ok_or(usage)?;
     let output = arguments.next().ok_or(usage)?;
 
-    let mut demuxer = FragmentedDemuxer::new(File::open(input)?)?;
-    let first = demuxer.next().transpose()?;
-    let source = demuxer.movie().ok_or("the file carries no movie")?;
+    let mut driver = DemuxDriver::new(File::open(input)?, FragmentedDemuxFsm::new())?;
+    let first = driver.next().transpose()?;
+    let source = driver.fsm().movie().ok_or("the file carries no movie")?;
     let now =
         Mp4EpochSeconds::from_unix_seconds(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())
             .ok_or("the clock is past what a header states")?;
@@ -48,12 +49,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     .ok_or("the movie declares no track")?;
 
     let mut muxer = NonFragmentedMuxer::new(BufWriter::new(File::create(output)?));
-    if let Some(file_type) = demuxer.file_type() {
+    if let Some(file_type) = driver.fsm().file_type() {
         muxer.handle_file_type(file_type.clone())?;
     }
     muxer.handle_movie(movie)?;
     let mut chunk = None;
-    for sample in first.into_iter().map(Ok).chain(demuxer) {
+    for sample in first.into_iter().map(Ok).chain(driver) {
         let sample = sample?;
         let described_by = Some((sample.track_id(), sample.sample_description_index()));
         if chunk != described_by {

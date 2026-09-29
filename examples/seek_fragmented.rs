@@ -13,8 +13,9 @@ use core::error::Error;
 use std::env;
 use std::fs::File;
 
-use isobmff::io::blocking::FragmentedDemuxer;
+use isobmff::io::blocking::DemuxDriver;
 use isobmff::sample::movie_fragment_random_access::sync_sample_at;
+use isobmff::structure::FragmentedDemuxFsm;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let usage = "usage: seek_fragmented <in.mp4> <milliseconds>";
@@ -22,15 +23,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     let path = arguments.next().ok_or(usage)?;
     let milliseconds: u64 = arguments.next().ok_or(usage)?.parse()?;
 
-    let mut demuxer = FragmentedDemuxer::new(File::open(path)?)?;
-    demuxer.next().transpose()?;
-    let mfra = demuxer
+    let mut driver = DemuxDriver::new(File::open(path)?, FragmentedDemuxFsm::new())?;
+    driver.next().transpose()?;
+    let mfra = driver
         .locate_movie_fragment_random_access()?
         .ok_or("the file does not close with an mfra")?;
-    demuxer.resume_at(mfra)?;
-    demuxer.next().transpose()?;
-    let movie = demuxer.movie().ok_or("the file carries no movie")?;
-    let random_access = demuxer
+    driver.fsm_mut().resume_at(mfra)?;
+    driver.next().transpose()?;
+    let movie = driver.fsm().movie().ok_or("the file carries no movie")?;
+    let random_access = driver
+        .fsm()
         .movie_fragment_random_access()
         .ok_or("the mfra did not read")?;
     let mut moof_offsets = Vec::new();
@@ -57,10 +59,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         .into_iter()
         .min()
         .ok_or("the mfra lists no entry")?;
-    demuxer.resume_at(earliest)?;
+    driver.fsm_mut().resume_at(earliest)?;
 
     let mut count: u64 = 0;
-    for sample in demuxer {
+    for sample in driver {
         let sample = sample?;
         println!(
             "track={} time={} size={} sync={}",

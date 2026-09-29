@@ -1,30 +1,47 @@
-//! [`ReadSamples`], [`ResumeSamples`] and [`PollOutput`], what a driver asks of the stack beneath it
+//! [`Demux`], [`ResumeSamples`] and [`PollOutput`], what a driver asks of the stack beneath it
 
 use core::ops::Range;
 
 use isobmff_sample::Sample;
 use isobmff_sequence::EventBytes;
 
-/// Bytes handed over to the reader at a time
+/// Most bytes read off the source at a time
 pub(crate) const CUT_LENGTH: usize = 1024 * 1024;
 
-/// The five verbs of a reader a demuxer drives
+/// The verbs and queries of a demux FSM that a demux driver drives it by
 ///
-/// Each is the reader's own of the same name, with its contract.
-pub(crate) trait ReadSamples {
-    /// Takes the next cut of the file and reads the samples it completes
+/// Each is the demux FSM's own of the same name, with its contract. The
+/// trait is sealed: the demux FSMs of [`isobmff_structure`] implement it,
+/// and no other type can.
+pub trait Demux: sealed::Sealed {
+    /// Takes the next bytes of the file in order, and reads the samples they complete
+    ///
+    /// # Errors
+    ///
+    /// * What the demux FSM's `handle_input` makes of the bytes.
     fn handle_input(&mut self, input: &[u8]) -> Result<(), isobmff_structure::Error>;
 
-    /// Takes bytes of the file fetched for what [`wanted_extent`](Self::wanted_extent) named, and reads the samples they complete
+    /// Takes bytes of the file read for what [`wanted_extent`](Self::wanted_extent) named, and reads the samples they complete
+    ///
+    /// # Errors
+    ///
+    /// * What the demux FSM's `handle_data` makes of the bytes.
     fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), isobmff_structure::Error>;
 
     /// Takes the next sample the file handed over so far completed
     fn poll_sample(&mut self) -> Option<Sample>;
 
-    /// Returns the bytes the extent at the front of those held still lacks, if any is held
+    /// Returns the bytes the extent at the front of those held still lacks, once the input has passed its start
     fn wanted_extent(&self) -> Option<Range<u64>>;
 
+    /// Returns the file offset the next byte handed to [`handle_input`](Self::handle_input) lies at
+    fn input_offset(&self) -> u64;
+
     /// Declares the file over
+    ///
+    /// # Errors
+    ///
+    /// * What the demux FSM's `finish` makes of the end of the file.
     fn finish(&mut self) -> Result<(), isobmff_structure::Error>;
 }
 
@@ -33,7 +50,7 @@ pub(crate) trait ReadSamples {
 /// It is the reader's own of the same name, with its contract: the readers of
 /// the structures an index points into have it, and the reader of a
 /// non-fragmented movie does not.
-pub(crate) trait ResumeSamples: ReadSamples {
+pub(crate) trait ResumeSamples: Demux {
     /// Restarts the reading at `offset`, the file offset the input handed over next starts at
     fn resume_at(&mut self, offset: u64) -> Result<(), isobmff_structure::Error>;
 }
@@ -44,6 +61,19 @@ pub(crate) trait ResumeSamples: ReadSamples {
 pub(crate) trait PollOutput {
     /// Hands over the bytes the file has been laid down as so far
     fn poll_output(&mut self) -> Option<EventBytes>;
+}
+
+mod sealed {
+    /// The bound no type outside this crate can meet, which closes [`Demux`](super::Demux)
+    #[allow(
+        unnameable_types,
+        reason = "a supertrait no other crate can name is what seals the trait"
+    )]
+    pub trait Sealed {}
+
+    impl Sealed for isobmff_structure::FragmentedDemuxFsm {}
+    impl Sealed for isobmff_structure::MediaSegmentDemuxFsm {}
+    impl Sealed for isobmff_structure::NonFragmentedDemuxFsm {}
 }
 
 #[cfg(test)]
@@ -57,7 +87,7 @@ pub(crate) mod tests {
     use isobmff_sample::Sample;
     use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
 
-    use super::{PollOutput, ReadSamples, ResumeSamples};
+    use super::{Demux, PollOutput, ResumeSamples, sealed};
 
     /// Reader answering as scripted, and recording what it was handed
     #[derive(Default)]
@@ -70,11 +100,17 @@ pub(crate) mod tests {
         pub(crate) samples: VecDeque<Sample>,
         pub(crate) finished: bool,
         pub(crate) resumed_at: Vec<u64>,
+        pub(crate) input_offset: u64,
     }
 
-    impl ReadSamples for Scripted {
+    impl sealed::Sealed for Scripted {}
+
+    impl Demux for Scripted {
         fn handle_input(&mut self, input: &[u8]) -> Result<(), isobmff_structure::Error> {
             self.inputs.push(input.to_vec());
+            self.input_offset = self
+                .input_offset
+                .saturating_add(u64::try_from(input.len()).unwrap());
             self.samples.extend(self.completed_by_input.drain(..));
 
             Ok(())
@@ -99,7 +135,14 @@ pub(crate) mod tests {
             self.wanted.clone()
         }
 
+        fn input_offset(&self) -> u64 {
+            self.input_offset
+        }
+
         fn finish(&mut self) -> Result<(), isobmff_structure::Error> {
+            if self.finished {
+                return Err(isobmff_structure::Error::already_finished());
+            }
             self.finished = true;
 
             self.finish.take().map_or(Ok(()), Err)
@@ -109,6 +152,7 @@ pub(crate) mod tests {
     impl ResumeSamples for Scripted {
         fn resume_at(&mut self, offset: u64) -> Result<(), isobmff_structure::Error> {
             self.resumed_at.push(offset);
+            self.input_offset = offset;
             self.samples.clear();
             self.wanted = None;
             self.finished = false;

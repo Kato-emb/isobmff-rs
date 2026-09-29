@@ -19,8 +19,9 @@ use isobmff::boxes::{
     ChunkOffsetBox, ChunkOffsets, MovieBox, SampleSizeBox, SampleSizeEntries, SampleSizes,
     SampleTableBox, SampleToChunkBox, TimeToSampleBox,
 };
-use isobmff::io::blocking::{FragmentedMuxer, NonFragmentedDemuxer};
+use isobmff::io::blocking::{DemuxDriver, FragmentedMuxer};
 use isobmff::sample::Sample;
+use isobmff::structure::NonFragmentedDemuxFsm;
 
 /// The samples of one track read ahead of the others, waiting their turn in decode time
 struct TrackQueue {
@@ -35,9 +36,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let input = arguments.next().ok_or(usage)?;
     let output = arguments.next().ok_or(usage)?;
 
-    let mut demuxer = NonFragmentedDemuxer::new(File::open(input)?)?;
-    let first = demuxer.next().transpose()?;
-    let source = demuxer.movie().ok_or("the file carries no movie")?;
+    let mut driver = DemuxDriver::new(File::open(input)?, NonFragmentedDemuxFsm::new())?;
+    let first = driver.next().transpose()?;
+    let source = driver.fsm().movie().ok_or("the file carries no movie")?;
 
     let mut movie = MovieBox::new_fragmented(source.mvhd().timescale(), source.trak().to_vec())
         .ok_or("the movie declares no track")?;
@@ -69,7 +70,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let mut muxer = FragmentedMuxer::new(BufWriter::new(File::create(output)?));
-    if let Some(file_type) = demuxer.file_type() {
+    if let Some(file_type) = driver.fsm().file_type() {
         muxer.handle_file_type(file_type.clone())?;
     }
     muxer.handle_movie(movie)?;
@@ -86,7 +87,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Ok(muxer.finish_fragment()?)
     };
 
-    let mut samples = first.into_iter().map(Ok).chain(demuxer);
+    let mut samples = first.into_iter().map(Ok).chain(driver);
     let mut fragment = Vec::new();
     let mut carries_cut_track = false;
     loop {
