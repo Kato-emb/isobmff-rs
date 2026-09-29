@@ -83,26 +83,26 @@ mod tests {
         movie: MovieBox,
         fragments: Vec<Vec<Sample>>,
     ) -> Vec<u8> {
-        let mut writer = FragmentedMuxFsm::new();
+        let mut mux_fsm = FragmentedMuxFsm::new();
         let mut file = Vec::new();
 
         if let Some(brands) = brands {
-            writer.handle_file_type(brands).unwrap();
+            mux_fsm.handle_file_type(brands).unwrap();
         }
-        writer.handle_movie(movie).unwrap();
+        mux_fsm.handle_movie(movie).unwrap();
 
         for (position, samples) in fragments.into_iter().enumerate() {
             let sequence_number = u32::try_from(position).unwrap().saturating_add(1);
 
-            writer.begin_fragment(sequence_number).unwrap();
+            mux_fsm.begin_fragment(sequence_number).unwrap();
             for sample in samples {
-                writer.handle_sample(sample).unwrap();
+                mux_fsm.handle_sample(sample).unwrap();
             }
-            writer.finish_fragment().unwrap();
+            mux_fsm.finish_fragment().unwrap();
         }
-        writer.finish().unwrap();
+        mux_fsm.finish().unwrap();
 
-        while let Some(written) = writer.poll_output() {
+        while let Some(written) = mux_fsm.poll_output() {
             file.extend_from_slice(&written);
         }
 
@@ -151,11 +151,11 @@ mod tests {
     fn a_file_handed_no_brands_is_read_back_declaring_the_brand_its_layout_requires() {
         let file = written_file(None, movie(), two_track_fragments());
 
-        let mut reader = FragmentedDemuxFsm::new();
-        reader.handle_input(&file).unwrap();
+        let mut demux_fsm = FragmentedDemuxFsm::new();
+        demux_fsm.handle_input(&file).unwrap();
 
         assert_eq!(
-            reader.file_type(),
+            demux_fsm.file_type(),
             Some(&FileTypeBox::new(
                 FourCC::new(*b"iso6"),
                 0,

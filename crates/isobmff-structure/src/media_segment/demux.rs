@@ -93,37 +93,37 @@ use crate::{Error, WholeBoxReader};
 /// use isobmff_structure::{MediaSegmentDemuxFsm, MediaSegmentMuxFsm};
 /// # use isobmff_test_support::{fragmented_movie, segment_type};
 /// // A segment of one fragment carrying two samples of track 1
-/// let mut writer = MediaSegmentMuxFsm::new();
-/// writer.handle_segment_type(segment_type())?;
-/// writer.begin_fragment(1)?;
-/// writer.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
-/// writer.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
-/// writer.finish_fragment()?;
-/// writer.finish()?;
+/// let mut mux_fsm = MediaSegmentMuxFsm::new();
+/// mux_fsm.handle_segment_type(segment_type())?;
+/// mux_fsm.begin_fragment(1)?;
+/// mux_fsm.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
+/// mux_fsm.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
+/// mux_fsm.finish_fragment()?;
+/// mux_fsm.finish()?;
 ///
-/// // The segment the writer laid down is drained as it hands the bytes over
+/// // The segment the mux FSM laid down is drained as it hands the bytes over
 /// let mut segment = Vec::new();
-/// while let Some(written) = writer.poll_output() {
+/// while let Some(written) = mux_fsm.poll_output() {
 ///     segment.extend_from_slice(&written);
 /// }
 ///
 /// // The segment is handed over as it arrives, against the movie it continues
 /// let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO));
-/// let mut reader = MediaSegmentDemuxFsm::new(movie);
+/// let mut demux_fsm = MediaSegmentDemuxFsm::new(movie);
 /// for arriving in segment.chunks(7) {
-///     reader.handle_input(arriving)?;
+///     demux_fsm.handle_input(arriving)?;
 /// }
-/// reader.finish()?;
+/// demux_fsm.finish()?;
 ///
 /// // The brands the segment declared are there to read
-/// assert_eq!(reader.segment_type().map(|styp| styp.major_brand()), Some(segment_type().major_brand()));
+/// assert_eq!(demux_fsm.segment_type().map(|styp| styp.major_brand()), Some(segment_type().major_brand()));
 ///
 /// // The samples come back as they were laid out
-/// let first = reader.poll_sample().unwrap();
+/// let first = demux_fsm.poll_sample().unwrap();
 /// assert_eq!((first.data(), first.decode_time()), (b"SAMP".as_slice(), 0));
-/// let second = reader.poll_sample().unwrap();
+/// let second = demux_fsm.poll_sample().unwrap();
 /// assert_eq!((second.data(), second.decode_time()), (b"DATA".as_slice(), 1_024));
-/// assert_eq!(reader.poll_sample(), None);
+/// assert_eq!(demux_fsm.poll_sample(), None);
 /// # Ok::<(), isobmff_structure::Error>(())
 /// ```
 #[derive(Debug)]
@@ -494,19 +494,19 @@ mod tests {
 
     /// What the reader makes of `segment` handed over whole, then declared over
     fn read(segment: &[u8]) -> Result<MediaSegmentDemuxFsm, Error> {
-        let mut reader = MediaSegmentDemuxFsm::new(movie());
+        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie());
 
-        reader.handle_input(segment)?;
-        reader.finish()?;
+        demux_fsm.handle_input(segment)?;
+        demux_fsm.finish()?;
 
-        Ok(reader)
+        Ok(demux_fsm)
     }
 
     #[test]
     fn a_segment_declaring_no_brands_is_read_all_the_same() {
-        let reader = read(&written(&movie_fragment())).unwrap();
+        let demux_fsm = read(&written(&movie_fragment())).unwrap();
 
-        assert_eq!(reader.segment_type(), None);
+        assert_eq!(demux_fsm.segment_type(), None);
     }
 
     #[test]
@@ -519,11 +519,11 @@ mod tests {
 
     #[test]
     fn a_box_read_into_a_value_declaring_a_payload_past_the_limit_is_rejected() {
-        let mut reader =
+        let mut demux_fsm =
             MediaSegmentDemuxFsm::with_limits(movie(), 4, SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT);
 
         assert_eq!(
-            reader
+            demux_fsm
                 .handle_input(&written(&segment_type()))
                 .map_err(Error::kind),
             Err(ErrorKind::PayloadLimitExceeded)
@@ -538,15 +538,15 @@ mod tests {
             framed(BoxType::compact(*b"free"), &[0x11; 4_096]),
         ]
         .concat();
-        let mut reader = MediaSegmentDemuxFsm::with_limits(
+        let mut demux_fsm = MediaSegmentDemuxFsm::with_limits(
             movie(),
             fragment.len() as u64,
             SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT,
         );
 
-        reader.handle_input(&segment).unwrap();
+        demux_fsm.handle_input(&segment).unwrap();
 
-        assert_eq!(reader.finish(), Ok(()));
+        assert_eq!(demux_fsm.finish(), Ok(()));
     }
 
     #[test]
@@ -554,62 +554,62 @@ mod tests {
         let mut segment = segment_of_one_sample();
         segment.extend_from_slice(b"\0\0\0\x04free");
 
-        let mut reader = MediaSegmentDemuxFsm::new(movie());
+        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie());
 
         assert_eq!(
-            reader.handle_input(&segment).map_err(Error::kind),
+            demux_fsm.handle_input(&segment).map_err(Error::kind),
             Err(ErrorKind::Sequence(isobmff_sequence::ErrorKind::Box(
                 isobmff_core::ErrorKind::SizeBelowHeader
             )))
         );
         assert_eq!(
-            reader.poll_sample().map(Sample::into_data),
+            demux_fsm.poll_sample().map(Sample::into_data),
             Some(b"SAMP".to_vec())
         );
     }
 
     #[test]
-    fn the_bytes_the_reader_wants_fetched_complete_the_sample_as_the_media_data_would() {
+    fn the_bytes_the_demux_fsm_wants_fetched_complete_the_sample_as_the_media_data_would() {
         let mut segment = segment_of_one_sample();
         let media_data = segment.split_off(segment.len().saturating_sub(4));
 
-        let mut reader = MediaSegmentDemuxFsm::new(movie());
-        reader.handle_input(&segment).unwrap();
-        let wanted = reader.wanted_extent().unwrap();
-        reader.handle_data(wanted.start, &media_data).unwrap();
+        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie());
+        demux_fsm.handle_input(&segment).unwrap();
+        let wanted = demux_fsm.wanted_extent().unwrap();
+        demux_fsm.handle_data(wanted.start, &media_data).unwrap();
 
         let media_data_start = segment.len() as u64;
         assert_eq!(wanted, media_data_start..media_data_start.saturating_add(4));
-        assert_eq!(reader.poll_sample(), Some(sample()));
+        assert_eq!(demux_fsm.poll_sample(), Some(sample()));
     }
 
     #[test]
-    fn a_failed_reader_reports_the_same_failure_for_every_call_after_it() {
-        let mut reader = MediaSegmentDemuxFsm::new(movie());
+    fn a_failed_demux_fsm_reports_the_same_failure_for_every_call_after_it() {
+        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie());
         let failure = Error::box_out_of_order(MediaDataBox::BOX_TYPE);
         let segment = written(&MediaDataBox::new(MEDIA_DATA.to_vec()));
 
-        assert_eq!(reader.handle_input(&segment), Err(failure));
+        assert_eq!(demux_fsm.handle_input(&segment), Err(failure));
         assert_eq!(
-            reader.handle_input(&written(&movie_fragment())),
+            demux_fsm.handle_input(&written(&movie_fragment())),
             Err(failure)
         );
-        assert_eq!(reader.handle_data(0, b"SAMP"), Err(failure));
-        assert_eq!(reader.finish(), Err(failure));
+        assert_eq!(demux_fsm.handle_data(0, b"SAMP"), Err(failure));
+        assert_eq!(demux_fsm.finish(), Err(failure));
     }
 
     #[test]
     fn input_handed_over_after_finishing_is_rejected() {
-        let mut reader = read(&written(&movie_fragment())).unwrap();
+        let mut demux_fsm = read(&written(&movie_fragment())).unwrap();
 
         assert_eq!(
-            reader.handle_input(&written(&movie_fragment())),
+            demux_fsm.handle_input(&written(&movie_fragment())),
             Err(Error::already_finished())
         );
         assert_eq!(
-            reader.handle_data(0, b"SAMP"),
+            demux_fsm.handle_data(0, b"SAMP"),
             Err(Error::already_finished())
         );
-        assert_eq!(reader.finish(), Err(Error::already_finished()));
+        assert_eq!(demux_fsm.finish(), Err(Error::already_finished()));
     }
 }

@@ -187,45 +187,45 @@ fn laid_out(input: &Input<'_>) -> Vec<Vec<Sample>> {
 /// still hands over the bytes of the chunks it had laid down, which carry no
 /// movie.
 fn file_of(chunks: &[Vec<Sample>]) -> (Vec<u8>, bool) {
-    let mut writer = NonFragmentedMuxFsm::new();
+    let mut mux_fsm = NonFragmentedMuxFsm::new();
     let mut file = Vec::new();
     let mut refused = None;
 
-    writer
+    mux_fsm
         .handle_file_type(file_type())
         .expect("a writer waiting for the brands refused them");
-    writer
+    mux_fsm
         .handle_movie(movie())
         .expect("a writer waiting for the movie refused it");
 
     'chunks: for samples in chunks {
-        if let Err(reported) = writer.begin_chunk() {
+        if let Err(reported) = mux_fsm.begin_chunk() {
             refused = Some(reported);
             break;
         }
         for sample in samples {
-            if let Err(reported) = writer.handle_sample(sample.clone()) {
+            if let Err(reported) = mux_fsm.handle_sample(sample.clone()) {
                 refused = Some(reported);
                 break 'chunks;
             }
         }
-        drained_into(&mut writer, &mut file);
+        drained_into(&mut mux_fsm, &mut file);
     }
 
     if refused.is_none() {
-        refused = writer.finish().err();
+        refused = mux_fsm.finish().err();
     }
-    drained_into(&mut writer, &mut file);
+    drained_into(&mut mux_fsm, &mut file);
 
     match refused {
         Some(reported) => {
             assert_eq!(
-                writer.handle_sample(a_sample()),
+                mux_fsm.handle_sample(a_sample()),
                 Err(reported),
                 "a refused writer took a sample instead of reporting its failure again"
             );
             assert_eq!(
-                writer.finish(),
+                mux_fsm.finish(),
                 Err(reported),
                 "a refused writer reported another failure when the file was declared over"
             );
@@ -234,7 +234,7 @@ fn file_of(chunks: &[Vec<Sample>]) -> (Vec<u8>, bool) {
         }
         None => {
             assert_eq!(
-                writer.handle_sample(a_sample()).map_err(Error::kind),
+                mux_fsm.handle_sample(a_sample()).map_err(Error::kind),
                 Err(ErrorKind::AlreadyFinished),
                 "the writer took a sample after the file was declared over"
             );
@@ -245,8 +245,8 @@ fn file_of(chunks: &[Vec<Sample>]) -> (Vec<u8>, bool) {
 }
 
 /// Takes what the writer has laid down into `file`
-fn drained_into(writer: &mut NonFragmentedMuxFsm, file: &mut Vec<u8>) {
-    while let Some(written) = writer.poll_output() {
+fn drained_into(mux_fsm: &mut NonFragmentedMuxFsm, file: &mut Vec<u8>) {
+    while let Some(written) = mux_fsm.poll_output() {
         file.extend_from_slice(&written);
     }
 }
@@ -282,35 +282,35 @@ fn movie_first_file_of(chunks: &[Vec<Sample>]) -> Vec<u8> {
 
 /// The samples `file` carries, read off it `cut_length` bytes at a time and then off the bytes it wants fetched
 fn read_back(file: &[u8], cut_length: usize) -> Result<Vec<Sample>, Error> {
-    let mut reader = NonFragmentedDemuxFsm::new();
+    let mut demux_fsm = NonFragmentedDemuxFsm::new();
     let mut samples = Vec::new();
 
     for arriving in file.chunks(cut_length) {
-        reader.handle_input(arriving)?;
-        drain(&mut reader, &mut samples);
+        demux_fsm.handle_input(arriving)?;
+        drain(&mut demux_fsm, &mut samples);
     }
-    while let Some(wanted) = reader.wanted_extent() {
+    while let Some(wanted) = demux_fsm.wanted_extent() {
         let start = usize::try_from(wanted.start).unwrap_or(usize::MAX);
         let end = usize::try_from(wanted.end).unwrap_or(usize::MAX);
         let fetched = file.get(start..end).unwrap_or_default();
 
-        reader.handle_data(wanted.start, fetched)?;
-        drain(&mut reader, &mut samples);
+        demux_fsm.handle_data(wanted.start, fetched)?;
+        drain(&mut demux_fsm, &mut samples);
         // Why not looping until nothing is wanted: a want past the file is
         // never met, and empty input leaves it standing
         if fetched.is_empty() {
             break;
         }
     }
-    reader.finish()?;
-    drain(&mut reader, &mut samples);
+    demux_fsm.finish()?;
+    drain(&mut demux_fsm, &mut samples);
 
     Ok(samples)
 }
 
 /// Takes every sample the reader has completed
-fn drain(reader: &mut NonFragmentedDemuxFsm, samples: &mut Vec<Sample>) {
-    while let Some(sample) = reader.poll_sample() {
+fn drain(demux_fsm: &mut NonFragmentedDemuxFsm, samples: &mut Vec<Sample>) {
+    while let Some(sample) = demux_fsm.poll_sample() {
         samples.push(sample);
     }
 }

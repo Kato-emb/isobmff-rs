@@ -62,19 +62,19 @@ use crate::{Error, whole_box_header, whole_payload};
 /// use isobmff_structure::MediaSegmentMuxFsm;
 /// # use isobmff_test_support::segment_type;
 /// // A segment opening with its brands
-/// let mut writer = MediaSegmentMuxFsm::new();
-/// writer.handle_segment_type(segment_type())?;
+/// let mut mux_fsm = MediaSegmentMuxFsm::new();
+/// mux_fsm.handle_segment_type(segment_type())?;
 ///
 /// // One fragment of two samples of track 1, lasting 1024 units each
-/// writer.begin_fragment(1)?;
-/// writer.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
-/// writer.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
-/// writer.finish_fragment()?;
-/// writer.finish()?;
+/// mux_fsm.begin_fragment(1)?;
+/// mux_fsm.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
+/// mux_fsm.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
+/// mux_fsm.finish_fragment()?;
+/// mux_fsm.finish()?;
 ///
-/// // The bytes are drained as the writer hands them over
+/// // The bytes are drained as the mux FSM hands them over
 /// let mut segment = Vec::new();
-/// while let Some(written) = writer.poll_output() {
+/// while let Some(written) = mux_fsm.poll_output() {
 ///     segment.extend_from_slice(&written);
 /// }
 ///
@@ -333,85 +333,85 @@ mod tests {
 
     #[test]
     fn a_segment_declaring_no_brands_is_laid_down_all_the_same() {
-        let mut writer = MediaSegmentMuxFsm::new();
+        let mut mux_fsm = MediaSegmentMuxFsm::new();
 
-        writer.begin_fragment(1).unwrap();
-        writer.finish_fragment().unwrap();
+        mux_fsm.begin_fragment(1).unwrap();
+        mux_fsm.finish_fragment().unwrap();
 
-        assert_eq!(writer.finish(), Ok(()));
-        assert!(writer.poll_output().unwrap().ends_with(b"moof"));
+        assert_eq!(mux_fsm.finish(), Ok(()));
+        assert!(mux_fsm.poll_output().unwrap().ends_with(b"moof"));
     }
 
     #[test]
     fn brands_handed_over_after_a_fragment_are_rejected() {
-        let mut writer = MediaSegmentMuxFsm::new();
+        let mut mux_fsm = MediaSegmentMuxFsm::new();
 
-        writer.begin_fragment(1).unwrap();
-        writer.finish_fragment().unwrap();
+        mux_fsm.begin_fragment(1).unwrap();
+        mux_fsm.finish_fragment().unwrap();
 
         assert_eq!(
-            writer.handle_segment_type(segment_type()),
+            mux_fsm.handle_segment_type(segment_type()),
             Err(Error::box_out_of_order(SegmentTypeBox::BOX_TYPE))
         );
     }
 
     #[test]
     fn a_sample_handed_over_while_no_fragment_is_open_is_rejected() {
-        let mut writer = MediaSegmentMuxFsm::new();
+        let mut mux_fsm = MediaSegmentMuxFsm::new();
 
         assert_eq!(
-            writer.handle_sample(sample()).map_err(Error::kind),
+            mux_fsm.handle_sample(sample()).map_err(Error::kind),
             Err(ErrorKind::Sample(isobmff_sample::ErrorKind::NoFragmentOpen))
         );
     }
 
     #[test]
     fn a_segment_declared_over_without_a_fragment_is_rejected() {
-        let mut writer = MediaSegmentMuxFsm::new();
+        let mut mux_fsm = MediaSegmentMuxFsm::new();
 
-        writer.handle_segment_type(segment_type()).unwrap();
+        mux_fsm.handle_segment_type(segment_type()).unwrap();
 
         assert_eq!(
-            writer.finish(),
+            mux_fsm.finish(),
             Err(Error::missing_mandatory_box(MovieFragmentBox::BOX_TYPE))
         );
     }
 
     #[test]
-    fn a_failed_writer_reports_the_same_failure_for_every_call_after_it() {
-        let mut writer = MediaSegmentMuxFsm::new();
+    fn a_failed_mux_fsm_reports_the_same_failure_for_every_call_after_it() {
+        let mut mux_fsm = MediaSegmentMuxFsm::new();
 
-        writer.handle_segment_type(segment_type()).unwrap();
-        let failure = writer.finish().unwrap_err();
+        mux_fsm.handle_segment_type(segment_type()).unwrap();
+        let failure = mux_fsm.finish().unwrap_err();
 
-        assert_eq!(writer.handle_segment_type(segment_type()), Err(failure));
-        assert_eq!(writer.begin_fragment(1), Err(failure));
-        assert_eq!(writer.finish(), Err(failure));
+        assert_eq!(mux_fsm.handle_segment_type(segment_type()), Err(failure));
+        assert_eq!(mux_fsm.begin_fragment(1), Err(failure));
+        assert_eq!(mux_fsm.finish(), Err(failure));
     }
 
     #[test]
-    fn a_failed_writer_hands_over_the_bytes_it_had_already_laid_down() {
-        let mut writer = MediaSegmentMuxFsm::new();
+    fn a_failed_mux_fsm_hands_over_the_bytes_it_had_already_laid_down() {
+        let mut mux_fsm = MediaSegmentMuxFsm::new();
 
-        writer.handle_segment_type(segment_type()).unwrap();
+        mux_fsm.handle_segment_type(segment_type()).unwrap();
 
-        assert!(writer.finish().is_err());
+        assert!(mux_fsm.finish().is_err());
 
-        assert_eq!(*writer.poll_output().unwrap(), *b"\0\0\0\x18styp");
+        assert_eq!(*mux_fsm.poll_output().unwrap(), *b"\0\0\0\x18styp");
     }
 
     #[test]
     fn anything_handed_over_after_finishing_is_rejected() {
-        let mut writer = MediaSegmentMuxFsm::new();
+        let mut mux_fsm = MediaSegmentMuxFsm::new();
 
-        writer.begin_fragment(1).unwrap();
-        writer.finish_fragment().unwrap();
-        writer.finish().unwrap();
+        mux_fsm.begin_fragment(1).unwrap();
+        mux_fsm.finish_fragment().unwrap();
+        mux_fsm.finish().unwrap();
 
         assert_eq!(
-            writer.handle_sample(sample()),
+            mux_fsm.handle_sample(sample()),
             Err(Error::already_finished())
         );
-        assert_eq!(writer.finish(), Err(Error::already_finished()));
+        assert_eq!(mux_fsm.finish(), Err(Error::already_finished()));
     }
 }

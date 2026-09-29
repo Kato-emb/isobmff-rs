@@ -21,22 +21,22 @@ mod tests {
 
     /// Reader that read `file` whole and was declared over
     fn read_whole(file: &IndexedFile) -> FragmentedDemuxFsm {
-        let mut reader = FragmentedDemuxFsm::new();
-        reader.handle_input(&file.bytes).unwrap();
-        reader.finish().unwrap();
+        let mut demux_fsm = FragmentedDemuxFsm::new();
+        demux_fsm.handle_input(&file.bytes).unwrap();
+        demux_fsm.finish().unwrap();
 
-        reader
+        demux_fsm
     }
 
-    /// Resumes `reader` at `offset` and hands it the rest of `file` from there
+    /// Resumes `demux_fsm` at `offset` and hands it the rest of `file` from there
     fn resumed_at(
-        reader: &mut FragmentedDemuxFsm,
+        demux_fsm: &mut FragmentedDemuxFsm,
         file: &IndexedFile,
         offset: u64,
     ) -> Result<(), Error> {
-        reader.resume_at(offset)?;
-        reader.handle_input(file.bytes.get(usize::try_from(offset).unwrap()..).unwrap())?;
-        reader.finish()
+        demux_fsm.resume_at(offset)?;
+        demux_fsm.handle_input(file.bytes.get(usize::try_from(offset).unwrap()..).unwrap())?;
+        demux_fsm.finish()
     }
 
     #[test]
@@ -59,11 +59,11 @@ mod tests {
     fn a_file_read_in_order_yields_every_sample_and_both_indexes_pointing_at_its_fragments() {
         let file = indexed_fragmented_file();
 
-        let mut reader = read_whole(&file);
+        let mut demux_fsm = read_whole(&file);
 
-        assert_eq!(drained(&mut reader), file.fragment_samples.concat());
+        assert_eq!(drained(&mut demux_fsm), file.fragment_samples.concat());
         assert_eq!(
-            reader
+            demux_fsm
                 .segment_indexes()
                 .iter()
                 .map(|segment_index| segment_index
@@ -75,7 +75,7 @@ mod tests {
             [file.moof_offsets.as_slice()]
         );
         assert_eq!(
-            reader
+            demux_fsm
                 .movie_fragment_random_access()
                 .unwrap()
                 .tfra()
@@ -123,16 +123,16 @@ mod tests {
             })
             .unwrap();
 
-        let mut reader = read_whole(&file);
-        drained(&mut reader);
-        resumed_at(&mut reader, &file, segment_index).unwrap();
+        let mut demux_fsm = read_whole(&file);
+        drained(&mut demux_fsm);
+        resumed_at(&mut demux_fsm, &file, segment_index).unwrap();
 
-        assert_eq!(reader.segment_indexes().len(), 1);
-        assert_eq!(drained(&mut reader), file.fragment_samples.concat());
+        assert_eq!(demux_fsm.segment_indexes().len(), 1);
+        assert_eq!(drained(&mut demux_fsm), file.fragment_samples.concat());
     }
 
     #[test]
-    fn resuming_at_media_data_is_out_of_order_and_leaves_the_reader_failed() {
+    fn resuming_at_media_data_is_out_of_order_and_leaves_the_demux_fsm_failed() {
         let file = indexed_fragmented_file();
         let second = *file.moof_offsets.get(1).unwrap();
         let moof_size = file
@@ -143,32 +143,33 @@ mod tests {
         let media_data = second.saturating_add(u64::from(u32::from_be_bytes(*moof_size)));
         let out_of_order = Error::box_out_of_order(BoxType::compact(*b"mdat"));
 
-        let mut reader = read_whole(&file);
+        let mut demux_fsm = read_whole(&file);
 
         assert_eq!(
-            resumed_at(&mut reader, &file, media_data),
+            resumed_at(&mut demux_fsm, &file, media_data),
             Err(out_of_order)
         );
-        assert_eq!(reader.resume_at(second), Err(out_of_order));
+        assert_eq!(demux_fsm.resume_at(second), Err(out_of_order));
     }
 
     #[test]
     fn a_file_stating_no_decode_time_read_in_order_starts_its_timeline_at_zero() {
         let file = indexed_fragmented_file_without_decode_times();
 
-        let mut reader = read_whole(&file);
+        let mut demux_fsm = read_whole(&file);
 
-        assert_eq!(drained(&mut reader), file.fragment_samples.concat());
+        assert_eq!(drained(&mut demux_fsm), file.fragment_samples.concat());
     }
 
     #[test]
     fn resuming_at_a_fragment_stating_no_decode_time_fails_for_the_missing_decode_time() {
         let file = indexed_fragmented_file_without_decode_times();
 
-        let mut reader = read_whole(&file);
+        let mut demux_fsm = read_whole(&file);
 
         assert_eq!(
-            resumed_at(&mut reader, &file, *file.moof_offsets.get(1).unwrap()).map_err(Error::kind),
+            resumed_at(&mut demux_fsm, &file, *file.moof_offsets.get(1).unwrap())
+                .map_err(Error::kind),
             Err(ErrorKind::Sample(
                 isobmff_sample::ErrorKind::MissingDecodeTime
             ))

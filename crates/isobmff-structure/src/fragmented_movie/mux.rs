@@ -63,23 +63,23 @@ use crate::{Error, whole_box_header, whole_payload};
 /// use isobmff_structure::FragmentedMuxFsm;
 /// # use isobmff_test_support::fragmented_movie;
 /// // A file handed no brands, only the movie its fragments continue
-/// let mut writer = FragmentedMuxFsm::new();
-/// writer.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO)))?;
+/// let mut mux_fsm = FragmentedMuxFsm::new();
+/// mux_fsm.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO)))?;
 ///
 /// // One fragment of two samples of track 1, lasting 1024 units each
-/// writer.begin_fragment(1)?;
-/// writer.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
-/// writer.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
-/// writer.finish_fragment()?;
-/// writer.finish()?;
+/// mux_fsm.begin_fragment(1)?;
+/// mux_fsm.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
+/// mux_fsm.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
+/// mux_fsm.finish_fragment()?;
+/// mux_fsm.finish()?;
 ///
-/// // The bytes are drained as the writer hands them over
+/// // The bytes are drained as the mux FSM hands them over
 /// let mut file = Vec::new();
-/// while let Some(written) = writer.poll_output() {
+/// while let Some(written) = mux_fsm.poll_output() {
 ///     file.extend_from_slice(&written);
 /// }
 ///
-/// // The file opens with the brands the writer declares, and the media data holds the samples end to end
+/// // The file opens with the brands the mux FSM declares, and the media data holds the samples end to end
 /// assert_eq!(&file[4..8], b"ftyp");
 /// assert!(file.ends_with(b"SAMPDATA"));
 /// # Ok::<(), isobmff_structure::Error>(())
@@ -373,9 +373,9 @@ mod tests {
     }
 
     /// The bytes the writer has laid down, drained to the end
-    fn drained(writer: &mut FragmentedMuxFsm) -> Vec<u8> {
+    fn drained(mux_fsm: &mut FragmentedMuxFsm) -> Vec<u8> {
         let mut file = Vec::new();
-        while let Some(written) = writer.poll_output() {
+        while let Some(written) = mux_fsm.poll_output() {
             file.extend_from_slice(&written);
         }
 
@@ -383,12 +383,12 @@ mod tests {
     }
 
     #[test]
-    fn a_file_handed_no_brands_opens_with_the_brands_the_writer_declares() {
-        let mut writer = FragmentedMuxFsm::new();
+    fn a_file_handed_no_brands_opens_with_the_brands_the_mux_fsm_declares() {
+        let mut mux_fsm = FragmentedMuxFsm::new();
 
-        writer.handle_movie(movie()).unwrap();
-        writer.finish().unwrap();
-        let file = drained(&mut writer);
+        mux_fsm.handle_movie(movie()).unwrap();
+        mux_fsm.finish().unwrap();
+        let file = drained(&mut mux_fsm);
 
         assert_eq!(
             FileTypeBox::decode(&file).map(|(file_type, rest)| (file_type, rest.get(4..8))),
@@ -398,12 +398,12 @@ mod tests {
 
     #[test]
     fn the_brands_handed_over_are_laid_down_as_they_stand() {
-        let mut writer = FragmentedMuxFsm::new();
+        let mut mux_fsm = FragmentedMuxFsm::new();
 
-        writer.handle_file_type(file_type()).unwrap();
-        writer.handle_movie(movie()).unwrap();
-        writer.finish().unwrap();
-        let file = drained(&mut writer);
+        mux_fsm.handle_file_type(file_type()).unwrap();
+        mux_fsm.handle_movie(movie()).unwrap();
+        mux_fsm.finish().unwrap();
+        let file = drained(&mut mux_fsm);
 
         assert_eq!(
             FileTypeBox::decode(&file).map(|(file_type, rest)| (file_type, rest.get(4..8))),
@@ -413,74 +413,74 @@ mod tests {
 
     #[test]
     fn a_fragment_closed_before_the_movie_is_rejected() {
-        let mut writer = FragmentedMuxFsm::new();
+        let mut mux_fsm = FragmentedMuxFsm::new();
 
-        writer.handle_file_type(file_type()).unwrap();
-        writer.begin_fragment(1).unwrap();
+        mux_fsm.handle_file_type(file_type()).unwrap();
+        mux_fsm.begin_fragment(1).unwrap();
 
         assert_eq!(
-            writer.finish_fragment(),
+            mux_fsm.finish_fragment(),
             Err(Error::box_out_of_order(MovieFragmentBox::BOX_TYPE))
         );
     }
 
     #[test]
     fn a_sample_handed_over_while_no_fragment_is_open_is_rejected() {
-        let mut writer = FragmentedMuxFsm::new();
+        let mut mux_fsm = FragmentedMuxFsm::new();
 
         assert_eq!(
-            writer.handle_sample(sample()).map_err(Error::kind),
+            mux_fsm.handle_sample(sample()).map_err(Error::kind),
             Err(ErrorKind::Sample(isobmff_sample::ErrorKind::NoFragmentOpen))
         );
     }
 
     #[test]
     fn a_file_declared_over_without_a_movie_is_rejected() {
-        let mut writer = FragmentedMuxFsm::new();
+        let mut mux_fsm = FragmentedMuxFsm::new();
 
-        writer.handle_file_type(file_type()).unwrap();
+        mux_fsm.handle_file_type(file_type()).unwrap();
 
         assert_eq!(
-            writer.finish(),
+            mux_fsm.finish(),
             Err(Error::missing_mandatory_box(MovieBox::BOX_TYPE))
         );
     }
 
     #[test]
-    fn a_failed_writer_reports_the_same_failure_for_every_call_after_it() {
-        let mut writer = FragmentedMuxFsm::new();
+    fn a_failed_mux_fsm_reports_the_same_failure_for_every_call_after_it() {
+        let mut mux_fsm = FragmentedMuxFsm::new();
         let failure = Error::box_out_of_order(FileTypeBox::BOX_TYPE);
 
-        writer.handle_movie(movie()).unwrap();
+        mux_fsm.handle_movie(movie()).unwrap();
 
-        assert_eq!(writer.handle_file_type(file_type()), Err(failure));
-        assert_eq!(writer.begin_fragment(1), Err(failure));
-        assert_eq!(writer.finish(), Err(failure));
+        assert_eq!(mux_fsm.handle_file_type(file_type()), Err(failure));
+        assert_eq!(mux_fsm.begin_fragment(1), Err(failure));
+        assert_eq!(mux_fsm.finish(), Err(failure));
     }
 
     #[test]
-    fn a_failed_writer_hands_over_the_bytes_it_had_already_laid_down() {
-        let mut writer = FragmentedMuxFsm::new();
+    fn a_failed_mux_fsm_hands_over_the_bytes_it_had_already_laid_down() {
+        let mut mux_fsm = FragmentedMuxFsm::new();
 
-        writer.handle_file_type(file_type()).unwrap();
+        mux_fsm.handle_file_type(file_type()).unwrap();
 
-        assert!(writer.handle_file_type(file_type()).is_err());
+        assert!(mux_fsm.handle_file_type(file_type()).is_err());
 
-        assert_eq!(*writer.poll_output().unwrap(), *b"\0\0\0\x18ftyp");
+        assert_eq!(*mux_fsm.poll_output().unwrap(), *b"\0\0\0\x18ftyp");
     }
 
     #[test]
     fn anything_handed_over_after_finishing_is_rejected() {
-        let mut writer = FragmentedMuxFsm::new();
+        let mut mux_fsm = FragmentedMuxFsm::new();
 
-        writer.handle_file_type(file_type()).unwrap();
-        writer.handle_movie(movie()).unwrap();
-        writer.finish().unwrap();
+        mux_fsm.handle_file_type(file_type()).unwrap();
+        mux_fsm.handle_movie(movie()).unwrap();
+        mux_fsm.finish().unwrap();
 
         assert_eq!(
-            writer.handle_sample(sample()),
+            mux_fsm.handle_sample(sample()),
             Err(Error::already_finished())
         );
-        assert_eq!(writer.finish(), Err(Error::already_finished()));
+        assert_eq!(mux_fsm.finish(), Err(Error::already_finished()));
     }
 }

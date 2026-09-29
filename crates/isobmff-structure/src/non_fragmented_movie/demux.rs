@@ -75,28 +75,28 @@ use crate::{Error, WholeBoxReader};
 ///
 /// // The file is handed over as it arrives: the media data comes before any
 /// // sample has claimed it, so no sample is completed yet
-/// let mut reader = NonFragmentedDemuxFsm::new();
+/// let mut demux_fsm = NonFragmentedDemuxFsm::new();
 /// for arriving in file.chunks(7) {
-///     reader.handle_input(arriving)?;
+///     demux_fsm.handle_input(arriving)?;
 /// }
-/// assert_eq!(reader.poll_sample(), None);
+/// assert_eq!(demux_fsm.poll_sample(), None);
 ///
 /// // The movie has arrived, and names the bytes its samples lack in turn
-/// assert_eq!(reader.movie().map(|moov| moov.trak().len()), Some(1));
-/// while let Some(wanted) = reader.wanted_extent() {
+/// assert_eq!(demux_fsm.movie().map(|moov| moov.trak().len()), Some(1));
+/// while let Some(wanted) = demux_fsm.wanted_extent() {
 ///     let fetched = &file[wanted.start as usize..wanted.end as usize];
-///     reader.handle_data(wanted.start, fetched)?;
+///     demux_fsm.handle_data(wanted.start, fetched)?;
 /// }
-/// reader.finish()?;
+/// demux_fsm.finish()?;
 ///
 /// // The samples come back as the file laid them down
-/// let first = reader.poll_sample().unwrap();
+/// let first = demux_fsm.poll_sample().unwrap();
 /// assert_eq!((first.data(), first.decode_time()), (b"SAMP".as_slice(), 0));
-/// let second = reader.poll_sample().unwrap();
+/// let second = demux_fsm.poll_sample().unwrap();
 /// assert_eq!((second.data(), second.decode_time()), (b"DATA".as_slice(), 3_000));
-/// let third = reader.poll_sample().unwrap();
+/// let third = demux_fsm.poll_sample().unwrap();
 /// assert_eq!((third.data(), third.decode_time()), (b"LAST".as_slice(), 6_000));
-/// assert_eq!(reader.poll_sample(), None);
+/// assert_eq!(demux_fsm.poll_sample(), None);
 /// # Ok::<(), isobmff_structure::Error>(())
 /// ```
 #[derive(Debug)]
@@ -404,20 +404,20 @@ mod tests {
 
     /// What the reader makes of `file` handed over whole, then declared over
     fn read(file: &[u8]) -> Result<NonFragmentedDemuxFsm, Error> {
-        let mut reader = NonFragmentedDemuxFsm::new();
+        let mut demux_fsm = NonFragmentedDemuxFsm::new();
 
-        reader.handle_input(file)?;
-        reader.finish()?;
+        demux_fsm.handle_input(file)?;
+        demux_fsm.finish()?;
 
-        Ok(reader)
+        Ok(demux_fsm)
     }
 
     #[test]
     fn a_file_declaring_no_brands_is_read_all_the_same() {
-        let reader = read(&written(&unfragmented_movie())).unwrap();
+        let demux_fsm = read(&written(&unfragmented_movie())).unwrap();
 
-        assert_eq!(reader.file_type(), None);
-        assert_eq!(reader.movie(), Some(&unfragmented_movie()));
+        assert_eq!(demux_fsm.file_type(), None);
+        assert_eq!(demux_fsm.movie(), Some(&unfragmented_movie()));
     }
 
     #[test]
@@ -430,11 +430,11 @@ mod tests {
 
     #[test]
     fn a_box_read_into_a_value_declaring_a_payload_past_the_limit_is_rejected() {
-        let mut reader =
+        let mut demux_fsm =
             NonFragmentedDemuxFsm::with_limits(4, SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT);
 
         assert_eq!(
-            reader
+            demux_fsm
                 .handle_input(&written(&file_type()))
                 .map_err(Error::kind),
             Err(ErrorKind::PayloadLimitExceeded)
@@ -449,14 +449,14 @@ mod tests {
             framed(BoxType::compact(*b"free"), &[0x11; 4_096]),
         ]
         .concat();
-        let mut reader = NonFragmentedDemuxFsm::with_limits(
+        let mut demux_fsm = NonFragmentedDemuxFsm::with_limits(
             movie.len() as u64,
             SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT,
         );
 
-        reader.handle_input(&file).unwrap();
+        demux_fsm.handle_input(&file).unwrap();
 
-        assert_eq!(reader.finish(), Ok(()));
+        assert_eq!(demux_fsm.finish(), Ok(()));
     }
 
     #[test]
@@ -464,9 +464,9 @@ mod tests {
         let mut file = written(&unfragmented_movie());
         file.splice(..4, [0x00, 0x00, 0x00, 0x00]);
 
-        let reader = read(&file).unwrap();
+        let demux_fsm = read(&file).unwrap();
 
-        assert_eq!(reader.movie(), Some(&unfragmented_movie()));
+        assert_eq!(demux_fsm.movie(), Some(&unfragmented_movie()));
     }
 
     #[test]
@@ -474,16 +474,16 @@ mod tests {
         let mut file = non_fragmented_file(&[&[b"SAMP"]], true);
         file.extend_from_slice(b"\0\0\0\x04free");
 
-        let mut reader = NonFragmentedDemuxFsm::new();
+        let mut demux_fsm = NonFragmentedDemuxFsm::new();
 
         assert_eq!(
-            reader.handle_input(&file).map_err(Error::kind),
+            demux_fsm.handle_input(&file).map_err(Error::kind),
             Err(ErrorKind::Sequence(isobmff_sequence::ErrorKind::Box(
                 isobmff_core::ErrorKind::SizeBelowHeader
             )))
         );
         assert_eq!(
-            reader.poll_sample().map(Sample::into_data),
+            demux_fsm.poll_sample().map(Sample::into_data),
             Some(b"SAMP".to_vec())
         );
     }
@@ -491,12 +491,12 @@ mod tests {
     #[test]
     fn a_file_declared_over_with_a_sample_short_of_its_bytes_is_rejected() {
         let file = non_fragmented_file(&[&[b"SAMP"]], false);
-        let mut reader = NonFragmentedDemuxFsm::new();
+        let mut demux_fsm = NonFragmentedDemuxFsm::new();
 
-        reader.handle_input(&file).unwrap();
+        demux_fsm.handle_input(&file).unwrap();
 
         assert_eq!(
-            reader.finish().map_err(Error::kind),
+            demux_fsm.finish().map_err(Error::kind),
             Err(ErrorKind::Sample(
                 isobmff_sample::ErrorKind::UnfinishedSample
             ))
@@ -504,32 +504,32 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_reader_reports_the_same_failure_for_every_call_after_it() {
-        let mut reader = NonFragmentedDemuxFsm::new();
+    fn a_failed_demux_fsm_reports_the_same_failure_for_every_call_after_it() {
+        let mut demux_fsm = NonFragmentedDemuxFsm::new();
         let failure = Error::box_out_of_order(FileTypeBox::BOX_TYPE);
         let file = [written(&file_type()), written(&file_type())].concat();
 
-        assert_eq!(reader.handle_input(&file), Err(failure));
+        assert_eq!(demux_fsm.handle_input(&file), Err(failure));
         assert_eq!(
-            reader.handle_input(&written(&unfragmented_movie())),
+            demux_fsm.handle_input(&written(&unfragmented_movie())),
             Err(failure)
         );
-        assert_eq!(reader.handle_data(0, b"SAMP"), Err(failure));
-        assert_eq!(reader.finish(), Err(failure));
+        assert_eq!(demux_fsm.handle_data(0, b"SAMP"), Err(failure));
+        assert_eq!(demux_fsm.finish(), Err(failure));
     }
 
     #[test]
     fn input_handed_over_after_finishing_is_rejected() {
-        let mut reader = read(&written(&unfragmented_movie())).unwrap();
+        let mut demux_fsm = read(&written(&unfragmented_movie())).unwrap();
 
         assert_eq!(
-            reader.handle_input(&written(&file_type())),
+            demux_fsm.handle_input(&written(&file_type())),
             Err(Error::already_finished())
         );
         assert_eq!(
-            reader.handle_data(0, b"SAMP"),
+            demux_fsm.handle_data(0, b"SAMP"),
             Err(Error::already_finished())
         );
-        assert_eq!(reader.finish(), Err(Error::already_finished()));
+        assert_eq!(demux_fsm.finish(), Err(Error::already_finished()));
     }
 }

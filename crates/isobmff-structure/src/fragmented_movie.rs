@@ -26,10 +26,10 @@ mod tests {
 
     /// A file of one fragment carrying [`sample`], handed no brands
     pub(super) fn file_of_one_sample() -> Vec<u8> {
-        let mut writer = FragmentedMuxFsm::new();
+        let mut mux_fsm = FragmentedMuxFsm::new();
         let mut file = Vec::new();
 
-        writer
+        mux_fsm
             .handle_movie(fragmented_movie(TrackExtendsBox::new(
                 1,
                 1,
@@ -38,11 +38,11 @@ mod tests {
                 SampleFlags::ZERO,
             )))
             .unwrap();
-        writer.begin_fragment(1).unwrap();
-        writer.handle_sample(sample()).unwrap();
-        writer.finish_fragment().unwrap();
-        writer.finish().unwrap();
-        while let Some(written) = writer.poll_output() {
+        mux_fsm.begin_fragment(1).unwrap();
+        mux_fsm.handle_sample(sample()).unwrap();
+        mux_fsm.finish_fragment().unwrap();
+        mux_fsm.finish().unwrap();
+        while let Some(written) = mux_fsm.poll_output() {
             file.extend_from_slice(&written);
         }
 

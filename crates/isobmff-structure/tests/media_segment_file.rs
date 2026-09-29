@@ -41,14 +41,14 @@ mod tests {
     #[test]
     fn a_segment_read_in_order_yields_every_sample_and_an_index_pointing_at_its_fragments() {
         let segment = indexed_segment_file();
-        let mut reader = MediaSegmentDemuxFsm::new(presentation_movie());
+        let mut demux_fsm = MediaSegmentDemuxFsm::new(presentation_movie());
 
-        reader.handle_input(&segment.bytes).unwrap();
-        reader.finish().unwrap();
+        demux_fsm.handle_input(&segment.bytes).unwrap();
+        demux_fsm.finish().unwrap();
 
-        assert_eq!(drained(&mut reader), segment.fragment_samples.concat());
+        assert_eq!(drained(&mut demux_fsm), segment.fragment_samples.concat());
         assert_eq!(
-            reader
+            demux_fsm
                 .segment_indexes()
                 .iter()
                 .map(|segment_index| segment_index
@@ -65,13 +65,13 @@ mod tests {
     fn resuming_at_the_second_fragment_yields_its_samples_alone() {
         let segment = indexed_segment_file();
         let second = *segment.moof_offsets.get(1).unwrap();
-        let mut reader = MediaSegmentDemuxFsm::new(presentation_movie());
-        reader.handle_input(&segment.bytes).unwrap();
-        reader.finish().unwrap();
-        drained(&mut reader);
+        let mut demux_fsm = MediaSegmentDemuxFsm::new(presentation_movie());
+        demux_fsm.handle_input(&segment.bytes).unwrap();
+        demux_fsm.finish().unwrap();
+        drained(&mut demux_fsm);
 
-        reader.resume_at(second).unwrap();
-        reader
+        demux_fsm.resume_at(second).unwrap();
+        demux_fsm
             .handle_input(
                 segment
                     .bytes
@@ -79,10 +79,10 @@ mod tests {
                     .unwrap(),
             )
             .unwrap();
-        reader.finish().unwrap();
+        demux_fsm.finish().unwrap();
 
         assert_eq!(
-            &drained(&mut reader),
+            &drained(&mut demux_fsm),
             segment.fragment_samples.get(1).unwrap()
         );
     }

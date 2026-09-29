@@ -92,21 +92,21 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 /// use isobmff_structure::{NonFragmentedDemuxFsm, NonFragmentedMuxFsm};
 /// # use isobmff_test_support::{file_type, unfragmented_movie};
 /// // A file opening with its brands, whose movie declares one track and no sample yet
-/// let mut writer = NonFragmentedMuxFsm::new();
-/// writer.handle_file_type(file_type())?;
-/// writer.handle_movie(unfragmented_movie())?;
+/// let mut mux_fsm = NonFragmentedMuxFsm::new();
+/// mux_fsm.handle_file_type(file_type())?;
+/// mux_fsm.handle_movie(unfragmented_movie())?;
 ///
 /// // Two chunks of track 1, each laid down as its own `mdat`
-/// writer.begin_chunk()?;
-/// writer.handle_sample(Sample::new(1, 0, 3_000, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
-/// writer.handle_sample(Sample::new(1, 3_000, 3_000, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
-/// writer.begin_chunk()?;
-/// writer.handle_sample(Sample::new(1, 6_000, 3_000, 0, SampleFlags::ZERO, 1, b"LAST".to_vec()))?;
-/// writer.finish()?;
+/// mux_fsm.begin_chunk()?;
+/// mux_fsm.handle_sample(Sample::new(1, 0, 3_000, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
+/// mux_fsm.handle_sample(Sample::new(1, 3_000, 3_000, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
+/// mux_fsm.begin_chunk()?;
+/// mux_fsm.handle_sample(Sample::new(1, 6_000, 3_000, 0, SampleFlags::ZERO, 1, b"LAST".to_vec()))?;
+/// mux_fsm.finish()?;
 ///
-/// // The bytes are drained as the writer hands them over
+/// // The bytes are drained as the mux FSM hands them over
 /// let mut file = Vec::new();
-/// while let Some(written) = writer.poll_output() {
+/// while let Some(written) = mux_fsm.poll_output() {
 ///     file.extend_from_slice(&written);
 /// }
 ///
@@ -114,13 +114,13 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 /// assert_eq!(&file[4..8], b"ftyp");
 ///
 /// // Read back, the samples come out as they were laid down
-/// let mut reader = NonFragmentedDemuxFsm::new();
-/// reader.handle_input(&file)?;
-/// while let Some(wanted) = reader.wanted_extent() {
-///     reader.handle_data(wanted.start, &file[wanted.start as usize..wanted.end as usize])?;
+/// let mut demux_fsm = NonFragmentedDemuxFsm::new();
+/// demux_fsm.handle_input(&file)?;
+/// while let Some(wanted) = demux_fsm.wanted_extent() {
+///     demux_fsm.handle_data(wanted.start, &file[wanted.start as usize..wanted.end as usize])?;
 /// }
-/// reader.finish()?;
-/// let read_back: Vec<Vec<u8>> = core::iter::from_fn(|| reader.poll_sample())
+/// demux_fsm.finish()?;
+/// let read_back: Vec<Vec<u8>> = core::iter::from_fn(|| demux_fsm.poll_sample())
 ///     .map(Sample::into_data)
 ///     .collect();
 /// assert_eq!(read_back, [b"SAMP".to_vec(), b"DATA".to_vec(), b"LAST".to_vec()]);
@@ -438,9 +438,9 @@ mod tests {
     }
 
     /// The bytes the writer has laid down, drained to the end
-    fn drained(writer: &mut NonFragmentedMuxFsm) -> Vec<u8> {
+    fn drained(mux_fsm: &mut NonFragmentedMuxFsm) -> Vec<u8> {
         let mut file = Vec::new();
-        while let Some(written) = writer.poll_output() {
+        while let Some(written) = mux_fsm.poll_output() {
             file.extend_from_slice(&written);
         }
 
@@ -448,12 +448,12 @@ mod tests {
     }
 
     #[test]
-    fn a_file_handed_no_brands_opens_with_the_brands_the_writer_declares() {
-        let mut writer = NonFragmentedMuxFsm::new();
+    fn a_file_handed_no_brands_opens_with_the_brands_the_mux_fsm_declares() {
+        let mut mux_fsm = NonFragmentedMuxFsm::new();
 
-        writer.handle_movie(unfragmented_movie()).unwrap();
-        writer.finish().unwrap();
-        let file = drained(&mut writer);
+        mux_fsm.handle_movie(unfragmented_movie()).unwrap();
+        mux_fsm.finish().unwrap();
+        let file = drained(&mut mux_fsm);
 
         assert_eq!(
             FileTypeBox::decode(&file).map(|(file_type, rest)| (file_type, rest.get(4..8))),
@@ -462,14 +462,15 @@ mod tests {
     }
 
     #[test]
-    fn a_file_handed_no_brands_whose_chunk_comes_first_opens_with_the_brands_the_writer_declares() {
-        let mut writer = NonFragmentedMuxFsm::new();
+    fn a_file_handed_no_brands_whose_chunk_comes_first_opens_with_the_brands_the_mux_fsm_declares()
+    {
+        let mut mux_fsm = NonFragmentedMuxFsm::new();
 
-        writer.begin_chunk().unwrap();
-        writer.handle_sample(sample()).unwrap();
-        writer.handle_movie(unfragmented_movie()).unwrap();
-        writer.finish().unwrap();
-        let file = drained(&mut writer);
+        mux_fsm.begin_chunk().unwrap();
+        mux_fsm.handle_sample(sample()).unwrap();
+        mux_fsm.handle_movie(unfragmented_movie()).unwrap();
+        mux_fsm.finish().unwrap();
+        let file = drained(&mut mux_fsm);
 
         assert_eq!(
             FileTypeBox::decode(&file).map(|(file_type, rest)| (file_type, rest.get(4..8))),
@@ -479,12 +480,12 @@ mod tests {
 
     #[test]
     fn the_brands_handed_over_are_laid_down_as_they_stand() {
-        let mut writer = NonFragmentedMuxFsm::new();
+        let mut mux_fsm = NonFragmentedMuxFsm::new();
 
-        writer.handle_file_type(file_type()).unwrap();
-        writer.handle_movie(unfragmented_movie()).unwrap();
-        writer.finish().unwrap();
-        let file = drained(&mut writer);
+        mux_fsm.handle_file_type(file_type()).unwrap();
+        mux_fsm.handle_movie(unfragmented_movie()).unwrap();
+        mux_fsm.finish().unwrap();
+        let file = drained(&mut mux_fsm);
 
         assert_eq!(
             FileTypeBox::decode(&file).map(|(file_type, rest)| (file_type, rest.get(4..8))),
@@ -494,14 +495,14 @@ mod tests {
 
     #[test]
     fn a_chunk_no_sample_was_handed_over_to_leaves_no_media_data_box() {
-        let mut writer = NonFragmentedMuxFsm::new();
+        let mut mux_fsm = NonFragmentedMuxFsm::new();
 
-        writer.handle_movie(unfragmented_movie()).unwrap();
-        writer.begin_chunk().unwrap();
-        writer.begin_chunk().unwrap();
-        writer.handle_sample(sample()).unwrap();
-        writer.finish().unwrap();
-        let file = drained(&mut writer);
+        mux_fsm.handle_movie(unfragmented_movie()).unwrap();
+        mux_fsm.begin_chunk().unwrap();
+        mux_fsm.begin_chunk().unwrap();
+        mux_fsm.handle_sample(sample()).unwrap();
+        mux_fsm.finish().unwrap();
+        let file = drained(&mut mux_fsm);
 
         assert_eq!(file.get(24..28), Some(b"mdat".as_slice()));
         assert_eq!(file.get(36..40), Some(b"moov".as_slice()));
@@ -509,46 +510,46 @@ mod tests {
 
     #[test]
     fn brands_handed_over_after_a_chunk_was_opened_are_out_of_order() {
-        let mut writer = NonFragmentedMuxFsm::new();
+        let mut mux_fsm = NonFragmentedMuxFsm::new();
 
-        writer.handle_movie(unfragmented_movie()).unwrap();
-        writer.begin_chunk().unwrap();
+        mux_fsm.handle_movie(unfragmented_movie()).unwrap();
+        mux_fsm.begin_chunk().unwrap();
 
         assert_eq!(
-            writer.handle_file_type(file_type()),
+            mux_fsm.handle_file_type(file_type()),
             Err(Error::box_out_of_order(FileTypeBox::BOX_TYPE))
         );
     }
 
     #[test]
     fn a_second_movie_is_rejected() {
-        let mut writer = NonFragmentedMuxFsm::new();
+        let mut mux_fsm = NonFragmentedMuxFsm::new();
 
-        writer.handle_movie(unfragmented_movie()).unwrap();
+        mux_fsm.handle_movie(unfragmented_movie()).unwrap();
 
         assert_eq!(
-            writer.handle_movie(unfragmented_movie()),
+            mux_fsm.handle_movie(unfragmented_movie()),
             Err(Error::duplicate_box(MovieBox::BOX_TYPE))
         );
     }
 
     #[test]
     fn a_sample_handed_over_while_no_chunk_is_open_is_rejected() {
-        let mut writer = NonFragmentedMuxFsm::new();
+        let mut mux_fsm = NonFragmentedMuxFsm::new();
 
         assert_eq!(
-            writer.handle_sample(sample()).map_err(Error::kind),
+            mux_fsm.handle_sample(sample()).map_err(Error::kind),
             Err(ErrorKind::Sample(isobmff_sample::ErrorKind::NoChunkOpen))
         );
     }
 
     #[test]
     fn a_sample_of_a_track_the_movie_does_not_declare_is_rejected_when_the_file_is_declared_over() {
-        let mut writer = NonFragmentedMuxFsm::new();
+        let mut mux_fsm = NonFragmentedMuxFsm::new();
 
-        writer.handle_movie(unfragmented_movie()).unwrap();
-        writer.begin_chunk().unwrap();
-        writer
+        mux_fsm.handle_movie(unfragmented_movie()).unwrap();
+        mux_fsm.begin_chunk().unwrap();
+        mux_fsm
             .handle_sample(Sample::new(
                 7,
                 0,
@@ -561,60 +562,60 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            writer.finish().map_err(Error::kind),
+            mux_fsm.finish().map_err(Error::kind),
             Err(ErrorKind::Sample(isobmff_sample::ErrorKind::UnknownTrackId))
         );
     }
 
     #[test]
     fn a_file_declared_over_without_a_movie_is_rejected() {
-        let mut writer = NonFragmentedMuxFsm::new();
+        let mut mux_fsm = NonFragmentedMuxFsm::new();
 
-        writer.handle_file_type(file_type()).unwrap();
+        mux_fsm.handle_file_type(file_type()).unwrap();
 
         assert_eq!(
-            writer.finish(),
+            mux_fsm.finish(),
             Err(Error::missing_mandatory_box(MovieBox::BOX_TYPE))
         );
     }
 
     #[test]
-    fn a_failed_writer_reports_the_same_failure_for_every_call_after_it() {
-        let mut writer = NonFragmentedMuxFsm::new();
+    fn a_failed_mux_fsm_reports_the_same_failure_for_every_call_after_it() {
+        let mut mux_fsm = NonFragmentedMuxFsm::new();
         let failure = Error::box_out_of_order(FileTypeBox::BOX_TYPE);
 
-        writer.handle_movie(unfragmented_movie()).unwrap();
+        mux_fsm.handle_movie(unfragmented_movie()).unwrap();
 
-        assert_eq!(writer.handle_file_type(file_type()), Err(failure));
-        assert_eq!(writer.begin_chunk(), Err(failure));
-        assert_eq!(writer.handle_sample(sample()), Err(failure));
-        assert_eq!(writer.finish(), Err(failure));
+        assert_eq!(mux_fsm.handle_file_type(file_type()), Err(failure));
+        assert_eq!(mux_fsm.begin_chunk(), Err(failure));
+        assert_eq!(mux_fsm.handle_sample(sample()), Err(failure));
+        assert_eq!(mux_fsm.finish(), Err(failure));
     }
 
     #[test]
-    fn a_failed_writer_hands_over_the_bytes_it_had_already_laid_down() {
-        let mut writer = NonFragmentedMuxFsm::new();
+    fn a_failed_mux_fsm_hands_over_the_bytes_it_had_already_laid_down() {
+        let mut mux_fsm = NonFragmentedMuxFsm::new();
 
-        writer.handle_file_type(file_type()).unwrap();
+        mux_fsm.handle_file_type(file_type()).unwrap();
 
-        assert!(writer.handle_file_type(file_type()).is_err());
+        assert!(mux_fsm.handle_file_type(file_type()).is_err());
 
-        assert_eq!(*writer.poll_output().unwrap(), *b"\0\0\0\x18ftyp");
+        assert_eq!(*mux_fsm.poll_output().unwrap(), *b"\0\0\0\x18ftyp");
     }
 
     #[test]
     fn anything_handed_over_after_finishing_is_rejected() {
-        let mut writer = NonFragmentedMuxFsm::new();
+        let mut mux_fsm = NonFragmentedMuxFsm::new();
 
-        writer.handle_file_type(file_type()).unwrap();
-        writer.handle_movie(unfragmented_movie()).unwrap();
-        writer.finish().unwrap();
+        mux_fsm.handle_file_type(file_type()).unwrap();
+        mux_fsm.handle_movie(unfragmented_movie()).unwrap();
+        mux_fsm.finish().unwrap();
 
-        assert_eq!(writer.begin_chunk(), Err(Error::already_finished()));
+        assert_eq!(mux_fsm.begin_chunk(), Err(Error::already_finished()));
         assert_eq!(
-            writer.handle_sample(sample()),
+            mux_fsm.handle_sample(sample()),
             Err(Error::already_finished())
         );
-        assert_eq!(writer.finish(), Err(Error::already_finished()));
+        assert_eq!(mux_fsm.finish(), Err(Error::already_finished()));
     }
 }
