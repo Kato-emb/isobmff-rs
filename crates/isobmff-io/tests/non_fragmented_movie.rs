@@ -7,8 +7,9 @@ mod tests {
     use futures_executor::block_on;
     use futures_util::io::Cursor;
     use isobmff_boxes::{HeaderDuration, MovieBox};
-    use isobmff_io::blocking::{NonFragmentedDemuxer, NonFragmentedMuxer};
+    use isobmff_io::blocking::{DemuxDriver, NonFragmentedMuxer};
     use isobmff_sample::Sample;
+    use isobmff_structure::NonFragmentedDemuxFsm;
     use isobmff_test_support::{
         SAMPLE_CHUNKS, SAMPLE_DURATION, file_type, non_fragmented_file,
         non_fragmented_file_samples, unfragmented_movie,
@@ -19,10 +20,11 @@ mod tests {
         for movie_first in [true, false] {
             let file = non_fragmented_file(&SAMPLE_CHUNKS, movie_first);
 
-            let read_back: Vec<Sample> = NonFragmentedDemuxer::new(io::Cursor::new(file))
-                .unwrap()
-                .collect::<Result<_, _>>()
-                .unwrap();
+            let read_back: Vec<Sample> =
+                DemuxDriver::new(io::Cursor::new(file), NonFragmentedDemuxFsm::new())
+                    .unwrap()
+                    .collect::<Result<_, _>>()
+                    .unwrap();
 
             assert_eq!(read_back, non_fragmented_file_samples());
         }
@@ -44,10 +46,11 @@ mod tests {
         }
         muxer.finish().unwrap();
 
-        let read_back: Vec<Sample> = NonFragmentedDemuxer::new(io::Cursor::new(&file))
-            .unwrap()
-            .collect::<Result<_, _>>()
-            .unwrap();
+        let read_back: Vec<Sample> =
+            DemuxDriver::new(io::Cursor::new(&file), NonFragmentedDemuxFsm::new())
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
 
         assert_eq!(read_back, non_fragmented_file_samples());
     }
@@ -67,13 +70,14 @@ mod tests {
         }
         muxer.finish().unwrap();
 
-        let mut demuxer = NonFragmentedDemuxer::new(io::Cursor::new(&file)).unwrap();
-        for sample in &mut demuxer {
+        let mut driver =
+            DemuxDriver::new(io::Cursor::new(&file), NonFragmentedDemuxFsm::new()).unwrap();
+        for sample in &mut driver {
             sample.unwrap();
         }
 
         assert_eq!(
-            demuxer.movie().map(MovieBox::mvhd),
+            driver.fsm().movie().map(MovieBox::mvhd),
             Some(
                 &unfragmented_movie()
                     .mvhd()

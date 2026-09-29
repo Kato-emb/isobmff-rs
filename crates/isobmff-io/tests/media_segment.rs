@@ -6,8 +6,9 @@ mod tests {
 
     use futures_executor::block_on;
     use futures_util::io::Cursor;
-    use isobmff_io::blocking::{MediaSegmentDemuxer, MediaSegmentMuxer};
+    use isobmff_io::blocking::{DemuxDriver, MediaSegmentMuxer};
     use isobmff_sample::Sample;
+    use isobmff_structure::MediaSegmentDemuxFsm;
     use isobmff_test_support::{
         indexed_segment_file, presentation_movie, segment_file_samples, segment_file_with_samples,
         segment_type,
@@ -15,9 +16,9 @@ mod tests {
 
     #[test]
     fn a_source_that_seeks_has_every_sample_read_off_it() {
-        let read_back: Vec<Sample> = MediaSegmentDemuxer::new(
+        let read_back: Vec<Sample> = DemuxDriver::new(
             io::Cursor::new(segment_file_with_samples()),
-            presentation_movie(),
+            MediaSegmentDemuxFsm::new(presentation_movie()),
         )
         .unwrap()
         .collect::<Result<_, _>>()
@@ -39,11 +40,13 @@ mod tests {
         muxer.finish_fragment().unwrap();
         muxer.finish().unwrap();
 
-        let read_back: Vec<Sample> =
-            MediaSegmentDemuxer::new(io::Cursor::new(&segment), presentation_movie())
-                .unwrap()
-                .collect::<Result<_, _>>()
-                .unwrap();
+        let read_back: Vec<Sample> = DemuxDriver::new(
+            io::Cursor::new(&segment),
+            MediaSegmentDemuxFsm::new(presentation_movie()),
+        )
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
 
         assert_eq!(read_back, segment_file_samples());
     }
@@ -101,23 +104,28 @@ mod tests {
     fn the_sidx_read_in_order_names_the_subsegment_a_time_is_read_from() {
         let file = indexed_segment_file();
         let second = file.fragment_samples.get(1).unwrap();
-        let mut demuxer =
-            MediaSegmentDemuxer::new(io::Cursor::new(file.bytes.clone()), presentation_movie())
-                .unwrap();
+        let mut driver = DemuxDriver::new(
+            io::Cursor::new(file.bytes.clone()),
+            MediaSegmentDemuxFsm::new(presentation_movie()),
+        )
+        .unwrap();
         assert_eq!(
-            demuxer.by_ref().collect::<Result<Vec<_>, _>>().unwrap(),
+            driver.by_ref().collect::<Result<Vec<_>, _>>().unwrap(),
             file.fragment_samples.concat()
         );
 
-        let subsegment = demuxer
+        let subsegment_start = driver
+            .fsm()
             .segment_indexes()
             .first()
             .unwrap()
             .subsegment_at(second.first().unwrap().decode_time())
-            .unwrap();
-        demuxer.resume_at(subsegment.extent().start).unwrap();
+            .unwrap()
+            .extent()
+            .start;
+        driver.fsm_mut().resume_at(subsegment_start).unwrap();
 
-        assert_eq!(demuxer.collect::<Result<Vec<_>, _>>().unwrap(), *second);
+        assert_eq!(driver.collect::<Result<Vec<_>, _>>().unwrap(), *second);
     }
 
     #[test]

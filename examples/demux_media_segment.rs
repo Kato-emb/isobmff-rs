@@ -8,7 +8,8 @@ use core::error::Error;
 use std::env;
 use std::fs::File;
 
-use isobmff::io::blocking::{FragmentedDemuxer, MediaSegmentDemuxer};
+use isobmff::io::blocking::DemuxDriver;
+use isobmff::structure::{FragmentedDemuxFsm, MediaSegmentDemuxFsm};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let usage = "usage: demux_media_segment <initialization.mp4> <segment.m4s>";
@@ -16,16 +17,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     let initialization_path = arguments.next().ok_or(usage)?;
     let segment_path = arguments.next().ok_or(usage)?;
 
-    let mut initialization = FragmentedDemuxer::new(File::open(initialization_path)?)?;
+    let mut initialization =
+        DemuxDriver::new(File::open(initialization_path)?, FragmentedDemuxFsm::new())?;
     initialization.next().transpose()?;
     let movie = initialization
+        .fsm()
         .movie()
         .ok_or("the initialization segment carries no movie")?
         .clone();
-    let demuxer = MediaSegmentDemuxer::new(File::open(segment_path)?, movie)?;
+    let driver = DemuxDriver::new(File::open(segment_path)?, MediaSegmentDemuxFsm::new(movie))?;
 
     let mut count: u64 = 0;
-    for sample in demuxer {
+    for sample in driver {
         let sample = sample?;
         println!(
             "track={} time={} size={} sync={}",

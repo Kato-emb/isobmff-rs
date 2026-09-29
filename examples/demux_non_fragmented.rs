@@ -6,17 +6,18 @@ use core::error::Error;
 use std::env;
 use std::fs::File;
 
-use isobmff::io::blocking::NonFragmentedDemuxer;
+use isobmff::io::blocking::DemuxDriver;
+use isobmff::structure::NonFragmentedDemuxFsm;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let path = env::args()
         .nth(1)
         .ok_or("usage: demux_non_fragmented <in.mp4>")?;
 
-    let demuxer = NonFragmentedDemuxer::new(File::open(path)?)?;
+    let driver = DemuxDriver::new(File::open(path)?, NonFragmentedDemuxFsm::new())?;
 
     let mut count: u64 = 0;
-    for sample in demuxer {
+    for sample in driver {
         let sample = sample?;
         println!(
             "track={} time={} size={} sync={}",

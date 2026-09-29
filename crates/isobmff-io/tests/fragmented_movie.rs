@@ -6,9 +6,10 @@ mod tests {
 
     use futures_executor::block_on;
     use futures_util::io::Cursor;
-    use isobmff_io::blocking::{FragmentedDemuxer, FragmentedMuxer};
+    use isobmff_io::blocking::{DemuxDriver, FragmentedMuxer};
     use isobmff_sample::Sample;
     use isobmff_sample::movie_fragment_random_access::sync_sample_at;
+    use isobmff_structure::FragmentedDemuxFsm;
     use isobmff_test_support::{
         file_type, fragmented_file_samples, fragmented_file_with_samples, indexed_fragmented_file,
         presentation_movie,
@@ -16,11 +17,13 @@ mod tests {
 
     #[test]
     fn a_source_that_seeks_has_every_sample_read_off_it() {
-        let read_back: Vec<Sample> =
-            FragmentedDemuxer::new(io::Cursor::new(fragmented_file_with_samples()))
-                .unwrap()
-                .collect::<Result<_, _>>()
-                .unwrap();
+        let read_back: Vec<Sample> = DemuxDriver::new(
+            io::Cursor::new(fragmented_file_with_samples()),
+            FragmentedDemuxFsm::new(),
+        )
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
 
         assert_eq!(read_back, fragmented_file_samples());
     }
@@ -39,10 +42,11 @@ mod tests {
         muxer.finish_fragment().unwrap();
         muxer.finish().unwrap();
 
-        let read_back: Vec<Sample> = FragmentedDemuxer::new(io::Cursor::new(&file))
-            .unwrap()
-            .collect::<Result<_, _>>()
-            .unwrap();
+        let read_back: Vec<Sample> =
+            DemuxDriver::new(io::Cursor::new(&file), FragmentedDemuxFsm::new())
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
 
         assert_eq!(read_back, fragmented_file_samples());
     }
@@ -98,25 +102,32 @@ mod tests {
     fn the_mfra_found_at_the_end_of_the_file_names_the_fragment_a_time_is_read_from() {
         let file = indexed_fragmented_file();
         let second = file.fragment_samples.get(1).unwrap();
-        let mut demuxer = FragmentedDemuxer::new(io::Cursor::new(file.bytes.clone())).unwrap();
-        demuxer.next().unwrap().unwrap();
+        let mut driver = DemuxDriver::new(
+            io::Cursor::new(file.bytes.clone()),
+            FragmentedDemuxFsm::new(),
+        )
+        .unwrap();
+        driver.next().unwrap().unwrap();
 
-        let mfra = demuxer
+        let mfra = driver
             .locate_movie_fragment_random_access()
             .unwrap()
             .unwrap();
-        demuxer.resume_at(mfra).unwrap();
-        assert!(demuxer.next().is_none());
-        let tfra = demuxer
+        driver.fsm_mut().resume_at(mfra).unwrap();
+        assert!(driver.next().is_none());
+        let tfra = driver
+            .fsm()
             .movie_fragment_random_access()
             .unwrap()
             .tfra()
             .first()
             .unwrap();
-        let sync_sample = sync_sample_at(tfra, second.first().unwrap().decode_time()).unwrap();
-        demuxer.resume_at(sync_sample.moof_offset()).unwrap();
+        let moof_offset = sync_sample_at(tfra, second.first().unwrap().decode_time())
+            .unwrap()
+            .moof_offset();
+        driver.fsm_mut().resume_at(moof_offset).unwrap();
 
-        assert_eq!(demuxer.collect::<Result<Vec<_>, _>>().unwrap(), *second);
+        assert_eq!(driver.collect::<Result<Vec<_>, _>>().unwrap(), *second);
     }
 
     #[test]
