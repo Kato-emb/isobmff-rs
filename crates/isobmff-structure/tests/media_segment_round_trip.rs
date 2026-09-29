@@ -80,23 +80,23 @@ mod tests {
         fragments: Vec<Vec<Sample>>,
         begin: fn(&mut MediaSegmentMuxFsm, u32) -> Result<(), Error>,
     ) -> Vec<u8> {
-        let mut writer = MediaSegmentMuxFsm::new();
+        let mut mux_fsm = MediaSegmentMuxFsm::new();
         let mut segment = Vec::new();
 
-        writer.handle_segment_type(segment_type()).unwrap();
+        mux_fsm.handle_segment_type(segment_type()).unwrap();
 
         for (position, samples) in fragments.into_iter().enumerate() {
             let sequence_number = u32::try_from(position).unwrap().saturating_add(1);
 
-            begin(&mut writer, sequence_number).unwrap();
+            begin(&mut mux_fsm, sequence_number).unwrap();
             for sample in samples {
-                writer.handle_sample(sample).unwrap();
+                mux_fsm.handle_sample(sample).unwrap();
             }
-            writer.finish_fragment().unwrap();
+            mux_fsm.finish_fragment().unwrap();
         }
-        writer.finish().unwrap();
+        mux_fsm.finish().unwrap();
 
-        while let Some(written) = writer.poll_output() {
+        while let Some(written) = mux_fsm.poll_output() {
             segment.extend_from_slice(&written);
         }
 

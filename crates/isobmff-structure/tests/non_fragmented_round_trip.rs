@@ -80,22 +80,22 @@ mod tests {
         movie: MovieBox,
         chunks: Vec<Vec<Sample>>,
     ) -> Vec<u8> {
-        let mut writer = NonFragmentedMuxFsm::new();
+        let mut mux_fsm = NonFragmentedMuxFsm::new();
         let mut file = Vec::new();
 
         if let Some(brands) = brands {
-            writer.handle_file_type(brands).unwrap();
+            mux_fsm.handle_file_type(brands).unwrap();
         }
-        writer.handle_movie(movie).unwrap();
+        mux_fsm.handle_movie(movie).unwrap();
         for chunk in chunks {
-            writer.begin_chunk().unwrap();
+            mux_fsm.begin_chunk().unwrap();
             for sample in chunk {
-                writer.handle_sample(sample).unwrap();
+                mux_fsm.handle_sample(sample).unwrap();
             }
         }
-        writer.finish().unwrap();
+        mux_fsm.finish().unwrap();
 
-        while let Some(written) = writer.poll_output() {
+        while let Some(written) = mux_fsm.poll_output() {
             file.extend_from_slice(&written);
         }
 
@@ -136,11 +136,11 @@ mod tests {
     fn a_file_handed_no_brands_is_read_back_declaring_the_brand_its_layout_requires() {
         let file = written_file(None, movie(), two_track_chunks());
 
-        let mut reader = NonFragmentedDemuxFsm::new();
-        reader.handle_input(&file).unwrap();
+        let mut demux_fsm = NonFragmentedDemuxFsm::new();
+        demux_fsm.handle_input(&file).unwrap();
 
         assert_eq!(
-            reader.file_type(),
+            demux_fsm.file_type(),
             Some(&FileTypeBox::new(
                 FourCC::new(*b"iso4"),
                 0,
@@ -153,9 +153,9 @@ mod tests {
     fn the_durations_are_stated_from_the_samples_each_track_was_handed() {
         let file = written_file(None, movie_timed_in(1_000), two_track_chunks());
 
-        let mut reader = NonFragmentedDemuxFsm::new();
-        reader.handle_input(&file).unwrap();
-        let read = reader.movie().unwrap();
+        let mut demux_fsm = NonFragmentedDemuxFsm::new();
+        demux_fsm.handle_input(&file).unwrap();
+        let read = demux_fsm.movie().unwrap();
 
         let mut expected = read.clone();
         let duration = |value| HeaderDuration::new(value).unwrap();
@@ -175,14 +175,14 @@ mod tests {
     #[test]
     fn a_file_handed_no_brands_whose_chunk_comes_before_the_movie_is_read_back() {
         let sample = Sample::new(1, 0, 3_000, 0, SampleFlags::ZERO, 1, b"VIDEO_01".to_vec());
-        let mut writer = NonFragmentedMuxFsm::new();
+        let mut mux_fsm = NonFragmentedMuxFsm::new();
         let mut file = Vec::new();
 
-        writer.begin_chunk().unwrap();
-        writer.handle_sample(sample.clone()).unwrap();
-        writer.handle_movie(movie()).unwrap();
-        writer.finish().unwrap();
-        while let Some(written) = writer.poll_output() {
+        mux_fsm.begin_chunk().unwrap();
+        mux_fsm.handle_sample(sample.clone()).unwrap();
+        mux_fsm.handle_movie(movie()).unwrap();
+        mux_fsm.finish().unwrap();
+        while let Some(written) = mux_fsm.poll_output() {
             file.extend_from_slice(&written);
         }
 

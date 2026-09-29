@@ -16,31 +16,34 @@ mod tests {
     #[test]
     fn a_movie_before_its_media_data_has_every_sample_read_as_the_file_arrives() {
         let file = non_fragmented_file(&SAMPLE_CHUNKS, true);
-        let mut reader = NonFragmentedDemuxFsm::new();
+        let mut demux_fsm = NonFragmentedDemuxFsm::new();
 
-        let samples = handed_over_in_order(&mut reader, &file, file.len());
+        let samples = handed_over_in_order(&mut demux_fsm, &file, file.len());
 
         assert_eq!(samples, non_fragmented_file_samples());
-        assert_eq!(reader.wanted_extent(), None);
-        assert_eq!(reader.finish(), Ok(()));
+        assert_eq!(demux_fsm.wanted_extent(), None);
+        assert_eq!(demux_fsm.finish(), Ok(()));
     }
 
     #[test]
     fn a_movie_after_its_media_data_completes_no_sample_and_names_the_bytes_it_lacks() {
         let file = non_fragmented_file(&SAMPLE_CHUNKS, false);
-        let mut reader = NonFragmentedDemuxFsm::new();
+        let mut demux_fsm = NonFragmentedDemuxFsm::new();
 
-        let samples = handed_over_in_order(&mut reader, &file, file.len());
+        let samples = handed_over_in_order(&mut demux_fsm, &file, file.len());
 
         assert_eq!(samples, []);
         assert_eq!(
-            reader.wanted_extent().map(|wanted| fetched(&file, &wanted)),
+            demux_fsm
+                .wanted_extent()
+                .map(|wanted| fetched(&file, &wanted)),
             Some(b"SAMPLE_1".as_slice())
         );
     }
 
     #[test]
-    fn the_bytes_the_reader_wants_fetched_in_turn_complete_every_sample_however_the_file_was_cut() {
+    fn the_bytes_the_demux_fsm_wants_fetched_in_turn_complete_every_sample_however_the_file_was_cut()
+     {
         for file in [
             non_fragmented_file(&SAMPLE_CHUNKS, true),
             non_fragmented_file(&SAMPLE_CHUNKS, false),

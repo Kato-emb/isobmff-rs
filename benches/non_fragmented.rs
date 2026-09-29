@@ -181,10 +181,10 @@ fn fetched<'file>(file: &'file [u8], wanted: &Range<u64>, fetch_len: usize) -> &
 }
 
 /// Drains what the writer has ready into `outputs`, and reports how many bytes that was
-fn drained(writer: &mut NonFragmentedMuxFsm, outputs: &mut Vec<EventBytes>) -> usize {
+fn drained(mux_fsm: &mut NonFragmentedMuxFsm, outputs: &mut Vec<EventBytes>) -> usize {
     let mut total = 0;
 
-    while let Some(written) = writer.poll_output() {
+    while let Some(written) = mux_fsm.poll_output() {
         total += written.len();
         outputs.push(written);
     }
@@ -198,22 +198,22 @@ fn non_fragmented_writer_file(
     movie: MovieBox,
     chunks: Vec<Vec<Sample>>,
 ) -> (usize, Vec<EventBytes>) {
-    let mut writer = NonFragmentedMuxFsm::new();
+    let mut mux_fsm = NonFragmentedMuxFsm::new();
     let mut outputs = Vec::new();
     let mut total = 0;
 
-    writer.handle_file_type(file_type).unwrap();
-    writer.handle_movie(movie).unwrap();
+    mux_fsm.handle_file_type(file_type).unwrap();
+    mux_fsm.handle_movie(movie).unwrap();
 
     for samples in chunks {
-        writer.begin_chunk().unwrap();
+        mux_fsm.begin_chunk().unwrap();
         for sample in samples {
-            writer.handle_sample(sample).unwrap();
+            mux_fsm.handle_sample(sample).unwrap();
         }
-        total += drained(&mut writer, &mut outputs);
+        total += drained(&mut mux_fsm, &mut outputs);
     }
-    writer.finish().unwrap();
-    total += drained(&mut writer, &mut outputs);
+    mux_fsm.finish().unwrap();
+    total += drained(&mut mux_fsm, &mut outputs);
 
     (total, outputs)
 }
@@ -224,11 +224,11 @@ fn non_fragmented_writer_file(
 /// reader still wants is fetched: nothing where the movie lay first, and every
 /// sample where it lay last.
 fn non_fragmented_reader_samples(file: &[u8], fetch_len: usize) -> (usize, usize) {
-    let mut reader = NonFragmentedDemuxFsm::new();
+    let mut demux_fsm = NonFragmentedDemuxFsm::new();
     let mut count = 0;
     let mut total = 0;
-    let mut take = |reader: &mut NonFragmentedDemuxFsm| {
-        while let Some(sample) = reader.poll_sample() {
+    let mut take = |demux_fsm: &mut NonFragmentedDemuxFsm| {
+        while let Some(sample) = demux_fsm.poll_sample() {
             count += 1;
             total += sample.data().len();
             black_box(&sample);
@@ -236,36 +236,36 @@ fn non_fragmented_reader_samples(file: &[u8], fetch_len: usize) -> (usize, usize
     };
 
     for arriving in file.chunks(ARRIVING_CHUNK_LEN) {
-        reader.handle_input(arriving).unwrap();
-        take(&mut reader);
+        demux_fsm.handle_input(arriving).unwrap();
+        take(&mut demux_fsm);
     }
-    while let Some(wanted) = reader.wanted_extent() {
-        reader
+    while let Some(wanted) = demux_fsm.wanted_extent() {
+        demux_fsm
             .handle_data(wanted.start, fetched(file, &wanted, fetch_len))
             .unwrap();
-        take(&mut reader);
+        take(&mut demux_fsm);
     }
-    reader.finish().unwrap();
-    take(&mut reader);
+    demux_fsm.finish().unwrap();
+    take(&mut demux_fsm);
 
     (count, total)
 }
 
 /// The extents the reader wants once the file has been handed over, in the order it wants them
 fn wants_of(file: &[u8], fetch_len: usize) -> Vec<Range<u64>> {
-    let mut reader = NonFragmentedDemuxFsm::new();
+    let mut demux_fsm = NonFragmentedDemuxFsm::new();
     let mut wants = Vec::new();
-    let take = |reader: &mut NonFragmentedDemuxFsm| while reader.poll_sample().is_some() {};
+    let take = |demux_fsm: &mut NonFragmentedDemuxFsm| while demux_fsm.poll_sample().is_some() {};
 
     for arriving in file.chunks(ARRIVING_CHUNK_LEN) {
-        reader.handle_input(arriving).unwrap();
-        take(&mut reader);
+        demux_fsm.handle_input(arriving).unwrap();
+        take(&mut demux_fsm);
     }
-    while let Some(wanted) = reader.wanted_extent() {
-        reader
+    while let Some(wanted) = demux_fsm.wanted_extent() {
+        demux_fsm
             .handle_data(wanted.start, fetched(file, &wanted, fetch_len))
             .unwrap();
-        take(&mut reader);
+        take(&mut demux_fsm);
         wants.push(wanted);
     }
 
@@ -274,11 +274,11 @@ fn wants_of(file: &[u8], fetch_len: usize) -> Vec<Range<u64>> {
 
 /// The movie `file` declares, read off it
 fn movie_of(file: &[u8]) -> MovieBox {
-    let mut reader = NonFragmentedDemuxFsm::new();
+    let mut demux_fsm = NonFragmentedDemuxFsm::new();
 
-    reader.handle_input(file).unwrap();
+    demux_fsm.handle_input(file).unwrap();
 
-    reader.movie().cloned().unwrap()
+    demux_fsm.movie().cloned().unwrap()
 }
 
 /// Resolves the samples the movie declares, and reports how many there were

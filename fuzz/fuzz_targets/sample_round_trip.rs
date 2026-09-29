@@ -176,29 +176,29 @@ fn laid_out(input: &Input<'_>) -> Vec<(u32, Vec<Sample>)> {
 /// A writer that refuses reports that same failure for every call after it and
 /// still hands over the bytes of the fragments it had closed.
 fn file_of(movie: &MovieBox, fragments: &[(u32, Vec<Sample>)]) -> (Vec<u8>, usize) {
-    let mut writer = FragmentedMuxFsm::new();
+    let mut mux_fsm = FragmentedMuxFsm::new();
     let mut file = Vec::new();
     let mut closed = 0;
     let mut refused = None;
 
-    writer
+    mux_fsm
         .handle_file_type(file_type())
         .expect("a writer waiting for the brands refused them");
-    writer
+    mux_fsm
         .handle_movie(movie.clone())
         .expect("a writer waiting for the movie refused it");
 
     for (sequence_number, samples) in fragments {
-        let mut outcome = writer.begin_fragment(*sequence_number);
+        let mut outcome = mux_fsm.begin_fragment(*sequence_number);
 
         for sample in samples {
             if outcome.is_err() {
                 break;
             }
-            outcome = writer.handle_sample(sample.clone());
+            outcome = mux_fsm.handle_sample(sample.clone());
         }
         if outcome.is_ok() {
-            outcome = writer.finish_fragment();
+            outcome = mux_fsm.finish_fragment();
         }
 
         match outcome {
@@ -208,29 +208,29 @@ fn file_of(movie: &MovieBox, fragments: &[(u32, Vec<Sample>)]) -> (Vec<u8>, usiz
                 break;
             }
         }
-        drained_into(&mut writer, &mut file);
+        drained_into(&mut mux_fsm, &mut file);
     }
 
     if refused.is_none() {
-        refused = writer.finish().err();
+        refused = mux_fsm.finish().err();
     }
-    drained_into(&mut writer, &mut file);
+    drained_into(&mut mux_fsm, &mut file);
 
     match refused {
         Some(reported) => {
             assert_eq!(
-                writer.handle_sample(a_sample()),
+                mux_fsm.handle_sample(a_sample()),
                 Err(reported),
                 "a refused writer took a sample instead of reporting its failure again"
             );
             assert_eq!(
-                writer.finish(),
+                mux_fsm.finish(),
                 Err(reported),
                 "a refused writer reported another failure when the file was declared over"
             );
         }
         None => assert_eq!(
-            writer.handle_sample(a_sample()).map_err(Error::kind),
+            mux_fsm.handle_sample(a_sample()).map_err(Error::kind),
             Err(ErrorKind::AlreadyFinished),
             "the writer took a sample after the file was declared over"
         ),
@@ -240,8 +240,8 @@ fn file_of(movie: &MovieBox, fragments: &[(u32, Vec<Sample>)]) -> (Vec<u8>, usiz
 }
 
 /// Takes what the writer has laid down into `file`
-fn drained_into(writer: &mut FragmentedMuxFsm, file: &mut Vec<u8>) {
-    while let Some(written) = writer.poll_output() {
+fn drained_into(mux_fsm: &mut FragmentedMuxFsm, file: &mut Vec<u8>) {
+    while let Some(written) = mux_fsm.poll_output() {
         file.extend_from_slice(&written);
     }
 }
@@ -264,22 +264,22 @@ fn a_sample() -> Sample {
 /// Panics where the reader rejects the file, which is the property this target
 /// holds the writer to.
 fn read_back(file: &[u8]) -> Vec<Sample> {
-    let mut reader = FragmentedDemuxFsm::new();
+    let mut demux_fsm = FragmentedDemuxFsm::new();
     let mut samples = Vec::new();
 
     assert!(
-        reader.handle_input(file).is_ok(),
+        demux_fsm.handle_input(file).is_ok(),
         "the reader rejects the file the writer laid down"
     );
-    while let Some(sample) = reader.poll_sample() {
+    while let Some(sample) = demux_fsm.poll_sample() {
         samples.push(sample);
     }
 
     assert!(
-        reader.finish().is_ok(),
+        demux_fsm.finish().is_ok(),
         "the reader rejects the end of the file the writer laid down"
     );
-    while let Some(sample) = reader.poll_sample() {
+    while let Some(sample) = demux_fsm.poll_sample() {
         samples.push(sample);
     }
 

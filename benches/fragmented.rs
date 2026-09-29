@@ -282,10 +282,10 @@ fn handed_over(file: &[u8], chunk_len: usize) {
 }
 
 /// Drains what the writer has ready into `outputs`, and reports how many bytes that was
-fn drained(writer: &mut FragmentedMuxFsm, outputs: &mut Vec<EventBytes>) -> usize {
+fn drained(mux_fsm: &mut FragmentedMuxFsm, outputs: &mut Vec<EventBytes>) -> usize {
     let mut total = 0;
 
-    while let Some(written) = writer.poll_output() {
+    while let Some(written) = mux_fsm.poll_output() {
         total += written.len();
         outputs.push(written);
     }
@@ -299,25 +299,25 @@ fn fragmented_writer_file(
     movie: MovieBox,
     fragments: Vec<Vec<Sample>>,
 ) -> (usize, Vec<EventBytes>) {
-    let mut writer = FragmentedMuxFsm::new();
+    let mut mux_fsm = FragmentedMuxFsm::new();
     let mut outputs = Vec::new();
     let mut total = 0;
 
-    writer.handle_file_type(file_type).unwrap();
-    writer.handle_movie(movie).unwrap();
+    mux_fsm.handle_file_type(file_type).unwrap();
+    mux_fsm.handle_movie(movie).unwrap();
 
     for (position, samples) in fragments.into_iter().enumerate() {
-        writer
+        mux_fsm
             .begin_fragment(u32::try_from(position).unwrap() + 1)
             .unwrap();
         for sample in samples {
-            writer.handle_sample(sample).unwrap();
+            mux_fsm.handle_sample(sample).unwrap();
         }
-        writer.finish_fragment().unwrap();
-        total += drained(&mut writer, &mut outputs);
+        mux_fsm.finish_fragment().unwrap();
+        total += drained(&mut mux_fsm, &mut outputs);
     }
-    writer.finish().unwrap();
-    total += drained(&mut writer, &mut outputs);
+    mux_fsm.finish().unwrap();
+    total += drained(&mut mux_fsm, &mut outputs);
 
     (total, outputs)
 }
@@ -351,11 +351,11 @@ fn movie_fragment_writer_fragments(
 
 /// Reads the samples off the file, and reports how many there were and what they carry
 fn fragmented_reader_samples(file: &[u8], chunk_len: usize) -> (usize, usize) {
-    let mut reader = FragmentedDemuxFsm::new();
+    let mut demux_fsm = FragmentedDemuxFsm::new();
     let mut count = 0;
     let mut total = 0;
-    let mut take = |reader: &mut FragmentedDemuxFsm| {
-        while let Some(sample) = reader.poll_sample() {
+    let mut take = |demux_fsm: &mut FragmentedDemuxFsm| {
+        while let Some(sample) = demux_fsm.poll_sample() {
             count += 1;
             total += sample.data().len();
             black_box(&sample);
@@ -363,11 +363,11 @@ fn fragmented_reader_samples(file: &[u8], chunk_len: usize) -> (usize, usize) {
     };
 
     for arriving in file.chunks(chunk_len) {
-        reader.handle_input(arriving).unwrap();
-        take(&mut reader);
+        demux_fsm.handle_input(arriving).unwrap();
+        take(&mut demux_fsm);
     }
-    reader.finish().unwrap();
-    take(&mut reader);
+    demux_fsm.finish().unwrap();
+    take(&mut demux_fsm);
 
     (count, total)
 }
@@ -472,29 +472,29 @@ fn box_writer_file(events: Vec<BoxEvent>) -> (usize, Vec<EventBytes>) {
 
 /// The file the composition makes, laid down whole
 fn written_file(composition: &Composition) -> Vec<u8> {
-    let mut writer = FragmentedMuxFsm::new();
+    let mut mux_fsm = FragmentedMuxFsm::new();
     let mut file = Vec::with_capacity(composition.payload_len());
-    let gather = |writer: &mut FragmentedMuxFsm, file: &mut Vec<u8>| {
-        while let Some(written) = writer.poll_output() {
+    let gather = |mux_fsm: &mut FragmentedMuxFsm, file: &mut Vec<u8>| {
+        while let Some(written) = mux_fsm.poll_output() {
             file.extend_from_slice(&written);
         }
     };
 
-    writer.handle_file_type(file_type()).unwrap();
-    writer.handle_movie(composition.movie()).unwrap();
+    mux_fsm.handle_file_type(file_type()).unwrap();
+    mux_fsm.handle_movie(composition.movie()).unwrap();
 
     for (position, samples) in composition.samples().into_iter().enumerate() {
-        writer
+        mux_fsm
             .begin_fragment(u32::try_from(position).unwrap() + 1)
             .unwrap();
         for sample in samples {
-            writer.handle_sample(sample).unwrap();
+            mux_fsm.handle_sample(sample).unwrap();
         }
-        writer.finish_fragment().unwrap();
-        gather(&mut writer, &mut file);
+        mux_fsm.finish_fragment().unwrap();
+        gather(&mut mux_fsm, &mut file);
     }
-    writer.finish().unwrap();
-    gather(&mut writer, &mut file);
+    mux_fsm.finish().unwrap();
+    gather(&mut mux_fsm, &mut file);
 
     file
 }

@@ -31,14 +31,14 @@ mod tests {
 
     /// A segment of one fragment carrying [`sample`], with no brands
     pub(super) fn segment_of_one_sample() -> Vec<u8> {
-        let mut writer = MediaSegmentMuxFsm::new();
+        let mut mux_fsm = MediaSegmentMuxFsm::new();
         let mut segment = Vec::new();
 
-        writer.begin_fragment(1).unwrap();
-        writer.handle_sample(sample()).unwrap();
-        writer.finish_fragment().unwrap();
-        writer.finish().unwrap();
-        while let Some(written) = writer.poll_output() {
+        mux_fsm.begin_fragment(1).unwrap();
+        mux_fsm.handle_sample(sample()).unwrap();
+        mux_fsm.finish_fragment().unwrap();
+        mux_fsm.finish().unwrap();
+        while let Some(written) = mux_fsm.poll_output() {
             segment.extend_from_slice(&written);
         }
 
