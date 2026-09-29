@@ -78,14 +78,17 @@ mod tests {
         let mut segment = Vec::new();
 
         let read_back = block_on(async {
-            let mut muxer = isobmff_io::MediaSegmentMuxer::new(&mut segment);
-            muxer.handle_segment_type(segment_type()).await.unwrap();
-            muxer.begin_fragment(1).await.unwrap();
+            let mut mux_driver =
+                isobmff_io::MuxDriver::new(&mut segment, MediaSegmentMuxFsm::new());
+            let mux_fsm = mux_driver.fsm_mut();
+            mux_fsm.handle_segment_type(segment_type()).unwrap();
+            mux_fsm.begin_fragment(1).unwrap();
             for sample in segment_file_samples() {
-                muxer.handle_sample(sample).await.unwrap();
+                mux_fsm.handle_sample(sample).unwrap();
             }
-            muxer.finish_fragment().await.unwrap();
-            muxer.finish().await.unwrap();
+            mux_fsm.finish_fragment().unwrap();
+            mux_fsm.finish().unwrap();
+            mux_driver.flush().await.unwrap();
 
             let mut driver = isobmff_io::DemuxDriver::new(
                 Cursor::new(&segment),

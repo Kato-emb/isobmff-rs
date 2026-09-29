@@ -1,4 +1,4 @@
-//! [`Demux`] and [`Mux`], what a driver asks of the stack beneath it, and what a demux driver reads for a demux FSM: [`Request`], and [`ClosingMovieFragmentRandomAccessOffset`] where it looks for an `mfra`
+//! [`Demux`] and [`Mux`], what a driver asks of the stack beneath it, what a demux driver reads for a demux FSM — [`Request`], and [`ClosingMovieFragmentRandomAccessOffset`] where it looks for an `mfra` — and [`InFlight`], what a mux driver is writing
 
 use core::ops::Range;
 use std::io;
@@ -248,6 +248,55 @@ impl ClosingMovieFragmentRandomAccessOffset {
         MovieFragmentRandomAccessOffsetBox::decode(mfro)
             .ok()
             .and_then(|(mfro, _)| mfro.movie_fragment_random_access_start(self.file_len))
+    }
+}
+
+/// The chunk a mux driver is writing and how many of its bytes the sink took, if any
+#[derive(Debug)]
+pub(crate) struct InFlight(Option<(EventBytes, usize)>);
+
+impl InFlight {
+    /// Creates one writing no chunk
+    pub(crate) const fn new() -> Self {
+        Self(None)
+    }
+
+    /// Returns the bytes of the chunk the sink is to take next, taking the next chunk `fsm` made once one is written whole
+    pub(crate) fn rest<W: Mux>(&mut self, fsm: &mut W) -> Option<&[u8]> {
+        while self
+            .0
+            .as_ref()
+            .is_none_or(|(chunk, taken)| *taken >= chunk.len())
+        {
+            self.0 = Some((fsm.poll_output()?, 0));
+        }
+
+        self.0
+            .as_ref()
+            .and_then(|(chunk, taken)| chunk.get(*taken..))
+    }
+
+    /// Counts what the sink made of the bytes [`rest`](Self::rest) returned
+    ///
+    /// An interrupted write takes none of them, which the next [`rest`](Self::rest) returns again.
+    ///
+    /// # Errors
+    ///
+    /// * [`Io`](crate::ErrorKind::Io): the sink refused the bytes, or took
+    ///   none of them ([`WriteZero`](io::ErrorKind::WriteZero)).
+    pub(crate) fn took(&mut self, written: io::Result<usize>) -> Result<(), Error> {
+        match written {
+            Err(failure) if failure.kind() == io::ErrorKind::Interrupted => Ok(()),
+            Ok(0) => Err(io::Error::from(io::ErrorKind::WriteZero).into()),
+            Ok(written) => {
+                if let Some((_, taken)) = &mut self.0 {
+                    *taken = taken.saturating_add(written);
+                }
+
+                Ok(())
+            }
+            Err(failure) => Err(failure.into()),
+        }
     }
 }
 
