@@ -38,8 +38,8 @@ name = "remux_to_non_fragmented"
 path = "remux_to_non_fragmented.rs"
 
 [[example]]
-name = "drive_non_fragmented_reader"
-path = "drive_non_fragmented_reader.rs"
+name = "drive_non_fragmented_demux_fsm"
+path = "drive_non_fragmented_demux_fsm.rs"
 
 [[example]]
 name = "demux_media_segment"

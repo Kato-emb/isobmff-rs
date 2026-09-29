@@ -42,7 +42,7 @@ use isobmff::boxes::{
 use isobmff::core::{BoxHeader, BoxType, Mp4EpochSeconds};
 use isobmff::sample::{MovieFragmentWriter, Sample};
 use isobmff::sequence::{BoxEvent, BoxReader, BoxWriter, EventBytes};
-use isobmff::structure::{FragmentedReader, FragmentedWriter};
+use isobmff::structure::{FragmentedDemuxFsm, FragmentedMuxFsm};
 use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type, track};
 
 /// Ticks every sample of the benchmarked movies lasts
@@ -282,7 +282,7 @@ fn handed_over(file: &[u8], chunk_len: usize) {
 }
 
 /// Drains what the writer has ready into `outputs`, and reports how many bytes that was
-fn drained(writer: &mut FragmentedWriter, outputs: &mut Vec<EventBytes>) -> usize {
+fn drained(writer: &mut FragmentedMuxFsm, outputs: &mut Vec<EventBytes>) -> usize {
     let mut total = 0;
 
     while let Some(written) = writer.poll_output() {
@@ -299,7 +299,7 @@ fn fragmented_writer_file(
     movie: MovieBox,
     fragments: Vec<Vec<Sample>>,
 ) -> (usize, Vec<EventBytes>) {
-    let mut writer = FragmentedWriter::new();
+    let mut writer = FragmentedMuxFsm::new();
     let mut outputs = Vec::new();
     let mut total = 0;
 
@@ -351,10 +351,10 @@ fn movie_fragment_writer_fragments(
 
 /// Reads the samples off the file, and reports how many there were and what they carry
 fn fragmented_reader_samples(file: &[u8], chunk_len: usize) -> (usize, usize) {
-    let mut reader = FragmentedReader::new();
+    let mut reader = FragmentedDemuxFsm::new();
     let mut count = 0;
     let mut total = 0;
-    let mut take = |reader: &mut FragmentedReader| {
+    let mut take = |reader: &mut FragmentedDemuxFsm| {
         while let Some(sample) = reader.poll_sample() {
             count += 1;
             total += sample.data().len();
@@ -472,9 +472,9 @@ fn box_writer_file(events: Vec<BoxEvent>) -> (usize, Vec<EventBytes>) {
 
 /// The file the composition makes, laid down whole
 fn written_file(composition: &Composition) -> Vec<u8> {
-    let mut writer = FragmentedWriter::new();
+    let mut writer = FragmentedMuxFsm::new();
     let mut file = Vec::with_capacity(composition.payload_len());
-    let gather = |writer: &mut FragmentedWriter, file: &mut Vec<u8>| {
+    let gather = |writer: &mut FragmentedMuxFsm, file: &mut Vec<u8>| {
         while let Some(written) = writer.poll_output() {
             file.extend_from_slice(&written);
         }

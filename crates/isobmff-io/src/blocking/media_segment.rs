@@ -4,14 +4,14 @@ use std::io::{Read, Seek, Write};
 
 use isobmff_boxes::{MovieBox, SegmentTypeBox};
 use isobmff_sample::{Sample, SegmentIndex};
-use isobmff_structure::{MediaSegmentReader, MediaSegmentWriter};
+use isobmff_structure::{MediaSegmentDemuxFsm, MediaSegmentMuxFsm};
 
 use super::driver::{Demuxer, Muxer};
 use crate::Error;
 
 /// Reads the samples a media segment carries off a source that seeks
 ///
-/// The driver of [`MediaSegmentReader`] over `std::io`: it reads the segment
+/// The driver of [`MediaSegmentDemuxFsm`] over `std::io`: it reads the segment
 /// off the source a cut at a time and hands each over, fetches the bytes the
 /// reader names as lacking wherever the segment passed them by — the media
 /// data of a fragment addressing bytes before it — by seeking to them, and
@@ -80,13 +80,13 @@ use crate::Error;
 /// ```
 #[derive(Debug)]
 pub struct MediaSegmentDemuxer<S> {
-    demuxer: Demuxer<S, MediaSegmentReader>,
+    demuxer: Demuxer<S, MediaSegmentDemuxFsm>,
 }
 
 impl<S: Read + Seek> MediaSegmentDemuxer<S> {
     /// Creates a demuxer over `source`, the segment continuing `movie` and beginning where the source stands
     ///
-    /// The reader beneath is [`MediaSegmentReader::new`]; one holding the
+    /// The reader beneath is [`MediaSegmentDemuxFsm::new`]; one holding the
     /// segment to other limits is driven through
     /// [`with_reader`](Self::with_reader).
     ///
@@ -95,7 +95,7 @@ impl<S: Read + Seek> MediaSegmentDemuxer<S> {
     /// * [`Io`](crate::ErrorKind::Io): the source does not report
     ///   where it stands.
     pub fn new(source: S, movie: MovieBox) -> Result<Self, Error> {
-        Self::with_reader(source, MediaSegmentReader::new(movie))
+        Self::with_reader(source, MediaSegmentDemuxFsm::new(movie))
     }
 
     /// Creates a demuxer over `source` driving `reader`, the segment beginning where the source stands
@@ -104,7 +104,7 @@ impl<S: Read + Seek> MediaSegmentDemuxer<S> {
     ///
     /// * [`Io`](crate::ErrorKind::Io): the source does not report
     ///   where it stands.
-    pub fn with_reader(source: S, reader: MediaSegmentReader) -> Result<Self, Error> {
+    pub fn with_reader(source: S, reader: MediaSegmentDemuxFsm) -> Result<Self, Error> {
         Ok(Self {
             demuxer: Demuxer::new(source, reader)?,
         })
@@ -122,7 +122,7 @@ impl<S: Read + Seek> MediaSegmentDemuxer<S> {
         self.demuxer.reader().movie()
     }
 
-    /// Returns the subsegments of every `sidx` read so far, as [`MediaSegmentReader::segment_indexes`] holds them
+    /// Returns the subsegments of every `sidx` read so far, as [`MediaSegmentDemuxFsm::segment_indexes`] holds them
     #[must_use]
     pub fn segment_indexes(&self) -> &[SegmentIndex] {
         self.demuxer.reader().segment_indexes()
@@ -130,7 +130,7 @@ impl<S: Read + Seek> MediaSegmentDemuxer<S> {
 
     /// Restarts the reading at `offset` of the segment, a place an index names
     ///
-    /// The reader is resumed at `offset` as [`MediaSegmentReader::resume_at`]
+    /// The reader is resumed at `offset` as [`MediaSegmentDemuxFsm::resume_at`]
     /// resumes it, and the source is sought there from where the segment
     /// begins: the samples not yet taken are dropped, and the ones that
     /// come next are those the segment carries from `offset` on — the `moof`
@@ -144,7 +144,7 @@ impl<S: Read + Seek> MediaSegmentDemuxer<S> {
     ///   which leaves the demuxer as it was, or the source does not seek
     ///   there.
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`MediaSegmentReader::resume_at`] makes of the call.
+    ///   [`MediaSegmentDemuxFsm::resume_at`] makes of the call.
     ///
     /// A failure after the offset is checked ends the samples, until a
     /// resume succeeds.
@@ -163,7 +163,7 @@ impl<S: Read + Seek> Iterator for MediaSegmentDemuxer<S> {
 
 /// Lays a media segment down on a sink, taking the samples as they come
 ///
-/// The driver of [`MediaSegmentWriter`] over `std::io`: it takes the brands
+/// The driver of [`MediaSegmentMuxFsm`] over `std::io`: it takes the brands
 /// and the samples as the writer does, and writes every byte the writer makes
 /// of them to the sink before the call returns. A caller hands over brands
 /// and samples and nothing else moves.
@@ -171,7 +171,7 @@ impl<S: Read + Seek> Iterator for MediaSegmentDemuxer<S> {
 /// # Contract
 ///
 /// * The calls are the writer's, and what each takes and refuses is
-///   [`MediaSegmentWriter`]'s contract, carried through as
+///   [`MediaSegmentMuxFsm`]'s contract, carried through as
 ///   [`Structure`](crate::ErrorKind::Structure). What the writer made
 ///   of a call is written before the call reports, the bytes made before a
 ///   refusal included; a sink refusing them is
@@ -208,7 +208,7 @@ impl<S: Read + Seek> Iterator for MediaSegmentDemuxer<S> {
 /// ```
 #[derive(Debug)]
 pub struct MediaSegmentMuxer<W> {
-    muxer: Muxer<W, MediaSegmentWriter>,
+    muxer: Muxer<W, MediaSegmentMuxFsm>,
 }
 
 impl<W: Write> MediaSegmentMuxer<W> {
@@ -216,7 +216,7 @@ impl<W: Write> MediaSegmentMuxer<W> {
     #[must_use]
     pub const fn new(sink: W) -> Self {
         Self {
-            muxer: Muxer::new(sink, MediaSegmentWriter::new()),
+            muxer: Muxer::new(sink, MediaSegmentMuxFsm::new()),
         }
     }
 
@@ -225,7 +225,7 @@ impl<W: Write> MediaSegmentMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`MediaSegmentWriter::handle_segment_type`] makes of the call.
+    ///   [`MediaSegmentMuxFsm::handle_segment_type`] makes of the call.
     /// * [`Io`](crate::ErrorKind::Io): the sink refuses the bytes.
     pub fn handle_segment_type(&mut self, segment_type: SegmentTypeBox) -> Result<(), Error> {
         self.muxer
@@ -237,7 +237,7 @@ impl<W: Write> MediaSegmentMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`MediaSegmentWriter::begin_fragment`] makes of the call.
+    ///   [`MediaSegmentMuxFsm::begin_fragment`] makes of the call.
     pub fn begin_fragment(&mut self, sequence_number: u32) -> Result<(), Error> {
         self.muxer
             .drive(|writer| writer.begin_fragment(sequence_number))
@@ -248,7 +248,7 @@ impl<W: Write> MediaSegmentMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`MediaSegmentWriter::begin_fragment_continuing`] makes of the call.
+    ///   [`MediaSegmentMuxFsm::begin_fragment_continuing`] makes of the call.
     pub fn begin_fragment_continuing(&mut self, sequence_number: u32) -> Result<(), Error> {
         self.muxer
             .drive(|writer| writer.begin_fragment_continuing(sequence_number))
@@ -259,7 +259,7 @@ impl<W: Write> MediaSegmentMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`MediaSegmentWriter::handle_sample`] makes of the call.
+    ///   [`MediaSegmentMuxFsm::handle_sample`] makes of the call.
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), Error> {
         self.muxer.drive(|writer| writer.handle_sample(sample))
     }
@@ -269,10 +269,10 @@ impl<W: Write> MediaSegmentMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`MediaSegmentWriter::finish_fragment`] makes of the call.
+    ///   [`MediaSegmentMuxFsm::finish_fragment`] makes of the call.
     /// * [`Io`](crate::ErrorKind::Io): the sink refuses the bytes.
     pub fn finish_fragment(&mut self) -> Result<(), Error> {
-        self.muxer.drive(MediaSegmentWriter::finish_fragment)
+        self.muxer.drive(MediaSegmentMuxFsm::finish_fragment)
     }
 
     /// Declares the segment over, and flushes the sink
@@ -280,10 +280,10 @@ impl<W: Write> MediaSegmentMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`MediaSegmentWriter::finish`] makes of the call.
+    ///   [`MediaSegmentMuxFsm::finish`] makes of the call.
     /// * [`Io`](crate::ErrorKind::Io): the sink does not flush.
     pub fn finish(&mut self) -> Result<(), Error> {
-        self.muxer.finish(MediaSegmentWriter::finish)
+        self.muxer.finish(MediaSegmentMuxFsm::finish)
     }
 }
 

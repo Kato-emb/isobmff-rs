@@ -11,7 +11,7 @@ mod reading;
 mod tests {
     use isobmff_core::BoxType;
     use isobmff_sequence::BoxEvent;
-    use isobmff_structure::{Error, ErrorKind, FragmentedReader};
+    use isobmff_structure::{Error, ErrorKind, FragmentedDemuxFsm};
     use isobmff_test_support::{
         IndexedFile, events_of, fragmented_file_samples, fragmented_file_with_samples,
         indexed_fragmented_file, indexed_fragmented_file_without_decode_times,
@@ -20,8 +20,8 @@ mod tests {
     use super::reading::{drained, samples_of};
 
     /// Reader that read `file` whole and was declared over
-    fn read_whole(file: &IndexedFile) -> FragmentedReader {
-        let mut reader = FragmentedReader::new();
+    fn read_whole(file: &IndexedFile) -> FragmentedDemuxFsm {
+        let mut reader = FragmentedDemuxFsm::new();
         reader.handle_input(&file.bytes).unwrap();
         reader.finish().unwrap();
 
@@ -30,7 +30,7 @@ mod tests {
 
     /// Resumes `reader` at `offset` and hands it the rest of `file` from there
     fn resumed_at(
-        reader: &mut FragmentedReader,
+        reader: &mut FragmentedDemuxFsm,
         file: &IndexedFile,
         offset: u64,
     ) -> Result<(), Error> {
@@ -96,7 +96,7 @@ mod tests {
         drained(&mut finished);
         resumed_at(&mut finished, &file, second).unwrap();
 
-        let mut reading = FragmentedReader::new();
+        let mut reading = FragmentedDemuxFsm::new();
         reading
             .handle_input(file.bytes.get(..usize::try_from(second).unwrap()).unwrap())
             .unwrap();

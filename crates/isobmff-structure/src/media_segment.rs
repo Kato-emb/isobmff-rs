@@ -1,11 +1,11 @@
-//! [`MediaSegmentReader`] and [`MediaSegmentWriter`], a media segment read and written through the layers this crate holds, ISO/IEC 14496-12 §8.16
+//! [`MediaSegmentDemuxFsm`] and [`MediaSegmentMuxFsm`], a media segment read and written through the layers this crate holds, ISO/IEC 14496-12 §8.16
 
-mod reader;
+mod demux;
+mod mux;
 mod structure;
-mod writer;
 
-pub use reader::MediaSegmentReader;
-pub use writer::MediaSegmentWriter;
+pub use demux::MediaSegmentDemuxFsm;
+pub use mux::MediaSegmentMuxFsm;
 
 use structure::{MediaSegmentDisposition, MediaSegmentStructure};
 
@@ -17,7 +17,7 @@ mod tests {
     use isobmff_sample::Sample;
     use isobmff_test_support::fragmented_movie;
 
-    use super::MediaSegmentWriter;
+    use super::MediaSegmentMuxFsm;
 
     /// Movie of one track the segments continue, whose defaults a `trex` states
     pub(super) fn movie() -> MovieBox {
@@ -31,7 +31,7 @@ mod tests {
 
     /// A segment of one fragment carrying [`sample`], with no brands
     pub(super) fn segment_of_one_sample() -> Vec<u8> {
-        let mut writer = MediaSegmentWriter::new();
+        let mut writer = MediaSegmentMuxFsm::new();
         let mut segment = Vec::new();
 
         writer.begin_fragment(1).unwrap();

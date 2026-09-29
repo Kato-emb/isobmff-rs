@@ -14,7 +14,7 @@ mod tests {
     use isobmff_core::{BoxType, FourCC, Mp4EpochSeconds};
     use isobmff_sample::Sample;
     use isobmff_sequence::BoxEvent;
-    use isobmff_structure::{NonFragmentedReader, NonFragmentedWriter};
+    use isobmff_structure::{NonFragmentedDemuxFsm, NonFragmentedMuxFsm};
     use isobmff_test_support::{events_of, file_type, track};
 
     /// Ticks a second the media of the movie is timed in
@@ -80,7 +80,7 @@ mod tests {
         movie: MovieBox,
         chunks: Vec<Vec<Sample>>,
     ) -> Vec<u8> {
-        let mut writer = NonFragmentedWriter::new();
+        let mut writer = NonFragmentedMuxFsm::new();
         let mut file = Vec::new();
 
         if let Some(brands) = brands {
@@ -136,7 +136,7 @@ mod tests {
     fn a_file_handed_no_brands_is_read_back_declaring_the_brand_its_layout_requires() {
         let file = written_file(None, movie(), two_track_chunks());
 
-        let mut reader = NonFragmentedReader::new();
+        let mut reader = NonFragmentedDemuxFsm::new();
         reader.handle_input(&file).unwrap();
 
         assert_eq!(
@@ -153,7 +153,7 @@ mod tests {
     fn the_durations_are_stated_from_the_samples_each_track_was_handed() {
         let file = written_file(None, movie_timed_in(1_000), two_track_chunks());
 
-        let mut reader = NonFragmentedReader::new();
+        let mut reader = NonFragmentedDemuxFsm::new();
         reader.handle_input(&file).unwrap();
         let read = reader.movie().unwrap();
 
@@ -175,7 +175,7 @@ mod tests {
     #[test]
     fn a_file_handed_no_brands_whose_chunk_comes_before_the_movie_is_read_back() {
         let sample = Sample::new(1, 0, 3_000, 0, SampleFlags::ZERO, 1, b"VIDEO_01".to_vec());
-        let mut writer = NonFragmentedWriter::new();
+        let mut writer = NonFragmentedMuxFsm::new();
         let mut file = Vec::new();
 
         writer.begin_chunk().unwrap();

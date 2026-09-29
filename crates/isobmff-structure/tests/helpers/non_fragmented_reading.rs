@@ -7,7 +7,7 @@
 use core::ops::Range;
 
 use isobmff_sample::Sample;
-use isobmff_structure::NonFragmentedReader;
+use isobmff_structure::NonFragmentedDemuxFsm;
 
 /// The bytes of `file` lying at `extent`
 pub(crate) fn fetched<'file>(file: &'file [u8], extent: &Range<u64>) -> &'file [u8] {
@@ -17,7 +17,7 @@ pub(crate) fn fetched<'file>(file: &'file [u8], extent: &Range<u64>) -> &'file [
 
 /// Hands `file` over in order, `cut_length` bytes at a time, and returns the samples that completed
 pub(crate) fn handed_over_in_order(
-    reader: &mut NonFragmentedReader,
+    reader: &mut NonFragmentedDemuxFsm,
     file: &[u8],
     cut_length: usize,
 ) -> Vec<Sample> {
@@ -35,7 +35,7 @@ pub(crate) fn handed_over_in_order(
 
 /// The samples `file` carries, read off it `cut_length` bytes at a time and then off the bytes it wants fetched
 pub(crate) fn samples_of(file: &[u8], cut_length: usize) -> Vec<Sample> {
-    let mut reader = NonFragmentedReader::new();
+    let mut reader = NonFragmentedDemuxFsm::new();
     let mut samples = handed_over_in_order(&mut reader, file, cut_length);
 
     while let Some(wanted) = reader.wanted_extent() {

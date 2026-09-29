@@ -1,7 +1,7 @@
 [package]
 name = "isobmff"
 version = "0.0.0"
-description = "Sans-IO readers and writers for an ISO base media file and the samples it carries"
+description = "Sans-IO demux and mux FSMs for an ISO base media file and the samples it carries"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -15,7 +15,7 @@ exclude.workspace = true
 default = ["avc", "mp4"]
 # `isobmff::avc`, ISO/IEC 14496-15.
 avc = ["dep:isobmff-avc"]
-# `isobmff::io`, the demuxers and the muxers driving the readers and writers.
+# `isobmff::io`, the demuxers and the muxers driving the demux and mux FSMs.
 io = ["dep:isobmff-io"]
 # `isobmff::mp4`, ISO/IEC 14496-14.
 mp4 = ["dep:isobmff-mp4"]

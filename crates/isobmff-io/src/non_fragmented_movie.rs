@@ -6,7 +6,7 @@ use futures_io::{AsyncRead, AsyncSeek, AsyncWrite};
 use isobmff_boxes::{FileTypeBox, MovieBox};
 use isobmff_sample::Sample;
 use isobmff_sequence::EventBytes;
-use isobmff_structure::{NonFragmentedReader, NonFragmentedWriter};
+use isobmff_structure::{NonFragmentedDemuxFsm, NonFragmentedMuxFsm};
 
 use crate::Error;
 use crate::driver::{Demuxer, Muxer};
@@ -14,7 +14,7 @@ use crate::stack::{PollOutput, ReadSamples};
 
 /// Reads the samples a non-fragmented movie file carries off an asynchronous source that seeks
 ///
-/// The driver of [`NonFragmentedReader`] over `futures::io`: it reads the
+/// The driver of [`NonFragmentedDemuxFsm`] over `futures::io`: it reads the
 /// file off the source a cut at a time and hands each over, fetches the bytes
 /// the reader names as lacking wherever the file passed them by — the media
 /// data of a movie lying after it — by seeking to them, and hands over the
@@ -76,13 +76,13 @@ use crate::stack::{PollOutput, ReadSamples};
 /// ```
 #[derive(Debug)]
 pub struct NonFragmentedDemuxer<S> {
-    demuxer: Demuxer<S, NonFragmentedReader>,
+    demuxer: Demuxer<S, NonFragmentedDemuxFsm>,
 }
 
 impl<S: AsyncRead + AsyncSeek + Unpin> NonFragmentedDemuxer<S> {
     /// Creates a demuxer over `source`, the file beginning where it stands
     ///
-    /// The reader beneath is [`NonFragmentedReader::new`]; one holding the
+    /// The reader beneath is [`NonFragmentedDemuxFsm::new`]; one holding the
     /// file to other limits is driven through
     /// [`with_reader`](Self::with_reader).
     ///
@@ -91,7 +91,7 @@ impl<S: AsyncRead + AsyncSeek + Unpin> NonFragmentedDemuxer<S> {
     /// * [`Io`](crate::ErrorKind::Io): the source does not report
     ///   where it stands.
     pub async fn new(source: S) -> Result<Self, Error> {
-        Self::with_reader(source, NonFragmentedReader::new()).await
+        Self::with_reader(source, NonFragmentedDemuxFsm::new()).await
     }
 
     /// Creates a demuxer over `source` driving `reader`, the file beginning where the source stands
@@ -100,7 +100,7 @@ impl<S: AsyncRead + AsyncSeek + Unpin> NonFragmentedDemuxer<S> {
     ///
     /// * [`Io`](crate::ErrorKind::Io): the source does not report
     ///   where it stands.
-    pub async fn with_reader(source: S, reader: NonFragmentedReader) -> Result<Self, Error> {
+    pub async fn with_reader(source: S, reader: NonFragmentedDemuxFsm) -> Result<Self, Error> {
         Ok(Self {
             demuxer: Demuxer::new(source, reader).await?,
         })
@@ -124,31 +124,31 @@ impl<S: AsyncRead + AsyncSeek + Unpin> NonFragmentedDemuxer<S> {
     }
 }
 
-impl ReadSamples for NonFragmentedReader {
+impl ReadSamples for NonFragmentedDemuxFsm {
     fn handle_input(&mut self, input: &[u8]) -> Result<(), isobmff_structure::Error> {
-        NonFragmentedReader::handle_input(self, input)
+        NonFragmentedDemuxFsm::handle_input(self, input)
     }
 
     fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), isobmff_structure::Error> {
-        NonFragmentedReader::handle_data(self, offset, data)
+        NonFragmentedDemuxFsm::handle_data(self, offset, data)
     }
 
     fn poll_sample(&mut self) -> Option<Sample> {
-        NonFragmentedReader::poll_sample(self)
+        NonFragmentedDemuxFsm::poll_sample(self)
     }
 
     fn wanted_extent(&self) -> Option<Range<u64>> {
-        NonFragmentedReader::wanted_extent(self)
+        NonFragmentedDemuxFsm::wanted_extent(self)
     }
 
     fn finish(&mut self) -> Result<(), isobmff_structure::Error> {
-        NonFragmentedReader::finish(self)
+        NonFragmentedDemuxFsm::finish(self)
     }
 }
 
 /// Lays a non-fragmented movie file down on an asynchronous sink, taking the samples as they come
 ///
-/// The driver of [`NonFragmentedWriter`] over `futures::io`: it takes the
+/// The driver of [`NonFragmentedMuxFsm`] over `futures::io`: it takes the
 /// boxes and the samples as the writer does, and writes every byte the writer
 /// makes of them to the sink before the call returns. A caller hands over
 /// boxes and samples and nothing else moves.
@@ -156,7 +156,7 @@ impl ReadSamples for NonFragmentedReader {
 /// # Contract
 ///
 /// * The calls are the writer's, and what each takes and refuses is
-///   [`NonFragmentedWriter`]'s contract, carried through as
+///   [`NonFragmentedMuxFsm`]'s contract, carried through as
 ///   [`Structure`](crate::ErrorKind::Structure). What the writer made
 ///   of a call is written before the call reports, the bytes made before a
 ///   refusal included; a sink refusing them is
@@ -211,7 +211,7 @@ impl ReadSamples for NonFragmentedReader {
 /// ```
 #[derive(Debug)]
 pub struct NonFragmentedMuxer<W> {
-    muxer: Muxer<W, NonFragmentedWriter>,
+    muxer: Muxer<W, NonFragmentedMuxFsm>,
 }
 
 impl<W: AsyncWrite + Unpin> NonFragmentedMuxer<W> {
@@ -219,7 +219,7 @@ impl<W: AsyncWrite + Unpin> NonFragmentedMuxer<W> {
     #[must_use]
     pub const fn new(sink: W) -> Self {
         Self {
-            muxer: Muxer::new(sink, NonFragmentedWriter::new()),
+            muxer: Muxer::new(sink, NonFragmentedMuxFsm::new()),
         }
     }
 
@@ -228,7 +228,7 @@ impl<W: AsyncWrite + Unpin> NonFragmentedMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`NonFragmentedWriter::handle_file_type`] makes of the call.
+    ///   [`NonFragmentedMuxFsm::handle_file_type`] makes of the call.
     /// * [`Io`](crate::ErrorKind::Io): the sink refuses the bytes.
     pub async fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), Error> {
         self.muxer
@@ -241,7 +241,7 @@ impl<W: AsyncWrite + Unpin> NonFragmentedMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`NonFragmentedWriter::handle_movie`] makes of the call.
+    ///   [`NonFragmentedMuxFsm::handle_movie`] makes of the call.
     /// * [`Io`](crate::ErrorKind::Io): the sink refuses bytes a
     ///   dropped call left over.
     pub async fn handle_movie(&mut self, movie: MovieBox) -> Result<(), Error> {
@@ -253,10 +253,10 @@ impl<W: AsyncWrite + Unpin> NonFragmentedMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`NonFragmentedWriter::begin_chunk`] makes of the call.
+    ///   [`NonFragmentedMuxFsm::begin_chunk`] makes of the call.
     /// * [`Io`](crate::ErrorKind::Io): the sink refuses the bytes.
     pub async fn begin_chunk(&mut self) -> Result<(), Error> {
-        self.muxer.drive(NonFragmentedWriter::begin_chunk).await
+        self.muxer.drive(NonFragmentedMuxFsm::begin_chunk).await
     }
 
     /// Takes a sample, and places it at the end of the chunk that is open
@@ -264,7 +264,7 @@ impl<W: AsyncWrite + Unpin> NonFragmentedMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`NonFragmentedWriter::handle_sample`] makes of the call.
+    ///   [`NonFragmentedMuxFsm::handle_sample`] makes of the call.
     /// * [`Io`](crate::ErrorKind::Io): the sink refuses bytes a
     ///   dropped call left over.
     pub async fn handle_sample(&mut self, sample: Sample) -> Result<(), Error> {
@@ -282,17 +282,17 @@ impl<W: AsyncWrite + Unpin> NonFragmentedMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`NonFragmentedWriter::finish`] makes of the call.
+    ///   [`NonFragmentedMuxFsm::finish`] makes of the call.
     /// * [`Io`](crate::ErrorKind::Io): the sink refuses the bytes, or
     ///   does not flush.
     pub async fn finish(&mut self) -> Result<(), Error> {
-        self.muxer.finish(NonFragmentedWriter::finish).await
+        self.muxer.finish(NonFragmentedMuxFsm::finish).await
     }
 }
 
-impl PollOutput for NonFragmentedWriter {
+impl PollOutput for NonFragmentedMuxFsm {
     fn poll_output(&mut self) -> Option<EventBytes> {
-        NonFragmentedWriter::poll_output(self)
+        NonFragmentedMuxFsm::poll_output(self)
     }
 }
 

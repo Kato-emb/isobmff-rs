@@ -1,11 +1,11 @@
-//! [`FragmentedReader`] and [`FragmentedWriter`], a fragmented movie file read and written through the layers this crate holds, ISO/IEC 14496-12 Annex A.8
+//! [`FragmentedDemuxFsm`] and [`FragmentedMuxFsm`], a fragmented movie file read and written through the layers this crate holds, ISO/IEC 14496-12 Annex A.8
 
-mod reader;
+mod demux;
+mod mux;
 mod structure;
-mod writer;
 
-pub use reader::FragmentedReader;
-pub use writer::FragmentedWriter;
+pub use demux::FragmentedDemuxFsm;
+pub use mux::FragmentedMuxFsm;
 
 use structure::{FragmentedDisposition, FragmentedStructure};
 
@@ -17,7 +17,7 @@ mod tests {
     use isobmff_sample::Sample;
     use isobmff_test_support::fragmented_movie;
 
-    use super::FragmentedWriter;
+    use super::FragmentedMuxFsm;
 
     /// One sample of track 1, the first of its fragment
     pub(super) fn sample() -> Sample {
@@ -26,7 +26,7 @@ mod tests {
 
     /// A file of one fragment carrying [`sample`], handed no brands
     pub(super) fn file_of_one_sample() -> Vec<u8> {
-        let mut writer = FragmentedWriter::new();
+        let mut writer = FragmentedMuxFsm::new();
         let mut file = Vec::new();
 
         writer

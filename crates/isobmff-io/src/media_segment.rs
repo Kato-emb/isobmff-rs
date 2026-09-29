@@ -6,7 +6,7 @@ use futures_io::{AsyncRead, AsyncSeek, AsyncWrite};
 use isobmff_boxes::{MovieBox, SegmentTypeBox};
 use isobmff_sample::{Sample, SegmentIndex};
 use isobmff_sequence::EventBytes;
-use isobmff_structure::{MediaSegmentReader, MediaSegmentWriter};
+use isobmff_structure::{MediaSegmentDemuxFsm, MediaSegmentMuxFsm};
 
 use crate::Error;
 use crate::driver::{Demuxer, Muxer};
@@ -14,7 +14,7 @@ use crate::stack::{PollOutput, ReadSamples, ResumeSamples};
 
 /// Reads the samples a media segment carries off an asynchronous source that seeks
 ///
-/// The driver of [`MediaSegmentReader`] over `futures::io`: it reads the
+/// The driver of [`MediaSegmentDemuxFsm`] over `futures::io`: it reads the
 /// segment off the source a cut at a time and hands each over, fetches the
 /// bytes the reader names as lacking wherever the segment passed them by —
 /// the media data of a fragment addressing bytes before it — by seeking to
@@ -91,13 +91,13 @@ use crate::stack::{PollOutput, ReadSamples, ResumeSamples};
 /// ```
 #[derive(Debug)]
 pub struct MediaSegmentDemuxer<S> {
-    demuxer: Demuxer<S, MediaSegmentReader>,
+    demuxer: Demuxer<S, MediaSegmentDemuxFsm>,
 }
 
 impl<S: AsyncRead + AsyncSeek + Unpin> MediaSegmentDemuxer<S> {
     /// Creates a demuxer over `source`, the segment continuing `movie` and beginning where the source stands
     ///
-    /// The reader beneath is [`MediaSegmentReader::new`]; one holding the
+    /// The reader beneath is [`MediaSegmentDemuxFsm::new`]; one holding the
     /// segment to other limits is driven through
     /// [`with_reader`](Self::with_reader).
     ///
@@ -106,7 +106,7 @@ impl<S: AsyncRead + AsyncSeek + Unpin> MediaSegmentDemuxer<S> {
     /// * [`Io`](crate::ErrorKind::Io): the source does not report
     ///   where it stands.
     pub async fn new(source: S, movie: MovieBox) -> Result<Self, Error> {
-        Self::with_reader(source, MediaSegmentReader::new(movie)).await
+        Self::with_reader(source, MediaSegmentDemuxFsm::new(movie)).await
     }
 
     /// Creates a demuxer over `source` driving `reader`, the segment beginning where the source stands
@@ -115,7 +115,7 @@ impl<S: AsyncRead + AsyncSeek + Unpin> MediaSegmentDemuxer<S> {
     ///
     /// * [`Io`](crate::ErrorKind::Io): the source does not report
     ///   where it stands.
-    pub async fn with_reader(source: S, reader: MediaSegmentReader) -> Result<Self, Error> {
+    pub async fn with_reader(source: S, reader: MediaSegmentDemuxFsm) -> Result<Self, Error> {
         Ok(Self {
             demuxer: Demuxer::new(source, reader).await?,
         })
@@ -133,7 +133,7 @@ impl<S: AsyncRead + AsyncSeek + Unpin> MediaSegmentDemuxer<S> {
         self.demuxer.reader().movie()
     }
 
-    /// Returns the subsegments of every `sidx` read so far, as [`MediaSegmentReader::segment_indexes`] holds them
+    /// Returns the subsegments of every `sidx` read so far, as [`MediaSegmentDemuxFsm::segment_indexes`] holds them
     #[must_use]
     pub fn segment_indexes(&self) -> &[SegmentIndex] {
         self.demuxer.reader().segment_indexes()
@@ -146,7 +146,7 @@ impl<S: AsyncRead + AsyncSeek + Unpin> MediaSegmentDemuxer<S> {
 
     /// Restarts the reading at `offset` of the segment, a place an index names
     ///
-    /// The reader is resumed at `offset` as [`MediaSegmentReader::resume_at`]
+    /// The reader is resumed at `offset` as [`MediaSegmentDemuxFsm::resume_at`]
     /// resumes it, and the source is sought there from where the segment
     /// begins: the samples not yet taken are dropped, and the ones that come
     /// next are those the segment carries from `offset` on — the `moof` or
@@ -162,7 +162,7 @@ impl<S: AsyncRead + AsyncSeek + Unpin> MediaSegmentDemuxer<S> {
     ///   which leaves the demuxer as it was, or the source does not seek
     ///   there.
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`MediaSegmentReader::resume_at`] makes of the call.
+    ///   [`MediaSegmentDemuxFsm::resume_at`] makes of the call.
     ///
     /// A failure after the offset is checked ends the samples, until a
     /// resume succeeds.
@@ -171,37 +171,37 @@ impl<S: AsyncRead + AsyncSeek + Unpin> MediaSegmentDemuxer<S> {
     }
 }
 
-impl ReadSamples for MediaSegmentReader {
+impl ReadSamples for MediaSegmentDemuxFsm {
     fn handle_input(&mut self, input: &[u8]) -> Result<(), isobmff_structure::Error> {
-        MediaSegmentReader::handle_input(self, input)
+        MediaSegmentDemuxFsm::handle_input(self, input)
     }
 
     fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), isobmff_structure::Error> {
-        MediaSegmentReader::handle_data(self, offset, data)
+        MediaSegmentDemuxFsm::handle_data(self, offset, data)
     }
 
     fn poll_sample(&mut self) -> Option<Sample> {
-        MediaSegmentReader::poll_sample(self)
+        MediaSegmentDemuxFsm::poll_sample(self)
     }
 
     fn wanted_extent(&self) -> Option<Range<u64>> {
-        MediaSegmentReader::wanted_extent(self)
+        MediaSegmentDemuxFsm::wanted_extent(self)
     }
 
     fn finish(&mut self) -> Result<(), isobmff_structure::Error> {
-        MediaSegmentReader::finish(self)
+        MediaSegmentDemuxFsm::finish(self)
     }
 }
 
-impl ResumeSamples for MediaSegmentReader {
+impl ResumeSamples for MediaSegmentDemuxFsm {
     fn resume_at(&mut self, offset: u64) -> Result<(), isobmff_structure::Error> {
-        MediaSegmentReader::resume_at(self, offset)
+        MediaSegmentDemuxFsm::resume_at(self, offset)
     }
 }
 
 /// Lays a media segment down on an asynchronous sink, taking the samples as they come
 ///
-/// The driver of [`MediaSegmentWriter`] over `futures::io`: it takes the
+/// The driver of [`MediaSegmentMuxFsm`] over `futures::io`: it takes the
 /// brands and the samples as the writer does, and writes every byte the
 /// writer makes of them to the sink before the call returns. A caller hands
 /// over brands and samples and nothing else moves.
@@ -209,7 +209,7 @@ impl ResumeSamples for MediaSegmentReader {
 /// # Contract
 ///
 /// * The calls are the writer's, and what each takes and refuses is
-///   [`MediaSegmentWriter`]'s contract, carried through as
+///   [`MediaSegmentMuxFsm`]'s contract, carried through as
 ///   [`Structure`](crate::ErrorKind::Structure). What the writer made
 ///   of a call is written before the call reports, the bytes made before a
 ///   refusal included; a sink refusing them is
@@ -257,7 +257,7 @@ impl ResumeSamples for MediaSegmentReader {
 /// ```
 #[derive(Debug)]
 pub struct MediaSegmentMuxer<W> {
-    muxer: Muxer<W, MediaSegmentWriter>,
+    muxer: Muxer<W, MediaSegmentMuxFsm>,
 }
 
 impl<W: AsyncWrite + Unpin> MediaSegmentMuxer<W> {
@@ -265,7 +265,7 @@ impl<W: AsyncWrite + Unpin> MediaSegmentMuxer<W> {
     #[must_use]
     pub const fn new(sink: W) -> Self {
         Self {
-            muxer: Muxer::new(sink, MediaSegmentWriter::new()),
+            muxer: Muxer::new(sink, MediaSegmentMuxFsm::new()),
         }
     }
 
@@ -274,7 +274,7 @@ impl<W: AsyncWrite + Unpin> MediaSegmentMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`MediaSegmentWriter::handle_segment_type`] makes of the call.
+    ///   [`MediaSegmentMuxFsm::handle_segment_type`] makes of the call.
     /// * [`Io`](crate::ErrorKind::Io): the sink refuses the bytes.
     pub async fn handle_segment_type(&mut self, segment_type: SegmentTypeBox) -> Result<(), Error> {
         self.muxer
@@ -287,7 +287,7 @@ impl<W: AsyncWrite + Unpin> MediaSegmentMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`MediaSegmentWriter::begin_fragment`] makes of the call.
+    ///   [`MediaSegmentMuxFsm::begin_fragment`] makes of the call.
     /// * [`Io`](crate::ErrorKind::Io): the sink refuses bytes a
     ///   dropped call left over.
     pub async fn begin_fragment(&mut self, sequence_number: u32) -> Result<(), Error> {
@@ -301,7 +301,7 @@ impl<W: AsyncWrite + Unpin> MediaSegmentMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`MediaSegmentWriter::begin_fragment_continuing`] makes of the call.
+    ///   [`MediaSegmentMuxFsm::begin_fragment_continuing`] makes of the call.
     /// * [`Io`](crate::ErrorKind::Io): the sink refuses bytes a
     ///   dropped call left over.
     pub async fn begin_fragment_continuing(&mut self, sequence_number: u32) -> Result<(), Error> {
@@ -315,7 +315,7 @@ impl<W: AsyncWrite + Unpin> MediaSegmentMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`MediaSegmentWriter::handle_sample`] makes of the call.
+    ///   [`MediaSegmentMuxFsm::handle_sample`] makes of the call.
     /// * [`Io`](crate::ErrorKind::Io): the sink refuses bytes a
     ///   dropped call left over.
     pub async fn handle_sample(&mut self, sample: Sample) -> Result<(), Error> {
@@ -329,10 +329,10 @@ impl<W: AsyncWrite + Unpin> MediaSegmentMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`MediaSegmentWriter::finish_fragment`] makes of the call.
+    ///   [`MediaSegmentMuxFsm::finish_fragment`] makes of the call.
     /// * [`Io`](crate::ErrorKind::Io): the sink refuses the bytes.
     pub async fn finish_fragment(&mut self) -> Result<(), Error> {
-        self.muxer.drive(MediaSegmentWriter::finish_fragment).await
+        self.muxer.drive(MediaSegmentMuxFsm::finish_fragment).await
     }
 
     /// Declares the segment over, and flushes the sink
@@ -344,16 +344,16 @@ impl<W: AsyncWrite + Unpin> MediaSegmentMuxer<W> {
     /// # Errors
     ///
     /// * [`Structure`](crate::ErrorKind::Structure): what
-    ///   [`MediaSegmentWriter::finish`] makes of the call.
+    ///   [`MediaSegmentMuxFsm::finish`] makes of the call.
     /// * [`Io`](crate::ErrorKind::Io): the sink does not flush.
     pub async fn finish(&mut self) -> Result<(), Error> {
-        self.muxer.finish(MediaSegmentWriter::finish).await
+        self.muxer.finish(MediaSegmentMuxFsm::finish).await
     }
 }
 
-impl PollOutput for MediaSegmentWriter {
+impl PollOutput for MediaSegmentMuxFsm {
     fn poll_output(&mut self) -> Option<EventBytes> {
-        MediaSegmentWriter::poll_output(self)
+        MediaSegmentMuxFsm::poll_output(self)
     }
 }
 

@@ -1,4 +1,4 @@
-//! [`NonFragmentedWriter`], a non-fragmented movie file laid down as the samples come
+//! [`NonFragmentedMuxFsm`], a non-fragmented movie file laid down as the samples come
 
 use alloc::vec::Vec;
 use core::mem;
@@ -13,7 +13,7 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 
 /// Lays a non-fragmented movie file down, taking the samples as they come
 ///
-/// The mirror of [`NonFragmentedReader`](crate::NonFragmentedReader): it
+/// The mirror of [`NonFragmentedDemuxFsm`](crate::NonFragmentedDemuxFsm): it
 /// wires the layers that write a non-fragmented movie file — the structure
 /// that holds the order of the top-level boxes, the writing of each box
 /// whole, the laying out of the samples as the sample tables of the movie
@@ -89,10 +89,10 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 /// ```
 /// use isobmff_boxes::SampleFlags;
 /// use isobmff_sample::Sample;
-/// use isobmff_structure::{NonFragmentedReader, NonFragmentedWriter};
+/// use isobmff_structure::{NonFragmentedDemuxFsm, NonFragmentedMuxFsm};
 /// # use isobmff_test_support::{file_type, unfragmented_movie};
 /// // A file opening with its brands, whose movie declares one track and no sample yet
-/// let mut writer = NonFragmentedWriter::new();
+/// let mut writer = NonFragmentedMuxFsm::new();
 /// writer.handle_file_type(file_type())?;
 /// writer.handle_movie(unfragmented_movie())?;
 ///
@@ -114,7 +114,7 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 /// assert_eq!(&file[4..8], b"ftyp");
 ///
 /// // Read back, the samples come out as they were laid down
-/// let mut reader = NonFragmentedReader::new();
+/// let mut reader = NonFragmentedDemuxFsm::new();
 /// reader.handle_input(&file)?;
 /// while let Some(wanted) = reader.wanted_extent() {
 ///     reader.handle_data(wanted.start, &file[wanted.start as usize..wanted.end as usize])?;
@@ -127,7 +127,7 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 /// # Ok::<(), isobmff_structure::Error>(())
 /// ```
 #[derive(Debug)]
-pub struct NonFragmentedWriter {
+pub struct NonFragmentedMuxFsm {
     boxes: BoxWriter,
     structure: NonFragmentedStructure,
     samples: SampleTableWriter,
@@ -147,7 +147,7 @@ enum State {
     Failed(Error),
 }
 
-impl NonFragmentedWriter {
+impl NonFragmentedMuxFsm {
     /// Creates a writer waiting at the start of a non-fragmented movie file
     #[must_use]
     pub const fn new() -> Self {
@@ -409,7 +409,7 @@ impl NonFragmentedWriter {
     }
 }
 
-impl Default for NonFragmentedWriter {
+impl Default for NonFragmentedMuxFsm {
     fn default() -> Self {
         Self::new()
     }
@@ -429,7 +429,7 @@ mod tests {
     use isobmff_sample::Sample;
     use isobmff_test_support::{file_type, unfragmented_movie};
 
-    use super::{Error, NonFragmentedWriter, default_file_type};
+    use super::{Error, NonFragmentedMuxFsm, default_file_type};
     use crate::ErrorKind;
 
     /// A sample of the track the movie declares
@@ -438,7 +438,7 @@ mod tests {
     }
 
     /// The bytes the writer has laid down, drained to the end
-    fn drained(writer: &mut NonFragmentedWriter) -> Vec<u8> {
+    fn drained(writer: &mut NonFragmentedMuxFsm) -> Vec<u8> {
         let mut file = Vec::new();
         while let Some(written) = writer.poll_output() {
             file.extend_from_slice(&written);
@@ -449,7 +449,7 @@ mod tests {
 
     #[test]
     fn a_file_handed_no_brands_opens_with_the_brands_the_writer_declares() {
-        let mut writer = NonFragmentedWriter::new();
+        let mut writer = NonFragmentedMuxFsm::new();
 
         writer.handle_movie(unfragmented_movie()).unwrap();
         writer.finish().unwrap();
@@ -463,7 +463,7 @@ mod tests {
 
     #[test]
     fn a_file_handed_no_brands_whose_chunk_comes_first_opens_with_the_brands_the_writer_declares() {
-        let mut writer = NonFragmentedWriter::new();
+        let mut writer = NonFragmentedMuxFsm::new();
 
         writer.begin_chunk().unwrap();
         writer.handle_sample(sample()).unwrap();
@@ -479,7 +479,7 @@ mod tests {
 
     #[test]
     fn the_brands_handed_over_are_laid_down_as_they_stand() {
-        let mut writer = NonFragmentedWriter::new();
+        let mut writer = NonFragmentedMuxFsm::new();
 
         writer.handle_file_type(file_type()).unwrap();
         writer.handle_movie(unfragmented_movie()).unwrap();
@@ -494,7 +494,7 @@ mod tests {
 
     #[test]
     fn a_chunk_no_sample_was_handed_over_to_leaves_no_media_data_box() {
-        let mut writer = NonFragmentedWriter::new();
+        let mut writer = NonFragmentedMuxFsm::new();
 
         writer.handle_movie(unfragmented_movie()).unwrap();
         writer.begin_chunk().unwrap();
@@ -509,7 +509,7 @@ mod tests {
 
     #[test]
     fn brands_handed_over_after_a_chunk_was_opened_are_out_of_order() {
-        let mut writer = NonFragmentedWriter::new();
+        let mut writer = NonFragmentedMuxFsm::new();
 
         writer.handle_movie(unfragmented_movie()).unwrap();
         writer.begin_chunk().unwrap();
@@ -522,7 +522,7 @@ mod tests {
 
     #[test]
     fn a_second_movie_is_rejected() {
-        let mut writer = NonFragmentedWriter::new();
+        let mut writer = NonFragmentedMuxFsm::new();
 
         writer.handle_movie(unfragmented_movie()).unwrap();
 
@@ -534,7 +534,7 @@ mod tests {
 
     #[test]
     fn a_sample_handed_over_while_no_chunk_is_open_is_rejected() {
-        let mut writer = NonFragmentedWriter::new();
+        let mut writer = NonFragmentedMuxFsm::new();
 
         assert_eq!(
             writer.handle_sample(sample()).map_err(Error::kind),
@@ -544,7 +544,7 @@ mod tests {
 
     #[test]
     fn a_sample_of_a_track_the_movie_does_not_declare_is_rejected_when_the_file_is_declared_over() {
-        let mut writer = NonFragmentedWriter::new();
+        let mut writer = NonFragmentedMuxFsm::new();
 
         writer.handle_movie(unfragmented_movie()).unwrap();
         writer.begin_chunk().unwrap();
@@ -568,7 +568,7 @@ mod tests {
 
     #[test]
     fn a_file_declared_over_without_a_movie_is_rejected() {
-        let mut writer = NonFragmentedWriter::new();
+        let mut writer = NonFragmentedMuxFsm::new();
 
         writer.handle_file_type(file_type()).unwrap();
 
@@ -580,7 +580,7 @@ mod tests {
 
     #[test]
     fn a_failed_writer_reports_the_same_failure_for_every_call_after_it() {
-        let mut writer = NonFragmentedWriter::new();
+        let mut writer = NonFragmentedMuxFsm::new();
         let failure = Error::box_out_of_order(FileTypeBox::BOX_TYPE);
 
         writer.handle_movie(unfragmented_movie()).unwrap();
@@ -593,7 +593,7 @@ mod tests {
 
     #[test]
     fn a_failed_writer_hands_over_the_bytes_it_had_already_laid_down() {
-        let mut writer = NonFragmentedWriter::new();
+        let mut writer = NonFragmentedMuxFsm::new();
 
         writer.handle_file_type(file_type()).unwrap();
 
@@ -604,7 +604,7 @@ mod tests {
 
     #[test]
     fn anything_handed_over_after_finishing_is_rejected() {
-        let mut writer = NonFragmentedWriter::new();
+        let mut writer = NonFragmentedMuxFsm::new();
 
         writer.handle_file_type(file_type()).unwrap();
         writer.handle_movie(unfragmented_movie()).unwrap();
