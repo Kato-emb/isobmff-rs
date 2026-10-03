@@ -33,7 +33,8 @@ mod tests {
                 None,
             ),
             vec![TrackRunBox::new(Some(i32::try_from(MOOF_LEN + 8).unwrap()), None, rows).unwrap()],
-        );
+        )
+        .unwrap();
 
         MovieFragmentBox::new(MovieFragmentHeaderBox::new(1), vec![track_fragment])
     }

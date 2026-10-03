@@ -22,13 +22,12 @@ use crate::trun::TrackRunBox;
 /// [`with_tfdt`](Self::with_tfdt) sets it.
 ///
 /// A `tfhd` stating `duration-is-empty` declares that the fragment holds no
-/// samples, and §8.8.8 has such a fragment hold no track runs. This box
-/// states the flag: a box holds either runs, as
-/// [`new`](Self::new) builds it, or the empty duration, as
-/// [`with_empty_duration`](Self::with_empty_duration) builds it and
-/// [`duration_is_empty`](Self::duration_is_empty) reports. On encode it writes
-/// the flag into its `tfhd`. [`decode_payload`](BoxDecode::decode_payload)
-/// reads the flag off the `tfhd` and refuses it alongside a `trun`.
+/// samples, and §8.8.8 has such a fragment hold no track runs — so
+/// [`with_empty_duration`](Self::with_empty_duration) states the flag and
+/// holds no run, a header built by
+/// [`TrackFragmentHeaderBox::new`](TrackFragmentHeaderBox::new) never states
+/// it, and both [`new`](Self::new) and
+/// [`decode_payload`](BoxDecode::decode_payload) refuse the two together.
 ///
 /// The `sdtp`, `sbgp`, `subs`, `saiz`, and `saio` children have no fields yet, so
 /// they are kept in [`other_boxes`](Self::other_boxes) and written back unread.
@@ -42,30 +41,31 @@ use crate::trun::TrackRunBox;
 pub struct TrackFragmentBox {
     tfhd: TrackFragmentHeaderBox,
     tfdt: Option<TrackFragmentBaseMediaDecodeTimeBox>,
-    trun: TrackRuns,
+    trun: Vec<TrackRunBox>,
     other_boxes: OtherBoxes,
-}
-
-/// What a `traf` holds for its runs: the runs, or the empty duration that forbids them
-#[derive(Clone, PartialEq, Debug)]
-enum TrackRuns {
-    Runs(Vec<TrackRunBox>),
-    EmptyDuration,
 }
 
 impl TrackFragmentBox {
     /// Creates the box from the header and the runs of samples
-    #[must_use]
-    pub const fn new(tfhd: TrackFragmentHeaderBox, trun: Vec<TrackRunBox>) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// * [`ForbiddenChildBox`](isobmff_core::ErrorKind::ForbiddenChildBox): `tfhd`
+    ///   states `duration-is-empty` and `trun` holds a run.
+    pub fn new(tfhd: TrackFragmentHeaderBox, trun: Vec<TrackRunBox>) -> Result<Self, Error> {
+        if tfhd.duration_is_empty() && !trun.is_empty() {
+            return Err(Error::forbidden_child_box(TrackRunBox::BOX_TYPE));
+        }
+
+        Ok(Self {
             tfhd,
             tfdt: None,
-            trun: TrackRuns::Runs(trun),
+            trun,
             other_boxes: OtherBoxes::new(),
-        }
+        })
     }
 
-    /// Creates the box of a fragment holding no samples, whose `tfhd` is written stating `duration-is-empty`
+    /// Creates the box of a fragment holding no samples, whose `tfhd` states `duration-is-empty`
     ///
     /// Such a fragment adds the default sample duration its `tfhd` or the
     /// `trex` of its track states to the timeline, and no sample (§8.8.7.1),
@@ -73,9 +73,9 @@ impl TrackFragmentBox {
     #[must_use]
     pub const fn with_empty_duration(tfhd: TrackFragmentHeaderBox) -> Self {
         Self {
-            tfhd,
+            tfhd: tfhd.with_empty_duration(),
             tfdt: None,
-            trun: TrackRuns::EmptyDuration,
+            trun: Vec::new(),
             other_boxes: OtherBoxes::new(),
         }
     }
@@ -104,18 +104,7 @@ impl TrackFragmentBox {
     /// Returns the runs of samples this fragment adds, in the order they came
     #[must_use]
     pub fn trun(&self) -> &[TrackRunBox] {
-        match &self.trun {
-            TrackRuns::Runs(trun) => trun,
-            TrackRuns::EmptyDuration => &[],
-        }
-    }
-
-    /// Returns whether the fragment states that it holds no samples, through `duration-is-empty`
-    ///
-    /// Such a fragment holds no run, so [`trun`](Self::trun) is empty.
-    #[must_use]
-    pub const fn duration_is_empty(&self) -> bool {
-        matches!(self.trun, TrackRuns::EmptyDuration)
+        &self.trun
     }
 
     /// Returns the children no field of this box claims, in the order they came
@@ -145,14 +134,12 @@ impl BoxDecode for TrackFragmentBox {
         let mut tfdt_boxes = ChildBoxes::new();
         let mut trun_boxes = ChildBoxes::new();
         let mut other_boxes = OtherBoxes::new();
-        let mut duration_is_empty = false;
 
         for child in boxes(reader.take_remainder()) {
             let child = child?;
             let box_type = child.header().box_type();
 
             if box_type == TrackFragmentHeaderBox::BOX_TYPE {
-                duration_is_empty = TrackFragmentHeaderBox::states_empty_duration(child.payload());
                 tfhd_boxes.push(child);
             } else if box_type == TrackFragmentBaseMediaDecodeTimeBox::BOX_TYPE {
                 tfdt_boxes.push(child);
@@ -167,16 +154,14 @@ impl BoxDecode for TrackFragmentBox {
         // Why not weighing the runs once they are read: the rule turns on whether
         // a run is there at all, and a fragment that declares an empty duration
         // would have every run of an input it goes on to refuse decoded first.
-        let trun = match (duration_is_empty, trun_boxes.is_empty()) {
-            (false, _) => TrackRuns::Runs(trun_boxes.zero_or_more()?),
-            (true, true) => TrackRuns::EmptyDuration,
-            (true, false) => return Err(Error::forbidden_child_box(TrackRunBox::BOX_TYPE)),
-        };
+        if tfhd.duration_is_empty() && !trun_boxes.is_empty() {
+            return Err(Error::forbidden_child_box(TrackRunBox::BOX_TYPE));
+        }
 
         Ok(Self {
             tfhd,
             tfdt: tfdt_boxes.zero_or_one()?,
-            trun,
+            trun: trun_boxes.zero_or_more()?,
             other_boxes,
         })
     }
@@ -185,7 +170,7 @@ impl BoxDecode for TrackFragmentBox {
 impl BoxEncode for TrackFragmentBox {
     fn payload_len(&self) -> u64 {
         let decode_time = self.tfdt.as_ref().map_or(0, |tfdt| tfdt.encoded_len());
-        let runs = self.trun().iter().fold(0_u64, |total, trun| {
+        let runs = self.trun.iter().fold(0_u64, |total, trun| {
             total.saturating_add(trun.encoded_len())
         });
         let others = self
@@ -204,16 +189,11 @@ impl BoxEncode for TrackFragmentBox {
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        let mut rest = if self.duration_is_empty() {
-            self.tfhd
-                .encode_stating_empty_duration(writer.take_remainder())?
-        } else {
-            self.tfhd.encode(writer.take_remainder())?
-        };
+        let mut rest = self.tfhd.encode(writer.take_remainder())?;
         if let Some(tfdt) = &self.tfdt {
             rest = tfdt.encode(rest)?;
         }
-        for trun in self.trun() {
+        for trun in &self.trun {
             rest = trun.encode(rest)?;
         }
         for other in self.other_boxes.as_slice() {
@@ -262,6 +242,7 @@ pub(crate) mod tests {
     /// Track fragment adding one run of samples to the track it names
     pub(crate) fn track_fragment(track_id: u32) -> TrackFragmentBox {
         TrackFragmentBox::new(track_fragment_header(track_id), vec![track_run()])
+            .unwrap()
             .with_tfdt(TrackFragmentBaseMediaDecodeTimeBox::new(1_024))
     }
 
@@ -303,7 +284,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_fragment_adding_no_run_of_samples_reads_back_as_the_value_that_wrote_it() {
-        let empty = TrackFragmentBox::new(track_fragment_header(1), Vec::new());
+        let empty = TrackFragmentBox::new(track_fragment_header(1), Vec::new()).unwrap();
 
         let payload = encoded_payload(&empty);
 
@@ -311,26 +292,28 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_fragment_of_empty_duration_states_so_in_its_header_and_reads_back() {
+    fn a_fragment_of_empty_duration_states_so_holds_no_run_and_reads_back() {
         let empty = TrackFragmentBox::with_empty_duration(track_fragment_header(1));
-
-        let payload = encoded_payload(&empty);
-
-        assert_eq!(payload.get(8..12), Some(b"\0\x01\0\x08".as_slice()));
-        assert_eq!(TrackFragmentBox::decode_payload(&payload).unwrap(), empty);
-    }
-
-    #[test]
-    fn a_header_read_from_an_empty_duration_fragment_heads_runs_and_reads_back() {
-        let empty = TrackFragmentBox::with_empty_duration(track_fragment_header(1));
-        let read = TrackFragmentBox::decode_payload(&encoded_payload(&empty)).unwrap();
-        let with_runs = TrackFragmentBox::new(read.tfhd().clone(), vec![track_run()]);
-
-        let payload = encoded_payload(&with_runs);
 
         assert_eq!(
-            TrackFragmentBox::decode_payload(&payload).unwrap(),
-            with_runs
+            empty,
+            TrackFragmentBox::new(track_fragment_header(1).with_empty_duration(), Vec::new())
+                .unwrap()
+        );
+        assert_eq!(
+            TrackFragmentBox::decode_payload(&encoded_payload(&empty)).unwrap(),
+            empty
+        );
+    }
+
+    #[test]
+    fn a_header_read_stating_an_empty_duration_cannot_head_a_run() {
+        let empty = TrackFragmentBox::with_empty_duration(track_fragment_header(1));
+        let read = TrackFragmentBox::decode_payload(&encoded_payload(&empty)).unwrap();
+
+        assert_eq!(
+            TrackFragmentBox::new(read.tfhd().clone(), vec![track_run()]),
+            Err(Error::forbidden_child_box(TrackRunBox::BOX_TYPE))
         );
     }
 

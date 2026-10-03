@@ -228,6 +228,7 @@ pub fn movie_fragment() -> MovieFragmentBox {
         ),
         Vec::new(),
     )
+    .unwrap()
     .with_tfdt(TrackFragmentBaseMediaDecodeTimeBox::new(0));
 
     MovieFragmentBox::new(MovieFragmentHeaderBox::new(1), vec![track_fragment])

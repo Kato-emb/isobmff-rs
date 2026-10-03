@@ -153,7 +153,7 @@ impl TrackFragment {
 
         let overflow = || Error::decode_time_overflow(track_id);
         let mut end = decode_time;
-        if traf.duration_is_empty() {
+        if tfhd.duration_is_empty() {
             end = end
                 .checked_add(u64::from(sample_duration))
                 .ok_or_else(overflow)?;
@@ -376,6 +376,7 @@ mod tests {
             ),
             trun,
         )
+        .unwrap()
     }
 
     /// Movie fragment carrying the given track fragments
@@ -445,7 +446,8 @@ mod tests {
                 Some(8),
             ),
             vec![TrackRunBox::new(Some(100), None, rows).unwrap()],
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             resolved(&movie_fragment(vec![track_fragment]), &one_track_movie()),
@@ -473,7 +475,8 @@ mod tests {
                 Some(2),
             ),
             vec![run(Some(100), 2)],
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             resolved(&movie_fragment(vec![track_fragment]), &one_track_movie()),
@@ -529,6 +532,7 @@ mod tests {
             ),
             vec![run(Some(100), 1)],
         )
+        .unwrap()
         .with_tfdt(TrackFragmentBaseMediaDecodeTimeBox::new(4_096));
         assert_eq!(
             resolved_from(
@@ -546,7 +550,8 @@ mod tests {
         let track_fragment = TrackFragmentBox::new(
             track_fragment_header(TrackFragmentHeaderFlags::ZERO, 1, Some(400), None, None),
             vec![run(Some(8), 1)],
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             resolved(&movie_fragment(vec![track_fragment]), &one_track_movie()),
@@ -572,7 +577,8 @@ mod tests {
         let track_fragment = TrackFragmentBox::new(
             track_fragment_header(TrackFragmentHeaderFlags::ZERO, 1, None, None, None),
             vec![run(Some(100), 1)],
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             resolved(&movie_fragment(vec![track_fragment]), &one_track_movie()),
@@ -587,6 +593,7 @@ mod tests {
                 track_fragment_header(TrackFragmentHeaderFlags::ZERO, track_id, None, None, None),
                 vec![run(data_offset, 1)],
             )
+            .unwrap()
         };
 
         assert_eq!(
@@ -613,7 +620,8 @@ mod tests {
         let stating_no_anchor = TrackFragmentBox::new(
             track_fragment_header(TrackFragmentHeaderFlags::ZERO, 2, None, None, None),
             vec![run(Some(100), 1)],
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             resolved_from(
@@ -685,7 +693,8 @@ mod tests {
                 None,
             ),
             vec![run(Some(100), 1)],
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             resolved(&movie_fragment(vec![by_a_second_entry]), &one_track_movie()),
@@ -823,7 +832,8 @@ mod tests {
                     None,
                 ),
                 vec![run(None, 1)],
-            ),
+            )
+            .unwrap(),
         ]);
 
         assert_eq!(
@@ -856,6 +866,7 @@ mod tests {
             ),
             vec![run(Some(100), 1)],
         )
+        .unwrap()
         .with_tfdt(TrackFragmentBaseMediaDecodeTimeBox::new(u64::MAX));
 
         assert_eq!(
@@ -878,7 +889,8 @@ mod tests {
                 None,
             ),
             vec![run(None, 1)],
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             resolved(
