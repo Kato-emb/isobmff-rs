@@ -49,8 +49,7 @@ const DEFAULT_BASE_IS_MOOF: u32 = 0x0002_0000;
 /// ISO/IEC 14496-12 §8.8.7.1 has the `tf_flags` state which optional fields
 /// the box carries, which a [`TrackFragmentHeaderBox`] derives from the fields
 /// themselves, and `duration-is-empty`, which
-/// [`TrackFragmentBox`](crate::TrackFragmentBox) states for the fragment it
-/// holds. What is left for a caller to state is
+/// [`TrackFragmentBox`](crate::TrackFragmentBox) states for its fragment. What is left for a caller to state is
 /// [`default-base-is-moof`](Self::DEFAULT_BASE_IS_MOOF) and whatever bits the
 /// spec has yet to define, which this holds alone and
 /// [`TrackFragmentHeaderBox::new`] takes.
@@ -242,6 +241,31 @@ impl TrackFragmentHeaderBox {
     pub const fn default_sample_flags(&self) -> Option<SampleFlags> {
         self.default_sample_flags
     }
+
+    /// Returns whether the `tf_flags` at the front of a `tfhd` payload state `duration-is-empty`
+    ///
+    /// A payload too short to hold them states nothing.
+    pub(crate) fn states_empty_duration(payload: &[u8]) -> bool {
+        payload.first_chunk::<4>().is_some_and(|full_box| {
+            FullBoxFields::from_bytes(full_box).flags().bits() & DURATION_IS_EMPTY != 0
+        })
+    }
+
+    /// Writes the whole box into the front of `buffer`, its flags stating `duration-is-empty`, and returns what is left
+    ///
+    /// # Errors
+    ///
+    /// * What [`encode`](BoxEncode::encode) reports.
+    pub(crate) fn encode_stating_empty_duration<'buffer>(
+        &self,
+        buffer: &'buffer mut [u8],
+    ) -> Result<&'buffer mut [u8], Error> {
+        Self {
+            flags: flags_of(self.flags.bits() | DURATION_IS_EMPTY),
+            ..self.clone()
+        }
+        .encode(buffer)
+    }
 }
 
 /// Returns `flag` when the field it states is `present`, and no bit otherwise
@@ -257,21 +281,8 @@ const fn flags_of(bits: u32) -> FullBoxFlags {
     FullBoxFields::from_bytes(&bits.to_be_bytes()).flags()
 }
 
-/// A `tfhd` as the wire carries it, `duration-is-empty` included
-///
-/// The [`TrackFragmentBox`](crate::TrackFragmentBox) reads and writes its
-/// header through this.
-pub(crate) struct WireTrackFragmentHeader {
-    pub(crate) tfhd: TrackFragmentHeaderBox,
-    pub(crate) duration_is_empty: bool,
-}
-
 impl BoxDefinition for TrackFragmentHeaderBox {
     const BOX_TYPE: BoxType = BoxType::compact(*b"tfhd");
-}
-
-impl BoxDefinition for WireTrackFragmentHeader {
-    const BOX_TYPE: BoxType = TrackFragmentHeaderBox::BOX_TYPE;
 }
 
 impl BoxDecode for TrackFragmentHeaderBox {
@@ -283,12 +294,6 @@ impl BoxDecode for TrackFragmentHeaderBox {
     ///   `default_sample_flags` set a bit §8.8.3.1 reserves.
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the payload
     ///   ends inside a field the flags state.
-    fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        WireTrackFragmentHeader::decode_fields(reader).map(|wire| wire.tfhd)
-    }
-}
-
-impl BoxDecode for WireTrackFragmentHeader {
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let full_box = FullBoxFields::from_bytes(reader.read_bytes::<4>()?);
         let version = full_box.version();
@@ -328,16 +333,13 @@ impl BoxDecode for WireTrackFragmentHeader {
         };
 
         Ok(Self {
-            tfhd: TrackFragmentHeaderBox {
-                flags,
-                track_id,
-                base_data_offset,
-                sample_description_index,
-                default_sample_duration,
-                default_sample_size,
-                default_sample_flags,
-            },
-            duration_is_empty: carries(DURATION_IS_EMPTY),
+            flags,
+            track_id,
+            base_data_offset,
+            sample_description_index,
+            default_sample_duration,
+            default_sample_size,
+            default_sample_flags,
         })
     }
 }
@@ -363,30 +365,7 @@ impl BoxEncode for TrackFragmentHeaderBox {
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        self.encode_fields_flagged(writer, false)
-    }
-}
-
-impl BoxEncode for WireTrackFragmentHeader {
-    fn payload_len(&self) -> u64 {
-        self.tfhd.payload_len()
-    }
-
-    fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        self.tfhd
-            .encode_fields_flagged(writer, self.duration_is_empty)
-    }
-}
-
-impl TrackFragmentHeaderBox {
-    /// Writes the fields of the box, its flags stating `duration-is-empty` when `duration_is_empty`
-    fn encode_fields_flagged(
-        &self,
-        writer: &mut FieldWriter<'_>,
-        duration_is_empty: bool,
-    ) -> Result<(), Error> {
-        let flags = flags_of(self.flags.bits() | presence(duration_is_empty, DURATION_IS_EMPTY));
-        writer.write_bytes(&FullBoxFields::new(0, flags).to_bytes())?;
+        writer.write_bytes(&FullBoxFields::new(0, self.flags).to_bytes())?;
         writer.write_u32(self.track_id)?;
         if let Some(base_data_offset) = self.base_data_offset {
             writer.write_u64(base_data_offset)?;
@@ -534,7 +513,7 @@ mod tests {
     #[test]
     fn a_box_read_on_its_own_drops_the_empty_duration_its_traf_states() {
         let mut payload = encoded_payload(&every_field());
-        *payload.get_mut(1).unwrap() = 0x01;
+        *payload.get_mut(1).unwrap() |= 0x01;
 
         assert_eq!(
             TrackFragmentHeaderBox::decode_payload(&payload).unwrap(),

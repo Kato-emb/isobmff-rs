@@ -8,7 +8,7 @@ use isobmff_core::{
 };
 
 use crate::tfdt::TrackFragmentBaseMediaDecodeTimeBox;
-use crate::tfhd::{TrackFragmentHeaderBox, WireTrackFragmentHeader};
+use crate::tfhd::TrackFragmentHeaderBox;
 use crate::trun::TrackRunBox;
 
 /// Box that carries what one movie fragment adds to one track
@@ -26,8 +26,8 @@ use crate::trun::TrackRunBox;
 /// states the flag: a box holds either runs, as
 /// [`new`](Self::new) builds it, or the empty duration, as
 /// [`with_empty_duration`](Self::with_empty_duration) builds it and
-/// [`duration_is_empty`](Self::duration_is_empty) reports, and writes the flag
-/// into its `tfhd` on encode. [`decode_payload`](BoxDecode::decode_payload)
+/// [`duration_is_empty`](Self::duration_is_empty) reports. On encode it writes
+/// the flag into its `tfhd`. [`decode_payload`](BoxDecode::decode_payload)
 /// reads the flag off the `tfhd` and refuses it alongside a `trun`.
 ///
 /// The `sdtp`, `sbgp`, `subs`, `saiz`, and `saio` children have no fields yet, so
@@ -46,7 +46,7 @@ pub struct TrackFragmentBox {
     other_boxes: OtherBoxes,
 }
 
-/// What a `traf` holds in place of its runs: the runs, or the empty duration that forbids them
+/// What a `traf` holds for its runs: the runs, or the empty duration that forbids them
 #[derive(Clone, PartialEq, Debug)]
 enum TrackRuns {
     Runs(Vec<TrackRunBox>),
@@ -145,12 +145,14 @@ impl BoxDecode for TrackFragmentBox {
         let mut tfdt_boxes = ChildBoxes::new();
         let mut trun_boxes = ChildBoxes::new();
         let mut other_boxes = OtherBoxes::new();
+        let mut duration_is_empty = false;
 
         for child in boxes(reader.take_remainder()) {
             let child = child?;
             let box_type = child.header().box_type();
 
             if box_type == TrackFragmentHeaderBox::BOX_TYPE {
+                duration_is_empty = TrackFragmentHeaderBox::states_empty_duration(child.payload());
                 tfhd_boxes.push(child);
             } else if box_type == TrackFragmentBaseMediaDecodeTimeBox::BOX_TYPE {
                 tfdt_boxes.push(child);
@@ -161,10 +163,7 @@ impl BoxDecode for TrackFragmentBox {
             }
         }
 
-        let WireTrackFragmentHeader {
-            tfhd,
-            duration_is_empty,
-        } = tfhd_boxes.exactly_one()?;
+        let tfhd: TrackFragmentHeaderBox = tfhd_boxes.exactly_one()?;
         // Why not weighing the runs once they are read: the rule turns on whether
         // a run is there at all, and a fragment that declares an empty duration
         // would have every run of an input it goes on to refuse decoded first.
@@ -205,11 +204,12 @@ impl BoxEncode for TrackFragmentBox {
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        let tfhd = WireTrackFragmentHeader {
-            tfhd: self.tfhd.clone(),
-            duration_is_empty: self.duration_is_empty(),
+        let mut rest = if self.duration_is_empty() {
+            self.tfhd
+                .encode_stating_empty_duration(writer.take_remainder())?
+        } else {
+            self.tfhd.encode(writer.take_remainder())?
         };
-        let mut rest = tfhd.encode(writer.take_remainder())?;
         if let Some(tfdt) = &self.tfdt {
             rest = tfdt.encode(rest)?;
         }
