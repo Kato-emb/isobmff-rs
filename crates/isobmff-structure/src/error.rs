@@ -10,7 +10,7 @@ use isobmff_core::{BoxType, Category};
 /// What went wrong is one [`kind`](Self::kind): a failure of the structure of
 /// the file — a box it requires that never came, one that came twice, one
 /// that came out of the order the structure keeps, a box reaching past the
-/// limit a reader gathers for one — or a failure of a layer beneath, which
+/// limit a demux FSM gathers for one — or a failure of a layer beneath, which
 /// this type carries through whole rather than translating:
 /// [`sequence_error`](Self::sequence_error) for the framing of the file,
 /// [`sample_error`](Self::sample_error) for the samples it carries, and
@@ -75,7 +75,7 @@ impl Error {
         }
     }
 
-    /// Returns the failure of a box reaching past the limit a reader gathers
+    /// Returns the failure of a box reaching past the limit a demux FSM gathers
     #[must_use]
     pub const fn payload_limit_exceeded(box_type: BoxType, reached: u64, limit: u64) -> Self {
         Self {
@@ -338,13 +338,13 @@ pub enum ErrorKind {
     /// places behind it. [`box_type`](Error::box_type) is the box
     /// that came out of order.
     BoxOutOfOrder,
-    /// Box read whole reaches past the limit the reader gathers
+    /// Box read whole reaches past the limit the demux FSM gathers
     ///
     /// [`box_type`](Error::box_type) is the box,
     /// [`needed_bytes`](Error::needed_bytes) the payload it
     /// declares — or, for a box declaring no total, the payload it has
     /// reached — and [`available_bytes`](Error::available_bytes)
-    /// the payload the reader gathers for one box at most.
+    /// the payload the demux FSM gathers for one box at most.
     PayloadLimitExceeded,
     /// File was declared over, and takes nothing more
     AlreadyFinished,
@@ -372,7 +372,7 @@ enum Representation {
     DuplicateBox { box_type: BoxType },
     /// Box lying out of the order the structure keeps
     BoxOutOfOrder { box_type: BoxType },
-    /// Box reaching past the limit a reader gathers
+    /// Box reaching past the limit a demux FSM gathers
     PayloadLimitExceeded {
         box_type: BoxType,
         reached: u64,

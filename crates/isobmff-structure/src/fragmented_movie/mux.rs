@@ -31,7 +31,7 @@ use crate::{Error, whole_box_header, whole_payload};
 ///   declared over without a `moov` is
 ///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
 /// * The `ftyp` handed over is laid down as it stands. Where none was handed
-///   over, the writer lays its own down before the `moov`: `iso6` as its
+///   over, the mux FSM lays its own down before the `moov`: `iso6` as its
 ///   `major_brand` and its one `compatible_brands` entry, with
 ///   `minor_version` 0, the brand the widest layout it lays down requires
 ///   (§8.8.7.1, Annex E.9).
@@ -45,8 +45,8 @@ use crate::{Error, whole_box_header, whole_payload};
 /// * The bytes are taken from [`poll_output`](Self::poll_output), one
 ///   [`EventBytes`] a call, owned by whoever takes them. The caller drains
 ///   before handing over more: bytes are held until they are taken, so
-///   writing on without polling has the writer hold the whole file.
-/// * An `Err` leaves the writer failed for good,
+///   writing on without polling has the mux FSM hold the whole file.
+/// * An `Err` leaves the mux FSM failed for good,
 ///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The bytes made before
 ///   it are still there to take.
@@ -92,7 +92,7 @@ pub struct FragmentedMuxFsm {
     state: State,
 }
 
-/// Where the writer stands between calls
+/// Where the mux FSM stands between calls
 #[derive(Clone, Copy, Debug)]
 enum State {
     /// Laying the file down as the boxes and the samples come
@@ -104,7 +104,7 @@ enum State {
 }
 
 impl FragmentedMuxFsm {
-    /// Creates a writer waiting at the start of a fragmented movie file
+    /// Creates a mux FSM waiting at the start of a fragmented movie file
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -124,7 +124,7 @@ impl FragmentedMuxFsm {
     /// * [`Box`](crate::ErrorKind::Box): the box does not write.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the writer keeps and reports
+    /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), Error> {
         self.writing()?;
@@ -140,7 +140,7 @@ impl FragmentedMuxFsm {
     /// * [`Box`](crate::ErrorKind::Box): the box does not write.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the writer keeps and reports
+    /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), Error> {
         self.writing()?;
@@ -161,7 +161,7 @@ impl FragmentedMuxFsm {
     ///   makes of the call.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the writer keeps and reports
+    /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn begin_fragment(&mut self, sequence_number: u32) -> Result<(), Error> {
         self.writing()?;
@@ -181,7 +181,7 @@ impl FragmentedMuxFsm {
     ///   makes of the call.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the writer keeps and reports
+    /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn begin_fragment_continuing(&mut self, sequence_number: u32) -> Result<(), Error> {
         self.writing()?;
@@ -198,7 +198,7 @@ impl FragmentedMuxFsm {
     ///   makes of the sample.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the writer keeps and reports
+    /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), Error> {
         self.writing()?;
@@ -222,7 +222,7 @@ impl FragmentedMuxFsm {
     ///   does not write.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the writer keeps and reports
+    /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn finish_fragment(&mut self) -> Result<(), Error> {
         self.writing()?;
@@ -239,7 +239,7 @@ impl FragmentedMuxFsm {
     ///
     /// Reports `None` once they are used up: more samples are needed, or the
     /// file is over. Failure is reported by the calls that take the boxes and
-    /// the samples, so this one never fails — a failed writer hands over the
+    /// the samples, so this one never fails — a failed mux FSM hands over the
     /// bytes it had already made, then nothing from there on.
     pub fn poll_output(&mut self) -> Option<EventBytes> {
         self.boxes.poll_output()
@@ -256,7 +256,7 @@ impl FragmentedMuxFsm {
     ///   fragmented movie file.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was already declared over.
-    /// * The failure of a previous call, which the writer keeps and reports
+    /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), Error> {
         self.writing()?;
@@ -274,7 +274,7 @@ impl FragmentedMuxFsm {
         Ok(())
     }
 
-    /// Returns `Ok` while the writer still takes boxes and samples
+    /// Returns `Ok` while the mux FSM still takes boxes and samples
     const fn writing(&self) -> Result<(), Error> {
         match self.state {
             State::Writing => Ok(()),
@@ -324,14 +324,14 @@ impl FragmentedMuxFsm {
         self.lay_down_step(BoxEvent::End)
     }
 
-    /// Hands one step of the framing over, failing the writer where it is refused
+    /// Hands one step of the framing over, failing the mux FSM where it is refused
     fn lay_down_step(&mut self, step: BoxEvent) -> Result<(), Error> {
         self.boxes
             .handle_event(step)
             .map_err(|failure| self.fail(failure.into()))
     }
 
-    /// Fails the writer for good, and hands the failure back to report
+    /// Fails the mux FSM for good, and hands the failure back to report
     const fn fail(&mut self, failure: Error) -> Error {
         self.state = State::Failed(failure);
 
@@ -345,7 +345,7 @@ impl Default for FragmentedMuxFsm {
     }
 }
 
-/// Brands the writer declares where none were handed over, those the widest layout it lays down requires
+/// Brands the mux FSM declares where none were handed over, those the widest layout it lays down requires
 fn default_file_type() -> FileTypeBox {
     FileTypeBox::new(FourCC::new(*b"iso6"), 0, alloc::vec![FourCC::new(*b"iso6")])
 }
@@ -372,7 +372,7 @@ mod tests {
         Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec())
     }
 
-    /// The bytes the writer has laid down, drained to the end
+    /// The bytes the mux FSM has laid down, drained to the end
     fn drained(mux_fsm: &mut FragmentedMuxFsm) -> Vec<u8> {
         let mut file = Vec::new();
         while let Some(written) = mux_fsm.poll_output() {

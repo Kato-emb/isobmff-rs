@@ -1,4 +1,4 @@
-//! The order the boxes of an ISO base media file stand in, and the stacks that read and write one
+//! The order the boxes of an ISO base media file stand in, and the demux and mux FSMs that read and write one
 //!
 //! A presentation is carried as samples — ISO/IEC 14496-12 §3.1.14 has a sample
 //! as all the data associated with a single timestamp. [`FragmentedDemuxFsm`]
@@ -16,8 +16,8 @@
 //!
 //! Seven layers stand between a file and the samples it carries, joined only
 //! by the values that pass between them: a box event, a typed box, an extent,
-//! a sample, a disposition. No layer but the stack holds another's machine.
-//! Listed from the framing up to the caller:
+//! a sample, a disposition. No layer but the demux and mux FSMs holds
+//! another's machine. Listed from the framing up to the caller:
 //!
 //! 1. **Framing.** A file is a sequence of objects, called boxes (§4.2), and
 //!    framing that sequence is the work of
@@ -58,20 +58,20 @@
 //!    media data, the movie they continue held apart from it. The structure
 //!    is the only layer that knows how a file is put together, and the order
 //!    a file breaks is its failure.
-//! 6. **Stack.** [`FragmentedDemuxFsm`], [`FragmentedMuxFsm`],
+//! 6. **Demux and mux FSMs.** [`FragmentedDemuxFsm`], [`FragmentedMuxFsm`],
 //!    [`NonFragmentedDemuxFsm`], [`NonFragmentedMuxFsm`], [`MediaSegmentDemuxFsm`]
 //!    and [`MediaSegmentMuxFsm`] wire layers 1 to 5 into one machine per
-//!    structure and direction. A stack holds one rule of its own: a demux
-//!    FSM keeps where the input it takes in order stands, and states the one
-//!    read it wants next — an extent layer 4 lacks whose start that input has
+//!    structure and direction. A demux FSM holds one rule of its own: it
+//!    keeps where the input it takes in order stands, and states the one read
+//!    it wants next — an extent layer 4 lacks whose start that input has
 //!    passed, else the continuation of that input — taking every input with
-//!    the offset it was read at. It passes every value between the layers,
+//!    the offset it was read at. Each passes every value between the layers,
 //!    so a caller hands over bytes and takes samples, or hands over samples
-//!    and takes bytes, and never sees one. Every offset above the framing is a file
-//!    offset —
-//!    the extents the framing reports, counted from the first byte of the
-//!    file or from the offset the stack last resumed at, the chunk offsets and base data offsets the boxes declare
-//!    (§8.7.5, §8.8.7) — and no layer here knows any other.
+//!    and takes bytes, and never sees one. Every offset above the framing is
+//!    a file offset — the extents the framing reports, counted from the first
+//!    byte of the file or from the offset the demux FSM last resumed at, the
+//!    chunk offsets and base data offsets the boxes declare (§8.7.5, §8.8.7)
+//!    — and no layer here knows any other.
 //! 7. **The I/O.** Where the bytes come from and go to is the caller's: the
 //!    file is handed over from its first byte, or from a resume point an index
 //!    names, output is taken, and what the demux FSM says it still lacks is
