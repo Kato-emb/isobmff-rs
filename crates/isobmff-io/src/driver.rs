@@ -32,11 +32,9 @@ async fn seek<S: AsyncSeek + Unpin>(source: &mut S, position: SeekFrom) -> io::R
 ///
 /// The driver carries out what the FSM states, and holds nothing the FSM
 /// holds: each [`next`](Self::next) takes a sample the FSM completed, or
-/// reads for one and asks again — the bytes
-/// [`wanted_extent`](Demux::wanted_extent) names, handed to
-/// [`handle_data`](Demux::handle_data), or where none is named the file read
-/// on from [`input_offset`](Demux::input_offset), handed to
-/// [`handle_input`](Demux::handle_input).
+/// reads for one and asks again — the read
+/// [`wanted_input`](Demux::wanted_input) names, handed to
+/// [`handle_input`](Demux::handle_input) at its offset.
 ///
 /// # Contract
 ///
@@ -51,12 +49,12 @@ async fn seek<S: AsyncSeek + Unpin>(source: &mut S, position: SeekFrom) -> io::R
 /// * The samples come out of [`next`](Self::next), in the order the FSM
 ///   completes them. What the FSM read into values is there to read through
 ///   [`fsm`](Self::fsm).
-/// * The source handing over no byte where the file is read on is the end of
-///   the file: the FSM is declared over, the samples it completed come out,
-///   then `None` until the reading is resumed. The source handing over no
-///   byte where a want lies is [`Io`](crate::ErrorKind::Io) with
-///   [`UnexpectedEof`](std::io::ErrorKind::UnexpectedEof): the file was read
-///   past that offset before, so the source has shrunk since.
+/// * The source handing over no byte is the end of the file: the FSM is
+///   declared over, the samples it completed come out, then `None` until the
+///   reading is resumed. The source ending short of a want is what the FSM
+///   makes of the end of the file: a [`Structure`](crate::ErrorKind::Structure)
+///   failure carrying the samples' `UnfinishedSample`.
+///   Once the FSM wants no read, the source is not read again.
 /// * A failure of the source leaves the FSM as it was, and the next call
 ///   makes the same read again. A failure of the FSM comes after the samples
 ///   it completed before failing, and is the FSM's to report again for every
@@ -165,7 +163,10 @@ impl<S: AsyncRead + AsyncSeek + Unpin, D: Demux> DemuxDriver<S, D> {
             if let Some(sample) = self.fsm.poll_sample() {
                 return Some(Ok(sample));
             }
-            let request = Request::of(&self.fsm);
+            let request = match Request::of(&mut self.fsm)? {
+                Ok(request) => request,
+                Err(failure) => return Some(Err(failure)),
+            };
             let handed = self
                 .read_at(request.offset, request.length)
                 .await
@@ -173,10 +174,8 @@ impl<S: AsyncRead + AsyncSeek + Unpin, D: Demux> DemuxDriver<S, D> {
                 .and_then(|read| {
                     request.hand_over(&mut self.fsm, self.buffer.get(..read).unwrap_or_default())
                 });
-            match handed {
-                Ok(true) => {}
-                Ok(false) => return None,
-                Err(failure) => return Some(self.fsm.poll_sample().ok_or(failure)),
+            if let Err(failure) = handed {
+                return Some(self.fsm.poll_sample().ok_or(failure));
             }
         }
     }
@@ -424,37 +423,6 @@ mod tests {
     use crate::stack::tests::{Queued, Scripted, framed, sample};
     use crate::stack::{CUT_LENGTH, Demux};
 
-    /// Source holding nothing past any position it is sought back to
-    struct Shrinking(Cursor<Vec<u8>>);
-
-    impl AsyncRead for Shrinking {
-        fn poll_read(
-            mut self: Pin<&mut Self>,
-            context: &mut Context<'_>,
-            into: &mut [u8],
-        ) -> Poll<io::Result<usize>> {
-            Pin::new(&mut self.0).poll_read(context, into)
-        }
-    }
-
-    impl AsyncSeek for Shrinking {
-        fn poll_seek(
-            mut self: Pin<&mut Self>,
-            context: &mut Context<'_>,
-            from: SeekFrom,
-        ) -> Poll<io::Result<u64>> {
-            if let SeekFrom::Start(position) = from {
-                if position < self.0.position() {
-                    self.0
-                        .get_mut()
-                        .truncate(usize::try_from(position).unwrap());
-                }
-            }
-
-            Pin::new(&mut self.0).poll_seek(context, from)
-        }
-    }
-
     /// Source standing still once before every read and every seek
     struct Hesitant<S> {
         source: S,
@@ -690,12 +658,12 @@ mod tests {
     }
 
     #[test]
-    fn a_want_is_read_where_it_lies_and_the_file_read_on_from_the_input_offset() {
+    fn a_want_is_read_where_it_lies_and_the_file_read_on_in_order() {
         let mut driver = block_on(DemuxDriver::new(
             Cursor::new(b"FILEBYTES".to_vec()),
             Scripted {
                 wanted: Some(2..6),
-                input_offset: 4,
+                in_order_offset: 4,
                 ..Scripted::default()
             },
         ))
@@ -722,22 +690,6 @@ mod tests {
         assert_eq!(yielded(&mut driver), []);
         assert_eq!(driver.fsm().inputs, [b"FILE".to_vec()]);
         assert_eq!(driver.fsm().data, [(1, b"IL".to_vec())]);
-    }
-
-    #[test]
-    fn a_source_shrunk_below_a_want_is_reported_as_ending() {
-        let mut driver = block_on(DemuxDriver::new(
-            Shrinking(Cursor::new(b"FILE".to_vec())),
-            Scripted::default(),
-        ))
-        .unwrap();
-        block_on(driver.next());
-        driver.fsm_mut().wanted = Some(0..4);
-
-        assert_eq!(
-            next_yielded(&mut driver),
-            Some(Err(ErrorKind::Io(io::ErrorKind::UnexpectedEof)))
-        );
     }
 
     #[test]
@@ -813,7 +765,7 @@ mod tests {
     }
 
     #[test]
-    fn an_input_offset_past_what_a_seek_names_is_refused() {
+    fn an_offset_past_what_a_seek_names_is_refused() {
         let mut source = Cursor::new(b"junkFILE".to_vec());
         source.set_position(4);
         let mut driver = block_on(DemuxDriver::new(source, Scripted::default())).unwrap();
@@ -895,6 +847,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(yielded(&mut driver), []);
+        driver.fsm_mut().resume_at(4).unwrap();
         driver.fsm_mut().wanted = Some(1..3);
         assert!(poll_once(driver.next()).is_none());
 

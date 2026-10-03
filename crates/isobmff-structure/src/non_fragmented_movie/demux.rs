@@ -1,14 +1,12 @@
 //! [`NonFragmentedDemuxFsm`], a non-fragmented movie file read as it arrives
 
-use core::ops::Range;
-
 use isobmff_boxes::{FileTypeBox, MovieBox};
 use isobmff_sample::sample_table::sample_extents;
 use isobmff_sample::{Sample, SampleReader};
 use isobmff_sequence::{BoxEvent, BoxReader};
 
 use super::{NonFragmentedDisposition, NonFragmentedStructure};
-use crate::{Error, InOrderPosition, WholeBoxReader};
+use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 
 /// Reads the samples a non-fragmented movie file carries, taking it as it arrives
 ///
@@ -27,6 +25,8 @@ use crate::{Error, InOrderPosition, WholeBoxReader};
 /// # Contract
 ///
 /// * The file is handed over from its first byte, in order and cut anywhere,
+///   each cut handed over at the offset it was read at, where
+///   [`wanted_input`](Self::wanted_input) names,
 ///   and the samples it completed are taken from
 ///   [`poll_sample`](Self::poll_sample). The caller drains before handing
 ///   over more: samples are held until they are taken. Where the file lies in
@@ -53,12 +53,13 @@ use crate::{Error, InOrderPosition, WholeBoxReader};
 ///   in the order the file lays them down. Media data arriving before the
 ///   movie is dropped, since no sample has claimed it yet, so a movie lying
 ///   after its media data completes no sample by itself: from then on
-///   [`wanted_extent`](Self::wanted_extent) names, once the input has passed
+///   [`wanted_input`](Self::wanted_input) names, once the input has passed
 ///   its start, the bytes the extent at the front of those held still lacks,
 ///   for a caller that can seek to fetch and hand to
-///   [`handle_data`](Self::handle_data).
+///   [`handle_input`](Self::handle_input) at their offset.
 /// * An `Err` leaves the reader failed for good,
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside:
+///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) and
+///   [`UnwantedInput`](crate::ErrorKind::UnwantedInput) aside:
 ///   every later call reports that same failure again. The samples completed
 ///   before it are still there to take.
 /// * [`finish`](Self::finish) declares the file over, and reports what any
@@ -75,21 +76,19 @@ use crate::{Error, InOrderPosition, WholeBoxReader};
 /// // A file of two chunks of one track, its movie lying after its media data
 /// let file = non_fragmented_file(&[&[b"SAMP", b"DATA"], &[b"LAST"]], false);
 ///
-/// // The file is handed over as it arrives: the media data comes before any
-/// // sample has claimed it, so no sample is completed yet
+/// // The file is read where the demux FSM wants it, seven bytes at a time where it names no length
 /// let mut demux_fsm = NonFragmentedDemuxFsm::new();
-/// for arriving in file.chunks(7) {
-///     demux_fsm.handle_input(arriving)?;
+/// while let Some(wanted) = demux_fsm.wanted_input() {
+///     let start = (wanted.offset() as usize).min(file.len());
+///     let end = wanted.length().map_or(start + 7, |length| start + length as usize);
+///     let read = &file[start..end.min(file.len())];
+///     if read.is_empty() {
+///         demux_fsm.finish()?;
+///     } else {
+///         demux_fsm.handle_input(wanted.offset(), read)?;
+///     }
 /// }
-/// assert_eq!(demux_fsm.poll_sample(), None);
-///
-/// // The movie has arrived, and names the bytes its samples lack in turn
 /// assert_eq!(demux_fsm.movie().map(|moov| moov.trak().len()), Some(1));
-/// while let Some(wanted) = demux_fsm.wanted_extent() {
-///     let fetched = &file[wanted.start as usize..wanted.end as usize];
-///     demux_fsm.handle_data(wanted.start, fetched)?;
-/// }
-/// demux_fsm.finish()?;
 ///
 /// // The samples come back as the file laid them down
 /// let first = demux_fsm.poll_sample().unwrap();
@@ -104,7 +103,7 @@ use crate::{Error, InOrderPosition, WholeBoxReader};
 #[derive(Debug)]
 pub struct NonFragmentedDemuxFsm {
     boxes: BoxReader,
-    position: InOrderPosition,
+    position: InputPosition,
     structure: NonFragmentedStructure,
     samples: SampleReader,
     open: Option<Open>,
@@ -172,7 +171,7 @@ impl NonFragmentedDemuxFsm {
     pub const fn with_limits(payload_limit: u64, sample_size_limit: u64) -> Self {
         Self {
             boxes: BoxReader::new(),
-            position: InOrderPosition::new(),
+            position: InputPosition::new(),
             structure: NonFragmentedStructure::new(),
             samples: SampleReader::with_sample_size_limit(sample_size_limit),
             open: None,
@@ -183,11 +182,18 @@ impl NonFragmentedDemuxFsm {
         }
     }
 
-    /// Takes the next cut of the file and reads the samples it completes
+    /// Takes bytes of the file read at `offset`, and reads the samples they complete
     ///
-    /// The input is taken whole, as the continuation of what was handed over
-    /// before it, the first cut starting at the first byte of the file. What
-    /// the input completed is then taken from
+    /// `offset` is a file offset, counted from the first byte of the file as a
+    /// chunk offset is (ISO/IEC 14496-12 §8.7.5). Bytes at the offset the input
+    /// taken in order stands at — the first byte of the file, then where the
+    /// bytes taken in order before them end — are taken whole as its
+    /// continuation. Bytes at the offset of the bytes
+    /// [`wanted_input`](Self::wanted_input) names as lacking are offered to the
+    /// samples alone, as media data is, and the input taken in order goes on
+    /// from where it stood; bytes at the offset the input taken in order stands
+    /// at are taken all the same while such bytes are named. Empty input is
+    /// taken as nothing. What the input completed is then taken from
     /// [`poll_sample`](Self::poll_sample).
     ///
     /// # Errors
@@ -205,10 +211,29 @@ impl NonFragmentedDemuxFsm {
     ///   of the sample tables of the movie or the media data beside it.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
+    /// * [`UnwantedInput`](crate::ErrorKind::UnwantedInput): `offset` is
+    ///   neither where the input taken in order stands nor the offset of the
+    ///   bytes [`wanted_input`](Self::wanted_input) names as lacking. The
+    ///   reader is not failed by it.
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
-    pub fn handle_input(&mut self, input: &[u8]) -> Result<(), Error> {
+    pub fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), Error> {
         self.reading()?;
+        if input.is_empty() {
+            return Ok(());
+        }
+
+        match self.position.route(offset, self.samples.wanted_extent()) {
+            InputRoute::InOrder => {}
+            InputRoute::Lacking => {
+                return self
+                    .samples
+                    .handle_data(offset, input)
+                    .map_err(|failure| self.fail(failure.into()));
+            }
+            InputRoute::Unwanted => return Err(Error::unwanted_input(offset)),
+        }
+
         self.position.advance(input.len());
 
         // Why not failing before the events are read: the framing keeps the
@@ -221,29 +246,6 @@ impl NonFragmentedDemuxFsm {
         framed.map_err(|failure| self.fail(failure.into()))
     }
 
-    /// Takes bytes of the file fetched for what [`wanted_extent`](Self::wanted_extent) named, and reads the samples they complete
-    ///
-    /// The bytes are offered to the samples alone, as the media data of the
-    /// file is: `offset` is where the first of them lies in the file, counted
-    /// from its first byte as a chunk offset is (ISO/IEC 14496-12 §8.7.5),
-    /// and what they completed is then taken from
-    /// [`poll_sample`](Self::poll_sample).
-    /// The file handed over in order through
-    /// [`handle_input`](Self::handle_input) goes on from where it stood.
-    ///
-    /// # Errors
-    ///
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
-    ///   file was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the reader keeps and reports
-    ///   again for every call after it.
-    pub fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), Error> {
-        self.reading()?;
-        self.samples
-            .handle_data(offset, data)
-            .map_err(|failure| self.fail(failure.into()))
-    }
-
     /// Takes the next sample the file handed over so far completed
     ///
     /// Reports `None` once they are used up: more of the file is needed. Failure
@@ -254,24 +256,19 @@ impl NonFragmentedDemuxFsm {
         self.samples.poll_sample()
     }
 
-    /// Returns the bytes the extent at the front of those held still lacks, once the input has passed its start
+    /// Returns the one read wanted next, or `None` once the file is declared over or the reader has failed
     ///
-    /// An extent starting at or after [`input_offset`](Self::input_offset) is
-    /// not named: the file handed over in order brings its bytes. A movie
-    /// lying before its media data has none named; one lying after it names
-    /// bytes already passed by, which a caller that can seek fetches and
-    /// hands to [`handle_data`](Self::handle_data).
+    /// Bytes the extent at the front of those held still lacks are wanted
+    /// first, with their length, once the input taken in order has passed their
+    /// start. A movie lying before its media data has none wanted; one lying
+    /// after it wants bytes already passed by. Otherwise the continuation of
+    /// the input taken in order is wanted, at the offset it stands at and with
+    /// no length. Bytes read for either are handed to
+    /// [`handle_input`](Self::handle_input) at the offset they were read at.
     #[must_use]
-    pub fn wanted_extent(&self) -> Option<Range<u64>> {
-        self.position.passed(self.samples.wanted_extent())
-    }
-
-    /// Returns the file offset the next byte handed to [`handle_input`](Self::handle_input) lies at
-    ///
-    /// It is the number of bytes handed over in order so far.
-    #[must_use]
-    pub const fn input_offset(&self) -> u64 {
-        self.position.offset()
+    pub fn wanted_input(&self) -> Option<WantedInput> {
+        matches!(self.state, State::Reading)
+            .then(|| self.position.wanted_input(self.samples.wanted_extent()))
     }
 
     /// Returns the brands the file declares itself readable as, once they have arrived
@@ -406,6 +403,8 @@ impl Default for NonFragmentedDemuxFsm {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use isobmff_boxes::{FileTypeBox, MovieBox};
     use isobmff_core::{BoxDefinition, BoxType};
     use isobmff_sample::{Sample, SampleReader};
@@ -415,12 +414,13 @@ mod tests {
 
     use super::{Error, NonFragmentedDemuxFsm};
     use crate::ErrorKind;
+    use crate::WantedInput;
 
     /// What the reader makes of `file` handed over whole, then declared over
     fn read(file: &[u8]) -> Result<NonFragmentedDemuxFsm, Error> {
         let mut demux_fsm = NonFragmentedDemuxFsm::new();
 
-        demux_fsm.handle_input(file)?;
+        demux_fsm.handle_input(0, file)?;
         demux_fsm.finish()?;
 
         Ok(demux_fsm)
@@ -449,7 +449,7 @@ mod tests {
 
         assert_eq!(
             demux_fsm
-                .handle_input(&written(&file_type()))
+                .handle_input(0, &written(&file_type()))
                 .map_err(Error::kind),
             Err(ErrorKind::PayloadLimitExceeded)
         );
@@ -468,7 +468,7 @@ mod tests {
             SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT,
         );
 
-        demux_fsm.handle_input(&file).unwrap();
+        demux_fsm.handle_input(0, &file).unwrap();
 
         assert_eq!(demux_fsm.finish(), Ok(()));
     }
@@ -491,7 +491,7 @@ mod tests {
         let mut demux_fsm = NonFragmentedDemuxFsm::new();
 
         assert_eq!(
-            demux_fsm.handle_input(&file).map_err(Error::kind),
+            demux_fsm.handle_input(0, &file).map_err(Error::kind),
             Err(ErrorKind::Sequence(isobmff_sequence::ErrorKind::Box(
                 isobmff_core::ErrorKind::SizeBelowHeader
             )))
@@ -500,6 +500,7 @@ mod tests {
             demux_fsm.poll_sample().map(Sample::into_data),
             Some(b"SAMP".to_vec())
         );
+        assert_eq!(demux_fsm.wanted_input(), None);
     }
 
     #[test]
@@ -507,7 +508,7 @@ mod tests {
         let file = non_fragmented_file(&[&[b"SAMP"]], false);
         let mut demux_fsm = NonFragmentedDemuxFsm::new();
 
-        demux_fsm.handle_input(&file).unwrap();
+        demux_fsm.handle_input(0, &file).unwrap();
 
         assert_eq!(
             demux_fsm.finish().map_err(Error::kind),
@@ -523,12 +524,11 @@ mod tests {
         let failure = Error::box_out_of_order(FileTypeBox::BOX_TYPE);
         let file = [written(&file_type()), written(&file_type())].concat();
 
-        assert_eq!(demux_fsm.handle_input(&file), Err(failure));
+        assert_eq!(demux_fsm.handle_input(0, &file), Err(failure));
         assert_eq!(
-            demux_fsm.handle_input(&written(&unfragmented_movie())),
+            demux_fsm.handle_input(0, &written(&unfragmented_movie())),
             Err(failure)
         );
-        assert_eq!(demux_fsm.handle_data(0, b"SAMP"), Err(failure));
         assert_eq!(demux_fsm.finish(), Err(failure));
     }
 
@@ -537,13 +537,87 @@ mod tests {
         let mut demux_fsm = read(&written(&unfragmented_movie())).unwrap();
 
         assert_eq!(
-            demux_fsm.handle_input(&written(&file_type())),
-            Err(Error::already_finished())
-        );
-        assert_eq!(
-            demux_fsm.handle_data(0, b"SAMP"),
+            demux_fsm.handle_input(0, &written(&file_type())),
             Err(Error::already_finished())
         );
         assert_eq!(demux_fsm.finish(), Err(Error::already_finished()));
+    }
+
+    /// The demux FSM handed whole a file whose movie lies after its media data, that file, and the offset of its one sample
+    fn movie_after_its_media_data() -> (NonFragmentedDemuxFsm, Vec<u8>, u64) {
+        let file = non_fragmented_file(&[&[b"SAMP"]], false);
+        let lacking = file.windows(4).position(|bytes| bytes == b"SAMP").unwrap() as u64;
+        let mut demux_fsm = NonFragmentedDemuxFsm::new();
+
+        demux_fsm.handle_input(0, &file).unwrap();
+
+        (demux_fsm, file, lacking)
+    }
+
+    #[test]
+    fn bytes_a_movie_lying_after_its_media_data_lacks_are_wanted_with_their_length() {
+        let (demux_fsm, _, lacking) = movie_after_its_media_data();
+
+        assert_eq!(
+            demux_fsm.wanted_input(),
+            Some(WantedInput::new(lacking, Some(4)))
+        );
+    }
+
+    #[test]
+    fn input_at_the_offset_wanted_completes_the_sample_and_the_continuation_is_wanted_after_it() {
+        let (mut demux_fsm, file, lacking) = movie_after_its_media_data();
+
+        demux_fsm.handle_input(lacking, b"SAMP").unwrap();
+
+        assert_eq!(
+            demux_fsm.poll_sample().map(Sample::into_data),
+            Some(b"SAMP".to_vec())
+        );
+        assert_eq!(
+            demux_fsm.wanted_input(),
+            Some(WantedInput::new(file.len() as u64, None))
+        );
+    }
+
+    #[test]
+    fn input_in_order_is_taken_while_bytes_are_wanted() {
+        let (mut demux_fsm, file, lacking) = movie_after_its_media_data();
+
+        demux_fsm
+            .handle_input(file.len() as u64, &framed(BoxType::compact(*b"free"), &[]))
+            .unwrap();
+
+        assert_eq!(
+            demux_fsm.wanted_input(),
+            Some(WantedInput::new(lacking, Some(4)))
+        );
+    }
+
+    #[test]
+    fn input_at_an_offset_neither_in_order_nor_wanted_is_refused_and_the_file_reads_on() {
+        let (mut demux_fsm, _, lacking) = movie_after_its_media_data();
+
+        assert_eq!(
+            demux_fsm.handle_input(lacking + 1, b"AMP"),
+            Err(Error::unwanted_input(lacking + 1))
+        );
+        assert_eq!(demux_fsm.handle_input(lacking, b"SAMP"), Ok(()));
+        assert_eq!(demux_fsm.finish(), Ok(()));
+    }
+
+    #[test]
+    fn empty_input_is_taken_as_nothing_wherever_it_is_handed_over() {
+        let mut demux_fsm = NonFragmentedDemuxFsm::new();
+
+        assert_eq!(demux_fsm.handle_input(9, &[]), Ok(()));
+        assert_eq!(demux_fsm.wanted_input(), Some(WantedInput::new(0, None)));
+    }
+
+    #[test]
+    fn nothing_is_wanted_once_the_file_is_declared_over() {
+        let demux_fsm = read(&non_fragmented_file(&[&[b"SAMP"]], true)).unwrap();
+
+        assert_eq!(demux_fsm.wanted_input(), None);
     }
 }

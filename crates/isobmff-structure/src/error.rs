@@ -95,6 +95,14 @@ impl Error {
         }
     }
 
+    /// Returns the failure of input handed over at `offset`, an offset the demux FSM takes no input at
+    #[must_use]
+    pub const fn unwanted_input(offset: u64) -> Self {
+        Self {
+            representation: Representation::UnwantedInput { offset },
+        }
+    }
+
     /// Returns what went wrong
     #[must_use]
     pub const fn kind(self) -> ErrorKind {
@@ -107,6 +115,7 @@ impl Error {
             Representation::BoxOutOfOrder { .. } => ErrorKind::BoxOutOfOrder,
             Representation::PayloadLimitExceeded { .. } => ErrorKind::PayloadLimitExceeded,
             Representation::AlreadyFinished => ErrorKind::AlreadyFinished,
+            Representation::UnwantedInput { .. } => ErrorKind::UnwantedInput,
         }
     }
 
@@ -121,7 +130,9 @@ impl Error {
             | Representation::DuplicateBox { .. }
             | Representation::BoxOutOfOrder { .. } => Category::Malformed,
             Representation::PayloadLimitExceeded { .. } => Category::Unsupported,
-            Representation::AlreadyFinished => Category::Usage,
+            Representation::AlreadyFinished | Representation::UnwantedInput { .. } => {
+                Category::Usage
+            }
         }
     }
 
@@ -162,6 +173,12 @@ impl Error {
     #[must_use]
     pub const fn available_bytes(self) -> Option<u64> {
         self.representation.fields().available_bytes
+    }
+
+    /// Returns the offset refused input was handed over at, for the kinds that refuse input
+    #[must_use]
+    pub const fn input_offset(self) -> Option<u64> {
+        self.representation.fields().input_offset
     }
 }
 
@@ -219,6 +236,10 @@ impl fmt::Display for Error {
             Representation::AlreadyFinished => {
                 formatter.write_str("file was declared over and takes nothing more")
             }
+            Representation::UnwantedInput { offset } => write!(
+                formatter,
+                "input handed over at offset {offset} is not the read the demux FSM wants"
+            ),
         }
     }
 }
@@ -248,6 +269,9 @@ impl fmt::Debug for Error {
         if let Some(available) = values.available_bytes {
             fields.field("available_bytes", &available);
         }
+        if let Some(offset) = values.input_offset {
+            fields.field("input_offset", &offset);
+        }
 
         fields.finish()
     }
@@ -264,7 +288,8 @@ impl error::Error for Error {
             | Representation::DuplicateBox { .. }
             | Representation::BoxOutOfOrder { .. }
             | Representation::PayloadLimitExceeded { .. }
-            | Representation::AlreadyFinished => None,
+            | Representation::AlreadyFinished
+            | Representation::UnwantedInput { .. } => None,
         }
     }
 }
@@ -323,6 +348,13 @@ pub enum ErrorKind {
     PayloadLimitExceeded,
     /// File was declared over, and takes nothing more
     AlreadyFinished,
+    /// Input was handed over at an offset the demux FSM takes no input at
+    ///
+    /// The demux FSM takes input at the offset the input taken in order
+    /// stands at, or at the offset of bytes it named as lacking, and refuses
+    /// it anywhere else. [`input_offset`](Error::input_offset) is the offset
+    /// the input was handed over at.
+    UnwantedInput,
 }
 
 /// Values a failure carries, keyed by what went wrong
@@ -348,6 +380,8 @@ enum Representation {
     },
     /// Call made after the file was declared over
     AlreadyFinished,
+    /// Input handed over at an offset the demux FSM takes no input at
+    UnwantedInput { offset: u64 },
 }
 
 /// Values a failure carries, laid flat, with `None` where its kind carries no such value
@@ -358,6 +392,7 @@ struct Fields {
     box_type: Option<BoxType>,
     needed_bytes: Option<u64>,
     available_bytes: Option<u64>,
+    input_offset: Option<u64>,
 }
 
 impl Fields {
@@ -369,6 +404,7 @@ impl Fields {
         box_type: None,
         needed_bytes: None,
         available_bytes: None,
+        input_offset: None,
     };
 }
 
@@ -405,6 +441,10 @@ impl Representation {
                 ..Fields::EMPTY
             },
             Self::AlreadyFinished => Fields::EMPTY,
+            Self::UnwantedInput { offset } => Fields {
+                input_offset: Some(offset),
+                ..Fields::EMPTY
+            },
         }
     }
 }
@@ -432,6 +472,7 @@ mod tests {
             Category::Unsupported
         );
         assert_eq!(Error::already_finished().category(), Category::Usage);
+        assert_eq!(Error::unwanted_input(9).category(), Category::Usage);
         assert_eq!(
             Error::from(isobmff_core::Error::unsupported_version(2)).category(),
             Category::Unsupported
@@ -455,6 +496,12 @@ mod tests {
         assert_eq!(exceeded.available_bytes(), Some(16));
 
         assert_eq!(Error::already_finished().box_type(), None);
+
+        let unwanted = Error::unwanted_input(9);
+
+        assert_eq!(unwanted.kind(), ErrorKind::UnwantedInput);
+        assert_eq!(unwanted.input_offset(), Some(9));
+        assert_eq!(unwanted.box_type(), None);
     }
 
     #[test]
@@ -506,6 +553,10 @@ mod tests {
             Error::already_finished().to_string(),
             "file was declared over and takes nothing more"
         );
+        assert_eq!(
+            Error::unwanted_input(9).to_string(),
+            "input handed over at offset 9 is not the read the demux FSM wants"
+        );
     }
 
     #[test]
@@ -527,6 +578,10 @@ mod tests {
         assert_eq!(
             format!("{:?}", Error::already_finished()),
             "Error { kind: AlreadyFinished, category: Usage }"
+        );
+        assert_eq!(
+            format!("{:?}", Error::unwanted_input(9)),
+            "Error { kind: UnwantedInput, category: Usage, input_offset: 9 }"
         );
     }
 }

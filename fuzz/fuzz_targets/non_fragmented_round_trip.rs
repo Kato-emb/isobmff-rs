@@ -285,16 +285,19 @@ fn read_back(file: &[u8], cut_length: usize) -> Result<Vec<Sample>, Error> {
     let mut demux_fsm = NonFragmentedDemuxFsm::new();
     let mut samples = Vec::new();
 
-    for arriving in file.chunks(cut_length) {
-        demux_fsm.handle_input(arriving)?;
+    for (offset, arriving) in (0..).step_by(cut_length).zip(file.chunks(cut_length)) {
+        demux_fsm.handle_input(offset, arriving)?;
         drain(&mut demux_fsm, &mut samples);
     }
-    while let Some(wanted) = demux_fsm.wanted_extent() {
-        let start = usize::try_from(wanted.start).unwrap_or(usize::MAX);
-        let end = usize::try_from(wanted.end).unwrap_or(usize::MAX);
+    while let Some((offset, length)) = demux_fsm
+        .wanted_input()
+        .and_then(|wanted| Some((wanted.offset(), wanted.length()?)))
+    {
+        let start = usize::try_from(offset).unwrap_or(usize::MAX);
+        let end = usize::try_from(offset.saturating_add(length)).unwrap_or(usize::MAX);
         let fetched = file.get(start..end).unwrap_or_default();
 
-        demux_fsm.handle_data(wanted.start, fetched)?;
+        demux_fsm.handle_input(offset, fetched)?;
         drain(&mut demux_fsm, &mut samples);
         // Why not looping until nothing is wanted: a want past the file is
         // never met, and empty input leaves it standing

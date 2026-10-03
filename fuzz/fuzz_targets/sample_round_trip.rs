@@ -268,7 +268,7 @@ fn read_back(file: &[u8]) -> Vec<Sample> {
     let mut samples = Vec::new();
 
     assert!(
-        demux_fsm.handle_input(file).is_ok(),
+        demux_fsm.handle_input(0, file).is_ok(),
         "the reader rejects the file the writer laid down"
     );
     while let Some(sample) = demux_fsm.poll_sample() {

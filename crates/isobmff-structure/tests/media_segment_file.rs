@@ -9,7 +9,7 @@ mod reading;
 
 #[cfg(test)]
 mod tests {
-    use isobmff_structure::MediaSegmentDemuxFsm;
+    use isobmff_structure::{MediaSegmentDemuxFsm, WantedInput};
     use isobmff_test_support::{
         indexed_segment_file, presentation_movie, segment_file_samples, segment_file_with_samples,
     };
@@ -43,7 +43,7 @@ mod tests {
         let segment = indexed_segment_file();
         let mut demux_fsm = MediaSegmentDemuxFsm::new(presentation_movie());
 
-        demux_fsm.handle_input(&segment.bytes).unwrap();
+        demux_fsm.handle_input(0, &segment.bytes).unwrap();
         demux_fsm.finish().unwrap();
 
         assert_eq!(drained(&mut demux_fsm), segment.fragment_samples.concat());
@@ -66,13 +66,14 @@ mod tests {
         let segment = indexed_segment_file();
         let second = *segment.moof_offsets.get(1).unwrap();
         let mut demux_fsm = MediaSegmentDemuxFsm::new(presentation_movie());
-        demux_fsm.handle_input(&segment.bytes).unwrap();
+        demux_fsm.handle_input(0, &segment.bytes).unwrap();
         demux_fsm.finish().unwrap();
         drained(&mut demux_fsm);
 
         demux_fsm.resume_at(second).unwrap();
         demux_fsm
             .handle_input(
+                second,
                 segment
                     .bytes
                     .get(usize::try_from(second).unwrap()..)
@@ -88,18 +89,19 @@ mod tests {
     }
 
     #[test]
-    fn the_input_stands_after_the_bytes_handed_over_since_the_reading_last_started() {
+    fn the_continuation_is_wanted_after_the_bytes_handed_over_since_the_reading_last_started() {
         let segment = indexed_segment_file();
         let second = *segment.moof_offsets.get(1).unwrap();
         let mut demux_fsm = MediaSegmentDemuxFsm::new(presentation_movie());
 
-        let created = demux_fsm.input_offset();
-        demux_fsm.handle_input(&segment.bytes).unwrap();
-        let handed = demux_fsm.input_offset();
+        let created = demux_fsm.wanted_input();
+        demux_fsm.handle_input(0, &segment.bytes).unwrap();
+        let handed = demux_fsm.wanted_input();
         demux_fsm.resume_at(second).unwrap();
-        let resumed = demux_fsm.input_offset();
+        let resumed = demux_fsm.wanted_input();
         demux_fsm
             .handle_input(
+                second,
                 segment
                     .bytes
                     .get(usize::try_from(second).unwrap()..)
@@ -109,8 +111,13 @@ mod tests {
 
         let segment_length = u64::try_from(segment.bytes.len()).unwrap();
         assert_eq!(
-            [created, handed, resumed, demux_fsm.input_offset()],
-            [0, segment_length, second, segment_length]
+            [created, handed, resumed, demux_fsm.wanted_input()],
+            [
+                Some(WantedInput::new(0, None)),
+                Some(WantedInput::new(segment_length, None)),
+                Some(WantedInput::new(second, None)),
+                Some(WantedInput::new(segment_length, None))
+            ]
         );
     }
 }
