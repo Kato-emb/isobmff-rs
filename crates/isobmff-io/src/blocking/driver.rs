@@ -15,11 +15,9 @@ use crate::stack::{
 ///
 /// The driver carries out what the FSM states, and holds nothing the FSM
 /// holds: each [`next`](Iterator::next) takes a sample the FSM completed, or
-/// reads for one and asks again — the bytes
-/// [`wanted_extent`](Demux::wanted_extent) names, handed to
-/// [`handle_data`](Demux::handle_data), or where none is named the file read
-/// on from [`input_offset`](Demux::input_offset), handed to
-/// [`handle_input`](Demux::handle_input).
+/// reads for one and asks again — the read
+/// [`wanted_input`](Demux::wanted_input) names, handed to
+/// [`handle_input`](Demux::handle_input) at its offset.
 ///
 /// # Contract
 ///
@@ -34,12 +32,12 @@ use crate::stack::{
 /// * The samples come as `Iterator` items, in the order the FSM completes
 ///   them. What the FSM read into values is there to read through
 ///   [`fsm`](Self::fsm).
-/// * The source handing over no byte where the file is read on is the end of
-///   the file: the FSM is declared over, the samples it completed come out,
-///   then `None` until the reading is resumed. The source handing over no
-///   byte where a want lies is [`Io`](crate::ErrorKind::Io) with
-///   [`UnexpectedEof`](std::io::ErrorKind::UnexpectedEof): the file was read
-///   past that offset before, so the source has shrunk since.
+/// * The source handing over no byte is the end of the file: the FSM is
+///   declared over, the samples it completed come out, then `None` until the
+///   reading is resumed. The source ending short of a want is what the FSM
+///   makes of the end of the file: a [`Structure`](crate::ErrorKind::Structure)
+///   failure carrying the samples' `UnfinishedSample`.
+///   Once the FSM wants no read, the source is not read again.
 /// * A failure of the source leaves the FSM as it was, and the next call
 ///   makes the same read again. A failure of the FSM comes after the samples
 ///   it completed before failing, and is the FSM's to report again for every
@@ -228,17 +226,18 @@ impl<S: Read + Seek, D: Demux> Iterator for DemuxDriver<S, D> {
             if let Some(sample) = self.fsm.poll_sample() {
                 return Some(Ok(sample));
             }
-            let request = Request::of(&self.fsm);
+            let request = match Request::of(&mut self.fsm)? {
+                Ok(request) => request,
+                Err(failure) => return Some(Err(failure)),
+            };
             let handed = self
                 .read_at(request.offset, request.length)
                 .map_err(Error::from)
                 .and_then(|read| {
                     request.hand_over(&mut self.fsm, self.buffer.get(..read).unwrap_or_default())
                 });
-            match handed {
-                Ok(true) => {}
-                Ok(false) => return None,
-                Err(failure) => return Some(self.fsm.poll_sample().ok_or(failure)),
+            if let Err(failure) = handed {
+                return Some(self.fsm.poll_sample().ok_or(failure));
             }
         }
     }
@@ -419,29 +418,6 @@ mod tests {
         }
     }
 
-    /// Source holding nothing past any position it is sought back to
-    struct Shrinking(io::Cursor<Vec<u8>>);
-
-    impl Read for Shrinking {
-        fn read(&mut self, into: &mut [u8]) -> io::Result<usize> {
-            self.0.read(into)
-        }
-    }
-
-    impl Seek for Shrinking {
-        fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
-            if let SeekFrom::Start(position) = from {
-                if position < self.0.position() {
-                    self.0
-                        .get_mut()
-                        .truncate(usize::try_from(position).unwrap());
-                }
-            }
-
-            self.0.seek(from)
-        }
-    }
-
     /// Source that does not seek from its end
     struct Unmeasured(io::Cursor<Vec<u8>>);
 
@@ -574,13 +550,13 @@ mod tests {
     }
 
     #[test]
-    fn a_want_is_read_where_it_lies_and_the_file_read_on_from_the_input_offset_with_no_seek_where_the_source_stands()
+    fn a_want_is_read_where_it_lies_and_the_file_read_on_in_order_with_no_seek_where_the_source_stands()
      {
         let mut driver = DemuxDriver::new(
             Recorded::new(b"FILEBYTES".to_vec()),
             Scripted {
                 wanted: Some(2..6),
-                input_offset: 4,
+                in_order_offset: 4,
                 ..Scripted::default()
             },
         )
@@ -593,7 +569,6 @@ mod tests {
                 Call::Seek(SeekFrom::Start(2)),
                 Call::Read(4),
                 Call::Seek(SeekFrom::Start(4)),
-                Call::Read(CUT_LENGTH),
                 Call::Read(CUT_LENGTH),
                 Call::Read(CUT_LENGTH),
             ]
@@ -634,22 +609,6 @@ mod tests {
         assert_eq!(yielded(&mut driver), []);
         assert_eq!(driver.fsm().inputs, [b"FILE".to_vec()]);
         assert_eq!(driver.fsm().data, [(1, b"IL".to_vec())]);
-    }
-
-    #[test]
-    fn a_source_shrunk_below_a_want_is_reported_as_ending() {
-        let mut driver = DemuxDriver::new(
-            Shrinking(io::Cursor::new(b"FILE".to_vec())),
-            Scripted::default(),
-        )
-        .unwrap();
-        driver.next();
-        driver.fsm_mut().wanted = Some(0..4);
-
-        assert_eq!(
-            next_yielded(&mut driver),
-            Some(Err(ErrorKind::Io(io::ErrorKind::UnexpectedEof)))
-        );
     }
 
     #[test]
@@ -716,13 +675,12 @@ mod tests {
                 Call::Seek(SeekFrom::Start(0)),
                 Call::Read(CUT_LENGTH),
                 Call::Read(CUT_LENGTH),
-                Call::Read(CUT_LENGTH),
             ]
         );
     }
 
     #[test]
-    fn an_input_offset_past_what_a_seek_names_is_refused() {
+    fn an_offset_past_what_a_seek_names_is_refused() {
         let mut source = io::Cursor::new(b"junkFILE".to_vec());
         source.set_position(4);
         let mut driver = DemuxDriver::new(source, Scripted::default()).unwrap();

@@ -137,7 +137,7 @@ mod tests {
         let file = written_file(None, movie(), two_track_chunks());
 
         let mut demux_fsm = NonFragmentedDemuxFsm::new();
-        demux_fsm.handle_input(&file).unwrap();
+        demux_fsm.handle_input(0, &file).unwrap();
 
         assert_eq!(
             demux_fsm.file_type(),
@@ -154,7 +154,7 @@ mod tests {
         let file = written_file(None, movie_timed_in(1_000), two_track_chunks());
 
         let mut demux_fsm = NonFragmentedDemuxFsm::new();
-        demux_fsm.handle_input(&file).unwrap();
+        demux_fsm.handle_input(0, &file).unwrap();
         let read = demux_fsm.movie().unwrap();
 
         let mut expected = read.clone();

@@ -362,8 +362,8 @@ fn fragmented_reader_samples(file: &[u8], chunk_len: usize) -> (usize, usize) {
         }
     };
 
-    for arriving in file.chunks(chunk_len) {
-        demux_fsm.handle_input(arriving).unwrap();
+    for (offset, arriving) in (0..).step_by(chunk_len).zip(file.chunks(chunk_len)) {
+        demux_fsm.handle_input(offset, arriving).unwrap();
         take(&mut demux_fsm);
     }
     demux_fsm.finish().unwrap();

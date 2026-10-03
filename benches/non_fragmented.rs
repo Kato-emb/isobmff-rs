@@ -180,6 +180,13 @@ fn fetched<'file>(file: &'file [u8], wanted: &Range<u64>, fetch_len: usize) -> &
         .unwrap()
 }
 
+/// The bytes the reader wants whose length it states: those its samples lack that the file has passed
+fn lacking_extent(demux_fsm: &NonFragmentedDemuxFsm) -> Option<Range<u64>> {
+    let wanted = demux_fsm.wanted_input()?;
+
+    Some(wanted.offset()..wanted.offset() + wanted.length()?)
+}
+
 /// Drains what the writer has ready into `outputs`, and reports how many bytes that was
 fn drained(mux_fsm: &mut NonFragmentedMuxFsm, outputs: &mut Vec<EventBytes>) -> usize {
     let mut total = 0;
@@ -235,13 +242,16 @@ fn non_fragmented_reader_samples(file: &[u8], fetch_len: usize) -> (usize, usize
         }
     };
 
-    for arriving in file.chunks(ARRIVING_CHUNK_LEN) {
-        demux_fsm.handle_input(arriving).unwrap();
+    for (offset, arriving) in (0..)
+        .step_by(ARRIVING_CHUNK_LEN)
+        .zip(file.chunks(ARRIVING_CHUNK_LEN))
+    {
+        demux_fsm.handle_input(offset, arriving).unwrap();
         take(&mut demux_fsm);
     }
-    while let Some(wanted) = demux_fsm.wanted_extent() {
+    while let Some(wanted) = lacking_extent(&demux_fsm) {
         demux_fsm
-            .handle_data(wanted.start, fetched(file, &wanted, fetch_len))
+            .handle_input(wanted.start, fetched(file, &wanted, fetch_len))
             .unwrap();
         take(&mut demux_fsm);
     }
@@ -257,13 +267,16 @@ fn wants_of(file: &[u8], fetch_len: usize) -> Vec<Range<u64>> {
     let mut wants = Vec::new();
     let take = |demux_fsm: &mut NonFragmentedDemuxFsm| while demux_fsm.poll_sample().is_some() {};
 
-    for arriving in file.chunks(ARRIVING_CHUNK_LEN) {
-        demux_fsm.handle_input(arriving).unwrap();
+    for (offset, arriving) in (0..)
+        .step_by(ARRIVING_CHUNK_LEN)
+        .zip(file.chunks(ARRIVING_CHUNK_LEN))
+    {
+        demux_fsm.handle_input(offset, arriving).unwrap();
         take(&mut demux_fsm);
     }
-    while let Some(wanted) = demux_fsm.wanted_extent() {
+    while let Some(wanted) = lacking_extent(&demux_fsm) {
         demux_fsm
-            .handle_data(wanted.start, fetched(file, &wanted, fetch_len))
+            .handle_input(wanted.start, fetched(file, &wanted, fetch_len))
             .unwrap();
         take(&mut demux_fsm);
         wants.push(wanted);
@@ -276,7 +289,7 @@ fn wants_of(file: &[u8], fetch_len: usize) -> Vec<Range<u64>> {
 fn movie_of(file: &[u8]) -> MovieBox {
     let mut demux_fsm = NonFragmentedDemuxFsm::new();
 
-    demux_fsm.handle_input(file).unwrap();
+    demux_fsm.handle_input(0, file).unwrap();
 
     demux_fsm.movie().cloned().unwrap()
 }

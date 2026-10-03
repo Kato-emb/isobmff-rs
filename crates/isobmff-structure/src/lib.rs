@@ -61,12 +61,13 @@
 //! 6. **Stack.** [`FragmentedDemuxFsm`], [`FragmentedMuxFsm`],
 //!    [`NonFragmentedDemuxFsm`], [`NonFragmentedMuxFsm`], [`MediaSegmentDemuxFsm`]
 //!    and [`MediaSegmentMuxFsm`] wire layers 1 to 5 into one machine per
-//!    structure and direction. A stack holds no failure kind of its own and
-//!    one rule: a demux FSM keeps where the input it takes in order stands,
-//!    and of what layer 4 wants names only an extent whose start that input
-//!    has passed. It passes every value between the layers, so a caller
-//!    hands over bytes and takes samples, or hands over samples and takes
-//!    bytes, and never sees one. Every offset above the framing is a file
+//!    structure and direction. A stack holds one rule of its own: a demux
+//!    FSM keeps where the input it takes in order stands, and states the one
+//!    read it wants next — an extent layer 4 lacks whose start that input has
+//!    passed, else the continuation of that input — taking every input with
+//!    the offset it was read at. It passes every value between the layers,
+//!    so a caller hands over bytes and takes samples, or hands over samples
+//!    and takes bytes, and never sees one. Every offset above the framing is a file
 //!    offset —
 //!    the extents the framing reports, counted from the first byte of the
 //!    file or from the offset the stack last resumed at, the chunk offsets and base data offsets the boxes declare
@@ -100,15 +101,16 @@ extern crate alloc;
 
 mod error;
 mod fragmented_movie;
-mod in_order_position;
+mod input_position;
 mod media_segment;
 mod non_fragmented_movie;
 mod whole_box;
 
 pub use error::{Error, ErrorKind};
 pub use fragmented_movie::{FragmentedDemuxFsm, FragmentedMuxFsm};
+pub use input_position::WantedInput;
 pub use media_segment::{MediaSegmentDemuxFsm, MediaSegmentMuxFsm};
 pub use non_fragmented_movie::{NonFragmentedDemuxFsm, NonFragmentedMuxFsm};
 
-pub(crate) use in_order_position::InOrderPosition;
+pub(crate) use input_position::{InputPosition, InputRoute};
 pub(crate) use whole_box::{WholeBoxReader, compact_box_header, whole_box_header, whole_payload};

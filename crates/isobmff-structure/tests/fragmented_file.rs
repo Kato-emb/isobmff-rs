@@ -11,7 +11,7 @@ mod reading;
 mod tests {
     use isobmff_core::BoxType;
     use isobmff_sequence::BoxEvent;
-    use isobmff_structure::{Error, ErrorKind, FragmentedDemuxFsm};
+    use isobmff_structure::{Error, ErrorKind, FragmentedDemuxFsm, WantedInput};
     use isobmff_test_support::{
         IndexedFile, events_of, fragmented_file_samples, fragmented_file_with_samples,
         indexed_fragmented_file, indexed_fragmented_file_without_decode_times,
@@ -22,7 +22,7 @@ mod tests {
     /// Reader that read `file` whole and was declared over
     fn read_whole(file: &IndexedFile) -> FragmentedDemuxFsm {
         let mut demux_fsm = FragmentedDemuxFsm::new();
-        demux_fsm.handle_input(&file.bytes).unwrap();
+        demux_fsm.handle_input(0, &file.bytes).unwrap();
         demux_fsm.finish().unwrap();
 
         demux_fsm
@@ -35,7 +35,10 @@ mod tests {
         offset: u64,
     ) -> Result<(), Error> {
         demux_fsm.resume_at(offset)?;
-        demux_fsm.handle_input(file.bytes.get(usize::try_from(offset).unwrap()..).unwrap())?;
+        demux_fsm.handle_input(
+            offset,
+            file.bytes.get(usize::try_from(offset).unwrap()..).unwrap(),
+        )?;
         demux_fsm.finish()
     }
 
@@ -98,7 +101,10 @@ mod tests {
 
         let mut reading = FragmentedDemuxFsm::new();
         reading
-            .handle_input(file.bytes.get(..usize::try_from(second).unwrap()).unwrap())
+            .handle_input(
+                0,
+                file.bytes.get(..usize::try_from(second).unwrap()).unwrap(),
+            )
             .unwrap();
         drained(&mut reading);
         resumed_at(&mut reading, &file, second).unwrap();
@@ -177,24 +183,32 @@ mod tests {
     }
 
     #[test]
-    fn the_input_stands_after_the_bytes_handed_over_since_the_reading_last_started() {
+    fn the_continuation_is_wanted_after_the_bytes_handed_over_since_the_reading_last_started() {
         let file = indexed_fragmented_file();
         let second = *file.moof_offsets.get(1).unwrap();
         let mut demux_fsm = FragmentedDemuxFsm::new();
 
-        let created = demux_fsm.input_offset();
-        demux_fsm.handle_input(&file.bytes).unwrap();
-        let handed = demux_fsm.input_offset();
+        let created = demux_fsm.wanted_input();
+        demux_fsm.handle_input(0, &file.bytes).unwrap();
+        let handed = demux_fsm.wanted_input();
         demux_fsm.resume_at(second).unwrap();
-        let resumed = demux_fsm.input_offset();
+        let resumed = demux_fsm.wanted_input();
         demux_fsm
-            .handle_input(file.bytes.get(usize::try_from(second).unwrap()..).unwrap())
+            .handle_input(
+                second,
+                file.bytes.get(usize::try_from(second).unwrap()..).unwrap(),
+            )
             .unwrap();
 
         let file_length = u64::try_from(file.bytes.len()).unwrap();
         assert_eq!(
-            [created, handed, resumed, demux_fsm.input_offset()],
-            [0, file_length, second, file_length]
+            [created, handed, resumed, demux_fsm.wanted_input()],
+            [
+                Some(WantedInput::new(0, None)),
+                Some(WantedInput::new(file_length, None)),
+                Some(WantedInput::new(second, None)),
+                Some(WantedInput::new(file_length, None))
+            ]
         );
     }
 }

@@ -1,6 +1,5 @@
 //! [`Demux`] and [`Mux`], what a driver asks of the stack beneath it, what a demux driver reads for a demux FSM — [`Request`], and [`ClosingMovieFragmentRandomAccessOffset`] where it looks for an `mfra` — and [`InFlight`], what a mux driver is writing
 
-use core::ops::Range;
 use std::io;
 
 use isobmff_boxes::MovieFragmentRandomAccessOffsetBox;
@@ -9,7 +8,7 @@ use isobmff_sample::Sample;
 use isobmff_sequence::EventBytes;
 use isobmff_structure::{
     FragmentedDemuxFsm, FragmentedMuxFsm, MediaSegmentDemuxFsm, MediaSegmentMuxFsm,
-    NonFragmentedDemuxFsm, NonFragmentedMuxFsm,
+    NonFragmentedDemuxFsm, NonFragmentedMuxFsm, WantedInput,
 };
 
 use crate::Error;
@@ -23,28 +22,18 @@ pub(crate) const CUT_LENGTH: usize = 1024 * 1024;
 /// trait is sealed: the demux FSMs of [`isobmff_structure`] implement it,
 /// and no other type can.
 pub trait Demux: sealed::Sealed {
-    /// Takes the next bytes of the file in order, and reads the samples they complete
+    /// Takes bytes of the file read at `offset`, and reads the samples they complete
     ///
     /// # Errors
     ///
     /// * What the demux FSM's `handle_input` makes of the bytes.
-    fn handle_input(&mut self, input: &[u8]) -> Result<(), isobmff_structure::Error>;
-
-    /// Takes bytes of the file read for what [`wanted_extent`](Self::wanted_extent) named, and reads the samples they complete
-    ///
-    /// # Errors
-    ///
-    /// * What the demux FSM's `handle_data` makes of the bytes.
-    fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), isobmff_structure::Error>;
+    fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), isobmff_structure::Error>;
 
     /// Takes the next sample the file handed over so far completed
     fn poll_sample(&mut self) -> Option<Sample>;
 
-    /// Returns the bytes the extent at the front of those held still lacks, once the input has passed its start
-    fn wanted_extent(&self) -> Option<Range<u64>>;
-
-    /// Returns the file offset the next byte handed to [`handle_input`](Self::handle_input) lies at
-    fn input_offset(&self) -> u64;
+    /// Returns the one read wanted next, or `None` once the file is declared over or the FSM has failed
+    fn wanted_input(&self) -> Option<WantedInput>;
 
     /// Declares the file over
     ///
@@ -64,83 +53,61 @@ pub trait Mux: sealed::Sealed {
     fn poll_output(&mut self) -> Option<EventBytes>;
 }
 
-/// What a demux driver reads next for a demux FSM: the bytes it wants, or else the file on in order
+/// What a demux driver reads next for a demux FSM: the read it wants, a buffer at most
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Request {
     /// The file offset the read starts at
     pub(crate) offset: u64,
     /// The most bytes the read takes
     pub(crate) length: usize,
-    wanted: bool,
 }
 
 impl Request {
-    /// Returns the read `fsm` asks for next: the extent it wants, a buffer at most, or else a buffer on from its input offset
-    pub(crate) fn of<D: Demux>(fsm: &D) -> Self {
-        fsm.wanted_extent().map_or(
-            Self {
-                offset: fsm.input_offset(),
-                length: CUT_LENGTH,
-                wanted: false,
-            },
-            |wanted| Self {
-                offset: wanted.start,
-                length: usize::try_from(wanted.end.saturating_sub(wanted.start))
-                    .map_or(CUT_LENGTH, |length| length.min(CUT_LENGTH)),
-                wanted: true,
-            },
-        )
+    /// Returns the read `fsm` wants next, or once it wants none, the failure it keeps, or `None` where the file was declared over
+    pub(crate) fn of<D: Demux>(fsm: &mut D) -> Option<Result<Self, Error>> {
+        let Some(wanted) = fsm.wanted_input() else {
+            return fsm
+                .finish()
+                .err()
+                .filter(|failure| failure.kind() != isobmff_structure::ErrorKind::AlreadyFinished)
+                .map(|failure| Err(failure.into()));
+        };
+
+        Some(Ok(Self {
+            offset: wanted.offset(),
+            length: wanted.length().map_or(CUT_LENGTH, |length| {
+                usize::try_from(length).map_or(CUT_LENGTH, |length| length.min(CUT_LENGTH))
+            }),
+        }))
     }
 
-    /// Hands `fsm` the bytes read for the request, and returns `false` once the file was declared over before
-    ///
-    /// No byte read in order declares the file over.
+    /// Hands `fsm` the bytes read for the request, no byte read declaring the file over
     ///
     /// # Errors
     ///
-    /// * [`Io`](crate::ErrorKind::Io) with
-    ///   [`UnexpectedEof`](io::ErrorKind::UnexpectedEof): no byte was read
-    ///   for a want, the source ending before bytes it held.
     /// * [`Structure`](crate::ErrorKind::Structure): what `fsm` makes of the
     ///   bytes, or of the end of the file.
-    pub(crate) fn hand_over<D: Demux>(self, fsm: &mut D, read: &[u8]) -> Result<bool, Error> {
-        let handed = match (self.wanted, read.is_empty()) {
-            (true, true) => return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into()),
-            (true, false) => fsm.handle_data(self.offset, read),
-            (false, false) => fsm.handle_input(read),
-            (false, true) => match fsm.finish() {
-                Err(failure) if failure.kind() == isobmff_structure::ErrorKind::AlreadyFinished => {
-                    return Ok(false);
-                }
-                finished => finished,
-            },
-        };
-
-        handed?;
-
-        Ok(true)
+    pub(crate) fn hand_over<D: Demux>(self, fsm: &mut D, read: &[u8]) -> Result<(), Error> {
+        if read.is_empty() {
+            fsm.finish()
+        } else {
+            fsm.handle_input(self.offset, read)
+        }
+        .map_err(Error::from)
     }
 }
 
 impl Demux for FragmentedDemuxFsm {
-    fn handle_input(&mut self, input: &[u8]) -> Result<(), isobmff_structure::Error> {
-        FragmentedDemuxFsm::handle_input(self, input)
-    }
-
-    fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), isobmff_structure::Error> {
-        FragmentedDemuxFsm::handle_data(self, offset, data)
+    fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), isobmff_structure::Error> {
+        FragmentedDemuxFsm::handle_input(self, offset, input)
     }
 
     fn poll_sample(&mut self) -> Option<Sample> {
         FragmentedDemuxFsm::poll_sample(self)
     }
 
-    fn wanted_extent(&self) -> Option<Range<u64>> {
-        FragmentedDemuxFsm::wanted_extent(self)
-    }
-
-    fn input_offset(&self) -> u64 {
-        FragmentedDemuxFsm::input_offset(self)
+    fn wanted_input(&self) -> Option<WantedInput> {
+        FragmentedDemuxFsm::wanted_input(self)
     }
 
     fn finish(&mut self) -> Result<(), isobmff_structure::Error> {
@@ -149,24 +116,16 @@ impl Demux for FragmentedDemuxFsm {
 }
 
 impl Demux for MediaSegmentDemuxFsm {
-    fn handle_input(&mut self, input: &[u8]) -> Result<(), isobmff_structure::Error> {
-        MediaSegmentDemuxFsm::handle_input(self, input)
-    }
-
-    fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), isobmff_structure::Error> {
-        MediaSegmentDemuxFsm::handle_data(self, offset, data)
+    fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), isobmff_structure::Error> {
+        MediaSegmentDemuxFsm::handle_input(self, offset, input)
     }
 
     fn poll_sample(&mut self) -> Option<Sample> {
         MediaSegmentDemuxFsm::poll_sample(self)
     }
 
-    fn wanted_extent(&self) -> Option<Range<u64>> {
-        MediaSegmentDemuxFsm::wanted_extent(self)
-    }
-
-    fn input_offset(&self) -> u64 {
-        MediaSegmentDemuxFsm::input_offset(self)
+    fn wanted_input(&self) -> Option<WantedInput> {
+        MediaSegmentDemuxFsm::wanted_input(self)
     }
 
     fn finish(&mut self) -> Result<(), isobmff_structure::Error> {
@@ -175,24 +134,16 @@ impl Demux for MediaSegmentDemuxFsm {
 }
 
 impl Demux for NonFragmentedDemuxFsm {
-    fn handle_input(&mut self, input: &[u8]) -> Result<(), isobmff_structure::Error> {
-        NonFragmentedDemuxFsm::handle_input(self, input)
-    }
-
-    fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), isobmff_structure::Error> {
-        NonFragmentedDemuxFsm::handle_data(self, offset, data)
+    fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), isobmff_structure::Error> {
+        NonFragmentedDemuxFsm::handle_input(self, offset, input)
     }
 
     fn poll_sample(&mut self) -> Option<Sample> {
         NonFragmentedDemuxFsm::poll_sample(self)
     }
 
-    fn wanted_extent(&self) -> Option<Range<u64>> {
-        NonFragmentedDemuxFsm::wanted_extent(self)
-    }
-
-    fn input_offset(&self) -> u64 {
-        NonFragmentedDemuxFsm::input_offset(self)
+    fn wanted_input(&self) -> Option<WantedInput> {
+        NonFragmentedDemuxFsm::wanted_input(self)
     }
 
     fn finish(&mut self) -> Result<(), isobmff_structure::Error> {
@@ -331,6 +282,7 @@ pub(crate) mod tests {
     use isobmff_core::{BoxHeader, BoxType};
     use isobmff_sample::Sample;
     use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
+    use isobmff_structure::WantedInput;
 
     use super::{Demux, Mux, sealed};
 
@@ -344,29 +296,32 @@ pub(crate) mod tests {
         pub(crate) data: Vec<(u64, Vec<u8>)>,
         pub(crate) samples: VecDeque<Sample>,
         pub(crate) finished: bool,
-        pub(crate) input_offset: u64,
+        pub(crate) in_order_offset: u64,
     }
 
     impl sealed::Sealed for Scripted {}
 
     impl Demux for Scripted {
-        fn handle_input(&mut self, input: &[u8]) -> Result<(), isobmff_structure::Error> {
-            self.inputs.push(input.to_vec());
-            self.input_offset = self
-                .input_offset
-                .saturating_add(u64::try_from(input.len()).unwrap());
-            self.samples.extend(self.completed_by_input.drain(..));
-
-            Ok(())
-        }
-
-        fn handle_data(
+        fn handle_input(
             &mut self,
             offset: u64,
-            data: &[u8],
+            input: &[u8],
         ) -> Result<(), isobmff_structure::Error> {
-            self.data.push((offset, data.to_vec()));
-            self.wanted = None;
+            if self
+                .wanted
+                .as_ref()
+                .is_some_and(|wanted| wanted.start == offset)
+            {
+                self.data.push((offset, input.to_vec()));
+                self.wanted = None;
+
+                return Ok(());
+            }
+            self.inputs.push(input.to_vec());
+            self.in_order_offset = self
+                .in_order_offset
+                .saturating_add(u64::try_from(input.len()).unwrap());
+            self.samples.extend(self.completed_by_input.drain(..));
 
             Ok(())
         }
@@ -375,12 +330,18 @@ pub(crate) mod tests {
             self.samples.pop_front()
         }
 
-        fn wanted_extent(&self) -> Option<Range<u64>> {
-            self.wanted.clone()
-        }
-
-        fn input_offset(&self) -> u64 {
-            self.input_offset
+        fn wanted_input(&self) -> Option<WantedInput> {
+            (!self.finished).then(|| {
+                self.wanted.as_ref().map_or(
+                    WantedInput::new(self.in_order_offset, None),
+                    |wanted| {
+                        WantedInput::new(
+                            wanted.start,
+                            Some(wanted.end.saturating_sub(wanted.start)),
+                        )
+                    },
+                )
+            })
         }
 
         fn finish(&mut self) -> Result<(), isobmff_structure::Error> {
@@ -396,7 +357,7 @@ pub(crate) mod tests {
     impl Scripted {
         /// Restarts the reading at `offset`, as a demux FSM's `resume_at` does
         pub(crate) fn resume_at(&mut self, offset: u64) -> Result<(), isobmff_structure::Error> {
-            self.input_offset = offset;
+            self.in_order_offset = offset;
             self.samples.clear();
             self.wanted = None;
             self.finished = false;

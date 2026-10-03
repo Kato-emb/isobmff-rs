@@ -152,7 +152,7 @@ mod tests {
         let file = written_file(None, movie(), two_track_fragments());
 
         let mut demux_fsm = FragmentedDemuxFsm::new();
-        demux_fsm.handle_input(&file).unwrap();
+        demux_fsm.handle_input(0, &file).unwrap();
 
         assert_eq!(
             demux_fsm.file_type(),

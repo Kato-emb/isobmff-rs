@@ -1,7 +1,5 @@
 //! [`MediaSegmentDemuxFsm`], a media segment read as it arrives
 
-use core::ops::Range;
-
 use alloc::vec::Vec;
 
 use isobmff_boxes::{MovieBox, MovieFragmentBox, SegmentIndexBox, SegmentTypeBox};
@@ -11,7 +9,7 @@ use isobmff_sample::{Sample, SampleReader, SegmentIndex, TrackDecodeTimes};
 use isobmff_sequence::{BoxEvent, BoxReader};
 
 use super::{MediaSegmentDisposition, MediaSegmentStructure};
-use crate::{Error, InOrderPosition, WholeBoxReader};
+use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 
 /// Reads the samples a media segment carries, taking it as it arrives
 ///
@@ -32,7 +30,10 @@ use crate::{Error, InOrderPosition, WholeBoxReader};
 /// # Contract
 ///
 /// * The segment is handed over from its first byte, or from the offset
-///   [`resume_at`](Self::resume_at) names, in order and cut anywhere, and the samples it completed are taken from
+///   [`resume_at`](Self::resume_at) names, in order and cut anywhere,
+///   each cut handed over at the offset it was read at, where
+///   [`wanted_input`](Self::wanted_input) names,
+///   and the samples it completed are taken from
 ///   [`poll_sample`](Self::poll_sample). The caller drains before handing
 ///   over more: samples are held until they are taken. Where the segment
 ///   lies in its resource is the caller's: every offset the reader reports
@@ -72,11 +73,12 @@ use crate::{Error, InOrderPosition, WholeBoxReader};
 ///   their bytes, so a segment handed over in order yields the samples of each
 ///   fragment in the order they lie in it, whatever order the fragment
 ///   declares them in and wherever the input is cut.
-///   [`wanted_extent`](Self::wanted_extent) names what the extent at the
+///   [`wanted_input`](Self::wanted_input) names what the extent at the
 ///   front of those held still lacks only once the input has passed its
 ///   start, which a segment whose fragments precede their media data never has.
 /// * An `Err` leaves the reader failed for good,
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside:
+///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) and
+///   [`UnwantedInput`](crate::ErrorKind::UnwantedInput) aside:
 ///   every later call reports that same failure again. The samples completed
 ///   before it are still there to take.
 /// * [`finish`](Self::finish) declares the segment over, and reports what
@@ -111,8 +113,8 @@ use crate::{Error, InOrderPosition, WholeBoxReader};
 /// // The segment is handed over as it arrives, against the movie it continues
 /// let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO));
 /// let mut demux_fsm = MediaSegmentDemuxFsm::new(movie);
-/// for arriving in segment.chunks(7) {
-///     demux_fsm.handle_input(arriving)?;
+/// for (offset, arriving) in (0..).step_by(7).zip(segment.chunks(7)) {
+///     demux_fsm.handle_input(offset, arriving)?;
 /// }
 /// demux_fsm.finish()?;
 ///
@@ -130,7 +132,7 @@ use crate::{Error, InOrderPosition, WholeBoxReader};
 #[derive(Debug)]
 pub struct MediaSegmentDemuxFsm {
     boxes: BoxReader,
-    position: InOrderPosition,
+    position: InputPosition,
     structure: MediaSegmentStructure,
     samples: SampleReader,
     decode_times: TrackDecodeTimes,
@@ -205,7 +207,7 @@ impl MediaSegmentDemuxFsm {
     pub const fn with_limits(movie: MovieBox, payload_limit: u64, sample_size_limit: u64) -> Self {
         Self {
             boxes: BoxReader::new(),
-            position: InOrderPosition::new(),
+            position: InputPosition::new(),
             structure: MediaSegmentStructure::new(),
             samples: SampleReader::with_sample_size_limit(sample_size_limit),
             decode_times: TrackDecodeTimes::new(),
@@ -218,12 +220,20 @@ impl MediaSegmentDemuxFsm {
         }
     }
 
-    /// Takes the next cut of the segment and reads the samples it completes
+    /// Takes bytes of the segment read at `offset`, and reads the samples they complete
     ///
-    /// The input is taken whole, as the continuation of what was handed over
-    /// before it, the first cut starting at the first byte of the segment, or
-    /// at the offset the last [`resume_at`](Self::resume_at) named. What the
-    /// input completed is then taken from [`poll_sample`](Self::poll_sample).
+    /// `offset` is an offset into the segment, counted from its first byte as a
+    /// base data offset is (ISO/IEC 14496-12 §8.8.7). Bytes at the offset the
+    /// input taken in order stands at — the first byte of the segment or the
+    /// offset the last [`resume_at`](Self::resume_at) named, then where the
+    /// bytes taken in order before them end — are taken whole as its
+    /// continuation. Bytes at the offset of the bytes
+    /// [`wanted_input`](Self::wanted_input) names as lacking are offered to the
+    /// samples alone, as media data is, and the input taken in order goes on
+    /// from where it stood; bytes at the offset the input taken in order stands
+    /// at are taken all the same while such bytes are named. Empty input is
+    /// taken as nothing. What the input completed is then taken from
+    /// [`poll_sample`](Self::poll_sample).
     ///
     /// # Errors
     ///
@@ -239,10 +249,29 @@ impl MediaSegmentDemuxFsm {
     ///   of a fragment, a `sidx`, or the media data beside it.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
+    /// * [`UnwantedInput`](crate::ErrorKind::UnwantedInput): `offset` is
+    ///   neither where the input taken in order stands nor the offset of the
+    ///   bytes [`wanted_input`](Self::wanted_input) names as lacking. The
+    ///   reader is not failed by it.
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
-    pub fn handle_input(&mut self, input: &[u8]) -> Result<(), Error> {
+    pub fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), Error> {
         self.reading()?;
+        if input.is_empty() {
+            return Ok(());
+        }
+
+        match self.position.route(offset, self.samples.wanted_extent()) {
+            InputRoute::InOrder => {}
+            InputRoute::Lacking => {
+                return self
+                    .samples
+                    .handle_data(offset, input)
+                    .map_err(|failure| self.fail(failure.into()));
+            }
+            InputRoute::Unwanted => return Err(Error::unwanted_input(offset)),
+        }
+
         self.position.advance(input.len());
 
         // Why not failing before the events are read: the framing keeps the
@@ -255,29 +284,6 @@ impl MediaSegmentDemuxFsm {
         framed.map_err(|failure| self.fail(failure.into()))
     }
 
-    /// Takes bytes of the segment fetched for what [`wanted_extent`](Self::wanted_extent) named, and reads the samples they complete
-    ///
-    /// The bytes are offered to the samples alone, as the media data of the
-    /// segment is: `offset` is where the first of them lies in the segment,
-    /// counted from its first byte as a base data offset is (ISO/IEC 14496-12
-    /// §8.8.7), and what they completed is then taken from
-    /// [`poll_sample`](Self::poll_sample). The segment handed over in order
-    /// through [`handle_input`](Self::handle_input) goes on from where it
-    /// stood.
-    ///
-    /// # Errors
-    ///
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
-    ///   segment was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the reader keeps and reports
-    ///   again for every call after it.
-    pub fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), Error> {
-        self.reading()?;
-        self.samples
-            .handle_data(offset, data)
-            .map_err(|failure| self.fail(failure.into()))
-    }
-
     /// Takes the next sample the segment handed over so far completed
     ///
     /// Reports `None` once they are used up: more of the segment is needed.
@@ -288,27 +294,21 @@ impl MediaSegmentDemuxFsm {
         self.samples.poll_sample()
     }
 
-    /// Returns the bytes the extent at the front of those held still lacks, once the input has passed its start
+    /// Returns the one read wanted next, or `None` once the segment is declared over or the reader has failed
     ///
-    /// An extent starting at or after [`input_offset`](Self::input_offset) is
-    /// not named: the segment handed over in order brings its bytes. Where
-    /// each fragment precedes the media data it addresses, a segment handed
-    /// over in order has none named. A fragment addressing media data lying
-    /// before it (§8.8.7 has a base data offset name any byte of the segment)
-    /// names bytes already passed by, which a caller that can seek fetches
-    /// and hands to [`handle_data`](Self::handle_data).
+    /// Bytes the extent at the front of those held still lacks are wanted
+    /// first, with their length, once the input taken in order has passed their
+    /// start. Where each fragment precedes the media data it addresses, a
+    /// segment handed over in order has none wanted; a fragment addressing
+    /// media data lying before it (§8.8.7 has a base data offset name any byte
+    /// of the segment) wants bytes already passed by. Otherwise the
+    /// continuation of the input taken in order is wanted, at the offset it
+    /// stands at and with no length. Bytes read for either are handed to
+    /// [`handle_input`](Self::handle_input) at the offset they were read at.
     #[must_use]
-    pub fn wanted_extent(&self) -> Option<Range<u64>> {
-        self.position.passed(self.samples.wanted_extent())
-    }
-
-    /// Returns the offset into the segment the next byte handed to [`handle_input`](Self::handle_input) lies at
-    ///
-    /// It is the offset the last [`resume_at`](Self::resume_at) named, or zero
-    /// before any, and the bytes handed over in order since.
-    #[must_use]
-    pub const fn input_offset(&self) -> u64 {
-        self.position.offset()
+    pub fn wanted_input(&self) -> Option<WantedInput> {
+        matches!(self.state, State::Reading)
+            .then(|| self.position.wanted_input(self.samples.wanted_extent()))
     }
 
     /// Returns the brands the segment declares itself readable as, once they have arrived
@@ -499,12 +499,13 @@ mod tests {
     use super::super::tests::{movie, sample, segment_of_one_sample};
     use super::{Error, MediaSegmentDemuxFsm};
     use crate::ErrorKind;
+    use crate::WantedInput;
 
     /// What the reader makes of `segment` handed over whole, then declared over
     fn read(segment: &[u8]) -> Result<MediaSegmentDemuxFsm, Error> {
         let mut demux_fsm = MediaSegmentDemuxFsm::new(movie());
 
-        demux_fsm.handle_input(segment)?;
+        demux_fsm.handle_input(0, segment)?;
         demux_fsm.finish()?;
 
         Ok(demux_fsm)
@@ -532,7 +533,7 @@ mod tests {
 
         assert_eq!(
             demux_fsm
-                .handle_input(&written(&segment_type()))
+                .handle_input(0, &written(&segment_type()))
                 .map_err(Error::kind),
             Err(ErrorKind::PayloadLimitExceeded)
         );
@@ -552,7 +553,7 @@ mod tests {
             SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT,
         );
 
-        demux_fsm.handle_input(&segment).unwrap();
+        demux_fsm.handle_input(0, &segment).unwrap();
 
         assert_eq!(demux_fsm.finish(), Ok(()));
     }
@@ -565,7 +566,7 @@ mod tests {
         let mut demux_fsm = MediaSegmentDemuxFsm::new(movie());
 
         assert_eq!(
-            demux_fsm.handle_input(&segment).map_err(Error::kind),
+            demux_fsm.handle_input(0, &segment).map_err(Error::kind),
             Err(ErrorKind::Sequence(isobmff_sequence::ErrorKind::Box(
                 isobmff_core::ErrorKind::SizeBelowHeader
             )))
@@ -574,6 +575,7 @@ mod tests {
             demux_fsm.poll_sample().map(Sample::into_data),
             Some(b"SAMP".to_vec())
         );
+        assert_eq!(demux_fsm.wanted_input(), None);
     }
 
     #[test]
@@ -583,11 +585,13 @@ mod tests {
         let media_data = segment.split_off(segment.len().saturating_sub(4));
 
         let mut demux_fsm = MediaSegmentDemuxFsm::new(movie());
-        demux_fsm.handle_input(&segment).unwrap();
-        let wanted = demux_fsm.wanted_extent();
-        demux_fsm.handle_input(&media_data).unwrap();
+        demux_fsm.handle_input(0, &segment).unwrap();
+        let wanted = demux_fsm.wanted_input();
+        demux_fsm
+            .handle_input(segment.len() as u64, &media_data)
+            .unwrap();
 
-        assert_eq!(wanted, None);
+        assert_eq!(wanted, Some(WantedInput::new(segment.len() as u64, None)));
         assert_eq!(demux_fsm.poll_sample(), Some(sample()));
     }
 
@@ -597,12 +601,11 @@ mod tests {
         let failure = Error::box_out_of_order(MediaDataBox::BOX_TYPE);
         let segment = written(&MediaDataBox::new(MEDIA_DATA.to_vec()));
 
-        assert_eq!(demux_fsm.handle_input(&segment), Err(failure));
+        assert_eq!(demux_fsm.handle_input(0, &segment), Err(failure));
         assert_eq!(
-            demux_fsm.handle_input(&written(&movie_fragment())),
+            demux_fsm.handle_input(0, &written(&movie_fragment())),
             Err(failure)
         );
-        assert_eq!(demux_fsm.handle_data(0, b"SAMP"), Err(failure));
         assert_eq!(demux_fsm.finish(), Err(failure));
     }
 
@@ -611,13 +614,51 @@ mod tests {
         let mut demux_fsm = read(&written(&movie_fragment())).unwrap();
 
         assert_eq!(
-            demux_fsm.handle_input(&written(&movie_fragment())),
-            Err(Error::already_finished())
-        );
-        assert_eq!(
-            demux_fsm.handle_data(0, b"SAMP"),
+            demux_fsm.handle_input(0, &written(&movie_fragment())),
             Err(Error::already_finished())
         );
         assert_eq!(demux_fsm.finish(), Err(Error::already_finished()));
+    }
+
+    #[test]
+    fn input_at_an_offset_neither_in_order_nor_wanted_is_refused_and_the_segment_reads_on() {
+        let segment = segment_of_one_sample();
+        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie());
+
+        demux_fsm
+            .handle_input(0, segment.get(..8).unwrap())
+            .unwrap();
+
+        assert_eq!(
+            demux_fsm.handle_input(9, segment.get(9..).unwrap()),
+            Err(Error::unwanted_input(9))
+        );
+        assert_eq!(demux_fsm.handle_input(8, segment.get(8..).unwrap()), Ok(()));
+        assert_eq!(demux_fsm.finish(), Ok(()));
+        assert_eq!(demux_fsm.poll_sample(), Some(sample()));
+    }
+
+    #[test]
+    fn empty_input_is_taken_as_nothing_wherever_it_is_handed_over() {
+        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie());
+
+        assert_eq!(demux_fsm.handle_input(9, &[]), Ok(()));
+        assert_eq!(demux_fsm.wanted_input(), Some(WantedInput::new(0, None)));
+    }
+
+    #[test]
+    fn the_segment_is_wanted_from_the_offset_the_reading_resumed_at() {
+        let mut demux_fsm = read(&segment_of_one_sample()).unwrap();
+
+        demux_fsm.resume_at(100).unwrap();
+
+        assert_eq!(demux_fsm.wanted_input(), Some(WantedInput::new(100, None)));
+    }
+
+    #[test]
+    fn nothing_is_wanted_once_the_segment_is_declared_over() {
+        let demux_fsm = read(&segment_of_one_sample()).unwrap();
+
+        assert_eq!(demux_fsm.wanted_input(), None);
     }
 }

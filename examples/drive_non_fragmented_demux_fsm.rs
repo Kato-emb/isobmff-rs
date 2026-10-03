@@ -23,24 +23,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut demux_fsm = NonFragmentedDemuxFsm::new();
     let mut buffer = vec![0; 64 * 1024];
     let mut count: u64 = 0;
-    let mut finished = false;
-    while !finished {
-        let wanted = demux_fsm.wanted_extent();
-        let offset = wanted
-            .as_ref()
-            .map_or(demux_fsm.input_offset(), |wanted| wanted.start);
-        file.seek(SeekFrom::Start(offset))?;
-        let read = file.read(&mut buffer)?;
-        let bytes = buffer.get(..read).unwrap_or_default();
-        match (wanted, read) {
-            (Some(_), 0) => return Err("the file ends before bytes its movie names".into()),
-            (Some(_), _) => demux_fsm.handle_data(offset, bytes)?,
-            (None, 0) => {
-                demux_fsm.finish()?;
-                finished = true;
-            }
-            (None, _) => demux_fsm.handle_input(bytes)?,
-        }
+    while let Some(wanted) = demux_fsm.wanted_input() {
+        let length = wanted.length().map_or(buffer.len(), |length| {
+            usize::try_from(length).map_or(buffer.len(), |length| length.min(buffer.len()))
+        });
+        file.seek(SeekFrom::Start(wanted.offset()))?;
+        let read = file.read(buffer.get_mut(..length).unwrap_or_default())?;
+        let handed = if read == 0 {
+            demux_fsm.finish()
+        } else {
+            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
+        };
         while let Some(sample) = demux_fsm.poll_sample() {
             println!(
                 "track={} time={} size={} sync={}",
@@ -51,6 +44,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             );
             count = count.saturating_add(1);
         }
+        handed?;
     }
     println!("samples={count}");
 

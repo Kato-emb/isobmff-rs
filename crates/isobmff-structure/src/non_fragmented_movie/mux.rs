@@ -115,11 +115,15 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 ///
 /// // Read back, the samples come out as they were laid down
 /// let mut demux_fsm = NonFragmentedDemuxFsm::new();
-/// demux_fsm.handle_input(&file)?;
-/// while let Some(wanted) = demux_fsm.wanted_extent() {
-///     demux_fsm.handle_data(wanted.start, &file[wanted.start as usize..wanted.end as usize])?;
+/// while let Some(wanted) = demux_fsm.wanted_input() {
+///     let start = (wanted.offset() as usize).min(file.len());
+///     let end = wanted.length().map_or(file.len(), |length| start + length as usize);
+///     if start == end {
+///         demux_fsm.finish()?;
+///     } else {
+///         demux_fsm.handle_input(wanted.offset(), &file[start..end])?;
+///     }
 /// }
-/// demux_fsm.finish()?;
 /// let read_back: Vec<Vec<u8>> = core::iter::from_fn(|| demux_fsm.poll_sample())
 ///     .map(Sample::into_data)
 ///     .collect();

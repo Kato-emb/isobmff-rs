@@ -9,9 +9,37 @@ mod reading;
 
 #[cfg(test)]
 mod tests {
-    use super::reading::{fetched, handed_over_in_order, samples_of};
-    use isobmff_structure::NonFragmentedDemuxFsm;
+    use isobmff_sample::Sample;
+
+    use super::reading::{drained, samples_of};
+    use isobmff_structure::{NonFragmentedDemuxFsm, WantedInput};
     use isobmff_test_support::{SAMPLE_CHUNKS, non_fragmented_file, non_fragmented_file_samples};
+
+    /// The bytes of `file` a read of known length wants
+    fn fetched(file: &[u8], wanted: WantedInput) -> &[u8] {
+        let start = usize::try_from(wanted.offset()).unwrap();
+        let length = usize::try_from(wanted.length().unwrap()).unwrap();
+
+        file.get(start..)
+            .and_then(|rest| rest.get(..length))
+            .unwrap()
+    }
+
+    /// Hands `file` over in order, `cut_length` bytes at a time, and returns the samples that completed
+    fn handed_over_in_order(
+        demux_fsm: &mut NonFragmentedDemuxFsm,
+        file: &[u8],
+        cut_length: usize,
+    ) -> Vec<Sample> {
+        let mut samples = Vec::new();
+
+        for (offset, arriving) in (0..).step_by(cut_length).zip(file.chunks(cut_length)) {
+            demux_fsm.handle_input(offset, arriving).unwrap();
+            samples.extend(drained(demux_fsm));
+        }
+
+        samples
+    }
 
     #[test]
     fn a_movie_before_its_media_data_has_every_sample_read_as_the_file_arrives() {
@@ -21,7 +49,7 @@ mod tests {
         let samples = handed_over_in_order(&mut demux_fsm, &file, file.len());
 
         assert_eq!(samples, non_fragmented_file_samples());
-        assert_eq!(demux_fsm.wanted_extent(), None);
+        assert_eq!(demux_fsm.wanted_input().and_then(WantedInput::length), None);
         assert_eq!(demux_fsm.finish(), Ok(()));
     }
 
@@ -35,8 +63,8 @@ mod tests {
         assert_eq!(samples, []);
         assert_eq!(
             demux_fsm
-                .wanted_extent()
-                .map(|wanted| fetched(&file, &wanted)),
+                .wanted_input()
+                .map(|wanted| fetched(&file, wanted)),
             Some(b"SAMPLE_1".as_slice())
         );
     }
@@ -55,16 +83,19 @@ mod tests {
     }
 
     #[test]
-    fn the_input_stands_after_the_bytes_handed_over_so_far() {
+    fn the_continuation_is_wanted_after_the_bytes_handed_over_so_far() {
         let file = non_fragmented_file(&SAMPLE_CHUNKS, true);
         let mut demux_fsm = NonFragmentedDemuxFsm::new();
 
-        let created = demux_fsm.input_offset();
-        demux_fsm.handle_input(&file).unwrap();
+        let created = demux_fsm.wanted_input();
+        demux_fsm.handle_input(0, &file).unwrap();
 
         assert_eq!(
-            [created, demux_fsm.input_offset()],
-            [0, u64::try_from(file.len()).unwrap()]
+            [created, demux_fsm.wanted_input()],
+            [
+                Some(WantedInput::new(0, None)),
+                Some(WantedInput::new(u64::try_from(file.len()).unwrap(), None))
+            ]
         );
     }
 
@@ -75,9 +106,9 @@ mod tests {
         for cut_length in [1, 3, 7, 64, file.len()] {
             let mut demux_fsm = NonFragmentedDemuxFsm::new();
             let mut wanted = Vec::new();
-            for arriving in file.chunks(cut_length) {
-                demux_fsm.handle_input(arriving).unwrap();
-                wanted.extend(demux_fsm.wanted_extent());
+            for (offset, arriving) in (0..).step_by(cut_length).zip(file.chunks(cut_length)) {
+                demux_fsm.handle_input(offset, arriving).unwrap();
+                wanted.extend(demux_fsm.wanted_input().and_then(WantedInput::length));
             }
 
             assert_eq!(wanted, []);
@@ -91,9 +122,12 @@ mod tests {
         handed_over_in_order(&mut demux_fsm, &file, 7);
 
         let mut wanted = Vec::new();
-        while let Some(extent) = demux_fsm.wanted_extent() {
-            let bytes = fetched(&file, &extent);
-            demux_fsm.handle_data(extent.start, bytes).unwrap();
+        while let Some(extent) = demux_fsm
+            .wanted_input()
+            .filter(|wanted| wanted.length().is_some())
+        {
+            let bytes = fetched(&file, extent);
+            demux_fsm.handle_input(extent.offset(), bytes).unwrap();
             wanted.push(bytes);
         }
 
