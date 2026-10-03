@@ -153,7 +153,7 @@ impl TrackFragment {
 
         let overflow = || Error::decode_time_overflow(track_id);
         let mut end = decode_time;
-        if tfhd.duration_is_empty() {
+        if traf.duration_is_empty() {
             end = end
                 .checked_add(u64::from(sample_duration))
                 .ok_or_else(overflow)?;
