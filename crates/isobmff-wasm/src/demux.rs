@@ -13,35 +13,39 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use crate::dump::read_boxes;
 
 /// The tracks of a file and the samples its tables declare
-#[wasm_bindgen(getter_with_clone)]
+#[wasm_bindgen]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Demux {
     /// The tracks the movie declares, in the order it declares them
+    #[wasm_bindgen(getter_with_clone)]
     pub tracks: Vec<TrackRecord>,
     /// The samples of the movie in the order its sample tables lay them in the file, then those of each fragment in the order it declares them
+    #[wasm_bindgen(getter_with_clone)]
     pub samples: Vec<SampleRecord>,
 }
 
 /// One track of a movie, as its headers and its sample descriptions state it
-#[wasm_bindgen(getter_with_clone, inspectable)]
+#[wasm_bindgen(inspectable)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct TrackRecord {
     /// The `track_ID` of the `tkhd`
     pub track_id: u32,
     /// The `handler_type` of the `hdlr`, a fourcc such as `vide` or `soun`
+    #[wasm_bindgen(getter_with_clone)]
     pub handler_type: String,
     /// The `timescale` of the `mdhd`, in ticks per second
     pub timescale: u32,
     /// The `duration` of the `mdhd` in its timescale, or none when it is indeterminate
     pub duration: Option<u64>,
     /// The type of each entry of the `stsd`, a fourcc such as `avc1` or `mp4a`
+    #[wasm_bindgen(getter_with_clone)]
     pub sample_entries: Vec<String>,
 }
 
 /// One sample, what its tables state of it and where its bytes lie in the file
-#[wasm_bindgen(getter_with_clone, inspectable)]
+#[wasm_bindgen(inspectable)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SampleRecord {

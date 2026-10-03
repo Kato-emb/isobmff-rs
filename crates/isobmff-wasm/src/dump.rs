@@ -26,11 +26,12 @@ const CONTAINERS: [BoxType; 12] = [
 ];
 
 /// One box of a file, where it lies and how deep it is held
-#[wasm_bindgen(getter_with_clone, inspectable)]
+#[wasm_bindgen(inspectable)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct BoxRecord {
     /// The fourcc of the box, or `uuid` and its user type
+    #[wasm_bindgen(getter_with_clone)]
     pub box_type: String,
     /// The offset in the file of the first byte of the box
     pub offset: u64,
