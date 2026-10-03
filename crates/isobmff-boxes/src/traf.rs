@@ -48,16 +48,15 @@ pub struct TrackFragmentBox {
 impl TrackFragmentBox {
     /// Creates the box from the header and the runs of samples
     ///
-    /// # Errors
-    ///
-    /// * [`ForbiddenChildBox`](isobmff_core::ErrorKind::ForbiddenChildBox): `tfhd`
-    ///   states `duration-is-empty` and `trun` holds a run.
-    pub fn new(tfhd: TrackFragmentHeaderBox, trun: Vec<TrackRunBox>) -> Result<Self, Error> {
+    /// Returns `None` when `tfhd` states `duration-is-empty` and `trun` holds
+    /// a run, which §8.8.8 forbids together.
+    #[must_use]
+    pub fn new(tfhd: TrackFragmentHeaderBox, trun: Vec<TrackRunBox>) -> Option<Self> {
         if tfhd.duration_is_empty() && !trun.is_empty() {
-            return Err(Error::forbidden_child_box(TrackRunBox::BOX_TYPE));
+            return None;
         }
 
-        Ok(Self {
+        Some(Self {
             tfhd,
             tfdt: None,
             trun,
@@ -313,7 +312,7 @@ pub(crate) mod tests {
 
         assert_eq!(
             TrackFragmentBox::new(read.tfhd().clone(), vec![track_run()]),
-            Err(Error::forbidden_child_box(TrackRunBox::BOX_TYPE))
+            None
         );
     }
 
