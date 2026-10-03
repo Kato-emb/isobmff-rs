@@ -11,8 +11,8 @@
 //! the other way, laying samples down as a file or a segment of each kind.
 //! None reaches for a source or a sink of its own: when to read or write, and
 //! from or to where, stay with the caller. Where the caller has an I/O to
-//! hand, the `io` feature adds `isobmff::io`, the demux and mux drivers that
-//! drive any of them over it.
+//! hand, the `io` feature adds `isobmff::io`, a source read at the offsets a
+//! demux FSM names and a sink the chunks a mux FSM made are written to.
 //!
 //! # One module per crate
 //!
@@ -36,7 +36,7 @@
 //! and what passes between them, [`isobmff_structure`] describes. `avc` and
 //! `mp4` are on by default and `io` is not, so a caller that wants the base
 //! specification alone turns the default features off, and one that wants a
-//! demux or a mux driver asks for `io`.
+//! source or a sink over an I/O asks for `io`.
 //!
 //! Each crate names the failures of its own layers `Error` and `ErrorKind`, and
 //! carries the failures of the layers beneath through whole rather than
@@ -92,7 +92,7 @@ pub mod structure {
     pub use isobmff_structure::*;
 }
 
-/// The drivers running the demux and mux FSMs over an I/O,
+/// A source read at an offset and a sink written a chunk at a time,
 /// over `futures::io` at the root and over `std::io` in `blocking` — the
 /// `isobmff-io` crate whole, behind the `io` feature
 #[cfg(feature = "io")]

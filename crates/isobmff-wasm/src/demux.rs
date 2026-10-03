@@ -4,12 +4,12 @@ use std::io::{self, Read};
 
 use isobmff::boxes::{MovieBox, MovieFragmentBox};
 use isobmff::core::{BoxDecode, BoxDefinition, BoxType};
-use isobmff::io::Error;
 use isobmff::sample::{SampleExtent, TrackDecodeTimes, movie_fragment, sample_table};
 use isobmff::sequence::BoxEvent;
 use isobmff::structure;
 use wasm_bindgen::prelude::wasm_bindgen;
 
+use crate::Error;
 use crate::dump::read_boxes;
 
 /// The tracks of a file and the samples its tables declare
@@ -181,7 +181,6 @@ fn record(extent: &SampleExtent) -> SampleRecord {
 mod tests {
     use std::io;
 
-    use isobmff::io::ErrorKind;
     use isobmff::sample::Sample;
     use isobmff_test_support::{
         SAMPLE_CHUNKS, fragmented_file_samples, fragmented_file_with_samples,
@@ -190,6 +189,8 @@ mod tests {
     };
 
     use super::{Demux, SampleRecord, TrackRecord, demux};
+
+    use crate::Error;
 
     fn the_track() -> Vec<TrackRecord> {
         vec![TrackRecord {
@@ -279,6 +280,8 @@ mod tests {
     fn a_media_segment_on_its_own_is_unsupported() {
         let refused = demux(io::Cursor::new(segment_file_with_samples())).unwrap_err();
 
-        assert_eq!(refused.kind(), ErrorKind::Io(io::ErrorKind::Unsupported));
+        assert!(
+            matches!(refused, Error::Io(failure) if failure.kind() == io::ErrorKind::Unsupported)
+        );
     }
 }

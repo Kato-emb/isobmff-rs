@@ -11,6 +11,7 @@
 //! Usage: `cargo run -p isobmff-examples --example remux_to_fragmented -- <in.mp4> <out.mp4>`
 
 use core::error::Error;
+use core::iter;
 use std::env;
 use std::fs::File;
 use std::io::BufWriter;
@@ -19,7 +20,7 @@ use isobmff::boxes::{
     ChunkOffsetBox, ChunkOffsets, MovieBox, SampleSizeBox, SampleSizeEntries, SampleSizes,
     SampleTableBox, SampleToChunkBox, TimeToSampleBox,
 };
-use isobmff::io::blocking::{DemuxDriver, MuxDriver};
+use isobmff::io::blocking::{Sink, Source};
 use isobmff::sample::Sample;
 use isobmff::structure::{FragmentedMuxFsm, NonFragmentedDemuxFsm};
 
@@ -36,15 +37,29 @@ fn main() -> Result<(), Box<dyn Error>> {
     let input = arguments.next().ok_or(usage)?;
     let output = arguments.next().ok_or(usage)?;
 
-    let mut driver = DemuxDriver::new(File::open(input)?, NonFragmentedDemuxFsm::new())?;
-    let first = driver.next().transpose()?;
-    let source = driver.fsm().movie().ok_or("the file carries no movie")?;
+    let mut source = Source::new(File::open(input)?)?;
+    let mut demux_fsm = NonFragmentedDemuxFsm::new();
+    while demux_fsm.movie().is_none() {
+        let wanted = demux_fsm
+            .wanted_input()
+            .ok_or("the file carries no movie")?;
+        let bytes = source.read_at(wanted.offset(), wanted.length())?;
+        if bytes.is_empty() {
+            demux_fsm.finish()?;
+        } else {
+            demux_fsm.handle_input(wanted.offset(), bytes)?;
+        }
+    }
+    let source_movie = demux_fsm.movie().ok_or("the file carries no movie")?;
 
-    let mut movie = MovieBox::new_fragmented(source.mvhd().timescale(), source.trak().to_vec())
-        .ok_or("the movie declares no track")?;
+    let mut movie = MovieBox::new_fragmented(
+        source_movie.mvhd().timescale(),
+        source_movie.trak().to_vec(),
+    )
+    .ok_or("the movie declares no track")?;
     let mut cut_tracks = Vec::new();
     let mut queues = Vec::new();
-    for track in source.trak() {
+    for track in source_movie.trak() {
         let track_id = track.tkhd().track_id();
         let sample_table = track.mdia().minf().stbl();
         if sample_table.stss().is_some() {
@@ -69,44 +84,48 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
     }
 
-    let mut mux_driver = MuxDriver::new(
-        BufWriter::new(File::create(output)?),
-        FragmentedMuxFsm::new(),
-    );
-    if let Some(file_type) = driver.fsm().file_type() {
-        mux_driver.fsm_mut().handle_file_type(file_type.clone())?;
+    let mut sink = Sink::new(BufWriter::new(File::create(output)?));
+    let mut mux_fsm = FragmentedMuxFsm::new();
+    if let Some(file_type) = demux_fsm.file_type() {
+        mux_fsm.handle_file_type(file_type.clone())?;
     }
-    mux_driver.fsm_mut().handle_movie(movie)?;
+    mux_fsm.handle_movie(movie)?;
     let mut sequence_number: u32 = 0;
     let mut write_fragment = |fragment: &mut Vec<Sample>| -> Result<(), Box<dyn Error>> {
         sequence_number = sequence_number
             .checked_add(1)
             .ok_or("more fragments than a sequence number counts")?;
-        let mux_fsm = mux_driver.fsm_mut();
         mux_fsm.begin_fragment(sequence_number)?;
         fragment.sort_by_key(Sample::track_id);
         for sample in fragment.drain(..) {
             mux_fsm.handle_sample(sample)?;
         }
         mux_fsm.finish_fragment()?;
-        Ok(mux_driver.flush()?)
+        Ok(sink.write(iter::from_fn(|| mux_fsm.poll_output()))?)
     };
 
-    let mut samples = first.into_iter().map(Ok).chain(driver);
     let mut fragment = Vec::new();
     let mut carries_cut_track = false;
     loop {
         while queues.iter().any(|queue| queue.samples.is_empty()) {
-            let Some(sample) = samples.next() else {
+            let Some(wanted) = demux_fsm.wanted_input() else {
                 break;
             };
-            let sample = sample?;
-            queues
-                .iter_mut()
-                .find(|queue| queue.track_id == sample.track_id())
-                .ok_or("a sample of a track the movie does not declare")?
-                .samples
-                .push(sample);
+            let bytes = source.read_at(wanted.offset(), wanted.length())?;
+            let handed = if bytes.is_empty() {
+                demux_fsm.finish()
+            } else {
+                demux_fsm.handle_input(wanted.offset(), bytes)
+            };
+            while let Some(sample) = demux_fsm.poll_sample() {
+                queues
+                    .iter_mut()
+                    .find(|queue| queue.track_id == sample.track_id())
+                    .ok_or("a sample of a track the movie does not declare")?
+                    .samples
+                    .push(sample);
+            }
+            handed?;
         }
         let Some(queue) = queues
             .iter_mut()
@@ -133,8 +152,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     if !fragment.is_empty() {
         write_fragment(&mut fragment)?;
     }
-    mux_driver.fsm_mut().finish()?;
-    mux_driver.flush()?;
+    mux_fsm.finish()?;
+    sink.write(iter::from_fn(|| mux_fsm.poll_output()))?;
+    sink.flush()?;
 
     Ok(())
 }

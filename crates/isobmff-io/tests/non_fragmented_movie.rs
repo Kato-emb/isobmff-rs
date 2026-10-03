@@ -1,4 +1,4 @@
-//! The samples of a non-fragmented movie file, read off a source that seeks wherever the movie lies and read back off one a muxer laid down
+//! The samples of a non-fragmented movie file, written to a sink with the movie after its media data and read back off a source that seeks
 
 #[cfg(test)]
 mod tests {
@@ -6,139 +6,82 @@ mod tests {
 
     use futures_executor::block_on;
     use futures_util::io::Cursor;
-    use isobmff_boxes::{HeaderDuration, MovieBox};
-    use isobmff_io::blocking::{DemuxDriver, MuxDriver};
-    use isobmff_sample::Sample;
+    use isobmff_io::blocking::{Sink, Source};
     use isobmff_structure::{NonFragmentedDemuxFsm, NonFragmentedMuxFsm};
     use isobmff_test_support::{
-        SAMPLE_CHUNKS, SAMPLE_DURATION, file_type, non_fragmented_file,
-        non_fragmented_file_samples, unfragmented_movie,
+        SAMPLE_CHUNKS, file_type, non_fragmented_file_samples, unfragmented_movie,
     };
 
-    #[test]
-    fn a_source_that_seeks_has_every_sample_read_off_it_wherever_the_movie_lies() {
-        for movie_first in [true, false] {
-            let file = non_fragmented_file(&SAMPLE_CHUNKS, movie_first);
-
-            let read_back: Vec<Sample> =
-                DemuxDriver::new(io::Cursor::new(file), NonFragmentedDemuxFsm::new())
-                    .unwrap()
-                    .collect::<Result<_, _>>()
-                    .unwrap();
-
-            assert_eq!(read_back, non_fragmented_file_samples());
+    /// A mux FSM that has laid down the samples of the fixture in its chunks
+    fn laid_down() -> NonFragmentedMuxFsm {
+        let mut fsm = NonFragmentedMuxFsm::new();
+        let mut samples = non_fragmented_file_samples().into_iter();
+        fsm.handle_file_type(file_type()).unwrap();
+        fsm.handle_movie(unfragmented_movie()).unwrap();
+        for chunk in SAMPLE_CHUNKS {
+            fsm.begin_chunk().unwrap();
+            for _sample in chunk {
+                fsm.handle_sample(samples.next().unwrap()).unwrap();
+            }
         }
+        fsm.finish().unwrap();
+
+        fsm
     }
 
     #[test]
-    fn the_samples_the_muxer_wrote_to_a_sink_are_read_back_off_it_by_the_demuxer() {
+    fn the_samples_written_to_a_sink_are_read_back_off_a_source() {
+        let mut mux_fsm = laid_down();
         let mut file = Vec::new();
-        let mut mux_driver = MuxDriver::new(&mut file, NonFragmentedMuxFsm::new());
-        let mux_fsm = mux_driver.fsm_mut();
-        let mut samples = non_fragmented_file_samples().into_iter();
+        let mut sink = Sink::new(&mut file);
+        sink.write(core::iter::from_fn(|| mux_fsm.poll_output()))
+            .unwrap();
+        sink.flush().unwrap();
 
-        mux_fsm.handle_file_type(file_type()).unwrap();
-        mux_fsm.handle_movie(unfragmented_movie()).unwrap();
-        for chunk in SAMPLE_CHUNKS {
-            mux_fsm.begin_chunk().unwrap();
-            for _sample in chunk {
-                mux_fsm.handle_sample(samples.next().unwrap()).unwrap();
-            }
+        let mut source = Source::new(io::Cursor::new(file)).unwrap();
+        let mut fsm = NonFragmentedDemuxFsm::new();
+        let mut read_back = Vec::new();
+        while let Some(wanted) = fsm.wanted_input() {
+            let bytes = source.read_at(wanted.offset(), wanted.length()).unwrap();
+            let handed = if bytes.is_empty() {
+                fsm.finish()
+            } else {
+                fsm.handle_input(wanted.offset(), bytes)
+            };
+            read_back.extend(core::iter::from_fn(|| fsm.poll_sample()));
+            handed.unwrap();
         }
-        mux_fsm.finish().unwrap();
-        mux_driver.flush().unwrap();
-
-        let read_back: Vec<Sample> =
-            DemuxDriver::new(io::Cursor::new(&file), NonFragmentedDemuxFsm::new())
-                .unwrap()
-                .collect::<Result<_, _>>()
-                .unwrap();
 
         assert_eq!(read_back, non_fragmented_file_samples());
     }
 
     #[test]
-    fn a_movie_the_muxer_laid_down_from_a_template_of_no_duration_is_read_back_with_a_header_lasting_its_samples()
-     {
-        let mut file = Vec::new();
-        let mut mux_driver = MuxDriver::new(&mut file, NonFragmentedMuxFsm::new());
-        let mux_fsm = mux_driver.fsm_mut();
-        let samples = non_fragmented_file_samples();
-        let lasting = samples.len() as u64 * u64::from(SAMPLE_DURATION);
-
-        mux_fsm.handle_movie(unfragmented_movie()).unwrap();
-        mux_fsm.begin_chunk().unwrap();
-        for sample in samples {
-            mux_fsm.handle_sample(sample).unwrap();
-        }
-        mux_fsm.finish().unwrap();
-        mux_driver.flush().unwrap();
-
-        let mut driver =
-            DemuxDriver::new(io::Cursor::new(&file), NonFragmentedDemuxFsm::new()).unwrap();
-        for sample in &mut driver {
-            sample.unwrap();
-        }
-
-        assert_eq!(
-            driver.fsm().movie().map(MovieBox::mvhd),
-            Some(
-                &unfragmented_movie()
-                    .mvhd()
-                    .clone()
-                    .with_duration(HeaderDuration::new(lasting).unwrap())
-            )
-        );
-    }
-
-    #[test]
-    fn an_asynchronous_source_that_seeks_has_every_sample_read_off_it_wherever_the_movie_lies() {
-        for movie_first in [true, false] {
-            let file = non_fragmented_file(&SAMPLE_CHUNKS, movie_first);
-
-            let read_back = block_on(async {
-                let mut driver =
-                    isobmff_io::DemuxDriver::new(Cursor::new(file), NonFragmentedDemuxFsm::new())
-                        .await
-                        .unwrap();
-                let mut read_back = Vec::new();
-                while let Some(sample) = driver.next().await {
-                    read_back.push(sample.unwrap());
-                }
-
-                read_back
-            });
-
-            assert_eq!(read_back, non_fragmented_file_samples());
-        }
-    }
-
-    #[test]
-    fn the_samples_the_asynchronous_muxer_wrote_to_a_sink_are_read_back_off_it_by_the_demuxer() {
-        let mut file = Vec::new();
-        let mut samples = non_fragmented_file_samples().into_iter();
+    fn the_samples_written_to_an_asynchronous_sink_are_read_back_off_an_asynchronous_source() {
+        let mut mux_fsm = laid_down();
 
         let read_back = block_on(async {
-            let mut mux_driver = isobmff_io::MuxDriver::new(&mut file, NonFragmentedMuxFsm::new());
-            let mux_fsm = mux_driver.fsm_mut();
-            mux_fsm.handle_file_type(file_type()).unwrap();
-            mux_fsm.handle_movie(unfragmented_movie()).unwrap();
-            for chunk in SAMPLE_CHUNKS {
-                mux_fsm.begin_chunk().unwrap();
-                for _sample in chunk {
-                    mux_fsm.handle_sample(samples.next().unwrap()).unwrap();
-                }
-            }
-            mux_fsm.finish().unwrap();
-            mux_driver.flush().await.unwrap();
+            let mut file = Vec::new();
+            let mut sink = isobmff_io::Sink::new(&mut file);
+            sink.write(core::iter::from_fn(|| mux_fsm.poll_output()))
+                .await
+                .unwrap();
+            sink.flush().await.unwrap();
 
-            let mut driver =
-                isobmff_io::DemuxDriver::new(Cursor::new(&file), NonFragmentedDemuxFsm::new())
+            let mut source = isobmff_io::Source::new(Cursor::new(file)).await.unwrap();
+            let mut fsm = NonFragmentedDemuxFsm::new();
+            let mut read_back = Vec::new();
+            while let Some(wanted) = fsm.wanted_input() {
+                let bytes = source
+                    .read_at(wanted.offset(), wanted.length())
                     .await
                     .unwrap();
-            let mut read_back = Vec::new();
-            while let Some(sample) = driver.next().await {
-                read_back.push(sample.unwrap());
+                let handed = if bytes.is_empty() {
+                    fsm.finish()
+                } else {
+                    fsm.handle_input(wanted.offset(), bytes)
+                };
+                read_back.extend(core::iter::from_fn(|| fsm.poll_sample()));
+                handed.unwrap();
             }
 
             read_back

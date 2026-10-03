@@ -9,8 +9,8 @@
 //! [`NonFragmentedMuxFsm`] and [`MediaSegmentMuxFsm`] go the other way, laying
 //! samples down as a file or a segment of each kind. None reaches for a source
 //! or a sink of its own: when to read or write, and from or to where, stay with
-//! the caller. A caller that has an I/O to hand drives any of them through the
-//! demux and mux drivers of `isobmff-io`.
+//! the caller. A caller that has an I/O to hand reads and writes through the
+//! source and the sink of `isobmff-io`.
 //!
 //! # The layers a file is read through
 //!
@@ -78,9 +78,50 @@
 //!    fetched or not, so a `File`, a socket, or a buffer already in memory
 //!    drives the six layers above the same way. Where
 //!    the file lies in its resource, and how a file offset becomes a seek or a
-//!    range, is settled here and in none of them. This crate holds no such
-//!    driver: the demux and mux drivers of `isobmff-io`, which drive any
-//!    stack, are the layer.
+//!    range, is settled here and in none of them. This crate holds no I/O:
+//!    the source and the sink of `isobmff-io`, which know no machine, are the
+//!    layer, and the loop between them and a machine is the caller's.
+//!
+//! The loop a demux FSM is read by asks it for the one read it wants, makes
+//! that read, and hands the bytes over at the offset they were read at, no
+//! byte declaring the file over; the samples come out before any failure of
+//! the input that completed them is acted on, and once the file is declared
+//! over or the FSM has failed it wants no read:
+//!
+//! ```
+//! use isobmff_structure::NonFragmentedDemuxFsm;
+//! # use isobmff_test_support::non_fragmented_file;
+//! // A file whose movie lies after its media data, held in memory
+//! let file = non_fragmented_file(&[&[b"SAMP", b"DATA"]], false);
+//! let mut fsm = NonFragmentedDemuxFsm::new();
+//! let mut read_back = Vec::new();
+//!
+//! while let Some(wanted) = fsm.wanted_input() {
+//!     // The read the FSM wants, cut at seven bytes where it names no length
+//!     let start = (wanted.offset() as usize).min(file.len());
+//!     let length = wanted.length().map_or(7, |length| length as usize);
+//!     let bytes = &file[start..(start + length).min(file.len())];
+//!     let handed = if bytes.is_empty() { fsm.finish() } else { fsm.handle_input(wanted.offset(), bytes) };
+//!
+//!     // The samples it completed come out as they come whole, before any failure
+//!     while let Some(sample) = fsm.poll_sample() {
+//!         read_back.push(sample.into_data());
+//!     }
+//!     handed?;
+//! }
+//! assert_eq!(read_back, [b"SAMP".to_vec(), b"DATA".to_vec()]);
+//! # Ok::<(), isobmff_structure::Error>(())
+//! ```
+//!
+//! A mux FSM is driven by its own verbs, and the chunks it made are taken
+//! with its `poll_output` and written where the caller writes.
+//!
+//! A caller whose source cannot seek — a socket, a live stream of segments —
+//! hands every cut it reads over at the offset the FSM names while the length
+//! of the read wanted is `None`, and stops where a length is named. One whose
+//! source is positioned by nature — a slice in memory, a blob, a range request
+//! — reads where the FSM names. `examples/drive_non_fragmented_demux_fsm.rs`
+//! drives a demux FSM over a file this way.
 //!
 //! A caller that holds a whole presentation in memory needs none of the
 //! machines: [`isobmff_boxes`] reads its boxes into values,

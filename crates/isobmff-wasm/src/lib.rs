@@ -5,6 +5,10 @@
 //! from a worker. A failure reaches JavaScript as an `Error` whose message is
 //! the one the library states, or the exception the browser threw.
 
+use core::{error, fmt};
+use std::io;
+
+use isobmff::structure;
 use wasm_bindgen::JsError;
 use wasm_bindgen::prelude::wasm_bindgen;
 use web_sys::Blob;
@@ -17,6 +21,45 @@ mod source;
 
 pub use demux::{Demux, SampleRecord, TrackRecord};
 pub use dump::BoxRecord;
+
+/// Reason an export fails: the `Blob` did not read, or the library refused what it read
+#[derive(Debug)]
+pub(crate) enum Error {
+    /// The `Blob` did not read, or the file is one an export does not take
+    Io(io::Error),
+    /// The library refused what it read
+    Structure(structure::Error),
+}
+
+impl From<io::Error> for Error {
+    fn from(failure: io::Error) -> Self {
+        Self::Io(failure)
+    }
+}
+
+impl From<structure::Error> for Error {
+    fn from(failure: structure::Error) -> Self {
+        Self::Structure(failure)
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(failure) => write!(formatter, "{failure}"),
+            Self::Structure(failure) => write!(formatter, "{failure}"),
+        }
+    }
+}
+
+impl error::Error for Error {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self {
+            Self::Io(failure) => Some(failure),
+            Self::Structure(failure) => Some(failure),
+        }
+    }
+}
 
 /// Returns the boxes `blob` is formed as, each container followed by the boxes it holds
 ///
