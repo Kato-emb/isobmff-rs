@@ -127,10 +127,13 @@ mod tests {
     use crate::transfer::tests::{framed, poll_once};
 
     /// Sink recording what was written to it, and whether it was flushed
+    ///
+    /// Interrupting so many writes first.
     #[derive(Default, PartialEq, Debug)]
     struct Recording {
         written: Vec<u8>,
         flushed: bool,
+        interruptions: usize,
     }
 
     impl AsyncWrite for Recording {
@@ -139,6 +142,11 @@ mod tests {
             _context: &mut Context<'_>,
             bytes: &[u8],
         ) -> Poll<io::Result<usize>> {
+            if let Some(left) = self.interruptions.checked_sub(1) {
+                self.interruptions = left;
+
+                return Poll::Ready(Err(io::Error::from(io::ErrorKind::Interrupted)));
+            }
             self.written.extend_from_slice(bytes);
 
             Poll::Ready(Ok(bytes.len()))
@@ -205,6 +213,25 @@ mod tests {
             Recording {
                 written: b"\0\0\0\x0cfreeMADE".to_vec(),
                 flushed: true,
+                interruptions: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn an_interrupted_write_is_made_again() {
+        let mut sink = Sink::new(Recording {
+            interruptions: 2,
+            ..Recording::default()
+        });
+
+        block_on(sink.write(framed(b"MADE"))).unwrap();
+
+        assert_eq!(
+            sink.sink,
+            Recording {
+                written: b"\0\0\0\x0cfreeMADE".to_vec(),
+                ..Recording::default()
             }
         );
     }

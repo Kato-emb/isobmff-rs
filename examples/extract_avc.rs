@@ -27,16 +27,18 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut source = Source::new(File::open(input)?)?;
     let mut demux_fsm = NonFragmentedDemuxFsm::new();
+    let mut handed = Ok(());
     while demux_fsm.movie().is_none() {
+        handed?;
         let wanted = demux_fsm
             .wanted_input()
             .ok_or("the file carries no movie")?;
         let bytes = source.read_at(wanted.offset(), wanted.length())?;
-        if bytes.is_empty() {
-            demux_fsm.finish()?;
+        handed = if bytes.is_empty() {
+            demux_fsm.finish()
         } else {
-            demux_fsm.handle_input(wanted.offset(), bytes)?;
-        }
+            demux_fsm.handle_input(wanted.offset(), bytes)
+        };
     }
     let movie = demux_fsm.movie().ok_or("the file carries no movie")?;
     if movie.mvex().is_some() {
@@ -67,13 +69,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         stream.write_all(parameter_set)?;
     }
     let mut count: u64 = 0;
-    while let Some(wanted) = demux_fsm.wanted_input() {
-        let bytes = source.read_at(wanted.offset(), wanted.length())?;
-        let handed = if bytes.is_empty() {
-            demux_fsm.finish()
-        } else {
-            demux_fsm.handle_input(wanted.offset(), bytes)
-        };
+    loop {
         while let Some(sample) = demux_fsm.poll_sample() {
             if sample.track_id() != track_id {
                 continue;
@@ -88,6 +84,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             count = count.saturating_add(1);
         }
         handed?;
+        let Some(wanted) = demux_fsm.wanted_input() else {
+            break;
+        };
+        let bytes = source.read_at(wanted.offset(), wanted.length())?;
+        handed = if bytes.is_empty() {
+            demux_fsm.finish()
+        } else {
+            demux_fsm.handle_input(wanted.offset(), bytes)
+        };
     }
     stream.flush()?;
     println!("samples={count}");

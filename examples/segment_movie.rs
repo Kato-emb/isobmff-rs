@@ -40,16 +40,18 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut source = Source::new(File::open(input)?)?;
     let mut demux_fsm = NonFragmentedDemuxFsm::new();
+    let mut handed = Ok(());
     while demux_fsm.movie().is_none() {
+        handed?;
         let wanted = demux_fsm
             .wanted_input()
             .ok_or("the file carries no movie")?;
         let bytes = source.read_at(wanted.offset(), wanted.length())?;
-        if bytes.is_empty() {
-            demux_fsm.finish()?;
+        handed = if bytes.is_empty() {
+            demux_fsm.finish()
         } else {
-            demux_fsm.handle_input(wanted.offset(), bytes)?;
-        }
+            demux_fsm.handle_input(wanted.offset(), bytes)
+        };
     }
     let source_movie = demux_fsm.movie().ok_or("the file carries no movie")?;
 
@@ -125,16 +127,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut fragment = Vec::new();
     let mut carries_cut_track = false;
     loop {
-        while queues.iter().any(|queue| queue.samples.is_empty()) {
-            let Some(wanted) = demux_fsm.wanted_input() else {
-                break;
-            };
-            let bytes = source.read_at(wanted.offset(), wanted.length())?;
-            let handed = if bytes.is_empty() {
-                demux_fsm.finish()
-            } else {
-                demux_fsm.handle_input(wanted.offset(), bytes)
-            };
+        loop {
             while let Some(sample) = demux_fsm.poll_sample() {
                 queues
                     .iter_mut()
@@ -144,6 +137,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .push(sample);
             }
             handed?;
+            if queues.iter().all(|queue| !queue.samples.is_empty()) {
+                break;
+            }
+            let Some(wanted) = demux_fsm.wanted_input() else {
+                break;
+            };
+            let bytes = source.read_at(wanted.offset(), wanted.length())?;
+            handed = if bytes.is_empty() {
+                demux_fsm.finish()
+            } else {
+                demux_fsm.handle_input(wanted.offset(), bytes)
+            };
         }
         let Some(queue) = queues
             .iter_mut()

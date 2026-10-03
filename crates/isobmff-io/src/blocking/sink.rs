@@ -106,18 +106,24 @@ mod tests {
 
     /// Sink recording what was written to it and whether it was flushed
     ///
-    /// Taking at most so many bytes at a write when asked to, and refusing
-    /// the write after each that took some.
+    /// Interrupting so many writes first, taking at most so many bytes at a
+    /// write when asked to, and refusing the write after each that took some.
     #[derive(Default, PartialEq, Debug)]
     struct Recording {
         written: Vec<u8>,
         flushed: bool,
+        interruptions: usize,
         taking_at_most: Option<usize>,
         refusing: bool,
     }
 
     impl Write for Recording {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if let Some(left) = self.interruptions.checked_sub(1) {
+                self.interruptions = left;
+
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
             if self.refusing {
                 self.refusing = false;
 
@@ -151,8 +157,27 @@ mod tests {
             Recording {
                 written: b"\0\0\0\x0cfreeMADE".to_vec(),
                 flushed: true,
+                interruptions: 0,
                 taking_at_most: None,
                 refusing: false,
+            }
+        );
+    }
+
+    #[test]
+    fn an_interrupted_write_is_made_again() {
+        let mut sink = Sink::new(Recording {
+            interruptions: 2,
+            ..Recording::default()
+        });
+
+        sink.write(framed(b"MADE")).unwrap();
+
+        assert_eq!(
+            sink.sink,
+            Recording {
+                written: b"\0\0\0\x0cfreeMADE".to_vec(),
+                ..Recording::default()
             }
         );
     }
