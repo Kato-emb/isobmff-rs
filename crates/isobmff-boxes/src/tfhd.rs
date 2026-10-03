@@ -201,8 +201,9 @@ impl TrackFragmentHeaderBox {
 
     /// Returns whether the fragment states that it holds no samples
     ///
-    /// A `traf` read by [`decode_payload`](BoxDecode::decode_payload) of
-    /// [`TrackFragmentBox`](crate::TrackFragmentBox) is refused when it states
+    /// Both [`new`](crate::TrackFragmentBox::new) and
+    /// [`decode_payload`](BoxDecode::decode_payload) of
+    /// [`TrackFragmentBox`](crate::TrackFragmentBox) refuse a `traf` stating
     /// this alongside a `trun`.
     #[must_use]
     pub const fn duration_is_empty(&self) -> bool {

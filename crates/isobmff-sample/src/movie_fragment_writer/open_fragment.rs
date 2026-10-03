@@ -6,9 +6,9 @@ use alloc::vec::Vec;
 use isobmff_boxes::{
     CompositionTimeOffset, MediaDataBox, MovieFragmentBox, MovieFragmentHeaderBox, SampleFlags,
     StatedTrackRunSample, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
-    TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBuilder,
+    TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunBuilder,
 };
-use isobmff_core::BoxEncode as _;
+use isobmff_core::{BoxDefinition as _, BoxEncode as _};
 
 use crate::error::Error;
 use crate::sample::Sample;
@@ -312,8 +312,11 @@ fn build_track_fragment(track: &OpenTrack, base: Option<u64>) -> Result<TrackFra
         })
         .collect::<Result<Vec<_>, Error>>()?;
 
-    Ok(TrackFragmentBox::new(header, runs)
-        .with_tfdt(TrackFragmentBaseMediaDecodeTimeBox::new(track.decode_time)))
+    let track_fragment = TrackFragmentBox::new(header, runs).ok_or(
+        isobmff_core::Error::forbidden_child_box(TrackRunBox::BOX_TYPE),
+    )?;
+
+    Ok(track_fragment.with_tfdt(TrackFragmentBaseMediaDecodeTimeBox::new(track.decode_time)))
 }
 
 #[cfg(test)]

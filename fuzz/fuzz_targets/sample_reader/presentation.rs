@@ -362,7 +362,7 @@ pub fn lay_out(input: &Input<'_>) -> Option<LaidOut> {
             let traf = if track_fragment.duration_is_empty {
                 TrackFragmentBox::with_empty_duration(tfhd)
             } else {
-                TrackFragmentBox::new(tfhd, runs)
+                TrackFragmentBox::new(tfhd, runs)?
             };
             track_fragments.push(match tfdt {
                 Some(tfdt) => traf.with_tfdt(tfdt),

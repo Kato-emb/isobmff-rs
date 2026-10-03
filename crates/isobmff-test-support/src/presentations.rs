@@ -82,7 +82,8 @@ fn fragment_over(
                 None,
             ),
             vec![TrackRunBox::new(Some(data_offset), None, samples).unwrap()],
-        );
+        )
+        .unwrap();
         let track_fragment = match decode_time {
             Some(decode_time) => {
                 track_fragment.with_tfdt(TrackFragmentBaseMediaDecodeTimeBox::new(decode_time))
