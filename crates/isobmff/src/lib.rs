@@ -86,8 +86,8 @@ pub mod sample {
     pub use isobmff_sample::*;
 }
 
-/// The order the boxes of a file stand in, and the stacks that read and write
-/// one — the `isobmff-structure` crate whole
+/// The order the boxes of a file stand in, and the demux and mux FSMs that
+/// read and write one — the `isobmff-structure` crate whole
 pub mod structure {
     pub use isobmff_structure::*;
 }

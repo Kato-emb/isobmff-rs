@@ -12,7 +12,7 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 ///
 /// A non-fragmented movie file carries its samples in the sample tables of its
 /// one movie (ISO/IEC 14496-12 §8.2.1) and their bytes in the media data
-/// beside it, which the movie may lie before or after. This reader wires the
+/// beside it, which the movie may lie before or after. This demux FSM wires the
 /// layers that read one: the framing of the file into boxes, the structure
 /// that says what each top-level box is, the reading of the boxes it names
 /// into values, the resolution of the sample tables of the movie into the
@@ -30,7 +30,7 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 ///   and the samples it completed are taken from
 ///   [`poll_sample`](Self::poll_sample). The caller drains before handing
 ///   over more: samples are held until they are taken. Where the file lies in
-///   its resource is the caller's: every offset the reader reports is a file
+///   its resource is the caller's: every offset the demux FSM reports is a file
 ///   offset, counting from the first byte of the file as the boxes count
 ///   theirs (§8.7.5, §8.8.7).
 /// * The boxes the structure reads into values are there to read once they
@@ -57,7 +57,7 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 ///   its start, the bytes the extent at the front of those held still lacks,
 ///   for a caller that can seek to fetch and hand to
 ///   [`handle_input`](Self::handle_input) at their offset.
-/// * An `Err` leaves the reader failed for good,
+/// * An `Err` leaves the demux FSM failed for good,
 ///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) and
 ///   [`UnwantedInput`](crate::ErrorKind::UnwantedInput) aside:
 ///   every later call reports that same failure again. The samples completed
@@ -113,7 +113,7 @@ pub struct NonFragmentedDemuxFsm {
     state: State,
 }
 
-/// Where the reader stands between calls
+/// Where the demux FSM stands between calls
 #[derive(Clone, Copy, Debug)]
 enum State {
     /// Taking the file as it arrives
@@ -143,7 +143,7 @@ impl NonFragmentedDemuxFsm {
     /// limit of its own with [`with_limits`](Self::with_limits).
     pub const DEFAULT_PAYLOAD_LIMIT: u64 = 16 * 1024 * 1024;
 
-    /// Creates a reader waiting at the start of a non-fragmented movie file
+    /// Creates a demux FSM waiting at the start of a non-fragmented movie file
     ///
     /// What a box read into a value may declare is bounded by
     /// [`DEFAULT_PAYLOAD_LIMIT`](Self::DEFAULT_PAYLOAD_LIMIT), and what one
@@ -157,11 +157,11 @@ impl NonFragmentedDemuxFsm {
         )
     }
 
-    /// Creates a reader holding the file to `payload_limit` and `sample_size_limit`
+    /// Creates a demux FSM holding the file to `payload_limit` and `sample_size_limit`
     ///
-    /// Both bound memory the reader is about to take, and both bound one box or
-    /// one sample rather than the file. A box read into a value that declares
-    /// more than `payload_limit` bytes of payload is
+    /// Both bound memory the demux FSM is about to take, and both bound one box
+    /// or one sample rather than the file. A box read into a value that
+    /// declares more than `payload_limit` bytes of payload is
     /// [`PayloadLimitExceeded`](crate::ErrorKind::PayloadLimitExceeded)
     /// before a byte of it is gathered; a sample declaring more than
     /// `sample_size_limit` bytes is what
@@ -202,7 +202,7 @@ impl NonFragmentedDemuxFsm {
     ///   [`DuplicateBox`](crate::ErrorKind::DuplicateBox): what the
     ///   structure makes of a top-level box arriving where it does.
     /// * [`PayloadLimitExceeded`](crate::ErrorKind::PayloadLimitExceeded):
-    ///   a box read into a value reaches past the limit the reader gathers.
+    ///   a box read into a value reaches past the limit the demux FSM gathers.
     /// * [`Sequence`](crate::ErrorKind::Sequence): what the framing
     ///   of the file makes of the input.
     /// * [`Box`](crate::ErrorKind::Box): a box read into a value
@@ -214,8 +214,8 @@ impl NonFragmentedDemuxFsm {
     /// * [`UnwantedInput`](crate::ErrorKind::UnwantedInput): `offset` is
     ///   neither where the input taken in order stands nor the offset of the
     ///   bytes [`wanted_input`](Self::wanted_input) names as lacking. The
-    ///   reader is not failed by it.
-    /// * The failure of a previous call, which the reader keeps and reports
+    ///   demux FSM is not failed by it.
+    /// * The failure of a previous call, which the demux FSM keeps and reports
     ///   again for every call after it.
     pub fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), Error> {
         self.reading()?;
@@ -250,13 +250,13 @@ impl NonFragmentedDemuxFsm {
     ///
     /// Reports `None` once they are used up: more of the file is needed. Failure
     /// is reported by the calls that take it, so this one never fails — a failed
-    /// reader hands over the samples it had already completed, then `None` from
-    /// there on.
+    /// demux FSM hands over the samples it had already completed, then `None`
+    /// from there on.
     pub fn poll_sample(&mut self) -> Option<Sample> {
         self.samples.poll_sample()
     }
 
-    /// Returns the one read wanted next, or `None` once the file is declared over or the reader has failed
+    /// Returns the one read wanted next, or `None` once the file is declared over or the demux FSM has failed
     ///
     /// Bytes the extent at the front of those held still lacks are wanted
     /// first, with their length, once the input taken in order has passed their
@@ -299,7 +299,7 @@ impl NonFragmentedDemuxFsm {
     ///   its media data, unless the bytes it named were fetched.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was already declared over.
-    /// * The failure of a previous call, which the reader keeps and reports
+    /// * The failure of a previous call, which the demux FSM keeps and reports
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), Error> {
         self.reading()?;
@@ -318,7 +318,7 @@ impl NonFragmentedDemuxFsm {
         Ok(())
     }
 
-    /// Returns `Ok` while the reader still takes what arrives
+    /// Returns `Ok` while the demux FSM still takes what arrives
     const fn reading(&self) -> Result<(), Error> {
         match self.state {
             State::Reading => Ok(()),
@@ -387,7 +387,7 @@ impl NonFragmentedDemuxFsm {
         Ok(())
     }
 
-    /// Fails the reader for good, and hands the failure back to report
+    /// Fails the demux FSM for good, and hands the failure back to report
     const fn fail(&mut self, failure: Error) -> Error {
         self.state = State::Failed(failure);
 
@@ -416,7 +416,7 @@ mod tests {
     use crate::ErrorKind;
     use crate::WantedInput;
 
-    /// What the reader makes of `file` handed over whole, then declared over
+    /// What the demux FSM makes of `file` handed over whole, then declared over
     fn read(file: &[u8]) -> Result<NonFragmentedDemuxFsm, Error> {
         let mut demux_fsm = NonFragmentedDemuxFsm::new();
 

@@ -108,7 +108,7 @@ impl<Value: BoxDecode + BoxDefinition> WholeBoxReader<Value> {
 /// Encodes `value` as the payload of the whole box it forms, naming that box on a failure
 ///
 /// The mirror of [`WholeBoxReader`]: the payload comes back in one allocation
-/// sized to what the value declares, for a writer to lay down between the
+/// sized to what the value declares, for a mux FSM to lay down between the
 /// header and the end of the box.
 ///
 /// # Errors

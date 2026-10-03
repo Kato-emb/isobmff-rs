@@ -16,7 +16,7 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 /// A media segment carries a portion of a presentation for delivery apart
 /// from the movie that declares it (ISO/IEC 14496-12 §8.16.1): the brands it
 /// declares itself readable as, then one movie fragment after another with
-/// the media data each of them addresses. This reader wires the layers that
+/// the media data each of them addresses. This demux FSM wires the layers that
 /// read one: the framing of the segment into boxes, the structure that says
 /// what each top-level box is, the reading of the boxes it names into values,
 /// the resolution of each fragment against the movie into the extents of its
@@ -36,10 +36,10 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 ///   and the samples it completed are taken from
 ///   [`poll_sample`](Self::poll_sample). The caller drains before handing
 ///   over more: samples are held until they are taken. Where the segment
-///   lies in its resource is the caller's: every offset the reader reports
+///   lies in its resource is the caller's: every offset the demux FSM reports
 ///   is an offset into the segment, counting from the first byte of it as
 ///   the boxes count theirs (§8.8.7).
-/// * The fragments are resolved against the movie the reader was created
+/// * The fragments are resolved against the movie the demux FSM was created
 ///   with, which is there to read at [`movie`](Self::movie). The brands are
 ///   there once they have arrived: [`segment_type`](Self::segment_type). The
 ///   indexes of every `sidx` are there once read, as
@@ -62,7 +62,7 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 ///   A segment carrying no `styp` reads all the same, as §8.16.2 allows.
 /// * Where a fragment states no decode time for a track, the track goes on
 ///   from where the fragments handed over before it left it, or from zero
-///   where none did (§8.8.12): a reader is one segment's. After a
+///   where none did (§8.8.12): a demux FSM is one segment's. After a
 ///   [`resume_at`](Self::resume_at) it is [`Sample`](crate::ErrorKind::Sample)
 ///   instead.
 /// * A box read into a value is gathered whole before it is read, so what it
@@ -76,7 +76,7 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 ///   [`wanted_input`](Self::wanted_input) names what the extent at the
 ///   front of those held still lacks only once the input has passed its
 ///   start, which a segment whose fragments precede their media data never has.
-/// * An `Err` leaves the reader failed for good,
+/// * An `Err` leaves the demux FSM failed for good,
 ///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) and
 ///   [`UnwantedInput`](crate::ErrorKind::UnwantedInput) aside:
 ///   every later call reports that same failure again. The samples completed
@@ -144,7 +144,7 @@ pub struct MediaSegmentDemuxFsm {
     state: State,
 }
 
-/// Where the reader stands between calls
+/// Where the demux FSM stands between calls
 #[derive(Clone, Copy, Debug)]
 enum State {
     /// Taking the segment as it arrives
@@ -178,7 +178,7 @@ impl MediaSegmentDemuxFsm {
     /// that names a limit of its own with [`with_limits`](Self::with_limits).
     pub const DEFAULT_PAYLOAD_LIMIT: u64 = 16 * 1024 * 1024;
 
-    /// Creates a reader waiting at the start of a media segment continuing `movie`
+    /// Creates a demux FSM waiting at the start of a media segment continuing `movie`
     ///
     /// What a box read into a value may declare is bounded by
     /// [`DEFAULT_PAYLOAD_LIMIT`](Self::DEFAULT_PAYLOAD_LIMIT), and what one
@@ -193,10 +193,10 @@ impl MediaSegmentDemuxFsm {
         )
     }
 
-    /// Creates a reader of a segment continuing `movie`, holding it to `payload_limit` and `sample_size_limit`
+    /// Creates a demux FSM of a segment continuing `movie`, holding it to `payload_limit` and `sample_size_limit`
     ///
-    /// Both bound memory the reader is about to take, and both bound one box or
-    /// one sample rather than the segment. A box read into a value that
+    /// Both bound memory the demux FSM is about to take, and both bound one box
+    /// or one sample rather than the segment. A box read into a value that
     /// declares more than `payload_limit` bytes of payload is
     /// [`PayloadLimitExceeded`](crate::ErrorKind::PayloadLimitExceeded)
     /// before a byte of it is gathered; a sample declaring more than
@@ -240,7 +240,7 @@ impl MediaSegmentDemuxFsm {
     /// * [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder): what
     ///   the structure makes of a top-level box arriving where it does.
     /// * [`PayloadLimitExceeded`](crate::ErrorKind::PayloadLimitExceeded):
-    ///   a box read into a value reaches past the limit the reader gathers.
+    ///   a box read into a value reaches past the limit the demux FSM gathers.
     /// * [`Sequence`](crate::ErrorKind::Sequence): what the framing
     ///   of the segment makes of the input.
     /// * [`Box`](crate::ErrorKind::Box): a box read into a value
@@ -252,8 +252,8 @@ impl MediaSegmentDemuxFsm {
     /// * [`UnwantedInput`](crate::ErrorKind::UnwantedInput): `offset` is
     ///   neither where the input taken in order stands nor the offset of the
     ///   bytes [`wanted_input`](Self::wanted_input) names as lacking. The
-    ///   reader is not failed by it.
-    /// * The failure of a previous call, which the reader keeps and reports
+    ///   demux FSM is not failed by it.
+    /// * The failure of a previous call, which the demux FSM keeps and reports
     ///   again for every call after it.
     pub fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), Error> {
         self.reading()?;
@@ -288,13 +288,13 @@ impl MediaSegmentDemuxFsm {
     ///
     /// Reports `None` once they are used up: more of the segment is needed.
     /// Failure is reported by the calls that take it, so this one never fails
-    /// — a failed reader hands over the samples it had already completed, then
-    /// `None` from there on.
+    /// — a failed demux FSM hands over the samples it had already completed,
+    /// then `None` from there on.
     pub fn poll_sample(&mut self) -> Option<Sample> {
         self.samples.poll_sample()
     }
 
-    /// Returns the one read wanted next, or `None` once the segment is declared over or the reader has failed
+    /// Returns the one read wanted next, or `None` once the segment is declared over or the demux FSM has failed
     ///
     /// Bytes the extent at the front of those held still lacks are wanted
     /// first, with their length, once the input taken in order has passed their
@@ -336,12 +336,12 @@ impl MediaSegmentDemuxFsm {
     /// Restarts the reading at `offset`, the offset into the segment the input handed over next starts at
     ///
     /// The next box is to be one an index points at: a `moof` or a `sidx`.
-    /// The reader resumes from reading and from the segment declared over
+    /// The demux FSM resumes from reading and from the segment declared over
     /// alike, and takes the segment again from there.
     ///
     /// # Errors
     ///
-    /// * The failure of a previous call, which the reader keeps and reports
+    /// * The failure of a previous call, which the demux FSM keeps and reports
     ///   again for every call after it.
     pub fn resume_at(&mut self, offset: u64) -> Result<(), Error> {
         if let State::Failed(failure) = self.state {
@@ -374,7 +374,7 @@ impl MediaSegmentDemuxFsm {
     ///   declared is short of the data it claimed.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   segment was already declared over.
-    /// * The failure of a previous call, which the reader keeps and reports
+    /// * The failure of a previous call, which the demux FSM keeps and reports
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), Error> {
         self.reading()?;
@@ -393,7 +393,7 @@ impl MediaSegmentDemuxFsm {
         Ok(())
     }
 
-    /// Returns `Ok` while the reader still takes what arrives
+    /// Returns `Ok` while the demux FSM still takes what arrives
     const fn reading(&self) -> Result<(), Error> {
         match self.state {
             State::Reading => Ok(()),
@@ -481,7 +481,7 @@ impl MediaSegmentDemuxFsm {
         Ok(())
     }
 
-    /// Fails the reader for good, and hands the failure back to report
+    /// Fails the demux FSM for good, and hands the failure back to report
     const fn fail(&mut self, failure: Error) -> Error {
         self.state = State::Failed(failure);
 
@@ -501,7 +501,7 @@ mod tests {
     use crate::ErrorKind;
     use crate::WantedInput;
 
-    /// What the reader makes of `segment` handed over whole, then declared over
+    /// What the demux FSM makes of `segment` handed over whole, then declared over
     fn read(segment: &[u8]) -> Result<MediaSegmentDemuxFsm, Error> {
         let mut demux_fsm = MediaSegmentDemuxFsm::new(movie());
 

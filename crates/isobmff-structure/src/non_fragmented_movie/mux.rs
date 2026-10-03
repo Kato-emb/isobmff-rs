@@ -26,7 +26,7 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 /// samples come, one `mdat` per chunk with its length declared (§8.1.1), and
 /// the movie goes down last, once every chunk offset it states is known
 /// (§8.7.5): a file with its movie first is a transform of this one, not a
-/// mode of the writer.
+/// mode of the mux FSM.
 ///
 /// # Contract
 ///
@@ -39,13 +39,13 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 ///   declared over without a `moov` is
 ///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
 /// * The `ftyp` handed over is laid down as it stands. Where none was handed
-///   over, the writer lays its own down before the `moov` or before any
+///   over, the mux FSM lays its own down before the `moov` or before any
 ///   chunk, whichever takes its place first: `iso4` as its `major_brand` and
 ///   its one `compatible_brands` entry, with `minor_version` 0, the brand the
 ///   widest layout it lays down requires (Annex E.7).
 /// * The movie handed to [`handle_movie`](Self::handle_movie) is a template:
 ///   what it declares of each track is laid down as it stands, but for the
-///   sample tables and the durations. The writer fills the sample tables in
+///   sample tables and the durations. The mux FSM fills the sample tables in
 ///   from the samples of that track
 ///   at [`finish`](Self::finish) — the `stsd` kept, the four tables laying
 ///   the samples out replaced, and every other box the `stbl` carried
@@ -72,10 +72,10 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 ///   [`EventBytes`] a call, owned by whoever takes them: the media data of a
 ///   chunk comes sample by sample, each in the allocation it was handed over
 ///   in, an empty one passed over. The caller drains before handing over more: bytes are held until
-///   they are taken, so writing on without polling has the writer hold the
+///   they are taken, so writing on without polling has the mux FSM hold the
 ///   whole file. The samples of the chunk that is open are held until it is
 ///   laid down.
-/// * An `Err` leaves the writer failed for good,
+/// * An `Err` leaves the mux FSM failed for good,
 ///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The bytes made before
 ///   it are still there to take.
@@ -140,7 +140,7 @@ pub struct NonFragmentedMuxFsm {
     state: State,
 }
 
-/// Where the writer stands between calls
+/// Where the mux FSM stands between calls
 #[derive(Clone, Copy, Debug)]
 enum State {
     /// Laying the file down as the boxes and the samples come
@@ -152,7 +152,7 @@ enum State {
 }
 
 impl NonFragmentedMuxFsm {
-    /// Creates a writer waiting at the start of a non-fragmented movie file
+    /// Creates a mux FSM waiting at the start of a non-fragmented movie file
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -174,7 +174,7 @@ impl NonFragmentedMuxFsm {
     /// * [`Box`](crate::ErrorKind::Box): the box does not write.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the writer keeps and reports
+    /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), Error> {
         self.writing()?;
@@ -193,7 +193,7 @@ impl NonFragmentedMuxFsm {
     ///   was handed over already.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the writer keeps and reports
+    /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), Error> {
         self.writing()?;
@@ -222,7 +222,7 @@ impl NonFragmentedMuxFsm {
     ///   is longer than the `size` field of an `mdat` can state.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the writer keeps and reports
+    /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn begin_chunk(&mut self) -> Result<(), Error> {
         self.writing()?;
@@ -258,7 +258,7 @@ impl NonFragmentedMuxFsm {
     ///   makes of the sample.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the writer keeps and reports
+    /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), Error> {
         self.writing()?;
@@ -275,7 +275,7 @@ impl NonFragmentedMuxFsm {
     ///
     /// Reports `None` once they are used up: more samples are needed, or the
     /// file is over. Failure is reported by the calls that take the boxes and
-    /// the samples, so this one never fails — a failed writer hands over the
+    /// the samples, so this one never fails — a failed mux FSM hands over the
     /// bytes it had already made, then nothing from there on.
     pub fn poll_output(&mut self) -> Option<EventBytes> {
         self.boxes.poll_output()
@@ -297,7 +297,7 @@ impl NonFragmentedMuxFsm {
     ///   non-fragmented movie file.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was already declared over.
-    /// * The failure of a previous call, which the writer keeps and reports
+    /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), Error> {
         self.writing()?;
@@ -336,7 +336,7 @@ impl NonFragmentedMuxFsm {
         Ok(())
     }
 
-    /// Lays `file_type` down as the first box of the file, failing the writer where it is refused
+    /// Lays `file_type` down as the first box of the file, failing the mux FSM where it is refused
     fn lay_down_file_type(&mut self, file_type: &FileTypeBox) -> Result<(), Error> {
         let payload = whole_payload(file_type).map_err(|failure| self.fail(failure))?;
         let header = whole_box_header(FileTypeBox::BOX_TYPE, payload.len() as u64)
@@ -346,7 +346,7 @@ impl NonFragmentedMuxFsm {
         self.frame(header, alloc::vec![payload])
     }
 
-    /// Admits the box `box_type` names into the file where the structure places it, failing the writer where it is refused
+    /// Admits the box `box_type` names into the file where the structure places it, failing the mux FSM where it is refused
     ///
     /// A box the structure passes over is refused as
     /// [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder).
@@ -363,7 +363,7 @@ impl NonFragmentedMuxFsm {
         }
     }
 
-    /// Returns `Ok` while the writer still takes boxes and samples
+    /// Returns `Ok` while the mux FSM still takes boxes and samples
     const fn writing(&self) -> Result<(), Error> {
         match self.state {
             State::Writing => Ok(()),
@@ -398,14 +398,14 @@ impl NonFragmentedMuxFsm {
         self.lay_down_step(BoxEvent::End)
     }
 
-    /// Hands one step of the framing over, failing the writer where it is refused
+    /// Hands one step of the framing over, failing the mux FSM where it is refused
     fn lay_down_step(&mut self, step: BoxEvent) -> Result<(), Error> {
         self.boxes
             .handle_event(step)
             .map_err(|failure| self.fail(failure.into()))
     }
 
-    /// Fails the writer for good, and hands the failure back to report
+    /// Fails the mux FSM for good, and hands the failure back to report
     const fn fail(&mut self, failure: Error) -> Error {
         self.state = State::Failed(failure);
 
@@ -419,7 +419,7 @@ impl Default for NonFragmentedMuxFsm {
     }
 }
 
-/// Brands the writer declares where none were handed over, those the widest layout it lays down requires
+/// Brands the mux FSM declares where none were handed over, those the widest layout it lays down requires
 fn default_file_type() -> FileTypeBox {
     FileTypeBox::new(FourCC::new(*b"iso4"), 0, alloc::vec![FourCC::new(*b"iso4")])
 }
@@ -441,7 +441,7 @@ mod tests {
         Sample::new(1, 0, 3_000, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec())
     }
 
-    /// The bytes the writer has laid down, drained to the end
+    /// The bytes the mux FSM has laid down, drained to the end
     fn drained(mux_fsm: &mut NonFragmentedMuxFsm) -> Vec<u8> {
         let mut file = Vec::new();
         while let Some(written) = mux_fsm.poll_output() {

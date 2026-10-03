@@ -44,8 +44,8 @@ use crate::{Error, whole_box_header, whole_payload};
 /// * The bytes are taken from [`poll_output`](Self::poll_output), one
 ///   [`EventBytes`] a call, owned by whoever takes them. The caller drains
 ///   before handing over more: bytes are held until they are taken, so
-///   writing on without polling has the writer hold the whole segment.
-/// * An `Err` leaves the writer failed for good,
+///   writing on without polling has the mux FSM hold the whole segment.
+/// * An `Err` leaves the mux FSM failed for good,
 ///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The bytes made before
 ///   it are still there to take.
@@ -91,7 +91,7 @@ pub struct MediaSegmentMuxFsm {
     state: State,
 }
 
-/// Where the writer stands between calls
+/// Where the mux FSM stands between calls
 #[derive(Clone, Copy, Debug)]
 enum State {
     /// Laying the segment down as the brands and the samples come
@@ -103,7 +103,7 @@ enum State {
 }
 
 impl MediaSegmentMuxFsm {
-    /// Creates a writer waiting at the start of a media segment
+    /// Creates a mux FSM waiting at the start of a media segment
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -123,7 +123,7 @@ impl MediaSegmentMuxFsm {
     /// * [`Box`](crate::ErrorKind::Box): the box does not write.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the writer keeps and reports
+    /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn handle_segment_type(&mut self, segment_type: SegmentTypeBox) -> Result<(), Error> {
         self.writing()?;
@@ -141,7 +141,7 @@ impl MediaSegmentMuxFsm {
     ///   makes of the call.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the writer keeps and reports
+    /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn begin_fragment(&mut self, sequence_number: u32) -> Result<(), Error> {
         self.writing()?;
@@ -161,7 +161,7 @@ impl MediaSegmentMuxFsm {
     ///   makes of the call.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the writer keeps and reports
+    /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn begin_fragment_continuing(&mut self, sequence_number: u32) -> Result<(), Error> {
         self.writing()?;
@@ -178,7 +178,7 @@ impl MediaSegmentMuxFsm {
     ///   makes of the sample.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the writer keeps and reports
+    /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), Error> {
         self.writing()?;
@@ -201,7 +201,7 @@ impl MediaSegmentMuxFsm {
     ///   does not write.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the writer keeps and reports
+    /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn finish_fragment(&mut self) -> Result<(), Error> {
         self.writing()?;
@@ -218,7 +218,7 @@ impl MediaSegmentMuxFsm {
     ///
     /// Reports `None` once they are used up: more samples are needed, or the
     /// segment is over. Failure is reported by the calls that take the brands
-    /// and the samples, so this one never fails — a failed writer hands over
+    /// and the samples, so this one never fails — a failed mux FSM hands over
     /// the bytes it had already made, then nothing from there on.
     pub fn poll_output(&mut self) -> Option<EventBytes> {
         self.boxes.poll_output()
@@ -235,7 +235,7 @@ impl MediaSegmentMuxFsm {
     ///   segment.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   segment was already declared over.
-    /// * The failure of a previous call, which the writer keeps and reports
+    /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), Error> {
         self.writing()?;
@@ -253,7 +253,7 @@ impl MediaSegmentMuxFsm {
         Ok(())
     }
 
-    /// Returns `Ok` while the writer still takes brands and samples
+    /// Returns `Ok` while the mux FSM still takes brands and samples
     const fn writing(&self) -> Result<(), Error> {
         match self.state {
             State::Writing => Ok(()),
@@ -300,14 +300,14 @@ impl MediaSegmentMuxFsm {
         self.lay_down_step(BoxEvent::End)
     }
 
-    /// Hands one step of the framing over, failing the writer where it is refused
+    /// Hands one step of the framing over, failing the mux FSM where it is refused
     fn lay_down_step(&mut self, step: BoxEvent) -> Result<(), Error> {
         self.boxes
             .handle_event(step)
             .map_err(|failure| self.fail(failure.into()))
     }
 
-    /// Fails the writer for good, and hands the failure back to report
+    /// Fails the mux FSM for good, and hands the failure back to report
     const fn fail(&mut self, failure: Error) -> Error {
         self.state = State::Failed(failure);
 
