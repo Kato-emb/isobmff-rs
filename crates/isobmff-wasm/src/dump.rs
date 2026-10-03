@@ -4,10 +4,11 @@ use core::ops::Range;
 use std::io::{self, Read};
 
 use isobmff::core::{BoxHeader, BoxType, boxes};
-use isobmff::io::Error;
 use isobmff::sequence::{BoxEvent, BoxReader};
 use isobmff::structure;
 use wasm_bindgen::prelude::wasm_bindgen;
+
+use crate::Error;
 
 /// The boxes whose payload is read as the boxes it holds
 const CONTAINERS: [BoxType; 12] = [

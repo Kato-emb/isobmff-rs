@@ -1,10 +1,11 @@
-//! The drivers over `std::io`
+//! The source and the sink over `std::io`
 //!
-//! [`DemuxDriver`] drives a demux FSM over a source that is `Read + Seek` and
-//! yields the samples the file carries as `Iterator` items; [`MuxDriver`]
-//! drives a mux FSM onto a sink that is `Write` and writes the bytes it made.
-//! What each takes and refuses is its FSM's contract.
+//! [`Source`] reads a file at the offsets a demux FSM names off a source that
+//! is `Read + Seek`; [`Sink`] writes the chunks a mux FSM made to a sink that
+//! is `Write`.
 
-mod driver;
+mod sink;
+mod source;
 
-pub use driver::{DemuxDriver, MuxDriver};
+pub use sink::Sink;
+pub use source::Source;

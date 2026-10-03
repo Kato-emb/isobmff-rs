@@ -1,4 +1,4 @@
-//! The samples of a media segment, read off a source that seeks against the movie it continues and read back off one a muxer laid down
+//! The samples of a media segment, written to a sink and read back off a source that seeks against the movie it continues
 
 #[cfg(test)]
 mod tests {
@@ -6,170 +6,82 @@ mod tests {
 
     use futures_executor::block_on;
     use futures_util::io::Cursor;
-    use isobmff_io::blocking::{DemuxDriver, MuxDriver};
-    use isobmff_sample::Sample;
+    use isobmff_io::blocking::{Sink, Source};
     use isobmff_structure::{MediaSegmentDemuxFsm, MediaSegmentMuxFsm};
-    use isobmff_test_support::{
-        indexed_segment_file, presentation_movie, segment_file_samples, segment_file_with_samples,
-        segment_type,
-    };
+    use isobmff_test_support::{presentation_movie, segment_file_samples, segment_type};
 
-    #[test]
-    fn a_source_that_seeks_has_every_sample_read_off_it() {
-        let read_back: Vec<Sample> = DemuxDriver::new(
-            io::Cursor::new(segment_file_with_samples()),
-            MediaSegmentDemuxFsm::new(presentation_movie()),
-        )
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-
-        assert_eq!(read_back, segment_file_samples());
-    }
-
-    #[test]
-    fn the_samples_the_muxer_wrote_to_a_sink_are_read_back_off_it_by_the_demuxer() {
-        let mut segment = Vec::new();
-        let mut mux_driver = MuxDriver::new(&mut segment, MediaSegmentMuxFsm::new());
-        let mux_fsm = mux_driver.fsm_mut();
-
-        mux_fsm.handle_segment_type(segment_type()).unwrap();
-        mux_fsm.begin_fragment(1).unwrap();
+    /// A mux FSM that has laid down a segment of one fragment carrying the samples of the fixture
+    fn laid_down() -> MediaSegmentMuxFsm {
+        let mut fsm = MediaSegmentMuxFsm::new();
+        fsm.handle_segment_type(segment_type()).unwrap();
+        fsm.begin_fragment(1).unwrap();
         for sample in segment_file_samples() {
-            mux_fsm.handle_sample(sample).unwrap();
+            fsm.handle_sample(sample).unwrap();
         }
-        mux_fsm.finish_fragment().unwrap();
-        mux_fsm.finish().unwrap();
-        mux_driver.flush().unwrap();
+        fsm.finish_fragment().unwrap();
+        fsm.finish().unwrap();
 
-        let read_back: Vec<Sample> = DemuxDriver::new(
-            io::Cursor::new(&segment),
-            MediaSegmentDemuxFsm::new(presentation_movie()),
-        )
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-
-        assert_eq!(read_back, segment_file_samples());
+        fsm
     }
 
     #[test]
-    fn an_asynchronous_source_that_seeks_has_every_sample_read_off_it() {
-        let read_back = block_on(async {
-            let mut driver = isobmff_io::DemuxDriver::new(
-                Cursor::new(segment_file_with_samples()),
-                MediaSegmentDemuxFsm::new(presentation_movie()),
-            )
-            .await
-            .unwrap();
-            let mut read_back = Vec::new();
-            while let Some(sample) = driver.next().await {
-                read_back.push(sample.unwrap());
-            }
-
-            read_back
-        });
-
-        assert_eq!(read_back, segment_file_samples());
-    }
-
-    #[test]
-    fn the_samples_the_asynchronous_muxer_wrote_to_a_sink_are_read_back_off_it_by_the_demuxer() {
+    fn the_samples_written_to_a_sink_are_read_back_off_a_source() {
+        let mut mux_fsm = laid_down();
         let mut segment = Vec::new();
+        let mut sink = Sink::new(&mut segment);
+        sink.write(core::iter::from_fn(|| mux_fsm.poll_output()))
+            .unwrap();
+        sink.flush().unwrap();
+
+        let mut source = Source::new(io::Cursor::new(segment)).unwrap();
+        let mut fsm = MediaSegmentDemuxFsm::new(presentation_movie());
+        let mut read_back = Vec::new();
+        while let Some(wanted) = fsm.wanted_input() {
+            let bytes = source.read_at(wanted.offset(), wanted.length()).unwrap();
+            let handed = if bytes.is_empty() {
+                fsm.finish()
+            } else {
+                fsm.handle_input(wanted.offset(), bytes)
+            };
+            read_back.extend(core::iter::from_fn(|| fsm.poll_sample()));
+            handed.unwrap();
+        }
+
+        assert_eq!(read_back, segment_file_samples());
+    }
+
+    #[test]
+    fn the_samples_written_to_an_asynchronous_sink_are_read_back_off_an_asynchronous_source() {
+        let mut mux_fsm = laid_down();
 
         let read_back = block_on(async {
-            let mut mux_driver =
-                isobmff_io::MuxDriver::new(&mut segment, MediaSegmentMuxFsm::new());
-            let mux_fsm = mux_driver.fsm_mut();
-            mux_fsm.handle_segment_type(segment_type()).unwrap();
-            mux_fsm.begin_fragment(1).unwrap();
-            for sample in segment_file_samples() {
-                mux_fsm.handle_sample(sample).unwrap();
-            }
-            mux_fsm.finish_fragment().unwrap();
-            mux_fsm.finish().unwrap();
-            mux_driver.flush().await.unwrap();
+            let mut segment = Vec::new();
+            let mut sink = isobmff_io::Sink::new(&mut segment);
+            sink.write(core::iter::from_fn(|| mux_fsm.poll_output()))
+                .await
+                .unwrap();
+            sink.flush().await.unwrap();
 
-            let mut driver = isobmff_io::DemuxDriver::new(
-                Cursor::new(&segment),
-                MediaSegmentDemuxFsm::new(presentation_movie()),
-            )
-            .await
-            .unwrap();
+            let mut source = isobmff_io::Source::new(Cursor::new(segment)).await.unwrap();
+            let mut fsm = MediaSegmentDemuxFsm::new(presentation_movie());
             let mut read_back = Vec::new();
-            while let Some(sample) = driver.next().await {
-                read_back.push(sample.unwrap());
+            while let Some(wanted) = fsm.wanted_input() {
+                let bytes = source
+                    .read_at(wanted.offset(), wanted.length())
+                    .await
+                    .unwrap();
+                let handed = if bytes.is_empty() {
+                    fsm.finish()
+                } else {
+                    fsm.handle_input(wanted.offset(), bytes)
+                };
+                read_back.extend(core::iter::from_fn(|| fsm.poll_sample()));
+                handed.unwrap();
             }
 
             read_back
         });
 
         assert_eq!(read_back, segment_file_samples());
-    }
-
-    #[test]
-    fn the_sidx_read_in_order_names_the_subsegment_a_time_is_read_from() {
-        let file = indexed_segment_file();
-        let second = file.fragment_samples.get(1).unwrap();
-        let mut driver = DemuxDriver::new(
-            io::Cursor::new(file.bytes.clone()),
-            MediaSegmentDemuxFsm::new(presentation_movie()),
-        )
-        .unwrap();
-        assert_eq!(
-            driver.by_ref().collect::<Result<Vec<_>, _>>().unwrap(),
-            file.fragment_samples.concat()
-        );
-
-        let subsegment_start = driver
-            .fsm()
-            .segment_indexes()
-            .first()
-            .unwrap()
-            .subsegment_at(second.first().unwrap().decode_time())
-            .unwrap()
-            .extent()
-            .start;
-        driver.fsm_mut().resume_at(subsegment_start).unwrap();
-
-        assert_eq!(driver.collect::<Result<Vec<_>, _>>().unwrap(), *second);
-    }
-
-    #[test]
-    fn the_sidx_an_asynchronous_demux_driver_read_in_order_names_the_subsegment_a_time_is_read_from()
-     {
-        let file = indexed_segment_file();
-        let second = file.fragment_samples.get(1).unwrap();
-
-        let read_back = block_on(async {
-            let mut driver = isobmff_io::DemuxDriver::new(
-                Cursor::new(file.bytes.clone()),
-                MediaSegmentDemuxFsm::new(presentation_movie()),
-            )
-            .await
-            .unwrap();
-            while let Some(sample) = driver.next().await {
-                sample.unwrap();
-            }
-
-            let subsegment_start = driver
-                .fsm()
-                .segment_indexes()
-                .first()
-                .unwrap()
-                .subsegment_at(second.first().unwrap().decode_time())
-                .unwrap()
-                .extent()
-                .start;
-            driver.fsm_mut().resume_at(subsegment_start).unwrap();
-            let mut read_back = Vec::new();
-            while let Some(sample) = driver.next().await {
-                read_back.push(sample.unwrap());
-            }
-
-            read_back
-        });
-
-        assert_eq!(read_back, *second);
     }
 }

@@ -14,7 +14,7 @@ use std::io::{BufWriter, Write};
 
 use isobmff::avc::Avc1SampleEntry;
 use isobmff::core::{BoxDecode, BoxDefinition};
-use isobmff::io::blocking::DemuxDriver;
+use isobmff::io::blocking::Source;
 use isobmff::structure::NonFragmentedDemuxFsm;
 
 const START_CODE: [u8; 4] = [0, 0, 0, 1];
@@ -25,9 +25,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     let input = arguments.next().ok_or(usage)?;
     let output = arguments.next().ok_or(usage)?;
 
-    let mut driver = DemuxDriver::new(File::open(input)?, NonFragmentedDemuxFsm::new())?;
-    let first = driver.next().transpose()?;
-    let movie = driver.fsm().movie().ok_or("the file carries no movie")?;
+    let mut source = Source::new(File::open(input)?)?;
+    let mut demux_fsm = NonFragmentedDemuxFsm::new();
+    let mut handed = Ok(());
+    while demux_fsm.movie().is_none() {
+        handed?;
+        let wanted = demux_fsm
+            .wanted_input()
+            .ok_or("the file carries no movie")?;
+        let bytes = source.read_at(wanted.offset(), wanted.length())?;
+        handed = if bytes.is_empty() {
+            demux_fsm.finish()
+        } else {
+            demux_fsm.handle_input(wanted.offset(), bytes)
+        };
+    }
+    let movie = demux_fsm.movie().ok_or("the file carries no movie")?;
     if movie.mvex().is_some() {
         return Err("the file is fragmented".into());
     }
@@ -56,19 +69,30 @@ fn main() -> Result<(), Box<dyn Error>> {
         stream.write_all(parameter_set)?;
     }
     let mut count: u64 = 0;
-    for sample in first.into_iter().map(Ok).chain(driver) {
-        let sample = sample?;
-        if sample.track_id() != track_id {
-            continue;
+    loop {
+        while let Some(sample) = demux_fsm.poll_sample() {
+            if sample.track_id() != track_id {
+                continue;
+            }
+            if sample.sample_description_index() != 1 {
+                return Err("a sample is described by another sample entry than the first".into());
+            }
+            for nal_unit in length_size.nal_units(sample.data()) {
+                stream.write_all(&START_CODE)?;
+                stream.write_all(nal_unit?)?;
+            }
+            count = count.saturating_add(1);
         }
-        if sample.sample_description_index() != 1 {
-            return Err("a sample is described by another sample entry than the first".into());
-        }
-        for nal_unit in length_size.nal_units(sample.data()) {
-            stream.write_all(&START_CODE)?;
-            stream.write_all(nal_unit?)?;
-        }
-        count = count.saturating_add(1);
+        handed?;
+        let Some(wanted) = demux_fsm.wanted_input() else {
+            break;
+        };
+        let bytes = source.read_at(wanted.offset(), wanted.length())?;
+        handed = if bytes.is_empty() {
+            demux_fsm.finish()
+        } else {
+            demux_fsm.handle_input(wanted.offset(), bytes)
+        };
     }
     stream.flush()?;
     println!("samples={count}");

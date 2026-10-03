@@ -1,6 +1,6 @@
 //! Reads the samples a non-fragmented MP4 file carries with the demux FSM alone, one line per sample
 //!
-//! No driver of the `io` feature is involved: the file is read where the demux FSM says — the
+//! No source of the `io` feature is involved: the file is read where the demux FSM says — the
 //! bytes it names as lacking that the file has already passed, the media data of a movie lying
 //! after it, or else on from where its input stands — and each read is handed to it. The output
 //! matches `demux_non_fragmented`.
