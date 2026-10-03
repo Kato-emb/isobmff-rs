@@ -24,8 +24,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut buffer = vec![0; 64 * 1024];
     let mut count: u64 = 0;
     while let Some(wanted) = demux_fsm.wanted_input() {
+        let length = wanted.length().map_or(buffer.len(), |length| {
+            usize::try_from(length).map_or(buffer.len(), |length| length.min(buffer.len()))
+        });
         file.seek(SeekFrom::Start(wanted.offset()))?;
-        let read = file.read(&mut buffer)?;
+        let read = file.read(buffer.get_mut(..length).unwrap_or_default())?;
         let handed = if read == 0 {
             demux_fsm.finish()
         } else {
