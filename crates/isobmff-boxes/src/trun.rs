@@ -240,13 +240,15 @@ impl TrackRunBox {
         &self.samples
     }
 
-    /// Returns the run as written against `tfhd`, leaving out of the rows every field that needs no stating
+    /// Returns the run as written against `tfhd`, leaving out every field that needs no stating
     ///
     /// A field the header states a default for, which every row of the run
     /// agrees with, is left out of the rows. Flags that only the first row
     /// differs from the default on are written as its `first_sample_flags`
-    /// (§8.8.8). Composition time offsets are left out of every row when none
-    /// of them states one other than zero. Every sample keeps what it states.
+    /// (§8.8.8), and a `first_sample_flags` equal to the default the header
+    /// states is left out. Composition time offsets are left out of every row
+    /// when none of them states one other than zero. What each sample takes
+    /// once the defaults apply is what it took before.
     ///
     /// # Examples
     ///
@@ -841,6 +843,46 @@ mod tests {
             )
             .unwrap()
         );
+    }
+
+    /// Run of two rows stating no flags, whose own are `first_sample_flags`
+    fn unflagged(first_sample_flags: SampleFlags) -> TrackRunBox {
+        TrackRunBox::new(
+            None,
+            Some(first_sample_flags),
+            vec![TrackRunSample::new(Some(1_024), None, None, None); 2],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn first_sample_flags_equal_to_the_default_are_left_out() {
+        let run = unflagged(SampleFlags::NON_SYNC_SAMPLE).without_defaults(&header(
+            None,
+            None,
+            Some(SampleFlags::NON_SYNC_SAMPLE),
+        ));
+
+        assert_eq!(
+            run,
+            TrackRunBox::new(
+                None,
+                None,
+                vec![TrackRunSample::new(Some(1_024), None, None, None); 2]
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn first_sample_flags_other_than_the_default_are_kept() {
+        let run = unflagged(SampleFlags::SYNC_SAMPLE).without_defaults(&header(
+            None,
+            None,
+            Some(SampleFlags::NON_SYNC_SAMPLE),
+        ));
+
+        assert_eq!(run, unflagged(SampleFlags::SYNC_SAMPLE));
     }
 
     #[test]
