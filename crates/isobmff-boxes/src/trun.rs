@@ -240,7 +240,7 @@ impl TrackRunBox {
         &self.samples
     }
 
-    /// Returns the run as written against `tfhd`, every field it already defaults left out of the rows
+    /// Returns the run as written against `tfhd`, leaving out of the rows every field that needs no stating
     ///
     /// A field the header states a default for, which every row of the run
     /// agrees with, is left out of the rows. Flags that only the first row
