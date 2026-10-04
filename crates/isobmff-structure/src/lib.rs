@@ -9,8 +9,7 @@
 //! [`NonFragmentedMuxFsm`] and [`MediaSegmentMuxFsm`] go the other way, laying
 //! samples down as a file or a segment of each kind. None reaches for a source
 //! or a sink of its own: when to read or write, and from or to where, stay with
-//! the caller. A caller that has an I/O to hand reads and writes through the
-//! source and the sink of `isobmff-io`.
+//! the caller, through [the caller's loop](#the-callers-loop).
 //!
 //! # The layers a file is read through
 //!
@@ -78,9 +77,11 @@
 //!    fetched or not, so a `File`, a socket, or a buffer already in memory
 //!    drives the six layers above the same way. Where
 //!    the file lies in its resource, and how a file offset becomes a seek or a
-//!    range, is settled here and in none of them. This crate holds no I/O:
-//!    the source and the sink of `isobmff-io`, which know no machine, are the
-//!    layer, and the loop between them and a machine is the caller's.
+//!    range, is settled here and in none of them. No crate of the workspace
+//!    holds this layer: it is the caller's code, the loop between a machine
+//!    and its I/O.
+//!
+//! # The caller's loop
 //!
 //! The loop a demux FSM is read by asks it for the one read it wants, makes
 //! that read, and hands the bytes over at the offset they were read at, no
@@ -113,15 +114,60 @@
 //! # Ok::<(), isobmff_structure::Error>(())
 //! ```
 //!
-//! A mux FSM is driven by its own verbs, and the chunks it made are taken
-//! with its `poll_output` and written where the caller writes.
+//! A mux FSM is driven by its own verbs, and each chunk it made is taken with
+//! its `poll_output` and written whole where the caller writes. Over
+//! `std::io`, the two loops are these, the demux loop seeking before every
+//! read:
+//!
+//! ```
+//! use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+//!
+//! use isobmff_boxes::{SampleFlags, TrackExtendsBox};
+//! use isobmff_sample::Sample;
+//! use isobmff_structure::{FragmentedDemuxFsm, FragmentedMuxFsm};
+//! # use isobmff_test_support::{file_type, fragmented_movie};
+//! // A fragment of two samples laid down, each chunk written whole
+//! let mut file = Cursor::new(Vec::new());
+//! let mut mux_fsm = FragmentedMuxFsm::new();
+//! mux_fsm.handle_file_type(file_type())?;
+//! mux_fsm.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO)))?;
+//! mux_fsm.begin_fragment(1)?;
+//! mux_fsm.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
+//! mux_fsm.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
+//! mux_fsm.finish_fragment()?;
+//! mux_fsm.finish()?;
+//! while let Some(chunk) = mux_fsm.poll_output() {
+//!     file.write_all(&chunk)?;
+//! }
+//!
+//! // The file read back where the demux FSM wants, into a buffer of the caller's
+//! let mut demux_fsm = FragmentedDemuxFsm::new();
+//! let mut buffer = vec![0; 1024 * 1024];
+//! let mut read_back = Vec::new();
+//! while let Some(wanted) = demux_fsm.wanted_input() {
+//!     file.seek(SeekFrom::Start(wanted.offset()))?;
+//!     let read = file.read(&mut buffer)?;
+//!     let handed = if read == 0 { demux_fsm.finish() } else { demux_fsm.handle_input(wanted.offset(), &buffer[..read]) };
+//!     while let Some(sample) = demux_fsm.poll_sample() {
+//!         read_back.push(sample.into_data());
+//!     }
+//!     handed?;
+//! }
+//! assert_eq!(read_back, [b"SAMP".to_vec(), b"DATA".to_vec()]);
+//! # Ok::<(), Box<dyn core::error::Error>>(())
+//! ```
+//!
+//! An asynchronous caller writes the same loops, awaiting the seek, the read
+//! and the write. The read the FSM wants does not move until bytes are handed
+//! over, so a demux iteration dropped part way is made again from its seek. A chunk taken from `poll_output` is the caller's: one not written
+//! whole when its write is dropped is the caller's to keep.
 //!
 //! A caller whose source cannot seek — a socket, a live stream of segments —
 //! hands every cut it reads over at the offset the FSM names while the length
 //! of the read wanted is `None`, and stops where a length is named. One whose
 //! source is positioned by nature — a slice in memory, a blob, a range request
-//! — reads where the FSM names. `examples/drive_non_fragmented_demux_fsm.rs`
-//! drives a demux FSM over a file this way.
+//! — reads where the FSM names, and as much as the length it names where it
+//! names one.
 //!
 //! A caller that holds a whole presentation in memory needs none of the
 //! machines: [`isobmff_boxes`] reads its boxes into values,

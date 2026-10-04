@@ -6,11 +6,11 @@
 
 use core::error::Error;
 use std::env;
+use std::io::SeekFrom;
 
-use isobmff::io::Source;
 use isobmff::structure::FragmentedDemuxFsm;
 use tokio::fs::File;
-use tokio_util::compat::TokioAsyncReadCompatExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -18,16 +18,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .nth(1)
         .ok_or("usage: demux_fragmented_tokio <in.mp4>")?;
 
-    let mut source = Source::new(File::open(path).await?.compat()).await?;
+    let mut file = File::open(path).await?;
+    let mut buffer = vec![0; 1024 * 1024];
     let mut demux_fsm = FragmentedDemuxFsm::new();
 
     let mut count: u64 = 0;
     while let Some(wanted) = demux_fsm.wanted_input() {
-        let bytes = source.read_at(wanted.offset(), wanted.length()).await?;
-        let handed = if bytes.is_empty() {
+        file.seek(SeekFrom::Start(wanted.offset())).await?;
+        let read = file.read(&mut buffer).await?;
+        let handed = if read == 0 {
             demux_fsm.finish()
         } else {
-            demux_fsm.handle_input(wanted.offset(), bytes)
+            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
         };
         while let Some(sample) = demux_fsm.poll_sample() {
             println!(

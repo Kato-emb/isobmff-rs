@@ -7,8 +7,8 @@
 use core::error::Error;
 use std::env;
 use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 
-use isobmff::io::blocking::Source;
 use isobmff::structure::{FragmentedDemuxFsm, MediaSegmentDemuxFsm};
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -17,7 +17,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let initialization_path = arguments.next().ok_or(usage)?;
     let segment_path = arguments.next().ok_or(usage)?;
 
-    let mut initialization = Source::new(File::open(initialization_path)?)?;
+    let mut initialization_file = File::open(initialization_path)?;
+    let mut buffer = vec![0; 1024 * 1024];
     let mut initialization_fsm = FragmentedDemuxFsm::new();
     let movie = loop {
         if let Some(movie) = initialization_fsm.movie() {
@@ -26,23 +27,26 @@ fn main() -> Result<(), Box<dyn Error>> {
         let wanted = initialization_fsm
             .wanted_input()
             .ok_or("the initialization segment carries no movie")?;
-        let bytes = initialization.read_at(wanted.offset(), wanted.length())?;
-        if bytes.is_empty() {
+        initialization_file.seek(SeekFrom::Start(wanted.offset()))?;
+        let read = initialization_file.read(&mut buffer)?;
+        if read == 0 {
             initialization_fsm.finish()?;
         } else {
-            initialization_fsm.handle_input(wanted.offset(), bytes)?;
+            initialization_fsm
+                .handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())?;
         }
     };
-    let mut source = Source::new(File::open(segment_path)?)?;
+    let mut segment_file = File::open(segment_path)?;
     let mut demux_fsm = MediaSegmentDemuxFsm::new(movie);
 
     let mut count: u64 = 0;
     while let Some(wanted) = demux_fsm.wanted_input() {
-        let bytes = source.read_at(wanted.offset(), wanted.length())?;
-        let handed = if bytes.is_empty() {
+        segment_file.seek(SeekFrom::Start(wanted.offset()))?;
+        let read = segment_file.read(&mut buffer)?;
+        let handed = if read == 0 {
             demux_fsm.finish()
         } else {
-            demux_fsm.handle_input(wanted.offset(), bytes)
+            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
         };
         while let Some(sample) = demux_fsm.poll_sample() {
             println!(

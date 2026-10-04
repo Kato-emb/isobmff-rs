@@ -9,9 +9,8 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-isobmff = { workspace = true, features = ["io"] }
-tokio = { version = "1", features = ["fs", "rt", "macros"] }
-tokio-util = { version = "0.7", features = ["compat"] }
+isobmff.workspace = true
+tokio = { version = "1", features = ["fs", "io-util", "rt", "macros"] }
 
 [[example]]
 name = "demux_fragmented"
@@ -36,10 +35,6 @@ path = "remux_to_fragmented.rs"
 [[example]]
 name = "remux_to_non_fragmented"
 path = "remux_to_non_fragmented.rs"
-
-[[example]]
-name = "drive_non_fragmented_demux_fsm"
-path = "drive_non_fragmented_demux_fsm.rs"
 
 [[example]]
 name = "demux_media_segment"

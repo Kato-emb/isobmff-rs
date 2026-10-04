@@ -10,11 +10,10 @@
 use core::error::Error;
 use std::env;
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 
 use isobmff::avc::Avc1SampleEntry;
 use isobmff::core::{BoxDecode, BoxDefinition};
-use isobmff::io::blocking::Source;
 use isobmff::structure::NonFragmentedDemuxFsm;
 
 const START_CODE: [u8; 4] = [0, 0, 0, 1];
@@ -25,7 +24,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let input = arguments.next().ok_or(usage)?;
     let output = arguments.next().ok_or(usage)?;
 
-    let mut source = Source::new(File::open(input)?)?;
+    let mut file = File::open(input)?;
+    let mut buffer = vec![0; 1024 * 1024];
     let mut demux_fsm = NonFragmentedDemuxFsm::new();
     let mut handed = Ok(());
     while demux_fsm.movie().is_none() {
@@ -33,11 +33,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         let wanted = demux_fsm
             .wanted_input()
             .ok_or("the file carries no movie")?;
-        let bytes = source.read_at(wanted.offset(), wanted.length())?;
-        handed = if bytes.is_empty() {
+        file.seek(SeekFrom::Start(wanted.offset()))?;
+        let read = file.read(&mut buffer)?;
+        handed = if read == 0 {
             demux_fsm.finish()
         } else {
-            demux_fsm.handle_input(wanted.offset(), bytes)
+            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
         };
     }
     let movie = demux_fsm.movie().ok_or("the file carries no movie")?;
@@ -87,11 +88,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         let Some(wanted) = demux_fsm.wanted_input() else {
             break;
         };
-        let bytes = source.read_at(wanted.offset(), wanted.length())?;
-        handed = if bytes.is_empty() {
+        file.seek(SeekFrom::Start(wanted.offset()))?;
+        let read = file.read(&mut buffer)?;
+        handed = if read == 0 {
             demux_fsm.finish()
         } else {
-            demux_fsm.handle_input(wanted.offset(), bytes)
+            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
         };
     }
     stream.flush()?;
