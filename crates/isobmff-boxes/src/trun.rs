@@ -276,7 +276,7 @@ impl TrackRunBox {
     /// );
     /// ```
     #[must_use]
-    pub fn without_defaults(&self, tfhd: &TrackFragmentHeaderBox) -> Self {
+    pub fn without_defaults(mut self, tfhd: &TrackFragmentHeaderBox) -> Self {
         let rows = || self.samples.iter();
         let carries_duration = tfhd.default_sample_duration().is_none_or(|default| {
             rows().any(|row| row.sample_duration.is_some_and(|value| value != default))
@@ -306,22 +306,17 @@ impl TrackRunBox {
             _default_the_rows_do_not_share => (true, self.first_sample_flags),
         };
 
-        let samples = rows()
-            .map(|row| TrackRunSample {
-                sample_duration: row.sample_duration.filter(|_| carries_duration),
-                sample_size: row.sample_size.filter(|_| carries_size),
-                sample_flags: row.sample_flags.filter(|_| carries_flags),
-                sample_composition_time_offset: row
-                    .sample_composition_time_offset
-                    .filter(|_| carries_offsets),
-            })
-            .collect();
-
-        Self {
-            data_offset: self.data_offset,
-            first_sample_flags,
-            samples,
+        for row in &mut self.samples {
+            row.sample_duration = row.sample_duration.filter(|_| carries_duration);
+            row.sample_size = row.sample_size.filter(|_| carries_size);
+            row.sample_flags = row.sample_flags.filter(|_| carries_flags);
+            row.sample_composition_time_offset = row
+                .sample_composition_time_offset
+                .filter(|_| carries_offsets);
         }
+        self.first_sample_flags = first_sample_flags;
+
+        self
     }
 }
 
