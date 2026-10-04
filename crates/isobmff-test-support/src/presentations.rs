@@ -421,3 +421,8 @@ pub fn indexed_fragmented_file_without_decode_times() -> IndexedFile {
 pub fn indexed_segment_file() -> IndexedFile {
     indexed(written(&segment_type()), true)
 }
+
+/// [`indexed_segment_file`] with fragments stating no `tfdt`, so their decode times follow only from the fragments before them
+pub fn indexed_segment_file_without_decode_times() -> IndexedFile {
+    indexed(written(&segment_type()), false)
+}

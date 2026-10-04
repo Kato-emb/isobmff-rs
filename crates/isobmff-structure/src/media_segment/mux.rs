@@ -19,15 +19,17 @@ use crate::{Error, whole_box_header, whole_payload};
 /// and the media data beside it, and the framing of the segment — so a
 /// caller hands over brands and samples and takes bytes. The movie the
 /// segment continues — that of the initialization segment — is taken when
-/// the mux FSM is made, and not written: a segment carries none. It holds no
-/// rule of its own, and reaches for no destination: when to write and to
-/// where stay with the caller.
+/// the mux FSM is made, and not written: a segment carries none. Beside the
+/// structure it holds two rules of its own: a `styp` comes first if at all,
+/// and none listing a brand that forbids the `default-base-is-moof` it writes
+/// is laid down. It reaches for no destination: when to write and to where
+/// stay with the caller.
 ///
 /// # Contract
 ///
 /// * The order of the boxes is the structure's, held to as they are handed
-///   over: the `styp` first if at all, then the fragments. A `styp` handed
-///   over after another box is
+///   over, but for the `styp`, which the mux FSM lays down first if at all:
+///   the `styp`, then the fragments. A `styp` handed over after another box is
 ///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder), and a
 ///   segment declared over without a fragment is
 ///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
@@ -150,6 +152,9 @@ impl MediaSegmentMuxFsm {
         self.writing()?;
         if segment_type.forbids_default_base_is_moof() {
             return Err(self.fail(Error::unsupported_brand()));
+        }
+        if !self.structure.is_at_start() {
+            return Err(self.fail(Error::box_out_of_order(SegmentTypeBox::BOX_TYPE)));
         }
         self.write_value(&segment_type)
     }
@@ -374,6 +379,18 @@ mod tests {
             Err(Error::unsupported_brand())
         );
         assert_eq!(mux_fsm.poll_output(), None);
+    }
+
+    #[test]
+    fn brands_handed_over_twice_are_rejected() {
+        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
+
+        mux_fsm.handle_segment_type(segment_type()).unwrap();
+
+        assert_eq!(
+            mux_fsm.handle_segment_type(segment_type()),
+            Err(Error::box_out_of_order(SegmentTypeBox::BOX_TYPE))
+        );
     }
 
     #[test]

@@ -13,19 +13,20 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 
 /// Reads the samples a media segment carries, taking it as it arrives
 ///
-/// A media segment carries a portion of a presentation for delivery apart
-/// from the movie that declares it (ISO/IEC 14496-12 §8.16.1): the brands it
-/// declares itself readable as, then one movie fragment after another with
-/// the media data each of them addresses. This demux FSM wires the layers that
+/// A media segment carries a portion of a presentation for delivery apart from
+/// the movie that declares it (ISO/IEC 14496-12 §8.16.1): the brands it
+/// declares itself readable as, then one movie fragment after another with the
+/// media data each of them addresses; segments concatenated into one stream,
+/// each with its `styp`, are read as one. This demux FSM wires the layers that
 /// read one: the framing of the segment into boxes, the structure that says
 /// what each top-level box is, the reading of the boxes it names into values,
 /// the resolution of each fragment against the movie into the extents of its
-/// samples, and the gathering of those samples out of the media data. The
-/// movie is the caller's to hand over, since the segment carries none. It
-/// holds no rule of its own but one: of the bytes the samples still lack, it
-/// names only those whose start the segment handed over in order has passed.
-/// A caller hands over bytes and takes [`Sample`]s. It reaches for no source
-/// of its own: when to read and from where stay with the caller.
+/// samples, and the gathering of those samples out of the media data. The movie
+/// is the caller's to hand over, since the segment carries none. It holds no
+/// rule of its own but one: of the bytes the samples still lack, it names only
+/// those whose start the segment handed over in order has passed. A caller
+/// hands over bytes and takes [`Sample`]s. It reaches for no source of its own:
+/// when to read and from where stay with the caller.
 ///
 /// # Contract
 ///
@@ -55,8 +56,9 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 ///   fragment stating none for such a track is
 ///   [`Sample`](crate::ErrorKind::Sample).
 /// * The order the boxes come in, and what a segment that breaks it is
-///   reported as, are the structure's: a `styp` after another box and an
-///   `mdat` before any `moof` are
+///   reported as, are the structure's: a `styp` and an `mdat` are read
+///   wherever they lie, a box other than a `moof` or a `sidx` straight after
+///   a [`resume_at`](Self::resume_at) is
 ///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder), and a
 ///   segment declared over without a `moof` is
 ///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
@@ -64,21 +66,23 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 /// * Where a fragment states no decode time for a track, the track goes on
 ///   from where the fragments handed over before it left it, or where none
 ///   did, from where the sample table of the movie leaves it — zero for the
-///   movie of an initialization segment, which declares no sample (§8.8.12):
-///   a demux FSM is one segment's. After a
-///   [`resume_at`](Self::resume_at) it is [`Sample`](crate::ErrorKind::Sample)
-///   instead.
+///   movie of an initialization segment, which declares no sample (§8.8.12).
+///   A `styp` read on the way does not set the track back. After a
+///   [`resume_at`](Self::resume_at), a fragment stating none for a track no
+///   `tfdt` has stated since is [`Sample`](crate::ErrorKind::Sample) instead.
 /// * A box read into a value is gathered whole before it is read, so what it
 ///   declares is bounded — see [`with_limits`](Self::with_limits).
-/// * The samples of a fragment are read out of the media data that follows
-///   it, and come out as their bytes arrive whole, as [`SampleReader`]'s
+/// * The samples of a fragment are read out of the media data it addresses,
+///   and come out as their bytes arrive whole, as [`SampleReader`]'s
 ///   contract has it: the extents of a fragment are held in the order of
 ///   their bytes, so a segment handed over in order yields the samples of each
 ///   fragment in the order they lie in it, whatever order the fragment
 ///   declares them in and wherever the input is cut.
 ///   [`wanted_input`](Self::wanted_input) names what the extent at the
 ///   front of those held still lacks only once the input has passed its
-///   start, which a segment whose fragments precede their media data never has.
+///   start, which a segment whose fragments precede their media data never
+///   has; a fragment addressing media data lying before it (§8.8.7, §8.8.8)
+///   wants bytes already passed by.
 /// * An `Err` leaves the demux FSM failed for good,
 ///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) and
 ///   [`UnwantedInput`](crate::ErrorKind::UnwantedInput) aside:
@@ -327,6 +331,9 @@ impl MediaSegmentDemuxFsm {
     }
 
     /// Returns the brands the segment declares itself readable as, once they have arrived
+    ///
+    /// A `styp` read again, as segments concatenated into one stream each
+    /// carry one, takes the place of the one read before it.
     #[must_use]
     pub const fn segment_type(&self) -> Option<&SegmentTypeBox> {
         self.segment_type.as_ref()
@@ -617,6 +624,7 @@ mod tests {
         let mut demux_fsm = MediaSegmentDemuxFsm::new(movie()).unwrap();
         let failure = Error::box_out_of_order(MediaDataBox::BOX_TYPE);
         let segment = written(&MediaDataBox::new(MEDIA_DATA.to_vec()));
+        demux_fsm.resume_at(0).unwrap();
 
         assert_eq!(demux_fsm.handle_input(0, &segment), Err(failure));
         assert_eq!(

@@ -55,9 +55,10 @@
 //!    non-fragmented movie file of §8.2.1 — the brands, the one movie, and
 //!    the media data it declares, lying before the movie or after it — and
 //!    the media segment of §8.16 — the brands, then the fragments and their
-//!    media data, the movie they continue held apart from it. The structure
-//!    is the only layer that knows how a file is put together, and the order
-//!    a file breaks is its failure.
+//!    media data, the movie they continue held apart from it, segments
+//!    concatenated into one stream read as one. The structure is the only
+//!    layer that knows how a file is put together, and the order a file
+//!    breaks is its failure.
 //! 6. **Demux and mux FSMs.** [`FragmentedDemuxFsm`], [`FragmentedMuxFsm`],
 //!    [`NonFragmentedDemuxFsm`], [`NonFragmentedMuxFsm`], [`MediaSegmentDemuxFsm`]
 //!    and [`MediaSegmentMuxFsm`] wire layers 1 to 5 into one machine per
