@@ -31,6 +31,12 @@ use crate::{Error, whole_box_header, whole_payload};
 ///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder), and a
 ///   segment declared over without a fragment is
 ///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
+/// * A `styp` listing a brand under which the `default-base-is-moof` every
+///   `tfhd` states shall not be used
+///   ([`SegmentTypeBox::forbids_default_base_is_moof`]) is
+///   [`UnsupportedBrand`](crate::ErrorKind::UnsupportedBrand), and nothing
+///   of it is laid down. The `ftyp` of the initialization segment is not
+///   handed over, and is not checked.
 /// * A fragment is opened by [`begin_fragment`](Self::begin_fragment) or
 ///   [`begin_fragment_continuing`](Self::begin_fragment_continuing),
 ///   carries the samples handed over next, and is laid down by
@@ -130,6 +136,9 @@ impl MediaSegmentMuxFsm {
     ///
     /// # Errors
     ///
+    /// * [`UnsupportedBrand`](crate::ErrorKind::UnsupportedBrand): a
+    ///   brand listed forbids the `default-base-is-moof` the mux FSM writes;
+    ///   nothing of the box is laid down.
     /// * [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder): a box
     ///   was laid down before them.
     /// * [`Box`](crate::ErrorKind::Box): the box does not write.
@@ -139,6 +148,9 @@ impl MediaSegmentMuxFsm {
     ///   again for every call after it.
     pub fn handle_segment_type(&mut self, segment_type: SegmentTypeBox) -> Result<(), Error> {
         self.writing()?;
+        if segment_type.forbids_default_base_is_moof() {
+            return Err(self.fail(Error::unsupported_brand()));
+        }
         self.write_value(&segment_type)
     }
 
@@ -330,7 +342,7 @@ impl MediaSegmentMuxFsm {
 #[cfg(test)]
 mod tests {
     use isobmff_boxes::{MovieFragmentBox, SampleFlags, SegmentTypeBox};
-    use isobmff_core::BoxDefinition;
+    use isobmff_core::{BoxDefinition, FourCC};
     use isobmff_sample::Sample;
     use isobmff_test_support::{segment_type, unfragmented_movie};
 
@@ -347,6 +359,21 @@ mod tests {
 
         assert_eq!(mux_fsm.finish(), Ok(()));
         assert!(mux_fsm.poll_output().unwrap().ends_with(b"moof"));
+    }
+
+    #[test]
+    fn brands_forbidding_default_base_is_moof_are_rejected_before_anything_is_laid_down() {
+        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
+
+        assert_eq!(
+            mux_fsm.handle_segment_type(SegmentTypeBox::new(
+                FourCC::new(*b"msdh"),
+                0,
+                alloc::vec![FourCC::new(*b"msdh"), FourCC::new(*b"isom")],
+            )),
+            Err(Error::unsupported_brand())
+        );
+        assert_eq!(mux_fsm.poll_output(), None);
     }
 
     #[test]

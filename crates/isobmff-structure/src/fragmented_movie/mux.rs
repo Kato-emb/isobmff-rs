@@ -36,8 +36,12 @@ use crate::{Error, whole_box_header, whole_payload};
 ///   samples are checked against the movie as they are handed over, as
 ///   [`MovieFragmentWriter`] checks them, and a movie it refuses is refused
 ///   before any of it is laid down.
-/// * The `ftyp` handed over is laid down as it stands. Where none was handed
-///   over, the mux FSM lays its own down before the `moov`: `iso6` as its
+/// * The `ftyp` handed over is laid down as it stands, unless it lists a
+///   brand under which the `default-base-is-moof` every `tfhd` states shall
+///   not be used ([`FileTypeBox::forbids_default_base_is_moof`]):
+///   that is [`UnsupportedBrand`](crate::ErrorKind::UnsupportedBrand), and
+///   nothing of it is laid down. Where none was handed over, the mux FSM
+///   lays its own down before the `moov`: `iso6` as its
 ///   `major_brand` and its one `compatible_brands` entry, with
 ///   `minor_version` 0, the brand the widest layout it lays down requires
 ///   (§8.8.7.1, Annex E.9).
@@ -125,6 +129,9 @@ impl FragmentedMuxFsm {
     ///
     /// # Errors
     ///
+    /// * [`UnsupportedBrand`](crate::ErrorKind::UnsupportedBrand): a
+    ///   brand listed forbids the `default-base-is-moof` the mux FSM writes;
+    ///   nothing of the box is laid down.
     /// * [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder): a box
     ///   was handed over before them.
     /// * [`Box`](crate::ErrorKind::Box): the box does not write.
@@ -134,6 +141,9 @@ impl FragmentedMuxFsm {
     ///   again for every call after it.
     pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), Error> {
         self.writing()?;
+        if file_type.forbids_default_base_is_moof() {
+            return Err(self.fail(Error::unsupported_brand()));
+        }
         self.write_value(&file_type)
     }
 
@@ -392,7 +402,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox, SampleFlags, TrackExtendsBox};
-    use isobmff_core::{BoxDecode, BoxDefinition};
+    use isobmff_core::{BoxDecode, BoxDefinition, FourCC};
     use isobmff_sample::Sample;
     use isobmff_test_support::{file_type, fragmented_movie, unfragmented_movie};
 
@@ -446,6 +456,21 @@ mod tests {
             FileTypeBox::decode(&file).map(|(file_type, rest)| (file_type, rest.get(4..8))),
             Ok((file_type(), Some(b"moov".as_slice())))
         );
+    }
+
+    #[test]
+    fn brands_forbidding_default_base_is_moof_are_rejected_before_anything_is_laid_down() {
+        let mut mux_fsm = FragmentedMuxFsm::new();
+
+        assert_eq!(
+            mux_fsm.handle_file_type(FileTypeBox::new(
+                FourCC::new(*b"iso6"),
+                0,
+                alloc::vec![FourCC::new(*b"iso6"), FourCC::new(*b"isom")],
+            )),
+            Err(Error::unsupported_brand())
+        );
+        assert_eq!(mux_fsm.poll_output(), None);
     }
 
     #[test]

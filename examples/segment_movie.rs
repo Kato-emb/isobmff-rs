@@ -1,12 +1,14 @@
 //! Cuts a non-fragmented MP4 file into an initialization segment and media segments
 //!
 //! `init.mp4` carries an `ftyp` and the `moov` alone — the source's `ftyp`, or the `iso6` one the
-//! muxer lays down where the source has none — the tracks of the source emptied of their samples
-//! as `remux_to_fragmented` empties them. `0001.m4s`, `0002.m4s`, … each carry one fragment, after
-//! a `styp` stating the brands of the source's `ftyp` where it has one. The samples are cut and
-//! ordered as `remux_to_fragmented` cuts and orders them — in decode time across the tracks, a
-//! segment opening at every sync sample of a track that carries a sync sample table — and each
-//! keeps the decode time the source gives it, so the segments continue one another.
+//! muxer lays down where the source has none or lists a brand the `default-base-is-moof` of the
+//! fragments shall not be used under, as `remux_to_fragmented` chooses — the tracks of the source
+//! emptied of their samples as `remux_to_fragmented` empties them. `0001.m4s`, `0002.m4s`, … each
+//! carry one fragment, after a `styp` stating the brands of the source's `ftyp` where `init.mp4`
+//! carries it. The samples are cut and ordered as `remux_to_fragmented` cuts and orders them — in
+//! decode time across the tracks, a segment opening at every sync sample of a track that carries a
+//! sync sample table — and each keeps the decode time the source gives it, so the segments
+//! continue one another.
 //!
 //! Usage: `cargo run -p isobmff-examples --example segment_movie -- <in.mp4> <out_dir>`
 
@@ -87,7 +89,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
     }
 
-    let file_type = demux_fsm.file_type().cloned();
+    let file_type = demux_fsm
+        .file_type()
+        .filter(|file_type| !file_type.forbids_default_base_is_moof())
+        .cloned();
     let mut initialization = Sink::new(BufWriter::new(File::create(output.join("init.mp4"))?));
     let mut initialization_fsm = FragmentedMuxFsm::new();
     if let Some(file_type) = &file_type {

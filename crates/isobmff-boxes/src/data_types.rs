@@ -6,6 +6,7 @@
 //! and media header — a type here stands for that shape, and each type cites
 //! the section that settles it.
 
+pub(crate) mod brands;
 pub(crate) mod composition_time_offset;
 pub(crate) mod header_duration;
 pub(crate) mod sample_flags;

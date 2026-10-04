@@ -6,6 +6,8 @@ use isobmff_core::{
     BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FourCC,
 };
 
+use crate::data_types::brands;
+
 /// Length of the fields that precede the compatible brands
 const FIXED_FIELDS_LEN: u64 = 8;
 
@@ -83,6 +85,43 @@ impl FileTypeBox {
     #[must_use]
     pub fn compatible_brands(&self) -> &[FourCC] {
         &self.compatible_brands
+    }
+
+    /// Returns whether a brand listed forbids a `tfhd` to state
+    /// `default-base-is-moof`
+    ///
+    /// ISO/IEC 14496-12 §8.8.7.1 forbids the flag in brands or compatible
+    /// brands earlier than `iso5`: those whose features Annex E has `iso5`
+    /// require support for, `isom`, `avc1`, `iso2`, `iso3` and `iso4`. One
+    /// of them as the `major_brand` or among the `compatible_brands` forbids
+    /// the flag, whatever else is listed; any other brand is taken to allow
+    /// it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff_boxes::FileTypeBox;
+    /// use isobmff_core::FourCC;
+    ///
+    /// // A file listing `isom` beside `iso6` still forbids the flag
+    /// let listing_isom = FileTypeBox::new(
+    ///     FourCC::new(*b"iso6"),
+    ///     0,
+    ///     vec![FourCC::new(*b"iso6"), FourCC::new(*b"isom")],
+    /// );
+    /// assert!(listing_isom.forbids_default_base_is_moof());
+    ///
+    /// // A file listing no brand earlier than `iso5` allows it
+    /// let listing_iso6 = FileTypeBox::new(
+    ///     FourCC::new(*b"iso6"),
+    ///     0,
+    ///     vec![FourCC::new(*b"iso6"), FourCC::new(*b"dash")],
+    /// );
+    /// assert!(!listing_iso6.forbids_default_base_is_moof());
+    /// ```
+    #[must_use]
+    pub fn forbids_default_base_is_moof(&self) -> bool {
+        brands::forbids_default_base_is_moof(self.major_brand, &self.compatible_brands)
     }
 }
 
