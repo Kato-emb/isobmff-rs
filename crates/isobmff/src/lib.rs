@@ -10,9 +10,7 @@
 //! [`structure::NonFragmentedMuxFsm`] and [`structure::MediaSegmentMuxFsm`] go
 //! the other way, laying samples down as a file or a segment of each kind.
 //! None reaches for a source or a sink of its own: when to read or write, and
-//! from or to where, stay with the caller. Where the caller has an I/O to
-//! hand, the `io` feature adds `isobmff::io`, a source read at the offsets a
-//! demux FSM names and a sink the chunks a mux FSM made are written to.
+//! from or to where, stay with the caller.
 //!
 //! # One module per crate
 //!
@@ -28,15 +26,16 @@
 //! | [`boxes`] | `isobmff-boxes` | the catalog layer 2 reads a box into |
 //! | [`sample`] | `isobmff-sample` | layers 3 and 4 |
 //! | [`structure`] | `isobmff-structure` | layers 2, 5 and 6 |
-//! | `io` | `isobmff-io` | layer 7 |
 //! | [`avc`] | `isobmff-avc` | none: the sample entries of ISO/IEC 14496-15 |
 //! | [`mp4`] | `isobmff-mp4` | none: the sample entries and descriptors of ISO/IEC 14496-14 |
 //!
-//! What each module holds is its own summary below; what the seven layers are,
-//! and what passes between them, [`isobmff_structure`] describes. `avc` and
-//! `mp4` are on by default and `io` is not, so a caller that wants the base
-//! specification alone turns the default features off, and one that wants a
-//! source or a sink over an I/O asks for `io`.
+//! Layer 7, the I/O, is the caller's code, and no module holds it: the loop
+//! between a machine and its I/O is
+//! [the one `isobmff_structure` states](isobmff_structure#the-callers-loop).
+//! What each module holds is its own summary below; what the seven layers
+//! are, and what passes between them, [`isobmff_structure`] describes.
+//! `avc` and `mp4` are on by default, so a caller that wants the base
+//! specification alone turns the default features off.
 //!
 //! Each crate names the failures of its own layers `Error` and `ErrorKind`, and
 //! carries the failures of the layers beneath through whole rather than
@@ -46,15 +45,13 @@
 //! # `no_std`
 //!
 //! The crate is `no_std` but needs `alloc`, for the reasons
-//! [`isobmff_structure`] states of the layers beneath. The `io` feature, off by
-//! default, adds `isobmff::io` alone, which needs `std`: the six layers beneath
-//! it are the same with it or without.
+//! [`isobmff_structure`] states of the layers beneath.
 //!
 //! # Examples
 //!
 //! The [`examples`](https://github.com/Kato-emb/isobmff-rs/tree/main/examples)
 //! directory of the repository holds one program per use, each written
-//! against this crate alone with its `io` feature on, and run from a
+//! against this crate and the I/O it reads and writes through, and run from a
 //! checkout as `cargo run -p isobmff-examples --example <name> -- <arguments>`.
 
 #![no_std]
@@ -90,14 +87,6 @@ pub mod sample {
 /// read and write one — the `isobmff-structure` crate whole
 pub mod structure {
     pub use isobmff_structure::*;
-}
-
-/// A source read at an offset and a sink written a chunk at a time,
-/// over `futures::io` at the root and over `std::io` in `blocking` — the
-/// `isobmff-io` crate whole, behind the `io` feature
-#[cfg(feature = "io")]
-pub mod io {
-    pub use isobmff_io::*;
 }
 
 /// Sample entries of ISO/IEC 14496-15, the carriage of AVC video — the

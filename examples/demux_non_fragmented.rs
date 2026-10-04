@@ -5,8 +5,8 @@
 use core::error::Error;
 use std::env;
 use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 
-use isobmff::io::blocking::Source;
 use isobmff::structure::NonFragmentedDemuxFsm;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -14,16 +14,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         .nth(1)
         .ok_or("usage: demux_non_fragmented <in.mp4>")?;
 
-    let mut source = Source::new(File::open(path)?)?;
+    let mut file = File::open(path)?;
+    let mut buffer = vec![0; 1024 * 1024];
     let mut demux_fsm = NonFragmentedDemuxFsm::new();
 
     let mut count: u64 = 0;
     while let Some(wanted) = demux_fsm.wanted_input() {
-        let bytes = source.read_at(wanted.offset(), wanted.length())?;
-        let handed = if bytes.is_empty() {
+        file.seek(SeekFrom::Start(wanted.offset()))?;
+        let read = file.read(&mut buffer)?;
+        let handed = if read == 0 {
             demux_fsm.finish()
         } else {
-            demux_fsm.handle_input(wanted.offset(), bytes)
+            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
         };
         while let Some(sample) = demux_fsm.poll_sample() {
             println!(

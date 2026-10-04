@@ -9,15 +9,13 @@
 //! Usage: `cargo run -p isobmff-examples --example remux_to_non_fragmented -- <in.mp4> <out.mp4>`
 
 use core::error::Error;
-use core::iter;
 use std::env;
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use isobmff::boxes::MovieBox;
 use isobmff::core::Mp4EpochSeconds;
-use isobmff::io::blocking::{Sink, Source};
 use isobmff::structure::{FragmentedDemuxFsm, NonFragmentedMuxFsm};
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -26,7 +24,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let input = arguments.next().ok_or(usage)?;
     let output = arguments.next().ok_or(usage)?;
 
-    let mut source = Source::new(File::open(input)?)?;
+    let mut input_file = File::open(input)?;
+    let mut buffer = vec![0; 1024 * 1024];
     let mut demux_fsm = FragmentedDemuxFsm::new();
     let mut handed = Ok(());
     while demux_fsm.movie().is_none() {
@@ -34,11 +33,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         let wanted = demux_fsm
             .wanted_input()
             .ok_or("the file carries no movie")?;
-        let bytes = source.read_at(wanted.offset(), wanted.length())?;
-        handed = if bytes.is_empty() {
+        input_file.seek(SeekFrom::Start(wanted.offset()))?;
+        let read = input_file.read(&mut buffer)?;
+        handed = if read == 0 {
             demux_fsm.finish()
         } else {
-            demux_fsm.handle_input(wanted.offset(), bytes)
+            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
         };
     }
     let movie = demux_fsm.movie().ok_or("the file carries no movie")?;
@@ -62,7 +62,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     )
     .ok_or("the movie declares no track")?;
 
-    let mut sink = Sink::new(BufWriter::new(File::create(output)?));
+    let mut output_file = BufWriter::new(File::create(output)?);
     let mut mux_fsm = NonFragmentedMuxFsm::new();
     if let Some(file_type) = demux_fsm.file_type() {
         mux_fsm.handle_file_type(file_type.clone())?;
@@ -75,7 +75,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             if chunk != described_by {
                 chunk = described_by;
                 mux_fsm.begin_chunk()?;
-                sink.write(iter::from_fn(|| mux_fsm.poll_output()))?;
+                while let Some(chunk) = mux_fsm.poll_output() {
+                    output_file.write_all(&chunk)?;
+                }
             }
             mux_fsm.handle_sample(sample)?;
         }
@@ -83,16 +85,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         let Some(wanted) = demux_fsm.wanted_input() else {
             break;
         };
-        let bytes = source.read_at(wanted.offset(), wanted.length())?;
-        handed = if bytes.is_empty() {
+        input_file.seek(SeekFrom::Start(wanted.offset()))?;
+        let read = input_file.read(&mut buffer)?;
+        handed = if read == 0 {
             demux_fsm.finish()
         } else {
-            demux_fsm.handle_input(wanted.offset(), bytes)
+            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
         };
     }
     mux_fsm.finish()?;
-    sink.write(iter::from_fn(|| mux_fsm.poll_output()))?;
-    sink.flush()?;
+    while let Some(chunk) = mux_fsm.poll_output() {
+        output_file.write_all(&chunk)?;
+    }
+    output_file.flush()?;
 
     Ok(())
 }

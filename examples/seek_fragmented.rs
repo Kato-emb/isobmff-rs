@@ -12,8 +12,8 @@
 use core::error::Error;
 use std::env;
 use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 
-use isobmff::io::blocking::Source;
 use isobmff::sample::movie_fragment_random_access::sync_sample_at;
 use isobmff::structure::FragmentedDemuxFsm;
 
@@ -23,28 +23,30 @@ fn main() -> Result<(), Box<dyn Error>> {
     let path = arguments.next().ok_or(usage)?;
     let milliseconds: u64 = arguments.next().ok_or(usage)?.parse()?;
 
-    let file = File::open(path)?;
+    let mut file = File::open(path)?;
     let file_len = file.metadata()?.len();
-    let mut source = Source::new(file)?;
+    let mut buffer = vec![0; 1024 * 1024];
     let mut demux_fsm = FragmentedDemuxFsm::new();
     while demux_fsm.movie().is_none() {
         let wanted = demux_fsm
             .wanted_input()
             .ok_or("the file carries no movie")?;
-        let bytes = source.read_at(wanted.offset(), wanted.length())?;
-        if bytes.is_empty() {
+        file.seek(SeekFrom::Start(wanted.offset()))?;
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
             demux_fsm.finish()?;
         } else {
-            demux_fsm.handle_input(wanted.offset(), bytes)?;
+            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())?;
         }
     }
     demux_fsm.resume_at_movie_fragment_random_access(file_len)?;
     while let Some(wanted) = demux_fsm.wanted_input() {
-        let bytes = source.read_at(wanted.offset(), wanted.length())?;
-        if bytes.is_empty() {
+        file.seek(SeekFrom::Start(wanted.offset()))?;
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
             demux_fsm.finish()?;
         } else {
-            demux_fsm.handle_input(wanted.offset(), bytes)?;
+            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())?;
         }
     }
     let movie = demux_fsm.movie().ok_or("the file carries no movie")?;
@@ -79,11 +81,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut count: u64 = 0;
     while let Some(wanted) = demux_fsm.wanted_input() {
-        let bytes = source.read_at(wanted.offset(), wanted.length())?;
-        let handed = if bytes.is_empty() {
+        file.seek(SeekFrom::Start(wanted.offset()))?;
+        let read = file.read(&mut buffer)?;
+        let handed = if read == 0 {
             demux_fsm.finish()
         } else {
-            demux_fsm.handle_input(wanted.offset(), bytes)
+            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
         };
         while let Some(sample) = demux_fsm.poll_sample() {
             println!(

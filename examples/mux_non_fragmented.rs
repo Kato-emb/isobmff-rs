@@ -7,10 +7,9 @@
 //! Usage: `cargo run -p isobmff-examples --example mux_non_fragmented -- <out.mp4> [seconds]`
 
 use core::error::Error;
-use core::iter;
 use std::env;
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::{BufWriter, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use isobmff::boxes::{
@@ -24,7 +23,6 @@ use isobmff::core::{
     AnyBox, BoxType, FieldWriter, FourCC, FullBoxFlags, I8F8, LanguageCode, Mp4EpochSeconds,
     NullTerminatedString, U16F16,
 };
-use isobmff::io::blocking::Sink;
 use isobmff::sample::Sample;
 use isobmff::structure::NonFragmentedMuxFsm;
 
@@ -103,14 +101,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     let movie = MovieBox::new(movie_header, vec![TrackBox::new(track_header, media)], None)
         .ok_or("the movie declares no track")?;
 
-    let mut sink = Sink::new(BufWriter::new(File::create(path)?));
+    let mut file = BufWriter::new(File::create(path)?);
     let mut mux_fsm = NonFragmentedMuxFsm::new();
     mux_fsm.handle_movie(movie)?;
     for start in (0..frames).step_by(usize::try_from(FRAMES_PER_SAMPLE)?) {
         let end = start.saturating_add(FRAMES_PER_SAMPLE).min(frames);
         if start % SAMPLE_RATE < FRAMES_PER_SAMPLE {
             mux_fsm.begin_chunk()?;
-            sink.write(iter::from_fn(|| mux_fsm.poll_output()))?;
+            while let Some(chunk) = mux_fsm.poll_output() {
+                file.write_all(&chunk)?;
+            }
         }
         let data = (start..end)
             .flat_map(|frame| {
@@ -135,8 +135,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         ))?;
     }
     mux_fsm.finish()?;
-    sink.write(iter::from_fn(|| mux_fsm.poll_output()))?;
-    sink.flush()?;
+    while let Some(chunk) = mux_fsm.poll_output() {
+        file.write_all(&chunk)?;
+    }
+    file.flush()?;
 
     Ok(())
 }

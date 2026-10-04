@@ -15,8 +15,6 @@ exclude.workspace = true
 default = ["avc", "mp4"]
 # `isobmff::avc`, ISO/IEC 14496-15.
 avc = ["dep:isobmff-avc"]
-# `isobmff::io`, a source and a sink the demux and mux FSMs are read and written through.
-io = ["dep:isobmff-io"]
 # `isobmff::mp4`, ISO/IEC 14496-14.
 mp4 = ["dep:isobmff-mp4"]
 
@@ -24,7 +22,6 @@ mp4 = ["dep:isobmff-mp4"]
 isobmff-avc = { workspace = true, optional = true }
 isobmff-boxes.workspace = true
 isobmff-core.workspace = true
-isobmff-io = { workspace = true, optional = true }
 isobmff-mp4 = { workspace = true, optional = true }
 isobmff-sample.workspace = true
 isobmff-sequence.workspace = true

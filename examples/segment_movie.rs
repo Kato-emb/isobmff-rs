@@ -13,17 +13,15 @@
 //! Usage: `cargo run -p isobmff-examples --example segment_movie -- <in.mp4> <out_dir>`
 
 use core::error::Error;
-use core::iter;
 use std::env;
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
 use isobmff::boxes::{
     ChunkOffsetBox, ChunkOffsets, MovieBox, SampleSizeBox, SampleSizeEntries, SampleSizes,
     SampleTableBox, SampleToChunkBox, SegmentTypeBox, TimeToSampleBox,
 };
-use isobmff::io::blocking::{Sink, Source};
 use isobmff::sample::Sample;
 use isobmff::structure::{FragmentedMuxFsm, MediaSegmentMuxFsm, NonFragmentedDemuxFsm};
 
@@ -40,7 +38,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let input = arguments.next().ok_or(usage)?;
     let output = PathBuf::from(arguments.next().ok_or(usage)?);
 
-    let mut source = Source::new(File::open(input)?)?;
+    let mut file = File::open(input)?;
+    let mut buffer = vec![0; 1024 * 1024];
     let mut demux_fsm = NonFragmentedDemuxFsm::new();
     let mut handed = Ok(());
     while demux_fsm.movie().is_none() {
@@ -48,11 +47,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         let wanted = demux_fsm
             .wanted_input()
             .ok_or("the file carries no movie")?;
-        let bytes = source.read_at(wanted.offset(), wanted.length())?;
-        handed = if bytes.is_empty() {
+        file.seek(SeekFrom::Start(wanted.offset()))?;
+        let read = file.read(&mut buffer)?;
+        handed = if read == 0 {
             demux_fsm.finish()
         } else {
-            demux_fsm.handle_input(wanted.offset(), bytes)
+            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
         };
     }
     let source_movie = demux_fsm.movie().ok_or("the file carries no movie")?;
@@ -93,14 +93,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         .file_type()
         .filter(|file_type| !file_type.forbids_default_base_is_moof())
         .cloned();
-    let mut initialization = Sink::new(BufWriter::new(File::create(output.join("init.mp4"))?));
+    let mut initialization = BufWriter::new(File::create(output.join("init.mp4"))?);
     let mut initialization_fsm = FragmentedMuxFsm::new();
     if let Some(file_type) = &file_type {
         initialization_fsm.handle_file_type(file_type.clone())?;
     }
     initialization_fsm.handle_movie(movie.clone())?;
     initialization_fsm.finish()?;
-    initialization.write(iter::from_fn(|| initialization_fsm.poll_output()))?;
+    while let Some(chunk) = initialization_fsm.poll_output() {
+        initialization.write_all(&chunk)?;
+    }
     initialization.flush()?;
 
     let mut sequence_number: u32 = 0;
@@ -109,7 +111,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .checked_add(1)
             .ok_or("more segments than a sequence number counts")?;
         let path = output.join(format!("{sequence_number:04}.m4s"));
-        let mut segment = Sink::new(BufWriter::new(File::create(path)?));
+        let mut segment = BufWriter::new(File::create(path)?);
         let mut segment_fsm = MediaSegmentMuxFsm::new(&movie)?;
         if let Some(file_type) = &file_type {
             segment_fsm.handle_segment_type(SegmentTypeBox::new(
@@ -125,7 +127,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         segment_fsm.finish_fragment()?;
         segment_fsm.finish()?;
-        segment.write(iter::from_fn(|| segment_fsm.poll_output()))?;
+        while let Some(chunk) = segment_fsm.poll_output() {
+            segment.write_all(&chunk)?;
+        }
         Ok(segment.flush()?)
     };
 
@@ -148,11 +152,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             let Some(wanted) = demux_fsm.wanted_input() else {
                 break;
             };
-            let bytes = source.read_at(wanted.offset(), wanted.length())?;
-            handed = if bytes.is_empty() {
+            file.seek(SeekFrom::Start(wanted.offset()))?;
+            let read = file.read(&mut buffer)?;
+            handed = if read == 0 {
                 demux_fsm.finish()
             } else {
-                demux_fsm.handle_input(wanted.offset(), bytes)
+                demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
             };
         }
         let Some(queue) = queues

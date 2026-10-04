@@ -90,13 +90,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Not --all-targets: the test and doctest targets need std by design, and
       # building them here would fail for reasons unrelated to the crate.
-      # isobmff-io is excluded, not merely unbuilt: it drives the layers beneath
-      # over an I/O, so std is what it is for. isobmff-examples is excluded with
-      # it: it asks isobmff for `io`, which would bring isobmff-io back in.
-      # isobmff-benches is excluded as well: criterion, which it depends on,
-      # needs std. So is isobmff-wasm: it asks for `io` too, and it is built for
-      # a browser, which the wasm job checks.
-      - run: cargo check --workspace --exclude isobmff-io --exclude isobmff-examples --exclude isobmff-benches --exclude isobmff-wasm --target thumbv7em-none-eabihf
+      # isobmff-examples is excluded, not merely unbuilt: its programs read and
+      # write files, so std is what they are for. isobmff-benches is excluded
+      # as well: criterion, which it depends on, needs std. So is isobmff-wasm:
+      # it is built for a browser, which the wasm job checks.
+      - run: cargo check --workspace --exclude isobmff-examples --exclude isobmff-benches --exclude isobmff-wasm --target thumbv7em-none-eabihf
       # The alloc feature is on by default, so every other job builds core with a
       # heap behind it. Only this run reaches the alloc-free path, and it runs on
       # the target that has no allocator to fall back on.
