@@ -1,9 +1,5 @@
 //! [`TrackRunBox`] (`trun`), ISO/IEC 14496-12 §8.8.8
 
-mod builder;
-
-pub use builder::{StatedTrackRunSample, TrackRunBuilder};
-
 use alloc::vec::Vec;
 
 use isobmff_core::{
@@ -12,6 +8,7 @@ use isobmff_core::{
 };
 
 use crate::data_types::{CompositionTimeOffset, SampleFlags, read_sample_flags};
+use crate::tfhd::TrackFragmentHeaderBox;
 
 /// Length of the fields that precede the optional ones
 const FIXED_FIELDS_LEN: u64 = 8;
@@ -241,6 +238,91 @@ impl TrackRunBox {
     #[must_use]
     pub fn samples(&self) -> &[TrackRunSample] {
         &self.samples
+    }
+
+    /// Returns the run as `tfhd` has it: the fields whose defaults every row agrees with are left out
+    ///
+    /// A field the header states a default for, which every row of the run
+    /// agrees with, is left out of the rows. Flags that only the first row
+    /// differs from the default on are written as its `first_sample_flags`
+    /// (ISO/IEC 14496-12 §8.8.8). A composition time offset is left out of the
+    /// rows where none of them states one other than zero. Every sample keeps
+    /// what it states.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff_boxes::{CompositionTimeOffset, SampleFlags, TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample};
+    ///
+    /// // Two samples lasting 1024 units each, of different sizes, every field stated
+    /// let offset = Some(CompositionTimeOffset::new(0).unwrap());
+    /// let track_run = TrackRunBox::new(
+    ///     Some(100),
+    ///     None,
+    ///     vec![
+    ///         TrackRunSample::new(Some(1_024), Some(4), Some(SampleFlags::ZERO), offset),
+    ///         TrackRunSample::new(Some(1_024), Some(2), Some(SampleFlags::ZERO), offset),
+    ///     ],
+    /// )
+    /// .unwrap();
+    ///
+    /// // Against a header stating the duration and the flags, only the size is written per row
+    /// let header = TrackFragmentHeaderBox::new(TrackFragmentHeaderFlags::ZERO, 1, None, None, Some(1_024), None, Some(SampleFlags::ZERO));
+    /// assert_eq!(
+    ///     track_run.without_defaults(&header).samples(),
+    ///     [
+    ///         TrackRunSample::new(None, Some(4), None, None),
+    ///         TrackRunSample::new(None, Some(2), None, None),
+    ///     ]
+    /// );
+    /// ```
+    #[must_use]
+    pub fn without_defaults(&self, tfhd: &TrackFragmentHeaderBox) -> Self {
+        let rows = || self.samples.iter();
+        let carries_duration = tfhd.default_sample_duration().is_none_or(|default| {
+            rows().any(|row| row.sample_duration.is_some_and(|value| value != default))
+        });
+        let carries_size = tfhd.default_sample_size().is_none_or(|default| {
+            rows().any(|row| row.sample_size.is_some_and(|value| value != default))
+        });
+        let carries_offsets = rows().any(|row| {
+            row.sample_composition_time_offset
+                .is_some_and(|offset| offset.get() != 0)
+        });
+        let (carries_flags, first_sample_flags) = match tfhd.default_sample_flags() {
+            Some(default)
+                if rows()
+                    .skip(1)
+                    .all(|row| row.sample_flags.is_none_or(|flags| flags == default)) =>
+            {
+                let first = rows().next().and_then(|row| row.sample_flags);
+
+                (
+                    false,
+                    self.first_sample_flags
+                        .or(first)
+                        .filter(|first| *first != default),
+                )
+            }
+            _default_the_rows_do_not_share => (true, self.first_sample_flags),
+        };
+
+        let samples = rows()
+            .map(|row| TrackRunSample {
+                sample_duration: row.sample_duration.filter(|_| carries_duration),
+                sample_size: row.sample_size.filter(|_| carries_size),
+                sample_flags: row.sample_flags.filter(|_| carries_flags),
+                sample_composition_time_offset: row
+                    .sample_composition_time_offset
+                    .filter(|_| carries_offsets),
+            })
+            .collect();
+
+        Self {
+            data_offset: self.data_offset,
+            first_sample_flags,
+            samples,
+        }
     }
 }
 

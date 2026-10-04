@@ -1,13 +1,13 @@
 //! [`OpenFragment`], the samples of one movie fragment held until it is closed
 
 use alloc::collections::BTreeMap;
+use alloc::vec;
 use alloc::vec::Vec;
 
 use isobmff_boxes::{
     CompositionTimeOffset, MediaDataBox, MovieFragmentBox, MovieFragmentHeaderBox, SampleFlags,
-    StatedTrackRunSample, TrackBox, TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox,
-    TrackFragmentBox, TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox,
-    TrackRunBuilder,
+    TrackBox, TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
+    TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
 };
 use isobmff_core::{BoxDefinition as _, BoxEncode as _};
 
@@ -18,11 +18,12 @@ use crate::track_decode_times::TrackDecodeTimes;
 
 /// Samples of one track lying next to each other in the media data of a fragment
 ///
-/// `data_offset` is where the run starts in that media data.
+/// `data_offset` is where the run starts in that media data, and every row
+/// states all four fields of its sample.
 #[derive(Clone, Debug)]
 struct OpenRun {
     data_offset: u64,
-    builder: TrackRunBuilder,
+    rows: Vec<TrackRunSample>,
 }
 
 /// Samples one track contributes to the fragment being written
@@ -42,40 +43,37 @@ struct OpenTrack {
 }
 
 impl OpenTrack {
-    /// Adds `row` to this track, in the run it carries on or one starting at `data_offset`
+    /// Adds `row`, lasting `sample_duration`, to this track, in the run it carries on or one starting at `data_offset`
     ///
     /// `carries_on` states whether the sample handed over before this one
     /// belonged to this track, which is what makes the two lie next to each
-    /// other in the media data. A run that cannot write the row beside the
-    /// ones it holds hands it back, and a new run starts with it.
+    /// other in the media data.
     fn place(
         &mut self,
-        row: StatedTrackRunSample,
+        row: TrackRunSample,
+        sample_duration: u32,
         data_offset: u64,
         carries_on: bool,
     ) -> Result<(), Error> {
         self.reached = self
             .reached
-            .checked_add(u64::from(row.sample_duration()))
+            .checked_add(u64::from(sample_duration))
             .ok_or(Error::decode_time_overflow(self.track_id))?;
 
-        let placed = match self.runs.last_mut() {
-            Some(run) if carries_on => run.builder.push(row),
-            _no_run_this_sample_carries_on => Err(row),
-        };
-        if let Err(row) = placed {
-            self.runs.push(OpenRun {
+        match self.runs.last_mut() {
+            Some(run) if carries_on => run.rows.push(row),
+            _no_run_this_sample_carries_on => self.runs.push(OpenRun {
                 data_offset,
-                builder: TrackRunBuilder::new(row),
-            });
+                rows: vec![row],
+            }),
         }
 
         Ok(())
     }
 
     /// Returns every row of every run of the track, in the order they were placed
-    fn rows(&self) -> impl Iterator<Item = &StatedTrackRunSample> {
-        self.runs.iter().flat_map(|run| run.builder.rows())
+    fn rows(&self) -> impl Iterator<Item = &TrackRunSample> {
+        self.runs.iter().flat_map(|run| &run.rows)
     }
 }
 
@@ -134,11 +132,12 @@ impl OpenFragment {
             ));
         };
 
-        let row = StatedTrackRunSample::new(
-            sample.sample_duration(),
-            sample_size,
-            sample.sample_flags(),
-            sample_composition_time_offset,
+        let sample_duration = sample.sample_duration();
+        let row = TrackRunSample::new(
+            Some(sample_duration),
+            Some(sample_size),
+            Some(sample.sample_flags()),
+            Some(sample_composition_time_offset),
         );
         let decode_time = sample.decode_time();
         let sample_description_index = sample.sample_description_index();
@@ -170,7 +169,7 @@ impl OpenFragment {
                     return Err(Error::decode_time_mismatch(track_id, decode_time, expected));
                 }
 
-                track.place(row, data_offset, carries_on)?;
+                track.place(row, sample_duration, data_offset, carries_on)?;
             }
             None => {
                 let trak = trak.iter().find(|trak| trak.tkhd().track_id() == track_id);
@@ -195,7 +194,7 @@ impl OpenFragment {
                     sample_description_index,
                     runs: Vec::new(),
                 };
-                track.place(row, data_offset, false)?;
+                track.place(row, sample_duration, data_offset, false)?;
                 self.placed_tracks.insert(track_id, self.tracks.len());
                 self.tracks.push(track);
             }
@@ -234,11 +233,11 @@ impl OpenFragment {
 /// What the samples of one track fragment share, and so what its `tfhd` states
 ///
 /// A field every sample of the fragment states the same value for is written
-/// once as the default of the `tfhd`, which [`TrackRunBuilder`] then leaves out
-/// of the rows of every run. A fragment whose samples share their flags but
-/// for the first one states the shared ones, so that the builder writes the
-/// flags of the first sample as its `first_sample_flags` (ISO/IEC 14496-12
-/// §8.8.8) against that default.
+/// once as the default of the `tfhd`, which
+/// [`TrackRunBox::without_defaults`] then leaves out of the rows of every run.
+/// A fragment whose samples share their flags but for the first one states the
+/// shared ones, so that the flags of the first sample are written as its
+/// `first_sample_flags` (ISO/IEC 14496-12 §8.8.8) against that default.
 #[derive(Clone, Copy, Debug)]
 struct Defaults {
     sample_duration: Option<u32>,
@@ -249,12 +248,14 @@ struct Defaults {
 impl Defaults {
     /// Returns what the samples of `track` share
     fn of(track: &OpenTrack) -> Self {
-        let flags = || track.rows().map(StatedTrackRunSample::sample_flags);
+        let flags = || track.rows().map(TrackRunSample::sample_flags);
 
         Self {
-            sample_duration: shared(track.rows().map(StatedTrackRunSample::sample_duration)),
-            sample_size: shared(track.rows().map(StatedTrackRunSample::sample_size)),
-            sample_flags: shared(flags()).or_else(|| shared(flags().skip(1))),
+            sample_duration: shared(track.rows().map(TrackRunSample::sample_duration)).flatten(),
+            sample_size: shared(track.rows().map(TrackRunSample::sample_size)).flatten(),
+            sample_flags: shared(flags())
+                .or_else(|| shared(flags().skip(1)))
+                .flatten(),
         }
     }
 }
@@ -319,7 +320,19 @@ fn build_track_fragment(track: &OpenTrack, base: Option<u64>) -> Result<TrackFra
                 }
                 None => 0,
             };
-            Ok(run.builder.build(Some(data_offset), &header))
+            let track_run = TrackRunBox::new(Some(data_offset), None, run.rows.clone())
+                .ok_or_else(|| {
+                    let widest = run.rows.iter().filter_map(|row| {
+                        row.sample_composition_time_offset()
+                            .map(CompositionTimeOffset::get)
+                    });
+                    Error::composition_time_offset_out_of_range(
+                        track.track_id,
+                        widest.max().unwrap_or_default(),
+                    )
+                })?;
+
+            Ok(track_run.without_defaults(&header))
         })
         .collect::<Result<Vec<_>, Error>>()?;
 

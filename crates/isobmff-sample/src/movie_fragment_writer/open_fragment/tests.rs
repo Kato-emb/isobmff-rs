@@ -366,13 +366,22 @@ fn flags_no_two_samples_share_are_written_by_every_row() {
 }
 
 #[test]
-fn a_run_is_split_where_no_trun_version_writes_both_offsets() {
-    let (movie_fragment, _media_data) = one_fragment(vec![
-        offset_by(0, -8),
-        offset_by(1_024, i64::from(u32::MAX)),
-    ]);
+fn a_run_stating_offsets_no_one_trun_version_writes_both_of_is_refused() {
+    let mut writer = writer();
 
-    assert_eq!(rows_of_the_runs(&movie_fragment, 1), [1, 1]);
+    writer.begin_fragment(1).unwrap();
+    writer.handle_sample(offset_by(0, -8)).unwrap();
+    writer
+        .handle_sample(offset_by(1_024, i64::from(u32::MAX)))
+        .unwrap();
+
+    assert_eq!(
+        writer.finish_fragment(),
+        Err(Error::composition_time_offset_out_of_range(
+            1,
+            i64::from(u32::MAX)
+        ))
+    );
 }
 
 #[test]

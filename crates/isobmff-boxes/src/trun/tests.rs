@@ -4,7 +4,8 @@ use alloc::vec::Vec;
 use isobmff_core::{BoxDecode, BoxEncode, Error};
 
 use super::{CompositionTimeOffset, MAXIMUM_EMPTY_ROWS, TrackRunBox, TrackRunSample};
-use crate::SampleFlags;
+use crate::tfhd::{TrackFragmentHeaderBox, TrackFragmentHeaderFlags};
+use crate::{DegradationPriorityEntry, PaddingBitsEntry, SampleDependencyTypeEntry, SampleFlags};
 
 /// Row stating the size of its sample and the offset to its composition time
 fn sample(sample_size: u32, sample_composition_time_offset: i64) -> TrackRunSample {
@@ -220,5 +221,165 @@ fn a_version_the_box_does_not_read_is_rejected() {
     assert_eq!(
         TrackRunBox::decode_payload(&payload),
         Err(Error::unsupported_version(2))
+    );
+}
+
+/// Flags of a sync sample that depends on no other
+fn independent() -> SampleFlags {
+    SampleFlags::new(
+        SampleDependencyTypeEntry::new(0, 2, 0, 0).unwrap(),
+        PaddingBitsEntry::default(),
+        false,
+        DegradationPriorityEntry::default(),
+    )
+}
+
+/// Flags of a sample that depends on others and is left out of the sync samples
+fn dependent() -> SampleFlags {
+    SampleFlags::new(
+        SampleDependencyTypeEntry::new(0, 1, 0, 0).unwrap(),
+        PaddingBitsEntry::default(),
+        true,
+        DegradationPriorityEntry::default(),
+    )
+}
+
+/// Row stating every field: a sample lasting 1024 units and occupying 4 bytes, flagged `sample_flags`, composed at `offset`
+fn stated(sample_flags: SampleFlags, offset: i64) -> TrackRunSample {
+    TrackRunSample::new(
+        Some(1_024),
+        Some(4),
+        Some(sample_flags),
+        Some(CompositionTimeOffset::new(offset).unwrap()),
+    )
+}
+
+/// Header of track 1 stating the defaults given
+fn header(
+    default_sample_duration: Option<u32>,
+    default_sample_size: Option<u32>,
+    default_sample_flags: Option<SampleFlags>,
+) -> TrackFragmentHeaderBox {
+    TrackFragmentHeaderBox::new(
+        TrackFragmentHeaderFlags::ZERO,
+        1,
+        None,
+        None,
+        default_sample_duration,
+        default_sample_size,
+        default_sample_flags,
+    )
+}
+
+/// Run of the rows given, with no data offset, as `header` has it
+fn without_defaults(rows: &[TrackRunSample], header: &TrackFragmentHeaderBox) -> TrackRunBox {
+    TrackRunBox::new(None, None, rows.to_vec())
+        .unwrap()
+        .without_defaults(header)
+}
+
+#[test]
+fn the_fields_the_header_defaults_cover_are_left_out_of_the_rows() {
+    let run = without_defaults(
+        &[stated(SampleFlags::ZERO, 0), stated(SampleFlags::ZERO, 0)],
+        &header(Some(1_024), Some(4), Some(SampleFlags::ZERO)),
+    );
+
+    assert_eq!(
+        run,
+        TrackRunBox::new(
+            None,
+            None,
+            vec![TrackRunSample::new(None, None, None, None); 2]
+        )
+        .unwrap()
+    );
+}
+
+#[test]
+fn a_field_a_row_differs_from_its_default_on_is_stated_by_every_row() {
+    let run = without_defaults(
+        &[stated(SampleFlags::ZERO, 0), stated(SampleFlags::ZERO, 0)],
+        &header(Some(512), Some(4), Some(SampleFlags::ZERO)),
+    );
+
+    assert_eq!(
+        run,
+        TrackRunBox::new(
+            None,
+            None,
+            vec![TrackRunSample::new(Some(1_024), None, None, None); 2]
+        )
+        .unwrap()
+    );
+}
+
+#[test]
+fn flags_only_the_first_row_differs_on_are_its_own() {
+    let run = without_defaults(
+        &[stated(independent(), 0), stated(dependent(), 0)],
+        &header(Some(1_024), Some(4), Some(dependent())),
+    );
+
+    assert_eq!(
+        run,
+        TrackRunBox::new(
+            None,
+            Some(independent()),
+            vec![TrackRunSample::new(None, None, None, None); 2]
+        )
+        .unwrap()
+    );
+}
+
+#[test]
+fn flags_a_later_row_differs_on_are_stated_by_every_row() {
+    let run = without_defaults(
+        &[stated(dependent(), 0), stated(independent(), 0)],
+        &header(Some(1_024), Some(4), Some(dependent())),
+    );
+
+    assert_eq!(
+        run,
+        TrackRunBox::new(
+            None,
+            None,
+            vec![
+                TrackRunSample::new(None, None, Some(dependent()), None),
+                TrackRunSample::new(None, None, Some(independent()), None),
+            ]
+        )
+        .unwrap()
+    );
+}
+
+#[test]
+fn an_offset_other_than_zero_has_every_row_state_one() {
+    let run = without_defaults(
+        &[stated(SampleFlags::ZERO, 0), stated(SampleFlags::ZERO, 8)],
+        &header(Some(1_024), Some(4), Some(SampleFlags::ZERO)),
+    );
+
+    assert_eq!(
+        run,
+        TrackRunBox::new(
+            None,
+            None,
+            vec![
+                TrackRunSample::new(
+                    None,
+                    None,
+                    None,
+                    Some(CompositionTimeOffset::new(0).unwrap())
+                ),
+                TrackRunSample::new(
+                    None,
+                    None,
+                    None,
+                    Some(CompositionTimeOffset::new(8).unwrap())
+                ),
+            ]
+        )
+        .unwrap()
     );
 }

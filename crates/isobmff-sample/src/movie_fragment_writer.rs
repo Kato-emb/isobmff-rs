@@ -54,9 +54,7 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///   `first_sample_flags`. The `stsd` entry is always stated by the `tfhd`.
 /// * A run whose samples all compose when they are decoded states no
 ///   composition time offset; one holding any other offset states one for
-///   every row, and is cut where the two versions of a `trun` would disagree
-///   on how to write them (§8.8.8), as
-///   [`TrackRunBuilder`](isobmff_boxes::TrackRunBuilder) has it.
+///   every row.
 ///
 /// # Contract
 ///
@@ -106,6 +104,11 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// * The samples of one `traf` are all described by one `stsd` entry, which
 ///   the `tfhd` states for them: a fragment mixing two is
 ///   [`SampleDescriptionIndexMismatch`](crate::ErrorKind::SampleDescriptionIndexMismatch).
+/// * A run stating a negative composition time offset and one past
+///   [`i32::MAX`], which no one version of a `trun` writes both of (§8.8.8),
+///   is reported by [`finish_fragment`](Self::finish_fragment), where the
+///   runs are built:
+///   [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange).
 /// * A fragment of no samples is written as a `moof` of no `traf` beside an
 ///   empty payload.
 /// * An `Err` leaves the writer failed for good,
@@ -307,6 +310,10 @@ impl MovieFragmentWriter {
     ///   fragment was open to close.
     /// * [`DataOffsetOutOfRange`](crate::ErrorKind::DataOffsetOutOfRange):
     ///   a sample lies further into the fragment than a `trun` reaches.
+    /// * [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange):
+    ///   a run states a negative composition time offset and one past
+    ///   [`i32::MAX`], which no one version of a `trun` writes both of; the
+    ///   failure names the widest.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
