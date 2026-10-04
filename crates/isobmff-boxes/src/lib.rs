@@ -119,5 +119,5 @@ pub use tkhd::TrackHeaderBox;
 pub use traf::TrackFragmentBox;
 pub use trak::TrackBox;
 pub use trex::TrackExtendsBox;
-pub use trun::{StatedTrackRunSample, TrackRunBox, TrackRunBuilder, TrackRunSample};
+pub use trun::{TrackRunBox, TrackRunSample};
 pub use vmhd::VideoMediaHeaderBox;

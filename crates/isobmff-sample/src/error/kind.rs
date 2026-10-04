@@ -150,9 +150,10 @@ pub enum ErrorKind {
     ///
     /// Version 0 of either box writes the offset unsigned in 32 bits and
     /// version 1 signed (ISO/IEC 14496-12 §8.8.8, §8.6.1.3), so one past both
-    /// is refused. A `ctts` states the offsets of a whole track in one version,
-    /// so a track stating a negative offset and one past [`i32::MAX`] is
-    /// refused too, naming the widest.
+    /// is refused. A `ctts` states the offsets of a whole track in one version
+    /// and a `trun` those of a whole run, so a track or a run stating a
+    /// negative offset and one past [`i32::MAX`] is refused too, naming the
+    /// widest.
     /// [`track_id`](crate::Error::track_id) is the track it belongs to,
     /// and [`composition_time_offset`](crate::Error::composition_time_offset)
     /// the offset it states.

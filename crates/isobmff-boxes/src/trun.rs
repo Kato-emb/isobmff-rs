@@ -1,9 +1,5 @@
 //! [`TrackRunBox`] (`trun`), ISO/IEC 14496-12 §8.8.8
 
-mod builder;
-
-pub use builder::{StatedTrackRunSample, TrackRunBuilder};
-
 use alloc::vec::Vec;
 
 use isobmff_core::{
@@ -12,6 +8,7 @@ use isobmff_core::{
 };
 
 use crate::data_types::{CompositionTimeOffset, SampleFlags, read_sample_flags};
+use crate::tfhd::TrackFragmentHeaderBox;
 
 /// Length of the fields that precede the optional ones
 const FIXED_FIELDS_LEN: u64 = 8;
@@ -242,6 +239,87 @@ impl TrackRunBox {
     pub fn samples(&self) -> &[TrackRunSample] {
         &self.samples
     }
+
+    /// Returns the run as written against `tfhd`, leaving out every field that needs no stating
+    ///
+    /// A field the header states a default for, which every row of the run
+    /// agrees with, is left out of the rows. Flags that only the first row
+    /// differs from the default on are written as its `first_sample_flags`
+    /// (§8.8.8), and a `first_sample_flags` equal to the default the header
+    /// states is left out. Composition time offsets are left out of every row
+    /// when none of them states one other than zero. What each sample takes
+    /// once the defaults apply is what it took before.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff_boxes::{CompositionTimeOffset, SampleFlags, TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample};
+    ///
+    /// // Two samples lasting 1024 units each, of different sizes, every field stated
+    /// let offset = Some(CompositionTimeOffset::new(0).unwrap());
+    /// let track_run = TrackRunBox::new(
+    ///     Some(100),
+    ///     None,
+    ///     vec![
+    ///         TrackRunSample::new(Some(1_024), Some(4), Some(SampleFlags::ZERO), offset),
+    ///         TrackRunSample::new(Some(1_024), Some(2), Some(SampleFlags::ZERO), offset),
+    ///     ],
+    /// )
+    /// .unwrap();
+    ///
+    /// // Against a header stating the duration and the flags, only the size is written per row
+    /// let header = TrackFragmentHeaderBox::new(TrackFragmentHeaderFlags::ZERO, 1, None, None, Some(1_024), None, Some(SampleFlags::ZERO));
+    /// assert_eq!(
+    ///     track_run.without_defaults(&header).samples(),
+    ///     [
+    ///         TrackRunSample::new(None, Some(4), None, None),
+    ///         TrackRunSample::new(None, Some(2), None, None),
+    ///     ]
+    /// );
+    /// ```
+    #[must_use]
+    pub fn without_defaults(mut self, tfhd: &TrackFragmentHeaderBox) -> Self {
+        let rows = || self.samples.iter();
+        let carries_duration = tfhd.default_sample_duration().is_none_or(|default| {
+            rows().any(|row| row.sample_duration.is_some_and(|value| value != default))
+        });
+        let carries_size = tfhd.default_sample_size().is_none_or(|default| {
+            rows().any(|row| row.sample_size.is_some_and(|value| value != default))
+        });
+        let carries_offsets = rows().any(|row| {
+            row.sample_composition_time_offset
+                .is_some_and(|offset| offset.get() != 0)
+        });
+        let (carries_flags, first_sample_flags) = match tfhd.default_sample_flags() {
+            Some(default)
+                if rows()
+                    .skip(1)
+                    .all(|row| row.sample_flags.is_none_or(|flags| flags == default)) =>
+            {
+                let first = rows().next().and_then(|row| row.sample_flags);
+
+                (
+                    false,
+                    self.first_sample_flags
+                        .or(first)
+                        .filter(|first| *first != default),
+                )
+            }
+            _default_the_rows_do_not_share => (true, self.first_sample_flags),
+        };
+
+        for row in &mut self.samples {
+            row.sample_duration = row.sample_duration.filter(|_| carries_duration);
+            row.sample_size = row.sample_size.filter(|_| carries_size);
+            row.sample_flags = row.sample_flags.filter(|_| carries_flags);
+            row.sample_composition_time_offset = row
+                .sample_composition_time_offset
+                .filter(|_| carries_offsets);
+        }
+        self.first_sample_flags = first_sample_flags;
+
+        self
+    }
 }
 
 impl BoxDefinition for TrackRunBox {
@@ -433,6 +511,7 @@ mod tests {
 
     use super::{CompositionTimeOffset, MAXIMUM_EMPTY_ROWS, TrackRunBox, TrackRunSample};
     use crate::SampleFlags;
+    use crate::tfhd::{TrackFragmentHeaderBox, TrackFragmentHeaderFlags};
 
     /// Row stating the size of its sample and the offset to its composition time
     fn sample(sample_size: u32, sample_composition_time_offset: i64) -> TrackRunSample {
@@ -648,6 +727,192 @@ mod tests {
         assert_eq!(
             TrackRunBox::decode_payload(&payload),
             Err(Error::unsupported_version(2))
+        );
+    }
+
+    /// Row stating every field: a sample lasting 1024 units and occupying 4 bytes, flagged `sample_flags`, composed at `offset`
+    fn stated(sample_flags: SampleFlags, offset: i64) -> TrackRunSample {
+        TrackRunSample::new(
+            Some(1_024),
+            Some(4),
+            Some(sample_flags),
+            Some(CompositionTimeOffset::new(offset).unwrap()),
+        )
+    }
+
+    /// Header of track 1 stating the defaults given
+    fn header(
+        default_sample_duration: Option<u32>,
+        default_sample_size: Option<u32>,
+        default_sample_flags: Option<SampleFlags>,
+    ) -> TrackFragmentHeaderBox {
+        TrackFragmentHeaderBox::new(
+            TrackFragmentHeaderFlags::ZERO,
+            1,
+            None,
+            None,
+            default_sample_duration,
+            default_sample_size,
+            default_sample_flags,
+        )
+    }
+
+    /// Run of the rows given, with no data offset, written against `header`
+    fn without_defaults(rows: &[TrackRunSample], header: &TrackFragmentHeaderBox) -> TrackRunBox {
+        TrackRunBox::new(None, None, rows.to_vec())
+            .unwrap()
+            .without_defaults(header)
+    }
+
+    #[test]
+    fn the_fields_the_header_defaults_cover_are_left_out_of_the_rows() {
+        let run = without_defaults(
+            &[stated(SampleFlags::ZERO, 0), stated(SampleFlags::ZERO, 0)],
+            &header(Some(1_024), Some(4), Some(SampleFlags::ZERO)),
+        );
+
+        assert_eq!(
+            run,
+            TrackRunBox::new(
+                None,
+                None,
+                vec![TrackRunSample::new(None, None, None, None); 2]
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn a_field_a_row_differs_from_its_default_on_is_stated_by_every_row() {
+        let run = without_defaults(
+            &[stated(SampleFlags::ZERO, 0), stated(SampleFlags::ZERO, 0)],
+            &header(Some(512), Some(4), Some(SampleFlags::ZERO)),
+        );
+
+        assert_eq!(
+            run,
+            TrackRunBox::new(
+                None,
+                None,
+                vec![TrackRunSample::new(Some(1_024), None, None, None); 2]
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn flags_only_the_first_row_differs_on_are_its_own() {
+        let run = without_defaults(
+            &[
+                stated(SampleFlags::SYNC_SAMPLE, 0),
+                stated(SampleFlags::NON_SYNC_SAMPLE, 0),
+            ],
+            &header(Some(1_024), Some(4), Some(SampleFlags::NON_SYNC_SAMPLE)),
+        );
+
+        assert_eq!(
+            run,
+            TrackRunBox::new(
+                None,
+                Some(SampleFlags::SYNC_SAMPLE),
+                vec![TrackRunSample::new(None, None, None, None); 2]
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn flags_a_later_row_differs_on_are_stated_by_every_row() {
+        let run = without_defaults(
+            &[
+                stated(SampleFlags::NON_SYNC_SAMPLE, 0),
+                stated(SampleFlags::SYNC_SAMPLE, 0),
+            ],
+            &header(Some(1_024), Some(4), Some(SampleFlags::NON_SYNC_SAMPLE)),
+        );
+
+        assert_eq!(
+            run,
+            TrackRunBox::new(
+                None,
+                None,
+                vec![
+                    TrackRunSample::new(None, None, Some(SampleFlags::NON_SYNC_SAMPLE), None),
+                    TrackRunSample::new(None, None, Some(SampleFlags::SYNC_SAMPLE), None),
+                ]
+            )
+            .unwrap()
+        );
+    }
+
+    /// Run of two rows stating no flags, whose own are `first_sample_flags`
+    fn unflagged(first_sample_flags: SampleFlags) -> TrackRunBox {
+        TrackRunBox::new(
+            None,
+            Some(first_sample_flags),
+            vec![TrackRunSample::new(Some(1_024), None, None, None); 2],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn first_sample_flags_equal_to_the_default_are_left_out() {
+        let run = unflagged(SampleFlags::NON_SYNC_SAMPLE).without_defaults(&header(
+            None,
+            None,
+            Some(SampleFlags::NON_SYNC_SAMPLE),
+        ));
+
+        assert_eq!(
+            run,
+            TrackRunBox::new(
+                None,
+                None,
+                vec![TrackRunSample::new(Some(1_024), None, None, None); 2]
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn first_sample_flags_other_than_the_default_are_kept() {
+        let run = unflagged(SampleFlags::SYNC_SAMPLE).without_defaults(&header(
+            None,
+            None,
+            Some(SampleFlags::NON_SYNC_SAMPLE),
+        ));
+
+        assert_eq!(run, unflagged(SampleFlags::SYNC_SAMPLE));
+    }
+
+    #[test]
+    fn an_offset_other_than_zero_has_every_row_state_one() {
+        let run = without_defaults(
+            &[stated(SampleFlags::ZERO, 0), stated(SampleFlags::ZERO, 8)],
+            &header(Some(1_024), Some(4), Some(SampleFlags::ZERO)),
+        );
+
+        assert_eq!(
+            run,
+            TrackRunBox::new(
+                None,
+                None,
+                vec![
+                    TrackRunSample::new(
+                        None,
+                        None,
+                        None,
+                        Some(CompositionTimeOffset::new(0).unwrap())
+                    ),
+                    TrackRunSample::new(
+                        None,
+                        None,
+                        None,
+                        Some(CompositionTimeOffset::new(8).unwrap())
+                    ),
+                ]
+            )
+            .unwrap()
         );
     }
 }
