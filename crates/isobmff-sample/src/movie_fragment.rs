@@ -88,7 +88,7 @@ pub fn sample_extents(
         .traf()
         .iter()
         .flat_map(|traf| traf.trun())
-        .map(|trun| trun.sample_count() as usize)
+        .map(|trun| trun.samples().len())
         .sum::<usize>();
     // Why not chaining the failure after an iterator of the extents: the
     // chained iterator costs a reader ten nanoseconds an extent over a plain

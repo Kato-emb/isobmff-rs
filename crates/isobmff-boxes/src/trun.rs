@@ -1,7 +1,6 @@
 //! [`TrackRunBox`] (`trun`), ISO/IEC 14496-12 §8.8.8
 
 use alloc::vec::Vec;
-use core::iter::{self, RepeatN};
 use core::slice;
 
 use isobmff_core::{
@@ -129,6 +128,18 @@ enum Rows {
 }
 
 impl Rows {
+    /// Holds `rows`, as their count where they carry no field
+    fn of(rows: Vec<TrackRunSample>) -> Self {
+        if per_sample_field_flags(&rows) == 0 {
+            // Why not `as`: every caller holds at most as many rows as a `u32`
+            // counts, so the fallback names a run no constructor builds rather
+            // than truncating.
+            Self::Empty(u32::try_from(rows.len()).unwrap_or(u32::MAX))
+        } else {
+            Self::Stated(rows)
+        }
+    }
+
     /// Returns the rows that carry a field, none where the rows are empty
     fn stated(&self) -> &[TrackRunSample] {
         match self {
@@ -235,16 +246,12 @@ impl TrackRunBox {
                 .iter()
                 .filter_map(TrackRunSample::sample_composition_time_offset),
         )?;
-        let sample_count = u32::try_from(samples.len()).ok()?;
+        u32::try_from(samples.len()).ok()?;
 
         Some(Self {
             data_offset,
             first_sample_flags,
-            rows: if carried == 0 {
-                Rows::Empty(sample_count)
-            } else {
-                Rows::Stated(samples)
-            },
+            rows: Rows::of(samples),
         })
     }
 
@@ -295,9 +302,9 @@ impl TrackRunBox {
     pub fn samples(&self) -> impl ExactSizeIterator<Item = TrackRunSample> + '_ {
         match &self.rows {
             Rows::Stated(rows) => Samples::Stated(rows.iter()),
-            Rows::Empty(sample_count) => {
-                Samples::Empty(iter::repeat_n(EMPTY_ROW, *sample_count as usize))
-            }
+            Rows::Empty(sample_count) => Samples::Empty {
+                remaining: *sample_count,
+            },
         }
     }
 
@@ -340,7 +347,6 @@ impl TrackRunBox {
     /// ```
     #[must_use]
     pub fn without_defaults(mut self, tfhd: &TrackFragmentHeaderBox) -> Self {
-        let sample_count = self.sample_count();
         let rows = || self.rows.stated().iter();
         let carries_duration = tfhd.default_sample_duration().is_none_or(|default| {
             rows().any(|row| row.sample_duration.is_some_and(|value| value != default))
@@ -370,8 +376,8 @@ impl TrackRunBox {
             _default_the_rows_do_not_share => (true, self.first_sample_flags),
         };
 
-        if let Rows::Stated(rows) = &mut self.rows {
-            for row in rows.iter_mut() {
+        if let Rows::Stated(mut rows) = self.rows {
+            for row in &mut rows {
                 row.sample_duration = row.sample_duration.filter(|_| carries_duration);
                 row.sample_size = row.sample_size.filter(|_| carries_size);
                 row.sample_flags = row.sample_flags.filter(|_| carries_flags);
@@ -379,9 +385,7 @@ impl TrackRunBox {
                     .sample_composition_time_offset
                     .filter(|_| carries_offsets);
             }
-            if per_sample_field_flags(rows) == 0 {
-                self.rows = Rows::Empty(sample_count);
-            }
+            self.rows = Rows::of(rows);
         }
         self.first_sample_flags = first_sample_flags;
 
@@ -392,7 +396,7 @@ impl TrackRunBox {
 /// The rows of a run read one after another, an empty one per sample where the run holds only their count
 enum Samples<'rows> {
     Stated(slice::Iter<'rows, TrackRunSample>),
-    Empty(RepeatN<TrackRunSample>),
+    Empty { remaining: u32 },
 }
 
 impl Iterator for Samples<'_> {
@@ -401,14 +405,22 @@ impl Iterator for Samples<'_> {
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             Self::Stated(rows) => rows.next().cloned(),
-            Self::Empty(rows) => rows.next(),
+            Self::Empty { remaining } => {
+                *remaining = remaining.checked_sub(1)?;
+
+                Some(EMPTY_ROW)
+            }
         }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         match self {
             Self::Stated(rows) => rows.size_hint(),
-            Self::Empty(rows) => rows.size_hint(),
+            Self::Empty { remaining } => {
+                let remaining = *remaining as usize;
+
+                (remaining, Some(remaining))
+            }
         }
     }
 }
@@ -476,7 +488,7 @@ impl BoxDecode for TrackRunBox {
         // hold a gigabyte of them before the payload ran out.
         reader.require(row_len.saturating_mul(u64::from(sample_count)))?;
 
-        if row_len == 0 || sample_count == 0 {
+        if row_len == 0 {
             return Ok(Self::of_empty_rows(
                 data_offset,
                 first_sample_flags,
@@ -521,7 +533,7 @@ impl BoxDecode for TrackRunBox {
         Ok(Self {
             data_offset,
             first_sample_flags,
-            rows: Rows::Stated(samples),
+            rows: Rows::of(samples),
         })
     }
 }
