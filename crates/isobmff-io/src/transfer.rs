@@ -4,7 +4,6 @@ use std::io;
 
 use isobmff_boxes::MovieFragmentRandomAccessOffsetBox;
 use isobmff_core::BoxDecode;
-use isobmff_sequence::EventBytes;
 
 /// Most bytes read off the source at a time
 pub(crate) const CUT_LENGTH: usize = 1024 * 1024;
@@ -51,20 +50,20 @@ impl ClosingMovieFragmentRandomAccessOffset {
 
 /// The chunk a sink is writing and how many of its bytes the sink took
 #[derive(Debug)]
-pub(crate) struct ChunkBuffer {
-    chunk: EventBytes,
+pub(crate) struct ChunkBuffer<C> {
+    chunk: C,
     written: usize,
 }
 
-impl ChunkBuffer {
+impl<C: AsRef<[u8]>> ChunkBuffer<C> {
     /// Returns the chunk `buffer` holds part-written, or once it is written whole, the next of `chunks` put in its place
     pub(crate) fn unwritten<'buffer>(
         buffer: &'buffer mut Option<Self>,
-        chunks: &mut impl Iterator<Item = EventBytes>,
+        chunks: &mut impl Iterator<Item = C>,
     ) -> Option<&'buffer mut Self> {
         while buffer
             .as_ref()
-            .is_none_or(|buffer| buffer.written >= buffer.chunk.len())
+            .is_none_or(|buffer| buffer.written >= buffer.chunk.as_ref().len())
         {
             *buffer = Some(Self {
                 chunk: chunks.next()?,
@@ -75,9 +74,16 @@ impl ChunkBuffer {
         buffer.as_mut()
     }
 
+    /// Returns the bytes of the chunk `buffer` holds part-written that the sink has not taken, empty where it holds no such chunk
+    pub(crate) fn into_rest(buffer: Option<Self>) -> Vec<u8> {
+        buffer
+            .map(|buffer| buffer.rest().to_vec())
+            .unwrap_or_default()
+    }
+
     /// Returns the bytes of the chunk the sink is to take next
     pub(crate) fn rest(&self) -> &[u8] {
-        self.chunk.get(self.written..).unwrap_or_default()
+        self.chunk.as_ref().get(self.written..).unwrap_or_default()
     }
 
     /// Counts what the sink made of the bytes [`rest`](Self::rest) returned

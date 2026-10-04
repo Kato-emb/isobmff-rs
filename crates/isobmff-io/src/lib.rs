@@ -37,8 +37,9 @@
 //! The samples a failing input completed come out before its failure is
 //! acted on. Once the file is declared over or the FSM has failed it wants no
 //! read, and the loop ends. A mux FSM is driven by its own verbs, and what it
-//! made is written by `sink.write(core::iter::from_fn(|| fsm.poll_output()))`,
-//! then `sink.flush()` where the bytes are to reach the medium.
+//! made is written by
+//! `sink.write_all(&mut core::iter::from_fn(|| fsm.poll_output()))`, then
+//! `sink.flush()` where the bytes are to reach the medium.
 //!
 //! A demux FSM of a fragmented movie file or a media segment reads the file
 //! from a place an index names as well as from its start: the indexes it
@@ -56,11 +57,11 @@
 //! `async fn` of this crate is cancellation safe: a [`Source::read_at`]
 //! dropped part way and made again reads the same bytes, trusting where the
 //! source stands only once a seek or a read there completed; a
-//! [`Sink::write`] dropped part way is carried on by the next from the byte
-//! the sink stopped at, the chunks it did not take left with the FSM; a
-//! [`Source::locate_movie_fragment_random_access`] dropped part way is made
-//! again from its start. What fails is reported as `std::io` reports it; what
-//! the FSM refuses is the FSM's own failure.
+//! [`Sink::write_all`] dropped part way is carried on by the next from the
+//! byte the sink stopped at, the chunks it did not take still in the iterator
+//! it was handed; a [`Source::locate_movie_fragment_random_access`] dropped
+//! part way is made again from its start. What fails is reported as
+//! `std::io` reports it; what the FSM refuses is the FSM's own failure.
 //!
 //! # A source that does not seek
 //!

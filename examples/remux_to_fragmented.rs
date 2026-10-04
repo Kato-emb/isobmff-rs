@@ -108,7 +108,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             mux_fsm.handle_sample(sample)?;
         }
         mux_fsm.finish_fragment()?;
-        Ok(sink.write(iter::from_fn(|| mux_fsm.poll_output()))?)
+        Ok(sink.write_all(&mut iter::from_fn(|| mux_fsm.poll_output()))?)
     };
 
     let mut fragment = Vec::new();
@@ -163,7 +163,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         write_fragment(&mut fragment)?;
     }
     mux_fsm.finish()?;
-    sink.write(iter::from_fn(|| mux_fsm.poll_output()))?;
+    sink.write_all(&mut iter::from_fn(|| mux_fsm.poll_output()))?;
     sink.flush()?;
 
     Ok(())

@@ -110,7 +110,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let end = start.saturating_add(FRAMES_PER_SAMPLE).min(frames);
         if start % SAMPLE_RATE < FRAMES_PER_SAMPLE {
             mux_fsm.begin_chunk()?;
-            sink.write(iter::from_fn(|| mux_fsm.poll_output()))?;
+            sink.write_all(&mut iter::from_fn(|| mux_fsm.poll_output()))?;
         }
         let data = (start..end)
             .flat_map(|frame| {
@@ -135,7 +135,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         ))?;
     }
     mux_fsm.finish()?;
-    sink.write(iter::from_fn(|| mux_fsm.poll_output()))?;
+    sink.write_all(&mut iter::from_fn(|| mux_fsm.poll_output()))?;
     sink.flush()?;
 
     Ok(())

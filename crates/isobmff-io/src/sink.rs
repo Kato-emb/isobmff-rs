@@ -7,7 +7,6 @@ use core::pin::Pin;
 use std::io;
 
 use futures_io::AsyncWrite;
-use isobmff_sequence::EventBytes;
 
 use crate::transfer::ChunkBuffer;
 
@@ -15,23 +14,25 @@ use crate::transfer::ChunkBuffer;
 ///
 /// # Contract
 ///
-/// * A [`write`](Self::write) writes the chunk part-written first, then each
-///   chunk the iterator yields, by `write`s of the sink made again where
-///   interrupted. It takes the next chunk off the iterator only once the
-///   chunk before is written whole, so the chunks it did not take stay with
-///   the iterator.
+/// * A [`write_all`](Self::write_all) writes the chunk part-written first,
+///   then each chunk `chunks` yields, by `write`s of the sink made again
+///   where interrupted. It takes the next chunk off `chunks` only once the
+///   chunk before is written whole: a chunk taken is held here until written
+///   whole, and a chunk not taken is still in `chunks`, which the caller
+///   holds.
 /// * A sink refusing bytes, or taking none of them
 ///   ([`WriteZero`](io::ErrorKind::WriteZero)), fails the
-///   [`write`](Self::write): this keeps the chunk the sink was taking and how
-///   much of it the sink took, and the next [`write`](Self::write) carries on
-///   from there, with no byte written twice and none lost.
+///   [`write_all`](Self::write_all): this keeps the chunk the sink was taking
+///   and how much of it the sink took, and the next
+///   [`write_all`](Self::write_all) carries on from there, with no byte
+///   written twice and none lost.
 /// * [`flush`](Self::flush) flushes the sink, and nothing else. A sink that
 ///   is costly to write to in small pieces is the caller's to wrap in a
 ///   buffering sink.
 /// * Every `async fn` here is cancellation safe. The count of what the sink
 ///   took moves as each write completes, before the next await, so a
-///   [`write`](Self::write) dropped where the sink stood still is carried on
-///   by the next one, with no byte written twice and none lost.
+///   [`write_all`](Self::write_all) dropped where the sink stood still is
+///   carried on by the next one, with no byte written twice and none lost.
 ///
 /// # Examples
 ///
@@ -59,7 +60,7 @@ use crate::transfer::ChunkBuffer;
 ///     fsm.finish()?;
 ///
 ///     // What the FSM made is written to the file
-///     sink.write(core::iter::from_fn(|| fsm.poll_output())).await?;
+///     sink.write_all(&mut core::iter::from_fn(|| fsm.poll_output())).await?;
 ///     sink.flush().await?;
 ///
 ///     // The file opens with the brands, and the media data holds the samples end to end
@@ -70,12 +71,12 @@ use crate::transfer::ChunkBuffer;
 /// # .unwrap();
 /// ```
 #[derive(Debug)]
-pub struct Sink<S> {
+pub struct Sink<S, C> {
     sink: S,
-    buffer: Option<ChunkBuffer>,
+    buffer: Option<ChunkBuffer<C>>,
 }
 
-impl<S: AsyncWrite + Unpin> Sink<S> {
+impl<S: AsyncWrite + Unpin, C: AsRef<[u8]>> Sink<S, C> {
     /// Creates one writing to `sink`
     #[must_use]
     pub const fn new(sink: S) -> Self {
@@ -88,9 +89,8 @@ impl<S: AsyncWrite + Unpin> Sink<S> {
     ///
     /// * The sink refuses a chunk, or takes none of it
     ///   ([`WriteZero`](io::ErrorKind::WriteZero)).
-    pub async fn write(&mut self, chunks: impl IntoIterator<Item = EventBytes>) -> io::Result<()> {
-        let mut chunks = chunks.into_iter();
-        while let Some(buffer) = ChunkBuffer::unwritten(&mut self.buffer, &mut chunks) {
+    pub async fn write_all(&mut self, chunks: &mut impl Iterator<Item = C>) -> io::Result<()> {
+        while let Some(buffer) = ChunkBuffer::unwritten(&mut self.buffer, chunks) {
             let written =
                 poll_fn(|context| Pin::new(&mut self.sink).poll_write(context, buffer.rest()))
                     .await;
@@ -108,12 +108,34 @@ impl<S: AsyncWrite + Unpin> Sink<S> {
     pub async fn flush(&mut self) -> io::Result<()> {
         poll_fn(|context| Pin::new(&mut self.sink).poll_flush(context)).await
     }
+
+    /// Returns the sink written to
+    #[must_use]
+    pub const fn get_ref(&self) -> &S {
+        &self.sink
+    }
+
+    /// Returns the sink written to, for writing to or changing directly
+    ///
+    /// Bytes written to it directly while a chunk is part-written fall
+    /// within the bytes of that chunk.
+    #[must_use]
+    pub const fn get_mut(&mut self) -> &mut S {
+        &mut self.sink
+    }
+
+    /// Returns the sink written to, and the bytes of the chunk part-written that the sink has not taken
+    ///
+    /// The bytes are empty where no chunk is part-written.
+    #[must_use]
+    pub fn into_parts(self) -> (S, Vec<u8>) {
+        (self.sink, ChunkBuffer::into_rest(self.buffer))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
-    use core::cell::Cell;
     use core::pin::Pin;
     use core::task::{Context, Poll};
     use std::io;
@@ -166,11 +188,15 @@ mod tests {
         }
     }
 
-    /// Sink taking one byte at a time, and standing still once it holds `hesitate_at` of them
-    #[derive(Default, Debug)]
+    /// Sink taking one byte at a time
+    ///
+    /// Standing still once it holds `hesitate_at` of them, and refusing a
+    /// write once it holds `refuse_at` of them.
+    #[derive(Default, PartialEq, Debug)]
     struct Trickle {
         written: Vec<u8>,
         hesitate_at: Option<usize>,
+        refuse_at: Option<usize>,
     }
 
     impl AsyncWrite for Trickle {
@@ -184,6 +210,11 @@ mod tests {
                 context.waker().wake_by_ref();
 
                 return Poll::Pending;
+            }
+            if self.refuse_at == Some(self.written.len()) {
+                self.refuse_at = None;
+
+                return Poll::Ready(Err(io::Error::from(io::ErrorKind::BrokenPipe)));
             }
             self.written.extend(bytes.iter().take(1));
 
@@ -200,11 +231,13 @@ mod tests {
     }
 
     #[test]
-    fn a_write_writes_every_chunk_and_a_flush_flushes_the_sink() {
+    fn a_write_all_writes_every_chunk_and_a_flush_flushes_the_sink() {
         let mut sink = Sink::new(Recording::default());
 
         block_on(async {
-            sink.write(framed(b"MADE")).await.unwrap();
+            sink.write_all(&mut framed(b"MADE").into_iter())
+                .await
+                .unwrap();
             sink.flush().await.unwrap();
         });
 
@@ -225,7 +258,7 @@ mod tests {
             ..Recording::default()
         });
 
-        block_on(sink.write(framed(b"MADE"))).unwrap();
+        block_on(sink.write_all(&mut framed(b"MADE").into_iter())).unwrap();
 
         assert_eq!(
             sink.sink,
@@ -241,32 +274,79 @@ mod tests {
         let mut sink = Sink::new(Cursor::new(&mut [][..]));
 
         assert_eq!(
-            block_on(sink.write(framed(b"MADE"))).map_err(|failure| failure.kind()),
+            block_on(sink.write_all(&mut framed(b"MADE").into_iter()))
+                .map_err(|failure| failure.kind()),
             Err(io::ErrorKind::WriteZero)
         );
     }
 
     #[test]
-    fn a_write_dropped_part_way_through_a_chunk_has_the_next_write_the_rest_once_and_the_chunks_after_left_untaken()
+    fn a_write_all_dropped_part_way_through_a_chunk_leaves_the_chunks_after_in_the_iterator_and_has_the_next_write_all_write_the_rest_once()
      {
         let mut sink = Sink::new(Trickle {
             hesitate_at: Some(3),
             ..Trickle::default()
         });
-        let mut chunks = framed(b"MADE").into_iter().chain(framed(b"MORE"));
-        let taken = Cell::new(0_usize);
-        let mut counted = core::iter::from_fn(|| {
-            taken.set(taken.get().saturating_add(1));
-            chunks.next()
-        });
+        let mut chunks = [framed(b"MADE"), framed(b"MORE")].concat().into_iter();
 
-        assert!(poll_once(sink.write(&mut counted)).is_none());
-        let taken_by_the_dropped = taken.get();
-        block_on(sink.write(&mut counted)).unwrap();
+        assert!(poll_once(sink.write_all(&mut chunks)).is_none());
+        let left = chunks.as_slice().to_vec();
+        block_on(sink.write_all(&mut chunks)).unwrap();
 
         assert_eq!(
-            (taken_by_the_dropped, sink.sink.written),
-            (1, b"\0\0\0\x0cfreeMADE\0\0\0\x0cfreeMORE".to_vec())
+            (left, sink.sink.written),
+            (
+                framed(b"MADE")
+                    .into_iter()
+                    .skip(1)
+                    .chain(framed(b"MORE"))
+                    .collect::<Vec<_>>(),
+                b"\0\0\0\x0cfreeMADE\0\0\0\x0cfreeMORE".to_vec()
+            )
+        );
+    }
+
+    #[test]
+    fn a_sink_failing_part_way_through_a_chunk_leaves_the_chunks_after_in_the_iterator_and_has_the_next_write_all_carry_on_from_the_failed_byte()
+     {
+        let mut sink = Sink::new(Trickle {
+            refuse_at: Some(5),
+            ..Trickle::default()
+        });
+        let mut chunks = framed(b"MADE").into_iter();
+
+        let failed = block_on(sink.write_all(&mut chunks)).map_err(|failure| failure.kind());
+        let left = chunks.as_slice().to_vec();
+        block_on(sink.write_all(&mut chunks)).unwrap();
+
+        assert_eq!(
+            (failed, left, sink.sink.written),
+            (
+                Err(io::ErrorKind::BrokenPipe),
+                framed(b"MADE").into_iter().skip(1).collect::<Vec<_>>(),
+                b"\0\0\0\x0cfreeMADE".to_vec()
+            )
+        );
+    }
+
+    #[test]
+    fn a_sink_failing_part_way_through_a_chunk_is_handed_back_with_the_bytes_of_the_chunk_it_did_not_take()
+     {
+        let mut sink = Sink::new(Trickle {
+            refuse_at: Some(5),
+            ..Trickle::default()
+        });
+
+        block_on(sink.write_all(&mut [b"\0\0\0\x0cfreeMADE".to_vec()].into_iter())).unwrap_err();
+        assert_eq!(
+            sink.into_parts(),
+            (
+                Trickle {
+                    written: b"\0\0\0\x0cf".to_vec(),
+                    ..Trickle::default()
+                },
+                b"reeMADE".to_vec()
+            )
         );
     }
 }

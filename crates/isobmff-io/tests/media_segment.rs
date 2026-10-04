@@ -29,7 +29,7 @@ mod tests {
         let mut mux_fsm = laid_down();
         let mut segment = Vec::new();
         let mut sink = Sink::new(&mut segment);
-        sink.write(core::iter::from_fn(|| mux_fsm.poll_output()))
+        sink.write_all(&mut core::iter::from_fn(|| mux_fsm.poll_output()))
             .unwrap();
         sink.flush().unwrap();
 
@@ -57,7 +57,7 @@ mod tests {
         let read_back = block_on(async {
             let mut segment = Vec::new();
             let mut sink = isobmff_io::Sink::new(&mut segment);
-            sink.write(core::iter::from_fn(|| mux_fsm.poll_output()))
+            sink.write_all(&mut core::iter::from_fn(|| mux_fsm.poll_output()))
                 .await
                 .unwrap();
             sink.flush().await.unwrap();

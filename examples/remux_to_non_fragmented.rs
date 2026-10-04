@@ -75,7 +75,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             if chunk != described_by {
                 chunk = described_by;
                 mux_fsm.begin_chunk()?;
-                sink.write(iter::from_fn(|| mux_fsm.poll_output()))?;
+                sink.write_all(&mut iter::from_fn(|| mux_fsm.poll_output()))?;
             }
             mux_fsm.handle_sample(sample)?;
         }
@@ -91,7 +91,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         };
     }
     mux_fsm.finish()?;
-    sink.write(iter::from_fn(|| mux_fsm.poll_output()))?;
+    sink.write_all(&mut iter::from_fn(|| mux_fsm.poll_output()))?;
     sink.flush()?;
 
     Ok(())

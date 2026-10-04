@@ -2,24 +2,24 @@
 
 use std::io::{self, Write};
 
-use isobmff_sequence::EventBytes;
-
 use crate::transfer::ChunkBuffer;
 
 /// The chunks a mux FSM made, written to a sink that is `Write`
 ///
 /// # Contract
 ///
-/// * A [`write`](Self::write) writes the chunk part-written first, then each
-///   chunk the iterator yields, by `write`s of the sink made again where
-///   interrupted. It takes the next chunk off the iterator only once the
-///   chunk before is written whole, so the chunks it did not take stay with
-///   the iterator.
+/// * A [`write_all`](Self::write_all) writes the chunk part-written first,
+///   then each chunk `chunks` yields, by `write`s of the sink made again
+///   where interrupted. It takes the next chunk off `chunks` only once the
+///   chunk before is written whole: a chunk taken is held here until written
+///   whole, and a chunk not taken is still in `chunks`, which the caller
+///   holds.
 /// * A sink refusing bytes, or taking none of them
 ///   ([`WriteZero`](io::ErrorKind::WriteZero)), fails the
-///   [`write`](Self::write): this keeps the chunk the sink was taking and how
-///   much of it the sink took, and the next [`write`](Self::write) carries on
-///   from there, with no byte written twice and none lost.
+///   [`write_all`](Self::write_all): this keeps the chunk the sink was taking
+///   and how much of it the sink took, and the next
+///   [`write_all`](Self::write_all) carries on from there, with no byte
+///   written twice and none lost.
 /// * [`flush`](Self::flush) flushes the sink, and nothing else. A sink that
 ///   is costly to write to in small pieces is the caller's to wrap in a
 ///   `BufWriter`.
@@ -47,7 +47,7 @@ use crate::transfer::ChunkBuffer;
 /// fsm.finish()?;
 ///
 /// // What the FSM made is written to the file
-/// sink.write(core::iter::from_fn(|| fsm.poll_output()))?;
+/// sink.write_all(&mut core::iter::from_fn(|| fsm.poll_output()))?;
 /// sink.flush()?;
 ///
 /// // The file opens with the brands, and the media data holds the samples end to end
@@ -56,12 +56,12 @@ use crate::transfer::ChunkBuffer;
 /// # Ok::<(), Box<dyn core::error::Error>>(())
 /// ```
 #[derive(Debug)]
-pub struct Sink<S> {
+pub struct Sink<S, C> {
     sink: S,
-    buffer: Option<ChunkBuffer>,
+    buffer: Option<ChunkBuffer<C>>,
 }
 
-impl<S: Write> Sink<S> {
+impl<S: Write, C: AsRef<[u8]>> Sink<S, C> {
     /// Creates one writing to `sink`
     #[must_use]
     pub const fn new(sink: S) -> Self {
@@ -74,9 +74,8 @@ impl<S: Write> Sink<S> {
     ///
     /// * The sink refuses a chunk, or takes none of it
     ///   ([`WriteZero`](io::ErrorKind::WriteZero)).
-    pub fn write(&mut self, chunks: impl IntoIterator<Item = EventBytes>) -> io::Result<()> {
-        let mut chunks = chunks.into_iter();
-        while let Some(buffer) = ChunkBuffer::unwritten(&mut self.buffer, &mut chunks) {
+    pub fn write_all(&mut self, chunks: &mut impl Iterator<Item = C>) -> io::Result<()> {
+        while let Some(buffer) = ChunkBuffer::unwritten(&mut self.buffer, chunks) {
             let written = self.sink.write(buffer.rest());
             buffer.took(written)?;
         }
@@ -92,12 +91,34 @@ impl<S: Write> Sink<S> {
     pub fn flush(&mut self) -> io::Result<()> {
         self.sink.flush()
     }
+
+    /// Returns the sink written to
+    #[must_use]
+    pub const fn get_ref(&self) -> &S {
+        &self.sink
+    }
+
+    /// Returns the sink written to, for writing to or changing directly
+    ///
+    /// Bytes written to it directly while a chunk is part-written fall
+    /// within the bytes of that chunk.
+    #[must_use]
+    pub const fn get_mut(&mut self) -> &mut S {
+        &mut self.sink
+    }
+
+    /// Returns the sink written to, and the bytes of the chunk part-written that the sink has not taken
+    ///
+    /// The bytes are empty where no chunk is part-written.
+    #[must_use]
+    pub fn into_parts(self) -> (S, Vec<u8>) {
+        (self.sink, ChunkBuffer::into_rest(self.buffer))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
-    use core::cell::Cell;
     use std::io::{self, Write};
 
     use super::Sink;
@@ -146,10 +167,10 @@ mod tests {
     }
 
     #[test]
-    fn a_write_writes_every_chunk_and_a_flush_flushes_the_sink() {
+    fn a_write_all_writes_every_chunk_and_a_flush_flushes_the_sink() {
         let mut sink = Sink::new(Recording::default());
 
-        sink.write(framed(b"MADE")).unwrap();
+        sink.write_all(&mut framed(b"MADE").into_iter()).unwrap();
         sink.flush().unwrap();
 
         assert_eq!(
@@ -171,7 +192,7 @@ mod tests {
             ..Recording::default()
         });
 
-        sink.write(framed(b"MADE")).unwrap();
+        sink.write_all(&mut framed(b"MADE").into_iter()).unwrap();
 
         assert_eq!(
             sink.sink,
@@ -183,29 +204,67 @@ mod tests {
     }
 
     #[test]
-    fn a_sink_failing_part_way_through_a_chunk_has_the_rest_written_by_the_next_write_and_the_chunks_after_left_untaken()
+    fn a_sink_failing_part_way_through_a_chunk_leaves_the_chunks_after_in_the_iterator_and_has_the_next_write_all_carry_on_from_the_failed_byte()
      {
         let mut sink = Sink::new(Recording {
             taking_at_most: Some(5),
             ..Recording::default()
         });
         let mut chunks = framed(b"MADE").into_iter();
-        let taken = Cell::new(0_usize);
-        let mut counted = core::iter::from_fn(|| {
-            taken.set(taken.get().saturating_add(1));
-            chunks.next()
-        });
 
-        let first = sink.write(&mut counted).map_err(|failure| failure.kind());
-        let taken_by_the_first = taken.get();
-        while sink.write(&mut counted).is_err() {}
+        let failed = sink
+            .write_all(&mut chunks)
+            .map_err(|failure| failure.kind());
+        let left = chunks.as_slice().to_vec();
+        while sink.write_all(&mut chunks).is_err() {}
 
         assert_eq!(
-            (first, taken_by_the_first, sink.sink.written),
+            (failed, left, sink.sink.written),
             (
                 Err(io::ErrorKind::BrokenPipe),
-                1,
+                framed(b"MADE").into_iter().skip(1).collect::<Vec<_>>(),
                 b"\0\0\0\x0cfreeMADE".to_vec()
+            )
+        );
+    }
+
+    #[test]
+    fn a_sink_failing_part_way_through_a_chunk_is_handed_back_with_the_bytes_of_the_chunk_it_did_not_take()
+     {
+        let mut sink = Sink::new(Recording {
+            taking_at_most: Some(5),
+            ..Recording::default()
+        });
+
+        sink.write_all(&mut [b"\0\0\0\x0cfreeMADE".to_vec()].into_iter())
+            .unwrap_err();
+        assert_eq!(
+            sink.into_parts(),
+            (
+                Recording {
+                    written: b"\0\0\0\x0cf".to_vec(),
+                    taking_at_most: Some(5),
+                    ..Recording::default()
+                },
+                b"reeMADE".to_vec()
+            )
+        );
+    }
+
+    #[test]
+    fn a_sink_with_no_chunk_part_written_is_handed_back_with_no_bytes() {
+        let mut sink = Sink::new(Recording::default());
+
+        sink.write_all(&mut framed(b"MADE").into_iter()).unwrap();
+
+        assert_eq!(
+            sink.into_parts(),
+            (
+                Recording {
+                    written: b"\0\0\0\x0cfreeMADE".to_vec(),
+                    ..Recording::default()
+                },
+                Vec::new()
             )
         );
     }
@@ -215,7 +274,7 @@ mod tests {
         let mut sink = Sink::new(io::Cursor::new(&mut [][..]));
 
         assert_eq!(
-            sink.write(framed(b"MADE"))
+            sink.write_all(&mut framed(b"MADE").into_iter())
                 .map_err(|failure| failure.kind()),
             Err(io::ErrorKind::WriteZero)
         );

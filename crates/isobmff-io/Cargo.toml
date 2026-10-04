@@ -15,12 +15,12 @@ exclude.workspace = true
 futures-io = "0.3"
 isobmff-boxes.workspace = true
 isobmff-core.workspace = true
-isobmff-sequence.workspace = true
 
 [dev-dependencies]
 futures-executor = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 isobmff-sample.workspace = true
+isobmff-sequence.workspace = true
 isobmff-structure.workspace = true
 isobmff-test-support.workspace = true
 

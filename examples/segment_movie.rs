@@ -100,7 +100,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     initialization_fsm.handle_movie(movie.clone())?;
     initialization_fsm.finish()?;
-    initialization.write(iter::from_fn(|| initialization_fsm.poll_output()))?;
+    initialization.write_all(&mut iter::from_fn(|| initialization_fsm.poll_output()))?;
     initialization.flush()?;
 
     let mut sequence_number: u32 = 0;
@@ -125,7 +125,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         segment_fsm.finish_fragment()?;
         segment_fsm.finish()?;
-        segment.write(iter::from_fn(|| segment_fsm.poll_output()))?;
+        segment.write_all(&mut iter::from_fn(|| segment_fsm.poll_output()))?;
         Ok(segment.flush()?)
     };
 
