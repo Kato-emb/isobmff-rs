@@ -169,7 +169,7 @@ pub fn fragmented_file_samples() -> Vec<Sample> {
 /// A fragmented file laid out by hand whose movie declares samples of its own, with its movie, where its fragment lies, and the samples each declares
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Debug)]
-pub struct HybridFile {
+pub struct FragmentedFileWithMovieSamples {
     /// The bytes of the file
     pub bytes: Vec<u8>,
     /// The movie the file declares
@@ -193,7 +193,10 @@ pub struct HybridFile {
 /// `tfdt` where `decode_time_stated` is set; its samples start there, and
 /// where the samples of the sample table leave the track otherwise
 /// (§8.8.12).
-pub fn hybrid_file(movie_first: bool, decode_time_stated: bool) -> HybridFile {
+pub fn fragmented_file_with_movie_samples(
+    movie_first: bool,
+    decode_time_stated: bool,
+) -> FragmentedFileWithMovieSamples {
     let media_data = FRAGMENTED_MEDIA_DATA.as_slice();
     let (movie, head) = file_laid_out(
         &SAMPLE_CHUNKS,
@@ -218,7 +221,7 @@ pub fn hybrid_file(movie_first: bool, decode_time_stated: bool) -> HybridFile {
     ]
     .concat();
 
-    HybridFile {
+    FragmentedFileWithMovieSamples {
         bytes,
         movie,
         moof_offset,

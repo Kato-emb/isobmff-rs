@@ -15,8 +15,9 @@ mod tests {
     };
     use isobmff_structure::{Error, MediaSegmentDemuxFsm, WantedInput};
     use isobmff_test_support::{
-        hybrid_file, indexed_segment_file, presentation_movie, sample_table, segment_file_samples,
-        segment_file_with_samples, self_contained_data_reference, track_laid_out,
+        fragmented_file_with_movie_samples, indexed_segment_file, presentation_movie, sample_table,
+        segment_file_samples, segment_file_with_samples, self_contained_data_reference,
+        track_laid_out,
     };
 
     use super::reading::{drained, samples_of};
@@ -129,7 +130,7 @@ mod tests {
     #[test]
     fn a_first_fragment_stating_no_decode_time_starts_where_the_sample_table_of_the_movie_leaves_its_track()
      {
-        let file = hybrid_file(true, false);
+        let file = fragmented_file_with_movie_samples(true, false);
         let segment = file
             .bytes
             .get(usize::try_from(file.moof_offset).unwrap()..)

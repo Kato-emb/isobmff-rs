@@ -21,9 +21,9 @@ mod tests {
     use isobmff_sequence::BoxEvent;
     use isobmff_structure::{Error, ErrorKind, FragmentedDemuxFsm, WantedInput};
     use isobmff_test_support::{
-        HybridFile, IndexedFile, SAMPLE_CHUNKS, events_of, file_type, fragmented_file_samples,
-        fragmented_file_with_samples, hybrid_file, indexed_fragmented_file,
-        indexed_fragmented_file_without_decode_times, non_fragmented_file,
+        FragmentedFileWithMovieSamples, IndexedFile, SAMPLE_CHUNKS, events_of, file_type,
+        fragmented_file_samples, fragmented_file_with_movie_samples, fragmented_file_with_samples,
+        indexed_fragmented_file, indexed_fragmented_file_without_decode_times, non_fragmented_file,
         non_fragmented_file_samples, sample_table, self_contained_data_reference, track_laid_out,
         written,
     };
@@ -326,7 +326,7 @@ mod tests {
     }
 
     /// The samples `file` was built to carry, those of its movie first
-    fn every_sample_of(file: &HybridFile) -> Vec<Sample> {
+    fn every_sample_of(file: &FragmentedFileWithMovieSamples) -> Vec<Sample> {
         [file.movie_samples.clone(), file.fragment_samples.clone()].concat()
     }
 
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn the_samples_a_movie_declares_beside_its_fragments_are_read_with_theirs() {
         for movie_first in [true, false] {
-            let file = hybrid_file(movie_first, true);
+            let file = fragmented_file_with_movie_samples(movie_first, true);
 
             for cut_length in [7, file.bytes.len()] {
                 assert_eq!(
@@ -360,7 +360,7 @@ mod tests {
     fn a_fragment_stating_no_decode_time_starts_where_the_sample_table_of_the_movie_leaves_its_track()
      {
         for movie_first in [true, false] {
-            let file = hybrid_file(movie_first, false);
+            let file = fragmented_file_with_movie_samples(movie_first, false);
 
             assert_eq!(
                 by_track(samples_of(&file.bytes, 7)),
@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn media_data_lying_before_the_movie_is_wanted_once_the_movie_is_read() {
-        let file = hybrid_file(false, true);
+        let file = fragmented_file_with_movie_samples(false, true);
         let first_sample = file
             .bytes
             .windows(8)
@@ -419,7 +419,7 @@ mod tests {
 
     #[test]
     fn resuming_drops_the_samples_of_the_movie_and_a_fragment_stating_no_decode_time_then_fails() {
-        let read_resuming_at_the_fragment = |file: &HybridFile| {
+        let read_resuming_at_the_fragment = |file: &FragmentedFileWithMovieSamples| {
             let fragment = usize::try_from(file.moof_offset).unwrap();
             let mut demux_fsm = FragmentedDemuxFsm::new();
             demux_fsm
@@ -434,14 +434,14 @@ mod tests {
 
             (resumed, drained(&mut demux_fsm))
         };
-        let stating = hybrid_file(false, true);
+        let stating = fragmented_file_with_movie_samples(false, true);
 
         assert_eq!(
             read_resuming_at_the_fragment(&stating),
             (Ok(()), stating.fragment_samples.clone())
         );
         assert_eq!(
-            read_resuming_at_the_fragment(&hybrid_file(false, false)),
+            read_resuming_at_the_fragment(&fragmented_file_with_movie_samples(false, false)),
             (
                 Err(ErrorKind::Sample(
                     isobmff_sample::ErrorKind::MissingDecodeTime
