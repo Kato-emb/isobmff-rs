@@ -128,6 +128,10 @@ impl fmt::Display for Error {
                 "track {track_id} has no stsd entry {sample_description_index}"
             ),
             Representation::MissingMovieExtends => formatter.write_str("the movie carries no mvex"),
+            Representation::SampleTableNotEmpty { track_id } => write!(
+                formatter,
+                "sample table of track {track_id} lays samples out in a movie continued in fragments"
+            ),
             Representation::UnknownDataReferenceIndex {
                 track_id,
                 data_reference_index,
@@ -325,6 +329,7 @@ mod tests {
         assert_eq!(unfinished.available_bytes(), Some(512));
         assert_eq!(unfinished.sample_description_index(), None);
         assert_eq!(Error::missing_movie_extends().track_id(), None);
+        assert_eq!(Error::sample_table_not_empty(4).track_id(), Some(4));
         assert_eq!(Error::unknown_track_id(3).sample_description_index(), None);
 
         let external = Error::external_data_reference(1, 2);
@@ -413,6 +418,10 @@ mod tests {
         assert_eq!(
             Error::missing_movie_extends().to_string(),
             "the movie carries no mvex"
+        );
+        assert_eq!(
+            Error::sample_table_not_empty(4).to_string(),
+            "sample table of track 4 lays samples out in a movie continued in fragments"
         );
         assert_eq!(
             Error::unknown_data_reference_index(2, 3).to_string(),
@@ -504,6 +513,10 @@ mod tests {
         assert_eq!(
             format!("{:?}", Error::missing_movie_extends()),
             "Error { kind: MissingMovieExtends, category: Malformed }"
+        );
+        assert_eq!(
+            format!("{:?}", Error::sample_table_not_empty(4)),
+            "Error { kind: SampleTableNotEmpty, category: Unsupported, track_id: 4 }"
         );
         assert_eq!(
             format!("{:?}", Error::sample_size_limit_exceeded(1, 32, 16)),

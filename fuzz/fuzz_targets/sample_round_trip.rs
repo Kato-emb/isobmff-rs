@@ -11,7 +11,9 @@
 //!    among themselves — a sample naming no bytes shares its byte with the
 //!    samples around it, and is held only to its place among those of its
 //!    track
-//! 3. the reader does not reject the file the writer laid down
+//! 3. the reader does not reject the file the writer laid down: a sample of a
+//!    track the movie does not declare, or described by an `stsd` entry its
+//!    track has none of, is refused by the writer where it is handed over
 //! 4. laying the samples read back out again reads back those same samples,
 //!    held to as property 2 is and no closer: a sample naming no bytes is
 //!    placed where it arrived, and the first pass hands it back behind the
@@ -73,8 +75,10 @@ struct Fragment {
 /// One sample as the caller states it, over the bytes it is carried as
 #[derive(Arbitrary, Debug)]
 struct Stated {
-    /// Whether the sample belongs to the second of the tracks the movie declares
-    second_track: bool,
+    /// Which of the tracks the movie declares the sample names, or at its highest one past them
+    track: u8,
+    /// At its highest, the sample is described by a second `stsd` entry, which no track carries
+    entry: u8,
     duration: u16,
     #[arbitrary(with = sample_flags)]
     flags: SampleFlags,
@@ -134,7 +138,11 @@ fn laid_out(input: &Input<'_>) -> Vec<(u32, Vec<Sample>)> {
                 .iter()
                 .take(MAX_SAMPLES)
                 .map(|stated| {
-                    let position = usize::from(stated.second_track);
+                    let position = if stated.track == u8::MAX {
+                        TRACK_COUNT
+                    } else {
+                        usize::from(stated.track) % TRACK_COUNT
+                    };
                     let end = taken
                         .saturating_add(usize::from(stated.length))
                         .min(input.sample_data.len());
@@ -160,7 +168,7 @@ fn laid_out(input: &Input<'_>) -> Vec<(u32, Vec<Sample>)> {
                         u32::from(stated.duration),
                         i64::from(stated.composition_time_offset),
                         stated.flags,
-                        SAMPLE_DESCRIPTION_INDEX,
+                        SAMPLE_DESCRIPTION_INDEX + u32::from(stated.entry == u8::MAX),
                         data.to_vec(),
                     )
                 })

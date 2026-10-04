@@ -31,7 +31,7 @@ mod tests {
 
     /// A segment of one fragment carrying [`sample`], with no brands
     pub(super) fn segment_of_one_sample() -> Vec<u8> {
-        let mut mux_fsm = MediaSegmentMuxFsm::new();
+        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
         let mut segment = Vec::new();
 
         mux_fsm.begin_fragment(1).unwrap();

@@ -93,7 +93,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     if let Some(file_type) = &file_type {
         initialization_fsm.handle_file_type(file_type.clone())?;
     }
-    initialization_fsm.handle_movie(movie)?;
+    initialization_fsm.handle_movie(movie.clone())?;
     initialization_fsm.finish()?;
     initialization.write(iter::from_fn(|| initialization_fsm.poll_output()))?;
     initialization.flush()?;
@@ -105,7 +105,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .ok_or("more segments than a sequence number counts")?;
         let path = output.join(format!("{sequence_number:04}.m4s"));
         let mut segment = Sink::new(BufWriter::new(File::create(path)?));
-        let mut segment_fsm = MediaSegmentMuxFsm::new();
+        let mut segment_fsm = MediaSegmentMuxFsm::new(&movie)?;
         if let Some(file_type) = &file_type {
             segment_fsm.handle_segment_type(SegmentTypeBox::new(
                 file_type.major_brand(),

@@ -37,7 +37,7 @@ mod tests {
             Sample::new(1, 3_000, 3_000, 8, dependent, 1, b"BBBB".to_vec()),
             Sample::new(1, 6_000, 1_500, -8, dependent, 1, b"CC".to_vec()),
         ];
-        let mut writer = MovieFragmentWriter::new();
+        let mut writer = MovieFragmentWriter::new(&movie).unwrap();
 
         writer.begin_fragment(1).unwrap();
         for sample in &samples {

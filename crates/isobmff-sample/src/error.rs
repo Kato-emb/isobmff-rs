@@ -87,7 +87,7 @@ impl Error {
         }
     }
 
-    /// Returns the failure of a fragment carrying samples of a track the movie never declared
+    /// Returns the failure of a sample belonging to a track the movie never declared
     #[must_use]
     pub const fn unknown_track_id(track_id: u32) -> Self {
         Self {
@@ -114,6 +114,14 @@ impl Error {
     pub const fn missing_movie_extends() -> Self {
         Self {
             representation: Representation::MissingMovieExtends,
+        }
+    }
+
+    /// Returns the failure of a movie continued in fragments laying samples out in the sample table of a track
+    #[must_use]
+    pub const fn sample_table_not_empty(track_id: u32) -> Self {
+        Self {
+            representation: Representation::SampleTableNotEmpty { track_id },
         }
     }
 

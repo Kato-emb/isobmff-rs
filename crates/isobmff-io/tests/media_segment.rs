@@ -12,7 +12,7 @@ mod tests {
 
     /// A mux FSM that has laid down a segment of one fragment carrying the samples of the fixture
     fn laid_down() -> MediaSegmentMuxFsm {
-        let mut fsm = MediaSegmentMuxFsm::new();
+        let mut fsm = MediaSegmentMuxFsm::new(&presentation_movie()).unwrap();
         fsm.handle_segment_type(segment_type()).unwrap();
         fsm.begin_fragment(1).unwrap();
         for sample in segment_file_samples() {

@@ -17,7 +17,7 @@ pub(super) enum Representation {
     MissingDecodeTime { track_id: u32 },
     /// Data offset running past what 64 bits carry
     DataOffsetOverflow { track_id: u32 },
-    /// Fragment carrying samples of a track the movie never declared
+    /// Sample belonging to a track the movie never declared
     UnknownTrackId { track_id: u32 },
     /// Samples described by an `stsd` entry their track has none of
     UnknownSampleDescriptionIndex {
@@ -26,6 +26,8 @@ pub(super) enum Representation {
     },
     /// Movie carrying no `mvex`, and so no fragments
     MissingMovieExtends,
+    /// Movie continued in fragments laying samples out in the sample table of a track
+    SampleTableNotEmpty { track_id: u32 },
     /// Sample entry naming a `dref` entry the track has none of
     UnknownDataReferenceIndex {
         track_id: u32,
@@ -140,6 +142,7 @@ impl Representation {
             Self::UnknownTrackId { .. } => ErrorKind::UnknownTrackId,
             Self::UnknownSampleDescriptionIndex { .. } => ErrorKind::UnknownSampleDescriptionIndex,
             Self::MissingMovieExtends => ErrorKind::MissingMovieExtends,
+            Self::SampleTableNotEmpty { .. } => ErrorKind::SampleTableNotEmpty,
             Self::UnknownDataReferenceIndex { .. } => ErrorKind::UnknownDataReferenceIndex,
             Self::ExternalDataReference { .. } => ErrorKind::ExternalDataReference,
             Self::SampleCountMismatch { .. } => ErrorKind::SampleCountMismatch,
@@ -185,6 +188,7 @@ impl Representation {
             | Self::SampleDescriptionIndexMismatch { .. }
             | Self::TrackIdMismatch { .. } => Category::Malformed,
             Self::ExternalDataReference { .. }
+            | Self::SampleTableNotEmpty { .. }
             | Self::MissingDecodeTime { .. }
             | Self::SampleSizeLimitExceeded { .. }
             | Self::SampleSizeOutOfRange { .. }
@@ -209,6 +213,7 @@ impl Representation {
             | Self::MissingDecodeTime { track_id }
             | Self::DataOffsetOverflow { track_id }
             | Self::UnknownTrackId { track_id }
+            | Self::SampleTableNotEmpty { track_id }
             | Self::SampleCountMismatch { track_id } => Fields {
                 track_id: Some(track_id),
                 ..Fields::EMPTY
@@ -349,6 +354,10 @@ mod tests {
         );
         assert_eq!(
             Error::sample_size_limit_exceeded(1, 32, 16).category(),
+            Category::Unsupported
+        );
+        assert_eq!(
+            Error::sample_table_not_empty(4).category(),
             Category::Unsupported
         );
         assert_eq!(

@@ -80,7 +80,7 @@ mod tests {
         fragments: Vec<Vec<Sample>>,
         begin: fn(&mut MediaSegmentMuxFsm, u32) -> Result<(), Error>,
     ) -> Vec<u8> {
-        let mut mux_fsm = MediaSegmentMuxFsm::new();
+        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
         let mut segment = Vec::new();
 
         mux_fsm.handle_segment_type(segment_type()).unwrap();

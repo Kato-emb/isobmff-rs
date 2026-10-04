@@ -214,6 +214,23 @@ pub fn fragmented_movie(trex: TrackExtendsBox) -> MovieBox {
     .unwrap()
 }
 
+/// Movie of the tracks given, which no `trex` states the defaults of a fragment for
+pub fn movie_declaring(trak: Vec<TrackBox>) -> MovieBox {
+    let next_track_id = trak
+        .iter()
+        .map(|track| track.tkhd().track_id())
+        .max()
+        .unwrap()
+        .saturating_add(1);
+
+    MovieBox::new(
+        MovieHeaderBox::new(EPOCH, EPOCH, TIMESCALE, HeaderDuration::ZERO, next_track_id),
+        trak,
+        None,
+    )
+    .unwrap()
+}
+
 /// Fragment adding time to the track the movie declared, and no sample
 pub fn movie_fragment() -> MovieFragmentBox {
     let track_fragment = TrackFragmentBox::new(

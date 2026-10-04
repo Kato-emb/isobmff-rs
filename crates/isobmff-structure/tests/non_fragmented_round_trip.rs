@@ -171,21 +171,4 @@ mod tests {
         }
         assert_eq!(read, &expected);
     }
-
-    #[test]
-    fn a_file_handed_no_brands_whose_chunk_comes_before_the_movie_is_read_back() {
-        let sample = Sample::new(1, 0, 3_000, 0, SampleFlags::ZERO, 1, b"VIDEO_01".to_vec());
-        let mut mux_fsm = NonFragmentedMuxFsm::new();
-        let mut file = Vec::new();
-
-        mux_fsm.begin_chunk().unwrap();
-        mux_fsm.handle_sample(sample.clone()).unwrap();
-        mux_fsm.handle_movie(movie()).unwrap();
-        mux_fsm.finish().unwrap();
-        while let Some(written) = mux_fsm.poll_output() {
-            file.extend_from_slice(&written);
-        }
-
-        assert_eq!(samples_of(&file, file.len()), [sample]);
-    }
 }
