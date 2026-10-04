@@ -281,18 +281,6 @@ impl Error {
         Self::new(ErrorKind::UnsupportedValue, Detail::Nothing)
     }
 
-    /// Returns the failure of a count past the entries a box reads
-    #[must_use]
-    pub const fn unsupported_entry_count(declared: u64, limit: u64) -> Self {
-        Self::new(
-            ErrorKind::UnsupportedEntryCount,
-            Detail::Entries {
-                needed: declared,
-                available: limit,
-            },
-        )
-    }
-
     /// Returns the failure with `container` added to the boxes it was reached through
     ///
     /// A container calls this as a child failure passes through it, which builds
@@ -646,12 +634,6 @@ impl fmt::Display for Error {
                 "full box declares flags {:#08x}, which this box does not read",
                 self.flags().unwrap_or_default()
             ),
-            ErrorKind::UnsupportedEntryCount => write!(
-                formatter,
-                "box declares {} entries, past the {} this box reads",
-                self.needed_entries().unwrap_or_default(),
-                self.available_entries().unwrap_or_default()
-            ),
             ErrorKind::UnsupportedValue => formatter
                 .write_str("box states a value this box does not read in one of its fields"),
         }
@@ -821,12 +803,6 @@ pub enum ErrorKind {
     /// [`field_size`](Error::field_size) is the width in bits the box
     /// declares.
     UnsupportedFieldSize,
-    /// Count a box declares is past the entries the box reads
-    ///
-    /// [`needed_entries`](Error::needed_entries) is the count the field
-    /// declares, [`available_entries`](Error::available_entries) the
-    /// count the box reads.
-    UnsupportedEntryCount,
     /// Box states a value the box does not read in one of its fields
     UnsupportedValue,
     /// Buffer ends inside the value being written into it
@@ -877,7 +853,6 @@ impl ErrorKind {
             | Self::UnsupportedVersion
             | Self::UnsupportedFlags
             | Self::UnsupportedFieldSize
-            | Self::UnsupportedEntryCount
             | Self::UnsupportedValue => Category::Unsupported,
             Self::TruncatedBuffer
             | Self::TrailingBuffer
@@ -1219,10 +1194,6 @@ mod tests {
         assert_eq!(
             Error::entry_count_mismatch(4, 2).to_string(),
             "box declares 4 entries but holds 2"
-        );
-        assert_eq!(
-            Error::unsupported_entry_count(u64::from(u32::MAX), 1_048_576).to_string(),
-            "box declares 4294967295 entries, past the 1048576 this box reads"
         );
     }
 
