@@ -12,8 +12,9 @@ const PAYLOAD_LEN: u64 = 8;
 ///
 /// [`MovieFragmentRandomAccessOffsetBox`] (`mfro`), ISO/IEC 14496-12 §8.8.11.
 /// It is the last box of its `mfra`, so when the `mfra` is also the last box
-/// of the file a reader finds it by reading this box off the last 16 bytes
-/// and stepping back `size` bytes from the end.
+/// of the file a reader finds it by reading this box off the last
+/// [`ENCODED_LEN`](Self::ENCODED_LEN) bytes and stepping back `size` bytes
+/// from the end.
 ///
 /// Neither the version nor the `flags` are held — the spec defines only
 /// version 0 and declares the flags zero for this box.
@@ -25,6 +26,12 @@ pub struct MovieFragmentRandomAccessOffsetBox {
 }
 
 impl MovieFragmentRandomAccessOffsetBox {
+    /// Bytes the box occupies in a file, its header included
+    ///
+    /// An `mfro` whose size is stated in 32 bits occupies this many; a file
+    /// closing with an `mfra` closes with them.
+    pub const ENCODED_LEN: usize = 16;
+
     /// Creates the box from the number of bytes its `mfra` occupies
     #[must_use]
     pub const fn new(size: u32) -> Self {

@@ -373,9 +373,9 @@ pub enum ErrorKind {
     AlreadyFinished,
     /// Input was handed over at an offset the demux FSM takes no input at
     ///
-    /// The demux FSM takes input at the offset the input taken in order
-    /// stands at, or at the offset of bytes it named as lacking, and refuses
-    /// it anywhere else. [`input_offset`](Error::input_offset) is the offset
+    /// The demux FSM takes input where it names the read it wants and, while
+    /// it takes the input in order, where that input stands, and refuses it
+    /// anywhere else. [`input_offset`](Error::input_offset) is the offset
     /// the input was handed over at.
     UnwantedInput,
 }
