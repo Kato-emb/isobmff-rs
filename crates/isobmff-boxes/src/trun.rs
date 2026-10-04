@@ -220,7 +220,7 @@ impl TrackRunBox {
     /// * one row carries a negative composition time offset while another
     ///   carries one past [`i32::MAX`], which leaves no version able to write
     ///   both;
-    /// * there are more rows than the `sample_count` field counts.
+    /// * there are more rows than the 32-bit `sample_count` field can count.
     ///
     /// Rows that all carry no field are held as their count, as
     /// [`of_empty_rows`](Self::of_empty_rows) holds them.
@@ -257,8 +257,8 @@ impl TrackRunBox {
 
     /// Creates the box of a run of `sample_count` samples whose rows state no field
     ///
-    /// Every sample takes what the `tfhd` and the `trex` set, but the first,
-    /// which takes `first_sample_flags` where it is given.
+    /// Every sample takes what the `tfhd` and the `trex` set, except that the
+    /// first takes `first_sample_flags` as its flags where it is given.
     #[must_use]
     pub const fn of_empty_rows(
         data_offset: Option<i32>,
@@ -393,7 +393,7 @@ impl TrackRunBox {
     }
 }
 
-/// The rows of a run read one after another, an empty one per sample where the run holds only their count
+/// The rows of a run one after another, or an empty row per sample where the run holds only the `sample_count`
 enum Samples<'rows> {
     Stated(slice::Iter<'rows, TrackRunSample>),
     Empty { remaining: u32 },
@@ -809,7 +809,7 @@ mod tests {
     }
 
     #[test]
-    fn the_sample_count_counts_the_rows_or_is_the_count_held() {
+    fn the_sample_count_is_the_rows_counted_or_the_count_held() {
         assert_eq!(
             [
                 track_run().sample_count(),
