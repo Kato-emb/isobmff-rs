@@ -127,9 +127,9 @@ enum Rows {
     Empty { sample_count: u32 },
 }
 
-impl Rows {
+impl From<Vec<TrackRunSample>> for Rows {
     /// Holds `rows`, as their `sample_count` where they carry no field
-    fn of(rows: Vec<TrackRunSample>) -> Self {
+    fn from(rows: Vec<TrackRunSample>) -> Self {
         if per_sample_field_flags(&rows) == 0 {
             // Why not `as`: every caller holds at most as many rows as a `u32`
             // counts, so the fallback names a run no constructor builds rather
@@ -141,7 +141,9 @@ impl Rows {
             Self::Table(rows)
         }
     }
+}
 
+impl Rows {
     /// Returns the rows of the table, none where the run holds only the `sample_count`
     fn table(&self) -> &[TrackRunSample] {
         match self {
@@ -225,7 +227,7 @@ impl TrackRunBox {
     /// * there are more rows than the 32-bit `sample_count` field can count.
     ///
     /// Rows that all carry no field are held as their count, as
-    /// [`of_empty_rows`](Self::of_empty_rows) holds them.
+    /// [`from_sample_count`](Self::from_sample_count) holds them.
     #[must_use]
     pub fn new(
         data_offset: Option<i32>,
@@ -253,7 +255,7 @@ impl TrackRunBox {
         Some(Self {
             data_offset,
             first_sample_flags,
-            rows: Rows::of(samples),
+            rows: Rows::from(samples),
         })
     }
 
@@ -262,7 +264,7 @@ impl TrackRunBox {
     /// Every sample takes what the `tfhd` and the `trex` set, except that the
     /// first takes `first_sample_flags` as its flags where it is given.
     #[must_use]
-    pub const fn of_empty_rows(
+    pub const fn from_sample_count(
         data_offset: Option<i32>,
         first_sample_flags: Option<SampleFlags>,
         sample_count: u32,
@@ -387,7 +389,7 @@ impl TrackRunBox {
                     .sample_composition_time_offset
                     .filter(|_| carries_offsets);
             }
-            self.rows = Rows::of(rows);
+            self.rows = Rows::from(rows);
         }
         self.first_sample_flags = first_sample_flags;
 
@@ -491,7 +493,7 @@ impl BoxDecode for TrackRunBox {
         reader.require(row_len.saturating_mul(u64::from(sample_count)))?;
 
         if row_len == 0 {
-            return Ok(Self::of_empty_rows(
+            return Ok(Self::from_sample_count(
                 data_offset,
                 first_sample_flags,
                 sample_count,
@@ -535,7 +537,7 @@ impl BoxDecode for TrackRunBox {
         Ok(Self {
             data_offset,
             first_sample_flags,
-            rows: Rows::of(samples),
+            rows: Rows::from(samples),
         })
     }
 }
@@ -791,7 +793,7 @@ mod tests {
     fn a_run_of_empty_rows_is_read_as_its_count_however_many_it_counts() {
         let run = TrackRunBox::decode_payload(&empty_rows(u32::MAX)).unwrap();
 
-        assert_eq!(run, TrackRunBox::of_empty_rows(None, None, u32::MAX));
+        assert_eq!(run, TrackRunBox::from_sample_count(None, None, u32::MAX));
         assert_eq!(encoded_payload(&run), empty_rows(u32::MAX));
     }
 
@@ -799,13 +801,13 @@ mod tests {
     fn rows_that_all_carry_no_field_are_held_as_their_count() {
         assert_eq!(
             TrackRunBox::new(Some(8), None, vec![EMPTY_ROW; 3]),
-            Some(TrackRunBox::of_empty_rows(Some(8), None, 3))
+            Some(TrackRunBox::from_sample_count(Some(8), None, 3))
         );
     }
 
     #[test]
     fn a_run_holding_its_count_yields_an_empty_row_per_sample() {
-        let run = TrackRunBox::of_empty_rows(None, None, 3);
+        let run = TrackRunBox::from_sample_count(None, None, 3);
 
         assert_eq!(run.samples().collect::<Vec<_>>(), vec![EMPTY_ROW; 3]);
     }
@@ -815,7 +817,7 @@ mod tests {
         assert_eq!(
             [
                 track_run().sample_count(),
-                TrackRunBox::of_empty_rows(None, None, 3).sample_count()
+                TrackRunBox::from_sample_count(None, None, 3).sample_count()
             ],
             [2, 3]
         );
