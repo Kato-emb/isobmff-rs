@@ -6,6 +6,8 @@ use isobmff_core::{
     BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FourCC,
 };
 
+use crate::data_types::brands;
+
 /// Length of the fields that precede the compatible brands
 const FIXED_FIELDS_LEN: u64 = 8;
 
@@ -59,6 +61,17 @@ impl SegmentTypeBox {
     #[must_use]
     pub fn compatible_brands(&self) -> &[FourCC] {
         &self.compatible_brands
+    }
+
+    /// Returns the first brand listed under which a `tfhd` shall not state
+    /// `default-base-is-moof`
+    ///
+    /// The brands are read as
+    /// [`FileTypeBox::brand_forbidding_default_base_is_moof`](crate::FileTypeBox::brand_forbidding_default_base_is_moof)
+    /// reads them.
+    #[must_use]
+    pub fn brand_forbidding_default_base_is_moof(&self) -> Option<FourCC> {
+        brands::brand_forbidding_default_base_is_moof(self.major_brand, &self.compatible_brands)
     }
 }
 
@@ -125,6 +138,20 @@ mod tests {
         assert_eq!(
             SegmentTypeBox::decode_payload(b"msdh\0\0\0\0msd"),
             Err(Error::truncated_payload(12, 11))
+        );
+    }
+
+    #[test]
+    fn a_segment_listing_a_brand_earlier_than_iso5_forbids_default_base_is_moof() {
+        let segment_type = SegmentTypeBox::new(
+            FourCC::new(*b"msdh"),
+            0,
+            vec![FourCC::new(*b"msdh"), FourCC::new(*b"iso4")],
+        );
+
+        assert_eq!(
+            segment_type.brand_forbidding_default_base_is_moof(),
+            Some(FourCC::new(*b"iso4"))
         );
     }
 

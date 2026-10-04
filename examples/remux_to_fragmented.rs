@@ -6,7 +6,9 @@
 //! The samples are written in decode time across the tracks, whatever order the source lays them
 //! down in, so each fragment carries the same stretch of time of every track. A fragment opens at
 //! every sync sample of a track that carries a sync sample table, so a source with no such track
-//! is written as one fragment.
+//! is written as one fragment. The source's `ftyp` is carried over, unless it lists a brand the
+//! `default-base-is-moof` of the fragments shall not be used under — `isom` and the others earlier
+//! than `iso5` — where the `iso6` one the muxer lays down takes its place.
 //!
 //! Usage: `cargo run -p isobmff-examples --example remux_to_fragmented -- <in.mp4> <out.mp4>`
 
@@ -88,7 +90,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut sink = Sink::new(BufWriter::new(File::create(output)?));
     let mut mux_fsm = FragmentedMuxFsm::new();
-    if let Some(file_type) = demux_fsm.file_type() {
+    if let Some(file_type) = demux_fsm
+        .file_type()
+        .filter(|file_type| file_type.brand_forbidding_default_base_is_moof().is_none())
+    {
         mux_fsm.handle_file_type(file_type.clone())?;
     }
     mux_fsm.handle_movie(movie)?;

@@ -3,15 +3,16 @@
 use core::error;
 use core::fmt;
 
-use isobmff_core::{BoxType, Category};
+use isobmff_core::{BoxType, Category, FourCC};
 
 /// Reason a file does not read through the layers this crate holds
 ///
 /// What went wrong is one [`kind`](Self::kind): a failure of the structure of
 /// the file — a box it requires that never came, one that came twice, one
 /// that came out of the order the structure keeps, a box reaching past the
-/// limit a demux FSM gathers for one — or a failure of a layer beneath, which
-/// this type carries through whole rather than translating:
+/// limit a demux FSM gathers for one, a brand a mux FSM cannot write under —
+/// or a failure of a layer beneath, which this type carries through whole
+/// rather than translating:
 /// [`sequence_error`](Self::sequence_error) for the framing of the file,
 /// [`sample_error`](Self::sample_error) for the samples it carries, and
 /// [`box_error`](Self::box_error) for one box that did not decode. What a
@@ -87,6 +88,14 @@ impl Error {
         }
     }
 
+    /// Returns the failure of a brand handed over that the mux FSM cannot write under
+    #[must_use]
+    pub const fn unsupported_brand(brand: FourCC) -> Self {
+        Self {
+            representation: Representation::UnsupportedBrand { brand },
+        }
+    }
+
     /// Returns the failure of a call made after the file was declared over
     #[must_use]
     pub const fn already_finished() -> Self {
@@ -114,6 +123,7 @@ impl Error {
             Representation::DuplicateBox { .. } => ErrorKind::DuplicateBox,
             Representation::BoxOutOfOrder { .. } => ErrorKind::BoxOutOfOrder,
             Representation::PayloadLimitExceeded { .. } => ErrorKind::PayloadLimitExceeded,
+            Representation::UnsupportedBrand { .. } => ErrorKind::UnsupportedBrand,
             Representation::AlreadyFinished => ErrorKind::AlreadyFinished,
             Representation::UnwantedInput { .. } => ErrorKind::UnwantedInput,
         }
@@ -129,7 +139,8 @@ impl Error {
             Representation::MissingMandatoryBox { .. }
             | Representation::DuplicateBox { .. }
             | Representation::BoxOutOfOrder { .. } => Category::Malformed,
-            Representation::PayloadLimitExceeded { .. } => Category::Unsupported,
+            Representation::PayloadLimitExceeded { .. }
+            | Representation::UnsupportedBrand { .. } => Category::Unsupported,
             Representation::AlreadyFinished | Representation::UnwantedInput { .. } => {
                 Category::Usage
             }
@@ -179,6 +190,12 @@ impl Error {
     #[must_use]
     pub const fn input_offset(self) -> Option<u64> {
         self.representation.fields().input_offset
+    }
+
+    /// Returns the brand the failure names, for the kinds that name one
+    #[must_use]
+    pub const fn brand(self) -> Option<FourCC> {
+        self.representation.fields().brand
     }
 }
 
@@ -233,6 +250,10 @@ impl fmt::Display for Error {
                 formatter,
                 "{box_type} box reaches {reached} payload bytes, past the {limit}-byte limit"
             ),
+            Representation::UnsupportedBrand { brand } => write!(
+                formatter,
+                "brand {brand} is one the mux FSM cannot write under"
+            ),
             Representation::AlreadyFinished => {
                 formatter.write_str("file was declared over and takes nothing more")
             }
@@ -272,6 +293,9 @@ impl fmt::Debug for Error {
         if let Some(offset) = values.input_offset {
             fields.field("input_offset", &offset);
         }
+        if let Some(brand) = values.brand {
+            fields.field("brand", &brand);
+        }
 
         fields.finish()
     }
@@ -288,6 +312,7 @@ impl error::Error for Error {
             | Representation::DuplicateBox { .. }
             | Representation::BoxOutOfOrder { .. }
             | Representation::PayloadLimitExceeded { .. }
+            | Representation::UnsupportedBrand { .. }
             | Representation::AlreadyFinished
             | Representation::UnwantedInput { .. } => None,
         }
@@ -346,6 +371,14 @@ pub enum ErrorKind {
     /// reached — and [`available_bytes`](Error::available_bytes)
     /// the payload the demux FSM gathers for one box at most.
     PayloadLimitExceeded,
+    /// Brand was handed over that the mux FSM cannot write under
+    ///
+    /// A mux FSM that writes `default-base-is-moof` in every `tfhd` refuses a
+    /// `ftyp` or `styp` listing a brand earlier than `iso5` — `isom`, `avc1`,
+    /// `iso2`, `iso3` or `iso4` — under which ISO/IEC 14496-12 §8.8.7.1
+    /// forbids the flag. [`brand`](Error::brand) is the first such brand
+    /// listed.
+    UnsupportedBrand,
     /// File was declared over, and takes nothing more
     AlreadyFinished,
     /// Input was handed over at an offset the demux FSM takes no input at
@@ -378,6 +411,8 @@ enum Representation {
         reached: u64,
         limit: u64,
     },
+    /// Brand handed over that the mux FSM cannot write under
+    UnsupportedBrand { brand: FourCC },
     /// Call made after the file was declared over
     AlreadyFinished,
     /// Input handed over at an offset the demux FSM takes no input at
@@ -393,6 +428,7 @@ struct Fields {
     needed_bytes: Option<u64>,
     available_bytes: Option<u64>,
     input_offset: Option<u64>,
+    brand: Option<FourCC>,
 }
 
 impl Fields {
@@ -405,6 +441,7 @@ impl Fields {
         needed_bytes: None,
         available_bytes: None,
         input_offset: None,
+        brand: None,
     };
 }
 
@@ -440,6 +477,10 @@ impl Representation {
                 available_bytes: Some(limit),
                 ..Fields::EMPTY
             },
+            Self::UnsupportedBrand { brand } => Fields {
+                brand: Some(brand),
+                ..Fields::EMPTY
+            },
             Self::AlreadyFinished => Fields::EMPTY,
             Self::UnwantedInput { offset } => Fields {
                 input_offset: Some(offset),
@@ -454,7 +495,7 @@ mod tests {
     use alloc::format;
     use alloc::string::ToString as _;
 
-    use isobmff_core::{BoxType, Category};
+    use isobmff_core::{BoxType, Category, FourCC};
 
     use super::{Error, ErrorKind};
 
@@ -469,6 +510,10 @@ mod tests {
         );
         assert_eq!(
             Error::payload_limit_exceeded(MOOV, 32, 16).category(),
+            Category::Unsupported
+        );
+        assert_eq!(
+            Error::unsupported_brand(FourCC::new(*b"isom")).category(),
             Category::Unsupported
         );
         assert_eq!(Error::already_finished().category(), Category::Usage);
@@ -502,6 +547,12 @@ mod tests {
         assert_eq!(unwanted.kind(), ErrorKind::UnwantedInput);
         assert_eq!(unwanted.input_offset(), Some(9));
         assert_eq!(unwanted.box_type(), None);
+
+        let unsupported = Error::unsupported_brand(FourCC::new(*b"isom"));
+
+        assert_eq!(unsupported.kind(), ErrorKind::UnsupportedBrand);
+        assert_eq!(unsupported.brand(), Some(FourCC::new(*b"isom")));
+        assert_eq!(unsupported.box_type(), None);
     }
 
     #[test]
@@ -550,6 +601,10 @@ mod tests {
             "moov box reaches 32 payload bytes, past the 16-byte limit"
         );
         assert_eq!(
+            Error::unsupported_brand(FourCC::new(*b"isom")).to_string(),
+            "brand isom is one the mux FSM cannot write under"
+        );
+        assert_eq!(
             Error::already_finished().to_string(),
             "file was declared over and takes nothing more"
         );
@@ -582,6 +637,10 @@ mod tests {
         assert_eq!(
             format!("{:?}", Error::unwanted_input(9)),
             "Error { kind: UnwantedInput, category: Usage, input_offset: 9 }"
+        );
+        assert_eq!(
+            format!("{:?}", Error::unsupported_brand(FourCC::new(*b"isom"))),
+            "Error { kind: UnsupportedBrand, category: Unsupported, brand: FourCC(\"isom\") }"
         );
     }
 }
