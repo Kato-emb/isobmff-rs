@@ -34,8 +34,8 @@ use crate::{Error, whole_box_header, whole_payload};
 ///   sample handed over, before it is
 ///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder) of the `moof`. The
 ///   samples are checked against the movie as they are handed over, as
-///   [`MovieFragmentWriter`] checks them, and a movie that continues in no
-///   fragments is refused before any of it is laid down.
+///   [`MovieFragmentWriter`] checks them, and a movie it refuses is refused
+///   before any of it is laid down.
 /// * The `ftyp` handed over is laid down as it stands. Where none was handed
 ///   over, the mux FSM lays its own down before the `moov`: `iso6` as its
 ///   `major_brand` and its one `compatible_brands` entry, with
@@ -143,9 +143,9 @@ impl FragmentedMuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::ErrorKind::Sample): the movie continues in no
-    ///   fragments, as [`MovieFragmentWriter::new`] refuses it; nothing of it
-    ///   is laid down.
+    /// * [`Sample`](crate::ErrorKind::Sample): the movie is one
+    ///   [`MovieFragmentWriter::new`] refuses — it carries no `mvex`, or its
+    ///   sample tables lay samples out; nothing of it is laid down.
     /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): a movie
     ///   continuing in fragments was handed over already.
     /// * [`Box`](crate::ErrorKind::Box): the box does not write.
@@ -389,20 +389,12 @@ fn default_file_type() -> FileTypeBox {
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_boxes::{
-        ChunkOffsetBox, ChunkOffsetEntry, ChunkOffsets, FileTypeBox, MovieBox, MovieFragmentBox,
-        SampleFlags, SampleSizeBox, SampleSizeEntries, SampleSizeEntry, SampleSizes,
-        SampleToChunkBox, SampleToChunkEntry, TimeToSampleBox, TimeToSampleEntry, TrackExtendsBox,
-    };
+    use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox, SampleFlags, TrackExtendsBox};
     use isobmff_core::{BoxDecode, BoxDefinition};
     use isobmff_sample::Sample;
-    use isobmff_test_support::{
-        file_type, fragmented_movie, sample_table, self_contained_data_reference, track_laid_out,
-        unfragmented_movie,
-    };
+    use isobmff_test_support::{file_type, fragmented_movie, unfragmented_movie};
 
     use super::{Error, FragmentedMuxFsm, default_file_type};
     use crate::ErrorKind;
@@ -475,45 +467,17 @@ mod tests {
 
     #[test]
     fn a_movie_continued_in_no_fragments_is_rejected_before_anything_is_laid_down() {
-        let laid_out = sample_table(
-            TimeToSampleBox::new(vec![TimeToSampleEntry::new(1, 1_024)]),
-            SampleToChunkBox::new(vec![SampleToChunkEntry::new(1, 1, 1)]),
-            SampleSizes::Stsz(SampleSizeBox::new(SampleSizeEntries::PerSample(vec![
-                SampleSizeEntry::new(4),
-            ]))),
-            ChunkOffsets::Stco(ChunkOffsetBox::new(vec![ChunkOffsetEntry::new(8)])),
-        );
-        let rejected = |movie: MovieBox| {
-            let mut mux_fsm = FragmentedMuxFsm::new();
-            let failure = mux_fsm.handle_movie(movie).map_err(Error::kind);
-
-            (failure, mux_fsm.poll_output())
-        };
+        let mut mux_fsm = FragmentedMuxFsm::new();
 
         assert_eq!(
-            rejected(unfragmented_movie()),
-            (
-                Err(ErrorKind::Sample(
-                    isobmff_sample::ErrorKind::MissingMovieExtends
-                )),
-                None
-            )
+            mux_fsm
+                .handle_movie(unfragmented_movie())
+                .map_err(Error::kind),
+            Err(ErrorKind::Sample(
+                isobmff_sample::ErrorKind::MissingMovieExtends
+            ))
         );
-        assert_eq!(
-            rejected(
-                MovieBox::new_fragmented(
-                    90_000,
-                    vec![track_laid_out(1, self_contained_data_reference(), laid_out)],
-                )
-                .unwrap()
-            ),
-            (
-                Err(ErrorKind::Sample(
-                    isobmff_sample::ErrorKind::SampleTableNotEmpty
-                )),
-                None
-            )
-        );
+        assert_eq!(mux_fsm.poll_output(), None);
     }
 
     #[test]

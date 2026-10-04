@@ -5,8 +5,9 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{
     CompositionTimeOffset, MediaDataBox, MovieFragmentBox, MovieFragmentHeaderBox, SampleFlags,
-    StatedTrackRunSample, TrackBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
-    TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunBuilder,
+    StatedTrackRunSample, TrackBox, TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox,
+    TrackFragmentBox, TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox,
+    TrackRunBuilder,
 };
 use isobmff_core::{BoxDefinition as _, BoxEncode as _};
 
@@ -111,12 +112,14 @@ impl OpenFragment {
     /// Places `sample` in the fragment, its bytes on the end of the media data
     ///
     /// A track reaching this fragment for the first time is checked against
-    /// `trak`, the tracks the movie declares, and against `decode_times`,
-    /// where the fragments closed before this one leave each track.
+    /// `trak` and `trex`, which the movie declares its tracks by, and against
+    /// `decode_times`, where the fragments closed before this one leave each
+    /// track.
     pub(super) fn place(
         &mut self,
         sample: Sample,
         trak: &[TrackBox],
+        trex: &[TrackExtendsBox],
         decode_times: &TrackDecodeTimes,
     ) -> Result<(), Error> {
         let track_id = sample.track_id();
@@ -170,10 +173,11 @@ impl OpenFragment {
                 track.place(row, data_offset, carries_on)?;
             }
             None => {
-                let trak = trak
-                    .iter()
-                    .find(|trak| trak.tkhd().track_id() == track_id)
-                    .ok_or(Error::unknown_track_id(track_id))?;
+                let trak = trak.iter().find(|trak| trak.tkhd().track_id() == track_id);
+                let trex = trex.iter().find(|trex| trex.track_id() == track_id);
+                let (Some(trak), Some(_trex)) = (trak, trex) else {
+                    return Err(Error::unknown_track_id(track_id));
+                };
                 SampleDescriptions::new(trak).data_reference_index(sample_description_index)?;
                 let placed = self.placement.decode_time(track_id).unwrap_or(decode_time);
                 if let Some(reached) = decode_times

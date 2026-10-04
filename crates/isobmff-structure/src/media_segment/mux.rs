@@ -114,8 +114,9 @@ impl MediaSegmentMuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::ErrorKind::Sample): the movie continues in no
-    ///   fragments, as [`MovieFragmentWriter::new`] refuses it.
+    /// * [`Sample`](crate::ErrorKind::Sample): the movie is one
+    ///   [`MovieFragmentWriter::new`] refuses — it carries no `mvex`, or its
+    ///   sample tables lay samples out.
     pub fn new(movie: &MovieBox) -> Result<Self, Error> {
         Ok(Self {
             boxes: BoxWriter::new(),

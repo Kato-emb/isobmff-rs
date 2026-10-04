@@ -5,7 +5,7 @@ mod open_fragment;
 use alloc::vec::Vec;
 use core::mem;
 
-use isobmff_boxes::{MovieBox, MovieFragmentBox, TrackBox};
+use isobmff_boxes::{MovieBox, MovieFragmentBox, TrackBox, TrackExtendsBox};
 
 use crate::error::Error;
 use crate::movie_fragment_writer::open_fragment::OpenFragment;
@@ -154,6 +154,7 @@ use crate::track_decode_times::TrackDecodeTimes;
 #[derive(Clone, Debug)]
 pub struct MovieFragmentWriter {
     trak: Vec<TrackBox>,
+    trex: Vec<TrackExtendsBox>,
     decode_times: TrackDecodeTimes,
     state: State,
 }
@@ -181,9 +182,9 @@ impl MovieFragmentWriter {
     /// * [`SampleTableNotEmpty`](crate::ErrorKind::SampleTableNotEmpty):
     ///   the sample tables of a track lay samples out.
     pub fn new(movie: &MovieBox) -> Result<Self, Error> {
-        if movie.mvex().is_none() {
+        let Some(mvex) = movie.mvex() else {
             return Err(Error::missing_movie_extends());
-        }
+        };
         for trak in movie.trak() {
             let stbl = trak.mdia().minf().stbl();
             if !stbl.stts().entries().is_empty()
@@ -197,6 +198,7 @@ impl MovieFragmentWriter {
 
         Ok(Self {
             trak: movie.trak().to_vec(),
+            trex: mvex.trex().to_vec(),
             decode_times: TrackDecodeTimes::new(),
             state: State::Between,
         })
@@ -253,7 +255,7 @@ impl MovieFragmentWriter {
     /// * [`NoFragmentOpen`](crate::ErrorKind::NoFragmentOpen): no
     ///   fragment was opened to carry it.
     /// * [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId): the movie
-    ///   declares no track the sample belongs to.
+    ///   declares no `trak` or no `trex` for the track of the sample.
     /// * [`UnknownSampleDescriptionIndex`](crate::ErrorKind::UnknownSampleDescriptionIndex):
     ///   the track has no `stsd` entry describing the sample.
     /// * The failures of [`SampleEntry::try_from`](isobmff_boxes::SampleEntry),
@@ -287,7 +289,7 @@ impl MovieFragmentWriter {
         let State::Fragment(open) = &mut self.state else {
             return Err(self.fail(Error::no_fragment_open()));
         };
-        open.place(sample, &self.trak, &self.decode_times)
+        open.place(sample, &self.trak, &self.trex, &self.decode_times)
             .map_err(|failure| self.fail(failure))
     }
 
@@ -605,6 +607,20 @@ mod tests {
         assert_eq!(
             refused(sample(2, 0, b"AAAA")),
             Err(Error::external_data_reference(2, 1))
+        );
+    }
+
+    #[test]
+    fn a_sample_of_a_track_no_trex_continues_in_fragments_is_refused() {
+        let mut movie = MovieBox::new_fragmented(90_000, vec![track(1)]).unwrap();
+        *movie.trak_mut(1).unwrap() = track(5);
+        let mut writer = MovieFragmentWriter::new(&movie).unwrap();
+
+        writer.begin_fragment(1).unwrap();
+
+        assert_eq!(
+            writer.handle_sample(sample(5, 0, b"AAAA")),
+            Err(Error::unknown_track_id(5))
         );
     }
 

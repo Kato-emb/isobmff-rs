@@ -46,8 +46,9 @@ pub enum ErrorKind {
     ///
     /// A track is declared by a `trak` and, for its fragments, a `trex`
     /// (ISO/IEC 14496-12 §8.8.3); a fragment of a track missing either is
-    /// refused, as is a sample a writer is handed of a track missing its
-    /// `trak`. [`track_id`](crate::Error::track_id) is the track it names.
+    /// refused, as is a sample handed to a writer whose track the movie
+    /// declares no `trak` for, or, for fragments, no `trex`.
+    /// [`track_id`](crate::Error::track_id) is the track it names.
     UnknownTrackId,
     /// Samples are described by an `stsd` entry their track has none of
     ///
