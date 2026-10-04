@@ -10,14 +10,18 @@ mod reading;
 #[cfg(test)]
 mod tests {
     use isobmff_boxes::{
-        ChunkOffsets, MovieBox, SampleSizeBox, SampleSizes, SampleToChunkBox, TimeToSampleBox,
-        TimeToSampleEntry,
+        ChunkOffsets, MediaDataBox, MovieBox, MovieFragmentBox, MovieFragmentHeaderBox,
+        SampleSizeBox, SampleSizes, SampleToChunkBox, SegmentTypeBox, TimeToSampleBox,
+        TimeToSampleEntry, TrackFragmentBox, TrackFragmentHeaderBox, TrackFragmentHeaderFlags,
+        TrackRunBox, TrackRunSample,
     };
+    use isobmff_core::{BoxEncode, FourCC};
     use isobmff_structure::{Error, MediaSegmentDemuxFsm, WantedInput};
     use isobmff_test_support::{
-        fragmented_file_with_movie_samples, indexed_segment_file, presentation_movie, sample_table,
-        segment_file_samples, segment_file_with_samples, self_contained_data_reference,
-        track_laid_out,
+        SAMPLE_CHUNKS, fragmented_file_with_movie_samples, indexed_segment_file,
+        indexed_segment_file_without_decode_times, non_fragmented_file_samples, presentation_movie,
+        sample_table, segment_file_samples, segment_file_with_samples, segment_type,
+        self_contained_data_reference, track_laid_out, written,
     };
 
     use super::reading::{drained, samples_of};
@@ -157,6 +161,95 @@ mod tests {
         assert_eq!(
             MediaSegmentDemuxFsm::new(movie).map(drop),
             Err(Error::from(isobmff_sample::Error::decode_time_overflow(1)))
+        );
+    }
+
+    /// Brands of a later segment, other than those [`segment_type`] declares
+    fn later_segment_type() -> SegmentTypeBox {
+        SegmentTypeBox::new(
+            FourCC::new(*b"msix"),
+            1,
+            vec![FourCC::new(*b"msix"), FourCC::new(*b"dash")],
+        )
+    }
+
+    #[test]
+    fn segments_concatenated_each_with_its_brands_read_as_one_with_times_carried_on() {
+        let segment = indexed_segment_file_without_decode_times();
+        let (first, second) = segment
+            .bytes
+            .split_at(usize::try_from(*segment.moof_offsets.get(1).unwrap()).unwrap());
+        let concatenated = [first, &written(&later_segment_type()), second].concat();
+
+        for cut_length in [7, concatenated.len()] {
+            assert_eq!(
+                samples_of(presentation_movie(), &concatenated, cut_length),
+                segment.fragment_samples.concat(),
+                "cut length: {cut_length}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_brands_of_the_segment_read_last_are_the_ones_there_to_read() {
+        let first_segment = segment_file_with_samples();
+        let mut demux_fsm = MediaSegmentDemuxFsm::new(presentation_movie()).unwrap();
+
+        demux_fsm.handle_input(0, &first_segment).unwrap();
+        let after_the_first = demux_fsm.segment_type().cloned();
+        demux_fsm
+            .handle_input(
+                u64::try_from(first_segment.len()).unwrap(),
+                &written(&later_segment_type()),
+            )
+            .unwrap();
+
+        assert_eq!(
+            (after_the_first, demux_fsm.segment_type().cloned()),
+            (Some(segment_type()), Some(later_segment_type()))
+        );
+    }
+
+    #[test]
+    fn a_fragment_addressing_media_data_before_it_is_read_through_the_bytes_wanted_back() {
+        let data = SAMPLE_CHUNKS.first().unwrap();
+        let media_data = MediaDataBox::new(data.concat());
+        let track_fragment = TrackFragmentBox::new(
+            TrackFragmentHeaderBox::new(
+                TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
+                1,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            vec![
+                TrackRunBox::new(
+                    Some(-i32::try_from(media_data.payload_len()).unwrap()),
+                    None,
+                    vec![TrackRunSample::new(None, None, None, None); data.len()],
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap();
+        let segment = [
+            written(&segment_type()),
+            written(&media_data),
+            written(&MovieFragmentBox::new(
+                MovieFragmentHeaderBox::new(1),
+                vec![track_fragment],
+            )),
+        ]
+        .concat();
+
+        assert_eq!(
+            samples_of(presentation_movie(), &segment, 7),
+            non_fragmented_file_samples()
+                .into_iter()
+                .take(data.len())
+                .collect::<Vec<_>>()
         );
     }
 }

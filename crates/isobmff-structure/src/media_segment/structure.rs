@@ -7,31 +7,27 @@ use crate::Error;
 
 /// Holds the structure of a media segment, one top-level box at a time
 ///
-/// A media segment carries a portion of a presentation for delivery apart
-/// from the movie that declares it (ISO/IEC 14496-12 §8.16.1): the brands it
-/// declares itself readable as, then one movie fragment after another with
-/// the media data each of them addresses (§3.1.18). This machine holds that
+/// A media segment carries a portion of a presentation for delivery apart from
+/// the movie that declares it (ISO/IEC 14496-12 §8.16.1): the brands it
+/// declares itself readable as, then one movie fragment after another with the
+/// media data each of them addresses (§3.1.18). Segments concatenated into one
+/// stream are read as one, each `styp` where it lies. This machine holds that
 /// order. Handed the type of each top-level box as it comes, it answers with
 /// the [`MediaSegmentDisposition`] of that box — read whole into a value,
-/// passed on as media data, or passed over — and fails on a box the order
-/// does not place there. It reads no box itself: what is done with a
-/// disposition stays with the caller.
+/// passed on as media data, or passed over — and fails on a box the order does
+/// not place there. It reads no box itself: what is done with a disposition
+/// stays with the caller.
 ///
 /// # Contract
 ///
-/// * The `styp` comes first, as §8.16.2 asks: a segment carrying none reads
-///   all the same, but one carrying it after any other box — a second `styp`
-///   among them, as the segments of a presentation concatenated into one
-///   file carry — is
-///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder).
+/// * A `styp` and a `sidx` are read into values, and an `mdat` is passed on as
+///   media data, wherever they lie, none moving the order on more than a box
+///   passed over does. A segment carrying no `styp` reads all the same, and no
+///   `styp` marks a boundary the order turns on (§8.16.2 lets one not first in
+///   its file be ignored). How many `mdat`s there are is not counted.
 /// * The `moof` comes any number of times, and at least once: a segment
 ///   declared over without one is
 ///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
-/// * The `mdat` comes after a fragment: one arriving before any `moof` is
-///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder). How many
-///   follow a fragment is not counted.
-/// * A `sidx` is read into a value wherever it lies, and moves the order on as
-///   a box passed over does.
 /// * Every other box is passed over, wherever it lies — a `moov` among them,
 ///   since the movie a segment continues is held apart from it.
 /// * [`resume`](Self::resume) restarts the order part-way into the segment,
@@ -82,11 +78,11 @@ enum State {
 /// How far into the order of a media segment the boxes so far reach
 #[derive(Clone, Copy, Debug)]
 enum Position {
-    /// Before any box, where the `styp` may still come
+    /// Before any box
     Start,
-    /// After a box, waiting for the first fragment
+    /// After a box, before any fragment
     Opened,
-    /// After a fragment, where media data may follow
+    /// After a fragment
     Fragmenting,
 }
 
@@ -99,12 +95,19 @@ impl MediaSegmentStructure {
         }
     }
 
+    /// Returns whether the structure is reading at the start, before any box
+    #[must_use]
+    pub(crate) const fn is_at_start(&self) -> bool {
+        matches!(self.state, State::Reading(Position::Start))
+    }
+
     /// Takes the type of the next top-level box, and returns what to do with that box
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder): a
-    ///   `styp` after another box, or an `mdat` before any `moof`.
+    /// * [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder): a box
+    ///   other than a `moof` or a `sidx` straight after a
+    ///   [`resume`](Self::resume).
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the structure keeps and reports
@@ -113,17 +116,17 @@ impl MediaSegmentStructure {
         &mut self,
         box_type: BoxType,
     ) -> Result<MediaSegmentDisposition, Error> {
-        let placed = match (self.state, box_type) {
+        let (reached, disposition) = match (self.state, box_type) {
             (State::Reading(position), _)
             | (State::Resuming(position), MovieFragmentBox::BOX_TYPE | SegmentIndexBox::BOX_TYPE) => {
                 place(position, box_type)
             }
-            (State::Resuming(_position), _other) => Err(Error::box_out_of_order(box_type)),
+            (State::Resuming(_position), _other) => {
+                return Err(self.fail(Error::box_out_of_order(box_type)));
+            }
             (State::Finished(_position), _any) => return Err(Error::already_finished()),
             (State::Failed(failure), _any) => return Err(failure),
         };
-
-        let (reached, disposition) = placed.map_err(|failure| self.fail(failure))?;
         self.state = State::Reading(reached);
 
         Ok(disposition)
@@ -175,39 +178,28 @@ impl MediaSegmentStructure {
 }
 
 /// Places the box `box_type` names at `position`, and returns where the segment stands past it
-const fn place(
-    position: Position,
-    box_type: BoxType,
-) -> Result<(Position, MediaSegmentDisposition), Error> {
+const fn place(position: Position, box_type: BoxType) -> (Position, MediaSegmentDisposition) {
     match (box_type, position) {
-        (SegmentTypeBox::BOX_TYPE, Position::Start) => {
-            Ok((Position::Opened, MediaSegmentDisposition::SegmentType))
-        }
-        (SegmentTypeBox::BOX_TYPE, Position::Opened | Position::Fragmenting)
-        | (MediaDataBox::BOX_TYPE, Position::Start | Position::Opened) => {
-            Err(Error::box_out_of_order(box_type))
-        }
-        (
-            MovieFragmentBox::BOX_TYPE,
-            Position::Start | Position::Opened | Position::Fragmenting,
-        ) => Ok((
+        (MovieFragmentBox::BOX_TYPE, _any) => (
             Position::Fragmenting,
             MediaSegmentDisposition::MovieFragment,
-        )),
-        (MediaDataBox::BOX_TYPE, Position::Fragmenting) => {
-            Ok((Position::Fragmenting, MediaSegmentDisposition::MediaData))
+        ),
+        (SegmentTypeBox::BOX_TYPE, _any) => {
+            (passed_over(position), MediaSegmentDisposition::SegmentType)
+        }
+        (MediaDataBox::BOX_TYPE, _any) => {
+            (passed_over(position), MediaSegmentDisposition::MediaData)
         }
         (SegmentIndexBox::BOX_TYPE, _any) => {
-            Ok((passed_over(position), MediaSegmentDisposition::SegmentIndex))
+            (passed_over(position), MediaSegmentDisposition::SegmentIndex)
         }
-        (_other, _any) => Ok((passed_over(position), MediaSegmentDisposition::Skip)),
+        (_other, _any) => (passed_over(position), MediaSegmentDisposition::Skip),
     }
 }
 
-/// Returns where the segment stands past a box the order is not built of, standing at `position`
+/// Returns where the segment stands past a box other than a `moof`, standing at `position`
 ///
-/// Any box closes the start of the segment, past which the `styp` is out of
-/// order.
+/// Any box closes the start of the segment.
 const fn passed_over(position: Position) -> Position {
     match position {
         Position::Start => Position::Opened,
@@ -276,6 +268,10 @@ mod tests {
             dispositions_resuming_after(&[b"styp", b"moof"], &[b"mdat"]),
             Err(Error::box_out_of_order(BoxType::compact(*b"mdat")))
         );
+        assert_eq!(
+            dispositions_resuming_after(&[b"styp", b"moof"], &[b"styp"]),
+            Err(Error::box_out_of_order(BoxType::compact(*b"styp")))
+        );
     }
 
     #[test]
@@ -327,23 +323,33 @@ mod tests {
     }
 
     #[test]
-    fn brands_declared_after_another_box_are_out_of_order() {
-        let out_of_order = Err(Error::box_out_of_order(BoxType::compact(*b"styp")));
-
-        assert_eq!(dispositions_of(&[b"free", b"styp"]), out_of_order);
-        assert_eq!(dispositions_of(&[b"moof", b"styp"]), out_of_order);
-        assert_eq!(dispositions_of(&[b"styp", b"styp"]), out_of_order);
-    }
-
-    #[test]
-    fn media_data_arriving_before_any_fragment_is_out_of_order() {
+    fn brands_and_media_data_are_read_wherever_they_lie() {
         assert_eq!(
-            dispositions_of(&[b"styp", b"mdat"]),
-            Err(Error::box_out_of_order(BoxType::compact(*b"mdat")))
-        );
-        assert_eq!(
-            dispositions_of(&[b"mdat"]),
-            Err(Error::box_out_of_order(BoxType::compact(*b"mdat")))
+            [
+                dispositions_of(&[b"styp", b"moof", b"mdat", b"styp", b"moof", b"mdat"]),
+                dispositions_of(&[b"styp", b"mdat", b"moof"]),
+                dispositions_of(&[b"moof", b"mdat", b"styp"]),
+            ],
+            [
+                Ok(vec![
+                    MediaSegmentDisposition::SegmentType,
+                    MediaSegmentDisposition::MovieFragment,
+                    MediaSegmentDisposition::MediaData,
+                    MediaSegmentDisposition::SegmentType,
+                    MediaSegmentDisposition::MovieFragment,
+                    MediaSegmentDisposition::MediaData,
+                ]),
+                Ok(vec![
+                    MediaSegmentDisposition::SegmentType,
+                    MediaSegmentDisposition::MediaData,
+                    MediaSegmentDisposition::MovieFragment,
+                ]),
+                Ok(vec![
+                    MediaSegmentDisposition::MovieFragment,
+                    MediaSegmentDisposition::MediaData,
+                    MediaSegmentDisposition::SegmentType,
+                ]),
+            ]
         );
     }
 
@@ -353,6 +359,9 @@ mod tests {
 
         structure
             .handle_box_type(BoxType::compact(*b"styp"))
+            .unwrap();
+        structure
+            .handle_box_type(BoxType::compact(*b"mdat"))
             .unwrap();
 
         assert_eq!(
@@ -376,6 +385,7 @@ mod tests {
     fn a_failed_structure_reports_the_same_failure_for_every_call_after_it() {
         let mut structure = MediaSegmentStructure::new();
         let failure = Error::box_out_of_order(BoxType::compact(*b"mdat"));
+        structure.resume();
 
         assert_eq!(
             structure.handle_box_type(BoxType::compact(*b"mdat")),
