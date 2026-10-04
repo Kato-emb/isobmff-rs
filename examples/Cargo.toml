@@ -11,6 +11,7 @@ license.workspace = true
 [dependencies]
 isobmff.workspace = true
 tokio = { version = "1", features = ["fs", "io-util", "rt", "macros"] }
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 
 [[example]]
 name = "demux_fragmented"
@@ -59,6 +60,14 @@ path = "extract_avc.rs"
 [[example]]
 name = "demux_fragmented_tokio"
 path = "demux_fragmented_tokio.rs"
+
+[[example]]
+name = "demux_fragmented_tcp"
+path = "demux_fragmented_tcp.rs"
+
+[[example]]
+name = "demux_non_fragmented_http"
+path = "demux_non_fragmented_http.rs"
 
 # Why not `workspace = true`: that table cannot be overridden in part, and an
 # example is a consumer, which prints and matches `non_exhaustive` enums with a
