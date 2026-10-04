@@ -46,7 +46,7 @@ mod tests {
         let (movie_fragment, media_data) = writer.finish_fragment().unwrap();
 
         let data_start = MOOF_START + movie_fragment.encoded_len() + MEDIA_DATA_HEADER_LEN;
-        let mut decode_times = TrackDecodeTimes::new();
+        let mut decode_times = TrackDecodeTimes::new(&movie).unwrap();
         let extents: Vec<SampleExtent> =
             sample_extents(&movie_fragment, &movie, MOOF_START, &mut decode_times)
                 .unwrap()

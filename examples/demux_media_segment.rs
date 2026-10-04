@@ -37,7 +37,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     };
     let mut segment_file = File::open(segment_path)?;
-    let mut demux_fsm = MediaSegmentDemuxFsm::new(movie);
+    let mut demux_fsm = MediaSegmentDemuxFsm::new(movie)?;
 
     let mut count: u64 = 0;
     while let Some(wanted) = demux_fsm.wanted_input() {

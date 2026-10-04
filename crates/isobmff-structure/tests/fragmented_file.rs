@@ -9,13 +9,23 @@ mod reading;
 
 #[cfg(test)]
 mod tests {
-    use isobmff_boxes::MovieFragmentRandomAccessOffsetBox;
-    use isobmff_core::BoxType;
+    use isobmff_boxes::{
+        ChunkOffsets, MediaDataBox, MovieBox, MovieFragmentBox, MovieFragmentHeaderBox,
+        MovieFragmentRandomAccessOffsetBox, SampleFlags, SampleSizeBox, SampleSizes,
+        SampleToChunkBox, TimeToSampleBox, TrackBox, TrackFragmentBaseMediaDecodeTimeBox,
+        TrackFragmentBox, TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox,
+        TrackRunSample,
+    };
+    use isobmff_core::{BoxEncode, BoxType};
+    use isobmff_sample::Sample;
     use isobmff_sequence::BoxEvent;
     use isobmff_structure::{Error, ErrorKind, FragmentedDemuxFsm, WantedInput};
     use isobmff_test_support::{
-        IndexedFile, events_of, fragmented_file_samples, fragmented_file_with_samples,
-        indexed_fragmented_file, indexed_fragmented_file_without_decode_times,
+        HybridFile, IndexedFile, SAMPLE_CHUNKS, events_of, file_type, fragmented_file_samples,
+        fragmented_file_with_samples, hybrid_file, indexed_fragmented_file,
+        indexed_fragmented_file_without_decode_times, non_fragmented_file,
+        non_fragmented_file_samples, sample_table, self_contained_data_reference, track_laid_out,
+        written,
     };
 
     use super::reading::{drained, read_on, samples_of};
@@ -313,5 +323,306 @@ mod tests {
                 None
             )
         );
+    }
+
+    /// The samples `file` was built to carry, those of its movie first
+    fn every_sample_of(file: &HybridFile) -> Vec<Sample> {
+        [file.movie_samples.clone(), file.fragment_samples.clone()].concat()
+    }
+
+    /// `samples` ordered by track, then by decode time
+    fn by_track(mut samples: Vec<Sample>) -> Vec<Sample> {
+        // Why not comparing the order they come out in: the samples of the
+        // movie and those of the fragment are held apart, and which complete
+        // first is decided by where the input is cut and which bytes are
+        // wanted back.
+        samples.sort_by_key(|sample| (sample.track_id(), sample.decode_time()));
+
+        samples
+    }
+
+    #[test]
+    fn the_samples_a_movie_declares_beside_its_fragments_are_read_with_theirs() {
+        for movie_first in [true, false] {
+            let file = hybrid_file(movie_first, true);
+
+            for cut_length in [7, file.bytes.len()] {
+                assert_eq!(
+                    by_track(samples_of(&file.bytes, cut_length)),
+                    every_sample_of(&file),
+                    "movie first: {movie_first}, cut length: {cut_length}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_fragment_stating_no_decode_time_starts_where_the_sample_table_of_the_movie_leaves_its_track()
+     {
+        for movie_first in [true, false] {
+            let file = hybrid_file(movie_first, false);
+
+            assert_eq!(
+                by_track(samples_of(&file.bytes, 7)),
+                every_sample_of(&file),
+                "movie first: {movie_first}"
+            );
+        }
+    }
+
+    #[test]
+    fn media_data_lying_before_the_movie_is_wanted_once_the_movie_is_read() {
+        let file = hybrid_file(false, true);
+        let first_sample = file
+            .bytes
+            .windows(8)
+            .position(|bytes| bytes == b"SAMPLE_1")
+            .unwrap();
+        let mut demux_fsm = FragmentedDemuxFsm::new();
+
+        demux_fsm
+            .handle_input(
+                0,
+                file.bytes
+                    .get(..usize::try_from(file.moof_offset).unwrap())
+                    .unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            demux_fsm.wanted_input(),
+            Some(WantedInput::new(
+                u64::try_from(first_sample).unwrap(),
+                Some(8)
+            ))
+        );
+        assert_eq!(
+            [
+                drained(&mut demux_fsm),
+                read_on(&mut demux_fsm, &file.bytes, 7)
+            ]
+            .concat(),
+            every_sample_of(&file)
+        );
+    }
+
+    #[test]
+    fn a_file_of_no_fragment_whose_movie_carries_no_mvex_yields_every_sample_its_movie_declares() {
+        for movie_first in [true, false] {
+            assert_eq!(
+                samples_of(&non_fragmented_file(&SAMPLE_CHUNKS, movie_first), 7),
+                non_fragmented_file_samples(),
+                "movie first: {movie_first}"
+            );
+        }
+    }
+
+    #[test]
+    fn resuming_drops_the_samples_of_the_movie_and_a_fragment_stating_no_decode_time_then_fails() {
+        let read_resuming_at_the_fragment = |file: &HybridFile| {
+            let fragment = usize::try_from(file.moof_offset).unwrap();
+            let mut demux_fsm = FragmentedDemuxFsm::new();
+            demux_fsm
+                .handle_input(0, file.bytes.get(..fragment).unwrap())
+                .unwrap();
+
+            demux_fsm.resume_at(file.moof_offset).unwrap();
+            let resumed = demux_fsm
+                .handle_input(file.moof_offset, file.bytes.get(fragment..).unwrap())
+                .and_then(|()| demux_fsm.finish())
+                .map_err(Error::kind);
+
+            (resumed, drained(&mut demux_fsm))
+        };
+        let stating = hybrid_file(false, true);
+
+        assert_eq!(
+            read_resuming_at_the_fragment(&stating),
+            (Ok(()), stating.fragment_samples.clone())
+        );
+        assert_eq!(
+            read_resuming_at_the_fragment(&hybrid_file(false, false)),
+            (
+                Err(ErrorKind::Sample(
+                    isobmff_sample::ErrorKind::MissingDecodeTime
+                )),
+                Vec::new()
+            )
+        );
+    }
+
+    /// Ticks a second the movie of [`two_tracks_laid_out_past_their_fragment`] is timed in
+    const TIMESCALE: u32 = 90_000;
+
+    /// Decode time the fragment of [`two_tracks_laid_out_past_their_fragment`] states, where it states one
+    const FRAGMENT_DECODE_TIME: u64 = 180_000;
+
+    /// A file of two tracks the movie and one fragment each declare samples of, the media data of the movie lying past that of the fragment
+    ///
+    /// The file is `ftyp moov moof mdat mdat`: track 1 declares two samples of
+    /// 3 000 ticks in the sample table and one in the fragment, track 2 one of
+    /// 1 000 ticks in each. The fragment states its decode times in a `tfdt`
+    /// where `decode_time_stated` is set. Returns the file and the samples it
+    /// carries, in the order their bytes lie.
+    fn two_tracks_laid_out_past_their_fragment(decode_time_stated: bool) -> (Vec<u8>, Vec<Sample>) {
+        let track_chunks: [(u32, u32, &[&[u8]]); 2] =
+            [(1, 3_000, &[b"MOV1", b"MOV2"]), (2, 1_000, &[b"MOV3"])];
+        let fragment_runs: [(u32, u32, &[u8]); 2] = [(1, 3_000, b"FRG1"), (2, 1_000, b"FRG2")];
+
+        let movie_laying_out = |chunk_offsets: [u64; 2]| {
+            let trak: Vec<TrackBox> = track_chunks
+                .iter()
+                .zip(chunk_offsets)
+                .map(|(&(track_id, duration, samples), chunk_offset)| {
+                    let sample_count = u32::try_from(samples.len()).unwrap();
+                    track_laid_out(
+                        track_id,
+                        self_contained_data_reference(),
+                        sample_table(
+                            TimeToSampleBox::from_deltas(samples.iter().map(|_sample| duration)),
+                            SampleToChunkBox::from_chunks([(u64::from(sample_count), 1)]).unwrap(),
+                            SampleSizes::Stsz(SampleSizeBox::from_sizes(
+                                samples
+                                    .iter()
+                                    .map(|sample| u32::try_from(sample.len()).unwrap()),
+                            )),
+                            ChunkOffsets::from_offsets([chunk_offset]),
+                        ),
+                    )
+                })
+                .collect();
+
+            MovieBox::new_fragmented(TIMESCALE, trak).unwrap()
+        };
+        let fragment_laying_out = |data_start: u64| {
+            let mut data_offset = data_start;
+            let track_fragments = fragment_runs
+                .iter()
+                .map(|&(track_id, duration, sample)| {
+                    let sample_size = u32::try_from(sample.len()).unwrap();
+                    let run = TrackRunBox::new(
+                        Some(i32::try_from(data_offset).unwrap()),
+                        None,
+                        vec![TrackRunSample::new(
+                            Some(duration),
+                            Some(sample_size),
+                            None,
+                            None,
+                        )],
+                    )
+                    .unwrap();
+                    data_offset = data_offset.saturating_add(u64::from(sample_size));
+                    let track_fragment = TrackFragmentBox::new(
+                        TrackFragmentHeaderBox::new(
+                            TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
+                            track_id,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                        ),
+                        vec![run],
+                    )
+                    .unwrap();
+
+                    if decode_time_stated {
+                        track_fragment.with_tfdt(TrackFragmentBaseMediaDecodeTimeBox::new(
+                            FRAGMENT_DECODE_TIME,
+                        ))
+                    } else {
+                        track_fragment
+                    }
+                })
+                .collect();
+
+            MovieFragmentBox::new(MovieFragmentHeaderBox::new(1), track_fragments)
+        };
+
+        let fragment_media_data = MediaDataBox::new(
+            fragment_runs
+                .iter()
+                .flat_map(|(_track_id, _duration, sample)| sample.iter().copied())
+                .collect(),
+        );
+        let movie_media_data = MediaDataBox::new(
+            track_chunks
+                .iter()
+                .flat_map(|(_track_id, _duration, samples)| samples.concat())
+                .collect(),
+        );
+        let header_len = |media_data: &MediaDataBox| {
+            media_data
+                .encoded_len()
+                .saturating_sub(media_data.payload_len())
+        };
+        let fragment_len = fragment_laying_out(0).encoded_len();
+        let fragment =
+            fragment_laying_out(fragment_len.saturating_add(header_len(&fragment_media_data)));
+        // Why not building the movie once: its chunk offsets lie past the
+        // movie itself. The placeholders and the offsets both fit 32 bits, so
+        // both movies state them in a `stco` of the same length.
+        let movie_len = movie_laying_out([0, 0]).encoded_len();
+        let first_chunk = u64::try_from(written(&file_type()).len())
+            .unwrap()
+            .saturating_add(movie_len)
+            .saturating_add(fragment.encoded_len())
+            .saturating_add(fragment_media_data.encoded_len())
+            .saturating_add(header_len(&movie_media_data));
+        let [(_track_id, _duration, first_chunk_samples), _second] = track_chunks;
+        let second_chunk =
+            first_chunk.saturating_add(u64::try_from(first_chunk_samples.concat().len()).unwrap());
+        let movie = movie_laying_out([first_chunk, second_chunk]);
+
+        let file = [
+            written(&file_type()),
+            written(&movie),
+            written(&fragment),
+            written(&fragment_media_data),
+            written(&movie_media_data),
+        ]
+        .concat();
+        let sample = |track_id, decode_time, duration, data: &[u8]| {
+            Sample::new(
+                track_id,
+                decode_time,
+                duration,
+                0,
+                SampleFlags::ZERO,
+                1,
+                data.to_vec(),
+            )
+        };
+        let fragment_start = |movie_duration| {
+            if decode_time_stated {
+                FRAGMENT_DECODE_TIME
+            } else {
+                movie_duration
+            }
+        };
+        let samples = vec![
+            sample(1, fragment_start(6_000), 3_000, b"FRG1"),
+            sample(2, fragment_start(1_000), 1_000, b"FRG2"),
+            sample(1, 0, 3_000, b"MOV1"),
+            sample(1, 3_000, 3_000, b"MOV2"),
+            sample(2, 0, 1_000, b"MOV3"),
+        ];
+
+        (file, samples)
+    }
+
+    #[test]
+    fn the_samples_of_several_tracks_a_movie_declares_past_its_fragment_are_read_with_theirs() {
+        for decode_time_stated in [true, false] {
+            let (file, samples) = two_tracks_laid_out_past_their_fragment(decode_time_stated);
+
+            for cut_length in [7, file.len()] {
+                assert_eq!(
+                    samples_of(&file, cut_length),
+                    samples,
+                    "decode time stated: {decode_time_stated}, cut length: {cut_length}"
+                );
+            }
+        }
     }
 }

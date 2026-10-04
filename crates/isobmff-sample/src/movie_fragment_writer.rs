@@ -199,7 +199,7 @@ impl MovieFragmentWriter {
         Ok(Self {
             trak: movie.trak().to_vec(),
             trex: mvex.trex().to_vec(),
-            decode_times: TrackDecodeTimes::new(),
+            decode_times: TrackDecodeTimes::new(movie)?,
             state: State::Between,
         })
     }

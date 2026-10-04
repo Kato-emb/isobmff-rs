@@ -32,8 +32,8 @@ pub use boxes::{
 };
 pub use driving::{bytes_of, events_of, payloads_fused, polled};
 pub use presentations::{
-    IndexedFile, SAMPLE_CHUNKS, fragmented_file_samples, fragmented_file_with_samples,
-    indexed_fragmented_file, indexed_fragmented_file_without_decode_times, indexed_segment_file,
-    non_fragmented_file_samples, presentation_movie, segment_file_samples,
+    HybridFile, IndexedFile, SAMPLE_CHUNKS, fragmented_file_samples, fragmented_file_with_samples,
+    hybrid_file, indexed_fragmented_file, indexed_fragmented_file_without_decode_times,
+    indexed_segment_file, non_fragmented_file_samples, presentation_movie, segment_file_samples,
     segment_file_with_samples,
 };

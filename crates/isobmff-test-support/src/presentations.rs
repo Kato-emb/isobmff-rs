@@ -20,7 +20,7 @@ use isobmff_sample::Sample;
 use isobmff_sequence::BoxEvent;
 
 use crate::boxes::{
-    SAMPLE_DURATION, TIMESCALE, file_type, fragmented_movie, segment_type, written,
+    SAMPLE_DURATION, TIMESCALE, file_laid_out, file_type, fragmented_movie, segment_type, written,
 };
 use crate::driving::events_of;
 
@@ -164,6 +164,67 @@ pub fn fragmented_file_with_samples() -> Vec<u8> {
 /// The samples [`fragmented_file_with_samples`] was built to carry
 pub fn fragmented_file_samples() -> Vec<Sample> {
     samples_over([FRAGMENTED_MEDIA_DATA.as_slice()], BASE_MEDIA_DECODE_TIME)
+}
+
+/// A fragmented file laid out by hand whose movie declares samples of its own, with its movie, where its fragment lies, and the samples each declares
+#[non_exhaustive]
+#[derive(Clone, PartialEq, Debug)]
+pub struct HybridFile {
+    /// The bytes of the file
+    pub bytes: Vec<u8>,
+    /// The movie the file declares
+    pub movie: MovieBox,
+    /// Where the `moof` starts in the file
+    pub moof_offset: u64,
+    /// The samples the sample table of the movie declares, in the order they lie
+    pub movie_samples: Vec<Sample>,
+    /// The samples the fragment declares, in the order they lie
+    pub fragment_samples: Vec<Sample>,
+}
+
+/// Lays out the brands, a movie declaring samples of its own and their media data, then one fragment and its media data
+///
+/// The movie declares the samples of [`SAMPLE_CHUNKS`] in its sample table,
+/// one `mdat` per chunk, and lies before that media data where `movie_first`
+/// is set and after it otherwise, as
+/// [`non_fragmented_file`](crate::non_fragmented_file) lays them out; its
+/// `mvex` is that of [`presentation_movie`]. The fragment carries the media
+/// data of [`fragmented_file_with_samples`], and states its decode time in a
+/// `tfdt` where `decode_time_stated` is set; its samples start there, and
+/// where the samples of the sample table leave the track otherwise
+/// (§8.8.12).
+pub fn hybrid_file(movie_first: bool, decode_time_stated: bool) -> HybridFile {
+    let media_data = FRAGMENTED_MEDIA_DATA.as_slice();
+    let (movie, head) = file_laid_out(
+        &SAMPLE_CHUNKS,
+        movie_first,
+        presentation_movie().mvex().cloned(),
+    );
+    let movie_samples = non_fragmented_file_samples();
+    let fragment_start = if decode_time_stated {
+        BASE_MEDIA_DECODE_TIME
+    } else {
+        u64::from(SAMPLE_DURATION).saturating_mul(u64::try_from(movie_samples.len()).unwrap())
+    };
+    let moof_offset = u64::try_from(head.len()).unwrap();
+    let bytes = [
+        head,
+        written(&fragment_over(
+            1,
+            decode_time_stated.then_some(BASE_MEDIA_DECODE_TIME),
+            media_data,
+        )),
+        written(&MediaDataBox::new(media_data.to_vec())),
+    ]
+    .concat();
+
+    HybridFile {
+        bytes,
+        movie,
+        moof_offset,
+        movie_samples,
+        fragment_samples: samples_over([media_data], fragment_start),
+    }
 }
 
 /// A media segment laid out by hand: the brands, then two fragments each with its media data

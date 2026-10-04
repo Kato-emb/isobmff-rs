@@ -160,9 +160,14 @@ fuzz_target!(|input: Input<'_>| {
 /// The extents each fragment declares, resolved against the movie in turn
 ///
 /// A fragment the resolver refuses ends the presentation: the fragments before
-/// it are what the reader is handed, and the refusal is reported with them.
+/// it are what the reader is handed, and the refusal is reported with them. A
+/// movie the decode times refuse leaves no fragment handed over, only the
+/// refusal.
 fn resolved(laid_out: &LaidOut) -> (Vec<Vec<SampleExtent>>, Option<Error>) {
-    let mut decode_times = TrackDecodeTimes::new();
+    let mut decode_times = match TrackDecodeTimes::new(&laid_out.movie) {
+        Ok(decode_times) => decode_times,
+        Err(refused) => return (Vec::new(), Some(refused)),
+    };
     let mut extents = Vec::new();
 
     for placed in &laid_out.fragments {

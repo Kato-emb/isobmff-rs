@@ -408,7 +408,12 @@ mod tests {
         movie_fragment: &MovieFragmentBox,
         movie: &MovieBox,
     ) -> Result<Vec<SampleExtent>, Error> {
-        resolved_from(movie_fragment, movie, 0, &mut TrackDecodeTimes::new())
+        resolved_from(
+            movie_fragment,
+            movie,
+            0,
+            &mut TrackDecodeTimes::new(movie).unwrap(),
+        )
     }
 
     /// Resolves `movie_fragment` at `moof_start` against a movie whose tracks stand at `decode_times`
@@ -423,7 +428,7 @@ mod tests {
 
     /// Times of a movie whose track 1 stands at `decode_time`
     fn track_1_at(decode_time: u64) -> TrackDecodeTimes {
-        let mut decode_times = TrackDecodeTimes::new();
+        let mut decode_times = TrackDecodeTimes::new(&one_track_movie()).unwrap();
         decode_times.reach(1, decode_time);
 
         decode_times
@@ -566,7 +571,7 @@ mod tests {
                 &one_sample_movie_fragment(),
                 &one_track_movie(),
                 1_000,
-                &mut TrackDecodeTimes::new()
+                &mut TrackDecodeTimes::new(&one_track_movie()).unwrap()
             ),
             Ok(vec![extent(1, 0, 1_100..1_104)])
         );
@@ -628,7 +633,7 @@ mod tests {
                 &movie_fragment(vec![carrying_no_run, stating_no_anchor]),
                 &movie(vec![track(1), track(2)]),
                 1_000,
-                &mut TrackDecodeTimes::new(),
+                &mut TrackDecodeTimes::new(&movie(vec![track(1), track(2)])).unwrap(),
             ),
             Ok(vec![extent(2, 0, 1_100..1_104)])
         );
@@ -738,7 +743,7 @@ mod tests {
 
     #[test]
     fn a_track_is_moved_past_the_samples_of_each_of_its_fragments_in_turn() {
-        let mut decode_times = TrackDecodeTimes::new();
+        let mut decode_times = TrackDecodeTimes::new(&movie(vec![track(1), track(2)])).unwrap();
         let two_of_the_same_track = movie_fragment(vec![
             track_fragment(1, vec![run(Some(100), 2)]),
             track_fragment(1, vec![run(Some(108), 1)]),
@@ -763,7 +768,7 @@ mod tests {
 
     #[test]
     fn a_failure_returned_outright_leaves_every_track_where_it_stood() {
-        let mut decode_times = TrackDecodeTimes::new();
+        let mut decode_times = TrackDecodeTimes::new(&one_track_movie()).unwrap();
         let then_an_unknown_track = movie_fragment(vec![
             track_fragment(1, vec![run(Some(100), 1)]),
             track_fragment(3, vec![run(Some(104), 1)]),
@@ -820,7 +825,7 @@ mod tests {
 
     #[test]
     fn the_extents_placed_before_a_failure_come_out_ahead_of_it_and_the_tracks_have_moved() {
-        let mut decode_times = TrackDecodeTimes::new();
+        let mut decode_times = TrackDecodeTimes::new(&movie(vec![track(1), track(2)])).unwrap();
         let then_past_the_end_of_the_file = movie_fragment(vec![
             track_fragment(1, vec![run(Some(100), 1)]),
             TrackFragmentBox::new(

@@ -15,12 +15,13 @@
 //!   against its movie — the `trex` and the `stsd` of each track (§8.8).
 //!   Neither holds state across calls, and what §8.8 carries from one fragment
 //!   to the next — where each track's decode time stands when a fragment
-//!   states none (§8.8.12) — is a [`TrackDecodeTimes`] the caller owns and
-//!   hands in. Resolution has a mirror on the writing side, one per form:
-//!   [`MovieFragmentWriter`] takes [`Sample`]s and lays them out as the `moof`
-//!   and the media data of a movie fragment, placing each where it arrived,
-//!   and [`SampleTableWriter`] takes them chunk by chunk and lays them out as
-//!   the sample tables of a movie, handing the bytes of each straight back.
+//!   states none (§8.8.12) — is a [`TrackDecodeTimes`] the caller makes from
+//!   the movie, owns and hands in. Resolution has a mirror on the writing
+//!   side, one per form: [`MovieFragmentWriter`] takes [`Sample`]s and lays
+//!   them out as the `moof` and the media data of a movie fragment, placing
+//!   each where it arrived, and [`SampleTableWriter`] takes them chunk by
+//!   chunk and lays them out as the sample tables of a movie, handing the
+//!   bytes of each straight back.
 //!   Beside resolution, the indexes a file may carry are looked up by time:
 //!   [`segment_index::subsegments`] places the subsegments a `sidx` indexes
 //!   in the file (§8.16.3), and [`movie_fragment_random_access::sync_sample_at`]

@@ -40,7 +40,8 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 ///   is an offset into the segment, counting from the first byte of it as
 ///   the boxes count theirs (§8.8.7).
 /// * The fragments are resolved against the movie the demux FSM was created
-///   with, which is there to read at [`movie`](Self::movie). The brands are
+///   with, which is there to read at [`movie`](Self::movie); the samples its
+///   sample tables declare are not read. The brands are
 ///   there once they have arrived: [`segment_type`](Self::segment_type). The
 ///   indexes of every `sidx` are there once read, as
 ///   [`segment_indexes`](Self::segment_indexes). The media data is offered
@@ -61,8 +62,10 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 ///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
 ///   A segment carrying no `styp` reads all the same, as §8.16.2 allows.
 /// * Where a fragment states no decode time for a track, the track goes on
-///   from where the fragments handed over before it left it, or from zero
-///   where none did (§8.8.12): a demux FSM is one segment's. After a
+///   from where the fragments handed over before it left it, or where none
+///   did, from where the sample table of the movie leaves it — zero for the
+///   movie of an initialization segment, which declares no sample (§8.8.12):
+///   a demux FSM is one segment's. After a
 ///   [`resume_at`](Self::resume_at) it is [`Sample`](crate::ErrorKind::Sample)
 ///   instead.
 /// * A box read into a value is gathered whole before it is read, so what it
@@ -112,7 +115,7 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 /// }
 ///
 /// // The segment is handed over as it arrives, against the movie it continues
-/// let mut demux_fsm = MediaSegmentDemuxFsm::new(movie);
+/// let mut demux_fsm = MediaSegmentDemuxFsm::new(movie)?;
 /// for (offset, arriving) in (0..).step_by(7).zip(segment.chunks(7)) {
 ///     demux_fsm.handle_input(offset, arriving)?;
 /// }
@@ -184,8 +187,12 @@ impl MediaSegmentDemuxFsm {
     /// [`DEFAULT_PAYLOAD_LIMIT`](Self::DEFAULT_PAYLOAD_LIMIT), and what one
     /// sample may declare by
     /// [`SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT`](SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT).
-    #[must_use]
-    pub const fn new(movie: MovieBox) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// * [`Sample`](crate::ErrorKind::Sample): what
+    ///   [`TrackDecodeTimes::new`] makes of `movie`.
+    pub fn new(movie: MovieBox) -> Result<Self, Error> {
         Self::with_limits(
             movie,
             Self::DEFAULT_PAYLOAD_LIMIT,
@@ -203,21 +210,29 @@ impl MediaSegmentDemuxFsm {
     /// `sample_size_limit` bytes is what
     /// [`SampleReader::with_sample_size_limit`](SampleReader::with_sample_size_limit)
     /// makes of it.
-    #[must_use]
-    pub const fn with_limits(movie: MovieBox, payload_limit: u64, sample_size_limit: u64) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// * [`Sample`](crate::ErrorKind::Sample): what
+    ///   [`TrackDecodeTimes::new`] makes of `movie`.
+    pub fn with_limits(
+        movie: MovieBox,
+        payload_limit: u64,
+        sample_size_limit: u64,
+    ) -> Result<Self, Error> {
+        Ok(Self {
             boxes: BoxReader::new(),
             position: InputPosition::new(),
             structure: MediaSegmentStructure::new(),
             samples: SampleReader::with_sample_size_limit(sample_size_limit),
-            decode_times: TrackDecodeTimes::new(),
+            decode_times: TrackDecodeTimes::new(&movie)?,
             open: None,
             segment_type: None,
             movie,
             segment_indexes: Vec::new(),
             payload_limit,
             state: State::Reading,
-        }
+        })
     }
 
     /// Takes bytes of the segment read at `offset`, and reads the samples they complete
@@ -503,7 +518,7 @@ mod tests {
 
     /// What the demux FSM makes of `segment` handed over whole, then declared over
     fn read(segment: &[u8]) -> Result<MediaSegmentDemuxFsm, Error> {
-        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie());
+        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie()).unwrap();
 
         demux_fsm.handle_input(0, segment)?;
         demux_fsm.finish()?;
@@ -529,7 +544,8 @@ mod tests {
     #[test]
     fn a_box_read_into_a_value_declaring_a_payload_past_the_limit_is_rejected() {
         let mut demux_fsm =
-            MediaSegmentDemuxFsm::with_limits(movie(), 4, SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT);
+            MediaSegmentDemuxFsm::with_limits(movie(), 4, SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT)
+                .unwrap();
 
         assert_eq!(
             demux_fsm
@@ -551,7 +567,8 @@ mod tests {
             movie(),
             fragment.len() as u64,
             SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT,
-        );
+        )
+        .unwrap();
 
         demux_fsm.handle_input(0, &segment).unwrap();
 
@@ -563,7 +580,7 @@ mod tests {
         let mut segment = segment_of_one_sample();
         segment.extend_from_slice(b"\0\0\0\x04free");
 
-        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie());
+        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie()).unwrap();
 
         assert_eq!(
             demux_fsm.handle_input(0, &segment).map_err(Error::kind),
@@ -584,7 +601,7 @@ mod tests {
         let mut segment = segment_of_one_sample();
         let media_data = segment.split_off(segment.len().saturating_sub(4));
 
-        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie());
+        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie()).unwrap();
         demux_fsm.handle_input(0, &segment).unwrap();
         let wanted = demux_fsm.wanted_input();
         demux_fsm
@@ -597,7 +614,7 @@ mod tests {
 
     #[test]
     fn a_failed_demux_fsm_reports_the_same_failure_for_every_call_after_it() {
-        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie());
+        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie()).unwrap();
         let failure = Error::box_out_of_order(MediaDataBox::BOX_TYPE);
         let segment = written(&MediaDataBox::new(MEDIA_DATA.to_vec()));
 
@@ -623,7 +640,7 @@ mod tests {
     #[test]
     fn input_at_an_offset_neither_in_order_nor_wanted_is_refused_and_the_segment_reads_on() {
         let segment = segment_of_one_sample();
-        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie());
+        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie()).unwrap();
 
         demux_fsm
             .handle_input(0, segment.get(..8).unwrap())
@@ -640,7 +657,7 @@ mod tests {
 
     #[test]
     fn empty_input_is_taken_as_nothing_wherever_it_is_handed_over() {
-        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie());
+        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie()).unwrap();
 
         assert_eq!(demux_fsm.handle_input(9, &[]), Ok(()));
         assert_eq!(demux_fsm.wanted_input(), Some(WantedInput::new(0, None)));

@@ -82,7 +82,7 @@ pub struct SampleRecord {
 pub(crate) fn demux<S: Read>(source: S) -> Result<Demux, Error> {
     let mut gathered: Option<(BoxType, u64, Vec<u8>)> = None;
     let mut movie: Option<MovieBox> = None;
-    let mut decode_times = TrackDecodeTimes::new();
+    let mut decode_times = TrackDecodeTimes::unknown();
     let mut samples = Vec::new();
     read_boxes(source, |event, extent| {
         match event {
@@ -104,6 +104,8 @@ pub(crate) fn demux<S: Read>(source: S) -> Result<Demux, Error> {
                     for extent in sample_table::sample_extents(&declared) {
                         samples.push(record(&extent.map_err(structure::Error::from)?));
                     }
+                    decode_times =
+                        TrackDecodeTimes::new(&declared).map_err(structure::Error::from)?;
                     movie = Some(declared);
                 }
                 Some((_, moof_start, bytes)) => {

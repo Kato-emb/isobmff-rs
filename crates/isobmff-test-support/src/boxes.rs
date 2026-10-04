@@ -270,6 +270,15 @@ pub fn fragmented_file() -> Vec<u8> {
 /// reader of the two files meets the same sample tables, once ahead of the
 /// bytes they name and once behind them.
 pub fn non_fragmented_file(chunks: &[&[&[u8]]], movie_first: bool) -> Vec<u8> {
+    file_laid_out(chunks, movie_first, None).1
+}
+
+/// The movie and the file of [`non_fragmented_file`], the movie declaring the samples of its sample table and `mvex`, where one is given
+pub(crate) fn file_laid_out(
+    chunks: &[&[&[u8]]],
+    movie_first: bool,
+    mvex: Option<MovieExtendsBox>,
+) -> (MovieBox, Vec<u8>) {
     let brands = written(&file_type());
     let media_data: Vec<MediaDataBox> = chunks
         .iter()
@@ -295,7 +304,7 @@ pub fn non_fragmented_file(chunks: &[&[&[u8]]], movie_first: bool) -> Vec<u8> {
         MovieBox::new(
             MovieHeaderBox::new(EPOCH, EPOCH, TIMESCALE, HeaderDuration::ZERO, 2),
             vec![track_laid_out(1, self_contained_data_reference(), stbl)],
-            None,
+            mvex.clone(),
         )
         .unwrap()
     };
@@ -314,14 +323,16 @@ pub fn non_fragmented_file(chunks: &[&[&[u8]]], movie_first: bool) -> Vec<u8> {
         chunk_offsets.push(chunk_start.saturating_add(header_len));
         chunk_start = chunk_start.saturating_add(mdat.encoded_len());
     }
-    let movie = written(&movie_laying_out(chunk_offsets));
+    let movie = movie_laying_out(chunk_offsets);
+    let movie_bytes = written(&movie);
     let media_data = media_data.iter().map(written).collect::<Vec<_>>().concat();
-
-    if movie_first {
-        [brands, movie, media_data].concat()
+    let file = if movie_first {
+        [brands, movie_bytes, media_data].concat()
     } else {
-        [brands, media_data, movie].concat()
-    }
+        [brands, media_data, movie_bytes].concat()
+    };
+
+    (movie, file)
 }
 
 /// A synthetic segment: the brands of the segment, one fragment, its media data
