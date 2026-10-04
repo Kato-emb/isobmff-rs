@@ -240,14 +240,13 @@ impl TrackRunBox {
         &self.samples
     }
 
-    /// Returns the run as `tfhd` has it: the fields whose defaults every row agrees with are left out
+    /// Returns the run as written against `tfhd`, every field it already defaults left out of the rows
     ///
     /// A field the header states a default for, which every row of the run
     /// agrees with, is left out of the rows. Flags that only the first row
     /// differs from the default on are written as its `first_sample_flags`
-    /// (ISO/IEC 14496-12 §8.8.8). A composition time offset is left out of the
-    /// rows where none of them states one other than zero. Every sample keeps
-    /// what it states.
+    /// (§8.8.8). Composition time offsets are left out of every row when none
+    /// of them states one other than zero. Every sample keeps what it states.
     ///
     /// # Examples
     ///

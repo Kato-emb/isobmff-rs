@@ -271,7 +271,7 @@ fn header(
     )
 }
 
-/// Run of the rows given, with no data offset, as `header` has it
+/// Run of the rows given, with no data offset, written against `header`
 fn without_defaults(rows: &[TrackRunSample], header: &TrackFragmentHeaderBox) -> TrackRunBox {
     TrackRunBox::new(None, None, rows.to_vec())
         .unwrap()
