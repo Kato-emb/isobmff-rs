@@ -10,7 +10,7 @@ use isobmff_structure::MediaSegmentDemuxFsm;
 
 /// The samples `segment` carries against `movie`, read off it where the demux FSM wants, `cut_length` bytes at a time at most
 pub(crate) fn samples_of(movie: MovieBox, segment: &[u8], cut_length: usize) -> Vec<Sample> {
-    let mut demux_fsm = MediaSegmentDemuxFsm::new(movie);
+    let mut demux_fsm = MediaSegmentDemuxFsm::new(movie).unwrap();
     let mut samples = Vec::new();
 
     while let Some(wanted) = demux_fsm.wanted_input() {

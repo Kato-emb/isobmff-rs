@@ -9,9 +9,15 @@ mod reading;
 
 #[cfg(test)]
 mod tests {
-    use isobmff_structure::{MediaSegmentDemuxFsm, WantedInput};
+    use isobmff_boxes::{
+        ChunkOffsets, MovieBox, SampleSizeBox, SampleSizes, SampleToChunkBox, TimeToSampleBox,
+        TimeToSampleEntry,
+    };
+    use isobmff_structure::{Error, MediaSegmentDemuxFsm, WantedInput};
     use isobmff_test_support::{
-        indexed_segment_file, presentation_movie, segment_file_samples, segment_file_with_samples,
+        fragmented_file_with_movie_samples, indexed_segment_file, presentation_movie, sample_table,
+        segment_file_samples, segment_file_with_samples, self_contained_data_reference,
+        track_laid_out,
     };
 
     use super::reading::{drained, samples_of};
@@ -41,7 +47,7 @@ mod tests {
     #[test]
     fn a_segment_read_in_order_yields_every_sample_and_an_index_pointing_at_its_fragments() {
         let segment = indexed_segment_file();
-        let mut demux_fsm = MediaSegmentDemuxFsm::new(presentation_movie());
+        let mut demux_fsm = MediaSegmentDemuxFsm::new(presentation_movie()).unwrap();
 
         demux_fsm.handle_input(0, &segment.bytes).unwrap();
         demux_fsm.finish().unwrap();
@@ -65,7 +71,7 @@ mod tests {
     fn resuming_at_the_second_fragment_yields_its_samples_alone() {
         let segment = indexed_segment_file();
         let second = *segment.moof_offsets.get(1).unwrap();
-        let mut demux_fsm = MediaSegmentDemuxFsm::new(presentation_movie());
+        let mut demux_fsm = MediaSegmentDemuxFsm::new(presentation_movie()).unwrap();
         demux_fsm.handle_input(0, &segment.bytes).unwrap();
         demux_fsm.finish().unwrap();
         drained(&mut demux_fsm);
@@ -92,7 +98,7 @@ mod tests {
     fn the_continuation_is_wanted_after_the_bytes_handed_over_since_the_reading_last_started() {
         let segment = indexed_segment_file();
         let second = *segment.moof_offsets.get(1).unwrap();
-        let mut demux_fsm = MediaSegmentDemuxFsm::new(presentation_movie());
+        let mut demux_fsm = MediaSegmentDemuxFsm::new(presentation_movie()).unwrap();
 
         let created = demux_fsm.wanted_input();
         demux_fsm.handle_input(0, &segment.bytes).unwrap();
@@ -118,6 +124,39 @@ mod tests {
                 Some(WantedInput::new(second, None)),
                 Some(WantedInput::new(segment_length, None))
             ]
+        );
+    }
+
+    #[test]
+    fn a_first_fragment_stating_no_decode_time_starts_where_the_sample_table_of_the_movie_leaves_its_track()
+     {
+        let file = fragmented_file_with_movie_samples(true, false);
+        let segment = file
+            .bytes
+            .get(usize::try_from(file.moof_offset).unwrap()..)
+            .unwrap();
+
+        assert_eq!(samples_of(file.movie, segment, 7), file.fragment_samples);
+    }
+
+    #[test]
+    fn a_movie_whose_sample_table_runs_past_64_bits_of_decode_time_is_rejected() {
+        let longest_run = TimeToSampleEntry::new(u32::MAX, u32::MAX);
+        let stbl = sample_table(
+            TimeToSampleBox::new(vec![longest_run, longest_run]),
+            SampleToChunkBox::new(Vec::new()),
+            SampleSizes::Stsz(SampleSizeBox::from_sizes([])),
+            ChunkOffsets::from_offsets([]),
+        );
+        let movie = MovieBox::new_fragmented(
+            90_000,
+            vec![track_laid_out(1, self_contained_data_reference(), stbl)],
+        )
+        .unwrap();
+
+        assert_eq!(
+            MediaSegmentDemuxFsm::new(movie).map(drop),
+            Err(Error::from(isobmff_sample::Error::decode_time_overflow(1)))
         );
     }
 }

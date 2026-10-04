@@ -55,7 +55,7 @@ mod tests {
     #[test]
     fn the_samples_a_fragment_declares_are_read_out_of_the_media_data_that_follows_it() {
         let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 3_000, 16, INDEPENDENT));
-        let mut decode_times = TrackDecodeTimes::new();
+        let mut decode_times = TrackDecodeTimes::new(&movie).unwrap();
         let mut reader = SampleReader::new();
         let mut samples = Vec::new();
 

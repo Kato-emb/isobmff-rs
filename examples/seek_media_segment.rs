@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     };
     let mut segment_file = File::open(segment_path)?;
-    let mut demux_fsm = MediaSegmentDemuxFsm::new(movie);
+    let mut demux_fsm = MediaSegmentDemuxFsm::new(movie)?;
 
     let subsegment_start = loop {
         let covering = demux_fsm.segment_indexes().iter().find_map(|index| {

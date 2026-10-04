@@ -7,9 +7,10 @@ use isobmff_boxes::{
     MovieFragmentRandomAccessOffsetBox, SegmentIndexBox,
 };
 use isobmff_core::{BoxDecode, BoxDefinition};
-use isobmff_sample::movie_fragment::sample_extents;
 use isobmff_sample::segment_index::subsegments;
-use isobmff_sample::{Sample, SampleReader, SegmentIndex, TrackDecodeTimes};
+use isobmff_sample::{
+    Sample, SampleReader, SegmentIndex, TrackDecodeTimes, movie_fragment, sample_table,
+};
 use isobmff_sequence::{BoxEvent, BoxReader};
 
 use super::{FragmentedDisposition, FragmentedStructure};
@@ -19,12 +20,14 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 ///
 /// A fragmented movie file is laid out as ISO/IEC 14496-12 Annex A.8 has it:
 /// the brands it declares itself readable as, the movie its fragments
-/// continue, then one movie fragment after another with the media data each
-/// of them addresses. This demux FSM wires the layers that read one: the
-/// framing of the file into boxes, the structure that says what each top-level
-/// box is, the reading of the boxes it names into values, the resolution of
-/// each fragment against the movie into the extents of its samples, and the
-/// gathering of those samples out of the media data. It holds no rule of its
+/// continue, which may declare samples of its own (§8.8), then one movie
+/// fragment after another, with the media data the movie and its fragments
+/// address lying anywhere among them. This demux FSM wires the layers that
+/// read one: the framing of the file into boxes, the structure that says what
+/// each top-level box is, the reading of the boxes it names into values, the
+/// resolution of the sample tables of the movie, and of each fragment against
+/// the movie, into the extents of their samples, and the gathering of those
+/// samples out of the media data. It holds no rule of its
 /// own but one: of the bytes the samples still lack, it names only those whose
 /// start the file handed over in order has passed. A caller hands over bytes
 /// and takes [`Sample`]s. It reaches for no source of its own: when to read
@@ -52,9 +55,10 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 /// * [`resume_at`](Self::resume_at) restarts the reading at a file offset an
 ///   index points at, a `moof`, a `sidx` or an `mfra`, from where the file is
 ///   then handed over. The movie and the indexes read so far stand; the
-///   extents held and the samples not yet taken are dropped, and where each
-///   track stands on its timeline is no longer known until a `tfdt` states
-///   it; a fragment stating none for such a track is
+///   extents held, those of the movie among them, and the samples not yet
+///   taken are dropped, and are not resolved again; where each track stands
+///   on its timeline is no longer known until a `tfdt` states it; a fragment
+///   stating none for such a track is
 ///   [`Sample`](crate::ErrorKind::Sample).
 ///   [`resume_at_movie_fragment_random_access`](Self::resume_at_movie_fragment_random_access)
 ///   restarts it at the `mfra` the file closes with, once the last bytes of
@@ -62,7 +66,7 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 ///   name none.
 /// * The order the boxes come in, and what a file that breaks it is reported
 ///   as, are the structure's: an `ftyp` after another box, a
-///   `moof` before the `moov`, an `mdat` before any `moof` are
+///   `moof` before the `moov` are
 ///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder), a second
 ///   `moov` is [`DuplicateBox`](crate::ErrorKind::DuplicateBox), and
 ///   a file declared over without a `moov`, other than while its closing
@@ -71,15 +75,20 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 ///   A file carrying no `ftyp` reads all the same, as §4.3 allows.
 /// * A box read into a value is gathered whole before it is read, so what it
 ///   declares is bounded — see [`with_limits`](Self::with_limits).
-/// * The samples of a fragment are read out of the media data that follows
-///   it, and come out as their bytes arrive whole, as [`SampleReader`]'s
-///   contract has it: the extents of a fragment are held in the order of
-///   their bytes, so a file handed over in order yields the samples of each
-///   fragment in the order they lie in it, whatever order the fragment
-///   declares them in and wherever the input is cut.
-///   [`wanted_input`](Self::wanted_input) names what the extent at the
-///   front of those held still lacks only once the input has passed its
-///   start, which a file whose fragments precede their media data never has.
+/// * The samples the sample tables of the movie declare are resolved once the
+///   `moov` has been read, and those of a fragment once the `moof` has; where
+///   their chunks and runs lie is not checked. Either comes out as its bytes
+///   arrive whole, as [`SampleReader`]'s contract has it: the extents of the
+///   movie, and those of each fragment, are held in the order of their bytes,
+///   so a file handed over in order yields the samples of each in the order
+///   they lie in it, whatever order the boxes declare them in and wherever
+///   the input is cut. [`wanted_input`](Self::wanted_input) names what the
+///   extent at the front of those held still lacks only once the input has
+///   passed its start, which a file whose movie and fragments precede their
+///   media data never has.
+/// * Where a fragment states no decode time for a track, the track goes on
+///   from where the samples before it left it, those the sample table of the
+///   movie declares among them (§8.8.12).
 /// * An `Err` leaves the demux FSM failed for good,
 ///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) and
 ///   [`UnwantedInput`](crate::ErrorKind::UnwantedInput) aside:
@@ -229,7 +238,7 @@ impl FragmentedDemuxFsm {
             position: InputPosition::new(),
             structure: FragmentedStructure::new(),
             samples: SampleReader::with_sample_size_limit(sample_size_limit),
-            decode_times: TrackDecodeTimes::new(),
+            decode_times: TrackDecodeTimes::unknown(),
             open: None,
             file_type: None,
             movie: None,
@@ -268,7 +277,7 @@ impl FragmentedDemuxFsm {
     /// * [`Box`](crate::ErrorKind::Box): a box read into a value
     ///   does not decode.
     /// * [`Sample`](crate::ErrorKind::Sample): what the samples make
-    ///   of a fragment, a `sidx`, or the media data beside it.
+    ///   of the movie, a fragment, a `sidx`, or the media data beside them.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was declared over, by [`finish`](Self::finish) or by
     ///   [`resume_at_movie_fragment_random_access`](Self::resume_at_movie_fragment_random_access).
@@ -357,12 +366,13 @@ impl FragmentedDemuxFsm {
     ///
     /// Bytes the extent at the front of those held still lacks are wanted
     /// first, with their length, once the input taken in order has passed their
-    /// start. Where each fragment precedes the media data it addresses, a file
-    /// handed over in order has none wanted; a fragment addressing media data
-    /// lying before it (§8.8.7 has a base data offset name any byte of the
-    /// file) wants bytes already passed by. Otherwise the continuation of the
-    /// input taken in order is wanted, at the offset it stands at and with no
-    /// length. While the bytes the file would close with an `mfro` in are gathered, after
+    /// start. Where the movie and each fragment precede the media data they
+    /// address, a file handed over in order has none wanted; a movie whose
+    /// chunks lie before it (§8.1.1 sets no order for an `mdat`), or a
+    /// fragment addressing media data lying before it (§8.8.7 has a base data
+    /// offset name any byte of the file), wants bytes already passed by.
+    /// Otherwise the continuation of the input taken in order is wanted, at
+    /// the offset it stands at and with no length. While the bytes the file would close with an `mfro` in are gathered, after
     /// [`resume_at_movie_fragment_random_access`](Self::resume_at_movie_fragment_random_access),
     /// those still to gather are wanted alone, with their length. Bytes read
     /// for any of these are handed to [`handle_input`](Self::handle_input) at
@@ -492,8 +502,8 @@ impl FragmentedDemuxFsm {
     /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox):
     ///   the file carried no `moov`.
     /// * [`Sample`](crate::ErrorKind::Sample): what the samples make
-    ///   of a fragment or a `sidx` declaring no total, or a sample a fragment
-    ///   declared is short of the data it claimed.
+    ///   of the movie, a fragment or a `sidx` declaring no total, or a sample
+    ///   the movie or a fragment declared is short of the data it claimed.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   file was already declared over.
     /// * The failure of a previous call, which the demux FSM keeps and reports
@@ -591,9 +601,14 @@ impl FragmentedDemuxFsm {
                     Some(Open::FileType(reader)) => reader
                         .finish()
                         .map(|file_type| self.file_type = Some(file_type)),
-                    Some(Open::Movie(reader)) => {
-                        reader.finish().map(|movie| self.movie = Some(movie))
-                    }
+                    Some(Open::Movie(reader)) => reader.finish().and_then(|movie| {
+                        self.samples
+                            .handle_sample_extents(sample_table::sample_extents(&movie))?;
+                        self.decode_times = TrackDecodeTimes::new(&movie)?;
+                        self.movie = Some(movie);
+
+                        Ok(())
+                    }),
                     Some(Open::MovieFragment { reader, moof_start }) => {
                         reader.finish().and_then(|movie_fragment| {
                             // Why not unreachable: the structure placed the `moof`
@@ -604,7 +619,7 @@ impl FragmentedDemuxFsm {
                                 return Err(Error::box_out_of_order(MovieFragmentBox::BOX_TYPE));
                             };
 
-                            let extents = sample_extents(
+                            let extents = movie_fragment::sample_extents(
                                 &movie_fragment,
                                 movie,
                                 moof_start,

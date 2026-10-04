@@ -49,8 +49,9 @@
 //! 5. **Structure.** The order of the top-level boxes of one kind of file, and
 //!    what is to be done with each: read into a value, offered to the samples
 //!    as media data, or passed over. Three structures are held: the
-//!    fragmented movie file of Annex A.8 — the brands, the movie, then one
-//!    movie fragment after another with the media data beside it — the
+//!    fragmented movie file of Annex A.8 — the brands, the movie, which may
+//!    declare samples of its own, then one movie fragment after another, the
+//!    media data lying anywhere among them — the
 //!    non-fragmented movie file of §8.2.1 — the brands, the one movie, and
 //!    the media data it declares, lying before the movie or after it — and
 //!    the media segment of §8.16 — the brands, then the fragments and their

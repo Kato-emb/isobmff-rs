@@ -12,8 +12,9 @@ use crate::Error;
 ///
 /// A fragmented movie file is laid out as ISO/IEC 14496-12 Annex A.8 has it:
 /// the brands it declares itself readable as, the movie its fragments
-/// continue, then one movie fragment after another with the media data each
-/// of them addresses. This machine holds that order. Handed the type of each
+/// continue, then one movie fragment after another, with the media data the
+/// movie and its fragments address lying anywhere among them (§8.1.1). This
+/// machine holds that order. Handed the type of each
 /// top-level box as it comes, it answers with the [`FragmentedDisposition`]
 /// of that box — read whole into a value, passed on as media data, or passed
 /// over — and fails on a box the order does not place there. It reads no box
@@ -31,9 +32,8 @@ use crate::Error;
 ///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder). A file
 ///   declared over without one is
 ///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
-/// * The `mdat` comes after a fragment: one arriving before any `moof` is
-///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder). How many
-///   follow a fragment is not counted.
+/// * An `mdat` is passed on as media data wherever it lies, before the `moov`
+///   as well. How many there are is not counted.
 /// * A `sidx` and an `mfra` are read into values wherever they lie, and move
 ///   the order on as a box passed over does.
 /// * Every other box is passed over, wherever it lies.
@@ -95,10 +95,8 @@ enum Position {
     Start,
     /// After a box, waiting for the `moov`
     Opened,
-    /// After the `moov`, waiting for the first fragment
+    /// After the `moov`
     Declared,
-    /// After a fragment, where media data may follow
-    Fragmenting,
 }
 
 impl FragmentedStructure {
@@ -121,8 +119,7 @@ impl FragmentedStructure {
     /// # Errors
     ///
     /// * [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder): an
-    ///   `ftyp` after another box, a `moof` before the `moov`, or an `mdat`
-    ///   before any `moof`.
+    ///   `ftyp` after another box, or a `moof` before the `moov`.
     /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): a second
     ///   `moov`.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
@@ -175,7 +172,7 @@ impl FragmentedStructure {
     pub(crate) fn finish(&mut self) -> Result<(), Error> {
         match self.state {
             State::Reading(position) | State::Resuming(position) => match position {
-                Position::Declared | Position::Fragmenting => {
+                Position::Declared => {
                     self.state = State::Finished(position);
 
                     Ok(())
@@ -206,22 +203,19 @@ const fn place(
         (FileTypeBox::BOX_TYPE, Position::Start) => {
             Ok((Position::Opened, FragmentedDisposition::FileType))
         }
-        (FileTypeBox::BOX_TYPE, Position::Opened | Position::Declared | Position::Fragmenting)
-        | (MovieFragmentBox::BOX_TYPE, Position::Start | Position::Opened)
-        | (MediaDataBox::BOX_TYPE, Position::Start | Position::Opened | Position::Declared) => {
+        (FileTypeBox::BOX_TYPE, Position::Opened | Position::Declared)
+        | (MovieFragmentBox::BOX_TYPE, Position::Start | Position::Opened) => {
             Err(Error::box_out_of_order(box_type))
         }
         (MovieBox::BOX_TYPE, Position::Start | Position::Opened) => {
             Ok((Position::Declared, FragmentedDisposition::Movie))
         }
-        (MovieBox::BOX_TYPE, Position::Declared | Position::Fragmenting) => {
-            Err(Error::duplicate_box(box_type))
+        (MovieBox::BOX_TYPE, Position::Declared) => Err(Error::duplicate_box(box_type)),
+        (MovieFragmentBox::BOX_TYPE, Position::Declared) => {
+            Ok((Position::Declared, FragmentedDisposition::MovieFragment))
         }
-        (MovieFragmentBox::BOX_TYPE, Position::Declared | Position::Fragmenting) => {
-            Ok((Position::Fragmenting, FragmentedDisposition::MovieFragment))
-        }
-        (MediaDataBox::BOX_TYPE, Position::Fragmenting) => {
-            Ok((Position::Fragmenting, FragmentedDisposition::MediaData))
+        (MediaDataBox::BOX_TYPE, _any) => {
+            Ok((passed_over(position), FragmentedDisposition::MediaData))
         }
         (SegmentIndexBox::BOX_TYPE, _any) => {
             Ok((passed_over(position), FragmentedDisposition::SegmentIndex))
@@ -240,7 +234,7 @@ const fn place(
 const fn passed_over(position: Position) -> Position {
     match position {
         Position::Start => Position::Opened,
-        Position::Opened | Position::Declared | Position::Fragmenting => position,
+        Position::Opened | Position::Declared => position,
     }
 }
 
@@ -417,14 +411,33 @@ mod tests {
     }
 
     #[test]
-    fn media_data_arriving_before_any_fragment_is_out_of_order() {
+    fn media_data_is_passed_on_wherever_it_lies() {
         assert_eq!(
-            dispositions_of(&[b"ftyp", b"moov", b"mdat"]),
-            Err(Error::box_out_of_order(BoxType::compact(*b"mdat")))
-        );
-        assert_eq!(
-            dispositions_of(&[b"mdat"]),
-            Err(Error::box_out_of_order(BoxType::compact(*b"mdat")))
+            [
+                dispositions_of(&[b"ftyp", b"moov", b"mdat", b"moof", b"mdat"]),
+                dispositions_of(&[b"ftyp", b"mdat", b"moov", b"moof", b"mdat"]),
+                dispositions_of(&[b"mdat", b"moov"]),
+            ],
+            [
+                Ok(vec![
+                    FragmentedDisposition::FileType,
+                    FragmentedDisposition::Movie,
+                    FragmentedDisposition::MediaData,
+                    FragmentedDisposition::MovieFragment,
+                    FragmentedDisposition::MediaData,
+                ]),
+                Ok(vec![
+                    FragmentedDisposition::FileType,
+                    FragmentedDisposition::MediaData,
+                    FragmentedDisposition::Movie,
+                    FragmentedDisposition::MovieFragment,
+                    FragmentedDisposition::MediaData,
+                ]),
+                Ok(vec![
+                    FragmentedDisposition::MediaData,
+                    FragmentedDisposition::Movie,
+                ]),
+            ]
         );
     }
 
