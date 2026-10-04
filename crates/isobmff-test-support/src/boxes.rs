@@ -194,12 +194,7 @@ fn empty_sample_table(entry: AnyBox) -> SampleTableBox {
 
 /// Movie of one track that no `trex` states the defaults of a fragment for
 pub fn unfragmented_movie() -> MovieBox {
-    MovieBox::new(
-        MovieHeaderBox::new(EPOCH, EPOCH, TIMESCALE, HeaderDuration::ZERO, 2),
-        vec![track(1)],
-        None,
-    )
-    .unwrap()
+    movie_declaring(vec![track(1)])
 }
 
 /// Movie of one track continued in fragments, which fall back on `trex`
@@ -210,6 +205,23 @@ pub fn fragmented_movie(trex: TrackExtendsBox) -> MovieBox {
         MovieHeaderBox::new(EPOCH, EPOCH, TIMESCALE, HeaderDuration::ZERO, 2),
         vec![track(trex.track_id())],
         MovieExtendsBox::new(vec![trex]),
+    )
+    .unwrap()
+}
+
+/// Movie of the tracks given, which no `trex` states the defaults of a fragment for
+pub fn movie_declaring(trak: Vec<TrackBox>) -> MovieBox {
+    let next_track_id = trak
+        .iter()
+        .map(|track| track.tkhd().track_id())
+        .max()
+        .unwrap()
+        .saturating_add(1);
+
+    MovieBox::new(
+        MovieHeaderBox::new(EPOCH, EPOCH, TIMESCALE, HeaderDuration::ZERO, next_track_id),
+        trak,
+        None,
     )
     .unwrap()
 }
@@ -272,7 +284,7 @@ pub fn non_fragmented_file(chunks: &[&[&[u8]]], movie_first: bool) -> Vec<u8> {
         .iter()
         .map(|chunk| (u64::try_from(chunk.len()).unwrap(), 1))
         .collect();
-    let movie_declaring = |chunk_offsets: Vec<u64>| {
+    let movie_laying_out = |chunk_offsets: Vec<u64>| {
         let stbl = sample_table(
             TimeToSampleBox::from_deltas(sizes.iter().map(|_size| SAMPLE_DURATION)),
             SampleToChunkBox::from_chunks(samples_per_chunk.iter().copied()).unwrap(),
@@ -293,7 +305,7 @@ pub fn non_fragmented_file(chunks: &[&[&[u8]]], movie_first: bool) -> Vec<u8> {
         // past the movie itself, so its length is needed before its offsets
         // are. The placeholders and the offsets of these fixtures all fit 32
         // bits, so both movies state them in a `stco` of the same length.
-        let movie_len = movie_declaring(vec![0; chunks.len()]).encoded_len();
+        let movie_len = movie_laying_out(vec![0; chunks.len()]).encoded_len();
         chunk_start = chunk_start.saturating_add(movie_len);
     }
     let mut chunk_offsets = Vec::new();
@@ -302,7 +314,7 @@ pub fn non_fragmented_file(chunks: &[&[&[u8]]], movie_first: bool) -> Vec<u8> {
         chunk_offsets.push(chunk_start.saturating_add(header_len));
         chunk_start = chunk_start.saturating_add(mdat.encoded_len());
     }
-    let movie = written(&movie_declaring(chunk_offsets));
+    let movie = written(&movie_laying_out(chunk_offsets));
     let media_data = media_data.iter().map(written).collect::<Vec<_>>().concat();
 
     if movie_first {

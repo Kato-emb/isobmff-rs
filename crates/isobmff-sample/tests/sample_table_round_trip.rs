@@ -9,7 +9,9 @@ mod tests {
     use isobmff_core::{AnyBox, BoxType, Mp4EpochSeconds};
     use isobmff_sample::sample_table::sample_extents;
     use isobmff_sample::{Sample, SampleExtent, SampleTableWriter, SampleTables};
-    use isobmff_test_support::{self_contained_data_reference, track_laid_out};
+    use isobmff_test_support::{
+        movie_declaring, self_contained_data_reference, track, track_laid_out,
+    };
 
     /// Sample of `track_id` at `decode_time` lasting `sample_duration` units, carrying `data`
     fn sample(track_id: u32, decode_time: u64, sample_duration: u32, data: &[u8]) -> Sample {
@@ -45,7 +47,7 @@ mod tests {
 
     /// Lays `chunks` out, each `(chunk_offset, samples)`, and hands back the tables of each track in turn
     fn laid_out(chunks: &[(u64, Vec<Sample>)]) -> Vec<(u32, SampleTables)> {
-        let mut writer = SampleTableWriter::new();
+        let mut writer = SampleTableWriter::new(&movie_declaring(vec![track(1), track(2)]));
 
         for (chunk_offset, samples) in chunks {
             writer.begin_chunk(*chunk_offset).unwrap();

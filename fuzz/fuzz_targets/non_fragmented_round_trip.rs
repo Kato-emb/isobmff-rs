@@ -13,7 +13,9 @@
 //!    claimed it and is fetched again, or a movie moved before the media data
 //!    claims it as it comes — the samples of the moved file compared by their
 //!    bytes alone, the fixture laying one track out
-//! 3. the reader does not reject the file the writer laid down
+//! 3. the reader does not reject the file the writer laid down: a sample of a
+//!    track the movie does not declare, or described by an `stsd` entry its
+//!    track has none of, is refused by the writer where it is handed over
 //!
 //! A sample carries a byte at least: an extent naming no bytes is whole where it
 //! is held, and comes out where the extents held before it clear, which the
@@ -63,11 +65,13 @@ struct Input<'bytes> {
     sample_data: &'bytes [u8],
 }
 
-/// One chunk: which track it holds, and the samples handed over for it
+/// One chunk: which track it holds, the entry describing it, and the samples handed over for it
 #[derive(Arbitrary, Debug)]
 struct Chunk {
-    /// Whether the chunk belongs to the second of the tracks the movie declares
-    second_track: bool,
+    /// Which of the tracks the movie declares the chunk holds, or at its highest one past them
+    track: u8,
+    /// At its highest, the samples are described by a second `stsd` entry, which no track carries
+    entry: u8,
     samples: Vec<Stated>,
 }
 
@@ -140,8 +144,14 @@ fn laid_out(input: &Input<'_>) -> Vec<Vec<Sample>> {
         .iter()
         .take(MAX_CHUNKS)
         .map(|chunk| {
-            let position = usize::from(chunk.second_track);
-            let track_id = TRACK_IDS.get(position).copied().unwrap_or(u32::MAX);
+            let position = if chunk.track == u8::MAX {
+                TRACK_IDS.len()
+            } else {
+                usize::from(chunk.track) % TRACK_IDS.len()
+            };
+            let track_id = TRACK_IDS.get(position).copied().unwrap_or(NEXT_TRACK_ID);
+            let sample_description_index =
+                SAMPLE_DESCRIPTION_INDEX + u32::from(chunk.entry == u8::MAX);
             chunk
                 .samples
                 .iter()
@@ -172,7 +182,7 @@ fn laid_out(input: &Input<'_>) -> Vec<Vec<Sample>> {
                         u32::from(stated.duration),
                         0,
                         SampleFlags::ZERO,
-                        SAMPLE_DESCRIPTION_INDEX,
+                        sample_description_index,
                         data.to_vec(),
                     ))
                 })

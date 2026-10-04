@@ -322,13 +322,14 @@ fn fragmented_writer_file(
     (total, outputs)
 }
 
-/// Lays the fragments down as `moof` and media data pairs, and hands them back with how many bytes of media data they carry
+/// Lays the fragments of `movie` down as `moof` and media data pairs, and hands them back with how many bytes of media data they carry
 ///
 /// The sample layer alone: the pairs are never framed as a file.
 fn movie_fragment_writer_fragments(
+    movie: &MovieBox,
     fragments: Vec<Vec<Sample>>,
 ) -> (usize, Vec<(MovieFragmentBox, Vec<u8>)>) {
-    let mut writer = MovieFragmentWriter::new();
+    let mut writer = MovieFragmentWriter::new(movie).unwrap();
     let mut pairs = Vec::new();
     let mut total = 0;
 
@@ -537,11 +538,11 @@ fn composition(criterion: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new("movie_fragment_writer", name), |bencher| {
             bencher.iter_batched(
-                || composition.samples(),
-                |fragments| {
-                    let (written_len, pairs) = movie_fragment_writer_fragments(fragments);
+                || (composition.movie(), composition.samples()),
+                |(movie, fragments)| {
+                    let (written_len, pairs) = movie_fragment_writer_fragments(&movie, fragments);
                     assert_eq!(written_len, payload_len);
-                    pairs
+                    (movie, pairs)
                 },
                 batch_size(payload_len),
             );
@@ -622,11 +623,12 @@ fn fragment_length(criterion: &mut Criterion) {
             BenchmarkId::new("movie_fragment_writer", samples_per_fragment),
             |bencher| {
                 bencher.iter_batched(
-                    || composition.samples(),
-                    |fragments| {
-                        let (written_len, pairs) = movie_fragment_writer_fragments(fragments);
+                    || (composition.movie(), composition.samples()),
+                    |(movie, fragments)| {
+                        let (written_len, pairs) =
+                            movie_fragment_writer_fragments(&movie, fragments);
                         assert_eq!(written_len, payload_len);
-                        pairs
+                        (movie, pairs)
                     },
                     batch_size(payload_len),
                 );

@@ -95,8 +95,9 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 /// use isobmff_sample::Sample;
 /// use isobmff_structure::{MediaSegmentDemuxFsm, MediaSegmentMuxFsm};
 /// # use isobmff_test_support::{fragmented_movie, segment_type};
-/// // A segment of one fragment carrying two samples of track 1
-/// let mut mux_fsm = MediaSegmentMuxFsm::new();
+/// // A segment of one fragment carrying two samples of track 1, continuing a movie of that track
+/// let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO));
+/// let mut mux_fsm = MediaSegmentMuxFsm::new(&movie)?;
 /// mux_fsm.handle_segment_type(segment_type())?;
 /// mux_fsm.begin_fragment(1)?;
 /// mux_fsm.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
@@ -111,7 +112,6 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 /// }
 ///
 /// // The segment is handed over as it arrives, against the movie it continues
-/// let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO));
 /// let mut demux_fsm = MediaSegmentDemuxFsm::new(movie);
 /// for (offset, arriving) in (0..).step_by(7).zip(segment.chunks(7)) {
 ///     demux_fsm.handle_input(offset, arriving)?;

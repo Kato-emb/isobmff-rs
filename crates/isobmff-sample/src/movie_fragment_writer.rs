@@ -5,7 +5,7 @@ mod open_fragment;
 use alloc::vec::Vec;
 use core::mem;
 
-use isobmff_boxes::MovieFragmentBox;
+use isobmff_boxes::{MovieBox, MovieFragmentBox, TrackBox, TrackExtendsBox};
 
 use crate::error::Error;
 use crate::movie_fragment_writer::open_fragment::OpenFragment;
@@ -22,9 +22,10 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// writes nothing itself: what the two are laid down as, and where, stay with
 /// the caller.
 ///
-/// The brands and the movie the fragments continue are the caller's too, and
-/// the `trex` of a track sets defaults this writer never leans on — every
-/// default a fragment falls back on is stated by its own `tfhd`.
+/// The writer is made for the movie the fragments continue, which it checks
+/// the samples against and never writes: the brands and the movie stay the
+/// caller's too. The `trex` of a track sets defaults this writer never leans
+/// on — every default a fragment falls back on is stated by its own `tfhd`.
 ///
 /// # Layout
 ///
@@ -59,6 +60,23 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///
 /// # Contract
 ///
+/// * The movie is one continued in fragments: it carries an `mvex`, which is
+///   otherwise [`MissingMovieExtends`](crate::ErrorKind::MissingMovieExtends),
+///   and its sample tables lay no sample out, which is otherwise
+///   [`SampleTableNotEmpty`](crate::ErrorKind::SampleTableNotEmpty) — both
+///   reported by [`new`](Self::new).
+/// * A sample belongs to a track the movie declares by a `trak` and a `trex`,
+///   and is described by an `stsd` entry of that track whose data reference
+///   is the file itself, as a reader of the fragments resolves it (§8.8.3,
+///   §8.5.2, §8.7.2). The first sample of a track in a fragment is checked,
+///   and the samples after it are held to its entry: the failures are those
+///   of the reader —
+///   [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId),
+///   [`UnknownSampleDescriptionIndex`](crate::ErrorKind::UnknownSampleDescriptionIndex),
+///   [`UnknownDataReferenceIndex`](crate::ErrorKind::UnknownDataReferenceIndex),
+///   [`ExternalDataReference`](crate::ErrorKind::ExternalDataReference), or
+///   the failure of an entry that does not read as a sample entry, carried
+///   on [`Box`](crate::ErrorKind::Box).
 /// * A fragment is opened by [`begin_fragment`](Self::begin_fragment) or
 ///   [`begin_fragment_continuing`](Self::begin_fragment_continuing) and
 ///   closed by [`finish_fragment`](Self::finish_fragment). Handing a sample
@@ -105,11 +123,14 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// # Examples
 ///
 /// ```
-/// use isobmff_boxes::SampleFlags;
+/// use isobmff_boxes::{SampleFlags, TrackExtendsBox};
 /// use isobmff_core::BoxEncode as _;
 /// use isobmff_sample::{MovieFragmentWriter, Sample};
+/// # use isobmff_test_support::fragmented_movie;
 ///
-/// let mut writer = MovieFragmentWriter::new();
+/// // A writer for a movie of track 1, continued in fragments
+/// let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO));
+/// let mut writer = MovieFragmentWriter::new(&movie)?;
 ///
 /// // One fragment of two samples of track 1, lasting 1024 units each
 /// writer.begin_fragment(1)?;
@@ -132,6 +153,8 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// ```
 #[derive(Clone, Debug)]
 pub struct MovieFragmentWriter {
+    trak: Vec<TrackBox>,
+    trex: Vec<TrackExtendsBox>,
     decode_times: TrackDecodeTimes,
     state: State,
 }
@@ -150,13 +173,35 @@ enum State {
 }
 
 impl MovieFragmentWriter {
-    /// Creates a writer waiting for the first fragment
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
+    /// Creates a writer for the fragments `movie` continues, waiting for the first one
+    ///
+    /// # Errors
+    ///
+    /// * [`MissingMovieExtends`](crate::ErrorKind::MissingMovieExtends):
+    ///   the movie carries no `mvex`, and so continues in no fragments.
+    /// * [`SampleTableNotEmpty`](crate::ErrorKind::SampleTableNotEmpty):
+    ///   the sample tables of a track lay samples out.
+    pub fn new(movie: &MovieBox) -> Result<Self, Error> {
+        let Some(mvex) = movie.mvex() else {
+            return Err(Error::missing_movie_extends());
+        };
+        for trak in movie.trak() {
+            let stbl = trak.mdia().minf().stbl();
+            if !stbl.stts().entries().is_empty()
+                || !stbl.stsc().entries().is_empty()
+                || stbl.sample_sizes().sizes().next().is_some()
+                || stbl.chunk_offsets().offsets().next().is_some()
+            {
+                return Err(Error::sample_table_not_empty(trak.tkhd().track_id()));
+            }
+        }
+
+        Ok(Self {
+            trak: movie.trak().to_vec(),
+            trex: mvex.trex().to_vec(),
             decode_times: TrackDecodeTimes::new(),
             state: State::Between,
-        }
+        })
     }
 
     /// Opens a fragment, which the samples handed over next are laid out in
@@ -209,6 +254,17 @@ impl MovieFragmentWriter {
     ///
     /// * [`NoFragmentOpen`](crate::ErrorKind::NoFragmentOpen): no
     ///   fragment was opened to carry it.
+    /// * [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId): the movie
+    ///   declares no `trak` or no `trex` for the track of the sample.
+    /// * [`UnknownSampleDescriptionIndex`](crate::ErrorKind::UnknownSampleDescriptionIndex):
+    ///   the track has no `stsd` entry describing the sample.
+    /// * The failures of [`SampleEntry::try_from`](isobmff_boxes::SampleEntry),
+    ///   carried on [`Box`](crate::ErrorKind::Box): that entry does not read
+    ///   as a sample entry, with `stsd` added to the containers.
+    /// * [`UnknownDataReferenceIndex`](crate::ErrorKind::UnknownDataReferenceIndex):
+    ///   that entry names a `dref` entry the track has none of.
+    /// * [`ExternalDataReference`](crate::ErrorKind::ExternalDataReference):
+    ///   the `dref` entry names a resource other than the file itself.
     /// * [`DecodeTimeMismatch`](crate::ErrorKind::DecodeTimeMismatch):
     ///   the sample does not start where the one before it in its track ends.
     /// * [`BackwardDecodeTime`](crate::ErrorKind::BackwardDecodeTime):
@@ -233,7 +289,7 @@ impl MovieFragmentWriter {
         let State::Fragment(open) = &mut self.state else {
             return Err(self.fail(Error::no_fragment_open()));
         };
-        open.place(sample, &self.decode_times)
+        open.place(sample, &self.trak, &self.trex, &self.decode_times)
             .map_err(|failure| self.fail(failure))
     }
 
@@ -321,19 +377,30 @@ impl MovieFragmentWriter {
     }
 }
 
-impl Default for MovieFragmentWriter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use isobmff_boxes::SampleFlags;
+    use alloc::vec;
+
+    use isobmff_boxes::{
+        ChunkOffsetBox, ChunkOffsetEntry, ChunkOffsets, MovieBox, SampleFlags, SampleSizeBox,
+        SampleSizeEntries, SampleSizeEntry, SampleSizes, SampleToChunkBox, SampleToChunkEntry,
+        TimeToSampleBox, TimeToSampleEntry,
+    };
+    use isobmff_test_support::{
+        external_data_reference, sample_table, self_contained_data_reference, track,
+        track_laid_out, track_reading_from, unfragmented_movie,
+    };
 
     use super::MovieFragmentWriter;
     use crate::error::Error;
     use crate::sample::Sample;
+
+    /// Writer for a movie of tracks 1 and 2, each continued in fragments
+    pub(super) fn writer() -> MovieFragmentWriter {
+        let movie = MovieBox::new_fragmented(90_000, vec![track(1), track(2)]).unwrap();
+
+        MovieFragmentWriter::new(&movie).unwrap()
+    }
 
     /// Sample of `track_id` at `decode_time` lasting 1024 units, carrying `data`
     pub(super) fn sample(track_id: u32, decode_time: u64, data: &[u8]) -> Sample {
@@ -350,7 +417,7 @@ mod tests {
 
     #[test]
     fn a_fragment_may_start_after_the_samples_before_it_end() {
-        let mut writer = MovieFragmentWriter::new();
+        let mut writer = writer();
 
         writer.begin_fragment(1).unwrap();
         writer.handle_sample(sample(1, 0, b"AAAA")).unwrap();
@@ -362,7 +429,7 @@ mod tests {
 
     #[test]
     fn a_track_going_back_to_a_decode_time_it_passed_is_refused() {
-        let mut writer = MovieFragmentWriter::new();
+        let mut writer = writer();
 
         writer.begin_fragment(1).unwrap();
         writer.handle_sample(sample(1, 0, b"AAAA")).unwrap();
@@ -377,7 +444,7 @@ mod tests {
 
     #[test]
     fn a_fragment_opened_after_one_opened_continuing_carries_on_from_where_it_placed_the_track() {
-        let mut writer = MovieFragmentWriter::new();
+        let mut writer = writer();
 
         writer.begin_fragment(1).unwrap();
         writer.handle_sample(sample(1, 0, b"AAAA")).unwrap();
@@ -398,8 +465,8 @@ mod tests {
 
     #[test]
     fn a_sample_handed_over_or_a_fragment_closed_while_none_is_open_is_refused() {
-        let mut handed_a_sample = MovieFragmentWriter::new();
-        let mut closed = MovieFragmentWriter::new();
+        let mut handed_a_sample = writer();
+        let mut closed = writer();
 
         assert_eq!(
             handed_a_sample.handle_sample(sample(1, 0, b"AAAA")),
@@ -410,7 +477,7 @@ mod tests {
 
     #[test]
     fn the_samples_are_declared_over_once_every_fragment_is_closed() {
-        let mut writer = MovieFragmentWriter::new();
+        let mut writer = writer();
 
         writer.begin_fragment(1).unwrap();
         writer.handle_sample(sample(1, 0, b"AAAA")).unwrap();
@@ -421,7 +488,7 @@ mod tests {
 
     #[test]
     fn anything_handed_over_after_the_samples_were_declared_over_is_refused() {
-        let mut writer = MovieFragmentWriter::new();
+        let mut writer = writer();
 
         writer.finish().unwrap();
 
@@ -436,7 +503,7 @@ mod tests {
 
     #[test]
     fn the_samples_declared_over_while_a_fragment_is_open_is_refused() {
-        let mut writer = MovieFragmentWriter::new();
+        let mut writer = writer();
 
         writer.begin_fragment(1).unwrap();
 
@@ -445,7 +512,7 @@ mod tests {
 
     #[test]
     fn a_fragment_begun_while_one_is_open_is_refused() {
-        let mut writer = MovieFragmentWriter::new();
+        let mut writer = writer();
 
         writer.begin_fragment(1).unwrap();
 
@@ -454,7 +521,7 @@ mod tests {
 
     #[test]
     fn a_failure_is_reported_again_for_every_call_after_it() {
-        let mut writer = MovieFragmentWriter::new();
+        let mut writer = writer();
 
         writer.begin_fragment(1).unwrap();
         writer.handle_sample(sample(1, 0, b"AAAA")).unwrap();
@@ -476,5 +543,94 @@ mod tests {
             writer.finish(),
             Err(Error::decode_time_mismatch(1, 512, 1_024))
         );
+    }
+
+    #[test]
+    fn a_writer_is_made_only_for_a_movie_continued_in_fragments() {
+        let laid_out = sample_table(
+            TimeToSampleBox::new(vec![TimeToSampleEntry::new(1, 1_024)]),
+            SampleToChunkBox::new(vec![SampleToChunkEntry::new(1, 1, 1)]),
+            SampleSizes::Stsz(SampleSizeBox::new(SampleSizeEntries::PerSample(vec![
+                SampleSizeEntry::new(4),
+            ]))),
+            ChunkOffsets::Stco(ChunkOffsetBox::new(vec![ChunkOffsetEntry::new(8)])),
+        );
+        let filled = MovieBox::new_fragmented(
+            90_000,
+            vec![
+                track(1),
+                track_laid_out(2, self_contained_data_reference(), laid_out),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            MovieFragmentWriter::new(&unfragmented_movie()).map(|_writer| ()),
+            Err(Error::missing_movie_extends())
+        );
+        assert_eq!(
+            MovieFragmentWriter::new(&filled).map(|_writer| ()),
+            Err(Error::sample_table_not_empty(2))
+        );
+    }
+
+    #[test]
+    fn a_sample_the_movie_does_not_resolve_is_refused_where_it_is_handed_over() {
+        let movie = MovieBox::new_fragmented(
+            90_000,
+            vec![track(1), track_reading_from(2, external_data_reference())],
+        )
+        .unwrap();
+        let refused = |sample: Sample| {
+            let mut writer = MovieFragmentWriter::new(&movie).unwrap();
+            writer.begin_fragment(1).unwrap();
+
+            writer.handle_sample(sample)
+        };
+
+        assert_eq!(
+            refused(sample(999, 0, b"AAAA")),
+            Err(Error::unknown_track_id(999))
+        );
+        assert_eq!(
+            refused(Sample::new(
+                1,
+                0,
+                1_024,
+                0,
+                SampleFlags::ZERO,
+                2,
+                b"AAAA".to_vec()
+            )),
+            Err(Error::unknown_sample_description_index(1, 2))
+        );
+        assert_eq!(
+            refused(sample(2, 0, b"AAAA")),
+            Err(Error::external_data_reference(2, 1))
+        );
+    }
+
+    #[test]
+    fn a_sample_of_a_track_no_trex_continues_in_fragments_is_refused() {
+        let mut movie = MovieBox::new_fragmented(90_000, vec![track(1)]).unwrap();
+        *movie.trak_mut(1).unwrap() = track(5);
+        let mut writer = MovieFragmentWriter::new(&movie).unwrap();
+
+        writer.begin_fragment(1).unwrap();
+
+        assert_eq!(
+            writer.handle_sample(sample(5, 0, b"AAAA")),
+            Err(Error::unknown_track_id(5))
+        );
+    }
+
+    #[test]
+    fn a_fragment_holding_a_refused_sample_is_never_built() {
+        let mut writer = writer();
+
+        writer.begin_fragment(1).unwrap();
+        writer.handle_sample(sample(999, 0, b"AAAA")).unwrap_err();
+
+        assert_eq!(writer.finish_fragment(), Err(Error::unknown_track_id(999)));
     }
 }

@@ -143,14 +143,14 @@ mod tests {
 
     use crate::error::Error;
     use crate::sample::Sample;
-    use crate::sample_table_writer::tests::{laid_out, sample};
-    use crate::sample_table_writer::{SampleTableWriter, SampleTables};
+    use crate::sample_table_writer::SampleTables;
+    use crate::sample_table_writer::tests::{laid_out, sample, writer};
 
     use super::OpenTrack;
 
     #[test]
     fn a_track_starting_anywhere_but_at_zero_is_refused() {
-        let mut writer = SampleTableWriter::new();
+        let mut writer = writer();
 
         writer.begin_chunk(1_000).unwrap();
 
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn a_sample_that_does_not_start_where_the_one_before_it_ends_is_refused() {
-        let mut writer = SampleTableWriter::new();
+        let mut writer = writer();
 
         writer.begin_chunk(1_000).unwrap();
         writer.handle_sample(sample(1, 0, b"AAAA")).unwrap();
@@ -200,7 +200,7 @@ mod tests {
             1,
             b"AAAA".to_vec(),
         );
-        let mut writer = SampleTableWriter::new();
+        let mut writer = writer();
 
         writer.begin_chunk(1_000).unwrap();
 
@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn a_track_composing_samples_both_early_and_past_what_signed_offsets_reach_is_refused() {
-        let mut writer = SampleTableWriter::new();
+        let mut writer = writer();
 
         writer.begin_chunk(1_000).unwrap();
         writer

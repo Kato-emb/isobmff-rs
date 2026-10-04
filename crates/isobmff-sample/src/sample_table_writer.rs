@@ -7,13 +7,14 @@ use alloc::vec::Vec;
 use core::mem;
 
 use isobmff_boxes::{
-    ChunkOffsets, CompositionOffsetBox, DegradationPriorityBox, PaddingBitsBox,
+    ChunkOffsets, CompositionOffsetBox, DegradationPriorityBox, MovieBox, PaddingBitsBox,
     SampleDependencyTypeBox, SampleDescriptionBox, SampleSizes, SampleTableBox, SampleToChunkBox,
-    SyncSampleBox, TimeToSampleBox,
+    SyncSampleBox, TimeToSampleBox, TrackBox,
 };
 
 use crate::error::Error;
 use crate::sample::Sample;
+use crate::sample_description::SampleDescriptions;
 use crate::sample_table_writer::open_track::OpenTrack;
 
 /// Lays the samples of a presentation out as the sample tables of a movie
@@ -27,8 +28,9 @@ use crate::sample_table_writer::open_track::OpenTrack;
 /// chunk starts (`stco` or `co64`, §8.7.5), and the optional tables stating their composition time
 /// offsets (`ctts`, §8.6.1.3) and the fields of their `sample_flags` (`sdtp`,
 /// `padb`, `stss` and `stdp`, §8.8.3.1), which [`finish`](Self::finish) hands
-/// back per track as [`SampleTables`]. The `stsd` of each track, and the movie
-/// the tables go into, stay with the caller.
+/// back per track as [`SampleTables`]. The writer is made for the movie the
+/// tables go into, which it checks the samples against; the `stsd` of each
+/// track, and the movie itself, stay with the caller.
 ///
 /// # Layout
 ///
@@ -54,6 +56,18 @@ use crate::sample_table_writer::open_track::OpenTrack;
 ///
 /// # Contract
 ///
+/// * A sample belongs to a track the movie declares by a `trak`, which is
+///   otherwise [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId), and is
+///   described by an `stsd` entry of that track whose data reference is the
+///   file itself, as a reader of the tables resolves it (§8.5.2, §8.7.2).
+///   The first sample of a chunk is checked, and the samples after it are
+///   held to its track and entry: the failures of the entry are those of the
+///   reader —
+///   [`UnknownSampleDescriptionIndex`](crate::ErrorKind::UnknownSampleDescriptionIndex),
+///   [`UnknownDataReferenceIndex`](crate::ErrorKind::UnknownDataReferenceIndex),
+///   [`ExternalDataReference`](crate::ErrorKind::ExternalDataReference), or
+///   the failure of an entry that does not read as a sample entry, carried
+///   on [`Box`](crate::ErrorKind::Box).
 /// * Handing a sample over while no chunk is open is
 ///   [`NoChunkOpen`](crate::ErrorKind::NoChunkOpen), and one of another
 ///   track than the chunk holds is
@@ -93,8 +107,11 @@ use crate::sample_table_writer::open_track::OpenTrack;
 ///     SampleToChunkEntry,
 /// };
 /// use isobmff_sample::{Sample, SampleTableWriter};
+/// # use isobmff_test_support::{movie_declaring, track};
 ///
-/// let mut writer = SampleTableWriter::new();
+/// // A writer for a movie of tracks 1 and 2
+/// let movie = movie_declaring(vec![track(1), track(2)]);
+/// let mut writer = SampleTableWriter::new(&movie);
 ///
 /// // Two samples of track 1 in a chunk at 1000, then one of track 2 in a chunk at 1008
 /// writer.begin_chunk(1_000)?;
@@ -117,6 +134,7 @@ use crate::sample_table_writer::open_track::OpenTrack;
 /// ```
 #[derive(Clone, Debug)]
 pub struct SampleTableWriter {
+    trak: Vec<TrackBox>,
     tracks: BTreeMap<u32, OpenTrack>,
     state: State,
 }
@@ -249,17 +267,32 @@ struct OpenChunk {
 
 impl OpenChunk {
     /// Places `sample` at the end of this chunk, on the tables of its track in `tracks`, and hands its bytes back
+    ///
+    /// The first sample of the chunk is checked against `trak`, the tracks
+    /// the movie declares.
     fn place(
         &mut self,
         sample: Sample,
+        trak: &[TrackBox],
         tracks: &mut BTreeMap<u32, OpenTrack>,
     ) -> Result<Vec<u8>, Error> {
         let track_id = sample.track_id();
-        let held = self.held.get_or_insert(HeldSamples {
-            track_id,
-            sample_description_index: sample.sample_description_index(),
-            sample_count: 0,
-        });
+        let held = match &mut self.held {
+            Some(held) => held,
+            None => {
+                let trak = trak
+                    .iter()
+                    .find(|trak| trak.tkhd().track_id() == track_id)
+                    .ok_or(Error::unknown_track_id(track_id))?;
+                SampleDescriptions::new(trak)
+                    .data_reference_index(sample.sample_description_index())?;
+                self.held.insert(HeldSamples {
+                    track_id,
+                    sample_description_index: sample.sample_description_index(),
+                    sample_count: 0,
+                })
+            }
+        };
         if held.track_id != track_id {
             return Err(Error::track_id_mismatch(track_id, held.track_id));
         }
@@ -286,10 +319,11 @@ struct HeldSamples {
 }
 
 impl SampleTableWriter {
-    /// Creates a writer waiting for the first chunk
+    /// Creates a writer for the sample tables of `movie`, waiting for the first chunk
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new(movie: &MovieBox) -> Self {
         Self {
+            trak: movie.trak().to_vec(),
             tracks: BTreeMap::new(),
             state: State::Between,
         }
@@ -323,6 +357,17 @@ impl SampleTableWriter {
     ///
     /// * [`NoChunkOpen`](crate::ErrorKind::NoChunkOpen): no chunk was
     ///   opened to carry it.
+    /// * [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId): the movie
+    ///   declares no track the sample belongs to.
+    /// * [`UnknownSampleDescriptionIndex`](crate::ErrorKind::UnknownSampleDescriptionIndex):
+    ///   the track has no `stsd` entry describing the sample.
+    /// * The failures of [`SampleEntry::try_from`](isobmff_boxes::SampleEntry),
+    ///   carried on [`Box`](crate::ErrorKind::Box): that entry does not read
+    ///   as a sample entry, with `stsd` added to the containers.
+    /// * [`UnknownDataReferenceIndex`](crate::ErrorKind::UnknownDataReferenceIndex):
+    ///   that entry names a `dref` entry the track has none of.
+    /// * [`ExternalDataReference`](crate::ErrorKind::ExternalDataReference):
+    ///   the `dref` entry names a resource other than the file itself.
     /// * [`TrackIdMismatch`](crate::ErrorKind::TrackIdMismatch): the
     ///   sample belongs to another track than the chunk holds.
     /// * [`SampleDescriptionIndexMismatch`](crate::ErrorKind::SampleDescriptionIndexMismatch):
@@ -347,7 +392,7 @@ impl SampleTableWriter {
             return Err(self.fail(Error::no_chunk_open()));
         };
         chunk
-            .place(sample, &mut self.tracks)
+            .place(sample, &self.trak, &mut self.tracks)
             .map_err(|failure| self.fail(failure))
     }
 
@@ -412,12 +457,6 @@ impl SampleTableWriter {
     }
 }
 
-impl Default for SampleTableWriter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use alloc::collections::BTreeMap;
@@ -431,9 +470,16 @@ mod tests {
         SampleToChunkBox, SampleToChunkEntry, TimeToSampleBox, TimeToSampleEntry,
     };
 
+    use isobmff_test_support::{movie_declaring, track};
+
     use super::{SampleTableWriter, SampleTables};
     use crate::error::Error;
     use crate::sample::Sample;
+
+    /// Writer for the sample tables of a movie of tracks 1 and 2
+    pub(super) fn writer() -> SampleTableWriter {
+        SampleTableWriter::new(&movie_declaring(vec![track(1), track(2)]))
+    }
 
     /// Sample of `track_id` at `decode_time` lasting 1024 units, carrying `data`
     pub(super) fn sample(track_id: u32, decode_time: u64, data: &[u8]) -> Sample {
@@ -450,7 +496,7 @@ mod tests {
 
     /// Lays `chunks` out, each `(chunk_offset, samples)`, and hands back the tables
     pub(super) fn laid_out(chunks: Vec<(u64, Vec<Sample>)>) -> BTreeMap<u32, SampleTables> {
-        let mut writer = SampleTableWriter::new();
+        let mut writer = writer();
 
         for (chunk_offset, samples) in chunks {
             writer.begin_chunk(chunk_offset).unwrap();
@@ -464,7 +510,7 @@ mod tests {
 
     #[test]
     fn the_bytes_of_a_sample_are_handed_straight_back() {
-        let mut writer = SampleTableWriter::new();
+        let mut writer = writer();
 
         writer.begin_chunk(1_000).unwrap();
 
@@ -614,7 +660,7 @@ mod tests {
 
     #[test]
     fn a_sample_handed_over_while_no_chunk_is_open_is_refused() {
-        let mut writer = SampleTableWriter::new();
+        let mut writer = writer();
 
         assert_eq!(
             writer.handle_sample(sample(1, 0, b"AAAA")),
@@ -624,7 +670,7 @@ mod tests {
 
     #[test]
     fn a_sample_of_another_track_than_the_chunk_holds_is_refused() {
-        let mut writer = SampleTableWriter::new();
+        let mut writer = writer();
 
         writer.begin_chunk(1_000).unwrap();
         writer.handle_sample(sample(1, 0, b"AAAA")).unwrap();
@@ -639,7 +685,7 @@ mod tests {
     fn samples_of_one_chunk_described_by_two_entries_are_refused() {
         let described_by_the_second =
             Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 2, b"BBBB".to_vec());
-        let mut writer = SampleTableWriter::new();
+        let mut writer = writer();
 
         writer.begin_chunk(1_000).unwrap();
         writer.handle_sample(sample(1, 0, b"AAAA")).unwrap();
@@ -682,7 +728,7 @@ mod tests {
 
     #[test]
     fn anything_handed_over_after_the_samples_were_declared_over_is_refused() {
-        let mut writer = SampleTableWriter::new();
+        let mut writer = writer();
 
         writer.finish().unwrap();
 
@@ -696,7 +742,7 @@ mod tests {
 
     #[test]
     fn a_failure_is_reported_again_for_every_call_after_it() {
-        let mut writer = SampleTableWriter::new();
+        let mut writer = writer();
 
         writer.begin_chunk(1_000).unwrap();
         writer.handle_sample(sample(1, 0, b"AAAA")).unwrap();
@@ -713,6 +759,33 @@ mod tests {
         assert_eq!(
             writer.finish(),
             Err(Error::decode_time_mismatch(1, 512, 1_024))
+        );
+    }
+
+    #[test]
+    fn a_sample_the_movie_does_not_resolve_is_refused_where_it_is_handed_over() {
+        let refused = |sample: Sample| {
+            let mut writer = writer();
+            writer.begin_chunk(1_000).unwrap();
+
+            writer.handle_sample(sample)
+        };
+
+        assert_eq!(
+            refused(sample(999, 0, b"AAAA")),
+            Err(Error::unknown_track_id(999))
+        );
+        assert_eq!(
+            refused(Sample::new(
+                1,
+                0,
+                1_024,
+                0,
+                SampleFlags::ZERO,
+                2,
+                b"AAAA".to_vec()
+            )),
+            Err(Error::unknown_sample_description_index(1, 2))
         );
     }
 }

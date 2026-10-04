@@ -5,13 +5,15 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{
     CompositionTimeOffset, MediaDataBox, MovieFragmentBox, MovieFragmentHeaderBox, SampleFlags,
-    StatedTrackRunSample, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
-    TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunBuilder,
+    StatedTrackRunSample, TrackBox, TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox,
+    TrackFragmentBox, TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox,
+    TrackRunBuilder,
 };
 use isobmff_core::{BoxDefinition as _, BoxEncode as _};
 
 use crate::error::Error;
 use crate::sample::Sample;
+use crate::sample_description::SampleDescriptions;
 use crate::track_decode_times::TrackDecodeTimes;
 
 /// Samples of one track lying next to each other in the media data of a fragment
@@ -109,12 +111,15 @@ impl OpenFragment {
 
     /// Places `sample` in the fragment, its bytes on the end of the media data
     ///
-    /// `decode_times` is where the fragments closed before this one leave each
-    /// track, which a track reaching this fragment for the first time is
-    /// checked against.
+    /// A track reaching this fragment for the first time is checked against
+    /// `trak` and `trex`, which the movie declares its tracks by, and against
+    /// `decode_times`, where the fragments closed before this one leave each
+    /// track.
     pub(super) fn place(
         &mut self,
         sample: Sample,
+        trak: &[TrackBox],
+        trex: &[TrackExtendsBox],
         decode_times: &TrackDecodeTimes,
     ) -> Result<(), Error> {
         let track_id = sample.track_id();
@@ -168,6 +173,12 @@ impl OpenFragment {
                 track.place(row, data_offset, carries_on)?;
             }
             None => {
+                let trak = trak.iter().find(|trak| trak.tkhd().track_id() == track_id);
+                let trex = trex.iter().find(|trex| trex.track_id() == track_id);
+                let (Some(trak), Some(_trex)) = (trak, trex) else {
+                    return Err(Error::unknown_track_id(track_id));
+                };
+                SampleDescriptions::new(trak).data_reference_index(sample_description_index)?;
                 let placed = self.placement.decode_time(track_id).unwrap_or(decode_time);
                 if let Some(reached) = decode_times
                     .decode_time(track_id)
@@ -332,8 +343,7 @@ mod tests {
     use isobmff_core::BoxEncode as _;
 
     use crate::error::Error;
-    use crate::movie_fragment_writer::MovieFragmentWriter;
-    use crate::movie_fragment_writer::tests::sample;
+    use crate::movie_fragment_writer::tests::{sample, writer};
     use crate::sample::Sample;
 
     /// Bytes the header of the `mdat` beside a fragment occupies
@@ -387,7 +397,7 @@ mod tests {
 
     /// Writes `samples` as one fragment, and returns the boxes it is written as
     fn one_fragment(samples: Vec<Sample>) -> (MovieFragmentBox, Vec<u8>) {
-        let mut writer = MovieFragmentWriter::new();
+        let mut writer = writer();
 
         writer.begin_fragment(1).unwrap();
         for sample in samples {
@@ -454,7 +464,7 @@ mod tests {
 
     #[test]
     fn a_decode_time_is_written_for_every_fragment_of_a_track() {
-        let mut writer = MovieFragmentWriter::new();
+        let mut writer = writer();
         let mut decode_times = Vec::new();
 
         for (sequence_number, decode_time) in [(1, 0), (2, 8_192)] {
@@ -477,8 +487,8 @@ mod tests {
     #[test]
     fn a_fragment_opened_continuing_places_every_track_where_it_reached() {
         let first_fragment = [timed(1, 0, 3_000, 0), timed(2, 0, 1_024, 0)];
-        let mut continuing = MovieFragmentWriter::new();
-        let mut stated = MovieFragmentWriter::new();
+        let mut continuing = writer();
+        let mut stated = writer();
         for writer in [&mut continuing, &mut stated] {
             writer.begin_fragment(1).unwrap();
             for sample in first_fragment.clone() {
@@ -519,7 +529,7 @@ mod tests {
 
     #[test]
     fn a_first_fragment_opened_continuing_places_its_tracks_at_zero() {
-        let mut writer = MovieFragmentWriter::new();
+        let mut writer = writer();
 
         writer.begin_fragment_continuing(1).unwrap();
         writer.handle_sample(sample(1, 90_000, b"AAAA")).unwrap();
@@ -702,7 +712,7 @@ mod tests {
     #[test]
     fn a_composition_time_offset_no_run_writes_is_refused() {
         let past_the_field = i64::from(u32::MAX).saturating_add(1);
-        let mut writer = MovieFragmentWriter::new();
+        let mut writer = writer();
 
         writer.begin_fragment(1).unwrap();
 
@@ -728,7 +738,7 @@ mod tests {
 
     #[test]
     fn a_sample_that_does_not_start_where_the_one_before_it_ends_is_refused() {
-        let mut writer = MovieFragmentWriter::new();
+        let mut writer = writer();
 
         writer.begin_fragment(1).unwrap();
         writer.handle_sample(sample(1, 0, b"AAAA")).unwrap();
@@ -741,7 +751,7 @@ mod tests {
 
     #[test]
     fn a_mismatch_in_a_fragment_opened_continuing_is_reported_in_the_times_the_samples_state() {
-        let mut writer = MovieFragmentWriter::new();
+        let mut writer = writer();
 
         writer.begin_fragment(1).unwrap();
         writer.handle_sample(sample(1, 0, b"AAAA")).unwrap();
@@ -759,7 +769,7 @@ mod tests {
     fn samples_of_one_fragment_described_by_two_entries_are_refused() {
         let described_by_the_second =
             Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 2, b"BBBB".to_vec());
-        let mut writer = MovieFragmentWriter::new();
+        let mut writer = writer();
 
         writer.begin_fragment(1).unwrap();
         writer.handle_sample(sample(1, 0, b"AAAA")).unwrap();
@@ -781,7 +791,7 @@ mod tests {
             1,
             b"AAAA".to_vec(),
         );
-        let mut writer = MovieFragmentWriter::new();
+        let mut writer = writer();
 
         writer.begin_fragment(1).unwrap();
 

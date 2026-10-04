@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use isobmff_boxes::{MediaDataBox, SegmentTypeBox};
+use isobmff_boxes::{MediaDataBox, MovieBox, SegmentTypeBox};
 use isobmff_core::{BoxDefinition, BoxEncode, BoxType};
 use isobmff_sample::{MovieFragmentWriter, Sample};
 use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
@@ -18,7 +18,8 @@ use crate::{Error, whole_box_header, whole_payload};
 /// each box whole, the laying out of the samples of a fragment as its `moof`
 /// and the media data beside it, and the framing of the segment — so a
 /// caller hands over brands and samples and takes bytes. The movie the
-/// segment continues is not written: a segment carries none. It holds no
+/// segment continues — that of the initialization segment — is taken when
+/// the mux FSM is made, and not written: a segment carries none. It holds no
 /// rule of its own, and reaches for no destination: when to write and to
 /// where stay with the caller.
 ///
@@ -36,7 +37,9 @@ use crate::{Error, whole_box_header, whole_payload};
 ///   [`finish_fragment`](Self::finish_fragment) as the `moof` and the `mdat`
 ///   the sample layer made of it. What the samples themselves must hold to
 ///   is [`MovieFragmentWriter`]'s contract, reported as
-///   [`Sample`](crate::ErrorKind::Sample); a segment written apart
+///   [`Sample`](crate::ErrorKind::Sample): the samples are checked against
+///   the movie of the initialization segment, and a movie that continues in
+///   no fragments is refused by [`new`](Self::new). A segment written apart
 ///   from the ones before it starts each track where its first sample
 ///   states, since every fragment states a `tfdt`, or at zero where the first
 ///   fragment carrying the track was opened by
@@ -57,12 +60,13 @@ use crate::{Error, whole_box_header, whole_payload};
 /// # Examples
 ///
 /// ```
-/// use isobmff_boxes::SampleFlags;
+/// use isobmff_boxes::{SampleFlags, TrackExtendsBox};
 /// use isobmff_sample::Sample;
 /// use isobmff_structure::MediaSegmentMuxFsm;
-/// # use isobmff_test_support::segment_type;
-/// // A segment opening with its brands
-/// let mut mux_fsm = MediaSegmentMuxFsm::new();
+/// # use isobmff_test_support::{fragmented_movie, segment_type};
+/// // A segment continuing the movie of track 1, opening with its brands
+/// let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO));
+/// let mut mux_fsm = MediaSegmentMuxFsm::new(&movie)?;
 /// mux_fsm.handle_segment_type(segment_type())?;
 ///
 /// // One fragment of two samples of track 1, lasting 1024 units each
@@ -103,15 +107,23 @@ enum State {
 }
 
 impl MediaSegmentMuxFsm {
-    /// Creates a mux FSM waiting at the start of a media segment
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
+    /// Creates a mux FSM waiting at the start of a media segment that continues `movie`
+    ///
+    /// `movie` is the movie of the initialization segment, which the samples
+    /// are checked against.
+    ///
+    /// # Errors
+    ///
+    /// * [`Sample`](crate::ErrorKind::Sample): the movie is one
+    ///   [`MovieFragmentWriter::new`] refuses — it carries no `mvex`, or its
+    ///   sample tables lay samples out.
+    pub fn new(movie: &MovieBox) -> Result<Self, Error> {
+        Ok(Self {
             boxes: BoxWriter::new(),
             structure: MediaSegmentStructure::new(),
-            samples: MovieFragmentWriter::new(),
+            samples: MovieFragmentWriter::new(movie)?,
             state: State::Writing,
-        }
+        })
     }
 
     /// Takes the brands the segment declares itself readable as, and lays them down
@@ -315,25 +327,20 @@ impl MediaSegmentMuxFsm {
     }
 }
 
-impl Default for MediaSegmentMuxFsm {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use isobmff_boxes::{MovieFragmentBox, SegmentTypeBox};
+    use isobmff_boxes::{MovieFragmentBox, SampleFlags, SegmentTypeBox};
     use isobmff_core::BoxDefinition;
-    use isobmff_test_support::segment_type;
+    use isobmff_sample::Sample;
+    use isobmff_test_support::{segment_type, unfragmented_movie};
 
-    use super::super::tests::sample;
+    use super::super::tests::{movie, sample};
     use super::{Error, MediaSegmentMuxFsm};
     use crate::ErrorKind;
 
     #[test]
     fn a_segment_declaring_no_brands_is_laid_down_all_the_same() {
-        let mut mux_fsm = MediaSegmentMuxFsm::new();
+        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
 
         mux_fsm.begin_fragment(1).unwrap();
         mux_fsm.finish_fragment().unwrap();
@@ -344,7 +351,7 @@ mod tests {
 
     #[test]
     fn brands_handed_over_after_a_fragment_are_rejected() {
-        let mut mux_fsm = MediaSegmentMuxFsm::new();
+        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
 
         mux_fsm.begin_fragment(1).unwrap();
         mux_fsm.finish_fragment().unwrap();
@@ -357,7 +364,7 @@ mod tests {
 
     #[test]
     fn a_sample_handed_over_while_no_fragment_is_open_is_rejected() {
-        let mut mux_fsm = MediaSegmentMuxFsm::new();
+        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
 
         assert_eq!(
             mux_fsm.handle_sample(sample()).map_err(Error::kind),
@@ -366,8 +373,42 @@ mod tests {
     }
 
     #[test]
+    fn a_mux_fsm_is_made_only_for_a_movie_continued_in_fragments() {
+        assert_eq!(
+            MediaSegmentMuxFsm::new(&unfragmented_movie())
+                .map(|_mux_fsm| ())
+                .map_err(Error::kind),
+            Err(ErrorKind::Sample(
+                isobmff_sample::ErrorKind::MissingMovieExtends
+            ))
+        );
+    }
+
+    #[test]
+    fn a_sample_of_a_track_the_movie_of_the_initialization_segment_does_not_declare_is_rejected() {
+        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
+
+        mux_fsm.begin_fragment(1).unwrap();
+
+        assert_eq!(
+            mux_fsm
+                .handle_sample(Sample::new(
+                    999,
+                    0,
+                    1_024,
+                    0,
+                    SampleFlags::ZERO,
+                    1,
+                    b"SAMP".to_vec()
+                ))
+                .map_err(Error::kind),
+            Err(ErrorKind::Sample(isobmff_sample::ErrorKind::UnknownTrackId))
+        );
+    }
+
+    #[test]
     fn a_segment_declared_over_without_a_fragment_is_rejected() {
-        let mut mux_fsm = MediaSegmentMuxFsm::new();
+        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
 
         mux_fsm.handle_segment_type(segment_type()).unwrap();
 
@@ -379,7 +420,7 @@ mod tests {
 
     #[test]
     fn a_failed_mux_fsm_reports_the_same_failure_for_every_call_after_it() {
-        let mut mux_fsm = MediaSegmentMuxFsm::new();
+        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
 
         mux_fsm.handle_segment_type(segment_type()).unwrap();
         let failure = mux_fsm.finish().unwrap_err();
@@ -391,7 +432,7 @@ mod tests {
 
     #[test]
     fn a_failed_mux_fsm_hands_over_the_bytes_it_had_already_laid_down() {
-        let mut mux_fsm = MediaSegmentMuxFsm::new();
+        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
 
         mux_fsm.handle_segment_type(segment_type()).unwrap();
 
@@ -402,7 +443,7 @@ mod tests {
 
     #[test]
     fn anything_handed_over_after_finishing_is_rejected() {
-        let mut mux_fsm = MediaSegmentMuxFsm::new();
+        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
 
         mux_fsm.begin_fragment(1).unwrap();
         mux_fsm.finish_fragment().unwrap();

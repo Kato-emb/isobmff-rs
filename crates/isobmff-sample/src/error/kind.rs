@@ -42,11 +42,13 @@ pub enum ErrorKind {
     /// the subsegments of a `sidx` (ISO/IEC 14496-12 §8.16.3), the stream the
     /// index names by its `reference_ID`.
     DataOffsetOverflow,
-    /// Fragment carries samples of a track the movie never declared
+    /// Sample belongs to a track the movie never declared
     ///
     /// A track is declared by a `trak` and, for its fragments, a `trex`
     /// (ISO/IEC 14496-12 §8.8.3); a fragment of a track missing either is
-    /// refused. [`track_id`](crate::Error::track_id) is the track it names.
+    /// refused, as is a sample handed to a writer whose track the movie
+    /// declares no `trak` for, or, for fragments, no `trex`.
+    /// [`track_id`](crate::Error::track_id) is the track it names.
     UnknownTrackId,
     /// Samples are described by an `stsd` entry their track has none of
     ///
@@ -61,6 +63,13 @@ pub enum ErrorKind {
     /// A movie continued in fragments declares so by its `mvex` (ISO/IEC
     /// 14496-12 §8.8.1); a fragment of a movie carrying none is refused.
     MissingMovieExtends,
+    /// Movie continued in fragments lays samples out in the sample table of a track
+    ///
+    /// The `stts`, `stsc`, sample sizes or chunk offsets of a track of a movie
+    /// continued in fragments (ISO/IEC 14496-12 §8.8.1) lay a sample out,
+    /// which a writer laying out fragments refuses.
+    /// [`track_id`](crate::Error::track_id) is the track.
+    SampleTableNotEmpty,
     /// Sample entry names a `dref` entry the track has none of
     ///
     /// [`track_id`](crate::Error::track_id) is the track it belongs to, and
