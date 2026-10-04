@@ -16,14 +16,22 @@ use crate::sample::Sample;
 use crate::sample_description::SampleDescriptions;
 use crate::track_decode_times::TrackDecodeTimes;
 
+/// One sample of a run as the writer holds it, every field its row can carry stated
+#[derive(Clone, Copy, Debug)]
+struct StatedTrackRunSample {
+    sample_duration: u32,
+    sample_size: u32,
+    sample_flags: SampleFlags,
+    sample_composition_time_offset: CompositionTimeOffset,
+}
+
 /// Samples of one track lying next to each other in the media data of a fragment
 ///
-/// `data_offset` is where the run starts in that media data, and every row
-/// states all four fields of its sample.
+/// `data_offset` is where the run starts in that media data.
 #[derive(Clone, Debug)]
 struct OpenRun {
     data_offset: u64,
-    rows: Vec<TrackRunSample>,
+    rows: Vec<StatedTrackRunSample>,
 }
 
 /// Samples one track contributes to the fragment being written
@@ -43,21 +51,20 @@ struct OpenTrack {
 }
 
 impl OpenTrack {
-    /// Adds `row`, lasting `sample_duration`, to this track, in the run it carries on or one starting at `data_offset`
+    /// Adds `row` to this track, in the run it carries on or one starting at `data_offset`
     ///
     /// `carries_on` states whether the sample handed over before this one
     /// belonged to this track, which is what makes the two lie next to each
     /// other in the media data.
     fn place(
         &mut self,
-        row: TrackRunSample,
-        sample_duration: u32,
+        row: StatedTrackRunSample,
         data_offset: u64,
         carries_on: bool,
     ) -> Result<(), Error> {
         self.reached = self
             .reached
-            .checked_add(u64::from(sample_duration))
+            .checked_add(u64::from(row.sample_duration))
             .ok_or(Error::decode_time_overflow(self.track_id))?;
 
         match self.runs.last_mut() {
@@ -72,7 +79,7 @@ impl OpenTrack {
     }
 
     /// Returns every row of every run of the track, in the order they were placed
-    fn rows(&self) -> impl Iterator<Item = &TrackRunSample> {
+    fn rows(&self) -> impl Iterator<Item = &StatedTrackRunSample> {
         self.runs.iter().flat_map(|run| &run.rows)
     }
 }
@@ -132,13 +139,12 @@ impl OpenFragment {
             ));
         };
 
-        let sample_duration = sample.sample_duration();
-        let row = TrackRunSample::new(
-            Some(sample_duration),
-            Some(sample_size),
-            Some(sample.sample_flags()),
-            Some(sample_composition_time_offset),
-        );
+        let row = StatedTrackRunSample {
+            sample_duration: sample.sample_duration(),
+            sample_size,
+            sample_flags: sample.sample_flags(),
+            sample_composition_time_offset,
+        };
         let decode_time = sample.decode_time();
         let sample_description_index = sample.sample_description_index();
         let data_offset = self.media_data.len() as u64;
@@ -169,7 +175,7 @@ impl OpenFragment {
                     return Err(Error::decode_time_mismatch(track_id, decode_time, expected));
                 }
 
-                track.place(row, sample_duration, data_offset, carries_on)?;
+                track.place(row, data_offset, carries_on)?;
             }
             None => {
                 let trak = trak.iter().find(|trak| trak.tkhd().track_id() == track_id);
@@ -194,7 +200,7 @@ impl OpenFragment {
                     sample_description_index,
                     runs: Vec::new(),
                 };
-                track.place(row, sample_duration, data_offset, false)?;
+                track.place(row, data_offset, false)?;
                 self.placed_tracks.insert(track_id, self.tracks.len());
                 self.tracks.push(track);
             }
@@ -248,14 +254,12 @@ struct Defaults {
 impl Defaults {
     /// Returns what the samples of `track` share
     fn of(track: &OpenTrack) -> Self {
-        let flags = || track.rows().map(TrackRunSample::sample_flags);
+        let flags = || track.rows().map(|row| row.sample_flags);
 
         Self {
-            sample_duration: shared(track.rows().map(TrackRunSample::sample_duration)).flatten(),
-            sample_size: shared(track.rows().map(TrackRunSample::sample_size)).flatten(),
-            sample_flags: shared(flags())
-                .or_else(|| shared(flags().skip(1)))
-                .flatten(),
+            sample_duration: shared(track.rows().map(|row| row.sample_duration)),
+            sample_size: shared(track.rows().map(|row| row.sample_size)),
+            sample_flags: shared(flags()).or_else(|| shared(flags().skip(1))),
         }
     }
 }
@@ -320,17 +324,29 @@ fn build_track_fragment(track: &OpenTrack, base: Option<u64>) -> Result<TrackFra
                 }
                 None => 0,
             };
-            let track_run = TrackRunBox::new(Some(data_offset), None, run.rows.clone())
-                .ok_or_else(|| {
-                    let widest = run.rows.iter().filter_map(|row| {
-                        row.sample_composition_time_offset()
-                            .map(CompositionTimeOffset::get)
-                    });
-                    Error::composition_time_offset_out_of_range(
-                        track.track_id,
-                        widest.max().unwrap_or_default(),
+            let rows = run
+                .rows
+                .iter()
+                .map(|row| {
+                    TrackRunSample::new(
+                        Some(row.sample_duration),
+                        Some(row.sample_size),
+                        Some(row.sample_flags),
+                        Some(row.sample_composition_time_offset),
                     )
-                })?;
+                })
+                .collect();
+            let track_run = TrackRunBox::new(Some(data_offset), None, rows).ok_or_else(|| {
+                let widest = run
+                    .rows
+                    .iter()
+                    .map(|row| row.sample_composition_time_offset.get())
+                    .max();
+                Error::composition_time_offset_out_of_range(
+                    track.track_id,
+                    widest.unwrap_or_default(),
+                )
+            })?;
 
             Ok(track_run.without_defaults(&header))
         })

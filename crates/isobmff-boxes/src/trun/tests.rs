@@ -4,8 +4,8 @@ use alloc::vec::Vec;
 use isobmff_core::{BoxDecode, BoxEncode, Error};
 
 use super::{CompositionTimeOffset, MAXIMUM_EMPTY_ROWS, TrackRunBox, TrackRunSample};
+use crate::SampleFlags;
 use crate::tfhd::{TrackFragmentHeaderBox, TrackFragmentHeaderFlags};
-use crate::{DegradationPriorityEntry, PaddingBitsEntry, SampleDependencyTypeEntry, SampleFlags};
 
 /// Row stating the size of its sample and the offset to its composition time
 fn sample(sample_size: u32, sample_composition_time_offset: i64) -> TrackRunSample {
@@ -224,26 +224,6 @@ fn a_version_the_box_does_not_read_is_rejected() {
     );
 }
 
-/// Flags of a sync sample that depends on no other
-fn independent() -> SampleFlags {
-    SampleFlags::new(
-        SampleDependencyTypeEntry::new(0, 2, 0, 0).unwrap(),
-        PaddingBitsEntry::default(),
-        false,
-        DegradationPriorityEntry::default(),
-    )
-}
-
-/// Flags of a sample that depends on others and is left out of the sync samples
-fn dependent() -> SampleFlags {
-    SampleFlags::new(
-        SampleDependencyTypeEntry::new(0, 1, 0, 0).unwrap(),
-        PaddingBitsEntry::default(),
-        true,
-        DegradationPriorityEntry::default(),
-    )
-}
-
 /// Row stating every field: a sample lasting 1024 units and occupying 4 bytes, flagged `sample_flags`, composed at `offset`
 fn stated(sample_flags: SampleFlags, offset: i64) -> TrackRunSample {
     TrackRunSample::new(
@@ -317,15 +297,18 @@ fn a_field_a_row_differs_from_its_default_on_is_stated_by_every_row() {
 #[test]
 fn flags_only_the_first_row_differs_on_are_its_own() {
     let run = without_defaults(
-        &[stated(independent(), 0), stated(dependent(), 0)],
-        &header(Some(1_024), Some(4), Some(dependent())),
+        &[
+            stated(SampleFlags::SYNC_SAMPLE, 0),
+            stated(SampleFlags::NON_SYNC_SAMPLE, 0),
+        ],
+        &header(Some(1_024), Some(4), Some(SampleFlags::NON_SYNC_SAMPLE)),
     );
 
     assert_eq!(
         run,
         TrackRunBox::new(
             None,
-            Some(independent()),
+            Some(SampleFlags::SYNC_SAMPLE),
             vec![TrackRunSample::new(None, None, None, None); 2]
         )
         .unwrap()
@@ -335,8 +318,11 @@ fn flags_only_the_first_row_differs_on_are_its_own() {
 #[test]
 fn flags_a_later_row_differs_on_are_stated_by_every_row() {
     let run = without_defaults(
-        &[stated(dependent(), 0), stated(independent(), 0)],
-        &header(Some(1_024), Some(4), Some(dependent())),
+        &[
+            stated(SampleFlags::NON_SYNC_SAMPLE, 0),
+            stated(SampleFlags::SYNC_SAMPLE, 0),
+        ],
+        &header(Some(1_024), Some(4), Some(SampleFlags::NON_SYNC_SAMPLE)),
     );
 
     assert_eq!(
@@ -345,8 +331,8 @@ fn flags_a_later_row_differs_on_are_stated_by_every_row() {
             None,
             None,
             vec![
-                TrackRunSample::new(None, None, Some(dependent()), None),
-                TrackRunSample::new(None, None, Some(independent()), None),
+                TrackRunSample::new(None, None, Some(SampleFlags::NON_SYNC_SAMPLE), None),
+                TrackRunSample::new(None, None, Some(SampleFlags::SYNC_SAMPLE), None),
             ]
         )
         .unwrap()
