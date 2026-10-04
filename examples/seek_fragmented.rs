@@ -23,7 +23,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let path = arguments.next().ok_or(usage)?;
     let milliseconds: u64 = arguments.next().ok_or(usage)?.parse()?;
 
-    let mut source = Source::new(File::open(path)?)?;
+    let file = File::open(path)?;
+    let file_len = file.metadata()?.len();
+    let mut source = Source::new(file)?;
     let mut demux_fsm = FragmentedDemuxFsm::new();
     while demux_fsm.movie().is_none() {
         let wanted = demux_fsm
@@ -36,10 +38,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             demux_fsm.handle_input(wanted.offset(), bytes)?;
         }
     }
-    let mfra = source
-        .locate_movie_fragment_random_access()?
-        .ok_or("the file does not close with an mfra")?;
-    demux_fsm.resume_at(mfra)?;
+    demux_fsm.resume_at_movie_fragment_random_access(file_len)?;
     while let Some(wanted) = demux_fsm.wanted_input() {
         let bytes = source.read_at(wanted.offset(), wanted.length())?;
         if bytes.is_empty() {
@@ -51,7 +50,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let movie = demux_fsm.movie().ok_or("the file carries no movie")?;
     let random_access = demux_fsm
         .movie_fragment_random_access()
-        .ok_or("the mfra did not read")?;
+        .ok_or("the file does not close with an mfra")?;
     let mut moof_offsets = Vec::new();
     for tfra in random_access.tfra() {
         let timescale = movie

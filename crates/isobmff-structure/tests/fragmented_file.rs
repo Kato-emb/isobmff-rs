@@ -9,6 +9,7 @@ mod reading;
 
 #[cfg(test)]
 mod tests {
+    use isobmff_boxes::MovieFragmentRandomAccessOffsetBox;
     use isobmff_core::BoxType;
     use isobmff_sequence::BoxEvent;
     use isobmff_structure::{Error, ErrorKind, FragmentedDemuxFsm, WantedInput};
@@ -17,7 +18,7 @@ mod tests {
         indexed_fragmented_file, indexed_fragmented_file_without_decode_times,
     };
 
-    use super::reading::{drained, samples_of};
+    use super::reading::{drained, read_on, samples_of};
 
     /// Reader that read `file` whole and was declared over
     fn read_whole(file: &IndexedFile) -> FragmentedDemuxFsm {
@@ -209,6 +210,108 @@ mod tests {
                 Some(WantedInput::new(second, None)),
                 Some(WantedInput::new(file_length, None))
             ]
+        );
+    }
+
+    /// Demux FSM that read `bytes` up to `first`, the offset of the first fragment, then was told the file is `file_len` long to find its `mfra`
+    fn locating_after_the_movie(bytes: &[u8], first: u64, file_len: u64) -> FragmentedDemuxFsm {
+        let mut demux_fsm = FragmentedDemuxFsm::new();
+        demux_fsm
+            .handle_input(0, bytes.get(..usize::try_from(first).unwrap()).unwrap())
+            .unwrap();
+        demux_fsm
+            .resume_at_movie_fragment_random_access(file_len)
+            .unwrap();
+
+        demux_fsm
+    }
+
+    #[test]
+    fn the_mfra_closing_the_file_is_read_however_its_last_bytes_are_cut() {
+        let file = indexed_fragmented_file();
+        let first = *file.moof_offsets.first().unwrap();
+        let file_len = u64::try_from(file.bytes.len()).unwrap();
+        let read_in_order = read_whole(&file).movie_fragment_random_access().cloned();
+
+        for cut_length in [1, 7, file.bytes.len()] {
+            let mut demux_fsm = locating_after_the_movie(&file.bytes, first, file_len);
+
+            assert_eq!(
+                (
+                    read_on(&mut demux_fsm, &file.bytes, cut_length),
+                    demux_fsm.movie_fragment_random_access().cloned()
+                ),
+                (Vec::new(), read_in_order.clone())
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_too_short_for_an_mfro_closing_with_none_or_with_one_stepping_back_past_its_start_is_declared_over_and_read_again_from_a_fragment()
+     {
+        let file = indexed_fragmented_file();
+        let first = *file.moof_offsets.first().unwrap();
+        let mfra_start = file
+            .bytes
+            .last_chunk::<4>()
+            .map(|size| usize::try_from(u32::from_be_bytes(*size)).unwrap())
+            .and_then(|size| file.bytes.len().checked_sub(size))
+            .unwrap();
+        let no_mfra = file.bytes.get(..mfra_start).unwrap();
+        let mut past_the_start = file.bytes.clone();
+        *past_the_start.last_chunk_mut::<4>().unwrap() = u32::MAX.to_be_bytes();
+
+        let read = [
+            (
+                file.bytes.as_slice(),
+                MovieFragmentRandomAccessOffsetBox::ENCODED_LEN.saturating_sub(1),
+            ),
+            (no_mfra, no_mfra.len()),
+            (past_the_start.as_slice(), past_the_start.len()),
+        ]
+        .map(|(bytes, file_len)| {
+            let mut demux_fsm =
+                locating_after_the_movie(bytes, first, u64::try_from(file_len).unwrap());
+            let located = read_on(&mut demux_fsm, bytes, 7);
+            let declared_over = (
+                demux_fsm.wanted_input(),
+                demux_fsm.movie_fragment_random_access().cloned(),
+            );
+            demux_fsm.resume_at(first).unwrap();
+
+            (located, declared_over, read_on(&mut demux_fsm, bytes, 7))
+        });
+
+        let read_again = (Vec::new(), (None, None), file.fragment_samples.concat());
+        assert_eq!(vec![read_again; 3], read);
+    }
+
+    #[test]
+    fn input_elsewhere_than_the_closing_bytes_is_refused_and_finishing_then_declares_the_file_over()
+    {
+        let file = indexed_fragmented_file();
+        let file_len = u64::try_from(file.bytes.len()).unwrap();
+        let closing_len = u64::try_from(MovieFragmentRandomAccessOffsetBox::ENCODED_LEN).unwrap();
+        let mut demux_fsm = FragmentedDemuxFsm::new();
+        demux_fsm
+            .resume_at_movie_fragment_random_access(file_len)
+            .unwrap();
+
+        let refused = demux_fsm.handle_input(0, &file.bytes);
+        let wanted = demux_fsm.wanted_input();
+        let finished = demux_fsm.finish();
+
+        assert_eq!(
+            (refused, wanted, finished, demux_fsm.wanted_input()),
+            (
+                Err(Error::unwanted_input(0)),
+                Some(WantedInput::new(
+                    file_len.saturating_sub(closing_len),
+                    Some(closing_len)
+                )),
+                Ok(()),
+                None
+            )
         );
     }
 }

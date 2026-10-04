@@ -9,7 +9,15 @@ use isobmff_structure::FragmentedDemuxFsm;
 
 /// The samples `file` carries, read off it where the demux FSM wants, `cut_length` bytes at a time at most
 pub(crate) fn samples_of(file: &[u8], cut_length: usize) -> Vec<Sample> {
-    let mut demux_fsm = FragmentedDemuxFsm::new();
+    read_on(&mut FragmentedDemuxFsm::new(), file, cut_length)
+}
+
+/// The samples `demux_fsm` reads off `file` where it wants, `cut_length` bytes at a time at most, until it wants no more
+pub(crate) fn read_on(
+    demux_fsm: &mut FragmentedDemuxFsm,
+    file: &[u8],
+    cut_length: usize,
+) -> Vec<Sample> {
     let mut samples = Vec::new();
 
     while let Some(wanted) = demux_fsm.wanted_input() {
@@ -25,7 +33,7 @@ pub(crate) fn samples_of(file: &[u8], cut_length: usize) -> Vec<Sample> {
         } else {
             demux_fsm.handle_input(wanted.offset(), read)
         };
-        samples.extend(drained(&mut demux_fsm));
+        samples.extend(drained(demux_fsm));
         handed.unwrap();
     }
 
