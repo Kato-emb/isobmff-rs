@@ -120,31 +120,33 @@ fn per_sample_field_flags(samples: &[TrackRunSample]) -> u32 {
 /// Row of a run that states no per-sample field
 const EMPTY_ROW: TrackRunSample = TrackRunSample::new(None, None, None, None);
 
-/// What a run holds of its samples: the rows where they carry a field, or how many there are where they carry none
+/// What a run holds of its table: the rows where they carry a field, or the `sample_count` where they are empty
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 enum Rows {
-    Stated(Vec<TrackRunSample>),
-    Empty(u32),
+    Table(Vec<TrackRunSample>),
+    Empty { sample_count: u32 },
 }
 
 impl Rows {
-    /// Holds `rows`, as their count where they carry no field
+    /// Holds `rows`, as their `sample_count` where they carry no field
     fn of(rows: Vec<TrackRunSample>) -> Self {
         if per_sample_field_flags(&rows) == 0 {
             // Why not `as`: every caller holds at most as many rows as a `u32`
             // counts, so the fallback names a run no constructor builds rather
             // than truncating.
-            Self::Empty(u32::try_from(rows.len()).unwrap_or(u32::MAX))
+            Self::Empty {
+                sample_count: u32::try_from(rows.len()).unwrap_or(u32::MAX),
+            }
         } else {
-            Self::Stated(rows)
+            Self::Table(rows)
         }
     }
 
-    /// Returns the rows that carry a field, none where the rows are empty
-    fn stated(&self) -> &[TrackRunSample] {
+    /// Returns the rows of the table, none where the run holds only the `sample_count`
+    fn table(&self) -> &[TrackRunSample] {
         match self {
-            Self::Stated(rows) => rows,
-            Self::Empty(_) => &[],
+            Self::Table(rows) => rows,
+            Self::Empty { .. } => &[],
         }
     }
 }
@@ -268,7 +270,7 @@ impl TrackRunBox {
         Self {
             data_offset,
             first_sample_flags,
-            rows: Rows::Empty(sample_count),
+            rows: Rows::Empty { sample_count },
         }
     }
 
@@ -290,8 +292,8 @@ impl TrackRunBox {
         match &self.rows {
             // Why not `as`: `new` refuses more rows than a `u32` counts, so the
             // fallback names a run no constructor builds rather than truncating.
-            Rows::Stated(rows) => u32::try_from(rows.len()).unwrap_or(u32::MAX),
-            Rows::Empty(sample_count) => *sample_count,
+            Rows::Table(rows) => u32::try_from(rows.len()).unwrap_or(u32::MAX),
+            Rows::Empty { sample_count } => *sample_count,
         }
     }
 
@@ -301,8 +303,8 @@ impl TrackRunBox {
     /// counts.
     pub fn samples(&self) -> impl ExactSizeIterator<Item = TrackRunSample> + '_ {
         match &self.rows {
-            Rows::Stated(rows) => Samples::Stated(rows.iter()),
-            Rows::Empty(sample_count) => Samples::Empty {
+            Rows::Table(rows) => Samples::Table(rows.iter()),
+            Rows::Empty { sample_count } => Samples::Empty {
                 remaining: *sample_count,
             },
         }
@@ -347,7 +349,7 @@ impl TrackRunBox {
     /// ```
     #[must_use]
     pub fn without_defaults(mut self, tfhd: &TrackFragmentHeaderBox) -> Self {
-        let rows = || self.rows.stated().iter();
+        let rows = || self.rows.table().iter();
         let carries_duration = tfhd.default_sample_duration().is_none_or(|default| {
             rows().any(|row| row.sample_duration.is_some_and(|value| value != default))
         });
@@ -376,7 +378,7 @@ impl TrackRunBox {
             _default_the_rows_do_not_share => (true, self.first_sample_flags),
         };
 
-        if let Rows::Stated(mut rows) = self.rows {
+        if let Rows::Table(mut rows) = self.rows {
             for row in &mut rows {
                 row.sample_duration = row.sample_duration.filter(|_| carries_duration);
                 row.sample_size = row.sample_size.filter(|_| carries_size);
@@ -395,7 +397,7 @@ impl TrackRunBox {
 
 /// The rows of a run one after another, or an empty row per sample where the run holds only the `sample_count`
 enum Samples<'rows> {
-    Stated(slice::Iter<'rows, TrackRunSample>),
+    Table(slice::Iter<'rows, TrackRunSample>),
     Empty { remaining: u32 },
 }
 
@@ -404,7 +406,7 @@ impl Iterator for Samples<'_> {
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Stated(rows) => rows.next().cloned(),
+            Self::Table(rows) => rows.next().cloned(),
             Self::Empty { remaining } => {
                 *remaining = remaining.checked_sub(1)?;
 
@@ -415,7 +417,7 @@ impl Iterator for Samples<'_> {
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         match self {
-            Self::Stated(rows) => rows.size_hint(),
+            Self::Table(rows) => rows.size_hint(),
             Self::Empty { remaining } => {
                 let remaining = *remaining as usize;
 
@@ -544,7 +546,7 @@ impl BoxEncode for TrackRunBox {
             .saturating_add(self.data_offset.map_or(0, |_| OPTIONAL_FIELD_LEN))
             .saturating_add(self.first_sample_flags.map_or(0, |_| OPTIONAL_FIELD_LEN));
 
-        let row = u64::from(per_sample_field_flags(self.rows.stated()).count_ones())
+        let row = u64::from(per_sample_field_flags(self.rows.table()).count_ones())
             .saturating_mul(OPTIONAL_FIELD_LEN);
         let rows = row.saturating_mul(u64::from(self.sample_count()));
 
@@ -552,7 +554,7 @@ impl BoxEncode for TrackRunBox {
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        let bits = per_sample_field_flags(self.rows.stated())
+        let bits = per_sample_field_flags(self.rows.table())
             | self.data_offset.map_or(0, |_| DATA_OFFSET_PRESENT)
             | self
                 .first_sample_flags
@@ -563,7 +565,7 @@ impl BoxEncode for TrackRunBox {
         // range when it is written.
         let version = CompositionTimeOffset::version_writing(
             self.rows
-                .stated()
+                .table()
                 .iter()
                 .filter_map(TrackRunSample::sample_composition_time_offset),
         )
@@ -584,7 +586,7 @@ impl BoxEncode for TrackRunBox {
             writer.write_u32(first_sample_flags.bits())?;
         }
 
-        for sample in self.rows.stated() {
+        for sample in self.rows.table() {
             for field in [
                 sample.sample_duration,
                 sample.sample_size,
