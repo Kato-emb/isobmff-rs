@@ -32,8 +32,13 @@ allow = [
 confidence-threshold = 0.9
 # libfuzzer-sys vendors the LLVM libFuzzer sources, which carry NCSA on top of
 # its own MIT OR Apache-2.0. It is a fuzz-only build dependency and never
-# reaches a published artifact.
-exceptions = [{ name = "libfuzzer-sys", allow = ["NCSA"] }]
+# reaches a published artifact. webpki-roots is the Mozilla CA list the
+# examples' HTTP client checks a server against, data under CDLA-Permissive-2.0;
+# the examples crate is not published either.
+exceptions = [
+    { name = "libfuzzer-sys", allow = ["NCSA"] },
+    { name = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
+]
 
 [bans]
 multiple-versions = "warn"

@@ -4,10 +4,10 @@
 //! mebibyte, whichever is more, so a movie lying after its media data is read as
 //! `demux_non_fragmented` reads it from a file. A server that does not answer a range request with
 //! partial content of a stated length, no more than was asked for, is refused; a range it cannot
-//! satisfy ends the file. Only plain `http` is supported. The output matches `demux_non_fragmented`
-//! for the same file.
+//! satisfy ends the file. An `https` server is checked against the Mozilla root certificates. The
+//! output matches `demux_non_fragmented` for the same file.
 //!
-//! Usage: `cargo run -p isobmff-examples --example demux_non_fragmented_http -- <http://host/in.mp4>`
+//! Usage: `cargo run -p isobmff-examples --example demux_non_fragmented_http -- <url>`
 
 use core::error::Error;
 use std::env;
@@ -19,7 +19,7 @@ use ureq::Agent;
 fn main() -> Result<(), Box<dyn Error>> {
     let url = env::args()
         .nth(1)
-        .ok_or("usage: demux_non_fragmented_http <http://host/in.mp4>")?;
+        .ok_or("usage: demux_non_fragmented_http <url>")?;
 
     let agent = Agent::config_builder()
         .http_status_as_error(false)

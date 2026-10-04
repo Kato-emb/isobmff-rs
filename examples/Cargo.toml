@@ -11,7 +11,7 @@ license.workspace = true
 [dependencies]
 isobmff.workspace = true
 tokio = { version = "1", features = ["fs", "io-util", "rt", "macros"] }
-ureq = { version = "3", default-features = false }
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 
 [[example]]
 name = "demux_fragmented"
