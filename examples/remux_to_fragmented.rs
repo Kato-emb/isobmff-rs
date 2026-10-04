@@ -92,7 +92,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut mux_fsm = FragmentedMuxFsm::new();
     if let Some(file_type) = demux_fsm
         .file_type()
-        .filter(|file_type| file_type.brand_forbidding_default_base_is_moof().is_none())
+        .filter(|file_type| !file_type.forbids_default_base_is_moof())
     {
         mux_fsm.handle_file_type(file_type.clone())?;
     }

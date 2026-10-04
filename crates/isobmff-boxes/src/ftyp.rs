@@ -87,15 +87,15 @@ impl FileTypeBox {
         &self.compatible_brands
     }
 
-    /// Returns the first brand listed under which a `tfhd` shall not state
+    /// Returns whether a brand listed forbids a `tfhd` to state
     /// `default-base-is-moof`
     ///
     /// ISO/IEC 14496-12 §8.8.7.1 forbids the flag in brands or compatible
     /// brands earlier than `iso5`: those whose features Annex E has `iso5`
-    /// require support for, `isom`, `avc1`, `iso2`, `iso3` and `iso4`. Any
-    /// other brand is taken to allow it. The `major_brand` is looked at
-    /// first, then the `compatible_brands` in order; `None` means no brand
-    /// listed forbids the flag.
+    /// require support for, `isom`, `avc1`, `iso2`, `iso3` and `iso4`. One
+    /// of them as the `major_brand` or among the `compatible_brands` forbids
+    /// the flag, whatever else is listed; any other brand is taken to allow
+    /// it.
     ///
     /// # Examples
     ///
@@ -109,10 +109,7 @@ impl FileTypeBox {
     ///     0,
     ///     vec![FourCC::new(*b"iso6"), FourCC::new(*b"isom")],
     /// );
-    /// assert_eq!(
-    ///     listing_isom.brand_forbidding_default_base_is_moof(),
-    ///     Some(FourCC::new(*b"isom"))
-    /// );
+    /// assert!(listing_isom.forbids_default_base_is_moof());
     ///
     /// // A file listing no brand earlier than `iso5` allows it
     /// let listing_iso6 = FileTypeBox::new(
@@ -120,11 +117,11 @@ impl FileTypeBox {
     ///     0,
     ///     vec![FourCC::new(*b"iso6"), FourCC::new(*b"dash")],
     /// );
-    /// assert_eq!(listing_iso6.brand_forbidding_default_base_is_moof(), None);
+    /// assert!(!listing_iso6.forbids_default_base_is_moof());
     /// ```
     #[must_use]
-    pub fn brand_forbidding_default_base_is_moof(&self) -> Option<FourCC> {
-        brands::brand_forbidding_default_base_is_moof(self.major_brand, &self.compatible_brands)
+    pub fn forbids_default_base_is_moof(&self) -> bool {
+        brands::forbids_default_base_is_moof(self.major_brand, &self.compatible_brands)
     }
 }
 

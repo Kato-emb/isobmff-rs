@@ -13,44 +13,40 @@ const BRANDS_EARLIER_THAN_ISO5: [FourCC; 5] = [
     FourCC::new(*b"iso4"),
 ];
 
-/// Returns the first of the brands, major then compatible, under which
-/// `default-base-is-moof` shall not be used (§8.8.7.1)
-pub(crate) fn brand_forbidding_default_base_is_moof(
+/// Returns whether any of the brands, major or compatible, is one under
+/// which `default-base-is-moof` shall not be used (§8.8.7.1)
+pub(crate) fn forbids_default_base_is_moof(
     major_brand: FourCC,
     compatible_brands: &[FourCC],
-) -> Option<FourCC> {
+) -> bool {
     iter::once(&major_brand)
         .chain(compatible_brands)
-        .copied()
-        .find(|brand| BRANDS_EARLIER_THAN_ISO5.contains(brand))
+        .any(|brand| BRANDS_EARLIER_THAN_ISO5.contains(brand))
 }
 
 #[cfg(test)]
 mod tests {
     use isobmff_core::FourCC;
 
-    use super::brand_forbidding_default_base_is_moof;
+    use super::forbids_default_base_is_moof;
 
     #[test]
     fn iso4_forbids_default_base_is_moof_and_iso5_does_not() {
-        assert_eq!(
-            brand_forbidding_default_base_is_moof(FourCC::new(*b"iso5"), &[FourCC::new(*b"iso4")]),
-            Some(FourCC::new(*b"iso4"))
-        );
-        assert_eq!(
-            brand_forbidding_default_base_is_moof(FourCC::new(*b"iso5"), &[FourCC::new(*b"iso5")]),
-            None
-        );
+        assert!(forbids_default_base_is_moof(
+            FourCC::new(*b"iso5"),
+            &[FourCC::new(*b"iso4")]
+        ));
+        assert!(!forbids_default_base_is_moof(
+            FourCC::new(*b"iso5"),
+            &[FourCC::new(*b"iso5")]
+        ));
     }
 
     #[test]
-    fn the_major_brand_is_named_before_a_forbidding_compatible_brand() {
-        assert_eq!(
-            brand_forbidding_default_base_is_moof(
-                FourCC::new(*b"avc1"),
-                &[FourCC::new(*b"isom"), FourCC::new(*b"iso2")]
-            ),
-            Some(FourCC::new(*b"avc1"))
-        );
+    fn a_major_brand_earlier_than_iso5_forbids_default_base_is_moof_on_its_own() {
+        assert!(forbids_default_base_is_moof(
+            FourCC::new(*b"avc1"),
+            &[FourCC::new(*b"iso6")]
+        ));
     }
 }

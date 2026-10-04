@@ -91,7 +91,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let file_type = demux_fsm
         .file_type()
-        .filter(|file_type| file_type.brand_forbidding_default_base_is_moof().is_none())
+        .filter(|file_type| !file_type.forbids_default_base_is_moof())
         .cloned();
     let mut initialization = Sink::new(BufWriter::new(File::create(output.join("init.mp4"))?));
     let mut initialization_fsm = FragmentedMuxFsm::new();

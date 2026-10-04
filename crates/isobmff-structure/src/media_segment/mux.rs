@@ -33,7 +33,7 @@ use crate::{Error, whole_box_header, whole_payload};
 ///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
 /// * A `styp` listing a brand under which the `default-base-is-moof` every
 ///   `tfhd` states shall not be used
-///   ([`SegmentTypeBox::brand_forbidding_default_base_is_moof`]) is
+///   ([`SegmentTypeBox::forbids_default_base_is_moof`]) is
 ///   [`UnsupportedBrand`](crate::ErrorKind::UnsupportedBrand), and nothing
 ///   of it is laid down. The `ftyp` of the initialization segment is not
 ///   handed over, and is not checked.
@@ -148,8 +148,8 @@ impl MediaSegmentMuxFsm {
     ///   again for every call after it.
     pub fn handle_segment_type(&mut self, segment_type: SegmentTypeBox) -> Result<(), Error> {
         self.writing()?;
-        if let Some(brand) = segment_type.brand_forbidding_default_base_is_moof() {
-            return Err(self.fail(Error::unsupported_brand(brand)));
+        if segment_type.forbids_default_base_is_moof() {
+            return Err(self.fail(Error::unsupported_brand()));
         }
         self.write_value(&segment_type)
     }
@@ -371,7 +371,7 @@ mod tests {
                 0,
                 alloc::vec![FourCC::new(*b"msdh"), FourCC::new(*b"isom")],
             )),
-            Err(Error::unsupported_brand(FourCC::new(*b"isom")))
+            Err(Error::unsupported_brand())
         );
         assert_eq!(mux_fsm.poll_output(), None);
     }

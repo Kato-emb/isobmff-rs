@@ -38,7 +38,7 @@ use crate::{Error, whole_box_header, whole_payload};
 ///   before any of it is laid down.
 /// * The `ftyp` handed over is laid down as it stands, unless it lists a
 ///   brand under which the `default-base-is-moof` every `tfhd` states shall
-///   not be used ([`FileTypeBox::brand_forbidding_default_base_is_moof`]):
+///   not be used ([`FileTypeBox::forbids_default_base_is_moof`]):
 ///   that is [`UnsupportedBrand`](crate::ErrorKind::UnsupportedBrand), and
 ///   nothing of it is laid down. Where none was handed over, the mux FSM
 ///   lays its own down before the `moov`: `iso6` as its
@@ -141,8 +141,8 @@ impl FragmentedMuxFsm {
     ///   again for every call after it.
     pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), Error> {
         self.writing()?;
-        if let Some(brand) = file_type.brand_forbidding_default_base_is_moof() {
-            return Err(self.fail(Error::unsupported_brand(brand)));
+        if file_type.forbids_default_base_is_moof() {
+            return Err(self.fail(Error::unsupported_brand()));
         }
         self.write_value(&file_type)
     }
@@ -468,7 +468,7 @@ mod tests {
                 0,
                 alloc::vec![FourCC::new(*b"iso6"), FourCC::new(*b"isom")],
             )),
-            Err(Error::unsupported_brand(FourCC::new(*b"isom")))
+            Err(Error::unsupported_brand())
         );
         assert_eq!(mux_fsm.poll_output(), None);
     }

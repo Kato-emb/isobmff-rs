@@ -63,15 +63,15 @@ impl SegmentTypeBox {
         &self.compatible_brands
     }
 
-    /// Returns the first brand listed under which a `tfhd` shall not state
+    /// Returns whether a brand listed forbids a `tfhd` to state
     /// `default-base-is-moof`
     ///
     /// The brands are read as
-    /// [`FileTypeBox::brand_forbidding_default_base_is_moof`](crate::FileTypeBox::brand_forbidding_default_base_is_moof)
+    /// [`FileTypeBox::forbids_default_base_is_moof`](crate::FileTypeBox::forbids_default_base_is_moof)
     /// reads them.
     #[must_use]
-    pub fn brand_forbidding_default_base_is_moof(&self) -> Option<FourCC> {
-        brands::brand_forbidding_default_base_is_moof(self.major_brand, &self.compatible_brands)
+    pub fn forbids_default_base_is_moof(&self) -> bool {
+        brands::forbids_default_base_is_moof(self.major_brand, &self.compatible_brands)
     }
 }
 
@@ -149,10 +149,7 @@ mod tests {
             vec![FourCC::new(*b"msdh"), FourCC::new(*b"iso4")],
         );
 
-        assert_eq!(
-            segment_type.brand_forbidding_default_base_is_moof(),
-            Some(FourCC::new(*b"iso4"))
-        );
+        assert!(segment_type.forbids_default_base_is_moof());
     }
 
     #[test]
