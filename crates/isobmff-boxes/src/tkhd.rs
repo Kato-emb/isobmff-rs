@@ -243,6 +243,8 @@ impl BoxDefinition for TrackHeaderBox {
 }
 
 impl BoxDecode for TrackHeaderBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

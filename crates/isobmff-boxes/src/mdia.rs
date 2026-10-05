@@ -99,6 +99,8 @@ impl BoxDefinition for MediaBox {
 }
 
 impl BoxDecode for MediaBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * The failures of [`boxes`]: a child does not frame as a box.

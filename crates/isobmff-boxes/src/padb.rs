@@ -80,6 +80,8 @@ impl BoxDefinition for PaddingBitsBox {
 }
 
 impl BoxDecode for PaddingBitsBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

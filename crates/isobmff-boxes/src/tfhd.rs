@@ -275,6 +275,8 @@ impl BoxDefinition for TrackFragmentHeaderBox {
 }
 
 impl BoxDecode for TrackFragmentHeaderBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

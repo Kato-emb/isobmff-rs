@@ -38,7 +38,7 @@ pub(crate) struct WholeBoxReader<Value> {
     value: PhantomData<Value>,
 }
 
-impl<Value: BoxDecode + BoxDefinition> WholeBoxReader<Value> {
+impl<Value: BoxDecode<Error = isobmff_core::Error> + BoxDefinition> WholeBoxReader<Value> {
     /// Begins reading the box `header` introduces, gathering no more than `payload_limit` bytes for it
     ///
     /// # Errors
@@ -188,7 +188,7 @@ mod tests {
     const PAYLOAD_LIMIT: u64 = 1_024;
 
     /// The values read out of the steps `file` frames into, handed over `cut_length` bytes at a time
-    fn read_whole<Value: super::BoxDecode + BoxDefinition>(
+    fn read_whole<Value: super::BoxDecode<Error = isobmff_core::Error> + BoxDefinition>(
         file: &[u8],
         cut_length: usize,
     ) -> Result<Vec<Value>, Error> {

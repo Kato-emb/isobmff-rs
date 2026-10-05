@@ -76,6 +76,8 @@ impl BoxDefinition for HintMediaHeaderBox {
 }
 
 impl BoxDecode for HintMediaHeaderBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

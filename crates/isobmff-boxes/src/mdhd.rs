@@ -146,6 +146,8 @@ impl BoxDefinition for MediaHeaderBox {
 }
 
 impl BoxDecode for MediaHeaderBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

@@ -223,6 +223,8 @@ impl BoxDefinition for MovieHeaderBox {
 }
 
 impl BoxDecode for MovieHeaderBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

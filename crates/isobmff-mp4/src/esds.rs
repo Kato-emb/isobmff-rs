@@ -1,8 +1,8 @@
 //! [`ESDBox`] (`esds`), ISO/IEC 14496-14 §6.7
 
 use isobmff_core::{
-    BoxDefinition, BoxEncode, BoxType, FieldReader, FieldWriter, FullBoxFields, FullBoxFlags,
-    RawBox,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, FieldReader, FieldWriter, FullBoxFields,
+    FullBoxFlags,
 };
 
 use crate::error::Error;
@@ -13,10 +13,8 @@ use crate::es_descriptor::ESDescriptor;
 /// [`ESDBox`] (`esds`), ISO/IEC 14496-14 §6.7. The [`ESDescriptor`] is the
 /// whole of the payload after the version and flags.
 ///
-/// The payload is read by [`decode_payload`](Self::decode_payload) rather than
-/// [`BoxDecode`](isobmff_core::BoxDecode): what goes wrong inside a descriptor
-/// is this crate's [`Error`], which that trait has no room for. Writing is
-/// [`BoxEncode`] as for any box.
+/// What goes wrong inside a descriptor is this crate's [`Error`], which
+/// [`BoxDecode`] reports for the box.
 #[doc(alias = "esds")]
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -36,54 +34,34 @@ impl ESDBox {
     pub const fn es(&self) -> &ESDescriptor {
         &self.es
     }
+}
 
-    /// Reads the box from its payload, header excluded
-    ///
+impl BoxDefinition for ESDBox {
+    const BOX_TYPE: BoxType = BoxType::compact(*b"esds");
+}
+
+impl BoxDecode for ESDBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`Box`](crate::ErrorKind::Box) of
+    ///   [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
+    ///   payload ends inside the version and flags.
+    /// * [`Box`](crate::ErrorKind::Box) of
     ///   [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the
     ///   box declares a version other than 0.
-    /// * [`Box`](crate::ErrorKind::Box) of
-    ///   [`TrailingPayload`](isobmff_core::ErrorKind::TrailingPayload): bytes
-    ///   follow the descriptor.
     /// * What [`ESDescriptor::decode`] reports.
-    pub fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
-        let mut reader = FieldReader::new(payload);
+    fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let version = FullBoxFields::from_bytes(reader.read_bytes::<4>()?).version();
         if version != 0 {
             return Err(isobmff_core::Error::unsupported_version(version).into());
         }
 
-        let es = ESDescriptor::decode(&mut reader)?;
-        reader.finish()?;
-
-        Ok(Self { es })
+        Ok(Self {
+            es: ESDescriptor::decode(reader)?,
+        })
     }
-}
-
-/// Reads the `esds` child of a sample entry into the slot it must fill once
-///
-/// # Errors
-///
-/// * [`Box`](crate::ErrorKind::Box) of
-///   [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): `slot` was
-///   filled already.
-/// * What [`ESDBox::decode_payload`] reports, with `esds` on the
-///   [`containers`](isobmff_core::Error::containers) path of a box failure.
-pub(crate) fn decode_child(slot: &mut Option<ESDBox>, child: RawBox<'_>) -> Result<(), Error> {
-    if slot.is_some() {
-        return Err(isobmff_core::Error::duplicate_box(ESDBox::BOX_TYPE).into());
-    }
-    let es = ESDBox::decode_payload(child.payload())
-        .map_err(|error| error.in_container(ESDBox::BOX_TYPE))?;
-    *slot = Some(es);
-
-    Ok(())
-}
-
-impl BoxDefinition for ESDBox {
-    const BOX_TYPE: BoxType = BoxType::compact(*b"esds");
 }
 
 impl BoxEncode for ESDBox {
@@ -102,7 +80,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::BoxEncode;
+    use isobmff_core::{BoxDecode, BoxEncode};
 
     use super::ESDBox;
     use crate::error::{Error, ErrorKind};

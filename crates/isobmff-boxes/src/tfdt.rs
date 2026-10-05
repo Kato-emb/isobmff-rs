@@ -67,6 +67,8 @@ impl BoxDefinition for TrackFragmentBaseMediaDecodeTimeBox {
 }
 
 impl BoxDecode for TrackFragmentBaseMediaDecodeTimeBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

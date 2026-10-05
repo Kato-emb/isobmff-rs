@@ -61,6 +61,8 @@ impl BoxDefinition for MovieExtendsBox {
 }
 
 impl BoxDecode for MovieExtendsBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * The failures of [`boxes`]: a child does not frame as a box.

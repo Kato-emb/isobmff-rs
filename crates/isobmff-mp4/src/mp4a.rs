@@ -2,8 +2,8 @@
 
 use isobmff_boxes::{AudioSampleEntry, SamplingRateBox};
 use isobmff_core::{
-    AnyBox, BoxDefinition, BoxEncode, BoxType, ChildBoxes, FieldReader, FieldWriter, OtherBoxes,
-    boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, FieldReader, FieldWriter,
+    OtherBoxes, boxes,
 };
 
 use crate::error::Error;
@@ -15,9 +15,6 @@ use crate::esds::ESDBox;
 /// with the fields of an [`AudioSampleEntry`] and holds an [`ESDBox`]; a
 /// [`SamplingRateBox`] may follow for a version 1 entry, and any other box —
 /// `chnl`, the DRC boxes — is kept as it came and written back.
-///
-/// The payload is read by [`decode_payload`](Self::decode_payload) rather than
-/// [`BoxDecode`](isobmff_core::BoxDecode), for the reason [`ESDBox`] gives.
 ///
 /// # Examples
 ///
@@ -99,32 +96,35 @@ impl MP4AudioSampleEntry {
     pub fn other_boxes(&self) -> &[AnyBox] {
         self.other_boxes.as_slice()
     }
+}
 
-    /// Reads the entry from the payload of an `mp4a` box
-    ///
-    /// A `stsd` entry arrives as an [`AnyBox`]; one whose
-    /// [`box_type`](AnyBox::box_type) is [`BOX_TYPE`](Self::BOX_TYPE) hands
-    /// its [`raw_payload`](AnyBox::raw_payload) here.
-    ///
+impl BoxDefinition for MP4AudioSampleEntry {
+    const BOX_TYPE: BoxType = BoxType::compact(*b"mp4a");
+}
+
+impl BoxDecode for MP4AudioSampleEntry {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`Box`](crate::ErrorKind::Box): what [`AudioSampleEntry::decode_fields`]
     ///   reports for the fields; a child that does not frame as a box; no
     ///   `esds` among the children, or more than one `esds` or `srat`; what
-    ///   [`SamplingRateBox`] reports.
-    /// * What [`ESDBox::decode_payload`] reports.
-    pub fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
-        let mut reader = FieldReader::new(payload);
-        let audio = AudioSampleEntry::decode_fields(&mut reader)?;
+    ///   [`SamplingRateBox`] reports, with `srat` on the
+    ///   [`containers`](isobmff_core::Error::containers) path.
+    /// * What the [`BoxDecode`] of [`ESDBox`] reports, with `esds` on the
+    ///   [`containers`](isobmff_core::Error::containers) path of a box failure.
+    fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
+        let audio = AudioSampleEntry::decode_fields(reader)?;
 
-        let mut es = None;
+        let mut esds_boxes = ChildBoxes::new();
         let mut sampling_rate_boxes = ChildBoxes::new();
         let mut other_boxes = OtherBoxes::new();
         for child in boxes(reader.take_remainder()) {
             let child = child?;
             let box_type = child.header().box_type();
             if box_type == ESDBox::BOX_TYPE {
-                crate::esds::decode_child(&mut es, child)?;
+                esds_boxes.push(child);
             } else if box_type == SamplingRateBox::BOX_TYPE {
                 sampling_rate_boxes.push(child);
             } else {
@@ -134,15 +134,11 @@ impl MP4AudioSampleEntry {
 
         Ok(Self {
             audio,
-            es: es.ok_or(isobmff_core::Error::missing_mandatory_box(ESDBox::BOX_TYPE))?,
+            es: esds_boxes.exactly_one()?,
             sampling_rate: sampling_rate_boxes.zero_or_one()?,
             other_boxes,
         })
     }
-}
-
-impl BoxDefinition for MP4AudioSampleEntry {
-    const BOX_TYPE: BoxType = BoxType::compact(*b"mp4a");
 }
 
 impl BoxEncode for MP4AudioSampleEntry {
@@ -185,7 +181,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_boxes::{AudioSampleEntry, SamplingRateBox};
-    use isobmff_core::{AnyBox, BoxEncode, BoxType, FourCC, U16F16};
+    use isobmff_core::{AnyBox, BoxDecode, BoxEncode, BoxType, FourCC, U16F16};
 
     use super::MP4AudioSampleEntry;
     use crate::error::Error;

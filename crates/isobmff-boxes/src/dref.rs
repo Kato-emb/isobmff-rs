@@ -51,6 +51,8 @@ impl BoxDefinition for DataReferenceBox {
 }
 
 impl BoxDecode for DataReferenceBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

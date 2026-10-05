@@ -34,6 +34,8 @@ impl BoxDefinition for AVCConfigurationBox {
 }
 
 impl BoxDecode for AVCConfigurationBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * What [`AVCDecoderConfigurationRecord::decode_fields`] reports.

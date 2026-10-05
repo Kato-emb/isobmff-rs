@@ -20,6 +20,8 @@ impl BoxDefinition for SequenceNumberBox {
 }
 
 impl BoxDecode for SequenceNumberBox {
+    type Error = Error;
+
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         Ok(Self {
             sequence_number: reader.read_u32()?,
@@ -48,6 +50,8 @@ impl BoxDefinition for OpaqueDataBox {
 }
 
 impl BoxDecode for OpaqueDataBox {
+    type Error = Error;
+
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         Ok(Self {
             data: reader.take_remainder().to_vec(),
@@ -115,6 +119,8 @@ impl BoxDefinition for ExpiryBox {
 }
 
 impl BoxDecode for ExpiryBox {
+    type Error = Error;
+
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let full_box = FullBoxFields::from_bytes(reader.read_bytes::<4>()?);
         let expiry_time = reader.read_unsigned(Self::field_width(full_box.version()))?;
@@ -151,6 +157,8 @@ impl BoxDefinition for VendorMarkerBox {
 }
 
 impl BoxDecode for VendorMarkerBox {
+    type Error = Error;
+
     fn decode_fields(_reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         Ok(Self)
     }

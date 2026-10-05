@@ -164,6 +164,8 @@ impl BoxDefinition for CompactSampleSizeBox {
 }
 
 impl BoxDecode for CompactSampleSizeBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

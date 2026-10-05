@@ -12,8 +12,9 @@
 //! written back.
 //!
 //! The entries of a `stsd` are kept as [`AnyBox`](isobmff_core::AnyBox) by
-//! `isobmff-boxes`; one named by these codes decodes here through the
-//! `decode_payload` of its entry, and goes back in through `AnyBox::from`.
+//! `isobmff-boxes`; one named by these codes decodes here through
+//! [`BoxDecode`](isobmff_core::BoxDecode), and goes back in through
+//! `AnyBox::from`.
 //!
 //! Descriptors are not boxes, so what goes wrong inside them is reported by
 //! this crate's own [`Error`], which carries a box failure through as one of

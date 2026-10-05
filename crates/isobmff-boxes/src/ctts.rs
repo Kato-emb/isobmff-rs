@@ -183,6 +183,8 @@ impl BoxDefinition for CompositionOffsetBox {
 }
 
 impl BoxDecode for CompositionOffsetBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

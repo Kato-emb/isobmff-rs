@@ -36,6 +36,8 @@ impl BoxDefinition for SamplingRateBox {
 }
 
 impl BoxDecode for SamplingRateBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

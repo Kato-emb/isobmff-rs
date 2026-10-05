@@ -34,6 +34,8 @@ impl BoxDefinition for SubtitleMediaHeaderBox {
 }
 
 impl BoxDecode for SubtitleMediaHeaderBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

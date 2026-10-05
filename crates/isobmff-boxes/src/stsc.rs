@@ -152,6 +152,8 @@ impl BoxDefinition for SampleToChunkBox {
 }
 
 impl BoxDecode for SampleToChunkBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

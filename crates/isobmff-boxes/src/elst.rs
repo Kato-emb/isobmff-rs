@@ -152,6 +152,8 @@ impl BoxDefinition for EditListBox {
 }
 
 impl BoxDecode for EditListBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

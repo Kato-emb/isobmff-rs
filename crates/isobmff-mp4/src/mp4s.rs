@@ -2,7 +2,8 @@
 
 use isobmff_boxes::SampleEntry;
 use isobmff_core::{
-    AnyBox, BoxDefinition, BoxEncode, BoxType, FieldReader, FieldWriter, OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, FieldReader, FieldWriter,
+    OtherBoxes, boxes,
 };
 
 use crate::error::Error;
@@ -14,9 +15,6 @@ use crate::esds::ESDBox;
 /// [`MpegSampleEntry`] (`mp4s`), ISO/IEC 14496-14 §6.7. The entry opens with
 /// the fields of the plain [`SampleEntry`] of ISO/IEC 14496-12 §8.5.2.2 and
 /// holds an [`ESDBox`]; any other box is kept as it came and written back.
-///
-/// The payload is read by [`decode_payload`](Self::decode_payload) rather than
-/// [`BoxDecode`](isobmff_core::BoxDecode), for the reason [`ESDBox`] gives.
 #[doc(alias = "mp4s")]
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Debug)]
@@ -55,24 +53,30 @@ impl MpegSampleEntry {
     pub fn other_boxes(&self) -> &[AnyBox] {
         self.other_boxes.as_slice()
     }
+}
 
-    /// Reads the entry from the payload of an `mp4s` box
-    ///
+impl BoxDefinition for MpegSampleEntry {
+    const BOX_TYPE: BoxType = BoxType::compact(*b"mp4s");
+}
+
+impl BoxDecode for MpegSampleEntry {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`Box`](crate::ErrorKind::Box): the payload ends before the fields do;
     ///   a child that does not frame as a box; no `esds` among the children,
     ///   or more than one.
-    /// * What [`ESDBox::decode_payload`] reports.
-    pub fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
-        let mut reader = FieldReader::new(payload);
+    /// * What the [`BoxDecode`] of [`ESDBox`] reports, with `esds` on the
+    ///   [`containers`](isobmff_core::Error::containers) path of a box failure.
+    fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let sample_entry = SampleEntry::from_bytes(reader.read_bytes::<8>()?);
-        let mut es = None;
+        let mut esds_boxes = ChildBoxes::new();
         let mut other_boxes = OtherBoxes::new();
         for child in boxes(reader.take_remainder()) {
             let child = child?;
             if child.header().box_type() == ESDBox::BOX_TYPE {
-                crate::esds::decode_child(&mut es, child)?;
+                esds_boxes.push(child);
             } else {
                 other_boxes.keep(child);
             }
@@ -80,14 +84,10 @@ impl MpegSampleEntry {
 
         Ok(Self {
             sample_entry,
-            es: es.ok_or(isobmff_core::Error::missing_mandatory_box(ESDBox::BOX_TYPE))?,
+            es: esds_boxes.exactly_one()?,
             other_boxes,
         })
     }
-}
-
-impl BoxDefinition for MpegSampleEntry {
-    const BOX_TYPE: BoxType = BoxType::compact(*b"mp4s");
 }
 
 impl BoxEncode for MpegSampleEntry {
@@ -121,7 +121,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{AnyBox, BoxEncode, BoxType};
+    use isobmff_core::{AnyBox, BoxDecode, BoxEncode, BoxType};
 
     use super::MpegSampleEntry;
     use crate::error::Error;

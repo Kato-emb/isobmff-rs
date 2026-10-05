@@ -52,6 +52,8 @@ impl BoxDefinition for BitRateBox {
 }
 
 impl BoxDecode for BitRateBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the

@@ -35,6 +35,8 @@ impl BoxDefinition for NullMediaHeaderBox {
 }
 
 impl BoxDecode for NullMediaHeaderBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

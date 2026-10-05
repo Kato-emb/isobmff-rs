@@ -61,6 +61,8 @@ impl BoxDefinition for MovieFragmentRandomAccessOffsetBox {
 }
 
 impl BoxDecode for MovieFragmentRandomAccessOffsetBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

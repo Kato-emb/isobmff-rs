@@ -75,6 +75,8 @@ impl BoxDefinition for ChunkLargeOffsetBox {
 }
 
 impl BoxDecode for ChunkLargeOffsetBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

@@ -2,7 +2,8 @@
 
 use isobmff_boxes::VisualSampleEntry;
 use isobmff_core::{
-    AnyBox, BoxDefinition, BoxEncode, BoxType, FieldReader, FieldWriter, OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, FieldReader, FieldWriter,
+    OtherBoxes, boxes,
 };
 
 use crate::error::Error;
@@ -14,9 +15,6 @@ use crate::esds::ESDBox;
 /// with the fields of a [`VisualSampleEntry`] — §6.7.3 sets its
 /// `compressorname` to 0 — and holds an [`ESDBox`]; any other box is kept as
 /// it came and written back.
-///
-/// The payload is read by [`decode_payload`](Self::decode_payload) rather than
-/// [`BoxDecode`](isobmff_core::BoxDecode), for the reason [`ESDBox`] gives.
 #[doc(alias = "mp4v")]
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Debug)]
@@ -54,24 +52,30 @@ impl MP4VisualSampleEntry {
     pub fn other_boxes(&self) -> &[AnyBox] {
         self.other_boxes.as_slice()
     }
+}
 
-    /// Reads the entry from the payload of an `mp4v` box
-    ///
+impl BoxDefinition for MP4VisualSampleEntry {
+    const BOX_TYPE: BoxType = BoxType::compact(*b"mp4v");
+}
+
+impl BoxDecode for MP4VisualSampleEntry {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`Box`](crate::ErrorKind::Box): what [`VisualSampleEntry::decode_fields`]
     ///   reports for the fields; a child that does not frame as a box; no
     ///   `esds` among the children, or more than one.
-    /// * What [`ESDBox::decode_payload`] reports.
-    pub fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
-        let mut reader = FieldReader::new(payload);
-        let visual = VisualSampleEntry::decode_fields(&mut reader)?;
-        let mut es = None;
+    /// * What the [`BoxDecode`] of [`ESDBox`] reports, with `esds` on the
+    ///   [`containers`](isobmff_core::Error::containers) path of a box failure.
+    fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
+        let visual = VisualSampleEntry::decode_fields(reader)?;
+        let mut esds_boxes = ChildBoxes::new();
         let mut other_boxes = OtherBoxes::new();
         for child in boxes(reader.take_remainder()) {
             let child = child?;
             if child.header().box_type() == ESDBox::BOX_TYPE {
-                crate::esds::decode_child(&mut es, child)?;
+                esds_boxes.push(child);
             } else {
                 other_boxes.keep(child);
             }
@@ -79,14 +83,10 @@ impl MP4VisualSampleEntry {
 
         Ok(Self {
             visual,
-            es: es.ok_or(isobmff_core::Error::missing_mandatory_box(ESDBox::BOX_TYPE))?,
+            es: esds_boxes.exactly_one()?,
             other_boxes,
         })
     }
-}
-
-impl BoxDefinition for MP4VisualSampleEntry {
-    const BOX_TYPE: BoxType = BoxType::compact(*b"mp4v");
 }
 
 impl BoxEncode for MP4VisualSampleEntry {
@@ -121,7 +121,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_boxes::VisualSampleEntry;
-    use isobmff_core::{AnyBox, BoxEncode, BoxType};
+    use isobmff_core::{AnyBox, BoxDecode, BoxEncode, BoxType};
 
     use super::MP4VisualSampleEntry;
     use crate::error::Error;

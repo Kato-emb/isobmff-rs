@@ -3,7 +3,7 @@
 
 #![no_main]
 
-use isobmff_core::BoxEncode;
+use isobmff_core::{BoxDecode, BoxEncode};
 use isobmff_mp4::MP4AudioSampleEntry;
 use libfuzzer_sys::fuzz_target;
 
