@@ -51,32 +51,27 @@ mod tests {
         }
     }
 
-    /// Gathers every box a payload holds
-    fn gathered(payload: &[u8]) -> ChildBoxes<'_> {
-        let mut children = ChildBoxes::new();
-        for child in boxes(payload) {
-            children.push(child.unwrap());
-        }
-
-        children
+    /// Collects every box a payload holds
+    fn collected(payload: &[u8]) -> ChildBoxes<'_> {
+        boxes(payload).collect::<Result<_, _>>().unwrap()
     }
 
     #[test]
     fn a_child_with_a_failure_of_its_own_reads_as_any_child() {
-        let children = gathered(b"\0\0\0\x0cchkv\0\x07\xff\xf8");
+        let mut children = collected(b"\0\0\0\x0cchkv\0\x07\xff\xf8");
 
         assert_eq!(
-            children.exactly_one::<CheckedValueBox>(),
+            children.take_exactly_one::<CheckedValueBox>(),
             Ok(CheckedValueBox(7))
         );
     }
 
     #[test]
     fn a_box_failure_of_the_child_names_it_on_the_path() {
-        let truncated = gathered(b"\0\0\0\x0achkv\0\x07");
+        let mut truncated = collected(b"\0\0\0\x0achkv\0\x07");
 
         assert_eq!(
-            truncated.exactly_one::<CheckedValueBox>(),
+            truncated.take_exactly_one::<CheckedValueBox>(),
             Err(VendorError::Box(
                 Error::truncated_payload(4, 2).in_container(CheckedValueBox::BOX_TYPE)
             ))
@@ -85,10 +80,10 @@ mod tests {
 
     #[test]
     fn a_failure_of_a_kind_of_its_own_passes_out_as_it_was() {
-        let disagreeing = gathered(b"\0\0\0\x0cchkv\0\x07\0\x07");
+        let mut disagreeing = collected(b"\0\0\0\x0cchkv\0\x07\0\x07");
 
         assert_eq!(
-            disagreeing.exactly_one::<CheckedValueBox>(),
+            disagreeing.take_exactly_one::<CheckedValueBox>(),
             Err(VendorError::ChecksumMismatch)
         );
     }
@@ -96,7 +91,7 @@ mod tests {
     #[test]
     fn a_count_the_quantity_forbids_is_reported_as_the_failure_the_child_reports() {
         assert_eq!(
-            ChildBoxes::new().exactly_one::<CheckedValueBox>(),
+            ChildBoxes::new().take_exactly_one::<CheckedValueBox>(),
             Err(VendorError::Box(Error::missing_mandatory_box(
                 CheckedValueBox::BOX_TYPE
             )))

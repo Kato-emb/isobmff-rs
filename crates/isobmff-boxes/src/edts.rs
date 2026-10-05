@@ -78,21 +78,12 @@ impl BoxDecode for EditBox {
     /// * Whatever the child reports, on the [`containers`](Error::containers) path: the
     ///   `elst` does not decode.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let mut edit_list_boxes = ChildBoxes::new();
-        let mut other_boxes = OtherBoxes::new();
-
-        for child in boxes(reader.take_remainder()) {
-            let child = child?;
-            if child.header().box_type() == EditListBox::BOX_TYPE {
-                edit_list_boxes.push(child);
-            } else {
-                other_boxes.keep(child);
-            }
-        }
+        let mut children: ChildBoxes<'_> =
+            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         Ok(Self {
-            elst: edit_list_boxes.zero_or_one()?,
-            other_boxes,
+            elst: children.take_zero_or_one()?,
+            other_boxes: OtherBoxes::from(children),
         })
     }
 }

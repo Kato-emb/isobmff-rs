@@ -70,21 +70,13 @@ impl BoxDecode for MP4VisualSampleEntry {
     ///   [`containers`](isobmff_core::Error::containers) path of a box failure.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let visual = VisualSampleEntry::decode_fields(reader)?;
-        let mut esds_boxes = ChildBoxes::new();
-        let mut other_boxes = OtherBoxes::new();
-        for child in boxes(reader.take_remainder()) {
-            let child = child?;
-            if child.header().box_type() == ESDBox::BOX_TYPE {
-                esds_boxes.push(child);
-            } else {
-                other_boxes.keep(child);
-            }
-        }
+        let mut children: ChildBoxes<'_> =
+            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         Ok(Self {
             visual,
-            es: esds_boxes.exactly_one()?,
-            other_boxes,
+            es: children.take_exactly_one()?,
+            other_boxes: OtherBoxes::from(children),
         })
     }
 }

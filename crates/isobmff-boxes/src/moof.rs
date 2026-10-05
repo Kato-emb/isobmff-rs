@@ -76,27 +76,13 @@ impl BoxDecode for MovieFragmentBox {
     /// * Whatever the child reports, on the [`containers`](Error::containers) path: a child does
     ///   not decode.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let mut mfhd_boxes = ChildBoxes::new();
-        let mut traf_boxes = ChildBoxes::new();
-        let mut other_boxes = OtherBoxes::new();
-
-        for child in boxes(reader.take_remainder()) {
-            let child = child?;
-            let box_type = child.header().box_type();
-
-            if box_type == MovieFragmentHeaderBox::BOX_TYPE {
-                mfhd_boxes.push(child);
-            } else if box_type == TrackFragmentBox::BOX_TYPE {
-                traf_boxes.push(child);
-            } else {
-                other_boxes.keep(child);
-            }
-        }
+        let mut children: ChildBoxes<'_> =
+            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         Ok(Self {
-            mfhd: mfhd_boxes.exactly_one()?,
-            traf: traf_boxes.zero_or_more()?,
-            other_boxes,
+            mfhd: children.take_exactly_one()?,
+            traf: children.take_zero_or_more()?,
+            other_boxes: OtherBoxes::from(children),
         })
     }
 }

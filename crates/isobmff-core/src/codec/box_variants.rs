@@ -11,8 +11,9 @@ use crate::framing::raw_box::RawBox;
 /// slot, several box types that write the one child it holds. Implementing
 /// this trait names those types and reads a child of any of them into the value
 /// of the slot, which
-/// [`ChildBoxes::exactly_one_variant`](crate::ChildBoxes::exactly_one_variant)
-/// builds the slot with.
+/// [`ChildBoxes::take_exactly_one_variant`](crate::ChildBoxes::take_exactly_one_variant)
+/// and [`ChildBoxes::take_zero_or_one_variant`](crate::ChildBoxes::take_zero_or_one_variant)
+/// build the slot with.
 ///
 /// # Examples
 ///
@@ -42,14 +43,11 @@ use crate::framing::raw_box::RawBox;
 ///
 /// // A container stating the slot with its 16-bit variant
 /// let payload = b"\0\0\0\x0asqn2\0\x07";
-/// let mut sequence_numbers = ChildBoxes::new();
-/// for child in boxes(payload) {
-///     sequence_numbers.push(child.unwrap());
-/// }
+/// let mut children: ChildBoxes<'_> = boxes(payload).collect::<Result<_, _>>().unwrap();
 ///
 /// // The one child stated is read as the variant its type names
 /// assert_eq!(
-///     sequence_numbers.exactly_one_variant::<SequenceNumber>(),
+///     children.take_exactly_one_variant::<SequenceNumber>(),
 ///     Ok(SequenceNumber::Narrow(7))
 /// );
 /// ```

@@ -111,31 +111,14 @@ impl BoxDecode for MediaBox {
     /// * Whatever the child reports, on the [`containers`](Error::containers) path: one of them
     ///   does not decode.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let mut mdhd_boxes = ChildBoxes::new();
-        let mut hdlr_boxes = ChildBoxes::new();
-        let mut minf_boxes = ChildBoxes::new();
-        let mut other_boxes = OtherBoxes::new();
-
-        for child in boxes(reader.take_remainder()) {
-            let child = child?;
-            let box_type = child.header().box_type();
-
-            if box_type == MediaHeaderBox::BOX_TYPE {
-                mdhd_boxes.push(child);
-            } else if box_type == HandlerBox::BOX_TYPE {
-                hdlr_boxes.push(child);
-            } else if box_type == MediaInformationBox::BOX_TYPE {
-                minf_boxes.push(child);
-            } else {
-                other_boxes.keep(child);
-            }
-        }
+        let mut children: ChildBoxes<'_> =
+            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         Ok(Self {
-            mdhd: mdhd_boxes.exactly_one()?,
-            hdlr: hdlr_boxes.exactly_one()?,
-            minf: minf_boxes.exactly_one()?,
-            other_boxes,
+            mdhd: children.take_exactly_one()?,
+            hdlr: children.take_exactly_one()?,
+            minf: children.take_exactly_one()?,
+            other_boxes: OtherBoxes::from(children),
         })
     }
 }

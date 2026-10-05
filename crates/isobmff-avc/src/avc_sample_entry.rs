@@ -174,26 +174,14 @@ impl<Name: AVCCodingName> BoxDecode for AVCSampleEntry<Name> {
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let visual = VisualSampleEntry::decode_fields(reader)?;
 
-        let mut configuration_boxes = ChildBoxes::new();
-        let mut bit_rate_boxes = ChildBoxes::new();
-        let mut other_boxes = OtherBoxes::new();
-        for child in boxes(reader.take_remainder()) {
-            let child = child?;
-            let box_type = child.header().box_type();
-            if box_type == AVCConfigurationBox::BOX_TYPE {
-                configuration_boxes.push(child);
-            } else if box_type == BitRateBox::BOX_TYPE {
-                bit_rate_boxes.push(child);
-            } else {
-                other_boxes.keep(child);
-            }
-        }
+        let mut children: ChildBoxes<'_> =
+            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         Ok(Self {
             visual,
-            config: configuration_boxes.exactly_one()?,
-            bit_rate: bit_rate_boxes.zero_or_one()?,
-            other_boxes,
+            config: children.take_exactly_one()?,
+            bit_rate: children.take_zero_or_one()?,
+            other_boxes: OtherBoxes::from(children),
             _marker: PhantomData,
         })
     }
