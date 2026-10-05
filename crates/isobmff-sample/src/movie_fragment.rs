@@ -1,10 +1,11 @@
 //! [`sample_extents`], the samples a movie fragment declares resolved against the movie, ISO/IEC 14496-12 §8.8
 
 use alloc::vec::Vec;
+use core::ops::Range;
 
 use isobmff_boxes::{
     CompositionTimeOffset, MovieBox, MovieFragmentBox, SampleFlags, TrackBox, TrackExtendsBox,
-    TrackFragmentBox, TrackRunBox,
+    TrackFragmentBox, TrackRunBox, TrackRunSample,
 };
 use isobmff_core::BoxDefinition as _;
 
@@ -122,10 +123,7 @@ enum SettledFragment {
     /// `sample_size` is the size its runs fall back on, where the `tfhd` or the
     /// `trex` of the track states one; the data of its runs is walked only to
     /// anchor a track fragment after it.
-    KeptUnread {
-        track_id: u32,
-        sample_size: Option<u32>,
-    },
+    KeptUnread { sample_size: Option<u32> },
 }
 
 /// What one track fragment of a track the movie reads settles for its samples before their data is placed
@@ -170,7 +168,6 @@ impl SettledFragment {
             }
 
             return Ok(Self::KeptUnread {
-                track_id,
                 sample_size: tfhd
                     .default_sample_size()
                     .or(trex.map(TrackExtendsBox::default_sample_size)),
@@ -224,17 +221,6 @@ impl SettledFragment {
     }
 }
 
-/// Where the samples of a track fragment settle as its runs are walked
-///
-/// `base` is where the offsets of the track fragment are anchored, which the
-/// offset a run states is counted from. `data_offset` is where the sample
-/// resolved next starts, and `decode_time` when it is decoded.
-struct Cursor {
-    base: u64,
-    data_offset: u64,
-    decode_time: u64,
-}
-
 /// Places the data of every track fragment of `movie_fragment` into `extents`, stopping at the first failure
 fn resolve_data(
     movie_fragment: &MovieFragmentBox,
@@ -242,103 +228,114 @@ fn resolve_data(
     moof_start: u64,
     extents: &mut Vec<Result<SampleExtent, Error>>,
 ) -> Result<(), Error> {
-    let mut data_before = None;
+    let mut data_before: Result<u64, Error> = Ok(moof_start);
 
     for (traf, settled) in movie_fragment.traf().iter().zip(track_fragments) {
         let tfhd = traf.tfhd();
         let base = match tfhd.base_data_offset() {
             Some(base) => Ok(base),
             None if tfhd.default_base_is_moof() => Ok(moof_start),
-            None => data_before.unwrap_or(Ok(moof_start)),
+            None => data_before,
         };
 
-        let data_end = match settled {
+        data_before = match settled {
             SettledFragment::Read(settled) => {
                 let base = base?;
-                let mut cursor = Cursor {
-                    base,
-                    data_offset: base,
-                    decode_time: settled.decode_time,
-                };
+                let mut data_offset = base;
+                let mut decode_time = settled.decode_time;
                 for trun in traf.trun() {
-                    resolve_run(trun, settled, &mut cursor, extents)?;
+                    let mut first_sample_flags = trun.first_sample_flags();
+                    place_run(
+                        trun,
+                        base,
+                        &mut data_offset,
+                        Some(settled.sample_size),
+                        settled.track_id,
+                        |row, data| {
+                            let sample_duration =
+                                row.sample_duration().unwrap_or(settled.sample_duration);
+                            extents.push(Ok(SampleExtent::new(
+                                settled.track_id,
+                                decode_time,
+                                sample_duration,
+                                row.sample_composition_time_offset()
+                                    .map_or(0, CompositionTimeOffset::get),
+                                first_sample_flags
+                                    .take()
+                                    .or(row.sample_flags())
+                                    .unwrap_or(settled.sample_flags),
+                                settled.sample_description_index,
+                                settled.data_reference_index,
+                                data,
+                            )));
+
+                            // Why not checked_add: SettledFragment::settle summed these same
+                            // durations from the same start and refused the fragment on
+                            // overflow, so this cannot wrap.
+                            decode_time = decode_time.wrapping_add(u64::from(sample_duration));
+                        },
+                    )?;
                 }
 
-                Ok(cursor.data_offset)
+                Ok(data_offset)
             }
-            SettledFragment::KeptUnread {
-                track_id,
-                sample_size,
-            } => base.and_then(|base| {
-                let overflow = Error::data_offset_overflow(*track_id);
-                traf.trun().iter().try_fold(base, |data_offset, trun| {
-                    let start = match trun.data_offset() {
-                        Some(stated) => {
-                            base.checked_add_signed(i64::from(stated)).ok_or(overflow)?
-                        }
-                        None => data_offset,
-                    };
-                    trun.samples().try_fold(start, |data_end, row| {
-                        let size = row
-                            .sample_size()
-                            .or(*sample_size)
-                            .ok_or(Error::unknown_track_id(*track_id))?;
-                        data_end.checked_add(u64::from(size)).ok_or(overflow)
-                    })
-                })
+            SettledFragment::KeptUnread { sample_size } => base.and_then(|base| {
+                let mut data_offset = base;
+                for trun in traf.trun() {
+                    place_run(
+                        trun,
+                        base,
+                        &mut data_offset,
+                        *sample_size,
+                        tfhd.track_id(),
+                        |_, _| {},
+                    )?;
+                }
+
+                Ok(data_offset)
             }),
         };
-
-        data_before = Some(data_end);
     }
 
     Ok(())
 }
 
-/// Resolves the samples `trun` declares into `extents`, and moves `cursor` past them
-fn resolve_run(
+/// Walks the rows of `trun`, handing `place` each row and the data it occupies, and moves `data_offset` past them
+///
+/// A run stating a `data_offset` starts that far from `base`, the anchor of its
+/// track fragment, and one stating none where `data_offset` stands (ISO/IEC
+/// 14496-12 §8.8.8.3). A row stating no size takes `sample_size`.
+///
+/// # Errors
+///
+/// * [`DataOffsetOverflow`](crate::ErrorKind::DataOffsetOverflow): the
+///   offsets run past what 64 bits carry.
+/// * [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId): a row states no
+///   size and `sample_size` is `None`.
+fn place_run(
     trun: &TrackRunBox,
-    settled: &TrackFragment,
-    cursor: &mut Cursor,
-    extents: &mut Vec<Result<SampleExtent, Error>>,
+    base: u64,
+    data_offset: &mut u64,
+    sample_size: Option<u32>,
+    track_id: u32,
+    mut place: impl FnMut(TrackRunSample, Range<u64>),
 ) -> Result<(), Error> {
-    let track_id = settled.track_id;
     if let Some(stated) = trun.data_offset() {
-        cursor.data_offset = cursor
-            .base
+        *data_offset = base
             .checked_add_signed(i64::from(stated))
             .ok_or(Error::data_offset_overflow(track_id))?;
     }
 
-    let mut first_sample_flags = trun.first_sample_flags();
     for row in trun.samples() {
-        let declared = u64::from(row.sample_size().unwrap_or(settled.sample_size));
-        let data_end = cursor
-            .data_offset
-            .checked_add(declared)
+        let size = row
+            .sample_size()
+            .or(sample_size)
+            .ok_or(Error::unknown_track_id(track_id))?;
+        let data_end = data_offset
+            .checked_add(u64::from(size))
             .ok_or(Error::data_offset_overflow(track_id))?;
-        let sample_duration = row.sample_duration().unwrap_or(settled.sample_duration);
-
-        extents.push(Ok(SampleExtent::new(
-            track_id,
-            cursor.decode_time,
-            sample_duration,
-            row.sample_composition_time_offset()
-                .map_or(0, CompositionTimeOffset::get),
-            first_sample_flags
-                .take()
-                .or(row.sample_flags())
-                .unwrap_or(settled.sample_flags),
-            settled.sample_description_index,
-            settled.data_reference_index,
-            cursor.data_offset..data_end,
-        )));
-
-        // Why not checked_add: TrackFragment::settle summed these same durations
-        // from the same start and refused the fragment on overflow, so this
-        // cannot wrap.
-        cursor.decode_time = cursor.decode_time.wrapping_add(u64::from(sample_duration));
-        cursor.data_offset = data_end;
+        place(row, *data_offset..data_end);
+        *data_offset = data_end;
     }
 
     Ok(())
@@ -469,6 +466,19 @@ mod tests {
                 None,
             ),
             trun,
+        )
+        .unwrap()
+    }
+
+    /// Fragment of `track_id` stating no anchor, of one run of `sample_count` samples
+    fn stating_no_anchor(
+        track_id: u32,
+        data_offset: Option<i32>,
+        sample_count: u32,
+    ) -> TrackFragmentBox {
+        TrackFragmentBox::new(
+            track_fragment_header(TrackFragmentHeaderFlags::ZERO, track_id, None, None, None),
+            vec![run(data_offset, sample_count)],
         )
         .unwrap()
     }
@@ -687,19 +697,11 @@ mod tests {
 
     #[test]
     fn offsets_of_a_later_track_fragment_stating_no_anchor_follow_the_data_before_it() {
-        let stating_no_anchor = |track_id, data_offset| {
-            TrackFragmentBox::new(
-                track_fragment_header(TrackFragmentHeaderFlags::ZERO, track_id, None, None, None),
-                vec![run(data_offset, 1)],
-            )
-            .unwrap()
-        };
-
         assert_eq!(
             resolved(
                 &movie_fragment(vec![
-                    stating_no_anchor(1, Some(100)),
-                    stating_no_anchor(2, None),
+                    stating_no_anchor(1, Some(100), 1),
+                    stating_no_anchor(2, None, 1),
                 ]),
                 &movie(vec![track(1), track(2)])
             ),
@@ -998,19 +1000,6 @@ mod tests {
             ),
             Err(Error::data_offset_overflow(1))
         );
-    }
-
-    /// Fragment of `track_id` stating no anchor, of one run of `sample_count` samples
-    fn stating_no_anchor(
-        track_id: u32,
-        data_offset: Option<i32>,
-        sample_count: u32,
-    ) -> TrackFragmentBox {
-        TrackFragmentBox::new(
-            track_fragment_header(TrackFragmentHeaderFlags::ZERO, track_id, None, None, None),
-            vec![run(data_offset, sample_count)],
-        )
-        .unwrap()
     }
 
     #[test]
