@@ -27,9 +27,14 @@ use crate::trex::TrackExtendsBox;
 /// [`new`](Self::new) alone: a decoded movie whose tracks collide on a
 /// `track_id` reads as it came.
 ///
+/// A `trak` that does not read is kept among [`other_boxes`](Self::other_boxes)
+/// as the bytes it came as, and the movie reads as one of the tracks that do;
+/// the rule of one `trex` for each track holds of those.
+///
 /// On encode the children are written in the order the spec lists them —
-/// `mvhd`, then the tracks, then `mvex` — and then the children no field
-/// claims, so a round-trip settles the order rather than preserving it.
+/// `mvhd`, then the tracks, then `mvex` — and then the children of
+/// [`other_boxes`](Self::other_boxes), so a round-trip settles the order rather
+/// than preserving it.
 #[doc(alias = "moov")]
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Debug)]
@@ -139,7 +144,7 @@ impl MovieBox {
         &mut self.mvhd
     }
 
-    /// Returns the tracks the presentation is made of
+    /// Returns the tracks the presentation is made of, those that read
     #[must_use]
     pub fn trak(&self) -> &[TrackBox] {
         &self.trak
@@ -200,7 +205,8 @@ impl MovieBox {
         self.mvex.as_ref()
     }
 
-    /// Returns the children no field of this box claims, in the order they came
+    /// Returns the children no field of this box claims, in the order they came,
+    /// and after them the `trak`s that do not read
     #[must_use]
     pub fn other_boxes(&self) -> &[AnyBox] {
         self.other_boxes.as_slice()
@@ -234,8 +240,10 @@ impl BoxDecode for MovieBox {
     ///   no `trak` at all, or a track of a fragmented movie without its `trex`.
     /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one `mvhd` or
     ///   `mvex`.
-    /// * Whatever the child reports, on the [`containers`](Error::containers) path: one of the
-    ///   children does not decode.
+    /// * Whatever the child reports, on the [`containers`](Error::containers) path: the `mvhd`
+    ///   or the `mvex` does not decode, or no `trak` does, which reports the failure of the
+    ///   first `trak`. A `trak` that does not decode is kept among
+    ///   [`other_boxes`](Self::other_boxes) instead.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let mut mvhd_boxes = ChildBoxes::new();
         let mut trak_boxes = ChildBoxes::new();
@@ -258,7 +266,7 @@ impl BoxDecode for MovieBox {
         }
 
         let mvhd = mvhd_boxes.exactly_one()?;
-        let trak = trak_boxes.one_or_more()?;
+        let trak = trak_boxes.one_or_more_keeping_unread(&mut other_boxes)?;
         let mvex = mvex_boxes.zero_or_one()?;
 
         if a_track_lacks_its_trex(&trak, mvex.as_ref()) {
@@ -328,6 +336,7 @@ mod tests {
     use crate::edts::EditBox;
     use crate::edts::tests::edit;
     use crate::mdhd::MediaHeaderBox;
+    use crate::minf::tests::kept;
     use crate::mvex::tests::movie_extends;
     use crate::mvhd::tests::movie_header;
     use crate::sample_size::{SampleSizeBox, SampleSizes};
@@ -399,6 +408,19 @@ mod tests {
         child.encode(&mut buffer).unwrap();
 
         buffer
+    }
+
+    /// Track `track()` written with an `mdhd` of version 2, which the box does not read
+    fn track_of_an_unread_media_header() -> Vec<u8> {
+        let mut written = encoded_child(&track());
+        let version_at = written
+            .windows(4)
+            .position(|window| window == b"mdhd")
+            .and_then(|at| at.checked_add(4))
+            .unwrap();
+        *written.get_mut(version_at).unwrap() = 2;
+
+        written
     }
 
     /// Writes the payload of the box and returns the bytes it occupies
@@ -705,6 +727,66 @@ mod tests {
         assert_eq!(
             MovieBox::decode_payload(&payload),
             Err(Error::duplicate_box(BoxType::compact(*b"mvhd")))
+        );
+    }
+
+    #[test]
+    fn a_track_that_does_not_read_is_kept_after_the_unclaimed_children_and_the_others_read() {
+        let unclaimed = vec![0, 0, 0, 0x08, b'f', b'r', b'e', b'e'];
+        let unread = track_of_an_unread_media_header();
+        let payload = [
+            encoded_child(&movie_header(5_000)),
+            unread.clone(),
+            encoded_child(&track()),
+            unclaimed.clone(),
+        ]
+        .concat();
+
+        let decoded = MovieBox::decode_payload(&payload).unwrap();
+
+        assert_eq!(
+            decoded,
+            MovieBox {
+                mvhd: movie_header(5_000),
+                trak: vec![track()],
+                mvex: None,
+                other_boxes: kept(&[unclaimed, unread].concat()),
+            }
+        );
+        assert_eq!(
+            MovieBox::decode_payload(&encoded_payload(&decoded)),
+            Ok(decoded)
+        );
+    }
+
+    #[test]
+    fn a_movie_of_which_no_track_reads_reports_the_failure_of_the_first() {
+        let track_of_no_children = vec![0, 0, 0, 0x08, b't', b'r', b'a', b'k'];
+        let payload = [
+            encoded_child(&movie_header(5_000)),
+            track_of_an_unread_media_header(),
+            track_of_no_children,
+        ]
+        .concat();
+
+        assert_eq!(
+            MovieBox::decode_payload(&payload),
+            Err(Error::unsupported_version(2)
+                .in_container(BoxType::compact(*b"mdhd"))
+                .in_container(BoxType::compact(*b"mdia"))
+                .in_container(BoxType::compact(*b"trak")))
+        );
+    }
+
+    #[test]
+    fn an_extends_box_that_does_not_read_fails_the_movie() {
+        let extends_of_no_trex = vec![0, 0, 0, 0x08, b'm', b'v', b'e', b'x'];
+        let payload = [encoded_payload(&movie()), extends_of_no_trex].concat();
+
+        assert_eq!(
+            MovieBox::decode_payload(&payload),
+            Err(Error::missing_mandatory_box(BoxType::compact(*b"trex"))
+                .in_container(BoxType::compact(*b"mvex")))
         );
     }
 }

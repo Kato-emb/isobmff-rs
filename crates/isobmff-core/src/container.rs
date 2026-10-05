@@ -7,6 +7,7 @@ use crate::codec::box_decode::BoxDecode;
 use crate::codec::box_definition::BoxDefinition;
 use crate::codec::box_variants::BoxVariants;
 use crate::error::Error;
+use crate::framing::box_type::BoxType;
 use crate::framing::raw_box::RawBox;
 
 /// Children of one box type, gathered as a container reads its payload
@@ -31,6 +32,13 @@ use crate::framing::raw_box::RawBox;
 /// Reading is left until then. The children are gathered as the bytes they were
 /// framed as, so a count the quantity already forbids is reported without a
 /// payload being read at all.
+///
+/// A container that reads on without a claimed child that does not decode
+/// finishes with [`zero_or_one_keeping_unread`](Self::zero_or_one_keeping_unread),
+/// [`one_or_more_keeping_unread`](Self::one_or_more_keeping_unread) or
+/// [`zero_or_one_variant_keeping_unread`](Self::zero_or_one_variant_keeping_unread)
+/// instead: such a child is kept in the container's [`OtherBoxes`] as the bytes
+/// it came as, and the field goes without it.
 ///
 /// Routing a box type to the gathering that claims it belongs to the container.
 /// A child of another type pushed here is read as the type the finish asks for,
@@ -149,13 +157,47 @@ impl<'payload> ChildBoxes<'payload> {
     /// * Whatever the child reports, with its box type on the
     ///   [`containers`](Error::containers) path of the failure.
     pub fn exactly_one_variant<Slot: BoxVariants>(self) -> Result<Slot, Error> {
-        let variants = Slot::VARIANTS;
+        let stated = self
+            .at_most_one_variant(Slot::VARIANTS)?
+            .ok_or(Error::missing_alternative_box(Slot::VARIANTS))?;
+        let box_type = stated.header().box_type();
+
+        Slot::decode_variant(stated).map_err(|error| error.in_container(box_type))
+    }
+
+    /// Returns the slot of several box types that holds at most one child, if the child was there and reads
+    ///
+    /// The gathering holds the children of every type in
+    /// [`Slot::VARIANTS`](BoxVariants::VARIANTS), which the failures name. A
+    /// child that does not decode is kept in `other_boxes`, after the children
+    /// it already holds, and the slot reads back [`None`].
+    ///
+    /// # Errors
+    ///
+    /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): more than one child was
+    ///   gathered, all of one type.
+    /// * [`DuplicateAlternativeBox`](crate::ErrorKind::DuplicateAlternativeBox): more
+    ///   than one was, of more than one type.
+    pub fn zero_or_one_variant_keeping_unread<Slot: BoxVariants>(
+        self,
+        other_boxes: &mut OtherBoxes,
+    ) -> Result<Option<Slot>, Error> {
+        let Some(stated) = self.at_most_one_variant(Slot::VARIANTS)? else {
+            return Ok(None);
+        };
+        Ok(Slot::decode_variant(stated)
+            .inspect_err(|_| other_boxes.keep(stated))
+            .ok())
+    }
+
+    /// Returns the one child gathered across `variants`, if one was
+    fn at_most_one_variant(
+        self,
+        variants: &'static [BoxType],
+    ) -> Result<Option<RawBox<'payload>>, Error> {
         match self.children.as_slice() {
-            [] => Err(Error::missing_alternative_box(variants)),
-            [stated] => {
-                let box_type = stated.header().box_type();
-                Slot::decode_variant(*stated).map_err(|error| error.in_container(box_type))
-            }
+            [] => Ok(None),
+            [stated] => Ok(Some(*stated)),
             [first, rest @ ..] => {
                 let box_type = first.header().box_type();
                 let of_one_type = rest
@@ -183,15 +225,44 @@ impl<'payload> ChildBoxes<'payload> {
     where
         Child: BoxDecode + BoxDefinition,
     {
-        let mut children = self.children.into_iter();
-        let Some(child) = children.next() else {
+        self.at_most_one(Child::BOX_TYPE)?
+            .map(decode::<Child>)
+            .transpose()
+    }
+
+    /// Returns the child of a quantity of `Zero or one`, if it was there and reads
+    ///
+    /// A child that does not decode is kept in `other_boxes`, after the children
+    /// it already holds, and the field reads back [`None`].
+    ///
+    /// # Errors
+    ///
+    /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): more than one child of
+    ///   the type was gathered.
+    pub fn zero_or_one_keeping_unread<Child>(
+        self,
+        other_boxes: &mut OtherBoxes,
+    ) -> Result<Option<Child>, Error>
+    where
+        Child: BoxDecode + BoxDefinition,
+    {
+        let Some(child) = self.at_most_one(Child::BOX_TYPE)? else {
             return Ok(None);
         };
+        Ok(decode::<Child>(child)
+            .inspect_err(|_| other_boxes.keep(child))
+            .ok())
+    }
+
+    /// Returns the one child gathered, if one was, naming `box_type` in the failure of a second
+    fn at_most_one(self, box_type: BoxType) -> Result<Option<RawBox<'payload>>, Error> {
+        let mut children = self.children.into_iter();
+        let child = children.next();
         if children.next().is_some() {
-            return Err(Error::duplicate_box(Child::BOX_TYPE));
+            return Err(Error::duplicate_box(box_type));
         }
 
-        Ok(Some(decode::<Child>(child)?))
+        Ok(child)
     }
 
     /// Returns the children of a quantity of `One or more`, in the order they came
@@ -211,6 +282,43 @@ impl<'payload> ChildBoxes<'payload> {
         }
 
         self.zero_or_more()
+    }
+
+    /// Returns the children of a quantity of `One or more` that read, in the order they came
+    ///
+    /// A child that does not decode is kept in `other_boxes`, after the children
+    /// it already holds, and the others are read on without it.
+    ///
+    /// # Errors
+    ///
+    /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox): no child of
+    ///   the type was gathered.
+    /// * Whatever the first of the children reports, with its box type on the
+    ///   [`containers`](Error::containers) path of the failure: none of them reads.
+    pub fn one_or_more_keeping_unread<Child>(
+        self,
+        other_boxes: &mut OtherBoxes,
+    ) -> Result<Vec<Child>, Error>
+    where
+        Child: BoxDecode + BoxDefinition,
+    {
+        let mut read = Vec::with_capacity(self.children.len());
+        let mut first_failure = None;
+        for child in self.children {
+            match decode::<Child>(child) {
+                Ok(value) => read.push(value),
+                Err(error) => {
+                    first_failure.get_or_insert(error);
+                    other_boxes.keep(child);
+                }
+            }
+        }
+
+        if read.is_empty() {
+            return Err(first_failure.unwrap_or(Error::missing_mandatory_box(Child::BOX_TYPE)));
+        }
+
+        Ok(read)
     }
 
     /// Returns the children of a quantity of `Zero or more`, in the order they came
@@ -235,11 +343,13 @@ where
     Child::decode_payload(child.payload()).map_err(|error| error.in_container(Child::BOX_TYPE))
 }
 
-/// Children of a container that no field of it claims
+/// Children of a container that no field of it claims, and those a field claims that did not read
 ///
 /// They are kept as the bytes they lie as, under the box type that names them,
 /// so a container writes back the children it has no field to read them into.
-/// The order they came in is the order they are held.
+/// The order they are kept in is the order they are held. A claimed child that
+/// did not read is kept here too, by one of the `_keeping_unread` finishes of
+/// [`ChildBoxes`].
 ///
 /// Where they go among the children the container does read is that container's
 /// own canonical order, so summing them and writing them is that container's
@@ -298,7 +408,7 @@ impl OtherBoxes {
         }
     }
 
-    /// Keeps a child no field of the container claims
+    /// Keeps a child no field of the container claims, or one a field claims that did not read
     ///
     /// The payload is copied out of `child`, so what is kept outlives the input
     /// it was framed from.
@@ -309,7 +419,7 @@ impl OtherBoxes {
         ));
     }
 
-    /// Returns the children kept, in the order they came
+    /// Returns the children kept, in the order they were kept
     #[must_use]
     pub fn as_slice(&self) -> &[AnyBox] {
         &self.children
@@ -524,6 +634,144 @@ mod tests {
         assert_eq!(
             children.exactly_one::<SequenceNumberBox>(),
             Err(Error::truncated_payload(4, 1).in_container(SequenceNumberBox::BOX_TYPE))
+        );
+    }
+
+    /// Holding of the children no field claims, having kept a `free` already
+    fn other_boxes_holding_a_free() -> OtherBoxes {
+        let mut other_boxes = OtherBoxes::new();
+        for child in boxes(b"\0\0\0\x08free") {
+            other_boxes.keep(child.unwrap());
+        }
+
+        other_boxes
+    }
+
+    #[test]
+    fn a_child_of_zero_or_one_that_does_not_read_is_kept_after_the_unclaimed_ones() {
+        let mut other_boxes = other_boxes_holding_a_free();
+
+        let read = gathered(b"\0\0\0\x09sqnc!")
+            .zero_or_one_keeping_unread::<SequenceNumberBox>(&mut other_boxes);
+
+        assert_eq!(read, Ok(None));
+        assert_eq!(
+            other_boxes.as_slice(),
+            [
+                AnyBox::from_raw_bytes(BoxType::compact(*b"free"), Vec::new()),
+                AnyBox::from_raw_bytes(BoxType::compact(*b"sqnc"), b"!".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_child_of_zero_or_one_that_reads_is_kept_by_its_field() {
+        let mut other_boxes = OtherBoxes::new();
+
+        let read = gathered(b"\0\0\0\x0csqnc\0\0\0\x07")
+            .zero_or_one_keeping_unread::<SequenceNumberBox>(&mut other_boxes);
+
+        assert_eq!(read, Ok(Some(SequenceNumberBox(7))));
+        assert_eq!(other_boxes, OtherBoxes::new());
+    }
+
+    #[test]
+    fn a_count_zero_or_one_forbids_is_refused_though_the_children_do_not_read() {
+        let payload = b"\0\0\0\x09sqnc!\0\0\0\x09sqnc!";
+
+        assert_eq!(
+            gathered(payload)
+                .zero_or_one_keeping_unread::<SequenceNumberBox>(&mut OtherBoxes::new()),
+            Err(Error::duplicate_box(SequenceNumberBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn children_of_one_or_more_that_do_not_read_are_kept_and_the_others_read_in_order() {
+        let payload = b"\0\0\0\x0csqnc\0\0\0\x07\0\0\0\x09sqnc!\0\0\0\x0csqnc\0\0\0\x09";
+        let mut other_boxes = other_boxes_holding_a_free();
+
+        let read =
+            gathered(payload).one_or_more_keeping_unread::<SequenceNumberBox>(&mut other_boxes);
+
+        assert_eq!(read, Ok(vec![SequenceNumberBox(7), SequenceNumberBox(9)]));
+        assert_eq!(
+            other_boxes.as_slice(),
+            [
+                AnyBox::from_raw_bytes(BoxType::compact(*b"free"), Vec::new()),
+                AnyBox::from_raw_bytes(BoxType::compact(*b"sqnc"), b"!".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn one_or_more_of_which_none_reads_reports_the_failure_of_the_first() {
+        let payload = b"\0\0\0\x09sqnc!\0\0\0\x08sqnc";
+
+        assert_eq!(
+            gathered(payload)
+                .one_or_more_keeping_unread::<SequenceNumberBox>(&mut OtherBoxes::new()),
+            Err(Error::truncated_payload(4, 1).in_container(SequenceNumberBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn one_or_more_kept_unread_refuses_a_container_holding_none() {
+        assert_eq!(
+            ChildBoxes::new()
+                .one_or_more_keeping_unread::<SequenceNumberBox>(&mut OtherBoxes::new()),
+            Err(Error::missing_mandatory_box(SequenceNumberBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn a_variant_that_does_not_read_is_kept_after_the_unclaimed_ones() {
+        let mut other_boxes = other_boxes_holding_a_free();
+
+        let read = gathered(b"\0\0\0\x09sqn2!")
+            .zero_or_one_variant_keeping_unread::<SequenceNumber>(&mut other_boxes);
+
+        assert_eq!(read, Ok(None));
+        assert_eq!(
+            other_boxes.as_slice(),
+            [
+                AnyBox::from_raw_bytes(BoxType::compact(*b"free"), Vec::new()),
+                AnyBox::from_raw_bytes(BoxType::compact(*b"sqn2"), b"!".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_variant_of_zero_or_one_yields_the_child_that_reads_and_nothing_for_none() {
+        let mut other_boxes = OtherBoxes::new();
+
+        assert_eq!(
+            gathered(b"\0\0\0\x0csqn2\0\0\0\x07")
+                .zero_or_one_variant_keeping_unread::<SequenceNumber>(&mut other_boxes),
+            Ok(Some(SequenceNumber::Alternative(SequenceNumberBox(7))))
+        );
+        assert_eq!(
+            ChildBoxes::new()
+                .zero_or_one_variant_keeping_unread::<SequenceNumber>(&mut other_boxes),
+            Ok(None)
+        );
+        assert_eq!(other_boxes, OtherBoxes::new());
+    }
+
+    #[test]
+    fn more_than_one_variant_is_refused_though_none_reads() {
+        let of_one_type = b"\0\0\0\x09sqnc!\0\0\0\x09sqnc!";
+        let of_two_types = b"\0\0\0\x09sqnc!\0\0\0\x09sqn2!";
+
+        assert_eq!(
+            gathered(of_one_type)
+                .zero_or_one_variant_keeping_unread::<SequenceNumber>(&mut OtherBoxes::new()),
+            Err(Error::duplicate_box(SequenceNumberBox::BOX_TYPE))
+        );
+        assert_eq!(
+            gathered(of_two_types)
+                .zero_or_one_variant_keeping_unread::<SequenceNumber>(&mut OtherBoxes::new()),
+            Err(Error::duplicate_alternative_box(SequenceNumber::VARIANTS))
         );
     }
 

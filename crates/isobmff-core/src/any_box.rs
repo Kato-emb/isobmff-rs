@@ -74,14 +74,15 @@ impl BoxEncode for OpaquePayload {
 /// Box carried without its payload type, under the box type that names it
 ///
 /// Boxes of unlike types travel together as these: a container keeps the
-/// children it has no field for in a `Vec` of them, and writes each back
-/// without naming what it holds.
+/// children it has no field for, and those that did not read, in a `Vec` of
+/// them, and writes each back without naming what it holds.
 ///
 /// Two kinds of box fit. One the reader has a type for arrives through
 /// [`From`]; [`downcast_ref`](Self::downcast_ref) and
 /// [`downcast_mut`](Self::downcast_mut) reach it again. One the reader has no
-/// type for arrives through [`from_raw_bytes`](Self::from_raw_bytes) as the bytes it lies as, and
-/// comes back out of [`raw_payload`](Self::raw_payload).
+/// type for, or one its type did not read, arrives through
+/// [`from_raw_bytes`](Self::from_raw_bytes) as the bytes it lies as, and comes
+/// back out of [`raw_payload`](Self::raw_payload).
 ///
 /// Either way the box type is the payload's own
 /// [`box_type`](BoxFormat::box_type), asked for afresh on every call, so the
@@ -141,7 +142,7 @@ pub struct AnyBox {
 }
 
 impl AnyBox {
-    /// Creates a box from the bytes of a payload no type was available for
+    /// Creates a box from the bytes of a payload no type was available for or its type did not read
     ///
     /// `payload` is the payload of the box whole, header excluded, as
     /// [`RawBox::payload`](crate::RawBox::payload) leaves it.
