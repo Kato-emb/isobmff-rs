@@ -19,6 +19,8 @@ use crate::framing::raw_box::RawBox;
 /// }
 ///
 /// impl BoxDecode for SequenceNumberBox {
+///     type Error = Error;
+///
 ///     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
 ///         Ok(Self {
 ///             sequence_number: reader.read_u32()?,
@@ -45,6 +47,13 @@ use crate::framing::raw_box::RawBox;
 /// );
 /// ```
 pub trait BoxDecode: Sized {
+    /// Failure that reading the box reports
+    ///
+    /// A box whose failures are all ones [`Error`] names states `Error`. A box
+    /// that fails in a way of its own states a type of its own crate, which
+    /// takes the [`Error`] the methods provided here report themselves.
+    type Error: From<Error>;
+
     /// Reads the fields of `Self` off the front of the payload of one box
     ///
     /// The Syntax subclause of a box lays out the fields its payload is made
@@ -63,7 +72,7 @@ pub trait BoxDecode: Sized {
     /// * What the box makes of the fields it has read: a version or a flag it
     ///   does not read, a count that disagrees with what follows it, or the
     ///   failures a container brings.
-    fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error>;
+    fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Self::Error>;
 
     /// Decodes the payload of one box into a value
     ///
@@ -90,7 +99,7 @@ pub trait BoxDecode: Sized {
     ///   bytes past the fields of `Self`.
     /// * What [`decode_fields`](Self::decode_fields) reports for the fields
     ///   themselves.
-    fn decode_payload(payload: &[u8]) -> Result<Self, Error> {
+    fn decode_payload(payload: &[u8]) -> Result<Self, Self::Error> {
         let mut reader = FieldReader::new(payload);
         let value = Self::decode_fields(&mut reader)?;
         reader.finish()?;
@@ -150,6 +159,8 @@ pub trait BoxDecode: Sized {
     /// }
     ///
     /// impl BoxDecode for SequenceNumberBox {
+    ///     type Error = Error;
+    ///
     ///     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
     ///         Ok(Self {
     ///             sequence_number: reader.read_u32()?,
@@ -190,7 +201,7 @@ pub trait BoxDecode: Sized {
     ///     ))
     /// );
     /// ```
-    fn decode(input: &[u8]) -> Result<(Self, &[u8]), Error>
+    fn decode(input: &[u8]) -> Result<(Self, &[u8]), Self::Error>
     where
         Self: BoxDefinition,
     {
@@ -198,7 +209,7 @@ pub trait BoxDecode: Sized {
         let found = framed.header().box_type();
 
         if found != Self::BOX_TYPE {
-            return Err(Error::box_type_mismatch(Self::BOX_TYPE, found));
+            return Err(Error::box_type_mismatch(Self::BOX_TYPE, found).into());
         }
 
         Ok((Self::decode_payload(framed.payload())?, rest))
@@ -224,6 +235,8 @@ mod tests {
     }
 
     impl BoxDecode for SequenceNumberBox {
+        type Error = Error;
+
         fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
             Ok(Self {
                 sequence_number: reader.read_u32()?,

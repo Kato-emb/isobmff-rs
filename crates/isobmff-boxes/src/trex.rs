@@ -81,6 +81,8 @@ impl BoxDefinition for TrackExtendsBox {
 }
 
 impl BoxDecode for TrackExtendsBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

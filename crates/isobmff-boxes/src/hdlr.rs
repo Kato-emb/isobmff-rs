@@ -68,6 +68,8 @@ impl BoxDefinition for HandlerBox {
 }
 
 impl BoxDecode for HandlerBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

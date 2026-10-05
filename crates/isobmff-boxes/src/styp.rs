@@ -80,6 +80,8 @@ impl BoxDefinition for SegmentTypeBox {
 }
 
 impl BoxDecode for SegmentTypeBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the

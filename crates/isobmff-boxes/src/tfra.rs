@@ -200,6 +200,8 @@ impl BoxDefinition for TrackFragmentRandomAccessBox {
 }
 
 impl BoxDecode for TrackFragmentRandomAccessBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

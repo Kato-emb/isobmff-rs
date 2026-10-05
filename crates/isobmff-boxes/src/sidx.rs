@@ -232,6 +232,8 @@ impl BoxDefinition for SegmentIndexBox {
 }
 
 impl BoxDecode for SegmentIndexBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

@@ -130,6 +130,8 @@ impl BoxDefinition for FileTypeBox {
 }
 
 impl BoxDecode for FileTypeBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the

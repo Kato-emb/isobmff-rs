@@ -71,6 +71,8 @@ impl BoxDefinition for SampleDescriptionBox {
 }
 
 impl BoxDecode for SampleDescriptionBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

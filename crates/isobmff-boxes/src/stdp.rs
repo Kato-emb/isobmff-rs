@@ -70,6 +70,8 @@ impl BoxDefinition for DegradationPriorityBox {
 }
 
 impl BoxDecode for DegradationPriorityBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

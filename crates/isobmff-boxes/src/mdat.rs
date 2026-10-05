@@ -64,6 +64,8 @@ impl BoxDefinition for MediaDataBox {
 }
 
 impl BoxDecode for MediaDataBox {
+    type Error = Error;
+
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         Ok(Self::new(reader.take_remainder().to_vec()))
     }

@@ -76,6 +76,8 @@ impl BoxDefinition for SyncSampleBox {
 }
 
 impl BoxDecode for SyncSampleBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

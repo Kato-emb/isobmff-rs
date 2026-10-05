@@ -91,6 +91,8 @@ impl BoxDefinition for VideoMediaHeaderBox {
 }
 
 impl BoxDecode for VideoMediaHeaderBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

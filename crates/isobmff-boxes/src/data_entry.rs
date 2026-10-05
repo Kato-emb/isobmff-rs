@@ -110,6 +110,8 @@ impl BoxDefinition for DataEntryUrlBox {
 }
 
 impl BoxDecode for DataEntryUrlBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box
@@ -205,6 +207,8 @@ impl BoxDefinition for DataEntryUrnBox {
 }
 
 impl BoxDecode for DataEntryUrnBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

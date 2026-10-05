@@ -178,6 +178,8 @@ impl BoxDefinition for TimeToSampleBox {
 }
 
 impl BoxDecode for TimeToSampleBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

@@ -112,6 +112,8 @@ impl BoxDefinition for SampleDependencyTypeBox {
 }
 
 impl BoxDecode for SampleDependencyTypeBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

@@ -693,6 +693,62 @@ impl fmt::Debug for Error {
 
 impl error::Error for Error {}
 
+/// Failure that names each box it passes out through, keeping its type
+///
+/// A box read inside a container fails inside that container as well, and the
+/// container names itself on the failure as it passes out. `ChildBoxes`
+/// requires this of the [`Error`](crate::BoxDecode::Error) of the child it
+/// reads.
+///
+/// A failure with no path to add to returns itself unchanged.
+///
+/// # Examples
+///
+/// ```
+/// use isobmff_core::{BoxType, Error, InContainer};
+///
+/// // A failure of a vendor crate, which either names a box or does not
+/// #[derive(Clone, Copy, PartialEq, Debug)]
+/// enum VendorError {
+///     Box(Error),
+///     Bitstream,
+/// }
+///
+/// impl InContainer for VendorError {
+///     fn in_container(self, container: BoxType) -> Self {
+///         match self {
+///             Self::Box(box_error) => Self::Box(box_error.in_container(container)),
+///             Self::Bitstream => Self::Bitstream,
+///         }
+///     }
+/// }
+///
+/// // A failure of a box takes the container on its path
+/// let failure = VendorError::Box(Error::unsupported_version(2))
+///     .in_container(BoxType::compact(*b"vndr"));
+/// assert_eq!(
+///     failure,
+///     VendorError::Box(Error::unsupported_version(2).in_container(BoxType::compact(*b"vndr")))
+/// );
+///
+/// // A failure with no path stays as it was
+/// assert_eq!(
+///     VendorError::Bitstream.in_container(BoxType::compact(*b"vndr")),
+///     VendorError::Bitstream
+/// );
+/// ```
+pub trait InContainer {
+    /// Returns the failure with `container` added to the boxes it was reached through
+    #[must_use]
+    fn in_container(self, container: BoxType) -> Self;
+}
+
+impl InContainer for Error {
+    fn in_container(self, container: BoxType) -> Self {
+        Self::in_container(self, container)
+    }
+}
+
 /// What a failure of reading or writing a box is
 ///
 /// The vocabulary is this crate's own: reading one box off a slice and writing

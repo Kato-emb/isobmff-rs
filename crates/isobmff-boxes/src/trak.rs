@@ -242,6 +242,8 @@ impl BoxDefinition for TrackBox {
 }
 
 impl BoxDecode for TrackBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * The failures of [`boxes`]: a child does not frame as a box.

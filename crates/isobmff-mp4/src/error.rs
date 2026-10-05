@@ -3,7 +3,7 @@
 use core::error;
 use core::fmt;
 
-use isobmff_core::{BoxType, Category};
+use isobmff_core::{BoxType, Category, InContainer};
 
 use crate::descriptor::DescriptorTag;
 
@@ -18,6 +18,7 @@ use crate::descriptor::DescriptorTag;
 /// # Examples
 ///
 /// ```
+/// use isobmff_core::BoxDecode;
 /// use isobmff_mp4::{DescriptorTag, ESDBox, Error, ErrorKind};
 ///
 /// // An `esds` whose payload opens with a descriptor other than an ES_Descriptor
@@ -135,6 +136,12 @@ impl Error {
             | Representation::DuplicateDescriptor { .. }
             | Representation::ExpandableSizeTooLong { .. } => self,
         }
+    }
+}
+
+impl InContainer for Error {
+    fn in_container(self, container: BoxType) -> Self {
+        Self::in_container(self, container)
     }
 }
 

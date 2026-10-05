@@ -436,6 +436,8 @@ impl BoxDefinition for TrackRunBox {
 }
 
 impl BoxDecode for TrackRunBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

@@ -43,6 +43,8 @@ impl BoxDefinition for MovieFragmentHeaderBox {
 }
 
 impl BoxDecode for MovieFragmentHeaderBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

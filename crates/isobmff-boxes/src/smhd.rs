@@ -60,6 +60,8 @@ impl BoxDefinition for SoundMediaHeaderBox {
 }
 
 impl BoxDecode for SoundMediaHeaderBox {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box

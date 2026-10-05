@@ -6,7 +6,7 @@ use crate::any_box::AnyBox;
 use crate::codec::box_decode::BoxDecode;
 use crate::codec::box_definition::BoxDefinition;
 use crate::codec::box_variants::BoxVariants;
-use crate::error::Error;
+use crate::error::{Error, InContainer};
 use crate::framing::raw_box::RawBox;
 
 /// Children of one box type, gathered as a container reads its payload
@@ -32,6 +32,11 @@ use crate::framing::raw_box::RawBox;
 /// framed as, so a count the quantity already forbids is reported without a
 /// payload being read at all.
 ///
+/// A failure is reported as the [`Error`](BoxDecode::Error) of the child's
+/// [`BoxDecode`]: the quantity's own failures are the [`Error`] they are named
+/// by, converted into it, and a child's failure takes the child's box type
+/// through [`InContainer`].
+///
 /// Routing a box type to the gathering that claims it belongs to the container.
 /// A child of another type pushed here is read as the type the finish asks for,
 /// or as one of the variants, which is a fault of the container rather than
@@ -54,6 +59,8 @@ use crate::framing::raw_box::RawBox;
 /// }
 ///
 /// impl BoxDecode for SequenceNumberBox {
+///     type Error = Error;
+///
 ///     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
 ///         Ok(Self {
 ///             sequence_number: reader.read_u32()?,
@@ -125,12 +132,13 @@ impl<'payload> ChildBoxes<'payload> {
     /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): more than one was.
     /// * Whatever the child reports, with its box type on the
     ///   [`containers`](Error::containers) path of the failure.
-    pub fn exactly_one<Child>(self) -> Result<Child, Error>
+    pub fn exactly_one<Child>(self) -> Result<Child, Child::Error>
     where
         Child: BoxDecode + BoxDefinition,
+        Child::Error: InContainer,
     {
         self.zero_or_one::<Child>()?
-            .ok_or(Error::missing_mandatory_box(Child::BOX_TYPE))
+            .ok_or_else(|| Error::missing_mandatory_box(Child::BOX_TYPE).into())
     }
 
     /// Returns the slot a quantity of `Exactly one variant must be present` fills
@@ -179,16 +187,17 @@ impl<'payload> ChildBoxes<'payload> {
     ///   the type was gathered.
     /// * Whatever the child reports, with its box type on the
     ///   [`containers`](Error::containers) path of the failure.
-    pub fn zero_or_one<Child>(self) -> Result<Option<Child>, Error>
+    pub fn zero_or_one<Child>(self) -> Result<Option<Child>, Child::Error>
     where
         Child: BoxDecode + BoxDefinition,
+        Child::Error: InContainer,
     {
         let mut children = self.children.into_iter();
         let Some(child) = children.next() else {
             return Ok(None);
         };
         if children.next().is_some() {
-            return Err(Error::duplicate_box(Child::BOX_TYPE));
+            return Err(Error::duplicate_box(Child::BOX_TYPE).into());
         }
 
         Ok(Some(decode::<Child>(child)?))
@@ -202,12 +211,13 @@ impl<'payload> ChildBoxes<'payload> {
     ///   the type was gathered.
     /// * Whatever one of the children reports, with its box type on the
     ///   [`containers`](Error::containers) path of the failure.
-    pub fn one_or_more<Child>(self) -> Result<Vec<Child>, Error>
+    pub fn one_or_more<Child>(self) -> Result<Vec<Child>, Child::Error>
     where
         Child: BoxDecode + BoxDefinition,
+        Child::Error: InContainer,
     {
         if self.children.is_empty() {
-            return Err(Error::missing_mandatory_box(Child::BOX_TYPE));
+            return Err(Error::missing_mandatory_box(Child::BOX_TYPE).into());
         }
 
         self.zero_or_more()
@@ -219,18 +229,20 @@ impl<'payload> ChildBoxes<'payload> {
     ///
     /// * Whatever one of the children reports, with its box type on the
     ///   [`containers`](Error::containers) path of the failure.
-    pub fn zero_or_more<Child>(self) -> Result<Vec<Child>, Error>
+    pub fn zero_or_more<Child>(self) -> Result<Vec<Child>, Child::Error>
     where
         Child: BoxDecode + BoxDefinition,
+        Child::Error: InContainer,
     {
         self.children.into_iter().map(decode::<Child>).collect()
     }
 }
 
 /// Reads one child, naming it in whatever failure it reports
-fn decode<Child>(child: RawBox<'_>) -> Result<Child, Error>
+fn decode<Child>(child: RawBox<'_>) -> Result<Child, Child::Error>
 where
     Child: BoxDecode + BoxDefinition,
+    Child::Error: InContainer,
 {
     Child::decode_payload(child.payload()).map_err(|error| error.in_container(Child::BOX_TYPE))
 }
@@ -340,6 +352,8 @@ mod tests {
     }
 
     impl BoxDecode for SequenceNumberBox {
+        type Error = Error;
+
         fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
             Ok(Self(reader.read_u32()?))
         }

@@ -159,6 +159,8 @@ impl<Name: AVCCodingName> BoxDefinition for AVCSampleEntry<Name> {
 }
 
 impl<Name: AVCCodingName> BoxDecode for AVCSampleEntry<Name> {
+    type Error = Error;
+
     /// # Errors
     ///
     /// * What [`VisualSampleEntry::decode_fields`] reports for the fields.
