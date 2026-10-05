@@ -1,5 +1,7 @@
 //! [`SampleReader`], the samples gathered out of the bytes their extents name
 
+mod index;
+
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use core::mem;
@@ -7,6 +9,8 @@ use core::ops::Range;
 
 use crate::error::Error;
 use crate::sample::{Sample, SampleExtent};
+
+use index::Index;
 
 /// Reads samples out of the bytes of a file, given where each of them lies
 ///
@@ -94,14 +98,14 @@ pub struct SampleReader {
     // is a walk over every held extent on every arrival, which a reader fed
     // in order pays for nothing.
     whole_held: usize,
-    // Why not an index of the extents by the bytes they lack: keeping one costs
-    // every extent a few tree operations, which a reader fed in order pays for
-    // nothing, where the order the extents are held in is an index already
-    // wherever it is the order of their bytes — which extents held together
-    // are put in, and extents held one at a time keep only where they come
-    // in it. The long way is left for what is held behind a short extent
-    // lying past it, one at a time or together.
-    held_in_order: bool,
+    // Why not indexing the extents by the bytes they lack all the time: keeping
+    // an index costs every extent a few tree operations, which a reader fed in
+    // order pays for nothing, where the order the extents are held in is an
+    // index already wherever it is the order of their bytes — which extents
+    // held together are put in, and extents held one at a time keep only where
+    // they come in it. The extents move into one once a short extent is held
+    // behind one lying past it, and out of it once none is short.
+    index: Option<Index>,
     sample_size_limit: u64,
     state: State,
 }
@@ -141,7 +145,7 @@ impl SampleReader {
             pending: VecDeque::new(),
             ready: VecDeque::new(),
             whole_held: 0,
-            held_in_order: true,
+            index: None,
             sample_size_limit,
             state: State::Reading,
         }
@@ -161,7 +165,7 @@ impl SampleReader {
         self.reading()?;
         let first = self.pending.len();
         let held = self.admit(extent);
-        self.held_in_order_from(first);
+        self.order_from(first);
         self.report_front();
 
         held
@@ -214,7 +218,7 @@ impl SampleReader {
                 batch.sort_by_key(|held| held.extent.extent().start);
             }
         }
-        self.held_in_order_from(first);
+        self.order_from(first);
         self.report_front();
 
         held
@@ -234,13 +238,18 @@ impl SampleReader {
         // Why not checked_add: the caller read `data` out of a finite resource,
         // so its end cannot run past what 64 bits carry.
         let arriving = offset..offset.saturating_add(data.len() as u64);
+        if let Some(index) = &mut self.index {
+            index.fill(data, &arriving, &mut self.ready);
+
+            return Ok(());
+        }
+
         let mut made_whole: usize = 0;
-        let held_in_order = self.held_in_order;
         for pending in self.pending.iter_mut() {
             if pending.is_whole() {
                 continue;
             }
-            if held_in_order && pending.lacking().start >= arriving.end {
+            if pending.lacking().start >= arriving.end {
                 break;
             }
             pending.take_from(data, &arriving);
@@ -280,7 +289,7 @@ impl SampleReader {
     /// Returns the bytes the extent at the front of those held still lacks, if any extent is held
     #[must_use]
     pub fn wanted_extent(&self) -> Option<Range<u64>> {
-        self.pending.front().map(PendingSample::lacking)
+        self.front().map(PendingSample::lacking)
     }
 
     /// Declares the samples over, which every extent held must have been met by
@@ -296,7 +305,7 @@ impl SampleReader {
     pub fn finish(&mut self) -> Result<(), Error> {
         self.reading()?;
 
-        match self.pending.front() {
+        match self.front() {
             Some(short) => Err(self.fail(Error::unfinished_sample(
                 short.extent.track_id(),
                 short.declared_len(),
@@ -346,8 +355,26 @@ impl SampleReader {
         Ok(())
     }
 
-    /// Keeps `held_in_order` where the first short extent held from `first` on lies at or past the last short one before it, the batch itself in order
-    fn held_in_order_from(&mut self, first: usize) {
+    /// Indexes the extents held from `first` on where they or those before them are out of the order of their bytes, and drops the index once none before them is short
+    fn order_from(&mut self, first: usize) {
+        match &mut self.index {
+            Some(index) if index.holds_short() => {
+                index.hold(self.pending.drain(..));
+
+                return;
+            }
+            Some(_) => {
+                if let Some(index) = self.index.take() {
+                    let mut held = index.into_held();
+                    held.append(&mut self.pending);
+                    self.pending = held;
+                }
+
+                return;
+            }
+            None => {}
+        }
+
         // Why the start of what is lacked and not the start of the extent, and
         // why the extents already whole are passed over: input fills every
         // short extent it reaches up to its own end, so short extents held in
@@ -361,14 +388,29 @@ impl SampleReader {
             .rev()
             .find(|held| !held.is_whole());
         let batch = self.pending.range(first..).find(|held| !held.is_whole());
-        self.held_in_order = before.is_none_or(|before| {
-            self.held_in_order
-                && batch.is_none_or(|batch| before.lacking().start <= batch.lacking().start)
-        });
+        if before.is_some_and(|before| {
+            batch.is_some_and(|batch| before.lacking().start > batch.lacking().start)
+        }) {
+            self.index = Some(Index::new(mem::take(&mut self.pending)));
+        }
+    }
+
+    /// Returns the extent at the front of those held
+    fn front(&self) -> Option<&PendingSample> {
+        match &self.index {
+            Some(index) => index.front(),
+            None => self.pending.front(),
+        }
     }
 
     /// Hands over the whole samples at the front of the queue, in the order they were held
     fn report_front(&mut self) {
+        if let Some(index) = &mut self.index {
+            index.report_front(&mut self.ready);
+
+            return;
+        }
+
         while self.pending.front().is_some_and(PendingSample::is_whole) {
             let Some(front) = self.pending.pop_front() else {
                 break;
@@ -403,7 +445,12 @@ impl SampleReader {
     /// Returns the bytes the reader has taken memory for, held or ready to take
     #[cfg(test)]
     fn held_bytes(&self) -> usize {
-        let held = self.pending.iter().map(|pending| pending.data.capacity());
+        let indexed = self.index.iter().flat_map(Index::held);
+        let held = self
+            .pending
+            .iter()
+            .chain(indexed)
+            .map(|pending| pending.data.capacity());
         let ready = self.ready.iter().map(|sample| sample.data().len());
 
         held.chain(ready).sum()
