@@ -34,17 +34,15 @@ use crate::Error;
 ///   at a box an index points at: the next box is a `moof` or a `sidx`,
 ///   placed as it would be where the boxes before the resume left the order,
 ///   and any other is [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder).
-///   The structure resumes from the segment declared over as well, and a
-///   failed one stays failed.
-/// * An `Err` leaves the structure failed for good,
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside:
-///   every later call reports that same failure again.
-/// * [`finish`](Self::finish) declares the segment over. A header handed
-///   over then, or a second [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished).
+/// * An `Err` changes nothing: the structure stands where it stood before the
+///   call.
+/// * [`finish`](Self::finish) checks that the boxes so far form a whole
+///   segment, and changes nothing.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MediaSegmentStructure {
-    state: State,
+    position: Position,
+    /// Whether the next box is one an index points at, after a [`resume`](Self::resume)
+    resuming: bool,
 }
 
 /// What the structure of a media segment makes of a top-level box
@@ -60,19 +58,6 @@ pub(crate) enum MediaSegmentDisposition {
     MediaData,
     /// Box is passed over, payload and all
     Skip,
-}
-
-/// Where the structure stands between calls
-#[derive(Clone, Copy, Debug)]
-enum State {
-    /// Taking headers, standing where the boxes so far have brought it
-    Reading(Position),
-    /// Restarted part-way into the segment, where the boxes before it had brought it, taking a box an index points at next
-    Resuming(Position),
-    /// Told the segment is over, where the boxes so far had brought it, and taking no more headers
-    Finished(Position),
-    /// Failed, and reporting that same failure for every call after it
-    Failed(Error),
 }
 
 /// How far into the order of a media segment the boxes so far reach
@@ -91,14 +76,15 @@ impl MediaSegmentStructure {
     #[must_use]
     pub(crate) const fn new() -> Self {
         Self {
-            state: State::Reading(Position::Start),
+            position: Position::Start,
+            resuming: false,
         }
     }
 
     /// Returns whether the structure is reading at the start, before any box
     #[must_use]
     pub(crate) const fn is_at_start(&self) -> bool {
-        matches!(self.state, State::Reading(Position::Start))
+        !self.resuming && matches!(self.position, Position::Start)
     }
 
     /// Takes the type of the next top-level box, and returns what to do with that box
@@ -108,72 +94,44 @@ impl MediaSegmentStructure {
     /// * [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder): a box
     ///   other than a `moof` or a `sidx` straight after a
     ///   [`resume`](Self::resume).
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
-    ///   segment was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the structure keeps and reports
-    ///   again for every call after it.
     pub(crate) fn handle_box_type(
         &mut self,
         box_type: BoxType,
     ) -> Result<MediaSegmentDisposition, Error> {
-        let (reached, disposition) = match (self.state, box_type) {
-            (State::Reading(position), _)
-            | (State::Resuming(position), MovieFragmentBox::BOX_TYPE | SegmentIndexBox::BOX_TYPE) => {
-                place(position, box_type)
-            }
-            (State::Resuming(_position), _other) => {
-                return Err(self.fail(Error::box_out_of_order(box_type)));
-            }
-            (State::Finished(_position), _any) => return Err(Error::already_finished()),
-            (State::Failed(failure), _any) => return Err(failure),
-        };
-        self.state = State::Reading(reached);
+        if self.resuming
+            && !matches!(
+                box_type,
+                MovieFragmentBox::BOX_TYPE | SegmentIndexBox::BOX_TYPE
+            )
+        {
+            return Err(Error::box_out_of_order(box_type));
+        }
+
+        let (reached, disposition) = place(self.position, box_type);
+        self.position = reached;
+        self.resuming = false;
 
         Ok(disposition)
     }
 
     /// Restarts the order part-way into the segment, where the next box is one an index points at
     pub(crate) const fn resume(&mut self) {
-        match self.state {
-            State::Reading(position) | State::Resuming(position) | State::Finished(position) => {
-                self.state = State::Resuming(position);
-            }
-            State::Failed(_failure) => {}
-        }
+        self.resuming = true;
     }
 
-    /// Declares the segment over
+    /// Checks that the boxes so far form a whole segment
     ///
     /// # Errors
     ///
     /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox):
     ///   the segment carried no `moof`.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
-    ///   segment was already declared over.
-    /// * The failure of a previous call, which the structure keeps and reports
-    ///   again for every call after it.
-    pub(crate) fn finish(&mut self) -> Result<(), Error> {
-        match self.state {
-            State::Reading(position) | State::Resuming(position) => match position {
-                Position::Fragmenting => {
-                    self.state = State::Finished(position);
-
-                    Ok(())
-                }
-                Position::Start | Position::Opened => {
-                    Err(self.fail(Error::missing_mandatory_box(MovieFragmentBox::BOX_TYPE)))
-                }
-            },
-            State::Finished(_position) => Err(Error::already_finished()),
-            State::Failed(failure) => Err(failure),
+    pub(crate) const fn finish(&self) -> Result<(), Error> {
+        match self.position {
+            Position::Fragmenting => Ok(()),
+            Position::Start | Position::Opened => {
+                Err(Error::missing_mandatory_box(MovieFragmentBox::BOX_TYPE))
+            }
         }
-    }
-
-    /// Fails the structure for good, and hands the failure back to report
-    const fn fail(&mut self, failure: Error) -> Error {
-        self.state = State::Failed(failure);
-
-        failure
     }
 }
 
@@ -275,7 +233,7 @@ mod tests {
     }
 
     #[test]
-    fn a_segment_declared_over_resumes_and_is_declared_over_again() {
+    fn a_segment_resumed_after_its_check_passed_goes_on_from_where_it_stood() {
         let mut structure = MediaSegmentStructure::new();
         structure
             .handle_box_type(BoxType::compact(*b"moof"))
@@ -285,8 +243,8 @@ mod tests {
         structure.resume();
 
         assert_eq!(
-            structure.handle_box_type(BoxType::compact(*b"moof")),
-            Ok(MediaSegmentDisposition::MovieFragment)
+            structure.handle_box_type(BoxType::compact(*b"sidx")),
+            Ok(MediaSegmentDisposition::SegmentIndex)
         );
         assert_eq!(structure.finish(), Ok(()));
     }
@@ -379,38 +337,5 @@ mod tests {
             .unwrap();
 
         assert_eq!(structure.finish(), Ok(()));
-    }
-
-    #[test]
-    fn a_failed_structure_reports_the_same_failure_for_every_call_after_it() {
-        let mut structure = MediaSegmentStructure::new();
-        let failure = Error::box_out_of_order(BoxType::compact(*b"mdat"));
-        structure.resume();
-
-        assert_eq!(
-            structure.handle_box_type(BoxType::compact(*b"mdat")),
-            Err(failure)
-        );
-        assert_eq!(
-            structure.handle_box_type(BoxType::compact(*b"moof")),
-            Err(failure)
-        );
-        assert_eq!(structure.finish(), Err(failure));
-    }
-
-    #[test]
-    fn a_header_handed_over_after_finishing_is_rejected() {
-        let mut structure = MediaSegmentStructure::new();
-
-        structure
-            .handle_box_type(BoxType::compact(*b"moof"))
-            .unwrap();
-        structure.finish().unwrap();
-
-        assert_eq!(
-            structure.handle_box_type(BoxType::compact(*b"moof")),
-            Err(Error::already_finished())
-        );
-        assert_eq!(structure.finish(), Err(Error::already_finished()));
     }
 }

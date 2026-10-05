@@ -31,15 +31,13 @@ use crate::Error;
 /// * The `mdat` comes anywhere past the `ftyp`, any number of times (§8.1.1).
 /// * Every other box is passed over, wherever it lies — a `moof` among them,
 ///   whose samples are not read.
-/// * An `Err` leaves the structure failed for good,
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside:
-///   every later call reports that same failure again.
-/// * [`finish`](Self::finish) declares the file over. A header handed over
-///   then, or a second [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished).
+/// * An `Err` changes nothing: the structure stands where it stood before the
+///   call.
+/// * [`finish`](Self::finish) checks that the boxes so far form a whole file,
+///   and changes nothing.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct NonFragmentedStructure {
-    state: State,
+    position: Position,
 }
 
 /// What the structure of a non-fragmented movie file makes of a top-level box
@@ -53,17 +51,6 @@ pub(crate) enum NonFragmentedDisposition {
     MediaData,
     /// Box is passed over, payload and all
     Skip,
-}
-
-/// Where the structure stands between calls
-#[derive(Clone, Copy, Debug)]
-enum State {
-    /// Taking headers, standing where the boxes so far have brought it
-    Reading(Position),
-    /// Told the file is over, and taking no more headers
-    Finished,
-    /// Failed, and reporting that same failure for every call after it
-    Failed(Error),
 }
 
 /// How far into the order of a non-fragmented movie file the boxes so far reach
@@ -82,14 +69,14 @@ impl NonFragmentedStructure {
     #[must_use]
     pub(crate) const fn new() -> Self {
         Self {
-            state: State::Reading(Position::Start),
+            position: Position::Start,
         }
     }
 
     /// Returns whether no box has been placed yet, where the `ftyp` may still come
     #[must_use]
     pub(crate) const fn is_at_start(&self) -> bool {
-        matches!(self.state, State::Reading(Position::Start))
+        matches!(self.position, Position::Start)
     }
 
     /// Takes the type of the next top-level box, and returns what to do with that box
@@ -100,57 +87,29 @@ impl NonFragmentedStructure {
     ///   `ftyp` after another box.
     /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): a second
     ///   `moov`.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
-    ///   file was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the structure keeps and reports
-    ///   again for every call after it.
     pub(crate) fn handle_box_type(
         &mut self,
         box_type: BoxType,
     ) -> Result<NonFragmentedDisposition, Error> {
-        let position = match self.state {
-            State::Reading(position) => position,
-            State::Finished => return Err(Error::already_finished()),
-            State::Failed(failure) => return Err(failure),
-        };
-
-        let (reached, disposition) =
-            place(position, box_type).map_err(|failure| self.fail(failure))?;
-        self.state = State::Reading(reached);
+        let (reached, disposition) = place(self.position, box_type)?;
+        self.position = reached;
 
         Ok(disposition)
     }
 
-    /// Declares the file over
+    /// Checks that the boxes so far form a whole file
     ///
     /// # Errors
     ///
     /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox):
     ///   the file carried no `moov`.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
-    ///   file was already declared over.
-    /// * The failure of a previous call, which the structure keeps and reports
-    ///   again for every call after it.
-    pub(crate) fn finish(&mut self) -> Result<(), Error> {
-        match self.state {
-            State::Reading(Position::Declared) => {
-                self.state = State::Finished;
-
-                Ok(())
+    pub(crate) const fn finish(&self) -> Result<(), Error> {
+        match self.position {
+            Position::Declared => Ok(()),
+            Position::Start | Position::Opened => {
+                Err(Error::missing_mandatory_box(MovieBox::BOX_TYPE))
             }
-            State::Reading(Position::Start | Position::Opened) => {
-                Err(self.fail(Error::missing_mandatory_box(MovieBox::BOX_TYPE)))
-            }
-            State::Finished => Err(Error::already_finished()),
-            State::Failed(failure) => Err(failure),
         }
-    }
-
-    /// Fails the structure for good, and hands the failure back to report
-    const fn fail(&mut self, failure: Error) -> Error {
-        self.state = State::Failed(failure);
-
-        failure
     }
 }
 
@@ -308,41 +267,5 @@ mod tests {
             .unwrap();
 
         assert_eq!(structure.finish(), Ok(()));
-    }
-
-    #[test]
-    fn a_failed_structure_reports_the_same_failure_for_every_call_after_it() {
-        let mut structure = NonFragmentedStructure::new();
-        let failure = Error::box_out_of_order(BoxType::compact(*b"ftyp"));
-
-        structure
-            .handle_box_type(BoxType::compact(*b"mdat"))
-            .unwrap();
-
-        assert_eq!(
-            structure.handle_box_type(BoxType::compact(*b"ftyp")),
-            Err(failure)
-        );
-        assert_eq!(
-            structure.handle_box_type(BoxType::compact(*b"moov")),
-            Err(failure)
-        );
-        assert_eq!(structure.finish(), Err(failure));
-    }
-
-    #[test]
-    fn a_header_handed_over_after_finishing_is_rejected() {
-        let mut structure = NonFragmentedStructure::new();
-
-        structure
-            .handle_box_type(BoxType::compact(*b"moov"))
-            .unwrap();
-        structure.finish().unwrap();
-
-        assert_eq!(
-            structure.handle_box_type(BoxType::compact(*b"mdat")),
-            Err(Error::already_finished())
-        );
-        assert_eq!(structure.finish(), Err(Error::already_finished()));
     }
 }
