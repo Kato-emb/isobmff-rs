@@ -98,14 +98,15 @@ pub struct SampleReader {
     // is a walk over every held extent on every arrival, which a reader fed
     // in order pays for nothing.
     whole_held: usize,
+    /// The extents held once a short extent lacks bytes before one held ahead of it, until none is short
+    ///
+    /// `pending` is empty between calls while this is `Some`.
     // Why not indexing the extents by the bytes they lack all the time: keeping
     // an index costs every extent a few tree operations, which a reader fed in
     // order pays for nothing, where the order the extents are held in is an
     // index already wherever it is the order of their bytes — which extents
     // held together are put in, and extents held one at a time keep only where
-    // they come in it. The extents move into one once a short extent is held
-    // behind one lying past it, `pending` staying empty between calls while
-    // they are in it, and the index goes once none is short.
+    // they come in it.
     index: Option<Index>,
     sample_size_limit: u64,
     state: State,
@@ -359,7 +360,7 @@ impl SampleReader {
         Ok(())
     }
 
-    /// Indexes the extents held where those from `first` on or those before them are out of the order of their bytes
+    /// Moves the extents held into the index once a short one from `first` on lacks bytes before the last short one ahead of it, or the index is already kept
     fn order_from(&mut self, first: usize) {
         if self.index.is_none() {
             // Why the start of what is lacked and not the start of the extent, and

@@ -266,7 +266,7 @@ const BOX_PAYLOAD_LENS: [(&str, usize); 6] = [
     ("64KiB", 64 * 1024),
 ];
 
-/// Samples the fifth table hands the sample reader, over the range it reports
+/// Samples the fifth table hands the sample reader, over the range the fifth table reports
 const DESCENDING_SAMPLE_COUNTS: [(&str, usize); 3] =
     [("1k", 1_024), ("4k", 4 * 1_024), ("16k", 16 * 1_024)];
 
@@ -384,7 +384,7 @@ fn fragmented_reader_samples(file: &[u8], chunk_len: usize) -> (usize, usize) {
     (count, total)
 }
 
-/// The extents of `sample_count` samples of one track, fragment by fragment, whose media data lies fragment by fragment in descending order
+/// The extents of `sample_count` samples of one track, fragment by fragment, the media data of each fragment lying before that of the one declared ahead of it
 ///
 /// The first fragment declares samples lying at the end of the media data and
 /// the last at its start, each fragment's own samples in ascending order, as
@@ -803,7 +803,7 @@ fn descending_media_data(criterion: &mut Criterion) {
         group.bench_function(BenchmarkId::new("sample_reader", name), |bencher| {
             bencher.iter_batched(
                 || descending_extents(sample_count),
-                |fragments| {
+                |mut fragments| {
                     let mut reader = SampleReader::new();
                     let mut count = 0;
                     let mut total = 0;
@@ -815,9 +815,9 @@ fn descending_media_data(criterion: &mut Criterion) {
                         }
                     };
 
-                    for extents in fragments {
+                    for extents in &mut fragments {
                         reader
-                            .handle_sample_extents(extents.into_iter().map(Ok))
+                            .handle_sample_extents(extents.drain(..).map(Ok))
                             .unwrap();
                     }
                     for (offset, arriving) in (0..)
@@ -831,6 +831,7 @@ fn descending_media_data(criterion: &mut Criterion) {
                     take(&mut reader);
 
                     assert_eq!((count, total), (sample_count, payload_len));
+                    fragments
                 },
                 batch_size(payload_len),
             );

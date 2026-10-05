@@ -1,4 +1,4 @@
-//! [`Index`], the extents a [`SampleReader`](super::SampleReader) holds while they are out of the order of their bytes
+//! [`Index`], the extents a [`SampleReader`](super::SampleReader) holds once they fall out of the order of their bytes
 
 use alloc::collections::{BTreeSet, VecDeque};
 use alloc::vec::Vec;
@@ -7,11 +7,11 @@ use core::ops::Range;
 use super::PendingSample;
 use crate::sample::Sample;
 
-/// Extents held out of the order of their bytes, found by the byte each lacks next
+/// Extents a reader holds once they fall out of the order of their bytes, found by the byte each lacks next
 ///
 /// `held` keeps the extents in the order they were held, an extent handed
-/// over leaving an empty slot behind it, and `front` is the number the extent
-/// at its front was held as. `lacking` names each short extent by the byte it
+/// over from behind a short one leaving its slot empty, and `front` is the
+/// number the extent at its front was held as. `lacking` names each short extent by the byte it
 /// lacks next and its number.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Index {
@@ -25,8 +25,8 @@ impl Index {
     pub(super) fn hold(&mut self, extents: impl IntoIterator<Item = PendingSample>) {
         for pending in extents {
             if !pending.is_whole() {
-                // Why not checked_add: the number counts the extents one reader
-                // has held, which no input reaches 2^64 of.
+                // Why not checked_add: the number counts the extents held since
+                // this index was made, which no input reaches 2^64 of.
                 let number = self.front.wrapping_add(self.held.len() as u64);
                 self.lacking.insert((pending.lacking().start, number));
             }
@@ -50,16 +50,17 @@ impl Index {
         self.held.iter().flatten()
     }
 
-    /// Fills the short extents `data`, the bytes `arriving` covers, carries the next byte of, and hands over the samples that makes whole
+    /// Fills the short extents whose next lacked byte lies in `data`, the bytes `arriving` covers, and hands over the samples this makes whole
     pub(super) fn fill(
         &mut self,
         data: &[u8],
         arriving: &Range<u64>,
         ready: &mut VecDeque<Sample>,
     ) {
-        // Why not taking the keys off the range one at a time: each would search
-        // the set from its root again, where one pass over the range reads them
-        // in a row.
+        // Why not removing the keys while walking the range: the set cannot
+        // change while the walk borrows it, and taking the first key of the
+        // range afresh each time adds a search from the root per key on top of
+        // the removal.
         let reached: Vec<(u64, u64)> = self
             .lacking
             .range((arriving.start, 0)..(arriving.end, 0))
