@@ -239,29 +239,12 @@ impl BoxDecode for MovieBox {
     /// * Whatever the child reports, on the [`containers`](Error::containers) path: one of the
     ///   children does not decode.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let mut mvhd_boxes = ChildBoxes::new();
-        let mut trak_boxes = ChildBoxes::new();
-        let mut mvex_boxes = ChildBoxes::new();
-        let mut other_boxes = OtherBoxes::new();
+        let mut children: ChildBoxes<'_> =
+            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
 
-        for child in boxes(reader.take_remainder()) {
-            let child = child?;
-            let box_type = child.header().box_type();
-
-            if box_type == MovieHeaderBox::BOX_TYPE {
-                mvhd_boxes.push(child);
-            } else if box_type == TrackBox::BOX_TYPE {
-                trak_boxes.push(child);
-            } else if box_type == MovieExtendsBox::BOX_TYPE {
-                mvex_boxes.push(child);
-            } else {
-                other_boxes.keep(child);
-            }
-        }
-
-        let mvhd = mvhd_boxes.exactly_one()?;
-        let trak = trak_boxes.one_or_more()?;
-        let mvex = mvex_boxes.zero_or_one()?;
+        let mvhd = children.take_exactly_one()?;
+        let trak = children.take_one_or_more()?;
+        let mvex = children.take_zero_or_one()?;
 
         if a_track_lacks_its_trex(&trak, mvex.as_ref()) {
             return Err(Error::missing_mandatory_box(TrackExtendsBox::BOX_TYPE));
@@ -271,7 +254,7 @@ impl BoxDecode for MovieBox {
             mvhd,
             trak,
             mvex,
-            other_boxes,
+            other_boxes: OtherBoxes::from(children),
         })
     }
 }

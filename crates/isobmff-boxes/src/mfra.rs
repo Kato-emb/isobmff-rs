@@ -72,28 +72,14 @@ impl BoxDecode for MovieFragmentRandomAccessBox {
     /// * Whatever the child reports, on the [`containers`](Error::containers) path: a child does
     ///   not decode.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let mut tfra_boxes = ChildBoxes::new();
-        let mut mfro_boxes = ChildBoxes::new();
-        let mut other_boxes = OtherBoxes::new();
+        let mut children: ChildBoxes<'_> =
+            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
 
-        for child in boxes(reader.take_remainder()) {
-            let child = child?;
-            let box_type = child.header().box_type();
-
-            if box_type == TrackFragmentRandomAccessBox::BOX_TYPE {
-                tfra_boxes.push(child);
-            } else if box_type == MovieFragmentRandomAccessOffsetBox::BOX_TYPE {
-                mfro_boxes.push(child);
-            } else {
-                other_boxes.keep(child);
-            }
-        }
-
-        mfro_boxes.exactly_one::<MovieFragmentRandomAccessOffsetBox>()?;
+        children.take_exactly_one::<MovieFragmentRandomAccessOffsetBox>()?;
 
         Ok(Self {
-            tfra: tfra_boxes.zero_or_more()?,
-            other_boxes,
+            tfra: children.take_zero_or_more()?,
+            other_boxes: OtherBoxes::from(children),
         })
     }
 }

@@ -131,39 +131,22 @@ impl BoxDecode for TrackFragmentBox {
     /// * Whatever the child reports, on the [`containers`](Error::containers) path: a child does
     ///   not decode.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let mut tfhd_boxes = ChildBoxes::new();
-        let mut tfdt_boxes = ChildBoxes::new();
-        let mut trun_boxes = ChildBoxes::new();
-        let mut other_boxes = OtherBoxes::new();
+        let mut children: ChildBoxes<'_> =
+            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
 
-        for child in boxes(reader.take_remainder()) {
-            let child = child?;
-            let box_type = child.header().box_type();
-
-            if box_type == TrackFragmentHeaderBox::BOX_TYPE {
-                tfhd_boxes.push(child);
-            } else if box_type == TrackFragmentBaseMediaDecodeTimeBox::BOX_TYPE {
-                tfdt_boxes.push(child);
-            } else if box_type == TrackRunBox::BOX_TYPE {
-                trun_boxes.push(child);
-            } else {
-                other_boxes.keep(child);
-            }
-        }
-
-        let tfhd: TrackFragmentHeaderBox = tfhd_boxes.exactly_one()?;
+        let tfhd: TrackFragmentHeaderBox = children.take_exactly_one()?;
         // Why not weighing the runs once they are read: the rule turns on whether
         // a run is there at all, and a fragment that declares an empty duration
         // would have every run of an input it goes on to refuse decoded first.
-        if tfhd.duration_is_empty() && !trun_boxes.is_empty() {
+        if tfhd.duration_is_empty() && children.contains::<TrackRunBox>() {
             return Err(Error::forbidden_child_box(TrackRunBox::BOX_TYPE));
         }
 
         Ok(Self {
             tfhd,
-            tfdt: tfdt_boxes.zero_or_one()?,
-            trun: trun_boxes.zero_or_more()?,
-            other_boxes,
+            tfdt: children.take_zero_or_one()?,
+            trun: children.take_zero_or_more()?,
+            other_boxes: OtherBoxes::from(children),
         })
     }
 }

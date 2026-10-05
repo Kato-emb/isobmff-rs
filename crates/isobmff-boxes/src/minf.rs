@@ -230,37 +230,14 @@ impl BoxDecode for MediaInformationBox {
     /// * Whatever a child reports, on the [`containers`](Error::containers) path: one
     ///   of them does not decode.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let mut media_header_boxes = ChildBoxes::new();
-        let mut data_information_boxes = ChildBoxes::new();
-        let mut sample_table_boxes = ChildBoxes::new();
-        let mut other_boxes = OtherBoxes::new();
-
-        for child in boxes(reader.take_remainder()) {
-            let child = child?;
-            let box_type = child.header().box_type();
-
-            if MediaInformationHeader::VARIANTS.contains(&box_type) {
-                media_header_boxes.push(child);
-            } else if box_type == DataInformationBox::BOX_TYPE {
-                data_information_boxes.push(child);
-            } else if box_type == SampleTableBox::BOX_TYPE {
-                sample_table_boxes.push(child);
-            } else {
-                other_boxes.keep(child);
-            }
-        }
-
-        let media_information_header = if media_header_boxes.is_empty() {
-            None
-        } else {
-            Some(media_header_boxes.exactly_one_variant()?)
-        };
+        let mut children: ChildBoxes<'_> =
+            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         Ok(Self {
-            media_information_header,
-            dinf: data_information_boxes.exactly_one()?,
-            stbl: sample_table_boxes.exactly_one()?,
-            other_boxes,
+            media_information_header: children.take_zero_or_one_variant()?,
+            dinf: children.take_exactly_one()?,
+            stbl: children.take_exactly_one()?,
+            other_boxes: OtherBoxes::from(children),
         })
     }
 }

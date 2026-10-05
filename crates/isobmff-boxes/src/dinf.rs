@@ -58,21 +58,12 @@ impl BoxDecode for DataInformationBox {
     /// * Whatever the child reports, on the [`containers`](Error::containers) path: the
     ///   `dref` does not decode.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let mut data_reference_boxes = ChildBoxes::new();
-        let mut other_boxes = OtherBoxes::new();
-
-        for child in boxes(reader.take_remainder()) {
-            let child = child?;
-            if child.header().box_type() == DataReferenceBox::BOX_TYPE {
-                data_reference_boxes.push(child);
-            } else {
-                other_boxes.keep(child);
-            }
-        }
+        let mut children: ChildBoxes<'_> =
+            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         Ok(Self {
-            dref: data_reference_boxes.exactly_one()?,
-            other_boxes,
+            dref: children.take_exactly_one()?,
+            other_boxes: OtherBoxes::from(children),
         })
     }
 }

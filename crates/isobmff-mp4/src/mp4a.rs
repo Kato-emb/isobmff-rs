@@ -117,26 +117,14 @@ impl BoxDecode for MP4AudioSampleEntry {
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let audio = AudioSampleEntry::decode_fields(reader)?;
 
-        let mut esds_boxes = ChildBoxes::new();
-        let mut sampling_rate_boxes = ChildBoxes::new();
-        let mut other_boxes = OtherBoxes::new();
-        for child in boxes(reader.take_remainder()) {
-            let child = child?;
-            let box_type = child.header().box_type();
-            if box_type == ESDBox::BOX_TYPE {
-                esds_boxes.push(child);
-            } else if box_type == SamplingRateBox::BOX_TYPE {
-                sampling_rate_boxes.push(child);
-            } else {
-                other_boxes.keep(child);
-            }
-        }
+        let mut children: ChildBoxes<'_> =
+            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         Ok(Self {
             audio,
-            es: esds_boxes.exactly_one()?,
-            sampling_rate: sampling_rate_boxes.zero_or_one()?,
-            other_boxes,
+            es: children.take_exactly_one()?,
+            sampling_rate: children.take_zero_or_one()?,
+            other_boxes: OtherBoxes::from(children),
         })
     }
 }

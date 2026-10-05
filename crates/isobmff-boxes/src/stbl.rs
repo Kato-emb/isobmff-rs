@@ -1,8 +1,8 @@
 //! [`SampleTableBox`] (`stbl`), ISO/IEC 14496-12 §8.5.1
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxVariants, ChildBoxes, Error,
-    FieldReader, FieldWriter, OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
+    FieldWriter, OtherBoxes, boxes,
 };
 
 use crate::chunk_offset::ChunkOffsets;
@@ -250,59 +250,21 @@ impl BoxDecode for SampleTableBox {
     /// * Whatever a child reports, on the [`containers`](Error::containers) path: one
     ///   of the tables does not decode.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let mut sample_description_boxes = ChildBoxes::new();
-        let mut time_to_sample_boxes = ChildBoxes::new();
-        let mut sample_to_chunk_boxes = ChildBoxes::new();
-        let mut sample_size_boxes = ChildBoxes::new();
-        let mut chunk_offset_boxes = ChildBoxes::new();
-        let mut composition_offset_boxes = ChildBoxes::new();
-        let mut sync_sample_boxes = ChildBoxes::new();
-        let mut padding_bits_boxes = ChildBoxes::new();
-        let mut degradation_priority_boxes = ChildBoxes::new();
-        let mut sample_dependency_type_boxes = ChildBoxes::new();
-        let mut other_boxes = OtherBoxes::new();
-
-        for child in boxes(reader.take_remainder()) {
-            let child = child?;
-            let box_type = child.header().box_type();
-
-            if box_type == SampleDescriptionBox::BOX_TYPE {
-                sample_description_boxes.push(child);
-            } else if box_type == TimeToSampleBox::BOX_TYPE {
-                time_to_sample_boxes.push(child);
-            } else if box_type == SampleToChunkBox::BOX_TYPE {
-                sample_to_chunk_boxes.push(child);
-            } else if SampleSizes::VARIANTS.contains(&box_type) {
-                sample_size_boxes.push(child);
-            } else if ChunkOffsets::VARIANTS.contains(&box_type) {
-                chunk_offset_boxes.push(child);
-            } else if box_type == CompositionOffsetBox::BOX_TYPE {
-                composition_offset_boxes.push(child);
-            } else if box_type == SyncSampleBox::BOX_TYPE {
-                sync_sample_boxes.push(child);
-            } else if box_type == PaddingBitsBox::BOX_TYPE {
-                padding_bits_boxes.push(child);
-            } else if box_type == DegradationPriorityBox::BOX_TYPE {
-                degradation_priority_boxes.push(child);
-            } else if box_type == SampleDependencyTypeBox::BOX_TYPE {
-                sample_dependency_type_boxes.push(child);
-            } else {
-                other_boxes.keep(child);
-            }
-        }
+        let mut children: ChildBoxes<'_> =
+            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         Ok(Self {
-            stsd: sample_description_boxes.exactly_one()?,
-            stts: time_to_sample_boxes.exactly_one()?,
-            stsc: sample_to_chunk_boxes.exactly_one()?,
-            sample_sizes: sample_size_boxes.exactly_one_variant()?,
-            chunk_offsets: chunk_offset_boxes.exactly_one_variant()?,
-            ctts: composition_offset_boxes.zero_or_one()?,
-            stss: sync_sample_boxes.zero_or_one()?,
-            padb: padding_bits_boxes.zero_or_one()?,
-            stdp: degradation_priority_boxes.zero_or_one()?,
-            sdtp: sample_dependency_type_boxes.zero_or_one()?,
-            other_boxes,
+            stsd: children.take_exactly_one()?,
+            stts: children.take_exactly_one()?,
+            stsc: children.take_exactly_one()?,
+            sample_sizes: children.take_exactly_one_variant()?,
+            chunk_offsets: children.take_exactly_one_variant()?,
+            ctts: children.take_zero_or_one()?,
+            stss: children.take_zero_or_one()?,
+            padb: children.take_zero_or_one()?,
+            stdp: children.take_zero_or_one()?,
+            sdtp: children.take_zero_or_one()?,
+            other_boxes: OtherBoxes::from(children),
         })
     }
 }

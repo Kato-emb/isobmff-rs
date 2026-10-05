@@ -4,7 +4,7 @@
 //!
 //! The crate is `no_std`. The `alloc` feature, on by default, adds the items
 //! that need a heap: [`AnyBox`] and [`NullTerminatedString`], which own the
-//! bytes they carry, and [`ChildBoxes`] and [`OtherBoxes`], which gather the
+//! bytes they carry, and [`ChildBoxes`] and [`OtherBoxes`], which hold the
 //! children of a container. Nothing else in the crate reaches for a heap.
 
 #![no_std]
