@@ -13,7 +13,7 @@ use crate::sample::Sample;
 /// over leaving an empty slot behind it, and `front` is the number the extent
 /// at its front was held as. `lacking` names each short extent by the byte it
 /// lacks next and its number.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct Index {
     held: VecDeque<Option<PendingSample>>,
     front: u64,
@@ -21,18 +21,6 @@ pub(super) struct Index {
 }
 
 impl Index {
-    /// Indexes `held`, the extents in the order they were held
-    pub(super) fn new(held: VecDeque<PendingSample>) -> Self {
-        let mut index = Self {
-            held: VecDeque::with_capacity(held.len()),
-            front: 0,
-            lacking: BTreeSet::new(),
-        };
-        index.hold(held);
-
-        index
-    }
-
     /// Holds `extents` behind those held, in the order they come
     pub(super) fn hold(&mut self, extents: impl IntoIterator<Item = PendingSample>) {
         for pending in extents {
@@ -53,18 +41,13 @@ impl Index {
 
     /// Returns the extent at the front of those held
     pub(super) fn front(&self) -> Option<&PendingSample> {
-        self.held.iter().flatten().next()
+        self.held.front().and_then(Option::as_ref)
     }
 
     /// Returns the extents held, in the order they were held
     #[cfg(test)]
     pub(super) fn held(&self) -> impl Iterator<Item = &PendingSample> {
         self.held.iter().flatten()
-    }
-
-    /// Hands back the extents held, in the order they were held
-    pub(super) fn into_held(self) -> VecDeque<PendingSample> {
-        self.held.into_iter().flatten().collect()
     }
 
     /// Fills the short extents `data`, the bytes `arriving` covers, carries the next byte of, and hands over the samples that makes whole
@@ -74,8 +57,9 @@ impl Index {
         arriving: &Range<u64>,
         ready: &mut VecDeque<Sample>,
     ) {
-        // Why not taking them off the set one at a time: an extent the input
-        // could not fill would be put back where it was and found again.
+        // Why not taking the keys off the range one at a time: each would search
+        // the set from its root again, where one pass over the range reads them
+        // in a row.
         let reached: Vec<(u64, u64)> = self
             .lacking
             .range((arriving.start, 0)..(arriving.end, 0))
@@ -101,7 +85,10 @@ impl Index {
         }
 
         self.report_front(ready);
-        made_whole.sort_unstable();
+        // Why not sort_unstable: the numbers come as ascending runs, one per
+        // stretch of extents held in order that the input reaches, which a
+        // stable sort merges where an unstable one sorts them afresh.
+        made_whole.sort();
         for number in made_whole {
             if let Some(pending) = self.slot(number).and_then(Option::take) {
                 ready.push_back(pending.into_sample());

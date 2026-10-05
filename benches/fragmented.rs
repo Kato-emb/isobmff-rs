@@ -391,67 +391,33 @@ fn fragmented_reader_samples(file: &[u8], chunk_len: usize) -> (usize, usize) {
 /// a file laying its `moof` boxes down before media data written backwards
 /// declares them.
 fn descending_extents(sample_count: usize) -> Vec<Vec<SampleExtent>> {
-    let fragment_count = sample_count / DESCENDING_SAMPLES_PER_FRAGMENT;
-    let fragment_len = DESCENDING_SAMPLES_PER_FRAGMENT * DESCENDING_SAMPLE_LEN;
+    let sample_len = u64::try_from(DESCENDING_SAMPLE_LEN).unwrap();
+    let samples_per_fragment = u64::try_from(DESCENDING_SAMPLES_PER_FRAGMENT).unwrap();
+    let fragment_count = u64::try_from(sample_count).unwrap() / samples_per_fragment;
 
     (0..fragment_count)
         .map(|fragment| {
-            let lies_at = (fragment_count - 1 - fragment) * fragment_len;
+            let lies_at = (fragment_count - 1 - fragment) * samples_per_fragment * sample_len;
 
-            (0..DESCENDING_SAMPLES_PER_FRAGMENT)
+            (0..samples_per_fragment)
                 .map(|position| {
-                    let start = u64::try_from(lies_at + position * DESCENDING_SAMPLE_LEN).unwrap();
-                    let sample_number = fragment * DESCENDING_SAMPLES_PER_FRAGMENT + position;
+                    let start = lies_at + position * sample_len;
+                    let sample_number = fragment * samples_per_fragment + position;
 
                     SampleExtent::new(
                         1,
-                        u64::try_from(sample_number).unwrap() * u64::from(SAMPLE_DURATION),
+                        sample_number * u64::from(SAMPLE_DURATION),
                         SAMPLE_DURATION,
                         0,
                         SampleFlags::ZERO,
                         1,
                         1,
-                        start..start + u64::try_from(DESCENDING_SAMPLE_LEN).unwrap(),
+                        start..start + sample_len,
                     )
                 })
                 .collect()
         })
         .collect()
-}
-
-/// Reads the samples of `fragments` out of `media_data` handed over in order, and reports how many there were and what they carry
-///
-/// The sample layer alone: every fragment's extents are held before a byte
-/// arrives, as a reader that has framed the `moof` boxes ahead of the media
-/// data holds them.
-fn sample_reader_samples(fragments: Vec<Vec<SampleExtent>>, media_data: &[u8]) -> (usize, usize) {
-    let mut reader = SampleReader::new();
-    let mut count = 0;
-    let mut total = 0;
-    let mut take = |reader: &mut SampleReader| {
-        while let Some(sample) = reader.poll_sample() {
-            count += 1;
-            total += sample.data().len();
-            black_box(&sample);
-        }
-    };
-
-    for extents in fragments {
-        reader
-            .handle_sample_extents(extents.into_iter().map(Ok))
-            .unwrap();
-    }
-    for (offset, arriving) in (0..)
-        .step_by(DEFAULT_ARRIVING_CHUNK_LEN)
-        .zip(media_data.chunks(DEFAULT_ARRIVING_CHUNK_LEN))
-    {
-        reader.handle_data(offset, arriving).unwrap();
-        take(&mut reader);
-    }
-    reader.finish().unwrap();
-    take(&mut reader);
-
-    (count, total)
 }
 
 /// Frames the boxes of the file, and reports how many of them ended
@@ -830,7 +796,7 @@ fn descending_media_data(criterion: &mut Criterion) {
                     handed_over(&media_data, DEFAULT_ARRIVING_CHUNK_LEN);
                     fragments
                 },
-                BatchSize::SmallInput,
+                batch_size(payload_len),
             );
         });
 
@@ -838,12 +804,35 @@ fn descending_media_data(criterion: &mut Criterion) {
             bencher.iter_batched(
                 || descending_extents(sample_count),
                 |fragments| {
-                    assert_eq!(
-                        sample_reader_samples(fragments, &media_data),
-                        (sample_count, payload_len)
-                    );
+                    let mut reader = SampleReader::new();
+                    let mut count = 0;
+                    let mut total = 0;
+                    let mut take = |reader: &mut SampleReader| {
+                        while let Some(sample) = reader.poll_sample() {
+                            count += 1;
+                            total += sample.data().len();
+                            black_box(&sample);
+                        }
+                    };
+
+                    for extents in fragments {
+                        reader
+                            .handle_sample_extents(extents.into_iter().map(Ok))
+                            .unwrap();
+                    }
+                    for (offset, arriving) in (0..)
+                        .step_by(DEFAULT_ARRIVING_CHUNK_LEN)
+                        .zip(media_data.chunks(DEFAULT_ARRIVING_CHUNK_LEN))
+                    {
+                        reader.handle_data(offset, arriving).unwrap();
+                        take(&mut reader);
+                    }
+                    reader.finish().unwrap();
+                    take(&mut reader);
+
+                    assert_eq!((count, total), (sample_count, payload_len));
                 },
-                BatchSize::SmallInput,
+                batch_size(payload_len),
             );
         });
     }

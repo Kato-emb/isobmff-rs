@@ -104,7 +104,8 @@ pub struct SampleReader {
     // index already wherever it is the order of their bytes — which extents
     // held together are put in, and extents held one at a time keep only where
     // they come in it. The extents move into one once a short extent is held
-    // behind one lying past it, and out of it once none is short.
+    // behind one lying past it, `pending` staying empty between calls while
+    // they are in it, and the index goes once none is short.
     index: Option<Index>,
     sample_size_limit: u64,
     state: State,
@@ -240,6 +241,9 @@ impl SampleReader {
         let arriving = offset..offset.saturating_add(data.len() as u64);
         if let Some(index) = &mut self.index {
             index.fill(data, &arriving, &mut self.ready);
+            if !index.holds_short() {
+                self.index = None;
+            }
 
             return Ok(());
         }
@@ -355,43 +359,30 @@ impl SampleReader {
         Ok(())
     }
 
-    /// Indexes the extents held from `first` on where they or those before them are out of the order of their bytes, and drops the index once none before them is short
+    /// Indexes the extents held where those from `first` on or those before them are out of the order of their bytes
     fn order_from(&mut self, first: usize) {
-        match &mut self.index {
-            Some(index) if index.holds_short() => {
-                index.hold(self.pending.drain(..));
-
-                return;
+        if self.index.is_none() {
+            // Why the start of what is lacked and not the start of the extent, and
+            // why the extents already whole are passed over: input fills every
+            // short extent it reaches up to its own end, so short extents held in
+            // the order of their bytes stay in the order of the bytes they lack,
+            // and the fill stops at the first short extent lacking bytes past the
+            // input. An extent naming no bytes is whole where it is held and
+            // waits behind the short ones, keeping a start the fills leave behind.
+            let before = self
+                .pending
+                .range(..first)
+                .rev()
+                .find(|held| !held.is_whole());
+            let batch = self.pending.range(first..).find(|held| !held.is_whole());
+            if before.is_some_and(|before| {
+                batch.is_some_and(|batch| before.lacking().start > batch.lacking().start)
+            }) {
+                self.index = Some(Index::default());
             }
-            Some(_) => {
-                if let Some(index) = self.index.take() {
-                    let mut held = index.into_held();
-                    held.append(&mut self.pending);
-                    self.pending = held;
-                }
-
-                return;
-            }
-            None => {}
         }
-
-        // Why the start of what is lacked and not the start of the extent, and
-        // why the extents already whole are passed over: input fills every
-        // short extent it reaches up to its own end, so short extents held in
-        // the order of their bytes stay in the order of the bytes they lack,
-        // and the fill stops at the first short extent lacking bytes past the
-        // input. An extent naming no bytes is whole where it is held and
-        // waits behind the short ones, keeping a start the fills leave behind.
-        let before = self
-            .pending
-            .range(..first)
-            .rev()
-            .find(|held| !held.is_whole());
-        let batch = self.pending.range(first..).find(|held| !held.is_whole());
-        if before.is_some_and(|before| {
-            batch.is_some_and(|batch| before.lacking().start > batch.lacking().start)
-        }) {
-            self.index = Some(Index::new(mem::take(&mut self.pending)));
+        if let Some(index) = &mut self.index {
+            index.hold(self.pending.drain(..));
         }
     }
 
