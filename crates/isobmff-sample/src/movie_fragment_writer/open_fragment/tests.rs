@@ -124,7 +124,6 @@ fn rows_of(movie_fragment: &MovieFragmentBox, track_id: u32) -> Vec<TrackRunSamp
         .trun()
         .iter()
         .flat_map(|track_run| track_run.samples())
-        .cloned()
         .collect()
 }
 

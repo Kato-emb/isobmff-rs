@@ -1,6 +1,7 @@
 //! [`TrackRunBox`] (`trun`), ISO/IEC 14496-12 §8.8.8
 
 use alloc::vec::Vec;
+use core::slice;
 
 use isobmff_core::{
     BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWidth, FieldWriter,
@@ -42,9 +43,6 @@ const PER_SAMPLE_FLAGS: u32 = SAMPLE_DURATION_PRESENT
 
 /// Every flag this box reads
 const DEFINED_FLAGS: u32 = DATA_OFFSET_PRESENT | FIRST_SAMPLE_FLAGS_PRESENT | PER_SAMPLE_FLAGS;
-
-/// Rows this box reads from a run whose rows are empty
-const MAXIMUM_EMPTY_ROWS: u64 = 1 << 20;
 
 /// One row of the table a track run documents, holding what it states per sample
 ///
@@ -119,6 +117,42 @@ fn per_sample_field_flags(samples: &[TrackRunSample]) -> u32 {
     samples.first().map_or(0, carried_field_flags)
 }
 
+/// Row of a run that states no per-sample field
+const EMPTY_ROW: TrackRunSample = TrackRunSample::new(None, None, None, None);
+
+/// What a run holds of its table: the rows where they carry a field, or the `sample_count` where they are empty
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+enum Rows {
+    Table(Vec<TrackRunSample>),
+    Empty { sample_count: u32 },
+}
+
+impl From<Vec<TrackRunSample>> for Rows {
+    /// Holds `rows`, as their `sample_count` where they carry no field
+    fn from(rows: Vec<TrackRunSample>) -> Self {
+        if per_sample_field_flags(&rows) == 0 {
+            // Why not `as`: every caller holds at most as many rows as a `u32`
+            // counts, so the fallback names a run no constructor builds rather
+            // than truncating.
+            Self::Empty {
+                sample_count: u32::try_from(rows.len()).unwrap_or(u32::MAX),
+            }
+        } else {
+            Self::Table(rows)
+        }
+    }
+}
+
+impl Rows {
+    /// Returns the rows of the table, none where the run holds only the `sample_count`
+    fn table(&self) -> &[TrackRunSample] {
+        match self {
+            Self::Table(rows) => rows,
+            Self::Empty { .. } => &[],
+        }
+    }
+}
+
 /// Box that documents a contiguous run of the samples of one track fragment
 ///
 /// [`TrackRunBox`] (`trun`), ISO/IEC 14496-12 §8.8.8. The run states, per
@@ -126,16 +160,14 @@ fn per_sample_field_flags(samples: &[TrackRunSample]) -> u32 {
 /// that table — and leaves the rest to the defaults the `tfhd` and the `trex`
 /// set. A `traf` carries as many runs as it has contiguous runs of samples.
 ///
-/// The `sample_count` is not held: it counts the rows, so it is derived on the
-/// way out. The `flags` are not held either — every flag this box reads states
-/// that one of the optional fields is present, which the fields themselves
-/// already say. A flag this box does not read is refused rather than carried
-/// through.
+/// The `flags` are not held: every flag this box reads states that one of the
+/// optional fields is present, which the fields themselves already say. A flag
+/// this box does not read is refused rather than carried through.
 ///
 /// A run that states no per-sample field still counts its samples, and §8.8.8
 /// allows those rows to be empty — which leaves the payload no say in how many
-/// there are. [`decode_payload`](BoxDecode::decode_payload) reads up to
-/// `1_048_576` such rows and refuses a count past that.
+/// there are. Such a run holds its `sample_count` and no rows, however many it
+/// counts; any other run holds its rows, which the `sample_count` counts.
 ///
 /// The version is not held: it selects whether the composition time offsets are
 /// written signed or unsigned, so
@@ -177,7 +209,7 @@ fn per_sample_field_flags(samples: &[TrackRunSample]) -> u32 {
 pub struct TrackRunBox {
     data_offset: Option<i32>,
     first_sample_flags: Option<SampleFlags>,
-    samples: Vec<TrackRunSample>,
+    rows: Rows,
 }
 
 impl TrackRunBox {
@@ -191,7 +223,11 @@ impl TrackRunBox {
     ///   which §8.8.8 forbids together;
     /// * one row carries a negative composition time offset while another
     ///   carries one past [`i32::MAX`], which leaves no version able to write
-    ///   both.
+    ///   both;
+    /// * there are more rows than the 32-bit `sample_count` field can count.
+    ///
+    /// Rows that all carry no field are held as their count, as
+    /// [`from_sample_count`](Self::from_sample_count) holds them.
     #[must_use]
     pub fn new(
         data_offset: Option<i32>,
@@ -214,12 +250,30 @@ impl TrackRunBox {
                 .iter()
                 .filter_map(TrackRunSample::sample_composition_time_offset),
         )?;
+        u32::try_from(samples.len()).ok()?;
 
         Some(Self {
             data_offset,
             first_sample_flags,
-            samples,
+            rows: Rows::from(samples),
         })
+    }
+
+    /// Creates the box of a run of `sample_count` samples whose rows state no field
+    ///
+    /// Every sample takes what the `tfhd` and the `trex` set, except that the
+    /// first takes `first_sample_flags` as its flags where it is given.
+    #[must_use]
+    pub const fn from_sample_count(
+        data_offset: Option<i32>,
+        first_sample_flags: Option<SampleFlags>,
+        sample_count: u32,
+    ) -> Self {
+        Self {
+            data_offset,
+            first_sample_flags,
+            rows: Rows::Empty { sample_count },
+        }
     }
 
     /// Returns the offset this run counts from the one the `tfhd` established
@@ -234,10 +288,28 @@ impl TrackRunBox {
         self.first_sample_flags
     }
 
-    /// Returns the samples of the run, in the order they are decoded
+    /// Returns how many samples the run documents
     #[must_use]
-    pub fn samples(&self) -> &[TrackRunSample] {
-        &self.samples
+    pub fn sample_count(&self) -> u32 {
+        match &self.rows {
+            // Why not `as`: `new` refuses more rows than a `u32` counts, so the
+            // fallback names a run no constructor builds rather than truncating.
+            Rows::Table(rows) => u32::try_from(rows.len()).unwrap_or(u32::MAX),
+            Rows::Empty { sample_count } => *sample_count,
+        }
+    }
+
+    /// Returns the samples of the run, in the order they are decoded
+    ///
+    /// A run whose rows state no field yields an empty row for each sample it
+    /// counts.
+    pub fn samples(&self) -> impl ExactSizeIterator<Item = TrackRunSample> + '_ {
+        match &self.rows {
+            Rows::Table(rows) => Samples::Table(rows.iter()),
+            Rows::Empty { sample_count } => Samples::Empty {
+                remaining: *sample_count,
+            },
+        }
     }
 
     /// Returns the run as written against `tfhd`, leaving out every field that needs no stating
@@ -270,7 +342,7 @@ impl TrackRunBox {
     /// // Against a header stating the duration and the flags, only the size is written per row
     /// let header = TrackFragmentHeaderBox::new(TrackFragmentHeaderFlags::ZERO, 1, None, None, Some(1_024), None, Some(SampleFlags::ZERO));
     /// assert_eq!(
-    ///     track_run.without_defaults(&header).samples(),
+    ///     track_run.without_defaults(&header).samples().collect::<Vec<_>>(),
     ///     [
     ///         TrackRunSample::new(None, Some(4), None, None),
     ///         TrackRunSample::new(None, Some(2), None, None),
@@ -279,7 +351,7 @@ impl TrackRunBox {
     /// ```
     #[must_use]
     pub fn without_defaults(mut self, tfhd: &TrackFragmentHeaderBox) -> Self {
-        let rows = || self.samples.iter();
+        let rows = || self.rows.table().iter();
         let carries_duration = tfhd.default_sample_duration().is_none_or(|default| {
             rows().any(|row| row.sample_duration.is_some_and(|value| value != default))
         });
@@ -308,19 +380,56 @@ impl TrackRunBox {
             _default_the_rows_do_not_share => (true, self.first_sample_flags),
         };
 
-        for row in &mut self.samples {
-            row.sample_duration = row.sample_duration.filter(|_| carries_duration);
-            row.sample_size = row.sample_size.filter(|_| carries_size);
-            row.sample_flags = row.sample_flags.filter(|_| carries_flags);
-            row.sample_composition_time_offset = row
-                .sample_composition_time_offset
-                .filter(|_| carries_offsets);
+        if let Rows::Table(mut rows) = self.rows {
+            for row in &mut rows {
+                row.sample_duration = row.sample_duration.filter(|_| carries_duration);
+                row.sample_size = row.sample_size.filter(|_| carries_size);
+                row.sample_flags = row.sample_flags.filter(|_| carries_flags);
+                row.sample_composition_time_offset = row
+                    .sample_composition_time_offset
+                    .filter(|_| carries_offsets);
+            }
+            self.rows = Rows::from(rows);
         }
         self.first_sample_flags = first_sample_flags;
 
         self
     }
 }
+
+/// The rows of a run one after another, or an empty row per sample where the run holds only the `sample_count`
+enum Samples<'rows> {
+    Table(slice::Iter<'rows, TrackRunSample>),
+    Empty { remaining: u32 },
+}
+
+impl Iterator for Samples<'_> {
+    type Item = TrackRunSample;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Table(rows) => rows.next().cloned(),
+            Self::Empty { remaining } => {
+                *remaining = remaining.checked_sub(1)?;
+
+                Some(EMPTY_ROW)
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::Table(rows) => rows.size_hint(),
+            Self::Empty { remaining } => {
+                let remaining = *remaining as usize;
+
+                (remaining, Some(remaining))
+            }
+        }
+    }
+}
+
+impl ExactSizeIterator for Samples<'_> {}
 
 impl BoxDefinition for TrackRunBox {
     const BOX_TYPE: BoxType = BoxType::compact(*b"trun");
@@ -336,8 +445,6 @@ impl BoxDecode for TrackRunBox {
     ///   sample flags setting a bit §8.8.3.1 reserves.
     /// * [`ConflictingFlags`](isobmff_core::ErrorKind::ConflictingFlags): the box states the
     ///   flags of its first sample and of every sample at once.
-    /// * [`UnsupportedEntryCount`](isobmff_core::ErrorKind::UnsupportedEntryCount): the rows
-    ///   are empty and the `sample_count` is past the rows this box reads.
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the payload
     ///   ends inside a field the flags state, or holds fewer rows than the
     ///   `sample_count` declares. Bytes past those rows are the
@@ -385,13 +492,15 @@ impl BoxDecode for TrackRunBox {
         // hold a gigabyte of them before the payload ran out.
         reader.require(row_len.saturating_mul(u64::from(sample_count)))?;
 
-        let declared = u64::from(sample_count);
-        if row_len == 0 && declared > MAXIMUM_EMPTY_ROWS {
-            return Err(Error::unsupported_entry_count(declared, MAXIMUM_EMPTY_ROWS));
+        if row_len == 0 {
+            return Ok(Self::from_sample_count(
+                data_offset,
+                first_sample_flags,
+                sample_count,
+            ));
         }
 
-        // Why not with_capacity: the count is bounded above, by the payload for
-        // rows that occupy bytes and by the limit for rows that do not, but
+        // Why not with_capacity: the count is bounded above by the payload, but
         // reserving still hands a four-byte field the whole bound up front.
         let mut samples = Vec::new();
         for _ in 0..sample_count {
@@ -428,7 +537,7 @@ impl BoxDecode for TrackRunBox {
         Ok(Self {
             data_offset,
             first_sample_flags,
-            samples,
+            rows: Rows::from(samples),
         })
     }
 }
@@ -439,15 +548,15 @@ impl BoxEncode for TrackRunBox {
             .saturating_add(self.data_offset.map_or(0, |_| OPTIONAL_FIELD_LEN))
             .saturating_add(self.first_sample_flags.map_or(0, |_| OPTIONAL_FIELD_LEN));
 
-        let row = u64::from(per_sample_field_flags(&self.samples).count_ones())
+        let row = u64::from(per_sample_field_flags(self.rows.table()).count_ones())
             .saturating_mul(OPTIONAL_FIELD_LEN);
-        let rows = row.saturating_mul(self.samples.len() as u64);
+        let rows = row.saturating_mul(u64::from(self.sample_count()));
 
         length.saturating_add(rows)
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        let bits = per_sample_field_flags(&self.samples)
+        let bits = per_sample_field_flags(self.rows.table())
             | self.data_offset.map_or(0, |_| DATA_OFFSET_PRESENT)
             | self
                 .first_sample_flags
@@ -457,7 +566,8 @@ impl BoxEncode for TrackRunBox {
         // and were one to slip through, version 1 refuses the offset past its
         // range when it is written.
         let version = CompositionTimeOffset::version_writing(
-            self.samples
+            self.rows
+                .table()
                 .iter()
                 .filter_map(TrackRunSample::sample_composition_time_offset),
         )
@@ -470,11 +580,7 @@ impl BoxEncode for TrackRunBox {
             .ok_or_else(|| Error::out_of_range(u64::from(bits), FieldWidth::Compact))?;
 
         writer.write_bytes(&FullBoxFields::new(version, flags).to_bytes())?;
-        let sample_count = self.samples.len() as u64;
-        // Why not saturate silently: a row count past `u32` cannot be written at
-        // all, and the box has already declared a length built from it, so this
-        // stands for a `Vec` no target can hold.
-        writer.write_unsigned(FieldWidth::Compact, sample_count)?;
+        writer.write_u32(self.sample_count())?;
         if let Some(data_offset) = self.data_offset {
             writer.write_i32(data_offset)?;
         }
@@ -482,7 +588,7 @@ impl BoxEncode for TrackRunBox {
             writer.write_u32(first_sample_flags.bits())?;
         }
 
-        for sample in &self.samples {
+        for sample in self.rows.table() {
             for field in [
                 sample.sample_duration,
                 sample.sample_size,
@@ -509,7 +615,7 @@ mod tests {
 
     use isobmff_core::{BoxDecode, BoxEncode, Error};
 
-    use super::{CompositionTimeOffset, MAXIMUM_EMPTY_ROWS, TrackRunBox, TrackRunSample};
+    use super::{CompositionTimeOffset, EMPTY_ROW, TrackRunBox, TrackRunSample};
     use crate::SampleFlags;
     use crate::tfhd::{TrackFragmentHeaderBox, TrackFragmentHeaderFlags};
 
@@ -684,27 +790,36 @@ mod tests {
     }
 
     #[test]
-    fn a_run_of_empty_rows_is_read_up_to_the_rows_the_box_holds() {
-        let sample_count = u32::try_from(MAXIMUM_EMPTY_ROWS).unwrap();
+    fn a_run_of_empty_rows_is_read_as_its_count_however_many_it_counts() {
+        let run = TrackRunBox::decode_payload(&empty_rows(u32::MAX)).unwrap();
 
-        let run = TrackRunBox::decode_payload(&empty_rows(sample_count)).unwrap();
+        assert_eq!(run, TrackRunBox::from_sample_count(None, None, u32::MAX));
+        assert_eq!(encoded_payload(&run), empty_rows(u32::MAX));
+    }
 
+    #[test]
+    fn rows_that_all_carry_no_field_are_held_as_their_count() {
         assert_eq!(
-            run.samples().len(),
-            usize::try_from(MAXIMUM_EMPTY_ROWS).unwrap()
+            TrackRunBox::new(Some(8), None, vec![EMPTY_ROW; 3]),
+            Some(TrackRunBox::from_sample_count(Some(8), None, 3))
         );
     }
 
     #[test]
-    fn a_count_of_empty_rows_past_the_rows_the_box_holds_is_rejected() {
-        let past_the_limit = u32::try_from(MAXIMUM_EMPTY_ROWS.saturating_add(1)).unwrap();
+    fn a_run_holding_its_count_yields_an_empty_row_per_sample() {
+        let run = TrackRunBox::from_sample_count(None, None, 3);
 
+        assert_eq!(run.samples().collect::<Vec<_>>(), vec![EMPTY_ROW; 3]);
+    }
+
+    #[test]
+    fn the_sample_count_is_the_rows_counted_or_the_count_held() {
         assert_eq!(
-            TrackRunBox::decode_payload(&empty_rows(past_the_limit)),
-            Err(Error::unsupported_entry_count(
-                u64::from(past_the_limit),
-                MAXIMUM_EMPTY_ROWS
-            ))
+            [
+                track_run().sample_count(),
+                TrackRunBox::from_sample_count(None, None, 3).sample_count()
+            ],
+            [2, 3]
         );
     }
 
