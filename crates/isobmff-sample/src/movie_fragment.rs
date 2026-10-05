@@ -33,7 +33,8 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// `tfdt` starts its samples there, and one carrying none carries on from where
 /// `decode_times` has its track, which a `tfdt` settles again for times
 /// created by [`TrackDecodeTimes::unknown`]. Before the extents are returned,
-/// `decode_times` is moved to where every track fragment leaves its track —
+/// `decode_times` is moved to where every track fragment of a track the movie
+/// reads leaves its track —
 /// the end of its last sample, or the default duration on from where it
 /// started for a fragment declaring an empty duration, which carries no
 /// samples (§8.8.7.1) — so the fragment resolved next carries on from there
@@ -60,8 +61,8 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// * [`MissingMovieExtends`](crate::ErrorKind::MissingMovieExtends): a
 ///   `traf` continues a movie that carries no `mvex`, and so no fragments.
 /// * [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId): a `traf`
-///   carries samples of a track the movie declares no `trak` or `trex` for,
-///   and the movie keeps no `trak` unread.
+///   carries samples of a track no read `trak` declares and the movie keeps no
+///   `trak` unread, or of a track the movie reads but declares no `trex` for.
 /// * [`UnknownSampleDescriptionIndex`](crate::ErrorKind::UnknownSampleDescriptionIndex):
 ///   a `traf` describes its samples by an `stsd` entry its track has none of.
 /// * The failures of [`SampleEntry::try_from`](isobmff_boxes::SampleEntry),
@@ -80,10 +81,19 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// Returned as the last of the extents:
 ///
 /// * [`DataOffsetOverflow`](crate::ErrorKind::DataOffsetOverflow): the
-///   offsets a fragment states run past what 64 bits carry.
-/// * [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId), naming the track
-///   kept unread: a `traf` stating no anchor follows one of a track the movie
-///   kept unread whose sample sizes nothing states.
+///   offsets a `traf` of a track the movie reads states run past what 64 bits
+///   carry.
+///
+/// Returned as the last of the extents, naming a track kept unread, where a
+/// `traf` of a track the movie reads states no anchor and the `traf`s before it
+/// back to one of a track kept unread state none either; where no such `traf`
+/// follows, the fragment reads on:
+///
+/// * [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId): a row of that
+///   `traf` kept unread states no size, and neither its `tfhd` nor the `trex`
+///   of its track states one.
+/// * [`DataOffsetOverflow`](crate::ErrorKind::DataOffsetOverflow): its
+///   offsets run past what 64 bits carry.
 pub fn sample_extents(
     movie_fragment: &MovieFragmentBox,
     movie: &MovieBox,
@@ -116,9 +126,9 @@ pub fn sample_extents(
 
 /// What one track fragment settles before its data is placed
 enum SettledFragment {
-    /// A fragment of a track the movie reads, whose samples are resolved
+    /// A track fragment of a track the movie reads, whose samples are resolved
     Read(TrackFragment),
-    /// A fragment of a track the movie kept unread, which gives no sample
+    /// A track fragment of a track the movie kept unread, which gives no sample
     ///
     /// `sample_size` is the size its runs fall back on, where the `tfhd` or the
     /// `trex` of the track states one; the data of its runs is walked only to
@@ -405,6 +415,17 @@ mod tests {
         *written.get_mut(version_at).unwrap() = 2;
 
         MovieBox::decode(&written).unwrap().0
+    }
+
+    /// The movie `written` holds with its second `trex` naming track 9, which leaves track 2 with no `trex`
+    fn with_no_trex_for_track_2(mut written: Vec<u8>) -> Vec<u8> {
+        let track_id_at = past_type(&written, b"trex", 1).checked_add(4).unwrap();
+        written
+            .get_mut(track_id_at..track_id_at.checked_add(4).unwrap())
+            .unwrap()
+            .copy_from_slice(&9_u32.to_be_bytes());
+
+        written
     }
 
     /// `movie(vec![track(1), track(2)])` read with track 2 kept unread
@@ -1016,7 +1037,7 @@ mod tests {
     }
 
     #[test]
-    fn samples_after_a_skipped_fragment_lie_and_decode_where_they_would_were_its_track_read() {
+    fn samples_after_a_fragment_kept_unread_lie_where_they_would_were_its_track_read() {
         let movie_fragment = movie_fragment(vec![
             stating_no_anchor(2, Some(100), 2),
             stating_no_anchor(1, None, 1),
@@ -1034,14 +1055,12 @@ mod tests {
     }
 
     #[test]
-    fn a_fragment_anchored_after_a_skipped_one_whose_sample_sizes_nothing_states_is_refused() {
-        let mut written = written(&movie(vec![track(1), track(2)]));
-        let second_trex_track_id = past_type(&written, b"trex", 1).checked_add(4).unwrap();
-        written
-            .get_mut(second_trex_track_id..second_trex_track_id.checked_add(4).unwrap())
-            .unwrap()
-            .copy_from_slice(&9_u32.to_be_bytes());
-        let movie = read_keeping_second_track_unread(written);
+    fn a_fragment_anchored_after_one_kept_unread_whose_sample_sizes_nothing_states_is_refused() {
+        let movie =
+            read_keeping_second_track_unread(with_no_trex_for_track_2(written(&movie(vec![
+                track(1),
+                track(2),
+            ]))));
         let movie_fragment = movie_fragment(vec![
             track_fragment(1, vec![run(Some(50), 1)]),
             stating_no_anchor(2, Some(100), 1),
@@ -1060,6 +1079,28 @@ mod tests {
         assert_eq!(
             extents,
             [Ok(extent(1, 0, 50..54)), Err(Error::unknown_track_id(2))]
+        );
+    }
+
+    #[test]
+    fn a_fragment_kept_unread_is_walked_by_the_sample_size_its_header_states() {
+        let movie =
+            read_keeping_second_track_unread(with_no_trex_for_track_2(written(&movie(vec![
+                track(1),
+                track(2),
+            ]))));
+        let kept_unread = TrackFragmentBox::new(
+            track_fragment_header(TrackFragmentHeaderFlags::ZERO, 2, None, None, Some(6)),
+            vec![run(Some(100), 2)],
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolved(
+                &movie_fragment(vec![kept_unread, stating_no_anchor(1, None, 1)]),
+                &movie
+            ),
+            Ok(vec![extent(1, 0, 112..116)])
         );
     }
 }
