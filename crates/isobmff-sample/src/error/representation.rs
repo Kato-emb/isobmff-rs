@@ -50,6 +50,12 @@ pub(super) enum Representation {
         declared: u64,
         limit: u64,
     },
+    /// Boxes declaring more samples than one resolution lays out
+    SampleCountLimitExceeded { declared: u64, limit: u64 },
+    /// Extent held past the count a reader holds
+    HeldExtentLimitExceeded { needed: u64, limit: u64 },
+    /// Sample gathered past the bytes a reader holds
+    HeldBytesLimitExceeded { needed: u64, limit: u64 },
     /// Sample whose bytes never arrived whole
     UnfinishedSample {
         track_id: u32,
@@ -104,6 +110,8 @@ pub(super) struct Fields {
     pub(super) sample_number: Option<u32>,
     pub(super) needed_bytes: Option<u64>,
     pub(super) available_bytes: Option<u64>,
+    pub(super) needed_samples: Option<u64>,
+    pub(super) available_samples: Option<u64>,
     pub(super) stated_decode_time: Option<u64>,
     pub(super) reached_decode_time: Option<u64>,
     pub(super) data_offset: Option<u64>,
@@ -123,6 +131,8 @@ impl Fields {
         sample_number: None,
         needed_bytes: None,
         available_bytes: None,
+        needed_samples: None,
+        available_samples: None,
         stated_decode_time: None,
         reached_decode_time: None,
         data_offset: None,
@@ -149,6 +159,9 @@ impl Representation {
             Self::FirstChunkOutOfRange { .. } => ErrorKind::FirstChunkOutOfRange,
             Self::SyncSampleOutOfRange { .. } => ErrorKind::SyncSampleOutOfRange,
             Self::SampleSizeLimitExceeded { .. } => ErrorKind::SampleSizeLimitExceeded,
+            Self::SampleCountLimitExceeded { .. } => ErrorKind::SampleCountLimitExceeded,
+            Self::HeldExtentLimitExceeded { .. } => ErrorKind::HeldExtentLimitExceeded,
+            Self::HeldBytesLimitExceeded { .. } => ErrorKind::HeldBytesLimitExceeded,
             Self::UnfinishedSample { .. } => ErrorKind::UnfinishedSample,
             Self::AlreadyFinished => ErrorKind::AlreadyFinished,
             Self::NoFragmentOpen => ErrorKind::NoFragmentOpen,
@@ -191,6 +204,9 @@ impl Representation {
             | Self::SampleTableNotEmpty { .. }
             | Self::MissingDecodeTime { .. }
             | Self::SampleSizeLimitExceeded { .. }
+            | Self::SampleCountLimitExceeded { .. }
+            | Self::HeldExtentLimitExceeded { .. }
+            | Self::HeldBytesLimitExceeded { .. }
             | Self::SampleSizeOutOfRange { .. }
             | Self::DataOffsetOutOfRange { .. }
             | Self::CompositionTimeOffsetOutOfRange { .. } => Category::Unsupported,
@@ -266,6 +282,20 @@ impl Representation {
             } => Fields {
                 track_id: Some(track_id),
                 needed_bytes: Some(declared),
+                available_bytes: Some(limit),
+                ..Fields::EMPTY
+            },
+            Self::SampleCountLimitExceeded {
+                declared: needed,
+                limit,
+            }
+            | Self::HeldExtentLimitExceeded { needed, limit } => Fields {
+                needed_samples: Some(needed),
+                available_samples: Some(limit),
+                ..Fields::EMPTY
+            },
+            Self::HeldBytesLimitExceeded { needed, limit } => Fields {
+                needed_bytes: Some(needed),
                 available_bytes: Some(limit),
                 ..Fields::EMPTY
             },
@@ -354,6 +384,18 @@ mod tests {
         );
         assert_eq!(
             Error::sample_size_limit_exceeded(1, 32, 16).category(),
+            Category::Unsupported
+        );
+        assert_eq!(
+            Error::sample_count_limit_exceeded(32, 16).category(),
+            Category::Unsupported
+        );
+        assert_eq!(
+            Error::held_extent_limit_exceeded(17, 16).category(),
+            Category::Unsupported
+        );
+        assert_eq!(
+            Error::held_bytes_limit_exceeded(32, 16).category(),
             Category::Unsupported
         );
         assert_eq!(

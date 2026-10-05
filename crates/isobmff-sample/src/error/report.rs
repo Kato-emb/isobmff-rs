@@ -66,6 +66,18 @@ impl Error {
         self.representation.fields().available_bytes
     }
 
+    /// Returns the samples the failure required, for the kinds that count samples
+    #[must_use]
+    pub const fn needed_samples(self) -> Option<u64> {
+        self.representation.fields().needed_samples
+    }
+
+    /// Returns the samples the failure had room for, for the kinds that count samples
+    #[must_use]
+    pub const fn available_samples(self) -> Option<u64> {
+        self.representation.fields().available_samples
+    }
+
     /// Returns the decode time a sample or a fragment states, for the kinds that compare one
     #[must_use]
     pub const fn stated_decode_time(self) -> Option<u64> {
@@ -172,6 +184,18 @@ impl fmt::Display for Error {
                 formatter,
                 "track {track_id} declares a sample of {declared} bytes, past the {limit}-byte limit"
             ),
+            Representation::SampleCountLimitExceeded { declared, limit } => write!(
+                formatter,
+                "boxes declare {declared} samples, past the {limit}-sample limit"
+            ),
+            Representation::HeldExtentLimitExceeded { needed, limit } => write!(
+                formatter,
+                "reader would hold {needed} extents, past the {limit}-extent limit"
+            ),
+            Representation::HeldBytesLimitExceeded { needed, limit } => write!(
+                formatter,
+                "reader would hold {needed} bytes, past the {limit}-byte limit"
+            ),
             Representation::UnfinishedSample {
                 track_id,
                 needed,
@@ -276,6 +300,12 @@ impl fmt::Debug for Error {
         if let Some(available) = values.available_bytes {
             fields.field("available_bytes", &available);
         }
+        if let Some(needed) = values.needed_samples {
+            fields.field("needed_samples", &needed);
+        }
+        if let Some(available) = values.available_samples {
+            fields.field("available_samples", &available);
+        }
         if let Some(stated) = values.stated_decode_time {
             fields.field("stated_decode_time", &stated);
         }
@@ -358,6 +388,23 @@ mod tests {
         assert_eq!(
             Error::composition_time_offset_out_of_range(1, -(1 << 40)).composition_time_offset(),
             Some(-(1 << 40))
+        );
+
+        let too_many = Error::sample_count_limit_exceeded(32, 16);
+
+        assert_eq!(too_many.needed_samples(), Some(32));
+        assert_eq!(too_many.available_samples(), Some(16));
+        assert_eq!(too_many.track_id(), None);
+        assert_eq!(too_many.needed_bytes(), None);
+
+        let too_much = Error::held_bytes_limit_exceeded(32, 16);
+
+        assert_eq!(too_much.needed_bytes(), Some(32));
+        assert_eq!(too_much.available_bytes(), Some(16));
+        assert_eq!(too_much.needed_samples(), None);
+        assert_eq!(
+            Error::held_extent_limit_exceeded(17, 16).needed_samples(),
+            Some(17)
         );
 
         let mismatch = Error::sample_description_index_mismatch(1, 2, 1);
@@ -448,6 +495,18 @@ mod tests {
             "track 1 declares a sample of 32 bytes, past the 16-byte limit"
         );
         assert_eq!(
+            Error::sample_count_limit_exceeded(32, 16).to_string(),
+            "boxes declare 32 samples, past the 16-sample limit"
+        );
+        assert_eq!(
+            Error::held_extent_limit_exceeded(17, 16).to_string(),
+            "reader would hold 17 extents, past the 16-extent limit"
+        );
+        assert_eq!(
+            Error::held_bytes_limit_exceeded(32, 16).to_string(),
+            "reader would hold 32 bytes, past the 16-byte limit"
+        );
+        assert_eq!(
             Error::unfinished_sample(2, 1_024, 512).to_string(),
             "sample of track 2 takes 1024 bytes, and 512 arrived"
         );
@@ -521,6 +580,18 @@ mod tests {
         assert_eq!(
             format!("{:?}", Error::sample_size_limit_exceeded(1, 32, 16)),
             "Error { kind: SampleSizeLimitExceeded, category: Unsupported, track_id: 1, needed_bytes: 32, available_bytes: 16 }"
+        );
+        assert_eq!(
+            format!("{:?}", Error::sample_count_limit_exceeded(32, 16)),
+            "Error { kind: SampleCountLimitExceeded, category: Unsupported, needed_samples: 32, available_samples: 16 }"
+        );
+        assert_eq!(
+            format!("{:?}", Error::held_extent_limit_exceeded(17, 16)),
+            "Error { kind: HeldExtentLimitExceeded, category: Unsupported, needed_samples: 17, available_samples: 16 }"
+        );
+        assert_eq!(
+            format!("{:?}", Error::held_bytes_limit_exceeded(32, 16)),
+            "Error { kind: HeldBytesLimitExceeded, category: Unsupported, needed_bytes: 32, available_bytes: 16 }"
         );
         assert_eq!(
             format!("{:?}", Error::external_data_reference(1, 2)),
