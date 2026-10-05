@@ -30,7 +30,7 @@ use isobmff::boxes::{FileTypeBox, MovieBox, SampleFlags};
 use isobmff::sample::Sample;
 use isobmff::sample::sample_table::sample_extents;
 use isobmff::sequence::EventBytes;
-use isobmff::structure::{NonFragmentedDemuxFsm, NonFragmentedMuxFsm};
+use isobmff::structure::{DemuxLimits, NonFragmentedDemuxFsm, NonFragmentedMuxFsm};
 use isobmff_test_support::{SAMPLE_DURATION, file_type, non_fragmented_file, unfragmented_movie};
 
 /// Track the samples of the benchmarked movies belong to
@@ -298,7 +298,7 @@ fn movie_of(file: &[u8]) -> MovieBox {
 ///
 /// The resolution layer alone: no sample is gathered.
 fn sample_table_extents(movie: &MovieBox) -> usize {
-    sample_extents(movie)
+    sample_extents(movie, DemuxLimits::DEFAULT_RESOLVED_SAMPLES)
         .inspect(|extent| {
             black_box(extent.as_ref().unwrap());
         })

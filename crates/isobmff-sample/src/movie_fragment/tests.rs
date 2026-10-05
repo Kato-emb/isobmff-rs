@@ -143,7 +143,7 @@ fn resolved_from(
     moof_start: u64,
     decode_times: &mut TrackDecodeTimes,
 ) -> Result<Vec<SampleExtent>, Error> {
-    sample_extents(movie_fragment, movie, moof_start, decode_times)?.collect()
+    sample_extents(movie_fragment, movie, moof_start, decode_times, u64::MAX)?.collect()
 }
 
 /// Times of a movie whose track 1 stands at `decode_time`
@@ -566,7 +566,8 @@ fn the_extents_placed_before_a_failure_come_out_ahead_of_it_and_the_tracks_have_
             &then_past_the_end_of_the_file,
             &movie(vec![track(1), track(2)]),
             0,
-            &mut decode_times
+            &mut decode_times,
+            u64::MAX
         )
         .unwrap()
         .collect::<Vec<_>>(),
@@ -623,5 +624,51 @@ fn data_offsets_running_past_what_64_bits_carry_are_refused() {
             &one_track_movie()
         ),
         Err(Error::data_offset_overflow(1))
+    );
+}
+
+#[test]
+fn a_fragment_counting_more_samples_than_the_limit_settles_none() {
+    let two_tracks = movie(vec![track(1), track(2)]);
+    let two_samples = movie_fragment(vec![
+        track_fragment(1, vec![run(Some(100), 1)]),
+        track_fragment(2, vec![run(Some(104), 1)]),
+    ]);
+    let mut decode_times = TrackDecodeTimes::new(&two_tracks).unwrap();
+
+    assert_eq!(
+        sample_extents(&two_samples, &two_tracks, 0, &mut decode_times, 1).map(|_| ()),
+        Err(Error::sample_count_limit_exceeded(2, 1))
+    );
+    assert_eq!(decode_times, TrackDecodeTimes::new(&two_tracks).unwrap());
+    assert_eq!(
+        sample_extents(&two_samples, &two_tracks, 0, &mut decode_times, 2)
+            .unwrap()
+            .collect::<Vec<_>>(),
+        [Ok(extent(1, 0, 100..104)), Ok(extent(2, 0, 104..108))]
+    );
+}
+
+#[test]
+fn runs_holding_only_a_count_are_counted_before_a_sample_is_settled() {
+    let empty_rows = || TrackRunBox::from_sample_count(None, None, u32::MAX);
+    let many_runs = movie_fragment(vec![track_fragment(
+        1,
+        vec![empty_rows(), empty_rows(), empty_rows()],
+    )]);
+
+    assert_eq!(
+        sample_extents(
+            &many_runs,
+            &one_track_movie(),
+            0,
+            &mut TrackDecodeTimes::new(&one_track_movie()).unwrap(),
+            1_048_576
+        )
+        .map(|_| ()),
+        Err(Error::sample_count_limit_exceeded(
+            3 * u64::from(u32::MAX),
+            1_048_576
+        ))
     );
 }

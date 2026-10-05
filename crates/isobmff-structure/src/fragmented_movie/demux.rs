@@ -14,7 +14,7 @@ use isobmff_sample::{
 use isobmff_sequence::{BoxEvent, BoxReader};
 
 use super::{FragmentedDisposition, FragmentedStructure};
-use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
+use crate::{DemuxLimits, Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 
 /// Reads the samples a fragmented movie file carries, taking it as it arrives
 ///
@@ -73,8 +73,9 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 ///   `mfro` is gathered, is
 ///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
 ///   A file carrying no `ftyp` reads all the same, as §4.3 allows.
-/// * A box read into a value is gathered whole before it is read, so what it
-///   declares is bounded — see [`with_limits`](Self::with_limits).
+/// * What the demux FSM holds of what the file declares is bounded — a box
+///   read into a value, the samples a `moov` or a `moof` declares, the
+///   samples gathered — by the [`DemuxLimits`] it was created with.
 /// * The samples the sample tables of the movie declare are resolved once the
 ///   `moov` has been read, and those of a fragment once the `moof` has; where
 ///   their chunks and runs lie is not checked. Either comes out as its bytes
@@ -158,7 +159,7 @@ pub struct FragmentedDemuxFsm {
     movie: Option<MovieBox>,
     segment_indexes: Vec<SegmentIndex>,
     movie_fragment_random_access: Option<MovieFragmentRandomAccessBox>,
-    payload_limit: u64,
+    limits: DemuxLimits,
     state: State,
 }
 
@@ -200,51 +201,27 @@ enum Open {
 }
 
 impl FragmentedDemuxFsm {
-    /// Payload a box read into a value may declare, where the caller names no limit
-    ///
-    /// Sixteen mebibytes. A caller reading files whose `moov` reaches past that
-    /// — a presentation of many tracks states a sample entry for each — names a
-    /// limit of its own with [`with_limits`](Self::with_limits).
-    pub const DEFAULT_PAYLOAD_LIMIT: u64 = 16 * 1024 * 1024;
-
-    /// Creates a demux FSM waiting at the start of a fragmented movie file
-    ///
-    /// What a box read into a value may declare is bounded by
-    /// [`DEFAULT_PAYLOAD_LIMIT`](Self::DEFAULT_PAYLOAD_LIMIT), and what one
-    /// sample may declare by
-    /// [`SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT`](SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT).
+    /// Creates a demux FSM waiting at the start of a fragmented movie file, bounded by the limits [`DemuxLimits::new`] states
     #[must_use]
     pub const fn new() -> Self {
-        Self::with_limits(
-            Self::DEFAULT_PAYLOAD_LIMIT,
-            SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT,
-        )
+        Self::with_limits(DemuxLimits::new())
     }
 
-    /// Creates a demux FSM holding the file to `payload_limit` and `sample_size_limit`
-    ///
-    /// Both bound memory the demux FSM is about to take, and both bound one box
-    /// or one sample rather than the file. A box read into a value that
-    /// declares more than `payload_limit` bytes of payload is
-    /// [`PayloadLimitExceeded`](crate::ErrorKind::PayloadLimitExceeded)
-    /// before a byte of it is gathered; a sample declaring more than
-    /// `sample_size_limit` bytes is what
-    /// [`SampleReader::with_sample_size_limit`](SampleReader::with_sample_size_limit)
-    /// makes of it.
+    /// Creates a demux FSM waiting at the start of a fragmented movie file, bounded by `limits`
     #[must_use]
-    pub const fn with_limits(payload_limit: u64, sample_size_limit: u64) -> Self {
+    pub const fn with_limits(limits: DemuxLimits) -> Self {
         Self {
             boxes: BoxReader::new(),
             position: InputPosition::new(),
             structure: FragmentedStructure::new(),
-            samples: SampleReader::with_sample_size_limit(sample_size_limit),
+            samples: SampleReader::with_limits(limits.sample_reader()),
             decode_times: TrackDecodeTimes::unknown(),
             open: None,
             file_type: None,
             movie: None,
             segment_indexes: Vec::new(),
             movie_fragment_random_access: None,
-            payload_limit,
+            limits,
             state: State::Reading,
         }
     }
@@ -561,22 +538,22 @@ impl FragmentedDemuxFsm {
                     .and_then(|disposition| {
                         self.open = match disposition {
                             FragmentedDisposition::FileType => Some(Open::FileType(
-                                WholeBoxReader::begin(header, self.payload_limit)?,
+                                WholeBoxReader::begin(header, self.limits.payload())?,
                             )),
                             FragmentedDisposition::Movie => Some(Open::Movie(
-                                WholeBoxReader::begin(header, self.payload_limit)?,
+                                WholeBoxReader::begin(header, self.limits.payload())?,
                             )),
                             FragmentedDisposition::MovieFragment => Some(Open::MovieFragment {
-                                reader: WholeBoxReader::begin(header, self.payload_limit)?,
+                                reader: WholeBoxReader::begin(header, self.limits.payload())?,
                                 moof_start: start,
                             }),
                             FragmentedDisposition::SegmentIndex => Some(Open::SegmentIndex(
-                                WholeBoxReader::begin(header, self.payload_limit)?,
+                                WholeBoxReader::begin(header, self.limits.payload())?,
                             )),
                             FragmentedDisposition::MovieFragmentRandomAccess => {
                                 Some(Open::MovieFragmentRandomAccess(WholeBoxReader::begin(
                                     header,
-                                    self.payload_limit,
+                                    self.limits.payload(),
                                 )?))
                             }
                             FragmentedDisposition::MediaData => Some(Open::MediaData),
@@ -603,7 +580,10 @@ impl FragmentedDemuxFsm {
                         .map(|file_type| self.file_type = Some(file_type)),
                     Some(Open::Movie(reader)) => reader.finish().and_then(|movie| {
                         self.samples
-                            .handle_sample_extents(sample_table::sample_extents(&movie))?;
+                            .handle_sample_extents(sample_table::sample_extents(
+                                &movie,
+                                self.limits.resolved_samples(),
+                            ))?;
                         self.decode_times = TrackDecodeTimes::new(&movie)?;
                         self.movie = Some(movie);
 
@@ -624,6 +604,7 @@ impl FragmentedDemuxFsm {
                                 movie,
                                 moof_start,
                                 &mut self.decode_times,
+                                self.limits.resolved_samples(),
                             )?;
                             self.samples.handle_sample_extents(extents)?;
 

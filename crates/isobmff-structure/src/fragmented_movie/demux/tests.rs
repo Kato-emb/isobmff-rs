@@ -1,12 +1,11 @@
 use isobmff_boxes::{FileTypeBox, MovieBox, SampleFlags, TrackExtendsBox};
 use isobmff_core::{BoxDefinition, BoxType};
-use isobmff_sample::{Sample, SampleReader};
+use isobmff_sample::{Sample, SampleReaderLimits};
 use isobmff_test_support::{file_type, fragmented_movie, framed, movie_fragment, written};
 
 use super::super::tests::{file_of_one_sample, sample};
 use super::{Error, FragmentedDemuxFsm};
-use crate::ErrorKind;
-use crate::WantedInput;
+use crate::{DemuxLimits, ErrorKind, WantedInput};
 
 /// Movie of one track continued in fragments, whose defaults a `trex` states
 fn movie() -> MovieBox {
@@ -42,7 +41,7 @@ fn a_file_declared_over_without_a_movie_is_rejected() {
 
 #[test]
 fn a_box_read_into_a_value_declaring_a_payload_past_the_limit_is_rejected() {
-    let mut demux_fsm = FragmentedDemuxFsm::with_limits(4, SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT);
+    let mut demux_fsm = FragmentedDemuxFsm::with_limits(DemuxLimits::new().with_payload(4));
 
     assert_eq!(
         demux_fsm
@@ -60,14 +59,40 @@ fn a_box_passed_over_is_not_bounded_by_the_limit() {
         framed(BoxType::compact(*b"free"), &[0x11; 4_096]),
     ]
     .concat();
-    let mut demux_fsm = FragmentedDemuxFsm::with_limits(
-        movie.len() as u64,
-        SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT,
-    );
+    let mut demux_fsm =
+        FragmentedDemuxFsm::with_limits(DemuxLimits::new().with_payload(movie.len() as u64));
 
     demux_fsm.handle_input(0, &file).unwrap();
 
     assert_eq!(demux_fsm.finish(), Ok(()));
+}
+
+#[test]
+fn a_fragment_declaring_more_samples_than_the_limit_lays_out_none() {
+    let mut demux_fsm =
+        FragmentedDemuxFsm::with_limits(DemuxLimits::new().with_resolved_samples(0));
+
+    assert_eq!(
+        demux_fsm.handle_input(0, &file_of_one_sample()),
+        Err(Error::from(
+            isobmff_sample::Error::sample_count_limit_exceeded(1, 0)
+        ))
+    );
+    assert_eq!(demux_fsm.poll_sample(), None);
+}
+
+#[test]
+fn the_sample_reader_is_held_to_the_limits_it_is_given() {
+    let mut demux_fsm = FragmentedDemuxFsm::with_limits(
+        DemuxLimits::new().with_sample_reader(SampleReaderLimits::new().with_held_extents(0)),
+    );
+
+    assert_eq!(
+        demux_fsm.handle_input(0, &file_of_one_sample()),
+        Err(Error::from(
+            isobmff_sample::Error::held_extent_limit_exceeded(1, 0)
+        ))
+    );
 }
 
 #[test]

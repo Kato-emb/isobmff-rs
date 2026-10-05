@@ -151,7 +151,7 @@ fn extent(track_id: u32, decode_time: u64, sample_duration: u32, data: Range<u64
 
 /// Resolves the samples of `movie`, whole
 fn resolved(movie: &MovieBox) -> Result<Vec<SampleExtent>, Error> {
-    sample_extents(movie).collect()
+    sample_extents(movie, u64::MAX).collect()
 }
 
 #[test]
@@ -602,11 +602,51 @@ fn the_extents_resolved_before_a_failure_come_out_ahead_of_it() {
     ]);
 
     assert_eq!(
-        sample_extents(&then_a_track_out_of_range).collect::<Vec<_>>(),
+        sample_extents(&then_a_track_out_of_range, u64::MAX).collect::<Vec<_>>(),
         [
             Ok(extent(1, 0, 100, 100..104)),
             Ok(extent(1, 100, 100, 200..204)),
             Err(Error::first_chunk_out_of_range(2, 2)),
         ]
+    );
+}
+
+#[test]
+fn a_movie_counting_more_samples_than_the_limit_lays_out_none() {
+    let two_samples = movie(vec![track_chunked_at(&[100, 200])]);
+
+    assert_eq!(
+        sample_extents(&two_samples, 2).collect::<Vec<_>>(),
+        [
+            Ok(extent(1, 0, 100, 100..104)),
+            Ok(extent(1, 100, 100, 200..204)),
+        ]
+    );
+    assert_eq!(
+        sample_extents(&two_samples, 1).collect::<Vec<_>>(),
+        [Err(Error::sample_count_limit_exceeded(2, 1))]
+    );
+}
+
+#[test]
+fn tables_stating_a_count_once_are_counted_before_a_sample_is_laid_out() {
+    let every_sample_alike = track_of(
+        2,
+        stts(&[(u32::MAX, 1)]),
+        stsc(&[(1, u32::MAX)]),
+        SampleSizes::Stsz(SampleSizeBox::new(SampleSizeEntries::Uniform {
+            sample_size: NonZeroU32::new(1).unwrap(),
+            sample_count: u32::MAX,
+        })),
+        stco(&[300]),
+    );
+    let declaring = movie(vec![track_chunked_at(&[100, 200]), every_sample_alike]);
+
+    assert_eq!(
+        sample_extents(&declaring, 1_048_576).collect::<Vec<_>>(),
+        [Err(Error::sample_count_limit_exceeded(
+            u64::from(u32::MAX) + 2,
+            1_048_576
+        ))]
     );
 }

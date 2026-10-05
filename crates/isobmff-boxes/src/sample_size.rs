@@ -37,6 +37,15 @@ impl SampleSizes {
         }
     }
 
+    /// Returns how many samples the table counts, however it states their sizes
+    #[must_use]
+    pub fn sample_count(&self) -> u64 {
+        match self {
+            Self::Stsz(stsz) => stsz.sample_count(),
+            Self::Stz2(stz2) => stz2.sample_count(),
+        }
+    }
+
     /// Returns the length this table occupies, header and payload
     pub(crate) fn encoded_len(&self) -> u64 {
         match self {
@@ -95,8 +104,9 @@ impl<StszSizes: Iterator<Item = u32>> Iterator for Sizes<'_, StszSizes> {
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
+    use core::num::NonZeroU32;
 
-    use super::{CompactSampleSizeBox, SampleSizeBox, SampleSizes};
+    use super::{CompactSampleSizeBox, SampleSizeBox, SampleSizeEntries, SampleSizes};
 
     #[test]
     fn the_sizes_come_out_in_turn_whichever_table_states_them() {
@@ -105,5 +115,19 @@ mod tests {
 
         assert_eq!(stsz.sizes().collect::<Vec<_>>(), [1_024, 512, 512]);
         assert_eq!(stz2.sizes().collect::<Vec<_>>(), [300, 7, 7]);
+    }
+
+    #[test]
+    fn the_count_is_of_the_samples_whichever_table_states_them() {
+        let uniform = SampleSizes::Stsz(SampleSizeBox::new(SampleSizeEntries::Uniform {
+            sample_size: NonZeroU32::new(4).unwrap(),
+            sample_count: u32::MAX,
+        }));
+        let per_sample = SampleSizes::Stsz(SampleSizeBox::from_sizes([1_024, 512]));
+        let stz2 = SampleSizes::Stz2(CompactSampleSizeBox::from_sizes([300, 7, 7]));
+
+        assert_eq!(uniform.sample_count(), u64::from(u32::MAX));
+        assert_eq!(per_sample.sample_count(), 2);
+        assert_eq!(stz2.sample_count(), 3);
     }
 }

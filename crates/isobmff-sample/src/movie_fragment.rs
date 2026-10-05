@@ -39,6 +39,9 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// of zero. The `data_reference_index` of each sample is read off the `stsd`
 /// entry that describes it (§8.5.2.3), which has to name the file itself.
 ///
+/// The samples are counted before one is settled: the `trun`s of every track
+/// fragment together counting more than `sample_count_limit` settle none.
+///
 /// The extents come out in the order the fragment declares them, and stop at
 /// the first failure, which is the last item. They borrow nothing: the boxes
 /// and `decode_times` are the caller's again once the call returns.
@@ -47,6 +50,9 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///
 /// Returned outright, before `decode_times` moves:
 ///
+/// * [`SampleCountLimitExceeded`](crate::ErrorKind::SampleCountLimitExceeded):
+///   the `trun`s of every track fragment together count more samples than
+///   `sample_count_limit`.
 /// * [`MissingMovieExtends`](crate::ErrorKind::MissingMovieExtends): a
 ///   `traf` continues a movie that carries no `mvex`, and so no fragments.
 /// * [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId): a `traf`
@@ -75,7 +81,21 @@ pub fn sample_extents(
     movie: &MovieBox,
     moof_start: u64,
     decode_times: &mut TrackDecodeTimes,
+    sample_count_limit: u64,
 ) -> Result<impl Iterator<Item = Result<SampleExtent, Error>> + use<>, Error> {
+    let declared = movie_fragment
+        .traf()
+        .iter()
+        .flat_map(|traf| traf.trun())
+        .map(|trun| u64::from(trun.sample_count()))
+        .fold(0, u64::saturating_add);
+    if declared > sample_count_limit {
+        return Err(Error::sample_count_limit_exceeded(
+            declared,
+            sample_count_limit,
+        ));
+    }
+
     let mut reached = decode_times.clone();
     let track_fragments = movie_fragment
         .traf()
@@ -84,16 +104,10 @@ pub fn sample_extents(
         .collect::<Result<Vec<_>, _>>()?;
     *decode_times = reached;
 
-    let rows = movie_fragment
-        .traf()
-        .iter()
-        .flat_map(|traf| traf.trun())
-        .map(|trun| trun.samples().len())
-        .sum::<usize>();
     // Why not chaining the failure after an iterator of the extents: the
     // chained iterator costs a reader ten nanoseconds an extent over a plain
     // one, a fifth of what reading a small sample costs in all.
-    let mut extents = Vec::with_capacity(rows.saturating_add(1));
+    let mut extents = Vec::with_capacity(usize::try_from(declared.saturating_add(1)).unwrap_or(0));
     let outcome = resolve_data(movie_fragment, &track_fragments, moof_start, &mut extents);
     extents.extend(outcome.err().map(Err));
 

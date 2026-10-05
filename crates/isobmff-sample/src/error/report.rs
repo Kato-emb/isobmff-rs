@@ -66,13 +66,13 @@ impl Error {
         self.representation.fields().available_bytes
     }
 
-    /// Returns the samples the failure required, for the kinds that count samples
+    /// Returns the samples or extents the failure required, for the kinds that count them
     #[must_use]
     pub const fn needed_samples(self) -> Option<u64> {
         self.representation.fields().needed_samples
     }
 
-    /// Returns the samples the failure had room for, for the kinds that count samples
+    /// Returns the samples or extents the failure had to hand, for the kinds that count them
     #[must_use]
     pub const fn available_samples(self) -> Option<u64> {
         self.representation.fields().available_samples

@@ -101,7 +101,10 @@ pub(crate) fn demux<S: Read>(source: S) -> Result<Demux, Error> {
                 Some((box_type, _, bytes)) if box_type == MovieBox::BOX_TYPE => {
                     let declared =
                         MovieBox::decode_payload(&bytes).map_err(structure::Error::from)?;
-                    for extent in sample_table::sample_extents(&declared) {
+                    for extent in sample_table::sample_extents(
+                        &declared,
+                        structure::DemuxLimits::DEFAULT_RESOLVED_SAMPLES,
+                    ) {
                         samples.push(record(&extent.map_err(structure::Error::from)?));
                     }
                     decode_times =
@@ -117,6 +120,7 @@ pub(crate) fn demux<S: Read>(source: S) -> Result<Demux, Error> {
                         declaring,
                         moof_start,
                         &mut decode_times,
+                        structure::DemuxLimits::DEFAULT_RESOLVED_SAMPLES,
                     )
                     .map_err(structure::Error::from)?
                     {

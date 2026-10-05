@@ -188,6 +188,7 @@
 
 extern crate alloc;
 
+mod demux_limits;
 mod error;
 mod fragmented_movie;
 mod input_position;
@@ -195,6 +196,7 @@ mod media_segment;
 mod non_fragmented_movie;
 mod whole_box;
 
+pub use demux_limits::DemuxLimits;
 pub use error::{Error, ErrorKind};
 pub use fragmented_movie::{FragmentedDemuxFsm, FragmentedMuxFsm};
 pub use input_position::WantedInput;

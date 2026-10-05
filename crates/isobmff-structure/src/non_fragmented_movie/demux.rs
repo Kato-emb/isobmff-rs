@@ -6,7 +6,7 @@ use isobmff_sample::{Sample, SampleReader};
 use isobmff_sequence::{BoxEvent, BoxReader};
 
 use super::{NonFragmentedDisposition, NonFragmentedStructure};
-use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
+use crate::{DemuxLimits, Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 
 /// Reads the samples a non-fragmented movie file carries, taking it as it arrives
 ///
@@ -45,8 +45,9 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 ///   a file declared over without a `moov` is
 ///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
 ///   A file carrying no `ftyp` reads all the same, as §4.3 allows.
-/// * A box read into a value is gathered whole before it is read, so what it
-///   declares is bounded — see [`with_limits`](Self::with_limits).
+/// * What the demux FSM holds of what the file declares is bounded — a box
+///   read into a value, the samples the `moov` declares, the samples
+///   gathered — by the [`DemuxLimits`] it was created with.
 /// * The samples are read out of the media data once the movie has arrived,
 ///   and come out as their bytes arrive whole, as [`SampleReader`]'s contract
 ///   has it: a movie lying before its media data has every sample come out
@@ -109,7 +110,7 @@ pub struct NonFragmentedDemuxFsm {
     open: Option<Open>,
     file_type: Option<FileTypeBox>,
     movie: Option<MovieBox>,
-    payload_limit: u64,
+    limits: DemuxLimits,
     state: State,
 }
 
@@ -136,48 +137,24 @@ enum Open {
 }
 
 impl NonFragmentedDemuxFsm {
-    /// Payload a box read into a value may declare, where the caller names no limit
-    ///
-    /// Sixteen mebibytes. A caller reading files whose `moov` reaches past that
-    /// — a long presentation states a table row for every sample — names a
-    /// limit of its own with [`with_limits`](Self::with_limits).
-    pub const DEFAULT_PAYLOAD_LIMIT: u64 = 16 * 1024 * 1024;
-
-    /// Creates a demux FSM waiting at the start of a non-fragmented movie file
-    ///
-    /// What a box read into a value may declare is bounded by
-    /// [`DEFAULT_PAYLOAD_LIMIT`](Self::DEFAULT_PAYLOAD_LIMIT), and what one
-    /// sample may declare by
-    /// [`SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT`](SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT).
+    /// Creates a demux FSM waiting at the start of a non-fragmented movie file, bounded by the limits [`DemuxLimits::new`] states
     #[must_use]
     pub const fn new() -> Self {
-        Self::with_limits(
-            Self::DEFAULT_PAYLOAD_LIMIT,
-            SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT,
-        )
+        Self::with_limits(DemuxLimits::new())
     }
 
-    /// Creates a demux FSM holding the file to `payload_limit` and `sample_size_limit`
-    ///
-    /// Both bound memory the demux FSM is about to take, and both bound one box
-    /// or one sample rather than the file. A box read into a value that
-    /// declares more than `payload_limit` bytes of payload is
-    /// [`PayloadLimitExceeded`](crate::ErrorKind::PayloadLimitExceeded)
-    /// before a byte of it is gathered; a sample declaring more than
-    /// `sample_size_limit` bytes is what
-    /// [`SampleReader::with_sample_size_limit`](SampleReader::with_sample_size_limit)
-    /// makes of it.
+    /// Creates a demux FSM waiting at the start of a non-fragmented movie file, bounded by `limits`
     #[must_use]
-    pub const fn with_limits(payload_limit: u64, sample_size_limit: u64) -> Self {
+    pub const fn with_limits(limits: DemuxLimits) -> Self {
         Self {
             boxes: BoxReader::new(),
             position: InputPosition::new(),
             structure: NonFragmentedStructure::new(),
-            samples: SampleReader::with_sample_size_limit(sample_size_limit),
+            samples: SampleReader::with_limits(limits.sample_reader()),
             open: None,
             file_type: None,
             movie: None,
-            payload_limit,
+            limits,
             state: State::Reading,
         }
     }
@@ -337,10 +314,10 @@ impl NonFragmentedDemuxFsm {
                     .and_then(|disposition| {
                         self.open = match disposition {
                             NonFragmentedDisposition::FileType => Some(Open::FileType(
-                                WholeBoxReader::begin(header, self.payload_limit)?,
+                                WholeBoxReader::begin(header, self.limits.payload())?,
                             )),
                             NonFragmentedDisposition::Movie => Some(Open::Movie(
-                                WholeBoxReader::begin(header, self.payload_limit)?,
+                                WholeBoxReader::begin(header, self.limits.payload())?,
                             )),
                             NonFragmentedDisposition::MediaData => Some(Open::MediaData),
                             NonFragmentedDisposition::Skip => None,
@@ -369,7 +346,10 @@ impl NonFragmentedDemuxFsm {
                         .finish()
                         .map(|file_type| self.file_type = Some(file_type)),
                     Some(Open::Movie(reader)) => reader.finish().and_then(|movie| {
-                        self.samples.handle_sample_extents(sample_extents(&movie))?;
+                        self.samples.handle_sample_extents(sample_extents(
+                            &movie,
+                            self.limits.resolved_samples(),
+                        ))?;
                         self.movie = Some(movie);
 
                         Ok(())
@@ -407,14 +387,13 @@ mod tests {
 
     use isobmff_boxes::{FileTypeBox, MovieBox};
     use isobmff_core::{BoxDefinition, BoxType};
-    use isobmff_sample::{Sample, SampleReader};
+    use isobmff_sample::{Sample, SampleReaderLimits};
     use isobmff_test_support::{
         file_type, framed, non_fragmented_file, unfragmented_movie, written,
     };
 
     use super::{Error, NonFragmentedDemuxFsm};
-    use crate::ErrorKind;
-    use crate::WantedInput;
+    use crate::{DemuxLimits, ErrorKind, WantedInput};
 
     /// What the demux FSM makes of `file` handed over whole, then declared over
     fn read(file: &[u8]) -> Result<NonFragmentedDemuxFsm, Error> {
@@ -444,8 +423,7 @@ mod tests {
 
     #[test]
     fn a_box_read_into_a_value_declaring_a_payload_past_the_limit_is_rejected() {
-        let mut demux_fsm =
-            NonFragmentedDemuxFsm::with_limits(4, SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT);
+        let mut demux_fsm = NonFragmentedDemuxFsm::with_limits(DemuxLimits::new().with_payload(4));
 
         assert_eq!(
             demux_fsm
@@ -463,14 +441,40 @@ mod tests {
             framed(BoxType::compact(*b"free"), &[0x11; 4_096]),
         ]
         .concat();
-        let mut demux_fsm = NonFragmentedDemuxFsm::with_limits(
-            movie.len() as u64,
-            SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT,
-        );
+        let mut demux_fsm =
+            NonFragmentedDemuxFsm::with_limits(DemuxLimits::new().with_payload(movie.len() as u64));
 
         demux_fsm.handle_input(0, &file).unwrap();
 
         assert_eq!(demux_fsm.finish(), Ok(()));
+    }
+
+    #[test]
+    fn a_movie_declaring_more_samples_than_the_limit_lays_out_none() {
+        let mut demux_fsm =
+            NonFragmentedDemuxFsm::with_limits(DemuxLimits::new().with_resolved_samples(0));
+
+        assert_eq!(
+            demux_fsm.handle_input(0, &non_fragmented_file(&[&[b"SAMP"]], true)),
+            Err(Error::from(
+                isobmff_sample::Error::sample_count_limit_exceeded(1, 0)
+            ))
+        );
+        assert_eq!(demux_fsm.poll_sample(), None);
+    }
+
+    #[test]
+    fn the_sample_reader_is_held_to_the_limits_it_is_given() {
+        let mut demux_fsm = NonFragmentedDemuxFsm::with_limits(
+            DemuxLimits::new().with_sample_reader(SampleReaderLimits::new().with_held_extents(0)),
+        );
+
+        assert_eq!(
+            demux_fsm.handle_input(0, &non_fragmented_file(&[&[b"SAMP"]], true)),
+            Err(Error::from(
+                isobmff_sample::Error::held_extent_limit_exceeded(1, 0)
+            ))
+        );
     }
 
     #[test]

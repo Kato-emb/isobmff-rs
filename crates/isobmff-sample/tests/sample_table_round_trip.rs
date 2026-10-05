@@ -169,7 +169,9 @@ mod tests {
             }
         }
         let movie = movie_of(laid_out(&chunks));
-        let resolved: Vec<SampleExtent> = sample_extents(&movie).map(Result::unwrap).collect();
+        let resolved: Vec<SampleExtent> = sample_extents(&movie, u64::MAX)
+            .map(Result::unwrap)
+            .collect();
 
         assert_eq!(resolved, laid_down);
     }
@@ -178,7 +180,7 @@ mod tests {
     fn the_samples_resolved_out_of_the_tables_lay_them_out_again() {
         let chunks = interleaved_chunks();
         let tables = laid_out(&chunks);
-        let mut resolved = sample_extents(&movie_of(tables.clone())).map(Result::unwrap);
+        let mut resolved = sample_extents(&movie_of(tables.clone()), u64::MAX).map(Result::unwrap);
 
         let from_the_tables: Vec<(u64, Vec<Sample>)> = chunks
             .iter()

@@ -33,7 +33,7 @@ use core::ops::Range;
 use isobmff::boxes::{
     DegradationPriorityEntry, PaddingBitsEntry, SampleDependencyTypeEntry, SampleFlags,
 };
-use isobmff::sample::{Error, ErrorKind, Sample, SampleExtent, SampleReader};
+use isobmff::sample::{Error, ErrorKind, Sample, SampleExtent, SampleReader, SampleReaderLimits};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
 
@@ -102,7 +102,7 @@ struct Followed {
 fuzz_target!(|input: Input<'_>| {
     let sample_size_limit = input
         .sample_size_limit
-        .map_or(SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT, u64::from);
+        .map_or(SampleReaderLimits::DEFAULT_SAMPLE_SIZE, u64::from);
     let steps: Vec<Step> = input.steps.iter().copied().take(MAX_STEPS).collect();
 
     for pass in [Pass::AsGiven, Pass::Twice, Pass::Cut] {
@@ -209,7 +209,8 @@ fn handed_over<'file>(steps: &[Step], file: &'file [u8], pass: Pass) -> Vec<Hand
 /// A run of extents is handed over in one call where `together` is set, and
 /// one at a time otherwise.
 fn read(sample_size_limit: u64, handed: &[Handed<'_>], together: bool) -> Reading {
-    let mut reader = SampleReader::with_sample_size_limit(sample_size_limit);
+    let mut reader =
+        SampleReader::with_limits(SampleReaderLimits::new().with_sample_size(sample_size_limit));
     let mut samples = Vec::new();
     let mut failure = None;
 

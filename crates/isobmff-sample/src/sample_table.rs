@@ -32,6 +32,9 @@ use crate::sample_description::SampleDescriptions;
 /// the `stss`. A track declaring no sample — one carried in fragments —
 /// contributes nothing, and a chunk its `stsc` lays no run over holds none.
 ///
+/// The samples are counted before one is laid out: the sample size tables of
+/// every track together counting more than `sample_count_limit` lay out none.
+///
 /// The extents of every track come out together in the order their bytes lie
 /// in the file, the samples of one chunk in sample order and the chunks of
 /// one track between those of another where the file interleaves them, which
@@ -43,6 +46,9 @@ use crate::sample_description::SampleDescriptions;
 ///
 /// Returned as the last of the extents:
 ///
+/// * [`SampleCountLimitExceeded`](crate::ErrorKind::SampleCountLimitExceeded):
+///   the `stsz` or `stz2` of every track together count more samples than
+///   `sample_count_limit`, and no extent comes before it.
 /// * [`SampleCountMismatch`](crate::ErrorKind::SampleCountMismatch):
 ///   the tables of a track count different numbers of samples.
 /// * [`SyncSampleOutOfRange`](crate::ErrorKind::SyncSampleOutOfRange):
@@ -65,12 +71,25 @@ use crate::sample_description::SampleDescriptions;
 ///   offsets of a track run past what 64 bits carry.
 pub fn sample_extents(
     movie: &MovieBox,
+    sample_count_limit: u64,
 ) -> impl Iterator<Item = Result<SampleExtent, Error>> + use<> {
-    let mut extents = Vec::new();
-    let outcome = movie
+    let declared = movie
         .trak()
         .iter()
-        .try_for_each(|trak| resolve_track(trak, &mut extents));
+        .map(|trak| trak.mdia().minf().stbl().sample_sizes().sample_count())
+        .fold(0, u64::saturating_add);
+    let mut extents = Vec::new();
+    let outcome = if declared > sample_count_limit {
+        Err(Error::sample_count_limit_exceeded(
+            declared,
+            sample_count_limit,
+        ))
+    } else {
+        movie
+            .trak()
+            .iter()
+            .try_for_each(|trak| resolve_track(trak, &mut extents))
+    };
     extents.sort_by_key(|extent| extent.extent().start);
 
     extents.into_iter().map(Ok).chain(outcome.err().map(Err))
