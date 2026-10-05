@@ -1,9 +1,10 @@
 //! Throughput of the layers a fragmented file is laid down and read back through
 //!
-//! Four measurements stand side by side: what every composition of samples costs
+//! Five measurements stand side by side: what every composition of samples costs
 //! through each layer, what the length of a fragment costs the writer, what the
-//! length of an arriving chunk costs the reader, and what the length of a box
-//! costs the framing on its own. The first three report the bytes the samples
+//! length of an arriving chunk costs the reader, what the length of a box costs
+//! the framing on its own, and what media data lying in descending order costs
+//! the sample reader. The first three and the fifth report the bytes the samples
 //! carry, so the layers of one column are comparable; the fourth reports boxes,
 //! which is what its cost is paid by. Each of them checks what it moved against
 //! what its input declares.
@@ -40,7 +41,7 @@ use isobmff::boxes::{
     SampleFlags, TrackExtendsBox,
 };
 use isobmff::core::{BoxHeader, BoxType, Mp4EpochSeconds};
-use isobmff::sample::{MovieFragmentWriter, Sample};
+use isobmff::sample::{MovieFragmentWriter, Sample, SampleExtent, SampleReader};
 use isobmff::sequence::{BoxEvent, BoxReader, BoxWriter, EventBytes};
 use isobmff::structure::{FragmentedDemuxFsm, FragmentedMuxFsm};
 use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type, track};
@@ -265,6 +266,16 @@ const BOX_PAYLOAD_LENS: [(&str, usize); 6] = [
     ("64KiB", 64 * 1024),
 ];
 
+/// Samples the fifth table hands the sample reader, over the range it reports
+const DESCENDING_SAMPLE_COUNTS: [(&str, usize); 3] =
+    [("1k", 1_024), ("4k", 4 * 1_024), ("16k", 16 * 1_024)];
+
+/// Samples one fragment of the fifth table declares
+const DESCENDING_SAMPLES_PER_FRAGMENT: usize = 64;
+
+/// Bytes every sample of the fifth table carries
+const DESCENDING_SAMPLE_LEN: usize = 512;
+
 /// How many inputs criterion sets up ahead of a routine that is handed `input_len` bytes
 const fn batch_size(input_len: usize) -> BatchSize {
     if input_len < LARGE_INPUT_LEN {
@@ -369,6 +380,76 @@ fn fragmented_reader_samples(file: &[u8], chunk_len: usize) -> (usize, usize) {
     }
     demux_fsm.finish().unwrap();
     take(&mut demux_fsm);
+
+    (count, total)
+}
+
+/// The extents of `sample_count` samples of one track, fragment by fragment, whose media data lies fragment by fragment in descending order
+///
+/// The first fragment declares samples lying at the end of the media data and
+/// the last at its start, each fragment's own samples in ascending order, as
+/// a file laying its `moof` boxes down before media data written backwards
+/// declares them.
+fn descending_extents(sample_count: usize) -> Vec<Vec<SampleExtent>> {
+    let fragment_count = sample_count / DESCENDING_SAMPLES_PER_FRAGMENT;
+    let fragment_len = DESCENDING_SAMPLES_PER_FRAGMENT * DESCENDING_SAMPLE_LEN;
+
+    (0..fragment_count)
+        .map(|fragment| {
+            let lies_at = (fragment_count - 1 - fragment) * fragment_len;
+
+            (0..DESCENDING_SAMPLES_PER_FRAGMENT)
+                .map(|position| {
+                    let start = u64::try_from(lies_at + position * DESCENDING_SAMPLE_LEN).unwrap();
+                    let sample_number = fragment * DESCENDING_SAMPLES_PER_FRAGMENT + position;
+
+                    SampleExtent::new(
+                        1,
+                        u64::try_from(sample_number).unwrap() * u64::from(SAMPLE_DURATION),
+                        SAMPLE_DURATION,
+                        0,
+                        SampleFlags::ZERO,
+                        1,
+                        1,
+                        start..start + u64::try_from(DESCENDING_SAMPLE_LEN).unwrap(),
+                    )
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Reads the samples of `fragments` out of `media_data` handed over in order, and reports how many there were and what they carry
+///
+/// The sample layer alone: every fragment's extents are held before a byte
+/// arrives, as a reader that has framed the `moof` boxes ahead of the media
+/// data holds them.
+fn sample_reader_samples(fragments: Vec<Vec<SampleExtent>>, media_data: &[u8]) -> (usize, usize) {
+    let mut reader = SampleReader::new();
+    let mut count = 0;
+    let mut total = 0;
+    let mut take = |reader: &mut SampleReader| {
+        while let Some(sample) = reader.poll_sample() {
+            count += 1;
+            total += sample.data().len();
+            black_box(&sample);
+        }
+    };
+
+    for extents in fragments {
+        reader
+            .handle_sample_extents(extents.into_iter().map(Ok))
+            .unwrap();
+    }
+    for (offset, arriving) in (0..)
+        .step_by(DEFAULT_ARRIVING_CHUNK_LEN)
+        .zip(media_data.chunks(DEFAULT_ARRIVING_CHUNK_LEN))
+    {
+        reader.handle_data(offset, arriving).unwrap();
+        take(&mut reader);
+    }
+    reader.finish().unwrap();
+    take(&mut reader);
 
     (count, total)
 }
@@ -730,11 +811,52 @@ fn box_length(criterion: &mut Criterion) {
     group.finish();
 }
 
+/// Measures what media data lying in descending order costs the sample reader, against how many samples it holds
+fn descending_media_data(criterion: &mut Criterion) {
+    let mut group = criterion.benchmark_group("fragmented_descending_media_data");
+
+    for (name, sample_count) in DESCENDING_SAMPLE_COUNTS {
+        let payload_len = sample_count * DESCENDING_SAMPLE_LEN;
+        let media_data = vec![0xab; payload_len];
+
+        group.throughput(Throughput::BytesDecimal(
+            u64::try_from(payload_len).unwrap(),
+        ));
+
+        group.bench_function(BenchmarkId::new("harness/reader", name), |bencher| {
+            bencher.iter_batched(
+                || descending_extents(sample_count),
+                |fragments| {
+                    handed_over(&media_data, DEFAULT_ARRIVING_CHUNK_LEN);
+                    fragments
+                },
+                BatchSize::SmallInput,
+            );
+        });
+
+        group.bench_function(BenchmarkId::new("sample_reader", name), |bencher| {
+            bencher.iter_batched(
+                || descending_extents(sample_count),
+                |fragments| {
+                    assert_eq!(
+                        sample_reader_samples(fragments, &media_data),
+                        (sample_count, payload_len)
+                    );
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     composition,
     fragment_length,
     chunk_length,
-    box_length
+    box_length,
+    descending_media_data
 );
 criterion_main!(benches);
