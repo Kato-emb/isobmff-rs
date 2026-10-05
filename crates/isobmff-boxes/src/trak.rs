@@ -46,11 +46,14 @@ const VIDEO_HANDLER_NAME: &str = "VideoHandler";
 /// [`TrackBox`] (`trak`), ISO/IEC 14496-12 §8.3.1. Both children the spec marks
 /// mandatory are promoted to fields, and so is the `edts` that maps the track's
 /// media onto the movie's timeline. The times this crate reports are the
-/// media's own: the edit list is read, not applied.
+/// media's own: the edit list is read, not applied. An `edts` that does not
+/// read is kept among [`other_boxes`](Self::other_boxes) as the bytes it came
+/// as, and the track reads as one with no edits.
 ///
 /// On encode the children are written in the order the spec lists them —
-/// `tkhd`, `edts`, `mdia` — and then the children no field claims, so a
-/// round-trip settles the order rather than preserving it.
+/// `tkhd`, `edts`, `mdia` — and then the children of
+/// [`other_boxes`](Self::other_boxes), so a round-trip settles the order rather
+/// than preserving it.
 #[doc(alias = "trak")]
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Debug)]
@@ -212,7 +215,7 @@ impl TrackBox {
         duration
     }
 
-    /// Returns the edits that map the track's media onto the movie's timeline, if the track has them
+    /// Returns the edits that map the track's media onto the movie's timeline, if the track has them and they read
     #[must_use]
     pub const fn edts(&self) -> Option<&EditBox> {
         self.edts.as_ref()
@@ -230,7 +233,7 @@ impl TrackBox {
         &mut self.mdia
     }
 
-    /// Returns the children no field of this box claims, in the order they came
+    /// Returns the children no field of this box claims, and an `edts` that does not read, in the order they came
     #[must_use]
     pub fn other_boxes(&self) -> &[AnyBox] {
         self.other_boxes.as_slice()
@@ -251,15 +254,16 @@ impl BoxDecode for TrackBox {
     ///   `mdia`.
     /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one of either, or
     ///   more than one `edts`.
-    /// * Whatever the child reports, on the [`containers`](Error::containers) path: one of them
-    ///   does not decode.
+    /// * Whatever the child reports, on the [`containers`](Error::containers) path: the `tkhd`
+    ///   or the `mdia` does not decode. An `edts` that does not decode is kept among
+    ///   [`other_boxes`](Self::other_boxes) instead.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let mut children: ChildBoxes<'_> =
             boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         Ok(Self {
             tkhd: children.take_exactly_one()?,
-            edts: children.take_zero_or_one()?,
+            edts: children.take_zero_or_one_if_decoded()?,
             mdia: children.take_exactly_one()?,
             other_boxes: OtherBoxes::from(children),
         })
@@ -315,6 +319,7 @@ pub(crate) mod tests {
     use crate::hdlr::HandlerBox;
     use crate::mdhd::MediaHeaderBox;
     use crate::mdia::MediaBox;
+    use crate::minf::tests::kept;
     use crate::minf::tests::media_information;
     use crate::minf::{MediaInformationBox, MediaInformationHeader};
     use crate::sample_size::{SampleSizeBox, SampleSizeEntries, SampleSizes};
@@ -500,6 +505,36 @@ pub(crate) mod tests {
         assert_eq!(
             TrackBox::decode_payload(&encoded_payload(&track)).unwrap(),
             track
+        );
+    }
+
+    #[test]
+    fn an_edit_box_that_does_not_read_is_kept_and_the_track_reads_without_it() {
+        let edts_of_an_elst_of_version_2 = vec![
+            0, 0, 0, 0x18, b'e', b'd', b't', b's', 0, 0, 0, 0x10, b'e', b'l', b's', b't', 2, 0, 0,
+            0, 0, 0, 0, 0,
+        ];
+        let payload = [
+            encoded_child(track().tkhd()),
+            edts_of_an_elst_of_version_2.clone(),
+            encoded_child(track().mdia()),
+        ]
+        .concat();
+
+        let decoded = TrackBox::decode_payload(&payload).unwrap();
+
+        assert_eq!(
+            decoded,
+            TrackBox {
+                tkhd: track().tkhd().clone(),
+                edts: None,
+                mdia: track().mdia().clone(),
+                other_boxes: kept(&edts_of_an_elst_of_version_2),
+            }
+        );
+        assert_eq!(
+            TrackBox::decode_payload(&encoded_payload(&decoded)),
+            Ok(decoded)
         );
     }
 }

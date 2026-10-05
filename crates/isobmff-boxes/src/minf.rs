@@ -103,12 +103,15 @@ impl BoxVariants for MediaInformationHeader {
 /// 14496-12 defines. §8.4.5 lets a derived specification define a header of its
 /// own, which no type here names — a `minf` headed by one of those keeps it
 /// among [`other_boxes`](Self::other_boxes) and the slot reads back [`None`].
-/// A box built with [`new`](Self::new) always states one of the five.
+/// So does a `minf` whose header does not read, which keeps it there as the
+/// bytes it came as. A box built with [`new`](Self::new) always states one of
+/// the five.
 ///
 /// On encode the children are written in the order the spec lists them — the
-/// media header, `dinf`, `stbl` — and then the children no field claims, so a
-/// round-trip settles the order rather than preserving it. A header kept among
-/// those children is written after the `stbl` with them.
+/// media header, `dinf`, `stbl` — and then the children of
+/// [`other_boxes`](Self::other_boxes), so a round-trip settles the order rather
+/// than preserving it. A header kept among those children is written after the
+/// `stbl` with them.
 ///
 /// # Examples
 ///
@@ -180,7 +183,7 @@ impl MediaInformationBox {
 
     /// Returns the header the kind of media this track carries states, or
     /// [`None`] when the box was read with a header no variant of
-    /// [`MediaInformationHeader`] names
+    /// [`MediaInformationHeader`] names or with one that does not read
     #[must_use]
     pub const fn media_information_header(&self) -> Option<&MediaInformationHeader> {
         self.media_information_header.as_ref()
@@ -204,7 +207,7 @@ impl MediaInformationBox {
         &mut self.stbl
     }
 
-    /// Returns the children no field of this box claims, in the order they came
+    /// Returns the children no field of this box claims, and a media header that does not read, in the order they came
     #[must_use]
     pub fn other_boxes(&self) -> &[AnyBox] {
         self.other_boxes.as_slice()
@@ -227,14 +230,15 @@ impl BoxDecode for MediaInformationBox {
     ///   `dinf`, more than one `stbl`, or more than one media header of one type.
     /// * [`DuplicateAlternativeBox`](isobmff_core::ErrorKind::DuplicateAlternativeBox):
     ///   media headers of two kinds, of which §8.4.5 has the box hold one.
-    /// * Whatever a child reports, on the [`containers`](Error::containers) path: one
-    ///   of them does not decode.
+    /// * Whatever a child reports, on the [`containers`](Error::containers) path: the
+    ///   `dinf` or the `stbl` does not decode. A media header that does not decode
+    ///   is kept among [`other_boxes`](Self::other_boxes) instead.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let mut children: ChildBoxes<'_> =
             boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         Ok(Self {
-            media_information_header: children.take_zero_or_one_variant()?,
+            media_information_header: children.take_zero_or_one_variant_if_decoded()?,
             dinf: children.take_exactly_one()?,
             stbl: children.take_exactly_one()?,
             other_boxes: OtherBoxes::from(children),
@@ -281,7 +285,8 @@ pub(crate) mod tests {
     use alloc::vec::Vec;
 
     use isobmff_core::{
-        AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxVariants as _, Error,
+        AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxVariants as _, ChildBoxes, Error,
+        OtherBoxes, boxes,
     };
 
     use super::{MediaInformationBox, MediaInformationHeader};
@@ -296,6 +301,15 @@ pub(crate) mod tests {
             MediaInformationHeader::Video(video_media_header()),
             data_information(),
             sample_table(),
+        )
+    }
+
+    /// Children a container keeps, as the boxes `children` frames into
+    pub(crate) fn kept(children: &[u8]) -> OtherBoxes {
+        OtherBoxes::from(
+            boxes(children)
+                .collect::<Result<ChildBoxes<'_>, _>>()
+                .unwrap(),
         )
     }
 
@@ -411,6 +425,63 @@ pub(crate) mod tests {
         assert_eq!(
             MediaInformationBox::decode_payload(&[header, dinf].concat()),
             Err(Error::missing_mandatory_box(BoxType::compact(*b"stbl")))
+        );
+    }
+
+    #[test]
+    fn a_media_header_that_does_not_read_is_kept_where_it_came_and_the_slot_reads_back_none() {
+        let smhd_with_trailing_bytes = vec![
+            0, 0, 0, 0x14, b's', b'm', b'h', b'd', 0, 0, 0, 0, 0, 0, 0, 0, 0xaa, 0xaa, 0xaa, 0xaa,
+        ];
+        let unclaimed = vec![0, 0, 0, 0x08, b'f', b'r', b'e', b'e'];
+        let payload = [
+            unclaimed.clone(),
+            smhd_with_trailing_bytes.clone(),
+            encoded_child(&data_information()),
+            encoded_child(&sample_table()),
+        ]
+        .concat();
+
+        let decoded = MediaInformationBox::decode_payload(&payload).unwrap();
+
+        assert_eq!(
+            decoded,
+            MediaInformationBox {
+                media_information_header: None,
+                dinf: data_information(),
+                stbl: sample_table(),
+                other_boxes: kept(&[unclaimed, smhd_with_trailing_bytes].concat()),
+            }
+        );
+        assert_eq!(
+            MediaInformationBox::decode_payload(&encoded_payload(&decoded)),
+            Ok(decoded)
+        );
+    }
+
+    #[test]
+    fn a_sample_table_that_does_not_read_fails_the_box() {
+        let ctts_of_version_2 = [
+            0, 0, 0, 0x10, b'c', b't', b't', b's', 2, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let stbl_payload = [
+            encoded_child(&sample_table()).get(8..).unwrap(),
+            ctts_of_version_2.as_slice(),
+        ]
+        .concat();
+        let stbl_size = u32::try_from(stbl_payload.len().checked_add(8).unwrap()).unwrap();
+        let payload = [
+            encoded_child(&video_media_header()),
+            encoded_child(&data_information()),
+            [stbl_size.to_be_bytes().as_slice(), b"stbl", &stbl_payload].concat(),
+        ]
+        .concat();
+
+        assert_eq!(
+            MediaInformationBox::decode_payload(&payload),
+            Err(Error::unsupported_version(2)
+                .in_container(BoxType::compact(*b"ctts"))
+                .in_container(BoxType::compact(*b"stbl")))
         );
     }
 }
