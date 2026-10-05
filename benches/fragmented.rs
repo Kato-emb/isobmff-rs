@@ -427,7 +427,7 @@ fn box_reader_boxes(file: &[u8], chunk_len: usize) -> usize {
     let mut reader = BoxReader::new();
     let mut count = 0;
     let mut take = |reader: &mut BoxReader| {
-        while let Some(event) = reader.poll_event() {
+        while let Some((_extent, event)) = reader.poll_event() {
             if matches!(event, BoxEvent::End) {
                 count += 1;
             }
@@ -473,7 +473,7 @@ fn box_events(file: &[u8]) -> Vec<BoxEvent> {
     let mut reader = BoxReader::new();
     let mut events = Vec::new();
     let take = |reader: &mut BoxReader, events: &mut Vec<BoxEvent>| {
-        while let Some(event) = reader.poll_event() {
+        while let Some((_extent, event)) = reader.poll_event() {
             events.push(event);
         }
     };

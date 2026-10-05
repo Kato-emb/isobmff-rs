@@ -333,7 +333,9 @@ impl MediaSegmentMuxFsm {
     fn lay_down_step(&mut self, step: BoxEvent) -> Result<(), Error> {
         self.boxes
             .handle_event(step)
-            .map_err(|failure| self.fail(failure.into()))
+            .map_err(|failure| self.fail(failure.into()))?;
+
+        Ok(())
     }
 
     /// Fails the mux FSM for good, and hands the failure back to report

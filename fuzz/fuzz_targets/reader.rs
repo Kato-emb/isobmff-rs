@@ -127,10 +127,7 @@ fn read<'input>(arriving: impl IntoIterator<Item = &'input [u8]>) -> Run {
 /// where the one before it left off to the end of the bytes that event was read
 /// from.
 fn drain(reader: &mut BoxReader, reported: &mut Vec<Reported>, covered: &mut u64) {
-    while let Some(polled) = reader.poll_event() {
-        let extent = reader
-            .event_extent()
-            .expect("an event was taken, so it has an extent");
+    while let Some((extent, polled)) = reader.poll_event() {
         let began_at = extent.start;
         let bytes_read_from = extent
             .end

@@ -202,7 +202,6 @@ mod tests {
                 }
                 BoxEvent::Payload(payload) => reader.as_mut().unwrap().handle_payload(payload)?,
                 BoxEvent::End => read.push(reader.take().unwrap().finish()?),
-                _later_step => {}
             }
         }
 

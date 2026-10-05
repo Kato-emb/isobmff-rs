@@ -99,7 +99,7 @@ fn events_of<'input>(arriving: impl IntoIterator<Item = &'input [u8]>) -> Readin
 
 /// Takes every event the reader has made, fusing the payload parts of one box
 fn drain(reader: &mut BoxReader, events: &mut Vec<BoxEvent>) {
-    while let Some(polled) = reader.poll_event() {
+    while let Some((_extent, polled)) = reader.poll_event() {
         match (events.last_mut(), polled) {
             (Some(BoxEvent::Payload(fused)), BoxEvent::Payload(part)) => {
                 fused.extend_from_slice(&part);
@@ -131,13 +131,9 @@ fn file_of(events: &[BoxEvent]) -> Vec<u8> {
     let mut file = Vec::new();
 
     for event in events {
-        writer
+        let extent = writer
             .handle_event(event.clone())
             .expect("the writer rejected an event the reader made");
-
-        let extent = writer
-            .event_extent()
-            .expect("an event was handed over, so it has an extent");
         let began_at = laid_down(&file);
 
         drain_into(&mut writer, &mut file);

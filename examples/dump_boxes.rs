@@ -39,12 +39,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         } else {
             reader.handle_input(cut.get(..read).unwrap_or_default())?;
         }
-        while let Some(event) = reader.poll_event() {
+        while let Some((extent, event)) = reader.poll_event() {
             match event {
                 BoxEvent::Header(header) => {
-                    let extent = reader
-                        .event_extent()
-                        .ok_or("the event taken has no extent")?;
                     print_box(header, extent.start, 0);
                     container = CONTAINERS
                         .contains(&header.box_type())
@@ -60,7 +57,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                         print_children(&children, offset, 1)?;
                     }
                 }
-                _ => {}
             }
         }
         if read == 0 {

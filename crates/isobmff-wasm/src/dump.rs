@@ -69,7 +69,6 @@ pub(crate) fn dump<S: Read>(source: S) -> Result<Vec<BoxRecord>, Error> {
                     push_children(&mut records, &children, offset, 1)?;
                 }
             }
-            _ => {}
         }
         Ok(())
     })?;
@@ -97,7 +96,7 @@ pub(crate) fn read_boxes<S: Read>(
                 .handle_input(cut.get(..read).unwrap_or_default())
                 .map_err(structure::Error::from)?;
         }
-        while let Some((event, extent)) = reader.poll_event().zip(reader.event_extent()) {
+        while let Some((extent, event)) = reader.poll_event() {
             on_event(event, extent)?;
         }
         if read == 0 {

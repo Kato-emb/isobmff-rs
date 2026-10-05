@@ -46,8 +46,8 @@ use crate::event::{BoxEvent, EventBytes};
 /// * A [`BoxEvent`] carries no position, so the extents
 ///   [`BoxReader`](crate::BoxReader) reported are not this writer's input: boxes
 ///   may be dropped from an event stream or added to it, and where the events
-///   land is the writer's own count. [`event_extent`](Self::event_extent) names
-///   it for the event last handed over.
+///   land is the writer's own count, which
+///   [`handle_event`](Self::handle_event) returns for the event it took.
 /// * An `Err` leaves the writer failed for good,
 ///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside: every later
 ///   [`handle_event`](Self::handle_event) and [`finish`](Self::finish) reports
@@ -85,11 +85,10 @@ use crate::event::{BoxEvent, EventBytes};
 /// let mut file = Vec::new();
 /// let mut extents = Vec::new();
 ///
-/// // Events are handed over one at a time, each with the bytes of the file it
-/// // was written to, and what they made is drained
+/// // Events are handed over one at a time, each returning the bytes of the
+/// // file it was written to, and what they made is drained
 /// for event in events {
-///     writer.handle_event(event).unwrap();
-///     extents.push(writer.event_extent().unwrap());
+///     extents.push(writer.handle_event(event).unwrap());
 ///     while let Some(written) = writer.poll_output() {
 ///         file.extend_from_slice(&written);
 ///     }
@@ -111,7 +110,6 @@ pub struct BoxWriter {
     /// The bytes still to be drained, as the events made them
     output: VecDeque<EventBytes>,
     position: u64,
-    event_extent: Option<Range<u64>>,
 }
 
 impl BoxWriter {
@@ -125,14 +123,20 @@ impl BoxWriter {
             state: State::Between,
             output: VecDeque::new(),
             position: 0,
-            event_extent: None,
         }
     }
 
-    /// Takes the next step of the sequence, and makes the bytes it lays down
+    /// Takes the next step of the sequence, makes the bytes it lays down, and returns where they lie
     ///
     /// The event is taken whole. What it made is then taken from
     /// [`poll_output`](Self::poll_output).
+    ///
+    /// The extent returned counts from the first byte the writer laid down,
+    /// and covers the bytes the event is made of — see [`BoxEvent`]. They are
+    /// the extent of the event whether they were drained by
+    /// [`poll_output`](Self::poll_output) or are still held. The events
+    /// partition the output, so the end of one extent is where the next
+    /// begins.
     ///
     /// # Errors
     ///
@@ -150,7 +154,7 @@ impl BoxWriter {
     ///   declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
-    pub fn handle_event(&mut self, event: BoxEvent) -> Result<(), Error> {
+    pub fn handle_event(&mut self, event: BoxEvent) -> Result<Range<u64>, Error> {
         let began_at = self.position;
         let length = match (self.state, event) {
             (State::Failed(failure), _) => return Err(failure),
@@ -235,24 +239,8 @@ impl BoxWriter {
         };
 
         self.position = self.position.saturating_add(length);
-        self.event_extent = Some(began_at..self.position);
 
-        Ok(())
-    }
-
-    /// Returns the bytes of the file the event last handed over was written to
-    ///
-    /// The extent counts from the first byte the writer laid down, and covers
-    /// the bytes that event is made of — see [`BoxEvent`]. They are the extent
-    /// of the event whether they were drained by
-    /// [`poll_output`](Self::poll_output) or are still held.
-    ///
-    /// It is the event [`handle_event`](Self::handle_event) took last that it
-    /// names, and `None` until the first is taken. The events partition the
-    /// output, so the end of one is where the next begins.
-    #[must_use]
-    pub fn event_extent(&self) -> Option<Range<u64>> {
-        self.event_extent.clone()
+        Ok(began_at..self.position)
     }
 
     /// Hands over the bytes the next event made
@@ -626,26 +614,18 @@ mod tests {
     }
 
     #[test]
-    fn the_extent_reported_is_the_one_of_the_event_handed_over_last() {
+    fn each_event_returns_the_extent_it_was_written_to() {
         let mut writer = BoxWriter::new();
 
-        assert_eq!(writer.event_extent(), None);
-
-        writer
-            .handle_event(BoxEvent::Header(compact_header(*b"free", 12)))
-            .unwrap();
-
-        assert_eq!(writer.event_extent(), Some(0..8));
-
-        writer
-            .handle_event(BoxEvent::Payload(Vec::from(*b"AAAA")))
-            .unwrap();
-
-        assert_eq!(writer.event_extent(), Some(8..12));
-
-        writer.handle_event(BoxEvent::End).unwrap();
-
-        assert_eq!(writer.event_extent(), Some(12..12));
+        assert_eq!(
+            writer.handle_event(BoxEvent::Header(compact_header(*b"free", 12))),
+            Ok(0..8)
+        );
+        assert_eq!(
+            writer.handle_event(BoxEvent::Payload(Vec::from(*b"AAAA"))),
+            Ok(8..12)
+        );
+        assert_eq!(writer.handle_event(BoxEvent::End), Ok(12..12));
     }
 
     #[test]
@@ -660,11 +640,11 @@ mod tests {
             .unwrap();
         writer.handle_event(BoxEvent::End).unwrap();
         drained(&mut writer);
-        writer
-            .handle_event(BoxEvent::Header(compact_header(*b"free", 8)))
-            .unwrap();
 
-        assert_eq!(writer.event_extent(), Some(12..20));
+        assert_eq!(
+            writer.handle_event(BoxEvent::Header(compact_header(*b"free", 8))),
+            Ok(12..20)
+        );
     }
 
     #[test]
