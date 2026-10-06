@@ -12,9 +12,8 @@ use crate::event::BoxEvent;
 /// Reads the sequence of boxes a file is formed as, taking the input as it arrives
 ///
 /// The reader is handed the input as it arrives and reports the boxes it frames
-/// as owned [`BoxEvent`]s, with the bytes each of them covers named by
-/// [`event_extent`](Self::event_extent). It reaches for no source of its own:
-/// when to read and from where stay with the caller.
+/// as owned [`BoxEvent`]s, each with the bytes it covers. It reaches for no
+/// source of its own: when to read and from where stay with the caller.
 ///
 /// Every box is passed on as it lies: the reader frames the file and reads no
 /// box into a value, so which boxes matter and what their payloads mean stay
@@ -33,7 +32,6 @@ use crate::event::BoxEvent;
 ///   a [`Header`](BoxEvent::Header) followed by an [`End`](BoxEvent::End).
 /// * The events partition the input: each one covers the bytes it was made
 ///   from, and the extent of one ends where the extent of the next begins.
-///   [`event_extent`](Self::event_extent) names it for the event last taken.
 /// * A box declaring no total —
 ///   [`ToEndOfFile`](isobmff_core::BoxSize::ToEndOfFile) — takes every byte
 ///   that arrives after its header, and only [`finish`](Self::finish) closes
@@ -75,7 +73,7 @@ use crate::event::BoxEvent;
 /// for input in arriving {
 ///     reader.handle_input(input).unwrap();
 ///     while let Some(event) = reader.poll_event() {
-///         events.push((reader.event_extent().unwrap(), event));
+///         events.push(event);
 ///     }
 /// }
 ///
@@ -105,7 +103,6 @@ use crate::event::BoxEvent;
 pub struct BoxReader {
     state: State,
     events: VecDeque<(Range<u64>, BoxEvent)>,
-    event_extent: Option<Range<u64>>,
     position: u64,
     queued_position: u64,
 }
@@ -120,7 +117,6 @@ impl BoxReader {
         Self {
             state: State::Between,
             events: VecDeque::new(),
-            event_extent: None,
             position: 0,
             queued_position: 0,
         }
@@ -254,7 +250,7 @@ impl BoxReader {
         }
     }
 
-    /// Takes the next event the input handed over so far completed
+    /// Takes the next event the input handed over so far completed, with the bytes it was read from
     ///
     /// Reports `None` once it is used up: more input is needed, or
     /// [`finish`](Self::finish) is. Failure is reported by
@@ -262,32 +258,15 @@ impl BoxReader {
     /// this call never fails — a failed reader hands over the events it had
     /// already made, then `None` from there on.
     ///
-    /// The bytes the event taken was read from are named by
-    /// [`event_extent`](Self::event_extent) until the next event is taken.
-    pub fn poll_event(&mut self) -> Option<BoxEvent> {
-        let (extent, event) = self.events.pop_front()?;
-
-        self.event_extent = Some(extent);
-
-        Some(event)
-    }
-
-    /// Returns the bytes of the file the event last taken was read from
-    ///
     /// The extent counts from the first byte handed to the reader, and covers
-    /// the bytes that event was read from — see [`BoxEvent`]. A file handed
+    /// the bytes the event was read from — see [`BoxEvent`]. A file handed
     /// over from its first byte thus has every extent a file offset, the
     /// coordinate a box declares its own in, so a sample layer reads the two
-    /// against each other as they stand.
-    ///
-    /// It is the event [`poll_event`](Self::poll_event) reported last that it
-    /// names, and `None` until the first is taken. Where in the file the reader
-    /// stands otherwise is no report of its own: an extent belongs to an event
-    /// and the events partition the input, so the end of one is where the next
-    /// begins.
-    #[must_use]
-    pub fn event_extent(&self) -> Option<Range<u64>> {
-        self.event_extent.clone()
+    /// against each other as they stand. Where in the file the reader stands
+    /// otherwise is no report of its own: the events partition the input, so
+    /// the end of one extent is where the next begins.
+    pub fn poll_event(&mut self) -> Option<(Range<u64>, BoxEvent)> {
+        self.events.pop_front()
     }
 
     /// Declares the file over, and closes the box left open
@@ -489,13 +468,6 @@ mod tests {
         (ends_at..ends_at, BoxEvent::End)
     }
 
-    /// The next event the reader reports, with the bytes it was read from
-    fn polled(reader: &mut BoxReader) -> Option<(Range<u64>, BoxEvent)> {
-        let event = reader.poll_event()?;
-
-        Some((reader.event_extent().unwrap(), event))
-    }
-
     /// Every event a reader reports for `input`, handed over `cut_length` bytes at a time
     fn events_of(input: &[u8], cut_length: usize) -> Vec<(Range<u64>, BoxEvent)> {
         let mut reader = BoxReader::new();
@@ -503,12 +475,12 @@ mod tests {
 
         for arriving in input.chunks(cut_length) {
             reader.handle_input(arriving).unwrap();
-            while let Some(event) = polled(&mut reader) {
+            while let Some(event) = reader.poll_event() {
                 events.push(event);
             }
         }
         reader.finish().unwrap();
-        while let Some(event) = polled(&mut reader) {
+        while let Some(event) = reader.poll_event() {
             events.push(event);
         }
 
@@ -529,34 +501,29 @@ mod tests {
 
                 assert_eq!(
                     reader.poll_event(),
-                    Some(BoxEvent::Header(header)),
+                    Some((0..encoded.len() as u64, BoxEvent::Header(header))),
                     "{encoded:02x?} cut every {cut_length}"
                 );
-                assert_eq!(reader.event_extent(), Some(0..encoded.len() as u64));
             }
         }
     }
 
     #[test]
-    fn the_extent_reported_is_the_one_of_the_event_taken_last() {
+    fn each_event_is_taken_with_the_extent_it_was_read_from() {
         let mut reader = BoxReader::new();
 
         reader.handle_input(b"\0\0\0\x0cfreeAAAA").unwrap();
 
-        assert_eq!(reader.event_extent(), None);
         assert_eq!(
             reader.poll_event(),
-            Some(BoxEvent::Header(compact_header(*b"free", 12)))
+            Some((0..8, BoxEvent::Header(compact_header(*b"free", 12))))
         );
-        assert_eq!(reader.event_extent(), Some(0..8));
         assert_eq!(
             reader.poll_event(),
-            Some(BoxEvent::Payload(Vec::from(*b"AAAA")))
+            Some((8..12, BoxEvent::Payload(Vec::from(*b"AAAA"))))
         );
-        assert_eq!(reader.event_extent(), Some(8..12));
-        assert_eq!(reader.poll_event(), Some(BoxEvent::End));
+        assert_eq!(reader.poll_event(), Some((12..12, BoxEvent::End)));
         assert_eq!(reader.poll_event(), None);
-        assert_eq!(reader.event_extent(), Some(12..12));
     }
 
     #[test]
@@ -660,7 +627,7 @@ mod tests {
         reader.handle_input(b"ee").unwrap();
 
         assert_eq!(
-            polled(&mut reader),
+            reader.poll_event(),
             Some(started(compact_header(*b"free", 8), 0))
         );
     }
@@ -677,7 +644,7 @@ mod tests {
 
         reader.handle_input(b"AA").unwrap();
 
-        assert_eq!(polled(&mut reader), Some(passed_on(b"AA", 10)));
+        assert_eq!(reader.poll_event(), Some(passed_on(b"AA", 10)));
     }
 
     #[test]
@@ -733,11 +700,11 @@ mod tests {
         );
 
         assert_eq!(
-            polled(&mut reader),
+            reader.poll_event(),
             Some(started(compact_header(*b"free", 8), 0))
         );
-        assert_eq!(polled(&mut reader), Some(ended(8)));
-        assert_eq!(polled(&mut reader), None);
+        assert_eq!(reader.poll_event(), Some(ended(8)));
+        assert_eq!(reader.poll_event(), None);
     }
 
     #[test]
@@ -748,11 +715,11 @@ mod tests {
         reader.finish().unwrap();
 
         assert_eq!(
-            polled(&mut reader),
+            reader.poll_event(),
             Some(started(compact_header(*b"free", 8), 0))
         );
-        assert_eq!(polled(&mut reader), Some(ended(8)));
-        assert_eq!(polled(&mut reader), None);
+        assert_eq!(reader.poll_event(), Some(ended(8)));
+        assert_eq!(reader.poll_event(), None);
     }
 
     #[test]

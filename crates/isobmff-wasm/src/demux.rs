@@ -129,7 +129,6 @@ pub(crate) fn demux<S: Read>(source: S) -> Result<Demux, Error> {
                 }
                 None => {}
             },
-            _ => {}
         }
         Ok(())
     })?;

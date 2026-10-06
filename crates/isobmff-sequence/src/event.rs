@@ -22,10 +22,13 @@ use isobmff_core::BoxHeader;
 /// A step says what the file holds and not where it holds it, so the same step
 /// is what [`BoxReader`](crate::BoxReader) reports and what
 /// [`BoxWriter`](crate::BoxWriter) takes. Where it lies is the extent each of
-/// them names for the step it last handled —
-/// [`BoxReader::event_extent`](crate::BoxReader::event_extent) and
-/// [`BoxWriter::event_extent`](crate::BoxWriter::event_extent).
-#[non_exhaustive]
+/// them hands over with it —
+/// [`BoxReader::poll_event`](crate::BoxReader::poll_event) and
+/// [`BoxWriter::handle_event`](crate::BoxWriter::handle_event).
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "a box is a header and a payload (ISO/IEC 14496-12 §4.2), and the framing reports those and where the box ended"
+)]
 #[derive(Clone, PartialEq, Debug)]
 pub enum BoxEvent {
     /// Header of the box that started

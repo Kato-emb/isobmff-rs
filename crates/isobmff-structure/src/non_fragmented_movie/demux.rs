@@ -306,7 +306,7 @@ impl NonFragmentedDemuxFsm {
 
     /// Reads every box the framing has finished framing so far
     fn read_framed(&mut self) -> Result<(), Error> {
-        while let Some(event) = self.boxes.poll_event() {
+        while let Some((extent, event)) = self.boxes.poll_event() {
             match event {
                 BoxEvent::Header(header) => self
                     .structure
@@ -328,17 +328,10 @@ impl NonFragmentedDemuxFsm {
                 BoxEvent::Payload(payload) => match &mut self.open {
                     Some(Open::FileType(reader)) => reader.handle_payload(payload),
                     Some(Open::Movie(reader)) => reader.handle_payload(payload),
-                    Some(Open::MediaData) => {
-                        // Why not unreachable: an event was taken, so the
-                        // framing names the bytes it was read from, and the
-                        // fallback is a degenerate position in place of a
-                        // panic the lints forbid.
-                        let start = self.boxes.event_extent().map_or(0, |extent| extent.start);
-
-                        self.samples
-                            .handle_data(start, &payload)
-                            .map_err(Error::from)
-                    }
+                    Some(Open::MediaData) => self
+                        .samples
+                        .handle_data(extent.start, &payload)
+                        .map_err(Error::from),
                     None => Ok(()),
                 },
                 BoxEvent::End => match self.open.take() {
@@ -356,10 +349,6 @@ impl NonFragmentedDemuxFsm {
                     }),
                     Some(Open::MediaData) | None => Ok(()),
                 },
-                // Why an arm at all: `BoxEvent` is `#[non_exhaustive]`, which
-                // `clippy::exhaustive_enums` asks of every public enum, so §4.2
-                // being settled at three steps does not close the match.
-                _later_step => Ok(()),
             }
             .map_err(|failure| self.fail(failure))?;
         }

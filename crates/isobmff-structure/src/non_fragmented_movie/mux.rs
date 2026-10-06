@@ -134,6 +134,8 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 #[derive(Debug)]
 pub struct NonFragmentedMuxFsm {
     boxes: BoxWriter,
+    /// Where the output stands: the end of the extent the last step was written to
+    output_position: u64,
     structure: NonFragmentedStructure,
     movie: Option<(MovieBox, SampleTableWriter)>,
     chunk: Vec<Vec<u8>>,
@@ -157,6 +159,7 @@ impl NonFragmentedMuxFsm {
     pub const fn new() -> Self {
         Self {
             boxes: BoxWriter::new(),
+            output_position: 0,
             structure: NonFragmentedStructure::new(),
             movie: None,
             chunk: Vec::new(),
@@ -241,9 +244,7 @@ impl NonFragmentedMuxFsm {
         // Why not checked_add: the framing already carries where the file
         // ends in 64 bits, and a compact header is eight bytes past it.
         let chunk_offset = self
-            .boxes
-            .event_extent()
-            .map_or(0, |extent| extent.end)
+            .output_position
             .saturating_add(header.encoded_len() as u64);
 
         self.samples()?
@@ -417,9 +418,14 @@ impl NonFragmentedMuxFsm {
 
     /// Hands one step of the framing over, failing the mux FSM where it is refused
     fn lay_down_step(&mut self, step: BoxEvent) -> Result<(), Error> {
-        self.boxes
+        let extent = self
+            .boxes
             .handle_event(step)
-            .map_err(|failure| self.fail(failure.into()))
+            .map_err(|failure| self.fail(failure.into()))?;
+
+        self.output_position = extent.end;
+
+        Ok(())
     }
 
     /// Fails the mux FSM for good, and hands the failure back to report

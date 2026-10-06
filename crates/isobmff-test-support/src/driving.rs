@@ -17,24 +17,16 @@ pub fn events_of(file: &[u8], cut_length: usize) -> Result<Vec<(Range<u64>, BoxE
 
     for arriving in file.chunks(cut_length) {
         reader.handle_input(arriving)?;
-        while let Some(event) = polled(&mut reader) {
+        while let Some(event) = reader.poll_event() {
             events.push(event);
         }
     }
     reader.finish()?;
-    while let Some(event) = polled(&mut reader) {
+    while let Some(event) = reader.poll_event() {
         events.push(event);
     }
 
     Ok(events)
-}
-
-/// The next event the reader reports, with the bytes of the file it was read from
-pub fn polled(reader: &mut BoxReader) -> Option<(Range<u64>, BoxEvent)> {
-    let event = reader.poll_event()?;
-    let extent = reader.event_extent()?;
-
-    Some((extent, event))
 }
 
 /// The steps with the payload of each box passed on fused back into one

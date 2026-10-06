@@ -11,8 +11,8 @@
 //! read, and where to write, to the caller.
 //!
 //! An event says what the file holds and not where it holds it. Where it lies is
-//! the extent each of the two names for the event it last handled —
-//! [`BoxReader::event_extent`] and [`BoxWriter::event_extent`] — a contiguous
+//! the extent each of the two hands over with it —
+//! [`BoxReader::poll_event`] and [`BoxWriter::handle_event`] — a contiguous
 //! subset of the bytes of a resource, ISO/IEC 14496-12 §8.11.3. It counts from
 //! the first byte handed over, so a file handed over from its first byte has
 //! every extent a file offset, the coordinate the boxes declare their own in
