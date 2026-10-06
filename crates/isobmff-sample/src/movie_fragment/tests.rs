@@ -238,6 +238,34 @@ fn a_sample_takes_what_its_row_states_over_the_defaults_of_the_fragment_and_the_
 }
 
 #[test]
+fn an_offset_a_version_0_run_states_past_the_signed_range_is_read_as_negative() {
+    let rows = vec![TrackRunSample::new(
+        None,
+        None,
+        None,
+        Some(CompositionTimeOffset::new(0xFFFF_FC00).unwrap()),
+    )];
+    let written_signed = TrackRunBox::new(Some(100), None, rows).unwrap();
+
+    assert_eq!(
+        resolved(
+            &movie_fragment(vec![track_fragment(1, vec![written_signed])]),
+            &one_track_movie()
+        ),
+        Ok(vec![SampleExtent::new(
+            1,
+            0,
+            1_024,
+            -1_024,
+            SampleFlags::ZERO,
+            1,
+            1,
+            100..104
+        )])
+    );
+}
+
+#[test]
 fn a_sample_takes_what_its_fragment_states_over_the_defaults_of_its_track() {
     let track_fragment = TrackFragmentBox::new(
         track_fragment_header(

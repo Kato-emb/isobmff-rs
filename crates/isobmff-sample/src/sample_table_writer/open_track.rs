@@ -8,6 +8,7 @@ use isobmff_boxes::{
     SampleToChunkBox, SyncSampleBox, SyncSampleEntry, TimeToSampleBox,
 };
 
+use crate::composition_time_offset;
 use crate::error::Error;
 use crate::sample::Sample;
 use crate::sample_table_writer::SampleTables;
@@ -33,7 +34,7 @@ impl OpenTrack {
     pub(super) fn place(&mut self, sample: Sample) -> Result<Vec<u8>, Error> {
         let track_id = sample.track_id();
         let offset = sample.sample_composition_time_offset();
-        let Some(sample_composition_time_offset) = CompositionTimeOffset::new(offset) else {
+        let Some(sample_composition_time_offset) = composition_time_offset::stated(offset) else {
             return Err(Error::composition_time_offset_out_of_range(
                 track_id, offset,
             ));
@@ -320,36 +321,18 @@ mod tests {
     }
 
     #[test]
-    fn a_track_composing_samples_both_early_and_past_what_signed_offsets_reach_is_refused() {
+    fn a_sample_composed_past_the_signed_range_is_refused() {
+        let past_the_signed_range = i64::from(i32::MAX) + 1;
         let mut writer = writer();
 
         writer.begin_chunk(1_000).unwrap();
-        writer
-            .handle_sample(Sample::new(
-                1,
-                0,
-                1_024,
-                -8,
-                SampleFlags::ZERO,
-                1,
-                b"AAAA".to_vec(),
-            ))
-            .unwrap();
-        writer
-            .handle_sample(Sample::new(
-                1,
-                1_024,
-                1_024,
-                1 << 31,
-                SampleFlags::ZERO,
-                1,
-                b"BBBB".to_vec(),
-            ))
-            .unwrap();
 
         assert_eq!(
-            writer.finish(),
-            Err(Error::composition_time_offset_out_of_range(1, 1 << 31))
+            writer.handle_sample(stating(0, past_the_signed_range, SampleFlags::ZERO)),
+            Err(Error::composition_time_offset_out_of_range(
+                1,
+                past_the_signed_range
+            ))
         );
     }
 }

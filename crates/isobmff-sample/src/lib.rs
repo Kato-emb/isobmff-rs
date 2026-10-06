@@ -50,6 +50,7 @@
 
 extern crate alloc;
 
+mod composition_time_offset;
 mod error;
 pub mod movie_fragment;
 pub mod movie_fragment_random_access;

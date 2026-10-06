@@ -11,6 +11,7 @@ use isobmff_boxes::{
 };
 use isobmff_core::{BoxDefinition as _, BoxEncode as _};
 
+use crate::composition_time_offset;
 use crate::error::Error;
 use crate::sample::Sample;
 use crate::sample_description::SampleDescriptions;
@@ -133,7 +134,7 @@ impl OpenFragment {
             return Err(Error::sample_size_out_of_range(track_id, offered));
         };
         let offset = sample.sample_composition_time_offset();
-        let Some(sample_composition_time_offset) = CompositionTimeOffset::new(offset) else {
+        let Some(sample_composition_time_offset) = composition_time_offset::stated(offset) else {
             return Err(Error::composition_time_offset_out_of_range(
                 track_id, offset,
             ));

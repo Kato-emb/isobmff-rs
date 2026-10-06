@@ -4,11 +4,12 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use isobmff_boxes::{
-    CompositionTimeOffset, MovieBox, MovieFragmentBox, SampleFlags, TrackBox, TrackExtendsBox,
-    TrackFragmentBox, TrackRunBox, TrackRunSample,
+    MovieBox, MovieFragmentBox, SampleFlags, TrackBox, TrackExtendsBox, TrackFragmentBox,
+    TrackRunBox, TrackRunSample,
 };
 use isobmff_core::BoxDefinition as _;
 
+use crate::composition_time_offset;
 use crate::error::Error;
 use crate::sample::SampleExtent;
 use crate::sample_description::SampleDescriptions;
@@ -285,7 +286,7 @@ fn resolve_data(
                                 decode_time,
                                 sample_duration,
                                 row.sample_composition_time_offset()
-                                    .map_or(0, CompositionTimeOffset::get),
+                                    .map_or(0, composition_time_offset::resolved),
                                 first_sample_flags
                                     .take()
                                     .or(row.sample_flags())

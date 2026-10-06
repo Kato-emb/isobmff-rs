@@ -265,7 +265,7 @@ impl Error {
         }
     }
 
-    /// Returns the failure of a sample stating a composition time offset no version of a `trun` or a `ctts` writes
+    /// Returns the failure of a sample stating a composition time offset outside what 32 signed bits hold
     #[must_use]
     pub const fn composition_time_offset_out_of_range(track_id: u32, offset: i64) -> Self {
         Self {

@@ -81,16 +81,15 @@ use crate::sample_table_writer::open_track::OpenTrack;
 /// * The samples of a chunk are all described by one `stsd` entry, which the
 ///   run of chunks states for them (§8.7.4): a chunk mixing two is
 ///   [`SampleDescriptionIndexMismatch`](crate::ErrorKind::SampleDescriptionIndexMismatch).
-/// * A sample stating a composition time offset no version of a `ctts`
-///   writes is
-///   [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange).
+/// * A sample stating a composition time offset outside what 32 signed bits
+///   hold is
+///   [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange):
+///   one past [`i32::MAX`] is refused too, which the readers here take as
+///   negative.
 /// * A chunk holding more samples than an `stsc` entry counts, or numbered
 ///   past what one reaches, is reported by [`finish`](Self::finish), where the
 ///   tables are built: the failure of the box, carried on
-///   [`Box`](crate::ErrorKind::Box). So is a track stating a negative
-///   composition time offset and one past [`i32::MAX`], which no one version
-///   of a `ctts` writes both of:
-///   [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange).
+///   [`Box`](crate::ErrorKind::Box).
 /// * An `Err` leaves the writer failed for good,
 ///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside: every
 ///   later call reports that same failure again.
@@ -380,8 +379,8 @@ impl SampleTableWriter {
     ///   the sample is longer than the 32 bits an `stsz` entry states its
     ///   length in.
     /// * [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange):
-    ///   the sample states a composition time offset neither version of a
-    ///   `ctts` writes.
+    ///   the sample states a composition time offset outside what 32 signed
+    ///   bits hold.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
@@ -405,10 +404,6 @@ impl SampleTableWriter {
     /// * [`OutOfRange`](isobmff_core::ErrorKind::OutOfRange), carried on
     ///   [`Box`](crate::ErrorKind::Box): a chunk holds more samples than
     ///   an `stsc` entry counts, or is numbered past what one reaches.
-    /// * [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange):
-    ///   a track states a negative composition time offset and one past
-    ///   [`i32::MAX`], which no one version of a `ctts` writes both of; the
-    ///   failure names the widest.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   samples were already declared over.
     /// * The failure of a previous call, which the writer keeps and reports

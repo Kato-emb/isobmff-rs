@@ -365,36 +365,17 @@ fn flags_no_two_samples_share_are_written_by_every_row() {
 }
 
 #[test]
-fn a_run_stating_offsets_no_one_trun_version_writes_both_of_is_refused() {
-    let mut writer = writer();
-
-    writer.begin_fragment(1).unwrap();
-    writer.handle_sample(offset_by(0, -8)).unwrap();
-    writer
-        .handle_sample(offset_by(1_024, i64::from(u32::MAX)))
-        .unwrap();
-
-    assert_eq!(
-        writer.finish_fragment(),
-        Err(Error::composition_time_offset_out_of_range(
-            1,
-            i64::from(u32::MAX)
-        ))
-    );
-}
-
-#[test]
-fn a_composition_time_offset_no_run_writes_is_refused() {
-    let past_the_field = i64::from(u32::MAX).saturating_add(1);
+fn a_sample_composed_past_the_signed_range_is_refused() {
+    let past_the_signed_range = i64::from(i32::MAX) + 1;
     let mut writer = writer();
 
     writer.begin_fragment(1).unwrap();
 
     assert_eq!(
-        writer.handle_sample(offset_by(0, past_the_field)),
+        writer.handle_sample(offset_by(0, past_the_signed_range)),
         Err(Error::composition_time_offset_out_of_range(
             1,
-            past_the_field
+            past_the_signed_range
         ))
     );
 }

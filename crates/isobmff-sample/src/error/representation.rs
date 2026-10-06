@@ -72,7 +72,7 @@ pub(super) enum Representation {
     SampleSizeOutOfRange { track_id: u32, declared: u64 },
     /// Sample lying further into its fragment than the offset a `trun` states reaches
     DataOffsetOutOfRange { track_id: u32, offset: u64 },
-    /// Sample stating a composition time offset no version of a `trun` or a `ctts` writes
+    /// Sample stating a composition time offset outside what 32 signed bits hold
     CompositionTimeOffsetOutOfRange { track_id: u32, offset: i64 },
     /// Sample not starting where the one before it in its track ends
     DecodeTimeMismatch {

@@ -19,7 +19,9 @@ use isobmff_boxes::SampleFlags;
 /// tracks on one timeline reads that time scale off the `moov` itself. A sample
 /// the file states no composition time offset for — a track without a `ctts`
 /// (§8.6.1.3), a `trun` row without the field (§8.8.8) — is composed when it is
-/// decoded, and carries an offset of zero.
+/// decoded, and carries an offset of zero. Version 0 of either box writes the
+/// offset unsigned, and one it states past [`i32::MAX`] is taken as the
+/// negative value of the same 32 bits.
 ///
 /// The `sample_flags` are a [`SampleFlags`], the fields §8.8.3.1 lays out,
 /// which cannot state a reserved bit. A sample table states those fields in

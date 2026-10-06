@@ -2,8 +2,9 @@
 
 use alloc::vec::Vec;
 
-use isobmff_boxes::{CompositionTimeOffset, MovieBox, SampleFlags, TrackBox};
+use isobmff_boxes::{MovieBox, SampleFlags, TrackBox};
 
+use crate::composition_time_offset;
 use crate::error::Error;
 use crate::sample::SampleExtent;
 use crate::sample_description::SampleDescriptions;
@@ -111,7 +112,7 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
     }
     let mut offsets = stbl
         .ctts()
-        .map(|ctts| ctts.offsets().map(CompositionTimeOffset::get));
+        .map(|ctts| ctts.offsets().map(composition_time_offset::resolved));
     let mut dependencies = stbl.sdtp().map(|sdtp| sdtp.entries().iter().copied());
     let mut paddings = stbl.padb().map(|padb| padb.entries().iter().copied());
     let mut priorities = stbl.stdp().map(|stdp| stdp.entries().iter().copied());
