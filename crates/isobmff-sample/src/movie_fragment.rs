@@ -90,16 +90,18 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///   offsets a `traf` of a track the movie reads states run past what 64 bits
 ///   carry.
 ///
-/// Returned as the last of the extents, naming a track kept unread, where a
-/// `traf` of a track the movie reads states no anchor and the `traf`s before it
-/// back to one of a track kept unread state none either; where no such `traf`
-/// follows, the fragment reads on:
+/// Returned as the last of the extents, naming a track kept unread, where the
+/// end of the data of a `traf` of that track is unknown and a `traf` of a track
+/// the movie reads is anchored there, through any `traf`s between them that
+/// state no anchor; where no such `traf` follows, the fragment reads on. The
+/// end is unknown where, in a run with no run after it stating a
+/// `data_offset`:
 ///
-/// * [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId): a row of that
-///   `traf` kept unread states no size, and neither its `tfhd` nor the `trex`
-///   of its track states one.
-/// * [`DataOffsetOverflow`](crate::ErrorKind::DataOffsetOverflow): its
-///   offsets run past what 64 bits carry.
+/// * [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId): a row states no
+///   size, and neither the `tfhd` of the `traf` nor the `trex` of its track
+///   states one.
+/// * [`DataOffsetOverflow`](crate::ErrorKind::DataOffsetOverflow): the offsets
+///   run past what 64 bits carry.
 pub fn sample_extents(
     movie_fragment: &MovieFragmentBox,
     movie: &MovieBox,
@@ -303,21 +305,31 @@ fn resolve_data(
 
                 Ok(data_offset)
             }
-            SettledFragment::KeptUnread { sample_size } => base.and_then(|base| {
-                let mut data_offset = base;
+            SettledFragment::KeptUnread { sample_size } => {
+                let mut data_end = base;
                 for trun in traf.trun() {
-                    place_run(
-                        trun,
-                        base,
-                        &mut data_offset,
-                        *sample_size,
-                        tfhd.track_id(),
-                        |_, _| {},
-                    )?;
+                    let start = if trun.data_offset().is_some() {
+                        base
+                    } else {
+                        data_end
+                    };
+                    data_end = base.and_then(|base| {
+                        let mut data_offset = start?;
+                        place_run(
+                            trun,
+                            base,
+                            &mut data_offset,
+                            *sample_size,
+                            tfhd.track_id(),
+                            |_, _| {},
+                        )?;
+
+                        Ok(data_offset)
+                    });
                 }
 
-                Ok(data_offset)
-            }),
+                data_end
+            }
         };
     }
 

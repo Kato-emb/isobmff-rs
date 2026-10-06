@@ -792,3 +792,30 @@ fn a_fragment_kept_unread_is_walked_by_the_sample_size_its_header_states() {
         Ok(vec![extent(1, 0, 112..116)])
     );
 }
+
+#[test]
+fn a_run_stating_its_offset_places_the_end_of_a_fragment_kept_unread_whatever_ran_before_it() {
+    let movie = read_keeping_second_track_unread(with_no_trex_for_track_2(written(&movie(vec![
+        track(1),
+        track(2),
+    ]))));
+    let sized_run = TrackRunBox::new(
+        Some(200),
+        None,
+        vec![TrackRunSample::new(None, Some(6), None, None)],
+    )
+    .unwrap();
+    let kept_unread = TrackFragmentBox::new(
+        track_fragment_header(TrackFragmentHeaderFlags::ZERO, 2, None, None, None),
+        vec![run(None, 1), sized_run],
+    )
+    .unwrap();
+
+    assert_eq!(
+        resolved(
+            &movie_fragment(vec![kept_unread, stating_no_anchor(1, None, 1)]),
+            &movie
+        ),
+        Ok(vec![extent(1, 0, 206..210)])
+    );
+}
