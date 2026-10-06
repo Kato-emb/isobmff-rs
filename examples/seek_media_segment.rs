@@ -12,7 +12,7 @@ use std::env;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
-use isobmff::structure::{FragmentedDemuxFsm, MediaSegmentDemuxFsm};
+use isobmff::structure::{MediaSegmentDemuxFsm, MovieDemuxFsm};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let usage = "usage: seek_media_segment <initialization.mp4> <segment.m4s> <milliseconds>";
@@ -23,7 +23,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut initialization_file = File::open(initialization_path)?;
     let mut buffer = vec![0; 1024 * 1024];
-    let mut initialization_fsm = FragmentedDemuxFsm::new();
+    let mut initialization_fsm = MovieDemuxFsm::new();
     let movie = loop {
         if let Some(movie) = initialization_fsm.movie() {
             break movie.clone();

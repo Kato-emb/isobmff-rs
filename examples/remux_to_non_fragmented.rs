@@ -16,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use isobmff::boxes::MovieBox;
 use isobmff::core::Mp4EpochSeconds;
-use isobmff::structure::{FragmentedDemuxFsm, NonFragmentedMuxFsm};
+use isobmff::structure::{MovieDemuxFsm, NonFragmentedMuxFsm};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let usage = "usage: remux_to_non_fragmented <in.mp4> <out.mp4>";
@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut input_file = File::open(input)?;
     let mut buffer = vec![0; 1024 * 1024];
-    let mut demux_fsm = FragmentedDemuxFsm::new();
+    let mut demux_fsm = MovieDemuxFsm::new();
     let mut handed = Ok(());
     while demux_fsm.movie().is_none() {
         handed?;

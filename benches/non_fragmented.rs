@@ -30,7 +30,7 @@ use isobmff::boxes::{FileTypeBox, MovieBox, SampleFlags};
 use isobmff::sample::Sample;
 use isobmff::sample::sample_table::sample_extents;
 use isobmff::sequence::EventBytes;
-use isobmff::structure::{DemuxLimits, NonFragmentedDemuxFsm, NonFragmentedMuxFsm};
+use isobmff::structure::{DemuxLimits, MovieDemuxFsm, NonFragmentedMuxFsm};
 use isobmff_test_support::{SAMPLE_DURATION, file_type, non_fragmented_file, unfragmented_movie};
 
 /// Track the samples of the benchmarked movies belong to
@@ -181,7 +181,7 @@ fn fetched<'file>(file: &'file [u8], wanted: &Range<u64>, fetch_len: usize) -> &
 }
 
 /// The bytes the reader wants whose length it states: those its samples lack that the file has passed
-fn lacking_extent(demux_fsm: &NonFragmentedDemuxFsm) -> Option<Range<u64>> {
+fn lacking_extent(demux_fsm: &MovieDemuxFsm) -> Option<Range<u64>> {
     let wanted = demux_fsm.wanted_input()?;
 
     Some(wanted.offset()..wanted.offset() + wanted.length()?)
@@ -231,10 +231,10 @@ fn non_fragmented_writer_file(
 /// reader still wants is fetched: nothing where the movie lay first, and every
 /// sample where it lay last.
 fn non_fragmented_reader_samples(file: &[u8], fetch_len: usize) -> (usize, usize) {
-    let mut demux_fsm = NonFragmentedDemuxFsm::new();
+    let mut demux_fsm = MovieDemuxFsm::new();
     let mut count = 0;
     let mut total = 0;
-    let mut take = |demux_fsm: &mut NonFragmentedDemuxFsm| {
+    let mut take = |demux_fsm: &mut MovieDemuxFsm| {
         while let Some(sample) = demux_fsm.poll_sample() {
             count += 1;
             total += sample.data().len();
@@ -263,9 +263,9 @@ fn non_fragmented_reader_samples(file: &[u8], fetch_len: usize) -> (usize, usize
 
 /// The extents the reader wants once the file has been handed over, in the order it wants them
 fn wants_of(file: &[u8], fetch_len: usize) -> Vec<Range<u64>> {
-    let mut demux_fsm = NonFragmentedDemuxFsm::new();
+    let mut demux_fsm = MovieDemuxFsm::new();
     let mut wants = Vec::new();
-    let take = |demux_fsm: &mut NonFragmentedDemuxFsm| while demux_fsm.poll_sample().is_some() {};
+    let take = |demux_fsm: &mut MovieDemuxFsm| while demux_fsm.poll_sample().is_some() {};
 
     for (offset, arriving) in (0..)
         .step_by(ARRIVING_CHUNK_LEN)
@@ -287,7 +287,7 @@ fn wants_of(file: &[u8], fetch_len: usize) -> Vec<Range<u64>> {
 
 /// The movie `file` declares, read off it
 fn movie_of(file: &[u8]) -> MovieBox {
-    let mut demux_fsm = NonFragmentedDemuxFsm::new();
+    let mut demux_fsm = MovieDemuxFsm::new();
 
     demux_fsm.handle_input(0, file).unwrap();
 

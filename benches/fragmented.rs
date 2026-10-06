@@ -43,7 +43,7 @@ use isobmff::boxes::{
 use isobmff::core::{BoxHeader, BoxType, Mp4EpochSeconds};
 use isobmff::sample::{MovieFragmentWriter, Sample, SampleExtent, SampleReader};
 use isobmff::sequence::{BoxEvent, BoxReader, BoxWriter, EventBytes};
-use isobmff::structure::{FragmentedDemuxFsm, FragmentedMuxFsm};
+use isobmff::structure::{FragmentedMuxFsm, MovieDemuxFsm};
 use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type, track};
 
 /// Ticks every sample of the benchmarked movies lasts
@@ -363,10 +363,10 @@ fn movie_fragment_writer_fragments(
 
 /// Reads the samples off the file, and reports how many there were and what they carry
 fn fragmented_reader_samples(file: &[u8], chunk_len: usize) -> (usize, usize) {
-    let mut demux_fsm = FragmentedDemuxFsm::new();
+    let mut demux_fsm = MovieDemuxFsm::new();
     let mut count = 0;
     let mut total = 0;
-    let mut take = |demux_fsm: &mut FragmentedDemuxFsm| {
+    let mut take = |demux_fsm: &mut MovieDemuxFsm| {
         while let Some(sample) = demux_fsm.poll_sample() {
             count += 1;
             total += sample.data().len();

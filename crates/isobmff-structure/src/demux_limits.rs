@@ -27,7 +27,7 @@ use isobmff_sample::SampleReaderLimits;
 ///
 /// ```
 /// use isobmff_sample::SampleReaderLimits;
-/// use isobmff_structure::{DemuxLimits, NonFragmentedDemuxFsm};
+/// use isobmff_structure::{DemuxLimits, MovieDemuxFsm};
 ///
 /// // Limits for a `moov` of many tracks and large samples
 /// let limits = DemuxLimits::new()
@@ -36,7 +36,7 @@ use isobmff_sample::SampleReaderLimits;
 /// assert_eq!(limits.resolved_samples(), DemuxLimits::DEFAULT_RESOLVED_SAMPLES);
 ///
 /// // A demux FSM is held to them from its creation
-/// let demux_fsm = NonFragmentedDemuxFsm::with_limits(limits);
+/// let demux_fsm = MovieDemuxFsm::with_limits(limits);
 /// ```
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

@@ -12,7 +12,7 @@ use crate::{Error, whole_box_header, whole_payload};
 
 /// Lays a fragmented movie file down, taking the samples as they come
 ///
-/// The mirror of [`FragmentedDemuxFsm`](crate::FragmentedDemuxFsm):
+/// The mirror of [`MovieDemuxFsm`](crate::MovieDemuxFsm):
 /// it wires the layers that write a fragmented movie file of ISO/IEC 14496-12
 /// Annex A.8 — the structure that holds the order of the top-level boxes, the
 /// writing of each box whole, the laying out of the samples of a fragment as

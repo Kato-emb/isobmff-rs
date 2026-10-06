@@ -1,11 +1,11 @@
 //! The order the boxes of an ISO base media file stand in, and the demux and mux FSMs that read and write one
 //!
 //! A presentation is carried as samples — ISO/IEC 14496-12 §3.1.14 has a sample
-//! as all the data associated with a single timestamp. [`FragmentedDemuxFsm`]
-//! takes a fragmented movie file as it arrives and reports the
-//! [`Sample`](isobmff_sample::Sample)s it carries, [`NonFragmentedDemuxFsm`] does
-//! the same for a non-fragmented one, and [`MediaSegmentDemuxFsm`] for a media
-//! segment delivered apart from the movie it continues; [`FragmentedMuxFsm`],
+//! as all the data associated with a single timestamp. [`MovieDemuxFsm`]
+//! takes a movie file as it arrives, fragmented or not, and reports the
+//! [`Sample`](isobmff_sample::Sample)s it carries, and [`MediaSegmentDemuxFsm`]
+//! does the same for a media segment delivered apart from the movie it
+//! continues; [`FragmentedMuxFsm`],
 //! [`NonFragmentedMuxFsm`] and [`MediaSegmentMuxFsm`] go the other way, laying
 //! samples down as a file or a segment of each kind. None reaches for a source
 //! or a sink of its own: when to read or write, and from or to where, stay with
@@ -59,10 +59,11 @@
 //!    concatenated into one stream read as one. The structure is the only
 //!    layer that knows how a file is put together, and the order a file
 //!    breaks is its failure.
-//! 6. **Demux and mux FSMs.** [`FragmentedDemuxFsm`], [`FragmentedMuxFsm`],
-//!    [`NonFragmentedDemuxFsm`], [`NonFragmentedMuxFsm`], [`MediaSegmentDemuxFsm`]
-//!    and [`MediaSegmentMuxFsm`] wire layers 1 to 5 into one machine per
-//!    structure and direction. A demux FSM holds one rule of its own: it
+//! 6. **Demux and mux FSMs.** [`MovieDemuxFsm`], [`MediaSegmentDemuxFsm`],
+//!    [`FragmentedMuxFsm`], [`NonFragmentedMuxFsm`] and [`MediaSegmentMuxFsm`]
+//!    wire layers 1 to 5 into machines: one demux FSM reads a movie file,
+//!    fragmented or not, through the structure of a fragmented one, and one
+//!    reads a media segment; a mux FSM writes each kind. A demux FSM holds one rule of its own: it
 //!    keeps where the input it takes in order stands, and states the one read
 //!    it wants next — an extent layer 4 lacks whose start that input has
 //!    passed, else the continuation of that input — taking every input with
@@ -92,11 +93,11 @@
 //! over or the FSM has failed it wants no read:
 //!
 //! ```
-//! use isobmff_structure::NonFragmentedDemuxFsm;
+//! use isobmff_structure::MovieDemuxFsm;
 //! # use isobmff_test_support::non_fragmented_file;
 //! // A file whose movie lies after its media data, held in memory
 //! let file = non_fragmented_file(&[&[b"SAMP", b"DATA"]], false);
-//! let mut fsm = NonFragmentedDemuxFsm::new();
+//! let mut fsm = MovieDemuxFsm::new();
 //! let mut read_back = Vec::new();
 //!
 //! while let Some(wanted) = fsm.wanted_input() {
@@ -126,7 +127,7 @@
 //!
 //! use isobmff_boxes::{SampleFlags, TrackExtendsBox};
 //! use isobmff_sample::Sample;
-//! use isobmff_structure::{FragmentedDemuxFsm, FragmentedMuxFsm};
+//! use isobmff_structure::{FragmentedMuxFsm, MovieDemuxFsm};
 //! # use isobmff_test_support::{file_type, fragmented_movie};
 //! // A fragment of two samples laid down, each chunk written whole
 //! let mut file = Cursor::new(Vec::new());
@@ -143,7 +144,7 @@
 //! }
 //!
 //! // The file read back where the demux FSM wants, into a buffer of the caller's
-//! let mut demux_fsm = FragmentedDemuxFsm::new();
+//! let mut demux_fsm = MovieDemuxFsm::new();
 //! let mut buffer = vec![0; 1024 * 1024];
 //! let mut read_back = Vec::new();
 //! while let Some(wanted) = demux_fsm.wanted_input() {
@@ -193,15 +194,17 @@ mod error;
 mod fragmented_movie;
 mod input_position;
 mod media_segment;
+mod movie;
 mod non_fragmented_movie;
 mod whole_box;
 
 pub use demux_limits::DemuxLimits;
 pub use error::{Error, ErrorKind};
-pub use fragmented_movie::{FragmentedDemuxFsm, FragmentedMuxFsm};
+pub use fragmented_movie::FragmentedMuxFsm;
 pub use input_position::WantedInput;
 pub use media_segment::{MediaSegmentDemuxFsm, MediaSegmentMuxFsm};
-pub use non_fragmented_movie::{NonFragmentedDemuxFsm, NonFragmentedMuxFsm};
+pub use movie::MovieDemuxFsm;
+pub use non_fragmented_movie::NonFragmentedMuxFsm;
 
 pub(crate) use input_position::{InputPosition, InputRoute};
 pub(crate) use whole_box::{WholeBoxReader, compact_box_header, whole_box_header, whole_payload};

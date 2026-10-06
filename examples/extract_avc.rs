@@ -14,7 +14,7 @@ use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 
 use isobmff::avc::Avc1SampleEntry;
 use isobmff::core::{BoxDecode, BoxDefinition};
-use isobmff::structure::NonFragmentedDemuxFsm;
+use isobmff::structure::MovieDemuxFsm;
 
 const START_CODE: [u8; 4] = [0, 0, 0, 1];
 
@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut file = File::open(input)?;
     let mut buffer = vec![0; 1024 * 1024];
-    let mut demux_fsm = NonFragmentedDemuxFsm::new();
+    let mut demux_fsm = MovieDemuxFsm::new();
     let mut handed = Ok(());
     while demux_fsm.movie().is_none() {
         handed?;

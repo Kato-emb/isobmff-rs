@@ -1,4 +1,4 @@
-//! [`FragmentedDemuxFsm`], a fragmented movie file read as it arrives
+//! [`MovieDemuxFsm`], a movie file read as it arrives, fragmented or not
 
 use alloc::vec::Vec;
 
@@ -13,16 +13,18 @@ use isobmff_sample::{
 };
 use isobmff_sequence::{BoxEvent, BoxReader};
 
-use super::{FragmentedDisposition, FragmentedStructure};
+use crate::fragmented_movie::{FragmentedDisposition, FragmentedStructure};
 use crate::{DemuxLimits, Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 
-/// Reads the samples a fragmented movie file carries, taking it as it arrives
+/// Reads the samples a movie file carries, fragmented or not, taking it as it arrives
 ///
-/// A fragmented movie file is laid out as ISO/IEC 14496-12 Annex A.8 has it:
-/// the brands it declares itself readable as, the movie its fragments
+/// A movie file declares its samples in the sample tables of its one movie
+/// (ISO/IEC 14496-12 §8.2.1). A fragmented one is laid out as Annex A.8 has
+/// it: the brands it declares itself readable as, the movie its fragments
 /// continue, which may declare samples of its own (§8.8), then one movie
-/// fragment after another, with the media data the movie and its fragments
-/// address lying anywhere among them. This demux FSM wires the layers that
+/// fragment after another. Either way the media data the movie and its
+/// fragments address lies anywhere among them, before the movie as well as
+/// after it. This demux FSM wires the layers that
 /// read one: the framing of the file into boxes, the structure that says what
 /// each top-level box is, the reading of the boxes it names into values, the
 /// resolution of the sample tables of the movie, and of each fragment against
@@ -87,6 +89,10 @@ use crate::{DemuxLimits, Error, InputPosition, InputRoute, WantedInput, WholeBox
 ///   extent at the front of those held still lacks only once the input has
 ///   passed its start, which a file whose movie and fragments precede their
 ///   media data never has.
+/// * A fragment continues a movie that declares it may be fragmented: a
+///   `moof` after a `moov` carrying no `mvex` is
+///   [`Sample`](crate::ErrorKind::Sample), the movie extends box missing
+///   (§8.8.1).
 /// * Where a fragment states no decode time for a track, the track goes on
 ///   from where the samples before it left it, those the sample table of the
 ///   movie declares among them (§8.8.12).
@@ -110,7 +116,7 @@ use crate::{DemuxLimits, Error, InputPosition, InputRoute, WantedInput, WholeBox
 /// ```
 /// use isobmff_boxes::{SampleFlags, TrackExtendsBox};
 /// use isobmff_sample::Sample;
-/// use isobmff_structure::{FragmentedDemuxFsm, FragmentedMuxFsm};
+/// use isobmff_structure::{FragmentedMuxFsm, MovieDemuxFsm};
 /// # use isobmff_test_support::{file_type, fragmented_movie};
 /// // A file of one fragment carrying two samples of track 1
 /// let mut mux_fsm = FragmentedMuxFsm::new();
@@ -129,7 +135,7 @@ use crate::{DemuxLimits, Error, InputPosition, InputRoute, WantedInput, WholeBox
 /// }
 ///
 /// // The file is handed over as it arrives, in whatever lengths it comes, each cut at its offset
-/// let mut demux_fsm = FragmentedDemuxFsm::new();
+/// let mut demux_fsm = MovieDemuxFsm::new();
 /// for (offset, arriving) in (0..).step_by(7).zip(file.chunks(7)) {
 ///     demux_fsm.handle_input(offset, arriving)?;
 /// }
@@ -148,7 +154,7 @@ use crate::{DemuxLimits, Error, InputPosition, InputRoute, WantedInput, WholeBox
 /// # Ok::<(), isobmff_structure::Error>(())
 /// ```
 #[derive(Debug)]
-pub struct FragmentedDemuxFsm {
+pub struct MovieDemuxFsm {
     boxes: BoxReader,
     position: InputPosition,
     structure: FragmentedStructure,
@@ -200,14 +206,14 @@ enum Open {
     MediaData,
 }
 
-impl FragmentedDemuxFsm {
-    /// Creates a demux FSM waiting at the start of a fragmented movie file, bounded by the limits [`DemuxLimits::new`] states
+impl MovieDemuxFsm {
+    /// Creates a demux FSM waiting at the start of a movie file, bounded by the limits [`DemuxLimits::new`] states
     #[must_use]
     pub const fn new() -> Self {
         Self::with_limits(DemuxLimits::new())
     }
 
-    /// Creates a demux FSM waiting at the start of a fragmented movie file, bounded by `limits`
+    /// Creates a demux FSM waiting at the start of a movie file, bounded by `limits`
     #[must_use]
     pub const fn with_limits(limits: DemuxLimits) -> Self {
         Self {
@@ -641,7 +647,7 @@ const fn closing_offset(file_len: u64, filled: usize) -> u64 {
     file_len.saturating_sub(left as u64)
 }
 
-impl Default for FragmentedDemuxFsm {
+impl Default for MovieDemuxFsm {
     fn default() -> Self {
         Self::new()
     }

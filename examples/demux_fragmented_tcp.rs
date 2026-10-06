@@ -11,7 +11,7 @@ use std::env;
 use std::io::Read;
 use std::net::TcpStream;
 
-use isobmff::structure::FragmentedDemuxFsm;
+use isobmff::structure::MovieDemuxFsm;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let address = env::args()
@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut stream = TcpStream::connect(address)?;
     let mut buffer = vec![0; 1024 * 1024];
-    let mut demux_fsm = FragmentedDemuxFsm::new();
+    let mut demux_fsm = MovieDemuxFsm::new();
 
     let mut count: u64 = 0;
     while let Some(wanted) = demux_fsm.wanted_input() {

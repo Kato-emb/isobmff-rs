@@ -1,4 +1,4 @@
-//! Round-trip properties of [`FragmentedMuxFsm`] against [`FragmentedDemuxFsm`]
+//! Round-trip properties of [`FragmentedMuxFsm`] against [`MovieDemuxFsm`]
 //!
 //! One run lays samples down as a fragmented file, reads that file back, and
 //! checks four properties of the same input:
@@ -29,7 +29,7 @@
 
 use isobmff::boxes::{MovieBox, SampleFlags, TrackExtendsBox};
 use isobmff::sample::Sample;
-use isobmff::structure::{Error, ErrorKind, FragmentedDemuxFsm, FragmentedMuxFsm};
+use isobmff::structure::{Error, ErrorKind, MovieDemuxFsm, FragmentedMuxFsm};
 use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
@@ -272,7 +272,7 @@ fn a_sample() -> Sample {
 /// Panics where the reader rejects the file, which is the property this target
 /// holds the writer to.
 fn read_back(file: &[u8]) -> Vec<Sample> {
-    let mut demux_fsm = FragmentedDemuxFsm::new();
+    let mut demux_fsm = MovieDemuxFsm::new();
     let mut samples = Vec::new();
 
     assert!(
