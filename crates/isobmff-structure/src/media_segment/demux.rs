@@ -5,11 +5,11 @@ use alloc::vec::Vec;
 use isobmff_boxes::{MovieBox, MovieFragmentBox, SegmentIndexBox, SegmentTypeBox};
 use isobmff_sample::movie_fragment::sample_extents;
 use isobmff_sample::segment_index::subsegments;
-use isobmff_sample::{Sample, SampleReader, SegmentIndex, TrackDecodeTimes};
-use isobmff_sequence::{BoxEvent, BoxReader};
+use isobmff_sample::{Sample, SegmentIndex, TrackDecodeTimes};
+use isobmff_sequence::BoxEvent;
 
 use super::{MediaSegmentDisposition, MediaSegmentStructure};
-use crate::{DemuxLimits, Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
+use crate::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
 
 /// Reads the samples a media segment carries, taking it as it arrives
 ///
@@ -74,7 +74,7 @@ use crate::{DemuxLimits, Error, InputPosition, InputRoute, WantedInput, WholeBox
 ///   read into a value, the samples a `moof` declares, the samples gathered
 ///   — by the [`DemuxLimits`] it was created with.
 /// * The samples of a fragment are read out of the media data it addresses,
-///   and come out as their bytes arrive whole, as [`SampleReader`]'s
+///   and come out as their bytes arrive whole, as [`SampleReader`](isobmff_sample::SampleReader)'s
 ///   contract has it: the extents of a fragment are held in the order of
 ///   their bytes, so a segment handed over in order yields the samples of each
 ///   fragment in the order they lie in it, whatever order the fragment
@@ -139,28 +139,14 @@ use crate::{DemuxLimits, Error, InputPosition, InputRoute, WantedInput, WholeBox
 /// ```
 #[derive(Debug)]
 pub struct MediaSegmentDemuxFsm {
-    boxes: BoxReader,
-    position: InputPosition,
+    input: DemuxInput,
     structure: MediaSegmentStructure,
-    samples: SampleReader,
     decode_times: TrackDecodeTimes,
     open: Option<Open>,
     segment_type: Option<SegmentTypeBox>,
     movie: MovieBox,
     segment_indexes: Vec<SegmentIndex>,
     limits: DemuxLimits,
-    state: State,
-}
-
-/// Where the demux FSM stands between calls
-#[derive(Clone, Copy, Debug)]
-enum State {
-    /// Taking the segment as it arrives
-    Reading,
-    /// Told the segment is over, and taking no more input
-    Finished,
-    /// Failed, and reporting that same failure for every call after it
-    Failed(Error),
 }
 
 /// The top-level box that started, held as its disposition has it until it ends
@@ -198,17 +184,14 @@ impl MediaSegmentDemuxFsm {
     ///   [`TrackDecodeTimes::new`] makes of `movie`.
     pub fn with_limits(movie: MovieBox, limits: DemuxLimits) -> Result<Self, Error> {
         Ok(Self {
-            boxes: BoxReader::new(),
-            position: InputPosition::new(),
+            input: DemuxInput::new(limits.sample_reader()),
             structure: MediaSegmentStructure::new(),
-            samples: SampleReader::with_limits(limits.sample_reader()),
             decode_times: TrackDecodeTimes::new(&movie)?,
             open: None,
             segment_type: None,
             movie,
             segment_indexes: Vec::new(),
             limits,
-            state: State::Reading,
         })
     }
 
@@ -248,32 +231,10 @@ impl MediaSegmentDemuxFsm {
     /// * The failure of a previous call, which the demux FSM keeps and reports
     ///   again for every call after it.
     pub fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), Error> {
-        self.reading()?;
-        if input.is_empty() {
-            return Ok(());
-        }
+        self.input.handle_input(offset, input)?;
+        let read = self.read_framed();
 
-        match self.position.route(offset, self.samples.wanted_extent()) {
-            InputRoute::InOrder => {}
-            InputRoute::Lacking => {
-                return self
-                    .samples
-                    .handle_data(offset, input)
-                    .map_err(|failure| self.fail(failure.into()));
-            }
-            InputRoute::Unwanted => return Err(Error::unwanted_input(offset)),
-        }
-
-        self.position.advance(input.len());
-
-        // Why not failing before the events are read: the framing keeps the
-        // events it made before failing, and the samples they complete are
-        // the caller's to take, so they are read first and the failure kept
-        // for after them.
-        let framed = self.boxes.handle_input(input);
-        self.read_framed()?;
-
-        framed.map_err(|failure| self.fail(failure.into()))
+        self.input.record(read)
     }
 
     /// Takes the next sample the segment handed over so far completed
@@ -283,7 +244,7 @@ impl MediaSegmentDemuxFsm {
     /// — a failed demux FSM hands over the samples it had already completed,
     /// then `None` from there on.
     pub fn poll_sample(&mut self) -> Option<Sample> {
-        self.samples.poll_sample()
+        self.input.poll_sample()
     }
 
     /// Returns the one read wanted next, or `None` once the segment is declared over or the demux FSM has failed
@@ -299,8 +260,7 @@ impl MediaSegmentDemuxFsm {
     /// [`handle_input`](Self::handle_input) at the offset they were read at.
     #[must_use]
     pub fn wanted_input(&self) -> Option<WantedInput> {
-        matches!(self.state, State::Reading)
-            .then(|| self.position.wanted_input(self.samples.wanted_extent()))
+        self.input.wanted_input()
     }
 
     /// Returns the brands the segment declares itself readable as, once they have arrived
@@ -339,17 +299,11 @@ impl MediaSegmentDemuxFsm {
     /// * The failure of a previous call, which the demux FSM keeps and reports
     ///   again for every call after it.
     pub fn resume_at(&mut self, offset: u64) -> Result<(), Error> {
-        if let State::Failed(failure) = self.state {
-            return Err(failure);
-        }
-
-        self.boxes = BoxReader::new();
-        self.position.resume(offset);
+        self.input.resumable()?;
+        self.input.restart(offset);
         self.structure.resume();
-        self.samples.clear();
         self.decode_times = TrackDecodeTimes::unknown();
         self.open = None;
-        self.state = State::Reading;
 
         Ok(())
     }
@@ -372,35 +326,17 @@ impl MediaSegmentDemuxFsm {
     /// * The failure of a previous call, which the demux FSM keeps and reports
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), Error> {
-        self.reading()?;
-        self.boxes
-            .finish()
-            .map_err(|failure| self.fail(failure.into()))?;
-        self.read_framed()?;
-        self.structure
-            .finish()
-            .map_err(|failure| self.fail(failure))?;
-        self.samples
-            .finish()
-            .map_err(|failure| self.fail(failure.into()))?;
-        self.state = State::Finished;
+        self.input.finish_framing()?;
+        let read = self.read_framed();
+        self.input.record(read)?;
+        let checked = self.structure.finish();
 
-        Ok(())
-    }
-
-    /// Returns `Ok` while the demux FSM still takes what arrives
-    const fn reading(&self) -> Result<(), Error> {
-        match self.state {
-            State::Reading => Ok(()),
-            State::Finished => Err(Error::already_finished()),
-            State::Failed(failure) => Err(failure),
-        }
+        self.input.finish(checked)
     }
 
     /// Reads every box the framing has finished framing so far
     fn read_framed(&mut self) -> Result<(), Error> {
-        while let Some((extent, event)) = self.boxes.poll_event() {
-            let start = self.position.file_offset(extent.start);
+        while let Some((start, event)) = self.input.poll_event() {
             match event {
                 BoxEvent::Header(header) => self
                     .structure
@@ -428,7 +364,8 @@ impl MediaSegmentDemuxFsm {
                     Some(Open::MovieFragment { reader, .. }) => reader.handle_payload(payload),
                     Some(Open::SegmentIndex(reader)) => reader.handle_payload(payload),
                     Some(Open::MediaData) => self
-                        .samples
+                        .input
+                        .samples_mut()
                         .handle_data(start, &payload)
                         .map_err(Error::from),
                     None => Ok(()),
@@ -446,7 +383,7 @@ impl MediaSegmentDemuxFsm {
                                 &mut self.decode_times,
                                 self.limits.resolved_samples(),
                             )?;
-                            self.samples.handle_sample_extents(extents)?;
+                            self.input.samples_mut().handle_sample_extents(extents)?;
 
                             Ok(())
                         })
@@ -461,27 +398,19 @@ impl MediaSegmentDemuxFsm {
                     }),
                     Some(Open::MediaData) | None => Ok(()),
                 },
-            }
-            .map_err(|failure| self.fail(failure))?;
+            }?;
         }
 
         Ok(())
-    }
-
-    /// Fails the demux FSM for good, and hands the failure back to report
-    const fn fail(&mut self, failure: Error) -> Error {
-        self.state = State::Failed(failure);
-
-        failure
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use isobmff_boxes::{MediaDataBox, MovieFragmentBox};
+    use isobmff_boxes::MovieFragmentBox;
     use isobmff_core::{BoxDefinition, BoxType};
-    use isobmff_sample::{Sample, SampleReaderLimits};
-    use isobmff_test_support::{MEDIA_DATA, framed, movie_fragment, segment_type, written};
+    use isobmff_sample::SampleReaderLimits;
+    use isobmff_test_support::{framed, movie_fragment, segment_type, written};
 
     use super::super::tests::{movie, sample, segment_of_one_sample};
     use super::{Error, MediaSegmentDemuxFsm};
@@ -576,26 +505,6 @@ mod tests {
     }
 
     #[test]
-    fn the_samples_completed_before_a_framing_failure_are_still_taken() {
-        let mut segment = segment_of_one_sample();
-        segment.extend_from_slice(b"\0\0\0\x04free");
-
-        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie()).unwrap();
-
-        assert_eq!(
-            demux_fsm.handle_input(0, &segment).map_err(Error::kind),
-            Err(ErrorKind::Sequence(isobmff_sequence::ErrorKind::Box(
-                isobmff_core::ErrorKind::SizeBelowHeader
-            )))
-        );
-        assert_eq!(
-            demux_fsm.poll_sample().map(Sample::into_data),
-            Some(b"SAMP".to_vec())
-        );
-        assert_eq!(demux_fsm.wanted_input(), None);
-    }
-
-    #[test]
     fn media_data_the_input_is_still_to_bring_is_not_wanted_and_completes_the_sample_as_it_arrives()
     {
         let mut segment = segment_of_one_sample();
@@ -613,70 +522,11 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_demux_fsm_reports_the_same_failure_for_every_call_after_it() {
-        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie()).unwrap();
-        let failure = Error::box_out_of_order(MediaDataBox::BOX_TYPE);
-        let segment = written(&MediaDataBox::new(MEDIA_DATA.to_vec()));
-        demux_fsm.resume_at(0).unwrap();
-
-        assert_eq!(demux_fsm.handle_input(0, &segment), Err(failure));
-        assert_eq!(
-            demux_fsm.handle_input(0, &written(&movie_fragment())),
-            Err(failure)
-        );
-        assert_eq!(demux_fsm.finish(), Err(failure));
-    }
-
-    #[test]
-    fn input_handed_over_after_finishing_is_rejected() {
-        let mut demux_fsm = read(&written(&movie_fragment())).unwrap();
-
-        assert_eq!(
-            demux_fsm.handle_input(0, &written(&movie_fragment())),
-            Err(Error::already_finished())
-        );
-        assert_eq!(demux_fsm.finish(), Err(Error::already_finished()));
-    }
-
-    #[test]
-    fn input_at_an_offset_neither_in_order_nor_wanted_is_refused_and_the_segment_reads_on() {
-        let segment = segment_of_one_sample();
-        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie()).unwrap();
-
-        demux_fsm
-            .handle_input(0, segment.get(..8).unwrap())
-            .unwrap();
-
-        assert_eq!(
-            demux_fsm.handle_input(9, segment.get(9..).unwrap()),
-            Err(Error::unwanted_input(9))
-        );
-        assert_eq!(demux_fsm.handle_input(8, segment.get(8..).unwrap()), Ok(()));
-        assert_eq!(demux_fsm.finish(), Ok(()));
-        assert_eq!(demux_fsm.poll_sample(), Some(sample()));
-    }
-
-    #[test]
-    fn empty_input_is_taken_as_nothing_wherever_it_is_handed_over() {
-        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie()).unwrap();
-
-        assert_eq!(demux_fsm.handle_input(9, &[]), Ok(()));
-        assert_eq!(demux_fsm.wanted_input(), Some(WantedInput::new(0, None)));
-    }
-
-    #[test]
     fn the_segment_is_wanted_from_the_offset_the_reading_resumed_at() {
         let mut demux_fsm = read(&segment_of_one_sample()).unwrap();
 
         demux_fsm.resume_at(100).unwrap();
 
         assert_eq!(demux_fsm.wanted_input(), Some(WantedInput::new(100, None)));
-    }
-
-    #[test]
-    fn nothing_is_wanted_once_the_segment_is_declared_over() {
-        let demux_fsm = read(&segment_of_one_sample()).unwrap();
-
-        assert_eq!(demux_fsm.wanted_input(), None);
     }
 }
