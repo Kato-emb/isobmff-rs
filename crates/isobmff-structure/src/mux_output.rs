@@ -10,9 +10,7 @@ use crate::Error;
 /// Lays the boxes of a file down through its framing, and keeps whether the mux FSM above still writes
 ///
 /// A mux FSM asks [`writing`](Self::writing) before it acts on a call, and
-/// hands the result of what it did to [`record`](Self::record), so a failure
-/// is kept here, once a call. Where its structure places each box stays with
-/// the mux FSM.
+/// hands the result of what it did to [`record`](Self::record).
 ///
 /// # Contract
 ///
@@ -55,7 +53,7 @@ impl MuxOutput {
         }
     }
 
-    /// Returns `Ok` while the mux FSM still takes boxes and samples
+    /// Returns `Ok` while the output still takes boxes
     ///
     /// # Errors
     ///

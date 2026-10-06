@@ -287,7 +287,7 @@ impl NonFragmentedMuxFsm {
         Ok(())
     }
 
-    /// Lays the chunk before down, admits the `mdat` of the next one, and tells the sample layer where its samples begin
+    /// Lays the chunk that is open down, admits the `mdat` of the next one, and tells the sample layer where its samples begin
     fn open_chunk(&mut self) -> Result<(), Error> {
         self.samples()?;
         self.lay_down_chunk()?;
@@ -309,7 +309,7 @@ impl NonFragmentedMuxFsm {
         Ok(())
     }
 
-    /// Lays the last chunk down, then the movie its sample tables now describe, and closes the framing
+    /// Lays the last chunk down, then the movie its sample tables now describe, and closes the structure and the framing
     fn finish_file(&mut self) -> Result<(), Error> {
         self.lay_down_chunk()?;
         self.structure.finish()?;

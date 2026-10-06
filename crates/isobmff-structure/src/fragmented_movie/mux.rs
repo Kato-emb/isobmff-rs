@@ -290,7 +290,7 @@ impl FragmentedMuxFsm {
         self.write_value(file_type)
     }
 
-    /// Lays the movie down, after the brands the mux FSM declares where none were handed over, and makes the sample layer of it
+    /// Makes the sample layer of the movie, then lays down the brands the mux FSM declares where none were handed over, and the movie
     fn lay_down_movie(&mut self, movie: &MovieBox) -> Result<(), Error> {
         let samples = MovieFragmentWriter::new(movie)?;
         if self.structure.is_at_start() {
