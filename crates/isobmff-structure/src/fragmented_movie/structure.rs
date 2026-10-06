@@ -42,18 +42,16 @@ use crate::Error;
 ///   placed as it would be where the boxes before the resume left the order,
 ///   and any other is [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder).
 ///   What those boxes established stands: a `moof` still needs the `moov`
-///   to have come, and a second `moov` is still a duplicate. The structure
-///   resumes from the file declared over as well, and a failed one stays
-///   failed.
-/// * An `Err` leaves the structure failed for good,
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside:
-///   every later call reports that same failure again.
-/// * [`finish`](Self::finish) declares the file over. A header handed over
-///   then, or a second [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished).
+///   to have come, and a second `moov` is still a duplicate.
+/// * An `Err` changes nothing: the structure stands where it stood before the
+///   call.
+/// * [`finish`](Self::finish) checks that the boxes so far form a whole file,
+///   and changes nothing.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FragmentedStructure {
-    state: State,
+    position: Position,
+    /// Whether the next box is one an index points at, after a [`resume`](Self::resume)
+    resuming: bool,
 }
 
 /// What the structure of a fragmented movie file makes of a top-level box
@@ -75,19 +73,6 @@ pub(crate) enum FragmentedDisposition {
     Skip,
 }
 
-/// Where the structure stands between calls
-#[derive(Clone, Copy, Debug)]
-enum State {
-    /// Taking headers, standing where the boxes so far have brought it
-    Reading(Position),
-    /// Restarted part-way into the file, where the boxes before it had brought it, taking a box an index points at next
-    Resuming(Position),
-    /// Told the file is over, where the boxes so far had brought it, and taking no more headers
-    Finished(Position),
-    /// Failed, and reporting that same failure for every call after it
-    Failed(Error),
-}
-
 /// How far into the order of a fragmented movie file the boxes so far reach
 #[derive(Clone, Copy, Debug)]
 enum Position {
@@ -104,14 +89,15 @@ impl FragmentedStructure {
     #[must_use]
     pub(crate) const fn new() -> Self {
         Self {
-            state: State::Reading(Position::Start),
+            position: Position::Start,
+            resuming: false,
         }
     }
 
     /// Returns whether no box has been placed yet, where the `ftyp` may still come
     #[must_use]
     pub(crate) const fn is_at_start(&self) -> bool {
-        matches!(self.state, State::Reading(Position::Start))
+        !self.resuming && matches!(self.position, Position::Start)
     }
 
     /// Takes the type of the next top-level box, and returns what to do with that box
@@ -122,75 +108,46 @@ impl FragmentedStructure {
     ///   `ftyp` after another box, or a `moof` before the `moov`.
     /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): a second
     ///   `moov`.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
-    ///   file was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the structure keeps and reports
-    ///   again for every call after it.
     pub(crate) fn handle_box_type(
         &mut self,
         box_type: BoxType,
     ) -> Result<FragmentedDisposition, Error> {
-        let placed = match (self.state, box_type) {
-            (State::Reading(position), _)
-            | (
-                State::Resuming(position),
+        if self.resuming
+            && !matches!(
+                box_type,
                 MovieFragmentBox::BOX_TYPE
-                | SegmentIndexBox::BOX_TYPE
-                | MovieFragmentRandomAccessBox::BOX_TYPE,
-            ) => place(position, box_type),
-            (State::Resuming(_position), _other) => Err(Error::box_out_of_order(box_type)),
-            (State::Finished(_position), _any) => return Err(Error::already_finished()),
-            (State::Failed(failure), _any) => return Err(failure),
-        };
+                    | SegmentIndexBox::BOX_TYPE
+                    | MovieFragmentRandomAccessBox::BOX_TYPE
+            )
+        {
+            return Err(Error::box_out_of_order(box_type));
+        }
 
-        let (reached, disposition) = placed.map_err(|failure| self.fail(failure))?;
-        self.state = State::Reading(reached);
+        let (reached, disposition) = place(self.position, box_type)?;
+        self.position = reached;
+        self.resuming = false;
 
         Ok(disposition)
     }
 
     /// Restarts the order part-way into the file, where the next box is one an index points at
     pub(crate) const fn resume(&mut self) {
-        match self.state {
-            State::Reading(position) | State::Resuming(position) | State::Finished(position) => {
-                self.state = State::Resuming(position);
-            }
-            State::Failed(_failure) => {}
-        }
+        self.resuming = true;
     }
 
-    /// Declares the file over
+    /// Checks that the boxes so far form a whole file
     ///
     /// # Errors
     ///
     /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox):
     ///   the file carried no `moov`.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
-    ///   file was already declared over.
-    /// * The failure of a previous call, which the structure keeps and reports
-    ///   again for every call after it.
-    pub(crate) fn finish(&mut self) -> Result<(), Error> {
-        match self.state {
-            State::Reading(position) | State::Resuming(position) => match position {
-                Position::Declared => {
-                    self.state = State::Finished(position);
-
-                    Ok(())
-                }
-                Position::Start | Position::Opened => {
-                    Err(self.fail(Error::missing_mandatory_box(MovieBox::BOX_TYPE)))
-                }
-            },
-            State::Finished(_position) => Err(Error::already_finished()),
-            State::Failed(failure) => Err(failure),
+    pub(crate) const fn finish(&self) -> Result<(), Error> {
+        match self.position {
+            Position::Declared => Ok(()),
+            Position::Start | Position::Opened => {
+                Err(Error::missing_mandatory_box(MovieBox::BOX_TYPE))
+            }
         }
-    }
-
-    /// Fails the structure for good, and hands the failure back to report
-    const fn fail(&mut self, failure: Error) -> Error {
-        self.state = State::Failed(failure);
-
-        failure
     }
 }
 
@@ -318,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn a_file_declared_over_resumes_and_is_declared_over_again() {
+    fn a_file_resumed_after_its_check_passed_goes_on_from_where_it_stood() {
         let mut structure = FragmentedStructure::new();
         structure
             .handle_box_type(BoxType::compact(*b"moov"))
@@ -328,8 +285,8 @@ mod tests {
         structure.resume();
 
         assert_eq!(
-            structure.handle_box_type(BoxType::compact(*b"mfra")),
-            Ok(FragmentedDisposition::MovieFragmentRandomAccess)
+            structure.handle_box_type(BoxType::compact(*b"moof")),
+            Ok(FragmentedDisposition::MovieFragment)
         );
         assert_eq!(structure.finish(), Ok(()));
     }
@@ -464,37 +421,5 @@ mod tests {
             .unwrap();
 
         assert_eq!(structure.finish(), Ok(()));
-    }
-
-    #[test]
-    fn a_failed_structure_reports_the_same_failure_for_every_call_after_it() {
-        let mut structure = FragmentedStructure::new();
-        let failure = Error::box_out_of_order(BoxType::compact(*b"moof"));
-
-        assert_eq!(
-            structure.handle_box_type(BoxType::compact(*b"moof")),
-            Err(failure)
-        );
-        assert_eq!(
-            structure.handle_box_type(BoxType::compact(*b"moov")),
-            Err(failure)
-        );
-        assert_eq!(structure.finish(), Err(failure));
-    }
-
-    #[test]
-    fn a_header_handed_over_after_finishing_is_rejected() {
-        let mut structure = FragmentedStructure::new();
-
-        structure
-            .handle_box_type(BoxType::compact(*b"moov"))
-            .unwrap();
-        structure.finish().unwrap();
-
-        assert_eq!(
-            structure.handle_box_type(BoxType::compact(*b"moof")),
-            Err(Error::already_finished())
-        );
-        assert_eq!(structure.finish(), Err(Error::already_finished()));
     }
 }
