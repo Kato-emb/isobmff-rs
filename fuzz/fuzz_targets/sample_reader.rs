@@ -40,7 +40,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use isobmff::boxes::MovieBox;
 use isobmff::sample::movie_fragment::sample_extents;
-use isobmff::sample::{Error, ErrorKind, Sample, SampleExtent, SampleReader, TrackDecodeTimes};
+use isobmff::sample::{
+    Error, ErrorKind, Sample, SampleExtent, SampleReader, SampleReaderLimits, TrackDecodeTimes,
+};
 use libfuzzer_sys::fuzz_target;
 
 #[path = "sample_reader/presentation.rs"]
@@ -176,6 +178,7 @@ fn resolved(laid_out: &LaidOut) -> (Vec<Vec<SampleExtent>>, Option<Error>) {
             &laid_out.movie,
             placed.moof_start,
             &mut decode_times,
+            u64::MAX,
         )
         .and_then(|extents| extents.collect::<Result<Vec<_>, _>>());
 
@@ -235,7 +238,8 @@ fn steps<'data>(
 /// Where the resolver refused a fragment, the presentation ends there and the
 /// samples are never declared over.
 fn read(sample_size_limit: u64, steps: Vec<Step<'_>>, refused: Option<Error>) -> Reading {
-    let mut reader = SampleReader::with_sample_size_limit(sample_size_limit);
+    let mut reader =
+        SampleReader::with_limits(SampleReaderLimits::new().with_sample_size(sample_size_limit));
     let mut samples = Vec::new();
     let mut failure = None;
 

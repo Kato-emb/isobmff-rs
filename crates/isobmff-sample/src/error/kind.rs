@@ -122,6 +122,30 @@ pub enum ErrorKind {
     /// [`available_bytes`](crate::Error::available_bytes) the length the reader
     /// gathers for one sample at most.
     SampleSizeLimitExceeded,
+    /// Boxes declare more samples than one resolution lays out
+    ///
+    /// The count is that of the call, every track of a movie or every run of
+    /// a fragment together, compared before a sample is laid out, so it names
+    /// no track. [`needed_samples`](crate::Error::needed_samples) is the count
+    /// the boxes declare, and
+    /// [`available_samples`](crate::Error::available_samples) the most the
+    /// caller lets one call lay out.
+    SampleCountLimitExceeded,
+    /// Extent would be held past the count the reader holds
+    ///
+    /// [`needed_samples`](crate::Error::needed_samples) is the count of
+    /// extents the reader would hold with it, and
+    /// [`available_samples`](crate::Error::available_samples) the most it
+    /// holds.
+    HeldExtentLimitExceeded,
+    /// Sample would be gathered past the bytes the reader holds
+    ///
+    /// The bytes held are those of every sample the reader has begun
+    /// gathering and not yet handed over, whole or not.
+    /// [`needed_bytes`](crate::Error::needed_bytes) is what the reader would
+    /// hold with the sample, and
+    /// [`available_bytes`](crate::Error::available_bytes) the most it holds.
+    HeldBytesLimitExceeded,
     /// Samples were declared over while the bytes of one had still to arrive
     ///
     /// [`track_id`](crate::Error::track_id) is the track it belongs to,

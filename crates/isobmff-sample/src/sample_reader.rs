@@ -1,6 +1,7 @@
 //! [`SampleReader`], the samples gathered out of the bytes their extents name
 
 mod index;
+mod limits;
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
@@ -11,6 +12,7 @@ use crate::error::Error;
 use crate::sample::{Sample, SampleExtent};
 
 use index::Index;
+pub use limits::SampleReaderLimits;
 
 /// Reads samples out of the bytes of a file, given where each of them lies
 ///
@@ -56,6 +58,14 @@ use index::Index;
 ///   the front of those held still lacks, and `None` once no extent is held.
 ///   A caller reading the file in order never needs it; one that can seek
 ///   fetches what it names, and the next want appears once that one is met.
+/// * What the reader holds is bounded by the [`SampleReaderLimits`] it was
+///   created with. An extent naming more bytes than one may, or coming once
+///   the reader holds as many extents as it may, is refused as it is held;
+///   an extent counts until its sample is handed over. Input bringing the
+///   first byte of a sample that would take the reader past the bytes it
+///   holds is refused as it arrives; a sample counts the bytes its extent
+///   names from then until [`poll_sample`](Self::poll_sample) takes it, so
+///   input handed over while the samples are not taken runs into that limit.
 /// * An `Err` leaves the reader failed for good,
 ///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside: every
 ///   later call that can fail reports that same failure again. The samples
@@ -108,47 +118,30 @@ pub struct SampleReader {
     // held together are put in, and extents held one at a time keep only where
     // they come in it.
     index: Option<Index>,
-    sample_size_limit: u64,
+    limits: SampleReaderLimits,
+    held_extents: u64,
+    held_bytes: u64,
     state: State,
 }
 
 impl SampleReader {
-    /// Bytes one sample may declare, where the caller names no limit
-    ///
-    /// Sixteen mebibytes. A caller reading a presentation whose samples reach
-    /// past that — a mezzanine format holds whole uncompressed frames — names a
-    /// limit of its own with
-    /// [`with_sample_size_limit`](Self::with_sample_size_limit).
-    pub const DEFAULT_SAMPLE_SIZE_LIMIT: u64 = 16 * 1024 * 1024;
-
-    /// Creates a reader holding no sample yet
-    ///
-    /// What one sample may declare is bounded by
-    /// [`DEFAULT_SAMPLE_SIZE_LIMIT`](Self::DEFAULT_SAMPLE_SIZE_LIMIT).
+    /// Creates a reader holding no sample yet, bounded by the limits [`SampleReaderLimits::new`] states
     #[must_use]
     pub const fn new() -> Self {
-        Self::with_sample_size_limit(Self::DEFAULT_SAMPLE_SIZE_LIMIT)
+        Self::with_limits(SampleReaderLimits::new())
     }
 
-    /// Creates a reader gathering no more than `sample_size_limit` bytes for one sample
-    ///
-    /// A sample is gathered whole before it is reported, so the length its
-    /// extent names is memory the reader is about to take. An extent naming
-    /// more than `sample_size_limit` bytes is
-    /// [`SampleSizeLimitExceeded`](crate::ErrorKind::SampleSizeLimitExceeded)
-    /// instead, refused before a byte of it is gathered.
-    ///
-    /// The limit bounds one sample rather than the presentation: it is checked
-    /// against the length an extent names, not against what the extents held
-    /// before it name between them.
+    /// Creates a reader holding no sample yet, bounded by `limits`
     #[must_use]
-    pub const fn with_sample_size_limit(sample_size_limit: u64) -> Self {
+    pub const fn with_limits(limits: SampleReaderLimits) -> Self {
         Self {
             pending: VecDeque::new(),
             ready: VecDeque::new(),
             whole_held: 0,
             index: None,
-            sample_size_limit,
+            limits,
+            held_extents: 0,
+            held_bytes: 0,
             state: State::Reading,
         }
     }
@@ -158,17 +151,21 @@ impl SampleReader {
     /// # Errors
     ///
     /// * [`SampleSizeLimitExceeded`](crate::ErrorKind::SampleSizeLimitExceeded):
-    ///   the extent names more bytes than the limit the reader was given.
+    ///   the extent names more bytes than one extent may.
+    /// * [`HeldExtentLimitExceeded`](crate::ErrorKind::HeldExtentLimitExceeded):
+    ///   the reader already holds as many extents as it may.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
     pub fn handle_sample_extent(&mut self, extent: SampleExtent) -> Result<(), Error> {
         self.reading()?;
+        let ready = self.ready.len();
         let first = self.pending.len();
         let held = self.admit(extent);
         self.order_from(first);
         self.report_front();
+        self.handed_over_since(ready);
 
         held
     }
@@ -187,7 +184,9 @@ impl SampleReader {
     /// # Errors
     ///
     /// * [`SampleSizeLimitExceeded`](crate::ErrorKind::SampleSizeLimitExceeded):
-    ///   an extent names more bytes than the limit the reader was given.
+    ///   an extent names more bytes than one extent may.
+    /// * [`HeldExtentLimitExceeded`](crate::ErrorKind::HeldExtentLimitExceeded):
+    ///   an extent comes once the reader holds as many as it may.
     /// * The failure among `extents`, where one is.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
@@ -198,8 +197,15 @@ impl SampleReader {
         extents: impl IntoIterator<Item = Result<SampleExtent, Error>>,
     ) -> Result<(), Error> {
         self.reading()?;
+        let ready = self.ready.len();
         let mut extents = extents.into_iter();
-        self.pending.reserve(extents.size_hint().0);
+        let room = self.limits.held_extents().saturating_sub(self.held_extents);
+        self.pending.reserve(
+            extents
+                .size_hint()
+                .0
+                .min(usize::try_from(room).unwrap_or(usize::MAX)),
+        );
         let first = self.pending.len();
         let mut in_order = true;
         let mut last_start = None;
@@ -222,6 +228,7 @@ impl SampleReader {
         }
         self.order_from(first);
         self.report_front();
+        self.handed_over_since(ready);
 
         held
     }
@@ -230,6 +237,9 @@ impl SampleReader {
     ///
     /// # Errors
     ///
+    /// * [`HeldBytesLimitExceeded`](crate::ErrorKind::HeldBytesLimitExceeded):
+    ///   a sample `data` starts would take the reader past the bytes it
+    ///   holds. The samples `data` made whole before it are there to take.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the reader keeps and reports
@@ -240,16 +250,29 @@ impl SampleReader {
         // Why not checked_add: the caller read `data` out of a finite resource,
         // so its end cannot run past what 64 bits carry.
         let arriving = offset..offset.saturating_add(data.len() as u64);
+        let ready = self.ready.len();
+        let limit = self.limits.held_bytes();
         if let Some(index) = &mut self.index {
-            index.fill(data, &arriving, &mut self.ready);
+            let refused = index.fill(
+                data,
+                &arriving,
+                &mut self.ready,
+                &mut self.held_bytes,
+                limit,
+            );
             if !index.holds_short() {
                 self.index = None;
             }
+            self.handed_over_since(ready);
 
-            return Ok(());
+            return match refused {
+                Ok(()) => Ok(()),
+                Err(needed) => Err(self.fail(Error::held_bytes_limit_exceeded(needed, limit))),
+            };
         }
 
         let mut made_whole: usize = 0;
+        let mut refused = None;
         for pending in self.pending.iter_mut() {
             if pending.is_whole() {
                 continue;
@@ -257,7 +280,10 @@ impl SampleReader {
             if pending.lacking().start >= arriving.end {
                 break;
             }
-            pending.take_from(data, &arriving);
+            if let Err(needed) = pending.take_from(data, &arriving, &mut self.held_bytes, limit) {
+                refused = Some(needed);
+                break;
+            }
             made_whole = made_whole.saturating_add(usize::from(pending.is_whole()));
         }
 
@@ -279,8 +305,12 @@ impl SampleReader {
                 self.whole_held = 0;
             }
         }
+        self.handed_over_since(ready);
 
-        Ok(())
+        match refused {
+            None => Ok(()),
+            Some(needed) => Err(self.fail(Error::held_bytes_limit_exceeded(needed, limit))),
+        }
     }
 
     /// Takes the next sample whose bytes have all arrived
@@ -288,7 +318,14 @@ impl SampleReader {
     /// This never fails: a failed reader hands over the samples it made before
     /// failing, and then reports `None`.
     pub fn poll_sample(&mut self) -> Option<Sample> {
-        self.ready.pop_front()
+        // Why not `pop_front()?` and `Some(sample)`: unwrapping the sample and
+        // wrapping it again slowed a reader handed 64-byte samples by a tenth.
+        let sample = self.ready.pop_front();
+        if let Some(taken) = &sample {
+            self.held_bytes = self.held_bytes.saturating_sub(taken.data().len() as u64);
+        }
+
+        sample
     }
 
     /// Returns the bytes the extent at the front of those held still lacks, if any extent is held
@@ -326,7 +363,7 @@ impl SampleReader {
 
     /// Drops every extent held and every sample not yet taken, to be handed the samples of another stretch of the file
     ///
-    /// The limit stays as the reader was given it, and a reader whose samples
+    /// The limits stay as the reader was given them, and a reader whose samples
     /// were declared over by [`finish`](Self::finish) takes extents and bytes
     /// again. A reader that failed stays failed.
     pub fn clear(&mut self) {
@@ -335,29 +372,42 @@ impl SampleReader {
             State::Reading | State::Finished => None,
         };
 
-        *self = Self::with_sample_size_limit(self.sample_size_limit);
+        *self = Self::with_limits(self.limits);
         if let Some(failure) = failed {
             self.state = State::Failed(failure);
         }
     }
 
-    /// Holds `extent` behind the extents held before it, refusing one past the limit
+    /// Holds `extent` behind the extents held before it, refusing one past the limits
     fn admit(&mut self, extent: SampleExtent) -> Result<(), Error> {
         let pending = PendingSample {
             extent,
             data: Vec::new(),
         };
         let declared = pending.declared_len();
-        if declared > self.sample_size_limit {
+        if declared > self.limits.sample_size() {
             return Err(self.fail(Error::sample_size_limit_exceeded(
                 pending.extent.track_id(),
                 declared,
-                self.sample_size_limit,
+                self.limits.sample_size(),
             )));
         }
+        if self.held_extents >= self.limits.held_extents() {
+            return Err(self.fail(Error::held_extent_limit_exceeded(
+                self.held_extents.saturating_add(1),
+                self.limits.held_extents(),
+            )));
+        }
+        self.held_extents = self.held_extents.saturating_add(1);
         self.pending.push_back(pending);
 
         Ok(())
+    }
+
+    /// Lets go of the extents handed over as samples since `ready` were ready to take
+    fn handed_over_since(&mut self, ready: usize) {
+        let handed_over = self.ready.len().saturating_sub(ready);
+        self.held_extents = self.held_extents.saturating_sub(handed_over as u64);
     }
 
     /// Moves the extents held into the index once a short one from `first` on lacks bytes before the last short one ahead of it, or the index is already kept
@@ -436,7 +486,7 @@ impl SampleReader {
 
     /// Returns the bytes the reader has taken memory for, held or ready to take
     #[cfg(test)]
-    fn held_bytes(&self) -> usize {
+    fn allocated_bytes(&self) -> usize {
         let indexed = self.index.iter().flat_map(Index::held);
         let held = self
             .pending
@@ -499,10 +549,23 @@ impl PendingSample {
     }
 
     /// Takes off `data`, the bytes of the file `arriving` covers, the bytes of this sample that come next
-    fn take_from(&mut self, data: &[u8], arriving: &Range<u64>) {
+    ///
+    /// The sample adds the bytes its extent names to `held_bytes` as it begins
+    /// gathering, and is refused where they would pass `held_bytes_limit`,
+    /// with the bytes it would have the reader hold.
+    fn take_from(
+        &mut self,
+        data: &[u8],
+        arriving: &Range<u64>,
+        held_bytes: &mut u64,
+        held_bytes_limit: u64,
+    ) -> Result<(), u64> {
+        // Why not returning the `Error`: passing it back out of every call on
+        // the path a sample is filled through slows a reader handed one sample
+        // a call; the caller builds it once, where the fill stops.
         let lacking = self.lacking();
         if !arriving.contains(&lacking.start) {
-            return;
+            return Ok(());
         }
 
         let taken_from = lacking.start.saturating_sub(arriving.start);
@@ -510,7 +573,7 @@ impl PendingSample {
         let (Ok(taken_from), Ok(taken_to)) =
             (usize::try_from(taken_from), usize::try_from(taken_to))
         else {
-            return;
+            return Ok(());
         };
 
         if let Some(taken) = data.get(taken_from..taken_to) {
@@ -518,11 +581,19 @@ impl PendingSample {
             // fills, reports and drops one sample at a time, and reserving for
             // every extent of a fragment up front hands it cold memory instead.
             if self.data.is_empty() {
+                let declared = self.declared_len();
+                let held = held_bytes.saturating_add(declared);
+                if held > held_bytes_limit {
+                    return Err(held);
+                }
+                *held_bytes = held;
                 self.data
-                    .reserve_exact(usize::try_from(self.declared_len()).unwrap_or(0));
+                    .reserve_exact(usize::try_from(declared).unwrap_or(0));
             }
             self.data.extend_from_slice(taken);
         }
+
+        Ok(())
     }
 
     /// Returns the sample, now that every byte of it has arrived

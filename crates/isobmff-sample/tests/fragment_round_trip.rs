@@ -47,11 +47,16 @@ mod tests {
 
         let data_start = MOOF_START + movie_fragment.encoded_len() + MEDIA_DATA_HEADER_LEN;
         let mut decode_times = TrackDecodeTimes::new(&movie).unwrap();
-        let extents: Vec<SampleExtent> =
-            sample_extents(&movie_fragment, &movie, MOOF_START, &mut decode_times)
-                .unwrap()
-                .map(Result::unwrap)
-                .collect();
+        let extents: Vec<SampleExtent> = sample_extents(
+            &movie_fragment,
+            &movie,
+            MOOF_START,
+            &mut decode_times,
+            u64::MAX,
+        )
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
 
         assert_eq!(media_data, b"AAAAAAAABBBBCC");
         assert_eq!(decode_times.decode_time(1), Some(7_500));

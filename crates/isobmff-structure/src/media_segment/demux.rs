@@ -9,7 +9,7 @@ use isobmff_sample::{Sample, SampleReader, SegmentIndex, TrackDecodeTimes};
 use isobmff_sequence::{BoxEvent, BoxReader};
 
 use super::{MediaSegmentDisposition, MediaSegmentStructure};
-use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
+use crate::{DemuxLimits, Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 
 /// Reads the samples a media segment carries, taking it as it arrives
 ///
@@ -70,8 +70,9 @@ use crate::{Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
 ///   A `styp` read on the way does not set the track back. After a
 ///   [`resume_at`](Self::resume_at), a fragment stating none for a track no
 ///   `tfdt` has stated since is [`Sample`](crate::ErrorKind::Sample) instead.
-/// * A box read into a value is gathered whole before it is read, so what it
-///   declares is bounded — see [`with_limits`](Self::with_limits).
+/// * What the demux FSM holds of what the segment declares is bounded — a box
+///   read into a value, the samples a `moof` declares, the samples gathered
+///   — by the [`DemuxLimits`] it was created with.
 /// * The samples of a fragment are read out of the media data it addresses,
 ///   and come out as their bytes arrive whole, as [`SampleReader`]'s
 ///   contract has it: the extents of a fragment are held in the order of
@@ -147,7 +148,7 @@ pub struct MediaSegmentDemuxFsm {
     segment_type: Option<SegmentTypeBox>,
     movie: MovieBox,
     segment_indexes: Vec<SegmentIndex>,
-    payload_limit: u64,
+    limits: DemuxLimits,
     state: State,
 }
 
@@ -179,62 +180,34 @@ enum Open {
 }
 
 impl MediaSegmentDemuxFsm {
-    /// Payload a box read into a value may declare, where the caller names no limit
-    ///
-    /// Sixteen mebibytes. A caller reading segments whose `moof` reaches past
-    /// that names a limit of its own with [`with_limits`](Self::with_limits).
-    pub const DEFAULT_PAYLOAD_LIMIT: u64 = 16 * 1024 * 1024;
-
-    /// Creates a demux FSM waiting at the start of a media segment continuing `movie`
-    ///
-    /// What a box read into a value may declare is bounded by
-    /// [`DEFAULT_PAYLOAD_LIMIT`](Self::DEFAULT_PAYLOAD_LIMIT), and what one
-    /// sample may declare by
-    /// [`SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT`](SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT).
+    /// Creates a demux FSM waiting at the start of a media segment continuing `movie`, bounded by the limits [`DemuxLimits::new`] states
     ///
     /// # Errors
     ///
     /// * [`Sample`](crate::ErrorKind::Sample): what
     ///   [`TrackDecodeTimes::new`] makes of `movie`.
     pub fn new(movie: MovieBox) -> Result<Self, Error> {
-        Self::with_limits(
-            movie,
-            Self::DEFAULT_PAYLOAD_LIMIT,
-            SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT,
-        )
+        Self::with_limits(movie, DemuxLimits::new())
     }
 
-    /// Creates a demux FSM of a segment continuing `movie`, holding it to `payload_limit` and `sample_size_limit`
-    ///
-    /// Both bound memory the demux FSM is about to take, and both bound one box
-    /// or one sample rather than the segment. A box read into a value that
-    /// declares more than `payload_limit` bytes of payload is
-    /// [`PayloadLimitExceeded`](crate::ErrorKind::PayloadLimitExceeded)
-    /// before a byte of it is gathered; a sample declaring more than
-    /// `sample_size_limit` bytes is what
-    /// [`SampleReader::with_sample_size_limit`](SampleReader::with_sample_size_limit)
-    /// makes of it.
+    /// Creates a demux FSM waiting at the start of a media segment continuing `movie`, bounded by `limits`
     ///
     /// # Errors
     ///
     /// * [`Sample`](crate::ErrorKind::Sample): what
     ///   [`TrackDecodeTimes::new`] makes of `movie`.
-    pub fn with_limits(
-        movie: MovieBox,
-        payload_limit: u64,
-        sample_size_limit: u64,
-    ) -> Result<Self, Error> {
+    pub fn with_limits(movie: MovieBox, limits: DemuxLimits) -> Result<Self, Error> {
         Ok(Self {
             boxes: BoxReader::new(),
             position: InputPosition::new(),
             structure: MediaSegmentStructure::new(),
-            samples: SampleReader::with_sample_size_limit(sample_size_limit),
+            samples: SampleReader::with_limits(limits.sample_reader()),
             decode_times: TrackDecodeTimes::new(&movie)?,
             open: None,
             segment_type: None,
             movie,
             segment_indexes: Vec::new(),
-            payload_limit,
+            limits,
             state: State::Reading,
         })
     }
@@ -440,14 +413,14 @@ impl MediaSegmentDemuxFsm {
                     .and_then(|disposition| {
                         self.open = match disposition {
                             MediaSegmentDisposition::SegmentType => Some(Open::SegmentType(
-                                WholeBoxReader::begin(header, self.payload_limit)?,
+                                WholeBoxReader::begin(header, self.limits.payload())?,
                             )),
                             MediaSegmentDisposition::MovieFragment => Some(Open::MovieFragment {
-                                reader: WholeBoxReader::begin(header, self.payload_limit)?,
+                                reader: WholeBoxReader::begin(header, self.limits.payload())?,
                                 moof_start: start,
                             }),
                             MediaSegmentDisposition::SegmentIndex => Some(Open::SegmentIndex(
-                                WholeBoxReader::begin(header, self.payload_limit)?,
+                                WholeBoxReader::begin(header, self.limits.payload())?,
                             )),
                             MediaSegmentDisposition::MediaData => Some(Open::MediaData),
                             MediaSegmentDisposition::Skip => None,
@@ -476,6 +449,7 @@ impl MediaSegmentDemuxFsm {
                                 &self.movie,
                                 moof_start,
                                 &mut self.decode_times,
+                                self.limits.resolved_samples(),
                             )?;
                             self.samples.handle_sample_extents(extents)?;
 
@@ -515,13 +489,12 @@ impl MediaSegmentDemuxFsm {
 mod tests {
     use isobmff_boxes::{MediaDataBox, MovieFragmentBox};
     use isobmff_core::{BoxDefinition, BoxType};
-    use isobmff_sample::{Sample, SampleReader};
+    use isobmff_sample::{Sample, SampleReaderLimits};
     use isobmff_test_support::{MEDIA_DATA, framed, movie_fragment, segment_type, written};
 
     use super::super::tests::{movie, sample, segment_of_one_sample};
     use super::{Error, MediaSegmentDemuxFsm};
-    use crate::ErrorKind;
-    use crate::WantedInput;
+    use crate::{DemuxLimits, ErrorKind, WantedInput};
 
     /// What the demux FSM makes of `segment` handed over whole, then declared over
     fn read(segment: &[u8]) -> Result<MediaSegmentDemuxFsm, Error> {
@@ -551,8 +524,7 @@ mod tests {
     #[test]
     fn a_box_read_into_a_value_declaring_a_payload_past_the_limit_is_rejected() {
         let mut demux_fsm =
-            MediaSegmentDemuxFsm::with_limits(movie(), 4, SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT)
-                .unwrap();
+            MediaSegmentDemuxFsm::with_limits(movie(), DemuxLimits::new().with_payload(4)).unwrap();
 
         assert_eq!(
             demux_fsm
@@ -572,14 +544,44 @@ mod tests {
         .concat();
         let mut demux_fsm = MediaSegmentDemuxFsm::with_limits(
             movie(),
-            fragment.len() as u64,
-            SampleReader::DEFAULT_SAMPLE_SIZE_LIMIT,
+            DemuxLimits::new().with_payload(fragment.len() as u64),
         )
         .unwrap();
 
         demux_fsm.handle_input(0, &segment).unwrap();
 
         assert_eq!(demux_fsm.finish(), Ok(()));
+    }
+
+    #[test]
+    fn a_fragment_declaring_more_samples_than_the_limit_lays_out_none() {
+        let mut demux_fsm =
+            MediaSegmentDemuxFsm::with_limits(movie(), DemuxLimits::new().with_resolved_samples(0))
+                .unwrap();
+
+        assert_eq!(
+            demux_fsm.handle_input(0, &segment_of_one_sample()),
+            Err(Error::from(
+                isobmff_sample::Error::sample_count_limit_exceeded(1, 0)
+            ))
+        );
+        assert_eq!(demux_fsm.poll_sample(), None);
+    }
+
+    #[test]
+    fn the_sample_reader_is_held_to_the_limits_it_is_given() {
+        let mut demux_fsm = MediaSegmentDemuxFsm::with_limits(
+            movie(),
+            DemuxLimits::new().with_sample_reader(SampleReaderLimits::new().with_held_extents(0)),
+        )
+        .unwrap();
+
+        assert_eq!(
+            demux_fsm.handle_input(0, &segment_of_one_sample()),
+            Err(Error::from(
+                isobmff_sample::Error::held_extent_limit_exceeded(1, 0)
+            ))
+        );
     }
 
     #[test]
