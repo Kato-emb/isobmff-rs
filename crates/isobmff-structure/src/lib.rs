@@ -63,11 +63,11 @@
 //!    [`FragmentedMuxFsm`], [`NonFragmentedMuxFsm`] and [`MediaSegmentMuxFsm`]
 //!    wire layers 1 to 5 into machines: one demux FSM reads a movie file,
 //!    fragmented or not, through the structure of a fragmented one, and one
-//!    reads a media segment; a mux FSM writes each kind. A demux FSM holds one rule of its own: it
-//!    keeps where the input it takes in order stands, and states the one read
-//!    it wants next — an extent layer 4 lacks whose start that input has
-//!    passed, else the continuation of that input — taking every input with
-//!    the offset it was read at. Each passes every value between the layers,
+//!    reads a media segment; a mux FSM writes each kind. A demux FSM holds
+//!    one rule of its own: it keeps where the input it takes in order stands,
+//!    and states the one read it wants next — an extent layer 4 lacks whose
+//!    start that input has passed, else the continuation of that input —
+//!    taking every input with the offset it was read at. Each passes every value between the layers,
 //!    so a caller hands over bytes and takes samples, or hands over samples
 //!    and takes bytes, and never sees one. Every offset above the framing is
 //!    a file offset — the extents the framing reports, counted from the first

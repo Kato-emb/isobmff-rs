@@ -384,7 +384,7 @@ impl MovieDemuxFsm {
         self.file_type.as_ref()
     }
 
-    /// Returns the movie the fragments of the file continue, once it has arrived
+    /// Returns the movie of the file, once it has arrived
     #[must_use]
     pub const fn movie(&self) -> Option<&MovieBox> {
         self.movie.as_ref()

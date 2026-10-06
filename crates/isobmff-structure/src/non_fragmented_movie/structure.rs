@@ -29,8 +29,7 @@ use crate::Error;
 ///   declared over without one is
 ///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
 /// * The `mdat` comes anywhere past the `ftyp`, any number of times (§8.1.1).
-/// * Every other box is passed over, wherever it lies — a `moof` among them,
-///   whose samples are not read.
+/// * Every other box is passed over, wherever it lies.
 /// * An `Err` changes nothing: the structure stands where it stood before the
 ///   call.
 /// * [`finish`](Self::finish) checks that the boxes so far form a whole file,
