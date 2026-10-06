@@ -45,7 +45,8 @@ impl<'track> SampleDescriptions<'track> {
     /// * [`UnknownDataReferenceIndex`](crate::ErrorKind::UnknownDataReferenceIndex):
     ///   the entry names a `dref` entry the track has none of.
     /// * [`ExternalDataReference`](crate::ErrorKind::ExternalDataReference):
-    ///   the `dref` entry names a resource other than the file itself.
+    ///   the `dref` entry names a resource other than the file itself, or is
+    ///   held as [`DataEntry::Other`].
     pub(crate) fn data_reference_index(&self, sample_description_index: u32) -> Result<u16, Error> {
         let entry = usize::try_from(sample_description_index)
             .ok()
@@ -82,10 +83,11 @@ mod tests {
     use alloc::string::String;
     use alloc::vec;
 
-    use isobmff_boxes::{DataEntry, DataEntryUrnBox, DataReferenceBox};
+    use isobmff_boxes::{DataEntry, DataEntryUrlBox, DataEntryUrnBox, DataReferenceBox};
     use isobmff_core::{AnyBox, BoxType, NullTerminatedString};
     use isobmff_test_support::{
-        external_data_reference, track, track_described_by, track_reading_from,
+        empty_sample_table, external_data_reference, track, track_described_by, track_laid_out,
+        track_reading_from,
     };
 
     use super::SampleDescriptions;
@@ -159,5 +161,32 @@ mod tests {
             SampleDescriptions::new(&by_urn).data_reference_index(1),
             Err(Error::external_data_reference(1, 1))
         );
+    }
+
+    #[test]
+    fn an_entry_of_another_type_is_refused_and_the_entries_after_it_resolve() {
+        let alias = AnyBox::from_raw_bytes(BoxType::compact(*b"alis"), vec![0, 0, 0, 1]);
+        let dref = DataReferenceBox::new(vec![
+            DataEntry::Other(alias),
+            DataEntry::Url(DataEntryUrlBox::new(None)),
+        ]);
+        let described_by = |data_reference_index: u8| {
+            AnyBox::from_raw_bytes(
+                BoxType::compact(*b"avc1"),
+                vec![0, 0, 0, 0, 0, 0, 0, data_reference_index],
+            )
+        };
+        let trak = track_laid_out(
+            1,
+            dref,
+            empty_sample_table(vec![described_by(1), described_by(2)]),
+        );
+        let descriptions = SampleDescriptions::new(&trak);
+
+        assert_eq!(
+            descriptions.data_reference_index(1),
+            Err(Error::external_data_reference(1, 1))
+        );
+        assert_eq!(descriptions.data_reference_index(2), Ok(2));
     }
 }

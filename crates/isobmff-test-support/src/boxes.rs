@@ -104,13 +104,13 @@ pub fn track_described_by(track_id: u32, entry: AnyBox) -> TrackBox {
     track_laid_out(
         track_id,
         self_contained_data_reference(),
-        empty_sample_table(entry),
+        empty_sample_table(vec![entry]),
     )
 }
 
 /// Track of [`track`], its media lying in the resources `dref` names, and declaring no sample
 pub fn track_reading_from(track_id: u32, dref: DataReferenceBox) -> TrackBox {
-    track_laid_out(track_id, dref, empty_sample_table(sample_entry()))
+    track_laid_out(track_id, dref, empty_sample_table(vec![sample_entry()]))
 }
 
 /// Track of [`track`], its media lying in the resources `dref` names and laid out by `stbl`
@@ -181,10 +181,10 @@ fn sample_entry() -> AnyBox {
     AnyBox::from_raw_bytes(BoxType::compact(*b"avc1"), vec![0, 0, 0, 0, 0, 0, 0, 1])
 }
 
-/// Sample table describing its samples by `entry` and declaring none
-fn empty_sample_table(entry: AnyBox) -> SampleTableBox {
+/// Sample table describing its samples by the `stsd` entries given and declaring none
+pub fn empty_sample_table(entries: Vec<AnyBox>) -> SampleTableBox {
     SampleTableBox::new(
-        SampleDescriptionBox::new(vec![entry]),
+        SampleDescriptionBox::new(entries),
         TimeToSampleBox::new(Vec::new()),
         SampleToChunkBox::new(Vec::new()),
         SampleSizes::Stsz(SampleSizeBox::new(SampleSizeEntries::PerSample(Vec::new()))),
