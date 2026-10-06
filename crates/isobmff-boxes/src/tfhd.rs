@@ -281,8 +281,6 @@ impl BoxDecode for TrackFragmentHeaderBox {
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box
     ///   declares a version other than 0.
-    /// * [`UnsupportedFlags`](isobmff_core::ErrorKind::UnsupportedFlags): the
-    ///   `default_sample_flags` set a bit §8.8.3.1 reserves.
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the payload
     ///   ends inside a field the flags state.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
@@ -530,13 +528,13 @@ mod tests {
     }
 
     #[test]
-    fn default_sample_flags_setting_a_reserved_bit_are_rejected() {
+    fn sample_flags_setting_a_reserved_bit_read_without_it() {
         let mut payload = encoded_payload(&every_field());
-        *payload.get_mut(28).unwrap() = 0x10;
+        *payload.get_mut(28).unwrap() |= 0x10;
 
         assert_eq!(
             TrackFragmentHeaderBox::decode_payload(&payload),
-            Err(Error::unsupported_flags(0x1000_0000))
+            Ok(every_field())
         );
     }
 

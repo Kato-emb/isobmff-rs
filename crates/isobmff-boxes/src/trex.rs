@@ -87,8 +87,6 @@ impl BoxDecode for TrackExtendsBox {
     ///
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box
     ///   declares a version other than 0.
-    /// * [`UnsupportedFlags`](isobmff_core::ErrorKind::UnsupportedFlags): the
-    ///   `default_sample_flags` set a bit §8.8.3.1 reserves.
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the payload
     ///   ends inside a field of the box.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
@@ -141,13 +139,20 @@ mod tests {
     use crate::{DegradationPriorityEntry, PaddingBitsEntry, SampleDependencyTypeEntry};
 
     #[test]
-    fn default_sample_flags_setting_a_reserved_bit_are_rejected() {
+    fn sample_flags_setting_a_reserved_bit_read_without_it() {
         let mut payload = vec![0; 24];
         *payload.get_mut(20).unwrap() = 0x80;
+        *payload.get_mut(21).unwrap() = 0x01;
 
         assert_eq!(
             TrackExtendsBox::decode_payload(&payload),
-            Err(Error::unsupported_flags(0x8000_0000))
+            Ok(TrackExtendsBox::new(
+                0,
+                0,
+                0,
+                0,
+                SampleFlags::from_bits(0x0001_0000).unwrap()
+            ))
         );
     }
 

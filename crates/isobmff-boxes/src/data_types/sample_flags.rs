@@ -19,7 +19,8 @@ const NON_SYNC_SAMPLE_BIT: u32 = 0x0001_0000;
 /// (§8.7.6), whether the sample is left out of the sync samples an `stss`
 /// lists (§8.6.2), and the priority of an `stdp` entry (§8.5.3), so each field
 /// is the entry of the table stating it. A `trex`, a `tfhd` and a `trun` carry
-/// the word as [`bits`](Self::bits) returns it.
+/// the word as [`bits`](Self::bits) returns it, and reading the word from one
+/// of them drops any reserved bit it sets.
 ///
 /// # Examples
 ///
@@ -163,18 +164,14 @@ impl SampleFlags {
     }
 }
 
-/// Reads a `sample_flags` word
+/// Reads a `sample_flags` word, dropping the reserved bits it sets
 ///
 /// # Errors
 ///
-/// * [`UnsupportedFlags`](isobmff_core::ErrorKind::UnsupportedFlags): the word
-///   sets a reserved bit.
 /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the payload
 ///   ends inside the word.
 pub(crate) fn read_sample_flags(reader: &mut FieldReader<'_>) -> Result<SampleFlags, Error> {
-    let bits = reader.read_u32()?;
-
-    SampleFlags::from_bits(bits).ok_or(Error::unsupported_flags(bits))
+    Ok(SampleFlags(reader.read_u32()? & !RESERVED_BITS))
 }
 
 #[cfg(test)]

@@ -443,8 +443,7 @@ impl BoxDecode for TrackRunBox {
     /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the box
     ///   declares a version other than 0 or 1.
     /// * [`UnsupportedFlags`](isobmff_core::ErrorKind::UnsupportedFlags): the box declares a
-    ///   flag this box does not read, which stands for a field it cannot place, or
-    ///   sample flags setting a bit §8.8.3.1 reserves.
+    ///   flag this box does not read, which stands for a field it cannot place.
     /// * [`ConflictingFlags`](isobmff_core::ErrorKind::ConflictingFlags): the box states the
     ///   flags of its first sample and of every sample at once.
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the payload
@@ -740,23 +739,19 @@ mod tests {
     }
 
     #[test]
-    fn first_sample_flags_setting_a_reserved_bit_are_rejected() {
-        let payload = b"\0\0\0\x04\0\0\0\x01\x10\0\0\0";
+    fn sample_flags_setting_a_reserved_bit_read_without_it() {
+        let first_sample_flags = b"\0\0\0\x04\0\0\0\x01\x10\x01\0\0";
+        let flags_of_a_row = b"\0\0\x04\0\0\0\0\x01\x10\x01\0\0";
 
-        assert_eq!(
-            TrackRunBox::decode_payload(payload),
-            Err(Error::unsupported_flags(0x1000_0000))
-        );
-    }
+        for payload in [first_sample_flags, flags_of_a_row] {
+            let mut without_it = *payload;
+            *without_it.get_mut(8).unwrap() = 0;
 
-    #[test]
-    fn sample_flags_of_a_row_setting_a_reserved_bit_are_rejected() {
-        let payload = b"\0\0\x04\0\0\0\0\x01\x10\0\0\0";
-
-        assert_eq!(
-            TrackRunBox::decode_payload(payload),
-            Err(Error::unsupported_flags(0x1000_0000))
-        );
+            assert_eq!(
+                TrackRunBox::decode_payload(payload).unwrap(),
+                TrackRunBox::decode_payload(&without_it).unwrap()
+            );
+        }
     }
 
     #[test]
