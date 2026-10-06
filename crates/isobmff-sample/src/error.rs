@@ -189,6 +189,30 @@ impl Error {
         }
     }
 
+    /// Returns the failure of boxes declaring `declared` samples where one resolution lays out `limit` at most
+    #[must_use]
+    pub const fn sample_count_limit_exceeded(declared: u64, limit: u64) -> Self {
+        Self {
+            representation: Representation::SampleCountLimitExceeded { declared, limit },
+        }
+    }
+
+    /// Returns the failure of a reader that would hold `needed` extents where it holds `limit` at most
+    #[must_use]
+    pub const fn held_extent_limit_exceeded(needed: u64, limit: u64) -> Self {
+        Self {
+            representation: Representation::HeldExtentLimitExceeded { needed, limit },
+        }
+    }
+
+    /// Returns the failure of a reader that would hold `needed` bytes where it holds `limit` at most
+    #[must_use]
+    pub const fn held_bytes_limit_exceeded(needed: u64, limit: u64) -> Self {
+        Self {
+            representation: Representation::HeldBytesLimitExceeded { needed, limit },
+        }
+    }
+
     /// Returns the failure of a sample whose bytes never arrived whole
     #[must_use]
     pub const fn unfinished_sample(track_id: u32, needed: u64, available: u64) -> Self {

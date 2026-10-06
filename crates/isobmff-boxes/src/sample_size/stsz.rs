@@ -162,6 +162,15 @@ impl SampleSizeBox {
         &self.entries
     }
 
+    /// Returns how many samples the box counts, however it states their sizes
+    #[must_use]
+    pub fn sample_count(&self) -> u64 {
+        match &self.entries {
+            SampleSizeEntries::Uniform { sample_count, .. } => u64::from(*sample_count),
+            SampleSizeEntries::PerSample(entries) => entries.len() as u64,
+        }
+    }
+
     /// Returns the size of every sample in turn, however the box states them
     ///
     /// A size every sample shares comes out once per sample.

@@ -3,7 +3,7 @@ use core::ops::Range;
 
 use isobmff_boxes::SampleFlags;
 
-use super::SampleReader;
+use super::{SampleReader, SampleReaderLimits};
 use crate::error::Error;
 use crate::sample::{Sample, SampleExtent};
 
@@ -47,7 +47,7 @@ fn drained(reader: &mut SampleReader) -> Vec<Sample> {
 
 #[test]
 fn a_cleared_reader_holds_nothing_and_reads_the_next_stretch_under_the_same_limit() {
-    let mut reader = SampleReader::with_sample_size_limit(8);
+    let mut reader = SampleReader::with_limits(SampleReaderLimits::new().with_sample_size(8));
     reader
         .handle_sample_extents([Ok(extent(0, 100..104)), Ok(extent(1_024, 104..108))])
         .unwrap();
@@ -247,19 +247,19 @@ fn the_reader_holds_no_more_than_the_bytes_its_extents_name() {
         extent(1_024, 104..108),
         extent(2_048, 1_000..1_004),
     ]);
-    assert_eq!(reader.held_bytes(), 0);
+    assert_eq!(reader.allocated_bytes(), 0);
 
     reader.handle_data(2_000, &[0xab; 4_096]).unwrap();
-    assert_eq!(reader.held_bytes(), 0);
+    assert_eq!(reader.allocated_bytes(), 0);
 
     reader.handle_data(0, &[0xab; 106]).unwrap();
-    assert_eq!(reader.held_bytes(), 4 + 4);
+    assert_eq!(reader.allocated_bytes(), 4 + 4);
 
     reader.handle_data(100, &[0xab; 2_048]).unwrap();
-    assert_eq!(reader.held_bytes(), 4 + 4 + 4);
+    assert_eq!(reader.allocated_bytes(), 4 + 4 + 4);
 
     assert_eq!(drained(&mut reader).len(), 3);
-    assert_eq!(reader.held_bytes(), 0);
+    assert_eq!(reader.allocated_bytes(), 0);
 }
 
 #[test]
@@ -376,11 +376,116 @@ fn an_extent_naming_no_bytes_is_not_handed_over_ahead_of_a_short_one_held_before
 
 #[test]
 fn an_extent_naming_more_bytes_than_the_limit_is_refused() {
-    let mut reader = SampleReader::with_sample_size_limit(3);
+    let mut reader = SampleReader::with_limits(SampleReaderLimits::new().with_sample_size(3));
 
     assert_eq!(
         reader.handle_sample_extent(extent(0, 100..104)),
         Err(Error::sample_size_limit_exceeded(1, 4, 3))
+    );
+}
+
+#[test]
+fn an_extent_held_past_the_extents_the_reader_holds_is_refused() {
+    let at_most_two = SampleReader::with_limits(SampleReaderLimits::new().with_held_extents(2));
+
+    let mut one_at_a_time = at_most_two.clone();
+    one_at_a_time
+        .handle_sample_extent(extent(0, 100..104))
+        .unwrap();
+    one_at_a_time
+        .handle_sample_extent(extent(1_024, 104..108))
+        .unwrap();
+    assert_eq!(
+        one_at_a_time.handle_sample_extent(extent(2_048, 108..112)),
+        Err(Error::held_extent_limit_exceeded(3, 2))
+    );
+
+    let mut together = at_most_two;
+    assert_eq!(
+        together.handle_sample_extents([
+            Ok(extent(0, 100..104)),
+            Ok(extent(1_024, 104..108)),
+            Ok(extent(2_048, 108..112)),
+        ]),
+        Err(Error::held_extent_limit_exceeded(3, 2))
+    );
+    assert_eq!(together.wanted_extent(), Some(100..104));
+}
+
+#[test]
+fn extents_held_across_calls_count_until_their_samples_are_handed_over() {
+    let mut reader = SampleReader::with_limits(SampleReaderLimits::new().with_held_extents(2));
+    reader
+        .handle_sample_extents([Ok(extent(0, 100..104)), Ok(extent(1_024, 104..108))])
+        .unwrap();
+    reader.handle_data(100, b"ABCD").unwrap();
+    reader
+        .handle_sample_extents([Ok(extent(2_048, 200..204))])
+        .unwrap();
+
+    assert_eq!(
+        reader.handle_sample_extents([Ok(extent(3_072, 204..208))]),
+        Err(Error::held_extent_limit_exceeded(3, 2))
+    );
+    assert_eq!(drained(&mut reader), [sample(0, b"ABCD")]);
+}
+
+#[test]
+fn extents_naming_the_same_bytes_are_refused_past_the_bytes_the_reader_holds() {
+    let mut reader = SampleReader::with_limits(SampleReaderLimits::new().with_held_bytes(1_024));
+    reader
+        .handle_sample_extents((0..3).map(|copy| Ok(extent(copy, 0..512))))
+        .unwrap();
+
+    assert_eq!(
+        reader.handle_data(0, &[0xab; 512]),
+        Err(Error::held_bytes_limit_exceeded(1_536, 1_024))
+    );
+    assert_eq!(
+        drained(&mut reader),
+        [sample(0, &[0xab; 512]), sample(1, &[0xab; 512])]
+    );
+}
+
+#[test]
+fn input_handed_over_without_taking_the_samples_is_refused_past_the_bytes_the_reader_holds() {
+    let limits = SampleReaderLimits::new().with_held_bytes(8);
+    let extents = || (0..3).map(|number| Ok(extent(number, number * 4..number * 4 + 4)));
+
+    let mut taking = SampleReader::with_limits(limits);
+    taking.handle_sample_extents(extents()).unwrap();
+    for (number, data) in [(0, b"ABCD"), (1, b"EFGH"), (2, b"IJKL")] {
+        taking.handle_data(number * 4, data).unwrap();
+        assert_eq!(drained(&mut taking), [sample(number, data)]);
+    }
+
+    let mut not_taking = SampleReader::with_limits(limits);
+    not_taking.handle_sample_extents(extents()).unwrap();
+    not_taking.handle_data(0, b"ABCD").unwrap();
+    not_taking.handle_data(4, b"EFGH").unwrap();
+    assert_eq!(
+        not_taking.handle_data(8, b"IJKL"),
+        Err(Error::held_bytes_limit_exceeded(12, 8))
+    );
+}
+
+#[test]
+fn extents_out_of_the_order_of_their_bytes_are_refused_past_the_bytes_the_reader_holds() {
+    let mut reader = SampleReader::with_limits(SampleReaderLimits::new().with_held_bytes(8));
+    reader
+        .handle_sample_extents([Ok(extent(0, 200..204)), Ok(extent(1_024, 100..104))])
+        .unwrap();
+    reader
+        .handle_sample_extents([Ok(extent(2_048, 104..108)), Ok(extent(3_072, 108..112))])
+        .unwrap();
+
+    assert_eq!(
+        reader.handle_data(100, b"ABCDEFGHIJKL"),
+        Err(Error::held_bytes_limit_exceeded(12, 8))
+    );
+    assert_eq!(
+        drained(&mut reader),
+        [sample(1_024, b"ABCD"), sample(2_048, b"EFGH")]
     );
 }
 
@@ -394,7 +499,7 @@ fn a_sample_short_of_its_bytes_is_refused_when_the_samples_are_declared_over() {
 
 #[test]
 fn a_failure_is_reported_again_for_every_call_after_it() {
-    let mut reader = SampleReader::with_sample_size_limit(3);
+    let mut reader = SampleReader::with_limits(SampleReaderLimits::new().with_sample_size(3));
     let refused = reader.handle_sample_extent(extent(0, 100..104));
 
     assert_eq!(reader.handle_data(100, b"ABCD"), refused);

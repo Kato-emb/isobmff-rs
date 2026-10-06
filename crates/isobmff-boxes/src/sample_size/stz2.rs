@@ -152,6 +152,12 @@ impl CompactSampleSizeBox {
         self.field_size
     }
 
+    /// Returns how many samples the box counts
+    #[must_use]
+    pub fn sample_count(&self) -> u64 {
+        self.entries.len() as u64
+    }
+
     /// Returns the entries, one per sample in decode order
     #[must_use]
     pub fn entries(&self) -> &[CompactSampleSizeEntry] {
