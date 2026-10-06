@@ -71,7 +71,7 @@ impl DemuxInput {
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the file was
     ///   declared over.
     /// * The failure [`record`](Self::record) kept.
-    pub(crate) const fn reading(&self) -> Result<(), Error> {
+    const fn reading(&self) -> Result<(), Error> {
         match self.state {
             State::Reading => Ok(()),
             State::Finished => Err(Error::already_finished()),
