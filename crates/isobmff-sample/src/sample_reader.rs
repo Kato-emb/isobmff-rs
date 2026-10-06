@@ -253,7 +253,7 @@ impl SampleReader {
         let ready = self.ready.len();
         let limit = self.limits.held_bytes();
         if let Some(index) = &mut self.index {
-            let filled = index.fill(
+            let refused = index.fill(
                 data,
                 &arriving,
                 &mut self.ready,
@@ -265,11 +265,14 @@ impl SampleReader {
             }
             self.handed_over_since(ready);
 
-            return filled.map_err(|failure| self.fail(failure));
+            return match refused {
+                Ok(()) => Ok(()),
+                Err(needed) => Err(self.fail(Error::held_bytes_limit_exceeded(needed, limit))),
+            };
         }
 
         let mut made_whole: usize = 0;
-        let mut filled = Ok(());
+        let mut refused = None;
         for pending in self.pending.iter_mut() {
             if pending.is_whole() {
                 continue;
@@ -277,8 +280,8 @@ impl SampleReader {
             if pending.lacking().start >= arriving.end {
                 break;
             }
-            filled = pending.take_from(data, &arriving, &mut self.held_bytes, limit);
-            if filled.is_err() {
+            if let Err(needed) = pending.take_from(data, &arriving, &mut self.held_bytes, limit) {
+                refused = Some(needed);
                 break;
             }
             made_whole = made_whole.saturating_add(usize::from(pending.is_whole()));
@@ -304,7 +307,10 @@ impl SampleReader {
         }
         self.handed_over_since(ready);
 
-        filled.map_err(|failure| self.fail(failure))
+        match refused {
+            None => Ok(()),
+            Some(needed) => Err(self.fail(Error::held_bytes_limit_exceeded(needed, limit))),
+        }
     }
 
     /// Takes the next sample whose bytes have all arrived
@@ -545,14 +551,18 @@ impl PendingSample {
     /// Takes off `data`, the bytes of the file `arriving` covers, the bytes of this sample that come next
     ///
     /// The sample adds the bytes its extent names to `held_bytes` as it begins
-    /// gathering, and is refused where they would pass `held_bytes_limit`.
+    /// gathering, and is refused where they would pass `held_bytes_limit`,
+    /// with the bytes it would have the reader hold.
     fn take_from(
         &mut self,
         data: &[u8],
         arriving: &Range<u64>,
         held_bytes: &mut u64,
         held_bytes_limit: u64,
-    ) -> Result<(), Error> {
+    ) -> Result<(), u64> {
+        // Why not returning the `Error`: passing it back out of every call on
+        // the path a sample is filled through slows a reader handed one sample
+        // a call; the caller builds it once, where the fill stops.
         let lacking = self.lacking();
         if !arriving.contains(&lacking.start) {
             return Ok(());
@@ -574,7 +584,7 @@ impl PendingSample {
                 let declared = self.declared_len();
                 let held = held_bytes.saturating_add(declared);
                 if held > held_bytes_limit {
-                    return Err(Error::held_bytes_limit_exceeded(held, held_bytes_limit));
+                    return Err(held);
                 }
                 *held_bytes = held;
                 self.data

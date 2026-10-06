@@ -5,7 +5,6 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use super::PendingSample;
-use crate::error::Error;
 use crate::sample::Sample;
 
 /// Extents a reader holds once they fall out of the order of their bytes, found by the byte each lacks next
@@ -53,8 +52,9 @@ impl Index {
 
     /// Fills the short extents whose next lacked byte lies in `data`, the bytes `arriving` covers, and hands over the samples this makes whole
     ///
-    /// A sample `held_bytes_limit` refuses stops the fill there, the samples
-    /// made whole before it handed over.
+    /// A sample `held_bytes_limit` refuses stops the fill there with the bytes
+    /// it would have the reader hold, the samples made whole before it handed
+    /// over.
     pub(super) fn fill(
         &mut self,
         data: &[u8],
@@ -62,7 +62,7 @@ impl Index {
         ready: &mut VecDeque<Sample>,
         held_bytes: &mut u64,
         held_bytes_limit: u64,
-    ) -> Result<(), Error> {
+    ) -> Result<(), u64> {
         // Why not removing the keys while walking the range: the set cannot
         // change while the walk borrows it, and taking the first key of the
         // range afresh each time adds a search from the root per key on top of
@@ -73,16 +73,16 @@ impl Index {
             .copied()
             .collect();
         let mut made_whole = Vec::new();
-        let mut filled = Ok(());
+        let mut refused = Ok(());
         for key in reached {
             self.lacking.remove(&key);
             let (_, number) = key;
             let Some(pending) = self.slot(number).and_then(Option::as_mut) else {
                 continue;
             };
-            if let Err(failure) = pending.take_from(data, arriving, held_bytes, held_bytes_limit) {
+            if let Err(needed) = pending.take_from(data, arriving, held_bytes, held_bytes_limit) {
                 self.lacking.insert(key);
-                filled = Err(failure);
+                refused = Err(needed);
                 break;
             }
             if pending.is_whole() {
@@ -93,7 +93,7 @@ impl Index {
             }
         }
         if made_whole.is_empty() {
-            return filled;
+            return refused;
         }
 
         self.report_front(ready);
@@ -107,7 +107,7 @@ impl Index {
             }
         }
 
-        filled
+        refused
     }
 
     /// Hands over the whole samples at the front of those held, in the order they were held
