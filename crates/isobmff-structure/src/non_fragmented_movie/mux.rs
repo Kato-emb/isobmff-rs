@@ -231,11 +231,10 @@ impl NonFragmentedMuxFsm {
         self.output.writing()?;
         let placed = self
             .samples()
-            .and_then(|samples| samples.handle_sample(sample).map_err(Error::from));
-        let data = self.output.record(placed)?;
-        self.chunk.push(data);
+            .and_then(|samples| samples.handle_sample(sample).map_err(Error::from))
+            .map(|data| self.chunk.push(data));
 
-        Ok(())
+        self.output.record(placed)
     }
 
     /// Hands over the bytes the file has been laid down as so far

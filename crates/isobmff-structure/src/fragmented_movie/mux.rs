@@ -323,7 +323,7 @@ impl FragmentedMuxFsm {
     fn samples(&mut self) -> Result<&mut MovieFragmentWriter, Error> {
         self.samples
             .as_mut()
-            .ok_or(Error::box_out_of_order(MovieFragmentBox::BOX_TYPE))
+            .ok_or_else(|| Error::box_out_of_order(MovieFragmentBox::BOX_TYPE))
     }
 
     /// Lays `value` down as the whole box it forms

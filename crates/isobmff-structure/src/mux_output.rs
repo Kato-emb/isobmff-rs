@@ -75,10 +75,7 @@ impl MuxOutput {
     /// # Errors
     ///
     /// The failure `result` carries.
-    pub(crate) const fn record<Value>(
-        &mut self,
-        result: Result<Value, Error>,
-    ) -> Result<Value, Error> {
+    pub(crate) const fn record(&mut self, result: Result<(), Error>) -> Result<(), Error> {
         if let Err(failure) = &result {
             self.state = State::Failed(*failure);
         }
@@ -150,8 +147,7 @@ mod tests {
         let mut output = MuxOutput::new();
         let failure = Error::box_out_of_order(BoxType::compact(*b"ftyp"));
 
-        assert_eq!(output.record::<()>(Err(failure)), Err(failure));
-        assert_eq!(output.writing(), Err(failure));
+        assert_eq!(output.record(Err(failure)), Err(failure));
         assert_eq!(output.writing(), Err(failure));
     }
 
@@ -162,7 +158,7 @@ mod tests {
 
         output.frame(header, [b"AAAA".to_vec()]).unwrap();
         output
-            .record::<()>(Err(Error::box_out_of_order(BoxType::compact(*b"ftyp"))))
+            .record(Err(Error::box_out_of_order(BoxType::compact(*b"ftyp"))))
             .unwrap_err();
 
         let mut file = Vec::new();
