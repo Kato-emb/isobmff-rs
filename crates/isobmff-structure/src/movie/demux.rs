@@ -168,7 +168,7 @@ pub struct MovieDemuxFsm {
 /// Where the demux FSM stands between calls
 #[derive(Clone, Copy, Debug)]
 enum State {
-    /// Taking the file as it arrives
+    /// Taking the file as the input half does, gathering no `mfro`
     Reading,
     /// Gathering the bytes a file `file_len` long would close with an `mfro` in, and taking nothing else
     LocatingMovieFragmentRandomAccess {

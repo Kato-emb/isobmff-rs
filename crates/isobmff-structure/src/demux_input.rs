@@ -179,7 +179,9 @@ impl DemuxInput {
     /// * The failure `checked` carries.
     /// * [`Sample`](crate::ErrorKind::Sample): a sample is short of the data
     ///   it claimed.
+    /// * What [`reading`](Self::reading) reports.
     pub(crate) fn finish(&mut self, checked: Result<(), Error>) -> Result<(), Error> {
+        self.reading()?;
         let finished = checked.and_then(|()| self.samples.finish().map_err(Error::from));
 
         self.record(finished)?;
@@ -218,7 +220,7 @@ impl DemuxInput {
 #[cfg(test)]
 mod tests {
     use isobmff_boxes::SampleFlags;
-    use isobmff_sample::{SampleExtent, SampleReaderLimits};
+    use isobmff_sample::{Sample, SampleExtent, SampleReaderLimits};
     use isobmff_sequence::BoxEvent;
 
     use super::{DemuxInput, Error};
@@ -229,6 +231,11 @@ mod tests {
 
     /// A box declaring a total shorter than its own header
     const BROKEN_BOX: &[u8] = b"\0\0\0\x04free";
+
+    /// The one sample whose extent [`extent_at`] names, its bytes arrived
+    fn sample() -> Sample {
+        Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec())
+    }
 
     /// The extent of one sample whose four bytes lie at `start`
     fn extent_at(start: u64) -> SampleExtent {
@@ -289,10 +296,7 @@ mod tests {
                 isobmff_core::Error::size_below_header(8, 4)
             )))
         );
-        assert_eq!(
-            input.poll_sample().map(|sample| sample.into_data()),
-            Some(b"SAMP".to_vec())
-        );
+        assert_eq!(input.poll_sample(), Some(sample()));
         assert_eq!(input.wanted_input(), None);
     }
 
@@ -330,10 +334,7 @@ mod tests {
 
         input.handle_input(8, b"SAMP").unwrap();
 
-        assert_eq!(
-            input.poll_sample().map(|sample| sample.into_data()),
-            Some(b"SAMP".to_vec())
-        );
+        assert_eq!(input.poll_sample(), Some(sample()));
         assert_eq!(input.wanted_input(), Some(WantedInput::new(12, None)));
     }
 
