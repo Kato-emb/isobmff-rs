@@ -41,6 +41,41 @@ fn movie(trak: Vec<TrackBox>) -> MovieBox {
     .unwrap()
 }
 
+/// Index just past the `occurrence`-th box type `four_cc` names in `written`, counting from 0
+fn past_type(written: &[u8], four_cc: &[u8; 4], occurrence: usize) -> usize {
+    written
+        .windows(4)
+        .enumerate()
+        .filter(|(_, window)| window == four_cc)
+        .nth(occurrence)
+        .and_then(|(at, _)| at.checked_add(4))
+        .unwrap()
+}
+
+/// The movie `written` holds, read with its second `mdhd` stating version 2 so the track holding it is kept unread
+fn read_keeping_second_track_unread(mut written: Vec<u8>) -> MovieBox {
+    let version_at = past_type(&written, b"mdhd", 1);
+    *written.get_mut(version_at).unwrap() = 2;
+
+    MovieBox::decode(&written).unwrap().0
+}
+
+/// The movie `written` holds with its second `trex` naming track 9, which leaves track 2 with no `trex`
+fn with_no_trex_for_track_2(mut written: Vec<u8>) -> Vec<u8> {
+    let track_id_at = past_type(&written, b"trex", 1).checked_add(4).unwrap();
+    written
+        .get_mut(track_id_at..track_id_at.checked_add(4).unwrap())
+        .unwrap()
+        .copy_from_slice(&9_u32.to_be_bytes());
+
+    written
+}
+
+/// `movie(vec![track(1), track(2)])` read with track 2 kept unread
+fn movie_keeping_track_2_unread() -> MovieBox {
+    read_keeping_second_track_unread(written(&movie(vec![track(1), track(2)])))
+}
+
 /// Movie of one track whose samples last 1024 units and occupy 4 bytes each
 fn one_track_movie() -> MovieBox {
     fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 4, SampleFlags::ZERO))
@@ -95,6 +130,19 @@ fn track_fragment(track_id: u32, trun: Vec<TrackRunBox>) -> TrackFragmentBox {
             None,
         ),
         trun,
+    )
+    .unwrap()
+}
+
+/// Fragment of `track_id` stating no anchor, of one run of `sample_count` samples
+fn stating_no_anchor(
+    track_id: u32,
+    data_offset: Option<i32>,
+    sample_count: u32,
+) -> TrackFragmentBox {
+    TrackFragmentBox::new(
+        track_fragment_header(TrackFragmentHeaderFlags::ZERO, track_id, None, None, None),
+        vec![run(data_offset, sample_count)],
     )
     .unwrap()
 }
@@ -313,19 +361,11 @@ fn offsets_of_a_fragment_stating_no_anchor_at_all_are_anchored_at_the_movie_frag
 
 #[test]
 fn offsets_of_a_later_track_fragment_stating_no_anchor_follow_the_data_before_it() {
-    let stating_no_anchor = |track_id, data_offset| {
-        TrackFragmentBox::new(
-            track_fragment_header(TrackFragmentHeaderFlags::ZERO, track_id, None, None, None),
-            vec![run(data_offset, 1)],
-        )
-        .unwrap()
-    };
-
     assert_eq!(
         resolved(
             &movie_fragment(vec![
-                stating_no_anchor(1, Some(100)),
-                stating_no_anchor(2, None),
+                stating_no_anchor(1, Some(100), 1),
+                stating_no_anchor(2, None, 1),
             ]),
             &movie(vec![track(1), track(2)])
         ),
@@ -670,5 +710,112 @@ fn runs_holding_only_a_count_are_counted_before_a_sample_is_settled() {
             3 * u64::from(u32::MAX),
             1_048_576
         ))
+    );
+}
+
+#[test]
+fn a_fragment_of_a_track_the_movie_kept_unread_gives_no_sample_and_the_others_resolve() {
+    let movie_fragment = movie_fragment(vec![
+        track_fragment(2, vec![run(Some(100), 1)]),
+        track_fragment(1, vec![run(Some(200), 1)]),
+    ]);
+
+    assert_eq!(
+        resolved(&movie_fragment, &movie_keeping_track_2_unread()),
+        Ok(vec![extent(1, 0, 200..204)])
+    );
+}
+
+#[test]
+fn samples_after_a_fragment_kept_unread_lie_where_they_would_were_its_track_read() {
+    let movie_fragment = movie_fragment(vec![
+        stating_no_anchor(2, Some(100), 2),
+        stating_no_anchor(1, None, 1),
+    ]);
+    let with_every_track_read = resolved(&movie_fragment, &movie(vec![track(1), track(2)]))
+        .unwrap()
+        .into_iter()
+        .filter(|extent| extent.track_id() != 2)
+        .collect();
+
+    assert_eq!(
+        resolved(&movie_fragment, &movie_keeping_track_2_unread()),
+        Ok(with_every_track_read)
+    );
+}
+
+#[test]
+fn a_fragment_anchored_after_one_kept_unread_whose_sample_sizes_nothing_states_is_refused() {
+    let movie = read_keeping_second_track_unread(with_no_trex_for_track_2(written(&movie(vec![
+        track(1),
+        track(2),
+    ]))));
+    let movie_fragment = movie_fragment(vec![
+        track_fragment(1, vec![run(Some(50), 1)]),
+        stating_no_anchor(2, Some(100), 1),
+        stating_no_anchor(1, None, 1),
+    ]);
+
+    let extents: Vec<_> = sample_extents(
+        &movie_fragment,
+        &movie,
+        0,
+        &mut TrackDecodeTimes::new(&movie).unwrap(),
+        u64::MAX,
+    )
+    .unwrap()
+    .collect();
+
+    assert_eq!(
+        extents,
+        [Ok(extent(1, 0, 50..54)), Err(Error::unknown_track_id(2))]
+    );
+}
+
+#[test]
+fn a_fragment_kept_unread_is_walked_by_the_sample_size_its_header_states() {
+    let movie = read_keeping_second_track_unread(with_no_trex_for_track_2(written(&movie(vec![
+        track(1),
+        track(2),
+    ]))));
+    let kept_unread = TrackFragmentBox::new(
+        track_fragment_header(TrackFragmentHeaderFlags::ZERO, 2, None, None, Some(6)),
+        vec![run(Some(100), 2)],
+    )
+    .unwrap();
+
+    assert_eq!(
+        resolved(
+            &movie_fragment(vec![kept_unread, stating_no_anchor(1, None, 1)]),
+            &movie
+        ),
+        Ok(vec![extent(1, 0, 112..116)])
+    );
+}
+
+#[test]
+fn a_run_stating_its_offset_places_the_end_of_a_fragment_kept_unread_whatever_ran_before_it() {
+    let movie = read_keeping_second_track_unread(with_no_trex_for_track_2(written(&movie(vec![
+        track(1),
+        track(2),
+    ]))));
+    let sized_run = TrackRunBox::new(
+        Some(200),
+        None,
+        vec![TrackRunSample::new(None, Some(6), None, None)],
+    )
+    .unwrap();
+    let kept_unread = TrackFragmentBox::new(
+        track_fragment_header(TrackFragmentHeaderFlags::ZERO, 2, None, None, None),
+        vec![run(None, 1), sized_run],
+    )
+    .unwrap();
+
+    assert_eq!(
+        resolved(
+            &movie_fragment(vec![kept_unread, stating_no_anchor(1, None, 1)]),
+            &movie
+        ),
+        Ok(vec![extent(1, 0, 206..210)])
     );
 }
