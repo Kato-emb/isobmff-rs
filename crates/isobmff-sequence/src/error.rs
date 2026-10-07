@@ -31,16 +31,14 @@ use isobmff_core::{BoxType, Category};
 /// assert_eq!(failure.box_error(), None);
 ///
 /// // A failure of one box is carried through whole
-/// let carried = Error::from(isobmff_core::Error::unsupported_version(2));
-/// assert_eq!(
+/// let unsupported = isobmff_core::Error::unsupported_version(2);
+/// let carried = Error::from(unsupported);
+/// assert!(matches!(
 ///     carried.kind(),
-///     ErrorKind::Box(isobmff_core::ErrorKind::UnsupportedVersion)
-/// );
+///     ErrorKind::Box(isobmff_core::ErrorKind::UnsupportedVersion { .. })
+/// ));
 /// assert_eq!(carried.category(), Category::Unsupported);
-/// assert_eq!(
-///     carried.box_error().and_then(|box_error| box_error.version()),
-///     Some(2)
-/// );
+/// assert_eq!(carried.box_error(), Some(unsupported));
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Error {
