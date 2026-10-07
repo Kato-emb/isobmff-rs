@@ -99,7 +99,8 @@ fn bytes_needed(result: Result<(RawBox<'_>, &[u8]), Error>) -> Option<u64> {
     let error = result.err()?;
 
     match error.kind() {
-        ErrorKind::TruncatedHeader | ErrorKind::TruncatedBox => error.needed_bytes(),
+        ErrorKind::TruncatedHeader { needed_bytes, .. }
+        | ErrorKind::TruncatedBox { needed_bytes, .. } => Some(needed_bytes),
         _ => None,
     }
 }

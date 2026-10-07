@@ -31,10 +31,10 @@ use crate::descriptor::DescriptorTag;
 ///
 /// // A box failure keeps its own kind under `Box`
 /// let failure = ESDBox::decode_payload(b"\0\0").unwrap_err();
-/// assert_eq!(
+/// assert!(matches!(
 ///     failure.kind(),
-///     ErrorKind::Box(isobmff_core::ErrorKind::TruncatedPayload)
-/// );
+///     ErrorKind::Box(isobmff_core::ErrorKind::TruncatedPayload { .. })
+/// ));
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Error {

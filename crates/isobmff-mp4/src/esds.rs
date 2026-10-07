@@ -83,7 +83,7 @@ mod tests {
     use isobmff_core::{BoxDecode, BoxEncode};
 
     use super::ESDBox;
-    use crate::error::{Error, ErrorKind};
+    use crate::error::Error;
     use crate::es_descriptor::tests::{aac_descriptor, aac_descriptor_bytes};
 
     fn encoded_payload(esds: &ESDBox) -> Vec<u8> {
@@ -116,8 +116,8 @@ mod tests {
         let payload = [vec![0; 4], aac_descriptor_bytes(), vec![0]].concat();
 
         assert_eq!(
-            ESDBox::decode_payload(&payload).unwrap_err().kind(),
-            ErrorKind::Box(isobmff_core::ErrorKind::TrailingPayload)
+            ESDBox::decode_payload(&payload),
+            Err(Error::from(isobmff_core::Error::trailing_payload(31, 32)))
         );
     }
 }

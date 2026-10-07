@@ -153,7 +153,7 @@ impl BoxReader {
                         unread = rest;
                         self.begin(header);
                     }
-                    Err(error) if error.kind() == BoxErrorKind::TruncatedHeader => {
+                    Err(error) if matches!(error.kind(), BoxErrorKind::TruncatedHeader { .. }) => {
                         if unread.is_empty() {
                             return Ok(());
                         }
@@ -175,14 +175,17 @@ impl BoxReader {
                             self.begin(header);
                             continue;
                         }
-                        // Why not unreachable: a truncated header reports what
-                        // it needs, and the fallback is the longest header a box
-                        // can carry in place of a panic the lints forbid.
-                        Err(error) if error.kind() == BoxErrorKind::TruncatedHeader => error
-                            .needed_bytes()
-                            .and_then(|needed| usize::try_from(needed).ok())
-                            .unwrap_or(BoxHeader::MAX_ENCODED_LEN),
-                        Err(error) => return Err(self.fail(error.into())),
+                        Err(error) => {
+                            let BoxErrorKind::TruncatedHeader { needed_bytes, .. } = error.kind()
+                            else {
+                                return Err(self.fail(error.into()));
+                            };
+                            // Why not unreachable: a header reaches no further
+                            // than the longest header a box can carry, and that
+                            // length is the fallback in place of a panic the
+                            // lints forbid.
+                            usize::try_from(needed_bytes).unwrap_or(BoxHeader::MAX_ENCODED_LEN)
+                        }
                     };
                     let wanted = unread.len().min(needed.saturating_sub(filled));
 
@@ -298,11 +301,14 @@ impl BoxReader {
                 Ok(())
             }
             State::Header { bytes, filled } => {
-                let needed = BoxHeader::decode(bytes.get(..filled).unwrap_or_default())
-                    .err()
-                    .filter(|error| error.kind() == BoxErrorKind::TruncatedHeader)
-                    .and_then(|error| error.needed_bytes())
-                    .unwrap_or(BoxHeader::MAX_ENCODED_LEN as u64);
+                let needed = if let Err(BoxErrorKind::TruncatedHeader { needed_bytes, .. }) =
+                    BoxHeader::decode(bytes.get(..filled).unwrap_or_default())
+                        .map_err(|error| error.kind())
+                {
+                    needed_bytes
+                } else {
+                    BoxHeader::MAX_ENCODED_LEN as u64
+                };
 
                 Err(self.fail(Error::unfinished_header(needed, filled as u64)))
             }

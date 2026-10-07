@@ -7,15 +7,18 @@ use crate::codec::field::FieldWidth;
 use crate::data_types::fourcc::FourCC;
 use crate::framing::box_type::BoxType;
 
+mod kind;
+
+pub use kind::{Category, ErrorKind};
+
 /// Boxes a failure holds of the path out of the containers it was read in
 const CONTAINER_DEPTH: usize = 8;
 
 /// Reason a box does not read off bytes, or does not write into them
 ///
-/// What went wrong is one [`kind`](Self::kind), and what a caller does about it
-/// is one [`category`](Self::category). Which of the values a failure carries
-/// are there follows from its kind, and each kind names its own on
-/// [`ErrorKind`].
+/// What went wrong is one [`kind`](Self::kind), which carries the values that
+/// describe it, and what a caller does about it is one
+/// [`category`](Self::category).
 ///
 /// A box read inside a container names the boxes it was reached through, as
 /// [`containers`](Self::containers). Each container adds itself as the failure
@@ -32,10 +35,12 @@ const CONTAINER_DEPTH: usize = 8;
 ///     .in_container(BoxType::compact(*b"tkhd"))
 ///     .in_container(BoxType::compact(*b"trak"));
 ///
-/// // What went wrong, and what a caller does about it
-/// assert_eq!(failure.kind(), ErrorKind::UnsupportedVersion);
+/// // What went wrong, with its values, and what a caller does about it
+/// assert!(matches!(
+///     failure.kind(),
+///     ErrorKind::UnsupportedVersion { version: 2, .. }
+/// ));
 /// assert_eq!(failure.category(), Category::Unsupported);
-/// assert_eq!(failure.version(), Some(2));
 ///
 /// // Where it went wrong, outermost box first
 /// assert_eq!(
@@ -49,120 +54,102 @@ const CONTAINER_DEPTH: usize = 8;
 ///     "in trak/tkhd: full box declares version 2, which this box does not read"
 /// );
 /// ```
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Error {
     kind: ErrorKind,
     containers: [Option<FourCC>; CONTAINER_DEPTH],
     dropped_containers: bool,
-    box_type: Option<BoxType>,
-    detail: Detail,
 }
 
 impl Error {
-    /// Returns a failure of `kind` carrying `detail`
-    const fn new(kind: ErrorKind, detail: Detail) -> Self {
+    /// Returns a failure of `kind`
+    const fn new(kind: ErrorKind) -> Self {
         Self {
             kind,
             containers: [None; CONTAINER_DEPTH],
             dropped_containers: false,
-            box_type: None,
-            detail,
-        }
-    }
-
-    /// Returns a failure of `kind` about the box `box_type` names
-    const fn about(kind: ErrorKind, box_type: BoxType) -> Self {
-        Self {
-            kind,
-            containers: [None; CONTAINER_DEPTH],
-            dropped_containers: false,
-            box_type: Some(box_type),
-            detail: Detail::Nothing,
         }
     }
 
     /// Returns the failure of an input that ends inside the header of a box
     #[must_use]
     pub const fn truncated_header(needed: u64, available: u64) -> Self {
-        Self::new(
-            ErrorKind::TruncatedHeader,
-            Detail::Bytes { needed, available },
-        )
+        Self::new(ErrorKind::TruncatedHeader {
+            needed_bytes: needed,
+            available_bytes: available,
+        })
     }
 
     /// Returns the failure of a box declaring a total below the header it prefixes
     #[must_use]
     pub const fn size_below_header(header_len: u64, declared: u64) -> Self {
-        Self::new(
-            ErrorKind::SizeBelowHeader,
-            Detail::Bytes {
-                needed: header_len,
-                available: declared,
-            },
-        )
+        Self::new(ErrorKind::SizeBelowHeader {
+            needed_bytes: header_len,
+            available_bytes: declared,
+        })
     }
 
     /// Returns the failure of a box whose declared total overruns the input
     #[must_use]
     pub const fn truncated_box(needed: u64, available: u64) -> Self {
-        Self::new(ErrorKind::TruncatedBox, Detail::Bytes { needed, available })
+        Self::new(ErrorKind::TruncatedBox {
+            needed_bytes: needed,
+            available_bytes: available,
+        })
     }
 
     /// Returns the failure of a box read as a type the input does not hold there
     #[must_use]
     pub const fn box_type_mismatch(expected: BoxType, found: BoxType) -> Self {
-        Self {
-            detail: Detail::FoundBoxType(found),
-            ..Self::about(ErrorKind::BoxTypeMismatch, expected)
-        }
+        Self::new(ErrorKind::BoxTypeMismatch {
+            box_type: expected,
+            found_box_type: found,
+        })
     }
 
     /// Returns the failure of a payload that ends inside a field
     #[must_use]
     pub const fn truncated_payload(needed: u64, available: u64) -> Self {
-        Self::new(
-            ErrorKind::TruncatedPayload,
-            Detail::Bytes { needed, available },
-        )
+        Self::new(ErrorKind::TruncatedPayload {
+            needed_bytes: needed,
+            available_bytes: available,
+        })
     }
 
     /// Returns the failure of a payload holding bytes past the fields it reads
     #[must_use]
     pub const fn trailing_payload(needed: u64, available: u64) -> Self {
-        Self::new(
-            ErrorKind::TrailingPayload,
-            Detail::Bytes { needed, available },
-        )
+        Self::new(ErrorKind::TrailingPayload {
+            needed_bytes: needed,
+            available_bytes: available,
+        })
     }
 
     /// Returns the failure of a buffer that ends inside what is written into it
     #[must_use]
     pub const fn truncated_buffer(needed: u64, available: u64) -> Self {
-        Self::new(
-            ErrorKind::TruncatedBuffer,
-            Detail::Bytes { needed, available },
-        )
+        Self::new(ErrorKind::TruncatedBuffer {
+            needed_bytes: needed,
+            available_bytes: available,
+        })
     }
 
     /// Returns the failure of a buffer holding bytes past the fields a box wrote
     #[must_use]
     pub const fn trailing_buffer(needed: u64, available: u64) -> Self {
-        Self::new(
-            ErrorKind::TrailingBuffer,
-            Detail::Bytes { needed, available },
-        )
+        Self::new(ErrorKind::TrailingBuffer {
+            needed_bytes: needed,
+            available_bytes: available,
+        })
     }
 
     /// Returns the failure of a buffer that is not the length a payload declared
     #[must_use]
     pub const fn buffer_length_mismatch(declared: u64, offered: u64) -> Self {
-        Self::new(
-            ErrorKind::BufferLengthMismatch,
-            Detail::Bytes {
-                needed: declared,
-                available: offered,
-            },
-        )
+        Self::new(ErrorKind::BufferLengthMismatch {
+            needed_bytes: declared,
+            available_bytes: offered,
+        })
     }
 
     /// Returns the failure of a value wider than the field it was given to
@@ -173,106 +160,91 @@ impl Error {
             FieldWidth::Extended => 8,
         };
 
-        Self::new(
-            ErrorKind::OutOfRange,
-            Detail::OutOfRange {
-                value,
-                width: field_bytes,
-            },
-        )
+        Self::new(ErrorKind::OutOfRange {
+            value,
+            needed_bytes: field_bytes,
+        })
     }
 
     /// Returns the failure of a full box declaring flags the spec forbids together
     #[must_use]
     pub const fn conflicting_flags(flags: u32) -> Self {
-        Self::new(ErrorKind::ConflictingFlags, Detail::Flags(flags))
+        Self::new(ErrorKind::ConflictingFlags { flags })
     }
 
     /// Returns the failure of a field the spec counts from 1 holding 0
     #[must_use]
     pub const fn zero_index() -> Self {
-        Self::new(ErrorKind::ZeroIndex, Detail::Nothing)
+        Self::new(ErrorKind::ZeroIndex)
     }
 
     /// Returns the failure of a container lacking a child the spec marks mandatory
     #[must_use]
     pub const fn missing_mandatory_box(box_type: BoxType) -> Self {
-        Self::about(ErrorKind::MissingMandatoryBox, box_type)
+        Self::new(ErrorKind::MissingMandatoryBox { box_type })
     }
 
     /// Returns the failure of a container holding more of a child than it may
     #[must_use]
     pub const fn duplicate_box(box_type: BoxType) -> Self {
-        Self::about(ErrorKind::DuplicateBox, box_type)
+        Self::new(ErrorKind::DuplicateBox { box_type })
     }
 
     /// Returns the failure of a container holding a child a field of it forbids
     #[must_use]
     pub const fn forbidden_child_box(box_type: BoxType) -> Self {
-        Self::about(ErrorKind::ForbiddenChildBox, box_type)
+        Self::new(ErrorKind::ForbiddenChildBox { box_type })
     }
 
     /// Returns the failure of a container holding none of the boxes it must hold one of
     #[must_use]
     pub const fn missing_alternative_box(alternatives: &'static [BoxType]) -> Self {
-        Self::new(
-            ErrorKind::MissingAlternativeBox,
-            Detail::Alternatives(alternatives),
-        )
+        Self::new(ErrorKind::MissingAlternativeBox { alternatives })
     }
 
     /// Returns the failure of a container holding more than one of the boxes it may hold one of
     #[must_use]
     pub const fn duplicate_alternative_box(alternatives: &'static [BoxType]) -> Self {
-        Self::new(
-            ErrorKind::DuplicateAlternativeBox,
-            Detail::Alternatives(alternatives),
-        )
+        Self::new(ErrorKind::DuplicateAlternativeBox { alternatives })
     }
 
     /// Returns the failure of a count that disagrees with the entries it frames
     #[must_use]
     pub const fn entry_count_mismatch(declared: u64, actual: u64) -> Self {
-        Self::new(
-            ErrorKind::EntryCountMismatch,
-            Detail::Entries {
-                needed: declared,
-                available: actual,
-            },
-        )
+        Self::new(ErrorKind::EntryCountMismatch {
+            needed_entries: declared,
+            available_entries: actual,
+        })
     }
 
     /// Returns the failure of a container holding a box this implementation does not read
     #[must_use]
     pub const fn unsupported_box(box_type: BoxType) -> Self {
-        Self::about(ErrorKind::UnsupportedBox, box_type)
+        Self::new(ErrorKind::UnsupportedBox { box_type })
     }
 
     /// Returns the failure of a full box declaring a version the box does not read
     #[must_use]
     pub const fn unsupported_version(version: u8) -> Self {
-        Self::new(ErrorKind::UnsupportedVersion, Detail::Version(version))
+        Self::new(ErrorKind::UnsupportedVersion { version })
     }
 
     /// Returns the failure of a box declaring a field size the box does not read
     #[must_use]
     pub const fn unsupported_field_size(field_size: u8) -> Self {
-        Self::new(
-            ErrorKind::UnsupportedFieldSize,
-            Detail::FieldSize(field_size),
-        )
+        Self::new(ErrorKind::UnsupportedFieldSize { field_size })
     }
 
     /// Returns the failure of a full box declaring flags the box does not read
     #[must_use]
     pub const fn unsupported_flags(flags: u32) -> Self {
-        Self::new(ErrorKind::UnsupportedFlags, Detail::Flags(flags))
+        Self::new(ErrorKind::UnsupportedFlags { flags })
     }
 
     /// Returns the failure of a box stating a value the box does not read in one of its fields
     #[must_use]
     pub const fn unsupported_value() -> Self {
-        Self::new(ErrorKind::UnsupportedValue, Detail::Nothing)
+        Self::new(ErrorKind::UnsupportedValue)
     }
 
     /// Returns the failure with `container` added to the boxes it was reached through
@@ -290,7 +262,7 @@ impl Error {
         self
     }
 
-    /// Returns what went wrong
+    /// Returns what went wrong, with the values that describe it
     #[must_use]
     pub const fn kind(self) -> ErrorKind {
         self.kind
@@ -305,178 +277,6 @@ impl Error {
     /// Returns the boxes the failure was reached through, outermost first
     pub fn containers(self) -> impl Iterator<Item = FourCC> {
         self.containers.into_iter().rev().flatten()
-    }
-
-    /// Returns the type of the box the failure names, for the kinds that name one
-    #[must_use]
-    pub const fn box_type(self) -> Option<BoxType> {
-        self.box_type
-    }
-
-    /// Returns the type the input holds, for the kinds that name what was there
-    #[must_use]
-    pub const fn found_box_type(self) -> Option<BoxType> {
-        match self.detail {
-            Detail::FoundBoxType(found) => Some(found),
-            Detail::Nothing
-            | Detail::Bytes { .. }
-            | Detail::Entries { .. }
-            | Detail::Version(_)
-            | Detail::Flags(_)
-            | Detail::OutOfRange { .. }
-            | Detail::Alternatives(_)
-            | Detail::FieldSize(_) => None,
-        }
-    }
-
-    /// Returns the box types a failure names one of, for the kinds that name a set
-    #[must_use]
-    pub const fn alternatives(self) -> Option<&'static [BoxType]> {
-        match self.detail {
-            Detail::Alternatives(alternatives) => Some(alternatives),
-            Detail::Nothing
-            | Detail::Bytes { .. }
-            | Detail::Entries { .. }
-            | Detail::Version(_)
-            | Detail::Flags(_)
-            | Detail::OutOfRange { .. }
-            | Detail::FoundBoxType(_)
-            | Detail::FieldSize(_) => None,
-        }
-    }
-
-    /// Returns the bytes the failure required, for the kinds that count bytes
-    ///
-    /// For [`OutOfRange`](ErrorKind::OutOfRange) this is the width of the field
-    /// the value did not fit.
-    #[must_use]
-    pub const fn needed_bytes(self) -> Option<u64> {
-        match self.detail {
-            Detail::Bytes { needed, .. } => Some(needed),
-            Detail::OutOfRange { width, .. } => Some(width),
-            Detail::Nothing
-            | Detail::Entries { .. }
-            | Detail::Version(_)
-            | Detail::Flags(_)
-            | Detail::FoundBoxType(_)
-            | Detail::Alternatives(_)
-            | Detail::FieldSize(_) => None,
-        }
-    }
-
-    /// Returns the bytes the failure had to hand, for the kinds that count bytes
-    ///
-    /// For [`SizeBelowHeader`](ErrorKind::SizeBelowHeader) this is the total the
-    /// `size` or `largesize` field declared.
-    #[must_use]
-    pub const fn available_bytes(self) -> Option<u64> {
-        match self.detail {
-            Detail::Bytes { available, .. } => Some(available),
-            Detail::Nothing
-            | Detail::Entries { .. }
-            | Detail::Version(_)
-            | Detail::Flags(_)
-            | Detail::OutOfRange { .. }
-            | Detail::FoundBoxType(_)
-            | Detail::Alternatives(_)
-            | Detail::FieldSize(_) => None,
-        }
-    }
-
-    /// Returns the entries the failure required, for the kinds that count entries
-    #[must_use]
-    pub const fn needed_entries(self) -> Option<u64> {
-        match self.detail {
-            Detail::Entries { needed, .. } => Some(needed),
-            Detail::Nothing
-            | Detail::Bytes { .. }
-            | Detail::Version(_)
-            | Detail::Flags(_)
-            | Detail::OutOfRange { .. }
-            | Detail::FoundBoxType(_)
-            | Detail::Alternatives(_)
-            | Detail::FieldSize(_) => None,
-        }
-    }
-
-    /// Returns the entries the failure had to hand, for the kinds that count entries
-    #[must_use]
-    pub const fn available_entries(self) -> Option<u64> {
-        match self.detail {
-            Detail::Entries { available, .. } => Some(available),
-            Detail::Nothing
-            | Detail::Bytes { .. }
-            | Detail::Version(_)
-            | Detail::Flags(_)
-            | Detail::OutOfRange { .. }
-            | Detail::FoundBoxType(_)
-            | Detail::Alternatives(_)
-            | Detail::FieldSize(_) => None,
-        }
-    }
-
-    /// Returns the version a full box declared, for the kinds that name one
-    #[must_use]
-    pub const fn version(self) -> Option<u8> {
-        match self.detail {
-            Detail::Version(version) => Some(version),
-            Detail::Nothing
-            | Detail::Bytes { .. }
-            | Detail::Entries { .. }
-            | Detail::Flags(_)
-            | Detail::OutOfRange { .. }
-            | Detail::FoundBoxType(_)
-            | Detail::Alternatives(_)
-            | Detail::FieldSize(_) => None,
-        }
-    }
-
-    /// Returns the flags a full box declared, for the kinds that name them
-    #[must_use]
-    pub const fn flags(self) -> Option<u32> {
-        match self.detail {
-            Detail::Flags(flags) => Some(flags),
-            Detail::Nothing
-            | Detail::Bytes { .. }
-            | Detail::Entries { .. }
-            | Detail::Version(_)
-            | Detail::OutOfRange { .. }
-            | Detail::FoundBoxType(_)
-            | Detail::Alternatives(_)
-            | Detail::FieldSize(_) => None,
-        }
-    }
-
-    /// Returns the width in bits a box declared its entries in, for the kinds that name one
-    #[must_use]
-    pub const fn field_size(self) -> Option<u8> {
-        match self.detail {
-            Detail::FieldSize(field_size) => Some(field_size),
-            Detail::Nothing
-            | Detail::Bytes { .. }
-            | Detail::Entries { .. }
-            | Detail::Version(_)
-            | Detail::Flags(_)
-            | Detail::OutOfRange { .. }
-            | Detail::FoundBoxType(_)
-            | Detail::Alternatives(_) => None,
-        }
-    }
-
-    /// Returns the value a field was given, for the kinds that name one
-    #[must_use]
-    pub const fn value(self) -> Option<u64> {
-        match self.detail {
-            Detail::OutOfRange { value, .. } => Some(value),
-            Detail::Nothing
-            | Detail::Bytes { .. }
-            | Detail::Entries { .. }
-            | Detail::Version(_)
-            | Detail::Flags(_)
-            | Detail::FoundBoxType(_)
-            | Detail::Alternatives(_)
-            | Detail::FieldSize(_) => None,
-        }
     }
 }
 
@@ -497,158 +297,136 @@ impl fmt::Display for Error {
             formatter.write_str(": ")?;
         }
 
-        let needed = self.needed_bytes().unwrap_or_default();
-        let available = self.available_bytes().unwrap_or_default();
-        let named = Named(self.box_type);
-        let found = Named(self.found_box_type());
-        let listed = Listed(self.alternatives().unwrap_or_default());
         match self.kind {
-            ErrorKind::TruncatedHeader => write!(
+            ErrorKind::TruncatedHeader {
+                needed_bytes,
+                available_bytes,
+            } => write!(
                 formatter,
-                "box header of {needed} bytes cut short by an input of {available}"
+                "box header of {needed_bytes} bytes cut short by an input of {available_bytes}"
             ),
-            ErrorKind::SizeBelowHeader => write!(
+            ErrorKind::SizeBelowHeader {
+                needed_bytes,
+                available_bytes,
+            } => write!(
                 formatter,
-                "box declares a total of {available} bytes, below its {needed}-byte header"
+                "box declares a total of {available_bytes} bytes, below its {needed_bytes}-byte \
+                 header"
             ),
-            ErrorKind::TruncatedBox => write!(
+            ErrorKind::TruncatedBox {
+                needed_bytes,
+                available_bytes,
+            } => write!(
                 formatter,
-                "box of {needed} bytes cut short by an input of {available}"
+                "box of {needed_bytes} bytes cut short by an input of {available_bytes}"
             ),
-            ErrorKind::BoxTypeMismatch => write!(
+            ErrorKind::BoxTypeMismatch {
+                box_type,
+                found_box_type,
+            } => write!(
                 formatter,
-                "input holds a {found}box where a {named}box was expected"
+                "input holds a {found_box_type} box where a {box_type} box was expected"
             ),
-            ErrorKind::TruncatedPayload => write!(
+            ErrorKind::TruncatedPayload {
+                needed_bytes,
+                available_bytes,
+            } => write!(
                 formatter,
-                "box payload of {needed} bytes cut short by an input of {available}"
+                "box payload of {needed_bytes} bytes cut short by an input of {available_bytes}"
             ),
-            ErrorKind::TrailingPayload => write!(
+            ErrorKind::TrailingPayload {
+                needed_bytes,
+                available_bytes,
+            } => write!(
                 formatter,
                 "box payload leaves {} bytes past the fields it holds",
-                available.saturating_sub(needed)
+                available_bytes.saturating_sub(needed_bytes)
             ),
-            ErrorKind::TruncatedBuffer => write!(
+            ErrorKind::TruncatedBuffer {
+                needed_bytes,
+                available_bytes,
+            } => write!(
                 formatter,
-                "value of {needed} bytes needs a buffer at least that long, not {available}"
+                "value of {needed_bytes} bytes needs a buffer at least that long, not \
+                 {available_bytes}"
             ),
-            ErrorKind::TrailingBuffer => write!(
+            ErrorKind::TrailingBuffer {
+                needed_bytes,
+                available_bytes,
+            } => write!(
                 formatter,
                 "buffer holds {} bytes past the fields the box wrote",
-                available.saturating_sub(needed)
+                available_bytes.saturating_sub(needed_bytes)
             ),
-            ErrorKind::BufferLengthMismatch => write!(
+            ErrorKind::BufferLengthMismatch {
+                needed_bytes,
+                available_bytes,
+            } => write!(
                 formatter,
-                "box payload of {needed} bytes needs a buffer of that length, not {available}"
+                "box payload of {needed_bytes} bytes needs a buffer of that length, not \
+                 {available_bytes}"
             ),
-            ErrorKind::OutOfRange => write!(
+            ErrorKind::OutOfRange {
+                value,
+                needed_bytes,
+            } => write!(
                 formatter,
-                "value {} does not fit the {needed} bytes of the field it was given to",
-                self.value().unwrap_or_default()
+                "value {value} does not fit the {needed_bytes} bytes of the field it was given to"
             ),
-            ErrorKind::ConflictingFlags => write!(
+            ErrorKind::ConflictingFlags { flags } => write!(
                 formatter,
-                "full box declares flags {:#08x}, which the spec does not allow together",
-                self.flags().unwrap_or_default()
+                "full box declares flags {flags:#08x}, which the spec does not allow together"
             ),
             ErrorKind::ZeroIndex => {
                 formatter.write_str("box holds 0 in a field the spec counts from 1")
             }
-            ErrorKind::MissingMandatoryBox => {
-                write!(formatter, "container holds no mandatory {named}box")
+            ErrorKind::MissingMandatoryBox { box_type } => {
+                write!(formatter, "container holds no mandatory {box_type} box")
             }
-            ErrorKind::DuplicateBox => write!(
+            ErrorKind::DuplicateBox { box_type } => write!(
                 formatter,
-                "container holds more than one {named}box, which may appear once"
+                "container holds more than one {box_type} box, which may appear once"
             ),
-            ErrorKind::ForbiddenChildBox => write!(
+            ErrorKind::ForbiddenChildBox { box_type } => write!(
                 formatter,
-                "container holds a {named}box that a field of it forbids"
+                "container holds a {box_type} box that a field of it forbids"
             ),
-            ErrorKind::MissingAlternativeBox => write!(
+            ErrorKind::MissingAlternativeBox { alternatives } => write!(
                 formatter,
-                "container holds none of the {listed} boxes, one of which it must hold"
+                "container holds none of the {} boxes, one of which it must hold",
+                Listed(alternatives)
             ),
-            ErrorKind::DuplicateAlternativeBox => write!(
+            ErrorKind::DuplicateAlternativeBox { alternatives } => write!(
                 formatter,
-                "container holds more than one of the {listed} boxes, of which one may appear"
+                "container holds more than one of the {} boxes, of which one may appear",
+                Listed(alternatives)
             ),
-            ErrorKind::UnsupportedBox => write!(
+            ErrorKind::UnsupportedBox { box_type } => write!(
                 formatter,
-                "container holds a {named}box, which this implementation does not read"
+                "container holds a {box_type} box, which this implementation does not read"
             ),
-            ErrorKind::EntryCountMismatch => write!(
+            ErrorKind::EntryCountMismatch {
+                needed_entries,
+                available_entries,
+            } => write!(
                 formatter,
-                "box declares {} entries but holds {}",
-                self.needed_entries().unwrap_or_default(),
-                self.available_entries().unwrap_or_default()
+                "box declares {needed_entries} entries but holds {available_entries}"
             ),
-            ErrorKind::UnsupportedVersion => write!(
+            ErrorKind::UnsupportedVersion { version } => write!(
                 formatter,
-                "full box declares version {}, which this box does not read",
-                self.version().unwrap_or_default()
+                "full box declares version {version}, which this box does not read"
             ),
-            ErrorKind::UnsupportedFieldSize => write!(
+            ErrorKind::UnsupportedFieldSize { field_size } => write!(
                 formatter,
-                "box declares entries {} bits wide, which this box does not read",
-                self.field_size().unwrap_or_default()
+                "box declares entries {field_size} bits wide, which this box does not read"
             ),
-            ErrorKind::UnsupportedFlags => write!(
+            ErrorKind::UnsupportedFlags { flags } => write!(
                 formatter,
-                "full box declares flags {:#08x}, which this box does not read",
-                self.flags().unwrap_or_default()
+                "full box declares flags {flags:#08x}, which this box does not read"
             ),
             ErrorKind::UnsupportedValue => formatter
                 .write_str("box states a value this box does not read in one of its fields"),
         }
-    }
-}
-
-impl fmt::Debug for Error {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut fields = formatter.debug_struct("Error");
-        fields.field("kind", &self.kind);
-        fields.field("category", &self.category());
-
-        if self.dropped_containers || self.containers().next().is_some() {
-            fields.field("containers", &Containers(*self));
-        }
-        if let Some(box_type) = self.box_type {
-            fields.field("box_type", &box_type);
-        }
-
-        match self.detail {
-            Detail::Nothing => {}
-            Detail::Bytes { needed, available } => {
-                fields.field("needed_bytes", &needed);
-                fields.field("available_bytes", &available);
-            }
-            Detail::Entries { needed, available } => {
-                fields.field("needed_entries", &needed);
-                fields.field("available_entries", &available);
-            }
-            Detail::Version(version) => {
-                fields.field("version", &version);
-            }
-            Detail::Flags(flags) => {
-                fields.field("flags", &flags);
-            }
-            Detail::FieldSize(field_size) => {
-                fields.field("field_size", &field_size);
-            }
-            Detail::OutOfRange { value, width } => {
-                fields.field("value", &value);
-                fields.field("needed_bytes", &width);
-            }
-            Detail::FoundBoxType(found) => {
-                fields.field("found_box_type", &found);
-            }
-            Detail::Alternatives(alternatives) => {
-                fields.field("alternatives", &alternatives);
-            }
-        }
-
-        fields.finish()
     }
 }
 
@@ -710,211 +488,6 @@ impl InContainer for Error {
     }
 }
 
-/// What a failure of reading or writing a box is
-///
-/// The vocabulary is this crate's own: reading one box off a slice and writing
-/// one into a buffer name their failures here. A layer above holds kinds of its
-/// own for the failures it detects, and carries these through whole rather than
-/// translating them. Each kind states which of the values an [`Error`] carries
-/// it brings, and falls in one [`Category`], which
-/// [`Error::category`](Error::category) reports.
-///
-/// The situations a box reaches are added to as ISO/IEC 14496-12 is read
-/// further, so a match on this must leave room for kinds that are not here yet.
-#[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum ErrorKind {
-    /// Input ends inside the header of a box
-    ///
-    /// [`needed_bytes`](Error::needed_bytes) is the length the header
-    /// reaches, [`available_bytes`](Error::available_bytes) the length
-    /// the input offered.
-    TruncatedHeader,
-    /// Total a box declares is smaller than the header it prefixes
-    ///
-    /// [`needed_bytes`](Error::needed_bytes) is the length the header
-    /// occupies, [`available_bytes`](Error::available_bytes) the total
-    /// the `size` or `largesize` field declares.
-    SizeBelowHeader,
-    /// Total a box declares overruns the input
-    ///
-    /// [`needed_bytes`](Error::needed_bytes) is the length the box
-    /// occupies, [`available_bytes`](Error::available_bytes) the length
-    /// the input offered.
-    TruncatedBox,
-    /// Box read as one type is of another
-    ///
-    /// [`box_type`](Error::box_type) is the type the box was read as,
-    /// [`found_box_type`](Error::found_box_type) the type the input holds.
-    BoxTypeMismatch,
-    /// Payload of a box ends inside a field
-    ///
-    /// [`needed_bytes`](Error::needed_bytes) is the length the fields
-    /// read so far require, [`available_bytes`](Error::available_bytes)
-    /// the length the payload offered.
-    TruncatedPayload,
-    /// Payload of a box holds bytes past the fields it reads
-    ///
-    /// [`needed_bytes`](Error::needed_bytes) is the length the fields
-    /// took, [`available_bytes`](Error::available_bytes) the length the
-    /// payload holds.
-    TrailingPayload,
-    /// Full box declares flags the spec does not allow together
-    ///
-    /// [`flags`](Error::flags) is the flags the box declares.
-    ConflictingFlags,
-    /// Field the spec counts from 1 holds 0
-    ZeroIndex,
-    /// Container lacks a child box the spec marks mandatory
-    ///
-    /// [`box_type`](Error::box_type) is the type of the child that is
-    /// missing.
-    MissingMandatoryBox,
-    /// Container holds more of a child box than its quantity allows
-    ///
-    /// [`box_type`](Error::box_type) is the type of the child held more
-    /// than once.
-    DuplicateBox,
-    /// Container holds a child box that a field of it forbids
-    ///
-    /// [`box_type`](Error::box_type) is the type of the child that is
-    /// forbidden.
-    ForbiddenChildBox,
-    /// Container holds none of the boxes the spec has it hold exactly one of
-    ///
-    /// [`alternatives`](Error::alternatives) is the box types the
-    /// container must hold one of.
-    MissingAlternativeBox,
-    /// Container holds more than one of the boxes the spec has it hold exactly one of
-    ///
-    /// [`alternatives`](Error::alternatives) is the box types the
-    /// container may hold one of.
-    DuplicateAlternativeBox,
-    /// Count a box declares does not match the entries it frames for itself
-    ///
-    /// [`needed_entries`](Error::needed_entries) is the count the
-    /// `entry_count` field declares,
-    /// [`available_entries`](Error::available_entries) the count the
-    /// payload holds.
-    EntryCountMismatch,
-    /// Container holds a box this implementation does not read
-    ///
-    /// [`box_type`](Error::box_type) is the type of the child that is
-    /// not read.
-    UnsupportedBox,
-    /// Full box declares a version the box does not read
-    ///
-    /// [`version`](Error::version) is the version the box declares.
-    UnsupportedVersion,
-    /// Full box declares flags the box does not read
-    ///
-    /// [`flags`](Error::flags) is the flags the box declares.
-    UnsupportedFlags,
-    /// Box declares its entries in a width the box does not read
-    ///
-    /// [`field_size`](Error::field_size) is the width in bits the box
-    /// declares.
-    UnsupportedFieldSize,
-    /// Box states a value the box does not read in one of its fields
-    UnsupportedValue,
-    /// Buffer ends inside the value being written into it
-    ///
-    /// [`needed_bytes`](Error::needed_bytes) is the length the value
-    /// requires, [`available_bytes`](Error::available_bytes) the length
-    /// the buffer offered.
-    TruncatedBuffer,
-    /// Buffer holds bytes past the fields a box wrote
-    ///
-    /// [`needed_bytes`](Error::needed_bytes) is the length the fields
-    /// wrote, [`available_bytes`](Error::available_bytes) the length the
-    /// buffer holds.
-    TrailingBuffer,
-    /// Buffer offered for a payload is not the length the payload declared
-    ///
-    /// [`needed_bytes`](Error::needed_bytes) is the length the payload
-    /// declares, [`available_bytes`](Error::available_bytes) the length
-    /// the buffer offered.
-    BufferLengthMismatch,
-    /// Value is wider than the field it was given to
-    ///
-    /// [`value`](Error::value) is the value the field was given,
-    /// [`needed_bytes`](Error::needed_bytes) the width of that field.
-    OutOfRange,
-}
-
-impl ErrorKind {
-    /// Returns what a caller does about a failure of this kind
-    pub(crate) const fn category(self) -> Category {
-        match self {
-            Self::TruncatedHeader
-            | Self::SizeBelowHeader
-            | Self::TruncatedBox
-            | Self::BoxTypeMismatch
-            | Self::TruncatedPayload
-            | Self::TrailingPayload
-            | Self::ConflictingFlags
-            | Self::ZeroIndex
-            | Self::MissingMandatoryBox
-            | Self::DuplicateBox
-            | Self::ForbiddenChildBox
-            | Self::MissingAlternativeBox
-            | Self::DuplicateAlternativeBox
-            | Self::EntryCountMismatch => Category::Malformed,
-            Self::UnsupportedBox
-            | Self::UnsupportedVersion
-            | Self::UnsupportedFlags
-            | Self::UnsupportedFieldSize
-            | Self::UnsupportedValue => Category::Unsupported,
-            Self::TruncatedBuffer
-            | Self::TrailingBuffer
-            | Self::BufferLengthMismatch
-            | Self::OutOfRange => Category::Usage,
-        }
-    }
-}
-
-/// What a caller does about a failure
-///
-/// A kind names one situation and there are many of them; this names what the
-/// situations have in common for whoever has to act on one. The three ask for
-/// three different things: a file that cannot be read, a file this
-/// implementation does not read, and a call that should not have been made.
-#[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum Category {
-    /// Boxes do not form what the format requires, and the file cannot stand as it is
-    ///
-    /// The file being read is malformed, or what is being written would lay
-    /// down one that is.
-    Malformed,
-    /// Format allows what the file holds, and this implementation does not read it
-    ///
-    /// The file is not at fault, so a caller may leave the box unread and carry
-    /// on with the ones it does read.
-    Unsupported,
-    /// Call was made with something the API does not take, or in an order it does not
-    ///
-    /// Nothing about the file is wrong; the code that made the call is. Writing
-    /// a value reports this as well: the buffer it is handed is the caller's to
-    /// size, and a value too wide for its field was built before it was written.
-    Usage,
-}
-
-/// Box type a failure names, as `Display` writes it before the word `box`
-///
-/// A failure that names no box leaves the word standing on its own, so the line
-/// reads either way.
-struct Named(Option<BoxType>);
-
-impl fmt::Display for Named {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            Some(box_type) => write!(formatter, "{box_type} "),
-            None => Ok(()),
-        }
-    }
-}
-
 /// Box types a failure names one of, as `Display` lists them
 struct Listed(&'static [BoxType]);
 
@@ -933,57 +506,20 @@ impl fmt::Display for Listed {
     }
 }
 
-/// Boxes a failure was reached through, as `Debug` lists them
-struct Containers(Error);
-
-impl fmt::Debug for Containers {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut list = formatter.debug_list();
-        if self.0.dropped_containers {
-            list.entry(&"...");
-        }
-
-        list.entries(self.0.containers()).finish()
-    }
-}
-
-/// Values a failure carries, as its kind calls for
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum Detail {
-    /// Kind that stands on its own, or names a box and nothing more
-    Nothing,
-    /// Bytes required against bytes to hand
-    Bytes { needed: u64, available: u64 },
-    /// Entries required against entries to hand
-    Entries { needed: u64, available: u64 },
-    /// Version a full box declared
-    Version(u8),
-    /// Flags a full box declared
-    Flags(u32),
-    /// Width in bits a box declared its entries in
-    FieldSize(u8),
-    /// Value a field was given, against the bytes of that field
-    OutOfRange { value: u64, width: u64 },
-    /// Box type an input holds where another was to be read
-    FoundBoxType(BoxType),
-    /// Box types a container holds exactly one of
-    Alternatives(&'static [BoxType]),
-}
-
 #[cfg(test)]
 mod tests {
-    use alloc::format;
     use alloc::string::ToString as _;
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use super::{Category, Error};
+    use super::{Error, ErrorKind};
     use crate::codec::field::FieldWidth;
     use crate::data_types::fourcc::FourCC;
     use crate::framing::box_type::BoxType;
 
     /// Box types the sample table of ISO/IEC 14496-12 §8.7.3.1 states its sample sizes with
-    const SAMPLE_SIZE_BOXES: &[BoxType] = &[BoxType::compact(*b"stsz"), BoxType::compact(*b"stz2")];
+    pub(super) const SAMPLE_SIZE_BOXES: &[BoxType] =
+        &[BoxType::compact(*b"stsz"), BoxType::compact(*b"stz2")];
 
     /// Box types the media information box of ISO/IEC 14496-12 §8.4.5 takes its media
     /// header from
@@ -1028,40 +564,14 @@ mod tests {
     }
 
     #[test]
-    fn a_failure_carries_only_the_values_its_kind_names() {
-        let error = Error::out_of_range(0x1_0000_0000, FieldWidth::Compact);
-
-        assert_eq!(error.value(), Some(0x1_0000_0000));
-        assert_eq!(error.needed_bytes(), Some(4));
-        assert_eq!(error.available_bytes(), None);
-        assert_eq!(error.version(), None);
-    }
-
-    #[test]
-    fn a_kind_falls_in_the_category_its_situation_asks_for() {
-        assert_eq!(Error::truncated_box(32, 24).category(), Category::Malformed);
+    fn a_value_out_of_range_names_the_bytes_of_the_field_it_was_given_to() {
         assert_eq!(
-            Error::unsupported_version(2).category(),
-            Category::Unsupported
+            Error::out_of_range(0x1_0000_0000, FieldWidth::Compact).kind(),
+            ErrorKind::OutOfRange {
+                value: 0x1_0000_0000,
+                needed_bytes: 4,
+            }
         );
-        assert_eq!(
-            Error::unsupported_box(BoxType::compact(*b"sgpd")).category(),
-            Category::Unsupported
-        );
-        assert_eq!(
-            Error::unsupported_field_size(12).category(),
-            Category::Unsupported
-        );
-        assert_eq!(
-            Error::missing_alternative_box(SAMPLE_SIZE_BOXES).category(),
-            Category::Malformed
-        );
-        assert_eq!(
-            Error::buffer_length_mismatch(4, 8).category(),
-            Category::Usage
-        );
-        assert_eq!(Error::zero_index().category(), Category::Malformed);
-        assert_eq!(Error::unsupported_value().category(), Category::Unsupported);
     }
 
     #[test]
@@ -1083,48 +593,60 @@ mod tests {
 
     #[test]
     fn a_failure_that_counts_entries_carries_both_counts() {
-        let error = Error::entry_count_mismatch(4, 2);
-
-        assert_eq!(error.needed_entries(), Some(4));
-        assert_eq!(error.available_entries(), Some(2));
-        assert_eq!(error.needed_bytes(), None);
+        assert_eq!(
+            Error::entry_count_mismatch(4, 2).kind(),
+            ErrorKind::EntryCountMismatch {
+                needed_entries: 4,
+                available_entries: 2,
+            }
+        );
     }
 
     #[test]
     fn a_failure_about_a_slot_several_box_types_fill_names_them_all() {
-        let error = Error::missing_alternative_box(SAMPLE_SIZE_BOXES);
-
-        assert_eq!(error.alternatives(), Some(SAMPLE_SIZE_BOXES));
-        assert_eq!(error.box_type(), None);
-        assert_eq!(Error::truncated_header(8, 4).alternatives(), None);
+        assert_eq!(
+            Error::missing_alternative_box(SAMPLE_SIZE_BOXES).kind(),
+            ErrorKind::MissingAlternativeBox {
+                alternatives: SAMPLE_SIZE_BOXES,
+            }
+        );
     }
 
     #[test]
     fn a_failure_about_one_box_names_its_type() {
-        let error = Error::missing_mandatory_box(BoxType::compact(*b"mvhd"));
-
-        assert_eq!(error.box_type(), Some(BoxType::compact(*b"mvhd")));
-        assert_eq!(Error::truncated_header(8, 4).box_type(), None);
+        assert_eq!(
+            Error::missing_mandatory_box(BoxType::compact(*b"mvhd")).kind(),
+            ErrorKind::MissingMandatoryBox {
+                box_type: BoxType::compact(*b"mvhd"),
+            }
+        );
     }
 
     #[test]
     fn a_failure_of_a_box_read_as_another_type_names_both_types() {
-        let error =
-            Error::box_type_mismatch(BoxType::compact(*b"moov"), BoxType::compact(*b"moof"));
-
-        assert_eq!(error.box_type(), Some(BoxType::compact(*b"moov")));
-        assert_eq!(error.found_box_type(), Some(BoxType::compact(*b"moof")));
-        assert_eq!(Error::truncated_header(8, 4).found_box_type(), None);
+        assert_eq!(
+            Error::box_type_mismatch(BoxType::compact(*b"moov"), BoxType::compact(*b"moof")).kind(),
+            ErrorKind::BoxTypeMismatch {
+                box_type: BoxType::compact(*b"moov"),
+                found_box_type: BoxType::compact(*b"moof"),
+            }
+        );
     }
 
     #[test]
     fn a_failure_of_a_full_box_carries_what_the_box_declared() {
-        assert_eq!(Error::unsupported_version(2).version(), Some(2));
         assert_eq!(
-            Error::conflicting_flags(0x0000_0404).flags(),
-            Some(0x0000_0404)
+            Error::unsupported_version(2).kind(),
+            ErrorKind::UnsupportedVersion { version: 2 }
         );
-        assert_eq!(Error::unsupported_field_size(12).field_size(), Some(12));
+        assert_eq!(
+            Error::conflicting_flags(0x0000_0404).kind(),
+            ErrorKind::ConflictingFlags { flags: 0x0000_0404 }
+        );
+        assert_eq!(
+            Error::unsupported_field_size(12).kind(),
+            ErrorKind::UnsupportedFieldSize { field_size: 12 }
+        );
     }
 
     #[test]
@@ -1234,16 +756,6 @@ mod tests {
         assert_eq!(
             Error::out_of_range(0x1_0000_0000, FieldWidth::Compact).to_string(),
             "value 4294967296 does not fit the 4 bytes of the field it was given to"
-        );
-    }
-
-    #[test]
-    fn debug_leaves_out_the_values_a_kind_does_not_carry() {
-        let error = Error::unsupported_version(2);
-
-        assert_eq!(
-            format!("{error:?}"),
-            "Error { kind: UnsupportedVersion, category: Unsupported, version: 2 }"
         );
     }
 }

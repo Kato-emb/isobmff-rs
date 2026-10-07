@@ -40,14 +40,11 @@ pub use kind::ErrorKind;
 /// // A failure of one box is carried through whole
 /// let missing = isobmff_core::Error::missing_mandatory_box(BoxType::compact(*b"trex"));
 /// let carried = Error::from(missing);
-/// assert_eq!(
+/// assert!(matches!(
 ///     carried.kind(),
-///     ErrorKind::Box(isobmff_core::ErrorKind::MissingMandatoryBox)
-/// );
-/// assert_eq!(
-///     carried.box_error().and_then(|box_error| box_error.box_type()),
-///     Some(BoxType::compact(*b"trex"))
-/// );
+///     ErrorKind::Box(isobmff_core::ErrorKind::MissingMandatoryBox { .. })
+/// ));
+/// assert_eq!(carried.box_error(), Some(missing));
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Error {

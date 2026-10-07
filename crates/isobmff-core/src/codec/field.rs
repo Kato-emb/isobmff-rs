@@ -440,8 +440,9 @@ impl<'buffer> FieldWriter<'buffer> {
     ///   inside the field.
     /// * [`OutOfRange`](crate::ErrorKind::OutOfRange): `value` is wider than the
     ///   field, which leaves nothing to write. The error's
-    ///   [`value`](Error::value) is the 64 bits of `value` in two's complement,
-    ///   so a negative `value` reads as 2^64 plus it.
+    ///   [`value`](crate::ErrorKind::OutOfRange::value) is the 64 bits of
+    ///   `value` in two's complement, so a negative `value` reads as 2^64 plus
+    ///   it.
     pub fn write_signed(&mut self, width: FieldWidth, value: i64) -> Result<(), Error> {
         match width {
             FieldWidth::Compact => {
