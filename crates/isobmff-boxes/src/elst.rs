@@ -21,15 +21,42 @@ const EMPTY_EDIT_MEDIA_TIME: i64 = -1;
 
 /// Rate an edit plays its media at
 ///
-/// ISO/IEC 14496-12 §8.6.6.3 has the `media_rate` take 0 or 1, written as a
-/// `media_rate_integer` of that value and a `media_rate_fraction` of 0.
+/// ISO/IEC 14496-12 §8.6.6.2 writes the `media_rate` as a `media_rate_integer`
+/// and a `media_rate_fraction` of 0, and §8.6.6.3 has it take 0,
+/// [`DWELL`](Self::DWELL), or 1, [`NORMAL`](Self::NORMAL). Those two are the
+/// only rates a caller builds. Any other comes from decoding alone, as the
+/// two fields the box carries.
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum MediaRate {
+pub struct MediaRate {
+    media_rate_integer: i16,
+    media_rate_fraction: i16,
+}
+
+impl MediaRate {
     /// Media at the `media_time` is held for the whole segment, a dwell
-    Dwell,
+    pub const DWELL: Self = Self {
+        media_rate_integer: 0,
+        media_rate_fraction: 0,
+    };
+
     /// Media plays at its own rate
-    Normal,
+    pub const NORMAL: Self = Self {
+        media_rate_integer: 1,
+        media_rate_fraction: 0,
+    };
+
+    /// Returns the integer part of the rate, `media_rate_integer`
+    #[must_use]
+    pub const fn media_rate_integer(&self) -> i16 {
+        self.media_rate_integer
+    }
+
+    /// Returns the field written after the integer part, `media_rate_fraction`
+    #[must_use]
+    pub const fn media_rate_fraction(&self) -> i16 {
+        self.media_rate_fraction
+    }
 }
 
 /// One entry of the table an [`EditListBox`] holds
@@ -161,8 +188,7 @@ impl BoxDecode for EditListBox {
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the payload
     ///   ends inside a field of the box or inside one of its entries.
     /// * [`UnsupportedValue`](isobmff_core::ErrorKind::UnsupportedValue): an entry
-    ///   states a negative `media_time` other than -1, a `media_rate_integer` other
-    ///   than 0 or 1, or a `media_rate_fraction` other than 0.
+    ///   states a negative `media_time` other than -1.
     /// * [`EntryCountMismatch`](isobmff_core::ErrorKind::EntryCountMismatch): the
     ///   `entry_count` field disagrees with the entries that follow it.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
@@ -183,10 +209,9 @@ impl BoxDecode for EditListBox {
                     Some(u64::try_from(media_time).map_err(|_| Error::unsupported_value())?)
                 }
             };
-            let media_rate = match (reader.read_i16()?, reader.read_i16()?) {
-                (0, 0) => MediaRate::Dwell,
-                (1, 0) => MediaRate::Normal,
-                _ => return Err(Error::unsupported_value()),
+            let media_rate = MediaRate {
+                media_rate_integer: reader.read_i16()?,
+                media_rate_fraction: reader.read_i16()?,
             };
 
             entries.push(EditListEntry {
@@ -238,15 +263,11 @@ impl BoxEncode for EditListBox {
                 Some(media_time) => i64::try_from(media_time)
                     .map_err(|_| Error::out_of_range(media_time, FieldWidth::Extended))?,
             };
-            let media_rate_integer = match entry.media_rate {
-                MediaRate::Dwell => 0,
-                MediaRate::Normal => 1,
-            };
 
             writer.write_unsigned(width, entry.segment_duration)?;
             writer.write_signed(width, media_time)?;
-            writer.write_i16(media_rate_integer)?;
-            writer.write_i16(0)?;
+            writer.write_i16(entry.media_rate.media_rate_integer)?;
+            writer.write_i16(entry.media_rate.media_rate_fraction)?;
         }
 
         Ok(())
@@ -265,8 +286,8 @@ pub(crate) mod tests {
     /// Edit list that starts the track 10 units into the movie and then plays its media from 0
     pub(crate) fn edit_list() -> EditListBox {
         EditListBox::new(vec![
-            EditListEntry::new(10, None, MediaRate::Normal),
-            EditListEntry::new(3_000, Some(0), MediaRate::Normal),
+            EditListEntry::new(10, None, MediaRate::NORMAL),
+            EditListEntry::new(3_000, Some(0), MediaRate::NORMAL),
         ])
     }
 
@@ -304,9 +325,9 @@ pub(crate) mod tests {
 
         for (version, media_time, segment_duration) in edit_lists {
             let edit_list = EditListBox::new(vec![
-                EditListEntry::new(10, None, MediaRate::Normal),
-                EditListEntry::new(20, Some(media_time), MediaRate::Dwell),
-                EditListEntry::new(segment_duration, Some(0), MediaRate::Normal),
+                EditListEntry::new(10, None, MediaRate::NORMAL),
+                EditListEntry::new(20, Some(media_time), MediaRate::DWELL),
+                EditListEntry::new(segment_duration, Some(0), MediaRate::NORMAL),
             ]);
 
             let payload = encoded_payload(&edit_list);
@@ -321,7 +342,7 @@ pub(crate) mod tests {
         let edit_list = EditListBox::new(vec![EditListEntry::new(
             0,
             Some(u64::MAX),
-            MediaRate::Normal,
+            MediaRate::NORMAL,
         )]);
         let mut buffer = vec![0; usize::try_from(edit_list.payload_len()).unwrap()];
 
@@ -332,17 +353,31 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_rate_or_a_media_time_the_spec_does_not_give_is_rejected() {
-        for payload in [
-            payload_of_one_entry(0, 2, 0),
-            payload_of_one_entry(0, 1, 1),
-            payload_of_one_entry(-2, 1, 0),
-        ] {
-            assert_eq!(
-                EditListBox::decode_payload(&payload),
-                Err(Error::unsupported_value())
-            );
-        }
+    fn a_rate_the_spec_does_not_give_reads_as_its_two_fields_and_back_as_the_same_value() {
+        let payload = payload_of_one_entry(0, 0, 0x4000);
+
+        let edit_list = EditListBox::decode_payload(&payload).unwrap();
+
+        assert_eq!(
+            edit_list,
+            EditListBox::new(vec![EditListEntry::new(
+                10,
+                Some(0),
+                MediaRate {
+                    media_rate_integer: 0,
+                    media_rate_fraction: 0x4000,
+                },
+            )])
+        );
+        assert_eq!(encoded_payload(&edit_list), payload);
+    }
+
+    #[test]
+    fn a_media_time_the_spec_does_not_give_is_rejected() {
+        assert_eq!(
+            EditListBox::decode_payload(&payload_of_one_entry(-2, 1, 0)),
+            Err(Error::unsupported_value())
+        );
     }
 
     #[test]
@@ -373,8 +408,8 @@ pub(crate) mod tests {
     #[test]
     fn the_duration_is_the_sum_of_the_segments_while_it_fits_in_64_bits() {
         let overflowing = EditListBox::new(vec![
-            EditListEntry::new(u64::MAX, Some(0), MediaRate::Normal),
-            EditListEntry::new(1, Some(0), MediaRate::Normal),
+            EditListEntry::new(u64::MAX, Some(0), MediaRate::NORMAL),
+            EditListEntry::new(1, Some(0), MediaRate::NORMAL),
         ]);
 
         assert_eq!(edit_list().duration(), Some(3_010));
