@@ -29,7 +29,7 @@ use crate::{Error, WantedInput};
 ///   declares the file over. The samples completed before it are still taken
 ///   from [`poll_sample`](Self::poll_sample), and no read is wanted.
 /// * Once the file is declared over, input or a second declaration is
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished), until
+///   [`AlreadyFinished`](crate::Error::AlreadyFinished), until
 ///   [`restart`](Self::restart) takes the reading up again.
 #[derive(Debug)]
 pub(crate) struct DemuxInput {
@@ -68,13 +68,13 @@ impl DemuxInput {
     ///
     /// # Errors
     ///
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the file was
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the file was
     ///   declared over.
     /// * The failure [`record`](Self::record) kept.
     const fn reading(&self) -> Result<(), Error> {
         match self.state {
             State::Reading => Ok(()),
-            State::Finished => Err(Error::already_finished()),
+            State::Finished => Err(Error::AlreadyFinished),
             State::Failed(failure) => Err(failure),
         }
     }
@@ -101,9 +101,9 @@ impl DemuxInput {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::ErrorKind::Sample): what the samples make of the
+    /// * [`Sample`](crate::Error::Sample): what the samples make of the
     ///   bytes they lack.
-    /// * [`UnwantedInput`](crate::ErrorKind::UnwantedInput): `offset` is
+    /// * [`UnwantedInput`](crate::Error::UnwantedInput): `offset` is
     ///   neither where the input taken in order stands nor where the bytes the
     ///   samples lack start. Nothing is recorded for it.
     /// * What [`reading`](Self::reading) reports.
@@ -120,7 +120,11 @@ impl DemuxInput {
 
                 return self.record(gathered);
             }
-            InputRoute::Unwanted => return Err(Error::unwanted_input(offset)),
+            InputRoute::Unwanted => {
+                return Err(Error::UnwantedInput {
+                    input_offset: offset,
+                });
+            }
         }
 
         self.position.advance(input.len());
@@ -177,7 +181,7 @@ impl DemuxInput {
     /// # Errors
     ///
     /// * The failure `checked` carries.
-    /// * [`Sample`](crate::ErrorKind::Sample): a sample is short of the data
+    /// * [`Sample`](crate::Error::Sample): a sample is short of the data
     ///   it claimed.
     /// * What [`reading`](Self::reading) reports.
     pub(crate) fn finish(&mut self, checked: Result<(), Error>) -> Result<(), Error> {
@@ -303,7 +307,7 @@ mod tests {
     #[test]
     fn a_failure_of_reading_the_events_is_reported_before_the_failure_of_the_framing() {
         let mut input = DemuxInput::new(SampleReaderLimits::new());
-        let failure = Error::unwanted_input(0);
+        let failure = Error::UnwantedInput { input_offset: 0 };
 
         input.handle_input(0, BROKEN_BOX).unwrap();
 
@@ -351,7 +355,10 @@ mod tests {
     fn input_at_an_offset_neither_in_order_nor_wanted_is_refused_and_the_file_reads_on() {
         let mut input = read_with_a_sample_at(FREE_BOX, 8);
 
-        assert_eq!(input.handle_input(9, b"AMP"), Err(Error::unwanted_input(9)));
+        assert_eq!(
+            input.handle_input(9, b"AMP"),
+            Err(Error::UnwantedInput { input_offset: 9 })
+        );
         assert_eq!(input.handle_input(8, b"SAMP"), Ok(()));
         assert_eq!(input.finish_framing(), Ok(()));
         assert_eq!(input.finish(Ok(())), Ok(()));
@@ -373,11 +380,8 @@ mod tests {
         input.finish(Ok(())).unwrap();
 
         assert_eq!(input.wanted_input(), None);
-        assert_eq!(
-            input.handle_input(0, FREE_BOX),
-            Err(Error::already_finished())
-        );
-        assert_eq!(input.finish_framing(), Err(Error::already_finished()));
+        assert_eq!(input.handle_input(0, FREE_BOX), Err(Error::AlreadyFinished));
+        assert_eq!(input.finish_framing(), Err(Error::AlreadyFinished));
     }
 
     #[test]
@@ -387,10 +391,10 @@ mod tests {
         input.finish_framing().unwrap();
 
         assert!(matches!(
-            input.finish(Ok(())).map_err(Error::kind),
-            Err(crate::ErrorKind::Sample(
-                isobmff_sample::Error::UnfinishedSample { .. }
-            ))
+            input.finish(Ok(())),
+            Err(Error::Sample {
+                error: isobmff_sample::Error::UnfinishedSample { .. }
+            })
         ));
     }
 }

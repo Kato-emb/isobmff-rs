@@ -10,16 +10,16 @@ use isobmff_sample::SampleReaderLimits;
 /// * [`payload`](Self::payload): the most payload one box read into a value
 ///   may declare, all of which is gathered before the box is read. Past it
 ///   the box is
-///   [`PayloadLimitExceeded`](crate::ErrorKind::PayloadLimitExceeded).
+///   [`PayloadLimitExceeded`](crate::Error::PayloadLimitExceeded).
 /// * [`resolved_samples`](Self::resolved_samples): the most samples one
 ///   `moov` or one `moof` may declare, every track together. Past it the
 ///   box lays out none, as
 ///   [`SampleCountLimitExceeded`](isobmff_sample::Error::SampleCountLimitExceeded)
-///   carried on [`Sample`](crate::ErrorKind::Sample).
+///   carried on [`Sample`](crate::Error::Sample).
 /// * [`sample_reader`](Self::sample_reader): the limits the
 ///   [`SampleReader`](isobmff_sample::SampleReader) the samples are gathered
 ///   by is held to, whose failures are carried on
-///   [`Sample`](crate::ErrorKind::Sample) as well.
+///   [`Sample`](crate::Error::Sample) as well.
 ///
 /// No relation between them is checked: whichever is reached first refuses.
 ///

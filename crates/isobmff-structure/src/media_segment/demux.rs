@@ -54,14 +54,14 @@ use crate::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
 ///   held and the samples not yet taken are dropped, and where each track
 ///   stands on its timeline is no longer known until a `tfdt` states it; a
 ///   fragment stating none for such a track is
-///   [`Sample`](crate::ErrorKind::Sample).
+///   [`Sample`](crate::Error::Sample).
 /// * The order the boxes come in, and what a segment that breaks it is
 ///   reported as, are the structure's: a `styp` and an `mdat` are read
 ///   wherever they lie, a box other than a `moof` or a `sidx` straight after
 ///   a [`resume_at`](Self::resume_at) is
-///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder), and a
+///   [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder), and a
 ///   segment declared over without a `moof` is
-///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
+///   [`MissingMandatoryBox`](crate::Error::MissingMandatoryBox).
 ///   A segment carrying no `styp` reads all the same, as §8.16.2 allows.
 /// * Where a fragment states no decode time for a track, the track goes on
 ///   from where the fragments handed over before it left it, or where none
@@ -69,7 +69,7 @@ use crate::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
 ///   movie of an initialization segment, which declares no sample (§8.8.12).
 ///   A `styp` read on the way does not set the track back. After a
 ///   [`resume_at`](Self::resume_at), a fragment stating none for a track no
-///   `tfdt` has stated since is [`Sample`](crate::ErrorKind::Sample) instead.
+///   `tfdt` has stated since is [`Sample`](crate::Error::Sample) instead.
 /// * What the demux FSM holds of what the segment declares is bounded — a box
 ///   read into a value, the samples a `moof` declares, the samples gathered
 ///   — by the [`DemuxLimits`] it was created with.
@@ -85,15 +85,15 @@ use crate::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
 ///   has; a fragment addressing media data lying before it (§8.8.7, §8.8.8)
 ///   wants bytes already passed by.
 /// * An `Err` leaves the demux FSM failed for good,
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) and
-///   [`UnwantedInput`](crate::ErrorKind::UnwantedInput) aside:
+///   [`AlreadyFinished`](crate::Error::AlreadyFinished) and
+///   [`UnwantedInput`](crate::Error::UnwantedInput) aside:
 ///   every later call reports that same failure again. The samples completed
 ///   before it are still there to take.
 /// * [`finish`](Self::finish) declares the segment over, and reports what
 ///   any layer makes of the end of it: a box left open, no `moof` come, a
 ///   sample short of the data it claimed. Samples are still taken after it,
 ///   but anything handed over then, or a second [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished), until
+///   [`AlreadyFinished`](crate::Error::AlreadyFinished), until
 ///   [`resume_at`](Self::resume_at) restarts the reading.
 ///
 /// # Examples
@@ -170,7 +170,7 @@ impl MediaSegmentDemuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::ErrorKind::Sample): what
+    /// * [`Sample`](crate::Error::Sample): what
     ///   [`TrackDecodeTimes::new`] makes of `movie`.
     pub fn new(movie: MovieBox) -> Result<Self, Error> {
         Self::with_limits(movie, DemuxLimits::new())
@@ -180,7 +180,7 @@ impl MediaSegmentDemuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::ErrorKind::Sample): what
+    /// * [`Sample`](crate::Error::Sample): what
     ///   [`TrackDecodeTimes::new`] makes of `movie`.
     pub fn with_limits(movie: MovieBox, limits: DemuxLimits) -> Result<Self, Error> {
         Ok(Self {
@@ -212,19 +212,19 @@ impl MediaSegmentDemuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder): what
+    /// * [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder): what
     ///   the structure makes of a top-level box arriving where it does.
-    /// * [`PayloadLimitExceeded`](crate::ErrorKind::PayloadLimitExceeded):
+    /// * [`PayloadLimitExceeded`](crate::Error::PayloadLimitExceeded):
     ///   a box read into a value reaches past the limit the demux FSM gathers.
-    /// * [`Sequence`](crate::ErrorKind::Sequence): what the framing
+    /// * [`Sequence`](crate::Error::Sequence): what the framing
     ///   of the segment makes of the input.
-    /// * [`Box`](crate::ErrorKind::Box): a box read into a value
+    /// * [`Box`](crate::Error::Box): a box read into a value
     ///   does not decode.
-    /// * [`Sample`](crate::ErrorKind::Sample): what the samples make
+    /// * [`Sample`](crate::Error::Sample): what the samples make
     ///   of a fragment, a `sidx`, or the media data beside it.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
-    /// * [`UnwantedInput`](crate::ErrorKind::UnwantedInput): `offset` is
+    /// * [`UnwantedInput`](crate::Error::UnwantedInput): `offset` is
     ///   neither where the input taken in order stands nor the offset of the
     ///   bytes [`wanted_input`](Self::wanted_input) names as lacking. The
     ///   demux FSM is not failed by it.
@@ -312,16 +312,16 @@ impl MediaSegmentDemuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`Sequence`](crate::ErrorKind::Sequence): the segment ended
+    /// * [`Sequence`](crate::Error::Sequence): the segment ended
     ///   inside a box.
-    /// * [`Box`](crate::ErrorKind::Box): a box read into a value,
+    /// * [`Box`](crate::Error::Box): a box read into a value,
     ///   declaring no total, does not decode.
-    /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox):
+    /// * [`MissingMandatoryBox`](crate::Error::MissingMandatoryBox):
     ///   the segment carried no `moof`.
-    /// * [`Sample`](crate::ErrorKind::Sample): what the samples make
+    /// * [`Sample`](crate::Error::Sample): what the samples make
     ///   of a fragment or a `sidx` declaring no total, or a sample a fragment
     ///   declared is short of the data it claimed.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   segment was already declared over.
     /// * The failure of a previous call, which the demux FSM keeps and reports
     ///   again for every call after it.
@@ -414,7 +414,7 @@ mod tests {
 
     use super::super::tests::{movie, sample, segment_of_one_sample};
     use super::{Error, MediaSegmentDemuxFsm};
-    use crate::{DemuxLimits, ErrorKind, WantedInput};
+    use crate::{DemuxLimits, WantedInput};
 
     /// What the demux FSM makes of `segment` handed over whole, then declared over
     fn read(segment: &[u8]) -> Result<MediaSegmentDemuxFsm, Error> {
@@ -437,7 +437,9 @@ mod tests {
     fn a_segment_declared_over_without_a_fragment_is_rejected() {
         assert_eq!(
             read(&written(&segment_type())).map(drop),
-            Err(Error::missing_mandatory_box(MovieFragmentBox::BOX_TYPE))
+            Err(Error::MissingMandatoryBox {
+                box_type: MovieFragmentBox::BOX_TYPE
+            })
         );
     }
 
@@ -447,10 +449,12 @@ mod tests {
             MediaSegmentDemuxFsm::with_limits(movie(), DemuxLimits::new().with_payload(4)).unwrap();
 
         assert_eq!(
-            demux_fsm
-                .handle_input(0, &written(&segment_type()))
-                .map_err(Error::kind),
-            Err(ErrorKind::PayloadLimitExceeded)
+            demux_fsm.handle_input(0, &written(&segment_type())),
+            Err(Error::PayloadLimitExceeded {
+                box_type: BoxType::compact(*b"styp"),
+                reached_bytes: 16,
+                limit_bytes: 4,
+            })
         );
     }
 
@@ -480,16 +484,14 @@ mod tests {
                 .unwrap();
 
         assert!(matches!(
-            demux_fsm
-                .handle_input(0, &segment_of_one_sample())
-                .map_err(Error::kind),
-            Err(ErrorKind::Sample(
-                isobmff_sample::Error::SampleCountLimitExceeded {
+            demux_fsm.handle_input(0, &segment_of_one_sample()),
+            Err(Error::Sample {
+                error: isobmff_sample::Error::SampleCountLimitExceeded {
                     declared_samples: 1,
                     limit_samples: 0,
                     ..
                 }
-            ))
+            })
         ));
         assert_eq!(demux_fsm.poll_sample(), None);
     }
@@ -503,16 +505,14 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            demux_fsm
-                .handle_input(0, &segment_of_one_sample())
-                .map_err(Error::kind),
-            Err(ErrorKind::Sample(
-                isobmff_sample::Error::HeldExtentLimitExceeded {
+            demux_fsm.handle_input(0, &segment_of_one_sample()),
+            Err(Error::Sample {
+                error: isobmff_sample::Error::HeldExtentLimitExceeded {
                     held_extents: 1,
                     limit_extents: 0,
                     ..
                 }
-            ))
+            })
         ));
     }
 

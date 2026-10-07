@@ -23,7 +23,7 @@ use crate::Error;
 ///   [`writing`](Self::writing). The bytes made before it are still taken from
 ///   [`poll_output`](Self::poll_output).
 /// * Once [`finish`](Self::finish) succeeds, [`writing`](Self::writing)
-///   reports [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished).
+///   reports [`AlreadyFinished`](crate::Error::AlreadyFinished).
 #[derive(Debug)]
 pub(crate) struct MuxOutput {
     boxes: BoxWriter,
@@ -57,13 +57,13 @@ impl MuxOutput {
     ///
     /// # Errors
     ///
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the file was
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the file was
     ///   declared over by [`finish`](Self::finish).
     /// * The failure [`record`](Self::record) kept.
     pub(crate) const fn writing(&self) -> Result<(), Error> {
         match self.state {
             State::Writing => Ok(()),
-            State::Finished => Err(Error::already_finished()),
+            State::Finished => Err(Error::AlreadyFinished),
             State::Failed(failure) => Err(failure),
         }
     }
@@ -92,7 +92,7 @@ impl MuxOutput {
     /// # Errors
     ///
     /// The failures of [`BoxWriter::handle_event`], carried on
-    /// [`Sequence`](crate::ErrorKind::Sequence).
+    /// [`Sequence`](crate::Error::Sequence).
     pub(crate) fn frame(
         &mut self,
         header: BoxHeader,
@@ -115,7 +115,7 @@ impl MuxOutput {
     /// # Errors
     ///
     /// The failures of [`BoxWriter::finish`], carried on
-    /// [`Sequence`](crate::ErrorKind::Sequence).
+    /// [`Sequence`](crate::Error::Sequence).
     pub(crate) fn finish(&mut self) -> Result<(), Error> {
         self.boxes.finish()?;
         self.state = State::Finished;
@@ -143,7 +143,9 @@ mod tests {
     #[test]
     fn a_failed_output_reports_the_same_failure_for_every_call_after_it() {
         let mut output = MuxOutput::new();
-        let failure = Error::box_out_of_order(BoxType::compact(*b"ftyp"));
+        let failure = Error::BoxOutOfOrder {
+            box_type: BoxType::compact(*b"ftyp"),
+        };
 
         assert_eq!(output.record(Err(failure)), Err(failure));
         assert_eq!(output.writing(), Err(failure));
@@ -156,7 +158,9 @@ mod tests {
 
         output.frame(header, [b"AAAA".to_vec()]).unwrap();
         output
-            .record(Err(Error::box_out_of_order(BoxType::compact(*b"ftyp"))))
+            .record(Err(Error::BoxOutOfOrder {
+                box_type: BoxType::compact(*b"ftyp"),
+            }))
             .unwrap_err();
 
         let mut file = Vec::new();
