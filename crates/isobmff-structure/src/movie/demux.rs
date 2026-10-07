@@ -297,7 +297,8 @@ impl MovieDemuxFsm {
                 self.restart(movie_fragment_random_access_start);
             }
             None => {
-                self.declare_over();
+                self.state = State::Reading;
+                self.input.declare_over();
             }
         }
 
@@ -422,7 +423,8 @@ impl MovieDemuxFsm {
         self.input.resumable()?;
 
         if file_len < MovieFragmentRandomAccessOffsetBox::ENCODED_LEN as u64 {
-            self.declare_over();
+            self.state = State::Reading;
+            self.input.declare_over();
         } else {
             self.state = State::LocatingMovieFragmentRandomAccess {
                 file_len,
@@ -457,7 +459,8 @@ impl MovieDemuxFsm {
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), Error> {
         if let State::LocatingMovieFragmentRandomAccess { .. } = self.state {
-            self.declare_over();
+            self.state = State::Reading;
+            self.input.declare_over();
 
             return Ok(());
         }
@@ -467,12 +470,6 @@ impl MovieDemuxFsm {
         let checked = self.structure.finish();
 
         self.input.finish(checked)
-    }
-
-    /// Declares the file over with nothing more read or checked, whatever the demux FSM stood at
-    const fn declare_over(&mut self) {
-        self.state = State::Reading;
-        self.input.declare_over();
     }
 
     /// Restarts the reading at `offset`, whatever the demux FSM stood at
