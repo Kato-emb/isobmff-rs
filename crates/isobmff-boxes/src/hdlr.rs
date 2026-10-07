@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn a_name_that_is_not_utf8_is_kept_as_its_bytes_and_written_back_as_them() {
-        let payload = [[0; 24].as_slice(), b"Caf\x8e\0"].concat();
+        let payload = [[0; 24].as_slice(), b"Gr\x9fn\0"].concat();
         let mut written = vec![0xaa; payload.len()];
 
         let handler = HandlerBox::decode_payload(&payload).unwrap();
@@ -176,7 +176,7 @@ mod tests {
             handler,
             HandlerBox::new(
                 FourCC::new([0; 4]),
-                NullTerminatedString::from_slice(b"Caf\x8e")
+                NullTerminatedString::from_slice(b"Gr\x9fn")
             )
         );
         assert_eq!(written, payload);

@@ -342,9 +342,9 @@ mod tests {
 
     #[test]
     fn strings_that_are_not_utf8_are_kept_as_their_bytes_and_written_back_as_them() {
-        let url = b"\0\0\0\0Caf\x8e.mp4\0";
-        let urn = b"\0\0\0\0urn:Caf\x8e\0Caf\x8e.mp4\0";
-        let mac_roman = || Some(NullTerminatedString::from_slice(b"Caf\x8e.mp4"));
+        let url = b"\0\0\0\0Gr\x9fn.mp4\0";
+        let urn = b"\0\0\0\0urn:Gr\x9fn\0Gr\x9fn.mp4\0";
+        let mac_roman = || Some(NullTerminatedString::from_slice(b"Gr\x9fn.mp4"));
 
         let elsewhere = DataEntryUrlBox::decode_payload(url).unwrap();
         let named = DataEntryUrnBox::decode_payload(urn).unwrap();
@@ -353,7 +353,7 @@ mod tests {
         assert_eq!(
             named,
             DataEntryUrnBox::new(
-                NullTerminatedString::from_slice(b"urn:Caf\x8e"),
+                NullTerminatedString::from_slice(b"urn:Gr\x9fn"),
                 mac_roman()
             )
         );

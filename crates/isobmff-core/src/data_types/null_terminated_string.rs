@@ -32,9 +32,9 @@ use crate::error::Error;
 /// assert_eq!(NullTerminatedString::from_slice(b"VideoHandler"), name);
 ///
 /// // Text that is not UTF-8 is kept as its bytes
-/// let mac_roman = NullTerminatedString::from_slice(b"Caf\x8e\0");
+/// let mac_roman = NullTerminatedString::from_slice(b"Gr\x9fn\0");
 /// assert_eq!(mac_roman.as_str(), None);
-/// assert_eq!(mac_roman.as_bytes(), b"Caf\x8e");
+/// assert_eq!(mac_roman.as_bytes(), b"Gr\x9fn");
 ///
 /// // Writing puts the terminator back, so the length counts it
 /// assert_eq!(name.encoded_len(), 13);
@@ -215,8 +215,8 @@ mod tests {
 
     #[test]
     fn debug_shows_the_bytes_escaped_as_ascii() {
-        let field = NullTerminatedString::from_slice(b"Caf\x8e");
+        let field = NullTerminatedString::from_slice(b"Gr\x9fn");
 
-        assert_eq!(format!("{field:?}"), r#"NullTerminatedString("Caf\x8e")"#);
+        assert_eq!(format!("{field:?}"), r#"NullTerminatedString("Gr\x9fn")"#);
     }
 }
