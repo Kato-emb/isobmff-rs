@@ -16,6 +16,13 @@ use crate::esds::ESDBox;
 /// [`SamplingRateBox`] may follow for a version 1 entry, and any other box —
 /// `chnl`, the DRC boxes — is kept as it came and written back.
 ///
+/// An entry read from a file lies in its `stsd` as the bytes it came as.
+/// [`SampleDescriptionBox::audio_entry`](isobmff_boxes::SampleDescriptionBox::audio_entry)
+/// reads it against the version of the `stsd`, refusing a QuickTime sound
+/// description of version 1; [`decode_payload`](BoxDecode::decode_payload)
+/// reads the payload alone, and reads such a description as an
+/// `AudioSampleEntryV1`.
+///
 /// # Examples
 ///
 /// ```
@@ -168,8 +175,8 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_boxes::{AudioSampleEntry, SamplingRateBox};
-    use isobmff_core::{AnyBox, BoxDecode, BoxEncode, BoxType, FourCC, U16F16};
+    use isobmff_boxes::{AudioSampleEntry, SampleDescriptionBox, SamplingRateBox};
+    use isobmff_core::{AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, FourCC, U16F16};
 
     use super::MP4AudioSampleEntry;
     use crate::error::Error;
@@ -272,5 +279,69 @@ mod tests {
                 BoxType::compact(*b"esds")
             )))
         );
+    }
+
+    #[test]
+    fn a_quicktime_version_1_entry_in_a_description_of_version_0_is_refused() {
+        let mut payload = encoded_payload(&entry());
+        *payload.get_mut(9).unwrap() = 1;
+        let (fields, boxes) = payload.split_at(usize::try_from(AudioSampleEntry::LEN).unwrap());
+        let samples_per_packet_to_bytes_per_sample =
+            [0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
+        let quicktime_version_1 = AnyBox::from_raw_bytes(
+            MP4AudioSampleEntry::BOX_TYPE,
+            [fields, &samples_per_packet_to_bytes_per_sample, boxes].concat(),
+        );
+
+        let description = SampleDescriptionBox::new(vec![quicktime_version_1]);
+
+        assert_eq!(
+            description.audio_entry::<MP4AudioSampleEntry>(0),
+            Some(Err(Error::from(
+                isobmff_core::Error::unsupported_version(1)
+                    .in_container(MP4AudioSampleEntry::BOX_TYPE)
+            )))
+        );
+    }
+
+    #[test]
+    fn an_entry_of_either_version_in_a_description_of_version_1_reads() {
+        let version_1 = MP4AudioSampleEntry::new(
+            AudioSampleEntry::new_v1(1, 2),
+            ESDBox::new(aac_descriptor()),
+            Some(SamplingRateBox::new(96_000)),
+        );
+        let description = SampleDescriptionBox::new_v1(vec![
+            AnyBox::from(entry()),
+            AnyBox::from_raw_bytes(MP4AudioSampleEntry::BOX_TYPE, encoded_payload(&version_1)),
+        ]);
+
+        let read = [0, 1].map(|index| description.audio_entry::<MP4AudioSampleEntry>(index));
+
+        assert_eq!(read, [Some(Ok(entry())), Some(Ok(version_1))]);
+    }
+
+    #[test]
+    fn an_entry_of_another_type_is_refused_naming_its_type() {
+        let avc1 = BoxType::compact(*b"avc1");
+        let description = SampleDescriptionBox::new(vec![AnyBox::from_raw_bytes(
+            avc1,
+            encoded_payload(&entry()),
+        )]);
+
+        assert_eq!(
+            description.audio_entry::<MP4AudioSampleEntry>(0),
+            Some(Err(Error::from(
+                isobmff_core::Error::box_type_mismatch(MP4AudioSampleEntry::BOX_TYPE, avc1)
+                    .in_container(avc1)
+            )))
+        );
+    }
+
+    #[test]
+    fn an_index_past_the_entries_reads_nothing() {
+        let description = SampleDescriptionBox::new(vec![AnyBox::from(entry())]);
+
+        assert_eq!(description.audio_entry::<MP4AudioSampleEntry>(1), None);
     }
 }

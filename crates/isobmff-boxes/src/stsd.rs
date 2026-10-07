@@ -4,8 +4,10 @@ use alloc::vec::Vec;
 
 use isobmff_core::{
     AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWidth,
-    FieldWriter, FullBoxFields, FullBoxFlags, boxes,
+    FieldWriter, FullBoxFields, FullBoxFlags, InContainer, boxes,
 };
+
+use crate::sample_entry::{AudioSampleEntry, payload_of};
 
 /// Length of the fields that precede the entries
 const FIXED_FIELDS_LEN: u64 = 8;
@@ -15,7 +17,8 @@ const FIXED_FIELDS_LEN: u64 = 8;
 /// [`SampleDescriptionBox`] (`stsd`), ISO/IEC 14496-12 §8.5.2. Each entry is a
 /// box whose type names a coding, and whose payload the coding's own
 /// specification lays out — so the entries are kept as [`AnyBox`] and left
-/// unread. A reader that knows a coding decodes an entry itself.
+/// unread. A reader that knows a coding decodes an entry itself, an audio
+/// entry through [`audio_entry`](Self::audio_entry).
 ///
 /// The `entry_count` field is not held: it counts the entries, so it is derived
 /// on the way out. On the way in a count that disagrees with the entries fails
@@ -63,6 +66,58 @@ impl SampleDescriptionBox {
     #[must_use]
     pub fn entries(&self) -> &[AnyBox] {
         &self.entries
+    }
+
+    /// Reads entry `index` as the audio sample entry `Entry`, refusing an entry of version 1 in a box of version 0
+    ///
+    /// ISO/IEC 14496-12 §12.2.3 places an `AudioSampleEntryV1` in a box of
+    /// version 1. An entry opening with version 1 in a box of version 0 is
+    /// refused before `Entry` reads it. An entry of version 0 in a box of
+    /// version 1 reads, as §8.5.2.3 allows beside an `AudioSampleEntryV1`.
+    ///
+    /// An entry carried as the bytes it lies as is read in place; one built
+    /// from a payload type is written out first.
+    ///
+    /// Returns `None` when the box holds no entry `index`.
+    ///
+    /// # Errors
+    ///
+    /// Each with the box type of the entry on the
+    /// [`containers`](Error::containers) path:
+    ///
+    /// * [`BoxTypeMismatch`](isobmff_core::ErrorKind::BoxTypeMismatch): the
+    ///   entry is of another type than `Entry`.
+    /// * [`UnsupportedVersion`](isobmff_core::ErrorKind::UnsupportedVersion): the
+    ///   entry opens with version 1 and this box is of version 0.
+    /// * What [`AudioSampleEntry::decode_fields`] reports for the fields the
+    ///   entry opens with, and what the [`BoxDecode`] of `Entry` reports.
+    /// * What [`encode_payload`](BoxEncode::encode_payload) reports for an
+    ///   entry built from a payload type.
+    pub fn audio_entry<Entry>(&self, index: usize) -> Option<Result<Entry, Entry::Error>>
+    where
+        Entry: BoxDecode + BoxDefinition,
+        Entry::Error: InContainer,
+    {
+        let entry = self.entries.get(index)?;
+        let box_type = entry.box_type();
+        let decoded = if box_type == Entry::BOX_TYPE {
+            Ok(())
+        } else {
+            Err(Error::box_type_mismatch(Entry::BOX_TYPE, box_type))
+        }
+        .and_then(|()| payload_of(entry))
+        .and_then(|payload| {
+            let audio = AudioSampleEntry::decode_fields(&mut FieldReader::new(&payload))?;
+            if self.version == 0 && audio.entry_version() == 1 {
+                return Err(Error::unsupported_version(1));
+            }
+
+            Ok(payload)
+        })
+        .map_err(Entry::Error::from)
+        .and_then(|payload| Entry::decode_payload(&payload));
+
+        Some(decoded.map_err(|error| error.in_container(box_type)))
     }
 }
 
