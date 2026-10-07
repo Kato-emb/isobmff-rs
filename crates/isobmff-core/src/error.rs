@@ -188,12 +188,6 @@ impl Error {
         Self::new(ErrorKind::ConflictingFlags, Detail::Flags(flags))
     }
 
-    /// Returns the failure of a text field that does not read as UTF-8
-    #[must_use]
-    pub const fn invalid_utf8(valid_up_to: usize) -> Self {
-        Self::new(ErrorKind::InvalidUtf8, Detail::ValidUpTo(valid_up_to))
-    }
-
     /// Returns the failure of a field the spec counts from 1 holding 0
     #[must_use]
     pub const fn zero_index() -> Self {
@@ -330,7 +324,6 @@ impl Error {
             | Detail::Version(_)
             | Detail::Flags(_)
             | Detail::OutOfRange { .. }
-            | Detail::ValidUpTo(_)
             | Detail::Alternatives(_)
             | Detail::FieldSize(_) => None,
         }
@@ -347,7 +340,6 @@ impl Error {
             | Detail::Version(_)
             | Detail::Flags(_)
             | Detail::OutOfRange { .. }
-            | Detail::ValidUpTo(_)
             | Detail::FoundBoxType(_)
             | Detail::FieldSize(_) => None,
         }
@@ -366,7 +358,6 @@ impl Error {
             | Detail::Entries { .. }
             | Detail::Version(_)
             | Detail::Flags(_)
-            | Detail::ValidUpTo(_)
             | Detail::FoundBoxType(_)
             | Detail::Alternatives(_)
             | Detail::FieldSize(_) => None,
@@ -386,7 +377,6 @@ impl Error {
             | Detail::Version(_)
             | Detail::Flags(_)
             | Detail::OutOfRange { .. }
-            | Detail::ValidUpTo(_)
             | Detail::FoundBoxType(_)
             | Detail::Alternatives(_)
             | Detail::FieldSize(_) => None,
@@ -403,7 +393,6 @@ impl Error {
             | Detail::Version(_)
             | Detail::Flags(_)
             | Detail::OutOfRange { .. }
-            | Detail::ValidUpTo(_)
             | Detail::FoundBoxType(_)
             | Detail::Alternatives(_)
             | Detail::FieldSize(_) => None,
@@ -420,7 +409,6 @@ impl Error {
             | Detail::Version(_)
             | Detail::Flags(_)
             | Detail::OutOfRange { .. }
-            | Detail::ValidUpTo(_)
             | Detail::FoundBoxType(_)
             | Detail::Alternatives(_)
             | Detail::FieldSize(_) => None,
@@ -437,7 +425,6 @@ impl Error {
             | Detail::Entries { .. }
             | Detail::Flags(_)
             | Detail::OutOfRange { .. }
-            | Detail::ValidUpTo(_)
             | Detail::FoundBoxType(_)
             | Detail::Alternatives(_)
             | Detail::FieldSize(_) => None,
@@ -454,7 +441,6 @@ impl Error {
             | Detail::Entries { .. }
             | Detail::Version(_)
             | Detail::OutOfRange { .. }
-            | Detail::ValidUpTo(_)
             | Detail::FoundBoxType(_)
             | Detail::Alternatives(_)
             | Detail::FieldSize(_) => None,
@@ -472,7 +458,6 @@ impl Error {
             | Detail::Version(_)
             | Detail::Flags(_)
             | Detail::OutOfRange { .. }
-            | Detail::ValidUpTo(_)
             | Detail::FoundBoxType(_)
             | Detail::Alternatives(_) => None,
         }
@@ -488,24 +473,6 @@ impl Error {
             | Detail::Entries { .. }
             | Detail::Version(_)
             | Detail::Flags(_)
-            | Detail::ValidUpTo(_)
-            | Detail::FoundBoxType(_)
-            | Detail::Alternatives(_)
-            | Detail::FieldSize(_) => None,
-        }
-    }
-
-    /// Returns the text that read before the byte that did not, in bytes
-    #[must_use]
-    pub const fn valid_up_to(self) -> Option<usize> {
-        match self.detail {
-            Detail::ValidUpTo(valid_up_to) => Some(valid_up_to),
-            Detail::Nothing
-            | Detail::Bytes { .. }
-            | Detail::Entries { .. }
-            | Detail::Version(_)
-            | Detail::Flags(_)
-            | Detail::OutOfRange { .. }
             | Detail::FoundBoxType(_)
             | Detail::Alternatives(_)
             | Detail::FieldSize(_) => None,
@@ -584,9 +551,6 @@ impl fmt::Display for Error {
                 "full box declares flags {:#08x}, which the spec does not allow together",
                 self.flags().unwrap_or_default()
             ),
-            ErrorKind::InvalidUtf8 => {
-                formatter.write_str("box payload holds a string that is not UTF-8")
-            }
             ErrorKind::ZeroIndex => {
                 formatter.write_str("box holds 0 in a field the spec counts from 1")
             }
@@ -675,9 +639,6 @@ impl fmt::Debug for Error {
             Detail::OutOfRange { value, width } => {
                 fields.field("value", &value);
                 fields.field("needed_bytes", &width);
-            }
-            Detail::ValidUpTo(valid_up_to) => {
-                fields.field("valid_up_to", &valid_up_to);
             }
             Detail::FoundBoxType(found) => {
                 fields.field("found_box_type", &found);
@@ -802,11 +763,6 @@ pub enum ErrorKind {
     ///
     /// [`flags`](Error::flags) is the flags the box declares.
     ConflictingFlags,
-    /// Field the spec declares as text does not read as UTF-8
-    ///
-    /// [`valid_up_to`](Error::valid_up_to) is the length of text that
-    /// reads before the byte that does not.
-    InvalidUtf8,
     /// Field the spec counts from 1 holds 0
     ZeroIndex,
     /// Container lacks a child box the spec marks mandatory
@@ -897,7 +853,6 @@ impl ErrorKind {
             | Self::TruncatedPayload
             | Self::TrailingPayload
             | Self::ConflictingFlags
-            | Self::InvalidUtf8
             | Self::ZeroIndex
             | Self::MissingMandatoryBox
             | Self::DuplicateBox
@@ -1009,8 +964,6 @@ enum Detail {
     FieldSize(u8),
     /// Value a field was given, against the bytes of that field
     OutOfRange { value: u64, width: u64 },
-    /// Text that read before the byte that did not, in bytes
-    ValidUpTo(usize),
     /// Box type an input holds where another was to be read
     FoundBoxType(BoxType),
     /// Box types a container holds exactly one of
@@ -1171,7 +1124,6 @@ mod tests {
             Error::conflicting_flags(0x0000_0404).flags(),
             Some(0x0000_0404)
         );
-        assert_eq!(Error::invalid_utf8(3).valid_up_to(), Some(3));
         assert_eq!(Error::unsupported_field_size(12).field_size(), Some(12));
     }
 
@@ -1230,10 +1182,6 @@ mod tests {
         assert_eq!(
             Error::unsupported_field_size(12).to_string(),
             "box declares entries 12 bits wide, which this box does not read"
-        );
-        assert_eq!(
-            Error::invalid_utf8(3).to_string(),
-            "box payload holds a string that is not UTF-8"
         );
         assert_eq!(
             Error::zero_index().to_string(),
