@@ -7,14 +7,14 @@
 //!    where the one before it ended, and a box lies over the header, the
 //!    payload parts, and the empty end it was read as
 //! 3. where the input is cut does not change the boxes it reads, nor where they lie
-//! 4. the boxes read agree with the [`boxes`] iterator over the input — header,
+//! 4. the boxes read agree with the [`Boxes`] iterator over the input — header,
 //!    payload, and the offset each box begins at — as far as the reader got
 //!    through it
 //! 5. input the iterator rejects the reader rejects as well
 
 #![no_main]
 
-use isobmff_core::{BoxHeader, boxes};
+use isobmff_core::{BoxHeader, Boxes};
 use isobmff_sequence::{BoxEvent, BoxReader};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
@@ -182,7 +182,7 @@ fn agrees_with_the_boxes_iterator(bytes: &[u8], run: &Run) {
     let mut iterated = Vec::new();
     let mut iterator_failed = false;
 
-    for framed in boxes(bytes) {
+    for framed in Boxes::new(bytes) {
         match framed {
             Ok(framed) => iterated.push(framed),
             Err(_) => iterator_failed = true,

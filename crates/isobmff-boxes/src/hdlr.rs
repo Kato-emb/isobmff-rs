@@ -1,7 +1,7 @@
 //! [`HandlerBox`] (`hdlr`), ISO/IEC 14496-12 §8.4.3
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FourCC,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FourCc,
     FullBoxFields, FullBoxFlags, NullTerminatedString,
 };
 
@@ -22,7 +22,7 @@ const FIXED_FIELDS_LEN: u64 = 24;
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct HandlerBox {
     pre_defined: u32,
-    handler_type: FourCC,
+    handler_type: FourCc,
     name: NullTerminatedString,
 }
 
@@ -32,7 +32,7 @@ impl HandlerBox {
     /// The `pre_defined` field is left zero, as the spec declares it for a file
     /// written to this revision.
     #[must_use]
-    pub const fn new(handler_type: FourCC, name: NullTerminatedString) -> Self {
+    pub const fn new(handler_type: FourCc, name: NullTerminatedString) -> Self {
         Self {
             pre_defined: 0,
             handler_type,
@@ -53,7 +53,7 @@ impl HandlerBox {
 
     /// Returns the code naming the kind of media the track carries
     #[must_use]
-    pub const fn handler_type(&self) -> FourCC {
+    pub const fn handler_type(&self) -> FourCc {
         self.handler_type
     }
 
@@ -84,7 +84,7 @@ impl BoxDecode for HandlerBox {
         }
 
         let pre_defined = reader.read_u32()?;
-        let handler_type = FourCC::new(*reader.read_bytes::<4>()?);
+        let handler_type = FourCc::new(*reader.read_bytes::<4>()?);
         let _reserved = reader.read_bytes::<12>()?;
 
         Ok(Self {
@@ -116,14 +116,14 @@ mod tests {
     use alloc::string::String;
     use alloc::vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, Error, FourCC, NullTerminatedString};
+    use isobmff_core::{BoxDecode, BoxEncode, Error, FourCc, NullTerminatedString};
 
     use super::HandlerBox;
 
     /// Handler box for a video track, named as most writers name it
     fn video_handler() -> HandlerBox {
         HandlerBox::new(
-            FourCC::new(*b"vide"),
+            FourCc::new(*b"vide"),
             NullTerminatedString::new(String::from("VideoHandler")).unwrap(),
         )
     }
@@ -175,7 +175,7 @@ mod tests {
         assert_eq!(
             handler,
             HandlerBox::new(
-                FourCC::new([0; 4]),
+                FourCc::new([0; 4]),
                 NullTerminatedString::from_slice(b"Gr\x9fn")
             )
         );

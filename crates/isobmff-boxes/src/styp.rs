@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FourCC,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FourCc,
 };
 
 use crate::data_types::brands;
@@ -25,18 +25,18 @@ const BRAND_LEN: u64 = 4;
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct SegmentTypeBox {
-    major_brand: FourCC,
+    major_brand: FourCc,
     minor_version: u32,
-    compatible_brands: Vec<FourCC>,
+    compatible_brands: Vec<FourCc>,
 }
 
 impl SegmentTypeBox {
     /// Creates the box from the brands it declares
     #[must_use]
     pub const fn new(
-        major_brand: FourCC,
+        major_brand: FourCc,
         minor_version: u32,
-        compatible_brands: Vec<FourCC>,
+        compatible_brands: Vec<FourCc>,
     ) -> Self {
         Self {
             major_brand,
@@ -47,7 +47,7 @@ impl SegmentTypeBox {
 
     /// Returns the brand naming the specification the segment was written to
     #[must_use]
-    pub const fn major_brand(&self) -> FourCC {
+    pub const fn major_brand(&self) -> FourCc {
         self.major_brand
     }
 
@@ -59,7 +59,7 @@ impl SegmentTypeBox {
 
     /// Returns every brand a reader may treat the segment as
     #[must_use]
-    pub fn compatible_brands(&self) -> &[FourCC] {
+    pub fn compatible_brands(&self) -> &[FourCc] {
         &self.compatible_brands
     }
 
@@ -88,12 +88,12 @@ impl BoxDecode for SegmentTypeBox {
     ///   payload ends inside a field, which includes a `compatible_brands` list
     ///   whose length is not a multiple of four.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let major_brand = FourCC::new(*reader.read_bytes::<4>()?);
+        let major_brand = FourCc::new(*reader.read_bytes::<4>()?);
         let minor_version = reader.read_u32()?;
 
         let mut compatible_brands = Vec::new();
         while !reader.remainder().is_empty() {
-            compatible_brands.push(FourCC::new(*reader.read_bytes::<4>()?));
+            compatible_brands.push(FourCc::new(*reader.read_bytes::<4>()?));
         }
 
         Ok(Self::new(major_brand, minor_version, compatible_brands))
@@ -123,7 +123,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode as _, Error, FourCC};
+    use isobmff_core::{BoxDecode, BoxEncode as _, Error, FourCc};
 
     use super::SegmentTypeBox;
 
@@ -131,7 +131,7 @@ mod tests {
     fn a_segment_reads_its_brands_under_its_own_type() {
         assert_eq!(
             SegmentTypeBox::decode_payload(b"iso6\0\0\x02\0dash").unwrap(),
-            SegmentTypeBox::new(FourCC::new(*b"iso6"), 512, vec![FourCC::new(*b"dash")])
+            SegmentTypeBox::new(FourCc::new(*b"iso6"), 512, vec![FourCc::new(*b"dash")])
         );
     }
 
@@ -146,9 +146,9 @@ mod tests {
     #[test]
     fn a_segment_listing_a_brand_earlier_than_iso5_forbids_default_base_is_moof() {
         let segment_type = SegmentTypeBox::new(
-            FourCC::new(*b"msdh"),
+            FourCc::new(*b"msdh"),
             0,
-            vec![FourCC::new(*b"msdh"), FourCC::new(*b"iso4")],
+            vec![FourCc::new(*b"msdh"), FourCc::new(*b"iso4")],
         );
 
         assert!(segment_type.forbids_default_base_is_moof());
@@ -156,7 +156,7 @@ mod tests {
 
     #[test]
     fn a_segment_writes_itself_under_the_styp_code() {
-        let segment_type = SegmentTypeBox::new(FourCC::new(*b"msdh"), 0, Vec::new());
+        let segment_type = SegmentTypeBox::new(FourCc::new(*b"msdh"), 0, Vec::new());
         let mut buffer = vec![0; usize::try_from(segment_type.encoded_len()).unwrap()];
 
         segment_type.encode(&mut buffer).unwrap();

@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FourCC,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FourCc,
 };
 
 use crate::data_types::brands;
@@ -25,13 +25,13 @@ const BRAND_LEN: u64 = 4;
 ///
 /// ```
 /// use isobmff_boxes::FileTypeBox;
-/// use isobmff_core::{BoxDecode, BoxEncode, FourCC};
+/// use isobmff_core::{BoxDecode, BoxEncode, FourCc};
 ///
 /// // The brands of a fragmented MP4 file
 /// let file_type = FileTypeBox::new(
-///     FourCC::new(*b"iso6"),
+///     FourCc::new(*b"iso6"),
 ///     512,
-///     vec![FourCC::new(*b"iso6"), FourCC::new(*b"dash")],
+///     vec![FourCc::new(*b"iso6"), FourCc::new(*b"dash")],
 /// );
 ///
 /// // The box writes to the bytes a file opens with
@@ -49,18 +49,18 @@ const BRAND_LEN: u64 = 4;
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct FileTypeBox {
-    major_brand: FourCC,
+    major_brand: FourCc,
     minor_version: u32,
-    compatible_brands: Vec<FourCC>,
+    compatible_brands: Vec<FourCc>,
 }
 
 impl FileTypeBox {
     /// Creates the box from the brands it declares
     #[must_use]
     pub const fn new(
-        major_brand: FourCC,
+        major_brand: FourCc,
         minor_version: u32,
-        compatible_brands: Vec<FourCC>,
+        compatible_brands: Vec<FourCc>,
     ) -> Self {
         Self {
             major_brand,
@@ -71,7 +71,7 @@ impl FileTypeBox {
 
     /// Returns the brand naming the specification the file was written to
     #[must_use]
-    pub const fn major_brand(&self) -> FourCC {
+    pub const fn major_brand(&self) -> FourCc {
         self.major_brand
     }
 
@@ -83,7 +83,7 @@ impl FileTypeBox {
 
     /// Returns every brand a reader may treat the file as
     #[must_use]
-    pub fn compatible_brands(&self) -> &[FourCC] {
+    pub fn compatible_brands(&self) -> &[FourCc] {
         &self.compatible_brands
     }
 
@@ -101,21 +101,21 @@ impl FileTypeBox {
     ///
     /// ```
     /// use isobmff_boxes::FileTypeBox;
-    /// use isobmff_core::FourCC;
+    /// use isobmff_core::FourCc;
     ///
     /// // A file listing `isom` beside `iso6` still forbids the flag
     /// let listing_isom = FileTypeBox::new(
-    ///     FourCC::new(*b"iso6"),
+    ///     FourCc::new(*b"iso6"),
     ///     0,
-    ///     vec![FourCC::new(*b"iso6"), FourCC::new(*b"isom")],
+    ///     vec![FourCc::new(*b"iso6"), FourCc::new(*b"isom")],
     /// );
     /// assert!(listing_isom.forbids_default_base_is_moof());
     ///
     /// // A file listing no brand earlier than `iso5` allows it
     /// let listing_iso6 = FileTypeBox::new(
-    ///     FourCC::new(*b"iso6"),
+    ///     FourCc::new(*b"iso6"),
     ///     0,
-    ///     vec![FourCC::new(*b"iso6"), FourCC::new(*b"dash")],
+    ///     vec![FourCc::new(*b"iso6"), FourCc::new(*b"dash")],
     /// );
     /// assert!(!listing_iso6.forbids_default_base_is_moof());
     /// ```
@@ -138,12 +138,12 @@ impl BoxDecode for FileTypeBox {
     ///   payload ends inside a field, which includes a `compatible_brands` list
     ///   whose length is not a multiple of four.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let major_brand = FourCC::new(*reader.read_bytes::<4>()?);
+        let major_brand = FourCc::new(*reader.read_bytes::<4>()?);
         let minor_version = reader.read_u32()?;
 
         let mut compatible_brands = Vec::new();
         while !reader.remainder().is_empty() {
-            compatible_brands.push(FourCC::new(*reader.read_bytes::<4>()?));
+            compatible_brands.push(FourCc::new(*reader.read_bytes::<4>()?));
         }
 
         Ok(Self::new(major_brand, minor_version, compatible_brands))
@@ -173,7 +173,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode as _, Error, FourCC};
+    use isobmff_core::{BoxDecode, BoxEncode as _, Error, FourCc};
 
     use super::FileTypeBox;
 
@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn a_box_declaring_no_compatible_brands_holds_only_the_two_fixed_fields() {
-        let file_type = FileTypeBox::new(FourCC::new(*b"isom"), 0, Vec::new());
+        let file_type = FileTypeBox::new(FourCc::new(*b"isom"), 0, Vec::new());
 
         assert_eq!(encoded(&file_type), b"\0\0\0\x10ftypisom\0\0\0\0");
     }
@@ -195,9 +195,9 @@ mod tests {
     #[test]
     fn a_box_reads_back_as_the_value_that_wrote_it() {
         let file_type = FileTypeBox::new(
-            FourCC::new(*b"iso6"),
+            FourCc::new(*b"iso6"),
             512,
-            vec![FourCC::new(*b"iso6"), FourCC::new(*b"dash")],
+            vec![FourCc::new(*b"iso6"), FourCc::new(*b"dash")],
         );
 
         let whole = encoded(&file_type);
@@ -213,9 +213,9 @@ mod tests {
         assert_eq!(
             FileTypeBox::decode_payload(b"iso6\0\0\x02\0iso6dash").unwrap(),
             FileTypeBox::new(
-                FourCC::new(*b"iso6"),
+                FourCc::new(*b"iso6"),
                 512,
-                vec![FourCC::new(*b"iso6"), FourCC::new(*b"dash")]
+                vec![FourCc::new(*b"iso6"), FourCc::new(*b"dash")]
             )
         );
     }
@@ -238,11 +238,11 @@ mod tests {
 
     #[test]
     fn every_compatible_brand_adds_four_bytes_to_the_fixed_fields() {
-        let none = FileTypeBox::new(FourCC::new(*b"isom"), 0, Vec::new());
+        let none = FileTypeBox::new(FourCc::new(*b"isom"), 0, Vec::new());
         let two = FileTypeBox::new(
-            FourCC::new(*b"isom"),
+            FourCc::new(*b"isom"),
             0,
-            vec![FourCC::new(*b"isom"), FourCC::new(*b"iso6")],
+            vec![FourCc::new(*b"isom"), FourCc::new(*b"iso6")],
         );
 
         assert_eq!(none.payload_len(), 8);

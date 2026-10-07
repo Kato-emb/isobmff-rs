@@ -23,7 +23,7 @@ pub(crate) mod uuid;
 
 pub use compressor_name::CompressorName;
 pub use fixed_point::{I8F8, I16F16, U16F16};
-pub use fourcc::FourCC;
+pub use fourcc::FourCc;
 pub use full_box::{FullBoxFields, FullBoxFlags};
 pub use language_code::LanguageCode;
 pub use matrix::Matrix;

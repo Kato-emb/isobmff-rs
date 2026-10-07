@@ -16,7 +16,7 @@ impl LengthSizeMinusOne {
     ///
     /// # Errors
     ///
-    /// * [`NALUnitLengthOutOfRange`](crate::ErrorKind::NALUnitLengthOutOfRange):
+    /// * [`NalUnitLengthOutOfRange`](crate::ErrorKind::NalUnitLengthOutOfRange):
     ///   a NAL unit is longer than the `NALUnitLength` field can state.
     ///
     /// # Examples
@@ -90,7 +90,7 @@ impl LengthSizeMinusOne {
     /// assert_eq!(nal_units, [[0x65, 0x88].as_slice(), &[0x06]]);
     /// ```
     pub fn nal_units(self, sample: &[u8]) -> impl Iterator<Item = Result<&[u8], Error>> {
-        NALUnits {
+        NalUnits {
             remaining: sample,
             length_size: self.length_size(),
         }
@@ -103,14 +103,14 @@ impl LengthSizeMinusOne {
 }
 
 /// The NAL units of a sample read one after another
-struct NALUnits<'sample> {
+struct NalUnits<'sample> {
     /// Bytes of the sample still to be read, empty once an `Err` came out
     remaining: &'sample [u8],
     /// Length in bytes of the `NALUnitLength` field
     length_size: usize,
 }
 
-impl<'sample> Iterator for NALUnits<'sample> {
+impl<'sample> Iterator for NalUnits<'sample> {
     type Item = Result<&'sample [u8], Error>;
 
     fn next(&mut self) -> Option<Self::Item> {

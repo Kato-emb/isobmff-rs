@@ -40,10 +40,10 @@ use isobmff::boxes::{
     FileTypeBox, HeaderDuration, MovieBox, MovieExtendsBox, MovieFragmentBox, MovieHeaderBox,
     SampleFlags, TrackExtendsBox,
 };
-use isobmff::core::{BoxHeader, BoxType, Mp4EpochSeconds};
 use isobmff::sample::{MovieFragmentWriter, Sample, SampleExtent, SampleReader};
 use isobmff::sequence::{BoxEvent, BoxReader, BoxWriter, EventBytes};
 use isobmff::structure::{FragmentedMuxFsm, MovieDemuxFsm};
+use isobmff::{BoxHeader, BoxType, Mp4EpochSeconds};
 use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type, track};
 
 /// Ticks every sample of the benchmarked movies lasts
@@ -455,7 +455,7 @@ fn free_boxes(payload_len: usize) -> (Vec<u8>, usize) {
     )
     .unwrap();
     let mut scratch = [0; BoxHeader::MAX_ENCODED_LEN];
-    let encoded = header.encode(&mut scratch).to_vec();
+    let encoded = header.write_to(&mut scratch).to_vec();
     let box_len = encoded.len() + payload_len;
     let box_count = BOX_LENGTH_FILE_LEN / box_len;
     let mut file = Vec::with_capacity(box_count * box_len);

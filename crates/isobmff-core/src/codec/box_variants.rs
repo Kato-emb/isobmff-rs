@@ -18,7 +18,7 @@ use crate::framing::raw_box::RawBox;
 /// # Examples
 ///
 /// ```
-/// use isobmff_core::{BoxType, BoxVariants, ChildBoxes, Error, FieldReader, RawBox, boxes};
+/// use isobmff_core::{BoxType, BoxVariants, Boxes, ChildBoxes, Error, FieldReader, RawBox};
 ///
 /// // A sequence number stated in 32 bits by a `sqnc`, or in 16 bits by a `sqn2`
 /// #[derive(PartialEq, Debug)]
@@ -43,7 +43,7 @@ use crate::framing::raw_box::RawBox;
 ///
 /// // A container stating the slot with its 16-bit variant
 /// let payload = b"\0\0\0\x0asqn2\0\x07";
-/// let mut children: ChildBoxes<'_> = boxes(payload).collect::<Result<_, _>>().unwrap();
+/// let mut children: ChildBoxes<'_> = Boxes::new(payload).collect::<Result<_, _>>().unwrap();
 ///
 /// // The one child stated is read as the variant its type names
 /// assert_eq!(

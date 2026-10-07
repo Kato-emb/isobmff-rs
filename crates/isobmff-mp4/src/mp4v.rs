@@ -2,8 +2,8 @@
 
 use isobmff_boxes::VisualSampleEntry;
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, FieldReader, FieldWriter,
-    OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, ChildBoxes, FieldReader,
+    FieldWriter, OtherBoxes,
 };
 
 use crate::error::Error;
@@ -71,7 +71,7 @@ impl BoxDecode for MP4VisualSampleEntry {
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let visual = VisualSampleEntry::decode_fields(reader)?;
         let mut children: ChildBoxes<'_> =
-            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
+            Boxes::new(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         Ok(Self {
             visual,

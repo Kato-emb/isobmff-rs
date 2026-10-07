@@ -4,7 +4,7 @@
 mod tests {
     use core::ops::Range;
 
-    use isobmff_core::{BoxHeader, boxes};
+    use isobmff_core::{BoxHeader, Boxes};
     use isobmff_sequence::BoxEvent;
 
     use isobmff_test_support::{events_of, file_running_to_its_end, payloads_fused};
@@ -56,7 +56,7 @@ mod tests {
     #[test]
     fn the_boxes_reported_are_the_ones_the_boxes_iterator_splits_out() {
         let file = file_running_to_its_end();
-        let split = boxes(&file)
+        let split = Boxes::new(&file)
             .map(|framed| {
                 let framed = framed.unwrap();
 
@@ -77,7 +77,7 @@ mod tests {
     fn the_extent_of_a_box_begins_where_that_box_begins_in_the_file() {
         let file = file_running_to_its_end();
         let mut walked = 0_u64;
-        let beginnings = boxes(&file)
+        let beginnings = Boxes::new(&file)
             .map(|framed| {
                 let framed = framed.unwrap();
                 let beginning = walked;

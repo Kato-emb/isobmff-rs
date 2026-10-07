@@ -11,7 +11,7 @@ mod reading;
 mod tests {
     use super::reading::samples_of;
     use isobmff_boxes::{FileTypeBox, HeaderDuration, MovieBox, MovieHeaderBox, SampleFlags};
-    use isobmff_core::{BoxType, FourCC, Mp4EpochSeconds};
+    use isobmff_core::{BoxType, FourCc, Mp4EpochSeconds};
     use isobmff_sample::Sample;
     use isobmff_sequence::BoxEvent;
     use isobmff_structure::{MovieDemuxFsm, NonFragmentedMuxFsm};
@@ -142,9 +142,9 @@ mod tests {
         assert_eq!(
             demux_fsm.file_type(),
             Some(&FileTypeBox::new(
-                FourCC::new(*b"iso4"),
+                FourCc::new(*b"iso4"),
                 0,
-                vec![FourCC::new(*b"iso4")]
+                vec![FourCc::new(*b"iso4")]
             ))
         );
     }

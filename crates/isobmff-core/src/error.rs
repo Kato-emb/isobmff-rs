@@ -4,7 +4,7 @@ use core::error;
 use core::fmt;
 
 use crate::codec::field::FieldWidth;
-use crate::data_types::fourcc::FourCC;
+use crate::data_types::fourcc::FourCc;
 use crate::framing::box_type::BoxType;
 
 mod kind;
@@ -28,7 +28,7 @@ const CONTAINER_DEPTH: usize = 8;
 /// # Examples
 ///
 /// ```
-/// use isobmff_core::{BoxType, Category, Error, ErrorKind, FourCC};
+/// use isobmff_core::{BoxType, Category, Error, ErrorKind, FourCc};
 ///
 /// // A container names itself as a child failure passes out through it
 /// let failure = Error::unsupported_version(2)
@@ -45,7 +45,7 @@ const CONTAINER_DEPTH: usize = 8;
 /// // Where it went wrong, outermost box first
 /// assert_eq!(
 ///     failure.containers().collect::<Vec<_>>(),
-///     [FourCC::new(*b"trak"), FourCC::new(*b"tkhd")]
+///     [FourCc::new(*b"trak"), FourCc::new(*b"tkhd")]
 /// );
 ///
 /// // A reader of the failure sees the path before the reason
@@ -57,7 +57,7 @@ const CONTAINER_DEPTH: usize = 8;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Error {
     kind: ErrorKind,
-    containers: [Option<FourCC>; CONTAINER_DEPTH],
+    containers: [Option<FourCc>; CONTAINER_DEPTH],
     dropped_containers: bool,
 }
 
@@ -272,7 +272,7 @@ impl Error {
     }
 
     /// Returns the boxes the failure was reached through, outermost first
-    pub fn containers(self) -> impl Iterator<Item = FourCC> {
+    pub fn containers(self) -> impl Iterator<Item = FourCc> {
         self.containers.into_iter().rev().flatten()
     }
 }
@@ -508,7 +508,7 @@ mod tests {
 
     use super::{Error, ErrorKind};
     use crate::codec::field::FieldWidth;
-    use crate::data_types::fourcc::FourCC;
+    use crate::data_types::fourcc::FourCc;
     use crate::framing::box_type::BoxType;
 
     /// Box types the sample table of ISO/IEC 14496-12 §8.7.3.1 states its sample sizes with
@@ -578,9 +578,9 @@ mod tests {
         assert_eq!(
             error.containers().collect::<Vec<_>>(),
             vec![
-                FourCC::new(*b"moov"),
-                FourCC::new(*b"trak"),
-                FourCC::new(*b"tkhd"),
+                FourCc::new(*b"moov"),
+                FourCc::new(*b"trak"),
+                FourCc::new(*b"tkhd"),
             ]
         );
     }

@@ -1,6 +1,6 @@
 //! [`BoxHeader`], the box header of ISO/IEC 14496-12 §4.2
 
-use crate::data_types::fourcc::FourCC;
+use crate::data_types::fourcc::FourCc;
 use crate::data_types::uuid::Uuid;
 use crate::error::Error;
 use crate::framing::box_size::{BoxSize, CompactSize, ExtendedSize};
@@ -29,7 +29,7 @@ const fn header_length(has_large_size: bool, has_user_type: bool) -> u8 {
 /// [`BoxType::Extended`]. A header is therefore 8, 16, 24, or 32 bytes long.
 ///
 /// Every value declares a total that covers the header it prefixes;
-/// [`encode`](Self::encode) is therefore infallible.
+/// [`write_to`](Self::write_to) is therefore infallible.
 ///
 /// # Examples
 ///
@@ -57,7 +57,7 @@ const fn header_length(has_large_size: bool, has_user_type: bool) -> u8 {
 ///
 /// // Decoding and encoding are inverse, byte for byte; the payload is not read
 /// let mut buffer = [0; BoxHeader::MAX_ENCODED_LEN];
-/// assert_eq!(header.encode(&mut buffer), b"\0\0\0\x10free");
+/// assert_eq!(header.write_to(&mut buffer), b"\0\0\0\x10free");
 /// assert_eq!(BoxHeader::decode(b"\0\0\0\x10free"), Ok((header, b"".as_slice())));
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -67,7 +67,7 @@ pub struct BoxHeader {
 }
 
 impl BoxHeader {
-    /// Buffer length [`encode`](Self::encode) writes into: the longest header
+    /// Buffer length [`write_to`](Self::write_to) writes into: the longest header
     pub const MAX_ENCODED_LEN: usize = header_length(true, true) as usize;
 
     /// Creates a header from a box type and a size
@@ -120,7 +120,7 @@ impl BoxHeader {
 
     /// Returns the length of the header itself, payload excluded
     ///
-    /// This is what [`encode`](Self::encode) writes, and what stands between
+    /// This is what [`write_to`](Self::write_to) writes, and what stands between
     /// the start of the box and the payload
     /// [`payload_len`](Self::payload_len) measures.
     #[must_use]
@@ -237,7 +237,7 @@ impl BoxHeader {
             .ok_or_else(|| truncated_at(header_length(false, false)))?;
 
         let declared = u32::from_be_bytes(*size_field);
-        let compact_type = CompactType::new(FourCC::new(*type_field));
+        let compact_type = CompactType::new(FourCc::new(*type_field));
 
         let (large_size, after_large_size) = if declared == EXTENDED_SIZE_MARKER {
             let (large_size_field, rest) = after_type
@@ -285,7 +285,7 @@ impl BoxHeader {
     /// The written prefix is 8, 16, 24, or 32 bytes long, depending on the
     /// forms the header carries; the rest of `buffer` is left untouched.
     #[must_use]
-    pub fn encode<'buffer>(
+    pub fn write_to<'buffer>(
         &self,
         buffer: &'buffer mut [u8; Self::MAX_ENCODED_LEN],
     ) -> &'buffer [u8] {
@@ -511,7 +511,7 @@ mod tests {
             let (header, _payload) = BoxHeader::decode(encoded).unwrap();
             let mut buffer = [0x00; BoxHeader::MAX_ENCODED_LEN];
 
-            assert_eq!(header.encode(&mut buffer), encoded);
+            assert_eq!(header.write_to(&mut buffer), encoded);
         }
     }
 

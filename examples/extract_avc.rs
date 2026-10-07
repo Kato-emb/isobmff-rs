@@ -13,8 +13,8 @@ use std::fs::File;
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 
 use isobmff::avc::Avc1SampleEntry;
-use isobmff::core::{BoxDecode, BoxDefinition};
 use isobmff::structure::MovieDemuxFsm;
+use isobmff::{BoxDecode, BoxDefinition};
 
 const START_CODE: [u8; 4] = [0, 0, 0, 1];
 

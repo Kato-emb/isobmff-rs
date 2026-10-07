@@ -14,8 +14,8 @@ use std::fs::File;
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use isobmff::Mp4EpochSeconds;
 use isobmff::boxes::MovieBox;
-use isobmff::core::Mp4EpochSeconds;
 use isobmff::structure::{MovieDemuxFsm, NonFragmentedMuxFsm};
 
 fn main() -> Result<(), Box<dyn Error>> {

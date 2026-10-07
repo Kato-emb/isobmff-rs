@@ -40,7 +40,7 @@ impl Error {
     #[must_use]
     pub const fn nal_unit_length_out_of_range(length: u64, length_size: u64) -> Self {
         Self {
-            representation: Representation::NALUnitLengthOutOfRange {
+            representation: Representation::NalUnitLengthOutOfRange {
                 length,
                 length_size,
             },
@@ -60,7 +60,7 @@ impl Error {
     #[must_use]
     pub const fn kind(self) -> ErrorKind {
         match self.representation {
-            Representation::NALUnitLengthOutOfRange { .. } => ErrorKind::NALUnitLengthOutOfRange,
+            Representation::NalUnitLengthOutOfRange { .. } => ErrorKind::NalUnitLengthOutOfRange,
             Representation::TruncatedSample { .. } => ErrorKind::TruncatedSample,
         }
     }
@@ -69,19 +69,19 @@ impl Error {
     #[must_use]
     pub const fn category(self) -> Category {
         match self.representation {
-            Representation::NALUnitLengthOutOfRange { .. } => Category::Usage,
+            Representation::NalUnitLengthOutOfRange { .. } => Category::Usage,
             Representation::TruncatedSample { .. } => Category::Malformed,
         }
     }
 
     /// Returns the bytes the failure required
     ///
-    /// For [`NALUnitLengthOutOfRange`](ErrorKind::NALUnitLengthOutOfRange)
+    /// For [`NalUnitLengthOutOfRange`](ErrorKind::NalUnitLengthOutOfRange)
     /// this is the width of the `NALUnitLength` field the length did not fit.
     #[must_use]
     pub const fn needed_bytes(self) -> Option<u64> {
         match self.representation {
-            Representation::NALUnitLengthOutOfRange { length_size, .. } => Some(length_size),
+            Representation::NalUnitLengthOutOfRange { length_size, .. } => Some(length_size),
             Representation::TruncatedSample { needed, .. } => Some(needed),
         }
     }
@@ -91,18 +91,18 @@ impl Error {
     pub const fn available_bytes(self) -> Option<u64> {
         match self.representation {
             Representation::TruncatedSample { available, .. } => Some(available),
-            Representation::NALUnitLengthOutOfRange { .. } => None,
+            Representation::NalUnitLengthOutOfRange { .. } => None,
         }
     }
 
     /// Returns the value a field was given, for the kinds that name one
     ///
-    /// For [`NALUnitLengthOutOfRange`](ErrorKind::NALUnitLengthOutOfRange)
+    /// For [`NalUnitLengthOutOfRange`](ErrorKind::NalUnitLengthOutOfRange)
     /// this is the length of the NAL unit.
     #[must_use]
     pub const fn value(self) -> Option<u64> {
         match self.representation {
-            Representation::NALUnitLengthOutOfRange { length, .. } => Some(length),
+            Representation::NalUnitLengthOutOfRange { length, .. } => Some(length),
             Representation::TruncatedSample { .. } => None,
         }
     }
@@ -111,7 +111,7 @@ impl Error {
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.representation {
-            Representation::NALUnitLengthOutOfRange {
+            Representation::NalUnitLengthOutOfRange {
                 length,
                 length_size,
             } => write!(
@@ -139,13 +139,13 @@ impl error::Error for Error {}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ErrorKind {
     /// A NAL unit is longer than the `NALUnitLength` field can state
-    NALUnitLengthOutOfRange,
+    NalUnitLengthOutOfRange,
     /// A sample ends inside a `NALUnitLength` field or the NAL unit it measures
     TruncatedSample,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Representation {
-    NALUnitLengthOutOfRange { length: u64, length_size: u64 },
+    NalUnitLengthOutOfRange { length: u64, length_size: u64 },
     TruncatedSample { needed: u64, available: u64 },
 }

@@ -3,10 +3,10 @@
 use std::io::{self, Read};
 
 use isobmff::boxes::{MovieBox, MovieFragmentBox};
-use isobmff::core::{BoxDecode, BoxDefinition, BoxType};
 use isobmff::sample::{SampleExtent, TrackDecodeTimes, movie_fragment, sample_table};
 use isobmff::sequence::BoxEvent;
 use isobmff::structure;
+use isobmff::{BoxDecode, BoxDefinition, BoxType};
 use wasm_bindgen::prelude::wasm_bindgen;
 
 use crate::Error;

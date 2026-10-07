@@ -1,8 +1,8 @@
 //! [`MediaBox`] (`mdia`), ISO/IEC 14496-12 §8.4.1
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
-    FieldWriter, OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, ChildBoxes, Error, FieldReader,
+    FieldWriter, OtherBoxes,
 };
 
 use crate::data_types::HeaderDuration;
@@ -103,7 +103,7 @@ impl BoxDecode for MediaBox {
 
     /// # Errors
     ///
-    /// * The failures of [`boxes`]: a child does not frame as a box.
+    /// * The failures of [`Boxes`]: a child does not frame as a box.
     /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox): no `mdhd`,
     ///   `hdlr`, or `minf`.
     /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one of any of
@@ -112,7 +112,7 @@ impl BoxDecode for MediaBox {
     ///   does not decode.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let mut children: ChildBoxes<'_> =
-            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
+            Boxes::new(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         Ok(Self {
             mdhd: children.take_exactly_one()?,
@@ -159,7 +159,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_core::{
-        BoxDecode, BoxEncode, BoxType, Error, FourCC, LanguageCode, Mp4EpochSeconds,
+        BoxDecode, BoxEncode, BoxType, Error, FourCc, LanguageCode, Mp4EpochSeconds,
         NullTerminatedString,
     };
 
@@ -179,7 +179,7 @@ mod tests {
                 LanguageCode::UND,
             ),
             HandlerBox::new(
-                FourCC::new(*b"vide"),
+                FourCc::new(*b"vide"),
                 NullTerminatedString::new(String::from("VideoHandler")).unwrap(),
             ),
             media_information(),

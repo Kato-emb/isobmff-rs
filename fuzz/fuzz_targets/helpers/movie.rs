@@ -4,8 +4,8 @@
 //! A file under `fuzz_targets/` is a target only where the `[[bin]]` table names
 //! it, so this module is not one.
 
+use isobmff::Mp4EpochSeconds;
 use isobmff::boxes::{HeaderDuration, MovieBox, MovieExtendsBox, MovieHeaderBox, TrackExtendsBox};
-use isobmff::core::Mp4EpochSeconds;
 use isobmff_test_support::track;
 
 /// Ticks a second the movie is timed in

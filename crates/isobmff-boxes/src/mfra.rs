@@ -3,8 +3,8 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
-    FieldWidth, FieldWriter, OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, ChildBoxes, Error, FieldReader,
+    FieldWidth, FieldWriter, OtherBoxes,
 };
 
 use crate::mfro::MovieFragmentRandomAccessOffsetBox;
@@ -66,14 +66,14 @@ impl BoxDecode for MovieFragmentRandomAccessBox {
 
     /// # Errors
     ///
-    /// * The failures of [`boxes`]: a child does not frame as a box.
+    /// * The failures of [`Boxes`]: a child does not frame as a box.
     /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox): no `mfro`.
     /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one `mfro`.
     /// * Whatever the child reports, on the [`containers`](Error::containers) path: a child does
     ///   not decode.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let mut children: ChildBoxes<'_> =
-            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
+            Boxes::new(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         children.take_exactly_one::<MovieFragmentRandomAccessOffsetBox>()?;
 
@@ -128,7 +128,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxDefinition as _, BoxEncode, BoxType, Error, boxes};
+    use isobmff_core::{BoxDecode, BoxDefinition as _, BoxEncode, BoxType, Boxes, Error};
 
     use super::MovieFragmentRandomAccessBox;
     use crate::mfro::MovieFragmentRandomAccessOffsetBox;
@@ -209,7 +209,7 @@ mod tests {
         .concat();
 
         let random_access = MovieFragmentRandomAccessBox::decode_payload(&payload).unwrap();
-        let box_types: Vec<BoxType> = boxes(&encoded_payload(&random_access))
+        let box_types: Vec<BoxType> = Boxes::new(&encoded_payload(&random_access))
             .map(|child| child.unwrap().header().box_type())
             .collect();
 

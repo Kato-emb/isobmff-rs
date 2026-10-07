@@ -314,7 +314,7 @@ impl MediaSegmentMuxFsm {
 #[cfg(test)]
 mod tests {
     use isobmff_boxes::{MovieFragmentBox, SampleFlags, SegmentTypeBox};
-    use isobmff_core::{BoxDefinition, FourCC};
+    use isobmff_core::{BoxDefinition, FourCc};
     use isobmff_sample::Sample;
     use isobmff_test_support::{segment_type, unfragmented_movie};
 
@@ -338,9 +338,9 @@ mod tests {
 
         assert_eq!(
             mux_fsm.handle_segment_type(SegmentTypeBox::new(
-                FourCC::new(*b"msdh"),
+                FourCc::new(*b"msdh"),
                 0,
-                alloc::vec![FourCC::new(*b"msdh"), FourCC::new(*b"isom")],
+                alloc::vec![FourCc::new(*b"msdh"), FourCc::new(*b"isom")],
             )),
             Err(Error::UnsupportedBrand)
         );

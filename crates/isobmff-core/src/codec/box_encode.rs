@@ -27,7 +27,7 @@ pub(crate) fn encode_into<'buffer>(
 
     let header = BoxHeader::with_payload_len(box_type, payload.payload_len()).ok_or(too_short)?;
     let mut scratch = [0; BoxHeader::MAX_ENCODED_LEN];
-    let encoded_header = header.encode(&mut scratch);
+    let encoded_header = header.write_to(&mut scratch);
 
     // Why not report a total beyond `usize` as its own error: such a total
     // exceeds any `buffer.len()` on the same target, so it is a short buffer by

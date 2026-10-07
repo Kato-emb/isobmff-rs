@@ -1,4 +1,4 @@
-//! Framing properties of [`boxes`] and [`RawBox::split_first`]
+//! Framing properties of [`Boxes`] and [`RawBox::split_first`]
 //!
 //! One run checks four properties of the same input:
 //!
@@ -10,7 +10,7 @@
 
 #![no_main]
 
-use isobmff_core::{BoxHeader, Error, ErrorKind, RawBox, boxes};
+use isobmff_core::{BoxHeader, Boxes, Error, ErrorKind, RawBox};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
 
@@ -42,13 +42,13 @@ fn frames_re_encode_to_the_span_they_came_from(bytes: &[u8]) {
     let mut offset = 0;
     let mut steps = 0usize;
 
-    for framed in boxes(bytes) {
+    for framed in Boxes::new(bytes) {
         steps += 1;
 
         let Ok(framed) = framed else { continue };
 
         let mut buffer = [0; BoxHeader::MAX_ENCODED_LEN];
-        let header = framed.header().encode(&mut buffer);
+        let header = framed.header().write_to(&mut buffer);
         let mut re_encoded = Vec::with_capacity(header.len() + framed.payload().len());
         re_encoded.extend_from_slice(header);
         re_encoded.extend_from_slice(framed.payload());

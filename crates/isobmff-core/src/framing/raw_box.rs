@@ -1,4 +1,4 @@
-//! [`RawBox`] and [`boxes`], a box of ISO/IEC 14496-12 §4.2 as the bytes it was framed as
+//! [`RawBox`] and [`Boxes`], a box of ISO/IEC 14496-12 §4.2 as the bytes it was framed as
 
 use core::iter::FusedIterator;
 
@@ -104,18 +104,7 @@ impl<'a> RawBox<'a> {
     }
 }
 
-/// Splits `input` into the boxes laid end to end in it
-///
-/// An empty input holds no boxes and iterates as an empty sequence.
-#[must_use]
-pub fn boxes(input: &[u8]) -> Boxes<'_> {
-    Boxes {
-        remaining: input,
-        done: false,
-    }
-}
-
-/// Iterator over the boxes of an input, as [`boxes`] returns
+/// Iterator over the boxes laid end to end in an input
 ///
 /// Each step splits one box off the front with
 /// [`RawBox::split_first`], which states the contract the steps follow. A box
@@ -125,6 +114,19 @@ pub fn boxes(input: &[u8]) -> Boxes<'_> {
 pub struct Boxes<'a> {
     remaining: &'a [u8],
     done: bool,
+}
+
+impl<'a> Boxes<'a> {
+    /// Creates the iterator over the boxes laid end to end in `input`
+    ///
+    /// An empty input holds no boxes and iterates as an empty sequence.
+    #[must_use]
+    pub const fn new(input: &'a [u8]) -> Self {
+        Self {
+            remaining: input,
+            done: false,
+        }
+    }
 }
 
 impl<'a> Iterator for Boxes<'a> {
@@ -155,7 +157,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use super::{Error, RawBox, boxes};
+    use super::{Boxes, Error, RawBox};
     use crate::framing::box_header::BoxHeader;
     use crate::framing::box_size::{BoxSize, CompactSize};
     use crate::framing::box_type::BoxType;
@@ -238,7 +240,7 @@ mod tests {
         let input = b"\0\0\0\x0cfreeAAAA\0\0\0\x08skip";
 
         assert_eq!(
-            boxes(input).collect::<Vec<_>>(),
+            Boxes::new(input).collect::<Vec<_>>(),
             vec![
                 Ok(RawBox {
                     header: compact_header(*b"free", 12),
@@ -254,13 +256,13 @@ mod tests {
 
     #[test]
     fn an_empty_input_holds_no_boxes() {
-        assert_eq!(boxes(b"").next(), None);
+        assert_eq!(Boxes::new(b"").next(), None);
     }
 
     #[test]
     fn a_box_that_fails_to_split_ends_the_iteration_for_good() {
         let input = b"\0\0\0\x08free\0\0\0\x20free";
-        let mut iterator = boxes(input);
+        let mut iterator = Boxes::new(input);
 
         let framed = iterator.by_ref().collect::<Vec<_>>();
 
@@ -284,7 +286,7 @@ mod tests {
 
         assert_eq!(rest, b"");
         assert_eq!(
-            boxes(container.payload()).collect::<Vec<_>>(),
+            Boxes::new(container.payload()).collect::<Vec<_>>(),
             vec![
                 Ok(RawBox {
                     header: compact_header(*b"free", 12),

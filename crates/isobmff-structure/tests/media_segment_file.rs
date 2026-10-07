@@ -15,7 +15,7 @@ mod tests {
         TimeToSampleEntry, TrackFragmentBox, TrackFragmentHeaderBox, TrackFragmentHeaderFlags,
         TrackRunBox, TrackRunSample,
     };
-    use isobmff_core::{BoxEncode, FourCC};
+    use isobmff_core::{BoxEncode, FourCc};
     use isobmff_structure::{Error, MediaSegmentDemuxFsm, WantedInput};
     use isobmff_test_support::{
         SAMPLE_CHUNKS, fragmented_file_with_movie_samples, indexed_segment_file,
@@ -170,9 +170,9 @@ mod tests {
     /// Brands of a later segment, other than those [`segment_type`] declares
     fn later_segment_type() -> SegmentTypeBox {
         SegmentTypeBox::new(
-            FourCC::new(*b"msix"),
+            FourCc::new(*b"msix"),
             1,
-            vec![FourCC::new(*b"msix"), FourCC::new(*b"dash")],
+            vec![FourCc::new(*b"msix"), FourCc::new(*b"dash")],
         )
     }
 

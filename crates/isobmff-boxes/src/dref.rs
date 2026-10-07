@@ -3,8 +3,8 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWidth, FieldWriter,
-    FullBoxFields, FullBoxFlags, boxes,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, Error, FieldReader, FieldWidth,
+    FieldWriter, FullBoxFields, FullBoxFlags,
 };
 
 use crate::data_entry::DataEntry;
@@ -59,7 +59,7 @@ impl BoxDecode for DataReferenceBox {
     ///   declares a version other than 0.
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
     ///   payload ends before the fields that precede the entries.
-    /// * The failures of [`boxes`]: an entry does not frame as a box.
+    /// * The failures of [`Boxes`]: an entry does not frame as a box.
     /// * [`EntryCountMismatch`](isobmff_core::ErrorKind::EntryCountMismatch): the
     ///   `entry_count` field disagrees with the entries that follow it.
     ///
@@ -74,7 +74,7 @@ impl BoxDecode for DataReferenceBox {
         let declared = u64::from(reader.read_u32()?);
 
         let mut entries = Vec::new();
-        for entry in boxes(reader.take_remainder()) {
+        for entry in Boxes::new(reader.take_remainder()) {
             entries.push(DataEntry::decode(entry?));
         }
 

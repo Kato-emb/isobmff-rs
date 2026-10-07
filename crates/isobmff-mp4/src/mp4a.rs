@@ -2,8 +2,8 @@
 
 use isobmff_boxes::{AudioSampleEntry, SamplingRateBox};
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, FieldReader, FieldWriter,
-    OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, ChildBoxes, FieldReader,
+    FieldWriter, OtherBoxes,
 };
 
 use crate::error::Error;
@@ -125,7 +125,7 @@ impl BoxDecode for MP4AudioSampleEntry {
         let audio = AudioSampleEntry::decode_fields(reader)?;
 
         let mut children: ChildBoxes<'_> =
-            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
+            Boxes::new(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         Ok(Self {
             audio,
@@ -176,7 +176,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_boxes::{AudioSampleEntry, SampleDescriptionBox, SamplingRateBox};
-    use isobmff_core::{AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, FourCC, U16F16};
+    use isobmff_core::{AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, FourCc, U16F16};
 
     use super::MP4AudioSampleEntry;
     use crate::error::Error;
@@ -262,7 +262,7 @@ mod tests {
             failure
                 .box_error()
                 .map(|error| error.containers().collect::<Vec<_>>()),
-            Some(vec![FourCC::new(*b"esds")])
+            Some(vec![FourCc::new(*b"esds")])
         );
     }
 

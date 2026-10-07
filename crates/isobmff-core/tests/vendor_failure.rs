@@ -5,7 +5,7 @@
 #[cfg(test)]
 mod tests {
     use isobmff_core::{
-        BoxDecode, BoxDefinition, BoxType, ChildBoxes, Error, FieldReader, InContainer, boxes,
+        BoxDecode, BoxDefinition, BoxType, Boxes, ChildBoxes, Error, FieldReader, InContainer,
     };
 
     /// Failure of the vendor crate: a box failure, or a checksum that disagrees
@@ -53,7 +53,7 @@ mod tests {
 
     /// Collects every box a payload holds
     fn collected(payload: &[u8]) -> ChildBoxes<'_> {
-        boxes(payload).collect::<Result<_, _>>().unwrap()
+        Boxes::new(payload).collect::<Result<_, _>>().unwrap()
     }
 
     #[test]

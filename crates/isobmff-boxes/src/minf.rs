@@ -1,8 +1,8 @@
 //! [`MediaInformationBox`] (`minf`), ISO/IEC 14496-12 §8.4.4
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxVariants, ChildBoxes, Error,
-    FieldReader, FieldWriter, OtherBoxes, RawBox, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxVariants, Boxes, ChildBoxes, Error,
+    FieldReader, FieldWriter, OtherBoxes, RawBox,
 };
 
 use crate::dinf::DataInformationBox;
@@ -223,7 +223,7 @@ impl BoxDecode for MediaInformationBox {
 
     /// # Errors
     ///
-    /// * The failures of [`boxes`]: a child does not frame as a box.
+    /// * The failures of [`Boxes`]: a child does not frame as a box.
     /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox): no
     ///   `dinf` or no `stbl`.
     /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one
@@ -235,7 +235,7 @@ impl BoxDecode for MediaInformationBox {
     ///   is kept among [`other_boxes`](Self::other_boxes) instead.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let mut children: ChildBoxes<'_> =
-            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
+            Boxes::new(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         Ok(Self {
             media_information_header: children.take_zero_or_one_variant_if_decoded()?,
@@ -285,8 +285,8 @@ pub(crate) mod tests {
     use alloc::vec::Vec;
 
     use isobmff_core::{
-        AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxVariants as _, ChildBoxes, Error,
-        OtherBoxes, boxes,
+        AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxVariants as _, Boxes, ChildBoxes,
+        Error, OtherBoxes,
     };
 
     use super::{MediaInformationBox, MediaInformationHeader};
@@ -307,7 +307,7 @@ pub(crate) mod tests {
     /// Children a container keeps, as the boxes `children` frames into
     pub(crate) fn kept(children: &[u8]) -> OtherBoxes {
         OtherBoxes::from(
-            boxes(children)
+            Boxes::new(children)
                 .collect::<Result<ChildBoxes<'_>, _>>()
                 .unwrap(),
         )

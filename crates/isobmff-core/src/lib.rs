@@ -32,10 +32,10 @@ pub use container::{ChildBoxes, OtherBoxes};
 #[cfg(feature = "alloc")]
 pub use data_types::NullTerminatedString;
 pub use data_types::{
-    CompressorName, FourCC, FullBoxFields, FullBoxFlags, I8F8, I16F16, LanguageCode, Matrix,
+    CompressorName, FourCc, FullBoxFields, FullBoxFlags, I8F8, I16F16, LanguageCode, Matrix,
     Mp4EpochSeconds, U16F16, Uuid,
 };
 pub use error::{Category, Error, ErrorKind, InContainer};
 pub use framing::{
-    BoxHeader, BoxSize, BoxType, Boxes, CompactSize, CompactType, ExtendedSize, RawBox, boxes,
+    BoxHeader, BoxSize, BoxType, Boxes, CompactSize, CompactType, ExtendedSize, RawBox,
 };

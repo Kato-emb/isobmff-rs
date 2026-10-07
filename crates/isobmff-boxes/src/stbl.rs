@@ -1,8 +1,8 @@
 //! [`SampleTableBox`] (`stbl`), ISO/IEC 14496-12 §8.5.1
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
-    FieldWriter, OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, ChildBoxes, Error, FieldReader,
+    FieldWriter, OtherBoxes,
 };
 
 use crate::chunk_offset::ChunkOffsets;
@@ -237,7 +237,7 @@ impl BoxDecode for SampleTableBox {
 
     /// # Errors
     ///
-    /// * The failures of [`boxes`]: a child does not frame as a box.
+    /// * The failures of [`Boxes`]: a child does not frame as a box.
     /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox): no
     ///   `stsd`, `stts`, or `stsc`.
     /// * [`MissingAlternativeBox`](isobmff_core::ErrorKind::MissingAlternativeBox):
@@ -251,7 +251,7 @@ impl BoxDecode for SampleTableBox {
     ///   of the tables does not decode.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let mut children: ChildBoxes<'_> =
-            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
+            Boxes::new(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         Ok(Self {
             stsd: children.take_exactly_one()?,
@@ -328,7 +328,7 @@ pub(crate) mod tests {
     use alloc::vec::Vec;
 
     use isobmff_core::{
-        AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxVariants as _, Error, boxes,
+        AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxVariants as _, Boxes, Error,
     };
 
     use super::SampleTableBox;
@@ -414,7 +414,7 @@ pub(crate) mod tests {
     fn the_children_are_written_in_the_order_the_spec_lists_them() {
         let payload = encoded_payload(&sample_table_with_every_optional_table());
 
-        let box_types: Vec<BoxType> = boxes(&payload)
+        let box_types: Vec<BoxType> = Boxes::new(&payload)
             .map(|child| child.unwrap().header().box_type())
             .collect();
 
