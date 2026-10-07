@@ -127,8 +127,6 @@ impl BoxDecode for DataEntryUrlBox {
     ///   states the media data is in this file is the
     ///   [`TrailingPayload`](isobmff_core::ErrorKind::TrailingPayload) the payload
     ///   contract refuses.
-    /// * [`InvalidUtf8`](isobmff_core::ErrorKind::InvalidUtf8): the location is not
-    ///   UTF-8.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let full_box = FullBoxFields::from_bytes(reader.read_bytes::<4>()?);
         if full_box.version() != 0 {
@@ -136,7 +134,7 @@ impl BoxDecode for DataEntryUrlBox {
         }
 
         let location = if full_box.flags().bits() & SELF_CONTAINED.bits() == 0 {
-            Some(NullTerminatedString::from_slice(reader.take_remainder())?)
+            Some(NullTerminatedString::from_slice(reader.take_remainder()))
         } else {
             None
         };
@@ -221,8 +219,6 @@ impl BoxDecode for DataEntryUrnBox {
     ///   declares a version other than 0.
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the payload
     ///   ends inside the version and the flags.
-    /// * [`InvalidUtf8`](isobmff_core::ErrorKind::InvalidUtf8): the name or the
-    ///   location is not UTF-8.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let version = FullBoxFields::from_bytes(reader.read_bytes::<4>()?).version();
         if version != 0 {
@@ -232,10 +228,10 @@ impl BoxDecode for DataEntryUrnBox {
         let mut strings = reader.take_remainder().splitn(2, |byte| *byte == 0);
 
         Ok(Self {
-            name: NullTerminatedString::from_slice(strings.next().unwrap_or_default())?,
+            name: NullTerminatedString::from_slice(strings.next().unwrap_or_default()),
             location: match strings.next().unwrap_or_default() {
                 [] => None,
-                location => Some(NullTerminatedString::from_slice(location)?),
+                location => Some(NullTerminatedString::from_slice(location)),
             },
         })
     }
@@ -342,6 +338,27 @@ mod tests {
             DataEntryUrnBox::decode_payload(payload).unwrap(),
             DataEntryUrnBox::new(text("urn:smpte:ul:0"), Some(text("media.mp4")))
         );
+    }
+
+    #[test]
+    fn strings_that_are_not_utf8_are_kept_as_their_bytes_and_written_back_as_them() {
+        let url = b"\0\0\0\0Gr\x9fn.mp4\0";
+        let urn = b"\0\0\0\0urn:Gr\x9fn\0Gr\x9fn.mp4\0";
+        let mac_roman = || Some(NullTerminatedString::from_slice(b"Gr\x9fn.mp4"));
+
+        let elsewhere = DataEntryUrlBox::decode_payload(url).unwrap();
+        let named = DataEntryUrnBox::decode_payload(urn).unwrap();
+
+        assert_eq!(elsewhere, DataEntryUrlBox::new(mac_roman()));
+        assert_eq!(
+            named,
+            DataEntryUrnBox::new(
+                NullTerminatedString::from_slice(b"urn:Gr\x9fn"),
+                mac_roman()
+            )
+        );
+        assert_eq!(encoded_payload(&elsewhere), url);
+        assert_eq!(encoded_payload(&named), urn);
     }
 
     #[test]

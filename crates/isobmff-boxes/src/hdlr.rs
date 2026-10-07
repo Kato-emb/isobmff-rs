@@ -14,8 +14,9 @@ const FIXED_FIELDS_LEN: u64 = 24;
 /// tells a reader which kind of media a track carries — `vide` for video,
 /// `soun` for audio — and the `name` is human-readable text a tool may show.
 ///
-/// The `name` is read leniently: files that leave its terminator off are common,
-/// and [`NullTerminatedString`] accepts them. Writing puts a terminator back.
+/// The `name` is read leniently: files that leave its terminator off, or whose
+/// text is not UTF-8, are common, and [`NullTerminatedString`] accepts them.
+/// Writing puts the bytes back and a terminator after them.
 #[doc(alias = "hdlr")]
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -76,7 +77,6 @@ impl BoxDecode for HandlerBox {
     ///   declares a version other than 0.
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
     ///   payload ends before the fields that precede the `name`.
-    /// * [`InvalidUtf8`](isobmff_core::ErrorKind::InvalidUtf8): the `name` is not UTF-8.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let version = FullBoxFields::from_bytes(reader.read_bytes::<4>()?).version();
         if version != 0 {
@@ -90,7 +90,7 @@ impl BoxDecode for HandlerBox {
         Ok(Self {
             pre_defined,
             handler_type,
-            name: NullTerminatedString::from_slice(reader.take_remainder())?,
+            name: NullTerminatedString::from_slice(reader.take_remainder()),
         })
     }
 }
@@ -152,7 +152,7 @@ mod tests {
     fn a_box_holding_no_name_reads_as_the_empty_string() {
         let handler = HandlerBox::decode_payload(&[0; 24]).unwrap();
 
-        assert_eq!(handler.name().as_str(), "");
+        assert_eq!(handler.name().as_str(), Some(""));
         assert_eq!(handler.payload_len(), 25);
     }
 
@@ -165,13 +165,20 @@ mod tests {
     }
 
     #[test]
-    fn a_name_that_is_not_utf8_is_rejected() {
-        let mut payload = vec![0; 24];
-        payload.push(0xff);
+    fn a_name_that_is_not_utf8_is_kept_as_its_bytes_and_written_back_as_them() {
+        let payload = [[0; 24].as_slice(), b"Gr\x9fn\0"].concat();
+        let mut written = vec![0xaa; payload.len()];
+
+        let handler = HandlerBox::decode_payload(&payload).unwrap();
+        handler.encode_payload(&mut written).unwrap();
 
         assert_eq!(
-            HandlerBox::decode_payload(&payload),
-            Err(Error::invalid_utf8(0))
+            handler,
+            HandlerBox::new(
+                FourCC::new([0; 4]),
+                NullTerminatedString::from_slice(b"Gr\x9fn")
+            )
         );
+        assert_eq!(written, payload);
     }
 }
