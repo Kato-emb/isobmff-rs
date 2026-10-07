@@ -16,8 +16,8 @@ use isobmff_core::{BoxType, Category};
 /// The vocabulary is this crate's own: taking a file as it arrives and laying
 /// one down name their failures here. The situations a sequence reaches are
 /// added to as ISO/IEC 14496-12 is read further, so a match on this must leave
-/// room for kinds that are not here yet, and a match on a kind must leave room
-/// for values that are not here yet.
+/// room for variants that are not here yet, and a match on a variant must leave
+/// room for fields that are not here yet.
 ///
 /// # Examples
 ///
@@ -187,7 +187,7 @@ mod tests {
     use super::Error;
 
     #[test]
-    fn a_kind_falls_in_the_category_its_situation_asks_for() {
+    fn a_failure_falls_in_the_category_its_situation_asks_for() {
         assert_eq!(
             Error::UnfinishedHeader {
                 needed_bytes: 16,
