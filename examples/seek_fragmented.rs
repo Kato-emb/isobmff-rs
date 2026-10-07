@@ -15,7 +15,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
 use isobmff::sample::movie_fragment_random_access::sync_sample_at;
-use isobmff::structure::FragmentedDemuxFsm;
+use isobmff::structure::MovieDemuxFsm;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let usage = "usage: seek_fragmented <in.mp4> <milliseconds>";
@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut file = File::open(path)?;
     let file_len = file.metadata()?.len();
     let mut buffer = vec![0; 1024 * 1024];
-    let mut demux_fsm = FragmentedDemuxFsm::new();
+    let mut demux_fsm = MovieDemuxFsm::new();
     while demux_fsm.movie().is_none() {
         let wanted = demux_fsm
             .wanted_input()

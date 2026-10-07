@@ -16,7 +16,7 @@ mod tests {
     };
     use isobmff_core::{AnyBox, BoxType, FourCC, Mp4EpochSeconds};
     use isobmff_sample::Sample;
-    use isobmff_structure::{FragmentedDemuxFsm, FragmentedMuxFsm};
+    use isobmff_structure::{FragmentedMuxFsm, MovieDemuxFsm};
     use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type, track};
 
     /// Ticks a second the media of the movie is timed in
@@ -151,7 +151,7 @@ mod tests {
     fn a_file_handed_no_brands_is_read_back_declaring_the_brand_its_layout_requires() {
         let file = written_file(None, movie(), two_track_fragments());
 
-        let mut demux_fsm = FragmentedDemuxFsm::new();
+        let mut demux_fsm = MovieDemuxFsm::new();
         demux_fsm.handle_input(0, &file).unwrap();
 
         assert_eq!(

@@ -14,7 +14,7 @@ mod tests {
     use isobmff_core::{BoxType, FourCC, Mp4EpochSeconds};
     use isobmff_sample::Sample;
     use isobmff_sequence::BoxEvent;
-    use isobmff_structure::{NonFragmentedDemuxFsm, NonFragmentedMuxFsm};
+    use isobmff_structure::{MovieDemuxFsm, NonFragmentedMuxFsm};
     use isobmff_test_support::{events_of, file_type, track};
 
     /// Ticks a second the media of the movie is timed in
@@ -136,7 +136,7 @@ mod tests {
     fn a_file_handed_no_brands_is_read_back_declaring_the_brand_its_layout_requires() {
         let file = written_file(None, movie(), two_track_chunks());
 
-        let mut demux_fsm = NonFragmentedDemuxFsm::new();
+        let mut demux_fsm = MovieDemuxFsm::new();
         demux_fsm.handle_input(0, &file).unwrap();
 
         assert_eq!(
@@ -153,7 +153,7 @@ mod tests {
     fn the_durations_are_stated_from_the_samples_each_track_was_handed() {
         let file = written_file(None, movie_timed_in(1_000), two_track_chunks());
 
-        let mut demux_fsm = NonFragmentedDemuxFsm::new();
+        let mut demux_fsm = MovieDemuxFsm::new();
         demux_fsm.handle_input(0, &file).unwrap();
         let read = demux_fsm.movie().unwrap();
 

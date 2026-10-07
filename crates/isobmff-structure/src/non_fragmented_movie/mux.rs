@@ -13,7 +13,7 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 
 /// Lays a non-fragmented movie file down, taking the samples as they come
 ///
-/// The mirror of [`NonFragmentedDemuxFsm`](crate::NonFragmentedDemuxFsm): it
+/// The mirror of [`MovieDemuxFsm`](crate::MovieDemuxFsm): it
 /// wires the layers that write a non-fragmented movie file — the structure
 /// that holds the order of the top-level boxes, the writing of each box
 /// whole, the laying out of the samples as the sample tables of the movie
@@ -90,7 +90,7 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 /// ```
 /// use isobmff_boxes::SampleFlags;
 /// use isobmff_sample::Sample;
-/// use isobmff_structure::{NonFragmentedDemuxFsm, NonFragmentedMuxFsm};
+/// use isobmff_structure::{MovieDemuxFsm, NonFragmentedMuxFsm};
 /// # use isobmff_test_support::{file_type, unfragmented_movie};
 /// // A file opening with its brands, whose movie declares one track and no sample yet
 /// let mut mux_fsm = NonFragmentedMuxFsm::new();
@@ -115,7 +115,7 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 /// assert_eq!(&file[4..8], b"ftyp");
 ///
 /// // Read back, the samples come out as they were laid down
-/// let mut demux_fsm = NonFragmentedDemuxFsm::new();
+/// let mut demux_fsm = MovieDemuxFsm::new();
 /// while let Some(wanted) = demux_fsm.wanted_input() {
 ///     let start = (wanted.offset() as usize).min(file.len());
 ///     let end = wanted.length().map_or(file.len(), |length| start + length as usize);

@@ -1,51 +1,8 @@
-//! [`FragmentedDemuxFsm`] and [`FragmentedMuxFsm`], a fragmented movie file read and written through the layers this crate holds, ISO/IEC 14496-12 Annex A.8
+//! [`FragmentedMuxFsm`], a fragmented movie file written through the layers this crate holds, ISO/IEC 14496-12 Annex A.8
 
-mod demux;
 mod mux;
 mod structure;
 
-pub use demux::FragmentedDemuxFsm;
 pub use mux::FragmentedMuxFsm;
 
-use structure::{FragmentedDisposition, FragmentedStructure};
-
-#[cfg(test)]
-mod tests {
-    use alloc::vec::Vec;
-
-    use isobmff_boxes::{SampleFlags, TrackExtendsBox};
-    use isobmff_sample::Sample;
-    use isobmff_test_support::fragmented_movie;
-
-    use super::FragmentedMuxFsm;
-
-    /// One sample of track 1, the first of its fragment
-    pub(super) fn sample() -> Sample {
-        Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec())
-    }
-
-    /// A file of one fragment carrying [`sample`], handed no brands
-    pub(super) fn file_of_one_sample() -> Vec<u8> {
-        let mut mux_fsm = FragmentedMuxFsm::new();
-        let mut file = Vec::new();
-
-        mux_fsm
-            .handle_movie(fragmented_movie(TrackExtendsBox::new(
-                1,
-                1,
-                1_024,
-                0,
-                SampleFlags::ZERO,
-            )))
-            .unwrap();
-        mux_fsm.begin_fragment(1).unwrap();
-        mux_fsm.handle_sample(sample()).unwrap();
-        mux_fsm.finish_fragment().unwrap();
-        mux_fsm.finish().unwrap();
-        while let Some(written) = mux_fsm.poll_output() {
-            file.extend_from_slice(&written);
-        }
-
-        file
-    }
-}
+pub(crate) use structure::{FragmentedDisposition, FragmentedStructure};

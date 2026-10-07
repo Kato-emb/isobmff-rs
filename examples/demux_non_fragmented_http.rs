@@ -13,7 +13,7 @@ use core::error::Error;
 use std::env;
 use std::io::Read;
 
-use isobmff::structure::NonFragmentedDemuxFsm;
+use isobmff::structure::MovieDemuxFsm;
 use ureq::Agent;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .build()
         .new_agent();
     let mut buffer = Vec::new();
-    let mut demux_fsm = NonFragmentedDemuxFsm::new();
+    let mut demux_fsm = MovieDemuxFsm::new();
 
     let mut count: u64 = 0;
     while let Some(wanted) = demux_fsm.wanted_input() {

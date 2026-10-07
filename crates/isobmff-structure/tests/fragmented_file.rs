@@ -19,7 +19,7 @@ mod tests {
     use isobmff_core::{BoxEncode, BoxType};
     use isobmff_sample::Sample;
     use isobmff_sequence::BoxEvent;
-    use isobmff_structure::{Error, ErrorKind, FragmentedDemuxFsm, WantedInput};
+    use isobmff_structure::{Error, ErrorKind, MovieDemuxFsm, WantedInput};
     use isobmff_test_support::{
         FragmentedFileWithMovieSamples, IndexedFile, SAMPLE_CHUNKS, events_of, file_type,
         fragmented_file_samples, fragmented_file_with_movie_samples, fragmented_file_with_samples,
@@ -31,8 +31,8 @@ mod tests {
     use super::reading::{drained, read_on, samples_of};
 
     /// Reader that read `file` whole and was declared over
-    fn read_whole(file: &IndexedFile) -> FragmentedDemuxFsm {
-        let mut demux_fsm = FragmentedDemuxFsm::new();
+    fn read_whole(file: &IndexedFile) -> MovieDemuxFsm {
+        let mut demux_fsm = MovieDemuxFsm::new();
         demux_fsm.handle_input(0, &file.bytes).unwrap();
         demux_fsm.finish().unwrap();
 
@@ -41,7 +41,7 @@ mod tests {
 
     /// Resumes `demux_fsm` at `offset` and hands it the rest of `file` from there
     fn resumed_at(
-        demux_fsm: &mut FragmentedDemuxFsm,
+        demux_fsm: &mut MovieDemuxFsm,
         file: &IndexedFile,
         offset: u64,
     ) -> Result<(), Error> {
@@ -110,7 +110,7 @@ mod tests {
         drained(&mut finished);
         resumed_at(&mut finished, &file, second).unwrap();
 
-        let mut reading = FragmentedDemuxFsm::new();
+        let mut reading = MovieDemuxFsm::new();
         reading
             .handle_input(
                 0,
@@ -197,7 +197,7 @@ mod tests {
     fn the_continuation_is_wanted_after_the_bytes_handed_over_since_the_reading_last_started() {
         let file = indexed_fragmented_file();
         let second = *file.moof_offsets.get(1).unwrap();
-        let mut demux_fsm = FragmentedDemuxFsm::new();
+        let mut demux_fsm = MovieDemuxFsm::new();
 
         let created = demux_fsm.wanted_input();
         demux_fsm.handle_input(0, &file.bytes).unwrap();
@@ -224,8 +224,8 @@ mod tests {
     }
 
     /// Demux FSM that read `bytes` up to `first`, the offset of the first fragment, then was told the file is `file_len` long to find its `mfra`
-    fn locating_after_the_movie(bytes: &[u8], first: u64, file_len: u64) -> FragmentedDemuxFsm {
-        let mut demux_fsm = FragmentedDemuxFsm::new();
+    fn locating_after_the_movie(bytes: &[u8], first: u64, file_len: u64) -> MovieDemuxFsm {
+        let mut demux_fsm = MovieDemuxFsm::new();
         demux_fsm
             .handle_input(0, bytes.get(..usize::try_from(first).unwrap()).unwrap())
             .unwrap();
@@ -302,7 +302,7 @@ mod tests {
         let file = indexed_fragmented_file();
         let file_len = u64::try_from(file.bytes.len()).unwrap();
         let closing_len = u64::try_from(MovieFragmentRandomAccessOffsetBox::ENCODED_LEN).unwrap();
-        let mut demux_fsm = FragmentedDemuxFsm::new();
+        let mut demux_fsm = MovieDemuxFsm::new();
         demux_fsm
             .resume_at_movie_fragment_random_access(file_len)
             .unwrap();
@@ -378,7 +378,7 @@ mod tests {
             .windows(8)
             .position(|bytes| bytes == b"SAMPLE_1")
             .unwrap();
-        let mut demux_fsm = FragmentedDemuxFsm::new();
+        let mut demux_fsm = MovieDemuxFsm::new();
 
         demux_fsm
             .handle_input(
@@ -421,7 +421,7 @@ mod tests {
     fn resuming_drops_the_samples_of_the_movie_and_a_fragment_stating_no_decode_time_then_fails() {
         let read_resuming_at_the_fragment = |file: &FragmentedFileWithMovieSamples| {
             let fragment = usize::try_from(file.moof_offset).unwrap();
-            let mut demux_fsm = FragmentedDemuxFsm::new();
+            let mut demux_fsm = MovieDemuxFsm::new();
             demux_fsm
                 .handle_input(0, file.bytes.get(..fragment).unwrap())
                 .unwrap();

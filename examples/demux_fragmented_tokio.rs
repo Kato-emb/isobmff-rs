@@ -8,7 +8,7 @@ use core::error::Error;
 use std::env;
 use std::io::SeekFrom;
 
-use isobmff::structure::FragmentedDemuxFsm;
+use isobmff::structure::MovieDemuxFsm;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut file = File::open(path).await?;
     let mut buffer = vec![0; 1024 * 1024];
-    let mut demux_fsm = FragmentedDemuxFsm::new();
+    let mut demux_fsm = MovieDemuxFsm::new();
 
     let mut count: u64 = 0;
     while let Some(wanted) = demux_fsm.wanted_input() {

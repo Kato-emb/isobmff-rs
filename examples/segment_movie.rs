@@ -23,7 +23,7 @@ use isobmff::boxes::{
     SampleTableBox, SampleToChunkBox, SegmentTypeBox, TimeToSampleBox,
 };
 use isobmff::sample::Sample;
-use isobmff::structure::{FragmentedMuxFsm, MediaSegmentMuxFsm, NonFragmentedDemuxFsm};
+use isobmff::structure::{FragmentedMuxFsm, MediaSegmentMuxFsm, MovieDemuxFsm};
 
 /// The samples of one track read ahead of the others, waiting their turn in decode time
 struct TrackQueue {
@@ -40,7 +40,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut file = File::open(input)?;
     let mut buffer = vec![0; 1024 * 1024];
-    let mut demux_fsm = NonFragmentedDemuxFsm::new();
+    let mut demux_fsm = MovieDemuxFsm::new();
     let mut handed = Ok(());
     while demux_fsm.movie().is_none() {
         handed?;

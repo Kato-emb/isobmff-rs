@@ -13,8 +13,9 @@ use crate::Error;
 /// A fragmented movie file is laid out as ISO/IEC 14496-12 Annex A.8 has it:
 /// the brands it declares itself readable as, the movie its fragments
 /// continue, then one movie fragment after another, with the media data the
-/// movie and its fragments address lying anywhere among them (§8.1.1). This
-/// machine holds that order. Handed the type of each
+/// movie and its fragments address lying anywhere among them (§8.1.1). A
+/// non-fragmented movie file (§8.2.1), that order with no fragment after the
+/// movie, is held by it as well. This machine holds that order. Handed the type of each
 /// top-level box as it comes, it answers with the [`FragmentedDisposition`]
 /// of that box — read whole into a value, passed on as media data, or passed
 /// over — and fails on a box the order does not place there. It reads no box

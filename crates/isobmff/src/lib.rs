@@ -2,11 +2,10 @@
 //!
 //! A presentation is carried as samples — ISO/IEC 14496-12 §3.1.14 has a sample
 //! as all the data associated with a single timestamp.
-//! [`structure::FragmentedDemuxFsm`] takes a fragmented movie file as it arrives
-//! and reports the [`sample::Sample`]s it carries,
-//! [`structure::NonFragmentedDemuxFsm`] does the same for a non-fragmented one,
-//! and [`structure::MediaSegmentDemuxFsm`] for a media segment delivered apart
-//! from the movie it continues; [`structure::FragmentedMuxFsm`],
+//! [`structure::MovieDemuxFsm`] takes a movie file as it arrives, fragmented or
+//! not, and reports the [`sample::Sample`]s it carries, and
+//! [`structure::MediaSegmentDemuxFsm`] does the same for a media segment
+//! delivered apart from the movie it continues; [`structure::FragmentedMuxFsm`],
 //! [`structure::NonFragmentedMuxFsm`] and [`structure::MediaSegmentMuxFsm`] go
 //! the other way, laying samples down as a file or a segment of each kind.
 //! None reaches for a source or a sink of its own: when to read or write, and
@@ -15,8 +14,8 @@
 //! # One module per crate
 //!
 //! Every module here is one crate of the workspace re-exported whole, and this
-//! root holds nothing else: [`structure::FragmentedDemuxFsm`] and
-//! `isobmff_structure::FragmentedDemuxFsm` are the same type, so documentation
+//! root holds nothing else: [`structure::MovieDemuxFsm`] and
+//! `isobmff_structure::MovieDemuxFsm` are the same type, so documentation
 //! written against any of those crates reads against this one.
 //!
 //! | module | crate | of the seven layers |

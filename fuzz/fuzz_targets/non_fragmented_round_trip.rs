@@ -1,4 +1,4 @@
-//! Round-trip properties of [`NonFragmentedMuxFsm`] against [`NonFragmentedDemuxFsm`]
+//! Round-trip properties of [`NonFragmentedMuxFsm`] against [`MovieDemuxFsm`]
 //!
 //! One run lays samples down as a non-fragmented file, chunk by chunk, reads
 //! that file back, and checks three properties of the same input:
@@ -26,7 +26,7 @@
 use isobmff::boxes::{HeaderDuration, MovieBox, MovieHeaderBox, SampleFlags};
 use isobmff::core::Mp4EpochSeconds;
 use isobmff::sample::Sample;
-use isobmff::structure::{Error, ErrorKind, NonFragmentedDemuxFsm, NonFragmentedMuxFsm};
+use isobmff::structure::{Error, ErrorKind, MovieDemuxFsm, NonFragmentedMuxFsm};
 use isobmff_test_support::{file_type, non_fragmented_file, track};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
@@ -292,7 +292,7 @@ fn movie_first_file_of(chunks: &[Vec<Sample>]) -> Vec<u8> {
 
 /// The samples `file` carries, read off it `cut_length` bytes at a time and then off the bytes it wants fetched
 fn read_back(file: &[u8], cut_length: usize) -> Result<Vec<Sample>, Error> {
-    let mut demux_fsm = NonFragmentedDemuxFsm::new();
+    let mut demux_fsm = MovieDemuxFsm::new();
     let mut samples = Vec::new();
 
     for (offset, arriving) in (0..).step_by(cut_length).zip(file.chunks(cut_length)) {
@@ -322,7 +322,7 @@ fn read_back(file: &[u8], cut_length: usize) -> Result<Vec<Sample>, Error> {
 }
 
 /// Takes every sample the reader has completed
-fn drain(demux_fsm: &mut NonFragmentedDemuxFsm, samples: &mut Vec<Sample>) {
+fn drain(demux_fsm: &mut MovieDemuxFsm, samples: &mut Vec<Sample>) {
     while let Some(sample) = demux_fsm.poll_sample() {
         samples.push(sample);
     }

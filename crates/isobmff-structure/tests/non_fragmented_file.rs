@@ -12,8 +12,10 @@ mod tests {
     use isobmff_sample::Sample;
 
     use super::reading::{drained, samples_of};
-    use isobmff_structure::{NonFragmentedDemuxFsm, WantedInput};
-    use isobmff_test_support::{SAMPLE_CHUNKS, non_fragmented_file, non_fragmented_file_samples};
+    use isobmff_structure::{Error, ErrorKind, MovieDemuxFsm, WantedInput};
+    use isobmff_test_support::{
+        SAMPLE_CHUNKS, movie_fragment, non_fragmented_file, non_fragmented_file_samples, written,
+    };
 
     /// The bytes of `file` a read of known length wants
     fn fetched(file: &[u8], wanted: WantedInput) -> &[u8] {
@@ -27,7 +29,7 @@ mod tests {
 
     /// Hands `file` over in order, `cut_length` bytes at a time, and returns the samples that completed
     fn handed_over_in_order(
-        demux_fsm: &mut NonFragmentedDemuxFsm,
+        demux_fsm: &mut MovieDemuxFsm,
         file: &[u8],
         cut_length: usize,
     ) -> Vec<Sample> {
@@ -44,7 +46,7 @@ mod tests {
     #[test]
     fn a_movie_before_its_media_data_has_every_sample_read_as_the_file_arrives() {
         let file = non_fragmented_file(&SAMPLE_CHUNKS, true);
-        let mut demux_fsm = NonFragmentedDemuxFsm::new();
+        let mut demux_fsm = MovieDemuxFsm::new();
 
         let samples = handed_over_in_order(&mut demux_fsm, &file, file.len());
 
@@ -56,7 +58,7 @@ mod tests {
     #[test]
     fn a_movie_after_its_media_data_completes_no_sample_and_names_the_bytes_it_lacks() {
         let file = non_fragmented_file(&SAMPLE_CHUNKS, false);
-        let mut demux_fsm = NonFragmentedDemuxFsm::new();
+        let mut demux_fsm = MovieDemuxFsm::new();
 
         let samples = handed_over_in_order(&mut demux_fsm, &file, file.len());
 
@@ -85,7 +87,7 @@ mod tests {
     #[test]
     fn the_continuation_is_wanted_after_the_bytes_handed_over_so_far() {
         let file = non_fragmented_file(&SAMPLE_CHUNKS, true);
-        let mut demux_fsm = NonFragmentedDemuxFsm::new();
+        let mut demux_fsm = MovieDemuxFsm::new();
 
         let created = demux_fsm.wanted_input();
         demux_fsm.handle_input(0, &file).unwrap();
@@ -104,7 +106,7 @@ mod tests {
         let file = non_fragmented_file(&SAMPLE_CHUNKS, true);
 
         for cut_length in [1, 3, 7, 64, file.len()] {
-            let mut demux_fsm = NonFragmentedDemuxFsm::new();
+            let mut demux_fsm = MovieDemuxFsm::new();
             let mut wanted = Vec::new();
             for (offset, arriving) in (0..).step_by(cut_length).zip(file.chunks(cut_length)) {
                 demux_fsm.handle_input(offset, arriving).unwrap();
@@ -118,7 +120,7 @@ mod tests {
     #[test]
     fn a_movie_after_its_media_data_names_each_sample_it_lacks_once_in_turn() {
         let file = non_fragmented_file(&SAMPLE_CHUNKS, false);
-        let mut demux_fsm = NonFragmentedDemuxFsm::new();
+        let mut demux_fsm = MovieDemuxFsm::new();
         handed_over_in_order(&mut demux_fsm, &file, 7);
 
         let mut wanted = Vec::new();
@@ -137,6 +139,23 @@ mod tests {
                 .iter()
                 .flat_map(|chunk| chunk.iter().copied())
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_fragment_after_a_movie_carrying_no_mvex_is_rejected_for_the_missing_movie_extends() {
+        let file = [
+            non_fragmented_file(&SAMPLE_CHUNKS, true),
+            written(&movie_fragment()),
+        ]
+        .concat();
+        let mut demux_fsm = MovieDemuxFsm::new();
+
+        assert_eq!(
+            demux_fsm.handle_input(0, &file).map_err(Error::kind),
+            Err(ErrorKind::Sample(
+                isobmff_sample::ErrorKind::MissingMovieExtends
+            ))
         );
     }
 }
