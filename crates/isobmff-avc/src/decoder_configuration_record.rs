@@ -50,12 +50,13 @@ impl LengthSizeMinusOne {
     }
 }
 
-/// Fields the record carries for a High, High 10, High 4:2:2, or High 4:4:4
+/// Fields §5.3.3.1 lays out for a High, High 10, High 4:2:2, or High 4:4:4
 /// Predictive profile
 ///
 /// ISO/IEC 14496-15 §5.3.3.1 lays these out only when `AVCProfileIndication`
-/// is 100, 110, 122, or 144. Deriving them means reading the SPS, which lies
-/// in ISO/IEC 14496-10; a caller building a record hands them over.
+/// is 100, 110, 122, or 144; a record read from a file may carry them under
+/// another profile. Deriving them means reading the SPS, which lies in ISO/IEC
+/// 14496-10; a caller building a record hands them over.
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct HighProfileFields {
@@ -303,7 +304,7 @@ impl AVCDecoderConfigurationRecord {
         &self.picture_parameter_sets
     }
 
-    /// Returns the fields a High profile record carries, when it carries them
+    /// Returns the fields that follow the PPSs, when the record carries them
     #[must_use]
     pub const fn high_profile_fields(&self) -> Option<&HighProfileFields> {
         self.high_profile_fields.as_ref()
@@ -324,9 +325,9 @@ impl AVCDecoderConfigurationRecord {
 
     /// Reads the record off the front of `reader`
     ///
-    /// The record ends where the payload does: for a High profile, the fields
-    /// §5.3.3.1 lays out after the PPSs are read when bytes remain and taken
-    /// as absent when none do.
+    /// The record ends where the payload does: the fields §5.3.3.1 lays out
+    /// after the PPSs are read when bytes remain, whatever the profile, and
+    /// taken as absent when none do.
     ///
     /// # Errors
     ///
@@ -349,12 +350,11 @@ impl AVCDecoderConfigurationRecord {
         let sequence_parameter_sets = decode_nal_units(reader, 0b1_1111)?;
         let picture_parameter_sets = decode_nal_units(reader, u8::MAX)?;
 
-        let high_profile_fields =
-            if HIGH_PROFILES.contains(&avc_profile_indication) && !reader.remainder().is_empty() {
-                Some(HighProfileFields::decode_fields(reader)?)
-            } else {
-                None
-            };
+        let high_profile_fields = if reader.remainder().is_empty() {
+            None
+        } else {
+            Some(HighProfileFields::decode_fields(reader)?)
+        };
 
         Ok(Self {
             avc_profile_indication,
@@ -447,7 +447,7 @@ pub(crate) mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::FieldReader;
+    use isobmff_core::{FieldReader, FieldWriter};
 
     use super::{AVCDecoderConfigurationRecord, HighProfileFields, LengthSizeMinusOne};
 
@@ -486,6 +486,35 @@ pub(crate) mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn fields_written_under_a_profile_the_spec_gives_none_read_and_write_back() {
+        let high_444_predictive =
+            b"\x01\xf4\x00\x1e\xff\xe1\x00\x02\x67\xf4\x01\x00\x02\x68\xce\xfd\xf8\xf8\x00";
+        let mut written = vec![0xaa; high_444_predictive.len()];
+
+        let record = AVCDecoderConfigurationRecord::decode_fields(&mut FieldReader::new(
+            high_444_predictive,
+        ))
+        .unwrap();
+        record
+            .encode_fields(&mut FieldWriter::new(&mut written))
+            .unwrap();
+
+        assert_eq!(
+            record,
+            AVCDecoderConfigurationRecord {
+                avc_profile_indication: 244,
+                profile_compatibility: 0,
+                avc_level_indication: 0x1e,
+                length_size_minus_one: LengthSizeMinusOne::FOUR_BYTES,
+                sequence_parameter_sets: vec![vec![0x67, 0xf4]],
+                picture_parameter_sets: vec![vec![0x68, 0xce]],
+                high_profile_fields: HighProfileFields::new(1, 0, 0, Vec::new()),
+            }
+        );
+        assert_eq!(written, high_444_predictive);
     }
 
     #[test]
