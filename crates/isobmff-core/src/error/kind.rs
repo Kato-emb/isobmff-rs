@@ -29,9 +29,9 @@ pub enum ErrorKind {
     #[non_exhaustive]
     SizeBelowHeader {
         /// Length the header occupies
-        needed_bytes: u64,
+        header_bytes: u64,
         /// Total the `size` or `largesize` field declares
-        available_bytes: u64,
+        declared_bytes: u64,
     },
     /// Total a box declares overruns the input
     #[non_exhaustive]
@@ -45,7 +45,7 @@ pub enum ErrorKind {
     #[non_exhaustive]
     BoxTypeMismatch {
         /// Type the box was read as
-        box_type: BoxType,
+        expected_box_type: BoxType,
         /// Type the input holds
         found_box_type: BoxType,
     },
@@ -108,9 +108,9 @@ pub enum ErrorKind {
     #[non_exhaustive]
     EntryCountMismatch {
         /// Count the `entry_count` field declares
-        needed_entries: u64,
+        declared_entries: u64,
         /// Count the payload holds
-        available_entries: u64,
+        actual_entries: u64,
     },
     /// Container holds a box this implementation does not read
     #[non_exhaustive]
@@ -159,9 +159,9 @@ pub enum ErrorKind {
     #[non_exhaustive]
     BufferLengthMismatch {
         /// Length the payload declares
-        needed_bytes: u64,
+        declared_bytes: u64,
         /// Length the buffer offered
-        available_bytes: u64,
+        offered_bytes: u64,
     },
     /// Value is wider than the field it was given to
     #[non_exhaustive]
@@ -169,13 +169,14 @@ pub enum ErrorKind {
         /// Value the field was given
         value: u64,
         /// Width in bytes of the field
-        needed_bytes: u64,
+        field_bytes: u64,
     },
 }
 
 impl ErrorKind {
     /// Returns what a caller does about a failure of this kind
-    pub(crate) const fn category(self) -> Category {
+    #[must_use]
+    pub const fn category(self) -> Category {
         match self {
             Self::TruncatedHeader { .. }
             | Self::SizeBelowHeader { .. }

@@ -303,7 +303,7 @@ impl BoxReader {
             State::Header { bytes, filled } => {
                 let needed = if let Err(BoxErrorKind::TruncatedHeader { needed_bytes, .. }) =
                     BoxHeader::decode(bytes.get(..filled).unwrap_or_default())
-                        .map_err(|error| error.kind())
+                        .map_err(isobmff_core::Error::kind)
                 {
                     needed_bytes
                 } else {

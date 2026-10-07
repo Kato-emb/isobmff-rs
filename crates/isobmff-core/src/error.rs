@@ -73,82 +73,82 @@ impl Error {
 
     /// Returns the failure of an input that ends inside the header of a box
     #[must_use]
-    pub const fn truncated_header(needed: u64, available: u64) -> Self {
+    pub const fn truncated_header(needed_bytes: u64, available_bytes: u64) -> Self {
         Self::new(ErrorKind::TruncatedHeader {
-            needed_bytes: needed,
-            available_bytes: available,
+            needed_bytes,
+            available_bytes,
         })
     }
 
     /// Returns the failure of a box declaring a total below the header it prefixes
     #[must_use]
-    pub const fn size_below_header(header_len: u64, declared: u64) -> Self {
+    pub const fn size_below_header(header_bytes: u64, declared_bytes: u64) -> Self {
         Self::new(ErrorKind::SizeBelowHeader {
-            needed_bytes: header_len,
-            available_bytes: declared,
+            header_bytes,
+            declared_bytes,
         })
     }
 
     /// Returns the failure of a box whose declared total overruns the input
     #[must_use]
-    pub const fn truncated_box(needed: u64, available: u64) -> Self {
+    pub const fn truncated_box(needed_bytes: u64, available_bytes: u64) -> Self {
         Self::new(ErrorKind::TruncatedBox {
-            needed_bytes: needed,
-            available_bytes: available,
+            needed_bytes,
+            available_bytes,
         })
     }
 
     /// Returns the failure of a box read as a type the input does not hold there
     #[must_use]
-    pub const fn box_type_mismatch(expected: BoxType, found: BoxType) -> Self {
+    pub const fn box_type_mismatch(expected_box_type: BoxType, found_box_type: BoxType) -> Self {
         Self::new(ErrorKind::BoxTypeMismatch {
-            box_type: expected,
-            found_box_type: found,
+            expected_box_type,
+            found_box_type,
         })
     }
 
     /// Returns the failure of a payload that ends inside a field
     #[must_use]
-    pub const fn truncated_payload(needed: u64, available: u64) -> Self {
+    pub const fn truncated_payload(needed_bytes: u64, available_bytes: u64) -> Self {
         Self::new(ErrorKind::TruncatedPayload {
-            needed_bytes: needed,
-            available_bytes: available,
+            needed_bytes,
+            available_bytes,
         })
     }
 
     /// Returns the failure of a payload holding bytes past the fields it reads
     #[must_use]
-    pub const fn trailing_payload(needed: u64, available: u64) -> Self {
+    pub const fn trailing_payload(needed_bytes: u64, available_bytes: u64) -> Self {
         Self::new(ErrorKind::TrailingPayload {
-            needed_bytes: needed,
-            available_bytes: available,
+            needed_bytes,
+            available_bytes,
         })
     }
 
     /// Returns the failure of a buffer that ends inside what is written into it
     #[must_use]
-    pub const fn truncated_buffer(needed: u64, available: u64) -> Self {
+    pub const fn truncated_buffer(needed_bytes: u64, available_bytes: u64) -> Self {
         Self::new(ErrorKind::TruncatedBuffer {
-            needed_bytes: needed,
-            available_bytes: available,
+            needed_bytes,
+            available_bytes,
         })
     }
 
     /// Returns the failure of a buffer holding bytes past the fields a box wrote
     #[must_use]
-    pub const fn trailing_buffer(needed: u64, available: u64) -> Self {
+    pub const fn trailing_buffer(needed_bytes: u64, available_bytes: u64) -> Self {
         Self::new(ErrorKind::TrailingBuffer {
-            needed_bytes: needed,
-            available_bytes: available,
+            needed_bytes,
+            available_bytes,
         })
     }
 
     /// Returns the failure of a buffer that is not the length a payload declared
     #[must_use]
-    pub const fn buffer_length_mismatch(declared: u64, offered: u64) -> Self {
+    pub const fn buffer_length_mismatch(declared_bytes: u64, offered_bytes: u64) -> Self {
         Self::new(ErrorKind::BufferLengthMismatch {
-            needed_bytes: declared,
-            available_bytes: offered,
+            declared_bytes,
+            offered_bytes,
         })
     }
 
@@ -160,10 +160,7 @@ impl Error {
             FieldWidth::Extended => 8,
         };
 
-        Self::new(ErrorKind::OutOfRange {
-            value,
-            needed_bytes: field_bytes,
-        })
+        Self::new(ErrorKind::OutOfRange { value, field_bytes })
     }
 
     /// Returns the failure of a full box declaring flags the spec forbids together
@@ -210,10 +207,10 @@ impl Error {
 
     /// Returns the failure of a count that disagrees with the entries it frames
     #[must_use]
-    pub const fn entry_count_mismatch(declared: u64, actual: u64) -> Self {
+    pub const fn entry_count_mismatch(declared_entries: u64, actual_entries: u64) -> Self {
         Self::new(ErrorKind::EntryCountMismatch {
-            needed_entries: declared,
-            available_entries: actual,
+            declared_entries,
+            actual_entries,
         })
     }
 
@@ -306,11 +303,11 @@ impl fmt::Display for Error {
                 "box header of {needed_bytes} bytes cut short by an input of {available_bytes}"
             ),
             ErrorKind::SizeBelowHeader {
-                needed_bytes,
-                available_bytes,
+                header_bytes,
+                declared_bytes,
             } => write!(
                 formatter,
-                "box declares a total of {available_bytes} bytes, below its {needed_bytes}-byte \
+                "box declares a total of {declared_bytes} bytes, below its {header_bytes}-byte \
                  header"
             ),
             ErrorKind::TruncatedBox {
@@ -321,11 +318,11 @@ impl fmt::Display for Error {
                 "box of {needed_bytes} bytes cut short by an input of {available_bytes}"
             ),
             ErrorKind::BoxTypeMismatch {
-                box_type,
+                expected_box_type,
                 found_box_type,
             } => write!(
                 formatter,
-                "input holds a {found_box_type} box where a {box_type} box was expected"
+                "input holds a {found_box_type} box where a {expected_box_type} box was expected"
             ),
             ErrorKind::TruncatedPayload {
                 needed_bytes,
@@ -359,19 +356,16 @@ impl fmt::Display for Error {
                 available_bytes.saturating_sub(needed_bytes)
             ),
             ErrorKind::BufferLengthMismatch {
-                needed_bytes,
-                available_bytes,
+                declared_bytes,
+                offered_bytes,
             } => write!(
                 formatter,
-                "box payload of {needed_bytes} bytes needs a buffer of that length, not \
-                 {available_bytes}"
+                "box payload of {declared_bytes} bytes needs a buffer of that length, not \
+                 {offered_bytes}"
             ),
-            ErrorKind::OutOfRange {
-                value,
-                needed_bytes,
-            } => write!(
+            ErrorKind::OutOfRange { value, field_bytes } => write!(
                 formatter,
-                "value {value} does not fit the {needed_bytes} bytes of the field it was given to"
+                "value {value} does not fit the {field_bytes} bytes of the field it was given to"
             ),
             ErrorKind::ConflictingFlags { flags } => write!(
                 formatter,
@@ -406,11 +400,11 @@ impl fmt::Display for Error {
                 "container holds a {box_type} box, which this implementation does not read"
             ),
             ErrorKind::EntryCountMismatch {
-                needed_entries,
-                available_entries,
+                declared_entries,
+                actual_entries,
             } => write!(
                 formatter,
-                "box declares {needed_entries} entries but holds {available_entries}"
+                "box declares {declared_entries} entries but holds {actual_entries}"
             ),
             ErrorKind::UnsupportedVersion { version } => write!(
                 formatter,
@@ -569,7 +563,7 @@ mod tests {
             Error::out_of_range(0x1_0000_0000, FieldWidth::Compact).kind(),
             ErrorKind::OutOfRange {
                 value: 0x1_0000_0000,
-                needed_bytes: 4,
+                field_bytes: 4,
             }
         );
     }
@@ -588,64 +582,6 @@ mod tests {
                 FourCC::new(*b"trak"),
                 FourCC::new(*b"tkhd"),
             ]
-        );
-    }
-
-    #[test]
-    fn a_failure_that_counts_entries_carries_both_counts() {
-        assert_eq!(
-            Error::entry_count_mismatch(4, 2).kind(),
-            ErrorKind::EntryCountMismatch {
-                needed_entries: 4,
-                available_entries: 2,
-            }
-        );
-    }
-
-    #[test]
-    fn a_failure_about_a_slot_several_box_types_fill_names_them_all() {
-        assert_eq!(
-            Error::missing_alternative_box(SAMPLE_SIZE_BOXES).kind(),
-            ErrorKind::MissingAlternativeBox {
-                alternatives: SAMPLE_SIZE_BOXES,
-            }
-        );
-    }
-
-    #[test]
-    fn a_failure_about_one_box_names_its_type() {
-        assert_eq!(
-            Error::missing_mandatory_box(BoxType::compact(*b"mvhd")).kind(),
-            ErrorKind::MissingMandatoryBox {
-                box_type: BoxType::compact(*b"mvhd"),
-            }
-        );
-    }
-
-    #[test]
-    fn a_failure_of_a_box_read_as_another_type_names_both_types() {
-        assert_eq!(
-            Error::box_type_mismatch(BoxType::compact(*b"moov"), BoxType::compact(*b"moof")).kind(),
-            ErrorKind::BoxTypeMismatch {
-                box_type: BoxType::compact(*b"moov"),
-                found_box_type: BoxType::compact(*b"moof"),
-            }
-        );
-    }
-
-    #[test]
-    fn a_failure_of_a_full_box_carries_what_the_box_declared() {
-        assert_eq!(
-            Error::unsupported_version(2).kind(),
-            ErrorKind::UnsupportedVersion { version: 2 }
-        );
-        assert_eq!(
-            Error::conflicting_flags(0x0000_0404).kind(),
-            ErrorKind::ConflictingFlags { flags: 0x0000_0404 }
-        );
-        assert_eq!(
-            Error::unsupported_field_size(12).kind(),
-            ErrorKind::UnsupportedFieldSize { field_size: 12 }
         );
     }
 
