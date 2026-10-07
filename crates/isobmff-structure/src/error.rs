@@ -11,11 +11,12 @@ use isobmff_core::{BoxType, Category};
 /// a failure of the structure of the file — a box it requires that never
 /// came, one that came twice, one that came out of the order the structure
 /// keeps, a box reaching past the limit a demux FSM gathers for one, brands a
-/// mux FSM cannot write under — or a failure of a layer beneath, which this
-/// type carries through whole rather than translating:
-/// [`Sequence`](Self::Sequence) for the framing of the file,
+/// mux FSM cannot write under — a call the FSM does not take — one after the
+/// file was declared over, or input at an offset it wants none at — or a
+/// failure of a layer beneath, which this type carries through whole rather
+/// than translating: [`Sequence`](Self::Sequence) for the framing of the file,
 /// [`Sample`](Self::Sample) for the samples it carries, and
-/// [`Box`](Self::Box) for one box that did not decode. What a caller does
+/// [`Box`](Self::Box) for one box that did not read or write. What a caller does
 /// about any of them is one [`category`](Self::category).
 ///
 /// The vocabulary is this crate's own: the boxes a structure is made of, the
@@ -109,7 +110,7 @@ pub enum Error {
     /// §8.8.7.1 forbids the flag.
     #[non_exhaustive]
     UnsupportedBrand,
-    /// File was declared over, and takes nothing more
+    /// File was declared over, and takes nothing more until the reading restarts
     #[non_exhaustive]
     AlreadyFinished,
     /// Input was handed over at an offset the demux FSM takes no input at
@@ -227,7 +228,7 @@ mod tests {
 
     use super::Error;
 
-    /// The `moov` box, which most of the structure's failures name
+    /// Box the failures in these tests name
     const MOOV: BoxType = BoxType::compact(*b"moov");
 
     #[test]
