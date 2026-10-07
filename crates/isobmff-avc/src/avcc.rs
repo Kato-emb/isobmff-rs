@@ -141,7 +141,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_high_profile_record_that_leaves_its_fields_off_reads_without_them() {
+    fn a_record_that_ends_after_its_parameter_sets_reads_without_the_fields() {
         let payload = b"\x01\x64\0\x28\xff\xe0\0";
 
         let configuration = AVCConfigurationBox::decode_payload(payload).unwrap();
