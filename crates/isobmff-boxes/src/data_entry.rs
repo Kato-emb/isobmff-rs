@@ -5,8 +5,8 @@
 //! writes with an underscore, where the space would not show.
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FullBoxFields,
-    FullBoxFlags, NullTerminatedString, RawBox,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter,
+    FullBoxFields, FullBoxFlags, NullTerminatedString, RawBox,
 };
 
 /// Length of the version and the flags every entry opens with
@@ -23,32 +23,36 @@ const SELF_CONTAINED: FullBoxFlags = match FullBoxFlags::new(1) {
 
 /// Entry of a data reference, stating where the media data of a track lies
 ///
-/// ISO/IEC 14496-12 §8.7.2. The spec closes the set: every entry of a `dref` is
-/// either a [`DataEntryUrlBox`] or a [`DataEntryUrnBox`], and a `dref` holding a
-/// box of any other type does not read.
+/// ISO/IEC 14496-12 §8.7.2. The spec names two types an entry may be, a
+/// [`DataEntryUrlBox`] and a [`DataEntryUrnBox`]. An entry of another type, and
+/// one of the two that does not read, is held as the bytes it came as, at its
+/// place among the entries, so the entries after it keep their index.
 #[non_exhaustive]
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum DataEntry {
     /// Entry naming the location of the media data, `url_`
     Url(DataEntryUrlBox),
     /// Entry naming the resource the media data is, `urn_`
     Urn(DataEntryUrnBox),
+    /// Entry of another type, or a `url_` or `urn_` that does not read
+    Other(AnyBox),
 }
 
 impl DataEntry {
-    /// Reads the entry `child` holds, for a child of one of the two types
-    pub(crate) fn decode(child: RawBox<'_>) -> Result<Self, Error> {
+    /// Reads the entry `child` holds, keeping it as [`Other`](Self::Other) where it is not a `url_` or `urn_` that reads
+    pub(crate) fn decode(child: RawBox<'_>) -> Self {
         let box_type = child.header().box_type();
         let payload = child.payload();
 
-        if box_type == DataEntryUrlBox::BOX_TYPE {
-            DataEntryUrlBox::decode_payload(payload).map(Self::Url)
+        let decoded = if box_type == DataEntryUrlBox::BOX_TYPE {
+            DataEntryUrlBox::decode_payload(payload).ok().map(Self::Url)
         } else if box_type == DataEntryUrnBox::BOX_TYPE {
-            DataEntryUrnBox::decode_payload(payload).map(Self::Urn)
+            DataEntryUrnBox::decode_payload(payload).ok().map(Self::Urn)
         } else {
-            return Err(Error::forbidden_child_box(box_type));
-        }
-        .map_err(|error| error.in_container(box_type))
+            None
+        };
+
+        decoded.unwrap_or_else(|| Self::Other(AnyBox::from_raw_bytes(box_type, payload.to_vec())))
     }
 
     /// Returns the length this entry occupies, header and payload
@@ -56,6 +60,7 @@ impl DataEntry {
         match self {
             Self::Url(url) => url.encoded_len(),
             Self::Urn(urn) => urn.encoded_len(),
+            Self::Other(other) => other.encoded_len(),
         }
     }
 
@@ -67,6 +72,7 @@ impl DataEntry {
         match self {
             Self::Url(url) => url.encode(buffer),
             Self::Urn(urn) => urn.encode(buffer),
+            Self::Other(other) => other.encode(buffer),
         }
     }
 }
@@ -264,9 +270,9 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, Error, NullTerminatedString};
+    use isobmff_core::{AnyBox, BoxDecode, BoxEncode, BoxType, Error, NullTerminatedString, boxes};
 
-    use super::{DataEntryUrlBox, DataEntryUrnBox};
+    use super::{DataEntry, DataEntryUrlBox, DataEntryUrnBox};
 
     /// Text of a field, which the spec carries as a null-terminated string
     fn text(value: &str) -> NullTerminatedString {
@@ -359,6 +365,21 @@ mod tests {
         assert_eq!(
             DataEntryUrnBox::decode_payload(b"\x01\0\0\0"),
             Err(Error::unsupported_version(1))
+        );
+    }
+
+    #[test]
+    fn an_entry_that_does_not_read_is_held_as_the_bytes_it_came_as() {
+        let url_of_version_1 = b"\0\0\0\x0curl \x01\0\0\x01";
+
+        let entry = DataEntry::decode(boxes(url_of_version_1).next().unwrap().unwrap());
+
+        assert_eq!(
+            entry,
+            DataEntry::Other(AnyBox::from_raw_bytes(
+                BoxType::compact(*b"url "),
+                b"\x01\0\0\x01".to_vec()
+            ))
         );
     }
 }

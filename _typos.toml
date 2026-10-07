@@ -1,6 +1,8 @@
-# Four-character box codes of ISO/IEC 14496-12 that read as misspelled English.
-# The spec fixes these spellings and they travel on the wire, so they are data
-# rather than prose — correcting one would change the format.
+# Four-character box codes that read as misspelled English: those of ISO/IEC
+# 14496-12, and `alis`, the QuickTime data reference entry a `dref` may hold.
+# The spellings are fixed and travel on the wire, so they are data rather than
+# prose — correcting one would change the format.
 [default.extend-words]
+alis = "alis"
 trak = "trak"
 trun = "trun"

@@ -27,7 +27,7 @@ const FIXED_FIELDS_LEN: u64 = 8;
 /// for this box. The version and the flags of an *entry* belong to the entry.
 #[doc(alias = "dref")]
 #[non_exhaustive]
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct DataReferenceBox {
     entries: Vec<DataEntry>,
 }
@@ -60,11 +60,11 @@ impl BoxDecode for DataReferenceBox {
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
     ///   payload ends before the fields that precede the entries.
     /// * The failures of [`boxes`]: an entry does not frame as a box.
-    /// * [`ForbiddenChildBox`](isobmff_core::ErrorKind::ForbiddenChildBox): an entry
-    ///   is neither a `url_` nor a `urn_`, which §8.7.2.1 closes the set to.
     /// * [`EntryCountMismatch`](isobmff_core::ErrorKind::EntryCountMismatch): the
     ///   `entry_count` field disagrees with the entries that follow it.
-    /// * Whatever an entry reports, on the [`containers`](Error::containers) path.
+    ///
+    /// An entry that is not a `url_` or `urn_` that reads does not fail the box;
+    /// it is held as [`DataEntry::Other`].
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let version = FullBoxFields::from_bytes(reader.read_bytes::<4>()?).version();
         if version != 0 {
@@ -75,7 +75,7 @@ impl BoxDecode for DataReferenceBox {
 
         let mut entries = Vec::new();
         for entry in boxes(reader.take_remainder()) {
-            entries.push(DataEntry::decode(entry?)?);
+            entries.push(DataEntry::decode(entry?));
         }
 
         let actual = entries.len() as u64;
@@ -119,7 +119,7 @@ pub(crate) mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxEncode, BoxType, Error, NullTerminatedString};
+    use isobmff_core::{AnyBox, BoxDecode, BoxEncode, BoxType, Error, NullTerminatedString};
 
     use super::DataReferenceBox;
     use crate::data_entry::{DataEntry, DataEntryUrlBox};
@@ -182,12 +182,24 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn an_entry_of_a_type_the_spec_does_not_allow_here_is_rejected() {
-        let payload = b"\0\0\0\0\0\0\0\x01\0\0\0\x0cfree\0\0\0\0";
+    fn an_entry_of_another_type_is_held_at_its_place_and_reads_back_as_the_same_value() {
+        let payload = b"\0\0\0\0\0\0\0\x02\0\0\0\x0calis\0\0\0\x01\0\0\0\x0curl \0\0\0\x01";
+
+        let data_reference = DataReferenceBox::decode_payload(payload).unwrap();
 
         assert_eq!(
-            DataReferenceBox::decode_payload(payload),
-            Err(Error::forbidden_child_box(BoxType::compact(*b"free")))
+            data_reference,
+            DataReferenceBox::new(vec![
+                DataEntry::Other(AnyBox::from_raw_bytes(
+                    BoxType::compact(*b"alis"),
+                    b"\0\0\0\x01".to_vec()
+                )),
+                DataEntry::Url(DataEntryUrlBox::new(None)),
+            ])
+        );
+        assert_eq!(
+            DataReferenceBox::decode_payload(&encoded_payload(&data_reference)).unwrap(),
+            data_reference
         );
     }
 

@@ -85,7 +85,9 @@ pub enum ErrorKind {
     /// A `dref` entry flagged self-contained has the media data in the file
     /// that carries the movie (ISO/IEC 14496-12 §8.7.2); any other sends the
     /// reader to an external file, which no resolver here follows yet, so a
-    /// sample described through one is refused.
+    /// sample described through one is refused. An entry held as
+    /// [`DataEntry::Other`](isobmff_boxes::DataEntry::Other) does not read as
+    /// the file itself, so it counts as such an entry.
     /// [`track_id`](crate::Error::track_id) is the track it belongs to, and
     /// [`data_reference_index`](crate::Error::data_reference_index) the entry,
     /// counted from one.
