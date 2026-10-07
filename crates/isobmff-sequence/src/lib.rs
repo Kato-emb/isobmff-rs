@@ -32,7 +32,7 @@ mod event;
 mod reader;
 mod writer;
 
-pub use error::{Error, ErrorKind};
+pub use error::Error;
 pub use event::{BoxEvent, EventBytes};
 pub use reader::BoxReader;
 pub use writer::BoxWriter;

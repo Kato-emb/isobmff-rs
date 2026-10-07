@@ -116,7 +116,7 @@ impl Error {
     #[must_use]
     pub const fn kind(self) -> ErrorKind {
         match self.representation {
-            Representation::Sequence(failure) => ErrorKind::Sequence(failure.kind()),
+            Representation::Sequence(failure) => ErrorKind::Sequence(failure),
             Representation::Sample(failure) => ErrorKind::Sample(failure.kind()),
             Representation::Box(box_error) => ErrorKind::Box(box_error.kind()),
             Representation::MissingMandatoryBox { .. } => ErrorKind::MissingMandatoryBox,
@@ -328,7 +328,7 @@ pub enum ErrorKind {
     ///
     /// The values that failure carries are on
     /// [`sequence_error`](Error::sequence_error).
-    Sequence(isobmff_sequence::ErrorKind),
+    Sequence(isobmff_sequence::Error),
     /// Failure of the samples the file carries, carried through as `isobmff-sample` names it
     ///
     /// The values that failure carries are on
@@ -532,13 +532,11 @@ mod tests {
 
     #[test]
     fn a_failure_of_a_layer_beneath_is_carried_through_whole() {
-        let sequence_error = isobmff_sequence::Error::unfinished_box(16, 8);
+        let sequence_error =
+            isobmff_sequence::Error::from(isobmff_core::Error::truncated_header(16, 8));
         let carried = Error::from(sequence_error);
 
-        assert_eq!(
-            carried.kind(),
-            ErrorKind::Sequence(isobmff_sequence::ErrorKind::UnfinishedBox)
-        );
+        assert_eq!(carried.kind(), ErrorKind::Sequence(sequence_error));
         assert_eq!(carried.sequence_error(), Some(sequence_error));
         assert_eq!(carried.sample_error(), None);
         assert_eq!(carried.needed_bytes(), None);

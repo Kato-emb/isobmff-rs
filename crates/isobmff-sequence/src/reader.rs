@@ -42,14 +42,14 @@ use crate::event::BoxEvent;
 ///   [`End`](BoxEvent::End) events with the extents they cover, and the payload
 ///   bytes those events hold end to end.
 /// * An `Err` leaves the reader failed for good,
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside: every later
+///   [`AlreadyFinished`](crate::Error::AlreadyFinished) aside: every later
 ///   [`handle_input`](Self::handle_input) and [`finish`](Self::finish) reports
 ///   that same failure again. The events made before it are still there to take,
 ///   and no further one is ever made.
 /// * [`finish`](Self::finish) declares the file over. Events are still taken
 ///   after it, but input handed over then, or a second
 ///   [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished). A file being over is
+///   [`AlreadyFinished`](crate::Error::AlreadyFinished). A file being over is
 ///   not a failure, so that is what every later call reports as well.
 ///
 /// # Examples
@@ -135,8 +135,8 @@ impl BoxReader {
     /// # Errors
     ///
     /// * The failures of [`BoxHeader::decode`], carried on
-    ///   [`Box`](crate::ErrorKind::Box): a header does not decode.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the file was declared
+    ///   [`Box`](crate::Error::Box): a header does not decode.
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the file was declared
     ///   over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
@@ -146,7 +146,7 @@ impl BoxReader {
         loop {
             match self.state {
                 State::Failed(failure) => return Err(failure),
-                State::Finished => return Err(Error::already_finished()),
+                State::Finished => return Err(Error::AlreadyFinished),
                 State::Between => match BoxHeader::decode(unread) {
                     Ok((header, rest)) => {
                         self.advance(unread.len().saturating_sub(rest.len()));
@@ -283,18 +283,18 @@ impl BoxReader {
     ///
     /// # Errors
     ///
-    /// * [`UnfinishedHeader`](crate::ErrorKind::UnfinishedHeader): the file ended
+    /// * [`UnfinishedHeader`](crate::Error::UnfinishedHeader): the file ended
     ///   inside a box header.
-    /// * [`UnfinishedBox`](crate::ErrorKind::UnfinishedBox): the file ended before
+    /// * [`UnfinishedBox`](crate::Error::UnfinishedBox): the file ended before
     ///   the declared total of a box was reached.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   file was already declared over.
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), Error> {
         match self.state {
             State::Failed(failure) => Err(failure),
-            State::Finished => Err(Error::already_finished()),
+            State::Finished => Err(Error::AlreadyFinished),
             State::Between => {
                 self.state = State::Finished;
 
@@ -310,7 +310,10 @@ impl BoxReader {
                     BoxHeader::MAX_ENCODED_LEN as u64
                 };
 
-                Err(self.fail(Error::unfinished_header(needed, filled as u64)))
+                Err(self.fail(Error::UnfinishedHeader {
+                    needed_bytes: needed,
+                    available_bytes: filled as u64,
+                }))
             }
             State::Payload {
                 header,
@@ -319,10 +322,10 @@ impl BoxReader {
             } if taken < declared => {
                 let header_len = header.encoded_len() as u64;
 
-                Err(self.fail(Error::unfinished_box(
-                    header_len.saturating_add(declared),
-                    header_len.saturating_add(taken),
-                )))
+                Err(self.fail(Error::UnfinishedBox {
+                    needed_bytes: header_len.saturating_add(declared),
+                    available_bytes: header_len.saturating_add(taken),
+                }))
             }
             State::Payload { .. } | State::PayloadToEndOfFile => {
                 self.state = State::Finished;
@@ -661,7 +664,13 @@ mod tests {
             .handle_input(&[0x00, 0x00, 0x00, 0x01, b'm', b'd', b'a', b't', 0x00])
             .unwrap();
 
-        assert_eq!(reader.finish(), Err(Error::unfinished_header(16, 9)));
+        assert_eq!(
+            reader.finish(),
+            Err(Error::UnfinishedHeader {
+                needed_bytes: 16,
+                available_bytes: 9,
+            })
+        );
     }
 
     #[test]
@@ -670,7 +679,13 @@ mod tests {
 
         reader.handle_input(b"\0\0\0\x10freeAAAA").unwrap();
 
-        assert_eq!(reader.finish(), Err(Error::unfinished_box(16, 12)));
+        assert_eq!(
+            reader.finish(),
+            Err(Error::UnfinishedBox {
+                needed_bytes: 16,
+                available_bytes: 12,
+            })
+        );
     }
 
     #[test]
@@ -686,7 +701,10 @@ mod tests {
     #[test]
     fn a_reader_that_failed_while_finishing_reports_that_failure_again() {
         let mut reader = BoxReader::new();
-        let failure = Error::unfinished_box(16, 12);
+        let failure = Error::UnfinishedBox {
+            needed_bytes: 16,
+            available_bytes: 12,
+        };
 
         reader.handle_input(b"\0\0\0\x10freeAAAA").unwrap();
 
@@ -736,7 +754,7 @@ mod tests {
 
         assert_eq!(
             reader.handle_input(b"\0\0\0\x08free"),
-            Err(Error::already_finished())
+            Err(Error::AlreadyFinished)
         );
     }
 
@@ -746,6 +764,6 @@ mod tests {
 
         reader.finish().unwrap();
 
-        assert_eq!(reader.finish(), Err(Error::already_finished()));
+        assert_eq!(reader.finish(), Err(Error::AlreadyFinished));
     }
 }
