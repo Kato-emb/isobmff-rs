@@ -42,18 +42,18 @@ use isobmff_core::{BoxType, Category};
 /// // A failure of one box is carried through whole
 /// let unsupported = isobmff_core::Error::unsupported_version(2);
 /// let carried = Error::from(unsupported);
-/// assert!(matches!(carried, Error::Box { 0: box_error, .. } if box_error == unsupported));
+/// assert!(matches!(carried, Error::Box { error, .. } if error == unsupported));
 /// assert_eq!(carried.category(), Category::Unsupported);
 /// ```
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Error {
     /// Failure of one box, carried through as `isobmff-core` names it
-    ///
-    /// The values that failure carries, and the boxes it was reached through,
-    /// are read off the [`isobmff_core::Error`] itself.
     #[non_exhaustive]
-    Box(isobmff_core::Error),
+    Box {
+        /// Failure of the box, carrying its own values and the boxes it was reached through
+        error: isobmff_core::Error,
+    },
     /// File ends inside the header of a box, with no more input to come
     #[non_exhaustive]
     UnfinishedHeader {
@@ -105,7 +105,7 @@ impl Error {
     #[must_use]
     pub const fn category(self) -> Category {
         match self {
-            Self::Box(box_error) => box_error.category(),
+            Self::Box { error } => error.category(),
             Self::UnfinishedHeader { .. } | Self::UnfinishedBox { .. } => Category::Malformed,
             Self::PayloadPastDeclared { .. }
             | Self::NoBoxOpen
@@ -118,15 +118,15 @@ impl Error {
 
 impl From<isobmff_core::Error> for Error {
     /// Carries the failure of one box through as it stands
-    fn from(box_error: isobmff_core::Error) -> Self {
-        Self::Box(box_error)
+    fn from(error: isobmff_core::Error) -> Self {
+        Self::Box { error }
     }
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            Self::Box(box_error) => write!(formatter, "{box_error}"),
+            Self::Box { error } => write!(formatter, "{error}"),
             Self::UnfinishedHeader {
                 needed_bytes,
                 available_bytes,
@@ -166,7 +166,7 @@ impl error::Error for Error {
     /// Returns the failure of one box the sequence carried through, when it holds one
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self {
-            Self::Box(box_error) => Some(box_error),
+            Self::Box { error } => Some(error),
             Self::UnfinishedHeader { .. }
             | Self::UnfinishedBox { .. }
             | Self::PayloadPastDeclared { .. }
