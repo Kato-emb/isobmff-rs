@@ -67,14 +67,14 @@ pub use limits::SampleReaderLimits;
 ///   names from then until [`poll_sample`](Self::poll_sample) takes it, so
 ///   input handed over while the samples are not taken runs into that limit.
 /// * An `Err` leaves the reader failed for good,
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside: every
+///   [`AlreadyFinished`](crate::Error::AlreadyFinished) aside: every
 ///   later call that can fail reports that same failure again. The samples
 ///   made before it are still there to take, and no further one is ever made.
 /// * [`finish`](Self::finish) declares the samples over, and fails if an
 ///   extent held is short of its bytes. Samples are still taken after it, but
 ///   an extent or input handed over then, or a second
 ///   [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished).
+///   [`AlreadyFinished`](crate::Error::AlreadyFinished).
 ///
 /// # Examples
 ///
@@ -150,11 +150,11 @@ impl SampleReader {
     ///
     /// # Errors
     ///
-    /// * [`SampleSizeLimitExceeded`](crate::ErrorKind::SampleSizeLimitExceeded):
+    /// * [`SampleSizeLimitExceeded`](crate::Error::SampleSizeLimitExceeded):
     ///   the extent names more bytes than one extent may.
-    /// * [`HeldExtentLimitExceeded`](crate::ErrorKind::HeldExtentLimitExceeded):
+    /// * [`HeldExtentLimitExceeded`](crate::Error::HeldExtentLimitExceeded):
     ///   the reader already holds as many extents as it may.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
@@ -183,12 +183,12 @@ impl SampleReader {
     ///
     /// # Errors
     ///
-    /// * [`SampleSizeLimitExceeded`](crate::ErrorKind::SampleSizeLimitExceeded):
+    /// * [`SampleSizeLimitExceeded`](crate::Error::SampleSizeLimitExceeded):
     ///   an extent names more bytes than one extent may.
-    /// * [`HeldExtentLimitExceeded`](crate::ErrorKind::HeldExtentLimitExceeded):
+    /// * [`HeldExtentLimitExceeded`](crate::Error::HeldExtentLimitExceeded):
     ///   an extent comes once the reader holds as many as it may.
     /// * The failure among `extents`, where one is.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
@@ -237,10 +237,10 @@ impl SampleReader {
     ///
     /// # Errors
     ///
-    /// * [`HeldBytesLimitExceeded`](crate::ErrorKind::HeldBytesLimitExceeded):
+    /// * [`HeldBytesLimitExceeded`](crate::Error::HeldBytesLimitExceeded):
     ///   a sample `data` starts would take the reader past the bytes it
     ///   holds. The samples `data` made whole before it are there to take.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
@@ -267,7 +267,10 @@ impl SampleReader {
 
             return match refused {
                 Ok(()) => Ok(()),
-                Err(needed) => Err(self.fail(Error::held_bytes_limit_exceeded(needed, limit))),
+                Err(needed) => Err(self.fail(Error::HeldBytesLimitExceeded {
+                    held_bytes: needed,
+                    limit_bytes: limit,
+                })),
             };
         }
 
@@ -309,7 +312,10 @@ impl SampleReader {
 
         match refused {
             None => Ok(()),
-            Some(needed) => Err(self.fail(Error::held_bytes_limit_exceeded(needed, limit))),
+            Some(needed) => Err(self.fail(Error::HeldBytesLimitExceeded {
+                held_bytes: needed,
+                limit_bytes: limit,
+            })),
         }
     }
 
@@ -338,9 +344,9 @@ impl SampleReader {
     ///
     /// # Errors
     ///
-    /// * [`UnfinishedSample`](crate::ErrorKind::UnfinishedSample): an
+    /// * [`UnfinishedSample`](crate::Error::UnfinishedSample): an
     ///   extent held is short of the bytes it names.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   samples were already declared over.
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
@@ -348,11 +354,11 @@ impl SampleReader {
         self.reading()?;
 
         match self.front() {
-            Some(short) => Err(self.fail(Error::unfinished_sample(
-                short.extent.track_id(),
-                short.declared_len(),
-                short.gathered_len(),
-            ))),
+            Some(short) => Err(self.fail(Error::UnfinishedSample {
+                track_id: short.extent.track_id(),
+                needed_bytes: short.declared_len(),
+                available_bytes: short.gathered_len(),
+            })),
             None => {
                 self.state = State::Finished;
 
@@ -386,17 +392,17 @@ impl SampleReader {
         };
         let declared = pending.declared_len();
         if declared > self.limits.sample_size() {
-            return Err(self.fail(Error::sample_size_limit_exceeded(
-                pending.extent.track_id(),
-                declared,
-                self.limits.sample_size(),
-            )));
+            return Err(self.fail(Error::SampleSizeLimitExceeded {
+                track_id: pending.extent.track_id(),
+                declared_bytes: declared,
+                limit_bytes: self.limits.sample_size(),
+            }));
         }
         if self.held_extents >= self.limits.held_extents() {
-            return Err(self.fail(Error::held_extent_limit_exceeded(
-                self.held_extents.saturating_add(1),
-                self.limits.held_extents(),
-            )));
+            return Err(self.fail(Error::HeldExtentLimitExceeded {
+                held_extents: self.held_extents.saturating_add(1),
+                limit_extents: self.limits.held_extents(),
+            }));
         }
         self.held_extents = self.held_extents.saturating_add(1);
         self.pending.push_back(pending);
@@ -472,7 +478,7 @@ impl SampleReader {
     const fn reading(&self) -> Result<(), Error> {
         match self.state {
             State::Reading => Ok(()),
-            State::Finished => Err(Error::already_finished()),
+            State::Finished => Err(Error::AlreadyFinished),
             State::Failed(failure) => Err(failure),
         }
     }

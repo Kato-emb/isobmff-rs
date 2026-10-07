@@ -16,7 +16,7 @@ mod tests {
         TrackRunBox, TrackRunSample,
     };
     use isobmff_core::{BoxEncode, FourCC};
-    use isobmff_structure::{Error, MediaSegmentDemuxFsm, WantedInput};
+    use isobmff_structure::{Error, ErrorKind, MediaSegmentDemuxFsm, WantedInput};
     use isobmff_test_support::{
         SAMPLE_CHUNKS, fragmented_file_with_movie_samples, indexed_segment_file,
         indexed_segment_file_without_decode_times, non_fragmented_file_samples, presentation_movie,
@@ -158,10 +158,14 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            MediaSegmentDemuxFsm::new(movie).map(drop),
-            Err(Error::from(isobmff_sample::Error::decode_time_overflow(1)))
-        );
+        assert!(matches!(
+            MediaSegmentDemuxFsm::new(movie)
+                .map(drop)
+                .map_err(Error::kind),
+            Err(ErrorKind::Sample(
+                isobmff_sample::Error::DecodeTimeOverflow { track_id: 1, .. }
+            ))
+        ));
     }
 
     /// Brands of a later segment, other than those [`segment_type`] declares

@@ -14,7 +14,7 @@ use isobmff_sample::SampleReaderLimits;
 /// * [`resolved_samples`](Self::resolved_samples): the most samples one
 ///   `moov` or one `moof` may declare, every track together. Past it the
 ///   box lays out none, as
-///   [`SampleCountLimitExceeded`](isobmff_sample::ErrorKind::SampleCountLimitExceeded)
+///   [`SampleCountLimitExceeded`](isobmff_sample::Error::SampleCountLimitExceeded)
 ///   carried on [`Sample`](crate::ErrorKind::Sample).
 /// * [`sample_reader`](Self::sample_reader): the limits the
 ///   [`SampleReader`](isobmff_sample::SampleReader) the samples are gathered

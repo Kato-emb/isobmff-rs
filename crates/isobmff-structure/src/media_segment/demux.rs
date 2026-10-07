@@ -479,12 +479,18 @@ mod tests {
             MediaSegmentDemuxFsm::with_limits(movie(), DemuxLimits::new().with_resolved_samples(0))
                 .unwrap();
 
-        assert_eq!(
-            demux_fsm.handle_input(0, &segment_of_one_sample()),
-            Err(Error::from(
-                isobmff_sample::Error::sample_count_limit_exceeded(1, 0)
+        assert!(matches!(
+            demux_fsm
+                .handle_input(0, &segment_of_one_sample())
+                .map_err(Error::kind),
+            Err(ErrorKind::Sample(
+                isobmff_sample::Error::SampleCountLimitExceeded {
+                    declared_samples: 1,
+                    limit_samples: 0,
+                    ..
+                }
             ))
-        );
+        ));
         assert_eq!(demux_fsm.poll_sample(), None);
     }
 
@@ -496,12 +502,18 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            demux_fsm.handle_input(0, &segment_of_one_sample()),
-            Err(Error::from(
-                isobmff_sample::Error::held_extent_limit_exceeded(1, 0)
+        assert!(matches!(
+            demux_fsm
+                .handle_input(0, &segment_of_one_sample())
+                .map_err(Error::kind),
+            Err(ErrorKind::Sample(
+                isobmff_sample::Error::HeldExtentLimitExceeded {
+                    held_extents: 1,
+                    limit_extents: 0,
+                    ..
+                }
             ))
-        );
+        ));
     }
 
     #[test]

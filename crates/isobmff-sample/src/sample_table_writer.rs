@@ -57,46 +57,46 @@ use crate::sample_table_writer::open_track::OpenTrack;
 /// # Contract
 ///
 /// * A sample belongs to a track the movie declares by a `trak`, which is
-///   otherwise [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId), and is
+///   otherwise [`UnknownTrackId`](crate::Error::UnknownTrackId), and is
 ///   described by an `stsd` entry of that track whose data reference is the
 ///   file itself, as a reader of the tables resolves it (§8.5.2, §8.7.2).
 ///   The first sample of a chunk is checked, and the samples after it are
 ///   held to its track and entry: the failures of the entry are those of the
 ///   reader —
-///   [`UnknownSampleDescriptionIndex`](crate::ErrorKind::UnknownSampleDescriptionIndex),
-///   [`UnknownDataReferenceIndex`](crate::ErrorKind::UnknownDataReferenceIndex),
-///   [`ExternalDataReference`](crate::ErrorKind::ExternalDataReference), or
+///   [`UnknownSampleDescriptionIndex`](crate::Error::UnknownSampleDescriptionIndex),
+///   [`UnknownDataReferenceIndex`](crate::Error::UnknownDataReferenceIndex),
+///   [`ExternalDataReference`](crate::Error::ExternalDataReference), or
 ///   the failure of an entry that does not read as a sample entry, carried
-///   on [`Box`](crate::ErrorKind::Box).
+///   on [`Box`](crate::Error::Box).
 /// * Handing a sample over while no chunk is open is
-///   [`NoChunkOpen`](crate::ErrorKind::NoChunkOpen), and one of another
+///   [`NoChunkOpen`](crate::Error::NoChunkOpen), and one of another
 ///   track than the chunk holds is
-///   [`TrackIdMismatch`](crate::ErrorKind::TrackIdMismatch). A chunk no
+///   [`TrackIdMismatch`](crate::Error::TrackIdMismatch). A chunk no
 ///   sample was handed over to is not recorded.
 /// * The decode timeline of a track starts at zero and states how long each
 ///   sample lasts, never when it is decoded, so a sample of a track has to
 ///   start where the one before it ends — the first at zero — which is
 ///   otherwise
-///   [`DecodeTimeMismatch`](crate::ErrorKind::DecodeTimeMismatch).
+///   [`DecodeTimeMismatch`](crate::Error::DecodeTimeMismatch).
 /// * The samples of a chunk are all described by one `stsd` entry, which the
 ///   run of chunks states for them (§8.7.4): a chunk mixing two is
-///   [`SampleDescriptionIndexMismatch`](crate::ErrorKind::SampleDescriptionIndexMismatch).
+///   [`SampleDescriptionIndexMismatch`](crate::Error::SampleDescriptionIndexMismatch).
 /// * A sample stating a composition time offset outside what 32 signed bits
 ///   hold is
-///   [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange):
+///   [`CompositionTimeOffsetOutOfRange`](crate::Error::CompositionTimeOffsetOutOfRange):
 ///   one past [`i32::MAX`] is refused too, which the readers here take as
 ///   negative.
 /// * A chunk holding more samples than an `stsc` entry counts, or numbered
 ///   past what one reaches, is reported by [`finish`](Self::finish), where the
 ///   tables are built: the failure of the box, carried on
-///   [`Box`](crate::ErrorKind::Box).
+///   [`Box`](crate::Error::Box).
 /// * An `Err` leaves the writer failed for good,
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside: every
+///   [`AlreadyFinished`](crate::Error::AlreadyFinished) aside: every
 ///   later call reports that same failure again.
 /// * [`finish`](Self::finish) declares the samples over and hands back the
 ///   tables. A chunk opened or a sample handed over then, or a second
 ///   [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished).
+///   [`AlreadyFinished`](crate::Error::AlreadyFinished).
 ///
 /// # Examples
 ///
@@ -282,7 +282,7 @@ impl OpenChunk {
                 let trak = trak
                     .iter()
                     .find(|trak| trak.tkhd().track_id() == track_id)
-                    .ok_or(Error::unknown_track_id(track_id))?;
+                    .ok_or(Error::UnknownTrackId { track_id })?;
                 SampleDescriptions::new(trak)
                     .data_reference_index(sample.sample_description_index())?;
                 self.held.insert(HeldSamples {
@@ -293,14 +293,17 @@ impl OpenChunk {
             }
         };
         if held.track_id != track_id {
-            return Err(Error::track_id_mismatch(track_id, held.track_id));
+            return Err(Error::TrackIdMismatch {
+                stated_track_id: track_id,
+                established_track_id: held.track_id,
+            });
         }
         if held.sample_description_index != sample.sample_description_index() {
-            return Err(Error::sample_description_index_mismatch(
+            return Err(Error::SampleDescriptionIndexMismatch {
                 track_id,
-                sample.sample_description_index(),
-                held.sample_description_index,
-            ));
+                stated_sample_description_index: sample.sample_description_index(),
+                established_sample_description_index: held.sample_description_index,
+            });
         }
         let data = tracks.entry(track_id).or_default().place(sample)?;
         held.sample_count = held.sample_count.saturating_add(1);
@@ -335,7 +338,7 @@ impl SampleTableWriter {
     ///
     /// # Errors
     ///
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
@@ -354,41 +357,41 @@ impl SampleTableWriter {
     ///
     /// # Errors
     ///
-    /// * [`NoChunkOpen`](crate::ErrorKind::NoChunkOpen): no chunk was
+    /// * [`NoChunkOpen`](crate::Error::NoChunkOpen): no chunk was
     ///   opened to carry it.
-    /// * [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId): the movie
+    /// * [`UnknownTrackId`](crate::Error::UnknownTrackId): the movie
     ///   declares no track the sample belongs to.
-    /// * [`UnknownSampleDescriptionIndex`](crate::ErrorKind::UnknownSampleDescriptionIndex):
+    /// * [`UnknownSampleDescriptionIndex`](crate::Error::UnknownSampleDescriptionIndex):
     ///   the track has no `stsd` entry describing the sample.
     /// * The failures of [`SampleEntry::try_from`](isobmff_boxes::SampleEntry),
-    ///   carried on [`Box`](crate::ErrorKind::Box): that entry does not read
+    ///   carried on [`Box`](crate::Error::Box): that entry does not read
     ///   as a sample entry, with `stsd` added to the containers.
-    /// * [`UnknownDataReferenceIndex`](crate::ErrorKind::UnknownDataReferenceIndex):
+    /// * [`UnknownDataReferenceIndex`](crate::Error::UnknownDataReferenceIndex):
     ///   that entry names a `dref` entry the track has none of.
-    /// * [`ExternalDataReference`](crate::ErrorKind::ExternalDataReference):
+    /// * [`ExternalDataReference`](crate::Error::ExternalDataReference):
     ///   the `dref` entry names a resource other than the file itself.
-    /// * [`TrackIdMismatch`](crate::ErrorKind::TrackIdMismatch): the
+    /// * [`TrackIdMismatch`](crate::Error::TrackIdMismatch): the
     ///   sample belongs to another track than the chunk holds.
-    /// * [`SampleDescriptionIndexMismatch`](crate::ErrorKind::SampleDescriptionIndexMismatch):
+    /// * [`SampleDescriptionIndexMismatch`](crate::Error::SampleDescriptionIndexMismatch):
     ///   the sample is described by another `stsd` entry than the chunk holds.
-    /// * [`DecodeTimeMismatch`](crate::ErrorKind::DecodeTimeMismatch):
+    /// * [`DecodeTimeMismatch`](crate::Error::DecodeTimeMismatch):
     ///   the sample does not start where the one before it in its track ends.
-    /// * [`DecodeTimeOverflow`](crate::ErrorKind::DecodeTimeOverflow):
+    /// * [`DecodeTimeOverflow`](crate::Error::DecodeTimeOverflow):
     ///   the decode times of its track run past what 64 bits carry.
-    /// * [`SampleSizeOutOfRange`](crate::ErrorKind::SampleSizeOutOfRange):
+    /// * [`SampleSizeOutOfRange`](crate::Error::SampleSizeOutOfRange):
     ///   the sample is longer than the 32 bits an `stsz` entry states its
     ///   length in.
-    /// * [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange):
+    /// * [`CompositionTimeOffsetOutOfRange`](crate::Error::CompositionTimeOffsetOutOfRange):
     ///   the sample states a composition time offset outside what 32 signed
     ///   bits hold.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
     pub fn handle_sample(&mut self, sample: Sample) -> Result<Vec<u8>, Error> {
         self.writing()?;
         let State::Chunk(chunk) = &mut self.state else {
-            return Err(self.fail(Error::no_chunk_open()));
+            return Err(self.fail(Error::NoChunkOpen));
         };
         chunk
             .place(sample, &self.trak, &mut self.tracks)
@@ -402,9 +405,9 @@ impl SampleTableWriter {
     /// # Errors
     ///
     /// * [`OutOfRange`](isobmff_core::ErrorKind::OutOfRange), carried on
-    ///   [`Box`](crate::ErrorKind::Box): a chunk holds more samples than
+    ///   [`Box`](crate::Error::Box): a chunk holds more samples than
     ///   an `stsc` entry counts, or is numbered past what one reaches.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   samples were already declared over.
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
@@ -439,7 +442,7 @@ impl SampleTableWriter {
     const fn writing(&self) -> Result<(), Error> {
         match self.state {
             State::Between | State::Chunk(_) => Ok(()),
-            State::Finished => Err(Error::already_finished()),
+            State::Finished => Err(Error::AlreadyFinished),
             State::Failed(failure) => Err(failure),
         }
     }
@@ -659,7 +662,7 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(sample(1, 0, b"AAAA")),
-            Err(Error::no_chunk_open())
+            Err(Error::NoChunkOpen)
         );
     }
 
@@ -672,7 +675,10 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(sample(2, 0, b"BBBB")),
-            Err(Error::track_id_mismatch(2, 1))
+            Err(Error::TrackIdMismatch {
+                stated_track_id: 2,
+                established_track_id: 1
+            })
         );
     }
 
@@ -687,7 +693,11 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(described_by_the_second),
-            Err(Error::sample_description_index_mismatch(1, 2, 1))
+            Err(Error::SampleDescriptionIndexMismatch {
+                track_id: 1,
+                stated_sample_description_index: 2,
+                established_sample_description_index: 1
+            })
         );
     }
 
@@ -727,12 +737,12 @@ mod tests {
 
         writer.finish().unwrap();
 
-        assert_eq!(writer.begin_chunk(1_000), Err(Error::already_finished()));
+        assert_eq!(writer.begin_chunk(1_000), Err(Error::AlreadyFinished));
         assert_eq!(
             writer.handle_sample(sample(1, 0, b"AAAA")),
-            Err(Error::already_finished())
+            Err(Error::AlreadyFinished)
         );
-        assert_eq!(writer.finish(), Err(Error::already_finished()));
+        assert_eq!(writer.finish(), Err(Error::AlreadyFinished));
     }
 
     #[test]
@@ -745,15 +755,27 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(sample(1, 1_024, b"CCCC")),
-            Err(Error::decode_time_mismatch(1, 512, 1_024))
+            Err(Error::DecodeTimeMismatch {
+                track_id: 1,
+                stated_decode_time: 512,
+                reached_decode_time: 1_024
+            })
         );
         assert_eq!(
             writer.begin_chunk(2_000),
-            Err(Error::decode_time_mismatch(1, 512, 1_024))
+            Err(Error::DecodeTimeMismatch {
+                track_id: 1,
+                stated_decode_time: 512,
+                reached_decode_time: 1_024
+            })
         );
         assert_eq!(
             writer.finish(),
-            Err(Error::decode_time_mismatch(1, 512, 1_024))
+            Err(Error::DecodeTimeMismatch {
+                track_id: 1,
+                stated_decode_time: 512,
+                reached_decode_time: 1_024
+            })
         );
     }
 
@@ -768,7 +790,7 @@ mod tests {
 
         assert_eq!(
             refused(sample(999, 0, b"AAAA")),
-            Err(Error::unknown_track_id(999))
+            Err(Error::UnknownTrackId { track_id: 999 })
         );
         assert_eq!(
             refused(Sample::new(
@@ -780,7 +802,10 @@ mod tests {
                 2,
                 b"AAAA".to_vec()
             )),
-            Err(Error::unknown_sample_description_index(1, 2))
+            Err(Error::UnknownSampleDescriptionIndex {
+                track_id: 1,
+                sample_description_index: 2
+            })
         );
     }
 }

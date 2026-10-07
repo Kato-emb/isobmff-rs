@@ -41,7 +41,7 @@ use std::collections::{BTreeMap, HashMap};
 use isobmff::boxes::MovieBox;
 use isobmff::sample::movie_fragment::sample_extents;
 use isobmff::sample::{
-    Error, ErrorKind, Sample, SampleExtent, SampleReader, SampleReaderLimits, TrackDecodeTimes,
+    Error, Sample, SampleExtent, SampleReader, SampleReaderLimits, TrackDecodeTimes,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -139,9 +139,8 @@ fuzz_target!(|input: Input<'_>| {
     );
 
     if laid_out.met_as_declared {
-        assert_ne!(
-            in_order.failure.map(Error::kind),
-            Some(ErrorKind::UnfinishedSample),
+        assert!(
+            !matches!(in_order.failure, Some(Error::UnfinishedSample { .. })),
             "a sample was left short of data every claim of it was met by"
         );
 
@@ -273,9 +272,8 @@ fn read(sample_size_limit: u64, steps: Vec<Step<'_>>, refused: Option<Error>) ->
         drain(&mut reader, &mut samples);
 
         match over {
-            Ok(()) => assert_eq!(
-                reader.handle_data(0, &[]).map_err(Error::kind),
-                Err(ErrorKind::AlreadyFinished),
+            Ok(()) => assert!(
+                matches!(reader.handle_data(0, &[]), Err(Error::AlreadyFinished { .. })),
                 "the reader took media data after the samples were declared over"
             ),
             Err(reported) => failure = Some(reported),

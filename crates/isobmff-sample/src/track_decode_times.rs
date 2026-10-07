@@ -36,7 +36,7 @@ impl TrackDecodeTimes {
     ///
     /// # Errors
     ///
-    /// * [`DecodeTimeOverflow`](crate::ErrorKind::DecodeTimeOverflow): the
+    /// * [`DecodeTimeOverflow`](crate::Error::DecodeTimeOverflow): the
     ///   deltas of a track sum past what 64 bits carry.
     pub fn new(movie: &MovieBox) -> Result<Self, Error> {
         let decode_times = movie
@@ -48,7 +48,7 @@ impl TrackDecodeTimes {
 
                 decode_time
                     .map(|decode_time| (track_id, decode_time))
-                    .ok_or(Error::decode_time_overflow(track_id))
+                    .ok_or(Error::DecodeTimeOverflow { track_id })
             })
             .collect::<Result<_, _>>()?;
 
@@ -134,7 +134,7 @@ mod tests {
 
         assert_eq!(
             TrackDecodeTimes::new(&movie),
-            Err(Error::decode_time_overflow(2))
+            Err(Error::DecodeTimeOverflow { track_id: 2 })
         );
     }
 

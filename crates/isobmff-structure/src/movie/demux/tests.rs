@@ -96,12 +96,18 @@ fn a_box_passed_over_is_not_bounded_by_the_limit() {
 fn a_fragment_declaring_more_samples_than_the_limit_lays_out_none() {
     let mut demux_fsm = MovieDemuxFsm::with_limits(DemuxLimits::new().with_resolved_samples(0));
 
-    assert_eq!(
-        demux_fsm.handle_input(0, &file_of_one_sample()),
-        Err(Error::from(
-            isobmff_sample::Error::sample_count_limit_exceeded(1, 0)
+    assert!(matches!(
+        demux_fsm
+            .handle_input(0, &file_of_one_sample())
+            .map_err(Error::kind),
+        Err(ErrorKind::Sample(
+            isobmff_sample::Error::SampleCountLimitExceeded {
+                declared_samples: 1,
+                limit_samples: 0,
+                ..
+            }
         ))
-    );
+    ));
     assert_eq!(demux_fsm.poll_sample(), None);
 }
 
@@ -109,12 +115,18 @@ fn a_fragment_declaring_more_samples_than_the_limit_lays_out_none() {
 fn a_movie_declaring_more_samples_than_the_limit_lays_out_none() {
     let mut demux_fsm = MovieDemuxFsm::with_limits(DemuxLimits::new().with_resolved_samples(0));
 
-    assert_eq!(
-        demux_fsm.handle_input(0, &non_fragmented_file(&[&[b"SAMP"]], true)),
-        Err(Error::from(
-            isobmff_sample::Error::sample_count_limit_exceeded(1, 0)
+    assert!(matches!(
+        demux_fsm
+            .handle_input(0, &non_fragmented_file(&[&[b"SAMP"]], true))
+            .map_err(Error::kind),
+        Err(ErrorKind::Sample(
+            isobmff_sample::Error::SampleCountLimitExceeded {
+                declared_samples: 1,
+                limit_samples: 0,
+                ..
+            }
         ))
-    );
+    ));
     assert_eq!(demux_fsm.poll_sample(), None);
 }
 
@@ -124,12 +136,18 @@ fn the_sample_reader_is_held_to_the_limits_it_is_given() {
         DemuxLimits::new().with_sample_reader(SampleReaderLimits::new().with_held_extents(0)),
     );
 
-    assert_eq!(
-        demux_fsm.handle_input(0, &file_of_one_sample()),
-        Err(Error::from(
-            isobmff_sample::Error::held_extent_limit_exceeded(1, 0)
+    assert!(matches!(
+        demux_fsm
+            .handle_input(0, &file_of_one_sample())
+            .map_err(Error::kind),
+        Err(ErrorKind::Sample(
+            isobmff_sample::Error::HeldExtentLimitExceeded {
+                held_extents: 1,
+                limit_extents: 0,
+                ..
+            }
         ))
-    );
+    ));
 }
 
 #[test]

@@ -151,11 +151,11 @@ mod tests {
         .concat();
         let mut demux_fsm = MovieDemuxFsm::new();
 
-        assert_eq!(
+        assert!(matches!(
             demux_fsm.handle_input(0, &file).map_err(Error::kind),
             Err(ErrorKind::Sample(
-                isobmff_sample::ErrorKind::MissingMovieExtends
+                isobmff_sample::Error::MissingMovieExtends { .. }
             ))
-        );
+        ));
     }
 }

@@ -444,7 +444,7 @@ fn a_run_stating_no_offset_starts_where_the_run_before_it_ended() {
 fn a_movie_carrying_no_extends_box_is_not_fragmented_at_all() {
     assert_eq!(
         resolved(&one_sample_movie_fragment(), &unfragmented_movie()),
-        Err(Error::missing_movie_extends())
+        Err(Error::MissingMovieExtends)
     );
 }
 
@@ -454,7 +454,7 @@ fn a_fragment_of_a_track_the_movie_never_declared_is_refused() {
 
     assert_eq!(
         resolved(&of_an_unknown_track, &one_track_movie()),
-        Err(Error::unknown_track_id(3))
+        Err(Error::UnknownTrackId { track_id: 3 })
     );
 }
 
@@ -491,7 +491,10 @@ fn a_fragment_described_by_an_entry_its_track_has_none_of_is_refused() {
 
     assert_eq!(
         resolved(&movie_fragment(vec![by_a_second_entry]), &one_track_movie()),
-        Err(Error::unknown_sample_description_index(1, 2))
+        Err(Error::UnknownSampleDescriptionIndex {
+            track_id: 1,
+            sample_description_index: 2
+        })
     );
 }
 
@@ -501,7 +504,10 @@ fn a_fragment_of_a_track_reading_from_an_external_file_is_refused() {
 
     assert_eq!(
         resolved(&one_sample_movie_fragment(), &movie(vec![external])),
-        Err(Error::external_data_reference(1, 1))
+        Err(Error::ExternalDataReference {
+            track_id: 1,
+            data_reference_index: 1
+        })
     );
 }
 
@@ -569,7 +575,7 @@ fn a_failure_returned_outright_leaves_every_track_where_it_stood() {
             0,
             &mut decode_times
         ),
-        Err(Error::unknown_track_id(3))
+        Err(Error::UnknownTrackId { track_id: 3 })
     );
     assert_eq!(decode_times.decode_time(1), Some(0));
 }
@@ -585,7 +591,7 @@ fn where_no_track_stands_anywhere_known_only_a_stated_decode_time_resolves() {
 
     assert_eq!(
         resolved_from(&stating_none, &one_track_movie(), 0, &mut decode_times),
-        Err(Error::missing_decode_time(1))
+        Err(Error::MissingDecodeTime { track_id: 1 })
     );
     assert_eq!(decode_times, TrackDecodeTimes::unknown());
     assert_eq!(
@@ -641,7 +647,7 @@ fn the_extents_placed_before_a_failure_come_out_ahead_of_it_and_the_tracks_have_
         .collect::<Vec<_>>(),
         [
             Ok(extent(1, 0, 100..104)),
-            Err(Error::data_offset_overflow(2))
+            Err(Error::DataOffsetOverflow { track_id: 2 })
         ]
     );
     assert_eq!(decode_times.decode_time(1), Some(1_024));
@@ -668,7 +674,7 @@ fn decode_times_running_past_what_64_bits_carry_are_refused() {
             &movie_fragment(vec![at_the_end_of_time]),
             &one_track_movie()
         ),
-        Err(Error::decode_time_overflow(1))
+        Err(Error::DecodeTimeOverflow { track_id: 1 })
     );
 }
 
@@ -691,7 +697,7 @@ fn data_offsets_running_past_what_64_bits_carry_are_refused() {
             &movie_fragment(vec![past_the_end_of_the_file]),
             &one_track_movie()
         ),
-        Err(Error::data_offset_overflow(1))
+        Err(Error::DataOffsetOverflow { track_id: 1 })
     );
 }
 
@@ -706,7 +712,10 @@ fn a_fragment_counting_more_samples_than_the_limit_settles_none() {
 
     assert_eq!(
         sample_extents(&two_samples, &two_tracks, 0, &mut decode_times, 1).map(|_| ()),
-        Err(Error::sample_count_limit_exceeded(2, 1))
+        Err(Error::SampleCountLimitExceeded {
+            declared_samples: 2,
+            limit_samples: 1
+        })
     );
     assert_eq!(decode_times, TrackDecodeTimes::new(&two_tracks).unwrap());
     assert_eq!(
@@ -734,10 +743,10 @@ fn runs_holding_only_a_count_are_counted_before_a_sample_is_settled() {
             1_048_576
         )
         .map(|_| ()),
-        Err(Error::sample_count_limit_exceeded(
-            3 * u64::from(u32::MAX),
-            1_048_576
-        ))
+        Err(Error::SampleCountLimitExceeded {
+            declared_samples: 3 * u64::from(u32::MAX),
+            limit_samples: 1_048_576
+        })
     );
 }
 
@@ -796,7 +805,10 @@ fn a_fragment_anchored_after_one_kept_unread_whose_sample_sizes_nothing_states_i
 
     assert_eq!(
         extents,
-        [Ok(extent(1, 0, 50..54)), Err(Error::unknown_track_id(2))]
+        [
+            Ok(extent(1, 0, 50..54)),
+            Err(Error::UnknownTrackId { track_id: 2 })
+        ]
     );
 }
 

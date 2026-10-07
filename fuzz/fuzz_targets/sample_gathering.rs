@@ -33,7 +33,7 @@ use core::ops::Range;
 use isobmff::boxes::{
     DegradationPriorityEntry, PaddingBitsEntry, SampleDependencyTypeEntry, SampleFlags,
 };
-use isobmff::sample::{Error, ErrorKind, Sample, SampleExtent, SampleReader, SampleReaderLimits};
+use isobmff::sample::{Error, Sample, SampleExtent, SampleReader, SampleReaderLimits};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
 
@@ -88,7 +88,24 @@ enum Handed<'file> {
 #[derive(PartialEq, Debug)]
 struct Reading {
     samples: Vec<Sample>,
-    failure: Option<Error>,
+    failure: Option<Failure>,
+}
+
+/// A failure of the reader, with the values the contract states it carries
+#[derive(PartialEq, Debug)]
+enum Failure {
+    SampleSizeLimitExceeded {
+        track_id: u32,
+        declared_bytes: u64,
+        limit_bytes: u64,
+    },
+    UnfinishedSample {
+        track_id: u32,
+        needed_bytes: u64,
+        available_bytes: u64,
+    },
+    /// A failure the contract states for no step
+    Other(Error),
 }
 
 /// An extent held, as the model follows it through the steps
@@ -252,9 +269,8 @@ fn read(sample_size_limit: u64, handed: &[Handed<'_>], together: bool) -> Readin
             );
         }
         None => {
-            assert_eq!(
-                reader.handle_data(0, &[]).map_err(Error::kind),
-                Err(ErrorKind::AlreadyFinished),
+            assert!(
+                matches!(reader.handle_data(0, &[]), Err(Error::AlreadyFinished { .. })),
                 "the reader took media data after the samples were declared over"
             );
             assert_eq!(
@@ -264,6 +280,33 @@ fn read(sample_size_limit: u64, handed: &[Handed<'_>], together: bool) -> Readin
             );
         }
     }
+
+    // Why not comparing the failure itself: a #[non_exhaustive] variant of
+    // another crate can be matched but not built, so the model states what it
+    // carries instead
+    let failure = failure.map(|reported| match reported {
+        Error::SampleSizeLimitExceeded {
+            track_id,
+            declared_bytes,
+            limit_bytes,
+            ..
+        } => Failure::SampleSizeLimitExceeded {
+            track_id,
+            declared_bytes,
+            limit_bytes,
+        },
+        Error::UnfinishedSample {
+            track_id,
+            needed_bytes,
+            available_bytes,
+            ..
+        } => Failure::UnfinishedSample {
+            track_id,
+            needed_bytes,
+            available_bytes,
+        },
+        reported => Failure::Other(reported),
+    });
 
     Reading { samples, failure }
 }
@@ -300,11 +343,11 @@ fn modelled(sample_size_limit: u64, handed: &[Handed<'_>], file: &[u8], together
                     whole_at: (declared_len(extent) == 0).then_some(step),
                 }));
                 if let Some(refused) = run.get(admitted) {
-                    failure = Some(Error::sample_size_limit_exceeded(
-                        refused.track_id(),
-                        declared_len(refused),
-                        sample_size_limit,
-                    ));
+                    failure = Some(Failure::SampleSizeLimitExceeded {
+                        track_id: refused.track_id(),
+                        declared_bytes: declared_len(refused),
+                        limit_bytes: sample_size_limit,
+                    });
                     break;
                 }
             }
@@ -329,12 +372,10 @@ fn modelled(sample_size_limit: u64, handed: &[Handed<'_>], file: &[u8], together
         failure = followed
             .iter()
             .find(|pending| pending.whole_at.is_none())
-            .map(|short| {
-                Error::unfinished_sample(
-                    short.extent.track_id(),
-                    declared_len(&short.extent),
-                    short.gathered,
-                )
+            .map(|short| Failure::UnfinishedSample {
+                track_id: short.extent.track_id(),
+                needed_bytes: declared_len(&short.extent),
+                available_bytes: short.gathered,
             });
     }
 

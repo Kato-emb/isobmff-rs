@@ -62,32 +62,32 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///
 /// Returned outright, before `decode_times` moves:
 ///
-/// * [`SampleCountLimitExceeded`](crate::ErrorKind::SampleCountLimitExceeded):
+/// * [`SampleCountLimitExceeded`](crate::Error::SampleCountLimitExceeded):
 ///   the `trun`s of every track fragment together count more samples than
 ///   `sample_count_limit`.
-/// * [`MissingMovieExtends`](crate::ErrorKind::MissingMovieExtends): a
+/// * [`MissingMovieExtends`](crate::Error::MissingMovieExtends): a
 ///   `traf` continues a movie that carries no `mvex`, and so no fragments.
-/// * [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId): a `traf`
+/// * [`UnknownTrackId`](crate::Error::UnknownTrackId): a `traf`
 ///   carries samples of a track no read `trak` declares and the movie keeps no
 ///   `trak` unread, or of a track the movie reads but declares no `trex` for.
-/// * [`UnknownSampleDescriptionIndex`](crate::ErrorKind::UnknownSampleDescriptionIndex):
+/// * [`UnknownSampleDescriptionIndex`](crate::Error::UnknownSampleDescriptionIndex):
 ///   a `traf` describes its samples by an `stsd` entry its track has none of.
 /// * The failures of [`SampleEntry::try_from`](isobmff_boxes::SampleEntry),
-///   carried on [`Box`](crate::ErrorKind::Box): the `stsd` entry does
+///   carried on [`Box`](crate::Error::Box): the `stsd` entry does
 ///   not read as a sample entry, with `stsd` added to the containers.
-/// * [`UnknownDataReferenceIndex`](crate::ErrorKind::UnknownDataReferenceIndex):
+/// * [`UnknownDataReferenceIndex`](crate::Error::UnknownDataReferenceIndex):
 ///   the `stsd` entry names a `dref` entry its track has none of.
-/// * [`ExternalDataReference`](crate::ErrorKind::ExternalDataReference):
+/// * [`ExternalDataReference`](crate::Error::ExternalDataReference):
 ///   the `dref` entry names a resource other than the file itself.
-/// * [`MissingDecodeTime`](crate::ErrorKind::MissingDecodeTime): a `traf`
+/// * [`MissingDecodeTime`](crate::Error::MissingDecodeTime): a `traf`
 ///   carries no `tfdt`, and `decode_times` does not know where its track
 ///   stands.
-/// * [`DecodeTimeOverflow`](crate::ErrorKind::DecodeTimeOverflow): the
+/// * [`DecodeTimeOverflow`](crate::Error::DecodeTimeOverflow): the
 ///   decode times of a track run past what 64 bits carry.
 ///
 /// Returned as the last of the extents:
 ///
-/// * [`DataOffsetOverflow`](crate::ErrorKind::DataOffsetOverflow): the
+/// * [`DataOffsetOverflow`](crate::Error::DataOffsetOverflow): the
 ///   offsets a `traf` of a track the movie reads states run past what 64 bits
 ///   carry.
 ///
@@ -98,10 +98,10 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// end is unknown where, in a run with no run after it stating a
 /// `data_offset`:
 ///
-/// * [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId): a row states no
+/// * [`UnknownTrackId`](crate::Error::UnknownTrackId): a row states no
 ///   size, and neither the `tfhd` of the `traf` nor the `trex` of its track
 ///   states one.
-/// * [`DataOffsetOverflow`](crate::ErrorKind::DataOffsetOverflow): the offsets
+/// * [`DataOffsetOverflow`](crate::Error::DataOffsetOverflow): the offsets
 ///   run past what 64 bits carry.
 pub fn sample_extents(
     movie_fragment: &MovieFragmentBox,
@@ -117,10 +117,10 @@ pub fn sample_extents(
         .map(|trun| u64::from(trun.sample_count()))
         .fold(0, u64::saturating_add);
     if declared > sample_count_limit {
-        return Err(Error::sample_count_limit_exceeded(
-            declared,
-            sample_count_limit,
-        ));
+        return Err(Error::SampleCountLimitExceeded {
+            declared_samples: declared,
+            limit_samples: sample_count_limit,
+        });
     }
 
     let mut reached = decode_times.clone();
@@ -176,7 +176,7 @@ impl SettledFragment {
         reached: &mut TrackDecodeTimes,
     ) -> Result<Self, Error> {
         let Some(mvex) = movie.mvex() else {
-            return Err(Error::missing_movie_extends());
+            return Err(Error::MissingMovieExtends);
         };
         let tfhd = traf.tfhd();
         let track_id = tfhd.track_id();
@@ -191,7 +191,7 @@ impl SettledFragment {
                 .iter()
                 .any(|kept| kept.box_type() == TrackBox::BOX_TYPE);
             if !keeps_a_track_unread {
-                return Err(Error::unknown_track_id(track_id));
+                return Err(Error::UnknownTrackId { track_id });
             }
 
             return Ok(Self::KeptUnread {
@@ -201,7 +201,7 @@ impl SettledFragment {
             });
         };
         let Some(trex) = trex else {
-            return Err(Error::unknown_track_id(track_id));
+            return Err(Error::UnknownTrackId { track_id });
         };
 
         let sample_description_index = tfhd
@@ -216,10 +216,10 @@ impl SettledFragment {
             Some(tfdt) => tfdt.base_media_decode_time(),
             None => reached
                 .decode_time(track_id)
-                .ok_or(Error::missing_decode_time(track_id))?,
+                .ok_or(Error::MissingDecodeTime { track_id })?,
         };
 
-        let overflow = || Error::decode_time_overflow(track_id);
+        let overflow = || Error::DecodeTimeOverflow { track_id };
         let mut end = decode_time;
         if tfhd.duration_is_empty() {
             end = end
@@ -345,9 +345,9 @@ fn resolve_data(
 ///
 /// # Errors
 ///
-/// * [`DataOffsetOverflow`](crate::ErrorKind::DataOffsetOverflow): the
+/// * [`DataOffsetOverflow`](crate::Error::DataOffsetOverflow): the
 ///   offsets run past what 64 bits carry.
-/// * [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId): a row states no
+/// * [`UnknownTrackId`](crate::Error::UnknownTrackId): a row states no
 ///   size and `sample_size` is `None`.
 fn place_run(
     trun: &TrackRunBox,
@@ -360,17 +360,17 @@ fn place_run(
     if let Some(stated) = trun.data_offset() {
         *data_offset = base
             .checked_add_signed(i64::from(stated))
-            .ok_or(Error::data_offset_overflow(track_id))?;
+            .ok_or(Error::DataOffsetOverflow { track_id })?;
     }
 
     for row in trun.samples() {
         let size = row
             .sample_size()
             .or(sample_size)
-            .ok_or(Error::unknown_track_id(track_id))?;
+            .ok_or(Error::UnknownTrackId { track_id })?;
         let data_end = data_offset
             .checked_add(u64::from(size))
-            .ok_or(Error::data_offset_overflow(track_id))?;
+            .ok_or(Error::DataOffsetOverflow { track_id })?;
         place(row, *data_offset..data_end);
         *data_offset = data_end;
     }
