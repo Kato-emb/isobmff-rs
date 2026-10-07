@@ -241,28 +241,38 @@ mod tests {
 
     #[test]
     fn a_kind_falls_in_the_category_its_situation_asks_for() {
-        assert_eq!(Error::truncated_box(32, 24).category(), Category::Malformed);
         assert_eq!(
-            Error::unsupported_version(2).category(),
-            Category::Unsupported
-        );
-        assert_eq!(
-            Error::unsupported_box(BoxType::compact(*b"sgpd")).category(),
-            Category::Unsupported
-        );
-        assert_eq!(
-            Error::unsupported_field_size(12).category(),
-            Category::Unsupported
-        );
-        assert_eq!(
-            Error::missing_alternative_box(SAMPLE_SIZE_BOXES).category(),
+            Error::truncated_box(32, 24).kind().category(),
             Category::Malformed
         );
         assert_eq!(
-            Error::buffer_length_mismatch(4, 8).category(),
+            Error::unsupported_version(2).kind().category(),
+            Category::Unsupported
+        );
+        assert_eq!(
+            Error::unsupported_box(BoxType::compact(*b"sgpd"))
+                .kind()
+                .category(),
+            Category::Unsupported
+        );
+        assert_eq!(
+            Error::unsupported_field_size(12).kind().category(),
+            Category::Unsupported
+        );
+        assert_eq!(
+            Error::missing_alternative_box(SAMPLE_SIZE_BOXES)
+                .kind()
+                .category(),
+            Category::Malformed
+        );
+        assert_eq!(
+            Error::buffer_length_mismatch(4, 8).kind().category(),
             Category::Usage
         );
-        assert_eq!(Error::zero_index().category(), Category::Malformed);
-        assert_eq!(Error::unsupported_value().category(), Category::Unsupported);
+        assert_eq!(Error::zero_index().kind().category(), Category::Malformed);
+        assert_eq!(
+            Error::unsupported_value().kind().category(),
+            Category::Unsupported
+        );
     }
 }
