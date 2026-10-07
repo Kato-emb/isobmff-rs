@@ -107,10 +107,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     for start in (0..frames).step_by(usize::try_from(FRAMES_PER_SAMPLE)?) {
         let end = start.saturating_add(FRAMES_PER_SAMPLE).min(frames);
         if start % SAMPLE_RATE < FRAMES_PER_SAMPLE {
-            mux_fsm.begin_chunk()?;
-            while let Some(chunk) = mux_fsm.poll_output() {
-                file.write_all(&chunk)?;
+            if start > 0 {
+                mux_fsm.finish_chunk()?;
+                while let Some(bytes) = mux_fsm.poll_output() {
+                    file.write_all(&bytes)?;
+                }
             }
+            mux_fsm.begin_chunk()?;
         }
         let data = (start..end)
             .flat_map(|frame| {
@@ -136,9 +139,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             data,
         ))?;
     }
+    if frames > 0 {
+        mux_fsm.finish_chunk()?;
+    }
     mux_fsm.finish()?;
-    while let Some(chunk) = mux_fsm.poll_output() {
-        file.write_all(&chunk)?;
+    while let Some(bytes) = mux_fsm.poll_output() {
+        file.write_all(&bytes)?;
     }
     file.flush()?;
 

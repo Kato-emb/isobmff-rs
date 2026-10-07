@@ -29,7 +29,7 @@ use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, 
 use isobmff::boxes::{FileTypeBox, MovieBox, SampleFlags};
 use isobmff::sample::sample_table::sample_extents;
 use isobmff::sample::{Sample, SampleProperties};
-use isobmff::sequence::EventBytes;
+use isobmff::sequence::OutputBytes;
 use isobmff::structure::{DemuxLimits, MovieDemuxFsm, NonFragmentedMuxFsm};
 use isobmff_test_support::{SAMPLE_DURATION, file_type, non_fragmented_file, unfragmented_movie};
 
@@ -190,7 +190,7 @@ fn lacking_extent(demux_fsm: &MovieDemuxFsm) -> Option<Range<u64>> {
 }
 
 /// Drains what the writer has ready into `outputs`, and reports how many bytes that was
-fn drained(mux_fsm: &mut NonFragmentedMuxFsm, outputs: &mut Vec<EventBytes>) -> usize {
+fn drained(mux_fsm: &mut NonFragmentedMuxFsm, outputs: &mut Vec<OutputBytes>) -> usize {
     let mut total = 0;
 
     while let Some(written) = mux_fsm.poll_output() {
@@ -206,7 +206,7 @@ fn non_fragmented_writer_file(
     file_type: FileTypeBox,
     movie: MovieBox,
     chunks: Vec<Vec<Sample>>,
-) -> (usize, Vec<EventBytes>) {
+) -> (usize, Vec<OutputBytes>) {
     let mut mux_fsm = NonFragmentedMuxFsm::new();
     let mut outputs = Vec::new();
     let mut total = 0;
@@ -219,6 +219,7 @@ fn non_fragmented_writer_file(
         for sample in samples {
             mux_fsm.handle_sample(sample).unwrap();
         }
+        mux_fsm.finish_chunk().unwrap();
         total += drained(&mut mux_fsm, &mut outputs);
     }
     mux_fsm.finish().unwrap();

@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use isobmff_boxes::{MediaDataBox, MovieBox, SegmentTypeBox};
 use isobmff_core::{BoxDefinition, BoxEncode, BoxType};
 use isobmff_sample::{MovieFragmentWriter, Sample};
-use isobmff_sequence::EventBytes;
+use isobmff_sequence::OutputBytes;
 
 use super::{MediaSegmentDisposition, MediaSegmentStructure};
 use crate::mux_output::MuxOutput;
@@ -54,7 +54,7 @@ use crate::{Error, whole_box_header, whole_payload};
 ///   fragment carrying the track was opened by
 ///   [`begin_fragment_continuing`](Self::begin_fragment_continuing).
 /// * The bytes are taken from [`poll_output`](Self::poll_output), one
-///   [`EventBytes`] a call, owned by whoever takes them. The caller drains
+///   [`OutputBytes`] a call, owned by whoever takes them. The caller drains
 ///   before handing over more: bytes are held until they are taken, so
 ///   writing on without polling has the mux FSM hold the whole segment.
 /// * An `Err` leaves the mux FSM failed for good,
@@ -158,7 +158,7 @@ impl MediaSegmentMuxFsm {
     ///   again for every call after it.
     pub fn handle_segment_type(&mut self, segment_type: SegmentTypeBox) -> Result<(), Error> {
         self.output.writing()?;
-        let mut lay_down_segment_type = || -> Result<(), Error> {
+        let mut write_segment_type = || -> Result<(), Error> {
             if segment_type.forbids_default_base_is_moof() {
                 return Err(Error::UnsupportedBrand);
             }
@@ -169,9 +169,9 @@ impl MediaSegmentMuxFsm {
             }
             self.write_value(&segment_type)
         };
-        let laid_down = lay_down_segment_type();
+        let written = write_segment_type();
 
-        self.output.record(laid_down)
+        self.output.record(written)
     }
 
     /// Opens a fragment, which the samples handed over next are laid out in
@@ -255,18 +255,18 @@ impl MediaSegmentMuxFsm {
     ///   again for every call after it.
     pub fn finish_fragment(&mut self) -> Result<(), Error> {
         self.output.writing()?;
-        let mut lay_down_fragment = || -> Result<(), Error> {
+        let mut write_fragment = || -> Result<(), Error> {
             self.samples.finish_fragment()?;
             while let Some((movie_fragment, media_data)) = self.samples.poll_fragment() {
                 self.write_value(&movie_fragment)?;
-                self.lay_down(MediaDataBox::BOX_TYPE, media_data)?;
+                self.write_box(MediaDataBox::BOX_TYPE, media_data)?;
             }
 
             Ok(())
         };
-        let laid_down = lay_down_fragment();
+        let written = write_fragment();
 
-        self.output.record(laid_down)
+        self.output.record(written)
     }
 
     /// Hands over the bytes the segment has been laid down as so far
@@ -275,7 +275,7 @@ impl MediaSegmentMuxFsm {
     /// segment is over. Failure is reported by the calls that take the brands
     /// and the samples, so this one never fails — a failed mux FSM hands over
     /// the bytes it had already made, then nothing from there on.
-    pub fn poll_output(&mut self) -> Option<EventBytes> {
+    pub fn poll_output(&mut self) -> Option<OutputBytes> {
         self.output.poll_output()
     }
 
@@ -311,14 +311,14 @@ impl MediaSegmentMuxFsm {
     ) -> Result<(), Error> {
         let payload = whole_payload(value)?;
 
-        self.lay_down(Value::BOX_TYPE, payload)
+        self.write_box(Value::BOX_TYPE, payload)
     }
 
     /// Lays one box down where the structure places it, through the framing of the segment
     ///
     /// A box the structure passes over is refused as
     /// [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder).
-    fn lay_down(&mut self, box_type: BoxType, payload: Vec<u8>) -> Result<(), Error> {
+    fn write_box(&mut self, box_type: BoxType, payload: Vec<u8>) -> Result<(), Error> {
         let header = whole_box_header(box_type, payload.len() as u64)?;
 
         match self.structure.handle_box_type(box_type)? {
@@ -330,7 +330,7 @@ impl MediaSegmentMuxFsm {
             }
         }
 
-        self.output.frame(header, [payload])
+        self.output.write_box(header, [payload])
     }
 }
 

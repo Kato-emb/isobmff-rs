@@ -76,11 +76,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                 sample.properties().sample_description_index,
             ));
             if chunk != described_by {
+                if chunk.is_some() {
+                    mux_fsm.finish_chunk()?;
+                    while let Some(bytes) = mux_fsm.poll_output() {
+                        output_file.write_all(&bytes)?;
+                    }
+                }
                 chunk = described_by;
                 mux_fsm.begin_chunk()?;
-                while let Some(chunk) = mux_fsm.poll_output() {
-                    output_file.write_all(&chunk)?;
-                }
             }
             mux_fsm.handle_sample(sample)?;
         }
@@ -96,9 +99,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
         };
     }
+    if chunk.is_some() {
+        mux_fsm.finish_chunk()?;
+    }
     mux_fsm.finish()?;
-    while let Some(chunk) = mux_fsm.poll_output() {
-        output_file.write_all(&chunk)?;
+    while let Some(bytes) = mux_fsm.poll_output() {
+        output_file.write_all(&bytes)?;
     }
     output_file.flush()?;
 

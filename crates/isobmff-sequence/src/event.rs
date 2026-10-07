@@ -80,11 +80,11 @@ pub enum BoxEvent {
 /// ```
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Debug)]
-pub struct EventBytes {
+pub struct OutputBytes {
     bytes: Bytes,
 }
 
-impl EventBytes {
+impl OutputBytes {
     /// Encodes the header of a box that started
     pub(crate) fn header(header: BoxHeader) -> Self {
         let mut bytes = [0; BoxHeader::MAX_ENCODED_LEN];
@@ -116,7 +116,7 @@ impl EventBytes {
     }
 }
 
-impl Deref for EventBytes {
+impl Deref for OutputBytes {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
@@ -130,7 +130,7 @@ impl Deref for EventBytes {
     }
 }
 
-impl AsRef<[u8]> for EventBytes {
+impl AsRef<[u8]> for OutputBytes {
     fn as_ref(&self) -> &[u8] {
         self
     }
