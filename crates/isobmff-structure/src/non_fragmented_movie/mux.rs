@@ -6,7 +6,7 @@ use core::iter;
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox, TrackBox};
 use isobmff_core::{BoxDefinition, BoxType, FourCc};
 use isobmff_sample::{Sample, SampleTableWriter};
-use isobmff_sequence::EventBytes;
+use isobmff_sequence::OutputBytes;
 
 use super::{NonFragmentedDisposition, NonFragmentedStructure};
 use crate::mux_output::MuxOutput;
@@ -63,15 +63,17 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 ///   list says otherwise. The samples are checked against the movie as they
 ///   are handed over, as [`SampleTableWriter`] checks them.
 /// * A chunk is opened by [`begin_chunk`](Self::begin_chunk), carries the
-///   samples handed over next, and is laid down as one `mdat` when the next
-///   chunk is opened or the file is declared over; a chunk no sample was
+///   samples handed over next, and is laid down as one `mdat` when
+///   [`finish_chunk`](Self::finish_chunk) closes it; a chunk no sample was
 ///   handed over to leaves no `mdat`, as it leaves no entry in the tables.
+///   Opening a chunk or declaring the file over while one is still open, or
+///   closing one while none is, is refused as [`Sample`](crate::Error::Sample).
 ///   What the samples must hold to — one track per chunk, a decode timeline
 ///   that carries on from sample to sample, no composition offsets or flags
 ///   the four tables cannot state — is [`SampleTableWriter`]'s contract,
 ///   reported as [`Sample`](crate::Error::Sample).
 /// * The bytes are taken from [`poll_output`](Self::poll_output), one
-///   [`EventBytes`] a call, owned by whoever takes them: the media data of a
+///   [`OutputBytes`] a call, owned by whoever takes them: the media data of a
 ///   chunk comes sample by sample, each in the allocation it was handed over
 ///   in, an empty one passed over. The caller drains before handing over more: bytes are held until
 ///   they are taken, so writing on without polling has the mux FSM hold the
@@ -122,6 +124,7 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 ///     },
 ///     b"DATA".to_vec(),
 /// ))?;
+/// mux_fsm.finish_chunk()?;
 /// mux_fsm.begin_chunk()?;
 /// mux_fsm.handle_sample(Sample::new(
 ///     SampleProperties {
@@ -134,6 +137,7 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 ///     },
 ///     b"LAST".to_vec(),
 /// ))?;
+/// mux_fsm.finish_chunk()?;
 /// mux_fsm.finish()?;
 ///
 /// // The bytes are drained as the mux FSM hands them over
@@ -167,7 +171,6 @@ pub struct NonFragmentedMuxFsm {
     output: MuxOutput,
     structure: NonFragmentedStructure,
     movie: Option<(MovieBox, SampleTableWriter)>,
-    chunk_open: bool,
 }
 
 impl NonFragmentedMuxFsm {
@@ -178,7 +181,6 @@ impl NonFragmentedMuxFsm {
             output: MuxOutput::new(),
             structure: NonFragmentedStructure::new(),
             movie: None,
-            chunk_open: false,
         }
     }
 
@@ -195,9 +197,9 @@ impl NonFragmentedMuxFsm {
     ///   again for every call after it.
     pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), Error> {
         self.output.writing()?;
-        let laid_down = self.lay_down_file_type(&file_type);
+        let written = self.write_file_type(&file_type);
 
-        self.output.record(laid_down)
+        self.output.record(written)
     }
 
     /// Takes the movie as a template, to be laid down last with its sample tables filled in and its durations updated from them
@@ -219,7 +221,7 @@ impl NonFragmentedMuxFsm {
         self.output.writing()?;
         let admit_movie = || -> Result<(), Error> {
             if self.structure.is_at_start() {
-                self.lay_down_file_type(&default_file_type())?;
+                self.write_file_type(&default_file_type())?;
             }
             // Why not placing the movie in the order at `finish`: a second movie
             // is refused where it is handed over, before chunks are laid down
@@ -236,18 +238,19 @@ impl NonFragmentedMuxFsm {
         self.output.record(admitted)
     }
 
-    /// Opens a chunk, which the samples handed over next are laid out in, laying down the chunk open before it
+    /// Opens a chunk, which the samples handed over next are laid out in
     ///
     /// The `mdat` of the chunk takes its place in the order of the boxes
-    /// here, and its bytes go down when the next chunk is opened or the file
-    /// is declared over.
+    /// here, and its bytes go down when [`finish_chunk`](Self::finish_chunk)
+    /// closes the chunk.
     ///
     /// # Errors
     ///
     /// * [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder): the
     ///   movie was not handed over first.
-    /// * [`Box`](crate::Error::Box): the chunk before this one
-    ///   is longer than the `size` field of an `mdat` can state.
+    /// * [`Sample`](crate::Error::Sample): the chunk opened before it was not
+    ///   closed, as
+    ///   [`ChunkStillOpen`](isobmff_sample::Error::ChunkStillOpen).
     /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the mux FSM keeps and reports
@@ -256,7 +259,6 @@ impl NonFragmentedMuxFsm {
         self.output.writing()?;
         let mut open_chunk = || -> Result<(), Error> {
             self.samples()?;
-            self.lay_down_chunk()?;
             // Why not measuring the header once the chunk is whole: the chunk
             // offset is stated before it is, so the chunk goes down under the
             // compact header whatever its length, and is refused where that form
@@ -271,7 +273,6 @@ impl NonFragmentedMuxFsm {
                 .saturating_add(header.encoded_len() as u64);
 
             self.samples()?.begin_chunk(chunk_offset)?;
-            self.chunk_open = true;
 
             Ok(())
         };
@@ -301,26 +302,64 @@ impl NonFragmentedMuxFsm {
         self.output.record(placed)
     }
 
+    /// Closes the chunk that is open, and lays its samples down as one `mdat`
+    ///
+    /// A chunk no sample was handed over to lays down nothing.
+    ///
+    /// # Errors
+    ///
+    /// * [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder): the
+    ///   movie was not handed over first.
+    /// * [`Sample`](crate::Error::Sample): no chunk was open, as
+    ///   [`NoChunkOpen`](isobmff_sample::Error::NoChunkOpen).
+    /// * [`Box`](crate::Error::Box): the chunk is longer than the
+    ///   `size` field of an `mdat` can state.
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
+    ///   file was declared over by [`finish`](Self::finish).
+    /// * The failure of a previous call, which the mux FSM keeps and reports
+    ///   again for every call after it.
+    pub fn finish_chunk(&mut self) -> Result<(), Error> {
+        self.output.writing()?;
+        let mut write_chunk = || -> Result<(), Error> {
+            let samples = self.samples()?;
+            samples.finish_chunk()?;
+            let media_data: Vec<Vec<u8>> = iter::from_fn(|| samples.poll_data()).collect();
+            if media_data.is_empty() {
+                return Ok(());
+            }
+            // Why not checked_add: the samples were handed over as values that
+            // fit in memory, so their lengths cannot sum past what 64 bits carry.
+            let media_data_len = media_data.iter().fold(0_u64, |total, sample| {
+                total.saturating_add(sample.len() as u64)
+            });
+            let header = compact_box_header(MediaDataBox::BOX_TYPE, media_data_len)?;
+
+            self.output.write_box(header, media_data)
+        };
+        let written = write_chunk();
+
+        self.output.record(written)
+    }
+
     /// Hands over the bytes the file has been laid down as so far
     ///
     /// Reports `None` once they are used up: more samples are needed, or the
     /// file is over. Failure is reported by the calls that take the boxes and
     /// the samples, so this one never fails — a failed mux FSM hands over the
     /// bytes it had already made, then nothing from there on.
-    pub fn poll_output(&mut self) -> Option<EventBytes> {
+    pub fn poll_output(&mut self) -> Option<OutputBytes> {
         self.output.poll_output()
     }
 
-    /// Declares the file over, laying down the chunk that is open and then the movie
+    /// Declares the file over, laying down the movie
     ///
     /// # Errors
     ///
-    /// * [`Box`](crate::Error::Box): the chunk that was open is
-    ///   longer than the `size` field of an `mdat` can state, or the movie
-    ///   does not write.
+    /// * [`Box`](crate::Error::Box): the movie does not write.
     /// * [`Sample`](crate::Error::Sample): what the sample layer
-    ///   makes of the samples as a whole — a chunk holding more samples than an
-    ///   `stsc` entry counts among them.
+    ///   makes of the samples as a whole — a chunk left open, as
+    ///   [`ChunkStillOpen`](isobmff_sample::Error::ChunkStillOpen), or a chunk
+    ///   holding more samples than an `stsc` entry counts among them.
     /// * [`MissingMandatoryBox`](crate::Error::MissingMandatoryBox):
     ///   the movie was never handed over, so the file laid down is not a
     ///   non-fragmented movie file.
@@ -331,7 +370,6 @@ impl NonFragmentedMuxFsm {
     pub fn finish(&mut self) -> Result<(), Error> {
         self.output.writing()?;
         let mut finish_file = || -> Result<(), Error> {
-            self.lay_down_chunk()?;
             self.structure.finish()?;
             // Why not unreachable: the structure declared the file over only with
             // the movie in it, so one was handed over, and the fallback is the
@@ -360,7 +398,7 @@ impl NonFragmentedMuxFsm {
             movie.update_durations();
             let payload = whole_payload(&movie)?;
             let header = whole_box_header(MovieBox::BOX_TYPE, payload.len() as u64)?;
-            self.output.frame(header, [payload])?;
+            self.output.write_box(header, [payload])?;
             self.output.finish()
         };
         let finished = finish_file();
@@ -369,12 +407,12 @@ impl NonFragmentedMuxFsm {
     }
 
     /// Lays `file_type` down as the first box of the file
-    fn lay_down_file_type(&mut self, file_type: &FileTypeBox) -> Result<(), Error> {
+    fn write_file_type(&mut self, file_type: &FileTypeBox) -> Result<(), Error> {
         let payload = whole_payload(file_type)?;
         let header = whole_box_header(FileTypeBox::BOX_TYPE, payload.len() as u64)?;
         self.admit(FileTypeBox::BOX_TYPE)?;
 
-        self.output.frame(header, [payload])
+        self.output.write_box(header, [payload])
     }
 
     /// Returns the sample layer, made once the movie was handed over
@@ -398,28 +436,6 @@ impl NonFragmentedMuxFsm {
             | NonFragmentedDisposition::MediaData => Ok(()),
             NonFragmentedDisposition::Skip => Err(Error::BoxOutOfOrder { box_type }),
         }
-    }
-
-    /// Closes the chunk that is open, if any, and lays its samples down as one `mdat`, if any were handed over
-    fn lay_down_chunk(&mut self) -> Result<(), Error> {
-        if !self.chunk_open {
-            return Ok(());
-        }
-        self.chunk_open = false;
-        let samples = self.samples()?;
-        samples.finish_chunk()?;
-        let media_data: Vec<Vec<u8>> = iter::from_fn(|| samples.poll_data()).collect();
-        if media_data.is_empty() {
-            return Ok(());
-        }
-        // Why not checked_add: the samples were handed over as values that fit
-        // in memory, so their lengths cannot sum past what 64 bits carry.
-        let media_data_len = media_data.iter().fold(0_u64, |total, sample| {
-            total.saturating_add(sample.len() as u64)
-        });
-        let header = compact_box_header(MediaDataBox::BOX_TYPE, media_data_len)?;
-
-        self.output.frame(header, media_data)
     }
 }
 
@@ -505,13 +521,65 @@ mod tests {
 
         mux_fsm.handle_movie(unfragmented_movie()).unwrap();
         mux_fsm.begin_chunk().unwrap();
+        mux_fsm.finish_chunk().unwrap();
         mux_fsm.begin_chunk().unwrap();
         mux_fsm.handle_sample(sample()).unwrap();
+        mux_fsm.finish_chunk().unwrap();
         mux_fsm.finish().unwrap();
         let file = drained(&mut mux_fsm);
 
         assert_eq!(file.get(24..28), Some(b"mdat".as_slice()));
         assert_eq!(file.get(36..40), Some(b"moov".as_slice()));
+    }
+
+    #[test]
+    fn a_chunk_is_laid_down_once_it_is_closed() {
+        let mut mux_fsm = NonFragmentedMuxFsm::new();
+
+        mux_fsm.handle_movie(unfragmented_movie()).unwrap();
+        mux_fsm.begin_chunk().unwrap();
+        mux_fsm.handle_sample(sample()).unwrap();
+        let before_the_close = drained(&mut mux_fsm);
+        mux_fsm.finish_chunk().unwrap();
+
+        assert!(before_the_close.windows(4).all(|window| window != b"mdat"));
+        assert_eq!(drained(&mut mux_fsm), b"\0\0\0\x0cmdatSAMP");
+    }
+
+    #[test]
+    fn a_chunk_begun_or_the_file_declared_over_while_a_chunk_is_open_fails_the_mux_fsm() {
+        let mut begun_again = NonFragmentedMuxFsm::new();
+        let mut declared_over = NonFragmentedMuxFsm::new();
+        for mux_fsm in [&mut begun_again, &mut declared_over] {
+            mux_fsm.handle_movie(unfragmented_movie()).unwrap();
+            mux_fsm.begin_chunk().unwrap();
+        }
+        let still_open = |refused: Result<(), Error>| {
+            matches!(
+                refused,
+                Err(Error::Sample {
+                    error: isobmff_sample::Error::ChunkStillOpen { .. }
+                })
+            )
+        };
+
+        assert!(still_open(begun_again.begin_chunk()));
+        assert!(still_open(begun_again.finish()));
+        assert!(still_open(declared_over.finish()));
+    }
+
+    #[test]
+    fn a_chunk_closed_while_none_is_open_fails_the_mux_fsm() {
+        let mut mux_fsm = NonFragmentedMuxFsm::new();
+
+        mux_fsm.handle_movie(unfragmented_movie()).unwrap();
+
+        assert!(matches!(
+            mux_fsm.finish_chunk(),
+            Err(Error::Sample {
+                error: isobmff_sample::Error::NoChunkOpen { .. }
+            })
+        ));
     }
 
     #[test]
@@ -648,6 +716,7 @@ mod tests {
 
         assert_eq!(mux_fsm.begin_chunk(), Err(Error::AlreadyFinished));
         assert_eq!(mux_fsm.handle_sample(sample()), Err(Error::AlreadyFinished));
+        assert_eq!(mux_fsm.finish_chunk(), Err(Error::AlreadyFinished));
         assert_eq!(mux_fsm.finish(), Err(Error::AlreadyFinished));
     }
 }

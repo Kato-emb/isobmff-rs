@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use isobmff_core::BoxHeader;
-use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
+use isobmff_sequence::{BoxEvent, BoxWriter, OutputBytes};
 
 use crate::Error;
 
@@ -14,7 +14,7 @@ use crate::Error;
 ///
 /// # Contract
 ///
-/// * [`frame`](Self::frame) lays one box down as its header, the pieces of
+/// * [`write_box`](Self::write_box) lays one box down as its header, the pieces of
 ///   its payload that are not empty, and its end.
 /// * [`position`](Self::position) is where the output stands: the end of the
 ///   bytes the last step was written to, counted from the first byte laid
@@ -93,20 +93,20 @@ impl MuxOutput {
     ///
     /// The failures of [`BoxWriter::handle_event`], carried on
     /// [`Sequence`](crate::Error::Sequence).
-    pub(crate) fn frame(
+    pub(crate) fn write_box(
         &mut self,
         header: BoxHeader,
         payload: impl IntoIterator<Item = Vec<u8>>,
     ) -> Result<(), Error> {
-        self.lay_down_step(BoxEvent::Header(header))?;
+        self.handle_event(BoxEvent::Header(header))?;
         for piece in payload.into_iter().filter(|piece| !piece.is_empty()) {
-            self.lay_down_step(BoxEvent::Payload(piece))?;
+            self.handle_event(BoxEvent::Payload(piece))?;
         }
-        self.lay_down_step(BoxEvent::End)
+        self.handle_event(BoxEvent::End)
     }
 
     /// Hands over the bytes the file has been laid down as so far
-    pub(crate) fn poll_output(&mut self) -> Option<EventBytes> {
+    pub(crate) fn poll_output(&mut self) -> Option<OutputBytes> {
         self.boxes.poll_output()
     }
 
@@ -124,7 +124,7 @@ impl MuxOutput {
     }
 
     /// Hands one step of the framing over, and moves the position to where its bytes end
-    fn lay_down_step(&mut self, step: BoxEvent) -> Result<(), Error> {
+    fn handle_event(&mut self, step: BoxEvent) -> Result<(), Error> {
         self.position = self.boxes.handle_event(step)?.end;
 
         Ok(())
@@ -156,7 +156,7 @@ mod tests {
         let mut output = MuxOutput::new();
         let header = compact_box_header(BoxType::compact(*b"free"), 4).unwrap();
 
-        output.frame(header, [b"AAAA".to_vec()]).unwrap();
+        output.write_box(header, [b"AAAA".to_vec()]).unwrap();
         output
             .record(Err(Error::BoxOutOfOrder {
                 box_type: BoxType::compact(*b"ftyp"),

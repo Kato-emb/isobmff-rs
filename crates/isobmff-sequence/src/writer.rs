@@ -6,7 +6,7 @@ use core::ops::Range;
 use isobmff_core::BoxHeader;
 
 use crate::error::Error;
-use crate::event::{BoxEvent, EventBytes};
+use crate::event::{BoxEvent, OutputBytes};
 
 /// Writes the sequence of boxes a file is formed as, taking the events as they come
 ///
@@ -23,14 +23,14 @@ use crate::event::{BoxEvent, EventBytes};
 ///
 /// * [`handle_event`](Self::handle_event) takes the event whole and makes the
 ///   bytes it lays down. Those bytes are handed over by
-///   [`poll_output`](Self::poll_output) as one [`EventBytes`] an event, an
+///   [`poll_output`](Self::poll_output) as one [`OutputBytes`] an event, an
 ///   [`End`](BoxEvent::End) making none — `None` once the events handed over so
 ///   far are written out.
 /// * The caller drains before handing over more events. Bytes are held until
 ///   they are taken, so writing on without polling has the writer hold the whole
 ///   file.
 /// * The payload of an event is handed on in the allocation it arrived in:
-///   [`EventBytes::into_vec`] gives back that same `Vec`, neither copied nor
+///   [`OutputBytes::into_vec`] gives back that same `Vec`, neither copied nor
 ///   grown. The bytes of a header are held inline until they are asked for as a
 ///   `Vec`.
 /// * A payload is carried by as many [`Payload`](BoxEvent::Payload) events as
@@ -108,7 +108,7 @@ use crate::event::{BoxEvent, EventBytes};
 pub struct BoxWriter {
     state: State,
     /// The bytes still to be drained, as the events made them
-    output: VecDeque<EventBytes>,
+    output: VecDeque<OutputBytes>,
     position: u64,
 }
 
@@ -174,7 +174,7 @@ impl BoxWriter {
             (State::Between, BoxEvent::Header(header)) => {
                 let header_len = header.encoded_len() as u64;
 
-                self.output.push_back(EventBytes::header(header));
+                self.output.push_back(OutputBytes::header(header));
                 self.state = match header.payload_len() {
                     Some(declared) => State::Payload {
                         header,
@@ -204,7 +204,7 @@ impl BoxWriter {
                         offered_bytes: offered,
                     }));
                 }
-                self.output.push_back(EventBytes::payload(payload));
+                self.output.push_back(OutputBytes::payload(payload));
                 self.state = State::Payload {
                     header,
                     declared,
@@ -216,7 +216,7 @@ impl BoxWriter {
             (State::PayloadToEndOfFile { .. }, BoxEvent::Payload(payload)) => {
                 let length = payload.len() as u64;
 
-                self.output.push_back(EventBytes::payload(payload));
+                self.output.push_back(OutputBytes::payload(payload));
 
                 length
             }
@@ -255,7 +255,7 @@ impl BoxWriter {
     /// [`finish`](Self::finish) alone, so this call never fails — a failed
     /// writer hands over the bytes it had already made, then nothing from there
     /// on.
-    pub fn poll_output(&mut self) -> Option<EventBytes> {
+    pub fn poll_output(&mut self) -> Option<OutputBytes> {
         self.output.pop_front()
     }
 
@@ -341,7 +341,7 @@ mod tests {
 
     use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize};
 
-    use super::{BoxEvent, BoxWriter, Error, EventBytes};
+    use super::{BoxEvent, BoxWriter, Error, OutputBytes};
 
     /// Header of a box declaring `total` in the compact `size` field
     fn compact_header(box_type: [u8; 4], total: u32) -> BoxHeader {
@@ -399,11 +399,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            writer.poll_output().map(EventBytes::into_vec),
+            writer.poll_output().map(OutputBytes::into_vec),
             Some(Vec::from(*b"\0\0\0\x0cmdat"))
         );
         assert_eq!(
-            writer.poll_output().map(EventBytes::into_vec),
+            writer.poll_output().map(OutputBytes::into_vec),
             Some(Vec::from(*b"PAYL"))
         );
         assert_eq!(writer.poll_output(), None);

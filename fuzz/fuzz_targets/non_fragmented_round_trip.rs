@@ -223,6 +223,10 @@ fn file_of(chunks: &[Vec<Sample>]) -> (Vec<u8>, bool) {
                 break 'chunks;
             }
         }
+        if let Err(reported) = mux_fsm.finish_chunk() {
+            refused = Some(reported);
+            break;
+        }
         drained_into(&mut mux_fsm, &mut file);
     }
 

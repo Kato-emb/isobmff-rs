@@ -108,8 +108,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             mux_fsm.handle_sample(sample)?;
         }
         mux_fsm.finish_fragment()?;
-        while let Some(chunk) = mux_fsm.poll_output() {
-            output_file.write_all(&chunk)?;
+        while let Some(bytes) = mux_fsm.poll_output() {
+            output_file.write_all(&bytes)?;
         }
 
         Ok(())
@@ -177,8 +177,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         write_fragment(&mut fragment)?;
     }
     mux_fsm.finish()?;
-    while let Some(chunk) = mux_fsm.poll_output() {
-        output_file.write_all(&chunk)?;
+    while let Some(bytes) = mux_fsm.poll_output() {
+        output_file.write_all(&bytes)?;
     }
     output_file.flush()?;
 

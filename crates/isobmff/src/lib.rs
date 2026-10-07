@@ -8,9 +8,8 @@
 //! delivered apart from the movie it continues; [`structure::FragmentedMuxFsm`],
 //! [`structure::NonFragmentedMuxFsm`] and [`structure::MediaSegmentMuxFsm`] go
 //! the other way, laying samples down as a file or a segment of each kind.
-//! None reaches for a source or a sink of its own: each handles the bytes
-//! handed to it and does no I/O; when to read or write, and from or to where,
-//! stay with the caller.
+//! None reaches for a source or a sink of its own, and none does I/O: when to
+//! read or write, and from or to where, stay with the caller.
 //!
 //! # The root and one module per crate
 //!

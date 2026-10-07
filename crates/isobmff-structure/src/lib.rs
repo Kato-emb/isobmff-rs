@@ -117,7 +117,7 @@
 //! # Ok::<(), isobmff_structure::Error>(())
 //! ```
 //!
-//! A mux FSM is driven by its own verbs, and each chunk it made is taken with
+//! A mux FSM is driven by its own verbs, and the bytes it made are taken with
 //! its `poll_output` and written whole where the caller writes. Over
 //! `std::io`, the two loops are these, the demux loop seeking before every
 //! read:
@@ -129,7 +129,7 @@
 //! use isobmff_sample::{Sample, SampleProperties};
 //! use isobmff_structure::{FragmentedMuxFsm, MovieDemuxFsm};
 //! # use isobmff_test_support::{file_type, fragmented_movie};
-//! // A fragment of two samples laid down, each chunk written whole
+//! // A fragment of two samples laid down, the bytes of each event written whole
 //! let mut file = Cursor::new(Vec::new());
 //! let mut mux_fsm = FragmentedMuxFsm::new();
 //! mux_fsm.handle_file_type(file_type())?;
@@ -159,8 +159,8 @@
 //! ))?;
 //! mux_fsm.finish_fragment()?;
 //! mux_fsm.finish()?;
-//! while let Some(chunk) = mux_fsm.poll_output() {
-//!     file.write_all(&chunk)?;
+//! while let Some(bytes) = mux_fsm.poll_output() {
+//!     file.write_all(&bytes)?;
 //! }
 //!
 //! // The file read back where the demux FSM wants, into a buffer of the caller's
@@ -182,8 +182,9 @@
 //!
 //! An asynchronous caller writes the same loops, awaiting the seek, the read
 //! and the write. The read the FSM wants does not move until bytes are handed
-//! over, so a demux iteration dropped part way is made again from its seek. A chunk taken from `poll_output` is the caller's: one not written
-//! whole when its write is dropped is the caller's to keep.
+//! over, so a demux iteration dropped part way is made again from its seek.
+//! The bytes taken from `poll_output` are the caller's: those not written
+//! whole when their write is dropped are the caller's to keep.
 //!
 //! A caller whose source cannot seek — a socket, a live stream of segments —
 //! hands every cut it reads over at the offset the FSM names while the length

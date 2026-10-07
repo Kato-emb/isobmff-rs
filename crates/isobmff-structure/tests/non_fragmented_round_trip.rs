@@ -96,6 +96,7 @@ mod tests {
             for sample in chunk {
                 mux_fsm.handle_sample(sample).unwrap();
             }
+            mux_fsm.finish_chunk().unwrap();
         }
         mux_fsm.finish().unwrap();
 

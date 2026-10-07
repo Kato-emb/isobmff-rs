@@ -100,8 +100,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     initialization_fsm.handle_movie(movie.clone())?;
     initialization_fsm.finish()?;
-    while let Some(chunk) = initialization_fsm.poll_output() {
-        initialization.write_all(&chunk)?;
+    while let Some(bytes) = initialization_fsm.poll_output() {
+        initialization.write_all(&bytes)?;
     }
     initialization.flush()?;
 
@@ -127,8 +127,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         segment_fsm.finish_fragment()?;
         segment_fsm.finish()?;
-        while let Some(chunk) = segment_fsm.poll_output() {
-            segment.write_all(&chunk)?;
+        while let Some(bytes) = segment_fsm.poll_output() {
+            segment.write_all(&bytes)?;
         }
         Ok(segment.flush()?)
     };

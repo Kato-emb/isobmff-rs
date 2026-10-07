@@ -41,7 +41,7 @@ use isobmff::boxes::{
     SampleFlags, TrackExtendsBox,
 };
 use isobmff::sample::{MovieFragmentWriter, Sample, SampleExtent, SampleProperties, SampleReader};
-use isobmff::sequence::{BoxEvent, BoxReader, BoxWriter, EventBytes};
+use isobmff::sequence::{BoxEvent, BoxReader, BoxWriter, OutputBytes};
 use isobmff::structure::{FragmentedMuxFsm, MovieDemuxFsm};
 use isobmff::{BoxHeader, BoxType, Mp4EpochSeconds};
 use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type, track};
@@ -295,7 +295,7 @@ fn handed_over(file: &[u8], chunk_len: usize) {
 }
 
 /// Drains what the writer has ready into `outputs`, and reports how many bytes that was
-fn drained(mux_fsm: &mut FragmentedMuxFsm, outputs: &mut Vec<EventBytes>) -> usize {
+fn drained(mux_fsm: &mut FragmentedMuxFsm, outputs: &mut Vec<OutputBytes>) -> usize {
     let mut total = 0;
 
     while let Some(written) = mux_fsm.poll_output() {
@@ -311,7 +311,7 @@ fn fragmented_writer_file(
     file_type: FileTypeBox,
     movie: MovieBox,
     fragments: Vec<Vec<Sample>>,
-) -> (usize, Vec<EventBytes>) {
+) -> (usize, Vec<OutputBytes>) {
     let mut mux_fsm = FragmentedMuxFsm::new();
     let mut outputs = Vec::new();
     let mut total = 0;
@@ -494,7 +494,7 @@ fn box_events(file: &[u8]) -> Vec<BoxEvent> {
 }
 
 /// Drains what the box writer has ready into `outputs`, and reports how many bytes that was
-fn box_drained(writer: &mut BoxWriter, outputs: &mut Vec<EventBytes>) -> usize {
+fn box_drained(writer: &mut BoxWriter, outputs: &mut Vec<OutputBytes>) -> usize {
     let mut total = 0;
 
     while let Some(written) = writer.poll_output() {
@@ -508,7 +508,7 @@ fn box_drained(writer: &mut BoxWriter, outputs: &mut Vec<EventBytes>) -> usize {
 /// Lays the events down as a file, and hands back how many bytes it came to and the outputs that carry them
 ///
 /// The box layer alone: what an event carries is written as it stands.
-fn box_writer_file(events: Vec<BoxEvent>) -> (usize, Vec<EventBytes>) {
+fn box_writer_file(events: Vec<BoxEvent>) -> (usize, Vec<OutputBytes>) {
     let mut writer = BoxWriter::new();
     let mut outputs = Vec::new();
     let mut total = 0;
