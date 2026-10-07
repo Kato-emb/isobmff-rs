@@ -78,9 +78,9 @@ pub enum Error {
     PayloadPastDeclared {
         /// Type of the box that declared the total
         box_type: BoxType,
-        /// Payload the box declares
+        /// Length of payload the box declares
         declared_bytes: u64,
-        /// Payload offered for the box
+        /// Length of payload offered for the box so far
         offered_bytes: u64,
     },
     /// Payload, or the end of a box, came while no box was open
