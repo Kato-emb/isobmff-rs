@@ -450,7 +450,7 @@ fn an_optional_table_counting_other_than_the_samples_of_its_track_is_refused() {
     for trak in tracks {
         assert_eq!(
             resolved(&movie(vec![trak])),
-            Err(Error::sample_count_mismatch(1))
+            Err(Error::SampleCountMismatch { track_id: 1 })
         );
     }
 }
@@ -458,10 +458,34 @@ fn an_optional_table_counting_other_than_the_samples_of_its_track_is_refused() {
 #[test]
 fn a_sync_sample_listed_out_of_order_or_past_the_samples_is_refused() {
     let listings = [
-        (stss(&[2, 2]), Error::sync_sample_out_of_range(1, 2)),
-        (stss(&[3, 1]), Error::sync_sample_out_of_range(1, 1)),
-        (stss(&[0]), Error::sync_sample_out_of_range(1, 0)),
-        (stss(&[1, 4]), Error::sync_sample_out_of_range(1, 4)),
+        (
+            stss(&[2, 2]),
+            Error::SyncSampleOutOfRange {
+                track_id: 1,
+                sample_number: 2,
+            },
+        ),
+        (
+            stss(&[3, 1]),
+            Error::SyncSampleOutOfRange {
+                track_id: 1,
+                sample_number: 1,
+            },
+        ),
+        (
+            stss(&[0]),
+            Error::SyncSampleOutOfRange {
+                track_id: 1,
+                sample_number: 0,
+            },
+        ),
+        (
+            stss(&[1, 4]),
+            Error::SyncSampleOutOfRange {
+                track_id: 1,
+                sample_number: 4,
+            },
+        ),
     ];
 
     for (listing, refused) in listings {
@@ -507,7 +531,7 @@ fn tables_counting_different_numbers_of_samples_are_refused() {
     ] {
         assert_eq!(
             resolved(&movie(vec![trak])),
-            Err(Error::sample_count_mismatch(1))
+            Err(Error::SampleCountMismatch { track_id: 1 })
         );
     }
 }
@@ -524,7 +548,10 @@ fn a_run_starting_past_the_last_chunk_is_refused() {
 
     assert_eq!(
         resolved(&movie(vec![past_the_last_chunk])),
-        Err(Error::first_chunk_out_of_range(1, 3))
+        Err(Error::FirstChunkOutOfRange {
+            track_id: 1,
+            first_chunk: 3
+        })
     );
 }
 
@@ -547,11 +574,17 @@ fn a_run_starting_at_or_before_the_start_of_the_run_before_it_is_refused() {
 
     assert_eq!(
         resolved(&movie(vec![doubling_back])),
-        Err(Error::first_chunk_out_of_range(1, 2))
+        Err(Error::FirstChunkOutOfRange {
+            track_id: 1,
+            first_chunk: 2
+        })
     );
     assert_eq!(
         resolved(&movie(vec![starting_twice])),
-        Err(Error::first_chunk_out_of_range(1, 3))
+        Err(Error::FirstChunkOutOfRange {
+            track_id: 1,
+            first_chunk: 3
+        })
     );
 }
 
@@ -567,7 +600,10 @@ fn a_first_run_starting_anywhere_but_at_the_first_chunk_is_refused() {
 
     assert_eq!(
         resolved(&movie(vec![starting_at_the_second_chunk])),
-        Err(Error::first_chunk_out_of_range(1, 2))
+        Err(Error::FirstChunkOutOfRange {
+            track_id: 1,
+            first_chunk: 2
+        })
     );
 }
 
@@ -590,7 +626,10 @@ fn a_run_described_by_an_entry_its_track_has_none_of_is_refused() {
 
     assert_eq!(
         resolved(&movie(vec![trak])),
-        Err(Error::unknown_sample_description_index(1, 2))
+        Err(Error::UnknownSampleDescriptionIndex {
+            track_id: 1,
+            sample_description_index: 2
+        })
     );
 }
 
@@ -604,7 +643,10 @@ fn a_sample_of_a_track_reading_from_an_external_file_is_refused() {
 
     assert_eq!(
         resolved(&movie(vec![trak])),
-        Err(Error::external_data_reference(1, 1))
+        Err(Error::ExternalDataReference {
+            track_id: 1,
+            data_reference_index: 1
+        })
     );
 }
 
@@ -620,7 +662,10 @@ fn the_extents_resolved_before_a_failure_come_out_ahead_of_it() {
         [
             Ok(extent(1, 0, 100, 100..104)),
             Ok(extent(1, 100, 100, 200..204)),
-            Err(Error::first_chunk_out_of_range(2, 2)),
+            Err(Error::FirstChunkOutOfRange {
+                track_id: 2,
+                first_chunk: 2
+            }),
         ]
     );
 }
@@ -638,7 +683,10 @@ fn a_movie_counting_more_samples_than_the_limit_lays_out_none() {
     );
     assert_eq!(
         sample_extents(&two_samples, 1).collect::<Vec<_>>(),
-        [Err(Error::sample_count_limit_exceeded(2, 1))]
+        [Err(Error::SampleCountLimitExceeded {
+            declared_samples: 2,
+            limit_samples: 1
+        })]
     );
 }
 
@@ -658,9 +706,9 @@ fn tables_stating_a_count_once_are_counted_before_a_sample_is_laid_out() {
 
     assert_eq!(
         sample_extents(&declaring, 1_048_576).collect::<Vec<_>>(),
-        [Err(Error::sample_count_limit_exceeded(
-            u64::from(u32::MAX) + 2,
-            1_048_576
-        ))]
+        [Err(Error::SampleCountLimitExceeded {
+            declared_samples: u64::from(u32::MAX) + 2,
+            limit_samples: 1_048_576
+        })]
     );
 }

@@ -52,28 +52,28 @@ impl<'track> SampleDescriptions<'track> {
             .ok()
             .and_then(|index| index.checked_sub(1))
             .and_then(|index| self.stsd.entries().get(index))
-            .ok_or(Error::unknown_sample_description_index(
-                self.track_id,
+            .ok_or(Error::UnknownSampleDescriptionIndex {
+                track_id: self.track_id,
                 sample_description_index,
-            ))?;
+            })?;
         let data_reference_index = SampleEntry::try_from(entry)
             .map_err(|error| error.in_container(SampleDescriptionBox::BOX_TYPE))?
             .data_reference_index();
         let data_entry = usize::from(data_reference_index)
             .checked_sub(1)
             .and_then(|index| self.dref.entries().get(index))
-            .ok_or(Error::unknown_data_reference_index(
-                self.track_id,
+            .ok_or(Error::UnknownDataReferenceIndex {
+                track_id: self.track_id,
                 data_reference_index,
-            ))?;
+            })?;
 
         if matches!(data_entry, DataEntry::Url(url) if url.location().is_none()) {
             Ok(data_reference_index)
         } else {
-            Err(Error::external_data_reference(
-                self.track_id,
+            Err(Error::ExternalDataReference {
+                track_id: self.track_id,
                 data_reference_index,
-            ))
+            })
         }
     }
 }
@@ -109,11 +109,17 @@ mod tests {
 
         assert_eq!(
             SampleDescriptions::new(&trak).data_reference_index(2),
-            Err(Error::unknown_sample_description_index(1, 2))
+            Err(Error::UnknownSampleDescriptionIndex {
+                track_id: 1,
+                sample_description_index: 2
+            })
         );
         assert_eq!(
             SampleDescriptions::new(&trak).data_reference_index(0),
-            Err(Error::unknown_sample_description_index(1, 0))
+            Err(Error::UnknownSampleDescriptionIndex {
+                track_id: 1,
+                sample_description_index: 0
+            })
         );
     }
 
@@ -138,7 +144,10 @@ mod tests {
 
         assert_eq!(
             SampleDescriptions::new(&trak).data_reference_index(1),
-            Err(Error::unknown_data_reference_index(1, 1))
+            Err(Error::UnknownDataReferenceIndex {
+                track_id: 1,
+                data_reference_index: 1
+            })
         );
     }
 
@@ -155,11 +164,17 @@ mod tests {
 
         assert_eq!(
             SampleDescriptions::new(&by_url).data_reference_index(1),
-            Err(Error::external_data_reference(1, 1))
+            Err(Error::ExternalDataReference {
+                track_id: 1,
+                data_reference_index: 1
+            })
         );
         assert_eq!(
             SampleDescriptions::new(&by_urn).data_reference_index(1),
-            Err(Error::external_data_reference(1, 1))
+            Err(Error::ExternalDataReference {
+                track_id: 1,
+                data_reference_index: 1
+            })
         );
     }
 
@@ -185,7 +200,10 @@ mod tests {
 
         assert_eq!(
             descriptions.data_reference_index(1),
-            Err(Error::external_data_reference(1, 1))
+            Err(Error::ExternalDataReference {
+                track_id: 1,
+                data_reference_index: 1
+            })
         );
         assert_eq!(descriptions.data_reference_index(2), Ok(2));
     }

@@ -537,7 +537,7 @@ mod tests {
         assert_eq!(carried.sample_error(), None);
         assert_eq!(carried.needed_bytes(), None);
 
-        let sample_error = isobmff_sample::Error::unknown_track_id(3);
+        let sample_error = isobmff_sample::Error::from(isobmff_core::Error::unsupported_version(2));
         let carried = Error::from(sample_error);
 
         assert_eq!(carried.sample_error(), Some(sample_error));
@@ -585,7 +585,7 @@ mod tests {
 
     #[test]
     fn display_of_a_carried_failure_reads_as_that_failure() {
-        let sample_error = isobmff_sample::Error::unknown_track_id(3);
+        let sample_error = isobmff_sample::Error::from(isobmff_core::Error::unsupported_version(2));
 
         assert_eq!(
             Error::from(sample_error).to_string(),

@@ -81,10 +81,10 @@ pub fn sample_extents(
         .fold(0, u64::saturating_add);
     let mut extents = Vec::new();
     let outcome = if declared > sample_count_limit {
-        Err(Error::sample_count_limit_exceeded(
-            declared,
-            sample_count_limit,
-        ))
+        Err(Error::SampleCountLimitExceeded {
+            declared_samples: declared,
+            limit_samples: sample_count_limit,
+        })
     } else {
         movie
             .trak()
@@ -105,10 +105,10 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
     let mut deltas = stbl.stts().deltas();
     let mut runs = stbl.stsc().entries().iter().peekable();
     if let Some(first) = runs.peek().filter(|run| run.first_chunk() != 1) {
-        return Err(Error::first_chunk_out_of_range(
+        return Err(Error::FirstChunkOutOfRange {
             track_id,
-            first.first_chunk(),
-        ));
+            first_chunk: first.first_chunk(),
+        });
     }
     let mut offsets = stbl
         .ctts()
@@ -149,7 +149,7 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
                 next_stated(&mut priorities),
             )
             else {
-                return Err(Error::sample_count_mismatch(track_id));
+                return Err(Error::SampleCountMismatch { track_id });
             };
             sample_number = sample_number.saturating_add(1);
             let is_sync_sample = sync_samples.as_mut().is_none_or(|listed| {
@@ -161,7 +161,7 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
                 SampleFlags::new(dependency, padding, !is_sync_sample, degradation_priority);
             let data_end = data_offset
                 .checked_add(u64::from(size))
-                .ok_or(Error::data_offset_overflow(track_id))?;
+                .ok_or(Error::DataOffsetOverflow { track_id })?;
 
             extents.push(SampleExtent::new(
                 track_id,
@@ -176,12 +176,15 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
 
             decode_time = decode_time
                 .checked_add(u64::from(delta))
-                .ok_or(Error::decode_time_overflow(track_id))?;
+                .ok_or(Error::DecodeTimeOverflow { track_id })?;
             data_offset = data_end;
         }
     }
     if let Some(run) = runs.next() {
-        return Err(Error::first_chunk_out_of_range(track_id, run.first_chunk()));
+        return Err(Error::FirstChunkOutOfRange {
+            track_id,
+            first_chunk: run.first_chunk(),
+        });
     }
     if sizes.next().is_some()
         || deltas.next().is_some()
@@ -190,13 +193,13 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
         || paddings.as_mut().and_then(Iterator::next).is_some()
         || priorities.as_mut().and_then(Iterator::next).is_some()
     {
-        return Err(Error::sample_count_mismatch(track_id));
+        return Err(Error::SampleCountMismatch { track_id });
     }
     if let Some(entry) = sync_samples.as_mut().and_then(Iterator::next) {
-        return Err(Error::sync_sample_out_of_range(
+        return Err(Error::SyncSampleOutOfRange {
             track_id,
-            entry.sample_number(),
-        ));
+            sample_number: entry.sample_number(),
+        });
     }
 
     Ok(())

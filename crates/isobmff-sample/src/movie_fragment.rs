@@ -117,10 +117,10 @@ pub fn sample_extents(
         .map(|trun| u64::from(trun.sample_count()))
         .fold(0, u64::saturating_add);
     if declared > sample_count_limit {
-        return Err(Error::sample_count_limit_exceeded(
-            declared,
-            sample_count_limit,
-        ));
+        return Err(Error::SampleCountLimitExceeded {
+            declared_samples: declared,
+            limit_samples: sample_count_limit,
+        });
     }
 
     let mut reached = decode_times.clone();
@@ -176,7 +176,7 @@ impl SettledFragment {
         reached: &mut TrackDecodeTimes,
     ) -> Result<Self, Error> {
         let Some(mvex) = movie.mvex() else {
-            return Err(Error::missing_movie_extends());
+            return Err(Error::MissingMovieExtends);
         };
         let tfhd = traf.tfhd();
         let track_id = tfhd.track_id();
@@ -191,7 +191,7 @@ impl SettledFragment {
                 .iter()
                 .any(|kept| kept.box_type() == TrackBox::BOX_TYPE);
             if !keeps_a_track_unread {
-                return Err(Error::unknown_track_id(track_id));
+                return Err(Error::UnknownTrackId { track_id });
             }
 
             return Ok(Self::KeptUnread {
@@ -201,7 +201,7 @@ impl SettledFragment {
             });
         };
         let Some(trex) = trex else {
-            return Err(Error::unknown_track_id(track_id));
+            return Err(Error::UnknownTrackId { track_id });
         };
 
         let sample_description_index = tfhd
@@ -216,10 +216,10 @@ impl SettledFragment {
             Some(tfdt) => tfdt.base_media_decode_time(),
             None => reached
                 .decode_time(track_id)
-                .ok_or(Error::missing_decode_time(track_id))?,
+                .ok_or(Error::MissingDecodeTime { track_id })?,
         };
 
-        let overflow = || Error::decode_time_overflow(track_id);
+        let overflow = || Error::DecodeTimeOverflow { track_id };
         let mut end = decode_time;
         if tfhd.duration_is_empty() {
             end = end
@@ -360,17 +360,17 @@ fn place_run(
     if let Some(stated) = trun.data_offset() {
         *data_offset = base
             .checked_add_signed(i64::from(stated))
-            .ok_or(Error::data_offset_overflow(track_id))?;
+            .ok_or(Error::DataOffsetOverflow { track_id })?;
     }
 
     for row in trun.samples() {
         let size = row
             .sample_size()
             .or(sample_size)
-            .ok_or(Error::unknown_track_id(track_id))?;
+            .ok_or(Error::UnknownTrackId { track_id })?;
         let data_end = data_offset
             .checked_add(u64::from(size))
-            .ok_or(Error::data_offset_overflow(track_id))?;
+            .ok_or(Error::DataOffsetOverflow { track_id })?;
         place(row, *data_offset..data_end);
         *data_offset = data_end;
     }

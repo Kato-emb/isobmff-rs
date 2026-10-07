@@ -35,25 +35,29 @@ impl OpenTrack {
         let track_id = sample.track_id();
         let offset = sample.sample_composition_time_offset();
         let Some(sample_composition_time_offset) = composition_time_offset::stated(offset) else {
-            return Err(Error::composition_time_offset_out_of_range(
-                track_id, offset,
-            ));
+            return Err(Error::CompositionTimeOffsetOutOfRange {
+                track_id,
+                composition_time_offset: offset,
+            });
         };
         let offered = sample.data().len() as u64;
         let Ok(sample_size) = u32::try_from(offered) else {
-            return Err(Error::sample_size_out_of_range(track_id, offered));
+            return Err(Error::SampleSizeOutOfRange {
+                track_id,
+                declared_bytes: offered,
+            });
         };
         if sample.decode_time() != self.reached {
-            return Err(Error::decode_time_mismatch(
+            return Err(Error::DecodeTimeMismatch {
                 track_id,
-                sample.decode_time(),
-                self.reached,
-            ));
+                stated_decode_time: sample.decode_time(),
+                reached_decode_time: self.reached,
+            });
         }
         self.reached = self
             .reached
             .checked_add(u64::from(sample.sample_duration()))
-            .ok_or(Error::decode_time_overflow(track_id))?;
+            .ok_or(Error::DecodeTimeOverflow { track_id })?;
         self.deltas.push(sample.sample_duration());
         self.sizes.push(sample_size);
         self.offsets.push(sample_composition_time_offset);
@@ -69,11 +73,9 @@ impl OpenTrack {
         } else {
             let widest = || self.offsets.iter().map(|offset| offset.get()).max();
             let ctts = CompositionOffsetBox::from_offsets(self.offsets.iter().copied())
-                .ok_or_else(|| {
-                    Error::composition_time_offset_out_of_range(
-                        track_id,
-                        widest().unwrap_or_default(),
-                    )
+                .ok_or_else(|| Error::CompositionTimeOffsetOutOfRange {
+                    track_id,
+                    composition_time_offset: widest().unwrap_or_default(),
                 })?;
             Some(ctts)
         };
@@ -157,7 +159,11 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(sample(1, 512, b"AAAA")),
-            Err(Error::decode_time_mismatch(1, 512, 0))
+            Err(Error::DecodeTimeMismatch {
+                track_id: 1,
+                stated_decode_time: 512,
+                reached_decode_time: 0
+            })
         );
     }
 
@@ -171,7 +177,11 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(sample(1, 512, b"BBBB")),
-            Err(Error::decode_time_mismatch(1, 512, 1_024))
+            Err(Error::DecodeTimeMismatch {
+                track_id: 1,
+                stated_decode_time: 512,
+                reached_decode_time: 1_024
+            })
         );
     }
 
@@ -186,7 +196,7 @@ mod tests {
 
         assert_eq!(
             track.place(at_the_end_of_time),
-            Err(Error::decode_time_overflow(1))
+            Err(Error::DecodeTimeOverflow { track_id: 1 })
         );
     }
 
@@ -207,10 +217,10 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(too_early),
-            Err(Error::composition_time_offset_out_of_range(
-                1,
-                -(1 << 31) - 1
-            ))
+            Err(Error::CompositionTimeOffsetOutOfRange {
+                track_id: 1,
+                composition_time_offset: -(1 << 31) - 1
+            })
         );
     }
 
@@ -329,10 +339,10 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(stating(0, past_the_signed_range, SampleFlags::ZERO)),
-            Err(Error::composition_time_offset_out_of_range(
-                1,
-                past_the_signed_range
-            ))
+            Err(Error::CompositionTimeOffsetOutOfRange {
+                track_id: 1,
+                composition_time_offset: past_the_signed_range
+            })
         );
     }
 }

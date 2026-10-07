@@ -186,7 +186,7 @@ impl MovieFragmentWriter {
     ///   the sample tables of a track lay samples out.
     pub fn new(movie: &MovieBox) -> Result<Self, Error> {
         let Some(mvex) = movie.mvex() else {
-            return Err(Error::missing_movie_extends());
+            return Err(Error::MissingMovieExtends);
         };
         for trak in movie.trak() {
             let stbl = trak.mdia().minf().stbl();
@@ -195,7 +195,9 @@ impl MovieFragmentWriter {
                 || stbl.sample_sizes().sizes().next().is_some()
                 || stbl.chunk_offsets().offsets().next().is_some()
             {
-                return Err(Error::sample_table_not_empty(trak.tkhd().track_id()));
+                return Err(Error::SampleTableNotEmpty {
+                    track_id: trak.tkhd().track_id(),
+                });
             }
         }
 
@@ -290,7 +292,7 @@ impl MovieFragmentWriter {
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), Error> {
         self.writing()?;
         let State::Fragment(open) = &mut self.state else {
-            return Err(self.fail(Error::no_fragment_open()));
+            return Err(self.fail(Error::NoFragmentOpen));
         };
         open.place(sample, &self.trak, &self.trex, &self.decode_times)
             .map_err(|failure| self.fail(failure))
@@ -321,7 +323,7 @@ impl MovieFragmentWriter {
         // here through `writing`, so the only state this replaces without a
         // fragment to take is the `Between` it puts back.
         let State::Fragment(open) = mem::replace(&mut self.state, State::Between) else {
-            return Err(self.fail(Error::no_fragment_open()));
+            return Err(self.fail(Error::NoFragmentOpen));
         };
 
         open.into_boxes(&mut self.decode_times)
@@ -341,7 +343,7 @@ impl MovieFragmentWriter {
     pub fn finish(&mut self) -> Result<(), Error> {
         self.writing()?;
         if matches!(self.state, State::Fragment(_)) {
-            return Err(self.fail(Error::fragment_still_open()));
+            return Err(self.fail(Error::FragmentStillOpen));
         }
         self.state = State::Finished;
 
@@ -356,7 +358,7 @@ impl MovieFragmentWriter {
     ) -> Result<(), Error> {
         self.writing()?;
         if matches!(self.state, State::Fragment(_)) {
-            return Err(self.fail(Error::fragment_still_open()));
+            return Err(self.fail(Error::FragmentStillOpen));
         }
         self.state = State::Fragment(OpenFragment::new(sequence_number, placement));
 
@@ -367,7 +369,7 @@ impl MovieFragmentWriter {
     const fn writing(&self) -> Result<(), Error> {
         match self.state {
             State::Between | State::Fragment(_) => Ok(()),
-            State::Finished => Err(Error::already_finished()),
+            State::Finished => Err(Error::AlreadyFinished),
             State::Failed(failure) => Err(failure),
         }
     }
@@ -441,7 +443,11 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(sample(1, 512, b"BBBB")),
-            Err(Error::backward_decode_time(1, 512, 1_024))
+            Err(Error::BackwardDecodeTime {
+                track_id: 1,
+                stated_decode_time: 512,
+                reached_decode_time: 1_024
+            })
         );
     }
 
@@ -462,7 +468,11 @@ mod tests {
         assert_eq!(writer.handle_sample(sample(1, 2_048, b"CCCC")), Ok(()));
         assert_eq!(
             going_back.handle_sample(sample(1, 2_047, b"CCCC")),
-            Err(Error::backward_decode_time(1, 2_047, 2_048))
+            Err(Error::BackwardDecodeTime {
+                track_id: 1,
+                stated_decode_time: 2_047,
+                reached_decode_time: 2_048
+            })
         );
     }
 
@@ -473,9 +483,9 @@ mod tests {
 
         assert_eq!(
             handed_a_sample.handle_sample(sample(1, 0, b"AAAA")),
-            Err(Error::no_fragment_open())
+            Err(Error::NoFragmentOpen)
         );
-        assert_eq!(closed.finish_fragment(), Err(Error::no_fragment_open()));
+        assert_eq!(closed.finish_fragment(), Err(Error::NoFragmentOpen));
     }
 
     #[test]
@@ -495,13 +505,13 @@ mod tests {
 
         writer.finish().unwrap();
 
-        assert_eq!(writer.begin_fragment(1), Err(Error::already_finished()));
+        assert_eq!(writer.begin_fragment(1), Err(Error::AlreadyFinished));
         assert_eq!(
             writer.handle_sample(sample(1, 0, b"AAAA")),
-            Err(Error::already_finished())
+            Err(Error::AlreadyFinished)
         );
-        assert_eq!(writer.finish_fragment(), Err(Error::already_finished()));
-        assert_eq!(writer.finish(), Err(Error::already_finished()));
+        assert_eq!(writer.finish_fragment(), Err(Error::AlreadyFinished));
+        assert_eq!(writer.finish(), Err(Error::AlreadyFinished));
     }
 
     #[test]
@@ -510,7 +520,7 @@ mod tests {
 
         writer.begin_fragment(1).unwrap();
 
-        assert_eq!(writer.finish(), Err(Error::fragment_still_open()));
+        assert_eq!(writer.finish(), Err(Error::FragmentStillOpen));
     }
 
     #[test]
@@ -519,7 +529,7 @@ mod tests {
 
         writer.begin_fragment(1).unwrap();
 
-        assert_eq!(writer.begin_fragment(2), Err(Error::fragment_still_open()));
+        assert_eq!(writer.begin_fragment(2), Err(Error::FragmentStillOpen));
     }
 
     #[test]
@@ -532,19 +542,35 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(sample(1, 1_024, b"CCCC")),
-            Err(Error::decode_time_mismatch(1, 512, 1_024))
+            Err(Error::DecodeTimeMismatch {
+                track_id: 1,
+                stated_decode_time: 512,
+                reached_decode_time: 1_024
+            })
         );
         assert_eq!(
             writer.finish_fragment(),
-            Err(Error::decode_time_mismatch(1, 512, 1_024))
+            Err(Error::DecodeTimeMismatch {
+                track_id: 1,
+                stated_decode_time: 512,
+                reached_decode_time: 1_024
+            })
         );
         assert_eq!(
             writer.begin_fragment(2),
-            Err(Error::decode_time_mismatch(1, 512, 1_024))
+            Err(Error::DecodeTimeMismatch {
+                track_id: 1,
+                stated_decode_time: 512,
+                reached_decode_time: 1_024
+            })
         );
         assert_eq!(
             writer.finish(),
-            Err(Error::decode_time_mismatch(1, 512, 1_024))
+            Err(Error::DecodeTimeMismatch {
+                track_id: 1,
+                stated_decode_time: 512,
+                reached_decode_time: 1_024
+            })
         );
     }
 
@@ -569,11 +595,11 @@ mod tests {
 
         assert_eq!(
             MovieFragmentWriter::new(&unfragmented_movie()).map(|_writer| ()),
-            Err(Error::missing_movie_extends())
+            Err(Error::MissingMovieExtends)
         );
         assert_eq!(
             MovieFragmentWriter::new(&filled).map(|_writer| ()),
-            Err(Error::sample_table_not_empty(2))
+            Err(Error::SampleTableNotEmpty { track_id: 2 })
         );
     }
 
@@ -593,7 +619,7 @@ mod tests {
 
         assert_eq!(
             refused(sample(999, 0, b"AAAA")),
-            Err(Error::unknown_track_id(999))
+            Err(Error::UnknownTrackId { track_id: 999 })
         );
         assert_eq!(
             refused(Sample::new(
@@ -605,11 +631,17 @@ mod tests {
                 2,
                 b"AAAA".to_vec()
             )),
-            Err(Error::unknown_sample_description_index(1, 2))
+            Err(Error::UnknownSampleDescriptionIndex {
+                track_id: 1,
+                sample_description_index: 2
+            })
         );
         assert_eq!(
             refused(sample(2, 0, b"AAAA")),
-            Err(Error::external_data_reference(2, 1))
+            Err(Error::ExternalDataReference {
+                track_id: 2,
+                data_reference_index: 1
+            })
         );
     }
 
@@ -623,7 +655,7 @@ mod tests {
 
         assert_eq!(
             writer.handle_sample(sample(5, 0, b"AAAA")),
-            Err(Error::unknown_track_id(5))
+            Err(Error::UnknownTrackId { track_id: 5 })
         );
     }
 
@@ -634,6 +666,9 @@ mod tests {
         writer.begin_fragment(1).unwrap();
         writer.handle_sample(sample(999, 0, b"AAAA")).unwrap_err();
 
-        assert_eq!(writer.finish_fragment(), Err(Error::unknown_track_id(999)));
+        assert_eq!(
+            writer.finish_fragment(),
+            Err(Error::UnknownTrackId { track_id: 999 })
+        );
     }
 }

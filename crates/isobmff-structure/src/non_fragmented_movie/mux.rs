@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 use core::mem;
 
-use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox};
+use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox, TrackBox};
 use isobmff_core::{BoxDefinition, BoxType, FourCC};
 use isobmff_sample::{Sample, SampleTableWriter};
 use isobmff_sequence::EventBytes;
@@ -313,10 +313,12 @@ impl NonFragmentedMuxFsm {
             let tables_per_track = samples.finish()?;
             for (track_id, tables) in tables_per_track {
                 // Why not unreachable: the sample layer took a sample of a track
-                // only where the movie declares it, and the fallback is its own
-                // answer to one it does not, in place of a panic the lints forbid.
+                // only where the movie declares it, and the fallback is the
+                // structure's own answer to a movie without that track, in place
+                // of a panic the lints forbid. Why not the sample layer's answer:
+                // its failures are built by that crate alone.
                 let Some(track) = movie.trak_mut(track_id) else {
-                    return Err(isobmff_sample::Error::unknown_track_id(track_id).into());
+                    return Err(Error::missing_mandatory_box(TrackBox::BOX_TYPE));
                 };
                 let stbl = track.mdia_mut().minf_mut().stbl_mut();
                 *stbl = tables.into_sample_table(stbl.stsd().clone());

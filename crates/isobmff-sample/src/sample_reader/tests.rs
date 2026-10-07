@@ -66,7 +66,11 @@ fn a_cleared_reader_holds_nothing_and_reads_the_next_stretch_under_the_same_limi
     assert_eq!(drained(&mut reader), [sample(8_192, b"WXYZ")]);
     assert_eq!(
         reader.handle_sample_extent(extent(9_216, 504..513)),
-        Err(Error::sample_size_limit_exceeded(1, 9, 8))
+        Err(Error::SampleSizeLimitExceeded {
+            track_id: 1,
+            declared_bytes: 9,
+            limit_bytes: 8
+        })
     );
 }
 
@@ -166,7 +170,7 @@ fn extents_handed_over_together_behind_one_lying_past_them_are_filled_all_the_sa
 #[test]
 fn the_failure_a_resolver_stopped_at_fails_the_reader_after_the_extents_before_it_held_in_order() {
     let mut reader = SampleReader::new();
-    let stopped_at = Error::data_offset_overflow(1);
+    let stopped_at = Error::DataOffsetOverflow { track_id: 1 };
 
     assert_eq!(
         reader.handle_sample_extents([
@@ -380,7 +384,11 @@ fn an_extent_naming_more_bytes_than_the_limit_is_refused() {
 
     assert_eq!(
         reader.handle_sample_extent(extent(0, 100..104)),
-        Err(Error::sample_size_limit_exceeded(1, 4, 3))
+        Err(Error::SampleSizeLimitExceeded {
+            track_id: 1,
+            declared_bytes: 4,
+            limit_bytes: 3
+        })
     );
 }
 
@@ -397,7 +405,10 @@ fn an_extent_held_past_the_extents_the_reader_holds_is_refused() {
         .unwrap();
     assert_eq!(
         one_at_a_time.handle_sample_extent(extent(2_048, 108..112)),
-        Err(Error::held_extent_limit_exceeded(3, 2))
+        Err(Error::HeldExtentLimitExceeded {
+            needed_extents: 3,
+            limit_extents: 2
+        })
     );
 
     let mut together = at_most_two;
@@ -407,7 +418,10 @@ fn an_extent_held_past_the_extents_the_reader_holds_is_refused() {
             Ok(extent(1_024, 104..108)),
             Ok(extent(2_048, 108..112)),
         ]),
-        Err(Error::held_extent_limit_exceeded(3, 2))
+        Err(Error::HeldExtentLimitExceeded {
+            needed_extents: 3,
+            limit_extents: 2
+        })
     );
     assert_eq!(together.wanted_extent(), Some(100..104));
 }
@@ -425,7 +439,10 @@ fn extents_held_across_calls_count_until_their_samples_are_handed_over() {
 
     assert_eq!(
         reader.handle_sample_extents([Ok(extent(3_072, 204..208))]),
-        Err(Error::held_extent_limit_exceeded(3, 2))
+        Err(Error::HeldExtentLimitExceeded {
+            needed_extents: 3,
+            limit_extents: 2
+        })
     );
     assert_eq!(drained(&mut reader), [sample(0, b"ABCD")]);
 }
@@ -439,7 +456,10 @@ fn extents_naming_the_same_bytes_are_refused_past_the_bytes_the_reader_holds() {
 
     assert_eq!(
         reader.handle_data(0, &[0xab; 512]),
-        Err(Error::held_bytes_limit_exceeded(1_536, 1_024))
+        Err(Error::HeldBytesLimitExceeded {
+            needed_bytes: 1_536,
+            limit_bytes: 1_024
+        })
     );
     assert_eq!(
         drained(&mut reader),
@@ -465,7 +485,10 @@ fn input_handed_over_without_taking_the_samples_is_refused_past_the_bytes_the_re
     not_taking.handle_data(4, b"EFGH").unwrap();
     assert_eq!(
         not_taking.handle_data(8, b"IJKL"),
-        Err(Error::held_bytes_limit_exceeded(12, 8))
+        Err(Error::HeldBytesLimitExceeded {
+            needed_bytes: 12,
+            limit_bytes: 8
+        })
     );
 }
 
@@ -481,7 +504,10 @@ fn extents_out_of_the_order_of_their_bytes_are_refused_past_the_bytes_the_reader
 
     assert_eq!(
         reader.handle_data(100, b"ABCDEFGHIJKL"),
-        Err(Error::held_bytes_limit_exceeded(12, 8))
+        Err(Error::HeldBytesLimitExceeded {
+            needed_bytes: 12,
+            limit_bytes: 8
+        })
     );
     assert_eq!(
         drained(&mut reader),
@@ -494,7 +520,14 @@ fn a_sample_short_of_its_bytes_is_refused_when_the_samples_are_declared_over() {
     let mut reader = holding([extent(0, 100..104)]);
     reader.handle_data(100, b"AB").unwrap();
 
-    assert_eq!(reader.finish(), Err(Error::unfinished_sample(1, 4, 2)));
+    assert_eq!(
+        reader.finish(),
+        Err(Error::UnfinishedSample {
+            track_id: 1,
+            needed_bytes: 4,
+            available_bytes: 2
+        })
+    );
 }
 
 #[test]
@@ -511,7 +544,14 @@ fn samples_made_whole_before_a_failure_are_still_taken() {
     let mut reader = holding([extent(0, 100..104), extent(1_024, 104..108)]);
     reader.handle_data(100, b"ABCD").unwrap();
 
-    assert_eq!(reader.finish(), Err(Error::unfinished_sample(1, 4, 0)));
+    assert_eq!(
+        reader.finish(),
+        Err(Error::UnfinishedSample {
+            track_id: 1,
+            needed_bytes: 4,
+            available_bytes: 0
+        })
+    );
     assert_eq!(drained(&mut reader), [sample(0, b"ABCD")]);
 }
 
@@ -522,11 +562,11 @@ fn anything_handed_over_after_the_samples_were_declared_over_is_refused() {
 
     assert_eq!(
         reader.handle_sample_extent(extent(0, 100..104)),
-        Err(Error::already_finished())
+        Err(Error::AlreadyFinished)
     );
     assert_eq!(
         reader.handle_data(100, b"ABCD"),
-        Err(Error::already_finished())
+        Err(Error::AlreadyFinished)
     );
-    assert_eq!(reader.finish(), Err(Error::already_finished()));
+    assert_eq!(reader.finish(), Err(Error::AlreadyFinished));
 }

@@ -66,7 +66,9 @@ impl OpenTrack {
         self.reached = self
             .reached
             .checked_add(u64::from(row.sample_duration))
-            .ok_or(Error::decode_time_overflow(self.track_id))?;
+            .ok_or(Error::DecodeTimeOverflow {
+                track_id: self.track_id,
+            })?;
 
         match self.runs.last_mut() {
             Some(run) if carries_on => run.rows.push(row),
@@ -131,13 +133,17 @@ impl OpenFragment {
         let track_id = sample.track_id();
         let offered = sample.data().len() as u64;
         let Ok(sample_size) = u32::try_from(offered) else {
-            return Err(Error::sample_size_out_of_range(track_id, offered));
+            return Err(Error::SampleSizeOutOfRange {
+                track_id,
+                declared_bytes: offered,
+            });
         };
         let offset = sample.sample_composition_time_offset();
         let Some(sample_composition_time_offset) = composition_time_offset::stated(offset) else {
-            return Err(Error::composition_time_offset_out_of_range(
-                track_id, offset,
-            ));
+            return Err(Error::CompositionTimeOffsetOutOfRange {
+                track_id,
+                composition_time_offset: offset,
+            });
         };
 
         let row = StatedTrackRunSample {
@@ -162,18 +168,22 @@ impl OpenFragment {
         {
             Some(track) => {
                 if track.sample_description_index != sample_description_index {
-                    return Err(Error::sample_description_index_mismatch(
+                    return Err(Error::SampleDescriptionIndexMismatch {
                         track_id,
-                        sample_description_index,
-                        track.sample_description_index,
-                    ));
+                        stated_sample_description_index: sample_description_index,
+                        established_sample_description_index: track.sample_description_index,
+                    });
                 }
                 let expected = track
                     .origin
                     .checked_add(track.reached.saturating_sub(track.decode_time))
-                    .ok_or(Error::decode_time_overflow(track_id))?;
+                    .ok_or(Error::DecodeTimeOverflow { track_id })?;
                 if expected != decode_time {
-                    return Err(Error::decode_time_mismatch(track_id, decode_time, expected));
+                    return Err(Error::DecodeTimeMismatch {
+                        track_id,
+                        stated_decode_time: decode_time,
+                        reached_decode_time: expected,
+                    });
                 }
 
                 track.place(row, data_offset, carries_on)?;
@@ -182,7 +192,7 @@ impl OpenFragment {
                 let trak = trak.iter().find(|trak| trak.tkhd().track_id() == track_id);
                 let trex = trex.iter().find(|trex| trex.track_id() == track_id);
                 let (Some(trak), Some(_trex)) = (trak, trex) else {
-                    return Err(Error::unknown_track_id(track_id));
+                    return Err(Error::UnknownTrackId { track_id });
                 };
                 SampleDescriptions::new(trak).data_reference_index(sample_description_index)?;
                 let placed = self.placement.decode_time(track_id).unwrap_or(decode_time);
@@ -190,7 +200,11 @@ impl OpenFragment {
                     .decode_time(track_id)
                     .filter(|reached| placed < *reached)
                 {
-                    return Err(Error::backward_decode_time(track_id, placed, reached));
+                    return Err(Error::BackwardDecodeTime {
+                        track_id,
+                        stated_decode_time: placed,
+                        reached_decode_time: reached,
+                    });
                 }
 
                 let mut track = OpenTrack {
@@ -320,7 +334,10 @@ fn build_track_fragment(track: &OpenTrack, base: Option<u64>) -> Result<TrackFra
                     let offset = base.saturating_add(run.data_offset);
 
                     i32::try_from(offset).map_err(|_past_the_field| {
-                        Error::data_offset_out_of_range(track.track_id, offset)
+                        Error::DataOffsetOutOfRange {
+                            track_id: track.track_id,
+                            data_offset: offset,
+                        }
                     })?
                 }
                 None => 0,
@@ -343,10 +360,10 @@ fn build_track_fragment(track: &OpenTrack, base: Option<u64>) -> Result<TrackFra
                     .iter()
                     .map(|row| row.sample_composition_time_offset.get())
                     .max();
-                Error::composition_time_offset_out_of_range(
-                    track.track_id,
-                    widest.unwrap_or_default(),
-                )
+                Error::CompositionTimeOffsetOutOfRange {
+                    track_id: track.track_id,
+                    composition_time_offset: widest.unwrap_or_default(),
+                }
             })?;
 
             Ok(track_run.without_defaults(&header))

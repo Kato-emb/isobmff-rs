@@ -373,10 +373,10 @@ fn a_sample_composed_past_the_signed_range_is_refused() {
 
     assert_eq!(
         writer.handle_sample(offset_by(0, past_the_signed_range)),
-        Err(Error::composition_time_offset_out_of_range(
-            1,
-            past_the_signed_range
-        ))
+        Err(Error::CompositionTimeOffsetOutOfRange {
+            track_id: 1,
+            composition_time_offset: past_the_signed_range
+        })
     );
 }
 
@@ -400,7 +400,11 @@ fn a_sample_that_does_not_start_where_the_one_before_it_ends_is_refused() {
 
     assert_eq!(
         writer.handle_sample(sample(1, 512, b"BBBB")),
-        Err(Error::decode_time_mismatch(1, 512, 1_024))
+        Err(Error::DecodeTimeMismatch {
+            track_id: 1,
+            stated_decode_time: 512,
+            reached_decode_time: 1_024
+        })
     );
 }
 
@@ -416,7 +420,11 @@ fn a_mismatch_in_a_fragment_opened_continuing_is_reported_in_the_times_the_sampl
 
     assert_eq!(
         writer.handle_sample(sample(1, 90_512, b"CCCC")),
-        Err(Error::decode_time_mismatch(1, 90_512, 91_024))
+        Err(Error::DecodeTimeMismatch {
+            track_id: 1,
+            stated_decode_time: 90_512,
+            reached_decode_time: 91_024
+        })
     );
 }
 
@@ -431,7 +439,11 @@ fn samples_of_one_fragment_described_by_two_entries_are_refused() {
 
     assert_eq!(
         writer.handle_sample(described_by_the_second),
-        Err(Error::sample_description_index_mismatch(1, 2, 1))
+        Err(Error::SampleDescriptionIndexMismatch {
+            track_id: 1,
+            stated_sample_description_index: 2,
+            established_sample_description_index: 1
+        })
     );
 }
 
@@ -452,6 +464,6 @@ fn decode_times_running_past_what_64_bits_carry_are_refused() {
 
     assert_eq!(
         writer.handle_sample(at_the_end_of_time),
-        Err(Error::decode_time_overflow(1))
+        Err(Error::DecodeTimeOverflow { track_id: 1 })
     );
 }

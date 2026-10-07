@@ -267,7 +267,10 @@ impl SampleReader {
 
             return match refused {
                 Ok(()) => Ok(()),
-                Err(needed) => Err(self.fail(Error::held_bytes_limit_exceeded(needed, limit))),
+                Err(needed) => Err(self.fail(Error::HeldBytesLimitExceeded {
+                    needed_bytes: needed,
+                    limit_bytes: limit,
+                })),
             };
         }
 
@@ -309,7 +312,10 @@ impl SampleReader {
 
         match refused {
             None => Ok(()),
-            Some(needed) => Err(self.fail(Error::held_bytes_limit_exceeded(needed, limit))),
+            Some(needed) => Err(self.fail(Error::HeldBytesLimitExceeded {
+                needed_bytes: needed,
+                limit_bytes: limit,
+            })),
         }
     }
 
@@ -348,11 +354,11 @@ impl SampleReader {
         self.reading()?;
 
         match self.front() {
-            Some(short) => Err(self.fail(Error::unfinished_sample(
-                short.extent.track_id(),
-                short.declared_len(),
-                short.gathered_len(),
-            ))),
+            Some(short) => Err(self.fail(Error::UnfinishedSample {
+                track_id: short.extent.track_id(),
+                needed_bytes: short.declared_len(),
+                available_bytes: short.gathered_len(),
+            })),
             None => {
                 self.state = State::Finished;
 
@@ -386,17 +392,17 @@ impl SampleReader {
         };
         let declared = pending.declared_len();
         if declared > self.limits.sample_size() {
-            return Err(self.fail(Error::sample_size_limit_exceeded(
-                pending.extent.track_id(),
-                declared,
-                self.limits.sample_size(),
-            )));
+            return Err(self.fail(Error::SampleSizeLimitExceeded {
+                track_id: pending.extent.track_id(),
+                declared_bytes: declared,
+                limit_bytes: self.limits.sample_size(),
+            }));
         }
         if self.held_extents >= self.limits.held_extents() {
-            return Err(self.fail(Error::held_extent_limit_exceeded(
-                self.held_extents.saturating_add(1),
-                self.limits.held_extents(),
-            )));
+            return Err(self.fail(Error::HeldExtentLimitExceeded {
+                needed_extents: self.held_extents.saturating_add(1),
+                limit_extents: self.limits.held_extents(),
+            }));
         }
         self.held_extents = self.held_extents.saturating_add(1);
         self.pending.push_back(pending);
@@ -472,7 +478,7 @@ impl SampleReader {
     const fn reading(&self) -> Result<(), Error> {
         match self.state {
             State::Reading => Ok(()),
-            State::Finished => Err(Error::already_finished()),
+            State::Finished => Err(Error::AlreadyFinished),
             State::Failed(failure) => Err(failure),
         }
     }

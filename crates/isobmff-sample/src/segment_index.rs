@@ -120,8 +120,12 @@ impl Subsegment {
 /// Both name the stream the index names by its `reference_ID`.
 pub fn subsegments(sidx: &SegmentIndexBox, anchor: u64) -> Result<SegmentIndex, Error> {
     let reference_id = sidx.reference_id();
-    let offset_overflow = || Error::data_offset_overflow(reference_id);
-    let time_overflow = || Error::presentation_time_overflow(reference_id);
+    let offset_overflow = || Error::DataOffsetOverflow {
+        track_id: reference_id,
+    };
+    let time_overflow = || Error::PresentationTimeOverflow {
+        track_id: reference_id,
+    };
 
     let mut start = anchor
         .checked_add(sidx.first_offset())
@@ -274,11 +278,11 @@ mod tests {
     fn extents_running_past_what_64_bits_carry_are_refused() {
         assert_eq!(
             subsegments(&index(0, u64::MAX, Vec::new()), 1),
-            Err(Error::data_offset_overflow(1))
+            Err(Error::DataOffsetOverflow { track_id: 1 })
         );
         assert_eq!(
             subsegments(&index(0, u64::MAX - 10, vec![reference(11, 0)]), 0),
-            Err(Error::data_offset_overflow(1))
+            Err(Error::DataOffsetOverflow { track_id: 1 })
         );
     }
 
@@ -286,7 +290,7 @@ mod tests {
     fn times_running_past_what_64_bits_carry_are_refused() {
         assert_eq!(
             subsegments(&index(u64::MAX - 10, 0, vec![reference(1, 11)]), 0),
-            Err(Error::presentation_time_overflow(1))
+            Err(Error::PresentationTimeOverflow { track_id: 1 })
         );
     }
 }
