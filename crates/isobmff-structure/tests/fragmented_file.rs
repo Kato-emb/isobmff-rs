@@ -188,7 +188,7 @@ mod tests {
             resumed_at(&mut demux_fsm, &file, *file.moof_offsets.get(1).unwrap())
                 .map_err(Error::kind),
             Err(ErrorKind::Sample(
-                isobmff_sample::Error::MissingDecodeTime { .. }
+                isobmff_sample::Error::MissingDecodeTime { track_id: 1, .. }
             ))
         ));
     }
@@ -446,7 +446,7 @@ mod tests {
         assert!(matches!(
             resumed,
             Err(ErrorKind::Sample(
-                isobmff_sample::Error::MissingDecodeTime { .. }
+                isobmff_sample::Error::MissingDecodeTime { track_id: 1, .. }
             ))
         ));
         assert_eq!(samples, Vec::new());

@@ -281,8 +281,9 @@ fn read(sample_size_limit: u64, handed: &[Handed<'_>], together: bool) -> Readin
         }
     }
 
-    // Why not comparing the failure itself: a variant of another crate is
-    // matched there, never built, so the model states what it carries instead
+    // Why not comparing the failure itself: a #[non_exhaustive] variant of
+    // another crate can be matched but not built, so the model states what it
+    // carries instead
     let failure = failure.map(|reported| match reported {
         Error::SampleSizeLimitExceeded {
             track_id,
