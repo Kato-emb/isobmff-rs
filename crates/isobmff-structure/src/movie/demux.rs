@@ -8,13 +8,11 @@ use isobmff_boxes::{
 };
 use isobmff_core::{BoxDecode, BoxDefinition};
 use isobmff_sample::segment_index::subsegments;
-use isobmff_sample::{
-    Sample, SampleReader, SegmentIndex, TrackDecodeTimes, movie_fragment, sample_table,
-};
-use isobmff_sequence::{BoxEvent, BoxReader};
+use isobmff_sample::{Sample, SegmentIndex, TrackDecodeTimes, movie_fragment, sample_table};
+use isobmff_sequence::BoxEvent;
 
 use crate::fragmented_movie::{FragmentedDisposition, FragmentedStructure};
-use crate::{DemuxLimits, Error, InputPosition, InputRoute, WantedInput, WholeBoxReader};
+use crate::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
 
 /// Reads the samples a movie file carries, fragmented or not, taking it as it arrives
 ///
@@ -81,7 +79,7 @@ use crate::{DemuxLimits, Error, InputPosition, InputRoute, WantedInput, WholeBox
 /// * The samples the sample tables of the movie declare are resolved once the
 ///   `moov` has been read, and those of a fragment once the `moof` has; where
 ///   their chunks and runs lie is not checked. Either comes out as its bytes
-///   arrive whole, as [`SampleReader`]'s contract has it: the extents of the
+///   arrive whole, as [`SampleReader`](isobmff_sample::SampleReader)'s contract has it: the extents of the
 ///   movie, and those of each fragment, are held in the order of their bytes,
 ///   so a file handed over in order yields the samples of each in the order
 ///   they lie in it, whatever order the boxes declare them in and wherever
@@ -155,10 +153,8 @@ use crate::{DemuxLimits, Error, InputPosition, InputRoute, WantedInput, WholeBox
 /// ```
 #[derive(Debug)]
 pub struct MovieDemuxFsm {
-    boxes: BoxReader,
-    position: InputPosition,
+    input: DemuxInput,
     structure: FragmentedStructure,
-    samples: SampleReader,
     decode_times: TrackDecodeTimes,
     open: Option<Open>,
     file_type: Option<FileTypeBox>,
@@ -172,7 +168,7 @@ pub struct MovieDemuxFsm {
 /// Where the demux FSM stands between calls
 #[derive(Clone, Copy, Debug)]
 enum State {
-    /// Taking the file as it arrives
+    /// Taking the file as the input half does, gathering no `mfro`
     Reading,
     /// Gathering the bytes a file `file_len` long would close with an `mfro` in, and taking nothing else
     LocatingMovieFragmentRandomAccess {
@@ -180,10 +176,6 @@ enum State {
         mfro: [u8; MovieFragmentRandomAccessOffsetBox::ENCODED_LEN],
         filled: usize,
     },
-    /// Told the file is over, and taking no more input
-    Finished,
-    /// Failed, and reporting that same failure for every call after it
-    Failed(Error),
 }
 
 /// The top-level box that started, held as its disposition has it until it ends
@@ -217,10 +209,8 @@ impl MovieDemuxFsm {
     #[must_use]
     pub const fn with_limits(limits: DemuxLimits) -> Self {
         Self {
-            boxes: BoxReader::new(),
-            position: InputPosition::new(),
+            input: DemuxInput::new(limits.sample_reader()),
             structure: FragmentedStructure::new(),
-            samples: SampleReader::with_limits(limits.sample_reader()),
             decode_times: TrackDecodeTimes::unknown(),
             open: None,
             file_type: None,
@@ -271,68 +261,47 @@ impl MovieDemuxFsm {
     /// * The failure of a previous call, which the demux FSM keeps and reports
     ///   again for every call after it.
     pub fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), Error> {
-        match &mut self.state {
-            State::Reading | State::LocatingMovieFragmentRandomAccess { .. }
-                if input.is_empty() =>
-            {
-                return Ok(());
-            }
-            State::Reading => {}
-            State::LocatingMovieFragmentRandomAccess {
-                file_len,
-                mfro,
-                filled,
-            } => {
-                if offset != closing_offset(*file_len, *filled) {
-                    return Err(Error::unwanted_input(offset));
-                }
-                let rest = mfro.get_mut(*filled..).unwrap_or_default();
-                let taken = rest.len().min(input.len());
-                rest.iter_mut()
-                    .zip(input)
-                    .for_each(|(slot, byte)| *slot = *byte);
-                *filled = filled.saturating_add(taken);
-                if *filled < MovieFragmentRandomAccessOffsetBox::ENCODED_LEN {
-                    return Ok(());
-                }
+        let State::LocatingMovieFragmentRandomAccess {
+            file_len,
+            mfro,
+            filled,
+        } = &mut self.state
+        else {
+            self.input.handle_input(offset, input)?;
+            let read = self.read_framed();
 
-                match MovieFragmentRandomAccessOffsetBox::decode(mfro.as_slice())
-                    .ok()
-                    .and_then(|(mfro, _)| mfro.movie_fragment_random_access_start(*file_len))
-                {
-                    Some(movie_fragment_random_access_start) => {
-                        self.restart(movie_fragment_random_access_start);
-                    }
-                    None => self.state = State::Finished,
-                }
+            return self.input.record(read);
+        };
 
-                return Ok(());
-            }
-            State::Finished => return Err(Error::already_finished()),
-            State::Failed(failure) => return Err(*failure),
+        if input.is_empty() {
+            return Ok(());
+        }
+        if offset != closing_offset(*file_len, *filled) {
+            return Err(Error::unwanted_input(offset));
+        }
+        let rest = mfro.get_mut(*filled..).unwrap_or_default();
+        let taken = rest.len().min(input.len());
+        rest.iter_mut()
+            .zip(input)
+            .for_each(|(slot, byte)| *slot = *byte);
+        *filled = filled.saturating_add(taken);
+        if *filled < MovieFragmentRandomAccessOffsetBox::ENCODED_LEN {
+            return Ok(());
         }
 
-        match self.position.route(offset, self.samples.wanted_extent()) {
-            InputRoute::InOrder => {}
-            InputRoute::Lacking => {
-                return self
-                    .samples
-                    .handle_data(offset, input)
-                    .map_err(|failure| self.fail(failure.into()));
+        match MovieFragmentRandomAccessOffsetBox::decode(mfro.as_slice())
+            .ok()
+            .and_then(|(mfro, _)| mfro.movie_fragment_random_access_start(*file_len))
+        {
+            Some(movie_fragment_random_access_start) => {
+                self.restart(movie_fragment_random_access_start);
             }
-            InputRoute::Unwanted => return Err(Error::unwanted_input(offset)),
+            None => {
+                self.declare_over();
+            }
         }
 
-        self.position.advance(input.len());
-
-        // Why not failing before the events are read: the framing keeps the
-        // events it made before failing, and the samples they complete are
-        // the caller's to take, so they are read first and the failure kept
-        // for after them.
-        let framed = self.boxes.handle_input(input);
-        self.read_framed()?;
-
-        framed.map_err(|failure| self.fail(failure.into()))
+        Ok(())
     }
 
     /// Takes the next sample the file handed over so far completed
@@ -342,7 +311,7 @@ impl MovieDemuxFsm {
     /// demux FSM hands over the samples it had already completed, then `None`
     /// from there on.
     pub fn poll_sample(&mut self) -> Option<Sample> {
-        self.samples.poll_sample()
+        self.input.poll_sample()
     }
 
     /// Returns the one read wanted next, or `None` once the file is declared over or the demux FSM has failed
@@ -363,7 +332,7 @@ impl MovieDemuxFsm {
     #[must_use]
     pub fn wanted_input(&self) -> Option<WantedInput> {
         match self.state {
-            State::Reading => Some(self.position.wanted_input(self.samples.wanted_extent())),
+            State::Reading => self.input.wanted_input(),
             State::LocatingMovieFragmentRandomAccess {
                 file_len, filled, ..
             } => {
@@ -374,7 +343,6 @@ impl MovieDemuxFsm {
                     Some(file_len.saturating_sub(start)),
                 ))
             }
-            State::Finished | State::Failed(_) => None,
         }
     }
 
@@ -420,9 +388,7 @@ impl MovieDemuxFsm {
     /// * The failure of a previous call, which the demux FSM keeps and reports
     ///   again for every call after it.
     pub fn resume_at(&mut self, offset: u64) -> Result<(), Error> {
-        if let State::Failed(failure) = self.state {
-            return Err(failure);
-        }
+        self.input.resumable()?;
         self.restart(offset);
 
         Ok(())
@@ -453,19 +419,17 @@ impl MovieDemuxFsm {
     /// * The failure of a previous call, which the demux FSM keeps and reports
     ///   again for every call after it.
     pub fn resume_at_movie_fragment_random_access(&mut self, file_len: u64) -> Result<(), Error> {
-        if let State::Failed(failure) = self.state {
-            return Err(failure);
-        }
+        self.input.resumable()?;
 
-        self.state = if file_len < MovieFragmentRandomAccessOffsetBox::ENCODED_LEN as u64 {
-            State::Finished
+        if file_len < MovieFragmentRandomAccessOffsetBox::ENCODED_LEN as u64 {
+            self.declare_over();
         } else {
-            State::LocatingMovieFragmentRandomAccess {
+            self.state = State::LocatingMovieFragmentRandomAccess {
                 file_len,
                 mfro: [0; MovieFragmentRandomAccessOffsetBox::ENCODED_LEN],
                 filled: 0,
-            }
-        };
+            };
+        }
 
         Ok(())
     }
@@ -492,37 +456,29 @@ impl MovieDemuxFsm {
     /// * The failure of a previous call, which the demux FSM keeps and reports
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), Error> {
-        match self.state {
-            State::Reading => {}
-            State::LocatingMovieFragmentRandomAccess { .. } => {
-                self.state = State::Finished;
+        if let State::LocatingMovieFragmentRandomAccess { .. } = self.state {
+            self.declare_over();
 
-                return Ok(());
-            }
-            State::Finished => return Err(Error::already_finished()),
-            State::Failed(failure) => return Err(failure),
+            return Ok(());
         }
-        self.boxes
-            .finish()
-            .map_err(|failure| self.fail(failure.into()))?;
-        self.read_framed()?;
-        self.structure
-            .finish()
-            .map_err(|failure| self.fail(failure))?;
-        self.samples
-            .finish()
-            .map_err(|failure| self.fail(failure.into()))?;
-        self.state = State::Finished;
+        self.input.finish_framing()?;
+        let read = self.read_framed();
+        self.input.record(read)?;
+        let checked = self.structure.finish();
 
-        Ok(())
+        self.input.finish(checked)
+    }
+
+    /// Declares the file over with nothing more read or checked, whatever the demux FSM stood at
+    const fn declare_over(&mut self) {
+        self.state = State::Reading;
+        self.input.declare_over();
     }
 
     /// Restarts the reading at `offset`, whatever the demux FSM stood at
     fn restart(&mut self, offset: u64) {
-        self.boxes = BoxReader::new();
-        self.position.resume(offset);
+        self.input.restart(offset);
         self.structure.resume();
-        self.samples.clear();
         self.decode_times = TrackDecodeTimes::unknown();
         self.open = None;
         self.state = State::Reading;
@@ -530,8 +486,7 @@ impl MovieDemuxFsm {
 
     /// Reads every box the framing has finished framing so far
     fn read_framed(&mut self) -> Result<(), Error> {
-        while let Some((extent, event)) = self.boxes.poll_event() {
-            let start = self.position.file_offset(extent.start);
+        while let Some((start, event)) = self.input.poll_event() {
             match event {
                 BoxEvent::Header(header) => self
                     .structure
@@ -570,7 +525,8 @@ impl MovieDemuxFsm {
                     Some(Open::SegmentIndex(reader)) => reader.handle_payload(payload),
                     Some(Open::MovieFragmentRandomAccess(reader)) => reader.handle_payload(payload),
                     Some(Open::MediaData) => self
-                        .samples
+                        .input
+                        .samples_mut()
                         .handle_data(start, &payload)
                         .map_err(Error::from),
                     None => Ok(()),
@@ -580,11 +536,9 @@ impl MovieDemuxFsm {
                         .finish()
                         .map(|file_type| self.file_type = Some(file_type)),
                     Some(Open::Movie(reader)) => reader.finish().and_then(|movie| {
-                        self.samples
-                            .handle_sample_extents(sample_table::sample_extents(
-                                &movie,
-                                self.limits.resolved_samples(),
-                            ))?;
+                        self.input.samples_mut().handle_sample_extents(
+                            sample_table::sample_extents(&movie, self.limits.resolved_samples()),
+                        )?;
                         self.decode_times = TrackDecodeTimes::new(&movie)?;
                         self.movie = Some(movie);
 
@@ -607,7 +561,7 @@ impl MovieDemuxFsm {
                                 &mut self.decode_times,
                                 self.limits.resolved_samples(),
                             )?;
-                            self.samples.handle_sample_extents(extents)?;
+                            self.input.samples_mut().handle_sample_extents(extents)?;
 
                             Ok(())
                         })
@@ -625,18 +579,10 @@ impl MovieDemuxFsm {
                         .map(|mfra| self.movie_fragment_random_access = Some(mfra)),
                     Some(Open::MediaData) | None => Ok(()),
                 },
-            }
-            .map_err(|failure| self.fail(failure))?;
+            }?;
         }
 
         Ok(())
-    }
-
-    /// Fails the demux FSM for good, and hands the failure back to report
-    const fn fail(&mut self, failure: Error) -> Error {
-        self.state = State::Failed(failure);
-
-        failure
     }
 }
 
