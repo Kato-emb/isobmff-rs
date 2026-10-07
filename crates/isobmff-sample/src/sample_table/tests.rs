@@ -6,11 +6,12 @@ use core::ops::Range;
 use isobmff_boxes::{
     ChunkLargeOffsetBox, ChunkLargeOffsetEntry, ChunkOffsetBox, ChunkOffsetEntry, ChunkOffsets,
     CompactSampleSizeBox, CompositionOffsetBox, CompositionTimeOffset, DegradationPriorityBox,
-    DegradationPriorityEntry, HeaderDuration, MovieBox, MovieHeaderBox, PaddingBitsBox,
-    PaddingBitsEntry, SampleDependencyTypeBox, SampleDependencyTypeEntry, SampleDescriptionBox,
-    SampleFlags, SampleSizeBox, SampleSizeEntries, SampleSizeEntry, SampleSizes, SampleTableBox,
-    SampleToChunkBox, SampleToChunkEntry, SyncSampleBox, SyncSampleEntry, TimeToSampleBox,
-    TimeToSampleEntry, TrackBox,
+    DegradationPriorityEntry, HeaderDuration, IsLeading, MovieBox, MovieHeaderBox, PaddingBitsBox,
+    PaddingBitsEntry, SampleDependencyTypeBox, SampleDependencyTypeEntry, SampleDependsOn,
+    SampleDescriptionBox, SampleFlags, SampleHasRedundancy, SampleIsDependedOn, SampleSizeBox,
+    SampleSizeEntries, SampleSizeEntry, SampleSizes, SampleTableBox, SampleToChunkBox,
+    SampleToChunkEntry, SyncSampleBox, SyncSampleEntry, TimeToSampleBox, TimeToSampleEntry,
+    TrackBox,
 };
 use isobmff_core::{AnyBox, BoxType, Mp4EpochSeconds};
 use isobmff_test_support::{
@@ -320,9 +321,24 @@ fn the_chunks_of_two_tracks_come_out_in_the_order_the_file_lays_them_down() {
 #[test]
 fn the_optional_tables_state_the_offset_and_the_flags_of_each_sample() {
     let dependencies = [
-        SampleDependencyTypeEntry::new(2, 2, 1, 2).unwrap(),
-        SampleDependencyTypeEntry::new(0, 1, 0, 0).unwrap(),
-        SampleDependencyTypeEntry::new(3, 1, 2, 1).unwrap(),
+        SampleDependencyTypeEntry::new(
+            IsLeading::NotLeading,
+            SampleDependsOn::DoesNotDependOnOthers,
+            SampleIsDependedOn::NotDisposable,
+            SampleHasRedundancy::NoRedundantCoding,
+        ),
+        SampleDependencyTypeEntry::new(
+            IsLeading::Unknown,
+            SampleDependsOn::DependsOnOthers,
+            SampleIsDependedOn::Unknown,
+            SampleHasRedundancy::Unknown,
+        ),
+        SampleDependencyTypeEntry::new(
+            IsLeading::LeadingWithoutDependency,
+            SampleDependsOn::DependsOnOthers,
+            SampleIsDependedOn::Disposable,
+            SampleHasRedundancy::RedundantCoding,
+        ),
     ];
     let paddings = [
         PaddingBitsEntry::new(5).unwrap(),

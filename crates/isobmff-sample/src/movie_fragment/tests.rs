@@ -3,11 +3,12 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use isobmff_boxes::{
-    CompositionTimeOffset, DegradationPriorityEntry, HeaderDuration, MovieBox, MovieExtendsBox,
-    MovieFragmentBox, MovieFragmentHeaderBox, MovieHeaderBox, PaddingBitsEntry,
-    SampleDependencyTypeEntry, SampleFlags, TrackBox, TrackExtendsBox,
-    TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
-    TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
+    CompositionTimeOffset, DegradationPriorityEntry, HeaderDuration, IsLeading, MovieBox,
+    MovieExtendsBox, MovieFragmentBox, MovieFragmentHeaderBox, MovieHeaderBox, PaddingBitsEntry,
+    SampleDependencyTypeEntry, SampleDependsOn, SampleFlags, SampleHasRedundancy,
+    SampleIsDependedOn, TrackBox, TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox,
+    TrackFragmentBox, TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox,
+    TrackRunSample,
 };
 use isobmff_core::{BoxDecode as _, BoxEncode as _, Mp4EpochSeconds};
 use isobmff_test_support::{
@@ -101,9 +102,14 @@ fn track_fragment_header(
 }
 
 /// Flags of a sync sample stating `sample_depends_on`, every other field 0
-fn depending_on(sample_depends_on: u8) -> SampleFlags {
+fn depending_on(sample_depends_on: SampleDependsOn) -> SampleFlags {
     SampleFlags::new(
-        SampleDependencyTypeEntry::new(0, sample_depends_on, 0, 0).unwrap(),
+        SampleDependencyTypeEntry::new(
+            IsLeading::Unknown,
+            sample_depends_on,
+            SampleIsDependedOn::Unknown,
+            SampleHasRedundancy::Unknown,
+        ),
         PaddingBitsEntry::default(),
         false,
         DegradationPriorityEntry::default(),
@@ -207,7 +213,7 @@ fn a_sample_takes_what_its_row_states_over_the_defaults_of_the_fragment_and_the_
     let rows = vec![TrackRunSample::new(
         Some(512),
         Some(2),
-        Some(depending_on(1)),
+        Some(depending_on(SampleDependsOn::DependsOnOthers)),
         Some(CompositionTimeOffset::new(-8).unwrap()),
     )];
     let track_fragment = TrackFragmentBox::new(
@@ -229,7 +235,7 @@ fn a_sample_takes_what_its_row_states_over_the_defaults_of_the_fragment_and_the_
             0,
             512,
             -8,
-            depending_on(1),
+            depending_on(SampleDependsOn::DependsOnOthers),
             1,
             1,
             100..102
@@ -296,13 +302,29 @@ fn the_flags_of_the_first_sample_of_a_run_stand_in_for_the_defaults() {
     ];
     let track_fragment = track_fragment(
         1,
-        vec![TrackRunBox::new(Some(100), Some(depending_on(2)), rows).unwrap()],
+        vec![
+            TrackRunBox::new(
+                Some(100),
+                Some(depending_on(SampleDependsOn::DoesNotDependOnOthers)),
+                rows,
+            )
+            .unwrap(),
+        ],
     );
 
     assert_eq!(
         resolved(&movie_fragment(vec![track_fragment]), &one_track_movie()),
         Ok(vec![
-            SampleExtent::new(1, 0, 1_024, 0, depending_on(2), 1, 1, 100..104),
+            SampleExtent::new(
+                1,
+                0,
+                1_024,
+                0,
+                depending_on(SampleDependsOn::DoesNotDependOnOthers),
+                1,
+                1,
+                100..104
+            ),
             extent(1, 1_024, 104..108),
         ])
     );
@@ -403,7 +425,7 @@ fn offsets_of_a_later_track_fragment_stating_no_anchor_follow_the_data_before_it
 
 #[test]
 fn a_track_fragment_after_one_carrying_no_run_is_anchored_where_that_one_was() {
-    let carrying_no_run = TrackFragmentBox::with_empty_duration(track_fragment_header(
+    let carrying_no_run = TrackFragmentBox::new_empty_duration(track_fragment_header(
         TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
         1,
         None,
@@ -513,7 +535,7 @@ fn a_fragment_of_a_track_reading_from_an_external_file_is_refused() {
 
 #[test]
 fn an_empty_duration_moves_the_timeline_on_without_a_sample() {
-    let empty = TrackFragmentBox::with_empty_duration(track_fragment_header(
+    let empty = TrackFragmentBox::new_empty_duration(track_fragment_header(
         TrackFragmentHeaderFlags::ZERO,
         1,
         None,

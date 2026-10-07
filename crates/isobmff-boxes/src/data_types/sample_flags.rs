@@ -3,8 +3,10 @@
 use isobmff_core::{Error, FieldReader};
 
 use crate::padb::PAD_MAXIMUM;
-use crate::sdtp::FIELD_MAXIMUM;
-use crate::{DegradationPriorityEntry, PaddingBitsEntry, SampleDependencyTypeEntry};
+use crate::{
+    DegradationPriorityEntry, IsLeading, PaddingBitsEntry, SampleDependencyTypeEntry,
+    SampleDependsOn, SampleHasRedundancy, SampleIsDependedOn,
+};
 
 /// Bits of the `sample_flags` §8.8.3.1 reserves, which are 0
 const RESERVED_BITS: u32 = 0xf000_0000;
@@ -25,11 +27,19 @@ const NON_SYNC_SAMPLE_BIT: u32 = 0x0001_0000;
 /// # Examples
 ///
 /// ```
-/// use isobmff_boxes::{DegradationPriorityEntry, PaddingBitsEntry, SampleDependencyTypeEntry, SampleFlags};
+/// use isobmff_boxes::{
+///     DegradationPriorityEntry, IsLeading, PaddingBitsEntry, SampleDependencyTypeEntry,
+///     SampleDependsOn, SampleFlags, SampleHasRedundancy, SampleIsDependedOn,
+/// };
 ///
 /// // A sample depending on others, left out of the sync samples
 /// let sample_flags = SampleFlags::new(
-///     SampleDependencyTypeEntry::new(0, 1, 0, 0).unwrap(),
+///     SampleDependencyTypeEntry::new(
+///         IsLeading::Unknown,
+///         SampleDependsOn::DependsOnOthers,
+///         SampleIsDependedOn::Unknown,
+///         SampleHasRedundancy::Unknown,
+///     ),
 ///     PaddingBitsEntry::default(),
 ///     true,
 ///     DegradationPriorityEntry::default(),
@@ -49,41 +59,48 @@ impl SampleFlags {
     /// Flags of a sample that depends on no other and can be decoded first
     ///
     /// The sample is a sync sample (ISO/IEC 14496-12 §8.6.2) whose
-    /// `sample_depends_on` is 2 (§8.6.4.3); its other fields are 0.
-    pub const SYNC_SAMPLE: Self = match (
-        SampleDependencyTypeEntry::new(0, 2, 0, 0),
-        PaddingBitsEntry::new(0),
-    ) {
-        (Some(sample_dependency_type), Some(padding_bits)) => Self::new(
-            sample_dependency_type,
+    /// `sample_depends_on` is [`DoesNotDependOnOthers`](SampleDependsOn::DoesNotDependOnOthers)
+    /// (§8.6.4.3); its other fields are 0.
+    pub const SYNC_SAMPLE: Self = match PaddingBitsEntry::new(0) {
+        Some(padding_bits) => Self::new(
+            SampleDependencyTypeEntry::new(
+                IsLeading::Unknown,
+                SampleDependsOn::DoesNotDependOnOthers,
+                SampleIsDependedOn::Unknown,
+                SampleHasRedundancy::Unknown,
+            ),
             padding_bits,
             false,
             DegradationPriorityEntry::new(0),
         ),
-        // Why not unwrap: every field is within its range, so the entries
-        // always build, and a degenerate value stands in for the panic the
-        // lints forbid.
-        (None, _) | (_, None) => Self::ZERO,
+        // Why not unwrap: the padding is within its range, so the entry always
+        // builds, and a degenerate value stands in for the panic the lints
+        // forbid.
+        None => Self::ZERO,
     };
 
     /// Flags of a sample that depends on others
     ///
     /// The sample is left out of the sync samples (ISO/IEC 14496-12 §8.6.2)
-    /// and its `sample_depends_on` is 1 (§8.6.4.3); its other fields are 0.
-    pub const NON_SYNC_SAMPLE: Self = match (
-        SampleDependencyTypeEntry::new(0, 1, 0, 0),
-        PaddingBitsEntry::new(0),
-    ) {
-        (Some(sample_dependency_type), Some(padding_bits)) => Self::new(
-            sample_dependency_type,
+    /// and its `sample_depends_on` is
+    /// [`DependsOnOthers`](SampleDependsOn::DependsOnOthers) (§8.6.4.3); its
+    /// other fields are 0.
+    pub const NON_SYNC_SAMPLE: Self = match PaddingBitsEntry::new(0) {
+        Some(padding_bits) => Self::new(
+            SampleDependencyTypeEntry::new(
+                IsLeading::Unknown,
+                SampleDependsOn::DependsOnOthers,
+                SampleIsDependedOn::Unknown,
+                SampleHasRedundancy::Unknown,
+            ),
             padding_bits,
             true,
             DegradationPriorityEntry::new(0),
         ),
-        // Why not unwrap: every field is within its range, so the entries
-        // always build, and a degenerate value stands in for the panic the
-        // lints forbid.
-        (None, _) | (_, None) => Self::ZERO,
+        // Why not unwrap: the padding is within its range, so the entry always
+        // builds, and a degenerate value stands in for the panic the lints
+        // forbid.
+        None => Self::ZERO,
     };
 
     /// Creates the flags from the fields they state
@@ -94,10 +111,10 @@ impl SampleFlags {
         sample_is_non_sync_sample: bool,
         degradation_priority: DegradationPriorityEntry,
     ) -> Self {
-        let high =
-            sample_dependency_type.is_leading() << 2 | sample_dependency_type.sample_depends_on();
-        let low = sample_dependency_type.sample_is_depended_on() << 6
-            | sample_dependency_type.sample_has_redundancy() << 4
+        let high = sample_dependency_type.is_leading().bits() << 2
+            | sample_dependency_type.sample_depends_on().bits();
+        let low = sample_dependency_type.sample_is_depended_on().bits() << 6
+            | sample_dependency_type.sample_has_redundancy().bits() << 4
             | padding_bits.pad() << 1
             | sample_is_non_sync_sample as u8;
         let [priority_high, priority_low] = degradation_priority.priority().to_be_bytes();
@@ -125,18 +142,15 @@ impl SampleFlags {
 
     /// Returns the answers an `sdtp` entry states for the sample
     #[must_use]
-    pub fn sample_dependency_type(self) -> SampleDependencyTypeEntry {
+    pub const fn sample_dependency_type(self) -> SampleDependencyTypeEntry {
         let [high, low, _, _] = self.0.to_be_bytes();
-        // Why not unwrap: each answer is masked to its 2 bits, so the entry
-        // always builds, and a degenerate value stands in for the panic the
-        // lints forbid.
+
         SampleDependencyTypeEntry::new(
-            (high >> 2) & FIELD_MAXIMUM,
-            high & FIELD_MAXIMUM,
-            low >> 6,
-            (low >> 4) & FIELD_MAXIMUM,
+            IsLeading::from_bits(high >> 2),
+            SampleDependsOn::from_bits(high),
+            SampleIsDependedOn::from_bits(low >> 6),
+            SampleHasRedundancy::from_bits(low >> 4),
         )
-        .unwrap_or_default()
     }
 
     /// Returns the padding bits a `padb` entry states for the sample
@@ -177,11 +191,19 @@ pub(crate) fn read_sample_flags(reader: &mut FieldReader<'_>) -> Result<SampleFl
 #[cfg(test)]
 mod tests {
     use super::SampleFlags;
-    use crate::{DegradationPriorityEntry, PaddingBitsEntry, SampleDependencyTypeEntry};
+    use crate::{
+        DegradationPriorityEntry, IsLeading, PaddingBitsEntry, SampleDependencyTypeEntry,
+        SampleDependsOn, SampleHasRedundancy, SampleIsDependedOn,
+    };
 
     #[test]
     fn each_field_lies_where_the_layout_places_it() {
-        let sample_dependency_type = SampleDependencyTypeEntry::new(3, 2, 1, 2).unwrap();
+        let sample_dependency_type = SampleDependencyTypeEntry::new(
+            IsLeading::LeadingWithoutDependency,
+            SampleDependsOn::DoesNotDependOnOthers,
+            SampleIsDependedOn::NotDisposable,
+            SampleHasRedundancy::NoRedundantCoding,
+        );
         let padding_bits = PaddingBitsEntry::new(5).unwrap();
         let degradation_priority = DegradationPriorityEntry::new(0xbeef);
 

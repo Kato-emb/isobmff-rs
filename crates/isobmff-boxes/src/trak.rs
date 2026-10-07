@@ -186,17 +186,17 @@ impl TrackBox {
         &mut self.tkhd
     }
 
-    /// States the duration of the track and of its media, and returns the track's
+    /// Updates the duration of the track and of its media, and returns the track's
     ///
-    /// The media is stated as [`MediaBox::state_duration`] states it. The
+    /// The media is updated as [`MediaBox::update_duration`] updates it. The
     /// `tkhd` takes, as ISO/IEC 14496-12 §8.3.2.3 has it, the sum of the
     /// `segment_duration` of the track's edits, or, for a track with no edit
     /// list, the media's duration converted to `movie_timescale` and rounded up
     /// to the next whole unit. It cannot be determined where the sum or the
     /// conversion reaches [`u64::MAX`], or where the media's duration cannot be
     /// determined or the media's time scale is 0.
-    pub(crate) fn state_duration(&mut self, movie_timescale: u32) -> HeaderDuration {
-        self.mdia.state_duration();
+    pub(crate) fn update_duration(&mut self, movie_timescale: u32) -> HeaderDuration {
+        self.mdia.update_duration();
         let media_header = self.mdia.mdhd();
         let duration =
             HeaderDuration::from_derived(match self.edts.as_ref().and_then(EditBox::elst) {

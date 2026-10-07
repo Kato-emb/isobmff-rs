@@ -295,10 +295,7 @@ fn drain(reader: &mut SampleReader, samples: &mut Vec<Sample>) {
 
 /// Returns whether `track_id` names a track of `movie`
 fn declares(movie: &MovieBox, track_id: u32) -> bool {
-    movie
-        .trak()
-        .iter()
-        .any(|trak| trak.tkhd().track_id() == track_id)
+    movie.trak_by_id(track_id).is_some()
 }
 
 /// The samples by how many times each was read, whatever order they came out in

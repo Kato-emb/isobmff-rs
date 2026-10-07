@@ -360,7 +360,7 @@ pub fn lay_out(input: &Input<'_>) -> Option<LaidOut> {
             // the resolver has it.
             data_before = Some(if runs.is_empty() { anchor } else { data_cursor });
             let traf = if track_fragment.duration_is_empty {
-                TrackFragmentBox::with_empty_duration(tfhd)
+                TrackFragmentBox::new_empty_duration(tfhd)
             } else {
                 TrackFragmentBox::new(tfhd, runs)?
             };

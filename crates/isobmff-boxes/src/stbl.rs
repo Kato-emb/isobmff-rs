@@ -337,7 +337,10 @@ pub(crate) mod tests {
     use crate::data_types::CompositionTimeOffset;
     use crate::padb::{PaddingBitsBox, PaddingBitsEntry};
     use crate::sample_size::{CompactSampleSizeBox, SampleSizeBox, SampleSizeEntries, SampleSizes};
-    use crate::sdtp::{SampleDependencyTypeBox, SampleDependencyTypeEntry};
+    use crate::sdtp::{
+        IsLeading, SampleDependencyTypeBox, SampleDependencyTypeEntry, SampleDependsOn,
+        SampleHasRedundancy, SampleIsDependedOn,
+    };
     use crate::stdp::{DegradationPriorityBox, DegradationPriorityEntry};
     use crate::stsc::SampleToChunkBox;
     use crate::stsd::SampleDescriptionBox;
@@ -359,7 +362,12 @@ pub(crate) mod tests {
     fn sample_table_with_every_optional_table() -> SampleTableBox {
         sample_table()
             .with_sdtp(SampleDependencyTypeBox::new(vec![
-                SampleDependencyTypeEntry::new(2, 2, 1, 2).unwrap(),
+                SampleDependencyTypeEntry::new(
+                    IsLeading::NotLeading,
+                    SampleDependsOn::DoesNotDependOnOthers,
+                    SampleIsDependedOn::NotDisposable,
+                    SampleHasRedundancy::NoRedundantCoding,
+                ),
             ]))
             .with_stdp(DegradationPriorityBox::new(vec![
                 DegradationPriorityEntry::new(3),

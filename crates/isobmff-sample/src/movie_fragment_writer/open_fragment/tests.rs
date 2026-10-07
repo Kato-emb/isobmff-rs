@@ -2,9 +2,10 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use isobmff_boxes::{
-    DegradationPriorityEntry, MovieFragmentBox, MovieFragmentHeaderBox, PaddingBitsEntry,
-    SampleDependencyTypeEntry, SampleFlags, TrackFragmentBox, TrackFragmentHeaderBox,
-    TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
+    DegradationPriorityEntry, IsLeading, MovieFragmentBox, MovieFragmentHeaderBox,
+    PaddingBitsEntry, SampleDependencyTypeEntry, SampleDependsOn, SampleFlags, SampleHasRedundancy,
+    SampleIsDependedOn, TrackFragmentBox, TrackFragmentHeaderBox, TrackFragmentHeaderFlags,
+    TrackRunBox, TrackRunSample,
 };
 use isobmff_core::BoxEncode as _;
 
@@ -47,9 +48,14 @@ fn timed(
 }
 
 /// Flags stating `sample_depends_on` and `sample_is_non_sync_sample`, every other field 0
-fn flags(sample_depends_on: u8, sample_is_non_sync_sample: bool) -> SampleFlags {
+fn flags(sample_depends_on: SampleDependsOn, sample_is_non_sync_sample: bool) -> SampleFlags {
     SampleFlags::new(
-        SampleDependencyTypeEntry::new(0, sample_depends_on, 0, 0).unwrap(),
+        SampleDependencyTypeEntry::new(
+            IsLeading::Unknown,
+            sample_depends_on,
+            SampleIsDependedOn::Unknown,
+            SampleHasRedundancy::Unknown,
+        ),
         PaddingBitsEntry::default(),
         sample_is_non_sync_sample,
         DegradationPriorityEntry::default(),
@@ -315,21 +321,25 @@ fn what_the_samples_do_not_share_is_stated_by_every_row() {
 #[test]
 fn flags_only_the_first_sample_differs_on_are_written_as_its_own() {
     let (movie_fragment, _media_data) = one_fragment(vec![
-        flagged(0, flags(2, false)),
-        flagged(1_024, flags(1, true)),
-        flagged(2_048, flags(1, true)),
+        flagged(0, flags(SampleDependsOn::DoesNotDependOnOthers, false)),
+        flagged(1_024, flags(SampleDependsOn::DependsOnOthers, true)),
+        flagged(2_048, flags(SampleDependsOn::DependsOnOthers, true)),
     ]);
     let track_fragment = track_fragment_of(&movie_fragment, 1);
 
     assert_eq!(
         *track_fragment.tfhd(),
-        track_fragment_header(Some(1_024), Some(4), Some(flags(1, true)))
+        track_fragment_header(
+            Some(1_024),
+            Some(4),
+            Some(flags(SampleDependsOn::DependsOnOthers, true))
+        )
     );
     assert_eq!(
         track_fragment.trun(),
         [TrackRunBox::new(
             Some(data_offset_of(&movie_fragment)),
-            Some(flags(2, false)),
+            Some(flags(SampleDependsOn::DoesNotDependOnOthers, false)),
             vec![TrackRunSample::new(None, None, None, None); 3],
         )
         .unwrap()]
@@ -339,9 +349,9 @@ fn flags_only_the_first_sample_differs_on_are_written_as_its_own() {
 #[test]
 fn flags_no_two_samples_share_are_written_by_every_row() {
     let (movie_fragment, _media_data) = one_fragment(vec![
-        flagged(0, flags(2, false)),
-        flagged(1_024, flags(1, true)),
-        flagged(2_048, flags(1, false)),
+        flagged(0, flags(SampleDependsOn::DoesNotDependOnOthers, false)),
+        flagged(1_024, flags(SampleDependsOn::DependsOnOthers, true)),
+        flagged(2_048, flags(SampleDependsOn::DependsOnOthers, false)),
     ]);
     let track_fragment = track_fragment_of(&movie_fragment, 1);
 
@@ -355,9 +365,24 @@ fn flags_no_two_samples_share_are_written_by_every_row() {
             Some(data_offset_of(&movie_fragment)),
             None,
             vec![
-                TrackRunSample::new(None, None, Some(flags(2, false)), None),
-                TrackRunSample::new(None, None, Some(flags(1, true)), None),
-                TrackRunSample::new(None, None, Some(flags(1, false)), None),
+                TrackRunSample::new(
+                    None,
+                    None,
+                    Some(flags(SampleDependsOn::DoesNotDependOnOthers, false)),
+                    None
+                ),
+                TrackRunSample::new(
+                    None,
+                    None,
+                    Some(flags(SampleDependsOn::DependsOnOthers, true)),
+                    None
+                ),
+                TrackRunSample::new(
+                    None,
+                    None,
+                    Some(flags(SampleDependsOn::DependsOnOthers, false)),
+                    None
+                ),
             ],
         )
         .unwrap()]
