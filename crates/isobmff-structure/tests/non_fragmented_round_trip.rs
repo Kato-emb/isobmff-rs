@@ -161,7 +161,7 @@ mod tests {
         let duration = |value| HeaderDuration::new(value).unwrap();
         *expected.mvhd_mut() = read.mvhd().clone().with_duration(duration(100));
         for (track_id, media_duration, track_duration) in [(1, 9_000, 100), (2, 4_096, 46)] {
-            let track = expected.trak_mut(track_id).unwrap();
+            let track = expected.track_mut(track_id).unwrap();
             *track.tkhd_mut() = track.tkhd().clone().with_duration(duration(track_duration));
             *track.mdia_mut().mdhd_mut() = track
                 .mdia()

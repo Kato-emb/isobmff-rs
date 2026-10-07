@@ -53,14 +53,14 @@ impl MediaBox {
         &mut self.mdhd
     }
 
-    /// States the duration of the media from its time-to-sample table
+    /// Updates the duration of the media from its time-to-sample table
     ///
     /// The `mdhd` takes the sum of the `stts` deltas, which ISO/IEC 14496-12
     /// §8.4.2.3 and §8.6.1.2.1 have be the length of the media, or
     /// [`HeaderDuration::INDETERMINATE`](crate::HeaderDuration::INDETERMINATE)
     /// where [`media_duration`](crate::TimeToSampleBox::media_duration) is
     /// `None` or the sum is [`u64::MAX`].
-    pub fn state_duration(&mut self) {
+    pub fn update_duration(&mut self) {
         self.mdhd = self
             .mdhd
             .clone()

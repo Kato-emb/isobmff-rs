@@ -3,8 +3,8 @@
 #[cfg(test)]
 mod tests {
     use isobmff_boxes::{
-        DegradationPriorityEntry, PaddingBitsEntry, SampleDependencyTypeEntry, SampleFlags,
-        TrackExtendsBox,
+        DegradationPriorityEntry, IsLeading, PaddingBitsEntry, SampleDependencyTypeEntry,
+        SampleDependsOn, SampleFlags, SampleHasRedundancy, SampleIsDependedOn, TrackExtendsBox,
     };
     use isobmff_core::BoxEncode as _;
     use isobmff_sample::movie_fragment::sample_extents;
@@ -20,13 +20,23 @@ mod tests {
     #[test]
     fn the_samples_a_fragment_is_written_from_resolve_back_out_of_it() {
         let independent = SampleFlags::new(
-            SampleDependencyTypeEntry::new(0, 2, 0, 0).unwrap(),
+            SampleDependencyTypeEntry::new(
+                IsLeading::Unknown,
+                SampleDependsOn::DoesNotDependOnOthers,
+                SampleIsDependedOn::Unknown,
+                SampleHasRedundancy::Unknown,
+            ),
             PaddingBitsEntry::default(),
             false,
             DegradationPriorityEntry::default(),
         );
         let dependent = SampleFlags::new(
-            SampleDependencyTypeEntry::new(0, 1, 0, 0).unwrap(),
+            SampleDependencyTypeEntry::new(
+                IsLeading::Unknown,
+                SampleDependsOn::DependsOnOthers,
+                SampleIsDependedOn::Unknown,
+                SampleHasRedundancy::Unknown,
+            ),
             PaddingBitsEntry::default(),
             true,
             DegradationPriorityEntry::default(),

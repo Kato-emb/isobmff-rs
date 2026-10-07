@@ -150,29 +150,49 @@ impl MovieBox {
         &self.trak
     }
 
-    /// Returns the track `track_id` names, to be changed in place, or `None` for a track the movie does not declare or that did not read
+    /// Returns the tracks the presentation is made of, those that read, to be changed in place
     ///
     /// What [`new`](Self::new) settled — distinct `track_id`s, and a `trex` for
     /// each track where the movie is fragmented — holds of the tracks as they
     /// were built; a change made through here that touches either is the
-    /// caller's to keep to them. A decoded movie whose tracks collide on
-    /// `track_id` yields the first of them, in the order they came.
+    /// caller's to keep to them.
     #[must_use]
-    pub fn trak_mut(&mut self, track_id: u32) -> Option<&mut TrackBox> {
+    pub fn trak_mut(&mut self) -> &mut [TrackBox] {
+        &mut self.trak
+    }
+
+    /// Returns the track `track_id` names, or `None` for a track the movie does not declare or that did not read
+    ///
+    /// A decoded movie whose tracks collide on `track_id` yields the first of
+    /// them, in the order they came.
+    #[must_use]
+    pub fn track(&self, track_id: u32) -> Option<&TrackBox> {
+        self.trak
+            .iter()
+            .find(|track| track.tkhd().track_id() == track_id)
+    }
+
+    /// Returns the track `track_id` names, to be changed in place, or `None` for a track the movie does not declare or that did not read
+    ///
+    /// What [`new`](Self::new) settled holds of the tracks as they were built,
+    /// as [`trak_mut`](Self::trak_mut) states; a decoded movie whose tracks
+    /// collide on `track_id` yields the first of them, in the order they came.
+    #[must_use]
+    pub fn track_mut(&mut self, track_id: u32) -> Option<&mut TrackBox> {
         self.trak
             .iter_mut()
             .find(|track| track.tkhd().track_id() == track_id)
     }
 
-    /// States the duration of the movie, its tracks and their media from the tables the movie holds
+    /// Updates the duration of the movie, its tracks and their media from the tables the movie holds
     ///
-    /// Every track that read, one with no samples as well, is stated afresh; a
-    /// `trak` kept among [`other_boxes`](Self::other_boxes) is neither stated
+    /// Every track that read, one with no samples as well, is updated; a
+    /// `trak` kept among [`other_boxes`](Self::other_boxes) is neither updated
     /// nor counted:
     ///
     /// * `mdhd` (ISO/IEC 14496-12 §8.4.2.3): as
-    ///   [`MediaBox::state_duration`](crate::MediaBox::state_duration) states
-    ///   it, the length of the media.
+    ///   [`MediaBox::update_duration`](crate::MediaBox::update_duration)
+    ///   updates it, the length of the media.
     /// * `tkhd` (§8.3.2.3): the sum of the `segment_duration` of the track's
     ///   edits, or, for a track with no edit list, the `mdhd` duration converted
     ///   to the movie's time scale and rounded up to the next whole unit.
@@ -184,12 +204,12 @@ impl MovieBox {
     /// scale is 0, or, for a `tkhd` with no edit list, the `mdhd` duration
     /// cannot be determined; the movie's cannot be determined once any track's
     /// cannot.
-    pub fn state_durations(&mut self) {
+    pub fn update_durations(&mut self) {
         let movie_timescale = self.mvhd.timescale();
         let mut longest = Some(0_u64);
 
         for track in &mut self.trak {
-            let duration = track.state_duration(movie_timescale).get();
+            let duration = track.update_duration(movie_timescale).get();
             longest = longest
                 .zip(duration)
                 .map(|(longest, duration)| longest.max(duration));
@@ -537,6 +557,18 @@ mod tests {
     }
 
     #[test]
+    fn a_track_id_two_decoded_tracks_declare_names_the_first_of_them() {
+        let mut second = track();
+        *second.tkhd_mut() = second.tkhd().clone().with_duration(duration(7_000));
+        let payload = [encoded_payload(&movie()), encoded_child(&second)].concat();
+
+        let mut decoded = MovieBox::decode_payload(&payload).unwrap();
+
+        assert_eq!(decoded.track(1), Some(&track()));
+        assert_eq!(decoded.track_mut(1), Some(&mut track()));
+    }
+
+    #[test]
     fn the_sample_tables_of_a_track_are_replaced_in_place_and_the_rest_of_the_movie_kept() {
         let unclaimed = vec![
             0, 0, 0, 0x0c, b'u', b'd', b't', b'a', 0x11, 0x11, 0x11, 0x11,
@@ -552,7 +584,7 @@ mod tests {
         );
 
         *decoded
-            .trak_mut(1)
+            .track_mut(1)
             .unwrap()
             .mdia_mut()
             .minf_mut()
@@ -576,14 +608,15 @@ mod tests {
 
     #[test]
     fn a_track_the_movie_does_not_declare_yields_nothing() {
-        assert_eq!(movie().trak_mut(7), None);
+        assert_eq!(movie().track(7), None);
+        assert_eq!(movie().track_mut(7), None);
     }
 
     #[test]
     fn a_duration_set_through_a_track_is_written_with_the_movie() {
         let mut movie = movie();
 
-        let edited = movie.trak_mut(1).unwrap();
+        let edited = movie.track_mut(1).unwrap();
         *edited.tkhd_mut() = edited.tkhd().clone().with_duration(duration(7_000));
 
         assert_eq!(
@@ -612,7 +645,7 @@ mod tests {
         )
         .unwrap();
 
-        movie.state_durations();
+        movie.update_durations();
 
         assert_eq!(
             MovieBox::new(
@@ -642,7 +675,7 @@ mod tests {
         )
         .unwrap();
 
-        movie.state_durations();
+        movie.update_durations();
 
         assert_eq!(
             MovieBox::new(
@@ -670,7 +703,7 @@ mod tests {
         )
         .unwrap();
 
-        movie.state_durations();
+        movie.update_durations();
 
         assert_eq!(
             MovieBox::new(
@@ -698,7 +731,7 @@ mod tests {
         )
         .unwrap();
 
-        movie.state_durations();
+        movie.update_durations();
 
         assert_eq!(
             MovieBox::new(movie_header(0), vec![video_track(1)], None),

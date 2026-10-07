@@ -18,12 +18,12 @@ use crate::trun::TrackRunBox;
 /// a fragment adding nothing but time to a track carries no run at all.
 ///
 /// The `tfdt` is optional, so [`new`](Self::new) and
-/// [`with_empty_duration`](Self::with_empty_duration) leave it out and
+/// [`new_empty_duration`](Self::new_empty_duration) leave it out and
 /// [`with_tfdt`](Self::with_tfdt) sets it.
 ///
 /// A `tfhd` stating `duration-is-empty` declares that the fragment holds no
 /// samples, and §8.8.8 has such a fragment hold no track runs — so
-/// [`with_empty_duration`](Self::with_empty_duration) states the flag and
+/// [`new_empty_duration`](Self::new_empty_duration) states the flag and
 /// holds no run, a header built by
 /// [`TrackFragmentHeaderBox::new`](TrackFragmentHeaderBox::new) never states
 /// it, and both [`new`](Self::new) and
@@ -70,7 +70,7 @@ impl TrackFragmentBox {
     /// `trex` of its track states to the timeline, and no sample (§8.8.7.1),
     /// so §8.8.8 has it carry no run.
     #[must_use]
-    pub const fn with_empty_duration(tfhd: TrackFragmentHeaderBox) -> Self {
+    pub const fn new_empty_duration(tfhd: TrackFragmentHeaderBox) -> Self {
         Self {
             tfhd: tfhd.with_empty_duration(),
             tfdt: None,
@@ -277,7 +277,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_fragment_of_empty_duration_states_so_holds_no_run_and_reads_back() {
-        let empty = TrackFragmentBox::with_empty_duration(track_fragment_header(1));
+        let empty = TrackFragmentBox::new_empty_duration(track_fragment_header(1));
 
         assert_eq!(
             empty,
@@ -292,7 +292,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_header_read_stating_an_empty_duration_cannot_head_a_run() {
-        let empty = TrackFragmentBox::with_empty_duration(track_fragment_header(1));
+        let empty = TrackFragmentBox::new_empty_duration(track_fragment_header(1));
         let read = TrackFragmentBox::decode_payload(&encoded_payload(&empty)).unwrap();
 
         assert_eq!(
@@ -303,7 +303,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_payload_holding_a_run_the_empty_duration_forbids_is_rejected() {
-        let empty = TrackFragmentBox::with_empty_duration(track_fragment_header(1));
+        let empty = TrackFragmentBox::new_empty_duration(track_fragment_header(1));
         let run = track_run();
         let mut encoded_run = vec![0; usize::try_from(run.encoded_len()).unwrap()];
         run.encode(&mut encoded_run).unwrap();

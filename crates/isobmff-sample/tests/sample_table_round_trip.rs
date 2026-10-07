@@ -3,8 +3,9 @@
 #[cfg(test)]
 mod tests {
     use isobmff_boxes::{
-        DegradationPriorityEntry, HeaderDuration, MovieBox, MovieHeaderBox, PaddingBitsEntry,
-        SampleDependencyTypeEntry, SampleDescriptionBox, SampleFlags,
+        DegradationPriorityEntry, HeaderDuration, IsLeading, MovieBox, MovieHeaderBox,
+        PaddingBitsEntry, SampleDependencyTypeEntry, SampleDependsOn, SampleDescriptionBox,
+        SampleFlags, SampleHasRedundancy, SampleIsDependedOn,
     };
     use isobmff_core::{AnyBox, BoxType, Mp4EpochSeconds};
     use isobmff_sample::sample_table::sample_extents;
@@ -100,7 +101,12 @@ mod tests {
                         100,
                         200,
                         SampleFlags::new(
-                            SampleDependencyTypeEntry::new(2, 2, 1, 2).unwrap(),
+                            SampleDependencyTypeEntry::new(
+                                IsLeading::NotLeading,
+                                SampleDependsOn::DoesNotDependOnOthers,
+                                SampleIsDependedOn::NotDisposable,
+                                SampleHasRedundancy::NoRedundantCoding,
+                            ),
                             PaddingBitsEntry::new(5).unwrap(),
                             false,
                             DegradationPriorityEntry::new(3),
@@ -113,7 +119,12 @@ mod tests {
                         100,
                         -100,
                         SampleFlags::new(
-                            SampleDependencyTypeEntry::new(0, 1, 0, 0).unwrap(),
+                            SampleDependencyTypeEntry::new(
+                                IsLeading::Unknown,
+                                SampleDependsOn::DependsOnOthers,
+                                SampleIsDependedOn::Unknown,
+                                SampleHasRedundancy::Unknown,
+                            ),
                             PaddingBitsEntry::default(),
                             true,
                             DegradationPriorityEntry::default(),

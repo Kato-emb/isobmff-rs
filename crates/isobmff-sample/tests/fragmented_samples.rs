@@ -3,8 +3,9 @@
 #[cfg(test)]
 mod tests {
     use isobmff_boxes::{
-        DegradationPriorityEntry, MovieFragmentBox, MovieFragmentHeaderBox, PaddingBitsEntry,
-        SampleDependencyTypeEntry, SampleFlags, TrackExtendsBox, TrackFragmentBox,
+        DegradationPriorityEntry, IsLeading, MovieFragmentBox, MovieFragmentHeaderBox,
+        PaddingBitsEntry, SampleDependencyTypeEntry, SampleDependsOn, SampleFlags,
+        SampleHasRedundancy, SampleIsDependedOn, TrackExtendsBox, TrackFragmentBox,
         TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
     };
     use isobmff_sample::movie_fragment::sample_extents;
@@ -41,7 +42,12 @@ mod tests {
 
     /// Flags of a sync sample that depends on no other, which the `trex` of the movie states
     const INDEPENDENT: SampleFlags = SampleFlags::new(
-        SampleDependencyTypeEntry::new(0, 2, 0, 0).unwrap(),
+        SampleDependencyTypeEntry::new(
+            IsLeading::Unknown,
+            SampleDependsOn::DoesNotDependOnOthers,
+            SampleIsDependedOn::Unknown,
+            SampleHasRedundancy::Unknown,
+        ),
         PaddingBitsEntry::new(0).unwrap(),
         false,
         DegradationPriorityEntry::new(0),

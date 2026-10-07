@@ -56,9 +56,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut moof_offsets = Vec::new();
     for tfra in random_access.tfra() {
         let timescale = movie
-            .trak()
-            .iter()
-            .find(|track| track.tkhd().track_id() == tfra.track_id())
+            .track(tfra.track_id())
             .ok_or("an mfra names a track the movie does not declare")?
             .mdia()
             .mdhd()

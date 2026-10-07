@@ -2,7 +2,7 @@
 //!
 //! The movie header and the tracks of the source are kept, the modification time of the `mvhd` and
 //! of each `tkhd` and `mdhd` set to now, its `mvex` and every other box of the movie dropped, and
-//! the writer fills the sample tables of each track in from the samples and states the durations
+//! the writer fills the sample tables of each track in from the samples and updates the durations
 //! from them. A chunk opens wherever the samples pass to another track or another sample
 //! description.
 //!

@@ -138,10 +138,11 @@ mod tests {
 
     use isobmff_boxes::{
         ChunkOffsetBox, ChunkOffsetEntry, ChunkOffsets, CompositionOffsetBox,
-        CompositionTimeOffset, DegradationPriorityBox, DegradationPriorityEntry, PaddingBitsBox,
-        PaddingBitsEntry, SampleDependencyTypeBox, SampleDependencyTypeEntry, SampleFlags,
-        SampleSizeBox, SampleSizes, SampleToChunkBox, SampleToChunkEntry, SyncSampleBox,
-        SyncSampleEntry, TimeToSampleBox,
+        CompositionTimeOffset, DegradationPriorityBox, DegradationPriorityEntry, IsLeading,
+        PaddingBitsBox, PaddingBitsEntry, SampleDependencyTypeBox, SampleDependencyTypeEntry,
+        SampleDependsOn, SampleFlags, SampleHasRedundancy, SampleIsDependedOn, SampleSizeBox,
+        SampleSizes, SampleToChunkBox, SampleToChunkEntry, SyncSampleBox, SyncSampleEntry,
+        TimeToSampleBox,
     };
 
     use crate::error::Error;
@@ -260,7 +261,12 @@ mod tests {
                     0,
                     8,
                     SampleFlags::new(
-                        SampleDependencyTypeEntry::new(2, 2, 1, 2).unwrap(),
+                        SampleDependencyTypeEntry::new(
+                            IsLeading::NotLeading,
+                            SampleDependsOn::DoesNotDependOnOthers,
+                            SampleIsDependedOn::NotDisposable,
+                            SampleHasRedundancy::NoRedundantCoding,
+                        ),
                         PaddingBitsEntry::new(5).unwrap(),
                         false,
                         DegradationPriorityEntry::new(3),
@@ -270,7 +276,12 @@ mod tests {
                     1_024,
                     -2,
                     SampleFlags::new(
-                        SampleDependencyTypeEntry::new(0, 1, 0, 0).unwrap(),
+                        SampleDependencyTypeEntry::new(
+                            IsLeading::Unknown,
+                            SampleDependsOn::DependsOnOthers,
+                            SampleIsDependedOn::Unknown,
+                            SampleHasRedundancy::Unknown,
+                        ),
                         PaddingBitsEntry::default(),
                         true,
                         DegradationPriorityEntry::default(),
@@ -298,8 +309,18 @@ mod tests {
                         SyncSampleEntry::new(3),
                     ])),
                     sdtp: Some(SampleDependencyTypeBox::new(vec![
-                        SampleDependencyTypeEntry::new(2, 2, 1, 2).unwrap(),
-                        SampleDependencyTypeEntry::new(0, 1, 0, 0).unwrap(),
+                        SampleDependencyTypeEntry::new(
+                            IsLeading::NotLeading,
+                            SampleDependsOn::DoesNotDependOnOthers,
+                            SampleIsDependedOn::NotDisposable,
+                            SampleHasRedundancy::NoRedundantCoding
+                        ),
+                        SampleDependencyTypeEntry::new(
+                            IsLeading::Unknown,
+                            SampleDependsOn::DependsOnOthers,
+                            SampleIsDependedOn::Unknown,
+                            SampleHasRedundancy::Unknown
+                        ),
                         SampleDependencyTypeEntry::default(),
                     ])),
                     padb: Some(PaddingBitsBox::new(vec![

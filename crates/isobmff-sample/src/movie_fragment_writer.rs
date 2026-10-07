@@ -631,7 +631,7 @@ mod tests {
     #[test]
     fn a_sample_of_a_track_no_trex_continues_in_fragments_is_refused() {
         let mut movie = MovieBox::new_fragmented(90_000, vec![track(1)]).unwrap();
-        *movie.trak_mut(1).unwrap() = track(5);
+        *movie.track_mut(1).unwrap() = track(5);
         let mut writer = MovieFragmentWriter::new(&movie).unwrap();
 
         writer.begin_fragment(1).unwrap();

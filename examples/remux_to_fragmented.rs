@@ -75,7 +75,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             samples: Vec::new(),
         });
         *movie
-            .trak_mut(track_id)
+            .track_mut(track_id)
             .ok_or("the movie lost a track it declares")?
             .mdia_mut()
             .minf_mut()

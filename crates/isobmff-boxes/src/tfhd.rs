@@ -106,7 +106,7 @@ impl TrackFragmentHeaderFlags {
 ///
 /// Five of the `flags` state which of those fields the box carries, so they are
 /// derived from the fields themselves; `duration-is-empty` is stated by
-/// [`TrackFragmentBox::with_empty_duration`](crate::TrackFragmentBox::with_empty_duration);
+/// [`TrackFragmentBox::new_empty_duration`](crate::TrackFragmentBox::new_empty_duration);
 /// and what a caller states is a [`TrackFragmentHeaderFlags`] —
 /// [`default-base-is-moof`](TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF) and
 /// whatever bits the spec has yet to define. [`flags`](Self::flags) returns all
@@ -383,7 +383,8 @@ mod tests {
 
     use super::{TrackFragmentHeaderBox, TrackFragmentHeaderFlags};
     use crate::{
-        DegradationPriorityEntry, PaddingBitsEntry, SampleDependencyTypeEntry, SampleFlags,
+        DegradationPriorityEntry, IsLeading, PaddingBitsEntry, SampleDependencyTypeEntry,
+        SampleDependsOn, SampleFlags, SampleHasRedundancy, SampleIsDependedOn,
     };
 
     /// Fragment header carrying every optional field the box defines
@@ -396,7 +397,12 @@ mod tests {
             Some(1_024),
             Some(512),
             Some(SampleFlags::new(
-                SampleDependencyTypeEntry::new(0, 1, 0, 0).unwrap(),
+                SampleDependencyTypeEntry::new(
+                    IsLeading::Unknown,
+                    SampleDependsOn::DependsOnOthers,
+                    SampleIsDependedOn::Unknown,
+                    SampleHasRedundancy::Unknown,
+                ),
                 PaddingBitsEntry::default(),
                 false,
                 DegradationPriorityEntry::default(),

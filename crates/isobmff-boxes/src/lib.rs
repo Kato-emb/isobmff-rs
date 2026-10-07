@@ -100,7 +100,10 @@ pub use sample_size::{
     CompactSampleSizeBox, CompactSampleSizeEntry, FieldSize, SampleSizeBox, SampleSizeEntries,
     SampleSizeEntry, SampleSizes,
 };
-pub use sdtp::{SampleDependencyTypeBox, SampleDependencyTypeEntry};
+pub use sdtp::{
+    IsLeading, SampleDependencyTypeBox, SampleDependencyTypeEntry, SampleDependsOn,
+    SampleHasRedundancy, SampleIsDependedOn,
+};
 pub use sidx::{ReferenceType, SegmentIndexBox, SegmentIndexReference};
 pub use smhd::SoundMediaHeaderBox;
 pub use srat::SamplingRateBox;
