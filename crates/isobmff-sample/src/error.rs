@@ -223,7 +223,7 @@ pub enum Error {
     #[non_exhaustive]
     HeldExtentLimitExceeded {
         /// Count of extents the reader would hold with it
-        needed_extents: u64,
+        held_extents: u64,
         /// Most extents the reader holds
         limit_extents: u64,
     },
@@ -234,7 +234,7 @@ pub enum Error {
     #[non_exhaustive]
     HeldBytesLimitExceeded {
         /// Length the reader would hold with the sample
-        needed_bytes: u64,
+        held_bytes: u64,
         /// Most bytes the reader holds
         limit_bytes: u64,
     },
@@ -262,8 +262,8 @@ pub enum Error {
     SampleSizeOutOfRange {
         /// Track the sample belongs to
         track_id: u32,
-        /// Length the sample carries
-        declared_bytes: u64,
+        /// Length the sample states
+        stated_bytes: u64,
     },
     /// Sample lies further into its fragment than the signed 32 bits of a `trun` offset reach
     ///
@@ -482,18 +482,18 @@ impl fmt::Display for Error {
                 "boxes declare {declared_samples} samples, past the {limit_samples}-sample limit"
             ),
             Self::HeldExtentLimitExceeded {
-                needed_extents,
+                held_extents,
                 limit_extents,
             } => write!(
                 formatter,
-                "reader would hold {needed_extents} extents, past the {limit_extents}-extent limit"
+                "reader would hold {held_extents} extents, past the {limit_extents}-extent limit"
             ),
             Self::HeldBytesLimitExceeded {
-                needed_bytes,
+                held_bytes,
                 limit_bytes,
             } => write!(
                 formatter,
-                "reader would hold {needed_bytes} bytes, past the {limit_bytes}-byte limit"
+                "reader would hold {held_bytes} bytes, past the {limit_bytes}-byte limit"
             ),
             Self::UnfinishedSample {
                 track_id,
@@ -512,10 +512,10 @@ impl fmt::Display for Error {
             Self::FragmentStillOpen => formatter.write_str("fragment is still open"),
             Self::SampleSizeOutOfRange {
                 track_id,
-                declared_bytes,
+                stated_bytes,
             } => write!(
                 formatter,
-                "track {track_id} states a sample of {declared_bytes} bytes, past the {} a trun row or an stsz entry carries",
+                "track {track_id} states a sample of {stated_bytes} bytes, past the {} a trun row or an stsz entry carries",
                 u32::MAX
             ),
             Self::DataOffsetOutOfRange {
@@ -613,7 +613,7 @@ mod tests {
 
     use isobmff_core::{BoxType, Category};
 
-    use crate::error::Error;
+    use super::Error;
 
     #[test]
     fn a_failure_falls_in_the_category_its_situation_asks_for() {
@@ -652,7 +652,7 @@ mod tests {
         );
         assert_eq!(
             Error::HeldExtentLimitExceeded {
-                needed_extents: 17,
+                held_extents: 17,
                 limit_extents: 16,
             }
             .category(),
@@ -660,7 +660,7 @@ mod tests {
         );
         assert_eq!(
             Error::HeldBytesLimitExceeded {
-                needed_bytes: 32,
+                held_bytes: 32,
                 limit_bytes: 16,
             }
             .category(),
@@ -707,7 +707,7 @@ mod tests {
         assert_eq!(
             Error::SampleSizeOutOfRange {
                 track_id: 1,
-                declared_bytes: 1 << 40,
+                stated_bytes: 1 << 40,
             }
             .category(),
             Category::Unsupported
@@ -821,7 +821,7 @@ mod tests {
         );
         assert_eq!(
             Error::HeldExtentLimitExceeded {
-                needed_extents: 17,
+                held_extents: 17,
                 limit_extents: 16,
             }
             .to_string(),
@@ -829,7 +829,7 @@ mod tests {
         );
         assert_eq!(
             Error::HeldBytesLimitExceeded {
-                needed_bytes: 32,
+                held_bytes: 32,
                 limit_bytes: 16,
             }
             .to_string(),
@@ -859,7 +859,7 @@ mod tests {
         assert_eq!(
             Error::SampleSizeOutOfRange {
                 track_id: 1,
-                declared_bytes: 1 << 40,
+                stated_bytes: 1 << 40,
             }
             .to_string(),
             "track 1 states a sample of 1099511627776 bytes, past the 4294967295 a trun row or an stsz entry carries"

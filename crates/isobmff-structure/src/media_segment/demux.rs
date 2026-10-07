@@ -508,7 +508,7 @@ mod tests {
                 .map_err(Error::kind),
             Err(ErrorKind::Sample(
                 isobmff_sample::Error::HeldExtentLimitExceeded {
-                    needed_extents: 1,
+                    held_extents: 1,
                     limit_extents: 0,
                     ..
                 }

@@ -44,7 +44,7 @@ impl OpenTrack {
         let Ok(sample_size) = u32::try_from(offered) else {
             return Err(Error::SampleSizeOutOfRange {
                 track_id,
-                declared_bytes: offered,
+                stated_bytes: offered,
             });
         };
         if sample.decode_time() != self.reached {

@@ -162,19 +162,18 @@ mod tests {
             ))]),
         );
 
+        let refused = Error::ExternalDataReference {
+            track_id: 1,
+            data_reference_index: 1,
+        };
+
         assert_eq!(
             SampleDescriptions::new(&by_url).data_reference_index(1),
-            Err(Error::ExternalDataReference {
-                track_id: 1,
-                data_reference_index: 1
-            })
+            Err(refused)
         );
         assert_eq!(
             SampleDescriptions::new(&by_urn).data_reference_index(1),
-            Err(Error::ExternalDataReference {
-                track_id: 1,
-                data_reference_index: 1
-            })
+            Err(refused)
         );
     }
 

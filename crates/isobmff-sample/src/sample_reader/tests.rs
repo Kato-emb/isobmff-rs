@@ -396,6 +396,10 @@ fn an_extent_naming_more_bytes_than_the_limit_is_refused() {
 fn an_extent_held_past_the_extents_the_reader_holds_is_refused() {
     let at_most_two = SampleReader::with_limits(SampleReaderLimits::new().with_held_extents(2));
 
+    let refused = Error::HeldExtentLimitExceeded {
+        held_extents: 3,
+        limit_extents: 2,
+    };
     let mut one_at_a_time = at_most_two.clone();
     one_at_a_time
         .handle_sample_extent(extent(0, 100..104))
@@ -405,10 +409,7 @@ fn an_extent_held_past_the_extents_the_reader_holds_is_refused() {
         .unwrap();
     assert_eq!(
         one_at_a_time.handle_sample_extent(extent(2_048, 108..112)),
-        Err(Error::HeldExtentLimitExceeded {
-            needed_extents: 3,
-            limit_extents: 2
-        })
+        Err(refused)
     );
 
     let mut together = at_most_two;
@@ -418,10 +419,7 @@ fn an_extent_held_past_the_extents_the_reader_holds_is_refused() {
             Ok(extent(1_024, 104..108)),
             Ok(extent(2_048, 108..112)),
         ]),
-        Err(Error::HeldExtentLimitExceeded {
-            needed_extents: 3,
-            limit_extents: 2
-        })
+        Err(refused)
     );
     assert_eq!(together.wanted_extent(), Some(100..104));
 }
@@ -440,7 +438,7 @@ fn extents_held_across_calls_count_until_their_samples_are_handed_over() {
     assert_eq!(
         reader.handle_sample_extents([Ok(extent(3_072, 204..208))]),
         Err(Error::HeldExtentLimitExceeded {
-            needed_extents: 3,
+            held_extents: 3,
             limit_extents: 2
         })
     );
@@ -457,7 +455,7 @@ fn extents_naming_the_same_bytes_are_refused_past_the_bytes_the_reader_holds() {
     assert_eq!(
         reader.handle_data(0, &[0xab; 512]),
         Err(Error::HeldBytesLimitExceeded {
-            needed_bytes: 1_536,
+            held_bytes: 1_536,
             limit_bytes: 1_024
         })
     );
@@ -486,7 +484,7 @@ fn input_handed_over_without_taking_the_samples_is_refused_past_the_bytes_the_re
     assert_eq!(
         not_taking.handle_data(8, b"IJKL"),
         Err(Error::HeldBytesLimitExceeded {
-            needed_bytes: 12,
+            held_bytes: 12,
             limit_bytes: 8
         })
     );
@@ -505,7 +503,7 @@ fn extents_out_of_the_order_of_their_bytes_are_refused_past_the_bytes_the_reader
     assert_eq!(
         reader.handle_data(100, b"ABCDEFGHIJKL"),
         Err(Error::HeldBytesLimitExceeded {
-            needed_bytes: 12,
+            held_bytes: 12,
             limit_bytes: 8
         })
     );

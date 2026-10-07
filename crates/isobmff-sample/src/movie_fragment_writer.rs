@@ -538,40 +538,23 @@ mod tests {
 
         writer.begin_fragment(1).unwrap();
         writer.handle_sample(sample(1, 0, b"AAAA")).unwrap();
-        writer.handle_sample(sample(1, 512, b"BBBB")).unwrap_err();
+        let failure = writer.handle_sample(sample(1, 512, b"BBBB")).unwrap_err();
 
         assert_eq!(
+            failure,
+            Error::DecodeTimeMismatch {
+                track_id: 1,
+                stated_decode_time: 512,
+                reached_decode_time: 1_024
+            }
+        );
+        assert_eq!(
             writer.handle_sample(sample(1, 1_024, b"CCCC")),
-            Err(Error::DecodeTimeMismatch {
-                track_id: 1,
-                stated_decode_time: 512,
-                reached_decode_time: 1_024
-            })
+            Err(failure)
         );
-        assert_eq!(
-            writer.finish_fragment(),
-            Err(Error::DecodeTimeMismatch {
-                track_id: 1,
-                stated_decode_time: 512,
-                reached_decode_time: 1_024
-            })
-        );
-        assert_eq!(
-            writer.begin_fragment(2),
-            Err(Error::DecodeTimeMismatch {
-                track_id: 1,
-                stated_decode_time: 512,
-                reached_decode_time: 1_024
-            })
-        );
-        assert_eq!(
-            writer.finish(),
-            Err(Error::DecodeTimeMismatch {
-                track_id: 1,
-                stated_decode_time: 512,
-                reached_decode_time: 1_024
-            })
-        );
+        assert_eq!(writer.finish_fragment(), Err(failure));
+        assert_eq!(writer.begin_fragment(2), Err(failure));
+        assert_eq!(writer.finish(), Err(failure));
     }
 
     #[test]

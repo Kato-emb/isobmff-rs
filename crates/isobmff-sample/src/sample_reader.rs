@@ -268,7 +268,7 @@ impl SampleReader {
             return match refused {
                 Ok(()) => Ok(()),
                 Err(needed) => Err(self.fail(Error::HeldBytesLimitExceeded {
-                    needed_bytes: needed,
+                    held_bytes: needed,
                     limit_bytes: limit,
                 })),
             };
@@ -313,7 +313,7 @@ impl SampleReader {
         match refused {
             None => Ok(()),
             Some(needed) => Err(self.fail(Error::HeldBytesLimitExceeded {
-                needed_bytes: needed,
+                held_bytes: needed,
                 limit_bytes: limit,
             })),
         }
@@ -400,7 +400,7 @@ impl SampleReader {
         }
         if self.held_extents >= self.limits.held_extents() {
             return Err(self.fail(Error::HeldExtentLimitExceeded {
-                needed_extents: self.held_extents.saturating_add(1),
+                held_extents: self.held_extents.saturating_add(1),
                 limit_extents: self.limits.held_extents(),
             }));
         }

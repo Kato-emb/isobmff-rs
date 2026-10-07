@@ -142,7 +142,7 @@ fn the_sample_reader_is_held_to_the_limits_it_is_given() {
             .map_err(Error::kind),
         Err(ErrorKind::Sample(
             isobmff_sample::Error::HeldExtentLimitExceeded {
-                needed_extents: 1,
+                held_extents: 1,
                 limit_extents: 0,
                 ..
             }

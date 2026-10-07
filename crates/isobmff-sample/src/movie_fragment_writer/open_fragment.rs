@@ -135,7 +135,7 @@ impl OpenFragment {
         let Ok(sample_size) = u32::try_from(offered) else {
             return Err(Error::SampleSizeOutOfRange {
                 track_id,
-                declared_bytes: offered,
+                stated_bytes: offered,
             });
         };
         let offset = sample.sample_composition_time_offset();

@@ -458,40 +458,22 @@ fn an_optional_table_counting_other_than_the_samples_of_its_track_is_refused() {
 #[test]
 fn a_sync_sample_listed_out_of_order_or_past_the_samples_is_refused() {
     let listings = [
-        (
-            stss(&[2, 2]),
-            Error::SyncSampleOutOfRange {
-                track_id: 1,
-                sample_number: 2,
-            },
-        ),
-        (
-            stss(&[3, 1]),
-            Error::SyncSampleOutOfRange {
-                track_id: 1,
-                sample_number: 1,
-            },
-        ),
-        (
-            stss(&[0]),
-            Error::SyncSampleOutOfRange {
-                track_id: 1,
-                sample_number: 0,
-            },
-        ),
-        (
-            stss(&[1, 4]),
-            Error::SyncSampleOutOfRange {
-                track_id: 1,
-                sample_number: 4,
-            },
-        ),
+        (stss(&[2, 2]), 2),
+        (stss(&[3, 1]), 1),
+        (stss(&[0]), 0),
+        (stss(&[1, 4]), 4),
     ];
 
-    for (listing, refused) in listings {
+    for (listing, sample_number) in listings {
         let trak = three_samples_stating(|stbl| stbl.with_stss(listing));
 
-        assert_eq!(resolved(&movie(vec![trak])), Err(refused));
+        assert_eq!(
+            resolved(&movie(vec![trak])),
+            Err(Error::SyncSampleOutOfRange {
+                track_id: 1,
+                sample_number,
+            })
+        );
     }
 }
 
