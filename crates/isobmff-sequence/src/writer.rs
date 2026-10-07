@@ -35,30 +35,30 @@ use crate::event::{BoxEvent, EventBytes};
 ///   `Vec`.
 /// * A payload is carried by as many [`Payload`](BoxEvent::Payload) events as
 ///   the caller cares to send, and must measure what the box declares:
-///   offering more is [`PayloadPastDeclared`](crate::ErrorKind::PayloadPastDeclared)
-///   and closing early is [`UnfinishedBox`](crate::ErrorKind::UnfinishedBox). The
+///   offering more is [`PayloadPastDeclared`](crate::Error::PayloadPastDeclared)
+///   and closing early is [`UnfinishedBox`](crate::Error::UnfinishedBox). The
 ///   writer does not correct the header it was handed to match what arrived.
 /// * A box declaring no total —
 ///   [`ToEndOfFile`](isobmff_core::BoxSize::ToEndOfFile) — takes payload of any
 ///   length and is closed by [`End`](BoxEvent::End) like any other. Nothing
 ///   may follow it: it runs to the end of the file by definition, so an event
-///   after it is [`PastEndOfFile`](crate::ErrorKind::PastEndOfFile).
+///   after it is [`PastEndOfFile`](crate::Error::PastEndOfFile).
 /// * A [`BoxEvent`] carries no position, so the extents
 ///   [`BoxReader`](crate::BoxReader) reported are not this writer's input: boxes
 ///   may be dropped from an event stream or added to it, and where the events
 ///   land is the writer's own count, which
 ///   [`handle_event`](Self::handle_event) returns for the event it took.
 /// * An `Err` leaves the writer failed for good,
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside: every later
+///   [`AlreadyFinished`](crate::Error::AlreadyFinished) aside: every later
 ///   [`handle_event`](Self::handle_event) and [`finish`](Self::finish) reports
 ///   that same failure again. The bytes made before it are still there to take,
 ///   and no further byte is ever made.
 /// * [`finish`](Self::finish) declares the file over. Bytes are still taken after
 ///   it, but an event handed over then, or a second [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished). A file being over is
+///   [`AlreadyFinished`](crate::Error::AlreadyFinished). A file being over is
 ///   not a failure, so that is what every later call reports as well.
 /// * [`finish`](Self::finish) reports
-///   [`UnfinishedBox`](crate::ErrorKind::UnfinishedBox) for a box whose declared
+///   [`UnfinishedBox`](crate::Error::UnfinishedBox) for a box whose declared
 ///   total was not reached. A box that declares no total, and one whose payload
 ///   is all there but was not closed, end the file where it stands — the bytes
 ///   written already form the whole box.
@@ -140,17 +140,17 @@ impl BoxWriter {
     ///
     /// # Errors
     ///
-    /// * [`NoBoxOpen`](crate::ErrorKind::NoBoxOpen): a payload or an end came
+    /// * [`NoBoxOpen`](crate::Error::NoBoxOpen): a payload or an end came
     ///   while no box was open.
-    /// * [`BoxStillOpen`](crate::ErrorKind::BoxStillOpen): a box started while the
+    /// * [`BoxStillOpen`](crate::Error::BoxStillOpen): a box started while the
     ///   box before it was still open.
-    /// * [`PayloadPastDeclared`](crate::ErrorKind::PayloadPastDeclared): more
+    /// * [`PayloadPastDeclared`](crate::Error::PayloadPastDeclared): more
     ///   payload was offered for a box than it declares.
-    /// * [`UnfinishedBox`](crate::ErrorKind::UnfinishedBox): a box was closed
+    /// * [`UnfinishedBox`](crate::Error::UnfinishedBox): a box was closed
     ///   before its declared total was reached.
-    /// * [`PastEndOfFile`](crate::ErrorKind::PastEndOfFile): an event came after
+    /// * [`PastEndOfFile`](crate::Error::PastEndOfFile): an event came after
     ///   the box running to the end of the file was closed.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the file was
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the file was
     ///   declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
@@ -158,14 +158,18 @@ impl BoxWriter {
         let began_at = self.position;
         let length = match (self.state, event) {
             (State::Failed(failure), _) => return Err(failure),
-            (State::Finished, _) => return Err(Error::already_finished()),
-            (State::EndOfFile, _) => return Err(self.fail(Error::past_end_of_file())),
+            (State::Finished, _) => return Err(Error::AlreadyFinished),
+            (State::EndOfFile, _) => return Err(self.fail(Error::PastEndOfFile)),
             (
                 State::Payload { header, .. } | State::PayloadToEndOfFile { header },
                 BoxEvent::Header(_),
-            ) => return Err(self.fail(Error::box_still_open(header.box_type()))),
+            ) => {
+                return Err(self.fail(Error::BoxStillOpen {
+                    box_type: header.box_type(),
+                }));
+            }
             (State::Between, BoxEvent::Payload(_) | BoxEvent::End) => {
-                return Err(self.fail(Error::no_box_open()));
+                return Err(self.fail(Error::NoBoxOpen));
             }
             (State::Between, BoxEvent::Header(header)) => {
                 let header_len = header.encoded_len() as u64;
@@ -194,11 +198,11 @@ impl BoxWriter {
                 let offered = written.saturating_add(length);
 
                 if offered > declared {
-                    return Err(self.fail(Error::payload_past_declared(
-                        header.box_type(),
-                        declared,
-                        offered,
-                    )));
+                    return Err(self.fail(Error::PayloadPastDeclared {
+                        box_type: header.box_type(),
+                        declared_bytes: declared,
+                        offered_bytes: offered,
+                    }));
                 }
                 self.output.push_back(EventBytes::payload(payload));
                 self.state = State::Payload {
@@ -259,16 +263,16 @@ impl BoxWriter {
     ///
     /// # Errors
     ///
-    /// * [`UnfinishedBox`](crate::ErrorKind::UnfinishedBox): a box whose declared
+    /// * [`UnfinishedBox`](crate::Error::UnfinishedBox): a box whose declared
     ///   total was not reached is still open.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the file was
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the file was
     ///   already declared over.
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), Error> {
         match self.state {
             State::Failed(failure) => Err(failure),
-            State::Finished => Err(Error::already_finished()),
+            State::Finished => Err(Error::AlreadyFinished),
             State::Payload {
                 header,
                 declared,
@@ -303,10 +307,10 @@ impl Default for BoxWriter {
 fn unfinished(header: BoxHeader, declared: u64, written: u64) -> Error {
     let header_len = header.encoded_len() as u64;
 
-    Error::unfinished_box(
-        header_len.saturating_add(declared),
-        header_len.saturating_add(written),
-    )
+    Error::UnfinishedBox {
+        needed_bytes: header_len.saturating_add(declared),
+        available_bytes: header_len.saturating_add(written),
+    }
 }
 
 /// Where the writer stands between calls
@@ -431,11 +435,11 @@ mod tests {
 
         assert_eq!(
             writer.handle_event(BoxEvent::Payload(vec![0x11; 5])),
-            Err(Error::payload_past_declared(
-                BoxType::compact(*b"mdat"),
-                4,
-                5
-            ))
+            Err(Error::PayloadPastDeclared {
+                box_type: BoxType::compact(*b"mdat"),
+                declared_bytes: 4,
+                offered_bytes: 5,
+            })
         );
     }
 
@@ -452,7 +456,10 @@ mod tests {
 
         assert_eq!(
             writer.handle_event(BoxEvent::End),
-            Err(Error::unfinished_box(12, 10))
+            Err(Error::UnfinishedBox {
+                needed_bytes: 12,
+                available_bytes: 10,
+            })
         );
     }
 
@@ -462,7 +469,7 @@ mod tests {
 
         assert_eq!(
             writer.handle_event(BoxEvent::Payload(Vec::from(*b"PAYL"))),
-            Err(Error::no_box_open())
+            Err(Error::NoBoxOpen)
         );
     }
 
@@ -470,10 +477,7 @@ mod tests {
     fn an_end_with_no_box_open_is_rejected() {
         let mut writer = BoxWriter::new();
 
-        assert_eq!(
-            writer.handle_event(BoxEvent::End),
-            Err(Error::no_box_open())
-        );
+        assert_eq!(writer.handle_event(BoxEvent::End), Err(Error::NoBoxOpen));
     }
 
     #[test]
@@ -486,7 +490,9 @@ mod tests {
 
         assert_eq!(
             writer.handle_event(BoxEvent::Header(compact_header(*b"free", 8))),
-            Err(Error::box_still_open(BoxType::compact(*b"mdat")))
+            Err(Error::BoxStillOpen {
+                box_type: BoxType::compact(*b"mdat"),
+            })
         );
     }
 
@@ -504,7 +510,7 @@ mod tests {
 
         assert_eq!(
             writer.handle_event(BoxEvent::Header(compact_header(*b"free", 8))),
-            Err(Error::past_end_of_file())
+            Err(Error::PastEndOfFile)
         );
     }
 
@@ -549,13 +555,19 @@ mod tests {
             .handle_event(BoxEvent::Payload(Vec::from(*b"PA")))
             .unwrap();
 
-        assert_eq!(writer.finish(), Err(Error::unfinished_box(12, 10)));
+        assert_eq!(
+            writer.finish(),
+            Err(Error::UnfinishedBox {
+                needed_bytes: 12,
+                available_bytes: 10,
+            })
+        );
     }
 
     #[test]
     fn a_failed_writer_reports_the_same_failure_for_every_call_after_it() {
         let mut writer = BoxWriter::new();
-        let failure = Error::no_box_open();
+        let failure = Error::NoBoxOpen;
 
         assert_eq!(writer.handle_event(BoxEvent::End), Err(failure));
         assert_eq!(
@@ -568,7 +580,10 @@ mod tests {
     #[test]
     fn a_writer_that_failed_while_finishing_reports_that_failure_again() {
         let mut writer = BoxWriter::new();
-        let failure = Error::unfinished_box(12, 8);
+        let failure = Error::UnfinishedBox {
+            needed_bytes: 12,
+            available_bytes: 8,
+        };
 
         writer
             .handle_event(BoxEvent::Header(compact_header(*b"mdat", 12)))
@@ -655,7 +670,7 @@ mod tests {
 
         assert_eq!(
             writer.handle_event(BoxEvent::Header(compact_header(*b"free", 8))),
-            Err(Error::already_finished())
+            Err(Error::AlreadyFinished)
         );
     }
 
@@ -665,6 +680,6 @@ mod tests {
 
         writer.finish().unwrap();
 
-        assert_eq!(writer.finish(), Err(Error::already_finished()));
+        assert_eq!(writer.finish(), Err(Error::AlreadyFinished));
     }
 }
