@@ -8,16 +8,16 @@
 /// * [`sample_size`](Self::sample_size): the most bytes one extent may
 ///   name, all of which the reader gathers before it reports the sample.
 ///   Past it the extent is
-///   [`SampleSizeLimitExceeded`](crate::ErrorKind::SampleSizeLimitExceeded).
+///   [`SampleSizeLimitExceeded`](crate::Error::SampleSizeLimitExceeded).
 /// * [`held_extents`](Self::held_extents): the most extents held at once,
 ///   an extent counting until its sample is handed over. Past it the extent
-///   is [`HeldExtentLimitExceeded`](crate::ErrorKind::HeldExtentLimitExceeded).
+///   is [`HeldExtentLimitExceeded`](crate::Error::HeldExtentLimitExceeded).
 /// * [`held_bytes`](Self::held_bytes): the most bytes of samples held at
 ///   once. A sample counts the bytes its extent names from the input that
 ///   brings its first byte until
 ///   [`poll_sample`](crate::SampleReader::poll_sample) takes it. Past it
 ///   the input is
-///   [`HeldBytesLimitExceeded`](crate::ErrorKind::HeldBytesLimitExceeded).
+///   [`HeldBytesLimitExceeded`](crate::Error::HeldBytesLimitExceeded).
 ///
 /// No relation between them is checked: whichever is reached first refuses.
 ///

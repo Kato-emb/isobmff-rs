@@ -62,32 +62,32 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///
 /// Returned outright, before `decode_times` moves:
 ///
-/// * [`SampleCountLimitExceeded`](crate::ErrorKind::SampleCountLimitExceeded):
+/// * [`SampleCountLimitExceeded`](crate::Error::SampleCountLimitExceeded):
 ///   the `trun`s of every track fragment together count more samples than
 ///   `sample_count_limit`.
-/// * [`MissingMovieExtends`](crate::ErrorKind::MissingMovieExtends): a
+/// * [`MissingMovieExtends`](crate::Error::MissingMovieExtends): a
 ///   `traf` continues a movie that carries no `mvex`, and so no fragments.
-/// * [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId): a `traf`
+/// * [`UnknownTrackId`](crate::Error::UnknownTrackId): a `traf`
 ///   carries samples of a track no read `trak` declares and the movie keeps no
 ///   `trak` unread, or of a track the movie reads but declares no `trex` for.
-/// * [`UnknownSampleDescriptionIndex`](crate::ErrorKind::UnknownSampleDescriptionIndex):
+/// * [`UnknownSampleDescriptionIndex`](crate::Error::UnknownSampleDescriptionIndex):
 ///   a `traf` describes its samples by an `stsd` entry its track has none of.
 /// * The failures of [`SampleEntry::try_from`](isobmff_boxes::SampleEntry),
-///   carried on [`Box`](crate::ErrorKind::Box): the `stsd` entry does
+///   carried on [`Box`](crate::Error::Box): the `stsd` entry does
 ///   not read as a sample entry, with `stsd` added to the containers.
-/// * [`UnknownDataReferenceIndex`](crate::ErrorKind::UnknownDataReferenceIndex):
+/// * [`UnknownDataReferenceIndex`](crate::Error::UnknownDataReferenceIndex):
 ///   the `stsd` entry names a `dref` entry its track has none of.
-/// * [`ExternalDataReference`](crate::ErrorKind::ExternalDataReference):
+/// * [`ExternalDataReference`](crate::Error::ExternalDataReference):
 ///   the `dref` entry names a resource other than the file itself.
-/// * [`MissingDecodeTime`](crate::ErrorKind::MissingDecodeTime): a `traf`
+/// * [`MissingDecodeTime`](crate::Error::MissingDecodeTime): a `traf`
 ///   carries no `tfdt`, and `decode_times` does not know where its track
 ///   stands.
-/// * [`DecodeTimeOverflow`](crate::ErrorKind::DecodeTimeOverflow): the
+/// * [`DecodeTimeOverflow`](crate::Error::DecodeTimeOverflow): the
 ///   decode times of a track run past what 64 bits carry.
 ///
 /// Returned as the last of the extents:
 ///
-/// * [`DataOffsetOverflow`](crate::ErrorKind::DataOffsetOverflow): the
+/// * [`DataOffsetOverflow`](crate::Error::DataOffsetOverflow): the
 ///   offsets a `traf` of a track the movie reads states run past what 64 bits
 ///   carry.
 ///
@@ -98,10 +98,10 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// end is unknown where, in a run with no run after it stating a
 /// `data_offset`:
 ///
-/// * [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId): a row states no
+/// * [`UnknownTrackId`](crate::Error::UnknownTrackId): a row states no
 ///   size, and neither the `tfhd` of the `traf` nor the `trex` of its track
 ///   states one.
-/// * [`DataOffsetOverflow`](crate::ErrorKind::DataOffsetOverflow): the offsets
+/// * [`DataOffsetOverflow`](crate::Error::DataOffsetOverflow): the offsets
 ///   run past what 64 bits carry.
 pub fn sample_extents(
     movie_fragment: &MovieFragmentBox,
@@ -345,9 +345,9 @@ fn resolve_data(
 ///
 /// # Errors
 ///
-/// * [`DataOffsetOverflow`](crate::ErrorKind::DataOffsetOverflow): the
+/// * [`DataOffsetOverflow`](crate::Error::DataOffsetOverflow): the
 ///   offsets run past what 64 bits carry.
-/// * [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId): a row states no
+/// * [`UnknownTrackId`](crate::Error::UnknownTrackId): a row states no
 ///   size and `sample_size` is `None`.
 fn place_run(
     trun: &TrackRunBox,

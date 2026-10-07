@@ -57,46 +57,46 @@ use crate::sample_table_writer::open_track::OpenTrack;
 /// # Contract
 ///
 /// * A sample belongs to a track the movie declares by a `trak`, which is
-///   otherwise [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId), and is
+///   otherwise [`UnknownTrackId`](crate::Error::UnknownTrackId), and is
 ///   described by an `stsd` entry of that track whose data reference is the
 ///   file itself, as a reader of the tables resolves it (§8.5.2, §8.7.2).
 ///   The first sample of a chunk is checked, and the samples after it are
 ///   held to its track and entry: the failures of the entry are those of the
 ///   reader —
-///   [`UnknownSampleDescriptionIndex`](crate::ErrorKind::UnknownSampleDescriptionIndex),
-///   [`UnknownDataReferenceIndex`](crate::ErrorKind::UnknownDataReferenceIndex),
-///   [`ExternalDataReference`](crate::ErrorKind::ExternalDataReference), or
+///   [`UnknownSampleDescriptionIndex`](crate::Error::UnknownSampleDescriptionIndex),
+///   [`UnknownDataReferenceIndex`](crate::Error::UnknownDataReferenceIndex),
+///   [`ExternalDataReference`](crate::Error::ExternalDataReference), or
 ///   the failure of an entry that does not read as a sample entry, carried
-///   on [`Box`](crate::ErrorKind::Box).
+///   on [`Box`](crate::Error::Box).
 /// * Handing a sample over while no chunk is open is
-///   [`NoChunkOpen`](crate::ErrorKind::NoChunkOpen), and one of another
+///   [`NoChunkOpen`](crate::Error::NoChunkOpen), and one of another
 ///   track than the chunk holds is
-///   [`TrackIdMismatch`](crate::ErrorKind::TrackIdMismatch). A chunk no
+///   [`TrackIdMismatch`](crate::Error::TrackIdMismatch). A chunk no
 ///   sample was handed over to is not recorded.
 /// * The decode timeline of a track starts at zero and states how long each
 ///   sample lasts, never when it is decoded, so a sample of a track has to
 ///   start where the one before it ends — the first at zero — which is
 ///   otherwise
-///   [`DecodeTimeMismatch`](crate::ErrorKind::DecodeTimeMismatch).
+///   [`DecodeTimeMismatch`](crate::Error::DecodeTimeMismatch).
 /// * The samples of a chunk are all described by one `stsd` entry, which the
 ///   run of chunks states for them (§8.7.4): a chunk mixing two is
-///   [`SampleDescriptionIndexMismatch`](crate::ErrorKind::SampleDescriptionIndexMismatch).
+///   [`SampleDescriptionIndexMismatch`](crate::Error::SampleDescriptionIndexMismatch).
 /// * A sample stating a composition time offset outside what 32 signed bits
 ///   hold is
-///   [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange):
+///   [`CompositionTimeOffsetOutOfRange`](crate::Error::CompositionTimeOffsetOutOfRange):
 ///   one past [`i32::MAX`] is refused too, which the readers here take as
 ///   negative.
 /// * A chunk holding more samples than an `stsc` entry counts, or numbered
 ///   past what one reaches, is reported by [`finish`](Self::finish), where the
 ///   tables are built: the failure of the box, carried on
-///   [`Box`](crate::ErrorKind::Box).
+///   [`Box`](crate::Error::Box).
 /// * An `Err` leaves the writer failed for good,
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside: every
+///   [`AlreadyFinished`](crate::Error::AlreadyFinished) aside: every
 ///   later call reports that same failure again.
 /// * [`finish`](Self::finish) declares the samples over and hands back the
 ///   tables. A chunk opened or a sample handed over then, or a second
 ///   [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished).
+///   [`AlreadyFinished`](crate::Error::AlreadyFinished).
 ///
 /// # Examples
 ///
@@ -335,7 +335,7 @@ impl SampleTableWriter {
     ///
     /// # Errors
     ///
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
@@ -354,34 +354,34 @@ impl SampleTableWriter {
     ///
     /// # Errors
     ///
-    /// * [`NoChunkOpen`](crate::ErrorKind::NoChunkOpen): no chunk was
+    /// * [`NoChunkOpen`](crate::Error::NoChunkOpen): no chunk was
     ///   opened to carry it.
-    /// * [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId): the movie
+    /// * [`UnknownTrackId`](crate::Error::UnknownTrackId): the movie
     ///   declares no track the sample belongs to.
-    /// * [`UnknownSampleDescriptionIndex`](crate::ErrorKind::UnknownSampleDescriptionIndex):
+    /// * [`UnknownSampleDescriptionIndex`](crate::Error::UnknownSampleDescriptionIndex):
     ///   the track has no `stsd` entry describing the sample.
     /// * The failures of [`SampleEntry::try_from`](isobmff_boxes::SampleEntry),
-    ///   carried on [`Box`](crate::ErrorKind::Box): that entry does not read
+    ///   carried on [`Box`](crate::Error::Box): that entry does not read
     ///   as a sample entry, with `stsd` added to the containers.
-    /// * [`UnknownDataReferenceIndex`](crate::ErrorKind::UnknownDataReferenceIndex):
+    /// * [`UnknownDataReferenceIndex`](crate::Error::UnknownDataReferenceIndex):
     ///   that entry names a `dref` entry the track has none of.
-    /// * [`ExternalDataReference`](crate::ErrorKind::ExternalDataReference):
+    /// * [`ExternalDataReference`](crate::Error::ExternalDataReference):
     ///   the `dref` entry names a resource other than the file itself.
-    /// * [`TrackIdMismatch`](crate::ErrorKind::TrackIdMismatch): the
+    /// * [`TrackIdMismatch`](crate::Error::TrackIdMismatch): the
     ///   sample belongs to another track than the chunk holds.
-    /// * [`SampleDescriptionIndexMismatch`](crate::ErrorKind::SampleDescriptionIndexMismatch):
+    /// * [`SampleDescriptionIndexMismatch`](crate::Error::SampleDescriptionIndexMismatch):
     ///   the sample is described by another `stsd` entry than the chunk holds.
-    /// * [`DecodeTimeMismatch`](crate::ErrorKind::DecodeTimeMismatch):
+    /// * [`DecodeTimeMismatch`](crate::Error::DecodeTimeMismatch):
     ///   the sample does not start where the one before it in its track ends.
-    /// * [`DecodeTimeOverflow`](crate::ErrorKind::DecodeTimeOverflow):
+    /// * [`DecodeTimeOverflow`](crate::Error::DecodeTimeOverflow):
     ///   the decode times of its track run past what 64 bits carry.
-    /// * [`SampleSizeOutOfRange`](crate::ErrorKind::SampleSizeOutOfRange):
+    /// * [`SampleSizeOutOfRange`](crate::Error::SampleSizeOutOfRange):
     ///   the sample is longer than the 32 bits an `stsz` entry states its
     ///   length in.
-    /// * [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange):
+    /// * [`CompositionTimeOffsetOutOfRange`](crate::Error::CompositionTimeOffsetOutOfRange):
     ///   the sample states a composition time offset outside what 32 signed
     ///   bits hold.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
@@ -402,9 +402,9 @@ impl SampleTableWriter {
     /// # Errors
     ///
     /// * [`OutOfRange`](isobmff_core::ErrorKind::OutOfRange), carried on
-    ///   [`Box`](crate::ErrorKind::Box): a chunk holds more samples than
+    ///   [`Box`](crate::Error::Box): a chunk holds more samples than
     ///   an `stsc` entry counts, or is numbered past what one reaches.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   samples were already declared over.
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.

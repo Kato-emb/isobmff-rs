@@ -63,7 +63,7 @@ mod sample_table_writer;
 pub mod segment_index;
 mod track_decode_times;
 
-pub use error::{Error, ErrorKind};
+pub use error::Error;
 pub use movie_fragment_writer::MovieFragmentWriter;
 pub use sample::{Sample, SampleExtent};
 pub use sample_reader::{SampleReader, SampleReaderLimits};

@@ -459,14 +459,14 @@ mod tests {
     fn a_movie_continued_in_no_fragments_is_rejected_before_anything_is_laid_down() {
         let mut mux_fsm = FragmentedMuxFsm::new();
 
-        assert_eq!(
+        assert!(matches!(
             mux_fsm
                 .handle_movie(unfragmented_movie())
                 .map_err(Error::kind),
             Err(ErrorKind::Sample(
-                isobmff_sample::ErrorKind::MissingMovieExtends
+                isobmff_sample::Error::MissingMovieExtends { .. }
             ))
-        );
+        ));
         assert_eq!(mux_fsm.poll_output(), None);
     }
 
@@ -480,7 +480,7 @@ mod tests {
             mux_fsm.handle_sample(sample).map_err(Error::kind)
         };
 
-        assert_eq!(
+        assert!(matches!(
             refused(Sample::new(
                 999,
                 0,
@@ -490,9 +490,12 @@ mod tests {
                 1,
                 b"SAMP".to_vec()
             )),
-            Err(ErrorKind::Sample(isobmff_sample::ErrorKind::UnknownTrackId))
-        );
-        assert_eq!(
+            Err(ErrorKind::Sample(isobmff_sample::Error::UnknownTrackId {
+                track_id: 999,
+                ..
+            }))
+        ));
+        assert!(matches!(
             refused(Sample::new(
                 1,
                 0,
@@ -503,9 +506,13 @@ mod tests {
                 b"SAMP".to_vec()
             )),
             Err(ErrorKind::Sample(
-                isobmff_sample::ErrorKind::UnknownSampleDescriptionIndex
+                isobmff_sample::Error::UnknownSampleDescriptionIndex {
+                    track_id: 1,
+                    sample_description_index: 2,
+                    ..
+                }
             ))
-        );
+        ));
     }
 
     #[test]
@@ -514,10 +521,12 @@ mod tests {
 
         mux_fsm.handle_movie(movie()).unwrap();
 
-        assert_eq!(
+        assert!(matches!(
             mux_fsm.handle_sample(sample()).map_err(Error::kind),
-            Err(ErrorKind::Sample(isobmff_sample::ErrorKind::NoFragmentOpen))
-        );
+            Err(ErrorKind::Sample(
+                isobmff_sample::Error::NoFragmentOpen { .. }
+            ))
+        ));
     }
 
     #[test]

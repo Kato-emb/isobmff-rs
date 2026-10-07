@@ -36,7 +36,7 @@ impl TrackDecodeTimes {
     ///
     /// # Errors
     ///
-    /// * [`DecodeTimeOverflow`](crate::ErrorKind::DecodeTimeOverflow): the
+    /// * [`DecodeTimeOverflow`](crate::Error::DecodeTimeOverflow): the
     ///   deltas of a track sum past what 64 bits carry.
     pub fn new(movie: &MovieBox) -> Result<Self, Error> {
         let decode_times = movie

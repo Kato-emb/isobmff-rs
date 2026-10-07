@@ -33,7 +33,7 @@ use core::ops::Range;
 use isobmff::boxes::{
     DegradationPriorityEntry, PaddingBitsEntry, SampleDependencyTypeEntry, SampleFlags,
 };
-use isobmff::sample::{Error, ErrorKind, Sample, SampleExtent, SampleReader, SampleReaderLimits};
+use isobmff::sample::{Error, Sample, SampleExtent, SampleReader, SampleReaderLimits};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
 
@@ -252,9 +252,8 @@ fn read(sample_size_limit: u64, handed: &[Handed<'_>], together: bool) -> Readin
             );
         }
         None => {
-            assert_eq!(
-                reader.handle_data(0, &[]).map_err(Error::kind),
-                Err(ErrorKind::AlreadyFinished),
+            assert!(
+                matches!(reader.handle_data(0, &[]), Err(Error::AlreadyFinished { .. })),
                 "the reader took media data after the samples were declared over"
             );
             assert_eq!(

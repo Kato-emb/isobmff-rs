@@ -507,10 +507,10 @@ mod tests {
 
         mux_fsm.handle_movie(unfragmented_movie()).unwrap();
 
-        assert_eq!(
+        assert!(matches!(
             mux_fsm.handle_sample(sample()).map_err(Error::kind),
-            Err(ErrorKind::Sample(isobmff_sample::ErrorKind::NoChunkOpen))
-        );
+            Err(ErrorKind::Sample(isobmff_sample::Error::NoChunkOpen { .. }))
+        ));
     }
 
     #[test]
@@ -523,7 +523,7 @@ mod tests {
             mux_fsm.handle_sample(sample).map_err(Error::kind)
         };
 
-        assert_eq!(
+        assert!(matches!(
             refused(Sample::new(
                 999,
                 0,
@@ -533,9 +533,12 @@ mod tests {
                 1,
                 b"SAMP".to_vec()
             )),
-            Err(ErrorKind::Sample(isobmff_sample::ErrorKind::UnknownTrackId))
-        );
-        assert_eq!(
+            Err(ErrorKind::Sample(isobmff_sample::Error::UnknownTrackId {
+                track_id: 999,
+                ..
+            }))
+        ));
+        assert!(matches!(
             refused(Sample::new(
                 1,
                 0,
@@ -546,9 +549,13 @@ mod tests {
                 b"SAMP".to_vec()
             )),
             Err(ErrorKind::Sample(
-                isobmff_sample::ErrorKind::UnknownSampleDescriptionIndex
+                isobmff_sample::Error::UnknownSampleDescriptionIndex {
+                    track_id: 1,
+                    sample_description_index: 2,
+                    ..
+                }
             ))
-        );
+        ));
     }
 
     #[test]

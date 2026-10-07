@@ -35,15 +35,11 @@ use isobmff_core::{BoxType, Category};
 /// assert_eq!(failure.box_type(), Some(BoxType::compact(*b"moov")));
 ///
 /// // A failure of the samples is carried through whole
-/// let carried = Error::from(isobmff_sample::Error::unknown_track_id(3));
-/// assert_eq!(
-///     carried.kind(),
-///     ErrorKind::Sample(isobmff_sample::ErrorKind::UnknownTrackId)
-/// );
-/// assert_eq!(
-///     carried.sample_error().map(isobmff_sample::Error::kind),
-///     Some(isobmff_sample::ErrorKind::UnknownTrackId)
-/// );
+/// let missing = isobmff_core::Error::missing_mandatory_box(BoxType::compact(*b"trex"));
+/// let sample_error = isobmff_sample::Error::from(missing);
+/// let carried = Error::from(sample_error);
+/// assert_eq!(carried.kind(), ErrorKind::Sample(sample_error));
+/// assert_eq!(carried.sample_error(), Some(sample_error));
 /// assert_eq!(carried.box_type(), None);
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -117,7 +113,7 @@ impl Error {
     pub const fn kind(self) -> ErrorKind {
         match self.representation {
             Representation::Sequence(failure) => ErrorKind::Sequence(failure),
-            Representation::Sample(failure) => ErrorKind::Sample(failure.kind()),
+            Representation::Sample(failure) => ErrorKind::Sample(failure),
             Representation::Box(box_error) => ErrorKind::Box(box_error.kind()),
             Representation::MissingMandatoryBox { .. } => ErrorKind::MissingMandatoryBox,
             Representation::DuplicateBox { .. } => ErrorKind::DuplicateBox,
@@ -333,7 +329,7 @@ pub enum ErrorKind {
     ///
     /// The values that failure carries are on
     /// [`sample_error`](Error::sample_error).
-    Sample(isobmff_sample::ErrorKind),
+    Sample(isobmff_sample::Error),
     /// Failure of one box, carried through as `isobmff-core` names it
     ///
     /// The values that failure carries, and the boxes it was reached through,

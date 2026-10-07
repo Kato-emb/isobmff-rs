@@ -37,14 +37,14 @@ impl<'track> SampleDescriptions<'track> {
     ///
     /// # Errors
     ///
-    /// * [`UnknownSampleDescriptionIndex`](crate::ErrorKind::UnknownSampleDescriptionIndex):
+    /// * [`UnknownSampleDescriptionIndex`](crate::Error::UnknownSampleDescriptionIndex):
     ///   the track has no such `stsd` entry.
     /// * The failures of [`SampleEntry::try_from`], carried on
-    ///   [`Box`](crate::ErrorKind::Box): the entry does not read as a
+    ///   [`Box`](crate::Error::Box): the entry does not read as a
     ///   sample entry, with `stsd` added to the containers.
-    /// * [`UnknownDataReferenceIndex`](crate::ErrorKind::UnknownDataReferenceIndex):
+    /// * [`UnknownDataReferenceIndex`](crate::Error::UnknownDataReferenceIndex):
     ///   the entry names a `dref` entry the track has none of.
-    /// * [`ExternalDataReference`](crate::ErrorKind::ExternalDataReference):
+    /// * [`ExternalDataReference`](crate::Error::ExternalDataReference):
     ///   the `dref` entry names a resource other than the file itself, or is
     ///   held as [`DataEntry::Other`].
     pub(crate) fn data_reference_index(&self, sample_description_index: u32) -> Result<u16, Error> {

@@ -386,11 +386,11 @@ mod tests {
 
         input.finish_framing().unwrap();
 
-        assert_eq!(
+        assert!(matches!(
             input.finish(Ok(())).map_err(Error::kind),
             Err(crate::ErrorKind::Sample(
-                isobmff_sample::ErrorKind::UnfinishedSample
+                isobmff_sample::Error::UnfinishedSample { .. }
             ))
-        );
+        ));
     }
 }

@@ -59,9 +59,9 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// # Contract
 ///
 /// * The movie is one continued in fragments: it carries an `mvex`, which is
-///   otherwise [`MissingMovieExtends`](crate::ErrorKind::MissingMovieExtends),
+///   otherwise [`MissingMovieExtends`](crate::Error::MissingMovieExtends),
 ///   and its sample tables lay no sample out, which is otherwise
-///   [`SampleTableNotEmpty`](crate::ErrorKind::SampleTableNotEmpty) — both
+///   [`SampleTableNotEmpty`](crate::Error::SampleTableNotEmpty) — both
 ///   reported by [`new`](Self::new).
 /// * A sample belongs to a track the movie declares by a `trak` and a `trex`,
 ///   and is described by an `stsd` entry of that track whose data reference
@@ -69,30 +69,30 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///   §8.5.2, §8.7.2). The first sample of a track in a fragment is checked,
 ///   and the samples after it are held to its entry: the failures are those
 ///   of the reader —
-///   [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId),
-///   [`UnknownSampleDescriptionIndex`](crate::ErrorKind::UnknownSampleDescriptionIndex),
-///   [`UnknownDataReferenceIndex`](crate::ErrorKind::UnknownDataReferenceIndex),
-///   [`ExternalDataReference`](crate::ErrorKind::ExternalDataReference), or
+///   [`UnknownTrackId`](crate::Error::UnknownTrackId),
+///   [`UnknownSampleDescriptionIndex`](crate::Error::UnknownSampleDescriptionIndex),
+///   [`UnknownDataReferenceIndex`](crate::Error::UnknownDataReferenceIndex),
+///   [`ExternalDataReference`](crate::Error::ExternalDataReference), or
 ///   the failure of an entry that does not read as a sample entry, carried
-///   on [`Box`](crate::ErrorKind::Box).
+///   on [`Box`](crate::Error::Box).
 /// * A fragment is opened by [`begin_fragment`](Self::begin_fragment) or
 ///   [`begin_fragment_continuing`](Self::begin_fragment_continuing) and
 ///   closed by [`finish_fragment`](Self::finish_fragment). Handing a sample
 ///   over or closing a fragment while none is open is
-///   [`NoFragmentOpen`](crate::ErrorKind::NoFragmentOpen), and opening
+///   [`NoFragmentOpen`](crate::Error::NoFragmentOpen), and opening
 ///   one while one is open is
-///   [`FragmentStillOpen`](crate::ErrorKind::FragmentStillOpen).
+///   [`FragmentStillOpen`](crate::Error::FragmentStillOpen).
 /// * The `sequence_number` of a fragment is the caller's. §8.8.5 has it
 ///   increase over the fragments of a presentation, which the writer neither
 ///   checks nor reports.
 /// * Within one fragment, a sample of a track starts where the one before it
 ///   ends: a `trun` states how long a sample lasts and not when it is decoded,
 ///   so a gap is
-///   [`DecodeTimeMismatch`](crate::ErrorKind::DecodeTimeMismatch).
+///   [`DecodeTimeMismatch`](crate::Error::DecodeTimeMismatch).
 ///   Between fragments opened by [`begin_fragment`](Self::begin_fragment) a
 ///   gap is written as it stands — the `tfdt` states it —
 ///   but a track never goes back, which is
-///   [`BackwardDecodeTime`](crate::ErrorKind::BackwardDecodeTime).
+///   [`BackwardDecodeTime`](crate::Error::BackwardDecodeTime).
 /// * A fragment opened by
 ///   [`begin_fragment`](Self::begin_fragment) places a track where its first
 ///   sample states. One opened by
@@ -103,21 +103,21 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///   keeps.
 /// * The samples of one `traf` are all described by one `stsd` entry, which
 ///   the `tfhd` states for them: a fragment mixing two is
-///   [`SampleDescriptionIndexMismatch`](crate::ErrorKind::SampleDescriptionIndexMismatch).
+///   [`SampleDescriptionIndexMismatch`](crate::Error::SampleDescriptionIndexMismatch).
 /// * A sample stating a composition time offset outside what 32 signed bits
 ///   hold is
-///   [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange):
+///   [`CompositionTimeOffsetOutOfRange`](crate::Error::CompositionTimeOffsetOutOfRange):
 ///   one past [`i32::MAX`] is refused too, which the readers here take as
 ///   negative.
 /// * A fragment of no samples is written as a `moof` of no `traf` beside an
 ///   empty payload.
 /// * An `Err` leaves the writer failed for good,
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside: every
+///   [`AlreadyFinished`](crate::Error::AlreadyFinished) aside: every
 ///   later call reports that same failure again.
 /// * [`finish`](Self::finish) declares the samples over, and fails if a
 ///   fragment is still open. A fragment opened or closed, or a sample handed
 ///   over then, or a second [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished).
+///   [`AlreadyFinished`](crate::Error::AlreadyFinished).
 ///
 /// An empty `traf` stating a `tfdt` alone, which §8.8.12 allows for
 /// establishing the duration of the sample before it, is not written: a track
@@ -180,9 +180,9 @@ impl MovieFragmentWriter {
     ///
     /// # Errors
     ///
-    /// * [`MissingMovieExtends`](crate::ErrorKind::MissingMovieExtends):
+    /// * [`MissingMovieExtends`](crate::Error::MissingMovieExtends):
     ///   the movie carries no `mvex`, and so continues in no fragments.
-    /// * [`SampleTableNotEmpty`](crate::ErrorKind::SampleTableNotEmpty):
+    /// * [`SampleTableNotEmpty`](crate::Error::SampleTableNotEmpty):
     ///   the sample tables of a track lay samples out.
     pub fn new(movie: &MovieBox) -> Result<Self, Error> {
         let Some(mvex) = movie.mvex() else {
@@ -214,9 +214,9 @@ impl MovieFragmentWriter {
     ///
     /// # Errors
     ///
-    /// * [`FragmentStillOpen`](crate::ErrorKind::FragmentStillOpen): the
+    /// * [`FragmentStillOpen`](crate::Error::FragmentStillOpen): the
     ///   fragment before it was not closed.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
@@ -237,9 +237,9 @@ impl MovieFragmentWriter {
     ///
     /// # Errors
     ///
-    /// * [`FragmentStillOpen`](crate::ErrorKind::FragmentStillOpen): the
+    /// * [`FragmentStillOpen`](crate::Error::FragmentStillOpen): the
     ///   fragment before it was not closed.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
@@ -255,35 +255,35 @@ impl MovieFragmentWriter {
     ///
     /// # Errors
     ///
-    /// * [`NoFragmentOpen`](crate::ErrorKind::NoFragmentOpen): no
+    /// * [`NoFragmentOpen`](crate::Error::NoFragmentOpen): no
     ///   fragment was opened to carry it.
-    /// * [`UnknownTrackId`](crate::ErrorKind::UnknownTrackId): the movie
+    /// * [`UnknownTrackId`](crate::Error::UnknownTrackId): the movie
     ///   declares no `trak` or no `trex` for the track of the sample.
-    /// * [`UnknownSampleDescriptionIndex`](crate::ErrorKind::UnknownSampleDescriptionIndex):
+    /// * [`UnknownSampleDescriptionIndex`](crate::Error::UnknownSampleDescriptionIndex):
     ///   the track has no `stsd` entry describing the sample.
     /// * The failures of [`SampleEntry::try_from`](isobmff_boxes::SampleEntry),
-    ///   carried on [`Box`](crate::ErrorKind::Box): that entry does not read
+    ///   carried on [`Box`](crate::Error::Box): that entry does not read
     ///   as a sample entry, with `stsd` added to the containers.
-    /// * [`UnknownDataReferenceIndex`](crate::ErrorKind::UnknownDataReferenceIndex):
+    /// * [`UnknownDataReferenceIndex`](crate::Error::UnknownDataReferenceIndex):
     ///   that entry names a `dref` entry the track has none of.
-    /// * [`ExternalDataReference`](crate::ErrorKind::ExternalDataReference):
+    /// * [`ExternalDataReference`](crate::Error::ExternalDataReference):
     ///   the `dref` entry names a resource other than the file itself.
-    /// * [`DecodeTimeMismatch`](crate::ErrorKind::DecodeTimeMismatch):
+    /// * [`DecodeTimeMismatch`](crate::Error::DecodeTimeMismatch):
     ///   the sample does not start where the one before it in its track ends.
-    /// * [`BackwardDecodeTime`](crate::ErrorKind::BackwardDecodeTime):
+    /// * [`BackwardDecodeTime`](crate::Error::BackwardDecodeTime):
     ///   the sample starts before the samples written for its track reach.
-    /// * [`SampleDescriptionIndexMismatch`](crate::ErrorKind::SampleDescriptionIndexMismatch):
+    /// * [`SampleDescriptionIndexMismatch`](crate::Error::SampleDescriptionIndexMismatch):
     ///   the sample is described by another `stsd` entry than its fragment
     ///   states for the track.
-    /// * [`SampleSizeOutOfRange`](crate::ErrorKind::SampleSizeOutOfRange):
+    /// * [`SampleSizeOutOfRange`](crate::Error::SampleSizeOutOfRange):
     ///   the sample is longer than the 32 bits a `trun` row states its length
     ///   in.
-    /// * [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange):
+    /// * [`CompositionTimeOffsetOutOfRange`](crate::Error::CompositionTimeOffsetOutOfRange):
     ///   the sample states a composition time offset outside what 32 signed
     ///   bits hold.
-    /// * [`DecodeTimeOverflow`](crate::ErrorKind::DecodeTimeOverflow):
+    /// * [`DecodeTimeOverflow`](crate::Error::DecodeTimeOverflow):
     ///   the decode times of its track run past what 64 bits carry.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
@@ -306,11 +306,11 @@ impl MovieFragmentWriter {
     ///
     /// # Errors
     ///
-    /// * [`NoFragmentOpen`](crate::ErrorKind::NoFragmentOpen): no
+    /// * [`NoFragmentOpen`](crate::Error::NoFragmentOpen): no
     ///   fragment was open to close.
-    /// * [`DataOffsetOutOfRange`](crate::ErrorKind::DataOffsetOutOfRange):
+    /// * [`DataOffsetOutOfRange`](crate::Error::DataOffsetOutOfRange):
     ///   a sample lies further into the fragment than a `trun` reaches.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
@@ -332,9 +332,9 @@ impl MovieFragmentWriter {
     ///
     /// # Errors
     ///
-    /// * [`FragmentStillOpen`](crate::ErrorKind::FragmentStillOpen): a
+    /// * [`FragmentStillOpen`](crate::Error::FragmentStillOpen): a
     ///   fragment was left open.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   samples were already declared over.
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.

@@ -184,13 +184,13 @@ mod tests {
 
         let mut demux_fsm = read_whole(&file);
 
-        assert_eq!(
+        assert!(matches!(
             resumed_at(&mut demux_fsm, &file, *file.moof_offsets.get(1).unwrap())
                 .map_err(Error::kind),
             Err(ErrorKind::Sample(
-                isobmff_sample::ErrorKind::MissingDecodeTime
+                isobmff_sample::Error::MissingDecodeTime { .. }
             ))
-        );
+        ));
     }
 
     #[test]
@@ -440,15 +440,16 @@ mod tests {
             read_resuming_at_the_fragment(&stating),
             (Ok(()), stating.fragment_samples.clone())
         );
-        assert_eq!(
-            read_resuming_at_the_fragment(&fragmented_file_with_movie_samples(false, false)),
-            (
-                Err(ErrorKind::Sample(
-                    isobmff_sample::ErrorKind::MissingDecodeTime
-                )),
-                Vec::new()
-            )
-        );
+        let (resumed, samples) =
+            read_resuming_at_the_fragment(&fragmented_file_with_movie_samples(false, false));
+
+        assert!(matches!(
+            resumed,
+            Err(ErrorKind::Sample(
+                isobmff_sample::Error::MissingDecodeTime { .. }
+            ))
+        ));
+        assert_eq!(samples, Vec::new());
     }
 
     /// Ticks a second the movie of [`two_tracks_laid_out_past_their_fragment`] is timed in

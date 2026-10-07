@@ -375,22 +375,24 @@ mod tests {
     fn a_sample_handed_over_while_no_fragment_is_open_is_rejected() {
         let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
 
-        assert_eq!(
+        assert!(matches!(
             mux_fsm.handle_sample(sample()).map_err(Error::kind),
-            Err(ErrorKind::Sample(isobmff_sample::ErrorKind::NoFragmentOpen))
-        );
+            Err(ErrorKind::Sample(
+                isobmff_sample::Error::NoFragmentOpen { .. }
+            ))
+        ));
     }
 
     #[test]
     fn a_mux_fsm_is_made_only_for_a_movie_continued_in_fragments() {
-        assert_eq!(
+        assert!(matches!(
             MediaSegmentMuxFsm::new(&unfragmented_movie())
                 .map(|_mux_fsm| ())
                 .map_err(Error::kind),
             Err(ErrorKind::Sample(
-                isobmff_sample::ErrorKind::MissingMovieExtends
+                isobmff_sample::Error::MissingMovieExtends { .. }
             ))
-        );
+        ));
     }
 
     #[test]
@@ -399,7 +401,7 @@ mod tests {
 
         mux_fsm.begin_fragment(1).unwrap();
 
-        assert_eq!(
+        assert!(matches!(
             mux_fsm
                 .handle_sample(Sample::new(
                     999,
@@ -411,8 +413,11 @@ mod tests {
                     b"SAMP".to_vec()
                 ))
                 .map_err(Error::kind),
-            Err(ErrorKind::Sample(isobmff_sample::ErrorKind::UnknownTrackId))
-        );
+            Err(ErrorKind::Sample(isobmff_sample::Error::UnknownTrackId {
+                track_id: 999,
+                ..
+            }))
+        ));
     }
 
     #[test]

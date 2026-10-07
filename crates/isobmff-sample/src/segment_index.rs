@@ -112,9 +112,9 @@ impl Subsegment {
 ///
 /// # Errors
 ///
-/// * [`DataOffsetOverflow`](crate::ErrorKind::DataOffsetOverflow): the
+/// * [`DataOffsetOverflow`](crate::Error::DataOffsetOverflow): the
 ///   extents of the subsegments run past what 64 bits carry.
-/// * [`PresentationTimeOverflow`](crate::ErrorKind::PresentationTimeOverflow):
+/// * [`PresentationTimeOverflow`](crate::Error::PresentationTimeOverflow):
 ///   the times of the subsegments run past what 64 bits carry.
 ///
 /// Both name the stream the index names by its `reference_ID`.

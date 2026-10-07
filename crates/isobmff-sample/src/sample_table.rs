@@ -47,28 +47,28 @@ use crate::sample_description::SampleDescriptions;
 ///
 /// Returned as the last of the extents:
 ///
-/// * [`SampleCountLimitExceeded`](crate::ErrorKind::SampleCountLimitExceeded):
+/// * [`SampleCountLimitExceeded`](crate::Error::SampleCountLimitExceeded):
 ///   the `stsz` or `stz2` of every track together count more samples than
 ///   `sample_count_limit`, and no extent comes before it.
-/// * [`SampleCountMismatch`](crate::ErrorKind::SampleCountMismatch):
+/// * [`SampleCountMismatch`](crate::Error::SampleCountMismatch):
 ///   the tables of a track count different numbers of samples.
-/// * [`SyncSampleOutOfRange`](crate::ErrorKind::SyncSampleOutOfRange):
+/// * [`SyncSampleOutOfRange`](crate::Error::SyncSampleOutOfRange):
 ///   the `stss` of a track lists a sample number no later than the one
 ///   before it, or outside the samples of the track (0 or past the last).
-/// * [`FirstChunkOutOfRange`](crate::ErrorKind::FirstChunkOutOfRange):
+/// * [`FirstChunkOutOfRange`](crate::Error::FirstChunkOutOfRange):
 ///   a run of chunks of a track starts at a chunk outside the range open to it.
-/// * [`UnknownSampleDescriptionIndex`](crate::ErrorKind::UnknownSampleDescriptionIndex):
+/// * [`UnknownSampleDescriptionIndex`](crate::Error::UnknownSampleDescriptionIndex):
 ///   a run describes its samples by an `stsd` entry its track has none of.
 /// * The failures of [`SampleEntry::try_from`](isobmff_boxes::SampleEntry),
-///   carried on [`Box`](crate::ErrorKind::Box): the `stsd` entry does
+///   carried on [`Box`](crate::Error::Box): the `stsd` entry does
 ///   not read as a sample entry, with `stsd` added to the containers.
-/// * [`UnknownDataReferenceIndex`](crate::ErrorKind::UnknownDataReferenceIndex):
+/// * [`UnknownDataReferenceIndex`](crate::Error::UnknownDataReferenceIndex):
 ///   the `stsd` entry names a `dref` entry its track has none of.
-/// * [`ExternalDataReference`](crate::ErrorKind::ExternalDataReference):
+/// * [`ExternalDataReference`](crate::Error::ExternalDataReference):
 ///   the `dref` entry names a resource other than the file itself.
-/// * [`DecodeTimeOverflow`](crate::ErrorKind::DecodeTimeOverflow): the
+/// * [`DecodeTimeOverflow`](crate::Error::DecodeTimeOverflow): the
 ///   decode times of a track run past what 64 bits carry.
-/// * [`DataOffsetOverflow`](crate::ErrorKind::DataOffsetOverflow): the
+/// * [`DataOffsetOverflow`](crate::Error::DataOffsetOverflow): the
 ///   offsets of a track run past what 64 bits carry.
 pub fn sample_extents(
     movie: &MovieBox,
