@@ -27,12 +27,23 @@ use isobmff_core::Category;
 /// ```
 /// use isobmff_boxes::SampleFlags;
 /// use isobmff_core::{BoxType, Category};
-/// use isobmff_sample::{Error, SampleExtent, SampleReader};
+/// use isobmff_sample::{Error, SampleExtent, SampleProperties, SampleReader};
 ///
 /// // A sample whose bytes never arrived whole is a failure of the samples themselves
 /// let mut reader = SampleReader::new();
-/// reader.handle_sample_extent(SampleExtent::new(3, 0, 1_024, 0, SampleFlags::ZERO, 1, 1, 100..104))?;
-/// reader.handle_data(100, b"AB")?;
+/// reader.handle_sample_extent(SampleExtent::new(
+///     SampleProperties {
+///         track_id: 3,
+///         decode_time: 0,
+///         sample_duration: 1_024,
+///         sample_composition_time_offset: 0,
+///         sample_flags: SampleFlags::ZERO,
+///         sample_description_index: 1,
+///     },
+///     1,
+///     100..104,
+/// ))?;
+/// reader.handle_input(100, b"AB")?;
 /// let failure = reader.finish().unwrap_err();
 /// assert!(matches!(
 ///     failure,
@@ -337,9 +348,12 @@ pub enum Error {
         /// Entry the fragment or the chunk describes the track by
         established_sample_description_index: u32,
     },
-    /// Sample was handed over while no chunk was open
+    /// Sample was handed over, or a chunk closed, while no chunk was open
     #[non_exhaustive]
     NoChunkOpen,
+    /// Chunk was begun, or samples declared over, while a chunk was still open
+    #[non_exhaustive]
+    ChunkStillOpen,
     /// Sample belongs to another track than the chunk that is open holds
     ///
     /// A chunk is a contiguous set of samples of one track (ISO/IEC 14496-12
@@ -387,7 +401,8 @@ impl Error {
             Self::AlreadyFinished
             | Self::NoFragmentOpen
             | Self::FragmentStillOpen
-            | Self::NoChunkOpen => Category::Usage,
+            | Self::NoChunkOpen
+            | Self::ChunkStillOpen => Category::Usage,
         }
     }
 }
@@ -557,7 +572,10 @@ impl fmt::Display for Error {
                 formatter,
                 "track {track_id} describes a sample by stsd entry {stated_sample_description_index} in a fragment or a chunk describing it by {established_sample_description_index}"
             ),
-            Self::NoChunkOpen => formatter.write_str("no chunk is open to carry a sample"),
+            Self::NoChunkOpen => {
+                formatter.write_str("no chunk is open to carry a sample or be closed")
+            }
+            Self::ChunkStillOpen => formatter.write_str("chunk is still open"),
             Self::TrackIdMismatch {
                 stated_track_id,
                 established_track_id,
@@ -602,6 +620,7 @@ impl error::Error for Error {
             | Self::BackwardDecodeTime { .. }
             | Self::SampleDescriptionIndexMismatch { .. }
             | Self::NoChunkOpen
+            | Self::ChunkStillOpen
             | Self::TrackIdMismatch { .. } => None,
         }
     }
@@ -714,6 +733,7 @@ mod tests {
         );
         assert_eq!(Error::NoFragmentOpen.category(), Category::Usage);
         assert_eq!(Error::NoChunkOpen.category(), Category::Usage);
+        assert_eq!(Error::ChunkStillOpen.category(), Category::Usage);
         assert_eq!(
             Error::TrackIdMismatch {
                 stated_track_id: 2,
@@ -909,8 +929,9 @@ mod tests {
         );
         assert_eq!(
             Error::NoChunkOpen.to_string(),
-            "no chunk is open to carry a sample"
+            "no chunk is open to carry a sample or be closed"
         );
+        assert_eq!(Error::ChunkStillOpen.to_string(), "chunk is still open");
         assert_eq!(
             Error::TrackIdMismatch {
                 stated_track_id: 2,

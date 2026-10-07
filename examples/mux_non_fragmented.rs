@@ -19,7 +19,7 @@ use isobmff::boxes::{
     SampleSizeBox, SampleSizeEntries, SampleSizes, SampleTableBox, SampleToChunkBox,
     SoundMediaHeaderBox, TimeToSampleBox, TrackBox, TrackHeaderBox,
 };
-use isobmff::sample::Sample;
+use isobmff::sample::{Sample, SampleProperties};
 use isobmff::structure::NonFragmentedMuxFsm;
 use isobmff::{
     AnyBox, BoxType, FieldWriter, FourCc, FullBoxFlags, I8F8, LanguageCode, Mp4EpochSeconds,
@@ -125,12 +125,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             .collect();
         let duration = u32::try_from(end.saturating_sub(start))?;
         mux_fsm.handle_sample(Sample::new(
-            TRACK_ID,
-            start,
-            duration,
-            0,
-            SampleFlags::ZERO,
-            1,
+            SampleProperties {
+                track_id: TRACK_ID,
+                decode_time: start,
+                sample_duration: duration,
+                sample_composition_time_offset: 0,
+                sample_flags: SampleFlags::ZERO,
+                sample_description_index: 1,
+            },
             data,
         ))?;
     }

@@ -2,6 +2,7 @@
 
 mod open_fragment;
 
+use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use core::mem;
 
@@ -17,9 +18,10 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// The writer takes the samples of a fragment between
 /// [`begin_fragment`](Self::begin_fragment) or
 /// [`begin_fragment_continuing`](Self::begin_fragment_continuing) and
-/// [`finish_fragment`](Self::finish_fragment), which hands back the `moof`
-/// they are declared by and the payload of the `mdat` that carries them. It
-/// writes nothing itself: what the two are laid down as, and where, stay with
+/// [`finish_fragment`](Self::finish_fragment), after which
+/// [`poll_fragment`](Self::poll_fragment) hands over the `moof` they are
+/// declared by and the payload of the `mdat` that carries them. It writes
+/// nothing itself: what the two are laid down as, and where, stay with
 /// the caller.
 ///
 /// The writer is made for the movie the fragments continue, which it checks
@@ -128,7 +130,7 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// ```
 /// use isobmff_boxes::{SampleFlags, TrackExtendsBox};
 /// use isobmff_core::BoxEncode as _;
-/// use isobmff_sample::{MovieFragmentWriter, Sample};
+/// use isobmff_sample::{MovieFragmentWriter, Sample, SampleProperties};
 /// # use isobmff_test_support::fragmented_movie;
 ///
 /// // A writer for a movie of track 1, continued in fragments
@@ -137,9 +139,30 @@ use crate::track_decode_times::TrackDecodeTimes;
 ///
 /// // One fragment of two samples of track 1, lasting 1024 units each
 /// writer.begin_fragment(1)?;
-/// writer.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
-/// writer.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
-/// let (movie_fragment, media_data) = writer.finish_fragment()?;
+/// writer.handle_sample(Sample::new(
+///     SampleProperties {
+///         track_id: 1,
+///         decode_time: 0,
+///         sample_duration: 1_024,
+///         sample_composition_time_offset: 0,
+///         sample_flags: SampleFlags::ZERO,
+///         sample_description_index: 1,
+///     },
+///     b"SAMP".to_vec(),
+/// ))?;
+/// writer.handle_sample(Sample::new(
+///     SampleProperties {
+///         track_id: 1,
+///         decode_time: 1_024,
+///         sample_duration: 1_024,
+///         sample_composition_time_offset: 0,
+///         sample_flags: SampleFlags::ZERO,
+///         sample_description_index: 1,
+///     },
+///     b"DATA".to_vec(),
+/// ))?;
+/// writer.finish_fragment()?;
+/// let (movie_fragment, media_data) = writer.poll_fragment().unwrap();
 /// assert_eq!(media_data, b"SAMPDATA");
 ///
 /// // The samples share how long they last, so their `tfhd` states it for both
@@ -159,6 +182,7 @@ pub struct MovieFragmentWriter {
     trak: Vec<TrackBox>,
     trex: Vec<TrackExtendsBox>,
     decode_times: TrackDecodeTimes,
+    fragments: VecDeque<(MovieFragmentBox, Vec<u8>)>,
     state: State,
 }
 
@@ -205,6 +229,7 @@ impl MovieFragmentWriter {
             trak: movie.trak().to_vec(),
             trex: mvex.trex().to_vec(),
             decode_times: TrackDecodeTimes::new(movie)?,
+            fragments: VecDeque::new(),
             state: State::Between,
         })
     }
@@ -298,7 +323,7 @@ impl MovieFragmentWriter {
             .map_err(|failure| self.fail(failure))
     }
 
-    /// Closes the fragment that is open, and hands back the `moof` and the `mdat` payload it is written as
+    /// Closes the fragment that is open, and builds the `moof` and the `mdat` payload it is written as for [`poll_fragment`](Self::poll_fragment)
     ///
     /// The offsets count over the header
     /// [`MediaDataBox`](isobmff_boxes::MediaDataBox) writes for a payload of
@@ -316,7 +341,7 @@ impl MovieFragmentWriter {
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
-    pub fn finish_fragment(&mut self) -> Result<(MovieFragmentBox, Vec<u8>), Error> {
+    pub fn finish_fragment(&mut self) -> Result<(), Error> {
         self.writing()?;
         // Why not leaving the state alone until the fragment is known to build:
         // the boxes are built from the fragment whole, and the caller reached
@@ -326,8 +351,20 @@ impl MovieFragmentWriter {
             return Err(self.fail(Error::NoFragmentOpen));
         };
 
-        open.into_boxes(&mut self.decode_times)
-            .map_err(|failure| self.fail(failure))
+        let fragment = open
+            .into_boxes(&mut self.decode_times)
+            .map_err(|failure| self.fail(failure))?;
+        self.fragments.push_back(fragment);
+
+        Ok(())
+    }
+
+    /// Hands over the `moof` and the `mdat` payload of the next fragment closed, in the order they were closed
+    ///
+    /// The writer holds a fragment until it is handed over here, and reports
+    /// `None` once they are used up.
+    pub fn poll_fragment(&mut self) -> Option<(MovieFragmentBox, Vec<u8>)> {
+        self.fragments.pop_front()
     }
 
     /// Declares the samples over
@@ -398,7 +435,7 @@ mod tests {
 
     use super::MovieFragmentWriter;
     use crate::error::Error;
-    use crate::sample::Sample;
+    use crate::sample::{Sample, SampleProperties};
 
     /// Writer for a movie of tracks 1 and 2, each continued in fragments
     pub(super) fn writer() -> MovieFragmentWriter {
@@ -410,14 +447,36 @@ mod tests {
     /// Sample of `track_id` at `decode_time` lasting 1024 units, carrying `data`
     pub(super) fn sample(track_id: u32, decode_time: u64, data: &[u8]) -> Sample {
         Sample::new(
-            track_id,
-            decode_time,
-            1_024,
-            0,
-            SampleFlags::ZERO,
-            1,
+            SampleProperties {
+                track_id,
+                decode_time,
+                sample_duration: 1_024,
+                sample_composition_time_offset: 0,
+                sample_flags: SampleFlags::ZERO,
+                sample_description_index: 1,
+            },
             data.to_vec(),
         )
+    }
+
+    #[test]
+    fn each_fragment_closed_is_handed_over_once_in_the_order_they_were_closed() {
+        let mut writer = writer();
+
+        for (sequence_number, decode_time, data) in [(1, 0, b"AAAA"), (2, 1_024, b"BBBB")] {
+            writer.begin_fragment(sequence_number).unwrap();
+            writer.handle_sample(sample(1, decode_time, data)).unwrap();
+            writer.finish_fragment().unwrap();
+        }
+
+        assert_eq!(
+            [
+                writer.poll_fragment().map(|(_moof, media_data)| media_data),
+                writer.poll_fragment().map(|(_moof, media_data)| media_data),
+                writer.poll_fragment().map(|(_moof, media_data)| media_data),
+            ],
+            [Some(b"AAAA".to_vec()), Some(b"BBBB".to_vec()), None]
+        );
     }
 
     #[test]
@@ -606,12 +665,14 @@ mod tests {
         );
         assert_eq!(
             refused(Sample::new(
-                1,
-                0,
-                1_024,
-                0,
-                SampleFlags::ZERO,
-                2,
+                SampleProperties {
+                    track_id: 1,
+                    decode_time: 0,
+                    sample_duration: 1_024,
+                    sample_composition_time_offset: 0,
+                    sample_flags: SampleFlags::ZERO,
+                    sample_description_index: 2
+                },
                 b"AAAA".to_vec()
             )),
             Err(Error::UnknownSampleDescriptionIndex {

@@ -17,7 +17,7 @@ mod tests {
         TrackRunSample,
     };
     use isobmff_core::{BoxEncode, BoxType};
-    use isobmff_sample::Sample;
+    use isobmff_sample::{Sample, SampleProperties};
     use isobmff_sequence::BoxEvent;
     use isobmff_structure::{Error, MovieDemuxFsm, WantedInput};
     use isobmff_test_support::{
@@ -342,7 +342,12 @@ mod tests {
         // movie and those of the fragment are held apart, and which complete
         // first is decided by where the input is cut and which bytes are
         // wanted back.
-        samples.sort_by_key(|sample| (sample.track_id(), sample.decode_time()));
+        samples.sort_by_key(|sample| {
+            (
+                sample.properties().track_id,
+                sample.properties().decode_time,
+            )
+        });
 
         samples
     }
@@ -591,12 +596,14 @@ mod tests {
         .concat();
         let sample = |track_id, decode_time, duration, data: &[u8]| {
             Sample::new(
-                track_id,
-                decode_time,
-                duration,
-                0,
-                SampleFlags::ZERO,
-                1,
+                SampleProperties {
+                    track_id,
+                    decode_time,
+                    sample_duration: duration,
+                    sample_composition_time_offset: 0,
+                    sample_flags: SampleFlags::ZERO,
+                    sample_description_index: 1,
+                },
                 data.to_vec(),
             )
         };

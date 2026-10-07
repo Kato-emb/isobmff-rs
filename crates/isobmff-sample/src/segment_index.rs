@@ -1,4 +1,4 @@
-//! [`subsegments`], the subsegments a segment index points at resolved to the file, ISO/IEC 14496-12 §8.16.3
+//! [`SegmentIndex`], the subsegments a segment index points at resolved to the file, ISO/IEC 14496-12 §8.16.3
 
 use alloc::vec::Vec;
 use core::ops::Range;
@@ -23,6 +23,62 @@ pub struct SegmentIndex {
 }
 
 impl SegmentIndex {
+    /// Resolves the references of `sidx` to the subsegments they point at, counting from `anchor`
+    ///
+    /// `anchor` is where the file continues past the `sidx` — the first byte
+    /// after the box in the file holding it (ISO/IEC 14496-12 §8.16.3.1). The
+    /// first subsegment starts `first_offset` bytes on from it, each after it
+    /// where the one before ends, and each starts on the presentation timeline
+    /// where the one before ends.
+    ///
+    /// # Errors
+    ///
+    /// * [`DataOffsetOverflow`](crate::Error::DataOffsetOverflow): the
+    ///   extents of the subsegments run past what 64 bits carry.
+    /// * [`PresentationTimeOverflow`](crate::Error::PresentationTimeOverflow):
+    ///   the times of the subsegments run past what 64 bits carry.
+    ///
+    /// Both name the stream the index names by its `reference_ID`.
+    pub fn resolve(sidx: &SegmentIndexBox, anchor: u64) -> Result<Self, Error> {
+        let reference_id = sidx.reference_id();
+        let offset_overflow = || Error::DataOffsetOverflow {
+            track_id: reference_id,
+        };
+        let time_overflow = || Error::PresentationTimeOverflow {
+            track_id: reference_id,
+        };
+
+        let mut start = anchor
+            .checked_add(sidx.first_offset())
+            .ok_or_else(offset_overflow)?;
+        let mut earliest_presentation_time = sidx.earliest_presentation_time();
+        let mut subsegments = Vec::with_capacity(sidx.references().len());
+        for reference in sidx.references() {
+            let end = start
+                .checked_add(u64::from(reference.referenced_size()))
+                .ok_or_else(offset_overflow)?;
+            let presentation_end = earliest_presentation_time
+                .checked_add(u64::from(reference.subsegment_duration()))
+                .ok_or_else(time_overflow)?;
+
+            subsegments.push(Subsegment {
+                extent: start..end,
+                presentation_time: earliest_presentation_time..presentation_end,
+                reference: *reference,
+            });
+
+            start = end;
+            earliest_presentation_time = presentation_end;
+        }
+
+        Ok(Self {
+            reference_id,
+            timescale: sidx.timescale(),
+            earliest_presentation_time: sidx.earliest_presentation_time(),
+            subsegments,
+        })
+    }
+
     /// Returns the ID of the stream the index names, a track ID in files based on ISO/IEC 14496-12
     #[must_use]
     pub const fn reference_id(&self) -> u32 {
@@ -102,62 +158,6 @@ impl Subsegment {
     }
 }
 
-/// Resolves the references of `sidx` to the subsegments they point at, counting from `anchor`
-///
-/// `anchor` is where the file continues past the `sidx` — the first byte
-/// after the box in the file holding it (ISO/IEC 14496-12 §8.16.3.1). The
-/// first subsegment starts `first_offset` bytes on from it, each after it
-/// where the one before ends, and each starts on the presentation timeline
-/// where the one before ends.
-///
-/// # Errors
-///
-/// * [`DataOffsetOverflow`](crate::Error::DataOffsetOverflow): the
-///   extents of the subsegments run past what 64 bits carry.
-/// * [`PresentationTimeOverflow`](crate::Error::PresentationTimeOverflow):
-///   the times of the subsegments run past what 64 bits carry.
-///
-/// Both name the stream the index names by its `reference_ID`.
-pub fn subsegments(sidx: &SegmentIndexBox, anchor: u64) -> Result<SegmentIndex, Error> {
-    let reference_id = sidx.reference_id();
-    let offset_overflow = || Error::DataOffsetOverflow {
-        track_id: reference_id,
-    };
-    let time_overflow = || Error::PresentationTimeOverflow {
-        track_id: reference_id,
-    };
-
-    let mut start = anchor
-        .checked_add(sidx.first_offset())
-        .ok_or_else(offset_overflow)?;
-    let mut earliest_presentation_time = sidx.earliest_presentation_time();
-    let mut subsegments = Vec::with_capacity(sidx.references().len());
-    for reference in sidx.references() {
-        let end = start
-            .checked_add(u64::from(reference.referenced_size()))
-            .ok_or_else(offset_overflow)?;
-        let presentation_end = earliest_presentation_time
-            .checked_add(u64::from(reference.subsegment_duration()))
-            .ok_or_else(time_overflow)?;
-
-        subsegments.push(Subsegment {
-            extent: start..end,
-            presentation_time: earliest_presentation_time..presentation_end,
-            reference: *reference,
-        });
-
-        start = end;
-        earliest_presentation_time = presentation_end;
-    }
-
-    Ok(SegmentIndex {
-        reference_id,
-        timescale: sidx.timescale(),
-        earliest_presentation_time: sidx.earliest_presentation_time(),
-        subsegments,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use alloc::vec;
@@ -166,7 +166,7 @@ mod tests {
 
     use isobmff_boxes::{ReferenceType, SegmentIndexBox, SegmentIndexReference};
 
-    use super::{SegmentIndex, Subsegment, subsegments};
+    use super::{SegmentIndex, Subsegment};
     use crate::error::Error;
 
     /// Reference to a media subsegment of `referenced_size` bytes lasting `subsegment_duration`
@@ -213,7 +213,7 @@ mod tests {
 
     /// Index of three subsegments of 1000, 2000 and 500 bytes, lasting 3000, 3000 and 1500, from 200 past an anchor at 1000
     fn three_subsegments() -> SegmentIndex {
-        subsegments(
+        SegmentIndex::resolve(
             &index(
                 9_000,
                 200,
@@ -267,7 +267,7 @@ mod tests {
         assert_eq!(resolved.subsegment_at(8_999), None);
         assert_eq!(resolved.subsegment_at(16_500), None);
         assert_eq!(
-            subsegments(&index(0, 0, Vec::new()), 0)
+            SegmentIndex::resolve(&index(0, 0, Vec::new()), 0)
                 .unwrap()
                 .subsegment_at(0),
             None
@@ -277,11 +277,11 @@ mod tests {
     #[test]
     fn extents_running_past_what_64_bits_carry_are_refused() {
         assert_eq!(
-            subsegments(&index(0, u64::MAX, Vec::new()), 1),
+            SegmentIndex::resolve(&index(0, u64::MAX, Vec::new()), 1),
             Err(Error::DataOffsetOverflow { track_id: 1 })
         );
         assert_eq!(
-            subsegments(&index(0, u64::MAX - 10, vec![reference(11, 0)]), 0),
+            SegmentIndex::resolve(&index(0, u64::MAX - 10, vec![reference(11, 0)]), 0),
             Err(Error::DataOffsetOverflow { track_id: 1 })
         );
     }
@@ -289,7 +289,7 @@ mod tests {
     #[test]
     fn times_running_past_what_64_bits_carry_are_refused() {
         assert_eq!(
-            subsegments(&index(u64::MAX - 10, 0, vec![reference(1, 11)]), 0),
+            SegmentIndex::resolve(&index(u64::MAX - 10, 0, vec![reference(1, 11)]), 0),
             Err(Error::PresentationTimeOverflow { track_id: 1 })
         );
     }

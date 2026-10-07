@@ -14,7 +14,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_boxes::{MovieBox, SampleFlags, TrackExtendsBox};
-    use isobmff_sample::Sample;
+    use isobmff_sample::{Sample, SampleProperties};
     use isobmff_test_support::fragmented_movie;
 
     use super::MediaSegmentMuxFsm;
@@ -26,7 +26,17 @@ mod tests {
 
     /// One sample of track 1, the first of its fragment
     pub(super) fn sample() -> Sample {
-        Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec())
+        Sample::new(
+            SampleProperties {
+                track_id: 1,
+                decode_time: 0,
+                sample_duration: 1_024,
+                sample_composition_time_offset: 0,
+                sample_flags: SampleFlags::ZERO,
+                sample_description_index: 1,
+            },
+            b"SAMP".to_vec(),
+        )
     }
 
     /// A segment of one fragment carrying [`sample`], with no brands

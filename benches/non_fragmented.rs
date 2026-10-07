@@ -27,8 +27,8 @@ use core::ops::Range;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 use isobmff::boxes::{FileTypeBox, MovieBox, SampleFlags};
-use isobmff::sample::Sample;
 use isobmff::sample::sample_table::sample_extents;
+use isobmff::sample::{Sample, SampleProperties};
 use isobmff::sequence::EventBytes;
 use isobmff::structure::{DemuxLimits, MovieDemuxFsm, NonFragmentedMuxFsm};
 use isobmff_test_support::{SAMPLE_DURATION, file_type, non_fragmented_file, unfragmented_movie};
@@ -73,12 +73,14 @@ impl Composition {
                 (0..self.samples_per_chunk)
                     .map(|_| {
                         let sample = Sample::new(
-                            TRACK_ID,
-                            decode_time,
-                            SAMPLE_DURATION,
-                            0,
-                            SampleFlags::ZERO,
-                            1,
+                            SampleProperties {
+                                track_id: TRACK_ID,
+                                decode_time,
+                                sample_duration: SAMPLE_DURATION,
+                                sample_composition_time_offset: 0,
+                                sample_flags: SampleFlags::ZERO,
+                                sample_description_index: 1,
+                            },
                             vec![0xab; self.sample_len],
                         );
                         decode_time += u64::from(SAMPLE_DURATION);

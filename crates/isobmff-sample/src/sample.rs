@@ -1,18 +1,17 @@
-//! [`Sample`], the unit a presentation carries its media in, and [`SampleExtent`], where one lies
+//! [`Sample`], the unit a presentation carries its media in, [`SampleExtent`], where one lies, and [`SampleProperties`], what both state of it
 
 use alloc::vec::Vec;
 use core::ops::Range;
 
 use isobmff_boxes::SampleFlags;
 
-/// One sample of one track, with the bytes it is carried as
+/// What a sample of one track is: when and for how long it is decoded, how, and by which description
 ///
-/// A sample is what a presentation is made of — ISO/IEC 14496-12 §3.1.14 has it
-/// as all the data associated with a single timestamp. What the file declares
-/// about it is resolved before it is handed over: what a sample table spreads
-/// over its tables (§8.7), or what a `trun` row leaves to the `tfhd` of its
-/// fragment and the `trex` of its track (§8.8.7, §8.8.8), so every field here
-/// is settled.
+/// Where a sample is read out of a file, what the file declares about it is
+/// resolved before it is handed over: what a sample table spreads over its
+/// tables (ISO/IEC 14496-12 §8.7), or what a `trun` row leaves to the `tfhd` of
+/// its fragment and the `trex` of its track (§8.8.7, §8.8.8), so every field
+/// here is settled.
 ///
 /// The times are measured in the time scale of the track, the one its `mdhd`
 /// declares (§8.4.2). They are not converted: a caller placing samples of two
@@ -29,75 +28,49 @@ use isobmff_boxes::SampleFlags;
 /// track carries no table for is zero, but for the sync samples: every sample
 /// of a track without an `stss` (§8.6.2) is one, and leaves
 /// `sample_is_non_sync_sample` clear.
+#[allow(
+    clippy::exhaustive_structs,
+    reason = "a caller states every property by name, so that two of the three `u32`s cannot be swapped unseen"
+)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct SampleProperties {
+    /// The track the sample belongs to
+    pub track_id: u32,
+    /// When the sample is decoded, in the time scale of its track
+    pub decode_time: u64,
+    /// How long the sample lasts, in the time scale of its track
+    pub sample_duration: u32,
+    /// The offset from the decode time of the sample to its composition time, in the time scale of its track
+    pub sample_composition_time_offset: i64,
+    /// The flags of the sample, which state how it may be decoded
+    pub sample_flags: SampleFlags,
+    /// The `stsd` entry the sample is described by
+    pub sample_description_index: u32,
+}
+
+/// One sample of one track, with the bytes it is carried as
+///
+/// A sample is what a presentation is made of — ISO/IEC 14496-12 §3.1.14 has it
+/// as all the data associated with a single timestamp, which is here its
+/// [`SampleProperties`] and the bytes it is carried as.
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Sample {
-    track_id: u32,
-    decode_time: u64,
-    sample_duration: u32,
-    sample_composition_time_offset: i64,
-    sample_flags: SampleFlags,
-    sample_description_index: u32,
+    properties: SampleProperties,
     data: Vec<u8>,
 }
 
 impl Sample {
     /// Creates the sample from the properties settled for it and the bytes it carries
     #[must_use]
-    pub const fn new(
-        track_id: u32,
-        decode_time: u64,
-        sample_duration: u32,
-        sample_composition_time_offset: i64,
-        sample_flags: SampleFlags,
-        sample_description_index: u32,
-        data: Vec<u8>,
-    ) -> Self {
-        Self {
-            track_id,
-            decode_time,
-            sample_duration,
-            sample_composition_time_offset,
-            sample_flags,
-            sample_description_index,
-            data,
-        }
+    pub const fn new(properties: SampleProperties, data: Vec<u8>) -> Self {
+        Self { properties, data }
     }
 
-    /// Returns the track this sample belongs to
+    /// Returns what this sample is
     #[must_use]
-    pub const fn track_id(&self) -> u32 {
-        self.track_id
-    }
-
-    /// Returns when this sample is decoded, in the time scale of its track
-    #[must_use]
-    pub const fn decode_time(&self) -> u64 {
-        self.decode_time
-    }
-
-    /// Returns how long this sample lasts, in the time scale of its track
-    #[must_use]
-    pub const fn sample_duration(&self) -> u32 {
-        self.sample_duration
-    }
-
-    /// Returns the offset from the decode time of this sample to its composition time
-    #[must_use]
-    pub const fn sample_composition_time_offset(&self) -> i64 {
-        self.sample_composition_time_offset
-    }
-
-    /// Returns the flags of this sample, which state how it may be decoded
-    #[must_use]
-    pub const fn sample_flags(&self) -> SampleFlags {
-        self.sample_flags
-    }
-
-    /// Returns the `stsd` entry this sample is described by
-    #[must_use]
-    pub const fn sample_description_index(&self) -> u32 {
-        self.sample_description_index
+    pub const fn properties(&self) -> &SampleProperties {
+        &self.properties
     }
 
     /// Returns the bytes this sample is carried as
@@ -130,12 +103,7 @@ impl Sample {
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct SampleExtent {
-    track_id: u32,
-    decode_time: u64,
-    sample_duration: u32,
-    sample_composition_time_offset: i64,
-    sample_flags: SampleFlags,
-    sample_description_index: u32,
+    properties: SampleProperties,
     data_reference_index: u16,
     extent: Range<u64>,
 }
@@ -143,66 +111,22 @@ pub struct SampleExtent {
 impl SampleExtent {
     /// Creates the extent from the properties settled for the sample and where its bytes lie
     #[must_use]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "every field is a settled fact of the sample, and a constructor that took fewer would leave one unsettled"
-    )]
     pub const fn new(
-        track_id: u32,
-        decode_time: u64,
-        sample_duration: u32,
-        sample_composition_time_offset: i64,
-        sample_flags: SampleFlags,
-        sample_description_index: u32,
+        properties: SampleProperties,
         data_reference_index: u16,
         extent: Range<u64>,
     ) -> Self {
         Self {
-            track_id,
-            decode_time,
-            sample_duration,
-            sample_composition_time_offset,
-            sample_flags,
-            sample_description_index,
+            properties,
             data_reference_index,
             extent,
         }
     }
 
-    /// Returns the track the sample belongs to
+    /// Returns what the sample is
     #[must_use]
-    pub const fn track_id(&self) -> u32 {
-        self.track_id
-    }
-
-    /// Returns when the sample is decoded, in the time scale of its track
-    #[must_use]
-    pub const fn decode_time(&self) -> u64 {
-        self.decode_time
-    }
-
-    /// Returns how long the sample lasts, in the time scale of its track
-    #[must_use]
-    pub const fn sample_duration(&self) -> u32 {
-        self.sample_duration
-    }
-
-    /// Returns the offset from the decode time of the sample to its composition time
-    #[must_use]
-    pub const fn sample_composition_time_offset(&self) -> i64 {
-        self.sample_composition_time_offset
-    }
-
-    /// Returns the flags of the sample, which state how it may be decoded
-    #[must_use]
-    pub const fn sample_flags(&self) -> SampleFlags {
-        self.sample_flags
-    }
-
-    /// Returns the `stsd` entry the sample is described by
-    #[must_use]
-    pub const fn sample_description_index(&self) -> u32 {
-        self.sample_description_index
+    pub const fn properties(&self) -> &SampleProperties {
+        &self.properties
     }
 
     /// Returns the `dref` entry naming the resource the bytes of the sample lie in

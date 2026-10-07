@@ -121,7 +121,7 @@ impl DemuxInput {
             InputRoute::Lacking => {
                 let gathered = self
                     .samples
-                    .handle_data(input_offset, input)
+                    .handle_input(input_offset, input)
                     .map_err(Error::from);
 
                 return self.record(gathered);
@@ -228,7 +228,7 @@ impl DemuxInput {
 #[cfg(test)]
 mod tests {
     use isobmff_boxes::SampleFlags;
-    use isobmff_sample::{Sample, SampleExtent, SampleReaderLimits};
+    use isobmff_sample::{Sample, SampleExtent, SampleProperties, SampleReaderLimits};
     use isobmff_sequence::BoxEvent;
 
     use super::{DemuxInput, Error};
@@ -242,18 +242,30 @@ mod tests {
 
     /// The one sample whose extent [`extent_at`] names, its bytes arrived
     fn sample() -> Sample {
-        Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec())
+        Sample::new(
+            SampleProperties {
+                track_id: 1,
+                decode_time: 0,
+                sample_duration: 1_024,
+                sample_composition_time_offset: 0,
+                sample_flags: SampleFlags::ZERO,
+                sample_description_index: 1,
+            },
+            b"SAMP".to_vec(),
+        )
     }
 
     /// The extent of one sample whose four bytes lie at `start`
     fn extent_at(start: u64) -> SampleExtent {
         SampleExtent::new(
-            1,
-            0,
-            1_024,
-            0,
-            SampleFlags::ZERO,
-            1,
+            SampleProperties {
+                track_id: 1,
+                decode_time: 0,
+                sample_duration: 1_024,
+                sample_composition_time_offset: 0,
+                sample_flags: SampleFlags::ZERO,
+                sample_description_index: 1,
+            },
             1,
             start..start.checked_add(4).unwrap(),
         )
@@ -263,7 +275,7 @@ mod tests {
     fn read_framed(input: &mut DemuxInput) -> Result<(), Error> {
         while let Some((start, event)) = input.poll_event() {
             if let BoxEvent::Payload(payload) = event {
-                input.samples_mut().handle_data(start, &payload)?;
+                input.samples_mut().handle_input(start, &payload)?;
             }
         }
 

@@ -16,7 +16,7 @@ use isobmff_boxes::{
     TrackRunBox, TrackRunSample,
 };
 use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader};
-use isobmff_sample::Sample;
+use isobmff_sample::{Sample, SampleProperties};
 use isobmff_sequence::BoxEvent;
 
 use crate::boxes::{
@@ -122,12 +122,14 @@ fn samples_over<'data>(
         .flat_map(|data| data.chunks(SAMPLE_LEN))
         .map(|data| {
             let sample = Sample::new(
-                1,
-                decode_time,
-                SAMPLE_DURATION,
-                0,
-                SampleFlags::ZERO,
-                1,
+                SampleProperties {
+                    track_id: 1,
+                    decode_time,
+                    sample_duration: SAMPLE_DURATION,
+                    sample_composition_time_offset: 0,
+                    sample_flags: SampleFlags::ZERO,
+                    sample_description_index: 1,
+                },
                 data.to_vec(),
             );
             decode_time = decode_time.saturating_add(u64::from(SAMPLE_DURATION));
@@ -267,12 +269,14 @@ pub fn non_fragmented_file_samples() -> Vec<Sample> {
         .flat_map(|chunk| chunk.iter())
         .map(|data| {
             let sample = Sample::new(
-                1,
-                decode_time,
-                SAMPLE_DURATION,
-                0,
-                SampleFlags::ZERO,
-                1,
+                SampleProperties {
+                    track_id: 1,
+                    decode_time,
+                    sample_duration: SAMPLE_DURATION,
+                    sample_composition_time_offset: 0,
+                    sample_flags: SampleFlags::ZERO,
+                    sample_description_index: 1,
+                },
                 data.to_vec(),
             );
             decode_time = decode_time.saturating_add(u64::from(SAMPLE_DURATION));
@@ -384,7 +388,7 @@ fn with_random_access(mut file: IndexedFile) -> IndexedFile {
         .zip(&file.fragment_samples)
         .map(|(&moof_offset, samples)| {
             TrackFragmentRandomAccessEntry::new(
-                samples.first().unwrap().decode_time(),
+                samples.first().unwrap().properties().decode_time,
                 moof_offset,
                 NonZeroU32::MIN,
                 NonZeroU32::MIN,

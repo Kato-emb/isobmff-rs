@@ -11,7 +11,7 @@ use isobmff_core::BoxEncode as _;
 
 use crate::error::Error;
 use crate::movie_fragment_writer::tests::{sample, writer};
-use crate::sample::Sample;
+use crate::sample::{Sample, SampleProperties};
 
 /// Bytes the header of the `mdat` beside a fragment occupies
 const MEDIA_DATA_HEADER_LEN: u64 = 8;
@@ -19,12 +19,14 @@ const MEDIA_DATA_HEADER_LEN: u64 = 8;
 /// Sample of track 1 at `decode_time` stating `sample_composition_time_offset`
 fn offset_by(decode_time: u64, sample_composition_time_offset: i64) -> Sample {
     Sample::new(
-        1,
-        decode_time,
-        1_024,
-        sample_composition_time_offset,
-        SampleFlags::ZERO,
-        1,
+        SampleProperties {
+            track_id: 1,
+            decode_time,
+            sample_duration: 1_024,
+            sample_composition_time_offset,
+            sample_flags: SampleFlags::ZERO,
+            sample_description_index: 1,
+        },
         b"AAAA".to_vec(),
     )
 }
@@ -37,12 +39,14 @@ fn timed(
     sample_composition_time_offset: i64,
 ) -> Sample {
     Sample::new(
-        track_id,
-        decode_time,
-        sample_duration,
-        sample_composition_time_offset,
-        SampleFlags::ZERO,
-        1,
+        SampleProperties {
+            track_id,
+            decode_time,
+            sample_duration,
+            sample_composition_time_offset,
+            sample_flags: SampleFlags::ZERO,
+            sample_description_index: 1,
+        },
         b"AAAA".to_vec(),
     )
 }
@@ -64,7 +68,17 @@ fn flags(sample_depends_on: SampleDependsOn, sample_is_non_sync_sample: bool) ->
 
 /// Sample of track 1 at `decode_time` stating `sample_flags`
 fn flagged(decode_time: u64, sample_flags: SampleFlags) -> Sample {
-    Sample::new(1, decode_time, 1_024, 0, sample_flags, 1, b"AAAA".to_vec())
+    Sample::new(
+        SampleProperties {
+            track_id: 1,
+            decode_time,
+            sample_duration: 1_024,
+            sample_composition_time_offset: 0,
+            sample_flags,
+            sample_description_index: 1,
+        },
+        b"AAAA".to_vec(),
+    )
 }
 
 /// Writes `samples` as one fragment, and returns the boxes it is written as
@@ -75,8 +89,9 @@ fn one_fragment(samples: Vec<Sample>) -> (MovieFragmentBox, Vec<u8>) {
     for sample in samples {
         writer.handle_sample(sample).unwrap();
     }
+    writer.finish_fragment().unwrap();
 
-    writer.finish_fragment().unwrap()
+    writer.poll_fragment().unwrap()
 }
 
 /// The fragment `track_id` contributed to `movie_fragment`
@@ -143,7 +158,8 @@ fn a_decode_time_is_written_for_every_fragment_of_a_track() {
         writer
             .handle_sample(sample(1, decode_time, b"AAAA"))
             .unwrap();
-        let (movie_fragment, _media_data) = writer.finish_fragment().unwrap();
+        writer.finish_fragment().unwrap();
+        let (movie_fragment, _media_data) = writer.poll_fragment().unwrap();
         decode_times.push(
             track_fragment_of(&movie_fragment, 1)
                 .tfdt()
@@ -166,6 +182,7 @@ fn a_fragment_opened_continuing_places_every_track_where_it_reached() {
             writer.handle_sample(sample).unwrap();
         }
         writer.finish_fragment().unwrap();
+        writer.poll_fragment().unwrap();
     }
 
     continuing.begin_fragment_continuing(2).unwrap();
@@ -184,7 +201,8 @@ fn a_fragment_opened_continuing_places_every_track_where_it_reached() {
     ] {
         stated.handle_sample(sample).unwrap();
     }
-    let (movie_fragment, _media_data) = continuing.finish_fragment().unwrap();
+    continuing.finish_fragment().unwrap();
+    let (movie_fragment, _media_data) = continuing.poll_fragment().unwrap();
 
     let decode_times: Vec<u64> = movie_fragment
         .traf()
@@ -192,9 +210,10 @@ fn a_fragment_opened_continuing_places_every_track_where_it_reached() {
         .map(|track_fragment| track_fragment.tfdt().unwrap().base_media_decode_time())
         .collect();
     assert_eq!(decode_times, [3_000, 1_024]);
+    stated.finish_fragment().unwrap();
     assert_eq!(
-        Ok((movie_fragment, b"AAAAAAAAAAAA".to_vec())),
-        stated.finish_fragment()
+        Some((movie_fragment, b"AAAAAAAAAAAA".to_vec())),
+        stated.poll_fragment()
     );
 }
 
@@ -204,7 +223,8 @@ fn a_first_fragment_opened_continuing_places_its_tracks_at_zero() {
 
     writer.begin_fragment_continuing(1).unwrap();
     writer.handle_sample(sample(1, 90_000, b"AAAA")).unwrap();
-    let (movie_fragment, _media_data) = writer.finish_fragment().unwrap();
+    writer.finish_fragment().unwrap();
+    let (movie_fragment, _media_data) = writer.poll_fragment().unwrap();
 
     assert_eq!(
         track_fragment_of(&movie_fragment, 1)
@@ -301,7 +321,17 @@ fn what_the_samples_share_is_stated_once_by_their_track_fragment_header() {
 
 #[test]
 fn what_the_samples_do_not_share_is_stated_by_every_row() {
-    let shorter = Sample::new(1, 1_024, 512, 0, SampleFlags::ZERO, 1, b"BB".to_vec());
+    let shorter = Sample::new(
+        SampleProperties {
+            track_id: 1,
+            decode_time: 1_024,
+            sample_duration: 512,
+            sample_composition_time_offset: 0,
+            sample_flags: SampleFlags::ZERO,
+            sample_description_index: 1,
+        },
+        b"BB".to_vec(),
+    );
     let (movie_fragment, _media_data) = one_fragment(vec![sample(1, 0, b"AAAA"), shorter]);
     let header = track_fragment_of(&movie_fragment, 1).tfhd();
 
@@ -455,8 +485,17 @@ fn a_mismatch_in_a_fragment_opened_continuing_is_reported_in_the_times_the_sampl
 
 #[test]
 fn samples_of_one_fragment_described_by_two_entries_are_refused() {
-    let described_by_the_second =
-        Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 2, b"BBBB".to_vec());
+    let described_by_the_second = Sample::new(
+        SampleProperties {
+            track_id: 1,
+            decode_time: 1_024,
+            sample_duration: 1_024,
+            sample_composition_time_offset: 0,
+            sample_flags: SampleFlags::ZERO,
+            sample_description_index: 2,
+        },
+        b"BBBB".to_vec(),
+    );
     let mut writer = writer();
 
     writer.begin_fragment(1).unwrap();
@@ -475,12 +514,14 @@ fn samples_of_one_fragment_described_by_two_entries_are_refused() {
 #[test]
 fn decode_times_running_past_what_64_bits_carry_are_refused() {
     let at_the_end_of_time = Sample::new(
-        1,
-        u64::MAX,
-        1_024,
-        0,
-        SampleFlags::ZERO,
-        1,
+        SampleProperties {
+            track_id: 1,
+            decode_time: u64::MAX,
+            sample_duration: 1_024,
+            sample_composition_time_offset: 0,
+            sample_flags: SampleFlags::ZERO,
+            sample_description_index: 1,
+        },
         b"AAAA".to_vec(),
     );
     let mut writer = writer();

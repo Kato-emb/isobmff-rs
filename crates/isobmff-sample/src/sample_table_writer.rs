@@ -2,7 +2,7 @@
 
 mod open_track;
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
 use core::mem;
 
@@ -20,25 +20,27 @@ use crate::sample_table_writer::open_track::OpenTrack;
 /// Lays the samples of a presentation out as the sample tables of a movie
 ///
 /// The writer takes the samples chunk by chunk — a chunk being a contiguous
-/// set of samples of one track (ISO/IEC 14496-12 §3.1.2) — and hands the bytes
-/// of each straight back, to be laid down where the caller opened the chunk.
+/// set of samples of one track (ISO/IEC 14496-12 §3.1.2) — and hands over the
+/// bytes of each through [`poll_data`](Self::poll_data), to be laid down where
+/// the caller opened the chunk.
 /// What it keeps is what the sample tables of a track state about them: the
 /// decode timeline (`stts`, §8.6.1.2), the chunks the samples lie in (`stsc`,
 /// §8.7.4), their sizes (a `stsz`, §8.7.3.2, never a `stz2`) and where each
 /// chunk starts (`stco` or `co64`, §8.7.5), and the optional tables stating their composition time
 /// offsets (`ctts`, §8.6.1.3) and the fields of their `sample_flags` (`sdtp`,
-/// `padb`, `stss` and `stdp`, §8.8.3.1), which [`finish`](Self::finish) hands
-/// back per track as [`SampleTables`]. The writer is made for the movie the
+/// `padb`, `stss` and `stdp`, §8.8.3.1), which
+/// [`poll_sample_tables`](Self::poll_sample_tables) hands over per track as
+/// [`SampleTables`] once [`finish`](Self::finish) has built them. The writer is made for the movie the
 /// tables go into, which it checks the samples against; the `stsd` of each
 /// track, and the movie itself, stay with the caller.
 ///
 /// # Layout
 ///
 /// * A chunk is opened by [`begin_chunk`](Self::begin_chunk) stating where in
-///   the file its first byte lies, and holds the samples handed over until the
-///   next chunk is opened or the samples are declared over. The samples of a
-///   chunk lie one after another from there, and the chunk belongs to the
-///   track of its first sample.
+///   the file its first byte lies, and holds the samples handed over until
+///   [`finish_chunk`](Self::finish_chunk) closes it. The samples of a chunk lie
+///   one after another from there, and the chunk belongs to the track of its
+///   first sample.
 /// * The tables of a track count its chunks in the order they were opened and
 ///   its samples in the order they were handed over, so the chunks of a track
 ///   have to be opened at rising offsets for
@@ -68,8 +70,10 @@ use crate::sample_table_writer::open_track::OpenTrack;
 ///   [`ExternalDataReference`](crate::Error::ExternalDataReference), or
 ///   the failure of an entry that does not read as a sample entry, carried
 ///   on [`Box`](crate::Error::Box).
-/// * Handing a sample over while no chunk is open is
-///   [`NoChunkOpen`](crate::Error::NoChunkOpen), and one of another
+/// * Handing a sample over or closing a chunk while no chunk is open is
+///   [`NoChunkOpen`](crate::Error::NoChunkOpen), and opening a chunk or
+///   declaring the samples over while one is still open is
+///   [`ChunkStillOpen`](crate::Error::ChunkStillOpen). A sample of another
 ///   track than the chunk holds is
 ///   [`TrackIdMismatch`](crate::Error::TrackIdMismatch). A chunk no
 ///   sample was handed over to is not recorded.
@@ -93,9 +97,9 @@ use crate::sample_table_writer::open_track::OpenTrack;
 /// * An `Err` leaves the writer failed for good,
 ///   [`AlreadyFinished`](crate::Error::AlreadyFinished) aside: every
 ///   later call reports that same failure again.
-/// * [`finish`](Self::finish) declares the samples over and hands back the
-///   tables. A chunk opened or a sample handed over then, or a second
-///   [`finish`](Self::finish), is
+/// * [`finish`](Self::finish) declares the samples over and builds the
+///   tables. A chunk opened or closed or a sample handed over then, or a
+///   second [`finish`](Self::finish), is
 ///   [`AlreadyFinished`](crate::Error::AlreadyFinished).
 ///
 /// # Examples
@@ -105,7 +109,7 @@ use crate::sample_table_writer::open_track::OpenTrack;
 ///     ChunkOffsetBox, ChunkOffsetEntry, ChunkOffsets, SampleFlags, SampleToChunkBox,
 ///     SampleToChunkEntry,
 /// };
-/// use isobmff_sample::{Sample, SampleTableWriter};
+/// use isobmff_sample::{Sample, SampleProperties, SampleTableWriter};
 /// # use isobmff_test_support::{movie_declaring, track};
 ///
 /// // A writer for a movie of tracks 1 and 2
@@ -114,27 +118,70 @@ use crate::sample_table_writer::open_track::OpenTrack;
 ///
 /// // Two samples of track 1 in a chunk at 1000, then one of track 2 in a chunk at 1008
 /// writer.begin_chunk(1_000)?;
-/// assert_eq!(writer.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?, b"SAMP");
-/// assert_eq!(writer.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?, b"DATA");
+/// writer.handle_sample(Sample::new(
+///     SampleProperties {
+///         track_id: 1,
+///         decode_time: 0,
+///         sample_duration: 1_024,
+///         sample_composition_time_offset: 0,
+///         sample_flags: SampleFlags::ZERO,
+///         sample_description_index: 1,
+///     },
+///     b"SAMP".to_vec(),
+/// ))?;
+/// writer.handle_sample(Sample::new(
+///     SampleProperties {
+///         track_id: 1,
+///         decode_time: 1_024,
+///         sample_duration: 1_024,
+///         sample_composition_time_offset: 0,
+///         sample_flags: SampleFlags::ZERO,
+///         sample_description_index: 1,
+///     },
+///     b"DATA".to_vec(),
+/// ))?;
+/// writer.finish_chunk()?;
 /// writer.begin_chunk(1_008)?;
-/// writer.handle_sample(Sample::new(2, 0, 512, 0, SampleFlags::ZERO, 1, b"MORE".to_vec()))?;
+/// writer.handle_sample(Sample::new(
+///     SampleProperties {
+///         track_id: 2,
+///         decode_time: 0,
+///         sample_duration: 512,
+///         sample_composition_time_offset: 0,
+///         sample_flags: SampleFlags::ZERO,
+///         sample_description_index: 1,
+///     },
+///     b"MORE".to_vec(),
+/// ))?;
+/// writer.finish_chunk()?;
+///
+/// // The bytes of the samples are handed over to be laid down in the order they came
+/// let data: Vec<Vec<u8>> = std::iter::from_fn(|| writer.poll_data()).collect();
+/// assert_eq!(data, [b"SAMP".to_vec(), b"DATA".to_vec(), b"MORE".to_vec()]);
 ///
 /// // Each track gets the tables its samples were laid out in
-/// let tables = writer.finish()?;
+/// writer.finish()?;
+/// let (track_id, tables) = writer.poll_sample_tables().unwrap();
+/// assert_eq!(track_id, 1);
 /// assert_eq!(
-///     *tables[&1].stsc(),
+///     *tables.stsc(),
 ///     SampleToChunkBox::new(vec![SampleToChunkEntry::new(1, 2, 1)])
 /// );
+/// let (track_id, tables) = writer.poll_sample_tables().unwrap();
+/// assert_eq!(track_id, 2);
 /// assert_eq!(
-///     *tables[&2].chunk_offsets(),
+///     *tables.chunk_offsets(),
 ///     ChunkOffsets::Stco(ChunkOffsetBox::new(vec![ChunkOffsetEntry::new(1_008)]))
 /// );
+/// assert_eq!(writer.poll_sample_tables(), None);
 /// # Ok::<(), isobmff_sample::Error>(())
 /// ```
 #[derive(Clone, Debug)]
 pub struct SampleTableWriter {
     trak: Vec<TrackBox>,
     tracks: BTreeMap<u32, OpenTrack>,
+    data: VecDeque<Vec<u8>>,
+    tables: BTreeMap<u32, SampleTables>,
     state: State,
 }
 
@@ -247,7 +294,7 @@ impl SampleTables {
 /// Where the writer stands between calls
 #[derive(Clone, Copy, Debug)]
 enum State {
-    /// Waiting for the first chunk to be opened
+    /// Between chunks, waiting for the next one to be opened
     Between,
     /// Holding a chunk open, and taking the samples it carries
     Chunk(OpenChunk),
@@ -275,7 +322,8 @@ impl OpenChunk {
         trak: &[TrackBox],
         tracks: &mut BTreeMap<u32, OpenTrack>,
     ) -> Result<Vec<u8>, Error> {
-        let track_id = sample.track_id();
+        let properties = sample.properties();
+        let track_id = properties.track_id;
         let held = match &mut self.held {
             Some(held) => held,
             None => {
@@ -284,10 +332,10 @@ impl OpenChunk {
                     .find(|trak| trak.tkhd().track_id() == track_id)
                     .ok_or(Error::UnknownTrackId { track_id })?;
                 SampleDescriptions::new(trak)
-                    .data_reference_index(sample.sample_description_index())?;
+                    .data_reference_index(properties.sample_description_index)?;
                 self.held.insert(HeldSamples {
                     track_id,
-                    sample_description_index: sample.sample_description_index(),
+                    sample_description_index: properties.sample_description_index,
                     sample_count: 0,
                 })
             }
@@ -298,10 +346,10 @@ impl OpenChunk {
                 established_track_id: held.track_id,
             });
         }
-        if held.sample_description_index != sample.sample_description_index() {
+        if held.sample_description_index != properties.sample_description_index {
             return Err(Error::SampleDescriptionIndexMismatch {
                 track_id,
-                stated_sample_description_index: sample.sample_description_index(),
+                stated_sample_description_index: properties.sample_description_index,
                 established_sample_description_index: held.sample_description_index,
             });
         }
@@ -327,24 +375,27 @@ impl SampleTableWriter {
         Self {
             trak: movie.trak().to_vec(),
             tracks: BTreeMap::new(),
+            data: VecDeque::new(),
+            tables: BTreeMap::new(),
             state: State::Between,
         }
     }
 
     /// Opens a chunk starting at `chunk_offset` in the file, which the samples handed over next lie in
     ///
-    /// The chunk open before it, if any, is closed: it holds the samples it
-    /// was handed, and belongs to their track.
-    ///
     /// # Errors
     ///
+    /// * [`ChunkStillOpen`](crate::Error::ChunkStillOpen): the chunk
+    ///   opened before it was not closed by [`finish_chunk`](Self::finish_chunk).
     /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
     pub fn begin_chunk(&mut self, chunk_offset: u64) -> Result<(), Error> {
         self.writing()?;
-        self.close_chunk();
+        if matches!(self.state, State::Chunk(_)) {
+            return Err(self.fail(Error::ChunkStillOpen));
+        }
         self.state = State::Chunk(OpenChunk {
             chunk_offset,
             held: None,
@@ -353,7 +404,34 @@ impl SampleTableWriter {
         Ok(())
     }
 
-    /// Takes a sample, places it at the end of the chunk that is open, and hands its bytes back
+    /// Closes the chunk that is open: it holds the samples it was handed, and belongs to their track
+    ///
+    /// # Errors
+    ///
+    /// * [`NoChunkOpen`](crate::Error::NoChunkOpen): no chunk was
+    ///   open to close.
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
+    ///   samples were declared over by [`finish`](Self::finish).
+    /// * The failure of a previous call, which the writer keeps and reports
+    ///   again for every call after it.
+    pub fn finish_chunk(&mut self) -> Result<(), Error> {
+        self.writing()?;
+        let State::Chunk(OpenChunk { chunk_offset, held }) = self.state else {
+            return Err(self.fail(Error::NoChunkOpen));
+        };
+        if let Some(held) = held {
+            let track = self.tracks.entry(held.track_id).or_default();
+            track
+                .chunks
+                .push((held.sample_count, held.sample_description_index));
+            track.chunk_offsets.push(chunk_offset);
+        }
+        self.state = State::Between;
+
+        Ok(())
+    }
+
+    /// Takes a sample, places it at the end of the chunk that is open, and queues its bytes for [`poll_data`](Self::poll_data)
     ///
     /// # Errors
     ///
@@ -388,22 +466,33 @@ impl SampleTableWriter {
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
-    pub fn handle_sample(&mut self, sample: Sample) -> Result<Vec<u8>, Error> {
+    pub fn handle_sample(&mut self, sample: Sample) -> Result<(), Error> {
         self.writing()?;
         let State::Chunk(chunk) = &mut self.state else {
             return Err(self.fail(Error::NoChunkOpen));
         };
-        chunk
+        let data = chunk
             .place(sample, &self.trak, &mut self.tracks)
-            .map_err(|failure| self.fail(failure))
+            .map_err(|failure| self.fail(failure))?;
+        self.data.push_back(data);
+
+        Ok(())
     }
 
-    /// Declares the samples over, and hands back the sample tables of every track
+    /// Hands over the bytes of the next sample, in the order the samples were handed over
     ///
-    /// The chunk that is open, if any, is closed first.
+    /// The writer holds the bytes of a sample until they are handed over here,
+    /// and reports `None` once they are used up.
+    pub fn poll_data(&mut self) -> Option<Vec<u8>> {
+        self.data.pop_front()
+    }
+
+    /// Declares the samples over, and builds the sample tables of every track for [`poll_sample_tables`](Self::poll_sample_tables)
     ///
     /// # Errors
     ///
+    /// * [`ChunkStillOpen`](crate::Error::ChunkStillOpen): a chunk
+    ///   was left open.
     /// * [`OutOfRange`](isobmff_core::ErrorKind::OutOfRange), carried on
     ///   [`Box`](crate::Error::Box): a chunk holds more samples than
     ///   an `stsc` entry counts, or is numbered past what one reaches.
@@ -411,31 +500,28 @@ impl SampleTableWriter {
     ///   samples were already declared over.
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
-    pub fn finish(&mut self) -> Result<BTreeMap<u32, SampleTables>, Error> {
+    pub fn finish(&mut self) -> Result<(), Error> {
         self.writing()?;
-        self.close_chunk();
+        if matches!(self.state, State::Chunk(_)) {
+            return Err(self.fail(Error::ChunkStillOpen));
+        }
         self.state = State::Finished;
 
-        mem::take(&mut self.tracks)
+        self.tables = mem::take(&mut self.tracks)
             .into_iter()
             .map(|(track_id, track)| Ok((track_id, track.into_tables(track_id)?)))
             .collect::<Result<_, _>>()
-            .map_err(|failure| self.fail(failure))
+            .map_err(|failure| self.fail(failure))?;
+
+        Ok(())
     }
 
-    /// Closes the chunk that is open, putting it on the tables of the track it belongs to
-    fn close_chunk(&mut self) {
-        if let State::Chunk(OpenChunk {
-            chunk_offset,
-            held: Some(held),
-        }) = self.state
-        {
-            let track = self.tracks.entry(held.track_id).or_default();
-            track
-                .chunks
-                .push((held.sample_count, held.sample_description_index));
-            track.chunk_offsets.push(chunk_offset);
-        }
+    /// Hands over the sample tables of the next track, in the order of the track IDs, once the samples were declared over
+    ///
+    /// Reports `None` until [`finish`](Self::finish) has built them, and once
+    /// they are used up. A track no sample was handed over to has none.
+    pub fn poll_sample_tables(&mut self) -> Option<(u32, SampleTables)> {
+        self.tables.pop_first()
     }
 
     /// Returns `Ok` while the writer still takes samples
@@ -460,6 +546,7 @@ mod tests {
     use alloc::collections::BTreeMap;
     use alloc::vec;
     use alloc::vec::Vec;
+    use core::iter;
     use core::num::NonZeroU32;
 
     use isobmff_boxes::{
@@ -472,7 +559,7 @@ mod tests {
 
     use super::{SampleTableWriter, SampleTables};
     use crate::error::Error;
-    use crate::sample::Sample;
+    use crate::sample::{Sample, SampleProperties};
 
     /// Writer for the sample tables of a movie of tracks 1 and 2
     pub(super) fn writer() -> SampleTableWriter {
@@ -482,12 +569,14 @@ mod tests {
     /// Sample of `track_id` at `decode_time` lasting 1024 units, carrying `data`
     pub(super) fn sample(track_id: u32, decode_time: u64, data: &[u8]) -> Sample {
         Sample::new(
-            track_id,
-            decode_time,
-            1_024,
-            0,
-            SampleFlags::ZERO,
-            1,
+            SampleProperties {
+                track_id,
+                decode_time,
+                sample_duration: 1_024,
+                sample_composition_time_offset: 0,
+                sample_flags: SampleFlags::ZERO,
+                sample_description_index: 1,
+            },
             data.to_vec(),
         )
     }
@@ -501,21 +590,72 @@ mod tests {
             for sample in samples {
                 writer.handle_sample(sample).unwrap();
             }
+            writer.finish_chunk().unwrap();
         }
+        writer.finish().unwrap();
 
-        writer.finish().unwrap()
+        iter::from_fn(|| writer.poll_sample_tables()).collect()
     }
 
     #[test]
-    fn the_bytes_of_a_sample_are_handed_straight_back() {
+    fn the_bytes_of_the_samples_are_handed_over_in_the_order_they_came() {
+        let mut writer = writer();
+
+        writer.begin_chunk(1_000).unwrap();
+        writer.handle_sample(sample(1, 0, b"AAAA")).unwrap();
+        writer.handle_sample(sample(1, 1_024, b"BB")).unwrap();
+
+        assert_eq!(
+            [writer.poll_data(), writer.poll_data(), writer.poll_data()],
+            [Some(b"AAAA".to_vec()), Some(b"BB".to_vec()), None]
+        );
+    }
+
+    #[test]
+    fn the_tables_are_handed_over_in_the_order_of_the_track_ids() {
+        let mut writer = writer();
+
+        for (chunk_offset, track_id) in [(1_000, 2), (2_000, 1)] {
+            writer.begin_chunk(chunk_offset).unwrap();
+            writer.handle_sample(sample(track_id, 0, b"AAAA")).unwrap();
+            writer.finish_chunk().unwrap();
+        }
+        writer.finish().unwrap();
+
+        assert_eq!(
+            iter::from_fn(|| writer.poll_sample_tables())
+                .map(|(track_id, _tables)| track_id)
+                .collect::<Vec<_>>(),
+            [1, 2]
+        );
+    }
+
+    #[test]
+    fn a_chunk_begun_while_one_is_still_open_fails_the_writer() {
         let mut writer = writer();
 
         writer.begin_chunk(1_000).unwrap();
 
-        assert_eq!(
-            writer.handle_sample(sample(1, 0, b"AAAA")),
-            Ok(b"AAAA".to_vec())
-        );
+        assert_eq!(writer.begin_chunk(2_000), Err(Error::ChunkStillOpen));
+        assert_eq!(writer.finish_chunk(), Err(Error::ChunkStillOpen));
+    }
+
+    #[test]
+    fn samples_declared_over_while_a_chunk_is_still_open_fail_the_writer() {
+        let mut writer = writer();
+
+        writer.begin_chunk(1_000).unwrap();
+
+        assert_eq!(writer.finish(), Err(Error::ChunkStillOpen));
+        assert_eq!(writer.poll_sample_tables(), None);
+    }
+
+    #[test]
+    fn a_chunk_closed_while_none_is_open_fails_the_writer() {
+        let mut writer = writer();
+
+        assert_eq!(writer.finish_chunk(), Err(Error::NoChunkOpen));
+        assert_eq!(writer.begin_chunk(1_000), Err(Error::NoChunkOpen));
     }
 
     #[test]
@@ -684,8 +824,17 @@ mod tests {
 
     #[test]
     fn samples_of_one_chunk_described_by_two_entries_are_refused() {
-        let described_by_the_second =
-            Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 2, b"BBBB".to_vec());
+        let described_by_the_second = Sample::new(
+            SampleProperties {
+                track_id: 1,
+                decode_time: 1_024,
+                sample_duration: 1_024,
+                sample_composition_time_offset: 0,
+                sample_flags: SampleFlags::ZERO,
+                sample_description_index: 2,
+            },
+            b"BBBB".to_vec(),
+        );
         let mut writer = writer();
 
         writer.begin_chunk(1_000).unwrap();
@@ -742,6 +891,7 @@ mod tests {
             writer.handle_sample(sample(1, 0, b"AAAA")),
             Err(Error::AlreadyFinished)
         );
+        assert_eq!(writer.finish_chunk(), Err(Error::AlreadyFinished));
         assert_eq!(writer.finish(), Err(Error::AlreadyFinished));
     }
 
@@ -794,12 +944,14 @@ mod tests {
         );
         assert_eq!(
             refused(Sample::new(
-                1,
-                0,
-                1_024,
-                0,
-                SampleFlags::ZERO,
-                2,
+                SampleProperties {
+                    track_id: 1,
+                    decode_time: 0,
+                    sample_duration: 1_024,
+                    sample_composition_time_offset: 0,
+                    sample_flags: SampleFlags::ZERO,
+                    sample_description_index: 2
+                },
                 b"AAAA".to_vec()
             )),
             Err(Error::UnknownSampleDescriptionIndex {

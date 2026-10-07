@@ -71,7 +71,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut chunk = None;
     loop {
         while let Some(sample) = demux_fsm.poll_sample() {
-            let described_by = Some((sample.track_id(), sample.sample_description_index()));
+            let described_by = Some((
+                sample.properties().track_id,
+                sample.properties().sample_description_index,
+            ));
             if chunk != described_by {
                 chunk = described_by;
                 mux_fsm.begin_chunk()?;

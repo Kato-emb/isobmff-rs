@@ -73,7 +73,7 @@ impl TrackDecodeTimes {
     }
 
     /// Moves `track_id` to `decode_time`, where its next sample starts
-    pub(crate) fn reach(&mut self, track_id: u32, decode_time: u64) {
+    pub(crate) fn set_decode_time(&mut self, track_id: u32, decode_time: u64) {
         self.decode_times.insert(track_id, decode_time);
     }
 }
@@ -142,9 +142,9 @@ mod tests {
     fn a_track_stands_where_it_was_last_moved_to() {
         let mut decode_times = TrackDecodeTimes::new(&unfragmented_movie()).unwrap();
 
-        decode_times.reach(1, 125);
-        decode_times.reach(2, 10);
-        decode_times.reach(1, 4_100);
+        decode_times.set_decode_time(1, 125);
+        decode_times.set_decode_time(2, 10);
+        decode_times.set_decode_time(1, 4_100);
 
         assert_eq!(decode_times.decode_time(1), Some(4_100));
         assert_eq!(decode_times.decode_time(2), Some(10));
@@ -154,7 +154,7 @@ mod tests {
     fn in_unknown_times_only_a_track_moved_somewhere_stands_anywhere_known() {
         let mut decode_times = TrackDecodeTimes::unknown();
 
-        decode_times.reach(1, 125);
+        decode_times.set_decode_time(1, 125);
 
         assert_eq!(decode_times.decode_time(1), Some(125));
         assert_eq!(decode_times.decode_time(2), None);

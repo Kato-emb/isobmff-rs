@@ -169,14 +169,15 @@ fn no_movie() -> io::Error {
 /// Returns the record of the sample `extent` resolves
 fn record(extent: &SampleExtent) -> SampleRecord {
     let bytes = extent.extent();
+    let properties = extent.properties();
 
     SampleRecord {
-        track_id: extent.track_id(),
-        decode_time: extent.decode_time(),
-        sample_duration: extent.sample_duration(),
-        sample_composition_time_offset: extent.sample_composition_time_offset(),
-        sync: !extent.sample_flags().sample_is_non_sync_sample(),
-        sample_description_index: extent.sample_description_index(),
+        track_id: properties.track_id,
+        decode_time: properties.decode_time,
+        sample_duration: properties.sample_duration,
+        sample_composition_time_offset: properties.sample_composition_time_offset,
+        sync: !properties.sample_flags.sample_is_non_sync_sample(),
+        sample_description_index: properties.sample_description_index,
         offset: bytes.start,
         size: bytes.end.saturating_sub(bytes.start),
     }
@@ -211,15 +212,18 @@ mod tests {
         samples
             .iter()
             .zip(offsets)
-            .map(|(sample, &offset)| SampleRecord {
-                track_id: sample.track_id(),
-                decode_time: sample.decode_time(),
-                sample_duration: sample.sample_duration(),
-                sample_composition_time_offset: sample.sample_composition_time_offset(),
-                sync: !sample.sample_flags().sample_is_non_sync_sample(),
-                sample_description_index: sample.sample_description_index(),
-                offset,
-                size: u64::try_from(sample.data().len()).unwrap(),
+            .map(|(sample, &offset)| {
+                let properties = sample.properties();
+                SampleRecord {
+                    track_id: properties.track_id,
+                    decode_time: properties.decode_time,
+                    sample_duration: properties.sample_duration,
+                    sample_composition_time_offset: properties.sample_composition_time_offset,
+                    sync: !properties.sample_flags.sample_is_non_sync_sample(),
+                    sample_description_index: properties.sample_description_index,
+                    offset,
+                    size: u64::try_from(sample.data().len()).unwrap(),
+                }
             })
             .collect()
     }

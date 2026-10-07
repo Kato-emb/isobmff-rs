@@ -1,7 +1,7 @@
 //! [`NonFragmentedMuxFsm`], a non-fragmented movie file laid down as the samples come
 
 use alloc::vec::Vec;
-use core::mem;
+use core::iter;
 
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox, TrackBox};
 use isobmff_core::{BoxDefinition, BoxType, FourCc};
@@ -90,7 +90,7 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 ///
 /// ```
 /// use isobmff_boxes::SampleFlags;
-/// use isobmff_sample::Sample;
+/// use isobmff_sample::{Sample, SampleProperties};
 /// use isobmff_structure::{MovieDemuxFsm, NonFragmentedMuxFsm};
 /// # use isobmff_test_support::{file_type, unfragmented_movie};
 /// // A file opening with its brands, whose movie declares one track and no sample yet
@@ -100,10 +100,40 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 ///
 /// // Two chunks of track 1, each laid down as its own `mdat`
 /// mux_fsm.begin_chunk()?;
-/// mux_fsm.handle_sample(Sample::new(1, 0, 3_000, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
-/// mux_fsm.handle_sample(Sample::new(1, 3_000, 3_000, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
+/// mux_fsm.handle_sample(Sample::new(
+///     SampleProperties {
+///         track_id: 1,
+///         decode_time: 0,
+///         sample_duration: 3_000,
+///         sample_composition_time_offset: 0,
+///         sample_flags: SampleFlags::ZERO,
+///         sample_description_index: 1,
+///     },
+///     b"SAMP".to_vec(),
+/// ))?;
+/// mux_fsm.handle_sample(Sample::new(
+///     SampleProperties {
+///         track_id: 1,
+///         decode_time: 3_000,
+///         sample_duration: 3_000,
+///         sample_composition_time_offset: 0,
+///         sample_flags: SampleFlags::ZERO,
+///         sample_description_index: 1,
+///     },
+///     b"DATA".to_vec(),
+/// ))?;
 /// mux_fsm.begin_chunk()?;
-/// mux_fsm.handle_sample(Sample::new(1, 6_000, 3_000, 0, SampleFlags::ZERO, 1, b"LAST".to_vec()))?;
+/// mux_fsm.handle_sample(Sample::new(
+///     SampleProperties {
+///         track_id: 1,
+///         decode_time: 6_000,
+///         sample_duration: 3_000,
+///         sample_composition_time_offset: 0,
+///         sample_flags: SampleFlags::ZERO,
+///         sample_description_index: 1,
+///     },
+///     b"LAST".to_vec(),
+/// ))?;
 /// mux_fsm.finish()?;
 ///
 /// // The bytes are drained as the mux FSM hands them over
@@ -137,7 +167,7 @@ pub struct NonFragmentedMuxFsm {
     output: MuxOutput,
     structure: NonFragmentedStructure,
     movie: Option<(MovieBox, SampleTableWriter)>,
-    chunk: Vec<Vec<u8>>,
+    chunk_open: bool,
 }
 
 impl NonFragmentedMuxFsm {
@@ -148,7 +178,7 @@ impl NonFragmentedMuxFsm {
             output: MuxOutput::new(),
             structure: NonFragmentedStructure::new(),
             movie: None,
-            chunk: Vec::new(),
+            chunk_open: false,
         }
     }
 
@@ -241,6 +271,7 @@ impl NonFragmentedMuxFsm {
                 .saturating_add(header.encoded_len() as u64);
 
             self.samples()?.begin_chunk(chunk_offset)?;
+            self.chunk_open = true;
 
             Ok(())
         };
@@ -265,8 +296,7 @@ impl NonFragmentedMuxFsm {
         self.output.writing()?;
         let placed = self
             .samples()
-            .and_then(|samples| samples.handle_sample(sample).map_err(Error::from))
-            .map(|data| self.chunk.push(data));
+            .and_then(|samples| samples.handle_sample(sample).map_err(Error::from));
 
         self.output.record(placed)
     }
@@ -312,8 +342,8 @@ impl NonFragmentedMuxFsm {
                     box_type: MovieBox::BOX_TYPE,
                 });
             };
-            let tables_per_track = samples.finish()?;
-            for (track_id, tables) in tables_per_track {
+            samples.finish()?;
+            while let Some((track_id, tables)) = samples.poll_sample_tables() {
                 // Why not unreachable: the sample layer took a sample of a track
                 // only where the movie declares it, and the fallback is the
                 // structure's own answer to a movie without that track, in place
@@ -370,12 +400,18 @@ impl NonFragmentedMuxFsm {
         }
     }
 
-    /// Lays the samples of the chunk that is open down as one `mdat`, if any were handed over
+    /// Closes the chunk that is open, if any, and lays its samples down as one `mdat`, if any were handed over
     fn lay_down_chunk(&mut self) -> Result<(), Error> {
-        if self.chunk.is_empty() {
+        if !self.chunk_open {
             return Ok(());
         }
-        let media_data = mem::take(&mut self.chunk);
+        self.chunk_open = false;
+        let samples = self.samples()?;
+        samples.finish_chunk()?;
+        let media_data: Vec<Vec<u8>> = iter::from_fn(|| samples.poll_data()).collect();
+        if media_data.is_empty() {
+            return Ok(());
+        }
         // Why not checked_add: the samples were handed over as values that fit
         // in memory, so their lengths cannot sum past what 64 bits carry.
         let media_data_len = media_data.iter().fold(0_u64, |total, sample| {
@@ -404,14 +440,24 @@ mod tests {
 
     use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox, SampleFlags};
     use isobmff_core::{BoxDecode, BoxDefinition};
-    use isobmff_sample::Sample;
+    use isobmff_sample::{Sample, SampleProperties};
     use isobmff_test_support::{file_type, unfragmented_movie};
 
     use super::{Error, NonFragmentedMuxFsm, default_file_type};
 
     /// A sample of the track the movie declares
     fn sample() -> Sample {
-        Sample::new(1, 0, 3_000, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec())
+        Sample::new(
+            SampleProperties {
+                track_id: 1,
+                decode_time: 0,
+                sample_duration: 3_000,
+                sample_composition_time_offset: 0,
+                sample_flags: SampleFlags::ZERO,
+                sample_description_index: 1,
+            },
+            b"SAMP".to_vec(),
+        )
     }
 
     /// The bytes the mux FSM has laid down, drained to the end
@@ -542,12 +588,14 @@ mod tests {
 
         assert!(matches!(
             refused(Sample::new(
-                999,
-                0,
-                3_000,
-                0,
-                SampleFlags::ZERO,
-                1,
+                SampleProperties {
+                    track_id: 999,
+                    decode_time: 0,
+                    sample_duration: 3_000,
+                    sample_composition_time_offset: 0,
+                    sample_flags: SampleFlags::ZERO,
+                    sample_description_index: 1
+                },
                 b"SAMP".to_vec()
             )),
             Err(Error::Sample {
@@ -556,12 +604,14 @@ mod tests {
         ));
         assert!(matches!(
             refused(Sample::new(
-                1,
-                0,
-                3_000,
-                0,
-                SampleFlags::ZERO,
-                2,
+                SampleProperties {
+                    track_id: 1,
+                    decode_time: 0,
+                    sample_duration: 3_000,
+                    sample_composition_time_offset: 0,
+                    sample_flags: SampleFlags::ZERO,
+                    sample_description_index: 2
+                },
                 b"SAMP".to_vec()
             )),
             Err(Error::Sample {

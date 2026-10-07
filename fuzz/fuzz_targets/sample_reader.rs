@@ -129,7 +129,7 @@ fuzz_target!(|input: Input<'_>| {
 
     for sample in &in_order.samples {
         assert!(
-            declares(&laid_out.movie, sample.track_id()),
+            declares(&laid_out.movie, sample.properties().track_id),
             "a sample of a track the movie never declared was read"
         );
     }
@@ -245,14 +245,14 @@ fn read(sample_size_limit: u64, steps: Vec<Step<'_>>, refused: Option<Error>) ->
     for step in steps {
         let outcome = match step {
             Step::Extents(extents) => reader.handle_sample_extents(extents.into_iter().map(Ok)),
-            Step::MediaData(offset, data) => reader.handle_data(offset, data),
+            Step::MediaData(offset, data) => reader.handle_input(offset, data),
         };
 
         drain(&mut reader, &mut samples);
 
         if let Err(reported) = outcome {
             assert_eq!(
-                reader.handle_data(0, &[]),
+                reader.handle_input(0, &[]),
                 Err(reported),
                 "a failed reader took media data instead of reporting its failure again"
             );
@@ -273,7 +273,7 @@ fn read(sample_size_limit: u64, steps: Vec<Step<'_>>, refused: Option<Error>) ->
 
         match over {
             Ok(()) => assert!(
-                matches!(reader.handle_data(0, &[]), Err(Error::AlreadyFinished { .. })),
+                matches!(reader.handle_input(0, &[]), Err(Error::AlreadyFinished { .. })),
                 "the reader took media data after the samples were declared over"
             ),
             Err(reported) => failure = Some(reported),
@@ -313,7 +313,7 @@ fn counted(samples: &[Sample]) -> HashMap<&Sample, usize> {
 fn reported(samples: &[Sample]) -> Vec<(u32, Vec<u8>)> {
     samples
         .iter()
-        .map(|sample| (sample.track_id(), sample.data().to_vec()))
+        .map(|sample| (sample.properties().track_id, sample.data().to_vec()))
         .collect()
 }
 
@@ -322,16 +322,19 @@ fn samples_follow_by_their_durations(samples: &[Sample]) {
     let mut next_of_track: BTreeMap<u32, u64> = BTreeMap::new();
 
     for sample in samples {
-        let decoded_at = next_of_track.get(&sample.track_id()).copied().unwrap_or(0);
+        let decoded_at = next_of_track
+            .get(&sample.properties().track_id)
+            .copied()
+            .unwrap_or(0);
 
         assert_eq!(
-            sample.decode_time(),
+            sample.properties().decode_time,
             decoded_at,
             "a sample does not follow the one before it on the timeline of its track"
         );
         next_of_track.insert(
-            sample.track_id(),
-            decoded_at.saturating_add(u64::from(sample.sample_duration())),
+            sample.properties().track_id,
+            decoded_at.saturating_add(u64::from(sample.properties().sample_duration)),
         );
     }
 }

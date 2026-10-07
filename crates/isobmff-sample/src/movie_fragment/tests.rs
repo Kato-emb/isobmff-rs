@@ -18,7 +18,7 @@ use isobmff_test_support::{
 
 use super::sample_extents;
 use crate::error::Error;
-use crate::sample::SampleExtent;
+use crate::sample::{SampleExtent, SampleProperties};
 use crate::track_decode_times::TrackDecodeTimes;
 
 /// Movie of the given tracks, each fragmented with samples that last 1024 units and occupy 4 bytes
@@ -166,12 +166,14 @@ fn one_sample_movie_fragment() -> MovieFragmentBox {
 /// Extent of a sample of `track_id` as the defaults of the movies here settle it
 fn extent(track_id: u32, decode_time: u64, data: Range<u64>) -> SampleExtent {
     SampleExtent::new(
-        track_id,
-        decode_time,
-        1_024,
-        0,
-        SampleFlags::ZERO,
-        1,
+        SampleProperties {
+            track_id,
+            decode_time,
+            sample_duration: 1_024,
+            sample_composition_time_offset: 0,
+            sample_flags: SampleFlags::ZERO,
+            sample_description_index: 1,
+        },
         1,
         data,
     )
@@ -203,7 +205,7 @@ fn resolved_from(
 /// Times of a movie whose track 1 stands at `decode_time`
 fn track_1_at(decode_time: u64) -> TrackDecodeTimes {
     let mut decode_times = TrackDecodeTimes::new(&one_track_movie()).unwrap();
-    decode_times.reach(1, decode_time);
+    decode_times.set_decode_time(1, decode_time);
 
     decode_times
 }
@@ -231,12 +233,14 @@ fn a_sample_takes_what_its_row_states_over_the_defaults_of_the_fragment_and_the_
     assert_eq!(
         resolved(&movie_fragment(vec![track_fragment]), &one_track_movie()),
         Ok(vec![SampleExtent::new(
-            1,
-            0,
-            512,
-            -8,
-            depending_on(SampleDependsOn::DependsOnOthers),
-            1,
+            SampleProperties {
+                track_id: 1,
+                decode_time: 0,
+                sample_duration: 512,
+                sample_composition_time_offset: -8,
+                sample_flags: depending_on(SampleDependsOn::DependsOnOthers),
+                sample_description_index: 1
+            },
             1,
             100..102
         )])
@@ -259,12 +263,14 @@ fn an_offset_a_version_0_run_states_past_the_signed_range_is_read_as_negative() 
             &one_track_movie()
         ),
         Ok(vec![SampleExtent::new(
-            1,
-            0,
-            1_024,
-            -1_024,
-            SampleFlags::ZERO,
-            1,
+            SampleProperties {
+                track_id: 1,
+                decode_time: 0,
+                sample_duration: 1_024,
+                sample_composition_time_offset: -1_024,
+                sample_flags: SampleFlags::ZERO,
+                sample_description_index: 1
+            },
             1,
             100..104
         )])
@@ -288,8 +294,30 @@ fn a_sample_takes_what_its_fragment_states_over_the_defaults_of_its_track() {
     assert_eq!(
         resolved(&movie_fragment(vec![track_fragment]), &one_track_movie()),
         Ok(vec![
-            SampleExtent::new(1, 0, 256, 0, SampleFlags::ZERO, 1, 1, 100..102),
-            SampleExtent::new(1, 256, 256, 0, SampleFlags::ZERO, 1, 1, 102..104),
+            SampleExtent::new(
+                SampleProperties {
+                    track_id: 1,
+                    decode_time: 0,
+                    sample_duration: 256,
+                    sample_composition_time_offset: 0,
+                    sample_flags: SampleFlags::ZERO,
+                    sample_description_index: 1
+                },
+                1,
+                100..102
+            ),
+            SampleExtent::new(
+                SampleProperties {
+                    track_id: 1,
+                    decode_time: 256,
+                    sample_duration: 256,
+                    sample_composition_time_offset: 0,
+                    sample_flags: SampleFlags::ZERO,
+                    sample_description_index: 1
+                },
+                1,
+                102..104
+            ),
         ])
     );
 }
@@ -316,12 +344,14 @@ fn the_flags_of_the_first_sample_of_a_run_stand_in_for_the_defaults() {
         resolved(&movie_fragment(vec![track_fragment]), &one_track_movie()),
         Ok(vec![
             SampleExtent::new(
-                1,
-                0,
-                1_024,
-                0,
-                depending_on(SampleDependsOn::DoesNotDependOnOthers),
-                1,
+                SampleProperties {
+                    track_id: 1,
+                    decode_time: 0,
+                    sample_duration: 1_024,
+                    sample_composition_time_offset: 0,
+                    sample_flags: depending_on(SampleDependsOn::DoesNotDependOnOthers),
+                    sample_description_index: 1
+                },
                 1,
                 100..104
             ),
@@ -794,7 +824,7 @@ fn samples_after_a_fragment_kept_unread_lie_where_they_would_were_its_track_read
     let with_every_track_read = resolved(&movie_fragment, &movie(vec![track(1), track(2)]))
         .unwrap()
         .into_iter()
-        .filter(|extent| extent.track_id() != 2)
+        .filter(|extent| extent.properties().track_id != 2)
         .collect();
 
     assert_eq!(

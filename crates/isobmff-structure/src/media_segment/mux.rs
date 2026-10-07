@@ -70,7 +70,7 @@ use crate::{Error, whole_box_header, whole_payload};
 ///
 /// ```
 /// use isobmff_boxes::{SampleFlags, TrackExtendsBox};
-/// use isobmff_sample::Sample;
+/// use isobmff_sample::{Sample, SampleProperties};
 /// use isobmff_structure::MediaSegmentMuxFsm;
 /// # use isobmff_test_support::{fragmented_movie, segment_type};
 /// // A segment continuing the movie of track 1, opening with its brands
@@ -80,8 +80,28 @@ use crate::{Error, whole_box_header, whole_payload};
 ///
 /// // One fragment of two samples of track 1, lasting 1024 units each
 /// mux_fsm.begin_fragment(1)?;
-/// mux_fsm.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
-/// mux_fsm.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
+/// mux_fsm.handle_sample(Sample::new(
+///     SampleProperties {
+///         track_id: 1,
+///         decode_time: 0,
+///         sample_duration: 1_024,
+///         sample_composition_time_offset: 0,
+///         sample_flags: SampleFlags::ZERO,
+///         sample_description_index: 1,
+///     },
+///     b"SAMP".to_vec(),
+/// ))?;
+/// mux_fsm.handle_sample(Sample::new(
+///     SampleProperties {
+///         track_id: 1,
+///         decode_time: 1_024,
+///         sample_duration: 1_024,
+///         sample_composition_time_offset: 0,
+///         sample_flags: SampleFlags::ZERO,
+///         sample_description_index: 1,
+///     },
+///     b"DATA".to_vec(),
+/// ))?;
 /// mux_fsm.finish_fragment()?;
 /// mux_fsm.finish()?;
 ///
@@ -236,10 +256,13 @@ impl MediaSegmentMuxFsm {
     pub fn finish_fragment(&mut self) -> Result<(), Error> {
         self.output.writing()?;
         let mut lay_down_fragment = || -> Result<(), Error> {
-            let (movie_fragment, media_data) = self.samples.finish_fragment()?;
+            self.samples.finish_fragment()?;
+            while let Some((movie_fragment, media_data)) = self.samples.poll_fragment() {
+                self.write_value(&movie_fragment)?;
+                self.lay_down(MediaDataBox::BOX_TYPE, media_data)?;
+            }
 
-            self.write_value(&movie_fragment)?;
-            self.lay_down(MediaDataBox::BOX_TYPE, media_data)
+            Ok(())
         };
         let laid_down = lay_down_fragment();
 
@@ -315,7 +338,7 @@ impl MediaSegmentMuxFsm {
 mod tests {
     use isobmff_boxes::{MovieFragmentBox, SampleFlags, SegmentTypeBox};
     use isobmff_core::{BoxDefinition, FourCc};
-    use isobmff_sample::Sample;
+    use isobmff_sample::{Sample, SampleProperties};
     use isobmff_test_support::{segment_type, unfragmented_movie};
 
     use super::super::tests::{movie, sample};
@@ -406,12 +429,14 @@ mod tests {
 
         assert!(matches!(
             mux_fsm.handle_sample(Sample::new(
-                999,
-                0,
-                1_024,
-                0,
-                SampleFlags::ZERO,
-                1,
+                SampleProperties {
+                    track_id: 999,
+                    decode_time: 0,
+                    sample_duration: 1_024,
+                    sample_composition_time_offset: 0,
+                    sample_flags: SampleFlags::ZERO,
+                    sample_description_index: 1
+                },
                 b"SAMP".to_vec()
             )),
             Err(Error::Sample {

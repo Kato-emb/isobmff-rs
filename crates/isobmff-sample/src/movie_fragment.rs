@@ -11,7 +11,7 @@ use isobmff_core::BoxDefinition as _;
 
 use crate::composition_time_offset;
 use crate::error::Error;
-use crate::sample::SampleExtent;
+use crate::sample::{SampleExtent, SampleProperties};
 use crate::sample_description::SampleDescriptions;
 use crate::track_decode_times::TrackDecodeTimes;
 
@@ -227,7 +227,7 @@ impl SettledFragment {
             let lasts = u64::from(row.sample_duration().unwrap_or(sample_duration));
             end = end.checked_add(lasts).ok_or_else(overflow)?;
         }
-        reached.reach(track_id, end);
+        reached.set_decode_time(track_id, end);
 
         Ok(Self::Read(TrackFragment {
             track_id,
@@ -279,16 +279,19 @@ fn resolve_data(
                             let sample_duration =
                                 row.sample_duration().unwrap_or(settled.sample_duration);
                             extents.push(Ok(SampleExtent::new(
-                                settled.track_id,
-                                decode_time,
-                                sample_duration,
-                                row.sample_composition_time_offset()
-                                    .map_or(0, composition_time_offset::resolved),
-                                first_sample_flags
-                                    .take()
-                                    .or(row.sample_flags())
-                                    .unwrap_or(settled.sample_flags),
-                                settled.sample_description_index,
+                                SampleProperties {
+                                    track_id: settled.track_id,
+                                    decode_time,
+                                    sample_duration,
+                                    sample_composition_time_offset: row
+                                        .sample_composition_time_offset()
+                                        .map_or(0, composition_time_offset::resolved),
+                                    sample_flags: first_sample_flags
+                                        .take()
+                                        .or(row.sample_flags())
+                                        .unwrap_or(settled.sample_flags),
+                                    sample_description_index: settled.sample_description_index,
+                                },
                                 settled.data_reference_index,
                                 data,
                             )));
