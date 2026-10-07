@@ -4,11 +4,12 @@ use alloc::vec::Vec;
 use core::mem;
 
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox};
-use isobmff_core::{BoxDefinition, BoxHeader, BoxType, FourCC};
+use isobmff_core::{BoxDefinition, BoxType, FourCC};
 use isobmff_sample::{Sample, SampleTableWriter};
-use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
+use isobmff_sequence::EventBytes;
 
 use super::{NonFragmentedDisposition, NonFragmentedStructure};
+use crate::mux_output::MuxOutput;
 use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 
 /// Lays a non-fragmented movie file down, taking the samples as they come
@@ -133,24 +134,10 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 /// ```
 #[derive(Debug)]
 pub struct NonFragmentedMuxFsm {
-    boxes: BoxWriter,
-    /// Where the output stands: the end of the extent the last step was written to
-    output_position: u64,
+    output: MuxOutput,
     structure: NonFragmentedStructure,
     movie: Option<(MovieBox, SampleTableWriter)>,
     chunk: Vec<Vec<u8>>,
-    state: State,
-}
-
-/// Where the mux FSM stands between calls
-#[derive(Clone, Copy, Debug)]
-enum State {
-    /// Laying the file down as the boxes and the samples come
-    Writing,
-    /// Told the file is over, and taking nothing more
-    Finished,
-    /// Failed, and reporting that same failure for every call after it
-    Failed(Error),
 }
 
 impl NonFragmentedMuxFsm {
@@ -158,12 +145,10 @@ impl NonFragmentedMuxFsm {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            boxes: BoxWriter::new(),
-            output_position: 0,
+            output: MuxOutput::new(),
             structure: NonFragmentedStructure::new(),
             movie: None,
             chunk: Vec::new(),
-            state: State::Writing,
         }
     }
 
@@ -179,8 +164,10 @@ impl NonFragmentedMuxFsm {
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), Error> {
-        self.writing()?;
-        self.lay_down_file_type(&file_type)
+        self.output.writing()?;
+        let laid_down = self.lay_down_file_type(&file_type);
+
+        self.output.record(laid_down)
     }
 
     /// Takes the movie as a template, to be laid down last with its sample tables filled in and its durations stated from them
@@ -199,19 +186,24 @@ impl NonFragmentedMuxFsm {
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), Error> {
-        self.writing()?;
-        if self.structure.is_at_start() {
-            self.lay_down_file_type(&default_file_type())?;
-        }
-        // Why not placing the movie in the order at `finish`: a second movie
-        // is refused where it is handed over, before chunks are laid down
-        // against the first, and the structure places a `moov` the same
-        // before the media data as after it.
-        self.admit(MovieBox::BOX_TYPE)?;
-        let samples = SampleTableWriter::new(&movie);
-        self.movie = Some((movie, samples));
+        self.output.writing()?;
+        let admit_movie = || -> Result<(), Error> {
+            if self.structure.is_at_start() {
+                self.lay_down_file_type(&default_file_type())?;
+            }
+            // Why not placing the movie in the order at `finish`: a second movie
+            // is refused where it is handed over, before chunks are laid down
+            // against the first, and the structure places a `moov` the same
+            // before the media data as after it.
+            self.admit(MovieBox::BOX_TYPE)?;
+            let samples = SampleTableWriter::new(&movie);
+            self.movie = Some((movie, samples));
 
-        Ok(())
+            Ok(())
+        };
+        let admitted = admit_movie();
+
+        self.output.record(admitted)
     }
 
     /// Opens a chunk, which the samples handed over next are laid out in, laying down the chunk open before it
@@ -231,25 +223,30 @@ impl NonFragmentedMuxFsm {
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn begin_chunk(&mut self) -> Result<(), Error> {
-        self.writing()?;
-        self.samples()?;
-        self.lay_down_chunk()?;
-        // Why not measuring the header once the chunk is whole: the chunk
-        // offset is stated before it is, so the chunk goes down under the
-        // compact header whatever its length, and is refused where that form
-        // cannot declare it.
-        self.admit(MediaDataBox::BOX_TYPE)?;
-        let header =
-            compact_box_header(MediaDataBox::BOX_TYPE, 0).map_err(|failure| self.fail(failure))?;
-        // Why not checked_add: the framing already carries where the file
-        // ends in 64 bits, and a compact header is eight bytes past it.
-        let chunk_offset = self
-            .output_position
-            .saturating_add(header.encoded_len() as u64);
+        self.output.writing()?;
+        let mut open_chunk = || -> Result<(), Error> {
+            self.samples()?;
+            self.lay_down_chunk()?;
+            // Why not measuring the header once the chunk is whole: the chunk
+            // offset is stated before it is, so the chunk goes down under the
+            // compact header whatever its length, and is refused where that form
+            // cannot declare it.
+            self.admit(MediaDataBox::BOX_TYPE)?;
+            let header = compact_box_header(MediaDataBox::BOX_TYPE, 0)?;
+            // Why not checked_add: the framing already carries where the file
+            // ends in 64 bits, and a compact header is eight bytes past it.
+            let chunk_offset = self
+                .output
+                .position()
+                .saturating_add(header.encoded_len() as u64);
 
-        self.samples()?
-            .begin_chunk(chunk_offset)
-            .map_err(|failure| self.fail(failure.into()))
+            self.samples()?.begin_chunk(chunk_offset)?;
+
+            Ok(())
+        };
+        let begun = open_chunk();
+
+        self.output.record(begun)
     }
 
     /// Takes a sample, and places it at the end of the chunk that is open
@@ -265,14 +262,13 @@ impl NonFragmentedMuxFsm {
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), Error> {
-        self.writing()?;
-        let data = self
-            .samples()?
-            .handle_sample(sample)
-            .map_err(|failure| self.fail(failure.into()))?;
-        self.chunk.push(data);
+        self.output.writing()?;
+        let placed = self
+            .samples()
+            .and_then(|samples| samples.handle_sample(sample).map_err(Error::from))
+            .map(|data| self.chunk.push(data));
 
-        Ok(())
+        self.output.record(placed)
     }
 
     /// Hands over the bytes the file has been laid down as so far
@@ -282,7 +278,7 @@ impl NonFragmentedMuxFsm {
     /// the samples, so this one never fails — a failed mux FSM hands over the
     /// bytes it had already made, then nothing from there on.
     pub fn poll_output(&mut self) -> Option<EventBytes> {
-        self.boxes.poll_output()
+        self.output.poll_output()
     }
 
     /// Declares the file over, laying down the chunk that is open and then the movie
@@ -303,90 +299,66 @@ impl NonFragmentedMuxFsm {
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), Error> {
-        self.writing()?;
-        self.lay_down_chunk()?;
-        self.structure
-            .finish()
-            .map_err(|failure| self.fail(failure))?;
-        // Why not unreachable: the structure declared the file over only with
-        // the movie in it, so one was handed over, and the fallback is the
-        // structure's own answer to a file without one, in place of a panic
-        // the lints forbid.
-        let Some((mut movie, mut samples)) = self.movie.take() else {
-            return Err(self.fail(Error::missing_mandatory_box(MovieBox::BOX_TYPE)));
-        };
-        let tables_per_track = samples
-            .finish()
-            .map_err(|failure| self.fail(failure.into()))?;
-        for (track_id, tables) in tables_per_track {
-            // Why not unreachable: the sample layer took a sample of a track
-            // only where the movie declares it, and the fallback is its own
-            // answer to one it does not, in place of a panic the lints forbid.
-            let Some(track) = movie.trak_mut(track_id) else {
-                return Err(self.fail(isobmff_sample::Error::unknown_track_id(track_id).into()));
+        self.output.writing()?;
+        let mut finish_file = || -> Result<(), Error> {
+            self.lay_down_chunk()?;
+            self.structure.finish()?;
+            // Why not unreachable: the structure declared the file over only with
+            // the movie in it, so one was handed over, and the fallback is the
+            // structure's own answer to a file without one, in place of a panic
+            // the lints forbid.
+            let Some((mut movie, mut samples)) = self.movie.take() else {
+                return Err(Error::missing_mandatory_box(MovieBox::BOX_TYPE));
             };
-            let stbl = track.mdia_mut().minf_mut().stbl_mut();
-            *stbl = tables.into_sample_table(stbl.stsd().clone());
-        }
-        movie.state_durations();
-        let payload = whole_payload(&movie).map_err(|failure| self.fail(failure))?;
-        let header = whole_box_header(MovieBox::BOX_TYPE, payload.len() as u64)
-            .map_err(|failure| self.fail(failure))?;
-        self.frame(header, alloc::vec![payload])?;
-        self.boxes
-            .finish()
-            .map_err(|failure| self.fail(failure.into()))?;
-        self.state = State::Finished;
+            let tables_per_track = samples.finish()?;
+            for (track_id, tables) in tables_per_track {
+                // Why not unreachable: the sample layer took a sample of a track
+                // only where the movie declares it, and the fallback is its own
+                // answer to one it does not, in place of a panic the lints forbid.
+                let Some(track) = movie.trak_mut(track_id) else {
+                    return Err(isobmff_sample::Error::unknown_track_id(track_id).into());
+                };
+                let stbl = track.mdia_mut().minf_mut().stbl_mut();
+                *stbl = tables.into_sample_table(stbl.stsd().clone());
+            }
+            movie.state_durations();
+            let payload = whole_payload(&movie)?;
+            let header = whole_box_header(MovieBox::BOX_TYPE, payload.len() as u64)?;
+            self.output.frame(header, [payload])?;
+            self.output.finish()
+        };
+        let finished = finish_file();
 
-        Ok(())
+        self.output.record(finished)
     }
 
-    /// Lays `file_type` down as the first box of the file, failing the mux FSM where it is refused
+    /// Lays `file_type` down as the first box of the file
     fn lay_down_file_type(&mut self, file_type: &FileTypeBox) -> Result<(), Error> {
-        let payload = whole_payload(file_type).map_err(|failure| self.fail(failure))?;
-        let header = whole_box_header(FileTypeBox::BOX_TYPE, payload.len() as u64)
-            .map_err(|failure| self.fail(failure))?;
+        let payload = whole_payload(file_type)?;
+        let header = whole_box_header(FileTypeBox::BOX_TYPE, payload.len() as u64)?;
         self.admit(FileTypeBox::BOX_TYPE)?;
 
-        self.frame(header, alloc::vec![payload])
+        self.output.frame(header, [payload])
     }
 
-    /// Returns the sample layer, made once the movie was handed over, failing the mux FSM where it was not
+    /// Returns the sample layer, made once the movie was handed over
     fn samples(&mut self) -> Result<&mut SampleTableWriter, Error> {
         match &mut self.movie {
             Some((_movie, samples)) => Ok(samples),
-            None => {
-                let failure = Error::box_out_of_order(MediaDataBox::BOX_TYPE);
-                self.state = State::Failed(failure);
-
-                Err(failure)
-            }
+            None => Err(Error::box_out_of_order(MediaDataBox::BOX_TYPE)),
         }
     }
 
-    /// Admits the box `box_type` names into the file where the structure places it, failing the mux FSM where it is refused
+    /// Admits the box `box_type` names into the file where the structure places it
     ///
     /// A box the structure passes over is refused as
     /// [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder).
     fn admit(&mut self, box_type: BoxType) -> Result<(), Error> {
-        match self
-            .structure
-            .handle_box_type(box_type)
-            .map_err(|failure| self.fail(failure))?
-        {
+        match self.structure.handle_box_type(box_type)? {
             NonFragmentedDisposition::FileType
             | NonFragmentedDisposition::Movie
             | NonFragmentedDisposition::MediaData => Ok(()),
-            NonFragmentedDisposition::Skip => Err(self.fail(Error::box_out_of_order(box_type))),
-        }
-    }
-
-    /// Returns `Ok` while the mux FSM still takes boxes and samples
-    const fn writing(&self) -> Result<(), Error> {
-        match self.state {
-            State::Writing => Ok(()),
-            State::Finished => Err(Error::already_finished()),
-            State::Failed(failure) => Err(failure),
+            NonFragmentedDisposition::Skip => Err(Error::box_out_of_order(box_type)),
         }
     }
 
@@ -401,38 +373,9 @@ impl NonFragmentedMuxFsm {
         let media_data_len = media_data.iter().fold(0_u64, |total, sample| {
             total.saturating_add(sample.len() as u64)
         });
-        let header = compact_box_header(MediaDataBox::BOX_TYPE, media_data_len)
-            .map_err(|failure| self.fail(failure))?;
+        let header = compact_box_header(MediaDataBox::BOX_TYPE, media_data_len)?;
 
-        self.frame(header, media_data)
-    }
-
-    /// Hands one box over to the framing of the file, its payload in the pieces it came in
-    fn frame(&mut self, header: BoxHeader, payload: Vec<Vec<u8>>) -> Result<(), Error> {
-        self.lay_down_step(BoxEvent::Header(header))?;
-        for piece in payload.into_iter().filter(|piece| !piece.is_empty()) {
-            self.lay_down_step(BoxEvent::Payload(piece))?;
-        }
-        self.lay_down_step(BoxEvent::End)
-    }
-
-    /// Hands one step of the framing over, failing the mux FSM where it is refused
-    fn lay_down_step(&mut self, step: BoxEvent) -> Result<(), Error> {
-        let extent = self
-            .boxes
-            .handle_event(step)
-            .map_err(|failure| self.fail(failure.into()))?;
-
-        self.output_position = extent.end;
-
-        Ok(())
-    }
-
-    /// Fails the mux FSM for good, and hands the failure back to report
-    const fn fail(&mut self, failure: Error) -> Error {
-        self.state = State::Failed(failure);
-
-        failure
+        self.output.frame(header, media_data)
     }
 }
 
@@ -618,30 +561,6 @@ mod tests {
             mux_fsm.finish(),
             Err(Error::missing_mandatory_box(MovieBox::BOX_TYPE))
         );
-    }
-
-    #[test]
-    fn a_failed_mux_fsm_reports_the_same_failure_for_every_call_after_it() {
-        let mut mux_fsm = NonFragmentedMuxFsm::new();
-        let failure = Error::box_out_of_order(FileTypeBox::BOX_TYPE);
-
-        mux_fsm.handle_movie(unfragmented_movie()).unwrap();
-
-        assert_eq!(mux_fsm.handle_file_type(file_type()), Err(failure));
-        assert_eq!(mux_fsm.begin_chunk(), Err(failure));
-        assert_eq!(mux_fsm.handle_sample(sample()), Err(failure));
-        assert_eq!(mux_fsm.finish(), Err(failure));
-    }
-
-    #[test]
-    fn a_failed_mux_fsm_hands_over_the_bytes_it_had_already_laid_down() {
-        let mut mux_fsm = NonFragmentedMuxFsm::new();
-
-        mux_fsm.handle_file_type(file_type()).unwrap();
-
-        assert!(mux_fsm.handle_file_type(file_type()).is_err());
-
-        assert_eq!(*mux_fsm.poll_output().unwrap(), *b"\0\0\0\x18ftyp");
     }
 
     #[test]

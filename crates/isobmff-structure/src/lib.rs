@@ -195,6 +195,7 @@ mod fragmented_movie;
 mod input_position;
 mod media_segment;
 mod movie;
+mod mux_output;
 mod non_fragmented_movie;
 mod whole_box;
 

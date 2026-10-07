@@ -5,9 +5,10 @@ use alloc::vec::Vec;
 use isobmff_boxes::{MediaDataBox, MovieBox, SegmentTypeBox};
 use isobmff_core::{BoxDefinition, BoxEncode, BoxType};
 use isobmff_sample::{MovieFragmentWriter, Sample};
-use isobmff_sequence::{BoxEvent, BoxWriter, EventBytes};
+use isobmff_sequence::EventBytes;
 
 use super::{MediaSegmentDisposition, MediaSegmentStructure};
+use crate::mux_output::MuxOutput;
 use crate::{Error, whole_box_header, whole_payload};
 
 /// Lays a media segment down, taking the samples as they come
@@ -97,21 +98,9 @@ use crate::{Error, whole_box_header, whole_payload};
 /// ```
 #[derive(Debug)]
 pub struct MediaSegmentMuxFsm {
-    boxes: BoxWriter,
+    output: MuxOutput,
     structure: MediaSegmentStructure,
     samples: MovieFragmentWriter,
-    state: State,
-}
-
-/// Where the mux FSM stands between calls
-#[derive(Clone, Copy, Debug)]
-enum State {
-    /// Laying the segment down as the brands and the samples come
-    Writing,
-    /// Told the samples are over, and taking nothing more
-    Finished,
-    /// Failed, and reporting that same failure for every call after it
-    Failed(Error),
 }
 
 impl MediaSegmentMuxFsm {
@@ -127,10 +116,9 @@ impl MediaSegmentMuxFsm {
     ///   sample tables lay samples out.
     pub fn new(movie: &MovieBox) -> Result<Self, Error> {
         Ok(Self {
-            boxes: BoxWriter::new(),
+            output: MuxOutput::new(),
             structure: MediaSegmentStructure::new(),
             samples: MovieFragmentWriter::new(movie)?,
-            state: State::Writing,
         })
     }
 
@@ -149,14 +137,19 @@ impl MediaSegmentMuxFsm {
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn handle_segment_type(&mut self, segment_type: SegmentTypeBox) -> Result<(), Error> {
-        self.writing()?;
-        if segment_type.forbids_default_base_is_moof() {
-            return Err(self.fail(Error::unsupported_brand()));
-        }
-        if !self.structure.is_at_start() {
-            return Err(self.fail(Error::box_out_of_order(SegmentTypeBox::BOX_TYPE)));
-        }
-        self.write_value(&segment_type)
+        self.output.writing()?;
+        let mut lay_down_segment_type = || -> Result<(), Error> {
+            if segment_type.forbids_default_base_is_moof() {
+                return Err(Error::unsupported_brand());
+            }
+            if !self.structure.is_at_start() {
+                return Err(Error::box_out_of_order(SegmentTypeBox::BOX_TYPE));
+            }
+            self.write_value(&segment_type)
+        };
+        let laid_down = lay_down_segment_type();
+
+        self.output.record(laid_down)
     }
 
     /// Opens a fragment, which the samples handed over next are laid out in
@@ -173,10 +166,13 @@ impl MediaSegmentMuxFsm {
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn begin_fragment(&mut self, sequence_number: u32) -> Result<(), Error> {
-        self.writing()?;
-        self.samples
+        self.output.writing()?;
+        let begun = self
+            .samples
             .begin_fragment(sequence_number)
-            .map_err(|failure| self.fail(failure.into()))
+            .map_err(Error::from);
+
+        self.output.record(begun)
     }
 
     /// Opens a fragment in which every track continues where the samples written for it reach, as [`MovieFragmentWriter::begin_fragment_continuing`] places them
@@ -193,10 +189,13 @@ impl MediaSegmentMuxFsm {
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn begin_fragment_continuing(&mut self, sequence_number: u32) -> Result<(), Error> {
-        self.writing()?;
-        self.samples
+        self.output.writing()?;
+        let begun = self
+            .samples
             .begin_fragment_continuing(sequence_number)
-            .map_err(|failure| self.fail(failure.into()))
+            .map_err(Error::from);
+
+        self.output.record(begun)
     }
 
     /// Takes a sample, and places it in the fragment that is open
@@ -210,10 +209,10 @@ impl MediaSegmentMuxFsm {
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), Error> {
-        self.writing()?;
-        self.samples
-            .handle_sample(sample)
-            .map_err(|failure| self.fail(failure.into()))
+        self.output.writing()?;
+        let placed = self.samples.handle_sample(sample).map_err(Error::from);
+
+        self.output.record(placed)
     }
 
     /// Closes the fragment that is open, and lays it down
@@ -233,14 +232,16 @@ impl MediaSegmentMuxFsm {
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn finish_fragment(&mut self) -> Result<(), Error> {
-        self.writing()?;
-        let (movie_fragment, media_data) = self
-            .samples
-            .finish_fragment()
-            .map_err(|failure| self.fail(failure.into()))?;
+        self.output.writing()?;
+        let mut lay_down_fragment = || -> Result<(), Error> {
+            let (movie_fragment, media_data) = self.samples.finish_fragment()?;
 
-        self.write_value(&movie_fragment)?;
-        self.lay_down(MediaDataBox::BOX_TYPE, media_data)
+            self.write_value(&movie_fragment)?;
+            self.lay_down(MediaDataBox::BOX_TYPE, media_data)
+        };
+        let laid_down = lay_down_fragment();
+
+        self.output.record(laid_down)
     }
 
     /// Hands over the bytes the segment has been laid down as so far
@@ -250,7 +251,7 @@ impl MediaSegmentMuxFsm {
     /// and the samples, so this one never fails — a failed mux FSM hands over
     /// the bytes it had already made, then nothing from there on.
     pub fn poll_output(&mut self) -> Option<EventBytes> {
-        self.boxes.poll_output()
+        self.output.poll_output()
     }
 
     /// Declares the segment over
@@ -267,28 +268,15 @@ impl MediaSegmentMuxFsm {
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), Error> {
-        self.writing()?;
-        self.samples
-            .finish()
-            .map_err(|failure| self.fail(failure.into()))?;
-        self.structure
-            .finish()
-            .map_err(|failure| self.fail(failure))?;
-        self.boxes
-            .finish()
-            .map_err(|failure| self.fail(failure.into()))?;
-        self.state = State::Finished;
+        self.output.writing()?;
+        let mut finish_segment = || -> Result<(), Error> {
+            self.samples.finish()?;
+            self.structure.finish()?;
+            self.output.finish()
+        };
+        let finished = finish_segment();
 
-        Ok(())
-    }
-
-    /// Returns `Ok` while the mux FSM still takes brands and samples
-    const fn writing(&self) -> Result<(), Error> {
-        match self.state {
-            State::Writing => Ok(()),
-            State::Finished => Err(Error::already_finished()),
-            State::Failed(failure) => Err(failure),
-        }
+        self.output.record(finished)
     }
 
     /// Lays `value` down as the whole box it forms
@@ -296,7 +284,7 @@ impl MediaSegmentMuxFsm {
         &mut self,
         value: &Value,
     ) -> Result<(), Error> {
-        let payload = whole_payload(value).map_err(|failure| self.fail(failure))?;
+        let payload = whole_payload(value)?;
 
         self.lay_down(Value::BOX_TYPE, payload)
     }
@@ -306,43 +294,18 @@ impl MediaSegmentMuxFsm {
     /// A box the structure passes over is refused as
     /// [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder).
     fn lay_down(&mut self, box_type: BoxType, payload: Vec<u8>) -> Result<(), Error> {
-        let header = whole_box_header(box_type, payload.len() as u64)
-            .map_err(|failure| self.fail(failure))?;
+        let header = whole_box_header(box_type, payload.len() as u64)?;
 
-        match self
-            .structure
-            .handle_box_type(box_type)
-            .map_err(|failure| self.fail(failure))?
-        {
+        match self.structure.handle_box_type(box_type)? {
             MediaSegmentDisposition::SegmentType
             | MediaSegmentDisposition::MovieFragment
             | MediaSegmentDisposition::MediaData => {}
             MediaSegmentDisposition::SegmentIndex | MediaSegmentDisposition::Skip => {
-                return Err(self.fail(Error::box_out_of_order(box_type)));
+                return Err(Error::box_out_of_order(box_type));
             }
         }
 
-        self.lay_down_step(BoxEvent::Header(header))?;
-        if !payload.is_empty() {
-            self.lay_down_step(BoxEvent::Payload(payload))?;
-        }
-        self.lay_down_step(BoxEvent::End)
-    }
-
-    /// Hands one step of the framing over, failing the mux FSM where it is refused
-    fn lay_down_step(&mut self, step: BoxEvent) -> Result<(), Error> {
-        self.boxes
-            .handle_event(step)
-            .map_err(|failure| self.fail(failure.into()))?;
-
-        Ok(())
-    }
-
-    /// Fails the mux FSM for good, and hands the failure back to report
-    const fn fail(&mut self, failure: Error) -> Error {
-        self.state = State::Failed(failure);
-
-        failure
+        self.output.frame(header, [payload])
     }
 }
 
@@ -462,29 +425,6 @@ mod tests {
             mux_fsm.finish(),
             Err(Error::missing_mandatory_box(MovieFragmentBox::BOX_TYPE))
         );
-    }
-
-    #[test]
-    fn a_failed_mux_fsm_reports_the_same_failure_for_every_call_after_it() {
-        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
-
-        mux_fsm.handle_segment_type(segment_type()).unwrap();
-        let failure = mux_fsm.finish().unwrap_err();
-
-        assert_eq!(mux_fsm.handle_segment_type(segment_type()), Err(failure));
-        assert_eq!(mux_fsm.begin_fragment(1), Err(failure));
-        assert_eq!(mux_fsm.finish(), Err(failure));
-    }
-
-    #[test]
-    fn a_failed_mux_fsm_hands_over_the_bytes_it_had_already_laid_down() {
-        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
-
-        mux_fsm.handle_segment_type(segment_type()).unwrap();
-
-        assert!(mux_fsm.finish().is_err());
-
-        assert_eq!(*mux_fsm.poll_output().unwrap(), *b"\0\0\0\x18styp");
     }
 
     #[test]
