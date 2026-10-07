@@ -138,7 +138,16 @@ impl MediaSegmentMuxFsm {
     ///   again for every call after it.
     pub fn handle_segment_type(&mut self, segment_type: SegmentTypeBox) -> Result<(), Error> {
         self.output.writing()?;
-        let laid_down = self.lay_down_segment_type(&segment_type);
+        let mut lay_down_segment_type = || -> Result<(), Error> {
+            if segment_type.forbids_default_base_is_moof() {
+                return Err(Error::unsupported_brand());
+            }
+            if !self.structure.is_at_start() {
+                return Err(Error::box_out_of_order(SegmentTypeBox::BOX_TYPE));
+            }
+            self.write_value(&segment_type)
+        };
+        let laid_down = lay_down_segment_type();
 
         self.output.record(laid_down)
     }
@@ -224,7 +233,13 @@ impl MediaSegmentMuxFsm {
     ///   again for every call after it.
     pub fn finish_fragment(&mut self) -> Result<(), Error> {
         self.output.writing()?;
-        let laid_down = self.lay_down_fragment();
+        let mut lay_down_fragment = || -> Result<(), Error> {
+            let (movie_fragment, media_data) = self.samples.finish_fragment()?;
+
+            self.write_value(&movie_fragment)?;
+            self.lay_down(MediaDataBox::BOX_TYPE, media_data)
+        };
+        let laid_down = lay_down_fragment();
 
         self.output.record(laid_down)
     }
@@ -254,35 +269,14 @@ impl MediaSegmentMuxFsm {
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), Error> {
         self.output.writing()?;
-        let finished = self.finish_segment();
+        let mut finish_segment = || -> Result<(), Error> {
+            self.samples.finish()?;
+            self.structure.finish()?;
+            self.output.finish()
+        };
+        let finished = finish_segment();
 
         self.output.record(finished)
-    }
-
-    /// Lays the brands down, unless one of them forbids the `default-base-is-moof` the mux FSM writes or a box came before them
-    fn lay_down_segment_type(&mut self, segment_type: &SegmentTypeBox) -> Result<(), Error> {
-        if segment_type.forbids_default_base_is_moof() {
-            return Err(Error::unsupported_brand());
-        }
-        if !self.structure.is_at_start() {
-            return Err(Error::box_out_of_order(SegmentTypeBox::BOX_TYPE));
-        }
-        self.write_value(segment_type)
-    }
-
-    /// Closes the fragment that is open, and lays down the `moof` and the `mdat` the sample layer made of it
-    fn lay_down_fragment(&mut self) -> Result<(), Error> {
-        let (movie_fragment, media_data) = self.samples.finish_fragment()?;
-
-        self.write_value(&movie_fragment)?;
-        self.lay_down(MediaDataBox::BOX_TYPE, media_data)
-    }
-
-    /// Closes the sample layer, the structure and the framing, in that order
-    fn finish_segment(&mut self) -> Result<(), Error> {
-        self.samples.finish()?;
-        self.structure.finish()?;
-        self.output.finish()
     }
 
     /// Lays `value` down as the whole box it forms

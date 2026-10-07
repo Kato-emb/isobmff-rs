@@ -187,7 +187,21 @@ impl NonFragmentedMuxFsm {
     ///   again for every call after it.
     pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), Error> {
         self.output.writing()?;
-        let admitted = self.admit_movie(movie);
+        let admit_movie = || -> Result<(), Error> {
+            if self.structure.is_at_start() {
+                self.lay_down_file_type(&default_file_type())?;
+            }
+            // Why not placing the movie in the order at `finish`: a second movie
+            // is refused where it is handed over, before chunks are laid down
+            // against the first, and the structure places a `moov` the same
+            // before the media data as after it.
+            self.admit(MovieBox::BOX_TYPE)?;
+            let samples = SampleTableWriter::new(&movie);
+            self.movie = Some((movie, samples));
+
+            Ok(())
+        };
+        let admitted = admit_movie();
 
         self.output.record(admitted)
     }
@@ -210,7 +224,27 @@ impl NonFragmentedMuxFsm {
     ///   again for every call after it.
     pub fn begin_chunk(&mut self) -> Result<(), Error> {
         self.output.writing()?;
-        let begun = self.open_chunk();
+        let mut open_chunk = || -> Result<(), Error> {
+            self.samples()?;
+            self.lay_down_chunk()?;
+            // Why not measuring the header once the chunk is whole: the chunk
+            // offset is stated before it is, so the chunk goes down under the
+            // compact header whatever its length, and is refused where that form
+            // cannot declare it.
+            self.admit(MediaDataBox::BOX_TYPE)?;
+            let header = compact_box_header(MediaDataBox::BOX_TYPE, 0)?;
+            // Why not checked_add: the framing already carries where the file
+            // ends in 64 bits, and a compact header is eight bytes past it.
+            let chunk_offset = self
+                .output
+                .position()
+                .saturating_add(header.encoded_len() as u64);
+
+            self.samples()?.begin_chunk(chunk_offset)?;
+
+            Ok(())
+        };
+        let begun = open_chunk();
 
         self.output.record(begun)
     }
@@ -266,76 +300,36 @@ impl NonFragmentedMuxFsm {
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), Error> {
         self.output.writing()?;
-        let finished = self.finish_file();
+        let mut finish_file = || -> Result<(), Error> {
+            self.lay_down_chunk()?;
+            self.structure.finish()?;
+            // Why not unreachable: the structure declared the file over only with
+            // the movie in it, so one was handed over, and the fallback is the
+            // structure's own answer to a file without one, in place of a panic
+            // the lints forbid.
+            let Some((mut movie, mut samples)) = self.movie.take() else {
+                return Err(Error::missing_mandatory_box(MovieBox::BOX_TYPE));
+            };
+            let tables_per_track = samples.finish()?;
+            for (track_id, tables) in tables_per_track {
+                // Why not unreachable: the sample layer took a sample of a track
+                // only where the movie declares it, and the fallback is its own
+                // answer to one it does not, in place of a panic the lints forbid.
+                let Some(track) = movie.trak_mut(track_id) else {
+                    return Err(isobmff_sample::Error::unknown_track_id(track_id).into());
+                };
+                let stbl = track.mdia_mut().minf_mut().stbl_mut();
+                *stbl = tables.into_sample_table(stbl.stsd().clone());
+            }
+            movie.state_durations();
+            let payload = whole_payload(&movie)?;
+            let header = whole_box_header(MovieBox::BOX_TYPE, payload.len() as u64)?;
+            self.output.frame(header, [payload])?;
+            self.output.finish()
+        };
+        let finished = finish_file();
 
         self.output.record(finished)
-    }
-
-    /// Admits the movie into the file, after the brands the mux FSM declares where none were handed over, and makes the sample layer of it
-    fn admit_movie(&mut self, movie: MovieBox) -> Result<(), Error> {
-        if self.structure.is_at_start() {
-            self.lay_down_file_type(&default_file_type())?;
-        }
-        // Why not placing the movie in the order at `finish`: a second movie
-        // is refused where it is handed over, before chunks are laid down
-        // against the first, and the structure places a `moov` the same
-        // before the media data as after it.
-        self.admit(MovieBox::BOX_TYPE)?;
-        let samples = SampleTableWriter::new(&movie);
-        self.movie = Some((movie, samples));
-
-        Ok(())
-    }
-
-    /// Lays the chunk that is open down, admits the `mdat` of the next one, and tells the sample layer where its samples begin
-    fn open_chunk(&mut self) -> Result<(), Error> {
-        self.samples()?;
-        self.lay_down_chunk()?;
-        // Why not measuring the header once the chunk is whole: the chunk
-        // offset is stated before it is, so the chunk goes down under the
-        // compact header whatever its length, and is refused where that form
-        // cannot declare it.
-        self.admit(MediaDataBox::BOX_TYPE)?;
-        let header = compact_box_header(MediaDataBox::BOX_TYPE, 0)?;
-        // Why not checked_add: the framing already carries where the file
-        // ends in 64 bits, and a compact header is eight bytes past it.
-        let chunk_offset = self
-            .output
-            .position()
-            .saturating_add(header.encoded_len() as u64);
-
-        self.samples()?.begin_chunk(chunk_offset)?;
-
-        Ok(())
-    }
-
-    /// Lays the last chunk down, then the movie its sample tables now describe, and closes the structure and the framing
-    fn finish_file(&mut self) -> Result<(), Error> {
-        self.lay_down_chunk()?;
-        self.structure.finish()?;
-        // Why not unreachable: the structure declared the file over only with
-        // the movie in it, so one was handed over, and the fallback is the
-        // structure's own answer to a file without one, in place of a panic
-        // the lints forbid.
-        let Some((mut movie, mut samples)) = self.movie.take() else {
-            return Err(Error::missing_mandatory_box(MovieBox::BOX_TYPE));
-        };
-        let tables_per_track = samples.finish()?;
-        for (track_id, tables) in tables_per_track {
-            // Why not unreachable: the sample layer took a sample of a track
-            // only where the movie declares it, and the fallback is its own
-            // answer to one it does not, in place of a panic the lints forbid.
-            let Some(track) = movie.trak_mut(track_id) else {
-                return Err(isobmff_sample::Error::unknown_track_id(track_id).into());
-            };
-            let stbl = track.mdia_mut().minf_mut().stbl_mut();
-            *stbl = tables.into_sample_table(stbl.stsd().clone());
-        }
-        movie.state_durations();
-        let payload = whole_payload(&movie)?;
-        let header = whole_box_header(MovieBox::BOX_TYPE, payload.len() as u64)?;
-        self.output.frame(header, [payload])?;
-        self.output.finish()
     }
 
     /// Lays `file_type` down as the first box of the file

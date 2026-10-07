@@ -129,7 +129,13 @@ impl FragmentedMuxFsm {
     ///   again for every call after it.
     pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), Error> {
         self.output.writing()?;
-        let laid_down = self.lay_down_file_type(&file_type);
+        let mut lay_down_file_type = || -> Result<(), Error> {
+            if file_type.forbids_default_base_is_moof() {
+                return Err(Error::unsupported_brand());
+            }
+            self.write_value(&file_type)
+        };
+        let laid_down = lay_down_file_type();
 
         self.output.record(laid_down)
     }
@@ -152,7 +158,17 @@ impl FragmentedMuxFsm {
     ///   again for every call after it.
     pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), Error> {
         self.output.writing()?;
-        let laid_down = self.lay_down_movie(&movie);
+        let mut lay_down_movie = || -> Result<(), Error> {
+            let samples = MovieFragmentWriter::new(&movie)?;
+            if self.structure.is_at_start() {
+                self.write_value(&default_file_type())?;
+            }
+            self.write_value(&movie)?;
+            self.samples = Some(samples);
+
+            Ok(())
+        };
+        let laid_down = lay_down_movie();
 
         self.output.record(laid_down)
     }
@@ -247,7 +263,13 @@ impl FragmentedMuxFsm {
     ///   again for every call after it.
     pub fn finish_fragment(&mut self) -> Result<(), Error> {
         self.output.writing()?;
-        let laid_down = self.lay_down_fragment();
+        let mut lay_down_fragment = || -> Result<(), Error> {
+            let (movie_fragment, media_data) = self.samples()?.finish_fragment()?;
+
+            self.write_value(&movie_fragment)?;
+            self.lay_down(MediaDataBox::BOX_TYPE, media_data)
+        };
+        let laid_down = lay_down_fragment();
 
         self.output.record(laid_down)
     }
@@ -277,46 +299,16 @@ impl FragmentedMuxFsm {
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), Error> {
         self.output.writing()?;
-        let finished = self.finish_file();
+        let mut finish_file = || -> Result<(), Error> {
+            if let Some(samples) = &mut self.samples {
+                samples.finish()?;
+            }
+            self.structure.finish()?;
+            self.output.finish()
+        };
+        let finished = finish_file();
 
         self.output.record(finished)
-    }
-
-    /// Lays the brands down, unless one of them forbids the `default-base-is-moof` the mux FSM writes
-    fn lay_down_file_type(&mut self, file_type: &FileTypeBox) -> Result<(), Error> {
-        if file_type.forbids_default_base_is_moof() {
-            return Err(Error::unsupported_brand());
-        }
-        self.write_value(file_type)
-    }
-
-    /// Makes the sample layer of the movie, then lays down the brands the mux FSM declares where none were handed over, and the movie
-    fn lay_down_movie(&mut self, movie: &MovieBox) -> Result<(), Error> {
-        let samples = MovieFragmentWriter::new(movie)?;
-        if self.structure.is_at_start() {
-            self.write_value(&default_file_type())?;
-        }
-        self.write_value(movie)?;
-        self.samples = Some(samples);
-
-        Ok(())
-    }
-
-    /// Closes the fragment that is open, and lays down the `moof` and the `mdat` the sample layer made of it
-    fn lay_down_fragment(&mut self) -> Result<(), Error> {
-        let (movie_fragment, media_data) = self.samples()?.finish_fragment()?;
-
-        self.write_value(&movie_fragment)?;
-        self.lay_down(MediaDataBox::BOX_TYPE, media_data)
-    }
-
-    /// Closes the sample layer, the structure and the framing, in that order
-    fn finish_file(&mut self) -> Result<(), Error> {
-        if let Some(samples) = &mut self.samples {
-            samples.finish()?;
-        }
-        self.structure.finish()?;
-        self.output.finish()
     }
 
     /// Returns the sample layer, made once the movie was handed over
