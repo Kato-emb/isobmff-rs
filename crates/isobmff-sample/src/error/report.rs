@@ -223,7 +223,7 @@ impl fmt::Display for Error {
             ),
             Representation::CompositionTimeOffsetOutOfRange { track_id, offset } => write!(
                 formatter,
-                "track {track_id} states a composition time offset of {offset}, which no version of a trun or a ctts writes"
+                "track {track_id} states a composition time offset of {offset}, outside what 32 signed bits hold"
             ),
             Representation::DecodeTimeMismatch {
                 track_id,
@@ -532,7 +532,7 @@ mod tests {
         );
         assert_eq!(
             Error::composition_time_offset_out_of_range(1, 1 << 40).to_string(),
-            "track 1 states a composition time offset of 1099511627776, which no version of a trun or a ctts writes"
+            "track 1 states a composition time offset of 1099511627776, outside what 32 signed bits hold"
         );
         assert_eq!(
             Error::decode_time_mismatch(1, 512, 1_024).to_string(),

@@ -176,14 +176,12 @@ pub enum ErrorKind {
     /// and [`data_offset`](crate::Error::data_offset) how far into the
     /// fragment the sample lies.
     DataOffsetOutOfRange,
-    /// Sample states a composition time offset no version of a `trun` or a `ctts` writes
+    /// Sample states a composition time offset outside what 32 signed bits hold
     ///
-    /// Version 0 of either box writes the offset unsigned in 32 bits and
-    /// version 1 signed (ISO/IEC 14496-12 §8.8.8, §8.6.1.3), so one past both
-    /// is refused. A `ctts` states the offsets of a whole track in one version
-    /// and a `trun` those of a whole run, so a track or a run stating a
-    /// negative offset and one past [`i32::MAX`] is refused too, naming the
-    /// widest.
+    /// Version 0 of a `trun` or a `ctts` writes the offset unsigned in 32 bits
+    /// and version 1 signed (ISO/IEC 14496-12 §8.8.8, §8.6.1.3). The writers
+    /// refuse an offset below [`i32::MIN`], and one past [`i32::MAX`], which the
+    /// readers here take as the negative value of the same bits.
     /// [`track_id`](crate::Error::track_id) is the track it belongs to,
     /// and [`composition_time_offset`](crate::Error::composition_time_offset)
     /// the offset it states.

@@ -104,11 +104,11 @@ use crate::track_decode_times::TrackDecodeTimes;
 /// * The samples of one `traf` are all described by one `stsd` entry, which
 ///   the `tfhd` states for them: a fragment mixing two is
 ///   [`SampleDescriptionIndexMismatch`](crate::ErrorKind::SampleDescriptionIndexMismatch).
-/// * A run stating a negative composition time offset and one past
-///   [`i32::MAX`], which no one version of a `trun` writes both of (§8.8.8),
-///   is reported by [`finish_fragment`](Self::finish_fragment), where the
-///   runs are built:
-///   [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange).
+/// * A sample stating a composition time offset outside what 32 signed bits
+///   hold is
+///   [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange):
+///   one past [`i32::MAX`] is refused too, which the readers here take as
+///   negative.
 /// * A fragment of no samples is written as a `moof` of no `traf` beside an
 ///   empty payload.
 /// * An `Err` leaves the writer failed for good,
@@ -279,8 +279,8 @@ impl MovieFragmentWriter {
     ///   the sample is longer than the 32 bits a `trun` row states its length
     ///   in.
     /// * [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange):
-    ///   the sample states a composition time offset neither version of a
-    ///   `trun` writes.
+    ///   the sample states a composition time offset outside what 32 signed
+    ///   bits hold.
     /// * [`DecodeTimeOverflow`](crate::ErrorKind::DecodeTimeOverflow):
     ///   the decode times of its track run past what 64 bits carry.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
@@ -310,10 +310,6 @@ impl MovieFragmentWriter {
     ///   fragment was open to close.
     /// * [`DataOffsetOutOfRange`](crate::ErrorKind::DataOffsetOutOfRange):
     ///   a sample lies further into the fragment than a `trun` reaches.
-    /// * [`CompositionTimeOffsetOutOfRange`](crate::ErrorKind::CompositionTimeOffsetOutOfRange):
-    ///   a run states a negative composition time offset and one past
-    ///   [`i32::MAX`], which no one version of a `trun` writes both of; the
-    ///   failure names the widest.
     /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports

@@ -412,6 +412,20 @@ fn a_table_missing_on_its_own_leaves_its_fields_as_a_track_stating_none_has_them
 }
 
 #[test]
+fn an_offset_a_version_0_ctts_states_past_the_signed_range_is_read_as_negative() {
+    let written_signed = three_samples_stating(|stbl| stbl.with_ctts(ctts(&[0, 0xFFFF_FC00, 0])));
+
+    assert_eq!(
+        resolved(&movie(vec![written_signed])),
+        Ok(vec![
+            extent(1, 0, 100, 100..104),
+            SampleExtent::new(1, 100, 100, -1_024, SampleFlags::ZERO, 1, 1, 104..108),
+            extent(1, 200, 100, 108..112),
+        ])
+    );
+}
+
+#[test]
 fn an_optional_table_counting_other_than_the_samples_of_its_track_is_refused() {
     let tracks = [
         three_samples_stating(|stbl| stbl.with_ctts(ctts(&[8, 8]))),
