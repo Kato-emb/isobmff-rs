@@ -180,7 +180,7 @@ impl SettledFragment {
         };
         let tfhd = traf.tfhd();
         let track_id = tfhd.track_id();
-        let trak = movie.track(track_id);
+        let trak = movie.trak_by_id(track_id);
         let trex = mvex.trex().iter().find(|trex| trex.track_id() == track_id);
         let Some(trak) = trak else {
             let keeps_a_track_unread = movie

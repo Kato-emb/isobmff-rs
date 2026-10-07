@@ -166,7 +166,7 @@ impl MovieBox {
     /// A decoded movie whose tracks collide on `track_id` yields the first of
     /// them, in the order they came.
     #[must_use]
-    pub fn track(&self, track_id: u32) -> Option<&TrackBox> {
+    pub fn trak_by_id(&self, track_id: u32) -> Option<&TrackBox> {
         self.trak
             .iter()
             .find(|track| track.tkhd().track_id() == track_id)
@@ -178,7 +178,7 @@ impl MovieBox {
     /// as [`trak_mut`](Self::trak_mut) states; a decoded movie whose tracks
     /// collide on `track_id` yields the first of them, in the order they came.
     #[must_use]
-    pub fn track_mut(&mut self, track_id: u32) -> Option<&mut TrackBox> {
+    pub fn trak_by_id_mut(&mut self, track_id: u32) -> Option<&mut TrackBox> {
         self.trak
             .iter_mut()
             .find(|track| track.tkhd().track_id() == track_id)
@@ -564,8 +564,8 @@ mod tests {
 
         let mut decoded = MovieBox::decode_payload(&payload).unwrap();
 
-        assert_eq!(decoded.track(1), Some(&track()));
-        assert_eq!(decoded.track_mut(1), Some(&mut track()));
+        assert_eq!(decoded.trak_by_id(1), Some(&track()));
+        assert_eq!(decoded.trak_by_id_mut(1), Some(&mut track()));
     }
 
     #[test]
@@ -584,7 +584,7 @@ mod tests {
         );
 
         *decoded
-            .track_mut(1)
+            .trak_by_id_mut(1)
             .unwrap()
             .mdia_mut()
             .minf_mut()
@@ -608,15 +608,15 @@ mod tests {
 
     #[test]
     fn a_track_the_movie_does_not_declare_yields_nothing() {
-        assert_eq!(movie().track(7), None);
-        assert_eq!(movie().track_mut(7), None);
+        assert_eq!(movie().trak_by_id(7), None);
+        assert_eq!(movie().trak_by_id_mut(7), None);
     }
 
     #[test]
     fn a_duration_set_through_a_track_is_written_with_the_movie() {
         let mut movie = movie();
 
-        let edited = movie.track_mut(1).unwrap();
+        let edited = movie.trak_by_id_mut(1).unwrap();
         *edited.tkhd_mut() = edited.tkhd().clone().with_duration(duration(7_000));
 
         assert_eq!(

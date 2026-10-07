@@ -319,7 +319,7 @@ impl NonFragmentedMuxFsm {
                 // structure's own answer to a movie without that track, in place
                 // of a panic the lints forbid. Why not the sample layer's answer:
                 // its failures are built by that crate alone.
-                let Some(track) = movie.track_mut(track_id) else {
+                let Some(track) = movie.trak_by_id_mut(track_id) else {
                     return Err(Error::MissingMandatoryBox {
                         box_type: TrackBox::BOX_TYPE,
                     });
