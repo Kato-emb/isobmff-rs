@@ -266,7 +266,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{AnyBox, BoxDecode, BoxEncode, BoxType, Error, NullTerminatedString, boxes};
+    use isobmff_core::{AnyBox, BoxDecode, BoxEncode, BoxType, Boxes, Error, NullTerminatedString};
 
     use super::{DataEntry, DataEntryUrlBox, DataEntryUrnBox};
 
@@ -389,7 +389,7 @@ mod tests {
     fn an_entry_that_does_not_read_is_held_as_the_bytes_it_came_as() {
         let url_of_version_1 = b"\0\0\0\x0curl \x01\0\0\x01";
 
-        let entry = DataEntry::decode(boxes(url_of_version_1).next().unwrap().unwrap());
+        let entry = DataEntry::decode(Boxes::new(url_of_version_1).next().unwrap().unwrap());
 
         assert_eq!(
             entry,

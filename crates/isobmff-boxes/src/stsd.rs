@@ -3,8 +3,8 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWidth,
-    FieldWriter, FullBoxFields, FullBoxFlags, InContainer, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, Error, FieldReader, FieldWidth,
+    FieldWriter, FullBoxFields, FullBoxFlags, InContainer,
 };
 
 use crate::sample_entry::{AudioSampleEntry, payload_of};
@@ -134,7 +134,7 @@ impl BoxDecode for SampleDescriptionBox {
     ///   declares a version other than 0 or 1.
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
     ///   payload ends before the fields that precede the entries.
-    /// * The failures of [`boxes`]: an entry does not frame as a box.
+    /// * The failures of [`Boxes`]: an entry does not frame as a box.
     /// * [`EntryCountMismatch`](isobmff_core::ErrorKind::EntryCountMismatch): the
     ///   `entry_count` field disagrees with the entries that follow it.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
@@ -146,7 +146,7 @@ impl BoxDecode for SampleDescriptionBox {
         let declared = u64::from(reader.read_u32()?);
 
         let mut entries = Vec::new();
-        for entry in boxes(reader.take_remainder()) {
+        for entry in Boxes::new(reader.take_remainder()) {
             let entry = entry?;
             entries.push(AnyBox::from_raw_bytes(
                 entry.header().box_type(),

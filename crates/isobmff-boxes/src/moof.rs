@@ -3,8 +3,8 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
-    FieldWriter, OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, ChildBoxes, Error, FieldReader,
+    FieldWriter, OtherBoxes,
 };
 
 use crate::mfhd::MovieFragmentHeaderBox;
@@ -70,14 +70,14 @@ impl BoxDecode for MovieFragmentBox {
 
     /// # Errors
     ///
-    /// * The failures of [`boxes`]: a child does not frame as a box.
+    /// * The failures of [`Boxes`]: a child does not frame as a box.
     /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox): no `mfhd`.
     /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one `mfhd`.
     /// * Whatever the child reports, on the [`containers`](Error::containers) path: a child does
     ///   not decode.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let mut children: ChildBoxes<'_> =
-            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
+            Boxes::new(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         Ok(Self {
             mfhd: children.take_exactly_one()?,
@@ -124,7 +124,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxDecode, BoxDefinition as _, BoxEncode, BoxType, Error, boxes};
+    use isobmff_core::{BoxDecode, BoxDefinition as _, BoxEncode, BoxType, Boxes, Error};
 
     use super::MovieFragmentBox;
     use crate::mfhd::MovieFragmentHeaderBox;
@@ -158,7 +158,7 @@ mod tests {
     fn the_children_are_written_in_the_order_the_spec_lists_them() {
         let payload = encoded_payload(&movie_fragment());
 
-        let box_types: Vec<BoxType> = boxes(&payload)
+        let box_types: Vec<BoxType> = Boxes::new(&payload)
             .map(|child| child.unwrap().header().box_type())
             .collect();
 

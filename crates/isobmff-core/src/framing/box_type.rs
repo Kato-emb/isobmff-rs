@@ -2,11 +2,11 @@
 
 use core::fmt;
 
-use crate::data_types::fourcc::FourCC;
+use crate::data_types::fourcc::FourCc;
 use crate::data_types::uuid::Uuid;
 
 /// Four-character code reserved to introduce a `usertype`
-const EXTENDED_MARKER: FourCC = FourCC::new(*b"uuid");
+const EXTENDED_MARKER: FourCc = FourCc::new(*b"uuid");
 
 /// Four-character code that names a box
 ///
@@ -16,24 +16,24 @@ const EXTENDED_MARKER: FourCC = FourCC::new(*b"uuid");
 /// # Examples
 ///
 /// ```
-/// use isobmff_core::{CompactType, FourCC};
+/// use isobmff_core::{CompactType, FourCc};
 ///
 /// // Any code but the reserved one names a box
-/// let moov = CompactType::new(FourCC::new(*b"moov")).unwrap();
-/// assert_eq!(moov.four_cc(), FourCC::new(*b"moov"));
+/// let moov = CompactType::new(FourCc::new(*b"moov")).unwrap();
+/// assert_eq!(moov.four_cc(), FourCc::new(*b"moov"));
 ///
 /// // The reserved code does not
-/// assert_eq!(CompactType::new(FourCC::new(*b"uuid")), None);
+/// assert_eq!(CompactType::new(FourCc::new(*b"uuid")), None);
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct CompactType(FourCC);
+pub struct CompactType(FourCc);
 
 impl CompactType {
     /// Creates a compact type from a four-character code
     ///
     /// Returns `None` for the reserved `uuid` code.
     #[must_use]
-    pub const fn new(four_cc: FourCC) -> Option<Self> {
+    pub const fn new(four_cc: FourCc) -> Option<Self> {
         match four_cc {
             EXTENDED_MARKER => None,
             _ => Some(Self(four_cc)),
@@ -42,7 +42,7 @@ impl CompactType {
 
     /// Returns the four-character code
     #[must_use]
-    pub const fn four_cc(self) -> FourCC {
+    pub const fn four_cc(self) -> FourCc {
         self.0
     }
 }
@@ -55,15 +55,15 @@ impl CompactType {
 /// # Examples
 ///
 /// ```
-/// use isobmff_core::{BoxType, FourCC, Uuid};
+/// use isobmff_core::{BoxType, FourCc, Uuid};
 ///
 /// // A compact type puts its own code in the `type` field
 /// const MOOV: BoxType = BoxType::compact(*b"moov");
-/// assert_eq!(MOOV.four_cc(), FourCC::new(*b"moov"));
+/// assert_eq!(MOOV.four_cc(), FourCc::new(*b"moov"));
 ///
 /// // An extended type puts the reserved code there, and its UUID in `usertype`
 /// let extended = BoxType::Extended(Uuid::new([0xab; 16]));
-/// assert_eq!(extended.four_cc(), FourCC::new(*b"uuid"));
+/// assert_eq!(extended.four_cc(), FourCc::new(*b"uuid"));
 /// ```
 #[allow(
     clippy::exhaustive_enums,
@@ -91,7 +91,7 @@ impl BoxType {
         reason = "constructor for const definitions; run-time input takes the fallible CompactType::new"
     )]
     pub const fn compact(code: [u8; 4]) -> Self {
-        match CompactType::new(FourCC::new(code)) {
+        match CompactType::new(FourCc::new(code)) {
             Some(compact) => Self::Compact(compact),
             None => panic!("`uuid` is reserved for extended box types"),
         }
@@ -102,7 +102,7 @@ impl BoxType {
     /// The extended form yields the reserved `uuid`; its `usertype` is a separate
     /// field.
     #[must_use]
-    pub const fn four_cc(self) -> FourCC {
+    pub const fn four_cc(self) -> FourCc {
         match self {
             Self::Compact(compact) => compact.four_cc(),
             Self::Extended(_) => EXTENDED_MARKER,
@@ -124,7 +124,7 @@ mod tests {
     use alloc::string::ToString as _;
 
     use super::{BoxType, CompactType};
-    use crate::data_types::fourcc::FourCC;
+    use crate::data_types::fourcc::FourCc;
     use crate::data_types::uuid::Uuid;
 
     const USER_TYPE: Uuid = Uuid::new([
@@ -134,12 +134,12 @@ mod tests {
 
     #[test]
     fn compact_type_rejects_the_code_reserved_for_user_types() {
-        assert_eq!(CompactType::new(FourCC::new(*b"uuid")), None);
+        assert_eq!(CompactType::new(FourCc::new(*b"uuid")), None);
     }
 
     #[test]
     fn compact_type_accepts_a_code_that_is_not_printable() {
-        let four_cc = FourCC::new([0xa9, b'n', b'a', b'm']);
+        let four_cc = FourCc::new([0xa9, b'n', b'a', b'm']);
 
         assert_eq!(
             CompactType::new(four_cc).map(CompactType::four_cc),
@@ -153,7 +153,7 @@ mod tests {
 
         assert_eq!(
             MOOV,
-            BoxType::Compact(CompactType::new(FourCC::new(*b"moov")).unwrap())
+            BoxType::Compact(CompactType::new(FourCc::new(*b"moov")).unwrap())
         );
     }
 
@@ -165,14 +165,14 @@ mod tests {
 
     #[test]
     fn the_compact_form_puts_its_own_code_in_the_type_field() {
-        assert_eq!(BoxType::compact(*b"moov").four_cc(), FourCC::new(*b"moov"));
+        assert_eq!(BoxType::compact(*b"moov").four_cc(), FourCc::new(*b"moov"));
     }
 
     #[test]
     fn the_extended_form_puts_the_reserved_code_in_the_type_field() {
         assert_eq!(
             BoxType::Extended(USER_TYPE).four_cc(),
-            FourCC::new(*b"uuid")
+            FourCc::new(*b"uuid")
         );
     }
 

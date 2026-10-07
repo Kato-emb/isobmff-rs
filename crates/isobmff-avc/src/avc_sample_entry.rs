@@ -4,8 +4,8 @@ use core::marker::PhantomData;
 
 use isobmff_boxes::{BitRateBox, VisualSampleEntry};
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
-    FieldWriter, OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, ChildBoxes, Error, FieldReader,
+    FieldWriter, OtherBoxes,
 };
 
 use crate::avcc::AVCConfigurationBox;
@@ -164,7 +164,7 @@ impl<Name: AVCCodingName> BoxDecode for AVCSampleEntry<Name> {
     /// # Errors
     ///
     /// * What [`VisualSampleEntry::decode_fields`] reports for the fields.
-    /// * The failures of [`boxes`]: a child does not frame as a box.
+    /// * The failures of [`Boxes`]: a child does not frame as a box.
     /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox): no
     ///   `avcC` follows the fields.
     /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one
@@ -175,7 +175,7 @@ impl<Name: AVCCodingName> BoxDecode for AVCSampleEntry<Name> {
         let visual = VisualSampleEntry::decode_fields(reader)?;
 
         let mut children: ChildBoxes<'_> =
-            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
+            Boxes::new(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         Ok(Self {
             visual,

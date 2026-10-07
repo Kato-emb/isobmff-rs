@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox, MovieFragmentBox};
-use isobmff_core::{BoxDefinition, BoxEncode, BoxType, FourCC};
+use isobmff_core::{BoxDefinition, BoxEncode, BoxType, FourCc};
 use isobmff_sample::{MovieFragmentWriter, Sample};
 use isobmff_sequence::EventBytes;
 
@@ -359,7 +359,7 @@ impl Default for FragmentedMuxFsm {
 
 /// Brands the mux FSM declares where none were handed over, those the widest layout it lays down requires
 fn default_file_type() -> FileTypeBox {
-    FileTypeBox::new(FourCC::new(*b"iso6"), 0, alloc::vec![FourCC::new(*b"iso6")])
+    FileTypeBox::new(FourCc::new(*b"iso6"), 0, alloc::vec![FourCc::new(*b"iso6")])
 }
 
 #[cfg(test)]
@@ -367,7 +367,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox, SampleFlags, TrackExtendsBox};
-    use isobmff_core::{BoxDecode, BoxDefinition, FourCC};
+    use isobmff_core::{BoxDecode, BoxDefinition, FourCc};
     use isobmff_sample::Sample;
     use isobmff_test_support::{file_type, fragmented_movie, unfragmented_movie};
 
@@ -428,9 +428,9 @@ mod tests {
 
         assert_eq!(
             mux_fsm.handle_file_type(FileTypeBox::new(
-                FourCC::new(*b"iso6"),
+                FourCc::new(*b"iso6"),
                 0,
-                alloc::vec![FourCC::new(*b"iso6"), FourCC::new(*b"isom")],
+                alloc::vec![FourCc::new(*b"iso6"), FourCc::new(*b"isom")],
             )),
             Err(Error::UnsupportedBrand)
         );

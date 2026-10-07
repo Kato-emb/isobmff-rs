@@ -6,9 +6,9 @@ use alloc::vec::Vec;
 use core::num::NonZeroU32;
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
-    FieldWriter, FourCC, FullBoxFlags, LanguageCode, Mp4EpochSeconds, NullTerminatedString,
-    OtherBoxes, U16F16, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, ChildBoxes, Error, FieldReader,
+    FieldWriter, FourCc, FullBoxFlags, LanguageCode, Mp4EpochSeconds, NullTerminatedString,
+    OtherBoxes, U16F16,
 };
 
 use crate::chunk_offset::{ChunkOffsetBox, ChunkOffsets};
@@ -162,7 +162,7 @@ impl TrackBox {
                 LanguageCode::UND,
             ),
             HandlerBox::new(
-                FourCC::new(*b"vide"),
+                FourCc::new(*b"vide"),
                 // Why not unwrap: the name holds no NUL, so the string always
                 // builds, and the empty name stands in for the panic the lints
                 // forbid.
@@ -249,7 +249,7 @@ impl BoxDecode for TrackBox {
 
     /// # Errors
     ///
-    /// * The failures of [`boxes`]: a child does not frame as a box.
+    /// * The failures of [`Boxes`]: a child does not frame as a box.
     /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox): no `tkhd` or
     ///   `mdia`.
     /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one of either, or
@@ -259,7 +259,7 @@ impl BoxDecode for TrackBox {
     ///   [`other_boxes`](Self::other_boxes) instead.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let mut children: ChildBoxes<'_> =
-            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
+            Boxes::new(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         Ok(Self {
             tkhd: children.take_exactly_one()?,
@@ -308,7 +308,7 @@ pub(crate) mod tests {
     use alloc::vec::Vec;
 
     use isobmff_core::{
-        AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FourCC, FullBoxFlags,
+        AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FourCc, FullBoxFlags,
         LanguageCode, Mp4EpochSeconds, NullTerminatedString, U16F16,
     };
 
@@ -351,7 +351,7 @@ pub(crate) mod tests {
                     LanguageCode::UND,
                 ),
                 HandlerBox::new(
-                    FourCC::new(*b"vide"),
+                    FourCc::new(*b"vide"),
                     NullTerminatedString::new(String::from("VideoHandler")).unwrap(),
                 ),
                 media_information(),
@@ -485,7 +485,7 @@ pub(crate) mod tests {
                         LanguageCode::UND
                     ),
                     HandlerBox::new(
-                        FourCC::new(*b"vide"),
+                        FourCc::new(*b"vide"),
                         NullTerminatedString::new(String::from("VideoHandler")).unwrap(),
                     ),
                     MediaInformationBox::new(

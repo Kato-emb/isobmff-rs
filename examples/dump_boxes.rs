@@ -7,8 +7,8 @@ use std::env;
 use std::fs::File;
 use std::io::Read;
 
-use isobmff::core::{BoxHeader, BoxType, boxes};
 use isobmff::sequence::{BoxEvent, BoxReader};
+use isobmff::{BoxHeader, BoxType, Boxes};
 
 const CONTAINERS: [BoxType; 12] = [
     BoxType::compact(*b"moov"),
@@ -67,7 +67,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 /// Prints the boxes laid end to end in `payload`, the first starting at `offset` of the file
 fn print_children(payload: &[u8], mut offset: u64, depth: usize) -> Result<(), Box<dyn Error>> {
-    for child in boxes(payload) {
+    for child in Boxes::new(payload) {
         let child = child?;
         let header = child.header();
         print_box(header, offset, depth);

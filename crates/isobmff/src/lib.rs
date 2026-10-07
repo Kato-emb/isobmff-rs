@@ -8,19 +8,22 @@
 //! delivered apart from the movie it continues; [`structure::FragmentedMuxFsm`],
 //! [`structure::NonFragmentedMuxFsm`] and [`structure::MediaSegmentMuxFsm`] go
 //! the other way, laying samples down as a file or a segment of each kind.
-//! None reaches for a source or a sink of its own: when to read or write, and
-//! from or to where, stay with the caller.
+//! None reaches for a source or a sink of its own: each handles the bytes
+//! handed to it and does no I/O; when to read or write, and from or to where,
+//! stay with the caller.
 //!
-//! # One module per crate
+//! # The root and one module per crate
 //!
-//! Every module here is one crate of the workspace re-exported whole, and this
-//! root holds nothing else: [`structure::MovieDemuxFsm`] and
-//! `isobmff_structure::MovieDemuxFsm` are the same type, so documentation
-//! written against any of those crates reads against this one.
+//! The root is the `isobmff-core` crate re-exported whole — [`BoxType`],
+//! [`FourCc`], [`BoxDecode`] and the rest of what all the layers are defined
+//! over — and every module is one other crate of the workspace re-exported
+//! whole: [`structure::MovieDemuxFsm`] and `isobmff_structure::MovieDemuxFsm`
+//! are the same type, so documentation written against any of those crates
+//! reads against this one.
 //!
-//! | module | crate | of the seven layers |
+//! | path | crate | of the seven layers |
 //! |---|---|---|
-//! | [`core`] | `isobmff-core` | what all of them are defined over |
+//! | the root | `isobmff-core` | what all of them are defined over |
 //! | [`sequence`] | `isobmff-sequence` | layer 1 |
 //! | [`boxes`] | `isobmff-boxes` | the catalog layer 2 reads a box into |
 //! | [`sample`] | `isobmff-sample` | layers 3 and 4 |
@@ -39,7 +42,7 @@
 //! Each crate names the failures of its own layers `Error`, and carries the
 //! failures of the layers beneath through whole rather than translating them,
 //! so [`structure::Error`] reaches [`sample::Error`] and [`sequence::Error`]
-//! reaches [`core::Error`].
+//! reaches [`Error`].
 //!
 //! # `no_std`
 //!
@@ -55,15 +58,7 @@
 
 #![no_std]
 
-// Why not `pub use isobmff_core as core`: rustdoc renders that as one line
-// under Re-exports, with no module page and no `isobmff::core::…` items to
-// search, and a flat glob would let the `Error` of one crate collide with the
-// `Error` of another.
-/// The framing of a box and the codecs its fields are read and written by —
-/// the `isobmff-core` crate whole
-pub mod core {
-    pub use isobmff_core::*;
-}
+pub use isobmff_core::*;
 
 /// A file framed as the sequence of boxes it is — the `isobmff-sequence` crate
 /// whole

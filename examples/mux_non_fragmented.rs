@@ -19,12 +19,12 @@ use isobmff::boxes::{
     SampleSizeBox, SampleSizeEntries, SampleSizes, SampleTableBox, SampleToChunkBox,
     SoundMediaHeaderBox, TimeToSampleBox, TrackBox, TrackHeaderBox,
 };
-use isobmff::core::{
-    AnyBox, BoxType, FieldWriter, FourCC, FullBoxFlags, I8F8, LanguageCode, Mp4EpochSeconds,
-    NullTerminatedString, U16F16,
-};
 use isobmff::sample::Sample;
 use isobmff::structure::NonFragmentedMuxFsm;
+use isobmff::{
+    AnyBox, BoxType, FieldWriter, FourCc, FullBoxFlags, I8F8, LanguageCode, Mp4EpochSeconds,
+    NullTerminatedString, U16F16,
+};
 
 const SAMPLE_RATE: u64 = 48_000;
 const FREQUENCY: u64 = 440;
@@ -77,7 +77,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             HeaderDuration::ZERO,
             LanguageCode::UND,
         ),
-        HandlerBox::new(FourCC::new(*b"soun"), handler_name),
+        HandlerBox::new(FourCc::new(*b"soun"), handler_name),
         media_information,
     );
     let enabled_in_movie = FullBoxFlags::new(0x3).ok_or("flags past 24 bits")?;

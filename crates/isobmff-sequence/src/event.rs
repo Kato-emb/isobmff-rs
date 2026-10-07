@@ -88,7 +88,7 @@ impl EventBytes {
     /// Encodes the header of a box that started
     pub(crate) fn header(header: BoxHeader) -> Self {
         let mut bytes = [0; BoxHeader::MAX_ENCODED_LEN];
-        let len = header.encode(&mut bytes).len();
+        let len = header.write_to(&mut bytes).len();
 
         Self {
             bytes: Bytes::Header { bytes, len },

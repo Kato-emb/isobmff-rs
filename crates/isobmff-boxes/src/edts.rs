@@ -1,8 +1,8 @@
 //! [`EditBox`] (`edts`), ISO/IEC 14496-12 §8.6.5
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
-    FieldWriter, OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, ChildBoxes, Error, FieldReader,
+    FieldWriter, OtherBoxes,
 };
 
 use crate::elst::EditListBox;
@@ -73,13 +73,13 @@ impl BoxDecode for EditBox {
 
     /// # Errors
     ///
-    /// * The failures of [`boxes`]: a child does not frame as a box.
+    /// * The failures of [`Boxes`]: a child does not frame as a box.
     /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one `elst`.
     /// * Whatever the child reports, on the [`containers`](Error::containers) path: the
     ///   `elst` does not decode.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let mut children: ChildBoxes<'_> =
-            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
+            Boxes::new(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         Ok(Self {
             elst: children.take_zero_or_one()?,

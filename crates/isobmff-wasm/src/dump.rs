@@ -3,9 +3,9 @@
 use core::ops::Range;
 use std::io::{self, Read};
 
-use isobmff::core::{BoxHeader, BoxType, boxes};
 use isobmff::sequence::{BoxEvent, BoxReader};
 use isobmff::structure;
+use isobmff::{BoxHeader, BoxType, Boxes};
 use wasm_bindgen::prelude::wasm_bindgen;
 
 use crate::Error;
@@ -46,7 +46,7 @@ pub struct BoxRecord {
 ///
 /// # Errors
 ///
-/// The failure of `source`, the reason the box reader or [`boxes`] refuses
+/// The failure of `source`, the reason the box reader or [`Boxes`] refuses
 /// what it reads, or a box that ends past `u64::MAX`.
 pub(crate) fn dump<S: Read>(source: S) -> Result<Vec<BoxRecord>, Error> {
     let mut container: Option<(u64, Vec<u8>)> = None;
@@ -112,7 +112,7 @@ fn push_children(
     mut offset: u64,
     depth: u32,
 ) -> Result<(), Error> {
-    for child in boxes(payload) {
+    for child in Boxes::new(payload) {
         let child = child.map_err(structure::Error::from)?;
         let header = child.header();
         records.push(record(header, offset, depth));

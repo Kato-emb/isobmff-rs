@@ -4,8 +4,8 @@ use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
-    FieldWriter, Mp4EpochSeconds, OtherBoxes, boxes,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, ChildBoxes, Error, FieldReader,
+    FieldWriter, Mp4EpochSeconds, OtherBoxes,
 };
 
 use crate::data_types::{HeaderDuration, SampleFlags};
@@ -238,7 +238,7 @@ impl BoxDecode for MovieBox {
 
     /// # Errors
     ///
-    /// * The failures of [`boxes`]: a child does not frame as a box.
+    /// * The failures of [`Boxes`]: a child does not frame as a box.
     /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox): no `mvhd`,
     ///   no `trak` at all, or a track of a fragmented movie without its `trex`.
     /// * [`DuplicateBox`](isobmff_core::ErrorKind::DuplicateBox): more than one `mvhd` or
@@ -249,7 +249,7 @@ impl BoxDecode for MovieBox {
     ///   [`other_boxes`](Self::other_boxes) instead.
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let mut children: ChildBoxes<'_> =
-            boxes(reader.take_remainder()).collect::<Result<_, _>>()?;
+            Boxes::new(reader.take_remainder()).collect::<Result<_, _>>()?;
 
         let mvhd = children.take_exactly_one()?;
         let trak = children.take_one_or_more_if_decoded()?;

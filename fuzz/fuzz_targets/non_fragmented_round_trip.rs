@@ -24,7 +24,7 @@
 #![no_main]
 
 use isobmff::boxes::{HeaderDuration, MovieBox, MovieHeaderBox, SampleFlags};
-use isobmff::core::{BoxDefinition as _, Mp4EpochSeconds};
+use isobmff::{BoxDefinition as _, Mp4EpochSeconds};
 use isobmff::sample::Sample;
 use isobmff::structure::{Error, MovieDemuxFsm, NonFragmentedMuxFsm};
 use isobmff_test_support::{file_type, non_fragmented_file, track};

@@ -51,7 +51,7 @@ use crate::framing::raw_box::RawBox;
 ///
 /// ```
 /// use isobmff_core::{BoxDecode, BoxDefinition, BoxType, ChildBoxes, Error, OtherBoxes};
-/// use isobmff_core::{FieldReader, boxes};
+/// use isobmff_core::{Boxes, FieldReader};
 ///
 /// // A box whose payload is one 32-bit sequence number
 /// #[derive(PartialEq, Debug)]
@@ -75,7 +75,7 @@ use crate::framing::raw_box::RawBox;
 ///
 /// // The payload of a container: the box a field claims, then one no field does
 /// let payload = b"\0\0\0\x0csqnc\0\0\0\x07\0\0\0\x08free";
-/// let mut children: ChildBoxes<'_> = boxes(payload).collect::<Result<_, _>>().unwrap();
+/// let mut children: ChildBoxes<'_> = Boxes::new(payload).collect::<Result<_, _>>().unwrap();
 ///
 /// // The quantity the box table states is asked for once, as the field is taken
 /// let sequence_number: SequenceNumberBox = children.take_exactly_one().unwrap();
@@ -395,11 +395,11 @@ where
 /// # Examples
 ///
 /// ```
-/// use isobmff_core::{BoxType, ChildBoxes, OtherBoxes, boxes};
+/// use isobmff_core::{BoxType, Boxes, ChildBoxes, OtherBoxes};
 ///
 /// // Two children of a container that has no field for either
 /// let payload = b"\0\0\0\x0cfreeAAAA\0\0\0\x08skip";
-/// let children: ChildBoxes<'_> = boxes(payload).collect::<Result<_, _>>().unwrap();
+/// let children: ChildBoxes<'_> = Boxes::new(payload).collect::<Result<_, _>>().unwrap();
 /// let other_boxes = OtherBoxes::from(children);
 ///
 /// // Each is held under the box type that named it, in the order it came
@@ -476,7 +476,7 @@ mod tests {
     use crate::codec::field::FieldReader;
     use crate::error::Error;
     use crate::framing::box_type::BoxType;
-    use crate::framing::raw_box::{RawBox, boxes};
+    use crate::framing::raw_box::{Boxes, RawBox};
 
     /// Box whose payload is one 32-bit sequence number
     #[derive(PartialEq, Debug)]
@@ -496,7 +496,7 @@ mod tests {
 
     /// Collects every box a payload holds, whatever type names it
     fn collected(payload: &[u8]) -> ChildBoxes<'_> {
-        boxes(payload).collect::<Result<_, _>>().unwrap()
+        Boxes::new(payload).collect::<Result<_, _>>().unwrap()
     }
 
     #[test]

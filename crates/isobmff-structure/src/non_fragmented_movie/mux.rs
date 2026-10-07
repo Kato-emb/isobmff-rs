@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use core::mem;
 
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox, TrackBox};
-use isobmff_core::{BoxDefinition, BoxType, FourCC};
+use isobmff_core::{BoxDefinition, BoxType, FourCc};
 use isobmff_sample::{Sample, SampleTableWriter};
 use isobmff_sequence::EventBytes;
 
@@ -395,7 +395,7 @@ impl Default for NonFragmentedMuxFsm {
 
 /// Brands the mux FSM declares where none were handed over, those the widest layout it lays down requires
 fn default_file_type() -> FileTypeBox {
-    FileTypeBox::new(FourCC::new(*b"iso4"), 0, alloc::vec![FourCC::new(*b"iso4")])
+    FileTypeBox::new(FourCc::new(*b"iso4"), 0, alloc::vec![FourCc::new(*b"iso4")])
 }
 
 #[cfg(test)]

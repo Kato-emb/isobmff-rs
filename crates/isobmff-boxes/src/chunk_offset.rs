@@ -147,7 +147,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{BoxVariants as _, boxes};
+    use isobmff_core::{BoxVariants as _, Boxes};
 
     use super::{
         ChunkLargeOffsetBox, ChunkLargeOffsetEntry, ChunkOffsetBox, ChunkOffsetEntry, ChunkOffsets,
@@ -158,7 +158,7 @@ mod tests {
         let mut buffer = vec![0; usize::try_from(chunk_offsets.encoded_len()).unwrap()];
         chunk_offsets.encode(&mut buffer).unwrap();
 
-        ChunkOffsets::decode_variant(boxes(&buffer).next().unwrap().unwrap()).unwrap()
+        ChunkOffsets::decode_variant(Boxes::new(&buffer).next().unwrap().unwrap()).unwrap()
     }
 
     #[test]

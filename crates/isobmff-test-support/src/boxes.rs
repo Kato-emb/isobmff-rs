@@ -15,7 +15,7 @@ use isobmff_boxes::{
     TrackFragmentHeaderFlags, TrackHeaderBox, VideoMediaHeaderBox,
 };
 use isobmff_core::{
-    AnyBox, BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, FourCC, FullBoxFlags,
+    AnyBox, BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, FourCc, FullBoxFlags,
     LanguageCode, Mp4EpochSeconds, NullTerminatedString, U16F16, Uuid,
 };
 
@@ -47,7 +47,7 @@ const USER_TYPE: Uuid = Uuid::new([
 /// Lays out the box `header` introduces: the header, then `payload`
 fn laid_out(header: BoxHeader, payload: &[u8]) -> Vec<u8> {
     let mut buffer = [0; BoxHeader::MAX_ENCODED_LEN];
-    let mut bytes = header.encode(&mut buffer).to_vec();
+    let mut bytes = header.write_to(&mut buffer).to_vec();
 
     bytes.extend_from_slice(payload);
 
@@ -73,18 +73,18 @@ pub fn written(value: &(impl BoxDefinition + BoxEncode)) -> Vec<u8> {
 /// Brands a file declares itself readable as
 pub fn file_type() -> FileTypeBox {
     FileTypeBox::new(
-        FourCC::new(*b"iso6"),
+        FourCc::new(*b"iso6"),
         512,
-        vec![FourCC::new(*b"iso6"), FourCC::new(*b"dash")],
+        vec![FourCc::new(*b"iso6"), FourCc::new(*b"dash")],
     )
 }
 
 /// Brands a media segment declares itself readable as
 pub fn segment_type() -> SegmentTypeBox {
     SegmentTypeBox::new(
-        FourCC::new(*b"msdh"),
+        FourCc::new(*b"msdh"),
         0,
-        vec![FourCC::new(*b"msdh"), FourCC::new(*b"msix")],
+        vec![FourCc::new(*b"msdh"), FourCc::new(*b"msix")],
     )
 }
 
@@ -124,7 +124,7 @@ pub fn track_laid_out(track_id: u32, dref: DataReferenceBox, stbl: SampleTableBo
             LanguageCode::UND,
         ),
         HandlerBox::new(
-            FourCC::new(*b"vide"),
+            FourCc::new(*b"vide"),
             NullTerminatedString::new(String::from("VideoHandler")).unwrap(),
         ),
         MediaInformationBox::new(

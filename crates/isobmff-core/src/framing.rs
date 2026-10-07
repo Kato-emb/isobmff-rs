@@ -14,4 +14,4 @@ pub(crate) mod raw_box;
 pub use box_header::BoxHeader;
 pub use box_size::{BoxSize, CompactSize, ExtendedSize};
 pub use box_type::{BoxType, CompactType};
-pub use raw_box::{Boxes, RawBox, boxes};
+pub use raw_box::{Boxes, RawBox};

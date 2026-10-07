@@ -14,7 +14,7 @@ mod tests {
         FileTypeBox, HeaderDuration, MovieBox, MovieExtendsBox, MovieHeaderBox, SampleFlags,
         TrackBox, TrackExtendsBox,
     };
-    use isobmff_core::{AnyBox, BoxType, FourCC, Mp4EpochSeconds};
+    use isobmff_core::{AnyBox, BoxType, FourCc, Mp4EpochSeconds};
     use isobmff_sample::Sample;
     use isobmff_structure::{FragmentedMuxFsm, MovieDemuxFsm};
     use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type, track};
@@ -157,9 +157,9 @@ mod tests {
         assert_eq!(
             demux_fsm.file_type(),
             Some(&FileTypeBox::new(
-                FourCC::new(*b"iso6"),
+                FourCc::new(*b"iso6"),
                 0,
-                vec![FourCC::new(*b"iso6")]
+                vec![FourCc::new(*b"iso6")]
             ))
         );
     }
