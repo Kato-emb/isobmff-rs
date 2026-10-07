@@ -35,13 +35,13 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 ///   over — a box takes its place in the order where it is handed over or
 ///   opened, whether its bytes go down then or later: the `ftyp` first,
 ///   before any chunk, the `moov` once. A box handed over out of that
-///   order is [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder) or
-///   [`DuplicateBox`](crate::ErrorKind::DuplicateBox), and a file
+///   order is [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder) or
+///   [`DuplicateBox`](crate::Error::DuplicateBox), and a file
 ///   declared over without a `moov` is
-///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
+///   [`MissingMandatoryBox`](crate::Error::MissingMandatoryBox).
 /// * The movie is handed over before any chunk, though its bytes go down
 ///   last: a chunk opened, or a sample handed over, before it is
-///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder) of the `mdat`.
+///   [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder) of the `mdat`.
 /// * The `ftyp` handed over is laid down as it stands. Where none was handed
 ///   over, the mux FSM lays its own down before the `moov`: `iso4` as its
 ///   `major_brand` and its one `compatible_brands` entry, with
@@ -69,7 +69,7 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 ///   What the samples must hold to — one track per chunk, a decode timeline
 ///   that carries on from sample to sample, no composition offsets or flags
 ///   the four tables cannot state — is [`SampleTableWriter`]'s contract,
-///   reported as [`Sample`](crate::ErrorKind::Sample).
+///   reported as [`Sample`](crate::Error::Sample).
 /// * The bytes are taken from [`poll_output`](Self::poll_output), one
 ///   [`EventBytes`] a call, owned by whoever takes them: the media data of a
 ///   chunk comes sample by sample, each in the allocation it was handed over
@@ -78,13 +78,13 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 ///   whole file. The samples of the chunk that is open are held until it is
 ///   laid down.
 /// * An `Err` leaves the mux FSM failed for good,
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside:
+///   [`AlreadyFinished`](crate::Error::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The bytes made before
 ///   it are still there to take.
 /// * [`finish`](Self::finish) declares the file over. Bytes are still taken
 ///   after it, but anything handed over then, or a second
 ///   [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished).
+///   [`AlreadyFinished`](crate::Error::AlreadyFinished).
 ///
 /// # Examples
 ///
@@ -156,10 +156,10 @@ impl NonFragmentedMuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder): a box
+    /// * [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder): a box
     ///   was handed over before them.
-    /// * [`Box`](crate::ErrorKind::Box): the box does not write.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`Box`](crate::Error::Box): the box does not write.
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
@@ -179,9 +179,9 @@ impl NonFragmentedMuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): a movie
+    /// * [`DuplicateBox`](crate::Error::DuplicateBox): a movie
     ///   was handed over already.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
@@ -214,11 +214,11 @@ impl NonFragmentedMuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder): the
+    /// * [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder): the
     ///   movie was not handed over first.
-    /// * [`Box`](crate::ErrorKind::Box): the chunk before this one
+    /// * [`Box`](crate::Error::Box): the chunk before this one
     ///   is longer than the `size` field of an `mdat` can state.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
@@ -253,11 +253,11 @@ impl NonFragmentedMuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder): the
+    /// * [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder): the
     ///   movie was not handed over first.
-    /// * [`Sample`](crate::ErrorKind::Sample): what the sample layer
+    /// * [`Sample`](crate::Error::Sample): what the sample layer
     ///   makes of the sample.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
@@ -285,16 +285,16 @@ impl NonFragmentedMuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`Box`](crate::ErrorKind::Box): the chunk that was open is
+    /// * [`Box`](crate::Error::Box): the chunk that was open is
     ///   longer than the `size` field of an `mdat` can state, or the movie
     ///   does not write.
-    /// * [`Sample`](crate::ErrorKind::Sample): what the sample layer
+    /// * [`Sample`](crate::Error::Sample): what the sample layer
     ///   makes of the samples as a whole — a chunk holding more samples than an
     ///   `stsc` entry counts among them.
-    /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox):
+    /// * [`MissingMandatoryBox`](crate::Error::MissingMandatoryBox):
     ///   the movie was never handed over, so the file laid down is not a
     ///   non-fragmented movie file.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   file was already declared over.
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
@@ -308,7 +308,9 @@ impl NonFragmentedMuxFsm {
             // structure's own answer to a file without one, in place of a panic
             // the lints forbid.
             let Some((mut movie, mut samples)) = self.movie.take() else {
-                return Err(Error::missing_mandatory_box(MovieBox::BOX_TYPE));
+                return Err(Error::MissingMandatoryBox {
+                    box_type: MovieBox::BOX_TYPE,
+                });
             };
             let tables_per_track = samples.finish()?;
             for (track_id, tables) in tables_per_track {
@@ -318,7 +320,9 @@ impl NonFragmentedMuxFsm {
                 // of a panic the lints forbid. Why not the sample layer's answer:
                 // its failures are built by that crate alone.
                 let Some(track) = movie.trak_mut(track_id) else {
-                    return Err(Error::missing_mandatory_box(TrackBox::BOX_TYPE));
+                    return Err(Error::MissingMandatoryBox {
+                        box_type: TrackBox::BOX_TYPE,
+                    });
                 };
                 let stbl = track.mdia_mut().minf_mut().stbl_mut();
                 *stbl = tables.into_sample_table(stbl.stsd().clone());
@@ -347,20 +351,22 @@ impl NonFragmentedMuxFsm {
     fn samples(&mut self) -> Result<&mut SampleTableWriter, Error> {
         match &mut self.movie {
             Some((_movie, samples)) => Ok(samples),
-            None => Err(Error::box_out_of_order(MediaDataBox::BOX_TYPE)),
+            None => Err(Error::BoxOutOfOrder {
+                box_type: MediaDataBox::BOX_TYPE,
+            }),
         }
     }
 
     /// Admits the box `box_type` names into the file where the structure places it
     ///
     /// A box the structure passes over is refused as
-    /// [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder).
+    /// [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder).
     fn admit(&mut self, box_type: BoxType) -> Result<(), Error> {
         match self.structure.handle_box_type(box_type)? {
             NonFragmentedDisposition::FileType
             | NonFragmentedDisposition::Movie
             | NonFragmentedDisposition::MediaData => Ok(()),
-            NonFragmentedDisposition::Skip => Err(Error::box_out_of_order(box_type)),
+            NonFragmentedDisposition::Skip => Err(Error::BoxOutOfOrder { box_type }),
         }
     }
 
@@ -402,7 +408,6 @@ mod tests {
     use isobmff_test_support::{file_type, unfragmented_movie};
 
     use super::{Error, NonFragmentedMuxFsm, default_file_type};
-    use crate::ErrorKind;
 
     /// A sample of the track the movie declares
     fn sample() -> Sample {
@@ -472,7 +477,9 @@ mod tests {
 
         assert_eq!(
             mux_fsm.handle_file_type(file_type()),
-            Err(Error::box_out_of_order(FileTypeBox::BOX_TYPE))
+            Err(Error::BoxOutOfOrder {
+                box_type: FileTypeBox::BOX_TYPE
+            })
         );
     }
 
@@ -484,7 +491,9 @@ mod tests {
 
         assert_eq!(
             mux_fsm.handle_movie(unfragmented_movie()),
-            Err(Error::duplicate_box(MovieBox::BOX_TYPE))
+            Err(Error::DuplicateBox {
+                box_type: MovieBox::BOX_TYPE
+            })
         );
     }
 
@@ -495,11 +504,15 @@ mod tests {
 
         assert_eq!(
             opened.begin_chunk(),
-            Err(Error::box_out_of_order(MediaDataBox::BOX_TYPE))
+            Err(Error::BoxOutOfOrder {
+                box_type: MediaDataBox::BOX_TYPE
+            })
         );
         assert_eq!(
             handed_a_sample.handle_sample(sample()),
-            Err(Error::box_out_of_order(MediaDataBox::BOX_TYPE))
+            Err(Error::BoxOutOfOrder {
+                box_type: MediaDataBox::BOX_TYPE
+            })
         );
     }
 
@@ -510,8 +523,10 @@ mod tests {
         mux_fsm.handle_movie(unfragmented_movie()).unwrap();
 
         assert!(matches!(
-            mux_fsm.handle_sample(sample()).map_err(Error::kind),
-            Err(ErrorKind::Sample(isobmff_sample::Error::NoChunkOpen { .. }))
+            mux_fsm.handle_sample(sample()),
+            Err(Error::Sample {
+                error: isobmff_sample::Error::NoChunkOpen { .. }
+            })
         ));
     }
 
@@ -522,7 +537,7 @@ mod tests {
             mux_fsm.handle_movie(unfragmented_movie()).unwrap();
             mux_fsm.begin_chunk().unwrap();
 
-            mux_fsm.handle_sample(sample).map_err(Error::kind)
+            mux_fsm.handle_sample(sample)
         };
 
         assert!(matches!(
@@ -535,10 +550,9 @@ mod tests {
                 1,
                 b"SAMP".to_vec()
             )),
-            Err(ErrorKind::Sample(isobmff_sample::Error::UnknownTrackId {
-                track_id: 999,
-                ..
-            }))
+            Err(Error::Sample {
+                error: isobmff_sample::Error::UnknownTrackId { track_id: 999, .. }
+            })
         ));
         assert!(matches!(
             refused(Sample::new(
@@ -550,13 +564,13 @@ mod tests {
                 2,
                 b"SAMP".to_vec()
             )),
-            Err(ErrorKind::Sample(
-                isobmff_sample::Error::UnknownSampleDescriptionIndex {
+            Err(Error::Sample {
+                error: isobmff_sample::Error::UnknownSampleDescriptionIndex {
                     track_id: 1,
                     sample_description_index: 2,
                     ..
                 }
-            ))
+            })
         ));
     }
 
@@ -568,7 +582,9 @@ mod tests {
 
         assert_eq!(
             mux_fsm.finish(),
-            Err(Error::missing_mandatory_box(MovieBox::BOX_TYPE))
+            Err(Error::MissingMandatoryBox {
+                box_type: MovieBox::BOX_TYPE
+            })
         );
     }
 
@@ -580,11 +596,8 @@ mod tests {
         mux_fsm.handle_movie(unfragmented_movie()).unwrap();
         mux_fsm.finish().unwrap();
 
-        assert_eq!(mux_fsm.begin_chunk(), Err(Error::already_finished()));
-        assert_eq!(
-            mux_fsm.handle_sample(sample()),
-            Err(Error::already_finished())
-        );
-        assert_eq!(mux_fsm.finish(), Err(Error::already_finished()));
+        assert_eq!(mux_fsm.begin_chunk(), Err(Error::AlreadyFinished));
+        assert_eq!(mux_fsm.handle_sample(sample()), Err(Error::AlreadyFinished));
+        assert_eq!(mux_fsm.finish(), Err(Error::AlreadyFinished));
     }
 }

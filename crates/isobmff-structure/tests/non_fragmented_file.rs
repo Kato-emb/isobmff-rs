@@ -12,7 +12,7 @@ mod tests {
     use isobmff_sample::Sample;
 
     use super::reading::{drained, samples_of};
-    use isobmff_structure::{Error, ErrorKind, MovieDemuxFsm, WantedInput};
+    use isobmff_structure::{Error, MovieDemuxFsm, WantedInput};
     use isobmff_test_support::{
         SAMPLE_CHUNKS, movie_fragment, non_fragmented_file, non_fragmented_file_samples, written,
     };
@@ -152,10 +152,11 @@ mod tests {
         let mut demux_fsm = MovieDemuxFsm::new();
 
         assert!(matches!(
-            demux_fsm.handle_input(0, &file).map_err(Error::kind),
-            Err(ErrorKind::Sample(
-                isobmff_sample::Error::MissingMovieExtends { .. }
-            ))
+            demux_fsm.handle_input(0, &file),
+            Err(Error::Sample {
+                error: isobmff_sample::Error::MissingMovieExtends { .. },
+                ..
+            })
         ));
     }
 }

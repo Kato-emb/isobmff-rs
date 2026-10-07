@@ -7,494 +7,251 @@ use isobmff_core::{BoxType, Category};
 
 /// Reason a file does not read through the layers this crate holds
 ///
-/// What went wrong is one [`kind`](Self::kind): a failure of the structure of
-/// the file — a box it requires that never came, one that came twice, one
-/// that came out of the order the structure keeps, a box reaching past the
-/// limit a demux FSM gathers for one, brands a mux FSM cannot write under —
-/// or a failure of a layer beneath, which this type carries through whole
-/// rather than translating:
-/// [`sequence_error`](Self::sequence_error) for the framing of the file,
-/// [`sample_error`](Self::sample_error) for the samples it carries, and
-/// [`box_error`](Self::box_error) for one box that did not decode. What a
-/// caller does about any of them is one [`category`](Self::category).
+/// What went wrong is one variant, which carries the values that describe it:
+/// a failure of the structure of the file — a box it requires that never
+/// came, one that came twice, one that came out of the order the structure
+/// keeps, a box reaching past the limit a demux FSM gathers for one, brands a
+/// mux FSM cannot write under — a call the FSM does not take — one after the
+/// file was declared over, or input at an offset it wants none at — or a
+/// failure of a layer beneath, which this type carries through whole rather
+/// than translating: [`Sequence`](Self::Sequence) for the framing of the file,
+/// [`Sample`](Self::Sample) for the samples it carries, and
+/// [`Box`](Self::Box) for one box that did not read or write. What a caller does
+/// about any of them is one [`category`](Self::category).
 ///
-/// The values a failure of this crate's own carries follow from its kind, and
-/// each kind names its own on [`ErrorKind`]. A carried failure keeps
-/// its own values, so the accessors here report `None` for it.
+/// The vocabulary is this crate's own: the boxes a structure is made of, the
+/// order it keeps them in, and reading one of them whole name their failures
+/// here. The situations a structure reaches are added to as ISO/IEC 14496-12
+/// is read further, so a match on this must leave room for variants that are
+/// not here yet, and a match on a variant must leave room for fields that are
+/// not here yet.
 ///
 /// # Examples
 ///
 /// ```
 /// use isobmff_core::{BoxType, Category};
-/// use isobmff_structure::{Error, ErrorKind};
+/// use isobmff_structure::{Error, MovieDemuxFsm};
 ///
-/// // A failure of the structure names its own kind
-/// let failure = Error::missing_mandatory_box(BoxType::compact(*b"moov"));
-/// assert_eq!(failure.kind(), ErrorKind::MissingMandatoryBox);
+/// // A file declared over before its movie came is a failure of the structure
+/// let mut demux_fsm = MovieDemuxFsm::new();
+/// let failure = demux_fsm.finish().unwrap_err();
+/// assert!(matches!(
+///     failure,
+///     Error::MissingMandatoryBox { box_type, .. } if box_type == BoxType::compact(*b"moov")
+/// ));
 /// assert_eq!(failure.category(), Category::Malformed);
-/// assert_eq!(failure.box_type(), Some(BoxType::compact(*b"moov")));
 ///
 /// // A failure of the samples is carried through whole
 /// let missing = isobmff_core::Error::missing_mandatory_box(BoxType::compact(*b"trex"));
 /// let sample_error = isobmff_sample::Error::from(missing);
 /// let carried = Error::from(sample_error);
-/// assert_eq!(carried.kind(), ErrorKind::Sample(sample_error));
-/// assert_eq!(carried.sample_error(), Some(sample_error));
-/// assert_eq!(carried.box_type(), None);
+/// assert!(matches!(carried, Error::Sample { error, .. } if error == sample_error));
+/// assert_eq!(carried.category(), Category::Malformed);
 /// ```
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Error {
-    representation: Representation,
-}
-
-impl Error {
-    /// Returns the failure of a file lacking a box its structure requires
-    #[must_use]
-    pub const fn missing_mandatory_box(box_type: BoxType) -> Self {
-        Self {
-            representation: Representation::MissingMandatoryBox { box_type },
-        }
-    }
-
-    /// Returns the failure of a file holding twice a box its structure carries once
-    #[must_use]
-    pub const fn duplicate_box(box_type: BoxType) -> Self {
-        Self {
-            representation: Representation::DuplicateBox { box_type },
-        }
-    }
-
-    /// Returns the failure of a box lying out of the order the structure keeps
-    #[must_use]
-    pub const fn box_out_of_order(box_type: BoxType) -> Self {
-        Self {
-            representation: Representation::BoxOutOfOrder { box_type },
-        }
-    }
-
-    /// Returns the failure of a box reaching past the limit a demux FSM gathers
-    #[must_use]
-    pub const fn payload_limit_exceeded(box_type: BoxType, reached: u64, limit: u64) -> Self {
-        Self {
-            representation: Representation::PayloadLimitExceeded {
-                box_type,
-                reached,
-                limit,
-            },
-        }
-    }
-
-    /// Returns the failure of brands handed over that the mux FSM cannot write under
-    #[must_use]
-    pub const fn unsupported_brand() -> Self {
-        Self {
-            representation: Representation::UnsupportedBrand,
-        }
-    }
-
-    /// Returns the failure of a call made after the file was declared over
-    #[must_use]
-    pub const fn already_finished() -> Self {
-        Self {
-            representation: Representation::AlreadyFinished,
-        }
-    }
-
-    /// Returns the failure of input handed over at `offset`, an offset the demux FSM takes no input at
-    #[must_use]
-    pub const fn unwanted_input(offset: u64) -> Self {
-        Self {
-            representation: Representation::UnwantedInput { offset },
-        }
-    }
-
-    /// Returns what went wrong
-    #[must_use]
-    pub const fn kind(self) -> ErrorKind {
-        match self.representation {
-            Representation::Sequence(failure) => ErrorKind::Sequence(failure),
-            Representation::Sample(failure) => ErrorKind::Sample(failure),
-            Representation::Box(box_error) => ErrorKind::Box(box_error.kind()),
-            Representation::MissingMandatoryBox { .. } => ErrorKind::MissingMandatoryBox,
-            Representation::DuplicateBox { .. } => ErrorKind::DuplicateBox,
-            Representation::BoxOutOfOrder { .. } => ErrorKind::BoxOutOfOrder,
-            Representation::PayloadLimitExceeded { .. } => ErrorKind::PayloadLimitExceeded,
-            Representation::UnsupportedBrand => ErrorKind::UnsupportedBrand,
-            Representation::AlreadyFinished => ErrorKind::AlreadyFinished,
-            Representation::UnwantedInput { .. } => ErrorKind::UnwantedInput,
-        }
-    }
-
-    /// Returns what a caller does about the failure
-    #[must_use]
-    pub const fn category(self) -> Category {
-        match self.representation {
-            Representation::Sequence(failure) => failure.category(),
-            Representation::Sample(failure) => failure.category(),
-            Representation::Box(box_error) => box_error.category(),
-            Representation::MissingMandatoryBox { .. }
-            | Representation::DuplicateBox { .. }
-            | Representation::BoxOutOfOrder { .. } => Category::Malformed,
-            Representation::PayloadLimitExceeded { .. } | Representation::UnsupportedBrand => {
-                Category::Unsupported
-            }
-            Representation::AlreadyFinished | Representation::UnwantedInput { .. } => {
-                Category::Usage
-            }
-        }
-    }
-
-    /// Returns the failure of the framing of the file, when it holds one
-    #[must_use]
-    pub const fn sequence_error(self) -> Option<isobmff_sequence::Error> {
-        self.representation.fields().sequence_error
-    }
-
-    /// Returns the failure of the samples the file carries, when it holds one
-    #[must_use]
-    pub const fn sample_error(self) -> Option<isobmff_sample::Error> {
-        self.representation.fields().sample_error
-    }
-
-    /// Returns the failure of one box carried through, when it holds one
-    ///
-    /// The values that failure carries, and the boxes it was reached through,
-    /// are read off the [`isobmff_core::Error`] itself.
-    #[must_use]
-    pub const fn box_error(self) -> Option<isobmff_core::Error> {
-        self.representation.fields().box_error
-    }
-
-    /// Returns the type of the box the failure names, for the kinds that name one
-    #[must_use]
-    pub const fn box_type(self) -> Option<BoxType> {
-        self.representation.fields().box_type
-    }
-
-    /// Returns the bytes the failure required, for the kinds that count bytes
-    #[must_use]
-    pub const fn needed_bytes(self) -> Option<u64> {
-        self.representation.fields().needed_bytes
-    }
-
-    /// Returns the bytes the failure had to hand, for the kinds that count bytes
-    #[must_use]
-    pub const fn available_bytes(self) -> Option<u64> {
-        self.representation.fields().available_bytes
-    }
-
-    /// Returns the offset refused input was handed over at, for the kinds that refuse input
-    #[must_use]
-    pub const fn input_offset(self) -> Option<u64> {
-        self.representation.fields().input_offset
-    }
-}
-
-impl From<isobmff_sequence::Error> for Error {
-    /// Carries the failure of the framing of the file through as it stands
-    fn from(failure: isobmff_sequence::Error) -> Self {
-        Self {
-            representation: Representation::Sequence(failure),
-        }
-    }
-}
-
-impl From<isobmff_sample::Error> for Error {
-    /// Carries the failure of the samples through as it stands
-    fn from(failure: isobmff_sample::Error) -> Self {
-        Self {
-            representation: Representation::Sample(failure),
-        }
-    }
-}
-
-impl From<isobmff_core::Error> for Error {
-    /// Carries the failure of one box through as it stands
-    fn from(box_error: isobmff_core::Error) -> Self {
-        Self {
-            representation: Representation::Box(box_error),
-        }
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.representation {
-            Representation::Sequence(failure) => write!(formatter, "{failure}"),
-            Representation::Sample(failure) => write!(formatter, "{failure}"),
-            Representation::Box(box_error) => write!(formatter, "{box_error}"),
-            Representation::MissingMandatoryBox { box_type } => {
-                write!(formatter, "file carries no {box_type} box")
-            }
-            Representation::DuplicateBox { box_type } => {
-                write!(formatter, "file carries a second {box_type} box")
-            }
-            Representation::BoxOutOfOrder { box_type } => write!(
-                formatter,
-                "file carries a {box_type} box out of the order its structure keeps"
-            ),
-            Representation::PayloadLimitExceeded {
-                box_type,
-                reached,
-                limit,
-            } => write!(
-                formatter,
-                "{box_type} box reaches {reached} payload bytes, past the {limit}-byte limit"
-            ),
-            Representation::UnsupportedBrand => {
-                formatter.write_str("brands handed over are ones the mux FSM cannot write under")
-            }
-            Representation::AlreadyFinished => {
-                formatter.write_str("file was declared over and takes nothing more")
-            }
-            Representation::UnwantedInput { offset } => write!(
-                formatter,
-                "input handed over at offset {offset} is not the read the demux FSM wants"
-            ),
-        }
-    }
-}
-
-impl fmt::Debug for Error {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let values = self.representation.fields();
-        let mut fields = formatter.debug_struct("Error");
-        fields.field("kind", &self.kind());
-        fields.field("category", &self.category());
-
-        if let Some(failure) = values.sequence_error {
-            fields.field("sequence_error", &failure);
-        }
-        if let Some(failure) = values.sample_error {
-            fields.field("sample_error", &failure);
-        }
-        if let Some(box_error) = values.box_error {
-            fields.field("box_error", &box_error);
-        }
-        if let Some(box_type) = values.box_type {
-            fields.field("box_type", &box_type);
-        }
-        if let Some(needed) = values.needed_bytes {
-            fields.field("needed_bytes", &needed);
-        }
-        if let Some(available) = values.available_bytes {
-            fields.field("available_bytes", &available);
-        }
-        if let Some(offset) = values.input_offset {
-            fields.field("input_offset", &offset);
-        }
-
-        fields.finish()
-    }
-}
-
-impl error::Error for Error {
-    /// Returns the failure of the layer beneath, when it holds one
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match &self.representation {
-            Representation::Sequence(failure) => Some(failure),
-            Representation::Sample(failure) => Some(failure),
-            Representation::Box(box_error) => Some(box_error),
-            Representation::MissingMandatoryBox { .. }
-            | Representation::DuplicateBox { .. }
-            | Representation::BoxOutOfOrder { .. }
-            | Representation::PayloadLimitExceeded { .. }
-            | Representation::UnsupportedBrand
-            | Representation::AlreadyFinished
-            | Representation::UnwantedInput { .. } => None,
-        }
-    }
-}
-
-/// What a failure of reading a file through the layers this crate holds is
-///
-/// The vocabulary is this crate's own: the boxes a structure is made of, the
-/// order it keeps them in, and reading one of them whole name their failures
-/// here. A failure of a layer beneath is not translated: it keeps the kind
-/// that layer gives it, carried on [`Sequence`](Self::Sequence),
-/// [`Sample`](Self::Sample), or [`Box`](Self::Box).
-///
-/// The situations a structure reaches are added to as ISO/IEC 14496-12 is
-/// read further, so a match on this must leave room for kinds that are not
-/// here yet.
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum ErrorKind {
+pub enum Error {
     /// Failure of the framing of the file, carried through as `isobmff-sequence` names it
-    ///
-    /// The values that failure carries are on
-    /// [`sequence_error`](Error::sequence_error).
-    Sequence(isobmff_sequence::Error),
+    #[non_exhaustive]
+    Sequence {
+        /// Failure of the framing, carrying its own values
+        error: isobmff_sequence::Error,
+    },
     /// Failure of the samples the file carries, carried through as `isobmff-sample` names it
-    ///
-    /// The values that failure carries are on
-    /// [`sample_error`](Error::sample_error).
-    Sample(isobmff_sample::Error),
+    #[non_exhaustive]
+    Sample {
+        /// Failure of the samples, carrying its own values
+        error: isobmff_sample::Error,
+    },
     /// Failure of one box, carried through as `isobmff-core` names it
-    ///
-    /// The values that failure carries, and the boxes it was reached through,
-    /// are on [`box_error`](Error::box_error).
-    Box(isobmff_core::ErrorKind),
+    #[non_exhaustive]
+    Box {
+        /// Failure of the box, carrying its own values and the boxes it was reached through
+        error: isobmff_core::Error,
+    },
     /// Box the structure requires is not there
     ///
     /// The file was declared over without it.
-    /// [`box_type`](Error::box_type) is the box that is missing.
-    MissingMandatoryBox,
+    #[non_exhaustive]
+    MissingMandatoryBox {
+        /// Type of the box that is missing
+        box_type: BoxType,
+    },
     /// Box the structure carries once is there twice
-    ///
-    /// [`box_type`](Error::box_type) is the box that came again.
-    DuplicateBox,
+    #[non_exhaustive]
+    DuplicateBox {
+        /// Type of the box that came again
+        box_type: BoxType,
+    },
     /// Box lies out of the order the structure keeps
     ///
     /// It came before a box the structure places ahead of it, or after one it
-    /// places behind it. [`box_type`](Error::box_type) is the box
-    /// that came out of order.
-    BoxOutOfOrder,
+    /// places behind it.
+    #[non_exhaustive]
+    BoxOutOfOrder {
+        /// Type of the box that came out of order
+        box_type: BoxType,
+    },
     /// Box read whole reaches past the limit the demux FSM gathers
-    ///
-    /// [`box_type`](Error::box_type) is the box,
-    /// [`needed_bytes`](Error::needed_bytes) the payload it
-    /// declares — or, for a box declaring no total, the payload it has
-    /// reached — and [`available_bytes`](Error::available_bytes)
-    /// the payload the demux FSM gathers for one box at most.
-    PayloadLimitExceeded,
+    #[non_exhaustive]
+    PayloadLimitExceeded {
+        /// Type of the box
+        box_type: BoxType,
+        /// Length of payload the box declares, or for a box declaring no total, the length it has reached
+        reached_bytes: u64,
+        /// Length of payload the demux FSM gathers for one box at most
+        limit_bytes: u64,
+    },
     /// Brands were handed over that the mux FSM cannot write under
     ///
     /// A mux FSM that writes `default-base-is-moof` in every `tfhd` refuses a
     /// `ftyp` or `styp` listing any brand earlier than `iso5` — `isom`,
     /// `avc1`, `iso2`, `iso3` or `iso4` — under which ISO/IEC 14496-12
     /// §8.8.7.1 forbids the flag.
+    #[non_exhaustive]
     UnsupportedBrand,
-    /// File was declared over, and takes nothing more
+    /// File was declared over, and takes nothing more until the reading restarts
+    #[non_exhaustive]
     AlreadyFinished,
     /// Input was handed over at an offset the demux FSM takes no input at
     ///
     /// The demux FSM takes input where it names the read it wants and, while
     /// it takes the input in order, where that input stands, and refuses it
-    /// anywhere else. [`input_offset`](Error::input_offset) is the offset
-    /// the input was handed over at.
-    UnwantedInput,
-}
-
-/// Values a failure carries, keyed by what went wrong
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum Representation {
-    /// Failure of the framing of the file, carried through whole
-    Sequence(isobmff_sequence::Error),
-    /// Failure of the samples the file carries, carried through whole
-    Sample(isobmff_sample::Error),
-    /// Failure of one box, carried through whole
-    Box(isobmff_core::Error),
-    /// Box the structure requires that is not there
-    MissingMandatoryBox { box_type: BoxType },
-    /// Box the structure carries once that is there twice
-    DuplicateBox { box_type: BoxType },
-    /// Box lying out of the order the structure keeps
-    BoxOutOfOrder { box_type: BoxType },
-    /// Box reaching past the limit a demux FSM gathers
-    PayloadLimitExceeded {
-        box_type: BoxType,
-        reached: u64,
-        limit: u64,
+    /// anywhere else.
+    #[non_exhaustive]
+    UnwantedInput {
+        /// Offset the input was handed over at
+        input_offset: u64,
     },
-    /// Brands handed over that the mux FSM cannot write under
-    UnsupportedBrand,
-    /// Call made after the file was declared over
-    AlreadyFinished,
-    /// Input handed over at an offset the demux FSM takes no input at
-    UnwantedInput { offset: u64 },
 }
 
-/// Values a failure carries, laid flat, with `None` where its kind carries no such value
-struct Fields {
-    sequence_error: Option<isobmff_sequence::Error>,
-    sample_error: Option<isobmff_sample::Error>,
-    box_error: Option<isobmff_core::Error>,
-    box_type: Option<BoxType>,
-    needed_bytes: Option<u64>,
-    available_bytes: Option<u64>,
-    input_offset: Option<u64>,
-}
-
-impl Fields {
-    /// Values of a failure that carries none
-    const EMPTY: Self = Self {
-        sequence_error: None,
-        sample_error: None,
-        box_error: None,
-        box_type: None,
-        needed_bytes: None,
-        available_bytes: None,
-        input_offset: None,
-    };
-}
-
-impl Representation {
-    /// Returns the values the failure carries, laid flat
-    const fn fields(self) -> Fields {
+impl Error {
+    /// Returns what a caller does about the failure
+    #[must_use]
+    pub const fn category(self) -> Category {
         match self {
-            Self::Sequence(failure) => Fields {
-                sequence_error: Some(failure),
-                ..Fields::EMPTY
-            },
-            Self::Sample(failure) => Fields {
-                sample_error: Some(failure),
-                ..Fields::EMPTY
-            },
-            Self::Box(box_error) => Fields {
-                box_error: Some(box_error),
-                ..Fields::EMPTY
-            },
-            Self::MissingMandatoryBox { box_type }
-            | Self::DuplicateBox { box_type }
-            | Self::BoxOutOfOrder { box_type } => Fields {
-                box_type: Some(box_type),
-                ..Fields::EMPTY
-            },
+            Self::Sequence { error } => error.category(),
+            Self::Sample { error } => error.category(),
+            Self::Box { error } => error.category(),
+            Self::MissingMandatoryBox { .. }
+            | Self::DuplicateBox { .. }
+            | Self::BoxOutOfOrder { .. } => Category::Malformed,
+            Self::PayloadLimitExceeded { .. } | Self::UnsupportedBrand => Category::Unsupported,
+            Self::AlreadyFinished | Self::UnwantedInput { .. } => Category::Usage,
+        }
+    }
+}
+
+impl From<isobmff_sequence::Error> for Error {
+    /// Carries the failure of the framing of the file through as it stands
+    fn from(error: isobmff_sequence::Error) -> Self {
+        Self::Sequence { error }
+    }
+}
+
+impl From<isobmff_sample::Error> for Error {
+    /// Carries the failure of the samples through as it stands
+    fn from(error: isobmff_sample::Error) -> Self {
+        Self::Sample { error }
+    }
+}
+
+impl From<isobmff_core::Error> for Error {
+    /// Carries the failure of one box through as it stands
+    fn from(error: isobmff_core::Error) -> Self {
+        Self::Box { error }
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::Sequence { error } => write!(formatter, "{error}"),
+            Self::Sample { error } => write!(formatter, "{error}"),
+            Self::Box { error } => write!(formatter, "{error}"),
+            Self::MissingMandatoryBox { box_type } => {
+                write!(formatter, "file carries no {box_type} box")
+            }
+            Self::DuplicateBox { box_type } => {
+                write!(formatter, "file carries a second {box_type} box")
+            }
+            Self::BoxOutOfOrder { box_type } => write!(
+                formatter,
+                "file carries a {box_type} box out of the order its structure keeps"
+            ),
             Self::PayloadLimitExceeded {
                 box_type,
-                reached,
-                limit,
-            } => Fields {
-                box_type: Some(box_type),
-                needed_bytes: Some(reached),
-                available_bytes: Some(limit),
-                ..Fields::EMPTY
-            },
-            Self::UnsupportedBrand | Self::AlreadyFinished => Fields::EMPTY,
-            Self::UnwantedInput { offset } => Fields {
-                input_offset: Some(offset),
-                ..Fields::EMPTY
-            },
+                reached_bytes,
+                limit_bytes,
+            } => write!(
+                formatter,
+                "{box_type} box reaches {reached_bytes} payload bytes, past the {limit_bytes}-byte \
+                 limit"
+            ),
+            Self::UnsupportedBrand => {
+                formatter.write_str("brands handed over are ones the mux FSM cannot write under")
+            }
+            Self::AlreadyFinished => {
+                formatter.write_str("file was declared over and takes nothing more")
+            }
+            Self::UnwantedInput { input_offset } => write!(
+                formatter,
+                "input handed over at offset {input_offset} is not the read the demux FSM wants"
+            ),
+        }
+    }
+}
+
+impl error::Error for Error {
+    /// Returns the failure of the layer beneath, when it holds one
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self {
+            Self::Sequence { error } => Some(error),
+            Self::Sample { error } => Some(error),
+            Self::Box { error } => Some(error),
+            Self::MissingMandatoryBox { .. }
+            | Self::DuplicateBox { .. }
+            | Self::BoxOutOfOrder { .. }
+            | Self::PayloadLimitExceeded { .. }
+            | Self::UnsupportedBrand
+            | Self::AlreadyFinished
+            | Self::UnwantedInput { .. } => None,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use alloc::format;
     use alloc::string::ToString as _;
 
     use isobmff_core::{BoxType, Category};
 
-    use super::{Error, ErrorKind};
+    use super::Error;
 
-    /// The `moov` box, which most of the structure's failures name
+    /// Box the failures in these tests name
     const MOOV: BoxType = BoxType::compact(*b"moov");
 
     #[test]
-    fn a_kind_falls_in_the_category_its_situation_asks_for() {
+    fn a_failure_falls_in_the_category_its_situation_asks_for() {
         assert_eq!(
-            Error::missing_mandatory_box(MOOV).category(),
+            Error::MissingMandatoryBox { box_type: MOOV }.category(),
             Category::Malformed
         );
         assert_eq!(
-            Error::payload_limit_exceeded(MOOV, 32, 16).category(),
+            Error::PayloadLimitExceeded {
+                box_type: MOOV,
+                reached_bytes: 32,
+                limit_bytes: 16,
+            }
+            .category(),
             Category::Unsupported
         );
-        assert_eq!(Error::unsupported_brand().category(), Category::Unsupported);
-        assert_eq!(Error::already_finished().category(), Category::Usage);
-        assert_eq!(Error::unwanted_input(9).category(), Category::Usage);
+        assert_eq!(Error::UnsupportedBrand.category(), Category::Unsupported);
+        assert_eq!(Error::AlreadyFinished.category(), Category::Usage);
+        assert_eq!(
+            Error::UnwantedInput { input_offset: 9 }.category(),
+            Category::Usage
+        );
         assert_eq!(
             Error::from(isobmff_core::Error::unsupported_version(2)).category(),
             Category::Unsupported
@@ -502,83 +259,38 @@ mod tests {
     }
 
     #[test]
-    fn a_failure_carries_only_the_values_its_kind_names() {
-        let missing = Error::missing_mandatory_box(MOOV);
-
-        assert_eq!(missing.kind(), ErrorKind::MissingMandatoryBox);
-        assert_eq!(missing.box_type(), Some(MOOV));
-        assert_eq!(missing.needed_bytes(), None);
-        assert_eq!(missing.box_error(), None);
-
-        let exceeded = Error::payload_limit_exceeded(MOOV, 32, 16);
-
-        assert_eq!(exceeded.kind(), ErrorKind::PayloadLimitExceeded);
-        assert_eq!(exceeded.box_type(), Some(MOOV));
-        assert_eq!(exceeded.needed_bytes(), Some(32));
-        assert_eq!(exceeded.available_bytes(), Some(16));
-
-        assert_eq!(Error::already_finished().box_type(), None);
-
-        let unwanted = Error::unwanted_input(9);
-
-        assert_eq!(unwanted.kind(), ErrorKind::UnwantedInput);
-        assert_eq!(unwanted.input_offset(), Some(9));
-        assert_eq!(unwanted.box_type(), None);
-    }
-
-    #[test]
-    fn a_failure_of_a_layer_beneath_is_carried_through_whole() {
-        let sequence_error =
-            isobmff_sequence::Error::from(isobmff_core::Error::truncated_header(16, 8));
-        let carried = Error::from(sequence_error);
-
-        assert_eq!(carried.kind(), ErrorKind::Sequence(sequence_error));
-        assert_eq!(carried.sequence_error(), Some(sequence_error));
-        assert_eq!(carried.sample_error(), None);
-        assert_eq!(carried.needed_bytes(), None);
-
-        let sample_error = isobmff_sample::Error::from(isobmff_core::Error::unsupported_version(2));
-        let carried = Error::from(sample_error);
-
-        assert_eq!(carried.sample_error(), Some(sample_error));
-        assert_eq!(carried.box_error(), None);
-
-        let box_error = isobmff_core::Error::missing_mandatory_box(BoxType::compact(*b"trex"))
-            .in_container(BoxType::compact(*b"mvex"));
-        let carried = Error::from(box_error);
-
-        assert_eq!(carried.box_error(), Some(box_error));
-        assert_eq!(carried.box_type(), None);
-    }
-
-    #[test]
     fn display_of_a_failure_of_the_structure_states_the_reason() {
         assert_eq!(
-            Error::missing_mandatory_box(MOOV).to_string(),
+            Error::MissingMandatoryBox { box_type: MOOV }.to_string(),
             "file carries no moov box"
         );
         assert_eq!(
-            Error::duplicate_box(MOOV).to_string(),
+            Error::DuplicateBox { box_type: MOOV }.to_string(),
             "file carries a second moov box"
         );
         assert_eq!(
-            Error::box_out_of_order(MOOV).to_string(),
+            Error::BoxOutOfOrder { box_type: MOOV }.to_string(),
             "file carries a moov box out of the order its structure keeps"
         );
         assert_eq!(
-            Error::payload_limit_exceeded(MOOV, 32, 16).to_string(),
+            Error::PayloadLimitExceeded {
+                box_type: MOOV,
+                reached_bytes: 32,
+                limit_bytes: 16,
+            }
+            .to_string(),
             "moov box reaches 32 payload bytes, past the 16-byte limit"
         );
         assert_eq!(
-            Error::unsupported_brand().to_string(),
+            Error::UnsupportedBrand.to_string(),
             "brands handed over are ones the mux FSM cannot write under"
         );
         assert_eq!(
-            Error::already_finished().to_string(),
+            Error::AlreadyFinished.to_string(),
             "file was declared over and takes nothing more"
         );
         assert_eq!(
-            Error::unwanted_input(9).to_string(),
+            Error::UnwantedInput { input_offset: 9 }.to_string(),
             "input handed over at offset 9 is not the read the demux FSM wants"
         );
     }
@@ -590,26 +302,6 @@ mod tests {
         assert_eq!(
             Error::from(sample_error).to_string(),
             sample_error.to_string()
-        );
-    }
-
-    #[test]
-    fn debug_names_the_values_a_kind_carries_and_leaves_out_the_rest() {
-        assert_eq!(
-            format!("{:?}", Error::payload_limit_exceeded(MOOV, 32, 16)),
-            "Error { kind: PayloadLimitExceeded, category: Unsupported, box_type: Compact(CompactType(FourCC(\"moov\"))), needed_bytes: 32, available_bytes: 16 }"
-        );
-        assert_eq!(
-            format!("{:?}", Error::already_finished()),
-            "Error { kind: AlreadyFinished, category: Usage }"
-        );
-        assert_eq!(
-            format!("{:?}", Error::unwanted_input(9)),
-            "Error { kind: UnwantedInput, category: Usage, input_offset: 9 }"
-        );
-        assert_eq!(
-            format!("{:?}", Error::unsupported_brand()),
-            "Error { kind: UnsupportedBrand, category: Unsupported }"
         );
     }
 }

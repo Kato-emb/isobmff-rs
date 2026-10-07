@@ -26,13 +26,13 @@ use crate::Error;
 /// * The `ftyp` comes first, as early as §4.3 asks: a file carrying none reads
 ///   all the same, as §4.3 allows, but one carrying it after any other box —
 ///   a second `ftyp` among them — is
-///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder).
+///   [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder).
 /// * The `moov` comes once, and before any fragment: a second is
-///   [`DuplicateBox`](crate::ErrorKind::DuplicateBox), and a `moof`
+///   [`DuplicateBox`](crate::Error::DuplicateBox), and a `moof`
 ///   arriving before it is
-///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder). A file
+///   [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder). A file
 ///   declared over without one is
-///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
+///   [`MissingMandatoryBox`](crate::Error::MissingMandatoryBox).
 /// * An `mdat` is passed on as media data wherever it lies, before the `moov`
 ///   as well. How many there are is not counted.
 /// * A `sidx` and an `mfra` are read into values wherever they lie, and move
@@ -41,7 +41,7 @@ use crate::Error;
 /// * [`resume`](Self::resume) restarts the order part-way into the file, at a
 ///   box an index points at: the next box is a `moof`, a `sidx` or an `mfra`,
 ///   placed as it would be where the boxes before the resume left the order,
-///   and any other is [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder).
+///   and any other is [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder).
 ///   What those boxes established stands: a `moof` still needs the `moov`
 ///   to have come, and a second `moov` is still a duplicate.
 /// * An `Err` changes nothing: the structure stands where it stood before the
@@ -105,9 +105,9 @@ impl FragmentedStructure {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder): an
+    /// * [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder): an
     ///   `ftyp` after another box, or a `moof` before the `moov`.
-    /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): a second
+    /// * [`DuplicateBox`](crate::Error::DuplicateBox): a second
     ///   `moov`.
     pub(crate) fn handle_box_type(
         &mut self,
@@ -121,7 +121,7 @@ impl FragmentedStructure {
                     | MovieFragmentRandomAccessBox::BOX_TYPE
             )
         {
-            return Err(Error::box_out_of_order(box_type));
+            return Err(Error::BoxOutOfOrder { box_type });
         }
 
         let (reached, disposition) = place(self.position, box_type)?;
@@ -140,14 +140,14 @@ impl FragmentedStructure {
     ///
     /// # Errors
     ///
-    /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox):
+    /// * [`MissingMandatoryBox`](crate::Error::MissingMandatoryBox):
     ///   the file carried no `moov`.
     pub(crate) const fn finish(&self) -> Result<(), Error> {
         match self.position {
             Position::Declared => Ok(()),
-            Position::Start | Position::Opened => {
-                Err(Error::missing_mandatory_box(MovieBox::BOX_TYPE))
-            }
+            Position::Start | Position::Opened => Err(Error::MissingMandatoryBox {
+                box_type: MovieBox::BOX_TYPE,
+            }),
         }
     }
 }
@@ -163,12 +163,12 @@ const fn place(
         }
         (FileTypeBox::BOX_TYPE, Position::Opened | Position::Declared)
         | (MovieFragmentBox::BOX_TYPE, Position::Start | Position::Opened) => {
-            Err(Error::box_out_of_order(box_type))
+            Err(Error::BoxOutOfOrder { box_type })
         }
         (MovieBox::BOX_TYPE, Position::Start | Position::Opened) => {
             Ok((Position::Declared, FragmentedDisposition::Movie))
         }
-        (MovieBox::BOX_TYPE, Position::Declared) => Err(Error::duplicate_box(box_type)),
+        (MovieBox::BOX_TYPE, Position::Declared) => Err(Error::DuplicateBox { box_type }),
         (MovieFragmentBox::BOX_TYPE, Position::Declared) => {
             Ok((Position::Declared, FragmentedDisposition::MovieFragment))
         }
@@ -259,7 +259,9 @@ mod tests {
     fn a_resumed_file_starting_on_a_box_no_index_points_at_is_out_of_order() {
         assert_eq!(
             dispositions_resuming_after(&[b"ftyp", b"moov", b"moof"], &[b"mdat"]),
-            Err(Error::box_out_of_order(BoxType::compact(*b"mdat")))
+            Err(Error::BoxOutOfOrder {
+                box_type: BoxType::compact(*b"mdat")
+            })
         );
     }
 
@@ -267,11 +269,15 @@ mod tests {
     fn a_resumed_file_keeps_the_order_the_boxes_before_the_resume_established() {
         assert_eq!(
             dispositions_resuming_after(&[b"ftyp"], &[b"moof"]),
-            Err(Error::box_out_of_order(BoxType::compact(*b"moof")))
+            Err(Error::BoxOutOfOrder {
+                box_type: BoxType::compact(*b"moof")
+            })
         );
         assert_eq!(
             dispositions_resuming_after(&[b"moov"], &[b"moof", b"moov"]),
-            Err(Error::duplicate_box(BoxType::compact(*b"moov")))
+            Err(Error::DuplicateBox {
+                box_type: BoxType::compact(*b"moov")
+            })
         );
     }
 
@@ -345,7 +351,9 @@ mod tests {
 
     #[test]
     fn brands_declared_after_another_box_are_out_of_order() {
-        let out_of_order = Err(Error::box_out_of_order(BoxType::compact(*b"ftyp")));
+        let out_of_order = Err(Error::BoxOutOfOrder {
+            box_type: BoxType::compact(*b"ftyp"),
+        });
 
         assert_eq!(dispositions_of(&[b"free", b"ftyp"]), out_of_order);
         assert_eq!(dispositions_of(&[b"moov", b"ftyp"]), out_of_order);
@@ -356,7 +364,9 @@ mod tests {
     fn a_second_movie_is_rejected() {
         assert_eq!(
             dispositions_of(&[b"ftyp", b"moov", b"moof", b"moov"]),
-            Err(Error::duplicate_box(BoxType::compact(*b"moov")))
+            Err(Error::DuplicateBox {
+                box_type: BoxType::compact(*b"moov")
+            })
         );
     }
 
@@ -364,7 +374,9 @@ mod tests {
     fn a_fragment_arriving_before_the_movie_is_out_of_order() {
         assert_eq!(
             dispositions_of(&[b"ftyp", b"moof"]),
-            Err(Error::box_out_of_order(BoxType::compact(*b"moof")))
+            Err(Error::BoxOutOfOrder {
+                box_type: BoxType::compact(*b"moof")
+            })
         );
     }
 
@@ -409,7 +421,9 @@ mod tests {
 
         assert_eq!(
             structure.finish(),
-            Err(Error::missing_mandatory_box(BoxType::compact(*b"moov")))
+            Err(Error::MissingMandatoryBox {
+                box_type: BoxType::compact(*b"moov")
+            })
         );
     }
 

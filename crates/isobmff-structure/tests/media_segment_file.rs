@@ -16,7 +16,7 @@ mod tests {
         TrackRunBox, TrackRunSample,
     };
     use isobmff_core::{BoxEncode, FourCC};
-    use isobmff_structure::{Error, ErrorKind, MediaSegmentDemuxFsm, WantedInput};
+    use isobmff_structure::{Error, MediaSegmentDemuxFsm, WantedInput};
     use isobmff_test_support::{
         SAMPLE_CHUNKS, fragmented_file_with_movie_samples, indexed_segment_file,
         indexed_segment_file_without_decode_times, non_fragmented_file_samples, presentation_movie,
@@ -159,12 +159,11 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            MediaSegmentDemuxFsm::new(movie)
-                .map(drop)
-                .map_err(Error::kind),
-            Err(ErrorKind::Sample(
-                isobmff_sample::Error::DecodeTimeOverflow { track_id: 1, .. }
-            ))
+            MediaSegmentDemuxFsm::new(movie).map(drop),
+            Err(Error::Sample {
+                error: isobmff_sample::Error::DecodeTimeOverflow { track_id: 1, .. },
+                ..
+            })
         ));
     }
 

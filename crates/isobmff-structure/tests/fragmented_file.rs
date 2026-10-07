@@ -19,7 +19,7 @@ mod tests {
     use isobmff_core::{BoxEncode, BoxType};
     use isobmff_sample::Sample;
     use isobmff_sequence::BoxEvent;
-    use isobmff_structure::{Error, ErrorKind, MovieDemuxFsm, WantedInput};
+    use isobmff_structure::{Error, MovieDemuxFsm, WantedInput};
     use isobmff_test_support::{
         FragmentedFileWithMovieSamples, IndexedFile, SAMPLE_CHUNKS, events_of, file_type,
         fragmented_file_samples, fragmented_file_with_movie_samples, fragmented_file_with_samples,
@@ -158,15 +158,15 @@ mod tests {
             .and_then(|moof| moof.first_chunk::<4>())
             .unwrap();
         let media_data = second.saturating_add(u64::from(u32::from_be_bytes(*moof_size)));
-        let out_of_order = Error::box_out_of_order(BoxType::compact(*b"mdat"));
 
         let mut demux_fsm = read_whole(&file);
+        let resumed = resumed_at(&mut demux_fsm, &file, media_data);
 
-        assert_eq!(
-            resumed_at(&mut demux_fsm, &file, media_data),
-            Err(out_of_order)
-        );
-        assert_eq!(demux_fsm.resume_at(second), Err(out_of_order));
+        assert!(matches!(
+            resumed,
+            Err(Error::BoxOutOfOrder { box_type, .. }) if box_type == BoxType::compact(*b"mdat")
+        ));
+        assert_eq!(demux_fsm.resume_at(second), resumed);
     }
 
     #[test]
@@ -185,11 +185,11 @@ mod tests {
         let mut demux_fsm = read_whole(&file);
 
         assert!(matches!(
-            resumed_at(&mut demux_fsm, &file, *file.moof_offsets.get(1).unwrap())
-                .map_err(Error::kind),
-            Err(ErrorKind::Sample(
-                isobmff_sample::Error::MissingDecodeTime { track_id: 1, .. }
-            ))
+            resumed_at(&mut demux_fsm, &file, *file.moof_offsets.get(1).unwrap()),
+            Err(Error::Sample {
+                error: isobmff_sample::Error::MissingDecodeTime { track_id: 1, .. },
+                ..
+            })
         ));
     }
 
@@ -311,10 +311,16 @@ mod tests {
         let wanted = demux_fsm.wanted_input();
         let finished = demux_fsm.finish();
 
+        assert!(matches!(
+            refused,
+            Err(Error::UnwantedInput {
+                input_offset: 0,
+                ..
+            })
+        ));
         assert_eq!(
-            (refused, wanted, finished, demux_fsm.wanted_input()),
+            (wanted, finished, demux_fsm.wanted_input()),
             (
-                Err(Error::unwanted_input(0)),
                 Some(WantedInput::new(
                     file_len.saturating_sub(closing_len),
                     Some(closing_len)
@@ -429,8 +435,7 @@ mod tests {
             demux_fsm.resume_at(file.moof_offset).unwrap();
             let resumed = demux_fsm
                 .handle_input(file.moof_offset, file.bytes.get(fragment..).unwrap())
-                .and_then(|()| demux_fsm.finish())
-                .map_err(Error::kind);
+                .and_then(|()| demux_fsm.finish());
 
             (resumed, drained(&mut demux_fsm))
         };
@@ -445,9 +450,10 @@ mod tests {
 
         assert!(matches!(
             resumed,
-            Err(ErrorKind::Sample(
-                isobmff_sample::Error::MissingDecodeTime { track_id: 1, .. }
-            ))
+            Err(Error::Sample {
+                error: isobmff_sample::Error::MissingDecodeTime { track_id: 1, .. },
+                ..
+            })
         ));
         assert_eq!(samples, Vec::new());
     }

@@ -8,7 +8,7 @@ use isobmff_test_support::{
 };
 
 use super::{Error, MovieDemuxFsm};
-use crate::{DemuxLimits, ErrorKind, FragmentedMuxFsm, WantedInput};
+use crate::{DemuxLimits, FragmentedMuxFsm, WantedInput};
 
 /// Movie of one track continued in fragments, whose defaults a `trex` states
 fn movie() -> MovieBox {
@@ -60,7 +60,9 @@ fn a_file_declaring_no_brands_is_read_all_the_same() {
 fn a_file_declared_over_without_a_movie_is_rejected() {
     assert_eq!(
         read(&written(&file_type())).map(drop),
-        Err(Error::missing_mandatory_box(MovieBox::BOX_TYPE))
+        Err(Error::MissingMandatoryBox {
+            box_type: MovieBox::BOX_TYPE
+        })
     );
 }
 
@@ -69,10 +71,12 @@ fn a_box_read_into_a_value_declaring_a_payload_past_the_limit_is_rejected() {
     let mut demux_fsm = MovieDemuxFsm::with_limits(DemuxLimits::new().with_payload(4));
 
     assert_eq!(
-        demux_fsm
-            .handle_input(0, &written(&file_type()))
-            .map_err(Error::kind),
-        Err(ErrorKind::PayloadLimitExceeded)
+        demux_fsm.handle_input(0, &written(&file_type())),
+        Err(Error::PayloadLimitExceeded {
+            box_type: BoxType::compact(*b"ftyp"),
+            reached_bytes: 16,
+            limit_bytes: 4,
+        })
     );
 }
 
@@ -97,16 +101,14 @@ fn a_fragment_declaring_more_samples_than_the_limit_lays_out_none() {
     let mut demux_fsm = MovieDemuxFsm::with_limits(DemuxLimits::new().with_resolved_samples(0));
 
     assert!(matches!(
-        demux_fsm
-            .handle_input(0, &file_of_one_sample())
-            .map_err(Error::kind),
-        Err(ErrorKind::Sample(
-            isobmff_sample::Error::SampleCountLimitExceeded {
+        demux_fsm.handle_input(0, &file_of_one_sample()),
+        Err(Error::Sample {
+            error: isobmff_sample::Error::SampleCountLimitExceeded {
                 declared_samples: 1,
                 limit_samples: 0,
                 ..
             }
-        ))
+        })
     ));
     assert_eq!(demux_fsm.poll_sample(), None);
 }
@@ -116,16 +118,14 @@ fn a_movie_declaring_more_samples_than_the_limit_lays_out_none() {
     let mut demux_fsm = MovieDemuxFsm::with_limits(DemuxLimits::new().with_resolved_samples(0));
 
     assert!(matches!(
-        demux_fsm
-            .handle_input(0, &non_fragmented_file(&[&[b"SAMP"]], true))
-            .map_err(Error::kind),
-        Err(ErrorKind::Sample(
-            isobmff_sample::Error::SampleCountLimitExceeded {
+        demux_fsm.handle_input(0, &non_fragmented_file(&[&[b"SAMP"]], true)),
+        Err(Error::Sample {
+            error: isobmff_sample::Error::SampleCountLimitExceeded {
                 declared_samples: 1,
                 limit_samples: 0,
                 ..
             }
-        ))
+        })
     ));
     assert_eq!(demux_fsm.poll_sample(), None);
 }
@@ -137,16 +137,14 @@ fn the_sample_reader_is_held_to_the_limits_it_is_given() {
     );
 
     assert!(matches!(
-        demux_fsm
-            .handle_input(0, &file_of_one_sample())
-            .map_err(Error::kind),
-        Err(ErrorKind::Sample(
-            isobmff_sample::Error::HeldExtentLimitExceeded {
+        demux_fsm.handle_input(0, &file_of_one_sample()),
+        Err(Error::Sample {
+            error: isobmff_sample::Error::HeldExtentLimitExceeded {
                 held_extents: 1,
                 limit_extents: 0,
                 ..
             }
-        ))
+        })
     ));
 }
 

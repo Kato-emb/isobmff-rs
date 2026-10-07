@@ -31,13 +31,13 @@ use crate::{Error, whole_box_header, whole_payload};
 /// * The order of the boxes is the structure's, held to as they are handed
 ///   over, but for the `styp`, which the mux FSM lays down first if at all:
 ///   the `styp`, then the fragments. A `styp` handed over after another box is
-///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder), and a
+///   [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder), and a
 ///   segment declared over without a fragment is
-///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
+///   [`MissingMandatoryBox`](crate::Error::MissingMandatoryBox).
 /// * A `styp` listing a brand under which the `default-base-is-moof` every
 ///   `tfhd` states shall not be used
 ///   ([`SegmentTypeBox::forbids_default_base_is_moof`]) is
-///   [`UnsupportedBrand`](crate::ErrorKind::UnsupportedBrand), and nothing
+///   [`UnsupportedBrand`](crate::Error::UnsupportedBrand), and nothing
 ///   of it is laid down. The `ftyp` of the initialization segment is not
 ///   handed over, and is not checked.
 /// * A fragment is opened by [`begin_fragment`](Self::begin_fragment) or
@@ -46,7 +46,7 @@ use crate::{Error, whole_box_header, whole_payload};
 ///   [`finish_fragment`](Self::finish_fragment) as the `moof` and the `mdat`
 ///   the sample layer made of it. What the samples themselves must hold to
 ///   is [`MovieFragmentWriter`]'s contract, reported as
-///   [`Sample`](crate::ErrorKind::Sample): the samples are checked against
+///   [`Sample`](crate::Error::Sample): the samples are checked against
 ///   the movie of the initialization segment, and a movie that continues in
 ///   no fragments is refused by [`new`](Self::new). A segment written apart
 ///   from the ones before it starts each track where its first sample
@@ -58,13 +58,13 @@ use crate::{Error, whole_box_header, whole_payload};
 ///   before handing over more: bytes are held until they are taken, so
 ///   writing on without polling has the mux FSM hold the whole segment.
 /// * An `Err` leaves the mux FSM failed for good,
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) aside:
+///   [`AlreadyFinished`](crate::Error::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The bytes made before
 ///   it are still there to take.
 /// * [`finish`](Self::finish) declares the segment over. Bytes are still
 ///   taken after it, but anything handed over then, or a second
 ///   [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished).
+///   [`AlreadyFinished`](crate::Error::AlreadyFinished).
 ///
 /// # Examples
 ///
@@ -111,7 +111,7 @@ impl MediaSegmentMuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::ErrorKind::Sample): the movie is one
+    /// * [`Sample`](crate::Error::Sample): the movie is one
     ///   [`MovieFragmentWriter::new`] refuses — it carries no `mvex`, or its
     ///   sample tables lay samples out.
     pub fn new(movie: &MovieBox) -> Result<Self, Error> {
@@ -126,13 +126,13 @@ impl MediaSegmentMuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`UnsupportedBrand`](crate::ErrorKind::UnsupportedBrand): a
+    /// * [`UnsupportedBrand`](crate::Error::UnsupportedBrand): a
     ///   brand listed forbids the `default-base-is-moof` the mux FSM writes;
     ///   nothing of the box is laid down.
-    /// * [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder): a box
+    /// * [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder): a box
     ///   was laid down before them.
-    /// * [`Box`](crate::ErrorKind::Box): the box does not write.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`Box`](crate::Error::Box): the box does not write.
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
@@ -140,10 +140,12 @@ impl MediaSegmentMuxFsm {
         self.output.writing()?;
         let mut lay_down_segment_type = || -> Result<(), Error> {
             if segment_type.forbids_default_base_is_moof() {
-                return Err(Error::unsupported_brand());
+                return Err(Error::UnsupportedBrand);
             }
             if !self.structure.is_at_start() {
-                return Err(Error::box_out_of_order(SegmentTypeBox::BOX_TYPE));
+                return Err(Error::BoxOutOfOrder {
+                    box_type: SegmentTypeBox::BOX_TYPE,
+                });
             }
             self.write_value(&segment_type)
         };
@@ -159,9 +161,9 @@ impl MediaSegmentMuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::ErrorKind::Sample): what the sample layer
+    /// * [`Sample`](crate::Error::Sample): what the sample layer
     ///   makes of the call.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
@@ -182,9 +184,9 @@ impl MediaSegmentMuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::ErrorKind::Sample): what the sample layer
+    /// * [`Sample`](crate::Error::Sample): what the sample layer
     ///   makes of the call.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
@@ -202,9 +204,9 @@ impl MediaSegmentMuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::ErrorKind::Sample): what the sample layer
+    /// * [`Sample`](crate::Error::Sample): what the sample layer
     ///   makes of the sample.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
@@ -223,11 +225,11 @@ impl MediaSegmentMuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::ErrorKind::Sample): what the sample layer
+    /// * [`Sample`](crate::Error::Sample): what the sample layer
     ///   makes of the fragment.
-    /// * [`Box`](crate::ErrorKind::Box): the `moof` or the `mdat`
+    /// * [`Box`](crate::Error::Box): the `moof` or the `mdat`
     ///   does not write.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
@@ -258,12 +260,12 @@ impl MediaSegmentMuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::ErrorKind::Sample): a fragment was left
+    /// * [`Sample`](crate::Error::Sample): a fragment was left
     ///   open.
-    /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox):
+    /// * [`MissingMandatoryBox`](crate::Error::MissingMandatoryBox):
     ///   no fragment was laid down, so what was laid down is not a media
     ///   segment.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   segment was already declared over.
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
@@ -292,7 +294,7 @@ impl MediaSegmentMuxFsm {
     /// Lays one box down where the structure places it, through the framing of the segment
     ///
     /// A box the structure passes over is refused as
-    /// [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder).
+    /// [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder).
     fn lay_down(&mut self, box_type: BoxType, payload: Vec<u8>) -> Result<(), Error> {
         let header = whole_box_header(box_type, payload.len() as u64)?;
 
@@ -301,7 +303,7 @@ impl MediaSegmentMuxFsm {
             | MediaSegmentDisposition::MovieFragment
             | MediaSegmentDisposition::MediaData => {}
             MediaSegmentDisposition::SegmentIndex | MediaSegmentDisposition::Skip => {
-                return Err(Error::box_out_of_order(box_type));
+                return Err(Error::BoxOutOfOrder { box_type });
             }
         }
 
@@ -318,7 +320,6 @@ mod tests {
 
     use super::super::tests::{movie, sample};
     use super::{Error, MediaSegmentMuxFsm};
-    use crate::ErrorKind;
 
     #[test]
     fn a_segment_declaring_no_brands_is_laid_down_all_the_same() {
@@ -341,7 +342,7 @@ mod tests {
                 0,
                 alloc::vec![FourCC::new(*b"msdh"), FourCC::new(*b"isom")],
             )),
-            Err(Error::unsupported_brand())
+            Err(Error::UnsupportedBrand)
         );
         assert_eq!(mux_fsm.poll_output(), None);
     }
@@ -354,7 +355,9 @@ mod tests {
 
         assert_eq!(
             mux_fsm.handle_segment_type(segment_type()),
-            Err(Error::box_out_of_order(SegmentTypeBox::BOX_TYPE))
+            Err(Error::BoxOutOfOrder {
+                box_type: SegmentTypeBox::BOX_TYPE
+            })
         );
     }
 
@@ -367,7 +370,9 @@ mod tests {
 
         assert_eq!(
             mux_fsm.handle_segment_type(segment_type()),
-            Err(Error::box_out_of_order(SegmentTypeBox::BOX_TYPE))
+            Err(Error::BoxOutOfOrder {
+                box_type: SegmentTypeBox::BOX_TYPE
+            })
         );
     }
 
@@ -376,22 +381,20 @@ mod tests {
         let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
 
         assert!(matches!(
-            mux_fsm.handle_sample(sample()).map_err(Error::kind),
-            Err(ErrorKind::Sample(
-                isobmff_sample::Error::NoFragmentOpen { .. }
-            ))
+            mux_fsm.handle_sample(sample()),
+            Err(Error::Sample {
+                error: isobmff_sample::Error::NoFragmentOpen { .. }
+            })
         ));
     }
 
     #[test]
     fn a_mux_fsm_is_made_only_for_a_movie_continued_in_fragments() {
         assert!(matches!(
-            MediaSegmentMuxFsm::new(&unfragmented_movie())
-                .map(|_mux_fsm| ())
-                .map_err(Error::kind),
-            Err(ErrorKind::Sample(
-                isobmff_sample::Error::MissingMovieExtends { .. }
-            ))
+            MediaSegmentMuxFsm::new(&unfragmented_movie()).map(|_mux_fsm| ()),
+            Err(Error::Sample {
+                error: isobmff_sample::Error::MissingMovieExtends { .. }
+            })
         ));
     }
 
@@ -402,21 +405,18 @@ mod tests {
         mux_fsm.begin_fragment(1).unwrap();
 
         assert!(matches!(
-            mux_fsm
-                .handle_sample(Sample::new(
-                    999,
-                    0,
-                    1_024,
-                    0,
-                    SampleFlags::ZERO,
-                    1,
-                    b"SAMP".to_vec()
-                ))
-                .map_err(Error::kind),
-            Err(ErrorKind::Sample(isobmff_sample::Error::UnknownTrackId {
-                track_id: 999,
-                ..
-            }))
+            mux_fsm.handle_sample(Sample::new(
+                999,
+                0,
+                1_024,
+                0,
+                SampleFlags::ZERO,
+                1,
+                b"SAMP".to_vec()
+            )),
+            Err(Error::Sample {
+                error: isobmff_sample::Error::UnknownTrackId { track_id: 999, .. }
+            })
         ));
     }
 
@@ -428,7 +428,9 @@ mod tests {
 
         assert_eq!(
             mux_fsm.finish(),
-            Err(Error::missing_mandatory_box(MovieFragmentBox::BOX_TYPE))
+            Err(Error::MissingMandatoryBox {
+                box_type: MovieFragmentBox::BOX_TYPE
+            })
         );
     }
 
@@ -440,10 +442,7 @@ mod tests {
         mux_fsm.finish_fragment().unwrap();
         mux_fsm.finish().unwrap();
 
-        assert_eq!(
-            mux_fsm.handle_sample(sample()),
-            Err(Error::already_finished())
-        );
-        assert_eq!(mux_fsm.finish(), Err(Error::already_finished()));
+        assert_eq!(mux_fsm.handle_sample(sample()), Err(Error::AlreadyFinished));
+        assert_eq!(mux_fsm.finish(), Err(Error::AlreadyFinished));
     }
 }

@@ -201,7 +201,7 @@ mod non_fragmented_movie;
 mod whole_box;
 
 pub use demux_limits::DemuxLimits;
-pub use error::{Error, ErrorKind};
+pub use error::Error;
 pub use fragmented_movie::FragmentedMuxFsm;
 pub use input_position::WantedInput;
 pub use media_segment::{MediaSegmentDemuxFsm, MediaSegmentMuxFsm};

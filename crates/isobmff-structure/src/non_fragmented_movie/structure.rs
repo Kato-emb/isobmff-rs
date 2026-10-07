@@ -23,11 +23,11 @@ use crate::Error;
 /// * The `ftyp` comes first, as early as §4.3 asks: a file carrying none reads
 ///   all the same, as §4.3 allows, but one carrying it after any other box —
 ///   a second `ftyp` among them — is
-///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder).
+///   [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder).
 /// * The `moov` comes once, before or after the media data: a second is
-///   [`DuplicateBox`](crate::ErrorKind::DuplicateBox), and a file
+///   [`DuplicateBox`](crate::Error::DuplicateBox), and a file
 ///   declared over without one is
-///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
+///   [`MissingMandatoryBox`](crate::Error::MissingMandatoryBox).
 /// * The `mdat` comes anywhere past the `ftyp`, any number of times (§8.1.1).
 /// * Every other box is passed over, wherever it lies.
 /// * An `Err` changes nothing: the structure stands where it stood before the
@@ -82,9 +82,9 @@ impl NonFragmentedStructure {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder): an
+    /// * [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder): an
     ///   `ftyp` after another box.
-    /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): a second
+    /// * [`DuplicateBox`](crate::Error::DuplicateBox): a second
     ///   `moov`.
     pub(crate) fn handle_box_type(
         &mut self,
@@ -100,14 +100,14 @@ impl NonFragmentedStructure {
     ///
     /// # Errors
     ///
-    /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox):
+    /// * [`MissingMandatoryBox`](crate::Error::MissingMandatoryBox):
     ///   the file carried no `moov`.
     pub(crate) const fn finish(&self) -> Result<(), Error> {
         match self.position {
             Position::Declared => Ok(()),
-            Position::Start | Position::Opened => {
-                Err(Error::missing_mandatory_box(MovieBox::BOX_TYPE))
-            }
+            Position::Start | Position::Opened => Err(Error::MissingMandatoryBox {
+                box_type: MovieBox::BOX_TYPE,
+            }),
         }
     }
 }
@@ -122,12 +122,12 @@ const fn place(
             Ok((Position::Opened, NonFragmentedDisposition::FileType))
         }
         (FileTypeBox::BOX_TYPE, Position::Opened | Position::Declared) => {
-            Err(Error::box_out_of_order(box_type))
+            Err(Error::BoxOutOfOrder { box_type })
         }
         (MovieBox::BOX_TYPE, Position::Start | Position::Opened) => {
             Ok((Position::Declared, NonFragmentedDisposition::Movie))
         }
-        (MovieBox::BOX_TYPE, Position::Declared) => Err(Error::duplicate_box(box_type)),
+        (MovieBox::BOX_TYPE, Position::Declared) => Err(Error::DuplicateBox { box_type }),
         (MediaDataBox::BOX_TYPE, Position::Start | Position::Opened) => {
             Ok((Position::Opened, NonFragmentedDisposition::MediaData))
         }
@@ -224,7 +224,9 @@ mod tests {
 
     #[test]
     fn brands_declared_after_another_box_are_out_of_order() {
-        let out_of_order = Err(Error::box_out_of_order(BoxType::compact(*b"ftyp")));
+        let out_of_order = Err(Error::BoxOutOfOrder {
+            box_type: BoxType::compact(*b"ftyp"),
+        });
 
         assert_eq!(dispositions_of(&[b"free", b"ftyp"]), out_of_order);
         assert_eq!(dispositions_of(&[b"mdat", b"ftyp"]), out_of_order);
@@ -236,13 +238,17 @@ mod tests {
     fn a_second_movie_is_rejected() {
         assert_eq!(
             dispositions_of(&[b"ftyp", b"moov", b"mdat", b"moov"]),
-            Err(Error::duplicate_box(BoxType::compact(*b"moov")))
+            Err(Error::DuplicateBox {
+                box_type: BoxType::compact(*b"moov")
+            })
         );
     }
 
     #[test]
     fn a_file_declared_over_without_a_movie_is_rejected() {
-        let missing = Err(Error::missing_mandatory_box(BoxType::compact(*b"moov")));
+        let missing = Err(Error::MissingMandatoryBox {
+            box_type: BoxType::compact(*b"moov"),
+        });
         let mut brands_alone = NonFragmentedStructure::new();
         let mut media_data_alone = NonFragmentedStructure::new();
 

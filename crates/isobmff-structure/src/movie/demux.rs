@@ -59,7 +59,7 @@ use crate::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
 ///   taken are dropped, and are not resolved again; where each track stands
 ///   on its timeline is no longer known until a `tfdt` states it; a fragment
 ///   stating none for such a track is
-///   [`Sample`](crate::ErrorKind::Sample).
+///   [`Sample`](crate::Error::Sample).
 ///   [`resume_at_movie_fragment_random_access`](Self::resume_at_movie_fragment_random_access)
 ///   restarts it at the `mfra` the file closes with, once the last bytes of
 ///   the file, wanted first, name it, or declares the file over where they
@@ -67,11 +67,11 @@ use crate::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
 /// * The order the boxes come in, and what a file that breaks it is reported
 ///   as, are the structure's: an `ftyp` after another box, a
 ///   `moof` before the `moov` are
-///   [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder), a second
-///   `moov` is [`DuplicateBox`](crate::ErrorKind::DuplicateBox), and
+///   [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder), a second
+///   `moov` is [`DuplicateBox`](crate::Error::DuplicateBox), and
 ///   a file declared over without a `moov`, other than while its closing
 ///   `mfro` is gathered, is
-///   [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox).
+///   [`MissingMandatoryBox`](crate::Error::MissingMandatoryBox).
 ///   A file carrying no `ftyp` reads all the same, as §4.3 allows.
 /// * What the demux FSM holds of what the file declares is bounded — a box
 ///   read into a value, the samples a `moov` or a `moof` declares, the
@@ -89,14 +89,14 @@ use crate::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
 ///   media data never has.
 /// * A fragment continues a movie that declares it may be fragmented: a
 ///   `moof` after a `moov` carrying no `mvex` is
-///   [`Sample`](crate::ErrorKind::Sample), the movie extends box missing
+///   [`Sample`](crate::Error::Sample), the movie extends box missing
 ///   (§8.8.1).
 /// * Where a fragment states no decode time for a track, the track goes on
 ///   from where the samples before it left it, those the sample table of the
 ///   movie declares among them (§8.8.12).
 /// * An `Err` leaves the demux FSM failed for good,
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished) and
-///   [`UnwantedInput`](crate::ErrorKind::UnwantedInput) aside:
+///   [`AlreadyFinished`](crate::Error::AlreadyFinished) and
+///   [`UnwantedInput`](crate::Error::UnwantedInput) aside:
 ///   every later call reports that same failure again. The samples completed
 ///   before it are still there to take.
 /// * [`finish`](Self::finish) declares the file over, and reports what any
@@ -104,7 +104,7 @@ use crate::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
 ///   sample short of the data it claimed; while the closing `mfro` is
 ///   gathered, it reports nothing. Samples are still taken after it, but
 ///   anything handed over then, or a second [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished), until
+///   [`AlreadyFinished`](crate::Error::AlreadyFinished), until
 ///   [`resume_at`](Self::resume_at) restarts the reading, or
 ///   [`resume_at_movie_fragment_random_access`](Self::resume_at_movie_fragment_random_access)
 ///   does where it locates an `mfra`.
@@ -240,21 +240,21 @@ impl MovieDemuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::ErrorKind::BoxOutOfOrder),
-    ///   [`DuplicateBox`](crate::ErrorKind::DuplicateBox): what the
+    /// * [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder),
+    ///   [`DuplicateBox`](crate::Error::DuplicateBox): what the
     ///   structure makes of a top-level box arriving where it does.
-    /// * [`PayloadLimitExceeded`](crate::ErrorKind::PayloadLimitExceeded):
+    /// * [`PayloadLimitExceeded`](crate::Error::PayloadLimitExceeded):
     ///   a box read into a value reaches past the limit the demux FSM gathers.
-    /// * [`Sequence`](crate::ErrorKind::Sequence): what the framing
+    /// * [`Sequence`](crate::Error::Sequence): what the framing
     ///   of the file makes of the input.
-    /// * [`Box`](crate::ErrorKind::Box): a box read into a value
+    /// * [`Box`](crate::Error::Box): a box read into a value
     ///   does not decode.
-    /// * [`Sample`](crate::ErrorKind::Sample): what the samples make
+    /// * [`Sample`](crate::Error::Sample): what the samples make
     ///   of the movie, a fragment, a `sidx`, or the media data beside them.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   file was declared over, by [`finish`](Self::finish) or by
     ///   [`resume_at_movie_fragment_random_access`](Self::resume_at_movie_fragment_random_access).
-    /// * [`UnwantedInput`](crate::ErrorKind::UnwantedInput): `offset` is
+    /// * [`UnwantedInput`](crate::Error::UnwantedInput): `offset` is
     ///   not where [`wanted_input`](Self::wanted_input) names, nor, while the
     ///   input is taken in order, where it stands. The demux FSM is not failed
     ///   by it.
@@ -277,7 +277,9 @@ impl MovieDemuxFsm {
             return Ok(());
         }
         if offset != closing_offset(*file_len, *filled) {
-            return Err(Error::unwanted_input(offset));
+            return Err(Error::UnwantedInput {
+                input_offset: offset,
+            });
         }
         let rest = mfro.get_mut(*filled..).unwrap_or_default();
         let taken = rest.len().min(input.len());
@@ -409,7 +411,7 @@ impl MovieDemuxFsm {
     /// read is wanted, the `mfra` read before stays, and
     /// [`resume_at`](Self::resume_at) takes the reading up again. Until then,
     /// input at any offset but the one [`wanted_input`](Self::wanted_input)
-    /// names is [`UnwantedInput`](crate::ErrorKind::UnwantedInput), and
+    /// names is [`UnwantedInput`](crate::Error::UnwantedInput), and
     /// [`finish`](Self::finish) declares the file over with no failure. The
     /// demux FSM is told this from reading and from the file declared over
     /// alike; what [`resume_at`](Self::resume_at) drops is dropped only once
@@ -444,16 +446,16 @@ impl MovieDemuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`Sequence`](crate::ErrorKind::Sequence): the file ended
+    /// * [`Sequence`](crate::Error::Sequence): the file ended
     ///   inside a box.
-    /// * [`Box`](crate::ErrorKind::Box): a box read into a value,
+    /// * [`Box`](crate::Error::Box): a box read into a value,
     ///   declaring no total, does not decode.
-    /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox):
+    /// * [`MissingMandatoryBox`](crate::Error::MissingMandatoryBox):
     ///   the file carried no `moov`.
-    /// * [`Sample`](crate::ErrorKind::Sample): what the samples make
+    /// * [`Sample`](crate::Error::Sample): what the samples make
     ///   of the movie, a fragment or a `sidx` declaring no total, or a sample
     ///   the movie or a fragment declared is short of the data it claimed.
-    /// * [`AlreadyFinished`](crate::ErrorKind::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   file was already declared over.
     /// * The failure of a previous call, which the demux FSM keeps and reports
     ///   again for every call after it.
@@ -548,7 +550,9 @@ impl MovieDemuxFsm {
                             // fallback repeats what the structure answers a `moof`
                             // before it with, in place of a panic the lints forbid.
                             let Some(movie) = self.movie.as_ref() else {
-                                return Err(Error::box_out_of_order(MovieFragmentBox::BOX_TYPE));
+                                return Err(Error::BoxOutOfOrder {
+                                    box_type: MovieFragmentBox::BOX_TYPE,
+                                });
                             };
 
                             let extents = movie_fragment::sample_extents(

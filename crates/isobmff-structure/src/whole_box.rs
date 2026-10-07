@@ -22,12 +22,12 @@ use crate::Error;
 /// # Contract
 ///
 /// * A box declaring more payload than the limit is
-///   [`PayloadLimitExceeded`](crate::ErrorKind::PayloadLimitExceeded)
+///   [`PayloadLimitExceeded`](crate::Error::PayloadLimitExceeded)
 ///   at [`begin`](Self::begin), before a byte of it is gathered. A box
 ///   declaring no total is gathered as far as the limit and refused the same
 ///   way where it reaches past it.
 /// * A payload that does not read as a `Value` is
-///   [`Box`](crate::ErrorKind::Box), with the box named as the
+///   [`Box`](crate::Error::Box), with the box named as the
 ///   container the failure was reached through.
 /// * A failure leaves the reader as it stood: the caller drops it, since the
 ///   box it was reading is lost.
@@ -43,18 +43,18 @@ impl<Value: BoxDecode<Error = isobmff_core::Error> + BoxDefinition> WholeBoxRead
     ///
     /// # Errors
     ///
-    /// * [`PayloadLimitExceeded`](crate::ErrorKind::PayloadLimitExceeded):
+    /// * [`PayloadLimitExceeded`](crate::Error::PayloadLimitExceeded):
     ///   the box declares more payload than `payload_limit`.
     pub(crate) fn begin(header: BoxHeader, payload_limit: u64) -> Result<Self, Error> {
-        if let Some(declared) = header
+        if let Some(reached_bytes) = header
             .payload_len()
             .filter(|declared| *declared > payload_limit)
         {
-            return Err(Error::payload_limit_exceeded(
-                Value::BOX_TYPE,
-                declared,
-                payload_limit,
-            ));
+            return Err(Error::PayloadLimitExceeded {
+                box_type: Value::BOX_TYPE,
+                reached_bytes,
+                limit_bytes: payload_limit,
+            });
         }
 
         Ok(Self {
@@ -71,18 +71,18 @@ impl<Value: BoxDecode<Error = isobmff_core::Error> + BoxDefinition> WholeBoxRead
     ///
     /// # Errors
     ///
-    /// * [`PayloadLimitExceeded`](crate::ErrorKind::PayloadLimitExceeded):
+    /// * [`PayloadLimitExceeded`](crate::Error::PayloadLimitExceeded):
     ///   a box declaring no total reaches past the limit the reader gathers.
     pub(crate) fn handle_payload(&mut self, mut payload: Vec<u8>) -> Result<(), Error> {
         // Why not checked_add: the framing cut the payload out of a finite
         // resource, so its length cannot run past what 64 bits carry.
-        let reached = (self.payload.len() as u64).saturating_add(payload.len() as u64);
-        if reached > self.payload_limit {
-            return Err(Error::payload_limit_exceeded(
-                Value::BOX_TYPE,
-                reached,
-                self.payload_limit,
-            ));
+        let reached_bytes = (self.payload.len() as u64).saturating_add(payload.len() as u64);
+        if reached_bytes > self.payload_limit {
+            return Err(Error::PayloadLimitExceeded {
+                box_type: Value::BOX_TYPE,
+                reached_bytes,
+                limit_bytes: self.payload_limit,
+            });
         }
         if self.payload.is_empty() {
             self.payload = payload;
@@ -97,7 +97,7 @@ impl<Value: BoxDecode<Error = isobmff_core::Error> + BoxDefinition> WholeBoxRead
     ///
     /// # Errors
     ///
-    /// * [`Box`](crate::ErrorKind::Box): the payload does not read
+    /// * [`Box`](crate::Error::Box): the payload does not read
     ///   as a `Value`, with the box named as the container.
     pub(crate) fn finish(self) -> Result<Value, Error> {
         Value::decode_payload(&self.payload)
@@ -113,7 +113,7 @@ impl<Value: BoxDecode<Error = isobmff_core::Error> + BoxDefinition> WholeBoxRead
 ///
 /// # Errors
 ///
-/// * [`Box`](crate::ErrorKind::Box): the value does not write, or
+/// * [`Box`](crate::Error::Box): the value does not write, or
 ///   declares a payload longer than any buffer on this target holds.
 pub(crate) fn whole_payload<Value: BoxEncode + BoxDefinition>(
     value: &Value,
@@ -135,7 +135,7 @@ pub(crate) fn whole_payload<Value: BoxEncode + BoxDefinition>(
 ///
 /// # Errors
 ///
-/// * [`Box`](crate::ErrorKind::Box): no header measures a payload
+/// * [`Box`](crate::Error::Box): no header measures a payload
 ///   that long, which no buffer on this target holds either.
 pub(crate) fn whole_box_header(box_type: BoxType, payload_len: u64) -> Result<BoxHeader, Error> {
     BoxHeader::with_payload_len(box_type, payload_len)
@@ -149,7 +149,7 @@ pub(crate) fn whole_box_header(box_type: BoxType, payload_len: u64) -> Result<Bo
 ///
 /// # Errors
 ///
-/// * [`Box`](crate::ErrorKind::Box): the total of header and
+/// * [`Box`](crate::Error::Box): the total of header and
 ///   payload does not fit the 32 bits of the `size` field, reported as
 ///   [`OutOfRange`](isobmff_core::ErrorKind::OutOfRange) of the box with the
 ///   payload's length, not the total, as the value.
@@ -178,7 +178,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox};
-    use isobmff_core::{BoxHeader, BoxSize, FourCC};
+    use isobmff_core::{BoxHeader, BoxSize};
     use isobmff_sequence::BoxEvent;
     use isobmff_test_support::{events_of, file_type, written};
 
@@ -236,7 +236,11 @@ mod tests {
 
         assert_eq!(
             WholeBoxReader::<FileTypeBox>::begin(header, 4).map(drop),
-            Err(Error::payload_limit_exceeded(FileTypeBox::BOX_TYPE, 16, 4))
+            Err(Error::PayloadLimitExceeded {
+                box_type: FileTypeBox::BOX_TYPE,
+                reached_bytes: 16,
+                limit_bytes: 4,
+            })
         );
     }
 
@@ -249,7 +253,11 @@ mod tests {
 
         assert_eq!(
             reader.handle_payload(vec![0; 2]),
-            Err(Error::payload_limit_exceeded(FileTypeBox::BOX_TYPE, 5, 4))
+            Err(Error::PayloadLimitExceeded {
+                box_type: FileTypeBox::BOX_TYPE,
+                reached_bytes: 5,
+                limit_bytes: 4,
+            })
         );
     }
 
@@ -261,10 +269,10 @@ mod tests {
         reader.handle_payload(b"AAAA".to_vec()).unwrap();
 
         assert_eq!(
-            reader.finish().map_err(|failure| failure
-                .box_error()
-                .map(|box_error| box_error.containers().collect::<Vec<_>>())),
-            Err(Some(vec![FourCC::new(*b"moov")]))
+            reader.finish(),
+            Err(Error::Box {
+                error: isobmff_core::Error::truncated_header(8, 4).in_container(MovieBox::BOX_TYPE),
+            })
         );
     }
 
