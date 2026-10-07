@@ -9,6 +9,7 @@
 //! The boxes a sample entry may hold after its fields — `clap`, `pasp`, `srat`,
 //! `btrt`, the ones a coding adds — are the derived entry's to sort.
 
+use alloc::borrow::Cow;
 use alloc::vec;
 
 use isobmff_core::{
@@ -106,25 +107,27 @@ impl TryFrom<&AnyBox> for SampleEntry {
     ///   reports for an entry built from a payload type, with its box type on
     ///   the [`containers`](Error::containers) path of the failure.
     fn try_from(entry: &AnyBox) -> Result<Self, Error> {
-        let fields = |payload: &[u8]| {
-            payload
-                .first_chunk::<8>()
-                .map(Self::from_bytes)
-                .ok_or(Error::truncated_payload(Self::LEN, payload.len() as u64))
-        };
-        let read = match entry.raw_payload() {
-            Some(raw) => fields(raw),
-            None => {
-                let mut written =
-                    vec![0; usize::try_from(entry.payload_len()).unwrap_or(usize::MAX)];
-                entry
-                    .encode_payload(&mut written)
-                    .and_then(|()| fields(&written))
-            }
-        };
-
-        read.map_err(|error| error.in_container(entry.box_type()))
+        payload_of(entry)
+            .and_then(|payload| {
+                payload
+                    .first_chunk::<8>()
+                    .map(Self::from_bytes)
+                    .ok_or(Error::truncated_payload(Self::LEN, payload.len() as u64))
+            })
+            .map_err(|error| error.in_container(entry.box_type()))
     }
+}
+
+/// Returns the payload of `entry`: the bytes it lies as, or the ones it writes when it was built from a payload type
+pub(crate) fn payload_of(entry: &AnyBox) -> Result<Cow<'_, [u8]>, Error> {
+    if let Some(raw) = entry.raw_payload() {
+        return Ok(Cow::Borrowed(raw));
+    }
+
+    let mut written = vec![0; usize::try_from(entry.payload_len()).unwrap_or(usize::MAX)];
+    entry.encode_payload(&mut written)?;
+
+    Ok(Cow::Owned(written))
 }
 
 /// Fields a visual sample entry opens with
@@ -328,8 +331,10 @@ impl VisualSampleEntry {
 ///
 /// The `pre_defined` and `reserved` fields are not held. A QuickTime sound
 /// description of version 1 is read as an `AudioSampleEntryV1`, its four extra
-/// fields left where the boxes of the entry follow, for the derived entry that
-/// composes these fields to refuse.
+/// fields left where the boxes of the entry follow. Such a description lies in
+/// a `stsd` of version 0, and
+/// [`SampleDescriptionBox::audio_entry`](crate::SampleDescriptionBox::audio_entry)
+/// refuses it there.
 ///
 /// [`AudioSampleEntryV1`]: Self
 #[non_exhaustive]
