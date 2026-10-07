@@ -130,7 +130,8 @@ impl OpenFragment {
         trex: &[TrackExtendsBox],
         decode_times: &TrackDecodeTimes,
     ) -> Result<(), Error> {
-        let track_id = sample.track_id();
+        let properties = sample.properties();
+        let track_id = properties.track_id;
         let offered = sample.data().len() as u64;
         let Ok(sample_size) = u32::try_from(offered) else {
             return Err(Error::SampleSizeOutOfRange {
@@ -138,7 +139,7 @@ impl OpenFragment {
                 stated_bytes: offered,
             });
         };
-        let offset = sample.sample_composition_time_offset();
+        let offset = properties.sample_composition_time_offset;
         let Some(sample_composition_time_offset) = composition_time_offset::stated(offset) else {
             return Err(Error::CompositionTimeOffsetOutOfRange {
                 track_id,
@@ -147,13 +148,13 @@ impl OpenFragment {
         };
 
         let row = StatedTrackRunSample {
-            sample_duration: sample.sample_duration(),
+            sample_duration: properties.sample_duration,
             sample_size,
-            sample_flags: sample.sample_flags(),
+            sample_flags: properties.sample_flags,
             sample_composition_time_offset,
         };
-        let decode_time = sample.decode_time();
-        let sample_description_index = sample.sample_description_index();
+        let decode_time = properties.decode_time;
+        let sample_description_index = properties.sample_description_index;
         let data_offset = self.media_data.len() as u64;
         let carries_on = self.last_track_id == Some(track_id);
 
@@ -244,7 +245,7 @@ impl OpenFragment {
         let base = measured.encoded_len().saturating_add(header_len);
         let movie_fragment = build_movie_fragment(self.sequence_number, &self.tracks, Some(base))?;
         for track in &self.tracks {
-            decode_times.reach(track.track_id, track.reached);
+            decode_times.set_decode_time(track.track_id, track.reached);
         }
 
         Ok((movie_fragment, media_data.into_data()))
@@ -266,9 +267,9 @@ struct Defaults {
     sample_flags: Option<SampleFlags>,
 }
 
-impl Defaults {
+impl From<&OpenTrack> for Defaults {
     /// Returns what the samples of `track` share
-    fn of(track: &OpenTrack) -> Self {
+    fn from(track: &OpenTrack) -> Self {
         let flags = || track.rows().map(|row| row.sample_flags);
 
         Self {
@@ -314,7 +315,7 @@ fn build_movie_fragment(
 
 /// Builds the `traf` the samples of one track of one fragment are written as
 fn build_track_fragment(track: &OpenTrack, base: Option<u64>) -> Result<TrackFragmentBox, Error> {
-    let defaults = Defaults::of(track);
+    let defaults = Defaults::from(track);
     let header = TrackFragmentHeaderBox::new(
         TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF,
         track.track_id,

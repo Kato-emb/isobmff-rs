@@ -9,7 +9,7 @@ mod tests {
         TrackFragmentHeaderBox, TrackFragmentHeaderFlags, TrackRunBox, TrackRunSample,
     };
     use isobmff_sample::movie_fragment::sample_extents;
-    use isobmff_sample::{Sample, SampleReader, TrackDecodeTimes};
+    use isobmff_sample::{Sample, SampleProperties, SampleReader, TrackDecodeTimes};
     use isobmff_test_support::{MEDIA_DATA, fragmented_movie};
 
     /// Where the `moof` of these tests lies in the file
@@ -55,7 +55,17 @@ mod tests {
 
     /// Sample of track 1 as the `trex` of the movie settles it, carrying `data`
     fn sample(decode_time: u64, data: &[u8]) -> Sample {
-        Sample::new(1, decode_time, 3_000, 0, INDEPENDENT, 1, data.to_vec())
+        Sample::new(
+            SampleProperties {
+                track_id: 1,
+                decode_time,
+                sample_duration: 3_000,
+                sample_composition_time_offset: 0,
+                sample_flags: INDEPENDENT,
+                sample_description_index: 1,
+            },
+            data.to_vec(),
+        )
     }
 
     #[test]
@@ -80,9 +90,9 @@ mod tests {
             }
 
             let data_start = moof_start + MOOF_LEN + 8;
-            reader.handle_data(data_start, &MEDIA_DATA[..40]).unwrap();
+            reader.handle_input(data_start, &MEDIA_DATA[..40]).unwrap();
             reader
-                .handle_data(data_start + 40, &MEDIA_DATA[40..])
+                .handle_input(data_start + 40, &MEDIA_DATA[40..])
                 .unwrap();
             while let Some(sample) = reader.poll_sample() {
                 samples.push(sample);

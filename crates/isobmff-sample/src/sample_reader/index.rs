@@ -96,7 +96,7 @@ impl Index {
             return refused;
         }
 
-        self.report_front(ready);
+        self.release_whole_front(ready);
         // Why not sort_unstable: the numbers come as ascending runs, one per
         // stretch of extents held in order that the input reaches, which a
         // stable sort merges where an unstable one sorts them afresh.
@@ -111,7 +111,7 @@ impl Index {
     }
 
     /// Hands over the whole samples at the front of those held, in the order they were held
-    pub(super) fn report_front(&mut self, ready: &mut VecDeque<Sample>) {
+    pub(super) fn release_whole_front(&mut self, ready: &mut VecDeque<Sample>) {
         while let Some(front) = self.held.front() {
             if front.as_ref().is_some_and(|pending| !pending.is_whole()) {
                 break;

@@ -121,7 +121,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             ))?;
         }
         segment_fsm.begin_fragment(sequence_number)?;
-        fragment.sort_by_key(Sample::track_id);
+        fragment.sort_by_key(|sample| sample.properties().track_id);
         for sample in fragment.drain(..) {
             segment_fsm.handle_sample(sample)?;
         }
@@ -140,7 +140,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             while let Some(sample) = demux_fsm.poll_sample() {
                 queues
                     .iter_mut()
-                    .find(|queue| queue.track_id == sample.track_id())
+                    .find(|queue| queue.track_id == sample.properties().track_id)
                     .ok_or("a sample of a track the movie does not declare")?
                     .samples
                     .push(sample);
@@ -164,8 +164,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             .iter_mut()
             .filter(|queue| !queue.samples.is_empty())
             .min_by(|queue, other| {
-                let time = queue.samples.first().map_or(0, Sample::decode_time);
-                let other_time = other.samples.first().map_or(0, Sample::decode_time);
+                let time = queue
+                    .samples
+                    .first()
+                    .map_or(0, |sample| sample.properties().decode_time);
+                let other_time = other
+                    .samples
+                    .first()
+                    .map_or(0, |sample| sample.properties().decode_time);
                 u128::from(time)
                     .saturating_mul(u128::from(other.timescale))
                     .cmp(&u128::from(other_time).saturating_mul(u128::from(queue.timescale)))
@@ -174,8 +180,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             break;
         };
         let sample = queue.samples.remove(0);
-        let is_cut_track = cut_tracks.contains(&sample.track_id());
-        if is_cut_track && carries_cut_track && !sample.sample_flags().sample_is_non_sync_sample() {
+        let is_cut_track = cut_tracks.contains(&sample.properties().track_id);
+        if is_cut_track
+            && carries_cut_track
+            && !sample.properties().sample_flags.sample_is_non_sync_sample()
+        {
             write_segment(&mut fragment)?;
             carries_cut_track = false;
         }

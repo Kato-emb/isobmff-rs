@@ -25,7 +25,7 @@
 
 use isobmff::boxes::{HeaderDuration, MovieBox, MovieHeaderBox, SampleFlags};
 use isobmff::{BoxDefinition as _, Mp4EpochSeconds};
-use isobmff::sample::Sample;
+use isobmff::sample::{Sample, SampleProperties};
 use isobmff::structure::{Error, MovieDemuxFsm, NonFragmentedMuxFsm};
 use isobmff_test_support::{file_type, non_fragmented_file, track};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
@@ -179,12 +179,14 @@ fn laid_out(input: &Input<'_>) -> Vec<Vec<Sample>> {
                     }
 
                     Some(Sample::new(
-                        track_id,
-                        decode_time,
-                        u32::from(stated.duration),
-                        0,
-                        SampleFlags::ZERO,
-                        sample_description_index,
+                        SampleProperties {
+                            track_id,
+                            decode_time,
+                            sample_duration: u32::from(stated.duration),
+                            sample_composition_time_offset: 0,
+                            sample_flags: SampleFlags::ZERO,
+                            sample_description_index,
+                        },
                         data.to_vec(),
                     ))
                 })
@@ -265,12 +267,14 @@ fn drained_into(mux_fsm: &mut NonFragmentedMuxFsm, file: &mut Vec<u8>) {
 /// A sample of the first track, for the calls a refused or finished writer takes
 fn a_sample() -> Sample {
     Sample::new(
-        TRACK_IDS[0],
-        0,
-        1,
-        0,
-        SampleFlags::ZERO,
-        SAMPLE_DESCRIPTION_INDEX,
+        SampleProperties {
+            track_id: TRACK_IDS[0],
+            decode_time: 0,
+            sample_duration: 1,
+            sample_composition_time_offset: 0,
+            sample_flags: SampleFlags::ZERO,
+            sample_description_index: SAMPLE_DESCRIPTION_INDEX,
+        },
         Vec::new(),
     )
 }

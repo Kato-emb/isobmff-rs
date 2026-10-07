@@ -6,7 +6,7 @@ use isobmff_boxes::{MovieBox, SampleFlags, TrackBox};
 
 use crate::composition_time_offset;
 use crate::error::Error;
-use crate::sample::SampleExtent;
+use crate::sample::{SampleExtent, SampleProperties};
 use crate::sample_description::SampleDescriptions;
 
 /// Resolves the samples the sample tables of `movie` declare, in the order their bytes lie in the file
@@ -164,12 +164,14 @@ fn resolve_track(trak: &TrackBox, extents: &mut Vec<SampleExtent>) -> Result<(),
                 .ok_or(Error::DataOffsetOverflow { track_id })?;
 
             extents.push(SampleExtent::new(
-                track_id,
-                decode_time,
-                delta,
-                offset,
-                sample_flags,
-                run.sample_description_index(),
+                SampleProperties {
+                    track_id,
+                    decode_time,
+                    sample_duration: delta,
+                    sample_composition_time_offset: offset,
+                    sample_flags,
+                    sample_description_index: run.sample_description_index(),
+                },
                 data_reference_index,
                 data_offset..data_end,
             ));

@@ -28,7 +28,7 @@
 #![no_main]
 
 use isobmff::boxes::{MovieBox, SampleFlags, TrackExtendsBox};
-use isobmff::sample::Sample;
+use isobmff::sample::{Sample, SampleProperties};
 use isobmff::structure::{Error, MovieDemuxFsm, FragmentedMuxFsm};
 use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
@@ -163,12 +163,17 @@ fn laid_out(input: &Input<'_>) -> Vec<(u32, Vec<Sample>)> {
                     }
 
                     Sample::new(
-                        track_id_of(position),
-                        decode_time,
-                        u32::from(stated.duration),
-                        i64::from(stated.composition_time_offset),
-                        stated.flags,
-                        SAMPLE_DESCRIPTION_INDEX + u32::from(stated.entry == u8::MAX),
+                        SampleProperties {
+                            track_id: track_id_of(position),
+                            decode_time,
+                            sample_duration: u32::from(stated.duration),
+                            sample_composition_time_offset: i64::from(
+                                stated.composition_time_offset,
+                            ),
+                            sample_flags: stated.flags,
+                            sample_description_index: SAMPLE_DESCRIPTION_INDEX
+                                + u32::from(stated.entry == u8::MAX),
+                        },
                         data.to_vec(),
                     )
                 })
@@ -256,12 +261,14 @@ fn drained_into(mux_fsm: &mut FragmentedMuxFsm, file: &mut Vec<u8>) {
 /// A sample of the first track, for the calls a refused or finished writer takes
 fn a_sample() -> Sample {
     Sample::new(
-        track_id_of(0),
-        0,
-        1,
-        0,
-        SampleFlags::ZERO,
-        SAMPLE_DESCRIPTION_INDEX,
+        SampleProperties {
+            track_id: track_id_of(0),
+            decode_time: 0,
+            sample_duration: 1,
+            sample_composition_time_offset: 0,
+            sample_flags: SampleFlags::ZERO,
+            sample_description_index: SAMPLE_DESCRIPTION_INDEX,
+        },
         Vec::new(),
     )
 }
@@ -344,7 +351,7 @@ fn carrying_bytes(samples: &[Sample]) -> Vec<Sample> {
 fn of_track(samples: &[Sample], track_id: u32) -> Vec<Sample> {
     samples
         .iter()
-        .filter(|sample| sample.track_id() == track_id)
+        .filter(|sample| sample.properties().track_id == track_id)
         .cloned()
         .collect()
 }

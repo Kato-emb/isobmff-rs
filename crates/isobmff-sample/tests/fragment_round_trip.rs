@@ -8,7 +8,9 @@ mod tests {
     };
     use isobmff_core::BoxEncode as _;
     use isobmff_sample::movie_fragment::sample_extents;
-    use isobmff_sample::{MovieFragmentWriter, Sample, SampleExtent, TrackDecodeTimes};
+    use isobmff_sample::{
+        MovieFragmentWriter, Sample, SampleExtent, SampleProperties, TrackDecodeTimes,
+    };
     use isobmff_test_support::fragmented_movie;
 
     /// Where the `moof` of this test lies in the file
@@ -43,9 +45,39 @@ mod tests {
         );
         let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 0, 0, SampleFlags::ZERO));
         let samples = [
-            Sample::new(1, 0, 3_000, 0, independent, 1, b"AAAAAAAA".to_vec()),
-            Sample::new(1, 3_000, 3_000, 8, dependent, 1, b"BBBB".to_vec()),
-            Sample::new(1, 6_000, 1_500, -8, dependent, 1, b"CC".to_vec()),
+            Sample::new(
+                SampleProperties {
+                    track_id: 1,
+                    decode_time: 0,
+                    sample_duration: 3_000,
+                    sample_composition_time_offset: 0,
+                    sample_flags: independent,
+                    sample_description_index: 1,
+                },
+                b"AAAAAAAA".to_vec(),
+            ),
+            Sample::new(
+                SampleProperties {
+                    track_id: 1,
+                    decode_time: 3_000,
+                    sample_duration: 3_000,
+                    sample_composition_time_offset: 8,
+                    sample_flags: dependent,
+                    sample_description_index: 1,
+                },
+                b"BBBB".to_vec(),
+            ),
+            Sample::new(
+                SampleProperties {
+                    track_id: 1,
+                    decode_time: 6_000,
+                    sample_duration: 1_500,
+                    sample_composition_time_offset: -8,
+                    sample_flags: dependent,
+                    sample_description_index: 1,
+                },
+                b"CC".to_vec(),
+            ),
         ];
         let mut writer = MovieFragmentWriter::new(&movie).unwrap();
 
@@ -53,7 +85,8 @@ mod tests {
         for sample in &samples {
             writer.handle_sample(sample.clone()).unwrap();
         }
-        let (movie_fragment, media_data) = writer.finish_fragment().unwrap();
+        writer.finish_fragment().unwrap();
+        let (movie_fragment, media_data) = writer.poll_fragment().unwrap();
 
         let data_start = MOOF_START + movie_fragment.encoded_len() + MEDIA_DATA_HEADER_LEN;
         let mut decode_times = TrackDecodeTimes::new(&movie).unwrap();
@@ -74,32 +107,38 @@ mod tests {
             extents,
             [
                 SampleExtent::new(
-                    1,
-                    0,
-                    3_000,
-                    0,
-                    independent,
-                    1,
+                    SampleProperties {
+                        track_id: 1,
+                        decode_time: 0,
+                        sample_duration: 3_000,
+                        sample_composition_time_offset: 0,
+                        sample_flags: independent,
+                        sample_description_index: 1
+                    },
                     1,
                     data_start..data_start + 8
                 ),
                 SampleExtent::new(
-                    1,
-                    3_000,
-                    3_000,
-                    8,
-                    dependent,
-                    1,
+                    SampleProperties {
+                        track_id: 1,
+                        decode_time: 3_000,
+                        sample_duration: 3_000,
+                        sample_composition_time_offset: 8,
+                        sample_flags: dependent,
+                        sample_description_index: 1
+                    },
                     1,
                     data_start + 8..data_start + 12
                 ),
                 SampleExtent::new(
-                    1,
-                    6_000,
-                    1_500,
-                    -8,
-                    dependent,
-                    1,
+                    SampleProperties {
+                        track_id: 1,
+                        decode_time: 6_000,
+                        sample_duration: 1_500,
+                        sample_composition_time_offset: -8,
+                        sample_flags: dependent,
+                        sample_description_index: 1
+                    },
                     1,
                     data_start + 12..data_start + 14
                 ),

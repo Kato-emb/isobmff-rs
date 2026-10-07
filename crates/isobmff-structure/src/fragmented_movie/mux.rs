@@ -70,7 +70,7 @@ use crate::{Error, whole_box_header, whole_payload};
 ///
 /// ```
 /// use isobmff_boxes::{SampleFlags, TrackExtendsBox};
-/// use isobmff_sample::Sample;
+/// use isobmff_sample::{Sample, SampleProperties};
 /// use isobmff_structure::FragmentedMuxFsm;
 /// # use isobmff_test_support::fragmented_movie;
 /// // A file handed no brands, only the movie its fragments continue
@@ -79,8 +79,28 @@ use crate::{Error, whole_box_header, whole_payload};
 ///
 /// // One fragment of two samples of track 1, lasting 1024 units each
 /// mux_fsm.begin_fragment(1)?;
-/// mux_fsm.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
-/// mux_fsm.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
+/// mux_fsm.handle_sample(Sample::new(
+///     SampleProperties {
+///         track_id: 1,
+///         decode_time: 0,
+///         sample_duration: 1_024,
+///         sample_composition_time_offset: 0,
+///         sample_flags: SampleFlags::ZERO,
+///         sample_description_index: 1,
+///     },
+///     b"SAMP".to_vec(),
+/// ))?;
+/// mux_fsm.handle_sample(Sample::new(
+///     SampleProperties {
+///         track_id: 1,
+///         decode_time: 1_024,
+///         sample_duration: 1_024,
+///         sample_composition_time_offset: 0,
+///         sample_flags: SampleFlags::ZERO,
+///         sample_description_index: 1,
+///     },
+///     b"DATA".to_vec(),
+/// ))?;
 /// mux_fsm.finish_fragment()?;
 /// mux_fsm.finish()?;
 ///
@@ -264,10 +284,13 @@ impl FragmentedMuxFsm {
     pub fn finish_fragment(&mut self) -> Result<(), Error> {
         self.output.writing()?;
         let mut lay_down_fragment = || -> Result<(), Error> {
-            let (movie_fragment, media_data) = self.samples()?.finish_fragment()?;
+            self.samples()?.finish_fragment()?;
+            while let Some((movie_fragment, media_data)) = self.samples()?.poll_fragment() {
+                self.write_value(&movie_fragment)?;
+                self.lay_down(MediaDataBox::BOX_TYPE, media_data)?;
+            }
 
-            self.write_value(&movie_fragment)?;
-            self.lay_down(MediaDataBox::BOX_TYPE, media_data)
+            Ok(())
         };
         let laid_down = lay_down_fragment();
 
@@ -368,7 +391,7 @@ mod tests {
 
     use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox, SampleFlags, TrackExtendsBox};
     use isobmff_core::{BoxDecode, BoxDefinition, FourCc};
-    use isobmff_sample::Sample;
+    use isobmff_sample::{Sample, SampleProperties};
     use isobmff_test_support::{file_type, fragmented_movie, unfragmented_movie};
 
     use super::{Error, FragmentedMuxFsm, default_file_type};
@@ -380,7 +403,17 @@ mod tests {
 
     /// A sample of the track the movie declares
     fn sample() -> Sample {
-        Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec())
+        Sample::new(
+            SampleProperties {
+                track_id: 1,
+                decode_time: 0,
+                sample_duration: 1_024,
+                sample_composition_time_offset: 0,
+                sample_flags: SampleFlags::ZERO,
+                sample_description_index: 1,
+            },
+            b"SAMP".to_vec(),
+        )
     }
 
     /// The bytes the mux FSM has laid down, drained to the end
@@ -483,12 +516,14 @@ mod tests {
 
         assert!(matches!(
             refused(Sample::new(
-                999,
-                0,
-                1_024,
-                0,
-                SampleFlags::ZERO,
-                1,
+                SampleProperties {
+                    track_id: 999,
+                    decode_time: 0,
+                    sample_duration: 1_024,
+                    sample_composition_time_offset: 0,
+                    sample_flags: SampleFlags::ZERO,
+                    sample_description_index: 1
+                },
                 b"SAMP".to_vec()
             )),
             Err(Error::Sample {
@@ -497,12 +532,14 @@ mod tests {
         ));
         assert!(matches!(
             refused(Sample::new(
-                1,
-                0,
-                1_024,
-                0,
-                SampleFlags::ZERO,
-                2,
+                SampleProperties {
+                    track_id: 1,
+                    decode_time: 0,
+                    sample_duration: 1_024,
+                    sample_composition_time_offset: 0,
+                    sample_flags: SampleFlags::ZERO,
+                    sample_description_index: 2
+                },
                 b"SAMP".to_vec()
             )),
             Err(Error::Sample {

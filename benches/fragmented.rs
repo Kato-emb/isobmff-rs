@@ -40,7 +40,7 @@ use isobmff::boxes::{
     FileTypeBox, HeaderDuration, MovieBox, MovieExtendsBox, MovieFragmentBox, MovieHeaderBox,
     SampleFlags, TrackExtendsBox,
 };
-use isobmff::sample::{MovieFragmentWriter, Sample, SampleExtent, SampleReader};
+use isobmff::sample::{MovieFragmentWriter, Sample, SampleExtent, SampleProperties, SampleReader};
 use isobmff::sequence::{BoxEvent, BoxReader, BoxWriter, EventBytes};
 use isobmff::structure::{FragmentedMuxFsm, MovieDemuxFsm};
 use isobmff::{BoxHeader, BoxType, Mp4EpochSeconds};
@@ -130,12 +130,14 @@ impl Composition {
                         let track = position % self.track_count;
                         let decode_time = decode_times.get_mut(track).unwrap();
                         let sample = Sample::new(
-                            u32::try_from(track).unwrap() + 1,
-                            *decode_time,
-                            SAMPLE_DURATION,
-                            0,
-                            SampleFlags::ZERO,
-                            1,
+                            SampleProperties {
+                                track_id: u32::try_from(track).unwrap() + 1,
+                                decode_time: *decode_time,
+                                sample_duration: SAMPLE_DURATION,
+                                sample_composition_time_offset: 0,
+                                sample_flags: SampleFlags::ZERO,
+                                sample_description_index: 1,
+                            },
                             vec![0xab; self.sample_len],
                         );
                         *decode_time += u64::from(SAMPLE_DURATION);
@@ -351,7 +353,8 @@ fn movie_fragment_writer_fragments(
         for sample in samples {
             writer.handle_sample(sample).unwrap();
         }
-        let pair = writer.finish_fragment().unwrap();
+        writer.finish_fragment().unwrap();
+        let pair = writer.poll_fragment().unwrap();
 
         total += pair.1.len();
         pairs.push(pair);
@@ -405,12 +408,14 @@ fn descending_extents(sample_count: usize) -> Vec<Vec<SampleExtent>> {
                     let sample_number = fragment * samples_per_fragment + position;
 
                     SampleExtent::new(
-                        1,
-                        sample_number * u64::from(SAMPLE_DURATION),
-                        SAMPLE_DURATION,
-                        0,
-                        SampleFlags::ZERO,
-                        1,
+                        SampleProperties {
+                            track_id: 1,
+                            decode_time: sample_number * u64::from(SAMPLE_DURATION),
+                            sample_duration: SAMPLE_DURATION,
+                            sample_composition_time_offset: 0,
+                            sample_flags: SampleFlags::ZERO,
+                            sample_description_index: 1,
+                        },
                         1,
                         start..start + sample_len,
                     )
@@ -824,7 +829,7 @@ fn descending_media_data(criterion: &mut Criterion) {
                         .step_by(DEFAULT_ARRIVING_CHUNK_LEN)
                         .zip(media_data.chunks(DEFAULT_ARRIVING_CHUNK_LEN))
                     {
-                        reader.handle_data(offset, arriving).unwrap();
+                        reader.handle_input(offset, arriving).unwrap();
                         take(&mut reader);
                     }
                     reader.finish().unwrap();

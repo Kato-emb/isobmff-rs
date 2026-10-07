@@ -126,7 +126,7 @@
 //! use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 //!
 //! use isobmff_boxes::{SampleFlags, TrackExtendsBox};
-//! use isobmff_sample::Sample;
+//! use isobmff_sample::{Sample, SampleProperties};
 //! use isobmff_structure::{FragmentedMuxFsm, MovieDemuxFsm};
 //! # use isobmff_test_support::{file_type, fragmented_movie};
 //! // A fragment of two samples laid down, each chunk written whole
@@ -135,8 +135,28 @@
 //! mux_fsm.handle_file_type(file_type())?;
 //! mux_fsm.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO)))?;
 //! mux_fsm.begin_fragment(1)?;
-//! mux_fsm.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
-//! mux_fsm.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
+//! mux_fsm.handle_sample(Sample::new(
+//!     SampleProperties {
+//!         track_id: 1,
+//!         decode_time: 0,
+//!         sample_duration: 1_024,
+//!         sample_composition_time_offset: 0,
+//!         sample_flags: SampleFlags::ZERO,
+//!         sample_description_index: 1,
+//!     },
+//!     b"SAMP".to_vec(),
+//! ))?;
+//! mux_fsm.handle_sample(Sample::new(
+//!     SampleProperties {
+//!         track_id: 1,
+//!         decode_time: 1_024,
+//!         sample_duration: 1_024,
+//!         sample_composition_time_offset: 0,
+//!         sample_flags: SampleFlags::ZERO,
+//!         sample_description_index: 1,
+//!     },
+//!     b"DATA".to_vec(),
+//! ))?;
 //! mux_fsm.finish_fragment()?;
 //! mux_fsm.finish()?;
 //! while let Some(chunk) = mux_fsm.poll_output() {

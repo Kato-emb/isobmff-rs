@@ -2,6 +2,8 @@
 
 #[cfg(test)]
 mod tests {
+    use core::iter;
+
     use isobmff_boxes::{
         DegradationPriorityEntry, HeaderDuration, IsLeading, MovieBox, MovieHeaderBox,
         PaddingBitsEntry, SampleDependencyTypeEntry, SampleDependsOn, SampleDescriptionBox,
@@ -9,7 +11,7 @@ mod tests {
     };
     use isobmff_core::{AnyBox, BoxType, Mp4EpochSeconds};
     use isobmff_sample::sample_table::sample_extents;
-    use isobmff_sample::{Sample, SampleExtent, SampleTableWriter, SampleTables};
+    use isobmff_sample::{Sample, SampleExtent, SampleProperties, SampleTableWriter, SampleTables};
     use isobmff_test_support::{
         movie_declaring, self_contained_data_reference, track, track_laid_out,
     };
@@ -36,12 +38,14 @@ mod tests {
         data: &[u8],
     ) -> Sample {
         Sample::new(
-            track_id,
-            decode_time,
-            sample_duration,
-            sample_composition_time_offset,
-            sample_flags,
-            1,
+            SampleProperties {
+                track_id,
+                decode_time,
+                sample_duration,
+                sample_composition_time_offset,
+                sample_flags,
+                sample_description_index: 1,
+            },
             data.to_vec(),
         )
     }
@@ -55,9 +59,11 @@ mod tests {
             for sample in samples {
                 writer.handle_sample(sample.clone()).unwrap();
             }
+            writer.finish_chunk().unwrap();
         }
+        writer.finish().unwrap();
 
-        writer.finish().unwrap().into_iter().collect()
+        iter::from_fn(|| writer.poll_sample_tables()).collect()
     }
 
     /// Movie of one track per entry of `tables`, each laid out by its tables
@@ -167,12 +173,10 @@ mod tests {
             for sample in samples {
                 let end = offset + sample.data().len() as u64;
                 laid_down.push(SampleExtent::new(
-                    sample.track_id(),
-                    sample.decode_time(),
-                    sample.sample_duration(),
-                    sample.sample_composition_time_offset(),
-                    sample.sample_flags(),
-                    1,
+                    SampleProperties {
+                        sample_description_index: 1,
+                        ..*sample.properties()
+                    },
                     1,
                     offset..end,
                 ));
@@ -200,15 +204,7 @@ mod tests {
                     .iter()
                     .map(|sample| {
                         let extent = resolved.next().unwrap();
-                        Sample::new(
-                            extent.track_id(),
-                            extent.decode_time(),
-                            extent.sample_duration(),
-                            extent.sample_composition_time_offset(),
-                            extent.sample_flags(),
-                            extent.sample_description_index(),
-                            sample.data().to_vec(),
-                        )
+                        Sample::new(*extent.properties(), sample.data().to_vec())
                     })
                     .collect();
                 (*chunk_offset, samples)

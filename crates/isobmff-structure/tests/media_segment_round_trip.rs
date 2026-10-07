@@ -14,7 +14,7 @@ mod tests {
         HeaderDuration, MovieBox, MovieExtendsBox, MovieHeaderBox, SampleFlags, TrackExtendsBox,
     };
     use isobmff_core::Mp4EpochSeconds;
-    use isobmff_sample::Sample;
+    use isobmff_sample::{Sample, SampleProperties};
     use isobmff_structure::{Error, MediaSegmentMuxFsm};
     use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, segment_type, track};
 
@@ -44,23 +44,27 @@ mod tests {
     fn two_track_fragments() -> Vec<Vec<Sample>> {
         let video = |decode_time, data: &[u8]| {
             Sample::new(
-                1,
-                decode_time,
-                3_000,
-                0,
-                SampleFlags::ZERO,
-                1,
+                SampleProperties {
+                    track_id: 1,
+                    decode_time,
+                    sample_duration: 3_000,
+                    sample_composition_time_offset: 0,
+                    sample_flags: SampleFlags::ZERO,
+                    sample_description_index: 1,
+                },
                 data.to_vec(),
             )
         };
         let audio = |decode_time, offset, data: &[u8]| {
             Sample::new(
-                2,
-                decode_time,
-                1_024,
-                offset,
-                SampleFlags::ZERO,
-                1,
+                SampleProperties {
+                    track_id: 2,
+                    decode_time,
+                    sample_duration: 1_024,
+                    sample_composition_time_offset: offset,
+                    sample_flags: SampleFlags::ZERO,
+                    sample_description_index: 1,
+                },
                 data.to_vec(),
             )
         };
@@ -126,19 +130,17 @@ mod tests {
             .collect();
         let continued = written_segment(fragments, MediaSegmentMuxFsm::begin_fragment_continuing);
         let moved_to_zero = |sample: Sample| {
-            let origin = if sample.track_id() == 1 {
+            let origin = if sample.properties().track_id == 1 {
                 90_000
             } else {
                 30_720
             };
 
             Sample::new(
-                sample.track_id(),
-                sample.decode_time().saturating_sub(origin),
-                sample.sample_duration(),
-                sample.sample_composition_time_offset(),
-                sample.sample_flags(),
-                sample.sample_description_index(),
+                SampleProperties {
+                    decode_time: sample.properties().decode_time.saturating_sub(origin),
+                    ..*sample.properties()
+                },
                 sample.into_data(),
             )
         };

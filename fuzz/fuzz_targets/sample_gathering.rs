@@ -33,7 +33,9 @@ use core::ops::Range;
 use isobmff::boxes::{
     DegradationPriorityEntry, PaddingBitsEntry, SampleDependencyTypeEntry, SampleFlags,
 };
-use isobmff::sample::{Error, Sample, SampleExtent, SampleReader, SampleReaderLimits};
+use isobmff::sample::{
+    Error, Sample, SampleExtent, SampleProperties, SampleReader, SampleReaderLimits,
+};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
 
@@ -166,17 +168,19 @@ fn handed_over<'file>(steps: &[Step], file: &'file [u8], pass: Pass) -> Vec<Hand
                 let start = u64::from(start);
 
                 run.push(SampleExtent::new(
-                    u32::from(track_id),
-                    u64::from(decode_time),
-                    u32::from(sample_duration),
-                    i64::from(sample_composition_time_offset),
-                    SampleFlags::new(
-                        SampleDependencyTypeEntry::default(),
-                        PaddingBitsEntry::default(),
-                        false,
-                        DegradationPriorityEntry::new(u16::from(sample_flags)),
-                    ),
-                    1,
+                    SampleProperties {
+                        track_id: u32::from(track_id),
+                        decode_time: u64::from(decode_time),
+                        sample_duration: u32::from(sample_duration),
+                        sample_composition_time_offset: i64::from(sample_composition_time_offset),
+                        sample_flags: SampleFlags::new(
+                            SampleDependencyTypeEntry::default(),
+                            PaddingBitsEntry::default(),
+                            false,
+                            DegradationPriorityEntry::new(u16::from(sample_flags)),
+                        ),
+                        sample_description_index: 1,
+                    },
                     1,
                     start..start.saturating_add(u64::from(len)),
                 ));
@@ -239,7 +243,7 @@ fn read(sample_size_limit: u64, handed: &[Handed<'_>], together: bool) -> Readin
             Handed::Extents(run) => run
                 .iter()
                 .try_for_each(|extent| reader.handle_sample_extent(extent.clone())),
-            Handed::Data(offset, data) => reader.handle_data(*offset, data),
+            Handed::Data(offset, data) => reader.handle_input(*offset, data),
         };
 
         drain(&mut reader, &mut samples);
@@ -258,7 +262,7 @@ fn read(sample_size_limit: u64, handed: &[Handed<'_>], together: bool) -> Readin
     match failure {
         Some(reported) => {
             assert_eq!(
-                reader.handle_data(0, &[]),
+                reader.handle_input(0, &[]),
                 Err(reported),
                 "a failed reader took media data instead of reporting its failure again"
             );
@@ -270,7 +274,7 @@ fn read(sample_size_limit: u64, handed: &[Handed<'_>], together: bool) -> Readin
         }
         None => {
             assert!(
-                matches!(reader.handle_data(0, &[]), Err(Error::AlreadyFinished { .. })),
+                matches!(reader.handle_input(0, &[]), Err(Error::AlreadyFinished { .. })),
                 "the reader took media data after the samples were declared over"
             );
             assert_eq!(
@@ -344,7 +348,7 @@ fn modelled(sample_size_limit: u64, handed: &[Handed<'_>], file: &[u8], together
                 }));
                 if let Some(refused) = run.get(admitted) {
                     failure = Some(Failure::SampleSizeLimitExceeded {
-                        track_id: refused.track_id(),
+                        track_id: refused.properties().track_id,
                         declared_bytes: declared_len(refused),
                         limit_bytes: sample_size_limit,
                     });
@@ -373,7 +377,7 @@ fn modelled(sample_size_limit: u64, handed: &[Handed<'_>], file: &[u8], together
             .iter()
             .find(|pending| pending.whole_at.is_none())
             .map(|short| Failure::UnfinishedSample {
-                track_id: short.extent.track_id(),
+                track_id: short.extent.properties().track_id,
                 needed_bytes: declared_len(&short.extent),
                 available_bytes: short.gathered,
             });
@@ -424,13 +428,5 @@ fn sample_of(extent: &SampleExtent, file: &[u8]) -> Sample {
         .and_then(|(start, end)| file.get(start..end))
         .unwrap_or_default();
 
-    Sample::new(
-        extent.track_id(),
-        extent.decode_time(),
-        extent.sample_duration(),
-        extent.sample_composition_time_offset(),
-        extent.sample_flags(),
-        extent.sample_description_index(),
-        data.to_vec(),
-    )
+    Sample::new(*extent.properties(), data.to_vec())
 }

@@ -65,10 +65,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         while let Some(sample) = demux_fsm.poll_sample() {
             println!(
                 "track={} time={} size={} sync={}",
-                sample.track_id(),
-                sample.decode_time(),
+                sample.properties().track_id,
+                sample.properties().decode_time,
                 sample.data().len(),
-                !sample.sample_flags().sample_is_non_sync_sample(),
+                !sample.properties().sample_flags.sample_is_non_sync_sample(),
             );
             count = count.saturating_add(1);
         }

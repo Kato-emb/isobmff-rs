@@ -15,7 +15,7 @@ mod tests {
         TrackBox, TrackExtendsBox,
     };
     use isobmff_core::{AnyBox, BoxType, FourCc, Mp4EpochSeconds};
-    use isobmff_sample::Sample;
+    use isobmff_sample::{Sample, SampleProperties};
     use isobmff_structure::{FragmentedMuxFsm, MovieDemuxFsm};
     use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type, track};
 
@@ -49,16 +49,28 @@ mod tests {
     /// versions of a `trun` write apart.
     fn two_track_fragments() -> Vec<Vec<Sample>> {
         let video = |decode_time, sample_flags, data: &[u8]| {
-            Sample::new(1, decode_time, 3_000, 0, sample_flags, 1, data.to_vec())
+            Sample::new(
+                SampleProperties {
+                    track_id: 1,
+                    decode_time,
+                    sample_duration: 3_000,
+                    sample_composition_time_offset: 0,
+                    sample_flags,
+                    sample_description_index: 1,
+                },
+                data.to_vec(),
+            )
         };
         let audio = |decode_time, offset, data: &[u8]| {
             Sample::new(
-                2,
-                decode_time,
-                1_024,
-                offset,
-                SampleFlags::ZERO,
-                1,
+                SampleProperties {
+                    track_id: 2,
+                    decode_time,
+                    sample_duration: 1_024,
+                    sample_composition_time_offset: offset,
+                    sample_flags: SampleFlags::ZERO,
+                    sample_description_index: 1,
+                },
                 data.to_vec(),
             )
         };
@@ -129,12 +141,14 @@ mod tests {
             AnyBox::from_raw_bytes(BoxType::compact(*b"avc1"), vec![0, 0, 0, 0, 0, 0, 0, 1]);
         let track = TrackBox::new_video(1, TIMESCALE, 1920, 1080, entry);
         let sample = Sample::new(
-            1,
-            0,
-            3_000,
-            0,
-            SampleFlags::SYNC_SAMPLE,
-            1,
+            SampleProperties {
+                track_id: 1,
+                decode_time: 0,
+                sample_duration: 3_000,
+                sample_composition_time_offset: 0,
+                sample_flags: SampleFlags::SYNC_SAMPLE,
+                sample_description_index: 1,
+            },
             b"VIDEO_01".to_vec(),
         );
 

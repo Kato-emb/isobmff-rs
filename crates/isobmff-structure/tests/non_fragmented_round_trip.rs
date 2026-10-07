@@ -12,7 +12,7 @@ mod tests {
     use super::reading::samples_of;
     use isobmff_boxes::{FileTypeBox, HeaderDuration, MovieBox, MovieHeaderBox, SampleFlags};
     use isobmff_core::{BoxType, FourCc, Mp4EpochSeconds};
-    use isobmff_sample::Sample;
+    use isobmff_sample::{Sample, SampleProperties};
     use isobmff_sequence::BoxEvent;
     use isobmff_structure::{MovieDemuxFsm, NonFragmentedMuxFsm};
     use isobmff_test_support::{events_of, file_type, track};
@@ -41,23 +41,27 @@ mod tests {
     fn two_track_chunks() -> Vec<Vec<Sample>> {
         let video = |decode_time, data: &[u8]| {
             Sample::new(
-                1,
-                decode_time,
-                3_000,
-                0,
-                SampleFlags::ZERO,
-                1,
+                SampleProperties {
+                    track_id: 1,
+                    decode_time,
+                    sample_duration: 3_000,
+                    sample_composition_time_offset: 0,
+                    sample_flags: SampleFlags::ZERO,
+                    sample_description_index: 1,
+                },
                 data.to_vec(),
             )
         };
         let audio = |decode_time, data: &[u8]| {
             Sample::new(
-                2,
-                decode_time,
-                1_024,
-                0,
-                SampleFlags::ZERO,
-                1,
+                SampleProperties {
+                    track_id: 2,
+                    decode_time,
+                    sample_duration: 1_024,
+                    sample_composition_time_offset: 0,
+                    sample_flags: SampleFlags::ZERO,
+                    sample_description_index: 1,
+                },
                 data.to_vec(),
             )
         };

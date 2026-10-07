@@ -21,7 +21,7 @@ use isobmff_test_support::{
 
 use super::sample_extents;
 use crate::error::Error;
-use crate::sample::SampleExtent;
+use crate::sample::{SampleExtent, SampleProperties};
 
 /// Movie of the given tracks, continued in no fragment
 fn movie(trak: Vec<TrackBox>) -> MovieBox {
@@ -139,12 +139,14 @@ fn stss(sample_numbers: &[u32]) -> SyncSampleBox {
 /// Extent of a sync sample of `track_id` described by entry 1, in the file itself
 fn extent(track_id: u32, decode_time: u64, sample_duration: u32, data: Range<u64>) -> SampleExtent {
     SampleExtent::new(
-        track_id,
-        decode_time,
-        sample_duration,
-        0,
-        SampleFlags::ZERO,
-        1,
+        SampleProperties {
+            track_id,
+            decode_time,
+            sample_duration,
+            sample_composition_time_offset: 0,
+            sample_flags: SampleFlags::ZERO,
+            sample_description_index: 1,
+        },
         1,
         data,
     )
@@ -286,7 +288,18 @@ fn the_samples_of_a_run_take_the_description_it_names() {
     assert_eq!(
         resolved(&movie(vec![trak])),
         Ok(vec![
-            SampleExtent::new(1, 0, 100, 0, SampleFlags::ZERO, 2, 1, 100..104),
+            SampleExtent::new(
+                SampleProperties {
+                    track_id: 1,
+                    decode_time: 0,
+                    sample_duration: 100,
+                    sample_composition_time_offset: 0,
+                    sample_flags: SampleFlags::ZERO,
+                    sample_description_index: 2
+                },
+                1,
+                100..104
+            ),
             extent(1, 100, 100, 200..204),
         ])
     );
@@ -365,32 +378,53 @@ fn the_optional_tables_state_the_offset_and_the_flags_of_each_sample() {
         resolved(&movie(vec![trak])),
         Ok(vec![
             SampleExtent::new(
-                1,
-                0,
-                100,
-                8,
-                SampleFlags::new(first_dependency, first_padding, false, first_priority),
-                1,
+                SampleProperties {
+                    track_id: 1,
+                    decode_time: 0,
+                    sample_duration: 100,
+                    sample_composition_time_offset: 8,
+                    sample_flags: SampleFlags::new(
+                        first_dependency,
+                        first_padding,
+                        false,
+                        first_priority
+                    ),
+                    sample_description_index: 1
+                },
                 1,
                 100..104
             ),
             SampleExtent::new(
-                1,
-                100,
-                100,
-                -2,
-                SampleFlags::new(second_dependency, second_padding, true, second_priority),
-                1,
+                SampleProperties {
+                    track_id: 1,
+                    decode_time: 100,
+                    sample_duration: 100,
+                    sample_composition_time_offset: -2,
+                    sample_flags: SampleFlags::new(
+                        second_dependency,
+                        second_padding,
+                        true,
+                        second_priority
+                    ),
+                    sample_description_index: 1
+                },
                 1,
                 104..108
             ),
             SampleExtent::new(
-                1,
-                200,
-                100,
-                0,
-                SampleFlags::new(third_dependency, third_padding, false, third_priority),
-                1,
+                SampleProperties {
+                    track_id: 1,
+                    decode_time: 200,
+                    sample_duration: 100,
+                    sample_composition_time_offset: 0,
+                    sample_flags: SampleFlags::new(
+                        third_dependency,
+                        third_padding,
+                        false,
+                        third_priority
+                    ),
+                    sample_description_index: 1
+                },
                 1,
                 108..112
             ),
@@ -412,16 +446,60 @@ fn a_table_missing_on_its_own_leaves_its_fields_as_a_track_stating_none_has_them
     assert_eq!(
         resolved(&movie(vec![listing_no_sync_sample])),
         Ok(vec![
-            SampleExtent::new(1, 0, 100, 0, non_sync, 1, 1, 100..104),
-            SampleExtent::new(1, 100, 100, 0, non_sync, 1, 1, 104..108),
-            SampleExtent::new(1, 200, 100, 0, non_sync, 1, 1, 108..112),
+            SampleExtent::new(
+                SampleProperties {
+                    track_id: 1,
+                    decode_time: 0,
+                    sample_duration: 100,
+                    sample_composition_time_offset: 0,
+                    sample_flags: non_sync,
+                    sample_description_index: 1
+                },
+                1,
+                100..104
+            ),
+            SampleExtent::new(
+                SampleProperties {
+                    track_id: 1,
+                    decode_time: 100,
+                    sample_duration: 100,
+                    sample_composition_time_offset: 0,
+                    sample_flags: non_sync,
+                    sample_description_index: 1
+                },
+                1,
+                104..108
+            ),
+            SampleExtent::new(
+                SampleProperties {
+                    track_id: 1,
+                    decode_time: 200,
+                    sample_duration: 100,
+                    sample_composition_time_offset: 0,
+                    sample_flags: non_sync,
+                    sample_description_index: 1
+                },
+                1,
+                108..112
+            ),
         ])
     );
     assert_eq!(
         resolved(&movie(vec![composing_the_second_late])),
         Ok(vec![
             extent(1, 0, 100, 100..104),
-            SampleExtent::new(1, 100, 100, 16, SampleFlags::ZERO, 1, 1, 104..108),
+            SampleExtent::new(
+                SampleProperties {
+                    track_id: 1,
+                    decode_time: 100,
+                    sample_duration: 100,
+                    sample_composition_time_offset: 16,
+                    sample_flags: SampleFlags::ZERO,
+                    sample_description_index: 1
+                },
+                1,
+                104..108
+            ),
             extent(1, 200, 100, 108..112),
         ])
     );
@@ -435,7 +513,18 @@ fn an_offset_a_version_0_ctts_states_past_the_signed_range_is_read_as_negative()
         resolved(&movie(vec![written_signed])),
         Ok(vec![
             extent(1, 0, 100, 100..104),
-            SampleExtent::new(1, 100, 100, -1_024, SampleFlags::ZERO, 1, 1, 104..108),
+            SampleExtent::new(
+                SampleProperties {
+                    track_id: 1,
+                    decode_time: 100,
+                    sample_duration: 100,
+                    sample_composition_time_offset: -1_024,
+                    sample_flags: SampleFlags::ZERO,
+                    sample_description_index: 1
+                },
+                1,
+                104..108
+            ),
             extent(1, 200, 100, 108..112),
         ])
     );

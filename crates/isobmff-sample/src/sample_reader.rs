@@ -34,7 +34,7 @@ pub use limits::SampleReaderLimits;
 ///   [`handle_sample_extents`](Self::handle_sample_extents) holds several
 ///   behind those held before them, in the order of their bytes, those
 ///   starting at the same byte in the order they came; and
-///   [`handle_data`](Self::handle_data) fills every held extent the input
+///   [`handle_input`](Self::handle_input) fills every held extent the input
 ///   reaches. Bytes no held extent names are dropped, so input arriving
 ///   before the extent that names it is not kept for it, and the extent is
 ///   reported as lacking those bytes once it arrives.
@@ -80,21 +80,42 @@ pub use limits::SampleReaderLimits;
 ///
 /// ```
 /// use isobmff_boxes::SampleFlags;
-/// use isobmff_sample::{Sample, SampleExtent, SampleReader};
+/// use isobmff_sample::{Sample, SampleExtent, SampleProperties, SampleReader};
 ///
 /// let mut reader = SampleReader::new();
 ///
 /// // Bytes arriving before the extent that names them are dropped
-/// reader.handle_data(100, b"ABCD")?;
-/// reader.handle_sample_extent(SampleExtent::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, 1, 100..104))?;
+/// reader.handle_input(100, b"ABCD")?;
+/// reader.handle_sample_extent(SampleExtent::new(
+///     SampleProperties {
+///         track_id: 1,
+///         decode_time: 0,
+///         sample_duration: 1_024,
+///         sample_composition_time_offset: 0,
+///         sample_flags: SampleFlags::ZERO,
+///         sample_description_index: 1,
+///     },
+///     1,
+///     100..104,
+/// ))?;
 /// assert_eq!(reader.poll_sample(), None);
 ///
 /// // The reader names what it lacks, and the sample is whole once handed it
 /// assert_eq!(reader.wanted_extent(), Some(100..104));
-/// reader.handle_data(100, b"ABCD")?;
+/// reader.handle_input(100, b"ABCD")?;
 /// assert_eq!(
 ///     reader.poll_sample(),
-///     Some(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"ABCD".to_vec()))
+///     Some(Sample::new(
+///         SampleProperties {
+///             track_id: 1,
+///             decode_time: 0,
+///             sample_duration: 1_024,
+///             sample_composition_time_offset: 0,
+///             sample_flags: SampleFlags::ZERO,
+///             sample_description_index: 1,
+///         },
+///         b"ABCD".to_vec(),
+///     ))
 /// );
 /// assert_eq!(reader.wanted_extent(), None);
 /// reader.finish()?;
@@ -164,7 +185,7 @@ impl SampleReader {
         let first = self.pending.len();
         let held = self.admit(extent);
         self.order_from(first);
-        self.report_front();
+        self.release_whole_front();
         self.handed_over_since(ready);
 
         held
@@ -227,34 +248,34 @@ impl SampleReader {
             }
         }
         self.order_from(first);
-        self.report_front();
+        self.release_whole_front();
         self.handed_over_since(ready);
 
         held
     }
 
-    /// Fills the samples whose extents reach into `data`, the bytes of the file from `offset` on
+    /// Fills the samples whose extents reach into `input`, the bytes of the file from `offset` on
     ///
     /// # Errors
     ///
     /// * [`HeldBytesLimitExceeded`](crate::Error::HeldBytesLimitExceeded):
-    ///   a sample `data` starts would take the reader past the bytes it
-    ///   holds. The samples `data` made whole before it are there to take.
+    ///   a sample `input` starts would take the reader past the bytes it
+    ///   holds. The samples `input` made whole before it are there to take.
     /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   samples were declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
-    pub fn handle_data(&mut self, offset: u64, data: &[u8]) -> Result<(), Error> {
+    pub fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), Error> {
         self.reading()?;
 
-        // Why not checked_add: the caller read `data` out of a finite resource,
+        // Why not checked_add: the caller read `input` out of a finite resource,
         // so its end cannot run past what 64 bits carry.
-        let arriving = offset..offset.saturating_add(data.len() as u64);
+        let arriving = offset..offset.saturating_add(input.len() as u64);
         let ready = self.ready.len();
         let limit = self.limits.held_bytes();
         if let Some(index) = &mut self.index {
             let refused = index.fill(
-                data,
+                input,
                 &arriving,
                 &mut self.ready,
                 &mut self.held_bytes,
@@ -283,7 +304,7 @@ impl SampleReader {
             if pending.lacking().start >= arriving.end {
                 break;
             }
-            if let Err(needed) = pending.take_from(data, &arriving, &mut self.held_bytes, limit) {
+            if let Err(needed) = pending.take_from(input, &arriving, &mut self.held_bytes, limit) {
                 refused = Some(needed);
                 break;
             }
@@ -296,7 +317,7 @@ impl SampleReader {
             // make whole the extents at the front and no other, and popping
             // those costs nothing, where moving the rest up a slot costs the
             // whole queue.
-            self.report_front();
+            self.release_whole_front();
             if self.whole_held > 0 {
                 for pending in mem::take(&mut self.pending) {
                     if pending.is_whole() && pending.declared_len() > 0 {
@@ -355,7 +376,7 @@ impl SampleReader {
 
         match self.front() {
             Some(short) => Err(self.fail(Error::UnfinishedSample {
-                track_id: short.extent.track_id(),
+                track_id: short.extent.properties().track_id,
                 needed_bytes: short.declared_len(),
                 available_bytes: short.gathered_len(),
             })),
@@ -393,7 +414,7 @@ impl SampleReader {
         let declared = pending.declared_len();
         if declared > self.limits.sample_size() {
             return Err(self.fail(Error::SampleSizeLimitExceeded {
-                track_id: pending.extent.track_id(),
+                track_id: pending.extent.properties().track_id,
                 declared_bytes: declared,
                 limit_bytes: self.limits.sample_size(),
             }));
@@ -452,9 +473,9 @@ impl SampleReader {
     }
 
     /// Hands over the whole samples at the front of the queue, in the order they were held
-    fn report_front(&mut self) {
+    fn release_whole_front(&mut self) {
         if let Some(index) = &mut self.index {
-            index.report_front(&mut self.ready);
+            index.release_whole_front(&mut self.ready);
 
             return;
         }
@@ -604,15 +625,7 @@ impl PendingSample {
 
     /// Returns the sample, now that every byte of it has arrived
     fn into_sample(self) -> Sample {
-        Sample::new(
-            self.extent.track_id(),
-            self.extent.decode_time(),
-            self.extent.sample_duration(),
-            self.extent.sample_composition_time_offset(),
-            self.extent.sample_flags(),
-            self.extent.sample_description_index(),
-            self.data,
-        )
+        Sample::new(*self.extent.properties(), self.data)
     }
 }
 

@@ -72,10 +72,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut count: u64 = 0;
     loop {
         while let Some(sample) = demux_fsm.poll_sample() {
-            if sample.track_id() != track_id {
+            if sample.properties().track_id != track_id {
                 continue;
             }
-            if sample.sample_description_index() != 1 {
+            if sample.properties().sample_description_index != 1 {
                 return Err("a sample is described by another sample entry than the first".into());
             }
             for nal_unit in length_size.nal_units(sample.data()) {

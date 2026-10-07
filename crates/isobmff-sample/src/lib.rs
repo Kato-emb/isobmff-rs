@@ -20,10 +20,10 @@
 //!   side, one per form: [`MovieFragmentWriter`] takes [`Sample`]s and lays
 //!   them out as the `moof` and the media data of a movie fragment, placing
 //!   each where it arrived, and [`SampleTableWriter`] takes them chunk by
-//!   chunk and lays them out as the sample tables of a movie, handing the
-//!   bytes of each straight back.
+//!   chunk and lays them out as the sample tables of a movie, handing over
+//!   the bytes of each to be laid down in the chunk.
 //!   Beside resolution, the indexes a file may carry are looked up by time:
-//!   [`segment_index::subsegments`] places the subsegments a `sidx` indexes
+//!   [`SegmentIndex::resolve`] places the subsegments a `sidx` indexes
 //!   in the file (§8.16.3), and [`movie_fragment_random_access::sync_sample_at`]
 //!   finds the sync sample a `tfra` lists for a time (§8.8.10). Either names
 //!   where in the file to start reading, and a caller starting past the first
@@ -65,7 +65,7 @@ mod track_decode_times;
 
 pub use error::Error;
 pub use movie_fragment_writer::MovieFragmentWriter;
-pub use sample::{Sample, SampleExtent};
+pub use sample::{Sample, SampleExtent, SampleProperties};
 pub use sample_reader::{SampleReader, SampleReaderLimits};
 pub use sample_table_writer::{SampleTableWriter, SampleTables};
 pub use segment_index::{SegmentIndex, Subsegment};

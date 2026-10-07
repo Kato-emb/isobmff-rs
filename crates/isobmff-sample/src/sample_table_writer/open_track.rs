@@ -32,8 +32,9 @@ pub(super) struct OpenTrack {
 impl OpenTrack {
     /// Places `sample` on the tables of this track, and hands its bytes back
     pub(super) fn place(&mut self, sample: Sample) -> Result<Vec<u8>, Error> {
-        let track_id = sample.track_id();
-        let offset = sample.sample_composition_time_offset();
+        let properties = sample.properties();
+        let track_id = properties.track_id;
+        let offset = properties.sample_composition_time_offset;
         let Some(sample_composition_time_offset) = composition_time_offset::stated(offset) else {
             return Err(Error::CompositionTimeOffsetOutOfRange {
                 track_id,
@@ -47,21 +48,21 @@ impl OpenTrack {
                 stated_bytes: offered,
             });
         };
-        if sample.decode_time() != self.reached {
+        if properties.decode_time != self.reached {
             return Err(Error::DecodeTimeMismatch {
                 track_id,
-                stated_decode_time: sample.decode_time(),
+                stated_decode_time: properties.decode_time,
                 reached_decode_time: self.reached,
             });
         }
         self.reached = self
             .reached
-            .checked_add(u64::from(sample.sample_duration()))
+            .checked_add(u64::from(properties.sample_duration))
             .ok_or(Error::DecodeTimeOverflow { track_id })?;
-        self.deltas.push(sample.sample_duration());
+        self.deltas.push(properties.sample_duration);
         self.sizes.push(sample_size);
         self.offsets.push(sample_composition_time_offset);
-        self.sample_flags.push(sample.sample_flags());
+        self.sample_flags.push(properties.sample_flags);
 
         Ok(sample.into_data())
     }
@@ -146,7 +147,7 @@ mod tests {
     };
 
     use crate::error::Error;
-    use crate::sample::Sample;
+    use crate::sample::{Sample, SampleProperties};
     use crate::sample_table_writer::SampleTables;
     use crate::sample_table_writer::tests::{laid_out, sample, writer};
 
@@ -174,6 +175,7 @@ mod tests {
 
         writer.begin_chunk(1_000).unwrap();
         writer.handle_sample(sample(1, 0, b"AAAA")).unwrap();
+        writer.finish_chunk().unwrap();
         writer.begin_chunk(2_000).unwrap();
 
         assert_eq!(
@@ -188,8 +190,17 @@ mod tests {
 
     #[test]
     fn decode_times_running_past_what_64_bits_carry_are_refused() {
-        let at_the_end_of_time =
-            Sample::new(1, u64::MAX, 1, 0, SampleFlags::ZERO, 1, b"AAAA".to_vec());
+        let at_the_end_of_time = Sample::new(
+            SampleProperties {
+                track_id: 1,
+                decode_time: u64::MAX,
+                sample_duration: 1,
+                sample_composition_time_offset: 0,
+                sample_flags: SampleFlags::ZERO,
+                sample_description_index: 1,
+            },
+            b"AAAA".to_vec(),
+        );
         let mut track = OpenTrack {
             reached: u64::MAX,
             ..OpenTrack::default()
@@ -204,12 +215,14 @@ mod tests {
     #[test]
     fn a_sample_composed_further_off_than_a_ctts_writes_is_refused() {
         let too_early = Sample::new(
-            1,
-            0,
-            1_024,
-            -(1 << 31) - 1,
-            SampleFlags::ZERO,
-            1,
+            SampleProperties {
+                track_id: 1,
+                decode_time: 0,
+                sample_duration: 1_024,
+                sample_composition_time_offset: -(1 << 31) - 1,
+                sample_flags: SampleFlags::ZERO,
+                sample_description_index: 1,
+            },
             b"AAAA".to_vec(),
         );
         let mut writer = writer();
@@ -232,12 +245,14 @@ mod tests {
         sample_flags: SampleFlags,
     ) -> Sample {
         Sample::new(
-            1,
-            decode_time,
-            1_024,
-            sample_composition_time_offset,
-            sample_flags,
-            1,
+            SampleProperties {
+                track_id: 1,
+                decode_time,
+                sample_duration: 1_024,
+                sample_composition_time_offset,
+                sample_flags,
+                sample_description_index: 1,
+            },
             b"AAAA".to_vec(),
         )
     }

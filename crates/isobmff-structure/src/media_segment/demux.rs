@@ -4,7 +4,6 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{MovieBox, MovieFragmentBox, SegmentIndexBox, SegmentTypeBox};
 use isobmff_sample::movie_fragment::sample_extents;
-use isobmff_sample::segment_index::subsegments;
 use isobmff_sample::{Sample, SegmentIndex, TrackDecodeTimes};
 use isobmff_sequence::BoxEvent;
 
@@ -100,7 +99,7 @@ use crate::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
 ///
 /// ```
 /// use isobmff_boxes::{SampleFlags, TrackExtendsBox};
-/// use isobmff_sample::Sample;
+/// use isobmff_sample::{Sample, SampleProperties};
 /// use isobmff_structure::{MediaSegmentDemuxFsm, MediaSegmentMuxFsm};
 /// # use isobmff_test_support::{fragmented_movie, segment_type};
 /// // A segment of one fragment carrying two samples of track 1, continuing a movie of that track
@@ -108,8 +107,28 @@ use crate::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
 /// let mut mux_fsm = MediaSegmentMuxFsm::new(&movie)?;
 /// mux_fsm.handle_segment_type(segment_type())?;
 /// mux_fsm.begin_fragment(1)?;
-/// mux_fsm.handle_sample(Sample::new(1, 0, 1_024, 0, SampleFlags::ZERO, 1, b"SAMP".to_vec()))?;
-/// mux_fsm.handle_sample(Sample::new(1, 1_024, 1_024, 0, SampleFlags::ZERO, 1, b"DATA".to_vec()))?;
+/// mux_fsm.handle_sample(Sample::new(
+///     SampleProperties {
+///         track_id: 1,
+///         decode_time: 0,
+///         sample_duration: 1_024,
+///         sample_composition_time_offset: 0,
+///         sample_flags: SampleFlags::ZERO,
+///         sample_description_index: 1,
+///     },
+///     b"SAMP".to_vec(),
+/// ))?;
+/// mux_fsm.handle_sample(Sample::new(
+///     SampleProperties {
+///         track_id: 1,
+///         decode_time: 1_024,
+///         sample_duration: 1_024,
+///         sample_composition_time_offset: 0,
+///         sample_flags: SampleFlags::ZERO,
+///         sample_description_index: 1,
+///     },
+///     b"DATA".to_vec(),
+/// ))?;
 /// mux_fsm.finish_fragment()?;
 /// mux_fsm.finish()?;
 ///
@@ -131,9 +150,9 @@ use crate::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
 ///
 /// // The samples come back as they were laid out
 /// let first = demux_fsm.poll_sample().unwrap();
-/// assert_eq!((first.data(), first.decode_time()), (b"SAMP".as_slice(), 0));
+/// assert_eq!((first.data(), first.properties().decode_time), (b"SAMP".as_slice(), 0));
 /// let second = demux_fsm.poll_sample().unwrap();
-/// assert_eq!((second.data(), second.decode_time()), (b"DATA".as_slice(), 1_024));
+/// assert_eq!((second.data(), second.properties().decode_time), (b"DATA".as_slice(), 1_024));
 /// assert_eq!(demux_fsm.poll_sample(), None);
 /// # Ok::<(), isobmff_structure::Error>(())
 /// ```
@@ -282,7 +301,7 @@ impl MediaSegmentDemuxFsm {
     ///
     /// A `sidx` read again, as the reading resumes at or before it, is held
     /// once. Each is placed in the segment from the first byte after its `sidx`, as
-    /// [`subsegments`] places them.
+    /// [`SegmentIndex::resolve`] places them.
     #[must_use]
     pub fn segment_indexes(&self) -> &[SegmentIndex] {
         &self.segment_indexes
@@ -366,7 +385,7 @@ impl MediaSegmentDemuxFsm {
                     Some(Open::MediaData) => self
                         .input
                         .samples_mut()
-                        .handle_data(start, &payload)
+                        .handle_input(start, &payload)
                         .map_err(Error::from),
                     None => Ok(()),
                 },
@@ -389,7 +408,7 @@ impl MediaSegmentDemuxFsm {
                         })
                     }
                     Some(Open::SegmentIndex(reader)) => reader.finish().and_then(|sidx| {
-                        let segment_index = subsegments(&sidx, start)?;
+                        let segment_index = SegmentIndex::resolve(&sidx, start)?;
                         if !self.segment_indexes.contains(&segment_index) {
                             self.segment_indexes.push(segment_index);
                         }
