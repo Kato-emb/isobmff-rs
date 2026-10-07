@@ -36,10 +36,10 @@
 //! `avc` and `mp4` are on by default, so a caller that wants the base
 //! specification alone turns the default features off.
 //!
-//! Each crate names the failures of its own layers `Error` and `ErrorKind`, and
-//! carries the failures of the layers beneath through whole rather than
-//! translating them, so [`structure::Error`] reaches [`sample::Error`] and
-//! [`sequence::Error`] reaches [`core::Error`].
+//! Each crate names the failures of its own layers `Error`, and carries the
+//! failures of the layers beneath through whole rather than translating them,
+//! so [`structure::Error`] reaches [`sample::Error`] and [`sequence::Error`]
+//! reaches [`core::Error`].
 //!
 //! # `no_std`
 //!
