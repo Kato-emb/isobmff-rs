@@ -46,13 +46,13 @@ impl<Value: BoxDecode<Error = isobmff_core::Error> + BoxDefinition> WholeBoxRead
     /// * [`PayloadLimitExceeded`](crate::Error::PayloadLimitExceeded):
     ///   the box declares more payload than `payload_limit`.
     pub(crate) fn begin(header: BoxHeader, payload_limit: u64) -> Result<Self, Error> {
-        if let Some(declared) = header
+        if let Some(reached_bytes) = header
             .payload_len()
             .filter(|declared| *declared > payload_limit)
         {
             return Err(Error::PayloadLimitExceeded {
                 box_type: Value::BOX_TYPE,
-                reached_bytes: declared,
+                reached_bytes,
                 limit_bytes: payload_limit,
             });
         }
@@ -76,11 +76,11 @@ impl<Value: BoxDecode<Error = isobmff_core::Error> + BoxDefinition> WholeBoxRead
     pub(crate) fn handle_payload(&mut self, mut payload: Vec<u8>) -> Result<(), Error> {
         // Why not checked_add: the framing cut the payload out of a finite
         // resource, so its length cannot run past what 64 bits carry.
-        let reached = (self.payload.len() as u64).saturating_add(payload.len() as u64);
-        if reached > self.payload_limit {
+        let reached_bytes = (self.payload.len() as u64).saturating_add(payload.len() as u64);
+        if reached_bytes > self.payload_limit {
             return Err(Error::PayloadLimitExceeded {
                 box_type: Value::BOX_TYPE,
-                reached_bytes: reached,
+                reached_bytes,
                 limit_bytes: self.payload_limit,
             });
         }

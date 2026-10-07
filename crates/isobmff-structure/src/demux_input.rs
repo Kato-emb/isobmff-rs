@@ -91,7 +91,7 @@ impl DemuxInput {
         }
     }
 
-    /// Takes bytes of the file read at `offset`, and routes them where they go
+    /// Takes bytes of the file read at `input_offset`, and routes them where they go
     ///
     /// Empty input is taken as nothing. Bytes the samples lack go to them
     /// alone, and a failure they report is recorded. The continuation of the
@@ -103,27 +103,31 @@ impl DemuxInput {
     ///
     /// * [`Sample`](crate::Error::Sample): what the samples make of the
     ///   bytes they lack.
-    /// * [`UnwantedInput`](crate::Error::UnwantedInput): `offset` is
+    /// * [`UnwantedInput`](crate::Error::UnwantedInput): `input_offset` is
     ///   neither where the input taken in order stands nor where the bytes the
     ///   samples lack start. Nothing is recorded for it.
     /// * What [`reading`](Self::reading) reports.
-    pub(crate) fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), Error> {
+    pub(crate) fn handle_input(&mut self, input_offset: u64, input: &[u8]) -> Result<(), Error> {
         self.reading()?;
         if input.is_empty() {
             return Ok(());
         }
 
-        match self.position.route(offset, self.samples.wanted_extent()) {
+        match self
+            .position
+            .route(input_offset, self.samples.wanted_extent())
+        {
             InputRoute::InOrder => {}
             InputRoute::Lacking => {
-                let gathered = self.samples.handle_data(offset, input).map_err(Error::from);
+                let gathered = self
+                    .samples
+                    .handle_data(input_offset, input)
+                    .map_err(Error::from);
 
                 return self.record(gathered);
             }
             InputRoute::Unwanted => {
-                return Err(Error::UnwantedInput {
-                    input_offset: offset,
-                });
+                return Err(Error::UnwantedInput { input_offset });
             }
         }
 

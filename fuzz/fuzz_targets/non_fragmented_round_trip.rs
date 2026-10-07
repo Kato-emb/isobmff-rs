@@ -24,7 +24,7 @@
 #![no_main]
 
 use isobmff::boxes::{HeaderDuration, MovieBox, MovieHeaderBox, SampleFlags};
-use isobmff::core::Mp4EpochSeconds;
+use isobmff::core::{BoxDefinition as _, Mp4EpochSeconds};
 use isobmff::sample::Sample;
 use isobmff::structure::{Error, MovieDemuxFsm, NonFragmentedMuxFsm};
 use isobmff_test_support::{file_type, non_fragmented_file, track};
@@ -90,7 +90,10 @@ fuzz_target!(|input: Input<'_>| {
 
     if !finished {
         assert!(
-            matches!(read_back(&file, cut_length), Err(Error::MissingMandatoryBox { .. })),
+            matches!(
+                read_back(&file, cut_length),
+                Err(Error::MissingMandatoryBox { box_type, .. }) if box_type == MovieBox::BOX_TYPE
+            ),
             "the bytes a refused writer laid down read as a file carrying a movie"
         );
         return;
