@@ -19,6 +19,8 @@
 
 extern crate alloc;
 
+use isobmff_core::{BoxDefinition, BoxType};
+
 mod btrt;
 mod chunk_offset;
 mod ctts;
@@ -124,3 +126,41 @@ pub use trak::TrackBox;
 pub use trex::TrackExtendsBox;
 pub use trun::{TrackRunBox, TrackRunSample};
 pub use vmhd::VideoMediaHeaderBox;
+
+/// Types of the container boxes ISO/IEC 14496-12 defines, whose payload is
+/// the boxes they hold and nothing else
+///
+/// ISO/IEC 14496-12 §3.1.3 defines a container box as one whose sole purpose is
+/// to contain and group a set of related boxes. A box is listed when its
+/// syntax declares a `Box`, not a `FullBox`, and its payload is boxes alone,
+/// so a box such as `meta` (§8.11.1), whose payload starts with the fields of
+/// a `FullBox`, is not. The types are listed in the order of the sections
+/// that define them.
+pub const CONTAINER_BOXES: &[BoxType] = &[
+    MovieBox::BOX_TYPE,
+    TrackBox::BOX_TYPE,
+    BoxType::compact(*b"tref"),
+    BoxType::compact(*b"trgr"),
+    MediaBox::BOX_TYPE,
+    MediaInformationBox::BOX_TYPE,
+    SampleTableBox::BOX_TYPE,
+    EditBox::BOX_TYPE,
+    DataInformationBox::BOX_TYPE,
+    MovieExtendsBox::BOX_TYPE,
+    MovieFragmentBox::BOX_TYPE,
+    TrackFragmentBox::BOX_TYPE,
+    MovieFragmentRandomAccessBox::BOX_TYPE,
+    BoxType::compact(*b"udta"),
+    BoxType::compact(*b"meco"),
+    BoxType::compact(*b"sinf"),
+    BoxType::compact(*b"schi"),
+    BoxType::compact(*b"paen"),
+    BoxType::compact(*b"strk"),
+    BoxType::compact(*b"strd"),
+    BoxType::compact(*b"rinf"),
+    BoxType::compact(*b"cinf"),
+    BoxType::compact(*b"hnti"),
+    BoxType::compact(*b"hinf"),
+    BoxType::compact(*b"fdsa"),
+    BoxType::compact(*b"ludt"),
+];

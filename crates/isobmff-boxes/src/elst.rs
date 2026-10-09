@@ -1,5 +1,6 @@
 //! [`EditListBox`] (`elst`), ISO/IEC 14496-12 §8.6.6
 
+use alloc::vec;
 use alloc::vec::Vec;
 
 use isobmff_core::{
@@ -133,6 +134,77 @@ impl EditListBox {
     #[must_use]
     pub const fn new(entries: Vec<EditListEntry>) -> Self {
         Self { entries }
+    }
+
+    /// Creates the box that starts the track `starting_offset` into the movie and plays its media from `media_time` on
+    ///
+    /// ISO/IEC 14496-12 §8.6.6.1 represents the starting offset of a track,
+    /// in the movie's time scale, by an initial empty edit that lasts it, so
+    /// the box holds one when `starting_offset` is not 0. The edit that
+    /// follows plays the media at [`MediaRate::NORMAL`] from `media_time`, in
+    /// the media's time scale, and has a `segment_duration` of 0.
+    #[must_use]
+    pub fn from_starting_offset(starting_offset: u64, media_time: u64) -> Self {
+        let media_edit = EditListEntry::new(0, Some(media_time), MediaRate::NORMAL);
+        let entries = if starting_offset == 0 {
+            vec![media_edit]
+        } else {
+            vec![
+                EditListEntry::new(starting_offset, None, MediaRate::NORMAL),
+                media_edit,
+            ]
+        };
+
+        Self { entries }
+    }
+
+    /// Returns how far into the movie the track starts, in the movie's time scale
+    ///
+    /// Returns `Some` only for a box whose edits are at most one initial empty
+    /// edit followed by one edit that plays the media at
+    /// [`MediaRate::NORMAL`]. ISO/IEC 14496-12 §8.6.6.1 represents a starting
+    /// offset by the initial empty edit, so the offset is its
+    /// `segment_duration`, or 0 without one.
+    #[must_use]
+    pub fn starting_offset(&self) -> Option<u64> {
+        self.starting_offset_and_media_time()
+            .map(|(starting_offset, _)| starting_offset)
+    }
+
+    /// Returns the time in the media the track starts playing from, in the media's time scale
+    ///
+    /// Returns the `media_time` of the edit that plays the media, `Some` for
+    /// the same boxes as [`starting_offset`](Self::starting_offset).
+    #[must_use]
+    pub fn media_time(&self) -> Option<u64> {
+        self.starting_offset_and_media_time()
+            .map(|(_, media_time)| media_time)
+    }
+
+    /// Returns the starting offset and the media time of a box shaped as §8.6.6.1 gives a starting offset
+    fn starting_offset_and_media_time(&self) -> Option<(u64, u64)> {
+        match self.entries.as_slice() {
+            [
+                EditListEntry {
+                    media_time: Some(media_time),
+                    media_rate: MediaRate::NORMAL,
+                    ..
+                },
+            ] => Some((0, *media_time)),
+            [
+                EditListEntry {
+                    segment_duration,
+                    media_time: None,
+                    ..
+                },
+                EditListEntry {
+                    media_time: Some(media_time),
+                    media_rate: MediaRate::NORMAL,
+                    ..
+                },
+            ] => Some((*segment_duration, *media_time)),
+            _ => None,
+        }
     }
 
     /// Returns the entries, in the order the track's timeline runs
@@ -403,6 +475,63 @@ pub(crate) mod tests {
             EditListBox::decode_payload(&payload),
             Err(Error::unsupported_version(2))
         );
+    }
+
+    #[test]
+    fn a_starting_offset_and_a_media_time_read_back_through_the_box() {
+        for (starting_offset, media_time) in [(0, 20), (10, 20)] {
+            let payload = encoded_payload(&EditListBox::from_starting_offset(
+                starting_offset,
+                media_time,
+            ));
+
+            let edit_list = EditListBox::decode_payload(&payload).unwrap();
+
+            assert_eq!(
+                (edit_list.starting_offset(), edit_list.media_time()),
+                (Some(starting_offset), Some(media_time))
+            );
+        }
+    }
+
+    #[test]
+    fn a_starting_offset_is_an_initial_empty_edit_before_a_media_edit_of_no_length() {
+        assert_eq!(
+            EditListBox::from_starting_offset(10, 20),
+            EditListBox::new(vec![
+                EditListEntry::new(10, None, MediaRate::NORMAL),
+                EditListEntry::new(0, Some(20), MediaRate::NORMAL),
+            ])
+        );
+        assert_eq!(
+            EditListBox::from_starting_offset(0, 20),
+            EditListBox::new(vec![EditListEntry::new(0, Some(20), MediaRate::NORMAL)])
+        );
+    }
+
+    #[test]
+    fn an_edit_list_of_another_shape_states_no_starting_offset_or_media_time() {
+        let empty_edit = EditListEntry::new(10, None, MediaRate::NORMAL);
+        let media_edit = EditListEntry::new(3_000, Some(0), MediaRate::NORMAL);
+        let dwell = EditListEntry::new(20, Some(0), MediaRate::DWELL);
+        let edit_lists = [
+            vec![],
+            vec![empty_edit],
+            vec![media_edit, empty_edit],
+            vec![media_edit, media_edit],
+            vec![empty_edit, empty_edit, media_edit],
+            vec![dwell],
+            vec![empty_edit, dwell],
+        ];
+
+        for entries in edit_lists {
+            let edit_list = EditListBox::new(entries);
+
+            assert_eq!(
+                (edit_list.starting_offset(), edit_list.media_time()),
+                (None, None)
+            );
+        }
     }
 
     #[test]
