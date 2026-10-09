@@ -8,6 +8,7 @@ use isobmff::boxes::{
     SampleTableBox, SampleToChunkBox, TimeToSampleBox,
 };
 use isobmff::sample::Sample;
+use isobmff::sequence::OutputBytes;
 use isobmff::structure::{self, FragmentedMuxFsm, MovieDemuxFsm, NonFragmentedMuxFsm};
 use wasm_bindgen::prelude::wasm_bindgen;
 
@@ -119,9 +120,7 @@ pub(crate) fn remux_to_fragmented<S: Read + Seek, W: Write>(
             mux_fsm.handle_sample(sample)?;
         }
         mux_fsm.finish_fragment()?;
-        while let Some(bytes) = mux_fsm.poll_output() {
-            sink.write_all(&bytes)?;
-        }
+        write_output(&mut sink, || mux_fsm.poll_output())?;
         Ok(())
     };
 
@@ -186,9 +185,7 @@ pub(crate) fn remux_to_fragmented<S: Read + Seek, W: Write>(
         write_fragment(&mut fragment)?;
     }
     mux_fsm.finish()?;
-    while let Some(bytes) = mux_fsm.poll_output() {
-        sink.write_all(&bytes)?;
-    }
+    write_output(&mut sink, || mux_fsm.poll_output())?;
     sink.flush()?;
 
     Ok(())
@@ -249,9 +246,7 @@ pub(crate) fn remux_to_non_fragmented<S: Read + Seek, W: Write>(
             if chunk != described_by {
                 if chunk.is_some() {
                     mux_fsm.finish_chunk()?;
-                    while let Some(bytes) = mux_fsm.poll_output() {
-                        sink.write_all(&bytes)?;
-                    }
+                    write_output(&mut sink, || mux_fsm.poll_output())?;
                 }
                 chunk = described_by;
                 mux_fsm.begin_chunk()?;
@@ -268,9 +263,7 @@ pub(crate) fn remux_to_non_fragmented<S: Read + Seek, W: Write>(
         mux_fsm.finish_chunk()?;
     }
     mux_fsm.finish()?;
-    while let Some(bytes) = mux_fsm.poll_output() {
-        sink.write_all(&bytes)?;
-    }
+    write_output(&mut sink, || mux_fsm.poll_output())?;
     sink.flush()?;
 
     Ok(())
@@ -318,6 +311,21 @@ fn handle_wanted<S: Read + Seek>(
     } else {
         demux_fsm.handle_input(offset, cut.get(..read).unwrap_or_default())
     })
+}
+
+/// Writes every output `poll_output` yields to `sink`, until it yields none
+///
+/// # Errors
+///
+/// The failure of `sink`.
+fn write_output<W: Write>(
+    sink: &mut W,
+    mut poll_output: impl FnMut() -> Option<OutputBytes>,
+) -> io::Result<()> {
+    while let Some(bytes) = poll_output() {
+        sink.write_all(&bytes)?;
+    }
+    Ok(())
 }
 
 /// Returns the failure of a movie the source declares that cannot be written as it is

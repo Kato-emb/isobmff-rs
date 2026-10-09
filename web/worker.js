@@ -19,7 +19,7 @@ function attempt(read) {
   }
 }
 
-async function written({ file, output, name }) {
+async function remuxToStorage({ file, output, name }) {
   const root = await navigator.storage.getDirectory();
   // The directory, not the root, is emptied: the origin is shared by every
   // site published under the same account.
@@ -43,7 +43,7 @@ self.onmessage = async ({ data }) => {
   if (data.request === "remux") {
     try {
       await ready;
-      self.postMessage({ file: await written(data) });
+      self.postMessage({ file: await remuxToStorage(data) });
     } catch (error) {
       self.postMessage({ error: error.message ?? String(error) });
     }
