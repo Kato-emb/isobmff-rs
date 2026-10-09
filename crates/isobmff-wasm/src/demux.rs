@@ -159,7 +159,7 @@ pub(crate) fn demux<S: Read>(source: S) -> Result<Demux, Error> {
 }
 
 /// Returns the failure of a file that carries no `moov`, or none ahead of its first `moof`
-fn no_movie() -> io::Error {
+pub(crate) fn no_movie() -> io::Error {
     io::Error::new(
         io::ErrorKind::Unsupported,
         "the file carries no movie (moov) ahead of its samples; a media segment on its own, without the movie it continues, is not supported",
