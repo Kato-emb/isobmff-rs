@@ -1,6 +1,7 @@
-import init, { demux, dump_boxes } from "../crates/isobmff-wasm/pkg/isobmff_wasm.js";
+import init, { Output, demux, dump_boxes, remux } from "../crates/isobmff-wasm/pkg/isobmff_wasm.js";
 
 const ready = init();
+const OUTPUT_DIRECTORY = "isobmff-rs-remux";
 
 // A wasm-bindgen object does not survive postMessage: its fields are getters
 // over wasm memory, so each record is copied out into a plain object.
@@ -18,7 +19,36 @@ function attempt(read) {
   }
 }
 
+async function written({ file, output, name }) {
+  const root = await navigator.storage.getDirectory();
+  // The directory, not the root, is emptied: the origin is shared by every
+  // site published under the same account.
+  await root.removeEntry(OUTPUT_DIRECTORY, { recursive: true }).catch((error) => {
+    if (error.name !== "NotFoundError") {
+      throw error;
+    }
+  });
+  const outputs = await root.getDirectoryHandle(OUTPUT_DIRECTORY, { create: true });
+  const fileHandle = await outputs.getFileHandle(name, { create: true });
+  const handle = await fileHandle.createSyncAccessHandle();
+  try {
+    remux(file, Output[output], handle);
+  } finally {
+    handle.close();
+  }
+  return fileHandle.getFile();
+}
+
 self.onmessage = async ({ data }) => {
+  if (data.request === "remux") {
+    try {
+      await ready;
+      self.postMessage({ file: await written(data) });
+    } catch (error) {
+      self.postMessage({ error: error.message ?? String(error) });
+    }
+    return;
+  }
   try {
     await ready;
   } catch (error) {

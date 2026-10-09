@@ -293,7 +293,8 @@ tbody tr.chosen {
   border-bottom: 1px solid var(--line);
 }
 
-.toolbar button {
+.toolbar button,
+.choices button {
   border: 1px solid var(--line);
   background: var(--panel);
   border-radius: 999px;
@@ -302,12 +303,14 @@ tbody tr.chosen {
   white-space: nowrap;
 }
 
-.toolbar button[aria-pressed="true"] {
+.toolbar button[aria-pressed="true"],
+.choices button[aria-pressed="true"] {
   border-color: var(--accent);
   color: var(--accent);
 }
 
-.toolbar button:disabled {
+.toolbar button:disabled,
+.choices button:disabled {
   opacity: 0.4;
   cursor: default;
 }
@@ -404,6 +407,27 @@ dd {
   font-variant-numeric: tabular-nums;
 }
 
+.choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.choices button {
+  border-radius: 8px;
+  padding: 6px 14px;
+}
+
+.remux .error {
+  padding: 0;
+}
+
+a.open-file {
+  display: inline-block;
+  text-decoration: none;
+}
+
 .map {
   display: flex;
   height: 32px;
@@ -484,7 +508,7 @@ dd {
     order: 1;
     flex-basis: 100%;
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
   .tabs button {

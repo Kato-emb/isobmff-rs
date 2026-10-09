@@ -2,6 +2,10 @@ const PAGE_LENGTH = 500;
 const HEX_LENGTH = 4096;
 const BOX_HEX_LENGTH = 512;
 const NARROW_HEX_WIDTH = 600;
+const OUTPUTS = {
+  Fragmented: { label: "Fragmented MP4", suffix: "frag" },
+  NonFragmented: { label: "Non-fragmented MP4", suffix: "nonfrag" },
+};
 const HANDLERS = { vide: "Video", soun: "Audio", hint: "Hint", meta: "Metadata", text: "Text", subt: "Subtitles", sbtl: "Subtitles" };
 const BOX_NAMES = {
   ftyp: "File type", styp: "Segment type", moov: "Movie", mvhd: "Movie header", trak: "Track",
@@ -32,9 +36,11 @@ const VIEWS = {
   boxes: { noun: "box", count: (data) => data.boxes.length, error: (data) => data.boxesError, render: renderBoxes, inspect: inspectBox },
   tracks: { noun: "track", count: (data) => data.tracks.length, error: (data) => data.samplesError, render: renderTracks, inspect: inspectTrack },
   samples: { noun: "sample", count: (data) => data.samples.length, error: (data) => data.samplesError, render: renderSamples, inspect: inspectSample },
+  remux: { render: renderRemux },
 };
 
 let worker;
+let remuxWorker;
 const state = {
   tab: "overview",
   data: null,
@@ -42,6 +48,7 @@ const state = {
   collapsed: new Set(),
   track: null,
   page: 0,
+  remux: null,
 };
 
 function element(tag, attributes = {}, ...children) {
@@ -91,6 +98,7 @@ function open(file) {
   }
   // Terminated so that a reply about an earlier file never lands over this one.
   worker?.terminate();
+  stopRemux();
   worker = new Worker("worker.js", { type: "module" });
   chip.textContent = `${file.name} · reading…`;
   worker.onmessage = ({ data }) => {
@@ -102,6 +110,34 @@ function open(file) {
     loaded(file, { boxes: { error: event.message }, movie: { error: event.message } });
   };
   worker.postMessage({ file });
+}
+
+function stopRemux() {
+  remuxWorker?.terminate();
+  if (state.remux?.url) {
+    URL.revokeObjectURL(state.remux.url);
+  }
+  state.remux = null;
+}
+
+function remuxTo(output) {
+  const { data } = state;
+  const name = `${data.file.name.replace(/\.[^.]*$/, "")}.${OUTPUTS[output].suffix}.mp4`;
+  stopRemux();
+  state.remux = { output, writing: true };
+  render();
+  const finished = (remux) => {
+    remuxWorker.terminate();
+    if (state.data === data) {
+      state.remux = { output, ...remux };
+      render();
+    }
+  };
+  remuxWorker = new Worker("worker.js", { type: "module" });
+  remuxWorker.onmessage = ({ data: reply }) =>
+    finished(reply.error ? { error: reply.error } : { name, size: reply.file.size, url: URL.createObjectURL(reply.file) });
+  remuxWorker.onerror = (event) => finished({ error: event.message });
+  remuxWorker.postMessage({ request: "remux", file: data.file, output, name });
 }
 
 function loaded(file, { boxes, movie }) {
@@ -158,7 +194,7 @@ function render({ keepScroll = false } = {}) {
       ),
     ),
   );
-  main.classList.toggle("wide", tab === "overview" || !data);
+  main.classList.toggle("wide", !VIEWS[tab].inspect || !data);
   if (!data) {
     list.replaceChildren(
       element(
@@ -273,6 +309,52 @@ function renderOverview() {
     ),
   ];
   list.replaceChildren(element("div", { class: "scroll" }, element("div", { class: "overview" }, sections)));
+}
+
+function renderRemux() {
+  const { remux } = state;
+  list.replaceChildren(
+    element(
+      "div",
+      { class: "scroll" },
+      element(
+        "div",
+        { class: "overview" },
+        element(
+          "div",
+          { class: "remux" },
+          element("h2", {}, "Remux"),
+          element(
+            "p",
+            { class: "muted" },
+            "Write the samples of this file out again as a fragmented or a non-fragmented MP4. The output is written in this browser and kept in its storage until the next remux.",
+          ),
+          element(
+            "div",
+            { class: "choices" },
+            Object.entries(OUTPUTS).map(([output, { label }]) =>
+              element(
+                "button",
+                { type: "button", "data-remux": output, disabled: remux?.writing ?? false, "aria-pressed": String(remux?.output === output) },
+                label,
+              ),
+            ),
+          ),
+          remux?.writing ? element("p", { class: "muted" }, "Writing…") : null,
+          remux?.error ? element("p", { class: "error" }, remux.error) : null,
+          remux?.url
+            ? element(
+                "p",
+                {},
+                element("a", { class: "open-file", href: remux.url, download: remux.name }, `Download ${remux.name}`),
+                " ",
+                element("span", { class: "muted" }, bytes(remux.size)),
+              )
+            : null,
+        ),
+      ),
+    ),
+  );
 }
 
 function table(headings, entries) {
@@ -534,7 +616,10 @@ list.addEventListener("click", (event) => {
   const track = event.target.closest("[data-track]");
   const page = event.target.closest("[data-page]");
   const row = event.target.closest("tr[data-index]");
-  if (twisty) {
+  const remux = event.target.closest("[data-remux]");
+  if (remux) {
+    remuxTo(remux.dataset.remux);
+  } else if (twisty) {
     const index = Number(twisty.dataset.twisty);
     if (!state.collapsed.delete(index)) {
       state.collapsed.add(index);
