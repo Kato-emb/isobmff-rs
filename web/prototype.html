@@ -1,0 +1,16 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PROTOTYPE — JS binding remux</title>
+<p>PROTOTYPE — throwaway. Pick a file; results appear below.</p>
+<input id="file" type="file">
+<pre id="result">waiting</pre>
+<script type="module">
+document.querySelector("#file").addEventListener("change", (event) => {
+  const result = document.querySelector("#result");
+  result.textContent = "running";
+  const worker = new Worker("prototype-worker.js", { type: "module" });
+  worker.onmessage = ({ data }) => { result.textContent = JSON.stringify(data, (key, value) => typeof value === "bigint" ? String(value) : value, 1); result.dataset.done = "1"; };
+  worker.onerror = (event) => { result.textContent = `worker error: ${event.message}`; result.dataset.done = "1"; };
+  worker.postMessage({ file: event.target.files[0] });
+});
+</script>

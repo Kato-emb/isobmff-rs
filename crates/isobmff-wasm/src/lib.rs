@@ -20,6 +20,7 @@ use crate::source::{BlobSource, js_integer};
 
 mod demux;
 mod dump;
+mod prototype_js_binding;
 mod remux;
 mod sink;
 mod source;
