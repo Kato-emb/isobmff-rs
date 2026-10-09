@@ -202,17 +202,41 @@ impl TrackBox {
             HeaderDuration::from_derived(match self.edts.as_ref().and_then(EditBox::elst) {
                 Some(elst) => elst.duration(),
                 None => media_header.duration().get().and_then(|media_duration| {
-                    let media_timescale = NonZeroU32::new(media_header.timescale())?;
-                    let scaled =
-                        u128::from(media_duration).checked_mul(u128::from(movie_timescale))?;
-
-                    u64::try_from(scaled.div_ceil(u128::from(media_timescale.get()))).ok()
+                    to_movie_timescale(media_duration, media_header.timescale(), movie_timescale)
                 }),
             });
 
         self.tkhd = self.tkhd.clone().with_duration(duration);
 
         duration
+    }
+
+    /// Gives a last edit of length 0 the length of the media left from its `media_time`
+    ///
+    /// The edit lasts until the composition of the media ends, its length
+    /// converted to `movie_timescale` and rounded up to the next whole unit,
+    /// as [`EditListBox::with_last_edit_filled`](crate::EditListBox::with_last_edit_filled)
+    /// fills it. The edits are left as they are where the time the composition
+    /// of the media ends at cannot be determined or does not lie past the
+    /// `media_time`, where the media's time scale is 0, or where the length
+    /// reaches past [`u64::MAX`].
+    pub(crate) fn fill_last_edit(&mut self, movie_timescale: u32) {
+        let Some(filled) = self.edts.as_ref().and_then(EditBox::elst).and_then(|elst| {
+            elst.with_last_edit_filled(|media_time| {
+                let left = self
+                    .mdia
+                    .minf()
+                    .stbl()
+                    .composition_end()?
+                    .checked_sub(media_time)?;
+
+                to_movie_timescale(left, self.mdia.mdhd().timescale(), movie_timescale)
+            })
+        }) else {
+            return;
+        };
+
+        self.edts = self.edts.take().map(|edts| edts.with_elst(filled));
     }
 
     /// Returns the edits that map the track's media onto the movie's timeline, if the track has them and they read
@@ -238,6 +262,16 @@ impl TrackBox {
     pub fn other_boxes(&self) -> &[AnyBox] {
         self.other_boxes.as_slice()
     }
+}
+
+/// Returns `duration`, in `media_timescale`, converted to `movie_timescale` and rounded up to the next whole unit
+///
+/// Returns `None` where `media_timescale` is 0 or the result reaches past [`u64::MAX`].
+fn to_movie_timescale(duration: u64, media_timescale: u32, movie_timescale: u32) -> Option<u64> {
+    let media_timescale = NonZeroU32::new(media_timescale)?;
+    let scaled = u128::from(duration).checked_mul(u128::from(movie_timescale))?;
+
+    u64::try_from(scaled.div_ceil(u128::from(media_timescale.get()))).ok()
 }
 
 impl BoxDefinition for TrackBox {

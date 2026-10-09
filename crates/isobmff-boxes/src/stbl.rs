@@ -1,5 +1,7 @@
 //! [`SampleTableBox`] (`stbl`), ISO/IEC 14496-12 §8.5.1
 
+use core::iter;
+
 use isobmff_core::{
     AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, ChildBoxes, Error, FieldReader,
     FieldWriter, OtherBoxes,
@@ -7,6 +9,7 @@ use isobmff_core::{
 
 use crate::chunk_offset::ChunkOffsets;
 use crate::ctts::CompositionOffsetBox;
+use crate::data_types::CompositionTimeOffset;
 use crate::padb::PaddingBitsBox;
 use crate::sample_size::SampleSizes;
 use crate::sdtp::SampleDependencyTypeBox;
@@ -225,6 +228,30 @@ impl SampleTableBox {
     #[must_use]
     pub fn other_boxes(&self) -> &[AnyBox] {
         self.other_boxes.as_slice()
+    }
+
+    /// Returns the time the composition of the media ends at, in the media's time scale
+    ///
+    /// The composition of a sample starts at its decode time plus its `ctts`
+    /// offset (ISO/IEC 14496-12 §8.6.1.3) and lasts its `stts` delta; the
+    /// composition of the media ends where the latest of them ends. Returns `None` for a table
+    /// with no samples, or where that time falls below 0 or past [`u64::MAX`].
+    pub(crate) fn composition_end(&self) -> Option<u64> {
+        let offsets = self
+            .ctts
+            .iter()
+            .flat_map(CompositionOffsetBox::offsets)
+            .map(CompositionTimeOffset::get)
+            .chain(iter::repeat(0));
+        let mut decode_time = 0_i128;
+        let mut end = None;
+        for (delta, offset) in self.stts.deltas().zip(offsets) {
+            let composed = decode_time.checked_add(i128::from(offset))?;
+            decode_time = decode_time.checked_add(i128::from(delta))?;
+            end = end.max(Some(composed.checked_add(i128::from(delta))?));
+        }
+
+        u64::try_from(end?).ok()
     }
 }
 

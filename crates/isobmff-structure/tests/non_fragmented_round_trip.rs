@@ -10,7 +10,10 @@ mod reading;
 #[cfg(test)]
 mod tests {
     use super::reading::samples_of;
-    use isobmff_boxes::{FileTypeBox, HeaderDuration, MovieBox, MovieHeaderBox, SampleFlags};
+    use isobmff_boxes::{
+        EditBox, EditListBox, EditListEntry, FileTypeBox, HeaderDuration, MediaRate, MovieBox,
+        MovieHeaderBox, SampleFlags,
+    };
     use isobmff_core::{BoxType, FourCc, Mp4EpochSeconds};
     use isobmff_sample::{Sample, SampleProperties};
     use isobmff_sequence::BoxEvent;
@@ -174,6 +177,49 @@ mod tests {
                 .clone()
                 .with_duration(duration(media_duration));
         }
+        assert_eq!(read, &expected);
+    }
+
+    #[test]
+    fn a_last_edit_of_length_0_is_laid_down_lasting_until_the_last_composition_ends() {
+        let edits = |segment_duration| {
+            EditBox::new().with_elst(EditListBox::new(vec![
+                EditListEntry::new(500, None, MediaRate::NORMAL),
+                EditListEntry::new(segment_duration, Some(3_000), MediaRate::NORMAL),
+            ]))
+        };
+        let mut movie = movie_timed_in(1_000);
+        let track = movie.trak_by_id_mut(1).unwrap();
+        *track = track.clone().with_edts(edits(0));
+        let composed_late = |decode_time, sample_composition_time_offset| {
+            Sample::new(
+                SampleProperties {
+                    track_id: 1,
+                    decode_time,
+                    sample_duration: 3_000,
+                    sample_composition_time_offset,
+                    sample_flags: SampleFlags::ZERO,
+                    sample_description_index: 1,
+                },
+                b"VIDEO".to_vec(),
+            )
+        };
+        let chunks = vec![vec![
+            composed_late(0, 3_000),
+            composed_late(3_000, 6_000),
+            composed_late(6_000, 0),
+        ]];
+        let file = written_file(None, movie, chunks);
+
+        let mut demux_fsm = MovieDemuxFsm::new();
+        demux_fsm.handle_input(0, &file).unwrap();
+        let read = demux_fsm.movie().unwrap().trak_by_id(1).unwrap();
+
+        let mut expected = read.clone().with_edts(edits(100));
+        *expected.tkhd_mut() = read
+            .tkhd()
+            .clone()
+            .with_duration(HeaderDuration::new(600).unwrap());
         assert_eq!(read, &expected);
     }
 }

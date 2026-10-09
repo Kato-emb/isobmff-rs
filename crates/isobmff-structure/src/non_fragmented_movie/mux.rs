@@ -57,10 +57,12 @@ use crate::{Error, compact_box_header, whole_box_header, whole_payload};
 ///   it was handed over with. With the tables in, the durations of the
 ///   `mdhd`, `tkhd` and `mvhd` are updated from them, as
 ///   [`MovieBox::update_durations`] updates them (ISO/IEC 14496-12 §8.4.2.3,
-///   §8.3.2.3, §8.2.2.3): an edit list handed over is laid down as it
-///   stands and the track lasts the sum of its edits, and the media of a
-///   track whose tables are empty lasts 0, as does the track unless an edit
-///   list says otherwise. The samples are checked against the movie as they
+///   §8.3.2.3, §8.2.2.3). An edit list handed over is laid down as it
+///   stands, but for a last edit of length 0 that plays the media at normal
+///   rate, which is given the length of the media left from its `media_time`
+///   as [`MovieBox::update_durations`] gives it. The track lasts the sum of
+///   its edits. The media of a track whose tables are empty lasts 0, as does
+///   the track unless an edit list says otherwise. The samples are checked against the movie as they
 ///   are handed over, as [`SampleTableWriter`] checks them.
 /// * A chunk is opened by [`begin_chunk`](Self::begin_chunk), carries the
 ///   samples handed over next, and is laid down as one `mdat` when
