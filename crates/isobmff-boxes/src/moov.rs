@@ -184,7 +184,7 @@ impl MovieBox {
             .find(|track| track.tkhd().track_id() == track_id)
     }
 
-    /// Updates the duration of the movie, its tracks and their media from the tables the movie holds
+    /// Updates the duration of the movie, its tracks, their edits and their media from the tables the movie holds
     ///
     /// Every track that read, one with no samples as well, is updated; a
     /// `trak` kept among [`other_boxes`](Self::other_boxes) is neither updated
@@ -193,6 +193,12 @@ impl MovieBox {
     /// * `mdhd` (ISO/IEC 14496-12 §8.4.2.3): as
     ///   [`MediaBox::update_duration`](crate::MediaBox::update_duration)
     ///   updates it, the length of the media.
+    /// * `elst`, in a movie with no `mvex`: a last edit of length 0 that plays
+    ///   the media at [`MediaRate::NORMAL`](crate::MediaRate::NORMAL) lasts the
+    ///   rest of the media, from its `media_time` until the composition of the
+    ///   media ends, converted to the movie's time scale and rounded up to the
+    ///   next whole unit. Where that cannot be determined it keeps its length
+    ///   of 0. In a movie with an `mvex` the edits are left as they are.
     /// * `tkhd` (§8.3.2.3): the sum of the `segment_duration` of the track's
     ///   edits, or, for a track with no edit list, the `mdhd` duration converted
     ///   to the movie's time scale and rounded up to the next whole unit.
@@ -209,6 +215,9 @@ impl MovieBox {
         let mut longest = Some(0_u64);
 
         for track in &mut self.trak {
+            if self.mvex.is_none() {
+                track.fill_last_edit(movie_timescale);
+            }
             let duration = track.update_duration(movie_timescale).get();
             longest = longest
                 .zip(duration)
@@ -338,9 +347,11 @@ mod tests {
         HeaderDuration, MovieBox, MovieExtendsBox, MovieHeaderBox, TrackBox, TrackExtendsBox,
     };
     use crate::chunk_offset::ChunkOffsets;
-    use crate::data_types::SampleFlags;
+    use crate::ctts::CompositionOffsetBox;
+    use crate::data_types::{CompositionTimeOffset, SampleFlags};
     use crate::edts::EditBox;
     use crate::edts::tests::edit;
+    use crate::elst::{EditListBox, EditListEntry, MediaRate};
     use crate::mdhd::MediaHeaderBox;
     use crate::minf::tests::kept;
     use crate::mvex::tests::movie_extends;
@@ -401,6 +412,11 @@ mod tests {
         *track.tkhd_mut() = track.tkhd().clone().with_duration(track_duration);
 
         track
+    }
+
+    /// The track with the edits given
+    fn with_edits(track: TrackBox, entries: Vec<EditListEntry>) -> TrackBox {
+        track.with_edts(EditBox::new().with_elst(EditListBox::new(entries)))
     }
 
     /// Extends box setting the defaults of a track the movie does not declare
@@ -685,6 +701,106 @@ mod tests {
                     with_durations(edit_box_alone, duration(2), duration(667)),
                 ],
                 None,
+            ),
+            Some(movie)
+        );
+    }
+
+    #[test]
+    fn a_last_edit_of_length_0_lasts_the_rest_of_the_media_and_the_track_the_sum_of_its_edits() {
+        let edits = |segment_duration| {
+            vec![
+                EditListEntry::new(500, None, MediaRate::NORMAL),
+                EditListEntry::new(segment_duration, Some(1), MediaRate::NORMAL),
+            ]
+        };
+        let open = with_edits(timed_track(1, 3, [1, 1, 1]), edits(0));
+        let mut movie = MovieBox::new(movie_header(0), vec![open], None).unwrap();
+
+        movie.update_durations();
+
+        let filled = with_edits(timed_track(1, 3, [1, 1, 1]), edits(667));
+        assert_eq!(
+            MovieBox::new(
+                movie_header(1_167),
+                vec![with_durations(filled, duration(3), duration(1_167))],
+                None,
+            ),
+            Some(movie)
+        );
+    }
+
+    #[test]
+    fn a_last_edit_of_length_0_lasts_until_the_latest_composition_ends() {
+        let offset = |value| CompositionTimeOffset::new(value).unwrap();
+        let edits = |segment_duration| {
+            vec![EditListEntry::new(
+                segment_duration,
+                Some(1),
+                MediaRate::NORMAL,
+            )]
+        };
+        let mut composed_late = timed_track(1, 3, [1, 1, 1]);
+        let stbl = composed_late.mdia_mut().minf_mut().stbl_mut();
+        *stbl = stbl.clone().with_ctts(
+            CompositionOffsetBox::from_offsets([offset(1), offset(2), offset(0)]).unwrap(),
+        );
+        let open = with_edits(composed_late.clone(), edits(0));
+        let mut movie = MovieBox::new(movie_header(0), vec![open], None).unwrap();
+
+        movie.update_durations();
+
+        let filled = with_edits(composed_late, edits(1_000));
+        assert_eq!(
+            MovieBox::new(
+                movie_header(1_000),
+                vec![with_durations(filled, duration(3), duration(1_000))],
+                None,
+            ),
+            Some(movie)
+        );
+    }
+
+    #[test]
+    fn a_dwell_of_length_0_keeps_its_length() {
+        let dwelling = with_edits(
+            timed_track(1, 3, [1, 1]),
+            vec![EditListEntry::new(0, Some(0), MediaRate::DWELL)],
+        );
+        let mut movie = MovieBox::new(movie_header(0), vec![dwelling.clone()], None).unwrap();
+
+        movie.update_durations();
+
+        assert_eq!(
+            MovieBox::new(
+                movie_header(0),
+                vec![with_durations(dwelling, duration(2), duration(0))],
+                None,
+            ),
+            Some(movie)
+        );
+    }
+
+    #[test]
+    fn a_last_edit_of_length_0_in_a_movie_continued_in_fragments_keeps_its_length() {
+        let continued = with_edits(
+            timed_track(1, 3, [1, 1]),
+            vec![EditListEntry::new(0, Some(0), MediaRate::NORMAL)],
+        );
+        let mut movie = MovieBox::new(
+            movie_header(0),
+            vec![continued.clone()],
+            Some(movie_extends()),
+        )
+        .unwrap();
+
+        movie.update_durations();
+
+        assert_eq!(
+            MovieBox::new(
+                movie_header(0),
+                vec![with_durations(continued, duration(2), duration(0))],
+                Some(movie_extends()),
             ),
             Some(movie)
         );

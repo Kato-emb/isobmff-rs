@@ -153,6 +153,32 @@ impl EditListBox {
         })
     }
 
+    /// Returns the box with its last edit of length 0 lasting what `length` states from its `media_time`
+    ///
+    /// `length` takes the `media_time` of the last edit and returns its
+    /// `segment_duration`, in the movie's time scale. Returns `None`
+    /// where the last edit is not one of length 0 playing the media at
+    /// [`MediaRate::NORMAL`], or where `length` returns `None`.
+    pub(crate) fn with_last_edit_filled(
+        &self,
+        length: impl FnOnce(u64) -> Option<u64>,
+    ) -> Option<Self> {
+        let (last, earlier) = self.entries.split_last()?;
+        let (0, Some(media_time), MediaRate::NORMAL) =
+            (last.segment_duration, last.media_time, last.media_rate)
+        else {
+            return None;
+        };
+        let mut entries = earlier.to_vec();
+        entries.push(EditListEntry::new(
+            length(media_time)?,
+            Some(media_time),
+            MediaRate::NORMAL,
+        ));
+
+        Some(Self::new(entries))
+    }
+
     /// Returns the version whose field width carries the durations and media times of this box
     fn version(&self) -> u8 {
         let within_32_bits = self.entries.iter().all(|entry| {
