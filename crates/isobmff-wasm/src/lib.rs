@@ -1,14 +1,17 @@
 //! The `isobmff` crate as the browser reaches it, through `wasm-bindgen`
 //!
+//! A value of the standard library comes back as a plain JavaScript value,
+//! and a value of the library as a class: `None` is `undefined`, a `u64` a
+//! `BigInt`, a `Vec<u8>` a `Uint8Array`, a `Vec` of another type and a
+//! tuple an array, and a [`core::ops::Range`] an object of `start` and `end`.
+//!
 //! A class named after a library type wraps that type, and its methods are
-//! the library's methods of the same names. A value of another library type
-//! comes back wrapped, a tuple comes back as an array, and a
-//! [`core::ops::Range`] as a [`Range`]. Each variant of an enum carrying data
-//! is read through a method named after it, which returns the variant's data,
-//! or `undefined` for another variant, and `true` or `false` for a variant
-//! carrying none. What the library displays is the `toString` of the class,
-//! a constant is a function of the same name, and the `next` of an iterator
-//! returns the item, or `undefined` once the items are used up.
+//! the library's methods of the same names. Each variant of an enum carrying
+//! data is read through a method named after it, which returns the variant's
+//! data, or `undefined` for another variant, and `true` or `false` for a
+//! variant carrying none. What the library displays is the `toString` of the
+//! class, a constant is a function of the same name, and the `next` of an
+//! iterator returns the item, or `undefined` once the items are used up.
 //!
 //! [`demux()`] and [`remux()`] are not of the library: they take the file as
 //! a `Blob` and read it through `FileReaderSync`, and [`remux()`] writes its
@@ -24,6 +27,7 @@ use std::io::{self, BufWriter};
 
 use isobmff::Mp4EpochSeconds;
 use isobmff::structure;
+use wasm_bindgen::JsCast;
 use wasm_bindgen::JsError;
 use wasm_bindgen::prelude::wasm_bindgen;
 use web_sys::{Blob, FileSystemSyncAccessHandle};
@@ -45,15 +49,25 @@ pub use framing::{BoxHeader, BoxSize, BoxType, Boxes, RawBox};
 pub use remux::Output;
 pub use sequence::{BoxEvent, BoxReader};
 
-/// [`core::ops::Range`] of `u64`, the extent of a file the library hands over
 #[wasm_bindgen]
-#[derive(Debug, Clone, Copy)]
-#[non_exhaustive]
-pub struct Range {
-    /// [`core::ops::Range::start`]
-    pub start: u64,
-    /// [`core::ops::Range::end`]
-    pub end: u64,
+extern "C" {
+    /// [`core::ops::Range`] of `u64` as a plain object of `start` and `end`
+    pub(crate) type Range;
+
+    #[wasm_bindgen(method, setter)]
+    fn set_start(this: &Range, start: u64);
+
+    #[wasm_bindgen(method, setter)]
+    fn set_end(this: &Range, end: u64);
+}
+
+impl From<core::ops::Range<u64>> for Range {
+    fn from(range: core::ops::Range<u64>) -> Self {
+        let object = js_sys::Object::new().unchecked_into::<Self>();
+        object.set_start(range.start);
+        object.set_end(range.end);
+        object
+    }
 }
 
 /// Reason [`demux()`] or [`remux()`] fails: the browser failed it, the input is one it does not take, or the library refused it

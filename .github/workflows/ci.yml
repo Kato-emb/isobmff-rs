@@ -130,6 +130,12 @@ jobs:
           tool: wasm-bindgen@${{ steps.version.outputs.wasm-bindgen }}
       - run: cargo build -p isobmff-wasm --target wasm32-unknown-unknown
       - run: wasm-bindgen --target web --out-dir crates/isobmff-wasm/pkg target/wasm32-unknown-unknown/debug/isobmff_wasm.wasm
+      # Why not the runner's Node: its version moves with the image, and no
+      # package.json marks the generated module as one, so only a Node that
+      # detects module syntax by default loads it.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
       - run: node --test web/test/*.test.js
 
   nightly:

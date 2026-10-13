@@ -61,16 +61,9 @@ impl BoxReader {
 
     /// [`isobmff::sequence::BoxReader::poll_event`], the extent and the event as an array of two
     pub fn poll_event(&mut self) -> Option<Array> {
-        self.0.poll_event().map(|(extent, event)| {
-            Array::of2(
-                &Range {
-                    start: extent.start,
-                    end: extent.end,
-                }
-                .into(),
-                &BoxEvent(event).into(),
-            )
-        })
+        self.0
+            .poll_event()
+            .map(|(extent, event)| Array::of2(&Range::from(extent), &BoxEvent(event).into()))
     }
 
     /// [`isobmff::sequence::BoxReader::finish`]

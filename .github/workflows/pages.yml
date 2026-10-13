@@ -40,6 +40,7 @@ jobs:
       - run: |
           mkdir -p _site/crates/isobmff-wasm
           cp -r web _site/
+          rm -r _site/web/test
           cp -r crates/isobmff-wasm/pkg _site/crates/isobmff-wasm/
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
