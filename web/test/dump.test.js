@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { initSync } from "../../crates/isobmff-wasm/pkg/isobmff_wasm.js";
+import { BoxReader, Boxes, initSync } from "../../crates/isobmff-wasm/pkg/isobmff_wasm.js";
 import { dump } from "../dump.js";
 
 const wasm = initSync({ module: readFileSync(new URL("../../crates/isobmff-wasm/pkg/isobmff_wasm_bg.wasm", import.meta.url)) });
@@ -78,4 +78,43 @@ test("a file ending inside a box is refused by the sequence layer", async () => 
   const truncated = box("free", new Uint8Array(8)).subarray(0, 12);
 
   await assert.rejects(dump(new Blob([truncated])), { message: "box of 16 bytes closed off at 12", kind: "sequence" });
+});
+
+test("the boxes come as plain objects of the shape their interfaces state", () => {
+  const extended = new Uint8Array([0, 0, 0, 1, ...new TextEncoder().encode("free"), 0, 0, 0, 0, 0, 0, 0, 17, 9]);
+  const userType = Uint8Array.from({ length: 16 }, (_, index) => index);
+  const toEndOfFile = box("mdat", new Uint8Array([7]));
+  toEndOfFile.set([0, 0, 0, 0]);
+
+  const boxes = new Boxes(new Uint8Array([...box("free", new Uint8Array([1])), ...extended, ...box("uuid", userType), ...toEndOfFile]));
+
+  assert.deepEqual(
+    [boxes.next(), boxes.next(), boxes.next(), boxes.next(), boxes.next()],
+    [
+      { done: false, value: { header: { boxType: { type: "compact", fourCc: "free" }, size: { type: "compact", size: 9 } }, payload: new Uint8Array([1]) } },
+      { done: false, value: { header: { boxType: { type: "compact", fourCc: "free" }, size: { type: "extended", size: 17n } }, payload: new Uint8Array([9]) } },
+      {
+        done: false,
+        value: { header: { boxType: { type: "extended", userType: "00010203-0405-0607-0809-0a0b0c0d0e0f" }, size: { type: "compact", size: 24 } }, payload: new Uint8Array() },
+      },
+      { done: false, value: { header: { boxType: { type: "compact", fourCc: "mdat" }, size: { type: "toEndOfFile" } }, payload: new Uint8Array([7]) } },
+      { done: true, value: undefined },
+    ],
+  );
+});
+
+test("the events come as plain objects of the shape their interfaces state", () => {
+  const reader = new BoxReader();
+  reader.handleInput(box("free", new Uint8Array([1])));
+  reader.finish();
+
+  const events = [reader.pollEvent(), reader.pollEvent(), reader.pollEvent(), reader.pollEvent()];
+  reader.free();
+
+  assert.deepEqual(events, [
+    [{ start: 0n, end: 8n }, { type: "header", header: { boxType: { type: "compact", fourCc: "free" }, size: { type: "compact", size: 9 } } }],
+    [{ start: 8n, end: 9n }, { type: "payload", payload: new Uint8Array([1]) }],
+    [{ start: 9n, end: 9n }, { type: "end" }],
+    undefined,
+  ]);
 });

@@ -2,29 +2,27 @@
 
 use isobmff::sample;
 use serde::Serialize;
-use tsify::Tsify;
+use wasm_bindgen::prelude::wasm_bindgen;
 
 use crate::Range;
 use crate::boxes::SampleFlags;
 
 /// [`isobmff::sample::SampleProperties`]
-#[derive(Debug, Clone, Serialize, Tsify)]
-#[tsify(large_number_types_as_bigints)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub struct SampleProperties {
+pub(crate) struct SampleProperties {
     /// [`isobmff::sample::SampleProperties::track_id`]
-    pub track_id: u32,
+    track_id: u32,
     /// [`isobmff::sample::SampleProperties::decode_time`]
-    pub decode_time: u64,
+    decode_time: u64,
     /// [`isobmff::sample::SampleProperties::sample_duration`]
-    pub sample_duration: u32,
+    sample_duration: u32,
     /// [`isobmff::sample::SampleProperties::sample_composition_time_offset`]
-    pub sample_composition_time_offset: i64,
+    sample_composition_time_offset: i64,
     /// [`isobmff::sample::SampleProperties::sample_flags`]
-    pub sample_flags: SampleFlags,
+    sample_flags: SampleFlags,
     /// [`isobmff::sample::SampleProperties::sample_description_index`]
-    pub sample_description_index: u32,
+    sample_description_index: u32,
 }
 
 impl From<sample::SampleProperties> for SampleProperties {
@@ -40,18 +38,29 @@ impl From<sample::SampleProperties> for SampleProperties {
     }
 }
 
+#[wasm_bindgen(typescript_custom_section)]
+const SAMPLE_PROPERTIES: &str = r#"
+/** `isobmff::sample::SampleProperties` */
+export interface SampleProperties {
+    trackId: number;
+    decodeTime: bigint;
+    sampleDuration: number;
+    sampleCompositionTimeOffset: bigint;
+    sampleFlags: SampleFlags;
+    sampleDescriptionIndex: number;
+}
+"#;
+
 /// [`isobmff::sample::SampleExtent`]
-#[derive(Debug, Clone, Serialize, Tsify)]
-#[tsify(large_number_types_as_bigints)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub struct SampleExtent {
+pub(crate) struct SampleExtent {
     /// [`isobmff::sample::SampleExtent::properties`]
-    pub properties: SampleProperties,
+    properties: SampleProperties,
     /// [`isobmff::sample::SampleExtent::data_reference_index`]
-    pub data_reference_index: u16,
+    data_reference_index: u16,
     /// [`isobmff::sample::SampleExtent::extent`]
-    pub extent: Range,
+    extent: Range,
 }
 
 impl From<sample::SampleExtent> for SampleExtent {
@@ -63,3 +72,13 @@ impl From<sample::SampleExtent> for SampleExtent {
         }
     }
 }
+
+#[wasm_bindgen(typescript_custom_section)]
+const SAMPLE_EXTENT: &str = r#"
+/** `isobmff::sample::SampleExtent` */
+export interface SampleExtent {
+    properties: SampleProperties;
+    dataReferenceIndex: number;
+    extent: Range;
+}
+"#;

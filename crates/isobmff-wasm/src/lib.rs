@@ -1,15 +1,15 @@
 //! The `isobmff` crate as the browser reaches it, through `wasm-bindgen`
 //!
 //! A box, a state machine, [`BoxReader`] and [`Boxes`] are classes named
-//! after the library's types; every other value is a plain object, whose
-//! TypeScript type is generated and which holds no wasm memory. Methods and
-//! the fields of a plain object are named in camelCase. An enum carrying data
-//! is a union discriminated by `type`, and an enum carrying none the camelCase
-//! name of its variant; a newtype is its inner value, `Option` is
-//! `undefined`, a `u64` or an `i64` a `BigInt`, `Vec<u8>` a `Uint8Array`,
-//! another `Vec` or a tuple an array, and a [`core::ops::Range`] an object of
-//! `start` and `end`. [`Boxes`] is iterable, and a `poll*` method returns
-//! `undefined` once nothing is ready.
+//! after the library's types; every other value is a plain object, built by
+//! `serde-wasm-bindgen`, whose TypeScript type is written by hand beside it
+//! and which holds no wasm memory. Methods and the fields of a plain object
+//! are named in camelCase. An enum carrying data is a union discriminated by
+//! `type`, and an enum carrying none the camelCase name of its variant; a
+//! newtype is its inner value, `Option` is `undefined`, a `u64` or an `i64` a
+//! `BigInt`, `Vec<u8>` a `Uint8Array`, another `Vec` or a tuple an array, and
+//! a [`core::ops::Range`] an object of `start` and `end`. [`Boxes`] is
+//! iterable, and a `poll*` method returns `undefined` once nothing is ready.
 //!
 //! A box a state machine lends is copied once into a root that the box's
 //! class holds; the class of a box within it is a handle holding that root
@@ -35,7 +35,7 @@ use std::io::{self, BufWriter};
 
 use isobmff::Mp4EpochSeconds;
 use serde::Serialize;
-use tsify::Tsify;
+use serde_wasm_bindgen::Serializer;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsError;
 use wasm_bindgen::JsValue;
@@ -55,27 +55,31 @@ mod source;
 mod structure;
 
 pub use boxes::{
-    AnyBox, DegradationPriorityEntry, HandlerBox, HeaderDuration, IsLeading, MediaBox,
-    MediaHeaderBox, MediaInformationBox, MovieBox, PaddingBitsEntry, SampleDependencyTypeEntry,
-    SampleDependsOn, SampleDescriptionBox, SampleFlags, SampleHasRedundancy, SampleIsDependedOn,
-    SampleTableBox, TrackBox, TrackHeaderBox, container_boxes,
+    AnyBox, HandlerBox, MediaBox, MediaHeaderBox, MediaInformationBox, MovieBox,
+    SampleDescriptionBox, SampleTableBox, TrackBox, TrackHeaderBox, container_boxes,
 };
-pub use framing::{BoxHeader, BoxSize, BoxType, Boxes, FourCc, IteratorStep, RawBox};
+pub use framing::{Boxes, JsBoxType, JsIteratorStep};
 pub use remux::Output;
-pub use sample::{SampleExtent, SampleProperties};
-pub use sequence::{BoxEvent, BoxReader};
-pub use structure::{MovieSampleExtentFsm, WantedInput};
+pub use sequence::{BoxReader, JsPolledEvent};
+pub use structure::{JsSampleExtent, JsWantedInput, MovieSampleExtentFsm};
 
 /// [`core::ops::Range`] of `u64`
-#[derive(Debug, Clone, Copy, Serialize, Tsify)]
-#[tsify(large_number_types_as_bigints)]
-#[non_exhaustive]
-pub struct Range {
+#[derive(Debug, Clone, Copy, Serialize)]
+pub(crate) struct Range {
     /// [`core::ops::Range::start`]
-    pub start: u64,
+    start: u64,
     /// [`core::ops::Range::end`]
-    pub end: u64,
+    end: u64,
 }
+
+#[wasm_bindgen(typescript_custom_section)]
+const RANGE: &str = r#"
+/** `core::ops::Range` of `u64` */
+export interface Range {
+    start: bigint;
+    end: bigint;
+}
+"#;
 
 impl From<core::ops::Range<u64>> for Range {
     fn from(range: core::ops::Range<u64>) -> Self {
@@ -105,8 +109,8 @@ impl Failure {
     }
 }
 
-impl From<tsify::Error> for Failure {
-    fn from(error: tsify::Error) -> Self {
+impl From<serde_wasm_bindgen::Error> for Failure {
+    fn from(error: serde_wasm_bindgen::Error) -> Self {
         Self {
             kind: "binding",
             message: error.to_string(),
@@ -170,6 +174,17 @@ fn sample_kind(error: &isobmff::sample::Error) -> &'static str {
         isobmff::sample::Error::Box { .. } => "box",
         _ => "sample",
     }
+}
+
+/// Returns `value` as the plain object `T` names, its `u64`s and `i64`s as `BigInt`s
+///
+/// # Errors
+///
+/// `"binding"`: `value` did not convert to a plain object.
+fn to_plain<T: JsCast>(value: &impl Serialize) -> Result<T, Failure> {
+    Ok(value
+        .serialize(&Serializer::new().serialize_large_number_types_as_bigints(true))?
+        .unchecked_into())
 }
 
 #[wasm_bindgen]

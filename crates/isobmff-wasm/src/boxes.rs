@@ -5,11 +5,10 @@ use core::cell::RefCell;
 
 use isobmff::boxes;
 use serde::Serialize;
-use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::wasm_bindgen;
 
-use crate::Failure;
-use crate::framing::{BoxType, FourCc};
+use crate::framing::{BoxType, JsBoxType};
+use crate::{Failure, to_plain};
 
 /// [`isobmff::boxes::CONTAINER_BOXES`], called as a function
 ///
@@ -17,23 +16,17 @@ use crate::framing::{BoxType, FourCc};
 ///
 /// `"binding"`: a value did not convert to a plain object.
 #[wasm_bindgen(js_name = CONTAINER_BOXES)]
-pub fn container_boxes() -> Result<Vec<Ts<BoxType>>, Failure> {
-    Ok(boxes::CONTAINER_BOXES
+pub fn container_boxes() -> Result<Vec<JsBoxType>, Failure> {
+    boxes::CONTAINER_BOXES
         .iter()
-        .map(|&box_type| BoxType::from(box_type).into_ts())
-        .collect::<Result<_, _>>()?)
+        .map(|&box_type| to_plain(&BoxType::from(box_type)))
+        .collect()
 }
 
-/// [`isobmff::boxes::HeaderDuration`], the duration it states or none where it is indeterminate
-#[derive(Debug, Clone, Copy, Serialize, Tsify)]
-#[tsify(large_number_types_as_bigints)]
-pub struct HeaderDuration(Option<u64>);
-
 /// [`isobmff::boxes::IsLeading`]
-#[derive(Debug, Clone, Copy, Serialize, Tsify)]
+#[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub enum IsLeading {
+enum IsLeading {
     /// [`isobmff::boxes::IsLeading::Unknown`]
     Unknown,
     /// [`isobmff::boxes::IsLeading::LeadingWithDependency`]
@@ -45,10 +38,9 @@ pub enum IsLeading {
 }
 
 /// [`isobmff::boxes::SampleDependsOn`]
-#[derive(Debug, Clone, Copy, Serialize, Tsify)]
+#[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub enum SampleDependsOn {
+enum SampleDependsOn {
     /// [`isobmff::boxes::SampleDependsOn::Unknown`]
     Unknown,
     /// [`isobmff::boxes::SampleDependsOn::DependsOnOthers`]
@@ -60,10 +52,9 @@ pub enum SampleDependsOn {
 }
 
 /// [`isobmff::boxes::SampleIsDependedOn`]
-#[derive(Debug, Clone, Copy, Serialize, Tsify)]
+#[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub enum SampleIsDependedOn {
+enum SampleIsDependedOn {
     /// [`isobmff::boxes::SampleIsDependedOn::Unknown`]
     Unknown,
     /// [`isobmff::boxes::SampleIsDependedOn::NotDisposable`]
@@ -75,10 +66,9 @@ pub enum SampleIsDependedOn {
 }
 
 /// [`isobmff::boxes::SampleHasRedundancy`]
-#[derive(Debug, Clone, Copy, Serialize, Tsify)]
+#[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub enum SampleHasRedundancy {
+enum SampleHasRedundancy {
     /// [`isobmff::boxes::SampleHasRedundancy::Unknown`]
     Unknown,
     /// [`isobmff::boxes::SampleHasRedundancy::RedundantCoding`]
@@ -90,18 +80,17 @@ pub enum SampleHasRedundancy {
 }
 
 /// [`isobmff::boxes::SampleDependencyTypeEntry`]
-#[derive(Debug, Clone, Copy, Serialize, Tsify)]
+#[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub struct SampleDependencyTypeEntry {
+struct SampleDependencyTypeEntry {
     /// [`isobmff::boxes::SampleDependencyTypeEntry::is_leading`]
-    pub is_leading: IsLeading,
+    is_leading: IsLeading,
     /// [`isobmff::boxes::SampleDependencyTypeEntry::sample_depends_on`]
-    pub sample_depends_on: SampleDependsOn,
+    sample_depends_on: SampleDependsOn,
     /// [`isobmff::boxes::SampleDependencyTypeEntry::sample_is_depended_on`]
-    pub sample_is_depended_on: SampleIsDependedOn,
+    sample_is_depended_on: SampleIsDependedOn,
     /// [`isobmff::boxes::SampleDependencyTypeEntry::sample_has_redundancy`]
-    pub sample_has_redundancy: SampleHasRedundancy,
+    sample_has_redundancy: SampleHasRedundancy,
 }
 
 impl From<boxes::SampleDependencyTypeEntry> for SampleDependencyTypeEntry {
@@ -140,34 +129,31 @@ impl From<boxes::SampleDependencyTypeEntry> for SampleDependencyTypeEntry {
 }
 
 /// [`isobmff::boxes::PaddingBitsEntry`]
-#[derive(Debug, Clone, Copy, Serialize, Tsify)]
-#[non_exhaustive]
-pub struct PaddingBitsEntry {
+#[derive(Debug, Clone, Copy, Serialize)]
+struct PaddingBitsEntry {
     /// [`isobmff::boxes::PaddingBitsEntry::pad`]
-    pub pad: u8,
+    pad: u8,
 }
 
 /// [`isobmff::boxes::DegradationPriorityEntry`]
-#[derive(Debug, Clone, Copy, Serialize, Tsify)]
-#[non_exhaustive]
-pub struct DegradationPriorityEntry {
+#[derive(Debug, Clone, Copy, Serialize)]
+struct DegradationPriorityEntry {
     /// [`isobmff::boxes::DegradationPriorityEntry::priority`]
-    pub priority: u16,
+    priority: u16,
 }
 
 /// [`isobmff::boxes::SampleFlags`], its fields as the tables stating them do
-#[derive(Debug, Clone, Copy, Serialize, Tsify)]
+#[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub struct SampleFlags {
+pub(crate) struct SampleFlags {
     /// [`isobmff::boxes::SampleFlags::sample_dependency_type`]
-    pub sample_dependency_type: SampleDependencyTypeEntry,
+    sample_dependency_type: SampleDependencyTypeEntry,
     /// [`isobmff::boxes::SampleFlags::padding_bits`]
-    pub padding_bits: PaddingBitsEntry,
+    padding_bits: PaddingBitsEntry,
     /// [`isobmff::boxes::SampleFlags::sample_is_non_sync_sample`]
-    pub sample_is_non_sync_sample: bool,
+    sample_is_non_sync_sample: bool,
     /// [`isobmff::boxes::SampleFlags::degradation_priority`]
-    pub degradation_priority: DegradationPriorityEntry,
+    degradation_priority: DegradationPriorityEntry,
 }
 
 impl From<boxes::SampleFlags> for SampleFlags {
@@ -184,6 +170,47 @@ impl From<boxes::SampleFlags> for SampleFlags {
         }
     }
 }
+
+#[wasm_bindgen(typescript_custom_section)]
+const SAMPLE_FLAGS: &str = r#"
+/** `isobmff::boxes::IsLeading` */
+export type IsLeading = "unknown" | "leadingWithDependency" | "notLeading" | "leadingWithoutDependency";
+
+/** `isobmff::boxes::SampleDependsOn` */
+export type SampleDependsOn = "unknown" | "dependsOnOthers" | "doesNotDependOnOthers" | "reserved";
+
+/** `isobmff::boxes::SampleIsDependedOn` */
+export type SampleIsDependedOn = "unknown" | "notDisposable" | "disposable" | "reserved";
+
+/** `isobmff::boxes::SampleHasRedundancy` */
+export type SampleHasRedundancy = "unknown" | "redundantCoding" | "noRedundantCoding" | "reserved";
+
+/** `isobmff::boxes::SampleDependencyTypeEntry` */
+export interface SampleDependencyTypeEntry {
+    isLeading: IsLeading;
+    sampleDependsOn: SampleDependsOn;
+    sampleIsDependedOn: SampleIsDependedOn;
+    sampleHasRedundancy: SampleHasRedundancy;
+}
+
+/** `isobmff::boxes::PaddingBitsEntry` */
+export interface PaddingBitsEntry {
+    pad: number;
+}
+
+/** `isobmff::boxes::DegradationPriorityEntry` */
+export interface DegradationPriorityEntry {
+    priority: number;
+}
+
+/** `isobmff::boxes::SampleFlags`, its fields as the tables stating them do */
+export interface SampleFlags {
+    sampleDependencyType: SampleDependencyTypeEntry;
+    paddingBits: PaddingBitsEntry;
+    sampleIsNonSyncSample: boolean;
+    degradationPriority: DegradationPriorityEntry;
+}
+"#;
 
 /// The path to one `trak` of a root `moov`, followed again on every call
 #[derive(Debug, Clone)]
@@ -313,17 +340,13 @@ impl MediaHeaderBox {
         self.0.read(|trak| trak.mdia().mdhd().timescale())
     }
 
-    /// [`isobmff::boxes::MediaHeaderBox::duration`]
+    /// [`isobmff::boxes::MediaHeaderBox::duration`], none where it is indeterminate
     ///
     /// # Errors
     ///
-    /// `"handle"`: the path leads to no box; `"binding"`: the value did not
-    /// convert to a plain object.
-    pub fn duration(&self) -> Result<Ts<HeaderDuration>, Failure> {
-        Ok(self
-            .0
-            .read(|trak| HeaderDuration(trak.mdia().mdhd().duration().get()))?
-            .into_ts()?)
+    /// `"handle"`: the path leads to no box.
+    pub fn duration(&self) -> Result<Option<u64>, Failure> {
+        self.0.read(|trak| trak.mdia().mdhd().duration().get())
     }
 }
 
@@ -335,15 +358,15 @@ pub struct HandlerBox(TrackPath);
 
 #[wasm_bindgen]
 impl HandlerBox {
-    /// [`isobmff::boxes::HandlerBox::handler_type`]
+    /// [`isobmff::boxes::HandlerBox::handler_type`], the four characters as [`isobmff::FourCc`] displays them
     ///
     /// # Errors
     ///
-    /// `"handle"`: the path leads to no box; `"binding"`: the value did not
-    /// convert to a plain object.
+    /// `"handle"`: the path leads to no box.
     #[wasm_bindgen(js_name = handlerType)]
-    pub fn handler_type(&self) -> Result<Ts<FourCc>, Failure> {
-        Ok(FourCc::from(self.0.read(|trak| trak.mdia().hdlr().handler_type())?).into_ts()?)
+    pub fn handler_type(&self) -> Result<String, Failure> {
+        self.0
+            .read(|trak| trak.mdia().hdlr().handler_type().to_string())
     }
 }
 
@@ -420,7 +443,7 @@ impl AnyBox {
     /// `"handle"`: the path leads to no box; `"binding"`: the value did not
     /// convert to a plain object.
     #[wasm_bindgen(js_name = boxType)]
-    pub fn box_type(&self) -> Result<Ts<BoxType>, Failure> {
+    pub fn box_type(&self) -> Result<JsBoxType, Failure> {
         let box_type = self
             .track
             .read(|trak| {
@@ -433,6 +456,6 @@ impl AnyBox {
                     .map(isobmff::AnyBox::box_type)
             })?
             .ok_or_else(Failure::handle)?;
-        Ok(BoxType::from(box_type).into_ts()?)
+        to_plain(&BoxType::from(box_type))
     }
 }

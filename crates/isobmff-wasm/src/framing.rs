@@ -3,14 +3,24 @@
 use alloc::vec;
 
 use serde::Serialize;
-use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::wasm_bindgen;
 
-use crate::Failure;
+use crate::{Failure, to_plain};
+
+#[wasm_bindgen]
+extern "C" {
+    /// [`isobmff::BoxType`] as the plain object `BoxType`
+    #[wasm_bindgen(typescript_type = "BoxType")]
+    pub type JsBoxType;
+
+    /// One step of [`Boxes`] as the plain object `IteratorResult` the iterator protocol of JavaScript states
+    #[wasm_bindgen(typescript_type = "IteratorResult<RawBox, undefined>")]
+    pub type JsIteratorStep;
+}
 
 /// [`isobmff::FourCc`], the four characters as [`isobmff::FourCc`] displays them
-#[derive(Debug, Clone, Serialize, Tsify)]
-pub struct FourCc(String);
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct FourCc(String);
 
 impl From<isobmff::FourCc> for FourCc {
     fn from(four_cc: isobmff::FourCc) -> Self {
@@ -18,21 +28,24 @@ impl From<isobmff::FourCc> for FourCc {
     }
 }
 
+#[wasm_bindgen(typescript_custom_section)]
+const FOUR_CC: &str = r#"
+/** `isobmff::FourCc`, the four characters as it displays them */
+export type FourCc = string;
+"#;
+
 /// [`isobmff::BoxType`]
-#[derive(Debug, Clone, Serialize, Tsify)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
-#[non_exhaustive]
-pub enum BoxType {
+pub(crate) enum BoxType {
     /// [`isobmff::BoxType::Compact`]
     #[serde(rename_all = "camelCase")]
-    #[non_exhaustive]
     Compact {
         /// [`isobmff::CompactType::four_cc`]
         four_cc: FourCc,
     },
     /// [`isobmff::BoxType::Extended`]
     #[serde(rename_all = "camelCase")]
-    #[non_exhaustive]
     Extended {
         /// The `usertype`, as [`isobmff::Uuid`] displays it
         user_type: String,
@@ -52,20 +65,22 @@ impl From<isobmff::BoxType> for BoxType {
     }
 }
 
+#[wasm_bindgen(typescript_custom_section)]
+const BOX_TYPE: &str = r#"
+/** `isobmff::BoxType` */
+export type BoxType = { type: "compact"; fourCc: FourCc } | { type: "extended"; userType: string };
+"#;
+
 /// [`isobmff::BoxSize`]
-#[derive(Debug, Clone, Copy, Serialize, Tsify)]
-#[tsify(large_number_types_as_bigints)]
+#[derive(Debug, Clone, Copy, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
-#[non_exhaustive]
-pub enum BoxSize {
+pub(crate) enum BoxSize {
     /// [`isobmff::BoxSize::Compact`]
-    #[non_exhaustive]
     Compact {
         /// [`isobmff::CompactSize::get`]
         size: u32,
     },
     /// [`isobmff::BoxSize::Extended`]
-    #[non_exhaustive]
     Extended {
         /// [`isobmff::ExtendedSize::get`]
         size: u64,
@@ -88,16 +103,20 @@ impl From<isobmff::BoxSize> for BoxSize {
     }
 }
 
+#[wasm_bindgen(typescript_custom_section)]
+const BOX_SIZE: &str = r#"
+/** `isobmff::BoxSize` */
+export type BoxSize = { type: "compact"; size: number } | { type: "extended"; size: bigint } | { type: "toEndOfFile" };
+"#;
+
 /// [`isobmff::BoxHeader`]
-#[derive(Debug, Clone, Serialize, Tsify)]
-#[tsify(large_number_types_as_bigints)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub struct BoxHeader {
+pub(crate) struct BoxHeader {
     /// [`isobmff::BoxHeader::box_type`]
-    pub box_type: BoxType,
+    box_type: BoxType,
     /// [`isobmff::BoxHeader::size`]
-    pub size: BoxSize,
+    size: BoxSize,
 }
 
 impl From<isobmff::BoxHeader> for BoxHeader {
@@ -109,28 +128,41 @@ impl From<isobmff::BoxHeader> for BoxHeader {
     }
 }
 
+#[wasm_bindgen(typescript_custom_section)]
+const BOX_HEADER: &str = r#"
+/** `isobmff::BoxHeader` */
+export interface BoxHeader {
+    boxType: BoxType;
+    size: BoxSize;
+}
+"#;
+
 /// [`isobmff::RawBox`], owning a copy of its payload
-#[derive(Debug, Clone, Serialize, Tsify)]
-#[tsify(large_number_types_as_bigints)]
-#[non_exhaustive]
-pub struct RawBox {
+#[derive(Debug, Clone, Serialize)]
+struct RawBox {
     /// [`isobmff::RawBox::header`]
-    pub header: BoxHeader,
+    header: BoxHeader,
     /// [`isobmff::RawBox::payload`]
     #[serde(with = "serde_bytes")]
-    #[tsify(type = "Uint8Array")]
-    pub payload: Vec<u8>,
+    payload: Vec<u8>,
 }
 
+#[wasm_bindgen(typescript_custom_section)]
+const RAW_BOX: &str = r#"
+/** `isobmff::RawBox`, owning a copy of its payload */
+export interface RawBox {
+    header: BoxHeader;
+    payload: Uint8Array;
+}
+"#;
+
 /// One step of [`Boxes`] as the iterator protocol of JavaScript states it
-#[derive(Debug, Serialize, Tsify)]
-#[tsify(large_number_types_as_bigints)]
-#[non_exhaustive]
-pub struct IteratorStep {
+#[derive(Debug, Serialize)]
+struct IteratorStep {
     /// Whether the boxes are used up
-    pub done: bool,
+    done: bool,
     /// The box the step yields, none once the boxes are used up
-    pub value: Option<RawBox>,
+    value: Option<RawBox>,
 }
 
 /// [`isobmff::Boxes`] over a copy of its input, iterable
@@ -164,8 +196,8 @@ impl Boxes {
     ///
     /// `"box"`: the error [`isobmff::Boxes`] yields, after which every step is
     /// done; `"binding"`: the box did not convert to a plain object.
-    #[wasm_bindgen(js_name = next, unchecked_return_type = "IteratorResult<RawBox, undefined>")]
-    pub fn next_box(&mut self) -> Result<Ts<IteratorStep>, Failure> {
+    #[wasm_bindgen(js_name = next)]
+    pub fn next_box(&mut self) -> Result<JsIteratorStep, Failure> {
         let step = self.0.next().transpose();
         if !matches!(step, Ok(Some(_))) {
             // Why not keep the buffer once the boxes are used up or failed: the
@@ -175,11 +207,10 @@ impl Boxes {
             self.0 = Vec::new().into_iter();
         }
         let value = step?;
-        Ok(IteratorStep {
+        to_plain(&IteratorStep {
             done: value.is_none(),
             value,
-        }
-        .into_ts()?)
+        })
     }
 
     /// Returns the boxes themselves, so that `for…of` walks them

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { initSync } from "../../crates/isobmff-wasm/pkg/isobmff_wasm.js";
+import { MovieSampleExtentFsm, initSync } from "../../crates/isobmff-wasm/pkg/isobmff_wasm.js";
 import { demux } from "../demux.js";
 
 const wasm = initSync({ module: readFileSync(new URL("../../crates/isobmff-wasm/pkg/isobmff_wasm_bg.wasm", import.meta.url)) });
@@ -102,4 +102,35 @@ test("reading a movie of many samples again leaves the wasm memory as it was", a
 
   assert.equal(demuxed.samples.length, sizes.length);
   assert.equal(wasm.memory.buffer.byteLength, used);
+});
+
+test("the wanted input and the sample extents come as plain objects of the shape their interfaces state", () => {
+  const chunkOffset = movie(0).length + 8;
+  const fsm = new MovieSampleExtentFsm();
+  const wanted = fsm.wantedInput();
+  fsm.handleInput(0n, movie(chunkOffset));
+
+  const extent = fsm.pollSampleExtent();
+  const duration = fsm.movie().trak()[0].mdia().mdhd().duration();
+  fsm.free();
+
+  assert.deepEqual(wanted, { offset: 0n, length: undefined });
+  assert.deepEqual(extent, {
+    properties: {
+      trackId: 1,
+      decodeTime: 0n,
+      sampleDuration: 3000,
+      sampleCompositionTimeOffset: 0n,
+      sampleFlags: {
+        sampleDependencyType: { isLeading: "unknown", sampleDependsOn: "unknown", sampleIsDependedOn: "unknown", sampleHasRedundancy: "unknown" },
+        paddingBits: { pad: 0 },
+        sampleIsNonSyncSample: false,
+        degradationPriority: { priority: 0 },
+      },
+      sampleDescriptionIndex: 1,
+    },
+    dataReferenceIndex: 1,
+    extent: { start: BigInt(chunkOffset), end: BigInt(chunkOffset + 4) },
+  });
+  assert.equal(duration, 0n);
 });

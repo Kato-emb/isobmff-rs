@@ -1,33 +1,32 @@
 //! [`isobmff::sequence`]: [`BoxReader`] and the [`BoxEvent`]s it reports
 
 use isobmff::sequence;
-use js_sys::Array;
 use serde::Serialize;
-use tsify::Tsify;
-use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::wasm_bindgen;
 
 use crate::framing::BoxHeader;
-use crate::{Failure, Range};
+use crate::{Failure, Range, to_plain};
+
+#[wasm_bindgen]
+extern "C" {
+    /// [`isobmff::sequence::BoxEvent`] and its extent as a plain array of a `Range` and a `BoxEvent`
+    #[wasm_bindgen(typescript_type = "[Range, BoxEvent]")]
+    pub type JsPolledEvent;
+}
 
 /// [`isobmff::sequence::BoxEvent`]
-#[derive(Debug, Clone, Serialize, Tsify)]
-#[tsify(large_number_types_as_bigints)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
-#[non_exhaustive]
-pub enum BoxEvent {
+enum BoxEvent {
     /// [`isobmff::sequence::BoxEvent::Header`]
-    #[non_exhaustive]
     Header {
         /// The header read
         header: BoxHeader,
     },
     /// [`isobmff::sequence::BoxEvent::Payload`]
-    #[non_exhaustive]
     Payload {
         /// The bytes of the payload read
         #[serde(with = "serde_bytes")]
-        #[tsify(type = "Uint8Array")]
         payload: Vec<u8>,
     },
     /// [`isobmff::sequence::BoxEvent::End`]
@@ -45,6 +44,12 @@ impl From<sequence::BoxEvent> for BoxEvent {
         }
     }
 }
+
+#[wasm_bindgen(typescript_custom_section)]
+const BOX_EVENT: &str = r#"
+/** `isobmff::sequence::BoxEvent` */
+export type BoxEvent = { type: "header"; header: BoxHeader } | { type: "payload"; payload: Uint8Array } | { type: "end" };
+"#;
 
 /// [`isobmff::sequence::BoxReader`]
 #[wasm_bindgen]
@@ -75,16 +80,11 @@ impl BoxReader {
     /// # Errors
     ///
     /// `"binding"`: the value did not convert to a plain object.
-    #[wasm_bindgen(js_name = pollEvent, unchecked_return_type = "[Range, BoxEvent] | undefined")]
-    pub fn poll_event(&mut self) -> Result<Option<Array>, Failure> {
+    #[wasm_bindgen(js_name = pollEvent)]
+    pub fn poll_event(&mut self) -> Result<Option<JsPolledEvent>, Failure> {
         self.0
             .poll_event()
-            .map(|(extent, event)| {
-                Ok(Array::of2(
-                    &JsValue::from(Range::from(extent).into_ts()?),
-                    &JsValue::from(BoxEvent::from(event).into_ts()?),
-                ))
-            })
+            .map(|(extent, event)| to_plain(&(Range::from(extent), BoxEvent::from(event))))
             .transpose()
     }
 

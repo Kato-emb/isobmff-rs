@@ -2,22 +2,30 @@
 
 use isobmff::structure;
 use serde::Serialize;
-use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::wasm_bindgen;
 
-use crate::Failure;
 use crate::boxes::MovieBox;
 use crate::sample::SampleExtent;
+use crate::{Failure, to_plain};
+
+#[wasm_bindgen]
+extern "C" {
+    /// [`isobmff::sample::SampleExtent`] as the plain object `SampleExtent`
+    #[wasm_bindgen(typescript_type = "SampleExtent")]
+    pub type JsSampleExtent;
+
+    /// [`isobmff::structure::WantedInput`] as the plain object `WantedInput`
+    #[wasm_bindgen(typescript_type = "WantedInput")]
+    pub type JsWantedInput;
+}
 
 /// [`isobmff::structure::WantedInput`]
-#[derive(Debug, Clone, Copy, Serialize, Tsify)]
-#[tsify(large_number_types_as_bigints)]
-#[non_exhaustive]
-pub struct WantedInput {
+#[derive(Debug, Clone, Copy, Serialize)]
+struct WantedInput {
     /// [`isobmff::structure::WantedInput::offset`]
-    pub offset: u64,
+    offset: u64,
     /// [`isobmff::structure::WantedInput::length`]
-    pub length: Option<u64>,
+    length: Option<u64>,
 }
 
 impl From<structure::WantedInput> for WantedInput {
@@ -28,6 +36,15 @@ impl From<structure::WantedInput> for WantedInput {
         }
     }
 }
+
+#[wasm_bindgen(typescript_custom_section)]
+const WANTED_INPUT: &str = r#"
+/** `isobmff::structure::WantedInput` */
+export interface WantedInput {
+    offset: bigint;
+    length: bigint | undefined;
+}
+"#;
 
 /// [`isobmff::structure::MovieSampleExtentFsm`]
 #[wasm_bindgen]
@@ -59,12 +76,11 @@ impl MovieSampleExtentFsm {
     ///
     /// `"binding"`: the value did not convert to a plain object.
     #[wasm_bindgen(js_name = pollSampleExtent)]
-    pub fn poll_sample_extent(&mut self) -> Result<Option<Ts<SampleExtent>>, Failure> {
-        Ok(self
-            .0
+    pub fn poll_sample_extent(&mut self) -> Result<Option<JsSampleExtent>, Failure> {
+        self.0
             .poll_sample_extent()
-            .map(|extent| SampleExtent::from(extent).into_ts())
-            .transpose()?)
+            .map(|extent| to_plain(&SampleExtent::from(extent)))
+            .transpose()
     }
 
     /// [`isobmff::structure::MovieSampleExtentFsm::wanted_input`]
@@ -73,12 +89,11 @@ impl MovieSampleExtentFsm {
     ///
     /// `"binding"`: the value did not convert to a plain object.
     #[wasm_bindgen(js_name = wantedInput)]
-    pub fn wanted_input(&self) -> Result<Option<Ts<WantedInput>>, Failure> {
-        Ok(self
-            .0
+    pub fn wanted_input(&self) -> Result<Option<JsWantedInput>, Failure> {
+        self.0
             .wanted_input()
-            .map(|wanted| WantedInput::from(wanted).into_ts())
-            .transpose()?)
+            .map(|wanted| to_plain(&WantedInput::from(wanted)))
+            .transpose()
     }
 
     /// [`isobmff::structure::MovieSampleExtentFsm::movie`], copied into a root of its own
