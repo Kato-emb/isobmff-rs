@@ -1,10 +1,23 @@
 //! The `isobmff` crate as the browser reaches it, through `wasm-bindgen`
 //!
-//! Each export takes the file as a `Blob` and reads it through
-//! `FileReaderSync`, and [`remux`] writes its output through a
-//! `FileSystemSyncAccessHandle`; both exist only in a worker, so every export
-//! is called from a worker. A failure reaches JavaScript as an `Error` whose
-//! message is the one the library states, or the exception the browser threw.
+//! A class named after a library type wraps that type, and its methods are
+//! the library's methods of the same names. A value of another library type
+//! comes back wrapped, a tuple comes back as an array, and a
+//! [`core::ops::Range`] as a [`Range`]. Each variant of an enum carrying data
+//! is read through a method named after it, which returns the variant's data,
+//! or `undefined` for another variant, and `true` or `false` for a variant
+//! carrying none. What the library displays is the `toString` of the class,
+//! a constant is a function of the same name, and the `next` of an iterator
+//! returns the item, or `undefined` once the items are used up.
+//!
+//! [`demux()`] and [`remux()`] are not of the library: they take the file as
+//! a `Blob` and read it through `FileReaderSync`, and [`remux()`] writes its
+//! output through a `FileSystemSyncAccessHandle`; both exist only in a
+//! worker, so those two are called from a worker. A failure reaches
+//! JavaScript as an `Error` whose message is the one the library states, or
+//! the exception the browser threw.
+
+extern crate alloc;
 
 use core::{error, fmt};
 use std::io::{self, BufWriter};
@@ -18,17 +31,32 @@ use web_sys::{Blob, FileSystemSyncAccessHandle};
 use crate::sink::OpfsSink;
 use crate::source::{BlobSource, js_integer};
 
+mod boxes;
 mod demux;
-mod dump;
+mod framing;
 mod remux;
+mod sequence;
 mod sink;
 mod source;
 
+pub use boxes::container_boxes;
 pub use demux::{Demux, SampleRecord, TrackRecord};
-pub use dump::BoxRecord;
+pub use framing::{BoxHeader, BoxSize, BoxType, Boxes, RawBox};
 pub use remux::Output;
+pub use sequence::{BoxEvent, BoxReader};
 
-/// Reason an export fails: the browser failed it, the input is one an export does not take, or the library refused it
+/// [`core::ops::Range`] of `u64`, the extent of a file the library hands over
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct Range {
+    /// [`core::ops::Range::start`]
+    pub start: u64,
+    /// [`core::ops::Range::end`]
+    pub end: u64,
+}
+
+/// Reason [`demux()`] or [`remux()`] fails: the browser failed it, the input is one it does not take, or the library refused it
 #[derive(Debug)]
 pub(crate) enum Error {
     /// The `Blob` did not read, the output did not write, the clock did not tell the time, or the input is one an export does not take
@@ -65,19 +93,6 @@ impl error::Error for Error {
             Self::Structure(failure) => Some(failure),
         }
     }
-}
-
-/// Returns the boxes `blob` is formed as, each container followed by the boxes it holds
-///
-/// # Errors
-///
-/// The failure of reading `blob`, or the reason the library refuses the boxes
-/// it reads: a box or a header that runs past the end of the file, a declared
-/// size smaller than its header, a box that ends past `u64::MAX`, or a
-/// container whose payload does not divide into boxes.
-#[wasm_bindgen]
-pub fn dump_boxes(blob: Blob) -> Result<Vec<BoxRecord>, JsError> {
-    Ok(dump::dump(BlobSource::new(blob)?)?)
 }
 
 /// Returns the tracks of the movie `blob` carries and the samples its tables declare

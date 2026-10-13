@@ -1,16 +1,16 @@
 //! [`demux`], the tracks of a file and the samples its tables declare
 
+use core::ops::Range;
 use std::io::{self, Read};
 
 use isobmff::boxes::{MovieBox, MovieFragmentBox};
 use isobmff::sample::{SampleExtent, TrackDecodeTimes, movie_fragment, sample_table};
-use isobmff::sequence::BoxEvent;
+use isobmff::sequence::{BoxEvent, BoxReader};
 use isobmff::structure;
 use isobmff::{BoxDecode, BoxDefinition, BoxType};
 use wasm_bindgen::prelude::wasm_bindgen;
 
 use crate::Error;
-use crate::dump::read_boxes;
 
 /// The tracks of a file and the samples its tables declare
 #[wasm_bindgen]
@@ -156,6 +156,36 @@ pub(crate) fn demux<S: Read>(source: S) -> Result<Demux, Error> {
         .collect();
 
     Ok(Demux { tracks, samples })
+}
+
+/// Reads `source` to its end through a box reader, handing each event and the extent of the file it was read from to `on_event`
+///
+/// # Errors
+///
+/// The failure of `source`, the reason the box reader refuses what it reads,
+/// or the failure `on_event` returns, which ends the reading.
+fn read_boxes<S: Read>(
+    mut source: S,
+    mut on_event: impl FnMut(BoxEvent, Range<u64>) -> Result<(), Error>,
+) -> Result<(), Error> {
+    let mut reader = BoxReader::new();
+    let mut cut = vec![0; 64 * 1024];
+    loop {
+        let read = source.read(&mut cut)?;
+        if read == 0 {
+            reader.finish().map_err(structure::Error::from)?;
+        } else {
+            reader
+                .handle_input(cut.get(..read).unwrap_or_default())
+                .map_err(structure::Error::from)?;
+        }
+        while let Some((extent, event)) = reader.poll_event() {
+            on_event(event, extent)?;
+        }
+        if read == 0 {
+            return Ok(());
+        }
+    }
 }
 
 /// Returns the failure of a file that carries no `moov`, or none ahead of its first `moof`
