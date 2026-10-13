@@ -1,6 +1,7 @@
-import init, { Output, remux } from "../crates/isobmff-wasm/pkg/isobmff_wasm.js";
+import init, { Mp4EpochSeconds } from "../crates/isobmff-wasm/pkg/isobmff_wasm.js";
 import { demux } from "./demux.js";
 import { dump } from "./dump.js";
+import { remuxToFragmented, remuxToNonFragmented } from "./remux.js";
 
 const ready = init();
 const OUTPUT_DIRECTORY = "isobmff-rs-remux";
@@ -26,7 +27,17 @@ async function remuxToStorage({ file, output, name }) {
   const fileHandle = await outputs.getFileHandle(name, { create: true });
   const handle = await fileHandle.createSyncAccessHandle();
   try {
-    remux(file, Output[output], handle);
+    const write = (bytes) => handle.write(bytes);
+    if (output === "Fragmented") {
+      await remuxToFragmented(file, write);
+    } else {
+      const now = Mp4EpochSeconds.fromUnixSeconds(BigInt(Math.floor(Date.now() / 1000)));
+      if (now === undefined) {
+        throw new Error("the clock is past what a header states");
+      }
+      await remuxToNonFragmented(file, now, write);
+    }
+    handle.flush();
   } finally {
     handle.close();
   }
