@@ -1,34 +1,48 @@
 //! The `isobmff` crate as the browser reaches it, through `wasm-bindgen`
 //!
-//! A value of the standard library comes back as a plain JavaScript value,
-//! and a value of the library as a class: `None` is `undefined`, a `u64` a
-//! `BigInt`, a `Vec<u8>` a `Uint8Array`, a `Vec` of another type and a
-//! tuple an array, and a [`core::ops::Range`] an object of `start` and `end`.
+//! A box, a state machine, [`BoxReader`] and [`Boxes`] are classes named
+//! after the library's types; every other value is a plain object, built by
+//! `serde-wasm-bindgen`, whose TypeScript type is written by hand beside it
+//! and which holds no wasm memory. Methods and the fields of a plain object
+//! are named in camelCase. An enum carrying data is a union discriminated by
+//! `type`, and an enum carrying none the camelCase name of its variant; a
+//! value the specification states as one field is the value of that field,
+//! and one it states as several an object of those fields, even where the
+//! library holds them in one integer (`SampleFlags`); a four-character code
+//! or a UUID is the string it displays as, `Option` is `undefined`, a `u64`
+//! or an `i64` a `BigInt`, `Vec<u8>` a `Uint8Array`, another `Vec` or a tuple
+//! an array, and a [`core::ops::Range`] an object of `start` and `end`.
+//! [`Boxes`] is iterable, and a `poll*` method returns `undefined` once
+//! nothing is ready.
 //!
-//! A class named after a library type wraps that type, and its methods are
-//! the library's methods of the same names. Each variant of an enum carrying
-//! data is read through a method named after it, which returns the variant's
-//! data, or `undefined` for another variant, and `true` or `false` for a
-//! variant carrying none. What the library displays is the `toString` of the
-//! class, a constant is a function of the same name, and the `next` of an
-//! iterator returns the item, or `undefined` once the items are used up.
+//! A box a state machine lends is copied once into a root that the box's
+//! class holds; the class of a box within it is a handle holding that root
+//! and the path to the box, followed again on every call. Each class is
+//! released by its user with `free()` or `using`, but for the boxes `for…of`
+//! walks, which release what they hold once used up or failed.
 //!
-//! [`demux()`] and [`remux()`] are not of the library: they take the file as
-//! a `Blob` and read it through `FileReaderSync`, and [`remux()`] writes its
-//! output through a `FileSystemSyncAccessHandle`; both exist only in a
-//! worker, so those two are called from a worker. A failure reaches
-//! JavaScript as an `Error` whose message is the one the library states, or
-//! the exception the browser threw.
+//! A failure is thrown as an `Error` whose message is the one the library
+//! states and whose `kind` names the layer that refused: `"box"`,
+//! `"sequence"`, `"sample"` or `"structure"`, `"handle"` for a handle whose
+//! path leads to no box, and `"binding"` for a value that did not convert to
+//! a plain object.
+//!
+//! [`remux()`] is not of the library: it takes the file as a `Blob` and reads
+//! it through `FileReaderSync`, and writes its output through a
+//! `FileSystemSyncAccessHandle`; both exist only in a worker, so it is called
+//! from a worker. Its failure is an `Error` whose message is the one the
+//! library states, or the exception the browser threw.
 
 extern crate alloc;
 
-use core::{error, fmt};
 use std::io::{self, BufWriter};
 
 use isobmff::Mp4EpochSeconds;
-use isobmff::structure;
+use serde::Serialize;
+use serde_wasm_bindgen::Serializer;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsError;
+use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::wasm_bindgen;
 use web_sys::{Blob, FileSystemSyncAccessHandle};
 
@@ -36,90 +50,163 @@ use crate::sink::OpfsSink;
 use crate::source::{BlobSource, js_integer};
 
 mod boxes;
-mod demux;
 mod framing;
 mod remux;
+mod sample;
 mod sequence;
 mod sink;
 mod source;
+mod structure;
 
-pub use boxes::container_boxes;
-pub use demux::{Demux, SampleRecord, TrackRecord};
-pub use framing::{BoxHeader, BoxSize, BoxType, Boxes, RawBox};
+pub use boxes::{
+    AnyBox, HandlerBox, MediaBox, MediaHeaderBox, MediaInformationBox, MovieBox,
+    SampleDescriptionBox, SampleTableBox, TrackBox, TrackHeaderBox, container_boxes,
+};
+pub use framing::{Boxes, JsBoxType, JsIteratorStep};
 pub use remux::Output;
-pub use sequence::{BoxEvent, BoxReader};
+pub use sequence::{BoxReader, JsPolledEvent};
+pub use structure::{JsSampleExtent, JsWantedInput, MovieSampleExtentFsm};
 
-#[wasm_bindgen]
-extern "C" {
-    /// [`core::ops::Range`] of `u64` as a plain object of `start` and `end`
-    pub(crate) type Range;
-
-    #[wasm_bindgen(method, setter)]
-    fn set_start(this: &Range, start: u64);
-
-    #[wasm_bindgen(method, setter)]
-    fn set_end(this: &Range, end: u64);
+/// [`core::ops::Range`] of `u64`
+#[derive(Debug, Clone, Copy, Serialize)]
+pub(crate) struct Range {
+    /// [`core::ops::Range::start`]
+    start: u64,
+    /// [`core::ops::Range::end`]
+    end: u64,
 }
+
+#[wasm_bindgen(typescript_custom_section)]
+const RANGE: &str = r#"
+/** `core::ops::Range` of `u64` */
+export interface Range {
+    start: bigint;
+    end: bigint;
+}
+"#;
 
 impl From<core::ops::Range<u64>> for Range {
     fn from(range: core::ops::Range<u64>) -> Self {
-        let object = js_sys::Object::new().unchecked_into::<Self>();
-        object.set_start(range.start);
-        object.set_end(range.end);
-        object
+        Self {
+            start: range.start,
+            end: range.end,
+        }
     }
 }
 
-/// Reason [`demux()`] or [`remux()`] fails: the browser failed it, the input is one it does not take, or the library refused it
+/// A refusal of the library, of a handle or of a conversion to a plain object, thrown as an `Error` carrying the `kind` of the layer that refused
 #[derive(Debug)]
-pub(crate) enum Error {
-    /// The `Blob` did not read, the output did not write, the clock did not tell the time, or the input is one an export does not take
-    Io(io::Error),
-    /// The library refused what it read or what it was to write
-    Structure(structure::Error),
+pub struct Failure {
+    /// The layer that refused
+    kind: &'static str,
+    /// What the library states of the refusal
+    message: String,
 }
 
-impl From<io::Error> for Error {
-    fn from(failure: io::Error) -> Self {
-        Self::Io(failure)
-    }
-}
-
-impl From<structure::Error> for Error {
-    fn from(failure: structure::Error) -> Self {
-        Self::Structure(failure)
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io(failure) => write!(formatter, "{failure}"),
-            Self::Structure(failure) => write!(formatter, "{failure}"),
+impl Failure {
+    /// Returns the failure of a handle whose path leads to no box
+    pub(crate) fn handle() -> Self {
+        Self {
+            kind: "handle",
+            message: "the box this handle names is no longer there".to_owned(),
         }
     }
 }
 
-impl error::Error for Error {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match self {
-            Self::Io(failure) => Some(failure),
-            Self::Structure(failure) => Some(failure),
+impl From<serde_wasm_bindgen::Error> for Failure {
+    fn from(error: serde_wasm_bindgen::Error) -> Self {
+        Self {
+            kind: "binding",
+            message: error.to_string(),
         }
     }
 }
 
-/// Returns the tracks of the movie `blob` carries and the samples its tables declare
+impl From<isobmff::Error> for Failure {
+    fn from(error: isobmff::Error) -> Self {
+        Self {
+            kind: "box",
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<isobmff::sequence::Error> for Failure {
+    fn from(error: isobmff::sequence::Error) -> Self {
+        Self {
+            kind: sequence_kind(&error),
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<isobmff::sample::Error> for Failure {
+    fn from(error: isobmff::sample::Error) -> Self {
+        Self {
+            kind: sample_kind(&error),
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<isobmff::structure::Error> for Failure {
+    fn from(error: isobmff::structure::Error) -> Self {
+        let kind = match &error {
+            isobmff::structure::Error::Sequence { error, .. } => sequence_kind(error),
+            isobmff::structure::Error::Sample { error, .. } => sample_kind(error),
+            isobmff::structure::Error::Box { .. } => "box",
+            _ => "structure",
+        };
+        Self {
+            kind,
+            message: error.to_string(),
+        }
+    }
+}
+
+/// Returns the layer a refusal of the sequence layer came from: the box it holds, or the sequence layer itself
+fn sequence_kind(error: &isobmff::sequence::Error) -> &'static str {
+    match error {
+        isobmff::sequence::Error::Box { .. } => "box",
+        _ => "sequence",
+    }
+}
+
+/// Returns the layer a refusal of the sample layer came from: the box it holds, or the sample layer itself
+fn sample_kind(error: &isobmff::sample::Error) -> &'static str {
+    match error {
+        isobmff::sample::Error::Box { .. } => "box",
+        _ => "sample",
+    }
+}
+
+/// Returns `value` as the plain object `T` names, its `u64`s and `i64`s as `BigInt`s
 ///
 /// # Errors
 ///
-/// The failure of reading `blob`, the reason the library refuses the boxes it
-/// reads or the tables the `moov` and each `moof` declare, or a file that
-/// carries no `moov`, or none ahead of its first `moof` as a media segment
-/// delivered apart from its movie does.
+/// `"binding"`: `value` did not convert to a plain object.
+fn to_plain<T: JsCast>(value: &impl Serialize) -> Result<T, Failure> {
+    Ok(value
+        .serialize(&Serializer::new().serialize_large_number_types_as_bigints(true))?
+        .unchecked_into())
+}
+
 #[wasm_bindgen]
-pub fn demux(blob: Blob) -> Result<Demux, JsError> {
-    Ok(demux::demux(BlobSource::new(blob)?)?)
+extern "C" {
+    /// An `Error` given the `kind` of the layer that refused
+    #[wasm_bindgen(extends = js_sys::Error)]
+    type ErrorOfLayer;
+
+    #[wasm_bindgen(method, setter)]
+    fn set_kind(this: &ErrorOfLayer, kind: &str);
+}
+
+impl From<Failure> for JsValue {
+    fn from(failure: Failure) -> Self {
+        let error = js_sys::Error::new(&failure.message).unchecked_into::<ErrorOfLayer>();
+        error.set_kind(failure.kind);
+        error.into()
+    }
 }
 
 /// Writes the movie file `blob` carries, fragmented or not, through `handle` in the layout `output` names
