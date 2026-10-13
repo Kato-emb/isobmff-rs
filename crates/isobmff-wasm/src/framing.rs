@@ -1,96 +1,139 @@
-//! The root of [`isobmff`]: the framing of ISO/IEC 14496-12 §4.2 ([`BoxType`], [`BoxSize`], the [`BoxHeader`] they form, the [`Boxes`] laid end to end), [`FourCc`] and [`AnyBox`]
+//! The root of [`isobmff`]: the framing of ISO/IEC 14496-12 §4.2 ([`BoxType`], [`BoxSize`], the [`BoxHeader`] they form, the [`Boxes`] laid end to end) and [`FourCc`]
 
 use alloc::vec;
 
-use wasm_bindgen::JsError;
+use serde::Serialize;
+use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::wasm_bindgen;
 
-/// [`isobmff::FourCc`]
-#[wasm_bindgen]
-#[derive(Debug, Clone, Copy)]
-pub struct FourCc(pub(crate) isobmff::FourCc);
+use crate::Failure;
 
-#[wasm_bindgen]
-impl FourCc {
-    /// Returns the four characters, as [`isobmff::FourCc`] displays them
-    #[wasm_bindgen(js_name = toString)]
-    pub fn display(&self) -> String {
-        self.0.to_string()
+/// [`isobmff::FourCc`], the four characters as [`isobmff::FourCc`] displays them
+#[derive(Debug, Clone, Serialize, Tsify)]
+pub struct FourCc(String);
+
+impl From<isobmff::FourCc> for FourCc {
+    fn from(four_cc: isobmff::FourCc) -> Self {
+        Self(four_cc.to_string())
     }
 }
 
 /// [`isobmff::BoxType`]
-#[wasm_bindgen]
-#[derive(Debug, Clone, Copy)]
-pub struct BoxType(pub(crate) isobmff::BoxType);
+#[derive(Debug, Clone, Serialize, Tsify)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum BoxType {
+    /// [`isobmff::BoxType::Compact`]
+    #[serde(rename_all = "camelCase")]
+    #[non_exhaustive]
+    Compact {
+        /// [`isobmff::CompactType::four_cc`]
+        four_cc: FourCc,
+    },
+    /// [`isobmff::BoxType::Extended`]
+    #[serde(rename_all = "camelCase")]
+    #[non_exhaustive]
+    Extended {
+        /// The `usertype`, as [`isobmff::Uuid`] displays it
+        user_type: String,
+    },
+}
 
-#[wasm_bindgen]
-impl BoxType {
-    /// Returns the fourcc, or `uuid` and the user type, as [`isobmff::BoxType`] displays it
-    #[wasm_bindgen(js_name = toString)]
-    pub fn display(&self) -> String {
-        self.0.to_string()
+impl From<isobmff::BoxType> for BoxType {
+    fn from(box_type: isobmff::BoxType) -> Self {
+        match box_type {
+            isobmff::BoxType::Compact(compact) => Self::Compact {
+                four_cc: compact.four_cc().into(),
+            },
+            isobmff::BoxType::Extended(user_type) => Self::Extended {
+                user_type: user_type.to_string(),
+            },
+        }
     }
 }
 
 /// [`isobmff::BoxSize`]
-#[wasm_bindgen]
-#[derive(Debug, Clone, Copy)]
-pub struct BoxSize(isobmff::BoxSize);
+#[derive(Debug, Clone, Copy, Serialize, Tsify)]
+#[tsify(large_number_types_as_bigints)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum BoxSize {
+    /// [`isobmff::BoxSize::Compact`]
+    #[non_exhaustive]
+    Compact {
+        /// [`isobmff::CompactSize::get`]
+        size: u32,
+    },
+    /// [`isobmff::BoxSize::Extended`]
+    #[non_exhaustive]
+    Extended {
+        /// [`isobmff::ExtendedSize::get`]
+        size: u64,
+    },
+    /// [`isobmff::BoxSize::ToEndOfFile`]
+    ToEndOfFile,
+}
 
-#[wasm_bindgen]
-impl BoxSize {
-    /// [`isobmff::BoxSize::total_bytes`]
-    pub fn total_bytes(&self) -> Option<u64> {
-        self.0.total_bytes()
+impl From<isobmff::BoxSize> for BoxSize {
+    fn from(size: isobmff::BoxSize) -> Self {
+        match size {
+            isobmff::BoxSize::Compact(compact) => Self::Compact {
+                size: compact.get(),
+            },
+            isobmff::BoxSize::Extended(extended) => Self::Extended {
+                size: extended.get(),
+            },
+            isobmff::BoxSize::ToEndOfFile => Self::ToEndOfFile,
+        }
     }
 }
 
 /// [`isobmff::BoxHeader`]
-#[wasm_bindgen]
-#[derive(Debug, Clone, Copy)]
-pub struct BoxHeader(pub(crate) isobmff::BoxHeader);
-
-#[wasm_bindgen]
-impl BoxHeader {
+#[derive(Debug, Clone, Serialize, Tsify)]
+#[tsify(large_number_types_as_bigints)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct BoxHeader {
     /// [`isobmff::BoxHeader::box_type`]
-    pub fn box_type(&self) -> BoxType {
-        BoxType(self.0.box_type())
-    }
-
+    pub box_type: BoxType,
     /// [`isobmff::BoxHeader::size`]
-    pub fn size(&self) -> BoxSize {
-        BoxSize(self.0.size())
-    }
+    pub size: BoxSize,
+}
 
-    /// [`isobmff::BoxHeader::encoded_len`]
-    pub fn encoded_len(&self) -> usize {
-        self.0.encoded_len()
+impl From<isobmff::BoxHeader> for BoxHeader {
+    fn from(header: isobmff::BoxHeader) -> Self {
+        Self {
+            box_type: header.box_type().into(),
+            size: header.size().into(),
+        }
     }
 }
 
 /// [`isobmff::RawBox`], owning a copy of its payload
-#[wasm_bindgen]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Tsify)]
+#[tsify(large_number_types_as_bigints)]
+#[non_exhaustive]
 pub struct RawBox {
-    header: isobmff::BoxHeader,
-    payload: Vec<u8>,
-}
-
-#[wasm_bindgen]
-impl RawBox {
     /// [`isobmff::RawBox::header`]
-    pub fn header(&self) -> BoxHeader {
-        BoxHeader(self.header)
-    }
-
-    /// [`isobmff::RawBox::payload`], copied
-    pub fn payload(&self) -> Vec<u8> {
-        self.payload.clone()
-    }
+    pub header: BoxHeader,
+    /// [`isobmff::RawBox::payload`]
+    #[serde(with = "serde_bytes")]
+    #[tsify(type = "Uint8Array")]
+    pub payload: Vec<u8>,
 }
 
-/// [`isobmff::Boxes`] over a copy of its input
+/// One step of [`Boxes`] as the iterator protocol of JavaScript states it
+#[derive(Debug, Serialize, Tsify)]
+#[tsify(large_number_types_as_bigints)]
+#[non_exhaustive]
+pub struct IteratorStep {
+    /// Whether the boxes are used up
+    pub done: bool,
+    /// The box the step yields, none once the boxes are used up
+    pub value: Option<RawBox>,
+}
+
+/// [`isobmff::Boxes`] over a copy of its input, iterable
 #[wasm_bindgen]
 #[derive(Debug)]
 pub struct Boxes(vec::IntoIter<Result<RawBox, isobmff::Error>>);
@@ -106,7 +149,7 @@ impl Boxes {
             isobmff::Boxes::new(input)
                 .map(|step| {
                     step.map(|framed| RawBox {
-                        header: framed.header(),
+                        header: framed.header().into(),
                         payload: framed.payload().to_vec(),
                     })
                 })
@@ -115,26 +158,36 @@ impl Boxes {
         )
     }
 
-    /// [`Iterator::next`] of [`isobmff::Boxes`], the box yielded or none once they are used up
+    /// [`Iterator::next`] of [`isobmff::Boxes`], as the iterator protocol states a step
     ///
     /// # Errors
     ///
-    /// The error [`isobmff::Boxes`] yields, after which every call returns none.
-    #[wasm_bindgen(js_name = next)]
-    pub fn next_box(&mut self) -> Result<Option<RawBox>, JsError> {
-        Ok(self.0.next().transpose()?)
+    /// `"box"`: the error [`isobmff::Boxes`] yields, after which every step is
+    /// done; `"binding"`: the box did not convert to a plain object.
+    #[wasm_bindgen(js_name = next, unchecked_return_type = "IteratorResult<RawBox, undefined>")]
+    pub fn next_box(&mut self) -> Result<Ts<IteratorStep>, Failure> {
+        let step = self.0.next().transpose();
+        if !matches!(step, Ok(Some(_))) {
+            // Why not keep the buffer once the boxes are used up or failed: the
+            // object `for…of` walks is the one `[Symbol.iterator]` returned,
+            // which no caller holds to free, so its memory goes now rather than
+            // when the collector comes.
+            self.0 = Vec::new().into_iter();
+        }
+        let value = step?;
+        Ok(IteratorStep {
+            done: value.is_none(),
+            value,
+        }
+        .into_ts()?)
     }
-}
 
-/// [`isobmff::AnyBox`]
-#[wasm_bindgen]
-#[derive(Debug, Clone)]
-pub struct AnyBox(pub(crate) isobmff::AnyBox);
-
-#[wasm_bindgen]
-impl AnyBox {
-    /// [`isobmff::AnyBox::box_type`]
-    pub fn box_type(&self) -> BoxType {
-        BoxType(self.0.box_type())
+    /// Returns the boxes themselves, so that `for…of` walks them
+    ///
+    /// The boxes returned release what they hold once used up or failed; the
+    /// object around them is left to the collector.
+    #[wasm_bindgen(js_name = "[Symbol.iterator]")]
+    pub fn iterator(self) -> Self {
+        self
     }
 }

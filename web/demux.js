@@ -1,4 +1,5 @@
 import { MovieSampleExtentFsm } from "../crates/isobmff-wasm/pkg/isobmff_wasm.js";
+import { boxTypeName } from "./dump.js";
 
 const CUT_LENGTH = 1024 * 1024;
 
@@ -12,33 +13,34 @@ const CUT_LENGTH = 1024 * 1024;
  * undefined where it is indeterminate; a sample is { track_id, decode_time,
  * sample_duration, sample_composition_time_offset, sync,
  * sample_description_index, offset, size }. Every 64-bit value is a BigInt.
- * Rejects with an Error stating the reason the library refuses the file, a
- * fragment ahead of the movie among them.
+ * Rejects with the library's Error, whose `kind` names the layer that
+ * refused, a fragment ahead of the movie among them, or the exception the
+ * browser threw.
  *
  * @param {Blob} blob
  * @returns {Promise<{ tracks: object[], samples: object[] }>}
  */
 export async function demux(blob) {
   const fsm = new MovieSampleExtentFsm();
-  const samples = [];
   try {
-    for (let offset = 0; ; offset += CUT_LENGTH) {
-      const cut = new Uint8Array(await blob.slice(offset, offset + CUT_LENGTH).arrayBuffer());
+    const samples = [];
+    for (let wanted; (wanted = fsm.wantedInput()); ) {
+      const start = Number(wanted.offset);
+      const length = wanted.length === undefined ? CUT_LENGTH : Math.min(CUT_LENGTH, Number(wanted.length));
+      const cut = new Uint8Array(await blob.slice(start, start + length).arrayBuffer());
       if (cut.length === 0) {
         fsm.finish();
       } else {
-        fsm.handle_input(BigInt(offset), cut);
+        fsm.handleInput(wanted.offset, cut);
       }
-      for (let extent; (extent = fsm.poll_sample_extent()); ) {
+      for (let extent; (extent = fsm.pollSampleExtent()); ) {
         samples.push(sample(extent));
       }
-      if (cut.length === 0) {
-        const movie = fsm.movie();
-        const traks = movie.trak();
-        movie.free();
-        return { tracks: traks.map(track), samples };
-      }
     }
+    const movie = fsm.movie();
+    const traks = movie.trak();
+    movie.free();
+    return { tracks: traks.map(track), samples };
   } finally {
     // Why not leave it to the FinalizationRegistry: it holds the movie and its
     // sample tables, the collector does not see wasm memory, and wasm memory
@@ -48,45 +50,38 @@ export async function demux(blob) {
 }
 
 function track(trak) {
+  const tkhd = trak.tkhd();
   const mdia = trak.mdia();
   const mdhd = mdia.mdhd();
+  const hdlr = mdia.hdlr();
   const minf = mdia.minf();
   const stbl = minf.stbl();
-  const listed = {
-    track_id: trak.tkhd().track_id(),
-    handler_type: String(mdia.hdlr().handler_type()),
-    timescale: mdhd.timescale(),
-    duration: mdhd.duration().get(),
-    sample_entries: stbl.stsd().entries().map((entry) => String(entry.box_type())),
-  };
-  // Why not leave these to the FinalizationRegistry: each is a copy of the
-  // sample tables of the track, which the collector does not see, so each file
-  // read would grow wasm memory by them.
-  for (const copy of [stbl, minf, mdia, trak]) {
-    copy.free();
+  const stsd = stbl.stsd();
+  const entries = stsd.entries();
+  try {
+    return {
+      track_id: tkhd.trackId(),
+      handler_type: hdlr.handlerType(),
+      timescale: mdhd.timescale(),
+      duration: mdhd.duration(),
+      sample_entries: entries.map((entry) => boxTypeName(entry.boxType())),
+    };
+  } finally {
+    for (const handle of [trak, tkhd, mdia, mdhd, hdlr, minf, stbl, stsd, ...entries]) {
+      handle.free();
+    }
   }
-  return listed;
 }
 
-function sample(extent) {
-  const properties = extent.properties();
-  const flags = properties.sample_flags;
-  const { start, end } = extent.extent();
-  const listed = {
-    track_id: properties.track_id,
-    decode_time: properties.decode_time,
-    sample_duration: properties.sample_duration,
-    sample_composition_time_offset: properties.sample_composition_time_offset,
-    sync: !flags.sample_is_non_sync_sample(),
-    sample_description_index: properties.sample_description_index,
-    offset: start,
-    size: end - start,
+function sample({ properties, extent }) {
+  return {
+    track_id: properties.trackId,
+    decode_time: properties.decodeTime,
+    sample_duration: properties.sampleDuration,
+    sample_composition_time_offset: properties.sampleCompositionTimeOffset,
+    sync: !properties.sampleFlags.sampleIsNonSyncSample,
+    sample_description_index: properties.sampleDescriptionIndex,
+    offset: extent.start,
+    size: extent.end - extent.start,
   };
-  // Why not leave them to the FinalizationRegistry: a file lists its samples by
-  // the hundred thousand, three wasm objects each, and the collector does not
-  // count wasm memory, so nothing prompts it to run.
-  flags.free();
-  properties.free();
-  extent.free();
-  return listed;
 }

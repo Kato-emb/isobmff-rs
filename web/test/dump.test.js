@@ -56,11 +56,11 @@ test("a box running to the end of the file has no size, and a uuid box names its
   ]);
 });
 
-test("a container whose payload does not divide into boxes is refused with the library's reason", async () => {
+test("a container whose payload does not divide into boxes is refused by the box layer", async () => {
   const cutShort = box("moov", box("mvhd", new Uint8Array(4)));
   new DataView(cutShort.buffer).setUint32(8, 64);
 
-  await assert.rejects(dump(new Blob([cutShort])), { message: "box of 64 bytes cut short by an input of 12" });
+  await assert.rejects(dump(new Blob([cutShort])), { message: "box of 64 bytes cut short by an input of 12", kind: "box" });
 });
 
 test("a box far longer than the wasm memory in use is read without the memory growing to its size", async () => {
@@ -72,4 +72,10 @@ test("a box far longer than the wasm memory in use is read without the memory gr
 
   assert.deepEqual(records, [listed("mdat", 0, 8 + length, 0)]);
   assert.ok(wasm.memory.buffer.byteLength < length / 8);
+});
+
+test("a file ending inside a box is refused by the sequence layer", async () => {
+  const truncated = box("free", new Uint8Array(8)).subarray(0, 12);
+
+  await assert.rejects(dump(new Blob([truncated])), { message: "box of 16 bytes closed off at 12", kind: "sequence" });
 });

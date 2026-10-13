@@ -1,34 +1,44 @@
 //! The `isobmff` crate as the browser reaches it, through `wasm-bindgen`
 //!
-//! A value of the standard library comes back as a plain JavaScript value,
-//! and a value of the library as a class: `None` is `undefined`, a `u64` or
-//! an `i64` a `BigInt`, a `Vec<u8>` a `Uint8Array`, a `Vec` of another type
-//! and a tuple an array, and a [`core::ops::Range`] an object of `start` and
-//! `end`.
+//! A box, a state machine, [`BoxReader`] and [`Boxes`] are classes named
+//! after the library's types; every other value is a plain object, whose
+//! TypeScript type is generated and which holds no wasm memory. Methods and
+//! the fields of a plain object are named in camelCase. An enum carrying data
+//! is a union discriminated by `type`, and an enum carrying none the camelCase
+//! name of its variant; a newtype is its inner value, `Option` is
+//! `undefined`, a `u64` or an `i64` a `BigInt`, `Vec<u8>` a `Uint8Array`,
+//! another `Vec` or a tuple an array, and a [`core::ops::Range`] an object of
+//! `start` and `end`. [`Boxes`] is iterable, and a `poll*` method returns
+//! `undefined` once nothing is ready.
 //!
-//! A class named after a library type wraps that type, its methods are the
-//! library's methods of the same names, and a public field of the type is a
-//! property of the same name. A method returning a reference returns a copy.
-//! Each variant of an enum carrying data is read through a method named after
-//! it, which returns the variant's data, or `undefined` for another variant,
-//! and `true` or `false` for a variant carrying none. What the library
-//! displays is the `toString` of the class, a constant is a function of the
-//! same name, and the `next` of an iterator returns the item, or `undefined`
-//! once the items are used up.
+//! A box a state machine lends is copied once into a root that the box's
+//! class holds; the class of a box within it is a handle holding that root
+//! and the path to the box, followed again on every call. Each class is
+//! released by its user with `free()` or `using`, but for the boxes `for…of`
+//! walks, which release what they hold once used up or failed.
+//!
+//! A failure is thrown as an `Error` whose message is the one the library
+//! states and whose `kind` names the layer that refused: `"box"`,
+//! `"sequence"`, `"sample"` or `"structure"`, `"handle"` for a handle whose
+//! path leads to no box, and `"binding"` for a value that did not convert to
+//! a plain object.
 //!
 //! [`remux()`] is not of the library: it takes the file as a `Blob` and reads
 //! it through `FileReaderSync`, and writes its output through a
 //! `FileSystemSyncAccessHandle`; both exist only in a worker, so it is called
-//! from a worker. A failure reaches JavaScript as an `Error` whose message is
-//! the one the library states, or the exception the browser threw.
+//! from a worker. Its failure is an `Error` whose message is the one the
+//! library states, or the exception the browser threw.
 
 extern crate alloc;
 
 use std::io::{self, BufWriter};
 
 use isobmff::Mp4EpochSeconds;
+use serde::Serialize;
+use tsify::Tsify;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsError;
+use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::wasm_bindgen;
 use web_sys::{Blob, FileSystemSyncAccessHandle};
 
@@ -45,34 +55,138 @@ mod source;
 mod structure;
 
 pub use boxes::{
-    HandlerBox, HeaderDuration, MediaBox, MediaHeaderBox, MediaInformationBox, MovieBox,
-    SampleDescriptionBox, SampleFlags, SampleTableBox, TrackBox, TrackHeaderBox, container_boxes,
+    AnyBox, DegradationPriorityEntry, HandlerBox, HeaderDuration, IsLeading, MediaBox,
+    MediaHeaderBox, MediaInformationBox, MovieBox, PaddingBitsEntry, SampleDependencyTypeEntry,
+    SampleDependsOn, SampleDescriptionBox, SampleFlags, SampleHasRedundancy, SampleIsDependedOn,
+    SampleTableBox, TrackBox, TrackHeaderBox, container_boxes,
 };
-pub use framing::{AnyBox, BoxHeader, BoxSize, BoxType, Boxes, FourCc, RawBox};
+pub use framing::{BoxHeader, BoxSize, BoxType, Boxes, FourCc, IteratorStep, RawBox};
 pub use remux::Output;
 pub use sample::{SampleExtent, SampleProperties};
 pub use sequence::{BoxEvent, BoxReader};
-pub use structure::MovieSampleExtentFsm;
+pub use structure::{MovieSampleExtentFsm, WantedInput};
 
-#[wasm_bindgen]
-extern "C" {
-    /// [`core::ops::Range`] of `u64` as a plain object of `start` and `end`
-    #[wasm_bindgen(typescript_type = "{ start: bigint; end: bigint }")]
-    pub type Range;
-
-    #[wasm_bindgen(method, setter)]
-    fn set_start(this: &Range, start: u64);
-
-    #[wasm_bindgen(method, setter)]
-    fn set_end(this: &Range, end: u64);
+/// [`core::ops::Range`] of `u64`
+#[derive(Debug, Clone, Copy, Serialize, Tsify)]
+#[tsify(large_number_types_as_bigints)]
+#[non_exhaustive]
+pub struct Range {
+    /// [`core::ops::Range::start`]
+    pub start: u64,
+    /// [`core::ops::Range::end`]
+    pub end: u64,
 }
 
 impl From<core::ops::Range<u64>> for Range {
     fn from(range: core::ops::Range<u64>) -> Self {
-        let object = js_sys::Object::new().unchecked_into::<Self>();
-        object.set_start(range.start);
-        object.set_end(range.end);
-        object
+        Self {
+            start: range.start,
+            end: range.end,
+        }
+    }
+}
+
+/// A refusal of the library, of a handle or of a conversion to a plain object, thrown as an `Error` carrying the `kind` of the layer that refused
+#[derive(Debug)]
+pub struct Failure {
+    /// The layer that refused
+    kind: &'static str,
+    /// What the library states of the refusal
+    message: String,
+}
+
+impl Failure {
+    /// Returns the failure of a handle whose path leads to no box
+    pub(crate) fn handle() -> Self {
+        Self {
+            kind: "handle",
+            message: "the box this handle names is no longer there".to_owned(),
+        }
+    }
+}
+
+impl From<tsify::Error> for Failure {
+    fn from(error: tsify::Error) -> Self {
+        Self {
+            kind: "binding",
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<isobmff::Error> for Failure {
+    fn from(error: isobmff::Error) -> Self {
+        Self {
+            kind: "box",
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<isobmff::sequence::Error> for Failure {
+    fn from(error: isobmff::sequence::Error) -> Self {
+        Self {
+            kind: sequence_kind(&error),
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<isobmff::sample::Error> for Failure {
+    fn from(error: isobmff::sample::Error) -> Self {
+        Self {
+            kind: sample_kind(&error),
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<isobmff::structure::Error> for Failure {
+    fn from(error: isobmff::structure::Error) -> Self {
+        let kind = match &error {
+            isobmff::structure::Error::Sequence { error, .. } => sequence_kind(error),
+            isobmff::structure::Error::Sample { error, .. } => sample_kind(error),
+            isobmff::structure::Error::Box { .. } => "box",
+            _ => "structure",
+        };
+        Self {
+            kind,
+            message: error.to_string(),
+        }
+    }
+}
+
+/// Returns the layer a refusal of the sequence layer came from: the box it holds, or the sequence layer itself
+fn sequence_kind(error: &isobmff::sequence::Error) -> &'static str {
+    match error {
+        isobmff::sequence::Error::Box { .. } => "box",
+        _ => "sequence",
+    }
+}
+
+/// Returns the layer a refusal of the sample layer came from: the box it holds, or the sample layer itself
+fn sample_kind(error: &isobmff::sample::Error) -> &'static str {
+    match error {
+        isobmff::sample::Error::Box { .. } => "box",
+        _ => "sample",
+    }
+}
+
+#[wasm_bindgen]
+extern "C" {
+    /// An `Error` given the `kind` of the layer that refused
+    #[wasm_bindgen(extends = js_sys::Error)]
+    type ErrorOfLayer;
+
+    #[wasm_bindgen(method, setter)]
+    fn set_kind(this: &ErrorOfLayer, kind: &str);
+}
+
+impl From<Failure> for JsValue {
+    fn from(failure: Failure) -> Self {
+        let error = js_sys::Error::new(&failure.message).unchecked_into::<ErrorOfLayer>();
+        error.set_kind(failure.kind);
+        error.into()
     }
 }
 

@@ -84,8 +84,11 @@ test("a movie lying after media data longer than a cut lists its samples where t
   assert.deepEqual(demuxed, { tracks: TRACKS, samples: samples(8) });
 });
 
-test("a fragment ahead of any movie is refused with the library's reason", async () => {
-  await assert.rejects(demux(new Blob([box("moof")])), { message: "file carries a moof box out of the order its structure keeps" });
+test("a fragment ahead of any movie is refused by the structure layer", async () => {
+  await assert.rejects(demux(new Blob([box("moof")])), {
+    message: "file carries a moof box out of the order its structure keeps",
+    kind: "structure",
+  });
 });
 
 test("reading a movie of many samples again leaves the wasm memory as it was", async () => {
