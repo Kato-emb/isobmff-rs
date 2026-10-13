@@ -1,4 +1,4 @@
-//! The order the boxes of an ISO base media file stand in, and the demux and mux FSMs that read and write one
+//! The order the boxes of an ISO base media file stand in, and the FSMs that read and write one
 //!
 //! A presentation is carried as samples — ISO/IEC 14496-12 §3.1.14 has a sample
 //! as all the data associated with a single timestamp. [`MovieDemuxFsm`]
@@ -7,7 +7,10 @@
 //! does the same for a media segment delivered apart from the movie it
 //! continues; [`FragmentedMuxFsm`],
 //! [`NonFragmentedMuxFsm`] and [`MediaSegmentMuxFsm`] go the other way, laying
-//! samples down as a file or a segment of each kind. None reaches for a source
+//! samples down as a file or a segment of each kind. [`MovieSampleExtentFsm`]
+//! reads a movie file as [`MovieDemuxFsm`] does short of gathering the
+//! samples, and reports the [`SampleExtent`](isobmff_sample::SampleExtent) of
+//! each, where its bytes lie in the file. None reaches for a source
 //! or a sink of its own: when to read or write, and from or to where, stay with
 //! the caller, through [the caller's loop](#the-callers-loop).
 //!
@@ -15,7 +18,7 @@
 //!
 //! Seven layers stand between a file and the samples it carries, joined only
 //! by the values that pass between them: a box event, a typed box, an extent,
-//! a sample, a disposition. No layer but the demux and mux FSMs holds
+//! a sample, a disposition. No layer but the FSMs of layer 6 holds
 //! another's machine. Listed from the framing up to the caller:
 //!
 //! 1. **Framing.** A file is a sequence of objects, called boxes (§4.2), and
@@ -63,13 +66,16 @@
 //!    [`FragmentedMuxFsm`], [`NonFragmentedMuxFsm`] and [`MediaSegmentMuxFsm`]
 //!    wire layers 1 to 5 into machines: one demux FSM reads a movie file,
 //!    fragmented or not, through the structure of a fragmented one, and one
-//!    reads a media segment; a mux FSM writes each kind. A demux FSM holds
+//!    reads a media segment; a mux FSM writes each kind.
+//!    [`MovieSampleExtentFsm`] wires layers 1, 2, 3 and 5 alone, and hands
+//!    over the extents layer 3 resolves in place of samples. A demux FSM holds
 //!    one rule of its own: it keeps where the input it takes in order stands,
 //!    and states the one read it wants next — an extent layer 4 lacks whose
 //!    start that input has passed, else the continuation of that input —
 //!    taking every input with the offset it was read at. Each passes every value between the layers,
-//!    so a caller hands over bytes and takes samples, or hands over samples
-//!    and takes bytes, and never sees one. Every offset above the framing is
+//!    so a caller hands over bytes and takes samples (or extents, from
+//!    [`MovieSampleExtentFsm`]), or hands over samples and takes bytes, and
+//!    never sees one. Every offset above the framing is
 //!    a file offset — the extents the framing reports, counted from the first
 //!    byte of the file or from the offset the demux FSM last resumed at, the
 //!    chunk offsets and base data offsets the boxes declare (§8.7.5, §8.8.7)

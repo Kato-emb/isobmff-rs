@@ -54,18 +54,18 @@ pub(crate) trait SampleGathering {
     ///
     /// # Errors
     ///
-    /// [`Sample`](crate::Error::Sample): what the samples make of the bytes.
+    /// * [`Sample`](crate::Error::Sample): what the samples make of the bytes.
     fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), Error>;
 
     /// Checks, once the file is over, that no sample is short of its bytes
     ///
     /// # Errors
     ///
-    /// [`Sample`](crate::Error::Sample): a sample is short of the data it
-    /// claimed.
+    /// * [`Sample`](crate::Error::Sample): a sample is short of the data it
+    ///   claimed.
     fn finish(&mut self) -> Result<(), Error>;
 
-    /// Drops the samples held, for the reading to restart elsewhere
+    /// Drops the samples held and the bytes they lack
     fn clear(&mut self);
 }
 

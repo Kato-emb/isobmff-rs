@@ -1,4 +1,4 @@
-//! [`MovieSampleExtentFsm`], where the samples of a movie file lie, read as it arrives without their bytes, fragmented or not
+//! [`MovieSampleExtentFsm`], where the samples of a movie file lie, read as it arrives without gathering their bytes, fragmented or not
 
 use alloc::collections::VecDeque;
 
@@ -36,15 +36,16 @@ use crate::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
 ///   theirs (§8.7.5, §8.8.7).
 /// * The `ftyp` and the `moov` are there to read once they have arrived:
 ///   [`file_type`](Self::file_type) and [`movie`](Self::movie).
-/// * The extents of the `moov` come in the order its sample tables declare
-///   them, then those of each `moof` in the order it declares them.
-/// * A `moof` before the `moov`, as a media segment delivered apart from its
-///   movie has, is [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder).
+/// * The extents of the `moov` come in the order their bytes lie in the
+///   file, then those of each `moof` in the order it declares them.
+/// * A `moof` before the `moov`, as in a media segment delivered apart from
+///   its movie, is [`BoxOutOfOrder`](crate::Error::BoxOutOfOrder).
 /// * An `Err` leaves the FSM failed for good,
 ///   [`AlreadyFinished`](crate::Error::AlreadyFinished) and
 ///   [`UnwantedInput`](crate::Error::UnwantedInput) aside: every later call
 ///   reports that same failure again. The extents resolved before it are
-///   still there to take.
+///   still there to take, those of a `moov` or a `moof` whose tables are
+///   refused part way among them.
 /// * [`finish`](Self::finish) declares the file over, and reports what any
 ///   layer makes of the end of it: a box left open, the `moov` never come.
 ///   Extents are still taken after it, but anything handed over then, or a
@@ -76,6 +77,8 @@ use crate::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
 /// ))?;
 /// mux_fsm.finish_fragment()?;
 /// mux_fsm.finish()?;
+///
+/// // The bytes the mux FSM wrote are the file
 /// let mut file = Vec::new();
 /// while let Some(written) = mux_fsm.poll_output() {
 ///     file.extend_from_slice(&written);
@@ -131,8 +134,8 @@ impl MovieSampleExtentFsm {
     /// Creates an FSM waiting at the start of a movie file, bounded by `limits`
     ///
     /// Of `limits`, the payload a box read into a value may reach and the
-    /// samples one `moov` or `moof` may resolve apply; nothing is gathered,
-    /// so the limits of [`DemuxLimits::with_sample_reader`] do not.
+    /// samples one `moov` or `moof` may declare apply; nothing is gathered,
+    /// so the limits of [`DemuxLimits::sample_reader`] do not.
     #[must_use]
     pub const fn with_limits(limits: DemuxLimits) -> Self {
         Self {
@@ -166,7 +169,7 @@ impl MovieSampleExtentFsm {
     ///   of the file makes of the input.
     /// * [`Box`](crate::Error::Box): a box read into a value
     ///   does not decode.
-    /// * [`Sample`](crate::Error::Sample): what the sample layer makes of the
+    /// * [`Sample`](crate::Error::Sample): what the samples make of the
     ///   tables of the movie or of a fragment.
     /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
@@ -221,7 +224,7 @@ impl MovieSampleExtentFsm {
     ///   declaring no total, does not decode.
     /// * [`MissingMandatoryBox`](crate::Error::MissingMandatoryBox):
     ///   the file carried no `moov`.
-    /// * [`Sample`](crate::Error::Sample): what the sample layer makes of the
+    /// * [`Sample`](crate::Error::Sample): what the samples make of the
     ///   tables of the box the file ended with.
     /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
     ///   file was already declared over.
@@ -333,8 +336,11 @@ mod tests {
         fragmented_file_with_samples, non_fragmented_file, segment_file_with_samples,
     };
 
+    use isobmff_boxes::MovieFragmentBox;
+    use isobmff_core::BoxDefinition;
+
     use super::MovieSampleExtentFsm;
-    use crate::{Error, MovieDemuxFsm};
+    use crate::{Error, MovieDemuxFsm, WantedInput};
 
     /// Hands `file` over in order in cuts of seven bytes, taking every extent as it is resolved
     fn extents_of(file: &[u8]) -> Result<Vec<SampleExtent>, Error> {
@@ -382,21 +388,27 @@ mod tests {
     }
 
     #[test]
-    fn the_extents_of_a_movie_lying_before_its_media_data_name_the_samples_a_demux_fsm_reads() {
-        let file = non_fragmented_file(&SAMPLE_CHUNKS, true);
+    fn the_extents_of_a_movie_name_the_samples_a_demux_fsm_reads_wherever_its_media_data_lies() {
+        for movie_first in [true, false] {
+            let file = non_fragmented_file(&SAMPLE_CHUNKS, movie_first);
 
-        let extents = extents_of(&file).unwrap();
+            let extents = extents_of(&file).unwrap();
 
-        assert_eq!(named_in(&file, &extents), samples_of(&file));
+            assert_eq!(named_in(&file, &extents), samples_of(&file));
+        }
     }
 
     #[test]
-    fn the_extents_of_a_movie_lying_after_its_media_data_are_read_in_one_pass() {
+    fn a_movie_lying_after_its_media_data_wants_nothing_but_the_continuation() {
         let file = non_fragmented_file(&SAMPLE_CHUNKS, false);
+        let mut extent_fsm = MovieSampleExtentFsm::new();
 
-        let extents = extents_of(&file).unwrap();
+        extent_fsm.handle_input(0, &file).unwrap();
 
-        assert_eq!(named_in(&file, &extents), samples_of(&file));
+        assert_eq!(
+            extent_fsm.wanted_input(),
+            Some(WantedInput::new(u64::try_from(file.len()).unwrap(), None))
+        );
     }
 
     #[test]
@@ -426,6 +438,11 @@ mod tests {
     fn a_media_segment_on_its_own_is_refused_as_a_fragment_before_the_movie() {
         let refused = extents_of(&segment_file_with_samples()).unwrap_err();
 
-        assert!(matches!(refused, Error::BoxOutOfOrder { .. }));
+        assert_eq!(
+            refused,
+            Error::BoxOutOfOrder {
+                box_type: MovieFragmentBox::BOX_TYPE
+            }
+        );
     }
 }
