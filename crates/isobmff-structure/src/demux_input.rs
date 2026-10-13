@@ -1,6 +1,8 @@
 //! [`DemuxInput`], the input half every demux FSM shares: the framing of the file, where the input stands, the samples gathered, and whether the demux FSM still reads
 
-use isobmff_sample::{Sample, SampleReader, SampleReaderLimits};
+use core::ops::Range;
+
+use isobmff_sample::{Sample, SampleReader};
 use isobmff_sequence::{BoxEvent, BoxReader};
 
 use crate::input_position::{InputPosition, InputRoute};
@@ -32,12 +34,73 @@ use crate::{Error, WantedInput};
 ///   [`AlreadyFinished`](crate::Error::AlreadyFinished), until
 ///   [`restart`](Self::restart) takes the reading up again.
 #[derive(Debug)]
-pub(crate) struct DemuxInput {
+pub(crate) struct DemuxInput<G> {
     boxes: BoxReader,
     position: InputPosition,
-    samples: SampleReader,
+    samples: G,
     framing: Result<(), Error>,
     state: State,
+}
+
+/// What a [`DemuxInput`] hands the bytes the samples lack to, and asks which bytes those are
+///
+/// A [`SampleReader`] gathers the samples whose extents it was handed; `()`
+/// gathers none, lacks no bytes, and so never has input routed to it.
+pub(crate) trait SampleGathering {
+    /// Returns the bytes of the file the samples lack next, if any
+    fn wanted_extent(&self) -> Option<Range<u64>>;
+
+    /// Takes bytes of the file read at `offset` that the samples lack
+    ///
+    /// # Errors
+    ///
+    /// [`Sample`](crate::Error::Sample): what the samples make of the bytes.
+    fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), Error>;
+
+    /// Checks, once the file is over, that no sample is short of its bytes
+    ///
+    /// # Errors
+    ///
+    /// [`Sample`](crate::Error::Sample): a sample is short of the data it
+    /// claimed.
+    fn finish(&mut self) -> Result<(), Error>;
+
+    /// Drops the samples held, for the reading to restart elsewhere
+    fn clear(&mut self);
+}
+
+impl SampleGathering for SampleReader {
+    fn wanted_extent(&self) -> Option<Range<u64>> {
+        Self::wanted_extent(self)
+    }
+
+    fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), Error> {
+        Self::handle_input(self, offset, input).map_err(Error::from)
+    }
+
+    fn finish(&mut self) -> Result<(), Error> {
+        Self::finish(self).map_err(Error::from)
+    }
+
+    fn clear(&mut self) {
+        Self::clear(self);
+    }
+}
+
+impl SampleGathering for () {
+    fn wanted_extent(&self) -> Option<Range<u64>> {
+        None
+    }
+
+    fn handle_input(&mut self, _offset: u64, _input: &[u8]) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn clear(&mut self) {}
 }
 
 /// Where the input stands between calls
@@ -51,14 +114,14 @@ enum State {
     Failed(Error),
 }
 
-impl DemuxInput {
-    /// Creates an input waiting at the start of a file, its samples gathered within `limits`
+impl<G: SampleGathering> DemuxInput<G> {
+    /// Creates an input waiting at the start of a file, the bytes its samples lack gathered by `samples`
     #[must_use]
-    pub(crate) const fn new(limits: SampleReaderLimits) -> Self {
+    pub(crate) const fn new(samples: G) -> Self {
         Self {
             boxes: BoxReader::new(),
             position: InputPosition::new(),
-            samples: SampleReader::with_limits(limits),
+            samples,
             framing: Ok(()),
             state: State::Reading,
         }
@@ -119,10 +182,7 @@ impl DemuxInput {
         {
             InputRoute::InOrder => {}
             InputRoute::Lacking => {
-                let gathered = self
-                    .samples
-                    .handle_input(input_offset, input)
-                    .map_err(Error::from);
+                let gathered = self.samples.handle_input(input_offset, input);
 
                 return self.record(gathered);
             }
@@ -142,11 +202,6 @@ impl DemuxInput {
         let (extent, event) = self.boxes.poll_event()?;
 
         Some((self.position.file_offset(extent.start), event))
-    }
-
-    /// Returns the samples being gathered, for the demux FSM to hand the extents and the media data it read
-    pub(crate) const fn samples_mut(&mut self) -> &mut SampleReader {
-        &mut self.samples
     }
 
     /// Keeps the failure of reading the events, or else the failure of the framing held, and reports it
@@ -190,7 +245,7 @@ impl DemuxInput {
     /// * What [`reading`](Self::reading) reports.
     pub(crate) fn finish(&mut self, checked: Result<(), Error>) -> Result<(), Error> {
         self.reading()?;
-        let finished = checked.and_then(|()| self.samples.finish().map_err(Error::from));
+        let finished = checked.and_then(|()| self.samples.finish());
 
         self.record(finished)?;
         self.state = State::Finished;
@@ -212,11 +267,6 @@ impl DemuxInput {
         self.state = State::Reading;
     }
 
-    /// Takes the next sample the input completed
-    pub(crate) fn poll_sample(&mut self) -> Option<Sample> {
-        self.samples.poll_sample()
-    }
-
     /// Returns the one read wanted next, or `None` once the file is declared over or the demux FSM has failed
     #[must_use]
     pub(crate) fn wanted_input(&self) -> Option<WantedInput> {
@@ -225,10 +275,22 @@ impl DemuxInput {
     }
 }
 
+impl DemuxInput<SampleReader> {
+    /// Returns the samples being gathered, for the demux FSM to hand the extents and the media data it read
+    pub(crate) const fn samples_mut(&mut self) -> &mut SampleReader {
+        &mut self.samples
+    }
+
+    /// Takes the next sample the input completed
+    pub(crate) fn poll_sample(&mut self) -> Option<Sample> {
+        self.samples.poll_sample()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use isobmff_boxes::SampleFlags;
-    use isobmff_sample::{Sample, SampleExtent, SampleProperties, SampleReaderLimits};
+    use isobmff_sample::{Sample, SampleExtent, SampleProperties, SampleReader};
     use isobmff_sequence::BoxEvent;
 
     use super::{DemuxInput, Error};
@@ -272,7 +334,7 @@ mod tests {
     }
 
     /// Reads every event the framing made as a demux FSM would, offering each payload to the samples
-    fn read_framed(input: &mut DemuxInput) -> Result<(), Error> {
+    fn read_framed(input: &mut DemuxInput<SampleReader>) -> Result<(), Error> {
         while let Some((start, event)) = input.poll_event() {
             if let BoxEvent::Payload(payload) = event {
                 input.samples_mut().handle_input(start, &payload)?;
@@ -283,8 +345,8 @@ mod tests {
     }
 
     /// An input handed `file` whole, its events read, and one sample declared at `start`
-    fn read_with_a_sample_at(file: &[u8], start: u64) -> DemuxInput {
-        let mut input = DemuxInput::new(SampleReaderLimits::new());
+    fn read_with_a_sample_at(file: &[u8], start: u64) -> DemuxInput<SampleReader> {
+        let mut input = DemuxInput::new(SampleReader::new());
 
         input.handle_input(0, file).unwrap();
         let read = read_framed(&mut input);
@@ -299,7 +361,7 @@ mod tests {
 
     #[test]
     fn the_samples_completed_before_a_framing_failure_are_still_taken() {
-        let mut input = DemuxInput::new(SampleReaderLimits::new());
+        let mut input = DemuxInput::new(SampleReader::new());
         input
             .samples_mut()
             .handle_sample_extent(extent_at(8))
@@ -322,7 +384,7 @@ mod tests {
 
     #[test]
     fn a_failure_of_reading_the_events_is_reported_before_the_failure_of_the_framing() {
-        let mut input = DemuxInput::new(SampleReaderLimits::new());
+        let mut input = DemuxInput::new(SampleReader::new());
         let failure = Error::UnwantedInput { input_offset: 0 };
 
         input.handle_input(0, BROKEN_BOX).unwrap();
@@ -332,7 +394,7 @@ mod tests {
 
     #[test]
     fn a_failed_input_reports_the_same_failure_for_every_call_after_it() {
-        let mut input = DemuxInput::new(SampleReaderLimits::new());
+        let mut input = DemuxInput::new(SampleReader::new());
         input.handle_input(0, BROKEN_BOX).unwrap();
         let failure = input.record(Ok(())).unwrap_err();
 
@@ -382,7 +444,7 @@ mod tests {
 
     #[test]
     fn empty_input_is_taken_as_nothing_wherever_it_is_handed_over() {
-        let mut input = DemuxInput::new(SampleReaderLimits::new());
+        let mut input = DemuxInput::new(SampleReader::new());
 
         assert_eq!(input.handle_input(9, &[]), Ok(()));
         assert_eq!(input.wanted_input(), Some(WantedInput::new(0, None)));
@@ -390,7 +452,7 @@ mod tests {
 
     #[test]
     fn a_file_declared_over_wants_nothing_and_takes_nothing_more() {
-        let mut input = DemuxInput::new(SampleReaderLimits::new());
+        let mut input = DemuxInput::new(SampleReader::new());
 
         input.finish_framing().unwrap();
         input.finish(Ok(())).unwrap();
