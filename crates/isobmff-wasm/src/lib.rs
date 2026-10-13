@@ -1,32 +1,32 @@
 //! The `isobmff` crate as the browser reaches it, through `wasm-bindgen`
 //!
 //! A value of the standard library comes back as a plain JavaScript value,
-//! and a value of the library as a class: `None` is `undefined`, a `u64` a
-//! `BigInt`, a `Vec<u8>` a `Uint8Array`, a `Vec` of another type and a
-//! tuple an array, and a [`core::ops::Range`] an object of `start` and `end`.
+//! and a value of the library as a class: `None` is `undefined`, a `u64` or
+//! an `i64` a `BigInt`, a `Vec<u8>` a `Uint8Array`, a `Vec` of another type
+//! and a tuple an array, and a [`core::ops::Range`] an object of `start` and
+//! `end`.
 //!
-//! A class named after a library type wraps that type, and its methods are
-//! the library's methods of the same names. Each variant of an enum carrying
-//! data is read through a method named after it, which returns the variant's
-//! data, or `undefined` for another variant, and `true` or `false` for a
-//! variant carrying none. What the library displays is the `toString` of the
-//! class, a constant is a function of the same name, and the `next` of an
-//! iterator returns the item, or `undefined` once the items are used up.
+//! A class named after a library type wraps that type, its methods are the
+//! library's methods of the same names, and a public field of the type is a
+//! property of the same name. A method returning a reference returns a copy.
+//! Each variant of an enum carrying data is read through a method named after
+//! it, which returns the variant's data, or `undefined` for another variant,
+//! and `true` or `false` for a variant carrying none. What the library
+//! displays is the `toString` of the class, a constant is a function of the
+//! same name, and the `next` of an iterator returns the item, or `undefined`
+//! once the items are used up.
 //!
-//! [`demux()`] and [`remux()`] are not of the library: they take the file as
-//! a `Blob` and read it through `FileReaderSync`, and [`remux()`] writes its
-//! output through a `FileSystemSyncAccessHandle`; both exist only in a
-//! worker, so those two are called from a worker. A failure reaches
-//! JavaScript as an `Error` whose message is the one the library states, or
-//! the exception the browser threw.
+//! [`remux()`] is not of the library: it takes the file as a `Blob` and reads
+//! it through `FileReaderSync`, and writes its output through a
+//! `FileSystemSyncAccessHandle`; both exist only in a worker, so it is called
+//! from a worker. A failure reaches JavaScript as an `Error` whose message is
+//! the one the library states, or the exception the browser threw.
 
 extern crate alloc;
 
-use core::{error, fmt};
 use std::io::{self, BufWriter};
 
 use isobmff::Mp4EpochSeconds;
-use isobmff::structure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsError;
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -36,23 +36,29 @@ use crate::sink::OpfsSink;
 use crate::source::{BlobSource, js_integer};
 
 mod boxes;
-mod demux;
 mod framing;
 mod remux;
+mod sample;
 mod sequence;
 mod sink;
 mod source;
+mod structure;
 
-pub use boxes::container_boxes;
-pub use demux::{Demux, SampleRecord, TrackRecord};
-pub use framing::{BoxHeader, BoxSize, BoxType, Boxes, RawBox};
+pub use boxes::{
+    HandlerBox, HeaderDuration, MediaBox, MediaHeaderBox, MediaInformationBox, MovieBox,
+    SampleDescriptionBox, SampleFlags, SampleTableBox, TrackBox, TrackHeaderBox, container_boxes,
+};
+pub use framing::{AnyBox, BoxHeader, BoxSize, BoxType, Boxes, FourCc, RawBox};
 pub use remux::Output;
+pub use sample::{SampleExtent, SampleProperties};
 pub use sequence::{BoxEvent, BoxReader};
+pub use structure::MovieSampleExtentFsm;
 
 #[wasm_bindgen]
 extern "C" {
     /// [`core::ops::Range`] of `u64` as a plain object of `start` and `end`
-    pub(crate) type Range;
+    #[wasm_bindgen(typescript_type = "{ start: bigint; end: bigint }")]
+    pub type Range;
 
     #[wasm_bindgen(method, setter)]
     fn set_start(this: &Range, start: u64);
@@ -68,58 +74,6 @@ impl From<core::ops::Range<u64>> for Range {
         object.set_end(range.end);
         object
     }
-}
-
-/// Reason [`demux()`] or [`remux()`] fails: the browser failed it, the input is one it does not take, or the library refused it
-#[derive(Debug)]
-pub(crate) enum Error {
-    /// The `Blob` did not read, the output did not write, the clock did not tell the time, or the input is one an export does not take
-    Io(io::Error),
-    /// The library refused what it read or what it was to write
-    Structure(structure::Error),
-}
-
-impl From<io::Error> for Error {
-    fn from(failure: io::Error) -> Self {
-        Self::Io(failure)
-    }
-}
-
-impl From<structure::Error> for Error {
-    fn from(failure: structure::Error) -> Self {
-        Self::Structure(failure)
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io(failure) => write!(formatter, "{failure}"),
-            Self::Structure(failure) => write!(formatter, "{failure}"),
-        }
-    }
-}
-
-impl error::Error for Error {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match self {
-            Self::Io(failure) => Some(failure),
-            Self::Structure(failure) => Some(failure),
-        }
-    }
-}
-
-/// Returns the tracks of the movie `blob` carries and the samples its tables declare
-///
-/// # Errors
-///
-/// The failure of reading `blob`, the reason the library refuses the boxes it
-/// reads or the tables the `moov` and each `moof` declare, or a file that
-/// carries no `moov`, or none ahead of its first `moof` as a media segment
-/// delivered apart from its movie does.
-#[wasm_bindgen]
-pub fn demux(blob: Blob) -> Result<Demux, JsError> {
-    Ok(demux::demux(BlobSource::new(blob)?)?)
 }
 
 /// Writes the movie file `blob` carries, fragmented or not, through `handle` in the layout `output` names

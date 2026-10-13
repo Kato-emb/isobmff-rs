@@ -1,5 +1,6 @@
 //! [`remux_to_fragmented`] and [`remux_to_non_fragmented`], a movie file written out again in the layout asked for
 
+use core::{error, fmt};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
 use isobmff::Mp4EpochSeconds;
@@ -12,11 +13,47 @@ use isobmff::sequence::OutputBytes;
 use isobmff::structure::{self, FragmentedMuxFsm, MovieDemuxFsm, NonFragmentedMuxFsm};
 use wasm_bindgen::prelude::wasm_bindgen;
 
-use crate::Error;
-use crate::demux::no_movie;
-
 /// The most bytes read from the source at a time
 const CUT_LENGTH: usize = 1024 * 1024;
+
+/// Reason [`remux()`](crate::remux()) fails: the browser failed it, the input is one it does not take, or the library refused it
+#[derive(Debug)]
+pub(crate) enum Error {
+    /// The `Blob` did not read, the output did not write, the clock did not tell the time, or the input is one [`remux()`](crate::remux()) does not take
+    Io(io::Error),
+    /// The library refused what it read or what it was to write
+    Structure(structure::Error),
+}
+
+impl From<io::Error> for Error {
+    fn from(failure: io::Error) -> Self {
+        Self::Io(failure)
+    }
+}
+
+impl From<structure::Error> for Error {
+    fn from(failure: structure::Error) -> Self {
+        Self::Structure(failure)
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(failure) => write!(formatter, "{failure}"),
+            Self::Structure(failure) => write!(formatter, "{failure}"),
+        }
+    }
+}
+
+impl error::Error for Error {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self {
+            Self::Io(failure) => Some(failure),
+            Self::Structure(failure) => Some(failure),
+        }
+    }
+}
 
 /// The layout a file is written out in
 #[wasm_bindgen]
@@ -333,6 +370,14 @@ fn unwritable_movie() -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
         "the movie declares no track, or two tracks of the same track_ID",
+    )
+}
+
+/// Returns the failure of a file that carries no `moov`, or none ahead of its first `moof`
+fn no_movie() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "the file carries no movie (moov) ahead of its samples; a media segment on its own, without the movie it continues, is not supported",
     )
 }
 

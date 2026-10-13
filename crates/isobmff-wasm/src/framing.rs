@@ -1,9 +1,23 @@
-//! The framing of ISO/IEC 14496-12 §4.2: [`BoxType`], [`BoxSize`], the [`BoxHeader`] they form, and the [`Boxes`] laid end to end
+//! The root of [`isobmff`]: the framing of ISO/IEC 14496-12 §4.2 ([`BoxType`], [`BoxSize`], the [`BoxHeader`] they form, the [`Boxes`] laid end to end), [`FourCc`] and [`AnyBox`]
 
 use alloc::vec;
 
 use wasm_bindgen::JsError;
 use wasm_bindgen::prelude::wasm_bindgen;
+
+/// [`isobmff::FourCc`]
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy)]
+pub struct FourCc(pub(crate) isobmff::FourCc);
+
+#[wasm_bindgen]
+impl FourCc {
+    /// Returns the four characters, as [`isobmff::FourCc`] displays them
+    #[wasm_bindgen(js_name = toString)]
+    pub fn display(&self) -> String {
+        self.0.to_string()
+    }
+}
 
 /// [`isobmff::BoxType`]
 #[wasm_bindgen]
@@ -109,5 +123,18 @@ impl Boxes {
     #[wasm_bindgen(js_name = next)]
     pub fn next_box(&mut self) -> Result<Option<RawBox>, JsError> {
         Ok(self.0.next().transpose()?)
+    }
+}
+
+/// [`isobmff::AnyBox`]
+#[wasm_bindgen]
+#[derive(Debug, Clone)]
+pub struct AnyBox(pub(crate) isobmff::AnyBox);
+
+#[wasm_bindgen]
+impl AnyBox {
+    /// [`isobmff::AnyBox::box_type`]
+    pub fn box_type(&self) -> BoxType {
+        BoxType(self.0.box_type())
     }
 }

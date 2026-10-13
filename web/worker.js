@@ -1,16 +1,9 @@
-import init, { Output, demux, remux } from "../crates/isobmff-wasm/pkg/isobmff_wasm.js";
+import init, { Output, remux } from "../crates/isobmff-wasm/pkg/isobmff_wasm.js";
+import { demux } from "./demux.js";
 import { dump } from "./dump.js";
 
 const ready = init();
 const OUTPUT_DIRECTORY = "isobmff-rs-remux";
-
-// A wasm-bindgen object does not survive postMessage: its fields are getters
-// over wasm memory, so each record is copied out into a plain object.
-function plain(record) {
-  const copy = record.toJSON();
-  record.free();
-  return copy;
-}
 
 async function attempt(read) {
   try {
@@ -58,11 +51,6 @@ self.onmessage = async ({ data }) => {
     return;
   }
   const boxes = await attempt(() => dump(data.file));
-  const movie = await attempt(() => {
-    const demuxed = demux(data.file);
-    const value = { tracks: demuxed.tracks.map(plain), samples: demuxed.samples.map(plain) };
-    demuxed.free();
-    return value;
-  });
+  const movie = await attempt(() => demux(data.file));
   self.postMessage({ boxes, movie });
 };
