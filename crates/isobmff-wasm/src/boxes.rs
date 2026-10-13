@@ -128,45 +128,27 @@ impl From<boxes::SampleDependencyTypeEntry> for SampleDependencyTypeEntry {
     }
 }
 
-/// [`isobmff::boxes::PaddingBitsEntry`]
-#[derive(Debug, Clone, Copy, Serialize)]
-struct PaddingBitsEntry {
-    /// [`isobmff::boxes::PaddingBitsEntry::pad`]
-    pad: u8,
-}
-
-/// [`isobmff::boxes::DegradationPriorityEntry`]
-#[derive(Debug, Clone, Copy, Serialize)]
-struct DegradationPriorityEntry {
-    /// [`isobmff::boxes::DegradationPriorityEntry::priority`]
-    priority: u16,
-}
-
 /// [`isobmff::boxes::SampleFlags`], its fields as the tables stating them do
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SampleFlags {
     /// [`isobmff::boxes::SampleFlags::sample_dependency_type`]
     sample_dependency_type: SampleDependencyTypeEntry,
-    /// [`isobmff::boxes::SampleFlags::padding_bits`]
-    padding_bits: PaddingBitsEntry,
+    /// [`isobmff::boxes::SampleFlags::padding_bits`], its [`isobmff::boxes::PaddingBitsEntry::pad`]
+    padding_bits: u8,
     /// [`isobmff::boxes::SampleFlags::sample_is_non_sync_sample`]
     sample_is_non_sync_sample: bool,
-    /// [`isobmff::boxes::SampleFlags::degradation_priority`]
-    degradation_priority: DegradationPriorityEntry,
+    /// [`isobmff::boxes::SampleFlags::degradation_priority`], its [`isobmff::boxes::DegradationPriorityEntry::priority`]
+    degradation_priority: u16,
 }
 
 impl From<boxes::SampleFlags> for SampleFlags {
     fn from(flags: boxes::SampleFlags) -> Self {
         Self {
             sample_dependency_type: flags.sample_dependency_type().into(),
-            padding_bits: PaddingBitsEntry {
-                pad: flags.padding_bits().pad(),
-            },
+            padding_bits: flags.padding_bits().pad(),
             sample_is_non_sync_sample: flags.sample_is_non_sync_sample(),
-            degradation_priority: DegradationPriorityEntry {
-                priority: flags.degradation_priority().priority(),
-            },
+            degradation_priority: flags.degradation_priority().priority(),
         }
     }
 }
@@ -193,22 +175,14 @@ export interface SampleDependencyTypeEntry {
     sampleHasRedundancy: SampleHasRedundancy;
 }
 
-/** `isobmff::boxes::PaddingBitsEntry` */
-export interface PaddingBitsEntry {
-    pad: number;
-}
-
-/** `isobmff::boxes::DegradationPriorityEntry` */
-export interface DegradationPriorityEntry {
-    priority: number;
-}
-
 /** `isobmff::boxes::SampleFlags`, its fields as the tables stating them do */
 export interface SampleFlags {
     sampleDependencyType: SampleDependencyTypeEntry;
-    paddingBits: PaddingBitsEntry;
+    /** `isobmff::boxes::PaddingBitsEntry::pad` */
+    paddingBits: number;
     sampleIsNonSyncSample: boolean;
-    degradationPriority: DegradationPriorityEntry;
+    /** `isobmff::boxes::DegradationPriorityEntry::priority` */
+    degradationPriority: number;
 }
 "#;
 

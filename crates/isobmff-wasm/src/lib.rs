@@ -6,7 +6,10 @@
 //! and which holds no wasm memory. Methods and the fields of a plain object
 //! are named in camelCase. An enum carrying data is a union discriminated by
 //! `type`, and an enum carrying none the camelCase name of its variant; a
-//! newtype is its inner value, `Option` is `undefined`, a `u64` or an `i64` a
+//! value the specification states as one field is the value of that field,
+//! and one it states as several an object of those fields, even where the
+//! library holds them in one integer (`SampleFlags`); `Option` is
+//! `undefined`, a `u64` or an `i64` a
 //! `BigInt`, `Vec<u8>` a `Uint8Array`, another `Vec` or a tuple an array, and
 //! a [`core::ops::Range`] an object of `start` and `end`. [`Boxes`] is
 //! iterable, and a `poll*` method returns `undefined` once nothing is ready.

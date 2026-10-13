@@ -123,9 +123,9 @@ test("the wanted input and the sample extents come as plain objects of the shape
       sampleCompositionTimeOffset: 0n,
       sampleFlags: {
         sampleDependencyType: { isLeading: "unknown", sampleDependsOn: "unknown", sampleIsDependedOn: "unknown", sampleHasRedundancy: "unknown" },
-        paddingBits: { pad: 0 },
+        paddingBits: 0,
         sampleIsNonSyncSample: false,
-        degradationPriority: { priority: 0 },
+        degradationPriority: 0,
       },
       sampleDescriptionIndex: 1,
     },
