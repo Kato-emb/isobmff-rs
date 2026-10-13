@@ -113,6 +113,9 @@ the browser. `pages.yml` deploys it on every push to `main`.
   ```
 
   and open <http://localhost:8000/web/>.
+- `web/test/` tests the site's JavaScript against that same output, with no
+  dependency to install. CI runs them with `node --test web/test/*.test.js`;
+  `bun test web/test/` runs the same files.
 
 ## Repository Settings This Scheme Relies On
 

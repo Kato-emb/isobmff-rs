@@ -113,6 +113,31 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy -p isobmff-wasm --target wasm32-unknown-unknown --all-targets -- -D warnings
 
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      # wasm-bindgen refuses a module built by a wasm-bindgen crate of another
+      # version, so the CLI is the one Cargo.lock pins.
+      - id: version
+        run: echo "wasm-bindgen=$(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "wasm-bindgen") | .version')" >> "$GITHUB_OUTPUT"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@${{ steps.version.outputs.wasm-bindgen }}
+      - run: cargo build -p isobmff-wasm --target wasm32-unknown-unknown
+      - run: wasm-bindgen --target web --out-dir crates/isobmff-wasm/pkg target/wasm32-unknown-unknown/debug/isobmff_wasm.wasm
+      # Why not the runner's Node: its version moves with the image, and no
+      # package.json marks the generated module as one, so only a Node that
+      # detects module syntax by default loads it.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: node --test web/test/*.test.js
+
   nightly:
     runs-on: ubuntu-latest
     continue-on-error: true

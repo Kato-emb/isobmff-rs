@@ -1,4 +1,5 @@
-import init, { Output, demux, dump_boxes, remux } from "../crates/isobmff-wasm/pkg/isobmff_wasm.js";
+import init, { Output, demux, remux } from "../crates/isobmff-wasm/pkg/isobmff_wasm.js";
+import { dump } from "./dump.js";
 
 const ready = init();
 const OUTPUT_DIRECTORY = "isobmff-rs-remux";
@@ -11,9 +12,9 @@ function plain(record) {
   return copy;
 }
 
-function attempt(read) {
+async function attempt(read) {
   try {
-    return { value: read() };
+    return { value: await read() };
   } catch (error) {
     return { error: error.message ?? String(error) };
   }
@@ -56,8 +57,8 @@ self.onmessage = async ({ data }) => {
     self.postMessage({ boxes: failed, movie: failed });
     return;
   }
-  const boxes = attempt(() => dump_boxes(data.file).map(plain));
-  const movie = attempt(() => {
+  const boxes = await attempt(() => dump(data.file));
+  const movie = await attempt(() => {
     const demuxed = demux(data.file);
     const value = { tracks: demuxed.tracks.map(plain), samples: demuxed.samples.map(plain) };
     demuxed.free();
