@@ -7,7 +7,9 @@ use isobmff_boxes::{
     MovieFragmentRandomAccessOffsetBox, SegmentIndexBox,
 };
 use isobmff_core::{BoxDecode, BoxDefinition};
-use isobmff_sample::{Sample, SegmentIndex, TrackDecodeTimes, movie_fragment, sample_table};
+use isobmff_sample::{
+    Sample, SampleReader, SegmentIndex, TrackDecodeTimes, movie_fragment, sample_table,
+};
 use isobmff_sequence::BoxEvent;
 
 use crate::fragmented_movie::{FragmentedDisposition, FragmentedStructure};
@@ -172,7 +174,7 @@ use crate::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
 /// ```
 #[derive(Debug)]
 pub struct MovieDemuxFsm {
-    input: DemuxInput,
+    input: DemuxInput<SampleReader>,
     structure: FragmentedStructure,
     decode_times: TrackDecodeTimes,
     open: Option<Open>,
@@ -228,7 +230,7 @@ impl MovieDemuxFsm {
     #[must_use]
     pub const fn with_limits(limits: DemuxLimits) -> Self {
         Self {
-            input: DemuxInput::new(limits.sample_reader()),
+            input: DemuxInput::new(SampleReader::with_limits(limits.sample_reader())),
             structure: FragmentedStructure::new(),
             decode_times: TrackDecodeTimes::unknown(),
             open: None,

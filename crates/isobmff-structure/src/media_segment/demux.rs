@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{MovieBox, MovieFragmentBox, SegmentIndexBox, SegmentTypeBox};
 use isobmff_sample::movie_fragment::sample_extents;
-use isobmff_sample::{Sample, SegmentIndex, TrackDecodeTimes};
+use isobmff_sample::{Sample, SampleReader, SegmentIndex, TrackDecodeTimes};
 use isobmff_sequence::BoxEvent;
 
 use super::{MediaSegmentDisposition, MediaSegmentStructure};
@@ -158,7 +158,7 @@ use crate::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
 /// ```
 #[derive(Debug)]
 pub struct MediaSegmentDemuxFsm {
-    input: DemuxInput,
+    input: DemuxInput<SampleReader>,
     structure: MediaSegmentStructure,
     decode_times: TrackDecodeTimes,
     open: Option<Open>,
@@ -203,7 +203,7 @@ impl MediaSegmentDemuxFsm {
     ///   [`TrackDecodeTimes::new`] makes of `movie`.
     pub fn with_limits(movie: MovieBox, limits: DemuxLimits) -> Result<Self, Error> {
         Ok(Self {
-            input: DemuxInput::new(limits.sample_reader()),
+            input: DemuxInput::new(SampleReader::with_limits(limits.sample_reader())),
             structure: MediaSegmentStructure::new(),
             decode_times: TrackDecodeTimes::new(&movie)?,
             open: None,
