@@ -226,7 +226,7 @@ pub use error::Error;
 pub use fragmented_movie::FragmentedMuxFsm;
 pub use input_position::WantedInput;
 pub use media_segment::{MediaSegmentDemuxFsm, MediaSegmentMuxFsm};
-pub use movie::MovieDemuxFsm;
+pub use movie::{MovieDemuxFsm, MovieSampleExtentFsm};
 pub use non_fragmented_movie::NonFragmentedMuxFsm;
 
 pub(crate) use demux_input::DemuxInput;
