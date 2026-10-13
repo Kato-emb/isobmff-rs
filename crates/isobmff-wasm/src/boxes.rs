@@ -1,4 +1,8 @@
-//! [`isobmff::boxes`]: [`CONTAINER_BOXES`](isobmff::boxes::CONTAINER_BOXES), the boxes from the `moov` down to the `stsd` as handles into one root, and the data types their fields and samples carry
+//! [`isobmff::boxes`]: [`CONTAINER_BOXES`](isobmff::boxes::CONTAINER_BOXES), the boxes from the `moov` down to the `stsd` as handles into one root, and the data types samples carry
+//!
+//! The boxes are those of ISO/IEC 14496-12 §8.2.1 (`moov`) to §8.5.2
+//! (`stsd`), each class citing its own section; the data types are the
+//! sample flags of §8.8.3.1 and the `sdtp` entry of §8.6.4 within them.
 
 use alloc::rc::Rc;
 use core::cell::RefCell;

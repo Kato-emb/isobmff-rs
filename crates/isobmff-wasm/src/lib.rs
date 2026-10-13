@@ -8,11 +8,12 @@
 //! `type`, and an enum carrying none the camelCase name of its variant; a
 //! value the specification states as one field is the value of that field,
 //! and one it states as several an object of those fields, even where the
-//! library holds them in one integer (`SampleFlags`); `Option` is
-//! `undefined`, a `u64` or an `i64` a
-//! `BigInt`, `Vec<u8>` a `Uint8Array`, another `Vec` or a tuple an array, and
-//! a [`core::ops::Range`] an object of `start` and `end`. [`Boxes`] is
-//! iterable, and a `poll*` method returns `undefined` once nothing is ready.
+//! library holds them in one integer (`SampleFlags`); a four-character code
+//! or a UUID is the string it displays as, `Option` is `undefined`, a `u64`
+//! or an `i64` a `BigInt`, `Vec<u8>` a `Uint8Array`, another `Vec` or a tuple
+//! an array, and a [`core::ops::Range`] an object of `start` and `end`.
+//! [`Boxes`] is iterable, and a `poll*` method returns `undefined` once
+//! nothing is ready.
 //!
 //! A box a state machine lends is copied once into a root that the box's
 //! class holds; the class of a box within it is a handle holding that root
