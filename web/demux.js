@@ -1,5 +1,6 @@
 import { MovieSampleExtentFsm } from "../crates/isobmff-wasm/pkg/isobmff_wasm.js";
 import { boxTypeName } from "./dump.js";
+import { EDITS } from "./edits.js";
 
 const CUT_LENGTH = 1024 * 1024;
 
@@ -9,9 +10,10 @@ const CUT_LENGTH = 1024 * 1024;
  * Resolves to { tracks, samples }: the tracks in the order the movie declares
  * them, the samples of the movie in the order their bytes lie in the file,
  * then those of each fragment in the order it declares them. A track is
- * { track_id, handler_type, timescale, duration, sample_entries }, duration
- * undefined where it is indeterminate; a sample is { track_id, decode_time,
- * sample_duration, sample_composition_time_offset, sync,
+ * { track_id, handler_type, timescale, duration, sample_entries, edits },
+ * duration undefined where it is indeterminate and edits the value each of
+ * `EDITS` reads from the track, keyed by its `key`; a sample is { track_id,
+ * decode_time, sample_duration, sample_composition_time_offset, sync,
  * sample_description_index, offset, size }. Every 64-bit value is a BigInt.
  * Rejects with the library's Error, whose `kind` names the layer that
  * refused, a fragment ahead of the movie among them, or the exception the
@@ -38,9 +40,12 @@ export async function demux(blob) {
       }
     }
     const movie = fsm.movie();
+    const mvhd = movie.mvhd();
+    const movieTimescale = mvhd.timescale();
     const traks = movie.trak();
+    mvhd.free();
     movie.free();
-    return { tracks: traks.map(track), samples };
+    return { tracks: traks.map((trak) => track(trak, movieTimescale)), samples };
   } finally {
     // Why not leave it to the FinalizationRegistry: it holds the movie and its
     // sample tables, the collector does not see wasm memory, and wasm memory
@@ -49,7 +54,7 @@ export async function demux(blob) {
   }
 }
 
-function track(trak) {
+function track(trak, movieTimescale) {
   const tkhd = trak.tkhd();
   const mdia = trak.mdia();
   const mdhd = mdia.mdhd();
@@ -65,6 +70,7 @@ function track(trak) {
       timescale: mdhd.timescale(),
       duration: mdhd.duration(),
       sample_entries: entries.map((entry) => boxTypeName(entry.boxType())),
+      edits: Object.fromEntries(EDITS.map((edit) => [edit.key, edit.read(trak, movieTimescale)])),
     };
   } finally {
     for (const handle of [trak, tkhd, mdia, mdhd, hdlr, minf, stbl, stsd, ...entries]) {

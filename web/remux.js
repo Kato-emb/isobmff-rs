@@ -10,6 +10,7 @@ import {
   SampleToChunkBox,
   TimeToSampleBox,
 } from "../crates/isobmff-wasm/pkg/isobmff_wasm.js";
+import { applyEdits } from "./edits.js";
 
 const CUT_LENGTH = 1024 * 1024;
 
@@ -26,7 +27,9 @@ const CUT_LENGTH = 1024 * 1024;
  * with no such track, a fragmented one among them, is written as one
  * fragment. The source's `ftyp` is carried over, unless it lists a brand the
  * `default-base-is-moof` of the fragments shall not be used under, where the
- * one the muxer lays down takes its place.
+ * one the muxer lays down takes its place. Each track carries the edits
+ * `changes` states for its `track_ID`, as `applyEdits` makes them, which may
+ * drop boxes of the track.
  *
  * Rejects with the library's Error, whose `kind` names the layer that
  * refused what it read or what it was to write, a file carrying no `moov` or
@@ -37,10 +40,11 @@ const CUT_LENGTH = 1024 * 1024;
  * threw.
  *
  * @param {Blob} blob
+ * @param {Map<number, Record<string, number>>} changes
  * @param {(bytes: Uint8Array) => void} write
  * @returns {Promise<void>}
  */
-export async function remuxToFragmented(blob, write) {
+export async function remuxToFragmented(blob, changes, write) {
   const demux = new MovieDemuxFsm();
   const mux = new FragmentedMuxFsm();
   const queues = [];
@@ -54,7 +58,8 @@ export async function remuxToFragmented(blob, write) {
       const read = await readMovie(demux, blob);
       refused = read.refused;
       const source = hold(read.source);
-      const movie = MovieBox.newFragmented(hold(source.mvhd()).timescale(), source.trak());
+      const timescale = hold(source.mvhd()).timescale();
+      const movie = MovieBox.newFragmented(timescale, editedTracks(source.trak(), timescale, changes));
       if (!movie) {
         throw unwritableMovie();
       }
@@ -183,7 +188,9 @@ export async function remuxToFragmented(blob, write) {
  * and every other box of the movie dropped, and the sample tables of each
  * track are filled in from the samples and the durations updated from them.
  * A chunk opens wherever the samples pass to another track or another sample
- * description. The source's `ftyp` is carried over.
+ * description. The source's `ftyp` is carried over. Each track carries the
+ * edits `changes` states for its `track_ID`, as `applyEdits` makes them,
+ * which may drop boxes of the track.
  *
  * Rejects with the library's Error, whose `kind` names the layer that
  * refused what it read or what it was to write, a file carrying no `moov` or
@@ -193,10 +200,11 @@ export async function remuxToFragmented(blob, write) {
  *
  * @param {Blob} blob
  * @param {bigint} now the seconds since 1904, as `Mp4EpochSeconds.fromUnixSeconds` states them
+ * @param {Map<number, Record<string, number>>} changes
  * @param {(bytes: Uint8Array) => void} write
  * @returns {Promise<void>}
  */
-export async function remuxToNonFragmented(blob, now, write) {
+export async function remuxToNonFragmented(blob, now, changes, write) {
   const demux = new MovieDemuxFsm();
   const mux = new NonFragmentedMuxFsm();
   const held = [];
@@ -208,13 +216,15 @@ export async function remuxToNonFragmented(blob, now, write) {
       const read = await readMovie(demux, blob);
       refused = read.refused;
       const source = hold(read.source);
+      const mvhd = hold(source.mvhd());
       traks = source.trak();
       for (const trak of traks) {
         trak.setTkhd(hold(hold(trak.tkhd()).withModificationTime(now)));
         const mdia = hold(trak.mdia());
         mdia.setMdhd(hold(hold(mdia.mdhd()).withModificationTime(now)));
       }
-      const movie = MovieBox.new(hold(hold(source.mvhd()).withModificationTime(now)), traks.splice(0));
+      traks = editedTracks(traks, mvhd.timescale(), changes);
+      const movie = MovieBox.new(hold(mvhd.withModificationTime(now)), traks.splice(0));
       if (!movie) {
         throw unwritableMovie();
       }
@@ -261,6 +271,18 @@ export async function remuxToNonFragmented(blob, now, write) {
     demux.free();
     mux.free();
   }
+}
+
+function editedTracks(traks, movieTimescale, changes) {
+  return traks.map((trak) => {
+    const tkhd = trak.tkhd();
+    const edited = applyEdits(trak, changes.get(tkhd.trackId()) ?? {}, movieTimescale);
+    tkhd.free();
+    if (edited !== trak) {
+      trak.free();
+    }
+    return edited;
+  });
 }
 
 async function readMovie(demux, blob) {

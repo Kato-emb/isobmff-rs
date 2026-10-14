@@ -8,7 +8,16 @@ import { box, movie } from "./fixtures.js";
 
 const wasm = initSync({ module: readFileSync(new URL("../../crates/isobmff-wasm/pkg/isobmff_wasm_bg.wasm", import.meta.url)) });
 
-const TRACKS = [{ track_id: 1, handler_type: "vide", timescale: 90_000, duration: 0n, sample_entries: ["avc1"] }];
+const TRACKS = [
+  {
+    track_id: 1,
+    handler_type: "vide",
+    timescale: 90_000,
+    duration: 0n,
+    sample_entries: ["avc1"],
+    edits: { rotation: null, starting_offset: 0, media_time: 0 },
+  },
+];
 
 function samples(chunkOffset) {
   const sample = { track_id: 1, sample_duration: 3000, sample_description_index: 1 };

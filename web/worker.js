@@ -15,7 +15,7 @@ async function attempt(read) {
   }
 }
 
-async function remuxToStorage({ file, output, name }) {
+async function remuxToStorage({ file, output, name, changes }) {
   const root = await navigator.storage.getDirectory();
   // The directory, not the root, is emptied: the origin is shared by every
   // site published under the same account.
@@ -49,13 +49,13 @@ async function remuxToStorage({ file, output, name }) {
       }
     };
     if (output === "Fragmented") {
-      await remuxToFragmented(file, write);
+      await remuxToFragmented(file, changes, write);
     } else {
       const now = Mp4EpochSeconds.fromUnixSeconds(BigInt(Math.floor(Date.now() / 1000)));
       if (now === undefined) {
         throw new Error("the clock is past what a header states");
       }
-      await remuxToNonFragmented(file, now, write);
+      await remuxToNonFragmented(file, now, changes, write);
     }
     flush();
     handle.flush();

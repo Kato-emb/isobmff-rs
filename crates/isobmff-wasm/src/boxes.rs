@@ -21,8 +21,8 @@ mod movie;
 mod sample_table;
 
 pub use movie::{
-    HandlerBox, MediaBox, MediaHeaderBox, MediaInformationBox, MovieBox, MovieHeaderBox, TrackBox,
-    TrackHeaderBox,
+    EditBox, EditListBox, HandlerBox, MediaBox, MediaHeaderBox, MediaInformationBox, MovieBox,
+    MovieHeaderBox, TrackBox, TrackHeaderBox,
 };
 pub use sample_table::{
     AnyBox, ChunkOffsets, JsSampleChunks, SampleDescriptionBox, SampleSizeBox, SampleSizes,
@@ -274,6 +274,24 @@ impl<T: 'static> Place<T> {
             } else {
                 Err(Failure::handle())
             }
+        }))
+    }
+
+    /// Returns the place `step` leads to from this one, for a box the library lends no `_mut` path to
+    ///
+    /// Each call hands over a copy of the box, so a change made through the
+    /// place is lost.
+    fn child_copy<C: Clone + 'static>(
+        &self,
+        step: impl Fn(&T) -> Option<&C> + 'static,
+    ) -> Place<C> {
+        let parent = self.clone();
+        Place(Rc::new(move |visit| {
+            let mut copy = parent
+                .read(|value| step(value).cloned())?
+                .ok_or_else(Failure::handle)?;
+            visit(&mut copy);
+            Ok(())
         }))
     }
 
