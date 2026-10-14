@@ -1,4 +1,4 @@
-//! The boxes of ISO/IEC 14496-12 §8.2.1 (`moov`) to §8.4.4 (`minf`), each a root of its own or a handle into one
+//! The boxes of ISO/IEC 14496-12 §8.2.1 (`moov`) to §8.4.4 (`minf`), and the `edts` and `elst` of §8.6.5 and §8.6.6, each a root of its own or a handle into one
 
 use alloc::rc::Rc;
 use core::cell::RefCell;
@@ -141,6 +141,30 @@ impl TrackBox {
 
 #[wasm_bindgen]
 impl TrackBox {
+    /// [`isobmff::boxes::TrackBox::new`] of copies of `tkhd` and `mdia`, a root of its own
+    ///
+    /// # Errors
+    ///
+    /// `"handle"`: the path of either box leads to no box.
+    pub fn new(tkhd: &TrackHeaderBox, mdia: &MediaBox) -> Result<Self, Failure> {
+        Ok(Self(Place::root(boxes::TrackBox::new(
+            tkhd.0.read(Clone::clone)?,
+            mdia.0.read(Clone::clone)?,
+        ))))
+    }
+
+    /// [`isobmff::boxes::TrackBox::with_edts`] of a copy of `edts`, a root of its own
+    ///
+    /// # Errors
+    ///
+    /// `"handle"`: the path of either box leads to no box.
+    #[wasm_bindgen(js_name = withEdts)]
+    pub fn with_edts(&self, edts: &EditBox) -> Result<Self, Failure> {
+        let edts = edts.0.read(Clone::clone)?;
+        let track = self.0.read(|track| track.clone().with_edts(edts))?;
+        Ok(Self(Place::root(track)))
+    }
+
     /// [`isobmff::boxes::TrackBox::tkhd`], a handle
     pub fn tkhd(&self) -> TrackHeaderBox {
         TrackHeaderBox(self.0.child(|track| Some(track.tkhd_mut())))
@@ -157,9 +181,100 @@ impl TrackBox {
         self.0.write(|track| *track.tkhd_mut() = tkhd)
     }
 
+    /// [`isobmff::boxes::TrackBox::edts`], a handle, or none where the library returns none
+    ///
+    /// # Errors
+    ///
+    /// `"handle"`: the path leads to no box.
+    pub fn edts(&self) -> Result<Option<EditBox>, Failure> {
+        let held = self.0.read(|track| track.edts().is_some())?;
+        Ok(held.then(|| EditBox(self.0.child_copy(boxes::TrackBox::edts))))
+    }
+
     /// [`isobmff::boxes::TrackBox::mdia`], a handle
     pub fn mdia(&self) -> MediaBox {
         MediaBox(self.0.child(|track| Some(track.mdia_mut())))
+    }
+}
+
+/// [`isobmff::boxes::EditBox`] (`edts`), ISO/IEC 14496-12 §8.6.5, a handle or a root of its own
+#[doc(alias = "edts")]
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct EditBox(Place<boxes::EditBox>);
+
+#[wasm_bindgen]
+impl EditBox {
+    /// [`isobmff::boxes::EditBox::new`], a root of its own
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self(Place::root(boxes::EditBox::new()))
+    }
+
+    /// [`isobmff::boxes::EditBox::with_elst`] of a copy of `elst`, a root of its own
+    ///
+    /// # Errors
+    ///
+    /// `"handle"`: the path of either box leads to no box.
+    #[wasm_bindgen(js_name = withElst)]
+    pub fn with_elst(&self, elst: &EditListBox) -> Result<Self, Failure> {
+        let elst = elst.0.read(Clone::clone)?;
+        let edts = self.0.read(|edts| edts.clone().with_elst(elst))?;
+        Ok(Self(Place::root(edts)))
+    }
+
+    /// [`isobmff::boxes::EditBox::elst`], a handle, or none where the library returns none
+    ///
+    /// # Errors
+    ///
+    /// `"handle"`: the path leads to no box.
+    pub fn elst(&self) -> Result<Option<EditListBox>, Failure> {
+        let held = self.0.read(|edts| edts.elst().is_some())?;
+        Ok(held.then(|| EditListBox(self.0.child_copy(boxes::EditBox::elst))))
+    }
+}
+
+impl Default for EditBox {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// [`isobmff::boxes::EditListBox`] (`elst`), ISO/IEC 14496-12 §8.6.6, a handle or a root of its own
+#[doc(alias = "elst")]
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct EditListBox(Place<boxes::EditListBox>);
+
+#[wasm_bindgen]
+impl EditListBox {
+    /// [`isobmff::boxes::EditListBox::from_starting_offset`], a root of its own
+    #[wasm_bindgen(js_name = fromStartingOffset)]
+    pub fn from_starting_offset(starting_offset: u64, media_time: u64) -> Self {
+        Self(Place::root(boxes::EditListBox::from_starting_offset(
+            starting_offset,
+            media_time,
+        )))
+    }
+
+    /// [`isobmff::boxes::EditListBox::starting_offset`]
+    ///
+    /// # Errors
+    ///
+    /// `"handle"`: the path leads to no box.
+    #[wasm_bindgen(js_name = startingOffset)]
+    pub fn starting_offset(&self) -> Result<Option<u64>, Failure> {
+        self.0.read(boxes::EditListBox::starting_offset)
+    }
+
+    /// [`isobmff::boxes::EditListBox::media_time`]
+    ///
+    /// # Errors
+    ///
+    /// `"handle"`: the path leads to no box.
+    #[wasm_bindgen(js_name = mediaTime)]
+    pub fn media_time(&self) -> Result<Option<u64>, Failure> {
+        self.0.read(boxes::EditListBox::media_time)
     }
 }
 
@@ -179,6 +294,37 @@ impl TrackHeaderBox {
     #[wasm_bindgen(js_name = trackId)]
     pub fn track_id(&self) -> Result<u32, Failure> {
         self.0.read(boxes::TrackHeaderBox::track_id)
+    }
+
+    /// [`isobmff::boxes::TrackHeaderBox::matrix`], the nine integers the fields of the matrix carry
+    ///
+    /// # Errors
+    ///
+    /// `"handle"`: the path leads to no box.
+    pub fn matrix(&self) -> Result<Vec<i32>, Failure> {
+        self.0.read(|header| header.matrix().raw().to_vec())
+    }
+
+    /// [`isobmff::boxes::TrackHeaderBox::with_matrix`] of the nine integers the fields of the matrix carry, a root of its own
+    ///
+    /// # Errors
+    ///
+    /// `"binding"`: `matrix` does not hold nine integers; `"handle"`: the
+    /// path leads to no box.
+    #[wasm_bindgen(js_name = withMatrix)]
+    pub fn with_matrix(&self, matrix: Vec<i32>) -> Result<Self, Failure> {
+        let matrix = <[i32; 9]>::try_from(matrix).map_err(|matrix| {
+            serde_wasm_bindgen::Error::new(format_args!(
+                "a matrix holds nine integers, not {}",
+                matrix.len()
+            ))
+        })?;
+        let header = self.0.read(|header| {
+            header
+                .clone()
+                .with_matrix(isobmff::Matrix::from_raw(matrix))
+        })?;
+        Ok(Self(Place::root(header)))
     }
 
     /// [`isobmff::boxes::TrackHeaderBox::with_modification_time`] at the seconds since 1904, a root of its own

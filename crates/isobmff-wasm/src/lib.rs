@@ -12,27 +12,30 @@
 //! and one it states as several an object of those fields, even where the
 //! library holds them in one integer (`SampleFlags`); a four-character code
 //! or a UUID is the string it displays as, `Option` is `undefined`, a `u64`
-//! or an `i64` a `BigInt`, `Vec<u8>` a `Uint8Array`, an argument of `u32`s a
-//! `Uint32Array` and one of `u64`s a `BigUint64Array`, another `Vec` or a
-//! tuple an array, and a [`core::ops::Range`] an object of `start` and `end`.
+//! or an `i64` a `BigInt`, `Vec<u8>` a `Uint8Array`, `i32`s an `Int32Array`
+//! whether taken or returned, an argument of `u32`s a `Uint32Array` and one
+//! of `u64`s a `BigUint64Array`, another `Vec` or a tuple an array, and a
+//! [`core::ops::Range`] an object of `start` and `end`.
 //! [`Boxes`] is iterable, and a `poll*` method returns `undefined` once
 //! nothing is ready.
 //!
 //! A box a state machine lends, or one a constructor or a `with*` method
 //! makes, is a root of its own that the box's class holds; the class of a box
 //! within it is a handle holding that root and the path to the box, followed
-//! again on every call. `set<Child>(box)` puts a copy of `box` in place of
-//! the child, and a box handed to a state machine is copied too. A `Sample`
-//! handed to `handleSample` and the tracks handed to `MovieBox.new` or
-//! `newFragmented` are taken by the call. Every other class is released by
-//! its user with `free()` or `using`, but for the boxes `for…of` walks, which
-//! release what they hold once used up or failed.
+//! again on every call; a box the library lends no `_mut` path to is read
+//! from a copy each call, and its class changes nothing in place.
+//! `set<Child>(box)` puts a copy of `box` in place of the child, and a box
+//! handed to a state machine is copied too. A `Sample` handed to
+//! `handleSample` and the tracks handed to `MovieBox.new` or `newFragmented`
+//! are taken by the call. Every other class is released by its user with
+//! `free()` or `using`, but for the boxes `for…of` walks, which release what
+//! they hold once used up or failed.
 //!
 //! A failure is thrown as an `Error` whose message is the one the library
 //! states and whose `kind` names the layer that refused: `"box"`,
 //! `"sequence"`, `"sample"` or `"structure"`, `"handle"` for a handle whose
 //! path leads to no box, and `"binding"` for a value that did not convert to
-//! or from a plain object.
+//! or from a plain object or to the value the library takes.
 
 extern crate alloc;
 
@@ -49,10 +52,10 @@ mod sequence;
 mod structure;
 
 pub use boxes::{
-    AnyBox, ChunkOffsets, FileTypeBox, HandlerBox, JsSampleChunks, MediaBox, MediaHeaderBox,
-    MediaInformationBox, MovieBox, MovieHeaderBox, Mp4EpochSeconds, SampleDescriptionBox,
-    SampleSizeBox, SampleSizes, SampleTableBox, SampleToChunkBox, SyncSampleBox, TimeToSampleBox,
-    TrackBox, TrackHeaderBox, container_boxes,
+    AnyBox, ChunkOffsets, EditBox, EditListBox, FileTypeBox, HandlerBox, JsSampleChunks, MediaBox,
+    MediaHeaderBox, MediaInformationBox, MovieBox, MovieHeaderBox, Mp4EpochSeconds,
+    SampleDescriptionBox, SampleSizeBox, SampleSizes, SampleTableBox, SampleToChunkBox,
+    SyncSampleBox, TimeToSampleBox, TrackBox, TrackHeaderBox, container_boxes,
 };
 pub use framing::{Boxes, JsBoxType, JsIteratorStep};
 pub use sample::{JsSampleProperties, Sample};

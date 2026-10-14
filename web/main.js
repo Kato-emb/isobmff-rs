@@ -1,3 +1,5 @@
+import { EDITS } from "./edits.js";
+
 const PAGE_LENGTH = 500;
 const HEX_LENGTH = 4096;
 const BOX_HEX_LENGTH = 512;
@@ -36,7 +38,7 @@ const VIEWS = {
   boxes: { noun: "box", count: (data) => data.boxes.length, error: (data) => data.boxesError, render: renderBoxes, inspect: inspectBox },
   tracks: { noun: "track", count: (data) => data.tracks.length, error: (data) => data.samplesError, render: renderTracks, inspect: inspectTrack },
   samples: { noun: "sample", count: (data) => data.samples.length, error: (data) => data.samplesError, render: renderSamples, inspect: inspectSample },
-  remux: { render: renderRemux },
+  remux: { noun: "track", render: renderRemux, inspect: inspectEdits },
 };
 
 let worker;
@@ -49,6 +51,7 @@ const state = {
   track: null,
   page: 0,
   remux: null,
+  changes: new Map(),
 };
 
 function element(tag, attributes = {}, ...children) {
@@ -137,7 +140,7 @@ function remuxTo(output) {
   remuxWorker.onmessage = ({ data: reply }) =>
     finished(reply.error ? { error: reply.error } : { name, size: reply.file.size, url: URL.createObjectURL(reply.file) });
   remuxWorker.onerror = (event) => finished({ error: event.message });
-  remuxWorker.postMessage({ request: "remux", file: data.file, output, name });
+  remuxWorker.postMessage({ request: "remux", file: data.file, output, name, changes: state.changes });
 }
 
 function loaded(file, { boxes, movie }) {
@@ -175,7 +178,7 @@ function loaded(file, { boxes, movie }) {
     trackStatistics,
     samplesError: movie.error ?? null,
   };
-  Object.assign(state, { tab: "overview", chosen: null, collapsed: new Set(), track: null, page: 0 });
+  Object.assign(state, { tab: "overview", chosen: null, collapsed: new Set(), track: null, page: 0, changes: new Map() });
   chip.textContent = `${file.name} · ${bytes(file.size)}`;
   render();
 }
@@ -311,50 +314,165 @@ function renderOverview() {
   list.replaceChildren(element("div", { class: "scroll" }, element("div", { class: "overview" }, sections)));
 }
 
+function offeredEdits(track) {
+  return EDITS.filter((edit) => edit.applies(track));
+}
+
+function editValue(edit, value) {
+  return value === null ? "other" : edit.control.format(value);
+}
+
+function changeEdit(key, value) {
+  const track = state.data.tracks[state.chosen];
+  const edit = EDITS.find((candidate) => candidate.key === key);
+  const changes = { ...state.changes.get(track.track_id) };
+  const source = track.edits[key];
+  if (value === undefined || value === source || (edit.control.type === "seconds" && source !== null && Math.abs(value - source) < 10 ** -edit.control.digits / 2)) {
+    delete changes[edit.key];
+  } else {
+    changes[edit.key] = value;
+  }
+  if (Object.keys(changes).length > 0) {
+    state.changes.set(track.track_id, changes);
+  } else {
+    state.changes.delete(track.track_id);
+  }
+  render({ keepScroll: true });
+}
+
 function renderRemux() {
-  const { remux } = state;
+  const { remux, data } = state;
+  const changedByTrack = data.tracks.map((track) => {
+    const changes = state.changes.get(track.track_id) ?? {};
+    return offeredEdits(track)
+      .filter((edit) => edit.key in changes)
+      .map((edit) => ({ track, edit, value: changes[edit.key] }));
+  });
+  const changed = changedByTrack.flat();
   list.replaceChildren(
     element(
       "div",
+      { class: "toolbar" },
+      Object.entries(OUTPUTS).map(([output, { label }]) =>
+        element(
+          "button",
+          { type: "button", "data-remux": output, disabled: remux?.writing ?? false, "aria-pressed": String(remux?.output === output) },
+          label,
+        ),
+      ),
+      element(
+        "span",
+        { class: "summary" },
+        changed.length === 0 ? "No changes: the tracks are written as read" : `${grouped(changed.length)} ${changed.length === 1 ? "change" : "changes"}`,
+      ),
+    ),
+    element(
+      "div",
       { class: "scroll" },
+      table(
+        [["Track"], ["Kind"], ["Codec", true], ["Changes"]],
+        data.tracks.map((track, index) => {
+          const count = changedByTrack[index].length;
+          return [
+            index,
+            [
+              track.track_id,
+              kind(track.handler_type),
+              track.sample_entries.join(", "),
+              count === 0 ? element("td", { class: "muted" }, "—") : element("td", {}, element("span", { class: "badge changed" }, grouped(count))),
+            ],
+          ];
+        }),
+      ),
       element(
         "div",
-        { class: "overview" },
-        element(
-          "div",
-          { class: "remux" },
-          element("h2", {}, "Remux"),
-          element(
-            "p",
-            { class: "muted" },
-            "Write the samples of this file out again as a fragmented or a non-fragmented MP4. The output is written in this browser and kept in its storage until the next remux.",
-          ),
-          element(
-            "div",
-            { class: "choices" },
-            Object.entries(OUTPUTS).map(([output, { label }]) =>
-              element(
-                "button",
-                { type: "button", "data-remux": output, disabled: remux?.writing ?? false, "aria-pressed": String(remux?.output === output) },
-                label,
+        { class: "remux" },
+        changed.length > 0
+          ? element(
+              "ul",
+              { class: "changes" },
+              changed.map(({ track, edit, value }) =>
+                element(
+                  "li",
+                  {},
+                  `Track ${track.track_id} · ${edit.label}: `,
+                  element("span", { class: "muted" }, editValue(edit, track.edits[edit.key])),
+                  " → ",
+                  element("strong", {}, editValue(edit, value)),
+                ),
               ),
-            ),
-          ),
-          remux?.writing ? element("p", { class: "muted" }, "Writing…") : null,
-          remux?.error ? element("p", { class: "error" }, remux.error) : null,
-          remux?.url
-            ? element(
-                "p",
-                {},
-                element("a", { class: "open-file", href: remux.url, download: remux.name }, `Download ${remux.name}`),
-                " ",
-                element("span", { class: "muted" }, bytes(remux.size)),
-              )
-            : null,
-        ),
+            )
+          : element("p", { class: "muted" }, "Choose a track to change how it is presented. The samples are written as they are."),
+        [...new Set(changed.map(({ edit }) => edit.note).filter(Boolean))].map((note) => element("p", { class: "muted" }, note)),
+        remux?.writing ? element("p", { class: "muted" }, "Writing…") : null,
+        remux?.error ? element("p", { class: "error" }, remux.error) : null,
+        remux?.url
+          ? element(
+              "p",
+              {},
+              element("a", { class: "open-file", href: remux.url, download: remux.name }, `Download ${remux.name}`),
+              " ",
+              element("span", { class: "muted" }, bytes(remux.size)),
+            )
+          : null,
+        element("p", { class: "muted" }, "The output is written in this browser and kept in its storage until the next remux."),
       ),
     ),
   );
+}
+
+function inspectEdits(data, chosen) {
+  const track = data.tracks[chosen];
+  const changes = state.changes.get(track.track_id) ?? {};
+  return [
+    element("h2", {}, `Track ${track.track_id}`),
+    element("div", { class: "subtitle" }, `${kind(track.handler_type)} · ${track.sample_entries.join(", ")} · ${grouped(track.timescale)} /s`),
+    ...offeredEdits(track).map((edit) => {
+      const source = track.edits[edit.key];
+      const changed = edit.key in changes;
+      const value = changed ? changes[edit.key] : source;
+      const fieldId = `edit-${edit.key}`;
+      return element(
+        "div",
+        { class: changed ? "field changed" : "field" },
+        element(
+          "div",
+          { class: "head" },
+          element("label", { for: fieldId }, edit.label),
+          changed ? element("button", { type: "button", class: "reset", "data-reset": edit.key }, "Revert") : null,
+        ),
+        edit.control.type === "choice"
+          ? element(
+              "div",
+              { class: "segments", role: "group", "aria-label": edit.label },
+              edit.control.values.map((option) =>
+                element(
+                  "button",
+                  { type: "button", id: option === edit.control.values[0] ? fieldId : null, "data-edit": edit.key, "data-value": option, "aria-pressed": String(option === value) },
+                  edit.control.format(option),
+                ),
+              ),
+            )
+          : element(
+              "div",
+              { class: "seconds" },
+              element("input", {
+                id: fieldId,
+                type: "number",
+                inputmode: "decimal",
+                min: 0,
+                step: 10 ** -edit.control.digits,
+                "data-edit": edit.key,
+                value: value === null ? "" : value.toFixed(edit.control.digits),
+                placeholder: value === null ? "other" : null,
+              }),
+              "s",
+            ),
+        element("div", { class: "was" }, `Read: ${editValue(edit, source)}`),
+        element("div", { class: "help" }, edit.help),
+      );
+    }),
+  ];
 }
 
 function table(headings, entries) {
@@ -645,9 +763,28 @@ list.addEventListener("keydown", (event) => {
 });
 
 inspector.addEventListener("click", (event) => {
+  const option = event.target.closest("button[data-edit]");
+  const reset = event.target.closest("[data-reset]");
   if (event.target.closest("[data-close]")) {
     choose(null);
+  } else if (option) {
+    changeEdit(option.dataset.edit, Number(option.dataset.value));
+  } else if (reset) {
+    changeEdit(reset.dataset.reset);
   }
+});
+
+inspector.addEventListener("change", (event) => {
+  const field = event.target.closest("input[data-edit]");
+  if (!field) {
+    return;
+  }
+  const value = Number(field.value);
+  if (field.value === "" || !Number.isFinite(value) || value < 0) {
+    render({ keepScroll: true });
+    return;
+  }
+  changeEdit(field.dataset.edit, value);
 });
 
 document.querySelector("#open").addEventListener("click", () => input.click());
