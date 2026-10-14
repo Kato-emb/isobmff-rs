@@ -285,7 +285,8 @@ async function readMovie(demux, blob) {
 
 async function handWanted(demux, wanted, blob) {
   const start = Number(wanted.offset);
-  const cut = new Uint8Array(await blob.slice(start, start + CUT_LENGTH).arrayBuffer());
+  const length = wanted.length === undefined ? CUT_LENGTH : Math.min(CUT_LENGTH, Number(wanted.length));
+  const cut = new Uint8Array(await blob.slice(start, start + length).arrayBuffer());
   try {
     if (cut.length === 0) {
       demux.finish();
