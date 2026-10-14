@@ -345,13 +345,11 @@ name = "isobmff-wasm"
 version = "0.0.0"
 dependencies = [
  "isobmff",
- "isobmff-test-support",
  "js-sys",
  "serde",
  "serde-wasm-bindgen",
  "serde_bytes",
  "wasm-bindgen",
- "web-sys",
 ]
 
 [[package]]
@@ -793,16 +791,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23f0c9c52aa7cd7d77769a4cfe2a9adb1b331f489a41d912ce14513d5ab995c6"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "web-sys"
-version = "0.3.106"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88261b9deccee56594c11a3460c462c41f58d148598fe70ad77070126a68aba4"
-dependencies = [
- "js-sys",
- "wasm-bindgen",
 ]
 
 [[package]]

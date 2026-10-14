@@ -41,11 +41,10 @@ impl MovieBox {
     ///
     /// `"handle"`: the path of `mvhd` or of a track leads to no box.
     pub fn new(mvhd: &MovieHeaderBox, trak: Vec<TrackBox>) -> Result<Option<Self>, Failure> {
-        let trak = trak
-            .iter()
-            .map(|track| track.0.read(Clone::clone))
-            .collect::<Result<_, _>>()?;
-        Ok(boxes::MovieBox::new(mvhd.0.read(Clone::clone)?, trak, None).map(Self::new_root))
+        Ok(
+            boxes::MovieBox::new(mvhd.0.read(Clone::clone)?, TrackBox::values(&trak)?, None)
+                .map(Self::new_root),
+        )
     }
 
     /// [`isobmff::boxes::MovieBox::new_fragmented`], taking the handles of `tracks`, a root of its own, or none where the library refuses the tracks
@@ -55,11 +54,10 @@ impl MovieBox {
     /// `"handle"`: the path of a track leads to no box.
     #[wasm_bindgen(js_name = newFragmented)]
     pub fn new_fragmented(timescale: u32, tracks: Vec<TrackBox>) -> Result<Option<Self>, Failure> {
-        let tracks = tracks
-            .iter()
-            .map(|track| track.0.read(Clone::clone))
-            .collect::<Result<_, _>>()?;
-        Ok(boxes::MovieBox::new_fragmented(timescale, tracks).map(Self::new_root))
+        Ok(
+            boxes::MovieBox::new_fragmented(timescale, TrackBox::values(&tracks)?)
+                .map(Self::new_root),
+        )
     }
 
     /// [`isobmff::boxes::MovieBox::mvhd`], a handle
@@ -126,6 +124,20 @@ impl MovieHeaderBox {
 #[wasm_bindgen]
 #[derive(Debug)]
 pub struct TrackBox(Place<boxes::TrackBox>);
+
+impl TrackBox {
+    /// Returns copies of the boxes `tracks` lead to, as the library takes them
+    ///
+    /// # Errors
+    ///
+    /// `"handle"`: the path of a track leads to no box.
+    fn values(tracks: &[Self]) -> Result<Vec<boxes::TrackBox>, Failure> {
+        tracks
+            .iter()
+            .map(|track| track.0.read(Clone::clone))
+            .collect()
+    }
+}
 
 #[wasm_bindgen]
 impl TrackBox {

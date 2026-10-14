@@ -5,6 +5,7 @@ import { remuxToFragmented, remuxToNonFragmented } from "./remux.js";
 
 const ready = init();
 const OUTPUT_DIRECTORY = "isobmff-rs-remux";
+const WRITE_LENGTH = 1024 * 1024;
 
 async function attempt(read) {
   try {
@@ -27,7 +28,26 @@ async function remuxToStorage({ file, output, name }) {
   const fileHandle = await outputs.getFileHandle(name, { create: true });
   const handle = await fileHandle.createSyncAccessHandle();
   try {
-    const write = (bytes) => handle.write(bytes);
+    // Why not hand each output to the handle: the non-fragmented muxer yields
+    // the bytes of each sample apart, and a synchronous write per sample is
+    // slow on large files.
+    const buffer = new Uint8Array(WRITE_LENGTH);
+    let buffered = 0;
+    const flush = () => {
+      handle.write(buffer.subarray(0, buffered));
+      buffered = 0;
+    };
+    const write = (bytes) => {
+      if (buffered + bytes.length > buffer.length) {
+        flush();
+      }
+      if (bytes.length >= buffer.length) {
+        handle.write(bytes);
+      } else {
+        buffer.set(bytes, buffered);
+        buffered += bytes.length;
+      }
+    };
     if (output === "Fragmented") {
       await remuxToFragmented(file, write);
     } else {
@@ -37,6 +57,7 @@ async function remuxToStorage({ file, output, name }) {
       }
       await remuxToNonFragmented(file, now, write);
     }
+    flush();
     handle.flush();
   } finally {
     handle.close();

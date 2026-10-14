@@ -283,9 +283,8 @@ impl<T: 'static> Place<T> {
     ///
     /// `"handle"`: the path leads to no box.
     fn read<R>(&self, read: impl FnOnce(&T) -> R) -> Result<R, Failure> {
-        let mut read = Some(read);
         let mut made = None;
-        (self.0)(&mut |value| made = read.take().map(|read| read(value)))?;
+        self.write(|value| made = Some(read(value)))?;
         made.ok_or_else(Failure::handle)
     }
 

@@ -33,35 +33,19 @@
 //! `"sequence"`, `"sample"` or `"structure"`, `"handle"` for a handle whose
 //! path leads to no box, and `"binding"` for a value that did not convert to
 //! or from a plain object.
-//!
-//! [`remux()`] is not of the library: it takes the file as a `Blob` and reads
-//! it through `FileReaderSync`, and writes its output through a
-//! `FileSystemSyncAccessHandle`; both exist only in a worker, so it is called
-//! from a worker. Its failure is an `Error` whose message is the one the
-//! library states, or the exception the browser threw.
 
 extern crate alloc;
-
-use std::io::{self, BufWriter};
 
 use serde::Serialize;
 use serde_wasm_bindgen::Serializer;
 use wasm_bindgen::JsCast;
-use wasm_bindgen::JsError;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::wasm_bindgen;
-use web_sys::{Blob, FileSystemSyncAccessHandle};
-
-use crate::sink::OpfsSink;
-use crate::source::{BlobSource, js_integer};
 
 mod boxes;
 mod framing;
-mod remux;
 mod sample;
 mod sequence;
-mod sink;
-mod source;
 mod structure;
 
 pub use boxes::{
@@ -71,7 +55,6 @@ pub use boxes::{
     TrackBox, TrackHeaderBox, container_boxes,
 };
 pub use framing::{Boxes, JsBoxType, JsIteratorStep};
-pub use remux::Output;
 pub use sample::{JsSampleProperties, Sample};
 pub use sequence::{BoxReader, JsPolledEvent};
 pub use structure::{
@@ -219,45 +202,4 @@ impl From<Failure> for JsValue {
         error.set_kind(failure.kind);
         error.into()
     }
-}
-
-/// Writes the movie file `blob` carries, fragmented or not, through `handle` in the layout `output` names
-///
-/// The file is written from where the cursor of `handle` stands. As
-/// [`Fragmented`](Output::Fragmented), each track keeps its boxes but for its
-/// sample tables, its samples lie in the fragments alone, written in decode
-/// time across the tracks, and a fragment opens at every sync sample of a
-/// track that carries a sync sample table. As
-/// [`NonFragmented`](Output::NonFragmented), the movie header and the tracks
-/// are kept with their modification times set to now and their sample tables
-/// and durations made anew from the samples, every other box of the movie is
-/// dropped, and a chunk opens wherever the samples pass to another track or
-/// another sample description.
-///
-/// # Errors
-///
-/// The failure of reading `blob` or of writing through `handle`; the reason
-/// the library refuses what it reads or what it is to write, a file that
-/// carries no `moov` or none ahead of its first `moof` among them; a movie
-/// declaring no track or two tracks of the same `track_ID`; more fragments
-/// than a sequence number counts; or a clock past what a header states.
-#[wasm_bindgen]
-pub fn remux(
-    blob: Blob,
-    output: Output,
-    handle: FileSystemSyncAccessHandle,
-) -> Result<(), JsError> {
-    let source = BlobSource::new(blob)?;
-    let sink = BufWriter::new(OpfsSink(handle));
-    match output {
-        Output::Fragmented => remux::remux_to_fragmented(source, sink)?,
-        Output::NonFragmented => {
-            let now = isobmff::Mp4EpochSeconds::from_unix_seconds(
-                js_integer(js_sys::Date::now())? / 1000,
-            )
-            .ok_or_else(|| io::Error::other("the clock is past what a header states"))?;
-            remux::remux_to_non_fragmented(source, sink, now)?;
-        }
-    }
-    Ok(())
 }

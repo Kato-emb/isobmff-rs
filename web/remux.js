@@ -45,65 +45,55 @@ export async function remuxToFragmented(blob, write) {
   const mux = new FragmentedMuxFsm();
   const queues = [];
   const fragment = [];
+  const cutTracks = new Set();
+  const held = [];
+  const hold = (handle) => (held.push(handle), handle);
   try {
-    let { source, refused } = await readMovie(demux, blob);
-    const cutTracks = new Set();
+    let refused;
     try {
-      const mvhd = source.mvhd();
-      const timescale = mvhd.timescale();
-      mvhd.free();
-      const movie = MovieBox.newFragmented(timescale, source.trak());
+      const read = await readMovie(demux, blob);
+      refused = read.refused;
+      const source = hold(read.source);
+      const movie = MovieBox.newFragmented(hold(source.mvhd()).timescale(), source.trak());
       if (!movie) {
         throw unwritableMovie();
       }
-      try {
-        for (const trak of source.trak()) {
-          const held = [trak];
-          const hold = (handle) => (held.push(handle), handle);
-          try {
-            const trackId = hold(trak.tkhd()).trackId();
-            const mdia = hold(trak.mdia());
-            const stbl = hold(hold(mdia.minf()).stbl());
-            const stss = stbl.stss();
-            if (stss) {
-              stss.free();
-              cutTracks.add(trackId);
-            }
-            queues.push({ trackId, timescale: hold(mdia.mdhd()).timescale(), samples: [], next: 0 });
-            const target = movie.trakById(trackId);
-            if (!target) {
-              throw unwritableMovie();
-            }
-            const emptied = hold(
-              SampleTableBox.new(
-                hold(stbl.stsd()),
-                hold(TimeToSampleBox.fromDeltas([])),
-                hold(SampleToChunkBox.fromChunks([])),
-                hold(SampleSizes.stsz(hold(SampleSizeBox.fromSizes([])))),
-                hold(ChunkOffsets.fromOffsets([])),
-              ),
-            );
-            hold(hold(hold(target).mdia()).minf()).setStbl(emptied);
-          } finally {
-            free(held);
-          }
+      hold(movie);
+      for (const trak of source.trak().map(hold)) {
+        const trackId = hold(trak.tkhd()).trackId();
+        const mdia = hold(trak.mdia());
+        const stbl = hold(hold(mdia.minf()).stbl());
+        const stss = stbl.stss();
+        if (stss) {
+          hold(stss);
+          cutTracks.add(trackId);
         }
-        const fileType = demux.fileType();
-        if (fileType) {
-          try {
-            if (!fileType.forbidsDefaultBaseIsMoof()) {
-              mux.handleFileType(fileType);
-            }
-          } finally {
-            fileType.free();
-          }
+        queues.push({ trackId, timescale: BigInt(hold(mdia.mdhd()).timescale()), samples: [], next: 0 });
+        const target = movie.trakById(trackId);
+        if (!target) {
+          throw unwritableMovie();
         }
-        mux.handleMovie(movie);
-      } finally {
-        movie.free();
+        const emptied = hold(
+          SampleTableBox.new(
+            hold(stbl.stsd()),
+            hold(TimeToSampleBox.fromDeltas([])),
+            hold(SampleToChunkBox.fromChunks([])),
+            hold(SampleSizes.stsz(hold(SampleSizeBox.fromSizes([])))),
+            hold(ChunkOffsets.fromOffsets([])),
+          ),
+        );
+        hold(hold(hold(target).mdia()).minf()).setStbl(emptied);
       }
+      const fileType = demux.fileType();
+      if (fileType) {
+        hold(fileType);
+        if (!fileType.forbidsDefaultBaseIsMoof()) {
+          mux.handleFileType(fileType);
+        }
+      }
+      mux.handleMovie(movie);
     } finally {
-      source.free();
+      free(held.splice(0));
     }
 
     let sequenceNumber = 0;
@@ -158,8 +148,8 @@ export async function remuxToFragmented(blob, write) {
       // once, and moving the rest of the queue for each one taken is quadratic.
       const taken = earliest.samples[earliest.next];
       earliest.next += 1;
-      if (earliest.next === earliest.samples.length) {
-        earliest.samples = [];
+      if (earliest.next * 2 >= earliest.samples.length) {
+        earliest.samples.splice(0, earliest.next);
         earliest.next = 0;
       }
       const isCutTrack = cutTracks.has(taken.properties.trackId);
@@ -209,61 +199,46 @@ export async function remuxToFragmented(blob, write) {
 export async function remuxToNonFragmented(blob, now, write) {
   const demux = new MovieDemuxFsm();
   const mux = new NonFragmentedMuxFsm();
+  const held = [];
+  const hold = (handle) => (held.push(handle), handle);
+  let traks = [];
   try {
-    let { source, refused } = await readMovie(demux, blob);
+    let refused;
     try {
-      const traks = source.trak();
+      const read = await readMovie(demux, blob);
+      refused = read.refused;
+      const source = hold(read.source);
+      traks = source.trak();
       for (const trak of traks) {
-        const held = [];
-        const hold = (handle) => (held.push(handle), handle);
-        try {
-          trak.setTkhd(hold(hold(trak.tkhd()).withModificationTime(now)));
-          const mdia = hold(trak.mdia());
-          mdia.setMdhd(hold(hold(mdia.mdhd()).withModificationTime(now)));
-        } finally {
-          free(held);
-        }
+        trak.setTkhd(hold(hold(trak.tkhd()).withModificationTime(now)));
+        const mdia = hold(trak.mdia());
+        mdia.setMdhd(hold(hold(mdia.mdhd()).withModificationTime(now)));
       }
-      const mvhd = source.mvhd();
-      const touched = mvhd.withModificationTime(now);
-      mvhd.free();
-      let movie;
-      try {
-        movie = MovieBox.new(touched, traks);
-      } finally {
-        touched.free();
-      }
+      const movie = MovieBox.new(hold(hold(source.mvhd()).withModificationTime(now)), traks.splice(0));
       if (!movie) {
         throw unwritableMovie();
       }
-      try {
-        const fileType = demux.fileType();
-        if (fileType) {
-          try {
-            mux.handleFileType(fileType);
-          } finally {
-            fileType.free();
-          }
-        }
-        mux.handleMovie(movie);
-      } finally {
-        movie.free();
+      hold(movie);
+      const fileType = demux.fileType();
+      if (fileType) {
+        hold(fileType);
+        mux.handleFileType(fileType);
       }
+      mux.handleMovie(movie);
     } finally {
-      source.free();
+      free([...held.splice(0), ...traks.splice(0)]);
     }
 
     let chunk;
     for (;;) {
       for (let sample; (sample = demux.pollSample()); ) {
         const { trackId, sampleDescriptionIndex } = sample.properties();
-        const describedBy = `${trackId}:${sampleDescriptionIndex}`;
-        if (chunk !== describedBy) {
+        if (chunk?.trackId !== trackId || chunk.sampleDescriptionIndex !== sampleDescriptionIndex) {
           if (chunk !== undefined) {
             mux.finishChunk();
             writeOutput(mux, write);
           }
-          chunk = describedBy;
+          chunk = { trackId, sampleDescriptionIndex };
           mux.beginChunk();
         }
         mux.handleSample(sample);
@@ -333,7 +308,7 @@ function writeOutput(mux, write) {
 function earlier(queue, other) {
   const time = queue.samples[queue.next].properties.decodeTime;
   const otherTime = other.samples[other.next].properties.decodeTime;
-  return time * BigInt(other.timescale) < otherTime * BigInt(queue.timescale);
+  return time * other.timescale < otherTime * queue.timescale;
 }
 
 function unwritableMovie() {
