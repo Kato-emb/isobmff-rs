@@ -431,14 +431,14 @@ function inspectEdits(data, chosen) {
       const source = track.edits[edit.key];
       const changed = edit.key in changes;
       const value = changed ? changes[edit.key] : source;
-      const id = `edit-${edit.key}`;
+      const fieldId = `edit-${edit.key}`;
       return element(
         "div",
         { class: changed ? "field changed" : "field" },
         element(
           "div",
           { class: "head" },
-          element("label", { for: id }, edit.label),
+          element("label", { for: fieldId }, edit.label),
           changed ? element("button", { type: "button", class: "reset", "data-reset": edit.key }, "Revert") : null,
         ),
         edit.control.type === "choice"
@@ -448,7 +448,7 @@ function inspectEdits(data, chosen) {
               edit.control.values.map((option) =>
                 element(
                   "button",
-                  { type: "button", id: option === edit.control.values[0] ? id : null, "data-edit": edit.key, "data-value": option, "aria-pressed": String(option === value) },
+                  { type: "button", id: option === edit.control.values[0] ? fieldId : null, "data-edit": edit.key, "data-value": option, "aria-pressed": String(option === value) },
                   edit.control.format(option),
                 ),
               ),
@@ -457,7 +457,7 @@ function inspectEdits(data, chosen) {
               "div",
               { class: "seconds" },
               element("input", {
-                id,
+                id: fieldId,
                 type: "number",
                 inputmode: "decimal",
                 min: 0,
