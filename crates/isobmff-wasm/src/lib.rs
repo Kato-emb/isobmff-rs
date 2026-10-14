@@ -1,7 +1,9 @@
 //! The `isobmff` crate as the browser reaches it, through `wasm-bindgen`
 //!
-//! A box, a state machine, [`BoxReader`] and [`Boxes`] are classes named
-//! after the library's types; every other value is a plain object, built by
+//! A box, a state machine, [`BoxReader`], [`Boxes`], a [`Sample`] and the
+//! enums holding boxes ([`SampleSizes`], [`ChunkOffsets`]) are classes named
+//! after the library's types, and [`Mp4EpochSeconds`] a class of a static
+//! method alone; every other value is a plain object, built by
 //! `serde-wasm-bindgen`, whose TypeScript type is written by hand beside it
 //! and which holds no wasm memory. Methods and the fields of a plain object
 //! are named in camelCase. An enum carrying data is a union discriminated by
@@ -10,62 +12,55 @@
 //! and one it states as several an object of those fields, even where the
 //! library holds them in one integer (`SampleFlags`); a four-character code
 //! or a UUID is the string it displays as, `Option` is `undefined`, a `u64`
-//! or an `i64` a `BigInt`, `Vec<u8>` a `Uint8Array`, another `Vec` or a tuple
-//! an array, and a [`core::ops::Range`] an object of `start` and `end`.
+//! or an `i64` a `BigInt`, `Vec<u8>` a `Uint8Array`, an argument of `u32`s a
+//! `Uint32Array` and one of `u64`s a `BigUint64Array`, another `Vec` or a
+//! tuple an array, and a [`core::ops::Range`] an object of `start` and `end`.
 //! [`Boxes`] is iterable, and a `poll*` method returns `undefined` once
 //! nothing is ready.
 //!
-//! A box a state machine lends is copied once into a root that the box's
-//! class holds; the class of a box within it is a handle holding that root
-//! and the path to the box, followed again on every call. Each class is
-//! released by its user with `free()` or `using`, but for the boxes `for…of`
-//! walks, which release what they hold once used up or failed.
+//! A box a state machine lends, or one a constructor or a `with*` method
+//! makes, is a root of its own that the box's class holds; the class of a box
+//! within it is a handle holding that root and the path to the box, followed
+//! again on every call. `set<Child>(box)` puts a copy of `box` in place of
+//! the child, and a box handed to a state machine is copied too. A `Sample`
+//! handed to `handleSample` and the tracks handed to `MovieBox.new` or
+//! `newFragmented` are taken by the call. Every other class is released by
+//! its user with `free()` or `using`, but for the boxes `for…of` walks, which
+//! release what they hold once used up or failed.
 //!
 //! A failure is thrown as an `Error` whose message is the one the library
 //! states and whose `kind` names the layer that refused: `"box"`,
 //! `"sequence"`, `"sample"` or `"structure"`, `"handle"` for a handle whose
 //! path leads to no box, and `"binding"` for a value that did not convert to
-//! a plain object.
-//!
-//! [`remux()`] is not of the library: it takes the file as a `Blob` and reads
-//! it through `FileReaderSync`, and writes its output through a
-//! `FileSystemSyncAccessHandle`; both exist only in a worker, so it is called
-//! from a worker. Its failure is an `Error` whose message is the one the
-//! library states, or the exception the browser threw.
+//! or from a plain object.
 
 extern crate alloc;
 
-use std::io::{self, BufWriter};
-
-use isobmff::Mp4EpochSeconds;
 use serde::Serialize;
 use serde_wasm_bindgen::Serializer;
 use wasm_bindgen::JsCast;
-use wasm_bindgen::JsError;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::wasm_bindgen;
-use web_sys::{Blob, FileSystemSyncAccessHandle};
-
-use crate::sink::OpfsSink;
-use crate::source::{BlobSource, js_integer};
 
 mod boxes;
 mod framing;
-mod remux;
 mod sample;
 mod sequence;
-mod sink;
-mod source;
 mod structure;
 
 pub use boxes::{
-    AnyBox, HandlerBox, MediaBox, MediaHeaderBox, MediaInformationBox, MovieBox,
-    SampleDescriptionBox, SampleTableBox, TrackBox, TrackHeaderBox, container_boxes,
+    AnyBox, ChunkOffsets, FileTypeBox, HandlerBox, JsSampleChunks, MediaBox, MediaHeaderBox,
+    MediaInformationBox, MovieBox, MovieHeaderBox, Mp4EpochSeconds, SampleDescriptionBox,
+    SampleSizeBox, SampleSizes, SampleTableBox, SampleToChunkBox, SyncSampleBox, TimeToSampleBox,
+    TrackBox, TrackHeaderBox, container_boxes,
 };
 pub use framing::{Boxes, JsBoxType, JsIteratorStep};
-pub use remux::Output;
+pub use sample::{JsSampleProperties, Sample};
 pub use sequence::{BoxReader, JsPolledEvent};
-pub use structure::{JsSampleExtent, JsWantedInput, MovieSampleExtentFsm};
+pub use structure::{
+    FragmentedMuxFsm, JsSampleExtent, JsWantedInput, MovieDemuxFsm, MovieSampleExtentFsm,
+    NonFragmentedMuxFsm,
+};
 
 /// [`core::ops::Range`] of `u64`
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -94,7 +89,7 @@ impl From<core::ops::Range<u64>> for Range {
     }
 }
 
-/// A refusal of the library, of a handle or of a conversion to a plain object, thrown as an `Error` carrying the `kind` of the layer that refused
+/// A refusal of the library, of a handle or of a conversion to or from a plain object, thrown as an `Error` carrying the `kind` of the layer that refused
 #[derive(Debug)]
 pub struct Failure {
     /// The layer that refused
@@ -207,43 +202,4 @@ impl From<Failure> for JsValue {
         error.set_kind(failure.kind);
         error.into()
     }
-}
-
-/// Writes the movie file `blob` carries, fragmented or not, through `handle` in the layout `output` names
-///
-/// The file is written from where the cursor of `handle` stands. As
-/// [`Fragmented`](Output::Fragmented), each track keeps its boxes but for its
-/// sample tables, its samples lie in the fragments alone, written in decode
-/// time across the tracks, and a fragment opens at every sync sample of a
-/// track that carries a sync sample table. As
-/// [`NonFragmented`](Output::NonFragmented), the movie header and the tracks
-/// are kept with their modification times set to now and their sample tables
-/// and durations made anew from the samples, every other box of the movie is
-/// dropped, and a chunk opens wherever the samples pass to another track or
-/// another sample description.
-///
-/// # Errors
-///
-/// The failure of reading `blob` or of writing through `handle`; the reason
-/// the library refuses what it reads or what it is to write, a file that
-/// carries no `moov` or none ahead of its first `moof` among them; a movie
-/// declaring no track or two tracks of the same `track_ID`; more fragments
-/// than a sequence number counts; or a clock past what a header states.
-#[wasm_bindgen]
-pub fn remux(
-    blob: Blob,
-    output: Output,
-    handle: FileSystemSyncAccessHandle,
-) -> Result<(), JsError> {
-    let source = BlobSource::new(blob)?;
-    let sink = BufWriter::new(OpfsSink(handle));
-    match output {
-        Output::Fragmented => remux::remux_to_fragmented(source, sink)?,
-        Output::NonFragmented => {
-            let now = Mp4EpochSeconds::from_unix_seconds(js_integer(js_sys::Date::now())? / 1000)
-                .ok_or_else(|| io::Error::other("the clock is past what a header states"))?;
-            remux::remux_to_non_fragmented(source, sink, now)?;
-        }
-    }
-    Ok(())
 }

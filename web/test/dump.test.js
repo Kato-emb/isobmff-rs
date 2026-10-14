@@ -4,16 +4,9 @@ import { test } from "node:test";
 
 import { BoxReader, Boxes, initSync } from "../../crates/isobmff-wasm/pkg/isobmff_wasm.js";
 import { dump } from "../dump.js";
+import { box } from "./fixtures.js";
 
 const wasm = initSync({ module: readFileSync(new URL("../../crates/isobmff-wasm/pkg/isobmff_wasm_bg.wasm", import.meta.url)) });
-
-function box(type, ...payload) {
-  const bytes = new Uint8Array(payload.reduce((length, part) => length + part.length, 8));
-  new DataView(bytes.buffer).setUint32(0, bytes.length);
-  bytes.set(new TextEncoder().encode(type), 4);
-  payload.reduce((at, part) => (bytes.set(part, at), at + part.length), 8);
-  return bytes;
-}
 
 function listed(box_type, offset, size, depth) {
   return { box_type, offset: BigInt(offset), size: size === undefined ? undefined : BigInt(size), depth };

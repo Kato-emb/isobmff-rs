@@ -98,8 +98,13 @@ The site at <https://kato-emb.github.io/isobmff-rs/web/> runs the library in
 the browser. `pages.yml` deploys it on every push to `main`.
 
 - `crates/isobmff-wasm/` is the crate `isobmff-wasm`, the library as `wasm-bindgen` exports
-  it. Its output, `crates/isobmff-wasm/pkg/`, is not committed, and is not published to npm.
-- `web/` is the site: HTML, plain ES modules and a stylesheet, no bundler.
+  it: the library's types and functions under their own names, each added when the site first
+  needs it, with no logic of its own. Its crate doc states how a type crosses (class or plain object, names, handles,
+  errors). Its output, `crates/isobmff-wasm/pkg/`, is not committed, and is not published to npm.
+- `web/` is the site: HTML, plain ES modules and a stylesheet, no bundler. What the site does
+  with a file is its JavaScript: the read loops, the box tree (`dump.js`), the tables
+  (`demux.js`), the remux (`remux.js`) and the writing of its output to the browser's storage
+  (`worker.js`).
   It imports `../crates/isobmff-wasm/pkg/isobmff_wasm.js`, so the two directories keep their
   places relative to each other when served.
 - Build and serve it locally with a `wasm-bindgen` CLI of the version

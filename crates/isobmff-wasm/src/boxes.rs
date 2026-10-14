@@ -1,11 +1,14 @@
-//! [`isobmff::boxes`]: [`CONTAINER_BOXES`](isobmff::boxes::CONTAINER_BOXES), the boxes from the `moov` down to the `stsd` as handles into one root, and the data types samples carry
+//! [`isobmff::boxes`]: [`CONTAINER_BOXES`](isobmff::boxes::CONTAINER_BOXES), the `ftyp`, the boxes from the `moov` down to the sample tables, each a root of its own or a handle into one, the data types samples carry, and [`Mp4EpochSeconds`]
 //!
-//! The boxes are those of ISO/IEC 14496-12 §8.2.1 (`moov`) to §8.5.2
-//! (`stsd`), each class citing its own section; the data types are the
-//! sample flags of §8.8.3.1 and the `sdtp` entry of §8.6.4 within them.
+//! The boxes are the `ftyp` of ISO/IEC 14496-12 §4.3 and those of §8.2.1
+//! (`moov`) to §8.7.5 (`stco`, `co64`), each class citing its own section;
+//! the data types are the sample flags of §8.8.3.1 and the `sdtp` entry of
+//! §8.6.4 within them, and the time of §6.2.2 that [`Mp4EpochSeconds`]
+//! converts.
 
 use alloc::rc::Rc;
 use core::cell::RefCell;
+use core::fmt;
 
 use isobmff::boxes;
 use serde::Serialize;
@@ -13,6 +16,18 @@ use wasm_bindgen::prelude::wasm_bindgen;
 
 use crate::framing::{BoxType, JsBoxType};
 use crate::{Failure, to_plain};
+
+mod movie;
+mod sample_table;
+
+pub use movie::{
+    HandlerBox, MediaBox, MediaHeaderBox, MediaInformationBox, MovieBox, MovieHeaderBox, TrackBox,
+    TrackHeaderBox,
+};
+pub use sample_table::{
+    AnyBox, ChunkOffsets, JsSampleChunks, SampleDescriptionBox, SampleSizeBox, SampleSizes,
+    SampleTableBox, SampleToChunkBox, SyncSampleBox, TimeToSampleBox,
+};
 
 /// [`isobmff::boxes::CONTAINER_BOXES`], called as a function
 ///
@@ -190,250 +205,112 @@ export interface SampleFlags {
 }
 "#;
 
-/// The path to one `trak` of a root `moov`, followed again on every call
-#[derive(Debug, Clone)]
-struct TrackPath {
-    /// The `moov` the handles share
-    root: Rc<RefCell<boxes::MovieBox>>,
-    /// The position of the `trak` among those of the `moov`
-    trak: usize,
-}
-
-impl TrackPath {
-    /// Returns what `read` makes of the `trak`, or the failure of a path that leads to no `trak`
-    fn read<T>(&self, read: impl FnOnce(&boxes::TrackBox) -> T) -> Result<T, Failure> {
-        self.root
-            .borrow()
-            .trak()
-            .get(self.trak)
-            .map(read)
-            .ok_or_else(Failure::handle)
-    }
-}
-
-/// [`isobmff::boxes::MovieBox`] (`moov`), ISO/IEC 14496-12 §8.2.1, the root its handles share
-#[doc(alias = "moov")]
+/// [`isobmff::Mp4EpochSeconds`], ISO/IEC 14496-12 §6.2.2, a time being the `BigInt` of its seconds since 1904 wherever a method takes or returns one
 #[wasm_bindgen]
 #[derive(Debug)]
-pub struct MovieBox(Rc<RefCell<boxes::MovieBox>>);
-
-impl MovieBox {
-    /// Makes `movie` the root of the handles reached from it
-    pub(crate) fn new(movie: boxes::MovieBox) -> Self {
-        Self(Rc::new(RefCell::new(movie)))
-    }
-}
+#[non_exhaustive]
+pub struct Mp4EpochSeconds {}
 
 #[wasm_bindgen]
-impl MovieBox {
-    /// [`isobmff::boxes::MovieBox::trak`], a handle to each
-    pub fn trak(&self) -> Vec<TrackBox> {
-        (0..self.0.borrow().trak().len())
-            .map(|trak| {
-                TrackBox(TrackPath {
-                    root: Rc::clone(&self.0),
-                    trak,
-                })
-            })
-            .collect()
+impl Mp4EpochSeconds {
+    /// [`isobmff::Mp4EpochSeconds::from_unix_seconds`], the seconds since 1904, or none where they do not fit in 64 bits
+    #[wasm_bindgen(js_name = fromUnixSeconds)]
+    pub fn from_unix_seconds(seconds: u64) -> Option<u64> {
+        isobmff::Mp4EpochSeconds::from_unix_seconds(seconds).map(isobmff::Mp4EpochSeconds::seconds)
     }
 }
 
-/// [`isobmff::boxes::TrackBox`] (`trak`), ISO/IEC 14496-12 §8.3.1, a handle into its root
-#[doc(alias = "trak")]
+/// [`isobmff::boxes::FileTypeBox`] (`ftyp`), ISO/IEC 14496-12 §4.3, a root of its own
+#[doc(alias = "ftyp")]
 #[wasm_bindgen]
 #[derive(Debug)]
-pub struct TrackBox(TrackPath);
+pub struct FileTypeBox(pub(crate) boxes::FileTypeBox);
 
 #[wasm_bindgen]
-impl TrackBox {
-    /// [`isobmff::boxes::TrackBox::tkhd`], a handle
-    pub fn tkhd(&self) -> TrackHeaderBox {
-        TrackHeaderBox(self.0.clone())
-    }
-
-    /// [`isobmff::boxes::TrackBox::mdia`], a handle
-    pub fn mdia(&self) -> MediaBox {
-        MediaBox(self.0.clone())
+impl FileTypeBox {
+    /// [`isobmff::boxes::FileTypeBox::forbids_default_base_is_moof`]
+    #[wasm_bindgen(js_name = forbidsDefaultBaseIsMoof)]
+    pub fn forbids_default_base_is_moof(&self) -> bool {
+        self.0.forbids_default_base_is_moof()
     }
 }
 
-/// [`isobmff::boxes::TrackHeaderBox`] (`tkhd`), ISO/IEC 14496-12 §8.3.2, a handle into its root
-#[doc(alias = "tkhd")]
-#[wasm_bindgen]
-#[derive(Debug)]
-pub struct TrackHeaderBox(TrackPath);
+/// A box of type `T` in the tree a root holds, reached from the root again on every call
+///
+/// The root is the box itself, or the box a path of the library's `_mut`
+/// accessors leads down from; handles to one root share it.
+struct Place<T>(Rc<Visit<T>>);
 
-#[wasm_bindgen]
-impl TrackHeaderBox {
-    /// [`isobmff::boxes::TrackHeaderBox::track_id`]
+/// Hands the box a [`Place`] reaches to the visitor, or fails where the path leads to no box
+type Visit<T> = dyn Fn(&mut dyn FnMut(&mut T)) -> Result<(), Failure>;
+
+impl<T: 'static> Place<T> {
+    /// Makes `value` a root of its own
+    fn root(value: T) -> Self {
+        Self::shared(Rc::new(RefCell::new(value)))
+    }
+
+    /// Returns the place of the box `root` holds, a root its holder reads too
+    fn shared(root: Rc<RefCell<T>>) -> Self {
+        Self(Rc::new(move |visit| {
+            visit(&mut root.borrow_mut());
+            Ok(())
+        }))
+    }
+
+    /// Returns the place `step` leads to from this one
+    fn child<C: 'static>(&self, step: impl Fn(&mut T) -> Option<&mut C> + 'static) -> Place<C> {
+        let parent = Rc::clone(&self.0);
+        Place(Rc::new(move |visit| {
+            let mut reached = false;
+            parent(&mut |value| {
+                if let Some(child) = step(value) {
+                    reached = true;
+                    visit(child);
+                }
+            })?;
+            if reached {
+                Ok(())
+            } else {
+                Err(Failure::handle())
+            }
+        }))
+    }
+
+    /// Returns what `read` makes of the box
     ///
     /// # Errors
     ///
     /// `"handle"`: the path leads to no box.
-    #[wasm_bindgen(js_name = trackId)]
-    pub fn track_id(&self) -> Result<u32, Failure> {
-        self.0.read(|trak| trak.tkhd().track_id())
-    }
-}
-
-/// [`isobmff::boxes::MediaBox`] (`mdia`), ISO/IEC 14496-12 §8.4.1, a handle into its root
-#[doc(alias = "mdia")]
-#[wasm_bindgen]
-#[derive(Debug)]
-pub struct MediaBox(TrackPath);
-
-#[wasm_bindgen]
-impl MediaBox {
-    /// [`isobmff::boxes::MediaBox::mdhd`], a handle
-    pub fn mdhd(&self) -> MediaHeaderBox {
-        MediaHeaderBox(self.0.clone())
+    fn read<R>(&self, read: impl FnOnce(&T) -> R) -> Result<R, Failure> {
+        let mut made = None;
+        self.write(|value| made = Some(read(value)))?;
+        made.ok_or_else(Failure::handle)
     }
 
-    /// [`isobmff::boxes::MediaBox::hdlr`], a handle
-    pub fn hdlr(&self) -> HandlerBox {
-        HandlerBox(self.0.clone())
-    }
-
-    /// [`isobmff::boxes::MediaBox::minf`], a handle
-    pub fn minf(&self) -> MediaInformationBox {
-        MediaInformationBox(self.0.clone())
-    }
-}
-
-/// [`isobmff::boxes::MediaHeaderBox`] (`mdhd`), ISO/IEC 14496-12 §8.4.2, a handle into its root
-#[doc(alias = "mdhd")]
-#[wasm_bindgen]
-#[derive(Debug)]
-pub struct MediaHeaderBox(TrackPath);
-
-#[wasm_bindgen]
-impl MediaHeaderBox {
-    /// [`isobmff::boxes::MediaHeaderBox::timescale`]
+    /// Changes the box by `write`
     ///
     /// # Errors
     ///
     /// `"handle"`: the path leads to no box.
-    pub fn timescale(&self) -> Result<u32, Failure> {
-        self.0.read(|trak| trak.mdia().mdhd().timescale())
-    }
-
-    /// [`isobmff::boxes::MediaHeaderBox::duration`], none where it is indeterminate
-    ///
-    /// # Errors
-    ///
-    /// `"handle"`: the path leads to no box.
-    pub fn duration(&self) -> Result<Option<u64>, Failure> {
-        self.0.read(|trak| trak.mdia().mdhd().duration().get())
+    fn write(&self, write: impl FnOnce(&mut T)) -> Result<(), Failure> {
+        let mut write = Some(write);
+        (self.0)(&mut |value| {
+            if let Some(write) = write.take() {
+                write(value);
+            }
+        })
     }
 }
 
-/// [`isobmff::boxes::HandlerBox`] (`hdlr`), ISO/IEC 14496-12 §8.4.3, a handle into its root
-#[doc(alias = "hdlr")]
-#[wasm_bindgen]
-#[derive(Debug)]
-pub struct HandlerBox(TrackPath);
-
-#[wasm_bindgen]
-impl HandlerBox {
-    /// [`isobmff::boxes::HandlerBox::handler_type`], the four characters as [`isobmff::FourCc`] displays them
-    ///
-    /// # Errors
-    ///
-    /// `"handle"`: the path leads to no box.
-    #[wasm_bindgen(js_name = handlerType)]
-    pub fn handler_type(&self) -> Result<String, Failure> {
-        self.0
-            .read(|trak| trak.mdia().hdlr().handler_type().to_string())
+impl<T> Clone for Place<T> {
+    fn clone(&self) -> Self {
+        Self(Rc::clone(&self.0))
     }
 }
 
-/// [`isobmff::boxes::MediaInformationBox`] (`minf`), ISO/IEC 14496-12 §8.4.4, a handle into its root
-#[doc(alias = "minf")]
-#[wasm_bindgen]
-#[derive(Debug)]
-pub struct MediaInformationBox(TrackPath);
-
-#[wasm_bindgen]
-impl MediaInformationBox {
-    /// [`isobmff::boxes::MediaInformationBox::stbl`], a handle
-    pub fn stbl(&self) -> SampleTableBox {
-        SampleTableBox(self.0.clone())
-    }
-}
-
-/// [`isobmff::boxes::SampleTableBox`] (`stbl`), ISO/IEC 14496-12 §8.5.1, a handle into its root
-#[doc(alias = "stbl")]
-#[wasm_bindgen]
-#[derive(Debug)]
-pub struct SampleTableBox(TrackPath);
-
-#[wasm_bindgen]
-impl SampleTableBox {
-    /// [`isobmff::boxes::SampleTableBox::stsd`], a handle
-    pub fn stsd(&self) -> SampleDescriptionBox {
-        SampleDescriptionBox(self.0.clone())
-    }
-}
-
-/// [`isobmff::boxes::SampleDescriptionBox`] (`stsd`), ISO/IEC 14496-12 §8.5.2, a handle into its root
-#[doc(alias = "stsd")]
-#[wasm_bindgen]
-#[derive(Debug)]
-pub struct SampleDescriptionBox(TrackPath);
-
-#[wasm_bindgen]
-impl SampleDescriptionBox {
-    /// [`isobmff::boxes::SampleDescriptionBox::entries`], a handle to each
-    ///
-    /// # Errors
-    ///
-    /// `"handle"`: the path leads to no box.
-    pub fn entries(&self) -> Result<Vec<AnyBox>, Failure> {
-        let count = self
-            .0
-            .read(|trak| trak.mdia().minf().stbl().stsd().entries().len())?;
-        Ok((0..count)
-            .map(|entry| AnyBox {
-                track: self.0.clone(),
-                entry,
-            })
-            .collect())
-    }
-}
-
-/// [`isobmff::AnyBox`], an entry of a `stsd`, a handle into its root
-#[wasm_bindgen]
-#[derive(Debug)]
-pub struct AnyBox {
-    /// The `trak` whose `stsd` holds the entry
-    track: TrackPath,
-    /// The position of the entry in the `stsd`
-    entry: usize,
-}
-
-#[wasm_bindgen]
-impl AnyBox {
-    /// [`isobmff::AnyBox::box_type`]
-    ///
-    /// # Errors
-    ///
-    /// `"handle"`: the path leads to no box; `"binding"`: the value did not
-    /// convert to a plain object.
-    #[wasm_bindgen(js_name = boxType)]
-    pub fn box_type(&self) -> Result<JsBoxType, Failure> {
-        let box_type = self
-            .track
-            .read(|trak| {
-                trak.mdia()
-                    .minf()
-                    .stbl()
-                    .stsd()
-                    .entries()
-                    .get(self.entry)
-                    .map(isobmff::AnyBox::box_type)
-            })?
-            .ok_or_else(Failure::handle)?;
-        to_plain(&BoxType::from(box_type))
+impl<T> fmt::Debug for Place<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Place")
     }
 }
