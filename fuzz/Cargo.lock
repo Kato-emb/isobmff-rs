@@ -65,7 +65,6 @@ dependencies = [
  "isobmff-boxes",
  "isobmff-core",
  "isobmff-mp4",
- "isobmff-sequence",
 ]
 
 [[package]]
@@ -95,7 +94,6 @@ dependencies = [
  "isobmff-avc",
  "isobmff-core",
  "isobmff-mp4",
- "isobmff-sequence",
  "isobmff-test-support",
  "libfuzzer-sys",
 ]
@@ -109,19 +107,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "isobmff-sequence"
-version = "0.0.0"
-dependencies = [
- "isobmff-core",
-]
-
-[[package]]
 name = "isobmff-test-support"
 version = "0.0.0"
 dependencies = [
  "isobmff-boxes",
  "isobmff-core",
- "isobmff-sequence",
 ]
 
 [[package]]

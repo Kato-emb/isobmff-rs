@@ -6,8 +6,8 @@ use core::ops::Range;
 
 use isobmff_core::{BoxHeader, ErrorKind as BoxErrorKind};
 
-use crate::error::Error;
-use crate::event::BoxEvent;
+use crate::sequence::error::Error;
+use crate::sequence::event::BoxEvent;
 
 /// Reads the sequence of boxes a file is formed as, taking the input as it arrives
 ///
@@ -42,21 +42,21 @@ use crate::event::BoxEvent;
 ///   [`End`](BoxEvent::End) events with the extents they cover, and the payload
 ///   bytes those events hold end to end.
 /// * An `Err` leaves the reader failed for good,
-///   [`AlreadyFinished`](crate::Error::AlreadyFinished) aside: every later
+///   [`AlreadyFinished`](crate::sequence::Error::AlreadyFinished) aside: every later
 ///   [`handle_input`](Self::handle_input) and [`finish`](Self::finish) reports
 ///   that same failure again. The events made before it are still there to take,
 ///   and no further one is ever made.
 /// * [`finish`](Self::finish) declares the file over. Events are still taken
 ///   after it, but input handed over then, or a second
 ///   [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::Error::AlreadyFinished). A file being over is
+///   [`AlreadyFinished`](crate::sequence::Error::AlreadyFinished). A file being over is
 ///   not a failure, so that is what every later call reports as well.
 ///
 /// # Examples
 ///
 /// ```
 /// use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize};
-/// use isobmff_sequence::{BoxEvent, BoxReader};
+/// use isobmff::sequence::{BoxEvent, BoxReader};
 ///
 /// // A file opening with an `ftyp` box and carrying one `mdat`, arriving cut
 /// // across both of them
@@ -135,8 +135,8 @@ impl BoxReader {
     /// # Errors
     ///
     /// * The failures of [`BoxHeader::decode`], carried on
-    ///   [`Box`](crate::Error::Box): a header does not decode.
-    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the file was declared
+    ///   [`Box`](crate::sequence::Error::Box): a header does not decode.
+    /// * [`AlreadyFinished`](crate::sequence::Error::AlreadyFinished): the file was declared
     ///   over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
@@ -283,11 +283,11 @@ impl BoxReader {
     ///
     /// # Errors
     ///
-    /// * [`UnfinishedHeader`](crate::Error::UnfinishedHeader): the file ended
+    /// * [`UnfinishedHeader`](crate::sequence::Error::UnfinishedHeader): the file ended
     ///   inside a box header.
-    /// * [`UnfinishedBox`](crate::Error::UnfinishedBox): the file ended before
+    /// * [`UnfinishedBox`](crate::sequence::Error::UnfinishedBox): the file ended before
     ///   the declared total of a box was reached.
-    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::sequence::Error::AlreadyFinished): the
     ///   file was already declared over.
     /// * The failure of a previous call, which the reader keeps and reports
     ///   again for every call after it.
@@ -414,6 +414,7 @@ mod tests {
     use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize, ExtendedSize, Uuid};
 
     use super::{BoxEvent, BoxReader, Error, Range};
+    use crate::sequence::driving::events_of;
 
     /// Every form a header takes: the two size fields against the two box types
     const EVERY_HEADER_FORM: [&[u8]; 6] = [
@@ -477,25 +478,6 @@ mod tests {
         (ends_at..ends_at, BoxEvent::End)
     }
 
-    /// Every event a reader reports for `input`, handed over `cut_length` bytes at a time
-    fn events_of(input: &[u8], cut_length: usize) -> Vec<(Range<u64>, BoxEvent)> {
-        let mut reader = BoxReader::new();
-        let mut events = Vec::new();
-
-        for arriving in input.chunks(cut_length) {
-            reader.handle_input(arriving).unwrap();
-            while let Some(event) = reader.poll_event() {
-                events.push(event);
-            }
-        }
-        reader.finish().unwrap();
-        while let Some(event) = reader.poll_event() {
-            events.push(event);
-        }
-
-        events
-    }
-
     #[test]
     fn a_header_of_any_form_is_read_however_the_input_was_cut() {
         for encoded in EVERY_HEADER_FORM {
@@ -538,7 +520,7 @@ mod tests {
     #[test]
     fn a_box_arriving_whole_is_reported_as_a_start_a_payload_and_an_end() {
         assert_eq!(
-            events_of(b"\0\0\0\x0cfreeAAAA", 12),
+            events_of(b"\0\0\0\x0cfreeAAAA", 12).unwrap(),
             vec![
                 started(compact_header(*b"free", 12), 0),
                 passed_on(b"AAAA", 8),
@@ -550,7 +532,7 @@ mod tests {
     #[test]
     fn a_box_with_no_payload_is_reported_as_a_start_and_an_end() {
         assert_eq!(
-            events_of(b"\0\0\0\x08skip", 8),
+            events_of(b"\0\0\0\x08skip", 8).unwrap(),
             vec![started(compact_header(*b"skip", 8), 0), ended(8)]
         );
     }
@@ -558,7 +540,7 @@ mod tests {
     #[test]
     fn a_payload_is_passed_on_as_the_input_cut_it() {
         assert_eq!(
-            events_of(b"\0\0\0\x0cfreeAAAA", 5),
+            events_of(b"\0\0\0\x0cfreeAAAA", 5).unwrap(),
             vec![
                 started(compact_header(*b"free", 12), 0),
                 passed_on(b"AA", 8),
@@ -571,7 +553,7 @@ mod tests {
     #[test]
     fn boxes_laid_end_to_end_are_reported_over_the_extent_each_one_covers() {
         assert_eq!(
-            events_of(b"\0\0\0\x0cfreeAAAA\0\0\0\x08skip", 5),
+            events_of(b"\0\0\0\x0cfreeAAAA\0\0\0\x08skip", 5).unwrap(),
             vec![
                 started(compact_header(*b"free", 12), 0),
                 passed_on(b"AA", 8),
@@ -597,7 +579,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            events_of(&input, 3),
+            events_of(&input, 3).unwrap(),
             vec![
                 started(header, 0),
                 passed_on(b"!", 32),
@@ -611,7 +593,7 @@ mod tests {
     #[test]
     fn a_box_running_to_the_end_of_the_file_is_closed_by_finishing() {
         assert_eq!(
-            events_of(b"\0\0\0\0mdatPAYLOAD", 4),
+            events_of(b"\0\0\0\0mdatPAYLOAD", 4).unwrap(),
             vec![
                 started(
                     BoxHeader::new(BoxType::compact(*b"mdat"), BoxSize::ToEndOfFile).unwrap(),

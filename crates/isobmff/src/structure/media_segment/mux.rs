@@ -4,10 +4,10 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{MediaDataBox, MovieBox, SegmentTypeBox};
 use isobmff_core::{BoxDefinition, BoxEncode, BoxType};
-use isobmff_sequence::OutputBytes;
 
 use super::{MediaSegmentDisposition, MediaSegmentStructure};
 use crate::sample::{MovieFragmentWriter, Sample};
+use crate::sequence::OutputBytes;
 use crate::structure::mux_output::MuxOutput;
 use crate::structure::{Error, whole_box_header, whole_payload};
 

@@ -179,10 +179,11 @@ mod tests {
 
     use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox};
     use isobmff_core::{BoxHeader, BoxSize};
-    use isobmff_sequence::BoxEvent;
-    use isobmff_test_support::{events_of, file_type, written};
+    use isobmff_test_support::{file_type, written};
 
     use super::{BoxDefinition, Error, FieldWidth, WholeBoxReader, compact_box_header};
+    use crate::sequence::BoxEvent;
+    use crate::sequence::driving::events_of;
 
     /// Bytes a box may declare in these tests, unless one states its own limit
     const PAYLOAD_LIMIT: u64 = 1_024;

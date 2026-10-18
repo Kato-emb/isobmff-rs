@@ -7,11 +7,11 @@ use isobmff_boxes::{
     MovieFragmentRandomAccessOffsetBox, SegmentIndexBox,
 };
 use isobmff_core::{BoxDecode, BoxDefinition};
-use isobmff_sequence::BoxEvent;
 
 use crate::sample::{
     Sample, SampleReader, SegmentIndex, TrackDecodeTimes, movie_fragment, sample_table,
 };
+use crate::sequence::BoxEvent;
 use crate::structure::fragmented_movie::{FragmentedDisposition, FragmentedStructure};
 use crate::structure::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
 

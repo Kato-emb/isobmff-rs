@@ -3,15 +3,16 @@
 #[cfg(test)]
 mod tests {
     use isobmff::sample::{Sample, SampleProperties};
+    use isobmff::sequence::BoxEvent;
     use isobmff::structure::{MovieDemuxFsm, NonFragmentedMuxFsm};
     use isobmff_boxes::{
         EditBox, EditListBox, EditListEntry, FileTypeBox, HeaderDuration, MediaRate, MovieBox,
         MovieHeaderBox, SampleFlags,
     };
     use isobmff_core::{BoxType, FourCc, Mp4EpochSeconds};
-    use isobmff_sequence::BoxEvent;
-    use isobmff_test_support::{events_of, file_type, track};
+    use isobmff_test_support::{file_type, track};
 
+    use crate::driving::events_of;
     use crate::reading::samples_of;
 
     /// Ticks a second the media of the movie is timed in

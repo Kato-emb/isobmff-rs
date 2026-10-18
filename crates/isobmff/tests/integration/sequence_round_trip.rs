@@ -2,11 +2,10 @@
 
 #[cfg(test)]
 mod tests {
-    use isobmff_sequence::BoxEvent;
+    use isobmff::sequence::BoxEvent;
+    use isobmff_test_support::{file_running_to_its_end, fragmented_file, segment_file};
 
-    use isobmff_test_support::{
-        bytes_of, events_of, file_running_to_its_end, fragmented_file, segment_file,
-    };
+    use crate::driving::{bytes_of, events_of};
 
     /// Every synthetic file the round trip is fixed for
     ///

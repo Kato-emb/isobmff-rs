@@ -4,9 +4,9 @@ use alloc::collections::VecDeque;
 
 use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox};
 use isobmff_core::BoxDefinition;
-use isobmff_sequence::BoxEvent;
 
 use crate::sample::{SampleExtent, TrackDecodeTimes, movie_fragment, sample_table};
+use crate::sequence::BoxEvent;
 use crate::structure::fragmented_movie::{FragmentedDisposition, FragmentedStructure};
 use crate::structure::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
 

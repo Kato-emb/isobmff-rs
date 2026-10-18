@@ -4,10 +4,11 @@
 mod tests {
     use core::ops::Range;
 
+    use isobmff::sequence::BoxEvent;
     use isobmff_core::{BoxHeader, Boxes};
-    use isobmff_sequence::BoxEvent;
+    use isobmff_test_support::file_running_to_its_end;
 
-    use isobmff_test_support::{events_of, file_running_to_its_end, payloads_fused};
+    use crate::driving::{events_of, payloads_fused};
 
     /// Each box the reader reported, as its header and the payload it passed on
     fn boxes_reported(events: &[(Range<u64>, BoxEvent)]) -> Vec<(BoxHeader, Vec<u8>)> {

@@ -23,7 +23,7 @@
 //! | path | crate | of the seven layers |
 //! |---|---|---|
 //! | the root | `isobmff-core` | what all of them are defined over |
-//! | [`sequence`] | `isobmff-sequence` | layer 1 |
+//! | [`sequence`] | this crate | layer 1 |
 //! | [`boxes`] | `isobmff-boxes` | the catalog layer 2 reads a box into |
 //! | [`sample`] | this crate | layers 3 and 4 |
 //! | [`structure`] | this crate | layers 2, 5 and 6 |
@@ -46,7 +46,8 @@
 //! # `no_std`
 //!
 //! The crate is `no_std` but needs `alloc`, for the reasons
-//! [`structure`](structure#alloc) states of its layers.
+//! [`sequence`](sequence#alloc), [`sample`](sample#alloc) and
+//! [`structure`](structure#alloc) state of their layers.
 //!
 //! # Examples
 //!
@@ -61,11 +62,7 @@ extern crate alloc;
 
 pub use isobmff_core::*;
 
-/// A file framed as the sequence of boxes it is — the `isobmff-sequence` crate
-/// whole
-pub mod sequence {
-    pub use isobmff_sequence::*;
-}
+pub mod sequence;
 
 /// The catalog of ISO/IEC 14496-12 boxes — the `isobmff-boxes` crate whole
 pub mod boxes {

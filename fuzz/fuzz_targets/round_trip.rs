@@ -17,7 +17,7 @@
 
 #![no_main]
 
-use isobmff_sequence::{BoxEvent, BoxReader, BoxWriter};
+use isobmff::sequence::{BoxEvent, BoxReader, BoxWriter};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
 

@@ -1,4 +1,4 @@
-//! Synthetic files and the machinery to drive them, shared by the tests of this workspace
+//! Synthetic files shared by the tests of this workspace
 //!
 //! A fixture here returns the value it built rather than an `Option` of it.
 
@@ -20,7 +20,6 @@
 extern crate alloc;
 
 mod boxes;
-mod driving;
 
 pub use boxes::{
     EVERY_FIELD_AT_ITS_HIGHEST, MEDIA_DATA, SAMPLE_DURATION, TIMESCALE, empty_sample_table,
@@ -29,4 +28,3 @@ pub use boxes::{
     segment_file, segment_type, self_contained_data_reference, track, track_described_by,
     track_laid_out, track_reading_from, unfragmented_movie, written,
 };
-pub use driving::{bytes_of, events_of, payloads_fused};

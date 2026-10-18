@@ -1,7 +1,7 @@
 [package]
 name = "isobmff-test-support"
 version = "0.0.0"
-description = "Synthetic files and the machinery to drive them, shared by the tests of this workspace"
+description = "Synthetic files shared by the tests of this workspace"
 publish = false
 edition.workspace = true
 rust-version.workspace = true
@@ -15,7 +15,6 @@ exclude.workspace = true
 [dependencies]
 isobmff-boxes.workspace = true
 isobmff-core.workspace = true
-isobmff-sequence.workspace = true
 
 [lints]
 workspace = true

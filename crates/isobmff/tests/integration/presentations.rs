@@ -7,6 +7,7 @@
 use core::num::NonZeroU32;
 
 use isobmff::sample::{Sample, SampleProperties};
+use isobmff::sequence::BoxEvent;
 use isobmff_boxes::{
     MediaDataBox, MovieBox, MovieFragmentBox, MovieFragmentHeaderBox, MovieFragmentRandomAccessBox,
     ReferenceType, SampleFlags, SegmentIndexBox, SegmentIndexReference, TrackExtendsBox,
@@ -15,11 +16,11 @@ use isobmff_boxes::{
     TrackRunBox, TrackRunSample,
 };
 use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader};
-use isobmff_sequence::BoxEvent;
 use isobmff_test_support::{
-    SAMPLE_DURATION, TIMESCALE, events_of, file_laid_out, file_type, fragmented_movie,
-    segment_type, written,
+    SAMPLE_DURATION, TIMESCALE, file_laid_out, file_type, fragmented_movie, segment_type, written,
 };
+
+use crate::driving::events_of;
 
 /// Bytes each sample of these files occupies
 const SAMPLE_LEN: usize = 8;
