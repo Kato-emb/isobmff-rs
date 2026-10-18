@@ -1,0 +1,209 @@
+//! [`SampleDescriptions`], the `stsd` entries of a track and the resource each has its samples lie in
+
+use isobmff_boxes::{DataEntry, DataReferenceBox, SampleDescriptionBox, SampleEntry, TrackBox};
+use isobmff_core::BoxDefinition as _;
+
+use crate::sample::error::Error;
+
+/// The sample descriptions of one track, and the resource each has its samples lie in
+///
+/// A sample is described by one entry of the `stsd` of its track (ISO/IEC
+/// 14496-12 §8.5.2), counted from one, and every entry carries the
+/// `data_reference_index` naming the entry of the `dref` (§8.7.2) the bytes of
+/// those samples lie in. Both declaration forms name their samples' entry — a
+/// sample table by the run of chunks (§8.7.4), a movie fragment by the `tfhd`
+/// or the `trex` (§8.8.7) — and resolve it here to the data reference, which
+/// has to be the file itself: an entry sending the reader to an external file
+/// is refused.
+pub(crate) struct SampleDescriptions<'track> {
+    track_id: u32,
+    stsd: &'track SampleDescriptionBox,
+    dref: &'track DataReferenceBox,
+}
+
+impl<'track> SampleDescriptions<'track> {
+    /// Reads the descriptions of `trak`
+    pub(crate) fn new(trak: &'track TrackBox) -> Self {
+        let minf = trak.mdia().minf();
+
+        Self {
+            track_id: trak.tkhd().track_id(),
+            stsd: minf.stbl().stsd(),
+            dref: minf.dinf().dref(),
+        }
+    }
+
+    /// Returns the `data_reference_index` of entry `sample_description_index`, which names the file itself
+    ///
+    /// # Errors
+    ///
+    /// * [`UnknownSampleDescriptionIndex`](crate::sample::Error::UnknownSampleDescriptionIndex):
+    ///   the track has no such `stsd` entry.
+    /// * The failures of [`SampleEntry::try_from`], carried on
+    ///   [`Box`](crate::sample::Error::Box): the entry does not read as a
+    ///   sample entry, with `stsd` added to the containers.
+    /// * [`UnknownDataReferenceIndex`](crate::sample::Error::UnknownDataReferenceIndex):
+    ///   the entry names a `dref` entry the track has none of.
+    /// * [`ExternalDataReference`](crate::sample::Error::ExternalDataReference):
+    ///   the `dref` entry names a resource other than the file itself, or is
+    ///   held as [`DataEntry::Other`].
+    pub(crate) fn data_reference_index(&self, sample_description_index: u32) -> Result<u16, Error> {
+        let entry = usize::try_from(sample_description_index)
+            .ok()
+            .and_then(|index| index.checked_sub(1))
+            .and_then(|index| self.stsd.entries().get(index))
+            .ok_or(Error::UnknownSampleDescriptionIndex {
+                track_id: self.track_id,
+                sample_description_index,
+            })?;
+        let data_reference_index = SampleEntry::try_from(entry)
+            .map_err(|error| error.in_container(SampleDescriptionBox::BOX_TYPE))?
+            .data_reference_index();
+        let data_entry = usize::from(data_reference_index)
+            .checked_sub(1)
+            .and_then(|index| self.dref.entries().get(index))
+            .ok_or(Error::UnknownDataReferenceIndex {
+                track_id: self.track_id,
+                data_reference_index,
+            })?;
+
+        if matches!(data_entry, DataEntry::Url(url) if url.location().is_none()) {
+            Ok(data_reference_index)
+        } else {
+            Err(Error::ExternalDataReference {
+                track_id: self.track_id,
+                data_reference_index,
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::string::String;
+    use alloc::vec;
+
+    use isobmff_boxes::{DataEntry, DataEntryUrlBox, DataEntryUrnBox, DataReferenceBox};
+    use isobmff_core::{AnyBox, BoxType, NullTerminatedString};
+    use isobmff_test_support::{
+        empty_sample_table, external_data_reference, track, track_described_by, track_laid_out,
+        track_reading_from,
+    };
+
+    use super::SampleDescriptions;
+    use crate::sample::error::Error;
+
+    #[test]
+    fn an_entry_naming_the_file_itself_resolves_to_its_data_reference_index() {
+        let trak = track(1);
+
+        assert_eq!(
+            SampleDescriptions::new(&trak).data_reference_index(1),
+            Ok(1)
+        );
+    }
+
+    #[test]
+    fn an_entry_the_track_has_none_of_is_refused() {
+        let trak = track(1);
+
+        assert_eq!(
+            SampleDescriptions::new(&trak).data_reference_index(2),
+            Err(Error::UnknownSampleDescriptionIndex {
+                track_id: 1,
+                sample_description_index: 2
+            })
+        );
+        assert_eq!(
+            SampleDescriptions::new(&trak).data_reference_index(0),
+            Err(Error::UnknownSampleDescriptionIndex {
+                track_id: 1,
+                sample_description_index: 0
+            })
+        );
+    }
+
+    #[test]
+    fn an_entry_ending_before_its_data_reference_index_fails_as_that_box() {
+        let cut_short = AnyBox::from_raw_bytes(BoxType::compact(*b"avc1"), vec![0; 4]);
+        let trak = track_described_by(1, cut_short);
+
+        assert_eq!(
+            SampleDescriptions::new(&trak).data_reference_index(1),
+            Err(Error::from(
+                isobmff_core::Error::truncated_payload(8, 4)
+                    .in_container(BoxType::compact(*b"avc1"))
+                    .in_container(BoxType::compact(*b"stsd"))
+            ))
+        );
+    }
+
+    #[test]
+    fn a_data_reference_the_track_has_none_of_is_refused() {
+        let trak = track_reading_from(1, DataReferenceBox::new(vec![]));
+
+        assert_eq!(
+            SampleDescriptions::new(&trak).data_reference_index(1),
+            Err(Error::UnknownDataReferenceIndex {
+                track_id: 1,
+                data_reference_index: 1
+            })
+        );
+    }
+
+    #[test]
+    fn a_data_reference_to_an_external_file_is_refused() {
+        let by_url = track_reading_from(1, external_data_reference());
+        let by_urn = track_reading_from(
+            1,
+            DataReferenceBox::new(vec![DataEntry::Urn(DataEntryUrnBox::new(
+                NullTerminatedString::new(String::from("media.bin")).unwrap(),
+                None,
+            ))]),
+        );
+
+        let refused = Error::ExternalDataReference {
+            track_id: 1,
+            data_reference_index: 1,
+        };
+
+        assert_eq!(
+            SampleDescriptions::new(&by_url).data_reference_index(1),
+            Err(refused)
+        );
+        assert_eq!(
+            SampleDescriptions::new(&by_urn).data_reference_index(1),
+            Err(refused)
+        );
+    }
+
+    #[test]
+    fn an_entry_of_another_type_is_refused_and_the_entries_after_it_resolve() {
+        let alias = AnyBox::from_raw_bytes(BoxType::compact(*b"alis"), vec![0, 0, 0, 1]);
+        let dref = DataReferenceBox::new(vec![
+            DataEntry::Other(alias),
+            DataEntry::Url(DataEntryUrlBox::new(None)),
+        ]);
+        let described_by = |data_reference_index: u8| {
+            AnyBox::from_raw_bytes(
+                BoxType::compact(*b"avc1"),
+                vec![0, 0, 0, 0, 0, 0, 0, data_reference_index],
+            )
+        };
+        let trak = track_laid_out(
+            1,
+            dref,
+            empty_sample_table(vec![described_by(1), described_by(2)]),
+        );
+        let descriptions = SampleDescriptions::new(&trak);
+
+        assert_eq!(
+            descriptions.data_reference_index(1),
+            Err(Error::ExternalDataReference {
+                track_id: 1,
+                data_reference_index: 1
+            })
+        );
+        assert_eq!(descriptions.data_reference_index(2), Ok(2));
+    }
+}

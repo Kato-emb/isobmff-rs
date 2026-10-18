@@ -2,12 +2,12 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{MovieBox, SampleFlags, TrackExtendsBox};
 use isobmff_core::{BoxDefinition, BoxType};
-use isobmff_sample::{Sample, SampleProperties, SampleReaderLimits};
 use isobmff_test_support::{
     file_type, fragmented_movie, framed, movie_fragment, non_fragmented_file, written,
 };
 
 use super::{Error, MovieDemuxFsm};
+use crate::sample::{Sample, SampleProperties, SampleReaderLimits};
 use crate::structure::{DemuxLimits, FragmentedMuxFsm, WantedInput};
 
 /// Movie of one track continued in fragments, whose defaults a `trex` states
@@ -113,7 +113,7 @@ fn a_fragment_declaring_more_samples_than_the_limit_lays_out_none() {
     assert!(matches!(
         demux_fsm.handle_input(0, &file_of_one_sample()),
         Err(Error::Sample {
-            error: isobmff_sample::Error::SampleCountLimitExceeded {
+            error: crate::sample::Error::SampleCountLimitExceeded {
                 declared_samples: 1,
                 limit_samples: 0,
                 ..
@@ -130,7 +130,7 @@ fn a_movie_declaring_more_samples_than_the_limit_lays_out_none() {
     assert!(matches!(
         demux_fsm.handle_input(0, &non_fragmented_file(&[&[b"SAMP"]], true)),
         Err(Error::Sample {
-            error: isobmff_sample::Error::SampleCountLimitExceeded {
+            error: crate::sample::Error::SampleCountLimitExceeded {
                 declared_samples: 1,
                 limit_samples: 0,
                 ..
@@ -149,7 +149,7 @@ fn the_sample_reader_is_held_to_the_limits_it_is_given() {
     assert!(matches!(
         demux_fsm.handle_input(0, &file_of_one_sample()),
         Err(Error::Sample {
-            error: isobmff_sample::Error::HeldExtentLimitExceeded {
+            error: crate::sample::Error::HeldExtentLimitExceeded {
                 held_extents: 1,
                 limit_extents: 0,
                 ..

@@ -21,20 +21,12 @@ extern crate alloc;
 
 mod boxes;
 mod driving;
-mod presentations;
 
 pub use boxes::{
-    EVERY_FIELD_AT_ITS_HIGHEST, MEDIA_DATA, SAMPLE_DURATION, empty_sample_table,
-    external_data_reference, file_running_to_its_end, file_type, fragmented_file, fragmented_movie,
-    framed, movie_declaring, movie_fragment, non_fragmented_file, sample_table, segment_file,
-    segment_type, self_contained_data_reference, track, track_described_by, track_laid_out,
-    track_reading_from, unfragmented_movie, written,
+    EVERY_FIELD_AT_ITS_HIGHEST, MEDIA_DATA, SAMPLE_DURATION, TIMESCALE, empty_sample_table,
+    external_data_reference, file_laid_out, file_running_to_its_end, file_type, fragmented_file,
+    fragmented_movie, framed, movie_declaring, movie_fragment, non_fragmented_file, sample_table,
+    segment_file, segment_type, self_contained_data_reference, track, track_described_by,
+    track_laid_out, track_reading_from, unfragmented_movie, written,
 };
 pub use driving::{bytes_of, events_of, payloads_fused};
-pub use presentations::{
-    FragmentedFileWithMovieSamples, IndexedFile, SAMPLE_CHUNKS, fragmented_file_samples,
-    fragmented_file_with_movie_samples, fragmented_file_with_samples, indexed_fragmented_file,
-    indexed_fragmented_file_without_decode_times, indexed_segment_file,
-    indexed_segment_file_without_decode_times, non_fragmented_file_samples, presentation_movie,
-    segment_file_samples, segment_file_with_samples,
-};

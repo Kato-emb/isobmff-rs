@@ -57,11 +57,11 @@ pub enum Error {
         /// Failure of the framing, carrying its own values
         error: isobmff_sequence::Error,
     },
-    /// Failure of the samples the file carries, carried through as `isobmff-sample` names it
+    /// Failure of the samples the file carries, carried through as [`sample`](crate::sample) names it
     #[non_exhaustive]
     Sample {
         /// Failure of the samples, carrying its own values
-        error: isobmff_sample::Error,
+        error: crate::sample::Error,
     },
     /// Failure of one box, carried through as `isobmff-core` names it
     #[non_exhaustive]
@@ -149,9 +149,9 @@ impl From<isobmff_sequence::Error> for Error {
     }
 }
 
-impl From<isobmff_sample::Error> for Error {
+impl From<crate::sample::Error> for Error {
     /// Carries the failure of the samples through as it stands
-    fn from(error: isobmff_sample::Error) -> Self {
+    fn from(error: crate::sample::Error) -> Self {
         Self::Sample { error }
     }
 }
@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn display_of_a_carried_failure_reads_as_that_failure() {
-        let sample_error = isobmff_sample::Error::from(isobmff_core::Error::unsupported_version(2));
+        let sample_error = crate::sample::Error::from(isobmff_core::Error::unsupported_version(2));
 
         assert_eq!(
             Error::from(sample_error).to_string(),

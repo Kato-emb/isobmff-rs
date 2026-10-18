@@ -2,9 +2,9 @@
 
 use core::ops::Range;
 
-use isobmff_sample::{Sample, SampleReader};
 use isobmff_sequence::{BoxEvent, BoxReader};
 
+use crate::sample::{Sample, SampleReader};
 use crate::structure::input_position::{InputPosition, InputRoute};
 use crate::structure::{Error, WantedInput};
 
@@ -290,10 +290,10 @@ impl DemuxInput<SampleReader> {
 #[cfg(test)]
 mod tests {
     use isobmff_boxes::SampleFlags;
-    use isobmff_sample::{Sample, SampleExtent, SampleProperties, SampleReader};
     use isobmff_sequence::BoxEvent;
 
     use super::{DemuxInput, Error};
+    use crate::sample::{Sample, SampleExtent, SampleProperties, SampleReader};
     use crate::structure::WantedInput;
 
     /// A `free` box carrying `SAMP`, twelve bytes long
@@ -471,7 +471,7 @@ mod tests {
         assert!(matches!(
             input.finish(Ok(())),
             Err(Error::Sample {
-                error: isobmff_sample::Error::UnfinishedSample { .. }
+                error: crate::sample::Error::UnfinishedSample { .. }
             })
         ));
     }

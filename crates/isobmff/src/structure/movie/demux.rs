@@ -7,11 +7,11 @@ use isobmff_boxes::{
     MovieFragmentRandomAccessOffsetBox, SegmentIndexBox,
 };
 use isobmff_core::{BoxDecode, BoxDefinition};
-use isobmff_sample::{
-    Sample, SampleReader, SegmentIndex, TrackDecodeTimes, movie_fragment, sample_table,
-};
 use isobmff_sequence::BoxEvent;
 
+use crate::sample::{
+    Sample, SampleReader, SegmentIndex, TrackDecodeTimes, movie_fragment, sample_table,
+};
 use crate::structure::fragmented_movie::{FragmentedDisposition, FragmentedStructure};
 use crate::structure::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
 
@@ -80,7 +80,7 @@ use crate::structure::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxRead
 /// * The samples the sample tables of the movie declare are resolved once the
 ///   `moov` has been read, and those of a fragment once the `moof` has; where
 ///   their chunks and runs lie is not checked. Either comes out as its bytes
-///   arrive whole, as [`SampleReader`](isobmff_sample::SampleReader)'s contract has it: the extents of the
+///   arrive whole, as [`SampleReader`](crate::sample::SampleReader)'s contract has it: the extents of the
 ///   movie, and those of each fragment, are held in the order of their bytes,
 ///   so a file handed over in order yields the samples of each in the order
 ///   they lie in it, whatever order the boxes declare them in and wherever

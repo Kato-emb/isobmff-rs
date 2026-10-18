@@ -3,11 +3,11 @@
 use alloc::vec::Vec;
 
 use isobmff_boxes::{MovieBox, MovieFragmentBox, SegmentIndexBox, SegmentTypeBox};
-use isobmff_sample::movie_fragment::sample_extents;
-use isobmff_sample::{Sample, SampleReader, SegmentIndex, TrackDecodeTimes};
 use isobmff_sequence::BoxEvent;
 
 use super::{MediaSegmentDisposition, MediaSegmentStructure};
+use crate::sample::movie_fragment::sample_extents;
+use crate::sample::{Sample, SampleReader, SegmentIndex, TrackDecodeTimes};
 use crate::structure::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
 
 /// Reads the samples a media segment carries, taking it as it arrives
@@ -73,7 +73,7 @@ use crate::structure::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxRead
 ///   read into a value, the samples a `moof` declares, the samples gathered
 ///   — by the [`DemuxLimits`] it was created with.
 /// * The samples of a fragment are read out of the media data it addresses,
-///   and come out as their bytes arrive whole, as [`SampleReader`](isobmff_sample::SampleReader)'s
+///   and come out as their bytes arrive whole, as [`SampleReader`](crate::sample::SampleReader)'s
 ///   contract has it: the extents of a fragment are held in the order of
 ///   their bytes, so a segment handed over in order yields the samples of each
 ///   fragment in the order they lie in it, whatever order the fragment
@@ -428,11 +428,11 @@ impl MediaSegmentDemuxFsm {
 mod tests {
     use isobmff_boxes::MovieFragmentBox;
     use isobmff_core::{BoxDefinition, BoxType};
-    use isobmff_sample::SampleReaderLimits;
     use isobmff_test_support::{framed, movie_fragment, segment_type, written};
 
     use super::super::tests::{movie, sample, segment_of_one_sample};
     use super::{Error, MediaSegmentDemuxFsm};
+    use crate::sample::SampleReaderLimits;
     use crate::structure::{DemuxLimits, WantedInput};
 
     /// What the demux FSM makes of `segment` handed over whole, then declared over
@@ -505,7 +505,7 @@ mod tests {
         assert!(matches!(
             demux_fsm.handle_input(0, &segment_of_one_sample()),
             Err(Error::Sample {
-                error: isobmff_sample::Error::SampleCountLimitExceeded {
+                error: crate::sample::Error::SampleCountLimitExceeded {
                     declared_samples: 1,
                     limit_samples: 0,
                     ..
@@ -526,7 +526,7 @@ mod tests {
         assert!(matches!(
             demux_fsm.handle_input(0, &segment_of_one_sample()),
             Err(Error::Sample {
-                error: isobmff_sample::Error::HeldExtentLimitExceeded {
+                error: crate::sample::Error::HeldExtentLimitExceeded {
                     held_extents: 1,
                     limit_extents: 0,
                     ..

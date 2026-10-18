@@ -4,10 +4,10 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox, MovieFragmentBox};
 use isobmff_core::{BoxDefinition, BoxEncode, BoxType, FourCc};
-use isobmff_sample::{MovieFragmentWriter, Sample};
 use isobmff_sequence::OutputBytes;
 
 use super::{FragmentedDisposition, FragmentedStructure};
+use crate::sample::{MovieFragmentWriter, Sample};
 use crate::structure::mux_output::MuxOutput;
 use crate::structure::{Error, whole_box_header, whole_payload};
 
@@ -391,10 +391,10 @@ mod tests {
 
     use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox, SampleFlags, TrackExtendsBox};
     use isobmff_core::{BoxDecode, BoxDefinition, FourCc};
-    use isobmff_sample::{Sample, SampleProperties};
     use isobmff_test_support::{file_type, fragmented_movie, unfragmented_movie};
 
     use super::{Error, FragmentedMuxFsm, default_file_type};
+    use crate::sample::{Sample, SampleProperties};
 
     /// Movie of one track continued in fragments, whose defaults a `trex` states
     fn movie() -> MovieBox {
@@ -498,7 +498,7 @@ mod tests {
         assert!(matches!(
             mux_fsm.handle_movie(unfragmented_movie()),
             Err(Error::Sample {
-                error: isobmff_sample::Error::MissingMovieExtends { .. }
+                error: crate::sample::Error::MissingMovieExtends
             })
         ));
         assert_eq!(mux_fsm.poll_output(), None);
@@ -527,7 +527,7 @@ mod tests {
                 b"SAMP".to_vec()
             )),
             Err(Error::Sample {
-                error: isobmff_sample::Error::UnknownTrackId { track_id: 999, .. }
+                error: crate::sample::Error::UnknownTrackId { track_id: 999, .. }
             })
         ));
         assert!(matches!(
@@ -543,7 +543,7 @@ mod tests {
                 b"SAMP".to_vec()
             )),
             Err(Error::Sample {
-                error: isobmff_sample::Error::UnknownSampleDescriptionIndex {
+                error: crate::sample::Error::UnknownSampleDescriptionIndex {
                     track_id: 1,
                     sample_description_index: 2,
                     ..
@@ -561,7 +561,7 @@ mod tests {
         assert!(matches!(
             mux_fsm.handle_sample(sample()),
             Err(Error::Sample {
-                error: isobmff_sample::Error::NoFragmentOpen { .. }
+                error: crate::sample::Error::NoFragmentOpen
             })
         ));
     }

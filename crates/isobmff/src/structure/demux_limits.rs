@@ -1,6 +1,6 @@
 //! [`DemuxLimits`], the most a demux FSM holds
 
-use isobmff_sample::SampleReaderLimits;
+use crate::sample::SampleReaderLimits;
 
 /// The most a demux FSM holds of what a file declares
 ///
@@ -14,10 +14,10 @@ use isobmff_sample::SampleReaderLimits;
 /// * [`resolved_samples`](Self::resolved_samples): the most samples one
 ///   `moov` or one `moof` may declare, every track together. Past it the
 ///   box lays out none, as
-///   [`SampleCountLimitExceeded`](isobmff_sample::Error::SampleCountLimitExceeded)
+///   [`SampleCountLimitExceeded`](crate::sample::Error::SampleCountLimitExceeded)
 ///   carried on [`Sample`](crate::structure::Error::Sample).
 /// * [`sample_reader`](Self::sample_reader): the limits the
-///   [`SampleReader`](isobmff_sample::SampleReader) the samples are gathered
+///   [`SampleReader`](crate::sample::SampleReader) the samples are gathered
 ///   by is held to, whose failures are carried on
 ///   [`Sample`](crate::structure::Error::Sample) as well.
 ///
