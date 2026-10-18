@@ -59,7 +59,7 @@ use crate::sample::{SampleExtent, SampleProperties};
 ///   a run of chunks of a track starts at a chunk outside the range open to it.
 /// * [`UnknownSampleDescriptionIndex`](crate::sample::Error::UnknownSampleDescriptionIndex):
 ///   a run describes its samples by an `stsd` entry its track has none of.
-/// * The failures of [`SampleEntry::try_from`](isobmff_boxes::SampleEntry),
+/// * The failures of [`SampleEntry::try_from`](crate::boxes::SampleEntry),
 ///   carried on [`Box`](crate::sample::Error::Box): the `stsd` entry does
 ///   not read as a sample entry, with `stsd` added to the containers.
 /// * [`UnknownDataReferenceIndex`](crate::sample::Error::UnknownDataReferenceIndex):

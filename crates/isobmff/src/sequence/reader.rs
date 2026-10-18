@@ -33,7 +33,7 @@ use crate::sequence::event::BoxEvent;
 /// * The events partition the input: each one covers the bytes it was made
 ///   from, and the extent of one ends where the extent of the next begins.
 /// * A box declaring no total —
-///   [`ToEndOfFile`](isobmff_core::BoxSize::ToEndOfFile) — takes every byte
+///   [`ToEndOfFile`](crate::BoxSize::ToEndOfFile) — takes every byte
 ///   that arrives after its header, and only [`finish`](Self::finish) closes
 ///   it.
 /// * Where a payload is cut into [`Payload`](BoxEvent::Payload) events follows
@@ -55,7 +55,7 @@ use crate::sequence::event::BoxEvent;
 /// # Examples
 ///
 /// ```
-/// use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize};
+/// use isobmff::{BoxHeader, BoxSize, BoxType, CompactSize};
 /// use isobmff::sequence::{BoxEvent, BoxReader};
 ///
 /// // A file opening with an `ftyp` box and carrying one `mdat`, arriving cut
@@ -277,7 +277,7 @@ impl BoxReader {
     /// A box is left open either because the file reached its declared total
     /// without the [`End`](BoxEvent::End) that follows having been made, or
     /// because it declares no total at all —
-    /// [`ToEndOfFile`](isobmff_core::BoxSize::ToEndOfFile), which only the end
+    /// [`ToEndOfFile`](crate::BoxSize::ToEndOfFile), which only the end
     /// of the file ends. Both are closed with an [`End`](BoxEvent::End), taken
     /// from [`poll_event`](Self::poll_event) like any other event.
     ///

@@ -42,7 +42,7 @@ use crate::sample::track_decode_times::TrackDecodeTimes;
 ///   they were handed over in — the media data holds that order, the `traf`
 ///   boxes group it.
 /// * Offsets are anchored at the fragment itself
-///   ([`default-base-is-moof`](isobmff_boxes::TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF),
+///   ([`default-base-is-moof`](crate::boxes::TrackFragmentHeaderFlags::DEFAULT_BASE_IS_MOOF),
 ///   ISO/IEC 14496-12 §8.8.7.1), and every `trun` states its own. They are
 ///   counted over the `moof` and the header of the `mdat`, so the two are laid
 ///   down as they come out: the media data of a fragment directly after the
@@ -288,7 +288,7 @@ impl MovieFragmentWriter {
     ///   declares no `trak` or no `trex` for the track of the sample.
     /// * [`UnknownSampleDescriptionIndex`](crate::sample::Error::UnknownSampleDescriptionIndex):
     ///   the track has no `stsd` entry describing the sample.
-    /// * The failures of [`SampleEntry::try_from`](isobmff_boxes::SampleEntry),
+    /// * The failures of [`SampleEntry::try_from`](crate::boxes::SampleEntry),
     ///   carried on [`Box`](crate::sample::Error::Box): that entry does not read
     ///   as a sample entry, with `stsd` added to the containers.
     /// * [`UnknownDataReferenceIndex`](crate::sample::Error::UnknownDataReferenceIndex):
@@ -326,7 +326,7 @@ impl MovieFragmentWriter {
     /// Closes the fragment that is open, and builds the `moof` and the `mdat` payload it is written as for [`poll_fragment`](Self::poll_fragment)
     ///
     /// The offsets count over the header
-    /// [`MediaDataBox`](isobmff_boxes::MediaDataBox) writes for a payload of
+    /// [`MediaDataBox`](crate::boxes::MediaDataBox) writes for a payload of
     /// that length, so the payload is laid down as that box, directly after
     /// the `moof`. Where the samples leave the timeline of each track is kept
     /// once the pair is built, and not on a failure.

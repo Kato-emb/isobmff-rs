@@ -9,9 +9,9 @@ use isobmff_core::{BoxType, Category};
 ///
 /// What went wrong is one variant, which carries the values that describe it:
 /// a failure of the sequence itself — a file cut short, a call made out of
-/// order — or a failure of one box, which [`isobmff_core::Error`] names and
-/// this type carries through whole, as [`Box`](Self::Box). What a caller does
-/// about either is one [`category`](Self::category).
+/// order — or a failure of one box, which [`isobmff::Error`](crate::Error)
+/// names and this type carries through whole, as [`Box`](Self::Box). What a
+/// caller does about either is one [`category`](Self::category).
 ///
 /// The vocabulary is [`sequence`](crate::sequence)'s own: taking a file as it
 /// arrives and laying one down name their failures here. The situations a
@@ -22,7 +22,7 @@ use isobmff_core::{BoxType, Category};
 /// # Examples
 ///
 /// ```
-/// use isobmff_core::Category;
+/// use isobmff::Category;
 /// use isobmff::sequence::{BoxReader, Error};
 ///
 /// // A file ending inside a box is a failure of the sequence itself
@@ -40,7 +40,7 @@ use isobmff_core::{BoxType, Category};
 /// assert_eq!(failure.category(), Category::Malformed);
 ///
 /// // A failure of one box is carried through whole
-/// let unsupported = isobmff_core::Error::unsupported_version(2);
+/// let unsupported = isobmff::Error::unsupported_version(2);
 /// let carried = Error::from(unsupported);
 /// assert!(matches!(carried, Error::Box { error, .. } if error == unsupported));
 /// assert_eq!(carried.category(), Category::Unsupported);

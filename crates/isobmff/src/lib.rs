@@ -65,9 +65,8 @@ pub use isobmff_core::*;
 pub mod sequence;
 
 /// The catalog of ISO/IEC 14496-12 boxes — the `isobmff-boxes` crate whole
-pub mod boxes {
-    pub use isobmff_boxes::*;
-}
+#[doc(inline)]
+pub use isobmff_boxes as boxes;
 
 pub mod sample;
 
@@ -76,13 +75,11 @@ pub mod structure;
 /// Sample entries of ISO/IEC 14496-15, the carriage of AVC video — the
 /// `isobmff-avc` crate whole, behind the `avc` feature
 #[cfg(feature = "avc")]
-pub mod avc {
-    pub use isobmff_avc::*;
-}
+#[doc(inline)]
+pub use isobmff_avc as avc;
 
 /// Sample entries and descriptors of ISO/IEC 14496-14, the MP4 file format —
 /// the `isobmff-mp4` crate whole, behind the `mp4` feature
 #[cfg(feature = "mp4")]
-pub mod mp4 {
-    pub use isobmff_mp4::*;
-}
+#[doc(inline)]
+pub use isobmff_mp4 as mp4;
