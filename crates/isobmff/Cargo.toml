@@ -25,7 +25,9 @@ isobmff-core.workspace = true
 isobmff-mp4 = { workspace = true, optional = true }
 isobmff-sample.workspace = true
 isobmff-sequence.workspace = true
-isobmff-structure.workspace = true
+
+[dev-dependencies]
+isobmff-test-support.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true
