@@ -73,7 +73,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         } else {
             demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
         };
-        while let Some(sample) = demux_fsm.poll_sample() {
+        while let Some(sample) = demux_fsm.poll_output() {
             println!(
                 "track={} time={} size={} sync={}",
                 sample.properties().track_id,

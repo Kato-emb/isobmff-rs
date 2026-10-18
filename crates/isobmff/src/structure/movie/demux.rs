@@ -8,14 +8,14 @@ use isobmff_boxes::{
 };
 use isobmff_core::{BoxDecode, BoxDefinition};
 
-use crate::sample::{
-    Sample, SampleReader, SegmentIndex, TrackDecodeTimes, movie_fragment, sample_table,
-};
+use crate::sample::{SampleReader, SegmentIndex, TrackDecodeTimes, movie_fragment, sample_table};
 use crate::sequence::BoxEvent;
 use crate::structure::fragmented_movie::{FragmentedDisposition, FragmentedStructure};
-use crate::structure::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
+use crate::structure::{
+    DemuxInput, DemuxLimits, Error, SampleGathering, WantedInput, WholeBoxReader,
+};
 
-/// Reads the samples a movie file carries, fragmented or not, taking it as it arrives
+/// Reads a movie file as it arrives, fragmented or not, into the samples it carries or their extents
 ///
 /// A movie file declares its samples in the sample tables of its one movie
 /// (ISO/IEC 14496-12 §8.2.1). A fragmented one is laid out as Annex A.8 has
@@ -27,12 +27,16 @@ use crate::structure::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxRead
 /// read one: the framing of the file into boxes, the structure that says what
 /// each top-level box is, the reading of the boxes it names into values, the
 /// resolution of the sample tables of the movie, and of each fragment against
-/// the movie, into the extents of their samples, and the gathering of those
-/// samples out of the media data. It holds no rule of its
-/// own but one: of the bytes the samples still lack, it names only those whose
-/// start the file handed over in order has passed. A caller hands over bytes
-/// and takes [`Sample`]s. It reaches for no source of its own: when to read
-/// and from where stay with the caller.
+/// the movie, into the extents of their samples, and what becomes of those
+/// extents, which is `G`'s, a [`SampleGathering`]: with [`SampleReader`],
+/// the default, the samples are gathered out of the media data, and a caller
+/// hands over bytes and takes [`Sample`](crate::sample::Sample)s; with
+/// [`SampleExtents`](crate::structure::SampleExtents), the extents come out
+/// as they are, the media data passed over, and a caller takes
+/// [`SampleExtent`](crate::sample::SampleExtent)s. It holds no rule of its
+/// own but one: of the bytes the samples still lack, it names only those
+/// whose start the file handed over in order has passed. It reaches for no
+/// source of its own: when to read and from where stay with the caller.
 ///
 /// # Contract
 ///
@@ -40,9 +44,9 @@ use crate::structure::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxRead
 ///   [`resume_at`](Self::resume_at) names, in order and cut anywhere,
 ///   each cut handed over at the offset it was read at, where
 ///   [`wanted_input`](Self::wanted_input) names,
-///   and the samples it completed are taken from
-///   [`poll_sample`](Self::poll_sample). The caller drains before handing
-///   over more: samples are held until they are taken. Where the file lies in
+///   and what it completed is taken from
+///   [`poll_output`](Self::poll_output). The caller drains before handing
+///   over more: output is held until it is taken. Where the file lies in
 ///   its resource is the caller's: every offset the demux FSM reports is a file
 ///   offset, counting from the first byte of the file as the boxes count
 ///   theirs (§8.7.5, §8.8.7).
@@ -51,8 +55,8 @@ use crate::structure::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxRead
 ///   the indexes of every `sidx` as [`segment_indexes`](Self::segment_indexes)
 ///   and the `mfra` as
 ///   [`movie_fragment_random_access`](Self::movie_fragment_random_access).
-///   The media data is offered to the samples, and every other box is passed
-///   over.
+///   The media data is offered to the gathering, and every other box is
+///   passed over.
 /// * [`resume_at`](Self::resume_at) restarts the reading at a file offset an
 ///   index points at, a `moof`, a `sidx` or an `mfra`, from where the file is
 ///   then handed over. The movie and the indexes read so far stand; the
@@ -75,19 +79,24 @@ use crate::structure::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxRead
 ///   [`MissingMandatoryBox`](crate::structure::Error::MissingMandatoryBox).
 ///   A file carrying no `ftyp` reads all the same, as §4.3 allows.
 /// * What the demux FSM holds of what the file declares is bounded — a box
-///   read into a value, the samples a `moov` or a `moof` declares, the
-///   samples gathered — by the [`DemuxLimits`] it was created with.
+///   read into a value, the samples a `moov` or a `moof` declares — by the
+///   [`DemuxLimits`] it was created with; what the gathering holds is bounded
+///   by what it was created with, [`DemuxLimits::sample_reader`] where
+///   [`with_limits`](Self::with_limits) created it.
 /// * The samples the sample tables of the movie declare are resolved once the
 ///   `moov` has been read, and those of a fragment once the `moof` has; where
-///   their chunks and runs lie is not checked. Either comes out as its bytes
-///   arrive whole, as [`SampleReader`](crate::sample::SampleReader)'s contract has it: the extents of the
-///   movie, and those of each fragment, are held in the order of their bytes,
-///   so a file handed over in order yields the samples of each in the order
-///   they lie in it, whatever order the boxes declare them in and wherever
-///   the input is cut. [`wanted_input`](Self::wanted_input) names what the
-///   extent at the front of those held still lacks only once the input has
-///   passed its start, which a file whose movie and fragments precede their
-///   media data never has.
+///   their chunks and runs lie is not checked. Gathering with
+///   [`SampleReader`], either comes out as its bytes arrive whole, as its
+///   contract has it: the extents of the movie, and those of each fragment,
+///   are held in the order of their bytes, so a file handed over in order
+///   yields the samples of each in the order they lie in it, whatever order
+///   the boxes declare them in and wherever the input is cut.
+///   [`wanted_input`](Self::wanted_input) names what the extent at the front
+///   of those held still lacks only once the input has passed its start,
+///   which a file whose movie and fragments precede their media data never
+///   has. Gathering with [`SampleExtents`](crate::structure::SampleExtents),
+///   the extents come out as each `moov` or `moof` is read, and nothing is
+///   wanted but the continuation.
 /// * A fragment continues a movie that declares it may be fragmented: a
 ///   `moof` after a `moov` carrying no `mvex` is
 ///   [`Sample`](crate::structure::Error::Sample), the movie extends box missing
@@ -98,12 +107,12 @@ use crate::structure::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxRead
 /// * An `Err` leaves the demux FSM failed for good,
 ///   [`AlreadyFinished`](crate::structure::Error::AlreadyFinished) and
 ///   [`UnwantedInput`](crate::structure::Error::UnwantedInput) aside:
-///   every later call reports that same failure again. The samples completed
-///   before it are still there to take.
+///   every later call reports that same failure again. The output completed
+///   before it is still there to take.
 /// * [`finish`](Self::finish) declares the file over, and reports what any
 ///   layer makes of the end of it: a box left open, the `moov` never come, a
 ///   sample short of the data it claimed; while the closing `mfro` is
-///   gathered, it reports nothing. Samples are still taken after it, but
+///   gathered, it reports nothing. Output is still taken after it, but
 ///   anything handed over then, or a second [`finish`](Self::finish), is
 ///   [`AlreadyFinished`](crate::structure::Error::AlreadyFinished), until
 ///   [`resume_at`](Self::resume_at) restarts the reading, or
@@ -165,16 +174,16 @@ use crate::structure::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxRead
 /// assert_eq!(demux_fsm.movie().map(|moov| moov.trak().len()), Some(1));
 ///
 /// // The samples come back as they were laid out
-/// let first = demux_fsm.poll_sample().unwrap();
+/// let first = demux_fsm.poll_output().unwrap();
 /// assert_eq!((first.data(), first.properties().decode_time), (b"SAMP".as_slice(), 0));
-/// let second = demux_fsm.poll_sample().unwrap();
+/// let second = demux_fsm.poll_output().unwrap();
 /// assert_eq!((second.data(), second.properties().decode_time), (b"DATA".as_slice(), 1_024));
-/// assert_eq!(demux_fsm.poll_sample(), None);
+/// assert_eq!(demux_fsm.poll_output(), None);
 /// # Ok::<(), isobmff::structure::Error>(())
 /// ```
 #[derive(Debug)]
-pub struct MovieDemuxFsm {
-    input: DemuxInput<SampleReader>,
+pub struct MovieDemuxFsm<G = SampleReader> {
+    input: DemuxInput<G>,
     structure: FragmentedStructure,
     decode_times: TrackDecodeTimes,
     open: Option<Open>,
@@ -220,17 +229,80 @@ enum Open {
 }
 
 impl MovieDemuxFsm {
-    /// Creates a demux FSM waiting at the start of a movie file, bounded by the limits [`DemuxLimits::new`] states
+    /// Creates a demux FSM waiting at the start of a movie file, gathering its samples, bounded by the limits [`DemuxLimits::new`] states
     #[must_use]
     pub const fn new() -> Self {
         Self::with_limits(DemuxLimits::new())
     }
 
-    /// Creates a demux FSM waiting at the start of a movie file, bounded by `limits`
+    /// Creates a demux FSM waiting at the start of a movie file, gathering its samples, bounded by `limits`
+    ///
+    /// The samples are gathered by a [`SampleReader`] bounded by
+    /// [`DemuxLimits::sample_reader`].
     #[must_use]
     pub const fn with_limits(limits: DemuxLimits) -> Self {
+        Self::with_gathering(SampleReader::with_limits(limits.sample_reader()), limits)
+    }
+}
+
+impl<G: SampleGathering> MovieDemuxFsm<G> {
+    /// Creates a demux FSM waiting at the start of a movie file, `gathering` taking the extents it resolves, bounded by `limits`
+    ///
+    /// Of `limits`, the payload a box read into a value may reach and the
+    /// samples one `moov` or `moof` may declare apply; `gathering` is taken as
+    /// it stands, with whatever bounds it was created with, so
+    /// [`DemuxLimits::sample_reader`] does not.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff::boxes::{SampleFlags, TrackExtendsBox};
+    /// use isobmff::sample::{Sample, SampleProperties};
+    /// use isobmff::structure::{DemuxLimits, FragmentedMuxFsm, MovieDemuxFsm, SampleExtents};
+    /// # use isobmff_test_support::{file_type, fragmented_movie};
+    /// // A file of one fragment carrying one sample of track 1
+    /// let mut mux_fsm = FragmentedMuxFsm::new();
+    /// mux_fsm.handle_file_type(file_type())?;
+    /// mux_fsm.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO)))?;
+    /// mux_fsm.begin_fragment(1)?;
+    /// mux_fsm.handle_sample(Sample::new(
+    ///     SampleProperties {
+    ///         track_id: 1,
+    ///         decode_time: 0,
+    ///         sample_duration: 1_024,
+    ///         sample_composition_time_offset: 0,
+    ///         sample_flags: SampleFlags::ZERO,
+    ///         sample_description_index: 1,
+    ///     },
+    ///     b"SAMP".to_vec(),
+    /// ))?;
+    /// mux_fsm.finish_fragment()?;
+    /// mux_fsm.finish()?;
+    ///
+    /// // The bytes the mux FSM wrote are the file
+    /// let mut file = Vec::new();
+    /// while let Some(written) = mux_fsm.poll_output() {
+    ///     file.extend_from_slice(&written);
+    /// }
+    ///
+    /// // The file is handed over in order; the extents come out, the media data passed over
+    /// let mut demux_fsm = MovieDemuxFsm::with_gathering(SampleExtents::new(), DemuxLimits::new());
+    /// for (offset, arriving) in (0..).step_by(7).zip(file.chunks(7)) {
+    ///     demux_fsm.handle_input(offset, arriving)?;
+    /// }
+    /// demux_fsm.finish()?;
+    ///
+    /// // The extent names the bytes of the sample in the file
+    /// let extent = demux_fsm.poll_output().unwrap();
+    /// let range = usize::try_from(extent.extent().start).unwrap()..usize::try_from(extent.extent().end).unwrap();
+    /// assert_eq!(&file[range], b"SAMP");
+    /// assert_eq!(demux_fsm.poll_output(), None);
+    /// # Ok::<(), isobmff::structure::Error>(())
+    /// ```
+    #[must_use]
+    pub const fn with_gathering(gathering: G, limits: DemuxLimits) -> Self {
         Self {
-            input: DemuxInput::new(SampleReader::with_limits(limits.sample_reader())),
+            input: DemuxInput::new(gathering),
             structure: FragmentedStructure::new(),
             decode_times: TrackDecodeTimes::unknown(),
             open: None,
@@ -243,7 +315,7 @@ impl MovieDemuxFsm {
         }
     }
 
-    /// Takes bytes of the file read at `offset`, and reads the samples they complete
+    /// Takes bytes of the file read at `offset`, and completes the output they carry
     ///
     /// `offset` is a file offset, counted from the first byte of the file as a
     /// base data offset is (ISO/IEC 14496-12 §8.8.7). Bytes at the offset the
@@ -257,7 +329,7 @@ impl MovieDemuxFsm {
     /// at are taken all the same while such bytes are named. While the bytes
     /// the file would close with an `mfro` in are gathered, only they are
     /// taken, and none past them. Empty input is taken as nothing. What the
-    /// input completed is then taken from [`poll_sample`](Self::poll_sample).
+    /// input completed is then taken from [`poll_output`](Self::poll_output).
     ///
     /// # Errors
     ///
@@ -328,27 +400,29 @@ impl MovieDemuxFsm {
         Ok(())
     }
 
-    /// Takes the next sample the file handed over so far completed
+    /// Takes the next output the file handed over so far completed: a sample, or an extent
     ///
     /// Reports `None` once they are used up: more of the file is needed. Failure
     /// is reported by the calls that take it, so this one never fails — a failed
-    /// demux FSM hands over the samples it had already completed, then `None`
+    /// demux FSM hands over the output it had already completed, then `None`
     /// from there on.
-    pub fn poll_sample(&mut self) -> Option<Sample> {
-        self.input.poll_sample()
+    pub fn poll_output(&mut self) -> Option<G::Output> {
+        self.input.poll_output()
     }
 
     /// Returns the one read wanted next, or `None` once the file is declared over or the demux FSM has failed
     ///
-    /// Bytes the extent at the front of those held still lacks are wanted
-    /// first, with their length, once the input taken in order has passed their
-    /// start. Where the movie and each fragment precede the media data they
-    /// address, a file handed over in order has none wanted; a movie whose
-    /// chunks lie before it (§8.1.1 sets no order for an `mdat`), or a
-    /// fragment addressing media data lying before it (§8.8.7 has a base data
-    /// offset name any byte of the file), wants bytes already passed by.
-    /// Otherwise the continuation of the input taken in order is wanted, at
-    /// the offset it stands at and with no length. While the bytes the file would close with an `mfro` in are gathered, after
+    /// Gathering with [`SampleReader`], bytes the extent at the front of
+    /// those held still lacks are wanted first, with their length, once the
+    /// input taken in order has passed their start. Where the movie and each
+    /// fragment precede the media data they address, a file handed over in
+    /// order has none wanted; a movie whose chunks lie before it (§8.1.1 sets
+    /// no order for an `mdat`), or a fragment addressing media data lying
+    /// before it (§8.8.7 has a base data offset name any byte of the file),
+    /// wants bytes already passed by. Gathering with
+    /// [`SampleExtents`](crate::structure::SampleExtents), none are ever
+    /// lacked. Otherwise the continuation of the input taken in order is
+    /// wanted, at the offset it stands at and with no length. While the bytes the file would close with an `mfro` in are gathered, after
     /// [`resume_at_movie_fragment_random_access`](Self::resume_at_movie_fragment_random_access),
     /// those still to gather are wanted alone, with their length. Bytes read
     /// for any of these are handed to [`handle_input`](Self::handle_input) at
@@ -544,11 +618,7 @@ impl MovieDemuxFsm {
                     Some(Open::MovieFragment { reader, .. }) => reader.handle_payload(payload),
                     Some(Open::SegmentIndex(reader)) => reader.handle_payload(payload),
                     Some(Open::MovieFragmentRandomAccess(reader)) => reader.handle_payload(payload),
-                    Some(Open::MediaData) => self
-                        .input
-                        .samples_mut()
-                        .handle_input(start, &payload)
-                        .map_err(Error::from),
+                    Some(Open::MediaData) => self.input.samples_mut().handle_input(start, &payload),
                     None => Ok(()),
                 },
                 BoxEvent::End => match self.open.take() {

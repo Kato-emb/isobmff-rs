@@ -238,7 +238,7 @@ fn non_fragmented_reader_samples(file: &[u8], fetch_len: usize) -> (usize, usize
     let mut count = 0;
     let mut total = 0;
     let mut take = |demux_fsm: &mut MovieDemuxFsm| {
-        while let Some(sample) = demux_fsm.poll_sample() {
+        while let Some(sample) = demux_fsm.poll_output() {
             count += 1;
             total += sample.data().len();
             black_box(&sample);
@@ -268,7 +268,7 @@ fn non_fragmented_reader_samples(file: &[u8], fetch_len: usize) -> (usize, usize
 fn wants_of(file: &[u8], fetch_len: usize) -> Vec<Range<u64>> {
     let mut demux_fsm = MovieDemuxFsm::new();
     let mut wants = Vec::new();
-    let take = |demux_fsm: &mut MovieDemuxFsm| while demux_fsm.poll_sample().is_some() {};
+    let take = |demux_fsm: &mut MovieDemuxFsm| while demux_fsm.poll_output().is_some() {};
 
     for (offset, arriving) in (0..)
         .step_by(ARRIVING_CHUNK_LEN)

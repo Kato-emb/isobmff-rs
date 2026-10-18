@@ -285,7 +285,7 @@ fn read_back(file: &[u8]) -> Vec<Sample> {
         demux_fsm.handle_input(0, file).is_ok(),
         "the reader rejects the file the writer laid down"
     );
-    while let Some(sample) = demux_fsm.poll_sample() {
+    while let Some(sample) = demux_fsm.poll_output() {
         samples.push(sample);
     }
 
@@ -293,7 +293,7 @@ fn read_back(file: &[u8]) -> Vec<Sample> {
         demux_fsm.finish().is_ok(),
         "the reader rejects the end of the file the writer laid down"
     );
-    while let Some(sample) = demux_fsm.poll_sample() {
+    while let Some(sample) = demux_fsm.poll_output() {
         samples.push(sample);
     }
 

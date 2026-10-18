@@ -34,7 +34,7 @@ use crate::structure::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxRead
 ///   each cut handed over at the offset it was read at, where
 ///   [`wanted_input`](Self::wanted_input) names,
 ///   and the samples it completed are taken from
-///   [`poll_sample`](Self::poll_sample). The caller drains before handing
+///   [`poll_output`](Self::poll_output). The caller drains before handing
 ///   over more: samples are held until they are taken. Where the segment
 ///   lies in its resource is the caller's: every offset the demux FSM reports
 ///   is an offset into the segment, counting from the first byte of it as
@@ -149,11 +149,11 @@ use crate::structure::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxRead
 /// assert_eq!(demux_fsm.segment_type().map(|styp| styp.major_brand()), Some(segment_type().major_brand()));
 ///
 /// // The samples come back as they were laid out
-/// let first = demux_fsm.poll_sample().unwrap();
+/// let first = demux_fsm.poll_output().unwrap();
 /// assert_eq!((first.data(), first.properties().decode_time), (b"SAMP".as_slice(), 0));
-/// let second = demux_fsm.poll_sample().unwrap();
+/// let second = demux_fsm.poll_output().unwrap();
 /// assert_eq!((second.data(), second.properties().decode_time), (b"DATA".as_slice(), 1_024));
-/// assert_eq!(demux_fsm.poll_sample(), None);
+/// assert_eq!(demux_fsm.poll_output(), None);
 /// # Ok::<(), isobmff::structure::Error>(())
 /// ```
 #[derive(Debug)]
@@ -227,7 +227,7 @@ impl MediaSegmentDemuxFsm {
     /// from where it stood; bytes at the offset the input taken in order stands
     /// at are taken all the same while such bytes are named. Empty input is
     /// taken as nothing. What the input completed is then taken from
-    /// [`poll_sample`](Self::poll_sample).
+    /// [`poll_output`](Self::poll_output).
     ///
     /// # Errors
     ///
@@ -262,8 +262,8 @@ impl MediaSegmentDemuxFsm {
     /// Failure is reported by the calls that take it, so this one never fails
     /// — a failed demux FSM hands over the samples it had already completed,
     /// then `None` from there on.
-    pub fn poll_sample(&mut self) -> Option<Sample> {
-        self.input.poll_sample()
+    pub fn poll_output(&mut self) -> Option<Sample> {
+        self.input.poll_output()
     }
 
     /// Returns the one read wanted next, or `None` once the segment is declared over or the demux FSM has failed
@@ -512,7 +512,7 @@ mod tests {
                 }
             })
         ));
-        assert_eq!(demux_fsm.poll_sample(), None);
+        assert_eq!(demux_fsm.poll_output(), None);
     }
 
     #[test]
@@ -549,7 +549,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(wanted, Some(WantedInput::new(segment.len() as u64, None)));
-        assert_eq!(demux_fsm.poll_sample(), Some(sample()));
+        assert_eq!(demux_fsm.poll_output(), Some(sample()));
     }
 
     #[test]

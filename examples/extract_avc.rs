@@ -71,7 +71,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let mut count: u64 = 0;
     loop {
-        while let Some(sample) = demux_fsm.poll_sample() {
+        while let Some(sample) = demux_fsm.poll_output() {
             if sample.properties().track_id != track_id {
                 continue;
             }

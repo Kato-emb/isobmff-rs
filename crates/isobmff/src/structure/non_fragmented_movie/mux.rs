@@ -162,7 +162,7 @@ use crate::structure::{Error, compact_box_header, whole_box_header, whole_payloa
 ///         demux_fsm.handle_input(wanted.offset(), &file[start..end])?;
 ///     }
 /// }
-/// let read_back: Vec<Vec<u8>> = core::iter::from_fn(|| demux_fsm.poll_sample())
+/// let read_back: Vec<Vec<u8>> = core::iter::from_fn(|| demux_fsm.poll_output())
 ///     .map(Sample::into_data)
 ///     .collect();
 /// assert_eq!(read_back, [b"SAMP".to_vec(), b"DATA".to_vec(), b"LAST".to_vec()]);

@@ -137,7 +137,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut carries_cut_track = false;
     loop {
         loop {
-            while let Some(sample) = demux_fsm.poll_sample() {
+            while let Some(sample) = demux_fsm.poll_output() {
                 queues
                     .iter_mut()
                     .find(|queue| queue.track_id == sample.properties().track_id)

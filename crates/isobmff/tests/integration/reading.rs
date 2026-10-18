@@ -43,7 +43,7 @@ pub(crate) fn read_on(
 /// Takes every sample the reader has completed
 pub(crate) fn drained(demux_fsm: &mut MovieDemuxFsm) -> Vec<Sample> {
     let mut samples = Vec::new();
-    while let Some(sample) = demux_fsm.poll_sample() {
+    while let Some(sample) = demux_fsm.poll_output() {
         samples.push(sample);
     }
 

@@ -69,7 +69,7 @@ test("the wanted input and the sample extents come as plain objects of the shape
   const wanted = fsm.wantedInput();
   fsm.handleInput(0n, movie(chunkOffset));
 
-  const extent = fsm.pollSampleExtent();
+  const extent = fsm.pollOutput();
   const duration = fsm.movie().trak()[0].mdia().mdhd().duration();
   fsm.free();
 

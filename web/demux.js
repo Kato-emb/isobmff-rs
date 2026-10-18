@@ -35,7 +35,7 @@ export async function demux(blob) {
       } else {
         fsm.handleInput(wanted.offset, cut);
       }
-      for (let extent; (extent = fsm.pollSampleExtent()); ) {
+      for (let extent; (extent = fsm.pollOutput()); ) {
         samples.push(sample(extent));
       }
     }
