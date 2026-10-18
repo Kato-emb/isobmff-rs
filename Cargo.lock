@@ -251,7 +251,6 @@ dependencies = [
  "isobmff-boxes",
  "isobmff-core",
  "isobmff-mp4",
- "isobmff-sample",
  "isobmff-sequence",
  "isobmff-test-support",
 ]
@@ -303,15 +302,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "isobmff-sample"
-version = "0.0.0"
-dependencies = [
- "isobmff-boxes",
- "isobmff-core",
- "isobmff-test-support",
-]
-
-[[package]]
 name = "isobmff-sequence"
 version = "0.0.0"
 dependencies = [
@@ -325,7 +315,6 @@ version = "0.0.0"
 dependencies = [
  "isobmff-boxes",
  "isobmff-core",
- "isobmff-sample",
  "isobmff-sequence",
 ]
 

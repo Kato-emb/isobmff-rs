@@ -5,10 +5,10 @@ use core::iter;
 
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox, TrackBox};
 use isobmff_core::{BoxDefinition, BoxType, FourCc};
-use isobmff_sample::{Sample, SampleTableWriter};
 use isobmff_sequence::OutputBytes;
 
 use super::{NonFragmentedDisposition, NonFragmentedStructure};
+use crate::sample::{Sample, SampleTableWriter};
 use crate::structure::mux_output::MuxOutput;
 use crate::structure::{Error, compact_box_header, whole_box_header, whole_payload};
 
@@ -252,7 +252,7 @@ impl NonFragmentedMuxFsm {
     ///   movie was not handed over first.
     /// * [`Sample`](crate::structure::Error::Sample): the chunk opened before it was not
     ///   closed, as
-    ///   [`ChunkStillOpen`](isobmff_sample::Error::ChunkStillOpen).
+    ///   [`ChunkStillOpen`](crate::sample::Error::ChunkStillOpen).
     /// * [`AlreadyFinished`](crate::structure::Error::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the mux FSM keeps and reports
@@ -313,7 +313,7 @@ impl NonFragmentedMuxFsm {
     /// * [`BoxOutOfOrder`](crate::structure::Error::BoxOutOfOrder): the
     ///   movie was not handed over first.
     /// * [`Sample`](crate::structure::Error::Sample): no chunk was open, as
-    ///   [`NoChunkOpen`](isobmff_sample::Error::NoChunkOpen).
+    ///   [`NoChunkOpen`](crate::sample::Error::NoChunkOpen).
     /// * [`Box`](crate::structure::Error::Box): the chunk is longer than the
     ///   `size` field of an `mdat` can state.
     /// * [`AlreadyFinished`](crate::structure::Error::AlreadyFinished): the
@@ -360,7 +360,7 @@ impl NonFragmentedMuxFsm {
     /// * [`Box`](crate::structure::Error::Box): the movie does not write.
     /// * [`Sample`](crate::structure::Error::Sample): what the sample layer
     ///   makes of the samples as a whole — a chunk left open, as
-    ///   [`ChunkStillOpen`](isobmff_sample::Error::ChunkStillOpen), or a chunk
+    ///   [`ChunkStillOpen`](crate::sample::Error::ChunkStillOpen), or a chunk
     ///   holding more samples than an `stsc` entry counts among them.
     /// * [`MissingMandatoryBox`](crate::structure::Error::MissingMandatoryBox):
     ///   the movie was never handed over, so the file laid down is not a
@@ -458,10 +458,10 @@ mod tests {
 
     use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox, SampleFlags};
     use isobmff_core::{BoxDecode, BoxDefinition};
-    use isobmff_sample::{Sample, SampleProperties};
     use isobmff_test_support::{file_type, unfragmented_movie};
 
     use super::{Error, NonFragmentedMuxFsm, default_file_type};
+    use crate::sample::{Sample, SampleProperties};
 
     /// A sample of the track the movie declares
     fn sample() -> Sample {
@@ -560,7 +560,7 @@ mod tests {
             matches!(
                 refused,
                 Err(Error::Sample {
-                    error: isobmff_sample::Error::ChunkStillOpen { .. }
+                    error: crate::sample::Error::ChunkStillOpen
                 })
             )
         };
@@ -579,7 +579,7 @@ mod tests {
         assert!(matches!(
             mux_fsm.finish_chunk(),
             Err(Error::Sample {
-                error: isobmff_sample::Error::NoChunkOpen { .. }
+                error: crate::sample::Error::NoChunkOpen
             })
         ));
     }
@@ -641,7 +641,7 @@ mod tests {
         assert!(matches!(
             mux_fsm.handle_sample(sample()),
             Err(Error::Sample {
-                error: isobmff_sample::Error::NoChunkOpen { .. }
+                error: crate::sample::Error::NoChunkOpen
             })
         ));
     }
@@ -669,7 +669,7 @@ mod tests {
                 b"SAMP".to_vec()
             )),
             Err(Error::Sample {
-                error: isobmff_sample::Error::UnknownTrackId { track_id: 999, .. }
+                error: crate::sample::Error::UnknownTrackId { track_id: 999, .. }
             })
         ));
         assert!(matches!(
@@ -685,7 +685,7 @@ mod tests {
                 b"SAMP".to_vec()
             )),
             Err(Error::Sample {
-                error: isobmff_sample::Error::UnknownSampleDescriptionIndex {
+                error: crate::sample::Error::UnknownSampleDescriptionIndex {
                     track_id: 1,
                     sample_description_index: 2,
                     ..

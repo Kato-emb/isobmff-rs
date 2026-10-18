@@ -3,13 +3,13 @@
 //! A presentation is carried as samples — ISO/IEC 14496-12 §3.1.14 has a sample
 //! as all the data associated with a single timestamp. [`MovieDemuxFsm`]
 //! takes a movie file as it arrives, fragmented or not, and reports the
-//! [`Sample`](isobmff_sample::Sample)s it carries, and [`MediaSegmentDemuxFsm`]
+//! [`Sample`](crate::sample::Sample)s it carries, and [`MediaSegmentDemuxFsm`]
 //! does the same for a media segment delivered apart from the movie it
 //! continues; [`FragmentedMuxFsm`],
 //! [`NonFragmentedMuxFsm`] and [`MediaSegmentMuxFsm`] go the other way, laying
 //! samples down as a file or a segment of each kind. [`MovieSampleExtentFsm`]
 //! reads a movie file as [`MovieDemuxFsm`] does short of gathering the
-//! samples, and reports the [`SampleExtent`](isobmff_sample::SampleExtent) of
+//! samples, and reports the [`SampleExtent`](crate::sample::SampleExtent) of
 //! each, where its bytes lie in the file. None reaches for a source
 //! or a sink of its own: when to read or write, and from or to where, stay with
 //! the caller, through [the caller's loop](#the-callers-loop).
@@ -33,20 +33,20 @@
 //!    first meet.
 //! 3. **Sample resolution.** Where every sample of a presentation lies and what
 //!    is true of it, resolved out of the boxes that declare it into a
-//!    [`SampleExtent`](isobmff_sample::SampleExtent): the sample tables of a
+//!    [`SampleExtent`](crate::sample::SampleExtent): the sample tables of a
 //!    movie (§8.7) through
-//!    [`sample_table::sample_extents`](isobmff_sample::sample_table::sample_extents),
+//!    [`sample_table::sample_extents`](crate::sample::sample_table::sample_extents),
 //!    or a movie fragment against the movie it continues (§8.8) through
-//!    [`movie_fragment::sample_extents`](isobmff_sample::movie_fragment::sample_extents).
+//!    [`movie_fragment::sample_extents`](crate::sample::movie_fragment::sample_extents).
 //!    The writing side is the mirror:
-//!    [`MovieFragmentWriter`](isobmff_sample::MovieFragmentWriter) lays samples
+//!    [`MovieFragmentWriter`](crate::sample::MovieFragmentWriter) lays samples
 //!    out as a `moof` and the media data beside it, and
-//!    [`SampleTableWriter`](isobmff_sample::SampleTableWriter) as the sample
-//!    tables of a movie. `isobmff-sample` holds this layer and the next.
-//! 4. **Sample gathering.** [`SampleReader`](isobmff_sample::SampleReader)
+//!    [`SampleTableWriter`](crate::sample::SampleTableWriter) as the sample
+//!    tables of a movie. [`sample`](crate::sample) holds this layer and the next.
+//! 4. **Sample gathering.** [`SampleReader`](crate::sample::SampleReader)
 //!    holds the extents it is handed and fills them out of the bytes that
 //!    arrive, each piece with the offset it starts at; a
-//!    [`Sample`](isobmff_sample::Sample) comes out once its bytes have, and the
+//!    [`Sample`](crate::sample::Sample) comes out once its bytes have, and the
 //!    extent it still lacks is named for a caller that can seek to fetch it.
 //!    Bytes no extent names are dropped.
 //! 5. **Structure.** The order of the top-level boxes of one kind of file, and
@@ -201,7 +201,7 @@
 //!
 //! A caller that holds a whole presentation in memory needs none of the
 //! machines: [`isobmff_boxes`] reads its boxes into values,
-//! [`sample_table::sample_extents`](isobmff_sample::sample_table::sample_extents)
+//! [`sample_table::sample_extents`](crate::sample::sample_table::sample_extents)
 //! names where its samples lie, and their bytes are sliced from there.
 //!
 //! # `alloc`

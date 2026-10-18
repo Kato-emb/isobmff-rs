@@ -14,10 +14,10 @@ mod tests {
     use alloc::vec::Vec;
 
     use isobmff_boxes::{MovieBox, SampleFlags, TrackExtendsBox};
-    use isobmff_sample::{Sample, SampleProperties};
     use isobmff_test_support::fragmented_movie;
 
     use super::MediaSegmentMuxFsm;
+    use crate::sample::{Sample, SampleProperties};
 
     /// Movie of one track the segments continue, whose defaults a `trex` states
     pub(super) fn movie() -> MovieBox {

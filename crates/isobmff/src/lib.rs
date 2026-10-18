@@ -16,7 +16,7 @@
 //! The root is the `isobmff-core` crate re-exported whole — [`BoxType`],
 //! [`FourCc`], [`BoxDecode`] and the rest of what all the layers are defined
 //! over. A module the table places in another crate is that crate re-exported
-//! whole: [`sample::Sample`] and `isobmff_sample::Sample` are the same type,
+//! whole: [`boxes::MovieBox`] and `isobmff_boxes::MovieBox` are the same type,
 //! so documentation written against any of those crates reads against this
 //! one. A module placed in this crate holds its layers itself.
 //!
@@ -25,7 +25,7 @@
 //! | the root | `isobmff-core` | what all of them are defined over |
 //! | [`sequence`] | `isobmff-sequence` | layer 1 |
 //! | [`boxes`] | `isobmff-boxes` | the catalog layer 2 reads a box into |
-//! | [`sample`] | `isobmff-sample` | layers 3 and 4 |
+//! | [`sample`] | this crate | layers 3 and 4 |
 //! | [`structure`] | this crate | layers 2, 5 and 6 |
 //! | [`avc`] | `isobmff-avc` | none: the sample entries of ISO/IEC 14496-15 |
 //! | [`mp4`] | `isobmff-mp4` | none: the sample entries and descriptors of ISO/IEC 14496-14 |
@@ -72,11 +72,7 @@ pub mod boxes {
     pub use isobmff_boxes::*;
 }
 
-/// Where the samples of a presentation lie, and the samples themselves — the
-/// `isobmff-sample` crate whole
-pub mod sample {
-    pub use isobmff_sample::*;
-}
+pub mod sample;
 
 pub mod structure;
 

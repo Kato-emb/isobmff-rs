@@ -23,7 +23,6 @@ isobmff-avc = { workspace = true, optional = true }
 isobmff-boxes.workspace = true
 isobmff-core.workspace = true
 isobmff-mp4 = { workspace = true, optional = true }
-isobmff-sample.workspace = true
 isobmff-sequence.workspace = true
 
 [dev-dependencies]

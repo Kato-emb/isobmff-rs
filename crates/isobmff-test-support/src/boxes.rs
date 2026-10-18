@@ -24,7 +24,7 @@ use isobmff_core::{
 const EPOCH: Mp4EpochSeconds = Mp4EpochSeconds::from_seconds(0);
 
 /// Ticks a second the media of the synthetic files is timed in
-pub(crate) const TIMESCALE: u32 = 90_000;
+pub const TIMESCALE: u32 = 90_000;
 
 /// Media data the fragment of the synthetic files addresses
 pub const MEDIA_DATA: [u8; 64] = [0x11; 64];
@@ -280,7 +280,7 @@ pub fn non_fragmented_file(chunks: &[&[&[u8]]], movie_first: bool) -> Vec<u8> {
 }
 
 /// The movie and the file of [`non_fragmented_file`], the movie declaring the samples of its sample table and `mvex`, where one is given
-pub(crate) fn file_laid_out(
+pub fn file_laid_out(
     chunks: &[&[&[u8]]],
     movie_first: bool,
     mvex: Option<MovieExtendsBox>,

@@ -4,10 +4,10 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{MediaDataBox, MovieBox, SegmentTypeBox};
 use isobmff_core::{BoxDefinition, BoxEncode, BoxType};
-use isobmff_sample::{MovieFragmentWriter, Sample};
 use isobmff_sequence::OutputBytes;
 
 use super::{MediaSegmentDisposition, MediaSegmentStructure};
+use crate::sample::{MovieFragmentWriter, Sample};
 use crate::structure::mux_output::MuxOutput;
 use crate::structure::{Error, whole_box_header, whole_payload};
 
@@ -338,11 +338,11 @@ impl MediaSegmentMuxFsm {
 mod tests {
     use isobmff_boxes::{MovieFragmentBox, SampleFlags, SegmentTypeBox};
     use isobmff_core::{BoxDefinition, FourCc};
-    use isobmff_sample::{Sample, SampleProperties};
     use isobmff_test_support::{segment_type, unfragmented_movie};
 
     use super::super::tests::{movie, sample};
     use super::{Error, MediaSegmentMuxFsm};
+    use crate::sample::{Sample, SampleProperties};
 
     #[test]
     fn a_segment_declaring_no_brands_is_laid_down_all_the_same() {
@@ -406,7 +406,7 @@ mod tests {
         assert!(matches!(
             mux_fsm.handle_sample(sample()),
             Err(Error::Sample {
-                error: isobmff_sample::Error::NoFragmentOpen { .. }
+                error: crate::sample::Error::NoFragmentOpen
             })
         ));
     }
@@ -416,7 +416,7 @@ mod tests {
         assert!(matches!(
             MediaSegmentMuxFsm::new(&unfragmented_movie()).map(|_mux_fsm| ()),
             Err(Error::Sample {
-                error: isobmff_sample::Error::MissingMovieExtends { .. }
+                error: crate::sample::Error::MissingMovieExtends
             })
         ));
     }
@@ -440,7 +440,7 @@ mod tests {
                 b"SAMP".to_vec()
             )),
             Err(Error::Sample {
-                error: isobmff_sample::Error::UnknownTrackId { track_id: 999, .. }
+                error: crate::sample::Error::UnknownTrackId { track_id: 999, .. }
             })
         ));
     }
