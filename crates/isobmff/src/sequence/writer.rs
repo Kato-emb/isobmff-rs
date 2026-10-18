@@ -5,14 +5,14 @@ use core::ops::Range;
 
 use isobmff_core::BoxHeader;
 
-use crate::error::Error;
-use crate::event::{BoxEvent, OutputBytes};
+use crate::sequence::error::Error;
+use crate::sequence::event::{BoxEvent, OutputBytes};
 
 /// Writes the sequence of boxes a file is formed as, taking the events as they come
 ///
 /// The writer is handed the steps of the sequence and lays down the bytes they
 /// make. It reaches for no destination of its own: when to write and to where
-/// stay with the caller. What [`BoxReader`](crate::BoxReader) reports, this
+/// stay with the caller. What [`BoxReader`](crate::sequence::BoxReader) reports, this
 /// writes, so an event stream read from one file writes back as that file.
 ///
 /// A box writes the header of its [`Header`](BoxEvent::Header) as it stands, so
@@ -35,30 +35,30 @@ use crate::event::{BoxEvent, OutputBytes};
 ///   `Vec`.
 /// * A payload is carried by as many [`Payload`](BoxEvent::Payload) events as
 ///   the caller cares to send, and must measure what the box declares:
-///   offering more is [`PayloadPastDeclared`](crate::Error::PayloadPastDeclared)
-///   and closing early is [`UnfinishedBox`](crate::Error::UnfinishedBox). The
+///   offering more is [`PayloadPastDeclared`](crate::sequence::Error::PayloadPastDeclared)
+///   and closing early is [`UnfinishedBox`](crate::sequence::Error::UnfinishedBox). The
 ///   writer does not correct the header it was handed to match what arrived.
 /// * A box declaring no total —
 ///   [`ToEndOfFile`](isobmff_core::BoxSize::ToEndOfFile) — takes payload of any
 ///   length and is closed by [`End`](BoxEvent::End) like any other. Nothing
 ///   may follow it: it runs to the end of the file by definition, so an event
-///   after it is [`PastEndOfFile`](crate::Error::PastEndOfFile).
+///   after it is [`PastEndOfFile`](crate::sequence::Error::PastEndOfFile).
 /// * A [`BoxEvent`] carries no position, so the extents
-///   [`BoxReader`](crate::BoxReader) reported are not this writer's input: boxes
+///   [`BoxReader`](crate::sequence::BoxReader) reported are not this writer's input: boxes
 ///   may be dropped from an event stream or added to it, and where the events
 ///   land is the writer's own count, which
 ///   [`handle_event`](Self::handle_event) returns for the event it took.
 /// * An `Err` leaves the writer failed for good,
-///   [`AlreadyFinished`](crate::Error::AlreadyFinished) aside: every later
+///   [`AlreadyFinished`](crate::sequence::Error::AlreadyFinished) aside: every later
 ///   [`handle_event`](Self::handle_event) and [`finish`](Self::finish) reports
 ///   that same failure again. The bytes made before it are still there to take,
 ///   and no further byte is ever made.
 /// * [`finish`](Self::finish) declares the file over. Bytes are still taken after
 ///   it, but an event handed over then, or a second [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::Error::AlreadyFinished). A file being over is
+///   [`AlreadyFinished`](crate::sequence::Error::AlreadyFinished). A file being over is
 ///   not a failure, so that is what every later call reports as well.
 /// * [`finish`](Self::finish) reports
-///   [`UnfinishedBox`](crate::Error::UnfinishedBox) for a box whose declared
+///   [`UnfinishedBox`](crate::sequence::Error::UnfinishedBox) for a box whose declared
 ///   total was not reached. A box that declares no total, and one whose payload
 ///   is all there but was not closed, end the file where it stands — the bytes
 ///   written already form the whole box.
@@ -67,7 +67,7 @@ use crate::event::{BoxEvent, OutputBytes};
 ///
 /// ```
 /// use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize};
-/// use isobmff_sequence::{BoxEvent, BoxWriter};
+/// use isobmff::sequence::{BoxEvent, BoxWriter};
 ///
 /// // A file opening with an `ftyp` box and carrying one `mdat`
 /// let whole_box = |box_type, total| {
@@ -140,17 +140,17 @@ impl BoxWriter {
     ///
     /// # Errors
     ///
-    /// * [`NoBoxOpen`](crate::Error::NoBoxOpen): a payload or an end came
+    /// * [`NoBoxOpen`](crate::sequence::Error::NoBoxOpen): a payload or an end came
     ///   while no box was open.
-    /// * [`BoxStillOpen`](crate::Error::BoxStillOpen): a box started while the
+    /// * [`BoxStillOpen`](crate::sequence::Error::BoxStillOpen): a box started while the
     ///   box before it was still open.
-    /// * [`PayloadPastDeclared`](crate::Error::PayloadPastDeclared): more
+    /// * [`PayloadPastDeclared`](crate::sequence::Error::PayloadPastDeclared): more
     ///   payload was offered for a box than it declares.
-    /// * [`UnfinishedBox`](crate::Error::UnfinishedBox): a box was closed
+    /// * [`UnfinishedBox`](crate::sequence::Error::UnfinishedBox): a box was closed
     ///   before its declared total was reached.
-    /// * [`PastEndOfFile`](crate::Error::PastEndOfFile): an event came after
+    /// * [`PastEndOfFile`](crate::sequence::Error::PastEndOfFile): an event came after
     ///   the box running to the end of the file was closed.
-    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the file was
+    /// * [`AlreadyFinished`](crate::sequence::Error::AlreadyFinished): the file was
     ///   declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.
@@ -263,9 +263,9 @@ impl BoxWriter {
     ///
     /// # Errors
     ///
-    /// * [`UnfinishedBox`](crate::Error::UnfinishedBox): a box whose declared
+    /// * [`UnfinishedBox`](crate::sequence::Error::UnfinishedBox): a box whose declared
     ///   total was not reached is still open.
-    /// * [`AlreadyFinished`](crate::Error::AlreadyFinished): the file was
+    /// * [`AlreadyFinished`](crate::sequence::Error::AlreadyFinished): the file was
     ///   already declared over.
     /// * The failure of a previous call, which the writer keeps and reports
     ///   again for every call after it.

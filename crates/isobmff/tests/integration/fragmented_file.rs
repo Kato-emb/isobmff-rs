@@ -3,6 +3,7 @@
 #[cfg(test)]
 mod tests {
     use isobmff::sample::{Sample, SampleProperties};
+    use isobmff::sequence::BoxEvent;
     use isobmff::structure::{Error, MovieDemuxFsm, WantedInput};
     use isobmff_boxes::{
         ChunkOffsets, MediaDataBox, MovieBox, MovieFragmentBox, MovieFragmentHeaderBox,
@@ -12,12 +13,12 @@ mod tests {
         TrackRunSample,
     };
     use isobmff_core::{BoxEncode, BoxType};
-    use isobmff_sequence::BoxEvent;
     use isobmff_test_support::{
-        events_of, file_type, non_fragmented_file, sample_table, self_contained_data_reference,
+        file_type, non_fragmented_file, sample_table, self_contained_data_reference,
         track_laid_out, written,
     };
 
+    use crate::driving::events_of;
     use crate::presentations::{
         FragmentedFileWithMovieSamples, IndexedFile, SAMPLE_CHUNKS, fragmented_file_samples,
         fragmented_file_with_movie_samples, fragmented_file_with_samples, indexed_fragmented_file,

@@ -20,11 +20,11 @@ use isobmff_core::BoxHeader;
 /// they measure it.
 ///
 /// A step says what the file holds and not where it holds it, so the same step
-/// is what [`BoxReader`](crate::BoxReader) reports and what
-/// [`BoxWriter`](crate::BoxWriter) takes. Where it lies is the extent each of
+/// is what [`BoxReader`](crate::sequence::BoxReader) reports and what
+/// [`BoxWriter`](crate::sequence::BoxWriter) takes. Where it lies is the extent each of
 /// them hands over with it —
-/// [`BoxReader::poll_event`](crate::BoxReader::poll_event) and
-/// [`BoxWriter::handle_event`](crate::BoxWriter::handle_event).
+/// [`BoxReader::poll_event`](crate::sequence::BoxReader::poll_event) and
+/// [`BoxWriter::handle_event`](crate::sequence::BoxWriter::handle_event).
 #[allow(
     clippy::exhaustive_enums,
     reason = "a box is a header and a payload (ISO/IEC 14496-12 §4.2), and the framing reports those and where the box ended"
@@ -43,7 +43,7 @@ pub enum BoxEvent {
 ///
 /// The bytes of a [`Header`](BoxEvent::Header) are held inline, and those
 /// of a [`Payload`](BoxEvent::Payload) are the very allocation the event
-/// carried: a payload crosses [`BoxWriter`](crate::BoxWriter) without being
+/// carried: a payload crosses [`BoxWriter`](crate::sequence::BoxWriter) without being
 /// copied, and [`into_vec`](Self::into_vec) hands that allocation back as it
 /// stands. A header never had one, so `into_vec` takes one there.
 ///
@@ -54,7 +54,7 @@ pub enum BoxEvent {
 ///
 /// ```
 /// use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize};
-/// use isobmff_sequence::{BoxEvent, BoxWriter};
+/// use isobmff::sequence::{BoxEvent, BoxWriter};
 ///
 /// // An `mdat` box carrying one payload of four bytes
 /// let total = BoxSize::Compact(CompactSize::new(12).unwrap());

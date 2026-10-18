@@ -5,10 +5,10 @@ use core::iter;
 
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox, TrackBox};
 use isobmff_core::{BoxDefinition, BoxType, FourCc};
-use isobmff_sequence::OutputBytes;
 
 use super::{NonFragmentedDisposition, NonFragmentedStructure};
 use crate::sample::{Sample, SampleTableWriter};
+use crate::sequence::OutputBytes;
 use crate::structure::mux_output::MuxOutput;
 use crate::structure::{Error, compact_box_header, whole_box_header, whole_payload};
 

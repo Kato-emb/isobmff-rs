@@ -23,10 +23,10 @@
 //!
 //! 1. **Framing.** A file is a sequence of objects, called boxes (§4.2), and
 //!    framing that sequence is the work of
-//!    [`BoxReader`](isobmff_sequence::BoxReader) and
-//!    [`BoxWriter`](isobmff_sequence::BoxWriter), which `isobmff-sequence`
-//!    holds. They read no box into a value: which boxes matter is not theirs
-//!    to say.
+//!    [`BoxReader`](crate::sequence::BoxReader) and
+//!    [`BoxWriter`](crate::sequence::BoxWriter), which
+//!    [`sequence`](crate::sequence) holds. They read no box into a value:
+//!    which boxes matter is not theirs to say.
 //! 2. **Box values.** The events of one box gathered whole and read into its
 //!    value, bounded by a limit on what the box may declare. Held in this
 //!    module, where a box event and [`BoxDecode`](isobmff_core::BoxDecode)

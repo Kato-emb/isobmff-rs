@@ -51,11 +51,11 @@ use isobmff_core::{BoxType, Category};
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Error {
-    /// Failure of the framing of the file, carried through as `isobmff-sequence` names it
+    /// Failure of the framing of the file, carried through as [`sequence`](crate::sequence) names it
     #[non_exhaustive]
     Sequence {
         /// Failure of the framing, carrying its own values
-        error: isobmff_sequence::Error,
+        error: crate::sequence::Error,
     },
     /// Failure of the samples the file carries, carried through as [`sample`](crate::sample) names it
     #[non_exhaustive]
@@ -142,9 +142,9 @@ impl Error {
     }
 }
 
-impl From<isobmff_sequence::Error> for Error {
+impl From<crate::sequence::Error> for Error {
     /// Carries the failure of the framing of the file through as it stands
-    fn from(error: isobmff_sequence::Error) -> Self {
+    fn from(error: crate::sequence::Error) -> Self {
         Self::Sequence { error }
     }
 }

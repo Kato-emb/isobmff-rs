@@ -3,8 +3,8 @@
 use alloc::vec::Vec;
 
 use isobmff_core::BoxHeader;
-use isobmff_sequence::{BoxEvent, BoxWriter, OutputBytes};
 
+use crate::sequence::{BoxEvent, BoxWriter, OutputBytes};
 use crate::structure::Error;
 
 /// Lays the boxes of a file down through its framing, and keeps whether the mux FSM above still writes

@@ -13,17 +13,17 @@ use isobmff_core::{BoxType, Category};
 /// this type carries through whole, as [`Box`](Self::Box). What a caller does
 /// about either is one [`category`](Self::category).
 ///
-/// The vocabulary is this crate's own: taking a file as it arrives and laying
-/// one down name their failures here. The situations a sequence reaches are
-/// added to as ISO/IEC 14496-12 is read further, so a match on this must leave
-/// room for variants that are not here yet, and a match on a variant must leave
-/// room for fields that are not here yet.
+/// The vocabulary is [`sequence`](crate::sequence)'s own: taking a file as it
+/// arrives and laying one down name their failures here. The situations a
+/// sequence reaches are added to as ISO/IEC 14496-12 is read further, so a
+/// match on this must leave room for variants that are not here yet, and a
+/// match on a variant must leave room for fields that are not here yet.
 ///
 /// # Examples
 ///
 /// ```
 /// use isobmff_core::Category;
-/// use isobmff_sequence::{BoxReader, Error};
+/// use isobmff::sequence::{BoxReader, Error};
 ///
 /// // A file ending inside a box is a failure of the sequence itself
 /// let mut reader = BoxReader::new();

@@ -26,9 +26,6 @@ path = "../crates/isobmff-core"
 [dependencies.isobmff-mp4]
 path = "../crates/isobmff-mp4"
 
-[dependencies.isobmff-sequence]
-path = "../crates/isobmff-sequence"
-
 [dependencies.isobmff]
 path = "../crates/isobmff"
 

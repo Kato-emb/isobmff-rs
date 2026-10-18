@@ -3,11 +3,11 @@
 use alloc::vec::Vec;
 
 use isobmff_boxes::{MovieBox, MovieFragmentBox, SegmentIndexBox, SegmentTypeBox};
-use isobmff_sequence::BoxEvent;
 
 use super::{MediaSegmentDisposition, MediaSegmentStructure};
 use crate::sample::movie_fragment::sample_extents;
 use crate::sample::{Sample, SampleReader, SegmentIndex, TrackDecodeTimes};
+use crate::sequence::BoxEvent;
 use crate::structure::{DemuxInput, DemuxLimits, Error, WantedInput, WholeBoxReader};
 
 /// Reads the samples a media segment carries, taking it as it arrives
