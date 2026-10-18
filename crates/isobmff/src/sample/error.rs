@@ -11,8 +11,8 @@ use isobmff_core::Category;
 /// a failure of the samples themselves — a fragment of a track the movie never
 /// declared, a timeline or an offset run past what its field carries, a sample
 /// that never arrived whole — or a failure of one box, which
-/// [`isobmff_core::Error`] names and this type carries through whole, as
-/// [`Box`](Self::Box). What a caller does about either is one
+/// [`isobmff::Error`](crate::Error) names and this type carries through
+/// whole, as [`Box`](Self::Box). What a caller does about either is one
 /// [`category`](Self::category).
 ///
 /// The vocabulary is [`sample`](crate::sample)'s own: resolving where a
@@ -165,7 +165,7 @@ pub enum Error {
     /// that carries the movie (ISO/IEC 14496-12 §8.7.2); any other sends the
     /// reader to an external file, which no resolver here follows yet, so a
     /// sample described through one is refused. An entry held as
-    /// [`DataEntry::Other`](isobmff_boxes::DataEntry::Other) does not read as
+    /// [`DataEntry::Other`](crate::boxes::DataEntry::Other) does not read as
     /// the file itself, so it counts as such an entry.
     #[non_exhaustive]
     ExternalDataReference {

@@ -47,7 +47,7 @@ use crate::sample::sample_table_writer::open_track::OpenTrack;
 ///   [`sample_table::sample_extents`](crate::sample::sample_table::sample_extents) to
 ///   hand the samples back in that order.
 /// * Each table is stated the way its box chooses from the values laid down:
-///   [`SampleSizeBox::from_sizes`](isobmff_boxes::SampleSizeBox::from_sizes),
+///   [`SampleSizeBox::from_sizes`](crate::boxes::SampleSizeBox::from_sizes),
 ///   [`TimeToSampleBox::from_deltas`], [`SampleToChunkBox::from_chunks`] and
 ///   [`ChunkOffsets::from_offsets`].
 /// * An optional table is left out when every sample of the track states what
@@ -441,7 +441,7 @@ impl SampleTableWriter {
     ///   declares no track the sample belongs to.
     /// * [`UnknownSampleDescriptionIndex`](crate::sample::Error::UnknownSampleDescriptionIndex):
     ///   the track has no `stsd` entry describing the sample.
-    /// * The failures of [`SampleEntry::try_from`](isobmff_boxes::SampleEntry),
+    /// * The failures of [`SampleEntry::try_from`](crate::boxes::SampleEntry),
     ///   carried on [`Box`](crate::sample::Error::Box): that entry does not read
     ///   as a sample entry, with `stsd` added to the containers.
     /// * [`UnknownDataReferenceIndex`](crate::sample::Error::UnknownDataReferenceIndex):
@@ -493,7 +493,7 @@ impl SampleTableWriter {
     ///
     /// * [`ChunkStillOpen`](crate::sample::Error::ChunkStillOpen): a chunk
     ///   was left open.
-    /// * [`OutOfRange`](isobmff_core::ErrorKind::OutOfRange), carried on
+    /// * [`OutOfRange`](crate::ErrorKind::OutOfRange), carried on
     ///   [`Box`](crate::sample::Error::Box): a chunk holds more samples than
     ///   an `stsc` entry counts, or is numbered past what one reaches.
     /// * [`AlreadyFinished`](crate::sample::Error::AlreadyFinished): the

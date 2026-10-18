@@ -29,7 +29,7 @@
 //!    which boxes matter is not theirs to say.
 //! 2. **Box values.** The events of one box gathered whole and read into its
 //!    value, bounded by a limit on what the box may declare. Held in this
-//!    module, where a box event and [`BoxDecode`](isobmff_core::BoxDecode)
+//!    module, where a box event and [`BoxDecode`](crate::BoxDecode)
 //!    first meet.
 //! 3. **Sample resolution.** Where every sample of a presentation lies and what
 //!    is true of it, resolved out of the boxes that declare it into a
@@ -200,7 +200,7 @@
 //! names one.
 //!
 //! A caller that holds a whole presentation in memory needs none of the
-//! machines: [`isobmff_boxes`] reads its boxes into values,
+//! machines: [`boxes`](crate::boxes) reads the boxes into values,
 //! [`sample_table::sample_extents`](crate::sample::sample_table::sample_extents)
 //! names where its samples lie, and their bytes are sliced from there.
 //!

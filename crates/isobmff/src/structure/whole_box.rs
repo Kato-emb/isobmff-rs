@@ -151,7 +151,7 @@ pub(crate) fn whole_box_header(box_type: BoxType, payload_len: u64) -> Result<Bo
 ///
 /// * [`Box`](crate::structure::Error::Box): the total of header and
 ///   payload does not fit the 32 bits of the `size` field, reported as
-///   [`OutOfRange`](isobmff_core::ErrorKind::OutOfRange) of the box with the
+///   [`OutOfRange`](crate::ErrorKind::OutOfRange) of the box with the
 ///   payload's length, not the total, as the value.
 pub(crate) fn compact_box_header(box_type: BoxType, payload_len: u64) -> Result<BoxHeader, Error> {
     BoxHeader::compact(box_type, payload_len).ok_or_else(|| {

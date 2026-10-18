@@ -39,7 +39,7 @@ use crate::sequence::event::{BoxEvent, OutputBytes};
 ///   and closing early is [`UnfinishedBox`](crate::sequence::Error::UnfinishedBox). The
 ///   writer does not correct the header it was handed to match what arrived.
 /// * A box declaring no total —
-///   [`ToEndOfFile`](isobmff_core::BoxSize::ToEndOfFile) — takes payload of any
+///   [`ToEndOfFile`](crate::BoxSize::ToEndOfFile) — takes payload of any
 ///   length and is closed by [`End`](BoxEvent::End) like any other. Nothing
 ///   may follow it: it runs to the end of the file by definition, so an event
 ///   after it is [`PastEndOfFile`](crate::sequence::Error::PastEndOfFile).
@@ -66,7 +66,7 @@ use crate::sequence::event::{BoxEvent, OutputBytes};
 /// # Examples
 ///
 /// ```
-/// use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize};
+/// use isobmff::{BoxHeader, BoxSize, BoxType, CompactSize};
 /// use isobmff::sequence::{BoxEvent, BoxWriter};
 ///
 /// // A file opening with an `ftyp` box and carrying one `mdat`

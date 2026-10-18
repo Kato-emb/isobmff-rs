@@ -53,7 +53,7 @@ pub enum BoxEvent {
 /// # Examples
 ///
 /// ```
-/// use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize};
+/// use isobmff::{BoxHeader, BoxSize, BoxType, CompactSize};
 /// use isobmff::sequence::{BoxEvent, BoxWriter};
 ///
 /// // An `mdat` box carrying one payload of four bytes

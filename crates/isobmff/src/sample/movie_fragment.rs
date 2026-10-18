@@ -72,7 +72,7 @@ use crate::sample::{SampleExtent, SampleProperties};
 ///   `trak` unread, or of a track the movie reads but declares no `trex` for.
 /// * [`UnknownSampleDescriptionIndex`](crate::sample::Error::UnknownSampleDescriptionIndex):
 ///   a `traf` describes its samples by an `stsd` entry its track has none of.
-/// * The failures of [`SampleEntry::try_from`](isobmff_boxes::SampleEntry),
+/// * The failures of [`SampleEntry::try_from`](crate::boxes::SampleEntry),
 ///   carried on [`Box`](crate::sample::Error::Box): the `stsd` entry does
 ///   not read as a sample entry, with `stsd` added to the containers.
 /// * [`UnknownDataReferenceIndex`](crate::sample::Error::UnknownDataReferenceIndex):
