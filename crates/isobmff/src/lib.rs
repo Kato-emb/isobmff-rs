@@ -11,14 +11,14 @@
 //! None reaches for a source or a sink of its own, and none does I/O: when to
 //! read or write, and from or to where, stay with the caller.
 //!
-//! # The root and one module per crate
+//! # The root and the modules
 //!
 //! The root is the `isobmff-core` crate re-exported whole — [`BoxType`],
 //! [`FourCc`], [`BoxDecode`] and the rest of what all the layers are defined
-//! over — and every module is one other crate of the workspace re-exported
-//! whole: [`structure::MovieDemuxFsm`] and `isobmff_structure::MovieDemuxFsm`
-//! are the same type, so documentation written against any of those crates
-//! reads against this one.
+//! over. A module the table places in another crate is that crate re-exported
+//! whole: [`sample::Sample`] and `isobmff_sample::Sample` are the same type,
+//! so documentation written against any of those crates reads against this
+//! one. A module placed in this crate holds its layers itself.
 //!
 //! | path | crate | of the seven layers |
 //! |---|---|---|
@@ -26,27 +26,27 @@
 //! | [`sequence`] | `isobmff-sequence` | layer 1 |
 //! | [`boxes`] | `isobmff-boxes` | the catalog layer 2 reads a box into |
 //! | [`sample`] | `isobmff-sample` | layers 3 and 4 |
-//! | [`structure`] | `isobmff-structure` | layers 2, 5 and 6 |
+//! | [`structure`] | this crate | layers 2, 5 and 6 |
 //! | [`avc`] | `isobmff-avc` | none: the sample entries of ISO/IEC 14496-15 |
 //! | [`mp4`] | `isobmff-mp4` | none: the sample entries and descriptors of ISO/IEC 14496-14 |
 //!
 //! Layer 7, the I/O, is the caller's code, and no module holds it: the loop
 //! between a machine and its I/O is
-//! [the one `isobmff_structure` states](isobmff_structure#the-callers-loop).
+//! [the one `structure` states](structure#the-callers-loop).
 //! What each module holds is its own summary below; what the seven layers
-//! are, and what passes between them, [`isobmff_structure`] describes.
+//! are, and what passes between them, [`structure`] describes.
 //! `avc` and `mp4` are on by default, so a caller that wants the base
 //! specification alone turns the default features off.
 //!
-//! Each crate names the failures of its own layers `Error`, and carries the
-//! failures of the layers beneath through whole rather than translating them,
-//! so [`structure::Error`] reaches [`sample::Error`] and [`sequence::Error`]
-//! reaches [`Error`].
+//! Where the root or a module has failures of its own, it names them `Error`,
+//! and carries the failures of the layers beneath through whole rather than
+//! translating them, so [`structure::Error`] reaches [`sample::Error`] and
+//! [`sequence::Error`] reaches [`Error`].
 //!
 //! # `no_std`
 //!
 //! The crate is `no_std` but needs `alloc`, for the reasons
-//! [`isobmff_structure`] states of the layers beneath.
+//! [`structure`](structure#alloc) states of its layers.
 //!
 //! # Examples
 //!
@@ -56,6 +56,8 @@
 //! checkout as `cargo run -p isobmff-examples --example <name> -- <arguments>`.
 
 #![no_std]
+
+extern crate alloc;
 
 pub use isobmff_core::*;
 
@@ -76,11 +78,7 @@ pub mod sample {
     pub use isobmff_sample::*;
 }
 
-/// The order the boxes of a file stand in, and the demux and mux FSMs that
-/// read and write one — the `isobmff-structure` crate whole
-pub mod structure {
-    pub use isobmff_structure::*;
-}
+pub mod structure;
 
 /// Sample entries of ISO/IEC 14496-15, the carriage of AVC video — the
 /// `isobmff-avc` crate whole, behind the `avc` feature
