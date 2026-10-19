@@ -38,10 +38,12 @@
 //! `avc` and `mp4` are on by default, so a caller that wants the base
 //! specification alone turns the default features off.
 //!
-//! Where the root or a module has failures of its own, it names them `Error`,
-//! and carries the failures of the layers beneath through whole rather than
-//! translating them, so [`structure::Error`] reaches [`sample::Error`] and
-//! [`sequence::Error`] reaches [`Error`].
+//! Where the root or a module has failures of its own, it names them `Error`
+//! — [`structure`] names them by what fails,
+//! [`DemuxError`](structure::DemuxError) and [`MuxError`](structure::MuxError)
+//! — and carries the failures of the layers beneath through whole rather than
+//! translating them, so [`DemuxError`](structure::DemuxError) reaches
+//! [`sample::Error`] and [`sequence::Error`] reaches [`Error`].
 //!
 //! # `no_std`
 //!

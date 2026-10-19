@@ -2,7 +2,7 @@
 
 use crate::sequence::{BoxEvent, BoxReader};
 use crate::structure::input_position::{InputPosition, InputRoute};
-use crate::structure::{Error, SampleGathering, WantedInput};
+use crate::structure::{DemuxError, SampleGathering, StructureError, WantedInput};
 
 /// Takes the input of a file at the offsets it was read at, and keeps whether the demux FSM above still reads
 ///
@@ -27,14 +27,14 @@ use crate::structure::{Error, SampleGathering, WantedInput};
 ///   declares the file over. The samples completed before it are still taken
 ///   from [`poll_output`](Self::poll_output), and no read is wanted.
 /// * Once the file is declared over, input or a second declaration is
-///   [`AlreadyFinished`](crate::structure::Error::AlreadyFinished), until
+///   [`AlreadyFinished`](crate::structure::DemuxError::AlreadyFinished), until
 ///   [`restart`](Self::restart) takes the reading up again.
 #[derive(Debug)]
 pub(crate) struct DemuxInput<G> {
     boxes: BoxReader,
     position: InputPosition,
     samples: G,
-    framing: Result<(), Error>,
+    framing: Result<(), DemuxError>,
     state: State,
 }
 
@@ -46,7 +46,7 @@ enum State {
     /// Told the file is over, and taking no more input
     Finished,
     /// Failed, and reporting that same failure for every call after it
-    Failed(Error),
+    Failed(DemuxError),
 }
 
 impl<G: SampleGathering> DemuxInput<G> {
@@ -66,13 +66,13 @@ impl<G: SampleGathering> DemuxInput<G> {
     ///
     /// # Errors
     ///
-    /// * [`AlreadyFinished`](crate::structure::Error::AlreadyFinished): the file was
+    /// * [`AlreadyFinished`](crate::structure::DemuxError::AlreadyFinished): the file was
     ///   declared over.
     /// * The failure [`record`](Self::record) kept.
-    const fn reading(&self) -> Result<(), Error> {
+    const fn reading(&self) -> Result<(), DemuxError> {
         match self.state {
             State::Reading => Ok(()),
-            State::Finished => Err(Error::AlreadyFinished),
+            State::Finished => Err(DemuxError::AlreadyFinished),
             State::Failed(failure) => Err(failure),
         }
     }
@@ -82,7 +82,7 @@ impl<G: SampleGathering> DemuxInput<G> {
     /// # Errors
     ///
     /// The failure [`record`](Self::record) kept.
-    pub(crate) const fn resumable(&self) -> Result<(), Error> {
+    pub(crate) const fn resumable(&self) -> Result<(), DemuxError> {
         match self.state {
             State::Reading | State::Finished => Ok(()),
             State::Failed(failure) => Err(failure),
@@ -99,13 +99,17 @@ impl<G: SampleGathering> DemuxInput<G> {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::structure::Error::Sample): what the samples make of the
+    /// * [`Sample`](crate::structure::DemuxError::Sample): what the samples make of the
     ///   bytes they lack.
-    /// * [`UnwantedInput`](crate::structure::Error::UnwantedInput): `input_offset` is
+    /// * [`UnwantedInput`](crate::structure::DemuxError::UnwantedInput): `input_offset` is
     ///   neither where the input taken in order stands nor where the bytes the
     ///   samples lack start. Nothing is recorded for it.
     /// * What [`reading`](Self::reading) reports.
-    pub(crate) fn handle_input(&mut self, input_offset: u64, input: &[u8]) -> Result<(), Error> {
+    pub(crate) fn handle_input(
+        &mut self,
+        input_offset: u64,
+        input: &[u8],
+    ) -> Result<(), DemuxError> {
         self.reading()?;
         if input.is_empty() {
             return Ok(());
@@ -122,12 +126,12 @@ impl<G: SampleGathering> DemuxInput<G> {
                 return self.record(gathered);
             }
             InputRoute::Unwanted => {
-                return Err(Error::UnwantedInput { input_offset });
+                return Err(DemuxError::UnwantedInput { input_offset });
             }
         }
 
         self.position.advance(input.len());
-        self.framing = self.boxes.handle_input(input).map_err(Error::from);
+        self.framing = self.boxes.handle_input(input).map_err(DemuxError::from);
 
         Ok(())
     }
@@ -145,7 +149,7 @@ impl<G: SampleGathering> DemuxInput<G> {
     ///
     /// The failure `read` carries, or else the failure of the framing held
     /// since the input or the declaration that made the events.
-    pub(crate) fn record(&mut self, read: Result<(), Error>) -> Result<(), Error> {
+    pub(crate) fn record(&mut self, read: Result<(), DemuxError>) -> Result<(), DemuxError> {
         let result = read.and(core::mem::replace(&mut self.framing, Ok(())));
 
         if let Err(failure) = result {
@@ -163,9 +167,9 @@ impl<G: SampleGathering> DemuxInput<G> {
     /// # Errors
     ///
     /// What [`reading`](Self::reading) reports.
-    pub(crate) fn finish_framing(&mut self) -> Result<(), Error> {
+    pub(crate) fn finish_framing(&mut self) -> Result<(), DemuxError> {
         self.reading()?;
-        self.framing = self.boxes.finish().map_err(Error::from);
+        self.framing = self.boxes.finish().map_err(DemuxError::from);
 
         Ok(())
     }
@@ -174,13 +178,16 @@ impl<G: SampleGathering> DemuxInput<G> {
     ///
     /// # Errors
     ///
-    /// * The failure `checked` carries.
-    /// * [`Sample`](crate::structure::Error::Sample): a sample is short of the data
+    /// * The failure of the structure `checked` carries, as the [`DemuxError`]
+    ///   variant of the same name.
+    /// * [`Sample`](crate::structure::DemuxError::Sample): a sample is short of the data
     ///   it claimed.
     /// * What [`reading`](Self::reading) reports.
-    pub(crate) fn finish(&mut self, checked: Result<(), Error>) -> Result<(), Error> {
+    pub(crate) fn finish(&mut self, checked: Result<(), StructureError>) -> Result<(), DemuxError> {
         self.reading()?;
-        let finished = checked.and_then(|()| self.samples.finish());
+        let finished = checked
+            .map_err(DemuxError::from)
+            .and_then(|()| self.samples.finish());
 
         self.record(finished)?;
         self.state = State::Finished;
@@ -224,7 +231,7 @@ impl<G: SampleGathering> DemuxInput<G> {
 mod tests {
     use isobmff_boxes::SampleFlags;
 
-    use super::{DemuxInput, Error};
+    use super::{DemuxError, DemuxInput};
     use crate::sample::{Sample, SampleExtent, SampleProperties, SampleReader};
     use crate::sequence::BoxEvent;
     use crate::structure::WantedInput;
@@ -267,7 +274,7 @@ mod tests {
     }
 
     /// Reads every event the framing made as a demux FSM would, offering each payload to the samples
-    fn read_framed(input: &mut DemuxInput<SampleReader>) -> Result<(), Error> {
+    fn read_framed(input: &mut DemuxInput<SampleReader>) -> Result<(), DemuxError> {
         while let Some((start, event)) = input.poll_event() {
             if let BoxEvent::Payload(payload) = event {
                 input.samples_mut().handle_input(start, &payload)?;
@@ -307,7 +314,7 @@ mod tests {
 
         assert_eq!(
             input.record(read),
-            Err(Error::from(crate::sequence::Error::from(
+            Err(DemuxError::from(crate::sequence::Error::from(
                 isobmff_core::Error::size_below_header(8, 4)
             )))
         );
@@ -318,7 +325,7 @@ mod tests {
     #[test]
     fn a_failure_of_reading_the_events_is_reported_before_the_failure_of_the_framing() {
         let mut input = DemuxInput::new(SampleReader::new());
-        let failure = Error::UnwantedInput { input_offset: 0 };
+        let failure = DemuxError::UnwantedInput { input_offset: 0 };
 
         input.handle_input(0, BROKEN_BOX).unwrap();
 
@@ -368,7 +375,7 @@ mod tests {
 
         assert_eq!(
             input.handle_input(9, b"AMP"),
-            Err(Error::UnwantedInput { input_offset: 9 })
+            Err(DemuxError::UnwantedInput { input_offset: 9 })
         );
         assert_eq!(input.handle_input(8, b"SAMP"), Ok(()));
         assert_eq!(input.finish_framing(), Ok(()));
@@ -391,8 +398,11 @@ mod tests {
         input.finish(Ok(())).unwrap();
 
         assert_eq!(input.wanted_input(), None);
-        assert_eq!(input.handle_input(0, FREE_BOX), Err(Error::AlreadyFinished));
-        assert_eq!(input.finish_framing(), Err(Error::AlreadyFinished));
+        assert_eq!(
+            input.handle_input(0, FREE_BOX),
+            Err(DemuxError::AlreadyFinished)
+        );
+        assert_eq!(input.finish_framing(), Err(DemuxError::AlreadyFinished));
     }
 
     #[test]
@@ -403,7 +413,7 @@ mod tests {
 
         assert!(matches!(
             input.finish(Ok(())),
-            Err(Error::Sample {
+            Err(DemuxError::Sample {
                 error: crate::sample::Error::UnfinishedSample { .. }
             })
         ));

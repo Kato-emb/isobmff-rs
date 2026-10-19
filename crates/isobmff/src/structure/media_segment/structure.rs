@@ -3,7 +3,7 @@
 use isobmff_boxes::{MediaDataBox, MovieFragmentBox, SegmentIndexBox, SegmentTypeBox};
 use isobmff_core::{BoxDefinition, BoxType};
 
-use crate::structure::Error;
+use crate::structure::StructureError;
 
 /// Holds the structure of a media segment, one top-level box at a time
 ///
@@ -27,13 +27,13 @@ use crate::structure::Error;
 ///   its file be ignored). How many `mdat`s there are is not counted.
 /// * The `moof` comes any number of times, and at least once: a segment
 ///   declared over without one is
-///   [`MissingMandatoryBox`](crate::structure::Error::MissingMandatoryBox).
+///   [`MissingMandatoryBox`](crate::structure::StructureError::MissingMandatoryBox).
 /// * Every other box is passed over, wherever it lies — a `moov` among them,
 ///   since the movie a segment continues is held apart from it.
 /// * [`resume`](Self::resume) restarts the order part-way into the segment,
 ///   at a box an index points at: the next box is a `moof` or a `sidx`,
 ///   placed as it would be where the boxes before the resume left the order,
-///   and any other is [`BoxOutOfOrder`](crate::structure::Error::BoxOutOfOrder).
+///   and any other is [`BoxOutOfOrder`](crate::structure::StructureError::BoxOutOfOrder).
 /// * An `Err` changes nothing: the structure stands where it stood before the
 ///   call.
 /// * [`finish`](Self::finish) checks that the boxes so far form a whole
@@ -91,20 +91,20 @@ impl MediaSegmentStructure {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::structure::Error::BoxOutOfOrder): a box
+    /// * [`BoxOutOfOrder`](crate::structure::StructureError::BoxOutOfOrder): a box
     ///   other than a `moof` or a `sidx` straight after a
     ///   [`resume`](Self::resume).
     pub(crate) fn handle_box_type(
         &mut self,
         box_type: BoxType,
-    ) -> Result<MediaSegmentDisposition, Error> {
+    ) -> Result<MediaSegmentDisposition, StructureError> {
         if self.resuming
             && !matches!(
                 box_type,
                 MovieFragmentBox::BOX_TYPE | SegmentIndexBox::BOX_TYPE
             )
         {
-            return Err(Error::BoxOutOfOrder { box_type });
+            return Err(StructureError::BoxOutOfOrder { box_type });
         }
 
         let (reached, disposition) = place(self.position, box_type);
@@ -123,12 +123,12 @@ impl MediaSegmentStructure {
     ///
     /// # Errors
     ///
-    /// * [`MissingMandatoryBox`](crate::structure::Error::MissingMandatoryBox):
+    /// * [`MissingMandatoryBox`](crate::structure::StructureError::MissingMandatoryBox):
     ///   the segment carried no `moof`.
-    pub(crate) const fn finish(&self) -> Result<(), Error> {
+    pub(crate) const fn finish(&self) -> Result<(), StructureError> {
         match self.position {
             Position::Fragmenting => Ok(()),
-            Position::Start | Position::Opened => Err(Error::MissingMandatoryBox {
+            Position::Start | Position::Opened => Err(StructureError::MissingMandatoryBox {
                 box_type: MovieFragmentBox::BOX_TYPE,
             }),
         }
@@ -172,10 +172,12 @@ mod tests {
 
     use isobmff_core::BoxType;
 
-    use super::{Error, MediaSegmentDisposition, MediaSegmentStructure};
+    use super::{MediaSegmentDisposition, MediaSegmentStructure, StructureError};
 
     /// The dispositions of the boxes named, in order, stopping at the first failure
-    fn dispositions_of(fourccs: &[&[u8; 4]]) -> Result<Vec<MediaSegmentDisposition>, Error> {
+    fn dispositions_of(
+        fourccs: &[&[u8; 4]],
+    ) -> Result<Vec<MediaSegmentDisposition>, StructureError> {
         let mut structure = MediaSegmentStructure::new();
 
         fourccs
@@ -188,7 +190,7 @@ mod tests {
     fn dispositions_resuming_after(
         before: &[&[u8; 4]],
         fourccs: &[&[u8; 4]],
-    ) -> Result<Vec<MediaSegmentDisposition>, Error> {
+    ) -> Result<Vec<MediaSegmentDisposition>, StructureError> {
         let mut structure = MediaSegmentStructure::new();
         for fourcc in before {
             structure.handle_box_type(BoxType::compact(**fourcc))?;
@@ -224,13 +226,13 @@ mod tests {
     fn a_resumed_segment_starting_on_a_box_no_index_points_at_is_out_of_order() {
         assert_eq!(
             dispositions_resuming_after(&[b"styp", b"moof"], &[b"mdat"]),
-            Err(Error::BoxOutOfOrder {
+            Err(StructureError::BoxOutOfOrder {
                 box_type: BoxType::compact(*b"mdat")
             })
         );
         assert_eq!(
             dispositions_resuming_after(&[b"styp", b"moof"], &[b"styp"]),
-            Err(Error::BoxOutOfOrder {
+            Err(StructureError::BoxOutOfOrder {
                 box_type: BoxType::compact(*b"styp")
             })
         );
@@ -328,7 +330,7 @@ mod tests {
 
         assert_eq!(
             structure.finish(),
-            Err(Error::MissingMandatoryBox {
+            Err(StructureError::MissingMandatoryBox {
                 box_type: BoxType::compact(*b"moof")
             })
         );

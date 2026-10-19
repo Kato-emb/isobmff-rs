@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests {
     use isobmff::sample::{Sample, SampleProperties};
-    use isobmff::structure::{Error, MediaSegmentMuxFsm};
+    use isobmff::structure::{MediaSegmentMuxFsm, MuxError};
     use isobmff_boxes::{
         HeaderDuration, MovieBox, MovieExtendsBox, MovieHeaderBox, SampleFlags, TrackExtendsBox,
     };
@@ -76,7 +76,7 @@ mod tests {
     /// The segment the samples make: the brands, then fragment after fragment, each opened by `begin`
     fn written_segment(
         fragments: Vec<Vec<Sample>>,
-        begin: fn(&mut MediaSegmentMuxFsm, u32) -> Result<(), Error>,
+        begin: fn(&mut MediaSegmentMuxFsm, u32) -> Result<(), MuxError>,
     ) -> Vec<u8> {
         let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
         let mut segment = Vec::new();

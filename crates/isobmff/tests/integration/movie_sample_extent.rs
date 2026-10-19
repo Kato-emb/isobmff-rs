@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests {
     use isobmff::sample::{Sample, SampleExtent};
-    use isobmff::structure::{DemuxLimits, Error, MovieDemuxFsm, SampleExtents, WantedInput};
+    use isobmff::structure::{DemuxError, DemuxLimits, MovieDemuxFsm, SampleExtents, WantedInput};
     use isobmff_boxes::MovieFragmentBox;
     use isobmff_core::BoxDefinition;
     use isobmff_test_support::non_fragmented_file;
@@ -15,7 +15,7 @@ mod tests {
     use crate::reading::samples_of;
 
     /// Hands `file` over in order in cuts of seven bytes, taking every extent as it is resolved
-    fn extents_of(file: &[u8]) -> Result<Vec<SampleExtent>, Error> {
+    fn extents_of(file: &[u8]) -> Result<Vec<SampleExtent>, DemuxError> {
         let mut demux_fsm = MovieDemuxFsm::with_gathering(SampleExtents::new(), DemuxLimits::new());
         let mut extents = Vec::new();
         for (offset, arriving) in (0..).step_by(7).zip(file.chunks(7)) {
@@ -94,7 +94,7 @@ mod tests {
 
         assert!(matches!(
             refused,
-            Err(Error::BoxOutOfOrder { box_type, .. }) if box_type == MovieFragmentBox::BOX_TYPE
+            Err(DemuxError::BoxOutOfOrder { box_type, .. }) if box_type == MovieFragmentBox::BOX_TYPE
         ));
     }
 }

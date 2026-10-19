@@ -10,16 +10,16 @@ use crate::sample::SampleReaderLimits;
 /// * [`payload`](Self::payload): the most payload one box read into a value
 ///   may declare, all of which is gathered before the box is read. Past it
 ///   the box is
-///   [`PayloadLimitExceeded`](crate::structure::Error::PayloadLimitExceeded).
+///   [`PayloadLimitExceeded`](crate::structure::DemuxError::PayloadLimitExceeded).
 /// * [`resolved_samples`](Self::resolved_samples): the most samples one
 ///   `moov` or one `moof` may declare, every track together. Past it the
 ///   box lays out none, as
 ///   [`SampleCountLimitExceeded`](crate::sample::Error::SampleCountLimitExceeded)
-///   carried on [`Sample`](crate::structure::Error::Sample).
+///   carried on [`Sample`](crate::structure::DemuxError::Sample).
 /// * [`sample_reader`](Self::sample_reader): the limits the
 ///   [`SampleReader`](crate::sample::SampleReader) the samples are gathered
 ///   by is held to, whose failures are carried on
-///   [`Sample`](crate::structure::Error::Sample) as well.
+///   [`Sample`](crate::structure::DemuxError::Sample) as well.
 ///
 /// No relation between them is checked: whichever is reached first refuses.
 ///

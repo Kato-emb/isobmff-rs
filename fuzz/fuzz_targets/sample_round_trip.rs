@@ -29,7 +29,7 @@
 
 use isobmff::boxes::{MovieBox, SampleFlags, TrackExtendsBox};
 use isobmff::sample::{Sample, SampleProperties};
-use isobmff::structure::{Error, MovieDemuxFsm, FragmentedMuxFsm};
+use isobmff::structure::{MovieDemuxFsm, FragmentedMuxFsm, MuxError};
 use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
@@ -243,7 +243,7 @@ fn file_of(movie: &MovieBox, fragments: &[(u32, Vec<Sample>)]) -> (Vec<u8>, usiz
             );
         }
         None => assert!(
-            matches!(mux_fsm.handle_sample(a_sample()), Err(Error::AlreadyFinished { .. })),
+            matches!(mux_fsm.handle_sample(a_sample()), Err(MuxError::AlreadyFinished { .. })),
             "the writer took a sample after the file was declared over"
         ),
     }

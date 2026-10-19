@@ -4,7 +4,7 @@
 mod tests {
     use isobmff::sample::{Sample, SampleProperties};
     use isobmff::sequence::BoxEvent;
-    use isobmff::structure::{Error, MovieDemuxFsm, WantedInput};
+    use isobmff::structure::{DemuxError, MovieDemuxFsm, WantedInput};
     use isobmff_boxes::{
         ChunkOffsets, MediaDataBox, MovieBox, MovieFragmentBox, MovieFragmentHeaderBox,
         MovieFragmentRandomAccessOffsetBox, SampleFlags, SampleSizeBox, SampleSizes,
@@ -40,7 +40,7 @@ mod tests {
         demux_fsm: &mut MovieDemuxFsm,
         file: &IndexedFile,
         offset: u64,
-    ) -> Result<(), Error> {
+    ) -> Result<(), DemuxError> {
         demux_fsm.resume_at(offset)?;
         demux_fsm.handle_input(
             offset,
@@ -160,7 +160,7 @@ mod tests {
 
         assert!(matches!(
             resumed,
-            Err(Error::BoxOutOfOrder { box_type, .. }) if box_type == BoxType::compact(*b"mdat")
+            Err(DemuxError::BoxOutOfOrder { box_type, .. }) if box_type == BoxType::compact(*b"mdat")
         ));
         assert_eq!(demux_fsm.resume_at(second), resumed);
     }
@@ -182,7 +182,7 @@ mod tests {
 
         assert!(matches!(
             resumed_at(&mut demux_fsm, &file, *file.moof_offsets.get(1).unwrap()),
-            Err(Error::Sample {
+            Err(DemuxError::Sample {
                 error: isobmff::sample::Error::MissingDecodeTime { track_id: 1, .. },
                 ..
             })
@@ -309,7 +309,7 @@ mod tests {
 
         assert!(matches!(
             refused,
-            Err(Error::UnwantedInput {
+            Err(DemuxError::UnwantedInput {
                 input_offset: 0,
                 ..
             })
@@ -451,7 +451,7 @@ mod tests {
 
         assert!(matches!(
             resumed,
-            Err(Error::Sample {
+            Err(DemuxError::Sample {
                 error: isobmff::sample::Error::MissingDecodeTime { track_id: 1, .. },
                 ..
             })

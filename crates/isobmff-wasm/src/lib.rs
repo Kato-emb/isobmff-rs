@@ -147,12 +147,27 @@ impl From<isobmff::sample::Error> for Failure {
     }
 }
 
-impl From<isobmff::structure::Error> for Failure {
-    fn from(error: isobmff::structure::Error) -> Self {
+impl From<isobmff::structure::DemuxError> for Failure {
+    fn from(error: isobmff::structure::DemuxError) -> Self {
         let kind = match &error {
-            isobmff::structure::Error::Sequence { error, .. } => sequence_kind(error),
-            isobmff::structure::Error::Sample { error, .. } => sample_kind(error),
-            isobmff::structure::Error::Box { .. } => "box",
+            isobmff::structure::DemuxError::Sequence { error, .. } => sequence_kind(error),
+            isobmff::structure::DemuxError::Sample { error, .. } => sample_kind(error),
+            isobmff::structure::DemuxError::Box { .. } => "box",
+            _ => "structure",
+        };
+        Self {
+            kind,
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<isobmff::structure::MuxError> for Failure {
+    fn from(error: isobmff::structure::MuxError) -> Self {
+        let kind = match &error {
+            isobmff::structure::MuxError::Sequence { error, .. } => sequence_kind(error),
+            isobmff::structure::MuxError::Sample { error, .. } => sample_kind(error),
+            isobmff::structure::MuxError::Box { .. } => "box",
             _ => "structure",
         };
         Self {

@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests {
     use isobmff::sample::Sample;
-    use isobmff::structure::{Error, MovieDemuxFsm, WantedInput};
+    use isobmff::structure::{DemuxError, MovieDemuxFsm, WantedInput};
     use isobmff_test_support::{movie_fragment, non_fragmented_file, written};
 
     use crate::presentations::{SAMPLE_CHUNKS, non_fragmented_file_samples};
@@ -145,7 +145,7 @@ mod tests {
 
         assert!(matches!(
             demux_fsm.handle_input(0, &file),
-            Err(Error::Sample {
+            Err(DemuxError::Sample {
                 error: isobmff::sample::Error::MissingMovieExtends { .. },
                 ..
             })
