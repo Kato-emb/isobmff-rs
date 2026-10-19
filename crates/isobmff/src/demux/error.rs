@@ -153,6 +153,19 @@ impl From<isobmff_core::Error> for DemuxError {
     }
 }
 
+impl From<crate::structure::Error> for DemuxError {
+    /// Carries the failure of the structure through as the variant of the same name
+    fn from(error: crate::structure::Error) -> Self {
+        match error {
+            crate::structure::Error::MissingMandatoryBox { box_type } => {
+                Self::MissingMandatoryBox { box_type }
+            }
+            crate::structure::Error::DuplicateBox { box_type } => Self::DuplicateBox { box_type },
+            crate::structure::Error::BoxOutOfOrder { box_type } => Self::BoxOutOfOrder { box_type },
+        }
+    }
+}
+
 impl fmt::Display for DemuxError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {

@@ -3,14 +3,14 @@
 use alloc::collections::VecDeque;
 use core::ops::Range;
 
+use crate::DemuxError;
 use crate::sample::{self, Sample, SampleExtent, SampleReader};
-use crate::structure::DemuxError;
 
 mod sealed {
     use core::ops::Range;
 
+    use crate::DemuxError;
     use crate::sample::{self, SampleExtent};
-    use crate::structure::DemuxError;
 
     /// The verbs a demuxer speaks to its gathering, closing [`SampleGathering`](super::SampleGathering) to the types beside it
     #[allow(
@@ -22,7 +22,7 @@ mod sealed {
         ///
         /// # Errors
         ///
-        /// * [`Sample`](crate::structure::DemuxError::Sample): the failure among
+        /// * [`Sample`](crate::DemuxError::Sample): the failure among
         ///   `extents`, where one is, or what the gathering makes of them.
         fn handle_sample_extents(
             &mut self,
@@ -36,7 +36,7 @@ mod sealed {
         ///
         /// # Errors
         ///
-        /// * [`Sample`](crate::structure::DemuxError::Sample): what the samples make
+        /// * [`Sample`](crate::DemuxError::Sample): what the samples make
         ///   of the bytes.
         fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), DemuxError>;
 
@@ -44,7 +44,7 @@ mod sealed {
         ///
         /// # Errors
         ///
-        /// * [`Sample`](crate::structure::DemuxError::Sample): a sample is short of
+        /// * [`Sample`](crate::DemuxError::Sample): a sample is short of
         ///   the data it claimed.
         fn finish(&mut self) -> Result<(), DemuxError>;
 
@@ -116,9 +116,9 @@ impl SampleGathering for SampleReader {
 /// the continuation of the input. The extents of a `moov` come out in the
 /// order their bytes lie in the file, then those of each `moof` in the order
 /// it declares them, up to the first the resolution refuses. Of the
-/// [`DemuxLimits`](crate::structure::DemuxLimits) the demuxer is created
+/// [`DemuxLimits`](crate::DemuxLimits) the demuxer is created
 /// with, those of
-/// [`DemuxLimits::sample_reader`](crate::structure::DemuxLimits::sample_reader)
+/// [`DemuxLimits::sample_reader`](crate::DemuxLimits::sample_reader)
 /// do not apply: nothing is gathered.
 #[derive(Debug, Default)]
 pub struct SampleExtents {

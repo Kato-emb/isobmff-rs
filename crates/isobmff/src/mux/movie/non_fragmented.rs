@@ -1,4 +1,4 @@
-//! [`NonFragmentedMuxer`], a non-fragmented movie file laid down as the samples come
+//! [`NonFragmentedMuxer`], a non-fragmented movie file laid down as the samples come, ISO/IEC 14496-12 §8.2.1 and §8.7
 
 use alloc::vec::Vec;
 use core::iter;
@@ -6,15 +6,14 @@ use core::iter;
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox, TrackBox};
 use isobmff_core::{BoxDefinition, BoxType, FourCc};
 
-use super::{NonFragmentedDisposition, NonFragmentedStructure};
+use crate::mux::{MuxError, MuxOutput, compact_box_header, whole_box_header, whole_payload};
 use crate::sample::{Sample, SampleTableWriter};
 use crate::sequence::OutputBytes;
-use crate::structure::mux_output::MuxOutput;
-use crate::structure::{MuxError, compact_box_header, whole_box_header, whole_payload};
+use crate::structure::{NonFragmentedDisposition, NonFragmentedStructure};
 
 /// Lays a non-fragmented movie file down, taking the samples as they come
 ///
-/// The mirror of [`MovieDemuxer`](crate::structure::MovieDemuxer): it
+/// The mirror of [`MovieDemuxer`](crate::MovieDemuxer): it
 /// wires the layers that write a non-fragmented movie file — the structure
 /// that holds the order of the top-level boxes, the writing of each box
 /// whole, the laying out of the samples as the sample tables of the movie
@@ -35,13 +34,13 @@ use crate::structure::{MuxError, compact_box_header, whole_box_header, whole_pay
 ///   over — a box takes its place in the order where it is handed over or
 ///   opened, whether its bytes go down then or later: the `ftyp` first,
 ///   before any chunk, the `moov` once. A box handed over out of that
-///   order is [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder) or
-///   [`DuplicateBox`](crate::structure::MuxError::DuplicateBox), and a file
+///   order is [`BoxOutOfOrder`](crate::MuxError::BoxOutOfOrder) or
+///   [`DuplicateBox`](crate::MuxError::DuplicateBox), and a file
 ///   declared over without a `moov` is
-///   [`MissingMandatoryBox`](crate::structure::MuxError::MissingMandatoryBox).
+///   [`MissingMandatoryBox`](crate::MuxError::MissingMandatoryBox).
 /// * The movie is handed over before any chunk, though its bytes go down
 ///   last: a chunk opened, or a sample handed over, before it is
-///   [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder) of the `mdat`.
+///   [`BoxOutOfOrder`](crate::MuxError::BoxOutOfOrder) of the `mdat`.
 /// * The `ftyp` handed over is laid down as it stands. Where none was handed
 ///   over, the muxer lays its own down before the `moov`: `iso4` as its
 ///   `major_brand` and its one `compatible_brands` entry, with
@@ -69,11 +68,11 @@ use crate::structure::{MuxError, compact_box_header, whole_box_header, whole_pay
 ///   [`finish_chunk`](Self::finish_chunk) closes it; a chunk no sample was
 ///   handed over to leaves no `mdat`, as it leaves no entry in the tables.
 ///   Opening a chunk or declaring the file over while one is still open, or
-///   closing one while none is, is refused as [`Sample`](crate::structure::MuxError::Sample).
+///   closing one while none is, is refused as [`Sample`](crate::MuxError::Sample).
 ///   What the samples must hold to — one track per chunk, a decode timeline
 ///   that carries on from sample to sample, no composition offsets or flags
 ///   the four tables cannot state — is [`SampleTableWriter`]'s contract,
-///   reported as [`Sample`](crate::structure::MuxError::Sample).
+///   reported as [`Sample`](crate::MuxError::Sample).
 /// * The bytes are taken from [`poll_output`](Self::poll_output), one
 ///   [`OutputBytes`] a call, owned by whoever takes them: the media data of a
 ///   chunk comes sample by sample, each in the allocation it was handed over
@@ -82,13 +81,13 @@ use crate::structure::{MuxError, compact_box_header, whole_box_header, whole_pay
 ///   whole file. The samples of the chunk that is open are held until it is
 ///   laid down.
 /// * An `Err` leaves the muxer failed for good,
-///   [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished) aside:
+///   [`AlreadyFinished`](crate::MuxError::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The bytes made before
 ///   it are still there to take.
 /// * [`finish`](Self::finish) declares the file over. Bytes are still taken
 ///   after it, but anything handed over then, or a second
 ///   [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished).
+///   [`AlreadyFinished`](crate::MuxError::AlreadyFinished).
 ///
 /// # Examples
 ///
@@ -190,10 +189,10 @@ impl NonFragmentedMuxer {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder): a box
+    /// * [`BoxOutOfOrder`](crate::MuxError::BoxOutOfOrder): a box
     ///   was handed over before them.
-    /// * [`Box`](crate::structure::MuxError::Box): the box does not write.
-    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
+    /// * [`Box`](crate::MuxError::Box): the box does not write.
+    /// * [`AlreadyFinished`](crate::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
@@ -213,9 +212,9 @@ impl NonFragmentedMuxer {
     ///
     /// # Errors
     ///
-    /// * [`DuplicateBox`](crate::structure::MuxError::DuplicateBox): a movie
+    /// * [`DuplicateBox`](crate::MuxError::DuplicateBox): a movie
     ///   was handed over already.
-    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
@@ -248,12 +247,12 @@ impl NonFragmentedMuxer {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder): the
+    /// * [`BoxOutOfOrder`](crate::MuxError::BoxOutOfOrder): the
     ///   movie was not handed over first.
-    /// * [`Sample`](crate::structure::MuxError::Sample): the chunk opened before it was not
+    /// * [`Sample`](crate::MuxError::Sample): the chunk opened before it was not
     ///   closed, as
     ///   [`ChunkStillOpen`](crate::sample::Error::ChunkStillOpen).
-    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
@@ -287,11 +286,11 @@ impl NonFragmentedMuxer {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder): the
+    /// * [`BoxOutOfOrder`](crate::MuxError::BoxOutOfOrder): the
     ///   movie was not handed over first.
-    /// * [`Sample`](crate::structure::MuxError::Sample): what the sample layer
+    /// * [`Sample`](crate::MuxError::Sample): what the sample layer
     ///   makes of the sample.
-    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
@@ -310,13 +309,13 @@ impl NonFragmentedMuxer {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder): the
+    /// * [`BoxOutOfOrder`](crate::MuxError::BoxOutOfOrder): the
     ///   movie was not handed over first.
-    /// * [`Sample`](crate::structure::MuxError::Sample): no chunk was open, as
+    /// * [`Sample`](crate::MuxError::Sample): no chunk was open, as
     ///   [`NoChunkOpen`](crate::sample::Error::NoChunkOpen).
-    /// * [`Box`](crate::structure::MuxError::Box): the chunk is longer than the
+    /// * [`Box`](crate::MuxError::Box): the chunk is longer than the
     ///   `size` field of an `mdat` can state.
-    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
@@ -357,15 +356,15 @@ impl NonFragmentedMuxer {
     ///
     /// # Errors
     ///
-    /// * [`Box`](crate::structure::MuxError::Box): the movie does not write.
-    /// * [`Sample`](crate::structure::MuxError::Sample): what the sample layer
+    /// * [`Box`](crate::MuxError::Box): the movie does not write.
+    /// * [`Sample`](crate::MuxError::Sample): what the sample layer
     ///   makes of the samples as a whole — a chunk left open, as
     ///   [`ChunkStillOpen`](crate::sample::Error::ChunkStillOpen), or a chunk
     ///   holding more samples than an `stsc` entry counts among them.
-    /// * [`MissingMandatoryBox`](crate::structure::MuxError::MissingMandatoryBox):
+    /// * [`MissingMandatoryBox`](crate::MuxError::MissingMandatoryBox):
     ///   the movie was never handed over, so the file laid down is not a
     ///   non-fragmented movie file.
-    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::MuxError::AlreadyFinished): the
     ///   file was already declared over.
     /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
@@ -430,7 +429,7 @@ impl NonFragmentedMuxer {
     /// Admits the box `box_type` names into the file where the structure places it
     ///
     /// A box the structure passes over is refused as
-    /// [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder).
+    /// [`BoxOutOfOrder`](crate::MuxError::BoxOutOfOrder).
     fn admit(&mut self, box_type: BoxType) -> Result<(), MuxError> {
         match self.structure.handle_box_type(box_type)? {
             NonFragmentedDisposition::FileType

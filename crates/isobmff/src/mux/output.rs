@@ -4,8 +4,8 @@ use alloc::vec::Vec;
 
 use isobmff_core::BoxHeader;
 
+use crate::MuxError;
 use crate::sequence::{BoxEvent, BoxWriter, OutputBytes};
-use crate::structure::MuxError;
 
 /// Lays the boxes of a file down through its framing, and keeps whether the muxer above still writes
 ///
@@ -23,7 +23,7 @@ use crate::structure::MuxError;
 ///   [`writing`](Self::writing). The bytes made before it are still taken from
 ///   [`poll_output`](Self::poll_output).
 /// * Once [`finish`](Self::finish) succeeds, [`writing`](Self::writing)
-///   reports [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished).
+///   reports [`AlreadyFinished`](crate::MuxError::AlreadyFinished).
 #[derive(Debug)]
 pub(crate) struct MuxOutput {
     boxes: BoxWriter,
@@ -57,7 +57,7 @@ impl MuxOutput {
     ///
     /// # Errors
     ///
-    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the file was
+    /// * [`AlreadyFinished`](crate::MuxError::AlreadyFinished): the file was
     ///   declared over by [`finish`](Self::finish).
     /// * The failure [`record`](Self::record) kept.
     pub(crate) const fn writing(&self) -> Result<(), MuxError> {
@@ -92,7 +92,7 @@ impl MuxOutput {
     /// # Errors
     ///
     /// The failures of [`BoxWriter::handle_event`], carried on
-    /// [`Sequence`](crate::structure::MuxError::Sequence).
+    /// [`Sequence`](crate::MuxError::Sequence).
     pub(crate) fn write_box(
         &mut self,
         header: BoxHeader,
@@ -115,7 +115,7 @@ impl MuxOutput {
     /// # Errors
     ///
     /// The failures of [`BoxWriter::finish`], carried on
-    /// [`Sequence`](crate::structure::MuxError::Sequence).
+    /// [`Sequence`](crate::MuxError::Sequence).
     pub(crate) fn finish(&mut self) -> Result<(), MuxError> {
         self.boxes.finish()?;
         self.state = State::Finished;
@@ -138,7 +138,7 @@ mod tests {
     use isobmff_core::BoxType;
 
     use super::{MuxError, MuxOutput};
-    use crate::structure::compact_box_header;
+    use crate::mux::compact_box_header;
 
     #[test]
     fn a_failed_output_reports_the_same_failure_for_every_call_after_it() {

@@ -1,12 +1,25 @@
-//! [`WholeBoxReader`], [`whole_payload`], [`whole_box_header`] and [`compact_box_header`]: one box read whole out of the steps it was framed into, and written whole into the steps it is laid down as
+//! The demuxers, [`MovieDemuxer`] and [`MediaSegmentDemuxer`], and the parts they share: the input they take, the limits they hold to, what a movie demuxer gathers, and [`WholeBoxReader`], one box read whole out of the steps it was framed into
 
-use alloc::vec;
+mod error;
+mod gathering;
+mod input;
+mod limits;
+mod media_segment;
+mod movie;
+
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxHeader, BoxType, FieldWidth};
+use isobmff_core::{BoxDecode, BoxDefinition, BoxHeader};
 
-use crate::structure::{DemuxError, MuxError};
+pub use error::DemuxError;
+pub use gathering::{SampleExtents, SampleGathering};
+pub use input::WantedInput;
+pub use limits::DemuxLimits;
+pub use media_segment::MediaSegmentDemuxer;
+pub use movie::MovieDemuxer;
+
+use input::DemuxInput;
 
 /// Reads one box into a value, gathering its payload whole out of the steps it arrives in
 ///
@@ -22,12 +35,12 @@ use crate::structure::{DemuxError, MuxError};
 /// # Contract
 ///
 /// * A box declaring more payload than the limit is
-///   [`PayloadLimitExceeded`](crate::structure::DemuxError::PayloadLimitExceeded)
+///   [`PayloadLimitExceeded`](crate::DemuxError::PayloadLimitExceeded)
 ///   at [`begin`](Self::begin), before a byte of it is gathered. A box
 ///   declaring no total is gathered as far as the limit and refused the same
 ///   way where it reaches past it.
 /// * A payload that does not read as a `Value` is
-///   [`Box`](crate::structure::DemuxError::Box), with the box named as the
+///   [`Box`](crate::DemuxError::Box), with the box named as the
 ///   container the failure was reached through.
 /// * A failure leaves the reader as it stood: the caller drops it, since the
 ///   box it was reading is lost.
@@ -43,7 +56,7 @@ impl<Value: BoxDecode<Error = isobmff_core::Error> + BoxDefinition> WholeBoxRead
     ///
     /// # Errors
     ///
-    /// * [`PayloadLimitExceeded`](crate::structure::DemuxError::PayloadLimitExceeded):
+    /// * [`PayloadLimitExceeded`](crate::DemuxError::PayloadLimitExceeded):
     ///   the box declares more payload than `payload_limit`.
     pub(crate) fn begin(header: BoxHeader, payload_limit: u64) -> Result<Self, DemuxError> {
         if let Some(reached_bytes) = header
@@ -71,7 +84,7 @@ impl<Value: BoxDecode<Error = isobmff_core::Error> + BoxDefinition> WholeBoxRead
     ///
     /// # Errors
     ///
-    /// * [`PayloadLimitExceeded`](crate::structure::DemuxError::PayloadLimitExceeded):
+    /// * [`PayloadLimitExceeded`](crate::DemuxError::PayloadLimitExceeded):
     ///   a box declaring no total reaches past the limit the reader gathers.
     pub(crate) fn handle_payload(&mut self, mut payload: Vec<u8>) -> Result<(), DemuxError> {
         // Why not checked_add: the framing cut the payload out of a finite
@@ -97,7 +110,7 @@ impl<Value: BoxDecode<Error = isobmff_core::Error> + BoxDefinition> WholeBoxRead
     ///
     /// # Errors
     ///
-    /// * [`Box`](crate::structure::DemuxError::Box): the payload does not read
+    /// * [`Box`](crate::DemuxError::Box): the payload does not read
     ///   as a `Value`, with the box named as the container.
     pub(crate) fn finish(self) -> Result<Value, DemuxError> {
         Value::decode_payload(&self.payload)
@@ -105,86 +118,16 @@ impl<Value: BoxDecode<Error = isobmff_core::Error> + BoxDefinition> WholeBoxRead
     }
 }
 
-/// Encodes `value` as the payload of the whole box it forms, naming that box on a failure
-///
-/// The mirror of [`WholeBoxReader`]: the payload comes back in one allocation
-/// sized to what the value declares, for a muxer to lay down between the
-/// header and the end of the box.
-///
-/// # Errors
-///
-/// * [`Box`](crate::structure::MuxError::Box): the value does not write, or
-///   declares a payload longer than any buffer on this target holds.
-pub(crate) fn whole_payload<Value: BoxEncode + BoxDefinition>(
-    value: &Value,
-) -> Result<Vec<u8>, MuxError> {
-    let payload_len = value.payload_len();
-    let Ok(length) = usize::try_from(payload_len) else {
-        return Err(past_every_buffer(Value::BOX_TYPE, payload_len));
-    };
-    let mut payload = vec![0; length];
-
-    value
-        .encode_payload(&mut payload)
-        .map_err(|failure| failure.in_container(Value::BOX_TYPE))?;
-
-    Ok(payload)
-}
-
-/// Returns the header of the whole box of `box_type` whose payload is `payload_len` bytes long
-///
-/// # Errors
-///
-/// * [`Box`](crate::structure::MuxError::Box): no header measures a payload
-///   that long, which no buffer on this target holds either.
-pub(crate) fn whole_box_header(box_type: BoxType, payload_len: u64) -> Result<BoxHeader, MuxError> {
-    BoxHeader::with_payload_len(box_type, payload_len)
-        .ok_or_else(|| past_every_buffer(box_type, payload_len))
-}
-
-/// Returns the header of the whole box of `box_type` whose payload is `payload_len` bytes long, in the compact form alone
-///
-/// A payload only the `largesize` field can measure is refused, so a header
-/// measured before its payload was whole keeps the length it was measured at.
-///
-/// # Errors
-///
-/// * [`Box`](crate::structure::MuxError::Box): the total of header and
-///   payload does not fit the 32 bits of the `size` field, reported as
-///   [`OutOfRange`](crate::ErrorKind::OutOfRange) of the box with the
-///   payload's length, not the total, as the value.
-pub(crate) fn compact_box_header(
-    box_type: BoxType,
-    payload_len: u64,
-) -> Result<BoxHeader, MuxError> {
-    BoxHeader::compact(box_type, payload_len).ok_or_else(|| {
-        isobmff_core::Error::out_of_range(payload_len, FieldWidth::Compact)
-            .in_container(box_type)
-            .into()
-    })
-}
-
-/// Reports a box longer than any buffer on this target, as `isobmff-core` names it
-fn past_every_buffer(box_type: BoxType, payload_len: u64) -> MuxError {
-    // Why not a failure of its own: a payload past `usize`, and a header that
-    // cannot measure one, both exceed every buffer this target can hold, which
-    // is the short buffer `isobmff_core::BoxEncode::encode` folds them into.
-    MuxError::from(
-        isobmff_core::Error::truncated_buffer(payload_len, usize::MAX as u64)
-            .in_container(box_type),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox};
+    use isobmff_boxes::{FileTypeBox, MovieBox};
     use isobmff_core::{BoxHeader, BoxSize};
     use isobmff_test_support::{file_type, written};
 
-    use super::{BoxDefinition, DemuxError, FieldWidth, WholeBoxReader, compact_box_header};
+    use super::{BoxDefinition, DemuxError, WholeBoxReader};
     use crate::sequence::BoxEvent;
     use crate::sequence::driving::events_of;
 
@@ -277,18 +220,6 @@ mod tests {
             Err(DemuxError::Box {
                 error: isobmff_core::Error::truncated_header(8, 4).in_container(MovieBox::BOX_TYPE),
             })
-        );
-    }
-
-    #[test]
-    fn a_compact_header_is_refused_for_a_payload_only_the_extended_form_declares() {
-        assert_eq!(
-            compact_box_header(MediaDataBox::BOX_TYPE, u32::MAX.into()),
-            Err(
-                isobmff_core::Error::out_of_range(u32::MAX.into(), FieldWidth::Compact)
-                    .in_container(MediaDataBox::BOX_TYPE)
-                    .into()
-            )
         );
     }
 }
