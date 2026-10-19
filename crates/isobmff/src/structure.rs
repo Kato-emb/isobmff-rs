@@ -7,10 +7,11 @@
 //! does the same for a media segment delivered apart from the movie it
 //! continues; [`FragmentedMuxFsm`],
 //! [`NonFragmentedMuxFsm`] and [`MediaSegmentMuxFsm`] go the other way, laying
-//! samples down as a file or a segment of each kind. [`MovieSampleExtentFsm`]
-//! reads a movie file as [`MovieDemuxFsm`] does short of gathering the
-//! samples, and reports the [`SampleExtent`](crate::sample::SampleExtent) of
-//! each, where its bytes lie in the file. None reaches for a source
+//! samples down as a file or a segment of each kind. [`MovieDemuxFsm`]
+//! gathering with [`SampleExtents`] reads a movie file the same way short of
+//! gathering the samples, and reports the
+//! [`SampleExtent`](crate::sample::SampleExtent) of each, where its bytes lie
+//! in the file. None reaches for a source
 //! or a sink of its own: when to read or write, and from or to where, stay with
 //! the caller, through [the caller's loop](#the-callers-loop).
 //!
@@ -67,14 +68,16 @@
 //!    wire layers 1 to 5 into machines: one demux FSM reads a movie file,
 //!    fragmented or not, through the structure of a fragmented one, and one
 //!    reads a media segment; a mux FSM writes each kind.
-//!    [`MovieSampleExtentFsm`] wires layers 1, 2, 3 and 5 alone, and hands
-//!    over the extents layer 3 resolves in place of samples. A demux FSM holds
+//!    [`MovieDemuxFsm`] gathering with [`SampleExtents`] wires layers 1, 2, 3
+//!    and 5 alone, and hands over the extents layer 3 resolves in place of
+//!    samples. A demux FSM holds
 //!    one rule of its own: it keeps where the input it takes in order stands,
 //!    and states the one read it wants next — an extent layer 4 lacks whose
 //!    start that input has passed, else the continuation of that input —
 //!    taking every input with the offset it was read at. Each passes every value between the layers,
-//!    so a caller hands over bytes and takes samples (or extents, from
-//!    [`MovieSampleExtentFsm`]), or hands over samples and takes bytes, and
+//!    so a caller hands over bytes and takes samples (or extents, from a
+//!    [`MovieDemuxFsm`] gathering with [`SampleExtents`]), or hands over
+//!    samples and takes bytes, and
 //!    never sees one. Every offset above the framing is
 //!    a file offset — the extents the framing reports, counted from the first
 //!    byte of the file or from the offset the demux FSM last resumed at, the
@@ -114,7 +117,7 @@
 //!     let handed = if bytes.is_empty() { fsm.finish() } else { fsm.handle_input(wanted.offset(), bytes) };
 //!
 //!     // The samples it completed come out as they come whole, before any failure
-//!     while let Some(sample) = fsm.poll_sample() {
+//!     while let Some(sample) = fsm.poll_output() {
 //!         read_back.push(sample.into_data());
 //!     }
 //!     handed?;
@@ -177,7 +180,7 @@
 //!     file.seek(SeekFrom::Start(wanted.offset()))?;
 //!     let read = file.read(&mut buffer)?;
 //!     let handed = if read == 0 { demux_fsm.finish() } else { demux_fsm.handle_input(wanted.offset(), &buffer[..read]) };
-//!     while let Some(sample) = demux_fsm.poll_sample() {
+//!     while let Some(sample) = demux_fsm.poll_output() {
 //!         read_back.push(sample.into_data());
 //!     }
 //!     handed?;
@@ -221,6 +224,7 @@ mod media_segment;
 mod movie;
 mod mux_output;
 mod non_fragmented_movie;
+mod sample_gathering;
 mod whole_box;
 
 pub use demux_limits::DemuxLimits;
@@ -228,8 +232,9 @@ pub use error::Error;
 pub use fragmented_movie::FragmentedMuxFsm;
 pub use input_position::WantedInput;
 pub use media_segment::{MediaSegmentDemuxFsm, MediaSegmentMuxFsm};
-pub use movie::{MovieDemuxFsm, MovieSampleExtentFsm};
+pub use movie::MovieDemuxFsm;
 pub use non_fragmented_movie::NonFragmentedMuxFsm;
+pub use sample_gathering::{SampleExtents, SampleGathering};
 
 use demux_input::DemuxInput;
 use whole_box::{WholeBoxReader, compact_box_header, whole_box_header, whole_payload};

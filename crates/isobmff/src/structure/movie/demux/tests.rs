@@ -7,8 +7,8 @@ use isobmff_test_support::{
 };
 
 use super::{Error, MovieDemuxFsm};
-use crate::sample::{Sample, SampleProperties, SampleReaderLimits};
-use crate::structure::{DemuxLimits, FragmentedMuxFsm, WantedInput};
+use crate::sample::{Sample, SampleExtent, SampleProperties, SampleReaderLimits};
+use crate::structure::{DemuxLimits, FragmentedMuxFsm, SampleExtents, WantedInput};
 
 /// Movie of one track continued in fragments, whose defaults a `trex` states
 fn movie() -> MovieBox {
@@ -120,7 +120,7 @@ fn a_fragment_declaring_more_samples_than_the_limit_lays_out_none() {
             }
         })
     ));
-    assert_eq!(demux_fsm.poll_sample(), None);
+    assert_eq!(demux_fsm.poll_output(), None);
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn a_movie_declaring_more_samples_than_the_limit_lays_out_none() {
             }
         })
     ));
-    assert_eq!(demux_fsm.poll_sample(), None);
+    assert_eq!(demux_fsm.poll_output(), None);
 }
 
 #[test]
@@ -181,7 +181,7 @@ fn media_data_the_input_is_still_to_bring_is_not_wanted_and_completes_the_sample
         .unwrap();
 
     assert_eq!(wanted, Some(WantedInput::new(file.len() as u64, None)));
-    assert_eq!(demux_fsm.poll_sample(), Some(sample()));
+    assert_eq!(demux_fsm.poll_output(), Some(sample()));
 }
 
 #[test]
@@ -191,4 +191,28 @@ fn the_file_is_wanted_from_the_offset_the_reading_resumed_at() {
     demux_fsm.resume_at(100).unwrap();
 
     assert_eq!(demux_fsm.wanted_input(), Some(WantedInput::new(100, None)));
+}
+
+#[test]
+fn the_extents_held_are_dropped_when_the_reading_resumes() {
+    let file = file_of_one_sample();
+    let media_data_start = file.len().saturating_sub(4) as u64;
+    let mut read_on = MovieDemuxFsm::with_gathering(SampleExtents::new(), DemuxLimits::new());
+    let mut resumed = MovieDemuxFsm::with_gathering(SampleExtents::new(), DemuxLimits::new());
+    read_on.handle_input(0, &file).unwrap();
+    resumed.handle_input(0, &file).unwrap();
+
+    resumed.resume_at(100).unwrap();
+
+    assert_eq!(
+        (read_on.poll_output(), resumed.poll_output()),
+        (
+            Some(SampleExtent::new(
+                *sample().properties(),
+                1,
+                media_data_start..media_data_start.saturating_add(4),
+            )),
+            None
+        )
+    );
 }

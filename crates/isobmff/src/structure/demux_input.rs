@@ -1,12 +1,8 @@
 //! [`DemuxInput`], the input half every demux FSM shares: the framing of the file, where the input stands, the samples gathered, and whether the demux FSM still reads
 
-use core::ops::Range;
-
 use crate::sequence::{BoxEvent, BoxReader};
-
-use crate::sample::{Sample, SampleReader};
 use crate::structure::input_position::{InputPosition, InputRoute};
-use crate::structure::{Error, WantedInput};
+use crate::structure::{Error, SampleGathering, WantedInput};
 
 /// Takes the input of a file at the offsets it was read at, and keeps whether the demux FSM above still reads
 ///
@@ -29,7 +25,7 @@ use crate::structure::{Error, WantedInput};
 ///   events it made and what the demux FSM checked of them.
 /// * A failure recorded is reported by every later call that takes input or
 ///   declares the file over. The samples completed before it are still taken
-///   from [`poll_sample`](Self::poll_sample), and no read is wanted.
+///   from [`poll_output`](Self::poll_output), and no read is wanted.
 /// * Once the file is declared over, input or a second declaration is
 ///   [`AlreadyFinished`](crate::structure::Error::AlreadyFinished), until
 ///   [`restart`](Self::restart) takes the reading up again.
@@ -40,67 +36,6 @@ pub(crate) struct DemuxInput<G> {
     samples: G,
     framing: Result<(), Error>,
     state: State,
-}
-
-/// What a [`DemuxInput`] hands the bytes the samples lack to, and asks which bytes those are
-///
-/// A [`SampleReader`] gathers the samples whose extents it was handed; `()`
-/// gathers none, lacks no bytes, and so never has input routed to it.
-pub(crate) trait SampleGathering {
-    /// Returns the bytes of the file the samples lack next, if any
-    fn wanted_extent(&self) -> Option<Range<u64>>;
-
-    /// Takes bytes of the file read at `offset` that the samples lack
-    ///
-    /// # Errors
-    ///
-    /// * [`Sample`](crate::structure::Error::Sample): what the samples make of the bytes.
-    fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), Error>;
-
-    /// Checks, once the file is over, that no sample is short of its bytes
-    ///
-    /// # Errors
-    ///
-    /// * [`Sample`](crate::structure::Error::Sample): a sample is short of the data it
-    ///   claimed.
-    fn finish(&mut self) -> Result<(), Error>;
-
-    /// Drops the samples held and the bytes they lack
-    fn clear(&mut self);
-}
-
-impl SampleGathering for SampleReader {
-    fn wanted_extent(&self) -> Option<Range<u64>> {
-        Self::wanted_extent(self)
-    }
-
-    fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), Error> {
-        Self::handle_input(self, offset, input).map_err(Error::from)
-    }
-
-    fn finish(&mut self) -> Result<(), Error> {
-        Self::finish(self).map_err(Error::from)
-    }
-
-    fn clear(&mut self) {
-        Self::clear(self);
-    }
-}
-
-impl SampleGathering for () {
-    fn wanted_extent(&self) -> Option<Range<u64>> {
-        None
-    }
-
-    fn handle_input(&mut self, _offset: u64, _input: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn finish(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn clear(&mut self) {}
 }
 
 /// Where the input stands between calls
@@ -273,17 +208,15 @@ impl<G: SampleGathering> DemuxInput<G> {
         matches!(self.state, State::Reading)
             .then(|| self.position.wanted_input(self.samples.wanted_extent()))
     }
-}
 
-impl DemuxInput<SampleReader> {
-    /// Returns the samples being gathered, for the demux FSM to hand the extents and the media data it read
-    pub(crate) const fn samples_mut(&mut self) -> &mut SampleReader {
+    /// Returns the gathering, for the demux FSM to hand the extents it resolved and the media data it read
+    pub(crate) const fn samples_mut(&mut self) -> &mut G {
         &mut self.samples
     }
 
-    /// Takes the next sample the input completed
-    pub(crate) fn poll_sample(&mut self) -> Option<Sample> {
-        self.samples.poll_sample()
+    /// Takes the next output the input completed
+    pub(crate) fn poll_output(&mut self) -> Option<G::Output> {
+        self.samples.poll_output()
     }
 }
 
@@ -378,7 +311,7 @@ mod tests {
                 isobmff_core::Error::size_below_header(8, 4)
             )))
         );
-        assert_eq!(input.poll_sample(), Some(sample()));
+        assert_eq!(input.poll_output(), Some(sample()));
         assert_eq!(input.wanted_input(), None);
     }
 
@@ -416,7 +349,7 @@ mod tests {
 
         input.handle_input(8, b"SAMP").unwrap();
 
-        assert_eq!(input.poll_sample(), Some(sample()));
+        assert_eq!(input.poll_output(), Some(sample()));
         assert_eq!(input.wanted_input(), Some(WantedInput::new(12, None)));
     }
 

@@ -70,7 +70,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     mux_fsm.handle_movie(movie)?;
     let mut chunk = None;
     loop {
-        while let Some(sample) = demux_fsm.poll_sample() {
+        while let Some(sample) = demux_fsm.poll_output() {
             let described_by = Some((
                 sample.properties().track_id,
                 sample.properties().sample_description_index,

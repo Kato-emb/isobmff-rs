@@ -370,7 +370,7 @@ fn fragmented_reader_samples(file: &[u8], chunk_len: usize) -> (usize, usize) {
     let mut count = 0;
     let mut total = 0;
     let mut take = |demux_fsm: &mut MovieDemuxFsm| {
-        while let Some(sample) = demux_fsm.poll_sample() {
+        while let Some(sample) = demux_fsm.poll_output() {
             count += 1;
             total += sample.data().len();
             black_box(&sample);

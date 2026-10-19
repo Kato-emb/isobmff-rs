@@ -332,7 +332,7 @@ fn read_back(file: &[u8], cut_length: usize) -> Result<Vec<Sample>, Error> {
 
 /// Takes every sample the reader has completed
 fn drain(demux_fsm: &mut MovieDemuxFsm, samples: &mut Vec<Sample>) {
-    while let Some(sample) = demux_fsm.poll_sample() {
+    while let Some(sample) = demux_fsm.poll_output() {
         samples.push(sample);
     }
 }

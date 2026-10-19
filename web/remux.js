@@ -119,7 +119,7 @@ export async function remuxToFragmented(blob, changes, write) {
     let carriesCutTrack = false;
     for (;;) {
       for (;;) {
-        for (let sample; (sample = demux.pollSample()); ) {
+        for (let sample; (sample = demux.pollOutput()); ) {
           const properties = sample.properties();
           const queue = queues.find((queue) => queue.trackId === properties.trackId);
           if (!queue) {
@@ -241,7 +241,7 @@ export async function remuxToNonFragmented(blob, now, changes, write) {
 
     let chunk;
     for (;;) {
-      for (let sample; (sample = demux.pollSample()); ) {
+      for (let sample; (sample = demux.pollOutput()); ) {
         const { trackId, sampleDescriptionIndex } = sample.properties();
         if (chunk?.trackId !== trackId || chunk.sampleDescriptionIndex !== sampleDescriptionIndex) {
           if (chunk !== undefined) {

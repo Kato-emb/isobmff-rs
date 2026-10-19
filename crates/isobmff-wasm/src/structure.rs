@@ -47,44 +47,47 @@ export interface WantedInput {
 }
 "#;
 
-/// [`isobmff::structure::MovieSampleExtentFsm`]
+/// [`isobmff::structure::MovieDemuxFsm`] gathering with [`isobmff::structure::SampleExtents`]
 #[wasm_bindgen]
 #[derive(Debug)]
-pub struct MovieSampleExtentFsm(structure::MovieSampleExtentFsm);
+pub struct MovieSampleExtentFsm(structure::MovieDemuxFsm<structure::SampleExtents>);
 
 #[wasm_bindgen]
 impl MovieSampleExtentFsm {
-    /// [`isobmff::structure::MovieSampleExtentFsm::new`]
+    /// [`isobmff::structure::MovieDemuxFsm::with_gathering`], of [`isobmff::structure::SampleExtents::new`] and [`isobmff::structure::DemuxLimits::new`]
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
-        Self(structure::MovieSampleExtentFsm::new())
+        Self(structure::MovieDemuxFsm::with_gathering(
+            structure::SampleExtents::new(),
+            structure::DemuxLimits::new(),
+        ))
     }
 
-    /// [`isobmff::structure::MovieSampleExtentFsm::handle_input`]
+    /// [`isobmff::structure::MovieDemuxFsm::handle_input`]
     ///
     /// # Errors
     ///
-    /// Those of [`isobmff::structure::MovieSampleExtentFsm::handle_input`], of
+    /// Those of [`isobmff::structure::MovieDemuxFsm::handle_input`], of
     /// the kind of the layer that refused.
     #[wasm_bindgen(js_name = handleInput)]
     pub fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), Failure> {
         Ok(self.0.handle_input(offset, input)?)
     }
 
-    /// [`isobmff::structure::MovieSampleExtentFsm::poll_sample_extent`]
+    /// [`isobmff::structure::MovieDemuxFsm::poll_output`]
     ///
     /// # Errors
     ///
     /// `"binding"`: the value did not convert to a plain object.
-    #[wasm_bindgen(js_name = pollSampleExtent)]
-    pub fn poll_sample_extent(&mut self) -> Result<Option<JsSampleExtent>, Failure> {
+    #[wasm_bindgen(js_name = pollOutput)]
+    pub fn poll_output(&mut self) -> Result<Option<JsSampleExtent>, Failure> {
         self.0
-            .poll_sample_extent()
+            .poll_output()
             .map(|extent| to_plain(&SampleExtent::from(extent)))
             .transpose()
     }
 
-    /// [`isobmff::structure::MovieSampleExtentFsm::wanted_input`]
+    /// [`isobmff::structure::MovieDemuxFsm::wanted_input`]
     ///
     /// # Errors
     ///
@@ -97,16 +100,16 @@ impl MovieSampleExtentFsm {
             .transpose()
     }
 
-    /// [`isobmff::structure::MovieSampleExtentFsm::movie`], copied into a root of its own
+    /// [`isobmff::structure::MovieDemuxFsm::movie`], copied into a root of its own
     pub fn movie(&self) -> Option<MovieBox> {
         self.0.movie().cloned().map(MovieBox::new_root)
     }
 
-    /// [`isobmff::structure::MovieSampleExtentFsm::finish`]
+    /// [`isobmff::structure::MovieDemuxFsm::finish`]
     ///
     /// # Errors
     ///
-    /// Those of [`isobmff::structure::MovieSampleExtentFsm::finish`], of the
+    /// Those of [`isobmff::structure::MovieDemuxFsm::finish`], of the
     /// kind of the layer that refused.
     pub fn finish(&mut self) -> Result<(), Failure> {
         Ok(self.0.finish()?)
@@ -143,10 +146,10 @@ impl MovieDemuxFsm {
         Ok(self.0.handle_input(offset, input)?)
     }
 
-    /// [`isobmff::structure::MovieDemuxFsm::poll_sample`]
-    #[wasm_bindgen(js_name = pollSample)]
-    pub fn poll_sample(&mut self) -> Option<Sample> {
-        self.0.poll_sample().map(Sample)
+    /// [`isobmff::structure::MovieDemuxFsm::poll_output`]
+    #[wasm_bindgen(js_name = pollOutput)]
+    pub fn poll_output(&mut self) -> Option<Sample> {
+        self.0.poll_output().map(Sample)
     }
 
     /// [`isobmff::structure::MovieDemuxFsm::wanted_input`]

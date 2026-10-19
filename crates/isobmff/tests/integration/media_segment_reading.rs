@@ -36,7 +36,7 @@ pub(crate) fn samples_of(movie: MovieBox, segment: &[u8], cut_length: usize) -> 
 /// Takes every sample the reader has completed
 pub(crate) fn drained(demux_fsm: &mut MediaSegmentDemuxFsm) -> Vec<Sample> {
     let mut samples = Vec::new();
-    while let Some(sample) = demux_fsm.poll_sample() {
+    while let Some(sample) = demux_fsm.poll_output() {
         samples.push(sample);
     }
 

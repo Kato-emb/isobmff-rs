@@ -62,7 +62,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 return Err(format!("the server answered a range request with {status}").into());
             }
         };
-        while let Some(sample) = demux_fsm.poll_sample() {
+        while let Some(sample) = demux_fsm.poll_output() {
             println!(
                 "track={} time={} size={} sync={}",
                 sample.properties().track_id,
