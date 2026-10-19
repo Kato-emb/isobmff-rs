@@ -4,7 +4,7 @@
 mod tests {
     use isobmff::sample::{Sample, SampleProperties};
     use isobmff::sequence::BoxEvent;
-    use isobmff::structure::{DemuxError, MovieDemuxFsm, WantedInput};
+    use isobmff::{DemuxError, MovieDemuxer, WantedInput};
     use isobmff_boxes::{
         ChunkOffsets, MediaDataBox, MovieBox, MovieFragmentBox, MovieFragmentHeaderBox,
         MovieFragmentRandomAccessOffsetBox, SampleFlags, SampleSizeBox, SampleSizes,
@@ -27,26 +27,26 @@ mod tests {
     use crate::reading::{drained, read_on, samples_of};
 
     /// Reader that read `file` whole and was declared over
-    fn read_whole(file: &IndexedFile) -> MovieDemuxFsm {
-        let mut demux_fsm = MovieDemuxFsm::new();
-        demux_fsm.handle_input(0, &file.bytes).unwrap();
-        demux_fsm.finish().unwrap();
+    fn read_whole(file: &IndexedFile) -> MovieDemuxer {
+        let mut demuxer = MovieDemuxer::new();
+        demuxer.handle_input(0, &file.bytes).unwrap();
+        demuxer.finish().unwrap();
 
-        demux_fsm
+        demuxer
     }
 
-    /// Resumes `demux_fsm` at `offset` and hands it the rest of `file` from there
+    /// Resumes `demuxer` at `offset` and hands it the rest of `file` from there
     fn resumed_at(
-        demux_fsm: &mut MovieDemuxFsm,
+        demuxer: &mut MovieDemuxer,
         file: &IndexedFile,
         offset: u64,
     ) -> Result<(), DemuxError> {
-        demux_fsm.resume_at(offset)?;
-        demux_fsm.handle_input(
+        demuxer.resume_at(offset)?;
+        demuxer.handle_input(
             offset,
             file.bytes.get(usize::try_from(offset).unwrap()..).unwrap(),
         )?;
-        demux_fsm.finish()
+        demuxer.finish()
     }
 
     #[test]
@@ -69,11 +69,11 @@ mod tests {
     fn a_file_read_in_order_yields_every_sample_and_both_indexes_pointing_at_its_fragments() {
         let file = indexed_fragmented_file();
 
-        let mut demux_fsm = read_whole(&file);
+        let mut demuxer = read_whole(&file);
 
-        assert_eq!(drained(&mut demux_fsm), file.fragment_samples.concat());
+        assert_eq!(drained(&mut demuxer), file.fragment_samples.concat());
         assert_eq!(
-            demux_fsm
+            demuxer
                 .segment_indexes()
                 .iter()
                 .map(|segment_index| segment_index
@@ -85,7 +85,7 @@ mod tests {
             [file.moof_offsets.as_slice()]
         );
         assert_eq!(
-            demux_fsm
+            demuxer
                 .movie_fragment_random_access()
                 .unwrap()
                 .tfra()
@@ -106,7 +106,7 @@ mod tests {
         drained(&mut finished);
         resumed_at(&mut finished, &file, second).unwrap();
 
-        let mut reading = MovieDemuxFsm::new();
+        let mut reading = MovieDemuxer::new();
         reading
             .handle_input(
                 0,
@@ -136,16 +136,16 @@ mod tests {
             })
             .unwrap();
 
-        let mut demux_fsm = read_whole(&file);
-        drained(&mut demux_fsm);
-        resumed_at(&mut demux_fsm, &file, segment_index).unwrap();
+        let mut demuxer = read_whole(&file);
+        drained(&mut demuxer);
+        resumed_at(&mut demuxer, &file, segment_index).unwrap();
 
-        assert_eq!(demux_fsm.segment_indexes().len(), 1);
-        assert_eq!(drained(&mut demux_fsm), file.fragment_samples.concat());
+        assert_eq!(demuxer.segment_indexes().len(), 1);
+        assert_eq!(drained(&mut demuxer), file.fragment_samples.concat());
     }
 
     #[test]
-    fn resuming_at_media_data_is_out_of_order_and_leaves_the_demux_fsm_failed() {
+    fn resuming_at_media_data_is_out_of_order_and_leaves_the_demuxer_failed() {
         let file = indexed_fragmented_file();
         let second = *file.moof_offsets.get(1).unwrap();
         let moof_size = file
@@ -155,33 +155,33 @@ mod tests {
             .unwrap();
         let media_data = second.saturating_add(u64::from(u32::from_be_bytes(*moof_size)));
 
-        let mut demux_fsm = read_whole(&file);
-        let resumed = resumed_at(&mut demux_fsm, &file, media_data);
+        let mut demuxer = read_whole(&file);
+        let resumed = resumed_at(&mut demuxer, &file, media_data);
 
         assert!(matches!(
             resumed,
             Err(DemuxError::BoxOutOfOrder { box_type, .. }) if box_type == BoxType::compact(*b"mdat")
         ));
-        assert_eq!(demux_fsm.resume_at(second), resumed);
+        assert_eq!(demuxer.resume_at(second), resumed);
     }
 
     #[test]
     fn a_file_stating_no_decode_time_read_in_order_starts_its_timeline_at_zero() {
         let file = indexed_fragmented_file_without_decode_times();
 
-        let mut demux_fsm = read_whole(&file);
+        let mut demuxer = read_whole(&file);
 
-        assert_eq!(drained(&mut demux_fsm), file.fragment_samples.concat());
+        assert_eq!(drained(&mut demuxer), file.fragment_samples.concat());
     }
 
     #[test]
     fn resuming_at_a_fragment_stating_no_decode_time_fails_for_the_missing_decode_time() {
         let file = indexed_fragmented_file_without_decode_times();
 
-        let mut demux_fsm = read_whole(&file);
+        let mut demuxer = read_whole(&file);
 
         assert!(matches!(
-            resumed_at(&mut demux_fsm, &file, *file.moof_offsets.get(1).unwrap()),
+            resumed_at(&mut demuxer, &file, *file.moof_offsets.get(1).unwrap()),
             Err(DemuxError::Sample {
                 error: isobmff::sample::Error::MissingDecodeTime { track_id: 1, .. },
                 ..
@@ -193,14 +193,14 @@ mod tests {
     fn the_continuation_is_wanted_after_the_bytes_handed_over_since_the_reading_last_started() {
         let file = indexed_fragmented_file();
         let second = *file.moof_offsets.get(1).unwrap();
-        let mut demux_fsm = MovieDemuxFsm::new();
+        let mut demuxer = MovieDemuxer::new();
 
-        let created = demux_fsm.wanted_input();
-        demux_fsm.handle_input(0, &file.bytes).unwrap();
-        let handed = demux_fsm.wanted_input();
-        demux_fsm.resume_at(second).unwrap();
-        let resumed = demux_fsm.wanted_input();
-        demux_fsm
+        let created = demuxer.wanted_input();
+        demuxer.handle_input(0, &file.bytes).unwrap();
+        let handed = demuxer.wanted_input();
+        demuxer.resume_at(second).unwrap();
+        let resumed = demuxer.wanted_input();
+        demuxer
             .handle_input(
                 second,
                 file.bytes.get(usize::try_from(second).unwrap()..).unwrap(),
@@ -209,7 +209,7 @@ mod tests {
 
         let file_length = u64::try_from(file.bytes.len()).unwrap();
         assert_eq!(
-            [created, handed, resumed, demux_fsm.wanted_input()],
+            [created, handed, resumed, demuxer.wanted_input()],
             [
                 Some(WantedInput::new(0, None)),
                 Some(WantedInput::new(file_length, None)),
@@ -219,17 +219,17 @@ mod tests {
         );
     }
 
-    /// Demux FSM that read `bytes` up to `first`, the offset of the first fragment, then was told the file is `file_len` long to find its `mfra`
-    fn locating_after_the_movie(bytes: &[u8], first: u64, file_len: u64) -> MovieDemuxFsm {
-        let mut demux_fsm = MovieDemuxFsm::new();
-        demux_fsm
+    /// Demuxer that read `bytes` up to `first`, the offset of the first fragment, then was told the file is `file_len` long to find its `mfra`
+    fn locating_after_the_movie(bytes: &[u8], first: u64, file_len: u64) -> MovieDemuxer {
+        let mut demuxer = MovieDemuxer::new();
+        demuxer
             .handle_input(0, bytes.get(..usize::try_from(first).unwrap()).unwrap())
             .unwrap();
-        demux_fsm
+        demuxer
             .resume_at_movie_fragment_random_access(file_len)
             .unwrap();
 
-        demux_fsm
+        demuxer
     }
 
     #[test]
@@ -240,12 +240,12 @@ mod tests {
         let read_in_order = read_whole(&file).movie_fragment_random_access().cloned();
 
         for cut_length in [1, 7, file.bytes.len()] {
-            let mut demux_fsm = locating_after_the_movie(&file.bytes, first, file_len);
+            let mut demuxer = locating_after_the_movie(&file.bytes, first, file_len);
 
             assert_eq!(
                 (
-                    read_on(&mut demux_fsm, &file.bytes, cut_length),
-                    demux_fsm.movie_fragment_random_access().cloned()
+                    read_on(&mut demuxer, &file.bytes, cut_length),
+                    demuxer.movie_fragment_random_access().cloned()
                 ),
                 (Vec::new(), read_in_order.clone())
             );
@@ -276,16 +276,16 @@ mod tests {
             (past_the_start.as_slice(), past_the_start.len()),
         ]
         .map(|(bytes, file_len)| {
-            let mut demux_fsm =
+            let mut demuxer =
                 locating_after_the_movie(bytes, first, u64::try_from(file_len).unwrap());
-            let located = read_on(&mut demux_fsm, bytes, 7);
+            let located = read_on(&mut demuxer, bytes, 7);
             let declared_over = (
-                demux_fsm.wanted_input(),
-                demux_fsm.movie_fragment_random_access().cloned(),
+                demuxer.wanted_input(),
+                demuxer.movie_fragment_random_access().cloned(),
             );
-            demux_fsm.resume_at(first).unwrap();
+            demuxer.resume_at(first).unwrap();
 
-            (located, declared_over, read_on(&mut demux_fsm, bytes, 7))
+            (located, declared_over, read_on(&mut demuxer, bytes, 7))
         });
 
         let read_again = (Vec::new(), (None, None), file.fragment_samples.concat());
@@ -298,14 +298,14 @@ mod tests {
         let file = indexed_fragmented_file();
         let file_len = u64::try_from(file.bytes.len()).unwrap();
         let closing_len = u64::try_from(MovieFragmentRandomAccessOffsetBox::ENCODED_LEN).unwrap();
-        let mut demux_fsm = MovieDemuxFsm::new();
-        demux_fsm
+        let mut demuxer = MovieDemuxer::new();
+        demuxer
             .resume_at_movie_fragment_random_access(file_len)
             .unwrap();
 
-        let refused = demux_fsm.handle_input(0, &file.bytes);
-        let wanted = demux_fsm.wanted_input();
-        let finished = demux_fsm.finish();
+        let refused = demuxer.handle_input(0, &file.bytes);
+        let wanted = demuxer.wanted_input();
+        let finished = demuxer.finish();
 
         assert!(matches!(
             refused,
@@ -315,7 +315,7 @@ mod tests {
             })
         ));
         assert_eq!(
-            (wanted, finished, demux_fsm.wanted_input()),
+            (wanted, finished, demuxer.wanted_input()),
             (
                 Some(WantedInput::new(
                     file_len.saturating_sub(closing_len),
@@ -385,9 +385,9 @@ mod tests {
             .windows(8)
             .position(|bytes| bytes == b"SAMPLE_1")
             .unwrap();
-        let mut demux_fsm = MovieDemuxFsm::new();
+        let mut demuxer = MovieDemuxer::new();
 
-        demux_fsm
+        demuxer
             .handle_input(
                 0,
                 file.bytes
@@ -397,18 +397,14 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            demux_fsm.wanted_input(),
+            demuxer.wanted_input(),
             Some(WantedInput::new(
                 u64::try_from(first_sample).unwrap(),
                 Some(8)
             ))
         );
         assert_eq!(
-            [
-                drained(&mut demux_fsm),
-                read_on(&mut demux_fsm, &file.bytes, 7)
-            ]
-            .concat(),
+            [drained(&mut demuxer), read_on(&mut demuxer, &file.bytes, 7)].concat(),
             every_sample_of(&file)
         );
     }
@@ -428,17 +424,17 @@ mod tests {
     fn resuming_drops_the_samples_of_the_movie_and_a_fragment_stating_no_decode_time_then_fails() {
         let read_resuming_at_the_fragment = |file: &FragmentedFileWithMovieSamples| {
             let fragment = usize::try_from(file.moof_offset).unwrap();
-            let mut demux_fsm = MovieDemuxFsm::new();
-            demux_fsm
+            let mut demuxer = MovieDemuxer::new();
+            demuxer
                 .handle_input(0, file.bytes.get(..fragment).unwrap())
                 .unwrap();
 
-            demux_fsm.resume_at(file.moof_offset).unwrap();
-            let resumed = demux_fsm
+            demuxer.resume_at(file.moof_offset).unwrap();
+            let resumed = demuxer
                 .handle_input(file.moof_offset, file.bytes.get(fragment..).unwrap())
-                .and_then(|()| demux_fsm.finish());
+                .and_then(|()| demuxer.finish());
 
-            (resumed, drained(&mut demux_fsm))
+            (resumed, drained(&mut demuxer))
         };
         let stating = fragmented_file_with_movie_samples(false, true);
 

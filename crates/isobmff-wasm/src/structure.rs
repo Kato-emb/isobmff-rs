@@ -1,6 +1,5 @@
-//! [`isobmff::structure`]: the demux FSMs [`MovieSampleExtentFsm`] and [`MovieDemuxFsm`] with the [`WantedInput`] they state, and the mux FSMs [`NonFragmentedMuxFsm`] and [`FragmentedMuxFsm`]
+//! The demuxers [`MovieExtentDemuxer`] and [`MovieDemuxer`] with the [`WantedInput`] they state, and the muxers [`NonFragmentedMuxer`] and [`FragmentedMuxer`]
 
-use isobmff::structure;
 use js_sys::Uint8Array;
 use serde::Serialize;
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -15,22 +14,22 @@ extern "C" {
     #[wasm_bindgen(typescript_type = "SampleExtent")]
     pub type JsSampleExtent;
 
-    /// [`isobmff::structure::WantedInput`] as the plain object `WantedInput`
+    /// [`isobmff::WantedInput`] as the plain object `WantedInput`
     #[wasm_bindgen(typescript_type = "WantedInput")]
     pub type JsWantedInput;
 }
 
-/// [`isobmff::structure::WantedInput`]
+/// [`isobmff::WantedInput`]
 #[derive(Debug, Clone, Copy, Serialize)]
 struct WantedInput {
-    /// [`isobmff::structure::WantedInput::offset`]
+    /// [`isobmff::WantedInput::offset`]
     offset: u64,
-    /// [`isobmff::structure::WantedInput::length`]
+    /// [`isobmff::WantedInput::length`]
     length: Option<u64>,
 }
 
-impl From<structure::WantedInput> for WantedInput {
-    fn from(wanted: structure::WantedInput) -> Self {
+impl From<isobmff::WantedInput> for WantedInput {
+    fn from(wanted: isobmff::WantedInput) -> Self {
         Self {
             offset: wanted.offset(),
             length: wanted.length(),
@@ -40,41 +39,41 @@ impl From<structure::WantedInput> for WantedInput {
 
 #[wasm_bindgen(typescript_custom_section)]
 const WANTED_INPUT: &str = r#"
-/** `isobmff::structure::WantedInput` */
+/** `isobmff::WantedInput` */
 export interface WantedInput {
     offset: bigint;
     length: bigint | undefined;
 }
 "#;
 
-/// [`isobmff::structure::MovieDemuxFsm`] gathering with [`isobmff::structure::SampleExtents`]
+/// [`isobmff::MovieDemuxer`] gathering with [`isobmff::SampleExtents`]
 #[wasm_bindgen]
 #[derive(Debug)]
-pub struct MovieSampleExtentFsm(structure::MovieDemuxFsm<structure::SampleExtents>);
+pub struct MovieExtentDemuxer(isobmff::MovieDemuxer<isobmff::SampleExtents>);
 
 #[wasm_bindgen]
-impl MovieSampleExtentFsm {
-    /// [`isobmff::structure::MovieDemuxFsm::with_gathering`], of [`isobmff::structure::SampleExtents::new`] and [`isobmff::structure::DemuxLimits::new`]
+impl MovieExtentDemuxer {
+    /// [`isobmff::MovieDemuxer::with_gathering`], of [`isobmff::SampleExtents::new`] and [`isobmff::DemuxLimits::new`]
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
-        Self(structure::MovieDemuxFsm::with_gathering(
-            structure::SampleExtents::new(),
-            structure::DemuxLimits::new(),
+        Self(isobmff::MovieDemuxer::with_gathering(
+            isobmff::SampleExtents::new(),
+            isobmff::DemuxLimits::new(),
         ))
     }
 
-    /// [`isobmff::structure::MovieDemuxFsm::handle_input`]
+    /// [`isobmff::MovieDemuxer::handle_input`]
     ///
     /// # Errors
     ///
-    /// Those of [`isobmff::structure::MovieDemuxFsm::handle_input`], of
+    /// Those of [`isobmff::MovieDemuxer::handle_input`], of
     /// the kind of the layer that refused.
     #[wasm_bindgen(js_name = handleInput)]
     pub fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), Failure> {
         Ok(self.0.handle_input(offset, input)?)
     }
 
-    /// [`isobmff::structure::MovieDemuxFsm::poll_output`]
+    /// [`isobmff::MovieDemuxer::poll_output`]
     ///
     /// # Errors
     ///
@@ -87,7 +86,7 @@ impl MovieSampleExtentFsm {
             .transpose()
     }
 
-    /// [`isobmff::structure::MovieDemuxFsm::wanted_input`]
+    /// [`isobmff::MovieDemuxer::wanted_input`]
     ///
     /// # Errors
     ///
@@ -100,59 +99,59 @@ impl MovieSampleExtentFsm {
             .transpose()
     }
 
-    /// [`isobmff::structure::MovieDemuxFsm::movie`], copied into a root of its own
+    /// [`isobmff::MovieDemuxer::movie`], copied into a root of its own
     pub fn movie(&self) -> Option<MovieBox> {
         self.0.movie().cloned().map(MovieBox::new_root)
     }
 
-    /// [`isobmff::structure::MovieDemuxFsm::finish`]
+    /// [`isobmff::MovieDemuxer::finish`]
     ///
     /// # Errors
     ///
-    /// Those of [`isobmff::structure::MovieDemuxFsm::finish`], of the
+    /// Those of [`isobmff::MovieDemuxer::finish`], of the
     /// kind of the layer that refused.
     pub fn finish(&mut self) -> Result<(), Failure> {
         Ok(self.0.finish()?)
     }
 }
 
-impl Default for MovieSampleExtentFsm {
+impl Default for MovieExtentDemuxer {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// [`isobmff::structure::MovieDemuxFsm`]
+/// [`isobmff::MovieDemuxer`]
 #[wasm_bindgen]
 #[derive(Debug)]
-pub struct MovieDemuxFsm(structure::MovieDemuxFsm);
+pub struct MovieDemuxer(isobmff::MovieDemuxer);
 
 #[wasm_bindgen]
-impl MovieDemuxFsm {
-    /// [`isobmff::structure::MovieDemuxFsm::new`]
+impl MovieDemuxer {
+    /// [`isobmff::MovieDemuxer::new`]
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
-        Self(structure::MovieDemuxFsm::new())
+        Self(isobmff::MovieDemuxer::new())
     }
 
-    /// [`isobmff::structure::MovieDemuxFsm::handle_input`]
+    /// [`isobmff::MovieDemuxer::handle_input`]
     ///
     /// # Errors
     ///
-    /// Those of [`isobmff::structure::MovieDemuxFsm::handle_input`], of the
+    /// Those of [`isobmff::MovieDemuxer::handle_input`], of the
     /// kind of the layer that refused.
     #[wasm_bindgen(js_name = handleInput)]
     pub fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), Failure> {
         Ok(self.0.handle_input(offset, input)?)
     }
 
-    /// [`isobmff::structure::MovieDemuxFsm::poll_output`]
+    /// [`isobmff::MovieDemuxer::poll_output`]
     #[wasm_bindgen(js_name = pollOutput)]
     pub fn poll_output(&mut self) -> Option<Sample> {
         self.0.poll_output().map(Sample)
     }
 
-    /// [`isobmff::structure::MovieDemuxFsm::wanted_input`]
+    /// [`isobmff::MovieDemuxer::wanted_input`]
     ///
     /// # Errors
     ///
@@ -165,211 +164,211 @@ impl MovieDemuxFsm {
             .transpose()
     }
 
-    /// [`isobmff::structure::MovieDemuxFsm::file_type`], copied into a root of its own
+    /// [`isobmff::MovieDemuxer::file_type`], copied into a root of its own
     #[wasm_bindgen(js_name = fileType)]
     pub fn file_type(&self) -> Option<FileTypeBox> {
         self.0.file_type().cloned().map(FileTypeBox)
     }
 
-    /// [`isobmff::structure::MovieDemuxFsm::movie`], copied into a root of its own
+    /// [`isobmff::MovieDemuxer::movie`], copied into a root of its own
     pub fn movie(&self) -> Option<MovieBox> {
         self.0.movie().cloned().map(MovieBox::new_root)
     }
 
-    /// [`isobmff::structure::MovieDemuxFsm::finish`]
+    /// [`isobmff::MovieDemuxer::finish`]
     ///
     /// # Errors
     ///
-    /// Those of [`isobmff::structure::MovieDemuxFsm::finish`], of the kind of
+    /// Those of [`isobmff::MovieDemuxer::finish`], of the kind of
     /// the layer that refused.
     pub fn finish(&mut self) -> Result<(), Failure> {
         Ok(self.0.finish()?)
     }
 }
 
-impl Default for MovieDemuxFsm {
+impl Default for MovieDemuxer {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// [`isobmff::structure::NonFragmentedMuxFsm`]
+/// [`isobmff::NonFragmentedMuxer`]
 #[wasm_bindgen]
 #[derive(Debug)]
-pub struct NonFragmentedMuxFsm(structure::NonFragmentedMuxFsm);
+pub struct NonFragmentedMuxer(isobmff::NonFragmentedMuxer);
 
 #[wasm_bindgen]
-impl NonFragmentedMuxFsm {
-    /// [`isobmff::structure::NonFragmentedMuxFsm::new`]
+impl NonFragmentedMuxer {
+    /// [`isobmff::NonFragmentedMuxer::new`]
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
-        Self(structure::NonFragmentedMuxFsm::new())
+        Self(isobmff::NonFragmentedMuxer::new())
     }
 
-    /// [`isobmff::structure::NonFragmentedMuxFsm::handle_file_type`], of a copy of `file_type`
+    /// [`isobmff::NonFragmentedMuxer::handle_file_type`], of a copy of `file_type`
     ///
     /// # Errors
     ///
-    /// Those of [`isobmff::structure::NonFragmentedMuxFsm::handle_file_type`],
+    /// Those of [`isobmff::NonFragmentedMuxer::handle_file_type`],
     /// of the kind of the layer that refused.
     #[wasm_bindgen(js_name = handleFileType)]
     pub fn handle_file_type(&mut self, file_type: &FileTypeBox) -> Result<(), Failure> {
         Ok(self.0.handle_file_type(file_type.0.clone())?)
     }
 
-    /// [`isobmff::structure::NonFragmentedMuxFsm::handle_movie`], of a copy of `movie`
+    /// [`isobmff::NonFragmentedMuxer::handle_movie`], of a copy of `movie`
     ///
     /// # Errors
     ///
-    /// Those of [`isobmff::structure::NonFragmentedMuxFsm::handle_movie`], of
+    /// Those of [`isobmff::NonFragmentedMuxer::handle_movie`], of
     /// the kind of the layer that refused.
     #[wasm_bindgen(js_name = handleMovie)]
     pub fn handle_movie(&mut self, movie: &MovieBox) -> Result<(), Failure> {
         Ok(self.0.handle_movie(movie.value())?)
     }
 
-    /// [`isobmff::structure::NonFragmentedMuxFsm::begin_chunk`]
+    /// [`isobmff::NonFragmentedMuxer::begin_chunk`]
     ///
     /// # Errors
     ///
-    /// Those of [`isobmff::structure::NonFragmentedMuxFsm::begin_chunk`], of
+    /// Those of [`isobmff::NonFragmentedMuxer::begin_chunk`], of
     /// the kind of the layer that refused.
     #[wasm_bindgen(js_name = beginChunk)]
     pub fn begin_chunk(&mut self) -> Result<(), Failure> {
         Ok(self.0.begin_chunk()?)
     }
 
-    /// [`isobmff::structure::NonFragmentedMuxFsm::handle_sample`], taking `sample`
+    /// [`isobmff::NonFragmentedMuxer::handle_sample`], taking `sample`
     ///
     /// # Errors
     ///
-    /// Those of [`isobmff::structure::NonFragmentedMuxFsm::handle_sample`], of
+    /// Those of [`isobmff::NonFragmentedMuxer::handle_sample`], of
     /// the kind of the layer that refused.
     #[wasm_bindgen(js_name = handleSample)]
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), Failure> {
         Ok(self.0.handle_sample(sample.0)?)
     }
 
-    /// [`isobmff::structure::NonFragmentedMuxFsm::finish_chunk`]
+    /// [`isobmff::NonFragmentedMuxer::finish_chunk`]
     ///
     /// # Errors
     ///
-    /// Those of [`isobmff::structure::NonFragmentedMuxFsm::finish_chunk`], of
+    /// Those of [`isobmff::NonFragmentedMuxer::finish_chunk`], of
     /// the kind of the layer that refused.
     #[wasm_bindgen(js_name = finishChunk)]
     pub fn finish_chunk(&mut self) -> Result<(), Failure> {
         Ok(self.0.finish_chunk()?)
     }
 
-    /// [`isobmff::structure::NonFragmentedMuxFsm::poll_output`]
+    /// [`isobmff::NonFragmentedMuxer::poll_output`]
     #[wasm_bindgen(js_name = pollOutput)]
     pub fn poll_output(&mut self) -> Option<Uint8Array> {
         self.0.poll_output().map(|bytes| Uint8Array::from(&*bytes))
     }
 
-    /// [`isobmff::structure::NonFragmentedMuxFsm::finish`]
+    /// [`isobmff::NonFragmentedMuxer::finish`]
     ///
     /// # Errors
     ///
-    /// Those of [`isobmff::structure::NonFragmentedMuxFsm::finish`], of the
+    /// Those of [`isobmff::NonFragmentedMuxer::finish`], of the
     /// kind of the layer that refused.
     pub fn finish(&mut self) -> Result<(), Failure> {
         Ok(self.0.finish()?)
     }
 }
 
-impl Default for NonFragmentedMuxFsm {
+impl Default for NonFragmentedMuxer {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// [`isobmff::structure::FragmentedMuxFsm`]
+/// [`isobmff::FragmentedMuxer`]
 #[wasm_bindgen]
 #[derive(Debug)]
-pub struct FragmentedMuxFsm(structure::FragmentedMuxFsm);
+pub struct FragmentedMuxer(isobmff::FragmentedMuxer);
 
 #[wasm_bindgen]
-impl FragmentedMuxFsm {
-    /// [`isobmff::structure::FragmentedMuxFsm::new`]
+impl FragmentedMuxer {
+    /// [`isobmff::FragmentedMuxer::new`]
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
-        Self(structure::FragmentedMuxFsm::new())
+        Self(isobmff::FragmentedMuxer::new())
     }
 
-    /// [`isobmff::structure::FragmentedMuxFsm::handle_file_type`], of a copy of `file_type`
+    /// [`isobmff::FragmentedMuxer::handle_file_type`], of a copy of `file_type`
     ///
     /// # Errors
     ///
-    /// Those of [`isobmff::structure::FragmentedMuxFsm::handle_file_type`], of
+    /// Those of [`isobmff::FragmentedMuxer::handle_file_type`], of
     /// the kind of the layer that refused.
     #[wasm_bindgen(js_name = handleFileType)]
     pub fn handle_file_type(&mut self, file_type: &FileTypeBox) -> Result<(), Failure> {
         Ok(self.0.handle_file_type(file_type.0.clone())?)
     }
 
-    /// [`isobmff::structure::FragmentedMuxFsm::handle_movie`], of a copy of `movie`
+    /// [`isobmff::FragmentedMuxer::handle_movie`], of a copy of `movie`
     ///
     /// # Errors
     ///
-    /// Those of [`isobmff::structure::FragmentedMuxFsm::handle_movie`], of the
+    /// Those of [`isobmff::FragmentedMuxer::handle_movie`], of the
     /// kind of the layer that refused.
     #[wasm_bindgen(js_name = handleMovie)]
     pub fn handle_movie(&mut self, movie: &MovieBox) -> Result<(), Failure> {
         Ok(self.0.handle_movie(movie.value())?)
     }
 
-    /// [`isobmff::structure::FragmentedMuxFsm::begin_fragment`]
+    /// [`isobmff::FragmentedMuxer::begin_fragment`]
     ///
     /// # Errors
     ///
-    /// Those of [`isobmff::structure::FragmentedMuxFsm::begin_fragment`], of
+    /// Those of [`isobmff::FragmentedMuxer::begin_fragment`], of
     /// the kind of the layer that refused.
     #[wasm_bindgen(js_name = beginFragment)]
     pub fn begin_fragment(&mut self, sequence_number: u32) -> Result<(), Failure> {
         Ok(self.0.begin_fragment(sequence_number)?)
     }
 
-    /// [`isobmff::structure::FragmentedMuxFsm::handle_sample`], taking `sample`
+    /// [`isobmff::FragmentedMuxer::handle_sample`], taking `sample`
     ///
     /// # Errors
     ///
-    /// Those of [`isobmff::structure::FragmentedMuxFsm::handle_sample`], of the
+    /// Those of [`isobmff::FragmentedMuxer::handle_sample`], of the
     /// kind of the layer that refused.
     #[wasm_bindgen(js_name = handleSample)]
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), Failure> {
         Ok(self.0.handle_sample(sample.0)?)
     }
 
-    /// [`isobmff::structure::FragmentedMuxFsm::finish_fragment`]
+    /// [`isobmff::FragmentedMuxer::finish_fragment`]
     ///
     /// # Errors
     ///
-    /// Those of [`isobmff::structure::FragmentedMuxFsm::finish_fragment`], of
+    /// Those of [`isobmff::FragmentedMuxer::finish_fragment`], of
     /// the kind of the layer that refused.
     #[wasm_bindgen(js_name = finishFragment)]
     pub fn finish_fragment(&mut self) -> Result<(), Failure> {
         Ok(self.0.finish_fragment()?)
     }
 
-    /// [`isobmff::structure::FragmentedMuxFsm::poll_output`]
+    /// [`isobmff::FragmentedMuxer::poll_output`]
     #[wasm_bindgen(js_name = pollOutput)]
     pub fn poll_output(&mut self) -> Option<Uint8Array> {
         self.0.poll_output().map(|bytes| Uint8Array::from(&*bytes))
     }
 
-    /// [`isobmff::structure::FragmentedMuxFsm::finish`]
+    /// [`isobmff::FragmentedMuxer::finish`]
     ///
     /// # Errors
     ///
-    /// Those of [`isobmff::structure::FragmentedMuxFsm::finish`], of the kind
+    /// Those of [`isobmff::FragmentedMuxer::finish`], of the kind
     /// of the layer that refused.
     pub fn finish(&mut self) -> Result<(), Failure> {
         Ok(self.0.finish()?)
     }
 }
 
-impl Default for FragmentedMuxFsm {
+impl Default for FragmentedMuxer {
     fn default() -> Self {
         Self::new()
     }

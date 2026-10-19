@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { MovieSampleExtentFsm, initSync } from "../../crates/isobmff-wasm/pkg/isobmff_wasm.js";
+import { MovieExtentDemuxer, initSync } from "../../crates/isobmff-wasm/pkg/isobmff_wasm.js";
 import { demux } from "../demux.js";
 import { box, movie } from "./fixtures.js";
 
@@ -65,13 +65,13 @@ test("reading a movie of many samples again leaves the wasm memory as it was", a
 
 test("the wanted input and the sample extents come as plain objects of the shape their interfaces state", () => {
   const chunkOffset = movie(0).length + 8;
-  const fsm = new MovieSampleExtentFsm();
-  const wanted = fsm.wantedInput();
-  fsm.handleInput(0n, movie(chunkOffset));
+  const demuxer = new MovieExtentDemuxer();
+  const wanted = demuxer.wantedInput();
+  demuxer.handleInput(0n, movie(chunkOffset));
 
-  const extent = fsm.pollOutput();
-  const duration = fsm.movie().trak()[0].mdia().mdhd().duration();
-  fsm.free();
+  const extent = demuxer.pollOutput();
+  const duration = demuxer.movie().trak()[0].mdia().mdhd().duration();
+  demuxer.free();
 
   assert.deepEqual(wanted, { offset: 0n, length: undefined });
   assert.deepEqual(extent, {

@@ -12,7 +12,7 @@ use std::env;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
-use isobmff::structure::{MediaSegmentDemuxFsm, MovieDemuxFsm};
+use isobmff::{MediaSegmentDemuxer, MovieDemuxer};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let usage = "usage: seek_media_segment <initialization.mp4> <segment.m4s> <milliseconds>";
@@ -23,57 +23,57 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut initialization_file = File::open(initialization_path)?;
     let mut buffer = vec![0; 1024 * 1024];
-    let mut initialization_fsm = MovieDemuxFsm::new();
+    let mut initialization_demuxer = MovieDemuxer::new();
     let movie = loop {
-        if let Some(movie) = initialization_fsm.movie() {
+        if let Some(movie) = initialization_demuxer.movie() {
             break movie.clone();
         }
-        let wanted = initialization_fsm
+        let wanted = initialization_demuxer
             .wanted_input()
             .ok_or("the initialization segment carries no movie")?;
         initialization_file.seek(SeekFrom::Start(wanted.offset()))?;
         let read = initialization_file.read(&mut buffer)?;
         if read == 0 {
-            initialization_fsm.finish()?;
+            initialization_demuxer.finish()?;
         } else {
-            initialization_fsm
+            initialization_demuxer
                 .handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())?;
         }
     };
     let mut segment_file = File::open(segment_path)?;
-    let mut demux_fsm = MediaSegmentDemuxFsm::new(movie)?;
+    let mut demuxer = MediaSegmentDemuxer::new(movie)?;
 
     let subsegment_start = loop {
-        let covering = demux_fsm.segment_indexes().iter().find_map(|index| {
+        let covering = demuxer.segment_indexes().iter().find_map(|index| {
             let time = milliseconds.checked_mul(u64::from(index.timescale()))? / 1_000;
             index.subsegment_at(time)
         });
         if let Some(subsegment) = covering {
             break subsegment.extent().start;
         }
-        let wanted = demux_fsm
+        let wanted = demuxer
             .wanted_input()
             .ok_or("no segment index covers the time")?;
         segment_file.seek(SeekFrom::Start(wanted.offset()))?;
         let read = segment_file.read(&mut buffer)?;
         if read == 0 {
-            demux_fsm.finish()?;
+            demuxer.finish()?;
         } else {
-            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())?;
+            demuxer.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())?;
         }
     };
-    demux_fsm.resume_at(subsegment_start)?;
+    demuxer.resume_at(subsegment_start)?;
 
     let mut count: u64 = 0;
-    while let Some(wanted) = demux_fsm.wanted_input() {
+    while let Some(wanted) = demuxer.wanted_input() {
         segment_file.seek(SeekFrom::Start(wanted.offset()))?;
         let read = segment_file.read(&mut buffer)?;
         let handed = if read == 0 {
-            demux_fsm.finish()
+            demuxer.finish()
         } else {
-            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
+            demuxer.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
         };
-        while let Some(sample) = demux_fsm.poll_output() {
+        while let Some(sample) = demuxer.poll_output() {
             println!(
                 "track={} time={} size={} sync={}",
                 sample.properties().track_id,

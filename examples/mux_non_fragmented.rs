@@ -20,10 +20,9 @@ use isobmff::boxes::{
     SoundMediaHeaderBox, TimeToSampleBox, TrackBox, TrackHeaderBox,
 };
 use isobmff::sample::{Sample, SampleProperties};
-use isobmff::structure::NonFragmentedMuxFsm;
 use isobmff::{
     AnyBox, BoxType, FieldWriter, FourCc, FullBoxFlags, I8F8, LanguageCode, Mp4EpochSeconds,
-    NullTerminatedString, U16F16,
+    NonFragmentedMuxer, NullTerminatedString, U16F16,
 };
 
 const SAMPLE_RATE: u64 = 48_000;
@@ -102,18 +101,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         .ok_or("the movie declares no track")?;
 
     let mut file = BufWriter::new(File::create(path)?);
-    let mut mux_fsm = NonFragmentedMuxFsm::new();
-    mux_fsm.handle_movie(movie)?;
+    let mut muxer = NonFragmentedMuxer::new();
+    muxer.handle_movie(movie)?;
     for start in (0..frames).step_by(usize::try_from(FRAMES_PER_SAMPLE)?) {
         let end = start.saturating_add(FRAMES_PER_SAMPLE).min(frames);
         if start % SAMPLE_RATE < FRAMES_PER_SAMPLE {
             if start > 0 {
-                mux_fsm.finish_chunk()?;
-                while let Some(bytes) = mux_fsm.poll_output() {
+                muxer.finish_chunk()?;
+                while let Some(bytes) = muxer.poll_output() {
                     file.write_all(&bytes)?;
                 }
             }
-            mux_fsm.begin_chunk()?;
+            muxer.begin_chunk()?;
         }
         let data = (start..end)
             .flat_map(|frame| {
@@ -127,7 +126,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             })
             .collect();
         let duration = u32::try_from(end.saturating_sub(start))?;
-        mux_fsm.handle_sample(Sample::new(
+        muxer.handle_sample(Sample::new(
             SampleProperties {
                 track_id: TRACK_ID,
                 decode_time: start,
@@ -140,10 +139,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         ))?;
     }
     if frames > 0 {
-        mux_fsm.finish_chunk()?;
+        muxer.finish_chunk()?;
     }
-    mux_fsm.finish()?;
-    while let Some(bytes) = mux_fsm.poll_output() {
+    muxer.finish()?;
+    while let Some(bytes) = muxer.poll_output() {
         file.write_all(&bytes)?;
     }
     file.flush()?;

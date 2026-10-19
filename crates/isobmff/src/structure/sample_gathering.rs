@@ -1,4 +1,4 @@
-//! [`SampleGathering`], what a movie demux FSM does with the extents it resolves: [`SampleReader`] gathers the samples, [`SampleExtents`] keeps the extents
+//! [`SampleGathering`], what a movie demuxer does with the extents it resolves: [`SampleReader`] gathers the samples, [`SampleExtents`] keeps the extents
 
 use alloc::collections::VecDeque;
 use core::ops::Range;
@@ -12,7 +12,7 @@ mod sealed {
     use crate::sample::{self, SampleExtent};
     use crate::structure::DemuxError;
 
-    /// The verbs a demux FSM speaks to its gathering, closing [`SampleGathering`](super::SampleGathering) to the types beside it
+    /// The verbs a demuxer speaks to its gathering, closing [`SampleGathering`](super::SampleGathering) to the types beside it
     #[allow(
         unnameable_types,
         reason = "sealing SampleGathering takes a supertrait a caller cannot name"
@@ -53,7 +53,7 @@ mod sealed {
     }
 }
 
-/// What a movie demux FSM does with the extents it resolves, and what it yields for each sample
+/// What a movie demuxer does with the extents it resolves, and what it yields for each sample
 ///
 /// The sample tables of a movie, and each fragment against the movie it
 /// continues, resolve into the extents of their samples (ISO/IEC 14496-12
@@ -61,9 +61,9 @@ mod sealed {
 /// becomes of those extents is the gathering's. [`SampleReader`] holds them
 /// and fills them out of the media data, yielding each [`Sample`] once its
 /// bytes have arrived; [`SampleExtents`] holds them as they are and yields
-/// each [`SampleExtent`], the media data passed over unread. A demux FSM
-/// takes one as its type parameter, and what the caller takes from it is the
-/// gathering's [`Output`](Self::Output).
+/// each [`SampleExtent`], the media data passed over unread.
+/// [`MovieDemuxer`](crate::MovieDemuxer) takes one as its type parameter, and
+/// what the caller takes from it is the gathering's [`Output`](Self::Output).
 ///
 /// The trait is sealed: the two types here implement it, and no other.
 pub trait SampleGathering: sealed::Gathering {
@@ -107,16 +107,16 @@ impl SampleGathering for SampleReader {
     }
 }
 
-/// The extents a movie demux FSM resolves, held as they are and yielded in place of samples
+/// The extents a movie demuxer resolves, held as they are and yielded in place of samples
 ///
-/// A demux FSM gathering with this type reads a movie file through the same
+/// [`MovieDemuxer`](crate::MovieDemuxer) gathering with this type reads a movie file through the same
 /// layers it otherwise does, short of gathering the samples: the media data,
 /// like every box passed over, goes unread, so the file is read once, in
 /// order, whatever order its media data lies in, and no bytes are wanted but
 /// the continuation of the input. The extents of a `moov` come out in the
 /// order their bytes lie in the file, then those of each `moof` in the order
 /// it declares them, up to the first the resolution refuses. Of the
-/// [`DemuxLimits`](crate::structure::DemuxLimits) the demux FSM is created
+/// [`DemuxLimits`](crate::structure::DemuxLimits) the demuxer is created
 /// with, those of
 /// [`DemuxLimits::sample_reader`](crate::structure::DemuxLimits::sample_reader)
 /// do not apply: nothing is gathered.

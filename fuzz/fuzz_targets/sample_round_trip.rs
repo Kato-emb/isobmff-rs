@@ -1,4 +1,4 @@
-//! Round-trip properties of [`FragmentedMuxFsm`] against [`MovieDemuxFsm`]
+//! Round-trip properties of [`FragmentedMuxer`] against [`MovieDemuxer`]
 //!
 //! One run lays samples down as a fragmented file, reads that file back, and
 //! checks four properties of the same input:
@@ -29,7 +29,7 @@
 
 use isobmff::boxes::{MovieBox, SampleFlags, TrackExtendsBox};
 use isobmff::sample::{Sample, SampleProperties};
-use isobmff::structure::{MovieDemuxFsm, FragmentedMuxFsm, MuxError};
+use isobmff::{FragmentedMuxer, MovieDemuxer, MuxError};
 use isobmff_test_support::{EVERY_FIELD_AT_ITS_HIGHEST, file_type};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
@@ -189,29 +189,29 @@ fn laid_out(input: &Input<'_>) -> Vec<(u32, Vec<Sample>)> {
 /// A writer that refuses reports that same failure for every call after it and
 /// still hands over the bytes of the fragments it had closed.
 fn file_of(movie: &MovieBox, fragments: &[(u32, Vec<Sample>)]) -> (Vec<u8>, usize) {
-    let mut mux_fsm = FragmentedMuxFsm::new();
+    let mut muxer = FragmentedMuxer::new();
     let mut file = Vec::new();
     let mut closed = 0;
     let mut refused = None;
 
-    mux_fsm
+    muxer
         .handle_file_type(file_type())
         .expect("a writer waiting for the brands refused them");
-    mux_fsm
+    muxer
         .handle_movie(movie.clone())
         .expect("a writer waiting for the movie refused it");
 
     for (sequence_number, samples) in fragments {
-        let mut outcome = mux_fsm.begin_fragment(*sequence_number);
+        let mut outcome = muxer.begin_fragment(*sequence_number);
 
         for sample in samples {
             if outcome.is_err() {
                 break;
             }
-            outcome = mux_fsm.handle_sample(sample.clone());
+            outcome = muxer.handle_sample(sample.clone());
         }
         if outcome.is_ok() {
-            outcome = mux_fsm.finish_fragment();
+            outcome = muxer.finish_fragment();
         }
 
         match outcome {
@@ -221,29 +221,29 @@ fn file_of(movie: &MovieBox, fragments: &[(u32, Vec<Sample>)]) -> (Vec<u8>, usiz
                 break;
             }
         }
-        drained_into(&mut mux_fsm, &mut file);
+        drained_into(&mut muxer, &mut file);
     }
 
     if refused.is_none() {
-        refused = mux_fsm.finish().err();
+        refused = muxer.finish().err();
     }
-    drained_into(&mut mux_fsm, &mut file);
+    drained_into(&mut muxer, &mut file);
 
     match refused {
         Some(reported) => {
             assert_eq!(
-                mux_fsm.handle_sample(a_sample()),
+                muxer.handle_sample(a_sample()),
                 Err(reported),
                 "a refused writer took a sample instead of reporting its failure again"
             );
             assert_eq!(
-                mux_fsm.finish(),
+                muxer.finish(),
                 Err(reported),
                 "a refused writer reported another failure when the file was declared over"
             );
         }
         None => assert!(
-            matches!(mux_fsm.handle_sample(a_sample()), Err(MuxError::AlreadyFinished { .. })),
+            matches!(muxer.handle_sample(a_sample()), Err(MuxError::AlreadyFinished { .. })),
             "the writer took a sample after the file was declared over"
         ),
     }
@@ -252,8 +252,8 @@ fn file_of(movie: &MovieBox, fragments: &[(u32, Vec<Sample>)]) -> (Vec<u8>, usiz
 }
 
 /// Takes what the writer has laid down into `file`
-fn drained_into(mux_fsm: &mut FragmentedMuxFsm, file: &mut Vec<u8>) {
-    while let Some(written) = mux_fsm.poll_output() {
+fn drained_into(muxer: &mut FragmentedMuxer, file: &mut Vec<u8>) {
+    while let Some(written) = muxer.poll_output() {
         file.extend_from_slice(&written);
     }
 }
@@ -278,22 +278,22 @@ fn a_sample() -> Sample {
 /// Panics where the reader rejects the file, which is the property this target
 /// holds the writer to.
 fn read_back(file: &[u8]) -> Vec<Sample> {
-    let mut demux_fsm = MovieDemuxFsm::new();
+    let mut demuxer = MovieDemuxer::new();
     let mut samples = Vec::new();
 
     assert!(
-        demux_fsm.handle_input(0, file).is_ok(),
+        demuxer.handle_input(0, file).is_ok(),
         "the reader rejects the file the writer laid down"
     );
-    while let Some(sample) = demux_fsm.poll_output() {
+    while let Some(sample) = demuxer.poll_output() {
         samples.push(sample);
     }
 
     assert!(
-        demux_fsm.finish().is_ok(),
+        demuxer.finish().is_ok(),
         "the reader rejects the end of the file the writer laid down"
     );
-    while let Some(sample) = demux_fsm.poll_output() {
+    while let Some(sample) = demuxer.poll_output() {
         samples.push(sample);
     }
 

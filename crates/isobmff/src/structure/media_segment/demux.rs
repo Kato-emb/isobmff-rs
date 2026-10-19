@@ -1,4 +1,4 @@
-//! [`MediaSegmentDemuxFsm`], a media segment read as it arrives
+//! [`MediaSegmentDemuxer`], a media segment read as it arrives
 
 use alloc::vec::Vec;
 
@@ -16,7 +16,7 @@ use crate::structure::{DemuxError, DemuxInput, DemuxLimits, WantedInput, WholeBo
 /// the movie that declares it (ISO/IEC 14496-12 §8.16.1): the brands it
 /// declares itself readable as, then one movie fragment after another with the
 /// media data each of them addresses; segments concatenated into one stream,
-/// each with its `styp`, are read as one. This demux FSM wires the layers that
+/// each with its `styp`, are read as one. This demuxer wires the layers that
 /// read one: the framing of the segment into boxes, the structure that says
 /// what each top-level box is, the reading of the boxes it names into values,
 /// the resolution of each fragment against the movie into the extents of its
@@ -36,10 +36,10 @@ use crate::structure::{DemuxError, DemuxInput, DemuxLimits, WantedInput, WholeBo
 ///   and the samples it completed are taken from
 ///   [`poll_output`](Self::poll_output). The caller drains before handing
 ///   over more: samples are held until they are taken. Where the segment
-///   lies in its resource is the caller's: every offset the demux FSM reports
+///   lies in its resource is the caller's: every offset the demuxer reports
 ///   is an offset into the segment, counting from the first byte of it as
 ///   the boxes count theirs (§8.8.7).
-/// * The fragments are resolved against the movie the demux FSM was created
+/// * The fragments are resolved against the movie the demuxer was created
 ///   with, which is there to read at [`movie`](Self::movie); the samples its
 ///   sample tables declare are not read. The brands are
 ///   there once they have arrived: [`segment_type`](Self::segment_type). The
@@ -69,7 +69,7 @@ use crate::structure::{DemuxError, DemuxInput, DemuxLimits, WantedInput, WholeBo
 ///   A `styp` read on the way does not set the track back. After a
 ///   [`resume_at`](Self::resume_at), a fragment stating none for a track no
 ///   `tfdt` has stated since is [`Sample`](crate::structure::DemuxError::Sample) instead.
-/// * What the demux FSM holds of what the segment declares is bounded — a box
+/// * What the demuxer holds of what the segment declares is bounded — a box
 ///   read into a value, the samples a `moof` declares, the samples gathered
 ///   — by the [`DemuxLimits`] it was created with.
 /// * The samples of a fragment are read out of the media data it addresses,
@@ -83,7 +83,7 @@ use crate::structure::{DemuxError, DemuxInput, DemuxLimits, WantedInput, WholeBo
 ///   start, which a segment whose fragments precede their media data never
 ///   has; a fragment addressing media data lying before it (§8.8.7, §8.8.8)
 ///   wants bytes already passed by.
-/// * An `Err` leaves the demux FSM failed for good,
+/// * An `Err` leaves the demuxer failed for good,
 ///   [`AlreadyFinished`](crate::structure::DemuxError::AlreadyFinished) and
 ///   [`UnwantedInput`](crate::structure::DemuxError::UnwantedInput) aside:
 ///   every later call reports that same failure again. The samples completed
@@ -100,14 +100,14 @@ use crate::structure::{DemuxError, DemuxInput, DemuxLimits, WantedInput, WholeBo
 /// ```
 /// use isobmff::boxes::{SampleFlags, TrackExtendsBox};
 /// use isobmff::sample::{Sample, SampleProperties};
-/// use isobmff::structure::{MediaSegmentDemuxFsm, MediaSegmentMuxFsm};
+/// use isobmff::{MediaSegmentDemuxer, MediaSegmentMuxer};
 /// # use isobmff_test_support::{fragmented_movie, segment_type};
 /// // A segment of one fragment carrying two samples of track 1, continuing a movie of that track
 /// let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO));
-/// let mut mux_fsm = MediaSegmentMuxFsm::new(&movie)?;
-/// mux_fsm.handle_segment_type(segment_type())?;
-/// mux_fsm.begin_fragment(1)?;
-/// mux_fsm.handle_sample(Sample::new(
+/// let mut muxer = MediaSegmentMuxer::new(&movie)?;
+/// muxer.handle_segment_type(segment_type())?;
+/// muxer.begin_fragment(1)?;
+/// muxer.handle_sample(Sample::new(
 ///     SampleProperties {
 ///         track_id: 1,
 ///         decode_time: 0,
@@ -118,7 +118,7 @@ use crate::structure::{DemuxError, DemuxInput, DemuxLimits, WantedInput, WholeBo
 ///     },
 ///     b"SAMP".to_vec(),
 /// ))?;
-/// mux_fsm.handle_sample(Sample::new(
+/// muxer.handle_sample(Sample::new(
 ///     SampleProperties {
 ///         track_id: 1,
 ///         decode_time: 1_024,
@@ -129,35 +129,35 @@ use crate::structure::{DemuxError, DemuxInput, DemuxLimits, WantedInput, WholeBo
 ///     },
 ///     b"DATA".to_vec(),
 /// ))?;
-/// mux_fsm.finish_fragment()?;
-/// mux_fsm.finish()?;
+/// muxer.finish_fragment()?;
+/// muxer.finish()?;
 ///
-/// // The segment the mux FSM laid down is drained as it hands the bytes over
+/// // The segment the muxer laid down is drained as it hands the bytes over
 /// let mut segment = Vec::new();
-/// while let Some(written) = mux_fsm.poll_output() {
+/// while let Some(written) = muxer.poll_output() {
 ///     segment.extend_from_slice(&written);
 /// }
 ///
 /// // The segment is handed over as it arrives, against the movie it continues
-/// let mut demux_fsm = MediaSegmentDemuxFsm::new(movie)?;
+/// let mut demuxer = MediaSegmentDemuxer::new(movie)?;
 /// for (offset, arriving) in (0..).step_by(7).zip(segment.chunks(7)) {
-///     demux_fsm.handle_input(offset, arriving)?;
+///     demuxer.handle_input(offset, arriving)?;
 /// }
-/// demux_fsm.finish()?;
+/// demuxer.finish()?;
 ///
 /// // The brands the segment declared are there to read
-/// assert_eq!(demux_fsm.segment_type().map(|styp| styp.major_brand()), Some(segment_type().major_brand()));
+/// assert_eq!(demuxer.segment_type().map(|styp| styp.major_brand()), Some(segment_type().major_brand()));
 ///
 /// // The samples come back as they were laid out
-/// let first = demux_fsm.poll_output().unwrap();
+/// let first = demuxer.poll_output().unwrap();
 /// assert_eq!((first.data(), first.properties().decode_time), (b"SAMP".as_slice(), 0));
-/// let second = demux_fsm.poll_output().unwrap();
+/// let second = demuxer.poll_output().unwrap();
 /// assert_eq!((second.data(), second.properties().decode_time), (b"DATA".as_slice(), 1_024));
-/// assert_eq!(demux_fsm.poll_output(), None);
+/// assert_eq!(demuxer.poll_output(), None);
 /// # Ok::<(), Box<dyn core::error::Error>>(())
 /// ```
 #[derive(Debug)]
-pub struct MediaSegmentDemuxFsm {
+pub struct MediaSegmentDemuxer {
     input: DemuxInput<SampleReader>,
     structure: MediaSegmentStructure,
     decode_times: TrackDecodeTimes,
@@ -184,8 +184,8 @@ enum Open {
     MediaData,
 }
 
-impl MediaSegmentDemuxFsm {
-    /// Creates a demux FSM waiting at the start of a media segment continuing `movie`, bounded by the limits [`DemuxLimits::new`] states
+impl MediaSegmentDemuxer {
+    /// Creates a demuxer waiting at the start of a media segment continuing `movie`, bounded by the limits [`DemuxLimits::new`] states
     ///
     /// # Errors
     ///
@@ -195,7 +195,7 @@ impl MediaSegmentDemuxFsm {
         Self::with_limits(movie, DemuxLimits::new())
     }
 
-    /// Creates a demux FSM waiting at the start of a media segment continuing `movie`, bounded by `limits`
+    /// Creates a demuxer waiting at the start of a media segment continuing `movie`, bounded by `limits`
     ///
     /// # Errors
     ///
@@ -234,7 +234,7 @@ impl MediaSegmentDemuxFsm {
     /// * [`BoxOutOfOrder`](crate::structure::DemuxError::BoxOutOfOrder): what
     ///   the structure makes of a top-level box arriving where it does.
     /// * [`PayloadLimitExceeded`](crate::structure::DemuxError::PayloadLimitExceeded):
-    ///   a box read into a value reaches past the limit the demux FSM gathers.
+    ///   a box read into a value reaches past the limit the demuxer gathers.
     /// * [`Sequence`](crate::structure::DemuxError::Sequence): what the framing
     ///   of the segment makes of the input.
     /// * [`Box`](crate::structure::DemuxError::Box): a box read into a value
@@ -246,8 +246,8 @@ impl MediaSegmentDemuxFsm {
     /// * [`UnwantedInput`](crate::structure::DemuxError::UnwantedInput): `offset` is
     ///   neither where the input taken in order stands nor the offset of the
     ///   bytes [`wanted_input`](Self::wanted_input) names as lacking. The
-    ///   demux FSM is not failed by it.
-    /// * The failure of a previous call, which the demux FSM keeps and reports
+    ///   demuxer is not failed by it.
+    /// * The failure of a previous call, which the demuxer keeps and reports
     ///   again for every call after it.
     pub fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), DemuxError> {
         self.input.handle_input(offset, input)?;
@@ -260,13 +260,13 @@ impl MediaSegmentDemuxFsm {
     ///
     /// Reports `None` once they are used up: more of the segment is needed.
     /// Failure is reported by the calls that take it, so this one never fails
-    /// — a failed demux FSM hands over the samples it had already completed,
+    /// — a failed demuxer hands over the samples it had already completed,
     /// then `None` from there on.
     pub fn poll_output(&mut self) -> Option<Sample> {
         self.input.poll_output()
     }
 
-    /// Returns the one read wanted next, or `None` once the segment is declared over or the demux FSM has failed
+    /// Returns the one read wanted next, or `None` once the segment is declared over or the demuxer has failed
     ///
     /// Bytes the extent at the front of those held still lacks are wanted
     /// first, with their length, once the input taken in order has passed their
@@ -310,12 +310,12 @@ impl MediaSegmentDemuxFsm {
     /// Restarts the reading at `offset`, the offset into the segment the input handed over next starts at
     ///
     /// The next box is to be one an index points at: a `moof` or a `sidx`.
-    /// The demux FSM resumes from reading and from the segment declared over
+    /// The demuxer resumes from reading and from the segment declared over
     /// alike, and takes the segment again from there.
     ///
     /// # Errors
     ///
-    /// * The failure of a previous call, which the demux FSM keeps and reports
+    /// * The failure of a previous call, which the demuxer keeps and reports
     ///   again for every call after it.
     pub fn resume_at(&mut self, offset: u64) -> Result<(), DemuxError> {
         self.input.resumable()?;
@@ -342,7 +342,7 @@ impl MediaSegmentDemuxFsm {
     ///   declared is short of the data it claimed.
     /// * [`AlreadyFinished`](crate::structure::DemuxError::AlreadyFinished): the
     ///   segment was already declared over.
-    /// * The failure of a previous call, which the demux FSM keeps and reports
+    /// * The failure of a previous call, which the demuxer keeps and reports
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), DemuxError> {
         self.input.finish_framing()?;
@@ -432,25 +432,25 @@ mod tests {
     use isobmff_test_support::{framed, movie_fragment, segment_type, written};
 
     use super::super::tests::{movie, sample, segment_of_one_sample};
-    use super::{DemuxError, MediaSegmentDemuxFsm};
+    use super::{DemuxError, MediaSegmentDemuxer};
     use crate::sample::SampleReaderLimits;
     use crate::structure::{DemuxLimits, WantedInput};
 
-    /// What the demux FSM makes of `segment` handed over whole, then declared over
-    fn read(segment: &[u8]) -> Result<MediaSegmentDemuxFsm, DemuxError> {
-        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie()).unwrap();
+    /// What the demuxer makes of `segment` handed over whole, then declared over
+    fn read(segment: &[u8]) -> Result<MediaSegmentDemuxer, DemuxError> {
+        let mut demuxer = MediaSegmentDemuxer::new(movie()).unwrap();
 
-        demux_fsm.handle_input(0, segment)?;
-        demux_fsm.finish()?;
+        demuxer.handle_input(0, segment)?;
+        demuxer.finish()?;
 
-        Ok(demux_fsm)
+        Ok(demuxer)
     }
 
     #[test]
     fn a_segment_declaring_no_brands_is_read_all_the_same() {
-        let demux_fsm = read(&written(&movie_fragment())).unwrap();
+        let demuxer = read(&written(&movie_fragment())).unwrap();
 
-        assert_eq!(demux_fsm.segment_type(), None);
+        assert_eq!(demuxer.segment_type(), None);
     }
 
     #[test]
@@ -465,11 +465,11 @@ mod tests {
 
     #[test]
     fn a_box_read_into_a_value_declaring_a_payload_past_the_limit_is_rejected() {
-        let mut demux_fsm =
-            MediaSegmentDemuxFsm::with_limits(movie(), DemuxLimits::new().with_payload(4)).unwrap();
+        let mut demuxer =
+            MediaSegmentDemuxer::with_limits(movie(), DemuxLimits::new().with_payload(4)).unwrap();
 
         assert_eq!(
-            demux_fsm.handle_input(0, &written(&segment_type())),
+            demuxer.handle_input(0, &written(&segment_type())),
             Err(DemuxError::PayloadLimitExceeded {
                 box_type: BoxType::compact(*b"styp"),
                 reached_bytes: 16,
@@ -486,25 +486,25 @@ mod tests {
             framed(BoxType::compact(*b"free"), &[0x11; 4_096]),
         ]
         .concat();
-        let mut demux_fsm = MediaSegmentDemuxFsm::with_limits(
+        let mut demuxer = MediaSegmentDemuxer::with_limits(
             movie(),
             DemuxLimits::new().with_payload(fragment.len() as u64),
         )
         .unwrap();
 
-        demux_fsm.handle_input(0, &segment).unwrap();
+        demuxer.handle_input(0, &segment).unwrap();
 
-        assert_eq!(demux_fsm.finish(), Ok(()));
+        assert_eq!(demuxer.finish(), Ok(()));
     }
 
     #[test]
     fn a_fragment_declaring_more_samples_than_the_limit_lays_out_none() {
-        let mut demux_fsm =
-            MediaSegmentDemuxFsm::with_limits(movie(), DemuxLimits::new().with_resolved_samples(0))
+        let mut demuxer =
+            MediaSegmentDemuxer::with_limits(movie(), DemuxLimits::new().with_resolved_samples(0))
                 .unwrap();
 
         assert!(matches!(
-            demux_fsm.handle_input(0, &segment_of_one_sample()),
+            demuxer.handle_input(0, &segment_of_one_sample()),
             Err(DemuxError::Sample {
                 error: crate::sample::Error::SampleCountLimitExceeded {
                     declared_samples: 1,
@@ -513,19 +513,19 @@ mod tests {
                 }
             })
         ));
-        assert_eq!(demux_fsm.poll_output(), None);
+        assert_eq!(demuxer.poll_output(), None);
     }
 
     #[test]
     fn the_sample_reader_is_held_to_the_limits_it_is_given() {
-        let mut demux_fsm = MediaSegmentDemuxFsm::with_limits(
+        let mut demuxer = MediaSegmentDemuxer::with_limits(
             movie(),
             DemuxLimits::new().with_sample_reader(SampleReaderLimits::new().with_held_extents(0)),
         )
         .unwrap();
 
         assert!(matches!(
-            demux_fsm.handle_input(0, &segment_of_one_sample()),
+            demuxer.handle_input(0, &segment_of_one_sample()),
             Err(DemuxError::Sample {
                 error: crate::sample::Error::HeldExtentLimitExceeded {
                     held_extents: 1,
@@ -542,23 +542,23 @@ mod tests {
         let mut segment = segment_of_one_sample();
         let media_data = segment.split_off(segment.len().saturating_sub(4));
 
-        let mut demux_fsm = MediaSegmentDemuxFsm::new(movie()).unwrap();
-        demux_fsm.handle_input(0, &segment).unwrap();
-        let wanted = demux_fsm.wanted_input();
-        demux_fsm
+        let mut demuxer = MediaSegmentDemuxer::new(movie()).unwrap();
+        demuxer.handle_input(0, &segment).unwrap();
+        let wanted = demuxer.wanted_input();
+        demuxer
             .handle_input(segment.len() as u64, &media_data)
             .unwrap();
 
         assert_eq!(wanted, Some(WantedInput::new(segment.len() as u64, None)));
-        assert_eq!(demux_fsm.poll_output(), Some(sample()));
+        assert_eq!(demuxer.poll_output(), Some(sample()));
     }
 
     #[test]
     fn the_segment_is_wanted_from_the_offset_the_reading_resumed_at() {
-        let mut demux_fsm = read(&segment_of_one_sample()).unwrap();
+        let mut demuxer = read(&segment_of_one_sample()).unwrap();
 
-        demux_fsm.resume_at(100).unwrap();
+        demuxer.resume_at(100).unwrap();
 
-        assert_eq!(demux_fsm.wanted_input(), Some(WantedInput::new(100, None)));
+        assert_eq!(demuxer.wanted_input(), Some(WantedInput::new(100, None)));
     }
 }

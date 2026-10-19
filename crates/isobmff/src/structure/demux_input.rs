@@ -1,16 +1,16 @@
-//! [`DemuxInput`], the input half every demux FSM shares: the framing of the file, where the input stands, the samples gathered, and whether the demux FSM still reads
+//! [`DemuxInput`], the input half every demuxer shares: the framing of the file, where the input stands, the samples gathered, and whether the demuxer still reads
 
 use crate::sequence::{BoxEvent, BoxReader};
 use crate::structure::input_position::{InputPosition, InputRoute};
 use crate::structure::{DemuxError, SampleGathering, StructureError, WantedInput};
 
-/// Takes the input of a file at the offsets it was read at, and keeps whether the demux FSM above still reads
+/// Takes the input of a file at the offsets it was read at, and keeps whether the demuxer above still reads
 ///
-/// A demux FSM hands its input to [`handle_input`](Self::handle_input), reads
+/// A demuxer hands its input to [`handle_input`](Self::handle_input), reads
 /// the boxes the framing made of it through [`poll_event`](Self::poll_event),
 /// and hands the result of reading them to [`record`](Self::record), so a
 /// failure is kept here, once a call. What is done with each box stays with
-/// the demux FSM.
+/// the demuxer.
 ///
 /// # Contract
 ///
@@ -22,7 +22,7 @@ use crate::structure::{DemuxError, SampleGathering, StructureError, WantedInput}
 ///   before failing are read: [`record`](Self::record) reports a failure of
 ///   reading them first, and only then the failure of the framing.
 /// * [`finish`](Self::finish) checks the samples last, after the framing, the
-///   events it made and what the demux FSM checked of them.
+///   events it made and what the demuxer checked of them.
 /// * A failure recorded is reported by every later call that takes input or
 ///   declares the file over. The samples completed before it are still taken
 ///   from [`poll_output`](Self::poll_output), and no read is wanted.
@@ -62,7 +62,7 @@ impl<G: SampleGathering> DemuxInput<G> {
         }
     }
 
-    /// Returns `Ok` while the demux FSM still takes input
+    /// Returns `Ok` while the demuxer still takes input
     ///
     /// # Errors
     ///
@@ -77,7 +77,7 @@ impl<G: SampleGathering> DemuxInput<G> {
         }
     }
 
-    /// Returns `Ok` unless the demux FSM has failed, whether or not the file was declared over
+    /// Returns `Ok` unless the demuxer has failed, whether or not the file was declared over
     ///
     /// # Errors
     ///
@@ -174,7 +174,7 @@ impl<G: SampleGathering> DemuxInput<G> {
         Ok(())
     }
 
-    /// Declares the file over once the demux FSM `checked` what it read, and checks the samples
+    /// Declares the file over once the demuxer `checked` what it read, and checks the samples
     ///
     /// # Errors
     ///
@@ -209,14 +209,14 @@ impl<G: SampleGathering> DemuxInput<G> {
         self.state = State::Reading;
     }
 
-    /// Returns the one read wanted next, or `None` once the file is declared over or the demux FSM has failed
+    /// Returns the one read wanted next, or `None` once the file is declared over or the demuxer has failed
     #[must_use]
     pub(crate) fn wanted_input(&self) -> Option<WantedInput> {
         matches!(self.state, State::Reading)
             .then(|| self.position.wanted_input(self.samples.wanted_extent()))
     }
 
-    /// Returns the gathering, for the demux FSM to hand the extents it resolved and the media data it read
+    /// Returns the gathering, for the demuxer to hand the extents it resolved and the media data it read
     pub(crate) const fn samples_mut(&mut self) -> &mut G {
         &mut self.samples
     }
@@ -273,7 +273,7 @@ mod tests {
         )
     }
 
-    /// Reads every event the framing made as a demux FSM would, offering each payload to the samples
+    /// Reads every event the framing made as a demuxer would, offering each payload to the samples
     fn read_framed(input: &mut DemuxInput<SampleReader>) -> Result<(), DemuxError> {
         while let Some((start, event)) = input.poll_event() {
             if let BoxEvent::Payload(payload) = event {

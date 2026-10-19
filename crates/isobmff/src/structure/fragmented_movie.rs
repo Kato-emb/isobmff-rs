@@ -1,8 +1,8 @@
-//! [`FragmentedMuxFsm`], a fragmented movie file written through the layers [`structure`](crate::structure) holds, ISO/IEC 14496-12 Annex A.8
+//! [`FragmentedMuxer`], a fragmented movie file written through the layers [`structure`](crate::structure) holds, ISO/IEC 14496-12 Annex A.8
 
 mod mux;
 mod structure;
 
-pub use mux::FragmentedMuxFsm;
+pub use mux::FragmentedMuxer;
 
 pub(crate) use structure::{FragmentedDisposition, FragmentedStructure};

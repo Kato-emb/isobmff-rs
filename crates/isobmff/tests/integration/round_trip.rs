@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests {
     use isobmff::sample::{Sample, SampleProperties};
-    use isobmff::structure::{FragmentedMuxFsm, MovieDemuxFsm};
+    use isobmff::{FragmentedMuxer, MovieDemuxer};
     use isobmff_boxes::{
         FileTypeBox, HeaderDuration, MovieBox, MovieExtendsBox, MovieHeaderBox, SampleFlags,
         TrackBox, TrackExtendsBox,
@@ -89,26 +89,26 @@ mod tests {
         movie: MovieBox,
         fragments: Vec<Vec<Sample>>,
     ) -> Vec<u8> {
-        let mut mux_fsm = FragmentedMuxFsm::new();
+        let mut muxer = FragmentedMuxer::new();
         let mut file = Vec::new();
 
         if let Some(brands) = brands {
-            mux_fsm.handle_file_type(brands).unwrap();
+            muxer.handle_file_type(brands).unwrap();
         }
-        mux_fsm.handle_movie(movie).unwrap();
+        muxer.handle_movie(movie).unwrap();
 
         for (position, samples) in fragments.into_iter().enumerate() {
             let sequence_number = u32::try_from(position).unwrap().saturating_add(1);
 
-            mux_fsm.begin_fragment(sequence_number).unwrap();
+            muxer.begin_fragment(sequence_number).unwrap();
             for sample in samples {
-                mux_fsm.handle_sample(sample).unwrap();
+                muxer.handle_sample(sample).unwrap();
             }
-            mux_fsm.finish_fragment().unwrap();
+            muxer.finish_fragment().unwrap();
         }
-        mux_fsm.finish().unwrap();
+        muxer.finish().unwrap();
 
-        while let Some(written) = mux_fsm.poll_output() {
+        while let Some(written) = muxer.poll_output() {
             file.extend_from_slice(&written);
         }
 
@@ -159,11 +159,11 @@ mod tests {
     fn a_file_handed_no_brands_is_read_back_declaring_the_brand_its_layout_requires() {
         let file = written_file(None, movie(), two_track_fragments());
 
-        let mut demux_fsm = MovieDemuxFsm::new();
-        demux_fsm.handle_input(0, &file).unwrap();
+        let mut demuxer = MovieDemuxer::new();
+        demuxer.handle_input(0, &file).unwrap();
 
         assert_eq!(
-            demux_fsm.file_type(),
+            demuxer.file_type(),
             Some(&FileTypeBox::new(
                 FourCc::new(*b"iso6"),
                 0,

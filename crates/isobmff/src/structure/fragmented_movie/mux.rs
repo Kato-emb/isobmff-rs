@@ -1,4 +1,4 @@
-//! [`FragmentedMuxFsm`], a fragmented movie file laid down as the samples come
+//! [`FragmentedMuxer`], a fragmented movie file laid down as the samples come
 
 use alloc::vec::Vec;
 
@@ -13,7 +13,7 @@ use crate::structure::{MuxError, whole_box_header, whole_payload};
 
 /// Lays a fragmented movie file down, taking the samples as they come
 ///
-/// The mirror of [`MovieDemuxFsm`](crate::structure::MovieDemuxFsm):
+/// The mirror of [`MovieDemuxer`](crate::structure::MovieDemuxer):
 /// it wires the layers that write a fragmented movie file of ISO/IEC 14496-12
 /// Annex A.8 — the structure that holds the order of the top-level boxes, the
 /// writing of each box whole, the laying out of the samples of a fragment as
@@ -41,7 +41,7 @@ use crate::structure::{MuxError, whole_box_header, whole_payload};
 ///   brand under which the `default-base-is-moof` every `tfhd` states shall
 ///   not be used ([`FileTypeBox::forbids_default_base_is_moof`]):
 ///   that is [`UnsupportedBrand`](crate::structure::MuxError::UnsupportedBrand), and
-///   nothing of it is laid down. Where none was handed over, the mux FSM
+///   nothing of it is laid down. Where none was handed over, the muxer
 ///   lays its own down before the `moov`: `iso6` as its
 ///   `major_brand` and its one `compatible_brands` entry, with
 ///   `minor_version` 0, the brand the widest layout it lays down requires
@@ -56,8 +56,8 @@ use crate::structure::{MuxError, whole_box_header, whole_payload};
 /// * The bytes are taken from [`poll_output`](Self::poll_output), one
 ///   [`OutputBytes`] a call, owned by whoever takes them. The caller drains
 ///   before handing over more: bytes are held until they are taken, so
-///   writing on without polling has the mux FSM hold the whole file.
-/// * An `Err` leaves the mux FSM failed for good,
+///   writing on without polling has the muxer hold the whole file.
+/// * An `Err` leaves the muxer failed for good,
 ///   [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The bytes made before
 ///   it are still there to take.
@@ -71,15 +71,15 @@ use crate::structure::{MuxError, whole_box_header, whole_payload};
 /// ```
 /// use isobmff::boxes::{SampleFlags, TrackExtendsBox};
 /// use isobmff::sample::{Sample, SampleProperties};
-/// use isobmff::structure::FragmentedMuxFsm;
+/// use isobmff::FragmentedMuxer;
 /// # use isobmff_test_support::fragmented_movie;
 /// // A file handed no brands, only the movie its fragments continue
-/// let mut mux_fsm = FragmentedMuxFsm::new();
-/// mux_fsm.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO)))?;
+/// let mut muxer = FragmentedMuxer::new();
+/// muxer.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO)))?;
 ///
 /// // One fragment of two samples of track 1, lasting 1024 units each
-/// mux_fsm.begin_fragment(1)?;
-/// mux_fsm.handle_sample(Sample::new(
+/// muxer.begin_fragment(1)?;
+/// muxer.handle_sample(Sample::new(
 ///     SampleProperties {
 ///         track_id: 1,
 ///         decode_time: 0,
@@ -90,7 +90,7 @@ use crate::structure::{MuxError, whole_box_header, whole_payload};
 ///     },
 ///     b"SAMP".to_vec(),
 /// ))?;
-/// mux_fsm.handle_sample(Sample::new(
+/// muxer.handle_sample(Sample::new(
 ///     SampleProperties {
 ///         track_id: 1,
 ///         decode_time: 1_024,
@@ -101,29 +101,29 @@ use crate::structure::{MuxError, whole_box_header, whole_payload};
 ///     },
 ///     b"DATA".to_vec(),
 /// ))?;
-/// mux_fsm.finish_fragment()?;
-/// mux_fsm.finish()?;
+/// muxer.finish_fragment()?;
+/// muxer.finish()?;
 ///
-/// // The bytes are drained as the mux FSM hands them over
+/// // The bytes are drained as the muxer hands them over
 /// let mut file = Vec::new();
-/// while let Some(written) = mux_fsm.poll_output() {
+/// while let Some(written) = muxer.poll_output() {
 ///     file.extend_from_slice(&written);
 /// }
 ///
-/// // The file opens with the brands the mux FSM declares, and the media data holds the samples end to end
+/// // The file opens with the brands the muxer declares, and the media data holds the samples end to end
 /// assert_eq!(&file[4..8], b"ftyp");
 /// assert!(file.ends_with(b"SAMPDATA"));
-/// # Ok::<(), isobmff::structure::MuxError>(())
+/// # Ok::<(), isobmff::MuxError>(())
 /// ```
 #[derive(Debug)]
-pub struct FragmentedMuxFsm {
+pub struct FragmentedMuxer {
     output: MuxOutput,
     structure: FragmentedStructure,
     samples: Option<MovieFragmentWriter>,
 }
 
-impl FragmentedMuxFsm {
-    /// Creates a mux FSM waiting at the start of a fragmented movie file
+impl FragmentedMuxer {
+    /// Creates a muxer waiting at the start of a fragmented movie file
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -138,14 +138,14 @@ impl FragmentedMuxFsm {
     /// # Errors
     ///
     /// * [`UnsupportedBrand`](crate::structure::MuxError::UnsupportedBrand): a
-    ///   brand listed forbids the `default-base-is-moof` the mux FSM writes;
+    ///   brand listed forbids the `default-base-is-moof` the muxer writes;
     ///   nothing of the box is laid down.
     /// * [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder): a box
     ///   was handed over before them.
     /// * [`Box`](crate::structure::MuxError::Box): the box does not write.
     /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the mux FSM keeps and reports
+    /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
     pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), MuxError> {
         self.output.writing()?;
@@ -174,7 +174,7 @@ impl FragmentedMuxFsm {
     /// * [`Box`](crate::structure::MuxError::Box): the box does not write.
     /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the mux FSM keeps and reports
+    /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
     pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), MuxError> {
         self.output.writing()?;
@@ -206,7 +206,7 @@ impl FragmentedMuxFsm {
     ///   makes of the call.
     /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the mux FSM keeps and reports
+    /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
     pub fn begin_fragment(&mut self, sequence_number: u32) -> Result<(), MuxError> {
         self.output.writing()?;
@@ -232,7 +232,7 @@ impl FragmentedMuxFsm {
     ///   makes of the call.
     /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the mux FSM keeps and reports
+    /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
     pub fn begin_fragment_continuing(&mut self, sequence_number: u32) -> Result<(), MuxError> {
         self.output.writing()?;
@@ -255,7 +255,7 @@ impl FragmentedMuxFsm {
     ///   makes of the sample.
     /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the mux FSM keeps and reports
+    /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), MuxError> {
         self.output.writing()?;
@@ -281,7 +281,7 @@ impl FragmentedMuxFsm {
     ///   does not write.
     /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the mux FSM keeps and reports
+    /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
     pub fn finish_fragment(&mut self) -> Result<(), MuxError> {
         self.output.writing()?;
@@ -303,7 +303,7 @@ impl FragmentedMuxFsm {
     ///
     /// Reports `None` once they are used up: more samples are needed, or the
     /// file is over. Failure is reported by the calls that take the boxes and
-    /// the samples, so this one never fails — a failed mux FSM hands over the
+    /// the samples, so this one never fails — a failed muxer hands over the
     /// bytes it had already made, then nothing from there on.
     pub fn poll_output(&mut self) -> Option<OutputBytes> {
         self.output.poll_output()
@@ -320,7 +320,7 @@ impl FragmentedMuxFsm {
     ///   fragmented movie file.
     /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
     ///   file was already declared over.
-    /// * The failure of a previous call, which the mux FSM keeps and reports
+    /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), MuxError> {
         self.output.writing()?;
@@ -376,13 +376,13 @@ impl FragmentedMuxFsm {
     }
 }
 
-impl Default for FragmentedMuxFsm {
+impl Default for FragmentedMuxer {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// Brands the mux FSM declares where none were handed over, those the widest layout it lays down requires
+/// Brands the muxer declares where none were handed over, those the widest layout it lays down requires
 fn default_file_type() -> FileTypeBox {
     FileTypeBox::new(FourCc::new(*b"iso6"), 0, alloc::vec![FourCc::new(*b"iso6")])
 }
@@ -395,7 +395,7 @@ mod tests {
     use isobmff_core::{BoxDecode, BoxDefinition, FourCc};
     use isobmff_test_support::{file_type, fragmented_movie, unfragmented_movie};
 
-    use super::{FragmentedMuxFsm, MuxError, default_file_type};
+    use super::{FragmentedMuxer, MuxError, default_file_type};
     use crate::sample::{Sample, SampleProperties};
 
     /// Movie of one track continued in fragments, whose defaults a `trex` states
@@ -418,10 +418,10 @@ mod tests {
         )
     }
 
-    /// The bytes the mux FSM has laid down, drained to the end
-    fn drained(mux_fsm: &mut FragmentedMuxFsm) -> Vec<u8> {
+    /// The bytes the muxer has laid down, drained to the end
+    fn drained(muxer: &mut FragmentedMuxer) -> Vec<u8> {
         let mut file = Vec::new();
-        while let Some(written) = mux_fsm.poll_output() {
+        while let Some(written) = muxer.poll_output() {
             file.extend_from_slice(&written);
         }
 
@@ -429,12 +429,12 @@ mod tests {
     }
 
     #[test]
-    fn a_file_handed_no_brands_opens_with_the_brands_the_mux_fsm_declares() {
-        let mut mux_fsm = FragmentedMuxFsm::new();
+    fn a_file_handed_no_brands_opens_with_the_brands_the_muxer_declares() {
+        let mut muxer = FragmentedMuxer::new();
 
-        mux_fsm.handle_movie(movie()).unwrap();
-        mux_fsm.finish().unwrap();
-        let file = drained(&mut mux_fsm);
+        muxer.handle_movie(movie()).unwrap();
+        muxer.finish().unwrap();
+        let file = drained(&mut muxer);
 
         assert_eq!(
             FileTypeBox::decode(&file).map(|(file_type, rest)| (file_type, rest.get(4..8))),
@@ -444,12 +444,12 @@ mod tests {
 
     #[test]
     fn the_brands_handed_over_are_laid_down_as_they_stand() {
-        let mut mux_fsm = FragmentedMuxFsm::new();
+        let mut muxer = FragmentedMuxer::new();
 
-        mux_fsm.handle_file_type(file_type()).unwrap();
-        mux_fsm.handle_movie(movie()).unwrap();
-        mux_fsm.finish().unwrap();
-        let file = drained(&mut mux_fsm);
+        muxer.handle_file_type(file_type()).unwrap();
+        muxer.handle_movie(movie()).unwrap();
+        muxer.finish().unwrap();
+        let file = drained(&mut muxer);
 
         assert_eq!(
             FileTypeBox::decode(&file).map(|(file_type, rest)| (file_type, rest.get(4..8))),
@@ -459,23 +459,23 @@ mod tests {
 
     #[test]
     fn brands_forbidding_default_base_is_moof_are_rejected_before_anything_is_laid_down() {
-        let mut mux_fsm = FragmentedMuxFsm::new();
+        let mut muxer = FragmentedMuxer::new();
 
         assert_eq!(
-            mux_fsm.handle_file_type(FileTypeBox::new(
+            muxer.handle_file_type(FileTypeBox::new(
                 FourCc::new(*b"iso6"),
                 0,
                 alloc::vec![FourCc::new(*b"iso6"), FourCc::new(*b"isom")],
             )),
             Err(MuxError::UnsupportedBrand)
         );
-        assert_eq!(mux_fsm.poll_output(), None);
+        assert_eq!(muxer.poll_output(), None);
     }
 
     #[test]
     fn a_fragment_opened_or_a_sample_handed_over_before_the_movie_is_rejected() {
-        let mut opened = FragmentedMuxFsm::new();
-        let mut handed_a_sample = FragmentedMuxFsm::new();
+        let mut opened = FragmentedMuxer::new();
+        let mut handed_a_sample = FragmentedMuxer::new();
 
         opened.handle_file_type(file_type()).unwrap();
 
@@ -495,25 +495,25 @@ mod tests {
 
     #[test]
     fn a_movie_continued_in_no_fragments_is_rejected_before_anything_is_laid_down() {
-        let mut mux_fsm = FragmentedMuxFsm::new();
+        let mut muxer = FragmentedMuxer::new();
 
         assert!(matches!(
-            mux_fsm.handle_movie(unfragmented_movie()),
+            muxer.handle_movie(unfragmented_movie()),
             Err(MuxError::Sample {
                 error: crate::sample::Error::MissingMovieExtends
             })
         ));
-        assert_eq!(mux_fsm.poll_output(), None);
+        assert_eq!(muxer.poll_output(), None);
     }
 
     #[test]
     fn a_sample_the_movie_does_not_resolve_is_rejected_where_it_is_handed_over() {
         let refused = |sample: Sample| {
-            let mut mux_fsm = FragmentedMuxFsm::new();
-            mux_fsm.handle_movie(movie()).unwrap();
-            mux_fsm.begin_fragment(1).unwrap();
+            let mut muxer = FragmentedMuxer::new();
+            muxer.handle_movie(movie()).unwrap();
+            muxer.begin_fragment(1).unwrap();
 
-            mux_fsm.handle_sample(sample)
+            muxer.handle_sample(sample)
         };
 
         assert!(matches!(
@@ -556,12 +556,12 @@ mod tests {
 
     #[test]
     fn a_sample_handed_over_while_no_fragment_is_open_is_rejected() {
-        let mut mux_fsm = FragmentedMuxFsm::new();
+        let mut muxer = FragmentedMuxer::new();
 
-        mux_fsm.handle_movie(movie()).unwrap();
+        muxer.handle_movie(movie()).unwrap();
 
         assert!(matches!(
-            mux_fsm.handle_sample(sample()),
+            muxer.handle_sample(sample()),
             Err(MuxError::Sample {
                 error: crate::sample::Error::NoFragmentOpen
             })
@@ -570,12 +570,12 @@ mod tests {
 
     #[test]
     fn a_file_declared_over_without_a_movie_is_rejected() {
-        let mut mux_fsm = FragmentedMuxFsm::new();
+        let mut muxer = FragmentedMuxer::new();
 
-        mux_fsm.handle_file_type(file_type()).unwrap();
+        muxer.handle_file_type(file_type()).unwrap();
 
         assert_eq!(
-            mux_fsm.finish(),
+            muxer.finish(),
             Err(MuxError::MissingMandatoryBox {
                 box_type: MovieBox::BOX_TYPE
             })
@@ -584,16 +584,16 @@ mod tests {
 
     #[test]
     fn anything_handed_over_after_finishing_is_rejected() {
-        let mut mux_fsm = FragmentedMuxFsm::new();
+        let mut muxer = FragmentedMuxer::new();
 
-        mux_fsm.handle_file_type(file_type()).unwrap();
-        mux_fsm.handle_movie(movie()).unwrap();
-        mux_fsm.finish().unwrap();
+        muxer.handle_file_type(file_type()).unwrap();
+        muxer.handle_movie(movie()).unwrap();
+        muxer.finish().unwrap();
 
         assert_eq!(
-            mux_fsm.handle_sample(sample()),
+            muxer.handle_sample(sample()),
             Err(MuxError::AlreadyFinished)
         );
-        assert_eq!(mux_fsm.finish(), Err(MuxError::AlreadyFinished));
+        assert_eq!(muxer.finish(), Err(MuxError::AlreadyFinished));
     }
 }

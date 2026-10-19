@@ -1,4 +1,4 @@
-//! [`MovieDemuxFsm`], a movie file read as it arrives, fragmented or not
+//! [`MovieDemuxer`], a movie file read as it arrives, fragmented or not
 
 use alloc::vec::Vec;
 
@@ -23,7 +23,7 @@ use crate::structure::{
 /// continue, which may declare samples of its own (§8.8), then one movie
 /// fragment after another. Either way the media data the movie and its
 /// fragments address lies anywhere among them, before the movie as well as
-/// after it. This demux FSM wires the layers that
+/// after it. This demuxer wires the layers that
 /// read one: the framing of the file into boxes, the structure that says what
 /// each top-level box is, the reading of the boxes it names into values, the
 /// resolution of the sample tables of the movie, and of each fragment against
@@ -47,7 +47,7 @@ use crate::structure::{
 ///   and what it completed is taken from
 ///   [`poll_output`](Self::poll_output). The caller drains before handing
 ///   over more: output is held until it is taken. Where the file lies in
-///   its resource is the caller's: every offset the demux FSM reports is a file
+///   its resource is the caller's: every offset the demuxer reports is a file
 ///   offset, counting from the first byte of the file as the boxes count
 ///   theirs (§8.7.5, §8.8.7).
 /// * The boxes the structure reads into values are there to read once they
@@ -78,7 +78,7 @@ use crate::structure::{
 ///   `mfro` is gathered, is
 ///   [`MissingMandatoryBox`](crate::structure::DemuxError::MissingMandatoryBox).
 ///   A file carrying no `ftyp` reads all the same, as §4.3 allows.
-/// * What the demux FSM holds of what the file declares is bounded — a box
+/// * What the demuxer holds of what the file declares is bounded — a box
 ///   read into a value, the samples a `moov` or a `moof` declares — by the
 ///   [`DemuxLimits`] it was created with; what the gathering holds is bounded
 ///   by what it was created with, [`DemuxLimits::sample_reader`] where
@@ -104,7 +104,7 @@ use crate::structure::{
 /// * Where a fragment states no decode time for a track, the track goes on
 ///   from where the samples before it left it, those the sample table of the
 ///   movie declares among them (§8.8.12).
-/// * An `Err` leaves the demux FSM failed for good,
+/// * An `Err` leaves the demuxer failed for good,
 ///   [`AlreadyFinished`](crate::structure::DemuxError::AlreadyFinished) and
 ///   [`UnwantedInput`](crate::structure::DemuxError::UnwantedInput) aside:
 ///   every later call reports that same failure again. The output completed
@@ -124,14 +124,14 @@ use crate::structure::{
 /// ```
 /// use isobmff::boxes::{SampleFlags, TrackExtendsBox};
 /// use isobmff::sample::{Sample, SampleProperties};
-/// use isobmff::structure::{FragmentedMuxFsm, MovieDemuxFsm};
+/// use isobmff::{FragmentedMuxer, MovieDemuxer};
 /// # use isobmff_test_support::{file_type, fragmented_movie};
 /// // A file of one fragment carrying two samples of track 1
-/// let mut mux_fsm = FragmentedMuxFsm::new();
-/// mux_fsm.handle_file_type(file_type())?;
-/// mux_fsm.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO)))?;
-/// mux_fsm.begin_fragment(1)?;
-/// mux_fsm.handle_sample(Sample::new(
+/// let mut muxer = FragmentedMuxer::new();
+/// muxer.handle_file_type(file_type())?;
+/// muxer.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO)))?;
+/// muxer.begin_fragment(1)?;
+/// muxer.handle_sample(Sample::new(
 ///     SampleProperties {
 ///         track_id: 1,
 ///         decode_time: 0,
@@ -142,7 +142,7 @@ use crate::structure::{
 ///     },
 ///     b"SAMP".to_vec(),
 /// ))?;
-/// mux_fsm.handle_sample(Sample::new(
+/// muxer.handle_sample(Sample::new(
 ///     SampleProperties {
 ///         track_id: 1,
 ///         decode_time: 1_024,
@@ -153,36 +153,36 @@ use crate::structure::{
 ///     },
 ///     b"DATA".to_vec(),
 /// ))?;
-/// mux_fsm.finish_fragment()?;
-/// mux_fsm.finish()?;
+/// muxer.finish_fragment()?;
+/// muxer.finish()?;
 ///
-/// // The file the mux FSM laid down is drained as it hands the bytes over
+/// // The file the muxer laid down is drained as it hands the bytes over
 /// let mut file = Vec::new();
-/// while let Some(written) = mux_fsm.poll_output() {
+/// while let Some(written) = muxer.poll_output() {
 ///     file.extend_from_slice(&written);
 /// }
 ///
 /// // The file is handed over as it arrives, in whatever lengths it comes, each cut at its offset
-/// let mut demux_fsm = MovieDemuxFsm::new();
+/// let mut demuxer = MovieDemuxer::new();
 /// for (offset, arriving) in (0..).step_by(7).zip(file.chunks(7)) {
-///     demux_fsm.handle_input(offset, arriving)?;
+///     demuxer.handle_input(offset, arriving)?;
 /// }
-/// demux_fsm.finish()?;
+/// demuxer.finish()?;
 ///
 /// // The brands and the movie the file declared are there to read
-/// assert_eq!(demux_fsm.file_type().map(|ftyp| ftyp.major_brand()), Some(file_type().major_brand()));
-/// assert_eq!(demux_fsm.movie().map(|moov| moov.trak().len()), Some(1));
+/// assert_eq!(demuxer.file_type().map(|ftyp| ftyp.major_brand()), Some(file_type().major_brand()));
+/// assert_eq!(demuxer.movie().map(|moov| moov.trak().len()), Some(1));
 ///
 /// // The samples come back as they were laid out
-/// let first = demux_fsm.poll_output().unwrap();
+/// let first = demuxer.poll_output().unwrap();
 /// assert_eq!((first.data(), first.properties().decode_time), (b"SAMP".as_slice(), 0));
-/// let second = demux_fsm.poll_output().unwrap();
+/// let second = demuxer.poll_output().unwrap();
 /// assert_eq!((second.data(), second.properties().decode_time), (b"DATA".as_slice(), 1_024));
-/// assert_eq!(demux_fsm.poll_output(), None);
+/// assert_eq!(demuxer.poll_output(), None);
 /// # Ok::<(), Box<dyn core::error::Error>>(())
 /// ```
 #[derive(Debug)]
-pub struct MovieDemuxFsm<G = SampleReader> {
+pub struct MovieDemuxer<G = SampleReader> {
     input: DemuxInput<G>,
     structure: FragmentedStructure,
     decode_times: TrackDecodeTimes,
@@ -195,7 +195,7 @@ pub struct MovieDemuxFsm<G = SampleReader> {
     state: State,
 }
 
-/// Where the demux FSM stands between calls
+/// Where the demuxer stands between calls
 #[derive(Clone, Copy, Debug)]
 enum State {
     /// Taking the file as the input half does, gathering no `mfro`
@@ -228,14 +228,14 @@ enum Open {
     MediaData,
 }
 
-impl MovieDemuxFsm {
-    /// Creates a demux FSM waiting at the start of a movie file, gathering its samples, bounded by the limits [`DemuxLimits::new`] states
+impl MovieDemuxer {
+    /// Creates a demuxer waiting at the start of a movie file, gathering its samples, bounded by the limits [`DemuxLimits::new`] states
     #[must_use]
     pub const fn new() -> Self {
         Self::with_limits(DemuxLimits::new())
     }
 
-    /// Creates a demux FSM waiting at the start of a movie file, gathering its samples, bounded by `limits`
+    /// Creates a demuxer waiting at the start of a movie file, gathering its samples, bounded by `limits`
     ///
     /// The samples are gathered by a [`SampleReader`] bounded by
     /// [`DemuxLimits::sample_reader`].
@@ -245,8 +245,8 @@ impl MovieDemuxFsm {
     }
 }
 
-impl<G: SampleGathering> MovieDemuxFsm<G> {
-    /// Creates a demux FSM waiting at the start of a movie file, `gathering` taking the extents it resolves, bounded by `limits`
+impl<G: SampleGathering> MovieDemuxer<G> {
+    /// Creates a demuxer waiting at the start of a movie file, `gathering` taking the extents it resolves, bounded by `limits`
     ///
     /// Of `limits`, the payload a box read into a value may reach and the
     /// samples one `moov` or `moof` may declare apply; `gathering` is taken as
@@ -258,14 +258,14 @@ impl<G: SampleGathering> MovieDemuxFsm<G> {
     /// ```
     /// use isobmff::boxes::{SampleFlags, TrackExtendsBox};
     /// use isobmff::sample::{Sample, SampleProperties};
-    /// use isobmff::structure::{DemuxLimits, FragmentedMuxFsm, MovieDemuxFsm, SampleExtents};
+    /// use isobmff::{DemuxLimits, FragmentedMuxer, MovieDemuxer, SampleExtents};
     /// # use isobmff_test_support::{file_type, fragmented_movie};
     /// // A file of one fragment carrying one sample of track 1
-    /// let mut mux_fsm = FragmentedMuxFsm::new();
-    /// mux_fsm.handle_file_type(file_type())?;
-    /// mux_fsm.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO)))?;
-    /// mux_fsm.begin_fragment(1)?;
-    /// mux_fsm.handle_sample(Sample::new(
+    /// let mut muxer = FragmentedMuxer::new();
+    /// muxer.handle_file_type(file_type())?;
+    /// muxer.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO)))?;
+    /// muxer.begin_fragment(1)?;
+    /// muxer.handle_sample(Sample::new(
     ///     SampleProperties {
     ///         track_id: 1,
     ///         decode_time: 0,
@@ -276,27 +276,27 @@ impl<G: SampleGathering> MovieDemuxFsm<G> {
     ///     },
     ///     b"SAMP".to_vec(),
     /// ))?;
-    /// mux_fsm.finish_fragment()?;
-    /// mux_fsm.finish()?;
+    /// muxer.finish_fragment()?;
+    /// muxer.finish()?;
     ///
-    /// // The bytes the mux FSM wrote are the file
+    /// // The bytes the muxer wrote are the file
     /// let mut file = Vec::new();
-    /// while let Some(written) = mux_fsm.poll_output() {
+    /// while let Some(written) = muxer.poll_output() {
     ///     file.extend_from_slice(&written);
     /// }
     ///
     /// // The file is handed over in order; the extents come out, the media data passed over
-    /// let mut demux_fsm = MovieDemuxFsm::with_gathering(SampleExtents::new(), DemuxLimits::new());
+    /// let mut demuxer = MovieDemuxer::with_gathering(SampleExtents::new(), DemuxLimits::new());
     /// for (offset, arriving) in (0..).step_by(7).zip(file.chunks(7)) {
-    ///     demux_fsm.handle_input(offset, arriving)?;
+    ///     demuxer.handle_input(offset, arriving)?;
     /// }
-    /// demux_fsm.finish()?;
+    /// demuxer.finish()?;
     ///
     /// // The extent names the bytes of the sample in the file
-    /// let extent = demux_fsm.poll_output().unwrap();
+    /// let extent = demuxer.poll_output().unwrap();
     /// let range = usize::try_from(extent.extent().start).unwrap()..usize::try_from(extent.extent().end).unwrap();
     /// assert_eq!(&file[range], b"SAMP");
-    /// assert_eq!(demux_fsm.poll_output(), None);
+    /// assert_eq!(demuxer.poll_output(), None);
     /// # Ok::<(), Box<dyn core::error::Error>>(())
     /// ```
     #[must_use]
@@ -337,7 +337,7 @@ impl<G: SampleGathering> MovieDemuxFsm<G> {
     ///   [`DuplicateBox`](crate::structure::DemuxError::DuplicateBox): what the
     ///   structure makes of a top-level box arriving where it does.
     /// * [`PayloadLimitExceeded`](crate::structure::DemuxError::PayloadLimitExceeded):
-    ///   a box read into a value reaches past the limit the demux FSM gathers.
+    ///   a box read into a value reaches past the limit the demuxer gathers.
     /// * [`Sequence`](crate::structure::DemuxError::Sequence): what the framing
     ///   of the file makes of the input.
     /// * [`Box`](crate::structure::DemuxError::Box): a box read into a value
@@ -349,9 +349,9 @@ impl<G: SampleGathering> MovieDemuxFsm<G> {
     ///   [`resume_at_movie_fragment_random_access`](Self::resume_at_movie_fragment_random_access).
     /// * [`UnwantedInput`](crate::structure::DemuxError::UnwantedInput): `offset` is
     ///   not where [`wanted_input`](Self::wanted_input) names, nor, while the
-    ///   input is taken in order, where it stands. The demux FSM is not failed
+    ///   input is taken in order, where it stands. The demuxer is not failed
     ///   by it.
-    /// * The failure of a previous call, which the demux FSM keeps and reports
+    /// * The failure of a previous call, which the demuxer keeps and reports
     ///   again for every call after it.
     pub fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), DemuxError> {
         let State::LocatingMovieFragmentRandomAccess {
@@ -404,13 +404,13 @@ impl<G: SampleGathering> MovieDemuxFsm<G> {
     ///
     /// Reports `None` once they are used up: more of the file is needed. Failure
     /// is reported by the calls that take it, so this one never fails — a failed
-    /// demux FSM hands over the output it had already completed, then `None`
+    /// demuxer hands over the output it had already completed, then `None`
     /// from there on.
     pub fn poll_output(&mut self) -> Option<G::Output> {
         self.input.poll_output()
     }
 
-    /// Returns the one read wanted next, or `None` once the file is declared over or the demux FSM has failed
+    /// Returns the one read wanted next, or `None` once the file is declared over or the demuxer has failed
     ///
     /// Gathering with [`SampleReader`], bytes the extent at the front of
     /// those held still lacks are wanted first, with their length, once the
@@ -478,12 +478,12 @@ impl<G: SampleGathering> MovieDemuxFsm<G> {
     /// Restarts the reading at `offset`, the file offset the input handed over next starts at
     ///
     /// The next box is to be one an index points at: a `moof`, a `sidx` or an
-    /// `mfra`. The demux FSM resumes from reading and from the file declared
+    /// `mfra`. The demuxer resumes from reading and from the file declared
     /// over alike, and takes the file again from there.
     ///
     /// # Errors
     ///
-    /// * The failure of a previous call, which the demux FSM keeps and reports
+    /// * The failure of a previous call, which the demuxer keeps and reports
     ///   again for every call after it.
     pub fn resume_at(&mut self, offset: u64) -> Result<(), DemuxError> {
         self.input.resumable()?;
@@ -508,13 +508,13 @@ impl<G: SampleGathering> MovieDemuxFsm<G> {
     /// input at any offset but the one [`wanted_input`](Self::wanted_input)
     /// names is [`UnwantedInput`](crate::structure::DemuxError::UnwantedInput), and
     /// [`finish`](Self::finish) declares the file over with no failure. The
-    /// demux FSM is told this from reading and from the file declared over
+    /// demuxer is told this from reading and from the file declared over
     /// alike; what [`resume_at`](Self::resume_at) drops is dropped only once
     /// the `mfra` is located.
     ///
     /// # Errors
     ///
-    /// * The failure of a previous call, which the demux FSM keeps and reports
+    /// * The failure of a previous call, which the demuxer keeps and reports
     ///   again for every call after it.
     pub fn resume_at_movie_fragment_random_access(
         &mut self,
@@ -555,7 +555,7 @@ impl<G: SampleGathering> MovieDemuxFsm<G> {
     ///   the movie or a fragment declared is short of the data it claimed.
     /// * [`AlreadyFinished`](crate::structure::DemuxError::AlreadyFinished): the
     ///   file was already declared over.
-    /// * The failure of a previous call, which the demux FSM keeps and reports
+    /// * The failure of a previous call, which the demuxer keeps and reports
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), DemuxError> {
         if let State::LocatingMovieFragmentRandomAccess { .. } = self.state {
@@ -572,7 +572,7 @@ impl<G: SampleGathering> MovieDemuxFsm<G> {
         self.input.finish(checked)
     }
 
-    /// Restarts the reading at `offset`, whatever the demux FSM stood at
+    /// Restarts the reading at `offset`, whatever the demuxer stood at
     fn restart(&mut self, offset: u64) {
         self.input.restart(offset);
         self.structure.resume();
@@ -689,7 +689,7 @@ const fn closing_offset(file_len: u64, filled: usize) -> u64 {
     file_len.saturating_sub(left as u64)
 }
 
-impl Default for MovieDemuxFsm {
+impl Default for MovieDemuxer {
     fn default() -> Self {
         Self::new()
     }

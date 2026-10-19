@@ -1,4 +1,4 @@
-//! [`MuxOutput`], the output half every mux FSM shares: the framing of the file, and whether the mux FSM still writes
+//! [`MuxOutput`], the output half every muxer shares: the framing of the file, and whether the muxer still writes
 
 use alloc::vec::Vec;
 
@@ -7,9 +7,9 @@ use isobmff_core::BoxHeader;
 use crate::sequence::{BoxEvent, BoxWriter, OutputBytes};
 use crate::structure::MuxError;
 
-/// Lays the boxes of a file down through its framing, and keeps whether the mux FSM above still writes
+/// Lays the boxes of a file down through its framing, and keeps whether the muxer above still writes
 ///
-/// A mux FSM asks [`writing`](Self::writing) before it acts on a call, and
+/// A muxer asks [`writing`](Self::writing) before it acts on a call, and
 /// hands the result of what it did to [`record`](Self::record).
 ///
 /// # Contract

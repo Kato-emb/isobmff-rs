@@ -1,9 +1,9 @@
 import {
   ChunkOffsets,
-  FragmentedMuxFsm,
+  FragmentedMuxer,
   MovieBox,
-  MovieDemuxFsm,
-  NonFragmentedMuxFsm,
+  MovieDemuxer,
+  NonFragmentedMuxer,
   SampleSizeBox,
   SampleSizes,
   SampleTableBox,
@@ -45,8 +45,8 @@ const CUT_LENGTH = 1024 * 1024;
  * @returns {Promise<void>}
  */
 export async function remuxToFragmented(blob, changes, write) {
-  const demux = new MovieDemuxFsm();
-  const mux = new FragmentedMuxFsm();
+  const demux = new MovieDemuxer();
+  const mux = new FragmentedMuxer();
   const queues = [];
   const fragment = [];
   const cutTracks = new Set();
@@ -172,9 +172,9 @@ export async function remuxToFragmented(blob, changes, write) {
     writeOutput(mux, write);
   } finally {
     free([...queues.flatMap((queue) => queue.samples.slice(queue.next)), ...fragment].map(({ sample }) => sample));
-    // Why not leave them to the FinalizationRegistry: the FSMs hold the movie
-    // and the samples read ahead, the collector does not see wasm memory, and
-    // wasm memory never shrinks.
+    // Why not leave them to the FinalizationRegistry: the demuxer and the
+    // muxer hold the movie and the samples read ahead, the collector does not
+    // see wasm memory, and wasm memory never shrinks.
     demux.free();
     mux.free();
   }
@@ -205,8 +205,8 @@ export async function remuxToFragmented(blob, changes, write) {
  * @returns {Promise<void>}
  */
 export async function remuxToNonFragmented(blob, now, changes, write) {
-  const demux = new MovieDemuxFsm();
-  const mux = new NonFragmentedMuxFsm();
+  const demux = new MovieDemuxer();
+  const mux = new NonFragmentedMuxer();
   const held = [];
   const hold = (handle) => (held.push(handle), handle);
   let traks = [];
@@ -316,7 +316,7 @@ async function handWanted(demux, wanted, blob) {
       demux.handleInput(wanted.offset, cut);
     }
   } catch (error) {
-    // Why not throw: the samples the demux FSM completed before the refusal
+    // Why not throw: the samples the demuxer completed before the refusal
     // are taken first, and the caller throws it once they are.
     return error;
   }

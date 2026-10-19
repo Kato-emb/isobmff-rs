@@ -13,8 +13,7 @@ use std::fs::File;
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 
 use isobmff::avc::Avc1SampleEntry;
-use isobmff::structure::MovieDemuxFsm;
-use isobmff::{BoxDecode, BoxDefinition};
+use isobmff::{BoxDecode, BoxDefinition, MovieDemuxer};
 
 const START_CODE: [u8; 4] = [0, 0, 0, 1];
 
@@ -26,22 +25,20 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut file = File::open(input)?;
     let mut buffer = vec![0; 1024 * 1024];
-    let mut demux_fsm = MovieDemuxFsm::new();
+    let mut demuxer = MovieDemuxer::new();
     let mut handed = Ok(());
-    while demux_fsm.movie().is_none() {
+    while demuxer.movie().is_none() {
         handed?;
-        let wanted = demux_fsm
-            .wanted_input()
-            .ok_or("the file carries no movie")?;
+        let wanted = demuxer.wanted_input().ok_or("the file carries no movie")?;
         file.seek(SeekFrom::Start(wanted.offset()))?;
         let read = file.read(&mut buffer)?;
         handed = if read == 0 {
-            demux_fsm.finish()
+            demuxer.finish()
         } else {
-            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
+            demuxer.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
         };
     }
-    let movie = demux_fsm.movie().ok_or("the file carries no movie")?;
+    let movie = demuxer.movie().ok_or("the file carries no movie")?;
     if movie.mvex().is_some() {
         return Err("the file is fragmented".into());
     }
@@ -71,7 +68,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let mut count: u64 = 0;
     loop {
-        while let Some(sample) = demux_fsm.poll_output() {
+        while let Some(sample) = demuxer.poll_output() {
             if sample.properties().track_id != track_id {
                 continue;
             }
@@ -85,15 +82,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             count = count.saturating_add(1);
         }
         handed?;
-        let Some(wanted) = demux_fsm.wanted_input() else {
+        let Some(wanted) = demuxer.wanted_input() else {
             break;
         };
         file.seek(SeekFrom::Start(wanted.offset()))?;
         let read = file.read(&mut buffer)?;
         handed = if read == 0 {
-            demux_fsm.finish()
+            demuxer.finish()
         } else {
-            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
+            demuxer.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
         };
     }
     stream.flush()?;

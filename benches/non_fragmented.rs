@@ -30,7 +30,7 @@ use isobmff::boxes::{FileTypeBox, MovieBox, SampleFlags};
 use isobmff::sample::sample_table::sample_extents;
 use isobmff::sample::{Sample, SampleProperties};
 use isobmff::sequence::OutputBytes;
-use isobmff::structure::{DemuxLimits, MovieDemuxFsm, NonFragmentedMuxFsm};
+use isobmff::{DemuxLimits, MovieDemuxer, NonFragmentedMuxer};
 use isobmff_test_support::{SAMPLE_DURATION, file_type, non_fragmented_file, unfragmented_movie};
 
 /// Track the samples of the benchmarked movies belong to
@@ -183,17 +183,17 @@ fn fetched<'file>(file: &'file [u8], wanted: &Range<u64>, fetch_len: usize) -> &
 }
 
 /// The bytes the reader wants whose length it states: those its samples lack that the file has passed
-fn lacking_extent(demux_fsm: &MovieDemuxFsm) -> Option<Range<u64>> {
-    let wanted = demux_fsm.wanted_input()?;
+fn lacking_extent(demuxer: &MovieDemuxer) -> Option<Range<u64>> {
+    let wanted = demuxer.wanted_input()?;
 
     Some(wanted.offset()..wanted.offset() + wanted.length()?)
 }
 
 /// Drains what the writer has ready into `outputs`, and reports how many bytes that was
-fn drained(mux_fsm: &mut NonFragmentedMuxFsm, outputs: &mut Vec<OutputBytes>) -> usize {
+fn drained(muxer: &mut NonFragmentedMuxer, outputs: &mut Vec<OutputBytes>) -> usize {
     let mut total = 0;
 
-    while let Some(written) = mux_fsm.poll_output() {
+    while let Some(written) = muxer.poll_output() {
         total += written.len();
         outputs.push(written);
     }
@@ -207,23 +207,23 @@ fn non_fragmented_writer_file(
     movie: MovieBox,
     chunks: Vec<Vec<Sample>>,
 ) -> (usize, Vec<OutputBytes>) {
-    let mut mux_fsm = NonFragmentedMuxFsm::new();
+    let mut muxer = NonFragmentedMuxer::new();
     let mut outputs = Vec::new();
     let mut total = 0;
 
-    mux_fsm.handle_file_type(file_type).unwrap();
-    mux_fsm.handle_movie(movie).unwrap();
+    muxer.handle_file_type(file_type).unwrap();
+    muxer.handle_movie(movie).unwrap();
 
     for samples in chunks {
-        mux_fsm.begin_chunk().unwrap();
+        muxer.begin_chunk().unwrap();
         for sample in samples {
-            mux_fsm.handle_sample(sample).unwrap();
+            muxer.handle_sample(sample).unwrap();
         }
-        mux_fsm.finish_chunk().unwrap();
-        total += drained(&mut mux_fsm, &mut outputs);
+        muxer.finish_chunk().unwrap();
+        total += drained(&mut muxer, &mut outputs);
     }
-    mux_fsm.finish().unwrap();
-    total += drained(&mut mux_fsm, &mut outputs);
+    muxer.finish().unwrap();
+    total += drained(&mut muxer, &mut outputs);
 
     (total, outputs)
 }
@@ -234,11 +234,11 @@ fn non_fragmented_writer_file(
 /// reader still wants is fetched: nothing where the movie lay first, and every
 /// sample where it lay last.
 fn non_fragmented_reader_samples(file: &[u8], fetch_len: usize) -> (usize, usize) {
-    let mut demux_fsm = MovieDemuxFsm::new();
+    let mut demuxer = MovieDemuxer::new();
     let mut count = 0;
     let mut total = 0;
-    let mut take = |demux_fsm: &mut MovieDemuxFsm| {
-        while let Some(sample) = demux_fsm.poll_output() {
+    let mut take = |demuxer: &mut MovieDemuxer| {
+        while let Some(sample) = demuxer.poll_output() {
             count += 1;
             total += sample.data().len();
             black_box(&sample);
@@ -249,39 +249,39 @@ fn non_fragmented_reader_samples(file: &[u8], fetch_len: usize) -> (usize, usize
         .step_by(ARRIVING_CHUNK_LEN)
         .zip(file.chunks(ARRIVING_CHUNK_LEN))
     {
-        demux_fsm.handle_input(offset, arriving).unwrap();
-        take(&mut demux_fsm);
+        demuxer.handle_input(offset, arriving).unwrap();
+        take(&mut demuxer);
     }
-    while let Some(wanted) = lacking_extent(&demux_fsm) {
-        demux_fsm
+    while let Some(wanted) = lacking_extent(&demuxer) {
+        demuxer
             .handle_input(wanted.start, fetched(file, &wanted, fetch_len))
             .unwrap();
-        take(&mut demux_fsm);
+        take(&mut demuxer);
     }
-    demux_fsm.finish().unwrap();
-    take(&mut demux_fsm);
+    demuxer.finish().unwrap();
+    take(&mut demuxer);
 
     (count, total)
 }
 
 /// The extents the reader wants once the file has been handed over, in the order it wants them
 fn wants_of(file: &[u8], fetch_len: usize) -> Vec<Range<u64>> {
-    let mut demux_fsm = MovieDemuxFsm::new();
+    let mut demuxer = MovieDemuxer::new();
     let mut wants = Vec::new();
-    let take = |demux_fsm: &mut MovieDemuxFsm| while demux_fsm.poll_output().is_some() {};
+    let take = |demuxer: &mut MovieDemuxer| while demuxer.poll_output().is_some() {};
 
     for (offset, arriving) in (0..)
         .step_by(ARRIVING_CHUNK_LEN)
         .zip(file.chunks(ARRIVING_CHUNK_LEN))
     {
-        demux_fsm.handle_input(offset, arriving).unwrap();
-        take(&mut demux_fsm);
+        demuxer.handle_input(offset, arriving).unwrap();
+        take(&mut demuxer);
     }
-    while let Some(wanted) = lacking_extent(&demux_fsm) {
-        demux_fsm
+    while let Some(wanted) = lacking_extent(&demuxer) {
+        demuxer
             .handle_input(wanted.start, fetched(file, &wanted, fetch_len))
             .unwrap();
-        take(&mut demux_fsm);
+        take(&mut demuxer);
         wants.push(wanted);
     }
 
@@ -290,11 +290,11 @@ fn wants_of(file: &[u8], fetch_len: usize) -> Vec<Range<u64>> {
 
 /// The movie `file` declares, read off it
 fn movie_of(file: &[u8]) -> MovieBox {
-    let mut demux_fsm = MovieDemuxFsm::new();
+    let mut demuxer = MovieDemuxer::new();
 
-    demux_fsm.handle_input(0, file).unwrap();
+    demuxer.handle_input(0, file).unwrap();
 
-    demux_fsm.movie().cloned().unwrap()
+    demuxer.movie().cloned().unwrap()
 }
 
 /// Resolves the samples the movie declares, and reports how many there were

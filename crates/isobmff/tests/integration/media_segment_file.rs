@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use isobmff::structure::{DemuxError, MediaSegmentDemuxFsm, WantedInput};
+    use isobmff::{DemuxError, MediaSegmentDemuxer, WantedInput};
     use isobmff_boxes::{
         ChunkOffsets, MediaDataBox, MovieBox, MovieFragmentBox, MovieFragmentHeaderBox,
         SampleSizeBox, SampleSizes, SampleToChunkBox, SegmentTypeBox, TimeToSampleBox,
@@ -46,14 +46,14 @@ mod tests {
     #[test]
     fn a_segment_read_in_order_yields_every_sample_and_an_index_pointing_at_its_fragments() {
         let segment = indexed_segment_file();
-        let mut demux_fsm = MediaSegmentDemuxFsm::new(presentation_movie()).unwrap();
+        let mut demuxer = MediaSegmentDemuxer::new(presentation_movie()).unwrap();
 
-        demux_fsm.handle_input(0, &segment.bytes).unwrap();
-        demux_fsm.finish().unwrap();
+        demuxer.handle_input(0, &segment.bytes).unwrap();
+        demuxer.finish().unwrap();
 
-        assert_eq!(drained(&mut demux_fsm), segment.fragment_samples.concat());
+        assert_eq!(drained(&mut demuxer), segment.fragment_samples.concat());
         assert_eq!(
-            demux_fsm
+            demuxer
                 .segment_indexes()
                 .iter()
                 .map(|segment_index| segment_index
@@ -70,13 +70,13 @@ mod tests {
     fn resuming_at_the_second_fragment_yields_its_samples_alone() {
         let segment = indexed_segment_file();
         let second = *segment.moof_offsets.get(1).unwrap();
-        let mut demux_fsm = MediaSegmentDemuxFsm::new(presentation_movie()).unwrap();
-        demux_fsm.handle_input(0, &segment.bytes).unwrap();
-        demux_fsm.finish().unwrap();
-        drained(&mut demux_fsm);
+        let mut demuxer = MediaSegmentDemuxer::new(presentation_movie()).unwrap();
+        demuxer.handle_input(0, &segment.bytes).unwrap();
+        demuxer.finish().unwrap();
+        drained(&mut demuxer);
 
-        demux_fsm.resume_at(second).unwrap();
-        demux_fsm
+        demuxer.resume_at(second).unwrap();
+        demuxer
             .handle_input(
                 second,
                 segment
@@ -85,10 +85,10 @@ mod tests {
                     .unwrap(),
             )
             .unwrap();
-        demux_fsm.finish().unwrap();
+        demuxer.finish().unwrap();
 
         assert_eq!(
-            &drained(&mut demux_fsm),
+            &drained(&mut demuxer),
             segment.fragment_samples.get(1).unwrap()
         );
     }
@@ -97,14 +97,14 @@ mod tests {
     fn the_continuation_is_wanted_after_the_bytes_handed_over_since_the_reading_last_started() {
         let segment = indexed_segment_file();
         let second = *segment.moof_offsets.get(1).unwrap();
-        let mut demux_fsm = MediaSegmentDemuxFsm::new(presentation_movie()).unwrap();
+        let mut demuxer = MediaSegmentDemuxer::new(presentation_movie()).unwrap();
 
-        let created = demux_fsm.wanted_input();
-        demux_fsm.handle_input(0, &segment.bytes).unwrap();
-        let handed = demux_fsm.wanted_input();
-        demux_fsm.resume_at(second).unwrap();
-        let resumed = demux_fsm.wanted_input();
-        demux_fsm
+        let created = demuxer.wanted_input();
+        demuxer.handle_input(0, &segment.bytes).unwrap();
+        let handed = demuxer.wanted_input();
+        demuxer.resume_at(second).unwrap();
+        let resumed = demuxer.wanted_input();
+        demuxer
             .handle_input(
                 second,
                 segment
@@ -116,7 +116,7 @@ mod tests {
 
         let segment_length = u64::try_from(segment.bytes.len()).unwrap();
         assert_eq!(
-            [created, handed, resumed, demux_fsm.wanted_input()],
+            [created, handed, resumed, demuxer.wanted_input()],
             [
                 Some(WantedInput::new(0, None)),
                 Some(WantedInput::new(segment_length, None)),
@@ -154,7 +154,7 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            MediaSegmentDemuxFsm::new(movie).map(drop),
+            MediaSegmentDemuxer::new(movie).map(drop),
             Err(DemuxError::Sample {
                 error: isobmff::sample::Error::DecodeTimeOverflow { track_id: 1, .. },
                 ..
@@ -191,11 +191,11 @@ mod tests {
     #[test]
     fn the_brands_of_the_segment_read_last_are_the_ones_there_to_read() {
         let first_segment = segment_file_with_samples();
-        let mut demux_fsm = MediaSegmentDemuxFsm::new(presentation_movie()).unwrap();
+        let mut demuxer = MediaSegmentDemuxer::new(presentation_movie()).unwrap();
 
-        demux_fsm.handle_input(0, &first_segment).unwrap();
-        let after_the_first = demux_fsm.segment_type().cloned();
-        demux_fsm
+        demuxer.handle_input(0, &first_segment).unwrap();
+        let after_the_first = demuxer.segment_type().cloned();
+        demuxer
             .handle_input(
                 u64::try_from(first_segment.len()).unwrap(),
                 &written(&later_segment_type()),
@@ -203,7 +203,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            (after_the_first, demux_fsm.segment_type().cloned()),
+            (after_the_first, demuxer.segment_type().cloned()),
             (Some(segment_type()), Some(later_segment_type()))
         );
     }

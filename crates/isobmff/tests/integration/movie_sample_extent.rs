@@ -1,9 +1,9 @@
-//! The extents a movie file declares, yielded by a demux FSM gathering none of its samples, against the samples one gathering them reads
+//! The extents a movie file declares, yielded by a demuxer gathering none of its samples, against the samples one gathering them reads
 
 #[cfg(test)]
 mod tests {
     use isobmff::sample::{Sample, SampleExtent};
-    use isobmff::structure::{DemuxError, DemuxLimits, MovieDemuxFsm, SampleExtents, WantedInput};
+    use isobmff::{DemuxError, DemuxLimits, MovieDemuxer, SampleExtents, WantedInput};
     use isobmff_boxes::MovieFragmentBox;
     use isobmff_core::BoxDefinition;
     use isobmff_test_support::non_fragmented_file;
@@ -16,14 +16,14 @@ mod tests {
 
     /// Hands `file` over in order in cuts of seven bytes, taking every extent as it is resolved
     fn extents_of(file: &[u8]) -> Result<Vec<SampleExtent>, DemuxError> {
-        let mut demux_fsm = MovieDemuxFsm::with_gathering(SampleExtents::new(), DemuxLimits::new());
+        let mut demuxer = MovieDemuxer::with_gathering(SampleExtents::new(), DemuxLimits::new());
         let mut extents = Vec::new();
         for (offset, arriving) in (0..).step_by(7).zip(file.chunks(7)) {
-            demux_fsm.handle_input(offset, arriving)?;
-            extents.extend(core::iter::from_fn(|| demux_fsm.poll_output()));
+            demuxer.handle_input(offset, arriving)?;
+            extents.extend(core::iter::from_fn(|| demuxer.poll_output()));
         }
-        demux_fsm.finish()?;
-        extents.extend(core::iter::from_fn(|| demux_fsm.poll_output()));
+        demuxer.finish()?;
+        extents.extend(core::iter::from_fn(|| demuxer.poll_output()));
 
         Ok(extents)
     }
@@ -42,7 +42,7 @@ mod tests {
     }
 
     #[test]
-    fn the_extents_of_a_movie_name_the_samples_a_demux_fsm_reads_wherever_its_media_data_lies() {
+    fn the_extents_of_a_movie_name_the_samples_a_demuxer_reads_wherever_its_media_data_lies() {
         for movie_first in [true, false] {
             let file = non_fragmented_file(&SAMPLE_CHUNKS, movie_first);
 
@@ -55,12 +55,12 @@ mod tests {
     #[test]
     fn a_movie_lying_after_its_media_data_wants_nothing_but_the_continuation() {
         let file = non_fragmented_file(&SAMPLE_CHUNKS, false);
-        let mut demux_fsm = MovieDemuxFsm::with_gathering(SampleExtents::new(), DemuxLimits::new());
+        let mut demuxer = MovieDemuxer::with_gathering(SampleExtents::new(), DemuxLimits::new());
 
-        demux_fsm.handle_input(0, &file).unwrap();
+        demuxer.handle_input(0, &file).unwrap();
 
         assert_eq!(
-            demux_fsm.wanted_input(),
+            demuxer.wanted_input(),
             Some(WantedInput::new(u64::try_from(file.len()).unwrap(), None))
         );
     }

@@ -1,17 +1,17 @@
-//! [`DemuxError`], the reason a file does not read through a demux FSM
+//! [`DemuxError`], the reason a file does not read through a demuxer
 
 use core::error;
 use core::fmt;
 
 use isobmff_core::{BoxType, Category};
 
-/// Reason a file does not read through a demux FSM
+/// Reason a file does not read through a demuxer
 ///
 /// What went wrong is one variant, which carries the values that describe it:
 /// a failure of the structure of the file — a box it requires that never
 /// came, one that came twice, one that came out of the order the structure
-/// keeps, a box reaching past the limit the demux FSM gathers for one — a
-/// call the demux FSM does not take — one after the file was declared over,
+/// keeps, a box reaching past the limit the demuxer gathers for one — a
+/// call the demuxer does not take — one after the file was declared over,
 /// or input at an offset it wants none at — or a failure of a layer beneath,
 /// which this type carries through whole rather than translating:
 /// [`Sequence`](Self::Sequence) for the framing of the file,
@@ -19,7 +19,7 @@ use isobmff_core::{BoxType, Category};
 /// [`Box`](Self::Box) for one box that did not read. What a caller does about
 /// any of them is one [`category`](Self::category).
 ///
-/// The situations a demux FSM reaches are added to as ISO/IEC 14496-12 is
+/// The situations a demuxer reaches are added to as ISO/IEC 14496-12 is
 /// read further, so a match on this must leave room for variants that are not
 /// here yet, and a match on a variant must leave room for fields that are not
 /// here yet.
@@ -28,11 +28,11 @@ use isobmff_core::{BoxType, Category};
 ///
 /// ```
 /// use isobmff::{BoxType, Category};
-/// use isobmff::structure::{DemuxError, MovieDemuxFsm};
+/// use isobmff::{DemuxError, MovieDemuxer};
 ///
 /// // A file declared over before its movie came is a failure of the structure
-/// let mut demux_fsm = MovieDemuxFsm::new();
-/// let failure = demux_fsm.finish().unwrap_err();
+/// let mut demuxer = MovieDemuxer::new();
+/// let failure = demuxer.finish().unwrap_err();
 /// assert!(matches!(
 ///     failure,
 ///     DemuxError::MissingMandatoryBox { box_type, .. } if box_type == BoxType::compact(*b"moov")
@@ -90,22 +90,22 @@ pub enum DemuxError {
         /// Type of the box that came out of order
         box_type: BoxType,
     },
-    /// Box read whole reaches past the limit the demux FSM gathers
+    /// Box read whole reaches past the limit the demuxer gathers
     #[non_exhaustive]
     PayloadLimitExceeded {
         /// Type of the box
         box_type: BoxType,
         /// Length of payload the box declares, or for a box declaring no total, the length it has reached
         reached_bytes: u64,
-        /// Length of payload the demux FSM gathers for one box at most
+        /// Length of payload the demuxer gathers for one box at most
         limit_bytes: u64,
     },
     /// File was declared over, and takes nothing more until the reading restarts
     #[non_exhaustive]
     AlreadyFinished,
-    /// Input was handed over at an offset the demux FSM takes no input at
+    /// Input was handed over at an offset the demuxer takes no input at
     ///
-    /// The demux FSM takes input where it names the read it wants and, while
+    /// The demuxer takes input where it names the read it wants and, while
     /// it takes the input in order, where that input stands, and refuses it
     /// anywhere else.
     #[non_exhaustive]
@@ -183,7 +183,7 @@ impl fmt::Display for DemuxError {
             }
             Self::UnwantedInput { input_offset } => write!(
                 formatter,
-                "input handed over at offset {input_offset} is not the read the demux FSM wants"
+                "input handed over at offset {input_offset} is not the read the demuxer wants"
             ),
         }
     }
@@ -272,7 +272,7 @@ mod tests {
         );
         assert_eq!(
             DemuxError::UnwantedInput { input_offset: 9 }.to_string(),
-            "input handed over at offset 9 is not the read the demux FSM wants"
+            "input handed over at offset 9 is not the read the demuxer wants"
         );
     }
 

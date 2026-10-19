@@ -14,7 +14,7 @@ extern "C" {
     pub type JsSampleProperties;
 }
 
-/// [`isobmff::sample::Sample`], whose bytes stay in wasm memory until a mux FSM's `handleSample` takes it
+/// [`isobmff::sample::Sample`], whose bytes stay in wasm memory until a muxer's `handleSample` takes it
 #[wasm_bindgen]
 #[derive(Debug)]
 pub struct Sample(pub(crate) sample::Sample);

@@ -1,11 +1,11 @@
-//! [`MediaSegmentDemuxFsm`] and [`MediaSegmentMuxFsm`], a media segment read and written through the layers [`structure`](crate::structure) holds, ISO/IEC 14496-12 §8.16
+//! [`MediaSegmentDemuxer`] and [`MediaSegmentMuxer`], a media segment read and written through the layers [`structure`](crate::structure) holds, ISO/IEC 14496-12 §8.16
 
 mod demux;
 mod mux;
 mod structure;
 
-pub use demux::MediaSegmentDemuxFsm;
-pub use mux::MediaSegmentMuxFsm;
+pub use demux::MediaSegmentDemuxer;
+pub use mux::MediaSegmentMuxer;
 
 use structure::{MediaSegmentDisposition, MediaSegmentStructure};
 
@@ -16,7 +16,7 @@ mod tests {
     use isobmff_boxes::{MovieBox, SampleFlags, TrackExtendsBox};
     use isobmff_test_support::fragmented_movie;
 
-    use super::MediaSegmentMuxFsm;
+    use super::MediaSegmentMuxer;
     use crate::sample::{Sample, SampleProperties};
 
     /// Movie of one track the segments continue, whose defaults a `trex` states
@@ -41,14 +41,14 @@ mod tests {
 
     /// A segment of one fragment carrying [`sample`], with no brands
     pub(super) fn segment_of_one_sample() -> Vec<u8> {
-        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
+        let mut muxer = MediaSegmentMuxer::new(&movie()).unwrap();
         let mut segment = Vec::new();
 
-        mux_fsm.begin_fragment(1).unwrap();
-        mux_fsm.handle_sample(sample()).unwrap();
-        mux_fsm.finish_fragment().unwrap();
-        mux_fsm.finish().unwrap();
-        while let Some(written) = mux_fsm.poll_output() {
+        muxer.begin_fragment(1).unwrap();
+        muxer.handle_sample(sample()).unwrap();
+        muxer.finish_fragment().unwrap();
+        muxer.finish().unwrap();
+        while let Some(written) = muxer.poll_output() {
             segment.extend_from_slice(&written);
         }
 

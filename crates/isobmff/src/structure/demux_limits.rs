@@ -1,10 +1,10 @@
-//! [`DemuxLimits`], the most a demux FSM holds
+//! [`DemuxLimits`], the most a demuxer holds
 
 use crate::sample::SampleReaderLimits;
 
-/// The most a demux FSM holds of what a file declares
+/// The most a demuxer holds of what a file declares
 ///
-/// Each limit bounds memory the demux FSM is about to take, and is checked
+/// Each limit bounds memory the demuxer is about to take, and is checked
 /// before it is taken:
 ///
 /// * [`payload`](Self::payload): the most payload one box read into a value
@@ -27,7 +27,7 @@ use crate::sample::SampleReaderLimits;
 ///
 /// ```
 /// use isobmff::sample::SampleReaderLimits;
-/// use isobmff::structure::{DemuxLimits, MovieDemuxFsm};
+/// use isobmff::{DemuxLimits, MovieDemuxer};
 ///
 /// // Limits for a `moov` of many tracks and large samples
 /// let limits = DemuxLimits::new()
@@ -35,8 +35,8 @@ use crate::sample::SampleReaderLimits;
 ///     .with_sample_reader(SampleReaderLimits::new().with_held_bytes(256 * 1024 * 1024));
 /// assert_eq!(limits.resolved_samples(), DemuxLimits::DEFAULT_RESOLVED_SAMPLES);
 ///
-/// // A demux FSM is held to them from its creation
-/// let demux_fsm = MovieDemuxFsm::with_limits(limits);
+/// // A demuxer is held to them from its creation
+/// let demuxer = MovieDemuxer::with_limits(limits);
 /// ```
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -53,7 +53,7 @@ impl DemuxLimits {
     /// Most samples one `moov` or one `moof` may declare, where the caller names no limit: 1,048,576
     pub const DEFAULT_RESOLVED_SAMPLES: u64 = 1024 * 1024;
 
-    /// Creates the limits a demux FSM holds where the caller names none
+    /// Creates the limits a demuxer holds where the caller names none
     ///
     /// The sample reader is held to [`SampleReaderLimits::new`].
     #[must_use]

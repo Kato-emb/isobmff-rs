@@ -22,7 +22,7 @@ use isobmff::boxes::{
     SampleTableBox, SampleToChunkBox, TimeToSampleBox,
 };
 use isobmff::sample::Sample;
-use isobmff::structure::{FragmentedMuxFsm, MovieDemuxFsm};
+use isobmff::{FragmentedMuxer, MovieDemuxer};
 
 /// The samples of one track read ahead of the others, waiting their turn in decode time
 struct TrackQueue {
@@ -39,22 +39,20 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut input_file = File::open(input)?;
     let mut buffer = vec![0; 1024 * 1024];
-    let mut demux_fsm = MovieDemuxFsm::new();
+    let mut demuxer = MovieDemuxer::new();
     let mut handed = Ok(());
-    while demux_fsm.movie().is_none() {
+    while demuxer.movie().is_none() {
         handed?;
-        let wanted = demux_fsm
-            .wanted_input()
-            .ok_or("the file carries no movie")?;
+        let wanted = demuxer.wanted_input().ok_or("the file carries no movie")?;
         input_file.seek(SeekFrom::Start(wanted.offset()))?;
         let read = input_file.read(&mut buffer)?;
         handed = if read == 0 {
-            demux_fsm.finish()
+            demuxer.finish()
         } else {
-            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
+            demuxer.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
         };
     }
-    let source_movie = demux_fsm.movie().ok_or("the file carries no movie")?;
+    let source_movie = demuxer.movie().ok_or("the file carries no movie")?;
 
     let mut movie = MovieBox::new_fragmented(
         source_movie.mvhd().timescale(),
@@ -89,26 +87,26 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let mut output_file = BufWriter::new(File::create(output)?);
-    let mut mux_fsm = FragmentedMuxFsm::new();
-    if let Some(file_type) = demux_fsm
+    let mut muxer = FragmentedMuxer::new();
+    if let Some(file_type) = demuxer
         .file_type()
         .filter(|file_type| !file_type.forbids_default_base_is_moof())
     {
-        mux_fsm.handle_file_type(file_type.clone())?;
+        muxer.handle_file_type(file_type.clone())?;
     }
-    mux_fsm.handle_movie(movie)?;
+    muxer.handle_movie(movie)?;
     let mut sequence_number: u32 = 0;
     let mut write_fragment = |fragment: &mut Vec<Sample>| -> Result<(), Box<dyn Error>> {
         sequence_number = sequence_number
             .checked_add(1)
             .ok_or("more fragments than a sequence number counts")?;
-        mux_fsm.begin_fragment(sequence_number)?;
+        muxer.begin_fragment(sequence_number)?;
         fragment.sort_by_key(|sample| sample.properties().track_id);
         for sample in fragment.drain(..) {
-            mux_fsm.handle_sample(sample)?;
+            muxer.handle_sample(sample)?;
         }
-        mux_fsm.finish_fragment()?;
-        while let Some(bytes) = mux_fsm.poll_output() {
+        muxer.finish_fragment()?;
+        while let Some(bytes) = muxer.poll_output() {
             output_file.write_all(&bytes)?;
         }
 
@@ -119,7 +117,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut carries_cut_track = false;
     loop {
         loop {
-            while let Some(sample) = demux_fsm.poll_output() {
+            while let Some(sample) = demuxer.poll_output() {
                 queues
                     .iter_mut()
                     .find(|queue| queue.track_id == sample.properties().track_id)
@@ -131,15 +129,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             if queues.iter().all(|queue| !queue.samples.is_empty()) {
                 break;
             }
-            let Some(wanted) = demux_fsm.wanted_input() else {
+            let Some(wanted) = demuxer.wanted_input() else {
                 break;
             };
             input_file.seek(SeekFrom::Start(wanted.offset()))?;
             let read = input_file.read(&mut buffer)?;
             handed = if read == 0 {
-                demux_fsm.finish()
+                demuxer.finish()
             } else {
-                demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
+                demuxer.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
             };
         }
         let Some(queue) = queues
@@ -176,8 +174,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     if !fragment.is_empty() {
         write_fragment(&mut fragment)?;
     }
-    mux_fsm.finish()?;
-    while let Some(bytes) = mux_fsm.poll_output() {
+    muxer.finish()?;
+    while let Some(bytes) = muxer.poll_output() {
         output_file.write_all(&bytes)?;
     }
     output_file.flush()?;
