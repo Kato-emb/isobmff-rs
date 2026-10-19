@@ -1,4 +1,4 @@
-//! [`MediaSegmentMuxFsm`], a media segment laid down as the samples come
+//! [`MediaSegmentMuxer`], a media segment laid down as the samples come
 
 use alloc::vec::Vec;
 
@@ -13,14 +13,14 @@ use crate::structure::{MuxError, whole_box_header, whole_payload};
 
 /// Lays a media segment down, taking the samples as they come
 ///
-/// The mirror of [`MediaSegmentDemuxFsm`](crate::structure::MediaSegmentDemuxFsm): it wires
+/// The mirror of [`MediaSegmentDemuxer`](crate::structure::MediaSegmentDemuxer): it wires
 /// the layers that write a media segment of ISO/IEC 14496-12 §8.16 — the
 /// structure that holds the order of the top-level boxes, the writing of
 /// each box whole, the laying out of the samples of a fragment as its `moof`
 /// and the media data beside it, and the framing of the segment — so a
 /// caller hands over brands and samples and takes bytes. The movie the
 /// segment continues — that of the initialization segment — is taken when
-/// the mux FSM is made, and not written: a segment carries none. Beside the
+/// the muxer is made, and not written: a segment carries none. Beside the
 /// structure it holds two rules of its own: a `styp` comes first if at all,
 /// and none listing a brand that forbids the `default-base-is-moof` it writes
 /// is laid down. It reaches for no destination: when to write and to where
@@ -29,7 +29,7 @@ use crate::structure::{MuxError, whole_box_header, whole_payload};
 /// # Contract
 ///
 /// * The order of the boxes is the structure's, held to as they are handed
-///   over, but for the `styp`, which the mux FSM lays down first if at all:
+///   over, but for the `styp`, which the muxer lays down first if at all:
 ///   the `styp`, then the fragments. A `styp` handed over after another box is
 ///   [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder), and a
 ///   segment declared over without a fragment is
@@ -56,8 +56,8 @@ use crate::structure::{MuxError, whole_box_header, whole_payload};
 /// * The bytes are taken from [`poll_output`](Self::poll_output), one
 ///   [`OutputBytes`] a call, owned by whoever takes them. The caller drains
 ///   before handing over more: bytes are held until they are taken, so
-///   writing on without polling has the mux FSM hold the whole segment.
-/// * An `Err` leaves the mux FSM failed for good,
+///   writing on without polling has the muxer hold the whole segment.
+/// * An `Err` leaves the muxer failed for good,
 ///   [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The bytes made before
 ///   it are still there to take.
@@ -71,16 +71,16 @@ use crate::structure::{MuxError, whole_box_header, whole_payload};
 /// ```
 /// use isobmff::boxes::{SampleFlags, TrackExtendsBox};
 /// use isobmff::sample::{Sample, SampleProperties};
-/// use isobmff::structure::MediaSegmentMuxFsm;
+/// use isobmff::MediaSegmentMuxer;
 /// # use isobmff_test_support::{fragmented_movie, segment_type};
 /// // A segment continuing the movie of track 1, opening with its brands
 /// let movie = fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO));
-/// let mut mux_fsm = MediaSegmentMuxFsm::new(&movie)?;
-/// mux_fsm.handle_segment_type(segment_type())?;
+/// let mut muxer = MediaSegmentMuxer::new(&movie)?;
+/// muxer.handle_segment_type(segment_type())?;
 ///
 /// // One fragment of two samples of track 1, lasting 1024 units each
-/// mux_fsm.begin_fragment(1)?;
-/// mux_fsm.handle_sample(Sample::new(
+/// muxer.begin_fragment(1)?;
+/// muxer.handle_sample(Sample::new(
 ///     SampleProperties {
 ///         track_id: 1,
 ///         decode_time: 0,
@@ -91,7 +91,7 @@ use crate::structure::{MuxError, whole_box_header, whole_payload};
 ///     },
 ///     b"SAMP".to_vec(),
 /// ))?;
-/// mux_fsm.handle_sample(Sample::new(
+/// muxer.handle_sample(Sample::new(
 ///     SampleProperties {
 ///         track_id: 1,
 ///         decode_time: 1_024,
@@ -102,29 +102,29 @@ use crate::structure::{MuxError, whole_box_header, whole_payload};
 ///     },
 ///     b"DATA".to_vec(),
 /// ))?;
-/// mux_fsm.finish_fragment()?;
-/// mux_fsm.finish()?;
+/// muxer.finish_fragment()?;
+/// muxer.finish()?;
 ///
-/// // The bytes are drained as the mux FSM hands them over
+/// // The bytes are drained as the muxer hands them over
 /// let mut segment = Vec::new();
-/// while let Some(written) = mux_fsm.poll_output() {
+/// while let Some(written) = muxer.poll_output() {
 ///     segment.extend_from_slice(&written);
 /// }
 ///
 /// // The segment opens with the brands, and the media data holds the samples end to end
 /// assert_eq!(&segment[4..8], b"styp");
 /// assert!(segment.ends_with(b"SAMPDATA"));
-/// # Ok::<(), isobmff::structure::MuxError>(())
+/// # Ok::<(), isobmff::MuxError>(())
 /// ```
 #[derive(Debug)]
-pub struct MediaSegmentMuxFsm {
+pub struct MediaSegmentMuxer {
     output: MuxOutput,
     structure: MediaSegmentStructure,
     samples: MovieFragmentWriter,
 }
 
-impl MediaSegmentMuxFsm {
-    /// Creates a mux FSM waiting at the start of a media segment that continues `movie`
+impl MediaSegmentMuxer {
+    /// Creates a muxer waiting at the start of a media segment that continues `movie`
     ///
     /// `movie` is the movie of the initialization segment, which the samples
     /// are checked against.
@@ -147,14 +147,14 @@ impl MediaSegmentMuxFsm {
     /// # Errors
     ///
     /// * [`UnsupportedBrand`](crate::structure::MuxError::UnsupportedBrand): a
-    ///   brand listed forbids the `default-base-is-moof` the mux FSM writes;
+    ///   brand listed forbids the `default-base-is-moof` the muxer writes;
     ///   nothing of the box is laid down.
     /// * [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder): a box
     ///   was laid down before them.
     /// * [`Box`](crate::structure::MuxError::Box): the box does not write.
     /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the mux FSM keeps and reports
+    /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
     pub fn handle_segment_type(&mut self, segment_type: SegmentTypeBox) -> Result<(), MuxError> {
         self.output.writing()?;
@@ -185,7 +185,7 @@ impl MediaSegmentMuxFsm {
     ///   makes of the call.
     /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the mux FSM keeps and reports
+    /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
     pub fn begin_fragment(&mut self, sequence_number: u32) -> Result<(), MuxError> {
         self.output.writing()?;
@@ -208,7 +208,7 @@ impl MediaSegmentMuxFsm {
     ///   makes of the call.
     /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the mux FSM keeps and reports
+    /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
     pub fn begin_fragment_continuing(&mut self, sequence_number: u32) -> Result<(), MuxError> {
         self.output.writing()?;
@@ -228,7 +228,7 @@ impl MediaSegmentMuxFsm {
     ///   makes of the sample.
     /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the mux FSM keeps and reports
+    /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
     pub fn handle_sample(&mut self, sample: Sample) -> Result<(), MuxError> {
         self.output.writing()?;
@@ -251,7 +251,7 @@ impl MediaSegmentMuxFsm {
     ///   does not write.
     /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
-    /// * The failure of a previous call, which the mux FSM keeps and reports
+    /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
     pub fn finish_fragment(&mut self) -> Result<(), MuxError> {
         self.output.writing()?;
@@ -273,7 +273,7 @@ impl MediaSegmentMuxFsm {
     ///
     /// Reports `None` once they are used up: more samples are needed, or the
     /// segment is over. Failure is reported by the calls that take the brands
-    /// and the samples, so this one never fails — a failed mux FSM hands over
+    /// and the samples, so this one never fails — a failed muxer hands over
     /// the bytes it had already made, then nothing from there on.
     pub fn poll_output(&mut self) -> Option<OutputBytes> {
         self.output.poll_output()
@@ -290,7 +290,7 @@ impl MediaSegmentMuxFsm {
     ///   segment.
     /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
     ///   segment was already declared over.
-    /// * The failure of a previous call, which the mux FSM keeps and reports
+    /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
     pub fn finish(&mut self) -> Result<(), MuxError> {
         self.output.writing()?;
@@ -341,43 +341,43 @@ mod tests {
     use isobmff_test_support::{segment_type, unfragmented_movie};
 
     use super::super::tests::{movie, sample};
-    use super::{MediaSegmentMuxFsm, MuxError};
+    use super::{MediaSegmentMuxer, MuxError};
     use crate::sample::{Sample, SampleProperties};
 
     #[test]
     fn a_segment_declaring_no_brands_is_laid_down_all_the_same() {
-        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
+        let mut muxer = MediaSegmentMuxer::new(&movie()).unwrap();
 
-        mux_fsm.begin_fragment(1).unwrap();
-        mux_fsm.finish_fragment().unwrap();
+        muxer.begin_fragment(1).unwrap();
+        muxer.finish_fragment().unwrap();
 
-        assert_eq!(mux_fsm.finish(), Ok(()));
-        assert!(mux_fsm.poll_output().unwrap().ends_with(b"moof"));
+        assert_eq!(muxer.finish(), Ok(()));
+        assert!(muxer.poll_output().unwrap().ends_with(b"moof"));
     }
 
     #[test]
     fn brands_forbidding_default_base_is_moof_are_rejected_before_anything_is_laid_down() {
-        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
+        let mut muxer = MediaSegmentMuxer::new(&movie()).unwrap();
 
         assert_eq!(
-            mux_fsm.handle_segment_type(SegmentTypeBox::new(
+            muxer.handle_segment_type(SegmentTypeBox::new(
                 FourCc::new(*b"msdh"),
                 0,
                 alloc::vec![FourCc::new(*b"msdh"), FourCc::new(*b"isom")],
             )),
             Err(MuxError::UnsupportedBrand)
         );
-        assert_eq!(mux_fsm.poll_output(), None);
+        assert_eq!(muxer.poll_output(), None);
     }
 
     #[test]
     fn brands_handed_over_twice_are_rejected() {
-        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
+        let mut muxer = MediaSegmentMuxer::new(&movie()).unwrap();
 
-        mux_fsm.handle_segment_type(segment_type()).unwrap();
+        muxer.handle_segment_type(segment_type()).unwrap();
 
         assert_eq!(
-            mux_fsm.handle_segment_type(segment_type()),
+            muxer.handle_segment_type(segment_type()),
             Err(MuxError::BoxOutOfOrder {
                 box_type: SegmentTypeBox::BOX_TYPE
             })
@@ -386,13 +386,13 @@ mod tests {
 
     #[test]
     fn brands_handed_over_after_a_fragment_are_rejected() {
-        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
+        let mut muxer = MediaSegmentMuxer::new(&movie()).unwrap();
 
-        mux_fsm.begin_fragment(1).unwrap();
-        mux_fsm.finish_fragment().unwrap();
+        muxer.begin_fragment(1).unwrap();
+        muxer.finish_fragment().unwrap();
 
         assert_eq!(
-            mux_fsm.handle_segment_type(segment_type()),
+            muxer.handle_segment_type(segment_type()),
             Err(MuxError::BoxOutOfOrder {
                 box_type: SegmentTypeBox::BOX_TYPE
             })
@@ -401,10 +401,10 @@ mod tests {
 
     #[test]
     fn a_sample_handed_over_while_no_fragment_is_open_is_rejected() {
-        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
+        let mut muxer = MediaSegmentMuxer::new(&movie()).unwrap();
 
         assert!(matches!(
-            mux_fsm.handle_sample(sample()),
+            muxer.handle_sample(sample()),
             Err(MuxError::Sample {
                 error: crate::sample::Error::NoFragmentOpen
             })
@@ -412,9 +412,9 @@ mod tests {
     }
 
     #[test]
-    fn a_mux_fsm_is_made_only_for_a_movie_continued_in_fragments() {
+    fn a_muxer_is_made_only_for_a_movie_continued_in_fragments() {
         assert!(matches!(
-            MediaSegmentMuxFsm::new(&unfragmented_movie()).map(|_mux_fsm| ()),
+            MediaSegmentMuxer::new(&unfragmented_movie()).map(|_muxer| ()),
             Err(MuxError::Sample {
                 error: crate::sample::Error::MissingMovieExtends
             })
@@ -423,12 +423,12 @@ mod tests {
 
     #[test]
     fn a_sample_of_a_track_the_movie_of_the_initialization_segment_does_not_declare_is_rejected() {
-        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
+        let mut muxer = MediaSegmentMuxer::new(&movie()).unwrap();
 
-        mux_fsm.begin_fragment(1).unwrap();
+        muxer.begin_fragment(1).unwrap();
 
         assert!(matches!(
-            mux_fsm.handle_sample(Sample::new(
+            muxer.handle_sample(Sample::new(
                 SampleProperties {
                     track_id: 999,
                     decode_time: 0,
@@ -447,12 +447,12 @@ mod tests {
 
     #[test]
     fn a_segment_declared_over_without_a_fragment_is_rejected() {
-        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
+        let mut muxer = MediaSegmentMuxer::new(&movie()).unwrap();
 
-        mux_fsm.handle_segment_type(segment_type()).unwrap();
+        muxer.handle_segment_type(segment_type()).unwrap();
 
         assert_eq!(
-            mux_fsm.finish(),
+            muxer.finish(),
             Err(MuxError::MissingMandatoryBox {
                 box_type: MovieFragmentBox::BOX_TYPE
             })
@@ -461,16 +461,16 @@ mod tests {
 
     #[test]
     fn anything_handed_over_after_finishing_is_rejected() {
-        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
+        let mut muxer = MediaSegmentMuxer::new(&movie()).unwrap();
 
-        mux_fsm.begin_fragment(1).unwrap();
-        mux_fsm.finish_fragment().unwrap();
-        mux_fsm.finish().unwrap();
+        muxer.begin_fragment(1).unwrap();
+        muxer.finish_fragment().unwrap();
+        muxer.finish().unwrap();
 
         assert_eq!(
-            mux_fsm.handle_sample(sample()),
+            muxer.handle_sample(sample()),
             Err(MuxError::AlreadyFinished)
         );
-        assert_eq!(mux_fsm.finish(), Err(MuxError::AlreadyFinished));
+        assert_eq!(muxer.finish(), Err(MuxError::AlreadyFinished));
     }
 }

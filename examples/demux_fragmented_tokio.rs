@@ -8,7 +8,7 @@ use core::error::Error;
 use std::env;
 use std::io::SeekFrom;
 
-use isobmff::structure::MovieDemuxFsm;
+use isobmff::MovieDemuxer;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
@@ -20,18 +20,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut file = File::open(path).await?;
     let mut buffer = vec![0; 1024 * 1024];
-    let mut demux_fsm = MovieDemuxFsm::new();
+    let mut demuxer = MovieDemuxer::new();
 
     let mut count: u64 = 0;
-    while let Some(wanted) = demux_fsm.wanted_input() {
+    while let Some(wanted) = demuxer.wanted_input() {
         file.seek(SeekFrom::Start(wanted.offset())).await?;
         let read = file.read(&mut buffer).await?;
         let handed = if read == 0 {
-            demux_fsm.finish()
+            demuxer.finish()
         } else {
-            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
+            demuxer.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
         };
-        while let Some(sample) = demux_fsm.poll_output() {
+        while let Some(sample) = demuxer.poll_output() {
             println!(
                 "track={} time={} size={} sync={}",
                 sample.properties().track_id,

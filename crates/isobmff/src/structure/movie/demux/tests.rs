@@ -6,9 +6,9 @@ use isobmff_test_support::{
     file_type, fragmented_movie, framed, movie_fragment, non_fragmented_file, written,
 };
 
-use super::{DemuxError, MovieDemuxFsm};
+use super::{DemuxError, MovieDemuxer};
 use crate::sample::{Sample, SampleExtent, SampleProperties, SampleReaderLimits};
-use crate::structure::{DemuxLimits, FragmentedMuxFsm, SampleExtents, WantedInput};
+use crate::structure::{DemuxLimits, FragmentedMuxer, SampleExtents, WantedInput};
 
 /// Movie of one track continued in fragments, whose defaults a `trex` states
 fn movie() -> MovieBox {
@@ -32,38 +32,38 @@ fn sample() -> Sample {
 
 /// A file of one fragment carrying [`sample`], handed no brands
 fn file_of_one_sample() -> Vec<u8> {
-    let mut mux_fsm = FragmentedMuxFsm::new();
+    let mut muxer = FragmentedMuxer::new();
     let mut file = Vec::new();
 
-    mux_fsm.handle_movie(movie()).unwrap();
-    mux_fsm.begin_fragment(1).unwrap();
-    mux_fsm.handle_sample(sample()).unwrap();
-    mux_fsm.finish_fragment().unwrap();
-    mux_fsm.finish().unwrap();
-    while let Some(written) = mux_fsm.poll_output() {
+    muxer.handle_movie(movie()).unwrap();
+    muxer.begin_fragment(1).unwrap();
+    muxer.handle_sample(sample()).unwrap();
+    muxer.finish_fragment().unwrap();
+    muxer.finish().unwrap();
+    while let Some(written) = muxer.poll_output() {
         file.extend_from_slice(&written);
     }
 
     file
 }
 
-/// What the demux FSM makes of `file` handed over whole, then declared over
-fn read(file: &[u8]) -> Result<MovieDemuxFsm, DemuxError> {
-    let mut demux_fsm = MovieDemuxFsm::new();
+/// What the demuxer makes of `file` handed over whole, then declared over
+fn read(file: &[u8]) -> Result<MovieDemuxer, DemuxError> {
+    let mut demuxer = MovieDemuxer::new();
 
-    demux_fsm.handle_input(0, file)?;
-    demux_fsm.finish()?;
+    demuxer.handle_input(0, file)?;
+    demuxer.finish()?;
 
-    Ok(demux_fsm)
+    Ok(demuxer)
 }
 
 #[test]
 fn a_file_declaring_no_brands_is_read_all_the_same() {
     let file = [written(&movie()), written(&movie_fragment())].concat();
-    let demux_fsm = read(&file).unwrap();
+    let demuxer = read(&file).unwrap();
 
-    assert_eq!(demux_fsm.file_type(), None);
-    assert_eq!(demux_fsm.movie(), Some(&movie()));
+    assert_eq!(demuxer.file_type(), None);
+    assert_eq!(demuxer.movie(), Some(&movie()));
 }
 
 #[test]
@@ -78,10 +78,10 @@ fn a_file_declared_over_without_a_movie_is_rejected() {
 
 #[test]
 fn a_box_read_into_a_value_declaring_a_payload_past_the_limit_is_rejected() {
-    let mut demux_fsm = MovieDemuxFsm::with_limits(DemuxLimits::new().with_payload(4));
+    let mut demuxer = MovieDemuxer::with_limits(DemuxLimits::new().with_payload(4));
 
     assert_eq!(
-        demux_fsm.handle_input(0, &written(&file_type())),
+        demuxer.handle_input(0, &written(&file_type())),
         Err(DemuxError::PayloadLimitExceeded {
             box_type: BoxType::compact(*b"ftyp"),
             reached_bytes: 16,
@@ -98,20 +98,20 @@ fn a_box_passed_over_is_not_bounded_by_the_limit() {
         framed(BoxType::compact(*b"free"), &[0x11; 4_096]),
     ]
     .concat();
-    let mut demux_fsm =
-        MovieDemuxFsm::with_limits(DemuxLimits::new().with_payload(movie.len() as u64));
+    let mut demuxer =
+        MovieDemuxer::with_limits(DemuxLimits::new().with_payload(movie.len() as u64));
 
-    demux_fsm.handle_input(0, &file).unwrap();
+    demuxer.handle_input(0, &file).unwrap();
 
-    assert_eq!(demux_fsm.finish(), Ok(()));
+    assert_eq!(demuxer.finish(), Ok(()));
 }
 
 #[test]
 fn a_fragment_declaring_more_samples_than_the_limit_lays_out_none() {
-    let mut demux_fsm = MovieDemuxFsm::with_limits(DemuxLimits::new().with_resolved_samples(0));
+    let mut demuxer = MovieDemuxer::with_limits(DemuxLimits::new().with_resolved_samples(0));
 
     assert!(matches!(
-        demux_fsm.handle_input(0, &file_of_one_sample()),
+        demuxer.handle_input(0, &file_of_one_sample()),
         Err(DemuxError::Sample {
             error: crate::sample::Error::SampleCountLimitExceeded {
                 declared_samples: 1,
@@ -120,15 +120,15 @@ fn a_fragment_declaring_more_samples_than_the_limit_lays_out_none() {
             }
         })
     ));
-    assert_eq!(demux_fsm.poll_output(), None);
+    assert_eq!(demuxer.poll_output(), None);
 }
 
 #[test]
 fn a_movie_declaring_more_samples_than_the_limit_lays_out_none() {
-    let mut demux_fsm = MovieDemuxFsm::with_limits(DemuxLimits::new().with_resolved_samples(0));
+    let mut demuxer = MovieDemuxer::with_limits(DemuxLimits::new().with_resolved_samples(0));
 
     assert!(matches!(
-        demux_fsm.handle_input(0, &non_fragmented_file(&[&[b"SAMP"]], true)),
+        demuxer.handle_input(0, &non_fragmented_file(&[&[b"SAMP"]], true)),
         Err(DemuxError::Sample {
             error: crate::sample::Error::SampleCountLimitExceeded {
                 declared_samples: 1,
@@ -137,17 +137,17 @@ fn a_movie_declaring_more_samples_than_the_limit_lays_out_none() {
             }
         })
     ));
-    assert_eq!(demux_fsm.poll_output(), None);
+    assert_eq!(demuxer.poll_output(), None);
 }
 
 #[test]
 fn the_sample_reader_is_held_to_the_limits_it_is_given() {
-    let mut demux_fsm = MovieDemuxFsm::with_limits(
+    let mut demuxer = MovieDemuxer::with_limits(
         DemuxLimits::new().with_sample_reader(SampleReaderLimits::new().with_held_extents(0)),
     );
 
     assert!(matches!(
-        demux_fsm.handle_input(0, &file_of_one_sample()),
+        demuxer.handle_input(0, &file_of_one_sample()),
         Err(DemuxError::Sample {
             error: crate::sample::Error::HeldExtentLimitExceeded {
                 held_extents: 1,
@@ -163,9 +163,9 @@ fn a_box_read_into_a_value_declaring_no_total_is_read_to_the_end_of_the_file() {
     let mut file = written(&movie());
     file.splice(..4, [0x00, 0x00, 0x00, 0x00]);
 
-    let demux_fsm = read(&file).unwrap();
+    let demuxer = read(&file).unwrap();
 
-    assert_eq!(demux_fsm.movie(), Some(&movie()));
+    assert_eq!(demuxer.movie(), Some(&movie()));
 }
 
 #[test]
@@ -173,32 +173,32 @@ fn media_data_the_input_is_still_to_bring_is_not_wanted_and_completes_the_sample
     let mut file = file_of_one_sample();
     let media_data = file.split_off(file.len().saturating_sub(4));
 
-    let mut demux_fsm = MovieDemuxFsm::new();
-    demux_fsm.handle_input(0, &file).unwrap();
-    let wanted = demux_fsm.wanted_input();
-    demux_fsm
+    let mut demuxer = MovieDemuxer::new();
+    demuxer.handle_input(0, &file).unwrap();
+    let wanted = demuxer.wanted_input();
+    demuxer
         .handle_input(file.len() as u64, &media_data)
         .unwrap();
 
     assert_eq!(wanted, Some(WantedInput::new(file.len() as u64, None)));
-    assert_eq!(demux_fsm.poll_output(), Some(sample()));
+    assert_eq!(demuxer.poll_output(), Some(sample()));
 }
 
 #[test]
 fn the_file_is_wanted_from_the_offset_the_reading_resumed_at() {
-    let mut demux_fsm = read(&file_of_one_sample()).unwrap();
+    let mut demuxer = read(&file_of_one_sample()).unwrap();
 
-    demux_fsm.resume_at(100).unwrap();
+    demuxer.resume_at(100).unwrap();
 
-    assert_eq!(demux_fsm.wanted_input(), Some(WantedInput::new(100, None)));
+    assert_eq!(demuxer.wanted_input(), Some(WantedInput::new(100, None)));
 }
 
 #[test]
 fn the_extents_held_are_dropped_when_the_reading_resumes() {
     let file = file_of_one_sample();
     let media_data_start = file.len().saturating_sub(4) as u64;
-    let mut read_on = MovieDemuxFsm::with_gathering(SampleExtents::new(), DemuxLimits::new());
-    let mut resumed = MovieDemuxFsm::with_gathering(SampleExtents::new(), DemuxLimits::new());
+    let mut read_on = MovieDemuxer::with_gathering(SampleExtents::new(), DemuxLimits::new());
+    let mut resumed = MovieDemuxer::with_gathering(SampleExtents::new(), DemuxLimits::new());
     read_on.handle_input(0, &file).unwrap();
     resumed.handle_input(0, &file).unwrap();
 

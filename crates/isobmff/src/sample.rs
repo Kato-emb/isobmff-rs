@@ -42,8 +42,8 @@
 //! # What these layers do not know
 //!
 //! Neither the framing of a file ([`sequence`](crate::sequence)) nor the
-//! structures that read and write one ([`structure`](crate::structure)) is
-//! named here: the layers above hand in the boxes and the bytes, and neither
+//! demuxers and muxers that read and write one ([the root](crate)) are named
+//! here: the layers above hand in the boxes and the bytes, and neither
 //! of them is reached from this module.
 //!
 //! What either layer fails on is an [`Error`].

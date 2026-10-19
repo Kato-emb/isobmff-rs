@@ -23,7 +23,7 @@ use isobmff::boxes::{
     SampleTableBox, SampleToChunkBox, SegmentTypeBox, TimeToSampleBox,
 };
 use isobmff::sample::Sample;
-use isobmff::structure::{FragmentedMuxFsm, MediaSegmentMuxFsm, MovieDemuxFsm};
+use isobmff::{FragmentedMuxer, MediaSegmentMuxer, MovieDemuxer};
 
 /// The samples of one track read ahead of the others, waiting their turn in decode time
 struct TrackQueue {
@@ -40,22 +40,20 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut file = File::open(input)?;
     let mut buffer = vec![0; 1024 * 1024];
-    let mut demux_fsm = MovieDemuxFsm::new();
+    let mut demuxer = MovieDemuxer::new();
     let mut handed = Ok(());
-    while demux_fsm.movie().is_none() {
+    while demuxer.movie().is_none() {
         handed?;
-        let wanted = demux_fsm
-            .wanted_input()
-            .ok_or("the file carries no movie")?;
+        let wanted = demuxer.wanted_input().ok_or("the file carries no movie")?;
         file.seek(SeekFrom::Start(wanted.offset()))?;
         let read = file.read(&mut buffer)?;
         handed = if read == 0 {
-            demux_fsm.finish()
+            demuxer.finish()
         } else {
-            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
+            demuxer.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
         };
     }
-    let source_movie = demux_fsm.movie().ok_or("the file carries no movie")?;
+    let source_movie = demuxer.movie().ok_or("the file carries no movie")?;
 
     let mut movie = MovieBox::new_fragmented(
         source_movie.mvhd().timescale(),
@@ -89,18 +87,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
     }
 
-    let file_type = demux_fsm
+    let file_type = demuxer
         .file_type()
         .filter(|file_type| !file_type.forbids_default_base_is_moof())
         .cloned();
     let mut initialization = BufWriter::new(File::create(output.join("init.mp4"))?);
-    let mut initialization_fsm = FragmentedMuxFsm::new();
+    let mut initialization_muxer = FragmentedMuxer::new();
     if let Some(file_type) = &file_type {
-        initialization_fsm.handle_file_type(file_type.clone())?;
+        initialization_muxer.handle_file_type(file_type.clone())?;
     }
-    initialization_fsm.handle_movie(movie.clone())?;
-    initialization_fsm.finish()?;
-    while let Some(bytes) = initialization_fsm.poll_output() {
+    initialization_muxer.handle_movie(movie.clone())?;
+    initialization_muxer.finish()?;
+    while let Some(bytes) = initialization_muxer.poll_output() {
         initialization.write_all(&bytes)?;
     }
     initialization.flush()?;
@@ -112,22 +110,22 @@ fn main() -> Result<(), Box<dyn Error>> {
             .ok_or("more segments than a sequence number counts")?;
         let path = output.join(format!("{sequence_number:04}.m4s"));
         let mut segment = BufWriter::new(File::create(path)?);
-        let mut segment_fsm = MediaSegmentMuxFsm::new(&movie)?;
+        let mut segment_muxer = MediaSegmentMuxer::new(&movie)?;
         if let Some(file_type) = &file_type {
-            segment_fsm.handle_segment_type(SegmentTypeBox::new(
+            segment_muxer.handle_segment_type(SegmentTypeBox::new(
                 file_type.major_brand(),
                 file_type.minor_version(),
                 file_type.compatible_brands().to_vec(),
             ))?;
         }
-        segment_fsm.begin_fragment(sequence_number)?;
+        segment_muxer.begin_fragment(sequence_number)?;
         fragment.sort_by_key(|sample| sample.properties().track_id);
         for sample in fragment.drain(..) {
-            segment_fsm.handle_sample(sample)?;
+            segment_muxer.handle_sample(sample)?;
         }
-        segment_fsm.finish_fragment()?;
-        segment_fsm.finish()?;
-        while let Some(bytes) = segment_fsm.poll_output() {
+        segment_muxer.finish_fragment()?;
+        segment_muxer.finish()?;
+        while let Some(bytes) = segment_muxer.poll_output() {
             segment.write_all(&bytes)?;
         }
         Ok(segment.flush()?)
@@ -137,7 +135,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut carries_cut_track = false;
     loop {
         loop {
-            while let Some(sample) = demux_fsm.poll_output() {
+            while let Some(sample) = demuxer.poll_output() {
                 queues
                     .iter_mut()
                     .find(|queue| queue.track_id == sample.properties().track_id)
@@ -149,15 +147,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             if queues.iter().all(|queue| !queue.samples.is_empty()) {
                 break;
             }
-            let Some(wanted) = demux_fsm.wanted_input() else {
+            let Some(wanted) = demuxer.wanted_input() else {
                 break;
             };
             file.seek(SeekFrom::Start(wanted.offset()))?;
             let read = file.read(&mut buffer)?;
             handed = if read == 0 {
-                demux_fsm.finish()
+                demuxer.finish()
             } else {
-                demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
+                demuxer.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
             };
         }
         let Some(queue) = queues

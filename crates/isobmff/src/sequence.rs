@@ -21,9 +21,9 @@
 //! # What this layer does not know
 //!
 //! Neither the box values of [`boxes`](crate::boxes) nor the layers that read
-//! them ([`sample`](crate::sample), [`structure`](crate::structure)) are named
-//! here: a box is carried as it lies, and what it means is left to the
-//! layers above.
+//! them ([`sample`](crate::sample) and the demuxers and muxers at
+//! [the root](crate)) are named here: a box is carried as it lies, and what it
+//! means is left to the layers above.
 //!
 //! # `alloc`
 //!

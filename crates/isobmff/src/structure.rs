@@ -1,13 +1,13 @@
-//! The order the boxes of an ISO base media file stand in, and the FSMs that read and write one
+//! The order the boxes of an ISO base media file stand in, and the demuxers and muxers that read and write one
 //!
 //! A presentation is carried as samples — ISO/IEC 14496-12 §3.1.14 has a sample
-//! as all the data associated with a single timestamp. [`MovieDemuxFsm`]
+//! as all the data associated with a single timestamp. [`MovieDemuxer`]
 //! takes a movie file as it arrives, fragmented or not, and reports the
-//! [`Sample`](crate::sample::Sample)s it carries, and [`MediaSegmentDemuxFsm`]
+//! [`Sample`](crate::sample::Sample)s it carries, and [`MediaSegmentDemuxer`]
 //! does the same for a media segment delivered apart from the movie it
-//! continues; [`FragmentedMuxFsm`],
-//! [`NonFragmentedMuxFsm`] and [`MediaSegmentMuxFsm`] go the other way, laying
-//! samples down as a file or a segment of each kind. [`MovieDemuxFsm`]
+//! continues; [`FragmentedMuxer`],
+//! [`NonFragmentedMuxer`] and [`MediaSegmentMuxer`] go the other way, laying
+//! samples down as a file or a segment of each kind. [`MovieDemuxer`]
 //! gathering with [`SampleExtents`] reads a movie file the same way short of
 //! gathering the samples, and reports the
 //! [`SampleExtent`](crate::sample::SampleExtent) of each, where its bytes lie
@@ -19,7 +19,7 @@
 //!
 //! Seven layers stand between a file and the samples it carries, joined only
 //! by the values that pass between them: a box event, a typed box, an extent,
-//! a sample, a disposition. No layer but the FSMs of layer 6 holds
+//! a sample, a disposition. No layer but the demuxers and muxers of layer 6 holds
 //! another's machine. Listed from the framing up to the caller:
 //!
 //! 1. **Framing.** A file is a sequence of objects, called boxes (§4.2), and
@@ -63,29 +63,29 @@
 //!    concatenated into one stream read as one. The structure is the only
 //!    layer that knows how a file is put together, and the order a file
 //!    breaks is its failure.
-//! 6. **Demux and mux FSMs.** [`MovieDemuxFsm`], [`MediaSegmentDemuxFsm`],
-//!    [`FragmentedMuxFsm`], [`NonFragmentedMuxFsm`] and [`MediaSegmentMuxFsm`]
-//!    wire layers 1 to 5 into machines: one demux FSM reads a movie file,
+//! 6. **Demuxers and muxers.** [`MovieDemuxer`], [`MediaSegmentDemuxer`],
+//!    [`FragmentedMuxer`], [`NonFragmentedMuxer`] and [`MediaSegmentMuxer`]
+//!    wire layers 1 to 5 into machines: one demuxer reads a movie file,
 //!    fragmented or not, through the structure of a fragmented one, and one
-//!    reads a media segment; a mux FSM writes each kind.
-//!    [`MovieDemuxFsm`] gathering with [`SampleExtents`] wires layers 1, 2, 3
+//!    reads a media segment; one muxer writes each kind.
+//!    [`MovieDemuxer`] gathering with [`SampleExtents`] wires layers 1, 2, 3
 //!    and 5 alone, and hands over the extents layer 3 resolves in place of
-//!    samples. A demux FSM holds
+//!    samples. A demuxer holds
 //!    one rule of its own: it keeps where the input it takes in order stands,
 //!    and states the one read it wants next — an extent layer 4 lacks whose
 //!    start that input has passed, else the continuation of that input —
 //!    taking every input with the offset it was read at. Each passes every value between the layers,
 //!    so a caller hands over bytes and takes samples (or extents, from a
-//!    [`MovieDemuxFsm`] gathering with [`SampleExtents`]), or hands over
+//!    [`MovieDemuxer`] gathering with [`SampleExtents`]), or hands over
 //!    samples and takes bytes, and
 //!    never sees one. Every offset above the framing is
 //!    a file offset — the extents the framing reports, counted from the first
-//!    byte of the file or from the offset the demux FSM last resumed at, the
+//!    byte of the file or from the offset the demuxer last resumed at, the
 //!    chunk offsets and base data offsets the boxes declare (§8.7.5, §8.8.7)
 //!    — and no layer here knows any other.
 //! 7. **The I/O.** Where the bytes come from and go to is the caller's: the
 //!    file is handed over from its first byte, or from a resume point an index
-//!    names, output is taken, and what the demux FSM says it still lacks is
+//!    names, output is taken, and what the demuxer says it still lacks is
 //!    fetched or not, so a `File`, a socket, or a buffer already in memory
 //!    drives the six layers above the same way. Where
 //!    the file lies in its resource, and how a file offset becomes a seek or a
@@ -95,38 +95,38 @@
 //!
 //! # The caller's loop
 //!
-//! The loop a demux FSM is read by asks it for the one read it wants, makes
+//! The loop a demuxer is read by asks it for the one read it wants, makes
 //! that read, and hands the bytes over at the offset they were read at, no
 //! byte declaring the file over; the samples come out before any failure of
 //! the input that completed them is acted on, and once the file is declared
-//! over or the FSM has failed it wants no read:
+//! over or the demuxer has failed it wants no read:
 //!
 //! ```
-//! use isobmff::structure::MovieDemuxFsm;
+//! use isobmff::MovieDemuxer;
 //! # use isobmff_test_support::non_fragmented_file;
 //! // A file whose movie lies after its media data, held in memory
 //! let file = non_fragmented_file(&[&[b"SAMP", b"DATA"]], false);
-//! let mut fsm = MovieDemuxFsm::new();
+//! let mut demuxer = MovieDemuxer::new();
 //! let mut read_back = Vec::new();
 //!
-//! while let Some(wanted) = fsm.wanted_input() {
-//!     // The read the FSM wants, cut at seven bytes where it names no length
+//! while let Some(wanted) = demuxer.wanted_input() {
+//!     // The read the demuxer wants, cut at seven bytes where it names no length
 //!     let start = (wanted.offset() as usize).min(file.len());
 //!     let length = wanted.length().map_or(7, |length| length as usize);
 //!     let bytes = &file[start..(start + length).min(file.len())];
-//!     let handed = if bytes.is_empty() { fsm.finish() } else { fsm.handle_input(wanted.offset(), bytes) };
+//!     let handed = if bytes.is_empty() { demuxer.finish() } else { demuxer.handle_input(wanted.offset(), bytes) };
 //!
 //!     // The samples it completed come out as they come whole, before any failure
-//!     while let Some(sample) = fsm.poll_output() {
+//!     while let Some(sample) = demuxer.poll_output() {
 //!         read_back.push(sample.into_data());
 //!     }
 //!     handed?;
 //! }
 //! assert_eq!(read_back, [b"SAMP".to_vec(), b"DATA".to_vec()]);
-//! # Ok::<(), isobmff::structure::DemuxError>(())
+//! # Ok::<(), isobmff::DemuxError>(())
 //! ```
 //!
-//! A mux FSM is driven by its own verbs, and the bytes it made are taken with
+//! A muxer is driven by its own verbs, and the bytes it made are taken with
 //! its `poll_output` and written whole where the caller writes. Over
 //! `std::io`, the two loops are these, the demux loop seeking before every
 //! read:
@@ -136,15 +136,15 @@
 //!
 //! use isobmff::boxes::{SampleFlags, TrackExtendsBox};
 //! use isobmff::sample::{Sample, SampleProperties};
-//! use isobmff::structure::{FragmentedMuxFsm, MovieDemuxFsm};
+//! use isobmff::{FragmentedMuxer, MovieDemuxer};
 //! # use isobmff_test_support::{file_type, fragmented_movie};
 //! // A fragment of two samples laid down, the bytes of each event written whole
 //! let mut file = Cursor::new(Vec::new());
-//! let mut mux_fsm = FragmentedMuxFsm::new();
-//! mux_fsm.handle_file_type(file_type())?;
-//! mux_fsm.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO)))?;
-//! mux_fsm.begin_fragment(1)?;
-//! mux_fsm.handle_sample(Sample::new(
+//! let mut muxer = FragmentedMuxer::new();
+//! muxer.handle_file_type(file_type())?;
+//! muxer.handle_movie(fragmented_movie(TrackExtendsBox::new(1, 1, 1_024, 0, SampleFlags::ZERO)))?;
+//! muxer.begin_fragment(1)?;
+//! muxer.handle_sample(Sample::new(
 //!     SampleProperties {
 //!         track_id: 1,
 //!         decode_time: 0,
@@ -155,7 +155,7 @@
 //!     },
 //!     b"SAMP".to_vec(),
 //! ))?;
-//! mux_fsm.handle_sample(Sample::new(
+//! muxer.handle_sample(Sample::new(
 //!     SampleProperties {
 //!         track_id: 1,
 //!         decode_time: 1_024,
@@ -166,21 +166,21 @@
 //!     },
 //!     b"DATA".to_vec(),
 //! ))?;
-//! mux_fsm.finish_fragment()?;
-//! mux_fsm.finish()?;
-//! while let Some(bytes) = mux_fsm.poll_output() {
+//! muxer.finish_fragment()?;
+//! muxer.finish()?;
+//! while let Some(bytes) = muxer.poll_output() {
 //!     file.write_all(&bytes)?;
 //! }
 //!
-//! // The file read back where the demux FSM wants, into a buffer of the caller's
-//! let mut demux_fsm = MovieDemuxFsm::new();
+//! // The file read back where the demuxer wants, into a buffer of the caller's
+//! let mut demuxer = MovieDemuxer::new();
 //! let mut buffer = vec![0; 1024 * 1024];
 //! let mut read_back = Vec::new();
-//! while let Some(wanted) = demux_fsm.wanted_input() {
+//! while let Some(wanted) = demuxer.wanted_input() {
 //!     file.seek(SeekFrom::Start(wanted.offset()))?;
 //!     let read = file.read(&mut buffer)?;
-//!     let handed = if read == 0 { demux_fsm.finish() } else { demux_fsm.handle_input(wanted.offset(), &buffer[..read]) };
-//!     while let Some(sample) = demux_fsm.poll_output() {
+//!     let handed = if read == 0 { demuxer.finish() } else { demuxer.handle_input(wanted.offset(), &buffer[..read]) };
+//!     while let Some(sample) = demuxer.poll_output() {
 //!         read_back.push(sample.into_data());
 //!     }
 //!     handed?;
@@ -190,30 +190,22 @@
 //! ```
 //!
 //! An asynchronous caller writes the same loops, awaiting the seek, the read
-//! and the write. The read the FSM wants does not move until bytes are handed
+//! and the write. The read the demuxer wants does not move until bytes are handed
 //! over, so a demux iteration dropped part way is made again from its seek.
 //! The bytes taken from `poll_output` are the caller's: those not written
 //! whole when their write is dropped are the caller's to keep.
 //!
 //! A caller whose source cannot seek — a socket, a live stream of segments —
-//! hands every cut it reads over at the offset the FSM names while the length
+//! hands every cut it reads over at the offset the demuxer names while the length
 //! of the read wanted is `None`, and stops where a length is named. One whose
 //! source is positioned by nature — a slice in memory, a blob, a range request
-//! — reads where the FSM names, and as much as the length it names where it
+//! — reads where the demuxer names, and as much as the length it names where it
 //! names one.
 //!
 //! A caller that holds a whole presentation in memory needs none of the
 //! machines: [`boxes`](crate::boxes) reads the boxes into values,
 //! [`sample_table::sample_extents`](crate::sample::sample_table::sample_extents)
 //! names where its samples lie, and their bytes are sliced from there.
-//!
-//! # `alloc`
-//!
-//! The layers here need `alloc`: a box read into a value is gathered
-//! whole, a sample owns the bytes it carries, the extents a movie or a fragment
-//! declares are held until the data that meets them arrives, the samples of a
-//! fragment or a chunk being written are held until it is laid down, and the
-//! movie a non-fragmented file is written against until the file is over.
 
 mod demux_error;
 mod demux_input;
@@ -231,12 +223,12 @@ mod whole_box;
 
 pub use demux_error::DemuxError;
 pub use demux_limits::DemuxLimits;
-pub use fragmented_movie::FragmentedMuxFsm;
+pub use fragmented_movie::FragmentedMuxer;
 pub use input_position::WantedInput;
-pub use media_segment::{MediaSegmentDemuxFsm, MediaSegmentMuxFsm};
-pub use movie::MovieDemuxFsm;
+pub use media_segment::{MediaSegmentDemuxer, MediaSegmentMuxer};
+pub use movie::MovieDemuxer;
 pub use mux_error::MuxError;
-pub use non_fragmented_movie::NonFragmentedMuxFsm;
+pub use non_fragmented_movie::NonFragmentedMuxer;
 pub use sample_gathering::{SampleExtents, SampleGathering};
 
 use demux_input::DemuxInput;

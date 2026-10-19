@@ -1,24 +1,24 @@
-//! [`MuxError`], the reason a file does not write through a mux FSM
+//! [`MuxError`], the reason a file does not write through a muxer
 
 use core::error;
 use core::fmt;
 
 use isobmff_core::{BoxType, Category};
 
-/// Reason a file does not write through a mux FSM
+/// Reason a file does not write through a muxer
 ///
 /// What went wrong is one variant, which carries the values that describe it:
 /// a failure of the structure of the file — a box it requires that never
 /// came, one that came twice, one that came out of the order the structure
-/// keeps, brands the mux FSM cannot write under — a call after the file was
-/// declared over, which the mux FSM does not take — or a failure of a layer
+/// keeps, brands the muxer cannot write under — a call after the file was
+/// declared over, which the muxer does not take — or a failure of a layer
 /// beneath, which this type carries through whole rather than translating:
 /// [`Sequence`](Self::Sequence) for the framing of the file,
 /// [`Sample`](Self::Sample) for the samples it carries, and
 /// [`Box`](Self::Box) for one box that did not write. What a caller does
 /// about any of them is one [`category`](Self::category).
 ///
-/// The situations a mux FSM reaches are added to as ISO/IEC 14496-12 is read
+/// The situations a muxer reaches are added to as ISO/IEC 14496-12 is read
 /// further, so a match on this must leave room for variants that are not here
 /// yet, and a match on a variant must leave room for fields that are not here
 /// yet.
@@ -27,11 +27,11 @@ use isobmff_core::{BoxType, Category};
 ///
 /// ```
 /// use isobmff::{BoxType, Category};
-/// use isobmff::structure::{FragmentedMuxFsm, MuxError};
+/// use isobmff::{FragmentedMuxer, MuxError};
 ///
 /// // A file declared over before its movie was handed over is a failure of the structure
-/// let mut mux_fsm = FragmentedMuxFsm::new();
-/// let failure = mux_fsm.finish().unwrap_err();
+/// let mut muxer = FragmentedMuxer::new();
+/// let failure = muxer.finish().unwrap_err();
 /// assert!(matches!(
 ///     failure,
 ///     MuxError::MissingMandatoryBox { box_type, .. } if box_type == BoxType::compact(*b"moov")
@@ -89,9 +89,9 @@ pub enum MuxError {
         /// Type of the box that came out of order
         box_type: BoxType,
     },
-    /// Brands were handed over that the mux FSM cannot write under
+    /// Brands were handed over that the muxer cannot write under
     ///
-    /// A mux FSM that writes `default-base-is-moof` in every `tfhd` refuses a
+    /// A muxer that writes `default-base-is-moof` in every `tfhd` refuses a
     /// `ftyp` or `styp` listing any brand earlier than `iso5` — `isom`,
     /// `avc1`, `iso2`, `iso3` or `iso4` — under which ISO/IEC 14496-12
     /// §8.8.7.1 forbids the flag.
@@ -157,7 +157,7 @@ impl fmt::Display for MuxError {
                 "file carries a {box_type} box out of the order its structure keeps"
             ),
             Self::UnsupportedBrand => {
-                formatter.write_str("brands handed over are ones the mux FSM cannot write under")
+                formatter.write_str("brands handed over are ones the muxer cannot write under")
             }
             Self::AlreadyFinished => {
                 formatter.write_str("file was declared over and takes nothing more")
@@ -223,7 +223,7 @@ mod tests {
         );
         assert_eq!(
             MuxError::UnsupportedBrand.to_string(),
-            "brands handed over are ones the mux FSM cannot write under"
+            "brands handed over are ones the muxer cannot write under"
         );
         assert_eq!(
             MuxError::AlreadyFinished.to_string(),

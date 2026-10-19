@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests {
     use isobmff::sample::{Sample, SampleProperties};
-    use isobmff::structure::{MediaSegmentMuxFsm, MuxError};
+    use isobmff::{MediaSegmentMuxer, MuxError};
     use isobmff_boxes::{
         HeaderDuration, MovieBox, MovieExtendsBox, MovieHeaderBox, SampleFlags, TrackExtendsBox,
     };
@@ -76,25 +76,25 @@ mod tests {
     /// The segment the samples make: the brands, then fragment after fragment, each opened by `begin`
     fn written_segment(
         fragments: Vec<Vec<Sample>>,
-        begin: fn(&mut MediaSegmentMuxFsm, u32) -> Result<(), MuxError>,
+        begin: fn(&mut MediaSegmentMuxer, u32) -> Result<(), MuxError>,
     ) -> Vec<u8> {
-        let mut mux_fsm = MediaSegmentMuxFsm::new(&movie()).unwrap();
+        let mut muxer = MediaSegmentMuxer::new(&movie()).unwrap();
         let mut segment = Vec::new();
 
-        mux_fsm.handle_segment_type(segment_type()).unwrap();
+        muxer.handle_segment_type(segment_type()).unwrap();
 
         for (position, samples) in fragments.into_iter().enumerate() {
             let sequence_number = u32::try_from(position).unwrap().saturating_add(1);
 
-            begin(&mut mux_fsm, sequence_number).unwrap();
+            begin(&mut muxer, sequence_number).unwrap();
             for sample in samples {
-                mux_fsm.handle_sample(sample).unwrap();
+                muxer.handle_sample(sample).unwrap();
             }
-            mux_fsm.finish_fragment().unwrap();
+            muxer.finish_fragment().unwrap();
         }
-        mux_fsm.finish().unwrap();
+        muxer.finish().unwrap();
 
-        while let Some(written) = mux_fsm.poll_output() {
+        while let Some(written) = muxer.poll_output() {
             segment.extend_from_slice(&written);
         }
 
@@ -103,7 +103,7 @@ mod tests {
 
     #[test]
     fn the_samples_are_read_back_as_they_were_handed_over_however_the_segment_was_cut() {
-        let segment = written_segment(two_track_fragments(), MediaSegmentMuxFsm::begin_fragment);
+        let segment = written_segment(two_track_fragments(), MediaSegmentMuxer::begin_fragment);
 
         for cut_length in [segment.len(), 1, 3, 7, 64, segment.len().saturating_sub(1)] {
             assert_eq!(
@@ -116,13 +116,13 @@ mod tests {
 
     #[test]
     fn samples_read_off_a_segment_and_written_continuing_read_back_from_where_each_track_reached() {
-        let segment = written_segment(two_track_fragments(), MediaSegmentMuxFsm::begin_fragment);
+        let segment = written_segment(two_track_fragments(), MediaSegmentMuxer::begin_fragment);
         let mut read_out = samples_of(movie(), &segment, segment.len()).into_iter();
         let fragments = two_track_fragments()
             .iter()
             .map(|samples| read_out.by_ref().take(samples.len()).collect())
             .collect();
-        let continued = written_segment(fragments, MediaSegmentMuxFsm::begin_fragment_continuing);
+        let continued = written_segment(fragments, MediaSegmentMuxer::begin_fragment_continuing);
         let moved_to_zero = |sample: Sample| {
             let origin = if sample.properties().track_id == 1 {
                 90_000

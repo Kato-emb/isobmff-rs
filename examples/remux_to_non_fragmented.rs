@@ -14,9 +14,8 @@ use std::fs::File;
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use isobmff::Mp4EpochSeconds;
 use isobmff::boxes::MovieBox;
-use isobmff::structure::{MovieDemuxFsm, NonFragmentedMuxFsm};
+use isobmff::{MovieDemuxer, Mp4EpochSeconds, NonFragmentedMuxer};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let usage = "usage: remux_to_non_fragmented <in.mp4> <out.mp4>";
@@ -26,22 +25,20 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut input_file = File::open(input)?;
     let mut buffer = vec![0; 1024 * 1024];
-    let mut demux_fsm = MovieDemuxFsm::new();
+    let mut demuxer = MovieDemuxer::new();
     let mut handed = Ok(());
-    while demux_fsm.movie().is_none() {
+    while demuxer.movie().is_none() {
         handed?;
-        let wanted = demux_fsm
-            .wanted_input()
-            .ok_or("the file carries no movie")?;
+        let wanted = demuxer.wanted_input().ok_or("the file carries no movie")?;
         input_file.seek(SeekFrom::Start(wanted.offset()))?;
         let read = input_file.read(&mut buffer)?;
         handed = if read == 0 {
-            demux_fsm.finish()
+            demuxer.finish()
         } else {
-            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
+            demuxer.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
         };
     }
-    let movie = demux_fsm.movie().ok_or("the file carries no movie")?;
+    let movie = demuxer.movie().ok_or("the file carries no movie")?;
     let now =
         Mp4EpochSeconds::from_unix_seconds(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())
             .ok_or("the clock is past what a header states")?;
@@ -63,47 +60,47 @@ fn main() -> Result<(), Box<dyn Error>> {
     .ok_or("the movie declares no track")?;
 
     let mut output_file = BufWriter::new(File::create(output)?);
-    let mut mux_fsm = NonFragmentedMuxFsm::new();
-    if let Some(file_type) = demux_fsm.file_type() {
-        mux_fsm.handle_file_type(file_type.clone())?;
+    let mut muxer = NonFragmentedMuxer::new();
+    if let Some(file_type) = demuxer.file_type() {
+        muxer.handle_file_type(file_type.clone())?;
     }
-    mux_fsm.handle_movie(movie)?;
+    muxer.handle_movie(movie)?;
     let mut chunk = None;
     loop {
-        while let Some(sample) = demux_fsm.poll_output() {
+        while let Some(sample) = demuxer.poll_output() {
             let described_by = Some((
                 sample.properties().track_id,
                 sample.properties().sample_description_index,
             ));
             if chunk != described_by {
                 if chunk.is_some() {
-                    mux_fsm.finish_chunk()?;
-                    while let Some(bytes) = mux_fsm.poll_output() {
+                    muxer.finish_chunk()?;
+                    while let Some(bytes) = muxer.poll_output() {
                         output_file.write_all(&bytes)?;
                     }
                 }
                 chunk = described_by;
-                mux_fsm.begin_chunk()?;
+                muxer.begin_chunk()?;
             }
-            mux_fsm.handle_sample(sample)?;
+            muxer.handle_sample(sample)?;
         }
         handed?;
-        let Some(wanted) = demux_fsm.wanted_input() else {
+        let Some(wanted) = demuxer.wanted_input() else {
             break;
         };
         input_file.seek(SeekFrom::Start(wanted.offset()))?;
         let read = input_file.read(&mut buffer)?;
         handed = if read == 0 {
-            demux_fsm.finish()
+            demuxer.finish()
         } else {
-            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
+            demuxer.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
         };
     }
     if chunk.is_some() {
-        mux_fsm.finish_chunk()?;
+        muxer.finish_chunk()?;
     }
-    mux_fsm.finish()?;
-    while let Some(bytes) = mux_fsm.poll_output() {
+    muxer.finish()?;
+    while let Some(bytes) = muxer.poll_output() {
         output_file.write_all(&bytes)?;
     }
     output_file.flush()?;

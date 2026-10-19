@@ -1,4 +1,4 @@
-import { MovieSampleExtentFsm } from "../crates/isobmff-wasm/pkg/isobmff_wasm.js";
+import { MovieExtentDemuxer } from "../crates/isobmff-wasm/pkg/isobmff_wasm.js";
 import { boxTypeName } from "./dump.js";
 import { EDITS } from "./edits.js";
 
@@ -23,23 +23,23 @@ const CUT_LENGTH = 1024 * 1024;
  * @returns {Promise<{ tracks: object[], samples: object[] }>}
  */
 export async function demux(blob) {
-  const fsm = new MovieSampleExtentFsm();
+  const demuxer = new MovieExtentDemuxer();
   try {
     const samples = [];
-    for (let wanted; (wanted = fsm.wantedInput()); ) {
+    for (let wanted; (wanted = demuxer.wantedInput()); ) {
       const start = Number(wanted.offset);
       const length = wanted.length === undefined ? CUT_LENGTH : Math.min(CUT_LENGTH, Number(wanted.length));
       const cut = new Uint8Array(await blob.slice(start, start + length).arrayBuffer());
       if (cut.length === 0) {
-        fsm.finish();
+        demuxer.finish();
       } else {
-        fsm.handleInput(wanted.offset, cut);
+        demuxer.handleInput(wanted.offset, cut);
       }
-      for (let extent; (extent = fsm.pollOutput()); ) {
+      for (let extent; (extent = demuxer.pollOutput()); ) {
         samples.push(sample(extent));
       }
     }
-    const movie = fsm.movie();
+    const movie = demuxer.movie();
     const mvhd = movie.mvhd();
     const movieTimescale = mvhd.timescale();
     const traks = movie.trak();
@@ -50,7 +50,7 @@ export async function demux(blob) {
     // Why not leave it to the FinalizationRegistry: it holds the movie and its
     // sample tables, the collector does not see wasm memory, and wasm memory
     // never shrinks, so each file read would grow it by that much.
-    fsm.free();
+    demuxer.free();
   }
 }
 

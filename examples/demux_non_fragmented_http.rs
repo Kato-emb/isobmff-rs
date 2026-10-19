@@ -1,6 +1,6 @@
 //! Reads the samples a non-fragmented MP4 file served over HTTP carries, one line per sample
 //!
-//! Each read the demux FSM wants is fetched with a range request, of the length it names or a
+//! Each read the demuxer wants is fetched with a range request, of the length it names or a
 //! mebibyte, whichever is more, so a movie lying after its media data is read as
 //! `demux_non_fragmented` reads it from a file. A server that does not answer a range request with
 //! partial content of a stated length, no more than was asked for, is refused; a range it cannot
@@ -13,7 +13,7 @@ use core::error::Error;
 use std::env;
 use std::io::Read;
 
-use isobmff::structure::MovieDemuxFsm;
+use isobmff::MovieDemuxer;
 use ureq::Agent;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -26,10 +26,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         .build()
         .new_agent();
     let mut buffer = Vec::new();
-    let mut demux_fsm = MovieDemuxFsm::new();
+    let mut demuxer = MovieDemuxer::new();
 
     let mut count: u64 = 0;
-    while let Some(wanted) = demux_fsm.wanted_input() {
+    while let Some(wanted) = demuxer.wanted_input() {
         let length = wanted.length().unwrap_or(0).max(1024 * 1024);
         let last = wanted
             .offset()
@@ -55,14 +55,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 buffer.clear();
                 response.body_mut().as_reader().read_to_end(&mut buffer)?;
-                demux_fsm.handle_input(wanted.offset(), &buffer)
+                demuxer.handle_input(wanted.offset(), &buffer)
             }
-            416 => demux_fsm.finish(),
+            416 => demuxer.finish(),
             status => {
                 return Err(format!("the server answered a range request with {status}").into());
             }
         };
-        while let Some(sample) = demux_fsm.poll_output() {
+        while let Some(sample) = demuxer.poll_output() {
             println!(
                 "track={} time={} size={} sync={}",
                 sample.properties().track_id,

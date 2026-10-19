@@ -4,7 +4,7 @@
 mod tests {
     use isobmff::sample::{Sample, SampleProperties};
     use isobmff::sequence::BoxEvent;
-    use isobmff::structure::{MovieDemuxFsm, NonFragmentedMuxFsm};
+    use isobmff::{MovieDemuxer, NonFragmentedMuxer};
     use isobmff_boxes::{
         EditBox, EditListBox, EditListEntry, FileTypeBox, HeaderDuration, MediaRate, MovieBox,
         MovieHeaderBox, SampleFlags,
@@ -82,23 +82,23 @@ mod tests {
         movie: MovieBox,
         chunks: Vec<Vec<Sample>>,
     ) -> Vec<u8> {
-        let mut mux_fsm = NonFragmentedMuxFsm::new();
+        let mut muxer = NonFragmentedMuxer::new();
         let mut file = Vec::new();
 
         if let Some(brands) = brands {
-            mux_fsm.handle_file_type(brands).unwrap();
+            muxer.handle_file_type(brands).unwrap();
         }
-        mux_fsm.handle_movie(movie).unwrap();
+        muxer.handle_movie(movie).unwrap();
         for chunk in chunks {
-            mux_fsm.begin_chunk().unwrap();
+            muxer.begin_chunk().unwrap();
             for sample in chunk {
-                mux_fsm.handle_sample(sample).unwrap();
+                muxer.handle_sample(sample).unwrap();
             }
-            mux_fsm.finish_chunk().unwrap();
+            muxer.finish_chunk().unwrap();
         }
-        mux_fsm.finish().unwrap();
+        muxer.finish().unwrap();
 
-        while let Some(written) = mux_fsm.poll_output() {
+        while let Some(written) = muxer.poll_output() {
             file.extend_from_slice(&written);
         }
 
@@ -139,11 +139,11 @@ mod tests {
     fn a_file_handed_no_brands_is_read_back_declaring_the_brand_its_layout_requires() {
         let file = written_file(None, movie(), two_track_chunks());
 
-        let mut demux_fsm = MovieDemuxFsm::new();
-        demux_fsm.handle_input(0, &file).unwrap();
+        let mut demuxer = MovieDemuxer::new();
+        demuxer.handle_input(0, &file).unwrap();
 
         assert_eq!(
-            demux_fsm.file_type(),
+            demuxer.file_type(),
             Some(&FileTypeBox::new(
                 FourCc::new(*b"iso4"),
                 0,
@@ -156,9 +156,9 @@ mod tests {
     fn the_durations_are_stated_from_the_samples_each_track_was_handed() {
         let file = written_file(None, movie_timed_in(1_000), two_track_chunks());
 
-        let mut demux_fsm = MovieDemuxFsm::new();
-        demux_fsm.handle_input(0, &file).unwrap();
-        let read = demux_fsm.movie().unwrap();
+        let mut demuxer = MovieDemuxer::new();
+        demuxer.handle_input(0, &file).unwrap();
+        let read = demuxer.movie().unwrap();
 
         let mut expected = read.clone();
         let duration = |value| HeaderDuration::new(value).unwrap();
@@ -206,9 +206,9 @@ mod tests {
         ]];
         let file = written_file(None, movie, chunks);
 
-        let mut demux_fsm = MovieDemuxFsm::new();
-        demux_fsm.handle_input(0, &file).unwrap();
-        let read = demux_fsm.movie().unwrap().trak_by_id(1).unwrap();
+        let mut demuxer = MovieDemuxer::new();
+        demuxer.handle_input(0, &file).unwrap();
+        let read = demuxer.movie().unwrap().trak_by_id(1).unwrap();
 
         let mut expected = read.clone().with_edts(edits(100));
         *expected.tkhd_mut() = read

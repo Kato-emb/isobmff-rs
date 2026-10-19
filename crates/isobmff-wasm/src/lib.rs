@@ -1,23 +1,25 @@
 //! The `isobmff` crate as the browser reaches it, through `wasm-bindgen`
 //!
-//! A box, a state machine, [`BoxReader`], [`Boxes`], a [`Sample`] and the
-//! enums holding boxes ([`SampleSizes`], [`ChunkOffsets`]) are classes named
-//! after the library's types, and [`Mp4EpochSeconds`] a class of a static
-//! method alone; every other value is a plain object, built by
-//! `serde-wasm-bindgen`, whose TypeScript type is written by hand beside it
-//! and which holds no wasm memory. Methods and the fields of a plain object
-//! are named in camelCase. An enum carrying data is a union discriminated by
-//! `type`, and an enum carrying none the camelCase name of its variant; a
-//! value the specification states as one field is the value of that field,
-//! and one it states as several an object of those fields, even where the
-//! library holds them in one integer (`SampleFlags`); a four-character code
-//! or a UUID is the string it displays as, `Option` is `undefined`, a `u64`
-//! or an `i64` a `BigInt`, `Vec<u8>` a `Uint8Array`, `i32`s an `Int32Array`
-//! whether taken or returned, an argument of `u32`s a `Uint32Array` and one
-//! of `u64`s a `BigUint64Array`, another `Vec` or a tuple an array, and a
-//! [`core::ops::Range`] an object of `start` and `end`.
-//! [`Boxes`] is iterable, and a `poll*` method returns `undefined` once
-//! nothing is ready.
+//! A box, a state machine, [`BoxReader`], [`Boxes`], a [`Sample`] and the enums
+//! holding boxes ([`SampleSizes`], [`ChunkOffsets`]) are classes named after
+//! the library's types, and [`Mp4EpochSeconds`] a class of a static method
+//! alone. A generic type of the library is a class for each type argument the
+//! binding fills it with, named for that use: [`MovieDemuxer`] holds
+//! `isobmff::MovieDemuxer<SampleReader>` and [`MovieExtentDemuxer`]
+//! `isobmff::MovieDemuxer<SampleExtents>`. Every other value is a plain object,
+//! built by `serde-wasm-bindgen`, whose TypeScript type is written by hand
+//! beside it and which holds no wasm memory. Methods and the fields of a plain
+//! object are named in camelCase. An enum carrying data is a union
+//! discriminated by `type`, and an enum carrying none the camelCase name of its
+//! variant; a value the specification states as one field is the value of that
+//! field, and one it states as several an object of those fields, even where
+//! the library holds them in one integer (`SampleFlags`); a four-character code
+//! or a UUID is the string it displays as, `Option` is `undefined`, a `u64` or
+//! an `i64` a `BigInt`, `Vec<u8>` a `Uint8Array`, `i32`s an `Int32Array`
+//! whether taken or returned, an argument of `u32`s a `Uint32Array` and one of
+//! `u64`s a `BigUint64Array`, another `Vec` or a tuple an array, and a
+//! [`core::ops::Range`] an object of `start` and `end`. [`Boxes`] is iterable,
+//! and a `poll*` method returns `undefined` once nothing is ready.
 //!
 //! A box a state machine lends, or one a constructor or a `with*` method
 //! makes, is a root of its own that the box's class holds; the class of a box
@@ -61,8 +63,8 @@ pub use framing::{Boxes, JsBoxType, JsIteratorStep};
 pub use sample::{JsSampleProperties, Sample};
 pub use sequence::{BoxReader, JsPolledEvent};
 pub use structure::{
-    FragmentedMuxFsm, JsSampleExtent, JsWantedInput, MovieDemuxFsm, MovieSampleExtentFsm,
-    NonFragmentedMuxFsm,
+    FragmentedMuxer, JsSampleExtent, JsWantedInput, MovieDemuxer, MovieExtentDemuxer,
+    NonFragmentedMuxer,
 };
 
 /// [`core::ops::Range`] of `u64`
@@ -147,12 +149,12 @@ impl From<isobmff::sample::Error> for Failure {
     }
 }
 
-impl From<isobmff::structure::DemuxError> for Failure {
-    fn from(error: isobmff::structure::DemuxError) -> Self {
+impl From<isobmff::DemuxError> for Failure {
+    fn from(error: isobmff::DemuxError) -> Self {
         let kind = match &error {
-            isobmff::structure::DemuxError::Sequence { error, .. } => sequence_kind(error),
-            isobmff::structure::DemuxError::Sample { error, .. } => sample_kind(error),
-            isobmff::structure::DemuxError::Box { .. } => "box",
+            isobmff::DemuxError::Sequence { error, .. } => sequence_kind(error),
+            isobmff::DemuxError::Sample { error, .. } => sample_kind(error),
+            isobmff::DemuxError::Box { .. } => "box",
             _ => "structure",
         };
         Self {
@@ -162,12 +164,12 @@ impl From<isobmff::structure::DemuxError> for Failure {
     }
 }
 
-impl From<isobmff::structure::MuxError> for Failure {
-    fn from(error: isobmff::structure::MuxError) -> Self {
+impl From<isobmff::MuxError> for Failure {
+    fn from(error: isobmff::MuxError) -> Self {
         let kind = match &error {
-            isobmff::structure::MuxError::Sequence { error, .. } => sequence_kind(error),
-            isobmff::structure::MuxError::Sample { error, .. } => sample_kind(error),
-            isobmff::structure::MuxError::Box { .. } => "box",
+            isobmff::MuxError::Sequence { error, .. } => sequence_kind(error),
+            isobmff::MuxError::Sample { error, .. } => sample_kind(error),
+            isobmff::MuxError::Box { .. } => "box",
             _ => "structure",
         };
         Self {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { MovieDemuxFsm, initSync } from "../../crates/isobmff-wasm/pkg/isobmff_wasm.js";
+import { MovieDemuxer, initSync } from "../../crates/isobmff-wasm/pkg/isobmff_wasm.js";
 import { demux } from "../demux.js";
 import { dump } from "../dump.js";
 import { rotationOf } from "../edits.js";
@@ -129,10 +129,10 @@ test("remuxing a movie of many samples again leaves the wasm memory as it was", 
 
 test("a handle following a track_ID no track declares any more is refused as a handle", () => {
   const movieOf = (trackId) => {
-    const fsm = new MovieDemuxFsm();
-    fsm.handleInput(0n, movie(undefined, { trackId }));
-    const read = fsm.movie();
-    fsm.free();
+    const demuxer = new MovieDemuxer();
+    demuxer.handleInput(0n, movie(undefined, { trackId }));
+    const read = demuxer.movie();
+    demuxer.free();
     return read;
   };
   const first = movieOf(1);

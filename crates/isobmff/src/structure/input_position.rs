@@ -1,8 +1,8 @@
-//! [`InputPosition`], where the input a demux FSM takes in order stands in the file, and [`WantedInput`], the one read it wants next
+//! [`InputPosition`], where the input a demuxer takes in order stands in the file, and [`WantedInput`], the one read it wants next
 
 use core::ops::Range;
 
-/// The one read a demux FSM wants next: where in the file, and how much if it knows
+/// The one read a demuxer wants next: where in the file, and how much if it knows
 ///
 /// [`offset`](Self::offset) is a file offset, counted from the first byte of
 /// the file as a chunk offset or a base data offset is (ISO/IEC 14496-12
@@ -48,7 +48,7 @@ pub(crate) enum InputRoute {
     Unwanted,
 }
 
-/// Where the input a demux FSM takes in order stands: the offset the reading started at, and what was handed over since
+/// Where the input a demuxer takes in order stands: the offset the reading started at, and what was handed over since
 // Why not checked_add anywhere here: the offset the reading resumes at is one
 // the caller vouches for, and a change of coordinates carries no failure kind,
 // so an offset past any real file saturates.

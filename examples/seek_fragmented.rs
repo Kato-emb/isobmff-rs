@@ -14,8 +14,8 @@ use std::env;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
+use isobmff::MovieDemuxer;
 use isobmff::sample::movie_fragment_random_access::sync_sample_at;
-use isobmff::structure::MovieDemuxFsm;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let usage = "usage: seek_fragmented <in.mp4> <milliseconds>";
@@ -26,31 +26,29 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut file = File::open(path)?;
     let file_len = file.metadata()?.len();
     let mut buffer = vec![0; 1024 * 1024];
-    let mut demux_fsm = MovieDemuxFsm::new();
-    while demux_fsm.movie().is_none() {
-        let wanted = demux_fsm
-            .wanted_input()
-            .ok_or("the file carries no movie")?;
+    let mut demuxer = MovieDemuxer::new();
+    while demuxer.movie().is_none() {
+        let wanted = demuxer.wanted_input().ok_or("the file carries no movie")?;
         file.seek(SeekFrom::Start(wanted.offset()))?;
         let read = file.read(&mut buffer)?;
         if read == 0 {
-            demux_fsm.finish()?;
+            demuxer.finish()?;
         } else {
-            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())?;
+            demuxer.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())?;
         }
     }
-    demux_fsm.resume_at_movie_fragment_random_access(file_len)?;
-    while let Some(wanted) = demux_fsm.wanted_input() {
+    demuxer.resume_at_movie_fragment_random_access(file_len)?;
+    while let Some(wanted) = demuxer.wanted_input() {
         file.seek(SeekFrom::Start(wanted.offset()))?;
         let read = file.read(&mut buffer)?;
         if read == 0 {
-            demux_fsm.finish()?;
+            demuxer.finish()?;
         } else {
-            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())?;
+            demuxer.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())?;
         }
     }
-    let movie = demux_fsm.movie().ok_or("the file carries no movie")?;
-    let random_access = demux_fsm
+    let movie = demuxer.movie().ok_or("the file carries no movie")?;
+    let random_access = demuxer
         .movie_fragment_random_access()
         .ok_or("the file does not close with an mfra")?;
     let mut moof_offsets = Vec::new();
@@ -75,18 +73,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         .into_iter()
         .min()
         .ok_or("the mfra lists no entry")?;
-    demux_fsm.resume_at(earliest)?;
+    demuxer.resume_at(earliest)?;
 
     let mut count: u64 = 0;
-    while let Some(wanted) = demux_fsm.wanted_input() {
+    while let Some(wanted) = demuxer.wanted_input() {
         file.seek(SeekFrom::Start(wanted.offset()))?;
         let read = file.read(&mut buffer)?;
         let handed = if read == 0 {
-            demux_fsm.finish()
+            demuxer.finish()
         } else {
-            demux_fsm.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
+            demuxer.handle_input(wanted.offset(), buffer.get(..read).unwrap_or_default())
         };
-        while let Some(sample) = demux_fsm.poll_output() {
+        while let Some(sample) = demuxer.poll_output() {
             println!(
                 "track={} time={} size={} sync={}",
                 sample.properties().track_id,
