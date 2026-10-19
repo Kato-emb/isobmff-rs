@@ -62,6 +62,10 @@
 
 extern crate alloc;
 
+pub use demux::{
+    DemuxError, DemuxLimits, MediaSegmentDemuxer, MovieDemuxer, SampleExtents, SampleGathering,
+    WantedInput,
+};
 pub use isobmff_core::{
     AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxFormat, BoxHeader, BoxSize, BoxType,
     BoxVariants, Boxes, Category, ChildBoxes, CompactSize, CompactType, CompressorName, Error,
@@ -69,12 +73,9 @@ pub use isobmff_core::{
     FullBoxFlags, I8F8, I16F16, InContainer, LanguageCode, Matrix, Mp4EpochSeconds,
     NullTerminatedString, OtherBoxes, RawBox, U16F16, Uuid,
 };
+pub use mux::{FragmentedMuxer, MediaSegmentMuxer, MuxError, NonFragmentedMuxer};
 pub use sample::{Sample, SampleExtent, SampleProperties};
 pub use sequence::OutputBytes;
-pub use structure::{
-    DemuxError, DemuxLimits, FragmentedMuxer, MediaSegmentDemuxer, MediaSegmentMuxer, MovieDemuxer,
-    MuxError, NonFragmentedMuxer, SampleExtents, SampleGathering, WantedInput,
-};
 
 pub mod sequence;
 
@@ -84,6 +85,8 @@ pub use isobmff_boxes as boxes;
 
 pub mod sample;
 
+mod demux;
+mod mux;
 mod structure;
 
 /// Sample entries of ISO/IEC 14496-15, the carriage of AVC video — the

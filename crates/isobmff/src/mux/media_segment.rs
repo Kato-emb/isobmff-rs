@@ -1,19 +1,18 @@
-//! [`MediaSegmentMuxer`], a media segment laid down as the samples come
+//! [`MediaSegmentMuxer`], a media segment laid down as the samples come, ISO/IEC 14496-12 §8.16
 
 use alloc::vec::Vec;
 
 use isobmff_boxes::{MediaDataBox, MovieBox, SegmentTypeBox};
 use isobmff_core::{BoxDefinition, BoxEncode, BoxType};
 
-use super::{MediaSegmentDisposition, MediaSegmentStructure};
+use crate::mux::{MuxError, MuxOutput, whole_box_header, whole_payload};
 use crate::sample::{MovieFragmentWriter, Sample};
 use crate::sequence::OutputBytes;
-use crate::structure::mux_output::MuxOutput;
-use crate::structure::{MuxError, whole_box_header, whole_payload};
+use crate::structure::{MediaSegmentDisposition, MediaSegmentStructure};
 
 /// Lays a media segment down, taking the samples as they come
 ///
-/// The mirror of [`MediaSegmentDemuxer`](crate::structure::MediaSegmentDemuxer): it wires
+/// The mirror of [`MediaSegmentDemuxer`](crate::MediaSegmentDemuxer): it wires
 /// the layers that write a media segment of ISO/IEC 14496-12 §8.16 — the
 /// structure that holds the order of the top-level boxes, the writing of
 /// each box whole, the laying out of the samples of a fragment as its `moof`
@@ -31,13 +30,13 @@ use crate::structure::{MuxError, whole_box_header, whole_payload};
 /// * The order of the boxes is the structure's, held to as they are handed
 ///   over, but for the `styp`, which the muxer lays down first if at all:
 ///   the `styp`, then the fragments. A `styp` handed over after another box is
-///   [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder), and a
+///   [`BoxOutOfOrder`](crate::MuxError::BoxOutOfOrder), and a
 ///   segment declared over without a fragment is
-///   [`MissingMandatoryBox`](crate::structure::MuxError::MissingMandatoryBox).
+///   [`MissingMandatoryBox`](crate::MuxError::MissingMandatoryBox).
 /// * A `styp` listing a brand under which the `default-base-is-moof` every
 ///   `tfhd` states shall not be used
 ///   ([`SegmentTypeBox::forbids_default_base_is_moof`]) is
-///   [`UnsupportedBrand`](crate::structure::MuxError::UnsupportedBrand), and nothing
+///   [`UnsupportedBrand`](crate::MuxError::UnsupportedBrand), and nothing
 ///   of it is laid down. The `ftyp` of the initialization segment is not
 ///   handed over, and is not checked.
 /// * A fragment is opened by [`begin_fragment`](Self::begin_fragment) or
@@ -46,7 +45,7 @@ use crate::structure::{MuxError, whole_box_header, whole_payload};
 ///   [`finish_fragment`](Self::finish_fragment) as the `moof` and the `mdat`
 ///   the sample layer made of it. What the samples themselves must hold to
 ///   is [`MovieFragmentWriter`]'s contract, reported as
-///   [`Sample`](crate::structure::MuxError::Sample): the samples are checked against
+///   [`Sample`](crate::MuxError::Sample): the samples are checked against
 ///   the movie of the initialization segment, and a movie that continues in
 ///   no fragments is refused by [`new`](Self::new). A segment written apart
 ///   from the ones before it starts each track where its first sample
@@ -58,13 +57,13 @@ use crate::structure::{MuxError, whole_box_header, whole_payload};
 ///   before handing over more: bytes are held until they are taken, so
 ///   writing on without polling has the muxer hold the whole segment.
 /// * An `Err` leaves the muxer failed for good,
-///   [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished) aside:
+///   [`AlreadyFinished`](crate::MuxError::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The bytes made before
 ///   it are still there to take.
 /// * [`finish`](Self::finish) declares the segment over. Bytes are still
 ///   taken after it, but anything handed over then, or a second
 ///   [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished).
+///   [`AlreadyFinished`](crate::MuxError::AlreadyFinished).
 ///
 /// # Examples
 ///
@@ -131,7 +130,7 @@ impl MediaSegmentMuxer {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::structure::MuxError::Sample): the movie is one
+    /// * [`Sample`](crate::MuxError::Sample): the movie is one
     ///   [`MovieFragmentWriter::new`] refuses — it carries no `mvex`, or its
     ///   sample tables lay samples out.
     pub fn new(movie: &MovieBox) -> Result<Self, MuxError> {
@@ -146,13 +145,13 @@ impl MediaSegmentMuxer {
     ///
     /// # Errors
     ///
-    /// * [`UnsupportedBrand`](crate::structure::MuxError::UnsupportedBrand): a
+    /// * [`UnsupportedBrand`](crate::MuxError::UnsupportedBrand): a
     ///   brand listed forbids the `default-base-is-moof` the muxer writes;
     ///   nothing of the box is laid down.
-    /// * [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder): a box
+    /// * [`BoxOutOfOrder`](crate::MuxError::BoxOutOfOrder): a box
     ///   was laid down before them.
-    /// * [`Box`](crate::structure::MuxError::Box): the box does not write.
-    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
+    /// * [`Box`](crate::MuxError::Box): the box does not write.
+    /// * [`AlreadyFinished`](crate::MuxError::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
@@ -181,9 +180,9 @@ impl MediaSegmentMuxer {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::structure::MuxError::Sample): what the sample layer
+    /// * [`Sample`](crate::MuxError::Sample): what the sample layer
     ///   makes of the call.
-    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::MuxError::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
@@ -204,9 +203,9 @@ impl MediaSegmentMuxer {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::structure::MuxError::Sample): what the sample layer
+    /// * [`Sample`](crate::MuxError::Sample): what the sample layer
     ///   makes of the call.
-    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::MuxError::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
@@ -224,9 +223,9 @@ impl MediaSegmentMuxer {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::structure::MuxError::Sample): what the sample layer
+    /// * [`Sample`](crate::MuxError::Sample): what the sample layer
     ///   makes of the sample.
-    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::MuxError::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
@@ -245,11 +244,11 @@ impl MediaSegmentMuxer {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::structure::MuxError::Sample): what the sample layer
+    /// * [`Sample`](crate::MuxError::Sample): what the sample layer
     ///   makes of the fragment.
-    /// * [`Box`](crate::structure::MuxError::Box): the `moof` or the `mdat`
+    /// * [`Box`](crate::MuxError::Box): the `moof` or the `mdat`
     ///   does not write.
-    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::MuxError::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
@@ -283,12 +282,12 @@ impl MediaSegmentMuxer {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::structure::MuxError::Sample): a fragment was left
+    /// * [`Sample`](crate::MuxError::Sample): a fragment was left
     ///   open.
-    /// * [`MissingMandatoryBox`](crate::structure::MuxError::MissingMandatoryBox):
+    /// * [`MissingMandatoryBox`](crate::MuxError::MissingMandatoryBox):
     ///   no fragment was laid down, so what was laid down is not a media
     ///   segment.
-    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::MuxError::AlreadyFinished): the
     ///   segment was already declared over.
     /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
@@ -317,7 +316,7 @@ impl MediaSegmentMuxer {
     /// Lays one box down where the structure places it, through the framing of the segment
     ///
     /// A box the structure passes over is refused as
-    /// [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder).
+    /// [`BoxOutOfOrder`](crate::MuxError::BoxOutOfOrder).
     fn write_box(&mut self, box_type: BoxType, payload: Vec<u8>) -> Result<(), MuxError> {
         let header = whole_box_header(box_type, payload.len() as u64)?;
 
@@ -340,8 +339,8 @@ mod tests {
     use isobmff_core::{BoxDefinition, FourCc};
     use isobmff_test_support::{segment_type, unfragmented_movie};
 
-    use super::super::tests::{movie, sample};
     use super::{MediaSegmentMuxer, MuxError};
+    use crate::mux::driving::{movie, sample};
     use crate::sample::{Sample, SampleProperties};
 
     #[test]

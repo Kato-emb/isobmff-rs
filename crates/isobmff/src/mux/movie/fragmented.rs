@@ -1,19 +1,18 @@
-//! [`FragmentedMuxer`], a fragmented movie file laid down as the samples come
+//! [`FragmentedMuxer`], a fragmented movie file laid down as the samples come, ISO/IEC 14496-12 Annex A.8
 
 use alloc::vec::Vec;
 
 use isobmff_boxes::{FileTypeBox, MediaDataBox, MovieBox, MovieFragmentBox};
 use isobmff_core::{BoxDefinition, BoxEncode, BoxType, FourCc};
 
-use super::{FragmentedDisposition, FragmentedStructure};
+use crate::mux::{MuxError, MuxOutput, whole_box_header, whole_payload};
 use crate::sample::{MovieFragmentWriter, Sample};
 use crate::sequence::OutputBytes;
-use crate::structure::mux_output::MuxOutput;
-use crate::structure::{MuxError, whole_box_header, whole_payload};
+use crate::structure::{FragmentedDisposition, FragmentedStructure};
 
 /// Lays a fragmented movie file down, taking the samples as they come
 ///
-/// The mirror of [`MovieDemuxer`](crate::structure::MovieDemuxer):
+/// The mirror of [`MovieDemuxer`](crate::MovieDemuxer):
 /// it wires the layers that write a fragmented movie file of ISO/IEC 14496-12
 /// Annex A.8 — the structure that holds the order of the top-level boxes, the
 /// writing of each box whole, the laying out of the samples of a fragment as
@@ -27,20 +26,20 @@ use crate::structure::{MuxError, whole_box_header, whole_payload};
 /// * The order of the boxes is the structure's, held to as they are handed
 ///   over: the `ftyp` first, the `moov` once and before any fragment. A
 ///   box handed over out of that order is
-///   [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder) or
-///   [`DuplicateBox`](crate::structure::MuxError::DuplicateBox), and a file
+///   [`BoxOutOfOrder`](crate::MuxError::BoxOutOfOrder) or
+///   [`DuplicateBox`](crate::MuxError::DuplicateBox), and a file
 ///   declared over without a `moov` is
-///   [`MissingMandatoryBox`](crate::structure::MuxError::MissingMandatoryBox).
+///   [`MissingMandatoryBox`](crate::MuxError::MissingMandatoryBox).
 /// * The movie comes before any fragment: a fragment opened or closed, or a
 ///   sample handed over, before it is
-///   [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder) of the `moof`. The
+///   [`BoxOutOfOrder`](crate::MuxError::BoxOutOfOrder) of the `moof`. The
 ///   samples are checked against the movie as they are handed over, as
 ///   [`MovieFragmentWriter`] checks them, and a movie it refuses is refused
 ///   before any of it is laid down.
 /// * The `ftyp` handed over is laid down as it stands, unless it lists a
 ///   brand under which the `default-base-is-moof` every `tfhd` states shall
 ///   not be used ([`FileTypeBox::forbids_default_base_is_moof`]):
-///   that is [`UnsupportedBrand`](crate::structure::MuxError::UnsupportedBrand), and
+///   that is [`UnsupportedBrand`](crate::MuxError::UnsupportedBrand), and
 ///   nothing of it is laid down. Where none was handed over, the muxer
 ///   lays its own down before the `moov`: `iso6` as its
 ///   `major_brand` and its one `compatible_brands` entry, with
@@ -52,19 +51,19 @@ use crate::structure::{MuxError, whole_box_header, whole_payload};
 ///   [`finish_fragment`](Self::finish_fragment) as the `moof` and the `mdat`
 ///   the sample layer made of it. What the samples themselves must hold to
 ///   is [`MovieFragmentWriter`]'s contract, reported as
-///   [`Sample`](crate::structure::MuxError::Sample).
+///   [`Sample`](crate::MuxError::Sample).
 /// * The bytes are taken from [`poll_output`](Self::poll_output), one
 ///   [`OutputBytes`] a call, owned by whoever takes them. The caller drains
 ///   before handing over more: bytes are held until they are taken, so
 ///   writing on without polling has the muxer hold the whole file.
 /// * An `Err` leaves the muxer failed for good,
-///   [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished) aside:
+///   [`AlreadyFinished`](crate::MuxError::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The bytes made before
 ///   it are still there to take.
 /// * [`finish`](Self::finish) declares the file over. Bytes are still taken
 ///   after it, but anything handed over then, or a second
 ///   [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished).
+///   [`AlreadyFinished`](crate::MuxError::AlreadyFinished).
 ///
 /// # Examples
 ///
@@ -137,13 +136,13 @@ impl FragmentedMuxer {
     ///
     /// # Errors
     ///
-    /// * [`UnsupportedBrand`](crate::structure::MuxError::UnsupportedBrand): a
+    /// * [`UnsupportedBrand`](crate::MuxError::UnsupportedBrand): a
     ///   brand listed forbids the `default-base-is-moof` the muxer writes;
     ///   nothing of the box is laid down.
-    /// * [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder): a box
+    /// * [`BoxOutOfOrder`](crate::MuxError::BoxOutOfOrder): a box
     ///   was handed over before them.
-    /// * [`Box`](crate::structure::MuxError::Box): the box does not write.
-    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
+    /// * [`Box`](crate::MuxError::Box): the box does not write.
+    /// * [`AlreadyFinished`](crate::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
@@ -166,13 +165,13 @@ impl FragmentedMuxer {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::structure::MuxError::Sample): the movie is one
+    /// * [`Sample`](crate::MuxError::Sample): the movie is one
     ///   [`MovieFragmentWriter::new`] refuses — it carries no `mvex`, or its
     ///   sample tables lay samples out; nothing of it is laid down.
-    /// * [`DuplicateBox`](crate::structure::MuxError::DuplicateBox): a movie
+    /// * [`DuplicateBox`](crate::MuxError::DuplicateBox): a movie
     ///   continuing in fragments was handed over already.
-    /// * [`Box`](crate::structure::MuxError::Box): the box does not write.
-    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
+    /// * [`Box`](crate::MuxError::Box): the box does not write.
+    /// * [`AlreadyFinished`](crate::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
@@ -200,11 +199,11 @@ impl FragmentedMuxer {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder): the
+    /// * [`BoxOutOfOrder`](crate::MuxError::BoxOutOfOrder): the
     ///   movie was not handed over first.
-    /// * [`Sample`](crate::structure::MuxError::Sample): what the sample layer
+    /// * [`Sample`](crate::MuxError::Sample): what the sample layer
     ///   makes of the call.
-    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
@@ -226,11 +225,11 @@ impl FragmentedMuxer {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder): the
+    /// * [`BoxOutOfOrder`](crate::MuxError::BoxOutOfOrder): the
     ///   movie was not handed over first.
-    /// * [`Sample`](crate::structure::MuxError::Sample): what the sample layer
+    /// * [`Sample`](crate::MuxError::Sample): what the sample layer
     ///   makes of the call.
-    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
@@ -249,11 +248,11 @@ impl FragmentedMuxer {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder): the
+    /// * [`BoxOutOfOrder`](crate::MuxError::BoxOutOfOrder): the
     ///   movie was not handed over first.
-    /// * [`Sample`](crate::structure::MuxError::Sample): what the sample layer
+    /// * [`Sample`](crate::MuxError::Sample): what the sample layer
     ///   makes of the sample.
-    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
@@ -273,13 +272,13 @@ impl FragmentedMuxer {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder): the
+    /// * [`BoxOutOfOrder`](crate::MuxError::BoxOutOfOrder): the
     ///   movie was not handed over first.
-    /// * [`Sample`](crate::structure::MuxError::Sample): what the sample layer
+    /// * [`Sample`](crate::MuxError::Sample): what the sample layer
     ///   makes of the fragment.
-    /// * [`Box`](crate::structure::MuxError::Box): the `moof` or the `mdat`
+    /// * [`Box`](crate::MuxError::Box): the `moof` or the `mdat`
     ///   does not write.
-    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
@@ -313,12 +312,12 @@ impl FragmentedMuxer {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::structure::MuxError::Sample): a fragment was left
+    /// * [`Sample`](crate::MuxError::Sample): a fragment was left
     ///   open.
-    /// * [`MissingMandatoryBox`](crate::structure::MuxError::MissingMandatoryBox):
+    /// * [`MissingMandatoryBox`](crate::MuxError::MissingMandatoryBox):
     ///   the movie was never handed over, so the file laid down is not a
     ///   fragmented movie file.
-    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::MuxError::AlreadyFinished): the
     ///   file was already declared over.
     /// * The failure of a previous call, which the muxer keeps and reports
     ///   again for every call after it.
@@ -356,7 +355,7 @@ impl FragmentedMuxer {
     /// Lays one box down where the structure places it, through the framing of the file
     ///
     /// A box the structure passes over is refused as
-    /// [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder).
+    /// [`BoxOutOfOrder`](crate::MuxError::BoxOutOfOrder).
     fn write_box(&mut self, box_type: BoxType, payload: Vec<u8>) -> Result<(), MuxError> {
         let header = whole_box_header(box_type, payload.len() as u64)?;
 

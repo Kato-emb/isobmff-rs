@@ -1,14 +1,14 @@
-//! The order the boxes of an ISO base media file stand in, and the demuxers and muxers that read and write one
+//! The order the top-level boxes of an ISO base media file stand in, ISO/IEC 14496-12 §6.2.3
 //!
 //! A presentation is carried as samples — ISO/IEC 14496-12 §3.1.14 has a sample
-//! as all the data associated with a single timestamp. [`MovieDemuxer`]
+//! as all the data associated with a single timestamp. [`MovieDemuxer`](crate::MovieDemuxer)
 //! takes a movie file as it arrives, fragmented or not, and reports the
-//! [`Sample`](crate::sample::Sample)s it carries, and [`MediaSegmentDemuxer`]
+//! [`Sample`](crate::sample::Sample)s it carries, and [`MediaSegmentDemuxer`](crate::MediaSegmentDemuxer)
 //! does the same for a media segment delivered apart from the movie it
-//! continues; [`FragmentedMuxer`],
-//! [`NonFragmentedMuxer`] and [`MediaSegmentMuxer`] go the other way, laying
-//! samples down as a file or a segment of each kind. [`MovieDemuxer`]
-//! gathering with [`SampleExtents`] reads a movie file the same way short of
+//! continues; [`FragmentedMuxer`](crate::FragmentedMuxer),
+//! [`NonFragmentedMuxer`](crate::NonFragmentedMuxer) and [`MediaSegmentMuxer`](crate::MediaSegmentMuxer) go the other way, laying
+//! samples down as a file or a segment of each kind. [`MovieDemuxer`](crate::MovieDemuxer)
+//! gathering with [`SampleExtents`](crate::SampleExtents) reads a movie file the same way short of
 //! gathering the samples, and reports the
 //! [`SampleExtent`](crate::sample::SampleExtent) of each, where its bytes lie
 //! in the file. None reaches for a source
@@ -29,9 +29,10 @@
 //!    [`sequence`](crate::sequence) holds. They read no box into a value:
 //!    which boxes matter is not theirs to say.
 //! 2. **Box values.** The events of one box gathered whole and read into its
-//!    value, bounded by a limit on what the box may declare. Held in this
-//!    module, where a box event and [`BoxDecode`](crate::BoxDecode)
-//!    first meet.
+//!    value, bounded by a limit on what the box may declare, and a value
+//!    written whole into the events of its box. Held by the demuxers and the
+//!    muxers, where a box event and [`BoxDecode`](crate::BoxDecode) first
+//!    meet.
 //! 3. **Sample resolution.** Where every sample of a presentation lies and what
 //!    is true of it, resolved out of the boxes that declare it into a
 //!    [`SampleExtent`](crate::sample::SampleExtent): the sample tables of a
@@ -63,12 +64,12 @@
 //!    concatenated into one stream read as one. The structure is the only
 //!    layer that knows how a file is put together, and the order a file
 //!    breaks is its failure.
-//! 6. **Demuxers and muxers.** [`MovieDemuxer`], [`MediaSegmentDemuxer`],
-//!    [`FragmentedMuxer`], [`NonFragmentedMuxer`] and [`MediaSegmentMuxer`]
+//! 6. **Demuxers and muxers.** [`MovieDemuxer`](crate::MovieDemuxer), [`MediaSegmentDemuxer`](crate::MediaSegmentDemuxer),
+//!    [`FragmentedMuxer`](crate::FragmentedMuxer), [`NonFragmentedMuxer`](crate::NonFragmentedMuxer) and [`MediaSegmentMuxer`](crate::MediaSegmentMuxer)
 //!    wire layers 1 to 5 into machines: one demuxer reads a movie file,
 //!    fragmented or not, through the structure of a fragmented one, and one
 //!    reads a media segment; one muxer writes each kind.
-//!    [`MovieDemuxer`] gathering with [`SampleExtents`] wires layers 1, 2, 3
+//!    [`MovieDemuxer`](crate::MovieDemuxer) gathering with [`SampleExtents`](crate::SampleExtents) wires layers 1, 2, 3
 //!    and 5 alone, and hands over the extents layer 3 resolves in place of
 //!    samples. A demuxer holds
 //!    one rule of its own: it keeps where the input it takes in order stands,
@@ -76,7 +77,7 @@
 //!    start that input has passed, else the continuation of that input —
 //!    taking every input with the offset it was read at. Each passes every value between the layers,
 //!    so a caller hands over bytes and takes samples (or extents, from a
-//!    [`MovieDemuxer`] gathering with [`SampleExtents`]), or hands over
+//!    [`MovieDemuxer`](crate::MovieDemuxer) gathering with [`SampleExtents`](crate::SampleExtents)), or hands over
 //!    samples and takes bytes, and
 //!    never sees one. Every offset above the framing is
 //!    a file offset — the extents the framing reports, counted from the first
@@ -207,30 +208,12 @@
 //! [`sample_table::sample_extents`](crate::sample::sample_table::sample_extents)
 //! names where its samples lie, and their bytes are sliced from there.
 
-mod demux_error;
-mod demux_input;
-mod demux_limits;
+mod error;
 mod fragmented_movie;
-mod input_position;
 mod media_segment;
-mod movie;
-mod mux_error;
-mod mux_output;
 mod non_fragmented_movie;
-mod sample_gathering;
-mod structure_error;
-mod whole_box;
 
-pub use demux_error::DemuxError;
-pub use demux_limits::DemuxLimits;
-pub use fragmented_movie::FragmentedMuxer;
-pub use input_position::WantedInput;
-pub use media_segment::{MediaSegmentDemuxer, MediaSegmentMuxer};
-pub use movie::MovieDemuxer;
-pub use mux_error::MuxError;
-pub use non_fragmented_movie::NonFragmentedMuxer;
-pub use sample_gathering::{SampleExtents, SampleGathering};
-
-use demux_input::DemuxInput;
-use structure_error::StructureError;
-use whole_box::{WholeBoxReader, compact_box_header, whole_box_header, whole_payload};
+pub(crate) use error::Error;
+pub(crate) use fragmented_movie::{FragmentedDisposition, FragmentedStructure};
+pub(crate) use media_segment::{MediaSegmentDisposition, MediaSegmentStructure};
+pub(crate) use non_fragmented_movie::{NonFragmentedDisposition, NonFragmentedStructure};

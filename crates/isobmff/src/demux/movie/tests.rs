@@ -8,7 +8,7 @@ use isobmff_test_support::{
 
 use super::{DemuxError, MovieDemuxer};
 use crate::sample::{Sample, SampleExtent, SampleProperties, SampleReaderLimits};
-use crate::structure::{DemuxLimits, FragmentedMuxer, SampleExtents, WantedInput};
+use crate::{DemuxLimits, FragmentedMuxer, SampleExtents, WantedInput};
 
 /// Movie of one track continued in fragments, whose defaults a `trex` states
 fn movie() -> MovieBox {

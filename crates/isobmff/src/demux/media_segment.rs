@@ -1,14 +1,14 @@
-//! [`MediaSegmentDemuxer`], a media segment read as it arrives
+//! [`MediaSegmentDemuxer`], a media segment read as it arrives, ISO/IEC 14496-12 §8.16
 
 use alloc::vec::Vec;
 
 use isobmff_boxes::{MovieBox, MovieFragmentBox, SegmentIndexBox, SegmentTypeBox};
 
-use super::{MediaSegmentDisposition, MediaSegmentStructure};
+use crate::demux::{DemuxError, DemuxInput, DemuxLimits, WantedInput, WholeBoxReader};
 use crate::sample::movie_fragment::sample_extents;
 use crate::sample::{Sample, SampleReader, SegmentIndex, TrackDecodeTimes};
 use crate::sequence::BoxEvent;
-use crate::structure::{DemuxError, DemuxInput, DemuxLimits, WantedInput, WholeBoxReader};
+use crate::structure::{MediaSegmentDisposition, MediaSegmentStructure};
 
 /// Reads the samples a media segment carries, taking it as it arrives
 ///
@@ -53,14 +53,14 @@ use crate::structure::{DemuxError, DemuxInput, DemuxLimits, WantedInput, WholeBo
 ///   held and the samples not yet taken are dropped, and where each track
 ///   stands on its timeline is no longer known until a `tfdt` states it; a
 ///   fragment stating none for such a track is
-///   [`Sample`](crate::structure::DemuxError::Sample).
+///   [`Sample`](crate::DemuxError::Sample).
 /// * The order the boxes come in, and what a segment that breaks it is
 ///   reported as, are the structure's: a `styp` and an `mdat` are read
 ///   wherever they lie, a box other than a `moof` or a `sidx` straight after
 ///   a [`resume_at`](Self::resume_at) is
-///   [`BoxOutOfOrder`](crate::structure::DemuxError::BoxOutOfOrder), and a
+///   [`BoxOutOfOrder`](crate::DemuxError::BoxOutOfOrder), and a
 ///   segment declared over without a `moof` is
-///   [`MissingMandatoryBox`](crate::structure::DemuxError::MissingMandatoryBox).
+///   [`MissingMandatoryBox`](crate::DemuxError::MissingMandatoryBox).
 ///   A segment carrying no `styp` reads all the same, as §8.16.2 allows.
 /// * Where a fragment states no decode time for a track, the track goes on
 ///   from where the fragments handed over before it left it, or where none
@@ -68,7 +68,7 @@ use crate::structure::{DemuxError, DemuxInput, DemuxLimits, WantedInput, WholeBo
 ///   movie of an initialization segment, which declares no sample (§8.8.12).
 ///   A `styp` read on the way does not set the track back. After a
 ///   [`resume_at`](Self::resume_at), a fragment stating none for a track no
-///   `tfdt` has stated since is [`Sample`](crate::structure::DemuxError::Sample) instead.
+///   `tfdt` has stated since is [`Sample`](crate::DemuxError::Sample) instead.
 /// * What the demuxer holds of what the segment declares is bounded — a box
 ///   read into a value, the samples a `moof` declares, the samples gathered
 ///   — by the [`DemuxLimits`] it was created with.
@@ -84,15 +84,15 @@ use crate::structure::{DemuxError, DemuxInput, DemuxLimits, WantedInput, WholeBo
 ///   has; a fragment addressing media data lying before it (§8.8.7, §8.8.8)
 ///   wants bytes already passed by.
 /// * An `Err` leaves the demuxer failed for good,
-///   [`AlreadyFinished`](crate::structure::DemuxError::AlreadyFinished) and
-///   [`UnwantedInput`](crate::structure::DemuxError::UnwantedInput) aside:
+///   [`AlreadyFinished`](crate::DemuxError::AlreadyFinished) and
+///   [`UnwantedInput`](crate::DemuxError::UnwantedInput) aside:
 ///   every later call reports that same failure again. The samples completed
 ///   before it are still there to take.
 /// * [`finish`](Self::finish) declares the segment over, and reports what
 ///   any layer makes of the end of it: a box left open, no `moof` come, a
 ///   sample short of the data it claimed. Samples are still taken after it,
 ///   but anything handed over then, or a second [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::structure::DemuxError::AlreadyFinished), until
+///   [`AlreadyFinished`](crate::DemuxError::AlreadyFinished), until
 ///   [`resume_at`](Self::resume_at) restarts the reading.
 ///
 /// # Examples
@@ -189,7 +189,7 @@ impl MediaSegmentDemuxer {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::structure::DemuxError::Sample): what
+    /// * [`Sample`](crate::DemuxError::Sample): what
     ///   [`TrackDecodeTimes::new`] makes of `movie`.
     pub fn new(movie: MovieBox) -> Result<Self, DemuxError> {
         Self::with_limits(movie, DemuxLimits::new())
@@ -199,7 +199,7 @@ impl MediaSegmentDemuxer {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::structure::DemuxError::Sample): what
+    /// * [`Sample`](crate::DemuxError::Sample): what
     ///   [`TrackDecodeTimes::new`] makes of `movie`.
     pub fn with_limits(movie: MovieBox, limits: DemuxLimits) -> Result<Self, DemuxError> {
         Ok(Self {
@@ -231,19 +231,19 @@ impl MediaSegmentDemuxer {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::structure::DemuxError::BoxOutOfOrder): what
+    /// * [`BoxOutOfOrder`](crate::DemuxError::BoxOutOfOrder): what
     ///   the structure makes of a top-level box arriving where it does.
-    /// * [`PayloadLimitExceeded`](crate::structure::DemuxError::PayloadLimitExceeded):
+    /// * [`PayloadLimitExceeded`](crate::DemuxError::PayloadLimitExceeded):
     ///   a box read into a value reaches past the limit the demuxer gathers.
-    /// * [`Sequence`](crate::structure::DemuxError::Sequence): what the framing
+    /// * [`Sequence`](crate::DemuxError::Sequence): what the framing
     ///   of the segment makes of the input.
-    /// * [`Box`](crate::structure::DemuxError::Box): a box read into a value
+    /// * [`Box`](crate::DemuxError::Box): a box read into a value
     ///   does not decode.
-    /// * [`Sample`](crate::structure::DemuxError::Sample): what the samples make
+    /// * [`Sample`](crate::DemuxError::Sample): what the samples make
     ///   of a fragment, a `sidx`, or the media data beside it.
-    /// * [`AlreadyFinished`](crate::structure::DemuxError::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::DemuxError::AlreadyFinished): the
     ///   segment was declared over by [`finish`](Self::finish).
-    /// * [`UnwantedInput`](crate::structure::DemuxError::UnwantedInput): `offset` is
+    /// * [`UnwantedInput`](crate::DemuxError::UnwantedInput): `offset` is
     ///   neither where the input taken in order stands nor the offset of the
     ///   bytes [`wanted_input`](Self::wanted_input) names as lacking. The
     ///   demuxer is not failed by it.
@@ -331,16 +331,16 @@ impl MediaSegmentDemuxer {
     ///
     /// # Errors
     ///
-    /// * [`Sequence`](crate::structure::DemuxError::Sequence): the segment ended
+    /// * [`Sequence`](crate::DemuxError::Sequence): the segment ended
     ///   inside a box.
-    /// * [`Box`](crate::structure::DemuxError::Box): a box read into a value,
+    /// * [`Box`](crate::DemuxError::Box): a box read into a value,
     ///   declaring no total, does not decode.
-    /// * [`MissingMandatoryBox`](crate::structure::DemuxError::MissingMandatoryBox):
+    /// * [`MissingMandatoryBox`](crate::DemuxError::MissingMandatoryBox):
     ///   the segment carried no `moof`.
-    /// * [`Sample`](crate::structure::DemuxError::Sample): what the samples make
+    /// * [`Sample`](crate::DemuxError::Sample): what the samples make
     ///   of a fragment or a `sidx` declaring no total, or a sample a fragment
     ///   declared is short of the data it claimed.
-    /// * [`AlreadyFinished`](crate::structure::DemuxError::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::DemuxError::AlreadyFinished): the
     ///   segment was already declared over.
     /// * The failure of a previous call, which the demuxer keeps and reports
     ///   again for every call after it.
@@ -431,10 +431,10 @@ mod tests {
     use isobmff_core::{BoxDefinition, BoxType};
     use isobmff_test_support::{framed, movie_fragment, segment_type, written};
 
-    use super::super::tests::{movie, sample, segment_of_one_sample};
     use super::{DemuxError, MediaSegmentDemuxer};
+    use crate::mux::driving::{movie, sample, segment_of_one_sample};
     use crate::sample::SampleReaderLimits;
-    use crate::structure::{DemuxLimits, WantedInput};
+    use crate::{DemuxLimits, WantedInput};
 
     /// What the demuxer makes of `segment` handed over whole, then declared over
     fn read(segment: &[u8]) -> Result<MediaSegmentDemuxer, DemuxError> {

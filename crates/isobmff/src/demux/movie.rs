@@ -1,4 +1,4 @@
-//! [`MovieDemuxer`], a movie file read as it arrives, fragmented or not
+//! [`MovieDemuxer`], a movie file read as it arrives, fragmented or not, ISO/IEC 14496-12 §8.2.1, §8.7 and Annex A.8
 
 use alloc::vec::Vec;
 
@@ -8,12 +8,12 @@ use isobmff_boxes::{
 };
 use isobmff_core::{BoxDecode, BoxDefinition};
 
-use crate::sample::{SampleReader, SegmentIndex, TrackDecodeTimes, movie_fragment, sample_table};
-use crate::sequence::BoxEvent;
-use crate::structure::fragmented_movie::{FragmentedDisposition, FragmentedStructure};
-use crate::structure::{
+use crate::demux::{
     DemuxError, DemuxInput, DemuxLimits, SampleGathering, WantedInput, WholeBoxReader,
 };
+use crate::sample::{SampleReader, SegmentIndex, TrackDecodeTimes, movie_fragment, sample_table};
+use crate::sequence::BoxEvent;
+use crate::structure::{FragmentedDisposition, FragmentedStructure};
 
 /// Reads a movie file as it arrives, fragmented or not, into the samples it carries or their extents
 ///
@@ -31,7 +31,7 @@ use crate::structure::{
 /// extents, which is `G`'s, a [`SampleGathering`]: with [`SampleReader`],
 /// the default, the samples are gathered out of the media data, and a caller
 /// hands over bytes and takes [`Sample`](crate::sample::Sample)s; with
-/// [`SampleExtents`](crate::structure::SampleExtents), the extents come out
+/// [`SampleExtents`](crate::SampleExtents), the extents come out
 /// as they are, the media data passed over, and a caller takes
 /// [`SampleExtent`](crate::sample::SampleExtent)s. It holds no rule of its
 /// own but one: of the bytes the samples still lack, it names only those
@@ -64,7 +64,7 @@ use crate::structure::{
 ///   taken are dropped, and are not resolved again; where each track stands
 ///   on its timeline is no longer known until a `tfdt` states it; a fragment
 ///   stating none for such a track is
-///   [`Sample`](crate::structure::DemuxError::Sample).
+///   [`Sample`](crate::DemuxError::Sample).
 ///   [`resume_at_movie_fragment_random_access`](Self::resume_at_movie_fragment_random_access)
 ///   restarts it at the `mfra` the file closes with, once the last bytes of
 ///   the file, wanted first, name it, or declares the file over where they
@@ -72,11 +72,11 @@ use crate::structure::{
 /// * The order the boxes come in, and what a file that breaks it is reported
 ///   as, are the structure's: an `ftyp` after another box, a
 ///   `moof` before the `moov` are
-///   [`BoxOutOfOrder`](crate::structure::DemuxError::BoxOutOfOrder), a second
-///   `moov` is [`DuplicateBox`](crate::structure::DemuxError::DuplicateBox), and
+///   [`BoxOutOfOrder`](crate::DemuxError::BoxOutOfOrder), a second
+///   `moov` is [`DuplicateBox`](crate::DemuxError::DuplicateBox), and
 ///   a file declared over without a `moov`, other than while its closing
 ///   `mfro` is gathered, is
-///   [`MissingMandatoryBox`](crate::structure::DemuxError::MissingMandatoryBox).
+///   [`MissingMandatoryBox`](crate::DemuxError::MissingMandatoryBox).
 ///   A file carrying no `ftyp` reads all the same, as §4.3 allows.
 /// * What the demuxer holds of what the file declares is bounded — a box
 ///   read into a value, the samples a `moov` or a `moof` declares — by the
@@ -94,19 +94,19 @@ use crate::structure::{
 ///   [`wanted_input`](Self::wanted_input) names what the extent at the front
 ///   of those held still lacks only once the input has passed its start,
 ///   which a file whose movie and fragments precede their media data never
-///   has. Gathering with [`SampleExtents`](crate::structure::SampleExtents),
+///   has. Gathering with [`SampleExtents`](crate::SampleExtents),
 ///   the extents come out as each `moov` or `moof` is read, and nothing is
 ///   wanted but the continuation.
 /// * A fragment continues a movie that declares it may be fragmented: a
 ///   `moof` after a `moov` carrying no `mvex` is
-///   [`Sample`](crate::structure::DemuxError::Sample), the movie extends box missing
+///   [`Sample`](crate::DemuxError::Sample), the movie extends box missing
 ///   (§8.8.1).
 /// * Where a fragment states no decode time for a track, the track goes on
 ///   from where the samples before it left it, those the sample table of the
 ///   movie declares among them (§8.8.12).
 /// * An `Err` leaves the demuxer failed for good,
-///   [`AlreadyFinished`](crate::structure::DemuxError::AlreadyFinished) and
-///   [`UnwantedInput`](crate::structure::DemuxError::UnwantedInput) aside:
+///   [`AlreadyFinished`](crate::DemuxError::AlreadyFinished) and
+///   [`UnwantedInput`](crate::DemuxError::UnwantedInput) aside:
 ///   every later call reports that same failure again. The output completed
 ///   before it is still there to take.
 /// * [`finish`](Self::finish) declares the file over, and reports what any
@@ -114,7 +114,7 @@ use crate::structure::{
 ///   sample short of the data it claimed; while the closing `mfro` is
 ///   gathered, it reports nothing. Output is still taken after it, but
 ///   anything handed over then, or a second [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::structure::DemuxError::AlreadyFinished), until
+///   [`AlreadyFinished`](crate::DemuxError::AlreadyFinished), until
 ///   [`resume_at`](Self::resume_at) restarts the reading, or
 ///   [`resume_at_movie_fragment_random_access`](Self::resume_at_movie_fragment_random_access)
 ///   does where it locates an `mfra`.
@@ -333,21 +333,21 @@ impl<G: SampleGathering> MovieDemuxer<G> {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::structure::DemuxError::BoxOutOfOrder),
-    ///   [`DuplicateBox`](crate::structure::DemuxError::DuplicateBox): what the
+    /// * [`BoxOutOfOrder`](crate::DemuxError::BoxOutOfOrder),
+    ///   [`DuplicateBox`](crate::DemuxError::DuplicateBox): what the
     ///   structure makes of a top-level box arriving where it does.
-    /// * [`PayloadLimitExceeded`](crate::structure::DemuxError::PayloadLimitExceeded):
+    /// * [`PayloadLimitExceeded`](crate::DemuxError::PayloadLimitExceeded):
     ///   a box read into a value reaches past the limit the demuxer gathers.
-    /// * [`Sequence`](crate::structure::DemuxError::Sequence): what the framing
+    /// * [`Sequence`](crate::DemuxError::Sequence): what the framing
     ///   of the file makes of the input.
-    /// * [`Box`](crate::structure::DemuxError::Box): a box read into a value
+    /// * [`Box`](crate::DemuxError::Box): a box read into a value
     ///   does not decode.
-    /// * [`Sample`](crate::structure::DemuxError::Sample): what the samples make
+    /// * [`Sample`](crate::DemuxError::Sample): what the samples make
     ///   of the movie, a fragment, a `sidx`, or the media data beside them.
-    /// * [`AlreadyFinished`](crate::structure::DemuxError::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::DemuxError::AlreadyFinished): the
     ///   file was declared over, by [`finish`](Self::finish) or by
     ///   [`resume_at_movie_fragment_random_access`](Self::resume_at_movie_fragment_random_access).
-    /// * [`UnwantedInput`](crate::structure::DemuxError::UnwantedInput): `offset` is
+    /// * [`UnwantedInput`](crate::DemuxError::UnwantedInput): `offset` is
     ///   not where [`wanted_input`](Self::wanted_input) names, nor, while the
     ///   input is taken in order, where it stands. The demuxer is not failed
     ///   by it.
@@ -420,7 +420,7 @@ impl<G: SampleGathering> MovieDemuxer<G> {
     /// no order for an `mdat`), or a fragment addressing media data lying
     /// before it (§8.8.7 has a base data offset name any byte of the file),
     /// wants bytes already passed by. Gathering with
-    /// [`SampleExtents`](crate::structure::SampleExtents), none are ever
+    /// [`SampleExtents`](crate::SampleExtents), none are ever
     /// lacked. Otherwise the continuation of the input taken in order is
     /// wanted, at the offset it stands at and with no length. While the bytes the file would close with an `mfro` in are gathered, after
     /// [`resume_at_movie_fragment_random_access`](Self::resume_at_movie_fragment_random_access),
@@ -506,7 +506,7 @@ impl<G: SampleGathering> MovieDemuxer<G> {
     /// read is wanted, the `mfra` read before stays, and
     /// [`resume_at`](Self::resume_at) takes the reading up again. Until then,
     /// input at any offset but the one [`wanted_input`](Self::wanted_input)
-    /// names is [`UnwantedInput`](crate::structure::DemuxError::UnwantedInput), and
+    /// names is [`UnwantedInput`](crate::DemuxError::UnwantedInput), and
     /// [`finish`](Self::finish) declares the file over with no failure. The
     /// demuxer is told this from reading and from the file declared over
     /// alike; what [`resume_at`](Self::resume_at) drops is dropped only once
@@ -544,16 +544,16 @@ impl<G: SampleGathering> MovieDemuxer<G> {
     ///
     /// # Errors
     ///
-    /// * [`Sequence`](crate::structure::DemuxError::Sequence): the file ended
+    /// * [`Sequence`](crate::DemuxError::Sequence): the file ended
     ///   inside a box.
-    /// * [`Box`](crate::structure::DemuxError::Box): a box read into a value,
+    /// * [`Box`](crate::DemuxError::Box): a box read into a value,
     ///   declaring no total, does not decode.
-    /// * [`MissingMandatoryBox`](crate::structure::DemuxError::MissingMandatoryBox):
+    /// * [`MissingMandatoryBox`](crate::DemuxError::MissingMandatoryBox):
     ///   the file carried no `moov`.
-    /// * [`Sample`](crate::structure::DemuxError::Sample): what the samples make
+    /// * [`Sample`](crate::DemuxError::Sample): what the samples make
     ///   of the movie, a fragment or a `sidx` declaring no total, or a sample
     ///   the movie or a fragment declared is short of the data it claimed.
-    /// * [`AlreadyFinished`](crate::structure::DemuxError::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::DemuxError::AlreadyFinished): the
     ///   file was already declared over.
     /// * The failure of a previous call, which the demuxer keeps and reports
     ///   again for every call after it.
