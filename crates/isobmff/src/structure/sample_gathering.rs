@@ -4,13 +4,13 @@ use alloc::collections::VecDeque;
 use core::ops::Range;
 
 use crate::sample::{self, Sample, SampleExtent, SampleReader};
-use crate::structure::Error;
+use crate::structure::DemuxError;
 
 mod sealed {
     use core::ops::Range;
 
     use crate::sample::{self, SampleExtent};
-    use crate::structure::Error;
+    use crate::structure::DemuxError;
 
     /// The verbs a demux FSM speaks to its gathering, closing [`SampleGathering`](super::SampleGathering) to the types beside it
     #[allow(
@@ -22,12 +22,12 @@ mod sealed {
         ///
         /// # Errors
         ///
-        /// * [`Sample`](crate::structure::Error::Sample): the failure among
+        /// * [`Sample`](crate::structure::DemuxError::Sample): the failure among
         ///   `extents`, where one is, or what the gathering makes of them.
         fn handle_sample_extents(
             &mut self,
             extents: impl IntoIterator<Item = Result<SampleExtent, sample::Error>>,
-        ) -> Result<(), Error>;
+        ) -> Result<(), DemuxError>;
 
         /// Returns the bytes of the file the samples lack next, if any
         fn wanted_extent(&self) -> Option<Range<u64>>;
@@ -36,17 +36,17 @@ mod sealed {
         ///
         /// # Errors
         ///
-        /// * [`Sample`](crate::structure::Error::Sample): what the samples make
+        /// * [`Sample`](crate::structure::DemuxError::Sample): what the samples make
         ///   of the bytes.
-        fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), Error>;
+        fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), DemuxError>;
 
         /// Checks, once the file is over, that no sample is short of its bytes
         ///
         /// # Errors
         ///
-        /// * [`Sample`](crate::structure::Error::Sample): a sample is short of
+        /// * [`Sample`](crate::structure::DemuxError::Sample): a sample is short of
         ///   the data it claimed.
-        fn finish(&mut self) -> Result<(), Error>;
+        fn finish(&mut self) -> Result<(), DemuxError>;
 
         /// Drops what is held: the extents, the samples and the bytes they lack
         fn clear(&mut self);
@@ -78,20 +78,20 @@ impl sealed::Gathering for SampleReader {
     fn handle_sample_extents(
         &mut self,
         extents: impl IntoIterator<Item = Result<SampleExtent, sample::Error>>,
-    ) -> Result<(), Error> {
-        Self::handle_sample_extents(self, extents).map_err(Error::from)
+    ) -> Result<(), DemuxError> {
+        Self::handle_sample_extents(self, extents).map_err(DemuxError::from)
     }
 
     fn wanted_extent(&self) -> Option<Range<u64>> {
         Self::wanted_extent(self)
     }
 
-    fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), Error> {
-        Self::handle_input(self, offset, input).map_err(Error::from)
+    fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), DemuxError> {
+        Self::handle_input(self, offset, input).map_err(DemuxError::from)
     }
 
-    fn finish(&mut self) -> Result<(), Error> {
-        Self::finish(self).map_err(Error::from)
+    fn finish(&mut self) -> Result<(), DemuxError> {
+        Self::finish(self).map_err(DemuxError::from)
     }
 
     fn clear(&mut self) {
@@ -139,7 +139,7 @@ impl sealed::Gathering for SampleExtents {
     fn handle_sample_extents(
         &mut self,
         extents: impl IntoIterator<Item = Result<SampleExtent, sample::Error>>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), DemuxError> {
         for extent in extents {
             self.extents.push_back(extent?);
         }
@@ -151,11 +151,11 @@ impl sealed::Gathering for SampleExtents {
         None
     }
 
-    fn handle_input(&mut self, _offset: u64, _input: &[u8]) -> Result<(), Error> {
+    fn handle_input(&mut self, _offset: u64, _input: &[u8]) -> Result<(), DemuxError> {
         Ok(())
     }
 
-    fn finish(&mut self) -> Result<(), Error> {
+    fn finish(&mut self) -> Result<(), DemuxError> {
         Ok(())
     }
 

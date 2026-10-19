@@ -6,7 +6,7 @@ use isobmff_test_support::{
     file_type, fragmented_movie, framed, movie_fragment, non_fragmented_file, written,
 };
 
-use super::{Error, MovieDemuxFsm};
+use super::{DemuxError, MovieDemuxFsm};
 use crate::sample::{Sample, SampleExtent, SampleProperties, SampleReaderLimits};
 use crate::structure::{DemuxLimits, FragmentedMuxFsm, SampleExtents, WantedInput};
 
@@ -48,7 +48,7 @@ fn file_of_one_sample() -> Vec<u8> {
 }
 
 /// What the demux FSM makes of `file` handed over whole, then declared over
-fn read(file: &[u8]) -> Result<MovieDemuxFsm, Error> {
+fn read(file: &[u8]) -> Result<MovieDemuxFsm, DemuxError> {
     let mut demux_fsm = MovieDemuxFsm::new();
 
     demux_fsm.handle_input(0, file)?;
@@ -70,7 +70,7 @@ fn a_file_declaring_no_brands_is_read_all_the_same() {
 fn a_file_declared_over_without_a_movie_is_rejected() {
     assert_eq!(
         read(&written(&file_type())).map(drop),
-        Err(Error::MissingMandatoryBox {
+        Err(DemuxError::MissingMandatoryBox {
             box_type: MovieBox::BOX_TYPE
         })
     );
@@ -82,7 +82,7 @@ fn a_box_read_into_a_value_declaring_a_payload_past_the_limit_is_rejected() {
 
     assert_eq!(
         demux_fsm.handle_input(0, &written(&file_type())),
-        Err(Error::PayloadLimitExceeded {
+        Err(DemuxError::PayloadLimitExceeded {
             box_type: BoxType::compact(*b"ftyp"),
             reached_bytes: 16,
             limit_bytes: 4,
@@ -112,7 +112,7 @@ fn a_fragment_declaring_more_samples_than_the_limit_lays_out_none() {
 
     assert!(matches!(
         demux_fsm.handle_input(0, &file_of_one_sample()),
-        Err(Error::Sample {
+        Err(DemuxError::Sample {
             error: crate::sample::Error::SampleCountLimitExceeded {
                 declared_samples: 1,
                 limit_samples: 0,
@@ -129,7 +129,7 @@ fn a_movie_declaring_more_samples_than_the_limit_lays_out_none() {
 
     assert!(matches!(
         demux_fsm.handle_input(0, &non_fragmented_file(&[&[b"SAMP"]], true)),
-        Err(Error::Sample {
+        Err(DemuxError::Sample {
             error: crate::sample::Error::SampleCountLimitExceeded {
                 declared_samples: 1,
                 limit_samples: 0,
@@ -148,7 +148,7 @@ fn the_sample_reader_is_held_to_the_limits_it_is_given() {
 
     assert!(matches!(
         demux_fsm.handle_input(0, &file_of_one_sample()),
-        Err(Error::Sample {
+        Err(DemuxError::Sample {
             error: crate::sample::Error::HeldExtentLimitExceeded {
                 held_extents: 1,
                 limit_extents: 0,

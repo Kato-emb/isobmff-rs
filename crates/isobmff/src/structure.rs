@@ -123,7 +123,7 @@
 //!     handed?;
 //! }
 //! assert_eq!(read_back, [b"SAMP".to_vec(), b"DATA".to_vec()]);
-//! # Ok::<(), isobmff::structure::Error>(())
+//! # Ok::<(), isobmff::structure::DemuxError>(())
 //! ```
 //!
 //! A mux FSM is driven by its own verbs, and the bytes it made are taken with
@@ -215,26 +215,30 @@
 //! fragment or a chunk being written are held until it is laid down, and the
 //! movie a non-fragmented file is written against until the file is over.
 
+mod demux_error;
 mod demux_input;
 mod demux_limits;
-mod error;
 mod fragmented_movie;
 mod input_position;
 mod media_segment;
 mod movie;
+mod mux_error;
 mod mux_output;
 mod non_fragmented_movie;
 mod sample_gathering;
+mod structure_error;
 mod whole_box;
 
+pub use demux_error::DemuxError;
 pub use demux_limits::DemuxLimits;
-pub use error::Error;
 pub use fragmented_movie::FragmentedMuxFsm;
 pub use input_position::WantedInput;
 pub use media_segment::{MediaSegmentDemuxFsm, MediaSegmentMuxFsm};
 pub use movie::MovieDemuxFsm;
+pub use mux_error::MuxError;
 pub use non_fragmented_movie::NonFragmentedMuxFsm;
 pub use sample_gathering::{SampleExtents, SampleGathering};
 
 use demux_input::DemuxInput;
+use structure_error::StructureError;
 use whole_box::{WholeBoxReader, compact_box_header, whole_box_header, whole_payload};

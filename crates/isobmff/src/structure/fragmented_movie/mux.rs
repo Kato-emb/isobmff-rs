@@ -9,7 +9,7 @@ use super::{FragmentedDisposition, FragmentedStructure};
 use crate::sample::{MovieFragmentWriter, Sample};
 use crate::sequence::OutputBytes;
 use crate::structure::mux_output::MuxOutput;
-use crate::structure::{Error, whole_box_header, whole_payload};
+use crate::structure::{MuxError, whole_box_header, whole_payload};
 
 /// Lays a fragmented movie file down, taking the samples as they come
 ///
@@ -27,20 +27,20 @@ use crate::structure::{Error, whole_box_header, whole_payload};
 /// * The order of the boxes is the structure's, held to as they are handed
 ///   over: the `ftyp` first, the `moov` once and before any fragment. A
 ///   box handed over out of that order is
-///   [`BoxOutOfOrder`](crate::structure::Error::BoxOutOfOrder) or
-///   [`DuplicateBox`](crate::structure::Error::DuplicateBox), and a file
+///   [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder) or
+///   [`DuplicateBox`](crate::structure::MuxError::DuplicateBox), and a file
 ///   declared over without a `moov` is
-///   [`MissingMandatoryBox`](crate::structure::Error::MissingMandatoryBox).
+///   [`MissingMandatoryBox`](crate::structure::MuxError::MissingMandatoryBox).
 /// * The movie comes before any fragment: a fragment opened or closed, or a
 ///   sample handed over, before it is
-///   [`BoxOutOfOrder`](crate::structure::Error::BoxOutOfOrder) of the `moof`. The
+///   [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder) of the `moof`. The
 ///   samples are checked against the movie as they are handed over, as
 ///   [`MovieFragmentWriter`] checks them, and a movie it refuses is refused
 ///   before any of it is laid down.
 /// * The `ftyp` handed over is laid down as it stands, unless it lists a
 ///   brand under which the `default-base-is-moof` every `tfhd` states shall
 ///   not be used ([`FileTypeBox::forbids_default_base_is_moof`]):
-///   that is [`UnsupportedBrand`](crate::structure::Error::UnsupportedBrand), and
+///   that is [`UnsupportedBrand`](crate::structure::MuxError::UnsupportedBrand), and
 ///   nothing of it is laid down. Where none was handed over, the mux FSM
 ///   lays its own down before the `moov`: `iso6` as its
 ///   `major_brand` and its one `compatible_brands` entry, with
@@ -52,19 +52,19 @@ use crate::structure::{Error, whole_box_header, whole_payload};
 ///   [`finish_fragment`](Self::finish_fragment) as the `moof` and the `mdat`
 ///   the sample layer made of it. What the samples themselves must hold to
 ///   is [`MovieFragmentWriter`]'s contract, reported as
-///   [`Sample`](crate::structure::Error::Sample).
+///   [`Sample`](crate::structure::MuxError::Sample).
 /// * The bytes are taken from [`poll_output`](Self::poll_output), one
 ///   [`OutputBytes`] a call, owned by whoever takes them. The caller drains
 ///   before handing over more: bytes are held until they are taken, so
 ///   writing on without polling has the mux FSM hold the whole file.
 /// * An `Err` leaves the mux FSM failed for good,
-///   [`AlreadyFinished`](crate::structure::Error::AlreadyFinished) aside:
+///   [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished) aside:
 ///   every later call reports that same failure again. The bytes made before
 ///   it are still there to take.
 /// * [`finish`](Self::finish) declares the file over. Bytes are still taken
 ///   after it, but anything handed over then, or a second
 ///   [`finish`](Self::finish), is
-///   [`AlreadyFinished`](crate::structure::Error::AlreadyFinished).
+///   [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished).
 ///
 /// # Examples
 ///
@@ -113,7 +113,7 @@ use crate::structure::{Error, whole_box_header, whole_payload};
 /// // The file opens with the brands the mux FSM declares, and the media data holds the samples end to end
 /// assert_eq!(&file[4..8], b"ftyp");
 /// assert!(file.ends_with(b"SAMPDATA"));
-/// # Ok::<(), isobmff::structure::Error>(())
+/// # Ok::<(), isobmff::structure::MuxError>(())
 /// ```
 #[derive(Debug)]
 pub struct FragmentedMuxFsm {
@@ -137,21 +137,21 @@ impl FragmentedMuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`UnsupportedBrand`](crate::structure::Error::UnsupportedBrand): a
+    /// * [`UnsupportedBrand`](crate::structure::MuxError::UnsupportedBrand): a
     ///   brand listed forbids the `default-base-is-moof` the mux FSM writes;
     ///   nothing of the box is laid down.
-    /// * [`BoxOutOfOrder`](crate::structure::Error::BoxOutOfOrder): a box
+    /// * [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder): a box
     ///   was handed over before them.
-    /// * [`Box`](crate::structure::Error::Box): the box does not write.
-    /// * [`AlreadyFinished`](crate::structure::Error::AlreadyFinished): the
+    /// * [`Box`](crate::structure::MuxError::Box): the box does not write.
+    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
-    pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), Error> {
+    pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), MuxError> {
         self.output.writing()?;
-        let mut write_file_type = || -> Result<(), Error> {
+        let mut write_file_type = || -> Result<(), MuxError> {
             if file_type.forbids_default_base_is_moof() {
-                return Err(Error::UnsupportedBrand);
+                return Err(MuxError::UnsupportedBrand);
             }
             self.write_value(&file_type)
         };
@@ -166,19 +166,19 @@ impl FragmentedMuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::structure::Error::Sample): the movie is one
+    /// * [`Sample`](crate::structure::MuxError::Sample): the movie is one
     ///   [`MovieFragmentWriter::new`] refuses — it carries no `mvex`, or its
     ///   sample tables lay samples out; nothing of it is laid down.
-    /// * [`DuplicateBox`](crate::structure::Error::DuplicateBox): a movie
+    /// * [`DuplicateBox`](crate::structure::MuxError::DuplicateBox): a movie
     ///   continuing in fragments was handed over already.
-    /// * [`Box`](crate::structure::Error::Box): the box does not write.
-    /// * [`AlreadyFinished`](crate::structure::Error::AlreadyFinished): the
+    /// * [`Box`](crate::structure::MuxError::Box): the box does not write.
+    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
-    pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), Error> {
+    pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), MuxError> {
         self.output.writing()?;
-        let mut write_movie = || -> Result<(), Error> {
+        let mut write_movie = || -> Result<(), MuxError> {
             let samples = MovieFragmentWriter::new(&movie)?;
             if self.structure.is_at_start() {
                 self.write_value(&default_file_type())?;
@@ -200,19 +200,21 @@ impl FragmentedMuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::structure::Error::BoxOutOfOrder): the
+    /// * [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder): the
     ///   movie was not handed over first.
-    /// * [`Sample`](crate::structure::Error::Sample): what the sample layer
+    /// * [`Sample`](crate::structure::MuxError::Sample): what the sample layer
     ///   makes of the call.
-    /// * [`AlreadyFinished`](crate::structure::Error::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
-    pub fn begin_fragment(&mut self, sequence_number: u32) -> Result<(), Error> {
+    pub fn begin_fragment(&mut self, sequence_number: u32) -> Result<(), MuxError> {
         self.output.writing()?;
-        let begun = self
-            .samples()
-            .and_then(|samples| samples.begin_fragment(sequence_number).map_err(Error::from));
+        let begun = self.samples().and_then(|samples| {
+            samples
+                .begin_fragment(sequence_number)
+                .map_err(MuxError::from)
+        });
 
         self.output.record(begun)
     }
@@ -224,20 +226,20 @@ impl FragmentedMuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::structure::Error::BoxOutOfOrder): the
+    /// * [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder): the
     ///   movie was not handed over first.
-    /// * [`Sample`](crate::structure::Error::Sample): what the sample layer
+    /// * [`Sample`](crate::structure::MuxError::Sample): what the sample layer
     ///   makes of the call.
-    /// * [`AlreadyFinished`](crate::structure::Error::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
-    pub fn begin_fragment_continuing(&mut self, sequence_number: u32) -> Result<(), Error> {
+    pub fn begin_fragment_continuing(&mut self, sequence_number: u32) -> Result<(), MuxError> {
         self.output.writing()?;
         let begun = self.samples().and_then(|samples| {
             samples
                 .begin_fragment_continuing(sequence_number)
-                .map_err(Error::from)
+                .map_err(MuxError::from)
         });
 
         self.output.record(begun)
@@ -247,19 +249,19 @@ impl FragmentedMuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::structure::Error::BoxOutOfOrder): the
+    /// * [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder): the
     ///   movie was not handed over first.
-    /// * [`Sample`](crate::structure::Error::Sample): what the sample layer
+    /// * [`Sample`](crate::structure::MuxError::Sample): what the sample layer
     ///   makes of the sample.
-    /// * [`AlreadyFinished`](crate::structure::Error::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
-    pub fn handle_sample(&mut self, sample: Sample) -> Result<(), Error> {
+    pub fn handle_sample(&mut self, sample: Sample) -> Result<(), MuxError> {
         self.output.writing()?;
         let placed = self
             .samples()
-            .and_then(|samples| samples.handle_sample(sample).map_err(Error::from));
+            .and_then(|samples| samples.handle_sample(sample).map_err(MuxError::from));
 
         self.output.record(placed)
     }
@@ -271,19 +273,19 @@ impl FragmentedMuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`BoxOutOfOrder`](crate::structure::Error::BoxOutOfOrder): the
+    /// * [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder): the
     ///   movie was not handed over first.
-    /// * [`Sample`](crate::structure::Error::Sample): what the sample layer
+    /// * [`Sample`](crate::structure::MuxError::Sample): what the sample layer
     ///   makes of the fragment.
-    /// * [`Box`](crate::structure::Error::Box): the `moof` or the `mdat`
+    /// * [`Box`](crate::structure::MuxError::Box): the `moof` or the `mdat`
     ///   does not write.
-    /// * [`AlreadyFinished`](crate::structure::Error::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
     ///   file was declared over by [`finish`](Self::finish).
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
-    pub fn finish_fragment(&mut self) -> Result<(), Error> {
+    pub fn finish_fragment(&mut self) -> Result<(), MuxError> {
         self.output.writing()?;
-        let mut write_fragment = || -> Result<(), Error> {
+        let mut write_fragment = || -> Result<(), MuxError> {
             self.samples()?.finish_fragment()?;
             while let Some((movie_fragment, media_data)) = self.samples()?.poll_fragment() {
                 self.write_value(&movie_fragment)?;
@@ -311,18 +313,18 @@ impl FragmentedMuxFsm {
     ///
     /// # Errors
     ///
-    /// * [`Sample`](crate::structure::Error::Sample): a fragment was left
+    /// * [`Sample`](crate::structure::MuxError::Sample): a fragment was left
     ///   open.
-    /// * [`MissingMandatoryBox`](crate::structure::Error::MissingMandatoryBox):
+    /// * [`MissingMandatoryBox`](crate::structure::MuxError::MissingMandatoryBox):
     ///   the movie was never handed over, so the file laid down is not a
     ///   fragmented movie file.
-    /// * [`AlreadyFinished`](crate::structure::Error::AlreadyFinished): the
+    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the
     ///   file was already declared over.
     /// * The failure of a previous call, which the mux FSM keeps and reports
     ///   again for every call after it.
-    pub fn finish(&mut self) -> Result<(), Error> {
+    pub fn finish(&mut self) -> Result<(), MuxError> {
         self.output.writing()?;
-        let mut finish_file = || -> Result<(), Error> {
+        let mut finish_file = || -> Result<(), MuxError> {
             if let Some(samples) = &mut self.samples {
                 samples.finish()?;
             }
@@ -335,8 +337,8 @@ impl FragmentedMuxFsm {
     }
 
     /// Returns the sample layer, made once the movie was handed over
-    fn samples(&mut self) -> Result<&mut MovieFragmentWriter, Error> {
-        self.samples.as_mut().ok_or(Error::BoxOutOfOrder {
+    fn samples(&mut self) -> Result<&mut MovieFragmentWriter, MuxError> {
+        self.samples.as_mut().ok_or(MuxError::BoxOutOfOrder {
             box_type: MovieFragmentBox::BOX_TYPE,
         })
     }
@@ -345,7 +347,7 @@ impl FragmentedMuxFsm {
     fn write_value<Value: BoxEncode + BoxDefinition>(
         &mut self,
         value: &Value,
-    ) -> Result<(), Error> {
+    ) -> Result<(), MuxError> {
         let payload = whole_payload(value)?;
 
         self.write_box(Value::BOX_TYPE, payload)
@@ -354,8 +356,8 @@ impl FragmentedMuxFsm {
     /// Lays one box down where the structure places it, through the framing of the file
     ///
     /// A box the structure passes over is refused as
-    /// [`BoxOutOfOrder`](crate::structure::Error::BoxOutOfOrder).
-    fn write_box(&mut self, box_type: BoxType, payload: Vec<u8>) -> Result<(), Error> {
+    /// [`BoxOutOfOrder`](crate::structure::MuxError::BoxOutOfOrder).
+    fn write_box(&mut self, box_type: BoxType, payload: Vec<u8>) -> Result<(), MuxError> {
         let header = whole_box_header(box_type, payload.len() as u64)?;
 
         match self.structure.handle_box_type(box_type)? {
@@ -366,7 +368,7 @@ impl FragmentedMuxFsm {
             FragmentedDisposition::SegmentIndex
             | FragmentedDisposition::MovieFragmentRandomAccess
             | FragmentedDisposition::Skip => {
-                return Err(Error::BoxOutOfOrder { box_type });
+                return Err(MuxError::BoxOutOfOrder { box_type });
             }
         }
 
@@ -393,7 +395,7 @@ mod tests {
     use isobmff_core::{BoxDecode, BoxDefinition, FourCc};
     use isobmff_test_support::{file_type, fragmented_movie, unfragmented_movie};
 
-    use super::{Error, FragmentedMuxFsm, default_file_type};
+    use super::{FragmentedMuxFsm, MuxError, default_file_type};
     use crate::sample::{Sample, SampleProperties};
 
     /// Movie of one track continued in fragments, whose defaults a `trex` states
@@ -465,7 +467,7 @@ mod tests {
                 0,
                 alloc::vec![FourCc::new(*b"iso6"), FourCc::new(*b"isom")],
             )),
-            Err(Error::UnsupportedBrand)
+            Err(MuxError::UnsupportedBrand)
         );
         assert_eq!(mux_fsm.poll_output(), None);
     }
@@ -479,13 +481,13 @@ mod tests {
 
         assert_eq!(
             opened.begin_fragment(1),
-            Err(Error::BoxOutOfOrder {
+            Err(MuxError::BoxOutOfOrder {
                 box_type: MovieFragmentBox::BOX_TYPE
             })
         );
         assert_eq!(
             handed_a_sample.handle_sample(sample()),
-            Err(Error::BoxOutOfOrder {
+            Err(MuxError::BoxOutOfOrder {
                 box_type: MovieFragmentBox::BOX_TYPE
             })
         );
@@ -497,7 +499,7 @@ mod tests {
 
         assert!(matches!(
             mux_fsm.handle_movie(unfragmented_movie()),
-            Err(Error::Sample {
+            Err(MuxError::Sample {
                 error: crate::sample::Error::MissingMovieExtends
             })
         ));
@@ -526,7 +528,7 @@ mod tests {
                 },
                 b"SAMP".to_vec()
             )),
-            Err(Error::Sample {
+            Err(MuxError::Sample {
                 error: crate::sample::Error::UnknownTrackId { track_id: 999, .. }
             })
         ));
@@ -542,7 +544,7 @@ mod tests {
                 },
                 b"SAMP".to_vec()
             )),
-            Err(Error::Sample {
+            Err(MuxError::Sample {
                 error: crate::sample::Error::UnknownSampleDescriptionIndex {
                     track_id: 1,
                     sample_description_index: 2,
@@ -560,7 +562,7 @@ mod tests {
 
         assert!(matches!(
             mux_fsm.handle_sample(sample()),
-            Err(Error::Sample {
+            Err(MuxError::Sample {
                 error: crate::sample::Error::NoFragmentOpen
             })
         ));
@@ -574,7 +576,7 @@ mod tests {
 
         assert_eq!(
             mux_fsm.finish(),
-            Err(Error::MissingMandatoryBox {
+            Err(MuxError::MissingMandatoryBox {
                 box_type: MovieBox::BOX_TYPE
             })
         );
@@ -588,7 +590,10 @@ mod tests {
         mux_fsm.handle_movie(movie()).unwrap();
         mux_fsm.finish().unwrap();
 
-        assert_eq!(mux_fsm.handle_sample(sample()), Err(Error::AlreadyFinished));
-        assert_eq!(mux_fsm.finish(), Err(Error::AlreadyFinished));
+        assert_eq!(
+            mux_fsm.handle_sample(sample()),
+            Err(MuxError::AlreadyFinished)
+        );
+        assert_eq!(mux_fsm.finish(), Err(MuxError::AlreadyFinished));
     }
 }

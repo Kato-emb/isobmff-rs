@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use isobmff_core::BoxHeader;
 
 use crate::sequence::{BoxEvent, BoxWriter, OutputBytes};
-use crate::structure::Error;
+use crate::structure::MuxError;
 
 /// Lays the boxes of a file down through its framing, and keeps whether the mux FSM above still writes
 ///
@@ -23,7 +23,7 @@ use crate::structure::Error;
 ///   [`writing`](Self::writing). The bytes made before it are still taken from
 ///   [`poll_output`](Self::poll_output).
 /// * Once [`finish`](Self::finish) succeeds, [`writing`](Self::writing)
-///   reports [`AlreadyFinished`](crate::structure::Error::AlreadyFinished).
+///   reports [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished).
 #[derive(Debug)]
 pub(crate) struct MuxOutput {
     boxes: BoxWriter,
@@ -39,7 +39,7 @@ enum State {
     /// Told the file is over, and taking nothing more
     Finished,
     /// Failed, and reporting that same failure for every call after it
-    Failed(Error),
+    Failed(MuxError),
 }
 
 impl MuxOutput {
@@ -57,13 +57,13 @@ impl MuxOutput {
     ///
     /// # Errors
     ///
-    /// * [`AlreadyFinished`](crate::structure::Error::AlreadyFinished): the file was
+    /// * [`AlreadyFinished`](crate::structure::MuxError::AlreadyFinished): the file was
     ///   declared over by [`finish`](Self::finish).
     /// * The failure [`record`](Self::record) kept.
-    pub(crate) const fn writing(&self) -> Result<(), Error> {
+    pub(crate) const fn writing(&self) -> Result<(), MuxError> {
         match self.state {
             State::Writing => Ok(()),
-            State::Finished => Err(Error::AlreadyFinished),
+            State::Finished => Err(MuxError::AlreadyFinished),
             State::Failed(failure) => Err(failure),
         }
     }
@@ -73,7 +73,7 @@ impl MuxOutput {
     /// # Errors
     ///
     /// The failure `result` carries.
-    pub(crate) const fn record(&mut self, result: Result<(), Error>) -> Result<(), Error> {
+    pub(crate) const fn record(&mut self, result: Result<(), MuxError>) -> Result<(), MuxError> {
         if let Err(failure) = &result {
             self.state = State::Failed(*failure);
         }
@@ -92,12 +92,12 @@ impl MuxOutput {
     /// # Errors
     ///
     /// The failures of [`BoxWriter::handle_event`], carried on
-    /// [`Sequence`](crate::structure::Error::Sequence).
+    /// [`Sequence`](crate::structure::MuxError::Sequence).
     pub(crate) fn write_box(
         &mut self,
         header: BoxHeader,
         payload: impl IntoIterator<Item = Vec<u8>>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), MuxError> {
         self.handle_event(BoxEvent::Header(header))?;
         for piece in payload.into_iter().filter(|piece| !piece.is_empty()) {
             self.handle_event(BoxEvent::Payload(piece))?;
@@ -115,8 +115,8 @@ impl MuxOutput {
     /// # Errors
     ///
     /// The failures of [`BoxWriter::finish`], carried on
-    /// [`Sequence`](crate::structure::Error::Sequence).
-    pub(crate) fn finish(&mut self) -> Result<(), Error> {
+    /// [`Sequence`](crate::structure::MuxError::Sequence).
+    pub(crate) fn finish(&mut self) -> Result<(), MuxError> {
         self.boxes.finish()?;
         self.state = State::Finished;
 
@@ -124,7 +124,7 @@ impl MuxOutput {
     }
 
     /// Hands one step of the framing over, and moves the position to where its bytes end
-    fn handle_event(&mut self, step: BoxEvent) -> Result<(), Error> {
+    fn handle_event(&mut self, step: BoxEvent) -> Result<(), MuxError> {
         self.position = self.boxes.handle_event(step)?.end;
 
         Ok(())
@@ -137,13 +137,13 @@ mod tests {
 
     use isobmff_core::BoxType;
 
-    use super::{Error, MuxOutput};
+    use super::{MuxError, MuxOutput};
     use crate::structure::compact_box_header;
 
     #[test]
     fn a_failed_output_reports_the_same_failure_for_every_call_after_it() {
         let mut output = MuxOutput::new();
-        let failure = Error::BoxOutOfOrder {
+        let failure = MuxError::BoxOutOfOrder {
             box_type: BoxType::compact(*b"ftyp"),
         };
 
@@ -158,7 +158,7 @@ mod tests {
 
         output.write_box(header, [b"AAAA".to_vec()]).unwrap();
         output
-            .record(Err(Error::BoxOutOfOrder {
+            .record(Err(MuxError::BoxOutOfOrder {
                 box_type: BoxType::compact(*b"ftyp"),
             }))
             .unwrap_err();

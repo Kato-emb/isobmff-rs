@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use isobmff::structure::{Error, MediaSegmentDemuxFsm, WantedInput};
+    use isobmff::structure::{DemuxError, MediaSegmentDemuxFsm, WantedInput};
     use isobmff_boxes::{
         ChunkOffsets, MediaDataBox, MovieBox, MovieFragmentBox, MovieFragmentHeaderBox,
         SampleSizeBox, SampleSizes, SampleToChunkBox, SegmentTypeBox, TimeToSampleBox,
@@ -155,7 +155,7 @@ mod tests {
 
         assert!(matches!(
             MediaSegmentDemuxFsm::new(movie).map(drop),
-            Err(Error::Sample {
+            Err(DemuxError::Sample {
                 error: isobmff::sample::Error::DecodeTimeOverflow { track_id: 1, .. },
                 ..
             })

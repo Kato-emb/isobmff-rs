@@ -26,7 +26,7 @@
 use isobmff::boxes::{HeaderDuration, MovieBox, MovieHeaderBox, SampleFlags};
 use isobmff::{BoxDefinition as _, Mp4EpochSeconds};
 use isobmff::sample::{Sample, SampleProperties};
-use isobmff::structure::{Error, MovieDemuxFsm, NonFragmentedMuxFsm};
+use isobmff::structure::{DemuxError, MovieDemuxFsm, MuxError, NonFragmentedMuxFsm};
 use isobmff_test_support::{file_type, non_fragmented_file, track};
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
@@ -92,7 +92,7 @@ fuzz_target!(|input: Input<'_>| {
         assert!(
             matches!(
                 read_back(&file, cut_length),
-                Err(Error::MissingMandatoryBox { box_type, .. }) if box_type == MovieBox::BOX_TYPE
+                Err(DemuxError::MissingMandatoryBox { box_type, .. }) if box_type == MovieBox::BOX_TYPE
             ),
             "the bytes a refused writer laid down read as a file carrying a movie"
         );
@@ -252,7 +252,7 @@ fn file_of(chunks: &[Vec<Sample>]) -> (Vec<u8>, bool) {
         }
         None => {
             assert!(
-                matches!(mux_fsm.handle_sample(a_sample()), Err(Error::AlreadyFinished { .. })),
+                matches!(mux_fsm.handle_sample(a_sample()), Err(MuxError::AlreadyFinished { .. })),
                 "the writer took a sample after the file was declared over"
             );
 
@@ -300,7 +300,7 @@ fn movie_first_file_of(chunks: &[Vec<Sample>]) -> Vec<u8> {
 }
 
 /// The samples `file` carries, read off it `cut_length` bytes at a time and then off the bytes it wants fetched
-fn read_back(file: &[u8], cut_length: usize) -> Result<Vec<Sample>, Error> {
+fn read_back(file: &[u8], cut_length: usize) -> Result<Vec<Sample>, DemuxError> {
     let mut demux_fsm = MovieDemuxFsm::new();
     let mut samples = Vec::new();
 
