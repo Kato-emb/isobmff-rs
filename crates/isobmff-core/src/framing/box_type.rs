@@ -58,7 +58,8 @@ impl CompactType {
 /// Excludes the UUIDs §4.2.3 reserves for mapping a compact type into the
 /// UUID space — a four-character code followed by
 /// `0011-0010-8000-00AA00389B71` — which the `extended_type` of a box shall
-/// not equal.
+/// not equal. A header read off bytes keeps such a UUID as found, and is not
+/// written back.
 ///
 /// # Examples
 ///
@@ -85,11 +86,16 @@ impl ExtendedType {
     /// Returns `None` for a UUID of the form §4.2.3 reserves.
     #[must_use]
     pub const fn new(uuid: Uuid) -> Option<Self> {
-        if u128::from_be_bytes(*uuid.as_bytes()) & RESERVED_MASK == RESERVED_SUFFIX {
+        if maps_a_compact_type(uuid) {
             return None;
         }
 
         Some(Self(uuid))
+    }
+
+    /// Creates the extended type a header read off bytes declares, the reserved form included
+    pub(crate) const fn as_found(uuid: Uuid) -> Self {
+        Self(uuid)
     }
 
     /// Returns the UUID
@@ -97,6 +103,11 @@ impl ExtendedType {
     pub const fn uuid(self) -> Uuid {
         self.0
     }
+}
+
+/// Returns whether `uuid` is the UUID ISO/IEC 14496-12 §4.2.3 maps a compact type to
+const fn maps_a_compact_type(uuid: Uuid) -> bool {
+    u128::from_be_bytes(*uuid.as_bytes()) & RESERVED_MASK == RESERVED_SUFFIX
 }
 
 /// Type a box header declares, ISO/IEC 14496-12 §4.2.2
