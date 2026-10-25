@@ -1,0 +1,24 @@
+# Relax only `unwrap_used`/`expect_used` in test code.
+# The other denied lints (indexing_slicing, panic, arithmetic_side_effects, ...)
+# still apply to tests; relax them per-module when needed with a reasoned
+# `#[expect(clippy::indexing_slicing, reason = "...")]`.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+
+# Proper nouns the format's vocabulary carries, which `doc_markdown` would
+# otherwise read as identifiers that lost their backticks.
+doc-valid-idents = ["QuickTime", ".."]
+
+# The default lets `i j x y z w n` through `min_ident_chars`, which the
+# no-abbreviation rule of AGENTS.md does not.
+allowed-idents-below-min-chars = []
+
+# Rust casing for acronyms in type names (`AvcSampleEntry`, not the
+# specification's `AVCSampleEntry`); the spelling of the specification is a
+# `#[doc(alias)]`.
+upper-case-acronyms-aggressive = true
+
+# By default clippy spares public items the lints whose fix would break the API
+# (upper_case_acronyms and wrong_self_convention among them). The public API is
+# what those lints are for, and before a release there is no API to keep.
+avoid-breaking-exported-api = false
