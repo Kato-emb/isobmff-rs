@@ -105,11 +105,9 @@ mod tests {
         };
 
         let total_of = |child: &RawBox<'_>| {
-            child
-                .header()
-                .encoded_len()
-                .checked_add(child.payload().len())
-                .and_then(|total| u64::try_from(total).ok())
+            u64::try_from(child.payload().len())
+                .ok()
+                .and_then(|payload_len| payload_len.checked_add(child.header().encoded_len()))
                 .unwrap_or(u64::MAX)
         };
         let ours = tally(

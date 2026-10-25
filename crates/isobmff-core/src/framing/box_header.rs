@@ -12,22 +12,14 @@ const EXTENDED_SIZE_MARKER: u32 = 1;
 /// Value of the `size` field that runs the payload to the end of what encloses the box
 const TO_END_OF_FILE_MARKER: u32 = 0;
 
-/// Byte length of a header carrying the given optional fields
-const fn header_length(has_large_size: bool, has_extended_type: bool) -> u8 {
+/// Byte length of a header with a `largesize` field, an `extended_type` field, both or neither
+const fn header_length(has_large_size: bool, has_extended_type: bool) -> u64 {
     match (has_large_size, has_extended_type) {
         (false, false) => 8,
         (true, false) => 16,
         (false, true) => 24,
         (true, true) => 32,
     }
-}
-
-/// Byte length of a header declaring `size` and `box_type`
-fn header_length_of(size: BoxSize, box_type: BoxType) -> u8 {
-    header_length(
-        matches!(size, BoxSize::Extended(_)),
-        matches!(box_type, BoxType::Extended(_)),
-    )
 }
 
 /// Header that introduces a box and states how far it reaches, ISO/IEC 14496-12 §4.2.2
@@ -62,10 +54,12 @@ fn header_length_of(size: BoxSize, box_type: BoxType) -> u8 {
 ///     None
 /// );
 ///
-/// // The header is written as the bytes it is read from; the payload is not read
-/// let mut buffer = [0; BoxHeader::MAX_ENCODED_LEN];
-/// assert_eq!(header.write_to(&mut buffer), Ok(b"\0\0\0\x10free".as_slice()));
-/// assert_eq!(BoxHeader::decode(b"\0\0\0\x10free"), Ok((header, b"".as_slice())));
+/// // The header is written as the bytes it is read from, and the payload goes after it
+/// let mut buffer = [0; 16];
+/// let payload = header.encode(&mut buffer).unwrap();
+/// payload.copy_from_slice(b"AAAAAAAA");
+/// assert_eq!(&buffer, b"\0\0\0\x10freeAAAAAAAA");
+/// assert_eq!(BoxHeader::decode(&buffer), Ok((header, b"AAAAAAAA".as_slice())));
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct BoxHeader {
@@ -74,9 +68,6 @@ pub struct BoxHeader {
 }
 
 impl BoxHeader {
-    /// Buffer length [`write_to`](Self::write_to) writes into: the longest header
-    pub const MAX_ENCODED_LEN: usize = header_length(true, true) as usize;
-
     /// Creates a header from a box type and a size
     ///
     /// Returns `None` when the declared total is smaller than the header those
@@ -85,10 +76,58 @@ impl BoxHeader {
     /// accepted with either box type.
     #[must_use]
     pub fn new(box_type: BoxType, size: BoxSize) -> Option<Self> {
+        let header = Self { box_type, size };
+
         match size.total_bytes() {
-            Some(total) if total < u64::from(header_length_of(size, box_type)) => None,
-            Some(_) | None => Some(Self { box_type, size }),
+            Some(total) if total < header.encoded_len() => None,
+            Some(_) | None => Some(header),
         }
+    }
+
+    /// Creates the shortest header that introduces a payload of the given length
+    ///
+    /// The total goes in the `size` field where it fits and moves to the
+    /// `largesize` field where it does not. An `extended_type` field is
+    /// included whenever `box_type` carries one.
+    ///
+    /// Returns `None` when the total of header and payload overruns `u64`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize};
+    ///
+    /// // A payload the 32-bit `size` field can declare
+    /// let header = BoxHeader::with_payload_len(BoxType::compact(*b"free"), 4).unwrap();
+    /// assert_eq!(header.size(), BoxSize::Compact(CompactSize::new(12).unwrap()));
+    ///
+    /// // A payload too long for that field moves the total into `largesize`
+    /// let long = BoxHeader::with_payload_len(BoxType::compact(*b"mdat"), u32::MAX.into()).unwrap();
+    /// assert_eq!(long.encoded_len(), 16);
+    ///
+    /// // An extended type takes sixteen bytes more, which the total covers
+    /// let vendor = BoxType::extended([0xab; 16]);
+    /// assert_eq!(BoxHeader::with_payload_len(vendor, 4).unwrap().encoded_len(), 24);
+    ///
+    /// // A payload leaving no room for the header it needs
+    /// assert_eq!(BoxHeader::with_payload_len(BoxType::compact(*b"mdat"), u64::MAX), None);
+    /// ```
+    #[must_use]
+    pub fn with_payload_len(box_type: BoxType, payload_len: u64) -> Option<Self> {
+        let has_extended_type = matches!(box_type, BoxType::Extended(_));
+        let size = payload_len
+            .checked_add(header_length(false, has_extended_type))
+            .and_then(|total| u32::try_from(total).ok())
+            .and_then(CompactSize::new)
+            .map(BoxSize::Compact)
+            .or_else(|| {
+                payload_len
+                    .checked_add(header_length(true, has_extended_type))
+                    .and_then(ExtendedSize::new)
+                    .map(BoxSize::Extended)
+            })?;
+
+        Some(Self { box_type, size })
     }
 
     /// Returns the type of the box
@@ -103,115 +142,32 @@ impl BoxHeader {
         self.size
     }
 
+    /// Returns the length of the header itself, payload excluded
+    #[must_use]
+    pub const fn encoded_len(self) -> u64 {
+        header_length(
+            matches!(self.size, BoxSize::Extended(_)),
+            matches!(self.box_type, BoxType::Extended(_)),
+        )
+    }
+
     /// Returns the length of the payload the header spans, header excluded
     ///
     /// Returns `None` for [`BoxSize::ToEndOfFile`], which declares no total and
     /// so leaves the payload to run as far as what encloses the box does.
     #[must_use]
     pub fn payload_len(self) -> Option<u64> {
-        self.size
-            .total_bytes()?
-            .checked_sub(u64::from(header_length_of(self.size, self.box_type)))
-    }
-
-    /// Returns the length of the header itself, payload excluded
-    ///
-    /// This is what [`write_to`](Self::write_to) writes, and what stands between
-    /// the start of the box and the payload
-    /// [`payload_len`](Self::payload_len) measures.
-    #[must_use]
-    pub fn encoded_len(self) -> usize {
-        usize::from(header_length_of(self.size, self.box_type))
-    }
-
-    /// Creates the header that introduces a payload of the given length
-    ///
-    /// The total goes in the `size` field where it fits and moves to the
-    /// `largesize` field where it does not, so the header is the shortest one
-    /// that can declare the box. An `extended_type` field is included whenever
-    /// `box_type` carries one.
-    ///
-    /// Returns `None` when the total of header and payload overruns `u64`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use isobmff_core::{BoxHeader, BoxSize, BoxType, CompactSize};
-    ///
-    /// // A payload the 32-bit `size` field can declare
-    /// let header = BoxHeader::with_payload_len(BoxType::compact(*b"free"), 4).unwrap();
-    /// assert_eq!(header.size(), BoxSize::Compact(CompactSize::new(12).unwrap()));
-    /// assert_eq!(header.encoded_len(), 8);
-    ///
-    /// // A payload too long for that field moves the total into `largesize`
-    /// let long = BoxHeader::with_payload_len(BoxType::compact(*b"mdat"), u32::MAX.into()).unwrap();
-    /// assert_eq!(long.encoded_len(), 16);
-    ///
-    /// // An extended type takes sixteen bytes more, which the total must cover
-    /// let vendor = BoxType::extended([0xab; 16]);
-    /// assert_eq!(BoxHeader::with_payload_len(vendor, 4).unwrap().encoded_len(), 24);
-    ///
-    /// // A payload leaving no room for the header it needs
-    /// assert_eq!(BoxHeader::with_payload_len(BoxType::compact(*b"mdat"), u64::MAX), None);
-    /// ```
-    #[must_use]
-    pub fn with_payload_len(box_type: BoxType, payload_len: u64) -> Option<Self> {
-        Self::compact(box_type, payload_len).or_else(|| {
-            let has_extended_type = matches!(box_type, BoxType::Extended(_));
-            let total =
-                payload_len.checked_add(u64::from(header_length(true, has_extended_type)))?;
-
-            Some(Self {
-                box_type,
-                size: BoxSize::Extended(ExtendedSize::new(total)?),
-            })
-        })
-    }
-
-    /// Creates the header that introduces a payload of the given length, with the total in the `size` field alone
-    ///
-    /// The total goes in the 32-bit `size` field, and `None` is returned where
-    /// it does not fit there, where
-    /// [`with_payload_len`](Self::with_payload_len) would reach for the
-    /// `largesize` field. An `extended_type` field is included whenever
-    /// `box_type` carries one.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use isobmff_core::{BoxHeader, BoxType};
-    ///
-    /// // A payload the `size` field can declare gets the eight-byte header
-    /// let header = BoxHeader::compact(BoxType::compact(*b"mdat"), 4).unwrap();
-    /// assert_eq!(header, BoxHeader::with_payload_len(BoxType::compact(*b"mdat"), 4).unwrap());
-    /// assert_eq!(header.encoded_len(), 8);
-    ///
-    /// // A payload only `largesize` can declare gets no header
-    /// assert_eq!(BoxHeader::compact(BoxType::compact(*b"mdat"), u32::MAX.into()), None);
-    /// ```
-    #[must_use]
-    pub fn compact(box_type: BoxType, payload_len: u64) -> Option<Self> {
-        let has_extended_type = matches!(box_type, BoxType::Extended(_));
-        let size = payload_len
-            .checked_add(u64::from(header_length(false, has_extended_type)))
-            .and_then(|total| u32::try_from(total).ok())
-            .and_then(CompactSize::new)?;
-
-        Some(Self {
-            box_type,
-            size: BoxSize::Compact(size),
-        })
+        self.size.total_bytes()?.checked_sub(self.encoded_len())
     }
 
     /// Decodes the header that starts `input`
     ///
     /// Returns the header and the bytes after it, where the payload of the box
-    /// begins. At most [`MAX_ENCODED_LEN`](Self::MAX_ENCODED_LEN) bytes are
-    /// read, and the payload is not examined: a declared total that overruns
+    /// begins. The payload is not examined: a declared total that overruns
     /// `input` decodes as it stands.
     ///
     /// An `extended_type` that ISO/IEC 14496-12 §4.2.3 reserves is kept as
-    /// found; [`write_to`](Self::write_to) refuses to write it back.
+    /// found; [`encode`](Self::encode) refuses to write it back.
     ///
     /// # Errors
     ///
@@ -223,87 +179,65 @@ impl BoxHeader {
     /// * [`SizeBelowHeader`](crate::ErrorKind::SizeBelowHeader): the declared total
     ///   is smaller than the header it prefixes.
     pub fn decode(input: &[u8]) -> Result<(Self, &[u8]), Error> {
-        let truncated_at = |needed: u8| {
-            Error::truncated_header(
-                u64::from(needed),
-                u64::try_from(input.len()).unwrap_or(u64::MAX),
-            )
-        };
+        let available_bytes = u64::try_from(input.len()).unwrap_or(u64::MAX);
+        let truncated = |needed_bytes| Error::truncated_header(needed_bytes, available_bytes);
 
-        let (size_field, after_size) = input
+        let (size_field, rest) = input
             .split_first_chunk::<4>()
-            .ok_or_else(|| truncated_at(header_length(false, false)))?;
-        let (type_field, after_type) = after_size
+            .ok_or_else(|| truncated(header_length(false, false)))?;
+        let (type_field, rest) = rest
             .split_first_chunk::<4>()
-            .ok_or_else(|| truncated_at(header_length(false, false)))?;
-
+            .ok_or_else(|| truncated(header_length(false, false)))?;
         let declared = u32::from_be_bytes(*size_field);
         let compact_type = CompactType::new(FourCc::new(*type_field));
+        let header_bytes = header_length(declared == EXTENDED_SIZE_MARKER, compact_type.is_none());
 
-        let (large_size, after_large_size) = if declared == EXTENDED_SIZE_MARKER {
-            let (large_size_field, rest) = after_type
+        let (large_size, rest) = if declared == EXTENDED_SIZE_MARKER {
+            let (large_size_field, rest) = rest
                 .split_first_chunk::<8>()
-                .ok_or_else(|| truncated_at(header_length(true, compact_type.is_none())))?;
+                .ok_or_else(|| truncated(header_bytes))?;
             (Some(u64::from_be_bytes(*large_size_field)), rest)
         } else {
-            (None, after_type)
+            (None, rest)
         };
 
-        let header_length = header_length(large_size.is_some(), compact_type.is_none());
-
-        let (box_type, remainder) = match compact_type {
-            Some(compact) => (BoxType::Compact(compact), after_large_size),
+        let (box_type, rest) = match compact_type {
+            Some(compact) => (BoxType::Compact(compact), rest),
             None => {
-                let (extended_type_field, rest) = after_large_size
+                let (extended_type_field, rest) = rest
                     .split_first_chunk::<16>()
-                    .ok_or_else(|| truncated_at(header_length))?;
+                    .ok_or_else(|| truncated(header_bytes))?;
                 let extended = ExtendedType::as_found(Uuid::new(*extended_type_field));
                 (BoxType::Extended(extended), rest)
             }
         };
 
-        let size_below_header = || {
-            Error::size_below_header(
-                u64::from(header_length),
-                large_size.unwrap_or(u64::from(declared)),
-            )
-        };
-
         let size = match large_size {
-            Some(large_size) => ExtendedSize::new(large_size)
-                .map(BoxSize::Extended)
-                .ok_or_else(size_below_header)?,
-            None if declared == TO_END_OF_FILE_MARKER => BoxSize::ToEndOfFile,
-            None => CompactSize::new(declared)
-                .map(BoxSize::Compact)
-                .ok_or_else(size_below_header)?,
+            Some(large_size) => ExtendedSize::new(large_size).map(BoxSize::Extended),
+            None if declared == TO_END_OF_FILE_MARKER => Some(BoxSize::ToEndOfFile),
+            None => CompactSize::new(declared).map(BoxSize::Compact),
         };
+        let header = size
+            .and_then(|size| Self::new(box_type, size))
+            .ok_or_else(|| {
+                Error::size_below_header(header_bytes, large_size.unwrap_or(u64::from(declared)))
+            })?;
 
-        Self::new(box_type, size)
-            .map(|header| (header, remainder))
-            .ok_or_else(size_below_header)
+        Ok((header, rest))
     }
 
-    /// Writes the header into `buffer` and returns the bytes written
+    /// Writes the header into the front of `buffer` and returns what is left, where the payload goes
     ///
-    /// The written prefix is 8, 16, 24, or 32 bytes long, depending on the
-    /// forms the header carries; the rest of `buffer` is left untouched.
+    /// Nothing is written when the header is not.
     ///
     /// # Errors
     ///
     /// * [`InvalidValue`](crate::ErrorKind::InvalidValue) naming
     ///   `extended_type`: the header was read off bytes declaring an
-    ///   `extended_type` that ISO/IEC 14496-12 §4.2.3 reserves. Nothing is
-    ///   written.
-    pub fn write_to<'buffer>(
-        &self,
-        buffer: &'buffer mut [u8; Self::MAX_ENCODED_LEN],
-    ) -> Result<&'buffer [u8], Error> {
-        let (declared, large_size) = match self.size {
-            BoxSize::ToEndOfFile => (TO_END_OF_FILE_MARKER, None),
-            BoxSize::Compact(size) => (size.get(), None),
-            BoxSize::Extended(size) => (EXTENDED_SIZE_MARKER, Some(size.get())),
-        };
+    ///   `extended_type` that ISO/IEC 14496-12 §4.2.3 reserves.
+    /// * [`TruncatedBuffer`](crate::ErrorKind::TruncatedBuffer): `buffer` is
+    ///   shorter than [`encoded_len`](Self::encoded_len).
+    pub fn encode<'buffer>(&self, buffer: &'buffer mut [u8]) -> Result<&'buffer mut [u8], Error> {
         let extended_type = match self.box_type {
             BoxType::Compact(_) => None,
             BoxType::Extended(extended) if ExtendedType::new(extended.uuid()).is_none() => {
@@ -311,27 +245,29 @@ impl BoxHeader {
             }
             BoxType::Extended(extended) => Some(extended.uuid()),
         };
-
-        let (encoded, _beyond_header) = buffer.split_at_mut(self.encoded_len());
-
-        let (size_field, after_size) = encoded.split_at_mut(4);
-        size_field.copy_from_slice(&declared.to_be_bytes());
-        let (type_field, after_type) = after_size.split_at_mut(4);
-        type_field.copy_from_slice(self.box_type.four_cc().as_bytes());
-
-        let after_large_size = match large_size {
-            Some(large_size) => {
-                let (large_size_field, rest) = after_type.split_at_mut(8);
-                large_size_field.copy_from_slice(&large_size.to_be_bytes());
-                rest
-            }
-            None => after_type,
+        let (declared, large_size) = match self.size {
+            BoxSize::ToEndOfFile => (TO_END_OF_FILE_MARKER, None),
+            BoxSize::Compact(size) => (size.get(), None),
+            BoxSize::Extended(size) => (EXTENDED_SIZE_MARKER, Some(size.get())),
         };
-        if let Some(extended_type) = extended_type {
-            after_large_size.copy_from_slice(extended_type.as_bytes());
+
+        let available_bytes = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
+        let (header, rest) = usize::try_from(self.encoded_len())
+            .ok()
+            .and_then(|header_bytes| buffer.split_at_mut_checked(header_bytes))
+            .ok_or_else(|| Error::truncated_buffer(self.encoded_len(), available_bytes))?;
+
+        let fields = declared
+            .to_be_bytes()
+            .into_iter()
+            .chain(*self.box_type.four_cc().as_bytes())
+            .chain(large_size.into_iter().flat_map(u64::to_be_bytes))
+            .chain(extended_type.into_iter().flat_map(|uuid| *uuid.as_bytes()));
+        for (slot, byte) in header.iter_mut().zip(fields) {
+            *slot = byte;
         }
 
-        Ok(encoded)
+        Ok(rest)
     }
 }
 
@@ -526,10 +462,24 @@ mod tests {
     fn every_header_form_writes_the_bytes_it_was_read_from() {
         for encoded in EVERY_FORM {
             let (header, _payload) = BoxHeader::decode(encoded).unwrap();
-            let mut buffer = [0x00; BoxHeader::MAX_ENCODED_LEN];
+            let mut buffer = [0x00; 32];
 
-            assert_eq!(header.write_to(&mut buffer), Ok(encoded));
+            let rest = header.encode(&mut buffer).unwrap().len();
+
+            assert_eq!(buffer.get(..32 - rest), Some(encoded));
         }
+    }
+
+    #[test]
+    fn a_buffer_one_byte_short_of_the_header_is_refused_and_left_untouched() {
+        let header = BoxHeader::with_payload_len(BoxType::extended(EXTENDED_TYPE), 0).unwrap();
+        let mut buffer = [0xff; 23];
+
+        assert_eq!(
+            header.encode(&mut buffer),
+            Err(Error::truncated_buffer(24, 23))
+        );
+        assert_eq!(buffer, [0xff; 23]);
     }
 
     #[test]
@@ -546,13 +496,13 @@ mod tests {
     #[test]
     fn a_reserved_extended_type_is_not_written_back() {
         let (header, _payload) = BoxHeader::decode(&RESERVED_EXTENDED_TYPE).unwrap();
-        let mut buffer = [0xff; BoxHeader::MAX_ENCODED_LEN];
+        let mut buffer = [0xff; 24];
 
         assert_eq!(
-            header.write_to(&mut buffer),
+            header.encode(&mut buffer),
             Err(Error::invalid_value("extended_type"))
         );
-        assert_eq!(buffer, [0xff; BoxHeader::MAX_ENCODED_LEN]);
+        assert_eq!(buffer, [0xff; 24]);
     }
 
     #[test]
@@ -566,16 +516,22 @@ mod tests {
     }
 
     #[test]
-    fn a_compact_header_is_made_for_a_payload_the_size_field_declares_and_for_no_other() {
+    fn a_payload_one_byte_past_what_the_size_field_declares_moves_the_total_into_largesize() {
         let mdat = BoxType::compact(*b"mdat");
-        let longest =
-            BoxHeader::new(mdat, BoxSize::Compact(CompactSize::new(u32::MAX).unwrap())).unwrap();
-        let longest_payload = longest.payload_len().unwrap();
+        let longest_compact = u64::from(u32::MAX) - 8;
 
-        assert_eq!(BoxHeader::compact(mdat, longest_payload), Some(longest));
         assert_eq!(
-            BoxHeader::compact(mdat, longest_payload.checked_add(1).unwrap()),
-            None
+            [
+                BoxHeader::with_payload_len(mdat, longest_compact),
+                BoxHeader::with_payload_len(mdat, longest_compact + 1),
+            ],
+            [
+                BoxHeader::new(mdat, BoxSize::Compact(CompactSize::new(u32::MAX).unwrap())),
+                BoxHeader::new(
+                    mdat,
+                    BoxSize::Extended(ExtendedSize::new(u64::from(u32::MAX) + 9).unwrap())
+                ),
+            ]
         );
     }
 
