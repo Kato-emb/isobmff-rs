@@ -1,4 +1,4 @@
-//! [`BoxDefinition`] and [`BoxFormat`], the box type a Definition subclause assigns, as a constant and as a value
+//! [`BoxDefinition`], the box type a Definition subclause assigns
 
 use crate::framing::box_type::BoxType;
 
@@ -25,7 +25,7 @@ use crate::framing::box_type::BoxType;
 ///     const BOX_TYPE: BoxType = BoxType::compact(*b"free");
 /// }
 ///
-/// // A vendor box named by the UUID of its `usertype` field
+/// // A vendor box named by the UUID of its `extended_type` field
 /// struct VendorBox;
 ///
 /// impl BoxDefinition for VendorBox {
@@ -42,67 +42,10 @@ use crate::framing::box_type::BoxType;
 ///     Some(FreeSpaceBox::BOX_TYPE)
 /// );
 ///
-/// // A user type needs 16 bytes more, which a total of eight does not cover
+/// // An extended type needs 16 bytes more, which a total of eight does not cover
 /// assert_eq!(empty_header::<VendorBox>(), None);
 /// ```
 pub trait BoxDefinition {
     /// Box type that names `Self` on the wire
     const BOX_TYPE: BoxType;
-}
-
-/// Box type that names a value on the wire
-///
-/// Most boxes know their type without a value in hand, and state it as the
-/// constant of [`BoxDefinition`]; every such type is a `BoxFormat` too, by the
-/// blanket implementation. Some do not: the specification declares classes whose box
-/// type is a parameter of the class — `SampleEntry(format)` §8.5.2.2,
-/// `TrackReferenceTypeBox(reference_type)` §8.3.3.2 and
-/// `TrackGroupTypeBox(track_group_type)` §8.3.4 — and leaves the codes those
-/// take open, for a registration or a derived specification to name one no
-/// type here stands for. Such a value carries the code it was read under and
-/// settles its type only once it exists, so it states that type here.
-///
-/// Whatever the source, the type a value reports is the one its box is written
-/// under: [`BoxEncode::encode`](crate::BoxEncode::encode) takes it from here.
-///
-/// # Examples
-///
-/// ```
-/// use isobmff_core::{BoxDefinition, BoxFormat, BoxType};
-///
-/// // A box named by one code states it once, for the type
-/// struct MediaDataBox;
-///
-/// impl BoxDefinition for MediaDataBox {
-///     const BOX_TYPE: BoxType = BoxType::compact(*b"mdat");
-/// }
-///
-/// // A track reference is named by the reference type it carries, which
-/// // §8.3.3.2 leaves open, so the code travels in the value
-/// struct TrackReferenceTypeBox {
-///     reference_type: BoxType,
-/// }
-///
-/// impl BoxFormat for TrackReferenceTypeBox {
-///     fn box_type(&self) -> BoxType {
-///         self.reference_type
-///     }
-/// }
-///
-/// assert_eq!(MediaDataBox.box_type(), MediaDataBox::BOX_TYPE);
-/// assert_eq!(
-///     TrackReferenceTypeBox { reference_type: BoxType::compact(*b"hint") }.box_type(),
-///     BoxType::compact(*b"hint")
-/// );
-/// ```
-pub trait BoxFormat {
-    /// Returns the box type this value is written under
-    #[must_use]
-    fn box_type(&self) -> BoxType;
-}
-
-impl<Definition: BoxDefinition> BoxFormat for Definition {
-    fn box_type(&self) -> BoxType {
-        Self::BOX_TYPE
-    }
 }

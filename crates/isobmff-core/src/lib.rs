@@ -24,9 +24,7 @@ mod data_types;
 mod error;
 mod framing;
 
-pub use codec::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxFormat, FieldReader, FieldWidth, FieldWriter,
-};
+pub use codec::{BoxDecode, BoxDefinition, BoxEncode, FieldReader, FieldWidth, FieldWriter};
 #[cfg(feature = "alloc")]
 pub use data_types::Utf8String;
 pub use data_types::{FourCc, FullBoxFlags, FullBoxHeader, I8F8, I16F16, U16F16, Uuid};

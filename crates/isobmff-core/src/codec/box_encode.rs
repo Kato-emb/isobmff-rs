@@ -1,6 +1,6 @@
 //! [`BoxEncode`], a box written from a value
 
-use crate::codec::box_definition::BoxFormat;
+use crate::codec::box_definition::BoxDefinition;
 use crate::codec::field::FieldWriter;
 use crate::error::Error;
 use crate::framing::box_header::BoxHeader;
@@ -110,7 +110,7 @@ pub trait BoxEncode {
 
     /// Returns the length of the whole box, header included
     ///
-    /// [`BoxFormat`] names the box type, and the header that introduces
+    /// [`BoxDefinition`] names the box type, and the header that introduces
     /// [`payload_len`](Self::payload_len) bytes under it is the shortest one
     /// [`BoxHeader::with_payload_len`] builds.
     ///
@@ -118,18 +118,18 @@ pub trait BoxEncode {
     #[must_use]
     fn encoded_len(&self) -> u64
     where
-        Self: BoxFormat + Sized,
+        Self: BoxDefinition + Sized,
     {
         let payload_len = self.payload_len();
 
-        BoxHeader::with_payload_len(self.box_type(), payload_len).map_or(u64::MAX, |header| {
+        BoxHeader::with_payload_len(Self::BOX_TYPE, payload_len).map_or(u64::MAX, |header| {
             header.encoded_len().saturating_add(payload_len)
         })
     }
 
     /// Writes the whole box into the front of `buffer` and returns what is left
     ///
-    /// The header goes down under [`box_type`](BoxFormat::box_type) and the
+    /// The header goes down under [`BOX_TYPE`](BoxDefinition::BOX_TYPE) and the
     /// total that [`payload_len`](Self::payload_len) implies, and the payload
     /// follows as [`encode_payload`](Self::encode_payload) writes it. It is the
     /// mirror of [`BoxDecode::decode`](crate::BoxDecode::decode), which reads
@@ -193,13 +193,13 @@ pub trait BoxEncode {
     /// ```
     fn encode<'buffer>(&self, buffer: &'buffer mut [u8]) -> Result<&'buffer mut [u8], Error>
     where
-        Self: BoxFormat + Sized,
+        Self: BoxDefinition + Sized,
     {
         let needed = self.encoded_len();
         let available = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
         let too_short = || Error::truncated_buffer(needed, available);
 
-        let header = BoxHeader::with_payload_len(self.box_type(), self.payload_len())
+        let header = BoxHeader::with_payload_len(Self::BOX_TYPE, self.payload_len())
             .ok_or_else(too_short)?;
         // Why not report a total beyond `usize` as its own error: such a total
         // exceeds any `buffer.len()` on the same target, so it is a short buffer
