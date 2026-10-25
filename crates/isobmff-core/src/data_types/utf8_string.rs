@@ -19,7 +19,8 @@ use crate::error::Error;
 /// an encoding other than UTF-8, so [`from_slice`](Self::from_slice) accepts
 /// both: [`as_str`](Self::as_str) returns the text where the bytes are UTF-8,
 /// and [`as_bytes`](Self::as_bytes) returns them whatever they are. Writing
-/// puts the bytes back as they were read, and a terminator after them.
+/// is strict: it writes the bytes and a terminator after them only where the
+/// bytes are UTF-8.
 ///
 /// # Examples
 ///
@@ -33,10 +34,11 @@ use crate::error::Error;
 /// // A file that leaves the terminator off reads the same
 /// assert_eq!(Utf8String::from_slice(b"VideoHandler"), name);
 ///
-/// // Text that is not UTF-8 is kept as its bytes
+/// // Text that is not UTF-8 is kept as its bytes, and is not written
 /// let mac_roman = Utf8String::from_slice(b"Gr\x9fn\0");
 /// assert_eq!(mac_roman.as_str(), None);
 /// assert_eq!(mac_roman.as_bytes(), b"Gr\x9fn");
+/// assert!(mac_roman.encode(&mut [0; 5]).is_err());
 ///
 /// // Writing puts the terminator back, so the length counts it
 /// assert_eq!(name.encoded_len(), 13);
@@ -103,9 +105,15 @@ impl Utf8String {
     ///
     /// # Errors
     ///
+    /// * [`InvalidUtf8String`](crate::ErrorKind::InvalidUtf8String): the bytes
+    ///   the field carries are not UTF-8.
     /// * [`TruncatedBuffer`](crate::ErrorKind::TruncatedBuffer): `buffer` is shorter
     ///   than [`encoded_len`](Self::encoded_len).
     pub fn encode<'buffer>(&self, buffer: &'buffer mut [u8]) -> Result<&'buffer mut [u8], Error> {
+        if self.as_str().is_none() {
+            return Err(Error::invalid_utf8_string());
+        }
+
         let available_bytes = buffer.len();
         let too_short = || {
             Error::truncated_buffer(
@@ -161,14 +169,13 @@ mod tests {
     }
 
     #[test]
-    fn text_that_is_not_utf8_is_kept_as_its_bytes_and_written_back_as_them() {
+    fn text_that_is_not_utf8_is_kept_as_its_bytes_and_refused_on_writing() {
         let field = Utf8String::from_slice(b"\xff\0");
-        let mut buffer = vec![0xaa; 2];
-
-        field.encode(&mut buffer).unwrap();
+        let mut buffer = [0xaa; 2];
 
         assert_eq!(field, Utf8String(vec![0xff]));
-        assert_eq!(buffer, b"\xff\0");
+        assert_eq!(field.encode(&mut buffer), Err(Error::invalid_utf8_string()));
+        assert_eq!(buffer, [0xaa; 2]);
     }
 
     #[test]

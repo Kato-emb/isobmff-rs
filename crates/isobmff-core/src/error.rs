@@ -76,6 +76,12 @@ impl Error {
         Self::new(ErrorKind::InvalidValue { field })
     }
 
+    /// Returns the failure of a `utf8string` field holding bytes that are not UTF-8
+    #[must_use]
+    pub const fn invalid_utf8_string() -> Self {
+        Self::new(ErrorKind::InvalidUtf8String)
+    }
+
     /// Returns the failure of a count that disagrees with the entries it frames
     #[must_use]
     pub const fn entry_count_mismatch(declared_entries: u64, actual_entries: u64) -> Self {
@@ -198,6 +204,11 @@ pub enum ErrorKind {
         /// Name of the field as the specification spells it
         field: &'static str,
     },
+    /// Field of the basic type `utf8string` holds bytes that are not UTF-8
+    ///
+    /// ISO/IEC 14496-12 §4.2.1 defines the type as UTF-8. A reader keeps such
+    /// bytes as found, so this is reported where they would be written.
+    InvalidUtf8String,
     /// Count a box declares does not match the entries it frames for itself
     #[non_exhaustive]
     EntryCountMismatch {
@@ -239,7 +250,9 @@ impl ErrorKind {
     #[must_use]
     pub const fn category(self) -> Category {
         match self {
-            Self::InvalidValue { .. } | Self::EntryCountMismatch { .. } => Category::Malformed,
+            Self::InvalidValue { .. }
+            | Self::InvalidUtf8String
+            | Self::EntryCountMismatch { .. } => Category::Malformed,
             Self::UnsupportedVersion { .. }
             | Self::UnsupportedFlags { .. }
             | Self::UnsupportedValue { .. } => Category::Unsupported,
@@ -255,6 +268,9 @@ impl fmt::Display for ErrorKind {
                 formatter,
                 "box holds a value in its {field} field that the specification does not allow"
             ),
+            Self::InvalidUtf8String => {
+                formatter.write_str("utf8string field holds bytes that are not UTF-8")
+            }
             Self::EntryCountMismatch {
                 declared_entries,
                 actual_entries,
