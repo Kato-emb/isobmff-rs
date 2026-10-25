@@ -1,8 +1,11 @@
-//! [`ChildBoxes`] and [`OtherBoxes`], the boxes a container box holds
+//! [`ChildBoxes`], [`OtherBoxes`] and [`ChildBoxWriter`], the boxes a container box holds
+
+mod other_boxes;
 
 use alloc::vec::Vec;
 
-use crate::any_box::AnyBox;
+pub use other_boxes::{ChildBoxWriter, OtherBoxes};
+
 use crate::codec::box_decode::BoxDecode;
 use crate::codec::box_definition::BoxDefinition;
 use crate::codec::box_variants::BoxVariants;
@@ -23,7 +26,9 @@ use crate::framing::raw_box::{Boxes, RawBox};
 /// for, and reports the counts the quantity forbids before reading any of them.
 /// The children are taken in whatever order they lie in the payload. What no
 /// take removed is the container's [`OtherBoxes`], built with [`From`], in the
-/// order the children came.
+/// order the children came, each remembering the known child it followed — the
+/// child a take removed that lay last before it — so [`ChildBoxWriter`] writes
+/// it back there.
 ///
 /// "Exactly one variant shall be present" is a quantity across box types,
 /// which [`take_exactly_one_variant`](Self::take_exactly_one_variant) takes
@@ -82,7 +87,8 @@ use crate::framing::raw_box::{Boxes, RawBox};
 /// ```
 #[derive(Debug)]
 pub struct ChildBoxes<'payload> {
-    children: Vec<RawBox<'payload>>,
+    children: Vec<(usize, RawBox<'payload>)>,
+    known: Vec<(usize, BoxType)>,
 }
 
 impl<'payload> ChildBoxes<'payload> {
@@ -90,8 +96,9 @@ impl<'payload> ChildBoxes<'payload> {
     ///
     /// A child takes at least the eight bytes of its header, so `payload`
     /// holds at most `payload.len() / 8` children. The collection allocates
-    /// room for exactly the children `payload` holds, so at most
-    /// `size_of::<RawBox>()` bytes for each eight of `payload`: what it
+    /// room for exactly the children `payload` holds, each with its place among
+    /// them, and records the place and type of each child a take removes: a
+    /// bounded number of bytes for each eight of `payload`, so what it
     /// allocates is bounded by the length of `payload`, which the caller sets.
     ///
     /// # Errors
@@ -105,9 +112,12 @@ impl<'payload> ChildBoxes<'payload> {
             child.map(|_| count.saturating_add(1))
         })?;
         let mut children = Vec::with_capacity(count);
-        children.extend(Boxes::new(payload).flatten());
+        children.extend(Boxes::new(payload).flatten().enumerate());
 
-        Ok(Self { children })
+        Ok(Self {
+            children,
+            known: Vec::new(),
+        })
     }
 
     /// Returns whether a child of the type that names `Child` is there, without reading it
@@ -115,7 +125,7 @@ impl<'payload> ChildBoxes<'payload> {
     pub fn contains<Child: BoxDefinition>(&self) -> bool {
         self.children
             .iter()
-            .any(|child| child.header().box_type() == Child::BOX_TYPE)
+            .any(|(_, child)| child.header().box_type() == Child::BOX_TYPE)
     }
 
     /// Takes out the one child of a quantity of `Exactly one`
@@ -144,7 +154,7 @@ impl<'payload> ChildBoxes<'payload> {
         &mut self,
     ) -> Result<Option<Child>, Error> {
         self.position_of_at_most_one_of(const { &[Child::BOX_TYPE] })?
-            .map(|position| decode::<Child>(self.children.remove(position)))
+            .map(|position| decode::<Child>(self.take_at(position)))
             .transpose()
     }
 
@@ -202,12 +212,14 @@ impl<'payload> ChildBoxes<'payload> {
     ) -> Result<Vec<Child>, Error> {
         let mut read = Vec::new();
         let mut first_failure = None;
-        self.children.retain(|child| {
+        let known = &mut self.known;
+        self.children.retain(|(position, child)| {
             if child.header().box_type() != Child::BOX_TYPE {
                 return true;
             }
             match decode::<Child>(*child) {
                 Ok(value) => {
+                    known.push((*position, Child::BOX_TYPE));
                     read.push(value);
                     false
                 }
@@ -238,11 +250,15 @@ impl<'payload> ChildBoxes<'payload> {
     ) -> Result<Vec<Child>, Error> {
         let mut read = Vec::new();
         let mut failure = None;
-        self.children.retain(|child| {
+        let known = &mut self.known;
+        self.children.retain(|(position, child)| {
             let claimed = child.header().box_type() == Child::BOX_TYPE;
             if claimed && failure.is_none() {
                 match decode::<Child>(*child) {
-                    Ok(value) => read.push(value),
+                    Ok(value) => {
+                        known.push((*position, Child::BOX_TYPE));
+                        read.push(value);
+                    }
                     Err(error) => failure = Some(error),
                 }
             }
@@ -298,7 +314,7 @@ impl<'payload> ChildBoxes<'payload> {
     ) -> Result<Option<Variants>, Error> {
         self.position_of_at_most_one_of(Variants::VARIANTS)?
             .map(|position| {
-                let child = self.children.remove(position);
+                let child = self.take_at(position);
                 let box_type = child.header().box_type();
                 Variants::decode_variant(child).map_err(|error| error.in_container(box_type))
             })
@@ -333,10 +349,19 @@ impl<'payload> ChildBoxes<'payload> {
         position: usize,
         read: impl FnOnce(RawBox<'payload>) -> Option<Value>,
     ) -> Option<Value> {
-        let value = self.children.get(position).copied().and_then(read)?;
-        self.children.remove(position);
+        let (_, child) = self.children.get(position).copied()?;
+        let value = read(child)?;
+        self.take_at(position);
 
         Some(value)
+    }
+
+    /// Removes the child at `position`, recording it as a known child for the children left
+    fn take_at(&mut self, position: usize) -> RawBox<'payload> {
+        let (place, child) = self.children.remove(position);
+        self.known.push((place, child.header().box_type()));
+
+        child
     }
 
     /// Returns where the one child of a type in `box_types` lies, if one is there
@@ -348,14 +373,14 @@ impl<'payload> ChildBoxes<'payload> {
             .children
             .iter()
             .enumerate()
-            .filter(|(_, child)| box_types.contains(&child.header().box_type()));
-        let Some((position, first)) = claimed.next() else {
+            .filter(|(_, (_, child))| box_types.contains(&child.header().box_type()));
+        let Some((position, (_, first))) = claimed.next() else {
             return Ok(None);
         };
         let box_type = first.header().box_type();
-        if let Some((_, second)) = claimed.next() {
+        if let Some((_, (_, second))) = claimed.next() {
             let of_one_type = second.header().box_type() == box_type
-                && claimed.all(|(_, other)| other.header().box_type() == box_type);
+                && claimed.all(|(_, (_, other))| other.header().box_type() == box_type);
             return Err(if of_one_type {
                 Error::duplicate_box(box_type)
             } else {
@@ -370,83 +395,6 @@ impl<'payload> ChildBoxes<'payload> {
 /// Reads one child, naming it in whatever failure it reports
 fn decode<Child: BoxDecode + BoxDefinition>(child: RawBox<'_>) -> Result<Child, Error> {
     Child::decode_payload(child.payload()).map_err(|error| error.in_container(Child::BOX_TYPE))
-}
-
-/// Children of a container that no field of it claims, and those a field claims that did not read
-///
-/// They are kept as the bytes they lie as, under the box type that names them,
-/// so a container writes back the children it holds no value of. They are what
-/// no take removed from the container's [`ChildBoxes`], in the order they came.
-///
-/// Where they go among the children the container does read is that
-/// container's own order, so a box written back holds them after the children
-/// it reads, wherever they lay when it was read. Summing and writing them is
-/// that container's part: this type hands them over with
-/// [`as_slice`](Self::as_slice), and the container treats that run as it
-/// treats any run of children it holds.
-///
-/// # Examples
-///
-/// ```
-/// use isobmff_core::{BoxType, ChildBoxes, OtherBoxes};
-///
-/// // Two children of a container that has no field for either
-/// let payload = b"\0\0\0\x0cfreeAAAA\0\0\0\x08skip";
-/// let other_boxes = OtherBoxes::from(ChildBoxes::decode(payload).unwrap());
-///
-/// // Each is held under the box type that named it, in the order it came
-/// let box_types: Vec<BoxType> = other_boxes
-///     .as_slice()
-///     .iter()
-///     .map(|kept| kept.box_type())
-///     .collect();
-/// assert_eq!(
-///     box_types,
-///     [BoxType::compact(*b"free"), BoxType::compact(*b"skip")]
-/// );
-///
-/// // The container writes them where its own order puts them
-/// let mut buffer = [0; 20];
-/// let mut rest = buffer.as_mut_slice();
-/// for kept in other_boxes.as_slice() {
-///     rest = kept.encode(rest).unwrap();
-/// }
-/// assert_eq!(&buffer, payload);
-/// ```
-#[derive(Clone, Default, PartialEq, Debug)]
-pub struct OtherBoxes {
-    children: Vec<AnyBox>,
-}
-
-impl OtherBoxes {
-    /// Creates a holding of no child
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            children: Vec::new(),
-        }
-    }
-
-    /// Returns the children kept, in the order they came
-    #[must_use]
-    pub fn as_slice(&self) -> &[AnyBox] {
-        &self.children
-    }
-}
-
-impl From<ChildBoxes<'_>> for OtherBoxes {
-    /// Keeps the children no take removed, copying each payload out of the input it was framed from
-    fn from(children: ChildBoxes<'_>) -> Self {
-        Self {
-            children: children
-                .children
-                .into_iter()
-                .map(|child| {
-                    AnyBox::from_raw_bytes(child.header().box_type(), child.payload().to_vec())
-                })
-                .collect(),
-        }
-    }
 }
 
 #[cfg(test)]

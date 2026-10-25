@@ -3,8 +3,8 @@
 #[cfg(test)]
 mod tests {
     use isobmff_core::{
-        AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxVariants, ChildBoxes, Error,
-        FieldReader, FieldWriter, OtherBoxes, RawBox,
+        AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, BoxVariants, ChildBoxWriter,
+        ChildBoxes, Error, FieldReader, FieldWriter, OtherBoxes, RawBox,
     };
 
     /// Box of a vendor's own whose payload is one 16-bit level
@@ -120,13 +120,6 @@ mod tests {
                 Self::Narrow(narrow) => narrow.encoded_len(),
             }
         }
-
-        fn encode<'buffer>(&self, buffer: &'buffer mut [u8]) -> Result<&'buffer mut [u8], Error> {
-            match self {
-                Self::Wide(wide) => wide.encode(buffer),
-                Self::Narrow(narrow) => narrow.encode(buffer),
-            }
-        }
     }
 
     /// Container of a vendor's own, named by a UUID: exactly one level, one sequence number in either variant, and whatever else
@@ -164,36 +157,29 @@ mod tests {
         }
 
         fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-            let rest = self.level.encode(writer.take_remainder())?;
-            let mut rest = self.sequence_number.encode(rest)?;
-            for kept in self.other_boxes.as_slice() {
-                rest = kept.encode(rest)?;
+            let mut children = ChildBoxWriter::new(writer.take_remainder(), &self.other_boxes);
+            children.write(&self.level)?;
+            match &self.sequence_number {
+                SequenceNumber::Wide(wide) => children.write(wide)?,
+                SequenceNumber::Narrow(narrow) => children.write(narrow)?,
             }
-
-            Ok(())
+            children.finish()
         }
     }
 
-    /// `TrackInformationBox` holding, in this order, an unknown `uuid` child, its `vsq2`, and its `vlvl`
+    /// `TrackInformationBox` holding, in this order, its `vlvl`, an unknown `uuid` child, and its `vsq2`
     const READ: &[u8] =
         b"\0\0\0\x46uuid\x5a\x5a\x5a\x5a\x5a\x5a\x5a\x5a\x5a\x5a\x5a\x5a\x5a\x5a\x5a\x5a\
-        \0\0\0\x1auuid\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\xaa\xbb\
-        \0\0\0\x0avsq2\0\x07\
-        \0\0\0\x0avlvl\x01\x02";
-
-    /// The same box written back: the children it reads first, in its own order, then the one it does not
-    const WRITTEN: &[u8] =
-        b"\0\0\0\x46uuid\x5a\x5a\x5a\x5a\x5a\x5a\x5a\x5a\x5a\x5a\x5a\x5a\x5a\x5a\x5a\x5a\
         \0\0\0\x0avlvl\x01\x02\
-        \0\0\0\x0avsq2\0\x07\
-        \0\0\0\x1auuid\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\xaa\xbb";
+        \0\0\0\x1auuid\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\xaa\xbb\
+        \0\0\0\x0avsq2\0\x07";
 
     /// The child of `READ` the container has no field for
     const UNKNOWN_CHILD: &[u8] =
         b"\0\0\0\x1auuid\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\xaa\xbb";
 
     #[test]
-    fn a_vendor_container_reads_its_children_in_any_order_and_keeps_the_one_it_has_no_field_for() {
+    fn a_vendor_container_reads_its_children_and_keeps_the_one_it_has_no_field_for() {
         assert_eq!(
             TrackInformationBox::decode(READ),
             Ok((
@@ -210,13 +196,13 @@ mod tests {
     }
 
     #[test]
-    fn a_vendor_container_writes_the_child_it_has_no_field_for_after_the_ones_it_reads() {
+    fn a_vendor_container_writes_the_child_it_has_no_field_for_back_where_it_lay() {
         let (track_information, _) = TrackInformationBox::decode(READ).unwrap();
         let mut written = vec![0; usize::try_from(track_information.encoded_len()).unwrap()];
 
         track_information.encode(&mut written).unwrap();
 
-        assert_eq!(written, WRITTEN);
+        assert_eq!(written, READ);
     }
 
     #[test]

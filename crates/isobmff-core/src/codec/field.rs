@@ -5,7 +5,7 @@ use core::mem;
 use crate::error::Error;
 
 /// Returns a length in bytes as the `u64` the failures of a payload count in
-fn byte_count(length: usize) -> u64 {
+pub(crate) fn byte_count(length: usize) -> u64 {
     u64::try_from(length).unwrap_or(u64::MAX)
 }
 

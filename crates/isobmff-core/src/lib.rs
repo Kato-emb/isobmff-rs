@@ -13,8 +13,9 @@
 //! The crate is `no_std`. The `alloc` feature, on by default, adds the values
 //! that own their bytes on the heap: [`Utf8String`], [`Utf8List`],
 //! [`UtfString`], [`Base64String`] and [`AnyBox`], which own the bytes they
-//! carry, and [`ChildBoxes`] and [`OtherBoxes`], which hold the children of a
-//! container. Nothing else in the crate reaches for a heap.
+//! carry, [`ChildBoxes`] and [`OtherBoxes`], which hold the children of a
+//! container, and [`ChildBoxWriter`], which writes them back. Nothing else in
+//! the crate reaches for a heap.
 
 #![no_std]
 
@@ -36,7 +37,7 @@ pub use codec::{
     BoxDecode, BoxDefinition, BoxEncode, BoxVariants, FieldReader, FieldWidth, FieldWriter,
 };
 #[cfg(feature = "alloc")]
-pub use container::{ChildBoxes, OtherBoxes};
+pub use container::{ChildBoxWriter, ChildBoxes, OtherBoxes};
 #[cfg(feature = "alloc")]
 pub use data_types::{Base64String, Utf8List, Utf8String, UtfString};
 pub use data_types::{FourCc, FullBoxFlags, FullBoxHeader, I8F8, I16F16, U16F16, Uuid};
