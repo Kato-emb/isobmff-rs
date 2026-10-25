@@ -51,6 +51,11 @@ impl BoxEncode for TypeCombinationBox {
 ///
 /// Children of other types are kept in [`other_boxes`](Self::other_boxes),
 /// and written back after the combinations.
+///
+/// The box holds one or more combinations. A box of none reads, but writing
+/// it is refused with [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue)
+/// for `compatible_combinations`, so a box built from [`Default`] is given a
+/// combination before it is written.
 #[doc(alias = "etyp")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -86,6 +91,10 @@ impl BoxEncode for ExtendedTypeBox {
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+        if self.compatible_combinations.is_empty() {
+            return Err(Error::invalid_value("compatible_combinations"));
+        }
+
         let mut rest = writer.take_remainder();
         for combination in &self.compatible_combinations {
             rest = combination.encode(rest)?;
@@ -102,7 +111,7 @@ impl BoxEncode for ExtendedTypeBox {
 mod tests {
     use alloc::vec;
 
-    use isobmff_core::{BoxDecode, BoxType, ChildBoxes, Error, FourCc, OtherBoxes};
+    use isobmff_core::{BoxDecode, BoxEncode, BoxType, ChildBoxes, Error, FourCc, OtherBoxes};
 
     use super::{ExtendedTypeBox, TypeCombinationBox};
     use crate::encoded;
@@ -165,6 +174,22 @@ mod tests {
     #[test]
     fn writes_its_combinations_and_then_the_child_it_has_no_field_for() {
         assert_eq!(encoded(&extended_type()), ETYP_WRITTEN);
+    }
+
+    #[test]
+    fn a_box_of_no_combination_reads_but_is_refused_when_written() {
+        let (read, _) = ExtendedTypeBox::decode(b"\0\0\0\x08etyp").unwrap();
+
+        assert_eq!(
+            (
+                read.encode(&mut [0; 8]),
+                ExtendedTypeBox::default().encode(&mut [0; 8])
+            ),
+            (
+                Err(Error::invalid_value("compatible_combinations")),
+                Err(Error::invalid_value("compatible_combinations"))
+            )
+        );
     }
 
     #[test]
