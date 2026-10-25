@@ -1,0 +1,16 @@
+[package]
+name = "isobmff"
+version = "0.0.0"
+description = "Sans-IO reading and writing of ISO base media files (ISO/IEC 14496-12)"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
