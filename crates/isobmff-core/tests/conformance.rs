@@ -181,8 +181,10 @@ mod tests {
                 minor_version: reader.read_u32()?,
                 compatible_brands: reader
                     .take_remainder()
-                    .chunks_exact(4)
-                    .map(|brand| FourCc::new(brand.try_into().unwrap()))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|brand| FourCc::new(*brand))
                     .collect(),
             })
         }
