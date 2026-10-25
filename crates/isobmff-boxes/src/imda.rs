@@ -4,8 +4,6 @@ use alloc::vec::Vec;
 
 use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter};
 
-use crate::field::FieldCodec;
-
 /// [`IdentifiedMediaDataBox`] (`imda`), ISO/IEC 14496-12 §8.1.4
 ///
 /// Media data as a [`MediaDataBox`](crate::MediaDataBox) holds it, with an
@@ -28,7 +26,7 @@ impl BoxDefinition for IdentifiedMediaDataBox {
 impl BoxDecode for IdentifiedMediaDataBox {
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         Ok(Self {
-            imda_identifier: u32::read(reader)?,
+            imda_identifier: reader.read_u32()?,
             data: reader.take_remainder().to_vec(),
         })
     }
@@ -36,13 +34,13 @@ impl BoxDecode for IdentifiedMediaDataBox {
 
 impl BoxEncode for IdentifiedMediaDataBox {
     fn payload_len(&self) -> u64 {
-        self.imda_identifier
-            .encoded_len()
-            .saturating_add(u64::try_from(self.data.len()).unwrap_or(u64::MAX))
+        u64::try_from(self.data.len())
+            .unwrap_or(u64::MAX)
+            .saturating_add(4)
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        self.imda_identifier.write(writer)?;
+        writer.write_u32(self.imda_identifier)?;
         writer.write_slice(&self.data)
     }
 }

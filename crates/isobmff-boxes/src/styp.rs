@@ -54,11 +54,7 @@ impl BoxDecode for SegmentTypeBox {
 
 impl BoxEncode for SegmentTypeBox {
     fn payload_len(&self) -> u64 {
-        general_type_len(
-            self.major_brand,
-            self.minor_version,
-            &self.compatible_brands,
-        )
+        general_type_len(&self.compatible_brands)
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {

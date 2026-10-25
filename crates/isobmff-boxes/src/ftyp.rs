@@ -6,7 +6,7 @@ use isobmff_core::{
     BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FourCc,
 };
 
-use crate::field::{FieldCodec, entries_len, read_to_end, write_entries};
+use crate::field::{entries_len, read_to_end, write_entries};
 
 /// Fields of a `GeneralTypeBox`, as `major_brand`, `minor_version` and `compatible_brands`
 pub(crate) type GeneralTypeFields = (FourCc, u32, Vec<FourCc>);
@@ -19,22 +19,15 @@ pub(crate) type GeneralTypeFields = (FourCc, u32, Vec<FourCc>);
 ///   payload ends inside a field or inside a brand.
 pub(crate) fn read_general_type(reader: &mut FieldReader<'_>) -> Result<GeneralTypeFields, Error> {
     Ok((
-        FourCc::read(reader)?,
-        u32::read(reader)?,
+        FourCc::new(*reader.read_bytes::<4>()?),
+        reader.read_u32()?,
         read_to_end(reader)?,
     ))
 }
 
 /// Returns how many bytes the fields of a `GeneralTypeBox` take, saturating at `u64::MAX`
-pub(crate) fn general_type_len(
-    major_brand: FourCc,
-    minor_version: u32,
-    compatible_brands: &[FourCc],
-) -> u64 {
-    major_brand
-        .encoded_len()
-        .saturating_add(minor_version.encoded_len())
-        .saturating_add(entries_len(compatible_brands))
+pub(crate) fn general_type_len(compatible_brands: &[FourCc]) -> u64 {
+    entries_len(compatible_brands).saturating_add(4 + 4)
 }
 
 /// Writes the fields of a `GeneralTypeBox`
@@ -49,8 +42,8 @@ pub(crate) fn write_general_type(
     minor_version: u32,
     compatible_brands: &[FourCc],
 ) -> Result<(), Error> {
-    major_brand.write(writer)?;
-    minor_version.write(writer)?;
+    writer.write_bytes(major_brand.as_bytes())?;
+    writer.write_u32(minor_version)?;
     write_entries(writer, compatible_brands)
 }
 
@@ -120,11 +113,7 @@ impl BoxDecode for FileTypeBox {
 
 impl BoxEncode for FileTypeBox {
     fn payload_len(&self) -> u64 {
-        general_type_len(
-            self.major_brand,
-            self.minor_version,
-            &self.compatible_brands,
-        )
+        general_type_len(&self.compatible_brands)
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {

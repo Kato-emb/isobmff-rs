@@ -7,7 +7,7 @@ use isobmff_core::{
     FullBoxHeader,
 };
 
-use crate::field::{FieldCodec, FixedLengthField, entries_len, read_to_end, write_entries};
+use crate::field::{TableEntry, entries_len, read_to_end, write_entries};
 
 /// Pair of a download rate and the initial delay it suggests, one entry of a [`ProgressiveDownloadInfoBox`]
 #[non_exhaustive]
@@ -20,26 +20,20 @@ pub struct ProgressiveDownloadInfoEntry {
     pub initial_delay: u32,
 }
 
-impl FieldCodec for ProgressiveDownloadInfoEntry {
+impl TableEntry for ProgressiveDownloadInfoEntry {
+    const ENCODED_LEN: u64 = 8;
+
     fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         Ok(Self {
-            rate: u32::read(reader)?,
-            initial_delay: u32::read(reader)?,
+            rate: reader.read_u32()?,
+            initial_delay: reader.read_u32()?,
         })
     }
 
     fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        self.rate.write(writer)?;
-        self.initial_delay.write(writer)
+        writer.write_u32(self.rate)?;
+        writer.write_u32(self.initial_delay)
     }
-
-    fn encoded_len(&self) -> u64 {
-        Self::ENCODED_LEN
-    }
-}
-
-impl FixedLengthField for ProgressiveDownloadInfoEntry {
-    const ENCODED_LEN: u64 = 8;
 }
 
 /// [`ProgressiveDownloadInfoBox`] (`pdin`), ISO/IEC 14496-12 §8.1.3
@@ -61,7 +55,7 @@ impl BoxDefinition for ProgressiveDownloadInfoBox {
 
 impl BoxDecode for ProgressiveDownloadInfoBox {
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let version = FullBoxHeader::read(reader)?.version();
+        let version = FullBoxHeader::from_bytes(reader.read_bytes::<4>()?).version();
         if version != 0 {
             return Err(Error::unsupported_version(version));
         }
@@ -74,11 +68,11 @@ impl BoxDecode for ProgressiveDownloadInfoBox {
 
 impl BoxEncode for ProgressiveDownloadInfoBox {
     fn payload_len(&self) -> u64 {
-        entries_len(&self.entries).saturating_add(FullBoxHeader::ENCODED_LEN)
+        entries_len(&self.entries).saturating_add(4)
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        FullBoxHeader::new(0, FullBoxFlags::ZERO).write(writer)?;
+        writer.write_bytes(&FullBoxHeader::new(0, FullBoxFlags::ZERO).to_bytes())?;
         write_entries(writer, &self.entries)
     }
 }
