@@ -22,5 +22,14 @@ alloc = []
 # framing is checked against.
 serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
 
+# Containers need the heap their children are collected on.
+[[test]]
+name = "conformance"
+required-features = ["alloc"]
+
+[[test]]
+name = "vendor_container"
+required-features = ["alloc"]
+
 [lints]
 workspace = true
