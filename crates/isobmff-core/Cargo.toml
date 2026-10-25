@@ -1,0 +1,21 @@
+[package]
+name = "isobmff-core"
+version = "0.0.0"
+description = "Minimal, dependency-free layer for implementing ISO base media file format boxes"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["alloc"]
+# Values that own their bytes on the heap, such as `Utf8String`.
+alloc = []
+
+[lints]
+workspace = true
