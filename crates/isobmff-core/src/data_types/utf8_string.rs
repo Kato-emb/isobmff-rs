@@ -48,7 +48,7 @@ use crate::error::Error;
 /// // A string carrying a NUL of its own could not be read back whole
 /// assert_eq!(Utf8String::new(String::from("Video\0Handler")), None);
 /// ```
-#[doc(alias = "utf8string", alias = "NullTerminatedString")]
+#[doc(alias = "utf8string")]
 #[derive(Clone, Default, PartialEq, Eq, Hash)]
 pub struct Utf8String(Vec<u8>);
 

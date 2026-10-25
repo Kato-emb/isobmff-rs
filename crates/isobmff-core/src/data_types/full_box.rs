@@ -80,7 +80,6 @@ impl FullBoxFlags {
 /// // A box that declares no flags of its own leaves them clear
 /// assert_eq!(FullBoxHeader::new(1, FullBoxFlags::ZERO).to_bytes(), [1, 0, 0, 0]);
 /// ```
-#[doc(alias = "FullBoxFields")]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct FullBoxHeader {
     version: u8,
