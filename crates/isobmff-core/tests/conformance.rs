@@ -9,15 +9,17 @@
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::path::{Path, PathBuf};
-    use std::process::Command;
+    use std::path::Path;
     use std::{env, fs};
 
     use isobmff_core::{
         BoxDecode, BoxDefinition, BoxEncode, BoxHeader, BoxType, Boxes, ChildBoxes, Error,
         FieldReader, FieldWidth, FieldWriter, FourCc, FullBoxFlags, FullBoxHeader, RawBox,
     };
-    use serde_json::Value;
+    use isobmff_test_support::serde_json::{self, Value};
+    use isobmff_test_support::{
+        ConformanceFile, conformance_files, ffprobe, gpac_children, gpac_frame, gpac_type,
+    };
 
     /// Box types whose payload is a sequence of boxes and nothing else
     const CONTAINERS: [[u8; 4]; 12] = [
@@ -34,54 +36,6 @@ mod tests {
 
     /// Type and total of a box, as GPAC spells them
     type Frame = (String, u64);
-
-    /// Returns a four-character code as GPAC spells it: printable ASCII as it is, any other byte in hexadecimal
-    fn gpac_type(four_cc: FourCc) -> String {
-        four_cc
-            .as_bytes()
-            .iter()
-            .map(|byte| {
-                if byte.is_ascii_graphic() || *byte == b' ' {
-                    char::from(*byte).to_string()
-                } else {
-                    format!("{byte:02X}")
-                }
-            })
-            .collect()
-    }
-
-    /// Returns the boxes GPAC reports directly inside `node`
-    fn gpac_children(node: &Value) -> Vec<&Value> {
-        node.as_object()
-            .into_iter()
-            .flatten()
-            .filter(|(key, _)| !key.starts_with('@'))
-            .flat_map(|(_, value)| {
-                if let Value::Array(items) = value {
-                    items.iter().collect()
-                } else {
-                    vec![value]
-                }
-            })
-            .filter(|item| item.get("@Type").is_some() && item.get("@Size").is_some())
-            .collect()
-    }
-
-    /// Returns the type and total GPAC reports for a box
-    fn gpac_frame(node: &Value) -> Frame {
-        let box_type = node
-            .get("@Type")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        let size = node
-            .get("@Size")
-            .and_then(Value::as_str)
-            .and_then(|size| size.parse().ok())
-            .unwrap_or_default();
-
-        (box_type, size)
-    }
 
     /// Returns how many of each box `frames` holds
     fn tally(frames: impl IntoIterator<Item = Frame>) -> BTreeMap<Frame, usize> {
@@ -118,7 +72,7 @@ mod tests {
         };
         let ours = tally(framed.iter().map(|child| {
             (
-                gpac_type(child.header().box_type().four_cc()),
+                gpac_type(child.header().box_type().four_cc().as_bytes()),
                 total_of(child),
             )
         }));
@@ -148,7 +102,7 @@ mod tests {
                 continue;
             }
 
-            let frame = (gpac_type(box_type.four_cc()), total_of(child));
+            let frame = (gpac_type(box_type.four_cc().as_bytes()), total_of(child));
             if let Some(position) = unmatched.iter().position(|node| gpac_frame(node) == frame) {
                 let node = unmatched.remove(position);
                 compare(
@@ -273,38 +227,6 @@ mod tests {
         }
     }
 
-    /// Returns the conformance files in the directory `ISOBMFF_CONFORMANCE_DIR` names, each with GPAC's report of it
-    fn conformance_files() -> Vec<(String, Vec<u8>, Value)> {
-        let directory = PathBuf::from(env::var_os("ISOBMFF_CONFORMANCE_DIR").expect(
-            "ISOBMFF_CONFORMANCE_DIR names the directory scripts/fetch-conformance.sh fetched into",
-        ));
-        let mut files = fs::read_dir(&directory)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .filter(|path| path.extension().is_some_and(|extension| extension == "mp4"))
-            .collect::<Vec<_>>();
-        files.sort();
-        assert!(
-            !files.is_empty(),
-            "{} holds no conformance file",
-            directory.display()
-        );
-
-        files
-            .into_iter()
-            .map(|file| {
-                let name = file.file_name().unwrap().to_str().unwrap().to_owned();
-                let stem = file.file_stem().unwrap().to_str().unwrap();
-                let report: Value = serde_json::from_slice(
-                    &fs::read(file.with_file_name(format!("{stem}_gpac.json"))).unwrap(),
-                )
-                .unwrap();
-
-                (name, fs::read(&file).unwrap(), report)
-            })
-            .collect()
-    }
-
     /// Returns the first box of `box_type` in `payload`, as the bytes it was framed from
     fn find(payload: &[u8], box_type: BoxType) -> Option<&[u8]> {
         let mut rest = payload;
@@ -366,18 +288,18 @@ mod tests {
 
     /// Returns what `ffprobe` reads off `file`: the `ftyp` brands as its format tags, and the `mvhd` timescale
     fn ffprobe_headers(file: &Path) -> (Value, Option<String>) {
-        let ffprobe = env::var_os("ISOBMFF_FFPROBE").unwrap_or_else(|| "ffprobe".into());
-        let tags = Command::new(&ffprobe)
-            .args(["-v", "error", "-print_format", "json", "-show_entries"])
-            .arg("format_tags=major_brand,minor_version,compatible_brands")
-            .arg(file)
-            .output()
-            .unwrap();
-        let trace = Command::new(&ffprobe)
-            .args(["-v", "trace"])
-            .arg(file)
-            .output()
-            .unwrap();
+        let tags = ffprobe(
+            &[
+                "-v",
+                "error",
+                "-print_format",
+                "json",
+                "-show_entries",
+                "format_tags=major_brand,minor_version,compatible_brands",
+            ],
+            file,
+        );
+        let trace = ffprobe(&["-v", "trace"], file);
         let timescale = String::from_utf8_lossy(&trace.stderr)
             .lines()
             .find_map(|line| line.split_once("time scale = "))
@@ -394,7 +316,13 @@ mod tests {
     #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
     fn every_box_of_a_conformance_file_frames_as_gpac_reports_it() {
         let mut differences = Vec::new();
-        for (name, bytes, report) in conformance_files() {
+        for ConformanceFile {
+            name,
+            bytes,
+            report,
+            ..
+        } in conformance_files()
+        {
             compare(
                 &name,
                 "",
@@ -411,7 +339,13 @@ mod tests {
     #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
     fn ftyp_and_mvhd_read_as_gpac_reports_and_write_what_was_read_and_what_ffmpeg_reads() {
         let mut differences = Vec::new();
-        for (name, bytes, report) in conformance_files() {
+        for ConformanceFile {
+            name,
+            bytes,
+            report,
+            ..
+        } in conformance_files()
+        {
             let ftyp = find(&bytes, FileTypeBox::BOX_TYPE).unwrap();
             let moov = find(&bytes, BoxType::compact(*b"moov")).unwrap();
             let (_moov_header, moov_payload) = BoxHeader::decode(moov).unwrap();

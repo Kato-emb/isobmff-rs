@@ -13,6 +13,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+isobmff-boxes.workspace = true
 isobmff-core = { workspace = true, features = ["alloc"] }
 
 [lints]

@@ -135,7 +135,8 @@ jobs:
 
   # The host jobs link std for their test binaries whatever a crate declares, so
   # std creeping into a library crate — a dropped `#![no_std]`, a dependency that
-  # needs std — fails only on a target that ships no std.
+  # needs std — fails only on a target that ships no std. isobmff-test-support
+  # serves the tests alone, which run on a host, so it needs std.
   no-std:
     runs-on: ubuntu-latest
     steps:
@@ -149,7 +150,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo check --workspace --target thumbv7em-none-eabihf
+      - run: cargo check --workspace --exclude isobmff-test-support --target thumbv7em-none-eabihf
 
   # Doctests run here, once: they are not instrumented in the coverage job
   # (that needs a nightly toolchain), and the code behaves the same on every host.
@@ -208,7 +209,7 @@ jobs:
         with:
           path: ${{ runner.temp }}/conformance
           key: conformance-${{ hashFiles('scripts/fetch-conformance.sh') }}
-      - run: ISOBMFF_CONFORMANCE_DIR="$RUNNER_TEMP/conformance" cargo nextest run -p isobmff-core --run-ignored only
+      - run: ISOBMFF_CONFORMANCE_DIR="$RUNNER_TEMP/conformance" cargo nextest run -p isobmff-core -p isobmff-boxes --run-ignored only
 
   # Advisories, license policy, banned crates and sources, per deny.toml.
   deny:

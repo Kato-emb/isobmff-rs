@@ -1,0 +1,67 @@
+//! Boxes of ISO/IEC 14496-12, each read into a value that owns its bytes
+//!
+//! A box here implements the traits of [`isobmff_core`]: it reads with
+//! [`BoxDecode`](isobmff_core::BoxDecode), writes with
+//! [`BoxEncode`](isobmff_core::BoxEncode), and names its box type with
+//! [`BoxDefinition`](isobmff_core::BoxDefinition), as a box of any other crate
+//! does.
+//!
+//! # Building a box
+//!
+//! The fields of a box are public and take the names its Syntax subclause
+//! gives them. A box is `#[non_exhaustive]`, so a later revision of the
+//! specification can add fields: it is built from its [`Default`], which holds
+//! the value the specification gives every `template` field, and its fields are
+//! then set one by one.
+//!
+//! A field the specification fixes with `=`, a `reserved` field and a
+//! `pre_defined` field carry no value of their own: they are read past
+//! whatever they hold, and written as the specification states them. A count
+//! is the length of the table it counts, and a flag that turns a field on is
+//! whether that field is there.
+//!
+//! # Untrusted input
+//!
+//! What a box allocates, and how many entries of a table it reads, are bounded
+//! by the length of the payload it is read from: a count is held against the
+//! payload before any entry is read. The caller sets the bound by the payload
+//! it passes.
+//!
+//! # `no_std`
+//!
+//! The crate is `no_std` but needs `alloc`: every box owns what it was read
+//! from, and a container owns the children it holds.
+
+#![no_std]
+
+extern crate alloc;
+
+mod etyp;
+mod field;
+mod free;
+mod ftyp;
+mod imda;
+mod mdat;
+mod otyp;
+mod pdin;
+mod styp;
+
+pub use etyp::{ExtendedTypeBox, TypeCombinationBox};
+pub use free::{Free, FreeSpaceBox, FreeType, Skip};
+pub use ftyp::FileTypeBox;
+pub use imda::IdentifiedMediaDataBox;
+pub use mdat::MediaDataBox;
+pub use otyp::OriginalFileTypeBox;
+pub use pdin::{ProgressiveDownloadInfoBox, ProgressiveDownloadInfoEntry};
+pub use styp::SegmentTypeBox;
+
+/// Returns the bytes of the whole box `value` writes
+#[cfg(test)]
+fn encoded<Box: isobmff_core::BoxEncode + isobmff_core::BoxDefinition>(
+    value: &Box,
+) -> alloc::vec::Vec<u8> {
+    let mut buffer = alloc::vec![0; usize::try_from(value.encoded_len()).unwrap()];
+    value.encode(&mut buffer).unwrap();
+
+    buffer
+}

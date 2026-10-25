@@ -1,0 +1,22 @@
+[package]
+name = "isobmff-boxes"
+version = "0.0.0"
+description = "Boxes of the ISO base media file format (ISO/IEC 14496-12), each read into a value that owns its bytes"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+isobmff-core = { workspace = true, features = ["alloc"] }
+
+[dev-dependencies]
+isobmff-test-support.workspace = true
+
+[lints]
+workspace = true
