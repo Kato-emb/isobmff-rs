@@ -7,7 +7,7 @@ use isobmff_core::{
     FieldWriter, FourCc, OtherBoxes,
 };
 
-use crate::field::{entries_len, read_to_end, write_entries};
+use crate::table::{entries_len, read_to_end, write_entries};
 
 /// [`TypeCombinationBox`] (`tyco`), ISO/IEC 14496-12 §5.3
 ///

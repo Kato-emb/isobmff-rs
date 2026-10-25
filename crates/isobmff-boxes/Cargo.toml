@@ -16,7 +16,13 @@ categories.workspace = true
 isobmff-core = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]
+# Measures the decoding of the tables read once per sample; not run in CI.
+criterion = { version = "0.8.2", default-features = false }
 isobmff-test-support.workspace = true
+
+[[bench]]
+name = "sample_size"
+harness = false
 
 [lints]
 workspace = true
