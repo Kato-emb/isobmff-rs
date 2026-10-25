@@ -113,6 +113,42 @@ impl Error {
         })
     }
 
+    /// Returns the failure of a container lacking a child the specification marks mandatory
+    #[must_use]
+    pub const fn missing_mandatory_box(box_type: BoxType) -> Self {
+        Self::new(ErrorKind::MissingMandatoryBox { box_type })
+    }
+
+    /// Returns the failure of a container holding more of a child than it may
+    #[must_use]
+    pub const fn duplicate_box(box_type: BoxType) -> Self {
+        Self::new(ErrorKind::DuplicateBox { box_type })
+    }
+
+    /// Returns the failure of a container holding a child a field of it forbids
+    #[must_use]
+    pub const fn forbidden_child_box(box_type: BoxType) -> Self {
+        Self::new(ErrorKind::ForbiddenChildBox { box_type })
+    }
+
+    /// Returns the failure of a container holding none of the variants it must hold one of
+    #[must_use]
+    pub const fn missing_variant_box(variants: &'static [BoxType]) -> Self {
+        Self::new(ErrorKind::MissingVariantBox { variants })
+    }
+
+    /// Returns the failure of a container holding more than one of the variants it may hold one of
+    #[must_use]
+    pub const fn duplicate_variant_box(variants: &'static [BoxType]) -> Self {
+        Self::new(ErrorKind::DuplicateVariantBox { variants })
+    }
+
+    /// Returns the failure of a container holding a box this implementation does not read
+    #[must_use]
+    pub const fn unsupported_box(box_type: BoxType) -> Self {
+        Self::new(ErrorKind::UnsupportedBox { box_type })
+    }
+
     /// Returns the failure of a field holding a value the specification does not allow there
     ///
     /// `field` is the name of the field as the specification spells it. A
@@ -313,6 +349,39 @@ pub enum ErrorKind {
         /// Length the payload offered
         available_bytes: u64,
     },
+    /// Container lacks a child the specification marks mandatory
+    #[non_exhaustive]
+    MissingMandatoryBox {
+        /// Type of the child that is not there
+        box_type: BoxType,
+    },
+    /// Container holds more of a child than the specification lets it
+    #[non_exhaustive]
+    DuplicateBox {
+        /// Type of the child held more than once
+        box_type: BoxType,
+    },
+    /// Container holds a child a field of it forbids
+    #[non_exhaustive]
+    ForbiddenChildBox {
+        /// Type of the child held
+        box_type: BoxType,
+    },
+    /// Container holds none of the variants of a box it must hold one of
+    ///
+    /// The quantity "Exactly one variant shall be present" of ISO/IEC 14496-12
+    /// §8.7.3.1 and §8.7.5.1.
+    #[non_exhaustive]
+    MissingVariantBox {
+        /// Box types of the variants
+        variants: &'static [BoxType],
+    },
+    /// Container holds more than one of the variants of a box it may hold one of
+    #[non_exhaustive]
+    DuplicateVariantBox {
+        /// Box types of the variants
+        variants: &'static [BoxType],
+    },
     /// Field holds a value the specification does not allow there
     #[non_exhaustive]
     InvalidValue {
@@ -331,6 +400,12 @@ pub enum ErrorKind {
         declared_entries: u64,
         /// Count the payload holds
         actual_entries: u64,
+    },
+    /// Container holds a box this implementation does not read
+    #[non_exhaustive]
+    UnsupportedBox {
+        /// Type of the child that is not read
+        box_type: BoxType,
     },
     /// Full box declares a version the box does not read
     #[non_exhaustive]
@@ -394,10 +469,16 @@ impl ErrorKind {
             | Self::TruncatedBox { .. }
             | Self::BoxTypeMismatch { .. }
             | Self::TruncatedPayload { .. }
+            | Self::MissingMandatoryBox { .. }
+            | Self::DuplicateBox { .. }
+            | Self::ForbiddenChildBox { .. }
+            | Self::MissingVariantBox { .. }
+            | Self::DuplicateVariantBox { .. }
             | Self::InvalidValue { .. }
             | Self::InvalidUtf8String
             | Self::EntryCountMismatch { .. } => Category::Malformed,
-            Self::UnsupportedVersion { .. }
+            Self::UnsupportedBox { .. }
+            | Self::UnsupportedVersion { .. }
             | Self::UnsupportedFlags { .. }
             | Self::UnsupportedValue { .. } => Category::Unsupported,
             Self::TruncatedBuffer { .. }
@@ -446,6 +527,31 @@ impl fmt::Display for ErrorKind {
             } => write!(
                 formatter,
                 "box payload of {needed_bytes} bytes cut short by an input of {available_bytes}"
+            ),
+            Self::MissingMandatoryBox { box_type } => {
+                write!(formatter, "container holds no mandatory {box_type} box")
+            }
+            Self::DuplicateBox { box_type } => write!(
+                formatter,
+                "container holds more than one {box_type} box, which may appear once"
+            ),
+            Self::ForbiddenChildBox { box_type } => write!(
+                formatter,
+                "container holds a {box_type} box that a field of it forbids"
+            ),
+            Self::MissingVariantBox { variants } => {
+                formatter.write_str("container holds none of the ")?;
+                write_listed(formatter, variants)?;
+                formatter.write_str(" boxes, one of which it must hold")
+            }
+            Self::DuplicateVariantBox { variants } => {
+                formatter.write_str("container holds more than one of the ")?;
+                write_listed(formatter, variants)?;
+                formatter.write_str(" boxes, of which one may appear")
+            }
+            Self::UnsupportedBox { box_type } => write!(
+                formatter,
+                "container holds a {box_type} box, which this implementation does not read"
             ),
             Self::InvalidValue { field } => write!(
                 formatter,
@@ -533,6 +639,18 @@ pub enum Category {
     Usage,
 }
 
+/// Writes `box_types` as a list separated by commas
+fn write_listed(formatter: &mut fmt::Formatter<'_>, box_types: &[BoxType]) -> fmt::Result {
+    for (position, box_type) in box_types.iter().enumerate() {
+        if position > 0 {
+            formatter.write_str(", ")?;
+        }
+        write!(formatter, "{box_type}")?;
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::string::ToString as _;
@@ -587,9 +705,38 @@ mod tests {
     #[test]
     fn display_of_a_failure_that_names_a_box_names_its_type() {
         assert_eq!(
-            Error::box_type_mismatch(BoxType::compact(*b"moov"), BoxType::compact(*b"moof"))
-                .to_string(),
-            "input holds a moof box where a moov box was expected"
+            [
+                Error::box_type_mismatch(BoxType::compact(*b"moov"), BoxType::compact(*b"moof"))
+                    .to_string(),
+                Error::missing_mandatory_box(BoxType::compact(*b"mvhd")).to_string(),
+                Error::duplicate_box(BoxType::compact(*b"tkhd")).to_string(),
+                Error::forbidden_child_box(BoxType::compact(*b"trun")).to_string(),
+                Error::unsupported_box(BoxType::compact(*b"sgpd")).to_string(),
+            ],
+            [
+                "input holds a moof box where a moov box was expected",
+                "container holds no mandatory mvhd box",
+                "container holds more than one tkhd box, which may appear once",
+                "container holds a trun box that a field of it forbids",
+                "container holds a sgpd box, which this implementation does not read",
+            ]
+        );
+    }
+
+    #[test]
+    fn display_of_a_failure_about_the_variants_of_a_box_names_them_all() {
+        const SAMPLE_SIZE_BOXES: &[BoxType] =
+            &[BoxType::compact(*b"stsz"), BoxType::compact(*b"stz2")];
+
+        assert_eq!(
+            [
+                Error::missing_variant_box(SAMPLE_SIZE_BOXES).to_string(),
+                Error::duplicate_variant_box(SAMPLE_SIZE_BOXES).to_string(),
+            ],
+            [
+                "container holds none of the stsz, stz2 boxes, one of which it must hold",
+                "container holds more than one of the stsz, stz2 boxes, of which one may appear",
+            ]
         );
     }
 

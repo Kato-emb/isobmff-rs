@@ -14,8 +14,8 @@ mod tests {
     use std::{env, fs};
 
     use isobmff_core::{
-        BoxDecode, BoxDefinition, BoxEncode, BoxHeader, BoxType, Boxes, Error, FieldReader,
-        FieldWidth, FieldWriter, FourCc, FullBoxFlags, FullBoxHeader, RawBox,
+        BoxDecode, BoxDefinition, BoxEncode, BoxHeader, BoxType, Boxes, ChildBoxes, Error,
+        FieldReader, FieldWidth, FieldWriter, FourCc, FullBoxFlags, FullBoxHeader, RawBox,
     };
     use serde_json::Value;
 
@@ -418,7 +418,10 @@ mod tests {
             let mvhd = find(moov_payload, MovieHeaderBox::BOX_TYPE).unwrap();
 
             let (file_type, _) = FileTypeBox::decode(ftyp).unwrap();
-            let (movie_header, _) = MovieHeaderBox::decode(mvhd).unwrap();
+            let movie_header: MovieHeaderBox = ChildBoxes::decode(moov_payload)
+                .unwrap()
+                .take_exactly_one()
+                .unwrap();
             let read = (
                 file_type,
                 [

@@ -1,0 +1,789 @@
+//! [`ChildBoxes`] and [`OtherBoxes`], the boxes a container box holds
+
+use alloc::vec::Vec;
+
+use crate::any_box::AnyBox;
+use crate::codec::box_decode::BoxDecode;
+use crate::codec::box_definition::BoxDefinition;
+use crate::codec::box_variants::BoxVariants;
+use crate::error::Error;
+use crate::framing::box_type::BoxType;
+use crate::framing::raw_box::{Boxes, RawBox};
+
+/// Children of a container, from which its fields are taken
+///
+/// A container collects every child its payload holds here with
+/// [`decode`](Self::decode), as the bytes they were framed as, and takes each
+/// field out by the quantity the Definition subclause of ISO/IEC 14496-12
+/// states for it: [`take_exactly_one`](Self::take_exactly_one),
+/// [`take_zero_or_one`](Self::take_zero_or_one),
+/// [`take_one_or_more`](Self::take_one_or_more),
+/// [`take_zero_or_more`](Self::take_zero_or_more). Each takes out the children
+/// of the type that names the field, hands back the field the quantity calls
+/// for, and reports the counts the quantity forbids before reading any of them.
+/// The children are taken in whatever order they lie in the payload. What no
+/// take removed is the container's [`OtherBoxes`], built with [`From`], in the
+/// order the children came.
+///
+/// "Exactly one variant shall be present" is a quantity across box types,
+/// which [`take_exactly_one_variant`](Self::take_exactly_one_variant) takes
+/// for a [`BoxVariants`].
+///
+/// A container that reads on past a claimed child that does not decode takes
+/// with [`take_zero_or_one_if_decoded`](Self::take_zero_or_one_if_decoded),
+/// [`take_one_or_more_if_decoded`](Self::take_one_or_more_if_decoded) or
+/// [`take_zero_or_one_variant_if_decoded`](Self::take_zero_or_one_variant_if_decoded)
+/// instead, which leave such a child where it lies, so it reaches the
+/// container's [`OtherBoxes`] with the children no field claims.
+///
+/// A child's failure names the child's box type on its
+/// [`containers`](Error::containers) path.
+///
+/// # Examples
+///
+/// ```
+/// use isobmff_core::{BoxDecode, BoxDefinition, BoxType, ChildBoxes, Error, FieldReader, OtherBoxes};
+///
+/// // A box whose payload is one 32-bit sequence number
+/// #[derive(PartialEq, Debug)]
+/// struct SequenceNumberBox {
+///     sequence_number: u32,
+/// }
+///
+/// impl BoxDefinition for SequenceNumberBox {
+///     const BOX_TYPE: BoxType = BoxType::compact(*b"sqnc");
+/// }
+///
+/// impl BoxDecode for SequenceNumberBox {
+///     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
+///         Ok(Self {
+///             sequence_number: reader.read_u32()?,
+///         })
+///     }
+/// }
+///
+/// // The payload of a container: the box a field claims, then one no field does
+/// let payload = b"\0\0\0\x0csqnc\0\0\0\x07\0\0\0\x08free";
+/// let mut children = ChildBoxes::decode(payload).unwrap();
+///
+/// // The quantity the Definition states is asked for once, as the field is taken
+/// let sequence_number: SequenceNumberBox = children.take_exactly_one().unwrap();
+/// assert_eq!(sequence_number, SequenceNumberBox { sequence_number: 7 });
+///
+/// // What no field took is kept as it came
+/// let other_boxes = OtherBoxes::from(children);
+/// assert_eq!(other_boxes.as_slice().len(), 1);
+///
+/// // A container holding none of a child it must hold does not read
+/// assert_eq!(
+///     ChildBoxes::decode(b"").unwrap().take_exactly_one::<SequenceNumberBox>(),
+///     Err(Error::missing_mandatory_box(SequenceNumberBox::BOX_TYPE))
+/// );
+/// ```
+#[derive(Debug)]
+pub struct ChildBoxes<'payload> {
+    children: Vec<RawBox<'payload>>,
+}
+
+impl<'payload> ChildBoxes<'payload> {
+    /// Collects the children laid end to end in `payload`, the payload of a container or the part of it after its fields
+    ///
+    /// A child takes at least the eight bytes of its header, so `payload`
+    /// holds at most `payload.len() / 8` children, and the collection holds at
+    /// most `size_of::<RawBox>()` bytes for each eight of `payload`: what it
+    /// allocates is bounded by the length of `payload`, which the caller sets.
+    ///
+    /// # Errors
+    ///
+    /// * The failures of [`RawBox::split_first`], for the first child that
+    ///   does not frame.
+    pub fn decode(payload: &'payload [u8]) -> Result<Self, Error> {
+        Ok(Self {
+            children: Boxes::new(payload).collect::<Result<_, _>>()?,
+        })
+    }
+
+    /// Returns whether a child of the type that names `Child` is there, without reading it
+    #[must_use]
+    pub fn contains<Child: BoxDefinition>(&self) -> bool {
+        self.children
+            .iter()
+            .any(|child| child.header().box_type() == Child::BOX_TYPE)
+    }
+
+    /// Takes out the one child of a quantity of `Exactly one`
+    ///
+    /// # Errors
+    ///
+    /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox): no child of
+    ///   the type is there.
+    /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): more than one is.
+    /// * Whatever the child reports, with its box type on the
+    ///   [`containers`](Error::containers) path of the failure.
+    pub fn take_exactly_one<Child: BoxDecode + BoxDefinition>(&mut self) -> Result<Child, Error> {
+        self.take_zero_or_one::<Child>()?
+            .ok_or_else(|| Error::missing_mandatory_box(Child::BOX_TYPE))
+    }
+
+    /// Takes out the child of a quantity of `Zero or one`, if it is there
+    ///
+    /// # Errors
+    ///
+    /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): more than one child of
+    ///   the type is there.
+    /// * Whatever the child reports, with its box type on the
+    ///   [`containers`](Error::containers) path of the failure.
+    pub fn take_zero_or_one<Child: BoxDecode + BoxDefinition>(
+        &mut self,
+    ) -> Result<Option<Child>, Error> {
+        self.position_of_at_most_one_of(const { &[Child::BOX_TYPE] })?
+            .map(|position| decode::<Child>(self.children.remove(position)))
+            .transpose()
+    }
+
+    /// Takes out the child of a quantity of `Zero or one`, if it is there and reads
+    ///
+    /// A child that does not decode is left where it lies, among the children no
+    /// take removed, and the field reads back [`None`].
+    ///
+    /// # Errors
+    ///
+    /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): more than one child of
+    ///   the type is there.
+    pub fn take_zero_or_one_if_decoded<Child: BoxDecode + BoxDefinition>(
+        &mut self,
+    ) -> Result<Option<Child>, Error> {
+        let Some(position) = self.position_of_at_most_one_of(const { &[Child::BOX_TYPE] })? else {
+            return Ok(None);
+        };
+
+        Ok(self.take_if_read(position, |child| decode::<Child>(child).ok()))
+    }
+
+    /// Takes out the children of a quantity of `One or more`, in the order they came
+    ///
+    /// # Errors
+    ///
+    /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox): no child of
+    ///   the type is there.
+    /// * Whatever the first of the children that does not read reports, with its
+    ///   box type on the [`containers`](Error::containers) path of the failure.
+    pub fn take_one_or_more<Child: BoxDecode + BoxDefinition>(
+        &mut self,
+    ) -> Result<Vec<Child>, Error> {
+        let read = self.take_zero_or_more::<Child>()?;
+        if read.is_empty() {
+            return Err(Error::missing_mandatory_box(Child::BOX_TYPE));
+        }
+
+        Ok(read)
+    }
+
+    /// Takes out the children of a quantity of `One or more` that read, in the order they came
+    ///
+    /// A child that does not decode is left where it lies, among the children no
+    /// take removed, and the others are read on without it.
+    ///
+    /// # Errors
+    ///
+    /// * [`MissingMandatoryBox`](crate::ErrorKind::MissingMandatoryBox): no child of
+    ///   the type is there.
+    /// * Whatever the first of the children reports, with its box type on the
+    ///   [`containers`](Error::containers) path of the failure: none of them reads.
+    pub fn take_one_or_more_if_decoded<Child: BoxDecode + BoxDefinition>(
+        &mut self,
+    ) -> Result<Vec<Child>, Error> {
+        let mut read = Vec::new();
+        let mut first_failure = None;
+        self.children.retain(|child| {
+            if child.header().box_type() != Child::BOX_TYPE {
+                return true;
+            }
+            match decode::<Child>(*child) {
+                Ok(value) => {
+                    read.push(value);
+                    false
+                }
+                Err(error) => {
+                    first_failure.get_or_insert(error);
+                    true
+                }
+            }
+        });
+
+        if read.is_empty() {
+            return Err(
+                first_failure.unwrap_or_else(|| Error::missing_mandatory_box(Child::BOX_TYPE))
+            );
+        }
+
+        Ok(read)
+    }
+
+    /// Takes out the children of a quantity of `Zero or more`, in the order they came
+    ///
+    /// # Errors
+    ///
+    /// * Whatever the first of the children that does not read reports, with its
+    ///   box type on the [`containers`](Error::containers) path of the failure.
+    pub fn take_zero_or_more<Child: BoxDecode + BoxDefinition>(
+        &mut self,
+    ) -> Result<Vec<Child>, Error> {
+        let mut read = Vec::new();
+        let mut failure = None;
+        self.children.retain(|child| {
+            let claimed = child.header().box_type() == Child::BOX_TYPE;
+            if claimed && failure.is_none() {
+                match decode::<Child>(*child) {
+                    Ok(value) => read.push(value),
+                    Err(error) => failure = Some(error),
+                }
+            }
+
+            !claimed
+        });
+
+        failure.map_or(Ok(read), Err)
+    }
+
+    /// Takes out the child a quantity of `Exactly one variant shall be present` names
+    ///
+    /// # Errors
+    ///
+    /// * [`MissingVariantBox`](crate::ErrorKind::MissingVariantBox): no child of a
+    ///   type in [`Variants::VARIANTS`](BoxVariants::VARIANTS) is there.
+    /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): more than one is, all of
+    ///   one type.
+    /// * [`DuplicateVariantBox`](crate::ErrorKind::DuplicateVariantBox): more than
+    ///   one is, of more than one type.
+    /// * Whatever the child reports, with its box type on the
+    ///   [`containers`](Error::containers) path of the failure.
+    pub fn take_exactly_one_variant<Variants: BoxVariants>(&mut self) -> Result<Variants, Error> {
+        self.take_zero_or_one_variant()?
+            .ok_or_else(|| Error::missing_variant_box(Variants::VARIANTS))
+    }
+
+    /// Takes out the child of one of the variants of a box, if it is there
+    ///
+    /// The specification states no such quantity; this is the take of a reader
+    /// that reads on past a container missing a variant it shall hold.
+    ///
+    /// # Errors
+    ///
+    /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): more than one child of a
+    ///   type in [`Variants::VARIANTS`](BoxVariants::VARIANTS) is there, all of
+    ///   one type.
+    /// * [`DuplicateVariantBox`](crate::ErrorKind::DuplicateVariantBox): more than
+    ///   one is, of more than one type.
+    /// * Whatever the child reports, with its box type on the
+    ///   [`containers`](Error::containers) path of the failure.
+    pub fn take_zero_or_one_variant<Variants: BoxVariants>(
+        &mut self,
+    ) -> Result<Option<Variants>, Error> {
+        self.position_of_at_most_one_of(Variants::VARIANTS)?
+            .map(|position| {
+                let child = self.children.remove(position);
+                let box_type = child.header().box_type();
+                Variants::decode_variant(child).map_err(|error| error.in_container(box_type))
+            })
+            .transpose()
+    }
+
+    /// Takes out the child of one of the variants of a box, if it is there and reads
+    ///
+    /// A child that does not decode is left where it lies, among the children no
+    /// take removed, and the slot reads back [`None`].
+    ///
+    /// # Errors
+    ///
+    /// * [`DuplicateBox`](crate::ErrorKind::DuplicateBox): more than one child of a
+    ///   type in [`Variants::VARIANTS`](BoxVariants::VARIANTS) is there, all of
+    ///   one type.
+    /// * [`DuplicateVariantBox`](crate::ErrorKind::DuplicateVariantBox): more than
+    ///   one is, of more than one type.
+    pub fn take_zero_or_one_variant_if_decoded<Variants: BoxVariants>(
+        &mut self,
+    ) -> Result<Option<Variants>, Error> {
+        let Some(position) = self.position_of_at_most_one_of(Variants::VARIANTS)? else {
+            return Ok(None);
+        };
+
+        Ok(self.take_if_read(position, |child| Variants::decode_variant(child).ok()))
+    }
+
+    /// Takes out the child at `position` if `read` makes a value of it, and leaves it otherwise
+    fn take_if_read<Value>(
+        &mut self,
+        position: usize,
+        read: impl FnOnce(RawBox<'payload>) -> Option<Value>,
+    ) -> Option<Value> {
+        let value = self.children.get(position).copied().and_then(read)?;
+        self.children.remove(position);
+
+        Some(value)
+    }
+
+    /// Returns where the one child of a type in `box_types` lies, if one is there
+    fn position_of_at_most_one_of(
+        &self,
+        box_types: &'static [BoxType],
+    ) -> Result<Option<usize>, Error> {
+        let mut claimed = self
+            .children
+            .iter()
+            .enumerate()
+            .filter(|(_, child)| box_types.contains(&child.header().box_type()));
+        let Some((position, first)) = claimed.next() else {
+            return Ok(None);
+        };
+        let box_type = first.header().box_type();
+        if let Some((_, second)) = claimed.next() {
+            let of_one_type = second.header().box_type() == box_type
+                && claimed.all(|(_, other)| other.header().box_type() == box_type);
+            return Err(if of_one_type {
+                Error::duplicate_box(box_type)
+            } else {
+                Error::duplicate_variant_box(box_types)
+            });
+        }
+
+        Ok(Some(position))
+    }
+}
+
+/// Reads one child, naming it in whatever failure it reports
+fn decode<Child: BoxDecode + BoxDefinition>(child: RawBox<'_>) -> Result<Child, Error> {
+    Child::decode_payload(child.payload()).map_err(|error| error.in_container(Child::BOX_TYPE))
+}
+
+/// Children of a container that no field of it claims, and those a field claims that did not read
+///
+/// They are kept as the bytes they lie as, under the box type that names them,
+/// so a container writes back the children it holds no value of. They are what
+/// no take removed from the container's [`ChildBoxes`], in the order they came.
+///
+/// Where they go among the children the container does read is that
+/// container's own order, so a box written back holds them after the children
+/// it reads, wherever they lay when it was read. Summing and writing them is
+/// that container's part: this type hands them over with
+/// [`as_slice`](Self::as_slice), and the container treats that run as it
+/// treats any run of children it holds.
+///
+/// # Examples
+///
+/// ```
+/// use isobmff_core::{BoxType, ChildBoxes, OtherBoxes};
+///
+/// // Two children of a container that has no field for either
+/// let payload = b"\0\0\0\x0cfreeAAAA\0\0\0\x08skip";
+/// let other_boxes = OtherBoxes::from(ChildBoxes::decode(payload).unwrap());
+///
+/// // Each is held under the box type that named it, in the order it came
+/// let box_types: Vec<BoxType> = other_boxes
+///     .as_slice()
+///     .iter()
+///     .map(|kept| kept.box_type())
+///     .collect();
+/// assert_eq!(
+///     box_types,
+///     [BoxType::compact(*b"free"), BoxType::compact(*b"skip")]
+/// );
+///
+/// // The container writes them where its own order puts them
+/// let mut buffer = [0; 20];
+/// let mut rest = buffer.as_mut_slice();
+/// for kept in other_boxes.as_slice() {
+///     rest = kept.encode(rest).unwrap();
+/// }
+/// assert_eq!(&buffer, payload);
+/// ```
+#[derive(Clone, Default, PartialEq, Debug)]
+pub struct OtherBoxes {
+    children: Vec<AnyBox>,
+}
+
+impl OtherBoxes {
+    /// Creates a holding of no child
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            children: Vec::new(),
+        }
+    }
+
+    /// Returns the children kept, in the order they came
+    #[must_use]
+    pub fn as_slice(&self) -> &[AnyBox] {
+        &self.children
+    }
+}
+
+impl From<ChildBoxes<'_>> for OtherBoxes {
+    /// Keeps the children no take removed, copying each payload out of the input it was framed from
+    fn from(children: ChildBoxes<'_>) -> Self {
+        Self {
+            children: children
+                .children
+                .into_iter()
+                .map(|child| {
+                    AnyBox::from_raw_bytes(child.header().box_type(), child.payload().to_vec())
+                })
+                .collect(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    use super::{ChildBoxes, OtherBoxes};
+    use crate::any_box::AnyBox;
+    use crate::codec::box_decode::BoxDecode;
+    use crate::codec::box_definition::BoxDefinition;
+    use crate::codec::box_variants::BoxVariants;
+    use crate::codec::field::FieldReader;
+    use crate::error::Error;
+    use crate::framing::box_type::BoxType;
+    use crate::framing::raw_box::RawBox;
+
+    /// Box whose payload is one 32-bit sequence number
+    #[derive(PartialEq, Debug)]
+    struct SequenceNumberBox(u32);
+
+    impl BoxDefinition for SequenceNumberBox {
+        const BOX_TYPE: BoxType = BoxType::compact(*b"sqnc");
+    }
+
+    impl BoxDecode for SequenceNumberBox {
+        fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
+            Ok(Self(reader.read_u32()?))
+        }
+    }
+
+    /// Collects every box a payload holds, whatever type names it
+    fn collected(payload: &[u8]) -> ChildBoxes<'_> {
+        ChildBoxes::decode(payload).unwrap()
+    }
+
+    #[test]
+    fn a_payload_holding_a_child_that_does_not_frame_is_refused() {
+        assert_eq!(
+            ChildBoxes::decode(b"\0\0\0\x0csqnc\0\0\0\x07\0\0\0\x10free").map(|_| ()),
+            Err(Error::truncated_box(16, 8))
+        );
+    }
+
+    #[test]
+    fn a_quantity_of_zero_or_one_yields_nothing_for_a_container_holding_none() {
+        assert_eq!(
+            collected(b"")
+                .take_zero_or_one::<SequenceNumberBox>()
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_quantity_of_at_most_one_refuses_a_second_child() {
+        let payload = b"\0\0\0\x0csqnc\0\0\0\x07\0\0\0\x0csqnc\0\0\0\x09";
+
+        assert_eq!(
+            collected(payload).take_exactly_one::<SequenceNumberBox>(),
+            Err(Error::duplicate_box(SequenceNumberBox::BOX_TYPE))
+        );
+        assert_eq!(
+            collected(payload).take_zero_or_one::<SequenceNumberBox>(),
+            Err(Error::duplicate_box(SequenceNumberBox::BOX_TYPE))
+        );
+    }
+
+    /// Sequence number stated by a `sqnc` or, as a box of the same payload, by a `sqn2`
+    #[derive(PartialEq, Debug)]
+    enum SequenceNumber {
+        Primary(SequenceNumberBox),
+        Alternative(SequenceNumberBox),
+    }
+
+    impl BoxVariants for SequenceNumber {
+        const VARIANTS: &'static [BoxType] =
+            &[SequenceNumberBox::BOX_TYPE, BoxType::compact(*b"sqn2")];
+
+        fn decode_variant(child: RawBox<'_>) -> Result<Self, Error> {
+            let sequence_number = SequenceNumberBox::decode_payload(child.payload())?;
+            if child.header().box_type() == SequenceNumberBox::BOX_TYPE {
+                Ok(Self::Primary(sequence_number))
+            } else {
+                Ok(Self::Alternative(sequence_number))
+            }
+        }
+    }
+
+    #[test]
+    fn a_quantity_of_exactly_one_variant_refuses_none_and_more_than_one() {
+        let of_one_type = b"\0\0\0\x0csqnc\0\0\0\x07\0\0\0\x0csqnc\0\0\0\x09";
+        let of_two_types = b"\0\0\0\x0csqnc\0\0\0\x07\0\0\0\x0csqn2\0\0\0\x09";
+
+        assert_eq!(
+            collected(b"").take_exactly_one_variant::<SequenceNumber>(),
+            Err(Error::missing_variant_box(SequenceNumber::VARIANTS))
+        );
+        assert_eq!(
+            collected(of_one_type).take_exactly_one_variant::<SequenceNumber>(),
+            Err(Error::duplicate_box(SequenceNumberBox::BOX_TYPE))
+        );
+        assert_eq!(
+            collected(of_two_types).take_exactly_one_variant::<SequenceNumber>(),
+            Err(Error::duplicate_variant_box(SequenceNumber::VARIANTS))
+        );
+    }
+
+    #[test]
+    fn a_variant_whose_payload_fails_to_read_is_named_on_the_path_of_the_failure() {
+        let mut children = collected(b"\0\0\0\x09sqn2!");
+
+        assert_eq!(
+            children.take_exactly_one_variant::<SequenceNumber>(),
+            Err(Error::truncated_payload(4, 1).in_container(BoxType::compact(*b"sqn2")))
+        );
+    }
+
+    #[test]
+    fn a_count_the_quantity_forbids_is_reported_before_any_child_is_read() {
+        let payload = b"\0\0\0\x09sqnc!\0\0\0\x09sqnc!";
+
+        assert_eq!(
+            collected(payload).take_zero_or_one::<SequenceNumberBox>(),
+            Err(Error::duplicate_box(SequenceNumberBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn a_quantity_of_one_or_more_yields_the_children_in_the_order_they_came() {
+        let payload = b"\0\0\0\x0csqnc\0\0\0\x07\0\0\0\x0csqnc\0\0\0\x09";
+
+        assert_eq!(
+            collected(payload)
+                .take_one_or_more::<SequenceNumberBox>()
+                .unwrap(),
+            vec![SequenceNumberBox(7), SequenceNumberBox(9)]
+        );
+    }
+
+    #[test]
+    fn a_collection_says_whether_a_child_of_a_type_is_there_without_reading_it() {
+        assert!(collected(b"\0\0\0\x09sqnc!").contains::<SequenceNumberBox>());
+        assert!(!collected(b"\0\0\0\x08free").contains::<SequenceNumberBox>());
+    }
+
+    #[test]
+    fn a_quantity_of_zero_or_one_variant_yields_the_child_stated_and_nothing_for_none() {
+        assert_eq!(
+            collected(b"\0\0\0\x0csqnc\0\0\0\x07").take_zero_or_one_variant::<SequenceNumber>(),
+            Ok(Some(SequenceNumber::Primary(SequenceNumberBox(7))))
+        );
+        assert_eq!(
+            collected(b"").take_zero_or_one_variant::<SequenceNumber>(),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn a_quantity_of_zero_or_one_variant_refuses_more_than_one() {
+        let of_one_type = b"\0\0\0\x0csqn2\0\0\0\x07\0\0\0\x0csqn2\0\0\0\x09";
+        let of_two_types = b"\0\0\0\x0csqn2\0\0\0\x07\0\0\0\x0csqnc\0\0\0\x09";
+
+        assert_eq!(
+            collected(of_one_type).take_zero_or_one_variant::<SequenceNumber>(),
+            Err(Error::duplicate_box(BoxType::compact(*b"sqn2")))
+        );
+        assert_eq!(
+            collected(of_two_types).take_zero_or_one_variant::<SequenceNumber>(),
+            Err(Error::duplicate_variant_box(SequenceNumber::VARIANTS))
+        );
+    }
+
+    #[test]
+    fn a_quantity_of_zero_or_more_reports_the_first_child_that_does_not_read() {
+        let payload = b"\0\0\0\x0csqnc\0\0\0\x07\0\0\0\x09sqnc!\0\0\0\x0asqnc!!";
+
+        assert_eq!(
+            collected(payload).take_zero_or_more::<SequenceNumberBox>(),
+            Err(Error::truncated_payload(4, 1).in_container(SequenceNumberBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn a_take_leaves_the_children_of_other_types_unread() {
+        let payload = b"\0\0\0\x09sqn2!\0\0\0\x0csqnc\0\0\0\x07";
+        let mut children = collected(payload);
+
+        assert_eq!(
+            children.take_zero_or_more::<SequenceNumberBox>(),
+            Ok(vec![SequenceNumberBox(7)])
+        );
+        assert_eq!(
+            OtherBoxes::from(children).as_slice(),
+            [AnyBox::from_raw_bytes(
+                BoxType::compact(*b"sqn2"),
+                b"!".to_vec()
+            )]
+        );
+    }
+
+    #[test]
+    fn a_quantity_of_zero_or_more_yields_nothing_for_a_container_holding_none() {
+        assert_eq!(
+            collected(b"")
+                .take_zero_or_more::<SequenceNumberBox>()
+                .unwrap(),
+            Vec::new()
+        );
+    }
+
+    #[test]
+    fn a_quantity_of_one_or_more_refuses_a_container_holding_none() {
+        assert_eq!(
+            collected(b"").take_one_or_more::<SequenceNumberBox>(),
+            Err(Error::missing_mandatory_box(SequenceNumberBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn a_child_that_does_not_read_names_itself_on_the_path_of_the_failure() {
+        let mut children = collected(b"\0\0\0\x09sqnc!");
+
+        assert_eq!(
+            children.take_exactly_one::<SequenceNumberBox>(),
+            Err(Error::truncated_payload(4, 1).in_container(SequenceNumberBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn the_children_no_take_removed_are_kept_as_the_bytes_they_lie_as_in_the_order_they_came() {
+        let payload = b"\0\0\0\x0cfreeAAAA\0\0\0\x0csqnc\0\0\0\x07\0\0\0\x08skip";
+        let mut children = collected(payload);
+
+        assert_eq!(
+            children.take_exactly_one::<SequenceNumberBox>(),
+            Ok(SequenceNumberBox(7))
+        );
+        assert_eq!(
+            OtherBoxes::from(children).as_slice(),
+            [
+                AnyBox::from_raw_bytes(BoxType::compact(*b"free"), b"AAAA".to_vec()),
+                AnyBox::from_raw_bytes(BoxType::compact(*b"skip"), Vec::new()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_child_of_zero_or_one_that_does_not_read_is_left_where_it_came() {
+        let payload = b"\0\0\0\x08free\0\0\0\x09sqnc!\0\0\0\x08skip";
+        let mut children = collected(payload);
+
+        assert_eq!(
+            children.take_zero_or_one_if_decoded::<SequenceNumberBox>(),
+            Ok(None)
+        );
+        assert_eq!(
+            OtherBoxes::from(children).as_slice(),
+            [
+                AnyBox::from_raw_bytes(BoxType::compact(*b"free"), Vec::new()),
+                AnyBox::from_raw_bytes(SequenceNumberBox::BOX_TYPE, b"!".to_vec()),
+                AnyBox::from_raw_bytes(BoxType::compact(*b"skip"), Vec::new()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_child_of_zero_or_one_that_reads_is_taken_out() {
+        let mut children = collected(b"\0\0\0\x0csqnc\0\0\0\x07");
+
+        assert_eq!(
+            children.take_zero_or_one_if_decoded::<SequenceNumberBox>(),
+            Ok(Some(SequenceNumberBox(7)))
+        );
+        assert_eq!(OtherBoxes::from(children), OtherBoxes::new());
+    }
+
+    #[test]
+    fn a_count_zero_or_one_forbids_is_refused_though_the_children_do_not_read() {
+        let payload = b"\0\0\0\x09sqnc!\0\0\0\x09sqnc!";
+
+        assert_eq!(
+            collected(payload).take_zero_or_one_if_decoded::<SequenceNumberBox>(),
+            Err(Error::duplicate_box(SequenceNumberBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn children_of_one_or_more_that_do_not_read_are_left_and_the_others_read_in_order() {
+        let payload = b"\0\0\0\x0csqnc\0\0\0\x07\0\0\0\x09sqnc!\0\0\0\x0csqnc\0\0\0\x09";
+        let mut children = collected(payload);
+
+        assert_eq!(
+            children.take_one_or_more_if_decoded::<SequenceNumberBox>(),
+            Ok(vec![SequenceNumberBox(7), SequenceNumberBox(9)])
+        );
+        assert_eq!(
+            OtherBoxes::from(children).as_slice(),
+            [AnyBox::from_raw_bytes(
+                SequenceNumberBox::BOX_TYPE,
+                b"!".to_vec()
+            )]
+        );
+    }
+
+    #[test]
+    fn one_or_more_of_which_none_reads_reports_the_failure_of_the_first() {
+        let payload = b"\0\0\0\x09sqnc!\0\0\0\x08sqnc";
+
+        assert_eq!(
+            collected(payload).take_one_or_more_if_decoded::<SequenceNumberBox>(),
+            Err(Error::truncated_payload(4, 1).in_container(SequenceNumberBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn a_quantity_of_one_or_more_that_reads_on_refuses_a_container_holding_none() {
+        assert_eq!(
+            collected(b"").take_one_or_more_if_decoded::<SequenceNumberBox>(),
+            Err(Error::missing_mandatory_box(SequenceNumberBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn a_variant_that_does_not_read_is_left_where_it_came() {
+        let payload = b"\0\0\0\x09sqn2!\0\0\0\x08free";
+        let mut children = collected(payload);
+
+        assert_eq!(
+            children.take_zero_or_one_variant_if_decoded::<SequenceNumber>(),
+            Ok(None)
+        );
+        assert_eq!(
+            OtherBoxes::from(children).as_slice(),
+            [
+                AnyBox::from_raw_bytes(BoxType::compact(*b"sqn2"), b"!".to_vec()),
+                AnyBox::from_raw_bytes(BoxType::compact(*b"free"), Vec::new()),
+            ]
+        );
+    }
+
+    #[test]
+    fn variants_more_than_one_are_refused_though_none_reads() {
+        let of_one_type = b"\0\0\0\x09sqnc!\0\0\0\x09sqnc!";
+        let of_two_types = b"\0\0\0\x09sqnc!\0\0\0\x09sqn2!";
+
+        assert_eq!(
+            collected(of_one_type).take_zero_or_one_variant_if_decoded::<SequenceNumber>(),
+            Err(Error::duplicate_box(SequenceNumberBox::BOX_TYPE))
+        );
+        assert_eq!(
+            collected(of_two_types).take_zero_or_one_variant_if_decoded::<SequenceNumber>(),
+            Err(Error::duplicate_variant_box(SequenceNumber::VARIANTS))
+        );
+    }
+}

@@ -5,26 +5,37 @@
 //! It holds the vocabulary such a box is written in: the header that frames a
 //! box and the identifiers that name it, the values its fields carry, the
 //! traits a box implements to be read and written — [`BoxDefinition`],
-//! [`BoxDecode`] and [`BoxEncode`] — and the [`Error`] its reading and writing
-//! report.
+//! [`BoxDecode`] and [`BoxEncode`] — the children a container box holds, and
+//! the [`Error`] its reading and writing report.
 //!
 //! # `no_std`
 //!
 //! The crate is `no_std`. The `alloc` feature, on by default, adds the values
-//! that own their bytes on the heap: [`Utf8String`]. Nothing else in the crate
-//! reaches for a heap.
+//! that own their bytes on the heap: [`Utf8String`] and [`AnyBox`], which own
+//! the bytes they carry, and [`ChildBoxes`] and [`OtherBoxes`], which hold the
+//! children of a container. Nothing else in the crate reaches for a heap.
 
 #![no_std]
 
 #[cfg(any(feature = "alloc", test))]
 extern crate alloc;
 
+#[cfg(feature = "alloc")]
+mod any_box;
 mod codec;
+#[cfg(feature = "alloc")]
+mod container;
 mod data_types;
 mod error;
 mod framing;
 
-pub use codec::{BoxDecode, BoxDefinition, BoxEncode, FieldReader, FieldWidth, FieldWriter};
+#[cfg(feature = "alloc")]
+pub use any_box::AnyBox;
+pub use codec::{
+    BoxDecode, BoxDefinition, BoxEncode, BoxVariants, FieldReader, FieldWidth, FieldWriter,
+};
+#[cfg(feature = "alloc")]
+pub use container::{ChildBoxes, OtherBoxes};
 #[cfg(feature = "alloc")]
 pub use data_types::Utf8String;
 pub use data_types::{FourCc, FullBoxFlags, FullBoxHeader, I8F8, I16F16, U16F16, Uuid};

@@ -4,6 +4,41 @@ use crate::codec::box_definition::BoxDefinition;
 use crate::codec::field::FieldWriter;
 use crate::error::Error;
 use crate::framing::box_header::BoxHeader;
+use crate::framing::box_type::BoxType;
+
+/// Returns the length of the whole box `payload` forms under `box_type`, saturating at `u64::MAX`
+pub(crate) fn encoded_len_of(box_type: BoxType, payload: &(impl BoxEncode + ?Sized)) -> u64 {
+    let payload_len = payload.payload_len();
+
+    BoxHeader::with_payload_len(box_type, payload_len).map_or(u64::MAX, |header| {
+        header.encoded_len().saturating_add(payload_len)
+    })
+}
+
+/// Writes the whole box `payload` forms under `box_type` into the front of `buffer` and returns what is left
+pub(crate) fn encode_into<'buffer>(
+    box_type: BoxType,
+    payload: &(impl BoxEncode + ?Sized),
+    buffer: &'buffer mut [u8],
+) -> Result<&'buffer mut [u8], Error> {
+    let needed = encoded_len_of(box_type, payload);
+    let available = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
+    let too_short = || Error::truncated_buffer(needed, available);
+
+    let header =
+        BoxHeader::with_payload_len(box_type, payload.payload_len()).ok_or_else(too_short)?;
+    // Why not report a total beyond `usize` as its own error: such a total
+    // exceeds any `buffer.len()` on the same target, so it is a short buffer by
+    // another name and folding it in keeps one error for one situation.
+    let (whole, rest) = usize::try_from(needed)
+        .ok()
+        .and_then(|needed| buffer.split_at_mut_checked(needed))
+        .ok_or_else(too_short)?;
+
+    payload.encode_payload(header.encode(whole)?)?;
+
+    Ok(rest)
+}
 
 /// Value that writes itself as the payload of a box
 ///
@@ -120,11 +155,7 @@ pub trait BoxEncode {
     where
         Self: BoxDefinition + Sized,
     {
-        let payload_len = self.payload_len();
-
-        BoxHeader::with_payload_len(Self::BOX_TYPE, payload_len).map_or(u64::MAX, |header| {
-            header.encoded_len().saturating_add(payload_len)
-        })
+        encoded_len_of(Self::BOX_TYPE, self)
     }
 
     /// Writes the whole box into the front of `buffer` and returns what is left
@@ -195,23 +226,7 @@ pub trait BoxEncode {
     where
         Self: BoxDefinition + Sized,
     {
-        let needed = self.encoded_len();
-        let available = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
-        let too_short = || Error::truncated_buffer(needed, available);
-
-        let header = BoxHeader::with_payload_len(Self::BOX_TYPE, self.payload_len())
-            .ok_or_else(too_short)?;
-        // Why not report a total beyond `usize` as its own error: such a total
-        // exceeds any `buffer.len()` on the same target, so it is a short buffer
-        // by another name and folding it in keeps one error for one situation.
-        let (whole, rest) = usize::try_from(needed)
-            .ok()
-            .and_then(|needed| buffer.split_at_mut_checked(needed))
-            .ok_or_else(too_short)?;
-
-        self.encode_payload(header.encode(whole)?)?;
-
-        Ok(rest)
+        encode_into(Self::BOX_TYPE, self, buffer)
     }
 }
 
