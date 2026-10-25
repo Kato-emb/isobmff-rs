@@ -170,6 +170,12 @@ impl Error {
         Self::new(ErrorKind::InvalidUtfString)
     }
 
+    /// Returns the failure of a `base64string` field holding bytes that are not base64
+    #[must_use]
+    pub const fn invalid_base64_string() -> Self {
+        Self::new(ErrorKind::InvalidBase64String)
+    }
+
     /// Returns the failure of a count that disagrees with the entries it frames
     #[must_use]
     pub const fn entry_count_mismatch(declared_entries: u64, actual_entries: u64) -> Self {
@@ -405,6 +411,12 @@ pub enum ErrorKind {
     /// opens with a byte order mark. A reader keeps such bytes as found, so this
     /// is reported where they would be written.
     InvalidUtfString,
+    /// Field of the basic type `base64string` holds bytes that are not base64
+    ///
+    /// ISO/IEC 14496-12 §4.2.1 defines the type as base64 encoded data. A
+    /// reader keeps such bytes as found, so this is reported where they would
+    /// be written.
+    InvalidBase64String,
     /// Count a box declares does not match the entries it frames for itself
     #[non_exhaustive]
     EntryCountMismatch {
@@ -489,6 +501,7 @@ impl ErrorKind {
             | Self::InvalidValue { .. }
             | Self::InvalidUtf8String
             | Self::InvalidUtfString
+            | Self::InvalidBase64String
             | Self::EntryCountMismatch { .. } => Category::Malformed,
             Self::UnsupportedBox { .. }
             | Self::UnsupportedVersion { .. }
@@ -575,6 +588,9 @@ impl fmt::Display for ErrorKind {
             }
             Self::InvalidUtfString => {
                 formatter.write_str("utfstring field holds bytes in neither UTF-8 nor UTF-16")
+            }
+            Self::InvalidBase64String => {
+                formatter.write_str("base64string field holds bytes that are not base64")
             }
             Self::EntryCountMismatch {
                 declared_entries,

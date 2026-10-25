@@ -9,6 +9,8 @@
 //! the form the wire carries and the form a caller states values in, and do
 //! nothing else: no arithmetic on fixed-point numbers.
 
+#[cfg(feature = "alloc")]
+pub(crate) mod base64_string;
 pub(crate) mod fixed_point;
 pub(crate) mod fourcc;
 pub(crate) mod full_box;
@@ -20,6 +22,8 @@ pub(crate) mod utf8_string;
 pub(crate) mod utf_string;
 pub(crate) mod uuid;
 
+#[cfg(feature = "alloc")]
+pub use base64_string::Base64String;
 pub use fixed_point::{I8F8, I16F16, U16F16};
 pub use fourcc::FourCc;
 pub use full_box::{FullBoxFlags, FullBoxHeader};
