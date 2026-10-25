@@ -131,6 +131,9 @@ impl<'a> Iterator for Boxes<'a> {
 
         match RawBox::split_first(self.remaining) {
             Ok((framed, rest)) => {
+                // Why not bound the steps: a split consumes at least the header
+                // it decodes, so `rest.len() < self.remaining.len()` and every
+                // step shortens what is left until it is empty.
                 self.remaining = rest;
                 Some(Ok(framed))
             }

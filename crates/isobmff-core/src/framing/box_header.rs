@@ -273,11 +273,10 @@ impl BoxHeader {
 
 #[cfg(test)]
 mod tests {
-    use alloc::string::ToString as _;
-
     use super::{BoxHeader, Error};
+    use crate::data_types::uuid::Uuid;
     use crate::framing::box_size::{BoxSize, CompactSize, ExtendedSize};
-    use crate::framing::box_type::BoxType;
+    use crate::framing::box_type::{BoxType, ExtendedType};
 
     const EXTENDED_TYPE: [u8; 16] = [
         0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32,
@@ -484,12 +483,21 @@ mod tests {
 
     #[test]
     fn a_reserved_extended_type_is_read_as_found() {
-        let (header, _payload) = BoxHeader::decode(&RESERVED_EXTENDED_TYPE).unwrap();
+        let reserved = ExtendedType::as_found(Uuid::new([
+            b'f', b'r', b'e', b'e', 0x00, 0x11, 0x00, 0x10, 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38,
+            0x9B, 0x71,
+        ]));
 
-        assert_eq!(header.payload_len(), Some(0));
         assert_eq!(
-            header.box_type().to_string(),
-            "uuid 66726565-0011-0010-8000-00aa00389b71"
+            BoxHeader::decode(&RESERVED_EXTENDED_TYPE),
+            Ok((
+                BoxHeader::new(
+                    BoxType::Extended(reserved),
+                    BoxSize::Compact(CompactSize::new(24).unwrap()),
+                )
+                .unwrap(),
+                b"".as_slice()
+            ))
         );
     }
 
