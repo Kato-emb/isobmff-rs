@@ -178,6 +178,10 @@ impl UtfString {
 fn utf16_decode_unit(bytes: &[u8]) -> Option<fn([u8; 2]) -> u16> {
     match *bytes.first_chunk::<2>()? {
         BIG_ENDIAN_BYTE_ORDER_MARK => Some(u16::from_be_bytes),
+        #[expect(
+            clippy::little_endian_bytes,
+            reason = "§4.2.1 lets a byte order mark make a UTF-16 string little-endian"
+        )]
         LITTLE_ENDIAN_BYTE_ORDER_MARK => Some(u16::from_le_bytes),
         _ => None,
     }
