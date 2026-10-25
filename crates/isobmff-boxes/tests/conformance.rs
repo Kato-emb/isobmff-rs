@@ -9,10 +9,13 @@ mod tests {
     use std::{env, fs};
 
     use isobmff_boxes::{
+        ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, CompactSampleSizeBox,
         DataInformationBox, EditBox, ExtendedTypeBox, FileTypeBox, Free, FreeSpaceBox, HandlerBox,
         IdentifiedMediaDataBox, LanguageCode, Matrix, MediaBox, MediaDataBox, MediaHeaderBox,
         MediaInformationBox, MovieBox, MovieHeaderBox, OriginalFileTypeBox,
-        ProgressiveDownloadInfoBox, SegmentTypeBox, Skip, TrackBox, TrackHeaderBox,
+        ProgressiveDownloadInfoBox, SampleDependencyTypeBox, SampleSizeBox, SampleSizeVariant,
+        SampleSizes, SampleTableBox, SampleToChunkBox, SampleToChunkEntry, SegmentTypeBox, Skip,
+        TimeToSampleBox, TimeToSampleEntry, TrackBox, TrackHeaderBox,
     };
     use isobmff_core::{
         BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, Error, FourCc, I8F8, RawBox, U16F16,
@@ -85,11 +88,7 @@ mod tests {
             let spelled = node.get(field).unwrap().as_str().unwrap();
             FourCc::new(spelled.as_bytes().try_into().unwrap())
         };
-        let entries = match node.get("BrandEntry") {
-            Some(Value::Array(entries)) => entries.iter().collect(),
-            Some(entry) => vec![entry],
-            None => Vec::new(),
-        };
+        let entries = gpac_elements(node, "BrandEntry");
         let minor_version = node.get("@MinorVersion").unwrap().as_str().unwrap();
 
         (
@@ -183,16 +182,20 @@ mod tests {
     }
 
     /// Box types of the containers a written-back `moov` may hold its children in another order in
-    const REORDERED: [BoxType; 6] = [
+    const REORDERED: [BoxType; 7] = [
         MovieBox::BOX_TYPE,
         TrackBox::BOX_TYPE,
         MediaBox::BOX_TYPE,
         MediaInformationBox::BOX_TYPE,
+        SampleTableBox::BOX_TYPE,
         DataInformationBox::BOX_TYPE,
         EditBox::BOX_TYPE,
     ];
 
     /// Returns whether `written` holds the boxes `original` holds, those inside the containers of [`REORDERED`] in any order
+    ///
+    /// An `sdtp` is the same box if it is written with the `flags` of 0 the
+    /// specification fixes, whatever it was read with.
     fn same_boxes(original: &[u8], written: &[u8]) -> bool {
         let mut unmatched = top_level(written);
         top_level(original).into_iter().all(|child| {
@@ -201,6 +204,13 @@ mod tests {
                 candidate.header().box_type() == box_type
                     && if REORDERED.contains(&box_type) {
                         same_boxes(child.payload(), candidate.payload())
+                    } else if box_type == SampleDependencyTypeBox::BOX_TYPE {
+                        // Why not compare the bytes whole: `08_bifs_carousel_v2.mp4`
+                        // holds an `sdtp` of `flags` 1, which is written as 0.
+                        let (original, written) = (child.payload(), candidate.payload());
+                        original.first() == written.first()
+                            && written.get(1..4) == Some([0, 0, 0].as_slice())
+                            && original.get(4..) == written.get(4..)
                     } else {
                         candidate.payload() == child.payload()
                     }
@@ -463,8 +473,159 @@ mod tests {
         assert_eq!(differences, Vec::<String>::new());
     }
 
-    /// Returns what `ffprobe` reads off `bytes`: the time base and duration of each stream, and the duration of the file
-    fn ffprobe_timing(name: &str, bytes: &[u8]) -> Value {
+    /// Returns the elements GPAC reports in `node` under `element`, which it reports as an array where there is more than one
+    fn gpac_elements<'report>(node: &'report Value, element: &str) -> Vec<&'report Value> {
+        match node.get(element) {
+            Some(Value::Array(elements)) => elements.iter().collect(),
+            Some(single) => vec![single],
+            None => Vec::new(),
+        }
+    }
+
+    /// Returns `stts` as GPAC reports it in `node`
+    fn gpac_time_to_sample(node: &Value) -> TimeToSampleBox {
+        let mut time_to_sample = TimeToSampleBox::default();
+        time_to_sample.entries = gpac_elements(node, "TimeToSampleEntry")
+            .into_iter()
+            .map(|reported| {
+                let mut entry = TimeToSampleEntry::default();
+                entry.sample_count = gpac_integer(reported, "@SampleCount");
+                entry.sample_delta = gpac_integer(reported, "@SampleDelta");
+                entry
+            })
+            .collect();
+        time_to_sample
+    }
+
+    /// Returns `stsc` as GPAC reports it in `node`
+    fn gpac_sample_to_chunk(node: &Value) -> SampleToChunkBox {
+        let mut sample_to_chunk = SampleToChunkBox::default();
+        sample_to_chunk.entries = gpac_elements(node, "SampleToChunkEntry")
+            .into_iter()
+            .map(|reported| {
+                let mut entry = SampleToChunkEntry::default();
+                entry.first_chunk = gpac_integer(reported, "@FirstChunk");
+                entry.samples_per_chunk = gpac_integer(reported, "@SamplesPerChunk");
+                entry.sample_description_index = gpac_integer(reported, "@SampleDescriptionIndex");
+                entry
+            })
+            .collect();
+        sample_to_chunk
+    }
+
+    /// Returns the sample size variant as GPAC reports it in `node`, an `stsz` or an `stz2`
+    fn gpac_sample_size(node: &Value) -> SampleSizeVariant {
+        let entries = gpac_elements(node, "SampleSizeEntry").into_iter();
+        if gpac_str(node, "@Type") == "stz2" {
+            let mut compact = CompactSampleSizeBox::default();
+            compact.field_size = gpac_integer(node, "@SampleSizeBits");
+            compact.entry_sizes = entries
+                .map(|reported| gpac_integer(reported, "@Size"))
+                .collect();
+            return SampleSizeVariant::CompactSampleSize(compact);
+        }
+        let mut sample_size = SampleSizeBox::default();
+        sample_size.sample_sizes = if node.get("@ConstantSampleSize").is_some() {
+            SampleSizes::Constant {
+                sample_size: gpac_integer(node, "@ConstantSampleSize"),
+                sample_count: gpac_integer(node, "@SampleCount"),
+            }
+        } else {
+            SampleSizes::Table {
+                entry_sizes: entries
+                    .map(|reported| gpac_integer(reported, "@Size"))
+                    .collect(),
+            }
+        };
+        SampleSizeVariant::SampleSize(sample_size)
+    }
+
+    /// Returns the chunk offset variant as GPAC reports it in `node`, an `stco` or a `co64`
+    fn gpac_chunk_offset(node: &Value) -> ChunkOffsetVariant {
+        let large = gpac_str(node, "@Type") == "co64";
+        let offsets = gpac_elements(
+            node,
+            if large {
+                "ChunkOffsetEntry"
+            } else {
+                "ChunkEntry"
+            },
+        )
+        .into_iter()
+        .map(|reported| gpac_integer::<u64>(reported, "@offset"));
+        if large {
+            let mut large_offset = ChunkLargeOffsetBox::default();
+            large_offset.chunk_offsets = offsets.collect();
+            return ChunkOffsetVariant::ChunkLargeOffset(large_offset);
+        }
+        let mut offset = ChunkOffsetBox::default();
+        offset.chunk_offsets = offsets
+            .map(|offset| u32::try_from(offset).unwrap())
+            .collect();
+        ChunkOffsetVariant::ChunkOffset(offset)
+    }
+
+    /// Tables of a sample table that locate its samples: `stts`, `stsc`, and the sample size and chunk offset variants
+    type SampleLocation = (
+        Option<TimeToSampleBox>,
+        Option<SampleToChunkBox>,
+        Option<SampleSizeVariant>,
+        Option<ChunkOffsetVariant>,
+    );
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn the_tables_that_locate_the_samples_read_as_gpac_reports_them() {
+        let mut differences = Vec::new();
+        for ConformanceFile {
+            name,
+            bytes,
+            report,
+            ..
+        } in conformance_files()
+        {
+            let ours: Vec<SampleLocation> = read_all::<MovieBox>(&top_level(&bytes))
+                .into_iter()
+                .flat_map(|movie| movie.trak)
+                .map(|track| {
+                    let sample_table = track.mdia.minf.stbl;
+                    (
+                        sample_table.stts,
+                        sample_table.stsc,
+                        sample_table.sample_size,
+                        sample_table.chunk_offset,
+                    )
+                })
+                .collect();
+            let theirs: Vec<SampleLocation> = gpac_top_level(&report, "moov")
+                .into_iter()
+                .flat_map(|movie| gpac_boxes(movie, "trak"))
+                .map(|track| {
+                    let media = gpac_box(track, "mdia");
+                    let sample_table = gpac_box(gpac_box(media, "minf"), "stbl");
+                    let first_of = |box_types: &[&str]| {
+                        box_types.iter().find_map(|box_type| {
+                            gpac_boxes(sample_table, box_type).first().copied()
+                        })
+                    };
+                    (
+                        first_of(&["stts"]).map(gpac_time_to_sample),
+                        first_of(&["stsc"]).map(gpac_sample_to_chunk),
+                        first_of(&["stsz", "stz2"]).map(gpac_sample_size),
+                        first_of(&["stco", "co64"]).map(gpac_chunk_offset),
+                    )
+                })
+                .collect();
+            if ours != theirs {
+                differences.push(format!("{name}: read {ours:?}, GPAC reports {theirs:?}"));
+            }
+        }
+
+        assert_eq!(differences, Vec::<String>::new());
+    }
+
+    /// Returns what `ffprobe` reads off `bytes`: the time base, duration and number of samples of each stream, and the duration of the file
+    fn ffprobe_streams(name: &str, bytes: &[u8]) -> Value {
         let probed = env::temp_dir().join(format!("isobmff-boxes-conformance-{name}"));
         fs::write(&probed, bytes).unwrap();
         let output = ffprobe(
@@ -473,8 +634,9 @@ mod tests {
                 "error",
                 "-print_format",
                 "json",
+                "-count_packets",
                 "-show_entries",
-                "stream=index,time_base,duration_ts:format=duration",
+                "stream=index,time_base,duration_ts,nb_read_packets:format=duration",
             ],
             &probed,
         );
@@ -505,8 +667,8 @@ mod tests {
                 }
             };
             let (read_back, expected) = (
-                ffprobe_timing(&name, &written),
-                ffprobe_timing(&name, &bytes),
+                ffprobe_streams(&name, &written),
+                ffprobe_streams(&name, &bytes),
             );
             if read_back != expected {
                 differences.push(format!(

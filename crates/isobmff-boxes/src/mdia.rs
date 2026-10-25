@@ -105,9 +105,9 @@ mod tests {
     /// `elng` of the tag `en`
     const ELNG: &[u8] = b"\0\0\0\x0felng\0\0\0\0en\0";
 
-    /// `minf` of one `dinf`, which holds one `url ` of media data in the same file
+    /// `minf` of one `dinf`, which holds one `url ` of media data in the same file, and an empty `stbl`
     const MINF: &[u8] =
-        b"\0\0\0\x2cminf\0\0\0\x24dinf\0\0\0\x1cdref\0\0\0\0\0\0\0\x01\0\0\0\x0curl \0\0\0\x01";
+        b"\0\0\0\x34minf\0\0\0\x24dinf\0\0\0\x1cdref\0\0\0\0\0\0\0\x01\0\0\0\x0curl \0\0\0\x01\0\0\0\x08stbl";
 
     /// Box of a type `mdia` holds no field for
     const FREE: &[u8] = b"\0\0\0\x08free";
@@ -134,7 +134,7 @@ mod tests {
 
     #[test]
     fn reads_its_children_and_keeps_the_child_it_has_no_field_for() {
-        let bytes = [b"\0\0\0\x8cmdia".as_slice(), MDHD, HDLR, FREE, MINF, ELNG].concat();
+        let bytes = [b"\0\0\0\x94mdia".as_slice(), MDHD, HDLR, FREE, MINF, ELNG].concat();
 
         assert_eq!(MediaBox::decode(&bytes), Ok((media(), b"".as_slice())));
     }
@@ -143,7 +143,7 @@ mod tests {
     fn writes_its_children_in_the_order_of_their_fields_then_the_child_it_has_no_field_for() {
         assert_eq!(
             encoded(&media()),
-            [b"\0\0\0\x8cmdia".as_slice(), MDHD, HDLR, ELNG, MINF, FREE].concat()
+            [b"\0\0\0\x94mdia".as_slice(), MDHD, HDLR, ELNG, MINF, FREE].concat()
         );
     }
 
