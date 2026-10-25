@@ -18,9 +18,9 @@ default = ["alloc"]
 alloc = []
 
 [dev-dependencies]
-# Reads the box structure GPAC reports for a conformance file, which the
-# framing is checked against.
-serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
+# Reads the conformance files and GPAC's reports of them, which the framing is
+# checked against, and runs ffprobe on what is written.
+isobmff-test-support.workspace = true
 
 # Containers need the heap their children are collected on.
 [[test]]

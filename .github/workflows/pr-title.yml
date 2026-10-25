@@ -32,6 +32,7 @@ jobs:
           # A scope is optional, but one that is given must be listed here, so
           # one part of the code is not named two ways in the CHANGELOG.
           scopes: |
+            boxes
             core
             deps
           # Imperative, starting lower-case (or with a backticked identifier),

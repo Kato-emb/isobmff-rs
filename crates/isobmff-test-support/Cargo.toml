@@ -1,0 +1,20 @@
+[package]
+name = "isobmff-test-support"
+version = "0.0.0"
+description = "What the tests of the workspace check against other implementations with: the conformance files, GPAC's reports of them, and FFmpeg's ffprobe"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+# Reads the box structure GPAC reports for a conformance file.
+serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true

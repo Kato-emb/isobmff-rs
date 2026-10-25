@@ -14,7 +14,9 @@ keywords = ["iso-bmff", "mp4", "media", "parser", "container"]
 categories = ["multimedia", "parser-implementations", "encoding"]
 
 [workspace.dependencies]
+isobmff-boxes = { path = "crates/isobmff-boxes", version = "0.0.0" }
 isobmff-core = { path = "crates/isobmff-core", version = "0.0.0", default-features = false }
+isobmff-test-support = { path = "crates/isobmff-test-support" }
 
 # This is the one lint table: a target that must relax a lint, such as an
 # example that prints, does so at the site with `#[expect(lint, reason = "...")]`
