@@ -1,15 +1,22 @@
-//! Framing checked against the box structure GPAC reports for the files of MPEG's `FileFormatConformance`
+//! Framing and box codecs checked against other implementations, on the files of MPEG's `FileFormatConformance`
 //!
+//! Reading is checked against the box structure and field values GPAC reports
+//! for each file, and writing against what FFmpeg's `ffprobe` reads back.
 //! `scripts/fetch-conformance.sh` fetches the files into a directory, which
-//! `ISOBMFF_CONFORMANCE_DIR` names to these tests.
+//! `ISOBMFF_CONFORMANCE_DIR` names to these tests; `ISOBMFF_FFPROBE` names
+//! `ffprobe` where it is not on the path.
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
     use std::{env, fs};
 
-    use isobmff_core::{BoxType, Boxes, RawBox};
+    use isobmff_core::{
+        BoxDecode, BoxDefinition, BoxEncode, BoxHeader, BoxType, Boxes, Error, FieldReader,
+        FieldWidth, FieldWriter, FourCc, FullBoxFlags, FullBoxHeader, RawBox,
+    };
     use serde_json::Value;
 
     /// Box types whose payload is a sequence of boxes and nothing else
@@ -28,10 +35,9 @@ mod tests {
     /// Type and total of a box, as GPAC spells them
     type Frame = (String, u64);
 
-    /// Returns the type of a box as GPAC spells it: printable ASCII as it is, any other byte in hexadecimal
-    fn gpac_type(box_type: BoxType) -> String {
-        box_type
-            .four_cc()
+    /// Returns a four-character code as GPAC spells it: printable ASCII as it is, any other byte in hexadecimal
+    fn gpac_type(four_cc: FourCc) -> String {
+        four_cc
             .as_bytes()
             .iter()
             .map(|byte| {
@@ -110,11 +116,12 @@ mod tests {
                 .and_then(|payload_len| payload_len.checked_add(child.header().encoded_len()))
                 .unwrap_or(u64::MAX)
         };
-        let ours = tally(
-            framed
-                .iter()
-                .map(|child| (gpac_type(child.header().box_type()), total_of(child))),
-        );
+        let ours = tally(framed.iter().map(|child| {
+            (
+                gpac_type(child.header().box_type().four_cc()),
+                total_of(child),
+            )
+        }));
         let omitted = GPAC_OMISSIONS
             .iter()
             .filter(|(omitted_file, omitted_path, _, _)| {
@@ -141,7 +148,7 @@ mod tests {
                 continue;
             }
 
-            let frame = (gpac_type(box_type), total_of(child));
+            let frame = (gpac_type(box_type.four_cc()), total_of(child));
             if let Some(position) = unmatched.iter().position(|node| gpac_frame(node) == frame) {
                 let node = unmatched.remove(position);
                 compare(
@@ -155,9 +162,117 @@ mod tests {
         }
     }
 
-    #[test]
-    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
-    fn every_box_of_a_conformance_file_frames_as_gpac_reports_it() {
+    /// [`FileTypeBox`] (`ftyp`), ISO/IEC 14496-12 §5.2, written on this crate's public items alone
+    #[derive(PartialEq, Eq, Debug)]
+    struct FileTypeBox {
+        major_brand: FourCc,
+        minor_version: u32,
+        compatible_brands: Vec<FourCc>,
+    }
+
+    impl BoxDefinition for FileTypeBox {
+        const BOX_TYPE: BoxType = BoxType::compact(*b"ftyp");
+    }
+
+    impl BoxDecode for FileTypeBox {
+        fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
+            Ok(Self {
+                major_brand: FourCc::new(*reader.read_bytes::<4>()?),
+                minor_version: reader.read_u32()?,
+                compatible_brands: reader
+                    .take_remainder()
+                    .chunks_exact(4)
+                    .map(|brand| FourCc::new(brand.try_into().unwrap()))
+                    .collect(),
+            })
+        }
+    }
+
+    impl BoxEncode for FileTypeBox {
+        fn payload_len(&self) -> u64 {
+            u64::try_from(self.compatible_brands.len())
+                .unwrap()
+                .checked_mul(4)
+                .and_then(|brands_len| brands_len.checked_add(8))
+                .unwrap()
+        }
+
+        fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+            writer.write_bytes(self.major_brand.as_bytes())?;
+            writer.write_u32(self.minor_version)?;
+            for brand in &self.compatible_brands {
+                writer.write_bytes(brand.as_bytes())?;
+            }
+
+            Ok(())
+        }
+    }
+
+    /// [`MovieHeaderBox`] (`mvhd`), ISO/IEC 14496-12 §8.2.2, written on this crate's public items alone
+    ///
+    /// The fields from `rate` to `pre_defined` are kept as the bytes they were
+    /// read from, so a box writes back what it was read from.
+    #[derive(PartialEq, Eq, Debug)]
+    struct MovieHeaderBox {
+        version: u8,
+        creation_time: u64,
+        modification_time: u64,
+        timescale: u32,
+        duration: u64,
+        rate_to_pre_defined: [u8; 76],
+        next_track_id: u32,
+    }
+
+    impl MovieHeaderBox {
+        fn width(version: u8) -> Result<FieldWidth, Error> {
+            match version {
+                0 => Ok(FieldWidth::Compact),
+                1 => Ok(FieldWidth::Extended),
+                _ => Err(Error::unsupported_version(version)),
+            }
+        }
+    }
+
+    impl BoxDefinition for MovieHeaderBox {
+        const BOX_TYPE: BoxType = BoxType::compact(*b"mvhd");
+    }
+
+    impl BoxDecode for MovieHeaderBox {
+        fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
+            let version = FullBoxHeader::from_bytes(reader.read_bytes::<4>()?).version();
+            let width = Self::width(version)?;
+
+            Ok(Self {
+                version,
+                creation_time: reader.read_unsigned(width)?,
+                modification_time: reader.read_unsigned(width)?,
+                timescale: reader.read_u32()?,
+                duration: reader.read_unsigned(width)?,
+                rate_to_pre_defined: *reader.read_bytes::<76>()?,
+                next_track_id: reader.read_u32()?,
+            })
+        }
+    }
+
+    impl BoxEncode for MovieHeaderBox {
+        fn payload_len(&self) -> u64 {
+            if self.version == 0 { 100 } else { 112 }
+        }
+
+        fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+            let width = Self::width(self.version)?;
+            writer.write_bytes(&FullBoxHeader::new(self.version, FullBoxFlags::ZERO).to_bytes())?;
+            writer.write_unsigned(width, self.creation_time)?;
+            writer.write_unsigned(width, self.modification_time)?;
+            writer.write_u32(self.timescale)?;
+            writer.write_unsigned(width, self.duration)?;
+            writer.write_bytes(&self.rate_to_pre_defined)?;
+            writer.write_u32(self.next_track_id)
+        }
+    }
+
+    /// Returns the conformance files in the directory `ISOBMFF_CONFORMANCE_DIR` names, each with GPAC's report of it
+    fn conformance_files() -> Vec<(String, Vec<u8>, Value)> {
         let directory = PathBuf::from(env::var_os("ISOBMFF_CONFORMANCE_DIR").expect(
             "ISOBMFF_CONFORMANCE_DIR names the directory scripts/fetch-conformance.sh fetched into",
         ));
@@ -173,16 +288,111 @@ mod tests {
             directory.display()
         );
 
-        let mut differences = Vec::new();
-        for file in files {
-            let name = file.file_name().unwrap().to_str().unwrap().to_owned();
-            let stem = file.file_stem().unwrap().to_str().unwrap();
-            let bytes = fs::read(&file).unwrap();
-            let report: Value = serde_json::from_slice(
-                &fs::read(file.with_file_name(format!("{stem}_gpac.json"))).unwrap(),
-            )
-            .unwrap();
+        files
+            .into_iter()
+            .map(|file| {
+                let name = file.file_name().unwrap().to_str().unwrap().to_owned();
+                let stem = file.file_stem().unwrap().to_str().unwrap();
+                let report: Value = serde_json::from_slice(
+                    &fs::read(file.with_file_name(format!("{stem}_gpac.json"))).unwrap(),
+                )
+                .unwrap();
 
+                (name, fs::read(&file).unwrap(), report)
+            })
+            .collect()
+    }
+
+    /// Returns the first box of `box_type` in `payload`, as the bytes it was framed from
+    fn find(payload: &[u8], box_type: BoxType) -> Option<&[u8]> {
+        let mut rest = payload;
+        while let Ok((framed, after)) = RawBox::split_first(rest) {
+            if framed.header().box_type() == box_type {
+                let framed_len = usize::try_from(framed.header().encoded_len())
+                    .unwrap()
+                    .checked_add(framed.payload().len())
+                    .unwrap();
+                return rest.get(..framed_len);
+            }
+            rest = after;
+        }
+
+        None
+    }
+
+    /// Returns what GPAC reports for the `ftyp` and `mvhd` of a file, in the fields of the boxes above
+    fn gpac_headers(report: &Value) -> (FileTypeBox, [u64; 5]) {
+        let file = report.get("IsoMediaFile").unwrap();
+        let number = |node: &Value, field: &str| -> u64 {
+            node.get(field).unwrap().as_str().unwrap().parse().unwrap()
+        };
+        let brand = |node: &Value, field: &str| -> FourCc {
+            let spelled = node.get(field).unwrap().as_str().unwrap();
+            FourCc::new(spelled.as_bytes().try_into().unwrap())
+        };
+
+        let file_type = file.get("FileTypeBox").unwrap();
+        let entries = match file_type.get("BrandEntry") {
+            Some(Value::Array(entries)) => entries.iter().collect(),
+            Some(entry) => vec![entry],
+            None => Vec::new(),
+        };
+        let file_type = FileTypeBox {
+            major_brand: brand(file_type, "@MajorBrand"),
+            minor_version: u32::try_from(number(file_type, "@MinorVersion")).unwrap(),
+            compatible_brands: entries
+                .into_iter()
+                .map(|entry| brand(entry, "@AlternateBrand"))
+                .collect(),
+        };
+
+        let movie_header = file
+            .get("MovieBox")
+            .and_then(|movie| movie.get("MovieHeaderBox"))
+            .unwrap();
+        let movie_header = [
+            "@Version",
+            "@CreationTime",
+            "@ModificationTime",
+            "@TimeScale",
+            "@Duration",
+        ]
+        .map(|field| number(movie_header, field));
+
+        (file_type, movie_header)
+    }
+
+    /// Returns what `ffprobe` reads off `file`: the `ftyp` brands as its format tags, and the `mvhd` timescale
+    fn ffprobe_headers(file: &Path) -> (Value, Option<String>) {
+        let ffprobe = env::var_os("ISOBMFF_FFPROBE").unwrap_or_else(|| "ffprobe".into());
+        let tags = Command::new(&ffprobe)
+            .args(["-v", "error", "-print_format", "json", "-show_entries"])
+            .arg("format_tags=major_brand,minor_version,compatible_brands")
+            .arg(file)
+            .output()
+            .unwrap();
+        let trace = Command::new(&ffprobe)
+            .args(["-v", "trace"])
+            .arg(file)
+            .output()
+            .unwrap();
+        let timescale = String::from_utf8_lossy(&trace.stderr)
+            .lines()
+            .find_map(|line| line.split_once("time scale = "))
+            .map(|(_, timescale)| timescale.trim().to_owned());
+        let tags: Value = serde_json::from_slice(&tags.stdout).unwrap();
+
+        (
+            tags.pointer("/format/tags").cloned().unwrap_or_default(),
+            timescale,
+        )
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn every_box_of_a_conformance_file_frames_as_gpac_reports_it() {
+        let mut differences = Vec::new();
+        for (name, bytes, report) in conformance_files() {
             compare(
                 &name,
                 "",
@@ -190,6 +400,80 @@ mod tests {
                 report.get("IsoMediaFile").unwrap(),
                 &mut differences,
             );
+        }
+
+        assert_eq!(differences, Vec::<String>::new());
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn ftyp_and_mvhd_read_as_gpac_reports_and_write_what_was_read_and_what_ffmpeg_reads() {
+        let mut differences = Vec::new();
+        for (name, bytes, report) in conformance_files() {
+            let ftyp = find(&bytes, FileTypeBox::BOX_TYPE).unwrap();
+            let moov = find(&bytes, BoxType::compact(*b"moov")).unwrap();
+            let (_moov_header, moov_payload) = BoxHeader::decode(moov).unwrap();
+            let mvhd = find(moov_payload, MovieHeaderBox::BOX_TYPE).unwrap();
+
+            let (file_type, _) = FileTypeBox::decode(ftyp).unwrap();
+            let (movie_header, _) = MovieHeaderBox::decode(mvhd).unwrap();
+            let read = (
+                file_type,
+                [
+                    u64::from(movie_header.version),
+                    movie_header.creation_time,
+                    movie_header.modification_time,
+                    u64::from(movie_header.timescale),
+                    movie_header.duration,
+                ],
+            );
+            if read != gpac_headers(&report) {
+                differences.push(format!(
+                    "{name}: read {read:?}, GPAC reports {:?}",
+                    gpac_headers(&report)
+                ));
+            }
+            let (file_type, _) = read;
+
+            let encoded = |len: u64| vec![0; usize::try_from(len).unwrap()];
+            let mut written_ftyp = encoded(file_type.encoded_len());
+            file_type.encode(&mut written_ftyp).unwrap();
+            let mut written_mvhd = encoded(movie_header.encoded_len());
+            movie_header.encode(&mut written_mvhd).unwrap();
+            if (written_ftyp.as_slice(), written_mvhd.as_slice()) != (ftyp, mvhd) {
+                differences.push(format!("{name}: writes bytes other than it read"));
+            }
+
+            let moov_header =
+                BoxHeader::with_payload_len(BoxType::compact(*b"moov"), movie_header.encoded_len())
+                    .unwrap();
+            let mut written_moov_header = encoded(moov_header.encoded_len());
+            moov_header.encode(&mut written_moov_header).unwrap();
+            let written = [written_ftyp, written_moov_header, written_mvhd].concat();
+
+            let (gpac_file_type, gpac_movie_header) = gpac_headers(&report);
+            let brand = |brand: &FourCc| String::from_utf8_lossy(brand.as_bytes()).into_owned();
+            let expected = (
+                serde_json::json!({
+                    "major_brand": brand(&gpac_file_type.major_brand),
+                    "minor_version": gpac_file_type.minor_version.to_string(),
+                    "compatible_brands": gpac_file_type
+                        .compatible_brands
+                        .iter()
+                        .map(brand)
+                        .collect::<String>(),
+                }),
+                Some(gpac_movie_header[3].to_string()),
+            );
+            let probed = env::temp_dir().join(format!("isobmff-core-conformance-{name}"));
+            fs::write(&probed, &written).unwrap();
+            let read_back = ffprobe_headers(&probed);
+            fs::remove_file(&probed).unwrap();
+            if read_back != expected {
+                differences.push(format!(
+                    "{name}: FFmpeg reads {read_back:?} from what was written, GPAC reports {expected:?}"
+                ));
+            }
         }
 
         assert_eq!(differences, Vec::<String>::new());

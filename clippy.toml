@@ -7,7 +7,7 @@ allow-expect-in-tests = true
 
 # Proper nouns the format's vocabulary carries, which `doc_markdown` would
 # otherwise read as identifiers that lost their backticks.
-doc-valid-idents = ["QuickTime", ".."]
+doc-valid-idents = ["QuickTime", "FFmpeg", ".."]
 
 # The default lets `i j x y z w n` through `min_ident_chars`, which the
 # no-abbreviation rule of AGENTS.md does not.
