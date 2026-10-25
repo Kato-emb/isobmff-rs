@@ -29,8 +29,9 @@ use crate::full_box::{read_version_zero, write_version_zero};
 /// # Untrusted input
 ///
 /// The box reads the `entry_count` entries it states, after holding the count
-/// against the payload, so what it allocates is bounded by the length of the
-/// payload, which the caller sets.
+/// against the payload, and allocates room for an entry only once it has read
+/// it, so what it allocates is bounded by the length of the payload, which the
+/// caller sets.
 #[doc(alias = "dref")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -51,7 +52,10 @@ impl BoxDecode for DataReferenceBox {
         // does not read may be a box of its header alone, eight bytes.
         reader.require(u64::from(entry_count).saturating_mul(8))?;
         let mut rest = reader.take_remainder();
-        let mut data_entries = Vec::with_capacity(usize::try_from(entry_count).unwrap_or_default());
+        // Why not room for `entry_count` entries up front: an entry may take only
+        // the eight bytes of its header, while a `DataEntry` takes several times
+        // that, so the room would outgrow the payload it was read from.
+        let mut data_entries = Vec::new();
         for _ in 0..entry_count {
             let (entry, after) = RawBox::split_first(rest)?;
             rest = after;

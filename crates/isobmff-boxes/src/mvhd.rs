@@ -18,7 +18,11 @@ use crate::full_box::version_width;
 /// the version it was read in.
 ///
 /// [`Default`] is the box of version 0 with every template field at its
-/// template value and every other field zero.
+/// template value and every other field zero. A `next_track_id` of zero
+/// reads, but writing it is refused with
+/// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for
+/// `next_track_ID`, so a box built from [`Default`] is given one before it
+/// is written.
 ///
 /// # Examples
 ///
@@ -67,7 +71,7 @@ pub struct MovieHeaderBox {
     pub volume: I8F8,
     /// Transformation matrix for the video of the presentation
     pub matrix: Matrix,
-    /// Value to use for the `track_ID` of the next track added to the presentation, never zero
+    /// Value to use for the `track_ID` of the next track added to the presentation, which is not zero
     ///
     /// All bits 1 means a writer adding a track searches the file for an
     /// unused `track_ID`.
@@ -135,6 +139,9 @@ impl BoxEncode for MovieHeaderBox {
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         let width = version_width(self.version)?;
+        if self.next_track_id == 0 {
+            return Err(Error::invalid_value("next_track_ID"));
+        }
         writer.write_bytes(&FullBoxHeader::new(self.version, FullBoxFlags::ZERO).to_bytes())?;
         writer.write_unsigned(width, self.creation_time)?;
         writer.write_unsigned(width, self.modification_time)?;
@@ -233,6 +240,18 @@ mod tests {
         assert_eq!(
             movie_header(0, [1 << 32, 2], 6000).encode(&mut buffer),
             Err(Error::out_of_range(1 << 32, FieldWidth::Compact))
+        );
+    }
+
+    #[test]
+    fn a_next_track_id_of_zero_reads_but_is_refused_when_written() {
+        let mut bytes = movie_header_v0();
+        bytes.splice(104..108, [0; 4]);
+        let (read, _) = MovieHeaderBox::decode(&bytes).unwrap();
+
+        assert_eq!(
+            (read.next_track_id, read.encode(&mut [0; 108])),
+            (0, Err(Error::invalid_value("next_track_ID")))
         );
     }
 

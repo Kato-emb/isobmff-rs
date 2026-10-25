@@ -31,7 +31,10 @@ const TRACK_SIZE_IS_ASPECT_RATIO: u8 = 0x08;
 ///
 /// [`Default`] is the box of version 0 with every template field at its
 /// template value — `volume` at 0, the value for a track that is not audio —
-/// and every other field zero or `false`.
+/// and every other field zero or `false`. A `track_id` of zero reads, but
+/// writing it is refused with
+/// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for `track_ID`,
+/// so a box built from [`Default`] is given one before it is written.
 #[doc(alias = "tkhd")]
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -53,7 +56,7 @@ pub struct TrackHeaderBox {
     pub creation_time: u64,
     /// Most recent time the track was modified, in seconds since midnight, Jan. 1, 1904, in UTC time
     pub modification_time: u64,
-    /// Identifier of the track over the entire life-time of the presentation, never zero
+    /// Identifier of the track over the entire life-time of the presentation, which is not zero
     pub track_id: u32,
     /// Duration of the track, in the timescale of the `MovieHeaderBox`
     ///
@@ -149,6 +152,9 @@ impl BoxEncode for TrackHeaderBox {
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         let width = version_width(self.version)?;
+        if self.track_id == 0 {
+            return Err(Error::invalid_value("track_ID"));
+        }
         let flags = [
             (self.track_enabled, TRACK_ENABLED),
             (self.track_in_movie, TRACK_IN_MOVIE),
@@ -262,6 +268,18 @@ mod tests {
         let (read, _) = TrackHeaderBox::decode(&bytes).unwrap();
 
         assert_eq!(encoded(&read), track_header_v0());
+    }
+
+    #[test]
+    fn a_track_id_of_zero_reads_but_is_refused_when_written() {
+        let mut bytes = track_header_v0();
+        bytes.splice(20..24, [0; 4]);
+        let (read, _) = TrackHeaderBox::decode(&bytes).unwrap();
+
+        assert_eq!(
+            (read.track_id, read.encode(&mut [0; 92])),
+            (0, Err(Error::invalid_value("track_ID")))
+        );
     }
 
     #[test]
