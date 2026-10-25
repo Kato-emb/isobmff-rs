@@ -78,7 +78,11 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo llvm-cov nextest --no-report --workspace --all-features --no-tests=pass
-      - run: |
+      # The report informs and never gates, so it cannot fail the job either; it
+      # has nothing to report while no code is covered, as in a crate with no
+      # items.
+      - continue-on-error: true
+        run: |
           {
             echo '## Coverage'
             echo '```'
