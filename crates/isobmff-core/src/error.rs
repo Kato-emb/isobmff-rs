@@ -3,6 +3,7 @@
 use core::error;
 use core::fmt;
 
+use crate::codec::field::FieldWidth;
 use crate::data_types::fourcc::FourCc;
 use crate::framing::box_type::BoxType;
 
@@ -94,6 +95,24 @@ impl Error {
         })
     }
 
+    /// Returns the failure of a box read as a type the input does not hold there
+    #[must_use]
+    pub const fn box_type_mismatch(expected_box_type: BoxType, found_box_type: BoxType) -> Self {
+        Self::new(ErrorKind::BoxTypeMismatch {
+            expected_box_type,
+            found_box_type,
+        })
+    }
+
+    /// Returns the failure of a payload that ends inside a field
+    #[must_use]
+    pub const fn truncated_payload(needed_bytes: u64, available_bytes: u64) -> Self {
+        Self::new(ErrorKind::TruncatedPayload {
+            needed_bytes,
+            available_bytes,
+        })
+    }
+
     /// Returns the failure of a field holding a value the specification does not allow there
     ///
     /// `field` is the name of the field as the specification spells it. A
@@ -149,6 +168,35 @@ impl Error {
             needed_bytes,
             available_bytes,
         })
+    }
+
+    /// Returns the failure of a buffer holding bytes past the fields a box wrote
+    #[must_use]
+    pub const fn trailing_buffer(needed_bytes: u64, available_bytes: u64) -> Self {
+        Self::new(ErrorKind::TrailingBuffer {
+            needed_bytes,
+            available_bytes,
+        })
+    }
+
+    /// Returns the failure of a buffer that is not the length a payload declared
+    #[must_use]
+    pub const fn buffer_length_mismatch(declared_bytes: u64, offered_bytes: u64) -> Self {
+        Self::new(ErrorKind::BufferLengthMismatch {
+            declared_bytes,
+            offered_bytes,
+        })
+    }
+
+    /// Returns the failure of a value wider than the field it was given to
+    #[must_use]
+    pub const fn out_of_range(value: u64, width: FieldWidth) -> Self {
+        let field_bytes = match width {
+            FieldWidth::Compact => 4,
+            FieldWidth::Extended => 8,
+        };
+
+        Self::new(ErrorKind::OutOfRange { value, field_bytes })
     }
 
     /// Returns the failure with `container` added to the boxes it was reached through
@@ -249,6 +297,22 @@ pub enum ErrorKind {
         /// Length the input offered
         available_bytes: u64,
     },
+    /// Box read as one type lies in the input as another
+    #[non_exhaustive]
+    BoxTypeMismatch {
+        /// Type the box was read as
+        expected_box_type: BoxType,
+        /// Type the input holds there
+        found_box_type: BoxType,
+    },
+    /// Payload ends inside a field
+    #[non_exhaustive]
+    TruncatedPayload {
+        /// Length the fields reach
+        needed_bytes: u64,
+        /// Length the payload offered
+        available_bytes: u64,
+    },
     /// Field holds a value the specification does not allow there
     #[non_exhaustive]
     InvalidValue {
@@ -294,6 +358,30 @@ pub enum ErrorKind {
         /// Length the buffer offered
         available_bytes: u64,
     },
+    /// Buffer holds bytes past the fields a box wrote into it
+    #[non_exhaustive]
+    TrailingBuffer {
+        /// Length the fields claimed
+        needed_bytes: u64,
+        /// Length the buffer offered
+        available_bytes: u64,
+    },
+    /// Buffer is not the length the payload declared
+    #[non_exhaustive]
+    BufferLengthMismatch {
+        /// Length the payload declared
+        declared_bytes: u64,
+        /// Length the buffer offered
+        offered_bytes: u64,
+    },
+    /// Value is wider than the field it was given to
+    #[non_exhaustive]
+    OutOfRange {
+        /// Value given
+        value: u64,
+        /// Width in bytes of the field
+        field_bytes: u64,
+    },
 }
 
 impl ErrorKind {
@@ -304,13 +392,18 @@ impl ErrorKind {
             Self::TruncatedHeader { .. }
             | Self::SizeBelowHeader { .. }
             | Self::TruncatedBox { .. }
+            | Self::BoxTypeMismatch { .. }
+            | Self::TruncatedPayload { .. }
             | Self::InvalidValue { .. }
             | Self::InvalidUtf8String
             | Self::EntryCountMismatch { .. } => Category::Malformed,
             Self::UnsupportedVersion { .. }
             | Self::UnsupportedFlags { .. }
             | Self::UnsupportedValue { .. } => Category::Unsupported,
-            Self::TruncatedBuffer { .. } => Category::Usage,
+            Self::TruncatedBuffer { .. }
+            | Self::TrailingBuffer { .. }
+            | Self::BufferLengthMismatch { .. }
+            | Self::OutOfRange { .. } => Category::Usage,
         }
     }
 }
@@ -339,6 +432,20 @@ impl fmt::Display for ErrorKind {
             } => write!(
                 formatter,
                 "box of {needed_bytes} bytes cut short by an input of {available_bytes}"
+            ),
+            Self::BoxTypeMismatch {
+                expected_box_type,
+                found_box_type,
+            } => write!(
+                formatter,
+                "input holds a {found_box_type} box where a {expected_box_type} box was expected"
+            ),
+            Self::TruncatedPayload {
+                needed_bytes,
+                available_bytes,
+            } => write!(
+                formatter,
+                "box payload of {needed_bytes} bytes cut short by an input of {available_bytes}"
             ),
             Self::InvalidValue { field } => write!(
                 formatter,
@@ -373,6 +480,26 @@ impl fmt::Display for ErrorKind {
                 formatter,
                 "value of {needed_bytes} bytes needs a buffer at least that long, not \
                  {available_bytes}"
+            ),
+            Self::TrailingBuffer {
+                needed_bytes,
+                available_bytes,
+            } => write!(
+                formatter,
+                "buffer holds {} bytes past the fields the box wrote",
+                available_bytes.saturating_sub(needed_bytes)
+            ),
+            Self::BufferLengthMismatch {
+                declared_bytes,
+                offered_bytes,
+            } => write!(
+                formatter,
+                "box payload of {declared_bytes} bytes needs a buffer of that length, not \
+                 {offered_bytes}"
+            ),
+            Self::OutOfRange { value, field_bytes } => write!(
+                formatter,
+                "value {value} does not fit the {field_bytes} bytes of the field it was given to"
             ),
         }
     }
@@ -412,6 +539,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use super::Error;
+    use crate::codec::field::FieldWidth;
     use crate::data_types::fourcc::FourCc;
     use crate::framing::box_type::BoxType;
 
@@ -457,6 +585,15 @@ mod tests {
     }
 
     #[test]
+    fn display_of_a_failure_that_names_a_box_names_its_type() {
+        assert_eq!(
+            Error::box_type_mismatch(BoxType::compact(*b"moov"), BoxType::compact(*b"moof"))
+                .to_string(),
+            "input holds a moof box where a moov box was expected"
+        );
+    }
+
+    #[test]
     fn display_names_the_field_a_value_failure_lies_in() {
         assert_eq!(
             [
@@ -492,6 +629,10 @@ mod tests {
                 Error::truncated_header(16, 12).to_string(),
                 Error::size_below_header(24, 20).to_string(),
                 Error::truncated_box(32, 24).to_string(),
+                Error::truncated_payload(20, 12).to_string(),
+                Error::trailing_buffer(12, 16).to_string(),
+                Error::buffer_length_mismatch(4, 8).to_string(),
+                Error::out_of_range(0x1_0000_0000, FieldWidth::Compact).to_string(),
                 Error::entry_count_mismatch(4, 2).to_string(),
                 Error::truncated_buffer(16, 12).to_string(),
             ],
@@ -499,6 +640,10 @@ mod tests {
                 "box header of 16 bytes cut short by an input of 12",
                 "box declares a total of 20 bytes, below its 24-byte header",
                 "box of 32 bytes cut short by an input of 24",
+                "box payload of 20 bytes cut short by an input of 12",
+                "buffer holds 4 bytes past the fields the box wrote",
+                "box payload of 4 bytes needs a buffer of that length, not 8",
+                "value 4294967296 does not fit the 4 bytes of the field it was given to",
                 "box declares 4 entries but holds 2",
                 "value of 16 bytes needs a buffer at least that long, not 12",
             ]

@@ -173,12 +173,14 @@ jobs:
           RUSTDOCFLAGS: "-D warnings --cfg docsrs"
       - run: cargo test --doc --workspace --all-features
 
-  # Framing read against the box structure GPAC reports for the files of MPEG's
-  # FileFormatConformance, which are fetched at a pinned commit rather than
-  # committed. The tests that read them are ignored elsewhere.
+  # Framing and box codecs read against what GPAC reports for the files of
+  # MPEG's FileFormatConformance, which are fetched at a pinned commit rather
+  # than committed, and written against what FFmpeg's ffprobe reads back. The
+  # tests that need them are ignored elsewhere.
   conformance:
     runs-on: ubuntu-latest
     steps:
+      - run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends ffmpeg
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
