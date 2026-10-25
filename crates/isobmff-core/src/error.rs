@@ -164,6 +164,12 @@ impl Error {
         Self::new(ErrorKind::InvalidUtf8String)
     }
 
+    /// Returns the failure of a `utfstring` field holding bytes in neither UTF-8 nor UTF-16
+    #[must_use]
+    pub const fn invalid_utf_string() -> Self {
+        Self::new(ErrorKind::InvalidUtfString)
+    }
+
     /// Returns the failure of a count that disagrees with the entries it frames
     #[must_use]
     pub const fn entry_count_mismatch(declared_entries: u64, actual_entries: u64) -> Self {
@@ -393,6 +399,12 @@ pub enum ErrorKind {
     /// ISO/IEC 14496-12 §4.2.1 defines both types as UTF-8. A reader keeps such
     /// bytes as found, so this is reported where they would be written.
     InvalidUtf8String,
+    /// Field of the basic type `utfstring` holds bytes in neither UTF-8 nor UTF-16
+    ///
+    /// ISO/IEC 14496-12 §4.2.1 defines the type as UTF-8, or as UTF-16 that
+    /// opens with a byte order mark. A reader keeps such bytes as found, so this
+    /// is reported where they would be written.
+    InvalidUtfString,
     /// Count a box declares does not match the entries it frames for itself
     #[non_exhaustive]
     EntryCountMismatch {
@@ -476,6 +488,7 @@ impl ErrorKind {
             | Self::DuplicateVariantBox { .. }
             | Self::InvalidValue { .. }
             | Self::InvalidUtf8String
+            | Self::InvalidUtfString
             | Self::EntryCountMismatch { .. } => Category::Malformed,
             Self::UnsupportedBox { .. }
             | Self::UnsupportedVersion { .. }
@@ -559,6 +572,9 @@ impl fmt::Display for ErrorKind {
             ),
             Self::InvalidUtf8String => {
                 formatter.write_str("utf8string or utf8list field holds bytes that are not UTF-8")
+            }
+            Self::InvalidUtfString => {
+                formatter.write_str("utfstring field holds bytes in neither UTF-8 nor UTF-16")
             }
             Self::EntryCountMismatch {
                 declared_entries,
