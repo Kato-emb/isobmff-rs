@@ -17,5 +17,10 @@ default = ["alloc"]
 # Values that own their bytes on the heap, such as `Utf8String`.
 alloc = []
 
+[dev-dependencies]
+# Reads the box structure GPAC reports for a conformance file, which the
+# framing is checked against.
+serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
+
 [lints]
 workspace = true

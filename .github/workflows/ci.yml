@@ -173,6 +173,39 @@ jobs:
           RUSTDOCFLAGS: "-D warnings --cfg docsrs"
       - run: cargo test --doc --workspace --all-features
 
+  # Framing read against the box structure GPAC reports for the files of MPEG's
+  # FileFormatConformance, which are fetched at a pinned commit rather than
+  # committed. The tests that read them are ignored elsewhere.
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: nextest
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The script pins the commit, so its hash keys the files it fetches.
+      - id: files
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/conformance
+          key: conformance-${{ hashFiles('scripts/fetch-conformance.sh') }}
+      - if: steps.files.outputs.cache-hit != 'true'
+        run: scripts/fetch-conformance.sh "$RUNNER_TEMP/conformance"
+      - if: steps.files.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/conformance
+          key: conformance-${{ hashFiles('scripts/fetch-conformance.sh') }}
+      - run: ISOBMFF_CONFORMANCE_DIR="$RUNNER_TEMP/conformance" cargo nextest run -p isobmff-core --run-ignored only
+
   # Advisories, license policy, banned crates and sources, per deny.toml.
   deny:
     runs-on: ubuntu-latest
@@ -190,7 +223,7 @@ jobs:
   # `test` is skipped on pull requests by design.
   ci-success:
     if: always()
-    needs: [lint, clippy, coverage, test, msrv, no-std, docs, deny]
+    needs: [lint, clippy, coverage, conformance, test, msrv, no-std, docs, deny]
     runs-on: ubuntu-latest
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')

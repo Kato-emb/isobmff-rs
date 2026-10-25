@@ -2,9 +2,9 @@
 //!
 //! A crate that defines boxes of its own — a vendor box, or one from a
 //! specification derived from ISO/IEC 14496-12 — depends on this crate alone.
-//! It holds the vocabulary such a box is written in: the identifiers that name
-//! a box, the values its fields carry, and the [`Error`] its reading and
-//! writing report.
+//! It holds the vocabulary such a box is written in: the header that frames a
+//! box and the identifiers that name it, the values its fields carry, and the
+//! [`Error`] its reading and writing report.
 //!
 //! # `no_std`
 //!
@@ -25,4 +25,7 @@ mod framing;
 pub use data_types::Utf8String;
 pub use data_types::{FourCc, FullBoxFlags, FullBoxHeader, I8F8, I16F16, U16F16, Uuid};
 pub use error::{Category, Error, ErrorKind};
-pub use framing::{BoxType, CompactType, ExtendedType};
+pub use framing::{
+    BoxHeader, BoxSize, BoxType, Boxes, CompactSize, CompactType, ExtendedSize, ExtendedType,
+    RawBox,
+};

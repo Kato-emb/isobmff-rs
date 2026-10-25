@@ -67,6 +67,33 @@ impl Error {
         }
     }
 
+    /// Returns the failure of an input that ends inside the header of a box
+    #[must_use]
+    pub const fn truncated_header(needed_bytes: u64, available_bytes: u64) -> Self {
+        Self::new(ErrorKind::TruncatedHeader {
+            needed_bytes,
+            available_bytes,
+        })
+    }
+
+    /// Returns the failure of a box declaring a total below the header it prefixes
+    #[must_use]
+    pub const fn size_below_header(header_bytes: u64, declared_bytes: u64) -> Self {
+        Self::new(ErrorKind::SizeBelowHeader {
+            header_bytes,
+            declared_bytes,
+        })
+    }
+
+    /// Returns the failure of a box whose declared total overruns the input
+    #[must_use]
+    pub const fn truncated_box(needed_bytes: u64, available_bytes: u64) -> Self {
+        Self::new(ErrorKind::TruncatedBox {
+            needed_bytes,
+            available_bytes,
+        })
+    }
+
     /// Returns the failure of a field holding a value the specification does not allow there
     ///
     /// `field` is the name of the field as the specification spells it. A
@@ -198,6 +225,30 @@ impl error::Error for Error {}
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ErrorKind {
+    /// Input ends inside the header of a box
+    #[non_exhaustive]
+    TruncatedHeader {
+        /// Length the header reaches
+        needed_bytes: u64,
+        /// Length the input offered
+        available_bytes: u64,
+    },
+    /// Total a box declares is smaller than the header it prefixes
+    #[non_exhaustive]
+    SizeBelowHeader {
+        /// Length of the header
+        header_bytes: u64,
+        /// Total the `size` or `largesize` field declares
+        declared_bytes: u64,
+    },
+    /// Total a box declares overruns the input
+    #[non_exhaustive]
+    TruncatedBox {
+        /// Total the box declares
+        needed_bytes: u64,
+        /// Length the input offered
+        available_bytes: u64,
+    },
     /// Field holds a value the specification does not allow there
     #[non_exhaustive]
     InvalidValue {
@@ -250,7 +301,10 @@ impl ErrorKind {
     #[must_use]
     pub const fn category(self) -> Category {
         match self {
-            Self::InvalidValue { .. }
+            Self::TruncatedHeader { .. }
+            | Self::SizeBelowHeader { .. }
+            | Self::TruncatedBox { .. }
+            | Self::InvalidValue { .. }
             | Self::InvalidUtf8String
             | Self::EntryCountMismatch { .. } => Category::Malformed,
             Self::UnsupportedVersion { .. }
@@ -264,6 +318,28 @@ impl ErrorKind {
 impl fmt::Display for ErrorKind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
+            Self::TruncatedHeader {
+                needed_bytes,
+                available_bytes,
+            } => write!(
+                formatter,
+                "box header of {needed_bytes} bytes cut short by an input of {available_bytes}"
+            ),
+            Self::SizeBelowHeader {
+                header_bytes,
+                declared_bytes,
+            } => write!(
+                formatter,
+                "box declares a total of {declared_bytes} bytes, below its {header_bytes}-byte \
+                 header"
+            ),
+            Self::TruncatedBox {
+                needed_bytes,
+                available_bytes,
+            } => write!(
+                formatter,
+                "box of {needed_bytes} bytes cut short by an input of {available_bytes}"
+            ),
             Self::InvalidValue { field } => write!(
                 formatter,
                 "box holds a value in its {field} field that the specification does not allow"
@@ -413,10 +489,16 @@ mod tests {
     fn display_of_a_failure_that_counts_names_both_counts() {
         assert_eq!(
             [
+                Error::truncated_header(16, 12).to_string(),
+                Error::size_below_header(24, 20).to_string(),
+                Error::truncated_box(32, 24).to_string(),
                 Error::entry_count_mismatch(4, 2).to_string(),
                 Error::truncated_buffer(16, 12).to_string(),
             ],
             [
+                "box header of 16 bytes cut short by an input of 12",
+                "box declares a total of 20 bytes, below its 24-byte header",
+                "box of 32 bytes cut short by an input of 24",
                 "box declares 4 entries but holds 2",
                 "value of 16 bytes needs a buffer at least that long, not 12",
             ]
