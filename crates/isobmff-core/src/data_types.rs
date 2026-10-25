@@ -13,12 +13,16 @@ pub(crate) mod fixed_point;
 pub(crate) mod fourcc;
 pub(crate) mod full_box;
 #[cfg(feature = "alloc")]
+pub(crate) mod utf8_list;
+#[cfg(feature = "alloc")]
 pub(crate) mod utf8_string;
 pub(crate) mod uuid;
 
 pub use fixed_point::{I8F8, I16F16, U16F16};
 pub use fourcc::FourCc;
 pub use full_box::{FullBoxFlags, FullBoxHeader};
+#[cfg(feature = "alloc")]
+pub use utf8_list::Utf8List;
 #[cfg(feature = "alloc")]
 pub use utf8_string::Utf8String;
 pub use uuid::Uuid;

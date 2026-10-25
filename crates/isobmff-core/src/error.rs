@@ -158,7 +158,7 @@ impl Error {
         Self::new(ErrorKind::InvalidValue { field })
     }
 
-    /// Returns the failure of a `utf8string` field holding bytes that are not UTF-8
+    /// Returns the failure of a `utf8string` or `utf8list` field holding bytes that are not UTF-8
     #[must_use]
     pub const fn invalid_utf8_string() -> Self {
         Self::new(ErrorKind::InvalidUtf8String)
@@ -388,9 +388,9 @@ pub enum ErrorKind {
         /// Name of the field as the specification spells it
         field: &'static str,
     },
-    /// Field of the basic type `utf8string` holds bytes that are not UTF-8
+    /// Field of the basic type `utf8string` or `utf8list` holds bytes that are not UTF-8
     ///
-    /// ISO/IEC 14496-12 §4.2.1 defines the type as UTF-8. A reader keeps such
+    /// ISO/IEC 14496-12 §4.2.1 defines both types as UTF-8. A reader keeps such
     /// bytes as found, so this is reported where they would be written.
     InvalidUtf8String,
     /// Count a box declares does not match the entries it frames for itself
@@ -558,7 +558,7 @@ impl fmt::Display for ErrorKind {
                 "box holds a value in its {field} field that the specification does not allow"
             ),
             Self::InvalidUtf8String => {
-                formatter.write_str("utf8string field holds bytes that are not UTF-8")
+                formatter.write_str("utf8string or utf8list field holds bytes that are not UTF-8")
             }
             Self::EntryCountMismatch {
                 declared_entries,
