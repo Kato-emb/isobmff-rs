@@ -172,6 +172,8 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings --cfg docsrs"
       - run: cargo test --doc --workspace --all-features
+      # The alloc-free build has doctests of its own to pass, without the items alloc adds.
+      - run: cargo test --doc -p isobmff-core --no-default-features
 
   # Framing and box codecs read against what GPAC reports for the files of
   # MPEG's FileFormatConformance, which are fetched at a pinned commit rather

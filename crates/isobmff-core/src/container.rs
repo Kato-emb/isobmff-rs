@@ -89,8 +89,9 @@ impl<'payload> ChildBoxes<'payload> {
     /// Collects the children laid end to end in `payload`, the payload of a container or the part of it after its fields
     ///
     /// A child takes at least the eight bytes of its header, so `payload`
-    /// holds at most `payload.len() / 8` children, and the collection holds at
-    /// most `size_of::<RawBox>()` bytes for each eight of `payload`: what it
+    /// holds at most `payload.len() / 8` children. The collection allocates
+    /// room for exactly the children `payload` holds, so at most
+    /// `size_of::<RawBox>()` bytes for each eight of `payload`: what it
     /// allocates is bounded by the length of `payload`, which the caller sets.
     ///
     /// # Errors
@@ -98,9 +99,15 @@ impl<'payload> ChildBoxes<'payload> {
     /// * The failures of [`RawBox::split_first`], for the first child that
     ///   does not frame.
     pub fn decode(payload: &'payload [u8]) -> Result<Self, Error> {
-        Ok(Self {
-            children: Boxes::new(payload).collect::<Result<_, _>>()?,
-        })
+        // Why not collect in one pass: a `Vec` grown as it is filled holds spare
+        // capacity beyond the children, which the bound above does not allow.
+        let count = Boxes::new(payload).try_fold(0_usize, |count, child| {
+            child.map(|_| count.saturating_add(1))
+        })?;
+        let mut children = Vec::with_capacity(count);
+        children.extend(Boxes::new(payload).flatten());
+
+        Ok(Self { children })
     }
 
     /// Returns whether a child of the type that names `Child` is there, without reading it
@@ -465,6 +472,16 @@ mod tests {
     /// Collects every box a payload holds, whatever type names it
     fn collected(payload: &[u8]) -> ChildBoxes<'_> {
         ChildBoxes::decode(payload).unwrap()
+    }
+
+    #[test]
+    fn the_children_are_held_in_exactly_the_room_they_take() {
+        let children = collected(b"\0\0\0\x08free\0\0\0\x08skip\0\0\0\x08free");
+
+        assert_eq!(
+            (children.children.len(), children.children.capacity()),
+            (3, 3)
+        );
     }
 
     #[test]

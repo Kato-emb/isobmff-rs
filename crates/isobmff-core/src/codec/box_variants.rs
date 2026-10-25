@@ -22,6 +22,7 @@ use crate::framing::raw_box::RawBox;
 /// # Examples
 ///
 /// ```
+/// # #[cfg(feature = "alloc")] {
 /// use isobmff_core::{BoxType, BoxVariants, ChildBoxes, Error, FieldReader, RawBox};
 ///
 /// // A sequence number stated in 32 bits by a `sqnc`, or in 16 bits by a `sqn2`
@@ -53,6 +54,7 @@ use crate::framing::raw_box::RawBox;
 ///     children.take_exactly_one_variant::<SequenceNumber>(),
 ///     Ok(SequenceNumber::Narrow(7))
 /// );
+/// # }
 /// ```
 pub trait BoxVariants: Sized {
     /// Box types of the variants
