@@ -98,10 +98,10 @@ impl BoxDecode for SampleTableBox {
             padb: children.take_zero_or_one_if_decoded()?,
             stdp: children.take_zero_or_one_if_decoded()?,
             sdtp: children.take_zero_or_one_if_decoded()?,
-            subs: children.take_zero_or_more()?,
-            ssrt: children.take_zero_or_more()?,
-            saiz: children.take_zero_or_more()?,
-            saio: children.take_zero_or_more()?,
+            subs: children.take_zero_or_more_if_decoded(),
+            ssrt: children.take_zero_or_more_if_decoded(),
+            saiz: children.take_zero_or_more_if_decoded(),
+            saio: children.take_zero_or_more_if_decoded(),
             other_boxes: OtherBoxes::from(children),
         })
     }
@@ -262,6 +262,9 @@ mod tests {
     /// `stss` of version 1, which `stbl` keeps as found
     const STSS_VERSION_1: &[u8] = b"\0\0\0\x10stss\x01\0\0\0\0\0\0\0";
 
+    /// `saio` of version 2, one of the children of zero or more that `stbl` keeps as found
+    const SAIO_VERSION_2: &[u8] = b"\0\0\0\x10saio\x02\0\0\0\0\0\0\0";
+
     fn sample_table(stss: Option<SyncSampleBox>, other_boxes: &[u8]) -> SampleTableBox {
         SampleTableBox {
             stts: Some(TimeToSampleBox {
@@ -329,12 +332,15 @@ mod tests {
     }
 
     #[test]
-    fn an_optional_table_of_a_version_it_does_not_read_is_kept_as_found() {
-        let payload = [STTS, STSC, STSZ, STCO, STSS_VERSION_1].concat();
+    fn optional_tables_of_a_version_it_does_not_read_are_kept_as_found() {
+        let payload = [STTS, STSC, STSZ, STCO, STSS_VERSION_1, SAIO_VERSION_2].concat();
 
         assert_eq!(
             SampleTableBox::decode_payload(&payload),
-            Ok(sample_table(None, STSS_VERSION_1))
+            Ok(sample_table(
+                None,
+                &[STSS_VERSION_1, SAIO_VERSION_2].concat()
+            ))
         );
     }
 

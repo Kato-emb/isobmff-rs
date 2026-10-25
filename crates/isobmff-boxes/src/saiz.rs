@@ -11,6 +11,8 @@ use isobmff_core::{
 use crate::table::{read_entries, table_len, write_entry_count};
 
 /// Type and stream of sample auxiliary information, which a [`SampleAuxiliaryInformationSizesBox`] and a [`SampleAuxiliaryInformationOffsetsBox`](crate::SampleAuxiliaryInformationOffsetsBox) state when flag `0x1` is set
+///
+/// [`Default`] is the type of every byte zero, of stream 0.
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct AuxInfoType {
@@ -19,6 +21,15 @@ pub struct AuxInfoType {
     /// Stream of the sample auxiliary information of that type, whose meaning
     /// the type defines
     pub aux_info_type_parameter: u32,
+}
+
+impl Default for AuxInfoType {
+    fn default() -> Self {
+        Self {
+            aux_info_type: FourCc::new([0; 4]),
+            aux_info_type_parameter: 0,
+        }
+    }
 }
 
 impl AuxInfoType {
@@ -108,6 +119,35 @@ impl Default for SampleInfoSizes {
 /// bits wide. A size wider than that is refused when the box is written, with
 /// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for
 /// `default_sample_info_size` or `sample_info_size`.
+///
+/// # Examples
+///
+/// ```
+/// use isobmff_boxes::{AuxInfoType, SampleAuxiliaryInformationSizesBox, SampleInfoSizes};
+/// use isobmff_core::{BoxDecode, BoxEncode, FourCc};
+///
+/// // A box is built from its default, field by field
+/// let mut aux_info_type = AuxInfoType::default();
+/// aux_info_type.aux_info_type = FourCc::new(*b"cenc");
+/// aux_info_type.aux_info_type_parameter = 1;
+/// let mut sizes = SampleAuxiliaryInformationSizesBox::default();
+/// sizes.aux_info_type = Some(aux_info_type);
+/// sizes.sample_info_sizes = SampleInfoSizes::Table {
+///     sample_info_sizes: vec![16, 0, 24],
+/// };
+///
+/// // It writes the bytes its syntax lays out, and reads back from them
+/// let mut buffer = [0; 28];
+/// sizes.encode(&mut buffer).unwrap();
+/// assert_eq!(
+///     &buffer,
+///     b"\0\0\0\x1csaiz\0\0\0\x01cenc\0\0\0\x01\0\0\0\0\x03\x10\0\x18"
+/// );
+/// assert_eq!(
+///     SampleAuxiliaryInformationSizesBox::decode(&buffer),
+///     Ok((sizes, b"".as_slice()))
+/// );
+/// ```
 #[doc(alias = "saiz")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Eq, Hash, Debug)]

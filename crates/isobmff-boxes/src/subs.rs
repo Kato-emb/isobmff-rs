@@ -36,6 +36,9 @@ pub enum SubSampleProperties {
 }
 
 /// Contiguous range of bytes of a sample, one sub-sample of a [`SubSampleInformationEntry`]
+///
+/// [`Default`] is the sub-sample of no byte, whose properties are stated in
+/// full and are all 0.
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct SubSample {
@@ -43,6 +46,19 @@ pub struct SubSample {
     pub subsample_size: u32,
     /// Properties of the sub-sample
     pub properties: SubSampleProperties,
+}
+
+impl Default for SubSample {
+    fn default() -> Self {
+        Self {
+            subsample_size: 0,
+            properties: SubSampleProperties::Explicit {
+                subsample_priority: 0,
+                discardable: 0,
+                codec_specific_parameters: 0,
+            },
+        }
+    }
 }
 
 /// Sample that has sub-sample structure and its sub-samples, one entry of a [`SubSampleInformationBox`]
@@ -72,6 +88,34 @@ pub struct SubSampleInformationEntry {
 /// with [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for `version`,
 /// and a value too wide for its field with
 /// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for the field.
+///
+/// # Examples
+///
+/// ```
+/// use isobmff_boxes::{SubSample, SubSampleInformationBox, SubSampleInformationEntry};
+/// use isobmff_core::{BoxDecode, BoxEncode};
+///
+/// // A box is built from its default, field by field
+/// let mut subsample = SubSample::default();
+/// subsample.subsample_size = 0x10;
+/// let mut entry = SubSampleInformationEntry::default();
+/// entry.sample_delta = 1;
+/// entry.subsamples = vec![subsample];
+/// let mut information = SubSampleInformationBox::default();
+/// information.entries = vec![entry];
+///
+/// // It writes the bytes its syntax lays out, and reads back from them
+/// let mut buffer = [0; 30];
+/// information.encode(&mut buffer).unwrap();
+/// assert_eq!(
+///     &buffer,
+///     b"\0\0\0\x1esubs\0\0\0\0\0\0\0\x01\0\0\0\x01\0\x01\0\x10\0\0\0\0\0\0"
+/// );
+/// assert_eq!(
+///     SubSampleInformationBox::decode(&buffer),
+///     Ok((information, b"".as_slice()))
+/// );
+/// ```
 #[doc(alias = "subs")]
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]

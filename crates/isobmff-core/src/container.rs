@@ -253,6 +253,15 @@ impl<'payload> ChildBoxes<'payload> {
         failure.map_or(Ok(read), Err)
     }
 
+    /// Takes out the children of a quantity of `Zero or more` that read, in the order they came
+    ///
+    /// A child that does not decode is left where it lies, among the children no
+    /// take removed, and the others are read on without it.
+    #[must_use]
+    pub fn take_zero_or_more_if_decoded<Child: BoxDecode + BoxDefinition>(&mut self) -> Vec<Child> {
+        self.take_one_or_more_if_decoded().unwrap_or_default()
+    }
+
     /// Takes out the child a quantity of `Exactly one variant shall be present` names
     ///
     /// # Errors
@@ -743,6 +752,24 @@ mod tests {
         assert_eq!(
             children.take_one_or_more_if_decoded::<SequenceNumberBox>(),
             Ok(vec![SequenceNumberBox(7), SequenceNumberBox(9)])
+        );
+        assert_eq!(
+            OtherBoxes::from(children).as_slice(),
+            [AnyBox::from_raw_bytes(
+                SequenceNumberBox::BOX_TYPE,
+                b"!".to_vec()
+            )]
+        );
+    }
+
+    #[test]
+    fn children_of_zero_or_more_that_do_not_read_are_left_and_the_others_read_in_order() {
+        let payload = b"\0\0\0\x0csqnc\0\0\0\x07\0\0\0\x09sqnc!\0\0\0\x0csqnc\0\0\0\x09";
+        let mut children = collected(payload);
+
+        assert_eq!(
+            children.take_zero_or_more_if_decoded::<SequenceNumberBox>(),
+            vec![SequenceNumberBox(7), SequenceNumberBox(9)]
         );
         assert_eq!(
             OtherBoxes::from(children).as_slice(),

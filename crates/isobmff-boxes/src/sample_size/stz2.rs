@@ -13,7 +13,9 @@ use crate::table::write_entry_count;
 /// wide. Entries of 4 bits pack two to a byte, the earlier sample in the high
 /// half, and the last byte of an odd number of them is padded with zeros.
 ///
-/// A `field_size` other than 4, 8 or 16 is refused, read or written, with
+/// A `field_size` of 32 is read, with its entries kept as found, but refused
+/// when the box is written; any other `field_size` than 4, 8 or 16 is refused,
+/// read or written. Both are refused with
 /// [`UnsupportedValue`](isobmff_core::ErrorKind::UnsupportedValue). An
 /// `entry_size` wider than `field_size` is refused when the box is written,
 /// with [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue).
@@ -23,10 +25,10 @@ use crate::table::write_entry_count;
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct CompactSampleSizeBox {
-    /// Width of every entry of the table, in bits: 4, 8 or 16
+    /// Width of every entry of the table, in bits: 4, 8 or 16, or 32 as read
     pub field_size: u8,
     /// `entry_size` of every sample, in bytes, indexed by its number
-    pub entry_sizes: Vec<u16>,
+    pub entry_sizes: Vec<u32>,
 }
 
 impl Default for CompactSampleSizeBox {
@@ -53,7 +55,7 @@ impl BoxDecode for CompactSampleSizeBox {
     fn decode_fields(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         read_version_zero(reader)?;
         let [_, _, _, field_size] = *reader.read_bytes::<4>()?;
-        if !matches!(field_size, 4 | 8 | 16) {
+        if !matches!(field_size, 4 | 8 | 16 | 32) {
             return Err(Error::unsupported_value("field_size"));
         }
         let sample_count = reader.read_u32()?;
@@ -67,16 +69,24 @@ impl BoxDecode for CompactSampleSizeBox {
         let entry_sizes = match field_size {
             4 => table
                 .iter()
-                .flat_map(|byte| [u16::from(byte >> 4), u16::from(byte & 0x0f)])
+                .flat_map(|byte| [u32::from(byte >> 4), u32::from(byte & 0x0f)])
                 .take(sample_count)
                 .collect(),
-            8 => table.iter().copied().map(u16::from).collect(),
-            _ => table
+            8 => table.iter().copied().map(u32::from).collect(),
+            16 => table
                 .as_chunks::<2>()
                 .0
                 .iter()
                 .copied()
                 .map(u16::from_be_bytes)
+                .map(u32::from)
+                .collect(),
+            _ => table
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .copied()
+                .map(u32::from_be_bytes)
                 .collect(),
         };
 
@@ -117,19 +127,20 @@ impl BoxEncode for CompactSampleSizeBox {
                 for pair in self.entry_sizes.chunks(2) {
                     let high = pair.first().copied().unwrap_or_default();
                     let low = pair.get(1).copied().unwrap_or_default();
-                    let [_, byte] = (high << 4 | low).to_be_bytes();
+                    let [.., byte] = (high << 4 | low).to_be_bytes();
                     writer.write_bytes(&[byte])?;
                 }
             }
             8 => {
                 for entry_size in &self.entry_sizes {
-                    let [_, byte] = entry_size.to_be_bytes();
+                    let [.., byte] = entry_size.to_be_bytes();
                     writer.write_bytes(&[byte])?;
                 }
             }
             _ => {
                 for entry_size in &self.entry_sizes {
-                    writer.write_u16(*entry_size)?;
+                    let [.., high, low] = entry_size.to_be_bytes();
+                    writer.write_bytes(&[high, low])?;
                 }
             }
         }
@@ -154,7 +165,7 @@ mod tests {
     /// `stz2` of two 16-bit entries, of 1 and 0x1234 bytes
     const STZ2_16: &[u8] = b"\0\0\0\x18stz2\0\0\0\0\0\0\0\x10\0\0\0\x02\0\x01\x12\x34";
 
-    fn compact_sample_size(field_size: u8, entry_sizes: &[u16]) -> CompactSampleSizeBox {
+    fn compact_sample_size(field_size: u8, entry_sizes: &[u32]) -> CompactSampleSizeBox {
         CompactSampleSizeBox {
             field_size,
             entry_sizes: entry_sizes.to_vec(),
@@ -198,11 +209,28 @@ mod tests {
     }
 
     #[test]
-    fn a_field_size_other_than_4_8_or_16_is_refused_read_or_written() {
+    fn a_field_size_of_32_is_read_as_found_but_refused_when_written() {
+        let read = CompactSampleSizeBox::decode_payload(
+            b"\0\0\0\0\0\0\0\x20\0\0\0\x02\0\x01\0\0\x12\x34\x56\x78",
+        );
         assert_eq!(
             (
-                CompactSampleSizeBox::decode_payload(b"\0\0\0\0\0\0\0\x20\0\0\0\0"),
-                compact_sample_size(32, &[]).encode(&mut [0; 20])
+                read,
+                compact_sample_size(32, &[0x1_0000]).encode(&mut [0; 24])
+            ),
+            (
+                Ok(compact_sample_size(32, &[0x1_0000, 0x1234_5678])),
+                Err(Error::unsupported_value("field_size"))
+            )
+        );
+    }
+
+    #[test]
+    fn a_field_size_other_than_4_8_16_or_32_is_refused_read_or_written() {
+        assert_eq!(
+            (
+                CompactSampleSizeBox::decode_payload(b"\0\0\0\0\0\0\0\x0c\0\0\0\0"),
+                compact_sample_size(12, &[]).encode(&mut [0; 20])
             ),
             (
                 Err(Error::unsupported_value("field_size")),
