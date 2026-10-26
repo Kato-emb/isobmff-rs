@@ -1,8 +1,17 @@
 //! [`SampleEntry`], the fields every sample entry opens with, and the bytes the class derived for its format lays out
 
+mod audio;
+mod visual;
+
+use alloc::vec;
 use alloc::vec::Vec;
 
-use isobmff_core::{BoxEncode, Error, FieldReader, FieldWriter, FourCc};
+use isobmff_core::{
+    BoxEncode, BoxType, ChildBoxes, Error, FieldReader, FieldWriter, FourCc, OtherBoxes, RawBox,
+};
+
+pub use audio::{AudioSampleEntry, AudioSampleEntryV1, AudioSampleEntryVariant};
+pub use visual::VisualSampleEntry;
 
 /// [`SampleEntry`], ISO/IEC 14496-12 §8.5.2
 ///
@@ -66,6 +75,62 @@ impl SampleEntry {
             remaining_data: reader.take_remainder().to_vec(),
         })
     }
+}
+
+/// Returns the entry whose bytes after `data_reference_index`, `remaining_len` of them, `encode_remaining` writes, as a class derived from [`SampleEntry`] lays them out
+///
+/// # Errors
+///
+/// * [`TrailingBuffer`](isobmff_core::ErrorKind::TrailingBuffer) or
+///   [`TruncatedBuffer`](isobmff_core::ErrorKind::TruncatedBuffer): what
+///   `encode_remaining` writes is not `remaining_len` long.
+/// * The failures of `encode_remaining`.
+pub(crate) fn from_class(
+    format: FourCc,
+    data_reference_index: u16,
+    remaining_len: u64,
+    encode_remaining: impl FnOnce(&mut FieldWriter<'_>) -> Result<(), Error>,
+) -> Result<SampleEntry, Error> {
+    let mut remaining_data = vec![0; usize::try_from(remaining_len).unwrap_or(usize::MAX)];
+    let mut writer = FieldWriter::new(&mut remaining_data);
+    encode_remaining(&mut writer)?;
+    writer.finish()?;
+
+    Ok(SampleEntry {
+        format,
+        data_reference_index,
+        remaining_data,
+    })
+}
+
+/// Splits the children of an entry before the first child of a type in `defined`, the boxes its class defines
+///
+/// Returns the children before it, which are the boxes of a derived
+/// specification where the entry lays its children out in the order its
+/// class does, and the children from it on, from which the class takes its
+/// boxes and keeps the rest as the extra boxes.
+///
+/// # Errors
+///
+/// * The failures of [`ChildBoxes::decode`]: a child does not frame.
+pub(crate) fn split_children<'payload>(
+    payload: &'payload [u8],
+    defined: &[BoxType],
+) -> Result<(OtherBoxes, ChildBoxes<'payload>), Error> {
+    let mut rest = payload;
+    while !rest.is_empty() {
+        let (child, after) = RawBox::split_first(rest)?;
+        if defined.contains(&child.header().box_type()) {
+            break;
+        }
+        rest = after;
+    }
+    let (derived, defined_onward) = payload.split_at(payload.len().saturating_sub(rest.len()));
+
+    Ok((
+        OtherBoxes::from(ChildBoxes::decode(derived)?),
+        ChildBoxes::decode(defined_onward)?,
+    ))
 }
 
 impl BoxEncode for SampleEntry {

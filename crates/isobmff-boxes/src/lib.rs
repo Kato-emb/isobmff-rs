@@ -36,9 +36,15 @@
 
 extern crate alloc;
 
+mod amve;
 mod assp;
 mod box_type_argument;
+mod btrt;
+mod cclv;
 mod chunk_offset;
+mod clap;
+mod clli;
+mod colr;
 mod csgp;
 mod cslg;
 mod ctts;
@@ -57,6 +63,7 @@ mod hdlr;
 mod imda;
 mod leva;
 mod mdat;
+mod mdcv;
 mod mdhd;
 mod mdia;
 mod media_information_header;
@@ -71,6 +78,7 @@ mod mvex;
 mod mvhd;
 mod otyp;
 mod padb;
+mod pasp;
 mod pdin;
 mod prft;
 mod rsot;
@@ -83,6 +91,7 @@ mod sbgp;
 mod sdtp;
 mod sgpd;
 mod sidx;
+mod srat;
 mod ssix;
 mod ssrt;
 mod stbl;
@@ -109,7 +118,7 @@ mod ttyp;
 pub use data_entry::{
     DataEntry, DataEntryImdaBox, DataEntrySeqNumImdaBox, DataEntryUrlBox, DataEntryUrnBox,
 };
-pub use data_types::{LanguageCode, Matrix, SampleFlags};
+pub use data_types::{CompressorName, LanguageCode, Matrix, SampleFlags};
 pub use dinf::DataInformationBox;
 pub use dref::DataReferenceBox;
 pub use edts::EditBox;
@@ -118,11 +127,17 @@ pub use elst::{EditListBox, EditListEntry};
 mod subs;
 mod table;
 
+pub use amve::AmbientViewingEnvironmentBox;
 pub use assp::{
     AlternativeStartupSequenceOffsetEntry, AlternativeStartupSequenceOffsets,
     AlternativeStartupSequencePropertiesBox,
 };
+pub use btrt::BitRateBox;
+pub use cclv::{ContentColourVolumeBox, ContentColourVolumePrimaries};
 pub use chunk_offset::{ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant};
+pub use clap::CleanApertureBox;
+pub use clli::ContentLightLevelBox;
+pub use colr::ColourInformationBox;
 pub use csgp::{CompactSampleToGroupBox, CompactSampleToGroupPattern};
 pub use cslg::CompositionToDecodeBox;
 pub use ctts::{CompositionOffsetBox, CompositionOffsetEntry};
@@ -133,6 +148,7 @@ pub use hdlr::HandlerBox;
 pub use imda::IdentifiedMediaDataBox;
 pub use leva::{Level, LevelAssignment, LevelAssignmentBox};
 pub use mdat::MediaDataBox;
+pub use mdcv::MasteringDisplayColourVolumeBox;
 pub use mdhd::MediaHeaderBox;
 pub use mdia::MediaBox;
 pub use media_information_header::{
@@ -150,12 +166,15 @@ pub use mvex::MovieExtendsBox;
 pub use mvhd::MovieHeaderBox;
 pub use otyp::OriginalFileTypeBox;
 pub use padb::PaddingBitsBox;
+pub use pasp::PixelAspectRatioBox;
 pub use pdin::{ProgressiveDownloadInfoBox, ProgressiveDownloadInfoEntry};
 pub use prft::ProducerReferenceTimeBox;
 pub use rsot::RedundantSampleOriginalTimingBox;
 pub use saio::SampleAuxiliaryInformationOffsetsBox;
 pub use saiz::{AuxInfoType, SampleAuxiliaryInformationSizesBox, SampleInfoSizes};
-pub use sample_entry::SampleEntry;
+pub use sample_entry::{
+    AudioSampleEntry, AudioSampleEntryV1, AudioSampleEntryVariant, SampleEntry, VisualSampleEntry,
+};
 pub use sample_group_entry::{
     AlternativeStartupEntry, AlternativeStartupPiece, AudioPreRollEntry, CleanApertureEntry,
     EssentialDescriptionsHierarchyEntry, PixelAspectRatioEntry, RateShareEntry,
@@ -168,6 +187,7 @@ pub use sbgp::{SampleToGroupBox, SampleToGroupEntry};
 pub use sdtp::{SampleDependencyTypeBox, SampleDependencyTypeEntry};
 pub use sgpd::SampleGroupDescriptionBox;
 pub use sidx::{SegmentIndexBox, SegmentIndexReference};
+pub use srat::SamplingRateBox;
 pub use ssix::{Subsegment, SubsegmentIndexBox, SubsegmentRange};
 pub use ssrt::{SubSampleDescription, SubSampleReferenceTableBox};
 pub use stbl::SampleTableBox;

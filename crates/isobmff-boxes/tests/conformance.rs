@@ -9,11 +9,11 @@ mod tests {
     use std::{env, fs};
 
     use isobmff_boxes::{
-        ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, CompactSampleSizeBox,
-        DataInformationBox, EditBox, ExtendedTypeBox, FileTypeBox, Free, FreeSpaceBox, HandlerBox,
-        IdentifiedMediaDataBox, LanguageCode, Matrix, MediaBox, MediaDataBox, MediaHeaderBox,
-        MediaInformationBox, MovieBox, MovieExtendsBox, MovieFragmentBox,
-        MovieFragmentRandomAccessBox, MovieHeaderBox, OriginalFileTypeBox,
+        AudioSampleEntryVariant, ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant,
+        CompactSampleSizeBox, DataInformationBox, EditBox, ExtendedTypeBox, FileTypeBox, Free,
+        FreeSpaceBox, HandlerBox, IdentifiedMediaDataBox, LanguageCode, Matrix, MediaBox,
+        MediaDataBox, MediaHeaderBox, MediaInformationBox, MovieBox, MovieExtendsBox,
+        MovieFragmentBox, MovieFragmentRandomAccessBox, MovieHeaderBox, OriginalFileTypeBox,
         ProducerReferenceTimeBox, ProgressiveDownloadInfoBox, RollRecoveryEntry,
         SampleDependencyTypeBox, SampleDescription, SampleDescriptionBox, SampleEntry, SampleFlags,
         SampleGroupDescriptionBox, SampleGroupDescriptionEntry, SampleSizeBox, SampleSizeVariant,
@@ -22,7 +22,7 @@ mod tests {
         SubsegmentIndexBox, TemporalLevelEntry, TimeToSampleBox, TimeToSampleEntry, TrackBox,
         TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
         TrackHeaderBox, TrackReference, TrackReferenceBox, TrackReferenceTypeBox, TrackRunBox,
-        TrackRunSample, TrackRunSamples, VisualRandomAccessEntry,
+        TrackRunSample, TrackRunSamples, VisualRandomAccessEntry, VisualSampleEntry,
     };
     use isobmff_core::{
         BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, Error, FourCc, I8F8, RawBox, U16F16,
@@ -145,6 +145,192 @@ mod tests {
         }
 
         assert_eq!(differences, Vec::<String>::new());
+    }
+
+    /// Returns the sample entries of the tracks of `bytes` whose handler type is `handler_type`, each with its `stsd` as GPAC reports it
+    fn sample_entries_of<'report>(
+        bytes: &[u8],
+        report: &'report Value,
+        handler_type: &[u8; 4],
+    ) -> Vec<(SampleEntry, &'report Value)> {
+        read_all::<MovieBox>(&top_level(bytes))
+            .into_iter()
+            .flat_map(|movie| movie.trak)
+            .zip(
+                gpac_top_level(report, "moov")
+                    .into_iter()
+                    .flat_map(|movie| gpac_boxes(movie, "trak")),
+            )
+            .filter(|(track, _)| track.mdia.hdlr.handler_type == FourCc::new(*handler_type))
+            .flat_map(|(track, reported)| {
+                let media = gpac_box(reported, "mdia");
+                let sample_table = gpac_box(gpac_box(media, "minf"), "stbl");
+                track
+                    .mdia
+                    .minf
+                    .stbl
+                    .stsd
+                    .sample_descriptions
+                    .into_iter()
+                    .zip(gpac_children(gpac_box(sample_table, "stsd")))
+                    .filter_map(|(entry, reported)| {
+                        if let SampleDescription::Typed(entry) = entry {
+                            Some((entry, reported))
+                        } else {
+                            None
+                        }
+                    })
+            })
+            .collect()
+    }
+
+    /// Returns `ours` with the fields GPAC reports for a visual sample entry set as GPAC reports them in `node`
+    fn gpac_visual_sample_entry(ours: &VisualSampleEntry, node: &Value) -> VisualSampleEntry {
+        let mut visual = ours.clone();
+        visual.width = gpac_integer(node, "@Width");
+        visual.height = gpac_integer(node, "@Height");
+        visual.horiz_resolution = U16F16::from_raw(gpac_integer(node, "@XDPI"));
+        visual.vert_resolution = U16F16::from_raw(gpac_integer(node, "@YDPI"));
+        visual.depth = gpac_integer(node, "@BitDepth");
+        visual
+    }
+
+    /// Reads every sample entry of the tracks of the handler type `handler_type` into `Class`, holds it against what GPAC reports, as `gpac` sets it, and writes it back, and returns what differs
+    ///
+    /// An entry written back holds the boxes it was read from after the
+    /// `fields_len` bytes of the fields of `Class`.
+    fn sample_entries_read_as_gpac_reports_them_and_write_back<Class>(
+        handler_type: &[u8; 4],
+        fields_len: usize,
+        gpac: fn(&Class, &Value) -> Class,
+    ) -> Vec<String>
+    where
+        Class:
+            for<'entry> TryFrom<&'entry SampleEntry, Error = Error> + PartialEq + std::fmt::Debug,
+        SampleEntry: for<'class> TryFrom<&'class Class, Error = Error>,
+    {
+        let mut differences = Vec::new();
+        for ConformanceFile {
+            name,
+            bytes,
+            report,
+            ..
+        } in conformance_files()
+        {
+            for (entry, reported) in sample_entries_of(&bytes, &report, handler_type) {
+                let read = match Class::try_from(&entry) {
+                    Ok(read) => read,
+                    Err(error) => {
+                        differences.push(format!("{name}: {:?}: {error}", entry.format));
+                        continue;
+                    }
+                };
+                let expected = gpac(&read, reported);
+                if read != expected {
+                    differences.push(format!("{name}: read {read:?}, GPAC reports {expected:?}"));
+                }
+                match SampleEntry::try_from(&read) {
+                    Ok(written)
+                        if same_boxes_after(&written, &entry, fields_len)
+                            && Class::try_from(&written).as_ref() == Ok(&read) => {}
+                    Ok(_) => differences.push(format!(
+                        "{name}: {:?} writes back other bytes",
+                        entry.format
+                    )),
+                    Err(error) => differences.push(format!("{name}: {:?}: {error}", entry.format)),
+                }
+            }
+        }
+
+        differences
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn the_sample_entries_of_video_tracks_read_as_gpac_reports_them_and_write_back() {
+        assert_eq!(
+            sample_entries_read_as_gpac_reports_them_and_write_back(
+                b"vide",
+                70,
+                gpac_visual_sample_entry
+            ),
+            Vec::<String>::new()
+        );
+    }
+
+    /// Returns `ours` with the fields GPAC reports for an audio sample entry set as GPAC reports them in `node`
+    ///
+    /// GPAC reports the integer part of `samplerate`, under `@SampleRate`, or
+    /// `@Samplerate` with `@ChannelCount` for an entry it reads as QuickTime
+    /// does, such as `agsm`.
+    fn gpac_audio_sample_entry(
+        ours: &AudioSampleEntryVariant,
+        node: &Value,
+    ) -> AudioSampleEntryVariant {
+        let field = |names: [&'static str; 2]| -> &'static str {
+            names
+                .into_iter()
+                .find(|name| node.get(name).is_some())
+                .unwrap()
+        };
+        let channel_count = gpac_integer(node, field(["@Channels", "@ChannelCount"]));
+        let sample_size = gpac_integer(node, "@BitsPerSample");
+        let sample_rate_integer: u32 = gpac_integer(node, field(["@SampleRate", "@Samplerate"]));
+        let sample_rate =
+            |ours: U16F16| U16F16::from_raw((sample_rate_integer << 16) | (ours.raw() & 0xffff));
+        let mut audio = ours.clone();
+        if let AudioSampleEntryVariant::AudioSampleEntry(audio) = &mut audio {
+            audio.channel_count = channel_count;
+            audio.sample_size = sample_size;
+            audio.sample_rate = sample_rate(audio.sample_rate);
+        } else if let AudioSampleEntryVariant::AudioSampleEntryV1(audio) = &mut audio {
+            audio.channel_count = channel_count;
+            audio.sample_size = sample_size;
+            audio.sample_rate = sample_rate(audio.sample_rate);
+        }
+        audio
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn the_sample_entries_of_audio_tracks_read_as_gpac_reports_them_and_write_back() {
+        assert_eq!(
+            sample_entries_read_as_gpac_reports_them_and_write_back(
+                b"soun",
+                20,
+                gpac_audio_sample_entry
+            ),
+            Vec::<String>::new()
+        );
+    }
+
+    /// Returns whether `written` holds the format and `data_reference_index` `original` holds, and after the `fields_len` bytes of its other fields the boxes `original` holds, in any order
+    ///
+    /// The other fields are not compared as bytes: a field the specification
+    /// fixes is written as it states it, whatever it was read as, such as the
+    /// last `pre_defined` of the `resv` of `restricted.mp4`, `0x00ff` for -1.
+    fn same_boxes_after(written: &SampleEntry, original: &SampleEntry, fields_len: usize) -> bool {
+        let mut unmatched = top_level(written.remaining_data.get(fields_len..).unwrap_or_default());
+        (written.format, written.data_reference_index)
+            == (original.format, original.data_reference_index)
+            && top_level(
+                original
+                    .remaining_data
+                    .get(fields_len..)
+                    .unwrap_or_default(),
+            )
+            .into_iter()
+            .all(|child| {
+                unmatched
+                    .iter()
+                    .position(|candidate| {
+                        candidate.header().box_type() == child.header().box_type()
+                            && candidate.payload() == child.payload()
+                    })
+                    .map(|position| unmatched.remove(position))
+                    .is_some()
+            })
+            && unmatched.is_empty()
     }
 
     /// Returns `stsd` with the format and `data_reference_index` of each entry set as GPAC reports them in `node`
