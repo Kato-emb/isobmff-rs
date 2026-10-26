@@ -36,6 +36,7 @@
 
 extern crate alloc;
 
+mod assp;
 mod box_type_argument;
 mod chunk_offset;
 mod csgp;
@@ -54,12 +55,15 @@ mod ftyp;
 mod full_box;
 mod hdlr;
 mod imda;
+mod leva;
 mod mdat;
 mod mdhd;
 mod mdia;
 mod media_information_header;
+mod mehd;
 mod minf;
 mod moov;
+mod mvex;
 mod mvhd;
 mod otyp;
 mod padb;
@@ -82,13 +86,15 @@ mod styp;
 mod tkhd;
 mod trak;
 mod tref;
+mod trep;
+mod trex;
 mod trgr;
 mod ttyp;
 
 pub use data_entry::{
     DataEntry, DataEntryImdaBox, DataEntrySeqNumImdaBox, DataEntryUrlBox, DataEntryUrnBox,
 };
-pub use data_types::{LanguageCode, Matrix};
+pub use data_types::{LanguageCode, Matrix, SampleFlags};
 pub use dinf::DataInformationBox;
 pub use dref::DataReferenceBox;
 pub use edts::EditBox;
@@ -97,6 +103,10 @@ pub use elst::{EditListBox, EditListEntry};
 mod subs;
 mod table;
 
+pub use assp::{
+    AlternativeStartupSequenceOffsetEntry, AlternativeStartupSequenceOffsets,
+    AlternativeStartupSequencePropertiesBox,
+};
 pub use chunk_offset::{ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant};
 pub use csgp::{CompactSampleToGroupBox, CompactSampleToGroupPattern};
 pub use cslg::CompositionToDecodeBox;
@@ -106,6 +116,7 @@ pub use free::{Free, FreeSpaceBox, FreeType, Skip};
 pub use ftyp::FileTypeBox;
 pub use hdlr::HandlerBox;
 pub use imda::IdentifiedMediaDataBox;
+pub use leva::{Level, LevelAssignment, LevelAssignmentBox};
 pub use mdat::MediaDataBox;
 pub use mdhd::MediaHeaderBox;
 pub use mdia::MediaBox;
@@ -113,8 +124,10 @@ pub use media_information_header::{
     HintMediaHeaderBox, MediaInformationHeader, NullMediaHeaderBox, SoundMediaHeaderBox,
     SubtitleMediaHeaderBox, VideoMediaHeaderBox, VolumetricVisualMediaHeaderBox,
 };
+pub use mehd::MovieExtendsHeaderBox;
 pub use minf::MediaInformationBox;
 pub use moov::MovieBox;
+pub use mvex::MovieExtendsBox;
 pub use mvhd::MovieHeaderBox;
 pub use otyp::OriginalFileTypeBox;
 pub use padb::PaddingBitsBox;
@@ -146,6 +159,8 @@ pub use subs::{
 pub use tkhd::TrackHeaderBox;
 pub use trak::TrackBox;
 pub use tref::{TrackReference, TrackReferenceBox, TrackReferenceTypeBox};
+pub use trep::TrackExtensionPropertiesBox;
+pub use trex::TrackExtendsBox;
 pub use trgr::{StereoVideoGroupBox, TrackGroup, TrackGroupBox, TrackGroupTypeBox};
 pub use ttyp::TrackTypeBox;
 
