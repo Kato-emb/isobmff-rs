@@ -40,6 +40,11 @@ use crate::subs::SubSampleInformationBox;
 /// [`other_boxes`](Self::other_boxes), as are children of other types, such
 /// as the `stsd`. Those are written back after the children the box holds a
 /// field for.
+///
+/// The box writes the children it holds a field for in the order of its
+/// fields, whatever order they were read in: the order of ISO/IEC 14496-12
+/// §7.3.4, and of Table 2 where §7.3.4 sets none. `ssrt`, which Table 2 does
+/// not list, is written right after `subs`.
 #[doc(alias = "stbl")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -307,6 +312,17 @@ mod tests {
                 }),
                 STSD
             ))
+        );
+    }
+
+    #[test]
+    fn writes_its_tables_in_the_order_of_the_specification_whatever_order_they_were_read_in() {
+        let payload = [STSS, STCO, STSZ, STSC, STTS].concat();
+        let sample_table = SampleTableBox::decode_payload(&payload).unwrap();
+
+        assert_eq!(
+            encoded(&sample_table),
+            [b"\0\0\0\x78stbl".as_slice(), STTS, STSC, STSZ, STCO, STSS].concat()
         );
     }
 

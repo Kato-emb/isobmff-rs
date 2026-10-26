@@ -14,9 +14,11 @@ use crate::minf::MediaInformationBox;
 ///
 /// Holds the boxes that declare information about the media data of a track.
 ///
-/// Children of other types are kept in [`other_boxes`](Self::other_boxes),
-/// and written back after `mdhd`, `hdlr`, `elng` and `minf`. An `elng` that
-/// does not read is kept there too, and `elng` reads back [`None`].
+/// The box writes `mdhd`, `hdlr`, `elng` and `minf` in this order, whatever
+/// order they were read in: the order of ISO/IEC 14496-12 §7.3.4, and of
+/// Table 2 where §7.3.4 sets none. Children of other types are kept in
+/// [`other_boxes`](Self::other_boxes), and written back after them. An `elng`
+/// that does not read is kept there too, and `elng` reads back [`None`].
 #[doc(alias = "mdia")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
