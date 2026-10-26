@@ -61,7 +61,9 @@ mod mdhd;
 mod mdia;
 mod media_information_header;
 mod mehd;
+mod mfhd;
 mod minf;
+mod moof;
 mod moov;
 mod mvex;
 mod mvhd;
@@ -83,7 +85,10 @@ mod stsh;
 mod stss;
 mod stts;
 mod styp;
+mod tfdt;
+mod tfhd;
 mod tkhd;
+mod traf;
 mod trak;
 mod tref;
 mod trep;
@@ -125,7 +130,9 @@ pub use media_information_header::{
     SubtitleMediaHeaderBox, VideoMediaHeaderBox, VolumetricVisualMediaHeaderBox,
 };
 pub use mehd::MovieExtendsHeaderBox;
+pub use mfhd::MovieFragmentHeaderBox;
 pub use minf::MediaInformationBox;
+pub use moof::MovieFragmentBox;
 pub use moov::MovieBox;
 pub use mvex::MovieExtendsBox;
 pub use mvhd::MovieHeaderBox;
@@ -156,7 +163,10 @@ pub use styp::SegmentTypeBox;
 pub use subs::{
     SubSample, SubSampleInformationBox, SubSampleInformationEntry, SubSampleProperties,
 };
+pub use tfdt::TrackFragmentBaseMediaDecodeTimeBox;
+pub use tfhd::TrackFragmentHeaderBox;
 pub use tkhd::TrackHeaderBox;
+pub use traf::TrackFragmentBox;
 pub use trak::TrackBox;
 pub use tref::{TrackReference, TrackReferenceBox, TrackReferenceTypeBox};
 pub use trep::TrackExtensionPropertiesBox;
