@@ -1,5 +1,7 @@
 //! The sample entries of a timed metadata track: [`XmlMetaDataSampleEntry`], [`TextMetaDataSampleEntry`], [`UriMetaSampleEntry`] and [`BoxedMetadataSampleEntry`]
 
+use alloc::vec::Vec;
+
 use isobmff_core::{
     BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FourCc, OtherBoxes, Utf8List, Utf8String,
 };
@@ -8,18 +10,20 @@ use crate::btrt::BitRateBox;
 use crate::keys::MetadataKeyTableBox;
 use crate::sample_entry::text::{MimeFormat, encode_remaining, remaining_len};
 use crate::sample_entry::{
-    BitRateChildren, SampleEntry, children_len, encode_children, encode_optional, from_class,
-    of_format, read_string, split_children,
+    AnyEntryBoxes, AnyEntryChildren, SampleEntry, children_len, encode_children, encode_optional,
+    from_class, of_format, read_string, split_children,
 };
+use crate::scrb::ScrambleSchemeInfoBox;
+use crate::sinf::ProtectionSchemeInfoBox;
 use crate::txtc::TextConfigBox;
 use crate::uri::UriBox;
 use crate::urii::UriInitBox;
 
 /// Box types of the boxes ISO/IEC 14496-12 defines for [`UriMetaSampleEntry`]
-const URI_DEFINED: [BoxType; 3] = [UriBox::BOX_TYPE, UriInitBox::BOX_TYPE, BitRateBox::BOX_TYPE];
+const URI_DEFINED: [BoxType; 2] = [UriBox::BOX_TYPE, UriInitBox::BOX_TYPE];
 
 /// Box types of the boxes ISO/IEC 14496-12 defines for [`BoxedMetadataSampleEntry`]
-const BOXED_DEFINED: [BoxType; 2] = [MetadataKeyTableBox::BOX_TYPE, BitRateBox::BOX_TYPE];
+const BOXED_DEFINED: [BoxType; 1] = [MetadataKeyTableBox::BOX_TYPE];
 
 /// [`XmlMetaDataSampleEntry`] (`metx`), ISO/IEC 14496-12 §12.3.3
 ///
@@ -36,11 +40,12 @@ const BOXED_DEFINED: [BoxType; 2] = [MetadataKeyTableBox::BOX_TYPE, BitRateBox::
 /// The children are laid out in three parts, the order in which the entry
 /// writes them, whatever order they were read in: the boxes a specification
 /// deriving the class defines, in [`derived_boxes`](Self::derived_boxes);
-/// `btrt`, which can choose the memory representation of the documents; and
-/// the boxes no definition of the class names, in
+/// the boxes any sample entry may hold, `sinf`, `scrb` and `btrt` in this
+/// order, the last of which can choose the memory representation of the
+/// documents; and the boxes no definition of the class names, in
 /// [`extra_boxes`](Self::extra_boxes). A child of a type this crate does not
-/// read that lies before `btrt` is read into the first part, and one that lies
-/// after it into the third.
+/// read that lies before every box of the second part is read into the first
+/// part, and one that lies after one of them into the third.
 #[doc(alias = "metx", alias = "XMLMetaDataSampleEntry")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -55,6 +60,10 @@ pub struct XmlMetaDataSampleEntry {
     pub schema_location: Utf8List,
     /// Children a specification deriving the class defines, which lay before the boxes of ISO/IEC 14496-12
     pub derived_boxes: OtherBoxes,
+    /// Protection schemes of a protected sample entry, alternative descriptions of the same protection
+    pub sinf: Vec<ProtectionSchemeInfoBox>,
+    /// Scrambling schemes applied to the samples
+    pub scrb: Vec<ScrambleSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -83,7 +92,7 @@ impl TryFrom<&SampleEntry> for XmlMetaDataSampleEntry {
         let content_encoding = Utf8String::from_slice(read_string(&mut reader)?);
         let namespace = Utf8List::from_slice(read_string(&mut reader)?);
         let schema_location = Utf8List::from_slice(read_string(&mut reader)?);
-        let children = BitRateChildren::read(reader.take_remainder())?;
+        let children = AnyEntryChildren::read(reader.take_remainder())?;
 
         Ok(Self {
             data_reference_index: entry.data_reference_index,
@@ -91,6 +100,8 @@ impl TryFrom<&SampleEntry> for XmlMetaDataSampleEntry {
             namespace,
             schema_location,
             derived_boxes: children.derived_boxes,
+            sinf: children.sinf,
+            scrb: children.scrb,
             btrt: children.btrt,
             extra_boxes: children.extra_boxes,
         })
@@ -108,9 +119,14 @@ impl TryFrom<&XmlMetaDataSampleEntry> for SampleEntry {
     ///   string or a list is not UTF-8.
     /// * The failures of writing a child.
     fn try_from(metadata: &XmlMetaDataSampleEntry) -> Result<Self, Error> {
+        let any_entry = AnyEntryBoxes {
+            sinf: &metadata.sinf,
+            scrb: &metadata.scrb,
+            btrt: metadata.btrt.as_ref(),
+        };
         let remaining_len = children_len(
             &metadata.derived_boxes,
-            metadata.btrt.as_ref().map(BoxEncode::encoded_len),
+            [any_entry.encoded_len()],
             &metadata.extra_boxes,
         )
         .saturating_add(metadata.content_encoding.encoded_len())
@@ -128,7 +144,7 @@ impl TryFrom<&XmlMetaDataSampleEntry> for SampleEntry {
                 encode_children(
                     rest,
                     &metadata.derived_boxes,
-                    |rest| encode_optional(rest, metadata.btrt.as_ref()),
+                    |rest| any_entry.encode(rest),
                     &metadata.extra_boxes,
                 )
             },
@@ -157,6 +173,10 @@ pub struct TextMetaDataSampleEntry {
     pub derived_boxes: OtherBoxes,
     /// Text each document opens with
     pub txtc: Option<TextConfigBox>,
+    /// Protection schemes of a protected sample entry, alternative descriptions of the same protection
+    pub sinf: Vec<ProtectionSchemeInfoBox>,
+    /// Scrambling schemes applied to the samples
+    pub scrb: Vec<ScrambleSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -189,6 +209,8 @@ impl TryFrom<&SampleEntry> for TextMetaDataSampleEntry {
             mime_format: read.mime_format,
             derived_boxes: read.derived_boxes,
             txtc: read.txtc,
+            sinf: read.sinf,
+            scrb: read.scrb,
             btrt: read.btrt,
             extra_boxes: read.extra_boxes,
         })
@@ -206,6 +228,12 @@ impl TryFrom<&TextMetaDataSampleEntry> for SampleEntry {
     ///   string is not UTF-8.
     /// * The failures of writing a child.
     fn try_from(metadata: &TextMetaDataSampleEntry) -> Result<Self, Error> {
+        let any_entry = AnyEntryBoxes {
+            sinf: &metadata.sinf,
+            scrb: &metadata.scrb,
+            btrt: metadata.btrt.as_ref(),
+        };
+
         from_class(
             TextMetaDataSampleEntry::FORMAT,
             metadata.data_reference_index,
@@ -214,7 +242,7 @@ impl TryFrom<&TextMetaDataSampleEntry> for SampleEntry {
                 &metadata.mime_format,
                 &metadata.derived_boxes,
                 metadata.txtc.as_ref(),
-                metadata.btrt.as_ref(),
+                &any_entry,
                 &metadata.extra_boxes,
             ),
             |writer| {
@@ -224,7 +252,7 @@ impl TryFrom<&TextMetaDataSampleEntry> for SampleEntry {
                     &metadata.mime_format,
                     &metadata.derived_boxes,
                     metadata.txtc.as_ref(),
-                    metadata.btrt.as_ref(),
+                    &any_entry,
                     &metadata.extra_boxes,
                 )
             },
@@ -243,7 +271,8 @@ impl TryFrom<&TextMetaDataSampleEntry> for SampleEntry {
 ///
 /// The children are laid out in three parts as those of a
 /// [`XmlMetaDataSampleEntry`] are, the boxes of ISO/IEC 14496-12 being the
-/// `uri ` the entry holds exactly one of, then `uriI` and `btrt`.
+/// `uri ` the entry holds exactly one of, then `uriI`, then the boxes any
+/// sample entry may hold.
 #[doc(alias = "urim", alias = "URIMetaSampleEntry")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -256,6 +285,10 @@ pub struct UriMetaSampleEntry {
     pub the_label: UriBox,
     /// Initialization data of the form
     pub init: Option<UriInitBox>,
+    /// Protection schemes of a protected sample entry, alternative descriptions of the same protection
+    pub sinf: Vec<ProtectionSchemeInfoBox>,
+    /// Scrambling schemes applied to the samples
+    pub scrb: Vec<ScrambleSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -289,6 +322,8 @@ impl TryFrom<&SampleEntry> for UriMetaSampleEntry {
             derived_boxes,
             the_label: children.take_exactly_one()?,
             init: children.take_zero_or_one_if_decoded()?,
+            sinf: children.take_zero_or_more_if_decoded(),
+            scrb: children.take_zero_or_more_if_decoded(),
             btrt: children.take_zero_or_one_if_decoded()?,
             extra_boxes: OtherBoxes::from(children),
         })
@@ -304,12 +339,17 @@ impl TryFrom<&UriMetaSampleEntry> for SampleEntry {
     ///
     /// * The failures of writing a child.
     fn try_from(metadata: &UriMetaSampleEntry) -> Result<Self, Error> {
+        let any_entry = AnyEntryBoxes {
+            sinf: &metadata.sinf,
+            scrb: &metadata.scrb,
+            btrt: metadata.btrt.as_ref(),
+        };
         let remaining_len = children_len(
             &metadata.derived_boxes,
             [
                 metadata.the_label.encoded_len(),
                 metadata.init.as_ref().map_or(0, BoxEncode::encoded_len),
-                metadata.btrt.as_ref().map_or(0, BoxEncode::encoded_len),
+                any_entry.encoded_len(),
             ],
             &metadata.extra_boxes,
         );
@@ -324,10 +364,7 @@ impl TryFrom<&UriMetaSampleEntry> for SampleEntry {
                     &metadata.derived_boxes,
                     |rest| {
                         let rest = metadata.the_label.encode(rest)?;
-                        encode_optional(
-                            encode_optional(rest, metadata.init.as_ref())?,
-                            metadata.btrt.as_ref(),
-                        )
+                        any_entry.encode(encode_optional(rest, metadata.init.as_ref())?)
                     },
                     &metadata.extra_boxes,
                 )
@@ -347,7 +384,8 @@ impl TryFrom<&UriMetaSampleEntry> for SampleEntry {
 ///
 /// The children are laid out in three parts as those of a
 /// [`XmlMetaDataSampleEntry`] are, the boxes of ISO/IEC 14496-12 being the
-/// `keys` the entry holds exactly one of, then `btrt`.
+/// `keys` the entry holds exactly one of, then the boxes any sample entry may
+/// hold.
 #[doc(alias = "mebx")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -358,6 +396,10 @@ pub struct BoxedMetadataSampleEntry {
     pub derived_boxes: OtherBoxes,
     /// Keys the samples may hold values of
     pub keys: MetadataKeyTableBox,
+    /// Protection schemes of a protected sample entry, alternative descriptions of the same protection
+    pub sinf: Vec<ProtectionSchemeInfoBox>,
+    /// Scrambling schemes applied to the samples
+    pub scrb: Vec<ScrambleSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -390,6 +432,8 @@ impl TryFrom<&SampleEntry> for BoxedMetadataSampleEntry {
             data_reference_index: entry.data_reference_index,
             derived_boxes,
             keys: children.take_exactly_one()?,
+            sinf: children.take_zero_or_more_if_decoded(),
+            scrb: children.take_zero_or_more_if_decoded(),
             btrt: children.take_zero_or_one_if_decoded()?,
             extra_boxes: OtherBoxes::from(children),
         })
@@ -405,22 +449,25 @@ impl TryFrom<&BoxedMetadataSampleEntry> for SampleEntry {
     ///
     /// * The failures of writing a child.
     fn try_from(metadata: &BoxedMetadataSampleEntry) -> Result<Self, Error> {
+        let any_entry = AnyEntryBoxes {
+            sinf: &metadata.sinf,
+            scrb: &metadata.scrb,
+            btrt: metadata.btrt.as_ref(),
+        };
+
         from_class(
             BoxedMetadataSampleEntry::FORMAT,
             metadata.data_reference_index,
             children_len(
                 &metadata.derived_boxes,
-                [
-                    metadata.keys.encoded_len(),
-                    metadata.btrt.as_ref().map_or(0, BoxEncode::encoded_len),
-                ],
+                [metadata.keys.encoded_len(), any_entry.encoded_len()],
                 &metadata.extra_boxes,
             ),
             |writer| {
                 encode_children(
                     writer.take_remainder(),
                     &metadata.derived_boxes,
-                    |rest| encode_optional(metadata.keys.encode(rest)?, metadata.btrt.as_ref()),
+                    |rest| any_entry.encode(metadata.keys.encode(rest)?),
                     &metadata.extra_boxes,
                 )
             },

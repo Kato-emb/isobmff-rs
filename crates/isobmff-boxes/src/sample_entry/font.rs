@@ -1,11 +1,15 @@
 //! [`FontSampleEntry`], the sample entry of a font track
 
-use isobmff_core::{BoxEncode, Error, FourCc, OtherBoxes};
+use alloc::vec::Vec;
+
+use isobmff_core::{Error, FourCc, OtherBoxes};
 
 use crate::btrt::BitRateBox;
 use crate::sample_entry::{
-    BitRateChildren, SampleEntry, children_len, encode_children, encode_optional, from_class,
+    AnyEntryBoxes, AnyEntryChildren, SampleEntry, children_len, encode_children, from_class,
 };
+use crate::scrb::ScrambleSchemeInfoBox;
+use crate::sinf::ProtectionSchemeInfoBox;
 
 /// [`FontSampleEntry`], ISO/IEC 14496-12 §12.7.3
 ///
@@ -19,10 +23,11 @@ use crate::sample_entry::{
 /// The children are laid out in three parts, the order in which the entry
 /// writes them, whatever order they were read in: the boxes a specification
 /// deriving the class defines, in [`derived_boxes`](Self::derived_boxes);
-/// `btrt`, which any sample entry may hold; and the boxes no definition of
-/// the class names, in [`extra_boxes`](Self::extra_boxes). A child of a type
-/// this crate does not read that lies before `btrt` is read into the first
-/// part, and one that lies after it into the third.
+/// the boxes any sample entry may hold, `sinf`, `scrb` and `btrt` in this
+/// order; and the boxes no definition of the class names, in
+/// [`extra_boxes`](Self::extra_boxes). A child of a type this crate does not
+/// read that lies before every box of the second part is read into the
+/// first part, and one that lies after one of them into the third.
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Debug)]
 pub struct FontSampleEntry {
@@ -32,6 +37,10 @@ pub struct FontSampleEntry {
     pub data_reference_index: u16,
     /// Children a specification deriving the class defines, which lay before the boxes of ISO/IEC 14496-12
     pub derived_boxes: OtherBoxes,
+    /// Protection schemes of a protected sample entry, alternative descriptions of the same protection
+    pub sinf: Vec<ProtectionSchemeInfoBox>,
+    /// Scrambling schemes applied to the samples
+    pub scrb: Vec<ScrambleSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -44,6 +53,8 @@ impl Default for FontSampleEntry {
             format: FourCc::new([0; 4]),
             data_reference_index: 0,
             derived_boxes: OtherBoxes::new(),
+            sinf: Vec::new(),
+            scrb: Vec::new(),
             btrt: None,
             extra_boxes: OtherBoxes::new(),
         }
@@ -60,12 +71,14 @@ impl TryFrom<&SampleEntry> for FontSampleEntry {
     /// * The failures of a child that does not frame, and of a `btrt` given
     ///   more than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
-        let children = BitRateChildren::read(&entry.remaining_data)?;
+        let children = AnyEntryChildren::read(&entry.remaining_data)?;
 
         Ok(Self {
             format: entry.format,
             data_reference_index: entry.data_reference_index,
             derived_boxes: children.derived_boxes,
+            sinf: children.sinf,
+            scrb: children.scrb,
             btrt: children.btrt,
             extra_boxes: children.extra_boxes,
         })
@@ -81,19 +94,25 @@ impl TryFrom<&FontSampleEntry> for SampleEntry {
     ///
     /// * The failures of writing a child.
     fn try_from(entry: &FontSampleEntry) -> Result<Self, Error> {
+        let any_entry = AnyEntryBoxes {
+            sinf: &entry.sinf,
+            scrb: &entry.scrb,
+            btrt: entry.btrt.as_ref(),
+        };
+
         from_class(
             entry.format,
             entry.data_reference_index,
             children_len(
                 &entry.derived_boxes,
-                entry.btrt.as_ref().map(BoxEncode::encoded_len),
+                [any_entry.encoded_len()],
                 &entry.extra_boxes,
             ),
             |writer| {
                 encode_children(
                     writer.take_remainder(),
                     &entry.derived_boxes,
-                    |rest| encode_optional(rest, entry.btrt.as_ref()),
+                    |rest| any_entry.encode(rest),
                     &entry.extra_boxes,
                 )
             },
@@ -103,17 +122,36 @@ impl TryFrom<&FontSampleEntry> for SampleEntry {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+
     use isobmff_core::{ChildBoxes, FourCc, OtherBoxes};
 
     use super::FontSampleEntry;
     use crate::btrt::BitRateBox;
     use crate::sample_entry::SampleEntry;
+    use crate::schm::SchemeTypeBox;
+    use crate::scrb::ScrambleSchemeInfoBox;
+    use crate::sinf::ProtectionSchemeInfoBox;
 
     /// Configuration of a derived specification, of a type this crate does not read
     const CONFIGURATION: &[u8] = b"\0\0\0\x09conf\x01";
 
     /// `btrt` of a buffer of 4096 bytes, at most 2 Mbit/s and 1 Mbit/s on average
     const BTRT: &[u8] = b"\0\0\0\x14btrt\0\0\x10\0\0\x1e\x84\x80\0\x0f\x42\x40";
+
+    /// `sinf` of the scheme `cenc` version 1.0
+    const SINF: &[u8] = b"\0\0\0\x1csinf\0\0\0\x14schm\0\0\0\0cenc\0\x01\0\0";
+
+    /// `scrb` of the scheme `cbcs` version 1.0
+    const SCRB: &[u8] = b"\0\0\0\x1cscrb\0\0\0\x14schm\0\0\0\0cbcs\0\x01\0\0";
+
+    fn scheme_type(scheme_type: [u8; 4]) -> SchemeTypeBox {
+        SchemeTypeBox {
+            scheme_type: FourCc::new(scheme_type),
+            scheme_version: 0x0001_0000,
+            scheme_uri: None,
+        }
+    }
 
     fn sample_entry(remaining: &[&[u8]]) -> SampleEntry {
         SampleEntry {
@@ -138,6 +176,7 @@ mod tests {
                 avg_bitrate: 1_000_000,
             }),
             extra_boxes: kept(extra_boxes),
+            ..FontSampleEntry::default()
         }
     }
 
@@ -154,6 +193,36 @@ mod tests {
         assert_eq!(
             SampleEntry::try_from(&entry(&[CONFIGURATION])),
             Ok(sample_entry(&[CONFIGURATION, BTRT, CONFIGURATION]))
+        );
+    }
+
+    #[test]
+    fn reads_the_boxes_any_sample_entry_may_hold_whatever_order_they_came_in() {
+        let expected = FontSampleEntry {
+            sinf: vec![ProtectionSchemeInfoBox {
+                schm: Some(scheme_type(*b"cenc")),
+                ..ProtectionSchemeInfoBox::default()
+            }],
+            scrb: vec![ScrambleSchemeInfoBox {
+                schm: scheme_type(*b"cbcs"),
+                ..ScrambleSchemeInfoBox::default()
+            }],
+            ..entry(&[])
+        };
+
+        assert_eq!(
+            FontSampleEntry::try_from(&sample_entry(&[CONFIGURATION, BTRT, SCRB, SINF])),
+            Ok(expected)
+        );
+    }
+
+    #[test]
+    fn writes_the_boxes_any_sample_entry_may_hold_as_sinf_scrb_then_btrt() {
+        let entry = FontSampleEntry::try_from(&sample_entry(&[CONFIGURATION, BTRT, SCRB, SINF]));
+
+        assert_eq!(
+            entry.and_then(|entry| SampleEntry::try_from(&entry)),
+            Ok(sample_entry(&[CONFIGURATION, SINF, SCRB, BTRT]))
         );
     }
 }

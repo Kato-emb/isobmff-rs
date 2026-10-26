@@ -19,6 +19,8 @@ use isobmff_core::{
 };
 
 use crate::btrt::BitRateBox;
+use crate::scrb::ScrambleSchemeInfoBox;
+use crate::sinf::ProtectionSchemeInfoBox;
 
 pub use audio::{AudioSampleEntry, AudioSampleEntryVariant};
 pub use audio_v1::AudioSampleEntryV1;
@@ -59,6 +61,44 @@ pub use volumetric::VolumetricVisualSampleEntry;
 /// A class of a fixed format reads only an entry of that format. A class
 /// that takes a coding name, such as [`VisualSampleEntry`], reads an entry of
 /// any format and keeps it.
+///
+/// # Protected sample entries
+///
+/// A protected sample entry, of a code ISO/IEC 14496-12 §13.4.1 lists in
+/// Table 13 such as `encv` or `enca`, keeps the syntax of the class of its
+/// original format, which the `frma` of its `sinf` gives, and adds the
+/// `sinf`. A class that takes a coding name reads and writes the entry as it
+/// is: a [`VisualSampleEntry`] reads an `encv`, and an
+/// [`AudioSampleEntryVariant`] an `enca`. A class of a fixed format refuses
+/// the entry, which reads into the class once its [`format`](Self::format) is
+/// set to that of the class, and is written back by setting the format of the
+/// entry the class writes:
+///
+/// ```
+/// use isobmff_boxes::{SampleEntry, SimpleTextSampleEntry};
+/// use isobmff_core::FourCc;
+///
+/// // A protected `stxt` of plain text, whose `sinf` gives its original format
+/// let mut enct = SampleEntry::default();
+/// enct.format = FourCc::new(*b"enct");
+/// enct.data_reference_index = 1;
+/// enct.remaining_data = b"\0text/plain\0\
+///     \0\0\0\x28sinf\0\0\0\x0cfrmastxt\0\0\0\x14schm\0\0\0\0cenc\0\x01\0\0"
+///     .to_vec();
+///
+/// // Read it into the class of its original format
+/// let mut original = enct.clone();
+/// original.format = SimpleTextSampleEntry::FORMAT;
+/// let text = SimpleTextSampleEntry::try_from(&original)?;
+/// let frma = text.sinf.first().and_then(|sinf| sinf.frma);
+/// assert_eq!(frma.map(|frma| frma.data_format), Some(SimpleTextSampleEntry::FORMAT));
+///
+/// // Write it back as the protected entry
+/// let mut written = SampleEntry::try_from(&text)?;
+/// written.format = FourCc::new(*b"enct");
+/// assert_eq!(written, enct);
+/// # Ok::<(), isobmff_core::Error>(())
+/// ```
 ///
 /// The format is the box type of the entry, which a
 /// [`SampleDescriptionBox`](crate::SampleDescriptionBox) reads into
@@ -141,7 +181,7 @@ pub(crate) fn from_class(
     })
 }
 
-/// Splits the children of an entry before the first child of a type in `defined`, the boxes its class defines
+/// Splits the children of an entry before the first child of a type in `defined`, the boxes its class defines, or of a type in [`AnyEntryBoxes::BOX_TYPES`]
 ///
 /// Returns the children before it, which are the boxes of a derived
 /// specification where the entry lays its children out in the order its
@@ -158,7 +198,8 @@ pub(crate) fn split_children<'payload>(
     let mut rest = payload;
     while !rest.is_empty() {
         let (child, after) = RawBox::split_first(rest)?;
-        if defined.contains(&child.header().box_type()) {
+        let box_type = child.header().box_type();
+        if defined.contains(&box_type) || AnyEntryBoxes::BOX_TYPES.contains(&box_type) {
             break;
         }
         rest = after;
@@ -198,28 +239,76 @@ pub(crate) fn read_string<'payload>(
     reader.read_slice(length)
 }
 
-/// Children of a class that defines no box of its own, which holds a `btrt` alone, as any sample entry may
-pub(crate) struct BitRateChildren {
+/// Children of a class that defines no box of its own, which holds only the boxes any sample entry may hold
+pub(crate) struct AnyEntryChildren {
     pub(crate) derived_boxes: OtherBoxes,
+    pub(crate) sinf: Vec<ProtectionSchemeInfoBox>,
+    pub(crate) scrb: Vec<ScrambleSchemeInfoBox>,
     pub(crate) btrt: Option<BitRateBox>,
     pub(crate) extra_boxes: OtherBoxes,
 }
 
-impl BitRateChildren {
-    /// Reads the children `payload` holds, split before the `btrt` as [`split_children`] splits them
+impl AnyEntryChildren {
+    /// Reads the children `payload` holds, split as [`split_children`] splits them
     ///
     /// # Errors
     ///
     /// * The failures of a child that does not frame, and of a `btrt` given
     ///   more than once.
     pub(crate) fn read(payload: &[u8]) -> Result<Self, Error> {
-        let (derived_boxes, mut children) = split_children(payload, &[BitRateBox::BOX_TYPE])?;
+        let (derived_boxes, mut children) = split_children(payload, &[])?;
 
         Ok(Self {
             derived_boxes,
+            sinf: children.take_zero_or_more_if_decoded(),
+            scrb: children.take_zero_or_more_if_decoded(),
             btrt: children.take_zero_or_one_if_decoded()?,
             extra_boxes: OtherBoxes::from(children),
         })
+    }
+}
+
+/// Boxes of ISO/IEC 14496-12 that any sample entry may hold, which an entry writes after the boxes its class defines, in this order
+pub(crate) struct AnyEntryBoxes<'entry> {
+    pub(crate) sinf: &'entry [ProtectionSchemeInfoBox],
+    pub(crate) scrb: &'entry [ScrambleSchemeInfoBox],
+    pub(crate) btrt: Option<&'entry BitRateBox>,
+}
+
+impl AnyEntryBoxes<'_> {
+    /// Box types of the boxes
+    pub(crate) const BOX_TYPES: [BoxType; 3] = [
+        ProtectionSchemeInfoBox::BOX_TYPE,
+        ScrambleSchemeInfoBox::BOX_TYPE,
+        BitRateBox::BOX_TYPE,
+    ];
+
+    /// Returns the length of the boxes
+    pub(crate) fn encoded_len(&self) -> u64 {
+        self.sinf
+            .iter()
+            .map(BoxEncode::encoded_len)
+            .chain(self.scrb.iter().map(BoxEncode::encoded_len))
+            .chain(self.btrt.map(BoxEncode::encoded_len))
+            .fold(0, u64::saturating_add)
+    }
+
+    /// Writes the boxes onto the front of `rest`, and returns what is left
+    ///
+    /// # Errors
+    ///
+    /// * The failures of writing a box.
+    pub(crate) fn encode<'buffer>(
+        &self,
+        mut rest: &'buffer mut [u8],
+    ) -> Result<&'buffer mut [u8], Error> {
+        for sinf in self.sinf {
+            rest = sinf.encode(rest)?;
+        }
+        for scrb in self.scrb {
+            rest = scrb.encode(rest)?;
+        }
+        encode_optional(rest, self.btrt)
     }
 }
 

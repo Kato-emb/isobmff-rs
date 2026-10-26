@@ -16,8 +16,11 @@ use crate::data_types::CompressorName;
 use crate::mdcv::MasteringDisplayColourVolumeBox;
 use crate::pasp::PixelAspectRatioBox;
 use crate::sample_entry::{
-    SampleEntry, children_len, encode_children, encode_optional, from_class, split_children,
+    AnyEntryBoxes, SampleEntry, children_len, encode_children, encode_optional, from_class,
+    split_children,
 };
+use crate::scrb::ScrambleSchemeInfoBox;
+use crate::sinf::ProtectionSchemeInfoBox;
 
 /// Length of the fields the class lays out after `data_reference_index`
 const FIELDS_LEN: u64 = 16 + 2 + 2 + 4 + 4 + 4 + 2 + 32 + 2 + 2;
@@ -44,8 +47,8 @@ const RESOLUTION_72_DPI: U16F16 = U16F16::from_integer(72);
 /// 2. The boxes ISO/IEC 14496-12 defines for the class, each in a field of
 ///    its own: `clap` and `pasp` in the order the syntax of the class gives
 ///    them; `colr`, `clli`, `mdcv`, `cclv` and `amve`, which §12.1.5 to
-///    §12.1.9 let the class hold, in that order; then `btrt`, which any
-///    sample entry may hold.
+///    §12.1.9 let the class hold, in that order; then the boxes any sample
+///    entry may hold: `sinf`, `scrb`, then `btrt`.
 /// 3. [`extra_boxes`](Self::extra_boxes): the boxes no definition of the
 ///    class names, which §8.5.2.1 lets any sample entry hold after the boxes
 ///    its definition names.
@@ -94,6 +97,10 @@ pub struct VisualSampleEntry {
     pub cclv: Option<ContentColourVolumeBox>,
     /// Ambient viewing environment the video was mastered for
     pub amve: Option<AmbientViewingEnvironmentBox>,
+    /// Protection schemes of a protected sample entry, alternative descriptions of the same protection
+    pub sinf: Vec<ProtectionSchemeInfoBox>,
+    /// Scrambling schemes applied to the samples
+    pub scrb: Vec<ScrambleSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -120,6 +127,8 @@ impl Default for VisualSampleEntry {
             mdcv: None,
             cclv: None,
             amve: None,
+            sinf: Vec::new(),
+            scrb: Vec::new(),
             btrt: None,
             extra_boxes: OtherBoxes::new(),
         }
@@ -127,7 +136,7 @@ impl Default for VisualSampleEntry {
 }
 
 /// Box types of the boxes ISO/IEC 14496-12 defines for the class
-const DEFINED: [BoxType; 8] = [
+const DEFINED: [BoxType; 7] = [
     CleanApertureBox::BOX_TYPE,
     PixelAspectRatioBox::BOX_TYPE,
     ColourInformationBox::BOX_TYPE,
@@ -135,7 +144,6 @@ const DEFINED: [BoxType; 8] = [
     MasteringDisplayColourVolumeBox::BOX_TYPE,
     ContentColourVolumeBox::BOX_TYPE,
     AmbientViewingEnvironmentBox::BOX_TYPE,
-    BitRateBox::BOX_TYPE,
 ];
 
 impl TryFrom<&SampleEntry> for VisualSampleEntry {
@@ -182,6 +190,8 @@ impl TryFrom<&SampleEntry> for VisualSampleEntry {
             mdcv: children.take_zero_or_one_if_decoded()?,
             cclv: children.take_zero_or_one_if_decoded()?,
             amve: children.take_zero_or_one_if_decoded()?,
+            sinf: children.take_zero_or_more_if_decoded(),
+            scrb: children.take_zero_or_more_if_decoded(),
             btrt: children.take_zero_or_one_if_decoded()?,
             extra_boxes: OtherBoxes::from(children),
         })
@@ -207,6 +217,15 @@ impl TryFrom<&VisualSampleEntry> for SampleEntry {
 }
 
 impl VisualSampleEntry {
+    /// Returns the boxes of the entry that any sample entry may hold
+    fn any_entry_boxes(&self) -> AnyEntryBoxes<'_> {
+        AnyEntryBoxes {
+            sinf: &self.sinf,
+            scrb: &self.scrb,
+            btrt: self.btrt.as_ref(),
+        }
+    }
+
     /// Returns the length of the bytes the entry lays out after `data_reference_index`
     fn remaining_len(&self) -> u64 {
         let defined = [
@@ -216,7 +235,7 @@ impl VisualSampleEntry {
             self.mdcv.as_ref().map_or(0, BoxEncode::encoded_len),
             self.cclv.as_ref().map_or(0, BoxEncode::encoded_len),
             self.amve.as_ref().map_or(0, BoxEncode::encoded_len),
-            self.btrt.as_ref().map_or(0, BoxEncode::encoded_len),
+            self.any_entry_boxes().encoded_len(),
         ]
         .into_iter()
         .chain(self.colr.iter().map(BoxEncode::encoded_len));
@@ -253,7 +272,7 @@ impl VisualSampleEntry {
                 rest = encode_optional(rest, self.mdcv.as_ref())?;
                 rest = encode_optional(rest, self.cclv.as_ref())?;
                 rest = encode_optional(rest, self.amve.as_ref())?;
-                encode_optional(rest, self.btrt.as_ref())
+                self.any_entry_boxes().encode(rest)
             },
             &self.extra_boxes,
         )
@@ -271,8 +290,11 @@ mod tests {
     use crate::btrt::BitRateBox;
     use crate::colr::ColourInformationBox;
     use crate::data_types::CompressorName;
+    use crate::frma::OriginalFormatBox;
     use crate::pasp::PixelAspectRatioBox;
     use crate::sample_entry::SampleEntry;
+    use crate::schm::SchemeTypeBox;
+    use crate::sinf::ProtectionSchemeInfoBox;
 
     /// Fields of an entry of 176 by 144 at 72 dpi, of one frame per sample, the compressor `AVC Coding` and depth `0x0018`
     const FIELDS: &[u8] =
@@ -290,6 +312,9 @@ mod tests {
 
     /// `btrt` of a buffer of 4096 bytes, at most 2 Mbit/s and 1 Mbit/s on average
     const BTRT: &[u8] = b"\0\0\0\x14btrt\0\0\x10\0\0\x1e\x84\x80\0\x0f\x42\x40";
+
+    /// `sinf` of the original format `avc1` and the scheme `cenc` version 1.0
+    const SINF: &[u8] = b"\0\0\0\x28sinf\0\0\0\x0cfrmaavc1\0\0\0\x14schm\0\0\0\0cenc\0\x01\0\0";
 
     /// Box no definition of the class names
     const EXTRA: &[u8] = b"\0\0\0\x09xtra\x07";
@@ -350,6 +375,47 @@ mod tests {
         assert_eq!(
             SampleEntry::try_from(&read),
             Ok(sample_entry(&[AVCC, PASP, COLR, BTRT, EXTRA]))
+        );
+    }
+
+    fn protected(children: &[&[u8]]) -> SampleEntry {
+        SampleEntry {
+            format: FourCc::new(*b"encv"),
+            ..sample_entry(children)
+        }
+    }
+
+    fn protected_visual() -> VisualSampleEntry {
+        VisualSampleEntry {
+            format: FourCc::new(*b"encv"),
+            sinf: vec![ProtectionSchemeInfoBox {
+                frma: Some(OriginalFormatBox {
+                    data_format: FourCc::new(*b"avc1"),
+                }),
+                schm: Some(SchemeTypeBox {
+                    scheme_type: FourCc::new(*b"cenc"),
+                    scheme_version: 0x0001_0000,
+                    scheme_uri: None,
+                }),
+                ..ProtectionSchemeInfoBox::default()
+            }],
+            ..visual(&[AVCC], &[])
+        }
+    }
+
+    #[test]
+    fn a_protected_entry_reads_with_the_syntax_of_its_original_class() {
+        assert_eq!(
+            VisualSampleEntry::try_from(&protected(&[AVCC, SINF, PASP, COLR, BTRT])),
+            Ok(protected_visual())
+        );
+    }
+
+    #[test]
+    fn writes_the_sinf_of_a_protected_entry_after_the_boxes_of_the_class_and_before_btrt() {
+        assert_eq!(
+            SampleEntry::try_from(&protected_visual()),
+            Ok(protected(&[AVCC, PASP, COLR, SINF, BTRT]))
         );
     }
 

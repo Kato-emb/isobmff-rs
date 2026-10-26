@@ -22,17 +22,18 @@ mod tests {
         FreeSpaceBox, HandlerBox, IdentifiedMediaDataBox, LanguageCode, Matrix, MediaBox,
         MediaDataBox, MediaHeaderBox, MediaInformationBox, MetaBox, MovieBox, MovieExtendsBox,
         MovieFragmentBox, MovieFragmentRandomAccessBox, MovieHeaderBox, OriginalFileTypeBox,
-        ProducerReferenceTimeBox, ProgressiveDownloadInfoBox, RollRecoveryEntry,
-        SampleDependencyTypeBox, SampleDescription, SampleDescriptionBox, SampleEntry, SampleFlags,
-        SampleGroupDescriptionBox, SampleGroupDescriptionEntry, SampleSizeBox, SampleSizeVariant,
-        SampleSizes, SampleTableBox, SampleToChunkBox, SampleToChunkEntry, SampleToGroupBox,
-        SampleToGroupEntry, SegmentIndexBox, SegmentIndexReference, SegmentTypeBox,
-        SimpleTextSampleEntry, Skip, SubTrackBox, SubTrackDefinitionBox, SubsegmentIndexBox,
-        TemporalLevelEntry, TimeToSampleBox, TimeToSampleEntry, TrackBox,
-        TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
-        TrackHeaderBox, TrackReference, TrackReferenceBox, TrackReferenceTypeBox, TrackRunBox,
-        TrackRunSample, TrackRunSamples, UserDataBox, VisualRandomAccessEntry, VisualSampleEntry,
-        XmlBox, XmlMetaDataSampleEntry, XmlSubtitleSampleEntry,
+        OriginalFormatBox, ProducerReferenceTimeBox, ProgressiveDownloadInfoBox,
+        ProtectionSchemeInfoBox, RollRecoveryEntry, SampleDependencyTypeBox, SampleDescription,
+        SampleDescriptionBox, SampleEntry, SampleFlags, SampleGroupDescriptionBox,
+        SampleGroupDescriptionEntry, SampleSizeBox, SampleSizeVariant, SampleSizes, SampleTableBox,
+        SampleToChunkBox, SampleToChunkEntry, SampleToGroupBox, SampleToGroupEntry, SchemeTypeBox,
+        SegmentIndexBox, SegmentIndexReference, SegmentTypeBox, SimpleTextSampleEntry, Skip,
+        SubTrackBox, SubTrackDefinitionBox, SubsegmentIndexBox, TemporalLevelEntry,
+        TimeToSampleBox, TimeToSampleEntry, TrackBox, TrackFragmentBaseMediaDecodeTimeBox,
+        TrackFragmentBox, TrackFragmentHeaderBox, TrackHeaderBox, TrackReference,
+        TrackReferenceBox, TrackReferenceTypeBox, TrackRunBox, TrackRunSample, TrackRunSamples,
+        UserDataBox, VisualRandomAccessEntry, VisualSampleEntry, XmlBox, XmlMetaDataSampleEntry,
+        XmlSubtitleSampleEntry,
     };
     use isobmff_core::{
         BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, Error, FourCc, I8F8, RawBox, U16F16,
@@ -197,6 +198,46 @@ mod tests {
             .collect()
     }
 
+    /// Returns `schm` as GPAC reports it in `node`
+    fn gpac_scheme_type(node: &Value) -> SchemeTypeBox {
+        let mut scheme_type = SchemeTypeBox::default();
+        scheme_type.scheme_type = gpac_four_cc(node, "@scheme_type");
+        scheme_type.scheme_version = gpac_integer(node, "@scheme_version");
+        scheme_type.scheme_uri = node
+            .get("@scheme_uri")
+            .map(|uri| Utf8String::new(uri.as_str().unwrap().to_owned()).unwrap());
+        scheme_type
+    }
+
+    /// Returns the `frma` GPAC reports directly inside `node`, if it reports one
+    fn gpac_original_format(node: &Value) -> Option<OriginalFormatBox> {
+        gpac_boxes(node, "frma").first().map(|reported| {
+            let mut original_format = OriginalFormatBox::default();
+            original_format.data_format = gpac_four_cc(reported, "@data_format");
+            original_format
+        })
+    }
+
+    /// Returns the `sinf` boxes GPAC reports in `node`, a sample entry, with the `frma` and the `schm` of each as GPAC reports them, and the rest as `ours` holds them
+    fn gpac_protection_schemes(
+        ours: &[ProtectionSchemeInfoBox],
+        node: &Value,
+    ) -> Vec<ProtectionSchemeInfoBox> {
+        gpac_boxes(node, "sinf")
+            .into_iter()
+            .enumerate()
+            .map(|(index, reported)| {
+                let mut sinf = ours.get(index).cloned().unwrap_or_default();
+                sinf.frma = gpac_original_format(reported);
+                sinf.schm = gpac_boxes(reported, "schm")
+                    .first()
+                    .copied()
+                    .map(gpac_scheme_type);
+                sinf
+            })
+            .collect()
+    }
+
     /// Returns `ours` with the fields GPAC reports for a visual sample entry set as GPAC reports them in `node`
     fn gpac_visual_sample_entry(ours: &VisualSampleEntry, node: &Value) -> VisualSampleEntry {
         let mut visual = ours.clone();
@@ -205,6 +246,7 @@ mod tests {
         visual.horiz_resolution = U16F16::from_raw(gpac_integer(node, "@XDPI"));
         visual.vert_resolution = U16F16::from_raw(gpac_integer(node, "@YDPI"));
         visual.depth = gpac_integer(node, "@BitDepth");
+        visual.sinf = gpac_protection_schemes(&ours.sinf, node);
         visual
     }
 
@@ -399,10 +441,12 @@ mod tests {
             audio.channel_count = channel_count;
             audio.sample_size = sample_size;
             audio.sample_rate = sample_rate(audio.sample_rate);
+            audio.sinf = gpac_protection_schemes(&audio.sinf, node);
         } else if let AudioSampleEntryVariant::AudioSampleEntryV1(audio) = &mut audio {
             audio.channel_count = channel_count;
             audio.sample_size = sample_size;
             audio.sample_rate = sample_rate(audio.sample_rate);
+            audio.sinf = gpac_protection_schemes(&audio.sinf, node);
         }
         audio
     }

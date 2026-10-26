@@ -1,5 +1,7 @@
 //! [`XmlSubtitleSampleEntry`] and [`TextSubtitleSampleEntry`], the sample entries of a subtitle track
 
+use alloc::vec::Vec;
+
 use isobmff_core::{
     BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FourCc, OtherBoxes, Utf8List, Utf8String,
 };
@@ -8,13 +10,15 @@ use crate::btrt::BitRateBox;
 use crate::mime::MimeBox;
 use crate::sample_entry::text::{MimeFormat, encode_remaining, remaining_len};
 use crate::sample_entry::{
-    SampleEntry, children_len, encode_children, encode_optional, from_class, of_format,
-    read_string, split_children,
+    AnyEntryBoxes, SampleEntry, children_len, encode_children, encode_optional, from_class,
+    of_format, read_string, split_children,
 };
+use crate::scrb::ScrambleSchemeInfoBox;
+use crate::sinf::ProtectionSchemeInfoBox;
 use crate::txtc::TextConfigBox;
 
 /// Box types of the boxes ISO/IEC 14496-12 defines for [`XmlSubtitleSampleEntry`]
-const DEFINED: [BoxType; 2] = [MimeBox::BOX_TYPE, BitRateBox::BOX_TYPE];
+const DEFINED: [BoxType; 1] = [MimeBox::BOX_TYPE];
 
 /// [`XmlSubtitleSampleEntry`] (`stpp`), ISO/IEC 14496-12 §12.6.3
 ///
@@ -31,11 +35,12 @@ const DEFINED: [BoxType; 2] = [MimeBox::BOX_TYPE, BitRateBox::BOX_TYPE];
 /// The children are laid out in three parts, the order in which the entry
 /// writes them, whatever order they were read in: the boxes a specification
 /// deriving the class defines, in [`derived_boxes`](Self::derived_boxes);
-/// `mime` and `btrt`, which §12.6.3.3 lets lie in either order; and the boxes
-/// no definition of the class names, in [`extra_boxes`](Self::extra_boxes). A
-/// child of a type this crate does not read that lies before `mime` and
-/// `btrt` is read into the first part, and one that lies after either into
-/// the third.
+/// `mime`, then the boxes any sample entry may hold, `sinf`, `scrb` and
+/// `btrt` in this order, which §12.6.3.3 lets `mime` and `btrt` lie in either
+/// order among; and the boxes no definition of the class names, in
+/// [`extra_boxes`](Self::extra_boxes). A child of a type this crate does not
+/// read that lies before every box of the second part is read into the first
+/// part, and one that lies after one of them into the third.
 #[doc(alias = "stpp", alias = "XMLSubtitleSampleEntry")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -52,6 +57,10 @@ pub struct XmlSubtitleSampleEntry {
     pub derived_boxes: OtherBoxes,
     /// MIME type of each document when delivered on its own
     pub mime: Option<MimeBox>,
+    /// Protection schemes of a protected sample entry, alternative descriptions of the same protection
+    pub sinf: Vec<ProtectionSchemeInfoBox>,
+    /// Scrambling schemes applied to the samples
+    pub scrb: Vec<ScrambleSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -89,6 +98,8 @@ impl TryFrom<&SampleEntry> for XmlSubtitleSampleEntry {
             auxiliary_mime_types,
             derived_boxes,
             mime: children.take_zero_or_one_if_decoded()?,
+            sinf: children.take_zero_or_more_if_decoded(),
+            scrb: children.take_zero_or_more_if_decoded(),
             btrt: children.take_zero_or_one_if_decoded()?,
             extra_boxes: OtherBoxes::from(children),
         })
@@ -106,11 +117,16 @@ impl TryFrom<&XmlSubtitleSampleEntry> for SampleEntry {
     ///   list is not UTF-8.
     /// * The failures of writing a child.
     fn try_from(subtitle: &XmlSubtitleSampleEntry) -> Result<Self, Error> {
+        let any_entry = AnyEntryBoxes {
+            sinf: &subtitle.sinf,
+            scrb: &subtitle.scrb,
+            btrt: subtitle.btrt.as_ref(),
+        };
         let remaining_len = children_len(
             &subtitle.derived_boxes,
             [
                 subtitle.mime.as_ref().map_or(0, BoxEncode::encoded_len),
-                subtitle.btrt.as_ref().map_or(0, BoxEncode::encoded_len),
+                any_entry.encoded_len(),
             ],
             &subtitle.extra_boxes,
         )
@@ -128,12 +144,7 @@ impl TryFrom<&XmlSubtitleSampleEntry> for SampleEntry {
                 encode_children(
                     subtitle.auxiliary_mime_types.encode(rest)?,
                     &subtitle.derived_boxes,
-                    |rest| {
-                        encode_optional(
-                            encode_optional(rest, subtitle.mime.as_ref())?,
-                            subtitle.btrt.as_ref(),
-                        )
-                    },
+                    |rest| any_entry.encode(encode_optional(rest, subtitle.mime.as_ref())?),
                     &subtitle.extra_boxes,
                 )
             },
@@ -162,6 +173,10 @@ pub struct TextSubtitleSampleEntry {
     pub derived_boxes: OtherBoxes,
     /// Text each document opens with
     pub txtc: Option<TextConfigBox>,
+    /// Protection schemes of a protected sample entry, alternative descriptions of the same protection
+    pub sinf: Vec<ProtectionSchemeInfoBox>,
+    /// Scrambling schemes applied to the samples
+    pub scrb: Vec<ScrambleSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -194,6 +209,8 @@ impl TryFrom<&SampleEntry> for TextSubtitleSampleEntry {
             mime_format: read.mime_format,
             derived_boxes: read.derived_boxes,
             txtc: read.txtc,
+            sinf: read.sinf,
+            scrb: read.scrb,
             btrt: read.btrt,
             extra_boxes: read.extra_boxes,
         })
@@ -211,6 +228,12 @@ impl TryFrom<&TextSubtitleSampleEntry> for SampleEntry {
     ///   string is not UTF-8.
     /// * The failures of writing a child.
     fn try_from(subtitle: &TextSubtitleSampleEntry) -> Result<Self, Error> {
+        let any_entry = AnyEntryBoxes {
+            sinf: &subtitle.sinf,
+            scrb: &subtitle.scrb,
+            btrt: subtitle.btrt.as_ref(),
+        };
+
         from_class(
             TextSubtitleSampleEntry::FORMAT,
             subtitle.data_reference_index,
@@ -219,7 +242,7 @@ impl TryFrom<&TextSubtitleSampleEntry> for SampleEntry {
                 &subtitle.mime_format,
                 &subtitle.derived_boxes,
                 subtitle.txtc.as_ref(),
-                subtitle.btrt.as_ref(),
+                &any_entry,
                 &subtitle.extra_boxes,
             ),
             |writer| {
@@ -229,7 +252,7 @@ impl TryFrom<&TextSubtitleSampleEntry> for SampleEntry {
                     &subtitle.mime_format,
                     &subtitle.derived_boxes,
                     subtitle.txtc.as_ref(),
-                    subtitle.btrt.as_ref(),
+                    &any_entry,
                     &subtitle.extra_boxes,
                 )
             },
