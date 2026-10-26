@@ -121,8 +121,8 @@ mod tests {
     /// `dinf` of one `url ` of media data in the same file
     const DINF: &[u8] = b"\0\0\0\x24dinf\0\0\0\x1cdref\0\0\0\0\0\0\0\x01\0\0\0\x0curl \0\0\0\x01";
 
-    /// `stbl` holding nothing, of a track that references no data
-    const STBL: &[u8] = b"\0\0\0\x08stbl";
+    /// `stbl` holding an `stsd` of no entry alone, of a track that references no data
+    const STBL: &[u8] = b"\0\0\0\x18stbl\0\0\0\x10stsd\0\0\0\0\0\0\0\0";
 
     /// `free`, a box `minf` holds no field for
     const FREE: &[u8] = b"\0\0\0\x08free";
@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn reads_its_children_and_keeps_the_child_it_has_no_field_for() {
-        let bytes = [b"\0\0\0\x4cminf".as_slice(), FREE, STBL, DINF, SMHD].concat();
+        let bytes = [b"\0\0\0\x5cminf".as_slice(), FREE, STBL, DINF, SMHD].concat();
 
         assert_eq!(
             MediaInformationBox::decode(&bytes),
@@ -161,7 +161,7 @@ mod tests {
     fn writes_its_children_in_the_order_of_their_fields_then_the_child_it_has_no_field_for() {
         assert_eq!(
             encoded(&media_information()),
-            [b"\0\0\0\x4cminf".as_slice(), SMHD, DINF, STBL, FREE].concat()
+            [b"\0\0\0\x5cminf".as_slice(), SMHD, DINF, STBL, FREE].concat()
         );
     }
 

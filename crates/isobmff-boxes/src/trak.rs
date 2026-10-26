@@ -123,10 +123,10 @@ mod tests {
     const EDTS: &[u8] = b"\0\0\0\x08edts";
 
     /// `mdia` of an `mdhd`, an `hdlr` and a `minf`, each holding the least it can
-    const MDIA: &[u8] = b"\0\0\0\x7dmdia\
+    const MDIA: &[u8] = b"\0\0\0\x8dmdia\
         \0\0\0\x20mdhd\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\xe8\0\0\0\0\x55\xc4\0\0\
         \0\0\0\x21hdlr\0\0\0\0\0\0\0\0vide\0\0\0\0\0\0\0\0\0\0\0\0\0\
-        \0\0\0\x34minf\0\0\0\x24dinf\0\0\0\x1cdref\0\0\0\0\0\0\0\x01\0\0\0\x0curl \0\0\0\x01\0\0\0\x08stbl";
+        \0\0\0\x44minf\0\0\0\x24dinf\0\0\0\x1cdref\0\0\0\0\0\0\0\x01\0\0\0\x0curl \0\0\0\x01\0\0\0\x18stbl\0\0\0\x10stsd\0\0\0\0\0\0\0\0";
 
     /// `tref` of a `hint` reference to the track 2
     const TREF: &[u8] = b"\0\0\0\x14tref\0\0\0\x0chint\0\0\0\x02";
@@ -157,7 +157,7 @@ mod tests {
     #[test]
     fn reads_its_children_and_keeps_the_child_it_has_no_field_for() {
         let bytes = [
-            b"\0\0\x01\x1dtrak".as_slice(),
+            b"\0\0\x01\x2dtrak".as_slice(),
             TKHD,
             UDTA,
             EDTS,
@@ -175,7 +175,7 @@ mod tests {
         assert_eq!(
             encoded(&track()),
             [
-                b"\0\0\x01\x1dtrak".as_slice(),
+                b"\0\0\x01\x2dtrak".as_slice(),
                 TKHD,
                 TREF,
                 TRGR,
@@ -194,7 +194,7 @@ mod tests {
 
         assert_eq!(
             encoded(&track),
-            [b"\0\0\0\xe9trak".as_slice(), TKHD, EDTS, MDIA].concat()
+            [b"\0\0\0\xf9trak".as_slice(), TKHD, EDTS, MDIA].concat()
         );
     }
 

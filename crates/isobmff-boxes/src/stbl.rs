@@ -21,6 +21,7 @@ use crate::sgpd::SampleGroupDescriptionBox;
 use crate::ssrt::SubSampleReferenceTableBox;
 use crate::stdp::DegradationPriorityBox;
 use crate::stsc::SampleToChunkBox;
+use crate::stsd::SampleDescriptionBox;
 use crate::stsh::ShadowSyncSampleBox;
 use crate::stss::SyncSampleBox;
 use crate::stts::TimeToSampleBox;
@@ -28,21 +29,23 @@ use crate::subs::SubSampleInformationBox;
 
 /// [`SampleTableBox`] (`stbl`), ISO/IEC 14496-12 §8.5.1
 ///
-/// The tables that locate the samples of a track in time and in the file,
-/// and that tell their type, size, chunk and offset.
+/// The sample entries that describe the coding of the samples of a track,
+/// and the tables that locate the samples in time and in the file, and that
+/// tell their type, size, chunk and offset.
 ///
-/// A track that references no data need hold no child here. A track that
-/// does holds an `stts`, an `stsc`, one sample size variant and one chunk
-/// offset variant, so these are [`None`] together or [`Some`] together: a box
-/// that holds some but not all of them reads, but writing it is refused, with
+/// The box holds exactly one `stsd`: a box without one, or with one that does
+/// not read, is refused. A track that references no data need hold no other
+/// child. A track that does holds an `stts`, an `stsc`, one sample size
+/// variant and one chunk offset variant, so these are [`None`] together or
+/// [`Some`] together: a box that holds some but not all of them reads, but
+/// writing it is refused, with
 /// [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox) or
 /// [`MissingVariantBox`](isobmff_core::ErrorKind::MissingVariantBox) for the
 /// first that is missing.
 ///
 /// An optional child of a version the box does not read is kept in
-/// [`other_boxes`](Self::other_boxes), as are children of other types, such
-/// as the `stsd`. Those are written back after the children the box holds a
-/// field for.
+/// [`other_boxes`](Self::other_boxes), as are children of other types. Those
+/// are written back after the children the box holds a field for.
 ///
 /// The box writes the children it holds a field for in the order of its
 /// fields, whatever order they were read in: the order of ISO/IEC 14496-12
@@ -52,6 +55,8 @@ use crate::subs::SubSampleInformationBox;
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
 pub struct SampleTableBox {
+    /// Sample entries, which give the coding type of the samples
+    pub stsd: SampleDescriptionBox,
     /// Durations of the samples in decoding order
     pub stts: Option<TimeToSampleBox>,
     /// Offsets from the decoding timestamps of the samples to their composition timestamps
@@ -101,6 +106,7 @@ impl BoxDecode for SampleTableBox {
         let mut children = ChildBoxes::decode(reader.take_remainder())?;
 
         Ok(Self {
+            stsd: children.take_exactly_one()?,
             stts: children.take_zero_or_one()?,
             ctts: children.take_zero_or_one_if_decoded()?,
             cslg: children.take_zero_or_one_if_decoded()?,
@@ -142,6 +148,7 @@ impl BoxEncode for SampleTableBox {
             });
 
         [
+            self.stsd.encoded_len(),
             self.stts.as_ref().map_or(0, BoxEncode::encoded_len),
             self.ctts.as_ref().map_or(0, BoxEncode::encoded_len),
             self.cslg.as_ref().map_or(0, BoxEncode::encoded_len),
@@ -186,7 +193,7 @@ impl BoxEncode for SampleTableBox {
             }
         }
 
-        let mut rest = writer.take_remainder();
+        let mut rest = self.stsd.encode(writer.take_remainder())?;
         if let Some(stts) = &self.stts {
             rest = stts.encode(rest)?;
         }
@@ -267,11 +274,18 @@ mod tests {
     use crate::encoded;
     use crate::sample_size::{SampleSizeBox, SampleSizeVariant, SampleSizes};
     use crate::stsc::{SampleToChunkBox, SampleToChunkEntry};
+    use crate::stsd::SampleDescriptionBox;
     use crate::stss::SyncSampleBox;
     use crate::stts::{TimeToSampleBox, TimeToSampleEntry};
 
-    /// `stsd` of no entry, a box `stbl` holds no field for
+    /// `stsd` of no entry
     const STSD: &[u8] = b"\0\0\0\x10stsd\0\0\0\0\0\0\0\0";
+
+    /// `stsd` of version 2, which `stbl` does not read
+    const STSD_VERSION_2: &[u8] = b"\0\0\0\x10stsd\x02\0\0\0\0\0\0\0";
+
+    /// Box of a type `stbl` holds no field for
+    const FREE: &[u8] = b"\0\0\0\x0afree\0\0";
 
     /// `stts` of 2 samples of duration 10
     const STTS: &[u8] = b"\0\0\0\x18stts\0\0\0\0\0\0\0\x01\0\0\0\x02\0\0\0\x0a";
@@ -326,7 +340,7 @@ mod tests {
 
     #[test]
     fn reads_its_tables_and_keeps_the_child_it_has_no_field_for() {
-        let payload = [STSD, STTS, STSC, STSZ, STCO, STSS].concat();
+        let payload = [FREE, STSD, STTS, STSC, STSZ, STCO, STSS].concat();
 
         assert_eq!(
             SampleTableBox::decode_payload(&payload),
@@ -334,19 +348,28 @@ mod tests {
                 Some(SyncSampleBox {
                     sample_numbers: vec![1]
                 }),
-                STSD
+                FREE
             ))
         );
     }
 
     #[test]
     fn writes_its_tables_in_the_order_of_the_specification_whatever_order_they_were_read_in() {
-        let payload = [STSS, STCO, STSZ, STSC, STTS].concat();
+        let payload = [STSS, STCO, STSZ, STSC, STTS, STSD].concat();
         let sample_table = SampleTableBox::decode_payload(&payload).unwrap();
 
         assert_eq!(
             encoded(&sample_table),
-            [b"\0\0\0\x78stbl".as_slice(), STTS, STSC, STSZ, STCO, STSS].concat()
+            [
+                b"\0\0\0\x88stbl".as_slice(),
+                STSD,
+                STTS,
+                STSC,
+                STSZ,
+                STCO,
+                STSS
+            ]
+            .concat()
         );
     }
 
@@ -358,11 +381,20 @@ mod tests {
         let sgpd = b"\0\0\0\x18sgpd\x01\0\0\0roll\0\0\0\x02\0\0\0\0".as_slice();
         let subs = b"\0\0\0\x10subs\0\0\0\0\0\0\0\0".as_slice();
         let sample_table =
-            SampleTableBox::decode_payload(&[subs, sgpd, csgp, sbgp, sdtp].concat()).unwrap();
+            SampleTableBox::decode_payload(&[subs, sgpd, csgp, sbgp, sdtp, STSD].concat()).unwrap();
 
         assert_eq!(
             encoded(&sample_table),
-            [b"\0\0\0\x64stbl".as_slice(), sdtp, sbgp, csgp, sgpd, subs].concat()
+            [
+                b"\0\0\0\x74stbl".as_slice(),
+                STSD,
+                sdtp,
+                sbgp,
+                csgp,
+                sgpd,
+                subs
+            ]
+            .concat()
         );
     }
 
@@ -373,15 +405,16 @@ mod tests {
         };
 
         assert_eq!(
-            encoded(&sample_table(Some(sync_sample), STSD)),
+            encoded(&sample_table(Some(sync_sample), FREE)),
             [
-                b"\0\0\0\x88stbl".as_slice(),
+                b"\0\0\0\x92stbl".as_slice(),
+                STSD,
                 STTS,
                 STSC,
                 STSZ,
                 STCO,
                 STSS,
-                STSD
+                FREE
             ]
             .concat()
         );
@@ -389,7 +422,7 @@ mod tests {
 
     #[test]
     fn optional_tables_of_a_version_it_does_not_read_are_kept_as_found() {
-        let payload = [STTS, STSC, STSZ, STCO, STSS_VERSION_1, SAIO_VERSION_2].concat();
+        let payload = [STSD, STTS, STSC, STSZ, STCO, STSS_VERSION_1, SAIO_VERSION_2].concat();
 
         assert_eq!(
             SampleTableBox::decode_payload(&payload),
@@ -403,6 +436,7 @@ mod tests {
     #[test]
     fn a_mandatory_table_that_does_not_read_is_refused() {
         let payload = [
+            STSD,
             b"\0\0\0\x10stts\x01\0\0\0\0\0\0\0".as_slice(),
             STSC,
             STSZ,
@@ -418,21 +452,35 @@ mod tests {
 
     #[test]
     fn a_box_of_no_table_reads_and_writes_back() {
-        let (read, _) = SampleTableBox::decode(b"\0\0\0\x08stbl").unwrap();
+        let bytes = [b"\0\0\0\x18stbl".as_slice(), STSD].concat();
+        let (read, _) = SampleTableBox::decode(&bytes).unwrap();
 
+        assert_eq!((encoded(&read), read), (bytes, SampleTableBox::default()));
+    }
+
+    #[test]
+    fn a_box_without_its_sample_descriptions_is_refused() {
         assert_eq!(
-            (encoded(&read), read),
-            (b"\0\0\0\x08stbl".to_vec(), SampleTableBox::default())
+            SampleTableBox::decode_payload(&[STTS, STSC, STSZ, STCO].concat()),
+            Err(Error::missing_mandatory_box(SampleDescriptionBox::BOX_TYPE))
+        );
+    }
+
+    #[test]
+    fn sample_descriptions_that_do_not_read_are_refused() {
+        assert_eq!(
+            SampleTableBox::decode_payload(STSD_VERSION_2),
+            Err(Error::unsupported_version(2).in_container(SampleDescriptionBox::BOX_TYPE))
         );
     }
 
     #[test]
     fn a_box_missing_some_of_the_mandatory_tables_reads_but_is_refused_when_written() {
-        let payload = [STTS, STSC, STSZ].concat();
+        let payload = [STSD, STTS, STSC, STSZ].concat();
         let read = SampleTableBox::decode_payload(&payload).unwrap();
 
         assert_eq!(
-            read.encode(&mut [0; 80]),
+            read.encode(&mut [0; 96]),
             Err(Error::missing_variant_box(ChunkOffsetVariant::VARIANTS))
         );
     }
