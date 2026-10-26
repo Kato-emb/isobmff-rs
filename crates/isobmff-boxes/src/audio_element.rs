@@ -5,6 +5,7 @@ use isobmff_core::{
     FieldWriter, FullBoxFlags, FullBoxHeader, OtherBoxes, Utf8String,
 };
 
+use crate::chnl::ChannelLayout;
 use crate::elng::ExtendedLanguageBox;
 use crate::full_box::read_version_zero;
 use crate::infe::{read_string, write_string};
@@ -328,10 +329,10 @@ impl BoxEncode for AudioElementDescriptionBox {
 /// The semantic information about one audio element of a preselection or of
 /// an audio element selection.
 ///
-/// The box writes `elng` and then `aedb`, whatever order they were read in:
+/// The box writes `elng`, `chnl` and `aedb`, whatever order they were read in:
 /// the order of ISO/IEC 14496-12 Table 2. Children of other types are kept in
 /// [`other_boxes`](Self::other_boxes), and written back after them, and so is
-/// an `elng` that does not read, which then reads back [`None`]. A box of no
+/// an `elng` or a `chnl` that does not read, which then reads back [`None`]. A box of no
 /// `aedb` does not read.
 #[doc(alias = "aelm")]
 #[non_exhaustive]
@@ -339,6 +340,8 @@ impl BoxEncode for AudioElementDescriptionBox {
 pub struct AudioElementBox {
     /// Language of the audio element
     pub elng: Option<ExtendedLanguageBox>,
+    /// Channel layout of the audio element
+    pub chnl: Option<ChannelLayout>,
     /// What the audio element is and how it may be changed
     pub aedb: AudioElementDescriptionBox,
     /// Children of a type the box holds no field for
@@ -355,6 +358,7 @@ impl BoxDecode for AudioElementBox {
 
         Ok(Self {
             elng: children.take_zero_or_one_if_decoded()?,
+            chnl: children.take_zero_or_one_if_decoded()?,
             aedb: children.take_exactly_one()?,
             other_boxes: OtherBoxes::from(children),
         })
@@ -365,6 +369,7 @@ impl BoxEncode for AudioElementBox {
     fn payload_len(&self) -> u64 {
         [
             self.elng.as_ref().map_or(0, BoxEncode::encoded_len),
+            self.chnl.as_ref().map_or(0, BoxEncode::encoded_len),
             self.aedb.encoded_len(),
         ]
         .into_iter()
@@ -376,6 +381,9 @@ impl BoxEncode for AudioElementBox {
         let mut rest = writer.take_remainder();
         if let Some(elng) = &self.elng {
             rest = elng.encode(rest)?;
+        }
+        if let Some(chnl) = &self.chnl {
+            rest = chnl.encode(rest)?;
         }
         rest = self.aedb.encode(rest)?;
         for kept in self.other_boxes.as_slice() {
@@ -399,6 +407,7 @@ mod tests {
         AudioElementBox, AudioElementDescriptionBox, AudioElementPosInteractivityPolar,
         AudioElementProminenceInteractivity,
     };
+    use crate::chnl::ChannelLayout;
     use crate::elng::ExtendedLanguageBox;
     use crate::encoded;
 
@@ -414,6 +423,9 @@ mod tests {
 
     /// `elng` of `de`
     const ELNG: &[u8] = b"\0\0\0\x0felng\0\0\0\0de\0";
+
+    /// `chnl` of version 0 that announces neither channels nor objects
+    const CHNL: &[u8] = b"\0\0\0\x0dchnl\0\0\0\0\0";
 
     /// `kind` holding nothing, a box `aelm` holds no field for
     const KIND: &[u8] = b"\0\0\0\x08kind";
@@ -505,19 +517,24 @@ mod tests {
     }
 
     #[test]
-    fn an_audio_element_reads_its_description_and_writes_it_after_elng() {
+    fn an_audio_element_reads_its_description_and_writes_it_after_elng_and_chnl() {
         let aedb = [b"\0\0\0\x4daedb".as_slice(), AEDB_FIELDS, AEPR, AEPP].concat();
-        let bytes = [b"\0\0\0\x6caelm".as_slice(), KIND, &aedb, ELNG].concat();
+        let bytes = [b"\0\0\0\x79aelm".as_slice(), KIND, &aedb, CHNL, ELNG].concat();
         let expected = AudioElementBox {
             elng: Some(ExtendedLanguageBox {
                 extended_language: string("de"),
+            }),
+            chnl: Some(ChannelLayout::Version0 {
+                channel_structure: None,
+                object_count: None,
             }),
             aedb: description(),
             other_boxes: OtherBoxes::from(ChildBoxes::decode(KIND).unwrap()),
         };
         let written = [
-            b"\0\0\0\x6caelm".as_slice(),
+            b"\0\0\0\x79aelm".as_slice(),
             ELNG,
+            CHNL,
             b"\0\0\0\x4daedb",
             AEDB_FIELDS,
             AEPP,

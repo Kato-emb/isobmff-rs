@@ -7,8 +7,10 @@ use isobmff_core::{
     FieldWriter, FullBoxFlags, FullBoxHeader, OtherBoxes, Utf8String,
 };
 
+use crate::ardi::AudioRenderingIndicationBox;
 use crate::audio_element::AudioElementBox;
 use crate::audio_element_selection::AudioElementSelectionBox;
+use crate::chnl::ChannelLayout;
 use crate::elng::ExtendedLanguageBox;
 use crate::full_box::read_version_zero;
 use crate::grpl::{entities_len, read_entities, write_entities};
@@ -29,11 +31,11 @@ const INTERLEAVING_TAG_PRESENT: u32 = 0x00_4000;
 /// `prsl`, held in the `GroupsListBox` of a file-level `MetaBox`.
 ///
 /// The `flags` of the box are whether each optional field is there. The box
-/// writes `elng`, the `aelm`s and the `aesb`s in this order, whatever order
-/// they were read in: the order of ISO/IEC 14496-12 Table 2. Children of
-/// other types are kept in [`other_boxes`](Self::other_boxes), and written
-/// back after them, and so is a child that does not read; an `elng` that does
-/// not read reads back [`None`].
+/// writes `elng`, `chnl`, `ardi`, the `aelm`s and the `aesb`s in this order,
+/// whatever order they were read in: the order of ISO/IEC 14496-12 Table 2.
+/// Children of other types are kept in [`other_boxes`](Self::other_boxes),
+/// and written back after them, and so is a child that does not read; an
+/// `elng`, a `chnl` or an `ardi` that does not read reads back [`None`].
 #[doc(alias = "prsl")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -50,6 +52,10 @@ pub struct PreselectionGroupBox {
     pub interleaving_tag: Option<Utf8String>,
     /// Language of the preselection
     pub elng: Option<ExtendedLanguageBox>,
+    /// Channel layout of the preselection
+    pub chnl: Option<ChannelLayout>,
+    /// Reproduction channel layout the preselection prefers
+    pub ardi: Option<AudioRenderingIndicationBox>,
     /// Audio elements of the preselection
     pub aelm: Vec<AudioElementBox>,
     /// Sets of audio elements of which one at a time is switched on
@@ -84,6 +90,8 @@ impl BoxDecode for PreselectionGroupBox {
             selection_priority,
             interleaving_tag,
             elng: children.take_zero_or_one_if_decoded()?,
+            chnl: children.take_zero_or_one_if_decoded()?,
+            ardi: children.take_zero_or_one_if_decoded()?,
             aelm: children.take_zero_or_more_if_decoded(),
             aesb: children.take_zero_or_more_if_decoded(),
             other_boxes: OtherBoxes::from(children),
@@ -104,6 +112,8 @@ impl BoxEncode for PreselectionGroupBox {
                 .as_ref()
                 .map_or(0, Utf8String::encoded_len),
             self.elng.as_ref().map_or(0, BoxEncode::encoded_len),
+            self.chnl.as_ref().map_or(0, BoxEncode::encoded_len),
+            self.ardi.as_ref().map_or(0, BoxEncode::encoded_len),
         ]
         .into_iter()
         .chain(self.aelm.iter().map(BoxEncode::encoded_len))
@@ -141,6 +151,12 @@ impl BoxEncode for PreselectionGroupBox {
         if let Some(elng) = &self.elng {
             rest = elng.encode(rest)?;
         }
+        if let Some(chnl) = &self.chnl {
+            rest = chnl.encode(rest)?;
+        }
+        if let Some(ardi) = &self.ardi {
+            rest = ardi.encode(rest)?;
+        }
         for audio_element in &self.aelm {
             rest = audio_element.encode(rest)?;
         }
@@ -163,11 +179,19 @@ mod tests {
     use isobmff_core::{BoxDecode, ChildBoxes, Error, OtherBoxes, Utf8String};
 
     use super::PreselectionGroupBox;
+    use crate::ardi::AudioRenderingIndicationBox;
+    use crate::chnl::ChannelLayout;
     use crate::elng::ExtendedLanguageBox;
     use crate::encoded;
 
     /// `elng` of `en`
     const ELNG: &[u8] = b"\0\0\0\x0felng\0\0\0\0en\0";
+
+    /// `chnl` of version 0 that announces neither channels nor objects
+    const CHNL: &[u8] = b"\0\0\0\x0dchnl\0\0\0\0\0";
+
+    /// `ardi` of the stereo layout
+    const ARDI: &[u8] = b"\0\0\0\x0dardi\0\0\0\0\x01";
 
     /// `labl` holding nothing, a box this box holds no field for
     const LABL: &[u8] = b"\0\0\0\x08labl";
@@ -186,6 +210,13 @@ mod tests {
             elng: Some(ExtendedLanguageBox {
                 extended_language: string("en"),
             }),
+            chnl: Some(ChannelLayout::Version0 {
+                channel_structure: None,
+                object_count: None,
+            }),
+            ardi: Some(AudioRenderingIndicationBox {
+                audio_rendering_indication: 1,
+            }),
             other_boxes: OtherBoxes::from(ChildBoxes::decode(LABL).unwrap()),
             ..PreselectionGroupBox::default()
         }
@@ -196,7 +227,7 @@ mod tests {
 
     #[test]
     fn reads_its_optional_fields_as_its_flags_say_and_its_children_in_any_order() {
-        let bytes = [b"\0\0\0\x38prsl".as_slice(), FIELDS, LABL, ELNG].concat();
+        let bytes = [b"\0\0\0\x52prsl".as_slice(), FIELDS, LABL, ARDI, CHNL, ELNG].concat();
 
         assert_eq!(
             PreselectionGroupBox::decode(&bytes),
@@ -205,11 +236,11 @@ mod tests {
     }
 
     #[test]
-    fn writes_the_flags_of_the_optional_fields_it_holds_then_elng_then_the_child_it_has_no_field_for()
-     {
+    fn writes_the_flags_of_the_optional_fields_it_holds_then_its_children_in_the_order_of_table_2()
+    {
         assert_eq!(
             encoded(&preselection()),
-            [b"\0\0\0\x38prsl".as_slice(), FIELDS, ELNG, LABL].concat()
+            [b"\0\0\0\x52prsl".as_slice(), FIELDS, ELNG, CHNL, ARDI, LABL].concat()
         );
     }
 

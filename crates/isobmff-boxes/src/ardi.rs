@@ -7,7 +7,7 @@ use crate::full_box::{read_version_zero, write_version_zero};
 /// [`AudioRenderingIndicationBox`] (`ardi`), ISO/IEC 14496-12 §12.2.8
 ///
 /// Hint for a preferred reproduction channel layout. It lies in a
-/// `PreselectionGroupBox`, which this crate does not read yet.
+/// [`PreselectionGroupBox`](crate::PreselectionGroupBox).
 ///
 /// The box reads version 0 alone. The `flags` are read past and written as
 /// zero.
