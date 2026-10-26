@@ -8,6 +8,7 @@ use isobmff_core::{
 };
 
 use crate::csgp::CompactSampleToGroupBox;
+use crate::rsot::RedundantSampleOriginalTimingBox;
 use crate::saio::SampleAuxiliaryInformationOffsetsBox;
 use crate::saiz::SampleAuxiliaryInformationSizesBox;
 use crate::sbgp::SampleToGroupBox;
@@ -23,14 +24,14 @@ use crate::trun::TrackRunBox;
 /// zero or more track runs.
 ///
 /// The box writes `tfhd`, `tfdt`, the track runs, the `sbgp`s, the `csgp`s,
-/// the `sgpd`s, the `subs`es, the `saiz`es and the `saio`s in this order,
-/// whatever order they were read in: the order of ISO/IEC 14496-12 Table 2,
-/// but for `tfdt`, which §8.8.12.1 places after `tfhd` and before the first
-/// track run, and `csgp`, which Table 2 does not list and which is written
-/// right after `sbgp`. Children of other types are kept in
-/// [`other_boxes`](Self::other_boxes), and written back after them. An
-/// optional child that does not read is kept there too; a `tfdt` that does
-/// not read reads back [`None`].
+/// the `sgpd`s, the `subs`es, the `saiz`es, the `saio`s and `rsot` in this
+/// order, whatever order they were read in: the order of ISO/IEC 14496-12
+/// Table 2, but for `tfdt`, which §8.8.12.1 places after `tfhd` and before
+/// the first track run, and `csgp` and `rsot`, which Table 2 does not list:
+/// `csgp` is written right after `sbgp`, and `rsot` last. Children of other
+/// types are kept in [`other_boxes`](Self::other_boxes), and written back
+/// after them. An optional child that does not read is kept there too; a
+/// `tfdt` or an `rsot` that does not read reads back [`None`].
 #[doc(alias = "traf")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -53,6 +54,8 @@ pub struct TrackFragmentBox {
     pub saiz: Vec<SampleAuxiliaryInformationSizesBox>,
     /// Offsets of the sample auxiliary information, one box for each type and stream
     pub saio: Vec<SampleAuxiliaryInformationOffsetsBox>,
+    /// Original timing of the first and last samples of the fragment
+    pub rsot: Option<RedundantSampleOriginalTimingBox>,
     /// Children of a type the box holds no field for
     pub other_boxes: OtherBoxes,
 }
@@ -75,6 +78,7 @@ impl BoxDecode for TrackFragmentBox {
             subs: children.take_zero_or_more_if_decoded(),
             saiz: children.take_zero_or_more_if_decoded(),
             saio: children.take_zero_or_more_if_decoded(),
+            rsot: children.take_zero_or_one_if_decoded()?,
             other_boxes: OtherBoxes::from(children),
         })
     }
@@ -85,6 +89,7 @@ impl BoxEncode for TrackFragmentBox {
         [
             self.tfhd.encoded_len(),
             self.tfdt.as_ref().map_or(0, BoxEncode::encoded_len),
+            self.rsot.as_ref().map_or(0, BoxEncode::encoded_len),
         ]
         .into_iter()
         .chain(self.trun.iter().map(BoxEncode::encoded_len))
@@ -124,6 +129,9 @@ impl BoxEncode for TrackFragmentBox {
         for offsets in &self.saio {
             rest = offsets.encode(rest)?;
         }
+        if let Some(rsot) = &self.rsot {
+            rest = rsot.encode(rest)?;
+        }
         for kept in self.other_boxes.as_slice() {
             rest = kept.encode(rest)?;
         }
@@ -140,6 +148,7 @@ mod tests {
 
     use super::TrackFragmentBox;
     use crate::encoded;
+    use crate::rsot::RedundantSampleOriginalTimingBox;
     use crate::saio::SampleAuxiliaryInformationOffsetsBox;
     use crate::saiz::SampleAuxiliaryInformationSizesBox;
     use crate::sbgp::SampleToGroupBox;
@@ -173,6 +182,9 @@ mod tests {
     /// `trun` of no sample
     const TRUN: &[u8] = b"\0\0\0\x10trun\0\0\0\0\0\0\0\0";
 
+    /// `rsot` of the elapsed duration alone, 1000
+    const RSOT: &[u8] = b"\0\0\0\x10rsot\0\0\0\x02\0\0\x03\xe8";
+
     /// `meta` holding nothing, a box `traf` holds no field for
     const META: &[u8] = b"\0\0\0\x0cmeta\0\0\0\0";
 
@@ -191,6 +203,7 @@ mod tests {
                     .unwrap()
                     .0,
             ],
+            rsot: Some(RedundantSampleOriginalTimingBox::decode(RSOT).unwrap().0),
             other_boxes: OtherBoxes::from(ChildBoxes::decode(META).unwrap()),
         }
     }
@@ -198,8 +211,9 @@ mod tests {
     #[test]
     fn reads_its_children_in_any_order_and_keeps_the_child_it_has_no_field_for() {
         let bytes = [
-            b"\0\0\0\xb3traf".as_slice(),
+            b"\0\0\0\xc3traf".as_slice(),
             TFHD,
+            RSOT,
             SAIZ,
             SAIO,
             META,
@@ -222,7 +236,7 @@ mod tests {
         assert_eq!(
             encoded(&track_fragment()),
             [
-                b"\0\0\0\xb3traf".as_slice(),
+                b"\0\0\0\xc3traf".as_slice(),
                 TFHD,
                 TFDT,
                 TRUN,
@@ -231,6 +245,7 @@ mod tests {
                 SUBS,
                 SAIZ,
                 SAIO,
+                RSOT,
                 META,
             ]
             .concat()
