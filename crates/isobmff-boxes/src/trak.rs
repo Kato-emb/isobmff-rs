@@ -1,5 +1,7 @@
 //! [`TrackBox`], the container of a single track
 
+use alloc::vec::Vec;
+
 use isobmff_core::{
     AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
     FieldWriter, OtherBoxes,
@@ -12,18 +14,21 @@ use crate::tkhd::TrackHeaderBox;
 use crate::tref::TrackReferenceBox;
 use crate::trgr::TrackGroupBox;
 use crate::ttyp::TrackTypeBox;
+use crate::udta::UserDataBox;
 
 /// [`TrackBox`] (`trak`), ISO/IEC 14496-12 §8.3.1
 ///
 /// Holds a single track of a presentation, with its temporal and spatial
 /// information and its media.
 ///
-/// The box writes `tkhd`, `ttyp`, `tref`, `trgr`, `edts`, `meta` and `mdia` in this
-/// order, whatever order they were read in: the order of ISO/IEC 14496-12
-/// §7.3.4, and of Table 2 where §7.3.4 sets none. Children of other types are
-/// kept in [`other_boxes`](Self::other_boxes), and written back after them. A
+/// The box writes `tkhd`, `ttyp`, `tref`, `trgr`, `edts`, `meta`, `mdia` and
+/// the `udta`s in this order, whatever order they were read in: the order of
+/// ISO/IEC 14496-12 §7.3.4, and of Table 2 where §7.3.4 sets none. Children of
+/// other types are kept in [`other_boxes`](Self::other_boxes), and written
+/// back after `mdia` and before the `udta`s, which §7.3.4 places last. A
 /// `ttyp`, a `tref`, a `trgr`, an `edts` or a `meta` that does not read is
-/// kept there too, and reads back [`None`].
+/// kept there too, and reads back [`None`]. A `udta` that does not read is
+/// kept there too.
 #[doc(alias = "trak")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -42,6 +47,8 @@ pub struct TrackBox {
     pub meta: Option<MetaBox>,
     /// Media of the track
     pub mdia: MediaBox,
+    /// User data of the track, in the order they came
+    pub udta: Vec<UserDataBox>,
     /// Children of a type the box holds no field for
     pub other_boxes: OtherBoxes,
 }
@@ -62,6 +69,7 @@ impl BoxDecode for TrackBox {
             edts: children.take_zero_or_one_if_decoded()?,
             meta: children.take_zero_or_one_if_decoded()?,
             mdia: children.take_exactly_one()?,
+            udta: children.take_zero_or_more_if_decoded(),
             other_boxes: OtherBoxes::from(children),
         })
     }
@@ -79,6 +87,7 @@ impl BoxEncode for TrackBox {
             self.mdia.encoded_len(),
         ]
         .into_iter()
+        .chain(self.udta.iter().map(BoxEncode::encoded_len))
         .chain(self.other_boxes.as_slice().iter().map(AnyBox::encoded_len))
         .fold(0, u64::saturating_add)
     }
@@ -104,6 +113,9 @@ impl BoxEncode for TrackBox {
         for kept in self.other_boxes.as_slice() {
             rest = kept.encode(rest)?;
         }
+        for user_data in &self.udta {
+            rest = user_data.encode(rest)?;
+        }
 
         Ok(())
     }
@@ -111,6 +123,8 @@ impl BoxEncode for TrackBox {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+
     use isobmff_core::{BoxDecode, BoxDefinition, ChildBoxes, Error, OtherBoxes};
 
     use super::TrackBox;
@@ -121,6 +135,7 @@ mod tests {
     use crate::tkhd::TrackHeaderBox;
     use crate::tref::TrackReferenceBox;
     use crate::trgr::TrackGroupBox;
+    use crate::udta::UserDataBox;
 
     /// `tkhd` of version 0, enabled and in the movie, of track 1 and every other field zero or its template value
     const TKHD: &[u8] = b"\0\0\0\x5ctkhd\0\0\0\x03\0\0\0\0\0\0\0\0\0\0\0\x01\0\0\0\0\0\0\0\0\
@@ -146,8 +161,11 @@ mod tests {
     /// `meta` holding nothing
     const META: &[u8] = b"\0\0\0\x0cmeta\0\0\0\0";
 
-    /// `udta` holding nothing, a box `trak` holds no field for
-    const UDTA: &[u8] = b"\0\0\0\x08udta";
+    /// `udta` of a `tsel` of switch group 1 and no attribute
+    const UDTA: &[u8] = b"\0\0\0\x18udta\0\0\0\x10tsel\0\0\0\0\0\0\0\x01";
+
+    /// `free` holding nothing, a box `trak` holds no field for
+    const FREE: &[u8] = b"\0\0\0\x08free";
 
     fn track() -> TrackBox {
         TrackBox {
@@ -163,19 +181,21 @@ mod tests {
             edts: Some(EditBox::default()),
             meta: Some(MetaBox::default()),
             mdia: MediaBox::decode(MDIA).unwrap().0,
-            other_boxes: OtherBoxes::from(ChildBoxes::decode(UDTA).unwrap()),
+            udta: vec![UserDataBox::decode(UDTA).unwrap().0],
+            other_boxes: OtherBoxes::from(ChildBoxes::decode(FREE).unwrap()),
         }
     }
 
     #[test]
     fn reads_its_children_and_keeps_the_child_it_has_no_field_for() {
         let bytes = [
-            b"\0\0\x01\x39trak".as_slice(),
+            b"\0\0\x01\x51trak".as_slice(),
             TKHD,
             UDTA,
             META,
             EDTS,
             TRGR,
+            FREE,
             MDIA,
             TREF,
         ]
@@ -185,20 +205,33 @@ mod tests {
     }
 
     #[test]
-    fn writes_its_children_in_the_order_of_their_fields_then_the_child_it_has_no_field_for() {
+    fn writes_its_children_in_the_order_of_their_fields_then_the_child_it_has_no_field_for_then_udta()
+     {
         assert_eq!(
             encoded(&track()),
             [
-                b"\0\0\x01\x39trak".as_slice(),
+                b"\0\0\x01\x51trak".as_slice(),
                 TKHD,
                 TREF,
                 TRGR,
                 EDTS,
                 META,
                 MDIA,
+                FREE,
                 UDTA
             ]
             .concat()
+        );
+    }
+
+    #[test]
+    fn a_child_it_has_no_field_for_read_after_udta_is_written_before_it() {
+        let payload = [TKHD, MDIA, UDTA, FREE].concat();
+        let track = TrackBox::decode_payload(&payload).unwrap();
+
+        assert_eq!(
+            encoded(&track),
+            [b"\0\0\x01\x11trak".as_slice(), TKHD, MDIA, FREE, UDTA].concat()
         );
     }
 
@@ -222,6 +255,7 @@ mod tests {
         expected.trgr = None;
         expected.edts = None;
         expected.meta = None;
+        expected.udta = vec![];
         expected.other_boxes = OtherBoxes::from(ChildBoxes::decode(unreadable).unwrap());
 
         assert_eq!(TrackBox::decode_payload(&payload), Ok(expected));

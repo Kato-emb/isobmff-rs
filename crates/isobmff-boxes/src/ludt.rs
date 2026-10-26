@@ -12,8 +12,7 @@ use crate::loudness::{AlbumLoudnessInfo, TrackLoudnessInfo};
 /// [`LoudnessBox`] (`ludt`), ISO/IEC 14496-12 §12.2.7
 ///
 /// Loudness declarations of an audio track, which lie in the `udta` of the
-/// track so that a movie fragment can update them. This crate does not read
-/// the `udta` yet.
+/// track so that a movie fragment can update them.
 ///
 /// The box writes its `tlou` boxes, then its `alou` boxes, in the order of
 /// the syntax of the class, whatever order they were read in. Children of

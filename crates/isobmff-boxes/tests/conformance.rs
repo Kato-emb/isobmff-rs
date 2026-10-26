@@ -9,6 +9,10 @@
 mod items;
 
 #[cfg(test)]
+#[path = "conformance/user_data.rs"]
+mod user_data;
+
+#[cfg(test)]
 mod tests {
     use std::{env, fs};
 
@@ -23,12 +27,12 @@ mod tests {
         SampleGroupDescriptionBox, SampleGroupDescriptionEntry, SampleSizeBox, SampleSizeVariant,
         SampleSizes, SampleTableBox, SampleToChunkBox, SampleToChunkEntry, SampleToGroupBox,
         SampleToGroupEntry, SegmentIndexBox, SegmentIndexReference, SegmentTypeBox,
-        SimpleTextSampleEntry, Skip, SubsegmentIndexBox, TemporalLevelEntry, TimeToSampleBox,
-        TimeToSampleEntry, TrackBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
-        TrackFragmentHeaderBox, TrackHeaderBox, TrackReference, TrackReferenceBox,
-        TrackReferenceTypeBox, TrackRunBox, TrackRunSample, TrackRunSamples,
-        VisualRandomAccessEntry, VisualSampleEntry, XmlBox, XmlMetaDataSampleEntry,
-        XmlSubtitleSampleEntry,
+        SimpleTextSampleEntry, Skip, SubTrackBox, SubTrackDefinitionBox, SubsegmentIndexBox,
+        TemporalLevelEntry, TimeToSampleBox, TimeToSampleEntry, TrackBox,
+        TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
+        TrackHeaderBox, TrackReference, TrackReferenceBox, TrackReferenceTypeBox, TrackRunBox,
+        TrackRunSample, TrackRunSamples, UserDataBox, VisualRandomAccessEntry, VisualSampleEntry,
+        XmlBox, XmlMetaDataSampleEntry, XmlSubtitleSampleEntry,
     };
     use isobmff_core::{
         BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, Error, FourCc, I8F8, RawBox, U16F16,
@@ -558,7 +562,7 @@ mod tests {
     }
 
     /// Box types of the containers a written-back container may hold its children in another order in
-    const REORDERED: [BoxType; 12] = [
+    const REORDERED: [BoxType; 15] = [
         MetaBox::BOX_TYPE,
         MovieBox::BOX_TYPE,
         TrackBox::BOX_TYPE,
@@ -571,6 +575,9 @@ mod tests {
         MovieFragmentBox::BOX_TYPE,
         TrackFragmentBox::BOX_TYPE,
         MovieFragmentRandomAccessBox::BOX_TYPE,
+        UserDataBox::BOX_TYPE,
+        SubTrackBox::BOX_TYPE,
+        SubTrackDefinitionBox::BOX_TYPE,
     ];
 
     /// Box types of the top-level containers, each with how it is read and written back
