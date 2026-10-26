@@ -39,6 +39,8 @@ extern crate alloc;
 mod amve;
 mod ardi;
 mod assp;
+mod audio_element;
+mod audio_element_selection;
 mod box_type_argument;
 mod brnd;
 mod btrt;
@@ -63,6 +65,7 @@ mod etyp;
 mod free;
 mod ftyp;
 mod full_box;
+mod grpl;
 mod hdlp;
 mod hdlr;
 mod idat;
@@ -100,6 +103,7 @@ mod pasp;
 mod pdin;
 mod pitm;
 mod prft;
+mod prsl;
 mod rsot;
 mod saio;
 mod saiz;
@@ -157,6 +161,11 @@ pub use assp::{
     AlternativeStartupSequenceOffsetEntry, AlternativeStartupSequenceOffsets,
     AlternativeStartupSequencePropertiesBox,
 };
+pub use audio_element::{
+    AudioElementBox, AudioElementDescriptionBox, AudioElementPosInteractivityPolar,
+    AudioElementProminenceInteractivity,
+};
+pub use audio_element_selection::{AudioElementSelectionBox, AudioElementSelectionDescriptionBox};
 pub use brnd::BrandProperty;
 pub use btrt::BitRateBox;
 pub use cclv::{ContentColourVolumeBox, ContentColourVolumePrimaries};
@@ -171,6 +180,7 @@ pub use ctts::{CompositionOffsetBox, CompositionOffsetEntry};
 pub use etyp::{ExtendedTypeBox, TypeCombinationBox};
 pub use free::{Free, FreeSpaceBox, FreeType, Skip};
 pub use ftyp::FileTypeBox;
+pub use grpl::{EntityToGroup, EntityToGroupBox, GroupsListBox};
 pub use hdlp::HandlerProperty;
 pub use hdlr::HandlerBox;
 pub use idat::ItemDataBox;
@@ -213,6 +223,7 @@ pub use pasp::PixelAspectRatioBox;
 pub use pdin::{ProgressiveDownloadInfoBox, ProgressiveDownloadInfoEntry};
 pub use pitm::PrimaryItemBox;
 pub use prft::ProducerReferenceTimeBox;
+pub use prsl::PreselectionGroupBox;
 pub use rsot::RedundantSampleOriginalTimingBox;
 pub use saio::SampleAuxiliaryInformationOffsetsBox;
 pub use saiz::{AuxInfoType, SampleAuxiliaryInformationSizesBox, SampleInfoSizes};

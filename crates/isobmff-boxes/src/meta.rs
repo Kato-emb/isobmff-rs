@@ -7,6 +7,7 @@ use isobmff_core::{
 
 use crate::dinf::DataInformationBox;
 use crate::full_box::{read_version_zero, write_version_zero};
+use crate::grpl::GroupsListBox;
 use crate::hdlr::HandlerBox;
 use crate::idat::ItemDataBox;
 use crate::iinf::ItemInfoBox;
@@ -25,9 +26,10 @@ use crate::xml::XmlVariant;
 ///
 /// Every child is optional, `hdlr` included: the 2026 edition no longer
 /// requires it. The box writes `hdlr`, `dinf`, `iloc`, `ipro`, `iinf`, the
-/// XML, `pitm`, `idat`, `iref` and `iprp` in this order, whatever order they
-/// were read in: the order of ISO/IEC 14496-12 Table 2, and for `iprp`, which
-/// Table 2 does not list, right after `iref`, as in the Syntax of the box.
+/// XML, `pitm`, `idat`, `iref`, `iprp` and `grpl` in this order, whatever
+/// order they were read in: the order of ISO/IEC 14496-12 Table 2, and for
+/// `iprp`, which Table 2 does not list, right after `iref`, as in the Syntax
+/// of the box.
 /// Children of other types are kept in
 /// [`other_boxes`](Self::other_boxes), and written back after them. A child
 /// that does not read is kept there too, and reads back [`None`].
@@ -55,6 +57,8 @@ pub struct MetaBox {
     pub iref: Option<ItemReferenceBox>,
     /// Item properties and the items they are associated with
     pub iprp: Option<ItemPropertiesBox>,
+    /// Entity groups of the items, and at the file level of the tracks
+    pub grpl: Option<GroupsListBox>,
     /// Children of a type the box holds no field for
     pub other_boxes: OtherBoxes,
 }
@@ -79,6 +83,7 @@ impl BoxDecode for MetaBox {
             idat: children.take_zero_or_one_if_decoded()?,
             iref: children.take_zero_or_one_if_decoded()?,
             iprp: children.take_zero_or_one_if_decoded()?,
+            grpl: children.take_zero_or_one_if_decoded()?,
             other_boxes: OtherBoxes::from(children),
         })
     }
@@ -101,6 +106,7 @@ impl BoxEncode for MetaBox {
             self.idat.as_ref().map_or(0, BoxEncode::encoded_len),
             self.iref.as_ref().map_or(0, BoxEncode::encoded_len),
             self.iprp.as_ref().map_or(0, BoxEncode::encoded_len),
+            self.grpl.as_ref().map_or(0, BoxEncode::encoded_len),
         ]
         .into_iter()
         .chain(self.other_boxes.as_slice().iter().map(AnyBox::encoded_len))
@@ -142,6 +148,9 @@ impl BoxEncode for MetaBox {
         if let Some(iprp) = &self.iprp {
             rest = iprp.encode(rest)?;
         }
+        if let Some(grpl) = &self.grpl {
+            rest = grpl.encode(rest)?;
+        }
         for kept in self.other_boxes.as_slice() {
             rest = kept.encode(rest)?;
         }
@@ -158,6 +167,7 @@ mod tests {
 
     use super::MetaBox;
     use crate::encoded;
+    use crate::grpl::GroupsListBox;
     use crate::hdlr::HandlerBox;
     use crate::idat::ItemDataBox;
     use crate::iinf::ItemInfoBox;
@@ -196,6 +206,9 @@ mod tests {
 
     /// `iprp` of an empty `ipco` and an `ipma` of version 0 and no entry
     const IPRP: &[u8] = b"\0\0\0\x20iprp\0\0\0\x08ipco\0\0\0\x10ipma\0\0\0\0\0\0\0\0";
+
+    /// `grpl` holding nothing
+    const GRPL: &[u8] = b"\0\0\0\x08grpl";
 
     /// `ipmc` holding nothing, a box this box holds no field for
     const IPMC: &[u8] = b"\0\0\0\x08ipmc";
@@ -236,6 +249,7 @@ mod tests {
                 ipma: vec![ItemPropertyAssociationBox::default()],
                 ..ItemPropertiesBox::default()
             }),
+            grpl: Some(GroupsListBox::default()),
             other_boxes: OtherBoxes::from(ChildBoxes::decode(IPMC).unwrap()),
             ..MetaBox::default()
         }
@@ -244,8 +258,9 @@ mod tests {
     #[test]
     fn reads_its_children_in_any_order_and_keeps_the_child_it_has_no_field_for() {
         let bytes = [
-            b"\0\0\0\xc2meta\0\0\0\0".as_slice(),
+            b"\0\0\0\xcameta\0\0\0\0".as_slice(),
             IPRP,
+            GRPL,
             IREF,
             IDAT,
             IPMC,
@@ -266,7 +281,7 @@ mod tests {
         assert_eq!(
             encoded(&meta()),
             [
-                b"\0\0\0\xc2meta\0\0\0\0".as_slice(),
+                b"\0\0\0\xcameta\0\0\0\0".as_slice(),
                 HDLR,
                 ILOC,
                 IPRO,
@@ -276,6 +291,7 @@ mod tests {
                 IDAT,
                 IREF,
                 IPRP,
+                GRPL,
                 IPMC
             ]
             .concat()

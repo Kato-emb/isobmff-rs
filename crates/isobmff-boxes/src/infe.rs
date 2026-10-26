@@ -147,7 +147,7 @@ impl Default for ItemInfoEntry {
 }
 
 /// Reads a `utf8string` that runs to its null terminator, or to the end of the payload where it has none
-fn read_string(reader: &mut FieldReader<'_>) -> Result<Utf8String, Error> {
+pub(crate) fn read_string(reader: &mut FieldReader<'_>) -> Result<Utf8String, Error> {
     let rest = reader.remainder();
     let len = rest
         .iter()
@@ -172,7 +172,7 @@ fn read_optional_string(reader: &mut FieldReader<'_>) -> Result<Option<Utf8Strin
 ///
 /// * [`InvalidUtf8String`](isobmff_core::ErrorKind::InvalidUtf8String):
 ///   `string` is not UTF-8.
-fn write_string(writer: &mut FieldWriter<'_>, string: &Utf8String) -> Result<(), Error> {
+pub(crate) fn write_string(writer: &mut FieldWriter<'_>, string: &Utf8String) -> Result<(), Error> {
     if string.as_str().is_none() {
         return Err(Error::invalid_utf8_string());
     }
