@@ -20,18 +20,20 @@ mod tests {
         AudioSampleEntryVariant, ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant,
         CompactSampleSizeBox, CompressedMovieBox, CompressedMovieFragmentBox,
         CompressedSegmentIndexBox, CompressedSubsegmentIndexBox, DataInformationBox, EditBox,
-        ExtendedTypeBox, FileTypeBox, Free, FreeSpaceBox, HandlerBox, IdentifiedMediaDataBox,
-        LanguageCode, Matrix, MediaBox, MediaDataBox, MediaHeaderBox, MediaInformationBox, MetaBox,
-        MovieBox, MovieExtendsBox, MovieFragmentBox, MovieFragmentRandomAccessBox, MovieHeaderBox,
-        OriginalFileTypeBox, OriginalFormatBox, ProducerReferenceTimeBox,
-        ProgressiveDownloadInfoBox, ProtectionSchemeInfoBox, RestrictedSchemeInfoBox,
-        RollRecoveryEntry, SampleDependencyTypeBox, SampleDescription, SampleDescriptionBox,
-        SampleEntry, SampleFlags, SampleGroupDescriptionBox, SampleGroupDescriptionEntry,
-        SampleSizeBox, SampleSizeVariant, SampleSizes, SampleTableBox, SampleToChunkBox,
-        SampleToChunkEntry, SampleToGroupBox, SampleToGroupEntry, SchemeTypeBox, SegmentIndexBox,
-        SegmentIndexReference, SegmentTypeBox, SimpleTextSampleEntry, Skip, StereoVideoBox,
-        SubTrackBox, SubTrackDefinitionBox, SubsegmentIndexBox, TemporalLevelEntry,
-        TimeToSampleBox, TimeToSampleEntry, TrackBox, TrackFragmentBaseMediaDecodeTimeBox,
+        ExtendedTypeBox, FileTypeBox, Free, FreeSpaceBox, HandlerBox, HintInformationBox,
+        HintStatisticsBox, IdentifiedMediaDataBox, LanguageCode, Matrix, MediaBox, MediaDataBox,
+        MediaHeaderBox, MediaInformationBox, MetaBox, MovieBox, MovieExtendsBox, MovieFragmentBox,
+        MovieFragmentRandomAccessBox, MovieHeaderBox, OriginalFileTypeBox, OriginalFormatBox,
+        ProducerReferenceTimeBox, ProgressiveDownloadInfoBox, ProtectionSchemeInfoBox,
+        ReceivedRtpHintSampleEntry, RestrictedSchemeInfoBox, RollRecoveryEntry,
+        RtcpReceptionHintSampleEntry, RtpHintSampleEntry, SampleDependencyTypeBox,
+        SampleDescription, SampleDescriptionBox, SampleEntry, SampleFlags,
+        SampleGroupDescriptionBox, SampleGroupDescriptionEntry, SampleSizeBox, SampleSizeVariant,
+        SampleSizes, SampleTableBox, SampleToChunkBox, SampleToChunkEntry, SampleToGroupBox,
+        SampleToGroupEntry, SchemeTypeBox, SegmentIndexBox, SegmentIndexReference, SegmentTypeBox,
+        SimpleTextSampleEntry, Skip, StereoVideoBox, SubTrackBox, SubTrackDefinitionBox,
+        SubsegmentIndexBox, TemporalLevelEntry, TimeOffsetBox, TimeToSampleBox, TimeToSampleEntry,
+        TimescaleEntryBox, TimestampSynchronyBox, TrackBox, TrackFragmentBaseMediaDecodeTimeBox,
         TrackFragmentBox, TrackFragmentHeaderBox, TrackHeaderBox, TrackReference,
         TrackReferenceBox, TrackReferenceTypeBox, TrackRunBox, TrackRunSample, TrackRunSamples,
         UserDataBox, VisualRandomAccessEntry, VisualSampleEntry, XmlBox, XmlMetaDataSampleEntry,
@@ -510,6 +512,114 @@ mod tests {
         assert_eq!((differences, read), (Vec::<String>::new(), 4));
     }
 
+    /// Returns `hinttrackversion`, `highestcompatibleversion` and `maxpacketsize` as GPAC reports them for the hint sample entry `node`
+    ///
+    /// GPAC prints `maxpacketsize` as signed, so its 32 bits are taken.
+    fn gpac_hint_track_fields(node: &Value) -> (u16, u16, u32) {
+        let max_packet_size: i64 = gpac_integer(node, "@MaxPacketSize");
+        (
+            gpac_integer(node, "@HintTrackVersion"),
+            gpac_integer(node, "@LastCompatibleVersion"),
+            u32::try_from(max_packet_size)
+                .or_else(|_| i32::try_from(max_packet_size).map(i32::cast_unsigned))
+                .unwrap(),
+        )
+    }
+
+    /// Returns `tims` with the timescale GPAC reports for the `tims` in `node`
+    fn gpac_timescale(node: &Value) -> TimescaleEntryBox {
+        let mut timescale = TimescaleEntryBox::default();
+        timescale.timescale = gpac_integer(gpac_box(node, "tims"), "@TimeScale");
+        timescale
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn the_sample_entries_of_hint_tracks_read_as_gpac_reports_them_and_write_back() {
+        let mut differences = Vec::new();
+        let mut read = Vec::new();
+        for ConformanceFile {
+            name,
+            bytes,
+            report,
+            ..
+        } in conformance_files()
+        {
+            for (entry, reported) in sample_entries_of(&bytes, &report, b"hint") {
+                read.push(entry.format);
+                differences.extend(match entry.format.as_bytes() {
+                    b"rtp " => read_as_gpac_reports_and_written_back(
+                        &name,
+                        &entry,
+                        reported,
+                        |ours: &RtpHintSampleEntry, node| {
+                            let mut hint = ours.clone();
+                            (
+                                hint.hint_track_version,
+                                hint.highest_compatible_version,
+                                hint.max_packet_size,
+                            ) = gpac_hint_track_fields(node);
+                            hint.tims = gpac_timescale(node);
+                            hint
+                        },
+                    ),
+                    b"rrtp" => read_as_gpac_reports_and_written_back(
+                        &name,
+                        &entry,
+                        reported,
+                        |ours: &ReceivedRtpHintSampleEntry, node| {
+                            let mut hint = ours.clone();
+                            (
+                                hint.hint_track_version,
+                                hint.highest_compatible_version,
+                                hint.max_packet_size,
+                            ) = gpac_hint_track_fields(node);
+                            hint.tims = gpac_timescale(node);
+                            hint.tsro = gpac_boxes(node, "tsro").first().map(|tsro| {
+                                let mut offset = TimeOffsetBox::default();
+                                offset.offset = gpac_integer(tsro, "@TimeStampOffset");
+                                offset
+                            });
+                            hint.tssy = gpac_boxes(node, "tssy").first().map(|tssy| {
+                                let mut synchrony = TimestampSynchronyBox::default();
+                                synchrony.timestamp_sync = gpac_integer(tssy, "@timestamp_sync");
+                                synchrony
+                            });
+                            hint
+                        },
+                    ),
+                    b"rtcp" => read_as_gpac_reports_and_written_back(
+                        &name,
+                        &entry,
+                        reported,
+                        |ours: &RtcpReceptionHintSampleEntry, node| {
+                            let mut hint = ours.clone();
+                            (
+                                hint.hint_track_version,
+                                hint.highest_compatible_version,
+                                hint.max_packet_size,
+                            ) = gpac_hint_track_fields(node);
+                            hint
+                        },
+                    ),
+                    _ => vec![format!("{name}: {:?} has no class here", entry.format)],
+                });
+            }
+        }
+
+        assert_eq!(
+            (differences, read),
+            (
+                Vec::<String>::new(),
+                [
+                    b"rtp ", b"rtp ", b"rtp ", b"rrtp", b"rrtp", b"rtcp", b"rtcp"
+                ]
+                .map(|format| FourCc::new(*format))
+                .to_vec()
+            )
+        );
+    }
+
     /// Returns `ours` with the fields GPAC reports for an audio sample entry set as GPAC reports them in `node`
     ///
     /// GPAC reports the integer part of `samplerate`, under `@SampleRate`, or
@@ -700,7 +810,7 @@ mod tests {
     }
 
     /// Box types of the containers a written-back container may hold its children in another order in
-    const REORDERED: [BoxType; 15] = [
+    const REORDERED: [BoxType; 17] = [
         MetaBox::BOX_TYPE,
         MovieBox::BOX_TYPE,
         TrackBox::BOX_TYPE,
@@ -716,6 +826,8 @@ mod tests {
         UserDataBox::BOX_TYPE,
         SubTrackBox::BOX_TYPE,
         SubTrackDefinitionBox::BOX_TYPE,
+        HintInformationBox::BOX_TYPE,
+        HintStatisticsBox::BOX_TYPE,
     ];
 
     /// Box types of the top-level containers, each with how it is read and written back
@@ -1243,7 +1355,7 @@ mod tests {
     }
 
     /// Returns the four-character code GPAC reports for `field` of `node`
-    fn gpac_four_cc(node: &Value, field: &str) -> FourCc {
+    pub(super) fn gpac_four_cc(node: &Value, field: &str) -> FourCc {
         FourCc::new(gpac_str(node, field).as_bytes().try_into().unwrap())
     }
 

@@ -5,6 +5,10 @@ mod audio_v1;
 mod font;
 mod haptic;
 mod metadata;
+mod received_rtp_hint;
+mod received_srtp_hint;
+mod rtcp_hint;
+mod rtp_hint;
 mod subtitle;
 mod text;
 mod visual;
@@ -30,6 +34,10 @@ pub use haptic::HapticSampleEntry;
 pub use metadata::{
     BoxedMetadataSampleEntry, TextMetaDataSampleEntry, UriMetaSampleEntry, XmlMetaDataSampleEntry,
 };
+pub use received_rtp_hint::{ProtectedRtpReceptionHintSampleEntry, ReceivedRtpHintSampleEntry};
+pub use received_srtp_hint::ReceivedSrtpHintSampleEntry;
+pub use rtcp_hint::{RtcpReceptionHintSampleEntry, SrtcpReceptionHintSampleEntry};
+pub use rtp_hint::{RtpHintSampleEntry, SrtpHintSampleEntry};
 pub use subtitle::{TextSubtitleSampleEntry, XmlSubtitleSampleEntry};
 pub use text::SimpleTextSampleEntry;
 pub use visual::VisualSampleEntry;
@@ -58,6 +66,12 @@ pub use volumetric::VolumetricVisualSampleEntry;
 /// * `fdsm`: [`FontSampleEntry`].
 /// * `volv`: [`VolumetricVisualSampleEntry`].
 /// * `hapt`: [`HapticSampleEntry`].
+/// * `hint`: [`RtpHintSampleEntry`] (`rtp `), [`SrtpHintSampleEntry`]
+///   (`srtp`), [`ReceivedRtpHintSampleEntry`] (`rrtp`),
+///   [`ReceivedSrtpHintSampleEntry`] (`rsrp`),
+///   [`ProtectedRtpReceptionHintSampleEntry`] (`prtp`),
+///   [`RtcpReceptionHintSampleEntry`] (`rtcp`) and
+///   [`SrtcpReceptionHintSampleEntry`] (`stcp`).
 ///
 /// A class of a fixed format reads only an entry of that format. A class
 /// that takes a coding name, such as [`VisualSampleEntry`], reads an entry of

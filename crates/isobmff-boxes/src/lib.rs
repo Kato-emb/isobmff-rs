@@ -76,6 +76,10 @@ mod gitn;
 mod grpl;
 mod hdlp;
 mod hdlr;
+mod hinf;
+mod hint_entry_boxes;
+mod hint_info;
+mod hint_statistics;
 mod idat;
 mod iinf;
 mod iloc;
@@ -120,6 +124,7 @@ mod prsl;
 mod reservoir;
 mod rinf;
 mod rsot;
+mod rtp_tlv;
 mod saio;
 mod saiz;
 mod sample_entry;
@@ -137,6 +142,7 @@ mod sidx;
 mod sinf;
 mod spki;
 mod srat;
+mod srpp;
 mod ssix;
 mod ssrt;
 mod stbl;
@@ -223,6 +229,20 @@ pub use gitn::{GroupIdToNameBox, GroupIdToNameEntry};
 pub use grpl::{EntityToGroup, EntityToGroupBox, GroupsListBox};
 pub use hdlp::HandlerProperty;
 pub use hdlr::HandlerBox;
+pub use hinf::{HintMaxRateBox, HintPayloadIdBox, HintStatisticsBox};
+pub use hint_entry_boxes::{
+    ReceivedCryptoContextIdBox, ReceivedSsrcBox, RolloverCounterBox, SequenceOffsetBox,
+    TimeOffsetBox, TimescaleEntryBox, TimestampSynchronyBox,
+};
+pub use hint_info::{
+    HintInformationBox, RtpMovieHintInformationBox, RtpTrackSdpHintInformationBox,
+};
+pub use hint_statistics::{
+    HintBytesSent64Box, HintBytesSentBox, HintImmediateBytesSentBox, HintLargestPacketBox,
+    HintLongestPacketBox, HintMaxRelativeTimeBox, HintMediaBytesSentBox, HintMinRelativeTimeBox,
+    HintPacketsSent64Box, HintPacketsSentBox, HintPayloadBytesSent64Box, HintPayloadBytesSentBox,
+    HintRepeatedBytesSentBox,
+};
 pub use idat::ItemDataBox;
 pub use iinf::ItemInfoBox;
 pub use iloc::{ItemLocation, ItemLocationBox, ItemLocationExtent};
@@ -272,13 +292,16 @@ pub use prsl::PreselectionGroupBox;
 pub use reservoir::{FecReservoirBox, FileReservoirBox, ReservoirEntry};
 pub use rinf::RestrictedSchemeInfoBox;
 pub use rsot::RedundantSampleOriginalTimingBox;
+pub use rtp_tlv::{ReceivedCsrcBox, RtpHeaderExtensionTlvBox, RtpOffsetTlvBox};
 pub use saio::SampleAuxiliaryInformationOffsetsBox;
 pub use saiz::{AuxInfoType, SampleAuxiliaryInformationSizesBox, SampleInfoSizes};
 pub use sample_entry::{
     AudioSampleEntry, AudioSampleEntryV1, AudioSampleEntryVariant, BoxedMetadataSampleEntry,
-    FontSampleEntry, HapticSampleEntry, SampleEntry, SimpleTextSampleEntry,
-    TextMetaDataSampleEntry, TextSubtitleSampleEntry, UriMetaSampleEntry, VisualSampleEntry,
-    VolumetricVisualSampleEntry, XmlMetaDataSampleEntry, XmlSubtitleSampleEntry,
+    FontSampleEntry, HapticSampleEntry, ProtectedRtpReceptionHintSampleEntry,
+    ReceivedRtpHintSampleEntry, ReceivedSrtpHintSampleEntry, RtcpReceptionHintSampleEntry,
+    RtpHintSampleEntry, SampleEntry, SimpleTextSampleEntry, SrtcpReceptionHintSampleEntry,
+    SrtpHintSampleEntry, TextMetaDataSampleEntry, TextSubtitleSampleEntry, UriMetaSampleEntry,
+    VisualSampleEntry, VolumetricVisualSampleEntry, XmlMetaDataSampleEntry, XmlSubtitleSampleEntry,
 };
 pub use sample_group_entry::{
     AlternativeStartupEntry, AlternativeStartupPiece, AudioPreRollEntry, CleanApertureEntry,
@@ -300,6 +323,7 @@ pub use sidx::{SegmentIndexBox, SegmentIndexReference};
 pub use sinf::ProtectionSchemeInfoBox;
 pub use spki::SamplePackingInformationBox;
 pub use srat::SamplingRateBox;
+pub use srpp::SrtpProcessBox;
 pub use ssix::{Subsegment, SubsegmentIndexBox, SubsegmentRange};
 pub use ssrt::{SubSampleDescription, SubSampleReferenceTableBox};
 pub use stbl::SampleTableBox;
