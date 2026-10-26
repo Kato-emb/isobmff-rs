@@ -183,7 +183,17 @@ jobs:
   conformance:
     runs-on: ubuntu-latest
     steps:
-      - run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends ffmpeg
+      # Not apt's ffmpeg: it drags in every codec library from a mirror that
+      # can stall for many minutes, and its version moves with the runner
+      # image. FFmpeg-Builds keeps each month's last build, so this one stays
+      # downloadable.
+      - name: Install ffprobe
+        timeout-minutes: 5
+        run: |
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/ffmpeg.tar.xz" \
+            https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n8.1.3-9-g29e619e767-linux64-lgpl-8.1.tar.xz
+          echo "dfa863a00ca81f1bdf58a372b18cff4820f0017e55de32778de8ecd8ed92a02e  $RUNNER_TEMP/ffmpeg.tar.xz" | sha256sum -c --quiet -
+          tar -xJf "$RUNNER_TEMP/ffmpeg.tar.xz" -C "$RUNNER_TEMP" --strip-components=2 --wildcards '*/bin/ffprobe'
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -209,7 +219,7 @@ jobs:
         with:
           path: ${{ runner.temp }}/conformance
           key: conformance-${{ hashFiles('scripts/fetch-conformance.sh') }}
-      - run: ISOBMFF_CONFORMANCE_DIR="$RUNNER_TEMP/conformance" cargo nextest run -p isobmff-core -p isobmff-boxes --run-ignored only
+      - run: ISOBMFF_CONFORMANCE_DIR="$RUNNER_TEMP/conformance" ISOBMFF_FFPROBE="$RUNNER_TEMP/ffprobe" cargo nextest run -p isobmff-core -p isobmff-boxes --run-ignored only
 
   # Advisories, license policy, banned crates and sources, per deny.toml.
   deny:
