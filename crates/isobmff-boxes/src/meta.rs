@@ -6,6 +6,7 @@ use isobmff_core::{
 };
 
 use crate::dinf::DataInformationBox;
+use crate::fiin::FdItemInformationBox;
 use crate::full_box::{read_version_zero, write_version_zero};
 use crate::grpl::GroupsListBox;
 use crate::hdlr::HandlerBox;
@@ -26,7 +27,7 @@ use crate::xml::XmlVariant;
 ///
 /// Every child is optional, `hdlr` included: the 2026 edition no longer
 /// requires it. The box writes `hdlr`, `dinf`, `iloc`, `ipro`, `iinf`, the
-/// XML, `pitm`, `idat`, `iref`, `iprp` and `grpl` in this order, whatever
+/// XML, `pitm`, `fiin`, `idat`, `iref`, `iprp` and `grpl` in this order, whatever
 /// order they were read in: the order of ISO/IEC 14496-12 Table 2, and for
 /// `iprp`, which Table 2 does not list, right after `iref`, as in the Syntax
 /// of the box.
@@ -51,6 +52,8 @@ pub struct MetaBox {
     pub xml: Option<XmlVariant>,
     /// Primary item
     pub pitm: Option<PrimaryItemBox>,
+    /// Partitioning of the items for file delivery, and the FD sessions they are sent in
+    pub fiin: Option<FdItemInformationBox>,
     /// Data of the items the box stores itself
     pub idat: Option<ItemDataBox>,
     /// Typed references from items to other items
@@ -80,6 +83,7 @@ impl BoxDecode for MetaBox {
             iinf: children.take_zero_or_one_if_decoded()?,
             xml: children.take_zero_or_one_variant_if_decoded()?,
             pitm: children.take_zero_or_one_if_decoded()?,
+            fiin: children.take_zero_or_one_if_decoded()?,
             idat: children.take_zero_or_one_if_decoded()?,
             iref: children.take_zero_or_one_if_decoded()?,
             iprp: children.take_zero_or_one_if_decoded()?,
@@ -103,6 +107,7 @@ impl BoxEncode for MetaBox {
                 XmlVariant::BinaryXml(binary) => binary.encoded_len(),
             }),
             self.pitm.as_ref().map_or(0, BoxEncode::encoded_len),
+            self.fiin.as_ref().map_or(0, BoxEncode::encoded_len),
             self.idat.as_ref().map_or(0, BoxEncode::encoded_len),
             self.iref.as_ref().map_or(0, BoxEncode::encoded_len),
             self.iprp.as_ref().map_or(0, BoxEncode::encoded_len),
@@ -139,6 +144,9 @@ impl BoxEncode for MetaBox {
         if let Some(pitm) = &self.pitm {
             rest = pitm.encode(rest)?;
         }
+        if let Some(fiin) = &self.fiin {
+            rest = fiin.encode(rest)?;
+        }
         if let Some(idat) = &self.idat {
             rest = idat.encode(rest)?;
         }
@@ -167,6 +175,7 @@ mod tests {
 
     use super::MetaBox;
     use crate::encoded;
+    use crate::fiin::FdItemInformationBox;
     use crate::grpl::GroupsListBox;
     use crate::hdlr::HandlerBox;
     use crate::idat::ItemDataBox;
@@ -191,6 +200,9 @@ mod tests {
 
     /// `pitm` of version 0 naming item 1
     const PITM: &[u8] = b"\0\0\0\x0epitm\0\0\0\0\0\x01";
+
+    /// `fiin` of no partition entry
+    const FIIN: &[u8] = b"\0\0\0\x0efiin\0\0\0\0\0\0";
 
     /// `idat` of two bytes
     const IDAT: &[u8] = b"\0\0\0\x0aidat\xaa\xbb";
@@ -239,6 +251,7 @@ mod tests {
                 version: 0,
                 item_id: 1,
             }),
+            fiin: Some(FdItemInformationBox::default()),
             idat: Some(ItemDataBox {
                 data: vec![0xaa, 0xbb],
             }),
@@ -258,7 +271,8 @@ mod tests {
     #[test]
     fn reads_its_children_in_any_order_and_keeps_the_child_it_has_no_field_for() {
         let bytes = [
-            b"\0\0\0\xcameta\0\0\0\0".as_slice(),
+            b"\0\0\0\xd8meta\0\0\0\0".as_slice(),
+            FIIN,
             IPRP,
             GRPL,
             IREF,
@@ -281,13 +295,14 @@ mod tests {
         assert_eq!(
             encoded(&meta()),
             [
-                b"\0\0\0\xcameta\0\0\0\0".as_slice(),
+                b"\0\0\0\xd8meta\0\0\0\0".as_slice(),
                 HDLR,
                 ILOC,
                 IPRO,
                 IINF,
                 BXML,
                 PITM,
+                FIIN,
                 IDAT,
                 IREF,
                 IPRP,
