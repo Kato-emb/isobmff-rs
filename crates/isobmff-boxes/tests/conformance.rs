@@ -12,13 +12,17 @@ mod tests {
         ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, CompactSampleSizeBox,
         DataInformationBox, EditBox, ExtendedTypeBox, FileTypeBox, Free, FreeSpaceBox, HandlerBox,
         IdentifiedMediaDataBox, LanguageCode, Matrix, MediaBox, MediaDataBox, MediaHeaderBox,
-        MediaInformationBox, MovieBox, MovieHeaderBox, OriginalFileTypeBox,
-        ProgressiveDownloadInfoBox, RollRecoveryEntry, SampleDependencyTypeBox,
-        SampleGroupDescriptionBox, SampleGroupDescriptionEntry, SampleSizeBox, SampleSizeVariant,
-        SampleSizes, SampleTableBox, SampleToChunkBox, SampleToChunkEntry, SampleToGroupBox,
-        SampleToGroupEntry, SegmentTypeBox, Skip, TemporalLevelEntry, TimeToSampleBox,
-        TimeToSampleEntry, TrackBox, TrackHeaderBox, TrackReference, TrackReferenceBox,
-        TrackReferenceTypeBox, VisualRandomAccessEntry,
+        MediaInformationBox, MovieBox, MovieExtendsBox, MovieFragmentBox,
+        MovieFragmentRandomAccessBox, MovieHeaderBox, OriginalFileTypeBox,
+        ProducerReferenceTimeBox, ProgressiveDownloadInfoBox, RollRecoveryEntry,
+        SampleDependencyTypeBox, SampleFlags, SampleGroupDescriptionBox,
+        SampleGroupDescriptionEntry, SampleSizeBox, SampleSizeVariant, SampleSizes, SampleTableBox,
+        SampleToChunkBox, SampleToChunkEntry, SampleToGroupBox, SampleToGroupEntry,
+        SegmentIndexBox, SegmentIndexReference, SegmentTypeBox, Skip, SubsegmentIndexBox,
+        TemporalLevelEntry, TimeToSampleBox, TimeToSampleEntry, TrackBox,
+        TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
+        TrackHeaderBox, TrackReference, TrackReferenceBox, TrackReferenceTypeBox, TrackRunBox,
+        TrackRunSample, TrackRunSamples, VisualRandomAccessEntry,
     };
     use isobmff_core::{
         BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, Error, FourCc, I8F8, RawBox, U16F16,
@@ -44,7 +48,7 @@ mod tests {
     type WrittenBack = fn(&[u8]) -> Result<Vec<u8>, Error>;
 
     /// Box types that can lie at the top level of a file and have a type here, each with how it is read and written back
-    const TOP_LEVEL: [(BoxType, WrittenBack); 9] = [
+    const TOP_LEVEL: [(BoxType, WrittenBack); 12] = [
         (FileTypeBox::BOX_TYPE, written_back::<FileTypeBox>),
         (SegmentTypeBox::BOX_TYPE, written_back::<SegmentTypeBox>),
         (ExtendedTypeBox::BOX_TYPE, written_back::<ExtendedTypeBox>),
@@ -68,6 +72,15 @@ mod tests {
         (
             ProgressiveDownloadInfoBox::BOX_TYPE,
             written_back::<ProgressiveDownloadInfoBox>,
+        ),
+        (SegmentIndexBox::BOX_TYPE, written_back::<SegmentIndexBox>),
+        (
+            SubsegmentIndexBox::BOX_TYPE,
+            written_back::<SubsegmentIndexBox>,
+        ),
+        (
+            ProducerReferenceTimeBox::BOX_TYPE,
+            written_back::<ProducerReferenceTimeBox>,
         ),
     ];
 
@@ -184,8 +197,8 @@ mod tests {
         assert_eq!(differences, Vec::<String>::new());
     }
 
-    /// Box types of the containers a written-back `moov` may hold its children in another order in
-    const REORDERED: [BoxType; 7] = [
+    /// Box types of the containers a written-back container may hold its children in another order in
+    const REORDERED: [BoxType; 11] = [
         MovieBox::BOX_TYPE,
         TrackBox::BOX_TYPE,
         MediaBox::BOX_TYPE,
@@ -193,6 +206,20 @@ mod tests {
         SampleTableBox::BOX_TYPE,
         DataInformationBox::BOX_TYPE,
         EditBox::BOX_TYPE,
+        MovieExtendsBox::BOX_TYPE,
+        MovieFragmentBox::BOX_TYPE,
+        TrackFragmentBox::BOX_TYPE,
+        MovieFragmentRandomAccessBox::BOX_TYPE,
+    ];
+
+    /// Box types of the top-level containers, each with how it is read and written back
+    const CONTAINERS: [(BoxType, WrittenBack); 3] = [
+        (MovieBox::BOX_TYPE, written_back::<MovieBox>),
+        (MovieFragmentBox::BOX_TYPE, written_back::<MovieFragmentBox>),
+        (
+            MovieFragmentRandomAccessBox::BOX_TYPE,
+            written_back::<MovieFragmentRandomAccessBox>,
+        ),
     ];
 
     /// Returns whether `written` holds the boxes `original` holds, those inside the containers of [`REORDERED`] in any order
@@ -224,20 +251,21 @@ mod tests {
         }) && unmatched.is_empty()
     }
 
-    /// Returns the file `bytes` with each of its top-level `moov`s read and written back
-    fn with_moov_written_back(bytes: &[u8]) -> Result<Vec<u8>, Error> {
+    /// Returns the file `bytes` with each of its top-level boxes that has a type here read and written back
+    fn with_boxes_written_back(bytes: &[u8]) -> Result<Vec<u8>, Error> {
         let mut written = Vec::with_capacity(bytes.len());
         for framed in top_level(bytes) {
-            if framed.header().box_type() == MovieBox::BOX_TYPE {
-                let movie = MovieBox::decode_payload(framed.payload())?;
-                let mut box_bytes = vec![0; usize::try_from(movie.encoded_len()).unwrap()];
-                movie.encode(&mut box_bytes)?;
-                written.extend(box_bytes);
-            } else {
-                let mut header = vec![0; usize::try_from(framed.header().encoded_len()).unwrap()];
-                framed.header().encode(&mut header)?;
-                written.extend(header);
-                written.extend(framed.payload());
+            let box_type = framed.header().box_type();
+            let mut header = vec![0; usize::try_from(framed.header().encoded_len()).unwrap()];
+            framed.header().encode(&mut header)?;
+            written.extend(header);
+            match CONTAINERS
+                .iter()
+                .chain(&TOP_LEVEL)
+                .find(|(known, _)| *known == box_type)
+            {
+                Some((_, written_back)) => written.extend(written_back(framed.payload())?),
+                None => written.extend(framed.payload()),
             }
         }
 
@@ -246,17 +274,22 @@ mod tests {
 
     #[test]
     #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
-    fn moov_writes_back_every_box_it_was_read_from() {
+    fn every_top_level_container_writes_back_every_box_it_was_read_from() {
         let mut differences = Vec::new();
         for ConformanceFile { name, bytes, .. } in conformance_files() {
             for framed in top_level(&bytes) {
-                if framed.header().box_type() != MovieBox::BOX_TYPE {
+                let box_type = framed.header().box_type();
+                let Some((_, written_back)) =
+                    CONTAINERS.iter().find(|(known, _)| *known == box_type)
+                else {
                     continue;
-                }
-                match written_back::<MovieBox>(framed.payload()) {
+                };
+                match written_back(framed.payload()) {
                     Ok(written) if same_boxes(framed.payload(), &written) => {}
-                    Ok(_) => differences.push(format!("{name}: moov writes back other boxes")),
-                    Err(error) => differences.push(format!("{name}: moov: {error}")),
+                    Ok(_) => {
+                        differences.push(format!("{name}: {box_type} writes back other boxes"))
+                    }
+                    Err(error) => differences.push(format!("{name}: {box_type}: {error}")),
                 }
             }
         }
@@ -808,6 +841,172 @@ mod tests {
         assert_eq!(differences, Vec::<String>::new());
     }
 
+    /// Returns the sample flags GPAC reports in `node`, whose names it gives `prefix` where it reports default or first sample flags and no prefix in a track run row
+    fn gpac_sample_flags(node: &Value, prefix: &str) -> SampleFlags {
+        let mut flags = SampleFlags::default();
+        flags.is_leading = gpac_integer(node, "@IsLeading");
+        flags.sample_depends_on = gpac_integer(node, &format!("@{prefix}DependsOn"));
+        flags.sample_is_depended_on = gpac_integer(node, &format!("@{prefix}IsDependedOn"));
+        flags.sample_has_redundancy = gpac_integer(node, &format!("@{prefix}HasRedundancy"));
+        flags.sample_padding_value = gpac_integer(node, "@SamplePadding");
+        flags.sample_is_non_sync_sample = gpac_str(node, &format!("@{prefix}Sync")) == "0";
+        flags.sample_degradation_priority =
+            gpac_integer(node, &format!("@{prefix}DegradationPriority"));
+        flags
+    }
+
+    /// Returns `tfhd` as GPAC reports it in `node`
+    fn gpac_track_fragment_header(node: &Value) -> TrackFragmentHeaderBox {
+        let tf_flags: u32 = gpac_integer(node, "@Flags");
+        let field =
+            |mask: u32, name: &str| (tf_flags & mask != 0).then(|| gpac_integer(node, name));
+        let mut header = TrackFragmentHeaderBox::default();
+        header.duration_is_empty = tf_flags & 0x01_0000 != 0;
+        header.default_base_is_moof = tf_flags & 0x02_0000 != 0;
+        header.track_id = gpac_integer(node, "@TrackID");
+        header.base_data_offset =
+            (tf_flags & 0x00_0001 != 0).then(|| gpac_integer(node, "@BaseDataOffset"));
+        header.sample_description_index = field(0x00_0002, "@SampleDescriptionIndex");
+        header.default_sample_duration = field(0x00_0008, "@SampleDuration");
+        header.default_sample_size = field(0x00_0010, "@SampleSize");
+        header.default_sample_flags = (tf_flags & 0x00_0020 != 0)
+            .then(|| gpac_sample_flags(node.get("DefaultSampleFlags").unwrap(), "Sample"));
+        header
+    }
+
+    /// Returns `trun` as GPAC reports it in `node`
+    fn gpac_track_run(node: &Value) -> TrackRunBox {
+        let tr_flags: u32 = gpac_integer(node, "@Flags");
+        let mut track_run = TrackRunBox::default();
+        track_run.version = gpac_integer(node, "@Version");
+        track_run.data_offset =
+            (tr_flags & 0x00_0001 != 0).then(|| gpac_integer(node, "@DataOffset"));
+        track_run.first_sample_flags = (tr_flags & 0x00_0004 != 0)
+            .then(|| gpac_sample_flags(node.get("FirstSampleFlags").unwrap(), "Sample"));
+        track_run.samples = if tr_flags & 0x00_0f00 == 0 {
+            TrackRunSamples::EmptyRows {
+                sample_count: gpac_integer(node, "@SampleCount"),
+            }
+        } else {
+            TrackRunSamples::Rows {
+                samples: gpac_elements(node, "TrackRunEntry")
+                    .into_iter()
+                    .map(|reported| {
+                        let field = |mask: u32, name: &str| {
+                            (tr_flags & mask != 0).then(|| gpac_integer(reported, name))
+                        };
+                        let mut sample = TrackRunSample::default();
+                        sample.sample_duration = field(0x00_0100, "@Duration");
+                        sample.sample_size = field(0x00_0200, "@Size");
+                        sample.sample_flags =
+                            (tr_flags & 0x00_0400 != 0).then(|| gpac_sample_flags(reported, ""));
+                        sample.sample_composition_time_offset = (tr_flags & 0x00_0800 != 0)
+                            .then(|| gpac_integer(reported, "@CTSOffset"));
+                        sample
+                    })
+                    .collect(),
+            }
+        };
+        track_run
+    }
+
+    /// Returns `tfdt` as GPAC reports it in `node`
+    fn gpac_decode_time(node: &Value) -> TrackFragmentBaseMediaDecodeTimeBox {
+        let mut decode_time = TrackFragmentBaseMediaDecodeTimeBox::default();
+        decode_time.version = gpac_integer(node, "@Version");
+        decode_time.base_media_decode_time = gpac_integer(node, "@baseMediaDecodeTime");
+        decode_time
+    }
+
+    /// Returns `sidx` as GPAC reports it in `node`
+    fn gpac_segment_index(node: &Value) -> SegmentIndexBox {
+        let mut segment_index = SegmentIndexBox::default();
+        segment_index.version = gpac_integer(node, "@Version");
+        segment_index.reference_id = gpac_integer(node, "@reference_ID");
+        segment_index.timescale = gpac_integer(node, "@timescale");
+        segment_index.earliest_presentation_time =
+            gpac_integer(node, "@earliest_presentation_time");
+        segment_index.first_offset = gpac_integer(node, "@first_offset");
+        segment_index.references = gpac_elements(node, "Reference")
+            .into_iter()
+            .map(|reported| {
+                let mut reference = SegmentIndexReference::default();
+                reference.reference_type = gpac_str(reported, "@type") == "1";
+                reference.referenced_size = gpac_integer(reported, "@size");
+                reference.subsegment_duration = gpac_integer(reported, "@duration");
+                reference.starts_with_sap = gpac_str(reported, "@startsWithSAP") == "1";
+                reference.sap_type = gpac_integer(reported, "@SAP_type");
+                reference.sap_delta_time = gpac_integer(reported, "@SAPDeltaTime");
+                reference
+            })
+            .collect();
+        segment_index
+    }
+
+    /// Boxes of a track fragment that state its samples: its `tfhd`, its `tfdt` and its track runs
+    type TrackFragmentSamples = (
+        TrackFragmentHeaderBox,
+        Option<TrackFragmentBaseMediaDecodeTimeBox>,
+        Vec<TrackRunBox>,
+    );
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn the_track_fragments_and_segment_indexes_read_as_gpac_reports_them() {
+        let mut differences = Vec::new();
+        for ConformanceFile {
+            name,
+            bytes,
+            report,
+            ..
+        } in conformance_files()
+        {
+            let boxes = top_level(&bytes);
+            let ours: (Vec<TrackFragmentSamples>, Vec<SegmentIndexBox>) = (
+                read_all::<MovieFragmentBox>(&boxes)
+                    .into_iter()
+                    .flat_map(|fragment| fragment.traf)
+                    .map(|track_fragment| {
+                        (
+                            track_fragment.tfhd,
+                            track_fragment.tfdt,
+                            track_fragment.trun,
+                        )
+                    })
+                    .collect(),
+                read_all::<SegmentIndexBox>(&boxes),
+            );
+            let theirs: (Vec<TrackFragmentSamples>, Vec<SegmentIndexBox>) = (
+                gpac_top_level(&report, "moof")
+                    .into_iter()
+                    .flat_map(|fragment| gpac_boxes(fragment, "traf"))
+                    .map(|track_fragment| {
+                        (
+                            gpac_track_fragment_header(gpac_box(track_fragment, "tfhd")),
+                            gpac_boxes(track_fragment, "tfdt")
+                                .first()
+                                .copied()
+                                .map(gpac_decode_time),
+                            gpac_boxes(track_fragment, "trun")
+                                .into_iter()
+                                .map(gpac_track_run)
+                                .collect(),
+                        )
+                    })
+                    .collect(),
+                gpac_top_level(&report, "sidx")
+                    .into_iter()
+                    .map(gpac_segment_index)
+                    .collect(),
+            );
+            if ours != theirs {
+                differences.push(format!("{name}: read {ours:?}, GPAC reports {theirs:?}"));
+            }
+        }
+
+        assert_eq!(differences, Vec::<String>::new());
+    }
+
     /// Returns what `ffprobe` reads off `bytes`: the time base, duration and number of samples of each stream, and the duration of the file
     fn ffprobe_streams(name: &str, bytes: &[u8]) -> Value {
         let probed = env::temp_dir().join(format!("isobmff-boxes-conformance-{name}"));
@@ -837,16 +1036,16 @@ mod tests {
 
     #[test]
     #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
-    fn a_file_with_its_moov_written_back_reads_in_ffmpeg_as_the_file_it_was_read_from() {
+    fn a_file_with_its_boxes_written_back_reads_in_ffmpeg_as_the_file_it_was_read_from() {
         let mut differences = Vec::new();
         for ConformanceFile { name, bytes, .. } in conformance_files() {
             if OFFSETS_INTO_MOOV.contains(&name.as_str()) {
                 continue;
             }
-            let written = match with_moov_written_back(&bytes) {
+            let written = match with_boxes_written_back(&bytes) {
                 Ok(written) => written,
                 Err(error) => {
-                    differences.push(format!("{name}: moov: {error}"));
+                    differences.push(format!("{name}: {error}"));
                     continue;
                 }
             };

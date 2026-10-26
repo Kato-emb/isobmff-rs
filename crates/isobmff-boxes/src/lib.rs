@@ -36,6 +36,7 @@
 
 extern crate alloc;
 
+mod assp;
 mod box_type_argument;
 mod chunk_offset;
 mod csgp;
@@ -54,16 +55,25 @@ mod ftyp;
 mod full_box;
 mod hdlr;
 mod imda;
+mod leva;
 mod mdat;
 mod mdhd;
 mod mdia;
 mod media_information_header;
+mod mehd;
+mod mfhd;
+mod mfra;
+mod mfro;
 mod minf;
+mod moof;
 mod moov;
+mod mvex;
 mod mvhd;
 mod otyp;
 mod padb;
 mod pdin;
+mod prft;
+mod rsot;
 mod saio;
 mod saiz;
 mod sample_group_entry;
@@ -71,6 +81,8 @@ mod sample_size;
 mod sbgp;
 mod sdtp;
 mod sgpd;
+mod sidx;
+mod ssix;
 mod ssrt;
 mod stbl;
 mod stdp;
@@ -79,16 +91,23 @@ mod stsh;
 mod stss;
 mod stts;
 mod styp;
+mod tfdt;
+mod tfhd;
+mod tfra;
 mod tkhd;
+mod traf;
 mod trak;
 mod tref;
+mod trep;
+mod trex;
 mod trgr;
+mod trun;
 mod ttyp;
 
 pub use data_entry::{
     DataEntry, DataEntryImdaBox, DataEntrySeqNumImdaBox, DataEntryUrlBox, DataEntryUrnBox,
 };
-pub use data_types::{LanguageCode, Matrix};
+pub use data_types::{LanguageCode, Matrix, SampleFlags};
 pub use dinf::DataInformationBox;
 pub use dref::DataReferenceBox;
 pub use edts::EditBox;
@@ -97,6 +116,10 @@ pub use elst::{EditListBox, EditListEntry};
 mod subs;
 mod table;
 
+pub use assp::{
+    AlternativeStartupSequenceOffsetEntry, AlternativeStartupSequenceOffsets,
+    AlternativeStartupSequencePropertiesBox,
+};
 pub use chunk_offset::{ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant};
 pub use csgp::{CompactSampleToGroupBox, CompactSampleToGroupPattern};
 pub use cslg::CompositionToDecodeBox;
@@ -106,6 +129,7 @@ pub use free::{Free, FreeSpaceBox, FreeType, Skip};
 pub use ftyp::FileTypeBox;
 pub use hdlr::HandlerBox;
 pub use imda::IdentifiedMediaDataBox;
+pub use leva::{Level, LevelAssignment, LevelAssignmentBox};
 pub use mdat::MediaDataBox;
 pub use mdhd::MediaHeaderBox;
 pub use mdia::MediaBox;
@@ -113,12 +137,20 @@ pub use media_information_header::{
     HintMediaHeaderBox, MediaInformationHeader, NullMediaHeaderBox, SoundMediaHeaderBox,
     SubtitleMediaHeaderBox, VideoMediaHeaderBox, VolumetricVisualMediaHeaderBox,
 };
+pub use mehd::MovieExtendsHeaderBox;
+pub use mfhd::MovieFragmentHeaderBox;
+pub use mfra::MovieFragmentRandomAccessBox;
+pub use mfro::MovieFragmentRandomAccessOffsetBox;
 pub use minf::MediaInformationBox;
+pub use moof::MovieFragmentBox;
 pub use moov::MovieBox;
+pub use mvex::MovieExtendsBox;
 pub use mvhd::MovieHeaderBox;
 pub use otyp::OriginalFileTypeBox;
 pub use padb::PaddingBitsBox;
 pub use pdin::{ProgressiveDownloadInfoBox, ProgressiveDownloadInfoEntry};
+pub use prft::ProducerReferenceTimeBox;
+pub use rsot::RedundantSampleOriginalTimingBox;
 pub use saio::SampleAuxiliaryInformationOffsetsBox;
 pub use saiz::{AuxInfoType, SampleAuxiliaryInformationSizesBox, SampleInfoSizes};
 pub use sample_group_entry::{
@@ -132,6 +164,8 @@ pub use sample_size::{CompactSampleSizeBox, SampleSizeBox, SampleSizeVariant, Sa
 pub use sbgp::{SampleToGroupBox, SampleToGroupEntry};
 pub use sdtp::{SampleDependencyTypeBox, SampleDependencyTypeEntry};
 pub use sgpd::SampleGroupDescriptionBox;
+pub use sidx::{SegmentIndexBox, SegmentIndexReference};
+pub use ssix::{Subsegment, SubsegmentIndexBox, SubsegmentRange};
 pub use ssrt::{SubSampleDescription, SubSampleReferenceTableBox};
 pub use stbl::SampleTableBox;
 pub use stdp::DegradationPriorityBox;
@@ -143,10 +177,17 @@ pub use styp::SegmentTypeBox;
 pub use subs::{
     SubSample, SubSampleInformationBox, SubSampleInformationEntry, SubSampleProperties,
 };
+pub use tfdt::TrackFragmentBaseMediaDecodeTimeBox;
+pub use tfhd::TrackFragmentHeaderBox;
+pub use tfra::{TrackFragmentRandomAccessBox, TrackFragmentRandomAccessEntry};
 pub use tkhd::TrackHeaderBox;
+pub use traf::TrackFragmentBox;
 pub use trak::TrackBox;
 pub use tref::{TrackReference, TrackReferenceBox, TrackReferenceTypeBox};
+pub use trep::TrackExtensionPropertiesBox;
+pub use trex::TrackExtendsBox;
 pub use trgr::{StereoVideoGroupBox, TrackGroup, TrackGroupBox, TrackGroupTypeBox};
+pub use trun::{TrackRunBox, TrackRunSample, TrackRunSamples};
 pub use ttyp::TrackTypeBox;
 
 /// Returns the bytes of the whole box `value` writes
