@@ -8,6 +8,7 @@ use isobmff_core::{
 
 use crate::btrt::BitRateBox;
 use crate::mime::MimeBox;
+use crate::rinf::RestrictedSchemeInfoBox;
 use crate::sample_entry::text::{MimeFormat, encode_remaining, remaining_len};
 use crate::sample_entry::{
     AnyEntryBoxes, SampleEntry, children_len, encode_children, encode_optional, from_class,
@@ -35,8 +36,8 @@ const DEFINED: [BoxType; 1] = [MimeBox::BOX_TYPE];
 /// The children are laid out in three parts, the order in which the entry
 /// writes them, whatever order they were read in: the boxes a specification
 /// deriving the class defines, in [`derived_boxes`](Self::derived_boxes);
-/// `mime`, then the boxes any sample entry may hold, `sinf`, `scrb` and
-/// `btrt` in this order, which §12.6.3.3 lets `mime` and `btrt` lie in either
+/// `mime`, then the boxes any sample entry may hold, `sinf`, `scrb`, `rinf`
+/// and `btrt` in this order, which §12.6.3.3 lets `mime` and `btrt` lie in either
 /// order among; and the boxes no definition of the class names, in
 /// [`extra_boxes`](Self::extra_boxes). A child of a type this crate does not
 /// read that lies before every box of the second part is read into the first
@@ -61,6 +62,8 @@ pub struct XmlSubtitleSampleEntry {
     pub sinf: Vec<ProtectionSchemeInfoBox>,
     /// Scrambling schemes applied to the samples
     pub scrb: Vec<ScrambleSchemeInfoBox>,
+    /// Restriction of a restricted sample entry, or advisory information on the restriction of one whose type was not transformed
+    pub rinf: Option<RestrictedSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -100,6 +103,7 @@ impl TryFrom<&SampleEntry> for XmlSubtitleSampleEntry {
             mime: children.take_zero_or_one_if_decoded()?,
             sinf: children.take_zero_or_more_if_decoded(),
             scrb: children.take_zero_or_more_if_decoded(),
+            rinf: children.take_zero_or_one_if_decoded()?,
             btrt: children.take_zero_or_one_if_decoded()?,
             extra_boxes: OtherBoxes::from(children),
         })
@@ -120,6 +124,7 @@ impl TryFrom<&XmlSubtitleSampleEntry> for SampleEntry {
         let any_entry = AnyEntryBoxes {
             sinf: &subtitle.sinf,
             scrb: &subtitle.scrb,
+            rinf: subtitle.rinf.as_ref(),
             btrt: subtitle.btrt.as_ref(),
         };
         let remaining_len = children_len(
@@ -177,6 +182,8 @@ pub struct TextSubtitleSampleEntry {
     pub sinf: Vec<ProtectionSchemeInfoBox>,
     /// Scrambling schemes applied to the samples
     pub scrb: Vec<ScrambleSchemeInfoBox>,
+    /// Restriction of a restricted sample entry, or advisory information on the restriction of one whose type was not transformed
+    pub rinf: Option<RestrictedSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -211,6 +218,7 @@ impl TryFrom<&SampleEntry> for TextSubtitleSampleEntry {
             txtc: read.txtc,
             sinf: read.sinf,
             scrb: read.scrb,
+            rinf: read.rinf,
             btrt: read.btrt,
             extra_boxes: read.extra_boxes,
         })
@@ -231,6 +239,7 @@ impl TryFrom<&TextSubtitleSampleEntry> for SampleEntry {
         let any_entry = AnyEntryBoxes {
             sinf: &subtitle.sinf,
             scrb: &subtitle.scrb,
+            rinf: subtitle.rinf.as_ref(),
             btrt: subtitle.btrt.as_ref(),
         };
 

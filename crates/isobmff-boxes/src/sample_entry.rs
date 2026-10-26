@@ -19,6 +19,7 @@ use isobmff_core::{
 };
 
 use crate::btrt::BitRateBox;
+use crate::rinf::RestrictedSchemeInfoBox;
 use crate::scrb::ScrambleSchemeInfoBox;
 use crate::sinf::ProtectionSchemeInfoBox;
 
@@ -62,14 +63,16 @@ pub use volumetric::VolumetricVisualSampleEntry;
 /// that takes a coding name, such as [`VisualSampleEntry`], reads an entry of
 /// any format and keeps it.
 ///
-/// # Protected sample entries
+/// # Protected and restricted sample entries
 ///
 /// A protected sample entry, of a code ISO/IEC 14496-12 §13.4.1 lists in
 /// Table 13 such as `encv` or `enca`, keeps the syntax of the class of its
 /// original format, which the `frma` of its `sinf` gives, and adds the
-/// `sinf`. A class that takes a coding name reads and writes the entry as it
-/// is: a [`VisualSampleEntry`] reads an `encv`, and an
-/// [`AudioSampleEntryVariant`] an `enca`. A class of a fixed format refuses
+/// `sinf`. A restricted sample entry, of a code §13.5.2 lists in Table 14
+/// such as `resv`, does the same with a `rinf`. A class that takes a coding
+/// name reads and writes the entry as it is: a [`VisualSampleEntry`] reads an
+/// `encv` or a `resv`, and an [`AudioSampleEntryVariant`] an `enca` or a
+/// `resa`. A class of a fixed format refuses
 /// the entry, which reads into the class once its [`format`](Self::format) is
 /// set to that of the class, and is written back by setting the format of the
 /// entry the class writes:
@@ -244,6 +247,7 @@ pub(crate) struct AnyEntryChildren {
     pub(crate) derived_boxes: OtherBoxes,
     pub(crate) sinf: Vec<ProtectionSchemeInfoBox>,
     pub(crate) scrb: Vec<ScrambleSchemeInfoBox>,
+    pub(crate) rinf: Option<RestrictedSchemeInfoBox>,
     pub(crate) btrt: Option<BitRateBox>,
     pub(crate) extra_boxes: OtherBoxes,
 }
@@ -262,6 +266,7 @@ impl AnyEntryChildren {
             derived_boxes,
             sinf: children.take_zero_or_more_if_decoded(),
             scrb: children.take_zero_or_more_if_decoded(),
+            rinf: children.take_zero_or_one_if_decoded()?,
             btrt: children.take_zero_or_one_if_decoded()?,
             extra_boxes: OtherBoxes::from(children),
         })
@@ -272,14 +277,16 @@ impl AnyEntryChildren {
 pub(crate) struct AnyEntryBoxes<'entry> {
     pub(crate) sinf: &'entry [ProtectionSchemeInfoBox],
     pub(crate) scrb: &'entry [ScrambleSchemeInfoBox],
+    pub(crate) rinf: Option<&'entry RestrictedSchemeInfoBox>,
     pub(crate) btrt: Option<&'entry BitRateBox>,
 }
 
 impl AnyEntryBoxes<'_> {
     /// Box types of the boxes
-    pub(crate) const BOX_TYPES: [BoxType; 3] = [
+    pub(crate) const BOX_TYPES: [BoxType; 4] = [
         ProtectionSchemeInfoBox::BOX_TYPE,
         ScrambleSchemeInfoBox::BOX_TYPE,
+        RestrictedSchemeInfoBox::BOX_TYPE,
         BitRateBox::BOX_TYPE,
     ];
 
@@ -289,6 +296,7 @@ impl AnyEntryBoxes<'_> {
             .iter()
             .map(BoxEncode::encoded_len)
             .chain(self.scrb.iter().map(BoxEncode::encoded_len))
+            .chain(self.rinf.map(BoxEncode::encoded_len))
             .chain(self.btrt.map(BoxEncode::encoded_len))
             .fold(0, u64::saturating_add)
     }
@@ -308,6 +316,7 @@ impl AnyEntryBoxes<'_> {
         for scrb in self.scrb {
             rest = scrb.encode(rest)?;
         }
+        rest = encode_optional(rest, self.rinf)?;
         encode_optional(rest, self.btrt)
     }
 }

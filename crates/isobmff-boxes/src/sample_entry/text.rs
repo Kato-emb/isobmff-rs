@@ -8,6 +8,7 @@ use isobmff_core::{
 };
 
 use crate::btrt::BitRateBox;
+use crate::rinf::RestrictedSchemeInfoBox;
 use crate::sample_entry::{
     AnyEntryBoxes, SampleEntry, children_len, encode_children, encode_optional, from_class,
     of_format, read_string, split_children,
@@ -27,6 +28,7 @@ pub(super) struct MimeFormat {
     pub(super) txtc: Option<TextConfigBox>,
     pub(super) sinf: Vec<ProtectionSchemeInfoBox>,
     pub(super) scrb: Vec<ScrambleSchemeInfoBox>,
+    pub(super) rinf: Option<RestrictedSchemeInfoBox>,
     pub(super) btrt: Option<BitRateBox>,
     pub(super) extra_boxes: OtherBoxes,
 }
@@ -51,6 +53,7 @@ impl MimeFormat {
             txtc: children.take_zero_or_one_if_decoded()?,
             sinf: children.take_zero_or_more_if_decoded(),
             scrb: children.take_zero_or_more_if_decoded(),
+            rinf: children.take_zero_or_one_if_decoded()?,
             btrt: children.take_zero_or_one_if_decoded()?,
             extra_boxes: OtherBoxes::from(children),
         })
@@ -118,8 +121,8 @@ pub(super) fn encode_remaining(
 /// The children are laid out in three parts, the order in which the entry
 /// writes them, whatever order they were read in: the boxes a specification
 /// deriving the class defines, in [`derived_boxes`](Self::derived_boxes);
-/// `txtC`, then the boxes any sample entry may hold, `sinf`, `scrb` and
-/// `btrt` in this order; and the boxes no definition of the class names, in
+/// `txtC`, then the boxes any sample entry may hold, `sinf`, `scrb`, `rinf`
+/// and `btrt` in this order; and the boxes no definition of the class names, in
 /// [`extra_boxes`](Self::extra_boxes). A child of a type this crate does not
 /// read that lies before every box of the second part is read into the first
 /// part, and one that lies after one of them into the third.
@@ -141,6 +144,8 @@ pub struct SimpleTextSampleEntry {
     pub sinf: Vec<ProtectionSchemeInfoBox>,
     /// Scrambling schemes applied to the samples
     pub scrb: Vec<ScrambleSchemeInfoBox>,
+    /// Restriction of a restricted sample entry, or advisory information on the restriction of one whose type was not transformed
+    pub rinf: Option<RestrictedSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -175,6 +180,7 @@ impl TryFrom<&SampleEntry> for SimpleTextSampleEntry {
             txtc: read.txtc,
             sinf: read.sinf,
             scrb: read.scrb,
+            rinf: read.rinf,
             btrt: read.btrt,
             extra_boxes: read.extra_boxes,
         })
@@ -195,6 +201,7 @@ impl TryFrom<&SimpleTextSampleEntry> for SampleEntry {
         let any_entry = AnyEntryBoxes {
             sinf: &text.sinf,
             scrb: &text.scrb,
+            rinf: text.rinf.as_ref(),
             btrt: text.btrt.as_ref(),
         };
 

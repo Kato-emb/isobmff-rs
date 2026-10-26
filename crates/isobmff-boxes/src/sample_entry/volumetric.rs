@@ -6,6 +6,7 @@ use isobmff_core::{Error, FieldReader, FourCc, OtherBoxes};
 
 use crate::btrt::BitRateBox;
 use crate::data_types::CompressorName;
+use crate::rinf::RestrictedSchemeInfoBox;
 use crate::sample_entry::{
     AnyEntryBoxes, AnyEntryChildren, SampleEntry, children_len, encode_children, from_class,
 };
@@ -39,6 +40,8 @@ pub struct VolumetricVisualSampleEntry {
     pub sinf: Vec<ProtectionSchemeInfoBox>,
     /// Scrambling schemes applied to the samples
     pub scrb: Vec<ScrambleSchemeInfoBox>,
+    /// Restriction of a restricted sample entry, or advisory information on the restriction of one whose type was not transformed
+    pub rinf: Option<RestrictedSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -54,6 +57,7 @@ impl Default for VolumetricVisualSampleEntry {
             derived_boxes: OtherBoxes::new(),
             sinf: Vec::new(),
             scrb: Vec::new(),
+            rinf: None,
             btrt: None,
             extra_boxes: OtherBoxes::new(),
         }
@@ -83,6 +87,7 @@ impl TryFrom<&SampleEntry> for VolumetricVisualSampleEntry {
             derived_boxes: children.derived_boxes,
             sinf: children.sinf,
             scrb: children.scrb,
+            rinf: children.rinf,
             btrt: children.btrt,
             extra_boxes: children.extra_boxes,
         })
@@ -101,6 +106,7 @@ impl TryFrom<&VolumetricVisualSampleEntry> for SampleEntry {
         let any_entry = AnyEntryBoxes {
             sinf: &volumetric.sinf,
             scrb: &volumetric.scrb,
+            rinf: volumetric.rinf.as_ref(),
             btrt: volumetric.btrt.as_ref(),
         };
 

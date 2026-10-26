@@ -10,6 +10,7 @@ use isobmff_core::{
 use crate::btrt::BitRateBox;
 use crate::chnl::{ChannelLayout, ChannelStructure};
 use crate::dmix::{DownMixInstructions, UndecodedDownMixInstructions};
+use crate::rinf::RestrictedSchemeInfoBox;
 use crate::sample_entry::audio_v1::AudioSampleEntryV1;
 use crate::sample_entry::{
     AnyEntryBoxes, SampleEntry, children_len, encode_children, encode_optional, from_class,
@@ -181,7 +182,7 @@ impl Fields {
 /// 2. The boxes ISO/IEC 14496-12 defines for the class, each in a field of
 ///    its own: `chnl`, `dmix` and `srat` in the order the syntax of the
 ///    class gives them, then the boxes any sample entry may hold: `sinf`,
-///    `scrb`, then `btrt`.
+///    `scrb`, `rinf`, then `btrt`.
 /// 3. [`extra_boxes`](Self::extra_boxes): the boxes no definition of the
 ///    class names.
 ///
@@ -220,6 +221,8 @@ pub struct AudioSampleEntry {
     pub sinf: Vec<ProtectionSchemeInfoBox>,
     /// Scrambling schemes applied to the samples
     pub scrb: Vec<ScrambleSchemeInfoBox>,
+    /// Restriction of a restricted sample entry, or advisory information on the restriction of one whose type was not transformed
+    pub rinf: Option<RestrictedSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -240,6 +243,7 @@ impl Default for AudioSampleEntry {
             srat: None,
             sinf: Vec::new(),
             scrb: Vec::new(),
+            rinf: None,
             btrt: None,
             extra_boxes: OtherBoxes::new(),
         }
@@ -278,6 +282,7 @@ impl TryFrom<&SampleEntry> for AudioSampleEntry {
             srat: children.take_zero_or_one_if_decoded()?,
             sinf: children.take_zero_or_more_if_decoded(),
             scrb: children.take_zero_or_more_if_decoded(),
+            rinf: children.take_zero_or_one_if_decoded()?,
             btrt: children.take_zero_or_one_if_decoded()?,
             extra_boxes: OtherBoxes::from(children),
         })
@@ -308,6 +313,7 @@ impl AudioSampleEntry {
         AnyEntryBoxes {
             sinf: &self.sinf,
             scrb: &self.scrb,
+            rinf: self.rinf.as_ref(),
             btrt: self.btrt.as_ref(),
         }
     }

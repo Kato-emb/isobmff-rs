@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 use isobmff_core::{Error, FourCc, OtherBoxes};
 
 use crate::btrt::BitRateBox;
+use crate::rinf::RestrictedSchemeInfoBox;
 use crate::sample_entry::{
     AnyEntryBoxes, AnyEntryChildren, SampleEntry, children_len, encode_children, from_class,
 };
@@ -23,8 +24,8 @@ use crate::sinf::ProtectionSchemeInfoBox;
 /// The children are laid out in three parts, the order in which the entry
 /// writes them, whatever order they were read in: the boxes a specification
 /// deriving the class defines, in [`derived_boxes`](Self::derived_boxes);
-/// the boxes any sample entry may hold, `sinf`, `scrb` and `btrt` in this
-/// order; and the boxes no definition of the class names, in
+/// the boxes any sample entry may hold, `sinf`, `scrb`, `rinf` and `btrt` in
+/// this order; and the boxes no definition of the class names, in
 /// [`extra_boxes`](Self::extra_boxes). A child of a type this crate does not
 /// read that lies before every box of the second part is read into the
 /// first part, and one that lies after one of them into the third.
@@ -41,6 +42,8 @@ pub struct HapticSampleEntry {
     pub sinf: Vec<ProtectionSchemeInfoBox>,
     /// Scrambling schemes applied to the samples
     pub scrb: Vec<ScrambleSchemeInfoBox>,
+    /// Restriction of a restricted sample entry, or advisory information on the restriction of one whose type was not transformed
+    pub rinf: Option<RestrictedSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -55,6 +58,7 @@ impl Default for HapticSampleEntry {
             derived_boxes: OtherBoxes::new(),
             sinf: Vec::new(),
             scrb: Vec::new(),
+            rinf: None,
             btrt: None,
             extra_boxes: OtherBoxes::new(),
         }
@@ -79,6 +83,7 @@ impl TryFrom<&SampleEntry> for HapticSampleEntry {
             derived_boxes: children.derived_boxes,
             sinf: children.sinf,
             scrb: children.scrb,
+            rinf: children.rinf,
             btrt: children.btrt,
             extra_boxes: children.extra_boxes,
         })
@@ -97,6 +102,7 @@ impl TryFrom<&HapticSampleEntry> for SampleEntry {
         let any_entry = AnyEntryBoxes {
             sinf: &entry.sinf,
             scrb: &entry.scrb,
+            rinf: entry.rinf.as_ref(),
             btrt: entry.btrt.as_ref(),
         };
 

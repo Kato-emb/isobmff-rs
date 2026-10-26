@@ -15,6 +15,7 @@ use crate::colr::ColourInformationBox;
 use crate::data_types::CompressorName;
 use crate::mdcv::MasteringDisplayColourVolumeBox;
 use crate::pasp::PixelAspectRatioBox;
+use crate::rinf::RestrictedSchemeInfoBox;
 use crate::sample_entry::{
     AnyEntryBoxes, SampleEntry, children_len, encode_children, encode_optional, from_class,
     split_children,
@@ -48,7 +49,7 @@ const RESOLUTION_72_DPI: U16F16 = U16F16::from_integer(72);
 ///    its own: `clap` and `pasp` in the order the syntax of the class gives
 ///    them; `colr`, `clli`, `mdcv`, `cclv` and `amve`, which §12.1.5 to
 ///    §12.1.9 let the class hold, in that order; then the boxes any sample
-///    entry may hold: `sinf`, `scrb`, then `btrt`.
+///    entry may hold: `sinf`, `scrb`, `rinf`, then `btrt`.
 /// 3. [`extra_boxes`](Self::extra_boxes): the boxes no definition of the
 ///    class names, which §8.5.2.1 lets any sample entry hold after the boxes
 ///    its definition names.
@@ -101,6 +102,8 @@ pub struct VisualSampleEntry {
     pub sinf: Vec<ProtectionSchemeInfoBox>,
     /// Scrambling schemes applied to the samples
     pub scrb: Vec<ScrambleSchemeInfoBox>,
+    /// Restriction of a restricted sample entry, or advisory information on the restriction of one whose type was not transformed
+    pub rinf: Option<RestrictedSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -129,6 +132,7 @@ impl Default for VisualSampleEntry {
             amve: None,
             sinf: Vec::new(),
             scrb: Vec::new(),
+            rinf: None,
             btrt: None,
             extra_boxes: OtherBoxes::new(),
         }
@@ -192,6 +196,7 @@ impl TryFrom<&SampleEntry> for VisualSampleEntry {
             amve: children.take_zero_or_one_if_decoded()?,
             sinf: children.take_zero_or_more_if_decoded(),
             scrb: children.take_zero_or_more_if_decoded(),
+            rinf: children.take_zero_or_one_if_decoded()?,
             btrt: children.take_zero_or_one_if_decoded()?,
             extra_boxes: OtherBoxes::from(children),
         })
@@ -222,6 +227,7 @@ impl VisualSampleEntry {
         AnyEntryBoxes {
             sinf: &self.sinf,
             scrb: &self.scrb,
+            rinf: self.rinf.as_ref(),
             btrt: self.btrt.as_ref(),
         }
     }

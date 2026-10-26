@@ -10,7 +10,10 @@ use isobmff_core::{
 /// The boxes the scheme a `SchemeTypeBox` declares needs, whose types and
 /// formats that scheme defines. They are kept in
 /// [`other_boxes`](Self::other_boxes), in the order they came, and written
-/// back in it.
+/// back in it: a box a scheme of ISO/IEC 14496-12 defines, a
+/// [`StereoVideoBox`](crate::StereoVideoBox) or a
+/// [`SamplePackingInformationBox`](crate::SamplePackingInformationBox), is
+/// read from there.
 #[doc(alias = "schi")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]

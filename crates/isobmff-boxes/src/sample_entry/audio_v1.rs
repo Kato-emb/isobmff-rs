@@ -7,6 +7,7 @@ use isobmff_core::{BoxEncode, Error, FieldWriter, FourCc, OtherBoxes, U16F16};
 use crate::btrt::BitRateBox;
 use crate::chnl::ChannelLayout;
 use crate::dmix::DownMixInstructions;
+use crate::rinf::RestrictedSchemeInfoBox;
 use crate::sample_entry::audio::{Fields, check_downmixes, take_channel_boxes};
 use crate::sample_entry::{
     AnyEntryBoxes, SampleEntry, children_len, encode_children, encode_optional, from_class,
@@ -60,6 +61,8 @@ pub struct AudioSampleEntryV1 {
     pub sinf: Vec<ProtectionSchemeInfoBox>,
     /// Scrambling schemes applied to the samples
     pub scrb: Vec<ScrambleSchemeInfoBox>,
+    /// Restriction of a restricted sample entry, or advisory information on the restriction of one whose type was not transformed
+    pub rinf: Option<RestrictedSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -80,6 +83,7 @@ impl Default for AudioSampleEntryV1 {
             srat: None,
             sinf: Vec::new(),
             scrb: Vec::new(),
+            rinf: None,
             btrt: None,
             extra_boxes: OtherBoxes::new(),
         }
@@ -118,6 +122,7 @@ impl TryFrom<&SampleEntry> for AudioSampleEntryV1 {
             srat: children.take_zero_or_one_if_decoded()?,
             sinf: children.take_zero_or_more_if_decoded(),
             scrb: children.take_zero_or_more_if_decoded(),
+            rinf: children.take_zero_or_one_if_decoded()?,
             btrt: children.take_zero_or_one_if_decoded()?,
             extra_boxes: OtherBoxes::from(children),
         })
@@ -148,6 +153,7 @@ impl AudioSampleEntryV1 {
         AnyEntryBoxes {
             sinf: &self.sinf,
             scrb: &self.scrb,
+            rinf: self.rinf.as_ref(),
             btrt: self.btrt.as_ref(),
         }
     }
