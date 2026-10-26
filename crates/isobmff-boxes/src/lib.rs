@@ -63,6 +63,8 @@ mod free;
 mod ftyp;
 mod full_box;
 mod hdlr;
+mod idat;
+mod iloc;
 mod imda;
 mod leva;
 mod loudness;
@@ -73,6 +75,7 @@ mod mdhd;
 mod mdia;
 mod media_information_header;
 mod mehd;
+mod meta;
 mod mfhd;
 mod mfra;
 mod mfro;
@@ -86,6 +89,7 @@ mod otyp;
 mod padb;
 mod pasp;
 mod pdin;
+mod pitm;
 mod prft;
 mod rsot;
 mod saio;
@@ -123,6 +127,7 @@ mod ttyp;
 mod txtc;
 mod uri;
 mod urii;
+mod xml;
 
 pub use data_entry::{
     DataEntry, DataEntryImdaBox, DataEntrySeqNumImdaBox, DataEntryUrlBox, DataEntryUrnBox,
@@ -157,6 +162,8 @@ pub use etyp::{ExtendedTypeBox, TypeCombinationBox};
 pub use free::{Free, FreeSpaceBox, FreeType, Skip};
 pub use ftyp::FileTypeBox;
 pub use hdlr::HandlerBox;
+pub use idat::ItemDataBox;
+pub use iloc::{ItemLocation, ItemLocationBox, ItemLocationExtent};
 pub use imda::IdentifiedMediaDataBox;
 pub use leva::{Level, LevelAssignment, LevelAssignmentBox};
 pub use loudness::{
@@ -172,6 +179,7 @@ pub use media_information_header::{
     SubtitleMediaHeaderBox, VideoMediaHeaderBox, VolumetricVisualMediaHeaderBox,
 };
 pub use mehd::MovieExtendsHeaderBox;
+pub use meta::MetaBox;
 pub use mfhd::MovieFragmentHeaderBox;
 pub use mfra::MovieFragmentRandomAccessBox;
 pub use mfro::MovieFragmentRandomAccessOffsetBox;
@@ -185,6 +193,7 @@ pub use otyp::OriginalFileTypeBox;
 pub use padb::PaddingBitsBox;
 pub use pasp::PixelAspectRatioBox;
 pub use pdin::{ProgressiveDownloadInfoBox, ProgressiveDownloadInfoEntry};
+pub use pitm::PrimaryItemBox;
 pub use prft::ProducerReferenceTimeBox;
 pub use rsot::RedundantSampleOriginalTimingBox;
 pub use saio::SampleAuxiliaryInformationOffsetsBox;
@@ -236,6 +245,7 @@ pub use ttyp::TrackTypeBox;
 pub use txtc::TextConfigBox;
 pub use uri::UriBox;
 pub use urii::UriInitBox;
+pub use xml::{BinaryXmlBox, XmlBox, XmlVariant};
 
 /// Returns the bytes of the whole box `value` writes
 #[cfg(test)]

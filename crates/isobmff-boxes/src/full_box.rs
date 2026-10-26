@@ -68,6 +68,42 @@ pub(crate) fn write_composition_offset(
     }
 }
 
+/// Reads a field of 16 bits, or of 32 where `wide`, such as an `item_ID` whose width the version of its box sets
+///
+/// # Errors
+///
+/// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
+///   payload ends inside the field.
+pub(crate) fn read_u16_or_u32(reader: &mut FieldReader<'_>, wide: bool) -> Result<u32, Error> {
+    if wide {
+        reader.read_u32()
+    } else {
+        reader.read_u16().map(u32::from)
+    }
+}
+
+/// Writes `value` as a field of 16 bits, or of 32 where `wide`
+///
+/// # Errors
+///
+/// * [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) naming `field`:
+///   `value` does not fit the width.
+/// * [`TruncatedBuffer`](isobmff_core::ErrorKind::TruncatedBuffer): the
+///   buffer ends inside the field.
+pub(crate) fn write_u16_or_u32(
+    writer: &mut FieldWriter<'_>,
+    wide: bool,
+    value: u64,
+    field: &'static str,
+) -> Result<(), Error> {
+    let too_wide = |_| Error::invalid_value(field);
+    if wide {
+        writer.write_u32(u32::try_from(value).map_err(too_wide)?)
+    } else {
+        writer.write_u16(u16::try_from(value).map_err(too_wide)?)
+    }
+}
+
 /// Returns the width of the fields that version 1 of a box widens to 64 bits
 ///
 /// # Errors

@@ -7,6 +7,7 @@ use isobmff_core::{
     FieldWriter, OtherBoxes,
 };
 
+use crate::meta::MetaBox;
 use crate::mvex::MovieExtendsBox;
 use crate::mvhd::MovieHeaderBox;
 use crate::trak::TrackBox;
@@ -15,11 +16,11 @@ use crate::trak::TrackBox;
 ///
 /// Holds the structure data of a presentation: its header and its tracks.
 ///
-/// The box writes `mvhd`, the tracks and `mvex` in this order, whatever order
+/// The box writes `mvhd`, `meta`, the tracks and `mvex` in this order, whatever order
 /// they were read in: the order of ISO/IEC 14496-12 §7.3.4, and of Table 2
 /// where §7.3.4 sets none. Children of other types are kept in
-/// [`other_boxes`](Self::other_boxes), and written back after them. An `mvex`
-/// that does not read is kept there too, and reads back [`None`].
+/// [`other_boxes`](Self::other_boxes), and written back after them. A `meta` or
+/// an `mvex` that does not read is kept there too, and reads back [`None`].
 ///
 /// The box holds one or more tracks. A box of none does not read, and writing
 /// it is refused with
@@ -31,6 +32,8 @@ use crate::trak::TrackBox;
 pub struct MovieBox {
     /// Media-independent information of the presentation
     pub mvhd: MovieHeaderBox,
+    /// Untimed metadata and items of the presentation
+    pub meta: Option<MetaBox>,
     /// Tracks of the presentation, in the order they came
     pub trak: Vec<TrackBox>,
     /// Defaults of the movie fragments the file can hold, which it holds none of where this is [`None`]
@@ -49,6 +52,7 @@ impl BoxDecode for MovieBox {
 
         Ok(Self {
             mvhd: children.take_exactly_one()?,
+            meta: children.take_zero_or_one_if_decoded()?,
             trak: children.take_one_or_more()?,
             mvex: children.take_zero_or_one_if_decoded()?,
             other_boxes: OtherBoxes::from(children),
@@ -60,6 +64,7 @@ impl BoxEncode for MovieBox {
     fn payload_len(&self) -> u64 {
         [
             self.mvhd.encoded_len(),
+            self.meta.as_ref().map_or(0, BoxEncode::encoded_len),
             self.mvex.as_ref().map_or(0, BoxEncode::encoded_len),
         ]
         .into_iter()
@@ -74,6 +79,9 @@ impl BoxEncode for MovieBox {
         }
 
         let mut rest = self.mvhd.encode(writer.take_remainder())?;
+        if let Some(meta) = &self.meta {
+            rest = meta.encode(rest)?;
+        }
         for track in &self.trak {
             rest = track.encode(rest)?;
         }
@@ -96,6 +104,7 @@ mod tests {
 
     use super::MovieBox;
     use crate::encoded;
+    use crate::meta::MetaBox;
     use crate::mvex::MovieExtendsBox;
     use crate::mvhd::MovieHeaderBox;
     use crate::trak::TrackBox;
@@ -121,6 +130,9 @@ mod tests {
     const MVEX: &[u8] = b"\0\0\0\x28mvex\
         \0\0\0\x20trex\0\0\0\0\0\0\0\x01\0\0\0\x01\0\0\0\0\0\0\0\0\0\0\0\0";
 
+    /// `meta` holding nothing
+    const META: &[u8] = b"\0\0\0\x0cmeta\0\0\0\0";
+
     /// `iods` holding nothing, a box `moov` holds no field for
     const IODS: &[u8] = b"\0\0\0\x0ciods\0\0\0\0";
 
@@ -133,6 +145,7 @@ mod tests {
                 next_track_id: 2,
                 ..MovieHeaderBox::default()
             },
+            meta: Some(MetaBox::default()),
             trak: vec![track.clone(), track],
             mvex: Some(MovieExtendsBox::decode(MVEX).unwrap().0),
             other_boxes: OtherBoxes::from(ChildBoxes::decode(IODS).unwrap()),
@@ -141,16 +154,34 @@ mod tests {
 
     #[test]
     fn reads_its_children_in_any_order_and_keeps_the_child_it_has_no_field_for() {
-        let bytes = [b"\0\0\x02\x8amoov".as_slice(), MVEX, MVHD, IODS, TRAK, TRAK].concat();
+        let bytes = [
+            b"\0\0\x02\x96moov".as_slice(),
+            MVEX,
+            MVHD,
+            IODS,
+            TRAK,
+            META,
+            TRAK,
+        ]
+        .concat();
 
         assert_eq!(MovieBox::decode(&bytes), Ok((movie(), b"".as_slice())));
     }
 
     #[test]
-    fn writes_its_header_then_its_tracks_then_mvex_then_the_child_it_has_no_field_for() {
+    fn writes_its_header_then_meta_then_its_tracks_then_mvex_then_the_child_it_has_no_field_for() {
         assert_eq!(
             encoded(&movie()),
-            [b"\0\0\x02\x8amoov".as_slice(), MVHD, TRAK, TRAK, MVEX, IODS].concat()
+            [
+                b"\0\0\x02\x96moov".as_slice(),
+                MVHD,
+                META,
+                TRAK,
+                TRAK,
+                MVEX,
+                IODS
+            ]
+            .concat()
         );
     }
 

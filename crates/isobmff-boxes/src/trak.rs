@@ -7,6 +7,7 @@ use isobmff_core::{
 
 use crate::edts::EditBox;
 use crate::mdia::MediaBox;
+use crate::meta::MetaBox;
 use crate::tkhd::TrackHeaderBox;
 use crate::tref::TrackReferenceBox;
 use crate::trgr::TrackGroupBox;
@@ -17,12 +18,12 @@ use crate::ttyp::TrackTypeBox;
 /// Holds a single track of a presentation, with its temporal and spatial
 /// information and its media.
 ///
-/// The box writes `tkhd`, `ttyp`, `tref`, `trgr`, `edts` and `mdia` in this
+/// The box writes `tkhd`, `ttyp`, `tref`, `trgr`, `edts`, `meta` and `mdia` in this
 /// order, whatever order they were read in: the order of ISO/IEC 14496-12
 /// §7.3.4, and of Table 2 where §7.3.4 sets none. Children of other types are
 /// kept in [`other_boxes`](Self::other_boxes), and written back after them. A
-/// `ttyp`, a `tref`, a `trgr` or an `edts` that does not read is kept there
-/// too, and reads back [`None`].
+/// `ttyp`, a `tref`, a `trgr`, an `edts` or a `meta` that does not read is
+/// kept there too, and reads back [`None`].
 #[doc(alias = "trak")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -37,6 +38,8 @@ pub struct TrackBox {
     pub trgr: Option<TrackGroupBox>,
     /// Map of the presentation timeline to the media timeline
     pub edts: Option<EditBox>,
+    /// Untimed metadata and items of the track
+    pub meta: Option<MetaBox>,
     /// Media of the track
     pub mdia: MediaBox,
     /// Children of a type the box holds no field for
@@ -57,6 +60,7 @@ impl BoxDecode for TrackBox {
             tref: children.take_zero_or_one_if_decoded()?,
             trgr: children.take_zero_or_one_if_decoded()?,
             edts: children.take_zero_or_one_if_decoded()?,
+            meta: children.take_zero_or_one_if_decoded()?,
             mdia: children.take_exactly_one()?,
             other_boxes: OtherBoxes::from(children),
         })
@@ -71,6 +75,7 @@ impl BoxEncode for TrackBox {
             self.tref.as_ref().map_or(0, BoxEncode::encoded_len),
             self.trgr.as_ref().map_or(0, BoxEncode::encoded_len),
             self.edts.as_ref().map_or(0, BoxEncode::encoded_len),
+            self.meta.as_ref().map_or(0, BoxEncode::encoded_len),
             self.mdia.encoded_len(),
         ]
         .into_iter()
@@ -92,6 +97,9 @@ impl BoxEncode for TrackBox {
         if let Some(edts) = &self.edts {
             rest = edts.encode(rest)?;
         }
+        if let Some(meta) = &self.meta {
+            rest = meta.encode(rest)?;
+        }
         rest = self.mdia.encode(rest)?;
         for kept in self.other_boxes.as_slice() {
             rest = kept.encode(rest)?;
@@ -109,6 +117,7 @@ mod tests {
     use crate::edts::EditBox;
     use crate::encoded;
     use crate::mdia::MediaBox;
+    use crate::meta::MetaBox;
     use crate::tkhd::TrackHeaderBox;
     use crate::tref::TrackReferenceBox;
     use crate::trgr::TrackGroupBox;
@@ -134,6 +143,9 @@ mod tests {
     /// `trgr` of the `msrc` track group 1
     const TRGR: &[u8] = b"\0\0\0\x18trgr\0\0\0\x10msrc\0\0\0\0\0\0\0\x01";
 
+    /// `meta` holding nothing
+    const META: &[u8] = b"\0\0\0\x0cmeta\0\0\0\0";
+
     /// `udta` holding nothing, a box `trak` holds no field for
     const UDTA: &[u8] = b"\0\0\0\x08udta";
 
@@ -149,6 +161,7 @@ mod tests {
             tref: Some(TrackReferenceBox::decode(TREF).unwrap().0),
             trgr: Some(TrackGroupBox::decode(TRGR).unwrap().0),
             edts: Some(EditBox::default()),
+            meta: Some(MetaBox::default()),
             mdia: MediaBox::decode(MDIA).unwrap().0,
             other_boxes: OtherBoxes::from(ChildBoxes::decode(UDTA).unwrap()),
         }
@@ -157,9 +170,10 @@ mod tests {
     #[test]
     fn reads_its_children_and_keeps_the_child_it_has_no_field_for() {
         let bytes = [
-            b"\0\0\x01\x2dtrak".as_slice(),
+            b"\0\0\x01\x39trak".as_slice(),
             TKHD,
             UDTA,
+            META,
             EDTS,
             TRGR,
             MDIA,
@@ -175,11 +189,12 @@ mod tests {
         assert_eq!(
             encoded(&track()),
             [
-                b"\0\0\x01\x2dtrak".as_slice(),
+                b"\0\0\x01\x39trak".as_slice(),
                 TKHD,
                 TREF,
                 TRGR,
                 EDTS,
+                META,
                 MDIA,
                 UDTA
             ]
@@ -206,6 +221,7 @@ mod tests {
         expected.tref = None;
         expected.trgr = None;
         expected.edts = None;
+        expected.meta = None;
         expected.other_boxes = OtherBoxes::from(ChildBoxes::decode(unreadable).unwrap());
 
         assert_eq!(TrackBox::decode_payload(&payload), Ok(expected));

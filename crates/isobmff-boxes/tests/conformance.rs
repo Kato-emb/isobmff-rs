@@ -11,9 +11,10 @@ mod tests {
     use isobmff_boxes::{
         AudioSampleEntryVariant, ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant,
         CompactSampleSizeBox, DataInformationBox, EditBox, ExtendedTypeBox, FileTypeBox, Free,
-        FreeSpaceBox, HandlerBox, IdentifiedMediaDataBox, LanguageCode, Matrix, MediaBox,
-        MediaDataBox, MediaHeaderBox, MediaInformationBox, MovieBox, MovieExtendsBox,
-        MovieFragmentBox, MovieFragmentRandomAccessBox, MovieHeaderBox, OriginalFileTypeBox,
+        FreeSpaceBox, HandlerBox, IdentifiedMediaDataBox, ItemLocation, ItemLocationBox,
+        ItemLocationExtent, LanguageCode, Matrix, MediaBox, MediaDataBox, MediaHeaderBox,
+        MediaInformationBox, MetaBox, MovieBox, MovieExtendsBox, MovieFragmentBox,
+        MovieFragmentRandomAccessBox, MovieHeaderBox, OriginalFileTypeBox,
         ProducerReferenceTimeBox, ProgressiveDownloadInfoBox, RollRecoveryEntry,
         SampleDependencyTypeBox, SampleDescription, SampleDescriptionBox, SampleEntry, SampleFlags,
         SampleGroupDescriptionBox, SampleGroupDescriptionEntry, SampleSizeBox, SampleSizeVariant,
@@ -23,7 +24,8 @@ mod tests {
         TimeToSampleEntry, TrackBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
         TrackFragmentHeaderBox, TrackHeaderBox, TrackReference, TrackReferenceBox,
         TrackReferenceTypeBox, TrackRunBox, TrackRunSample, TrackRunSamples,
-        VisualRandomAccessEntry, VisualSampleEntry, XmlMetaDataSampleEntry, XmlSubtitleSampleEntry,
+        VisualRandomAccessEntry, VisualSampleEntry, XmlBox, XmlMetaDataSampleEntry,
+        XmlSubtitleSampleEntry,
     };
     use isobmff_core::{
         BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, Error, FourCc, I8F8, RawBox, U16F16,
@@ -550,7 +552,8 @@ mod tests {
     }
 
     /// Box types of the containers a written-back container may hold its children in another order in
-    const REORDERED: [BoxType; 11] = [
+    const REORDERED: [BoxType; 12] = [
+        MetaBox::BOX_TYPE,
         MovieBox::BOX_TYPE,
         TrackBox::BOX_TYPE,
         MediaBox::BOX_TYPE,
@@ -565,7 +568,8 @@ mod tests {
     ];
 
     /// Box types of the top-level containers, each with how it is read and written back
-    const CONTAINERS: [(BoxType, WrittenBack); 3] = [
+    const CONTAINERS: [(BoxType, WrittenBack); 4] = [
+        (MetaBox::BOX_TYPE, written_back::<MetaBox>),
         (MovieBox::BOX_TYPE, written_back::<MovieBox>),
         (MovieFragmentBox::BOX_TYPE, written_back::<MovieFragmentBox>),
         (
@@ -578,6 +582,8 @@ mod tests {
     ///
     /// An `sdtp` is the same box if it is written with the `flags` of 0 the
     /// specification fixes, whatever it was read with.
+    /// An `xml ` is the same box if it is written with the null terminator the
+    /// specification requires, whether or not it was read with one.
     fn same_boxes(original: &[u8], written: &[u8]) -> bool {
         let mut unmatched = top_level(written);
         top_level(original).into_iter().all(|child| {
@@ -585,7 +591,7 @@ mod tests {
             let position = unmatched.iter().position(|candidate| {
                 candidate.header().box_type() == box_type
                     && if REORDERED.contains(&box_type) {
-                        same_boxes(child.payload(), candidate.payload())
+                        same_container(box_type, child.payload(), candidate.payload())
                     } else if box_type == SampleDependencyTypeBox::BOX_TYPE {
                         // Why not compare the bytes whole: `08_bifs_carousel_v2.mp4`
                         // holds an `sdtp` of `flags` 1, which is written as 0.
@@ -593,6 +599,12 @@ mod tests {
                         original.first() == written.first()
                             && written.get(1..4) == Some([0, 0, 0].as_slice())
                             && original.get(4..) == written.get(4..)
+                    } else if box_type == XmlBox::BOX_TYPE {
+                        // Why not compare the bytes whole: `12_metas_v2.mp4`
+                        // holds `xml ` boxes of no null terminator, which the
+                        // 2026 edition requires and the box writes.
+                        let (original, written) = (child.payload(), candidate.payload());
+                        written == original || written.strip_suffix(&[0]) == Some(original)
                     } else {
                         candidate.payload() == child.payload()
                     }
@@ -601,6 +613,17 @@ mod tests {
                 .map(|position| unmatched.remove(position))
                 .is_some()
         }) && unmatched.is_empty()
+    }
+
+    /// Returns whether `written`, the payload of a container of `box_type`, opens with the fields `original` opens with and holds the boxes it holds, in any order
+    ///
+    /// A `meta` opens with the fields of a full box, which the others do not.
+    fn same_container(box_type: BoxType, original: &[u8], written: &[u8]) -> bool {
+        let fields_len = if box_type == MetaBox::BOX_TYPE { 4 } else { 0 };
+        let (original_fields, original_children) = original.split_at(fields_len);
+        let (written_fields, written_children) = written.split_at(fields_len);
+
+        original_fields == written_fields && same_boxes(original_children, written_children)
     }
 
     /// Returns the file `bytes` with each of its top-level boxes that has a type here read and written back
@@ -637,7 +660,7 @@ mod tests {
                     continue;
                 };
                 match written_back(framed.payload()) {
-                    Ok(written) if same_boxes(framed.payload(), &written) => {}
+                    Ok(written) if same_container(box_type, framed.payload(), &written) => {}
                     Ok(_) => {
                         differences.push(format!("{name}: {box_type} writes back other boxes"))
                     }
@@ -1055,6 +1078,92 @@ mod tests {
                         .first()
                         .copied()
                         .map(gpac_track_reference)
+                })
+                .collect();
+            if ours != theirs {
+                differences.push(format!("{name}: read {ours:?}, GPAC reports {theirs:?}"));
+            }
+        }
+
+        assert_eq!(differences, Vec::<String>::new());
+    }
+
+    /// Returns `iloc` as GPAC reports it in `node`
+    fn gpac_item_location(node: &Value) -> ItemLocationBox {
+        let mut item_location = ItemLocationBox::default();
+        item_location.version = gpac_integer(node, "@Version");
+        item_location.offset_size = gpac_integer(node, "@offset_size");
+        item_location.length_size = gpac_integer(node, "@length_size");
+        item_location.base_offset_size = gpac_integer(node, "@base_offset_size");
+        item_location.index_size = gpac_integer(node, "@index_size");
+        item_location.items = gpac_elements(node, "ItemLocationEntry")
+            .into_iter()
+            .map(|reported| {
+                let mut item = ItemLocation::default();
+                item.item_id = gpac_integer(reported, "@item_ID");
+                item.construction_method = gpac_integer(reported, "@construction_method");
+                item.data_reference_index = gpac_integer(reported, "@data_reference_index");
+                item.base_offset = gpac_integer(reported, "@base_offset");
+                item.extents = gpac_elements(reported, "ItemExtentEntry")
+                    .into_iter()
+                    .map(|reported| {
+                        let mut extent = ItemLocationExtent::default();
+                        extent.item_reference_index = gpac_integer(reported, "@extent_index");
+                        extent.extent_offset = gpac_integer(reported, "@extent_offset");
+                        extent.extent_length = gpac_integer(reported, "@extent_length");
+                        extent
+                    })
+                    .collect();
+                item
+            })
+            .collect();
+        item_location
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn the_item_locations_of_the_file_movie_and_tracks_read_as_gpac_reports_them() {
+        let mut differences = Vec::new();
+        for ConformanceFile {
+            name,
+            bytes,
+            report,
+            ..
+        } in conformance_files()
+        {
+            let boxes = top_level(&bytes);
+            let movies = read_all::<MovieBox>(&boxes);
+            let metas = read_all::<MetaBox>(&boxes);
+            let ours: Vec<Option<ItemLocationBox>> = metas
+                .iter()
+                .chain(movies.iter().filter_map(|movie| movie.meta.as_ref()))
+                .chain(
+                    movies
+                        .iter()
+                        .flat_map(|movie| &movie.trak)
+                        .filter_map(|track| track.meta.as_ref()),
+                )
+                .map(|meta| meta.iloc.clone())
+                .collect();
+            let gpac_movies = gpac_top_level(&report, "moov");
+            let theirs: Vec<Option<ItemLocationBox>> = gpac_top_level(&report, "meta")
+                .into_iter()
+                .chain(
+                    gpac_movies
+                        .iter()
+                        .flat_map(|movie| gpac_boxes(movie, "meta")),
+                )
+                .chain(
+                    gpac_movies
+                        .iter()
+                        .flat_map(|movie| gpac_boxes(movie, "trak"))
+                        .flat_map(|track| gpac_boxes(track, "meta")),
+                )
+                .map(|meta| {
+                    gpac_boxes(meta, "iloc")
+                        .first()
+                        .copied()
+                        .map(gpac_item_location)
                 })
                 .collect();
             if ours != theirs {
