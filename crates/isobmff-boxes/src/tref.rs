@@ -83,7 +83,7 @@ impl BoxEncode for TrackReferenceTypeBox {
 }
 
 /// Returns whether two neighbours of `values` are equal, which in sorted values means a value occurs more than once
-fn has_adjacent_equal<Value: PartialEq>(values: &[Value]) -> bool {
+pub(crate) fn has_adjacent_equal<Value: PartialEq>(values: &[Value]) -> bool {
     values
         .windows(2)
         .any(|pair| matches!(pair, [first, second] if first == second))

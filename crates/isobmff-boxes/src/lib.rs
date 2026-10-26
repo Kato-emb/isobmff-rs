@@ -39,7 +39,10 @@ extern crate alloc;
 mod amve;
 mod ardi;
 mod assp;
+mod audio_element;
+mod audio_element_selection;
 mod box_type_argument;
+mod brnd;
 mod btrt;
 mod cclv;
 mod chnl;
@@ -62,9 +65,23 @@ mod etyp;
 mod free;
 mod ftyp;
 mod full_box;
+mod grpl;
+mod hdlp;
 mod hdlr;
+mod idat;
+mod iinf;
+mod iloc;
 mod imda;
+mod infe;
+mod ipco;
+mod ipma;
+mod ipro;
+mod iprp;
+mod iref;
+mod keyd;
+mod keys;
 mod leva;
+mod loca;
 mod loudness;
 mod ludt;
 mod mdat;
@@ -73,6 +90,7 @@ mod mdhd;
 mod mdia;
 mod media_information_header;
 mod mehd;
+mod meta;
 mod mfhd;
 mod mfra;
 mod mfro;
@@ -86,7 +104,9 @@ mod otyp;
 mod padb;
 mod pasp;
 mod pdin;
+mod pitm;
 mod prft;
+mod prsl;
 mod rsot;
 mod saio;
 mod saiz;
@@ -95,6 +115,7 @@ mod sample_group_entry;
 mod sample_size;
 mod sbgp;
 mod sdtp;
+mod setu;
 mod sgpd;
 mod sidx;
 mod srat;
@@ -123,6 +144,7 @@ mod ttyp;
 mod txtc;
 mod uri;
 mod urii;
+mod xml;
 
 pub use data_entry::{
     DataEntry, DataEntryImdaBox, DataEntrySeqNumImdaBox, DataEntryUrlBox, DataEntryUrnBox,
@@ -143,6 +165,12 @@ pub use assp::{
     AlternativeStartupSequenceOffsetEntry, AlternativeStartupSequenceOffsets,
     AlternativeStartupSequencePropertiesBox,
 };
+pub use audio_element::{
+    AudioElementBox, AudioElementDescriptionBox, AudioElementPosInteractivityPolar,
+    AudioElementProminenceInteractivity,
+};
+pub use audio_element_selection::{AudioElementSelectionBox, AudioElementSelectionDescriptionBox};
+pub use brnd::BrandProperty;
 pub use btrt::BitRateBox;
 pub use cclv::{ContentColourVolumeBox, ContentColourVolumePrimaries};
 pub use chnl::{ChannelLayout, ChannelStructure, SpeakerPosition};
@@ -156,9 +184,23 @@ pub use ctts::{CompositionOffsetBox, CompositionOffsetEntry};
 pub use etyp::{ExtendedTypeBox, TypeCombinationBox};
 pub use free::{Free, FreeSpaceBox, FreeType, Skip};
 pub use ftyp::FileTypeBox;
+pub use grpl::{EntityToGroup, EntityToGroupBox, GroupsListBox};
+pub use hdlp::HandlerProperty;
 pub use hdlr::HandlerBox;
+pub use idat::ItemDataBox;
+pub use iinf::ItemInfoBox;
+pub use iloc::{ItemLocation, ItemLocationBox, ItemLocationExtent};
 pub use imda::IdentifiedMediaDataBox;
+pub use infe::{FdItemInfoExtension, ItemInfoEntry, ItemInfoExtension, ItemType};
+pub use ipco::{ItemProperty, ItemPropertyContainerBox};
+pub use ipma::{ItemPropertyAssociation, ItemPropertyAssociationBox, ItemPropertyAssociationEntry};
+pub use ipro::ItemProtectionBox;
+pub use iprp::ItemPropertiesBox;
+pub use iref::{ItemReference, ItemReferenceBox, SingleItemTypeReferenceBox};
+pub use keyd::MetadataKeyDeclarationBox;
+pub use keys::{MetadataKey, MetadataKeyBox, MetadataKeyTableBox};
 pub use leva::{Level, LevelAssignment, LevelAssignmentBox};
+pub use loca::MetadataLocaleBox;
 pub use loudness::{
     AlbumLoudnessInfo, LoudnessBase, LoudnessInfoType, LoudnessMeasurement, TrackLoudnessInfo,
 };
@@ -172,6 +214,7 @@ pub use media_information_header::{
     SubtitleMediaHeaderBox, VideoMediaHeaderBox, VolumetricVisualMediaHeaderBox,
 };
 pub use mehd::MovieExtendsHeaderBox;
+pub use meta::MetaBox;
 pub use mfhd::MovieFragmentHeaderBox;
 pub use mfra::MovieFragmentRandomAccessBox;
 pub use mfro::MovieFragmentRandomAccessOffsetBox;
@@ -185,7 +228,9 @@ pub use otyp::OriginalFileTypeBox;
 pub use padb::PaddingBitsBox;
 pub use pasp::PixelAspectRatioBox;
 pub use pdin::{ProgressiveDownloadInfoBox, ProgressiveDownloadInfoEntry};
+pub use pitm::PrimaryItemBox;
 pub use prft::ProducerReferenceTimeBox;
+pub use prsl::PreselectionGroupBox;
 pub use rsot::RedundantSampleOriginalTimingBox;
 pub use saio::SampleAuxiliaryInformationOffsetsBox;
 pub use saiz::{AuxInfoType, SampleAuxiliaryInformationSizesBox, SampleInfoSizes};
@@ -205,6 +250,7 @@ pub use sample_group_entry::{
 pub use sample_size::{CompactSampleSizeBox, SampleSizeBox, SampleSizeVariant, SampleSizes};
 pub use sbgp::{SampleToGroupBox, SampleToGroupEntry};
 pub use sdtp::{SampleDependencyTypeBox, SampleDependencyTypeEntry};
+pub use setu::MetadataSetupBox;
 pub use sgpd::SampleGroupDescriptionBox;
 pub use sidx::{SegmentIndexBox, SegmentIndexReference};
 pub use srat::SamplingRateBox;
@@ -236,6 +282,7 @@ pub use ttyp::TrackTypeBox;
 pub use txtc::TextConfigBox;
 pub use uri::UriBox;
 pub use urii::UriInitBox;
+pub use xml::{BinaryXmlBox, XmlBox, XmlVariant};
 
 /// Returns the bytes of the whole box `value` writes
 #[cfg(test)]

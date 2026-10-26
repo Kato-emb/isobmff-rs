@@ -5,6 +5,10 @@
 //! `ffprobe` where it is not on the path.
 
 #[cfg(test)]
+#[path = "conformance/items.rs"]
+mod items;
+
+#[cfg(test)]
 mod tests {
     use std::{env, fs};
 
@@ -12,7 +16,7 @@ mod tests {
         AudioSampleEntryVariant, ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant,
         CompactSampleSizeBox, DataInformationBox, EditBox, ExtendedTypeBox, FileTypeBox, Free,
         FreeSpaceBox, HandlerBox, IdentifiedMediaDataBox, LanguageCode, Matrix, MediaBox,
-        MediaDataBox, MediaHeaderBox, MediaInformationBox, MovieBox, MovieExtendsBox,
+        MediaDataBox, MediaHeaderBox, MediaInformationBox, MetaBox, MovieBox, MovieExtendsBox,
         MovieFragmentBox, MovieFragmentRandomAccessBox, MovieHeaderBox, OriginalFileTypeBox,
         ProducerReferenceTimeBox, ProgressiveDownloadInfoBox, RollRecoveryEntry,
         SampleDependencyTypeBox, SampleDescription, SampleDescriptionBox, SampleEntry, SampleFlags,
@@ -23,7 +27,8 @@ mod tests {
         TimeToSampleEntry, TrackBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
         TrackFragmentHeaderBox, TrackHeaderBox, TrackReference, TrackReferenceBox,
         TrackReferenceTypeBox, TrackRunBox, TrackRunSample, TrackRunSamples,
-        VisualRandomAccessEntry, VisualSampleEntry, XmlMetaDataSampleEntry, XmlSubtitleSampleEntry,
+        VisualRandomAccessEntry, VisualSampleEntry, XmlBox, XmlMetaDataSampleEntry,
+        XmlSubtitleSampleEntry,
     };
     use isobmff_core::{
         BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, Error, FourCc, I8F8, RawBox, U16F16,
@@ -86,12 +91,12 @@ mod tests {
     ];
 
     /// Returns the top-level boxes of a file
-    fn top_level(bytes: &[u8]) -> Vec<RawBox<'_>> {
+    pub(super) fn top_level(bytes: &[u8]) -> Vec<RawBox<'_>> {
         Boxes::new(bytes).collect::<Result<_, _>>().unwrap()
     }
 
     /// Reads every box of `boxes` that is a `Box`, in the order they lie
-    fn read_all<Box: BoxDecode + BoxDefinition>(boxes: &[RawBox<'_>]) -> Vec<Box> {
+    pub(super) fn read_all<Box: BoxDecode + BoxDefinition>(boxes: &[RawBox<'_>]) -> Vec<Box> {
         boxes
             .iter()
             .filter(|framed| framed.header().box_type() == Box::BOX_TYPE)
@@ -119,7 +124,10 @@ mod tests {
     }
 
     /// Returns the top-level boxes GPAC reports of the four-character code `box_type`
-    fn gpac_top_level<'report>(report: &'report Value, box_type: &str) -> Vec<&'report Value> {
+    pub(super) fn gpac_top_level<'report>(
+        report: &'report Value,
+        box_type: &str,
+    ) -> Vec<&'report Value> {
         gpac_boxes(report.get("IsoMediaFile").unwrap(), box_type)
     }
 
@@ -550,7 +558,8 @@ mod tests {
     }
 
     /// Box types of the containers a written-back container may hold its children in another order in
-    const REORDERED: [BoxType; 11] = [
+    const REORDERED: [BoxType; 12] = [
+        MetaBox::BOX_TYPE,
         MovieBox::BOX_TYPE,
         TrackBox::BOX_TYPE,
         MediaBox::BOX_TYPE,
@@ -565,7 +574,8 @@ mod tests {
     ];
 
     /// Box types of the top-level containers, each with how it is read and written back
-    const CONTAINERS: [(BoxType, WrittenBack); 3] = [
+    const CONTAINERS: [(BoxType, WrittenBack); 4] = [
+        (MetaBox::BOX_TYPE, written_back::<MetaBox>),
         (MovieBox::BOX_TYPE, written_back::<MovieBox>),
         (MovieFragmentBox::BOX_TYPE, written_back::<MovieFragmentBox>),
         (
@@ -578,6 +588,8 @@ mod tests {
     ///
     /// An `sdtp` is the same box if it is written with the `flags` of 0 the
     /// specification fixes, whatever it was read with.
+    /// An `xml ` is the same box if it is written with the null terminator the
+    /// specification requires, whether or not it was read with one.
     fn same_boxes(original: &[u8], written: &[u8]) -> bool {
         let mut unmatched = top_level(written);
         top_level(original).into_iter().all(|child| {
@@ -585,7 +597,7 @@ mod tests {
             let position = unmatched.iter().position(|candidate| {
                 candidate.header().box_type() == box_type
                     && if REORDERED.contains(&box_type) {
-                        same_boxes(child.payload(), candidate.payload())
+                        same_container(box_type, child.payload(), candidate.payload())
                     } else if box_type == SampleDependencyTypeBox::BOX_TYPE {
                         // Why not compare the bytes whole: `08_bifs_carousel_v2.mp4`
                         // holds an `sdtp` of `flags` 1, which is written as 0.
@@ -593,6 +605,12 @@ mod tests {
                         original.first() == written.first()
                             && written.get(1..4) == Some([0, 0, 0].as_slice())
                             && original.get(4..) == written.get(4..)
+                    } else if box_type == XmlBox::BOX_TYPE {
+                        // Why not compare the bytes whole: `12_metas_v2.mp4`
+                        // holds `xml ` boxes of no null terminator, which the
+                        // 2026 edition requires and the box writes.
+                        let (original, written) = (child.payload(), candidate.payload());
+                        written == original || written.strip_suffix(&[0]) == Some(original)
                     } else {
                         candidate.payload() == child.payload()
                     }
@@ -601,6 +619,17 @@ mod tests {
                 .map(|position| unmatched.remove(position))
                 .is_some()
         }) && unmatched.is_empty()
+    }
+
+    /// Returns whether `written`, the payload of a container of `box_type`, opens with the fields `original` opens with and holds the boxes it holds, in any order
+    ///
+    /// A `meta` opens with the fields of a full box, which the others do not.
+    fn same_container(box_type: BoxType, original: &[u8], written: &[u8]) -> bool {
+        let fields_len = if box_type == MetaBox::BOX_TYPE { 4 } else { 0 };
+        let (original_fields, original_children) = original.split_at(fields_len);
+        let (written_fields, written_children) = written.split_at(fields_len);
+
+        original_fields == written_fields && same_boxes(original_children, written_children)
     }
 
     /// Returns the file `bytes` with each of its top-level boxes that has a type here read and written back
@@ -637,7 +666,7 @@ mod tests {
                     continue;
                 };
                 match written_back(framed.payload()) {
-                    Ok(written) if same_boxes(framed.payload(), &written) => {}
+                    Ok(written) if same_container(box_type, framed.payload(), &written) => {}
                     Ok(_) => {
                         differences.push(format!("{name}: {box_type} writes back other boxes"))
                     }
@@ -650,12 +679,12 @@ mod tests {
     }
 
     /// Returns the text GPAC reports for `field` of `node`
-    fn gpac_str<'report>(node: &'report Value, field: &str) -> &'report str {
+    pub(super) fn gpac_str<'report>(node: &'report Value, field: &str) -> &'report str {
         node.get(field).unwrap().as_str().unwrap()
     }
 
     /// Returns the integer GPAC reports for `field` of `node`
-    fn gpac_integer<Integer: std::str::FromStr>(node: &Value, field: &str) -> Integer {
+    pub(super) fn gpac_integer<Integer: std::str::FromStr>(node: &Value, field: &str) -> Integer {
         node.get(field)
             .unwrap()
             .as_str()
@@ -694,7 +723,7 @@ mod tests {
     }
 
     /// Returns the boxes GPAC reports directly inside `node` of the four-character code `box_type`
-    fn gpac_boxes<'report>(node: &'report Value, box_type: &str) -> Vec<&'report Value> {
+    pub(super) fn gpac_boxes<'report>(node: &'report Value, box_type: &str) -> Vec<&'report Value> {
         gpac_children(node)
             .into_iter()
             .filter(|child| child.get("@Type").and_then(Value::as_str) == Some(box_type))
@@ -862,7 +891,10 @@ mod tests {
     }
 
     /// Returns the elements GPAC reports in `node` under `element`, which it reports as an array where there is more than one
-    fn gpac_elements<'report>(node: &'report Value, element: &str) -> Vec<&'report Value> {
+    pub(super) fn gpac_elements<'report>(
+        node: &'report Value,
+        element: &str,
+    ) -> Vec<&'report Value> {
         match node.get(element) {
             Some(Value::Array(elements)) => elements.iter().collect(),
             Some(single) => vec![single],

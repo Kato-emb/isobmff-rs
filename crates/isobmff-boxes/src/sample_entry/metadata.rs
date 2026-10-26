@@ -5,6 +5,7 @@ use isobmff_core::{
 };
 
 use crate::btrt::BitRateBox;
+use crate::keys::MetadataKeyTableBox;
 use crate::sample_entry::text::{MimeFormat, encode_remaining, remaining_len};
 use crate::sample_entry::{
     BitRateChildren, SampleEntry, children_len, encode_children, encode_optional, from_class,
@@ -16,6 +17,9 @@ use crate::urii::UriInitBox;
 
 /// Box types of the boxes ISO/IEC 14496-12 defines for [`UriMetaSampleEntry`]
 const URI_DEFINED: [BoxType; 3] = [UriBox::BOX_TYPE, UriInitBox::BOX_TYPE, BitRateBox::BOX_TYPE];
+
+/// Box types of the boxes ISO/IEC 14496-12 defines for [`BoxedMetadataSampleEntry`]
+const BOXED_DEFINED: [BoxType; 2] = [MetadataKeyTableBox::BOX_TYPE, BitRateBox::BOX_TYPE];
 
 /// [`XmlMetaDataSampleEntry`] (`metx`), ISO/IEC 14496-12 §12.3.3
 ///
@@ -342,9 +346,8 @@ impl TryFrom<&UriMetaSampleEntry> for SampleEntry {
 /// # Children
 ///
 /// The children are laid out in three parts as those of a
-/// [`XmlMetaDataSampleEntry`] are, the box of ISO/IEC 14496-12 this crate
-/// reads being `btrt`. The `keys` the entry holds, which this crate does not
-/// read yet, is a child of a type it does not read.
+/// [`XmlMetaDataSampleEntry`] are, the boxes of ISO/IEC 14496-12 being the
+/// `keys` the entry holds exactly one of, then `btrt`.
 #[doc(alias = "mebx")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -353,6 +356,8 @@ pub struct BoxedMetadataSampleEntry {
     pub data_reference_index: u16,
     /// Children a specification deriving the class defines, which lay before the boxes of ISO/IEC 14496-12
     pub derived_boxes: OtherBoxes,
+    /// Keys the samples may hold values of
+    pub keys: MetadataKeyTableBox,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -373,17 +378,20 @@ impl TryFrom<&SampleEntry> for BoxedMetadataSampleEntry {
     ///
     /// * [`UnsupportedValue`](isobmff_core::ErrorKind::UnsupportedValue) for
     ///   `format`: the entry is of a format other than `mebx`.
-    /// * The failures of a child that does not frame, and of a `btrt` given
-    ///   more than once.
+    /// * [`MissingMandatoryBox`](isobmff_core::ErrorKind::MissingMandatoryBox):
+    ///   the entry holds no `keys`.
+    /// * The failures of a child that does not frame, of a `keys` that does
+    ///   not read, and of a box of ISO/IEC 14496-12 given more than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         of_format(entry, Self::FORMAT)?;
-        let children = BitRateChildren::read(&entry.remaining_data)?;
+        let (derived_boxes, mut children) = split_children(&entry.remaining_data, &BOXED_DEFINED)?;
 
         Ok(Self {
             data_reference_index: entry.data_reference_index,
-            derived_boxes: children.derived_boxes,
-            btrt: children.btrt,
-            extra_boxes: children.extra_boxes,
+            derived_boxes,
+            keys: children.take_exactly_one()?,
+            btrt: children.take_zero_or_one_if_decoded()?,
+            extra_boxes: OtherBoxes::from(children),
         })
     }
 }
@@ -402,14 +410,17 @@ impl TryFrom<&BoxedMetadataSampleEntry> for SampleEntry {
             metadata.data_reference_index,
             children_len(
                 &metadata.derived_boxes,
-                metadata.btrt.as_ref().map(BoxEncode::encoded_len),
+                [
+                    metadata.keys.encoded_len(),
+                    metadata.btrt.as_ref().map_or(0, BoxEncode::encoded_len),
+                ],
                 &metadata.extra_boxes,
             ),
             |writer| {
                 encode_children(
                     writer.take_remainder(),
                     &metadata.derived_boxes,
-                    |rest| encode_optional(rest, metadata.btrt.as_ref()),
+                    |rest| encode_optional(metadata.keys.encode(rest)?, metadata.btrt.as_ref()),
                     &metadata.extra_boxes,
                 )
             },
@@ -419,13 +430,17 @@ impl TryFrom<&BoxedMetadataSampleEntry> for SampleEntry {
 
 #[cfg(test)]
 mod tests {
-    use isobmff_core::{BoxType, ChildBoxes, Error, FourCc, OtherBoxes, Utf8List, Utf8String};
+    use isobmff_core::{
+        BoxDecode, BoxDefinition, BoxType, ChildBoxes, Error, FourCc, OtherBoxes, Utf8List,
+        Utf8String,
+    };
 
     use super::{
         BoxedMetadataSampleEntry, TextMetaDataSampleEntry, UriMetaSampleEntry,
         XmlMetaDataSampleEntry,
     };
     use crate::btrt::BitRateBox;
+    use crate::keys::MetadataKeyTableBox;
     use crate::sample_entry::SampleEntry;
     use crate::uri::UriBox;
     use crate::urii::UriInitBox;
@@ -433,8 +448,8 @@ mod tests {
     /// Box of a type this crate does not read
     const UNKNOWN: &[u8] = b"\0\0\0\x09xtra\x07";
 
-    /// `keys` of no key, a box this crate does not read yet
-    const KEYS: &[u8] = b"\0\0\0\x08keys";
+    /// `keys` of the key `cprt`, of the namespace `uiso` and the user-data key `cprt`
+    const KEYS: &[u8] = b"\0\0\0\x20keys\0\0\0\x18cprt\0\0\0\x10keyduisocprt";
 
     /// `btrt` of a buffer of 4096 bytes, at most 2 Mbit/s and 1 Mbit/s on average
     const BTRT: &[u8] = b"\0\0\0\x14btrt\0\0\x10\0\0\x1e\x84\x80\0\x0f\x42\x40";
@@ -544,21 +559,29 @@ mod tests {
     }
 
     #[test]
-    fn a_boxed_entry_keeps_its_keys_before_its_bit_rate() {
-        let entry = sample_entry(b"mebx", &[KEYS, BTRT]);
+    fn a_boxed_entry_writes_its_keys_then_its_bit_rate_whatever_order_they_were_read_in() {
         let metadata = BoxedMetadataSampleEntry {
             data_reference_index: 1,
-            derived_boxes: kept(&[KEYS]),
+            keys: MetadataKeyTableBox::decode(KEYS).unwrap().0,
             btrt: bit_rate(),
             ..BoxedMetadataSampleEntry::default()
         };
+        let read = BoxedMetadataSampleEntry::try_from(&sample_entry(b"mebx", &[BTRT, KEYS]));
 
         assert_eq!(
+            (read, SampleEntry::try_from(&metadata)),
             (
-                BoxedMetadataSampleEntry::try_from(&entry),
-                SampleEntry::try_from(&metadata)
-            ),
-            (Ok(metadata.clone()), Ok(entry))
+                Ok(metadata.clone()),
+                Ok(sample_entry(b"mebx", &[KEYS, BTRT]))
+            )
+        );
+    }
+
+    #[test]
+    fn a_boxed_entry_without_its_keys_is_refused() {
+        assert_eq!(
+            BoxedMetadataSampleEntry::try_from(&sample_entry(b"mebx", &[BTRT])).map(|_| ()),
+            Err(Error::missing_mandatory_box(MetadataKeyTableBox::BOX_TYPE))
         );
     }
 

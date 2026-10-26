@@ -7,6 +7,7 @@ use isobmff_core::{
     FieldWriter, OtherBoxes,
 };
 
+use crate::meta::MetaBox;
 use crate::mfhd::MovieFragmentHeaderBox;
 use crate::traf::TrackFragmentBox;
 
@@ -16,16 +17,19 @@ use crate::traf::TrackFragmentBox;
 /// the `MovieBox` holds. It is a top-level box, a peer of the `MovieBox` and
 /// the `MediaDataBox`es.
 ///
-/// The box writes `mfhd` and then the track fragments, whatever order they
-/// were read in: the order of ISO/IEC 14496-12 §7.3.4 and Table 2. Children
-/// of other types are kept in [`other_boxes`](Self::other_boxes), and written
-/// back after them. A track fragment that does not read is kept there too.
+/// The box writes `mfhd`, `meta` and then the track fragments, whatever order
+/// they were read in: the order of ISO/IEC 14496-12 §7.3.4 and Table 2.
+/// Children of other types are kept in [`other_boxes`](Self::other_boxes), and
+/// written back after them. A `meta` or a track fragment that does not read is
+/// kept there too; a `meta` that does not read reads back [`None`].
 #[doc(alias = "moof")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
 pub struct MovieFragmentBox {
     /// Sequence number of the fragment
     pub mfhd: MovieFragmentHeaderBox,
+    /// Untimed metadata and items of the fragment
+    pub meta: Option<MetaBox>,
     /// Track fragments, zero or more per track, in the order they came
     pub traf: Vec<TrackFragmentBox>,
     /// Children of a type the box holds no field for
@@ -42,6 +46,7 @@ impl BoxDecode for MovieFragmentBox {
 
         Ok(Self {
             mfhd: children.take_exactly_one()?,
+            meta: children.take_zero_or_one_if_decoded()?,
             traf: children.take_zero_or_more_if_decoded(),
             other_boxes: OtherBoxes::from(children),
         })
@@ -50,15 +55,21 @@ impl BoxDecode for MovieFragmentBox {
 
 impl BoxEncode for MovieFragmentBox {
     fn payload_len(&self) -> u64 {
-        [self.mfhd.encoded_len()]
-            .into_iter()
-            .chain(self.traf.iter().map(BoxEncode::encoded_len))
-            .chain(self.other_boxes.as_slice().iter().map(AnyBox::encoded_len))
-            .fold(0, u64::saturating_add)
+        [
+            self.mfhd.encoded_len(),
+            self.meta.as_ref().map_or(0, BoxEncode::encoded_len),
+        ]
+        .into_iter()
+        .chain(self.traf.iter().map(BoxEncode::encoded_len))
+        .chain(self.other_boxes.as_slice().iter().map(AnyBox::encoded_len))
+        .fold(0, u64::saturating_add)
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         let mut rest = self.mfhd.encode(writer.take_remainder())?;
+        if let Some(meta) = &self.meta {
+            rest = meta.encode(rest)?;
+        }
         for track_fragment in &self.traf {
             rest = track_fragment.encode(rest)?;
         }
@@ -78,6 +89,7 @@ mod tests {
 
     use super::MovieFragmentBox;
     use crate::encoded;
+    use crate::meta::MetaBox;
     use crate::mfhd::MovieFragmentHeaderBox;
     use crate::traf::TrackFragmentBox;
 
@@ -90,22 +102,26 @@ mod tests {
     /// `traf` of a `tfhd` of a version the box does not read
     const TRAF_UNREAD: &[u8] = b"\0\0\0\x18traf\0\0\0\x10tfhd\x01\0\0\0\0\0\0\x02";
 
-    /// `meta` holding nothing, a box `moof` holds no field for
+    /// `meta` holding nothing
     const META: &[u8] = b"\0\0\0\x0cmeta\0\0\0\0";
+
+    /// `pssh` holding nothing, a box `moof` holds no field for
+    const PSSH: &[u8] = b"\0\0\0\x0cpssh\0\0\0\0";
 
     fn movie_fragment() -> MovieFragmentBox {
         let (track_fragment, _) = TrackFragmentBox::decode(TRAF).unwrap();
 
         MovieFragmentBox {
             mfhd: MovieFragmentHeaderBox { sequence_number: 7 },
+            meta: Some(MetaBox::default()),
             traf: vec![track_fragment.clone(), track_fragment],
-            other_boxes: OtherBoxes::from(ChildBoxes::decode(META).unwrap()),
+            other_boxes: OtherBoxes::from(ChildBoxes::decode(PSSH).unwrap()),
         }
     }
 
     #[test]
     fn reads_its_header_and_track_fragments_and_keeps_the_child_it_has_no_field_for() {
-        let bytes = [b"\0\0\0\x5cmoof".as_slice(), TRAF, META, MFHD, TRAF].concat();
+        let bytes = [b"\0\0\0\x68moof".as_slice(), TRAF, PSSH, META, MFHD, TRAF].concat();
 
         assert_eq!(
             MovieFragmentBox::decode(&bytes),
@@ -114,10 +130,10 @@ mod tests {
     }
 
     #[test]
-    fn writes_its_header_then_its_track_fragments_then_the_child_it_has_no_field_for() {
+    fn writes_its_header_then_meta_then_its_track_fragments_then_the_child_it_has_no_field_for() {
         assert_eq!(
             encoded(&movie_fragment()),
-            [b"\0\0\0\x5cmoof".as_slice(), MFHD, TRAF, TRAF, META].concat()
+            [b"\0\0\0\x68moof".as_slice(), MFHD, META, TRAF, TRAF, PSSH].concat()
         );
     }
 
