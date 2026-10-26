@@ -37,10 +37,12 @@
 extern crate alloc;
 
 mod amve;
+mod ardi;
 mod assp;
 mod box_type_argument;
 mod btrt;
 mod cclv;
+mod chnl;
 mod chunk_offset;
 mod clap;
 mod clli;
@@ -51,6 +53,7 @@ mod ctts;
 mod data_entry;
 mod data_types;
 mod dinf;
+mod dmix;
 mod dref;
 mod edts;
 mod elng;
@@ -62,6 +65,8 @@ mod full_box;
 mod hdlr;
 mod imda;
 mod leva;
+mod loudness;
+mod ludt;
 mod mdat;
 mod mdcv;
 mod mdhd;
@@ -71,6 +76,7 @@ mod mehd;
 mod mfhd;
 mod mfra;
 mod mfro;
+mod mime;
 mod minf;
 mod moof;
 mod moov;
@@ -114,12 +120,16 @@ mod trex;
 mod trgr;
 mod trun;
 mod ttyp;
+mod txtc;
+mod uri;
+mod urii;
 
 pub use data_entry::{
     DataEntry, DataEntryImdaBox, DataEntrySeqNumImdaBox, DataEntryUrlBox, DataEntryUrnBox,
 };
 pub use data_types::{CompressorName, LanguageCode, Matrix, SampleFlags};
 pub use dinf::DataInformationBox;
+pub use dmix::{DownMixInstruction, DownMixInstructions, DownmixCoefficients};
 pub use dref::DataReferenceBox;
 pub use edts::EditBox;
 pub use elng::ExtendedLanguageBox;
@@ -128,12 +138,14 @@ mod subs;
 mod table;
 
 pub use amve::AmbientViewingEnvironmentBox;
+pub use ardi::AudioRenderingIndicationBox;
 pub use assp::{
     AlternativeStartupSequenceOffsetEntry, AlternativeStartupSequenceOffsets,
     AlternativeStartupSequencePropertiesBox,
 };
 pub use btrt::BitRateBox;
 pub use cclv::{ContentColourVolumeBox, ContentColourVolumePrimaries};
+pub use chnl::{ChannelLayout, ChannelStructure, SpeakerPosition};
 pub use chunk_offset::{ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant};
 pub use clap::CleanApertureBox;
 pub use clli::ContentLightLevelBox;
@@ -147,6 +159,10 @@ pub use ftyp::FileTypeBox;
 pub use hdlr::HandlerBox;
 pub use imda::IdentifiedMediaDataBox;
 pub use leva::{Level, LevelAssignment, LevelAssignmentBox};
+pub use loudness::{
+    AlbumLoudnessInfo, LoudnessBase, LoudnessInfoType, LoudnessMeasurement, TrackLoudnessInfo,
+};
+pub use ludt::LoudnessBox;
 pub use mdat::MediaDataBox;
 pub use mdcv::MasteringDisplayColourVolumeBox;
 pub use mdhd::MediaHeaderBox;
@@ -159,6 +175,7 @@ pub use mehd::MovieExtendsHeaderBox;
 pub use mfhd::MovieFragmentHeaderBox;
 pub use mfra::MovieFragmentRandomAccessBox;
 pub use mfro::MovieFragmentRandomAccessOffsetBox;
+pub use mime::MimeBox;
 pub use minf::MediaInformationBox;
 pub use moof::MovieFragmentBox;
 pub use moov::MovieBox;
@@ -173,7 +190,10 @@ pub use rsot::RedundantSampleOriginalTimingBox;
 pub use saio::SampleAuxiliaryInformationOffsetsBox;
 pub use saiz::{AuxInfoType, SampleAuxiliaryInformationSizesBox, SampleInfoSizes};
 pub use sample_entry::{
-    AudioSampleEntry, AudioSampleEntryV1, AudioSampleEntryVariant, SampleEntry, VisualSampleEntry,
+    AudioSampleEntry, AudioSampleEntryV1, AudioSampleEntryVariant, BoxedMetadataSampleEntry,
+    FontSampleEntry, HapticSampleEntry, SampleEntry, SimpleTextSampleEntry,
+    TextMetaDataSampleEntry, TextSubtitleSampleEntry, UriMetaSampleEntry, VisualSampleEntry,
+    VolumetricVisualSampleEntry, XmlMetaDataSampleEntry, XmlSubtitleSampleEntry,
 };
 pub use sample_group_entry::{
     AlternativeStartupEntry, AlternativeStartupPiece, AudioPreRollEntry, CleanApertureEntry,
@@ -213,6 +233,9 @@ pub use trex::TrackExtendsBox;
 pub use trgr::{StereoVideoGroupBox, TrackGroup, TrackGroupBox, TrackGroupTypeBox};
 pub use trun::{TrackRunBox, TrackRunSample, TrackRunSamples};
 pub use ttyp::TrackTypeBox;
+pub use txtc::TextConfigBox;
+pub use uri::UriBox;
+pub use urii::UriInitBox;
 
 /// Returns the bytes of the whole box `value` writes
 #[cfg(test)]

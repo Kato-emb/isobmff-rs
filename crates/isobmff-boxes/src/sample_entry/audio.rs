@@ -1,27 +1,80 @@
-//! [`AudioSampleEntry`] and [`AudioSampleEntryV1`], the sample entries of an audio track
+//! [`AudioSampleEntry`], the sample entry of an audio track, and [`AudioSampleEntryVariant`], which reads either class of audio sample entry
+
+use alloc::vec::Vec;
 
 use isobmff_core::{
-    AnyBox, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader, FieldWriter, FourCc,
+    BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader, FieldWriter, FourCc,
     OtherBoxes, U16F16,
 };
 
 use crate::btrt::BitRateBox;
-use crate::sample_entry::{SampleEntry, from_class, split_children};
+use crate::chnl::{ChannelLayout, ChannelStructure};
+use crate::dmix::{DownMixInstructions, UndecodedDownMixInstructions};
+use crate::sample_entry::audio_v1::AudioSampleEntryV1;
+use crate::sample_entry::{
+    SampleEntry, children_len, encode_children, encode_optional, from_class, split_children,
+};
 use crate::srat::SamplingRateBox;
 
 /// Box types of the boxes ISO/IEC 14496-12 defines for both classes
-const DEFINED: [BoxType; 2] = [SamplingRateBox::BOX_TYPE, BitRateBox::BOX_TYPE];
+const DEFINED: [BoxType; 4] = [
+    ChannelLayout::BOX_TYPE,
+    DownMixInstructions::BOX_TYPE,
+    SamplingRateBox::BOX_TYPE,
+    BitRateBox::BOX_TYPE,
+];
+
+/// Returns the `baseChannelCount` of an entry of `channel_count` channels holding `chnl`
+///
+/// §12.2.5.3 derives it from the `chnl`, where the `chnl` gives it: the
+/// `base_channel_count` of version 1, or the positions of an explicit layout
+/// of version 0 and its audio objects. Otherwise it is `channel_count`.
+fn base_channel_count(chnl: Option<&ChannelLayout>, channel_count: u16) -> u16 {
+    match chnl {
+        Some(ChannelLayout::Version1 {
+            base_channel_count, ..
+        }) => u16::from(*base_channel_count),
+        Some(ChannelLayout::Version0 {
+            channel_structure: Some(ChannelStructure::Explicit { speaker_positions }),
+            object_count,
+        }) => u16::try_from(speaker_positions.len())
+            .unwrap_or(u16::MAX)
+            .saturating_add(u16::from(object_count.unwrap_or(0))),
+        _ => channel_count,
+    }
+}
+
+/// Takes the `chnl` and the `dmix` boxes out of `children` of an entry of `channel_count` channels, the `dmix` boxes read with the `baseChannelCount` the `chnl` gives
+///
+/// # Errors
+///
+/// * The failures of [`DownMixInstructions`] read with the
+///   `baseChannelCount`, and of a box given more than once.
+pub(super) fn take_channel_boxes(
+    children: &mut ChildBoxes<'_>,
+    channel_count: u16,
+) -> Result<(Option<ChannelLayout>, Vec<DownMixInstructions>), Error> {
+    let chnl = children.take_zero_or_one_if_decoded()?;
+    let base_channel_count = base_channel_count(chnl.as_ref(), channel_count);
+    let dmix = children
+        .take_zero_or_more_if_decoded::<UndecodedDownMixInstructions>()
+        .into_iter()
+        .map(|undecoded| DownMixInstructions::decode_payload(base_channel_count, &undecoded.0))
+        .collect::<Result<_, _>>()?;
+
+    Ok((chnl, dmix))
+}
 
 /// Fields both classes lay out after `data_reference_index`, from `channelcount` on
-struct Fields {
-    channel_count: u16,
-    sample_size: u16,
-    sample_rate: U16F16,
+pub(super) struct Fields {
+    pub(super) channel_count: u16,
+    pub(super) sample_size: u16,
+    pub(super) sample_rate: U16F16,
 }
 
 impl Fields {
     /// Length of the fields both classes lay out after `data_reference_index`, `entry_version` included
-    const ENCODED_LEN: u64 = 2 + 6 + 2 + 2 + 2 + 2 + 4;
+    pub(super) const ENCODED_LEN: u64 = 2 + 6 + 2 + 2 + 2 + 2 + 4;
 
     /// Reads the fields of an entry of the class of `entry_version` from the bytes of `entry` after `data_reference_index`, and returns them with the children that follow, split as [`split_children`] splits them
     ///
@@ -32,7 +85,7 @@ impl Fields {
     /// * [`UnsupportedValue`](isobmff_core::ErrorKind::UnsupportedValue) for
     ///   `entry_version`: the entry is of the other class.
     /// * The failures of [`split_children`].
-    fn read(
+    pub(super) fn read(
         entry: &SampleEntry,
         entry_version: u16,
     ) -> Result<(Self, OtherBoxes, ChildBoxes<'_>), Error> {
@@ -64,7 +117,11 @@ impl Fields {
     ///
     /// * [`TruncatedBuffer`](isobmff_core::ErrorKind::TruncatedBuffer): the
     ///   buffer ends inside the fields.
-    fn write(&self, writer: &mut FieldWriter<'_>, entry_version: u16) -> Result<(), Error> {
+    pub(super) fn write(
+        &self,
+        writer: &mut FieldWriter<'_>,
+        entry_version: u16,
+    ) -> Result<(), Error> {
         writer.write_u16(entry_version)?;
         writer.write_bytes(&[0; 6])?;
         writer.write_u16(self.channel_count)?;
@@ -95,8 +152,8 @@ impl Fields {
 ///    deriving the class defines, such as a decoder configuration, and the
 ///    DRC boxes of ISO/IEC 23003-4.
 /// 2. The boxes ISO/IEC 14496-12 defines for the class, each in a field of
-///    its own: `srat` as the syntax of the class places it, then `btrt`,
-///    which any sample entry may hold.
+///    its own: `chnl`, `dmix` and `srat` in the order the syntax of the
+///    class gives them, then `btrt`, which any sample entry may hold.
 /// 3. [`extra_boxes`](Self::extra_boxes): the boxes no definition of the
 ///    class names.
 ///
@@ -125,6 +182,10 @@ pub struct AudioSampleEntry {
     pub sample_rate: U16F16,
     /// Children a specification deriving the class defines, which lay before the boxes of ISO/IEC 14496-12
     pub derived_boxes: OtherBoxes,
+    /// Assignment of the channels
+    pub chnl: Option<ChannelLayout>,
+    /// Downmixes, read with the `baseChannelCount` that `chnl` gives, or else `channel_count`
+    pub dmix: Vec<DownMixInstructions>,
     /// Actual sampling rate of the audio, which `sample_rate` cannot carry
     pub srat: Option<SamplingRateBox>,
     /// Bit rates and decoding buffer size of the stream
@@ -142,6 +203,8 @@ impl Default for AudioSampleEntry {
             sample_size: 16,
             sample_rate: U16F16::from_raw(0),
             derived_boxes: OtherBoxes::new(),
+            chnl: None,
+            dmix: Vec::new(),
             srat: None,
             btrt: None,
             extra_boxes: OtherBoxes::new(),
@@ -162,10 +225,12 @@ impl TryFrom<&SampleEntry> for AudioSampleEntry {
     /// * [`UnsupportedValue`](isobmff_core::ErrorKind::UnsupportedValue) for
     ///   `entry_version`: the bytes open with an `entry_version` other than
     ///   0.
-    /// * The failures of a child that does not frame, and of a box of
-    ///   ISO/IEC 14496-12 given more than once.
+    /// * The failures of a child that does not frame, of a box of
+    ///   ISO/IEC 14496-12 given more than once, and of a `dmix` read with the
+    ///   `baseChannelCount` the entry gives.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         let (fields, derived_boxes, mut children) = Fields::read(entry, 0)?;
+        let (chnl, dmix) = take_channel_boxes(&mut children, fields.channel_count)?;
 
         Ok(Self {
             format: entry.format,
@@ -174,6 +239,8 @@ impl TryFrom<&SampleEntry> for AudioSampleEntry {
             sample_size: fields.sample_size,
             sample_rate: fields.sample_rate,
             derived_boxes,
+            chnl,
+            dmix,
             srat: children.take_zero_or_one_if_decoded()?,
             btrt: children.take_zero_or_one_if_decoded()?,
             extra_boxes: OtherBoxes::from(children),
@@ -202,19 +269,16 @@ impl TryFrom<&AudioSampleEntry> for SampleEntry {
 impl AudioSampleEntry {
     /// Returns the length of the bytes the entry lays out after `data_reference_index`
     fn remaining_len(&self) -> u64 {
-        [
+        let defined = [
+            self.chnl.as_ref().map_or(0, BoxEncode::encoded_len),
             self.srat.as_ref().map_or(0, BoxEncode::encoded_len),
             self.btrt.as_ref().map_or(0, BoxEncode::encoded_len),
         ]
         .into_iter()
-        .chain(
-            self.derived_boxes
-                .as_slice()
-                .iter()
-                .map(AnyBox::encoded_len),
-        )
-        .chain(self.extra_boxes.as_slice().iter().map(AnyBox::encoded_len))
-        .fold(Fields::ENCODED_LEN, u64::saturating_add)
+        .chain(self.dmix.iter().map(BoxEncode::encoded_len));
+
+        children_len(&self.derived_boxes, defined, &self.extra_boxes)
+            .saturating_add(Fields::ENCODED_LEN)
     }
 
     /// Writes the bytes the entry lays out after `data_reference_index`
@@ -229,177 +293,19 @@ impl AudioSampleEntry {
             sample_rate: self.sample_rate,
         };
         fields.write(writer, 0)?;
-        let mut rest = writer.take_remainder();
-        for kept in self.derived_boxes.as_slice() {
-            rest = kept.encode(rest)?;
-        }
-        if let Some(srat) = &self.srat {
-            rest = srat.encode(rest)?;
-        }
-        if let Some(btrt) = &self.btrt {
-            rest = btrt.encode(rest)?;
-        }
-        for kept in self.extra_boxes.as_slice() {
-            rest = kept.encode(rest)?;
-        }
-
-        Ok(())
-    }
-}
-
-/// [`AudioSampleEntryV1`], ISO/IEC 14496-12 §12.2.3
-///
-/// The sample entry of an audio track for a sampling rate that only an `srat`
-/// can carry, a [`SampleEntry`] whose bytes after `data_reference_index` open
-/// with an `entry_version` of 1. It lies in a `stsd` of version 1, which is not
-/// checked. The bytes are read with [`TryFrom`] and written back with
-/// [`SampleEntry::try_from`]; [`AudioSampleEntryVariant`] reads an entry of
-/// either class.
-///
-/// The `pre_defined` and `reserved` fields are read past, and written as the
-/// specification states them.
-///
-/// # Children
-///
-/// The children are laid out in three parts as those of an
-/// [`AudioSampleEntry`] are, `srat` first among the boxes of
-/// ISO/IEC 14496-12 as the syntax of the class places it, then `btrt`.
-#[non_exhaustive]
-#[derive(Clone, PartialEq, Debug)]
-pub struct AudioSampleEntryV1 {
-    /// Coding name of the samples, the `format` of the [`SampleEntry`]
-    pub format: FourCc,
-    /// Index from 1 of the [`DataEntry`](crate::DataEntry) the samples are retrieved from
-    pub data_reference_index: u16,
-    /// Number of channels, which shall be correct: 1 mono, 2 stereo, and otherwise as the codec configuration assigns them
-    ///
-    /// The template gives no value, so [`Default`] gives 0, unknown.
-    pub channel_count: u16,
-    /// Size of a sample in bits, 16 by default
-    pub sample_size: u16,
-    /// Sampling rate of the audio as a multiple or division of the `srat`, 1 by default
-    pub sample_rate: U16F16,
-    /// Children a specification deriving the class defines, which lay before the boxes of ISO/IEC 14496-12
-    pub derived_boxes: OtherBoxes,
-    /// Actual sampling rate of the audio, which overrides `sample_rate`
-    pub srat: Option<SamplingRateBox>,
-    /// Bit rates and decoding buffer size of the stream
-    pub btrt: Option<BitRateBox>,
-    /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
-    pub extra_boxes: OtherBoxes,
-}
-
-impl Default for AudioSampleEntryV1 {
-    fn default() -> Self {
-        Self {
-            format: FourCc::new([0; 4]),
-            data_reference_index: 0,
-            channel_count: 0,
-            sample_size: 16,
-            sample_rate: U16F16::from_integer(1),
-            derived_boxes: OtherBoxes::new(),
-            srat: None,
-            btrt: None,
-            extra_boxes: OtherBoxes::new(),
-        }
-    }
-}
-
-impl TryFrom<&SampleEntry> for AudioSampleEntryV1 {
-    type Error = Error;
-
-    /// Reads the entry from the bytes of `entry` after `data_reference_index`
-    ///
-    /// # Errors
-    ///
-    /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
-    ///   bytes end inside a field, counted from the end of
-    ///   `data_reference_index`.
-    /// * [`UnsupportedValue`](isobmff_core::ErrorKind::UnsupportedValue) for
-    ///   `entry_version`: the bytes open with an `entry_version` other than
-    ///   1.
-    /// * The failures of a child that does not frame, and of a box of
-    ///   ISO/IEC 14496-12 given more than once.
-    fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
-        let (fields, derived_boxes, mut children) = Fields::read(entry, 1)?;
-
-        Ok(Self {
-            format: entry.format,
-            data_reference_index: entry.data_reference_index,
-            channel_count: fields.channel_count,
-            sample_size: fields.sample_size,
-            sample_rate: fields.sample_rate,
-            derived_boxes,
-            srat: children.take_zero_or_one_if_decoded()?,
-            btrt: children.take_zero_or_one_if_decoded()?,
-            extra_boxes: OtherBoxes::from(children),
-        })
-    }
-}
-
-impl TryFrom<&AudioSampleEntryV1> for SampleEntry {
-    type Error = Error;
-
-    /// Writes `audio` into the bytes of an entry after `data_reference_index`
-    ///
-    /// # Errors
-    ///
-    /// * The failures of writing a child.
-    fn try_from(audio: &AudioSampleEntryV1) -> Result<Self, Error> {
-        from_class(
-            audio.format,
-            audio.data_reference_index,
-            audio.remaining_len(),
-            |writer| audio.encode_remaining(writer),
+        encode_children(
+            writer.take_remainder(),
+            &self.derived_boxes,
+            |mut rest| {
+                rest = encode_optional(rest, self.chnl.as_ref())?;
+                for dmix in &self.dmix {
+                    rest = dmix.encode(rest)?;
+                }
+                rest = encode_optional(rest, self.srat.as_ref())?;
+                encode_optional(rest, self.btrt.as_ref())
+            },
+            &self.extra_boxes,
         )
-    }
-}
-
-impl AudioSampleEntryV1 {
-    /// Returns the length of the bytes the entry lays out after `data_reference_index`
-    fn remaining_len(&self) -> u64 {
-        [
-            self.srat.as_ref().map_or(0, BoxEncode::encoded_len),
-            self.btrt.as_ref().map_or(0, BoxEncode::encoded_len),
-        ]
-        .into_iter()
-        .chain(
-            self.derived_boxes
-                .as_slice()
-                .iter()
-                .map(AnyBox::encoded_len),
-        )
-        .chain(self.extra_boxes.as_slice().iter().map(AnyBox::encoded_len))
-        .fold(Fields::ENCODED_LEN, u64::saturating_add)
-    }
-
-    /// Writes the bytes the entry lays out after `data_reference_index`
-    ///
-    /// # Errors
-    ///
-    /// * The failures of writing a child.
-    fn encode_remaining(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        let fields = Fields {
-            channel_count: self.channel_count,
-            sample_size: self.sample_size,
-            sample_rate: self.sample_rate,
-        };
-        fields.write(writer, 1)?;
-        let mut rest = writer.take_remainder();
-        for kept in self.derived_boxes.as_slice() {
-            rest = kept.encode(rest)?;
-        }
-        if let Some(srat) = &self.srat {
-            rest = srat.encode(rest)?;
-        }
-        if let Some(btrt) = &self.btrt {
-            rest = btrt.encode(rest)?;
-        }
-        for kept in self.extra_boxes.as_slice() {
-            rest = kept.encode(rest)?;
-        }
-
-        Ok(())
     }
 }
 
@@ -451,9 +357,14 @@ impl TryFrom<&AudioSampleEntryVariant> for SampleEntry {
 mod tests {
     use isobmff_core::{ChildBoxes, Error, FourCc, OtherBoxes, U16F16};
 
-    use super::{AudioSampleEntry, AudioSampleEntryV1, AudioSampleEntryVariant};
+    use alloc::vec;
+
+    use super::{AudioSampleEntry, AudioSampleEntryVariant};
     use crate::btrt::BitRateBox;
+    use crate::chnl::ChannelLayout;
+    use crate::dmix::{DownMixInstruction, DownMixInstructions, DownmixCoefficients};
     use crate::sample_entry::SampleEntry;
+    use crate::sample_entry::audio_v1::AudioSampleEntryV1;
     use crate::srat::SamplingRateBox;
 
     /// Fields of an entry of `entry_version` 0: 2 channels of 16 bits at 48000 samples per second
@@ -464,6 +375,15 @@ mod tests {
 
     /// Decoder configuration of a derived specification, of a type this crate does not read
     const ESDS: &[u8] = b"\0\0\0\x0desds\0\0\0\0\x03";
+
+    /// `chnl` of version 1 of 3 base channels and no structure
+    const CHNL: &[u8] = b"\0\0\0\x0echnl\x01\0\0\0\0\x03";
+
+    /// `dmix` of version 1 of one downmix 1 from 3 base channels to the layout 1 of 1 channel, each coefficient 0 dB
+    const DMIX: &[u8] = b"\0\0\0\x13dmix\x01\0\0\0\x01\x01\x01\x01\x02\x94\xa0";
+
+    /// `dmix` of the downmix of [`DMIX`] from 2 base channels
+    const DMIX_OF_2: &[u8] = b"\0\0\0\x12dmix\x01\0\0\0\x01\x01\x01\x01\x02\x94";
 
     /// `srat` of 96000 samples per second
     const SRAT: &[u8] = b"\0\0\0\x10srat\0\0\0\0\0\x01\x77\0";
@@ -500,6 +420,30 @@ mod tests {
         })
     }
 
+    fn chnl() -> Option<ChannelLayout> {
+        Some(ChannelLayout::Version1 {
+            format_ordering: 0,
+            base_channel_count: 3,
+            channel_structure: None,
+            object_structured: false,
+        })
+    }
+
+    fn dmix(base_channel_count: usize) -> DownMixInstructions {
+        DownMixInstructions {
+            version: 1,
+            downmix_instructions: vec![DownMixInstruction {
+                target_layout: 1,
+                target_channel_count: 1,
+                downmix_id: 1,
+                downmix_coefficients: Some(DownmixCoefficients::Version1 {
+                    bs_downmix_offset: 0,
+                    bs_downmix_coefficient_v1: vec![5; base_channel_count],
+                }),
+            }],
+        }
+    }
+
     fn audio() -> AudioSampleEntry {
         AudioSampleEntry {
             format: FourCc::new(*b"mp4a"),
@@ -507,6 +451,8 @@ mod tests {
             channel_count: 2,
             sample_rate: U16F16::from_integer(48_000),
             derived_boxes: kept(&[ESDS]),
+            chnl: chnl(),
+            dmix: vec![dmix(3)],
             srat: srat(),
             btrt: btrt(),
             extra_boxes: kept(&[EXTRA]),
@@ -520,6 +466,8 @@ mod tests {
             data_reference_index: 1,
             channel_count: 2,
             derived_boxes: kept(&[ESDS]),
+            chnl: chnl(),
+            dmix: vec![dmix(3)],
             srat: srat(),
             btrt: btrt(),
             extra_boxes: kept(&[EXTRA]),
@@ -533,11 +481,11 @@ mod tests {
             [
                 AudioSampleEntryVariant::try_from(&sample_entry(
                     FIELDS,
-                    &[ESDS, SRAT, EXTRA, BTRT]
+                    &[ESDS, DMIX, SRAT, EXTRA, BTRT, CHNL]
                 )),
                 AudioSampleEntryVariant::try_from(&sample_entry(
                     FIELDS_V1,
-                    &[ESDS, BTRT, EXTRA, SRAT]
+                    &[ESDS, BTRT, DMIX, EXTRA, CHNL, SRAT]
                 )),
             ],
             [
@@ -555,9 +503,37 @@ mod tests {
                 SampleEntry::try_from(&AudioSampleEntryVariant::AudioSampleEntryV1(audio_v1())),
             ],
             [
-                Ok(sample_entry(FIELDS, &[ESDS, SRAT, BTRT, EXTRA])),
-                Ok(sample_entry(FIELDS_V1, &[ESDS, SRAT, BTRT, EXTRA])),
+                Ok(sample_entry(FIELDS, &[ESDS, CHNL, DMIX, SRAT, BTRT, EXTRA])),
+                Ok(sample_entry(
+                    FIELDS_V1,
+                    &[ESDS, SRAT, CHNL, DMIX, BTRT, EXTRA]
+                )),
             ]
+        );
+    }
+
+    #[test]
+    fn downmixes_of_an_entry_without_a_channel_layout_have_its_channel_count_for_base() {
+        let expected = AudioSampleEntry {
+            format: FourCc::new(*b"mp4a"),
+            data_reference_index: 1,
+            channel_count: 2,
+            sample_rate: U16F16::from_integer(48_000),
+            dmix: vec![dmix(2)],
+            ..AudioSampleEntry::default()
+        };
+
+        assert_eq!(
+            AudioSampleEntry::try_from(&sample_entry(FIELDS, &[DMIX_OF_2])),
+            Ok(expected)
+        );
+    }
+
+    #[test]
+    fn a_downmix_that_does_not_read_with_the_base_channel_count_refuses_the_entry() {
+        assert_eq!(
+            AudioSampleEntry::try_from(&sample_entry(FIELDS, &[CHNL, DMIX_OF_2])),
+            Err(Error::truncated_payload(11, 10))
         );
     }
 

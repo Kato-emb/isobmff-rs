@@ -3,8 +3,7 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    AnyBox, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FourCc, OtherBoxes,
-    U16F16,
+    BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FourCc, OtherBoxes, U16F16,
 };
 
 use crate::amve::AmbientViewingEnvironmentBox;
@@ -16,7 +15,9 @@ use crate::colr::ColourInformationBox;
 use crate::data_types::CompressorName;
 use crate::mdcv::MasteringDisplayColourVolumeBox;
 use crate::pasp::PixelAspectRatioBox;
-use crate::sample_entry::{SampleEntry, from_class, split_children};
+use crate::sample_entry::{
+    SampleEntry, children_len, encode_children, encode_optional, from_class, split_children,
+};
 
 /// Length of the fields the class lays out after `data_reference_index`
 const FIELDS_LEN: u64 = 16 + 2 + 2 + 4 + 4 + 4 + 2 + 32 + 2 + 2;
@@ -208,7 +209,7 @@ impl TryFrom<&VisualSampleEntry> for SampleEntry {
 impl VisualSampleEntry {
     /// Returns the length of the bytes the entry lays out after `data_reference_index`
     fn remaining_len(&self) -> u64 {
-        [
+        let defined = [
             self.clap.as_ref().map_or(0, BoxEncode::encoded_len),
             self.pasp.as_ref().map_or(0, BoxEncode::encoded_len),
             self.clli.as_ref().map_or(0, BoxEncode::encoded_len),
@@ -218,15 +219,9 @@ impl VisualSampleEntry {
             self.btrt.as_ref().map_or(0, BoxEncode::encoded_len),
         ]
         .into_iter()
-        .chain(self.colr.iter().map(BoxEncode::encoded_len))
-        .chain(
-            self.derived_boxes
-                .as_slice()
-                .iter()
-                .map(AnyBox::encoded_len),
-        )
-        .chain(self.extra_boxes.as_slice().iter().map(AnyBox::encoded_len))
-        .fold(FIELDS_LEN, u64::saturating_add)
+        .chain(self.colr.iter().map(BoxEncode::encoded_len));
+
+        children_len(&self.derived_boxes, defined, &self.extra_boxes).saturating_add(FIELDS_LEN)
     }
 
     /// Writes the bytes the entry lays out after `data_reference_index`
@@ -245,39 +240,23 @@ impl VisualSampleEntry {
         writer.write_bytes(&self.compressor_name.to_bytes())?;
         writer.write_u16(self.depth)?;
         writer.write_i16(-1)?;
-        let mut rest = writer.take_remainder();
-        for kept in self.derived_boxes.as_slice() {
-            rest = kept.encode(rest)?;
-        }
-        if let Some(clap) = &self.clap {
-            rest = clap.encode(rest)?;
-        }
-        if let Some(pasp) = &self.pasp {
-            rest = pasp.encode(rest)?;
-        }
-        for colr in &self.colr {
-            rest = colr.encode(rest)?;
-        }
-        if let Some(clli) = &self.clli {
-            rest = clli.encode(rest)?;
-        }
-        if let Some(mdcv) = &self.mdcv {
-            rest = mdcv.encode(rest)?;
-        }
-        if let Some(cclv) = &self.cclv {
-            rest = cclv.encode(rest)?;
-        }
-        if let Some(amve) = &self.amve {
-            rest = amve.encode(rest)?;
-        }
-        if let Some(btrt) = &self.btrt {
-            rest = btrt.encode(rest)?;
-        }
-        for kept in self.extra_boxes.as_slice() {
-            rest = kept.encode(rest)?;
-        }
-
-        Ok(())
+        encode_children(
+            writer.take_remainder(),
+            &self.derived_boxes,
+            |mut rest| {
+                rest = encode_optional(rest, self.clap.as_ref())?;
+                rest = encode_optional(rest, self.pasp.as_ref())?;
+                for colr in &self.colr {
+                    rest = colr.encode(rest)?;
+                }
+                rest = encode_optional(rest, self.clli.as_ref())?;
+                rest = encode_optional(rest, self.mdcv.as_ref())?;
+                rest = encode_optional(rest, self.cclv.as_ref())?;
+                rest = encode_optional(rest, self.amve.as_ref())?;
+                encode_optional(rest, self.btrt.as_ref())
+            },
+            &self.extra_boxes,
+        )
     }
 }
 

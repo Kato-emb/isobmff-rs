@@ -18,15 +18,16 @@ mod tests {
         SampleDependencyTypeBox, SampleDescription, SampleDescriptionBox, SampleEntry, SampleFlags,
         SampleGroupDescriptionBox, SampleGroupDescriptionEntry, SampleSizeBox, SampleSizeVariant,
         SampleSizes, SampleTableBox, SampleToChunkBox, SampleToChunkEntry, SampleToGroupBox,
-        SampleToGroupEntry, SegmentIndexBox, SegmentIndexReference, SegmentTypeBox, Skip,
-        SubsegmentIndexBox, TemporalLevelEntry, TimeToSampleBox, TimeToSampleEntry, TrackBox,
-        TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
-        TrackHeaderBox, TrackReference, TrackReferenceBox, TrackReferenceTypeBox, TrackRunBox,
-        TrackRunSample, TrackRunSamples, VisualRandomAccessEntry, VisualSampleEntry,
+        SampleToGroupEntry, SegmentIndexBox, SegmentIndexReference, SegmentTypeBox,
+        SimpleTextSampleEntry, Skip, SubsegmentIndexBox, TemporalLevelEntry, TimeToSampleBox,
+        TimeToSampleEntry, TrackBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
+        TrackFragmentHeaderBox, TrackHeaderBox, TrackReference, TrackReferenceBox,
+        TrackReferenceTypeBox, TrackRunBox, TrackRunSample, TrackRunSamples,
+        VisualRandomAccessEntry, VisualSampleEntry, XmlMetaDataSampleEntry, XmlSubtitleSampleEntry,
     };
     use isobmff_core::{
         BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, Error, FourCc, I8F8, RawBox, U16F16,
-        Utf8String,
+        Utf8List, Utf8String,
     };
     use isobmff_test_support::serde_json::{self, Value};
     use isobmff_test_support::{ConformanceFile, conformance_files, ffprobe, gpac_children};
@@ -256,6 +257,109 @@ mod tests {
             ),
             Vec::<String>::new()
         );
+    }
+
+    /// Reads `entry` into `Class`, holds it against what GPAC reports, as `gpac` sets it, and checks that it writes back the bytes it was read from, and returns what differs
+    fn read_as_gpac_reports_and_written_back<Class>(
+        name: &str,
+        entry: &SampleEntry,
+        reported: &Value,
+        gpac: fn(&Class, &Value) -> Class,
+    ) -> Vec<String>
+    where
+        Class:
+            for<'entry> TryFrom<&'entry SampleEntry, Error = Error> + PartialEq + std::fmt::Debug,
+        SampleEntry: for<'class> TryFrom<&'class Class, Error = Error>,
+    {
+        let read = match Class::try_from(entry) {
+            Ok(read) => read,
+            Err(error) => return vec![format!("{name}: {:?}: {error}", entry.format)],
+        };
+        let mut differences = Vec::new();
+        let expected = gpac(&read, reported);
+        if read != expected {
+            differences.push(format!("{name}: read {read:?}, GPAC reports {expected:?}"));
+        }
+        if SampleEntry::try_from(&read).as_ref() != Ok(entry) {
+            differences.push(format!(
+                "{name}: {:?} writes back other bytes",
+                entry.format
+            ));
+        }
+        differences
+    }
+
+    /// Returns the list GPAC reports for `field` of `node`, or `ours` where it reports none
+    fn gpac_list(ours: &Utf8List, node: &Value, field: &str) -> Utf8List {
+        node.get(field).and_then(Value::as_str).map_or_else(
+            || ours.clone(),
+            |list| Utf8List::from_slice(list.as_bytes()),
+        )
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn the_sample_entries_of_text_subtitle_and_metadata_tracks_read_as_gpac_reports_them_and_write_back()
+     {
+        let mut differences = Vec::new();
+        let mut read = 0;
+        for ConformanceFile {
+            name,
+            bytes,
+            report,
+            ..
+        } in conformance_files()
+        {
+            for (handler_type, format) in
+                [(b"text", b"stxt"), (b"subt", b"stpp"), (b"meta", b"metx")]
+            {
+                for (entry, reported) in sample_entries_of(&bytes, &report, handler_type) {
+                    if entry.format != FourCc::new(*format) {
+                        continue;
+                    }
+                    read += 1;
+                    differences.extend(match format {
+                        b"stxt" => read_as_gpac_reports_and_written_back(
+                            &name,
+                            &entry,
+                            reported,
+                            |ours: &SimpleTextSampleEntry, node| {
+                                let mut text = ours.clone();
+                                text.mime_format =
+                                    Utf8String::from_slice(gpac_str(node, "@mime_type").as_bytes());
+                                text
+                            },
+                        ),
+                        b"stpp" => read_as_gpac_reports_and_written_back(
+                            &name,
+                            &entry,
+                            reported,
+                            |ours: &XmlSubtitleSampleEntry, node| {
+                                let mut subtitle = ours.clone();
+                                subtitle.namespace = gpac_list(&ours.namespace, node, "@namespace");
+                                subtitle.schema_location =
+                                    gpac_list(&ours.schema_location, node, "@schema_location");
+                                subtitle
+                            },
+                        ),
+                        _ => read_as_gpac_reports_and_written_back(
+                            &name,
+                            &entry,
+                            reported,
+                            |ours: &XmlMetaDataSampleEntry, node| {
+                                let mut metadata = ours.clone();
+                                metadata.namespace = gpac_list(&ours.namespace, node, "@namespace");
+                                metadata.schema_location =
+                                    gpac_list(&ours.schema_location, node, "@schema_location");
+                                metadata
+                            },
+                        ),
+                    });
+                }
+            }
+        }
+
+        assert_eq!((differences, read), (Vec::<String>::new(), 4));
     }
 
     /// Returns `ours` with the fields GPAC reports for an audio sample entry set as GPAC reports them in `node`
@@ -1255,9 +1359,20 @@ mod tests {
         assert_eq!(differences, Vec::<String>::new());
     }
 
-    /// Returns what `ffprobe` reads off `bytes`: the time base, duration and number of samples of each stream, and the duration of the file
-    fn ffprobe_streams(name: &str, bytes: &[u8]) -> Value {
-        let probed = env::temp_dir().join(format!("isobmff-boxes-conformance-{name}"));
+    /// Entries `ffprobe` reports of the timing of a file: the time base, duration and number of samples of each stream, and the duration of the file
+    const TIMING: &str = "stream=index,time_base,duration_ts,nb_read_packets:format=duration";
+
+    /// Entries `ffprobe` reports of the sample entries of a file: the codec tag of each stream, and its picture size or its sampling rate and channels
+    const SAMPLE_ENTRIES: &str = "stream=index,codec_tag_string,width,height,sample_rate,channels";
+
+    /// Returns the entries `ffprobe` reports for `bytes`, as `show_entries` names them
+    fn ffprobe_streams(name: &str, bytes: &[u8], show_entries: &str) -> Value {
+        // Why not the name alone: tests run in processes of their own at once,
+        // and two of them probe the same file.
+        let probed = env::temp_dir().join(format!(
+            "isobmff-boxes-conformance-{}-{name}",
+            std::process::id()
+        ));
         fs::write(&probed, bytes).unwrap();
         let output = ffprobe(
             &[
@@ -1267,7 +1382,7 @@ mod tests {
                 "json",
                 "-count_packets",
                 "-show_entries",
-                "stream=index,time_base,duration_ts,nb_read_packets:format=duration",
+                show_entries,
             ],
             &probed,
         );
@@ -1298,8 +1413,81 @@ mod tests {
                 }
             };
             let (read_back, expected) = (
-                ffprobe_streams(&name, &written),
-                ffprobe_streams(&name, &bytes),
+                ffprobe_streams(&name, &written, TIMING),
+                ffprobe_streams(&name, &bytes, TIMING),
+            );
+            if read_back != expected {
+                differences.push(format!(
+                    "{name}: FFmpeg reads {read_back} from what was written, {expected} from the file"
+                ));
+            }
+        }
+
+        assert_eq!(differences, Vec::<String>::new());
+    }
+
+    /// Returns `entry` read into the class of ISO/IEC 14496-12 its handler type and format name, and written back, or `entry` itself where there is no such class
+    fn written_through_its_class(
+        handler_type: FourCc,
+        entry: &SampleEntry,
+    ) -> Result<SampleEntry, Error> {
+        match (handler_type.as_bytes(), entry.format.as_bytes()) {
+            (b"vide", _) => SampleEntry::try_from(&VisualSampleEntry::try_from(entry)?),
+            (b"soun", _) => SampleEntry::try_from(&AudioSampleEntryVariant::try_from(entry)?),
+            (b"text", b"stxt") => SampleEntry::try_from(&SimpleTextSampleEntry::try_from(entry)?),
+            (b"subt", b"stpp") => SampleEntry::try_from(&XmlSubtitleSampleEntry::try_from(entry)?),
+            (b"meta", b"metx") => SampleEntry::try_from(&XmlMetaDataSampleEntry::try_from(entry)?),
+            _ => Ok(entry.clone()),
+        }
+    }
+
+    /// Returns the file `bytes` with each sample entry of its `moov`s read into its class and written back
+    fn with_sample_entries_written_through_their_classes(bytes: &[u8]) -> Result<Vec<u8>, Error> {
+        let mut written = Vec::with_capacity(bytes.len());
+        for framed in top_level(bytes) {
+            if framed.header().box_type() != MovieBox::BOX_TYPE {
+                let mut header = vec![0; usize::try_from(framed.header().encoded_len()).unwrap()];
+                framed.header().encode(&mut header)?;
+                written.extend(header);
+                written.extend(framed.payload());
+                continue;
+            }
+            let mut movie = MovieBox::decode_payload(framed.payload())?;
+            for track in &mut movie.trak {
+                let handler_type = track.mdia.hdlr.handler_type;
+                for description in &mut track.mdia.minf.stbl.stsd.sample_descriptions {
+                    if let SampleDescription::Typed(entry) = description {
+                        *entry = written_through_its_class(handler_type, entry)?;
+                    }
+                }
+            }
+            let mut box_bytes = vec![0; usize::try_from(movie.encoded_len()).unwrap()];
+            movie.encode(&mut box_bytes)?;
+            written.extend(box_bytes);
+        }
+
+        Ok(written)
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn a_file_with_its_sample_entries_written_through_their_classes_reads_in_ffmpeg_as_the_file_it_was_read_from()
+     {
+        let mut differences = Vec::new();
+        for ConformanceFile { name, bytes, .. } in conformance_files() {
+            if OFFSETS_INTO_MOOV.contains(&name.as_str()) {
+                continue;
+            }
+            let written = match with_sample_entries_written_through_their_classes(&bytes) {
+                Ok(written) => written,
+                Err(error) => {
+                    differences.push(format!("{name}: {error}"));
+                    continue;
+                }
+            };
+            let (read_back, expected) = (
+                ffprobe_streams(&name, &written, SAMPLE_ENTRIES),
+                ffprobe_streams(&name, &bytes, SAMPLE_ENTRIES),
             );
             if read_back != expected {
                 differences.push(format!(

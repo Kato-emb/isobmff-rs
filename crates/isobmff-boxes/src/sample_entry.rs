@@ -1,17 +1,36 @@
 //! [`SampleEntry`], the fields every sample entry opens with, and the bytes the class derived for its format lays out
 
 mod audio;
+mod audio_v1;
+mod font;
+mod haptic;
+mod metadata;
+mod subtitle;
+mod text;
 mod visual;
+mod volumetric;
 
 use alloc::vec;
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    BoxEncode, BoxType, ChildBoxes, Error, FieldReader, FieldWriter, FourCc, OtherBoxes, RawBox,
+    AnyBox, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader, FieldWriter, FourCc,
+    OtherBoxes, RawBox,
 };
 
-pub use audio::{AudioSampleEntry, AudioSampleEntryV1, AudioSampleEntryVariant};
+use crate::btrt::BitRateBox;
+
+pub use audio::{AudioSampleEntry, AudioSampleEntryVariant};
+pub use audio_v1::AudioSampleEntryV1;
+pub use font::FontSampleEntry;
+pub use haptic::HapticSampleEntry;
+pub use metadata::{
+    BoxedMetadataSampleEntry, TextMetaDataSampleEntry, UriMetaSampleEntry, XmlMetaDataSampleEntry,
+};
+pub use subtitle::{TextSubtitleSampleEntry, XmlSubtitleSampleEntry};
+pub use text::SimpleTextSampleEntry;
 pub use visual::VisualSampleEntry;
+pub use volumetric::VolumetricVisualSampleEntry;
 
 /// [`SampleEntry`], ISO/IEC 14496-12 §8.5.2
 ///
@@ -21,6 +40,25 @@ pub use visual::VisualSampleEntry;
 /// both the [`format`](Self::format) and the handler type of the track, so
 /// the entry is read into that class by a caller who knows the handler type,
 /// and written back from it.
+///
+/// The classes ISO/IEC 14496-12 defines, by the handler type of the track:
+///
+/// * `vide`: [`VisualSampleEntry`].
+/// * `soun`: [`AudioSampleEntry`] or [`AudioSampleEntryV1`], which
+///   [`AudioSampleEntryVariant`] reads by their `entry_version`.
+/// * `meta`: [`XmlMetaDataSampleEntry`] (`metx`),
+///   [`TextMetaDataSampleEntry`] (`mett`), [`UriMetaSampleEntry`] (`urim`) and
+///   [`BoxedMetadataSampleEntry`] (`mebx`).
+/// * `text`: [`SimpleTextSampleEntry`] (`stxt`).
+/// * `subt`: [`XmlSubtitleSampleEntry`] (`stpp`) and
+///   [`TextSubtitleSampleEntry`] (`sbtt`).
+/// * `fdsm`: [`FontSampleEntry`].
+/// * `volv`: [`VolumetricVisualSampleEntry`].
+/// * `hapt`: [`HapticSampleEntry`].
+///
+/// A class of a fixed format reads only an entry of that format. A class
+/// that takes a coding name, such as [`VisualSampleEntry`], reads an entry of
+/// any format and keeps it.
 ///
 /// The format is the box type of the entry, which a
 /// [`SampleDescriptionBox`](crate::SampleDescriptionBox) reads into
@@ -131,6 +169,110 @@ pub(crate) fn split_children<'payload>(
         OtherBoxes::from(ChildBoxes::decode(derived)?),
         ChildBoxes::decode(defined_onward)?,
     ))
+}
+
+/// Checks that `entry` is of the format `format`, the format of a class that takes no coding name
+///
+/// # Errors
+///
+/// * [`UnsupportedValue`](isobmff_core::ErrorKind::UnsupportedValue) for
+///   `format`: the entry is of another format.
+pub(crate) fn of_format(entry: &SampleEntry, format: FourCc) -> Result<(), Error> {
+    if entry.format != format {
+        return Err(Error::unsupported_value("format"));
+    }
+
+    Ok(())
+}
+
+/// Reads a string field of an entry, which a NUL ends, or the end of the bytes where none does, and returns its bytes, the NUL included
+pub(crate) fn read_string<'payload>(
+    reader: &mut FieldReader<'payload>,
+) -> Result<&'payload [u8], Error> {
+    let rest = reader.remainder();
+    let length = rest
+        .iter()
+        .position(|byte| *byte == 0)
+        .map_or(rest.len(), |terminator| terminator.saturating_add(1));
+
+    reader.read_slice(length)
+}
+
+/// Children of a class that defines no box of its own, which holds a `btrt` alone, as any sample entry may
+pub(crate) struct BitRateChildren {
+    pub(crate) derived_boxes: OtherBoxes,
+    pub(crate) btrt: Option<BitRateBox>,
+    pub(crate) extra_boxes: OtherBoxes,
+}
+
+impl BitRateChildren {
+    /// Reads the children `payload` holds, split before the `btrt` as [`split_children`] splits them
+    ///
+    /// # Errors
+    ///
+    /// * The failures of a child that does not frame, and of a `btrt` given
+    ///   more than once.
+    pub(crate) fn read(payload: &[u8]) -> Result<Self, Error> {
+        let (derived_boxes, mut children) = split_children(payload, &[BitRateBox::BOX_TYPE])?;
+
+        Ok(Self {
+            derived_boxes,
+            btrt: children.take_zero_or_one_if_decoded()?,
+            extra_boxes: OtherBoxes::from(children),
+        })
+    }
+}
+
+/// Returns the length of the children of an entry: `derived_boxes`, the boxes of ISO/IEC 14496-12 the class defines, of the lengths `defined`, and `extra_boxes`
+pub(crate) fn children_len(
+    derived_boxes: &OtherBoxes,
+    defined: impl IntoIterator<Item = u64>,
+    extra_boxes: &OtherBoxes,
+) -> u64 {
+    derived_boxes
+        .as_slice()
+        .iter()
+        .chain(extra_boxes.as_slice())
+        .map(AnyBox::encoded_len)
+        .chain(defined)
+        .fold(0, u64::saturating_add)
+}
+
+/// Writes the children of an entry onto the front of `rest` in the order of the three parts: `derived_boxes`, the boxes of ISO/IEC 14496-12 that `encode_defined` writes, then `extra_boxes`
+///
+/// # Errors
+///
+/// * The failures of writing a child.
+pub(crate) fn encode_children<'buffer>(
+    mut rest: &'buffer mut [u8],
+    derived_boxes: &OtherBoxes,
+    encode_defined: impl FnOnce(&'buffer mut [u8]) -> Result<&'buffer mut [u8], Error>,
+    extra_boxes: &OtherBoxes,
+) -> Result<(), Error> {
+    for kept in derived_boxes.as_slice() {
+        rest = kept.encode(rest)?;
+    }
+    rest = encode_defined(rest)?;
+    for kept in extra_boxes.as_slice() {
+        rest = kept.encode(rest)?;
+    }
+
+    Ok(())
+}
+
+/// Writes `child`, if there is one, onto the front of `rest`, and returns what is left
+///
+/// # Errors
+///
+/// * The failures of writing `child`.
+pub(crate) fn encode_optional<'buffer, Child: BoxEncode + BoxDefinition>(
+    rest: &'buffer mut [u8],
+    child: Option<&Child>,
+) -> Result<&'buffer mut [u8], Error> {
+    match child {
+        Some(child) => child.encode(rest),
+        None => Ok(rest),
+    }
 }
 
 impl BoxEncode for SampleEntry {

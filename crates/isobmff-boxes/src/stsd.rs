@@ -33,9 +33,9 @@ pub enum SampleDescription {
 ///
 /// The box reads version 0 and version 1 and keeps the version it was read
 /// in, which it is written in. §8.5.2.3 treats version 1 as version 0, while
-/// an `AudioSampleEntryV1` lies in a box of version 1 alone, so neither
-/// version is checked against the entries the box holds. The `flags` are read
-/// past and written as zero.
+/// an [`AudioSampleEntryV1`](crate::AudioSampleEntryV1) lies in a box of
+/// version 1 alone, so neither version is checked against the entries the box
+/// holds. The `flags` are read past and written as zero.
 ///
 /// # Untrusted input
 ///
