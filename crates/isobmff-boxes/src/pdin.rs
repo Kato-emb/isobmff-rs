@@ -7,7 +7,7 @@ use isobmff_core::{
     FullBoxHeader,
 };
 
-use crate::field::{TableEntry, entries_len, read_to_end, write_entries};
+use crate::table::{TableEntry, entries_len, read_to_end, write_entries};
 
 /// Pair of a download rate and the initial delay it suggests, one entry of a [`ProgressiveDownloadInfoBox`]
 #[non_exhaustive]

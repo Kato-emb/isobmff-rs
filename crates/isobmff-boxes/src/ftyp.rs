@@ -6,7 +6,7 @@ use isobmff_core::{
     BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FourCc,
 };
 
-use crate::field::{entries_len, read_to_end, write_entries};
+use crate::table::{entries_len, read_to_end, write_entries};
 
 /// Fields of a `GeneralTypeBox`, as `major_brand`, `minor_version` and `compatible_brands`
 pub(crate) type GeneralTypeFields = (FourCc, u32, Vec<FourCc>);

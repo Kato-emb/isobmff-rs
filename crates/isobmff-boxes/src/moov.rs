@@ -93,15 +93,15 @@ mod tests {
         \0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x02";
 
     /// `trak` of a `tkhd` of track 1 and an `mdia` holding the least it can
-    const TRAK: &[u8] = b"\0\0\0\xd9trak\
+    const TRAK: &[u8] = b"\0\0\0\xe1trak\
         \0\0\0\x5ctkhd\0\0\0\x03\0\0\0\0\0\0\0\0\0\0\0\x01\0\0\0\0\0\0\0\0\
         \0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\
         \0\x01\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x01\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x40\0\0\0\
         \0\0\0\0\0\0\0\0\
-        \0\0\0\x75mdia\
+        \0\0\0\x7dmdia\
         \0\0\0\x20mdhd\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\xe8\0\0\0\0\x55\xc4\0\0\
         \0\0\0\x21hdlr\0\0\0\0\0\0\0\0vide\0\0\0\0\0\0\0\0\0\0\0\0\0\
-        \0\0\0\x2cminf\0\0\0\x24dinf\0\0\0\x1cdref\0\0\0\0\0\0\0\x01\0\0\0\x0curl \0\0\0\x01";
+        \0\0\0\x34minf\0\0\0\x24dinf\0\0\0\x1cdref\0\0\0\0\0\0\0\x01\0\0\0\x0curl \0\0\0\x01\0\0\0\x08stbl";
 
     /// `iods` holding nothing, a box `moov` holds no field for
     const IODS: &[u8] = b"\0\0\0\x0ciods\0\0\0\0";
@@ -122,7 +122,7 @@ mod tests {
 
     #[test]
     fn reads_its_header_and_tracks_in_order_and_keeps_the_child_it_has_no_field_for() {
-        let bytes = [b"\0\0\x02\x32moov".as_slice(), MVHD, IODS, TRAK, TRAK].concat();
+        let bytes = [b"\0\0\x02\x42moov".as_slice(), MVHD, IODS, TRAK, TRAK].concat();
 
         assert_eq!(MovieBox::decode(&bytes), Ok((movie(), b"".as_slice())));
     }
@@ -131,7 +131,7 @@ mod tests {
     fn writes_its_header_then_its_tracks_then_the_child_it_has_no_field_for() {
         assert_eq!(
             encoded(&movie()),
-            [b"\0\0\x02\x32moov".as_slice(), MVHD, TRAK, TRAK, IODS].concat()
+            [b"\0\0\x02\x42moov".as_slice(), MVHD, TRAK, TRAK, IODS].concat()
         );
     }
 

@@ -102,10 +102,10 @@ mod tests {
     const EDTS: &[u8] = b"\0\0\0\x08edts";
 
     /// `mdia` of an `mdhd`, an `hdlr` and a `minf`, each holding the least it can
-    const MDIA: &[u8] = b"\0\0\0\x75mdia\
+    const MDIA: &[u8] = b"\0\0\0\x7dmdia\
         \0\0\0\x20mdhd\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\xe8\0\0\0\0\x55\xc4\0\0\
         \0\0\0\x21hdlr\0\0\0\0\0\0\0\0vide\0\0\0\0\0\0\0\0\0\0\0\0\0\
-        \0\0\0\x2cminf\0\0\0\x24dinf\0\0\0\x1cdref\0\0\0\0\0\0\0\x01\0\0\0\x0curl \0\0\0\x01";
+        \0\0\0\x34minf\0\0\0\x24dinf\0\0\0\x1cdref\0\0\0\0\0\0\0\x01\0\0\0\x0curl \0\0\0\x01\0\0\0\x08stbl";
 
     /// `tref` holding nothing, a box `trak` holds no field for
     const TREF: &[u8] = b"\0\0\0\x08tref";
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn reads_its_children_and_keeps_the_child_it_has_no_field_for() {
-        let bytes = [b"\0\0\0\xe9trak".as_slice(), TKHD, TREF, EDTS, MDIA].concat();
+        let bytes = [b"\0\0\0\xf1trak".as_slice(), TKHD, TREF, EDTS, MDIA].concat();
 
         assert_eq!(TrackBox::decode(&bytes), Ok((track(), b"".as_slice())));
     }
@@ -136,7 +136,7 @@ mod tests {
     fn writes_its_children_in_the_order_of_their_fields_then_the_child_it_has_no_field_for() {
         assert_eq!(
             encoded(&track()),
-            [b"\0\0\0\xe9trak".as_slice(), TKHD, EDTS, MDIA, TREF].concat()
+            [b"\0\0\0\xf1trak".as_slice(), TKHD, EDTS, MDIA, TREF].concat()
         );
     }
 
