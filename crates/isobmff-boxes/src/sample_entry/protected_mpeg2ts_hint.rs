@@ -6,8 +6,8 @@ use isobmff_core::{Error, FourCc, OtherBoxes};
 
 use crate::btrt::BitRateBox;
 use crate::mpeg2ts_hint::{InitialSampleTimeBox, OdBox, PatBox, PmtBox, TsTimingBox};
+use crate::sample_entry::SampleEntry;
 use crate::sample_entry::mpeg2ts_hint::{Mpeg2TsEntry, Mpeg2TsParts, read_entry};
-use crate::sample_entry::{HINT_TRACK_VERSION, SampleEntry};
 
 /// [`ProtectedMpeg2TransportStreamSampleEntry`] (`pm2t`), ISO/IEC 14496-12 §9.3.5
 ///
@@ -19,6 +19,9 @@ use crate::sample_entry::{HINT_TRACK_VERSION, SampleEntry};
 /// `data_reference_index` are read with [`TryFrom`] and written back with
 /// [`SampleEntry::try_from`].
 ///
+/// `hinttrackversion` and `highestcompatibleversion`, which the Syntax sets
+/// to 1, are read past and written as 1.
+///
 /// # Children
 ///
 /// The children are laid out in three parts as those of an
@@ -28,14 +31,10 @@ use crate::sample_entry::{HINT_TRACK_VERSION, SampleEntry};
 /// [`extra_boxes`](Self::extra_boxes) by where it lies.
 #[doc(alias = "pm2t", alias = "ProtectedMPEG2TransportStreamSampleEntry")]
 #[non_exhaustive]
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Default, PartialEq, Debug)]
 pub struct ProtectedMpeg2TransportStreamSampleEntry {
     /// Index from 1 of the [`DataEntry`](crate::DataEntry) the samples are retrieved from
     pub data_reference_index: u16,
-    /// Version of the hint track format, 1
-    pub hint_track_version: u16,
-    /// Oldest version of the hint track format the track is compatible with, 1
-    pub highest_compatible_version: u16,
     /// Number of bytes before each MPEG-2 TS packet, such as a time code of a recording device
     pub preceding_bytes_len: u8,
     /// Number of bytes after each MPEG-2 TS packet, such as a checksum of a recording device
@@ -65,27 +64,6 @@ impl ProtectedMpeg2TransportStreamSampleEntry {
     pub const FORMAT: FourCc = FourCc::new(*b"pm2t");
 }
 
-impl Default for ProtectedMpeg2TransportStreamSampleEntry {
-    fn default() -> Self {
-        Self {
-            data_reference_index: 0,
-            hint_track_version: HINT_TRACK_VERSION,
-            highest_compatible_version: HINT_TRACK_VERSION,
-            preceding_bytes_len: 0,
-            trailing_bytes_len: 0,
-            precomputed_only_flag: false,
-            derived_boxes: OtherBoxes::new(),
-            tpat: None,
-            tpmt: Vec::new(),
-            tod: Vec::new(),
-            tsti: None,
-            istm: None,
-            btrt: None,
-            extra_boxes: OtherBoxes::new(),
-        }
-    }
-}
-
 impl TryFrom<&SampleEntry> for ProtectedMpeg2TransportStreamSampleEntry {
     type Error = Error;
 
@@ -99,8 +77,6 @@ impl TryFrom<&SampleEntry> for ProtectedMpeg2TransportStreamSampleEntry {
     ///   [`Mpeg2TsReceptionSampleEntry::try_from`](crate::Mpeg2TsReceptionSampleEntry::try_from).
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         let Mpeg2TsEntry {
-            hint_track_version,
-            highest_compatible_version,
             preceding_bytes_len,
             trailing_bytes_len,
             precomputed_only_flag,
@@ -116,8 +92,6 @@ impl TryFrom<&SampleEntry> for ProtectedMpeg2TransportStreamSampleEntry {
 
         Ok(Self {
             data_reference_index: entry.data_reference_index,
-            hint_track_version,
-            highest_compatible_version,
             preceding_bytes_len,
             trailing_bytes_len,
             precomputed_only_flag,
@@ -144,8 +118,6 @@ impl TryFrom<&ProtectedMpeg2TransportStreamSampleEntry> for SampleEntry {
     fn try_from(hint: &ProtectedMpeg2TransportStreamSampleEntry) -> Result<Self, Error> {
         Mpeg2TsParts {
             data_reference_index: hint.data_reference_index,
-            hint_track_version: hint.hint_track_version,
-            highest_compatible_version: hint.highest_compatible_version,
             preceding_bytes_len: hint.preceding_bytes_len,
             trailing_bytes_len: hint.trailing_bytes_len,
             precomputed_only_flag: hint.precomputed_only_flag,

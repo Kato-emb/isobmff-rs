@@ -512,18 +512,14 @@ mod tests {
         assert_eq!((differences, read), (Vec::<String>::new(), 4));
     }
 
-    /// Returns `hinttrackversion`, `highestcompatibleversion` and `maxpacketsize` as GPAC reports them for the hint sample entry `node`
+    /// Returns `maxpacketsize` as GPAC reports it for the hint sample entry `node`
     ///
-    /// GPAC prints `maxpacketsize` as signed, so its 32 bits are taken.
-    fn gpac_hint_track_fields(node: &Value) -> (u16, u16, u32) {
+    /// GPAC prints it as signed, so its 32 bits are taken.
+    fn gpac_max_packet_size(node: &Value) -> u32 {
         let max_packet_size: i64 = gpac_integer(node, "@MaxPacketSize");
-        (
-            gpac_integer(node, "@HintTrackVersion"),
-            gpac_integer(node, "@LastCompatibleVersion"),
-            u32::try_from(max_packet_size)
-                .or_else(|_| i32::try_from(max_packet_size).map(i32::cast_unsigned))
-                .unwrap(),
-        )
+        u32::try_from(max_packet_size)
+            .or_else(|_| i32::try_from(max_packet_size).map(i32::cast_unsigned))
+            .unwrap()
     }
 
     /// Returns `tims` with the timescale GPAC reports for the `tims` in `node`
@@ -554,11 +550,7 @@ mod tests {
                         reported,
                         |ours: &RtpHintSampleEntry, node| {
                             let mut hint = ours.clone();
-                            (
-                                hint.hint_track_version,
-                                hint.highest_compatible_version,
-                                hint.max_packet_size,
-                            ) = gpac_hint_track_fields(node);
+                            hint.max_packet_size = gpac_max_packet_size(node);
                             hint.tims = gpac_timescale(node);
                             hint
                         },
@@ -569,11 +561,7 @@ mod tests {
                         reported,
                         |ours: &ReceivedRtpHintSampleEntry, node| {
                             let mut hint = ours.clone();
-                            (
-                                hint.hint_track_version,
-                                hint.highest_compatible_version,
-                                hint.max_packet_size,
-                            ) = gpac_hint_track_fields(node);
+                            hint.max_packet_size = gpac_max_packet_size(node);
                             hint.tims = gpac_timescale(node);
                             hint.tsro = gpac_boxes(node, "tsro").first().map(|tsro| {
                                 let mut offset = TimeOffsetBox::default();
@@ -594,11 +582,7 @@ mod tests {
                         reported,
                         |ours: &RtcpReceptionHintSampleEntry, node| {
                             let mut hint = ours.clone();
-                            (
-                                hint.hint_track_version,
-                                hint.highest_compatible_version,
-                                hint.max_packet_size,
-                            ) = gpac_hint_track_fields(node);
+                            hint.max_packet_size = gpac_max_packet_size(node);
                             hint
                         },
                     ),

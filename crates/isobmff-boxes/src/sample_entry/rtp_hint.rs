@@ -18,14 +18,12 @@ pub(super) const FIELDS_LEN: u64 = 2 + 2 + 4;
 
 /// Fields every RTP class lays out after `data_reference_index`, and the children after them, as [`read_entry`] reads them
 pub(super) struct RtpEntry<'payload> {
-    pub(super) hint_track_version: u16,
-    pub(super) highest_compatible_version: u16,
     pub(super) max_packet_size: u32,
     pub(super) derived_boxes: OtherBoxes,
     pub(super) children: ChildBoxes<'payload>,
 }
 
-/// Reads `hinttrackversion`, `highestcompatibleversion` and `maxpacketsize` from the bytes of `entry`, an entry of the format `format`, after `data_reference_index`, and splits the children after them before the first box of `defined`, as [`split_children`] does
+/// Reads `maxpacketsize` from the bytes of `entry`, an entry of the format `format`, after `data_reference_index`, past `hinttrackversion` and `highestcompatibleversion`, and splits the children after them before the first box of `defined`, as [`split_children`] does
 ///
 /// # Errors
 ///
@@ -42,21 +40,18 @@ pub(super) fn read_entry<'payload>(
 ) -> Result<RtpEntry<'payload>, Error> {
     of_format(entry, format)?;
     let mut reader = FieldReader::new(&entry.remaining_data);
-    let hint_track_version = reader.read_u16()?;
-    let highest_compatible_version = reader.read_u16()?;
+    reader.read_bytes::<4>()?;
     let max_packet_size = reader.read_u32()?;
     let (derived_boxes, children) = split_children(reader.take_remainder(), defined)?;
 
     Ok(RtpEntry {
-        hint_track_version,
-        highest_compatible_version,
         max_packet_size,
         derived_boxes,
         children,
     })
 }
 
-/// Writes `hinttrackversion`, `highestcompatibleversion` and `maxpacketsize`, the fields [`read_entry`] reads
+/// Writes `hinttrackversion` and `highestcompatibleversion` as 1, then `maxpacketsize`
 ///
 /// # Errors
 ///
@@ -64,12 +59,10 @@ pub(super) fn read_entry<'payload>(
 ///   buffer ends inside a field.
 pub(super) fn write_fields(
     writer: &mut FieldWriter<'_>,
-    hint_track_version: u16,
-    highest_compatible_version: u16,
     max_packet_size: u32,
 ) -> Result<(), Error> {
-    writer.write_u16(hint_track_version)?;
-    writer.write_u16(highest_compatible_version)?;
+    writer.write_u16(HINT_TRACK_VERSION)?;
+    writer.write_u16(HINT_TRACK_VERSION)?;
     writer.write_u32(max_packet_size)
 }
 
@@ -88,6 +81,9 @@ const RTP_DEFINED: [BoxType; 4] = [
 /// `data_reference_index` are read with [`TryFrom`] and written back with
 /// [`SampleEntry::try_from`].
 ///
+/// `hinttrackversion` and `highestcompatibleversion`, which the Syntax sets
+/// to 1, are read past and written as 1.
+///
 /// # Children
 ///
 /// The children are laid out in three parts, the order in which the entry
@@ -101,14 +97,10 @@ const RTP_DEFINED: [BoxType; 4] = [
 /// first part, and one that lies after it into the third.
 #[doc(alias = "rtp")]
 #[non_exhaustive]
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Default, PartialEq, Debug)]
 pub struct RtpHintSampleEntry {
     /// Index from 1 of the [`DataEntry`](crate::DataEntry) the samples are retrieved from
     pub data_reference_index: u16,
-    /// Version of the hint track format, 1
-    pub hint_track_version: u16,
-    /// Oldest version of the hint track format the track is compatible with, 1
-    pub highest_compatible_version: u16,
     /// Size of the largest packet the track forms, in bytes
     pub max_packet_size: u32,
     /// Children a specification deriving the class defines, which lay before the boxes of ISO/IEC 14496-12
@@ -130,23 +122,6 @@ impl RtpHintSampleEntry {
     pub const FORMAT: FourCc = FourCc::new(*b"rtp ");
 }
 
-impl Default for RtpHintSampleEntry {
-    fn default() -> Self {
-        Self {
-            data_reference_index: 0,
-            hint_track_version: HINT_TRACK_VERSION,
-            highest_compatible_version: HINT_TRACK_VERSION,
-            max_packet_size: 0,
-            derived_boxes: OtherBoxes::new(),
-            tims: TimescaleEntryBox::default(),
-            tsro: None,
-            snro: None,
-            btrt: None,
-            extra_boxes: OtherBoxes::new(),
-        }
-    }
-}
-
 impl TryFrom<&SampleEntry> for RtpHintSampleEntry {
     type Error = Error;
 
@@ -165,8 +140,6 @@ impl TryFrom<&SampleEntry> for RtpHintSampleEntry {
     ///   not read, and of a box of ISO/IEC 14496-12 given more than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         let RtpEntry {
-            hint_track_version,
-            highest_compatible_version,
             max_packet_size,
             derived_boxes,
             mut children,
@@ -174,8 +147,6 @@ impl TryFrom<&SampleEntry> for RtpHintSampleEntry {
 
         Ok(Self {
             data_reference_index: entry.data_reference_index,
-            hint_track_version,
-            highest_compatible_version,
             max_packet_size,
             derived_boxes,
             tims: children.take_exactly_one()?,
@@ -212,12 +183,7 @@ impl TryFrom<&RtpHintSampleEntry> for SampleEntry {
             hint.data_reference_index,
             remaining_len.saturating_add(FIELDS_LEN),
             |writer| {
-                write_fields(
-                    writer,
-                    hint.hint_track_version,
-                    hint.highest_compatible_version,
-                    hint.max_packet_size,
-                )?;
+                write_fields(writer, hint.max_packet_size)?;
                 encode_children(
                     writer.take_remainder(),
                     &hint.derived_boxes,
@@ -251,6 +217,9 @@ const SRTP_DEFINED: [BoxType; 5] = [
 /// `data_reference_index` are read with [`TryFrom`] and written back with
 /// [`SampleEntry::try_from`].
 ///
+/// `hinttrackversion` and `highestcompatibleversion`, which the Syntax sets
+/// to 1, are read past and written as 1.
+///
 /// # Children
 ///
 /// The children are laid out in three parts as those of an
@@ -259,14 +228,10 @@ const SRTP_DEFINED: [BoxType; 5] = [
 /// `btrt`.
 #[doc(alias = "srtp")]
 #[non_exhaustive]
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Default, PartialEq, Debug)]
 pub struct SrtpHintSampleEntry {
     /// Index from 1 of the [`DataEntry`](crate::DataEntry) the samples are retrieved from
     pub data_reference_index: u16,
-    /// Version of the hint track format, 1
-    pub hint_track_version: u16,
-    /// Oldest version of the hint track format the track is compatible with, 1
-    pub highest_compatible_version: u16,
     /// Size of the largest packet the track forms, in bytes
     pub max_packet_size: u32,
     /// Children a specification deriving the class defines, which lay before the boxes of ISO/IEC 14496-12
@@ -290,24 +255,6 @@ impl SrtpHintSampleEntry {
     pub const FORMAT: FourCc = FourCc::new(*b"srtp");
 }
 
-impl Default for SrtpHintSampleEntry {
-    fn default() -> Self {
-        Self {
-            data_reference_index: 0,
-            hint_track_version: HINT_TRACK_VERSION,
-            highest_compatible_version: HINT_TRACK_VERSION,
-            max_packet_size: 0,
-            derived_boxes: OtherBoxes::new(),
-            tims: TimescaleEntryBox::default(),
-            tsro: None,
-            snro: None,
-            srpp: SrtpProcessBox::default(),
-            btrt: None,
-            extra_boxes: OtherBoxes::new(),
-        }
-    }
-}
-
 impl TryFrom<&SampleEntry> for SrtpHintSampleEntry {
     type Error = Error;
 
@@ -327,8 +274,6 @@ impl TryFrom<&SampleEntry> for SrtpHintSampleEntry {
     ///   more than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         let RtpEntry {
-            hint_track_version,
-            highest_compatible_version,
             max_packet_size,
             derived_boxes,
             mut children,
@@ -336,8 +281,6 @@ impl TryFrom<&SampleEntry> for SrtpHintSampleEntry {
 
         Ok(Self {
             data_reference_index: entry.data_reference_index,
-            hint_track_version,
-            highest_compatible_version,
             max_packet_size,
             derived_boxes,
             tims: children.take_exactly_one()?,
@@ -376,12 +319,7 @@ impl TryFrom<&SrtpHintSampleEntry> for SampleEntry {
             hint.data_reference_index,
             remaining_len.saturating_add(FIELDS_LEN),
             |writer| {
-                write_fields(
-                    writer,
-                    hint.hint_track_version,
-                    hint.highest_compatible_version,
-                    hint.max_packet_size,
-                )?;
+                write_fields(writer, hint.max_packet_size)?;
                 encode_children(
                     writer.take_remainder(),
                     &hint.derived_boxes,
@@ -460,6 +398,20 @@ mod tests {
                 Ok(sample_entry(b"rtp ", &[FIELDS, TIMS, TSRO, SNRO, UNKNOWN])),
                 rtp()
             )
+        );
+    }
+
+    #[test]
+    fn versions_other_than_1_are_read_past_and_written_as_1() {
+        let read = RtpHintSampleEntry::try_from(&sample_entry(
+            b"rtp ",
+            &[b"\0\x02\0\x02\0\0\x05\xaa", TIMS],
+        ))
+        .unwrap();
+
+        assert_eq!(
+            SampleEntry::try_from(&read),
+            Ok(sample_entry(b"rtp ", &[FIELDS, TIMS]))
         );
     }
 

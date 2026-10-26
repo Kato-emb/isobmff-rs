@@ -22,6 +22,9 @@ const DEFINED: [BoxType; 2] = [TimescaleEntryBox::BOX_TYPE, BitRateBox::BOX_TYPE
 /// [`SampleEntry`] after `data_reference_index` are read with [`TryFrom`]
 /// and written back with [`SampleEntry::try_from`].
 ///
+/// `hinttrackversion` and `highestcompatibleversion`, which the Syntax sets
+/// to 1, are read past and written as 1.
+///
 /// # Children
 ///
 /// The children are laid out in three parts, the order in which the entry
@@ -34,14 +37,10 @@ const DEFINED: [BoxType; 2] = [TimescaleEntryBox::BOX_TYPE, BitRateBox::BOX_TYPE
 /// it into the third.
 #[doc(alias = "fdp", alias = "FDHintSampleEntry")]
 #[non_exhaustive]
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Default, PartialEq, Debug)]
 pub struct FdHintSampleEntry {
     /// Index from 1 of the [`DataEntry`](crate::DataEntry) the samples are retrieved from
     pub data_reference_index: u16,
-    /// Version of the hint track format, 1
-    pub hint_track_version: u16,
-    /// Oldest version of the hint track format the track is compatible with, 1
-    pub highest_compatible_version: u16,
     /// Partition entry of the [`FdItemInformationBox`](crate::FdItemInformationBox) the track sends, 0 for none, such as for an FDT
     pub partition_entry_id: u16,
     /// Percentage of protection overhead the samples use, a fixed-point 8.8 number, as its 16 bits
@@ -61,22 +60,6 @@ impl FdHintSampleEntry {
     pub const FORMAT: FourCc = FourCc::new(*b"fdp ");
 }
 
-impl Default for FdHintSampleEntry {
-    fn default() -> Self {
-        Self {
-            data_reference_index: 0,
-            hint_track_version: HINT_TRACK_VERSION,
-            highest_compatible_version: HINT_TRACK_VERSION,
-            partition_entry_id: 0,
-            fec_overhead: 0,
-            derived_boxes: OtherBoxes::new(),
-            tims: None,
-            btrt: None,
-            extra_boxes: OtherBoxes::new(),
-        }
-    }
-}
-
 impl TryFrom<&SampleEntry> for FdHintSampleEntry {
     type Error = Error;
 
@@ -94,16 +77,13 @@ impl TryFrom<&SampleEntry> for FdHintSampleEntry {
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         of_format(entry, Self::FORMAT)?;
         let mut reader = FieldReader::new(&entry.remaining_data);
-        let hint_track_version = reader.read_u16()?;
-        let highest_compatible_version = reader.read_u16()?;
+        reader.read_bytes::<4>()?;
         let partition_entry_id = reader.read_u16()?;
         let fec_overhead = reader.read_u16()?;
         let (derived_boxes, mut children) = split_children(reader.take_remainder(), &DEFINED)?;
 
         Ok(Self {
             data_reference_index: entry.data_reference_index,
-            hint_track_version,
-            highest_compatible_version,
             partition_entry_id,
             fec_overhead,
             derived_boxes,
@@ -137,8 +117,8 @@ impl TryFrom<&FdHintSampleEntry> for SampleEntry {
             hint.data_reference_index,
             remaining_len.saturating_add(FIELDS_LEN),
             |writer| {
-                writer.write_u16(hint.hint_track_version)?;
-                writer.write_u16(hint.highest_compatible_version)?;
+                writer.write_u16(HINT_TRACK_VERSION)?;
+                writer.write_u16(HINT_TRACK_VERSION)?;
                 writer.write_u16(hint.partition_entry_id)?;
                 writer.write_u16(hint.fec_overhead)?;
                 encode_children(

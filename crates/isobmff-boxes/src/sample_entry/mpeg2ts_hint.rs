@@ -26,8 +26,6 @@ const DEFINED: [BoxType; 6] = [
 
 /// Fields and boxes every `MPEG2TSSampleEntry` lays out after `data_reference_index`, as [`read_entry`] reads them
 pub(super) struct Mpeg2TsEntry {
-    pub(super) hint_track_version: u16,
-    pub(super) highest_compatible_version: u16,
     pub(super) preceding_bytes_len: u8,
     pub(super) trailing_bytes_len: u8,
     pub(super) precomputed_only_flag: bool,
@@ -57,14 +55,11 @@ pub(super) struct Mpeg2TsEntry {
 pub(super) fn read_entry(entry: &SampleEntry, format: FourCc) -> Result<Mpeg2TsEntry, Error> {
     of_format(entry, format)?;
     let mut reader = FieldReader::new(&entry.remaining_data);
-    let hint_track_version = reader.read_u16()?;
-    let highest_compatible_version = reader.read_u16()?;
+    reader.read_bytes::<4>()?;
     let [preceding_bytes_len, trailing_bytes_len, flags] = *reader.read_bytes::<3>()?;
     let (derived_boxes, mut children) = split_children(reader.take_remainder(), &DEFINED)?;
 
     Ok(Mpeg2TsEntry {
-        hint_track_version,
-        highest_compatible_version,
         preceding_bytes_len,
         trailing_bytes_len,
         precomputed_only_flag: flags & 0x80 != 0,
@@ -82,8 +77,6 @@ pub(super) fn read_entry(entry: &SampleEntry, format: FourCc) -> Result<Mpeg2TsE
 /// Fields and boxes of an `MPEG2TSSampleEntry` to write, borrowed from the class that holds them, as [`Mpeg2TsParts::write`] writes them
 pub(super) struct Mpeg2TsParts<'class> {
     pub(super) data_reference_index: u16,
-    pub(super) hint_track_version: u16,
-    pub(super) highest_compatible_version: u16,
     pub(super) preceding_bytes_len: u8,
     pub(super) trailing_bytes_len: u8,
     pub(super) precomputed_only_flag: bool,
@@ -119,8 +112,8 @@ impl Mpeg2TsParts<'_> {
             self.data_reference_index,
             children_len(self.derived_boxes, defined, self.extra_boxes).saturating_add(FIELDS_LEN),
             |writer| {
-                writer.write_u16(self.hint_track_version)?;
-                writer.write_u16(self.highest_compatible_version)?;
+                writer.write_u16(HINT_TRACK_VERSION)?;
+                writer.write_u16(HINT_TRACK_VERSION)?;
                 writer.write_bytes(&[
                     self.preceding_bytes_len,
                     self.trailing_bytes_len,
@@ -157,6 +150,9 @@ impl Mpeg2TsParts<'_> {
 /// The bytes of a [`SampleEntry`] after `data_reference_index` are read with
 /// [`TryFrom`] and written back with [`SampleEntry::try_from`].
 ///
+/// `hinttrackversion` and `highestcompatibleversion`, which the Syntax sets
+/// to 1, are read past and written as 1.
+///
 /// # Children
 ///
 /// The children are laid out in three parts, the order in which the entry
@@ -170,14 +166,10 @@ impl Mpeg2TsParts<'_> {
 /// it into the third.
 #[doc(alias = "rm2t", alias = "MPEG2TSReceptionSampleEntry")]
 #[non_exhaustive]
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Default, PartialEq, Debug)]
 pub struct Mpeg2TsReceptionSampleEntry {
     /// Index from 1 of the [`DataEntry`](crate::DataEntry) the samples are retrieved from
     pub data_reference_index: u16,
-    /// Version of the hint track format, 1
-    pub hint_track_version: u16,
-    /// Oldest version of the hint track format the track is compatible with, 1
-    pub highest_compatible_version: u16,
     /// Number of bytes before each MPEG-2 TS packet, such as a time code of a recording device
     pub preceding_bytes_len: u8,
     /// Number of bytes after each MPEG-2 TS packet, such as a checksum of a recording device
@@ -207,27 +199,6 @@ impl Mpeg2TsReceptionSampleEntry {
     pub const FORMAT: FourCc = FourCc::new(*b"rm2t");
 }
 
-impl Default for Mpeg2TsReceptionSampleEntry {
-    fn default() -> Self {
-        Self {
-            data_reference_index: 0,
-            hint_track_version: HINT_TRACK_VERSION,
-            highest_compatible_version: HINT_TRACK_VERSION,
-            preceding_bytes_len: 0,
-            trailing_bytes_len: 0,
-            precomputed_only_flag: false,
-            derived_boxes: OtherBoxes::new(),
-            tpat: None,
-            tpmt: Vec::new(),
-            tod: Vec::new(),
-            tsti: None,
-            istm: None,
-            btrt: None,
-            extra_boxes: OtherBoxes::new(),
-        }
-    }
-}
-
 impl TryFrom<&SampleEntry> for Mpeg2TsReceptionSampleEntry {
     type Error = Error;
 
@@ -244,8 +215,6 @@ impl TryFrom<&SampleEntry> for Mpeg2TsReceptionSampleEntry {
     ///   `tsti`, `istm` or `btrt` given more than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         let Mpeg2TsEntry {
-            hint_track_version,
-            highest_compatible_version,
             preceding_bytes_len,
             trailing_bytes_len,
             precomputed_only_flag,
@@ -261,8 +230,6 @@ impl TryFrom<&SampleEntry> for Mpeg2TsReceptionSampleEntry {
 
         Ok(Self {
             data_reference_index: entry.data_reference_index,
-            hint_track_version,
-            highest_compatible_version,
             preceding_bytes_len,
             trailing_bytes_len,
             precomputed_only_flag,
@@ -289,8 +256,6 @@ impl TryFrom<&Mpeg2TsReceptionSampleEntry> for SampleEntry {
     fn try_from(hint: &Mpeg2TsReceptionSampleEntry) -> Result<Self, Error> {
         Mpeg2TsParts {
             data_reference_index: hint.data_reference_index,
-            hint_track_version: hint.hint_track_version,
-            highest_compatible_version: hint.highest_compatible_version,
             preceding_bytes_len: hint.preceding_bytes_len,
             trailing_bytes_len: hint.trailing_bytes_len,
             precomputed_only_flag: hint.precomputed_only_flag,
@@ -314,20 +279,19 @@ impl TryFrom<&Mpeg2TsReceptionSampleEntry> for SampleEntry {
 /// The bytes of a [`SampleEntry`] after `data_reference_index` are read with
 /// [`TryFrom`] and written back with [`SampleEntry::try_from`].
 ///
+/// `hinttrackversion` and `highestcompatibleversion`, which the Syntax sets
+/// to 1, are read past and written as 1.
+///
 /// # Children
 ///
 /// The children are laid out in three parts as those of an
 /// [`Mpeg2TsReceptionSampleEntry`] are.
 #[doc(alias = "sm2t", alias = "MPEG2TSServerSampleEntry")]
 #[non_exhaustive]
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Default, PartialEq, Debug)]
 pub struct Mpeg2TsServerSampleEntry {
     /// Index from 1 of the [`DataEntry`](crate::DataEntry) the samples are retrieved from
     pub data_reference_index: u16,
-    /// Version of the hint track format, 1
-    pub hint_track_version: u16,
-    /// Oldest version of the hint track format the track is compatible with, 1
-    pub highest_compatible_version: u16,
     /// Number of bytes before each MPEG-2 TS packet, such as a time code of a recording device
     pub preceding_bytes_len: u8,
     /// Number of bytes after each MPEG-2 TS packet, such as a checksum of a recording device
@@ -357,27 +321,6 @@ impl Mpeg2TsServerSampleEntry {
     pub const FORMAT: FourCc = FourCc::new(*b"sm2t");
 }
 
-impl Default for Mpeg2TsServerSampleEntry {
-    fn default() -> Self {
-        Self {
-            data_reference_index: 0,
-            hint_track_version: HINT_TRACK_VERSION,
-            highest_compatible_version: HINT_TRACK_VERSION,
-            preceding_bytes_len: 0,
-            trailing_bytes_len: 0,
-            precomputed_only_flag: false,
-            derived_boxes: OtherBoxes::new(),
-            tpat: None,
-            tpmt: Vec::new(),
-            tod: Vec::new(),
-            tsti: None,
-            istm: None,
-            btrt: None,
-            extra_boxes: OtherBoxes::new(),
-        }
-    }
-}
-
 impl TryFrom<&SampleEntry> for Mpeg2TsServerSampleEntry {
     type Error = Error;
 
@@ -390,8 +333,6 @@ impl TryFrom<&SampleEntry> for Mpeg2TsServerSampleEntry {
     /// * The other failures of [`Mpeg2TsReceptionSampleEntry::try_from`].
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         let Mpeg2TsEntry {
-            hint_track_version,
-            highest_compatible_version,
             preceding_bytes_len,
             trailing_bytes_len,
             precomputed_only_flag,
@@ -407,8 +348,6 @@ impl TryFrom<&SampleEntry> for Mpeg2TsServerSampleEntry {
 
         Ok(Self {
             data_reference_index: entry.data_reference_index,
-            hint_track_version,
-            highest_compatible_version,
             preceding_bytes_len,
             trailing_bytes_len,
             precomputed_only_flag,
@@ -435,8 +374,6 @@ impl TryFrom<&Mpeg2TsServerSampleEntry> for SampleEntry {
     fn try_from(hint: &Mpeg2TsServerSampleEntry) -> Result<Self, Error> {
         Mpeg2TsParts {
             data_reference_index: hint.data_reference_index,
-            hint_track_version: hint.hint_track_version,
-            highest_compatible_version: hint.highest_compatible_version,
             preceding_bytes_len: hint.preceding_bytes_len,
             trailing_bytes_len: hint.trailing_bytes_len,
             precomputed_only_flag: hint.precomputed_only_flag,

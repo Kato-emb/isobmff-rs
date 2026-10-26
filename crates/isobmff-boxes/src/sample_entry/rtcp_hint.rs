@@ -5,7 +5,7 @@ use isobmff_core::{BoxDefinition, BoxEncode, BoxType, Error, FourCc, OtherBoxes}
 use crate::btrt::BitRateBox;
 use crate::sample_entry::rtp_hint::{FIELDS_LEN, RtpEntry, read_entry, write_fields};
 use crate::sample_entry::{
-    HINT_TRACK_VERSION, SampleEntry, children_len, encode_children, encode_optional, from_class,
+    SampleEntry, children_len, encode_children, encode_optional, from_class,
 };
 
 /// Box types of the boxes ISO/IEC 14496-12 defines for both classes
@@ -20,6 +20,9 @@ const DEFINED: [BoxType; 1] = [BitRateBox::BOX_TYPE];
 /// [`SampleEntry`] after `data_reference_index` are read with [`TryFrom`] and
 /// written back with [`SampleEntry::try_from`].
 ///
+/// `hinttrackversion` and `highestcompatibleversion`, which the Syntax sets
+/// to 1, are read past and written as 1.
+///
 /// # Children
 ///
 /// The children are laid out in three parts, the order in which the entry
@@ -31,14 +34,10 @@ const DEFINED: [BoxType; 1] = [BitRateBox::BOX_TYPE];
 /// part, and one that lies after it into the third.
 #[doc(alias = "rtcp")]
 #[non_exhaustive]
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Default, PartialEq, Debug)]
 pub struct RtcpReceptionHintSampleEntry {
     /// Index from 1 of the [`DataEntry`](crate::DataEntry) the samples are retrieved from
     pub data_reference_index: u16,
-    /// Version of the hint track format, 1
-    pub hint_track_version: u16,
-    /// Oldest version of the hint track format the track is compatible with, 1
-    pub highest_compatible_version: u16,
     /// Size of the largest packet received, in bytes
     pub max_packet_size: u32,
     /// Children a specification deriving the class defines, which lay before the boxes of ISO/IEC 14496-12
@@ -52,20 +51,6 @@ pub struct RtcpReceptionHintSampleEntry {
 impl RtcpReceptionHintSampleEntry {
     /// Format of the class, which the box type of its entries is
     pub const FORMAT: FourCc = FourCc::new(*b"rtcp");
-}
-
-impl Default for RtcpReceptionHintSampleEntry {
-    fn default() -> Self {
-        Self {
-            data_reference_index: 0,
-            hint_track_version: HINT_TRACK_VERSION,
-            highest_compatible_version: HINT_TRACK_VERSION,
-            max_packet_size: 0,
-            derived_boxes: OtherBoxes::new(),
-            btrt: None,
-            extra_boxes: OtherBoxes::new(),
-        }
-    }
 }
 
 impl TryFrom<&SampleEntry> for RtcpReceptionHintSampleEntry {
@@ -84,8 +69,6 @@ impl TryFrom<&SampleEntry> for RtcpReceptionHintSampleEntry {
     ///   more than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         let RtpEntry {
-            hint_track_version,
-            highest_compatible_version,
             max_packet_size,
             derived_boxes,
             mut children,
@@ -93,8 +76,6 @@ impl TryFrom<&SampleEntry> for RtcpReceptionHintSampleEntry {
 
         Ok(Self {
             data_reference_index: entry.data_reference_index,
-            hint_track_version,
-            highest_compatible_version,
             max_packet_size,
             derived_boxes,
             btrt: children.take_zero_or_one_if_decoded()?,
@@ -122,12 +103,7 @@ impl TryFrom<&RtcpReceptionHintSampleEntry> for SampleEntry {
             )
             .saturating_add(FIELDS_LEN),
             |writer| {
-                write_fields(
-                    writer,
-                    hint.hint_track_version,
-                    hint.highest_compatible_version,
-                    hint.max_packet_size,
-                )?;
+                write_fields(writer, hint.max_packet_size)?;
                 encode_children(
                     writer.take_remainder(),
                     &hint.derived_boxes,
@@ -149,20 +125,19 @@ impl TryFrom<&RtcpReceptionHintSampleEntry> for SampleEntry {
 /// `data_reference_index` are read with [`TryFrom`] and written back with
 /// [`SampleEntry::try_from`].
 ///
+/// `hinttrackversion` and `highestcompatibleversion`, which the Syntax sets
+/// to 1, are read past and written as 1.
+///
 /// # Children
 ///
 /// The children are laid out in three parts as those of an
 /// [`RtcpReceptionHintSampleEntry`] are.
 #[doc(alias = "stcp")]
 #[non_exhaustive]
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Default, PartialEq, Debug)]
 pub struct SrtcpReceptionHintSampleEntry {
     /// Index from 1 of the [`DataEntry`](crate::DataEntry) the samples are retrieved from
     pub data_reference_index: u16,
-    /// Version of the hint track format, 1
-    pub hint_track_version: u16,
-    /// Oldest version of the hint track format the track is compatible with, 1
-    pub highest_compatible_version: u16,
     /// Size of the largest packet received, in bytes
     pub max_packet_size: u32,
     /// Children a specification deriving the class defines, which lay before the boxes of ISO/IEC 14496-12
@@ -178,20 +153,6 @@ impl SrtcpReceptionHintSampleEntry {
     pub const FORMAT: FourCc = FourCc::new(*b"stcp");
 }
 
-impl Default for SrtcpReceptionHintSampleEntry {
-    fn default() -> Self {
-        Self {
-            data_reference_index: 0,
-            hint_track_version: HINT_TRACK_VERSION,
-            highest_compatible_version: HINT_TRACK_VERSION,
-            max_packet_size: 0,
-            derived_boxes: OtherBoxes::new(),
-            btrt: None,
-            extra_boxes: OtherBoxes::new(),
-        }
-    }
-}
-
 impl TryFrom<&SampleEntry> for SrtcpReceptionHintSampleEntry {
     type Error = Error;
 
@@ -204,8 +165,6 @@ impl TryFrom<&SampleEntry> for SrtcpReceptionHintSampleEntry {
     /// * The other failures of [`RtcpReceptionHintSampleEntry::try_from`].
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         let RtpEntry {
-            hint_track_version,
-            highest_compatible_version,
             max_packet_size,
             derived_boxes,
             mut children,
@@ -213,8 +172,6 @@ impl TryFrom<&SampleEntry> for SrtcpReceptionHintSampleEntry {
 
         Ok(Self {
             data_reference_index: entry.data_reference_index,
-            hint_track_version,
-            highest_compatible_version,
             max_packet_size,
             derived_boxes,
             btrt: children.take_zero_or_one_if_decoded()?,
@@ -242,12 +199,7 @@ impl TryFrom<&SrtcpReceptionHintSampleEntry> for SampleEntry {
             )
             .saturating_add(FIELDS_LEN),
             |writer| {
-                write_fields(
-                    writer,
-                    hint.hint_track_version,
-                    hint.highest_compatible_version,
-                    hint.max_packet_size,
-                )?;
+                write_fields(writer, hint.max_packet_size)?;
                 encode_children(
                     writer.take_remainder(),
                     &hint.derived_boxes,
