@@ -15,18 +15,19 @@ use crate::sgpd::SampleGroupDescriptionBox;
 use crate::subs::SubSampleInformationBox;
 use crate::tfdt::TrackFragmentBaseMediaDecodeTimeBox;
 use crate::tfhd::TrackFragmentHeaderBox;
+use crate::trun::TrackRunBox;
 
 /// [`TrackFragmentBox`] (`traf`), ISO/IEC 14496-12 §8.8.6
 ///
 /// The samples, and the empty time, a movie fragment adds to one track, as
 /// zero or more track runs.
 ///
-/// The box writes `tfhd`, `tfdt`, the `sbgp`s, the `csgp`s, the `sgpd`s, the
-/// `subs`es, the `saiz`es and the `saio`s in this order, whatever order they
-/// were read in: the order of ISO/IEC 14496-12 Table 2, but for `tfdt`,
-/// which §8.8.12.1 places after `tfhd` and before the first track run, and
-/// `csgp`, which Table 2 does not list and which is written right after
-/// `sbgp`. Children of other types, such as the track runs, are kept in
+/// The box writes `tfhd`, `tfdt`, the track runs, the `sbgp`s, the `csgp`s,
+/// the `sgpd`s, the `subs`es, the `saiz`es and the `saio`s in this order,
+/// whatever order they were read in: the order of ISO/IEC 14496-12 Table 2,
+/// but for `tfdt`, which §8.8.12.1 places after `tfhd` and before the first
+/// track run, and `csgp`, which Table 2 does not list and which is written
+/// right after `sbgp`. Children of other types are kept in
 /// [`other_boxes`](Self::other_boxes), and written back after them. An
 /// optional child that does not read is kept there too; a `tfdt` that does
 /// not read reads back [`None`].
@@ -38,6 +39,8 @@ pub struct TrackFragmentBox {
     pub tfhd: TrackFragmentHeaderBox,
     /// Decoding timestamp of the first sample of the fragment
     pub tfdt: Option<TrackFragmentBaseMediaDecodeTimeBox>,
+    /// Track runs of the fragment, in the order they came
+    pub trun: Vec<TrackRunBox>,
     /// Sample group of each sample of the fragment, one box for each sample grouping
     pub sbgp: Vec<SampleToGroupBox>,
     /// Sample group of each sample of the fragment in repeating patterns, one box for each sample grouping
@@ -65,6 +68,7 @@ impl BoxDecode for TrackFragmentBox {
         Ok(Self {
             tfhd: children.take_exactly_one()?,
             tfdt: children.take_zero_or_one_if_decoded()?,
+            trun: children.take_zero_or_more_if_decoded(),
             sbgp: children.take_zero_or_more_if_decoded(),
             csgp: children.take_zero_or_more_if_decoded(),
             sgpd: children.take_zero_or_more_if_decoded(),
@@ -83,6 +87,7 @@ impl BoxEncode for TrackFragmentBox {
             self.tfdt.as_ref().map_or(0, BoxEncode::encoded_len),
         ]
         .into_iter()
+        .chain(self.trun.iter().map(BoxEncode::encoded_len))
         .chain(self.sbgp.iter().map(BoxEncode::encoded_len))
         .chain(self.csgp.iter().map(BoxEncode::encoded_len))
         .chain(self.sgpd.iter().map(BoxEncode::encoded_len))
@@ -97,6 +102,9 @@ impl BoxEncode for TrackFragmentBox {
         let mut rest = self.tfhd.encode(writer.take_remainder())?;
         if let Some(tfdt) = &self.tfdt {
             rest = tfdt.encode(rest)?;
+        }
+        for track_run in &self.trun {
+            rest = track_run.encode(rest)?;
         }
         for sample_to_group in &self.sbgp {
             rest = sample_to_group.encode(rest)?;
@@ -139,6 +147,7 @@ mod tests {
     use crate::subs::SubSampleInformationBox;
     use crate::tfdt::TrackFragmentBaseMediaDecodeTimeBox;
     use crate::tfhd::TrackFragmentHeaderBox;
+    use crate::trun::TrackRunBox;
 
     /// `tfhd` of track 1 based at the `moof`, with a default size of 300 alone
     const TFHD: &[u8] = b"\0\0\0\x14tfhd\0\x02\0\x10\0\0\0\x01\0\0\x01\x2c";
@@ -161,13 +170,17 @@ mod tests {
     /// `saio` of version 0 and no type, of one offset `0x200`
     const SAIO: &[u8] = b"\0\0\0\x14saio\0\0\0\0\0\0\0\x01\0\0\x02\0";
 
-    /// `trun` of no sample, a box `traf` holds no field for
+    /// `trun` of no sample
     const TRUN: &[u8] = b"\0\0\0\x10trun\0\0\0\0\0\0\0\0";
+
+    /// `meta` holding nothing, a box `traf` holds no field for
+    const META: &[u8] = b"\0\0\0\x0cmeta\0\0\0\0";
 
     fn track_fragment() -> TrackFragmentBox {
         TrackFragmentBox {
             tfhd: TrackFragmentHeaderBox::decode(TFHD).unwrap().0,
             tfdt: Some(TrackFragmentBaseMediaDecodeTimeBox::decode(TFDT).unwrap().0),
+            trun: vec![TrackRunBox::decode(TRUN).unwrap().0],
             sbgp: vec![SampleToGroupBox::decode(SBGP).unwrap().0],
             csgp: vec![],
             sgpd: vec![SampleGroupDescriptionBox::decode(SGPD).unwrap().0],
@@ -178,17 +191,18 @@ mod tests {
                     .unwrap()
                     .0,
             ],
-            other_boxes: OtherBoxes::from(ChildBoxes::decode(TRUN).unwrap()),
+            other_boxes: OtherBoxes::from(ChildBoxes::decode(META).unwrap()),
         }
     }
 
     #[test]
     fn reads_its_children_in_any_order_and_keeps_the_child_it_has_no_field_for() {
         let bytes = [
-            b"\0\0\0\xa7traf".as_slice(),
+            b"\0\0\0\xb3traf".as_slice(),
             TFHD,
             SAIZ,
             SAIO,
+            META,
             TRUN,
             SGPD,
             SBGP,
@@ -208,15 +222,16 @@ mod tests {
         assert_eq!(
             encoded(&track_fragment()),
             [
-                b"\0\0\0\xa7traf".as_slice(),
+                b"\0\0\0\xb3traf".as_slice(),
                 TFHD,
                 TFDT,
+                TRUN,
                 SBGP,
                 SGPD,
                 SUBS,
                 SAIZ,
                 SAIO,
-                TRUN,
+                META,
             ]
             .concat()
         );

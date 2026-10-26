@@ -3,10 +3,11 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWidth, FieldWriter,
-    FullBoxFlags, FullBoxHeader,
+    BoxDecode, BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FullBoxFlags,
+    FullBoxHeader,
 };
 
+use crate::full_box::{read_composition_offset, write_composition_offset};
 use crate::table::{read_entries, table_len, write_entry_count};
 
 /// Run of consecutive samples of one composition offset, one entry of a [`CompositionOffsetBox`]
@@ -56,11 +57,7 @@ impl BoxDecode for CompositionOffsetBox {
         let entries = read_entries(reader, entry_count, 8, |reader| {
             Ok(CompositionOffsetEntry {
                 sample_count: reader.read_u32()?,
-                sample_offset: if version == 0 {
-                    i64::from(reader.read_u32()?)
-                } else {
-                    i64::from(reader.read_i32()?)
-                },
+                sample_offset: read_composition_offset(reader, version)?,
             })
         })?;
 
@@ -82,14 +79,7 @@ impl BoxEncode for CompositionOffsetBox {
         write_entry_count(writer, self.entries.len())?;
         for entry in &self.entries {
             writer.write_u32(entry.sample_count)?;
-            if self.version == 0 {
-                let unsigned = u64::try_from(entry.sample_offset).map_err(|_| {
-                    Error::out_of_range(entry.sample_offset.cast_unsigned(), FieldWidth::Compact)
-                })?;
-                writer.write_unsigned(FieldWidth::Compact, unsigned)?;
-            } else {
-                writer.write_signed(FieldWidth::Compact, entry.sample_offset)?;
-            }
+            write_composition_offset(writer, self.version, entry.sample_offset)?;
         }
 
         Ok(())

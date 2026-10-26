@@ -24,5 +24,9 @@ isobmff-test-support.workspace = true
 name = "sample_size"
 harness = false
 
+[[bench]]
+name = "trun"
+harness = false
+
 [lints]
 workspace = true

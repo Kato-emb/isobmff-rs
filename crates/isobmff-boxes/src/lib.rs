@@ -94,6 +94,7 @@ mod tref;
 mod trep;
 mod trex;
 mod trgr;
+mod trun;
 mod ttyp;
 
 pub use data_entry::{
@@ -172,6 +173,7 @@ pub use tref::{TrackReference, TrackReferenceBox, TrackReferenceTypeBox};
 pub use trep::TrackExtensionPropertiesBox;
 pub use trex::TrackExtendsBox;
 pub use trgr::{StereoVideoGroupBox, TrackGroup, TrackGroupBox, TrackGroupTypeBox};
+pub use trun::{TrackRunBox, TrackRunSample, TrackRunSamples};
 pub use ttyp::TrackTypeBox;
 
 /// Returns the bytes of the whole box `value` writes
