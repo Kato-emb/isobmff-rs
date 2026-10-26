@@ -78,7 +78,10 @@ mod ipma;
 mod ipro;
 mod iprp;
 mod iref;
+mod keyd;
+mod keys;
 mod leva;
+mod loca;
 mod loudness;
 mod ludt;
 mod mdat;
@@ -112,6 +115,7 @@ mod sample_group_entry;
 mod sample_size;
 mod sbgp;
 mod sdtp;
+mod setu;
 mod sgpd;
 mod sidx;
 mod srat;
@@ -193,7 +197,10 @@ pub use ipma::{ItemPropertyAssociation, ItemPropertyAssociationBox, ItemProperty
 pub use ipro::ItemProtectionBox;
 pub use iprp::ItemPropertiesBox;
 pub use iref::{ItemReference, ItemReferenceBox, SingleItemTypeReferenceBox};
+pub use keyd::MetadataKeyDeclarationBox;
+pub use keys::{MetadataKey, MetadataKeyBox, MetadataKeyTableBox};
 pub use leva::{Level, LevelAssignment, LevelAssignmentBox};
+pub use loca::MetadataLocaleBox;
 pub use loudness::{
     AlbumLoudnessInfo, LoudnessBase, LoudnessInfoType, LoudnessMeasurement, TrackLoudnessInfo,
 };
@@ -243,6 +250,7 @@ pub use sample_group_entry::{
 pub use sample_size::{CompactSampleSizeBox, SampleSizeBox, SampleSizeVariant, SampleSizes};
 pub use sbgp::{SampleToGroupBox, SampleToGroupEntry};
 pub use sdtp::{SampleDependencyTypeBox, SampleDependencyTypeEntry};
+pub use setu::MetadataSetupBox;
 pub use sgpd::SampleGroupDescriptionBox;
 pub use sidx::{SegmentIndexBox, SegmentIndexReference};
 pub use srat::SamplingRateBox;
