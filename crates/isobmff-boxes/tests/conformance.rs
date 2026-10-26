@@ -18,22 +18,24 @@ mod tests {
 
     use isobmff_boxes::{
         AudioSampleEntryVariant, ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant,
-        CompactSampleSizeBox, DataInformationBox, EditBox, ExtendedTypeBox, FileTypeBox, Free,
-        FreeSpaceBox, HandlerBox, IdentifiedMediaDataBox, LanguageCode, Matrix, MediaBox,
-        MediaDataBox, MediaHeaderBox, MediaInformationBox, MetaBox, MovieBox, MovieExtendsBox,
-        MovieFragmentBox, MovieFragmentRandomAccessBox, MovieHeaderBox, OriginalFileTypeBox,
-        OriginalFormatBox, ProducerReferenceTimeBox, ProgressiveDownloadInfoBox,
-        ProtectionSchemeInfoBox, RestrictedSchemeInfoBox, RollRecoveryEntry,
-        SampleDependencyTypeBox, SampleDescription, SampleDescriptionBox, SampleEntry, SampleFlags,
-        SampleGroupDescriptionBox, SampleGroupDescriptionEntry, SampleSizeBox, SampleSizeVariant,
-        SampleSizes, SampleTableBox, SampleToChunkBox, SampleToChunkEntry, SampleToGroupBox,
-        SampleToGroupEntry, SchemeTypeBox, SegmentIndexBox, SegmentIndexReference, SegmentTypeBox,
-        SimpleTextSampleEntry, Skip, StereoVideoBox, SubTrackBox, SubTrackDefinitionBox,
-        SubsegmentIndexBox, TemporalLevelEntry, TimeToSampleBox, TimeToSampleEntry, TrackBox,
-        TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
-        TrackHeaderBox, TrackReference, TrackReferenceBox, TrackReferenceTypeBox, TrackRunBox,
-        TrackRunSample, TrackRunSamples, UserDataBox, VisualRandomAccessEntry, VisualSampleEntry,
-        XmlBox, XmlMetaDataSampleEntry, XmlSubtitleSampleEntry,
+        CompactSampleSizeBox, CompressedMovieBox, CompressedMovieFragmentBox,
+        CompressedSegmentIndexBox, CompressedSubsegmentIndexBox, DataInformationBox, EditBox,
+        ExtendedTypeBox, FileTypeBox, Free, FreeSpaceBox, HandlerBox, IdentifiedMediaDataBox,
+        LanguageCode, Matrix, MediaBox, MediaDataBox, MediaHeaderBox, MediaInformationBox, MetaBox,
+        MovieBox, MovieExtendsBox, MovieFragmentBox, MovieFragmentRandomAccessBox, MovieHeaderBox,
+        OriginalFileTypeBox, OriginalFormatBox, ProducerReferenceTimeBox,
+        ProgressiveDownloadInfoBox, ProtectionSchemeInfoBox, RestrictedSchemeInfoBox,
+        RollRecoveryEntry, SampleDependencyTypeBox, SampleDescription, SampleDescriptionBox,
+        SampleEntry, SampleFlags, SampleGroupDescriptionBox, SampleGroupDescriptionEntry,
+        SampleSizeBox, SampleSizeVariant, SampleSizes, SampleTableBox, SampleToChunkBox,
+        SampleToChunkEntry, SampleToGroupBox, SampleToGroupEntry, SchemeTypeBox, SegmentIndexBox,
+        SegmentIndexReference, SegmentTypeBox, SimpleTextSampleEntry, Skip, StereoVideoBox,
+        SubTrackBox, SubTrackDefinitionBox, SubsegmentIndexBox, TemporalLevelEntry,
+        TimeToSampleBox, TimeToSampleEntry, TrackBox, TrackFragmentBaseMediaDecodeTimeBox,
+        TrackFragmentBox, TrackFragmentHeaderBox, TrackHeaderBox, TrackReference,
+        TrackReferenceBox, TrackReferenceTypeBox, TrackRunBox, TrackRunSample, TrackRunSamples,
+        UserDataBox, VisualRandomAccessEntry, VisualSampleEntry, XmlBox, XmlMetaDataSampleEntry,
+        XmlSubtitleSampleEntry,
     };
     use isobmff_core::{
         BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, Error, FourCc, I8F8, RawBox, U16F16,
@@ -59,7 +61,7 @@ mod tests {
     type WrittenBack = fn(&[u8]) -> Result<Vec<u8>, Error>;
 
     /// Box types that can lie at the top level of a file and have a type here, each with how it is read and written back
-    const TOP_LEVEL: [(BoxType, WrittenBack); 12] = [
+    const TOP_LEVEL: [(BoxType, WrittenBack); 16] = [
         (FileTypeBox::BOX_TYPE, written_back::<FileTypeBox>),
         (SegmentTypeBox::BOX_TYPE, written_back::<SegmentTypeBox>),
         (ExtendedTypeBox::BOX_TYPE, written_back::<ExtendedTypeBox>),
@@ -92,6 +94,22 @@ mod tests {
         (
             ProducerReferenceTimeBox::BOX_TYPE,
             written_back::<ProducerReferenceTimeBox>,
+        ),
+        (
+            CompressedMovieBox::BOX_TYPE,
+            written_back::<CompressedMovieBox>,
+        ),
+        (
+            CompressedMovieFragmentBox::BOX_TYPE,
+            written_back::<CompressedMovieFragmentBox>,
+        ),
+        (
+            CompressedSegmentIndexBox::BOX_TYPE,
+            written_back::<CompressedSegmentIndexBox>,
+        ),
+        (
+            CompressedSubsegmentIndexBox::BOX_TYPE,
+            written_back::<CompressedSubsegmentIndexBox>,
         ),
     ];
 

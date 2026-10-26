@@ -51,6 +51,7 @@ mod cinf;
 mod clap;
 mod clli;
 mod colr;
+mod compressed;
 mod cprt;
 mod csch;
 mod csgp;
@@ -198,6 +199,10 @@ pub use cinf::CompleteTrackInfoBox;
 pub use clap::CleanApertureBox;
 pub use clli::ContentLightLevelBox;
 pub use colr::ColourInformationBox;
+pub use compressed::{
+    CompressedMovieBox, CompressedMovieFragmentBox, CompressedSegmentIndexBox,
+    CompressedSubsegmentIndexBox,
+};
 pub use cprt::CopyrightBox;
 pub use csch::CompatibleSchemeTypeBox;
 pub use csgp::{CompactSampleToGroupBox, CompactSampleToGroupPattern};
