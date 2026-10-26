@@ -15,7 +15,8 @@ mod tests {
         MediaInformationBox, MovieBox, MovieHeaderBox, OriginalFileTypeBox,
         ProgressiveDownloadInfoBox, SampleDependencyTypeBox, SampleSizeBox, SampleSizeVariant,
         SampleSizes, SampleTableBox, SampleToChunkBox, SampleToChunkEntry, SegmentTypeBox, Skip,
-        TimeToSampleBox, TimeToSampleEntry, TrackBox, TrackHeaderBox,
+        TimeToSampleBox, TimeToSampleEntry, TrackBox, TrackHeaderBox, TrackReference,
+        TrackReferenceBox, TrackReferenceTypeBox,
     };
     use isobmff_core::{
         BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, Error, FourCc, I8F8, RawBox, U16F16,
@@ -614,6 +615,59 @@ mod tests {
                         first_of(&["stsz", "stz2"]).map(gpac_sample_size),
                         first_of(&["stco", "co64"]).map(gpac_chunk_offset),
                     )
+                })
+                .collect();
+            if ours != theirs {
+                differences.push(format!("{name}: read {ours:?}, GPAC reports {theirs:?}"));
+            }
+        }
+
+        assert_eq!(differences, Vec::<String>::new());
+    }
+
+    /// Returns `tref` as GPAC reports it in `node`
+    fn gpac_track_reference(node: &Value) -> TrackReferenceBox {
+        let mut track_reference = TrackReferenceBox::default();
+        track_reference.track_references = gpac_children(node)
+            .into_iter()
+            .map(|reported| {
+                let mut typed = TrackReferenceTypeBox::default();
+                typed.reference_type =
+                    FourCc::new(gpac_str(reported, "@Type").as_bytes().try_into().unwrap());
+                typed.track_ids = gpac_elements(reported, "TrackReferenceEntry")
+                    .into_iter()
+                    .map(|entry| gpac_integer(entry, "@TrackID"))
+                    .collect();
+                TrackReference::Typed(typed)
+            })
+            .collect();
+        track_reference
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn the_track_references_read_as_gpac_reports_them() {
+        let mut differences = Vec::new();
+        for ConformanceFile {
+            name,
+            bytes,
+            report,
+            ..
+        } in conformance_files()
+        {
+            let ours: Vec<Option<TrackReferenceBox>> = read_all::<MovieBox>(&top_level(&bytes))
+                .into_iter()
+                .flat_map(|movie| movie.trak)
+                .map(|track| track.tref)
+                .collect();
+            let theirs: Vec<Option<TrackReferenceBox>> = gpac_top_level(&report, "moov")
+                .into_iter()
+                .flat_map(|movie| gpac_boxes(movie, "trak"))
+                .map(|track| {
+                    gpac_boxes(track, "tref")
+                        .first()
+                        .copied()
+                        .map(gpac_track_reference)
                 })
                 .collect();
             if ours != theirs {

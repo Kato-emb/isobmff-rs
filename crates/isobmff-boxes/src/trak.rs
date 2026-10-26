@@ -8,6 +8,8 @@ use isobmff_core::{
 use crate::edts::EditBox;
 use crate::mdia::MediaBox;
 use crate::tkhd::TrackHeaderBox;
+use crate::tref::TrackReferenceBox;
+use crate::trgr::TrackGroupBox;
 use crate::ttyp::TrackTypeBox;
 
 /// [`TrackBox`] (`trak`), ISO/IEC 14496-12 §8.3.1
@@ -15,12 +17,12 @@ use crate::ttyp::TrackTypeBox;
 /// Holds a single track of a presentation, with its temporal and spatial
 /// information and its media.
 ///
-/// The box writes `tkhd`, `ttyp`, `edts` and `mdia` in this order, whatever
-/// order they were read in: the order of ISO/IEC 14496-12 §7.3.4, and of
-/// Table 2 where §7.3.4 sets none. Children of other types are kept in
-/// [`other_boxes`](Self::other_boxes), and written back after them. A `ttyp`
-/// or an `edts` that does not read is kept there too, and reads back
-/// [`None`].
+/// The box writes `tkhd`, `ttyp`, `tref`, `trgr`, `edts` and `mdia` in this
+/// order, whatever order they were read in: the order of ISO/IEC 14496-12
+/// §7.3.4, and of Table 2 where §7.3.4 sets none. Children of other types are
+/// kept in [`other_boxes`](Self::other_boxes), and written back after them. A
+/// `ttyp`, a `tref`, a `trgr` or an `edts` that does not read is kept there
+/// too, and reads back [`None`].
 #[doc(alias = "trak")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -29,6 +31,10 @@ pub struct TrackBox {
     pub tkhd: TrackHeaderBox,
     /// Brands the track complies with
     pub ttyp: Option<TrackTypeBox>,
+    /// References of the track to other tracks and track groups
+    pub tref: Option<TrackReferenceBox>,
+    /// Track groups the track belongs to
+    pub trgr: Option<TrackGroupBox>,
     /// Map of the presentation timeline to the media timeline
     pub edts: Option<EditBox>,
     /// Media of the track
@@ -48,6 +54,8 @@ impl BoxDecode for TrackBox {
         Ok(Self {
             tkhd: children.take_exactly_one()?,
             ttyp: children.take_zero_or_one_if_decoded()?,
+            tref: children.take_zero_or_one_if_decoded()?,
+            trgr: children.take_zero_or_one_if_decoded()?,
             edts: children.take_zero_or_one_if_decoded()?,
             mdia: children.take_exactly_one()?,
             other_boxes: OtherBoxes::from(children),
@@ -60,6 +68,8 @@ impl BoxEncode for TrackBox {
         [
             self.tkhd.encoded_len(),
             self.ttyp.as_ref().map_or(0, BoxEncode::encoded_len),
+            self.tref.as_ref().map_or(0, BoxEncode::encoded_len),
+            self.trgr.as_ref().map_or(0, BoxEncode::encoded_len),
             self.edts.as_ref().map_or(0, BoxEncode::encoded_len),
             self.mdia.encoded_len(),
         ]
@@ -72,6 +82,12 @@ impl BoxEncode for TrackBox {
         let mut rest = self.tkhd.encode(writer.take_remainder())?;
         if let Some(ttyp) = &self.ttyp {
             rest = ttyp.encode(rest)?;
+        }
+        if let Some(tref) = &self.tref {
+            rest = tref.encode(rest)?;
+        }
+        if let Some(trgr) = &self.trgr {
+            rest = trgr.encode(rest)?;
         }
         if let Some(edts) = &self.edts {
             rest = edts.encode(rest)?;
@@ -94,6 +110,8 @@ mod tests {
     use crate::encoded;
     use crate::mdia::MediaBox;
     use crate::tkhd::TrackHeaderBox;
+    use crate::tref::TrackReferenceBox;
+    use crate::trgr::TrackGroupBox;
 
     /// `tkhd` of version 0, enabled and in the movie, of track 1 and every other field zero or its template value
     const TKHD: &[u8] = b"\0\0\0\x5ctkhd\0\0\0\x03\0\0\0\0\0\0\0\0\0\0\0\x01\0\0\0\0\0\0\0\0\
@@ -110,8 +128,14 @@ mod tests {
         \0\0\0\x21hdlr\0\0\0\0\0\0\0\0vide\0\0\0\0\0\0\0\0\0\0\0\0\0\
         \0\0\0\x34minf\0\0\0\x24dinf\0\0\0\x1cdref\0\0\0\0\0\0\0\x01\0\0\0\x0curl \0\0\0\x01\0\0\0\x08stbl";
 
-    /// `tref` holding nothing, a box `trak` holds no field for
-    const TREF: &[u8] = b"\0\0\0\x08tref";
+    /// `tref` of a `hint` reference to the track 2
+    const TREF: &[u8] = b"\0\0\0\x14tref\0\0\0\x0chint\0\0\0\x02";
+
+    /// `trgr` of the `msrc` track group 1
+    const TRGR: &[u8] = b"\0\0\0\x18trgr\0\0\0\x10msrc\0\0\0\0\0\0\0\x01";
+
+    /// `udta` holding nothing, a box `trak` holds no field for
+    const UDTA: &[u8] = b"\0\0\0\x08udta";
 
     fn track() -> TrackBox {
         TrackBox {
@@ -122,15 +146,26 @@ mod tests {
                 ..TrackHeaderBox::default()
             },
             ttyp: None,
+            tref: Some(TrackReferenceBox::decode(TREF).unwrap().0),
+            trgr: Some(TrackGroupBox::decode(TRGR).unwrap().0),
             edts: Some(EditBox::default()),
             mdia: MediaBox::decode(MDIA).unwrap().0,
-            other_boxes: OtherBoxes::from(ChildBoxes::decode(TREF).unwrap()),
+            other_boxes: OtherBoxes::from(ChildBoxes::decode(UDTA).unwrap()),
         }
     }
 
     #[test]
     fn reads_its_children_and_keeps_the_child_it_has_no_field_for() {
-        let bytes = [b"\0\0\0\xf1trak".as_slice(), TKHD, TREF, EDTS, MDIA].concat();
+        let bytes = [
+            b"\0\0\x01\x1dtrak".as_slice(),
+            TKHD,
+            UDTA,
+            EDTS,
+            TRGR,
+            MDIA,
+            TREF,
+        ]
+        .concat();
 
         assert_eq!(TrackBox::decode(&bytes), Ok((track(), b"".as_slice())));
     }
@@ -139,7 +174,16 @@ mod tests {
     fn writes_its_children_in_the_order_of_their_fields_then_the_child_it_has_no_field_for() {
         assert_eq!(
             encoded(&track()),
-            [b"\0\0\0\xf1trak".as_slice(), TKHD, EDTS, MDIA, TREF].concat()
+            [
+                b"\0\0\x01\x1dtrak".as_slice(),
+                TKHD,
+                TREF,
+                TRGR,
+                EDTS,
+                MDIA,
+                UDTA
+            ]
+            .concat()
         );
     }
 
@@ -159,6 +203,8 @@ mod tests {
         let unreadable = b"\0\0\0\x0attypis";
         let payload = [TKHD, MDIA, unreadable].concat();
         let mut expected = track();
+        expected.tref = None;
+        expected.trgr = None;
         expected.edts = None;
         expected.other_boxes = OtherBoxes::from(ChildBoxes::decode(unreadable).unwrap());
 
