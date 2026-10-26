@@ -76,6 +76,7 @@ mod prft;
 mod rsot;
 mod saio;
 mod saiz;
+mod sample_entry;
 mod sample_group_entry;
 mod sample_size;
 mod sbgp;
@@ -87,6 +88,7 @@ mod ssrt;
 mod stbl;
 mod stdp;
 mod stsc;
+mod stsd;
 mod stsh;
 mod stss;
 mod stts;
@@ -153,6 +155,7 @@ pub use prft::ProducerReferenceTimeBox;
 pub use rsot::RedundantSampleOriginalTimingBox;
 pub use saio::SampleAuxiliaryInformationOffsetsBox;
 pub use saiz::{AuxInfoType, SampleAuxiliaryInformationSizesBox, SampleInfoSizes};
+pub use sample_entry::SampleEntry;
 pub use sample_group_entry::{
     AlternativeStartupEntry, AlternativeStartupPiece, AudioPreRollEntry, CleanApertureEntry,
     EssentialDescriptionsHierarchyEntry, PixelAspectRatioEntry, RateShareEntry,
@@ -170,6 +173,7 @@ pub use ssrt::{SubSampleDescription, SubSampleReferenceTableBox};
 pub use stbl::SampleTableBox;
 pub use stdp::DegradationPriorityBox;
 pub use stsc::{SampleToChunkBox, SampleToChunkEntry};
+pub use stsd::{SampleDescription, SampleDescriptionBox};
 pub use stsh::{ShadowSyncSampleBox, ShadowSyncSampleEntry};
 pub use stss::SyncSampleBox;
 pub use stts::{TimeToSampleBox, TimeToSampleEntry};

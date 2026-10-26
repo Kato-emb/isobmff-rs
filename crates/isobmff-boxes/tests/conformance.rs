@@ -15,11 +15,11 @@ mod tests {
         MediaInformationBox, MovieBox, MovieExtendsBox, MovieFragmentBox,
         MovieFragmentRandomAccessBox, MovieHeaderBox, OriginalFileTypeBox,
         ProducerReferenceTimeBox, ProgressiveDownloadInfoBox, RollRecoveryEntry,
-        SampleDependencyTypeBox, SampleFlags, SampleGroupDescriptionBox,
-        SampleGroupDescriptionEntry, SampleSizeBox, SampleSizeVariant, SampleSizes, SampleTableBox,
-        SampleToChunkBox, SampleToChunkEntry, SampleToGroupBox, SampleToGroupEntry,
-        SegmentIndexBox, SegmentIndexReference, SegmentTypeBox, Skip, SubsegmentIndexBox,
-        TemporalLevelEntry, TimeToSampleBox, TimeToSampleEntry, TrackBox,
+        SampleDependencyTypeBox, SampleDescription, SampleDescriptionBox, SampleEntry, SampleFlags,
+        SampleGroupDescriptionBox, SampleGroupDescriptionEntry, SampleSizeBox, SampleSizeVariant,
+        SampleSizes, SampleTableBox, SampleToChunkBox, SampleToChunkEntry, SampleToGroupBox,
+        SampleToGroupEntry, SegmentIndexBox, SegmentIndexReference, SegmentTypeBox, Skip,
+        SubsegmentIndexBox, TemporalLevelEntry, TimeToSampleBox, TimeToSampleEntry, TrackBox,
         TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
         TrackHeaderBox, TrackReference, TrackReferenceBox, TrackReferenceTypeBox, TrackRunBox,
         TrackRunSample, TrackRunSamples, VisualRandomAccessEntry,
@@ -141,6 +141,68 @@ mod tests {
                     }
                     Err(error) => differences.push(format!("{name}: {box_type}: {error}")),
                 }
+            }
+        }
+
+        assert_eq!(differences, Vec::<String>::new());
+    }
+
+    /// Returns `stsd` with the format and `data_reference_index` of each entry set as GPAC reports them in `node`
+    ///
+    /// GPAC reports no `data_reference_index` for some formats, such as
+    /// `wvtt`, and spells it `@dataReferenceIndex` for others, such as `tx3g`.
+    fn gpac_sample_descriptions(ours: &SampleDescriptionBox, node: &Value) -> SampleDescriptionBox {
+        let mut sample_descriptions = ours.clone();
+        sample_descriptions.sample_descriptions = gpac_children(node)
+            .into_iter()
+            .enumerate()
+            .map(|(index, reported)| {
+                let mut entry = match ours.sample_descriptions.get(index) {
+                    Some(SampleDescription::Typed(entry)) => entry.clone(),
+                    _ => SampleEntry::default(),
+                };
+                entry.format =
+                    FourCc::new(gpac_str(reported, "@Type").as_bytes().try_into().unwrap());
+                if let Some(field) = ["@DataReferenceIndex", "@dataReferenceIndex"]
+                    .into_iter()
+                    .find(|field| reported.get(field).is_some())
+                {
+                    entry.data_reference_index = gpac_integer(reported, field);
+                }
+                SampleDescription::Typed(entry)
+            })
+            .collect();
+        sample_descriptions
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn the_sample_descriptions_read_as_gpac_reports_them() {
+        let mut differences = Vec::new();
+        for ConformanceFile {
+            name,
+            bytes,
+            report,
+            ..
+        } in conformance_files()
+        {
+            let ours: Vec<SampleDescriptionBox> = read_all::<MovieBox>(&top_level(&bytes))
+                .into_iter()
+                .flat_map(|movie| movie.trak)
+                .map(|track| track.mdia.minf.stbl.stsd)
+                .collect();
+            let theirs: Vec<SampleDescriptionBox> = gpac_top_level(&report, "moov")
+                .into_iter()
+                .flat_map(|movie| gpac_boxes(movie, "trak"))
+                .zip(&ours)
+                .map(|(track, ours)| {
+                    let media = gpac_box(track, "mdia");
+                    let sample_table = gpac_box(gpac_box(media, "minf"), "stbl");
+                    gpac_sample_descriptions(ours, gpac_box(sample_table, "stsd"))
+                })
+                .collect();
+            if ours != theirs {
+                differences.push(format!("{name}: read {ours:?}, GPAC reports {theirs:?}"));
             }
         }
 
