@@ -4,5 +4,6 @@
 # prose — correcting one would change the format.
 [default.extend-words]
 alis = "alis"
+alst = "alst"
 trak = "trak"
 trun = "trun"

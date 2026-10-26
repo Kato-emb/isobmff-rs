@@ -13,10 +13,12 @@ mod tests {
         DataInformationBox, EditBox, ExtendedTypeBox, FileTypeBox, Free, FreeSpaceBox, HandlerBox,
         IdentifiedMediaDataBox, LanguageCode, Matrix, MediaBox, MediaDataBox, MediaHeaderBox,
         MediaInformationBox, MovieBox, MovieHeaderBox, OriginalFileTypeBox,
-        ProgressiveDownloadInfoBox, SampleDependencyTypeBox, SampleSizeBox, SampleSizeVariant,
-        SampleSizes, SampleTableBox, SampleToChunkBox, SampleToChunkEntry, SegmentTypeBox, Skip,
-        TimeToSampleBox, TimeToSampleEntry, TrackBox, TrackHeaderBox, TrackReference,
-        TrackReferenceBox, TrackReferenceTypeBox,
+        ProgressiveDownloadInfoBox, RollRecoveryEntry, SampleDependencyTypeBox,
+        SampleGroupDescriptionBox, SampleGroupDescriptionEntry, SampleSizeBox, SampleSizeVariant,
+        SampleSizes, SampleTableBox, SampleToChunkBox, SampleToChunkEntry, SampleToGroupBox,
+        SampleToGroupEntry, SegmentTypeBox, Skip, TemporalLevelEntry, TimeToSampleBox,
+        TimeToSampleEntry, TrackBox, TrackHeaderBox, TrackReference, TrackReferenceBox,
+        TrackReferenceTypeBox, VisualRandomAccessEntry,
     };
     use isobmff_core::{
         BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, Error, FourCc, I8F8, RawBox, U16F16,
@@ -668,6 +670,134 @@ mod tests {
                         .first()
                         .copied()
                         .map(gpac_track_reference)
+                })
+                .collect();
+            if ours != theirs {
+                differences.push(format!("{name}: read {ours:?}, GPAC reports {theirs:?}"));
+            }
+        }
+
+        assert_eq!(differences, Vec::<String>::new());
+    }
+
+    /// Returns the four-character code GPAC reports for `field` of `node`
+    fn gpac_four_cc(node: &Value, field: &str) -> FourCc {
+        FourCc::new(gpac_str(node, field).as_bytes().try_into().unwrap())
+    }
+
+    /// Returns `sbgp` as GPAC reports it in `node`
+    fn gpac_sample_to_group(node: &Value) -> SampleToGroupBox {
+        let mut sample_to_group = SampleToGroupBox::default();
+        sample_to_group.grouping_type = gpac_four_cc(node, "@grouping_type");
+        sample_to_group.grouping_type_parameter = node
+            .get("@grouping_type_parameter")
+            .map(|_| gpac_integer(node, "@grouping_type_parameter"));
+        sample_to_group.entries = gpac_elements(node, "SampleGroupBoxEntry")
+            .into_iter()
+            .map(|reported| {
+                let mut entry = SampleToGroupEntry::default();
+                entry.sample_count = gpac_integer(reported, "@sample_count");
+                entry.group_description_index = gpac_integer(reported, "@group_description_index");
+                entry
+            })
+            .collect();
+        sample_to_group
+    }
+
+    /// Returns `sgpd` with the fields GPAC reports for it set as GPAC reports them
+    ///
+    /// GPAC reports the entries of the `grouping_type`s `roll`, `rap ` and
+    /// `tele` here; the entries of others are left as read. It reports a
+    /// `num_leading_samples` only where `num_leading_samples_known` is set.
+    fn gpac_sample_group_description(
+        ours: SampleGroupDescriptionBox,
+        node: &Value,
+    ) -> SampleGroupDescriptionBox {
+        let flags: u32 = gpac_integer(node, "@Flags");
+        let mut description = ours;
+        description.version = gpac_integer(node, "@Version");
+        description.static_group_description = flags & 0x1 != 0;
+        description.static_mapping = flags & 0x2 != 0;
+        description.grouping_type = gpac_four_cc(node, "@grouping_type");
+        if node.get("@default_length").is_some() {
+            description.default_length = gpac_integer(node, "@default_length");
+        }
+        let entries = |element: &str| gpac_elements(node, element).into_iter();
+        description.entries = match description.grouping_type.as_bytes() {
+            b"roll" => entries("RollRecoveryEntry")
+                .map(|reported| {
+                    let mut entry = RollRecoveryEntry::default();
+                    entry.roll_distance = gpac_integer(reported, "@roll_distance");
+                    SampleGroupDescriptionEntry::RollRecovery(entry)
+                })
+                .collect(),
+            b"rap " => entries("VisualRandomAccessEntry")
+                .map(|reported| {
+                    let mut entry = VisualRandomAccessEntry::default();
+                    entry.num_leading_samples_known =
+                        gpac_str(reported, "@num_leading_samples_known") == "yes";
+                    if entry.num_leading_samples_known {
+                        entry.num_leading_samples = gpac_integer(reported, "@num_leading_samples");
+                    }
+                    SampleGroupDescriptionEntry::VisualRandomAccess(entry)
+                })
+                .collect(),
+            b"tele" => entries("TemporalLevelEntry")
+                .map(|reported| {
+                    let mut entry = TemporalLevelEntry::default();
+                    entry.level_independently_decodable =
+                        gpac_str(reported, "@level_independently_decodable") == "1";
+                    SampleGroupDescriptionEntry::TemporalLevel(entry)
+                })
+                .collect(),
+            _ => return description,
+        };
+        description
+    }
+
+    /// Sample groups of a sample table: its `sbgp`s and its `sgpd`s
+    type SampleGroups = (Vec<SampleToGroupBox>, Vec<SampleGroupDescriptionBox>);
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn the_sample_groups_of_a_sample_table_read_as_gpac_reports_them() {
+        let mut differences = Vec::new();
+        for ConformanceFile {
+            name,
+            bytes,
+            report,
+            ..
+        } in conformance_files()
+        {
+            let ours: Vec<SampleGroups> = read_all::<MovieBox>(&top_level(&bytes))
+                .into_iter()
+                .flat_map(|movie| movie.trak)
+                .map(|track| {
+                    let sample_table = track.mdia.minf.stbl;
+                    (sample_table.sbgp, sample_table.sgpd)
+                })
+                .collect();
+            let theirs: Vec<SampleGroups> = gpac_top_level(&report, "moov")
+                .into_iter()
+                .flat_map(|movie| gpac_boxes(movie, "trak"))
+                .zip(&ours)
+                .map(|(track, (_, descriptions))| {
+                    let media = gpac_box(track, "mdia");
+                    let sample_table = gpac_box(gpac_box(media, "minf"), "stbl");
+                    (
+                        gpac_boxes(sample_table, "sbgp")
+                            .into_iter()
+                            .map(gpac_sample_to_group)
+                            .collect(),
+                        gpac_boxes(sample_table, "sgpd")
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, node)| {
+                                let read = descriptions.get(index).cloned().unwrap_or_default();
+                                gpac_sample_group_description(read, node)
+                            })
+                            .collect(),
+                    )
                 })
                 .collect();
             if ours != theirs {
