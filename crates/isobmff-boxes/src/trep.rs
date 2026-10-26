@@ -6,6 +6,7 @@ use isobmff_core::{
 };
 
 use crate::assp::AlternativeStartupSequencePropertiesBox;
+use crate::cslg::CompositionToDecodeBox;
 use crate::full_box::{read_version_zero, write_version_zero};
 
 /// [`TrackExtensionPropertiesBox`] (`trep`), ISO/IEC 14496-12 §8.8.15
@@ -13,15 +14,19 @@ use crate::full_box::{read_version_zero, write_version_zero};
 /// Documents or summarizes characteristics of one track in the movie
 /// fragments after the movie, in the boxes it holds.
 ///
-/// The box writes `assp` after `track_ID`, and then the children of other
-/// types, which are kept in [`other_boxes`](Self::other_boxes). An `assp`
-/// that does not read is kept there too, and reads back [`None`].
+/// The box writes `cslg` and `assp` after `track_ID`, in the order of their
+/// clauses, as Table 2 lists neither in this box, and then the children of
+/// other types, which are kept in [`other_boxes`](Self::other_boxes). A
+/// `cslg` or an `assp` that does not read is kept there too, and reads back
+/// [`None`].
 #[doc(alias = "trep")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
 pub struct TrackExtensionPropertiesBox {
     /// `track_ID` of the track the properties are for
     pub track_id: u32,
+    /// How the composition timeline relates to the decoding timeline in the movie fragments of the track
+    pub cslg: Option<CompositionToDecodeBox>,
     /// Properties of the alternative startup sequence sample groups of the track
     pub assp: Option<AlternativeStartupSequencePropertiesBox>,
     /// Children of a type the box holds no field for
@@ -40,6 +45,7 @@ impl BoxDecode for TrackExtensionPropertiesBox {
 
         Ok(Self {
             track_id,
+            cslg: children.take_zero_or_one_if_decoded()?,
             assp: children.take_zero_or_one_if_decoded()?,
             other_boxes: OtherBoxes::from(children),
         })
@@ -48,16 +54,23 @@ impl BoxDecode for TrackExtensionPropertiesBox {
 
 impl BoxEncode for TrackExtensionPropertiesBox {
     fn payload_len(&self) -> u64 {
-        [4 + 4, self.assp.as_ref().map_or(0, BoxEncode::encoded_len)]
-            .into_iter()
-            .chain(self.other_boxes.as_slice().iter().map(AnyBox::encoded_len))
-            .fold(0, u64::saturating_add)
+        [
+            4 + 4,
+            self.cslg.as_ref().map_or(0, BoxEncode::encoded_len),
+            self.assp.as_ref().map_or(0, BoxEncode::encoded_len),
+        ]
+        .into_iter()
+        .chain(self.other_boxes.as_slice().iter().map(AnyBox::encoded_len))
+        .fold(0, u64::saturating_add)
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         write_version_zero(writer)?;
         writer.write_u32(self.track_id)?;
         let mut rest = writer.take_remainder();
+        if let Some(cslg) = &self.cslg {
+            rest = cslg.encode(rest)?;
+        }
         if let Some(assp) = &self.assp {
             rest = assp.encode(rest)?;
         }
@@ -75,10 +88,15 @@ mod tests {
 
     use super::TrackExtensionPropertiesBox;
     use crate::assp::{AlternativeStartupSequenceOffsets, AlternativeStartupSequencePropertiesBox};
+    use crate::cslg::CompositionToDecodeBox;
     use crate::encoded;
 
     /// `assp` of version 0 and a bound of -2
     const ASSP: &[u8] = b"\0\0\0\x10assp\0\0\0\0\xff\xff\xff\xfe";
+
+    /// `cslg` of version 0: shift 10, deltas -10 and 30, composition from 0 to 140
+    const CSLG: &[u8] =
+        b"\0\0\0\x20cslg\0\0\0\0\0\0\0\x0a\xff\xff\xff\xf6\0\0\0\x1e\0\0\0\0\0\0\0\x8c";
 
     /// `free` holding nothing, a box `trep` holds no field for
     const FREE: &[u8] = b"\0\0\0\x08free";
@@ -86,6 +104,7 @@ mod tests {
     fn properties() -> TrackExtensionPropertiesBox {
         TrackExtensionPropertiesBox {
             track_id: 2,
+            cslg: Some(CompositionToDecodeBox::decode(CSLG).unwrap().0),
             assp: Some(AlternativeStartupSequencePropertiesBox {
                 offsets: AlternativeStartupSequenceOffsets::Unparameterized {
                     min_initial_alt_startup_offset: -2,
@@ -97,7 +116,13 @@ mod tests {
 
     #[test]
     fn reads_its_track_and_the_children_that_follow() {
-        let bytes = [b"\0\0\0\x28trep\0\0\0\0\0\0\0\x02".as_slice(), FREE, ASSP].concat();
+        let bytes = [
+            b"\0\0\0\x48trep\0\0\0\0\0\0\0\x02".as_slice(),
+            FREE,
+            ASSP,
+            CSLG,
+        ]
+        .concat();
 
         assert_eq!(
             TrackExtensionPropertiesBox::decode(&bytes),
@@ -106,10 +131,16 @@ mod tests {
     }
 
     #[test]
-    fn writes_its_track_then_assp_then_the_child_it_has_no_field_for() {
+    fn writes_its_track_then_cslg_and_assp_then_the_child_it_has_no_field_for() {
         assert_eq!(
             encoded(&properties()),
-            [b"\0\0\0\x28trep\0\0\0\0\0\0\0\x02".as_slice(), ASSP, FREE].concat()
+            [
+                b"\0\0\0\x48trep\0\0\0\0\0\0\0\x02".as_slice(),
+                CSLG,
+                ASSP,
+                FREE
+            ]
+            .concat()
         );
     }
 
