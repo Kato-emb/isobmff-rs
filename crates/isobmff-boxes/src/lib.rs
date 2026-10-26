@@ -64,8 +64,12 @@ mod ftyp;
 mod full_box;
 mod hdlr;
 mod idat;
+mod iinf;
 mod iloc;
 mod imda;
+mod infe;
+mod ipro;
+mod iref;
 mod leva;
 mod loudness;
 mod ludt;
@@ -163,8 +167,12 @@ pub use free::{Free, FreeSpaceBox, FreeType, Skip};
 pub use ftyp::FileTypeBox;
 pub use hdlr::HandlerBox;
 pub use idat::ItemDataBox;
+pub use iinf::ItemInfoBox;
 pub use iloc::{ItemLocation, ItemLocationBox, ItemLocationExtent};
 pub use imda::IdentifiedMediaDataBox;
+pub use infe::{FdItemInfoExtension, ItemInfoEntry, ItemInfoExtension, ItemType};
+pub use ipro::ItemProtectionBox;
+pub use iref::{ItemReference, ItemReferenceBox, SingleItemTypeReferenceBox};
 pub use leva::{Level, LevelAssignment, LevelAssignmentBox};
 pub use loudness::{
     AlbumLoudnessInfo, LoudnessBase, LoudnessInfoType, LoudnessMeasurement, TrackLoudnessInfo,

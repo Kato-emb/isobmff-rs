@@ -12,7 +12,7 @@ mod tests {
         AudioSampleEntryVariant, ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant,
         CompactSampleSizeBox, DataInformationBox, EditBox, ExtendedTypeBox, FileTypeBox, Free,
         FreeSpaceBox, HandlerBox, IdentifiedMediaDataBox, ItemLocation, ItemLocationBox,
-        ItemLocationExtent, LanguageCode, Matrix, MediaBox, MediaDataBox, MediaHeaderBox,
+        ItemLocationExtent, ItemType, LanguageCode, Matrix, MediaBox, MediaDataBox, MediaHeaderBox,
         MediaInformationBox, MetaBox, MovieBox, MovieExtendsBox, MovieFragmentBox,
         MovieFragmentRandomAccessBox, MovieHeaderBox, OriginalFileTypeBox,
         ProducerReferenceTimeBox, ProgressiveDownloadInfoBox, RollRecoveryEntry,
@@ -1165,6 +1165,85 @@ mod tests {
                         .copied()
                         .map(gpac_item_location)
                 })
+                .collect();
+            if ours != theirs {
+                differences.push(format!("{name}: read {ours:?}, GPAC reports {theirs:?}"));
+            }
+        }
+
+        assert_eq!(differences, Vec::<String>::new());
+    }
+
+    /// Returns the `item_ID`, `item_protection_index`, `item_name` and content type of each entry of `iinf`, as GPAC reports them in `node`
+    ///
+    /// GPAC reports an empty string as `(null)`.
+    fn gpac_item_infos(node: &Value) -> Vec<(u32, u16, String, String)> {
+        let text = |entry: &Value, field: &str| match gpac_str(entry, field) {
+            "(null)" => String::new(),
+            spelled => spelled.to_owned(),
+        };
+        gpac_boxes(node, "infe")
+            .into_iter()
+            .map(|entry| {
+                (
+                    gpac_integer(entry, "@item_ID"),
+                    gpac_integer(entry, "@item_protection_index"),
+                    text(entry, "@item_name"),
+                    text(entry, "@content_type"),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn the_item_infos_of_the_file_and_movie_read_as_gpac_reports_them() {
+        let mut differences = Vec::new();
+        for ConformanceFile {
+            name,
+            bytes,
+            report,
+            ..
+        } in conformance_files()
+        {
+            let boxes = top_level(&bytes);
+            let metas = read_all::<MetaBox>(&boxes);
+            let movies = read_all::<MovieBox>(&boxes);
+            let ours: Vec<Vec<(u32, u16, String, String)>> = metas
+                .iter()
+                .chain(movies.iter().filter_map(|movie| movie.meta.as_ref()))
+                .filter_map(|meta| meta.iinf.as_ref())
+                .map(|item_info| {
+                    item_info
+                        .item_infos
+                        .iter()
+                        .map(|entry| {
+                            let content_type = match &entry.item_type {
+                                ItemType::ContentType { content_type, .. }
+                                | ItemType::Mime { content_type, .. } => {
+                                    content_type.as_str().unwrap().to_owned()
+                                }
+                                ItemType::Uri { .. } | ItemType::Other { .. } | _ => String::new(),
+                            };
+                            (
+                                entry.item_id,
+                                entry.item_protection_index,
+                                entry.item_name.as_str().unwrap().to_owned(),
+                                content_type,
+                            )
+                        })
+                        .collect()
+                })
+                .collect();
+            let theirs: Vec<Vec<(u32, u16, String, String)>> = gpac_top_level(&report, "meta")
+                .into_iter()
+                .chain(
+                    gpac_top_level(&report, "moov")
+                        .into_iter()
+                        .flat_map(|movie| gpac_boxes(movie, "meta")),
+                )
+                .flat_map(|meta| gpac_boxes(meta, "iinf"))
+                .map(gpac_item_infos)
                 .collect();
             if ours != theirs {
                 differences.push(format!("{name}: read {ours:?}, GPAC reports {theirs:?}"));

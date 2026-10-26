@@ -9,7 +9,10 @@ use crate::dinf::DataInformationBox;
 use crate::full_box::{read_version_zero, write_version_zero};
 use crate::hdlr::HandlerBox;
 use crate::idat::ItemDataBox;
+use crate::iinf::ItemInfoBox;
 use crate::iloc::ItemLocationBox;
+use crate::ipro::ItemProtectionBox;
+use crate::iref::ItemReferenceBox;
 use crate::pitm::PrimaryItemBox;
 use crate::xml::XmlVariant;
 
@@ -20,8 +23,8 @@ use crate::xml::XmlVariant;
 /// fields of a full box.
 ///
 /// Every child is optional, `hdlr` included: the 2026 edition no longer
-/// requires it. The box writes `hdlr`, `dinf`, `iloc`, the XML, `pitm` and
-/// `idat` in this order, whatever order they were read in: the order of
+/// requires it. The box writes `hdlr`, `dinf`, `iloc`, `ipro`, `iinf`, the
+/// XML, `pitm`, `idat` and `iref` in this order, whatever order they were read in: the order of
 /// ISO/IEC 14496-12 Table 2. Children of other types are kept in
 /// [`other_boxes`](Self::other_boxes), and written back after them. A child
 /// that does not read is kept there too, and reads back [`None`].
@@ -35,12 +38,18 @@ pub struct MetaBox {
     pub dinf: Option<DataInformationBox>,
     /// Where the data of each item lies
     pub iloc: Option<ItemLocationBox>,
+    /// Protection schemes applied to items
+    pub ipro: Option<ItemProtectionBox>,
+    /// Information about the items
+    pub iinf: Option<ItemInfoBox>,
     /// XML stored directly in the box, as text or in a binary form
     pub xml: Option<XmlVariant>,
     /// Primary item
     pub pitm: Option<PrimaryItemBox>,
     /// Data of the items the box stores itself
     pub idat: Option<ItemDataBox>,
+    /// Typed references from items to other items
+    pub iref: Option<ItemReferenceBox>,
     /// Children of a type the box holds no field for
     pub other_boxes: OtherBoxes,
 }
@@ -58,9 +67,12 @@ impl BoxDecode for MetaBox {
             hdlr: children.take_zero_or_one_if_decoded()?,
             dinf: children.take_zero_or_one_if_decoded()?,
             iloc: children.take_zero_or_one_if_decoded()?,
+            ipro: children.take_zero_or_one_if_decoded()?,
+            iinf: children.take_zero_or_one_if_decoded()?,
             xml: children.take_zero_or_one_variant_if_decoded()?,
             pitm: children.take_zero_or_one_if_decoded()?,
             idat: children.take_zero_or_one_if_decoded()?,
+            iref: children.take_zero_or_one_if_decoded()?,
             other_boxes: OtherBoxes::from(children),
         })
     }
@@ -73,12 +85,15 @@ impl BoxEncode for MetaBox {
             self.hdlr.as_ref().map_or(0, BoxEncode::encoded_len),
             self.dinf.as_ref().map_or(0, BoxEncode::encoded_len),
             self.iloc.as_ref().map_or(0, BoxEncode::encoded_len),
+            self.ipro.as_ref().map_or(0, BoxEncode::encoded_len),
+            self.iinf.as_ref().map_or(0, BoxEncode::encoded_len),
             self.xml.as_ref().map_or(0, |xml| match xml {
                 XmlVariant::Xml(text) => text.encoded_len(),
                 XmlVariant::BinaryXml(binary) => binary.encoded_len(),
             }),
             self.pitm.as_ref().map_or(0, BoxEncode::encoded_len),
             self.idat.as_ref().map_or(0, BoxEncode::encoded_len),
+            self.iref.as_ref().map_or(0, BoxEncode::encoded_len),
         ]
         .into_iter()
         .chain(self.other_boxes.as_slice().iter().map(AnyBox::encoded_len))
@@ -97,6 +112,12 @@ impl BoxEncode for MetaBox {
         if let Some(iloc) = &self.iloc {
             rest = iloc.encode(rest)?;
         }
+        if let Some(ipro) = &self.ipro {
+            rest = ipro.encode(rest)?;
+        }
+        if let Some(iinf) = &self.iinf {
+            rest = iinf.encode(rest)?;
+        }
         rest = match &self.xml {
             Some(XmlVariant::Xml(text)) => text.encode(rest)?,
             Some(XmlVariant::BinaryXml(binary)) => binary.encode(rest)?,
@@ -107,6 +128,9 @@ impl BoxEncode for MetaBox {
         }
         if let Some(idat) = &self.idat {
             rest = idat.encode(rest)?;
+        }
+        if let Some(iref) = &self.iref {
+            rest = iref.encode(rest)?;
         }
         for kept in self.other_boxes.as_slice() {
             rest = kept.encode(rest)?;
@@ -126,7 +150,10 @@ mod tests {
     use crate::encoded;
     use crate::hdlr::HandlerBox;
     use crate::idat::ItemDataBox;
+    use crate::iinf::ItemInfoBox;
     use crate::iloc::{ItemLocation, ItemLocationBox, ItemLocationExtent};
+    use crate::ipro::ItemProtectionBox;
+    use crate::iref::ItemReferenceBox;
     use crate::pitm::PrimaryItemBox;
     use crate::xml::{BinaryXmlBox, XmlVariant};
 
@@ -146,8 +173,17 @@ mod tests {
     /// `idat` of two bytes
     const IDAT: &[u8] = b"\0\0\0\x0aidat\xaa\xbb";
 
-    /// `iinf` of no entry, a box this box holds no field for
+    /// `ipro` of no protection scheme
+    const IPRO: &[u8] = b"\0\0\0\x0eipro\0\0\0\0\0\0";
+
+    /// `iinf` of no entry
     const IINF: &[u8] = b"\0\0\0\x0eiinf\0\0\0\0\0\0";
+
+    /// `iref` of version 0 and no reference
+    const IREF: &[u8] = b"\0\0\0\x0ciref\0\0\0\0";
+
+    /// `ipmc` holding nothing, a box this box holds no field for
+    const IPMC: &[u8] = b"\0\0\0\x08ipmc";
 
     fn meta() -> MetaBox {
         MetaBox {
@@ -178,7 +214,10 @@ mod tests {
             idat: Some(ItemDataBox {
                 data: vec![0xaa, 0xbb],
             }),
-            other_boxes: OtherBoxes::from(ChildBoxes::decode(IINF).unwrap()),
+            ipro: Some(ItemProtectionBox::default()),
+            iinf: Some(ItemInfoBox::default()),
+            iref: Some(ItemReferenceBox::default()),
+            other_boxes: OtherBoxes::from(ChildBoxes::decode(IPMC).unwrap()),
             ..MetaBox::default()
         }
     }
@@ -186,9 +225,12 @@ mod tests {
     #[test]
     fn reads_its_children_in_any_order_and_keeps_the_child_it_has_no_field_for() {
         let bytes = [
-            b"\0\0\0\x80meta\0\0\0\0".as_slice(),
+            b"\0\0\0\xa2meta\0\0\0\0".as_slice(),
+            IREF,
             IDAT,
+            IPMC,
             IINF,
+            IPRO,
             PITM,
             BXML,
             ILOC,
@@ -204,13 +246,16 @@ mod tests {
         assert_eq!(
             encoded(&meta()),
             [
-                b"\0\0\0\x80meta\0\0\0\0".as_slice(),
+                b"\0\0\0\xa2meta\0\0\0\0".as_slice(),
                 HDLR,
                 ILOC,
+                IPRO,
+                IINF,
                 BXML,
                 PITM,
                 IDAT,
-                IINF
+                IREF,
+                IPMC
             ]
             .concat()
         );
