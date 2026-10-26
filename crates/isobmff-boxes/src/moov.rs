@@ -11,16 +11,19 @@ use crate::meta::MetaBox;
 use crate::mvex::MovieExtendsBox;
 use crate::mvhd::MovieHeaderBox;
 use crate::trak::TrackBox;
+use crate::udta::UserDataBox;
 
 /// [`MovieBox`] (`moov`), ISO/IEC 14496-12 §8.2.1
 ///
 /// Holds the structure data of a presentation: its header and its tracks.
 ///
-/// The box writes `mvhd`, `meta`, the tracks and `mvex` in this order, whatever order
-/// they were read in: the order of ISO/IEC 14496-12 §7.3.4, and of Table 2
-/// where §7.3.4 sets none. Children of other types are kept in
-/// [`other_boxes`](Self::other_boxes), and written back after them. A `meta` or
-/// an `mvex` that does not read is kept there too, and reads back [`None`].
+/// The box writes `mvhd`, `meta`, the tracks, `mvex` and the `udta`s in this
+/// order, whatever order they were read in: the order of ISO/IEC 14496-12
+/// §7.3.4, and of Table 2 where §7.3.4 sets none. Children of other types are
+/// kept in [`other_boxes`](Self::other_boxes), and written back after `mvex`
+/// and before the `udta`s, which §7.3.4 places last. A `meta` or an `mvex`
+/// that does not read is kept there too, and reads back [`None`]. A `udta`
+/// that does not read is kept there too.
 ///
 /// The box holds one or more tracks. A box of none does not read, and writing
 /// it is refused with
@@ -38,6 +41,8 @@ pub struct MovieBox {
     pub trak: Vec<TrackBox>,
     /// Defaults of the movie fragments the file can hold, which it holds none of where this is [`None`]
     pub mvex: Option<MovieExtendsBox>,
+    /// User data of the presentation, in the order they came
+    pub udta: Vec<UserDataBox>,
     /// Children of a type the box holds no field for
     pub other_boxes: OtherBoxes,
 }
@@ -55,6 +60,7 @@ impl BoxDecode for MovieBox {
             meta: children.take_zero_or_one_if_decoded()?,
             trak: children.take_one_or_more()?,
             mvex: children.take_zero_or_one_if_decoded()?,
+            udta: children.take_zero_or_more_if_decoded(),
             other_boxes: OtherBoxes::from(children),
         })
     }
@@ -69,6 +75,7 @@ impl BoxEncode for MovieBox {
         ]
         .into_iter()
         .chain(self.trak.iter().map(BoxEncode::encoded_len))
+        .chain(self.udta.iter().map(BoxEncode::encoded_len))
         .chain(self.other_boxes.as_slice().iter().map(AnyBox::encoded_len))
         .fold(0, u64::saturating_add)
     }
@@ -91,6 +98,9 @@ impl BoxEncode for MovieBox {
         for kept in self.other_boxes.as_slice() {
             rest = kept.encode(rest)?;
         }
+        for user_data in &self.udta {
+            rest = user_data.encode(rest)?;
+        }
 
         Ok(())
     }
@@ -108,6 +118,7 @@ mod tests {
     use crate::mvex::MovieExtendsBox;
     use crate::mvhd::MovieHeaderBox;
     use crate::trak::TrackBox;
+    use crate::udta::UserDataBox;
 
     /// `mvhd` of version 0, timescale 1000, `next_track_ID` 2 and every other field zero or its template value
     const MVHD: &[u8] = b"\0\0\0\x6cmvhd\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\xe8\0\0\0\0\
@@ -136,6 +147,9 @@ mod tests {
     /// `iods` holding nothing, a box `moov` holds no field for
     const IODS: &[u8] = b"\0\0\0\x0ciods\0\0\0\0";
 
+    /// `udta` of a `cprt` of the language `und` and the notice `(c)`
+    const UDTA: &[u8] = b"\0\0\0\x1audta\0\0\0\x12cprt\0\0\0\0\x55\xc4(c)\0";
+
     fn movie() -> MovieBox {
         let (track, _) = TrackBox::decode(TRAK).unwrap();
 
@@ -148,6 +162,7 @@ mod tests {
             meta: Some(MetaBox::default()),
             trak: vec![track.clone(), track],
             mvex: Some(MovieExtendsBox::decode(MVEX).unwrap().0),
+            udta: vec![UserDataBox::decode(UDTA).unwrap().0],
             other_boxes: OtherBoxes::from(ChildBoxes::decode(IODS).unwrap()),
         }
     }
@@ -155,8 +170,9 @@ mod tests {
     #[test]
     fn reads_its_children_in_any_order_and_keeps_the_child_it_has_no_field_for() {
         let bytes = [
-            b"\0\0\x02\x96moov".as_slice(),
+            b"\0\0\x02\xb0moov".as_slice(),
             MVEX,
+            UDTA,
             MVHD,
             IODS,
             TRAK,
@@ -169,19 +185,32 @@ mod tests {
     }
 
     #[test]
-    fn writes_its_header_then_meta_then_its_tracks_then_mvex_then_the_child_it_has_no_field_for() {
+    fn writes_its_header_then_meta_then_its_tracks_then_mvex_then_the_child_it_has_no_field_for_then_udta()
+     {
         assert_eq!(
             encoded(&movie()),
             [
-                b"\0\0\x02\x96moov".as_slice(),
+                b"\0\0\x02\xb0moov".as_slice(),
                 MVHD,
                 META,
                 TRAK,
                 TRAK,
                 MVEX,
-                IODS
+                IODS,
+                UDTA
             ]
             .concat()
+        );
+    }
+
+    #[test]
+    fn a_child_it_has_no_field_for_read_after_udta_is_written_before_it() {
+        let payload = [MVHD, TRAK, UDTA, IODS].concat();
+        let movie = MovieBox::decode_payload(&payload).unwrap();
+
+        assert_eq!(
+            encoded(&movie),
+            [b"\0\0\x01\x8bmoov".as_slice(), MVHD, TRAK, IODS, UDTA].concat()
         );
     }
 

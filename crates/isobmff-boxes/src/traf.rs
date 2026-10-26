@@ -18,6 +18,7 @@ use crate::subs::SubSampleInformationBox;
 use crate::tfdt::TrackFragmentBaseMediaDecodeTimeBox;
 use crate::tfhd::TrackFragmentHeaderBox;
 use crate::trun::TrackRunBox;
+use crate::udta::UserDataBox;
 
 /// [`TrackFragmentBox`] (`traf`), ISO/IEC 14496-12 §8.8.6
 ///
@@ -25,14 +26,16 @@ use crate::trun::TrackRunBox;
 /// zero or more track runs.
 ///
 /// The box writes `tfhd`, `tfdt`, the track runs, the `sbgp`s, the `csgp`s,
-/// the `sgpd`s, the `subs`es, the `saiz`es, the `saio`s, `meta` and `rsot` in this
-/// order, whatever order they were read in: the order of ISO/IEC 14496-12
-/// Table 2, but for `tfdt`, which §8.8.12.1 places after `tfhd` and before
-/// the first track run, and `csgp` and `rsot`, which Table 2 does not list:
-/// `csgp` is written right after `sbgp`, and `rsot` last. Children of other
-/// types are kept in [`other_boxes`](Self::other_boxes), and written back
-/// after them. An optional child that does not read is kept there too; a
-/// `tfdt`, a `meta` or an `rsot` that does not read reads back [`None`].
+/// the `sgpd`s, the `subs`es, the `saiz`es, the `saio`s, `meta`, `rsot` and
+/// the `udta`s in this order, whatever order they were read in: the order of
+/// ISO/IEC 14496-12 Table 2, but for `tfdt`, which §8.8.12.1 places after
+/// `tfhd` and before the first track run, and `csgp` and `rsot`, which Table 2
+/// does not list: `csgp` is written right after `sbgp`, and `rsot` after
+/// `meta`. Children of other types are kept in
+/// [`other_boxes`](Self::other_boxes), and written back after `rsot` and
+/// before the `udta`s, which §7.3.4 places last. An optional child that does
+/// not read is kept there too; a `tfdt`, a `meta` or an `rsot` that does not
+/// read reads back [`None`].
 #[doc(alias = "traf")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -59,6 +62,8 @@ pub struct TrackFragmentBox {
     pub meta: Option<MetaBox>,
     /// Original timing of the first and last samples of the fragment
     pub rsot: Option<RedundantSampleOriginalTimingBox>,
+    /// User data of the track fragment, in the order they came
+    pub udta: Vec<UserDataBox>,
     /// Children of a type the box holds no field for
     pub other_boxes: OtherBoxes,
 }
@@ -83,6 +88,7 @@ impl BoxDecode for TrackFragmentBox {
             saio: children.take_zero_or_more_if_decoded(),
             meta: children.take_zero_or_one_if_decoded()?,
             rsot: children.take_zero_or_one_if_decoded()?,
+            udta: children.take_zero_or_more_if_decoded(),
             other_boxes: OtherBoxes::from(children),
         })
     }
@@ -104,6 +110,7 @@ impl BoxEncode for TrackFragmentBox {
         .chain(self.subs.iter().map(BoxEncode::encoded_len))
         .chain(self.saiz.iter().map(BoxEncode::encoded_len))
         .chain(self.saio.iter().map(BoxEncode::encoded_len))
+        .chain(self.udta.iter().map(BoxEncode::encoded_len))
         .chain(self.other_boxes.as_slice().iter().map(AnyBox::encoded_len))
         .fold(0, u64::saturating_add)
     }
@@ -143,6 +150,9 @@ impl BoxEncode for TrackFragmentBox {
         for kept in self.other_boxes.as_slice() {
             rest = kept.encode(rest)?;
         }
+        for user_data in &self.udta {
+            rest = user_data.encode(rest)?;
+        }
 
         Ok(())
     }
@@ -166,6 +176,7 @@ mod tests {
     use crate::tfdt::TrackFragmentBaseMediaDecodeTimeBox;
     use crate::tfhd::TrackFragmentHeaderBox;
     use crate::trun::TrackRunBox;
+    use crate::udta::UserDataBox;
 
     /// `tfhd` of track 1 based at the `moof`, with a default size of 300 alone
     const TFHD: &[u8] = b"\0\0\0\x14tfhd\0\x02\0\x10\0\0\0\x01\0\0\x01\x2c";
@@ -200,6 +211,9 @@ mod tests {
     /// `senc` holding nothing, a box `traf` holds no field for
     const SENC: &[u8] = b"\0\0\0\x10senc\0\0\0\0\0\0\0\0";
 
+    /// `udta` holding nothing
+    const UDTA: &[u8] = b"\0\0\0\x08udta";
+
     fn track_fragment() -> TrackFragmentBox {
         TrackFragmentBox {
             tfhd: TrackFragmentHeaderBox::decode(TFHD).unwrap().0,
@@ -217,6 +231,7 @@ mod tests {
             ],
             meta: Some(MetaBox::default()),
             rsot: Some(RedundantSampleOriginalTimingBox::decode(RSOT).unwrap().0),
+            udta: vec![UserDataBox::default()],
             other_boxes: OtherBoxes::from(ChildBoxes::decode(SENC).unwrap()),
         }
     }
@@ -224,10 +239,11 @@ mod tests {
     #[test]
     fn reads_its_children_in_any_order_and_keeps_the_child_it_has_no_field_for() {
         let bytes = [
-            b"\0\0\0\xd3traf".as_slice(),
+            b"\0\0\0\xdbtraf".as_slice(),
             TFHD,
             RSOT,
             SAIZ,
+            UDTA,
             SAIO,
             SENC,
             META,
@@ -246,11 +262,12 @@ mod tests {
     }
 
     #[test]
-    fn writes_tfhd_then_tfdt_then_the_order_of_table_2_then_the_child_it_has_no_field_for() {
+    fn writes_tfhd_then_tfdt_then_the_order_of_table_2_then_the_child_it_has_no_field_for_then_udta()
+     {
         assert_eq!(
             encoded(&track_fragment()),
             [
-                b"\0\0\0\xd3traf".as_slice(),
+                b"\0\0\0\xdbtraf".as_slice(),
                 TFHD,
                 TFDT,
                 TRUN,
@@ -262,8 +279,20 @@ mod tests {
                 META,
                 RSOT,
                 SENC,
+                UDTA,
             ]
             .concat()
+        );
+    }
+
+    #[test]
+    fn a_child_it_has_no_field_for_read_after_udta_is_written_before_it() {
+        let payload = [TFHD, UDTA, SENC].concat();
+        let track_fragment = TrackFragmentBox::decode_payload(&payload).unwrap();
+
+        assert_eq!(
+            encoded(&track_fragment),
+            [b"\0\0\0\x34traf".as_slice(), TFHD, SENC, UDTA].concat()
         );
     }
 

@@ -10,29 +10,30 @@ mod items;
 
 #[cfg(test)]
 mod tests {
-    use std::{env, fs};
+    use std::{env, fs, iter};
 
     use isobmff_boxes::{
         AudioSampleEntryVariant, ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant,
-        CompactSampleSizeBox, DataInformationBox, EditBox, ExtendedTypeBox, FileTypeBox, Free,
-        FreeSpaceBox, HandlerBox, IdentifiedMediaDataBox, LanguageCode, Matrix, MediaBox,
-        MediaDataBox, MediaHeaderBox, MediaInformationBox, MetaBox, MovieBox, MovieExtendsBox,
-        MovieFragmentBox, MovieFragmentRandomAccessBox, MovieHeaderBox, OriginalFileTypeBox,
-        ProducerReferenceTimeBox, ProgressiveDownloadInfoBox, RollRecoveryEntry,
-        SampleDependencyTypeBox, SampleDescription, SampleDescriptionBox, SampleEntry, SampleFlags,
-        SampleGroupDescriptionBox, SampleGroupDescriptionEntry, SampleSizeBox, SampleSizeVariant,
-        SampleSizes, SampleTableBox, SampleToChunkBox, SampleToChunkEntry, SampleToGroupBox,
-        SampleToGroupEntry, SegmentIndexBox, SegmentIndexReference, SegmentTypeBox,
-        SimpleTextSampleEntry, Skip, SubsegmentIndexBox, TemporalLevelEntry, TimeToSampleBox,
+        CompactSampleSizeBox, CopyrightBox, DataInformationBox, EditBox, ExtendedTypeBox,
+        FileTypeBox, Free, FreeSpaceBox, HandlerBox, IdentifiedMediaDataBox, KindBox, LanguageCode,
+        Matrix, MediaBox, MediaDataBox, MediaHeaderBox, MediaInformationBox, MetaBox, MovieBox,
+        MovieExtendsBox, MovieFragmentBox, MovieFragmentRandomAccessBox, MovieHeaderBox,
+        OriginalFileTypeBox, ProducerReferenceTimeBox, ProgressiveDownloadInfoBox,
+        RollRecoveryEntry, SampleDependencyTypeBox, SampleDescription, SampleDescriptionBox,
+        SampleEntry, SampleFlags, SampleGroupDescriptionBox, SampleGroupDescriptionEntry,
+        SampleSizeBox, SampleSizeVariant, SampleSizes, SampleTableBox, SampleToChunkBox,
+        SampleToChunkEntry, SampleToGroupBox, SampleToGroupEntry, SegmentIndexBox,
+        SegmentIndexReference, SegmentTypeBox, SimpleTextSampleEntry, Skip, SubTrackBox,
+        SubTrackDefinitionBox, SubsegmentIndexBox, TemporalLevelEntry, TimeToSampleBox,
         TimeToSampleEntry, TrackBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
         TrackFragmentHeaderBox, TrackHeaderBox, TrackReference, TrackReferenceBox,
-        TrackReferenceTypeBox, TrackRunBox, TrackRunSample, TrackRunSamples,
+        TrackReferenceTypeBox, TrackRunBox, TrackRunSample, TrackRunSamples, UserDataBox,
         VisualRandomAccessEntry, VisualSampleEntry, XmlBox, XmlMetaDataSampleEntry,
         XmlSubtitleSampleEntry,
     };
     use isobmff_core::{
         BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, Error, FourCc, I8F8, RawBox, U16F16,
-        Utf8List, Utf8String,
+        Utf8List, Utf8String, UtfString,
     };
     use isobmff_test_support::serde_json::{self, Value};
     use isobmff_test_support::{ConformanceFile, conformance_files, ffprobe, gpac_children};
@@ -558,7 +559,7 @@ mod tests {
     }
 
     /// Box types of the containers a written-back container may hold its children in another order in
-    const REORDERED: [BoxType; 12] = [
+    const REORDERED: [BoxType; 15] = [
         MetaBox::BOX_TYPE,
         MovieBox::BOX_TYPE,
         TrackBox::BOX_TYPE,
@@ -571,6 +572,9 @@ mod tests {
         MovieFragmentBox::BOX_TYPE,
         TrackFragmentBox::BOX_TYPE,
         MovieFragmentRandomAccessBox::BOX_TYPE,
+        UserDataBox::BOX_TYPE,
+        SubTrackBox::BOX_TYPE,
+        SubTrackDefinitionBox::BOX_TYPE,
     ];
 
     /// Box types of the top-level containers, each with how it is read and written back
@@ -1087,6 +1091,103 @@ mod tests {
                         .first()
                         .copied()
                         .map(gpac_track_reference)
+                })
+                .collect();
+            if ours != theirs {
+                differences.push(format!("{name}: read {ours:?}, GPAC reports {theirs:?}"));
+            }
+        }
+
+        assert_eq!(differences, Vec::<String>::new());
+    }
+
+    /// Returns `cprt` with the fields GPAC reports for it set as GPAC reports them
+    fn gpac_copyright(ours: &CopyrightBox, node: &Value) -> CopyrightBox {
+        let notice = gpac_str(node, "@CopyrightNotice");
+        let mut copyright = ours.clone();
+        copyright.language = LanguageCode::new(
+            gpac_str(node, "@LanguageCode")
+                .as_bytes()
+                .try_into()
+                .unwrap(),
+        )
+        .unwrap();
+        if ours.notice.to_str().as_deref() != Some(notice) {
+            copyright.notice = UtfString::new(notice.to_owned()).unwrap();
+        }
+        copyright
+    }
+
+    /// Returns `kind` with the fields GPAC reports for it set as GPAC reports them
+    ///
+    /// GPAC reports an absent `value` as the empty string.
+    fn gpac_kind(ours: &KindBox, node: &Value) -> KindBox {
+        let value = gpac_str(node, "@value");
+        let mut kind = ours.clone();
+        kind.scheme_uri = Utf8String::from_slice(gpac_str(node, "@schemeURI").as_bytes());
+        if ours
+            .value
+            .as_ref()
+            .map_or(b"".as_slice(), Utf8String::as_bytes)
+            != value.as_bytes()
+        {
+            kind.value = Some(Utf8String::from_slice(value.as_bytes()));
+        }
+        kind
+    }
+
+    /// Copyright notices and kinds a `udta` holds
+    type UserData = (Vec<CopyrightBox>, Vec<KindBox>);
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn the_user_data_of_a_movie_and_its_tracks_reads_as_gpac_reports_it() {
+        let none: UserData = (Vec::new(), Vec::new());
+        let mut differences = Vec::new();
+        for ConformanceFile {
+            name,
+            bytes,
+            report,
+            ..
+        } in conformance_files()
+        {
+            let ours: Vec<UserData> = read_all::<MovieBox>(&top_level(&bytes))
+                .into_iter()
+                .flat_map(|movie| {
+                    movie
+                        .udta
+                        .into_iter()
+                        .chain(movie.trak.into_iter().flat_map(|track| track.udta))
+                })
+                .map(|user_data| (user_data.cprt, user_data.kind))
+                .collect();
+            let theirs: Vec<UserData> = gpac_top_level(&report, "moov")
+                .into_iter()
+                .flat_map(|movie| {
+                    gpac_boxes(movie, "udta").into_iter().chain(
+                        gpac_boxes(movie, "trak")
+                            .into_iter()
+                            .flat_map(|track| gpac_boxes(track, "udta")),
+                    )
+                })
+                .zip(ours.iter().chain(iter::repeat(&none)))
+                .map(|(user_data, (copyrights, kinds))| {
+                    (
+                        gpac_boxes(user_data, "cprt")
+                            .into_iter()
+                            .zip(
+                                copyrights
+                                    .iter()
+                                    .chain(iter::repeat(&CopyrightBox::default())),
+                            )
+                            .map(|(node, ours)| gpac_copyright(ours, node))
+                            .collect(),
+                        gpac_boxes(user_data, "kind")
+                            .into_iter()
+                            .zip(kinds.iter().chain(iter::repeat(&KindBox::default())))
+                            .map(|(node, ours)| gpac_kind(ours, node))
+                            .collect(),
+                    )
                 })
                 .collect();
             if ours != theirs {
