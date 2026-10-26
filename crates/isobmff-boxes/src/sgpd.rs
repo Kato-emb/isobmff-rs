@@ -44,7 +44,10 @@ const STATIC_MAPPING: u32 = 0x2;
 /// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for the field,
 /// where it holds an entry of another `grouping_type` than its own, a
 /// `default_length` other than 0 that is not the length of every entry, or a
-/// field its version does not carry that is not 0.
+/// field its version does not carry that is not 0; and with
+/// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for `version` where
+/// its `grouping_type` is `esgh` and its version is not 3, as §10.12.1
+/// requires.
 ///
 /// [`Default`] is the box of version 1, of no flag, `grouping_type` four zero
 /// bytes and no entry.
@@ -182,6 +185,9 @@ impl BoxEncode for SampleGroupDescriptionBox {
         }
         if self.version < 2 && self.default_group_description_index != 0 {
             return Err(Error::invalid_value("default_group_description_index"));
+        }
+        if self.grouping_type.as_bytes() == b"esgh" && self.version != 3 {
+            return Err(Error::invalid_value("version"));
         }
         if self.version == 0
             && !self.entries.is_empty()
@@ -393,18 +399,24 @@ mod tests {
         let mut bytes_in_version_0 = unread();
         bytes_in_version_0.version = 0;
         bytes_in_version_0.default_group_description_index = 0;
+        let hierarchy_not_essential = SampleGroupDescriptionBox {
+            grouping_type: FourCc::new(*b"esgh"),
+            ..SampleGroupDescriptionBox::default()
+        };
 
         assert_eq!(
             [
                 other_grouping_type,
                 wrong_default_length,
-                bytes_in_version_0
+                bytes_in_version_0,
+                hierarchy_not_essential
             ]
             .map(|value| value.encode(&mut [0; 64]).map(|_| ())),
             [
                 Err(Error::invalid_value("grouping_type")),
                 Err(Error::invalid_value("default_length")),
-                Err(Error::unsupported_value("grouping_type"))
+                Err(Error::unsupported_value("grouping_type")),
+                Err(Error::invalid_value("version"))
             ]
         );
     }

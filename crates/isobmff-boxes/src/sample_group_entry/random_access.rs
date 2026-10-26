@@ -4,7 +4,6 @@ use alloc::vec::Vec;
 
 use isobmff_core::{Error, FieldReader, FieldWriter};
 
-use super::within_bits;
 use crate::table::{TableEntry, entries_len, read_entries, read_to_end, write_entries};
 
 /// [`RollRecoveryEntry`] (`roll`), ISO/IEC 14496-12 §10.1
@@ -12,7 +11,8 @@ use crate::table::{TableEntry, entries_len, read_entries, read_to_end, write_ent
 /// The samples from which decoding recovers after a number of samples. The
 /// specification defines it as a `VisualRollRecoveryEntry` for video and an
 /// `AudioRollRecoveryEntry` for audio, of the same syntax; the handler type
-/// of the track tells which.
+/// of the track tells which. A `roll_distance` of 0 is refused when written,
+/// with [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue).
 #[doc(
     alias = "roll",
     alias = "VisualRollRecoveryEntry",
@@ -29,7 +29,9 @@ pub struct RollRecoveryEntry {
 /// [`AudioPreRollEntry`] (`prol`), ISO/IEC 14496-12 §10.1
 ///
 /// The independently decodable samples of an audio stream, from which the
-/// decoder output is correct after pre-rolling by a number of samples.
+/// decoder output is correct after pre-rolling by a number of samples. A
+/// `roll_distance` that is not positive is refused when written, with
+/// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue).
 #[doc(alias = "prol")]
 #[non_exhaustive]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
@@ -145,22 +147,24 @@ impl VisualRandomAccessEntry {
     }
 
     pub(super) fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        let num_leading_samples = within_bits(self.num_leading_samples, 7, "num_leading_samples")?;
+        if self.num_leading_samples > 0x7f {
+            return Err(Error::invalid_value("num_leading_samples"));
+        }
         let known = if self.num_leading_samples_known {
             0x80
         } else {
             0
         };
-        writer.write_bytes(&[known | num_leading_samples])
+        writer.write_bytes(&[known | self.num_leading_samples])
     }
 }
 
 /// [`SapEntry`] (`sap `), ISO/IEC 14496-12 §10.6
 ///
 /// The samples whose first byte is the position of a stream access point of
-/// a type, as Annex I defines them. A `sap_type` past 4 bits is refused when
-/// written, with [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for
-/// `SAP_type`.
+/// a type, as Annex I defines them. A `sap_type` other than 1 to 6, the
+/// types Annex I defines, is refused when written, with
+/// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for `SAP_type`.
 #[doc(alias = "sap", alias = "SAPEntry")]
 #[non_exhaustive]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
@@ -183,9 +187,11 @@ impl SapEntry {
     }
 
     pub(super) fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        let sap_type = within_bits(self.sap_type, 4, "SAP_type")?;
+        if !(1..=6).contains(&self.sap_type) {
+            return Err(Error::invalid_value("SAP_type"));
+        }
         let dependent = if self.dependent_flag { 0x80 } else { 0 };
-        writer.write_bytes(&[dependent | sap_type])
+        writer.write_bytes(&[dependent | self.sap_type])
     }
 }
 
@@ -194,9 +200,9 @@ impl SapEntry {
 /// The dependent random access points: samples after which all samples
 /// decode correctly if the closest preceding stream access point of type 1,
 /// 2 or 3 is available. An entry whose `reserved` bits are not zero, which
-/// readers ignore, is kept as its bytes. A `drap_type` past 3 bits is refused
-/// when written, with [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue)
-/// for `DRAP_type`.
+/// readers ignore, is kept as its bytes. A `drap_type` other than 1 to 3 is
+/// refused when written, with
+/// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for `DRAP_type`.
 #[doc(alias = "drap", alias = "VisualDRAPEntry")]
 #[non_exhaustive]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
@@ -219,8 +225,10 @@ impl VisualDrapEntry {
     }
 
     pub(super) fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        let drap_type = within_bits(self.drap_type, 3, "DRAP_type")?;
-        writer.write_u32(u32::from(drap_type) << 29)
+        if !(1..=3).contains(&self.drap_type) {
+            return Err(Error::invalid_value("DRAP_type"));
+        }
+        writer.write_u32(u32::from(self.drap_type) << 29)
     }
 }
 
@@ -232,7 +240,7 @@ impl VisualDrapEntry {
 /// `reserved` bits are not zero, which readers ignore, is kept as its bytes.
 ///
 /// `num_ref_sap_or_edrap_samples_minus1` is the number of
-/// `ref_sap_or_edrap_idx_delta`s, less one. An `edrap_type` past 3 bits, and
+/// `ref_sap_or_edrap_idx_delta`s, less one. An `edrap_type` other than 1 to 3, and
 /// a number of deltas other than 1 to 8, are refused when written, with
 /// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for the field.
 #[doc(alias = "edrp")]
@@ -271,7 +279,9 @@ impl VisualEdrapEntry {
     }
 
     pub(super) fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        let edrap_type = within_bits(self.edrap_type, 3, "edrap_type")?;
+        if !(1..=3).contains(&self.edrap_type) {
+            return Err(Error::invalid_value("edrap_type"));
+        }
         let minus1 = self
             .ref_sap_or_edrap_idx_deltas
             .len()
@@ -279,7 +289,7 @@ impl VisualEdrapEntry {
             .and_then(|minus1| u8::try_from(minus1).ok())
             .filter(|minus1| *minus1 < 8)
             .ok_or_else(|| Error::invalid_value("num_ref_sap_or_edrap_samples_minus1"))?;
-        writer.write_bytes(&[edrap_type << 5 | minus1 << 2])?;
+        writer.write_bytes(&[self.edrap_type << 5 | minus1 << 2])?;
         write_entries(writer, &self.ref_sap_or_edrap_idx_deltas)
     }
 }

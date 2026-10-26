@@ -46,10 +46,13 @@ pub struct CompactSampleToGroupPattern {
 /// `count_size_code` and `index_size_code` are each 0, 1, 2 or 3, for fields
 /// of 4, 8, 16 or 32 bits. Fields of 4 bits pack two to a byte, the earlier
 /// in the high half, and the last byte of an odd number of indices is padded
-/// with zeros. A `pattern_size_code` and a `count_size_code` of which one is 0
-/// and the other is not are refused, read or written, with
+/// with zeros. A 4-bit `pattern_length` with a wider `sample_count`, which
+/// §8.9.5.3 forbids, is refused, read or written, with
 /// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for
-/// `count_size_code`.
+/// `count_size_code`. A 4-bit `sample_count` with a wider `pattern_length`,
+/// which leaves the pairs off byte boundaries, is not read or written: it is
+/// refused with [`UnsupportedValue`](isobmff_core::ErrorKind::UnsupportedValue)
+/// for `count_size_code`.
 ///
 /// The box is written in the widths it holds. A code past 3, a value wider
 /// than its field, a pattern of no index, and a `sample_count` below the
@@ -141,8 +144,14 @@ impl CompactSampleToGroupBox {
         if self.count_size_code > 3 {
             return Err(Error::invalid_value("count_size_code"));
         }
-        if (self.pattern_size_code == 0) != (self.count_size_code == 0) {
+        if self.pattern_size_code == 0 && self.count_size_code != 0 {
             return Err(Error::invalid_value("count_size_code"));
+        }
+        // Why not read a 4-bit `sample_count` after a wider `pattern_length`:
+        // such a pair is not a whole number of bytes, and §8.9.5.3 does not
+        // say whether the indices then start on a byte; GPAC refuses it too.
+        if self.pattern_size_code != 0 && self.count_size_code == 0 {
+            return Err(Error::unsupported_value("count_size_code"));
         }
 
         Ok((
@@ -446,6 +455,14 @@ mod tests {
         assert_eq!(
             CompactSampleToGroupBox::decode_payload(b"\0\0\0\x15roll\0\0\0\x03\x02\x05\x01\x02"),
             Err(Error::truncated_payload(18, 16))
+        );
+    }
+
+    #[test]
+    fn a_4_bit_sample_count_after_a_wider_pattern_length_is_not_read() {
+        assert_eq!(
+            CompactSampleToGroupBox::decode_payload(b"\0\0\0\x10roll\0\0\0\0"),
+            Err(Error::unsupported_value("count_size_code"))
         );
     }
 

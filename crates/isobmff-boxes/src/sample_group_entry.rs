@@ -72,7 +72,8 @@ impl Default for RateShareOperationPoints {
 /// [`Multiple`](RateShareOperationPoints::Multiple) of fewer than two is
 /// refused when written, with
 /// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for
-/// `operation_point_count`.
+/// `operation_point_count`, as is one whose `available_bitrate`s are not
+/// positive and strictly increasing, for `available_bitrate`.
 #[doc(alias = "rash")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Eq, Hash, Debug)]
@@ -137,6 +138,15 @@ impl RateShareEntry {
                     .ok()
                     .filter(|count| *count > 1)
                     .ok_or_else(|| Error::invalid_value("operation_point_count"))?;
+                let increasing = operation_points
+                    .iter()
+                    .try_fold(0, |previous, point| {
+                        (point.available_bitrate > previous).then_some(point.available_bitrate)
+                    })
+                    .is_some();
+                if !increasing {
+                    return Err(Error::invalid_value("available_bitrate"));
+                }
                 writer.write_u16(operation_point_count)?;
                 write_entries(writer, operation_points)?;
             }
@@ -292,15 +302,6 @@ pub enum SampleGroupDescriptionEntry {
     Other(Vec<u8>),
 }
 
-/// Returns `value` if it fits in `bits` bits, and otherwise the failure that names `field`
-fn within_bits(value: u8, bits: u32, field: &'static str) -> Result<u8, Error> {
-    if u32::from(value) >> bits == 0 {
-        Ok(value)
-    } else {
-        Err(Error::invalid_value(field))
-    }
-}
-
 impl SampleGroupDescriptionEntry {
     /// Returns the `grouping_type` of the entry, or `None` for one kept as its bytes
     pub(crate) fn grouping_type(&self) -> Option<FourCc> {
@@ -435,8 +436,16 @@ impl SampleGroupDescriptionEntry {
     ///   buffer ends inside the entry.
     pub(crate) fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         match self {
-            Self::RollRecovery(RollRecoveryEntry { roll_distance })
-            | Self::AudioPreRoll(AudioPreRollEntry { roll_distance }) => {
+            Self::RollRecovery(RollRecoveryEntry { roll_distance }) => {
+                if *roll_distance == 0 {
+                    return Err(Error::invalid_value("roll_distance"));
+                }
+                writer.write_i16(*roll_distance)
+            }
+            Self::AudioPreRoll(AudioPreRollEntry { roll_distance }) => {
+                if *roll_distance <= 0 {
+                    return Err(Error::invalid_value("roll_distance"));
+                }
                 writer.write_i16(*roll_distance)
             }
             Self::RateShare(rate_share) => rate_share.write(writer),
@@ -720,19 +729,43 @@ mod tests {
     }
 
     #[test]
-    fn values_wider_than_their_fields_are_refused_when_written() {
+    fn values_the_specification_does_not_allow_are_refused_when_written() {
+        let operation_point = |available_bitrate| RateShareOperationPoint {
+            available_bitrate,
+            target_rate_share: 10,
+        };
         let refused = [
+            SampleGroupDescriptionEntry::RollRecovery(RollRecoveryEntry { roll_distance: 0 }),
+            SampleGroupDescriptionEntry::AudioPreRoll(AudioPreRollEntry { roll_distance: -1 }),
             SampleGroupDescriptionEntry::VisualRandomAccess(VisualRandomAccessEntry {
                 num_leading_samples_known: true,
                 num_leading_samples: 0x80,
             }),
             SampleGroupDescriptionEntry::RateShare(RateShareEntry {
                 operation_points: RateShareOperationPoints::Multiple {
-                    operation_points: vec![RateShareOperationPoint::default()],
+                    operation_points: vec![operation_point(64)],
                 },
                 ..RateShareEntry::default()
             }),
-            SampleGroupDescriptionEntry::VisualEdrap(VisualEdrapEntry::default()),
+            SampleGroupDescriptionEntry::RateShare(RateShareEntry {
+                operation_points: RateShareOperationPoints::Multiple {
+                    operation_points: vec![operation_point(64), operation_point(64)],
+                },
+                ..RateShareEntry::default()
+            }),
+            SampleGroupDescriptionEntry::Sap(SapEntry {
+                dependent_flag: false,
+                sap_type: 7,
+            }),
+            SampleGroupDescriptionEntry::VisualDrap(VisualDrapEntry { drap_type: 4 }),
+            SampleGroupDescriptionEntry::VisualEdrap(VisualEdrapEntry {
+                edrap_type: 4,
+                ref_sap_or_edrap_idx_deltas: vec![1],
+            }),
+            SampleGroupDescriptionEntry::VisualEdrap(VisualEdrapEntry {
+                edrap_type: 1,
+                ref_sap_or_edrap_idx_deltas: Vec::new(),
+            }),
         ];
 
         assert_eq!(
@@ -741,8 +774,14 @@ mod tests {
                 .map(|entry| entry.write(&mut FieldWriter::new(&mut [0; 32])))
                 .collect::<Vec<_>>(),
             [
+                Err(Error::invalid_value("roll_distance")),
+                Err(Error::invalid_value("roll_distance")),
                 Err(Error::invalid_value("num_leading_samples")),
                 Err(Error::invalid_value("operation_point_count")),
+                Err(Error::invalid_value("available_bitrate")),
+                Err(Error::invalid_value("SAP_type")),
+                Err(Error::invalid_value("DRAP_type")),
+                Err(Error::invalid_value("edrap_type")),
                 Err(Error::invalid_value("num_ref_sap_or_edrap_samples_minus1"))
             ]
         );
