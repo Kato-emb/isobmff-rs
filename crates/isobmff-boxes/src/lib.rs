@@ -36,6 +36,7 @@
 
 extern crate alloc;
 
+mod box_type_argument;
 mod chunk_offset;
 mod cslg;
 mod ctts;
@@ -76,6 +77,8 @@ mod stts;
 mod styp;
 mod tkhd;
 mod trak;
+mod tref;
+mod trgr;
 mod ttyp;
 
 pub use data_entry::{
@@ -128,6 +131,8 @@ pub use subs::{
 };
 pub use tkhd::TrackHeaderBox;
 pub use trak::TrackBox;
+pub use tref::{TrackReference, TrackReferenceBox, TrackReferenceTypeBox};
+pub use trgr::{StereoVideoGroupBox, TrackGroup, TrackGroupBox, TrackGroupTypeBox};
 pub use ttyp::TrackTypeBox;
 
 /// Returns the bytes of the whole box `value` writes
