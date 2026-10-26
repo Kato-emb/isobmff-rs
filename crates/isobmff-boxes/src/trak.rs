@@ -15,9 +15,12 @@ use crate::ttyp::TrackTypeBox;
 /// Holds a single track of a presentation, with its temporal and spatial
 /// information and its media.
 ///
-/// Children of other types are kept in [`other_boxes`](Self::other_boxes),
-/// and written back after `tkhd`, `ttyp`, `edts` and `mdia`. A `ttyp` or an
-/// `edts` that does not read is kept there too, and reads back [`None`].
+/// The box writes `tkhd`, `ttyp`, `edts` and `mdia` in this order, whatever
+/// order they were read in: the order of ISO/IEC 14496-12 §7.3.4, and of
+/// Table 2 where §7.3.4 sets none. Children of other types are kept in
+/// [`other_boxes`](Self::other_boxes), and written back after them. A `ttyp`
+/// or an `edts` that does not read is kept there too, and reads back
+/// [`None`].
 #[doc(alias = "trak")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -137,6 +140,17 @@ mod tests {
         assert_eq!(
             encoded(&track()),
             [b"\0\0\0\xf1trak".as_slice(), TKHD, EDTS, MDIA, TREF].concat()
+        );
+    }
+
+    #[test]
+    fn writes_its_children_in_the_order_of_the_specification_whatever_order_they_were_read_in() {
+        let payload = [MDIA, EDTS, TKHD].concat();
+        let track = TrackBox::decode_payload(&payload).unwrap();
+
+        assert_eq!(
+            encoded(&track),
+            [b"\0\0\0\xe9trak".as_slice(), TKHD, EDTS, MDIA].concat()
         );
     }
 

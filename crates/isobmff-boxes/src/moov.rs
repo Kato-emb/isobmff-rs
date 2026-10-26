@@ -14,8 +14,9 @@ use crate::trak::TrackBox;
 ///
 /// Holds the structure data of a presentation: its header and its tracks.
 ///
-/// Children of other types are kept in [`other_boxes`](Self::other_boxes),
-/// and written back after `mvhd` and the tracks.
+/// The box writes `mvhd` and then the tracks, whatever order they were read
+/// in: the order of ISO/IEC 14496-12 §7.3.4. Children of other types are kept
+/// in [`other_boxes`](Self::other_boxes), and written back after them.
 ///
 /// The box holds one or more tracks. A box of none does not read, and writing
 /// it is refused with

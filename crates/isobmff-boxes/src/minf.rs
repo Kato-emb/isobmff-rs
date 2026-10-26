@@ -18,8 +18,12 @@ use crate::stbl::SampleTableBox;
 /// box holds is not one ISO/IEC 14496-12 defines, such as one a derived
 /// specification defines: that header is kept in
 /// [`other_boxes`](Self::other_boxes). Children of other types are kept
-/// there too, and written back after the specific media header, `dinf` and
-/// `stbl`.
+/// there too.
+///
+/// The box writes the specific media header, `dinf` and `stbl` in this order,
+/// whatever order they were read in: the order of ISO/IEC 14496-12 §7.3.4.
+/// The children kept in [`other_boxes`](Self::other_boxes) are written back
+/// after them.
 #[doc(alias = "minf")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]

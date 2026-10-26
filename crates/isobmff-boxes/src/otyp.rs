@@ -14,10 +14,11 @@ use crate::ftyp::FileTypeBox;
 /// transformation of its box structure, such as compressing its top-level
 /// boxes, made them no longer apply.
 ///
-/// Children of other types — a nested `otyp` among them — are kept in
-/// [`other_boxes`](Self::other_boxes), and written back after `ftyp` and
-/// `etyp`. An `etyp` that does not read is kept there too, and `etyp` reads
-/// back [`None`].
+/// The box writes `ftyp` and then `etyp`, whatever order they were read in:
+/// the order they take in a file, ISO/IEC 14496-12 §8.16.5. Children of other
+/// types — a nested `otyp` among them — are kept in
+/// [`other_boxes`](Self::other_boxes), and written back after them. An `etyp`
+/// that does not read is kept there too, and `etyp` reads back [`None`].
 #[doc(alias = "otyp")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
