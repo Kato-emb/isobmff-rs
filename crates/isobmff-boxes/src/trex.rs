@@ -21,8 +21,10 @@ const IS_FRAMERATE_ESTIMATE: u8 = 0x01;
 pub struct TrackExtendsBox {
     /// Whether `media timescale / default_sample_duration` estimates the rate of samples per second of the track
     ///
-    /// The estimate is informative; where it is set, `default_sample_duration`
-    /// is not zero.
+    /// The estimate is informative. Where it is set, `default_sample_duration`
+    /// is not zero: a zero duration reads, but writing it is refused with
+    /// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for
+    /// `default_sample_duration`.
     pub is_framerate_estimate: bool,
     /// `track_ID` of the track in the `MovieBox` the defaults are for
     pub track_id: u32,
@@ -61,6 +63,10 @@ impl BoxEncode for TrackExtendsBox {
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+        if self.is_framerate_estimate && self.default_sample_duration == 0 {
+            return Err(Error::invalid_value("default_sample_duration"));
+        }
+
         let flags = if self.is_framerate_estimate {
             IS_FRAMERATE_ESTIMATE
         } else {
@@ -77,7 +83,7 @@ impl BoxEncode for TrackExtendsBox {
 
 #[cfg(test)]
 mod tests {
-    use isobmff_core::{BoxDecode, Error};
+    use isobmff_core::{BoxDecode, BoxEncode, Error};
 
     use super::TrackExtendsBox;
     use crate::data_types::SampleFlags;
@@ -119,6 +125,17 @@ mod tests {
         .unwrap();
 
         assert_eq!(encoded(&read), TREX);
+    }
+
+    #[test]
+    fn a_framerate_estimate_of_zero_duration_is_refused_when_written() {
+        let mut zero_duration = track_extends();
+        zero_duration.default_sample_duration = 0;
+
+        assert_eq!(
+            zero_duration.encode(&mut [0; 32]),
+            Err(Error::invalid_value("default_sample_duration"))
+        );
     }
 
     #[test]
