@@ -38,6 +38,7 @@ extern crate alloc;
 
 mod box_type_argument;
 mod chunk_offset;
+mod csgp;
 mod cslg;
 mod ctts;
 mod data_entry;
@@ -65,8 +66,11 @@ mod padb;
 mod pdin;
 mod saio;
 mod saiz;
+mod sample_group_entry;
 mod sample_size;
+mod sbgp;
 mod sdtp;
+mod sgpd;
 mod ssrt;
 mod stbl;
 mod stdp;
@@ -94,6 +98,7 @@ mod subs;
 mod table;
 
 pub use chunk_offset::{ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant};
+pub use csgp::{CompactSampleToGroupBox, CompactSampleToGroupPattern};
 pub use cslg::CompositionToDecodeBox;
 pub use ctts::{CompositionOffsetBox, CompositionOffsetEntry};
 pub use etyp::{ExtendedTypeBox, TypeCombinationBox};
@@ -116,8 +121,17 @@ pub use padb::PaddingBitsBox;
 pub use pdin::{ProgressiveDownloadInfoBox, ProgressiveDownloadInfoEntry};
 pub use saio::SampleAuxiliaryInformationOffsetsBox;
 pub use saiz::{AuxInfoType, SampleAuxiliaryInformationSizesBox, SampleInfoSizes};
+pub use sample_group_entry::{
+    AlternativeStartupEntry, AlternativeStartupPiece, AudioPreRollEntry, CleanApertureEntry,
+    EssentialDescriptionsHierarchyEntry, PixelAspectRatioEntry, RateShareEntry,
+    RateShareOperationPoint, RateShareOperationPoints, RollRecoveryEntry,
+    SampleGroupDescriptionEntry, SampleToMetadataItemEntry, SapEntry, T35SampleGroupEntry,
+    TemporalLevelEntry, VisualDrapEntry, VisualEdrapEntry, VisualRandomAccessEntry,
+};
 pub use sample_size::{CompactSampleSizeBox, SampleSizeBox, SampleSizeVariant, SampleSizes};
+pub use sbgp::{SampleToGroupBox, SampleToGroupEntry};
 pub use sdtp::{SampleDependencyTypeBox, SampleDependencyTypeEntry};
+pub use sgpd::SampleGroupDescriptionBox;
 pub use ssrt::{SubSampleDescription, SubSampleReferenceTableBox};
 pub use stbl::SampleTableBox;
 pub use stdp::DegradationPriorityBox;

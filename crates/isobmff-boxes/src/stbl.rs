@@ -8,13 +8,16 @@ use isobmff_core::{
 };
 
 use crate::chunk_offset::ChunkOffsetVariant;
+use crate::csgp::CompactSampleToGroupBox;
 use crate::cslg::CompositionToDecodeBox;
 use crate::ctts::CompositionOffsetBox;
 use crate::padb::PaddingBitsBox;
 use crate::saio::SampleAuxiliaryInformationOffsetsBox;
 use crate::saiz::SampleAuxiliaryInformationSizesBox;
 use crate::sample_size::SampleSizeVariant;
+use crate::sbgp::SampleToGroupBox;
 use crate::sdtp::SampleDependencyTypeBox;
+use crate::sgpd::SampleGroupDescriptionBox;
 use crate::ssrt::SubSampleReferenceTableBox;
 use crate::stdp::DegradationPriorityBox;
 use crate::stsc::SampleToChunkBox;
@@ -43,8 +46,8 @@ use crate::subs::SubSampleInformationBox;
 ///
 /// The box writes the children it holds a field for in the order of its
 /// fields, whatever order they were read in: the order of ISO/IEC 14496-12
-/// §7.3.4, and of Table 2 where §7.3.4 sets none. `ssrt`, which Table 2 does
-/// not list, is written right after `subs`.
+/// §7.3.4, and of Table 2 where §7.3.4 sets none. `csgp` and `ssrt`, which
+/// Table 2 does not list, are written right after `sbgp` and `subs`.
 #[doc(alias = "stbl")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -71,6 +74,12 @@ pub struct SampleTableBox {
     pub stdp: Option<DegradationPriorityBox>,
     /// Dependencies of each sample
     pub sdtp: Option<SampleDependencyTypeBox>,
+    /// Sample group of each sample, one box for each sample grouping
+    pub sbgp: Vec<SampleToGroupBox>,
+    /// Sample group of each sample in repeating patterns, one box for each sample grouping
+    pub csgp: Vec<CompactSampleToGroupBox>,
+    /// Sample group description entries, one box for each sample grouping
+    pub sgpd: Vec<SampleGroupDescriptionBox>,
     /// Sub-samples of the samples, one box for each value of `flags`
     pub subs: Vec<SubSampleInformationBox>,
     /// Properties of sub-samples that the `subs` of the same `flags` refer to
@@ -103,6 +112,9 @@ impl BoxDecode for SampleTableBox {
             padb: children.take_zero_or_one_if_decoded()?,
             stdp: children.take_zero_or_one_if_decoded()?,
             sdtp: children.take_zero_or_one_if_decoded()?,
+            sbgp: children.take_zero_or_more_if_decoded(),
+            csgp: children.take_zero_or_more_if_decoded(),
+            sgpd: children.take_zero_or_more_if_decoded(),
             subs: children.take_zero_or_more_if_decoded(),
             ssrt: children.take_zero_or_more_if_decoded(),
             saiz: children.take_zero_or_more_if_decoded(),
@@ -143,6 +155,9 @@ impl BoxEncode for SampleTableBox {
             self.sdtp.as_ref().map_or(0, BoxEncode::encoded_len),
         ]
         .into_iter()
+        .chain(self.sbgp.iter().map(BoxEncode::encoded_len))
+        .chain(self.csgp.iter().map(BoxEncode::encoded_len))
+        .chain(self.sgpd.iter().map(BoxEncode::encoded_len))
         .chain(self.subs.iter().map(BoxEncode::encoded_len))
         .chain(self.ssrt.iter().map(BoxEncode::encoded_len))
         .chain(self.saiz.iter().map(BoxEncode::encoded_len))
@@ -208,6 +223,15 @@ impl BoxEncode for SampleTableBox {
         }
         if let Some(sdtp) = &self.sdtp {
             rest = sdtp.encode(rest)?;
+        }
+        for sbgp in &self.sbgp {
+            rest = sbgp.encode(rest)?;
+        }
+        for csgp in &self.csgp {
+            rest = csgp.encode(rest)?;
+        }
+        for sgpd in &self.sgpd {
+            rest = sgpd.encode(rest)?;
         }
         for subs in &self.subs {
             rest = subs.encode(rest)?;
@@ -323,6 +347,22 @@ mod tests {
         assert_eq!(
             encoded(&sample_table),
             [b"\0\0\0\x78stbl".as_slice(), STTS, STSC, STSZ, STCO, STSS].concat()
+        );
+    }
+
+    #[test]
+    fn writes_its_sample_groups_between_sdtp_and_subs_whatever_order_they_were_read_in() {
+        let sdtp = b"\0\0\0\x0csdtp\0\0\0\0".as_slice();
+        let sbgp = b"\0\0\0\x14sbgp\0\0\0\0roll\0\0\0\0".as_slice();
+        let csgp = b"\0\0\0\x14csgp\0\0\0\x15roll\0\0\0\0".as_slice();
+        let sgpd = b"\0\0\0\x18sgpd\x01\0\0\0roll\0\0\0\x02\0\0\0\0".as_slice();
+        let subs = b"\0\0\0\x10subs\0\0\0\0\0\0\0\0".as_slice();
+        let sample_table =
+            SampleTableBox::decode_payload(&[subs, sgpd, csgp, sbgp, sdtp].concat()).unwrap();
+
+        assert_eq!(
+            encoded(&sample_table),
+            [b"\0\0\0\x64stbl".as_slice(), sdtp, sbgp, csgp, sgpd, subs].concat()
         );
     }
 
