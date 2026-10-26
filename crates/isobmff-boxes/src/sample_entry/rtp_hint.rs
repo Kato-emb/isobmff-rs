@@ -8,16 +8,13 @@ use isobmff_core::{
 use crate::btrt::BitRateBox;
 use crate::hint_entry_boxes::{SequenceOffsetBox, TimeOffsetBox, TimescaleEntryBox};
 use crate::sample_entry::{
-    SampleEntry, children_len, encode_children, encode_optional, from_class, of_format,
-    split_children,
+    HINT_TRACK_VERSION, SampleEntry, children_len, encode_children, encode_optional, from_class,
+    of_format, split_children,
 };
 use crate::srpp::SrtpProcessBox;
 
 /// Length of the fields the RTP classes lay out after `data_reference_index`: `hinttrackversion`, `highestcompatibleversion` and `maxpacketsize`
 pub(super) const FIELDS_LEN: u64 = 2 + 2 + 4;
-
-/// `hinttrackversion` and `highestcompatibleversion` of the 2026 edition
-pub(super) const HINT_TRACK_VERSION: u16 = 1;
 
 /// Fields every RTP class lays out after `data_reference_index`, and the children after them, as [`read_entry`] reads them
 pub(super) struct RtpEntry<'payload> {

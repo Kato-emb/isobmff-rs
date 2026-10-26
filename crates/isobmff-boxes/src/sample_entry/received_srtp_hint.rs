@@ -7,11 +7,9 @@ use crate::hint_entry_boxes::{
     ReceivedCryptoContextIdBox, ReceivedSsrcBox, RolloverCounterBox, TimeOffsetBox,
     TimescaleEntryBox, TimestampSynchronyBox,
 };
-use crate::sample_entry::rtp_hint::{
-    FIELDS_LEN, HINT_TRACK_VERSION, RtpEntry, read_entry, write_fields,
-};
+use crate::sample_entry::rtp_hint::{FIELDS_LEN, RtpEntry, read_entry, write_fields};
 use crate::sample_entry::{
-    SampleEntry, children_len, encode_children, encode_optional, from_class,
+    HINT_TRACK_VERSION, SampleEntry, children_len, encode_children, encode_optional, from_class,
 };
 use crate::srpp::SrtpProcessBox;
 

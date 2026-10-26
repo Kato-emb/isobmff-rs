@@ -66,6 +66,8 @@ mod edts;
 mod elng;
 mod elst;
 mod etyp;
+mod fd_sample;
+mod fdpa;
 mod fiin;
 mod fpar;
 mod free;
@@ -112,6 +114,7 @@ mod mime;
 mod minf;
 mod moof;
 mod moov;
+mod mpeg2ts_hint;
 mod mvex;
 mod mvhd;
 mod otyp;
@@ -220,6 +223,8 @@ pub use csgp::{CompactSampleToGroupBox, CompactSampleToGroupPattern};
 pub use cslg::CompositionToDecodeBox;
 pub use ctts::{CompositionOffsetBox, CompositionOffsetEntry};
 pub use etyp::{ExtendedTypeBox, TypeCombinationBox};
+pub use fd_sample::{ExtraDataBox, FdSample, FecInformationBox};
+pub use fdpa::{FdConstructor, FdPacketBox, LctHeaderExtension, LctHeaderTemplate};
 pub use fiin::{FdItemInformationBox, PartitionEntry};
 pub use fpar::{FilePartitionBox, FilePartitionEntry};
 pub use free::{Free, FreeSpaceBox, FreeType, Skip};
@@ -280,6 +285,7 @@ pub use mime::MimeBox;
 pub use minf::MediaInformationBox;
 pub use moof::MovieFragmentBox;
 pub use moov::MovieBox;
+pub use mpeg2ts_hint::{InitialSampleTimeBox, OdBox, PatBox, PmtBox, TsTimingBox};
 pub use mvex::MovieExtendsBox;
 pub use mvhd::MovieHeaderBox;
 pub use otyp::OriginalFileTypeBox;
@@ -297,11 +303,13 @@ pub use saio::SampleAuxiliaryInformationOffsetsBox;
 pub use saiz::{AuxInfoType, SampleAuxiliaryInformationSizesBox, SampleInfoSizes};
 pub use sample_entry::{
     AudioSampleEntry, AudioSampleEntryV1, AudioSampleEntryVariant, BoxedMetadataSampleEntry,
-    FontSampleEntry, HapticSampleEntry, ProtectedRtpReceptionHintSampleEntry,
-    ReceivedRtpHintSampleEntry, ReceivedSrtpHintSampleEntry, RtcpReceptionHintSampleEntry,
-    RtpHintSampleEntry, SampleEntry, SimpleTextSampleEntry, SrtcpReceptionHintSampleEntry,
-    SrtpHintSampleEntry, TextMetaDataSampleEntry, TextSubtitleSampleEntry, UriMetaSampleEntry,
-    VisualSampleEntry, VolumetricVisualSampleEntry, XmlMetaDataSampleEntry, XmlSubtitleSampleEntry,
+    FdHintSampleEntry, FontSampleEntry, HapticSampleEntry, Mpeg2TsReceptionSampleEntry,
+    Mpeg2TsServerSampleEntry, ProtectedMpeg2TransportStreamSampleEntry,
+    ProtectedRtpReceptionHintSampleEntry, ReceivedRtpHintSampleEntry, ReceivedSrtpHintSampleEntry,
+    RtcpReceptionHintSampleEntry, RtpHintSampleEntry, SampleEntry, SimpleTextSampleEntry,
+    SrtcpReceptionHintSampleEntry, SrtpHintSampleEntry, TextMetaDataSampleEntry,
+    TextSubtitleSampleEntry, UriMetaSampleEntry, VisualSampleEntry, VolumetricVisualSampleEntry,
+    XmlMetaDataSampleEntry, XmlSubtitleSampleEntry,
 };
 pub use sample_group_entry::{
     AlternativeStartupEntry, AlternativeStartupPiece, AudioPreRollEntry, CleanApertureEntry,

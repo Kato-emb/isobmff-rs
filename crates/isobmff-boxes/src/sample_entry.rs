@@ -2,9 +2,12 @@
 
 mod audio;
 mod audio_v1;
+mod fd_hint;
 mod font;
 mod haptic;
 mod metadata;
+mod mpeg2ts_hint;
+mod protected_mpeg2ts_hint;
 mod received_rtp_hint;
 mod received_srtp_hint;
 mod rtcp_hint;
@@ -29,11 +32,14 @@ use crate::sinf::ProtectionSchemeInfoBox;
 
 pub use audio::{AudioSampleEntry, AudioSampleEntryVariant};
 pub use audio_v1::AudioSampleEntryV1;
+pub use fd_hint::FdHintSampleEntry;
 pub use font::FontSampleEntry;
 pub use haptic::HapticSampleEntry;
 pub use metadata::{
     BoxedMetadataSampleEntry, TextMetaDataSampleEntry, UriMetaSampleEntry, XmlMetaDataSampleEntry,
 };
+pub use mpeg2ts_hint::{Mpeg2TsReceptionSampleEntry, Mpeg2TsServerSampleEntry};
+pub use protected_mpeg2ts_hint::ProtectedMpeg2TransportStreamSampleEntry;
 pub use received_rtp_hint::{ProtectedRtpReceptionHintSampleEntry, ReceivedRtpHintSampleEntry};
 pub use received_srtp_hint::ReceivedSrtpHintSampleEntry;
 pub use rtcp_hint::{RtcpReceptionHintSampleEntry, SrtcpReceptionHintSampleEntry};
@@ -42,6 +48,9 @@ pub use subtitle::{TextSubtitleSampleEntry, XmlSubtitleSampleEntry};
 pub use text::SimpleTextSampleEntry;
 pub use visual::VisualSampleEntry;
 pub use volumetric::VolumetricVisualSampleEntry;
+
+/// `hinttrackversion` and `highestcompatibleversion` of the hint sample entries of the 2026 edition
+const HINT_TRACK_VERSION: u16 = 1;
 
 /// [`SampleEntry`], ISO/IEC 14496-12 §8.5.2
 ///
@@ -70,8 +79,11 @@ pub use volumetric::VolumetricVisualSampleEntry;
 ///   (`srtp`), [`ReceivedRtpHintSampleEntry`] (`rrtp`),
 ///   [`ReceivedSrtpHintSampleEntry`] (`rsrp`),
 ///   [`ProtectedRtpReceptionHintSampleEntry`] (`prtp`),
-///   [`RtcpReceptionHintSampleEntry`] (`rtcp`) and
-///   [`SrtcpReceptionHintSampleEntry`] (`stcp`).
+///   [`RtcpReceptionHintSampleEntry`] (`rtcp`),
+///   [`SrtcpReceptionHintSampleEntry`] (`stcp`), [`FdHintSampleEntry`]
+///   (`fdp `), [`Mpeg2TsReceptionSampleEntry`] (`rm2t`),
+///   [`Mpeg2TsServerSampleEntry`] (`sm2t`) and
+///   [`ProtectedMpeg2TransportStreamSampleEntry`] (`pm2t`).
 ///
 /// A class of a fixed format reads only an entry of that format. A class
 /// that takes a coding name, such as [`VisualSampleEntry`], reads an entry of
