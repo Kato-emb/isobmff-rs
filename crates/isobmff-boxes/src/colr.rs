@@ -54,8 +54,10 @@ pub enum ColourInformationBox {
     },
     /// Colour information of a `colour_type` ISO/IEC 14496-12 does not lay out, which a reader may ignore
     ///
-    /// A `colour_type` of `nclx`, `rICC` or `prof` here is written as given,
-    /// and reads back as the variant of that type.
+    /// A `colour_type` of `nclx`, `rICC` or `prof`, which a variant of its own
+    /// holds, is refused here with
+    /// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for
+    /// `colour_type` when the box is written.
     Other {
         /// Type of the colour information
         colour_type: FourCc,
@@ -124,6 +126,9 @@ impl BoxEncode for ColourInformationBox {
             }
             Self::RestrictedIccProfile { icc_profile } => (RICC, icc_profile),
             Self::UnrestrictedIccProfile { icc_profile } => (PROF, icc_profile),
+            Self::Other { colour_type, .. } if matches!(*colour_type, NCLX | RICC | PROF) => {
+                return Err(Error::invalid_value("colour_type"));
+            }
             Self::Other {
                 colour_type,
                 remaining_data,
@@ -138,7 +143,7 @@ impl BoxEncode for ColourInformationBox {
 mod tests {
     use alloc::vec;
 
-    use isobmff_core::{BoxDecode, Error, FourCc};
+    use isobmff_core::{BoxDecode, BoxEncode, Error, FourCc};
 
     use super::ColourInformationBox;
     use crate::encoded;
@@ -202,6 +207,19 @@ mod tests {
             ColourInformationBox::decode(b"\0\0\0\x13colrnclx\0\x01\0\x01\0\x01\x7f").unwrap();
 
         assert_eq!(encoded(&read), b"\0\0\0\x13colrnclx\0\x01\0\x01\0\x01\0");
+    }
+
+    #[test]
+    fn colour_information_of_a_type_it_lays_out_held_as_bytes_is_refused_when_written() {
+        let other = ColourInformationBox::Other {
+            colour_type: FourCc::new(*b"nclx"),
+            remaining_data: vec![],
+        };
+
+        assert_eq!(
+            other.encode(&mut [0; 12]),
+            Err(Error::invalid_value("colour_type"))
+        );
     }
 
     #[test]

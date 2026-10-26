@@ -44,6 +44,31 @@ fn base_channel_count(chnl: Option<&ChannelLayout>, channel_count: u16) -> u16 {
     }
 }
 
+/// Checks that each of `dmix`, of an entry of `channel_count` channels holding `chnl`, holds the coefficients of the `baseChannelCount` the entry reads it with
+///
+/// # Errors
+///
+/// * [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for
+///   `baseChannelCount`: a `dmix` holds the coefficients of another count,
+///   which would not read back.
+pub(super) fn check_downmixes(
+    chnl: Option<&ChannelLayout>,
+    channel_count: u16,
+    dmix: &[DownMixInstructions],
+) -> Result<(), Error> {
+    let base_channel_count = usize::from(base_channel_count(chnl, channel_count));
+    for instructions in dmix {
+        if instructions
+            .base_channel_count()?
+            .is_some_and(|held| held != base_channel_count)
+        {
+            return Err(Error::invalid_value("baseChannelCount"));
+        }
+    }
+
+    Ok(())
+}
+
 /// Takes the `chnl` and the `dmix` boxes out of `children` of an entry of `channel_count` channels, the `dmix` boxes read with the `baseChannelCount` the `chnl` gives
 ///
 /// # Errors
@@ -285,8 +310,12 @@ impl AudioSampleEntry {
     ///
     /// # Errors
     ///
+    /// * [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for
+    ///   `baseChannelCount`: a `dmix` holds the coefficients of another
+    ///   `baseChannelCount` than the entry gives.
     /// * The failures of writing a child.
     fn encode_remaining(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+        check_downmixes(self.chnl.as_ref(), self.channel_count, &self.dmix)?;
         let fields = Fields {
             channel_count: self.channel_count,
             sample_size: self.sample_size,
@@ -534,6 +563,31 @@ mod tests {
         assert_eq!(
             AudioSampleEntry::try_from(&sample_entry(FIELDS, &[CHNL, DMIX_OF_2])),
             Err(Error::truncated_payload(11, 10))
+        );
+    }
+
+    #[test]
+    fn downmixes_of_another_base_channel_count_than_the_entry_gives_are_refused_when_written() {
+        let audio = AudioSampleEntry {
+            channel_count: 3,
+            dmix: vec![dmix(1)],
+            ..AudioSampleEntry::default()
+        };
+        let audio_v1 = AudioSampleEntryV1 {
+            chnl: chnl(),
+            dmix: vec![dmix(2)],
+            ..AudioSampleEntryV1::default()
+        };
+
+        assert_eq!(
+            (
+                SampleEntry::try_from(&audio),
+                SampleEntry::try_from(&audio_v1)
+            ),
+            (
+                Err(Error::invalid_value("baseChannelCount")),
+                Err(Error::invalid_value("baseChannelCount"))
+            )
         );
     }
 

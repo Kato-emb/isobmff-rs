@@ -7,7 +7,7 @@ use isobmff_core::{BoxEncode, Error, FieldWriter, FourCc, OtherBoxes, U16F16};
 use crate::btrt::BitRateBox;
 use crate::chnl::ChannelLayout;
 use crate::dmix::DownMixInstructions;
-use crate::sample_entry::audio::{Fields, take_channel_boxes};
+use crate::sample_entry::audio::{Fields, check_downmixes, take_channel_boxes};
 use crate::sample_entry::{
     SampleEntry, children_len, encode_children, encode_optional, from_class,
 };
@@ -150,8 +150,12 @@ impl AudioSampleEntryV1 {
     ///
     /// # Errors
     ///
+    /// * [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for
+    ///   `baseChannelCount`: a `dmix` holds the coefficients of another
+    ///   `baseChannelCount` than the entry gives.
     /// * The failures of writing a child.
     fn encode_remaining(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+        check_downmixes(self.chnl.as_ref(), self.channel_count, &self.dmix)?;
         let fields = Fields {
             channel_count: self.channel_count,
             sample_size: self.sample_size,

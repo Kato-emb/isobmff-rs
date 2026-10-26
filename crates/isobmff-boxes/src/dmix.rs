@@ -99,7 +99,9 @@ pub struct DownMixInstruction {
 /// downmix of one box holds a multiple of its `target_channel_count` of
 /// them, the same multiple for all: a box that holds otherwise is refused
 /// with [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for
-/// `baseChannelCount` when it is written.
+/// `baseChannelCount` when it is written. The sample entry holding the box
+/// refuses it so too when that multiple is not the count it reads the box
+/// with.
 ///
 /// A field wider than its bits, a version 0 holding other than one downmix,
 /// and a version 1 holding more than 127, are refused with
@@ -207,6 +209,36 @@ impl DownMixInstructions {
     }
 }
 
+impl DownMixInstructions {
+    /// Returns the `baseChannelCount` the coefficients the box holds are of, or [`None`] where no downmix holding coefficients tells it
+    ///
+    /// # Errors
+    ///
+    /// * [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for
+    ///   `baseChannelCount`: a downmix holds a number of coefficients that is
+    ///   no multiple of its `target_channel_count`, or two downmixes hold
+    ///   those of two counts.
+    pub(crate) fn base_channel_count(&self) -> Result<Option<usize>, Error> {
+        let mut base_channel_count = None;
+        for instruction in &self.downmix_instructions {
+            let Some(coefficients) = &instruction.downmix_coefficients else {
+                continue;
+            };
+            let (values, ..) = coefficients.layout();
+            let target_channel_count = usize::from(instruction.target_channel_count);
+            match values.len().checked_div(target_channel_count) {
+                Some(per_target)
+                    if per_target.checked_mul(target_channel_count) == Some(values.len())
+                        && *base_channel_count.get_or_insert(per_target) == per_target => {}
+                None if values.is_empty() => {}
+                _ => return Err(Error::invalid_value("baseChannelCount")),
+            }
+        }
+
+        Ok(base_channel_count)
+    }
+}
+
 /// Writes `coefficients`, `width` bits each after the four bits of `offset` if any, and pads them to a byte with the bits of `padding`
 ///
 /// # Errors
@@ -273,7 +305,7 @@ impl BoxEncode for DownMixInstructions {
                 }
             })
             .ok_or(Error::invalid_value("downmix_instructions_count"))?;
-        let mut base_channel_count = None;
+        self.base_channel_count()?;
         for instruction in &self.downmix_instructions {
             if instruction.target_channel_count > SEVEN_BITS {
                 return Err(Error::invalid_value("targetChannelCount"));
@@ -290,14 +322,6 @@ impl BoxEncode for DownMixInstructions {
                 || values.iter().any(|value| value >> width != 0)
             {
                 return Err(Error::invalid_value(field));
-            }
-            let target_channel_count = usize::from(instruction.target_channel_count);
-            match values.len().checked_div(target_channel_count) {
-                Some(per_target)
-                    if per_target.checked_mul(target_channel_count) == Some(values.len())
-                        && *base_channel_count.get_or_insert(per_target) == per_target => {}
-                None if values.is_empty() => {}
-                _ => return Err(Error::invalid_value("baseChannelCount")),
             }
         }
 
