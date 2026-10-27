@@ -28,6 +28,11 @@ allow = [
 confidence-threshold = 0.9
 # The list is the policy, not an inventory of what the graph holds today.
 unused-allowed-license = "allow"
+# libFuzzer, which this crate bundles, is NCSA-licensed. Only the fuzz targets
+# depend on it, and they are never distributed. CI checks their graph against
+# this file as well, and the workspace's graph never holds the crate.
+exceptions = [{ allow = ["NCSA"], crate = "libfuzzer-sys" }]
+unused-license-exception = "allow"
 
 [bans]
 wildcards = "deny"

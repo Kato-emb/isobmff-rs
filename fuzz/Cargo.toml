@@ -1,0 +1,26 @@
+[package]
+name = "isobmff-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Kept out of the workspace above: the targets need a nightly toolchain and
+# libFuzzer, neither of which the library itself takes on. Without this table
+# cargo walks up to the workspace manifest and refuses a package it does not
+# list.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+isobmff = { path = "../crates/isobmff" }
+libfuzzer-sys = "0.4.13"
+
+[[bin]]
+name = "framing"
+path = "fuzz_targets/framing.rs"
+test = false
+doc = false
+bench = false
