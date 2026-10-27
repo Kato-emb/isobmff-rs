@@ -73,10 +73,10 @@ mod tests {
             }
             if let Some(byte_range) = skipped {
                 assert_eq!(
-                    reader.wanted_input().map(|wanted| wanted.offset()),
-                    byte_range
-                        .length()
-                        .map(|length| byte_range.offset().saturating_add(length)),
+                    reader.wanted_input(),
+                    byte_range.length().map(|length| {
+                        ByteRange::new(byte_range.offset().saturating_add(length), None)
+                    }),
                     "the reader wants the file offset past the box it skips"
                 );
             }

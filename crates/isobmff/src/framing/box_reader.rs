@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use isobmff_core::{BoxHeader, ErrorKind, RawBox};
+use isobmff_core::{BoxHeader, ErrorKind};
 
 use crate::byte_range::ByteRange;
 use crate::error::DemuxError;
@@ -24,7 +24,7 @@ const SHORTEST_HEADER: u64 = 8;
 ///
 /// Each box opens with [`BoxEvent::Header`], whose [`OpenBox`] the caller
 /// answers with what to do with the payload: [`gather`](OpenBox::gather) it
-/// into one [`RawBox`], [`stream`](OpenBox::stream) it as the pieces of input
+/// into one [`RawBox`](crate::RawBox), [`stream`](OpenBox::stream) it as the pieces of input
 /// it arrives in, or [`skip`](OpenBox::skip) it. The reader takes no more
 /// input until it has the answer. Each box closes with [`BoxEvent::End`].
 ///
@@ -204,9 +204,9 @@ impl BoxReader {
         Ok(BoxEvents::new(Some(self), input))
     }
 
-    /// Ends the file at the offset the reader wants, and returns the events that closes
+    /// Ends the file at the offset the reader wants, and returns the events that close the box being read
     ///
-    /// The events close the box being read: a [`BoxEvent::End`], after a
+    /// The events are a [`BoxEvent::End`], after a
     /// [`BoxEvent::Gathered`] when the box is gathered. There are none when the
     /// file ends between boxes. A box whose size runs to the end of the file
     /// ends here, and a skipped box ends where its header says. The reader
@@ -251,12 +251,6 @@ impl BoxReader {
         end.map(|end| end.saturating_sub(self.position))
     }
 
-    fn raw_box(&self) -> Result<RawBox<'_>, DemuxError> {
-        RawBox::split_first(&self.gathered)
-            .map(|(raw_box, _)| raw_box)
-            .map_err(|error| DemuxError::Box { error })
-    }
-
     /// Takes from the front of `input` as far as the next event, and returns it
     fn step<'a>(&mut self, input: &mut &'a [u8]) -> Step<'a> {
         match self.progress {
@@ -280,6 +274,9 @@ impl BoxReader {
         if !started {
             self.gathered.clear();
         }
+        // Why not bound the turns: each takes at least a byte or returns, and
+        // `BoxHeader::decode` asks only for more than it was given, so `needed`
+        // stays above what is read until the header is whole.
         loop {
             let read = to_u64(self.gathered.len());
             let Some(bytes) = self.take(input, Some(needed.saturating_sub(read))) else {

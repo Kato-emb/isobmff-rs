@@ -44,6 +44,9 @@ impl OpenBox<'_> {
     /// The length is `None` for a box whose size runs to the end of the file.
     #[must_use]
     pub fn byte_range(&self) -> ByteRange {
+        // Why not keep the offset of the box apart: while a box is open, the
+        // buffer holds its header and nothing else, so the box starts that many
+        // bytes before the reader's position.
         let header_bytes = to_u64(self.reader.gathered.len());
         ByteRange::new(
             self.reader.position.saturating_sub(header_bytes),
@@ -143,7 +146,10 @@ impl<'a> Iterator for BoxEvents<'a> {
             Step::Gathered => {
                 self.end_queued = true;
                 let reader: &'a BoxReader = reader;
-                Some(reader.raw_box().map(BoxEvent::Gathered))
+                let gathered = RawBox::split_first(&reader.gathered)
+                    .map(|(raw_box, _)| BoxEvent::Gathered(raw_box))
+                    .map_err(|error| DemuxError::Box { error });
+                Some(gathered)
             }
             Step::Failed(failure) => Some(Err(failure)),
         }

@@ -74,9 +74,7 @@ impl BoxWriter {
     /// Writes the box `header` introduces, with the payload laid out in the pieces `payload` gives, and returns where it lies in the file
     ///
     /// The bytes of the box are output as one run, ready for
-    /// [`poll_output`](Self::poll_output). The pieces are walked once for
-    /// their lengths, which are checked before anything is copied, and once
-    /// more to copy them.
+    /// [`poll_output`](Self::poll_output).
     ///
     /// # Errors
     ///
@@ -104,6 +102,10 @@ impl BoxWriter {
             State::Finished => return Err(MuxError::AlreadyFinished),
         }
         let pieces = payload.into_iter();
+        // Why not size the buffer from the length the header declares: a
+        // header declaring more than is offered would size an allocation the
+        // check below then refuses. The pieces are walked for their lengths
+        // first, and copied only once those match.
         let payload_len = pieces
             .clone()
             .map(<[u8]>::len)

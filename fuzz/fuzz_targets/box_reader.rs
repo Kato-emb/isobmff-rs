@@ -9,8 +9,7 @@
 //!    the same failure or none, as the file given whole
 //!
 //! A read that ends without failure reads the boxes [`Boxes`] frames the file
-//! into, and at most one more: a skipped box that the file ends inside, as
-//! the reader never sees the bytes it skips.
+//! into, and at most one more: a skipped box that the file ends inside.
 
 #![no_main]
 
@@ -20,13 +19,10 @@ use isobmff::framing::{BoxEvent, BoxReader};
 use isobmff::{BoxHeader, Boxes, ByteRange, DemuxError};
 use libfuzzer_sys::fuzz_target;
 
-/// Lengths the file is cut into, each cut taking its lengths in turn
-///
-/// A long piece follows the short ones, so that an input of megabytes is read
-/// in few calls while its cuts still land inside headers and payloads alike.
+/// Lengths the file is cut into, each cut taking its lengths in turn, short ones followed by a long one
 const CUTS: [&[usize]; 2] = [&[1, 4096], &[3, 7, 64, 1021]];
 
-/// Limit a gathered payload is held to, small enough that some inputs reach it
+/// Limit a gathered payload is held to
 const GATHER_LIMIT: u64 = 1024;
 
 /// What a caller answers a header with
@@ -38,7 +34,7 @@ enum Answer {
 }
 
 /// Event as a caller records it, a streamed payload as the range of the input it lies in
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 enum Recorded {
     Header(BoxHeader, ByteRange, Answer),
     Payload(Range<usize>),
@@ -47,16 +43,15 @@ enum Recorded {
 }
 
 fuzz_target!(|bytes: &[u8]| {
-    let (whole, ending) = read(bytes, &[usize::MAX]);
+    let mut whole = Vec::new();
+    let ending = read(bytes, &[usize::MAX], &mut whole);
     for piece_lens in CUTS {
-        let (pieces, pieces_ending) = read(bytes, piece_lens);
+        let mut pieces = Vec::new();
+        let pieces_ending = read(bytes, piece_lens, &mut pieces);
         assert_eq!(
-            pieces, whole,
+            (pieces, pieces_ending),
+            (whole.clone(), ending),
             "pieces of {piece_lens:?} read otherwise than the whole file"
-        );
-        assert_eq!(
-            pieces_ending, ending,
-            "pieces of {piece_lens:?} end otherwise than the whole file"
         );
     }
 
@@ -87,14 +82,8 @@ fuzz_target!(|bytes: &[u8]| {
     }
 });
 
-/// Reads `bytes` from wherever the reader wants them, in pieces of `piece_lens` in turn, and returns the events and how the read ended
-fn read(bytes: &[u8], piece_lens: &[usize]) -> (Vec<Recorded>, Result<(), DemuxError>) {
-    let mut recorded = Vec::new();
-    let ending = drive(bytes, piece_lens, &mut recorded);
-    (recorded, ending)
-}
-
-fn drive(
+/// Reads `bytes` from wherever the reader wants them, in pieces of `piece_lens` in turn, into `recorded`, and returns how the read ended
+fn read(
     bytes: &[u8],
     piece_lens: &[usize],
     recorded: &mut Vec<Recorded>,
@@ -141,7 +130,7 @@ fn record(
         BoxEvent::Payload(piece) => {
             // Why not copy the piece: a payload is borrowed from the input, so
             // where it lies in the input says both what it holds and that it
-            // was not copied, at no cost for megabytes of payload.
+            // was not copied, without the cost of copying it.
             let start = (piece.as_ptr() as usize) - (bytes.as_ptr() as usize);
             let range = start..start + piece.len();
             match recorded.last_mut() {
