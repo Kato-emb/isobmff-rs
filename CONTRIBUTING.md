@@ -15,6 +15,22 @@ Every change to `main` goes through a pull request. Name a branch
 The jobs of `.github/workflows/ci.yml` are the checks a pull request must
 pass; each runs a command you can run locally before opening one.
 
+### Fuzzing
+
+The fuzz targets in `fuzz/` need [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz)
+and the nightly the `fuzz` job pins. The conformance files are their seeds:
+
+```sh
+scripts/fetch-conformance.sh target/conformance
+mkdir -p target/fuzz-seeds fuzz/corpus/framing
+cp target/conformance/*.mp4 target/fuzz-seeds/
+cargo +nightly-2026-10-13 fuzz run framing --target x86_64-unknown-linux-gnu \
+  fuzz/corpus/framing target/fuzz-seeds
+```
+
+A failing input lands in `fuzz/artifacts/`. Shrink it with `cargo fuzz tmin`,
+and fix the bug with a unit test that holds the shrunk bytes.
+
 ## Pull request titles
 
 This repository **squash-merges**: a merged pull request becomes one commit on

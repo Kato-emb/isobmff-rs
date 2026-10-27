@@ -31,6 +31,7 @@ jobs:
           toolchain: stable
           components: rustfmt
       - run: cargo fmt --all --check
+      - run: cargo fmt --manifest-path fuzz/Cargo.toml --check
       - uses: crate-ci/typos@7f9d0819ca1c008ade73f4b41fa9d258d48f605b # v1.51.1
       # A TODO/FIXME must carry an issue link or owner: `TODO(#12):`, `TODO(name):`, or a URL.
       - name: Forbid bare TODO/FIXME markers
@@ -57,6 +58,9 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo hack clippy --workspace --feature-powerset --all-targets -- -D warnings
+      # The fuzz targets are a workspace of their own, which the run above never
+      # reaches. They build on stable; only running them needs a nightly.
+      - run: cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
 
   # The tests run instrumented, so one run both gates and measures. Coverage is
   # reported, never gated on: a threshold rewards tests that execute lines
@@ -221,6 +225,42 @@ jobs:
           key: conformance-${{ hashFiles('scripts/fetch-conformance.sh') }}
       - run: ISOBMFF_CONFORMANCE_DIR="$RUNNER_TEMP/conformance" ISOBMFF_FFPROBE="$RUNNER_TEMP/ffprobe" cargo nextest run -p isobmff-core -p isobmff-boxes --run-ignored only
 
+  # A fixed number of runs of each fuzz target, seeded with the conformance
+  # files. A failure is a bug, so it blocks the merge. The nightly
+  # is pinned so that a regression in it cannot block a change of ours; it is
+  # raised by hand.
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: nightly-2026-10-13
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-fuzz
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: fuzz
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - id: files
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/conformance
+          key: conformance-${{ hashFiles('scripts/fetch-conformance.sh') }}
+      - if: steps.files.outputs.cache-hit != 'true'
+        run: scripts/fetch-conformance.sh "$RUNNER_TEMP/conformance"
+      # The seeds are the files alone: GPAC's reports beside them are not boxes.
+      # The first directory takes what a run adds, and is never kept.
+      - run: |
+          mkdir -p "$RUNNER_TEMP/seeds" "$RUNNER_TEMP/corpus"
+          cp "$RUNNER_TEMP"/conformance/*.mp4 "$RUNNER_TEMP/seeds/"
+      # The target is spelled out: the cargo-fuzz this action installs is a
+      # static musl binary, and defaults to the triple it was built for.
+      - run: cargo fuzz run framing --target x86_64-unknown-linux-gnu "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/seeds" -- -runs=500000 -seed=1
+
   # Advisories, license policy, banned crates and sources, per deny.toml.
   deny:
     runs-on: ubuntu-latest
@@ -232,13 +272,16 @@ jobs:
         with:
           tool: cargo-deny
       - run: cargo deny check
+      # The fuzz targets are a workspace of their own, so the check above never
+      # sees libfuzzer-sys or what it pulls in.
+      - run: cargo deny --manifest-path fuzz/Cargo.toml check
 
   # The one check the main ruleset requires besides the PR title, so a job can
   # be added or renamed here without editing the ruleset. A skipped job passes:
   # `test` is skipped on pull requests by design.
   ci-success:
     if: always()
-    needs: [lint, clippy, coverage, conformance, test, msrv, no-std, docs, deny]
+    needs: [lint, clippy, coverage, conformance, fuzz, test, msrv, no-std, docs, deny]
     runs-on: ubuntu-latest
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
