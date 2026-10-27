@@ -334,10 +334,18 @@ impl BoxReader {
                 }
             }
             Answer::Gather { limit_bytes } => {
-                if let Some(bytes) = self.take(input, self.remaining(end)) {
-                    let reached_bytes = to_u64(self.gathered.len())
-                        .saturating_sub(header.encoded_len())
-                        .saturating_add(to_u64(bytes.len()));
+                let gathered_bytes =
+                    to_u64(self.gathered.len()).saturating_sub(header.encoded_len());
+                // Why not take all of the input up to the end of the payload: a
+                // payload that runs to the end of the file would then fail at a
+                // length that depends on where the input was cut. One byte past
+                // the limit is enough to fail, and the same wherever the cut.
+                let past_limit = limit_bytes.saturating_sub(gathered_bytes).saturating_add(1);
+                let wanted = self
+                    .remaining(end)
+                    .map_or(past_limit, |remaining| remaining.min(past_limit));
+                if let Some(bytes) = self.take(input, Some(wanted)) {
+                    let reached_bytes = gathered_bytes.saturating_add(to_u64(bytes.len()));
                     if reached_bytes > limit_bytes {
                         return Step::Failed(self.fail(DemuxError::PayloadLimitExceeded {
                             box_type: header.box_type(),
@@ -616,13 +624,15 @@ mod tests {
     #[test]
     fn a_payload_running_to_the_end_of_the_file_fails_the_reader_once_it_outgrows_the_gather_limit()
     {
-        let file = b"\0\0\0\0mdatAAAAAAAA";
+        let file = b"\0\0\0\0mdatAAAAAAAAAAAA";
         let failure = DemuxError::PayloadLimitExceeded {
             box_type: BoxType::compact(*b"mdat"),
             reached_bytes: 8,
             limit_bytes: 7,
         };
-        assert_eq!(read(file, |_| 4, Answer::Gather(7)), Err(failure));
+        for piece_len in every_cut(file) {
+            assert_eq!(read(file, piece_len, Answer::Gather(7)), Err(failure));
+        }
     }
 
     #[test]

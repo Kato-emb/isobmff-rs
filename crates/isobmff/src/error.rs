@@ -38,7 +38,7 @@ pub enum DemuxError {
     PayloadLimitExceeded {
         /// Type of the box
         box_type: BoxType,
-        /// Length of the payload, as declared or as far as it has arrived
+        /// Length of the payload as declared, or, for a payload that runs to the end of the file, one byte past the limit
         reached_bytes: u64,
         /// Length the payload was gathered with as a limit
         limit_bytes: u64,
