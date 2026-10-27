@@ -102,35 +102,62 @@ pub(crate) fn read_counted<Entry: TableEntry>(
     reader: &mut FieldReader<'_>,
 ) -> Result<Vec<Entry>, Error> {
     let entry_count = reader.read_u32()?;
-    let table_len = u64::from(entry_count).saturating_mul(Entry::ENCODED_LEN);
+
+    read_fixed_entries(reader, entry_count, Entry::ENCODED_LEN, Entry::read)
+}
+
+/// Reads `entry_count` entries of a table, each with `read`, where every entry takes exactly `entry_len` bytes
+///
+/// This is how a table whose entries all take the same number of bytes, but
+/// whose fields the box around them lays out, is read: `ctts` reads its
+/// offsets signed or unsigned as its version says. A count of more entries
+/// than the rest of the payload holds is refused before any entry is read, as
+/// [`read_entries`] refuses it.
+///
+/// `entry_len` is never zero, and `read` reads all of an entry's `entry_len`
+/// bytes and no more.
+///
+/// # Errors
+///
+/// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
+///   payload holds fewer entries than `entry_count`.
+/// * What `read` reports for an entry.
+pub(crate) fn read_fixed_entries<Entry>(
+    reader: &mut FieldReader<'_>,
+    entry_count: u32,
+    entry_len: u64,
+    read: impl FnMut(&mut FieldReader<'_>) -> Result<Entry, Error>,
+) -> Result<Vec<Entry>, Error> {
+    let table_len = u64::from(entry_count).saturating_mul(entry_len);
     // Why not leave the length check to `read_slice`: where `usize` is narrower
     // than `u64`, the length it is given is cut down to `usize::MAX`, and the
     // refusal would name that rather than what the count asks for.
     reader.require(table_len)?;
     let table = reader.read_slice(usize::try_from(table_len).unwrap_or(usize::MAX))?;
 
-    read_whole_entries(table.chunks_exact(entry_len::<Entry>()))
+    read_whole_entries(
+        table.chunks_exact(usize::try_from(entry_len).unwrap_or(usize::MAX)),
+        read,
+    )
 }
 
-/// Number of bytes every entry takes, as a length of a slice
-fn entry_len<Entry: TableEntry>() -> usize {
-    usize::try_from(Entry::ENCODED_LEN).unwrap_or(usize::MAX)
-}
-
-/// Reads one entry off each of `entry_bytes`, the runs of `ENCODED_LEN` bytes of a table
+/// Reads one entry with `read` off each of `entry_bytes`, the runs of bytes the entries of a table take
 ///
 /// # Errors
 ///
-/// * What [`TableEntry::read`] reports for an entry.
-fn read_whole_entries<Entry: TableEntry>(
+/// * What `read` reports for an entry.
+fn read_whole_entries<Entry>(
     entry_bytes: ChunksExact<'_, u8>,
+    mut read: impl FnMut(&mut FieldReader<'_>) -> Result<Entry, Error>,
 ) -> Result<Vec<Entry>, Error> {
     let mut entries = Vec::with_capacity(entry_bytes.len());
     // Why not read every entry off the reader of the payload: an entry read off
-    // a reader of exactly `ENCODED_LEN` bytes, which is what it takes, lets the
-    // compiler drop the length check of each of its fields.
+    // a reader of exactly the bytes it takes lets the compiler drop the length
+    // check of each of its fields. That holds only where the entry length is a
+    // constant; a length the flags of the box set, as in `trun`, keeps the
+    // checks and adds a reader per entry.
     for entry in entry_bytes {
-        entries.push(Entry::read(&mut FieldReader::new(entry))?);
+        entries.push(read(&mut FieldReader::new(entry))?);
     }
 
     Ok(entries)
@@ -183,9 +210,9 @@ pub(crate) fn read_to_end<Entry: TableEntry>(
     reader: &mut FieldReader<'_>,
 ) -> Result<Vec<Entry>, Error> {
     let rest = reader.remainder();
-    let entry_bytes = rest.chunks_exact(entry_len::<Entry>());
+    let entry_bytes = rest.chunks_exact(usize::try_from(Entry::ENCODED_LEN).unwrap_or(usize::MAX));
     reader.read_slice(rest.len().saturating_sub(entry_bytes.remainder().len()))?;
-    let mut entries = read_whole_entries(entry_bytes)?;
+    let mut entries = read_whole_entries(entry_bytes, Entry::read)?;
     // Why not stop at the whole entries: a payload ending inside an entry is
     // refused with the length its fields need, which only reading the entry off
     // `reader` reports. What is left is shorter than `ENCODED_LEN`, so at most

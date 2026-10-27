@@ -8,7 +8,7 @@ use isobmff_core::{
 };
 
 use crate::full_box::{read_composition_offset, write_composition_offset};
-use crate::table::{read_entries, table_len, write_entry_count};
+use crate::table::{read_fixed_entries, table_len, write_entry_count};
 
 /// Run of consecutive samples of one composition offset, one entry of a [`CompositionOffsetBox`]
 #[non_exhaustive]
@@ -54,7 +54,7 @@ impl BoxDecode for CompositionOffsetBox {
             return Err(Error::unsupported_version(version));
         }
         let entry_count = reader.read_u32()?;
-        let entries = read_entries(reader, entry_count, 8, |reader| {
+        let entries = read_fixed_entries(reader, entry_count, 8, |reader| {
             Ok(CompositionOffsetEntry {
                 sample_count: reader.read_u32()?,
                 sample_offset: read_composition_offset(reader, version)?,
