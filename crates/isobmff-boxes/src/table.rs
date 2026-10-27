@@ -1,6 +1,7 @@
 //! [`TableEntry`], the entry of a table of fixed-length entries, and the tables of such entries
 
 use alloc::vec::Vec;
+use core::slice::ChunksExact;
 
 use isobmff_core::{Error, FieldReader, FieldWidth, FieldWriter, FourCc};
 
@@ -90,9 +91,8 @@ impl TableEntry for u64 {
 
 /// Reads the 32-bit `entry_count` of a table and then as many entries
 ///
-/// The entries are read as [`read_entries`] reads them, so a count of more
-/// entries than the rest of the payload holds is refused before any entry is
-/// read.
+/// A count of more entries than the rest of the payload holds is refused
+/// before any entry is read, as [`read_entries`] refuses it.
 ///
 /// # Errors
 ///
@@ -102,8 +102,38 @@ pub(crate) fn read_counted<Entry: TableEntry>(
     reader: &mut FieldReader<'_>,
 ) -> Result<Vec<Entry>, Error> {
     let entry_count = reader.read_u32()?;
+    let table_len = u64::from(entry_count).saturating_mul(Entry::ENCODED_LEN);
+    // Why not leave the length check to `read_slice`: where `usize` is narrower
+    // than `u64`, the length it is given is cut down to `usize::MAX`, and the
+    // refusal would name that rather than what the count asks for.
+    reader.require(table_len)?;
+    let table = reader.read_slice(usize::try_from(table_len).unwrap_or(usize::MAX))?;
 
-    read_entries(reader, entry_count, Entry::ENCODED_LEN, Entry::read)
+    read_whole_entries(table.chunks_exact(entry_len::<Entry>()))
+}
+
+/// Number of bytes every entry takes, as a length of a slice
+fn entry_len<Entry: TableEntry>() -> usize {
+    usize::try_from(Entry::ENCODED_LEN).unwrap_or(usize::MAX)
+}
+
+/// Reads one entry off each of `entry_bytes`, the runs of `ENCODED_LEN` bytes of a table
+///
+/// # Errors
+///
+/// * What [`TableEntry::read`] reports for an entry.
+fn read_whole_entries<Entry: TableEntry>(
+    entry_bytes: ChunksExact<'_, u8>,
+) -> Result<Vec<Entry>, Error> {
+    let mut entries = Vec::with_capacity(entry_bytes.len());
+    // Why not read every entry off the reader of the payload: an entry read off
+    // a reader of exactly `ENCODED_LEN` bytes, which is what it takes, lets the
+    // compiler drop the length check of each of its fields.
+    for entry in entry_bytes {
+        entries.push(Entry::read(&mut FieldReader::new(entry))?);
+    }
+
+    Ok(entries)
 }
 
 /// Reads `entry_count` entries of a table, each with `read`, where every entry takes at least `minimum_len` bytes
@@ -152,14 +182,15 @@ pub(crate) fn read_entries<Entry>(
 pub(crate) fn read_to_end<Entry: TableEntry>(
     reader: &mut FieldReader<'_>,
 ) -> Result<Vec<Entry>, Error> {
-    let capacity = usize::try_from(Entry::ENCODED_LEN)
-        .ok()
-        .and_then(|entry_len| reader.remainder().len().checked_div(entry_len))
-        .unwrap_or_default();
-    let mut entries = Vec::with_capacity(capacity);
-    // Why not a guard against an entry that takes nothing: `ENCODED_LEN` is
-    // never zero, so every turn takes at least one byte and the loop ends.
-    while !reader.remainder().is_empty() {
+    let rest = reader.remainder();
+    let entry_bytes = rest.chunks_exact(entry_len::<Entry>());
+    reader.read_slice(rest.len().saturating_sub(entry_bytes.remainder().len()))?;
+    let mut entries = read_whole_entries(entry_bytes)?;
+    // Why not stop at the whole entries: a payload ending inside an entry is
+    // refused with the length its fields need, which only reading the entry off
+    // `reader` reports. What is left is shorter than `ENCODED_LEN`, so at most
+    // one entry is read here.
+    if !reader.remainder().is_empty() {
         entries.push(Entry::read(reader)?);
     }
 
