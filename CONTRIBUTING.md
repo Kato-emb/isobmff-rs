@@ -17,8 +17,9 @@ pass; each runs a command you can run locally before opening one.
 
 ### Fuzzing
 
-The fuzz targets in `fuzz/` need [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz)
-and the nightly the `fuzz` job pins. The conformance files are their seeds:
+The fuzz targets in `fuzz/`, `framing` and `boxes`, need
+[cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) and the nightly the
+`fuzz` job pins. The conformance files are their seeds:
 
 ```sh
 scripts/fetch-conformance.sh target/conformance
