@@ -3,6 +3,11 @@
 //! The items of [`isobmff_core`], the vocabulary a box is written in, are at
 //! the root of this crate. The boxes ISO/IEC 14496-12 defines, written in that
 //! vocabulary, are in [`boxes`].
+//!
+//! The examples in `crates/isobmff/examples/` read and write files through
+//! [`framing`]: `cargo run -p isobmff --example dump_boxes -- movie.mp4` lists
+//! the boxes of a file, and `split_fragments` splits a fragmented movie file
+//! into segments.
 
 #![no_std]
 
