@@ -16,5 +16,10 @@ categories.workspace = true
 isobmff-boxes.workspace = true
 isobmff-core = { workspace = true, features = ["alloc"] }
 
+[dev-dependencies]
+# Reads the conformance files, which the reading and writing of boxes are
+# checked against.
+isobmff-test-support.workspace = true
+
 [lints]
 workspace = true

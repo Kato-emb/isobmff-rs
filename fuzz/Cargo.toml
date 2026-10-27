@@ -31,3 +31,10 @@ path = "fuzz_targets/boxes.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "box_reader"
+path = "fuzz_targets/box_reader.rs"
+test = false
+doc = false
+bench = false
