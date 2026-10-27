@@ -416,44 +416,7 @@ mod tests {
     use super::{BoxEvent, BoxReader};
     use crate::byte_range::ByteRange;
     use crate::error::DemuxError;
-
-    const EXTENDED_TYPE: [u8; 16] = [
-        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32,
-        0x10,
-    ];
-
-    const PAYLOAD: &[u8] = b"payload!";
-
-    /// One box in each header form, in the wire order `size`, `boxtype`, `largesize`, `extended_type`, then [`PAYLOAD`]
-    fn every_header_form() -> [Vec<u8>; 6] {
-        let with_payload = |header: &[u8]| [header, PAYLOAD].concat();
-        [
-            with_payload(&[0, 0, 0, 16, b'f', b'r', b'e', b'e']),
-            with_payload(&[0, 0, 0, 1, b'm', b'd', b'a', b't', 0, 0, 0, 0, 0, 0, 0, 24]),
-            with_payload(
-                &[
-                    [0, 0, 0, 32, b'u', b'u', b'i', b'd'].as_slice(),
-                    &EXTENDED_TYPE,
-                ]
-                .concat(),
-            ),
-            with_payload(
-                &[
-                    [0, 0, 0, 1, b'u', b'u', b'i', b'd', 0, 0, 0, 0, 0, 0, 0, 40].as_slice(),
-                    &EXTENDED_TYPE,
-                ]
-                .concat(),
-            ),
-            with_payload(&[0, 0, 0, 0, b'm', b'd', b'a', b't']),
-            with_payload(
-                &[
-                    [0, 0, 0, 0, b'u', b'u', b'i', b'd'].as_slice(),
-                    &EXTENDED_TYPE,
-                ]
-                .concat(),
-            ),
-        ]
-    }
+    use crate::framing::header_forms::{PAYLOAD, every_header_form};
 
     /// What a caller answers each header with
     #[derive(Clone, Copy)]

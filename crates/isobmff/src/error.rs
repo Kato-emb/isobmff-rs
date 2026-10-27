@@ -1,4 +1,4 @@
-//! [`DemuxError`], the reason the bytes of a file do not read as its boxes
+//! [`DemuxError`] and [`MuxError`], the reasons the bytes of a file do not read as its boxes, or boxes do not write as a file
 
 use core::error;
 use core::fmt;
@@ -120,3 +120,59 @@ impl fmt::Display for DemuxError {
 }
 
 impl error::Error for DemuxError {}
+
+/// Reason boxes do not write as the bytes of a file
+///
+/// A refused box leaves the writer as it was: nothing of it is output.
+#[non_exhaustive]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum MuxError {
+    /// Payload offered for a box is not the length its header declares
+    #[non_exhaustive]
+    PayloadLengthMismatch {
+        /// Type of the box
+        box_type: BoxType,
+        /// Length of the payload the header declares
+        declared_bytes: u64,
+        /// Length of the payload offered
+        offered_bytes: u64,
+    },
+    /// Box offered after one whose size runs to the end of the file
+    #[non_exhaustive]
+    PastEndOfFile {
+        /// Type of the box offered
+        box_type: BoxType,
+    },
+    /// Box offered after the file is finished
+    #[non_exhaustive]
+    AlreadyFinished,
+    /// Box does not write into bytes
+    #[non_exhaustive]
+    Box {
+        /// Why it does not
+        error: Error,
+    },
+}
+
+impl fmt::Display for MuxError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::PayloadLengthMismatch {
+                box_type,
+                declared_bytes,
+                offered_bytes,
+            } => write!(
+                formatter,
+                "{box_type} header declares a payload of {declared_bytes} bytes, offered {offered_bytes}"
+            ),
+            Self::PastEndOfFile { box_type } => write!(
+                formatter,
+                "{box_type} box offered after a box that runs to the end of the file"
+            ),
+            Self::AlreadyFinished => formatter.write_str("box offered after the file is finished"),
+            Self::Box { error } => fmt::Display::fmt(&error, formatter),
+        }
+    }
+}
+
+impl error::Error for MuxError {}

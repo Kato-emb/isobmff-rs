@@ -13,7 +13,7 @@ mod error;
 pub mod framing;
 
 pub use byte_range::ByteRange;
-pub use error::DemuxError;
+pub use error::{DemuxError, MuxError};
 pub use isobmff_core::*;
 
 /// Boxes of ISO/IEC 14496-12, each read into a value that owns its bytes
