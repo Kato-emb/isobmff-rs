@@ -75,6 +75,9 @@ pub struct FieldReader<'payload> {
     payload_len: usize,
 }
 
+// Why the `#[inline]` below despite the workspace's "rarely needed": the
+// readers are neither generic nor leaf functions, so without it the box
+// decoders in other crates call them once per field of every table entry.
 impl<'payload> FieldReader<'payload> {
     /// Creates a cursor over the payload of one box
     #[must_use]
@@ -120,6 +123,7 @@ impl<'payload> FieldReader<'payload> {
     ///
     /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload ends
     ///   inside the field.
+    #[inline]
     pub fn read_slice(&mut self, length: usize) -> Result<&'payload [u8], Error> {
         let (field, rest) = self
             .rest
@@ -136,6 +140,7 @@ impl<'payload> FieldReader<'payload> {
     ///
     /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload ends
     ///   inside the field.
+    #[inline]
     pub fn read_u16(&mut self) -> Result<u16, Error> {
         Ok(u16::from_be_bytes(*self.read_bytes::<2>()?))
     }
@@ -146,6 +151,7 @@ impl<'payload> FieldReader<'payload> {
     ///
     /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload ends
     ///   inside the field.
+    #[inline]
     pub fn read_i16(&mut self) -> Result<i16, Error> {
         Ok(i16::from_be_bytes(*self.read_bytes::<2>()?))
     }
@@ -156,6 +162,7 @@ impl<'payload> FieldReader<'payload> {
     ///
     /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload ends
     ///   inside the field.
+    #[inline]
     pub fn read_u32(&mut self) -> Result<u32, Error> {
         Ok(u32::from_be_bytes(*self.read_bytes::<4>()?))
     }
@@ -166,6 +173,7 @@ impl<'payload> FieldReader<'payload> {
     ///
     /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload ends
     ///   inside the field.
+    #[inline]
     pub fn read_i32(&mut self) -> Result<i32, Error> {
         Ok(i32::from_be_bytes(*self.read_bytes::<4>()?))
     }
@@ -176,6 +184,7 @@ impl<'payload> FieldReader<'payload> {
     ///
     /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload ends
     ///   inside the field.
+    #[inline]
     pub fn read_u64(&mut self) -> Result<u64, Error> {
         Ok(u64::from_be_bytes(*self.read_bytes::<8>()?))
     }
@@ -186,6 +195,7 @@ impl<'payload> FieldReader<'payload> {
     ///
     /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload ends
     ///   inside the field.
+    #[inline]
     pub fn read_i64(&mut self) -> Result<i64, Error> {
         Ok(i64::from_be_bytes(*self.read_bytes::<8>()?))
     }
@@ -196,6 +206,7 @@ impl<'payload> FieldReader<'payload> {
     ///
     /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload ends
     ///   inside the field.
+    #[inline]
     pub fn read_unsigned(&mut self, width: FieldWidth) -> Result<u64, Error> {
         match width {
             FieldWidth::Compact => Ok(u64::from(self.read_u32()?)),
@@ -209,6 +220,7 @@ impl<'payload> FieldReader<'payload> {
     ///
     /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload ends
     ///   inside the field.
+    #[inline]
     pub fn read_signed(&mut self, width: FieldWidth) -> Result<i64, Error> {
         match width {
             FieldWidth::Compact => Ok(i64::from(self.read_i32()?)),
@@ -226,6 +238,7 @@ impl<'payload> FieldReader<'payload> {
     ///
     /// * [`TruncatedPayload`](crate::ErrorKind::TruncatedPayload): the payload holds
     ///   fewer than `bytes` past the fields already read.
+    #[inline]
     pub fn require(&self, bytes: u64) -> Result<(), Error> {
         if bytes <= byte_count(self.rest.len()) {
             return Ok(());
