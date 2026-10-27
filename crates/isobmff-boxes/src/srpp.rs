@@ -5,6 +5,9 @@ use isobmff_core::{
     FieldWriter, FourCc, FullBoxFlags, FullBoxHeader, OtherBoxes,
 };
 
+use crate::schi::SchemeInformationBox;
+use crate::schm::SchemeTypeBox;
+
 /// [`SrtpProcessBox`] (`srpp`), ISO/IEC 14496-12 §9.1.2.2
 ///
 /// The algorithms of encryption and integrity protection that SRTP applies
@@ -19,9 +22,10 @@ use isobmff_core::{
 ///
 /// # Children
 ///
-/// The Syntax follows the fields with a `SchemeTypeBox` and a
-/// `SchemeInformationBox`, which the box keeps with any other child in
-/// [`other_boxes`](Self::other_boxes), in the order they came.
+/// The box writes `schm` then `schi`, the order of its Syntax, whatever
+/// order they were read in. Children of other types, and a child of these
+/// types that does not read, are kept in [`other_boxes`](Self::other_boxes),
+/// and written back after them.
 #[doc(alias = "srpp", alias = "SRTPProcessBox")]
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Debug)]
@@ -36,7 +40,11 @@ pub struct SrtpProcessBox {
     pub integrity_algorithm_rtp: FourCc,
     /// Algorithm protecting the integrity of the RTCP packets
     pub integrity_algorithm_rtcp: FourCc,
-    /// Children the box holds no field for, the `schm` and `schi` of the Syntax among them
+    /// Key management and security policy of the stream, `scheme_type_box` in the syntax
+    pub schm: Option<SchemeTypeBox>,
+    /// Parameters of the scheme, `info` in the syntax
+    pub schi: Option<SchemeInformationBox>,
+    /// Children of a type the box holds no field for
     pub other_boxes: OtherBoxes,
 }
 
@@ -51,6 +59,8 @@ impl Default for SrtpProcessBox {
             encryption_algorithm_rtcp: OUTSIDE_THE_FILE_FORMAT,
             integrity_algorithm_rtp: OUTSIDE_THE_FILE_FORMAT,
             integrity_algorithm_rtcp: OUTSIDE_THE_FILE_FORMAT,
+            schm: None,
+            schi: None,
             other_boxes: OtherBoxes::new(),
         }
     }
@@ -67,6 +77,7 @@ impl BoxDecode for SrtpProcessBox {
         let encryption_algorithm_rtcp = FourCc::new(*reader.read_bytes::<4>()?);
         let integrity_algorithm_rtp = FourCc::new(*reader.read_bytes::<4>()?);
         let integrity_algorithm_rtcp = FourCc::new(*reader.read_bytes::<4>()?);
+        let mut children = ChildBoxes::decode(reader.take_remainder())?;
 
         Ok(Self {
             version,
@@ -74,17 +85,20 @@ impl BoxDecode for SrtpProcessBox {
             encryption_algorithm_rtcp,
             integrity_algorithm_rtp,
             integrity_algorithm_rtcp,
-            other_boxes: OtherBoxes::from(ChildBoxes::decode(reader.take_remainder())?),
+            schm: children.take_zero_or_one_if_decoded()?,
+            schi: children.take_zero_or_one_if_decoded()?,
+            other_boxes: OtherBoxes::from(children),
         })
     }
 }
 
 impl BoxEncode for SrtpProcessBox {
     fn payload_len(&self) -> u64 {
-        self.other_boxes
-            .as_slice()
+        self.schm
             .iter()
-            .map(AnyBox::encoded_len)
+            .map(BoxEncode::encoded_len)
+            .chain(self.schi.iter().map(BoxEncode::encoded_len))
+            .chain(self.other_boxes.as_slice().iter().map(AnyBox::encoded_len))
             .fold(4 + 4 * 4, u64::saturating_add)
     }
 
@@ -99,6 +113,12 @@ impl BoxEncode for SrtpProcessBox {
             writer.write_bytes(algorithm.as_bytes())?;
         }
         let mut rest = writer.take_remainder();
+        if let Some(schm) = &self.schm {
+            rest = schm.encode(rest)?;
+        }
+        if let Some(schi) = &self.schi {
+            rest = schi.encode(rest)?;
+        }
         for kept in self.other_boxes.as_slice() {
             rest = kept.encode(rest)?;
         }
@@ -113,30 +133,43 @@ mod tests {
 
     use super::SrtpProcessBox;
     use crate::encoded;
+    use crate::schi::SchemeInformationBox;
+    use crate::schm::SchemeTypeBox;
 
-    /// `schm` of the scheme `srtp`, version 1, a box this module does not read
-    const SCHM: &[u8] = b"\0\0\0\x14schm\0\0\0\0srtp\0\x01\0\0";
+    /// Fields of AES in counter mode and HMAC-SHA-1 for RTP, the choice for RTCP left outside the file format
+    const FIELDS: &[u8] = b"\0\0\0\0ACM1    SHM2    ";
 
-    /// `srpp` of AES in counter mode and HMAC-SHA-1 for RTP, the choice for RTCP left outside the file format, with its `schm`
-    const SRPP: &[u8] =
-        b"\0\0\0\x30srpp\0\0\0\0ACM1    SHM2    \0\0\0\x14schm\0\0\0\0srtp\0\x01\0\0";
+    /// `schm` of the scheme `srtp`, version 1
+    const SCHM: &[u8] = b"\0\0\0\x14schm\0\0\0\0srtp\0\0\0\x01";
+
+    /// `schi` holding nothing
+    const SCHI: &[u8] = b"\0\0\0\x08schi";
+
+    /// Box of a type this module does not read
+    const OTHER: &[u8] = b"\0\0\0\x09xtra\x07";
 
     fn process() -> SrtpProcessBox {
         SrtpProcessBox {
             encryption_algorithm_rtp: FourCc::new(*b"ACM1"),
             integrity_algorithm_rtp: FourCc::new(*b"SHM2"),
-            other_boxes: OtherBoxes::from(ChildBoxes::decode(SCHM).unwrap()),
+            schm: Some(SchemeTypeBox::decode(SCHM).unwrap().0),
+            schi: Some(SchemeInformationBox::default()),
+            other_boxes: OtherBoxes::from(ChildBoxes::decode(OTHER).unwrap()),
             ..SrtpProcessBox::default()
         }
     }
 
     #[test]
-    fn reads_and_writes_the_bytes_its_syntax_lays_out() {
+    fn writes_its_scheme_type_then_its_scheme_information_whatever_order_they_were_read_in() {
+        let read = SrtpProcessBox::decode_payload(&[FIELDS, OTHER, SCHI, SCHM].concat()).unwrap();
+
         assert_eq!(
-            SrtpProcessBox::decode(SRPP),
-            Ok((process(), b"".as_slice()))
+            (encoded(&read), read),
+            (
+                [b"\0\0\0\x41srpp".as_slice(), FIELDS, SCHM, SCHI, OTHER].concat(),
+                process()
+            )
         );
-        assert_eq!(encoded(&process()), SRPP);
     }
 
     #[test]

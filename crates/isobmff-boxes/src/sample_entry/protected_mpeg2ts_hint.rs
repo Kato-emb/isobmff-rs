@@ -6,8 +6,11 @@ use isobmff_core::{Error, FourCc, OtherBoxes};
 
 use crate::btrt::BitRateBox;
 use crate::mpeg2ts_hint::{InitialSampleTimeBox, OdBox, PatBox, PmtBox, TsTimingBox};
-use crate::sample_entry::SampleEntry;
+use crate::rinf::RestrictedSchemeInfoBox;
 use crate::sample_entry::mpeg2ts_hint::{Mpeg2TsEntry, Mpeg2TsParts, read_entry};
+use crate::sample_entry::{AnyEntryBoxes, SampleEntry};
+use crate::scrb::ScrambleSchemeInfoBox;
+use crate::sinf::ProtectionSchemeInfoBox;
 
 /// [`ProtectedMpeg2TransportStreamSampleEntry`] (`pm2t`), ISO/IEC 14496-12 §9.3.5
 ///
@@ -26,9 +29,7 @@ use crate::sample_entry::mpeg2ts_hint::{Mpeg2TsEntry, Mpeg2TsParts, read_entry};
 ///
 /// The children are laid out in three parts as those of an
 /// [`Mpeg2TsReceptionSampleEntry`](crate::Mpeg2TsReceptionSampleEntry) are.
-/// The `sinf` is kept, with any child of a type the entry holds no field
-/// for, in [`derived_boxes`](Self::derived_boxes) or
-/// [`extra_boxes`](Self::extra_boxes) by where it lies.
+/// The `sinf` it requires is among the boxes any sample entry may hold.
 #[doc(alias = "pm2t", alias = "ProtectedMPEG2TransportStreamSampleEntry")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -53,6 +54,12 @@ pub struct ProtectedMpeg2TransportStreamSampleEntry {
     pub tsti: Option<TsTimingBox>,
     /// Time the sample times start from
     pub istm: Option<InitialSampleTimeBox>,
+    /// Protection schemes of a protected sample entry, alternative descriptions of the same protection
+    pub sinf: Vec<ProtectionSchemeInfoBox>,
+    /// Scrambling schemes applied to the samples
+    pub scrb: Vec<ScrambleSchemeInfoBox>,
+    /// Restriction of a restricted sample entry, or advisory information on the restriction of one whose type was not transformed
+    pub rinf: Option<RestrictedSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -86,6 +93,9 @@ impl TryFrom<&SampleEntry> for ProtectedMpeg2TransportStreamSampleEntry {
             tod,
             tsti,
             istm,
+            sinf,
+            scrb,
+            rinf,
             btrt,
             extra_boxes,
         } = read_entry(entry, Self::FORMAT)?;
@@ -101,6 +111,9 @@ impl TryFrom<&SampleEntry> for ProtectedMpeg2TransportStreamSampleEntry {
             tod,
             tsti,
             istm,
+            sinf,
+            scrb,
+            rinf,
             btrt,
             extra_boxes,
         })
@@ -127,7 +140,12 @@ impl TryFrom<&ProtectedMpeg2TransportStreamSampleEntry> for SampleEntry {
             tod: &hint.tod,
             tsti: hint.tsti.as_ref(),
             istm: hint.istm.as_ref(),
-            btrt: hint.btrt.as_ref(),
+            any_entry: AnyEntryBoxes {
+                sinf: &hint.sinf,
+                scrb: &hint.scrb,
+                rinf: hint.rinf.as_ref(),
+                btrt: hint.btrt.as_ref(),
+            },
             extra_boxes: &hint.extra_boxes,
         }
         .write(ProtectedMpeg2TransportStreamSampleEntry::FORMAT)
@@ -138,11 +156,12 @@ impl TryFrom<&ProtectedMpeg2TransportStreamSampleEntry> for SampleEntry {
 mod tests {
     use alloc::vec;
 
-    use isobmff_core::{ChildBoxes, FourCc, OtherBoxes};
+    use isobmff_core::{BoxDecode, FourCc};
 
     use super::ProtectedMpeg2TransportStreamSampleEntry;
     use crate::mpeg2ts_hint::PatBox;
     use crate::sample_entry::SampleEntry;
+    use crate::sinf::ProtectionSchemeInfoBox;
 
     /// Fields of version 1, four bytes before each packet, none after, precomputed
     const FIELDS: &[u8] = b"\0\x01\0\x01\x04\0\x80";
@@ -150,7 +169,7 @@ mod tests {
     /// `tPAT` of the PID 0 and one byte of section
     const TPAT: &[u8] = b"\0\0\0\x0btPAT\0\0\0";
 
-    /// `sinf` of the original format `rm2t`, a box this module does not read
+    /// `sinf` of the original format `rm2t`
     const SINF: &[u8] = b"\0\0\0\x14sinf\0\0\0\x0cfrmarm2t";
 
     fn sample_entry(remaining: &[&[u8]]) -> SampleEntry {
@@ -162,8 +181,8 @@ mod tests {
     }
 
     #[test]
-    fn a_protected_entry_keeps_its_scheme_information_where_it_lies() {
-        let entry = sample_entry(&[FIELDS, TPAT, SINF]);
+    fn a_protected_entry_writes_its_protection_scheme_after_the_boxes_of_its_class() {
+        let entry = sample_entry(&[FIELDS, SINF, TPAT]);
         let protected = ProtectedMpeg2TransportStreamSampleEntry {
             data_reference_index: 1,
             preceding_bytes_len: 4,
@@ -172,7 +191,7 @@ mod tests {
                 pid: 0,
                 section_data: vec![0],
             }),
-            extra_boxes: OtherBoxes::from(ChildBoxes::decode(SINF).unwrap()),
+            sinf: vec![ProtectionSchemeInfoBox::decode(SINF).unwrap().0],
             ..ProtectedMpeg2TransportStreamSampleEntry::default()
         };
 
@@ -181,7 +200,10 @@ mod tests {
                 ProtectedMpeg2TransportStreamSampleEntry::try_from(&entry),
                 SampleEntry::try_from(&protected)
             ),
-            (Ok(protected.clone()), Ok(entry))
+            (
+                Ok(protected.clone()),
+                Ok(sample_entry(&[FIELDS, TPAT, SINF]))
+            )
         );
     }
 }

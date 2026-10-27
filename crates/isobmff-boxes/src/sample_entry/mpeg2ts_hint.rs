@@ -6,22 +6,24 @@ use isobmff_core::{BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FourCc
 
 use crate::btrt::BitRateBox;
 use crate::mpeg2ts_hint::{InitialSampleTimeBox, OdBox, PatBox, PmtBox, TsTimingBox};
+use crate::rinf::RestrictedSchemeInfoBox;
 use crate::sample_entry::{
-    HINT_TRACK_VERSION, SampleEntry, children_len, encode_children, encode_optional, from_class,
-    of_format, split_children,
+    AnyEntryBoxes, HINT_TRACK_VERSION, SampleEntry, children_len, encode_children, encode_optional,
+    from_class, of_format, split_children,
 };
+use crate::scrb::ScrambleSchemeInfoBox;
+use crate::sinf::ProtectionSchemeInfoBox;
 
 /// Length of the fields the classes lay out after `data_reference_index`
 const FIELDS_LEN: u64 = 2 + 2 + 1 + 1 + 1;
 
 /// Box types of the boxes ISO/IEC 14496-12 defines for the classes
-const DEFINED: [BoxType; 6] = [
+const DEFINED: [BoxType; 5] = [
     PatBox::BOX_TYPE,
     PmtBox::BOX_TYPE,
     OdBox::BOX_TYPE,
     TsTimingBox::BOX_TYPE,
     InitialSampleTimeBox::BOX_TYPE,
-    BitRateBox::BOX_TYPE,
 ];
 
 /// Fields and boxes every `MPEG2TSSampleEntry` lays out after `data_reference_index`, as [`read_entry`] reads them
@@ -35,6 +37,9 @@ pub(super) struct Mpeg2TsEntry {
     pub(super) tod: Vec<OdBox>,
     pub(super) tsti: Option<TsTimingBox>,
     pub(super) istm: Option<InitialSampleTimeBox>,
+    pub(super) sinf: Vec<ProtectionSchemeInfoBox>,
+    pub(super) scrb: Vec<ScrambleSchemeInfoBox>,
+    pub(super) rinf: Option<RestrictedSchemeInfoBox>,
     pub(super) btrt: Option<BitRateBox>,
     pub(super) extra_boxes: OtherBoxes,
 }
@@ -51,7 +56,7 @@ pub(super) struct Mpeg2TsEntry {
 ///   bytes end inside a field, counted from the end of
 ///   `data_reference_index`.
 /// * The failures of a child that does not frame, and of a `tPAT`, `tsti`,
-///   `istm` or `btrt` given more than once.
+///   `istm`, `rinf` or `btrt` given more than once.
 pub(super) fn read_entry(entry: &SampleEntry, format: FourCc) -> Result<Mpeg2TsEntry, Error> {
     of_format(entry, format)?;
     let mut reader = FieldReader::new(&entry.remaining_data);
@@ -69,6 +74,9 @@ pub(super) fn read_entry(entry: &SampleEntry, format: FourCc) -> Result<Mpeg2TsE
         tod: children.take_zero_or_more_if_decoded(),
         tsti: children.take_zero_or_one_if_decoded()?,
         istm: children.take_zero_or_one_if_decoded()?,
+        sinf: children.take_zero_or_more_if_decoded(),
+        scrb: children.take_zero_or_more_if_decoded(),
+        rinf: children.take_zero_or_one_if_decoded()?,
         btrt: children.take_zero_or_one_if_decoded()?,
         extra_boxes: OtherBoxes::from(children),
     })
@@ -86,7 +94,7 @@ pub(super) struct Mpeg2TsParts<'class> {
     pub(super) tod: &'class [OdBox],
     pub(super) tsti: Option<&'class TsTimingBox>,
     pub(super) istm: Option<&'class InitialSampleTimeBox>,
-    pub(super) btrt: Option<&'class BitRateBox>,
+    pub(super) any_entry: AnyEntryBoxes<'class>,
     pub(super) extra_boxes: &'class OtherBoxes,
 }
 
@@ -101,7 +109,7 @@ impl Mpeg2TsParts<'_> {
             self.tpat.map_or(0, BoxEncode::encoded_len),
             self.tsti.map_or(0, BoxEncode::encoded_len),
             self.istm.map_or(0, BoxEncode::encoded_len),
-            self.btrt.map_or(0, BoxEncode::encoded_len),
+            self.any_entry.encoded_len(),
         ]
         .into_iter()
         .chain(self.tpmt.iter().map(BoxEncode::encoded_len))
@@ -132,7 +140,7 @@ impl Mpeg2TsParts<'_> {
                         }
                         rest = encode_optional(rest, self.tsti)?;
                         rest = encode_optional(rest, self.istm)?;
-                        encode_optional(rest, self.btrt)
+                        self.any_entry.encode(rest)
                     },
                     self.extra_boxes,
                 )
@@ -159,7 +167,7 @@ impl Mpeg2TsParts<'_> {
 /// writes them, whatever order they were read in: the boxes a specification
 /// deriving the class defines, in [`derived_boxes`](Self::derived_boxes);
 /// the boxes of §9.3.3.3, `tPAT`, the `tPMT`s, the `tOD `s, `tsti` and
-/// `istm`, then `btrt`, which any sample entry may hold; and the boxes no
+/// `istm`, then the boxes any sample entry may hold, `sinf`, `scrb`, `rinf` and `btrt` in this order; and the boxes no
 /// definition of the class names, in [`extra_boxes`](Self::extra_boxes). A
 /// child of a type this crate does not read that lies before the first box
 /// of ISO/IEC 14496-12 is read into the first part, and one that lies after
@@ -188,6 +196,12 @@ pub struct Mpeg2TsReceptionSampleEntry {
     pub tsti: Option<TsTimingBox>,
     /// Time the sample times start from
     pub istm: Option<InitialSampleTimeBox>,
+    /// Protection schemes of a protected sample entry, alternative descriptions of the same protection
+    pub sinf: Vec<ProtectionSchemeInfoBox>,
+    /// Scrambling schemes applied to the samples
+    pub scrb: Vec<ScrambleSchemeInfoBox>,
+    /// Restriction of a restricted sample entry, or advisory information on the restriction of one whose type was not transformed
+    pub rinf: Option<RestrictedSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -212,7 +226,7 @@ impl TryFrom<&SampleEntry> for Mpeg2TsReceptionSampleEntry {
     ///   bytes end inside a field, counted from the end of
     ///   `data_reference_index`.
     /// * The failures of a child that does not frame, and of a `tPAT`,
-    ///   `tsti`, `istm` or `btrt` given more than once.
+    ///   `tsti`, `istm`, `rinf` or `btrt` given more than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         let Mpeg2TsEntry {
             preceding_bytes_len,
@@ -224,6 +238,9 @@ impl TryFrom<&SampleEntry> for Mpeg2TsReceptionSampleEntry {
             tod,
             tsti,
             istm,
+            sinf,
+            scrb,
+            rinf,
             btrt,
             extra_boxes,
         } = read_entry(entry, Self::FORMAT)?;
@@ -239,6 +256,9 @@ impl TryFrom<&SampleEntry> for Mpeg2TsReceptionSampleEntry {
             tod,
             tsti,
             istm,
+            sinf,
+            scrb,
+            rinf,
             btrt,
             extra_boxes,
         })
@@ -265,7 +285,12 @@ impl TryFrom<&Mpeg2TsReceptionSampleEntry> for SampleEntry {
             tod: &hint.tod,
             tsti: hint.tsti.as_ref(),
             istm: hint.istm.as_ref(),
-            btrt: hint.btrt.as_ref(),
+            any_entry: AnyEntryBoxes {
+                sinf: &hint.sinf,
+                scrb: &hint.scrb,
+                rinf: hint.rinf.as_ref(),
+                btrt: hint.btrt.as_ref(),
+            },
             extra_boxes: &hint.extra_boxes,
         }
         .write(Mpeg2TsReceptionSampleEntry::FORMAT)
@@ -310,6 +335,12 @@ pub struct Mpeg2TsServerSampleEntry {
     pub tsti: Option<TsTimingBox>,
     /// Time the sample times start from
     pub istm: Option<InitialSampleTimeBox>,
+    /// Protection schemes of a protected sample entry, alternative descriptions of the same protection
+    pub sinf: Vec<ProtectionSchemeInfoBox>,
+    /// Scrambling schemes applied to the samples
+    pub scrb: Vec<ScrambleSchemeInfoBox>,
+    /// Restriction of a restricted sample entry, or advisory information on the restriction of one whose type was not transformed
+    pub rinf: Option<RestrictedSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -342,6 +373,9 @@ impl TryFrom<&SampleEntry> for Mpeg2TsServerSampleEntry {
             tod,
             tsti,
             istm,
+            sinf,
+            scrb,
+            rinf,
             btrt,
             extra_boxes,
         } = read_entry(entry, Self::FORMAT)?;
@@ -357,6 +391,9 @@ impl TryFrom<&SampleEntry> for Mpeg2TsServerSampleEntry {
             tod,
             tsti,
             istm,
+            sinf,
+            scrb,
+            rinf,
             btrt,
             extra_boxes,
         })
@@ -383,7 +420,12 @@ impl TryFrom<&Mpeg2TsServerSampleEntry> for SampleEntry {
             tod: &hint.tod,
             tsti: hint.tsti.as_ref(),
             istm: hint.istm.as_ref(),
-            btrt: hint.btrt.as_ref(),
+            any_entry: AnyEntryBoxes {
+                sinf: &hint.sinf,
+                scrb: &hint.scrb,
+                rinf: hint.rinf.as_ref(),
+                btrt: hint.btrt.as_ref(),
+            },
             extra_boxes: &hint.extra_boxes,
         }
         .write(Mpeg2TsServerSampleEntry::FORMAT)

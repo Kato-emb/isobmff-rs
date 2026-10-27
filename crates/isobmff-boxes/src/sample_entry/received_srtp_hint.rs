@@ -1,5 +1,7 @@
 //! [`ReceivedSrtpHintSampleEntry`], the sample entry of a track recording an SRTP stream
 
+use alloc::vec::Vec;
+
 use isobmff_core::{BoxDefinition, BoxEncode, BoxType, Error, FourCc, OtherBoxes};
 
 use crate::btrt::BitRateBox;
@@ -7,14 +9,17 @@ use crate::hint_entry_boxes::{
     ReceivedCryptoContextIdBox, ReceivedSsrcBox, RolloverCounterBox, TimeOffsetBox,
     TimescaleEntryBox, TimestampSynchronyBox,
 };
+use crate::rinf::RestrictedSchemeInfoBox;
 use crate::sample_entry::rtp_hint::{FIELDS_LEN, RtpEntry, read_entry, write_fields};
 use crate::sample_entry::{
-    SampleEntry, children_len, encode_children, encode_optional, from_class,
+    AnyEntryBoxes, SampleEntry, children_len, encode_children, encode_optional, from_class,
 };
+use crate::scrb::ScrambleSchemeInfoBox;
+use crate::sinf::ProtectionSchemeInfoBox;
 use crate::srpp::SrtpProcessBox;
 
 /// Box types of the boxes ISO/IEC 14496-12 defines for the class
-const DEFINED: [BoxType; 8] = [
+const DEFINED: [BoxType; 7] = [
     TimescaleEntryBox::BOX_TYPE,
     TimeOffsetBox::BOX_TYPE,
     TimestampSynchronyBox::BOX_TYPE,
@@ -22,7 +27,6 @@ const DEFINED: [BoxType; 8] = [
     ReceivedCryptoContextIdBox::BOX_TYPE,
     RolloverCounterBox::BOX_TYPE,
     SrtpProcessBox::BOX_TYPE,
-    BitRateBox::BOX_TYPE,
 ];
 
 /// [`ReceivedSrtpHintSampleEntry`] (`rsrp`), ISO/IEC 14496-12 §9.4.3.2
@@ -44,7 +48,7 @@ const DEFINED: [BoxType; 8] = [
 /// [`RtpHintSampleEntry`](crate::RtpHintSampleEntry) are, the boxes of
 /// ISO/IEC 14496-12 being the `tims` the entry holds exactly one of, `tsro`,
 /// `tssy`, the `rssr` it holds exactly one of, `ccid`, `sroc`, the `srpp` it
-/// holds exactly one of, then `btrt`.
+/// holds exactly one of, then `sinf`, `scrb`, `rinf` and `btrt`.
 #[doc(alias = "rsrp")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -69,6 +73,12 @@ pub struct ReceivedSrtpHintSampleEntry {
     pub sroc: Option<RolloverCounterBox>,
     /// SRTP algorithms that were applied to the packets
     pub srpp: SrtpProcessBox,
+    /// Protection schemes of a protected sample entry, alternative descriptions of the same protection
+    pub sinf: Vec<ProtectionSchemeInfoBox>,
+    /// Scrambling schemes applied to the samples
+    pub scrb: Vec<ScrambleSchemeInfoBox>,
+    /// Restriction of a restricted sample entry, or advisory information on the restriction of one whose type was not transformed
+    pub rinf: Option<RestrictedSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -115,6 +125,9 @@ impl TryFrom<&SampleEntry> for ReceivedSrtpHintSampleEntry {
             ccid: children.take_zero_or_one_if_decoded()?,
             sroc: children.take_zero_or_one_if_decoded()?,
             srpp: children.take_exactly_one()?,
+            sinf: children.take_zero_or_more_if_decoded(),
+            scrb: children.take_zero_or_more_if_decoded(),
+            rinf: children.take_zero_or_one_if_decoded()?,
             btrt: children.take_zero_or_one_if_decoded()?,
             extra_boxes: OtherBoxes::from(children),
         })
@@ -130,6 +143,12 @@ impl TryFrom<&ReceivedSrtpHintSampleEntry> for SampleEntry {
     ///
     /// * The failures of writing a child.
     fn try_from(hint: &ReceivedSrtpHintSampleEntry) -> Result<Self, Error> {
+        let any_entry = AnyEntryBoxes {
+            sinf: &hint.sinf,
+            scrb: &hint.scrb,
+            rinf: hint.rinf.as_ref(),
+            btrt: hint.btrt.as_ref(),
+        };
         let remaining_len = children_len(
             &hint.derived_boxes,
             [
@@ -140,7 +159,7 @@ impl TryFrom<&ReceivedSrtpHintSampleEntry> for SampleEntry {
                 hint.ccid.as_ref().map_or(0, BoxEncode::encoded_len),
                 hint.sroc.as_ref().map_or(0, BoxEncode::encoded_len),
                 hint.srpp.encoded_len(),
-                hint.btrt.as_ref().map_or(0, BoxEncode::encoded_len),
+                any_entry.encoded_len(),
             ],
             &hint.extra_boxes,
         );
@@ -162,7 +181,7 @@ impl TryFrom<&ReceivedSrtpHintSampleEntry> for SampleEntry {
                         let rest = encode_optional(rest, hint.ccid.as_ref())?;
                         let rest = encode_optional(rest, hint.sroc.as_ref())?;
                         let rest = hint.srpp.encode(rest)?;
-                        encode_optional(rest, hint.btrt.as_ref())
+                        any_entry.encode(rest)
                     },
                     &hint.extra_boxes,
                 )

@@ -1,15 +1,15 @@
 //! [`RtcpReceptionHintSampleEntry`] and [`SrtcpReceptionHintSampleEntry`], the sample entries of a track recording an RTCP or SRTCP stream
 
-use isobmff_core::{BoxDefinition, BoxEncode, BoxType, Error, FourCc, OtherBoxes};
+use alloc::vec::Vec;
+
+use isobmff_core::{Error, FourCc, OtherBoxes};
 
 use crate::btrt::BitRateBox;
+use crate::rinf::RestrictedSchemeInfoBox;
 use crate::sample_entry::rtp_hint::{FIELDS_LEN, RtpEntry, read_entry, write_fields};
-use crate::sample_entry::{
-    SampleEntry, children_len, encode_children, encode_optional, from_class,
-};
-
-/// Box types of the boxes ISO/IEC 14496-12 defines for both classes
-const DEFINED: [BoxType; 1] = [BitRateBox::BOX_TYPE];
+use crate::sample_entry::{AnyEntryBoxes, SampleEntry, children_len, encode_children, from_class};
+use crate::scrb::ScrambleSchemeInfoBox;
+use crate::sinf::ProtectionSchemeInfoBox;
 
 /// [`RtcpReceptionHintSampleEntry`] (`rtcp`), ISO/IEC 14496-12 §9.4.2.3
 ///
@@ -28,9 +28,10 @@ const DEFINED: [BoxType; 1] = [BitRateBox::BOX_TYPE];
 /// The children are laid out in three parts, the order in which the entry
 /// writes them, whatever order they were read in: the boxes a specification
 /// deriving the class defines, in [`derived_boxes`](Self::derived_boxes);
-/// `btrt`, which any sample entry may hold; and the boxes no definition of
+/// the boxes any sample entry may hold, `sinf`, `scrb`, `rinf` and `btrt` in
+/// this order; and the boxes no definition of
 /// the class names, in [`extra_boxes`](Self::extra_boxes). A child of a type
-/// this crate does not read that lies before `btrt` is read into the first
+/// this crate does not read that lies before every box of the second part is read into the first
 /// part, and one that lies after it into the third.
 #[doc(alias = "rtcp")]
 #[non_exhaustive]
@@ -42,6 +43,12 @@ pub struct RtcpReceptionHintSampleEntry {
     pub max_packet_size: u32,
     /// Children a specification deriving the class defines, which lay before the boxes of ISO/IEC 14496-12
     pub derived_boxes: OtherBoxes,
+    /// Protection schemes of a protected sample entry, alternative descriptions of the same protection
+    pub sinf: Vec<ProtectionSchemeInfoBox>,
+    /// Scrambling schemes applied to the samples
+    pub scrb: Vec<ScrambleSchemeInfoBox>,
+    /// Restriction of a restricted sample entry, or advisory information on the restriction of one whose type was not transformed
+    pub rinf: Option<RestrictedSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -65,19 +72,22 @@ impl TryFrom<&SampleEntry> for RtcpReceptionHintSampleEntry {
     /// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
     ///   bytes end inside a field, counted from the end of
     ///   `data_reference_index`.
-    /// * The failures of a child that does not frame, and of a `btrt` given
-    ///   more than once.
+    /// * The failures of a child that does not frame, and of a `rinf` or
+    ///   `btrt` given more than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         let RtpEntry {
             max_packet_size,
             derived_boxes,
             mut children,
-        } = read_entry(entry, Self::FORMAT, &DEFINED)?;
+        } = read_entry(entry, Self::FORMAT, &[])?;
 
         Ok(Self {
             data_reference_index: entry.data_reference_index,
             max_packet_size,
             derived_boxes,
+            sinf: children.take_zero_or_more_if_decoded(),
+            scrb: children.take_zero_or_more_if_decoded(),
+            rinf: children.take_zero_or_one_if_decoded()?,
             btrt: children.take_zero_or_one_if_decoded()?,
             extra_boxes: OtherBoxes::from(children),
         })
@@ -93,12 +103,18 @@ impl TryFrom<&RtcpReceptionHintSampleEntry> for SampleEntry {
     ///
     /// * The failures of writing a child.
     fn try_from(hint: &RtcpReceptionHintSampleEntry) -> Result<Self, Error> {
+        let any_entry = AnyEntryBoxes {
+            sinf: &hint.sinf,
+            scrb: &hint.scrb,
+            rinf: hint.rinf.as_ref(),
+            btrt: hint.btrt.as_ref(),
+        };
         from_class(
             RtcpReceptionHintSampleEntry::FORMAT,
             hint.data_reference_index,
             children_len(
                 &hint.derived_boxes,
-                hint.btrt.as_ref().map(BoxEncode::encoded_len),
+                [any_entry.encoded_len()],
                 &hint.extra_boxes,
             )
             .saturating_add(FIELDS_LEN),
@@ -107,7 +123,7 @@ impl TryFrom<&RtcpReceptionHintSampleEntry> for SampleEntry {
                 encode_children(
                     writer.take_remainder(),
                     &hint.derived_boxes,
-                    |rest| encode_optional(rest, hint.btrt.as_ref()),
+                    |rest| any_entry.encode(rest),
                     &hint.extra_boxes,
                 )
             },
@@ -142,6 +158,12 @@ pub struct SrtcpReceptionHintSampleEntry {
     pub max_packet_size: u32,
     /// Children a specification deriving the class defines, which lay before the boxes of ISO/IEC 14496-12
     pub derived_boxes: OtherBoxes,
+    /// Protection schemes of a protected sample entry, alternative descriptions of the same protection
+    pub sinf: Vec<ProtectionSchemeInfoBox>,
+    /// Scrambling schemes applied to the samples
+    pub scrb: Vec<ScrambleSchemeInfoBox>,
+    /// Restriction of a restricted sample entry, or advisory information on the restriction of one whose type was not transformed
+    pub rinf: Option<RestrictedSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -168,12 +190,15 @@ impl TryFrom<&SampleEntry> for SrtcpReceptionHintSampleEntry {
             max_packet_size,
             derived_boxes,
             mut children,
-        } = read_entry(entry, Self::FORMAT, &DEFINED)?;
+        } = read_entry(entry, Self::FORMAT, &[])?;
 
         Ok(Self {
             data_reference_index: entry.data_reference_index,
             max_packet_size,
             derived_boxes,
+            sinf: children.take_zero_or_more_if_decoded(),
+            scrb: children.take_zero_or_more_if_decoded(),
+            rinf: children.take_zero_or_one_if_decoded()?,
             btrt: children.take_zero_or_one_if_decoded()?,
             extra_boxes: OtherBoxes::from(children),
         })
@@ -189,12 +214,18 @@ impl TryFrom<&SrtcpReceptionHintSampleEntry> for SampleEntry {
     ///
     /// * The failures of writing a child.
     fn try_from(hint: &SrtcpReceptionHintSampleEntry) -> Result<Self, Error> {
+        let any_entry = AnyEntryBoxes {
+            sinf: &hint.sinf,
+            scrb: &hint.scrb,
+            rinf: hint.rinf.as_ref(),
+            btrt: hint.btrt.as_ref(),
+        };
         from_class(
             SrtcpReceptionHintSampleEntry::FORMAT,
             hint.data_reference_index,
             children_len(
                 &hint.derived_boxes,
-                hint.btrt.as_ref().map(BoxEncode::encoded_len),
+                [any_entry.encoded_len()],
                 &hint.extra_boxes,
             )
             .saturating_add(FIELDS_LEN),
@@ -203,7 +234,7 @@ impl TryFrom<&SrtcpReceptionHintSampleEntry> for SampleEntry {
                 encode_children(
                     writer.take_remainder(),
                     &hint.derived_boxes,
-                    |rest| encode_optional(rest, hint.btrt.as_ref()),
+                    |rest| any_entry.encode(rest),
                     &hint.extra_boxes,
                 )
             },

@@ -1,19 +1,24 @@
 //! [`FdHintSampleEntry`], the sample entry of an FD hint track
 
+use alloc::vec::Vec;
+
 use isobmff_core::{BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FourCc, OtherBoxes};
 
 use crate::btrt::BitRateBox;
 use crate::hint_entry_boxes::TimescaleEntryBox;
+use crate::rinf::RestrictedSchemeInfoBox;
 use crate::sample_entry::{
-    HINT_TRACK_VERSION, SampleEntry, children_len, encode_children, encode_optional, from_class,
-    of_format, split_children,
+    AnyEntryBoxes, HINT_TRACK_VERSION, SampleEntry, children_len, encode_children, encode_optional,
+    from_class, of_format, split_children,
 };
+use crate::scrb::ScrambleSchemeInfoBox;
+use crate::sinf::ProtectionSchemeInfoBox;
 
 /// Length of the fields the class lays out after `data_reference_index`
 const FIELDS_LEN: u64 = 2 + 2 + 2 + 2;
 
 /// Box types of the boxes ISO/IEC 14496-12 defines for the class
-const DEFINED: [BoxType; 2] = [TimescaleEntryBox::BOX_TYPE, BitRateBox::BOX_TYPE];
+const DEFINED: [BoxType; 1] = [TimescaleEntryBox::BOX_TYPE];
 
 /// [`FdHintSampleEntry`] (`fdp `), ISO/IEC 14496-12 §9.2.3
 ///
@@ -30,7 +35,7 @@ const DEFINED: [BoxType; 2] = [TimescaleEntryBox::BOX_TYPE, BitRateBox::BOX_TYPE
 /// The children are laid out in three parts, the order in which the entry
 /// writes them, whatever order they were read in: the boxes a specification
 /// deriving the class defines, in [`derived_boxes`](Self::derived_boxes);
-/// `tims` then `btrt`, which any sample entry may hold; and the boxes no
+/// `tims` then the boxes any sample entry may hold, `sinf`, `scrb`, `rinf` and `btrt` in this order; and the boxes no
 /// definition of the class names, in [`extra_boxes`](Self::extra_boxes). A
 /// child of a type this crate does not read that lies before the first box
 /// of ISO/IEC 14496-12 is read into the first part, and one that lies after
@@ -49,6 +54,12 @@ pub struct FdHintSampleEntry {
     pub derived_boxes: OtherBoxes,
     /// Timescale of the sample times, which give the send times of the packets; without it they give none
     pub tims: Option<TimescaleEntryBox>,
+    /// Protection schemes of a protected sample entry, alternative descriptions of the same protection
+    pub sinf: Vec<ProtectionSchemeInfoBox>,
+    /// Scrambling schemes applied to the samples
+    pub scrb: Vec<ScrambleSchemeInfoBox>,
+    /// Restriction of a restricted sample entry, or advisory information on the restriction of one whose type was not transformed
+    pub rinf: Option<RestrictedSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -88,6 +99,9 @@ impl TryFrom<&SampleEntry> for FdHintSampleEntry {
             fec_overhead,
             derived_boxes,
             tims: children.take_zero_or_one_if_decoded()?,
+            sinf: children.take_zero_or_more_if_decoded(),
+            scrb: children.take_zero_or_more_if_decoded(),
+            rinf: children.take_zero_or_one_if_decoded()?,
             btrt: children.take_zero_or_one_if_decoded()?,
             extra_boxes: OtherBoxes::from(children),
         })
@@ -103,11 +117,17 @@ impl TryFrom<&FdHintSampleEntry> for SampleEntry {
     ///
     /// * The failures of writing a child.
     fn try_from(hint: &FdHintSampleEntry) -> Result<Self, Error> {
+        let any_entry = AnyEntryBoxes {
+            sinf: &hint.sinf,
+            scrb: &hint.scrb,
+            rinf: hint.rinf.as_ref(),
+            btrt: hint.btrt.as_ref(),
+        };
         let remaining_len = children_len(
             &hint.derived_boxes,
             [
                 hint.tims.as_ref().map_or(0, BoxEncode::encoded_len),
-                hint.btrt.as_ref().map_or(0, BoxEncode::encoded_len),
+                any_entry.encoded_len(),
             ],
             &hint.extra_boxes,
         );
@@ -126,7 +146,7 @@ impl TryFrom<&FdHintSampleEntry> for SampleEntry {
                     &hint.derived_boxes,
                     |rest| {
                         let rest = encode_optional(rest, hint.tims.as_ref())?;
-                        encode_optional(rest, hint.btrt.as_ref())
+                        any_entry.encode(rest)
                     },
                     &hint.extra_boxes,
                 )
