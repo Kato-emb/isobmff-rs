@@ -9,7 +9,7 @@ use crate::hint_entry_boxes::{
     ReceivedSsrcBox, TimeOffsetBox, TimescaleEntryBox, TimestampSynchronyBox,
 };
 use crate::rinf::RestrictedSchemeInfoBox;
-use crate::sample_entry::rtp_hint::{FIELDS_LEN, RtpEntry, read_entry, write_fields};
+use crate::sample_entry::rtp_hint::{self, FIELDS_LEN, RtpEntry, write_fields};
 use crate::sample_entry::{
     AnyEntryBoxes, SampleEntry, children_len, encode_children, encode_optional, from_class,
 };
@@ -23,6 +23,104 @@ const DEFINED: [BoxType; 4] = [
     TimestampSynchronyBox::BOX_TYPE,
     ReceivedSsrcBox::BOX_TYPE,
 ];
+
+/// Fields and boxes an RTP reception hint entry lays out after `data_reference_index`, which both classes share, as [`read_entry`] reads them
+struct ReceivedRtpEntry {
+    max_packet_size: u32,
+    derived_boxes: OtherBoxes,
+    tims: TimescaleEntryBox,
+    tsro: Option<TimeOffsetBox>,
+    tssy: Option<TimestampSynchronyBox>,
+    rssr: Option<ReceivedSsrcBox>,
+    sinf: Vec<ProtectionSchemeInfoBox>,
+    scrb: Vec<ScrambleSchemeInfoBox>,
+    rinf: Option<RestrictedSchemeInfoBox>,
+    btrt: Option<BitRateBox>,
+    extra_boxes: OtherBoxes,
+}
+
+/// Reads the fields and the boxes of an RTP reception hint entry from the bytes of `entry`, an entry of the format `format`, after `data_reference_index`
+///
+/// # Errors
+///
+/// * The failures of [`ReceivedRtpHintSampleEntry::try_from`], `format`
+///   standing for `rrtp`.
+fn read_entry(entry: &SampleEntry, format: FourCc) -> Result<ReceivedRtpEntry, Error> {
+    let RtpEntry {
+        max_packet_size,
+        derived_boxes,
+        mut children,
+    } = rtp_hint::read_entry(entry, format, &DEFINED)?;
+
+    Ok(ReceivedRtpEntry {
+        max_packet_size,
+        derived_boxes,
+        tims: children.take_exactly_one()?,
+        tsro: children.take_zero_or_one_if_decoded()?,
+        tssy: children.take_zero_or_one_if_decoded()?,
+        rssr: children.take_zero_or_one_if_decoded()?,
+        sinf: children.take_zero_or_more_if_decoded(),
+        scrb: children.take_zero_or_more_if_decoded(),
+        rinf: children.take_zero_or_one_if_decoded()?,
+        btrt: children.take_zero_or_one_if_decoded()?,
+        extra_boxes: OtherBoxes::from(children),
+    })
+}
+
+/// Fields and boxes of an RTP reception hint entry to write, borrowed from the class that holds them, as [`ReceivedRtpParts::write`] writes them
+struct ReceivedRtpParts<'class> {
+    data_reference_index: u16,
+    max_packet_size: u32,
+    derived_boxes: &'class OtherBoxes,
+    tims: &'class TimescaleEntryBox,
+    tsro: Option<&'class TimeOffsetBox>,
+    tssy: Option<&'class TimestampSynchronyBox>,
+    rssr: Option<&'class ReceivedSsrcBox>,
+    any_entry: AnyEntryBoxes<'class>,
+    extra_boxes: &'class OtherBoxes,
+}
+
+impl ReceivedRtpParts<'_> {
+    /// Writes the fields and the boxes into the bytes of an entry of the format `format` after `data_reference_index`, the boxes of ISO/IEC 14496-12 in the order of §9.4.1.2
+    ///
+    /// # Errors
+    ///
+    /// * The failures of writing a child.
+    fn write(&self, format: FourCc) -> Result<SampleEntry, Error> {
+        let remaining_len = children_len(
+            self.derived_boxes,
+            [
+                self.tims.encoded_len(),
+                self.tsro.map_or(0, BoxEncode::encoded_len),
+                self.tssy.map_or(0, BoxEncode::encoded_len),
+                self.rssr.map_or(0, BoxEncode::encoded_len),
+                self.any_entry.encoded_len(),
+            ],
+            self.extra_boxes,
+        );
+
+        from_class(
+            format,
+            self.data_reference_index,
+            remaining_len.saturating_add(FIELDS_LEN),
+            |writer| {
+                write_fields(writer, self.max_packet_size)?;
+                encode_children(
+                    writer.take_remainder(),
+                    self.derived_boxes,
+                    |rest| {
+                        let rest = self.tims.encode(rest)?;
+                        let rest = encode_optional(rest, self.tsro)?;
+                        let rest = encode_optional(rest, self.tssy)?;
+                        let rest = encode_optional(rest, self.rssr)?;
+                        self.any_entry.encode(rest)
+                    },
+                    self.extra_boxes,
+                )
+            },
+        )
+    }
+}
 
 /// [`ReceivedRtpHintSampleEntry`] (`rrtp`), ISO/IEC 14496-12 §9.4.1.2
 ///
@@ -92,25 +190,33 @@ impl TryFrom<&SampleEntry> for ReceivedRtpHintSampleEntry {
     /// * The failures of a child that does not frame, of a `tims` that does
     ///   not read, and of a box of ISO/IEC 14496-12 given more than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
-        let RtpEntry {
+        let ReceivedRtpEntry {
             max_packet_size,
             derived_boxes,
-            mut children,
-        } = read_entry(entry, Self::FORMAT, &DEFINED)?;
+            tims,
+            tsro,
+            tssy,
+            rssr,
+            sinf,
+            scrb,
+            rinf,
+            btrt,
+            extra_boxes,
+        } = read_entry(entry, Self::FORMAT)?;
 
         Ok(Self {
             data_reference_index: entry.data_reference_index,
             max_packet_size,
             derived_boxes,
-            tims: children.take_exactly_one()?,
-            tsro: children.take_zero_or_one_if_decoded()?,
-            tssy: children.take_zero_or_one_if_decoded()?,
-            rssr: children.take_zero_or_one_if_decoded()?,
-            sinf: children.take_zero_or_more_if_decoded(),
-            scrb: children.take_zero_or_more_if_decoded(),
-            rinf: children.take_zero_or_one_if_decoded()?,
-            btrt: children.take_zero_or_one_if_decoded()?,
-            extra_boxes: OtherBoxes::from(children),
+            tims,
+            tsro,
+            tssy,
+            rssr,
+            sinf,
+            scrb,
+            rinf,
+            btrt,
+            extra_boxes,
         })
     }
 }
@@ -124,44 +230,23 @@ impl TryFrom<&ReceivedRtpHintSampleEntry> for SampleEntry {
     ///
     /// * The failures of writing a child.
     fn try_from(hint: &ReceivedRtpHintSampleEntry) -> Result<Self, Error> {
-        let any_entry = AnyEntryBoxes {
-            sinf: &hint.sinf,
-            scrb: &hint.scrb,
-            rinf: hint.rinf.as_ref(),
-            btrt: hint.btrt.as_ref(),
-        };
-        let remaining_len = children_len(
-            &hint.derived_boxes,
-            [
-                hint.tims.encoded_len(),
-                hint.tsro.as_ref().map_or(0, BoxEncode::encoded_len),
-                hint.tssy.as_ref().map_or(0, BoxEncode::encoded_len),
-                hint.rssr.as_ref().map_or(0, BoxEncode::encoded_len),
-                any_entry.encoded_len(),
-            ],
-            &hint.extra_boxes,
-        );
-
-        from_class(
-            ReceivedRtpHintSampleEntry::FORMAT,
-            hint.data_reference_index,
-            remaining_len.saturating_add(FIELDS_LEN),
-            |writer| {
-                write_fields(writer, hint.max_packet_size)?;
-                encode_children(
-                    writer.take_remainder(),
-                    &hint.derived_boxes,
-                    |rest| {
-                        let rest = hint.tims.encode(rest)?;
-                        let rest = encode_optional(rest, hint.tsro.as_ref())?;
-                        let rest = encode_optional(rest, hint.tssy.as_ref())?;
-                        let rest = encode_optional(rest, hint.rssr.as_ref())?;
-                        any_entry.encode(rest)
-                    },
-                    &hint.extra_boxes,
-                )
+        ReceivedRtpParts {
+            data_reference_index: hint.data_reference_index,
+            max_packet_size: hint.max_packet_size,
+            derived_boxes: &hint.derived_boxes,
+            tims: &hint.tims,
+            tsro: hint.tsro.as_ref(),
+            tssy: hint.tssy.as_ref(),
+            rssr: hint.rssr.as_ref(),
+            any_entry: AnyEntryBoxes {
+                sinf: &hint.sinf,
+                scrb: &hint.scrb,
+                rinf: hint.rinf.as_ref(),
+                btrt: hint.btrt.as_ref(),
             },
-        )
+            extra_boxes: &hint.extra_boxes,
+        }
+        .write(ReceivedRtpHintSampleEntry::FORMAT)
     }
 }
 
@@ -228,25 +313,33 @@ impl TryFrom<&SampleEntry> for ProtectedRtpReceptionHintSampleEntry {
     ///   `format`: the entry is of a format other than `prtp`.
     /// * The other failures of [`ReceivedRtpHintSampleEntry::try_from`].
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
-        let RtpEntry {
+        let ReceivedRtpEntry {
             max_packet_size,
             derived_boxes,
-            mut children,
-        } = read_entry(entry, Self::FORMAT, &DEFINED)?;
+            tims,
+            tsro,
+            tssy,
+            rssr,
+            sinf,
+            scrb,
+            rinf,
+            btrt,
+            extra_boxes,
+        } = read_entry(entry, Self::FORMAT)?;
 
         Ok(Self {
             data_reference_index: entry.data_reference_index,
             max_packet_size,
             derived_boxes,
-            tims: children.take_exactly_one()?,
-            tsro: children.take_zero_or_one_if_decoded()?,
-            tssy: children.take_zero_or_one_if_decoded()?,
-            rssr: children.take_zero_or_one_if_decoded()?,
-            sinf: children.take_zero_or_more_if_decoded(),
-            scrb: children.take_zero_or_more_if_decoded(),
-            rinf: children.take_zero_or_one_if_decoded()?,
-            btrt: children.take_zero_or_one_if_decoded()?,
-            extra_boxes: OtherBoxes::from(children),
+            tims,
+            tsro,
+            tssy,
+            rssr,
+            sinf,
+            scrb,
+            rinf,
+            btrt,
+            extra_boxes,
         })
     }
 }
@@ -260,44 +353,23 @@ impl TryFrom<&ProtectedRtpReceptionHintSampleEntry> for SampleEntry {
     ///
     /// * The failures of writing a child.
     fn try_from(hint: &ProtectedRtpReceptionHintSampleEntry) -> Result<Self, Error> {
-        let any_entry = AnyEntryBoxes {
-            sinf: &hint.sinf,
-            scrb: &hint.scrb,
-            rinf: hint.rinf.as_ref(),
-            btrt: hint.btrt.as_ref(),
-        };
-        let remaining_len = children_len(
-            &hint.derived_boxes,
-            [
-                hint.tims.encoded_len(),
-                hint.tsro.as_ref().map_or(0, BoxEncode::encoded_len),
-                hint.tssy.as_ref().map_or(0, BoxEncode::encoded_len),
-                hint.rssr.as_ref().map_or(0, BoxEncode::encoded_len),
-                any_entry.encoded_len(),
-            ],
-            &hint.extra_boxes,
-        );
-
-        from_class(
-            ProtectedRtpReceptionHintSampleEntry::FORMAT,
-            hint.data_reference_index,
-            remaining_len.saturating_add(FIELDS_LEN),
-            |writer| {
-                write_fields(writer, hint.max_packet_size)?;
-                encode_children(
-                    writer.take_remainder(),
-                    &hint.derived_boxes,
-                    |rest| {
-                        let rest = hint.tims.encode(rest)?;
-                        let rest = encode_optional(rest, hint.tsro.as_ref())?;
-                        let rest = encode_optional(rest, hint.tssy.as_ref())?;
-                        let rest = encode_optional(rest, hint.rssr.as_ref())?;
-                        any_entry.encode(rest)
-                    },
-                    &hint.extra_boxes,
-                )
+        ReceivedRtpParts {
+            data_reference_index: hint.data_reference_index,
+            max_packet_size: hint.max_packet_size,
+            derived_boxes: &hint.derived_boxes,
+            tims: &hint.tims,
+            tsro: hint.tsro.as_ref(),
+            tssy: hint.tssy.as_ref(),
+            rssr: hint.rssr.as_ref(),
+            any_entry: AnyEntryBoxes {
+                sinf: &hint.sinf,
+                scrb: &hint.scrb,
+                rinf: hint.rinf.as_ref(),
+                btrt: hint.btrt.as_ref(),
             },
-        )
+            extra_boxes: &hint.extra_boxes,
+        }
+        .write(ProtectedRtpReceptionHintSampleEntry::FORMAT)
     }
 }
 

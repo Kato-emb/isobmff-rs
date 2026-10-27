@@ -6,10 +6,83 @@ use isobmff_core::{Error, FourCc, OtherBoxes};
 
 use crate::btrt::BitRateBox;
 use crate::rinf::RestrictedSchemeInfoBox;
-use crate::sample_entry::rtp_hint::{FIELDS_LEN, RtpEntry, read_entry, write_fields};
+use crate::sample_entry::rtp_hint::{self, FIELDS_LEN, RtpEntry, write_fields};
 use crate::sample_entry::{AnyEntryBoxes, SampleEntry, children_len, encode_children, from_class};
 use crate::scrb::ScrambleSchemeInfoBox;
 use crate::sinf::ProtectionSchemeInfoBox;
+
+/// Fields and boxes an RTCP or SRTCP reception hint entry lays out after `data_reference_index`, which both classes share, as [`read_entry`] reads them
+struct RtcpEntry {
+    max_packet_size: u32,
+    derived_boxes: OtherBoxes,
+    sinf: Vec<ProtectionSchemeInfoBox>,
+    scrb: Vec<ScrambleSchemeInfoBox>,
+    rinf: Option<RestrictedSchemeInfoBox>,
+    btrt: Option<BitRateBox>,
+    extra_boxes: OtherBoxes,
+}
+
+/// Reads the fields and the boxes of an RTCP or SRTCP reception hint entry from the bytes of `entry`, an entry of the format `format`, after `data_reference_index`
+///
+/// # Errors
+///
+/// * The failures of [`RtcpReceptionHintSampleEntry::try_from`], `format`
+///   standing for `rtcp`.
+fn read_entry(entry: &SampleEntry, format: FourCc) -> Result<RtcpEntry, Error> {
+    let RtpEntry {
+        max_packet_size,
+        derived_boxes,
+        mut children,
+    } = rtp_hint::read_entry(entry, format, &[])?;
+
+    Ok(RtcpEntry {
+        max_packet_size,
+        derived_boxes,
+        sinf: children.take_zero_or_more_if_decoded(),
+        scrb: children.take_zero_or_more_if_decoded(),
+        rinf: children.take_zero_or_one_if_decoded()?,
+        btrt: children.take_zero_or_one_if_decoded()?,
+        extra_boxes: OtherBoxes::from(children),
+    })
+}
+
+/// Fields and boxes of an RTCP or SRTCP reception hint entry to write, borrowed from the class that holds them, as [`RtcpParts::write`] writes them
+struct RtcpParts<'class> {
+    data_reference_index: u16,
+    max_packet_size: u32,
+    derived_boxes: &'class OtherBoxes,
+    any_entry: AnyEntryBoxes<'class>,
+    extra_boxes: &'class OtherBoxes,
+}
+
+impl RtcpParts<'_> {
+    /// Writes the fields and the boxes into the bytes of an entry of the format `format` after `data_reference_index`
+    ///
+    /// # Errors
+    ///
+    /// * The failures of writing a child.
+    fn write(&self, format: FourCc) -> Result<SampleEntry, Error> {
+        from_class(
+            format,
+            self.data_reference_index,
+            children_len(
+                self.derived_boxes,
+                [self.any_entry.encoded_len()],
+                self.extra_boxes,
+            )
+            .saturating_add(FIELDS_LEN),
+            |writer| {
+                write_fields(writer, self.max_packet_size)?;
+                encode_children(
+                    writer.take_remainder(),
+                    self.derived_boxes,
+                    |rest| self.any_entry.encode(rest),
+                    self.extra_boxes,
+                )
+            },
+        )
+    }
+}
 
 /// [`RtcpReceptionHintSampleEntry`] (`rtcp`), ISO/IEC 14496-12 §9.4.2.3
 ///
@@ -75,21 +148,25 @@ impl TryFrom<&SampleEntry> for RtcpReceptionHintSampleEntry {
     /// * The failures of a child that does not frame, and of a `rinf` or
     ///   `btrt` given more than once.
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
-        let RtpEntry {
+        let RtcpEntry {
             max_packet_size,
             derived_boxes,
-            mut children,
-        } = read_entry(entry, Self::FORMAT, &[])?;
+            sinf,
+            scrb,
+            rinf,
+            btrt,
+            extra_boxes,
+        } = read_entry(entry, Self::FORMAT)?;
 
         Ok(Self {
             data_reference_index: entry.data_reference_index,
             max_packet_size,
             derived_boxes,
-            sinf: children.take_zero_or_more_if_decoded(),
-            scrb: children.take_zero_or_more_if_decoded(),
-            rinf: children.take_zero_or_one_if_decoded()?,
-            btrt: children.take_zero_or_one_if_decoded()?,
-            extra_boxes: OtherBoxes::from(children),
+            sinf,
+            scrb,
+            rinf,
+            btrt,
+            extra_boxes,
         })
     }
 }
@@ -103,31 +180,19 @@ impl TryFrom<&RtcpReceptionHintSampleEntry> for SampleEntry {
     ///
     /// * The failures of writing a child.
     fn try_from(hint: &RtcpReceptionHintSampleEntry) -> Result<Self, Error> {
-        let any_entry = AnyEntryBoxes {
-            sinf: &hint.sinf,
-            scrb: &hint.scrb,
-            rinf: hint.rinf.as_ref(),
-            btrt: hint.btrt.as_ref(),
-        };
-        from_class(
-            RtcpReceptionHintSampleEntry::FORMAT,
-            hint.data_reference_index,
-            children_len(
-                &hint.derived_boxes,
-                [any_entry.encoded_len()],
-                &hint.extra_boxes,
-            )
-            .saturating_add(FIELDS_LEN),
-            |writer| {
-                write_fields(writer, hint.max_packet_size)?;
-                encode_children(
-                    writer.take_remainder(),
-                    &hint.derived_boxes,
-                    |rest| any_entry.encode(rest),
-                    &hint.extra_boxes,
-                )
+        RtcpParts {
+            data_reference_index: hint.data_reference_index,
+            max_packet_size: hint.max_packet_size,
+            derived_boxes: &hint.derived_boxes,
+            any_entry: AnyEntryBoxes {
+                sinf: &hint.sinf,
+                scrb: &hint.scrb,
+                rinf: hint.rinf.as_ref(),
+                btrt: hint.btrt.as_ref(),
             },
-        )
+            extra_boxes: &hint.extra_boxes,
+        }
+        .write(RtcpReceptionHintSampleEntry::FORMAT)
     }
 }
 
@@ -186,21 +251,25 @@ impl TryFrom<&SampleEntry> for SrtcpReceptionHintSampleEntry {
     ///   `format`: the entry is of a format other than `stcp`.
     /// * The other failures of [`RtcpReceptionHintSampleEntry::try_from`].
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
-        let RtpEntry {
+        let RtcpEntry {
             max_packet_size,
             derived_boxes,
-            mut children,
-        } = read_entry(entry, Self::FORMAT, &[])?;
+            sinf,
+            scrb,
+            rinf,
+            btrt,
+            extra_boxes,
+        } = read_entry(entry, Self::FORMAT)?;
 
         Ok(Self {
             data_reference_index: entry.data_reference_index,
             max_packet_size,
             derived_boxes,
-            sinf: children.take_zero_or_more_if_decoded(),
-            scrb: children.take_zero_or_more_if_decoded(),
-            rinf: children.take_zero_or_one_if_decoded()?,
-            btrt: children.take_zero_or_one_if_decoded()?,
-            extra_boxes: OtherBoxes::from(children),
+            sinf,
+            scrb,
+            rinf,
+            btrt,
+            extra_boxes,
         })
     }
 }
@@ -214,31 +283,19 @@ impl TryFrom<&SrtcpReceptionHintSampleEntry> for SampleEntry {
     ///
     /// * The failures of writing a child.
     fn try_from(hint: &SrtcpReceptionHintSampleEntry) -> Result<Self, Error> {
-        let any_entry = AnyEntryBoxes {
-            sinf: &hint.sinf,
-            scrb: &hint.scrb,
-            rinf: hint.rinf.as_ref(),
-            btrt: hint.btrt.as_ref(),
-        };
-        from_class(
-            SrtcpReceptionHintSampleEntry::FORMAT,
-            hint.data_reference_index,
-            children_len(
-                &hint.derived_boxes,
-                [any_entry.encoded_len()],
-                &hint.extra_boxes,
-            )
-            .saturating_add(FIELDS_LEN),
-            |writer| {
-                write_fields(writer, hint.max_packet_size)?;
-                encode_children(
-                    writer.take_remainder(),
-                    &hint.derived_boxes,
-                    |rest| any_entry.encode(rest),
-                    &hint.extra_boxes,
-                )
+        RtcpParts {
+            data_reference_index: hint.data_reference_index,
+            max_packet_size: hint.max_packet_size,
+            derived_boxes: &hint.derived_boxes,
+            any_entry: AnyEntryBoxes {
+                sinf: &hint.sinf,
+                scrb: &hint.scrb,
+                rinf: hint.rinf.as_ref(),
+                btrt: hint.btrt.as_ref(),
             },
-        )
+            extra_boxes: &hint.extra_boxes,
+        }
+        .write(SrtcpReceptionHintSampleEntry::FORMAT)
     }
 }
 
