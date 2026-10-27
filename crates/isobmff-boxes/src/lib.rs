@@ -51,6 +51,7 @@ mod cinf;
 mod clap;
 mod clli;
 mod colr;
+mod compressed;
 mod cprt;
 mod csch;
 mod csgp;
@@ -65,13 +66,22 @@ mod edts;
 mod elng;
 mod elst;
 mod etyp;
+mod fd_sample;
+mod fdpa;
+mod fiin;
+mod fpar;
 mod free;
 mod frma;
 mod ftyp;
 mod full_box;
+mod gitn;
 mod grpl;
 mod hdlp;
 mod hdlr;
+mod hinf;
+mod hint_entry_boxes;
+mod hint_info;
+mod hint_statistics;
 mod idat;
 mod iinf;
 mod iloc;
@@ -104,6 +114,7 @@ mod mime;
 mod minf;
 mod moof;
 mod moov;
+mod mpeg2ts_hint;
 mod mvex;
 mod mvhd;
 mod otyp;
@@ -113,8 +124,10 @@ mod pdin;
 mod pitm;
 mod prft;
 mod prsl;
+mod reservoir;
 mod rinf;
 mod rsot;
+mod rtp_tlv;
 mod saio;
 mod saiz;
 mod sample_entry;
@@ -125,12 +138,14 @@ mod schi;
 mod schm;
 mod scrb;
 mod sdtp;
+mod segr;
 mod setu;
 mod sgpd;
 mod sidx;
 mod sinf;
 mod spki;
 mod srat;
+mod srpp;
 mod ssix;
 mod ssrt;
 mod stbl;
@@ -198,18 +213,41 @@ pub use cinf::CompleteTrackInfoBox;
 pub use clap::CleanApertureBox;
 pub use clli::ContentLightLevelBox;
 pub use colr::ColourInformationBox;
+pub use compressed::{
+    CompressedMovieBox, CompressedMovieFragmentBox, CompressedSegmentIndexBox,
+    CompressedSubsegmentIndexBox,
+};
 pub use cprt::CopyrightBox;
 pub use csch::CompatibleSchemeTypeBox;
 pub use csgp::{CompactSampleToGroupBox, CompactSampleToGroupPattern};
 pub use cslg::CompositionToDecodeBox;
 pub use ctts::{CompositionOffsetBox, CompositionOffsetEntry};
 pub use etyp::{ExtendedTypeBox, TypeCombinationBox};
+pub use fd_sample::{ExtraDataBox, FdSample, FecInformationBox};
+pub use fdpa::{FdConstructor, FdPacketBox, LctHeaderExtension, LctHeaderTemplate};
+pub use fiin::{FdItemInformationBox, PartitionEntry};
+pub use fpar::{FilePartitionBox, FilePartitionEntry};
 pub use free::{Free, FreeSpaceBox, FreeType, Skip};
 pub use frma::OriginalFormatBox;
 pub use ftyp::FileTypeBox;
+pub use gitn::{GroupIdToNameBox, GroupIdToNameEntry};
 pub use grpl::{EntityToGroup, EntityToGroupBox, GroupsListBox};
 pub use hdlp::HandlerProperty;
 pub use hdlr::HandlerBox;
+pub use hinf::{HintMaxRateBox, HintPayloadIdBox, HintStatisticsBox};
+pub use hint_entry_boxes::{
+    ReceivedCryptoContextIdBox, ReceivedSsrcBox, RolloverCounterBox, SequenceOffsetBox,
+    TimeOffsetBox, TimescaleEntryBox, TimestampSynchronyBox,
+};
+pub use hint_info::{
+    HintInformationBox, RtpMovieHintInformationBox, RtpTrackSdpHintInformationBox,
+};
+pub use hint_statistics::{
+    HintBytesSent64Box, HintBytesSentBox, HintImmediateBytesSentBox, HintLargestPacketBox,
+    HintLongestPacketBox, HintMaxRelativeTimeBox, HintMediaBytesSentBox, HintMinRelativeTimeBox,
+    HintPacketsSent64Box, HintPacketsSentBox, HintPayloadBytesSent64Box, HintPayloadBytesSentBox,
+    HintRepeatedBytesSentBox,
+};
 pub use idat::ItemDataBox;
 pub use iinf::ItemInfoBox;
 pub use iloc::{ItemLocation, ItemLocationBox, ItemLocationExtent};
@@ -247,6 +285,7 @@ pub use mime::MimeBox;
 pub use minf::MediaInformationBox;
 pub use moof::MovieFragmentBox;
 pub use moov::MovieBox;
+pub use mpeg2ts_hint::{InitialSampleTimeBox, OdBox, PatBox, PmtBox, TsTimingBox};
 pub use mvex::MovieExtendsBox;
 pub use mvhd::MovieHeaderBox;
 pub use otyp::OriginalFileTypeBox;
@@ -256,15 +295,21 @@ pub use pdin::{ProgressiveDownloadInfoBox, ProgressiveDownloadInfoEntry};
 pub use pitm::PrimaryItemBox;
 pub use prft::ProducerReferenceTimeBox;
 pub use prsl::PreselectionGroupBox;
+pub use reservoir::{FecReservoirBox, FileReservoirBox, ReservoirEntry};
 pub use rinf::RestrictedSchemeInfoBox;
 pub use rsot::RedundantSampleOriginalTimingBox;
+pub use rtp_tlv::{ReceivedCsrcBox, RtpHeaderExtensionTlvBox, RtpOffsetTlvBox};
 pub use saio::SampleAuxiliaryInformationOffsetsBox;
 pub use saiz::{AuxInfoType, SampleAuxiliaryInformationSizesBox, SampleInfoSizes};
 pub use sample_entry::{
     AudioSampleEntry, AudioSampleEntryV1, AudioSampleEntryVariant, BoxedMetadataSampleEntry,
-    FontSampleEntry, HapticSampleEntry, SampleEntry, SimpleTextSampleEntry,
-    TextMetaDataSampleEntry, TextSubtitleSampleEntry, UriMetaSampleEntry, VisualSampleEntry,
-    VolumetricVisualSampleEntry, XmlMetaDataSampleEntry, XmlSubtitleSampleEntry,
+    FdHintSampleEntry, FontSampleEntry, HapticSampleEntry, Mpeg2TsReceptionSampleEntry,
+    Mpeg2TsServerSampleEntry, ProtectedMpeg2TransportStreamSampleEntry,
+    ProtectedRtpReceptionHintSampleEntry, ReceivedRtpHintSampleEntry, ReceivedSrtpHintSampleEntry,
+    RtcpReceptionHintSampleEntry, RtpHintSampleEntry, SampleEntry, SimpleTextSampleEntry,
+    SrtcpReceptionHintSampleEntry, SrtpHintSampleEntry, TextMetaDataSampleEntry,
+    TextSubtitleSampleEntry, UriMetaSampleEntry, VisualSampleEntry, VolumetricVisualSampleEntry,
+    XmlMetaDataSampleEntry, XmlSubtitleSampleEntry,
 };
 pub use sample_group_entry::{
     AlternativeStartupEntry, AlternativeStartupPiece, AudioPreRollEntry, CleanApertureEntry,
@@ -279,12 +324,14 @@ pub use schi::SchemeInformationBox;
 pub use schm::SchemeTypeBox;
 pub use scrb::ScrambleSchemeInfoBox;
 pub use sdtp::{SampleDependencyTypeBox, SampleDependencyTypeEntry};
+pub use segr::{FdSessionGroupBox, SessionGroup};
 pub use setu::MetadataSetupBox;
 pub use sgpd::SampleGroupDescriptionBox;
 pub use sidx::{SegmentIndexBox, SegmentIndexReference};
 pub use sinf::ProtectionSchemeInfoBox;
 pub use spki::SamplePackingInformationBox;
 pub use srat::SamplingRateBox;
+pub use srpp::SrtpProcessBox;
 pub use ssix::{Subsegment, SubsegmentIndexBox, SubsegmentRange};
 pub use ssrt::{SubSampleDescription, SubSampleReferenceTableBox};
 pub use stbl::SampleTableBox;

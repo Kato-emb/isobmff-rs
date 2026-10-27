@@ -8,6 +8,8 @@ use isobmff_core::{
 };
 
 use crate::cprt::CopyrightBox;
+use crate::hinf::HintStatisticsBox;
+use crate::hint_info::HintInformationBox;
 use crate::kind::KindBox;
 use crate::labl::LabelBox;
 use crate::ludt::LoudnessBox;
@@ -22,9 +24,11 @@ use crate::tsel::TrackSelectionBox;
 /// The box writes the `cprt`s, `tsel`, the `kind`s, the `labl`s, the `strk`s
 /// and the `ludt`s in this order, whatever order they were read in: the order
 /// of ISO/IEC 14496-12 Table 2, which lists `labl` after `kind` in the
-/// `udta` of a `prsl`. Children of other types, and a child of these types
-/// that does not read, are kept in [`other_boxes`](Self::other_boxes), and
-/// written back after them; a `tsel` that does not read reads back [`None`].
+/// `udta` of a `prsl`. Then come `hnti` and `hinf`, which Table 2 does not
+/// list, in the order of §9.1.4 and §9.1.5. Children of other types, and a
+/// child of these types that does not read, are kept in
+/// [`other_boxes`](Self::other_boxes), and written back after them; a `tsel`,
+/// `hnti` or `hinf` that does not read reads back [`None`].
 #[doc(alias = "udta")]
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -41,6 +45,10 @@ pub struct UserDataBox {
     pub strk: Vec<SubTrackBox>,
     /// Loudness declarations of the audio track, in the order they came
     pub ludt: Vec<LoudnessBox>,
+    /// SDP information of the movie or of the hint track
+    pub hnti: Option<HintInformationBox>,
+    /// Statistics of the hint track
+    pub hinf: Option<HintStatisticsBox>,
     /// Children of a type the box holds no field for
     pub other_boxes: OtherBoxes,
 }
@@ -60,6 +68,8 @@ impl BoxDecode for UserDataBox {
             labl: children.take_zero_or_more_if_decoded(),
             strk: children.take_zero_or_more_if_decoded(),
             ludt: children.take_zero_or_more_if_decoded(),
+            hnti: children.take_zero_or_one_if_decoded()?,
+            hinf: children.take_zero_or_one_if_decoded()?,
             other_boxes: OtherBoxes::from(children),
         })
     }
@@ -75,6 +85,8 @@ impl BoxEncode for UserDataBox {
             .chain(self.labl.iter().map(BoxEncode::encoded_len))
             .chain(self.strk.iter().map(BoxEncode::encoded_len))
             .chain(self.ludt.iter().map(BoxEncode::encoded_len))
+            .chain(self.hnti.iter().map(BoxEncode::encoded_len))
+            .chain(self.hinf.iter().map(BoxEncode::encoded_len))
             .chain(self.other_boxes.as_slice().iter().map(AnyBox::encoded_len))
             .fold(0, u64::saturating_add)
     }
@@ -99,6 +111,12 @@ impl BoxEncode for UserDataBox {
         for loudness in &self.ludt {
             rest = loudness.encode(rest)?;
         }
+        if let Some(hnti) = &self.hnti {
+            rest = hnti.encode(rest)?;
+        }
+        if let Some(hinf) = &self.hinf {
+            rest = hinf.encode(rest)?;
+        }
         for kept in self.other_boxes.as_slice() {
             rest = kept.encode(rest)?;
         }
@@ -116,6 +134,8 @@ mod tests {
     use super::UserDataBox;
     use crate::cprt::CopyrightBox;
     use crate::encoded;
+    use crate::hinf::HintStatisticsBox;
+    use crate::hint_info::HintInformationBox;
     use crate::kind::KindBox;
     use crate::labl::LabelBox;
     use crate::ludt::LoudnessBox;
@@ -140,8 +160,14 @@ mod tests {
     /// `ludt` holding nothing
     const LUDT: &[u8] = b"\0\0\0\x08ludt";
 
-    /// `hnti` holding nothing, a box `udta` holds no field for
+    /// `hnti` holding nothing
     const HNTI: &[u8] = b"\0\0\0\x08hnti";
+
+    /// `hinf` holding nothing
+    const HINF: &[u8] = b"\0\0\0\x08hinf";
+
+    /// Box of a type `udta` holds no field for
+    const OTHER: &[u8] = b"\0\0\0\x08xtra";
 
     /// `strk` of an `stri` and no `strd`, which does not read
     const STRK_UNREAD: &[u8] = b"\0\0\0\x1cstrk\0\0\0\x14stri\0\0\0\0\0\0\0\0\0\0\0\x02";
@@ -154,14 +180,18 @@ mod tests {
             labl: vec![LabelBox::decode(LABL).unwrap().0],
             strk: vec![SubTrackBox::decode(STRK).unwrap().0],
             ludt: vec![LoudnessBox::default()],
-            other_boxes: OtherBoxes::from(ChildBoxes::decode(HNTI).unwrap()),
+            hnti: Some(HintInformationBox::default()),
+            hinf: Some(HintStatisticsBox::default()),
+            other_boxes: OtherBoxes::from(ChildBoxes::decode(OTHER).unwrap()),
         }
     }
 
     #[test]
     fn reads_its_children_in_any_order_and_keeps_the_child_it_has_no_field_for() {
         let bytes = [
-            b"\0\0\0\x89udta".as_slice(),
+            b"\0\0\0\x99udta".as_slice(),
+            OTHER,
+            HINF,
             HNTI,
             LUDT,
             STRK,
@@ -179,18 +209,21 @@ mod tests {
     }
 
     #[test]
-    fn writes_its_children_in_the_order_of_table_2_then_the_child_it_has_no_field_for() {
+    fn writes_its_children_in_the_order_of_table_2_then_the_hint_boxes_then_the_child_it_has_no_field_for()
+     {
         assert_eq!(
             encoded(&user_data()),
             [
-                b"\0\0\0\x89udta".as_slice(),
+                b"\0\0\0\x99udta".as_slice(),
                 CPRT,
                 TSEL,
                 KIND,
                 LABL,
                 STRK,
                 LUDT,
-                HNTI
+                HNTI,
+                HINF,
+                OTHER
             ]
             .concat()
         );
