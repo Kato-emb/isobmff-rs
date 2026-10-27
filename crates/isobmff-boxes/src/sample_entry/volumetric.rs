@@ -1,12 +1,17 @@
 //! [`VolumetricVisualSampleEntry`], the sample entry of a volumetric visual track
 
-use isobmff_core::{BoxEncode, Error, FieldReader, FourCc, OtherBoxes};
+use alloc::vec::Vec;
+
+use isobmff_core::{Error, FieldReader, FourCc, OtherBoxes};
 
 use crate::btrt::BitRateBox;
 use crate::data_types::CompressorName;
+use crate::rinf::RestrictedSchemeInfoBox;
 use crate::sample_entry::{
-    BitRateChildren, SampleEntry, children_len, encode_children, encode_optional, from_class,
+    AnyEntryBoxes, AnyEntryChildren, SampleEntry, children_len, encode_children, from_class,
 };
+use crate::scrb::ScrambleSchemeInfoBox;
+use crate::sinf::ProtectionSchemeInfoBox;
 
 /// [`VolumetricVisualSampleEntry`], ISO/IEC 14496-12 §12.9.3
 ///
@@ -18,7 +23,8 @@ use crate::sample_entry::{
 /// # Children
 ///
 /// The children are laid out in three parts as those of a
-/// [`FontSampleEntry`](crate::FontSampleEntry) are, around `btrt`.
+/// [`FontSampleEntry`](crate::FontSampleEntry) are, around the boxes any
+/// sample entry may hold.
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Debug)]
 pub struct VolumetricVisualSampleEntry {
@@ -30,6 +36,12 @@ pub struct VolumetricVisualSampleEntry {
     pub compressor_name: CompressorName,
     /// Children a specification deriving the class defines, which lay before the boxes of ISO/IEC 14496-12
     pub derived_boxes: OtherBoxes,
+    /// Protection schemes of a protected sample entry, alternative descriptions of the same protection
+    pub sinf: Vec<ProtectionSchemeInfoBox>,
+    /// Scrambling schemes applied to the samples
+    pub scrb: Vec<ScrambleSchemeInfoBox>,
+    /// Restriction of a restricted sample entry, or advisory information on the restriction of one whose type was not transformed
+    pub rinf: Option<RestrictedSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -43,6 +55,9 @@ impl Default for VolumetricVisualSampleEntry {
             data_reference_index: 0,
             compressor_name: CompressorName::default(),
             derived_boxes: OtherBoxes::new(),
+            sinf: Vec::new(),
+            scrb: Vec::new(),
+            rinf: None,
             btrt: None,
             extra_boxes: OtherBoxes::new(),
         }
@@ -63,13 +78,16 @@ impl TryFrom<&SampleEntry> for VolumetricVisualSampleEntry {
     fn try_from(entry: &SampleEntry) -> Result<Self, Error> {
         let mut reader = FieldReader::new(&entry.remaining_data);
         let compressor_name = CompressorName::from_bytes(*reader.read_bytes::<32>()?);
-        let children = BitRateChildren::read(reader.take_remainder())?;
+        let children = AnyEntryChildren::read(reader.take_remainder())?;
 
         Ok(Self {
             format: entry.format,
             data_reference_index: entry.data_reference_index,
             compressor_name,
             derived_boxes: children.derived_boxes,
+            sinf: children.sinf,
+            scrb: children.scrb,
+            rinf: children.rinf,
             btrt: children.btrt,
             extra_boxes: children.extra_boxes,
         })
@@ -85,12 +103,19 @@ impl TryFrom<&VolumetricVisualSampleEntry> for SampleEntry {
     ///
     /// * The failures of writing a child.
     fn try_from(volumetric: &VolumetricVisualSampleEntry) -> Result<Self, Error> {
+        let any_entry = AnyEntryBoxes {
+            sinf: &volumetric.sinf,
+            scrb: &volumetric.scrb,
+            rinf: volumetric.rinf.as_ref(),
+            btrt: volumetric.btrt.as_ref(),
+        };
+
         from_class(
             volumetric.format,
             volumetric.data_reference_index,
             children_len(
                 &volumetric.derived_boxes,
-                volumetric.btrt.as_ref().map(BoxEncode::encoded_len),
+                [any_entry.encoded_len()],
                 &volumetric.extra_boxes,
             )
             .saturating_add(32),
@@ -99,7 +124,7 @@ impl TryFrom<&VolumetricVisualSampleEntry> for SampleEntry {
                 encode_children(
                     writer.take_remainder(),
                     &volumetric.derived_boxes,
-                    |rest| encode_optional(rest, volumetric.btrt.as_ref()),
+                    |rest| any_entry.encode(rest),
                     &volumetric.extra_boxes,
                 )
             },
@@ -145,6 +170,7 @@ mod tests {
                 avg_bitrate: 1_000_000,
             }),
             extra_boxes: OtherBoxes::from(ChildBoxes::decode(&extra_boxes.concat()).unwrap()),
+            ..VolumetricVisualSampleEntry::default()
         }
     }
 

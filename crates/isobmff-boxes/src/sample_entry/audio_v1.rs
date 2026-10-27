@@ -7,10 +7,13 @@ use isobmff_core::{BoxEncode, Error, FieldWriter, FourCc, OtherBoxes, U16F16};
 use crate::btrt::BitRateBox;
 use crate::chnl::ChannelLayout;
 use crate::dmix::DownMixInstructions;
+use crate::rinf::RestrictedSchemeInfoBox;
 use crate::sample_entry::audio::{Fields, check_downmixes, take_channel_boxes};
 use crate::sample_entry::{
-    SampleEntry, children_len, encode_children, encode_optional, from_class,
+    AnyEntryBoxes, SampleEntry, children_len, encode_children, encode_optional, from_class,
 };
+use crate::scrb::ScrambleSchemeInfoBox;
+use crate::sinf::ProtectionSchemeInfoBox;
 use crate::srat::SamplingRateBox;
 
 /// [`AudioSampleEntryV1`], ISO/IEC 14496-12 §12.2.3
@@ -29,7 +32,8 @@ use crate::srat::SamplingRateBox;
 ///
 /// The children are laid out in three parts as those of an
 /// [`AudioSampleEntry`](crate::AudioSampleEntry) are, the boxes of ISO/IEC 14496-12 in the order the
-/// syntax of the class gives them, `srat`, `chnl` and `dmix`, then `btrt`.
+/// syntax of the class gives them, `srat`, `chnl` and `dmix`, then the boxes
+/// any sample entry may hold.
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Debug)]
 pub struct AudioSampleEntryV1 {
@@ -53,6 +57,12 @@ pub struct AudioSampleEntryV1 {
     pub chnl: Option<ChannelLayout>,
     /// Downmixes, read with the `baseChannelCount` that `chnl` gives, or else `channel_count`
     pub dmix: Vec<DownMixInstructions>,
+    /// Protection schemes of a protected sample entry, alternative descriptions of the same protection
+    pub sinf: Vec<ProtectionSchemeInfoBox>,
+    /// Scrambling schemes applied to the samples
+    pub scrb: Vec<ScrambleSchemeInfoBox>,
+    /// Restriction of a restricted sample entry, or advisory information on the restriction of one whose type was not transformed
+    pub rinf: Option<RestrictedSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -71,6 +81,9 @@ impl Default for AudioSampleEntryV1 {
             chnl: None,
             dmix: Vec::new(),
             srat: None,
+            sinf: Vec::new(),
+            scrb: Vec::new(),
+            rinf: None,
             btrt: None,
             extra_boxes: OtherBoxes::new(),
         }
@@ -107,6 +120,9 @@ impl TryFrom<&SampleEntry> for AudioSampleEntryV1 {
             chnl,
             dmix,
             srat: children.take_zero_or_one_if_decoded()?,
+            sinf: children.take_zero_or_more_if_decoded(),
+            scrb: children.take_zero_or_more_if_decoded(),
+            rinf: children.take_zero_or_one_if_decoded()?,
             btrt: children.take_zero_or_one_if_decoded()?,
             extra_boxes: OtherBoxes::from(children),
         })
@@ -132,12 +148,22 @@ impl TryFrom<&AudioSampleEntryV1> for SampleEntry {
 }
 
 impl AudioSampleEntryV1 {
+    /// Returns the boxes of the entry that any sample entry may hold
+    fn any_entry_boxes(&self) -> AnyEntryBoxes<'_> {
+        AnyEntryBoxes {
+            sinf: &self.sinf,
+            scrb: &self.scrb,
+            rinf: self.rinf.as_ref(),
+            btrt: self.btrt.as_ref(),
+        }
+    }
+
     /// Returns the length of the bytes the entry lays out after `data_reference_index`
     fn remaining_len(&self) -> u64 {
         let defined = [
             self.chnl.as_ref().map_or(0, BoxEncode::encoded_len),
             self.srat.as_ref().map_or(0, BoxEncode::encoded_len),
-            self.btrt.as_ref().map_or(0, BoxEncode::encoded_len),
+            self.any_entry_boxes().encoded_len(),
         ]
         .into_iter()
         .chain(self.dmix.iter().map(BoxEncode::encoded_len));
@@ -171,7 +197,7 @@ impl AudioSampleEntryV1 {
                 for dmix in &self.dmix {
                     rest = dmix.encode(rest)?;
                 }
-                encode_optional(rest, self.btrt.as_ref())
+                self.any_entry_boxes().encode(rest)
             },
             &self.extra_boxes,
         )

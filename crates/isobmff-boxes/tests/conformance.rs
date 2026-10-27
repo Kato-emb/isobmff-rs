@@ -22,13 +22,14 @@ mod tests {
         FreeSpaceBox, HandlerBox, IdentifiedMediaDataBox, LanguageCode, Matrix, MediaBox,
         MediaDataBox, MediaHeaderBox, MediaInformationBox, MetaBox, MovieBox, MovieExtendsBox,
         MovieFragmentBox, MovieFragmentRandomAccessBox, MovieHeaderBox, OriginalFileTypeBox,
-        ProducerReferenceTimeBox, ProgressiveDownloadInfoBox, RollRecoveryEntry,
+        OriginalFormatBox, ProducerReferenceTimeBox, ProgressiveDownloadInfoBox,
+        ProtectionSchemeInfoBox, RestrictedSchemeInfoBox, RollRecoveryEntry,
         SampleDependencyTypeBox, SampleDescription, SampleDescriptionBox, SampleEntry, SampleFlags,
         SampleGroupDescriptionBox, SampleGroupDescriptionEntry, SampleSizeBox, SampleSizeVariant,
         SampleSizes, SampleTableBox, SampleToChunkBox, SampleToChunkEntry, SampleToGroupBox,
-        SampleToGroupEntry, SegmentIndexBox, SegmentIndexReference, SegmentTypeBox,
-        SimpleTextSampleEntry, Skip, SubTrackBox, SubTrackDefinitionBox, SubsegmentIndexBox,
-        TemporalLevelEntry, TimeToSampleBox, TimeToSampleEntry, TrackBox,
+        SampleToGroupEntry, SchemeTypeBox, SegmentIndexBox, SegmentIndexReference, SegmentTypeBox,
+        SimpleTextSampleEntry, Skip, StereoVideoBox, SubTrackBox, SubTrackDefinitionBox,
+        SubsegmentIndexBox, TemporalLevelEntry, TimeToSampleBox, TimeToSampleEntry, TrackBox,
         TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
         TrackHeaderBox, TrackReference, TrackReferenceBox, TrackReferenceTypeBox, TrackRunBox,
         TrackRunSample, TrackRunSamples, UserDataBox, VisualRandomAccessEntry, VisualSampleEntry,
@@ -197,6 +198,121 @@ mod tests {
             .collect()
     }
 
+    /// Returns `schm` as GPAC reports it in `node`
+    fn gpac_scheme_type(node: &Value) -> SchemeTypeBox {
+        let mut scheme_type = SchemeTypeBox::default();
+        scheme_type.scheme_type = gpac_four_cc(node, "@scheme_type");
+        scheme_type.scheme_version = gpac_integer(node, "@scheme_version");
+        scheme_type.scheme_uri = node
+            .get("@scheme_uri")
+            .map(|uri| Utf8String::new(uri.as_str().unwrap().to_owned()).unwrap());
+        scheme_type
+    }
+
+    /// Returns the `frma` GPAC reports directly inside `node`, if it reports one
+    fn gpac_original_format(node: &Value) -> Option<OriginalFormatBox> {
+        gpac_boxes(node, "frma").first().map(|reported| {
+            let mut original_format = OriginalFormatBox::default();
+            original_format.data_format = gpac_four_cc(reported, "@data_format");
+            original_format
+        })
+    }
+
+    /// Returns the `sinf` boxes GPAC reports in `node`, a sample entry, with the `frma` and the `schm` of each as GPAC reports them, and the rest as `ours` holds them
+    fn gpac_protection_schemes(
+        ours: &[ProtectionSchemeInfoBox],
+        node: &Value,
+    ) -> Vec<ProtectionSchemeInfoBox> {
+        gpac_boxes(node, "sinf")
+            .into_iter()
+            .enumerate()
+            .map(|(index, reported)| {
+                let mut sinf = ours.get(index).cloned().unwrap_or_default();
+                sinf.frma = gpac_original_format(reported);
+                sinf.schm = gpac_boxes(reported, "schm")
+                    .first()
+                    .copied()
+                    .map(gpac_scheme_type);
+                sinf
+            })
+            .collect()
+    }
+
+    /// Returns the `rinf` GPAC reports in `node`, a sample entry, with its `frma` and its `schm` as GPAC reports them, and the rest as `ours` holds it
+    fn gpac_restricted_scheme(
+        ours: Option<&RestrictedSchemeInfoBox>,
+        node: &Value,
+    ) -> Option<RestrictedSchemeInfoBox> {
+        gpac_boxes(node, "rinf").first().map(|reported| {
+            let mut rinf = ours.cloned().unwrap_or_default();
+            rinf.frma = gpac_original_format(reported);
+            rinf.schm = gpac_scheme_type(gpac_box(reported, "schm"));
+            rinf
+        })
+    }
+
+    /// Returns the `stvi` GPAC reports in `node`, with the boxes after `stereo_indication_type` as `ours` holds them
+    ///
+    /// GPAC reports `stereo_indication_type` as hexadecimal digits after `0x`.
+    fn gpac_stereo_video(ours: &StereoVideoBox, node: &Value) -> StereoVideoBox {
+        let digits = gpac_str(node, "@stereo_indication_type")
+            .strip_prefix("0x")
+            .unwrap();
+        let mut stereo_video = ours.clone();
+        stereo_video.single_view_allowed = gpac_integer(node, "@single_view_allowed");
+        stereo_video.stereo_scheme = gpac_integer(node, "@stereo_scheme");
+        stereo_video.stereo_indication_type = digits
+            .as_bytes()
+            .chunks(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect();
+        stereo_video
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn the_stereo_video_boxes_of_restricted_video_read_as_gpac_reports_them() {
+        let mut differences = Vec::new();
+        let mut read = 0;
+        for ConformanceFile {
+            name,
+            bytes,
+            report,
+            ..
+        } in conformance_files()
+        {
+            for (entry, reported) in sample_entries_of(&bytes, &report, b"vide") {
+                let Some(schi) = VisualSampleEntry::try_from(&entry)
+                    .ok()
+                    .and_then(|visual| visual.rinf)
+                    .and_then(|rinf| rinf.schi)
+                else {
+                    continue;
+                };
+                let reported = gpac_box(gpac_box(gpac_box(reported, "rinf"), "schi"), "stvi");
+                for kept in schi.other_boxes.as_slice() {
+                    if kept.box_type() != StereoVideoBox::BOX_TYPE {
+                        continue;
+                    }
+                    match StereoVideoBox::decode_payload(kept.raw_payload().unwrap()) {
+                        Ok(stereo_video) => {
+                            let expected = gpac_stereo_video(&stereo_video, reported);
+                            if stereo_video != expected {
+                                differences.push(format!(
+                                    "{name}: read {stereo_video:?}, GPAC reports {expected:?}"
+                                ));
+                            }
+                            read += 1;
+                        }
+                        Err(error) => differences.push(format!("{name}: stvi: {error}")),
+                    }
+                }
+            }
+        }
+
+        assert_eq!((differences, read), (Vec::<String>::new(), 1));
+    }
+
     /// Returns `ours` with the fields GPAC reports for a visual sample entry set as GPAC reports them in `node`
     fn gpac_visual_sample_entry(ours: &VisualSampleEntry, node: &Value) -> VisualSampleEntry {
         let mut visual = ours.clone();
@@ -205,6 +321,8 @@ mod tests {
         visual.horiz_resolution = U16F16::from_raw(gpac_integer(node, "@XDPI"));
         visual.vert_resolution = U16F16::from_raw(gpac_integer(node, "@YDPI"));
         visual.depth = gpac_integer(node, "@BitDepth");
+        visual.sinf = gpac_protection_schemes(&ours.sinf, node);
+        visual.rinf = gpac_restricted_scheme(ours.rinf.as_ref(), node);
         visual
     }
 
@@ -399,10 +517,12 @@ mod tests {
             audio.channel_count = channel_count;
             audio.sample_size = sample_size;
             audio.sample_rate = sample_rate(audio.sample_rate);
+            audio.sinf = gpac_protection_schemes(&audio.sinf, node);
         } else if let AudioSampleEntryVariant::AudioSampleEntryV1(audio) = &mut audio {
             audio.channel_count = channel_count;
             audio.sample_size = sample_size;
             audio.sample_rate = sample_rate(audio.sample_rate);
+            audio.sinf = gpac_protection_schemes(&audio.sinf, node);
         }
         audio
     }

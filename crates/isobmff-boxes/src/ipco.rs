@@ -8,6 +8,7 @@ use isobmff_core::{
 
 use crate::brnd::BrandProperty;
 use crate::hdlp::HandlerProperty;
+use crate::scrb::ScrambleSchemeInfoBox;
 
 /// One child of an [`ItemPropertyContainerBox`]
 #[non_exhaustive]
@@ -17,6 +18,8 @@ pub enum ItemProperty {
     Brand(BrandProperty),
     /// Property of the type `hdlp`
     Handler(HandlerProperty),
+    /// Property of the type `scrb`, which a scrambled item lists as non-essential
+    ScrambleSchemeInfo(ScrambleSchemeInfoBox),
     /// Property of any other type, free space, or a child that does not decode, kept as its bytes
     Other(AnyBox),
 }
@@ -64,6 +67,10 @@ impl BoxDecode for ItemPropertyContainerBox {
                 HandlerProperty::decode_payload(payload)
                     .map(ItemProperty::Handler)
                     .ok()
+            } else if box_type == ScrambleSchemeInfoBox::BOX_TYPE {
+                ScrambleSchemeInfoBox::decode_payload(payload)
+                    .map(ItemProperty::ScrambleSchemeInfo)
+                    .ok()
             } else {
                 None
             };
@@ -83,6 +90,7 @@ impl BoxEncode for ItemPropertyContainerBox {
             .map(|property| match property {
                 ItemProperty::Brand(brand) => brand.encoded_len(),
                 ItemProperty::Handler(handler) => handler.encoded_len(),
+                ItemProperty::ScrambleSchemeInfo(scrb) => scrb.encoded_len(),
                 ItemProperty::Other(other) => other.encoded_len(),
             })
             .fold(0, u64::saturating_add)
@@ -94,6 +102,7 @@ impl BoxEncode for ItemPropertyContainerBox {
             rest = match property {
                 ItemProperty::Brand(brand) => brand.encode(rest)?,
                 ItemProperty::Handler(handler) => handler.encode(rest)?,
+                ItemProperty::ScrambleSchemeInfo(scrb) => scrb.encode(rest)?,
                 ItemProperty::Other(other) => other.encode(rest)?,
             };
         }
@@ -112,6 +121,8 @@ mod tests {
     use crate::brnd::BrandProperty;
     use crate::encoded;
     use crate::hdlp::HandlerProperty;
+    use crate::schm::SchemeTypeBox;
+    use crate::scrb::ScrambleSchemeInfoBox;
 
     /// `hdlp` of the handler type `pict`
     const HDLP: &[u8] = b"\0\0\0\x10hdlp\0\0\0\0pict";
@@ -127,6 +138,9 @@ mod tests {
 
     /// `hdlp` of a version it does not read
     const HDLP_V1: &[u8] = b"\0\0\0\x10hdlp\x01\0\0\0pict";
+
+    /// `scrb` of the scheme `cbcs` version 1.0
+    const SCRB: &[u8] = b"\0\0\0\x1cscrb\0\0\0\x14schm\0\0\0\0cbcs\0\x01\0\0";
 
     fn properties() -> ItemPropertyContainerBox {
         ItemPropertyContainerBox {
@@ -147,6 +161,14 @@ mod tests {
                     BoxType::compact(*b"hdlp"),
                     b"\x01\0\0\0pict".to_vec(),
                 )),
+                ItemProperty::ScrambleSchemeInfo(ScrambleSchemeInfoBox {
+                    schm: SchemeTypeBox {
+                        scheme_type: FourCc::new(*b"cbcs"),
+                        scheme_version: 0x0001_0000,
+                        scheme_uri: None,
+                    },
+                    ..ScrambleSchemeInfoBox::default()
+                }),
             ],
         }
     }
@@ -154,12 +176,13 @@ mod tests {
     #[test]
     fn reads_every_child_in_the_order_it_came_and_keeps_the_ones_it_does_not_lay_out() {
         let bytes = [
-            b"\0\0\0\x54ipco".as_slice(),
+            b"\0\0\0\x70ipco".as_slice(),
             HDLP,
             FREE,
             ISPE,
             BRND,
             HDLP_V1,
+            SCRB,
         ]
         .concat();
 
@@ -174,12 +197,13 @@ mod tests {
         assert_eq!(
             encoded(&properties()),
             [
-                b"\0\0\0\x54ipco".as_slice(),
+                b"\0\0\0\x70ipco".as_slice(),
                 HDLP,
                 FREE,
                 ISPE,
                 BRND,
-                HDLP_V1
+                HDLP_V1,
+                SCRB,
             ]
             .concat()
         );

@@ -10,18 +10,21 @@ use isobmff_core::{
 use crate::btrt::BitRateBox;
 use crate::chnl::{ChannelLayout, ChannelStructure};
 use crate::dmix::{DownMixInstructions, UndecodedDownMixInstructions};
+use crate::rinf::RestrictedSchemeInfoBox;
 use crate::sample_entry::audio_v1::AudioSampleEntryV1;
 use crate::sample_entry::{
-    SampleEntry, children_len, encode_children, encode_optional, from_class, split_children,
+    AnyEntryBoxes, SampleEntry, children_len, encode_children, encode_optional, from_class,
+    split_children,
 };
+use crate::scrb::ScrambleSchemeInfoBox;
+use crate::sinf::ProtectionSchemeInfoBox;
 use crate::srat::SamplingRateBox;
 
 /// Box types of the boxes ISO/IEC 14496-12 defines for both classes
-const DEFINED: [BoxType; 4] = [
+const DEFINED: [BoxType; 3] = [
     ChannelLayout::BOX_TYPE,
     DownMixInstructions::BOX_TYPE,
     SamplingRateBox::BOX_TYPE,
-    BitRateBox::BOX_TYPE,
 ];
 
 /// Returns the `baseChannelCount` of an entry of `channel_count` channels holding `chnl`
@@ -178,7 +181,8 @@ impl Fields {
 ///    DRC boxes of ISO/IEC 23003-4.
 /// 2. The boxes ISO/IEC 14496-12 defines for the class, each in a field of
 ///    its own: `chnl`, `dmix` and `srat` in the order the syntax of the
-///    class gives them, then `btrt`, which any sample entry may hold.
+///    class gives them, then the boxes any sample entry may hold: `sinf`,
+///    `scrb`, `rinf`, then `btrt`.
 /// 3. [`extra_boxes`](Self::extra_boxes): the boxes no definition of the
 ///    class names.
 ///
@@ -213,6 +217,12 @@ pub struct AudioSampleEntry {
     pub dmix: Vec<DownMixInstructions>,
     /// Actual sampling rate of the audio, which `sample_rate` cannot carry
     pub srat: Option<SamplingRateBox>,
+    /// Protection schemes of a protected sample entry, alternative descriptions of the same protection
+    pub sinf: Vec<ProtectionSchemeInfoBox>,
+    /// Scrambling schemes applied to the samples
+    pub scrb: Vec<ScrambleSchemeInfoBox>,
+    /// Restriction of a restricted sample entry, or advisory information on the restriction of one whose type was not transformed
+    pub rinf: Option<RestrictedSchemeInfoBox>,
     /// Bit rates and decoding buffer size of the stream
     pub btrt: Option<BitRateBox>,
     /// Children no definition of the class names, which lay after a box of ISO/IEC 14496-12
@@ -231,6 +241,9 @@ impl Default for AudioSampleEntry {
             chnl: None,
             dmix: Vec::new(),
             srat: None,
+            sinf: Vec::new(),
+            scrb: Vec::new(),
+            rinf: None,
             btrt: None,
             extra_boxes: OtherBoxes::new(),
         }
@@ -267,6 +280,9 @@ impl TryFrom<&SampleEntry> for AudioSampleEntry {
             chnl,
             dmix,
             srat: children.take_zero_or_one_if_decoded()?,
+            sinf: children.take_zero_or_more_if_decoded(),
+            scrb: children.take_zero_or_more_if_decoded(),
+            rinf: children.take_zero_or_one_if_decoded()?,
             btrt: children.take_zero_or_one_if_decoded()?,
             extra_boxes: OtherBoxes::from(children),
         })
@@ -292,12 +308,22 @@ impl TryFrom<&AudioSampleEntry> for SampleEntry {
 }
 
 impl AudioSampleEntry {
+    /// Returns the boxes of the entry that any sample entry may hold
+    fn any_entry_boxes(&self) -> AnyEntryBoxes<'_> {
+        AnyEntryBoxes {
+            sinf: &self.sinf,
+            scrb: &self.scrb,
+            rinf: self.rinf.as_ref(),
+            btrt: self.btrt.as_ref(),
+        }
+    }
+
     /// Returns the length of the bytes the entry lays out after `data_reference_index`
     fn remaining_len(&self) -> u64 {
         let defined = [
             self.chnl.as_ref().map_or(0, BoxEncode::encoded_len),
             self.srat.as_ref().map_or(0, BoxEncode::encoded_len),
-            self.btrt.as_ref().map_or(0, BoxEncode::encoded_len),
+            self.any_entry_boxes().encoded_len(),
         ]
         .into_iter()
         .chain(self.dmix.iter().map(BoxEncode::encoded_len));
@@ -331,7 +357,7 @@ impl AudioSampleEntry {
                     rest = dmix.encode(rest)?;
                 }
                 rest = encode_optional(rest, self.srat.as_ref())?;
-                encode_optional(rest, self.btrt.as_ref())
+                self.any_entry_boxes().encode(rest)
             },
             &self.extra_boxes,
         )
