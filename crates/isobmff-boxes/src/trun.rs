@@ -151,8 +151,9 @@ pub enum TrackRunSamples {
     },
     /// Each row carries the fields its sample does not take from the defaults
     ///
-    /// Every row carries the same fields. Rows that carry none are written
-    /// as [`EmptyRows`](Self::EmptyRows) and read back as such.
+    /// Every row carries the same fields. Rows that carry none, and a run of
+    /// no rows, are written as [`EmptyRows`](Self::EmptyRows) and read back as
+    /// such.
     Rows {
         /// Samples the run adds, in decoding order
         samples: Vec<TrackRunSample>,
@@ -232,7 +233,7 @@ impl BoxDecode for TrackRunBox {
             Some(SampleFlags::from_bits(reader.read_u32()?))
         };
         let row_len = TrackRunSample::encoded_len(tr_flags);
-        let samples = if row_len == 0 {
+        let samples = if row_len == 0 || sample_count == 0 {
             TrackRunSamples::EmptyRows { sample_count }
         } else {
             TrackRunSamples::Rows {
@@ -421,6 +422,21 @@ mod tests {
         };
 
         assert_eq!(encoded(&rows), TRUN_EMPTY_ROWS);
+    }
+
+    #[test]
+    fn a_run_of_no_samples_is_read_as_empty_rows_whatever_fields_its_flags_put_in_a_row() {
+        assert_eq!(
+            TrackRunBox::decode(b"\0\0\0\x18trun\0\0\x02\x01\0\0\0\0\0\0ett\0ef"),
+            Ok((
+                TrackRunBox {
+                    data_offset: Some(0x6574),
+                    samples: TrackRunSamples::EmptyRows { sample_count: 0 },
+                    ..TrackRunBox::default()
+                },
+                b"".as_slice()
+            ))
+        );
     }
 
     #[test]
