@@ -136,6 +136,7 @@ mod tests {
     use crate::btrt::BitRateBox;
     use crate::rinf::RestrictedSchemeInfoBox;
     use crate::sample_entry::SampleEntry;
+    use crate::schi::SchemeInformationBox;
     use crate::schm::SchemeTypeBox;
     use crate::scrb::ScrambleSchemeInfoBox;
     use crate::sinf::ProtectionSchemeInfoBox;
@@ -146,8 +147,8 @@ mod tests {
     /// `btrt` of a buffer of 4096 bytes, at most 2 Mbit/s and 1 Mbit/s on average
     const BTRT: &[u8] = b"\0\0\0\x14btrt\0\0\x10\0\0\x1e\x84\x80\0\x0f\x42\x40";
 
-    /// `sinf` of the scheme `cenc` version 1.0
-    const SINF: &[u8] = b"\0\0\0\x1csinf\0\0\0\x14schm\0\0\0\0cenc\0\x01\0\0";
+    /// `sinf` of the scheme `cenc` version 1.0, with no information for it
+    const SINF: &[u8] = b"\0\0\0\x24sinf\0\0\0\x14schm\0\0\0\0cenc\0\x01\0\0\0\0\0\x08schi";
 
     /// `scrb` of the scheme `cbcs` version 1.0
     const SCRB: &[u8] = b"\0\0\0\x1cscrb\0\0\0\x14schm\0\0\0\0cbcs\0\x01\0\0";
@@ -211,6 +212,7 @@ mod tests {
         let expected = FontSampleEntry {
             sinf: vec![ProtectionSchemeInfoBox {
                 schm: Some(scheme_type(*b"cenc")),
+                schi: Some(SchemeInformationBox::default()),
                 ..ProtectionSchemeInfoBox::default()
             }],
             scrb: vec![ScrambleSchemeInfoBox {

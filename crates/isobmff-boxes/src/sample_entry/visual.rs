@@ -299,6 +299,7 @@ mod tests {
     use crate::frma::OriginalFormatBox;
     use crate::pasp::PixelAspectRatioBox;
     use crate::sample_entry::SampleEntry;
+    use crate::schi::SchemeInformationBox;
     use crate::schm::SchemeTypeBox;
     use crate::sinf::ProtectionSchemeInfoBox;
 
@@ -319,8 +320,9 @@ mod tests {
     /// `btrt` of a buffer of 4096 bytes, at most 2 Mbit/s and 1 Mbit/s on average
     const BTRT: &[u8] = b"\0\0\0\x14btrt\0\0\x10\0\0\x1e\x84\x80\0\x0f\x42\x40";
 
-    /// `sinf` of the original format `avc1` and the scheme `cenc` version 1.0
-    const SINF: &[u8] = b"\0\0\0\x28sinf\0\0\0\x0cfrmaavc1\0\0\0\x14schm\0\0\0\0cenc\0\x01\0\0";
+    /// `sinf` of the original format `avc1` and the scheme `cenc` version 1.0, with no information for it
+    const SINF: &[u8] =
+        b"\0\0\0\x30sinf\0\0\0\x0cfrmaavc1\0\0\0\x14schm\0\0\0\0cenc\0\x01\0\0\0\0\0\x08schi";
 
     /// Box no definition of the class names
     const EXTRA: &[u8] = b"\0\0\0\x09xtra\x07";
@@ -403,6 +405,7 @@ mod tests {
                     scheme_version: 0x0001_0000,
                     scheme_uri: None,
                 }),
+                schi: Some(SchemeInformationBox::default()),
                 ..ProtectionSchemeInfoBox::default()
             }],
             ..visual(&[AVCC], &[])

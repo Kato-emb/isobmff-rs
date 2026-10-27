@@ -10,6 +10,10 @@ use crate::full_box::{read_version_zero, write_version_zero};
 /// sample of an original track, preserves every sample of the original
 /// streams. The box lies in the `SchemeInformationBox` of a restricted
 /// scheme of the `scheme_type` `spkt`.
+///
+/// A reserved `mode` reads as found, and is refused with
+/// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for `mode` when
+/// the box is written.
 #[doc(alias = "spki")]
 #[non_exhaustive]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
@@ -37,6 +41,9 @@ impl BoxEncode for SamplePackingInformationBox {
     }
 
     fn encode_fields(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+        if self.mode > 1 {
+            return Err(Error::invalid_value("mode"));
+        }
         write_version_zero(writer)?;
         writer.write_bytes(&[self.mode])
     }
@@ -44,7 +51,7 @@ impl BoxEncode for SamplePackingInformationBox {
 
 #[cfg(test)]
 mod tests {
-    use isobmff_core::{BoxDecode, Error};
+    use isobmff_core::{BoxDecode, BoxEncode, Error};
 
     use super::SamplePackingInformationBox;
     use crate::encoded;
@@ -78,6 +85,24 @@ mod tests {
         assert_eq!(
             SamplePackingInformationBox::decode_payload(b"\x01\0\0\0\0"),
             Err(Error::unsupported_version(1))
+        );
+    }
+
+    #[test]
+    fn a_reserved_mode_is_read_as_found() {
+        assert_eq!(
+            SamplePackingInformationBox::decode_payload(b"\0\0\0\0\x02"),
+            Ok(SamplePackingInformationBox { mode: 2 })
+        );
+    }
+
+    #[test]
+    fn a_reserved_mode_is_refused_when_written() {
+        assert_eq!(
+            SamplePackingInformationBox { mode: 2 }
+                .encode(&mut [0; 13])
+                .map(|_| ()),
+            Err(Error::invalid_value("mode"))
         );
     }
 }

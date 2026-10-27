@@ -86,7 +86,7 @@ pub use volumetric::VolumetricVisualSampleEntry;
 /// enct.format = FourCc::new(*b"enct");
 /// enct.data_reference_index = 1;
 /// enct.remaining_data = b"\0text/plain\0\
-///     \0\0\0\x28sinf\0\0\0\x0cfrmastxt\0\0\0\x14schm\0\0\0\0cenc\0\x01\0\0"
+///     \0\0\0\x30sinf\0\0\0\x0cfrmastxt\0\0\0\x14schm\0\0\0\0cenc\0\x01\0\0\0\0\0\x08schi"
 ///     .to_vec();
 ///
 /// // Read it into the class of its original format

@@ -96,17 +96,18 @@ mod tests {
 
     use super::ItemProtectionBox;
     use crate::encoded;
+    use crate::schi::SchemeInformationBox;
     use crate::schm::SchemeTypeBox;
     use crate::sinf::ProtectionSchemeInfoBox;
 
-    /// `sinf` of the scheme `cenc`, as item protection lays it out: with no `frma`
-    const SINF_CENC: &[u8] = b"\0\0\0\x1csinf\0\0\0\x14schm\0\0\0\0cenc\0\x01\0\0";
+    /// `sinf` of the scheme `cenc` with no information for it, as item protection lays it out: with no `frma`
+    const SINF_CENC: &[u8] = b"\0\0\0\x24sinf\0\0\0\x14schm\0\0\0\0cenc\0\x01\0\0\0\0\0\x08schi";
 
-    /// `sinf` of the scheme `cbcs`
-    const SINF_CBCS: &[u8] = b"\0\0\0\x1csinf\0\0\0\x14schm\0\0\0\0cbcs\0\x01\0\0";
+    /// `sinf` of the scheme `cbcs` with no information for it
+    const SINF_CBCS: &[u8] = b"\0\0\0\x24sinf\0\0\0\x14schm\0\0\0\0cbcs\0\x01\0\0\0\0\0\x08schi";
 
     /// Header and fields of `ipro` of the two schemes
-    const IPRO_HEADER: &[u8] = b"\0\0\0\x46ipro\0\0\0\0\0\x02";
+    const IPRO_HEADER: &[u8] = b"\0\0\0\x56ipro\0\0\0\0\0\x02";
 
     /// Box of a type `ipro` holds no field for
     const FREE: &[u8] = b"\0\0\0\x08free";
@@ -118,6 +119,7 @@ mod tests {
                 scheme_version: 0x0001_0000,
                 scheme_uri: None,
             }),
+            schi: Some(SchemeInformationBox::default()),
             ..ProtectionSchemeInfoBox::default()
         }
     }
@@ -159,7 +161,7 @@ mod tests {
         assert_eq!(
             encoded(&expected),
             [
-                b"\0\0\0\x4eipro\0\0\0\0\0\x02".as_slice(),
+                b"\0\0\0\x5eipro\0\0\0\0\0\x02".as_slice(),
                 SINF_CENC,
                 SINF_CBCS,
                 FREE

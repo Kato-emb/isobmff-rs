@@ -24,6 +24,15 @@ use crate::full_box::{read_version_zero, write_version_zero};
 /// it are kept in [`other_boxes`](Self::other_boxes), in the order they came,
 /// and written back in it.
 ///
+/// A reserved `stereo_scheme`, or a `stereo_indication_type` other than the
+/// scheme lays out, reads as found, and is refused with
+/// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) when the box is
+/// written: for `stereo_scheme` when the scheme is reserved, for
+/// `length` when the type is not 4 bytes long for the schemes 1 and 2, 2
+/// bytes for 3 and 4, or 3 bytes for 5, and for `stereo_indication_type`
+/// when the reserved bits of its second byte, past its least significant
+/// bit, are set for the schemes 3 to 5.
+///
 /// # Untrusted input
 ///
 /// `stereo_indication_type` is read only once `length` is held against the
@@ -83,8 +92,16 @@ impl BoxEncode for StereoVideoBox {
         if self.single_view_allowed > 0b11 {
             return Err(Error::invalid_value("single_view_allowed"));
         }
-        let length = u32::try_from(self.stereo_indication_type.len())
-            .map_err(|_| Error::invalid_value("length"))?;
+        let (length, flags) = match (self.stereo_scheme, self.stereo_indication_type.as_slice()) {
+            (1 | 2, [_, _, _, _]) => (4, 0),
+            (3 | 4, [_, second]) => (2, *second),
+            (5, [_, second, _]) => (3, *second),
+            (1..=5, _) => return Err(Error::invalid_value("length")),
+            _ => return Err(Error::invalid_value("stereo_scheme")),
+        };
+        if flags & !1 != 0 {
+            return Err(Error::invalid_value("stereo_indication_type"));
+        }
         write_version_zero(writer)?;
         writer.write_u32(u32::from(self.single_view_allowed))?;
         writer.write_u32(self.stereo_scheme)?;
@@ -185,6 +202,98 @@ mod tests {
         assert_eq!(
             StereoVideoBox::decode_payload(b"\x01\0\0\0\0\0\0\0\0\0\0\x01\0\0\0\0"),
             Err(Error::unsupported_version(1))
+        );
+    }
+
+    #[test]
+    fn a_reserved_scheme_is_read_as_found() {
+        let expected = StereoVideoBox {
+            stereo_scheme: 6,
+            stereo_indication_type: vec![1],
+            ..stereo_video()
+        };
+
+        assert_eq!(
+            StereoVideoBox::decode_payload(b"\0\0\0\0\0\0\0\0\0\0\0\x06\0\0\0\x01\x01"),
+            Ok(expected)
+        );
+    }
+
+    #[test]
+    fn a_reserved_scheme_is_refused_when_written() {
+        let reserved = StereoVideoBox {
+            stereo_scheme: 6,
+            ..stereo_video()
+        };
+
+        assert_eq!(
+            reserved.encode(&mut [0; 28]).map(|_| ()),
+            Err(Error::invalid_value("stereo_scheme"))
+        );
+    }
+
+    #[test]
+    fn an_indication_type_of_another_length_than_the_scheme_lays_out_is_refused_when_written() {
+        for (stereo_scheme, stereo_indication_type) in [
+            (1, vec![]),
+            (2, vec![0, 3]),
+            (3, vec![0, 0, 3, 0]),
+            (4, vec![3]),
+            (5, vec![3, 0]),
+        ] {
+            let mislaid = StereoVideoBox {
+                stereo_scheme,
+                stereo_indication_type,
+                ..stereo_video()
+            };
+
+            assert_eq!(
+                mislaid.encode(&mut [0; 28]).map(|_| ()),
+                Err(Error::invalid_value("length"))
+            );
+        }
+    }
+
+    #[test]
+    fn an_indication_type_with_reserved_bits_set_is_refused_when_written() {
+        for (stereo_scheme, stereo_indication_type) in [
+            (3, vec![3, 0b10]),
+            (4, vec![3, 0x80]),
+            (5, vec![3, 0b11, 1]),
+        ] {
+            let reserved_bits = StereoVideoBox {
+                stereo_scheme,
+                stereo_indication_type,
+                ..stereo_video()
+            };
+
+            assert_eq!(
+                reserved_bits.encode(&mut [0; 28]).map(|_| ()),
+                Err(Error::invalid_value("stereo_indication_type"))
+            );
+        }
+    }
+
+    #[test]
+    fn writes_the_two_and_three_byte_layouts_of_the_schemes() {
+        let video_frame_packing = StereoVideoBox {
+            stereo_scheme: 4,
+            stereo_indication_type: vec![3, 1],
+            ..stereo_video()
+        };
+        let packed_content = StereoVideoBox {
+            stereo_scheme: 5,
+            stereo_indication_type: vec![3, 1, 1],
+            ..stereo_video()
+        };
+
+        assert_eq!(
+            encoded(&video_frame_packing),
+            b"\0\0\0\x1astvi\0\0\0\0\0\0\0\0\0\0\0\x04\0\0\0\x02\x03\x01"
+        );
+        assert_eq!(
+            encoded(&packed_content),
+            b"\0\0\0\x1bstvi\0\0\0\0\0\0\0\0\0\0\0\x05\0\0\0\x03\x03\x01\x01"
         );
     }
 
