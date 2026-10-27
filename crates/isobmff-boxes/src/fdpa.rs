@@ -23,7 +23,7 @@ pub struct LctHeaderTemplate {
     pub session_close_bit: bool,
     /// Whether the packet ends the object
     pub object_close_bit: bool,
-    /// Transport object identifier (TOI) of the object the packet carries, which a server may change
+    /// Transport object identifier of the object the packet carries, which a server may change
     pub transport_object_identifier: u16,
 }
 
