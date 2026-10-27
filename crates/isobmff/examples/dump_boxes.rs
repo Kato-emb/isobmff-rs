@@ -7,7 +7,7 @@
 //! Each top-level box is read whole, up to a limit, and the boxes a container
 //! holds are listed under it. A `mdat`, a box past the limit and a box that
 //! runs to the end of the file are listed by their header alone: the reader
-//! then asks for the bytes past the box, the file is seeked there, and the
+//! then asks for the bytes past the box, the caller seeks the file there, and the
 //! payload is never read.
 
 use std::env;
