@@ -255,11 +255,12 @@ jobs:
       # The seeds are the files alone: GPAC's reports beside them are not boxes.
       # The first directory takes what a run adds, and is never kept.
       - run: |
-          mkdir -p "$RUNNER_TEMP/seeds" "$RUNNER_TEMP/corpus"
+          mkdir -p "$RUNNER_TEMP/seeds" "$RUNNER_TEMP/corpus/framing" "$RUNNER_TEMP/corpus/boxes"
           cp "$RUNNER_TEMP"/conformance/*.mp4 "$RUNNER_TEMP/seeds/"
       # The target is spelled out: the cargo-fuzz this action installs is a
       # static musl binary, and defaults to the triple it was built for.
-      - run: cargo fuzz run framing --target x86_64-unknown-linux-gnu "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/seeds" -- -runs=500000 -seed=1
+      - run: cargo fuzz run framing --target x86_64-unknown-linux-gnu "$RUNNER_TEMP/corpus/framing" "$RUNNER_TEMP/seeds" -- -runs=500000 -seed=1
+      - run: cargo fuzz run boxes --target x86_64-unknown-linux-gnu "$RUNNER_TEMP/corpus/boxes" "$RUNNER_TEMP/seeds" -- -runs=500000 -seed=1
 
   # Advisories, license policy, banned crates and sources, per deny.toml.
   deny:
