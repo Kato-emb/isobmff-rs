@@ -6,6 +6,14 @@
 
 #![no_std]
 
+extern crate alloc;
+
+mod byte_range;
+mod error;
+pub mod framing;
+
+pub use byte_range::ByteRange;
+pub use error::DemuxError;
 pub use isobmff_core::*;
 
 /// Boxes of ISO/IEC 14496-12, each read into a value that owns its bytes
