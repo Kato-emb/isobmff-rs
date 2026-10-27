@@ -124,9 +124,11 @@ impl LctHeaderExtension {
 /// are read past and written as zero.
 ///
 /// An [`Immediate`](Self::Immediate) of more than 14 bytes is refused with
-/// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for `count`, and
-/// a `data_length` of an item wider than its 24 bits with `InvalidValue` for
-/// `data_length`, when the box is written.
+/// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for `count`, a
+/// `data_length` of an item wider than its 24 bits with `InvalidValue` for
+/// `data_length`, and an [`Other`](Self::Other) of a type the Syntax defines,
+/// 0 to 5, with `InvalidValue` for `constructor_type`, when the box is
+/// written.
 #[doc(alias = "FDconstructor")]
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -184,12 +186,15 @@ pub enum FdConstructor {
     },
     /// Constructor of a type this crate does not read, with the 15 bytes after its type
     Other {
-        /// Type of the constructor
+        /// Type of the constructor, above 5
         constructor_type: u8,
         /// Bytes after `constructor_type`
         data: [u8; 15],
     },
 }
+
+/// Largest `constructor_type` the Syntax defines, which a typed variant of [`FdConstructor`] reads
+const LAST_DEFINED_TYPE: u8 = 5;
 
 /// Bytes a constructor takes, but for [`FdConstructor::ItemLarge`]
 const CONSTRUCTOR_LEN: u64 = 16;
@@ -360,6 +365,9 @@ impl FdConstructor {
                 constructor_type,
                 data,
             } => {
+                if *constructor_type <= LAST_DEFINED_TYPE {
+                    return Err(Error::invalid_value("constructor_type"));
+                }
                 writer.write_bytes(&[*constructor_type])?;
                 writer.write_bytes(data)
             }
@@ -593,6 +601,15 @@ mod tests {
                 .encode(&mut [0; 31])
                 .map(|_| ()),
             Err(Error::invalid_value("count"))
+        );
+        assert_eq!(
+            packet(FdConstructor::Other {
+                constructor_type: 5,
+                data: [0; 15],
+            })
+            .encode(&mut [0; 31])
+            .map(|_| ()),
+            Err(Error::invalid_value("constructor_type"))
         );
         assert_eq!(
             packet(FdConstructor::Item {
