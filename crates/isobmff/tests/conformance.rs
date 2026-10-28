@@ -2,14 +2,21 @@
 //!
 //! What the reader frames out of a file cut into pieces is checked against
 //! what [`Boxes`] frames out of the file whole, and what the writer writes
-//! from the reader's events against the file itself.
+//! from the reader's events against the file itself. The samples gathered
+//! out of the media data of a file cut into pieces are checked against the
+//! bytes their locations name in the file whole.
 //! `scripts/fetch-conformance.sh` fetches the files into a directory, which
 //! `ISOBMFF_CONFORMANCE_DIR` names to these tests.
 
 #[cfg(test)]
 mod tests {
+    use std::iter;
+
+    use isobmff::boxes::{MediaDataBox, MovieBox, MovieFragmentBox};
     use isobmff::framing::{BoxEvent, BoxReader, BoxWriter};
-    use isobmff::{BoxHeader, Boxes, ByteRange};
+    use isobmff::media_data::{MediaDataLimits, MediaDataReader};
+    use isobmff::structure_data::{StructureDataLimits, StructureDataReader};
+    use isobmff::{BoxDecode, BoxDefinition, BoxHeader, Boxes, ByteRange, Sample, SampleLocation};
     use isobmff_test_support::{ConformanceFile, conformance_files};
 
     /// Lengths the files are cut into, the last of them longer than any file
@@ -33,6 +40,14 @@ mod tests {
         written: Vec<u8>,
     }
 
+    /// Returns the `piece_len` bytes of `file` from where `wanted` starts, or as many as there are
+    fn piece(file: &[u8], wanted: ByteRange, piece_len: usize) -> &[u8] {
+        let rest = file
+            .get(usize::try_from(wanted.offset()).unwrap()..)
+            .unwrap_or_default();
+        rest.get(..piece_len).unwrap_or(rest)
+    }
+
     /// Reads `file` from wherever the reader wants it, `piece_len` bytes at a time, answering every header with `answer`
     fn read(file: &[u8], piece_len: usize, answer: Answer) -> Read {
         let mut reader = BoxReader::new();
@@ -41,10 +56,7 @@ mod tests {
         let mut passed_bytes = 0_usize;
         let mut written = Vec::new();
         while let Some(wanted) = reader.wanted_input() {
-            let rest = file
-                .get(usize::try_from(wanted.offset()).unwrap()..)
-                .unwrap_or_default();
-            let input = rest.get(..piece_len).unwrap_or(rest);
+            let input = piece(file, wanted, piece_len);
             if input.is_empty() {
                 break;
             }
@@ -159,6 +171,123 @@ mod tests {
                         "{name} byte by byte passes more than the headers"
                     );
                 }
+            }
+        }
+    }
+
+    /// Files whose samples are gathered: a non-fragmented movie file with its `moov` first, a fragmented movie file, and a segment
+    const MEDIA_DATA_FILES: [&str; 3] =
+        ["01_simple.mp4", "a4-tone-fragmented.mp4", "21_segment.mp4"];
+
+    /// What a caller that cannot seek saw reading a file
+    struct Gathered {
+        /// Locations of the samples the `moov` and the `moof`s declare, in the order the boxes lie
+        locations: Vec<SampleLocation>,
+        /// Samples gathered out of the media data, in the order they came out
+        samples: Vec<Sample>,
+    }
+
+    /// Reads `file` from its start, `piece_len` bytes at a time, streaming each `mdat` into a [`MediaDataReader`] that holds the locations of the samples
+    fn gather_samples(file: &[u8], piece_len: usize) -> Gathered {
+        let mut reader = BoxReader::new();
+        let mut structure_data = StructureDataReader::new(StructureDataLimits {
+            sample_count: u64::MAX,
+            segment_index_count: u64::MAX,
+            subsegment_count: u64::MAX,
+        });
+        let mut media_data = MediaDataReader::new(MediaDataLimits {
+            held_location_count: u64::MAX,
+            held_bytes: u64::MAX,
+        });
+        let mut gathered = Gathered {
+            locations: Vec::new(),
+            samples: Vec::new(),
+        };
+        let mut box_offset = 0;
+        while let Some(wanted) = reader.wanted_input() {
+            let input = piece(file, wanted, piece_len);
+            if input.is_empty() {
+                break;
+            }
+            for event in reader.handle_input(wanted.offset(), input).unwrap() {
+                match event {
+                    BoxEvent::Header(header) => {
+                        box_offset = reader.open_box().unwrap().offset();
+                        let box_type = header.box_type();
+                        if box_type == MovieBox::BOX_TYPE || box_type == MovieFragmentBox::BOX_TYPE
+                        {
+                            reader.gather(u64::MAX).unwrap();
+                        } else if box_type == MediaDataBox::BOX_TYPE {
+                            reader.stream().unwrap();
+                        } else {
+                            reader.skip().unwrap();
+                        }
+                    }
+                    BoxEvent::Payload(bytes) => media_data.handle_input(wanted.offset(), bytes),
+                    BoxEvent::End => {
+                        if let Some(raw_box) = reader.gathered_box() {
+                            let locations: Vec<_> = if raw_box.header().box_type()
+                                == MovieBox::BOX_TYPE
+                            {
+                                let movie = MovieBox::decode_payload(raw_box.payload()).unwrap();
+                                structure_data.handle_movie(movie).unwrap().collect()
+                            } else {
+                                let movie_fragment =
+                                    MovieFragmentBox::decode_payload(raw_box.payload()).unwrap();
+                                structure_data
+                                    .handle_movie_fragment(&movie_fragment, box_offset)
+                                    .unwrap()
+                                    .collect()
+                            };
+                            media_data
+                                .handle_sample_locations(locations.iter().cloned())
+                                .unwrap();
+                            gathered.locations.extend(locations);
+                        }
+                    }
+                    _ => {}
+                }
+                gathered
+                    .samples
+                    .extend(iter::from_fn(|| media_data.poll_sample()));
+            }
+        }
+        let _events = reader.finish().unwrap();
+        media_data.finish().unwrap();
+
+        gathered
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn the_samples_gathered_from_a_file_cut_into_pieces_are_the_bytes_their_locations_name() {
+        let files: Vec<_> = conformance_files()
+            .into_iter()
+            .filter(|file| MEDIA_DATA_FILES.contains(&file.name.as_str()))
+            .collect();
+        assert_eq!(files.len(), MEDIA_DATA_FILES.len());
+        for ConformanceFile { name, bytes, .. } in &files {
+            for piece_len in PIECE_LENS {
+                let gathered = gather_samples(bytes, piece_len);
+                let expected: Vec<_> = gathered
+                    .locations
+                    .iter()
+                    .map(|location| {
+                        let byte_range = location.byte_range();
+                        let data = bytes
+                            .get(
+                                usize::try_from(byte_range.start).unwrap()
+                                    ..usize::try_from(byte_range.end).unwrap(),
+                            )
+                            .unwrap();
+                        Sample::new(*location.properties(), data.to_vec())
+                    })
+                    .collect();
+                assert!(!expected.is_empty(), "{name} declares no sample");
+                assert!(
+                    gathered.samples == expected,
+                    "{name} in pieces of {piece_len} gathers other samples"
+                );
             }
         }
     }
