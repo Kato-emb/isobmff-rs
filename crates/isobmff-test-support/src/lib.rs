@@ -21,6 +21,8 @@ use serde_json::Value;
 pub struct ConformanceFile {
     /// File name, such as `01_simple.mp4`
     pub name: String,
+    /// Path of the file
+    pub path: PathBuf,
     /// Contents of the file
     pub bytes: Vec<u8>,
     /// GPAC's report of the file, which `IsoMediaFile` opens
@@ -69,6 +71,7 @@ pub fn conformance_files() -> Vec<ConformanceFile> {
                 name: file.file_name().unwrap().to_str().unwrap().to_owned(),
                 bytes: fs::read(&file).unwrap(),
                 report,
+                path: file,
             }
         })
         .collect()
@@ -145,4 +148,87 @@ pub fn ffprobe(arguments: &[&str], file: &Path) -> Output {
         .arg(file)
         .output()
         .unwrap()
+}
+
+/// Packet `ffprobe` reports for a file: the track of its stream, the bytes it reads, and its decoding timestamp
+#[non_exhaustive]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct FfprobePacket {
+    /// `track_ID` of the track of the stream, the `id` `ffprobe` reports for it
+    pub track_id: u32,
+    /// File offset of the bytes of the packet
+    pub pos: u64,
+    /// Number of bytes of the packet
+    pub size: u64,
+    /// Decoding timestamp of the packet, in the time base of its stream, where `ffprobe` reports one
+    pub dts: Option<i64>,
+}
+
+/// Returns the packets `ffprobe -show_streams -show_packets -of json` reports for `file`, in the order it reports them
+///
+/// # Panics
+///
+/// * `ffprobe` does not run, fails on `file`, or reports what does not read
+///   as JSON of streams and packets.
+#[must_use]
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "a test checking against what ffprobe does not report fails"
+)]
+pub fn ffprobe_packets(file: &Path) -> Vec<FfprobePacket> {
+    let output = ffprobe(
+        &[
+            "-v",
+            "error",
+            "-show_streams",
+            "-show_packets",
+            "-of",
+            "json",
+        ],
+        file,
+    );
+    assert!(
+        output.status.success(),
+        "ffprobe fails on {}: {}",
+        file.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let track_ids = report
+        .get("streams")
+        .and_then(Value::as_array)
+        .expect("ffprobe reports the streams")
+        .iter()
+        .map(|stream| {
+            let id = stream
+                .get("id")
+                .and_then(Value::as_str)
+                .expect("ffprobe reports the id of a stream");
+            u32::from_str_radix(id.trim_start_matches("0x"), 16).unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    report
+        .get("packets")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .map(|packet| {
+            let number = |field: &str| packet.get(field)?.as_str()?.parse().ok();
+            let stream_index = packet
+                .get("stream_index")
+                .and_then(Value::as_u64)
+                .expect("ffprobe reports the stream of a packet");
+            FfprobePacket {
+                track_id: *track_ids
+                    .get(usize::try_from(stream_index).unwrap())
+                    .expect("ffprobe reports the stream of a packet among its streams"),
+                pos: number("pos").expect("ffprobe reports the pos of a packet"),
+                size: number("size").expect("ffprobe reports the size of a packet"),
+                dts: packet.get("dts").and_then(Value::as_i64),
+            }
+        })
+        .collect()
 }
