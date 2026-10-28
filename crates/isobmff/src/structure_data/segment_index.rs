@@ -185,7 +185,8 @@ mod tests {
 
     use super::{SegmentIndex, Subsegment, movie_fragment_random_access_start};
     use crate::error::DemuxError;
-    use crate::structure_data::StructureDataReader;
+    use crate::structure_data::fixtures::UNLIMITED;
+    use crate::structure_data::{StructureDataLimits, StructureDataReader};
 
     /// `sidx` of version 0 of stream 1 at 1000 ticks a second, from time 500 and 100 bytes past the anchor: a subsegment of 2000 bytes and 3000 ticks starting with a SAP of type 1, then a reference to a segment index of 50 bytes and 1000 ticks
     const SIDX_V0: &[u8] = &[
@@ -214,7 +215,7 @@ mod tests {
 
     #[test]
     fn the_subsegments_of_an_sidx_lie_one_after_another_from_its_anchor() {
-        let mut reader = StructureDataReader::new(0);
+        let mut reader = StructureDataReader::new(UNLIMITED);
         reader
             .handle_segment_index(&SegmentIndexBox::decode_payload(SIDX_V0).unwrap(), 1000)
             .unwrap();
@@ -249,7 +250,7 @@ mod tests {
 
     #[test]
     fn an_sidx_of_version_1_counts_in_64_bits() {
-        let mut reader = StructureDataReader::new(0);
+        let mut reader = StructureDataReader::new(UNLIMITED);
         reader
             .handle_segment_index(&SegmentIndexBox::decode_payload(SIDX_V1).unwrap(), 8)
             .unwrap();
@@ -274,7 +275,7 @@ mod tests {
     #[test]
     fn an_index_kept_once_is_not_kept_again_and_resuming_keeps_it_and_the_mfra() {
         let sidx = SegmentIndexBox::decode_payload(SIDX_V0).unwrap();
-        let mut reader = StructureDataReader::new(0);
+        let mut reader = StructureDataReader::new(UNLIMITED);
         reader.handle_segment_index(&sidx, 1000).unwrap();
         reader.handle_movie_fragment_random_access(MovieFragmentRandomAccessBox::default());
         reader.resume();
@@ -291,11 +292,72 @@ mod tests {
     }
 
     #[test]
+    fn an_index_past_the_limits_is_refused_and_not_kept() {
+        let sidx = SegmentIndexBox::decode_payload(SIDX_V0).unwrap();
+        let mut reader = StructureDataReader::new(StructureDataLimits {
+            segment_index_count: 2,
+            subsegment_count: 5,
+            ..UNLIMITED
+        });
+        reader.handle_segment_index(&sidx, 1000).unwrap();
+        reader.handle_segment_index(&sidx, 2000).unwrap();
+
+        assert_eq!(
+            reader.handle_segment_index(&sidx, 3000),
+            Err(DemuxError::SegmentIndexCountLimitExceeded {
+                retained_segment_indexes: 3,
+                limit_segment_indexes: 2
+            })
+        );
+        assert_eq!(reader.handle_segment_index(&sidx, 1000), Ok(()));
+        assert_eq!(
+            reader.segment_indexes(),
+            [
+                SegmentIndex::new(&sidx, 1000).unwrap(),
+                SegmentIndex::new(&sidx, 2000).unwrap()
+            ]
+        );
+    }
+
+    #[test]
+    fn subsegments_past_the_limit_are_refused_whether_one_sidx_or_the_kept_ones_hold_them() {
+        let sidx = SegmentIndexBox::decode_payload(SIDX_V0).unwrap();
+        let mut reader = StructureDataReader::new(StructureDataLimits {
+            subsegment_count: 3,
+            ..UNLIMITED
+        });
+        let mut too_few = StructureDataReader::new(StructureDataLimits {
+            subsegment_count: 1,
+            ..UNLIMITED
+        });
+        reader.handle_segment_index(&sidx, 1000).unwrap();
+
+        assert_eq!(
+            too_few.handle_segment_index(&sidx, 1000),
+            Err(DemuxError::SubsegmentCountLimitExceeded {
+                retained_subsegments: 2,
+                limit_subsegments: 1
+            })
+        );
+        assert_eq!(
+            reader.handle_segment_index(&sidx, 2000),
+            Err(DemuxError::SubsegmentCountLimitExceeded {
+                retained_subsegments: 4,
+                limit_subsegments: 3
+            })
+        );
+        assert_eq!(
+            reader.segment_indexes(),
+            [SegmentIndex::new(&sidx, 1000).unwrap()]
+        );
+    }
+
+    #[test]
     fn an_index_past_64_bits_is_refused() {
         let sidx = SegmentIndexBox::decode_payload(SIDX_V1).unwrap();
 
         assert_eq!(
-            StructureDataReader::new(0).handle_segment_index(&sidx, u64::MAX),
+            StructureDataReader::new(UNLIMITED).handle_segment_index(&sidx, u64::MAX),
             Err(DemuxError::SegmentIndexOutOfRange { reference_id: 1 })
         );
     }

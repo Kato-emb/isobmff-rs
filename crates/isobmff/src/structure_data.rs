@@ -21,9 +21,43 @@ use isobmff_boxes::{
 use isobmff_core::BoxDefinition;
 
 use crate::error::DemuxError;
+use crate::framing::to_u64;
 use crate::sample::SampleLocation;
 
 pub use segment_index::{SegmentIndex, Subsegment, movie_fragment_random_access_start};
+
+/// Limits a [`StructureDataReader`] resolves and keeps structure-data up to
+///
+/// Each bounds what the reader allocates for values the file declares: the
+/// samples of one `moov` or `moof`, and the segment indexes, with their
+/// subsegments, the reader keeps over the whole file. A subsegment takes
+/// the same room whatever the file, so its count bounds its bytes.
+///
+/// # Examples
+///
+/// ```
+/// use isobmff::structure_data::StructureDataLimits;
+///
+/// let limits = StructureDataLimits {
+///     sample_count: 1_048_576,
+///     segment_index_count: 1024,
+///     subsegment_count: 1_048_576,
+/// };
+/// assert_eq!(limits.segment_index_count, 1024);
+/// ```
+#[expect(
+    clippy::exhaustive_structs,
+    reason = "a limit added later is one every caller has to set, not one that quietly takes a default"
+)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct StructureDataLimits {
+    /// Number of samples one `moov`, or one `moof`, is resolved up to
+    pub sample_count: u64,
+    /// Number of segment indexes the reader keeps up to
+    pub segment_index_count: u64,
+    /// Number of subsegments the segment indexes the reader keeps hold up to, together
+    pub subsegment_count: u64,
+}
 
 /// Reader of the structure-data of a file: the movie and its fragments, resolved to the samples they declare
 ///
@@ -37,9 +71,13 @@ pub use segment_index::{SegmentIndex, Subsegment, movie_fragment_random_access_s
 ///
 /// ```
 /// use isobmff::boxes::MovieBox;
-/// use isobmff::structure_data::StructureDataReader;
+/// use isobmff::structure_data::{StructureDataLimits, StructureDataReader};
 ///
-/// let mut reader = StructureDataReader::new(1_048_576);
+/// let mut reader = StructureDataReader::new(StructureDataLimits {
+///     sample_count: 1_048_576,
+///     segment_index_count: 1024,
+///     subsegment_count: 1_048_576,
+/// });
 /// // A movie of no track declares no sample.
 /// let samples = reader.handle_movie(MovieBox::default())?;
 /// assert_eq!(samples.len(), 0);
@@ -48,7 +86,7 @@ pub use segment_index::{SegmentIndex, Subsegment, movie_fragment_random_access_s
 /// ```
 #[derive(Debug)]
 pub struct StructureDataReader {
-    sample_count_limit: u64,
+    limits: StructureDataLimits,
     movie: Option<MovieBox>,
     /// Decoding time past the last sample of each track of the movie, in the order of its tracks, `None` once it is not known
     decoding_times: Vec<Option<u64>>,
@@ -57,11 +95,11 @@ pub struct StructureDataReader {
 }
 
 impl StructureDataReader {
-    /// Creates the reader of a file whose `moov`, and each `moof`, it resolves up to `sample_count_limit` samples of
+    /// Creates the reader of a file whose structure-data it resolves and keeps up to `limits`
     #[must_use]
-    pub const fn new(sample_count_limit: u64) -> Self {
+    pub const fn new(limits: StructureDataLimits) -> Self {
         Self {
-            sample_count_limit,
+            limits,
             movie: None,
             decoding_times: Vec::new(),
             segment_indexes: Vec::new(),
@@ -172,10 +210,16 @@ impl StructureDataReader {
     /// Resolves `sidx`, whose anchor point, the first byte after it, is at file offset `anchor`, and keeps the segment index
     ///
     /// A segment index the reader already keeps, as it does after resuming
-    /// before the `sidx`, is kept once.
+    /// before the `sidx`, is kept once, and counts once toward the limits.
     ///
     /// # Errors
     ///
+    /// * [`SubsegmentCountLimitExceeded`](DemuxError::SubsegmentCountLimitExceeded):
+    ///   the `sidx` references more subsegments than the limit, and none is
+    ///   resolved; or keeping its index would take the subsegments of the
+    ///   kept indexes past the limit.
+    /// * [`SegmentIndexCountLimitExceeded`](DemuxError::SegmentIndexCountLimitExceeded):
+    ///   keeping the index would take the kept indexes past the limit.
     /// * [`SegmentIndexOutOfRange`](DemuxError::SegmentIndexOutOfRange): the
     ///   byte ranges or the presentation times run past 64 bits.
     pub fn handle_segment_index(
@@ -183,10 +227,36 @@ impl StructureDataReader {
         sidx: &SegmentIndexBox,
         anchor: u64,
     ) -> Result<(), DemuxError> {
-        let segment_index = SegmentIndex::new(sidx, anchor)?;
-        if !self.segment_indexes.contains(&segment_index) {
-            self.segment_indexes.push(segment_index);
+        let subsegments_exceeded =
+            |retained_subsegments| DemuxError::SubsegmentCountLimitExceeded {
+                retained_subsegments,
+                limit_subsegments: self.limits.subsegment_count,
+            };
+        let declared_subsegments = to_u64(sidx.references.len());
+        if declared_subsegments > self.limits.subsegment_count {
+            return Err(subsegments_exceeded(declared_subsegments));
         }
+        let segment_index = SegmentIndex::new(sidx, anchor)?;
+        if self.segment_indexes.contains(&segment_index) {
+            return Ok(());
+        }
+
+        let retained_segment_indexes = to_u64(self.segment_indexes.len()).saturating_add(1);
+        if retained_segment_indexes > self.limits.segment_index_count {
+            return Err(DemuxError::SegmentIndexCountLimitExceeded {
+                retained_segment_indexes,
+                limit_segment_indexes: self.limits.segment_index_count,
+            });
+        }
+        let retained_subsegments = self
+            .segment_indexes
+            .iter()
+            .map(|kept| to_u64(kept.subsegments().len()))
+            .fold(declared_subsegments, u64::saturating_add);
+        if retained_subsegments > self.limits.subsegment_count {
+            return Err(subsegments_exceeded(retained_subsegments));
+        }
+        self.segment_indexes.push(segment_index);
 
         Ok(())
     }
@@ -225,10 +295,10 @@ impl StructureDataReader {
 
     /// Returns room for the locations of `declared_samples` samples, or the failure of more than the limit
     fn room_for(&self, declared_samples: u64) -> Result<Vec<SampleLocation>, DemuxError> {
-        if declared_samples > self.sample_count_limit {
+        if declared_samples > self.limits.sample_count {
             return Err(DemuxError::SampleCountLimitExceeded {
                 declared_samples,
-                limit_samples: self.sample_count_limit,
+                limit_samples: self.limits.sample_count,
             });
         }
 
@@ -351,6 +421,8 @@ fn nth_from_one<Entry>(entries: &[Entry], index: u32) -> Option<&Entry> {
 mod fixtures {
     use alloc::vec::Vec;
 
+    use super::StructureDataLimits;
+
     use isobmff_boxes::{
         ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, DataEntry, DataEntryUrlBox,
         MovieBox, SampleDescription, SampleEntry, SampleSizeBox, SampleSizeVariant, SampleSizes,
@@ -419,6 +491,13 @@ mod fixtures {
         trak
     }
 
+    /// Limits no structure-data of the tests reaches
+    pub(super) const UNLIMITED: StructureDataLimits = StructureDataLimits {
+        sample_count: u64::MAX,
+        segment_index_count: u64::MAX,
+        subsegment_count: u64::MAX,
+    };
+
     /// Returns the movie of `tracks`
     pub(super) fn movie(tracks: impl IntoIterator<Item = TrackBox>) -> MovieBox {
         let mut movie = MovieBox::default();
@@ -439,8 +518,8 @@ mod tests {
     };
     use isobmff_core::{BoxDecode, BoxDefinition, Utf8String};
 
-    use super::StructureDataReader;
-    use super::fixtures::{movie, track};
+    use super::fixtures::{UNLIMITED, movie, track};
+    use super::{StructureDataLimits, StructureDataReader};
     use crate::error::DemuxError;
     use crate::sample::{SampleLocation, SampleProperties};
 
@@ -448,7 +527,7 @@ mod tests {
     fn resolve(
         tracks: impl IntoIterator<Item = TrackBox>,
     ) -> Result<Vec<SampleLocation>, DemuxError> {
-        StructureDataReader::new(u64::MAX)
+        StructureDataReader::new(UNLIMITED)
             .handle_movie(movie(tracks))
             .map(Iterator::collect)
     }
@@ -670,7 +749,10 @@ mod tests {
 
     #[test]
     fn a_movie_of_more_samples_than_the_limit_is_refused_and_not_kept() {
-        let mut reader = StructureDataReader::new(3);
+        let mut reader = StructureDataReader::new(StructureDataLimits {
+            sample_count: 3,
+            ..UNLIMITED
+        });
         let tracks = [
             track(1, 10, &[1, 1], &[(1, 2)], &[0]),
             track(2, 10, &[1, 1], &[(1, 2)], &[2]),
@@ -688,7 +770,7 @@ mod tests {
 
     #[test]
     fn a_second_movie_is_refused() {
-        let mut reader = StructureDataReader::new(u64::MAX);
+        let mut reader = StructureDataReader::new(UNLIMITED);
         reader.handle_movie(movie([])).unwrap();
 
         assert_eq!(

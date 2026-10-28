@@ -156,6 +156,22 @@ pub enum DemuxError {
         /// `track_ID` of the track
         track_id: u32,
     },
+    /// Segment index that would take the segment indexes a reader keeps past the limit it keeps them up to
+    #[non_exhaustive]
+    SegmentIndexCountLimitExceeded {
+        /// Number of segment indexes the reader would keep
+        retained_segment_indexes: u64,
+        /// Number of segment indexes the reader keeps up to
+        limit_segment_indexes: u64,
+    },
+    /// Segment index whose subsegments would take those a reader keeps past the limit it keeps them up to
+    #[non_exhaustive]
+    SubsegmentCountLimitExceeded {
+        /// Number of subsegments the reader would keep
+        retained_subsegments: u64,
+        /// Number of subsegments the reader keeps up to
+        limit_subsegments: u64,
+    },
     /// Segment index whose byte ranges or presentation times run past 64 bits
     #[non_exhaustive]
     SegmentIndexOutOfRange {
@@ -280,6 +296,20 @@ impl fmt::Display for DemuxError {
             Self::DecodingTimeOverflow { track_id } => write!(
                 formatter,
                 "decoding time of a sample of track {track_id} is past 64 bits"
+            ),
+            Self::SegmentIndexCountLimitExceeded {
+                retained_segment_indexes,
+                limit_segment_indexes,
+            } => write!(
+                formatter,
+                "{retained_segment_indexes} segment indexes kept, past the limit of {limit_segment_indexes}"
+            ),
+            Self::SubsegmentCountLimitExceeded {
+                retained_subsegments,
+                limit_subsegments,
+            } => write!(
+                formatter,
+                "{retained_subsegments} subsegments kept, past the limit of {limit_subsegments}"
             ),
             Self::SegmentIndexOutOfRange { reference_id } => write!(
                 formatter,

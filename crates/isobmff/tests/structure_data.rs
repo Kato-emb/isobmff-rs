@@ -10,7 +10,7 @@ mod tests {
         MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentIndexBox,
     };
     use isobmff::framing::{BoxEvent, BoxReader};
-    use isobmff::structure_data::StructureDataReader;
+    use isobmff::structure_data::{StructureDataLimits, StructureDataReader};
     use isobmff::{BoxDecode, BoxDefinition, BoxType, DemuxError, Error, SampleLocation};
     use isobmff_test_support::{ConformanceFile, conformance_files, ffprobe_packets};
 
@@ -59,7 +59,11 @@ mod tests {
         let mut resolved = Resolved {
             locations: Vec::new(),
             top_level: Vec::new(),
-            structure_data: StructureDataReader::new(u64::MAX),
+            structure_data: StructureDataReader::new(StructureDataLimits {
+                sample_count: u64::MAX,
+                segment_index_count: u64::MAX,
+                subsegment_count: u64::MAX,
+            }),
         };
         while let Some(wanted) = reader.wanted_input() {
             let input = file

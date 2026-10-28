@@ -192,8 +192,8 @@ mod tests {
 
     use crate::error::DemuxError;
     use crate::sample::{SampleLocation, SampleProperties};
-    use crate::structure_data::StructureDataReader;
-    use crate::structure_data::fixtures::{movie, track};
+    use crate::structure_data::fixtures::{UNLIMITED, movie, track};
+    use crate::structure_data::{StructureDataLimits, StructureDataReader};
 
     /// File offset the fragments of the tests start at
     const MOOF_OFFSET: u64 = 1000;
@@ -245,7 +245,7 @@ mod tests {
 
     /// Returns a reader that holds [`fragmented_movie`]
     fn reader() -> StructureDataReader {
-        let mut reader = StructureDataReader::new(u64::MAX);
+        let mut reader = StructureDataReader::new(UNLIMITED);
         reader.handle_movie(fragmented_movie()).unwrap();
         reader
     }
@@ -416,12 +416,12 @@ mod tests {
     fn a_fragment_without_its_movie_or_of_a_track_it_does_not_extend_is_refused() {
         let mut without_trex = fragmented_movie();
         without_trex.mvex.as_mut().unwrap().trex.truncate(1);
-        let mut reader_without_trex = StructureDataReader::new(u64::MAX);
+        let mut reader_without_trex = StructureDataReader::new(UNLIMITED);
         reader_without_trex.handle_movie(without_trex).unwrap();
 
         assert_eq!(
             resolve(
-                &mut StructureDataReader::new(u64::MAX),
+                &mut StructureDataReader::new(UNLIMITED),
                 &moof([traf(1, &[(1, None)])])
             ),
             Err(DemuxError::MissingMovie)
@@ -438,7 +438,10 @@ mod tests {
 
     #[test]
     fn a_refused_fragment_leaves_the_decoding_times_as_they_were() {
-        let mut reader = StructureDataReader::new(6);
+        let mut reader = StructureDataReader::new(StructureDataLimits {
+            sample_count: 6,
+            ..UNLIMITED
+        });
         reader.handle_movie(fragmented_movie()).unwrap();
 
         assert_eq!(
