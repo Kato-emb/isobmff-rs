@@ -11,10 +11,11 @@ use super::{data_reference_index, expand};
 use crate::error::DemuxError;
 use crate::sample::{SampleLocation, SampleProperties};
 
-/// Returns the number of samples the track runs of `moof` count
+/// Returns the number of samples the track runs of `moof` count, those of track fragments of empty duration left out
 pub(super) fn sample_count(moof: &MovieFragmentBox) -> u64 {
     moof.traf
         .iter()
+        .filter(|traf| !traf.tfhd.duration_is_empty)
         .flat_map(|traf| &traf.trun)
         .map(|trun| u64::from(run_sample_count(trun)))
         .fold(0, u64::saturating_add)
@@ -190,6 +191,7 @@ mod tests {
     };
 
     use crate::error::DemuxError;
+    use crate::sample::{SampleLocation, SampleProperties};
     use crate::structure_data::StructureDataReader;
     use crate::structure_data::fixtures::{movie, track};
 
@@ -383,22 +385,30 @@ mod tests {
         };
         traf.trun = Vec::from([trun]);
 
-        let samples = reader()
-            .handle_movie_fragment(&moof([traf]), MOOF_OFFSET)
-            .unwrap()
-            .map(|location| {
-                let properties = *location.properties();
-                (
-                    properties.sample_duration,
-                    properties.sample_composition_time_offset,
-                    properties.sample_flags.sample_is_non_sync_sample,
-                    location.byte_range(),
-                )
-            })
-            .collect::<Vec<_>>();
+        let sample = |decoding_time, byte_range, sample_flags| {
+            SampleLocation::new(
+                SampleProperties {
+                    track_id: 1,
+                    decoding_time,
+                    sample_duration: 50,
+                    sample_composition_time_offset: -20,
+                    sample_flags: SampleFlags::from_bits(sample_flags),
+                    sample_description_index: 1,
+                },
+                1,
+                byte_range,
+            )
+        };
+
         assert_eq!(
-            samples,
-            [(50, -20, false, 1000..1003), (50, -20, true, 1003..1006)]
+            reader()
+                .handle_movie_fragment(&moof([traf]), MOOF_OFFSET)
+                .unwrap()
+                .collect::<Vec<_>>(),
+            [
+                sample(30, 1000..1003, 0x0200_0000),
+                sample(80, 1003..1006, 0x0201_0000)
+            ]
         );
     }
 

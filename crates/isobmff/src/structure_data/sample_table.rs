@@ -85,7 +85,6 @@ pub(super) fn resolve_track(
             run = Some((next, data_reference_index));
         }
         let Some((run, data_reference_index)) = run else {
-            // Chunks before the first run hold no sample.
             return Err(mismatch(SampleToChunkBox::BOX_TYPE));
         };
 

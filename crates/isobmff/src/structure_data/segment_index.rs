@@ -1,4 +1,4 @@
-//! [`SegmentIndex`] and [`Subsegment`], a `sidx` resolved to the byte ranges and the times of the subsegments it indexes, ISO/IEC 14496-12 §8.14.3
+//! [`SegmentIndex`] and [`Subsegment`], a `sidx` resolved to the byte ranges and the times of the subsegments it indexes
 
 use alloc::vec::Vec;
 use core::ops::Range;
@@ -146,7 +146,7 @@ impl Subsegment {
     }
 }
 
-/// Returns the file offset of the `mfra` the last 16 bytes of a file of `file_len` bytes point at, where they are an `mfro`, ISO/IEC 14496-12 §8.8.11
+/// Returns the file offset of the `mfra` the last 16 bytes of a file of `file_length` bytes point at, where they are an `mfro`, ISO/IEC 14496-12 §8.8.11
 ///
 /// The `mfro` is the last box of the `mfra`, and repeats its size, so the
 /// `mfra` starts that many bytes before the end of the file. The offset is a
@@ -167,13 +167,13 @@ impl Subsegment {
 /// assert_eq!(movie_fragment_random_access_start(1000, &[0; 16]), None);
 /// ```
 #[must_use]
-pub fn movie_fragment_random_access_start(file_len: u64, last_bytes: &[u8; 16]) -> Option<u64> {
+pub fn movie_fragment_random_access_start(file_length: u64, last_bytes: &[u8; 16]) -> Option<u64> {
     let (mfro, rest) = MovieFragmentRandomAccessOffsetBox::decode(last_bytes).ok()?;
     if !rest.is_empty() {
         return None;
     }
 
-    file_len.checked_sub(u64::from(mfro.parent_size))
+    file_length.checked_sub(u64::from(mfro.parent_size))
 }
 
 #[cfg(test)]
@@ -181,7 +181,9 @@ mod tests {
     use isobmff_boxes::{MovieFragmentRandomAccessBox, SegmentIndexBox};
     use isobmff_core::BoxDecode;
 
-    use super::movie_fragment_random_access_start;
+    use alloc::vec::Vec;
+
+    use super::{SegmentIndex, Subsegment, movie_fragment_random_access_start};
     use crate::error::DemuxError;
     use crate::structure_data::StructureDataReader;
 
@@ -217,32 +219,31 @@ mod tests {
             .handle_segment_index(&SegmentIndexBox::decode_payload(SIDX_V0).unwrap(), 1000)
             .unwrap();
 
-        assert_eq!(reader.segment_indexes().len(), 1);
+        let media = Subsegment {
+            byte_range: 1100..3100,
+            presentation_time: 500..3500,
+            references_segment_index: false,
+            starts_with_sap: true,
+            sap_type: 1,
+            sap_delta_time: 0,
+        };
+        let nested = Subsegment {
+            byte_range: 3100..3150,
+            presentation_time: 3500..4500,
+            references_segment_index: true,
+            starts_with_sap: false,
+            sap_type: 0,
+            sap_delta_time: 0,
+        };
+        let expected = SegmentIndex {
+            reference_id: 1,
+            timescale: 1000,
+            subsegments: Vec::from([media.clone(), nested.clone()]),
+        };
+        assert_eq!(reader.segment_indexes(), [expected]);
         let index = reader.segment_indexes().first().unwrap();
-        assert_eq!((index.reference_id(), index.timescale()), (1, 1000));
-        let subsegments = index.subsegments();
-        assert_eq!(subsegments.len(), 2);
-        let (media, nested) = (subsegments.first().unwrap(), subsegments.get(1).unwrap());
-        assert_eq!(
-            (media.byte_range(), media.presentation_time()),
-            (1100..3100, 500..3500)
-        );
-        assert!(!media.references_segment_index());
-        assert_eq!(
-            (
-                media.starts_with_sap(),
-                media.sap_type(),
-                media.sap_delta_time()
-            ),
-            (true, 1, 0)
-        );
-        assert_eq!(
-            (nested.byte_range(), nested.presentation_time()),
-            (3100..3150, 3500..4500)
-        );
-        assert!(nested.references_segment_index());
-        assert_eq!(index.subsegment_at(3499), Some(media));
-        assert_eq!(index.subsegment_at(3500), Some(nested));
+        assert_eq!(index.subsegment_at(3499), Some(&media));
+        assert_eq!(index.subsegment_at(3500), Some(&nested));
         assert_eq!(index.subsegment_at(499), None);
     }
 
@@ -253,13 +254,21 @@ mod tests {
             .handle_segment_index(&SegmentIndexBox::decode_payload(SIDX_V1).unwrap(), 8)
             .unwrap();
 
-        let subsegment = reader
-            .segment_indexes()
-            .first()
-            .and_then(|index| index.subsegments().first())
-            .unwrap();
-        assert_eq!(subsegment.byte_range(), 0x1_0000_0008..0x1_0000_07d8);
-        assert_eq!(subsegment.presentation_time(), 0x1_0000_0000..0x1_0000_0bb8);
+        assert_eq!(
+            reader.segment_indexes(),
+            [SegmentIndex {
+                reference_id: 1,
+                timescale: 1000,
+                subsegments: Vec::from([Subsegment {
+                    byte_range: 0x1_0000_0008..0x1_0000_07d8,
+                    presentation_time: 0x1_0000_0000..0x1_0000_0bb8,
+                    references_segment_index: false,
+                    starts_with_sap: true,
+                    sap_type: 1,
+                    sap_delta_time: 0,
+                }]),
+            }]
+        );
     }
 
     #[test]
@@ -272,8 +281,13 @@ mod tests {
         reader.handle_segment_index(&sidx, 1000).unwrap();
         reader.handle_segment_index(&sidx, 2000).unwrap();
 
-        assert_eq!(reader.segment_indexes().len(), 2);
-        assert!(reader.movie_fragment_random_access().is_some());
+        let first = SegmentIndex::new(&sidx, 1000).unwrap();
+        let second = SegmentIndex::new(&sidx, 2000).unwrap();
+        assert_eq!(reader.segment_indexes(), [first, second]);
+        assert_eq!(
+            reader.movie_fragment_random_access(),
+            Some(&MovieFragmentRandomAccessBox::default())
+        );
     }
 
     #[test]

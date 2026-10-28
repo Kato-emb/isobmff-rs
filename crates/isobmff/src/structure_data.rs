@@ -289,7 +289,7 @@ fn data_reference_index(trak: &TrackBox, sample_description_index: u32) -> Resul
     .ok_or(unknown_description)?;
     let data_reference_index = match description {
         SampleDescription::Typed(entry) => entry.data_reference_index,
-        // `SampleEntry` lays out six reserved bytes, then `data_reference_index` (§8.5.2.2).
+        // Why not refuse an entry that does not read as a `SampleEntry`: every sample entry opens with six reserved bytes and its `data_reference_index` (§8.5.2.2), whatever its format.
         SampleDescription::Other(entry) => entry
             .raw_payload()
             .and_then(|payload| payload.get(6..8))
@@ -323,7 +323,7 @@ fn data_reference_index(trak: &TrackBox, sample_description_index: u32) -> Resul
 
 /// Sorts `locations` into the order their media data lies in the file, samples of no bytes at one offset by track and decoding time
 fn in_file_order(locations: &mut [SampleLocation]) {
-    // Why not a stable sort by offset alone: it allocates scratch for half the locations, up to the sample limit.
+    // Why not a stable sort by offset alone: it allocates scratch in proportion to the locations, which the sample limit lets grow large.
     locations.sort_unstable_by_key(|location| {
         let properties = location.properties();
         (
@@ -434,15 +434,15 @@ mod tests {
 
     use isobmff_boxes::{
         CompactSampleSizeBox, CompositionOffsetBox, CompositionOffsetEntry, DataEntry,
-        DataEntryImdaBox, DataEntryUrlBox, MovieBox, SampleDependencyTypeBox, SampleSizeVariant,
-        SampleToChunkBox, SyncSampleBox, TimeToSampleBox, TrackBox,
+        DataEntryImdaBox, DataEntryUrlBox, MovieBox, SampleDependencyTypeBox, SampleFlags,
+        SampleSizeVariant, SampleToChunkBox, SyncSampleBox, TimeToSampleBox, TrackBox,
     };
     use isobmff_core::{BoxDecode, BoxDefinition, Utf8String};
 
     use super::StructureDataReader;
     use super::fixtures::{movie, track};
     use crate::error::DemuxError;
-    use crate::sample::SampleLocation;
+    use crate::sample::{SampleLocation, SampleProperties};
 
     /// Resolves the movie of `tracks` with no limit to speak of
     fn resolve(
@@ -451,6 +451,27 @@ mod tests {
         StructureDataReader::new(u64::MAX)
             .handle_movie(movie(tracks))
             .map(Iterator::collect)
+    }
+
+    /// Returns the location of a sample of 10 ticks of track 1, described by sample entry 1 and in the file itself
+    fn sample(
+        decoding_time: u64,
+        byte_range: Range<u64>,
+        sample_composition_time_offset: i64,
+        sample_flags: u32,
+    ) -> SampleLocation {
+        SampleLocation::new(
+            SampleProperties {
+                track_id: 1,
+                decoding_time,
+                sample_duration: 10,
+                sample_composition_time_offset,
+                sample_flags: SampleFlags::from_bits(sample_flags),
+                sample_description_index: 1,
+            },
+            1,
+            byte_range,
+        )
     }
 
     /// Returns the track, decoding time and byte range of each location
@@ -526,12 +547,14 @@ mod tests {
             .to_vec();
         trak.mdia.minf.stbl.ctts = Some(ctts);
 
-        let offsets = resolve([trak])
-            .unwrap()
-            .iter()
-            .map(|location| location.properties().sample_composition_time_offset)
-            .collect::<Vec<_>>();
-        assert_eq!(offsets, [20, -10, -10]);
+        assert_eq!(
+            resolve([trak]),
+            Ok(Vec::from([
+                sample(0, 0..1, 20, 0),
+                sample(10, 1..2, -10, 0),
+                sample(20, 2..3, -10, 0),
+            ]))
+        );
     }
 
     #[test]
@@ -544,29 +567,21 @@ mod tests {
         trak.mdia.minf.stbl.sdtp =
             Some(SampleDependencyTypeBox::decode_payload(b"\0\0\0\0\x24\x18\x14").unwrap());
 
-        let flags = resolve([trak])
-            .unwrap()
-            .iter()
-            .map(|location| {
-                let flags = location.properties().sample_flags;
-                (
-                    flags.sample_is_non_sync_sample,
-                    flags.sample_depends_on,
-                    flags.sample_is_depended_on,
-                )
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(flags, [(false, 2, 1), (true, 1, 2), (false, 1, 1)]);
+        assert_eq!(
+            resolve([trak]),
+            Ok(Vec::from([
+                sample(0, 0..1, 0, 0x0240_0000),
+                sample(10, 1..2, 0, 0x0181_0000),
+                sample(20, 2..3, 0, 0x0140_0000),
+            ]))
+        );
     }
 
     #[test]
     fn every_sample_of_a_track_without_an_stss_is_a_sync_sample() {
-        let locations = resolve([track(1, 10, &[1, 1], &[(1, 2)], &[0])]).unwrap();
-
-        assert!(
-            locations
-                .iter()
-                .all(|location| !location.properties().sample_flags.sample_is_non_sync_sample)
+        assert_eq!(
+            resolve([track(1, 10, &[1, 1], &[(1, 2)], &[0])]),
+            Ok(Vec::from([sample(0, 0..1, 0, 0), sample(10, 1..2, 0, 0)]))
         );
     }
 

@@ -149,10 +149,10 @@ mod tests {
         "FX-VY-9436R.3_qhd-variant.mp4",
     ];
 
-    /// Files whose edit list leaves samples out of the presentation, which `ffprobe` does not report as packets
+    /// Files whose edit list leaves samples out of the presentation, which `ffprobe` does not report as packets, and renumbers the dts of the rest
     const EDITED_OUT: [&str; 1] = ["a8-foreman_QCIF_edit.mp4"];
 
-    /// Track, file offset, length and decoding time of a sample or a packet
+    /// Track, file offset, length and dts of a sample or a packet
     type Placed = (u32, u64, u64, i64);
 
     #[test]
@@ -185,16 +185,21 @@ mod tests {
             if UNREAD_BY_FFPROBE.contains(&name.as_str()) {
                 continue;
             }
+            let movie = resolved.structure_data.movie().expect(&name);
             let mut samples = resolved
                 .locations
                 .iter()
                 .map(|location| {
+                    let properties = location.properties();
                     let byte_range = location.byte_range();
                     (
-                        location.properties().track_id,
+                        properties.track_id,
                         byte_range.start,
                         byte_range.end - byte_range.start,
-                        i64::try_from(location.properties().decoding_time).unwrap(),
+                        i64::try_from(properties.decoding_time)
+                            .unwrap()
+                            .checked_sub(dts_shift(movie, properties.track_id))
+                            .unwrap(),
                     )
                 })
                 .collect::<Vec<Placed>>();
@@ -209,25 +214,54 @@ mod tests {
             packets.sort_unstable();
 
             if EDITED_OUT.contains(&name.as_str()) {
-                samples.retain(|sample| {
-                    packets.iter().any(|packet| {
-                        (packet.0, packet.1, packet.2) == (sample.0, sample.1, sample.2)
-                    })
-                });
+                let placed = |placed: &[Placed]| {
+                    placed
+                        .iter()
+                        .map(|&(track, offset, length, _)| (track, offset, length))
+                        .collect::<Vec<_>>()
+                };
+                let mut kept = placed(&samples);
+                kept.retain(|sample| placed(&packets).contains(sample));
+                assert_eq!(kept, placed(&packets), "{name}: the packets are samples");
+                continue;
             }
-            assert_eq!(
-                samples
-                    .iter()
-                    .map(|&(track, offset, len, _)| (track, offset, len))
-                    .collect::<Vec<_>>(),
-                packets
-                    .iter()
-                    .map(|&(track, offset, len, _)| (track, offset, len))
-                    .collect::<Vec<_>>(),
-                "{name}: the samples lie where the packets do"
-            );
-            assert_dts_shifted_per_track(&name, &samples, &packets);
+            assert_eq!(samples, packets, "{name}: the samples are the packets");
         }
+    }
+
+    /// Returns how far `ffprobe` moves the dts of track `track_id` back from its decoding time
+    ///
+    /// It takes off the media time the first edit of the track starts at, and
+    /// as much again as the most negative composition offset of the `ctts`,
+    /// so that no sample is composed before the presentation starts.
+    fn dts_shift(movie: &MovieBox, track_id: u32) -> i64 {
+        let trak = movie
+            .trak
+            .iter()
+            .find(|trak| trak.tkhd.track_id == track_id)
+            .unwrap();
+        let media_time = trak
+            .edts
+            .iter()
+            .flat_map(|edts| &edts.elst)
+            .flat_map(|elst| &elst.entries)
+            .map(|entry| entry.media_time)
+            .find(|media_time| *media_time >= 0)
+            .unwrap_or_default();
+        let earliest_composition_offset = trak
+            .mdia
+            .minf
+            .stbl
+            .ctts
+            .iter()
+            .flat_map(|ctts| &ctts.entries)
+            .map(|entry| entry.sample_offset)
+            .min()
+            .unwrap_or_default();
+
+        media_time
+            .checked_sub(earliest_composition_offset.min(0))
+            .unwrap()
     }
 
     /// Asserts that each media subsegment of the segment indexes, and each `moof` the `mfra` lists, starts at a top-level box
@@ -261,24 +295,6 @@ mod tests {
                 Some(MovieFragmentBox::BOX_TYPE),
                 "{name}: tfra entry {entry:?} points at no moof"
             );
-        }
-    }
-
-    /// Asserts that the decoding time of each sample is the dts of its packet, shifted by one amount for each track
-    ///
-    /// `ffprobe` shifts the dts of a track by what its edit list or its
-    /// negative composition offsets take off the start of the presentation.
-    fn assert_dts_shifted_per_track(name: &str, samples: &[Placed], packets: &[Placed]) {
-        let mut shifts = Vec::<(u32, i64)>::new();
-        for (sample, packet) in samples.iter().zip(packets) {
-            let shift = sample.3.checked_sub(packet.3).unwrap();
-            match shifts.iter().find(|(track, _)| *track == sample.0) {
-                Some(&(_, expected)) => assert_eq!(
-                    shift, expected,
-                    "{name}: sample {sample:?} is shifted from packet {packet:?} unlike the rest of its track"
-                ),
-                None => shifts.push((sample.0, shift)),
-            }
         }
     }
 }
