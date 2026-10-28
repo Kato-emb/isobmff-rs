@@ -15,6 +15,7 @@ extern crate alloc;
 
 mod byte_range;
 mod error;
+pub mod file_level;
 pub mod framing;
 
 pub use byte_range::ByteRange;
