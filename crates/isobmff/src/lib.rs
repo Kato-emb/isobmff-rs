@@ -5,7 +5,8 @@
 //! vocabulary, are in [`boxes`].
 //!
 //! [`structure_data`] resolves the `moov` and the `moof`s of a file to the
-//! [`SampleLocation`] of each sample they declare.
+//! [`SampleLocation`] of each sample they declare, and [`media_data`]
+//! gathers the bytes of those samples out of the bytes of the file.
 //!
 //! The examples in `crates/isobmff/examples/` read and write files through
 //! [`framing`]: `cargo run -p isobmff --example dump_boxes -- movie.mp4` lists
@@ -19,6 +20,7 @@ extern crate alloc;
 mod byte_range;
 mod error;
 pub mod framing;
+pub mod media_data;
 mod sample;
 pub mod structure_data;
 

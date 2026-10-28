@@ -8,7 +8,7 @@ use isobmff_core::{BoxType, Error};
 use crate::byte_range::ByteRange;
 use crate::framing::BoxEventKind;
 
-/// Reason the bytes of a file do not read as its boxes, or its structure-data as the samples it declares
+/// Reason the bytes of a file do not read as its boxes, its structure-data as the samples it declares, or its media data as their bytes
 ///
 /// A [`BoxReader`](crate::framing::BoxReader) that fails stays failed: every
 /// call after it returns the same failure.
@@ -17,7 +17,9 @@ use crate::framing::BoxEventKind;
 /// [`PayloadLimitExceeded`](Self::PayloadLimitExceeded) refused by a gather
 /// are the exceptions, which refuse one call and leave the reader as it was.
 /// A [`StructureDataReader`](crate::structure_data::StructureDataReader)
-/// refuses the one box it is handed, and stays as it was.
+/// refuses the one box it is handed, and stays as it was. A
+/// [`MediaDataReader`](crate::media_data::MediaDataReader) refuses the
+/// locations it is handed, and stays as it was.
 ///
 /// A box whose own bytes are malformed fails with the [`Error`] it reads with,
 /// carried whole as [`Box`](Self::Box).
@@ -178,6 +180,32 @@ pub enum DemuxError {
         /// Stream ID of the reference stream of the `sidx`
         reference_id: u32,
     },
+    /// Sample locations that would take the locations a reader holds past the limit it holds them up to
+    #[non_exhaustive]
+    HeldLocationLimitExceeded {
+        /// Number of locations the reader would hold
+        held_locations: u64,
+        /// Number of locations the reader holds up to
+        limit_locations: u64,
+    },
+    /// Sample locations that would take the bytes the locations a reader holds name past the limit it holds them up to
+    #[non_exhaustive]
+    HeldBytesLimitExceeded {
+        /// Bytes the locations the reader would hold name together
+        held_bytes: u64,
+        /// Bytes the locations the reader holds name up to, together
+        limit_bytes: u64,
+    },
+    /// Input ends before the media data of a sample has arrived
+    #[non_exhaustive]
+    UnfinishedSample {
+        /// `track_ID` of the track the sample is of
+        track_id: u32,
+        /// Length of the media data of the sample
+        needed_bytes: u64,
+        /// Length of the media data of the sample that arrived
+        available_bytes: u64,
+    },
     /// Box does not read off its bytes
     #[non_exhaustive]
     Box {
@@ -314,6 +342,28 @@ impl fmt::Display for DemuxError {
             Self::SegmentIndexOutOfRange { reference_id } => write!(
                 formatter,
                 "segment index of stream {reference_id} runs past 64 bits"
+            ),
+            Self::HeldLocationLimitExceeded {
+                held_locations,
+                limit_locations,
+            } => write!(
+                formatter,
+                "{held_locations} sample locations held, past the limit of {limit_locations}"
+            ),
+            Self::HeldBytesLimitExceeded {
+                held_bytes,
+                limit_bytes,
+            } => write!(
+                formatter,
+                "sample locations held name {held_bytes} bytes, past the limit of {limit_bytes}"
+            ),
+            Self::UnfinishedSample {
+                track_id,
+                needed_bytes,
+                available_bytes,
+            } => write!(
+                formatter,
+                "input ends {available_bytes} bytes into a sample of track {track_id} of {needed_bytes}"
             ),
             Self::Box { error } => fmt::Display::fmt(&error, formatter),
         }
