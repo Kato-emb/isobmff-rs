@@ -8,13 +8,16 @@ use isobmff_core::{BoxType, Error};
 use crate::byte_range::ByteRange;
 use crate::framing::BoxEventKind;
 
-/// Reason the bytes of a file do not read as its boxes
+/// Reason the bytes of a file do not read as its boxes, or its structure-data as the samples it declares
 ///
-/// A reader that fails stays failed: every call after it returns the same
-/// failure. [`UnwantedInput`](Self::UnwantedInput),
+/// A [`BoxReader`](crate::framing::BoxReader) that fails stays failed: every
+/// call after it returns the same failure.
+/// [`UnwantedInput`](Self::UnwantedInput),
 /// [`UndecidedBox`](Self::UndecidedBox), [`NoOpenBox`](Self::NoOpenBox) and a
 /// [`PayloadLimitExceeded`](Self::PayloadLimitExceeded) refused by a gather
 /// are the exceptions, which refuse one call and leave the reader as it was.
+/// A [`StructureDataReader`](crate::structure_data::StructureDataReader)
+/// refuses the one box it is handed, and stays as it was.
 ///
 /// A box whose own bytes are malformed fails with the [`Error`] it reads with,
 /// carried whole as [`Box`](Self::Box).
@@ -65,6 +68,115 @@ pub enum DemuxError {
         needed_bytes: u64,
         /// Length of the box that arrived
         available_bytes: u64,
+    },
+    /// Box of which a file holds at most one arrives a second time
+    #[non_exhaustive]
+    DuplicateBox {
+        /// Type of the box
+        box_type: BoxType,
+    },
+    /// Structure-data declares more samples than the limit it is resolved with
+    #[non_exhaustive]
+    SampleCountLimitExceeded {
+        /// Number of samples the `moov` or the `moof` declares
+        declared_samples: u64,
+        /// Number of samples one `moov` or `moof` is resolved up to
+        limit_samples: u64,
+    },
+    /// Table of a sample table that does not agree with the others on the samples of the track
+    #[non_exhaustive]
+    SampleTableMismatch {
+        /// `track_ID` of the track
+        track_id: u32,
+        /// Type of the box of the table
+        box_type: BoxType,
+    },
+    /// Samples described by a sample entry their track has none of
+    #[non_exhaustive]
+    UnknownSampleDescriptionIndex {
+        /// `track_ID` of the track
+        track_id: u32,
+        /// Index, from 1, of the sample entry
+        sample_description_index: u32,
+    },
+    /// Sample entry that names an entry of a data reference its track has none of
+    #[non_exhaustive]
+    UnknownDataReferenceIndex {
+        /// `track_ID` of the track
+        track_id: u32,
+        /// Index, from 1, of the entry of the `dref`
+        data_reference_index: u16,
+    },
+    /// Media data in a file other than the one the structure-data is in
+    #[non_exhaustive]
+    ExternalDataReference {
+        /// `track_ID` of the track
+        track_id: u32,
+        /// Index, from 1, of the entry of the `dref` that names the file
+        data_reference_index: u16,
+    },
+    /// Media data in a container the reader does not resolve offsets into: an `IdentifiedMediaDataBox`
+    #[non_exhaustive]
+    UnsupportedDataReference {
+        /// `track_ID` of the track
+        track_id: u32,
+        /// Index, from 1, of the entry of the `dref`
+        data_reference_index: u16,
+    },
+    /// Movie fragment that arrives before the movie it extends
+    #[non_exhaustive]
+    MissingMovie,
+    /// Track fragment of a track the movie has none of
+    #[non_exhaustive]
+    UnknownTrackId {
+        /// `track_ID` the `tfhd` gives
+        track_id: u32,
+    },
+    /// Track fragment of a track the `mvex` of the movie gives no `trex` for
+    #[non_exhaustive]
+    MissingTrackExtends {
+        /// `track_ID` of the track
+        track_id: u32,
+    },
+    /// Track fragment without a `tfdt` whose decoding time is not known, as after a reader resumes
+    #[non_exhaustive]
+    MissingDecodingTime {
+        /// `track_ID` of the track
+        track_id: u32,
+    },
+    /// Media data of a sample that lies outside the file offsets 64 bits count
+    #[non_exhaustive]
+    DataOffsetOutOfRange {
+        /// `track_ID` of the track
+        track_id: u32,
+    },
+    /// Decoding time of a sample past what 64 bits carry
+    #[non_exhaustive]
+    DecodingTimeOverflow {
+        /// `track_ID` of the track
+        track_id: u32,
+    },
+    /// Segment index that would take the segment indexes a reader keeps past the limit it keeps them up to
+    #[non_exhaustive]
+    SegmentIndexCountLimitExceeded {
+        /// Number of segment indexes the reader would keep
+        retained_segment_indexes: u64,
+        /// Number of segment indexes the reader keeps up to
+        limit_segment_indexes: u64,
+    },
+    /// Segment index whose subsegments would take those a reader keeps past the limit it keeps them up to
+    #[non_exhaustive]
+    SubsegmentCountLimitExceeded {
+        /// Number of subsegments the reader would keep
+        retained_subsegments: u64,
+        /// Number of subsegments the reader keeps up to
+        limit_subsegments: u64,
+    },
+    /// Segment index whose byte ranges or presentation times run past 64 bits
+    #[non_exhaustive]
+    SegmentIndexOutOfRange {
+        /// Stream ID of the reference stream of the `sidx`
+        reference_id: u32,
     },
     /// Box does not read off its bytes
     #[non_exhaustive]
@@ -119,6 +231,89 @@ impl fmt::Display for DemuxError {
             } => write!(
                 formatter,
                 "file ends {available_bytes} bytes into a {box_type} box of {needed_bytes}"
+            ),
+            Self::DuplicateBox { box_type } => write!(formatter, "a second {box_type} box"),
+            Self::SampleCountLimitExceeded {
+                declared_samples,
+                limit_samples,
+            } => write!(
+                formatter,
+                "{declared_samples} samples declared, past the limit of {limit_samples}"
+            ),
+            Self::SampleTableMismatch { track_id, box_type } => write!(
+                formatter,
+                "{box_type} of track {track_id} does not agree with the rest of its sample table"
+            ),
+            Self::UnknownSampleDescriptionIndex {
+                track_id,
+                sample_description_index,
+            } => write!(
+                formatter,
+                "track {track_id} has no sample entry {sample_description_index}"
+            ),
+            Self::UnknownDataReferenceIndex {
+                track_id,
+                data_reference_index,
+            } => write!(
+                formatter,
+                "track {track_id} has no data reference entry {data_reference_index}"
+            ),
+            Self::ExternalDataReference {
+                track_id,
+                data_reference_index,
+            } => write!(
+                formatter,
+                "data reference entry {data_reference_index} of track {track_id} names another file"
+            ),
+            Self::UnsupportedDataReference {
+                track_id,
+                data_reference_index,
+            } => write!(
+                formatter,
+                "data reference entry {data_reference_index} of track {track_id} names an identified media data box"
+            ),
+            Self::MissingMovie => formatter.write_str("a movie fragment before the movie"),
+            Self::UnknownTrackId { track_id } => {
+                write!(
+                    formatter,
+                    "a track fragment of track {track_id}, which the movie has none of"
+                )
+            }
+            Self::MissingTrackExtends { track_id } => {
+                write!(
+                    formatter,
+                    "a track fragment of track {track_id}, which has no trex"
+                )
+            }
+            Self::MissingDecodingTime { track_id } => write!(
+                formatter,
+                "a track fragment of track {track_id} without a tfdt, whose decoding time is not known"
+            ),
+            Self::DataOffsetOutOfRange { track_id } => write!(
+                formatter,
+                "media data of a sample of track {track_id} lies outside 64-bit file offsets"
+            ),
+            Self::DecodingTimeOverflow { track_id } => write!(
+                formatter,
+                "decoding time of a sample of track {track_id} is past 64 bits"
+            ),
+            Self::SegmentIndexCountLimitExceeded {
+                retained_segment_indexes,
+                limit_segment_indexes,
+            } => write!(
+                formatter,
+                "{retained_segment_indexes} segment indexes kept, past the limit of {limit_segment_indexes}"
+            ),
+            Self::SubsegmentCountLimitExceeded {
+                retained_subsegments,
+                limit_subsegments,
+            } => write!(
+                formatter,
+                "{retained_subsegments} subsegments kept, past the limit of {limit_subsegments}"
+            ),
+            Self::SegmentIndexOutOfRange { reference_id } => write!(
+                formatter,
+                "segment index of stream {reference_id} runs past 64 bits"
             ),
             Self::Box { error } => fmt::Display::fmt(&error, formatter),
         }

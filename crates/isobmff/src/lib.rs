@@ -4,6 +4,9 @@
 //! the root of this crate. The boxes ISO/IEC 14496-12 defines, written in that
 //! vocabulary, are in [`boxes`].
 //!
+//! [`structure_data`] resolves the `moov` and the `moof`s of a file to the
+//! [`SampleLocation`] of each sample they declare.
+//!
 //! The examples in `crates/isobmff/examples/` read and write files through
 //! [`framing`]: `cargo run -p isobmff --example dump_boxes -- movie.mp4` lists
 //! the boxes of a file, and `split_fragments` splits a fragmented movie file
@@ -16,10 +19,13 @@ extern crate alloc;
 mod byte_range;
 mod error;
 pub mod framing;
+mod sample;
+pub mod structure_data;
 
 pub use byte_range::ByteRange;
 pub use error::{DemuxError, MuxError};
 pub use isobmff_core::*;
+pub use sample::{Sample, SampleLocation, SampleProperties};
 
 /// Boxes of ISO/IEC 14496-12, each read into a value that owns its bytes
 ///

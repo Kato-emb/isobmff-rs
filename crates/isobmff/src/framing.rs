@@ -16,7 +16,7 @@ pub use box_reader::BoxReader;
 pub use box_writer::BoxWriter;
 
 /// Converts a length in memory to one in a file, where it always fits
-fn to_u64(length: usize) -> u64 {
+pub(crate) fn to_u64(length: usize) -> u64 {
     u64::try_from(length).unwrap_or(u64::MAX)
 }
 
