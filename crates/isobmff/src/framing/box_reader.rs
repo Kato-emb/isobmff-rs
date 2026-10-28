@@ -222,9 +222,10 @@ impl BoxReader {
     /// Ends the file at the offset the reader wants, and returns the events that close the box being read
     ///
     /// The events are a [`BoxEvent::End`], or none when the file ends between
-    /// boxes. A box whose size runs to the end of the file ends here, and a
-    /// skipped box ends where its header says. The reader then wants no more
-    /// input.
+    /// boxes. A box whose size runs to the end of the file ends here, and so
+    /// may one whose payload has nothing left to arrive, so the events go where
+    /// those of [`handle_input`](Self::handle_input) go. A skipped box ends
+    /// where its header says. The reader then wants no more input.
     ///
     /// # Errors
     ///

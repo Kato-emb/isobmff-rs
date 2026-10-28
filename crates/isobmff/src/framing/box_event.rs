@@ -50,7 +50,7 @@ pub enum BoxEventKind {
 /// [`BoxReader::finish`](super::BoxReader::finish). They borrow the input,
 /// never the reader.
 #[derive(Clone, Debug, Default)]
-#[must_use = "the events say which header waits for an answer"]
+#[must_use = "the events open and close boxes, and a header waits for an answer"]
 pub struct BoxEvents<'a> {
     // Why not a `Vec`: the events of one call stop at the first `Header`, after
     // one `End`, and at most one `Payload` before it, so three slots always

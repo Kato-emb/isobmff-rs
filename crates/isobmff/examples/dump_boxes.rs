@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut file = File::open(path)?;
     let mut reader = BoxReader::new();
     let mut buffer = vec![0; 64 * 1024];
-    let mut gathering: Option<ByteRange> = None;
+    let mut gathering: Option<u64> = None;
 
     let (mut buffered_at, mut buffered) = (0_u64, 0_usize);
 
@@ -53,33 +53,43 @@ fn main() -> Result<(), Box<dyn Error>> {
         let input = buffer.get(..buffered).ok_or("read past the buffer")?;
 
         for event in reader.handle_input(buffered_at, input)? {
-            match event {
-                BoxEvent::Header(header) => {
-                    let byte_range = reader.open_box().ok_or("a header with no box open")?;
-                    if header.box_type() != BoxType::compact(*b"mdat")
-                        && header.payload_len().is_some()
-                        && reader.gather(GATHER_LIMIT).is_ok()
-                    {
-                        gathering = Some(byte_range);
-                    } else {
-                        print_box(header, byte_range, 0, " (not read)");
-                        reader.skip()?;
-                    }
-                }
-                BoxEvent::End => {
-                    if let (Some(raw_box), Some(byte_range)) =
-                        (reader.gathered_box(), gathering.take())
-                    {
-                        print_tree(raw_box, byte_range.offset(), 0);
-                    }
-                }
-                BoxEvent::Payload(_) | _ => {}
-            }
+            list(&mut reader, event, &mut gathering)?;
         }
     }
 
-    let _events = reader.finish()?;
+    for event in reader.finish()? {
+        list(&mut reader, event, &mut gathering)?;
+    }
 
+    Ok(())
+}
+
+/// Lists the box `event` belongs to: gathered and printed as a tree once it ends, or printed by its header and skipped
+fn list(
+    reader: &mut BoxReader,
+    event: BoxEvent<'_>,
+    gathering: &mut Option<u64>,
+) -> Result<(), Box<dyn Error>> {
+    match event {
+        BoxEvent::Header(header) => {
+            let byte_range = reader.open_box().ok_or("a header with no box open")?;
+            if header.box_type() != BoxType::compact(*b"mdat")
+                && header.payload_len().is_some()
+                && reader.gather(GATHER_LIMIT).is_ok()
+            {
+                *gathering = Some(byte_range.offset());
+            } else {
+                print_box(header, byte_range, 0, " (not read)");
+                reader.skip()?;
+            }
+        }
+        BoxEvent::End => {
+            if let (Some(raw_box), Some(offset)) = (reader.gathered_box(), gathering.take()) {
+                print_tree(raw_box, offset, 0);
+            }
+        }
+        BoxEvent::Payload(_) | _ => {}
+    }
     Ok(())
 }
 
