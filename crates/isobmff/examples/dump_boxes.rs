@@ -34,49 +34,51 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut buffer = vec![0; 64 * 1024];
     let mut gathering: Option<ByteRange> = None;
 
-    while let Some(wanted) = reader.wanted_input() {
-        file.seek(SeekFrom::Start(wanted.offset()))?;
-        let at_most = wanted
-            .length()
-            .and_then(|length| usize::try_from(length).ok())
-            .map_or(buffer.len(), |length| length.min(buffer.len()));
-        let read = file.read(buffer.get_mut(..at_most).ok_or("buffer too short")?)?;
-        if read == 0 {
-            break;
-        }
-        let input = buffer.get(..read).ok_or("read past the buffer")?;
+    let (mut buffered_at, mut buffered) = (0_u64, 0_usize);
 
-        for event in reader.handle_input(wanted.offset(), input)? {
-            match event? {
-                BoxEvent::Header(open) => {
-                    let header = open.header();
+    while let Some(wanted) = reader.wanted_input() {
+        let buffered_end = buffered_at.saturating_add(u64::try_from(buffered)?);
+        if !(buffered_at..buffered_end).contains(&wanted.offset()) {
+            file.seek(SeekFrom::Start(wanted.offset()))?;
+            let at_most = wanted
+                .length()
+                .and_then(|length| usize::try_from(length).ok())
+                .map_or(buffer.len(), |length| length.min(buffer.len()));
+            buffered = file.read(buffer.get_mut(..at_most).ok_or("buffer too short")?)?;
+            buffered_at = wanted.offset();
+            if buffered == 0 {
+                break;
+            }
+        }
+        let input = buffer.get(..buffered).ok_or("read past the buffer")?;
+
+        for event in reader.handle_input(buffered_at, input)? {
+            match event {
+                BoxEvent::Header(header) => {
+                    let byte_range = reader.open_box().ok_or("a header with no box open")?;
                     if header.box_type() != BoxType::compact(*b"mdat")
-                        && header
-                            .payload_len()
-                            .is_some_and(|payload_len| payload_len <= GATHER_LIMIT)
+                        && header.payload_len().is_some()
+                        && reader.gather(GATHER_LIMIT).is_ok()
                     {
-                        gathering = Some(open.byte_range());
-                        open.gather(GATHER_LIMIT)?;
+                        gathering = Some(byte_range);
                     } else {
-                        print_box(header, open.byte_range(), 0, " (not read)");
-                        open.skip();
+                        print_box(header, byte_range, 0, " (not read)");
+                        reader.skip()?;
                     }
                 }
-                BoxEvent::Gathered(raw_box) => {
-                    let byte_range = gathering
-                        .take()
-                        .ok_or("a box was gathered that was never opened")?;
-                    print_tree(raw_box, byte_range.offset(), 0);
+                BoxEvent::End => {
+                    if let (Some(raw_box), Some(byte_range)) =
+                        (reader.gathered_box(), gathering.take())
+                    {
+                        print_tree(raw_box, byte_range.offset(), 0);
+                    }
                 }
-                BoxEvent::Payload(_) | BoxEvent::End => {}
-                _ => {}
+                BoxEvent::Payload(_) | _ => {}
             }
         }
     }
 
-    for event in reader.finish()? {
-        event?;
-    }
+    let _events = reader.finish()?;
 
     Ok(())
 }

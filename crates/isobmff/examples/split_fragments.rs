@@ -13,13 +13,14 @@
 //! reading its payload. Concatenating `init.mp4` with the segments in order
 //! gives a file that plays as the original does.
 //!
-//! The `ftyp`, `moov` and `moof` are read whole and written back. A `mdat` is
-//! streamed: its payload goes to the segment as it is read, a piece at a time.
+//! The reader's events go to a writer for each segment. The `ftyp`, `moov`
+//! and `moof` are gathered whole; a `mdat` is streamed, its payload going to
+//! the segment a piece at a time as it is read, never held whole.
 
 use std::env;
 use std::error::Error;
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use isobmff::framing::{BoxEvent, BoxReader, BoxWriter};
@@ -39,84 +40,96 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut file = File::open(path)?;
     let mut reader = BoxReader::new();
     let mut buffer = vec![0; 64 * 1024];
-    let mut output = File::create(out_dir.join("init.mp4"))?;
-    let mut output_len: u64 = 0;
+    let mut output = BufWriter::new(File::create(out_dir.join("init.mp4"))?);
+    let mut writer = BoxWriter::new();
     let mut brands: Option<Vec<u8>> = None;
     let mut segment_count: u32 = 0;
+    let mut copying = false;
+
+    let (mut buffered_at, mut buffered) = (0_u64, 0_usize);
 
     while let Some(wanted) = reader.wanted_input() {
-        file.seek(SeekFrom::Start(wanted.offset()))?;
-        let at_most = wanted
-            .length()
-            .and_then(|length| usize::try_from(length).ok())
-            .map_or(buffer.len(), |length| length.min(buffer.len()));
-        let read = file.read(buffer.get_mut(..at_most).ok_or("buffer too short")?)?;
-        if read == 0 {
-            break;
-        }
-        let input = buffer.get(..read).ok_or("read past the buffer")?;
-
-        for event in reader.handle_input(wanted.offset(), input)? {
-            match event? {
-                BoxEvent::Header(open) => {
-                    let header = open.header();
-                    let box_type = header.box_type();
-                    if box_type == BoxType::compact(*b"mdat") {
-                        if segment_count == 0 && open.byte_range().offset() != output_len {
-                            return Err("the media data of the movie would move from where its chunk offsets point".into());
-                        }
-                        let mut encoded = [0; 32];
-                        header.encode(&mut encoded)?;
-                        let header_len = usize::try_from(header.encoded_len())?;
-                        output.write_all(encoded.get(..header_len).ok_or("header too long")?)?;
-                        output_len = output_len.saturating_add(header.encoded_len());
-                        open.stream();
-                    } else if [b"ftyp", b"moov", b"moof"]
-                        .iter()
-                        .any(|whole| box_type == BoxType::compact(**whole))
-                    {
-                        open.gather(GATHER_LIMIT)?;
-                    } else {
-                        open.skip();
-                    }
-                }
-                BoxEvent::Gathered(raw_box) => {
-                    let box_type = raw_box.header().box_type();
-                    let mut writer = BoxWriter::new();
-                    if box_type == BoxType::compact(*b"ftyp") {
-                        brands = Some(raw_box.payload().to_vec());
-                    } else if box_type == BoxType::compact(*b"moof") {
-                        let brands = brands.as_deref().ok_or("a moof before the ftyp")?;
-                        let segment_type = BoxHeader::with_payload_len(
-                            BoxType::compact(*b"styp"),
-                            u64::try_from(brands.len())?,
-                        )
-                        .ok_or("brands too long for a box")?;
-                        segment_count = segment_count.saturating_add(1);
-                        output =
-                            File::create(out_dir.join(format!("segment-{segment_count}.m4s")))?;
-                        output_len = 0;
-                        writer.handle_box(segment_type, [brands])?;
-                    }
-                    writer.handle_box(raw_box.header(), [raw_box.payload()])?;
-                    while let Some(bytes) = writer.poll_output() {
-                        output.write_all(&bytes)?;
-                        output_len = output_len.saturating_add(u64::try_from(bytes.len())?);
-                    }
-                }
-                BoxEvent::Payload(piece) => {
-                    output.write_all(piece)?;
-                    output_len = output_len.saturating_add(u64::try_from(piece.len())?);
-                }
-                BoxEvent::End => {}
-                _ => {}
+        let buffered_end = buffered_at.saturating_add(u64::try_from(buffered)?);
+        if !(buffered_at..buffered_end).contains(&wanted.offset()) {
+            file.seek(SeekFrom::Start(wanted.offset()))?;
+            let at_most = wanted
+                .length()
+                .and_then(|length| usize::try_from(length).ok())
+                .map_or(buffer.len(), |length| length.min(buffer.len()));
+            buffered = file.read(buffer.get_mut(..at_most).ok_or("buffer too short")?)?;
+            buffered_at = wanted.offset();
+            if buffered == 0 {
+                break;
             }
         }
+        let input = buffer.get(..buffered).ok_or("read past the buffer")?;
+
+        for event in reader.handle_input(buffered_at, input)? {
+            if let BoxEvent::Header(header) = event {
+                let box_type = header.box_type();
+                copying = [b"ftyp", b"moov", b"moof", b"mdat"]
+                    .iter()
+                    .any(|copied| box_type == BoxType::compact(**copied));
+                if !copying {
+                    reader.skip()?;
+                    continue;
+                }
+                if box_type == BoxType::compact(*b"moof") {
+                    writer.finish()?;
+                    segment_count = segment_count.saturating_add(1);
+                    output.flush()?;
+                    output = BufWriter::new(File::create(
+                        out_dir.join(format!("segment-{segment_count}.m4s")),
+                    )?);
+                    writer = BoxWriter::new();
+                    let brands = brands.as_deref().ok_or("a moof before the ftyp")?;
+                    let segment_type = BoxHeader::with_payload_len(
+                        BoxType::compact(*b"styp"),
+                        u64::try_from(brands.len())?,
+                    )
+                    .ok_or("brands too long for a box")?;
+                    for styp in [
+                        BoxEvent::Header(segment_type),
+                        BoxEvent::Payload(brands),
+                        BoxEvent::End,
+                    ] {
+                        output.write_all(writer.handle_event(styp)?)?;
+                    }
+                }
+                if box_type == BoxType::compact(*b"mdat") {
+                    reader.stream()?;
+                } else {
+                    reader.gather(GATHER_LIMIT)?;
+                }
+                output.write_all(writer.handle_event(event)?)?;
+                if segment_count == 0
+                    && box_type == BoxType::compact(*b"mdat")
+                    && writer.open_box().map(|written| written.offset())
+                        != reader.open_box().map(|read| read.offset())
+                {
+                    return Err(
+                        "the media data of the movie would move from where its chunk offsets point"
+                            .into(),
+                    );
+                }
+                continue;
+            }
+            if !copying {
+                continue;
+            }
+            if let Some(raw_box) = reader.gathered_box() {
+                if raw_box.header().box_type() == BoxType::compact(*b"ftyp") {
+                    brands = Some(raw_box.payload().to_vec());
+                }
+                output.write_all(writer.handle_event(BoxEvent::Payload(raw_box.payload()))?)?;
+            }
+            output.write_all(writer.handle_event(event)?)?;
+        }
     }
 
-    for event in reader.finish()? {
-        event?;
-    }
+    let _events = reader.finish()?;
+    writer.finish()?;
+    output.flush()?;
     println!(
         "wrote init.mp4 and {segment_count} media segments to {}",
         out_dir.display()

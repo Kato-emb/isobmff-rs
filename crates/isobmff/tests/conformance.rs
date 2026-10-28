@@ -2,9 +2,9 @@
 //!
 //! What the reader frames out of a file cut into pieces is checked against
 //! what [`Boxes`] frames out of the file whole, and what the writer writes
-//! back against the file itself. `scripts/fetch-conformance.sh` fetches the
-//! files into a directory, which `ISOBMFF_CONFORMANCE_DIR` names to these
-//! tests.
+//! from the reader's events against the file itself.
+//! `scripts/fetch-conformance.sh` fetches the files into a directory, which
+//! `ISOBMFF_CONFORMANCE_DIR` names to these tests.
 
 #[cfg(test)]
 mod tests {
@@ -18,6 +18,7 @@ mod tests {
     /// What the caller answers each header with
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
     enum Answer {
+        Gather,
         Stream,
         Skip,
     }
@@ -28,7 +29,7 @@ mod tests {
         boxes: Vec<(BoxHeader, ByteRange)>,
         /// Bytes the caller passed to the reader
         passed_bytes: usize,
-        /// The file as a writer wrote back the streamed boxes
+        /// The file as a writer wrote it from the events of the boxes gathered or streamed
         written: Vec<u8>,
     }
 
@@ -36,9 +37,9 @@ mod tests {
     fn read(file: &[u8], piece_len: usize, answer: Answer) -> Read {
         let mut reader = BoxReader::new();
         let mut writer = BoxWriter::new();
-        let mut boxes: Vec<(BoxHeader, ByteRange)> = Vec::new();
-        let mut payload = Vec::new();
+        let mut boxes = Vec::new();
         let mut passed_bytes = 0_usize;
+        let mut written = Vec::new();
         while let Some(wanted) = reader.wanted_input() {
             let rest = file
                 .get(usize::try_from(wanted.offset()).unwrap()..)
@@ -48,69 +49,63 @@ mod tests {
                 break;
             }
             passed_bytes = passed_bytes.saturating_add(input.len());
-            let mut skipped = None;
             for event in reader.handle_input(wanted.offset(), input).unwrap() {
-                match event.unwrap() {
-                    BoxEvent::Header(open) => {
-                        boxes.push((open.header(), open.byte_range()));
-                        match answer {
-                            Answer::Stream => open.stream(),
-                            Answer::Skip => {
-                                skipped = Some(open.byte_range());
-                                open.skip();
-                            }
+                if let BoxEvent::Header(header) = event {
+                    let byte_range = reader.open_box().unwrap();
+                    boxes.push((header, byte_range));
+                    match answer {
+                        Answer::Gather => reader.gather(u64::MAX).unwrap(),
+                        Answer::Stream => reader.stream().unwrap(),
+                        Answer::Skip => {
+                            reader.skip().unwrap();
+                            assert_eq!(
+                                reader.wanted_input(),
+                                byte_range.length().map(|length| {
+                                    ByteRange::new(byte_range.offset().saturating_add(length), None)
+                                }),
+                                "the reader wants the file offset past the box it skips"
+                            );
                         }
                     }
-                    BoxEvent::Payload(bytes) => payload.extend_from_slice(bytes),
-                    event @ (BoxEvent::End | BoxEvent::Gathered(_) | _) => {
-                        assert!(
-                            matches!(event, BoxEvent::End),
-                            "{event:?} of a box streamed or skipped"
-                        );
-                        close(&mut writer, answer, &boxes, &mut payload);
-                    }
                 }
-            }
-            if let Some(byte_range) = skipped {
-                assert_eq!(
-                    reader.wanted_input(),
-                    byte_range.length().map(|length| {
-                        ByteRange::new(byte_range.offset().saturating_add(length), None)
-                    }),
-                    "the reader wants the file offset past the box it skips"
-                );
+                write_back(&mut writer, &reader, event, answer, &mut written);
             }
         }
         for event in reader.finish().unwrap() {
-            assert!(matches!(event.unwrap(), BoxEvent::End));
-            close(&mut writer, answer, &boxes, &mut payload);
+            write_back(&mut writer, &reader, event, answer, &mut written);
         }
+        writer.finish().unwrap();
         Read {
             boxes,
             passed_bytes,
-            written: core::iter::from_fn(|| writer.poll_output())
-                .flatten()
-                .collect(),
+            written,
         }
     }
 
-    /// Writes back the box `boxes` ends with, when it was streamed, out of the `payload` gathered from its pieces
-    fn close(
+    /// Passes `event` of a box gathered or streamed on to `writer`, and keeps the bytes it returns
+    fn write_back(
         writer: &mut BoxWriter,
+        reader: &BoxReader,
+        event: BoxEvent<'_>,
         answer: Answer,
-        boxes: &[(BoxHeader, ByteRange)],
-        payload: &mut Vec<u8>,
+        written: &mut Vec<u8>,
     ) {
-        if answer == Answer::Stream {
-            let (header, _) = boxes.last().unwrap();
-            writer.handle_box(*header, [payload.as_slice()]).unwrap();
+        if answer == Answer::Skip {
+            return;
         }
-        payload.clear();
+        if let Some(raw_box) = reader.gathered_box() {
+            written.extend_from_slice(
+                writer
+                    .handle_event(BoxEvent::Payload(raw_box.payload()))
+                    .unwrap(),
+            );
+        }
+        written.extend_from_slice(writer.handle_event(event).unwrap());
     }
 
     /// Header of each box [`Boxes`] frames out of the whole of `file`, and where it lies
     fn framed_whole(file: &[u8]) -> Vec<(BoxHeader, ByteRange)> {
-        let mut offset = 0;
+        let mut offset = 0_u64;
         Boxes::new(file)
             .map(|framed| {
                 let framed = framed.unwrap();
@@ -129,13 +124,18 @@ mod tests {
     fn the_boxes_of_a_file_cut_into_pieces_frame_as_the_whole_file_does_and_write_back_to_it() {
         for ConformanceFile { name, bytes, .. } in conformance_files() {
             let expected = framed_whole(&bytes);
-            for piece_len in PIECE_LENS {
-                let streamed = read(&bytes, piece_len, Answer::Stream);
-                assert_eq!(streamed.boxes, expected, "{name} in pieces of {piece_len}");
-                assert!(
-                    streamed.written == bytes,
-                    "{name} in pieces of {piece_len} writes back to other bytes"
-                );
+            for answer in [Answer::Gather, Answer::Stream] {
+                for piece_len in PIECE_LENS {
+                    let read = read(&bytes, piece_len, answer);
+                    assert_eq!(
+                        read.boxes, expected,
+                        "{name} in pieces of {piece_len}, {answer:?}"
+                    );
+                    assert!(
+                        read.written == bytes,
+                        "{name} in pieces of {piece_len}, {answer:?}, writes back to other bytes"
+                    );
+                }
             }
         }
     }

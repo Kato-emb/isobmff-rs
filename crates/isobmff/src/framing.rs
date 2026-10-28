@@ -4,13 +4,21 @@
 //! gives its size and type. [`BoxReader`] finds where each box starts and ends
 //! as the bytes of the file arrive, and hands its payload on as the caller
 //! asks: gathered whole, streamed in pieces, or skipped. [`BoxWriter`] lays
-//! boxes end to end the same way.
+//! boxes end to end from the same [`BoxEvent`]s, so the events a reader reports
+//! write back to the bytes they were read from.
 
+mod box_event;
 mod box_reader;
 mod box_writer;
 
-pub use box_reader::{BoxEvent, BoxEvents, BoxReader, OpenBox};
+pub use box_event::{BoxEvent, BoxEventKind, BoxEvents};
+pub use box_reader::BoxReader;
 pub use box_writer::BoxWriter;
+
+/// Converts a length in memory to one in a file, where it always fits
+fn to_u64(length: usize) -> u64 {
+    u64::try_from(length).unwrap_or(u64::MAX)
+}
 
 /// Boxes in every header form, which the tests of reading and writing share
 #[cfg(test)]

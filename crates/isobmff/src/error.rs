@@ -6,13 +6,15 @@ use core::fmt;
 use isobmff_core::{BoxType, Error};
 
 use crate::byte_range::ByteRange;
+use crate::framing::BoxEventKind;
 
 /// Reason the bytes of a file do not read as its boxes
 ///
 /// A reader that fails stays failed: every call after it returns the same
-/// failure. [`UnwantedInput`](Self::UnwantedInput) and
-/// [`UndecidedBox`](Self::UndecidedBox) are the exceptions, which refuse one
-/// call and leave the reader as it was.
+/// failure. [`UnwantedInput`](Self::UnwantedInput),
+/// [`UndecidedBox`](Self::UndecidedBox), [`NoOpenBox`](Self::NoOpenBox) and a
+/// [`PayloadLimitExceeded`](Self::PayloadLimitExceeded) refused by a gather
+/// are the exceptions, which refuse one call and leave the reader as it was.
 ///
 /// A box whose own bytes are malformed fails with the [`Error`] it reads with,
 /// carried whole as [`Box`](Self::Box).
@@ -27,12 +29,15 @@ pub enum DemuxError {
         /// Input the reader wants next, or `None` when it wants no more
         wanted: Option<ByteRange>,
     },
-    /// Input arrives before the box just opened is gathered, streamed or skipped
+    /// Input arrives before the header just read is answered with a gather, a stream or a skip
     #[non_exhaustive]
     UndecidedBox {
-        /// Type of the box just opened
+        /// Type of the box the header opens
         box_type: BoxType,
     },
+    /// Gather, stream or skip asked for while no header waits for an answer
+    #[non_exhaustive]
+    NoOpenBox,
     /// Payload of a box being gathered reaches past the limit it was gathered with
     #[non_exhaustive]
     PayloadLimitExceeded {
@@ -89,8 +94,9 @@ impl fmt::Display for DemuxError {
             ),
             Self::UndecidedBox { box_type } => write!(
                 formatter,
-                "input before the {box_type} box just opened is gathered, streamed or skipped"
+                "input before the {box_type} header just read is answered"
             ),
+            Self::NoOpenBox => formatter.write_str("an answer while no header waits for one"),
             Self::PayloadLimitExceeded {
                 box_type,
                 reached_bytes,
@@ -123,7 +129,7 @@ impl error::Error for DemuxError {}
 
 /// Reason boxes do not write as the bytes of a file
 ///
-/// A refused box leaves the writer as it was: nothing of it is output.
+/// A refused event leaves the writer as it was: nothing of it is output.
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum MuxError {
@@ -136,6 +142,24 @@ pub enum MuxError {
         declared_bytes: u64,
         /// Length of the payload offered
         offered_bytes: u64,
+    },
+    /// Event that does not fit the box being written: a payload or an end with no box open, or a header while one is
+    #[non_exhaustive]
+    UnexpectedEvent {
+        /// Event the writer takes next: a header when no box is open, otherwise the end of the open box
+        expected: BoxEventKind,
+        /// Event offered
+        found: BoxEventKind,
+    },
+    /// File finished while a box whose payload length is declared is open
+    #[non_exhaustive]
+    UnfinishedBox {
+        /// Type of the box
+        box_type: BoxType,
+        /// Length of the payload the header declares
+        declared_bytes: u64,
+        /// Length of the payload written
+        written_bytes: u64,
     },
     /// Box offered after one whose size runs to the end of the file
     #[non_exhaustive]
@@ -164,6 +188,18 @@ impl fmt::Display for MuxError {
             } => write!(
                 formatter,
                 "{box_type} header declares a payload of {declared_bytes} bytes, offered {offered_bytes}"
+            ),
+            Self::UnexpectedEvent { expected, found } => write!(
+                formatter,
+                "{found:?} offered where the writer takes {expected:?}"
+            ),
+            Self::UnfinishedBox {
+                box_type,
+                declared_bytes,
+                written_bytes,
+            } => write!(
+                formatter,
+                "file finished {written_bytes} bytes into a {box_type} payload of {declared_bytes}"
             ),
             Self::PastEndOfFile { box_type } => write!(
                 formatter,

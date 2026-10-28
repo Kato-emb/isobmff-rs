@@ -2,14 +2,12 @@
 
 use alloc::vec::Vec;
 
-use isobmff_core::{BoxHeader, ErrorKind};
+use isobmff_core::{BoxHeader, ErrorKind, RawBox};
 
 use crate::byte_range::ByteRange;
 use crate::error::DemuxError;
-
-mod box_event;
-
-pub use box_event::{BoxEvent, BoxEvents, OpenBox};
+use crate::framing::box_event::{BoxEvent, BoxEvents};
+use crate::framing::to_u64;
 
 /// Length of the `size` and `boxtype` fields every header opens with
 const SHORTEST_HEADER: u64 = 8;
@@ -22,11 +20,11 @@ const SHORTEST_HEADER: u64 = 8;
 /// hold as [`BoxEvent`]s. Bytes may arrive cut anywhere, a byte at a time if
 /// need be.
 ///
-/// Each box opens with [`BoxEvent::Header`], whose [`OpenBox`] the caller
-/// answers with what to do with the payload: [`gather`](OpenBox::gather) it
-/// into one [`RawBox`](crate::RawBox), [`stream`](OpenBox::stream) it as the pieces of input
-/// it arrives in, or [`skip`](OpenBox::skip) it. The reader takes no more
-/// input until it has the answer. Each box closes with [`BoxEvent::End`].
+/// Each box opens with [`BoxEvent::Header`], which the caller answers with
+/// what to do with the payload: [`gather`](Self::gather) it into one
+/// [`RawBox`], [`stream`](Self::stream) it as [`BoxEvent::Payload`]s borrowed
+/// from the input, or [`skip`](Self::skip) it. The reader takes no more input
+/// until it has the answer. Each box closes with [`BoxEvent::End`].
 ///
 /// A box whose size runs to the end of the file is closed by
 /// [`finish`](Self::finish), which the caller calls once the file has no
@@ -54,16 +52,20 @@ const SHORTEST_HEADER: u64 = 8;
 ///         break;
 ///     }
 ///     for event in reader.handle_input(wanted.offset(), input)? {
-///         match event? {
-///             BoxEvent::Header(open) if open.header().box_type() == BoxType::compact(*b"ftyp") => {
-///                 open.gather(1024)?
+///         match event {
+///             BoxEvent::Header(header) if header.box_type() == BoxType::compact(*b"ftyp") => {
+///                 reader.gather(1024)?
 ///             }
-///             BoxEvent::Header(open) if open.header().box_type() == BoxType::compact(*b"mdat") => {
-///                 open.stream()
+///             BoxEvent::Header(header) if header.box_type() == BoxType::compact(*b"mdat") => {
+///                 reader.stream()?
 ///             }
-///             BoxEvent::Header(open) => open.skip(),
-///             BoxEvent::Gathered(ftyp) => brands.extend_from_slice(ftyp.payload()),
+///             BoxEvent::Header(_) => reader.skip()?,
 ///             BoxEvent::Payload(bytes) => media_data.extend_from_slice(bytes),
+///             BoxEvent::End => {
+///                 if let Some(ftyp) = reader.gathered_box() {
+///                     brands.extend_from_slice(ftyp.payload());
+///                 }
+///             }
 ///             _ => {}
 ///         }
 ///     }
@@ -71,7 +73,7 @@ const SHORTEST_HEADER: u64 = 8;
 ///
 /// // The file has no more bytes, which ends the `mdat`
 /// for event in reader.finish()? {
-///     assert!(matches!(event?, BoxEvent::End));
+///     assert!(matches!(event, BoxEvent::End));
 /// }
 /// assert_eq!(brands, b"isom\0\0\0\0");
 /// assert_eq!(media_data, b"samples");
@@ -91,25 +93,28 @@ pub struct BoxReader {
 /// How far the reader is through the box it reads
 #[derive(Clone, Copy, Debug)]
 enum Progress {
-    /// Reading a header that is `needed` bytes long as far as it is known, `started` once a byte of it is read
+    /// Reading a header that is `needed` bytes long as far as it is known, what is read of it in `gathered`
     Header {
         needed: u64,
-        started: bool,
     },
-    /// Header read, waiting for the caller to answer the [`OpenBox`]
+    /// Header of the box at file offset `offset` read, waiting for the caller to answer it
     Opened {
         header: BoxHeader,
+        offset: u64,
     },
-    /// Payload read as `answer` says, up to the file offset `end` or, for `None`, the end of the file
+    /// Payload of the box at file offset `offset` read as `answer` says, up to the file offset `end` or, for `None`, the end of the file
     Payload {
         header: BoxHeader,
+        offset: u64,
         end: Option<u64>,
         answer: Answer,
     },
+    /// Box whole in `gathered`, until the next input
+    Gathered,
     Failed(DemuxError),
 }
 
-/// What the caller answered an [`OpenBox`] with
+/// What the caller answered a header with
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Answer {
     Gather { limit_bytes: u64 },
@@ -125,7 +130,6 @@ impl BoxReader {
             position: 0,
             progress: Progress::Header {
                 needed: SHORTEST_HEADER,
-                started: false,
             },
             gathered: Vec::new(),
             at_end_of_file: false,
@@ -148,102 +152,228 @@ impl BoxReader {
             return None;
         }
         let length = match self.progress {
-            Progress::Header { .. } => None,
-            Progress::Opened { header } => header.payload_len(),
+            Progress::Header { .. } | Progress::Gathered => None,
+            Progress::Opened { header, .. } => header.payload_len(),
             Progress::Payload {
-                end,
+                end: None,
                 answer: Answer::Skip,
                 ..
-            } => return end.map(|end| ByteRange::new(end, None)),
+            }
+            | Progress::Failed(_) => return None,
             Progress::Payload { end, .. } => self.remaining(end).filter(|&remaining| remaining > 0),
-            Progress::Failed(_) => return None,
         };
         Some(ByteRange::new(self.position, length))
     }
 
     /// Takes `input`, the bytes of the file from file offset `offset`, and returns what they hold
     ///
-    /// `offset` is that of [`wanted_input`](Self::wanted_input). A caller that
-    /// cannot seek drops the bytes it holds before that offset, and passes on
-    /// from there.
+    /// `input` is taken from the offset [`wanted_input`](Self::wanted_input)
+    /// names, which it must start at or before. Bytes before that offset are
+    /// passed over, so a caller can pass the same input again after the events
+    /// stop, and a caller that cannot seek can pass the file on as it comes:
+    /// an input that ends before the wanted offset holds no events. Bytes passed
+    /// again must be the bytes passed before.
     ///
-    /// The events borrow both the reader and `input`. They stop after a
-    /// [`BoxEvent::Header`] and after the [`BoxEvent::End`] that follows a
-    /// [`BoxEvent::Gathered`], and leave the rest of `input` untaken: the
-    /// reader then wants it again, from the file offset it names. An empty
-    /// `input` holds no events.
+    /// The events borrow `input` alone, so the caller answers a
+    /// [`BoxEvent::Header`] on the reader while it goes through them. They stop
+    /// after a [`BoxEvent::Header`], which waits for its answer, and after the
+    /// [`BoxEvent::End`] of a gathered box, which
+    /// [`gathered_box`](Self::gathered_box) then returns.
+    ///
+    /// A failure after the first event is returned by the next call, and the
+    /// reader then wants no more input: the events before it are returned
+    /// first.
     ///
     /// # Errors
     ///
-    /// * [`UnwantedInput`](DemuxError::UnwantedInput): `offset` is not one the
-    ///   reader takes. The reader is left as it was.
-    /// * [`UndecidedBox`](DemuxError::UndecidedBox): the [`OpenBox`] of the
-    ///   last header was dropped unanswered. The reader is left as it was.
-    /// * The failure the reader failed with before.
-    ///
-    /// Each event is itself a `Result`, failing as the reader fails:
-    ///
+    /// * [`UnwantedInput`](DemuxError::UnwantedInput): `input` starts past the
+    ///   wanted offset, or the reader wants no more. The reader is left as it
+    ///   was.
+    /// * [`UndecidedBox`](DemuxError::UndecidedBox): the last header is not
+    ///   answered yet. The reader is left as it was.
     /// * [`Box`](DemuxError::Box): a header declares a size smaller than
     ///   itself.
     /// * [`PayloadLimitExceeded`](DemuxError::PayloadLimitExceeded): a box
     ///   gathered up to the end of the file outgrows its limit.
+    /// * The failure the reader failed with before.
     pub fn handle_input<'a>(
-        &'a mut self,
+        &mut self,
         offset: u64,
         input: &'a [u8],
     ) -> Result<BoxEvents<'a>, DemuxError> {
         self.check_answered()?;
         let wanted = self.wanted_input();
-        if wanted.map(ByteRange::offset) != Some(offset) {
+        let Some(passed_over) = wanted.and_then(|wanted| wanted.offset().checked_sub(offset))
+        else {
             return Err(DemuxError::UnwantedInput { offset, wanted });
-        }
-        if input.is_empty() {
-            return Ok(BoxEvents::new(None, &[]));
-        }
-        self.position = offset;
-        Ok(BoxEvents::new(Some(self), input))
+        };
+        self.leave_gathered();
+        let Some(rest) = usize::try_from(passed_over)
+            .ok()
+            .and_then(|passed_over| input.get(passed_over..))
+            .filter(|rest| !rest.is_empty())
+        else {
+            return Ok(BoxEvents::default());
+        };
+        self.position = offset.saturating_add(passed_over);
+        self.read(rest)
     }
 
     /// Ends the file at the offset the reader wants, and returns the events that close the box being read
     ///
-    /// The events are a [`BoxEvent::End`], after a
-    /// [`BoxEvent::Gathered`] when the box is gathered. There are none when the
-    /// file ends between boxes. A box whose size runs to the end of the file
-    /// ends here, and a skipped box ends where its header says. The reader
-    /// then wants no more input.
+    /// The events are a [`BoxEvent::End`], or none when the file ends between
+    /// boxes. A box whose size runs to the end of the file ends here, and a
+    /// skipped box ends where its header says. The reader then wants no more
+    /// input.
     ///
     /// # Errors
     ///
-    /// * [`UndecidedBox`](DemuxError::UndecidedBox): the [`OpenBox`] of the
-    ///   last header was dropped unanswered. The reader is left as it was.
-    /// * The failure the reader failed with before.
-    ///
-    /// Each event is itself a `Result`, failing as the reader fails:
-    ///
+    /// * [`UndecidedBox`](DemuxError::UndecidedBox): the last header is not
+    ///   answered yet. The reader is left as it was.
     /// * [`UnfinishedHeader`](DemuxError::UnfinishedHeader): the file ends
     ///   inside a header.
     /// * [`UnfinishedBox`](DemuxError::UnfinishedBox): the file ends before the
     ///   total a streamed or gathered box declares.
-    pub fn finish(&mut self) -> Result<BoxEvents<'_>, DemuxError> {
+    /// * The failure the reader failed with before.
+    pub fn finish(&mut self) -> Result<BoxEvents<'static>, DemuxError> {
         self.check_answered()?;
+        self.leave_gathered();
         self.at_end_of_file = true;
-        Ok(BoxEvents::new(Some(self), &[]))
+        self.read(&[])
     }
 
-    /// Refuses a call while the reader has failed or waits for an [`OpenBox`] to be answered
-    fn check_answered(&self) -> Result<(), DemuxError> {
-        match self.progress {
-            Progress::Failed(failure) => Err(failure),
-            Progress::Opened { header } => Err(DemuxError::UndecidedBox {
+    /// Gathers the payload of the box just opened into one [`RawBox`], which [`gathered_box`](Self::gathered_box) returns after its [`BoxEvent::End`]
+    ///
+    /// # Errors
+    ///
+    /// * [`PayloadLimitExceeded`](DemuxError::PayloadLimitExceeded): the
+    ///   payload the header declares is longer than `limit_bytes`. The box
+    ///   stays open, to be answered again. A payload that runs to the end of
+    ///   the file fails the reader instead, once it outgrows the limit.
+    /// * [`NoOpenBox`](DemuxError::NoOpenBox): no header waits for an answer.
+    /// * The failure the reader failed with before.
+    pub fn gather(&mut self, limit_bytes: u64) -> Result<(), DemuxError> {
+        let (header, offset) = self.open_header()?;
+        let payload_len = header.payload_len();
+        if let Some(payload_len) = payload_len
+            && payload_len > limit_bytes
+        {
+            return Err(DemuxError::PayloadLimitExceeded {
                 box_type: header.box_type(),
-            }),
-            Progress::Header { .. } | Progress::Payload { .. } => Ok(()),
+                reached_bytes: payload_len,
+                limit_bytes,
+            });
+        }
+        if let Some(payload_len) = payload_len.and_then(|len| usize::try_from(len).ok()) {
+            self.gathered.reserve(payload_len);
+        }
+        self.answer(header, offset, Answer::Gather { limit_bytes });
+        Ok(())
+    }
+
+    /// Streams the payload of the box just opened as [`BoxEvent::Payload`]s, each a piece of the input it arrives in
+    ///
+    /// # Errors
+    ///
+    /// * [`NoOpenBox`](DemuxError::NoOpenBox): no header waits for an answer.
+    /// * The failure the reader failed with before.
+    pub fn stream(&mut self) -> Result<(), DemuxError> {
+        let (header, offset) = self.open_header()?;
+        self.answer(header, offset, Answer::Stream);
+        Ok(())
+    }
+
+    /// Skips the payload of the box just opened: the reader next wants the file offset just past the box
+    ///
+    /// A box whose size runs to the end of the file leaves the reader wanting
+    /// no more input.
+    ///
+    /// # Errors
+    ///
+    /// * [`NoOpenBox`](DemuxError::NoOpenBox): no header waits for an answer.
+    /// * The failure the reader failed with before.
+    pub fn skip(&mut self) -> Result<(), DemuxError> {
+        let (header, offset) = self.open_header()?;
+        self.answer(header, offset, Answer::Skip);
+        Ok(())
+    }
+
+    /// Returns where the box being read lies in the file, header included, or `None` between boxes
+    ///
+    /// The length is `None` for a box whose size runs to the end of the file.
+    #[must_use]
+    pub fn open_box(&self) -> Option<ByteRange> {
+        match self.progress {
+            Progress::Opened { header, offset } | Progress::Payload { header, offset, .. } => {
+                Some(ByteRange::new(offset, header.size().total_bytes()))
+            }
+            Progress::Header { .. } | Progress::Gathered | Progress::Failed(_) => None,
         }
     }
 
-    fn fail(&mut self, failure: DemuxError) -> DemuxError {
+    /// Returns the box just gathered, from its [`BoxEvent::End`] until the next call to [`handle_input`](Self::handle_input) or [`finish`](Self::finish)
+    #[must_use]
+    pub fn gathered_box(&self) -> Option<RawBox<'_>> {
+        if !matches!(self.progress, Progress::Gathered) {
+            return None;
+        }
+        RawBox::split_first(&self.gathered)
+            .ok()
+            .map(|(raw_box, _)| raw_box)
+    }
+
+    /// Refuses a call while the reader has failed or waits for a header to be answered
+    fn check_answered(&self) -> Result<(), DemuxError> {
+        match self.progress {
+            Progress::Failed(failure) => Err(failure),
+            Progress::Opened { header, .. } => Err(DemuxError::UndecidedBox {
+                box_type: header.box_type(),
+            }),
+            Progress::Header { .. } | Progress::Payload { .. } | Progress::Gathered => Ok(()),
+        }
+    }
+
+    /// Returns the header waiting for an answer, and the file offset of its box
+    fn open_header(&self) -> Result<(BoxHeader, u64), DemuxError> {
+        match self.progress {
+            Progress::Opened { header, offset } => Ok((header, offset)),
+            Progress::Failed(failure) => Err(failure),
+            Progress::Header { .. } | Progress::Payload { .. } | Progress::Gathered => {
+                Err(DemuxError::NoOpenBox)
+            }
+        }
+    }
+
+    fn answer(&mut self, header: BoxHeader, offset: u64, answer: Answer) {
+        let end = header
+            .size()
+            .total_bytes()
+            .map(|total| offset.saturating_add(total));
+        if let (Answer::Skip, Some(end)) = (answer, end) {
+            self.position = end;
+        }
+        self.progress = Progress::Payload {
+            header,
+            offset,
+            end,
+            answer,
+        };
+    }
+
+    /// Makes ready for the header after a gathered box, which [`gathered_box`](Self::gathered_box) no longer returns
+    fn leave_gathered(&mut self) {
+        if let Progress::Gathered = self.progress {
+            self.gathered.clear();
+            self.progress = Progress::Header {
+                needed: SHORTEST_HEADER,
+            };
+        }
+    }
+
+    /// Fails the reader, and stops the events there
+    fn fail<'a>(&mut self, failure: DemuxError) -> Step<'a> {
         self.progress = Progress::Failed(failure);
-        failure
+        Step::Stop(None)
     }
 
     /// Returns the bytes from the reader's position up to the file offset `end`, or `None` up to the end of the file
@@ -251,46 +381,56 @@ impl BoxReader {
         end.map(|end| end.saturating_sub(self.position))
     }
 
+    /// Reads `input` as far as the events stop, and returns them
+    fn read<'a>(&mut self, mut input: &'a [u8]) -> Result<BoxEvents<'a>, DemuxError> {
+        let mut events = BoxEvents::default();
+        let stopped_at = loop {
+            match self.step(&mut input) {
+                Step::Event(event) => events.push(event),
+                Step::Stop(event) => break event,
+            }
+        };
+        if let Some(event) = stopped_at {
+            events.push(event);
+        }
+        if let Progress::Failed(failure) = self.progress
+            && events.is_empty()
+        {
+            return Err(failure);
+        }
+        Ok(events)
+    }
+
     /// Takes from the front of `input` as far as the next event, and returns it
     fn step<'a>(&mut self, input: &mut &'a [u8]) -> Step<'a> {
         match self.progress {
-            Progress::Header { needed, started } => self.read_header(input, needed, started),
+            Progress::Header { needed } => self.read_header(input, needed),
             Progress::Payload {
                 header,
                 end,
                 answer,
+                ..
             } => self.read_payload(input, header, end, answer),
-            Progress::Opened { .. } | Progress::Failed(_) => Step::Waiting,
+            Progress::Opened { .. } | Progress::Gathered | Progress::Failed(_) => Step::Stop(None),
         }
     }
 
     /// Takes the next header bytes off `input`, and opens the box once the header is whole
-    fn read_header<'a>(
-        &mut self,
-        input: &mut &'a [u8],
-        mut needed: u64,
-        started: bool,
-    ) -> Step<'a> {
-        if !started {
-            self.gathered.clear();
-        }
+    fn read_header<'a>(&mut self, input: &mut &'a [u8], mut needed: u64) -> Step<'a> {
         // Why not bound the turns: each takes at least a byte or returns, and
         // `BoxHeader::decode` asks only for more than it was given, so `needed`
         // stays above what is read until the header is whole.
         loop {
             let read = to_u64(self.gathered.len());
             let Some(bytes) = self.take(input, Some(needed.saturating_sub(read))) else {
-                self.progress = Progress::Header {
-                    needed,
-                    started: read > 0,
-                };
+                self.progress = Progress::Header { needed };
                 if self.at_end_of_file && read > 0 {
-                    return Step::Failed(self.fail(DemuxError::UnfinishedHeader {
+                    return self.fail(DemuxError::UnfinishedHeader {
                         needed_bytes: needed,
                         available_bytes: read,
-                    }));
+                    });
                 }
-                return Step::Waiting;
+                return Step::Stop(None);
             };
             self.gathered.extend_from_slice(bytes);
             if to_u64(self.gathered.len()) < needed {
@@ -298,12 +438,13 @@ impl BoxReader {
             }
             match BoxHeader::decode(&self.gathered) {
                 Ok((header, _)) => {
-                    self.progress = Progress::Opened { header };
-                    return Step::Opened(header);
+                    let offset = self.position.saturating_sub(to_u64(self.gathered.len()));
+                    self.progress = Progress::Opened { header, offset };
+                    return Step::Stop(Some(BoxEvent::Header(header)));
                 }
                 Err(error) => {
                     let ErrorKind::TruncatedHeader { needed_bytes, .. } = error.kind() else {
-                        return Step::Failed(self.fail(DemuxError::Box { error }));
+                        return self.fail(DemuxError::Box { error });
                     };
                     needed = needed_bytes;
                 }
@@ -319,10 +460,6 @@ impl BoxReader {
         end: Option<u64>,
         answer: Answer,
     ) -> Step<'a> {
-        let closes = |reader: &Self| match reader.remaining(end) {
-            Some(remaining) => remaining == 0 || answer == Answer::Skip && reader.at_end_of_file,
-            None => reader.at_end_of_file,
-        };
         match answer {
             Answer::Skip => {}
             Answer::Stream => {
@@ -344,35 +481,37 @@ impl BoxReader {
                 if let Some(bytes) = self.take(input, Some(wanted)) {
                     let reached_bytes = gathered_bytes.saturating_add(to_u64(bytes.len()));
                     if reached_bytes > limit_bytes {
-                        return Step::Failed(self.fail(DemuxError::PayloadLimitExceeded {
+                        return self.fail(DemuxError::PayloadLimitExceeded {
                             box_type: header.box_type(),
                             reached_bytes,
                             limit_bytes,
-                        }));
+                        });
                     }
                     self.gathered.extend_from_slice(bytes);
                 }
             }
         }
-        if closes(self) {
+        let remaining = self.remaining(end);
+        if remaining == Some(0) || remaining.is_none() && self.at_end_of_file {
+            if let Answer::Gather { .. } = answer {
+                self.progress = Progress::Gathered;
+                return Step::Stop(Some(BoxEvent::End));
+            }
+            self.gathered.clear();
             self.progress = Progress::Header {
                 needed: SHORTEST_HEADER,
-                started: false,
             };
-            return match answer {
-                Answer::Gather { .. } => Step::Gathered,
-                Answer::Stream | Answer::Skip => Step::Event(BoxEvent::End),
-            };
+            return Step::Event(BoxEvent::End);
         }
         if self.at_end_of_file {
             let needed_bytes = header.size().total_bytes().unwrap_or(u64::MAX);
-            return Step::Failed(self.fail(DemuxError::UnfinishedBox {
+            return self.fail(DemuxError::UnfinishedBox {
                 box_type: header.box_type(),
                 needed_bytes,
-                available_bytes: needed_bytes.saturating_sub(self.remaining(end).unwrap_or(0)),
-            }));
+                available_bytes: needed_bytes.saturating_sub(remaining.unwrap_or(0)),
+            });
         }
-        Step::Waiting
+        Step::Stop(None)
     }
 
     /// Takes up to `limit` bytes off the front of `input`, or every byte for `None`
@@ -398,17 +537,10 @@ impl Default for BoxReader {
 
 /// What one step of a reader through its input comes to
 enum Step<'a> {
+    /// An event, after which the reader reads on
     Event(BoxEvent<'a>),
-    Opened(BoxHeader),
-    Gathered,
-    /// Input used up before the next event
-    Waiting,
-    Failed(DemuxError),
-}
-
-/// Converts a length in memory to one in a file, where it always fits
-fn to_u64(length: usize) -> u64 {
-    u64::try_from(length).unwrap_or(u64::MAX)
+    /// The point the events stop at, with the event that stops them if any
+    Stop(Option<BoxEvent<'a>>),
 }
 
 #[cfg(test)]
@@ -418,9 +550,10 @@ mod tests {
 
     use isobmff_core::{BoxHeader, BoxType, Error};
 
-    use super::{BoxEvent, BoxReader};
+    use super::BoxReader;
     use crate::byte_range::ByteRange;
     use crate::error::DemuxError;
+    use crate::framing::box_event::BoxEvent;
     use crate::framing::header_forms::{PAYLOAD, every_header_form};
 
     /// What a caller answers each header with
@@ -434,7 +567,7 @@ mod tests {
     /// Event as a caller records it, the payload pieces of one box joined
     #[derive(PartialEq, Eq, Debug)]
     enum Recorded {
-        Header(BoxHeader, ByteRange),
+        Header(BoxHeader, Option<ByteRange>),
         Payload(Vec<u8>),
         Gathered(BoxHeader, Vec<u8>),
         End,
@@ -457,40 +590,43 @@ mod tests {
                 break;
             }
             for event in reader.handle_input(wanted.offset(), input)? {
-                record(event?, answer, &mut recorded)?;
+                record(&mut reader, event, answer, &mut recorded)?;
             }
         }
         for event in reader.finish()? {
-            record(event?, answer, &mut recorded)?;
+            record(&mut reader, event, answer, &mut recorded)?;
         }
         Ok(recorded)
     }
 
     fn record(
+        reader: &mut BoxReader,
         event: BoxEvent<'_>,
         answer: Answer,
         recorded: &mut Vec<Recorded>,
     ) -> Result<(), DemuxError> {
         match event {
-            BoxEvent::Header(open) => {
-                recorded.push(Recorded::Header(open.header(), open.byte_range()));
+            BoxEvent::Header(header) => {
+                recorded.push(Recorded::Header(header, reader.open_box()));
                 match answer {
-                    Answer::Gather(limit_bytes) => open.gather(limit_bytes)?,
-                    Answer::Stream => open.stream(),
-                    Answer::Skip => open.skip(),
+                    Answer::Gather(limit_bytes) => reader.gather(limit_bytes)?,
+                    Answer::Stream => reader.stream()?,
+                    Answer::Skip => reader.skip()?,
                 }
             }
             BoxEvent::Payload(bytes) => match recorded.last_mut() {
                 Some(Recorded::Payload(joined)) => joined.extend_from_slice(bytes),
                 Some(_) | None => recorded.push(Recorded::Payload(bytes.to_vec())),
             },
-            BoxEvent::Gathered(raw_box) => {
-                recorded.push(Recorded::Gathered(
-                    raw_box.header(),
-                    raw_box.payload().to_vec(),
-                ));
+            BoxEvent::End => {
+                if let Some(raw_box) = reader.gathered_box() {
+                    recorded.push(Recorded::Gathered(
+                        raw_box.header(),
+                        raw_box.payload().to_vec(),
+                    ));
+                }
+                recorded.push(Recorded::End);
             }
-            BoxEvent::End => recorded.push(Recorded::End),
         }
         Ok(())
     }
@@ -507,9 +643,9 @@ mod tests {
         })
     }
 
-    fn header_and_range(file: &[u8]) -> (BoxHeader, ByteRange) {
+    fn header_and_range(file: &[u8]) -> (BoxHeader, Option<ByteRange>) {
         let (header, _) = BoxHeader::decode(file).unwrap();
-        (header, ByteRange::new(0, header.size().total_bytes()))
+        (header, Some(ByteRange::new(0, header.size().total_bytes())))
     }
 
     #[test]
@@ -560,28 +696,6 @@ mod tests {
     }
 
     #[test]
-    fn a_skipped_box_moves_the_wanted_input_past_its_end() {
-        let mut reader = BoxReader::new();
-        for event in reader.handle_input(0, b"\0\0\0\x10freeAAAA").unwrap() {
-            if let BoxEvent::Header(open) = event.unwrap() {
-                open.skip();
-            }
-        }
-        assert_eq!(reader.wanted_input(), Some(ByteRange::new(16, None)));
-    }
-
-    #[test]
-    fn a_skipped_box_running_to_the_end_of_the_file_leaves_no_input_wanted() {
-        let mut reader = BoxReader::new();
-        for event in reader.handle_input(0, b"\0\0\0\0mdatAAAA").unwrap() {
-            if let BoxEvent::Header(open) = event.unwrap() {
-                open.skip();
-            }
-        }
-        assert_eq!(reader.wanted_input(), None);
-    }
-
-    #[test]
     fn boxes_laid_end_to_end_are_read_in_file_order() {
         let file = [
             b"\0\0\0\x0cfreeAAAA".as_slice(),
@@ -595,12 +709,12 @@ mod tests {
         assert_eq!(
             read(&file, |_| usize::MAX, Answer::Stream),
             Ok(vec![
-                Recorded::Header(free, ByteRange::new(0, Some(12))),
+                Recorded::Header(free, Some(ByteRange::new(0, Some(12)))),
                 Recorded::Payload(b"AAAA".to_vec()),
                 Recorded::End,
-                Recorded::Header(skip, ByteRange::new(12, Some(8))),
+                Recorded::Header(skip, Some(ByteRange::new(12, Some(8)))),
                 Recorded::End,
-                Recorded::Header(mdat, ByteRange::new(20, Some(11))),
+                Recorded::Header(mdat, Some(ByteRange::new(20, Some(11)))),
                 Recorded::Payload(b"BBB".to_vec()),
                 Recorded::End,
             ])
@@ -608,14 +722,91 @@ mod tests {
     }
 
     #[test]
-    fn a_payload_declared_past_the_gather_limit_fails_the_reader() {
-        let file = b"\0\0\0\x10freeAAAAAAAA";
-        let failure = DemuxError::PayloadLimitExceeded {
-            box_type: BoxType::compact(*b"free"),
-            reached_bytes: 8,
-            limit_bytes: 7,
-        };
-        assert_eq!(read(file, |_| usize::MAX, Answer::Gather(7)), Err(failure));
+    fn the_same_input_passed_again_reads_on_from_where_the_events_stopped() {
+        let file = [b"\0\0\0\x0cfreeAAAA".as_slice(), b"\0\0\0\x0bmdatBBB"].concat();
+        let mut reader = BoxReader::new();
+        let mut recorded = Vec::new();
+        loop {
+            let events: Vec<_> = reader.handle_input(0, &file).unwrap().collect();
+            if events.is_empty() {
+                break;
+            }
+            for event in events {
+                record(&mut reader, event, Answer::Stream, &mut recorded).unwrap();
+            }
+        }
+        for event in reader.finish().unwrap() {
+            record(&mut reader, event, Answer::Stream, &mut recorded).unwrap();
+        }
+        assert_eq!(Ok(recorded), read(&file, |_| 1, Answer::Stream));
+    }
+
+    #[test]
+    fn input_ending_before_the_wanted_offset_holds_no_events() {
+        let mut reader = BoxReader::new();
+        for event in reader.handle_input(0, b"\0\0\0\x10freeAAAA").unwrap() {
+            if let BoxEvent::Header(_) = event {
+                reader.skip().unwrap();
+            }
+        }
+        let wanted = reader.wanted_input();
+        assert_eq!(reader.handle_input(8, b"AAAA").unwrap().count(), 0);
+        assert_eq!(reader.handle_input(12, b"AAAA").unwrap().count(), 0);
+        assert_eq!(reader.wanted_input(), wanted);
+        assert_eq!(
+            reader
+                .handle_input(12, b"AAAA\0\0\0\x08skip")
+                .unwrap()
+                .collect::<Vec<_>>(),
+            [
+                BoxEvent::End,
+                BoxEvent::Header(BoxHeader::decode(b"\0\0\0\x08skip").unwrap().0)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_skipped_box_moves_the_wanted_input_past_its_end() {
+        let mut reader = BoxReader::new();
+        for event in reader.handle_input(0, b"\0\0\0\x10freeAAAA").unwrap() {
+            if let BoxEvent::Header(_) = event {
+                reader.skip().unwrap();
+            }
+        }
+        assert_eq!(reader.wanted_input(), Some(ByteRange::new(16, None)));
+    }
+
+    #[test]
+    fn a_skipped_box_running_to_the_end_of_the_file_leaves_no_input_wanted() {
+        let mut reader = BoxReader::new();
+        for event in reader.handle_input(0, b"\0\0\0\0mdatAAAA").unwrap() {
+            if let BoxEvent::Header(_) = event {
+                reader.skip().unwrap();
+            }
+        }
+        assert_eq!(reader.wanted_input(), None);
+    }
+
+    #[test]
+    fn a_payload_declared_past_the_gather_limit_is_refused_and_the_box_stays_open() {
+        let mut reader = BoxReader::new();
+        assert_eq!(
+            reader
+                .handle_input(0, b"\0\0\0\x10freeAAAAAAAA")
+                .unwrap()
+                .count(),
+            1
+        );
+        assert_eq!(
+            reader.gather(7),
+            Err(DemuxError::PayloadLimitExceeded {
+                box_type: BoxType::compact(*b"free"),
+                reached_bytes: 8,
+                limit_bytes: 7,
+            })
+        );
+        assert_eq!(reader.skip(), Ok(()));
+        assert_eq!(reader.wanted_input(), Some(ByteRange::new(16, None)));
     }
 
     #[test]
@@ -638,12 +829,35 @@ mod tests {
         let failure = DemuxError::Box {
             error: Error::size_below_header(8, 4),
         };
-        let events: Vec<_> = reader.handle_input(0, b"\0\0\0\x04free").unwrap().collect();
-        assert_eq!(events.len(), 1);
-        assert!(matches!(events.first(), Some(Err(found)) if *found == failure));
+        assert_eq!(
+            reader.handle_input(0, b"\0\0\0\x04free").err(),
+            Some(failure)
+        );
         assert_eq!(reader.wanted_input(), None);
         assert_eq!(reader.handle_input(8, b"more").err(), Some(failure));
         assert_eq!(reader.finish().err(), Some(failure));
+    }
+
+    #[test]
+    fn a_failure_after_events_is_returned_by_the_next_call() {
+        let mut reader = BoxReader::new();
+        assert_eq!(
+            reader.handle_input(0, b"\0\0\0\x0cfree").unwrap().count(),
+            1
+        );
+        reader.stream().unwrap();
+        let events: Vec<_> = reader
+            .handle_input(8, b"AAAA\0\0\0\x04free")
+            .unwrap()
+            .collect();
+        assert_eq!(events, [BoxEvent::Payload(b"AAAA"), BoxEvent::End]);
+        assert_eq!(reader.wanted_input(), None);
+        assert_eq!(
+            reader.finish().err(),
+            Some(DemuxError::Box {
+                error: Error::size_below_header(8, 4),
+            })
+        );
     }
 
     #[test]
@@ -660,8 +874,7 @@ mod tests {
             needed_bytes: 16,
             available_bytes: 10,
         };
-        let events: Vec<_> = reader.finish().unwrap().collect();
-        assert!(matches!(events.as_slice(), [Err(found)] if *found == failure));
+        assert_eq!(reader.finish().err(), Some(failure));
         assert_eq!(reader.finish().err(), Some(failure));
     }
 
@@ -686,7 +899,7 @@ mod tests {
     }
 
     #[test]
-    fn input_at_an_unwanted_offset_is_refused_and_leaves_the_reader_as_it_was() {
+    fn input_past_the_wanted_offset_is_refused_and_leaves_the_reader_as_it_was() {
         let mut reader = BoxReader::new();
         assert_eq!(
             reader.handle_input(1, b"\0\0\x08free").err(),
@@ -704,26 +917,57 @@ mod tests {
     #[test]
     fn empty_input_leaves_the_reader_as_it_was() {
         let mut reader = BoxReader::new();
-        for event in reader.handle_input(0, b"\0\0\0\x0cfree").unwrap() {
-            if let BoxEvent::Header(open) = event.unwrap() {
-                open.stream();
-            }
-        }
+        assert_eq!(
+            reader.handle_input(0, b"\0\0\0\x0cfree").unwrap().count(),
+            1
+        );
+        reader.stream().unwrap();
         let wanted = reader.wanted_input();
         assert_eq!(reader.handle_input(8, &[]).unwrap().count(), 0);
         assert_eq!(reader.wanted_input(), wanted);
     }
 
     #[test]
-    fn input_before_the_open_box_is_answered_is_refused() {
+    fn input_before_the_header_is_answered_is_refused() {
         let mut reader = BoxReader::new();
-        let header = reader.handle_input(0, b"\0\0\0\x0cfree").unwrap().next();
-        assert!(matches!(header, Some(Ok(BoxEvent::Header(_)))));
         assert_eq!(
-            reader.handle_input(8, b"AAAA").err(),
-            Some(DemuxError::UndecidedBox {
-                box_type: BoxType::compact(*b"free"),
-            })
+            reader.handle_input(0, b"\0\0\0\x0cfree").unwrap().count(),
+            1
         );
+        let undecided = DemuxError::UndecidedBox {
+            box_type: BoxType::compact(*b"free"),
+        };
+        assert_eq!(reader.handle_input(8, b"AAAA").err(), Some(undecided));
+        assert_eq!(reader.finish().err(), Some(undecided));
+    }
+
+    #[test]
+    fn an_answer_with_no_header_waiting_is_refused() {
+        let mut reader = BoxReader::new();
+        assert_eq!(reader.skip(), Err(DemuxError::NoOpenBox));
+        assert_eq!(
+            reader.handle_input(0, b"\0\0\0\x0cfree").unwrap().count(),
+            1
+        );
+        reader.stream().unwrap();
+        assert_eq!(reader.gather(8), Err(DemuxError::NoOpenBox));
+    }
+
+    #[test]
+    fn a_gathered_box_is_returned_until_the_next_input() {
+        let file = b"\0\0\0\x0cfreeAAAA\0\0\0\x08skip";
+        let mut reader = BoxReader::new();
+        assert_eq!(reader.handle_input(0, file).unwrap().count(), 1);
+        reader.gather(8).unwrap();
+        assert_eq!(
+            reader.handle_input(0, file).unwrap().collect::<Vec<_>>(),
+            [BoxEvent::End]
+        );
+        assert_eq!(
+            reader.gathered_box().map(|raw_box| raw_box.payload()),
+            Some(b"AAAA".as_slice())
+        );
+        assert_eq!(reader.handle_input(0, file).unwrap().count(), 1);
+        assert_eq!(reader.gathered_box(), None);
     }
 }
