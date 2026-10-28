@@ -35,6 +35,7 @@ jobs:
             boxes
             core
             deps
+            isobmff
           # Imperative, starting lower-case (or with a backticked identifier),
           # with no trailing period: it becomes a CHANGELOG bullet as written.
           subjectPattern: '^[a-z`].*[^.]$'
