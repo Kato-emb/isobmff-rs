@@ -59,7 +59,7 @@ mod tests {
                 break;
             }
             passed_bytes = passed_bytes.saturating_add(input.len());
-            for event in reader.handle_input(wanted.offset(), input).unwrap() {
+            while let Some(event) = reader.handle_input(wanted.offset(), input).unwrap() {
                 if let BoxEvent::Header(header) = event {
                     let byte_range = reader.open_box().unwrap();
                     boxes.push((header, byte_range));
@@ -81,7 +81,7 @@ mod tests {
                 write_back(&mut writer, &reader, event, answer, &mut written);
             }
         }
-        for event in reader.finish().unwrap() {
+        if let Some(event) = reader.finish().unwrap() {
             write_back(&mut writer, &reader, event, answer, &mut written);
         }
         writer.finish().unwrap();
@@ -201,7 +201,7 @@ mod tests {
                 [] => demuxer.finish().unwrap(),
                 input => demuxer.handle_input(wanted.offset(), input).unwrap(),
             };
-            for event in events {
+            if let Some(event) = events {
                 match event {
                     DemuxEvent::Movie { samples, .. }
                     | DemuxEvent::MovieFragment { samples, .. } => {

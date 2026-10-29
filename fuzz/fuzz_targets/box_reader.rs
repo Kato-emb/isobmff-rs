@@ -125,11 +125,11 @@ fn drive(
         if input.is_empty() {
             break;
         }
-        for event in reader.handle_input(wanted.offset(), input)? {
+        while let Some(event) = reader.handle_input(wanted.offset(), input)? {
             record(event, bytes, &mut reader, &mut answers, copy, recorded)?;
         }
     }
-    for event in reader.finish()? {
+    if let Some(event) = reader.finish()? {
         record(event, bytes, &mut reader, &mut answers, copy, recorded)?;
     }
     Ok(())

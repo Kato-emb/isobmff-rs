@@ -20,20 +20,18 @@ let file = std::fs::read("movie.mp4")?;
 let mut demuxer = Demuxer::new();
 while let Some(wanted) = demuxer.wanted_input() {
     let input = file.get(usize::try_from(wanted.offset())?..).unwrap_or_default();
-    let events = match input {
+    let event = match input {
         [] => demuxer.finish()?,
         input => demuxer.handle_input(wanted.offset(), input)?,
     };
-    for event in events {
-        match event {
-            DemuxEvent::Movie { samples, .. } | DemuxEvent::MovieFragment { samples, .. } => {
-                for sample in samples {
-                    println!("track {} at {:?}", sample.properties().track_id, sample.byte_range());
-                }
+    match event {
+        Some(DemuxEvent::Movie { samples, .. } | DemuxEvent::MovieFragment { samples, .. }) => {
+            for sample in samples {
+                println!("track {} at {:?}", sample.properties().track_id, sample.byte_range());
             }
-            DemuxEvent::MediaData { .. } => demuxer.skip()?,
-            _ => {}
         }
+        Some(DemuxEvent::MediaData { .. }) => demuxer.skip()?,
+        _ => {}
     }
 }
 ```

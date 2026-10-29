@@ -76,7 +76,7 @@ fn read(bytes: &[u8], piece_lens: &[usize]) -> (Vec<Recorded>, Result<(), DemuxE
                 [] => demuxer.finish()?,
                 input => demuxer.handle_input(offset, input)?,
             };
-            for event in events {
+            if let Some(event) = events {
                 recorded.push(match event {
                     DemuxEvent::FileType => Recorded::FileType,
                     DemuxEvent::SegmentType => Recorded::SegmentType,

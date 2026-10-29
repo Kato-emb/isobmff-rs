@@ -16,16 +16,14 @@
 //! while let Some(wanted) = demuxer.wanted_input() {
 //!     let input = file.get(usize::try_from(wanted.offset())?..).unwrap_or_default();
 //!     // Past the last byte, the file ends, and so may a box that runs to its end
-//!     let events = match input {
+//!     let event = match input {
 //!         [] => demuxer.finish()?,
 //!         input => demuxer.handle_input(wanted.offset(), input)?,
 //!     };
-//!     for event in events {
-//!         match event {
-//!             DemuxEvent::Movie { samples: locations, .. } => samples.extend(locations),
-//!             DemuxEvent::MediaData { .. } => demuxer.skip()?,
-//!             _ => {}
-//!         }
+//!     match event {
+//!         Some(DemuxEvent::Movie { samples: locations, .. }) => samples.extend(locations),
+//!         Some(DemuxEvent::MediaData { .. }) => demuxer.skip()?,
+//!         _ => {}
 //!     }
 //! }
 //! assert_eq!(samples.len(), 2);
@@ -60,20 +58,18 @@
 //!     let end = offset + u64::try_from(piece.map_or(0, <[u8]>::len))?;
 //!     // A piece is passed until the demuxer wants past it
 //!     while demuxer.wanted_input().is_some_and(|wanted| piece.is_none() || wanted.offset() < end) {
-//!         let events = match piece {
+//!         let event = match piece {
 //!             Some(piece) => demuxer.handle_input(offset, piece)?,
 //!             None => demuxer.finish()?,
 //!         };
-//!         for event in events {
-//!             match event {
-//!                 DemuxEvent::Movie { samples, .. } | DemuxEvent::MovieFragment { samples, .. } =>
-//!                     media_data.handle_sample_locations(samples)?,
-//!                 DemuxEvent::MediaData { .. } => demuxer.stream()?,
-//!                 DemuxEvent::MediaDataPayload { offset, bytes, .. } => media_data.handle_input(offset, bytes),
-//!                 _ => {}
-//!             }
-//!             samples.extend(core::iter::from_fn(|| media_data.poll_sample()));
+//!         match event {
+//!             Some(DemuxEvent::Movie { samples, .. } | DemuxEvent::MovieFragment { samples, .. }) =>
+//!                 media_data.handle_sample_locations(samples)?,
+//!             Some(DemuxEvent::MediaData { .. }) => demuxer.stream()?,
+//!             Some(DemuxEvent::MediaDataPayload { offset, bytes, .. }) => media_data.handle_input(offset, bytes),
+//!             _ => {}
 //!         }
+//!         samples.extend(core::iter::from_fn(|| media_data.poll_sample()));
 //!     }
 //! }
 //! media_data.finish()?;
@@ -103,7 +99,7 @@
 //!     -> Result<DemuxEvent<'static>, Box<dyn Error>> {
 //!     while let Some(wanted) = demuxer.wanted_input() {
 //!         let input = file.get(usize::try_from(wanted.offset())?..).filter(|input| !input.is_empty());
-//!         for event in demuxer.handle_input(wanted.offset(), input.ok_or("not found")?)? {
+//!         if let Some(event) = demuxer.handle_input(wanted.offset(), input.ok_or("not found")?)? {
 //!             if let DemuxEvent::MediaData { .. } = event { demuxer.skip()?; }
 //!             if found(&event) { return Ok(event); }
 //!         }
@@ -152,7 +148,7 @@ mod sample;
 pub mod structure_data;
 
 pub use byte_range::ByteRange;
-pub use demuxer::{DemuxEvent, DemuxEvents, Demuxer};
+pub use demuxer::{DemuxEvent, Demuxer};
 pub use error::{DemuxError, MuxError};
 pub use isobmff_core::*;
 pub use limits::DemuxLimits;

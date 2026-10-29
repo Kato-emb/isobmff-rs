@@ -178,11 +178,11 @@ mod tests {
             if input.is_empty() {
                 break;
             }
-            for event in reader.handle_input(wanted.offset(), input).unwrap() {
+            while let Some(event) = reader.handle_input(wanted.offset(), input).unwrap() {
                 map(&mut reader, event);
             }
         }
-        for event in reader.finish().unwrap() {
+        if let Some(event) = reader.finish().unwrap() {
             map(&mut reader, event);
         }
 

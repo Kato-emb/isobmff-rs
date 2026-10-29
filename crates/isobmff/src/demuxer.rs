@@ -8,7 +8,7 @@ use isobmff_core::BoxHeader;
 use crate::byte_range::ByteRange;
 use crate::demuxer::file_level::{Handling, Value};
 use crate::error::DemuxError;
-use crate::framing::{BoxEvent, BoxEvents, BoxReader};
+use crate::framing::{BoxEvent, BoxReader, to_u64};
 use crate::limits::DemuxLimits;
 use crate::structure_data::{SampleLocations, SegmentIndex, StructureDataReader};
 
@@ -76,16 +76,14 @@ impl Demuxer {
 
     /// Takes `input`, the bytes of the file from file offset `offset`, and returns what they hold
     ///
-    /// `input` is taken as [`BoxReader::handle_input`] takes it: from the
-    /// offset [`wanted_input`](Self::wanted_input) names, which it must start
-    /// at or before, and an input that ends before that offset holds no
-    /// events. The events borrow `input` alone, so the caller answers a
-    /// [`DemuxEvent::MediaData`] on the demuxer while it goes through them.
-    /// They stop where the reader of the boxes stops, so the caller passes the
-    /// rest of its input again from the offset wanted next.
+    /// `input` is taken, and the event returned, as [`BoxReader::handle_input`]
+    /// takes and returns them: one event a call, the caller passing the same
+    /// input again while events come. A box that makes no event, gathered or
+    /// skipped, is read past within the call. The caller answers a
+    /// [`DemuxEvent::MediaData`] on the demuxer before the next call.
     ///
-    /// A failure is returned by the call that reads it, in place of the events
-    /// before it.
+    /// A failure leaves the demuxer failed: it wants no more input, and every
+    /// call after it returns the same failure.
     ///
     /// # Errors
     ///
@@ -103,32 +101,34 @@ impl Demuxer {
         &mut self,
         offset: u64,
         input: &'a [u8],
-    ) -> Result<DemuxEvents<'a>, DemuxError> {
-        // Why not `offset`: input may start before the wanted offset, and a
-        // payload, which comes only first among the events of a call, starts
-        // where the reader wanted its input.
-        let payload_offset = self.boxes.wanted_input().map_or(offset, ByteRange::offset);
-        let box_events = self.boxes.handle_input(offset, input)?;
-        self.demux(box_events, payload_offset)
+    ) -> Result<Option<DemuxEvent<'a>>, DemuxError> {
+        loop {
+            let Some(box_event) = self.boxes.handle_input(offset, input)? else {
+                return Ok(None);
+            };
+            if let Some(event) = self.demux(box_event)? {
+                return Ok(Some(event));
+            }
+        }
     }
 
-    /// Ends the file at the offset the demuxer wants, and returns the events of the box it ends
+    /// Ends the file at the offset the demuxer wants, and returns the event of the box it ends
     ///
-    /// A box whose size runs to the end of the file ends here, so the events go
-    /// where those of [`handle_input`](Self::handle_input) go: a `moov` that
-    /// runs to the end of the file is reported here. The demuxer then wants no
-    /// more input.
+    /// A box whose size runs to the end of the file ends here, so the event
+    /// goes where those of [`handle_input`](Self::handle_input) go: a `moov`
+    /// that runs to the end of the file is reported here. The demuxer then
+    /// wants no more input.
     ///
     /// # Errors
     ///
     /// * The failures of [`BoxReader::finish`], and those of reading a box
     ///   into its value as for [`handle_input`](Self::handle_input).
     /// * The failure the demuxer failed with before.
-    pub fn finish(&mut self) -> Result<DemuxEvents<'static>, DemuxError> {
-        let box_events = self.boxes.finish()?;
-        // Why not the wanted offset: `finish` takes no input, so its events hold
-        // no payload to place.
-        self.demux(box_events, 0)
+    pub fn finish(&mut self) -> Result<Option<DemuxEvent<'static>>, DemuxError> {
+        let Some(box_event) = self.boxes.finish()? else {
+            return Ok(None);
+        };
+        self.demux(box_event)
     }
 
     /// Skips the media data box just reported: the demuxer next wants the file offset just past it
@@ -213,34 +213,17 @@ impl Demuxer {
         self.structure_data.movie_fragment_random_access()
     }
 
-    /// Makes the events of the reader of the boxes into those of the demuxer, a payload among them at file offset `payload_offset`
-    fn demux<'a>(
-        &mut self,
-        box_events: BoxEvents<'a>,
-        payload_offset: u64,
-    ) -> Result<DemuxEvents<'a>, DemuxError> {
-        let mut events = DemuxEvents::default();
-        for box_event in box_events {
-            let event = match box_event {
-                BoxEvent::Header(header) => self.open(header),
-                BoxEvent::Payload(bytes) => Ok(Some(DemuxEvent::MediaDataPayload {
-                    offset: payload_offset,
-                    bytes,
-                })),
-                BoxEvent::End => self.close(),
-            };
-            match event {
-                Ok(event) => events.push(event),
-                Err(failure) => {
-                    self.boxes.fail_with(failure);
-                    return Err(failure);
-                }
-            }
-        }
-        // Why not return the events first, as the reader of the boxes does: it
-        // then wants no more input, so a caller that reads while input is
-        // wanted would end without the failure.
-        self.boxes.failure().map_or(Ok(events), Err)
+    /// Makes an event of the reader of the boxes into the event of the demuxer, if it makes one
+    fn demux<'a>(&mut self, box_event: BoxEvent<'a>) -> Result<Option<DemuxEvent<'a>>, DemuxError> {
+        let event = match box_event {
+            BoxEvent::Header(header) => self.open(header),
+            BoxEvent::Payload(bytes) => Ok(Some(DemuxEvent::MediaDataPayload {
+                offset: self.boxes.position().saturating_sub(to_u64(bytes.len())),
+                bytes,
+            })),
+            BoxEvent::End => self.close(),
+        };
+        event.inspect_err(|&failure| self.boxes.fail_with(failure))
     }
 
     /// Answers the header of a box at file level as its type says, and returns the event it is reported with
@@ -363,40 +346,6 @@ pub enum DemuxEvent<'a> {
     },
 }
 
-/// Events the bytes given to a [`Demuxer`] hold, in file order
-///
-/// Returned by [`Demuxer::handle_input`] and [`Demuxer::finish`]. They borrow
-/// the input, never the demuxer.
-#[derive(Clone, Debug, Default)]
-#[must_use = "the events report the movie and its samples, and a media data box waits for an answer"]
-pub struct DemuxEvents<'a> {
-    // Why not a `Vec`: the events of the reader of the boxes in one call are
-    // at most a payload, the end of its box and one header, and only the
-    // payload and the header make an event here, so a call allocates nothing.
-    events: [Option<DemuxEvent<'a>>; 2],
-}
-
-impl<'a> DemuxEvents<'a> {
-    fn push(&mut self, event: Option<DemuxEvent<'a>>) {
-        let Some(event) = event else {
-            return;
-        };
-        let slot = self.events.iter_mut().find(|slot| slot.is_none());
-        debug_assert!(slot.is_some(), "more events than a call can make");
-        if let Some(slot) = slot {
-            *slot = Some(event);
-        }
-    }
-}
-
-impl<'a> Iterator for DemuxEvents<'a> {
-    type Item = DemuxEvent<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.events.iter_mut().find_map(Option::take)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use alloc::vec;
@@ -460,7 +409,7 @@ mod tests {
             if input.is_empty() {
                 break;
             }
-            for event in demuxer.handle_input(wanted.offset(), input)? {
+            while let Some(event) = demuxer.handle_input(wanted.offset(), input)? {
                 if let DemuxEvent::MediaData { .. } = event {
                     if stream {
                         demuxer.stream()?;
@@ -471,7 +420,7 @@ mod tests {
                 see(&mut read.seen, event);
             }
         }
-        for event in demuxer.finish()? {
+        if let Some(event) = demuxer.finish()? {
             see(&mut read.seen, event);
         }
 
@@ -601,27 +550,19 @@ mod tests {
     fn a_media_data_box_not_answered_refuses_input_and_leaves_the_demuxer_as_it_was() {
         let (file, _) = movie_at_end();
         let mut demuxer = Demuxer::new();
-        let mut offset = 0;
-        let events = loop {
-            let input = file.get(usize::try_from(offset).unwrap()..).unwrap();
-            let events: Vec<_> = demuxer.handle_input(offset, input).unwrap().collect();
-            if !events.is_empty() && !matches!(events.last(), Some(DemuxEvent::FileType)) {
-                break events;
-            }
-            offset = demuxer.wanted_input().unwrap().offset();
-        };
-        assert!(matches!(events.as_slice(), [DemuxEvent::MediaData { .. }]));
+        assert!(matches!(
+            demuxer.handle_input(0, &file),
+            Ok(Some(DemuxEvent::FileType))
+        ));
+        assert!(matches!(
+            demuxer.handle_input(0, &file),
+            Ok(Some(DemuxEvent::MediaData { .. }))
+        ));
         let wanted = demuxer.wanted_input();
 
-        let offset = wanted.unwrap().offset();
         assert_eq!(
-            demuxer
-                .handle_input(
-                    offset,
-                    file.get(usize::try_from(offset).unwrap()..).unwrap()
-                )
-                .map(Iterator::count),
-            Err(DemuxError::UndecidedBox {
+            demuxer.handle_input(0, &file).err(),
+            Some(DemuxError::UndecidedBox {
                 box_type: BoxType::compact(*b"mdat")
             })
         );
@@ -825,11 +766,11 @@ mod tests {
             "{failure:?}"
         );
         assert_eq!(demuxer.wanted_input(), None);
-        assert_eq!(demuxer.finish().map(Iterator::count), failure.map(|_| 0));
+        assert_eq!(demuxer.finish().err(), failure.err());
     }
 
     #[test]
-    fn a_failure_is_returned_by_the_call_that_reads_it_even_with_no_event_before_it() {
+    fn a_header_that_fails_after_a_skipped_box_fails_the_call_that_reads_it() {
         let file = [
             file_type(),
             raw_box(*b"free", b"AAAA"),
@@ -844,7 +785,7 @@ mod tests {
                 .unwrap();
             let outcome = demuxer
                 .handle_input(wanted.offset(), input)
-                .map(Iterator::count);
+                .map(|event| event.is_some());
             outcomes.push(outcome);
         }
 
@@ -854,6 +795,40 @@ mod tests {
                 error: isobmff_core::Error::size_below_header(8, 2)
             }))
         );
+    }
+
+    #[test]
+    fn the_payload_before_a_failure_arrives_however_the_input_is_cut() {
+        let file = [raw_box(*b"mdat", b"AB"), b"\0\0\0\x02free".to_vec()].concat();
+        let failure = DemuxError::Box {
+            error: isobmff_core::Error::size_below_header(8, 2),
+        };
+        for piece_len in [1, 2, 8, usize::MAX] {
+            let mut demuxer = Demuxer::new();
+            let mut payload = Vec::new();
+            let ending = loop {
+                let Some(wanted) = demuxer.wanted_input() else {
+                    break Ok(());
+                };
+                let rest = file
+                    .get(usize::try_from(wanted.offset()).unwrap()..)
+                    .unwrap();
+                match demuxer.handle_input(wanted.offset(), rest.get(..piece_len).unwrap_or(rest)) {
+                    Ok(Some(DemuxEvent::MediaData { .. })) => demuxer.stream().unwrap(),
+                    Ok(Some(DemuxEvent::MediaDataPayload { bytes, .. })) => {
+                        payload.extend_from_slice(bytes);
+                    }
+                    Ok(_) => {}
+                    Err(failure) => break Err(failure),
+                }
+            };
+
+            assert_eq!(
+                (payload, ending),
+                (b"AB".to_vec(), Err(failure)),
+                "in pieces of {piece_len}"
+            );
+        }
     }
 
     #[test]

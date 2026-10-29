@@ -52,7 +52,7 @@ mod tests {
                 [] => demuxer.finish()?,
                 input => demuxer.handle_input(wanted.offset(), input)?,
             };
-            for event in events {
+            if let Some(event) = events {
                 match event {
                     DemuxEvent::Movie { samples, .. }
                     | DemuxEvent::MovieFragment { samples, .. } => {

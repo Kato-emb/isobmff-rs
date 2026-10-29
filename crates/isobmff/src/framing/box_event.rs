@@ -43,39 +43,3 @@ pub enum BoxEventKind {
     /// [`BoxEvent::End`]
     End,
 }
-
-/// Events the bytes given to a [`BoxReader`](super::BoxReader) hold, in file order
-///
-/// Returned by [`BoxReader::handle_input`](super::BoxReader::handle_input) and
-/// [`BoxReader::finish`](super::BoxReader::finish). They borrow the input,
-/// never the reader.
-#[derive(Clone, Debug, Default)]
-#[must_use = "the events open and close boxes, and a header waits for an answer"]
-pub struct BoxEvents<'a> {
-    // Why not a `Vec`: the events of one call stop at the first `Header`, after
-    // one `End`, and at most one `Payload` before it, so three slots always
-    // hold them and a call allocates nothing.
-    events: [Option<BoxEvent<'a>>; 3],
-}
-
-impl<'a> BoxEvents<'a> {
-    pub(super) fn push(&mut self, event: BoxEvent<'a>) {
-        let slot = self.events.iter_mut().find(|slot| slot.is_none());
-        debug_assert!(slot.is_some(), "more events than a call can stop at");
-        if let Some(slot) = slot {
-            *slot = Some(event);
-        }
-    }
-
-    pub(super) fn is_empty(&self) -> bool {
-        self.events.iter().all(Option::is_none)
-    }
-}
-
-impl<'a> Iterator for BoxEvents<'a> {
-    type Item = BoxEvent<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.events.iter_mut().find_map(Option::take)
-    }
-}
