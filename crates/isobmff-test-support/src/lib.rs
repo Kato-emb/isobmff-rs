@@ -8,6 +8,7 @@
 //! The functions panic on what they cannot read: they serve tests, which fail
 //! on a panic.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::{env, fs};
@@ -128,6 +129,18 @@ pub fn gpac_frame(node: &Value) -> (String, u64) {
         .unwrap_or_default();
 
     (box_type, size)
+}
+
+/// Returns how many of each box `frames`, of the type and total GPAC gives each, holds
+#[must_use]
+pub fn tally(frames: impl IntoIterator<Item = (String, u64)>) -> BTreeMap<(String, u64), usize> {
+    frames
+        .into_iter()
+        .fold(BTreeMap::new(), |mut tally, frame| {
+            let count = tally.entry(frame).or_insert(0_usize);
+            *count = count.saturating_add(1);
+            tally
+        })
 }
 
 /// Runs `ffprobe` with `arguments` on `file`

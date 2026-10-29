@@ -126,8 +126,13 @@ impl BoxReader {
     /// Creates a reader that wants the file from its first byte
     #[must_use]
     pub const fn new() -> Self {
+        Self::starting_at(0)
+    }
+
+    /// Creates a reader that wants the file from file offset `position`, where a box starts
+    pub(crate) const fn starting_at(position: u64) -> Self {
         Self {
-            position: 0,
+            position,
             progress: Progress::Header {
                 needed: SHORTEST_HEADER,
             },
@@ -321,6 +326,34 @@ impl BoxReader {
         RawBox::split_first(&self.gathered)
             .ok()
             .map(|(raw_box, _)| raw_box)
+    }
+
+    /// Returns where the box [`gathered_box`](Self::gathered_box) returns lies in the file, header included
+    pub(crate) fn gathered_box_range(&self) -> Option<ByteRange> {
+        if !matches!(self.progress, Progress::Gathered) {
+            return None;
+        }
+        let length = to_u64(self.gathered.len());
+        Some(ByteRange::new(
+            self.position.saturating_sub(length),
+            Some(length),
+        ))
+    }
+
+    /// Fails the reader with `failure`, of a box it read, which every call after it returns
+    pub(crate) fn fail_with(&mut self, failure: DemuxError) {
+        self.progress = Progress::Failed(failure);
+    }
+
+    /// Returns the failure the reader failed with, once it has
+    pub(crate) const fn failure(&self) -> Option<DemuxError> {
+        match self.progress {
+            Progress::Failed(failure) => Some(failure),
+            Progress::Header { .. }
+            | Progress::Opened { .. }
+            | Progress::Payload { .. }
+            | Progress::Gathered => None,
+        }
     }
 
     /// Refuses a call while the reader has failed or waits for a header to be answered
