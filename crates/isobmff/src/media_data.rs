@@ -5,7 +5,7 @@
 //! [`SampleLocation`]s structure-data resolves to, and the bytes of the file
 //! as they arrive, and gathers each sample out of them.
 
-use alloc::collections::VecDeque;
+use alloc::collections::{BTreeSet, VecDeque};
 use alloc::vec::Vec;
 use core::ops::Range;
 
@@ -92,6 +92,8 @@ pub struct MediaDataReader {
     limits: MediaDataLimits,
     /// Locations held, in the order they were handed over
     held: VecDeque<HeldLocation>,
+    /// `track_ID`s of the tracks whose locations are not held
+    discarded_tracks: BTreeSet<u32>,
 }
 
 /// Location the reader holds, and as much of its media data as has arrived
@@ -119,6 +121,7 @@ impl MediaDataReader {
                 ..limits
             },
             held: VecDeque::new(),
+            discarded_tracks: BTreeSet::new(),
         }
     }
 
@@ -142,7 +145,11 @@ impl MediaDataReader {
             .iter()
             .map(|held| length(&held.location.byte_range()))
             .fold(0, u64::saturating_add);
-        for location in locations {
+        for location in locations.into_iter().filter(|location| {
+            !self
+                .discarded_tracks
+                .contains(&location.properties().track_id)
+        }) {
             let byte_range = location.byte_range();
             let held_locations = to_u64(self.held.len()).saturating_add(1);
             held_bytes = held_bytes.saturating_add(length(&byte_range));
@@ -231,6 +238,13 @@ impl MediaDataReader {
     /// Drops every held location and the bytes gathered for them, keeping the limits
     pub fn clear(&mut self) {
         self.held.clear();
+    }
+
+    /// Drops the held locations of the samples of track `track_id` and the bytes gathered for them, and holds none of the track later
+    pub(crate) fn discard_track(&mut self, track_id: u32) {
+        self.discarded_tracks.insert(track_id);
+        self.held
+            .retain(|held| held.location.properties().track_id != track_id);
     }
 }
 

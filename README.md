@@ -10,11 +10,12 @@ Sans-IO reading and writing of the ISO base media file format
 
 ## Reading a file
 
-A `Demuxer` does no I/O: it names the bytes it wants next, and reports what
-the bytes it is given hold. The caller reads the file however it can.
+A `Demuxer` does no I/O: it names the bytes it wants next, reports what the
+bytes it is given hold, and returns each sample once its bytes have arrived.
+The caller reads the file however it can.
 
 ```rust
-use isobmff::{DemuxEvent, Demuxer};
+use isobmff::Demuxer;
 
 let file = std::fs::read("movie.mp4")?;
 let mut demuxer = Demuxer::new();
@@ -24,13 +25,11 @@ while let Some(wanted) = demuxer.wanted_input() {
         [] => demuxer.finish()?,
         input => demuxer.handle_input(wanted.offset(), input)?,
     };
-    match event {
-        Some(DemuxEvent::Movie { samples, .. } | DemuxEvent::MovieFragment { samples, .. }) => {
-            for sample in samples {
-                println!("track {} at {:?}", sample.properties().track_id, sample.byte_range());
-            }
-        }
-        _ => {}
+    if let Some(event) = event {
+        println!("{event:?}");
+    }
+    while let Some(sample) = demuxer.poll_sample() {
+        println!("track {}: {} bytes", sample.properties().track_id, sample.data().len());
     }
 }
 ```

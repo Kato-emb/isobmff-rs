@@ -27,7 +27,7 @@ mod tests {
         demuxer: Demuxer,
     }
 
-    /// Reads `file` with a [`Demuxer`] from wherever it wants, skipping each `mdat`
+    /// Reads `file` with a [`Demuxer`] from wherever it wants, discarding every track once the `moov` is read
     fn resolve(file: &[u8]) -> Result<Resolved, DemuxError> {
         let mut resolved = Resolved {
             locations: Vec::new(),
@@ -40,7 +40,7 @@ mod tests {
         Ok(resolved)
     }
 
-    /// Reads `file` into `resolved` from wherever its demuxer wants, skipping each `mdat`
+    /// Reads `file` into `resolved` from wherever its demuxer wants, discarding every track once the `moov` is read
     fn resolve_from(resolved: &mut Resolved, file: &[u8]) -> Result<(), DemuxError> {
         let demuxer = &mut resolved.demuxer;
         while let Some(wanted) = demuxer.wanted_input() {
@@ -54,8 +54,19 @@ mod tests {
             };
             if let Some(event) = events {
                 match event {
-                    DemuxEvent::Movie { samples, .. }
-                    | DemuxEvent::MovieFragment { samples, .. } => {
+                    DemuxEvent::Movie { samples, .. } => {
+                        resolved.locations.extend(samples);
+                        let track_ids: Vec<_> = demuxer
+                            .movie()
+                            .iter()
+                            .flat_map(|movie| &movie.trak)
+                            .map(|trak| trak.tkhd.track_id)
+                            .collect();
+                        for track_id in track_ids {
+                            demuxer.discard_track(track_id);
+                        }
+                    }
+                    DemuxEvent::MovieFragment { samples, .. } => {
                         resolved.locations.extend(samples);
                     }
                     DemuxEvent::SegmentType { .. } => resolved.segment_type = true,

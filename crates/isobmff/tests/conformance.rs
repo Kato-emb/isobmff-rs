@@ -13,8 +13,9 @@ mod tests {
     use std::iter;
 
     use isobmff::framing::{BoxEvent, BoxReader, BoxWriter};
-    use isobmff::media_data::{MediaDataLimits, MediaDataReader};
-    use isobmff::{BoxHeader, Boxes, ByteRange, DemuxEvent, Demuxer, Sample, SampleLocation};
+    use isobmff::{
+        BoxHeader, Boxes, ByteRange, DemuxEvent, DemuxLimits, Demuxer, Sample, SampleLocation,
+    };
     use isobmff_test_support::{ConformanceFile, conformance_files};
 
     /// Lengths the files are cut into, the last of them longer than any file
@@ -177,55 +178,78 @@ mod tests {
     const MEDIA_DATA_FILES: [&str; 3] =
         ["01_simple.mp4", "a4-tone-fragmented.mp4", "21_segment.mp4"];
 
-    /// What a caller that cannot seek saw reading a file
+    /// What a caller saw reading a file
+    #[derive(Default)]
     struct Gathered {
-        /// Locations of the samples the `moov` and the `moof`s declare, in the order the boxes lie
+        /// Locations of the samples the `moov` and the `moofs` declare, in the order the boxes lie
         locations: Vec<SampleLocation>,
-        /// Samples gathered out of the media data, in the order they came out
+        /// Samples the demuxer returned, in the order they came out
         samples: Vec<Sample>,
     }
 
-    /// Reads `file` from its start, `piece_len` bytes at a time, passing each piece to a [`Demuxer`], then to a [`MediaDataReader`] holding the locations of the samples
-    fn gather_samples(file: &[u8], piece_len: usize) -> Gathered {
-        let mut demuxer = Demuxer::new();
-        let mut media_data = MediaDataReader::new(MediaDataLimits {
-            held_location_count: u64::MAX,
-            held_bytes: u64::MAX,
-        });
-        let mut gathered = Gathered {
-            locations: Vec::new(),
-            samples: Vec::new(),
-        };
-        let pieces = file.chunks(piece_len).map(Some).chain([None]);
-        let mut offset = 0_u64;
-        for piece in pieces {
-            let end = offset.saturating_add(u64::try_from(piece.map_or(0, <[u8]>::len)).unwrap());
-            while demuxer
-                .wanted_input()
-                .is_some_and(|wanted| piece.is_none() || wanted.offset() < end)
+    impl Gathered {
+        /// Keeps the locations `event` carries, if any
+        fn see(&mut self, event: DemuxEvent) {
+            if let DemuxEvent::Movie { samples, .. } | DemuxEvent::MovieFragment { samples, .. } =
+                event
             {
-                let event = match piece {
-                    Some(piece) => demuxer.handle_input(offset, piece).unwrap(),
-                    None => demuxer.finish().unwrap(),
-                };
-                if let Some(
-                    DemuxEvent::Movie { samples, .. } | DemuxEvent::MovieFragment { samples, .. },
-                ) = event
-                {
-                    let locations: Vec<_> = samples.collect();
-                    media_data
-                        .handle_sample_locations(locations.iter().cloned())
-                        .unwrap();
-                    gathered.locations.extend(locations);
-                }
+                self.locations.extend(samples);
             }
-            media_data.handle_input(offset, piece.unwrap_or_default());
-            gathered
-                .samples
-                .extend(iter::from_fn(|| media_data.poll_sample()));
-            offset = end;
         }
-        media_data.finish().unwrap();
+
+        /// Takes the samples `demuxer` has gathered
+        fn poll(&mut self, demuxer: &mut Demuxer) {
+            self.samples.extend(iter::from_fn(|| demuxer.poll_sample()));
+        }
+    }
+
+    /// Returns a demuxer that holds every sample of a file
+    fn demuxer() -> Demuxer {
+        Demuxer::with_limits(
+            DemuxLimits::new()
+                .with_held_location_count(u64::MAX)
+                .with_held_bytes(u64::MAX),
+        )
+    }
+
+    /// Reads `file` from its start as a caller that cannot seek, `piece_len` bytes at a time
+    fn gather_in_order(file: &[u8], piece_len: usize) -> Gathered {
+        let mut demuxer = demuxer();
+        let mut gathered = Gathered::default();
+        let mut offset = 0_u64;
+        for piece in file.chunks(piece_len) {
+            while let Some(event) = demuxer.handle_input(offset, piece).unwrap() {
+                gathered.see(event);
+            }
+            gathered.poll(&mut demuxer);
+            offset = offset.saturating_add(u64::try_from(piece.len()).unwrap());
+        }
+        while let Some(event) = demuxer.finish().unwrap() {
+            gathered.see(event);
+        }
+        gathered.poll(&mut demuxer);
+
+        gathered
+    }
+
+    /// Reads `file` from wherever the demuxer wants it, `piece_len` bytes at a time and no more than it wants
+    fn gather_seeking(file: &[u8], piece_len: usize) -> Gathered {
+        let mut demuxer = demuxer();
+        let mut gathered = Gathered::default();
+        while let Some(wanted) = demuxer.wanted_input() {
+            let len = wanted.length().map_or(piece_len, |length| {
+                piece_len.min(usize::try_from(length).unwrap())
+            });
+            let input = piece(file, wanted, len);
+            let event = match input {
+                [] => demuxer.finish().unwrap(),
+                input => demuxer.handle_input(wanted.offset(), input).unwrap(),
+            };
+            if let Some(event) = event {
+                gathered.see(event);
+            }
+            gathered.poll(&mut demuxer);
+        }
 
         gathered
     }
@@ -239,8 +263,12 @@ mod tests {
             .collect();
         assert_eq!(files.len(), MEDIA_DATA_FILES.len());
         for ConformanceFile { name, bytes, .. } in &files {
-            for piece_len in PIECE_LENS {
-                let gathered = gather_samples(bytes, piece_len);
+            for (piece_len, gathered) in PIECE_LENS.into_iter().flat_map(|piece_len| {
+                [
+                    (piece_len, gather_in_order(bytes, piece_len)),
+                    (piece_len, gather_seeking(bytes, piece_len)),
+                ]
+            }) {
                 let expected: Vec<_> = gathered
                     .locations
                     .iter()

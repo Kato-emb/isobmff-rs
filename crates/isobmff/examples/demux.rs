@@ -1,4 +1,4 @@
-//! Lists the boxes and the samples of a movie file or a segment, reading its structure-data and seeking past its media data
+//! Lists the boxes and the samples of a movie file or a segment, seeking to the bytes the demuxer wants
 //!
 //! ```text
 //! cargo run -p isobmff --example demux -- movie.mp4
@@ -10,9 +10,9 @@
 //! past it. A read that returns no byte is the end of the file, which the
 //! caller tells the demuxer with `finish`.
 //!
-//! The demuxer skips each `mdat`: its payload is never read while demuxing.
-//! The bytes of a sample are read afterwards from the file, at the byte range
-//! of its location, as a player reads them when it needs them.
+//! The demuxer skips each `mdat`, and once a `moov` or a `moof` locates
+//! samples in it, wants their bytes. The samples come out of `poll_sample`
+//! once their bytes have arrived.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -20,7 +20,7 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
-use isobmff::{ByteRange, DemuxEvent, Demuxer, SampleLocation};
+use isobmff::{ByteRange, DemuxEvent, Demuxer, Sample};
 
 /// Samples listed per track
 const LISTED_SAMPLES: usize = 3;
@@ -31,7 +31,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut demuxer = Demuxer::new();
     let mut buffer = vec![0; 64 * 1024];
     let (mut buffered_at, mut buffered) = (0_u64, 0_usize);
-    let mut locations = Vec::new();
+    let mut samples = BTreeMap::<u32, Vec<Sample>>::new();
 
     while let Some(wanted) = demuxer.wanted_input() {
         let buffered_end = buffered_at.saturating_add(u64::try_from(buffered)?);
@@ -45,19 +45,22 @@ fn main() -> Result<(), Box<dyn Error>> {
             input => demuxer.handle_input(buffered_at, input)?,
         };
         if let Some(event) = event {
-            report(&demuxer, event, &mut locations)?;
+            report(&demuxer, event)?;
+        }
+        while let Some(sample) = demuxer.poll_sample() {
+            samples
+                .entry(sample.properties().track_id)
+                .or_default()
+                .push(sample);
         }
     }
 
-    list_samples(&mut file, &locations)
+    list_samples(&samples);
+    Ok(())
 }
 
-/// Prints the box `event` reports, and keeps the locations of the samples it declares
-fn report(
-    demuxer: &Demuxer,
-    event: DemuxEvent,
-    locations: &mut Vec<SampleLocation>,
-) -> Result<(), Box<dyn Error>> {
+/// Prints the box `event` reports
+fn report(demuxer: &Demuxer, event: DemuxEvent) -> Result<(), Box<dyn Error>> {
     match event {
         DemuxEvent::FileType { byte_range, .. } => {
             let ftyp = demuxer.file_type().ok_or("ftyp without its value")?;
@@ -86,7 +89,6 @@ fn report(
                 byte_range,
                 &format!("{tracks} tracks, {} samples", samples.len()),
             );
-            locations.extend(samples);
         }
         DemuxEvent::MovieFragment {
             movie_fragment,
@@ -103,7 +105,6 @@ fn report(
                     samples.len()
                 ),
             );
-            locations.extend(samples);
         }
         DemuxEvent::SegmentIndex { byte_range, .. } => {
             let subsegments = demuxer
@@ -146,34 +147,24 @@ fn print_box(box_type: &str, byte_range: ByteRange, note: &str) {
     );
 }
 
-/// Prints how many samples each track has, and the first few with the first bytes of each, read from `file` at its byte range
-fn list_samples(file: &mut File, locations: &[SampleLocation]) -> Result<(), Box<dyn Error>> {
-    let mut by_track = BTreeMap::<u32, Vec<&SampleLocation>>::new();
-    for location in locations {
-        by_track
-            .entry(location.properties().track_id)
-            .or_default()
-            .push(location);
-    }
-    for (track_id, samples) in by_track {
-        println!("track {track_id}: {} samples", samples.len());
-        for location in samples.iter().take(LISTED_SAMPLES) {
-            let byte_range = location.byte_range();
-            let mut data =
-                vec![0; usize::try_from(byte_range.end.saturating_sub(byte_range.start))?];
-            file.seek(SeekFrom::Start(byte_range.start))?;
-            file.read_exact(&mut data)?;
-            let head: Vec<_> = data
+/// Prints how many samples each track has, and the first few with the first bytes of each
+fn list_samples(samples: &BTreeMap<u32, Vec<Sample>>) {
+    for (track_id, samples) in samples {
+        let bytes: usize = samples.iter().map(|sample| sample.data().len()).sum();
+        println!("track {track_id}: {} samples, {bytes} bytes", samples.len());
+        for sample in samples.iter().take(LISTED_SAMPLES) {
+            let head: Vec<_> = sample
+                .data()
                 .iter()
                 .take(8)
                 .map(|byte| format!("{byte:02x}"))
                 .collect();
             println!(
-                "  decoding time {} at {byte_range:?}: {} ...",
-                location.properties().decoding_time,
+                "  decoding time {}, {} bytes: {} ...",
+                sample.properties().decoding_time,
+                sample.data().len(),
                 head.join(" ")
             );
         }
     }
-    Ok(())
 }
