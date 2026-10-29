@@ -132,10 +132,13 @@
 //! the root of this crate. The boxes ISO/IEC 14496-12 defines, written in that
 //! vocabulary, are in [`boxes`].
 //!
-//! The examples in `crates/isobmff/examples/` read and write files through
-//! [`framing`]: `cargo run -p isobmff --example dump_boxes -- movie.mp4` lists
-//! the boxes of a file, and `split_fragments` splits a fragmented movie file
-//! into segments.
+//! The examples in `crates/isobmff/examples/` show the loops whole.
+//! `cargo run -p isobmff --example demux -- movie.mp4` seeks through a file,
+//! skipping each `mdat` and reading the bytes of a sample at its location.
+//! `demux_stream` reads standard input in order and streams each `mdat` into a
+//! [`MediaDataReader`](media_data::MediaDataReader). `dump_boxes` and
+//! `split_fragments` read and write files through [`framing`]: one lists the
+//! boxes of a file, the other splits a fragmented movie file into segments.
 
 #![no_std]
 
