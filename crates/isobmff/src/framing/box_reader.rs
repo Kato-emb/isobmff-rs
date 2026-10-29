@@ -429,11 +429,6 @@ impl BoxReader {
         Ok(event)
     }
 
-    /// Returns the file offset of the next byte the reader takes: after a [`BoxEvent::Payload`], the first byte past it
-    pub(crate) const fn position(&self) -> u64 {
-        self.position
-    }
-
     /// Takes the next header bytes off `input`, and opens the box once the header is whole
     fn read_header<'a>(&mut self, input: &mut &'a [u8], mut needed: u64) -> Option<BoxEvent<'a>> {
         // Why not bound the turns: each takes at least a byte or returns, and

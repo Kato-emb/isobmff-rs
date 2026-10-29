@@ -12,7 +12,7 @@ use isobmff_core::BoxHeader;
 use crate::byte_range::ByteRange;
 use crate::demuxer::file_level::{Handling, Value};
 use crate::error::DemuxError;
-use crate::framing::{BoxEvent, BoxReader, to_u64};
+use crate::framing::{BoxEvent, BoxReader};
 use crate::limits::DemuxLimits;
 use crate::structure_data::{SampleLocations, SegmentIndex, StructureDataReader};
 
@@ -26,18 +26,20 @@ use crate::structure_data::{SampleLocations, SegmentIndex, StructureDataReader};
 /// The boxes of structure-data (`moov`, `moof`, `sidx`, `mfra`) and the
 /// brands (`ftyp`, `styp`) are gathered and read into their values, which the
 /// demuxer keeps for its accessors; a `moov` or a `moof` is reported with the
-/// [`SampleLocation`](crate::SampleLocation)s it declares. Each media data
-/// box is reported by where it lies, and waits for the caller to
-/// [`skip`](Self::skip) it or [`stream`](Self::stream) it. Any other box is
-/// skipped (ISO/IEC 14496-12 §4.2.2).
+/// [`SampleLocation`](crate::SampleLocation)s it declares. Every other box,
+/// the media data boxes among them, is skipped and reported by where it lies
+/// (ISO/IEC 14496-12 §4.2.2): the bytes of the samples are the caller's to
+/// read at their locations, or to gather with a
+/// [`MediaDataReader`](crate::media_data::MediaDataReader).
 ///
 /// The demuxer holds no rule on the order of the boxes: a `moof` before the
 /// `moov` fails as the structure-data it declares does not resolve.
 ///
 /// A failure is returned by the call that reads it, and leaves the demuxer
 /// failed: it wants no more input, and every call after it returns the same
-/// failure. The exceptions refuse one call and leave the demuxer as it was,
-/// as [`DemuxError`] sets out.
+/// failure. Input that starts past the offset the demuxer wants is refused
+/// with [`UnwantedInput`](DemuxError::UnwantedInput), and leaves the demuxer
+/// as it was.
 ///
 /// The crate documentation shows the loops of a caller that can seek, of one
 /// that cannot, and of one that resumes at a later box.
@@ -82,30 +84,27 @@ impl Demuxer {
     ///
     /// `input` is taken, and the event returned, as [`BoxReader::handle_input`]
     /// takes and returns them: one event a call, the caller passing the same
-    /// input again while events come. A box that makes no event, gathered or
-    /// skipped, is read past within the call. The caller answers a
-    /// [`DemuxEvent::MediaData`] on the demuxer before the next call.
+    /// input again while events come. A box gathered into a value is read past
+    /// within the call, and reported once it is read.
     ///
     /// A failure leaves the demuxer failed: it wants no more input, and every
     /// call after it returns the same failure.
     ///
     /// # Errors
     ///
-    /// * [`UnwantedInput`](DemuxError::UnwantedInput),
-    ///   [`UndecidedBox`](DemuxError::UndecidedBox): `input` starts past the
-    ///   wanted offset, or a [`DemuxEvent::MediaData`] is not answered yet. The
-    ///   demuxer is left as it was.
+    /// * [`UnwantedInput`](DemuxError::UnwantedInput): `input` starts past the
+    ///   wanted offset. The demuxer is left as it was.
     /// * The failures of [`BoxReader::handle_input`], and of
     ///   [`BoxReader::gather`] with the limit of the payload of a box.
     /// * [`Box`](DemuxError::Box): a box gathered does not read as its value.
     /// * The failures of the [`StructureDataReader`] the boxes of
     ///   structure-data are handed to.
     /// * The failure the demuxer failed with before.
-    pub fn handle_input<'a>(
+    pub fn handle_input(
         &mut self,
         offset: u64,
-        input: &'a [u8],
-    ) -> Result<Option<DemuxEvent<'a>>, DemuxError> {
+        input: &[u8],
+    ) -> Result<Option<DemuxEvent>, DemuxError> {
         loop {
             let Some(box_event) = self.boxes.handle_input(offset, input)? else {
                 return Ok(None);
@@ -128,35 +127,11 @@ impl Demuxer {
     /// * The failures of [`BoxReader::finish`], and those of reading a box
     ///   into its value as for [`handle_input`](Self::handle_input).
     /// * The failure the demuxer failed with before.
-    pub fn finish(&mut self) -> Result<Option<DemuxEvent<'static>>, DemuxError> {
+    pub fn finish(&mut self) -> Result<Option<DemuxEvent>, DemuxError> {
         let Some(box_event) = self.boxes.finish()? else {
             return Ok(None);
         };
         self.demux(box_event)
-    }
-
-    /// Skips the media data box just reported: the demuxer next wants the file offset just past it
-    ///
-    /// # Errors
-    ///
-    /// * The failures of [`BoxReader::skip`]:
-    ///   [`NoOpenBox`](DemuxError::NoOpenBox) when no
-    ///   [`DemuxEvent::MediaData`] waits for an answer.
-    /// * The failure the demuxer failed with before.
-    pub fn skip(&mut self) -> Result<(), DemuxError> {
-        self.boxes.skip()
-    }
-
-    /// Streams the payload of the media data box just reported as [`DemuxEvent::MediaDataPayload`]s
-    ///
-    /// # Errors
-    ///
-    /// * The failures of [`BoxReader::stream`]:
-    ///   [`NoOpenBox`](DemuxError::NoOpenBox) when no
-    ///   [`DemuxEvent::MediaData`] waits for an answer.
-    /// * The failure the demuxer failed with before.
-    pub fn stream(&mut self) -> Result<(), DemuxError> {
-        self.boxes.stream()
     }
 
     /// Resumes reading at file offset `offset`, where a box after the `moov` starts, as after a seek
@@ -218,36 +193,34 @@ impl Demuxer {
     }
 
     /// Makes an event of the reader of the boxes into the event of the demuxer, if it makes one
-    fn demux<'a>(&mut self, box_event: BoxEvent<'a>) -> Result<Option<DemuxEvent<'a>>, DemuxError> {
+    fn demux(&mut self, box_event: BoxEvent<'_>) -> Result<Option<DemuxEvent>, DemuxError> {
         let event = match box_event {
             BoxEvent::Header(header) => self.open(header),
-            BoxEvent::Payload(bytes) => Ok(Some(DemuxEvent::MediaDataPayload {
-                offset: self.boxes.position().saturating_sub(to_u64(bytes.len())),
-                bytes,
-            })),
+            // Why not `unreachable!`: a payload comes only after `stream`, which
+            // the demuxer never calls, and library code does not panic.
+            BoxEvent::Payload(_) => Ok(None),
             BoxEvent::End => self.close(),
         };
         event.inspect_err(|&failure| self.boxes.fail_with(failure))
     }
 
     /// Answers the header of a box at file level as its type says, and returns the event it is reported with
-    fn open(&mut self, header: BoxHeader) -> Result<Option<DemuxEvent<'static>>, DemuxError> {
+    fn open(&mut self, header: BoxHeader) -> Result<Option<DemuxEvent>, DemuxError> {
         let byte_range = self.boxes.open_box().ok_or(DemuxError::NoOpenBox)?;
-        match file_level::handling(header.box_type()) {
+        let event = match file_level::handling(header.box_type()) {
             Handling::Gather => {
                 self.boxes.gather(self.payload_limit_bytes)?;
-                Ok(None)
+                return Ok(None);
             }
-            Handling::Report => Ok(Some(DemuxEvent::MediaData { header, byte_range })),
-            Handling::Skip => {
-                self.boxes.skip()?;
-                Ok(Some(DemuxEvent::Other { header, byte_range }))
-            }
-        }
+            Handling::MediaData => DemuxEvent::MediaData { header, byte_range },
+            Handling::Other => DemuxEvent::Other { header, byte_range },
+        };
+        self.boxes.skip()?;
+        Ok(Some(event))
     }
 
     /// Reads the box just gathered, if any, into its value, and returns the event it is reported with
-    fn close(&mut self) -> Result<Option<DemuxEvent<'static>>, DemuxError> {
+    fn close(&mut self) -> Result<Option<DemuxEvent>, DemuxError> {
         let (Some(raw_box), Some(range)) =
             (self.boxes.gathered_box(), self.boxes.gathered_box_range())
         else {
@@ -302,10 +275,10 @@ impl Default for Demuxer {
 ///
 /// An event says what was read and where it lies. The values the demuxer
 /// keeps are its to return; a `moof`, which it does not keep, comes with the
-/// event. An event borrows the input it was read from and never the demuxer.
+/// event. An event borrows neither the input nor the demuxer.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
-pub enum DemuxEvent<'a> {
+pub enum DemuxEvent {
     /// `ftyp` read, §5.2: [`Demuxer::file_type`] returns it
     #[non_exhaustive]
     FileType {
@@ -348,21 +321,13 @@ pub enum DemuxEvent<'a> {
         /// Where the whole box lies
         byte_range: ByteRange,
     },
-    /// Header of a media data box, `mdat` (§8.1.1) or `imda` (§8.1.4), which waits for [`Demuxer::skip`] or [`Demuxer::stream`]
+    /// Media data box, `mdat` (§8.1.1) or `imda` (§8.1.4), skipped
     #[non_exhaustive]
     MediaData {
         /// Header of the box
         header: BoxHeader,
         /// Where the whole box lies, its length `None` when it runs to the end of the file
         byte_range: ByteRange,
-    },
-    /// Piece of the payload of the media data box being streamed
-    #[non_exhaustive]
-    MediaDataPayload {
-        /// File offset of the first byte of the piece
-        offset: u64,
-        /// Bytes of the piece, borrowed from the input
-        bytes: &'a [u8],
     },
     /// Any other box, skipped, §4.2.2
     #[non_exhaustive]
@@ -404,8 +369,6 @@ mod tests {
         SegmentIndex,
         MovieFragmentRandomAccess,
         MediaData(ByteRange),
-        /// Payload of a media data box from a file offset, its pieces joined
-        Payload(u64, Vec<u8>),
         Other(BoxType, ByteRange),
     }
 
@@ -417,13 +380,8 @@ mod tests {
         wanted: Vec<u64>,
     }
 
-    /// Reads `file` from wherever `demuxer` wants it, `piece_len` bytes at a time, streaming each media data box if `stream`, else skipping it
-    fn read(
-        demuxer: &mut Demuxer,
-        file: &[u8],
-        piece_len: usize,
-        stream: bool,
-    ) -> Result<Read, DemuxError> {
+    /// Reads `file` from wherever `demuxer` wants it, `piece_len` bytes at a time
+    fn read(demuxer: &mut Demuxer, file: &[u8], piece_len: usize) -> Result<Read, DemuxError> {
         let mut read = Read {
             seen: Vec::new(),
             wanted: Vec::new(),
@@ -438,13 +396,6 @@ mod tests {
                 break;
             }
             while let Some(event) = demuxer.handle_input(wanted.offset(), input)? {
-                if let DemuxEvent::MediaData { .. } = event {
-                    if stream {
-                        demuxer.stream()?;
-                    } else {
-                        demuxer.skip()?;
-                    }
-                }
                 see(&mut read.seen, event);
             }
         }
@@ -455,7 +406,7 @@ mod tests {
         Ok(read)
     }
 
-    fn see(seen: &mut Vec<Seen>, event: DemuxEvent<'_>) {
+    fn see(seen: &mut Vec<Seen>, event: DemuxEvent) {
         let placed = |samples: super::SampleLocations| {
             samples
                 .map(|location| {
@@ -475,15 +426,6 @@ mod tests {
             DemuxEvent::SegmentIndex { .. } => Seen::SegmentIndex,
             DemuxEvent::MovieFragmentRandomAccess { .. } => Seen::MovieFragmentRandomAccess,
             DemuxEvent::MediaData { byte_range, .. } => Seen::MediaData(byte_range),
-            DemuxEvent::MediaDataPayload { offset, bytes } => {
-                if let Some(Seen::Payload(start, joined)) = seen.last_mut()
-                    && start.saturating_add(to_u64(joined.len())) == offset
-                {
-                    joined.extend_from_slice(bytes);
-                    return;
-                }
-                Seen::Payload(offset, bytes.to_vec())
-            }
             DemuxEvent::Other { header, byte_range } => Seen::Other(header.box_type(), byte_range),
         };
         seen.push(event);
@@ -534,7 +476,7 @@ mod tests {
         let (file, payload) = movie_at_end();
         let start = payload.start;
         for piece_len in [1, 7, usize::MAX] {
-            let read = read(&mut Demuxer::new(), &file, piece_len, false).unwrap();
+            let read = read(&mut Demuxer::new(), &file, piece_len).unwrap();
 
             assert_eq!(
                 read.seen,
@@ -558,44 +500,6 @@ mod tests {
                 read.wanted
             );
         }
-    }
-
-    #[test]
-    fn a_media_data_box_streams_as_pieces_at_their_file_offsets() {
-        let (file, payload) = movie_at_end();
-        for piece_len in [1, 7, usize::MAX] {
-            let read = read(&mut Demuxer::new(), &file, piece_len, true).unwrap();
-
-            assert_eq!(
-                read.seen.get(2),
-                Some(&Seen::Payload(payload.start, b"ABCDEF".to_vec())),
-                "in pieces of {piece_len}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_media_data_box_not_answered_refuses_input_and_leaves_the_demuxer_as_it_was() {
-        let (file, _) = movie_at_end();
-        let mut demuxer = Demuxer::new();
-        assert!(matches!(
-            demuxer.handle_input(0, &file),
-            Ok(Some(DemuxEvent::FileType { .. }))
-        ));
-        assert!(matches!(
-            demuxer.handle_input(0, &file),
-            Ok(Some(DemuxEvent::MediaData { .. }))
-        ));
-        let wanted = demuxer.wanted_input();
-
-        assert_eq!(
-            demuxer.handle_input(0, &file).err(),
-            Some(DemuxError::UndecidedBox {
-                box_type: BoxType::compact(*b"mdat")
-            })
-        );
-        assert_eq!(demuxer.wanted_input(), wanted);
-        assert_eq!(demuxer.skip(), Ok(()));
     }
 
     /// Returns a movie of track 1, no sample in its `moov`, and a `trex` of samples of 100 ticks and 2 bytes
@@ -657,7 +561,7 @@ mod tests {
         let head = [file_type(), fragmented_movie()].concat();
         let file = [head.clone(), fragment(1, None), fragment(2, None)].concat();
         let second = to_u64(head.len()).saturating_add(to_u64(fragment(1, None).len()));
-        let read = read(&mut Demuxer::new(), &file, 7, false).unwrap();
+        let read = read(&mut Demuxer::new(), &file, 7).unwrap();
 
         let fragments: Vec<_> = read
             .seen
@@ -696,7 +600,7 @@ mod tests {
         let first = [head.clone(), segment(0)].concat();
         let file = [first.clone(), segment(1)].concat();
         let mut demuxer = Demuxer::new();
-        let read = read(&mut demuxer, &file, usize::MAX, false).unwrap();
+        let read = read(&mut demuxer, &file, usize::MAX).unwrap();
 
         let fragment_offset = |segment_offset: u64| {
             segment_offset
@@ -753,11 +657,10 @@ mod tests {
                     byte_range,
                     ..
                 } => reported.push((byte_range, Some(movie_fragment.mfhd.sequence_number))),
-                DemuxEvent::MediaData { .. } => demuxer.skip().unwrap(),
                 DemuxEvent::SegmentType { .. }
                 | DemuxEvent::SegmentIndex { .. }
                 | DemuxEvent::MovieFragmentRandomAccess { .. }
-                | DemuxEvent::MediaDataPayload { .. }
+                | DemuxEvent::MediaData { .. }
                 | DemuxEvent::Other { .. } => {}
             }
         }
@@ -785,7 +688,7 @@ mod tests {
         let first = to_u64(head.len());
         let file = [head, sidx(0), sidx(200)].concat();
         let mut demuxer = Demuxer::new();
-        read(&mut demuxer, &file, usize::MAX, false).unwrap();
+        read(&mut demuxer, &file, usize::MAX).unwrap();
 
         demuxer.resume_at(first).unwrap();
         let reported = loop {
@@ -810,10 +713,10 @@ mod tests {
         let second = to_u64(head.len()).saturating_add(to_u64(fragment(1, None).len()));
         let file = [head.clone(), fragment(1, None), fragment(2, Some(5000))].concat();
         let mut demuxer = Demuxer::new();
-        read(&mut demuxer, &file, usize::MAX, false).unwrap();
+        read(&mut demuxer, &file, usize::MAX).unwrap();
 
         demuxer.resume_at(second).unwrap();
-        let resumed = read(&mut demuxer, &file, usize::MAX, false).unwrap();
+        let resumed = read(&mut demuxer, &file, usize::MAX).unwrap();
         assert_eq!(
             resumed.seen.first(),
             Some(&fragment_samples(&fragment(2, Some(5000)), second, 5000))
@@ -821,7 +724,7 @@ mod tests {
 
         demuxer.resume_at(to_u64(head.len())).unwrap();
         assert_eq!(
-            read(&mut demuxer, &file, usize::MAX, false).map(|read| read.seen),
+            read(&mut demuxer, &file, usize::MAX).map(|read| read.seen),
             Err(DemuxError::MissingDecodingTime { track_id: 1 })
         );
         assert_eq!(demuxer.wanted_input(), None);
@@ -844,7 +747,7 @@ mod tests {
             .copy_from_slice(&[0; 4]);
 
         let (_, payload) = movie_at_end();
-        let read = read(&mut Demuxer::new(), &file, 7, false).unwrap();
+        let read = read(&mut Demuxer::new(), &file, 7).unwrap();
         assert_eq!(
             read.seen.last(),
             Some(&Seen::Movie(vec![
@@ -859,7 +762,7 @@ mod tests {
         let (file, _) = movie_at_end();
         let mut demuxer = Demuxer::with_limits(DemuxLimits::new().with_payload_bytes(16));
 
-        let failure = read(&mut demuxer, &file, usize::MAX, false).map(|read| read.seen);
+        let failure = read(&mut demuxer, &file, usize::MAX).map(|read| read.seen);
         assert!(
             matches!(failure, Err(DemuxError::PayloadLimitExceeded { box_type, limit_bytes: 16, .. }) if box_type == isobmff_boxes::MovieBox::BOX_TYPE),
             "{failure:?}"
@@ -897,14 +800,20 @@ mod tests {
     }
 
     #[test]
-    fn the_payload_before_a_failure_arrives_however_the_input_is_cut() {
-        let file = [raw_box(*b"mdat", b"AB"), b"\0\0\0\x02free".to_vec()].concat();
+    fn the_events_before_a_failure_arrive_however_the_input_is_cut() {
+        let file = [
+            file_type(),
+            raw_box(*b"mdat", b"AB"),
+            b"\0\0\0\x02free".to_vec(),
+        ]
+        .concat();
         let failure = DemuxError::Box {
             error: isobmff_core::Error::size_below_header(8, 2),
         };
+        let mdat = ByteRange::new(to_u64(file_type().len()), Some(10));
         for piece_len in [1, 2, 8, usize::MAX] {
             let mut demuxer = Demuxer::new();
-            let mut payload = Vec::new();
+            let mut seen = Vec::new();
             let ending = loop {
                 let Some(wanted) = demuxer.wanted_input() else {
                     break Ok(());
@@ -913,18 +822,15 @@ mod tests {
                     .get(usize::try_from(wanted.offset()).unwrap()..)
                     .unwrap();
                 match demuxer.handle_input(wanted.offset(), rest.get(..piece_len).unwrap_or(rest)) {
-                    Ok(Some(DemuxEvent::MediaData { .. })) => demuxer.stream().unwrap(),
-                    Ok(Some(DemuxEvent::MediaDataPayload { bytes, .. })) => {
-                        payload.extend_from_slice(bytes);
-                    }
-                    Ok(_) => {}
+                    Ok(Some(event)) => see(&mut seen, event),
+                    Ok(None) => {}
                     Err(failure) => break Err(failure),
                 }
             };
 
             assert_eq!(
-                (payload, ending),
-                (b"AB".to_vec(), Err(failure)),
+                (seen, ending),
+                (vec![Seen::FileType, Seen::MediaData(mdat)], Err(failure)),
                 "in pieces of {piece_len}"
             );
         }
@@ -937,7 +843,7 @@ mod tests {
         uuid.extend_from_slice(b"AAAA");
         let file = [file_type(), uuid].concat();
 
-        let read = read(&mut Demuxer::new(), &file, usize::MAX, false).unwrap();
+        let read = read(&mut Demuxer::new(), &file, usize::MAX).unwrap();
         assert_eq!(
             read.seen,
             [
@@ -951,11 +857,11 @@ mod tests {
     fn a_movie_read_again_after_resuming_before_it_fails_as_a_duplicate() {
         let (file, _) = movie_at_end();
         let mut demuxer = Demuxer::new();
-        read(&mut demuxer, &file, usize::MAX, false).unwrap();
+        read(&mut demuxer, &file, usize::MAX).unwrap();
 
         demuxer.resume_at(0).unwrap();
         assert_eq!(
-            read(&mut demuxer, &file, usize::MAX, false).map(|read| read.seen),
+            read(&mut demuxer, &file, usize::MAX).map(|read| read.seen),
             Err(DemuxError::DuplicateBox {
                 box_type: isobmff_boxes::MovieBox::BOX_TYPE
             })
@@ -967,7 +873,7 @@ mod tests {
         let file = [file_type(), fragment(1, None), fragmented_movie()].concat();
 
         assert_eq!(
-            read(&mut Demuxer::new(), &file, usize::MAX, false).map(|read| read.seen),
+            read(&mut Demuxer::new(), &file, usize::MAX).map(|read| read.seen),
             Err(DemuxError::MissingMovie)
         );
     }

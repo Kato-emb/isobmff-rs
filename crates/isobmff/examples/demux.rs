@@ -10,9 +10,9 @@
 //! past it. A read that returns no byte is the end of the file, which the
 //! caller tells the demuxer with `finish`.
 //!
-//! Each `mdat` is skipped: its payload is never read while demuxing. The bytes
-//! of a sample are read afterwards from the file, at the byte range of its
-//! location, as a player reads them when it needs them.
+//! The demuxer skips each `mdat`: its payload is never read while demuxing.
+//! The bytes of a sample are read afterwards from the file, at the byte range
+//! of its location, as a player reads them when it needs them.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -44,15 +44,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             [] => demuxer.finish()?,
             input => demuxer.handle_input(buffered_at, input)?,
         };
-        match event {
-            Some(DemuxEvent::MediaData {
-                header, byte_range, ..
-            }) => {
-                print_box(&header.box_type().to_string(), byte_range, "skipped");
-                demuxer.skip()?;
-            }
-            Some(event) => report(&demuxer, event, &mut locations)?,
-            None => {}
+        if let Some(event) = event {
+            report(&demuxer, event, &mut locations)?;
         }
     }
 
@@ -62,7 +55,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 /// Prints the box `event` reports, and keeps the locations of the samples it declares
 fn report(
     demuxer: &Demuxer,
-    event: DemuxEvent<'_>,
+    event: DemuxEvent,
     locations: &mut Vec<SampleLocation>,
 ) -> Result<(), Box<dyn Error>> {
     match event {
@@ -129,12 +122,15 @@ fn report(
                 .sum::<usize>();
             print_box("mfra", byte_range, &format!("{entries} entries"));
         }
-        DemuxEvent::Other {
+        DemuxEvent::MediaData {
+            header, byte_range, ..
+        }
+        | DemuxEvent::Other {
             header, byte_range, ..
         } => {
             print_box(&header.box_type().to_string(), byte_range, "skipped");
         }
-        DemuxEvent::MediaData { .. } | DemuxEvent::MediaDataPayload { .. } | _ => {}
+        _ => {}
     }
     Ok(())
 }

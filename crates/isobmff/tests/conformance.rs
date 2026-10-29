@@ -185,7 +185,7 @@ mod tests {
         samples: Vec<Sample>,
     }
 
-    /// Reads `file` from its start, `piece_len` bytes at a time, with a [`Demuxer`] that streams each `mdat` into a [`MediaDataReader`] holding the locations of the samples
+    /// Reads `file` from its start, `piece_len` bytes at a time, passing each piece to a [`Demuxer`], then to a [`MediaDataReader`] holding the locations of the samples
     fn gather_samples(file: &[u8], piece_len: usize) -> Gathered {
         let mut demuxer = Demuxer::new();
         let mut media_data = MediaDataReader::new(MediaDataLimits {
@@ -196,36 +196,34 @@ mod tests {
             locations: Vec::new(),
             samples: Vec::new(),
         };
-        while let Some(wanted) = demuxer.wanted_input() {
-            let events = match piece(file, wanted, piece_len) {
-                [] => demuxer.finish().unwrap(),
-                input => demuxer.handle_input(wanted.offset(), input).unwrap(),
-            };
-            if let Some(event) = events {
-                match event {
-                    DemuxEvent::Movie { samples, .. }
-                    | DemuxEvent::MovieFragment { samples, .. } => {
-                        let locations: Vec<_> = samples.collect();
-                        media_data
-                            .handle_sample_locations(locations.iter().cloned())
-                            .unwrap();
-                        gathered.locations.extend(locations);
-                    }
-                    DemuxEvent::MediaData { .. } => demuxer.stream().unwrap(),
-                    DemuxEvent::MediaDataPayload { offset, bytes, .. } => {
-                        media_data.handle_input(offset, bytes);
-                    }
-                    DemuxEvent::FileType { .. }
-                    | DemuxEvent::SegmentType { .. }
-                    | DemuxEvent::SegmentIndex { .. }
-                    | DemuxEvent::MovieFragmentRandomAccess { .. }
-                    | DemuxEvent::Other { .. }
-                    | _ => {}
+        let pieces = file.chunks(piece_len).map(Some).chain([None]);
+        let mut offset = 0_u64;
+        for piece in pieces {
+            let end = offset.saturating_add(u64::try_from(piece.map_or(0, <[u8]>::len)).unwrap());
+            while demuxer
+                .wanted_input()
+                .is_some_and(|wanted| piece.is_none() || wanted.offset() < end)
+            {
+                let event = match piece {
+                    Some(piece) => demuxer.handle_input(offset, piece).unwrap(),
+                    None => demuxer.finish().unwrap(),
+                };
+                if let Some(
+                    DemuxEvent::Movie { samples, .. } | DemuxEvent::MovieFragment { samples, .. },
+                ) = event
+                {
+                    let locations: Vec<_> = samples.collect();
+                    media_data
+                        .handle_sample_locations(locations.iter().cloned())
+                        .unwrap();
+                    gathered.locations.extend(locations);
                 }
-                gathered
-                    .samples
-                    .extend(iter::from_fn(|| media_data.poll_sample()));
             }
+            media_data.handle_input(offset, piece.unwrap_or_default());
+            gathered
+                .samples
+                .extend(iter::from_fn(|| media_data.poll_sample()));
+            offset = end;
         }
         media_data.finish().unwrap();
 

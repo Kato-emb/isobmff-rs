@@ -1,9 +1,9 @@
-//! Boxes at file level, each read into its value, reported by where it lies, or skipped
+//! Boxes at file level, each read into its value or skipped
 //!
 //! A box at file level is one no other box contains (ISO/IEC 14496-12
 //! §3.1.14). What becomes of it follows from its type alone: the boxes whose
-//! values the demuxer reads are gathered, the media data boxes are reported
-//! for the caller to stream or skip, and any other box is skipped (§4.2.2).
+//! values the demuxer reads are gathered, and every other box is skipped
+//! (§4.2.2).
 //! Nothing is held between boxes: the order the boxes come in is for the
 //! reader of their values to judge.
 
@@ -20,10 +20,10 @@ use crate::error::DemuxError;
 pub(crate) enum Handling {
     /// Gathered whole, and read into its value with [`read`]
     Gather,
-    /// Reported by where it lies, for the caller to stream or skip
-    Report,
-    /// Skipped, and reported by where it lies
-    Skip,
+    /// Media data box, skipped
+    MediaData,
+    /// Any other box, skipped
+    Other,
 }
 
 /// Value of a box at file level that is read off its payload
@@ -49,8 +49,8 @@ pub(crate) fn handling(box_type: BoxType) -> Handling {
         return Handling::Gather;
     }
     match box_type {
-        MediaDataBox::BOX_TYPE | IdentifiedMediaDataBox::BOX_TYPE => Handling::Report,
-        BoxType::Compact(_) | BoxType::Extended(_) => Handling::Skip,
+        MediaDataBox::BOX_TYPE | IdentifiedMediaDataBox::BOX_TYPE => Handling::MediaData,
+        BoxType::Compact(_) | BoxType::Extended(_) => Handling::Other,
     }
 }
 
@@ -154,7 +154,7 @@ mod tests {
                     .unwrap_or(file_length.saturating_sub(byte_range.offset()));
                 match handling(header.box_type()) {
                     Handling::Gather => reader.gather(u64::MAX).unwrap(),
-                    Handling::Report | Handling::Skip => {
+                    Handling::MediaData | Handling::Other => {
                         reader.skip().unwrap();
                         mapped.push((header.box_type(), total, None));
                     }
@@ -218,7 +218,7 @@ mod tests {
                     "{name}: {box_type}"
                 );
                 if *box_type == BoxType::compact(*b"meta") {
-                    assert_eq!(handling(*box_type), Handling::Skip, "{name}");
+                    assert_eq!(handling(*box_type), Handling::Other, "{name}");
                     metas.push(name.clone());
                 }
             }

@@ -30,7 +30,6 @@ while let Some(wanted) = demuxer.wanted_input() {
                 println!("track {} at {:?}", sample.properties().track_id, sample.byte_range());
             }
         }
-        Some(DemuxEvent::MediaData { .. }) => demuxer.skip()?,
         _ => {}
     }
 }

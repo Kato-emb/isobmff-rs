@@ -5,18 +5,20 @@
 //! curl -s https://example.com/movie.mp4 | cargo run -p isobmff --example demux_stream
 //! ```
 //!
-//! The file is read from standard input a buffer at a time, and each buffer
-//! is passed to the demuxer until it wants bytes past it. Each `mdat` is
-//! streamed, and its pieces go to a `MediaDataReader`, which holds the
-//! locations of the samples the `moov` and the `moof`s declare and gathers
-//! each sample out of them. Samples are counted as they are gathered.
+//! The file is read from standard input a buffer at a time. Each buffer goes
+//! to the demuxer first, again and again until it wants bytes past it, so that
+//! the locations of the samples the `moov` and the `moof`s in it declare are
+//! held by a `MediaDataReader`. Then the same buffer goes to the
+//! `MediaDataReader`, which gathers the samples out of it. Samples are counted
+//! as they are gathered.
 //!
 //! The demuxer cannot tell where the file ends, so the caller calls `finish`
 //! when standard input ends.
 //!
-//! A caller that cannot seek reads a fragmented movie file, or a file whose
-//! `moov` comes before its media data: media data that goes by before the
-//! `moov` is not kept, and `finish` of the `MediaDataReader` fails.
+//! A caller that cannot seek reads a file whose `moov` and `moof`s each come
+//! before their media data: media data in a buffer before the one the box that
+//! locates it is resolved in is not kept, and `finish` of the
+//! `MediaDataReader` fails.
 //!
 //! The locations a `MediaDataReader` holds count toward its limit by the bytes
 //! they name, so every sample of one `moov` or `moof` together has to fit
@@ -51,21 +53,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                 [] => demuxer.finish()?,
                 piece => demuxer.handle_input(offset, piece)?,
             };
-            match event {
-                Some(
-                    DemuxEvent::Movie { samples, .. } | DemuxEvent::MovieFragment { samples, .. },
-                ) => media_data.handle_sample_locations(samples)?,
-                Some(DemuxEvent::MediaData { .. }) => demuxer.stream()?,
-                Some(DemuxEvent::MediaDataPayload { offset, bytes, .. }) => {
-                    media_data.handle_input(offset, bytes);
-                }
-                _ => {}
+            if let Some(
+                DemuxEvent::Movie { samples, .. } | DemuxEvent::MovieFragment { samples, .. },
+            ) = event
+            {
+                media_data.handle_sample_locations(samples)?;
             }
-            while let Some(sample) = media_data.poll_sample() {
-                let (samples, bytes) = gathered.entry(sample.properties().track_id).or_default();
-                *samples = samples.saturating_add(1);
-                *bytes = bytes.saturating_add(u64::try_from(sample.data().len())?);
-            }
+        }
+        media_data.handle_input(offset, piece);
+        while let Some(sample) = media_data.poll_sample() {
+            let (samples, bytes) = gathered.entry(sample.properties().track_id).or_default();
+            *samples = samples.saturating_add(1);
+            *bytes = bytes.saturating_add(u64::try_from(sample.data().len())?);
         }
         if at_end {
             break;

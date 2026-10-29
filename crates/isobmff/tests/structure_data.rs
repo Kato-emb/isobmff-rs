@@ -68,12 +68,10 @@ mod tests {
                                 byte_range.offset().saturating_add(length)
                             }),
                         );
-                        demuxer.skip()?;
                     }
                     DemuxEvent::FileType { .. }
                     | DemuxEvent::SegmentIndex { .. }
                     | DemuxEvent::MovieFragmentRandomAccess { .. }
-                    | DemuxEvent::MediaDataPayload { .. }
                     | DemuxEvent::Other { .. }
                     | _ => {}
                 }
