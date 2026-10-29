@@ -104,8 +104,9 @@ impl Demuxer {
         offset: u64,
         input: &'a [u8],
     ) -> Result<DemuxEvents<'a>, DemuxError> {
-        // Why the wanted offset: a payload is reported only first among the
-        // events of a call, and starts where the reader wanted its input.
+        // Why not `offset`: input may start before the wanted offset, and a
+        // payload, which comes only first among the events of a call, starts
+        // where the reader wanted its input.
         let payload_offset = self.boxes.wanted_input().map_or(offset, ByteRange::offset);
         let box_events = self.boxes.handle_input(offset, input)?;
         self.demux(box_events, payload_offset)
@@ -154,12 +155,13 @@ impl Demuxer {
         self.boxes.stream()
     }
 
-    /// Resumes reading at file offset `offset`, where a box starts, as after a seek
+    /// Resumes reading at file offset `offset`, where a box after the `moov` starts, as after a seek
     ///
     /// The demuxer forgets the decoding time each track has reached, so a
     /// `moof` read after it resolves only where its `tfdt` gives the decoding
     /// time (§8.8.12). The movie, the segment indexes, the movie fragment
-    /// random access box and the brands are kept. A
+    /// random access box and the brands are kept, so a `moov` read again fails
+    /// with [`DuplicateBox`](DemuxError::DuplicateBox). A
     /// [`MediaDataReader`](crate::media_data::MediaDataReader) the caller fed
     /// is for the caller to [`clear`](crate::media_data::MediaDataReader::clear).
     ///
@@ -328,7 +330,7 @@ pub enum DemuxEvent<'a> {
     /// `moof` read, §8.8.4
     #[non_exhaustive]
     MovieFragment {
-        /// Locations of the samples its track runs declare, in the order their media data lies
+        /// Locations of the samples its track fragment runs declare, in the order their media data lies
         samples: SampleLocations,
     },
     /// `sidx` read, §8.14.3: [`Demuxer::segment_indexes`] returns its index
@@ -368,9 +370,9 @@ pub enum DemuxEvent<'a> {
 #[derive(Clone, Debug, Default)]
 #[must_use = "the events report the movie and its samples, and a media data box waits for an answer"]
 pub struct DemuxEvents<'a> {
-    // Why two slots: the boxes of one call come to a payload, the end of its
-    // box, and one header, of which the payload and the header each make at
-    // most one event.
+    // Why not a `Vec`: the events of the reader of the boxes in one call are
+    // at most a payload, the end of its box and one header, and only the
+    // payload and the header make an event here, so a call allocates nothing.
     events: [Option<DemuxEvent<'a>>; 2],
 }
 
@@ -801,12 +803,19 @@ mod tests {
             .unwrap()
             .copy_from_slice(&[0; 4]);
 
+        let (_, payload) = movie_at_end();
         let read = read(&mut Demuxer::new(), &file, 7, false).unwrap();
-        assert!(matches!(read.seen.last(), Some(Seen::Movie(samples)) if samples.len() == 2));
+        assert_eq!(
+            read.seen.last(),
+            Some(&Seen::Movie(vec![
+                (1, 0, payload.start..payload.start.saturating_add(2)),
+                (1, 10, payload.start.saturating_add(2)..payload.end),
+            ]))
+        );
     }
 
     #[test]
-    fn a_box_gathered_past_its_limit_fails_the_demuxer() {
+    fn a_box_whose_payload_is_past_the_limit_fails_the_demuxer() {
         let (file, _) = movie_at_end();
         let mut demuxer = Demuxer::with_limits(DemuxLimits::new().with_payload_bytes(16));
 
@@ -821,7 +830,6 @@ mod tests {
 
     #[test]
     fn a_failure_is_returned_by_the_call_that_reads_it_even_with_no_event_before_it() {
-        // A box skipped, then a header declaring a size smaller than itself
         let file = [
             file_type(),
             raw_box(*b"free", b"AAAA"),
@@ -845,6 +853,38 @@ mod tests {
             Some(&Err(DemuxError::Box {
                 error: isobmff_core::Error::size_below_header(8, 2)
             }))
+        );
+    }
+
+    #[test]
+    fn a_box_of_an_extended_type_is_reported_as_any_other() {
+        let mut uuid = b"\0\0\0\x1cuuid".to_vec();
+        uuid.extend_from_slice(&[0xab; 16]);
+        uuid.extend_from_slice(b"AAAA");
+        let file = [file_type(), uuid].concat();
+
+        let read = read(&mut Demuxer::new(), &file, usize::MAX, false).unwrap();
+        assert_eq!(
+            read.seen,
+            [
+                Seen::FileType,
+                Seen::Other(BoxType::extended([0xab; 16]), ByteRange::new(16, Some(28))),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_movie_read_again_after_resuming_before_it_fails_as_a_duplicate() {
+        let (file, _) = movie_at_end();
+        let mut demuxer = Demuxer::new();
+        read(&mut demuxer, &file, usize::MAX, false).unwrap();
+
+        demuxer.resume_at(0).unwrap();
+        assert_eq!(
+            read(&mut demuxer, &file, usize::MAX, false).map(|read| read.seen),
+            Err(DemuxError::DuplicateBox {
+                box_type: isobmff_boxes::MovieBox::BOX_TYPE
+            })
         );
     }
 

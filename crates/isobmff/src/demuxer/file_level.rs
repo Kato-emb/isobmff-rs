@@ -107,7 +107,7 @@ mod tests {
     use crate::framing::{BoxEvent, BoxReader};
 
     #[test]
-    fn a_gathered_box_reads_into_its_value() {
+    fn a_box_with_a_value_reads_into_it() {
         let (raw_box, _) = RawBox::split_first(b"\0\0\0\x18ftypisom\0\0\x02\0isomiso2").unwrap();
         let mut file_type = FileTypeBox::default();
         file_type.major_brand = FourCc::new(*b"isom");
@@ -118,7 +118,7 @@ mod tests {
     }
 
     #[test]
-    fn a_box_not_gathered_reads_into_no_value() {
+    fn a_media_data_box_reads_into_no_value() {
         let (raw_box, _) = RawBox::split_first(b"\0\0\0\x10mdatpayload!").unwrap();
 
         assert_eq!(read(raw_box), Ok(None));
@@ -218,11 +218,11 @@ mod tests {
                     "{name}: {box_type}"
                 );
                 if *box_type == BoxType::compact(*b"meta") {
+                    assert_eq!(handling(*box_type), Handling::Skip, "{name}");
                     metas.push(name.clone());
                 }
             }
         }
-        // The files with a `meta` at file level, which is skipped as any other box
         assert_eq!(metas, ["05_bifs_video_protected_v2.mp4", "12_metas_v2.mp4"]);
     }
 }

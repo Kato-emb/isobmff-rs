@@ -310,7 +310,6 @@ mod tests {
             .unwrap();
         resolved.demuxer.resume_at(last_moof).unwrap();
 
-        // The fragments of this file have no `tfdt`, so none resolves alone
         let refused = resolve_from(&mut resolved, &bytes);
         assert!(
             matches!(refused, Err(DemuxError::MissingDecodingTime { .. })),
