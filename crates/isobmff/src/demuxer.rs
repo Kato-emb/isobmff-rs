@@ -30,9 +30,10 @@ use crate::structure_data::{SampleLocations, SegmentIndex, StructureDataReader};
 /// The demuxer holds no rule on the order of the boxes: a `moof` before the
 /// `moov` fails as the structure-data it declares does not resolve.
 ///
-/// A failure leaves the demuxer failed: every call after it returns the same
-/// failure, except those that refuse one call and leave the reader as it
-/// was, as [`DemuxError`] sets out.
+/// A failure is returned by the call that reads it, and leaves the demuxer
+/// failed: it wants no more input, and every call after it returns the same
+/// failure. The exceptions refuse one call and leave the demuxer as it was,
+/// as [`DemuxError`] sets out.
 ///
 /// The crate documentation shows the loops of a caller that can seek, of one
 /// that cannot, and of one that resumes at a later box.
@@ -83,8 +84,8 @@ impl Demuxer {
     /// They stop where the reader of the boxes stops, so the caller passes the
     /// rest of its input again from the offset wanted next.
     ///
-    /// A failure after the first event is returned by the next call: the
-    /// events before it are returned first.
+    /// A failure is returned by the call that reads it, in place of the events
+    /// before it.
     ///
     /// # Errors
     ///
@@ -230,14 +231,14 @@ impl Demuxer {
                 Ok(event) => events.push(event),
                 Err(failure) => {
                     self.boxes.fail_with(failure);
-                    if events.is_empty() {
-                        return Err(failure);
-                    }
-                    break;
+                    return Err(failure);
                 }
             }
         }
-        Ok(events)
+        // Why not return the events first, as the reader of the boxes does: it
+        // then wants no more input, so a caller that reads while input is
+        // wanted would end without the failure.
+        self.boxes.failure().map_or(Ok(events), Err)
     }
 
     /// Answers the header of a box at file level as its type says, and returns the event it is reported with
@@ -383,10 +384,6 @@ impl<'a> DemuxEvents<'a> {
         if let Some(slot) = slot {
             *slot = Some(event);
         }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.events.iter().all(Option::is_none)
     }
 }
 
@@ -820,6 +817,35 @@ mod tests {
         );
         assert_eq!(demuxer.wanted_input(), None);
         assert_eq!(demuxer.finish().map(Iterator::count), failure.map(|_| 0));
+    }
+
+    #[test]
+    fn a_failure_is_returned_by_the_call_that_reads_it_even_with_no_event_before_it() {
+        // A box skipped, then a header declaring a size smaller than itself
+        let file = [
+            file_type(),
+            raw_box(*b"free", b"AAAA"),
+            b"\0\0\0\x02free".to_vec(),
+        ]
+        .concat();
+        let mut demuxer = Demuxer::new();
+        let mut outcomes = Vec::new();
+        while let Some(wanted) = demuxer.wanted_input() {
+            let input = file
+                .get(usize::try_from(wanted.offset()).unwrap()..)
+                .unwrap();
+            let outcome = demuxer
+                .handle_input(wanted.offset(), input)
+                .map(Iterator::count);
+            outcomes.push(outcome);
+        }
+
+        assert_eq!(
+            outcomes.last(),
+            Some(&Err(DemuxError::Box {
+                error: isobmff_core::Error::size_below_header(8, 2)
+            }))
+        );
     }
 
     #[test]

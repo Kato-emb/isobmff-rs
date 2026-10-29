@@ -12,11 +12,9 @@
 mod tests {
     use std::iter;
 
-    use isobmff::boxes::{MediaDataBox, MovieBox, MovieFragmentBox};
     use isobmff::framing::{BoxEvent, BoxReader, BoxWriter};
     use isobmff::media_data::{MediaDataLimits, MediaDataReader};
-    use isobmff::structure_data::{StructureDataLimits, StructureDataReader};
-    use isobmff::{BoxDecode, BoxDefinition, BoxHeader, Boxes, ByteRange, Sample, SampleLocation};
+    use isobmff::{BoxHeader, Boxes, ByteRange, DemuxEvent, Demuxer, Sample, SampleLocation};
     use isobmff_test_support::{ConformanceFile, conformance_files};
 
     /// Lengths the files are cut into, the last of them longer than any file
@@ -187,14 +185,9 @@ mod tests {
         samples: Vec<Sample>,
     }
 
-    /// Reads `file` from its start, `piece_len` bytes at a time, streaming each `mdat` into a [`MediaDataReader`] that holds the locations of the samples
+    /// Reads `file` from its start, `piece_len` bytes at a time, with a [`Demuxer`] that streams each `mdat` into a [`MediaDataReader`] holding the locations of the samples
     fn gather_samples(file: &[u8], piece_len: usize) -> Gathered {
-        let mut reader = BoxReader::new();
-        let mut structure_data = StructureDataReader::new(StructureDataLimits {
-            sample_count: u64::MAX,
-            segment_index_count: u64::MAX,
-            subsegment_count: u64::MAX,
-        });
+        let mut demuxer = Demuxer::new();
         let mut media_data = MediaDataReader::new(MediaDataLimits {
             held_location_count: u64::MAX,
             held_bytes: u64::MAX,
@@ -203,56 +196,37 @@ mod tests {
             locations: Vec::new(),
             samples: Vec::new(),
         };
-        let mut box_offset = 0;
-        while let Some(wanted) = reader.wanted_input() {
-            let input = piece(file, wanted, piece_len);
-            if input.is_empty() {
-                break;
-            }
-            for event in reader.handle_input(wanted.offset(), input).unwrap() {
+        while let Some(wanted) = demuxer.wanted_input() {
+            let events = match piece(file, wanted, piece_len) {
+                [] => demuxer.finish().unwrap(),
+                input => demuxer.handle_input(wanted.offset(), input).unwrap(),
+            };
+            for event in events {
                 match event {
-                    BoxEvent::Header(header) => {
-                        box_offset = reader.open_box().unwrap().offset();
-                        let box_type = header.box_type();
-                        if box_type == MovieBox::BOX_TYPE || box_type == MovieFragmentBox::BOX_TYPE
-                        {
-                            reader.gather(u64::MAX).unwrap();
-                        } else if box_type == MediaDataBox::BOX_TYPE {
-                            reader.stream().unwrap();
-                        } else {
-                            reader.skip().unwrap();
-                        }
+                    DemuxEvent::Movie { samples, .. }
+                    | DemuxEvent::MovieFragment { samples, .. } => {
+                        let locations: Vec<_> = samples.collect();
+                        media_data
+                            .handle_sample_locations(locations.iter().cloned())
+                            .unwrap();
+                        gathered.locations.extend(locations);
                     }
-                    BoxEvent::Payload(bytes) => media_data.handle_input(wanted.offset(), bytes),
-                    BoxEvent::End => {
-                        if let Some(raw_box) = reader.gathered_box() {
-                            let locations: Vec<_> = if raw_box.header().box_type()
-                                == MovieBox::BOX_TYPE
-                            {
-                                let movie = MovieBox::decode_payload(raw_box.payload()).unwrap();
-                                structure_data.handle_movie(movie).unwrap().collect()
-                            } else {
-                                let movie_fragment =
-                                    MovieFragmentBox::decode_payload(raw_box.payload()).unwrap();
-                                structure_data
-                                    .handle_movie_fragment(&movie_fragment, box_offset)
-                                    .unwrap()
-                                    .collect()
-                            };
-                            media_data
-                                .handle_sample_locations(locations.iter().cloned())
-                                .unwrap();
-                            gathered.locations.extend(locations);
-                        }
+                    DemuxEvent::MediaData { .. } => demuxer.stream().unwrap(),
+                    DemuxEvent::MediaDataPayload { offset, bytes, .. } => {
+                        media_data.handle_input(offset, bytes);
                     }
-                    _ => {}
+                    DemuxEvent::FileType
+                    | DemuxEvent::SegmentType
+                    | DemuxEvent::SegmentIndex
+                    | DemuxEvent::MovieFragmentRandomAccess
+                    | DemuxEvent::Other { .. }
+                    | _ => {}
                 }
                 gathered
                     .samples
                     .extend(iter::from_fn(|| media_data.poll_sample()));
             }
         }
-        let _events = reader.finish().unwrap();
         media_data.finish().unwrap();
 
         gathered

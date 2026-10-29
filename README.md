@@ -8,6 +8,39 @@ Sans-IO reading and writing of the ISO base media file format
 > **Status:** under construction. The implementation is being migrated from an
 > earlier codebase, and nothing is published to crates.io yet.
 
+## Reading a file
+
+A `Demuxer` does no I/O: it names the bytes it wants next, and reports what
+the bytes it is given hold. The caller reads the file however it can.
+
+```rust
+use isobmff::{DemuxEvent, Demuxer};
+
+let file = std::fs::read("movie.mp4")?;
+let mut demuxer = Demuxer::new();
+while let Some(wanted) = demuxer.wanted_input() {
+    let input = file.get(usize::try_from(wanted.offset())?..).unwrap_or_default();
+    let events = match input {
+        [] => demuxer.finish()?,
+        input => demuxer.handle_input(wanted.offset(), input)?,
+    };
+    for event in events {
+        match event {
+            DemuxEvent::Movie { samples, .. } | DemuxEvent::MovieFragment { samples, .. } => {
+                for sample in samples {
+                    println!("track {} at {:?}", sample.properties().track_id, sample.byte_range());
+                }
+            }
+            DemuxEvent::MediaData { .. } => demuxer.skip()?,
+            _ => {}
+        }
+    }
+}
+```
+
+The crate documentation of `isobmff` shows a caller that cannot seek, and one
+that resumes at a fragment the `mfra` lists.
+
 ## Minimum supported Rust version
 
 `rust-version` in [Cargo.toml](Cargo.toml); [CONTRIBUTING.md](CONTRIBUTING.md#minimum-supported-rust-version)
