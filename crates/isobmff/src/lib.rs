@@ -83,7 +83,10 @@
 //! `moov` comes before its media data: media data that goes by before the
 //! `moov` is not kept, and
 //! [`MediaDataReader::finish`](media_data::MediaDataReader::finish) fails with
-//! [`UnfinishedSample`](DemuxError::UnfinishedSample).
+//! [`UnfinishedSample`](DemuxError::UnfinishedSample). The locations a
+//! `MediaDataReader` holds count toward its limit by the bytes they name, so a
+//! caller that hands it every sample of a `moov` or a `moof` at once, as here,
+//! reads only one whose samples together fit the limit.
 //!
 //! A caller that can seek reads a fragmented movie file from any of its
 //! fragments. The `mfra` at the end of the file lists where they start
@@ -113,7 +116,7 @@
 //! // The `mfro` in the last 16 bytes gives where the `mfra` starts
 //! let mfra = movie_fragment_random_access_start(u64::try_from(file.len())?, file.last_chunk().ok_or("short")?);
 //! demuxer.resume_at(mfra.ok_or("no mfra")?)?;
-//! read_to(&mut demuxer, file, |event| matches!(event, DemuxEvent::MovieFragmentRandomAccess))?;
+//! read_to(&mut demuxer, file, |event| matches!(event, DemuxEvent::MovieFragmentRandomAccess { .. }))?;
 //! // Resume at the last fragment the `mfra` lists
 //! let tfra = demuxer.movie_fragment_random_access().and_then(|mfra| mfra.tfra.first());
 //! let last = tfra.and_then(|tfra| tfra.entries.last()).ok_or("no fragment")?.clone();

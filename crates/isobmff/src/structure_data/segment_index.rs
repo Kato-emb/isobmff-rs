@@ -11,17 +11,20 @@ use crate::error::DemuxError;
 /// Segment index: how a (sub)segment divides into subsegments, each with its byte range and its presentation times, ISO/IEC 14496-12 §8.14.3
 ///
 /// The byte ranges are file offsets, counted from the anchor of the `sidx`,
-/// the first byte after it. The times are in the timescale of the index.
+/// the first byte after it. The times are in the timescale of the index. Two
+/// segment indexes are the same only when their `sidx`es lie at the same
+/// byte range.
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct SegmentIndex {
+    byte_range: Range<u64>,
     reference_id: u32,
     timescale: u32,
     subsegments: Vec<Subsegment>,
 }
 
 impl SegmentIndex {
-    /// Resolves `sidx`, whose anchor point is at file offset `anchor`
+    /// Resolves `sidx`, which lies at the file offsets `byte_range`, its anchor point the end of it
     ///
     /// The first subsegment starts `first_offset` bytes past the anchor and at
     /// the `earliest_presentation_time`, and each next one where the one
@@ -32,11 +35,14 @@ impl SegmentIndex {
     ///
     /// * [`SegmentIndexOutOfRange`](DemuxError::SegmentIndexOutOfRange): the
     ///   byte ranges or the times run past 64 bits.
-    pub(super) fn new(sidx: &SegmentIndexBox, anchor: u64) -> Result<Self, DemuxError> {
+    pub(super) fn new(sidx: &SegmentIndexBox, byte_range: Range<u64>) -> Result<Self, DemuxError> {
         let out_of_range = DemuxError::SegmentIndexOutOfRange {
             reference_id: sidx.reference_id,
         };
-        let mut offset = anchor.checked_add(sidx.first_offset).ok_or(out_of_range)?;
+        let mut offset = byte_range
+            .end
+            .checked_add(sidx.first_offset)
+            .ok_or(out_of_range)?;
         let mut time = sidx.earliest_presentation_time;
         let subsegments = sidx
             .references
@@ -63,10 +69,17 @@ impl SegmentIndex {
             .collect::<Result<_, _>>()?;
 
         Ok(Self {
+            byte_range,
             reference_id: sidx.reference_id,
             timescale: sidx.timescale,
             subsegments,
         })
+    }
+
+    /// Returns the file offsets the `sidx` lies at
+    #[must_use]
+    pub fn byte_range(&self) -> Range<u64> {
+        self.byte_range.clone()
     }
 
     /// Returns the stream ID of the reference stream, its `track_ID` in a file of this format
@@ -182,11 +195,17 @@ mod tests {
     use isobmff_core::BoxDecode;
 
     use alloc::vec::Vec;
+    use core::ops::Range;
 
     use super::{SegmentIndex, Subsegment, movie_fragment_random_access_start};
     use crate::error::DemuxError;
     use crate::structure_data::fixtures::UNLIMITED;
     use crate::structure_data::{StructureDataLimits, StructureDataReader};
+
+    /// Returns a byte range of a `sidx` whose anchor point is at file offset `anchor`, which is all of it the index resolves from
+    fn anchored_at(anchor: u64) -> Range<u64> {
+        anchor.saturating_sub(32)..anchor
+    }
 
     /// `sidx` of version 0 of stream 1 at 1000 ticks a second, from time 500 and 100 bytes past the anchor: a subsegment of 2000 bytes and 3000 ticks starting with a SAP of type 1, then a reference to a segment index of 50 bytes and 1000 ticks
     const SIDX_V0: &[u8] = &[
@@ -217,7 +236,10 @@ mod tests {
     fn the_subsegments_of_an_sidx_lie_one_after_another_from_its_anchor() {
         let mut reader = StructureDataReader::new(UNLIMITED);
         reader
-            .handle_segment_index(&SegmentIndexBox::decode_payload(SIDX_V0).unwrap(), 1000)
+            .handle_segment_index(
+                &SegmentIndexBox::decode_payload(SIDX_V0).unwrap(),
+                anchored_at(1000),
+            )
             .unwrap();
 
         let media = Subsegment {
@@ -237,6 +259,7 @@ mod tests {
             sap_delta_time: 0,
         };
         let expected = SegmentIndex {
+            byte_range: anchored_at(1000),
             reference_id: 1,
             timescale: 1000,
             subsegments: Vec::from([media.clone(), nested.clone()]),
@@ -252,12 +275,16 @@ mod tests {
     fn an_sidx_of_version_1_counts_in_64_bits() {
         let mut reader = StructureDataReader::new(UNLIMITED);
         reader
-            .handle_segment_index(&SegmentIndexBox::decode_payload(SIDX_V1).unwrap(), 8)
+            .handle_segment_index(
+                &SegmentIndexBox::decode_payload(SIDX_V1).unwrap(),
+                anchored_at(8),
+            )
             .unwrap();
 
         assert_eq!(
             reader.segment_indexes(),
             [SegmentIndex {
+                byte_range: anchored_at(8),
                 reference_id: 1,
                 timescale: 1000,
                 subsegments: Vec::from([Subsegment {
@@ -276,14 +303,20 @@ mod tests {
     fn an_index_kept_once_is_not_kept_again_and_resuming_keeps_it_and_the_mfra() {
         let sidx = SegmentIndexBox::decode_payload(SIDX_V0).unwrap();
         let mut reader = StructureDataReader::new(UNLIMITED);
-        reader.handle_segment_index(&sidx, 1000).unwrap();
+        reader
+            .handle_segment_index(&sidx, anchored_at(1000))
+            .unwrap();
         reader.handle_movie_fragment_random_access(MovieFragmentRandomAccessBox::default());
         reader.resume();
-        reader.handle_segment_index(&sidx, 1000).unwrap();
-        reader.handle_segment_index(&sidx, 2000).unwrap();
+        reader
+            .handle_segment_index(&sidx, anchored_at(1000))
+            .unwrap();
+        reader
+            .handle_segment_index(&sidx, anchored_at(2000))
+            .unwrap();
 
-        let first = SegmentIndex::new(&sidx, 1000).unwrap();
-        let second = SegmentIndex::new(&sidx, 2000).unwrap();
+        let first = SegmentIndex::new(&sidx, anchored_at(1000)).unwrap();
+        let second = SegmentIndex::new(&sidx, anchored_at(2000)).unwrap();
         assert_eq!(reader.segment_indexes(), [first, second]);
         assert_eq!(
             reader.movie_fragment_random_access(),
@@ -299,22 +332,29 @@ mod tests {
             subsegment_count: 5,
             ..UNLIMITED
         });
-        reader.handle_segment_index(&sidx, 1000).unwrap();
-        reader.handle_segment_index(&sidx, 2000).unwrap();
+        reader
+            .handle_segment_index(&sidx, anchored_at(1000))
+            .unwrap();
+        reader
+            .handle_segment_index(&sidx, anchored_at(2000))
+            .unwrap();
 
         assert_eq!(
-            reader.handle_segment_index(&sidx, 3000),
+            reader.handle_segment_index(&sidx, anchored_at(3000)),
             Err(DemuxError::SegmentIndexCountLimitExceeded {
                 retained_segment_indexes: 3,
                 limit_segment_indexes: 2
             })
         );
-        assert_eq!(reader.handle_segment_index(&sidx, 1000), Ok(()));
+        assert_eq!(
+            reader.handle_segment_index(&sidx, anchored_at(1000)),
+            Ok(())
+        );
         assert_eq!(
             reader.segment_indexes(),
             [
-                SegmentIndex::new(&sidx, 1000).unwrap(),
-                SegmentIndex::new(&sidx, 2000).unwrap()
+                SegmentIndex::new(&sidx, anchored_at(1000)).unwrap(),
+                SegmentIndex::new(&sidx, anchored_at(2000)).unwrap()
             ]
         );
     }
@@ -330,17 +370,19 @@ mod tests {
             subsegment_count: 1,
             ..UNLIMITED
         });
-        reader.handle_segment_index(&sidx, 1000).unwrap();
+        reader
+            .handle_segment_index(&sidx, anchored_at(1000))
+            .unwrap();
 
         assert_eq!(
-            too_few.handle_segment_index(&sidx, 1000),
+            too_few.handle_segment_index(&sidx, anchored_at(1000)),
             Err(DemuxError::SubsegmentCountLimitExceeded {
                 retained_subsegments: 2,
                 limit_subsegments: 1
             })
         );
         assert_eq!(
-            reader.handle_segment_index(&sidx, 2000),
+            reader.handle_segment_index(&sidx, anchored_at(2000)),
             Err(DemuxError::SubsegmentCountLimitExceeded {
                 retained_subsegments: 4,
                 limit_subsegments: 3
@@ -348,7 +390,7 @@ mod tests {
         );
         assert_eq!(
             reader.segment_indexes(),
-            [SegmentIndex::new(&sidx, 1000).unwrap()]
+            [SegmentIndex::new(&sidx, anchored_at(1000)).unwrap()]
         );
     }
 
@@ -357,7 +399,7 @@ mod tests {
         let sidx = SegmentIndexBox::decode_payload(SIDX_V1).unwrap();
 
         assert_eq!(
-            StructureDataReader::new(UNLIMITED).handle_segment_index(&sidx, u64::MAX),
+            StructureDataReader::new(UNLIMITED).handle_segment_index(&sidx, anchored_at(u64::MAX)),
             Err(DemuxError::SegmentIndexOutOfRange { reference_id: 1 })
         );
     }

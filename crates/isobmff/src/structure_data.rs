@@ -13,6 +13,7 @@ mod segment_index;
 
 use alloc::vec::{self, Vec};
 use core::iter::{self, FusedIterator};
+use core::ops::Range;
 
 use isobmff_boxes::{
     DataEntry, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SampleDescription,
@@ -207,7 +208,7 @@ impl StructureDataReader {
         })
     }
 
-    /// Resolves `sidx`, whose anchor point, the first byte after it, is at file offset `anchor`, and keeps the segment index
+    /// Resolves `sidx`, which lies at the file offsets `byte_range`, its anchor point the first byte after it, and keeps the segment index
     ///
     /// A segment index the reader already keeps, as it does after resuming
     /// before the `sidx`, is kept once, and counts once toward the limits.
@@ -225,7 +226,7 @@ impl StructureDataReader {
     pub fn handle_segment_index(
         &mut self,
         sidx: &SegmentIndexBox,
-        anchor: u64,
+        byte_range: Range<u64>,
     ) -> Result<(), DemuxError> {
         let subsegments_exceeded =
             |retained_subsegments| DemuxError::SubsegmentCountLimitExceeded {
@@ -236,7 +237,7 @@ impl StructureDataReader {
         if declared_subsegments > self.limits.subsegment_count {
             return Err(subsegments_exceeded(declared_subsegments));
         }
-        let segment_index = SegmentIndex::new(sidx, anchor)?;
+        let segment_index = SegmentIndex::new(sidx, byte_range)?;
         if self.segment_indexes.contains(&segment_index) {
             return Ok(());
         }

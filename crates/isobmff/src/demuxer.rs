@@ -2,7 +2,11 @@
 
 mod file_level;
 
-use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentRandomAccessBox, SegmentTypeBox};
+use alloc::boxed::Box;
+
+use isobmff_boxes::{
+    FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentTypeBox,
+};
 use isobmff_core::BoxHeader;
 
 use crate::byte_range::ByteRange;
@@ -186,7 +190,7 @@ impl Demuxer {
         self.file_type.as_ref()
     }
 
-    /// Returns the `styp` read last, the one of the segment being read, §8.14.2
+    /// Returns the `styp` read last, §8.14.2
     #[must_use]
     pub const fn segment_type(&self) -> Option<&SegmentTypeBox> {
         self.segment_type.as_ref()
@@ -244,42 +248,43 @@ impl Demuxer {
 
     /// Reads the box just gathered, if any, into its value, and returns the event it is reported with
     fn close(&mut self) -> Result<Option<DemuxEvent<'static>>, DemuxError> {
-        let (Some(raw_box), Some(byte_range)) =
+        let (Some(raw_box), Some(range)) =
             (self.boxes.gathered_box(), self.boxes.gathered_box_range())
         else {
             return Ok(None);
         };
+        let byte_range = ByteRange::new(range.start, Some(range.end.saturating_sub(range.start)));
         let Some(value) = file_level::read(raw_box)? else {
             return Ok(None);
         };
         let event = match value {
             Value::FileType(ftyp) => {
                 self.file_type = Some(ftyp);
-                DemuxEvent::FileType
+                DemuxEvent::FileType { byte_range }
             }
             Value::SegmentType(styp) => {
                 self.segment_type = Some(styp);
-                DemuxEvent::SegmentType
+                DemuxEvent::SegmentType { byte_range }
             }
             Value::Movie(moov) => DemuxEvent::Movie {
+                byte_range,
                 samples: self.structure_data.handle_movie(moov)?,
             },
             Value::MovieFragment(moof) => DemuxEvent::MovieFragment {
                 samples: self
                     .structure_data
-                    .handle_movie_fragment(&moof, byte_range.offset())?,
+                    .handle_movie_fragment(&moof, range.start)?,
+                movie_fragment: Box::new(moof),
+                byte_range,
             },
             Value::SegmentIndex(sidx) => {
-                let anchor = byte_range
-                    .offset()
-                    .saturating_add(byte_range.length().unwrap_or_default());
-                self.structure_data.handle_segment_index(&sidx, anchor)?;
-                DemuxEvent::SegmentIndex
+                self.structure_data.handle_segment_index(&sidx, range)?;
+                DemuxEvent::SegmentIndex { byte_range }
             }
             Value::MovieFragmentRandomAccess(mfra) => {
                 self.structure_data
                     .handle_movie_fragment_random_access(mfra);
-                DemuxEvent::MovieFragmentRandomAccess
+                DemuxEvent::MovieFragmentRandomAccess { byte_range }
             }
         };
 
@@ -295,31 +300,54 @@ impl Default for Demuxer {
 
 /// What the bytes of a file hold, as a [`Demuxer`] reports it
 ///
-/// An event says what was read; the values read are the demuxer's to return,
-/// so an event borrows the input it was read from and never the demuxer.
+/// An event says what was read and where it lies. The values the demuxer
+/// keeps are its to return; a `moof`, which it does not keep, comes with the
+/// event. An event borrows the input it was read from and never the demuxer.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
 pub enum DemuxEvent<'a> {
     /// `ftyp` read, §5.2: [`Demuxer::file_type`] returns it
-    FileType,
+    #[non_exhaustive]
+    FileType {
+        /// Where the whole box lies
+        byte_range: ByteRange,
+    },
     /// `styp` read, §8.14.2: [`Demuxer::segment_type`] returns it
-    SegmentType,
+    #[non_exhaustive]
+    SegmentType {
+        /// Where the whole box lies
+        byte_range: ByteRange,
+    },
     /// `moov` read, §8.2.1: [`Demuxer::movie`] returns it
     #[non_exhaustive]
     Movie {
+        /// Where the whole box lies
+        byte_range: ByteRange,
         /// Locations of the samples its sample tables declare, in the order their media data lies
         samples: SampleLocations,
     },
     /// `moof` read, §8.8.4
     #[non_exhaustive]
     MovieFragment {
+        /// The `moof`
+        movie_fragment: Box<MovieFragmentBox>,
+        /// Where the whole box lies
+        byte_range: ByteRange,
         /// Locations of the samples its track fragment runs declare, in the order their media data lies
         samples: SampleLocations,
     },
-    /// `sidx` read, §8.14.3: [`Demuxer::segment_indexes`] returns its index
-    SegmentIndex,
+    /// `sidx` read, §8.14.3: its index is the one of [`Demuxer::segment_indexes`] that starts where this does
+    #[non_exhaustive]
+    SegmentIndex {
+        /// Where the whole box lies
+        byte_range: ByteRange,
+    },
     /// `mfra` read, §8.8.9: [`Demuxer::movie_fragment_random_access`] returns it
-    MovieFragmentRandomAccess,
+    #[non_exhaustive]
+    MovieFragmentRandomAccess {
+        /// Where the whole box lies
+        byte_range: ByteRange,
+    },
     /// Header of a media data box, `mdat` (§8.1.1) or `imda` (§8.1.4), which waits for [`Demuxer::skip`] or [`Demuxer::stream`]
     #[non_exhaustive]
     MediaData {
@@ -440,12 +468,12 @@ mod tests {
                 .collect()
         };
         let event = match event {
-            DemuxEvent::FileType => Seen::FileType,
-            DemuxEvent::SegmentType => Seen::SegmentType,
-            DemuxEvent::Movie { samples } => Seen::Movie(placed(samples)),
-            DemuxEvent::MovieFragment { samples } => Seen::MovieFragment(placed(samples)),
-            DemuxEvent::SegmentIndex => Seen::SegmentIndex,
-            DemuxEvent::MovieFragmentRandomAccess => Seen::MovieFragmentRandomAccess,
+            DemuxEvent::FileType { .. } => Seen::FileType,
+            DemuxEvent::SegmentType { .. } => Seen::SegmentType,
+            DemuxEvent::Movie { samples, .. } => Seen::Movie(placed(samples)),
+            DemuxEvent::MovieFragment { samples, .. } => Seen::MovieFragment(placed(samples)),
+            DemuxEvent::SegmentIndex { .. } => Seen::SegmentIndex,
+            DemuxEvent::MovieFragmentRandomAccess { .. } => Seen::MovieFragmentRandomAccess,
             DemuxEvent::MediaData { byte_range, .. } => Seen::MediaData(byte_range),
             DemuxEvent::MediaDataPayload { offset, bytes } => {
                 if let Some(Seen::Payload(start, joined)) = seen.last_mut()
@@ -552,7 +580,7 @@ mod tests {
         let mut demuxer = Demuxer::new();
         assert!(matches!(
             demuxer.handle_input(0, &file),
-            Ok(Some(DemuxEvent::FileType))
+            Ok(Some(DemuxEvent::FileType { .. }))
         ));
         assert!(matches!(
             demuxer.handle_input(0, &file),
@@ -703,6 +731,77 @@ mod tests {
             demuxer.segment_type().map(|styp| styp.major_brand),
             Some(FourCc::new(*b"msdh"))
         );
+    }
+
+    #[test]
+    fn the_boxes_read_into_their_values_are_reported_where_they_lie() {
+        let (ftyp_length, moov_length) =
+            (to_u64(file_type().len()), to_u64(fragmented_movie().len()));
+        let moof_offset = ftyp_length.saturating_add(moov_length);
+        let mdat_length = to_u64(raw_box(*b"mdat", b"WXYZ").len());
+        let moof_length = to_u64(fragment(7, None).len()).saturating_sub(mdat_length);
+        let file = [file_type(), fragmented_movie(), fragment(7, None)].concat();
+        let mut demuxer = Demuxer::new();
+        let mut reported = Vec::new();
+        while let Some(event) = demuxer.handle_input(0, &file).unwrap() {
+            match event {
+                DemuxEvent::FileType { byte_range, .. } | DemuxEvent::Movie { byte_range, .. } => {
+                    reported.push((byte_range, None));
+                }
+                DemuxEvent::MovieFragment {
+                    movie_fragment,
+                    byte_range,
+                    ..
+                } => reported.push((byte_range, Some(movie_fragment.mfhd.sequence_number))),
+                DemuxEvent::MediaData { .. } => demuxer.skip().unwrap(),
+                DemuxEvent::SegmentType { .. }
+                | DemuxEvent::SegmentIndex { .. }
+                | DemuxEvent::MovieFragmentRandomAccess { .. }
+                | DemuxEvent::MediaDataPayload { .. }
+                | DemuxEvent::Other { .. } => {}
+            }
+        }
+
+        assert_eq!(
+            reported,
+            [
+                (ByteRange::new(0, Some(ftyp_length)), None),
+                (ByteRange::new(ftyp_length, Some(moov_length)), None),
+                (ByteRange::new(moof_offset, Some(moof_length)), Some(7)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_segment_index_read_again_is_reported_where_its_sidx_lies_and_kept_once() {
+        let sidx = |earliest_presentation_time| {
+            let mut sidx = SegmentIndexBox::default();
+            sidx.reference_id = 1;
+            sidx.timescale = 1000;
+            sidx.earliest_presentation_time = earliest_presentation_time;
+            encoded(&sidx)
+        };
+        let head = [file_type(), fragmented_movie()].concat();
+        let first = to_u64(head.len());
+        let file = [head, sidx(0), sidx(200)].concat();
+        let mut demuxer = Demuxer::new();
+        read(&mut demuxer, &file, usize::MAX, false).unwrap();
+
+        demuxer.resume_at(first).unwrap();
+        let reported = loop {
+            if let DemuxEvent::SegmentIndex { byte_range, .. } =
+                demuxer.handle_input(0, &file).unwrap().unwrap()
+            {
+                break byte_range;
+            }
+        };
+        assert_eq!(reported, ByteRange::new(first, Some(to_u64(sidx(0).len()))));
+        let starts: Vec<_> = demuxer
+            .segment_indexes()
+            .iter()
+            .map(|index| index.byte_range().start)
+            .collect();
+        assert_eq!(starts, [first, first.saturating_add(to_u64(sidx(0).len()))]);
     }
 
     #[test]

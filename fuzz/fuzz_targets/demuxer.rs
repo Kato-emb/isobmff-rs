@@ -1,14 +1,15 @@
 //! Reading of [`Demuxer`] over a file cut into pieces
 //!
 //! The input is the bytes of a file as they lie, so a file of boxes is a seed
-//! as it is. Every media data box is skipped, as a caller that can seek skips
-//! it. One run reads the file cut a few ways, and checks three properties of
-//! it:
+//! as it is. One run reads the file cut a few ways, once skipping every media
+//! data box, as a caller that can seek does, and once streaming it, and checks
+//! four properties of it:
 //!
 //! 1. no read panics
-//! 2. every cut reads to the same events, and ends in the same failure or
-//!    none, as the file given whole
-//! 3. the offset the demuxer wants never goes back, and stays put for at most
+//! 2. every cut reads to the same events, payload pieces joined, and ends in
+//!    the same failure or none, as the file given whole
+//! 3. each streamed payload is the bytes the file holds where it says it lies
+//! 4. the offset the demuxer wants never goes back, and stays put for at most
 //!    one call: the one that closes a gathered box with an empty payload
 
 #![no_main]
@@ -25,32 +26,49 @@ const LIMITS: DemuxLimits = DemuxLimits::new()
     .with_sample_count(1 << 16)
     .with_subsegment_count(1 << 16);
 
-/// Event as a caller records it
+/// Event as a caller records it, a streamed payload by its file offset and bytes
 #[derive(Clone, PartialEq, Debug)]
 enum Recorded {
-    FileType,
-    SegmentType,
-    Movie(Vec<SampleLocation>),
-    MovieFragment(Vec<SampleLocation>),
-    SegmentIndex,
-    MovieFragmentRandomAccess,
+    FileType(ByteRange),
+    SegmentType(ByteRange),
+    Movie(ByteRange, Vec<SampleLocation>),
+    MovieFragment(ByteRange, Vec<SampleLocation>),
+    SegmentIndex(ByteRange),
+    MovieFragmentRandomAccess(ByteRange),
     MediaData(BoxType, ByteRange),
+    Payload(u64, Vec<u8>),
     Other(BoxType, ByteRange),
 }
 
 fuzz_target!(|bytes: &[u8]| {
-    let whole = read(bytes, &[usize::MAX]);
-    for piece_lens in CUTS {
-        assert_eq!(
-            read(bytes, piece_lens),
-            whole,
-            "pieces of {piece_lens:?} read otherwise than the whole file"
-        );
+    for stream in [false, true] {
+        let whole = read(bytes, &[usize::MAX], stream);
+        for piece_lens in CUTS {
+            assert_eq!(
+                read(bytes, piece_lens, stream),
+                whole,
+                "pieces of {piece_lens:?} read otherwise than the whole file"
+            );
+        }
+        for recorded in &whole.0 {
+            if let Recorded::Payload(offset, payload) = recorded {
+                let start = usize::try_from(*offset).unwrap();
+                assert_eq!(
+                    bytes.get(start..start + payload.len()),
+                    Some(payload.as_slice()),
+                    "the payload at {offset} is not the bytes of the file there"
+                );
+            }
+        }
     }
 });
 
-/// Reads `bytes` from wherever the demuxer wants them, in pieces of `piece_lens` in turn, and returns the events and how the read ended
-fn read(bytes: &[u8], piece_lens: &[usize]) -> (Vec<Recorded>, Result<(), DemuxError>) {
+/// Reads `bytes` from wherever the demuxer wants them, in pieces of `piece_lens` in turn, streaming each media data box if `stream`, else skipping it, and returns the events and how the read ended
+fn read(
+    bytes: &[u8],
+    piece_lens: &[usize],
+    stream: bool,
+) -> (Vec<Recorded>, Result<(), DemuxError>) {
     let mut recorded = Vec::new();
     let ending = (|| {
         let mut piece_lens = piece_lens.iter().cycle();
@@ -77,26 +95,50 @@ fn read(bytes: &[u8], piece_lens: &[usize]) -> (Vec<Recorded>, Result<(), DemuxE
                 input => demuxer.handle_input(offset, input)?,
             };
             if let Some(event) = events {
-                recorded.push(match event {
-                    DemuxEvent::FileType => Recorded::FileType,
-                    DemuxEvent::SegmentType => Recorded::SegmentType,
-                    DemuxEvent::Movie { samples, .. } => Recorded::Movie(samples.collect()),
-                    DemuxEvent::MovieFragment { samples, .. } => {
-                        Recorded::MovieFragment(samples.collect())
+                let event = match event {
+                    DemuxEvent::FileType { byte_range, .. } => Recorded::FileType(byte_range),
+                    DemuxEvent::SegmentType { byte_range, .. } => Recorded::SegmentType(byte_range),
+                    DemuxEvent::Movie {
+                        byte_range,
+                        samples,
+                        ..
+                    } => Recorded::Movie(byte_range, samples.collect()),
+                    DemuxEvent::MovieFragment {
+                        byte_range,
+                        samples,
+                        ..
+                    } => Recorded::MovieFragment(byte_range, samples.collect()),
+                    DemuxEvent::SegmentIndex { byte_range, .. } => {
+                        Recorded::SegmentIndex(byte_range)
                     }
-                    DemuxEvent::SegmentIndex => Recorded::SegmentIndex,
-                    DemuxEvent::MovieFragmentRandomAccess => Recorded::MovieFragmentRandomAccess,
+                    DemuxEvent::MovieFragmentRandomAccess { byte_range, .. } => {
+                        Recorded::MovieFragmentRandomAccess(byte_range)
+                    }
                     DemuxEvent::MediaData {
                         header, byte_range, ..
                     } => {
-                        demuxer.skip()?;
+                        if stream {
+                            demuxer.stream()?;
+                        } else {
+                            demuxer.skip()?;
+                        }
                         Recorded::MediaData(header.box_type(), byte_range)
+                    }
+                    DemuxEvent::MediaDataPayload { offset, bytes, .. } => {
+                        if let Some(Recorded::Payload(start, joined)) = recorded.last_mut()
+                            && *start + joined.len() as u64 == offset
+                        {
+                            joined.extend_from_slice(bytes);
+                            continue;
+                        }
+                        Recorded::Payload(offset, bytes.to_vec())
                     }
                     DemuxEvent::Other {
                         header, byte_range, ..
                     } => Recorded::Other(header.box_type(), byte_range),
                     event => panic!("unexpected event {event:?}"),
-                });
+                };
+                recorded.push(event);
             }
         }
         Ok(())

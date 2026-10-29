@@ -58,7 +58,7 @@ mod tests {
                     | DemuxEvent::MovieFragment { samples, .. } => {
                         resolved.locations.extend(samples);
                     }
-                    DemuxEvent::SegmentType => resolved.segment_type = true,
+                    DemuxEvent::SegmentType { .. } => resolved.segment_type = true,
                     DemuxEvent::MediaData {
                         header, byte_range, ..
                     } => {
@@ -70,9 +70,9 @@ mod tests {
                         );
                         demuxer.skip()?;
                     }
-                    DemuxEvent::FileType
-                    | DemuxEvent::SegmentIndex
-                    | DemuxEvent::MovieFragmentRandomAccess
+                    DemuxEvent::FileType { .. }
+                    | DemuxEvent::SegmentIndex { .. }
+                    | DemuxEvent::MovieFragmentRandomAccess { .. }
                     | DemuxEvent::MediaDataPayload { .. }
                     | DemuxEvent::Other { .. }
                     | _ => {}

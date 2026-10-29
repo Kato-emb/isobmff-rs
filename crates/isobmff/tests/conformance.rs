@@ -215,10 +215,10 @@ mod tests {
                     DemuxEvent::MediaDataPayload { offset, bytes, .. } => {
                         media_data.handle_input(offset, bytes);
                     }
-                    DemuxEvent::FileType
-                    | DemuxEvent::SegmentType
-                    | DemuxEvent::SegmentIndex
-                    | DemuxEvent::MovieFragmentRandomAccess
+                    DemuxEvent::FileType { .. }
+                    | DemuxEvent::SegmentType { .. }
+                    | DemuxEvent::SegmentIndex { .. }
+                    | DemuxEvent::MovieFragmentRandomAccess { .. }
                     | DemuxEvent::Other { .. }
                     | _ => {}
                 }

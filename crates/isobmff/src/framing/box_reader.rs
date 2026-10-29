@@ -1,6 +1,7 @@
 //! [`BoxReader`], which frames the boxes of a file out of bytes that arrive in pieces
 
 use alloc::vec::Vec;
+use core::ops::Range;
 
 use isobmff_core::{BoxHeader, ErrorKind, RawBox};
 
@@ -328,15 +329,11 @@ impl BoxReader {
     }
 
     /// Returns where the box [`gathered_box`](Self::gathered_box) returns lies in the file, header included
-    pub(crate) fn gathered_box_range(&self) -> Option<ByteRange> {
+    pub(crate) fn gathered_box_range(&self) -> Option<Range<u64>> {
         if !matches!(self.progress, Progress::Gathered) {
             return None;
         }
-        let length = to_u64(self.gathered.len());
-        Some(ByteRange::new(
-            self.position.saturating_sub(length),
-            Some(length),
-        ))
+        Some(self.position.saturating_sub(to_u64(self.gathered.len()))..self.position)
     }
 
     /// Fails the reader with `failure`, of a box it read, which every call after it returns
