@@ -7,16 +7,12 @@ use isobmff_boxes::{FileTypeBox, MovieBox, SegmentTypeBox};
 use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader, Error};
 
 use crate::error::MuxError;
+use crate::file_level::refuse_brands_before_iso5;
 use crate::file_structure::FileStructure;
 use crate::framing::{BoxEvent, BoxWriter, to_u64};
 use crate::media_data::MediaDataWriter;
 use crate::sample::Sample;
 use crate::structure_data::{MovieFragmentWriter, SampleTableWriter, StructureDataWriter};
-
-/// Brands under which a track fragment may take the first byte of its `moof` as its base data offset, ISO/IEC 14496-12 §8.8.7.1 and Annex E
-const DEFAULT_BASE_IS_MOOF_BRANDS: [[u8; 4]; 9] = [
-    *b"iso5", *b"iso6", *b"iso7", *b"iso8", *b"iso9", *b"isoa", *b"isob", *b"isoc", *b"isod",
-];
 
 /// Writer of a movie file or a segment from the samples a caller hands it
 ///
@@ -311,19 +307,6 @@ impl Muxer {
         }
         Ok(())
     }
-}
-
-/// Refuses `file_type` where it names none of the brands under which a reader takes the `moof` as the base data offset of a track fragment, §8.8.7.1
-fn refuse_brands_before_iso5(file_type: &FileTypeBox) -> Result<(), MuxError> {
-    if core::iter::once(&file_type.major_brand)
-        .chain(&file_type.compatible_brands)
-        .any(|brand| DEFAULT_BASE_IS_MOOF_BRANDS.contains(brand.as_bytes()))
-    {
-        return Ok(());
-    }
-    Err(MuxError::UnsupportedBrand {
-        brand: file_type.major_brand,
-    })
 }
 
 /// Writes `value` as a box at file level through `boxes`, and returns its bytes

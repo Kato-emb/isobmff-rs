@@ -2,22 +2,11 @@
 
 use alloc::vec::Vec;
 
-use isobmff_boxes::{
-    ChunkOffsetBox, ChunkOffsetVariant, CompactSampleToGroupBox, CompositionOffsetBox,
-    DegradationPriorityBox, MovieBox, MovieExtendsBox, MovieFragmentBox, PaddingBitsBox,
-    SampleAuxiliaryInformationOffsetsBox, SampleAuxiliaryInformationSizesBox,
-    SampleDependencyTypeBox, SampleInfoSizes, SampleSizeBox, SampleToChunkBox, SampleToGroupBox,
-    ShadowSyncSampleBox, SubSampleInformationBox, SubSampleReferenceTableBox, SyncSampleBox,
-    TimeToSampleBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackRunBox,
-    TrackRunSample, TrackRunSamples,
-};
-use isobmff_core::{BoxDefinition, BoxEncode};
+use isobmff_boxes::{MovieBox, MovieExtendsBox, MovieFragmentBox};
+use isobmff_core::BoxDefinition;
 
-mod sample_table;
-
-use sample_table::TrackTable;
-
-use super::data_reference_index;
+use super::movie_fragment::{self, runs};
+use super::sample_table::{TrackTable, refuse_samples_in_tables};
 use crate::error::MuxError;
 use crate::framing::to_u64;
 use crate::sample::Sample;
@@ -47,20 +36,6 @@ pub(crate) struct MovieFragmentWriter {
 pub(crate) struct SampleTableWriter {
     movie: MovieBox,
     tables: Vec<TrackTable>,
-}
-
-/// Samples of one track that lie one after another, the first of them at `data_offset` from the media data of the samples written together
-struct Run<'a> {
-    /// Index of the track among the tracks of the movie
-    track: usize,
-    track_id: u32,
-    sample_description_index: u32,
-    /// Decoding time of the first sample
-    decoding_time: u64,
-    /// Decoding time past the last sample
-    decoding_end: u64,
-    samples: &'a [Sample],
-    data_offset: u64,
 }
 
 impl MovieFragmentWriter {
@@ -118,59 +93,12 @@ impl MovieFragmentWriter {
         data_start: u64,
     ) -> Result<MovieFragmentBox, MuxError> {
         let runs = runs(&self.movie, samples, None)?;
-        let mut tracks: Vec<Vec<&Run<'_>>> = Vec::new();
-        for run in &runs {
-            match tracks.iter_mut().find(|track_runs| {
-                track_runs
-                    .first()
-                    .is_some_and(|first| first.track == run.track)
-            }) {
-                Some(track_runs) => track_runs.push(run),
-                None => tracks.push(Vec::from([run])),
-            }
-        }
-        let mut moof = MovieFragmentBox::default();
-        moof.mfhd.sequence_number = self.sequence_number;
-        for track_runs in &tracks {
-            let Some(first) = track_runs.first() else {
-                continue;
-            };
-            let mut traf = TrackFragmentBox::default();
-            traf.tfhd.track_id = first.track_id;
-            traf.tfhd.default_base_is_moof = true;
-            traf.tfhd.sample_description_index =
-                Some(first.sample_description_index).filter(|&index| {
-                    self.movie
-                        .mvex
-                        .iter()
-                        .flat_map(|mvex| &mvex.trex)
-                        .find(|trex| trex.track_id == first.track_id)
-                        .is_none_or(|trex| trex.default_sample_description_index != index)
-                });
-            let mut tfdt = TrackFragmentBaseMediaDecodeTimeBox::default();
-            tfdt.version = u8::from(u32::try_from(first.decoding_time).is_err());
-            tfdt.base_media_decode_time = first.decoding_time;
-            traf.tfdt = Some(tfdt);
-            traf.trun = track_runs
-                .iter()
-                .map(|run| track_run(run.samples))
-                .collect();
-            moof.traf.push(traf);
-        }
-        let moof_len = moof.encoded_len();
-        for (traf, track_runs) in moof.traf.iter_mut().zip(&tracks) {
-            for (trun, run) in traf.trun.iter_mut().zip(track_runs) {
-                trun.data_offset = Some(
-                    moof_len
-                        .checked_add(data_start)
-                        .and_then(|offset| offset.checked_add(run.data_offset))
-                        .and_then(|offset| i32::try_from(offset).ok())
-                        .ok_or(MuxError::DataOffsetOutOfRange {
-                            track_id: run.track_id,
-                        })?,
-                );
-            }
-        }
+        let moof = movie_fragment::movie_fragment_box(
+            &self.movie,
+            self.sequence_number,
+            &runs,
+            data_start,
+        )?;
         self.sequence_number = self.sequence_number.wrapping_add(1);
 
         Ok(moof)
@@ -281,226 +209,6 @@ impl SampleTableWriter {
 
         movie
     }
-}
-
-/// Refuses `movie` where a table of the sample table of a track declares samples
-fn refuse_samples_in_tables(movie: &MovieBox) -> Result<(), MuxError> {
-    for trak in &movie.trak {
-        let stbl = &trak.mdia.minf.stbl;
-        let declared = [
-            (
-                stbl.stts
-                    .iter()
-                    .flat_map(|stts| &stts.entries)
-                    .any(|entry| entry.sample_count > 0),
-                TimeToSampleBox::BOX_TYPE,
-            ),
-            (
-                stbl.ctts
-                    .iter()
-                    .flat_map(|ctts| &ctts.entries)
-                    .any(|entry| entry.sample_count > 0),
-                CompositionOffsetBox::BOX_TYPE,
-            ),
-            (
-                stbl.stsc.iter().any(|stsc| !stsc.entries.is_empty()),
-                SampleToChunkBox::BOX_TYPE,
-            ),
-            (
-                super::sample_table::sample_count(trak) > 0,
-                SampleSizeBox::BOX_TYPE,
-            ),
-            (
-                match &stbl.chunk_offset {
-                    Some(ChunkOffsetVariant::ChunkOffset(stco)) => !stco.chunk_offsets.is_empty(),
-                    Some(ChunkOffsetVariant::ChunkLargeOffset(co64)) => {
-                        !co64.chunk_offsets.is_empty()
-                    }
-                    Some(_) | None => false,
-                },
-                ChunkOffsetBox::BOX_TYPE,
-            ),
-            (
-                stbl.stss.iter().any(|stss| !stss.sample_numbers.is_empty()),
-                SyncSampleBox::BOX_TYPE,
-            ),
-            (
-                stbl.sdtp.iter().any(|sdtp| !sdtp.entries.is_empty()),
-                SampleDependencyTypeBox::BOX_TYPE,
-            ),
-            (
-                stbl.stsh.iter().any(|stsh| !stsh.entries.is_empty()),
-                ShadowSyncSampleBox::BOX_TYPE,
-            ),
-            (
-                stbl.padb.iter().any(|padb| !padb.pads.is_empty()),
-                PaddingBitsBox::BOX_TYPE,
-            ),
-            (
-                stbl.stdp.iter().any(|stdp| !stdp.priorities.is_empty()),
-                DegradationPriorityBox::BOX_TYPE,
-            ),
-            (
-                stbl.sbgp
-                    .iter()
-                    .flat_map(|sbgp| &sbgp.entries)
-                    .any(|entry| entry.sample_count > 0),
-                SampleToGroupBox::BOX_TYPE,
-            ),
-            (
-                stbl.csgp
-                    .iter()
-                    .flat_map(|csgp| &csgp.patterns)
-                    .any(|pattern| pattern.sample_count > 0),
-                CompactSampleToGroupBox::BOX_TYPE,
-            ),
-            (
-                stbl.subs.iter().any(|subs| !subs.entries.is_empty()),
-                SubSampleInformationBox::BOX_TYPE,
-            ),
-            (
-                stbl.ssrt.iter().any(|ssrt| !ssrt.entries.is_empty()),
-                SubSampleReferenceTableBox::BOX_TYPE,
-            ),
-            (
-                stbl.saiz.iter().any(|saiz| match &saiz.sample_info_sizes {
-                    SampleInfoSizes::Constant { sample_count, .. } => *sample_count > 0,
-                    SampleInfoSizes::Table { sample_info_sizes } => !sample_info_sizes.is_empty(),
-                    _ => true,
-                }),
-                SampleAuxiliaryInformationSizesBox::BOX_TYPE,
-            ),
-            (
-                stbl.saio.iter().any(|saio| !saio.offsets.is_empty()),
-                SampleAuxiliaryInformationOffsetsBox::BOX_TYPE,
-            ),
-        ];
-        if let Some((_, box_type)) = declared.into_iter().find(|(declared, _)| *declared) {
-            return Err(MuxError::SampleTableNotEmpty {
-                track_id: trak.tkhd.track_id,
-                box_type,
-            });
-        }
-    }
-
-    Ok(())
-}
-
-/// Returns the runs of samples of one track that lie one after another in `samples`, checked against the tracks of `movie`
-///
-/// The decoding times of the samples of each track follow from the
-/// durations before them in `samples`, from the first sample's own where
-/// `decoding_times` is `None`, and otherwise from the decoding time
-/// `decoding_times` holds for the track, in the order of the tracks of the
-/// movie.
-///
-/// # Errors
-///
-/// * The failures of the samples as for [`SampleTableWriter::handle_samples`].
-fn runs<'a>(
-    movie: &MovieBox,
-    samples: &'a [Sample],
-    decoding_times: Option<&[u64]>,
-) -> Result<Vec<Run<'a>>, MuxError> {
-    let mut runs: Vec<Run<'a>> = Vec::new();
-    let mut rest = samples;
-    let mut data_offset = 0_u64;
-    while let Some(first) = rest.first() {
-        let first = first.properties();
-        let track_id = first.track_id;
-        let (track, trak) = movie
-            .trak
-            .iter()
-            .enumerate()
-            .find(|(_, trak)| trak.tkhd.track_id == track_id)
-            .ok_or(MuxError::UnknownTrackId { track_id })?;
-        let len = rest
-            .iter()
-            .take_while(|sample| sample.properties().track_id == track_id)
-            .count();
-        let (run_samples, after) = rest.split_at_checked(len).unwrap_or((rest, &[]));
-        let earlier = runs.iter().rev().find(|run| run.track == track);
-        let sample_description_index = match earlier {
-            Some(earlier) => earlier.sample_description_index,
-            None => {
-                data_reference_index(trak, first.sample_description_index)?;
-                first.sample_description_index
-            }
-        };
-        let decoding_start = earlier
-            .map(|earlier| earlier.decoding_end)
-            .or_else(|| decoding_times.map(|times| times.get(track).copied().unwrap_or_default()));
-        let mut decoding_time = decoding_start.unwrap_or(first.decoding_time);
-        let mut run_len = 0_u64;
-        for sample in run_samples {
-            let properties = sample.properties();
-            if properties.sample_description_index != sample_description_index {
-                return Err(MuxError::MixedSampleDescriptions { track_id });
-            }
-            let mismatch = MuxError::DecodingTimeMismatch {
-                track_id,
-                expected_decoding_time: decoding_time,
-                decoding_time: properties.decoding_time,
-            };
-            if properties.decoding_time != decoding_time {
-                return Err(mismatch);
-            }
-            decoding_time = decoding_time
-                .checked_add(u64::from(properties.sample_duration))
-                .ok_or(mismatch)?;
-            let size = sample.data().len();
-            if u32::try_from(size).is_err() {
-                return Err(MuxError::SampleSizeOutOfRange {
-                    track_id,
-                    sample_bytes: to_u64(size),
-                });
-            }
-            run_len = run_len.saturating_add(to_u64(size));
-        }
-        runs.push(Run {
-            track,
-            track_id,
-            sample_description_index,
-            decoding_time: first.decoding_time,
-            decoding_end: decoding_time,
-            samples: run_samples,
-            data_offset,
-        });
-        data_offset = data_offset.saturating_add(run_len);
-        rest = after;
-    }
-
-    Ok(runs)
-}
-
-/// Returns the track run of `samples`, each row carrying the fields of its sample, and the composition time offsets only where one is not zero
-fn track_run(samples: &[Sample]) -> TrackRunBox {
-    let offsets = samples
-        .iter()
-        .any(|sample| sample.properties().sample_composition_time_offset != 0);
-    let mut trun = TrackRunBox::default();
-    trun.version = u8::from(
-        samples
-            .iter()
-            .any(|sample| sample.properties().sample_composition_time_offset < 0),
-    );
-    trun.data_offset = Some(0);
-    trun.samples = TrackRunSamples::Rows {
-        samples: samples
-            .iter()
-            .map(|sample| {
-                let properties = sample.properties();
-                let mut row = TrackRunSample::default();
-                row.sample_duration = Some(properties.sample_duration);
-                row.sample_size = u32::try_from(sample.data().len()).ok();
-                row.sample_flags = Some(properties.sample_flags);
-                row.sample_composition_time_offset =
-                    offsets.then_some(properties.sample_composition_time_offset);
-                row
-            })
-            .collect(),
-    };
-    trun
 }
 
 /// Returns the version of a header box that holds `duration`: 1 where it takes more than 32 bits

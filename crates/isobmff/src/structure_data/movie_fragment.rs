@@ -1,15 +1,19 @@
-//! The samples the track fragments of a movie fragment declare, read off their track runs and the defaults they take, ISO/IEC 14496-12 §8.8
+//! The movie fragment, ISO/IEC 14496-12 §8.8: the samples its track fragments declare, read off their track runs and the defaults they take, and the movie fragment written of runs of samples
 
 use alloc::vec::Vec;
 use core::iter;
 
 use isobmff_boxes::{
-    MovieBox, MovieFragmentBox, SampleFlags, TrackRunBox, TrackRunSample, TrackRunSamples,
+    MovieBox, MovieFragmentBox, SampleFlags, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
+    TrackRunBox, TrackRunSample, TrackRunSamples,
 };
+use isobmff_core::BoxEncode;
 
-use super::{data_reference_index, expand};
-use crate::error::DemuxError;
-use crate::sample::{SampleLocation, SampleProperties};
+use super::sample_description::data_reference_index;
+use super::sample_table::expand;
+use crate::error::{DemuxError, MuxError};
+use crate::framing::to_u64;
+use crate::sample::{Sample, SampleLocation, SampleProperties};
 
 /// Returns the number of samples the track runs of `moof` count, those of track fragments of empty duration left out
 pub(super) fn sample_count(moof: &MovieFragmentBox) -> u64 {
@@ -177,6 +181,211 @@ fn rows(trun: &TrackRunBox) -> impl Iterator<Item = TrackRunSample> {
     };
 
     expand(iter::once((empty_rows, TrackRunSample::default()))).chain(rows.iter().copied())
+}
+
+/// Samples of one track that lie one after another, the first of them at `data_offset` from the media data of the samples written together
+pub(super) struct Run<'a> {
+    /// Index of the track among the tracks of the movie
+    pub(super) track: usize,
+    pub(super) track_id: u32,
+    pub(super) sample_description_index: u32,
+    /// Decoding time of the first sample
+    pub(super) decoding_time: u64,
+    /// Decoding time past the last sample
+    pub(super) decoding_end: u64,
+    pub(super) samples: &'a [Sample],
+    pub(super) data_offset: u64,
+}
+
+/// Returns the runs of samples of one track that lie one after another in `samples`, checked against the tracks of `movie`
+///
+/// The decoding times of the samples of each track follow from the
+/// durations before them in `samples`, from the first sample's own where
+/// `decoding_times` is `None`, and otherwise from the decoding time
+/// `decoding_times` holds for the track, in the order of the tracks of the
+/// movie.
+///
+/// # Errors
+///
+/// * The failures of the samples as for [`SampleTableWriter::handle_samples`](super::writer::SampleTableWriter::handle_samples).
+pub(super) fn runs<'a>(
+    movie: &MovieBox,
+    samples: &'a [Sample],
+    decoding_times: Option<&[u64]>,
+) -> Result<Vec<Run<'a>>, MuxError> {
+    let mut runs: Vec<Run<'a>> = Vec::new();
+    let mut rest = samples;
+    let mut data_offset = 0_u64;
+    while let Some(first) = rest.first() {
+        let first = first.properties();
+        let track_id = first.track_id;
+        let (track, trak) = movie
+            .trak
+            .iter()
+            .enumerate()
+            .find(|(_, trak)| trak.tkhd.track_id == track_id)
+            .ok_or(MuxError::UnknownTrackId { track_id })?;
+        let len = rest
+            .iter()
+            .take_while(|sample| sample.properties().track_id == track_id)
+            .count();
+        let (run_samples, after) = rest.split_at_checked(len).unwrap_or((rest, &[]));
+        let earlier = runs.iter().rev().find(|run| run.track == track);
+        let sample_description_index = match earlier {
+            Some(earlier) => earlier.sample_description_index,
+            None => {
+                data_reference_index(trak, first.sample_description_index)?;
+                first.sample_description_index
+            }
+        };
+        let decoding_start = earlier
+            .map(|earlier| earlier.decoding_end)
+            .or_else(|| decoding_times.map(|times| times.get(track).copied().unwrap_or_default()));
+        let mut decoding_time = decoding_start.unwrap_or(first.decoding_time);
+        let mut run_len = 0_u64;
+        for sample in run_samples {
+            let properties = sample.properties();
+            if properties.sample_description_index != sample_description_index {
+                return Err(MuxError::MixedSampleDescriptions { track_id });
+            }
+            let mismatch = MuxError::DecodingTimeMismatch {
+                track_id,
+                expected_decoding_time: decoding_time,
+                decoding_time: properties.decoding_time,
+            };
+            if properties.decoding_time != decoding_time {
+                return Err(mismatch);
+            }
+            decoding_time = decoding_time
+                .checked_add(u64::from(properties.sample_duration))
+                .ok_or(mismatch)?;
+            let size = sample.data().len();
+            if u32::try_from(size).is_err() {
+                return Err(MuxError::SampleSizeOutOfRange {
+                    track_id,
+                    sample_bytes: to_u64(size),
+                });
+            }
+            run_len = run_len.saturating_add(to_u64(size));
+        }
+        runs.push(Run {
+            track,
+            track_id,
+            sample_description_index,
+            decoding_time: first.decoding_time,
+            decoding_end: decoding_time,
+            samples: run_samples,
+            data_offset,
+        });
+        data_offset = data_offset.saturating_add(run_len);
+        rest = after;
+    }
+
+    Ok(runs)
+}
+
+/// Returns the movie fragment numbered `sequence_number` of the samples `runs` of the tracks of `movie`, their media data from `data_start` bytes past the end of the `moof`
+///
+/// Each track has one track fragment, its base data offset the first byte
+/// of the `moof` (§8.8.7.1) and its `tfdt` the decoding time of its first
+/// sample (§8.8.12), and a track run for each of its runs (§8.8.8). The data
+/// offsets count from the `moof`, whose length is taken once.
+///
+/// # Errors
+///
+/// * [`DataOffsetOutOfRange`](MuxError::DataOffsetOutOfRange): the media
+///   data of a sample lies further from the `moof` than a `trun` reaches.
+pub(super) fn movie_fragment_box(
+    movie: &MovieBox,
+    sequence_number: u32,
+    runs: &[Run<'_>],
+    data_start: u64,
+) -> Result<MovieFragmentBox, MuxError> {
+    let mut tracks: Vec<Vec<&Run<'_>>> = Vec::new();
+    for run in runs {
+        match tracks.iter_mut().find(|track_runs| {
+            track_runs
+                .first()
+                .is_some_and(|first| first.track == run.track)
+        }) {
+            Some(track_runs) => track_runs.push(run),
+            None => tracks.push(Vec::from([run])),
+        }
+    }
+    let mut moof = MovieFragmentBox::default();
+    moof.mfhd.sequence_number = sequence_number;
+    for track_runs in &tracks {
+        let Some(first) = track_runs.first() else {
+            continue;
+        };
+        let mut traf = TrackFragmentBox::default();
+        traf.tfhd.track_id = first.track_id;
+        traf.tfhd.default_base_is_moof = true;
+        traf.tfhd.sample_description_index =
+            Some(first.sample_description_index).filter(|&index| {
+                movie
+                    .mvex
+                    .iter()
+                    .flat_map(|mvex| &mvex.trex)
+                    .find(|trex| trex.track_id == first.track_id)
+                    .is_none_or(|trex| trex.default_sample_description_index != index)
+            });
+        let mut tfdt = TrackFragmentBaseMediaDecodeTimeBox::default();
+        tfdt.version = u8::from(u32::try_from(first.decoding_time).is_err());
+        tfdt.base_media_decode_time = first.decoding_time;
+        traf.tfdt = Some(tfdt);
+        traf.trun = track_runs
+            .iter()
+            .map(|run| track_run(run.samples))
+            .collect();
+        moof.traf.push(traf);
+    }
+    let moof_len = moof.encoded_len();
+    for (traf, track_runs) in moof.traf.iter_mut().zip(&tracks) {
+        for (trun, run) in traf.trun.iter_mut().zip(track_runs) {
+            trun.data_offset = Some(
+                moof_len
+                    .checked_add(data_start)
+                    .and_then(|offset| offset.checked_add(run.data_offset))
+                    .and_then(|offset| i32::try_from(offset).ok())
+                    .ok_or(MuxError::DataOffsetOutOfRange {
+                        track_id: run.track_id,
+                    })?,
+            );
+        }
+    }
+
+    Ok(moof)
+}
+
+/// Returns the track run of `samples`, each row carrying the fields of its sample, and the composition time offsets only where one is not zero
+fn track_run(samples: &[Sample]) -> TrackRunBox {
+    let offsets = samples
+        .iter()
+        .any(|sample| sample.properties().sample_composition_time_offset != 0);
+    let mut trun = TrackRunBox::default();
+    trun.version = u8::from(
+        samples
+            .iter()
+            .any(|sample| sample.properties().sample_composition_time_offset < 0),
+    );
+    trun.data_offset = Some(0);
+    trun.samples = TrackRunSamples::Rows {
+        samples: samples
+            .iter()
+            .map(|sample| {
+                let properties = sample.properties();
+                let mut row = TrackRunSample::default();
+                row.sample_duration = Some(properties.sample_duration);
+                row.sample_size = u32::try_from(sample.data().len()).ok();
+                row.sample_flags = Some(properties.sample_flags);
+                row.sample_composition_time_offset =
+                    offsets.then_some(properties.sample_composition_time_offset);
+                row
+            })
+            .collect(),
+    };
+    trun
 }
 
 #[cfg(test)]
