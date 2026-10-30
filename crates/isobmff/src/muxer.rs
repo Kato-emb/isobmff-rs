@@ -349,6 +349,7 @@ mod tests {
     use isobmff_core::{BoxDefinition, FourCc};
 
     use super::Muxer;
+    use crate::demuxer::Demuxer;
     use crate::error::MuxError;
     use crate::file_structure::FileStructure;
     use crate::sample::{Sample, SampleProperties};
@@ -464,6 +465,57 @@ mod tests {
                 written(b"mdat", &[b"ABCDE"]),
             ]
         );
+    }
+
+    #[test]
+    fn the_padding_and_the_degradation_priority_of_samples_carry_from_movie_fragments_into_sample_tables()
+     {
+        let demux = |file: &[u8]| {
+            let mut demuxer = Demuxer::new();
+            let mut samples = Vec::new();
+            while let Some(wanted) = demuxer.wanted_input() {
+                match file.get(usize::try_from(wanted.offset()).unwrap()..) {
+                    Some(input) if !input.is_empty() => {
+                        demuxer.handle_input(wanted.offset(), input).unwrap()
+                    }
+                    Some(_) | None => demuxer.finish().unwrap(),
+                };
+                samples.extend(iter::from_fn(|| demuxer.poll_sample()));
+            }
+            samples
+        };
+        let mux = |file_structure, ftyp, movie, samples: Vec<Sample>| {
+            let mut muxer = Muxer::new(file_structure);
+            muxer.handle_file_type(ftyp).unwrap();
+            muxer.handle_movie(movie).unwrap();
+            muxer.handle_samples(samples).unwrap();
+            muxer.finish().unwrap();
+            output(&mut muxer).concat()
+        };
+        let samples = two_samples().map(|sample| {
+            let mut properties = *sample.properties();
+            properties.sample_flags.sample_padding_value = 5;
+            properties.sample_flags.sample_degradation_priority =
+                u16::try_from(properties.decoding_time).unwrap();
+            Sample::new(properties, sample.into_data())
+        });
+
+        let fragmented = mux(
+            FileStructure::Fragmented {
+                first_sequence_number: 1,
+            },
+            file_type(b"iso6", &[b"iso6", b"mp41"]),
+            one_fragmented_track(),
+            samples.to_vec(),
+        );
+        let not_fragmented = mux(
+            FileStructure::NonFragmented,
+            file_type(b"isom", &[b"isom", b"mp41"]),
+            one_track(),
+            demux(&fragmented),
+        );
+
+        assert_eq!(demux(&not_fragmented), samples);
     }
 
     #[test]

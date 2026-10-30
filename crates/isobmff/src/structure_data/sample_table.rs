@@ -38,9 +38,10 @@ pub(super) fn sample_count(trak: &TrackBox) -> u64 {
 /// chunk starts, the samples of a chunk lying one after another from there
 /// (§8.7.5). The `stss` marks the sync samples, every sample being one where
 /// the track has no `stss` (§8.6.2), and the `sdtp` gives the dependencies of
-/// each (§8.6.4), which make up the `sample_flags` as §8.8.3.1 lays them out.
-/// A missing table declares no sample, and a missing optional one leaves its
-/// fields zero.
+/// each (§8.6.4), the `padb` the bits it is padded with (§8.7.6) and the
+/// `stdp` its degradation priority (§8.5.3), which make up the `sample_flags`
+/// as §8.8.3.1 lays them out. A missing table declares no sample, and a
+/// missing optional one leaves its fields zero.
 ///
 /// # Errors
 ///
@@ -75,6 +76,11 @@ pub(super) fn resolve_track(
         )
     });
     let mut dependencies = stbl.sdtp.as_ref().map(|sdtp| sdtp.entries.iter().copied());
+    let mut paddings = stbl.padb.as_ref().map(|padb| padb.pads.iter().copied());
+    let mut priorities = stbl
+        .stdp
+        .as_ref()
+        .map(|stdp| stdp.priorities.iter().copied());
     let mut sync_samples = stbl
         .stss
         .as_ref()
@@ -105,6 +111,10 @@ pub(super) fn resolve_track(
                 .ok_or_else(|| mismatch(CompositionOffsetBox::BOX_TYPE))?;
             let dependency = next_or_zero(&mut dependencies)
                 .ok_or_else(|| mismatch(SampleDependencyTypeBox::BOX_TYPE))?;
+            let sample_padding_value =
+                next_or_zero(&mut paddings).ok_or_else(|| mismatch(PaddingBitsBox::BOX_TYPE))?;
+            let sample_degradation_priority = next_or_zero(&mut priorities)
+                .ok_or_else(|| mismatch(DegradationPriorityBox::BOX_TYPE))?;
             sample_number = sample_number.saturating_add(1);
             let is_sync_sample = sync_samples.as_mut().is_none_or(|marked| {
                 marked
@@ -134,7 +144,9 @@ pub(super) fn resolve_track(
                         flags.sample_depends_on = dependency.sample_depends_on;
                         flags.sample_is_depended_on = dependency.sample_is_depended_on;
                         flags.sample_has_redundancy = dependency.sample_has_redundancy;
+                        flags.sample_padding_value = sample_padding_value;
                         flags.sample_is_non_sync_sample = !is_sync_sample;
+                        flags.sample_degradation_priority = sample_degradation_priority;
                         flags
                     },
                     sample_description_index: run.sample_description_index,
@@ -164,6 +176,14 @@ pub(super) fn resolve_track(
         (
             dependencies.and_then(|mut table| table.next()).is_some(),
             SampleDependencyTypeBox::BOX_TYPE,
+        ),
+        (
+            paddings.and_then(|mut table| table.next()).is_some(),
+            PaddingBitsBox::BOX_TYPE,
+        ),
+        (
+            priorities.and_then(|mut table| table.next()).is_some(),
+            DegradationPriorityBox::BOX_TYPE,
         ),
         (
             sync_samples.and_then(|mut table| table.next()).is_some(),
@@ -390,8 +410,10 @@ impl TrackTable {
     /// Fills the tables of `stbl` with what the table declares
     ///
     /// The `ctts` is left out where every composition time offset is zero, the
-    /// `stss` where every sample is a sync sample, and the `sdtp` where no sample
-    /// states a dependency (§8.6.1.3, §8.6.2, §8.6.4).
+    /// `stss` where every sample is a sync sample, the `sdtp` where no sample
+    /// states a dependency, the `padb` where no sample is padded, and the `stdp`
+    /// where every degradation priority is zero (§8.6.1.3, §8.6.2, §8.6.4,
+    /// §8.7.6, §8.5.3).
     pub(super) fn fill(self, stbl: &mut SampleTableBox) {
         let mut stts = TimeToSampleBox::default();
         stts.entries = runs_of(self.samples.iter().map(|sample| sample.sample_duration))
@@ -520,6 +542,34 @@ impl TrackTable {
                     .map(|sample| dependency(&sample.sample_flags))
                     .collect();
                 sdtp
+            });
+
+        stbl.padb = self
+            .samples
+            .iter()
+            .any(|sample| sample.sample_flags.sample_padding_value != 0)
+            .then(|| {
+                let mut padb = PaddingBitsBox::default();
+                padb.pads = self
+                    .samples
+                    .iter()
+                    .map(|sample| sample.sample_flags.sample_padding_value)
+                    .collect();
+                padb
+            });
+
+        stbl.stdp = self
+            .samples
+            .iter()
+            .any(|sample| sample.sample_flags.sample_degradation_priority != 0)
+            .then(|| {
+                let mut stdp = DegradationPriorityBox::default();
+                stdp.priorities = self
+                    .samples
+                    .iter()
+                    .map(|sample| sample.sample_flags.sample_degradation_priority)
+                    .collect();
+                stdp
             });
     }
 }

@@ -11,7 +11,9 @@ mod tests {
     use isobmff::boxes::{MovieBox, MovieFragmentBox};
     use isobmff::structure_data::movie_fragment_random_access_start;
     use isobmff::{BoxDefinition, BoxType, Boxes, DemuxError, DemuxEvent, Demuxer, SampleLocation};
-    use isobmff_test_support::{ConformanceFile, conformance_files, ffprobe_packets};
+    use isobmff_test_support::{
+        ConformanceFile, conformance_files, ffprobe_packets, gpac_children,
+    };
 
     /// What a [`Demuxer`] read of a file
     struct Resolved {
@@ -325,5 +327,63 @@ mod tests {
             "{refused:?}"
         );
         assert_eq!(held(&resolved.demuxer), read_whole);
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn the_padding_of_each_sample_is_what_gpac_reports_of_the_padb() {
+        let mut checked = 0;
+        for ConformanceFile {
+            name,
+            bytes,
+            report,
+            ..
+        } in conformance_files()
+        {
+            let padded: Vec<_> = report
+                .pointer("/IsoMediaFile/MovieBox")
+                .map(gpac_children)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|trak| {
+                    let padb = trak
+                        .pointer("/MediaBox/MediaInformationBox/SampleTableBox/PaddingBitsBox")?;
+                    Some((trak, padb))
+                })
+                .collect();
+            if padded.is_empty() {
+                continue;
+            }
+            let locations = resolve(&bytes).expect(&name).locations;
+            for (trak, padb) in padded {
+                let track_id: u32 = trak
+                    .pointer("/TrackHeaderBox/@TrackID")
+                    .and_then(|track_id| track_id.as_str()?.parse().ok())
+                    .unwrap();
+                let reported: Vec<u8> = padb["PaddingBitsEntry"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|entry| entry["@PaddingBits"].as_str().unwrap().parse().unwrap())
+                    .collect();
+                let mut samples: Vec<_> = locations
+                    .iter()
+                    .map(SampleLocation::properties)
+                    .filter(|properties| properties.track_id == track_id)
+                    .map(|properties| {
+                        (
+                            properties.decoding_time,
+                            properties.sample_flags.sample_padding_value,
+                        )
+                    })
+                    .collect();
+                samples.sort_unstable();
+                let paddings: Vec<u8> = samples.into_iter().map(|(_, padding)| padding).collect();
+
+                assert_eq!(paddings, reported, "{name}: track {track_id}");
+                checked += 1;
+            }
+        }
+        assert_ne!(checked, 0, "no file has a padb");
     }
 }
