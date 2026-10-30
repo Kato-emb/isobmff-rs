@@ -79,7 +79,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         offset = end;
     }
     loop {
-        let event = demuxer.finish();
+        let event = demuxer.finish(offset);
         if let Ok(Some(event)) = &event {
             print_box(event);
         }
@@ -91,6 +91,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     for (track_id, (samples, bytes)) in gathered {
         println!("track {track_id}: {samples} samples, {bytes} bytes");
+    }
+    for leniency in demuxer.leniencies() {
+        println!("read past: {leniency}");
     }
     Ok(())
 }

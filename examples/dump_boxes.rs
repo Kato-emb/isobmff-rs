@@ -30,6 +30,7 @@ const CONTAINERS: [&[u8; 4]; 14] = [
 fn main() -> Result<(), Box<dyn Error>> {
     let path = env::args().nth(1).ok_or("usage: dump_boxes <file>")?;
     let mut file = File::open(path)?;
+    let file_length = file.metadata()?.len();
     let mut reader = BoxReader::new();
     let mut buffer = vec![0; 64 * 1024];
     let mut gathering: Option<u64> = None;
@@ -57,7 +58,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    if let Some(event) = reader.finish()? {
+    if let Some(event) = reader.finish(file_length)? {
         list(&mut reader, event, &mut gathering)?;
     }
 

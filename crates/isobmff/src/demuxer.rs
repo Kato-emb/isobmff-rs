@@ -168,13 +168,19 @@ impl Demuxer {
         }
     }
 
-    /// Ends the file at the offset the demuxer wants, and returns the event of the box it ends
+    /// Ends the file at file offset `end_offset`, and returns the event of the box it ends
+    ///
+    /// `end_offset` is where the bytes of the file end: the length of the
+    /// file for a caller that reads wherever the demuxer wants, the number of
+    /// bytes passed for one that passes the file as it comes.
     ///
     /// A box whose size runs to the end of the file ends here, so the event
     /// goes where those of [`handle_input`](Self::handle_input) go: a `moov`
     /// that runs to the end of the file is reported here, and the caller calls
     /// `finish` again. Once it returns `None`, the demuxer wants no more
-    /// input.
+    /// input. A box the demuxer skips, and which the file ends inside, ends
+    /// there as well, as a [`Leniency::TruncatedBox`] that
+    /// [`leniencies`](Self::leniencies) returns.
     ///
     /// # Errors
     ///
@@ -184,8 +190,8 @@ impl Demuxer {
     ///   no event, and a sample lacks bytes, as for
     ///   [`MediaDataReader::finish`].
     /// * The failure the demuxer failed with before.
-    pub fn finish(&mut self) -> Result<Option<DemuxEvent>, DemuxError> {
-        if let Some(box_event) = self.boxes.finish()?
+    pub fn finish(&mut self, end_offset: u64) -> Result<Option<DemuxEvent>, DemuxError> {
+        if let Some(box_event) = self.boxes.finish(end_offset)?
             && let Some(event) = self.demux(box_event)?
         {
             return Ok(Some(event));
@@ -231,7 +237,7 @@ impl Demuxer {
         if let Some(failure) = self.boxes.failure() {
             return Err(failure);
         }
-        self.boxes = BoxReader::starting_at(offset);
+        self.boxes.restart_at(offset);
         self.structure_data.resume();
         self.media_data.clear();
         Ok(())
@@ -275,10 +281,14 @@ impl Demuxer {
     /// Returns what the demuxer has read past in the file rather than refuse it
     ///
     /// Each layer of the demuxer keeps what it read past in the order it read
-    /// it, and these are the leniencies of each layer in turn, such as those
-    /// of [`StructureDataReader::leniencies`].
+    /// it, and these are the leniencies of each layer in turn: those of
+    /// [`StructureDataReader::leniencies`], then those of
+    /// [`BoxReader::leniencies`].
     pub fn leniencies(&self) -> impl Iterator<Item = &Leniency> {
-        self.structure_data.leniencies().iter()
+        self.structure_data
+            .leniencies()
+            .iter()
+            .chain(self.boxes.leniencies())
     }
 
     /// Makes an event of the reader of the boxes into the event of the demuxer, if it makes one
@@ -528,7 +538,7 @@ mod tests {
                 }
                 poll(demuxer, &mut read.samples);
             }
-            let Some(event) = demuxer.finish()? else {
+            let Some(event) = demuxer.finish(to_u64(file.len()))? else {
                 break;
             };
             react(demuxer, &event);
@@ -553,7 +563,7 @@ mod tests {
             loop {
                 let event = match piece {
                     Some(piece) => demuxer.handle_input(offset, piece),
-                    None => demuxer.finish(),
+                    None => demuxer.finish(offset),
                 };
                 poll(demuxer, &mut samples);
                 match event {
@@ -917,7 +927,7 @@ mod tests {
                 .unwrap_or_default();
             let input = rest.get(..piece_lens.next().unwrap()).unwrap_or(rest);
             let event = match input {
-                [] => demuxer.finish(),
+                [] => demuxer.finish(to_u64(file.len())),
                 input => demuxer.handle_input(wanted.offset(), input),
             };
             poll(&mut demuxer, &mut samples);
@@ -946,7 +956,7 @@ mod tests {
         assert_eq!(stream(&mut demuxer, &file, 7), (Vec::new(), Err(failure)));
         assert_eq!(demuxer.wanted_input(), None);
         assert_eq!(demuxer.handle_input(0, &file).map(|_| ()), Err(failure));
-        assert_eq!(demuxer.finish().map(|_| ()), Err(failure));
+        assert_eq!(demuxer.finish(to_u64(file.len())).map(|_| ()), Err(failure));
     }
 
     #[test]
@@ -1255,6 +1265,39 @@ mod tests {
     }
 
     #[test]
+    fn a_file_cut_short_in_a_skipped_box_reads_to_its_end_and_is_kept_once_as_read_past() {
+        let head = [file_type(), fragmented_movie()].concat();
+        let head_len = to_u64(head.len());
+        let free_at = head_len.saturating_add(to_u64(fragment(1, None).len()));
+        // A `free` of 16 bytes, of which the file holds 10
+        let file = [head, fragment(1, None), b"\0\0\0\x10freeAA".to_vec()].concat();
+        let truncated = Leniency::TruncatedBox {
+            box_type: BoxType::compact(*b"free"),
+            byte_range: ByteRange::new(free_at, Some(16)),
+            available_bytes: 10,
+        };
+        let mut demuxer = Demuxer::new();
+
+        let first = read(&mut demuxer, &file, 7).unwrap();
+        assert_eq!(
+            (first.seen.last(), demuxer.leniencies().collect::<Vec<_>>()),
+            (
+                Some(&Seen::Other(
+                    BoxType::compact(*b"free"),
+                    ByteRange::new(free_at, Some(16))
+                )),
+                vec![&truncated]
+            )
+        );
+
+        demuxer.resume_at(head_len).unwrap();
+        assert_eq!(demuxer.leniencies().collect::<Vec<_>>(), [&truncated]);
+        demuxer.resume_at(free_at).unwrap();
+        read(&mut demuxer, &file, 7).unwrap();
+        assert_eq!(demuxer.leniencies().collect::<Vec<_>>(), [&truncated]);
+    }
+
+    #[test]
     fn a_movie_that_runs_to_the_end_of_the_file_is_reported_by_finish() {
         let (file, _) = movie_at_end();
         let mut file = file;
@@ -1287,7 +1330,7 @@ mod tests {
             "{failure:?}"
         );
         assert_eq!(demuxer.wanted_input(), None);
-        assert_eq!(demuxer.finish().err(), failure.err());
+        assert_eq!(demuxer.finish(to_u64(file.len())).err(), failure.err());
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! [`BoxReader`], which frames the boxes of a file out of bytes that arrive in pieces
 
 use alloc::vec::Vec;
+use core::mem;
 use core::ops::Range;
 
 use isobmff_core::{BoxHeader, ErrorKind, RawBox};
@@ -9,6 +10,7 @@ use crate::byte_range::ByteRange;
 use crate::error::DemuxError;
 use crate::framing::box_event::BoxEvent;
 use crate::framing::to_u64;
+use crate::leniency::Leniency;
 
 /// Length of the `size` and `boxtype` fields every header opens with
 const SHORTEST_HEADER: u64 = 8;
@@ -29,7 +31,9 @@ const SHORTEST_HEADER: u64 = 8;
 ///
 /// A box whose size runs to the end of the file is closed by
 /// [`finish`](Self::finish), which the caller calls once the file has no
-/// more bytes.
+/// more bytes. A skipped box the file ends inside is read as ending there,
+/// and kept as a [`Leniency::TruncatedBox`] that
+/// [`leniencies`](Self::leniencies) returns.
 ///
 /// # Examples
 ///
@@ -73,7 +77,8 @@ const SHORTEST_HEADER: u64 = 8;
 /// }
 ///
 /// // The file has no more bytes, which ends the `mdat`
-/// assert_eq!(reader.finish()?, Some(BoxEvent::End));
+/// let file_length = u64::try_from(file.len()).unwrap();
+/// assert_eq!(reader.finish(file_length)?, Some(BoxEvent::End));
 /// assert_eq!(brands, b"isom\0\0\0\0");
 /// assert_eq!(media_data, b"samples");
 /// # Ok::<(), DemuxError>(())
@@ -87,6 +92,7 @@ pub struct BoxReader {
     gathered: Vec<u8>,
     /// Whether [`finish`](Self::finish) has ended the file
     at_end_of_file: bool,
+    leniencies: Vec<Leniency>,
 }
 
 /// How far the reader is through the box it reads
@@ -129,7 +135,7 @@ impl BoxReader {
     }
 
     /// Creates a reader that wants the file from file offset `position`, where a box starts
-    pub(crate) const fn starting_at(position: u64) -> Self {
+    const fn starting_at(position: u64) -> Self {
         Self {
             position,
             progress: Progress::Header {
@@ -137,7 +143,16 @@ impl BoxReader {
             },
             gathered: Vec::new(),
             at_end_of_file: false,
+            leniencies: Vec::new(),
         }
+    }
+
+    /// Makes the reader want the file from file offset `position`, where a box starts, keeping what it has read past
+    pub(crate) fn restart_at(&mut self, position: u64) {
+        *self = Self {
+            leniencies: mem::take(&mut self.leniencies),
+            ..Self::starting_at(position)
+        };
     }
 
     /// Returns the bytes the reader wants next, or `None` once it wants no more
@@ -224,28 +239,70 @@ impl BoxReader {
         self.read(rest)
     }
 
-    /// Ends the file at the offset the reader wants, and returns the event that closes the box being read
+    /// Ends the file at file offset `end_offset`, and returns the event that closes the box being read
+    ///
+    /// `end_offset` is where the bytes of the file end: the length of the
+    /// file for a caller that reads wherever the reader wants, the number of
+    /// bytes passed for one that passes the file as it comes. The reader
+    /// wants nothing past it.
     ///
     /// The event is a [`BoxEvent::End`], or `None` when the file ends between
     /// boxes. A box whose size runs to the end of the file ends here, and so
     /// may one whose payload has nothing left to arrive, so the event goes
     /// where those of [`handle_input`](Self::handle_input) go. A skipped box
-    /// ends where its header says. The reader then wants no more input.
+    /// ends here too: where the file ends before the total its header
+    /// declares, the reader keeps a [`Leniency::TruncatedBox`] that
+    /// [`leniencies`](Self::leniencies) returns, once however often the box is
+    /// read. The reader then wants no more input.
     ///
     /// # Errors
     ///
     /// * [`UndecidedBox`](DemuxError::UndecidedBox): the last header is not
     ///   answered yet. The reader is left as it was.
+    /// * [`UnwantedInput`](DemuxError::UnwantedInput): `end_offset` is past
+    ///   the offset the reader wants, so the file has bytes the reader was not
+    ///   passed. The reader is left as it was.
     /// * [`UnfinishedHeader`](DemuxError::UnfinishedHeader): the file ends
     ///   inside a header.
     /// * [`UnfinishedBox`](DemuxError::UnfinishedBox): the file ends before the
     ///   total a streamed or gathered box declares.
     /// * The failure the reader failed with before.
-    pub fn finish(&mut self) -> Result<Option<BoxEvent<'static>>, DemuxError> {
+    pub fn finish(&mut self, end_offset: u64) -> Result<Option<BoxEvent<'static>>, DemuxError> {
         self.check_answered()?;
+        if let Some(wanted) = self.wanted_input()
+            && end_offset > wanted.offset()
+        {
+            return Err(DemuxError::UnwantedInput {
+                offset: end_offset,
+                wanted,
+            });
+        }
         self.leave_gathered();
+        if let Progress::Payload {
+            header,
+            offset,
+            end: Some(end),
+            answer: Answer::Skip,
+        } = self.progress
+            && end_offset < end
+        {
+            let truncated = Leniency::TruncatedBox {
+                box_type: header.box_type(),
+                byte_range: ByteRange::new(offset, Some(end.saturating_sub(offset))),
+                available_bytes: end_offset.saturating_sub(offset),
+            };
+            if !self.leniencies.contains(&truncated) {
+                self.leniencies.push(truncated);
+            }
+        }
         self.at_end_of_file = true;
         self.read(&[])
+    }
+
+    /// Returns what the reader has read past in the file rather than refuse it, in the order it read it
+    #[must_use]
+    pub fn leniencies(&self) -> &[Leniency] {
+        &self.leniencies
     }
 
     /// Gathers the payload of the box just opened into one [`RawBox`], which [`gathered_box`](Self::gathered_box) returns after its [`BoxEvent::End`]
@@ -561,6 +618,8 @@ mod tests {
     use crate::error::DemuxError;
     use crate::framing::box_event::BoxEvent;
     use crate::framing::header_forms::{PAYLOAD, every_header_form};
+    use crate::framing::to_u64;
+    use crate::leniency::Leniency;
 
     /// What a caller answers each header with
     #[derive(Clone, Copy)]
@@ -599,7 +658,7 @@ mod tests {
                 record(&mut reader, event, answer, &mut recorded)?;
             }
         }
-        if let Some(event) = reader.finish()? {
+        if let Some(event) = reader.finish(to_u64(file.len()))? {
             record(&mut reader, event, answer, &mut recorded)?;
         }
         Ok(recorded)
@@ -735,7 +794,7 @@ mod tests {
         while let Some(event) = reader.handle_input(0, &file).unwrap() {
             record(&mut reader, event, Answer::Stream, &mut recorded).unwrap();
         }
-        if let Some(event) = reader.finish().unwrap() {
+        if let Some(event) = reader.finish(to_u64(file.len())).unwrap() {
             record(&mut reader, event, Answer::Stream, &mut recorded).unwrap();
         }
         assert_eq!(Ok(recorded), read(&file, |_| 1, Answer::Stream));
@@ -777,6 +836,68 @@ mod tests {
             reader.skip().unwrap();
         }
         assert_eq!(reader.wanted_input(), None);
+    }
+
+    /// Returns how a reader that skips the first box of `file` finishes it at its end, and what it read past
+    fn skipped_and_finished(
+        file: &[u8],
+    ) -> (Result<Option<BoxEvent<'static>>, DemuxError>, Vec<Leniency>) {
+        let mut reader = BoxReader::new();
+        if let Some(BoxEvent::Header(_)) = reader.handle_input(0, file).unwrap() {
+            reader.skip().unwrap();
+        }
+        (
+            reader.finish(to_u64(file.len())),
+            reader.leniencies().to_vec(),
+        )
+    }
+
+    #[test]
+    fn a_skipped_box_the_file_ends_inside_ends_there_and_is_kept_as_read_past() {
+        // A `free` of 16 bytes, of which the file holds 12
+        assert_eq!(
+            skipped_and_finished(b"\0\0\0\x10freeAAAA"),
+            (
+                Ok(Some(BoxEvent::End)),
+                vec![Leniency::TruncatedBox {
+                    box_type: BoxType::compact(*b"free"),
+                    byte_range: ByteRange::new(0, Some(16)),
+                    available_bytes: 12,
+                }]
+            )
+        );
+    }
+
+    #[test]
+    fn a_skipped_box_the_file_holds_whole_or_that_runs_to_its_end_is_not_read_past() {
+        let finished = skipped_and_finished;
+
+        assert_eq!(
+            [
+                finished(b"\0\0\0\x0cfreeAAAA"),
+                finished(b"\0\0\0\0mdatAAAA")
+            ],
+            [
+                (Ok(Some(BoxEvent::End)), Vec::new()),
+                (Ok(Some(BoxEvent::End)), Vec::new())
+            ]
+        );
+    }
+
+    #[test]
+    fn a_file_said_to_end_past_the_wanted_offset_is_refused_and_the_reader_left_as_it_was() {
+        let mut reader = BoxReader::new();
+        if let Some(BoxEvent::Header(_)) = reader.handle_input(0, b"\0\0\0\x0cfreeAAAA").unwrap() {
+            reader.skip().unwrap();
+        }
+        let wanted = ByteRange::new(12, None);
+
+        assert_eq!(
+            reader.finish(20),
+            Err(DemuxError::UnwantedInput { offset: 20, wanted })
+        );
+        assert_eq!(reader.wanted_input(), Some(wanted));
+        assert_eq!(reader.finish(12), Ok(Some(BoxEvent::End)));
     }
 
     #[test]
@@ -824,7 +945,7 @@ mod tests {
         );
         assert_eq!(reader.wanted_input(), None);
         assert_eq!(reader.handle_input(8, b"more").err(), Some(failure));
-        assert_eq!(reader.finish().err(), Some(failure));
+        assert_eq!(reader.finish(8).err(), Some(failure));
     }
 
     #[test]
@@ -846,7 +967,7 @@ mod tests {
         assert_eq!(reader.handle_input(8, input), Ok(Some(BoxEvent::End)));
         assert_eq!(reader.handle_input(8, input), Err(failure));
         assert_eq!(reader.wanted_input(), None);
-        assert_eq!(reader.finish(), Err(failure));
+        assert_eq!(reader.finish(12), Err(failure));
     }
 
     #[test]
@@ -857,8 +978,8 @@ mod tests {
             needed_bytes: 16,
             available_bytes: 10,
         };
-        assert_eq!(reader.finish().err(), Some(failure));
-        assert_eq!(reader.finish().err(), Some(failure));
+        assert_eq!(reader.finish(10).err(), Some(failure));
+        assert_eq!(reader.finish(10).err(), Some(failure));
     }
 
     #[test]
@@ -877,7 +998,7 @@ mod tests {
     #[test]
     fn a_file_ending_between_boxes_finishes_with_no_events() {
         let mut reader = BoxReader::new();
-        assert_eq!(reader.finish(), Ok(None));
+        assert_eq!(reader.finish(0), Ok(None));
         assert_eq!(reader.wanted_input(), None);
     }
 
@@ -921,7 +1042,7 @@ mod tests {
             box_type: BoxType::compact(*b"free"),
         };
         assert_eq!(reader.handle_input(8, b"AAAA").err(), Some(undecided));
-        assert_eq!(reader.finish().err(), Some(undecided));
+        assert_eq!(reader.finish(8).err(), Some(undecided));
     }
 
     #[test]

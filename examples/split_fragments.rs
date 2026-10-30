@@ -126,6 +126,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(out_dir)?;
 
     let mut file = File::open(path)?;
+    let file_length = file.metadata()?.len();
     let mut reader = BoxReader::new();
     let mut buffer = vec![0; 64 * 1024];
     let mut splitter = Splitter {
@@ -160,7 +161,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    if let Some(event) = reader.finish()? {
+    if let Some(event) = reader.finish(file_length)? {
         splitter.handle(&mut reader, event)?;
     }
     splitter.finish()?;

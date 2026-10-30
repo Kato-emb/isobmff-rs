@@ -56,6 +56,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         _ => return Err(usage.into()),
     };
     let mut source = File::open(source)?;
+    let source_length = source.metadata()?.len();
     let mut destination = Destination {
         file: File::create(destination)?,
         written: 0,
@@ -74,7 +75,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             buffered_at = wanted.offset();
         }
         let event = match buffer.get(..buffered).ok_or("read past the buffer")? {
-            [] => demuxer.finish(),
+            [] => demuxer.finish(source_length),
             input => demuxer.handle_input(buffered_at, input),
         };
         pending.extend(std::iter::from_fn(|| demuxer.poll_sample()));

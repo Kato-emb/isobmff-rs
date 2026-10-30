@@ -18,7 +18,7 @@
 //!     let input = file.get(usize::try_from(wanted.offset())?..).unwrap_or_default();
 //!     // Past the last byte, the file ends, and so may a box that runs to its end
 //!     let event = match input {
-//!         [] => demuxer.finish(),
+//!         [] => demuxer.finish(u64::try_from(file.len())?),
 //!         input => demuxer.handle_input(wanted.offset(), input),
 //!     };
 //!     // The samples whose bytes have arrived, before a failure of the call is returned
@@ -67,9 +67,9 @@
 //!     }
 //!     offset = end;
 //! }
-//! // The input has ended, which only the caller knows
+//! // The input has ended, which only the caller knows, at the offset past the last byte passed
 //! loop {
-//!     let event = demuxer.finish();
+//!     let event = demuxer.finish(offset);
 //!     samples.extend(core::iter::from_fn(|| demuxer.poll_sample()));
 //!     if event?.is_none() { break; }
 //! }
@@ -92,9 +92,9 @@
 //! [`HeldBytesLimitExceeded`](DemuxError::HeldBytesLimitExceeded).
 //!
 //! Where the tables of a sample table state different numbers of samples,
-//! the demuxer reads the file as conforming readers do rather than refuse
-//! it, and keeps each such [`Leniency`] for the caller to ask after with
-//! [`Demuxer::leniencies`].
+//! or the file ends inside a box the demuxer skips, the demuxer reads the
+//! file as conforming readers do rather than refuse it, and keeps each such
+//! [`Leniency`] for the caller to ask after with [`Demuxer::leniencies`].
 //!
 //! A caller that can seek reads a fragmented movie file from any of its
 //! fragments. The `mfra` at the end of the file lists where they start
