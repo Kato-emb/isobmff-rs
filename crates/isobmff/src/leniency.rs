@@ -4,6 +4,8 @@ use core::fmt;
 
 use isobmff_core::BoxType;
 
+use crate::byte_range::ByteRange;
+
 /// Disagreement in a file that a reader read past, as conforming readers do, rather than refuse the file
 ///
 /// A reader keeps each leniency it took, so a caller can ask after the fact
@@ -45,6 +47,20 @@ pub enum Leniency {
         box_type: BoxType,
         /// How the table disagrees with the samples of the track
         kind: SampleTableDisagreement,
+    },
+    /// Box whose payload was skipped, and which the file ends before the total its header declares
+    ///
+    /// The file ends inside the box, as it does where a file is cut short
+    /// in a `free` box or in a box the reader does not know. The box is read
+    /// as ending where the file ends.
+    #[non_exhaustive]
+    TruncatedBox {
+        /// `boxtype` of the box
+        box_type: BoxType,
+        /// Where the box lies in the file, header included, as its header declares
+        byte_range: ByteRange,
+        /// Number of bytes of the box the file holds, header included
+        available_bytes: u64,
     },
 }
 
@@ -98,6 +114,15 @@ impl fmt::Display for Leniency {
             } => write!(
                 formatter,
                 "{box_type} of track {track_id} marks {sample_numbers} sample numbers out of order"
+            ),
+            Self::TruncatedBox {
+                box_type,
+                byte_range,
+                available_bytes,
+            } => write!(
+                formatter,
+                "file ends {available_bytes} bytes into the {box_type} box at {}",
+                byte_range.offset()
             ),
         }
     }

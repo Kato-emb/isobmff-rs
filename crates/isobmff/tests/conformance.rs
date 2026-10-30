@@ -89,7 +89,7 @@ mod tests {
                 write_back(&mut writer, &reader, event, answer, &mut written);
             }
         }
-        if let Some(event) = reader.finish().unwrap() {
+        if let Some(event) = reader.finish(u64::try_from(file.len()).unwrap()).unwrap() {
             write_back(&mut writer, &reader, event, answer, &mut written);
         }
         writer.finish().unwrap();
@@ -231,7 +231,7 @@ mod tests {
             gathered.poll(&mut demuxer);
             offset = offset.saturating_add(u64::try_from(piece.len()).unwrap());
         }
-        while let Some(event) = demuxer.finish().unwrap() {
+        while let Some(event) = demuxer.finish(offset).unwrap() {
             gathered.see(event);
         }
         gathered.poll(&mut demuxer);
@@ -249,7 +249,7 @@ mod tests {
             });
             let input = piece(file, wanted, len);
             let event = match input {
-                [] => demuxer.finish().unwrap(),
+                [] => demuxer.finish(u64::try_from(file.len()).unwrap()).unwrap(),
                 input => demuxer.handle_input(wanted.offset(), input).unwrap(),
             };
             if let Some(event) = event {
@@ -314,7 +314,7 @@ mod tests {
         while let Some(wanted) = demuxer.wanted_input() {
             let input = piece(file, wanted, usize::MAX);
             let event = match input {
-                [] => demuxer.finish(),
+                [] => demuxer.finish(u64::try_from(file.len()).unwrap()),
                 input => demuxer.handle_input(wanted.offset(), input),
             };
             samples.extend(iter::from_fn(|| demuxer.poll_sample()));

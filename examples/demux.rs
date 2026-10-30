@@ -29,6 +29,7 @@ const LISTED_SAMPLES: usize = 3;
 fn main() -> Result<(), Box<dyn Error>> {
     let path = env::args().nth(1).ok_or("usage: demux <file>")?;
     let mut file = File::open(path)?;
+    let file_length = file.metadata()?.len();
     let mut demuxer = Demuxer::new();
     let mut buffer = vec![0; 64 * 1024];
     let (mut buffered_at, mut buffered) = (0_u64, 0_usize);
@@ -42,7 +43,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             buffered_at = wanted.offset();
         }
         let event = match buffer.get(..buffered).ok_or("read past the buffer")? {
-            [] => demuxer.finish(),
+            [] => demuxer.finish(file_length),
             input => demuxer.handle_input(buffered_at, input),
         };
         while let Some(sample) = demuxer.poll_sample() {
@@ -57,6 +58,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     list_samples(&samples);
+    for leniency in demuxer.leniencies() {
+        println!("read past: {leniency}");
+    }
     Ok(())
 }
 

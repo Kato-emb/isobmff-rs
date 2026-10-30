@@ -74,7 +74,7 @@ use crate::structure_data::{MovieFragmentWriter, SampleTableWriter, StructureDat
 /// while let Some(wanted) = demuxer.wanted_input() {
 ///     let input = file.get(usize::try_from(wanted.offset())?..).unwrap_or_default();
 ///     let event = match input {
-///         [] => demuxer.finish(),
+///         [] => demuxer.finish(u64::try_from(file.len())?),
 ///         input => demuxer.handle_input(wanted.offset(), input),
 ///     };
 ///     samples.extend(core::iter::from_fn(|| demuxer.poll_sample()));
@@ -477,7 +477,7 @@ mod tests {
                 Some(input) if !input.is_empty() => {
                     demuxer.handle_input(wanted.offset(), input).unwrap()
                 }
-                Some(_) | None => demuxer.finish().unwrap(),
+                Some(_) | None => demuxer.finish(u64::try_from(file.len()).unwrap()).unwrap(),
             };
             samples.extend(iter::from_fn(|| demuxer.poll_sample()));
         }

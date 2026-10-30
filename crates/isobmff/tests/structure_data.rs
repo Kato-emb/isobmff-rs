@@ -10,7 +10,10 @@ mod tests {
 
     use isobmff::boxes::{MovieBox, MovieFragmentBox};
     use isobmff::structure_data::movie_fragment_random_access_start;
-    use isobmff::{BoxDefinition, BoxType, Boxes, DemuxError, DemuxEvent, Demuxer, SampleLocation};
+    use isobmff::{
+        BoxDefinition, BoxType, Boxes, ByteRange, DemuxError, DemuxEvent, Demuxer, Leniency,
+        SampleLocation,
+    };
     use isobmff_test_support::{
         ConformanceFile, conformance_files, ffprobe_packets, gpac_children,
     };
@@ -51,7 +54,7 @@ mod tests {
                 .get(usize::try_from(wanted.offset()).unwrap()..)
                 .unwrap_or_default();
             let events = match input {
-                [] => demuxer.finish()?,
+                [] => demuxer.finish(u64::try_from(file.len()).unwrap())?,
                 input => demuxer.handle_input(wanted.offset(), input)?,
             };
             if let Some(event) = events {
@@ -387,5 +390,142 @@ mod tests {
             }
         }
         assert_ne!(checked, 0, "no file has a padb");
+    }
+
+    /// Reads `file` with a [`Demuxer`] from wherever it wants, gathering every sample, and returns how the read ended and what the demuxer read past
+    fn read_whole(file: &[u8]) -> (Result<(), DemuxError>, Vec<Leniency>) {
+        let mut demuxer = Demuxer::new();
+        let ending = (|| {
+            while let Some(wanted) = demuxer.wanted_input() {
+                let input = file
+                    .get(usize::try_from(wanted.offset()).unwrap()..)
+                    .unwrap_or_default();
+                match input {
+                    [] => demuxer.finish(u64::try_from(file.len()).unwrap())?,
+                    input => demuxer.handle_input(wanted.offset(), input)?,
+                };
+                while demuxer.poll_sample().is_some() {}
+            }
+            Ok(())
+        })();
+        (ending, demuxer.leniencies().cloned().collect())
+    }
+
+    /// Reads `file` as a caller that cannot seek, passing it in pieces of `piece_len` bytes and discarding every track, and returns what the demuxer read past
+    fn read_in_order(file: &[u8], piece_len: usize) -> Result<Vec<Leniency>, DemuxError> {
+        let mut demuxer = Demuxer::new();
+        let mut offset = 0_u64;
+        let discard = |demuxer: &mut Demuxer, event: Option<DemuxEvent>| {
+            if let Some(DemuxEvent::Movie { .. }) = event {
+                let track_ids: Vec<_> = demuxer
+                    .movie()
+                    .iter()
+                    .flat_map(|movie| &movie.trak)
+                    .map(|trak| trak.tkhd.track_id)
+                    .collect();
+                for track_id in track_ids {
+                    demuxer.discard_track(track_id);
+                }
+            }
+        };
+        for piece in file.chunks(piece_len) {
+            let end = offset.saturating_add(u64::try_from(piece.len()).unwrap());
+            loop {
+                let event = demuxer.handle_input(offset, piece)?;
+                let more = event.is_some();
+                discard(&mut demuxer, event);
+                if !more
+                    && !demuxer
+                        .wanted_input()
+                        .is_some_and(|wanted| (offset..end).contains(&wanted.offset()))
+                {
+                    break;
+                }
+            }
+            offset = end;
+        }
+        while let Some(event) = demuxer.finish(offset)? {
+            discard(&mut demuxer, Some(event));
+        }
+        Ok(demuxer.leniencies().cloned().collect())
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn a_file_read_in_order_to_its_end_is_read_without_a_leniency() {
+        for ConformanceFile { name, bytes, .. } in conformance_files() {
+            if EXTERNAL_DATA.iter().any(|(external, ..)| *external == name) {
+                continue;
+            }
+            for piece_len in [7, 4096] {
+                assert_eq!(
+                    read_in_order(&bytes, piece_len),
+                    Ok(Vec::new()),
+                    "{name} in pieces of {piece_len}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn a_file_cut_short_in_a_box_it_skips_reads_and_one_cut_short_in_what_it_reads_fails() {
+        let ConformanceFile { bytes, .. } = conformance_files()
+            .into_iter()
+            .find(|file| file.name == "01_simple.mp4")
+            .unwrap();
+        // ftyp at 0, moov at 24, mdat at 5724, then a free of 51 bytes at 199312 to the end
+        assert_eq!(bytes.len(), 199_363);
+        let cut = |length: usize| bytes.get(..length).unwrap();
+        let with_junk = [bytes.as_slice(), b"\0\x10\0\0junk0123"].concat();
+        let truncated = |box_type: &[u8; 4], offset, total, available_bytes: u64| {
+            vec![Some((
+                BoxType::compact(*box_type),
+                ByteRange::new(offset, Some(total)),
+                available_bytes,
+            ))]
+        };
+        let read_past = |file: &[u8]| {
+            let (ending, leniencies) = read_whole(file);
+            let truncated: Vec<_> = leniencies
+                .iter()
+                .map(|leniency| match leniency {
+                    Leniency::TruncatedBox {
+                        box_type,
+                        byte_range,
+                        available_bytes,
+                        ..
+                    } => Some((*box_type, *byte_range, *available_bytes)),
+                    Leniency::SampleTable { .. } | _ => None,
+                })
+                .collect();
+            (ending, truncated)
+        };
+
+        assert_eq!(
+            [read_past(cut(199_343)), read_past(&with_junk)],
+            [
+                (Ok(()), truncated(b"free", 199_312, 51, 31)),
+                (Ok(()), truncated(b"junk", 199_363, 0x0010_0000, 12)),
+            ]
+        );
+        let in_a_sample = read_whole(cut(100_000)).0;
+        assert!(
+            matches!(in_a_sample, Err(DemuxError::UnfinishedSample { .. })),
+            "{in_a_sample:?}"
+        );
+        let in_the_movie = read_whole(cut(1000)).0;
+        assert!(
+            matches!(
+                in_the_movie,
+                Err(DemuxError::UnfinishedBox {
+                    box_type,
+                    needed_bytes: 5700,
+                    available_bytes: 976,
+                    ..
+                }) if box_type == MovieBox::BOX_TYPE
+            ),
+            "{in_the_movie:?}"
+        );
     }
 }

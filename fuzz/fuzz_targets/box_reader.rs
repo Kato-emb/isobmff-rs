@@ -129,7 +129,7 @@ fn drive(
             record(event, bytes, &mut reader, &mut answers, copy, recorded)?;
         }
     }
-    if let Some(event) = reader.finish()? {
+    if let Some(event) = reader.finish(u64::try_from(bytes.len()).unwrap())? {
         record(event, bytes, &mut reader, &mut answers, copy, recorded)?;
     }
     Ok(())

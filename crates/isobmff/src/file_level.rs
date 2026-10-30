@@ -203,7 +203,7 @@ mod tests {
                 map(&mut reader, event);
             }
         }
-        if let Some(event) = reader.finish().unwrap() {
+        if let Some(event) = reader.finish(u64::try_from(file.len()).unwrap()).unwrap() {
             map(&mut reader, event);
         }
 

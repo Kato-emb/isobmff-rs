@@ -5,8 +5,8 @@
 //! properties of it:
 //!
 //! 1. no read panics
-//! 2. every cut reads to the same events, and ends in the same failure or
-//!    none, as the file given whole. A read that fails on what the demuxer
+//! 2. every cut reads to the same events, ends in the same failure or none,
+//!    and reads past the same leniencies, as the file given whole. A read that fails on what the demuxer
 //!    holds is compared up to the events the shorter read reports: what is
 //!    held depends on the samples taken by then, which the cut decides
 //! 3. a read that ends without a failure returns the sample of every location
@@ -25,7 +25,8 @@
 #![no_main]
 
 use isobmff::{
-    BoxType, ByteRange, DemuxError, DemuxEvent, DemuxLimits, Demuxer, Sample, SampleLocation,
+    BoxType, ByteRange, DemuxError, DemuxEvent, DemuxLimits, Demuxer, Leniency, Sample,
+    SampleLocation,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -93,8 +94,8 @@ fuzz_target!(|bytes: &[u8]| {
             continue;
         }
         assert_eq!(
-            (&read.events, &read.ending),
-            (&whole.events, &whole.ending),
+            (&read.events, &read.ending, &read.leniencies),
+            (&whole.events, &whole.ending, &whole.leniencies),
             "pieces of {piece_lens:?} read otherwise than the whole file"
         );
         if whole.ending.is_ok() {
@@ -120,15 +121,16 @@ struct Read {
     events: Vec<Recorded>,
     samples: Vec<Sample>,
     ending: Result<(), DemuxError>,
+    leniencies: Vec<Leniency>,
 }
 
 /// Reads `bytes` from wherever the demuxer wants them, in pieces of `piece_lens` in turn
 fn read(bytes: &[u8], piece_lens: &[usize]) -> Read {
     let mut recorded = Vec::new();
     let mut samples = Vec::new();
+    let mut demuxer = Demuxer::with_limits(LIMITS);
     let ending = (|| {
         let mut piece_lens = piece_lens.iter().cycle();
-        let mut demuxer = Demuxer::with_limits(LIMITS);
         let mut last_wanted: Option<u64> = None;
         let mut located = false;
         let (mut calls, mut bound) = (0_u64, u64::try_from(bytes.len()).unwrap() + 2);
@@ -151,7 +153,7 @@ fn read(bytes: &[u8], piece_lens: &[usize]) -> Read {
                 .unwrap_or_default();
             let input = rest.get(..*piece_lens.next().unwrap()).unwrap_or(rest);
             let event = match input {
-                [] => demuxer.finish()?,
+                [] => demuxer.finish(u64::try_from(bytes.len()).unwrap())?,
                 input => demuxer.handle_input(offset, input)?,
             };
             samples.extend(std::iter::from_fn(|| demuxer.poll_sample()));
@@ -208,5 +210,6 @@ fn read(bytes: &[u8], piece_lens: &[usize]) -> Read {
         events: recorded,
         samples,
         ending,
+        leniencies: demuxer.leniencies().cloned().collect(),
     }
 }
