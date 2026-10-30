@@ -46,9 +46,11 @@ use crate::structure_data::{SampleLocations, SegmentIndex, StructureDataReader};
 ///
 /// A failure is returned by the call that reads it, and leaves the demuxer
 /// failed: it wants no more input, and every call after it returns the same
-/// failure. Input that starts past the offset the demuxer wants is refused
-/// with [`UnwantedInput`](DemuxError::UnwantedInput), and leaves the demuxer
-/// as it was.
+/// failure. [`poll_sample`](Self::poll_sample) still returns the samples
+/// whose bytes arrived until then, those of the failing call among them.
+/// Input that starts past the offset the demuxer wants is refused with
+/// [`UnwantedInput`](DemuxError::UnwantedInput), and leaves the demuxer as it
+/// was.
 ///
 /// The crate documentation shows the loops of a caller that can seek, of one
 /// that cannot, and of one that resumes at a later box.
@@ -107,7 +109,9 @@ impl Demuxer {
     /// within the call, and reported once it is read. The bytes of the input
     /// that samples lack are then gathered for
     /// [`poll_sample`](Self::poll_sample); input passed again adds nothing to
-    /// them.
+    /// them. They are gathered also when the call fails on what the input
+    /// holds, so the samples whose bytes arrived before the failure are still
+    /// returned by `poll_sample`.
     ///
     /// A failure leaves the demuxer failed: it wants no more input, and every
     /// call after it returns the same failure.
@@ -129,16 +133,25 @@ impl Demuxer {
         offset: u64,
         input: &[u8],
     ) -> Result<Option<DemuxEvent>, DemuxError> {
+        // Why not leave the failure to `BoxReader::handle_input`: the input below would still reach the media data of a failed demuxer.
+        if let Some(failure) = self.boxes.failure() {
+            return Err(failure);
+        }
         let event = loop {
-            let Some(box_event) = self.boxes.handle_input(offset, input)? else {
-                break None;
+            let box_event = match self.boxes.handle_input(offset, input) {
+                Ok(Some(box_event)) => box_event,
+                ended => break ended.map(|_| None),
             };
-            if let Some(event) = self.demux(box_event)? {
-                break Some(event);
+            match self.demux(box_event) {
+                Ok(None) => {}
+                demuxed => break demuxed,
             }
         };
-        self.media_data.handle_input(offset, input);
-        Ok(event)
+        // Why not leave the input to a call that succeeds: a box that fails after a skipped `mdat` ends the reading, and the caller would pass no more of the `mdat`.
+        if !matches!(event, Err(DemuxError::UnwantedInput { .. })) {
+            self.media_data.handle_input(offset, input);
+        }
+        event
     }
 
     /// Ends the file at the offset the demuxer wants, and returns the event of the box it ends
@@ -438,6 +451,9 @@ mod tests {
         Other(BoxType, ByteRange),
     }
 
+    /// Track and media data of each sample polled, in the order it came out
+    type Polled = Vec<(u32, Vec<u8>)>;
+
     /// What a caller saw reading a file
     #[derive(Debug)]
     struct Read {
@@ -446,8 +462,7 @@ mod tests {
         wanted: Vec<u64>,
         /// Byte ranges of the file passed to the demuxer
         passed: Vec<Range<u64>>,
-        /// Track and media data of each sample polled, in the order it came out
-        samples: Vec<(u32, Vec<u8>)>,
+        samples: Polled,
     }
 
     /// Reads `file` from wherever `demuxer` wants it, `piece_len` bytes at a time and no more than it wants
@@ -500,27 +515,41 @@ mod tests {
         Ok(read)
     }
 
-    /// Reads `file` from its start as a caller that cannot seek, `piece_len` bytes at a time, and returns the track and media data of each sample polled
+    /// Reads `file` from its start as a caller that cannot seek, `piece_len` bytes at a time, and returns the track and media data of each sample polled, and how the read ended
     fn stream(
         demuxer: &mut Demuxer,
         file: &[u8],
         piece_len: usize,
-    ) -> Result<Vec<(u32, Vec<u8>)>, DemuxError> {
+    ) -> (Polled, Result<(), DemuxError>) {
         let mut samples = Vec::new();
         let mut offset = 0_u64;
-        for piece in file.chunks(piece_len) {
-            while demuxer.handle_input(offset, piece)?.is_some() {}
-            poll(demuxer, &mut samples);
-            offset = offset.saturating_add(to_u64(piece.len()));
+        let mut ending = Ok(());
+        for piece in file.chunks(piece_len).map(Some).chain([None]) {
+            loop {
+                let event = match piece {
+                    Some(piece) => demuxer.handle_input(offset, piece),
+                    None => demuxer.finish(),
+                };
+                poll(demuxer, &mut samples);
+                match event {
+                    Ok(Some(_)) => {}
+                    ended => {
+                        ending = ended.map(|_| ());
+                        break;
+                    }
+                }
+            }
+            if ending.is_err() {
+                break;
+            }
+            offset = offset.saturating_add(to_u64(piece.map_or(0, <[u8]>::len)));
         }
-        while demuxer.finish()?.is_some() {}
-        poll(demuxer, &mut samples);
 
-        Ok(samples)
+        (samples, ending)
     }
 
     /// Takes every sample `demuxer` has gathered into `samples`
-    fn poll(demuxer: &mut Demuxer, samples: &mut Vec<(u32, Vec<u8>)>) {
+    fn poll(demuxer: &mut Demuxer, samples: &mut Polled) {
         samples.extend(
             iter::from_fn(|| demuxer.poll_sample())
                 .map(|sample| (sample.properties().track_id, sample.data().to_vec())),
@@ -678,11 +707,14 @@ mod tests {
 
             assert_eq!(
                 stream(&mut demuxer, &file, piece_len),
-                Err(DemuxError::UnfinishedSample {
-                    track_id: 1,
-                    needed_bytes: 2,
-                    available_bytes: 0
-                }),
+                (
+                    Vec::new(),
+                    Err(DemuxError::UnfinishedSample {
+                        track_id: 1,
+                        needed_bytes: 2,
+                        available_bytes: 0
+                    })
+                ),
                 "in pieces of {piece_len}"
             );
             assert_eq!(demuxer.wanted_input(), None, "in pieces of {piece_len}");
@@ -696,7 +728,7 @@ mod tests {
 
         assert_eq!(
             stream(&mut Demuxer::new(), &file, file.len()),
-            Ok(vec![(1, b"AB".to_vec()), (1, b"CDEF".to_vec())])
+            (vec![(1, b"AB".to_vec()), (1, b"CDEF".to_vec())], Ok(()))
         );
     }
 
@@ -707,12 +739,15 @@ mod tests {
         for piece_len in [1, 7, file.len()] {
             assert_eq!(
                 stream(&mut Demuxer::new(), &file, piece_len),
-                Ok(vec![
-                    (1, b"WX".to_vec()),
-                    (1, b"YZ".to_vec()),
-                    (1, b"WX".to_vec()),
-                    (1, b"YZ".to_vec()),
-                ]),
+                (
+                    vec![
+                        (1, b"WX".to_vec()),
+                        (1, b"YZ".to_vec()),
+                        (1, b"WX".to_vec()),
+                        (1, b"YZ".to_vec()),
+                    ],
+                    Ok(())
+                ),
                 "in pieces of {piece_len}"
             );
         }
@@ -756,11 +791,31 @@ mod tests {
         for piece_len in [1, 7, cut.len()] {
             assert_eq!(
                 stream(&mut Demuxer::new(), cut, piece_len),
-                Err(DemuxError::UnfinishedSample {
-                    track_id: 1,
-                    needed_bytes: 2,
-                    available_bytes: 1
-                }),
+                (
+                    vec![(1, b"WX".to_vec())],
+                    Err(DemuxError::UnfinishedSample {
+                        track_id: 1,
+                        needed_bytes: 2,
+                        available_bytes: 1
+                    })
+                ),
+                "in pieces of {piece_len}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_samples_whose_bytes_arrive_with_a_failing_header_are_still_returned() {
+        let head = [file_type(), fragmented_movie(), fragment(1, None)].concat();
+        let media_data = head.len().saturating_sub(4);
+        let file = [head.as_slice(), &[0, 0, 0, 4, b'f', b'r', b'e', b'e']].concat();
+        let failure = DemuxError::Box {
+            error: isobmff_core::Error::size_below_header(8, 4),
+        };
+        for piece_len in [media_data, file.len()] {
+            assert_eq!(
+                stream(&mut Demuxer::new(), &file, piece_len),
+                (vec![(1, b"WX".to_vec()), (1, b"YZ".to_vec())], Err(failure)),
                 "in pieces of {piece_len}"
             );
         }
@@ -776,7 +831,7 @@ mod tests {
             limit_bytes: 3,
         };
 
-        assert_eq!(stream(&mut demuxer, &file, 7), Err(failure));
+        assert_eq!(stream(&mut demuxer, &file, 7), (Vec::new(), Err(failure)));
         assert_eq!(demuxer.wanted_input(), None);
         assert_eq!(demuxer.handle_input(0, &file).map(|_| ()), Err(failure));
         assert_eq!(demuxer.finish().map(|_| ()), Err(failure));

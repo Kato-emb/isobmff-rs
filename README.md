@@ -22,14 +22,14 @@ let mut demuxer = Demuxer::new();
 while let Some(wanted) = demuxer.wanted_input() {
     let input = file.get(usize::try_from(wanted.offset())?..).unwrap_or_default();
     let event = match input {
-        [] => demuxer.finish()?,
-        input => demuxer.handle_input(wanted.offset(), input)?,
+        [] => demuxer.finish(),
+        input => demuxer.handle_input(wanted.offset(), input),
     };
-    if let Some(event) = event {
-        println!("{event:?}");
-    }
     while let Some(sample) = demuxer.poll_sample() {
         println!("track {}: {} bytes", sample.properties().track_id, sample.data().len());
+    }
+    if let Some(event) = event? {
+        println!("{event:?}");
     }
 }
 ```

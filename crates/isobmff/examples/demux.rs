@@ -12,7 +12,8 @@
 //!
 //! The demuxer skips each `mdat`, and once a `moov` or a `moof` locates
 //! samples in it, wants their bytes. The samples come out of `poll_sample`
-//! once their bytes have arrived.
+//! once their bytes have arrived, those whose bytes came with a call that
+//! fails among them: the caller takes them before it returns the failure.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -41,17 +42,17 @@ fn main() -> Result<(), Box<dyn Error>> {
             buffered_at = wanted.offset();
         }
         let event = match buffer.get(..buffered).ok_or("read past the buffer")? {
-            [] => demuxer.finish()?,
-            input => demuxer.handle_input(buffered_at, input)?,
+            [] => demuxer.finish(),
+            input => demuxer.handle_input(buffered_at, input),
         };
-        if let Some(event) = event {
-            report(&demuxer, event)?;
-        }
         while let Some(sample) = demuxer.poll_sample() {
             samples
                 .entry(sample.properties().track_id)
                 .or_default()
                 .push(sample);
+        }
+        if let Some(event) = event.inspect_err(|_| list_samples(&samples))? {
+            report(&demuxer, event)?;
         }
     }
 

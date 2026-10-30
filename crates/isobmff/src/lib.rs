@@ -18,13 +18,14 @@
 //!     let input = file.get(usize::try_from(wanted.offset())?..).unwrap_or_default();
 //!     // Past the last byte, the file ends, and so may a box that runs to its end
 //!     let event = match input {
-//!         [] => demuxer.finish()?,
-//!         input => demuxer.handle_input(wanted.offset(), input)?,
+//!         [] => demuxer.finish(),
+//!         input => demuxer.handle_input(wanted.offset(), input),
 //!     };
-//!     if let Some(DemuxEvent::Movie { samples: locations, .. }) = event {
+//!     // The samples whose bytes have arrived, before a failure of the call is returned
+//!     samples.extend(core::iter::from_fn(|| demuxer.poll_sample()));
+//!     if let Some(DemuxEvent::Movie { samples: locations, .. }) = event? {
 //!         assert_eq!(locations.map(|location| location.byte_range()).collect::<Vec<_>>(), [497..499, 499..501]);
 //!     }
-//!     samples.extend(core::iter::from_fn(|| demuxer.poll_sample()));
 //! }
 //! assert_eq!(samples.iter().map(|sample| sample.data()).collect::<Vec<_>>(), [b"AB", b"CD"]);
 //! # Ok::<(), Box<dyn core::error::Error>>(())
@@ -55,13 +56,20 @@
 //!
 //! let mut offset = 0_u64;
 //! for piece in file.chunks(64) {
-//!     while let Some(_event) = demuxer.handle_input(offset, piece)? {}
-//!     samples.extend(core::iter::from_fn(|| demuxer.poll_sample()));
+//!     // The same piece again while events come, taking the samples after each call
+//!     loop {
+//!         let event = demuxer.handle_input(offset, piece);
+//!         samples.extend(core::iter::from_fn(|| demuxer.poll_sample()));
+//!         if event?.is_none() { break; }
+//!     }
 //!     offset += u64::try_from(piece.len())?;
 //! }
 //! // The input has ended, which only the caller knows
-//! while let Some(_event) = demuxer.finish()? {}
-//! samples.extend(core::iter::from_fn(|| demuxer.poll_sample()));
+//! loop {
+//!     let event = demuxer.finish();
+//!     samples.extend(core::iter::from_fn(|| demuxer.poll_sample()));
+//!     if event?.is_none() { break; }
+//! }
 //! assert_eq!(samples.iter().map(|sample| sample.data()).collect::<Vec<_>>(), [b"AB", b"CD"]);
 //! # Ok::<(), Box<dyn core::error::Error>>(())
 //! ```

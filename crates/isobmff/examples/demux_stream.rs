@@ -8,7 +8,8 @@
 //! The file is read from standard input a buffer at a time. Each buffer goes
 //! to the demuxer again and again while it returns events, one box at file
 //! level each. After each call, the samples whose bytes have arrived by then
-//! come out of `poll_sample`, in the order of their locations. Each box and
+//! come out of `poll_sample`, in the order of their locations; those of a
+//! call that fails are taken before the failure is returned. Each box and
 //! each sample is printed as it comes out.
 //!
 //! The demuxer cannot tell where the file ends, so the caller calls `finish`
@@ -44,18 +45,28 @@ fn main() -> Result<(), Box<dyn Error>> {
         if piece.is_empty() {
             break;
         }
-        while let Some(event) = demuxer.handle_input(offset, piece)? {
-            print_box(&event);
+        loop {
+            let event = demuxer.handle_input(offset, piece);
+            if let Ok(Some(event)) = &event {
+                print_box(event);
+            }
             take_samples(&mut demuxer, &mut gathered)?;
+            if event?.is_none() {
+                break;
+            }
         }
-        take_samples(&mut demuxer, &mut gathered)?;
         offset = offset.saturating_add(u64::try_from(read)?);
     }
-    while let Some(event) = demuxer.finish()? {
-        print_box(&event);
+    loop {
+        let event = demuxer.finish();
+        if let Ok(Some(event)) = &event {
+            print_box(event);
+        }
         take_samples(&mut demuxer, &mut gathered)?;
+        if event?.is_none() {
+            break;
+        }
     }
-    take_samples(&mut demuxer, &mut gathered)?;
 
     for (track_id, (samples, bytes)) in gathered {
         println!("track {track_id}: {samples} samples, {bytes} bytes");
