@@ -137,9 +137,12 @@
 //! The examples in `crates/isobmff/examples/` show the loops whole.
 //! `cargo run -p isobmff --example demux -- movie.mp4` seeks through a file
 //! to what the demuxer wants, and `demux_stream` reads standard input in
-//! order; both count the samples the demuxer returns. `dump_boxes` and
-//! `split_fragments` read and write files through [`framing`]: one lists the
-//! boxes of a file, the other splits a fragmented movie file into segments.
+//! order; both count the samples the demuxer returns. `remux` writes the
+//! samples a demuxer reads into another file structure with a [`Muxer`]:
+//! `cargo run -p isobmff --example remux -- movie.mp4 fragmented.mp4 fragmented`.
+//! `dump_boxes` and `split_fragments` read and write files through
+//! [`framing`]: one lists the boxes of a file, the other splits a fragmented
+//! movie file into segments.
 
 #![no_std]
 
