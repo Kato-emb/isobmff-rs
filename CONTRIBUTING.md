@@ -17,7 +17,7 @@ pass; each runs a command you can run locally before opening one.
 
 ### Fuzzing
 
-The fuzz targets in `fuzz/`, `framing`, `boxes` and `box_reader`, need
+The fuzz targets in `fuzz/`, `framing`, `boxes`, `box_reader` and `demuxer`, need
 [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) and the nightly the
 `fuzz` job pins. The conformance files are their seeds:
 

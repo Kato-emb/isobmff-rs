@@ -8,7 +8,6 @@
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use std::path::Path;
     use std::{env, fs};
 
@@ -18,7 +17,7 @@ mod tests {
     };
     use isobmff_test_support::serde_json::{self, Value};
     use isobmff_test_support::{
-        ConformanceFile, conformance_files, ffprobe, gpac_children, gpac_frame, gpac_type,
+        ConformanceFile, conformance_files, ffprobe, gpac_children, gpac_frame, gpac_type, tally,
     };
 
     /// Box types whose payload is a sequence of boxes and nothing else
@@ -33,20 +32,6 @@ mod tests {
     /// sizes add up to the `udta` with the one GPAC leaves out.
     const GPAC_OMISSIONS: [(&str, &str, &str, u64); 1] =
         [("sg-tl-st.mp4", "/moov/trak/udta", "strk", 58)];
-
-    /// Type and total of a box, as GPAC spells them
-    type Frame = (String, u64);
-
-    /// Returns how many of each box `frames` holds
-    fn tally(frames: impl IntoIterator<Item = Frame>) -> BTreeMap<Frame, usize> {
-        frames
-            .into_iter()
-            .fold(BTreeMap::new(), |mut tally, frame| {
-                let count = tally.entry(frame).or_insert(0_usize);
-                *count = count.saturating_add(1);
-                tally
-            })
-    }
 
     /// Records where the boxes in `payload` differ from what GPAC reports in `node`, then descends into containers
     fn compare(

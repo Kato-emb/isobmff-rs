@@ -11,7 +11,7 @@ mod box_event;
 mod box_reader;
 mod box_writer;
 
-pub use box_event::{BoxEvent, BoxEventKind, BoxEvents};
+pub use box_event::{BoxEvent, BoxEventKind};
 pub use box_reader::BoxReader;
 pub use box_writer::BoxWriter;
 

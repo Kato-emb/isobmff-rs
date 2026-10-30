@@ -26,13 +26,13 @@ use crate::framing::BoxEventKind;
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum DemuxError {
-    /// Input starts at a file offset the reader does not want next
+    /// Input starts past the file offset the reader wants next
     #[non_exhaustive]
     UnwantedInput {
         /// File offset the input starts at
         offset: u64,
-        /// Input the reader wants next, or `None` when it wants no more
-        wanted: Option<ByteRange>,
+        /// Input the reader wants next
+        wanted: ByteRange,
     },
     /// Input arrives before the header just read is answered with a gather, a stream or a skip
     #[non_exhaustive]
@@ -217,20 +217,10 @@ pub enum DemuxError {
 impl fmt::Display for DemuxError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            Self::UnwantedInput {
-                offset,
-                wanted: Some(wanted),
-            } => write!(
+            Self::UnwantedInput { offset, wanted } => write!(
                 formatter,
                 "input at file offset {offset} where file offset {} is wanted",
                 wanted.offset()
-            ),
-            Self::UnwantedInput {
-                offset,
-                wanted: None,
-            } => write!(
-                formatter,
-                "input at file offset {offset} where no more is wanted"
             ),
             Self::UndecidedBox { box_type } => write!(
                 formatter,

@@ -38,3 +38,10 @@ path = "fuzz_targets/box_reader.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "demuxer"
+path = "fuzz_targets/demuxer.rs"
+test = false
+doc = false
+bench = false

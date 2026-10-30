@@ -155,12 +155,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         let input = buffer.get(..buffered).ok_or("read past the buffer")?;
 
-        for event in reader.handle_input(buffered_at, input)? {
+        while let Some(event) = reader.handle_input(buffered_at, input)? {
             splitter.handle(&mut reader, event)?;
         }
     }
 
-    for event in reader.finish()? {
+    if let Some(event) = reader.finish()? {
         splitter.handle(&mut reader, event)?;
     }
     splitter.finish()?;
