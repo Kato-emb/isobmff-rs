@@ -64,7 +64,7 @@ impl SegmentIndex {
                 };
                 offset = end;
                 time = time_end;
-                Ok(subsegment)
+                Ok::<_, DemuxError>(subsegment)
             })
             .collect::<Result<_, _>>()?;
 

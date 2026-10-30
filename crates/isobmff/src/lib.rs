@@ -137,9 +137,12 @@
 //! The examples in `crates/isobmff/examples/` show the loops whole.
 //! `cargo run -p isobmff --example demux -- movie.mp4` seeks through a file
 //! to what the demuxer wants, and `demux_stream` reads standard input in
-//! order; both count the samples the demuxer returns. `dump_boxes` and
-//! `split_fragments` read and write files through [`framing`]: one lists the
-//! boxes of a file, the other splits a fragmented movie file into segments.
+//! order; both count the samples the demuxer returns. `remux` writes the
+//! samples a demuxer reads into another file structure with a [`Muxer`]:
+//! `cargo run -p isobmff --example remux -- movie.mp4 fragmented.mp4 fragmented`.
+//! `dump_boxes` and `split_fragments` read and write files through
+//! [`framing`]: one lists the boxes of a file, the other splits a fragmented
+//! movie file into segments.
 
 #![no_std]
 
@@ -148,17 +151,21 @@ extern crate alloc;
 mod byte_range;
 mod demuxer;
 mod error;
+mod file_structure;
 pub mod framing;
 mod limits;
 pub mod media_data;
+mod muxer;
 mod sample;
 pub mod structure_data;
 
 pub use byte_range::ByteRange;
 pub use demuxer::{DemuxEvent, Demuxer};
 pub use error::{DemuxError, MuxError};
+pub use file_structure::FileStructure;
 pub use isobmff_core::*;
 pub use limits::DemuxLimits;
+pub use muxer::Muxer;
 pub use sample::{Sample, SampleLocation, SampleProperties};
 
 /// Boxes of ISO/IEC 14496-12, each read into a value that owns its bytes
