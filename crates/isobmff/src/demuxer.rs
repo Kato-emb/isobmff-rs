@@ -884,6 +884,45 @@ mod tests {
     }
 
     #[test]
+    fn a_sample_that_fits_the_held_bytes_only_once_those_before_it_are_taken_is_gathered_then() {
+        let head = file_type();
+        let file = [
+            head.clone(),
+            encoded(&movie([track(1, 10, &[24, 10], &[(1, 1)], &[0, 0])])),
+        ]
+        .concat();
+        let mut demuxer = Demuxer::with_limits(DemuxLimits::new().with_held_bytes(30));
+        let mut samples = Vec::new();
+        let mut piece_lens = [3, 7, 64].into_iter().cycle();
+        let mut calls = 0_u32;
+        let ending = loop {
+            let Some(wanted) = demuxer.wanted_input() else {
+                break Ok(());
+            };
+            calls = calls.checked_add(1).unwrap();
+            assert!(calls < 100, "the read does not end");
+            let rest = file
+                .get(usize::try_from(wanted.offset()).unwrap()..)
+                .unwrap_or_default();
+            let input = rest.get(..piece_lens.next().unwrap()).unwrap_or(rest);
+            let event = match input {
+                [] => demuxer.finish(),
+                input => demuxer.handle_input(wanted.offset(), input),
+            };
+            poll(&mut demuxer, &mut samples);
+            if let Err(failure) = event {
+                break Err(failure);
+            }
+        };
+
+        let bytes = |range: Range<usize>| file.get(range).unwrap().to_vec();
+        assert_eq!(
+            (samples, ending),
+            (vec![(1, bytes(0..24)), (1, bytes(0..10))], Ok(()))
+        );
+    }
+
+    #[test]
     fn samples_past_the_sample_bytes_fail_the_demuxer() {
         let head = [file_type(), fragmented_movie()].concat();
         let file = [head, fragment(1, None)].concat();

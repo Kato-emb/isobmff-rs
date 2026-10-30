@@ -1,7 +1,7 @@
 //! Reading of [`Demuxer`] over a file cut into pieces
 //!
 //! The input is the bytes of a file as they lie, so a file of boxes is a seed
-//! as it is. One run reads the file cut a few ways, and checks four
+//! as it is. One run reads the file cut a few ways, and checks five
 //! properties of it:
 //!
 //! 1. no read panics
@@ -13,9 +13,14 @@
 //!    the events carry, in their order, holding the bytes of the file the
 //!    location names
 //! 4. the offset the demuxer wants goes back only after a call that reports a
-//!    `moov` or a `moof`, whose samples may lie before it, and stays put for
-//!    at most one call: the one that closes a gathered box with an empty
-//!    payload
+//!    `moov` or a `moof`, whose samples may lie before it
+//! 5. the read ends within as many calls as the file has bytes, the samples
+//!    the events locate have bytes of media data, and two for each event:
+//!    every call reads a byte of a box, keeps a byte of a sample, reports a
+//!    box or fails, and a gathered box with an empty payload is wanted twice
+//!    at one offset. The offset may stay put for longer, as it does at a
+//!    sample that fits what the demuxer holds only once the samples held
+//!    before it are taken
 
 #![no_main]
 
@@ -124,20 +129,23 @@ fn read(bytes: &[u8], piece_lens: &[usize]) -> Read {
     let ending = (|| {
         let mut piece_lens = piece_lens.iter().cycle();
         let mut demuxer = Demuxer::with_limits(LIMITS);
-        let mut last_wanted: Option<(u64, usize)> = None;
+        let mut last_wanted: Option<u64> = None;
         let mut located = false;
+        let (mut calls, mut bound) = (0_u64, u64::try_from(bytes.len()).unwrap() + 2);
         while let Some(wanted) = demuxer.wanted_input() {
             let offset = wanted.offset();
-            last_wanted = match last_wanted {
-                Some((last, _)) if offset < last && !located => {
-                    panic!("the demuxer wants {offset} after {last}")
-                }
-                Some((last, times)) if offset == last => {
-                    assert!(times < 2, "the demuxer wants {offset} a third time running");
-                    Some((offset, times + 1))
-                }
-                _ => Some((offset, 1)),
-            };
+            if let Some(last) = last_wanted
+                && offset < last
+                && !located
+            {
+                panic!("the demuxer wants {offset} after {last}");
+            }
+            last_wanted = Some(offset);
+            calls += 1;
+            assert!(
+                calls <= bound,
+                "the read takes {calls} calls, past the {bound} the file accounts for"
+            );
             let rest = bytes
                 .get(usize::try_from(offset).unwrap()..)
                 .unwrap_or_default();
@@ -179,6 +187,18 @@ fn read(bytes: &[u8], piece_lens: &[usize]) -> Read {
                     } => Recorded::Other(header.box_type(), byte_range),
                     event => panic!("unexpected event {event:?}"),
                 };
+                if let Recorded::Movie(_, locations) | Recorded::MovieFragment(_, locations) =
+                    &event
+                {
+                    bound = locations
+                        .iter()
+                        .map(|location| {
+                            let byte_range = location.byte_range();
+                            byte_range.end - byte_range.start
+                        })
+                        .fold(bound, u64::saturating_add);
+                }
+                bound = bound.saturating_add(2);
                 recorded.push(event);
             }
         }
