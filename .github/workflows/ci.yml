@@ -223,7 +223,7 @@ jobs:
         with:
           path: ${{ runner.temp }}/conformance
           key: conformance-${{ hashFiles('scripts/fetch-conformance.sh') }}
-      - run: ISOBMFF_CONFORMANCE_DIR="$RUNNER_TEMP/conformance" ISOBMFF_FFPROBE="$RUNNER_TEMP/ffprobe" cargo nextest run -p isobmff-core -p isobmff-boxes --run-ignored only
+      - run: ISOBMFF_CONFORMANCE_DIR="$RUNNER_TEMP/conformance" ISOBMFF_FFPROBE="$RUNNER_TEMP/ffprobe" cargo nextest run -p isobmff-core -p isobmff-boxes -p isobmff --run-ignored only
 
   # A fixed number of runs of each fuzz target, seeded with the conformance
   # files. A failure is a bug, so it blocks the merge. The nightly
@@ -255,12 +255,14 @@ jobs:
       # The seeds are the files alone: GPAC's reports beside them are not boxes.
       # The first directory takes what a run adds, and is never kept.
       - run: |
-          mkdir -p "$RUNNER_TEMP/seeds" "$RUNNER_TEMP/corpus/framing" "$RUNNER_TEMP/corpus/boxes"
+          mkdir -p "$RUNNER_TEMP/seeds" "$RUNNER_TEMP/corpus/framing" "$RUNNER_TEMP/corpus/boxes" "$RUNNER_TEMP/corpus/box_reader" "$RUNNER_TEMP/corpus/demuxer"
           cp "$RUNNER_TEMP"/conformance/*.mp4 "$RUNNER_TEMP/seeds/"
       # The target is spelled out: the cargo-fuzz this action installs is a
       # static musl binary, and defaults to the triple it was built for.
       - run: cargo fuzz run framing --target x86_64-unknown-linux-gnu "$RUNNER_TEMP/corpus/framing" "$RUNNER_TEMP/seeds" -- -runs=500000 -seed=1
       - run: cargo fuzz run boxes --target x86_64-unknown-linux-gnu "$RUNNER_TEMP/corpus/boxes" "$RUNNER_TEMP/seeds" -- -runs=500000 -seed=1
+      - run: cargo fuzz run box_reader --target x86_64-unknown-linux-gnu "$RUNNER_TEMP/corpus/box_reader" "$RUNNER_TEMP/seeds" -- -runs=500000 -seed=1
+      - run: cargo fuzz run demuxer --target x86_64-unknown-linux-gnu "$RUNNER_TEMP/corpus/demuxer" "$RUNNER_TEMP/seeds" -- -runs=500000 -seed=1
 
   # Advisories, license policy, banned crates and sources, per deny.toml.
   deny:
