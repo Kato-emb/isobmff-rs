@@ -105,7 +105,8 @@ impl Demuxer {
     ///
     /// `input` is taken, and the event returned, as [`BoxReader::handle_input`]
     /// takes and returns them: one event a call, the caller passing the same
-    /// input again while events come. A box gathered into a value is read past
+    /// input again while events come, and, once the call returns `None`, while
+    /// the demuxer still wants bytes of it. A box gathered into a value is read past
     /// within the call, and reported once it is read. The bytes of the input
     /// that samples lack are then gathered for
     /// [`poll_sample`](Self::poll_sample); input passed again adds nothing to
@@ -529,7 +530,7 @@ mod tests {
         Ok(read)
     }
 
-    /// Reads `file` from its start as a caller that cannot seek, `piece_len` bytes at a time, and returns the track and media data of each sample polled, and how the read ended
+    /// Reads `file` from its start as a caller that cannot seek, `piece_len` bytes at a time, passing a piece again while events come or the demuxer wants bytes of it, and returns the track and media data of each sample polled, and how the read ended
     fn stream(
         demuxer: &mut Demuxer,
         file: &[u8],
@@ -539,6 +540,7 @@ mod tests {
         let mut offset = 0_u64;
         let mut ending = Ok(());
         for piece in file.chunks(piece_len).map(Some).chain([None]) {
+            let end = offset.saturating_add(to_u64(piece.map_or(0, <[u8]>::len)));
             loop {
                 let event = match piece {
                     Some(piece) => demuxer.handle_input(offset, piece),
@@ -546,7 +548,12 @@ mod tests {
                 };
                 poll(demuxer, &mut samples);
                 match event {
-                    Ok(Some(_)) => {}
+                    Ok(event)
+                        if event.is_some()
+                            || demuxer
+                                .wanted_input()
+                                .is_some_and(|wanted| (offset..end).contains(&wanted.offset())) => {
+                    }
                     ended => {
                         ending = ended.map(|_| ());
                         break;
@@ -556,7 +563,7 @@ mod tests {
             if ending.is_err() {
                 break;
             }
-            offset = offset.saturating_add(to_u64(piece.map_or(0, <[u8]>::len)));
+            offset = end;
         }
 
         (samples, ending)
@@ -861,6 +868,21 @@ mod tests {
 
         let read = stream(&mut Demuxer::new(), &file, 64 * 1024);
         assert!(read == (expected, Ok(())), "ended {:?}", read.1);
+    }
+
+    #[test]
+    fn a_piece_whose_samples_together_pass_the_held_bytes_gathers_them_all_when_passed_again() {
+        let file = [file_type(), fragmented_movie(), fragment(1, None)].concat();
+        let media_data = file.len().saturating_sub(4);
+
+        assert_eq!(
+            stream(
+                &mut Demuxer::with_limits(DemuxLimits::new().with_held_bytes(3)),
+                &file,
+                media_data
+            ),
+            (vec![(1, b"WX".to_vec()), (1, b"YZ".to_vec())], Ok(()))
+        );
     }
 
     #[test]
