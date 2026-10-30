@@ -435,10 +435,10 @@ pub enum MuxError {
     /// Samples, or the end of the file, offered before the movie that declares their tracks
     #[non_exhaustive]
     MissingMovie,
-    /// Brand of a fragmented file or a segment that does not allow a track fragment to take its `moof` as its base data offset, §8.8.7.1
+    /// Brands of a fragmented file or a segment that name none of `iso5` to `isod`, under which a reader takes the `moof` as the base data offset of a track fragment, §8.8.7.1
     #[non_exhaustive]
     UnsupportedBrand {
-        /// The brand: one earlier than `iso5`, or the major brand where no brand is `iso5` or later
+        /// The major brand
         brand: FourCc,
     },
     /// Box offered where the file it is written into takes none: an `mvex` in the movie of a file that is not fragmented
@@ -573,7 +573,7 @@ impl fmt::Display for MuxError {
             Self::MissingMovie => formatter.write_str("samples offered before the movie"),
             Self::UnsupportedBrand { brand } => write!(
                 formatter,
-                "brand {brand} does not allow a track fragment based on its moof"
+                "brands of major brand {brand} name none of iso5 to isod, which a track fragment based on its moof takes"
             ),
             Self::UnexpectedBox { box_type } => {
                 write!(formatter, "{box_type} box where the file takes none")

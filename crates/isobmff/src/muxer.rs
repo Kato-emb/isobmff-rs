@@ -4,7 +4,7 @@ use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
 use isobmff_boxes::{FileTypeBox, MovieBox, SegmentTypeBox};
-use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader, Error, FourCc};
+use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader, Error};
 
 use crate::error::MuxError;
 use crate::file_structure::FileStructure;
@@ -17,9 +17,6 @@ use crate::structure_data::{MovieFragmentWriter, SampleTableWriter, StructureDat
 const DEFAULT_BASE_IS_MOOF_BRANDS: [[u8; 4]; 9] = [
     *b"iso5", *b"iso6", *b"iso7", *b"iso8", *b"iso9", *b"isoa", *b"isob", *b"isoc", *b"isod",
 ];
-
-/// Brands earlier than `iso5`, under which a track fragment shall not take its `moof` as its base data offset, §8.8.7.1
-const EARLIER_BRANDS: [[u8; 4]; 6] = [*b"isom", *b"avc1", *b"iso2", *b"mp71", *b"iso3", *b"iso4"];
 
 /// Writer of a movie file or a segment from the samples a caller hands it
 ///
@@ -121,9 +118,9 @@ impl Muxer {
     /// Writes the brands of the file: its `ftyp`, or the `styp` of a segment, of the same brands (§4.3, §8.14.2)
     ///
     /// A file of movie fragments, or a segment, takes the first byte of each
-    /// `moof` as the base data offset of its track fragments, which brands
-    /// earlier than `iso5` do not allow (§8.8.7.1): its brands name one of
-    /// `iso5` and later, and none earlier.
+    /// `moof` as the base data offset of its track fragments, which a reader
+    /// supports under `iso5` and later brands (§8.8.7.1): its major brand or
+    /// a compatible brand is one of `iso5` to `isod`.
     ///
     /// # Errors
     ///
@@ -132,8 +129,8 @@ impl Muxer {
     /// * [`BoxOutOfOrder`](MuxError::BoxOutOfOrder): a box is written
     ///   already, which the brands go before.
     /// * [`UnsupportedBrand`](MuxError::UnsupportedBrand): the file is
-    ///   fragmented or a segment, and the brands name a brand earlier than
-    ///   `iso5`, or none of `iso5` and later.
+    ///   fragmented or a segment, and its brands name none of `iso5` to
+    ///   `isod`.
     /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the file is finished.
     pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), MuxError> {
         let box_type = match self.file_structure {
@@ -152,11 +149,11 @@ impl Muxer {
         let bytes = match self.file_structure {
             FileStructure::NonFragmented => write_box(&mut self.boxes, &file_type)?,
             FileStructure::Fragmented { .. } => {
-                refuse_earlier_brands(&file_type)?;
+                refuse_brands_before_iso5(&file_type)?;
                 write_box(&mut self.boxes, &file_type)?
             }
             FileStructure::Segment { .. } => {
-                refuse_earlier_brands(&file_type)?;
+                refuse_brands_before_iso5(&file_type)?;
                 let mut styp = SegmentTypeBox::default();
                 styp.major_brand = file_type.major_brand;
                 styp.minor_version = file_type.minor_version;
@@ -316,23 +313,17 @@ impl Muxer {
     }
 }
 
-/// Refuses `file_type` where its brands do not allow the `moof` as the base data offset of a track fragment, §8.8.7.1
-fn refuse_earlier_brands(file_type: &FileTypeBox) -> Result<(), MuxError> {
-    let brands = || iter_brands(file_type);
-    if let Some(brand) = brands().find(|brand| EARLIER_BRANDS.contains(brand.as_bytes())) {
-        return Err(MuxError::UnsupportedBrand { brand });
+/// Refuses `file_type` where it names none of the brands under which a reader takes the `moof` as the base data offset of a track fragment, §8.8.7.1
+fn refuse_brands_before_iso5(file_type: &FileTypeBox) -> Result<(), MuxError> {
+    if core::iter::once(&file_type.major_brand)
+        .chain(&file_type.compatible_brands)
+        .any(|brand| DEFAULT_BASE_IS_MOOF_BRANDS.contains(brand.as_bytes()))
+    {
+        return Ok(());
     }
-    if !brands().any(|brand| DEFAULT_BASE_IS_MOOF_BRANDS.contains(brand.as_bytes())) {
-        return Err(MuxError::UnsupportedBrand {
-            brand: file_type.major_brand,
-        });
-    }
-    Ok(())
-}
-
-/// Returns the major brand and the compatible brands of `file_type`
-fn iter_brands(file_type: &FileTypeBox) -> impl Iterator<Item = FourCc> + '_ {
-    core::iter::once(file_type.major_brand).chain(file_type.compatible_brands.iter().copied())
+    Err(MuxError::UnsupportedBrand {
+        brand: file_type.major_brand,
+    })
 }
 
 /// Writes `value` as a box at file level through `boxes`, and returns its bytes
@@ -610,8 +601,7 @@ mod tests {
     }
 
     #[test]
-    fn brands_that_do_not_allow_a_track_fragment_based_on_its_moof_are_refused_for_a_fragmented_file()
-     {
+    fn brands_that_name_none_from_iso5_on_are_refused_for_a_fragmented_file() {
         let refused = |ftyp| {
             Muxer::new(FileStructure::Fragmented {
                 first_sequence_number: 1,
@@ -621,15 +611,16 @@ mod tests {
 
         assert_eq!(
             [
-                refused(file_type(b"iso6", &[b"iso6", b"isom"])),
-                refused(file_type(b"mp42", &[b"mp41"])),
+                refused(file_type(
+                    b"iso5",
+                    &[b"avc1", b"iso6", b"iso4", b"iso5", b"dash"]
+                )),
+                refused(file_type(b"mp42", &[b"mp42", b"isom", b"iso2"])),
                 Muxer::new(FileStructure::NonFragmented)
                     .handle_file_type(file_type(b"isom", &[b"isom"])),
             ],
             [
-                Err(MuxError::UnsupportedBrand {
-                    brand: FourCc::new(*b"isom")
-                }),
+                Ok(()),
                 Err(MuxError::UnsupportedBrand {
                     brand: FourCc::new(*b"mp42")
                 }),
