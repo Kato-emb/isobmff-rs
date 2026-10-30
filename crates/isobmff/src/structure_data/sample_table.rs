@@ -8,17 +8,20 @@ use isobmff_boxes::{
     ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, CompactSampleToGroupBox,
     CompositionOffsetBox, CompositionOffsetEntry, DegradationPriorityBox, MovieBox, PaddingBitsBox,
     SampleAuxiliaryInformationOffsetsBox, SampleAuxiliaryInformationSizesBox,
-    SampleDependencyTypeBox, SampleDependencyTypeEntry, SampleFlags, SampleInfoSizes,
-    SampleSizeBox, SampleSizeVariant, SampleSizes, SampleTableBox, SampleToChunkBox,
-    SampleToChunkEntry, SampleToGroupBox, ShadowSyncSampleBox, SubSampleInformationBox,
-    SubSampleReferenceTableBox, SyncSampleBox, TimeToSampleBox, TimeToSampleEntry, TrackBox,
+    SampleDependencyTypeBox, SampleFlags, SampleInfoSizes, SampleSizeBox, SampleSizeVariant,
+    SampleSizes, SampleTableBox, SampleToChunkBox, SampleToChunkEntry, SampleToGroupBox,
+    ShadowSyncSampleBox, SubSampleInformationBox, SubSampleReferenceTableBox, SyncSampleBox,
+    TimeToSampleBox, TimeToSampleEntry, TrackBox,
 };
 use isobmff_core::BoxDefinition;
 
+use self::sample_flags::SampleFlagsTables;
 use super::sample_description::data_reference_index;
 use crate::error::{DemuxError, MuxError};
 use crate::framing::to_u64;
 use crate::sample::{Sample, SampleLocation, SampleProperties};
+
+mod sample_flags;
 
 /// Returns the number of samples the sample size table of `trak` counts
 pub(super) fn sample_count(trak: &TrackBox) -> u64 {
@@ -38,9 +41,10 @@ pub(super) fn sample_count(trak: &TrackBox) -> u64 {
 /// chunk starts, the samples of a chunk lying one after another from there
 /// (§8.7.5). The `stss` marks the sync samples, every sample being one where
 /// the track has no `stss` (§8.6.2), and the `sdtp` gives the dependencies of
-/// each (§8.6.4), which make up the `sample_flags` as §8.8.3.1 lays them out.
-/// A missing table declares no sample, and a missing optional one leaves its
-/// fields zero.
+/// each (§8.6.4), the `padb` the bits it is padded with (§8.7.6) and the
+/// `stdp` its degradation priority (§8.5.3), which make up the `sample_flags`
+/// as §8.8.3.1 lays them out. A missing table declares no sample, and a
+/// missing optional one leaves its fields zero.
 ///
 /// # Errors
 ///
@@ -74,16 +78,11 @@ pub(super) fn resolve_track(
                 .map(|entry| (entry.sample_count, entry.sample_offset)),
         )
     });
-    let mut dependencies = stbl.sdtp.as_ref().map(|sdtp| sdtp.entries.iter().copied());
-    let mut sync_samples = stbl
-        .stss
-        .as_ref()
-        .map(|stss| stss.sample_numbers.iter().copied().peekable());
+    let mut flags = SampleFlagsTables::new(stbl);
     let mut runs = stbl.stsc.iter().flat_map(|stsc| &stsc.entries).peekable();
 
     let mut run = None;
     let mut decoding_time = 0_u64;
-    let mut sample_number = 0_u64;
     for (chunk, chunk_offset) in (1_u32..).zip(chunk_offsets(stbl)) {
         if let Some(next) = runs.next_if(|next| next.first_chunk == chunk) {
             let data_reference_index = data_reference_index(trak, next.sample_description_index)?;
@@ -103,21 +102,7 @@ pub(super) fn resolve_track(
                 .ok_or_else(|| mismatch(TimeToSampleBox::BOX_TYPE))?;
             let sample_composition_time_offset = next_or_zero(&mut composition_offsets)
                 .ok_or_else(|| mismatch(CompositionOffsetBox::BOX_TYPE))?;
-            let dependency = next_or_zero(&mut dependencies)
-                .ok_or_else(|| mismatch(SampleDependencyTypeBox::BOX_TYPE))?;
-            sample_number = sample_number.saturating_add(1);
-            let is_sync_sample = sync_samples.as_mut().is_none_or(|marked| {
-                marked
-                    .next_if(|marked| u64::from(*marked) == sample_number)
-                    .is_some()
-            });
-            if sync_samples
-                .as_mut()
-                .and_then(|marked| marked.peek())
-                .is_some_and(|marked| u64::from(*marked) <= sample_number)
-            {
-                return Err(mismatch(SyncSampleBox::BOX_TYPE));
-            }
+            let sample_flags = flags.next_flags().map_err(mismatch)?;
 
             let data_end = data_offset
                 .checked_add(u64::from(size))
@@ -128,15 +113,7 @@ pub(super) fn resolve_track(
                     decoding_time,
                     sample_duration,
                     sample_composition_time_offset,
-                    sample_flags: {
-                        let mut flags = SampleFlags::default();
-                        flags.is_leading = dependency.is_leading;
-                        flags.sample_depends_on = dependency.sample_depends_on;
-                        flags.sample_is_depended_on = dependency.sample_is_depended_on;
-                        flags.sample_has_redundancy = dependency.sample_has_redundancy;
-                        flags.sample_is_non_sync_sample = !is_sync_sample;
-                        flags
-                    },
+                    sample_flags,
                     sample_description_index: run.sample_description_index,
                 },
                 data_reference_index,
@@ -161,17 +138,13 @@ pub(super) fn resolve_track(
                 .is_some(),
             CompositionOffsetBox::BOX_TYPE,
         ),
-        (
-            dependencies.and_then(|mut table| table.next()).is_some(),
-            SampleDependencyTypeBox::BOX_TYPE,
-        ),
-        (
-            sync_samples.and_then(|mut table| table.next()).is_some(),
-            SyncSampleBox::BOX_TYPE,
-        ),
     ];
-    match left_over.into_iter().find(|(left, _)| *left) {
-        Some((_, box_type)) => Err(mismatch(box_type)),
+    match left_over
+        .into_iter()
+        .find_map(|(left, box_type)| left.then_some(box_type))
+        .or_else(|| flags.left_over())
+    {
+        Some(box_type) => Err(mismatch(box_type)),
         None => Ok(decoding_time),
     }
 }
@@ -389,9 +362,9 @@ impl TrackTable {
 
     /// Fills the tables of `stbl` with what the table declares
     ///
-    /// The `ctts` is left out where every composition time offset is zero, the
-    /// `stss` where every sample is a sync sample, and the `sdtp` where no sample
-    /// states a dependency (§8.6.1.3, §8.6.2, §8.6.4).
+    /// The `ctts` is left out where every composition time offset is zero
+    /// (§8.6.1.3), and the tables of the `sample_flags` as
+    /// [`sample_flags::fill`] leaves them out.
     pub(super) fn fill(self, stbl: &mut SampleTableBox) {
         let mut stts = TimeToSampleBox::default();
         stts.entries = runs_of(self.samples.iter().map(|sample| sample.sample_duration))
@@ -486,41 +459,7 @@ impl TrackTable {
             },
         );
 
-        stbl.stss = self
-            .samples
-            .iter()
-            .any(|sample| sample.sample_flags.sample_is_non_sync_sample)
-            .then(|| {
-                let mut stss = SyncSampleBox::default();
-                stss.sample_numbers = (1_u32..)
-                    .zip(&self.samples)
-                    .filter(|(_, sample)| !sample.sample_flags.sample_is_non_sync_sample)
-                    .map(|(sample_number, _)| sample_number)
-                    .collect();
-                stss
-            });
-
-        let dependency = |flags: &SampleFlags| {
-            let mut entry = SampleDependencyTypeEntry::default();
-            entry.is_leading = flags.is_leading;
-            entry.sample_depends_on = flags.sample_depends_on;
-            entry.sample_is_depended_on = flags.sample_is_depended_on;
-            entry.sample_has_redundancy = flags.sample_has_redundancy;
-            entry
-        };
-        stbl.sdtp = self
-            .samples
-            .iter()
-            .any(|sample| dependency(&sample.sample_flags) != SampleDependencyTypeEntry::default())
-            .then(|| {
-                let mut sdtp = SampleDependencyTypeBox::default();
-                sdtp.entries = self
-                    .samples
-                    .iter()
-                    .map(|sample| dependency(&sample.sample_flags))
-                    .collect();
-                sdtp
-            });
+        sample_flags::fill(self.samples.iter().map(|sample| sample.sample_flags), stbl);
     }
 }
 

@@ -340,8 +340,9 @@ mod tests {
 
     use isobmff_boxes::{
         CompactSampleSizeBox, CompositionOffsetBox, CompositionOffsetEntry, DataEntry,
-        DataEntryImdaBox, DataEntryUrlBox, MovieBox, SampleDependencyTypeBox, SampleFlags,
-        SampleSizeVariant, SampleToChunkBox, SyncSampleBox, TimeToSampleBox, TrackBox,
+        DataEntryImdaBox, DataEntryUrlBox, DegradationPriorityBox, MovieBox, PaddingBitsBox,
+        SampleDependencyTypeBox, SampleFlags, SampleSizeVariant, SampleToChunkBox, SyncSampleBox,
+        TimeToSampleBox, TrackBox,
     };
     use isobmff_core::{BoxDecode, BoxDefinition, Utf8String};
 
@@ -484,6 +485,25 @@ mod tests {
     }
 
     #[test]
+    fn the_padb_and_the_stdp_make_up_the_sample_flags() {
+        let mut trak = track(1, 10, &[1, 1, 1], &[(1, 3)], &[0]);
+        // Three samples padded with 3, 5 and 6 bits, the second half of the last byte unused
+        trak.mdia.minf.stbl.padb =
+            Some(PaddingBitsBox::decode_payload(b"\0\0\0\0\0\0\0\x03\x35\x60").unwrap());
+        trak.mdia.minf.stbl.stdp =
+            Some(DegradationPriorityBox::decode_payload(b"\0\0\0\0\0\0\0\x07\x01\0").unwrap());
+
+        assert_eq!(
+            resolve([trak]),
+            Ok(Vec::from([
+                sample(0, 0..1, 0, 0x0006_0000),
+                sample(10, 1..2, 0, 0x000a_0007),
+                sample(20, 2..3, 0, 0x000c_0100),
+            ]))
+        );
+    }
+
+    #[test]
     fn every_sample_of_a_track_without_an_stss_is_a_sync_sample() {
         assert_eq!(
             resolve([track(1, 10, &[1, 1], &[(1, 2)], &[0])]),
@@ -522,12 +542,22 @@ mod tests {
         let mut stss = SyncSampleBox::default();
         stss.sample_numbers = Vec::from([1, 3]);
         sync_past_the_samples.mdia.minf.stbl.stss = Some(stss);
+        let mut short_padb = track(7, 10, &[1, 1], &[(1, 2)], &[0]);
+        let mut padb = PaddingBitsBox::default();
+        padb.pads = Vec::from([1]);
+        short_padb.mdia.minf.stbl.padb = Some(padb);
+        let mut long_stdp = track(7, 10, &[1, 1], &[(1, 2)], &[0]);
+        let mut stdp = DegradationPriorityBox::default();
+        stdp.priorities = Vec::from([1, 2, 3]);
+        long_stdp.mdia.minf.stbl.stdp = Some(stdp);
 
         for (trak, box_type) in [
             (short_stts, TimeToSampleBox::BOX_TYPE),
             (long_stts, TimeToSampleBox::BOX_TYPE),
             (chunk_past_the_samples, SampleToChunkBox::BOX_TYPE),
             (sync_past_the_samples, SyncSampleBox::BOX_TYPE),
+            (short_padb, PaddingBitsBox::BOX_TYPE),
+            (long_stdp, DegradationPriorityBox::BOX_TYPE),
         ] {
             assert_eq!(
                 resolve([trak]),

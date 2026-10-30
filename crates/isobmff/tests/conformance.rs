@@ -360,6 +360,8 @@ mod tests {
             stbl.chunk_offset = Some(ChunkOffsetVariant::ChunkOffset(ChunkOffsetBox::default()));
             stbl.stss = None;
             stbl.sdtp = None;
+            stbl.padb = None;
+            stbl.stdp = None;
         }
         movie
     }
@@ -416,10 +418,15 @@ mod tests {
         let files: Vec<_> = conformance_files()
             .into_iter()
             .filter(|file| {
-                ["01_simple.mp4", "a4-tone-fragmented.mp4"].contains(&file.name.as_str())
+                [
+                    "01_simple.mp4",
+                    "a4-tone-fragmented.mp4",
+                    "a7-tone-oddities.mp4",
+                ]
+                .contains(&file.name.as_str())
             })
             .collect();
-        assert_eq!(files.len(), 2);
+        assert_eq!(files.len(), 3);
         for ConformanceFile { name, bytes, .. } in &files {
             let source = demux(bytes);
             let first = FileStructure::Fragmented {

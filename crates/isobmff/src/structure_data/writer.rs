@@ -278,6 +278,11 @@ mod tests {
         )
     }
 
+    /// Returns the full box of `box_type` of version 0 and no flags, whose fields after those are `fields`
+    fn full(box_type: &[u8; 4], fields: &[&[u8]]) -> Vec<u8> {
+        written(box_type, &[&[&[0_u8; 4][..]], fields].concat())
+    }
+
     /// Returns [`sample`] with a composition time offset of `offset`, and not a sync sample
     fn offset_sample(
         track_id: u32,
@@ -430,9 +435,6 @@ mod tests {
             .collect::<Vec<_>>()
             .concat()
         };
-        let full = |box_type: &[u8; 4], fields: &[&[u8]]| {
-            written(box_type, &[&[&[0_u8; 4][..]], fields].concat())
-        };
         let track_1 = [
             full(
                 b"stts",
@@ -503,6 +505,52 @@ mod tests {
             .collect();
         assert_eq!(durations, [(track_1, 30, 300), (track_2, 20, 200)]);
         assert_eq!(movie.mvhd.duration, 300);
+    }
+
+    #[test]
+    fn the_padb_and_the_stdp_declare_the_padding_and_the_degradation_priority_of_each_sample() {
+        let flagged = |sample: Sample, sample_padding_value, sample_degradation_priority| {
+            let mut properties = *sample.properties();
+            properties.sample_flags.sample_padding_value = sample_padding_value;
+            properties.sample_flags.sample_degradation_priority = sample_degradation_priority;
+            Sample::new(properties, sample.into_data())
+        };
+        let mut writer = SampleTableWriter::new(two_tracks()).unwrap();
+        writer
+            .handle_samples(
+                &[
+                    flagged(sample(1, 0, 10, b"A"), 3, 0),
+                    flagged(sample(1, 10, 10, b"B"), 0, 0),
+                    flagged(sample(1, 20, 10, b"C"), 5, 0x102),
+                    sample(2, 0, 10, b"D"),
+                ],
+                1000,
+            )
+            .unwrap();
+
+        let movie = writer.finish();
+
+        let tables: Vec<_> = movie
+            .trak
+            .iter()
+            .map(|trak| {
+                let stbl = &trak.mdia.minf.stbl;
+                (
+                    stbl.padb.as_ref().map(encoded),
+                    stbl.stdp.as_ref().map(encoded),
+                )
+            })
+            .collect();
+        assert_eq!(
+            tables,
+            [
+                (
+                    Some(full(b"padb", &[&3_u32.to_be_bytes(), &[0x30, 0x50]])),
+                    Some(full(b"stdp", &[&[0, 0, 0, 0, 1, 2]])),
+                ),
+                (None, None),
+            ]
+        );
     }
 
     #[test]
