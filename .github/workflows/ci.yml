@@ -272,11 +272,13 @@ jobs:
           mkdir -p "$RUNNER_TEMP/seeds" "$RUNNER_TEMP/corpus"
           cp "$RUNNER_TEMP"/conformance/*.mp4 "$RUNNER_TEMP/seeds/"
       # The target is spelled out: the cargo-fuzz this action installs is a
-      # static musl binary, and defaults to the triple it was built for. No
-      # sanitizer: unsafe code is forbidden in every crate the targets reach,
-      # so AddressSanitizer has no memory error to find, and it slows every
-      # run. Panics and overflow checks still fail a run.
-      - run: cargo fuzz run "$TARGET" --target x86_64-unknown-linux-gnu --sanitizer none "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/seeds" -- -runs="$RUNS" -seed=1
+      # static musl binary, and defaults to the triple it was built for.
+      # LeakSanitizer rather than AddressSanitizer: unsafe code is forbidden in
+      # every crate the targets reach, so AddressSanitizer's memory checks have
+      # nothing to find and slow every run. Not no sanitizer at all: libFuzzer
+      # fails a run on an allocation past its limit only through a sanitizer's
+      # allocator, and an allocation sized by the input is a bug here.
+      - run: cargo fuzz run "$TARGET" --target x86_64-unknown-linux-gnu --sanitizer leak "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/seeds" -- -runs="$RUNS" -seed=1
 
   # Advisories, license policy, banned crates and sources, per deny.toml.
   deny:
