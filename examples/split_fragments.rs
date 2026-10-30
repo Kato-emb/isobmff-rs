@@ -1,7 +1,7 @@
 //! Splits a fragmented movie file into an initialization segment and one media segment per movie fragment
 //!
 //! ```text
-//! cargo run -p isobmff --example split_fragments -- movie.mp4 segments/
+//! cargo run --example split_fragments -- movie.mp4 segments/
 //! ```
 //!
 //! The initialization segment, `init.mp4`, holds the `ftyp` and the `moov`

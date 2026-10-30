@@ -1,7 +1,7 @@
 //! Lists the boxes and the samples of a movie file or a segment, seeking to the bytes the demuxer wants
 //!
 //! ```text
-//! cargo run -p isobmff --example demux -- movie.mp4
+//! cargo run --example demux -- movie.mp4
 //! ```
 //!
 //! The demuxer names the bytes it wants next. The caller seeks the file there

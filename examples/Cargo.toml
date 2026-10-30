@@ -1,0 +1,41 @@
+[package]
+name = "examples"
+version = "0.0.0"
+description = "Programs that read and write ISO base media files with isobmff"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dev-dependencies]
+isobmff.workspace = true
+# Fetches the movie file `demux_stream` reads as its bytes arrive. Its TLS
+# verifies certificates against the roots of the operating system, so that no
+# bundled root store joins the graph.
+rustls = { version = "0.23.46", default-features = false, features = ["ring"] }
+ureq = { version = "3.5.0", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
+
+[[example]]
+name = "demux"
+path = "demux.rs"
+
+[[example]]
+name = "demux_stream"
+path = "demux_stream.rs"
+
+[[example]]
+name = "dump_boxes"
+path = "dump_boxes.rs"
+
+[[example]]
+name = "remux"
+path = "remux.rs"
+
+[[example]]
+name = "split_fragments"
+path = "split_fragments.rs"
+
+[lints]
+workspace = true
