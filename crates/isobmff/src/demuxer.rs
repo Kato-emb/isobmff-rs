@@ -1,7 +1,5 @@
 //! [`Demuxer`], which reads a movie file or a segment from the bytes a caller reads
 
-mod file_level;
-
 use alloc::boxed::Box;
 
 use isobmff_boxes::{
@@ -10,8 +8,8 @@ use isobmff_boxes::{
 use isobmff_core::BoxHeader;
 
 use crate::byte_range::ByteRange;
-use crate::demuxer::file_level::{Handling, Value};
 use crate::error::DemuxError;
+use crate::file_level::{self, Handling, Value};
 use crate::framing::{BoxEvent, BoxReader};
 use crate::limits::DemuxLimits;
 use crate::media_data::MediaDataReader;

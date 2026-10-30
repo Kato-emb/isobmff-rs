@@ -1,11 +1,4 @@
-//! Samples gathered out of the media data of a file as its bytes arrive
-//!
-//! Media data is the bytes of samples, which structure-data describes by
-//! reference (ISO/IEC 14496-12 §8.1.1, A.3). A [`MediaDataReader`] takes the
-//! [`SampleLocation`]s structure-data resolves to, and the bytes of the file
-//! as they arrive, and gathers each sample out of them.
-
-mod writer;
+//! [`MediaDataReader`], which gathers the bytes of the samples whose locations it holds as they arrive
 
 use alloc::collections::{BTreeSet, VecDeque};
 use alloc::vec::Vec;
@@ -15,8 +8,6 @@ use crate::byte_range::ByteRange;
 use crate::error::DemuxError;
 use crate::framing::to_u64;
 use crate::sample::{Sample, SampleLocation};
-
-pub(crate) use writer::MediaDataWriter;
 
 /// Limits a [`MediaDataReader`] holds sample locations and their media data up to
 ///

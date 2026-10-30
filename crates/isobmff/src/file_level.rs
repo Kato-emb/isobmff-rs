@@ -1,4 +1,4 @@
-//! Boxes at file level, each read into its value or skipped
+//! Boxes at file level: each read into its value or skipped, and the brands a fragmented file is written under
 //!
 //! A box at file level is one no other box contains (ISO/IEC 14496-12
 //! §3.1.14). What becomes of it follows from its type alone: the boxes whose
@@ -6,6 +6,9 @@
 //! (§4.2.2).
 //! Nothing is held between boxes: the order the boxes come in is for the
 //! reader of their values to judge.
+//!
+//! A file whose track fragments take their `moof` as the base data offset is
+//! written under a brand from `iso5` on (§8.8.7.1).
 
 use isobmff_boxes::{
     FileTypeBox, IdentifiedMediaDataBox, MediaDataBox, MovieBox, MovieFragmentBox,
@@ -13,7 +16,7 @@ use isobmff_boxes::{
 };
 use isobmff_core::{BoxDecode, BoxDefinition, BoxType, RawBox};
 
-use crate::error::DemuxError;
+use crate::error::{DemuxError, MuxError};
 
 /// What becomes of a box at file level, as its type says
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -89,6 +92,24 @@ fn value_reader(box_type: BoxType) -> Option<ReadPayload> {
 fn decode<Decoded: BoxDecode + BoxDefinition>(payload: &[u8]) -> Result<Decoded, DemuxError> {
     Decoded::decode_payload(payload).map_err(|error| DemuxError::Box {
         error: error.in_container(Decoded::BOX_TYPE),
+    })
+}
+
+/// Brands under which a track fragment may take the first byte of its `moof` as its base data offset, ISO/IEC 14496-12 §8.8.7.1 and Annex E
+const DEFAULT_BASE_IS_MOOF_BRANDS: [[u8; 4]; 9] = [
+    *b"iso5", *b"iso6", *b"iso7", *b"iso8", *b"iso9", *b"isoa", *b"isob", *b"isoc", *b"isod",
+];
+
+/// Refuses `file_type` where it names none of the brands under which a reader takes the `moof` as the base data offset of a track fragment, §8.8.7.1
+pub(crate) fn refuse_brands_before_iso5(file_type: &FileTypeBox) -> Result<(), MuxError> {
+    if core::iter::once(&file_type.major_brand)
+        .chain(&file_type.compatible_brands)
+        .any(|brand| DEFAULT_BASE_IS_MOOF_BRANDS.contains(brand.as_bytes()))
+    {
+        return Ok(());
+    }
+    Err(MuxError::UnsupportedBrand {
+        brand: file_type.major_brand,
     })
 }
 

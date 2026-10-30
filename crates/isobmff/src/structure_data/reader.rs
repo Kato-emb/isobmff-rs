@@ -1,33 +1,17 @@
-//! Samples structure-data declares, resolved to where their media data lies
-//!
-//! Structure-data describes media data by reference (ISO/IEC 14496-12 A.3):
-//! the `moov` declares the samples of each track in its sample tables (§8.5),
-//! and each `moof` adds samples to them in track runs (§8.8). A
-//! [`StructureDataReader`] takes these boxes as they come in the file and
-//! resolves each sample to a [`SampleLocation`]: the values declared about
-//! it, and the byte range of its media data in file offsets.
-
-mod movie_fragment;
-mod sample_table;
-mod segment_index;
-mod writer;
+//! [`StructureDataReader`], which reads the structure-data of a file into the samples it declares
 
 use alloc::vec::{self, Vec};
-use core::iter::{self, FusedIterator};
+use core::iter::FusedIterator;
 use core::ops::Range;
 
-use isobmff_boxes::{
-    DataEntry, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SampleDescription,
-    SegmentIndexBox, TrackBox,
-};
+use isobmff_boxes::{MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentIndexBox};
 use isobmff_core::BoxDefinition;
 
-use crate::error::{DemuxError, MuxError};
+use super::segment_index::SegmentIndex;
+use super::{movie_fragment, sample_table};
+use crate::error::DemuxError;
 use crate::framing::to_u64;
 use crate::sample::SampleLocation;
-
-pub use segment_index::{SegmentIndex, Subsegment, movie_fragment_random_access_start};
-pub(crate) use writer::{MovieFragmentWriter, SampleTableWriter, StructureDataWriter};
 
 /// Limits a [`StructureDataReader`] resolves and keeps structure-data up to
 ///
@@ -336,159 +320,6 @@ impl ExactSizeIterator for SampleLocations {}
 
 impl FusedIterator for SampleLocations {}
 
-/// Reason the samples a sample entry of a track describes are not described, or do not lie in the file itself
-///
-/// Reading and writing a file refuse the same samples, each with the kind of
-/// the same name in its own error.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum DataReferenceRefusal {
-    /// The `stsd` has no entry `sample_description_index`, or the entry is too short to hold a `data_reference_index`
-    UnknownSampleDescriptionIndex {
-        track_id: u32,
-        sample_description_index: u32,
-    },
-    /// The `dref` has no entry `data_reference_index`
-    UnknownDataReferenceIndex {
-        track_id: u32,
-        data_reference_index: u16,
-    },
-    /// The entry names a file other than the file itself (§8.7.2)
-    ExternalDataReference {
-        track_id: u32,
-        data_reference_index: u16,
-    },
-    /// The entry names an `IdentifiedMediaDataBox`
-    UnsupportedDataReference {
-        track_id: u32,
-        data_reference_index: u16,
-    },
-}
-
-impl From<DataReferenceRefusal> for DemuxError {
-    fn from(refusal: DataReferenceRefusal) -> Self {
-        match refusal {
-            DataReferenceRefusal::UnknownSampleDescriptionIndex {
-                track_id,
-                sample_description_index,
-            } => Self::UnknownSampleDescriptionIndex {
-                track_id,
-                sample_description_index,
-            },
-            DataReferenceRefusal::UnknownDataReferenceIndex {
-                track_id,
-                data_reference_index,
-            } => Self::UnknownDataReferenceIndex {
-                track_id,
-                data_reference_index,
-            },
-            DataReferenceRefusal::ExternalDataReference {
-                track_id,
-                data_reference_index,
-            } => Self::ExternalDataReference {
-                track_id,
-                data_reference_index,
-            },
-            DataReferenceRefusal::UnsupportedDataReference {
-                track_id,
-                data_reference_index,
-            } => Self::UnsupportedDataReference {
-                track_id,
-                data_reference_index,
-            },
-        }
-    }
-}
-
-impl From<DataReferenceRefusal> for MuxError {
-    fn from(refusal: DataReferenceRefusal) -> Self {
-        match refusal {
-            DataReferenceRefusal::UnknownSampleDescriptionIndex {
-                track_id,
-                sample_description_index,
-            } => Self::UnknownSampleDescriptionIndex {
-                track_id,
-                sample_description_index,
-            },
-            DataReferenceRefusal::UnknownDataReferenceIndex {
-                track_id,
-                data_reference_index,
-            } => Self::UnknownDataReferenceIndex {
-                track_id,
-                data_reference_index,
-            },
-            DataReferenceRefusal::ExternalDataReference {
-                track_id,
-                data_reference_index,
-            } => Self::ExternalDataReference {
-                track_id,
-                data_reference_index,
-            },
-            DataReferenceRefusal::UnsupportedDataReference {
-                track_id,
-                data_reference_index,
-            } => Self::UnsupportedDataReference {
-                track_id,
-                data_reference_index,
-            },
-        }
-    }
-}
-
-/// Returns the index of the entry of the `dref` of `trak` that names where the samples sample entry `sample_description_index` describes are, once it names the file itself
-///
-/// # Errors
-///
-/// * The [`DataReferenceRefusal`] of a sample entry the `stsd` has none of,
-///   of a data reference entry the `dref` has none of, and of one that names
-///   another file or an `IdentifiedMediaDataBox`.
-fn data_reference_index(
-    trak: &TrackBox,
-    sample_description_index: u32,
-) -> Result<u16, DataReferenceRefusal> {
-    let track_id = trak.tkhd.track_id;
-    let unknown_description = DataReferenceRefusal::UnknownSampleDescriptionIndex {
-        track_id,
-        sample_description_index,
-    };
-    let description = nth_from_one(
-        &trak.mdia.minf.stbl.stsd.sample_descriptions,
-        sample_description_index,
-    )
-    .ok_or(unknown_description)?;
-    let data_reference_index = match description {
-        SampleDescription::Typed(entry) => entry.data_reference_index,
-        // Why not refuse an entry that does not read as a `SampleEntry`: every sample entry opens with six reserved bytes and its `data_reference_index` (§8.5.2.2), whatever its format.
-        SampleDescription::Other(entry) => entry
-            .raw_payload()
-            .and_then(|payload| payload.get(6..8))
-            .and_then(|bytes| <[u8; 2]>::try_from(bytes).ok())
-            .map(u16::from_be_bytes)
-            .ok_or(unknown_description)?,
-        _ => return Err(unknown_description),
-    };
-
-    match nth_from_one(
-        &trak.mdia.minf.dinf.dref.data_entries,
-        u32::from(data_reference_index),
-    ) {
-        Some(DataEntry::Url(url)) if url.location.is_none() => Ok(data_reference_index),
-        Some(DataEntry::Imda(_) | DataEntry::SeqNumImda(_)) => {
-            Err(DataReferenceRefusal::UnsupportedDataReference {
-                track_id,
-                data_reference_index,
-            })
-        }
-        Some(_) => Err(DataReferenceRefusal::ExternalDataReference {
-            track_id,
-            data_reference_index,
-        }),
-        None => Err(DataReferenceRefusal::UnknownDataReferenceIndex {
-            track_id,
-            data_reference_index,
-        }),
-    }
-}
-
 /// Sorts `locations` into the order their media data lies in the file, samples of no bytes at one offset by track and decoding time
 fn in_file_order(locations: &mut [SampleLocation]) {
     // Why not a stable sort by offset alone: it allocates scratch in proportion to the locations, which the sample limit lets grow large.
@@ -500,124 +331,6 @@ fn in_file_order(locations: &mut [SampleLocation]) {
             properties.decoding_time,
         )
     });
-}
-
-/// Returns the value of each sample a table of runs of samples of one value states, in sample order
-fn expand<Value: Clone>(runs: impl Iterator<Item = (u32, Value)>) -> impl Iterator<Item = Value> {
-    runs.flat_map(|(sample_count, value)| {
-        iter::repeat_n(value, usize::try_from(sample_count).unwrap_or(usize::MAX))
-    })
-}
-
-/// Returns entry `index` of a table that numbers its entries from 1
-fn nth_from_one<Entry>(entries: &[Entry], index: u32) -> Option<&Entry> {
-    entries.get(usize::try_from(index.checked_sub(1)?).ok()?)
-}
-
-/// Movies built from the fields of their boxes, which the tests of resolving share
-#[cfg(test)]
-pub(crate) mod fixtures {
-    use alloc::vec::Vec;
-
-    use isobmff_core::{BoxDefinition, BoxEncode};
-
-    use super::StructureDataLimits;
-
-    use isobmff_boxes::{
-        ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, DataEntry, DataEntryUrlBox,
-        MovieBox, SampleDescription, SampleEntry, SampleSizeBox, SampleSizeVariant, SampleSizes,
-        SampleToChunkBox, SampleToChunkEntry, TimeToSampleBox, TimeToSampleEntry, TrackBox,
-    };
-
-    /// Returns the track `track_id` of the samples of `sizes`, each lasting `sample_delta`, laid in chunks at `chunk_offsets` by the runs `(first_chunk, samples_per_chunk)`
-    ///
-    /// The track has one sample entry, whose media data is in the file itself.
-    pub(crate) fn track(
-        track_id: u32,
-        sample_delta: u32,
-        sizes: &[u32],
-        runs: &[(u32, u32)],
-        chunk_offsets: &[u64],
-    ) -> TrackBox {
-        let mut trak = TrackBox::default();
-        trak.tkhd.track_id = track_id;
-        let stbl = &mut trak.mdia.minf.stbl;
-        let mut entry = SampleEntry::default();
-        entry.data_reference_index = 1;
-        stbl.stsd.sample_descriptions = Vec::from([SampleDescription::Typed(entry)]);
-        let mut stts = TimeToSampleBox::default();
-        let mut run = TimeToSampleEntry::default();
-        run.sample_count = u32::try_from(sizes.len()).unwrap();
-        run.sample_delta = sample_delta;
-        stts.entries = Vec::from([run]);
-        stbl.stts = Some(stts);
-        let mut stsc = SampleToChunkBox::default();
-        stsc.entries = runs
-            .iter()
-            .map(|&(first_chunk, samples_per_chunk)| {
-                let mut entry = SampleToChunkEntry::default();
-                entry.first_chunk = first_chunk;
-                entry.samples_per_chunk = samples_per_chunk;
-                entry.sample_description_index = 1;
-                entry
-            })
-            .collect();
-        stbl.stsc = Some(stsc);
-        let mut stsz = SampleSizeBox::default();
-        stsz.sample_sizes = SampleSizes::Table {
-            entry_sizes: sizes.to_vec(),
-        };
-        stbl.sample_size = Some(SampleSizeVariant::SampleSize(stsz));
-        stbl.chunk_offset = Some(
-            match chunk_offsets
-                .iter()
-                .map(|&offset| u32::try_from(offset))
-                .collect::<Result<Vec<_>, _>>()
-            {
-                Ok(compact) => {
-                    let mut stco = ChunkOffsetBox::default();
-                    stco.chunk_offsets = compact;
-                    ChunkOffsetVariant::ChunkOffset(stco)
-                }
-                Err(_) => {
-                    let mut co64 = ChunkLargeOffsetBox::default();
-                    co64.chunk_offsets = chunk_offsets.to_vec();
-                    ChunkOffsetVariant::ChunkLargeOffset(co64)
-                }
-            },
-        );
-        trak.mdia.minf.dinf.dref.data_entries =
-            Vec::from([DataEntry::Url(DataEntryUrlBox::default())]);
-        trak
-    }
-
-    /// Returns `value` written as a box
-    pub(crate) fn encoded(value: &(impl BoxEncode + BoxDefinition)) -> Vec<u8> {
-        let mut bytes = alloc::vec![0; usize::try_from(value.encoded_len()).unwrap()];
-        value.encode(&mut bytes).unwrap();
-        bytes
-    }
-
-    /// Returns the box of `box_type` whose payload is `fields` laid end to end, under a 32-bit size
-    pub(crate) fn written(box_type: &[u8; 4], fields: &[&[u8]]) -> Vec<u8> {
-        let payload = fields.concat();
-        let size = u32::try_from(payload.len().checked_add(8).unwrap()).unwrap();
-        [&size.to_be_bytes()[..], box_type, &payload].concat()
-    }
-
-    /// Limits no structure-data of the tests reaches
-    pub(crate) const UNLIMITED: StructureDataLimits = StructureDataLimits {
-        sample_count: u64::MAX,
-        segment_index_count: u64::MAX,
-        subsegment_count: u64::MAX,
-    };
-
-    /// Returns the movie of `tracks`
-    pub(crate) fn movie(tracks: impl IntoIterator<Item = TrackBox>) -> MovieBox {
-        let mut movie = MovieBox::default();
-        movie.trak = tracks.into_iter().collect();
-        movie
-    }
 }
 
 #[cfg(test)]
@@ -632,10 +345,10 @@ mod tests {
     };
     use isobmff_core::{BoxDecode, BoxDefinition, Utf8String};
 
-    use super::fixtures::{UNLIMITED, movie, track};
     use super::{StructureDataLimits, StructureDataReader};
     use crate::error::DemuxError;
     use crate::sample::{SampleLocation, SampleProperties};
+    use crate::structure_data::fixtures::{UNLIMITED, movie, track};
 
     /// Resolves the movie of `tracks` with no limit to speak of
     fn resolve(
