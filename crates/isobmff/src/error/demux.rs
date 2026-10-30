@@ -84,7 +84,13 @@ pub enum DemuxError {
         /// Number of samples one `moov` or `moof` is resolved up to
         limit_samples: u64,
     },
-    /// Table of a sample table that does not agree with the others on the samples of the track
+    /// Table of a sample table that does not agree with the others on the samples of the track, so they cannot be laid out
+    ///
+    /// The track declares samples, but this table states none, or it lays
+    /// its runs over chunks the track does not have. A table that states
+    /// another number of samples than the track has, or an `stss` that marks
+    /// sample numbers out of order, is read past, as a
+    /// [`Leniency::SampleTable`](crate::Leniency::SampleTable).
     #[non_exhaustive]
     SampleTableMismatch {
         /// `track_ID` of the track

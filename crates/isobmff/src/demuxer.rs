@@ -11,6 +11,7 @@ use crate::byte_range::ByteRange;
 use crate::error::DemuxError;
 use crate::file_level::{self, Handling, Value};
 use crate::framing::{BoxEvent, BoxReader};
+use crate::leniency::Leniency;
 use crate::limits::DemuxLimits;
 use crate::media_data::MediaDataReader;
 use crate::sample::Sample;
@@ -217,7 +218,7 @@ impl Demuxer {
     /// The demuxer forgets the decoding time each track has reached, so a
     /// `moof` read after it resolves only where its `tfdt` gives the decoding
     /// time (§8.8.12). The movie, the segment indexes, the movie fragment
-    /// random access box and the brands are kept, so a `moov` read again fails
+    /// random access box, the brands and the leniencies are kept, so a `moov` read again fails
     /// with [`DuplicateBox`](DemuxError::DuplicateBox). The samples being
     /// gathered are dropped with the bytes gathered for them; the tracks
     /// discarded stay discarded.
@@ -269,6 +270,15 @@ impl Demuxer {
     #[must_use]
     pub const fn movie_fragment_random_access(&self) -> Option<&MovieFragmentRandomAccessBox> {
         self.structure_data.movie_fragment_random_access()
+    }
+
+    /// Returns what the demuxer has read past in the file rather than refuse it
+    ///
+    /// Each layer of the demuxer keeps what it read past in the order it read
+    /// it, and these are the leniencies of each layer in turn, such as those
+    /// of [`StructureDataReader::leniencies`].
+    pub fn leniencies(&self) -> impl Iterator<Item = &Leniency> {
+        self.structure_data.leniencies().iter()
     }
 
     /// Makes an event of the reader of the boxes into the event of the demuxer, if it makes one
@@ -442,12 +452,13 @@ mod tests {
         SegmentTypeBox, TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
         TrackRunBox, TrackRunSamples,
     };
-    use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader, BoxType, FourCc};
+    use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxHeader, BoxType, FourCc};
 
     use super::{DemuxEvent, Demuxer};
     use crate::byte_range::ByteRange;
     use crate::error::DemuxError;
     use crate::framing::to_u64;
+    use crate::leniency::{Leniency, SampleTableDisagreement};
     use crate::limits::DemuxLimits;
     use crate::structure_data::fixtures::track;
 
@@ -1209,6 +1220,38 @@ mod tests {
             demuxer.resume_at(second),
             Err(DemuxError::MissingDecodingTime { track_id: 1 })
         );
+    }
+
+    #[test]
+    fn what_the_movie_was_read_past_in_is_kept_after_resuming() {
+        let mut movie = isobmff_boxes::MovieBox::decode(&fragmented_movie())
+            .unwrap()
+            .0;
+        if let Some(stts) = movie
+            .trak
+            .first_mut()
+            .and_then(|trak| trak.mdia.minf.stbl.stts.as_mut())
+        {
+            stts.entries
+                .iter_mut()
+                .for_each(|entry| entry.sample_count = 3);
+        }
+        let head = [file_type(), encoded(&movie)].concat();
+        let file = [head.clone(), fragment(1, None), fragment(2, Some(5000))].concat();
+        let second = to_u64(head.len()).saturating_add(to_u64(fragment(1, None).len()));
+        let mut demuxer = Demuxer::new();
+        read(&mut demuxer, &file, usize::MAX).unwrap();
+        let read_past = [Leniency::SampleTable {
+            track_id: 1,
+            box_type: isobmff_boxes::TimeToSampleBox::BOX_TYPE,
+            kind: SampleTableDisagreement::Long { excess_samples: 3 },
+        }];
+        assert!(demuxer.leniencies().eq(&read_past));
+
+        demuxer.resume_at(second).unwrap();
+        read(&mut demuxer, &file, usize::MAX).unwrap();
+
+        assert!(demuxer.leniencies().eq(&read_past));
     }
 
     #[test]

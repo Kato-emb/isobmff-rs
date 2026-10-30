@@ -11,6 +11,7 @@ use super::segment_index::SegmentIndex;
 use super::{movie_fragment, sample_table};
 use crate::error::DemuxError;
 use crate::framing::to_u64;
+use crate::leniency::Leniency;
 use crate::sample::SampleLocation;
 
 /// Limits a [`StructureDataReader`] resolves and keeps structure-data up to
@@ -79,6 +80,7 @@ pub struct StructureDataReader {
     decoding_times: Vec<Option<u64>>,
     segment_indexes: Vec<SegmentIndex>,
     movie_fragment_random_access: Option<MovieFragmentRandomAccessBox>,
+    leniencies: Vec<Leniency>,
 }
 
 impl StructureDataReader {
@@ -91,6 +93,7 @@ impl StructureDataReader {
             decoding_times: Vec::new(),
             segment_indexes: Vec::new(),
             movie_fragment_random_access: None,
+            leniencies: Vec::new(),
         }
     }
 
@@ -101,6 +104,15 @@ impl StructureDataReader {
     /// each track starts at zero and runs on into the fragments that follow
     /// (§8.6.1.2, §8.8.12).
     ///
+    /// A table that states another number of samples than its track has is
+    /// read past, as FFmpeg does, and kept as a [`Leniency::SampleTable`]
+    /// that [`leniencies`](Self::leniencies) returns: the track has the
+    /// samples its chunks lay out, as far as its `stsz` or `stz2` gives them
+    /// sizes; the samples past the end of a short `stts` take its last
+    /// duration, those past the end of another short table take zero; and
+    /// the entries of a table past the last sample are left out, as are the
+    /// sample numbers the `stss` marks out of order.
+    ///
     /// # Errors
     ///
     /// * [`DuplicateBox`](DemuxError::DuplicateBox): the reader already holds
@@ -109,7 +121,10 @@ impl StructureDataReader {
     ///   the sample size tables of every track together count more samples
     ///   than the limit, and none is resolved.
     /// * [`SampleTableMismatch`](DemuxError::SampleTableMismatch): the tables
-    ///   of a track do not agree on its samples.
+    ///   of a track cannot lay out its samples: the track declares samples,
+    ///   but its `stsz` or `stz2`, its `stco` or `co64`, its `stsc` or its
+    ///   `stts` states none; or its `stsc` lays its runs over chunks it does
+    ///   not have.
     /// * [`UnknownSampleDescriptionIndex`](DemuxError::UnknownSampleDescriptionIndex),
     ///   [`UnknownDataReferenceIndex`](DemuxError::UnknownDataReferenceIndex):
     ///   samples are described by a sample entry, or a sample entry names a
@@ -134,14 +149,16 @@ impl StructureDataReader {
             .fold(0, u64::saturating_add);
         let mut locations = self.room_for(declared_samples)?;
         let mut decoding_times = Vec::with_capacity(movie.trak.len());
+        let mut leniencies = Vec::new();
         for trak in &movie.trak {
-            let decoding_time = sample_table::resolve_track(trak, &mut locations)?;
+            let decoding_time = sample_table::resolve_track(trak, &mut locations, &mut leniencies)?;
             decoding_times.push(Some(decoding_time));
         }
         in_file_order(&mut locations);
 
         self.movie = Some(movie);
         self.decoding_times = decoding_times;
+        self.leniencies = leniencies;
         Ok(SampleLocations {
             locations: locations.into_iter(),
         })
@@ -257,7 +274,7 @@ impl StructureDataReader {
     ///
     /// The fragments read after it resolve only where their `tfdt` gives the
     /// decoding time (§8.8.12). The movie, the segment indexes and the movie
-    /// fragment random access box are kept.
+    /// fragment random access box are kept, and so are the leniencies.
     pub fn resume(&mut self) {
         self.decoding_times.fill(None);
     }
@@ -278,6 +295,12 @@ impl StructureDataReader {
     #[must_use]
     pub const fn movie_fragment_random_access(&self) -> Option<&MovieFragmentRandomAccessBox> {
         self.movie_fragment_random_access.as_ref()
+    }
+
+    /// Returns what the reader has read past in the structure-data, in the order it read it
+    #[must_use]
+    pub fn leniencies(&self) -> &[Leniency] {
+        &self.leniencies
     }
 
     /// Returns room for the locations of `declared_samples` samples, or the failure of more than the limit
@@ -339,15 +362,16 @@ mod tests {
     use core::ops::Range;
 
     use isobmff_boxes::{
-        CompactSampleSizeBox, CompositionOffsetBox, CompositionOffsetEntry, DataEntry,
-        DataEntryImdaBox, DataEntryUrlBox, DegradationPriorityBox, MovieBox, PaddingBitsBox,
-        SampleDependencyTypeBox, SampleFlags, SampleSizeVariant, SampleToChunkBox, SyncSampleBox,
-        TimeToSampleBox, TrackBox,
+        ChunkOffsetBox, CompactSampleSizeBox, CompositionOffsetBox, CompositionOffsetEntry,
+        DataEntry, DataEntryImdaBox, DataEntryUrlBox, DegradationPriorityBox, MovieBox,
+        PaddingBitsBox, SampleDependencyTypeBox, SampleFlags, SampleSizeBox, SampleSizeVariant,
+        SampleToChunkBox, SyncSampleBox, TimeToSampleBox, TimeToSampleEntry, TrackBox,
     };
-    use isobmff_core::{BoxDecode, BoxDefinition, Utf8String};
+    use isobmff_core::{BoxDecode, BoxDefinition, BoxType, Utf8String};
 
     use super::{StructureDataLimits, StructureDataReader};
     use crate::error::DemuxError;
+    use crate::leniency::{Leniency, SampleTableDisagreement};
     use crate::sample::{SampleLocation, SampleProperties};
     use crate::structure_data::fixtures::{UNLIMITED, movie, track};
 
@@ -511,53 +535,195 @@ mod tests {
         );
     }
 
+    /// Decoding time, duration, composition time offset, `sample_flags` bits and byte range of a sample
+    type Timed = (u64, u32, i64, u32, Range<u64>);
+
+    /// Returns how each location is timed
+    fn timed(locations: &[SampleLocation]) -> Vec<Timed> {
+        locations
+            .iter()
+            .map(|location| {
+                let properties = location.properties();
+                (
+                    properties.decoding_time,
+                    properties.sample_duration,
+                    properties.sample_composition_time_offset,
+                    properties.sample_flags.to_bits().unwrap(),
+                    location.byte_range(),
+                )
+            })
+            .collect()
+    }
+
+    /// Resolves the movie of `tracks`, and returns how each sample is timed and what the reader read past
+    fn resolve_leniently(
+        tracks: impl IntoIterator<Item = TrackBox>,
+    ) -> (Vec<Timed>, Vec<Leniency>) {
+        let mut reader = StructureDataReader::new(UNLIMITED);
+        let locations: Vec<_> = reader.handle_movie(movie(tracks)).unwrap().collect();
+        (timed(&locations), reader.leniencies().to_vec())
+    }
+
+    /// Returns the leniency of the table `box_type` of track 7 of `kind`
+    fn read_past(box_type: &[u8; 4], kind: SampleTableDisagreement) -> Leniency {
+        Leniency::SampleTable {
+            track_id: 7,
+            box_type: BoxType::compact(*box_type),
+            kind,
+        }
+    }
+
     #[test]
-    fn a_table_counting_other_samples_than_the_stsz_is_refused() {
-        let mut short_stts = track(7, 10, &[1, 1], &[(1, 2)], &[0]);
-        short_stts
-            .mdia
-            .minf
-            .stbl
-            .stts
-            .as_mut()
-            .unwrap()
-            .entries
-            .first_mut()
-            .unwrap()
-            .sample_count = 1;
-        let mut long_stts = track(7, 10, &[1, 1], &[(1, 2)], &[0]);
-        long_stts
-            .mdia
-            .minf
-            .stbl
-            .stts
-            .as_mut()
-            .unwrap()
-            .entries
-            .first_mut()
-            .unwrap()
-            .sample_count = 3;
+    fn the_samples_past_a_short_stts_take_its_last_duration() {
+        let mut trak = track(7, 0, &[1, 1, 1], &[(1, 3)], &[0]);
+        if let Some(stts) = trak.mdia.minf.stbl.stts.as_mut() {
+            stts.entries = [(1, 10), (1, 20)]
+                .map(|(sample_count, sample_delta)| {
+                    let mut entry = TimeToSampleEntry::default();
+                    entry.sample_count = sample_count;
+                    entry.sample_delta = sample_delta;
+                    entry
+                })
+                .to_vec();
+        }
+
+        assert_eq!(
+            resolve_leniently([trak]),
+            (
+                Vec::from([
+                    (0, 10, 0, 0, 0..1),
+                    (10, 20, 0, 0, 1..2),
+                    (30, 20, 0, 0, 2..3)
+                ]),
+                Vec::from([read_past(
+                    b"stts",
+                    SampleTableDisagreement::Short { missing_samples: 1 }
+                )])
+            )
+        );
+    }
+
+    #[test]
+    fn the_samples_a_track_has_are_those_its_chunks_lay_out_as_far_as_its_stsz_gives_sizes() {
+        // Chunk 2 has room for two more samples than the stsz gives sizes for
         let chunk_past_the_samples = track(7, 10, &[1, 1], &[(1, 2)], &[0, 9]);
-        let mut sync_past_the_samples = track(7, 10, &[1, 1], &[(1, 2)], &[0]);
+        // The stsz and the stts state a third sample no chunk lays out
+        let samples_past_the_chunks = track(7, 10, &[1, 1, 1], &[(1, 2)], &[0]);
+        let first_two = Vec::from([(0, 10, 0, 0, 0..1), (10, 10, 0, 0, 1..2)]);
+
+        assert_eq!(
+            [
+                resolve_leniently([chunk_past_the_samples]),
+                resolve_leniently([samples_past_the_chunks]),
+            ],
+            [
+                (
+                    first_two.clone(),
+                    Vec::from([read_past(
+                        b"stsc",
+                        SampleTableDisagreement::Long { excess_samples: 2 }
+                    )])
+                ),
+                (
+                    first_two,
+                    Vec::from([
+                        read_past(b"stsz", SampleTableDisagreement::Long { excess_samples: 1 }),
+                        read_past(b"stts", SampleTableDisagreement::Long { excess_samples: 1 }),
+                    ])
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_samples_past_another_short_table_take_zero_and_the_entries_past_the_last_sample_are_left_out()
+     {
+        let mut trak = track(7, 10, &[1, 1, 1], &[(1, 3)], &[0]);
+        let stbl = &mut trak.mdia.minf.stbl;
+        let mut ctts = CompositionOffsetBox::default();
+        let mut entry = CompositionOffsetEntry::default();
+        entry.sample_count = 1;
+        entry.sample_offset = 5;
+        ctts.entries = Vec::from([entry]);
+        stbl.ctts = Some(ctts);
         let mut stss = SyncSampleBox::default();
-        stss.sample_numbers = Vec::from([1, 3]);
-        sync_past_the_samples.mdia.minf.stbl.stss = Some(stss);
-        let mut short_padb = track(7, 10, &[1, 1], &[(1, 2)], &[0]);
+        stss.sample_numbers = Vec::from([1, 4, 5]);
+        stbl.stss = Some(stss);
         let mut padb = PaddingBitsBox::default();
-        padb.pads = Vec::from([1]);
-        short_padb.mdia.minf.stbl.padb = Some(padb);
-        let mut long_stdp = track(7, 10, &[1, 1], &[(1, 2)], &[0]);
+        padb.pads = Vec::from([3]);
+        stbl.padb = Some(padb);
         let mut stdp = DegradationPriorityBox::default();
-        stdp.priorities = Vec::from([1, 2, 3]);
-        long_stdp.mdia.minf.stbl.stdp = Some(stdp);
+        stdp.priorities = Vec::from([1, 2, 3, 4]);
+        stbl.stdp = Some(stdp);
+
+        assert_eq!(
+            resolve_leniently([trak]),
+            (
+                Vec::from([
+                    (0, 10, 5, 0x0006_0001, 0..1),
+                    (10, 10, 0, 0x0001_0002, 1..2),
+                    (20, 10, 0, 0x0001_0003, 2..3),
+                ]),
+                Vec::from([
+                    read_past(
+                        b"ctts",
+                        SampleTableDisagreement::Short { missing_samples: 2 }
+                    ),
+                    read_past(
+                        b"padb",
+                        SampleTableDisagreement::Short { missing_samples: 2 }
+                    ),
+                    read_past(b"stdp", SampleTableDisagreement::Long { excess_samples: 1 }),
+                    read_past(b"stss", SampleTableDisagreement::Long { excess_samples: 2 }),
+                ])
+            )
+        );
+    }
+
+    #[test]
+    fn the_sample_numbers_an_stss_marks_out_of_order_are_passed_over() {
+        let mut trak = track(7, 10, &[1, 1, 1], &[(1, 3)], &[0]);
+        let mut stss = SyncSampleBox::default();
+        stss.sample_numbers = Vec::from([2, 1, 3]);
+        trak.mdia.minf.stbl.stss = Some(stss);
+
+        assert_eq!(
+            resolve_leniently([trak]),
+            (
+                Vec::from([
+                    (0, 10, 0, 0x0001_0000, 0..1),
+                    (10, 10, 0, 0, 1..2),
+                    (20, 10, 0, 0, 2..3),
+                ]),
+                Vec::from([read_past(
+                    b"stss",
+                    SampleTableDisagreement::Unordered { sample_numbers: 1 }
+                )])
+            )
+        );
+    }
+
+    #[test]
+    fn a_track_whose_tables_cannot_lay_out_its_samples_is_refused() {
+        let without = |box_type: &[u8; 4]| {
+            let mut trak = track(7, 10, &[1, 1], &[(1, 2)], &[0]);
+            let stbl = &mut trak.mdia.minf.stbl;
+            match box_type {
+                b"stsz" => stbl.sample_size = None,
+                b"stco" => stbl.chunk_offset = None,
+                b"stsc" => stbl.stsc = None,
+                _ => stbl.stts = None,
+            }
+            trak
+        };
+        let runs_past_the_chunks = track(7, 10, &[1, 1], &[(1, 1), (3, 1)], &[0, 1]);
 
         for (trak, box_type) in [
-            (short_stts, TimeToSampleBox::BOX_TYPE),
-            (long_stts, TimeToSampleBox::BOX_TYPE),
-            (chunk_past_the_samples, SampleToChunkBox::BOX_TYPE),
-            (sync_past_the_samples, SyncSampleBox::BOX_TYPE),
-            (short_padb, PaddingBitsBox::BOX_TYPE),
-            (long_stdp, DegradationPriorityBox::BOX_TYPE),
+            (without(b"stsz"), SampleSizeBox::BOX_TYPE),
+            (without(b"stco"), ChunkOffsetBox::BOX_TYPE),
+            (without(b"stsc"), SampleToChunkBox::BOX_TYPE),
+            (without(b"stts"), TimeToSampleBox::BOX_TYPE),
+            (runs_past_the_chunks, SampleToChunkBox::BOX_TYPE),
         ] {
             assert_eq!(
                 resolve([trak]),
@@ -567,6 +733,17 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[test]
+    fn a_track_of_no_sample_is_read_without_a_leniency() {
+        let mut reader = StructureDataReader::new(UNLIMITED);
+        let locations = reader.handle_movie(movie([track(7, 0, &[], &[], &[])]));
+
+        assert_eq!(
+            (locations.map(Iterator::count), reader.leniencies()),
+            (Ok(0), &[][..])
+        );
     }
 
     #[test]
