@@ -19,8 +19,8 @@
 //! `moof`s each come before their media data: media data in a buffer passed
 //! before the box that locates it is read is not kept, and `finish` fails.
 //!
-//! The demuxer holds the locations of every sample of a `moov` or a `moof` at
-//! once, so their bytes together have to fit `DemuxLimits::with_held_bytes`.
+//! The demuxer holds the media data of the samples not yet taken up to
+//! `DemuxLimits::with_held_bytes`, so the samples are taken after each call.
 
 use std::collections::BTreeMap;
 use std::error::Error;

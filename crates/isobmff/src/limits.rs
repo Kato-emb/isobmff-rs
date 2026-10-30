@@ -17,7 +17,13 @@ use crate::structure_data::StructureDataLimits;
 /// | Segment indexes kept | 65,536 |
 /// | Subsegments the kept segment indexes reference, together | 1,048,576 |
 /// | Sample locations a `MediaDataReader` holds | 1,048,576 |
-/// | Bytes of media data the held locations name, together | 16 MiB |
+/// | Bytes of media data of one sample | 16 MiB |
+/// | Bytes of media data allocated for the samples not yet taken, together | 16 MiB |
+///
+/// The locations of the samples of a `moov` or a `moof` are resolved into one
+/// list before the first of them is returned, so the samples it declares
+/// allocate up to `sample_count × size_of::<SampleLocation>()` bytes for it,
+/// besides the limits above.
 ///
 /// # Examples
 ///
@@ -52,6 +58,7 @@ impl DemuxLimits {
             },
             media_data: MediaDataLimits {
                 held_location_count: 1_048_576,
+                sample_bytes: 16 * 1024 * 1024,
                 held_bytes: 16 * 1024 * 1024,
             },
         }
@@ -92,7 +99,14 @@ impl DemuxLimits {
         self
     }
 
-    /// Replaces the bytes of media data the locations a `MediaDataReader` holds name, together
+    /// Replaces the bytes of media data of one sample a `MediaDataReader` holds
+    #[must_use]
+    pub const fn with_sample_bytes(mut self, sample_bytes: u64) -> Self {
+        self.media_data.sample_bytes = sample_bytes;
+        self
+    }
+
+    /// Replaces the bytes of media data a `MediaDataReader` holds allocated for the samples not yet taken, together
     #[must_use]
     pub const fn with_held_bytes(mut self, held_bytes: u64) -> Self {
         self.media_data.held_bytes = held_bytes;

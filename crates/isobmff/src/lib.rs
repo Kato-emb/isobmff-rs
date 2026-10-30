@@ -77,9 +77,15 @@
 //! Such a caller reads the samples of a file whose `moov` and `moof`s each
 //! come before their media data: media data in a piece passed before the box
 //! that locates it is read is not kept, and [`finish`](Demuxer::finish) fails
-//! with [`UnfinishedSample`](DemuxError::UnfinishedSample). The demuxer holds
-//! the locations of every sample of a `moov` or a `moof` at once, so their
-//! bytes together have to fit [`DemuxLimits::with_held_bytes`].
+//! with [`UnfinishedSample`](DemuxError::UnfinishedSample).
+//!
+//! The demuxer allocates the media data of a sample when its first byte
+//! arrives, and holds it until [`poll_sample`](Demuxer::poll_sample) takes the
+//! sample. What it holds allocated is bounded by
+//! [`DemuxLimits::with_held_bytes`]: the bytes past it are not kept and are
+//! wanted again, so the loops above take the samples after each call. A caller
+//! that never takes them fails with
+//! [`HeldBytesLimitExceeded`](DemuxError::HeldBytesLimitExceeded).
 //!
 //! A caller that can seek reads a fragmented movie file from any of its
 //! fragments. The `mfra` at the end of the file lists where they start

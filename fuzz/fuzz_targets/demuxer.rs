@@ -32,6 +32,7 @@ const LIMITS: DemuxLimits = DemuxLimits::new()
     .with_payload_bytes(1 << 20)
     .with_sample_count(1 << 16)
     .with_subsegment_count(1 << 16)
+    .with_sample_bytes(1 << 20)
     .with_held_bytes(1 << 20);
 
 /// Event as a caller records it
