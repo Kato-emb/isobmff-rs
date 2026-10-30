@@ -11,7 +11,7 @@ use crate::file_structure::FileStructure;
 use crate::framing::{BoxEvent, BoxWriter, to_u64};
 use crate::media_data::MediaDataWriter;
 use crate::sample::Sample;
-use crate::structure_data::StructureDataWriter;
+use crate::structure_data::{MovieFragmentWriter, SampleTableWriter, StructureDataWriter};
 
 /// Brands under which a track fragment may take the first byte of its `moof` as its base data offset, ISO/IEC 14496-12 §8.8.7.1 and Annex E
 const DEFAULT_BASE_IS_MOOF_BRANDS: [[u8; 4]; 9] = [
@@ -200,15 +200,20 @@ impl Muxer {
             FileStructure::Fragmented {
                 first_sequence_number,
             } => {
-                let structure_data = StructureDataWriter::fragmented(movie, first_sequence_number)?;
-                let bytes = write_box(&mut self.boxes, structure_data.movie())?;
+                let writer = MovieFragmentWriter::new(movie, first_sequence_number)?;
+                let bytes = write_box(&mut self.boxes, writer.movie())?;
                 self.output.push_back(bytes);
-                structure_data
+                StructureDataWriter::Fragmented(writer)
             }
             FileStructure::Segment {
                 first_sequence_number,
-            } => StructureDataWriter::fragmented(movie, first_sequence_number)?,
-            FileStructure::NonFragmented => StructureDataWriter::non_fragmented(movie)?,
+            } => StructureDataWriter::Fragmented(MovieFragmentWriter::new(
+                movie,
+                first_sequence_number,
+            )?),
+            FileStructure::NonFragmented => {
+                StructureDataWriter::NonFragmented(SampleTableWriter::new(movie)?)
+            }
         };
         self.structure_data = Some(structure_data);
 
@@ -253,17 +258,17 @@ impl Muxer {
         if samples.is_empty() {
             return Ok(());
         }
-        let header = MediaDataWriter::header(&samples)?;
-        match self.file_structure {
-            FileStructure::NonFragmented => {
+        let header = self.media_data.header(&samples)?;
+        match structure_data {
+            StructureDataWriter::NonFragmented(writer) => {
                 let data_offset = self
                     .boxes
                     .next_offset()
                     .saturating_add(header.encoded_len());
-                structure_data.handle_samples(&samples, data_offset)?;
+                writer.handle_samples(&samples, data_offset)?;
             }
-            FileStructure::Fragmented { .. } | FileStructure::Segment { .. } => {
-                let moof = structure_data.movie_fragment(&samples, header.encoded_len())?;
+            StructureDataWriter::Fragmented(writer) => {
+                let moof = writer.movie_fragment(&samples, header.encoded_len())?;
                 let bytes = write_box(&mut self.boxes, &moof)?;
                 self.output.push_back(bytes);
             }
@@ -292,8 +297,8 @@ impl Muxer {
     pub fn finish(&mut self) -> Result<(), MuxError> {
         self.refuse_if_finished()?;
         let structure_data = self.structure_data.take().ok_or(MuxError::MissingMovie)?;
-        if self.file_structure == FileStructure::NonFragmented {
-            let bytes = write_box(&mut self.boxes, &structure_data.finish())?;
+        if let StructureDataWriter::NonFragmented(writer) = structure_data {
+            let bytes = write_box(&mut self.boxes, &writer.finish())?;
             self.output.push_back(bytes);
         }
         self.boxes.finish()?;
@@ -367,13 +372,13 @@ mod tests {
         SampleSizeBox, SampleSizeVariant, SampleSizes, SampleToChunkBox, SampleToChunkEntry,
         TimeToSampleBox, TimeToSampleEntry, TrackExtendsBox,
     };
-    use isobmff_core::{BoxDefinition, BoxEncode, FourCc};
+    use isobmff_core::{BoxDefinition, FourCc};
 
     use super::Muxer;
     use crate::error::MuxError;
     use crate::file_structure::FileStructure;
     use crate::sample::{Sample, SampleProperties};
-    use crate::structure_data::fixtures::{movie, track};
+    use crate::structure_data::fixtures::{encoded, movie, track, written};
 
     /// Returns a movie of track 1 of no sample, the movie in a timescale of 1000 and the track of 100
     fn one_track() -> MovieBox {
@@ -424,20 +429,6 @@ mod tests {
             )
         };
         [sample(0, b"AB"), sample(10, b"CDE")]
-    }
-
-    /// Returns `value` written as a box
-    fn encoded(value: &(impl BoxEncode + BoxDefinition)) -> Vec<u8> {
-        let mut bytes = alloc::vec![0; usize::try_from(value.encoded_len()).unwrap()];
-        value.encode(&mut bytes).unwrap();
-        bytes
-    }
-
-    /// Returns the box of `box_type` whose payload is `fields` laid end to end
-    fn written(box_type: &[u8; 4], fields: &[&[u8]]) -> Vec<u8> {
-        let payload = fields.concat();
-        let size = u32::try_from(payload.len().checked_add(8).unwrap()).unwrap();
-        [&size.to_be_bytes()[..], box_type, &payload].concat()
     }
 
     /// Returns the boxes `muxer` has written, each whole

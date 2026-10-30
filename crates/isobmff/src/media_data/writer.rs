@@ -20,7 +20,7 @@ impl MediaDataWriter {
     ///
     /// * [`DataOffsetOutOfRange`](MuxError::DataOffsetOutOfRange): the media
     ///   data of the samples together is longer than a box holds.
-    pub(crate) fn header(samples: &[Sample]) -> Result<BoxHeader, MuxError> {
+    pub(crate) fn header(&self, samples: &[Sample]) -> Result<BoxHeader, MuxError> {
         let payload_len = samples
             .iter()
             .map(|sample| to_u64(sample.data().len()))
@@ -45,7 +45,9 @@ impl MediaDataWriter {
         header: BoxHeader,
         samples: &[Sample],
     ) -> Result<Vec<u8>, MuxError> {
-        let mut bytes = Vec::new();
+        let mut bytes = Vec::with_capacity(
+            usize::try_from(header.size().total_bytes().unwrap_or_default()).unwrap_or_default(),
+        );
         bytes.extend_from_slice(boxes.handle_event(BoxEvent::Header(header))?);
         for sample in samples {
             bytes.extend_from_slice(boxes.handle_event(BoxEvent::Payload(sample.data()))?);

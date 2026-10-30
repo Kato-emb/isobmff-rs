@@ -10,20 +10,69 @@ use isobmff_boxes::{
     SampleToChunkEntry, SyncSampleBox, TimeToSampleBox, TimeToSampleEntry,
 };
 
+use crate::sample::Sample;
+
 /// What the sample table of a track declares, as the samples written to it so far
 #[derive(Debug, Default)]
 pub(super) struct TrackTable {
     /// Decoding time past the last sample
-    pub(super) decoding_time: u64,
-    /// Number of samples and sample entry of each chunk, in chunk order
-    pub(super) chunks: Vec<(u32, u32)>,
-    /// File offset of each chunk, in chunk order
-    pub(super) chunk_offsets: Vec<u64>,
-    /// Duration, size, composition time offset and flags of each sample, in sample order
-    pub(super) samples: Vec<(u32, u32, i64, SampleFlags)>,
+    decoding_time: u64,
+    /// Chunks, in chunk order
+    chunks: Vec<Chunk>,
+    /// Samples, in sample order
+    samples: Vec<TableSample>,
+}
+
+/// What the sample table declares of a chunk
+#[derive(Debug)]
+struct Chunk {
+    /// File offset of the first byte of the chunk
+    offset: u64,
+    samples_per_chunk: u32,
+    sample_description_index: u32,
+}
+
+/// What the sample table declares of a sample
+#[derive(Debug)]
+struct TableSample {
+    sample_duration: u32,
+    sample_size: u32,
+    sample_composition_time_offset: i64,
+    sample_flags: SampleFlags,
 }
 
 impl TrackTable {
+    /// Returns the decoding time past the last sample
+    pub(super) const fn decoding_time(&self) -> u64 {
+        self.decoding_time
+    }
+
+    /// Adds `samples`, described by sample entry `sample_description_index`, as the chunk at file offset `offset`
+    pub(super) fn push_chunk(
+        &mut self,
+        offset: u64,
+        sample_description_index: u32,
+        samples: &[Sample],
+    ) {
+        self.chunks.push(Chunk {
+            offset,
+            samples_per_chunk: u32::try_from(samples.len()).unwrap_or(u32::MAX),
+            sample_description_index,
+        });
+        for sample in samples {
+            let properties = sample.properties();
+            self.decoding_time = self
+                .decoding_time
+                .saturating_add(u64::from(properties.sample_duration));
+            self.samples.push(TableSample {
+                sample_duration: properties.sample_duration,
+                sample_size: u32::try_from(sample.data().len()).unwrap_or(u32::MAX),
+                sample_composition_time_offset: properties.sample_composition_time_offset,
+                sample_flags: properties.sample_flags,
+            });
+        }
+    }
+
     /// Fills the tables of `stbl` with what the table declares
     ///
     /// The `ctts` is left out where every composition time offset is zero, the
@@ -31,7 +80,7 @@ impl TrackTable {
     /// states a dependency (§8.6.1.3, §8.6.2, §8.6.4).
     pub(super) fn fill(self, stbl: &mut SampleTableBox) {
         let mut stts = TimeToSampleBox::default();
-        stts.entries = runs_of(self.samples.iter().map(|sample| sample.0))
+        stts.entries = runs_of(self.samples.iter().map(|sample| sample.sample_duration))
             .map(|(sample_count, sample_delta)| {
                 let mut entry = TimeToSampleEntry::default();
                 entry.sample_count = sample_count;
@@ -41,10 +90,22 @@ impl TrackTable {
             .collect();
         stbl.stts = Some(stts);
 
-        stbl.ctts = self.samples.iter().any(|sample| sample.2 != 0).then(|| {
-            let mut ctts = CompositionOffsetBox::default();
-            ctts.version = u8::from(self.samples.iter().any(|sample| sample.2 < 0));
-            ctts.entries = runs_of(self.samples.iter().map(|sample| sample.2))
+        stbl.ctts = self
+            .samples
+            .iter()
+            .any(|sample| sample.sample_composition_time_offset != 0)
+            .then(|| {
+                let mut ctts = CompositionOffsetBox::default();
+                ctts.version = u8::from(
+                    self.samples
+                        .iter()
+                        .any(|sample| sample.sample_composition_time_offset < 0),
+                );
+                ctts.entries = runs_of(
+                    self.samples
+                        .iter()
+                        .map(|sample| sample.sample_composition_time_offset),
+                )
                 .map(|(sample_count, sample_offset)| {
                     let mut entry = CompositionOffsetEntry::default();
                     entry.sample_count = sample_count;
@@ -52,14 +113,14 @@ impl TrackTable {
                     entry
                 })
                 .collect();
-            ctts
-        });
+                ctts
+            });
 
         let mut stsc = SampleToChunkBox::default();
         let mut previous = None;
-        for (first_chunk, &(samples_per_chunk, sample_description_index)) in
-            (1_u32..).zip(&self.chunks)
-        {
+        for (first_chunk, chunk) in (1_u32..).zip(&self.chunks) {
+            let samples_per_chunk = chunk.samples_per_chunk;
+            let sample_description_index = chunk.sample_description_index;
             if previous != Some((samples_per_chunk, sample_description_index)) {
                 let mut entry = SampleToChunkEntry::default();
                 entry.first_chunk = first_chunk;
@@ -71,7 +132,11 @@ impl TrackTable {
         }
         stbl.stsc = Some(stsc);
 
-        let sizes: Vec<u32> = self.samples.iter().map(|sample| sample.1).collect();
+        let sizes: Vec<u32> = self
+            .samples
+            .iter()
+            .map(|sample| sample.sample_size)
+            .collect();
         let mut stsz = SampleSizeBox::default();
         stsz.sample_sizes = match (sizes.first(), u32::try_from(sizes.len())) {
             (Some(&size), Ok(sample_count)) if sizes.iter().all(|&other| other == size) => {
@@ -89,9 +154,9 @@ impl TrackTable {
 
         stbl.chunk_offset = Some(
             match self
-                .chunk_offsets
+                .chunks
                 .iter()
-                .map(|&offset| u32::try_from(offset).ok())
+                .map(|chunk| u32::try_from(chunk.offset).ok())
                 .collect::<Option<Vec<u32>>>()
             {
                 Some(chunk_offsets) => {
@@ -101,7 +166,7 @@ impl TrackTable {
                 }
                 None => {
                     let mut co64 = ChunkLargeOffsetBox::default();
-                    co64.chunk_offsets = self.chunk_offsets;
+                    co64.chunk_offsets = self.chunks.iter().map(|chunk| chunk.offset).collect();
                     ChunkOffsetVariant::ChunkLargeOffset(co64)
                 }
             },
@@ -110,12 +175,12 @@ impl TrackTable {
         stbl.stss = self
             .samples
             .iter()
-            .any(|sample| sample.3.sample_is_non_sync_sample)
+            .any(|sample| sample.sample_flags.sample_is_non_sync_sample)
             .then(|| {
                 let mut stss = SyncSampleBox::default();
                 stss.sample_numbers = (1_u32..)
                     .zip(&self.samples)
-                    .filter(|(_, sample)| !sample.3.sample_is_non_sync_sample)
+                    .filter(|(_, sample)| !sample.sample_flags.sample_is_non_sync_sample)
                     .map(|(sample_number, _)| sample_number)
                     .collect();
                 stss
@@ -132,13 +197,13 @@ impl TrackTable {
         stbl.sdtp = self
             .samples
             .iter()
-            .any(|sample| dependency(&sample.3) != SampleDependencyTypeEntry::default())
+            .any(|sample| dependency(&sample.sample_flags) != SampleDependencyTypeEntry::default())
             .then(|| {
                 let mut sdtp = SampleDependencyTypeBox::default();
                 sdtp.entries = self
                     .samples
                     .iter()
-                    .map(|sample| dependency(&sample.3))
+                    .map(|sample| dependency(&sample.sample_flags))
                     .collect();
                 sdtp
             });

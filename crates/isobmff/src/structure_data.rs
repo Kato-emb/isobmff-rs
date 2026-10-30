@@ -27,7 +27,7 @@ use crate::framing::to_u64;
 use crate::sample::SampleLocation;
 
 pub use segment_index::{SegmentIndex, Subsegment, movie_fragment_random_access_start};
-pub(crate) use writer::StructureDataWriter;
+pub(crate) use writer::{MovieFragmentWriter, SampleTableWriter, StructureDataWriter};
 
 /// Limits a [`StructureDataReader`] resolves and keeps structure-data up to
 ///
@@ -519,6 +519,8 @@ fn nth_from_one<Entry>(entries: &[Entry], index: u32) -> Option<&Entry> {
 pub(crate) mod fixtures {
     use alloc::vec::Vec;
 
+    use isobmff_core::{BoxDefinition, BoxEncode};
+
     use super::StructureDataLimits;
 
     use isobmff_boxes::{
@@ -587,6 +589,20 @@ pub(crate) mod fixtures {
         trak.mdia.minf.dinf.dref.data_entries =
             Vec::from([DataEntry::Url(DataEntryUrlBox::default())]);
         trak
+    }
+
+    /// Returns `value` written as a box
+    pub(crate) fn encoded(value: &(impl BoxEncode + BoxDefinition)) -> Vec<u8> {
+        let mut bytes = alloc::vec![0; usize::try_from(value.encoded_len()).unwrap()];
+        value.encode(&mut bytes).unwrap();
+        bytes
+    }
+
+    /// Returns the box of `box_type` whose payload is `fields` laid end to end, under a 32-bit size
+    pub(crate) fn written(box_type: &[u8; 4], fields: &[&[u8]]) -> Vec<u8> {
+        let payload = fields.concat();
+        let size = u32::try_from(payload.len().checked_add(8).unwrap()).unwrap();
+        [&size.to_be_bytes()[..], box_type, &payload].concat()
     }
 
     /// Limits no structure-data of the tests reaches
