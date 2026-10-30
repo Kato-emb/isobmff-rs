@@ -229,15 +229,22 @@ jobs:
   # files. A failure is a bug, so it blocks the merge. The nightly
   # is pinned so that a regression in it cannot block a change of ours; it is
   # raised by hand. One job per target, so the wait is the longest target
-  # rather than the sum of them.
+  # rather than the sum of them. demuxer reads each input whole several times
+  # over, so it takes fewer runs to finish beside the others; the weekly run
+  # of scheduled.yml goes deeper.
   fuzz:
     strategy:
       fail-fast: false
       matrix:
-        target: [framing, boxes, box_reader, demuxer]
+        include:
+          - { target: framing, runs: 500000 }
+          - { target: boxes, runs: 500000 }
+          - { target: box_reader, runs: 500000 }
+          - { target: demuxer, runs: 100000 }
     runs-on: ubuntu-latest
     env:
       TARGET: ${{ matrix.target }}
+      RUNS: ${{ matrix.runs }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -269,7 +276,7 @@ jobs:
       # sanitizer: unsafe code is forbidden in every crate the targets reach,
       # so AddressSanitizer has no memory error to find, and it slows every
       # run. Panics and overflow checks still fail a run.
-      - run: cargo fuzz run "$TARGET" --target x86_64-unknown-linux-gnu --sanitizer none "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/seeds" -- -runs=500000 -seed=1
+      - run: cargo fuzz run "$TARGET" --target x86_64-unknown-linux-gnu --sanitizer none "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/seeds" -- -runs="$RUNS" -seed=1
 
   # Advisories, license policy, banned crates and sources, per deny.toml.
   deny:
