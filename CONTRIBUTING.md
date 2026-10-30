@@ -26,7 +26,7 @@ scripts/fetch-conformance.sh target/conformance
 mkdir -p target/fuzz-seeds fuzz/corpus/framing
 cp target/conformance/*.mp4 target/fuzz-seeds/
 cargo +nightly-2026-10-13 fuzz run framing --target x86_64-unknown-linux-gnu \
-  fuzz/corpus/framing target/fuzz-seeds
+  --sanitizer leak fuzz/corpus/framing target/fuzz-seeds
 ```
 
 Run the other targets the same way, each with a corpus of its own.
