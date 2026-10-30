@@ -346,12 +346,13 @@ mod tests {
         SampleSizeBox, SampleSizeVariant, SampleSizes, SampleToChunkBox, SampleToChunkEntry,
         TimeToSampleBox, TimeToSampleEntry, TrackExtendsBox,
     };
-    use isobmff_core::{BoxDefinition, FourCc};
+    use isobmff_core::{BoxDecode, BoxDefinition, FourCc};
 
     use super::Muxer;
     use crate::demuxer::Demuxer;
     use crate::error::MuxError;
     use crate::file_structure::FileStructure;
+    use crate::leniency::{Leniency, SampleTableDisagreement};
     use crate::sample::{Sample, SampleProperties};
     use crate::structure_data::fixtures::{encoded, movie, track, written};
 
@@ -467,31 +468,86 @@ mod tests {
         );
     }
 
+    /// Reads `file` with a [`Demuxer`] from wherever it wants, and returns the demuxer and the samples it returned
+    fn demux(file: &[u8]) -> (Demuxer, Vec<Sample>) {
+        let mut demuxer = Demuxer::new();
+        let mut samples = Vec::new();
+        while let Some(wanted) = demuxer.wanted_input() {
+            match file.get(usize::try_from(wanted.offset()).unwrap()..) {
+                Some(input) if !input.is_empty() => {
+                    demuxer.handle_input(wanted.offset(), input).unwrap()
+                }
+                Some(_) | None => demuxer.finish().unwrap(),
+            };
+            samples.extend(iter::from_fn(|| demuxer.poll_sample()));
+        }
+        (demuxer, samples)
+    }
+
+    /// Returns the boxes a muxer laid out as `file_structure` writes of `ftyp`, `movie` and `samples`, each whole
+    fn mux(
+        file_structure: FileStructure,
+        ftyp: FileTypeBox,
+        movie: MovieBox,
+        samples: Vec<Sample>,
+    ) -> Vec<Vec<u8>> {
+        let mut muxer = Muxer::new(file_structure);
+        muxer.handle_file_type(ftyp).unwrap();
+        muxer.handle_movie(movie).unwrap();
+        muxer.handle_samples(samples).unwrap();
+        muxer.finish().unwrap();
+        output(&mut muxer)
+    }
+
+    #[test]
+    fn samples_read_past_a_short_stts_write_back_as_a_file_read_without_a_leniency() {
+        let brands = file_type(b"isom", &[b"isom", b"mp41"]);
+        let written = mux(
+            FileStructure::NonFragmented,
+            brands.clone(),
+            one_track(),
+            two_samples().to_vec(),
+        );
+        let (moov, head) = written.split_last().unwrap();
+        let mut movie = MovieBox::decode(moov).unwrap().0;
+        if let Some(stts) = movie
+            .trak
+            .first_mut()
+            .and_then(|trak| trak.mdia.minf.stbl.stts.as_mut())
+        {
+            stts.entries
+                .iter_mut()
+                .for_each(|entry| entry.sample_count = 1);
+        }
+        let (lenient, read) = demux(&[head.concat(), encoded(&movie)].concat());
+        assert_eq!(
+            lenient.leniencies().collect::<Vec<_>>(),
+            [&Leniency::SampleTable {
+                track_id: 1,
+                box_type: TimeToSampleBox::BOX_TYPE,
+                kind: SampleTableDisagreement::Short { missing_samples: 1 },
+            }]
+        );
+
+        let (strict, read_again) = demux(
+            &mux(
+                FileStructure::NonFragmented,
+                brands,
+                one_track(),
+                read.clone(),
+            )
+            .concat(),
+        );
+
+        assert_eq!(
+            (strict.leniencies().count(), read_again, read),
+            (0, two_samples().to_vec(), two_samples().to_vec())
+        );
+    }
+
     #[test]
     fn the_padding_and_the_degradation_priority_of_samples_carry_from_movie_fragments_into_sample_tables()
      {
-        let demux = |file: &[u8]| {
-            let mut demuxer = Demuxer::new();
-            let mut samples = Vec::new();
-            while let Some(wanted) = demuxer.wanted_input() {
-                match file.get(usize::try_from(wanted.offset()).unwrap()..) {
-                    Some(input) if !input.is_empty() => {
-                        demuxer.handle_input(wanted.offset(), input).unwrap()
-                    }
-                    Some(_) | None => demuxer.finish().unwrap(),
-                };
-                samples.extend(iter::from_fn(|| demuxer.poll_sample()));
-            }
-            samples
-        };
-        let mux = |file_structure, ftyp, movie, samples: Vec<Sample>| {
-            let mut muxer = Muxer::new(file_structure);
-            muxer.handle_file_type(ftyp).unwrap();
-            muxer.handle_movie(movie).unwrap();
-            muxer.handle_samples(samples).unwrap();
-            muxer.finish().unwrap();
-            output(&mut muxer).concat()
-        };
         let samples = two_samples().map(|sample| {
             let mut properties = *sample.properties();
             properties.sample_flags.sample_padding_value = 5;
@@ -512,10 +568,10 @@ mod tests {
             FileStructure::NonFragmented,
             file_type(b"isom", &[b"isom", b"mp41"]),
             one_track(),
-            demux(&fragmented),
+            demux(&fragmented.concat()).1,
         );
 
-        assert_eq!(demux(&not_fragmented), samples);
+        assert_eq!(demux(&not_fragmented.concat()).1, samples);
     }
 
     #[test]

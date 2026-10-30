@@ -155,6 +155,8 @@ mod tests {
                 continue;
             }
             let resolved = resolve(&bytes).expect(&name);
+            let read_past: Vec<_> = resolved.demuxer.leniencies().collect();
+            assert!(read_past.is_empty(), "{name} is read past: {read_past:?}");
             assert_indexes_point_at_boxes(&name, &resolved.demuxer, &top_level(&bytes));
             assert_eq!(
                 resolved.segment_type,

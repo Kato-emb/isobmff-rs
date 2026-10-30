@@ -1,6 +1,7 @@
 //! The sample table of a track, ISO/IEC 14496-12 §8.5.1 and §8.7: the samples its tables declare, read across them, and the tables written of the samples a writer adds
 
 use alloc::vec::Vec;
+use core::cmp::Ordering;
 use core::iter;
 use core::num::NonZeroU32;
 
@@ -19,6 +20,7 @@ use self::sample_flags::SampleFlagsTables;
 use super::sample_description::data_reference_index;
 use crate::error::{DemuxError, MuxError};
 use crate::framing::to_u64;
+use crate::leniency::{Leniency, SampleTableDisagreement};
 use crate::sample::{Sample, SampleLocation, SampleProperties};
 
 mod sample_flags;
@@ -46,12 +48,21 @@ pub(super) fn sample_count(trak: &TrackBox) -> u64 {
 /// as §8.8.3.1 lays them out. A missing table declares no sample, and a
 /// missing optional one leaves its fields zero.
 ///
+/// The samples of the track are those the chunks lay out, as far as the
+/// `stsz` or the `stz2` gives them sizes. A table that states another number
+/// of samples is read past, as a [`Leniency::SampleTable`] pushed onto
+/// `leniencies`: the samples past the end of a short `stts` take its last
+/// duration, those past the end of another short table take zero, and the
+/// entries of a table past the last sample are left out, as are the sample
+/// numbers the `stss` marks out of order.
+///
 /// # Errors
 ///
-/// * [`SampleTableMismatch`](DemuxError::SampleTableMismatch): a table counts
-///   a different number of samples than the `stsz` or the `stz2`, the `stsc`
-///   lays its runs over chunks the `stco` or the `co64` does not have, or the
-///   `stss` marks a sample number out of order or past the last sample.
+/// * [`SampleTableMismatch`](DemuxError::SampleTableMismatch): the track
+///   declares samples, in its `stsz` or `stz2` or in the chunks of its `stco`
+///   or `co64`, but one of those, the `stsc` or the `stts` states none; or
+///   the `stsc` lays its runs over chunks the `stco` or the `co64` does not
+///   have.
 /// * The failures of the sample entry and the data reference entry each run
 ///   of chunks names.
 /// * [`DataOffsetOutOfRange`](DemuxError::DataOffsetOutOfRange),
@@ -60,10 +71,36 @@ pub(super) fn sample_count(trak: &TrackBox) -> u64 {
 pub(super) fn resolve_track(
     trak: &TrackBox,
     locations: &mut Vec<SampleLocation>,
+    leniencies: &mut Vec<Leniency>,
 ) -> Result<u64, DemuxError> {
     let track_id = trak.tkhd.track_id;
     let stbl = &trak.mdia.minf.stbl;
     let mismatch = |box_type| DemuxError::SampleTableMismatch { track_id, box_type };
+
+    let stated_sizes = sample_count(trak);
+    let stated_durations = stated_samples(
+        stbl.stts
+            .iter()
+            .flat_map(|stts| stts.entries.iter().map(|entry| entry.sample_count)),
+    );
+    let has_chunks = chunk_offsets(stbl).next().is_some();
+    if stated_sizes > 0 || has_chunks {
+        let none_stated = [
+            (stated_sizes == 0, SampleSizeBox::BOX_TYPE),
+            (!has_chunks, ChunkOffsetBox::BOX_TYPE),
+            (
+                stbl.stsc.iter().all(|stsc| stsc.entries.is_empty()),
+                SampleToChunkBox::BOX_TYPE,
+            ),
+            (stated_durations == 0, TimeToSampleBox::BOX_TYPE),
+        ];
+        if let Some(box_type) = none_stated
+            .into_iter()
+            .find_map(|(none, box_type)| none.then_some(box_type))
+        {
+            return Err(mismatch(box_type));
+        }
+    }
 
     let mut sizes = sample_sizes(stbl);
     let mut durations = expand(stbl.stts.iter().flat_map(|stts| {
@@ -83,6 +120,9 @@ pub(super) fn resolve_track(
 
     let mut run = None;
     let mut decoding_time = 0_u64;
+    let mut sample_duration = 0;
+    let mut placed = 0_u64;
+    let mut laid_out = 0_u64;
     for (chunk, chunk_offset) in (1_u32..).zip(chunk_offsets(stbl)) {
         if let Some(next) = runs.next_if(|next| next.first_chunk == chunk) {
             let data_reference_index = data_reference_index(trak, next.sample_description_index)?;
@@ -92,17 +132,15 @@ pub(super) fn resolve_track(
             return Err(mismatch(SampleToChunkBox::BOX_TYPE));
         };
 
+        laid_out = laid_out.saturating_add(u64::from(run.samples_per_chunk));
         let mut data_offset = chunk_offset;
         for _ in 0..run.samples_per_chunk {
-            let size = sizes
-                .next()
-                .ok_or_else(|| mismatch(SampleToChunkBox::BOX_TYPE))?;
-            let sample_duration = durations
-                .next()
-                .ok_or_else(|| mismatch(TimeToSampleBox::BOX_TYPE))?;
-            let sample_composition_time_offset = next_or_zero(&mut composition_offsets)
-                .ok_or_else(|| mismatch(CompositionOffsetBox::BOX_TYPE))?;
-            let sample_flags = flags.next_flags().map_err(mismatch)?;
+            let Some(size) = sizes.next() else {
+                break;
+            };
+            sample_duration = durations.next().unwrap_or(sample_duration);
+            let sample_composition_time_offset = next_or_zero(&mut composition_offsets);
+            let sample_flags = flags.next_flags();
 
             let data_end = data_offset
                 .checked_add(u64::from(size))
@@ -123,29 +161,65 @@ pub(super) fn resolve_track(
                 .checked_add(u64::from(sample_duration))
                 .ok_or(DemuxError::DecodingTimeOverflow { track_id })?;
             data_offset = data_end;
+            placed = placed.saturating_add(1);
         }
     }
+    if runs.next().is_some() {
+        return Err(mismatch(SampleToChunkBox::BOX_TYPE));
+    }
 
-    let left_over = [
+    let stated = [
+        (SampleSizeBox::BOX_TYPE, Some(stated_sizes)),
+        (SampleToChunkBox::BOX_TYPE, Some(laid_out)),
+        (TimeToSampleBox::BOX_TYPE, Some(stated_durations)),
         (
-            runs.next().is_some() || sizes.next().is_some(),
-            SampleToChunkBox::BOX_TYPE,
-        ),
-        (durations.next().is_some(), TimeToSampleBox::BOX_TYPE),
-        (
-            composition_offsets
-                .and_then(|mut table| table.next())
-                .is_some(),
             CompositionOffsetBox::BOX_TYPE,
+            stbl.ctts
+                .as_ref()
+                .map(|ctts| stated_samples(ctts.entries.iter().map(|entry| entry.sample_count))),
         ),
     ];
-    match left_over
+    let (marked_past, unordered) = flags.marked_out_of_place();
+    let lengths = stated
         .into_iter()
-        .find_map(|(left, box_type)| left.then_some(box_type))
-        .or_else(|| flags.left_over())
-    {
-        Some(box_type) => Err(mismatch(box_type)),
-        None => Ok(decoding_time),
+        .chain(sample_flags::stated_samples(stbl))
+        .filter_map(|(box_type, stated)| Some((box_type, table_length(stated?, placed)?)))
+        .chain((marked_past > 0).then_some((
+            SyncSampleBox::BOX_TYPE,
+            SampleTableDisagreement::Long {
+                excess_samples: marked_past,
+            },
+        )))
+        .chain((unordered > 0).then_some((
+            SyncSampleBox::BOX_TYPE,
+            SampleTableDisagreement::Unordered {
+                sample_numbers: unordered,
+            },
+        )));
+    leniencies.extend(lengths.map(|(box_type, kind)| Leniency::SampleTable {
+        track_id,
+        box_type,
+        kind,
+    }));
+
+    Ok(decoding_time)
+}
+
+/// Returns the number of samples the runs of samples of a table, each the number of samples it holds, state together
+fn stated_samples(runs: impl Iterator<Item = u32>) -> u64 {
+    runs.map(u64::from).fold(0, u64::saturating_add)
+}
+
+/// Returns how a table that states `stated` samples disagrees with the `placed` samples of its track, unless it agrees
+fn table_length(stated: u64, placed: u64) -> Option<SampleTableDisagreement> {
+    match stated.cmp(&placed) {
+        Ordering::Less => Some(SampleTableDisagreement::Short {
+            missing_samples: placed.abs_diff(stated),
+        }),
+        Ordering::Equal => None,
+        Ordering::Greater => Some(SampleTableDisagreement::Long {
+            excess_samples: stated.abs_diff(placed),
+        }),
     }
 }
 
@@ -189,14 +263,9 @@ fn chunk_offsets(stbl: &SampleTableBox) -> impl Iterator<Item = u64> {
         .chain(large.iter().copied())
 }
 
-/// Returns what the table states for the next sample, or zero when the track has no such table
-///
-/// `None` when the table has run out of samples.
-fn next_or_zero<Entry: Default>(table: &mut Option<impl Iterator<Item = Entry>>) -> Option<Entry> {
-    match table {
-        Some(entries) => entries.next(),
-        None => Some(Entry::default()),
-    }
+/// Returns what the table states for the next sample, or zero when the track has no such table or the table has run out of samples
+fn next_or_zero<Entry: Default>(table: &mut Option<impl Iterator<Item = Entry>>) -> Entry {
+    table.as_mut().and_then(Iterator::next).unwrap_or_default()
 }
 
 /// Refuses `movie` where a table of the sample table of a track declares samples
