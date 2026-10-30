@@ -19,8 +19,10 @@
 //! `moof`s each come before their media data: media data in a buffer passed
 //! before the box that locates it is read is not kept, and `finish` fails.
 //!
-//! The demuxer holds the locations of every sample of a `moov` or a `moof` at
-//! once, so their bytes together have to fit `DemuxLimits::with_held_bytes`.
+//! The demuxer holds the media data of the samples not yet taken up to
+//! `DemuxLimits::with_held_bytes`, so the samples are taken after each call,
+//! and a buffer is passed again while the demuxer wants bytes of it: those of
+//! a sample it could hold only once the samples before it were taken.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -45,17 +47,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         if piece.is_empty() {
             break;
         }
+        let end = offset.saturating_add(u64::try_from(read)?);
         loop {
             let event = demuxer.handle_input(offset, piece);
             if let Ok(Some(event)) = &event {
                 print_box(event);
             }
             take_samples(&mut demuxer, &mut gathered)?;
-            if event?.is_none() {
+            if event?.is_none()
+                && !demuxer
+                    .wanted_input()
+                    .is_some_and(|wanted| (offset..end).contains(&wanted.offset()))
+            {
                 break;
             }
         }
-        offset = offset.saturating_add(u64::try_from(read)?);
+        offset = end;
     }
     loop {
         let event = demuxer.finish();

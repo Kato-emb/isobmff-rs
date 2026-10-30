@@ -105,13 +105,17 @@ impl Demuxer {
     ///
     /// `input` is taken, and the event returned, as [`BoxReader::handle_input`]
     /// takes and returns them: one event a call, the caller passing the same
-    /// input again while events come. A box gathered into a value is read past
+    /// input again while events come, and, once the call returns `None`, while
+    /// the demuxer still wants bytes of it. A box gathered into a value is read past
     /// within the call, and reported once it is read. The bytes of the input
     /// that samples lack are then gathered for
     /// [`poll_sample`](Self::poll_sample); input passed again adds nothing to
     /// them. They are gathered also when the call fails on what the input
     /// holds, so the samples whose bytes arrived before the failure are still
-    /// returned by `poll_sample`.
+    /// returned by `poll_sample`. The bytes a sample's allocation would take
+    /// past the limit of the media data held are not kept, as for
+    /// [`MediaDataReader::handle_input`], and are wanted again: the caller
+    /// takes the samples with `poll_sample` after each call.
     ///
     /// A failure leaves the demuxer failed: it wants no more input, and every
     /// call after it returns the same failure.
@@ -127,6 +131,10 @@ impl Demuxer {
     ///   structure-data are handed to.
     /// * The failures of [`MediaDataReader::handle_sample_locations`] the
     ///   locations of the samples are handed to.
+    /// * [`HeldBytesLimitExceeded`](DemuxError::HeldBytesLimitExceeded): the
+    ///   call reads no event, and keeps no byte of the input because a sample's
+    ///   allocation would take the media data held past the limit, as a caller
+    ///   that does not take the samples it gathers comes to.
     /// * The failure the demuxer failed with before.
     pub fn handle_input(
         &mut self,
@@ -147,11 +155,18 @@ impl Demuxer {
                 demuxed => break demuxed,
             }
         };
-        // Why not leave the input to a call that succeeds: a box that fails after a skipped `mdat` ends the reading, and the caller would pass no more of the `mdat`.
-        if !matches!(event, Err(DemuxError::UnwantedInput { .. })) {
-            self.media_data.handle_input(offset, input);
+        if matches!(event, Err(DemuxError::UnwantedInput { .. })) {
+            return event;
         }
-        event
+        // Why not leave the input to a call that succeeds: a box that fails after a skipped `mdat` ends the reading, and the caller would pass no more of the `mdat`.
+        let kept = self.media_data.handle_input(offset, input);
+        match (event, kept) {
+            (Ok(None), Err(refused)) => {
+                self.boxes.fail_with(refused);
+                Err(refused)
+            }
+            (event, _) => event,
+        }
     }
 
     /// Ends the file at the offset the demuxer wants, and returns the event of the box it ends
@@ -515,7 +530,7 @@ mod tests {
         Ok(read)
     }
 
-    /// Reads `file` from its start as a caller that cannot seek, `piece_len` bytes at a time, and returns the track and media data of each sample polled, and how the read ended
+    /// Reads `file` from its start as a caller that cannot seek, `piece_len` bytes at a time, passing a piece again while events come or the demuxer wants bytes of it, and returns the track and media data of each sample polled, and how the read ended
     fn stream(
         demuxer: &mut Demuxer,
         file: &[u8],
@@ -525,6 +540,7 @@ mod tests {
         let mut offset = 0_u64;
         let mut ending = Ok(());
         for piece in file.chunks(piece_len).map(Some).chain([None]) {
+            let end = offset.saturating_add(to_u64(piece.map_or(0, <[u8]>::len)));
             loop {
                 let event = match piece {
                     Some(piece) => demuxer.handle_input(offset, piece),
@@ -532,7 +548,12 @@ mod tests {
                 };
                 poll(demuxer, &mut samples);
                 match event {
-                    Ok(Some(_)) => {}
+                    Ok(event)
+                        if event.is_some()
+                            || demuxer
+                                .wanted_input()
+                                .is_some_and(|wanted| (offset..end).contains(&wanted.offset())) => {
+                    }
                     ended => {
                         ending = ended.map(|_| ());
                         break;
@@ -542,7 +563,7 @@ mod tests {
             if ending.is_err() {
                 break;
             }
-            offset = offset.saturating_add(to_u64(piece.map_or(0, <[u8]>::len)));
+            offset = end;
         }
 
         (samples, ending)
@@ -822,19 +843,90 @@ mod tests {
     }
 
     #[test]
-    fn samples_past_the_held_bytes_fail_the_demuxer() {
+    fn a_fragment_whose_samples_together_pass_the_held_bytes_gathers_whole_when_each_sample_is_taken()
+     {
+        let sample_len = 1_usize << 20;
+        let media_data: Vec<u8> = (0..sample_len.saturating_mul(32))
+            .map(|at| u8::try_from(at % 251).unwrap())
+            .collect();
+        let file = [
+            file_type(),
+            fragmented_movie(),
+            fragment_of(
+                1,
+                None,
+                32,
+                Some(u32::try_from(sample_len).unwrap()),
+                &media_data,
+            ),
+        ]
+        .concat();
+        let expected: Polled = media_data
+            .chunks(sample_len)
+            .map(|data| (1, data.to_vec()))
+            .collect();
+
+        let read = stream(&mut Demuxer::new(), &file, 64 * 1024);
+        assert!(read == (expected, Ok(())), "ended {:?}", read.1);
+    }
+
+    #[test]
+    fn a_piece_whose_samples_together_pass_the_held_bytes_gathers_them_all_when_passed_again() {
+        let file = [file_type(), fragmented_movie(), fragment(1, None)].concat();
+        let media_data = file.len().saturating_sub(4);
+
+        assert_eq!(
+            stream(
+                &mut Demuxer::with_limits(DemuxLimits::new().with_held_bytes(3)),
+                &file,
+                media_data
+            ),
+            (vec![(1, b"WX".to_vec()), (1, b"YZ".to_vec())], Ok(()))
+        );
+    }
+
+    #[test]
+    fn samples_past_the_sample_bytes_fail_the_demuxer() {
         let head = [file_type(), fragmented_movie()].concat();
         let file = [head, fragment(1, None)].concat();
-        let mut demuxer = Demuxer::with_limits(DemuxLimits::new().with_held_bytes(3));
-        let failure = DemuxError::HeldBytesLimitExceeded {
-            held_bytes: 4,
-            limit_bytes: 3,
+        let mut demuxer = Demuxer::with_limits(DemuxLimits::new().with_sample_bytes(1));
+        let failure = DemuxError::SampleBytesLimitExceeded {
+            declared_bytes: 2,
+            limit_bytes: 1,
         };
 
         assert_eq!(stream(&mut demuxer, &file, 7), (Vec::new(), Err(failure)));
         assert_eq!(demuxer.wanted_input(), None);
         assert_eq!(demuxer.handle_input(0, &file).map(|_| ()), Err(failure));
         assert_eq!(demuxer.finish().map(|_| ()), Err(failure));
+    }
+
+    #[test]
+    fn a_caller_that_does_not_take_its_samples_is_stopped_at_the_held_bytes() {
+        let head = [file_type(), fragmented_movie()].concat();
+        let file = [head, fragment(1, None)].concat();
+        let limits = DemuxLimits::new().with_held_bytes(2);
+        let mut demuxer = Demuxer::with_limits(limits);
+        let failure = DemuxError::HeldBytesLimitExceeded {
+            held_bytes: 4,
+            limit_bytes: 2,
+        };
+
+        let ended = loop {
+            match demuxer.handle_input(0, &file) {
+                Ok(Some(_)) => {}
+                ended => break ended.map(|_| ()),
+            }
+        };
+        assert_eq!(ended, Err(failure));
+        assert_eq!(demuxer.wanted_input(), None);
+        let mut samples = Vec::new();
+        poll(&mut demuxer, &mut samples);
+        assert_eq!(samples, [(1, b"WX".to_vec())]);
+        assert_eq!(
+            stream(&mut Demuxer::with_limits(limits), &file, file.len()),
+            (vec![(1, b"WX".to_vec()), (1, b"YZ".to_vec())], Ok(()))
+        );
     }
 
     /// Returns a movie of track 1, no sample in its `moov`, and a `trex` of samples of 100 ticks and 2 bytes
@@ -853,12 +945,24 @@ mod tests {
 
     /// Returns a `moof` of two samples of track 1, decoded from `tfdt` if given, followed by the `mdat` of their four bytes
     fn fragment(sequence_number: u32, tfdt: Option<u64>) -> Vec<u8> {
+        fragment_of(sequence_number, tfdt, 2, None, b"WXYZ")
+    }
+
+    /// Returns a `moof` of `sample_count` samples of track 1, of `default_sample_size` bytes each if given, followed by the `mdat` of `media_data`
+    fn fragment_of(
+        sequence_number: u32,
+        tfdt: Option<u64>,
+        sample_count: u32,
+        default_sample_size: Option<u32>,
+        media_data: &[u8],
+    ) -> Vec<u8> {
         let mut trun = TrackRunBox::default();
         trun.data_offset = Some(0);
-        trun.samples = TrackRunSamples::EmptyRows { sample_count: 2 };
+        trun.samples = TrackRunSamples::EmptyRows { sample_count };
         let mut traf = TrackFragmentBox::default();
         traf.tfhd.track_id = 1;
         traf.tfhd.default_base_is_moof = true;
+        traf.tfhd.default_sample_size = default_sample_size;
         traf.tfdt = tfdt.map(|base_media_decode_time| {
             let mut tfdt = TrackFragmentBaseMediaDecodeTimeBox::default();
             tfdt.version = 1;
@@ -873,7 +977,7 @@ mod tests {
         if let Some(trun) = moof.traf.first_mut().and_then(|traf| traf.trun.first_mut()) {
             trun.data_offset = Some(i32::try_from(data_offset).unwrap());
         }
-        [encoded(&moof), raw_box(*b"mdat", b"WXYZ")].concat()
+        [encoded(&moof), raw_box(*b"mdat", media_data)].concat()
     }
 
     /// Returns the samples of `fragment`, made by [`fragment`], at file offset `offset`, that start at decoding time `decoding_time`

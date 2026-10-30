@@ -14,10 +14,11 @@ use crate::error::DemuxError;
 use crate::framing::to_u64;
 use crate::sample::{Sample, SampleLocation};
 
-/// Limits a [`MediaDataReader`] holds sample locations up to
+/// Limits a [`MediaDataReader`] holds sample locations and their media data up to
 ///
-/// Each bounds what the reader allocates for the locations it is handed: their
-/// number, and the bytes of media data they name together.
+/// Each bounds what the reader allocates: the number of locations it holds,
+/// the media data of one sample, and the media data allocated for the samples
+/// not yet taken, together.
 ///
 /// # Examples
 ///
@@ -26,6 +27,7 @@ use crate::sample::{Sample, SampleLocation};
 ///
 /// let limits = MediaDataLimits {
 ///     held_location_count: 1_048_576,
+///     sample_bytes: 16 * 1024 * 1024,
 ///     held_bytes: 16 * 1024 * 1024,
 /// };
 /// assert_eq!(limits.held_location_count, 1_048_576);
@@ -38,7 +40,9 @@ use crate::sample::{Sample, SampleLocation};
 pub struct MediaDataLimits {
     /// Number of locations the reader holds up to
     pub held_location_count: u64,
-    /// Bytes of media data the locations the reader holds name up to, together
+    /// Bytes of media data of one sample the reader holds up to
+    pub sample_bytes: u64,
+    /// Bytes of media data the reader holds allocated for the samples not yet taken up to, together
     pub held_bytes: u64,
 }
 
@@ -50,9 +54,16 @@ pub struct MediaDataLimits {
 /// location that names them are not kept for it. Two locations that name the
 /// same bytes are gathered apart, each into its own sample.
 ///
-/// What the reader holds is bounded by the number of locations and by the
-/// bytes they name together. A location counts from the call that hands it
-/// over until [`poll_sample`](Self::poll_sample) takes its sample.
+/// What the reader holds is bounded by the number of locations, and by the
+/// media data allocated for them. A location counts from the call that hands
+/// it over until [`poll_sample`](Self::poll_sample) takes its sample. The
+/// media data of a sample is allocated, as long as its location says, when the
+/// first byte of it arrives, and counts until its sample is taken. A location
+/// that names more media data than one sample may hold is refused as it is
+/// handed over. The input a
+/// sample's allocation would take past the limit is not kept for it, nor for
+/// the samples held after it, and is wanted again: the caller takes samples
+/// with `poll_sample` and passes it again.
 ///
 /// A refused call leaves the reader as it was.
 ///
@@ -73,6 +84,7 @@ pub struct MediaDataLimits {
 /// };
 /// let mut reader = MediaDataReader::new(MediaDataLimits {
 ///     held_location_count: 1024,
+///     sample_bytes: 1024 * 1024,
 ///     held_bytes: 16 * 1024 * 1024,
 /// });
 ///
@@ -80,9 +92,9 @@ pub struct MediaDataLimits {
 /// reader.handle_sample_locations([SampleLocation::new(properties, 1, 100..104)])?;
 ///
 /// // Its bytes arrive in two pieces, the later one first
-/// reader.handle_input(102, b"CDEF");
+/// reader.handle_input(102, b"CDEF")?;
 /// assert_eq!(reader.poll_sample(), None);
-/// reader.handle_input(98, b"..AB");
+/// reader.handle_input(98, b"..AB")?;
 /// assert_eq!(reader.poll_sample(), Some(Sample::new(properties, b"ABCD".to_vec())));
 /// reader.finish()?;
 /// # Ok::<(), isobmff::DemuxError>(())
@@ -110,14 +122,19 @@ impl MediaDataReader {
     /// Creates the reader that holds sample locations up to `limits`
     ///
     /// On a target whose memory addresses fewer bytes than
-    /// `limits.held_bytes`, the reader holds up to what it addresses.
+    /// `limits.sample_bytes` or `limits.held_bytes`, the reader holds up to
+    /// what it addresses. One sample is held up to `limits.held_bytes` when
+    /// `limits.sample_bytes` is more, as a longer one could never be
+    /// allocated.
     #[must_use]
     pub fn new(limits: MediaDataLimits) -> Self {
+        let held_bytes = limits
+            .held_bytes
+            .min(u64::try_from(isize::MAX).unwrap_or(u64::MAX));
         Self {
             limits: MediaDataLimits {
-                held_bytes: limits
-                    .held_bytes
-                    .min(u64::try_from(isize::MAX).unwrap_or(u64::MAX)),
+                sample_bytes: limits.sample_bytes.min(held_bytes),
+                held_bytes,
                 ..limits
             },
             held: VecDeque::new(),
@@ -132,19 +149,14 @@ impl MediaDataReader {
     /// * [`HeldLocationLimitExceeded`](DemuxError::HeldLocationLimitExceeded):
     ///   holding the locations would take those held past the limit, and none
     ///   of them is held.
-    /// * [`HeldBytesLimitExceeded`](DemuxError::HeldBytesLimitExceeded):
-    ///   holding the locations would take the bytes the held locations name
-    ///   past the limit, and none of them is held.
+    /// * [`SampleBytesLimitExceeded`](DemuxError::SampleBytesLimitExceeded):
+    ///   a location names more media data than the limit of one sample, and
+    ///   none of them is held.
     pub fn handle_sample_locations(
         &mut self,
         locations: impl IntoIterator<Item = SampleLocation>,
     ) -> Result<(), DemuxError> {
         let held_before = self.held.len();
-        let mut held_bytes = self
-            .held
-            .iter()
-            .map(|held| length(&held.location.byte_range()))
-            .fold(0, u64::saturating_add);
         for location in locations.into_iter().filter(|location| {
             !self
                 .discarded_tracks
@@ -152,16 +164,16 @@ impl MediaDataReader {
         }) {
             let byte_range = location.byte_range();
             let held_locations = to_u64(self.held.len()).saturating_add(1);
-            held_bytes = held_bytes.saturating_add(length(&byte_range));
+            let declared_bytes = length(&byte_range);
             let refused = if held_locations > self.limits.held_location_count {
                 Some(DemuxError::HeldLocationLimitExceeded {
                     held_locations,
                     limit_locations: self.limits.held_location_count,
                 })
-            } else if held_bytes > self.limits.held_bytes {
-                Some(DemuxError::HeldBytesLimitExceeded {
-                    held_bytes,
-                    limit_bytes: self.limits.held_bytes,
+            } else if declared_bytes > self.limits.sample_bytes {
+                Some(DemuxError::SampleBytesLimitExceeded {
+                    declared_bytes,
+                    limit_bytes: self.limits.sample_bytes,
                 })
             } else {
                 None
@@ -184,10 +196,62 @@ impl MediaDataReader {
     }
 
     /// Takes the bytes of `input`, which starts at file offset `offset`, that the held locations name
-    pub fn handle_input(&mut self, offset: u64, input: &[u8]) {
+    ///
+    /// The media data of a sample is allocated when the first byte of it
+    /// arrives, in the order the locations are held, while the media data
+    /// allocated for the samples not yet taken stays within the limit. The
+    /// bytes of the sample whose allocation would not, and of the samples held
+    /// after it that have no allocation yet, are not kept: they are wanted
+    /// again.
+    ///
+    /// # Errors
+    ///
+    /// * [`HeldBytesLimitExceeded`](DemuxError::HeldBytesLimitExceeded): the
+    ///   input names bytes of a sample whose allocation would take the media
+    ///   data allocated past the limit, and none of its bytes is kept. The
+    ///   reader is left as it was: the samples whose bytes have arrived are to
+    ///   be taken with [`poll_sample`](Self::poll_sample) before the input is
+    ///   passed again.
+    pub fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), DemuxError> {
         let input_range = offset..offset.saturating_add(to_u64(input.len()));
+        let mut allocated_bytes = self
+            .held
+            .iter()
+            .map(|held| to_u64(held.data.len()))
+            .fold(0, u64::saturating_add);
+        let mut refused = None;
+        let mut kept = false;
         for held in &mut self.held {
+            let reached = held
+                .missing
+                .iter()
+                .any(|missing| missing.start < input_range.end && input_range.start < missing.end);
+            if !reached {
+                continue;
+            }
+            if held.data.is_empty() {
+                // Why not allocate a later sample once one is refused: it would hold the bytes the earlier one needs, and samples are taken in the order they are held.
+                if refused.is_some() {
+                    continue;
+                }
+                let held_bytes =
+                    allocated_bytes.saturating_add(length(&held.location.byte_range()));
+                if held_bytes > self.limits.held_bytes {
+                    refused = Some(DemuxError::HeldBytesLimitExceeded {
+                        held_bytes,
+                        limit_bytes: self.limits.held_bytes,
+                    });
+                    continue;
+                }
+                allocated_bytes = held_bytes;
+            }
             held.fill(&input_range, input);
+            kept = true;
+        }
+
+        match refused {
+            Some(refused) if !kept => Err(refused),
+            Some(_) | None => Ok(()),
         }
     }
 
@@ -344,6 +408,7 @@ mod tests {
     fn unlimited() -> MediaDataReader {
         MediaDataReader::new(MediaDataLimits {
             held_location_count: u64::MAX,
+            sample_bytes: u64::MAX,
             held_bytes: u64::MAX,
         })
     }
@@ -360,7 +425,7 @@ mod tests {
 
         let mut samples = Vec::new();
         for start in (8_u64..24).step_by(4) {
-            reader.handle_input(start, &file(start..start + 4));
+            reader.handle_input(start, &file(start..start + 4)).unwrap();
             samples.extend(poll_all(&mut reader));
         }
 
@@ -379,12 +444,12 @@ mod tests {
         let mut reader = unlimited();
         reader.handle_sample_locations(locations.clone()).unwrap();
 
-        reader.handle_input(25, &file(25..30));
-        reader.handle_input(10, &file(10..20));
+        reader.handle_input(25, &file(25..30)).unwrap();
+        reader.handle_input(10, &file(10..20)).unwrap();
         assert_eq!(poll_all(&mut reader), []);
-        reader.handle_input(35, &file(35..40));
-        reader.handle_input(20, &file(20..25));
-        reader.handle_input(30, &file(30..35));
+        reader.handle_input(35, &file(35..40)).unwrap();
+        reader.handle_input(20, &file(20..25)).unwrap();
+        reader.handle_input(30, &file(30..35)).unwrap();
 
         assert_eq!(
             poll_all(&mut reader),
@@ -398,11 +463,11 @@ mod tests {
         let mut reader = unlimited();
         reader.handle_sample_locations([location.clone()]).unwrap();
 
-        reader.handle_input(12, &file(12..16));
-        reader.handle_input(10, &file(10..14));
-        reader.handle_input(12, &file(12..16));
+        reader.handle_input(12, &file(12..16)).unwrap();
+        reader.handle_input(10, &file(10..14)).unwrap();
+        reader.handle_input(12, &file(12..16)).unwrap();
         assert_eq!(reader.poll_sample(), None);
-        reader.handle_input(10, &file(10..20));
+        reader.handle_input(10, &file(10..20)).unwrap();
 
         assert_eq!(poll_all(&mut reader), [sample(&location)]);
     }
@@ -417,7 +482,7 @@ mod tests {
         let mut reader = unlimited();
         reader.handle_sample_locations(locations.clone()).unwrap();
 
-        reader.handle_input(10, &file(10..25));
+        reader.handle_input(10, &file(10..25)).unwrap();
 
         assert_eq!(
             poll_all(&mut reader),
@@ -430,7 +495,7 @@ mod tests {
         let location = location(0, 10..14);
         let mut reader = unlimited();
 
-        reader.handle_input(10, &file(10..14));
+        reader.handle_input(10, &file(10..14)).unwrap();
         reader.handle_sample_locations([location.clone()]).unwrap();
 
         assert_eq!(reader.poll_sample(), None);
@@ -452,9 +517,9 @@ mod tests {
         let mut reader = unlimited();
         reader.handle_sample_locations(locations.clone()).unwrap();
 
-        reader.handle_input(12, &file(12..14));
+        reader.handle_input(12, &file(12..14)).unwrap();
         assert_eq!(reader.poll_sample(), None);
-        reader.handle_input(10, &file(10..12));
+        reader.handle_input(10, &file(10..12)).unwrap();
 
         assert_eq!(
             poll_all(&mut reader),
@@ -470,11 +535,11 @@ mod tests {
             .unwrap();
         assert_eq!(reader.wanted_input(), Some(ByteRange::new(10, Some(10))));
 
-        reader.handle_input(10, &file(10..13));
-        reader.handle_input(15, &file(15..20));
+        reader.handle_input(10, &file(10..13)).unwrap();
+        reader.handle_input(15, &file(15..20)).unwrap();
         assert_eq!(reader.wanted_input(), Some(ByteRange::new(13, Some(2))));
 
-        reader.handle_input(13, &file(13..15));
+        reader.handle_input(13, &file(13..15)).unwrap();
         assert_eq!(reader.wanted_input(), Some(ByteRange::new(30, Some(10))));
     }
 
@@ -482,6 +547,7 @@ mod tests {
     fn locations_past_the_held_location_limit_are_refused_and_none_of_them_is_held() {
         let mut reader = MediaDataReader::new(MediaDataLimits {
             held_location_count: 2,
+            sample_bytes: u64::MAX,
             held_bytes: u64::MAX,
         });
         reader
@@ -495,49 +561,115 @@ mod tests {
                 limit_locations: 2,
             })
         );
-        reader.handle_input(10, &file(10..16));
+        reader.handle_input(10, &file(10..16)).unwrap();
         assert_eq!(poll_all(&mut reader), [sample(&location(0, 10..12))]);
         assert_eq!(reader.wanted_input(), None);
     }
 
     #[test]
-    fn locations_past_the_held_bytes_limit_are_refused_and_none_of_them_is_held() {
+    fn locations_past_the_sample_bytes_limit_are_refused_and_none_of_them_is_held() {
         let mut reader = MediaDataReader::new(MediaDataLimits {
             held_location_count: u64::MAX,
-            held_bytes: 10,
+            sample_bytes: 5,
+            held_bytes: u64::MAX,
         });
         reader
-            .handle_sample_locations([location(0, 10..16)])
+            .handle_sample_locations([location(0, 10..14)])
             .unwrap();
 
         assert_eq!(
-            reader.handle_sample_locations([location(1, 16..18), location(2, 18..21)]),
-            Err(DemuxError::HeldBytesLimitExceeded {
-                held_bytes: 11,
-                limit_bytes: 10,
+            reader.handle_sample_locations([location(1, 14..16), location(2, 16..22)]),
+            Err(DemuxError::SampleBytesLimitExceeded {
+                declared_bytes: 6,
+                limit_bytes: 5,
             })
         );
-        reader.handle_input(10, &file(10..21));
-        assert_eq!(poll_all(&mut reader), [sample(&location(0, 10..16))]);
+        reader.handle_input(10, &file(10..22)).unwrap();
+        assert_eq!(poll_all(&mut reader), [sample(&location(0, 10..14))]);
         assert_eq!(reader.wanted_input(), None);
+    }
+
+    #[test]
+    fn a_location_past_the_held_bytes_is_refused_as_past_the_sample_bytes() {
+        let mut reader = MediaDataReader::new(MediaDataLimits {
+            held_location_count: u64::MAX,
+            sample_bytes: u64::MAX,
+            held_bytes: 4,
+        });
+
+        assert_eq!(
+            reader.handle_sample_locations([location(0, 10..15)]),
+            Err(DemuxError::SampleBytesLimitExceeded {
+                declared_bytes: 5,
+                limit_bytes: 4,
+            })
+        );
+    }
+
+    /// Reader that holds 6 bytes of media data allocated, and the locations of samples of 4, 3 and 2 bytes at file offset 10
+    fn holding_six_bytes() -> (MediaDataReader, [SampleLocation; 3]) {
+        let mut reader = MediaDataReader::new(MediaDataLimits {
+            held_location_count: u64::MAX,
+            sample_bytes: u64::MAX,
+            held_bytes: 6,
+        });
+        let locations = [
+            location(0, 10..14),
+            location(1, 14..17),
+            location(2, 17..19),
+        ];
+        reader.handle_sample_locations(locations.clone()).unwrap();
+        (reader, locations)
+    }
+
+    #[test]
+    fn input_past_the_held_bytes_gathers_the_samples_that_fit_and_wants_the_rest_again() {
+        let (mut reader, [first, second, third]) = holding_six_bytes();
+
+        reader.handle_input(10, &file(10..19)).unwrap();
+        assert_eq!(poll_all(&mut reader), [sample(&first)]);
+        assert_eq!(reader.wanted_input(), Some(ByteRange::new(14, Some(3))));
+
+        reader.handle_input(10, &file(10..19)).unwrap();
+        assert_eq!(poll_all(&mut reader), [sample(&second), sample(&third)]);
+    }
+
+    #[test]
+    fn input_of_which_the_held_bytes_keep_nothing_is_refused_and_leaves_the_reader_as_it_was() {
+        let (mut reader, [first, second, _]) = holding_six_bytes();
+        reader.handle_input(10, &file(10..14)).unwrap();
+
+        assert_eq!(
+            reader.handle_input(14, &file(14..17)),
+            Err(DemuxError::HeldBytesLimitExceeded {
+                held_bytes: 7,
+                limit_bytes: 6,
+            })
+        );
+        assert_eq!(reader.wanted_input(), Some(ByteRange::new(14, Some(3))));
+        assert_eq!(poll_all(&mut reader), [sample(&first)]);
+        reader.handle_input(14, &file(14..17)).unwrap();
+        assert_eq!(poll_all(&mut reader), [sample(&second)]);
     }
 
     #[test]
     fn a_taken_sample_no_longer_counts_toward_the_limits() {
         let mut reader = MediaDataReader::new(MediaDataLimits {
             held_location_count: 1,
+            sample_bytes: u64::MAX,
             held_bytes: 4,
         });
         reader
             .handle_sample_locations([location(0, 10..14)])
             .unwrap();
-        reader.handle_input(10, &file(10..14));
+        reader.handle_input(10, &file(10..14)).unwrap();
         assert_eq!(poll_all(&mut reader), [sample(&location(0, 10..14))]);
 
-        assert_eq!(
-            reader.handle_sample_locations([location(1, 14..18)]),
-            Ok(())
-        );
+        reader
+            .handle_sample_locations([location(1, 14..18)])
+            .unwrap();
+        reader.handle_input(14, &file(14..18)).unwrap();
+        assert_eq!(poll_all(&mut reader), [sample(&location(1, 14..18))]);
     }
 
     #[test]
@@ -551,8 +683,8 @@ mod tests {
             ])
             .unwrap();
 
-        reader.handle_input(10, &file(10..13));
-        reader.handle_input(18, &file(18..20));
+        reader.handle_input(10, &file(10..13)).unwrap();
+        reader.handle_input(18, &file(18..20)).unwrap();
 
         assert_eq!(
             reader.finish(),
@@ -569,12 +701,13 @@ mod tests {
     fn clearing_drops_what_is_held_and_keeps_the_limits() {
         let mut reader = MediaDataReader::new(MediaDataLimits {
             held_location_count: 1,
+            sample_bytes: u64::MAX,
             held_bytes: u64::MAX,
         });
         reader
             .handle_sample_locations([location(0, 10..14)])
             .unwrap();
-        reader.handle_input(10, &file(10..12));
+        reader.handle_input(10, &file(10..12)).unwrap();
 
         reader.clear();
 

@@ -56,13 +56,16 @@
 //!
 //! let mut offset = 0_u64;
 //! for piece in file.chunks(64) {
-//!     // The same piece again while events come, taking the samples after each call
+//!     let end = offset + u64::try_from(piece.len())?;
+//!     // The same piece again while events come, or while the demuxer wants bytes of it, taking the samples after each call
 //!     loop {
 //!         let event = demuxer.handle_input(offset, piece);
 //!         samples.extend(core::iter::from_fn(|| demuxer.poll_sample()));
-//!         if event?.is_none() { break; }
+//!         if event?.is_none() && !demuxer.wanted_input().is_some_and(|wanted| (offset..end).contains(&wanted.offset())) {
+//!             break;
+//!         }
 //!     }
-//!     offset += u64::try_from(piece.len())?;
+//!     offset = end;
 //! }
 //! // The input has ended, which only the caller knows
 //! loop {
@@ -77,9 +80,16 @@
 //! Such a caller reads the samples of a file whose `moov` and `moof`s each
 //! come before their media data: media data in a piece passed before the box
 //! that locates it is read is not kept, and [`finish`](Demuxer::finish) fails
-//! with [`UnfinishedSample`](DemuxError::UnfinishedSample). The demuxer holds
-//! the locations of every sample of a `moov` or a `moof` at once, so their
-//! bytes together have to fit [`DemuxLimits::with_held_bytes`].
+//! with [`UnfinishedSample`](DemuxError::UnfinishedSample).
+//!
+//! The demuxer allocates the media data of a sample when its first byte
+//! arrives, and holds it until [`poll_sample`](Demuxer::poll_sample) takes the
+//! sample. What it holds allocated is bounded by
+//! [`DemuxLimits::with_held_bytes`]: the bytes past it are not kept and are
+//! wanted again, so the loops above take the samples after each call, and the
+//! caller that cannot seek passes a piece again while the demuxer wants bytes
+//! of it. A caller that never takes them fails with
+//! [`HeldBytesLimitExceeded`](DemuxError::HeldBytesLimitExceeded).
 //!
 //! A caller that can seek reads a fragmented movie file from any of its
 //! fragments. The `mfra` at the end of the file lists where they start

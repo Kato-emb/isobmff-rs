@@ -188,12 +188,20 @@ pub enum DemuxError {
         /// Number of locations the reader holds up to
         limit_locations: u64,
     },
-    /// Sample locations that would take the bytes the locations a reader holds name past the limit it holds them up to
+    /// Sample location whose media data is longer than the limit a reader holds one sample up to
+    #[non_exhaustive]
+    SampleBytesLimitExceeded {
+        /// Length of the media data the location names
+        declared_bytes: u64,
+        /// Length of the media data of one sample the reader holds up to
+        limit_bytes: u64,
+    },
+    /// Input that would have a reader allocate the media data of a sample past the limit of the bytes it holds, and of which it takes nothing
     #[non_exhaustive]
     HeldBytesLimitExceeded {
-        /// Bytes the locations the reader would hold name together
+        /// Bytes the reader would hold allocated for samples not yet taken
         held_bytes: u64,
-        /// Bytes the locations the reader holds name up to, together
+        /// Bytes the reader holds allocated for samples not yet taken up to
         limit_bytes: u64,
     },
     /// Input ends before the media data of a sample has arrived
@@ -340,12 +348,19 @@ impl fmt::Display for DemuxError {
                 formatter,
                 "{held_locations} sample locations held, past the limit of {limit_locations}"
             ),
+            Self::SampleBytesLimitExceeded {
+                declared_bytes,
+                limit_bytes,
+            } => write!(
+                formatter,
+                "sample of {declared_bytes} bytes, past the limit of {limit_bytes}"
+            ),
             Self::HeldBytesLimitExceeded {
                 held_bytes,
                 limit_bytes,
             } => write!(
                 formatter,
-                "sample locations held name {held_bytes} bytes, past the limit of {limit_bytes}"
+                "{held_bytes} bytes of samples held, past the limit of {limit_bytes}"
             ),
             Self::UnfinishedSample {
                 track_id,
