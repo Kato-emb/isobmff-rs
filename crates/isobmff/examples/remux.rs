@@ -109,7 +109,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 /// Returns the brands and the movie of the destination, made of those of the source, `file_type` and `movie`
 ///
 /// The sample tables of the movie are emptied, as the samples the muxer
-/// writes declare them. A fragmented file or a segment takes a `trex` for
+/// writes declare them, and the tables of what else the source states of
+/// each sample, which the muxer does not write, are dropped. A fragmented file or a segment takes a `trex` for
 /// each track, and brands that name one of `iso5` to `isod`.
 fn destination_of(
     file_structure: FileStructure,
@@ -125,6 +126,15 @@ fn destination_of(
         stbl.chunk_offset = Some(ChunkOffsetVariant::ChunkOffset(Default::default()));
         stbl.stss = None;
         stbl.sdtp = None;
+        stbl.stsh = None;
+        stbl.padb = None;
+        stbl.stdp = None;
+        stbl.sbgp.clear();
+        stbl.csgp.clear();
+        stbl.subs.clear();
+        stbl.ssrt.clear();
+        stbl.saiz.clear();
+        stbl.saio.clear();
     }
     let mut file_type = file_type.cloned().unwrap_or_else(|| {
         let mut brands = FileTypeBox::default();

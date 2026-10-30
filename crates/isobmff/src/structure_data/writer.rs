@@ -3,8 +3,11 @@
 use alloc::vec::Vec;
 
 use isobmff_boxes::{
-    ChunkOffsetBox, ChunkOffsetVariant, CompositionOffsetBox, MovieBox, MovieExtendsBox,
-    MovieFragmentBox, SampleDependencyTypeBox, SampleSizeBox, SampleToChunkBox, SyncSampleBox,
+    ChunkOffsetBox, ChunkOffsetVariant, CompactSampleToGroupBox, CompositionOffsetBox,
+    DegradationPriorityBox, MovieBox, MovieExtendsBox, MovieFragmentBox, PaddingBitsBox,
+    SampleAuxiliaryInformationOffsetsBox, SampleAuxiliaryInformationSizesBox,
+    SampleDependencyTypeBox, SampleInfoSizes, SampleSizeBox, SampleToChunkBox, SampleToGroupBox,
+    ShadowSyncSampleBox, SubSampleInformationBox, SubSampleReferenceTableBox, SyncSampleBox,
     TimeToSampleBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackRunBox,
     TrackRunSample, TrackRunSamples,
 };
@@ -324,6 +327,52 @@ fn refuse_samples_in_tables(movie: &MovieBox) -> Result<(), MuxError> {
             (
                 stbl.sdtp.iter().any(|sdtp| !sdtp.entries.is_empty()),
                 SampleDependencyTypeBox::BOX_TYPE,
+            ),
+            (
+                stbl.stsh.iter().any(|stsh| !stsh.entries.is_empty()),
+                ShadowSyncSampleBox::BOX_TYPE,
+            ),
+            (
+                stbl.padb.iter().any(|padb| !padb.pads.is_empty()),
+                PaddingBitsBox::BOX_TYPE,
+            ),
+            (
+                stbl.stdp.iter().any(|stdp| !stdp.priorities.is_empty()),
+                DegradationPriorityBox::BOX_TYPE,
+            ),
+            (
+                stbl.sbgp
+                    .iter()
+                    .flat_map(|sbgp| &sbgp.entries)
+                    .any(|entry| entry.sample_count > 0),
+                SampleToGroupBox::BOX_TYPE,
+            ),
+            (
+                stbl.csgp
+                    .iter()
+                    .flat_map(|csgp| &csgp.patterns)
+                    .any(|pattern| pattern.sample_count > 0),
+                CompactSampleToGroupBox::BOX_TYPE,
+            ),
+            (
+                stbl.subs.iter().any(|subs| !subs.entries.is_empty()),
+                SubSampleInformationBox::BOX_TYPE,
+            ),
+            (
+                stbl.ssrt.iter().any(|ssrt| !ssrt.entries.is_empty()),
+                SubSampleReferenceTableBox::BOX_TYPE,
+            ),
+            (
+                stbl.saiz.iter().any(|saiz| match &saiz.sample_info_sizes {
+                    SampleInfoSizes::Constant { sample_count, .. } => *sample_count > 0,
+                    SampleInfoSizes::Table { sample_info_sizes } => !sample_info_sizes.is_empty(),
+                    _ => true,
+                }),
+                SampleAuxiliaryInformationSizesBox::BOX_TYPE,
+            ),
+            (
+                stbl.saio.iter().any(|saio| !saio.offsets.is_empty()),
+                SampleAuxiliaryInformationOffsetsBox::BOX_TYPE,
             ),
         ];
         if let Some((_, box_type)) = declared.into_iter().find(|(declared, _)| *declared) {
@@ -804,6 +853,58 @@ mod tests {
                 .first()
                 .map(|trak| trak.mdia.mdhd.duration),
             Some(0)
+        );
+    }
+
+    #[test]
+    fn a_movie_whose_auxiliary_tables_declare_samples_is_refused() {
+        let declaring = |stbl: fn(&mut isobmff_boxes::SampleTableBox)| {
+            let mut movie = two_tracks();
+            if let Some(trak) = movie.trak.get_mut(1) {
+                stbl(&mut trak.mdia.minf.stbl);
+            }
+            SampleTableWriter::new(movie).map(|_| ())
+        };
+        let refused = |box_type| {
+            Err(MuxError::SampleTableNotEmpty {
+                track_id: 2,
+                box_type,
+            })
+        };
+
+        assert_eq!(
+            [
+                declaring(|stbl| {
+                    let mut saiz = isobmff_boxes::SampleAuxiliaryInformationSizesBox::default();
+                    saiz.sample_info_sizes = isobmff_boxes::SampleInfoSizes::Table {
+                        sample_info_sizes: Vec::from([16]),
+                    };
+                    stbl.saiz = Vec::from([saiz]);
+                }),
+                declaring(|stbl| {
+                    let mut saio = isobmff_boxes::SampleAuxiliaryInformationOffsetsBox::default();
+                    saio.offsets = Vec::from([100]);
+                    stbl.saio = Vec::from([saio]);
+                }),
+                declaring(|stbl| {
+                    let mut sbgp = isobmff_boxes::SampleToGroupBox::default();
+                    let mut entry = isobmff_boxes::SampleToGroupEntry::default();
+                    entry.sample_count = 1;
+                    sbgp.entries = Vec::from([entry]);
+                    stbl.sbgp = Vec::from([sbgp]);
+                }),
+                declaring(|stbl| {
+                    let mut stdp = isobmff_boxes::DegradationPriorityBox::default();
+                    stdp.priorities = Vec::from([1]);
+                    stbl.stdp = Some(stdp);
+                }),
+            ],
+            [
+                refused(isobmff_boxes::SampleAuxiliaryInformationSizesBox::BOX_TYPE),
+                refused(isobmff_boxes::SampleAuxiliaryInformationOffsetsBox::BOX_TYPE),
+                refused(isobmff_boxes::SampleToGroupBox::BOX_TYPE),
+                refused(isobmff_boxes::DegradationPriorityBox::BOX_TYPE),
+            ]
         );
     }
 
