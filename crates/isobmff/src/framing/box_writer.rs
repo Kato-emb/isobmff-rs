@@ -205,6 +205,11 @@ impl BoxWriter {
         }
     }
 
+    /// Returns the file offset the next box starts at, once the box open, if any, ends
+    pub(crate) const fn next_offset(&self) -> u64 {
+        self.next_offset
+    }
+
     /// Ends the file: the writer takes no more events
     ///
     /// A box whose size runs to the end of the file, still open, ends here.

@@ -5,6 +5,8 @@
 //! [`SampleLocation`]s structure-data resolves to, and the bytes of the file
 //! as they arrive, and gathers each sample out of them.
 
+mod writer;
+
 use alloc::collections::{BTreeSet, VecDeque};
 use alloc::vec::Vec;
 use core::ops::Range;
@@ -13,6 +15,8 @@ use crate::byte_range::ByteRange;
 use crate::error::DemuxError;
 use crate::framing::to_u64;
 use crate::sample::{Sample, SampleLocation};
+
+pub(crate) use writer::MediaDataWriter;
 
 /// Limits a [`MediaDataReader`] holds sample locations and their media data up to
 ///

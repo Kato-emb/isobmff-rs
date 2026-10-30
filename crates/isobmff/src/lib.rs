@@ -148,17 +148,21 @@ extern crate alloc;
 mod byte_range;
 mod demuxer;
 mod error;
+mod file_structure;
 pub mod framing;
 mod limits;
 pub mod media_data;
+mod muxer;
 mod sample;
 pub mod structure_data;
 
 pub use byte_range::ByteRange;
 pub use demuxer::{DemuxEvent, Demuxer};
 pub use error::{DemuxError, MuxError};
+pub use file_structure::FileStructure;
 pub use isobmff_core::*;
 pub use limits::DemuxLimits;
+pub use muxer::Muxer;
 pub use sample::{Sample, SampleLocation, SampleProperties};
 
 /// Boxes of ISO/IEC 14496-12, each read into a value that owns its bytes

@@ -3,7 +3,7 @@
 use core::error;
 use core::fmt;
 
-use isobmff_core::{BoxType, Error};
+use isobmff_core::{BoxType, Error, FourCc};
 
 use crate::byte_range::ByteRange;
 use crate::framing::BoxEventKind;
@@ -420,6 +420,27 @@ pub enum MuxError {
     /// Box offered after the file is finished
     #[non_exhaustive]
     AlreadyFinished,
+    /// Box of a type the file holds one of, offered again
+    #[non_exhaustive]
+    DuplicateBox {
+        /// Type of the box
+        box_type: BoxType,
+    },
+    /// Box offered after a box it goes before in the file
+    #[non_exhaustive]
+    BoxOutOfOrder {
+        /// Type of the box offered
+        box_type: BoxType,
+    },
+    /// Samples, or the end of the file, offered before the movie that declares their tracks
+    #[non_exhaustive]
+    MissingMovie,
+    /// Brand of a fragmented file or a segment that does not allow a track fragment to take its `moof` as its base data offset, §8.8.7.1
+    #[non_exhaustive]
+    UnsupportedBrand {
+        /// The brand: one earlier than `iso5`, or the major brand where no brand is `iso5` or later
+        brand: FourCc,
+    },
     /// Box offered where the file it is written into takes none: an `mvex` in the movie of a file that is not fragmented
     #[non_exhaustive]
     UnexpectedBox {
@@ -544,6 +565,16 @@ impl fmt::Display for MuxError {
                 "{box_type} box offered after a box that runs to the end of the file"
             ),
             Self::AlreadyFinished => formatter.write_str("box offered after the file is finished"),
+            Self::DuplicateBox { box_type } => write!(formatter, "{box_type} box offered again"),
+            Self::BoxOutOfOrder { box_type } => write!(
+                formatter,
+                "{box_type} box offered after a box it goes before"
+            ),
+            Self::MissingMovie => formatter.write_str("samples offered before the movie"),
+            Self::UnsupportedBrand { brand } => write!(
+                formatter,
+                "brand {brand} does not allow a track fragment based on its moof"
+            ),
             Self::UnexpectedBox { box_type } => {
                 write!(formatter, "{box_type} box where the file takes none")
             }
