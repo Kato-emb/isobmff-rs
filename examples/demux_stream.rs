@@ -1,11 +1,10 @@
-//! Lists the boxes and the samples of a movie file or a segment as its bytes arrive in order, without seeking
+//! Lists the boxes and the samples of a movie file or a segment as its bytes arrive over HTTP, without seeking
 //!
 //! ```text
-//! cargo run -p isobmff --example demux_stream -- < movie.mp4
-//! curl -s https://example.com/movie.mp4 | cargo run -p isobmff --example demux_stream
+//! cargo run --example demux_stream -- https://example.com/movie.mp4
 //! ```
 //!
-//! The file is read from standard input a buffer at a time. Each buffer goes
+//! The response body is read a buffer at a time. Each buffer goes
 //! to the demuxer again and again while it returns events, one box at file
 //! level each. After each call, the samples whose bytes have arrived by then
 //! come out of `poll_sample`, in the order of their locations; those of a
@@ -13,7 +12,7 @@
 //! each sample is printed as it comes out.
 //!
 //! The demuxer cannot tell where the file ends, so the caller calls `finish`
-//! when standard input ends.
+//! when the response body ends.
 //!
 //! A caller that cannot seek reads the samples of a file whose `moov` and
 //! `moof`s each come before their media data: media data in a buffer passed
@@ -25,24 +24,39 @@
 //! a sample it could hold only once the samples before it were taken.
 
 use std::collections::BTreeMap;
+use std::env;
 use std::error::Error;
-use std::io::{self, Read};
+use std::io::Read;
 
 use isobmff::boxes::{
     FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentIndexBox,
     SegmentTypeBox,
 };
 use isobmff::{BoxDefinition, DemuxEvent, Demuxer};
+use ureq::Agent;
+use ureq::tls::{RootCerts, TlsConfig};
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let url = env::args().nth(1).ok_or("usage: demux_stream <url>")?;
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .map_err(|_| "a crypto provider is already installed")?;
+    let agent: Agent = Agent::config_builder()
+        .tls_config(
+            TlsConfig::builder()
+                .root_certs(RootCerts::PlatformVerifier)
+                .build(),
+        )
+        .build()
+        .into();
+    let mut body = agent.get(&url).call()?.into_body().into_reader();
     let mut demuxer = Demuxer::new();
-    let mut stdin = io::stdin().lock();
     let mut buffer = vec![0; 64 * 1024];
     let mut offset = 0_u64;
     let mut gathered = BTreeMap::<u32, (u64, u64)>::new();
 
     loop {
-        let read = stdin.read(&mut buffer)?;
+        let read = body.read(&mut buffer)?;
         let piece = buffer.get(..read).ok_or("read past the buffer")?;
         if piece.is_empty() {
             break;

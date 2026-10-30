@@ -134,12 +134,12 @@
 //! the root of this crate. The boxes ISO/IEC 14496-12 defines, written in that
 //! vocabulary, are in [`boxes`].
 //!
-//! The examples in `crates/isobmff/examples/` show the loops whole.
-//! `cargo run -p isobmff --example demux -- movie.mp4` seeks through a file
-//! to what the demuxer wants, and `demux_stream` reads standard input in
+//! The examples in `examples/` show the loops whole.
+//! `cargo run --example demux -- movie.mp4` seeks through a file
+//! to what the demuxer wants, and `demux_stream` reads a response over HTTP in
 //! order; both count the samples the demuxer returns. `remux` writes the
 //! samples a demuxer reads into another file structure with a [`Muxer`]:
-//! `cargo run -p isobmff --example remux -- movie.mp4 fragmented.mp4 fragmented`.
+//! `cargo run --example remux -- movie.mp4 fragmented.mp4 fragmented`.
 //! `dump_boxes` and `split_fragments` read and write files through
 //! [`framing`]: one lists the boxes of a file, the other splits a fragmented
 //! movie file into segments.

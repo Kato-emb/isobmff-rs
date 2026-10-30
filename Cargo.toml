@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "examples"]
 
 [workspace.package]
 edition = "2024"
@@ -14,6 +14,7 @@ keywords = ["iso-bmff", "mp4", "media", "parser", "container"]
 categories = ["multimedia", "parser-implementations", "encoding"]
 
 [workspace.dependencies]
+isobmff = { path = "crates/isobmff", version = "0.0.0" }
 isobmff-boxes = { path = "crates/isobmff-boxes", version = "0.0.0" }
 isobmff-core = { path = "crates/isobmff-core", version = "0.0.0", default-features = false }
 isobmff-test-support = { path = "crates/isobmff-test-support" }

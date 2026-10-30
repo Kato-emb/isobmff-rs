@@ -1,9 +1,9 @@
 //! Writes the samples of a movie file or a segment into another file structure: fragmented, not fragmented, or a segment
 //!
 //! ```text
-//! cargo run -p isobmff --example remux -- movie.mp4 fragmented.mp4 fragmented
-//! cargo run -p isobmff --example remux -- fragmented.mp4 movie.mp4 non-fragmented
-//! cargo run -p isobmff --example remux -- fragmented.mp4 segment.mp4 segment
+//! cargo run --example remux -- movie.mp4 fragmented.mp4 fragmented
+//! cargo run --example remux -- fragmented.mp4 movie.mp4 non-fragmented
+//! cargo run --example remux -- fragmented.mp4 segment.mp4 segment
 //! ```
 //!
 //! A demuxer reads the source as the `demux` example does, seeking to the

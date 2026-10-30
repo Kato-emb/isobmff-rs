@@ -1,7 +1,7 @@
 //! Prints the box structure of a file, reading its headers and skipping its media data
 //!
 //! ```text
-//! cargo run -p isobmff --example dump_boxes -- movie.mp4
+//! cargo run --example dump_boxes -- movie.mp4
 //! ```
 //!
 //! Each top-level box is read whole, up to a limit, and the boxes a container
