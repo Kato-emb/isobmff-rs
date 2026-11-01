@@ -266,6 +266,13 @@ jobs:
           key: conformance-${{ hashFiles('scripts/fetch-conformance.sh') }}
       - if: steps.files.outputs.cache-hit != 'true'
         run: scripts/fetch-conformance.sh "$RUNNER_TEMP/conformance"
+      # The corpus the weekly fuzz job of scheduled.yml grew, where there is one.
+      # The key is never saved here: a run only restores by the prefix.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/corpus
+          key: fuzz-corpus-${{ matrix.target }}-
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
       # The seeds are the files alone: GPAC's reports beside them are not boxes.
       # The first directory takes what a run adds, and is never kept.
       - run: |
