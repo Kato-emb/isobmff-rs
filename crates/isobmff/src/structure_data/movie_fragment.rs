@@ -13,6 +13,7 @@ use super::sample_description::data_reference_index;
 use super::sample_table::expand;
 use crate::error::{DemuxError, MuxError};
 use crate::framing::to_u64;
+use crate::leniency::Leniency;
 use crate::sample::{Sample, SampleLocation, SampleProperties};
 
 /// Returns the number of samples the track runs of `moof` count, those of track fragments of empty duration left out
@@ -38,7 +39,11 @@ pub(super) fn sample_count(moof: &MovieFragmentBox) -> u64 {
 ///
 /// The decoding time of the first sample of a track fragment is the one its
 /// `tfdt` gives, else the one its track has reached in `decoding_times`
-/// (§8.8.12), which the samples move on. A track fragment of empty duration
+/// (§8.8.12), which the samples move on. A `tfdt` other than the decoding
+/// time the earlier samples of its track have reached pushes a
+/// [`Leniency::DecodingTimeGap`] or a [`Leniency::DecodingTimeOverlap`] onto
+/// `leniencies`; a track whose time is not known, or that has no earlier
+/// sample, has nothing to compare. A track fragment of empty duration
 /// declares no sample and moves the decoding time on by the default duration.
 ///
 /// # Errors
@@ -56,10 +61,11 @@ pub(super) fn sample_count(moof: &MovieFragmentBox) -> u64 {
 ///   data or the decoding times run outside 64 bits.
 pub(super) fn resolve_fragment(
     movie: &MovieBox,
-    decoding_times: &mut [Option<u64>],
+    decoding_times: &mut [Option<ReachedTime>],
     moof: &MovieFragmentBox,
     moof_offset: u64,
     locations: &mut Vec<SampleLocation>,
+    leniencies: &mut Vec<Leniency>,
 ) -> Result<(), DemuxError> {
     let mut previous_end = moof_offset;
     for traf in &moof.traf {
@@ -77,12 +83,27 @@ pub(super) fn resolve_fragment(
             .flat_map(|mvex| &mvex.trex)
             .find(|trex| trex.track_id == track_id)
             .ok_or(DemuxError::MissingTrackExtends { track_id })?;
-        let mut time = traf
-            .tfdt
-            .as_ref()
-            .map(|tfdt| tfdt.base_media_decode_time)
-            .or(*decoding_time)
+        let tfdt = traf.tfdt.as_ref().map(|tfdt| tfdt.base_media_decode_time);
+        let reached = *decoding_time;
+        if let (Some(tfdt), Some(reached)) = (tfdt, reached)
+            && reached.after_sample
+        {
+            if tfdt > reached.time {
+                leniencies.push(Leniency::DecodingTimeGap {
+                    track_id,
+                    gap: tfdt.abs_diff(reached.time),
+                });
+            } else if tfdt < reached.time {
+                leniencies.push(Leniency::DecodingTimeOverlap {
+                    track_id,
+                    overlap: tfdt.abs_diff(reached.time),
+                });
+            }
+        }
+        let mut time = tfdt
+            .or(reached.map(|reached| reached.time))
             .ok_or(DemuxError::MissingDecodingTime { track_id })?;
+        let earlier_samples = locations.len();
         let defaults = Defaults {
             sample_description_index: tfhd
                 .sample_description_index
@@ -148,11 +169,24 @@ pub(super) fn resolve_fragment(
             }
         }
 
-        *decoding_time = Some(time);
+        *decoding_time = Some(ReachedTime {
+            time,
+            after_sample: reached.is_some_and(|reached| reached.after_sample)
+                || locations.len() > earlier_samples,
+        });
         previous_end = data_offset;
     }
 
     Ok(())
+}
+
+/// Decoding time a track has reached, once it is known
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ReachedTime {
+    /// Decoding time past the last sample of the track, or of its first sample where it has none
+    pub(super) time: u64,
+    /// Whether the track has a sample before this time
+    pub(super) after_sample: bool,
 }
 
 /// Values the samples of a track fragment take where their rows do not carry them: those of the `tfhd`, else those of the `trex`
@@ -400,6 +434,7 @@ mod tests {
     };
 
     use crate::error::DemuxError;
+    use crate::leniency::Leniency;
     use crate::sample::{SampleLocation, SampleProperties};
     use crate::structure_data::fixtures::{UNLIMITED, movie, track};
     use crate::structure_data::{StructureDataLimits, StructureDataReader};
@@ -429,6 +464,15 @@ mod tests {
         movie
     }
 
+    /// Returns the track fragment of track `track_id` of one sample of the defaults, decoded from `base_media_decode_time`
+    fn traf_from(track_id: u32, base_media_decode_time: u64) -> TrackFragmentBox {
+        let mut traf = traf(track_id, &[(1, None)]);
+        let mut tfdt = TrackFragmentBaseMediaDecodeTimeBox::default();
+        tfdt.base_media_decode_time = base_media_decode_time;
+        traf.tfdt = Some(tfdt);
+        traf
+    }
+
     /// Returns the track fragment of track `track_id` of runs of `sample_count` samples of the defaults, each at `data_offset`
     fn traf(track_id: u32, runs: &[(u32, Option<i32>)]) -> TrackFragmentBox {
         let mut traf = TrackFragmentBox::default();
@@ -454,8 +498,13 @@ mod tests {
 
     /// Returns a reader that holds [`fragmented_movie`]
     fn reader() -> StructureDataReader {
+        reader_of(fragmented_movie())
+    }
+
+    /// Returns a reader holding `movie`
+    fn reader_of(movie: MovieBox) -> StructureDataReader {
         let mut reader = StructureDataReader::new(UNLIMITED);
-        reader.handle_movie(fragmented_movie()).unwrap();
+        reader.handle_movie(movie).unwrap();
         reader
     }
 
@@ -545,6 +594,74 @@ mod tests {
     }
 
     #[test]
+    fn a_tfdt_other_than_the_decoding_time_the_earlier_samples_reach_is_kept_as_the_gap_or_overlap_it_leaves()
+     {
+        // Track 1 reaches 230 after its fragment of two samples, track 2 reaches 30 in the movie
+        let mut reader = reader();
+        let first = resolve(&mut reader, &moof([traf(1, &[(2, None)])]));
+
+        let past_and_before = resolve(&mut reader, &moof([traf_from(1, 330), traf_from(2, 10)]));
+
+        assert_eq!(
+            (first.map(|_| ()), past_and_before, reader.leniencies()),
+            (
+                Ok(()),
+                Ok(Vec::from([(1, 330, 1000..1008), (2, 10, 1008..1016)])),
+                &[
+                    Leniency::DecodingTimeGap {
+                        track_id: 1,
+                        gap: 100
+                    },
+                    Leniency::DecodingTimeOverlap {
+                        track_id: 2,
+                        overlap: 20
+                    },
+                ][..]
+            )
+        );
+    }
+
+    #[test]
+    fn a_tfdt_past_samples_of_no_duration_leaves_a_gap() {
+        let mut movie = fragmented_movie();
+        if let Some(trak) = movie.trak.first_mut() {
+            *trak = track(1, 0, &[1, 1], &[(1, 2)], &[0]);
+        }
+        let mut reader = reader_of(movie);
+
+        assert_eq!(
+            (
+                resolve(&mut reader, &moof([traf_from(1, 50)])),
+                reader.leniencies()
+            ),
+            (
+                Ok(Vec::from([(1, 50, 1000..1008)])),
+                &[Leniency::DecodingTimeGap {
+                    track_id: 1,
+                    gap: 50
+                }][..]
+            )
+        );
+    }
+
+    #[test]
+    fn a_tfdt_where_no_earlier_sample_of_its_track_moved_the_decoding_time_on_leaves_no_gap() {
+        let mut movie = fragmented_movie();
+        if let Some(trak) = movie.trak.get_mut(1) {
+            *trak = track(2, 10, &[], &[], &[]);
+        }
+        let mut reader = reader_of(movie);
+
+        assert_eq!(
+            (
+                resolve(&mut reader, &moof([traf_from(2, 90_000)])),
+                reader.leniencies()
+            ),
+            (Ok(Vec::from([(2, 90_000, 1000..1008)])), &[][..])
+        );
+    }
+
+    #[test]
     fn after_a_resume_only_a_track_fragment_with_a_tfdt_resolves() {
         let mut reader = reader();
         reader.resume();
@@ -559,6 +676,7 @@ mod tests {
             resolve(&mut reader, &moof([with_tfdt])).unwrap(),
             [(2, 0, 1000..1008)]
         );
+        assert_eq!(reader.leniencies(), []);
         assert_eq!(
             resolve(&mut reader, &moof([traf(2, &[(1, None)])])).unwrap(),
             [(2, 100, 1000..1008)]

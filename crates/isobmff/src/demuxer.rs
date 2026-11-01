@@ -1237,7 +1237,7 @@ mod tests {
                 .for_each(|entry| entry.sample_count = 3);
         }
         let head = [file_type(), encoded(&movie)].concat();
-        let file = [head.clone(), fragment(1, None), fragment(2, Some(5000))].concat();
+        let file = [head.clone(), fragment(1, None), fragment(2, Some(200))].concat();
         let second = to_u64(head.len()).saturating_add(to_u64(fragment(1, None).len()));
         let mut demuxer = Demuxer::new();
         read(&mut demuxer, &file, usize::MAX).unwrap();

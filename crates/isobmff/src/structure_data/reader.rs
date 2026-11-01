@@ -7,6 +7,7 @@ use core::ops::Range;
 use isobmff_boxes::{MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentIndexBox};
 use isobmff_core::BoxDefinition;
 
+use super::movie_fragment::ReachedTime;
 use super::segment_index::SegmentIndex;
 use super::{movie_fragment, sample_table};
 use crate::error::DemuxError;
@@ -77,7 +78,7 @@ pub struct StructureDataReader {
     limits: StructureDataLimits,
     movie: Option<MovieBox>,
     /// Decoding time past the last sample of each track of the movie, in the order of its tracks, `None` once it is not known
-    decoding_times: Vec<Option<u64>>,
+    decoding_times: Vec<Option<ReachedTime>>,
     segment_indexes: Vec<SegmentIndex>,
     movie_fragment_random_access: Option<MovieFragmentRandomAccessBox>,
     leniencies: Vec<Leniency>,
@@ -151,8 +152,12 @@ impl StructureDataReader {
         let mut decoding_times = Vec::with_capacity(movie.trak.len());
         let mut leniencies = Vec::new();
         for trak in &movie.trak {
-            let decoding_time = sample_table::resolve_track(trak, &mut locations, &mut leniencies)?;
-            decoding_times.push(Some(decoding_time));
+            let earlier_samples = locations.len();
+            let time = sample_table::resolve_track(trak, &mut locations, &mut leniencies)?;
+            decoding_times.push(Some(ReachedTime {
+                time,
+                after_sample: locations.len() > earlier_samples,
+            }));
         }
         in_file_order(&mut locations);
 
@@ -171,6 +176,17 @@ impl StructureDataReader {
     /// has reached in the movie and the fragments before it (§8.8.12), and
     /// the fragment moves that time on. The data offsets resolve to file
     /// offsets as Table 6 of §8.8.7.1 sets out.
+    ///
+    /// A `tfdt` past the decoding time the earlier samples of its track have
+    /// reached extends the duration of the sample before it (§8.8.12). That
+    /// sample is already returned, so the first sample of the track fragment
+    /// takes the decoding time of the `tfdt`, and the reader keeps the gap
+    /// as a [`Leniency::DecodingTimeGap`] that
+    /// [`leniencies`](Self::leniencies) returns. A `tfdt` before that time,
+    /// which §8.8.12 does not allow, is taken as it is and kept as a
+    /// [`Leniency::DecodingTimeOverlap`]. A track that has no earlier sample,
+    /// or whose time is not known since the reader resumed, is compared with
+    /// nothing.
     ///
     /// # Errors
     ///
@@ -196,16 +212,19 @@ impl StructureDataReader {
         let movie = self.movie.as_ref().ok_or(DemuxError::MissingMovie)?;
         let mut locations = self.room_for(movie_fragment::sample_count(movie_fragment))?;
         let mut decoding_times = self.decoding_times.clone();
+        let mut leniencies = Vec::new();
         movie_fragment::resolve_fragment(
             movie,
             &mut decoding_times,
             movie_fragment,
             moof_offset,
             &mut locations,
+            &mut leniencies,
         )?;
         in_file_order(&mut locations);
 
         self.decoding_times = decoding_times;
+        self.leniencies.append(&mut leniencies);
         Ok(SampleLocations {
             locations: locations.into_iter(),
         })
