@@ -22,34 +22,22 @@
 //! `DemuxLimits::with_held_bytes`, so the samples are taken after each call,
 //! and a buffer is passed again while the demuxer wants bytes of it: those of
 //! a sample it could hold only once the samples before it were taken.
-//!
-//! The media data of a track may be in another file, which a `url ` entry of
-//! its data reference names relative to the movie file (ISO/IEC 14496-12
-//! §8.7.2). The demuxer locates those samples and does not gather them. Once
-//! the movie file is read, the caller requests each file a data reference
-//! names, joined to the URL of the movie file, and gathers the samples in it
-//! with a `MediaDataReader` as its response body arrives, in the same way. The
-//! samples in a file whose request fails, or in an entry other than a `url `,
-//! are counted and not read, as are those past where a response body ends.
 
 use std::collections::BTreeMap;
 use std::env;
 use std::error::Error;
 use std::io::Read;
-use std::iter;
 
 use isobmff::boxes::{
-    DataEntry, FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox,
-    SegmentIndexBox, SegmentTypeBox,
+    FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentIndexBox,
+    SegmentTypeBox,
 };
-use isobmff::media_data::MediaDataReader;
-use isobmff::{BoxDefinition, DemuxEvent, DemuxLimits, Demuxer, Sample, SampleLocation};
+use isobmff::{BoxDefinition, DemuxEvent, Demuxer};
 use ureq::Agent;
-use ureq::http::Uri;
 use ureq::tls::{RootCerts, TlsConfig};
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let url_of_movie = env::args().nth(1).ok_or("usage: demux_stream <url>")?;
+    let url = env::args().nth(1).ok_or("usage: demux_stream <url>")?;
     rustls::crypto::ring::default_provider()
         .install_default()
         .map_err(|_| "a crypto provider is already installed")?;
@@ -61,12 +49,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         )
         .build()
         .into();
-    let mut body = agent.get(&url_of_movie).call()?.into_body().into_reader();
+    let mut body = agent.get(&url).call()?.into_body().into_reader();
     let mut demuxer = Demuxer::new();
     let mut buffer = vec![0; 64 * 1024];
     let mut offset = 0_u64;
     let mut gathered = BTreeMap::<u32, (u64, u64)>::new();
-    let mut elsewhere = BTreeMap::<(u32, u16), Vec<SampleLocation>>::new();
 
     loop {
         let read = body.read(&mut buffer)?;
@@ -79,9 +66,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             let event = demuxer.handle_input(offset, piece);
             if let Ok(Some(event)) = &event {
                 print_box(event);
-                keep_elsewhere(&demuxer, event, &mut elsewhere);
             }
-            take_samples(iter::from_fn(|| demuxer.poll_sample()), &mut gathered)?;
+            take_samples(&mut demuxer, &mut gathered)?;
             if event?.is_none()
                 && !demuxer
                     .wanted_input()
@@ -96,33 +82,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         let event = demuxer.finish();
         if let Ok(Some(event)) = &event {
             print_box(event);
-            keep_elsewhere(&demuxer, event, &mut elsewhere);
         }
-        take_samples(iter::from_fn(|| demuxer.poll_sample()), &mut gathered)?;
+        take_samples(&mut demuxer, &mut gathered)?;
         if event?.is_none() {
             break;
-        }
-    }
-
-    for ((track_id, data_reference_index), locations) in elsewhere {
-        let not_read = format!(
-            "track {track_id}: {} samples in data reference entry {data_reference_index}, not all read",
-            locations.len()
-        );
-        let entry = locations
-            .first()
-            .and_then(|location| demuxer.data_reference(location));
-        let Some(DataEntry::Url(url)) = entry else {
-            println!("{not_read}: {entry:?}");
-            continue;
-        };
-        let Some(named) = url.location.as_ref().and_then(|named| named.as_str()) else {
-            println!("{not_read}: a location that is not UTF-8");
-            continue;
-        };
-        let other = joined(&url_of_movie, named)?;
-        if let Err(error) = gather(&agent, &other, locations, &mut gathered) {
-            println!("{not_read}: {other}: {error}");
         }
     }
 
@@ -157,96 +120,12 @@ fn print_box(event: &DemuxEvent) {
     println!("[{box_type}] offset={} size={size}", byte_range.offset());
 }
 
-/// Keeps the locations `event` carries of samples whose media data is in another file, by track and data reference entry
-fn keep_elsewhere(
-    demuxer: &Demuxer,
-    event: &DemuxEvent,
-    elsewhere: &mut BTreeMap<(u32, u16), Vec<SampleLocation>>,
-) {
-    let (DemuxEvent::Movie {
-        samples: locations, ..
-    }
-    | DemuxEvent::MovieFragment {
-        samples: locations, ..
-    }) = event
-    else {
-        return;
-    };
-    for location in locations.clone().filter(|location| {
-        !matches!(demuxer.data_reference(location), Some(DataEntry::Url(url)) if url.location.is_none())
-    }) {
-        elsewhere
-            .entry((
-                location.properties().track_id,
-                location.data_reference_index(),
-            ))
-            .or_default()
-            .push(location);
-    }
-}
-
-/// Returns the URL `named`, relative to the URL of the movie file `url_of_movie` unless it has a scheme
-fn joined(url_of_movie: &str, named: &str) -> Result<String, Box<dyn Error>> {
-    if named.contains("://") {
-        return Ok(named.to_owned());
-    }
-    let movie: Uri = url_of_movie.parse()?;
-    let scheme = movie.scheme_str().ok_or("a movie URL without a scheme")?;
-    let authority = movie.authority().ok_or("a movie URL without a host")?;
-    if named.starts_with('/') {
-        return Ok(format!("{scheme}://{authority}{named}"));
-    }
-    // Why not remove the `.` and `..` segments, as RFC 3986 §5.2 does: the server resolves them in the path it is sent
-    let path = movie.path();
-    let directory = path
-        .rfind('/')
-        .and_then(|slash| path.get(..=slash))
-        .unwrap_or("/");
-    Ok(format!("{scheme}://{authority}{directory}{named}"))
-}
-
-/// Gathers the samples of `locations` out of the response body at `url` as it arrives, printing and counting each
-fn gather(
-    agent: &Agent,
-    url: &str,
-    locations: Vec<SampleLocation>,
-    gathered: &mut BTreeMap<u32, (u64, u64)>,
-) -> Result<(), Box<dyn Error>> {
-    let mut body = agent.get(url).call()?.into_body().into_reader();
-    let mut media_data = MediaDataReader::new(DemuxLimits::new().media_data());
-    media_data.handle_sample_locations(locations)?;
-    let mut buffer = vec![0; 64 * 1024];
-    let mut offset = 0_u64;
-    while media_data.wanted_input().is_some() {
-        let read = body.read(&mut buffer)?;
-        let piece = buffer.get(..read).ok_or("read past the buffer")?;
-        if piece.is_empty() {
-            break;
-        }
-        let end = offset.saturating_add(u64::try_from(read)?);
-        loop {
-            let handled = media_data.handle_input(offset, piece);
-            take_samples(iter::from_fn(|| media_data.poll_sample()), gathered)?;
-            handled?;
-            if !media_data
-                .wanted_input()
-                .is_some_and(|wanted| (offset..end).contains(&wanted.offset()))
-            {
-                break;
-            }
-        }
-        offset = end;
-    }
-    media_data.finish()?;
-    Ok(())
-}
-
-/// Prints each of `samples`, and counts them and their bytes by track
+/// Prints each sample `demuxer` has gathered, and counts them and their bytes by track
 fn take_samples(
-    samples: impl Iterator<Item = Sample>,
+    demuxer: &mut Demuxer,
     gathered: &mut BTreeMap<u32, (u64, u64)>,
 ) -> Result<(), Box<dyn Error>> {
-    for sample in samples {
+    while let Some(sample) = demuxer.poll_sample() {
         let properties = sample.properties();
         println!(
             "  sample of track {}: decoding time {}, {} bytes",
