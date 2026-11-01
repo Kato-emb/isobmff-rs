@@ -11,15 +11,17 @@
 //! them.
 
 mod movie_fragment;
+mod random_access;
 mod reader;
 mod sample_description;
 mod sample_table;
 mod segment_index;
 mod writer;
 
+pub use random_access::movie_fragment_random_access_start;
 pub use reader::{SampleLocations, StructureDataLimits, StructureDataReader};
 pub(crate) use sample_description::names_the_same_file;
 #[cfg(test)]
 pub(crate) use sample_table::fixtures;
-pub use segment_index::{SegmentIndex, Subsegment, movie_fragment_random_access_start};
+pub use segment_index::{SegmentIndex, Subsegment};
 pub(crate) use writer::{MovieFragmentWriter, SampleTableWriter, StructureDataWriter};

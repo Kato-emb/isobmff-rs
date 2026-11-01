@@ -431,6 +431,7 @@ mod tests {
             let source = demux(bytes);
             let first = FileStructure::Fragmented {
                 first_sequence_number: 1,
+                random_access: false,
             };
             let conversions = if source.movie.mvex.is_some() {
                 vec![
