@@ -24,14 +24,23 @@ GIT_LFS_SKIP_SMUDGE=1 git -C "$work" "${lfs_off[@]}" fetch -q --depth 1 --filter
 git -C "$work" sparse-checkout set --no-cone "$path/*"
 GIT_LFS_SKIP_SMUDGE=1 git -C "$work" "${lfs_off[@]}" checkout -q FETCH_HEAD
 
+fetch() {
+  local name=$1
+  local oid
+  oid=$(sed -n 's/^oid sha256://p' "$work/$path/$name")
+  curl -sSfL -o "$destination/$name" \
+    "https://media.githubusercontent.com/media/MPEGGroup/FileFormatConformance/$commit/$path/$name"
+  echo "$oid  $destination/$name" | sha256sum -c --quiet -
+}
+
 mkdir -p "$destination"
 for pointer in "$work/$path"/*.mp4; do
   name=$(basename "$pointer")
   size=$(sed -n 's/^size //p' "$pointer")
   [ "$size" -le "$max_bytes" ] || continue
-  oid=$(sed -n 's/^oid sha256://p' "$pointer")
-  curl -sSfL -o "$destination/$name" \
-    "https://media.githubusercontent.com/media/MPEGGroup/FileFormatConformance/$commit/$path/$name"
-  echo "$oid  $destination/$name" | sha256sum -c --quiet -
+  fetch "$name"
   cp "$work/$path/${name%.mp4}_gpac.json" "$destination/"
 done
+# The media data of a6_tone_multifile.mp4, which its data reference names
+# relative to it. The other files a data reference names are not in the set.
+fetch myData.dat

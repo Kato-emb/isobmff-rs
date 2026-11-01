@@ -91,6 +91,8 @@ pub struct Muxer {
     media_data: MediaDataWriter,
     /// Boxes written and not yet polled, in the order they lie in the file
     output: VecDeque<Vec<u8>>,
+    /// Boxes of an indexed segment that go after its `sidx`, held back until [`finish`](Self::finish) writes it
+    held: Vec<Vec<u8>>,
     /// Whether the `ftyp`, or the `styp` of a segment, is written
     file_type: bool,
     finished: bool,
@@ -106,6 +108,7 @@ impl Muxer {
             structure_data: None,
             media_data: MediaDataWriter,
             output: VecDeque::new(),
+            held: Vec::new(),
             file_type: false,
             finished: false,
         }
@@ -180,6 +183,10 @@ impl Muxer {
     ///   fragmented, and the movie has an `mvex`.
     /// * [`SampleTableNotEmpty`](MuxError::SampleTableNotEmpty): a table of
     ///   the sample table of a track declares samples.
+    /// * [`EditListNotApplied`](MuxError::EditListNotApplied): the segment is
+    ///   indexed, and the edit list of the first track of the movie moves its
+    ///   presentation times off its composition times, which the muxer does
+    ///   not apply.
     /// * [`Box`](MuxError::Box): the `moov` does not write.
     /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the file is finished.
     pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), MuxError> {
@@ -192,17 +199,22 @@ impl Muxer {
         let structure_data = match self.file_structure {
             FileStructure::Fragmented {
                 first_sequence_number,
+                random_access,
             } => {
-                let writer = MovieFragmentWriter::new(movie, first_sequence_number)?;
+                let writer =
+                    MovieFragmentWriter::new(movie, first_sequence_number, random_access, false)?;
                 let bytes = write_box(&mut self.boxes, writer.movie())?;
                 self.output.push_back(bytes);
                 StructureDataWriter::Fragmented(writer)
             }
             FileStructure::Segment {
                 first_sequence_number,
+                segment_index,
             } => StructureDataWriter::Fragmented(MovieFragmentWriter::new(
                 movie,
                 first_sequence_number,
+                false,
+                segment_index,
             )?),
             FileStructure::NonFragmented => {
                 StructureDataWriter::NonFragmented(SampleTableWriter::new(movie)?)
@@ -240,6 +252,9 @@ impl Muxer {
     ///   [`DataOffsetOutOfRange`](MuxError::DataOffsetOutOfRange): the media
     ///   data of a sample is longer, or lies further, than the structure-data
     ///   reaches.
+    /// * [`SegmentIndexOutOfRange`](MuxError::SegmentIndexOutOfRange): the
+    ///   segment is indexed, and its `sidx` cannot state the `moof` and the
+    ///   `mdat` of the samples as a subsegment.
     /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the file is finished.
     pub fn handle_samples(
         &mut self,
@@ -252,6 +267,8 @@ impl Muxer {
             return Ok(());
         }
         let header = self.media_data.header(&samples)?;
+        let mut written = Vec::new();
+        let mut held = false;
         match structure_data {
             StructureDataWriter::NonFragmented(writer) => {
                 let data_offset = self
@@ -261,23 +278,31 @@ impl Muxer {
                 writer.handle_samples(&samples, data_offset)?;
             }
             StructureDataWriter::Fragmented(writer) => {
-                let moof = writer.movie_fragment(&samples, header.encoded_len())?;
-                let bytes = write_box(&mut self.boxes, &moof)?;
-                self.output.push_back(bytes);
+                let moof_offset = self.boxes.next_offset();
+                let moof = writer.movie_fragment(&samples, moof_offset, header.encoded_len())?;
+                written.push(write_box(&mut self.boxes, &moof)?);
+                held = writer.indexes_subsegments();
             }
         }
-        let bytes = self.media_data.write(&mut self.boxes, header, &samples)?;
-        self.output.push_back(bytes);
+        written.push(self.media_data.write(&mut self.boxes, header, &samples)?);
+        if held {
+            self.held.extend(written);
+        } else {
+            self.output.extend(written);
+        }
 
         Ok(())
     }
 
     /// Returns the next box at file level written, in the order the boxes lie in the file, or `None` when the muxer has written none it has not returned
+    ///
+    /// The boxes of an indexed segment after its `styp` are returned once
+    /// [`finish`](Self::finish) has written its `sidx`.
     pub fn poll_output(&mut self) -> Option<Vec<u8>> {
         self.output.pop_front()
     }
 
-    /// Ends the file: writes the `moov` of a file that is not fragmented, with the sample tables of its samples
+    /// Ends the file: writes the `moov` of a file that is not fragmented, with the sample tables of its samples, the `mfra` of a fragmented file that lists its sync samples, or the `sidx` of an indexed segment before the boxes held back for it
     ///
     /// The muxer then takes no more input. The boxes written are still
     /// returned by [`poll_output`](Self::poll_output).
@@ -285,15 +310,30 @@ impl Muxer {
     /// # Errors
     ///
     /// * [`MissingMovie`](MuxError::MissingMovie): the muxer holds no movie.
-    /// * [`Box`](MuxError::Box): the `moov` does not write.
+    /// * [`Box`](MuxError::Box): the `moov` or the `mfra` does not write.
     /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the file is finished.
     pub fn finish(&mut self) -> Result<(), MuxError> {
         self.refuse_if_finished()?;
         let structure_data = self.structure_data.take().ok_or(MuxError::MissingMovie)?;
-        if let StructureDataWriter::NonFragmented(writer) = structure_data {
-            let bytes = write_box(&mut self.boxes, &writer.finish())?;
-            self.output.push_back(bytes);
-        }
+        let bytes = match structure_data {
+            StructureDataWriter::NonFragmented(writer) => {
+                Some(write_box(&mut self.boxes, &writer.finish())?)
+            }
+            StructureDataWriter::Fragmented(writer) => {
+                let (mfra, sidx) = writer.finish()?;
+                if let Some(sidx) = sidx {
+                    // Why not self.boxes: it counts file offsets in the order
+                    // boxes are written, and the sidx goes before boxes it has
+                    // counted already
+                    let bytes = write_box(&mut BoxWriter::new(), &sidx)?;
+                    self.output.push_back(bytes);
+                    self.output.extend(self.held.drain(..));
+                }
+                mfra.map(|mfra| write_box(&mut self.boxes, &mfra))
+                    .transpose()?
+            }
+        };
+        self.output.extend(bytes);
         self.boxes.finish()?;
         self.finished = true;
 
@@ -352,9 +392,11 @@ mod tests {
     use crate::demuxer::Demuxer;
     use crate::error::MuxError;
     use crate::file_structure::FileStructure;
+    use crate::framing::to_u64;
     use crate::leniency::{Leniency, SampleTableDisagreement};
     use crate::sample::{Sample, SampleProperties};
     use crate::structure_data::fixtures::{encoded, movie, track, written};
+    use crate::structure_data::movie_fragment_random_access_start;
 
     /// Returns a movie of track 1 of no sample, the movie in a timescale of 1000 and the track of 100
     fn one_track() -> MovieBox {
@@ -448,6 +490,7 @@ mod tests {
     fn a_fragmented_file_is_its_brands_its_movie_then_a_movie_fragment_and_its_media_data() {
         let mut muxer = Muxer::new(FileStructure::Fragmented {
             first_sequence_number: 1,
+            random_access: false,
         });
 
         muxer
@@ -468,9 +511,57 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_mfra_that_ends_a_fragmented_file_lists_where_each_fragment_starts_and_its_mfro_finds_it()
+    {
+        let mut muxer = Muxer::new(FileStructure::Fragmented {
+            first_sequence_number: 1,
+            random_access: true,
+        });
+        muxer
+            .handle_file_type(file_type(b"iso6", &[b"iso6"]))
+            .unwrap();
+        muxer.handle_movie(one_fragmented_track()).unwrap();
+        let [first, second] = two_samples();
+        muxer.handle_samples([first]).unwrap();
+        muxer.handle_samples([second]).unwrap();
+        muxer.finish().unwrap();
+        let boxes = output(&mut muxer);
+        let file = boxes.concat();
+        let offset_of = |index: usize| to_u64(boxes.iter().take(index).map(Vec::len).sum());
+
+        let (mut demuxer, _) = demux(&file);
+        let mfra = demuxer.movie_fragment_random_access().unwrap().clone();
+        let resumed: Vec<(u64, Option<u64>)> = mfra
+            .tfra
+            .iter()
+            .flat_map(|tfra| &tfra.entries)
+            .map(|entry| {
+                demuxer.resume_at(entry.moof_offset).unwrap();
+                let first = read(&mut demuxer, &file).into_iter().next();
+                (
+                    entry.moof_offset,
+                    first.map(|sample| sample.properties().decoding_time),
+                )
+            })
+            .collect();
+
+        assert_eq!(resumed, [(offset_of(2), Some(0)), (offset_of(4), Some(10))]);
+        assert_eq!(
+            movie_fragment_random_access_start(to_u64(file.len()), file.last_chunk().unwrap()),
+            Some(offset_of(6))
+        );
+    }
+
     /// Reads `file` with a [`Demuxer`] from wherever it wants, and returns the demuxer and the samples it returned
     fn demux(file: &[u8]) -> (Demuxer, Vec<Sample>) {
         let mut demuxer = Demuxer::new();
+        let samples = read(&mut demuxer, file);
+        (demuxer, samples)
+    }
+
+    /// Reads `file` with `demuxer` from wherever it wants to the end, and returns the samples it returned
+    fn read(demuxer: &mut Demuxer, file: &[u8]) -> Vec<Sample> {
         let mut samples = Vec::new();
         while let Some(wanted) = demuxer.wanted_input() {
             match file.get(usize::try_from(wanted.offset()).unwrap()..) {
@@ -481,7 +572,7 @@ mod tests {
             };
             samples.extend(iter::from_fn(|| demuxer.poll_sample()));
         }
-        (demuxer, samples)
+        samples
     }
 
     /// Returns the boxes a muxer laid out as `file_structure` writes of `ftyp`, `movie` and `samples`, each whole
@@ -559,6 +650,7 @@ mod tests {
         let fragmented = mux(
             FileStructure::Fragmented {
                 first_sequence_number: 1,
+                random_access: false,
             },
             file_type(b"iso6", &[b"iso6", b"mp41"]),
             one_fragmented_track(),
@@ -579,6 +671,7 @@ mod tests {
      {
         let mut muxer = Muxer::new(FileStructure::Segment {
             first_sequence_number: 5,
+            segment_index: false,
         });
 
         muxer
@@ -596,6 +689,63 @@ mod tests {
                 written(b"mdat", &[b"ABCDE"]),
             ]
         );
+    }
+
+    #[test]
+    fn an_indexed_segment_holds_its_movie_fragments_back_for_a_sidx_after_its_brands_that_indexes_each_with_its_media_data()
+     {
+        let mut muxer = Muxer::new(FileStructure::Segment {
+            first_sequence_number: 5,
+            segment_index: true,
+        });
+        muxer
+            .handle_file_type(file_type(b"msdh", &[b"msdh", b"iso6"]))
+            .unwrap();
+        muxer.handle_movie(one_fragmented_track()).unwrap();
+        let [first, second] = two_samples();
+        muxer.handle_samples([first]).unwrap();
+        muxer.handle_samples([second]).unwrap();
+        let before_finish = output(&mut muxer);
+        muxer.finish().unwrap();
+        let segment = [before_finish.clone(), output(&mut muxer)].concat();
+        let initialization = mux(
+            FileStructure::Fragmented {
+                first_sequence_number: 1,
+                random_access: false,
+            },
+            file_type(b"iso6", &[b"iso6"]),
+            one_fragmented_track(),
+            Vec::new(),
+        );
+        let boxes = [initialization.clone(), segment.clone()].concat();
+        let offset_of = |index: usize| to_u64(boxes.iter().take(index).map(Vec::len).sum());
+        let first_moof = initialization.len() + 2;
+
+        let (demuxer, samples) = demux(&boxes.concat());
+
+        assert_eq!(before_finish.len(), 1);
+        assert_eq!(
+            segment
+                .iter()
+                .map(|bytes| bytes.get(4..8))
+                .collect::<Vec<_>>(),
+            [b"styp", b"sidx", b"moof", b"mdat", b"moof", b"mdat"]
+                .map(|box_type| Some(&box_type[..]))
+        );
+        let subsegments: Vec<_> = demuxer
+            .segment_indexes()
+            .iter()
+            .flat_map(|index| index.subsegments())
+            .map(|subsegment| (subsegment.byte_range(), subsegment.presentation_time()))
+            .collect();
+        assert_eq!(
+            subsegments,
+            [
+                (offset_of(first_moof)..offset_of(first_moof + 2), 0..10),
+                (offset_of(first_moof + 2)..offset_of(first_moof + 4), 10..20),
+            ]
+        );
+        assert_eq!(samples, two_samples());
     }
 
     #[test]
@@ -650,6 +800,7 @@ mod tests {
         let fragmented = || {
             Muxer::new(FileStructure::Fragmented {
                 first_sequence_number: 1,
+                random_access: false,
             })
         };
         let mut no_movie = fragmented();
@@ -696,6 +847,7 @@ mod tests {
         let refused = |ftyp| {
             Muxer::new(FileStructure::Fragmented {
                 first_sequence_number: 1,
+                random_access: false,
             })
             .handle_file_type(ftyp)
         };

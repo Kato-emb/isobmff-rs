@@ -2,11 +2,15 @@
 
 use alloc::vec::Vec;
 
-use isobmff_boxes::{MovieBox, MovieExtendsBox, MovieFragmentBox};
-use isobmff_core::BoxDefinition;
+use isobmff_boxes::{
+    MovieBox, MovieExtendsBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentIndexBox,
+};
+use isobmff_core::{BoxDefinition, BoxEncode};
 
-use super::movie_fragment::{self, runs};
+use super::movie_fragment::{self, runs, track_fragments};
+use super::random_access::RandomAccessTables;
 use super::sample_table::{TrackTable, refuse_samples_in_tables};
+use super::segment_index::SubsegmentTable;
 use crate::error::MuxError;
 use crate::framing::to_u64;
 use crate::sample::Sample;
@@ -29,6 +33,10 @@ pub(crate) enum StructureDataWriter {
 pub(crate) struct MovieFragmentWriter {
     movie: MovieBox,
     sequence_number: u32,
+    /// Sync samples of the fragments written, where the file ends with an `mfra`
+    random_access: Option<RandomAccessTables>,
+    /// Subsegments of the fragments written, where the segment starts with a `sidx`
+    segment_index: Option<SubsegmentTable>,
 }
 
 /// Writer of the sample table of each track of a movie, in the order of its tracks
@@ -39,7 +47,7 @@ pub(crate) struct SampleTableWriter {
 }
 
 impl MovieFragmentWriter {
-    /// Creates the writer of the movie fragments of `movie`, the first numbered `first_sequence_number`
+    /// Creates the writer of the movie fragments of `movie`, the first numbered `first_sequence_number`, that lists their sync samples where `random_access` and indexes them as subsegments where `segment_index`
     ///
     /// # Errors
     ///
@@ -47,7 +55,15 @@ impl MovieFragmentWriter {
     ///   the movie has no `trex`, which its fragments take defaults from.
     /// * [`SampleTableNotEmpty`](MuxError::SampleTableNotEmpty): a table of a
     ///   track declares samples, which belong in the fragments.
-    pub(crate) fn new(movie: MovieBox, first_sequence_number: u32) -> Result<Self, MuxError> {
+    /// * [`EditListNotApplied`](MuxError::EditListNotApplied): the writer
+    ///   indexes subsegments, and the edit list of the first track moves its
+    ///   presentation times off its composition times.
+    pub(crate) fn new(
+        movie: MovieBox,
+        first_sequence_number: u32,
+        random_access: bool,
+        segment_index: bool,
+    ) -> Result<Self, MuxError> {
         refuse_samples_in_tables(&movie)?;
         for trak in &movie.trak {
             let track_id = trak.tkhd.track_id;
@@ -62,8 +78,12 @@ impl MovieFragmentWriter {
         }
 
         Ok(Self {
+            segment_index: segment_index
+                .then(|| SubsegmentTable::new(&movie))
+                .transpose()?,
             movie,
             sequence_number: first_sequence_number,
+            random_access: random_access.then(RandomAccessTables::default),
         })
     }
 
@@ -72,13 +92,15 @@ impl MovieFragmentWriter {
         &self.movie
     }
 
-    /// Returns the movie fragment of `samples`, whose media data lies in their order from `data_start` bytes past the end of the `moof`
+    /// Returns the movie fragment of `samples`, its `moof` at file offset `moof_offset` and their media data in their order from `data_start` bytes past its end
     ///
     /// Each track has one track fragment, its base data offset the first byte
     /// of the `moof` (§8.8.7.1) and its `tfdt` the decoding time of its first
     /// sample (§8.8.12), and a track run for each run of its samples that lie
     /// one after another (§8.8.8). The next fragment takes the next sequence
-    /// number.
+    /// number. A writer that lists sync samples lists the first of each
+    /// track in the fragment, and one that indexes subsegments indexes the
+    /// fragment and its media data as one.
     ///
     /// # Errors
     ///
@@ -87,21 +109,65 @@ impl MovieFragmentWriter {
     ///   which follow from the durations within the fragment only.
     /// * [`DataOffsetOutOfRange`](MuxError::DataOffsetOutOfRange): the media
     ///   data of a sample lies further from the `moof` than a `trun` reaches.
+    /// * [`SegmentIndexOutOfRange`](MuxError::SegmentIndexOutOfRange): the
+    ///   `sidx` cannot state the fragment as a subsegment.
     pub(crate) fn movie_fragment(
         &mut self,
         samples: &[Sample],
+        moof_offset: u64,
         data_start: u64,
     ) -> Result<MovieFragmentBox, MuxError> {
         let runs = runs(&self.movie, samples, None)?;
+        let track_fragments = track_fragments(&runs);
         let moof = movie_fragment::movie_fragment_box(
             &self.movie,
             self.sequence_number,
-            &runs,
+            &track_fragments,
             data_start,
         )?;
+        if let Some(segment_index) = &mut self.segment_index {
+            let referenced_size = samples
+                .iter()
+                .map(|sample| to_u64(sample.data().len()))
+                .fold(
+                    moof.encoded_len().saturating_add(data_start),
+                    u64::saturating_add,
+                );
+            segment_index.handle_movie_fragment(&track_fragments, referenced_size)?;
+        }
         self.sequence_number = self.sequence_number.wrapping_add(1);
+        if let Some(random_access) = &mut self.random_access {
+            random_access.handle_movie_fragment(&track_fragments, moof_offset);
+        }
 
         Ok(moof)
+    }
+
+    /// Returns whether the writer indexes the fragments it writes as the subsegments of a `sidx`
+    pub(crate) const fn indexes_subsegments(&self) -> bool {
+        self.segment_index.is_some()
+    }
+
+    /// Returns the `mfra` of the sync samples listed and the `sidx` of the subsegments indexed, where the writer lists and indexes them, §8.8.9, §8.14.3
+    ///
+    /// # Errors
+    ///
+    /// * [`Box`](MuxError::Box): the `mfra` is longer than its `mfro` counts.
+    pub(crate) fn finish(
+        self,
+    ) -> Result<
+        (
+            Option<MovieFragmentRandomAccessBox>,
+            Option<SegmentIndexBox>,
+        ),
+        MuxError,
+    > {
+        let mfra = self
+            .random_access
+            .map(RandomAccessTables::finish)
+            .transpose()?;
+
+        Ok((mfra, self.segment_index.map(SubsegmentTable::finish)))
     }
 }
 
@@ -212,7 +278,7 @@ impl SampleTableWriter {
 }
 
 /// Returns the version of a header box that holds `duration`: 1 where it takes more than 32 bits
-fn version_for(duration: u64) -> u8 {
+pub(super) fn version_for(duration: u64) -> u8 {
     u8::from(u32::try_from(duration).is_err())
 }
 
@@ -298,14 +364,15 @@ mod tests {
 
     #[test]
     fn a_movie_fragment_states_each_track_in_a_track_fragment_based_on_the_moof() {
-        let mut writer = MovieFragmentWriter::new(two_fragmented_tracks(), 7).unwrap();
+        let mut writer =
+            MovieFragmentWriter::new(two_fragmented_tracks(), 7, false, false).unwrap();
         let samples = [
             sample(1, 100, 10, b"AB"),
             sample(1, 110, 10, b"CDE"),
             offset_sample(2, 0, 20, b"FGHI", 5),
         ];
 
-        let moof = writer.movie_fragment(&samples, 8).unwrap();
+        let moof = writer.movie_fragment(&samples, 0, 8).unwrap();
 
         // moof 184 bytes, so the media data starts at 184 + 8
         let traf_1 = written(
@@ -359,7 +426,7 @@ mod tests {
         assert_eq!(encoded(&moof), expected);
         assert_eq!(
             writer
-                .movie_fragment(&samples, 8)
+                .movie_fragment(&samples, 0, 8)
                 .map(|moof| moof.mfhd.sequence_number),
             Ok(8)
         );
@@ -367,7 +434,8 @@ mod tests {
 
     #[test]
     fn samples_of_a_track_whose_runs_in_a_fragment_do_not_follow_on_are_refused() {
-        let mut writer = MovieFragmentWriter::new(two_fragmented_tracks(), 1).unwrap();
+        let mut writer =
+            MovieFragmentWriter::new(two_fragmented_tracks(), 1, false, false).unwrap();
 
         assert_eq!(
             writer
@@ -377,6 +445,7 @@ mod tests {
                         sample(2, 0, 20, b"CD"),
                         sample(1, 15, 10, b"EF")
                     ],
+                    0,
                     8,
                 )
                 .map(|_| ()),
@@ -672,7 +741,7 @@ mod tests {
             [
                 SampleTableWriter::new(two_fragmented_tracks()).map(|_| ()),
                 SampleTableWriter::new(declared).map(|_| ()),
-                MovieFragmentWriter::new(extends_one, 1).map(|_| ()),
+                MovieFragmentWriter::new(extends_one, 1, false, false).map(|_| ()),
             ],
             [
                 Err(MuxError::UnexpectedBox {

@@ -10,7 +10,7 @@ mod tests {
     use std::ops::Range;
 
     use isobmff::boxes::{DataEntry, MovieBox, MovieFragmentBox};
-    use isobmff::structure_data::movie_fragment_random_access_start;
+    use isobmff::structure_data::{DataReference, movie_fragment_random_access_start};
     use isobmff::{BoxDefinition, BoxType, Boxes, DemuxError, DemuxEvent, Demuxer, SampleLocation};
     use isobmff_test_support::{
         ConformanceFile, conformance_files, ffprobe_packets, gpac_children,
@@ -147,22 +147,45 @@ mod tests {
         } in conformance_files()
         {
             let resolved = resolve(&bytes).expect(&name);
-            let external: BTreeSet<_> = resolved
+            let named = |entry: &DataEntry| {
+                if let DataEntry::Url(url) = entry {
+                    url.location
+                        .as_ref()
+                        .and_then(|location| location.as_str())
+                        .unwrap_or_default()
+                        .to_owned()
+                } else {
+                    format!("{entry:?}")
+                }
+            };
+            let elsewhere = |data_reference: DataReference<'_>| {
+                (!data_reference.entry().is_in_same_file()).then(|| {
+                    (
+                        data_reference.track_id(),
+                        data_reference.index(),
+                        named(data_reference.entry()),
+                    )
+                })
+            };
+            let demuxer = &resolved.demuxer;
+            let named_by_locations: Vec<_> = resolved
                 .locations
                 .iter()
-                .filter_map(|location| {
-                    let entry = resolved.demuxer.data_reference(location);
-                    let named = if let Some(DataEntry::Url(url)) = entry {
-                        url.location.as_ref()?.as_str()?.to_owned()
-                    } else {
-                        format!("{entry:?}")
-                    };
-                    Some((
-                        location.properties().track_id,
-                        location.data_reference_index(),
-                        named,
-                    ))
-                })
+                .map(|location| demuxer.data_reference(location.data_reference()))
+                .collect();
+            assert!(
+                named_by_locations.iter().zip(&resolved.locations).all(
+                    |(data_reference, location)| data_reference
+                        .is_some_and(|data_reference| data_reference.track_id()
+                            == location.properties().track_id)
+                ),
+                "{name}: the key of each location names an entry of its own track"
+            );
+            let listed: BTreeSet<_> = demuxer.data_references().filter_map(elsewhere).collect();
+            let external: BTreeSet<_> = named_by_locations
+                .into_iter()
+                .flatten()
+                .filter_map(elsewhere)
                 .collect();
             let expected_external: BTreeSet<_> = EXTERNAL_DATA
                 .iter()
@@ -173,8 +196,9 @@ mod tests {
                 })
                 .collect();
             assert_eq!(
-                external, expected_external,
-                "{name}: samples located in another file"
+                (&listed, &external),
+                (&expected_external, &expected_external),
+                "{name}: data reference entries that name another file, and the samples located in one"
             );
             let read_past: Vec<_> = resolved.demuxer.leniencies().collect();
             assert!(read_past.is_empty(), "{name} is read past: {read_past:?}");
