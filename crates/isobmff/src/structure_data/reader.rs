@@ -4,12 +4,14 @@ use alloc::vec::{self, Vec};
 use core::iter::FusedIterator;
 use core::ops::Range;
 
-use isobmff_boxes::{MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentIndexBox};
+use isobmff_boxes::{
+    DataEntry, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentIndexBox,
+};
 use isobmff_core::BoxDefinition;
 
 use super::movie_fragment::ReachedTime;
 use super::segment_index::SegmentIndex;
-use super::{movie_fragment, sample_table};
+use super::{movie_fragment, sample_description, sample_table};
 use crate::error::DemuxError;
 use crate::framing::to_u64;
 use crate::leniency::Leniency;
@@ -137,10 +139,8 @@ impl StructureDataReader {
     ///   [`UnknownDataReferenceIndex`](DemuxError::UnknownDataReferenceIndex):
     ///   samples are described by a sample entry, or a sample entry names a
     ///   data reference entry, that the track has none of.
-    /// * [`ExternalDataReference`](DemuxError::ExternalDataReference),
-    ///   [`UnsupportedDataReference`](DemuxError::UnsupportedDataReference):
-    ///   the media data of samples is in another file, or in an
-    ///   `IdentifiedMediaDataBox`.
+    /// * [`UnsupportedDataReference`](DemuxError::UnsupportedDataReference):
+    ///   the media data of samples is in an `IdentifiedMediaDataBox`.
     /// * [`DataOffsetOutOfRange`](DemuxError::DataOffsetOutOfRange),
     ///   [`DecodingTimeOverflow`](DemuxError::DecodingTimeOverflow): the media
     ///   data or the decoding times of a track run past 64 bits.
@@ -328,6 +328,25 @@ impl StructureDataReader {
         self.movie_fragment_random_access.as_ref()
     }
 
+    /// Returns the entry of the data reference that says where the media data of the sample at `location` is, §8.7.2
+    ///
+    /// It is the entry of the `dref` of the track of the location that its
+    /// sample entry names, as [`data_reference_index`](SampleLocation::data_reference_index)
+    /// numbers it. A `url ` without a location says the media data is in the
+    /// file itself. Any other entry names where else it is: another file,
+    /// which a `url ` with a location or a `urn ` names and whose file offsets
+    /// the byte range of the location is in. `None` where the movie has no
+    /// track of the location, or the track no such entry.
+    #[must_use]
+    pub fn data_reference(&self, location: &SampleLocation) -> Option<&DataEntry> {
+        let track_id = location.properties().track_id;
+        self.movie
+            .iter()
+            .flat_map(|movie| &movie.trak)
+            .find(|trak| trak.tkhd.track_id == track_id)
+            .and_then(|trak| sample_description::data_entry(trak, location.data_reference_index()))
+    }
+
     /// Returns what the reader has read past in the structure-data, in the order it read it
     #[must_use]
     pub fn leniencies(&self) -> &[Leniency] {
@@ -407,17 +426,17 @@ mod tests {
 
     use isobmff_boxes::{
         ChunkOffsetBox, CompactSampleSizeBox, CompositionOffsetBox, CompositionOffsetEntry,
-        DataEntry, DataEntryImdaBox, DataEntryUrlBox, DegradationPriorityBox, MovieBox,
-        PaddingBitsBox, SampleDependencyTypeBox, SampleFlags, SampleSizeBox, SampleSizeVariant,
-        SampleToChunkBox, SyncSampleBox, TimeToSampleBox, TimeToSampleEntry, TrackBox,
+        DataEntry, DataEntryImdaBox, DegradationPriorityBox, MovieBox, PaddingBitsBox,
+        SampleDependencyTypeBox, SampleFlags, SampleSizeBox, SampleSizeVariant, SampleToChunkBox,
+        SyncSampleBox, TimeToSampleBox, TimeToSampleEntry, TrackBox,
     };
-    use isobmff_core::{BoxDecode, BoxDefinition, BoxType, Utf8String};
+    use isobmff_core::{BoxDecode, BoxDefinition, BoxType};
 
     use super::{StructureDataLimits, StructureDataReader};
     use crate::error::DemuxError;
     use crate::leniency::{Leniency, SampleTableDisagreement};
     use crate::sample::{SampleLocation, SampleProperties};
-    use crate::structure_data::fixtures::{UNLIMITED, movie, track};
+    use crate::structure_data::fixtures::{UNLIMITED, in_another_file, movie, track};
 
     /// Resolves the movie of `tracks` with no limit to speak of
     fn resolve(
@@ -819,24 +838,13 @@ mod tests {
     }
 
     #[test]
-    fn media_data_in_another_file_or_an_imda_is_refused() {
-        let mut external = track(3, 10, &[1], &[(1, 1)], &[0]);
-        let mut url = DataEntryUrlBox::default();
-        url.location = Some(Utf8String::from_slice(b"other.mp4"));
-        external.mdia.minf.dinf.dref.data_entries = Vec::from([DataEntry::Url(url)]);
+    fn media_data_in_an_imda_or_in_a_data_reference_entry_the_track_has_none_of_is_refused() {
         let mut imda = track(3, 10, &[1], &[(1, 1)], &[0]);
         imda.mdia.minf.dinf.dref.data_entries =
             Vec::from([DataEntry::Imda(DataEntryImdaBox::default())]);
         let mut unknown = track(3, 10, &[1], &[(1, 1)], &[0]);
         unknown.mdia.minf.dinf.dref.data_entries.clear();
 
-        assert_eq!(
-            resolve([external]),
-            Err(DemuxError::ExternalDataReference {
-                track_id: 3,
-                data_reference_index: 1
-            })
-        );
         assert_eq!(
             resolve([imda]),
             Err(DemuxError::UnsupportedDataReference {
@@ -850,6 +858,35 @@ mod tests {
                 track_id: 3,
                 data_reference_index: 1
             })
+        );
+    }
+
+    #[test]
+    fn media_data_in_another_file_is_located_in_that_file_and_its_data_reference_names_the_file() {
+        let external = in_another_file(track(3, 10, &[4], &[(1, 1)], &[100]));
+        let internal = track(1, 10, &[2], &[(1, 1)], &[0]);
+        let entries = [&internal, &external]
+            .map(|trak| trak.mdia.minf.dinf.dref.data_entries.first().cloned());
+        let mut reader = StructureDataReader::new(UNLIMITED);
+
+        let locations: Vec<_> = reader
+            .handle_movie(movie([internal, external]))
+            .unwrap()
+            .collect();
+
+        assert_eq!(
+            locations
+                .iter()
+                .map(|location| (
+                    location.properties().track_id,
+                    location.byte_range(),
+                    reader.data_reference(location).cloned()
+                ))
+                .collect::<Vec<_>>(),
+            [
+                (1, 0..2, entries[0].clone()),
+                (3, 100..104, entries[1].clone())
+            ]
         );
     }
 

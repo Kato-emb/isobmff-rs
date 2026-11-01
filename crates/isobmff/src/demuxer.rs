@@ -3,7 +3,8 @@
 use alloc::boxed::Box;
 
 use isobmff_boxes::{
-    FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentTypeBox,
+    DataEntry, FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox,
+    SegmentTypeBox,
 };
 use isobmff_core::BoxHeader;
 
@@ -14,8 +15,10 @@ use crate::framing::{BoxEvent, BoxReader};
 use crate::leniency::Leniency;
 use crate::limits::DemuxLimits;
 use crate::media_data::MediaDataReader;
-use crate::sample::Sample;
-use crate::structure_data::{SampleLocations, SegmentIndex, StructureDataReader};
+use crate::sample::{Sample, SampleLocation};
+use crate::structure_data::{
+    SampleLocations, SegmentIndex, StructureDataReader, names_the_same_file,
+};
 
 /// Reader of a movie file or a segment: the boxes at file level, read into their values, and the samples they declare
 ///
@@ -27,7 +30,7 @@ use crate::structure_data::{SampleLocations, SegmentIndex, StructureDataReader};
 /// The boxes of structure-data (`moov`, `moof`, `sidx`, `mfra`) and the
 /// brands (`ftyp`, `styp`) are gathered and read into their values, which the
 /// demuxer keeps for its accessors; a `moov` or a `moof` is reported with the
-/// [`SampleLocation`](crate::SampleLocation)s it declares. Every other box,
+/// [`SampleLocation`]s it declares. Every other box,
 /// the media data boxes among them, is skipped and reported by where it lies
 /// (ISO/IEC 14496-12 §4.2.2).
 ///
@@ -272,6 +275,17 @@ impl Demuxer {
         self.structure_data.movie_fragment_random_access()
     }
 
+    /// Returns the entry of the data reference that says where the media data of the sample at `location` is, as [`StructureDataReader::data_reference`] does
+    ///
+    /// The demuxer gathers the samples whose entry says their media data is
+    /// in the file itself. The events carry the locations of the others too,
+    /// in file offsets of the file their entry names, for the caller to read
+    /// there.
+    #[must_use]
+    pub fn data_reference(&self, location: &SampleLocation) -> Option<&DataEntry> {
+        self.structure_data.data_reference(location)
+    }
+
     /// Returns what the demuxer has read past in the file rather than refuse it
     ///
     /// Each layer of the demuxer keeps what it read past in the order it read
@@ -359,9 +373,15 @@ impl Demuxer {
         Ok(Some(event))
     }
 
-    /// Hands the locations of `samples` to the media data, and returns them
+    /// Hands the locations of `samples` whose media data is in the file itself to the media data, and returns them all
     fn gather(&mut self, samples: SampleLocations) -> Result<SampleLocations, DemuxError> {
-        self.media_data.handle_sample_locations(samples.clone())?;
+        let structure_data = &self.structure_data;
+        self.media_data
+            .handle_sample_locations(samples.clone().filter(|location| {
+                structure_data
+                    .data_reference(location)
+                    .is_some_and(names_the_same_file)
+            }))?;
         Ok(samples)
     }
 }
@@ -460,7 +480,7 @@ mod tests {
     use crate::framing::to_u64;
     use crate::leniency::{Leniency, SampleTableDisagreement};
     use crate::limits::DemuxLimits;
-    use crate::structure_data::fixtures::track;
+    use crate::structure_data::fixtures::{in_another_file, track};
 
     /// What a caller saw of an event, the samples by track, decoding time and byte range
     #[derive(PartialEq, Debug)]
@@ -701,6 +721,33 @@ mod tests {
                 "in pieces of {piece_len}"
             );
         }
+    }
+
+    #[test]
+    fn the_samples_of_a_track_whose_media_data_is_in_another_file_are_located_there_and_not_gathered()
+     {
+        let ftyp = file_type();
+        let mdat = raw_box(*b"mdat", b"AB");
+        let payload = to_u64(ftyp.len()).saturating_add(8);
+        let external = in_another_file(track(2, 10, &[4], &[(1, 1)], &[0]));
+        let moov = encoded(&movie([
+            track(1, 10, &[2], &[(1, 1)], &[payload]),
+            external,
+        ]));
+        let file = [ftyp, mdat, moov].concat();
+
+        let read = read(&mut Demuxer::new(), &file, 7).unwrap();
+
+        assert_eq!(
+            (read.seen.last(), read.samples),
+            (
+                Some(&Seen::Movie(vec![
+                    (2, 0, 0..4),
+                    (1, 0, payload..payload.saturating_add(2))
+                ])),
+                vec![(1, b"AB".to_vec())]
+            )
+        );
     }
 
     #[test]

@@ -24,8 +24,8 @@ use crate::structure_data::{MovieFragmentWriter, SampleTableWriter, StructureDat
 ///
 /// The movie is the caller's `moov`, its tracks and their sample entries
 /// already in place, its sample tables empty. The muxer declares the
-/// samples in it, or in movie fragments, and refuses samples a reader of
-/// the file would not read: those of a track, a sample entry or a data
+/// samples in it, or in movie fragments, and refuses samples it would not
+/// declare in the file it writes: those of a track, a sample entry or a data
 /// reference entry in the file itself the movie does not declare.
 ///
 /// A refused call leaves the muxer as it was.
