@@ -14,6 +14,7 @@
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::{env, fs, iter, process};
 
     use isobmff::boxes::{
@@ -554,7 +555,10 @@ mod tests {
 
     /// Returns the track, size and decoding timestamp of each packet `ffprobe` reads of `file`, sorted
     fn ffprobe_read(name: &str, file: &[u8]) -> Vec<(u32, u64, Option<i64>)> {
-        let path = env::temp_dir().join(format!("isobmff-mux-{}-{name}", process::id()));
+        // Why not the process and the name alone: tests in one process probe files of the same name at once
+        static PROBES: AtomicUsize = AtomicUsize::new(0);
+        let probe = PROBES.fetch_add(1, Ordering::Relaxed);
+        let path = env::temp_dir().join(format!("isobmff-mux-{}-{probe}-{name}", process::id()));
         fs::write(&path, file).unwrap();
         let mut packets: Vec<_> = ffprobe_packets(&path)
             .into_iter()
