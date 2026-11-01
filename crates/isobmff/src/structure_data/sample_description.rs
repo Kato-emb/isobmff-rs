@@ -1,8 +1,98 @@
 //! The sample entry that describes samples, and the data reference entry that says where their media data is, ISO/IEC 14496-12 §8.5.2 and §8.7.2
 
-use isobmff_boxes::{DataEntry, SampleDescription, TrackBox};
+use alloc::vec::Vec;
+
+use isobmff_boxes::{DataEntry, MovieBox, SampleDescription, TrackBox};
 
 use crate::error::{DemuxError, MuxError};
+use crate::sample::DataReferenceKey;
+
+/// One entry of the data reference of a track of the movie, under the key the locations of its samples carry, ISO/IEC 14496-12 §8.7.2
+///
+/// A [`StructureDataReader`](super::StructureDataReader) lists one for each
+/// entry of the `dref` of each track: two tracks whose entries name the same
+/// file are two of them.
+///
+/// # Examples
+///
+/// ```
+/// use isobmff::boxes::{DataEntry, MovieBox, TrackBox};
+/// use isobmff::structure_data::{StructureDataLimits, StructureDataReader};
+///
+/// let mut trak = TrackBox::default();
+/// trak.tkhd.track_id = 1;
+/// trak.mdia.minf.dinf.dref.data_entries = vec![DataEntry::Url(Default::default())];
+/// let mut movie = MovieBox::default();
+/// movie.trak = vec![trak];
+/// let mut reader = StructureDataReader::new(StructureDataLimits {
+///     sample_count: 1_048_576,
+///     segment_index_count: 1024,
+///     subsegment_count: 1_048_576,
+///     leniency_count: 65_536,
+/// });
+/// reader.handle_movie(movie)?;
+///
+/// let [data_reference] = reader.data_references() else { unreachable!() };
+/// assert_eq!((data_reference.track_id(), data_reference.index()), (1, 1));
+/// assert!(data_reference.entry().names_this_file());
+/// assert_eq!(reader.data_reference(data_reference.key()), Some(data_reference));
+/// # Ok::<(), isobmff::DemuxError>(())
+/// ```
+#[derive(Clone, PartialEq, Debug)]
+pub struct DataReference {
+    pub(super) key: DataReferenceKey,
+    pub(super) track_id: u32,
+    pub(super) index: u16,
+    pub(super) entry: DataEntry,
+}
+
+impl DataReference {
+    /// Returns the key the locations of the samples whose sample entry names the entry carry
+    #[must_use]
+    pub const fn key(&self) -> DataReferenceKey {
+        self.key
+    }
+
+    /// Returns the `track_ID` of the track whose `dref` holds the entry
+    #[must_use]
+    pub const fn track_id(&self) -> u32 {
+        self.track_id
+    }
+
+    /// Returns the index, from 1, of the entry in the `dref`, as a sample entry names it in its `data_reference_index`
+    #[must_use]
+    pub const fn index(&self) -> u16 {
+        self.index
+    }
+
+    /// Returns the entry, which says where the media data is
+    #[must_use]
+    pub const fn entry(&self) -> &DataEntry {
+        &self.entry
+    }
+}
+
+/// Returns an entry of the data reference of each track of `movie` for each entry its `dref` has, in the order of their keys
+///
+/// The entries past the last one a `data_reference_index` can number are
+/// left out: no sample entry can name them.
+pub(super) fn data_references(movie: &MovieBox) -> Vec<DataReference> {
+    movie
+        .trak
+        .iter()
+        .enumerate()
+        .flat_map(|(track_position, trak)| {
+            (1..=u16::MAX)
+                .zip(&trak.mdia.minf.dinf.dref.data_entries)
+                .map(move |(index, entry)| DataReference {
+                    key: DataReferenceKey::of(track_position, index),
+                    track_id: trak.tkhd.track_id,
+                    index,
+                    entry: entry.clone(),
+                })
+        })
+        .collect()
+}
 
 /// Reason the samples a sample entry of a track describes are not described, or do not lie in the file itself
 ///
@@ -101,8 +191,9 @@ pub(super) fn data_reference_index(
         _ => return Err(unknown_description),
     };
 
-    match data_entry(trak, data_reference_index) {
-        Some(entry) if names_the_same_file(entry) => Ok(data_reference_index),
+    let data_entries = &trak.mdia.minf.dinf.dref.data_entries;
+    match nth_from_one(data_entries, u32::from(data_reference_index)) {
+        Some(entry) if entry.names_this_file() => Ok(data_reference_index),
         Some(DataEntry::Imda(_) | DataEntry::SeqNumImda(_)) => {
             Err(DataReferenceRefusal::UnsupportedDataReference {
                 track_id,
@@ -120,7 +211,7 @@ pub(super) fn data_reference_index(
     }
 }
 
-/// Returns the index of the entry of the `dref` of `trak` that names where the samples sample entry `sample_description_index` describes are, in the file itself or in another
+/// Returns the key of the entry of the `dref` of `trak`, the track at `track_position` of the movie, that names where the samples sample entry `sample_description_index` describes are, in the file itself or in another
 ///
 /// # Errors
 ///
@@ -130,16 +221,17 @@ pub(super) fn data_reference_index(
 ///   entry names.
 /// * [`UnsupportedDataReference`](DemuxError::UnsupportedDataReference): the
 ///   entry names an `IdentifiedMediaDataBox`.
-pub(super) fn located_data_reference_index(
+pub(super) fn located_data_reference(
     trak: &TrackBox,
+    track_position: usize,
     sample_description_index: u32,
-) -> Result<u16, DemuxError> {
+) -> Result<DataReferenceKey, DemuxError> {
     match data_reference_index(trak, sample_description_index) {
         Ok(data_reference_index)
         | Err(DataReferenceRefusal::ExternalDataReference {
             data_reference_index,
             ..
-        }) => Ok(data_reference_index),
+        }) => Ok(DataReferenceKey::of(track_position, data_reference_index)),
         Err(DataReferenceRefusal::UnknownSampleDescriptionIndex {
             track_id,
             sample_description_index,
@@ -162,19 +254,6 @@ pub(super) fn located_data_reference_index(
             data_reference_index,
         }),
     }
-}
-
-/// Returns entry `data_reference_index` of the `dref` of `trak`, which says where media data is, §8.7.2
-pub(super) fn data_entry(trak: &TrackBox, data_reference_index: u16) -> Option<&DataEntry> {
-    nth_from_one(
-        &trak.mdia.minf.dinf.dref.data_entries,
-        u32::from(data_reference_index),
-    )
-}
-
-/// Returns whether `entry` says the media data is in the same file as the data reference: a `url ` without a location, §8.7.2
-pub(crate) fn names_the_same_file(entry: &DataEntry) -> bool {
-    matches!(entry, DataEntry::Url(url) if url.location.is_none())
 }
 
 /// Returns entry `index` of a table that numbers its entries from 1

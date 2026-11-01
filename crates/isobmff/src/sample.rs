@@ -1,9 +1,11 @@
-//! [`Sample`], [`SampleProperties`] and [`SampleLocation`], what structure-data declares about a sample and where its media data lies
+//! [`Sample`], [`SampleProperties`], [`SampleLocation`] and [`DataReferenceKey`], what structure-data declares about a sample and where its media data lies
 
 use alloc::vec::Vec;
 use core::ops::Range;
 
 use isobmff_boxes::SampleFlags;
+
+use crate::framing::to_u64;
 
 /// Values structure-data declares about one sample, ISO/IEC 14496-12 §8.8.7 and §8.8.8
 ///
@@ -102,6 +104,39 @@ impl Sample {
     }
 }
 
+/// Key of an entry of the data reference of a track, which names where the media data of samples is, ISO/IEC 14496-12 §8.7.2
+///
+/// A [`StructureDataReader`](crate::structure_data::StructureDataReader)
+/// gives each entry of the data reference of each track of the movie a key of
+/// its own, and the location of each sample carries the key of the entry its
+/// sample entry names. Keys order as the reader lists the entries: by track
+/// in the order of the movie, then by entry in the order of the data
+/// reference.
+///
+/// # Examples
+///
+/// ```
+/// use isobmff::DataReferenceKey;
+///
+/// assert_ne!(DataReferenceKey::new(0), DataReferenceKey::new(1));
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct DataReferenceKey(u64);
+
+impl DataReferenceKey {
+    /// Creates the key `value`, as a caller does that locates samples itself and names their media data with keys of its own
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// Returns the key a reader gives entry `index`, from 1, of the data reference of the track at `track_position`, from 0, of the movie
+    pub(crate) fn of(track_position: usize, index: u16) -> Self {
+        // Why not count the entries before the track: an index fits in 16 bits, so the track position takes the bits above them and the key of an entry needs no other track.
+        Self((to_u64(track_position) << 16) | u64::from(index))
+    }
+}
+
 /// Location of a sample: the values structure-data declares about it, and the data reference and byte range its media data lies at, ISO/IEC 14496-12 §6.1
 ///
 /// The byte range counts in file offsets of the file the data reference
@@ -112,7 +147,7 @@ impl Sample {
 ///
 /// ```
 /// use isobmff::boxes::SampleFlags;
-/// use isobmff::{SampleLocation, SampleProperties};
+/// use isobmff::{DataReferenceKey, SampleLocation, SampleProperties};
 ///
 /// let properties = SampleProperties {
 ///     track_id: 1,
@@ -122,30 +157,30 @@ impl Sample {
 ///     sample_flags: SampleFlags::default(),
 ///     sample_description_index: 1,
 /// };
-/// // 371 bytes of media data at file offset 48, in the file itself
-/// let location = SampleLocation::new(properties, 1, 48..419);
-/// assert_eq!(location.data_reference_index(), 1);
+/// // 371 bytes of media data at file offset 48 of the file key 0 names
+/// let location = SampleLocation::new(properties, DataReferenceKey::new(0), 48..419);
+/// assert_eq!(location.data_reference(), DataReferenceKey::new(0));
 /// assert_eq!(location.byte_range(), 48..419);
 /// ```
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct SampleLocation {
     properties: SampleProperties,
-    data_reference_index: u16,
+    data_reference: DataReferenceKey,
     byte_range: Range<u64>,
 }
 
 impl SampleLocation {
-    /// Creates the location of the sample of `properties` whose media data is `byte_range` of the file entry `data_reference_index` of the `dref` names
+    /// Creates the location of the sample of `properties` whose media data is `byte_range` of the file the data reference entry of key `data_reference` names
     #[must_use]
     pub const fn new(
         properties: SampleProperties,
-        data_reference_index: u16,
+        data_reference: DataReferenceKey,
         byte_range: Range<u64>,
     ) -> Self {
         Self {
             properties,
-            data_reference_index,
+            data_reference,
             byte_range,
         }
     }
@@ -156,10 +191,10 @@ impl SampleLocation {
         &self.properties
     }
 
-    /// Returns the index, from 1, of the entry of the `dref` that names the file the media data is in (§8.7.2)
+    /// Returns the key of the data reference entry that names the file the media data is in (§8.7.2)
     #[must_use]
-    pub const fn data_reference_index(&self) -> u16 {
-        self.data_reference_index
+    pub const fn data_reference(&self) -> DataReferenceKey {
+        self.data_reference
     }
 
     /// Returns the file offsets of the media data of the sample

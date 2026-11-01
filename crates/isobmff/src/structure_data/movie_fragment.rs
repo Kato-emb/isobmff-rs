@@ -9,7 +9,7 @@ use isobmff_boxes::{
 };
 use isobmff_core::BoxEncode;
 
-use super::sample_description::{data_reference_index, located_data_reference_index};
+use super::sample_description::{data_reference_index, located_data_reference};
 use super::sample_table::expand;
 use crate::error::{DemuxError, MuxError};
 use crate::framing::to_u64;
@@ -71,11 +71,12 @@ pub(super) fn resolve_fragment(
     for traf in &moof.traf {
         let tfhd = &traf.tfhd;
         let track_id = tfhd.track_id;
-        let (trak, decoding_time) = movie
+        let (track_position, (trak, decoding_time)) = movie
             .trak
             .iter()
             .zip(decoding_times.iter_mut())
-            .find(|(trak, _)| trak.tkhd.track_id == track_id)
+            .enumerate()
+            .find(|(_, (trak, _))| trak.tkhd.track_id == track_id)
             .ok_or(DemuxError::UnknownTrackId { track_id })?;
         let trex = movie
             .mvex
@@ -130,8 +131,8 @@ pub(super) fn resolve_fragment(
                 .checked_add(u64::from(defaults.sample_duration))
                 .ok_or(DemuxError::DecodingTimeOverflow { track_id })?;
         } else if traf.trun.iter().any(|trun| run_sample_count(trun) > 0) {
-            let data_reference_index =
-                located_data_reference_index(trak, defaults.sample_description_index)?;
+            let data_reference =
+                located_data_reference(trak, track_position, defaults.sample_description_index)?;
             for trun in &traf.trun {
                 if let Some(offset) = trun.data_offset {
                     data_offset = base
@@ -158,7 +159,7 @@ pub(super) fn resolve_fragment(
                                 .unwrap_or(defaults.sample_flags),
                             sample_description_index: defaults.sample_description_index,
                         },
-                        data_reference_index,
+                        data_reference,
                         data_offset..data_end,
                     ));
                     time = time
@@ -442,7 +443,7 @@ mod tests {
 
     use crate::error::DemuxError;
     use crate::leniency::Leniency;
-    use crate::sample::{SampleLocation, SampleProperties};
+    use crate::sample::{DataReferenceKey, SampleLocation, SampleProperties};
     use crate::structure_data::fixtures::{UNLIMITED, movie, track};
     use crate::structure_data::{StructureDataLimits, StructureDataReader};
 
@@ -729,7 +730,7 @@ mod tests {
                     sample_flags: SampleFlags::from_bits(sample_flags),
                     sample_description_index: 1,
                 },
-                1,
+                DataReferenceKey::of(0, 1),
                 byte_range,
             )
         };

@@ -17,7 +17,7 @@ use isobmff_boxes::{
 use isobmff_core::{BoxDefinition, BoxType};
 
 use self::sample_flags::SampleFlagsTables;
-use super::sample_description::located_data_reference_index;
+use super::sample_description::located_data_reference;
 use crate::error::{DemuxError, MuxError};
 use crate::framing::to_u64;
 use crate::leniency::{Leniency, SampleTableDisagreement};
@@ -70,6 +70,7 @@ pub(super) fn sample_count(trak: &TrackBox) -> u64 {
 ///   the decoding times run past 64 bits.
 pub(super) fn resolve_track(
     trak: &TrackBox,
+    track_position: usize,
     locations: &mut Vec<SampleLocation>,
     leniencies: &mut Vec<Leniency>,
 ) -> Result<u64, DemuxError> {
@@ -128,11 +129,11 @@ pub(super) fn resolve_track(
     let mut laid_out = 0_u64;
     for (chunk, chunk_offset) in (1_u32..).zip(chunk_offsets(stbl)) {
         if let Some(next) = runs.next_if(|next| next.first_chunk == chunk) {
-            let data_reference_index =
-                located_data_reference_index(trak, next.sample_description_index)?;
-            run = Some((next, data_reference_index));
+            let data_reference =
+                located_data_reference(trak, track_position, next.sample_description_index)?;
+            run = Some((next, data_reference));
         }
-        let Some((run, data_reference_index)) = run else {
+        let Some((run, data_reference)) = run else {
             return Err(mismatch(SampleToChunkBox::BOX_TYPE));
         };
 
@@ -158,7 +159,7 @@ pub(super) fn resolve_track(
                     sample_flags,
                     sample_description_index: run.sample_description_index,
                 },
-                data_reference_index,
+                data_reference,
                 data_offset..data_end,
             ));
             decoding_time = decoding_time

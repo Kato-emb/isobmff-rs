@@ -210,13 +210,27 @@ pub enum DataEntry {
     Other(AnyBox),
 }
 
+impl DataEntry {
+    /// Returns whether the entry places the media data in the file that holds the data reference: a [`DataEntryUrlBox`] without a location, ISO/IEC 14496-12 §8.7.2
+    ///
+    /// Every other entry places it elsewhere: in the file a URL or a URN
+    /// names, in an `IdentifiedMediaDataBox`, or where an entry of a type
+    /// this crate does not read says.
+    #[must_use]
+    pub const fn names_this_file(&self) -> bool {
+        matches!(self, Self::Url(DataEntryUrlBox { location: None }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::string::String;
 
     use isobmff_core::{BoxDecode, Error, Utf8String};
 
-    use super::{DataEntryImdaBox, DataEntrySeqNumImdaBox, DataEntryUrlBox, DataEntryUrnBox};
+    use super::{
+        DataEntry, DataEntryImdaBox, DataEntrySeqNumImdaBox, DataEntryUrlBox, DataEntryUrnBox,
+    };
     use crate::encoded;
 
     /// `url ` of media data in the same file
@@ -325,6 +339,23 @@ mod tests {
         assert_eq!(
             (encoded(&location), encoded(&identified)),
             (URL.to_vec(), IMDT.to_vec())
+        );
+    }
+
+    #[test]
+    fn only_a_url_without_a_location_names_the_file_that_holds_the_data_reference() {
+        assert_eq!(
+            [
+                DataEntry::Url(url(None)),
+                DataEntry::Url(url(Some("a.mp4"))),
+                DataEntry::Urn(urn(None)),
+                DataEntry::Imda(DataEntryImdaBox {
+                    imda_ref_identifier: 7
+                }),
+                DataEntry::SeqNumImda(DataEntrySeqNumImdaBox {}),
+            ]
+            .map(|entry| entry.names_this_file()),
+            [true, false, false, false, false]
         );
     }
 
