@@ -15,7 +15,7 @@ use crate::sample::Sample;
 ///
 /// Each writer holds the movie it was made from, and refuses samples the
 /// movie does not declare a track, a sample entry or a data reference entry
-/// in the file itself for, as a reader of the file would.
+/// in the file itself for: the media data it writes is in the file itself.
 #[derive(Debug)]
 pub(crate) enum StructureDataWriter {
     /// Movie fragments, §8.8
@@ -220,16 +220,13 @@ fn version_for(duration: u64) -> u8 {
 mod tests {
     use alloc::vec::Vec;
 
-    use isobmff_boxes::{
-        DataEntry, DataEntryUrlBox, MovieBox, MovieExtendsBox, SampleFlags, TrackBox,
-        TrackExtendsBox,
-    };
+    use isobmff_boxes::{MovieBox, MovieExtendsBox, SampleFlags, TrackBox, TrackExtendsBox};
     use isobmff_core::BoxDefinition;
 
     use super::{MovieFragmentWriter, SampleTableWriter};
     use crate::error::MuxError;
     use crate::sample::{Sample, SampleProperties};
-    use crate::structure_data::fixtures::{encoded, movie, track, written};
+    use crate::structure_data::fixtures::{encoded, in_another_file, movie, track, written};
 
     /// Returns a track `track_id` of no sample, its timescale `timescale`
     fn empty_track(track_id: u32, timescale: u32) -> TrackBox {
@@ -557,9 +554,7 @@ mod tests {
     fn samples_the_movie_does_not_declare_in_the_file_itself_are_refused() {
         let mut external = two_tracks();
         if let Some(trak) = external.trak.get_mut(1) {
-            let mut url = DataEntryUrlBox::default();
-            url.location = Some(isobmff_core::Utf8String::from_slice(b"other.mp4"));
-            trak.mdia.minf.dinf.dref.data_entries = Vec::from([DataEntry::Url(url)]);
+            *trak = in_another_file(trak.clone());
         }
         let mut writer = SampleTableWriter::new(external).unwrap();
         let mut other_description = sample(1, 0, 10, b"AB");

@@ -6,6 +6,7 @@
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::ops::Range;
 
     use isobmff::boxes::{MovieBox, MovieFragmentBox};
@@ -109,11 +110,11 @@ mod tests {
             .collect()
     }
 
-    /// Files whose media data is in other files, and the error the movie is refused with
-    const EXTERNAL_DATA: [(&str, u32, u16); 3] = [
-        ("02_dref_edts_img.mp4", 201, 1),
-        ("04_bifs_video.mp4", 3, 1),
-        ("a6_tone_multifile.mp4", 1, 2),
+    /// Files whose media data is partly in other files, with each track and data reference entry that names another file
+    const EXTERNAL_DATA: [(&str, &[(u32, u16)]); 3] = [
+        ("02_dref_edts_img.mp4", &[(101, 1), (201, 1)]),
+        ("04_bifs_video.mp4", &[(3, 1)]),
+        ("a6_tone_multifile.mp4", &[(1, 2)]),
     ];
 
     /// Files `ffprobe` 9.0.1 does not read: it fails with "error reading header"
@@ -136,25 +137,27 @@ mod tests {
             name, bytes, path, ..
         } in conformance_files()
         {
-            if let Some(&(_, track_id, data_reference_index)) = EXTERNAL_DATA
-                .iter()
-                .find(|(external, ..)| *external == name)
-            {
-                let refused = resolve(&bytes).err();
-                assert!(
-                    matches!(
-                        refused,
-                        Some(DemuxError::ExternalDataReference {
-                            track_id: refused_track,
-                            data_reference_index: refused_index,
-                            ..
-                        }) if refused_track == track_id && refused_index == data_reference_index
-                    ),
-                    "{name}, whose media data is in another file: {refused:?}"
-                );
-                continue;
-            }
             let resolved = resolve(&bytes).expect(&name);
+            let external: BTreeSet<_> = resolved
+                .locations
+                .iter()
+                .filter(|location| !resolved.demuxer.is_in_same_file(location))
+                .map(|location| {
+                    (
+                        location.properties().track_id,
+                        location.data_reference_index(),
+                    )
+                })
+                .collect();
+            let expected_external: BTreeSet<_> = EXTERNAL_DATA
+                .iter()
+                .filter(|(external, _)| *external == name)
+                .flat_map(|(_, entries)| entries.iter().copied())
+                .collect();
+            assert_eq!(
+                external, expected_external,
+                "{name}: samples located in another file"
+            );
             let read_past: Vec<_> = resolved.demuxer.leniencies().collect();
             assert!(read_past.is_empty(), "{name} is read past: {read_past:?}");
             assert_indexes_point_at_boxes(&name, &resolved.demuxer, &top_level(&bytes));
@@ -181,9 +184,13 @@ mod tests {
                 continue;
             }
             let movie = resolved.demuxer.movie().expect(&name);
+            // Why not compare the tracks in other files: ffprobe lists only some of their packets, which it does not read
+            let in_file =
+                |track_id: &u32| external.iter().all(|(external, _)| external != track_id);
             let mut samples = resolved
                 .locations
                 .iter()
+                .filter(|location| in_file(&location.properties().track_id))
                 .map(|location| {
                     let properties = location.properties();
                     let byte_range = location.byte_range();
@@ -200,6 +207,7 @@ mod tests {
                 .collect::<Vec<Placed>>();
             let mut packets = ffprobe_packets(&path)
                 .into_iter()
+                .filter(|packet| in_file(&packet.track_id))
                 .map(|packet| {
                     let dts = packet.dts.expect("ffprobe reports the dts of every packet");
                     (packet.track_id, packet.pos, packet.size, dts)

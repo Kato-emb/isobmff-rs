@@ -36,6 +36,54 @@
 //! gathered, and their bytes are not wanted. The events carry the location of
 //! every sample.
 //!
+//! The media data of a track may be in another file, which an entry of its
+//! data reference names (§8.7.2). The demuxer locates those samples in that
+//! file, where [`Demuxer::is_in_same_file`] says they are not, and does not
+//! gather them. The caller reads that file, and gathers them with a
+//! [`MediaDataReader`](media_data::MediaDataReader) of its own:
+//!
+//! ```
+//! use isobmff::boxes::DataEntry;
+//! use isobmff::media_data::{MediaDataLimits, MediaDataReader};
+//! use isobmff::{DemuxEvent, Demuxer};
+//!
+//! let file: &[u8] = include_bytes!("../tests/data/external.mp4");
+//! let (mut demuxer, mut external) = (Demuxer::new(), Vec::new());
+//! while let Some(wanted) = demuxer.wanted_input() {
+//!     let input = file.get(usize::try_from(wanted.offset())?..).unwrap_or_default();
+//!     let event = match input {
+//!         [] => demuxer.finish(),
+//!         input => demuxer.handle_input(wanted.offset(), input),
+//!     }?;
+//!     // The samples of the file itself come out of the demuxer, the others are left to the caller
+//!     if let Some(DemuxEvent::Movie { samples, .. }) = event {
+//!         external.extend(samples.filter(|location| !demuxer.is_in_same_file(location)));
+//!     }
+//!     assert_eq!(demuxer.poll_sample(), None);
+//! }
+//!
+//! // The data reference entry of their sample entry names the file they are in
+//! let trak = demuxer.movie().and_then(|movie| movie.trak.first()).ok_or("no track")?;
+//! let Some(DataEntry::Url(url)) = trak.mdia.minf.dinf.dref.data_entries.first() else {
+//!     return Err("no url".into());
+//! };
+//! assert_eq!(url.location.as_ref().and_then(|location| location.as_str()), Some("external.dat"));
+//!
+//! // Read that file, and gather the samples out of it
+//! let other: &[u8] = include_bytes!("../tests/data/external.dat");
+//! let mut media_data = MediaDataReader::new(MediaDataLimits {
+//!     held_location_count: 1024,
+//!     sample_bytes: 1024 * 1024,
+//!     held_bytes: 16 * 1024 * 1024,
+//! });
+//! media_data.handle_sample_locations(external)?;
+//! media_data.handle_input(0, other)?;
+//! media_data.finish()?;
+//! let samples: Vec<_> = core::iter::from_fn(|| media_data.poll_sample()).collect();
+//! assert_eq!(samples.iter().map(|sample| sample.data()).collect::<Vec<_>>(), [b"AB", b"CD"]);
+//! # Ok::<(), Box<dyn core::error::Error>>(())
+//! ```
+//!
 //! The demuxer is made of layers that follow the structure of a file, each
 //! usable alone:
 //!

@@ -9,7 +9,7 @@ use isobmff_boxes::{
 };
 use isobmff_core::BoxEncode;
 
-use super::sample_description::data_reference_index;
+use super::sample_description::{data_reference_index, located_data_reference_index};
 use super::sample_table::expand;
 use crate::error::{DemuxError, MuxError};
 use crate::framing::to_u64;
@@ -131,7 +131,7 @@ pub(super) fn resolve_fragment(
                 .ok_or(DemuxError::DecodingTimeOverflow { track_id })?;
         } else if traf.trun.iter().any(|trun| run_sample_count(trun) > 0) {
             let data_reference_index =
-                data_reference_index(trak, defaults.sample_description_index)?;
+                located_data_reference_index(trak, defaults.sample_description_index)?;
             for trun in &traf.trun {
                 if let Some(offset) = trun.data_offset {
                     data_offset = base

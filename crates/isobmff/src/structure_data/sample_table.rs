@@ -17,7 +17,7 @@ use isobmff_boxes::{
 use isobmff_core::{BoxDefinition, BoxType};
 
 use self::sample_flags::SampleFlagsTables;
-use super::sample_description::data_reference_index;
+use super::sample_description::located_data_reference_index;
 use crate::error::{DemuxError, MuxError};
 use crate::framing::to_u64;
 use crate::leniency::{Leniency, SampleTableDisagreement};
@@ -128,7 +128,8 @@ pub(super) fn resolve_track(
     let mut laid_out = 0_u64;
     for (chunk, chunk_offset) in (1_u32..).zip(chunk_offsets(stbl)) {
         if let Some(next) = runs.next_if(|next| next.first_chunk == chunk) {
-            let data_reference_index = data_reference_index(trak, next.sample_description_index)?;
+            let data_reference_index =
+                located_data_reference_index(trak, next.sample_description_index)?;
             run = Some((next, data_reference_index));
         }
         let Some((run, data_reference_index)) = run else {
@@ -642,6 +643,14 @@ pub(crate) mod fixtures {
         );
         trak.mdia.minf.dinf.dref.data_entries =
             Vec::from([DataEntry::Url(DataEntryUrlBox::default())]);
+        trak
+    }
+
+    /// Returns `trak` with its media data in the file `other.mp4`, which its only data reference entry names
+    pub(crate) fn in_another_file(mut trak: TrackBox) -> TrackBox {
+        let mut url = DataEntryUrlBox::default();
+        url.location = Some(isobmff_core::Utf8String::from_slice(b"other.mp4"));
+        trak.mdia.minf.dinf.dref.data_entries = Vec::from([DataEntry::Url(url)]);
         trak
     }
 

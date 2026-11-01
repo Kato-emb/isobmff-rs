@@ -114,14 +114,6 @@ pub enum DemuxError {
         /// Index, from 1, of the entry of the `dref`
         data_reference_index: u16,
     },
-    /// Media data in a file other than the one the structure-data is in
-    #[non_exhaustive]
-    ExternalDataReference {
-        /// `track_ID` of the track
-        track_id: u32,
-        /// Index, from 1, of the entry of the `dref` that names the file
-        data_reference_index: u16,
-    },
     /// Media data in a container the reader does not resolve offsets into: an `IdentifiedMediaDataBox`
     #[non_exhaustive]
     UnsupportedDataReference {
@@ -296,13 +288,6 @@ impl fmt::Display for DemuxError {
             } => write!(
                 formatter,
                 "track {track_id} has no data reference entry {data_reference_index}"
-            ),
-            Self::ExternalDataReference {
-                track_id,
-                data_reference_index,
-            } => write!(
-                formatter,
-                "data reference entry {data_reference_index} of track {track_id} names another file"
             ),
             Self::UnsupportedDataReference {
                 track_id,

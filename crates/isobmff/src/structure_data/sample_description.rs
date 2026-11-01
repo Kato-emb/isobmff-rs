@@ -6,8 +6,9 @@ use crate::error::{DemuxError, MuxError};
 
 /// Reason the samples a sample entry of a track describes are not described, or do not lie in the file itself
 ///
-/// Reading and writing a file refuse the same samples, each with the kind of
-/// the same name in its own error.
+/// Writing a file refuses these samples, each with the kind of the same name
+/// in [`MuxError`]. Reading a file refuses the same ones but those whose
+/// media data is in another file, which it locates in that file.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum DataReferenceRefusal {
     /// The `stsd` has no entry `sample_description_index`, or the entry is too short to hold a `data_reference_index`
@@ -30,41 +31,6 @@ pub(super) enum DataReferenceRefusal {
         track_id: u32,
         data_reference_index: u16,
     },
-}
-
-impl From<DataReferenceRefusal> for DemuxError {
-    fn from(refusal: DataReferenceRefusal) -> Self {
-        match refusal {
-            DataReferenceRefusal::UnknownSampleDescriptionIndex {
-                track_id,
-                sample_description_index,
-            } => Self::UnknownSampleDescriptionIndex {
-                track_id,
-                sample_description_index,
-            },
-            DataReferenceRefusal::UnknownDataReferenceIndex {
-                track_id,
-                data_reference_index,
-            } => Self::UnknownDataReferenceIndex {
-                track_id,
-                data_reference_index,
-            },
-            DataReferenceRefusal::ExternalDataReference {
-                track_id,
-                data_reference_index,
-            } => Self::ExternalDataReference {
-                track_id,
-                data_reference_index,
-            },
-            DataReferenceRefusal::UnsupportedDataReference {
-                track_id,
-                data_reference_index,
-            } => Self::UnsupportedDataReference {
-                track_id,
-                data_reference_index,
-            },
-        }
-    }
 }
 
 impl From<DataReferenceRefusal> for MuxError {
@@ -139,7 +105,7 @@ pub(super) fn data_reference_index(
         &trak.mdia.minf.dinf.dref.data_entries,
         u32::from(data_reference_index),
     ) {
-        Some(DataEntry::Url(url)) if url.location.is_none() => Ok(data_reference_index),
+        Some(entry) if names_the_same_file(entry) => Ok(data_reference_index),
         Some(DataEntry::Imda(_) | DataEntry::SeqNumImda(_)) => {
             Err(DataReferenceRefusal::UnsupportedDataReference {
                 track_id,
@@ -155,6 +121,64 @@ pub(super) fn data_reference_index(
             data_reference_index,
         }),
     }
+}
+
+/// Returns the index of the entry of the `dref` of `trak` that names where the samples sample entry `sample_description_index` describes are, in the file itself or in another
+///
+/// # Errors
+///
+/// * [`UnknownSampleDescriptionIndex`](DemuxError::UnknownSampleDescriptionIndex),
+///   [`UnknownDataReferenceIndex`](DemuxError::UnknownDataReferenceIndex):
+///   the `stsd` has no such sample entry, or the `dref` no entry the sample
+///   entry names.
+/// * [`UnsupportedDataReference`](DemuxError::UnsupportedDataReference): the
+///   entry names an `IdentifiedMediaDataBox`.
+pub(super) fn located_data_reference_index(
+    trak: &TrackBox,
+    sample_description_index: u32,
+) -> Result<u16, DemuxError> {
+    match data_reference_index(trak, sample_description_index) {
+        Ok(data_reference_index)
+        | Err(DataReferenceRefusal::ExternalDataReference {
+            data_reference_index,
+            ..
+        }) => Ok(data_reference_index),
+        Err(DataReferenceRefusal::UnknownSampleDescriptionIndex {
+            track_id,
+            sample_description_index,
+        }) => Err(DemuxError::UnknownSampleDescriptionIndex {
+            track_id,
+            sample_description_index,
+        }),
+        Err(DataReferenceRefusal::UnknownDataReferenceIndex {
+            track_id,
+            data_reference_index,
+        }) => Err(DemuxError::UnknownDataReferenceIndex {
+            track_id,
+            data_reference_index,
+        }),
+        Err(DataReferenceRefusal::UnsupportedDataReference {
+            track_id,
+            data_reference_index,
+        }) => Err(DemuxError::UnsupportedDataReference {
+            track_id,
+            data_reference_index,
+        }),
+    }
+}
+
+/// Returns whether entry `data_reference_index` of the `dref` of `trak` says the media data is in the file itself, §8.7.2
+pub(super) fn is_in_same_file(trak: &TrackBox, data_reference_index: u16) -> bool {
+    nth_from_one(
+        &trak.mdia.minf.dinf.dref.data_entries,
+        u32::from(data_reference_index),
+    )
+    .is_some_and(names_the_same_file)
+}
+
+/// Returns whether `entry` says the media data is in the same file as the data reference: a `url ` without a location, §8.7.2
+fn names_the_same_file(entry: &DataEntry) -> bool {
+    matches!(entry, DataEntry::Url(url) if url.location.is_none())
 }
 
 /// Returns entry `index` of a table that numbers its entries from 1
