@@ -159,6 +159,18 @@ pub enum MuxError {
         /// `track_ID` of the track
         track_id: u32,
     },
+    /// Edit list of the reference track of an indexed segment that presents its samples other than at their composition times, which a `sidx` states its times after and the muxer does not apply, §8.6.6, §8.14.3
+    #[non_exhaustive]
+    EditListNotApplied {
+        /// `track_ID` of the track
+        track_id: u32,
+    },
+    /// Subsegment that the `sidx` of its segment cannot state, §8.14.3
+    #[non_exhaustive]
+    SegmentIndexOutOfRange {
+        /// Stream ID of the reference stream of the `sidx`
+        reference_id: u32,
+    },
     /// Box does not write into bytes
     #[non_exhaustive]
     Box {
@@ -274,6 +286,14 @@ impl fmt::Display for MuxError {
             Self::DataOffsetOutOfRange { track_id } => write!(
                 formatter,
                 "media data of a sample of track {track_id} lies past what a data offset reaches"
+            ),
+            Self::EditListNotApplied { track_id } => write!(
+                formatter,
+                "edit list of track {track_id} moves its presentation times, which the segment index of a muxer does not apply"
+            ),
+            Self::SegmentIndexOutOfRange { reference_id } => write!(
+                formatter,
+                "subsegment that the segment index of stream {reference_id} cannot state"
             ),
             Self::Box { error } => fmt::Display::fmt(&error, formatter),
         }

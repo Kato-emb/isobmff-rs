@@ -53,6 +53,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "non-fragmented" => FileStructure::NonFragmented,
         "segment" => FileStructure::Segment {
             first_sequence_number: 1,
+            segment_index: false,
         },
         _ => return Err(usage.into()),
     };

@@ -140,29 +140,9 @@ fn length_size(number: u32) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use isobmff_boxes::SampleFlags;
-
     use super::{RandomAccessTables, length_size, movie_fragment_random_access_start};
-    use crate::sample::{Sample, SampleProperties};
-    use crate::structure_data::fixtures::{encoded, movie, track, written};
+    use crate::structure_data::fixtures::{encoded, movie, sample, track, written};
     use crate::structure_data::movie_fragment::{runs, track_fragments};
-
-    /// Returns a sample of `track_id` at `decoding_time`, lasting 10, presented `offset` after it, and a sync sample where `sync`
-    fn sample(track_id: u32, decoding_time: u64, offset: i64, sync: bool) -> Sample {
-        let mut sample_flags = SampleFlags::default();
-        sample_flags.sample_is_non_sync_sample = !sync;
-        Sample::new(
-            SampleProperties {
-                track_id,
-                decoding_time,
-                sample_duration: 10,
-                sample_composition_time_offset: offset,
-                sample_flags,
-                sample_description_index: 1,
-            },
-            b"A".to_vec(),
-        )
-    }
 
     #[test]
     fn the_first_sync_sample_of_each_track_in_a_fragment_is_listed_by_its_track_fragment_track_run_and_number()
@@ -170,16 +150,16 @@ mod tests {
         let movie = movie([1, 2, 3].map(|track_id| track(track_id, 0, &[], &[], &[])));
         let mut tables = RandomAccessTables::default();
         let first = [
-            sample(1, 0, 0, false),
-            sample(2, 0, 5, true),
-            sample(3, 0, 0, false),
-            sample(1, 10, 0, true),
-            sample(1, 20, 0, true),
+            sample(1, 0, 10, 0, false),
+            sample(2, 0, 10, 5, true),
+            sample(3, 0, 10, 0, false),
+            sample(1, 10, 10, 0, true),
+            sample(1, 20, 10, 0, true),
         ];
         let second = [
-            sample(1, 30, -40, true),
-            sample(1, 40, 0, true),
-            sample(2, 10, 0, false),
+            sample(1, 30, 10, -40, true),
+            sample(1, 40, 10, 0, true),
+            sample(2, 10, 10, 0, false),
         ];
 
         for (samples, moof_offset) in [(&first[..], 100), (&second[..], 1 << 32)] {
