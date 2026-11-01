@@ -91,6 +91,11 @@
 //! of it. A caller that never takes them fails with
 //! [`HeldBytesLimitExceeded`](DemuxError::HeldBytesLimitExceeded).
 //!
+//! Where the tables of a sample table state different numbers of samples,
+//! the demuxer reads the file as conforming readers do rather than refuse
+//! it, and keeps each such [`Leniency`] for the caller to ask after with
+//! [`Demuxer::leniencies`].
+//!
 //! A caller that can seek reads a fragmented movie file from any of its
 //! fragments. The `mfra` at the end of the file lists where they start
 //! (§8.8.9), and a fragment with a `tfdt` gives its own decoding time:
@@ -154,6 +159,7 @@ mod error;
 mod file_level;
 mod file_structure;
 pub mod framing;
+mod leniency;
 mod limits;
 pub mod media_data;
 mod muxer;
@@ -165,6 +171,7 @@ pub use demuxer::{DemuxEvent, Demuxer};
 pub use error::{DemuxError, MuxError};
 pub use file_structure::FileStructure;
 pub use isobmff_core::*;
+pub use leniency::{Leniency, SampleTableDisagreement};
 pub use limits::DemuxLimits;
 pub use muxer::Muxer;
 pub use sample::{Sample, SampleLocation, SampleProperties};
