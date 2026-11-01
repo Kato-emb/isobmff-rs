@@ -26,6 +26,7 @@ mod tests {
         BoxHeader, Boxes, ByteRange, DemuxEvent, DemuxLimits, Demuxer, FileStructure, FourCc,
         Muxer, Sample, SampleLocation,
     };
+    use isobmff_test_support::serde_json::Value;
     use isobmff_test_support::{ConformanceFile, conformance_files, ffprobe_packets};
 
     /// Lengths the files are cut into, the last of them longer than any file
@@ -313,7 +314,12 @@ mod tests {
     #[test]
     #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
     fn the_samples_in_another_file_are_gathered_out_of_the_file_their_data_reference_names() {
-        let ConformanceFile { bytes, path, .. } = conformance_files()
+        let ConformanceFile {
+            bytes,
+            path,
+            report,
+            ..
+        } = conformance_files()
             .into_iter()
             .find(|file| file.name == MEDIA_DATA_ELSEWHERE)
             .unwrap();
@@ -344,19 +350,52 @@ mod tests {
         }
         assert_eq!(elsewhere.keys().collect::<Vec<_>>(), ["./myData.dat"]);
 
+        let stbl = report
+            .pointer("/IsoMediaFile/MovieBox/TrackBox/MediaBox/MediaInformationBox/SampleTableBox")
+            .unwrap();
+        let number = |node: &Value, field: &str| -> u64 {
+            node.get(field)
+                .and_then(Value::as_str)
+                .unwrap()
+                .parse()
+                .unwrap()
+        };
+        let sample_sizes: Vec<_> = stbl
+            .pointer("/SampleSizeBox/SampleSizeEntry")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .map(|entry| number(entry, "@Size"))
+            .collect();
+        // Why not resolve a run of stsc entries: GPAC reports the one entry of this movie as an object, and an array would make this a second sample table reader
+        let samples_per_chunk = number(
+            stbl.pointer("/SampleToChunkBox/SampleToChunkEntry")
+                .unwrap(),
+            "@SamplesPerChunk",
+        );
+        let reported: Vec<_> = stbl
+            .pointer("/ChunkOffsetBox/ChunkEntry")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .map(|entry| number(entry, "@offset"))
+            .zip(sample_sizes.chunks(usize::try_from(samples_per_chunk).unwrap()))
+            .flat_map(|(chunk_offset, sample_sizes)| {
+                sample_sizes.iter().scan(chunk_offset, |start, size| {
+                    let byte_range = *start..start.checked_add(*size).unwrap();
+                    *start = byte_range.end;
+                    Some(byte_range)
+                })
+            })
+            .collect();
+
         for (named, locations) in elsewhere {
-            let other = fs::read(path.with_file_name(&named)).unwrap();
-            let mut byte_ranges: Vec<_> =
-                locations.iter().map(SampleLocation::byte_range).collect();
-            byte_ranges.sort_unstable_by_key(|byte_range| byte_range.start);
-            let covered = byte_ranges.iter().try_fold(0, |covered, byte_range| {
-                (byte_range.start == covered).then_some(byte_range.end)
-            });
+            let byte_ranges: Vec<_> = locations.iter().map(SampleLocation::byte_range).collect();
             assert_eq!(
-                covered,
-                Some(u64::try_from(other.len()).unwrap()),
-                "the samples lie end to end over the whole of {named}"
+                byte_ranges, reported,
+                "the samples in {named} lie where GPAC reports the chunks and sample sizes"
             );
+            let other = fs::read(path.with_file_name(&named)).unwrap();
             let expected = samples_at(&other, &locations);
             for piece_len in PIECE_LENS {
                 let mut media_data = MediaDataReader::new(HOLD_EVERY_SAMPLE.media_data());
