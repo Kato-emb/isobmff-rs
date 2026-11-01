@@ -3,8 +3,7 @@
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use isobmff_boxes::{MovieFragmentRandomAccessOffsetBox, SegmentIndexBox};
-use isobmff_core::BoxDecode;
+use isobmff_boxes::SegmentIndexBox;
 
 use crate::error::DemuxError;
 
@@ -159,36 +158,6 @@ impl Subsegment {
     }
 }
 
-/// Returns the file offset of the `mfra` the last 16 bytes of a file of `file_length` bytes point at, where they are an `mfro`, ISO/IEC 14496-12 §8.8.11
-///
-/// The `mfro` is the last box of the `mfra`, and repeats its size, so the
-/// `mfra` starts that many bytes before the end of the file. The offset is a
-/// hint: what is there may not be an `mfra` (§8.8.9).
-///
-/// `None` where the bytes are not an `mfro` of 16 bytes, or it gives a size
-/// past the start of the file.
-///
-/// # Examples
-///
-/// ```
-/// use isobmff::structure_data::movie_fragment_random_access_start;
-///
-/// // An mfro of an mfra of 61 bytes, at the end of a file of 1000
-/// let last_bytes = *b"\0\0\0\x10mfro\0\0\0\0\0\0\0\x3d";
-/// assert_eq!(movie_fragment_random_access_start(1000, &last_bytes), Some(939));
-/// assert_eq!(movie_fragment_random_access_start(60, &last_bytes), None);
-/// assert_eq!(movie_fragment_random_access_start(1000, &[0; 16]), None);
-/// ```
-#[must_use]
-pub fn movie_fragment_random_access_start(file_length: u64, last_bytes: &[u8; 16]) -> Option<u64> {
-    let (mfro, rest) = MovieFragmentRandomAccessOffsetBox::decode(last_bytes).ok()?;
-    if !rest.is_empty() {
-        return None;
-    }
-
-    file_length.checked_sub(u64::from(mfro.parent_size))
-}
-
 #[cfg(test)]
 mod tests {
     use isobmff_boxes::{MovieFragmentRandomAccessBox, SegmentIndexBox};
@@ -197,7 +166,7 @@ mod tests {
     use alloc::vec::Vec;
     use core::ops::Range;
 
-    use super::{SegmentIndex, Subsegment, movie_fragment_random_access_start};
+    use super::{SegmentIndex, Subsegment};
     use crate::error::DemuxError;
     use crate::structure_data::fixtures::UNLIMITED;
     use crate::structure_data::{StructureDataLimits, StructureDataReader};
@@ -401,21 +370,6 @@ mod tests {
         assert_eq!(
             StructureDataReader::new(UNLIMITED).handle_segment_index(&sidx, anchored_at(u64::MAX)),
             Err(DemuxError::SegmentIndexOutOfRange { reference_id: 1 })
-        );
-    }
-
-    #[test]
-    fn the_mfra_starts_the_size_its_mfro_repeats_before_the_end_of_the_file() {
-        let mfro = *b"\0\0\0\x10mfro\0\0\0\0\0\0\0\x3d";
-        let not_an_mfro = *b"\0\0\0\x10free\0\0\0\0\0\0\0\x3d";
-        let mfro_of_version_1 = *b"\0\0\0\x10mfro\x01\0\0\0\0\0\0\x3d";
-
-        assert_eq!(movie_fragment_random_access_start(61, &mfro), Some(0));
-        assert_eq!(movie_fragment_random_access_start(60, &mfro), None);
-        assert_eq!(movie_fragment_random_access_start(1000, &not_an_mfro), None);
-        assert_eq!(
-            movie_fragment_random_access_start(1000, &mfro_of_version_1),
-            None
         );
     }
 }

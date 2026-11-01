@@ -318,23 +318,10 @@ pub(super) fn runs<'a>(
     Ok(runs)
 }
 
-/// Returns the movie fragment numbered `sequence_number` of the samples `runs` of the tracks of `movie`, their media data from `data_start` bytes past the end of the `moof`
-///
-/// Each track has one track fragment, its base data offset the first byte
-/// of the `moof` (§8.8.7.1) and its `tfdt` the decoding time of its first
-/// sample (§8.8.12), and a track run for each of its runs (§8.8.8). The data
-/// offsets count from the `moof`, whose length is taken once.
-///
-/// # Errors
-///
-/// * [`DataOffsetOutOfRange`](MuxError::DataOffsetOutOfRange): the media
-///   data of a sample lies further from the `moof` than a `trun` reaches.
-pub(super) fn movie_fragment_box(
-    movie: &MovieBox,
-    sequence_number: u32,
-    runs: &[Run<'_>],
-    data_start: u64,
-) -> Result<MovieFragmentBox, MuxError> {
+/// Returns the runs of each track fragment of the movie fragment of `runs`: a track fragment for each track in the order of its first run, of its runs in their order
+pub(super) fn track_fragments<'runs, 'samples>(
+    runs: &'runs [Run<'samples>],
+) -> Vec<Vec<&'runs Run<'samples>>> {
     let mut tracks: Vec<Vec<&Run<'_>>> = Vec::new();
     for run in runs {
         match tracks.iter_mut().find(|track_runs| {
@@ -346,9 +333,29 @@ pub(super) fn movie_fragment_box(
             None => tracks.push(Vec::from([run])),
         }
     }
+    tracks
+}
+
+/// Returns the movie fragment numbered `sequence_number` of the tracks of `movie`, of a track fragment for each of `track_fragments`, their media data from `data_start` bytes past the end of the `moof`
+///
+/// Each track fragment has its base data offset the first byte of the
+/// `moof` (§8.8.7.1), its `tfdt` the decoding time of its first sample
+/// (§8.8.12), and a track run for each of its runs (§8.8.8). The data
+/// offsets count from the `moof`, whose length is taken once.
+///
+/// # Errors
+///
+/// * [`DataOffsetOutOfRange`](MuxError::DataOffsetOutOfRange): the media
+///   data of a sample lies further from the `moof` than a `trun` reaches.
+pub(super) fn movie_fragment_box(
+    movie: &MovieBox,
+    sequence_number: u32,
+    track_fragments: &[Vec<&Run<'_>>],
+    data_start: u64,
+) -> Result<MovieFragmentBox, MuxError> {
     let mut moof = MovieFragmentBox::default();
     moof.mfhd.sequence_number = sequence_number;
-    for track_runs in &tracks {
+    for track_runs in track_fragments {
         let Some(first) = track_runs.first() else {
             continue;
         };
@@ -375,7 +382,7 @@ pub(super) fn movie_fragment_box(
         moof.traf.push(traf);
     }
     let moof_len = moof.encoded_len();
-    for (traf, track_runs) in moof.traf.iter_mut().zip(&tracks) {
+    for (traf, track_runs) in moof.traf.iter_mut().zip(track_fragments) {
         for (trun, run) in traf.trun.iter_mut().zip(track_runs) {
             trun.data_offset = Some(
                 moof_len

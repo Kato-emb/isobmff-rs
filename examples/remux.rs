@@ -48,6 +48,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let file_structure = match structure.as_str() {
         "fragmented" => FileStructure::Fragmented {
             first_sequence_number: 1,
+            random_access: false,
         },
         "non-fragmented" => FileStructure::NonFragmented,
         "segment" => FileStructure::Segment {
@@ -84,6 +85,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             if let FileStructure::Segment { .. } = file_structure {
                 let mut initialization = Muxer::new(FileStructure::Fragmented {
                     first_sequence_number: 1,
+                    random_access: false,
                 });
                 initialization.handle_file_type(file_type.clone())?;
                 initialization.handle_movie(movie.clone())?;

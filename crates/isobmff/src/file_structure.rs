@@ -13,6 +13,12 @@ pub enum FileStructure {
     Fragmented {
         /// `sequence_number` of the first `moof`, §8.8.5
         first_sequence_number: u32,
+        /// Whether the file ends with an `mfra` that lists the first sync sample of each track in each `moof`, §8.8.9
+        ///
+        /// A track none of whose fragments has a sync sample has no `tfra`. A
+        /// file of compressed boxes has no `mfra` (§8.16.1), and the muxer
+        /// writes none of those.
+        random_access: bool,
     },
     /// Movie file that is not fragmented: the `ftyp`, an `mdat` for each call, and the `moov` at the end
     NonFragmented,
