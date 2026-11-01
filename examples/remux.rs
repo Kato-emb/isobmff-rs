@@ -4,7 +4,13 @@
 //! cargo run --example remux -- movie.mp4 fragmented.mp4 fragmented
 //! cargo run --example remux -- fragmented.mp4 movie.mp4 non-fragmented
 //! cargo run --example remux -- fragmented.mp4 segment.mp4 segment
+//! cargo run --example remux -- movie.mp4 fragmented.mp4 fragmented --random-access
+//! cargo run --example remux -- fragmented.mp4 segment.mp4 segment --segment-index
 //! ```
+//!
+//! `--random-access` ends a fragmented file with an `mfra` that lists the
+//! sync samples of its fragments, and `--segment-index` starts a segment with
+//! a `sidx` that indexes each `moof` and its `mdat` as a subsegment.
 //!
 //! A demuxer reads the source as the `demux` example does, seeking to the
 //! bytes it wants. Its movie, its sample tables emptied, goes to a muxer, and
@@ -39,21 +45,25 @@ const FROM_ISO5: [[u8; 4]; 9] = [
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut arguments = env::args().skip(1);
-    let usage = "usage: remux <source> <destination> fragmented|non-fragmented|segment";
-    let (source, destination, structure) = (
+    let usage = "usage: remux <source> <destination> (fragmented [--random-access] | non-fragmented | segment [--segment-index])";
+    let (source, destination, structure, option) = (
         arguments.next().ok_or(usage)?,
         arguments.next().ok_or(usage)?,
         arguments.next().ok_or(usage)?,
+        arguments.next(),
     );
-    let file_structure = match structure.as_str() {
-        "fragmented" => FileStructure::Fragmented {
+    if arguments.next().is_some() {
+        return Err(usage.into());
+    }
+    let file_structure = match (structure.as_str(), option.as_deref()) {
+        ("fragmented", option @ (None | Some("--random-access"))) => FileStructure::Fragmented {
             first_sequence_number: 1,
-            random_access: false,
+            random_access: option.is_some(),
         },
-        "non-fragmented" => FileStructure::NonFragmented,
-        "segment" => FileStructure::Segment {
+        ("non-fragmented", None) => FileStructure::NonFragmented,
+        ("segment", option @ (None | Some("--segment-index"))) => FileStructure::Segment {
             first_sequence_number: 1,
-            segment_index: false,
+            segment_index: option.is_some(),
         },
         _ => return Err(usage.into()),
     };
