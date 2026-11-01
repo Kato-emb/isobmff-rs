@@ -7,6 +7,7 @@ use core::ops::Range;
 use isobmff_boxes::{MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentIndexBox};
 use isobmff_core::BoxDefinition;
 
+use super::movie_fragment::ReachedTime;
 use super::segment_index::SegmentIndex;
 use super::{movie_fragment, sample_table};
 use crate::error::DemuxError;
@@ -30,6 +31,7 @@ use crate::sample::SampleLocation;
 ///     sample_count: 1_048_576,
 ///     segment_index_count: 1024,
 ///     subsegment_count: 1_048_576,
+///     leniency_count: 65_536,
 /// };
 /// assert_eq!(limits.segment_index_count, 1024);
 /// ```
@@ -45,6 +47,8 @@ pub struct StructureDataLimits {
     pub segment_index_count: u64,
     /// Number of subsegments the segment indexes the reader keeps hold up to, together
     pub subsegment_count: u64,
+    /// Number of leniencies the reader keeps up to, over the whole file
+    pub leniency_count: u64,
 }
 
 /// Reader of the structure-data of a file: the movie and its fragments, resolved to the samples they declare
@@ -65,6 +69,7 @@ pub struct StructureDataLimits {
 ///     sample_count: 1_048_576,
 ///     segment_index_count: 1024,
 ///     subsegment_count: 1_048_576,
+///     leniency_count: 65_536,
 /// });
 /// // A movie of no track declares no sample.
 /// let samples = reader.handle_movie(MovieBox::default())?;
@@ -77,7 +82,7 @@ pub struct StructureDataReader {
     limits: StructureDataLimits,
     movie: Option<MovieBox>,
     /// Decoding time past the last sample of each track of the movie, in the order of its tracks, `None` once it is not known
-    decoding_times: Vec<Option<u64>>,
+    decoding_times: Vec<Option<ReachedTime>>,
     segment_indexes: Vec<SegmentIndex>,
     movie_fragment_random_access: Option<MovieFragmentRandomAccessBox>,
     leniencies: Vec<Leniency>,
@@ -120,6 +125,9 @@ impl StructureDataReader {
     /// * [`SampleCountLimitExceeded`](DemuxError::SampleCountLimitExceeded):
     ///   the sample size tables of every track together count more samples
     ///   than the limit, and none is resolved.
+    /// * [`LeniencyCountLimitExceeded`](DemuxError::LeniencyCountLimitExceeded):
+    ///   keeping what the movie is read past in would take the leniencies the
+    ///   reader keeps past the limit.
     /// * [`SampleTableMismatch`](DemuxError::SampleTableMismatch): the tables
     ///   of a track cannot lay out its samples: the track declares samples,
     ///   but its `stsz` or `stz2`, its `stco` or `co64`, or its `stts`
@@ -151,9 +159,14 @@ impl StructureDataReader {
         let mut decoding_times = Vec::with_capacity(movie.trak.len());
         let mut leniencies = Vec::new();
         for trak in &movie.trak {
-            let decoding_time = sample_table::resolve_track(trak, &mut locations, &mut leniencies)?;
-            decoding_times.push(Some(decoding_time));
+            let earlier_samples = locations.len();
+            let time = sample_table::resolve_track(trak, &mut locations, &mut leniencies)?;
+            decoding_times.push(Some(ReachedTime {
+                time,
+                after_sample: locations.len() > earlier_samples,
+            }));
         }
+        self.check_room_for_leniencies(&leniencies)?;
         in_file_order(&mut locations);
 
         self.movie = Some(movie);
@@ -172,6 +185,17 @@ impl StructureDataReader {
     /// the fragment moves that time on. The data offsets resolve to file
     /// offsets as Table 6 of §8.8.7.1 sets out.
     ///
+    /// A `tfdt` past the decoding time the earlier samples of its track have
+    /// reached extends the duration of the sample before it (§8.8.12). That
+    /// sample is already returned, so the first sample of the track fragment
+    /// takes the decoding time of the `tfdt`, and the reader keeps the gap
+    /// as a [`Leniency::DecodingTimeGap`] that
+    /// [`leniencies`](Self::leniencies) returns. A `tfdt` before that time,
+    /// which §8.8.12 does not allow, is taken as it is and kept as a
+    /// [`Leniency::DecodingTimeOverlap`]. A track that has no earlier sample,
+    /// or whose time is not known since the reader resumed, is compared with
+    /// nothing.
+    ///
     /// # Errors
     ///
     /// * [`MissingMovie`](DemuxError::MissingMovie): the reader holds no
@@ -179,6 +203,9 @@ impl StructureDataReader {
     /// * [`SampleCountLimitExceeded`](DemuxError::SampleCountLimitExceeded):
     ///   the track runs together count more samples than the limit, and none
     ///   is resolved.
+    /// * [`LeniencyCountLimitExceeded`](DemuxError::LeniencyCountLimitExceeded):
+    ///   keeping what the fragment is read past in would take the leniencies
+    ///   the reader keeps past the limit.
     /// * [`UnknownTrackId`](DemuxError::UnknownTrackId),
     ///   [`MissingTrackExtends`](DemuxError::MissingTrackExtends): a track
     ///   fragment is of a track the movie, or its `mvex`, has none of.
@@ -196,16 +223,20 @@ impl StructureDataReader {
         let movie = self.movie.as_ref().ok_or(DemuxError::MissingMovie)?;
         let mut locations = self.room_for(movie_fragment::sample_count(movie_fragment))?;
         let mut decoding_times = self.decoding_times.clone();
+        let mut leniencies = Vec::new();
         movie_fragment::resolve_fragment(
             movie,
             &mut decoding_times,
             movie_fragment,
             moof_offset,
             &mut locations,
+            &mut leniencies,
         )?;
+        self.check_room_for_leniencies(&leniencies)?;
         in_file_order(&mut locations);
 
         self.decoding_times = decoding_times;
+        self.leniencies.append(&mut leniencies);
         Ok(SampleLocations {
             locations: locations.into_iter(),
         })
@@ -301,6 +332,19 @@ impl StructureDataReader {
     #[must_use]
     pub fn leniencies(&self) -> &[Leniency] {
         &self.leniencies
+    }
+
+    /// Refuses `leniencies` where keeping them besides those kept would take the leniencies past the limit
+    fn check_room_for_leniencies(&self, leniencies: &[Leniency]) -> Result<(), DemuxError> {
+        let retained_leniencies =
+            to_u64(self.leniencies.len()).saturating_add(to_u64(leniencies.len()));
+        if retained_leniencies > self.limits.leniency_count {
+            return Err(DemuxError::LeniencyCountLimitExceeded {
+                retained_leniencies,
+                limit_leniencies: self.limits.leniency_count,
+            });
+        }
+        Ok(())
     }
 
     /// Returns room for the locations of `declared_samples` samples, or the failure of more than the limit

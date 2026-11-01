@@ -163,6 +163,14 @@ pub enum DemuxError {
         /// `track_ID` of the track
         track_id: u32,
     },
+    /// Leniencies that would take those a reader keeps past the limit it keeps them up to
+    #[non_exhaustive]
+    LeniencyCountLimitExceeded {
+        /// Number of leniencies the reader would keep
+        retained_leniencies: u64,
+        /// Number of leniencies the reader keeps up to
+        limit_leniencies: u64,
+    },
     /// Segment index that would take the segment indexes a reader keeps past the limit it keeps them up to
     #[non_exhaustive]
     SegmentIndexCountLimitExceeded {
@@ -327,6 +335,13 @@ impl fmt::Display for DemuxError {
             Self::DecodingTimeOverflow { track_id } => write!(
                 formatter,
                 "decoding time of a sample of track {track_id} is past 64 bits"
+            ),
+            Self::LeniencyCountLimitExceeded {
+                retained_leniencies,
+                limit_leniencies,
+            } => write!(
+                formatter,
+                "{retained_leniencies} leniencies kept, past the limit of {limit_leniencies}"
             ),
             Self::SegmentIndexCountLimitExceeded {
                 retained_segment_indexes,

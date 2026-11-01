@@ -46,6 +46,32 @@ pub enum Leniency {
         /// How the table disagrees with the samples of the track
         kind: SampleTableDisagreement,
     },
+    /// Track fragment whose `tfdt` gives a decoding time before the one the earlier samples of its track reach
+    ///
+    /// ISO/IEC 14496-12 §8.8.12 does not allow it. The first sample of the
+    /// track fragment takes the decoding time of the `tfdt`, as FFmpeg reads
+    /// it, so the samples of the track overlap by as much.
+    #[non_exhaustive]
+    DecodingTimeOverlap {
+        /// `track_ID` of the track
+        track_id: u32,
+        /// Ticks of the media timescale by which the `tfdt` is before the decoding time the earlier samples reach
+        overlap: u64,
+    },
+    /// Track fragment whose `tfdt` gives a decoding time past the one the earlier samples of its track reach
+    ///
+    /// ISO/IEC 14496-12 §8.8.12 extends the duration of the sample before
+    /// the track fragment to the decoding time its `tfdt` gives. The reader
+    /// has returned that sample with the duration it declares, so its first
+    /// sample of the track fragment takes the decoding time of the `tfdt`,
+    /// and the extension is the gap between the two.
+    #[non_exhaustive]
+    DecodingTimeGap {
+        /// `track_ID` of the track
+        track_id: u32,
+        /// Ticks of the media timescale by which the `tfdt` is past the decoding time the earlier samples reach
+        gap: u64,
+    },
 }
 
 /// How a table of a sample table disagrees with the samples of its track
@@ -98,6 +124,14 @@ impl fmt::Display for Leniency {
             } => write!(
                 formatter,
                 "{box_type} of track {track_id} marks {sample_numbers} sample numbers out of order"
+            ),
+            Self::DecodingTimeOverlap { track_id, overlap } => write!(
+                formatter,
+                "tfdt of track {track_id} is {overlap} ticks before the decoding time its samples reach"
+            ),
+            Self::DecodingTimeGap { track_id, gap } => write!(
+                formatter,
+                "tfdt of track {track_id} is {gap} ticks past the decoding time its samples reach"
             ),
         }
     }

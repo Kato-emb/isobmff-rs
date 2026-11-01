@@ -664,6 +664,7 @@ pub(crate) mod fixtures {
         sample_count: u64::MAX,
         segment_index_count: u64::MAX,
         subsegment_count: u64::MAX,
+        leniency_count: u64::MAX,
     };
 
     /// Returns the movie of `tracks`

@@ -16,6 +16,7 @@ use crate::structure_data::StructureDataLimits;
 /// | Samples one `moov` or `moof` declares | 1,048,576 |
 /// | Segment indexes kept | 65,536 |
 /// | Subsegments the kept segment indexes reference, together | 1,048,576 |
+/// | Leniencies kept, over the whole file | 65,536 |
 /// | Sample locations a `MediaDataReader` holds | 1,048,576 |
 /// | Bytes of media data of one sample | 16 MiB |
 /// | Bytes of media data allocated for the samples not yet taken, together | 16 MiB |
@@ -55,6 +56,7 @@ impl DemuxLimits {
                 sample_count: 1_048_576,
                 segment_index_count: 65_536,
                 subsegment_count: 1_048_576,
+                leniency_count: 65_536,
             },
             media_data: MediaDataLimits {
                 held_location_count: 1_048_576,
@@ -89,6 +91,13 @@ impl DemuxLimits {
     #[must_use]
     pub const fn with_subsegment_count(mut self, subsegment_count: u64) -> Self {
         self.structure_data.subsegment_count = subsegment_count;
+        self
+    }
+
+    /// Replaces the number of leniencies the demuxer keeps, over the whole file
+    #[must_use]
+    pub const fn with_leniency_count(mut self, leniency_count: u64) -> Self {
+        self.structure_data.leniency_count = leniency_count;
         self
     }
 
