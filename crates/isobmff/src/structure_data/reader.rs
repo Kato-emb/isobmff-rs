@@ -82,8 +82,6 @@ pub struct StructureDataLimits {
 pub struct StructureDataReader {
     limits: StructureDataLimits,
     movie: Option<MovieBox>,
-    /// Entries of the data references of the tracks of the movie, in the order of their keys
-    data_references: Vec<DataReference>,
     /// Decoding time past the last sample of each track of the movie, in the order of its tracks, `None` once it is not known
     decoding_times: Vec<Option<ReachedTime>>,
     segment_indexes: Vec<SegmentIndex>,
@@ -98,7 +96,6 @@ impl StructureDataReader {
         Self {
             limits,
             movie: None,
-            data_references: Vec::new(),
             decoding_times: Vec::new(),
             segment_indexes: Vec::new(),
             movie_fragment_random_access: None,
@@ -172,7 +169,6 @@ impl StructureDataReader {
         self.check_room_for_leniencies(&leniencies)?;
         in_file_order(&mut locations);
 
-        self.data_references = sample_description::data_references(&movie);
         self.movie = Some(movie);
         self.decoding_times = decoding_times;
         self.leniencies = leniencies;
@@ -341,19 +337,16 @@ impl StructureDataReader {
     /// the media data is in the file itself. Any other entry names where else
     /// it is: another file, which a `url ` with a location or a `urn ` names
     /// and whose file offsets the byte ranges of the locations are in.
-    #[must_use]
-    pub fn data_references(&self) -> &[DataReference] {
-        &self.data_references
+    pub fn data_references(&self) -> impl Iterator<Item = DataReference<'_>> {
+        self.movie
+            .iter()
+            .flat_map(sample_description::data_references)
     }
 
     /// Returns the entry of the data reference of key `key`, as [`data_references`](Self::data_references) lists it, or `None` where it lists none
     #[must_use]
-    pub fn data_reference(&self, key: DataReferenceKey) -> Option<&DataReference> {
-        let position = self
-            .data_references
-            .binary_search_by_key(&key, DataReference::key)
-            .ok()?;
-        self.data_references.get(position)
+    pub fn data_reference(&self, key: DataReferenceKey) -> Option<DataReference<'_>> {
+        sample_description::data_reference(self.movie.as_ref()?, key)
     }
 
     /// Returns what the reader has read past in the structure-data, in the order it read it
@@ -927,7 +920,7 @@ mod tests {
 
         let expected: Vec<_> = [(0, 1, 1), (0, 1, 2), (1, 3, 1)]
             .into_iter()
-            .zip(entries)
+            .zip(&entries)
             .map(|((track_position, track_id, index), entry)| DataReference {
                 key: DataReferenceKey::of(track_position, index),
                 track_id,
@@ -937,13 +930,13 @@ mod tests {
             .collect();
         let named: Vec<_> = locations
             .iter()
-            .map(|location| reader.data_reference(location.data_reference()).cloned())
+            .map(|location| reader.data_reference(location.data_reference()))
             .collect();
         assert_eq!(
-            (reader.data_references(), named),
+            (reader.data_references().collect::<Vec<_>>(), named),
             (
-                expected.as_slice(),
-                Vec::from([expected.first().cloned(), expected.last().cloned()])
+                expected.clone(),
+                Vec::from([expected.first().copied(), expected.last().copied()])
             )
         );
         assert_eq!(reader.data_reference(DataReferenceKey::new(u64::MAX)), None);

@@ -113,12 +113,14 @@ impl Sample {
 /// in the order of the movie, then by entry in the order of the data
 /// reference.
 ///
-/// The reader decides the value of each key: only the keys of the entries
+/// The reader decides the value of each key: the keys of the entries
 /// [`data_references`](crate::structure_data::StructureDataReader::data_references)
-/// lists name an entry, and no other value is to be relied on.
-/// [`new`](Self::new) is for a caller that hands locations of its own to a
-/// [`MediaDataReader`](crate::media_data::MediaDataReader), and a key it
-/// makes names no entry of the reader.
+/// lists are the ones the locations of their samples carry, and no other
+/// value is to be relied on. [`new`](Self::new) is for a caller that hands
+/// locations of its own to a
+/// [`MediaDataReader`](crate::media_data::MediaDataReader): the reader does
+/// not know the keys it makes, and looking one up there returns any entry,
+/// or none.
 ///
 /// # Examples
 ///
@@ -141,6 +143,14 @@ impl DataReferenceKey {
     pub(crate) fn of(track_position: usize, index: u16) -> Self {
         // Why not count the entries before the track: an index fits in 16 bits, so the track position takes the bits above them and the key of an entry needs no other track.
         Self((to_u64(track_position) << 16) | u64::from(index))
+    }
+
+    /// Returns the track position and the index the key packs, as [`of`](Self::of) packs them
+    pub(crate) fn unpacked(self) -> (u64, u16) {
+        (
+            self.0 >> 16,
+            u16::try_from(self.0 & 0xffff).unwrap_or_default(),
+        )
     }
 }
 

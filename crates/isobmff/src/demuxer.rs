@@ -279,14 +279,13 @@ impl Demuxer {
     /// [`is_in_same_file`](crate::boxes::DataEntry::is_in_same_file). The
     /// events carry the locations of the others too, in file offsets of the
     /// file their entry names, for the caller to read there.
-    #[must_use]
-    pub fn data_references(&self) -> &[DataReference] {
+    pub fn data_references(&self) -> impl Iterator<Item = DataReference<'_>> {
         self.structure_data.data_references()
     }
 
     /// Returns the entry of the data reference of key `key`, as [`StructureDataReader::data_reference`] does
     #[must_use]
-    pub fn data_reference(&self, key: DataReferenceKey) -> Option<&DataReference> {
+    pub fn data_reference(&self, key: DataReferenceKey) -> Option<DataReference<'_>> {
         self.structure_data.data_reference(key)
     }
 

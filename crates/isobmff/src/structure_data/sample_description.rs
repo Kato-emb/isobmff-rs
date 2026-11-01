@@ -1,7 +1,5 @@
 //! The sample entry that describes samples, and the data reference entry that says where their media data is, ISO/IEC 14496-12 §8.5.2 and §8.7.2
 
-use alloc::vec::Vec;
-
 use isobmff_boxes::{DataEntry, MovieBox, SampleDescription, TrackBox};
 
 use crate::error::{DemuxError, MuxError};
@@ -11,7 +9,8 @@ use crate::sample::DataReferenceKey;
 ///
 /// A [`StructureDataReader`](super::StructureDataReader) lists one for each
 /// entry of the `dref` of each track: two tracks whose entries name the same
-/// file are two of them.
+/// file are two of them. It borrows the entry from the movie the reader
+/// holds.
 ///
 /// # Examples
 ///
@@ -32,21 +31,21 @@ use crate::sample::DataReferenceKey;
 /// });
 /// reader.handle_movie(movie)?;
 ///
-/// let [data_reference] = reader.data_references() else { unreachable!() };
+/// let data_reference = reader.data_references().next().ok_or("no entry")?;
 /// assert_eq!((data_reference.track_id(), data_reference.index()), (1, 1));
 /// assert!(data_reference.entry().is_in_same_file());
 /// assert_eq!(reader.data_reference(data_reference.key()), Some(data_reference));
-/// # Ok::<(), isobmff::DemuxError>(())
+/// # Ok::<(), Box<dyn core::error::Error>>(())
 /// ```
-#[derive(Clone, PartialEq, Debug)]
-pub struct DataReference {
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct DataReference<'a> {
     pub(super) key: DataReferenceKey,
     pub(super) track_id: u32,
     pub(super) index: u16,
-    pub(super) entry: DataEntry,
+    pub(super) entry: &'a DataEntry,
 }
 
-impl DataReference {
+impl<'a> DataReference<'a> {
     /// Returns the key the locations of the samples whose sample entry names the entry carry
     #[must_use]
     pub const fn key(&self) -> DataReferenceKey {
@@ -67,8 +66,8 @@ impl DataReference {
 
     /// Returns the entry, which says where the media data is
     #[must_use]
-    pub const fn entry(&self) -> &DataEntry {
-        &self.entry
+    pub const fn entry(&self) -> &'a DataEntry {
+        self.entry
     }
 }
 
@@ -76,7 +75,7 @@ impl DataReference {
 ///
 /// The entries past the last one a `data_reference_index` can number are
 /// left out: no sample entry can name them.
-pub(super) fn data_references(movie: &MovieBox) -> Vec<DataReference> {
+pub(super) fn data_references(movie: &MovieBox) -> impl Iterator<Item = DataReference<'_>> {
     movie
         .trak
         .iter()
@@ -88,10 +87,22 @@ pub(super) fn data_references(movie: &MovieBox) -> Vec<DataReference> {
                     key: DataReferenceKey::of(track_position, index),
                     track_id: trak.tkhd.track_id,
                     index,
-                    entry: entry.clone(),
+                    entry,
                 })
         })
-        .collect()
+}
+
+/// Returns the entry of the data reference of `movie` under key `key`, or `None` where no track and entry of `movie` has the key
+pub(super) fn data_reference(movie: &MovieBox, key: DataReferenceKey) -> Option<DataReference<'_>> {
+    let (track_position, index) = key.unpacked();
+    let trak = movie.trak.get(usize::try_from(track_position).ok()?)?;
+    let entry = nth_from_one(&trak.mdia.minf.dinf.dref.data_entries, u32::from(index))?;
+    Some(DataReference {
+        key,
+        track_id: trak.tkhd.track_id,
+        index,
+        entry,
+    })
 }
 
 /// Reason the samples a sample entry of a track describes are not described, or do not lie in the file itself

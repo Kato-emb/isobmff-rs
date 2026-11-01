@@ -158,7 +158,7 @@ mod tests {
                     format!("{entry:?}")
                 }
             };
-            let elsewhere = |data_reference: &DataReference| {
+            let elsewhere = |data_reference: DataReference<'_>| {
                 (!data_reference.entry().is_in_same_file()).then(|| {
                     (
                         data_reference.track_id(),
@@ -181,11 +181,7 @@ mod tests {
                 ),
                 "{name}: the key of each location names an entry of its own track"
             );
-            let listed: BTreeSet<_> = demuxer
-                .data_references()
-                .iter()
-                .filter_map(elsewhere)
-                .collect();
+            let listed: BTreeSet<_> = demuxer.data_references().filter_map(elsewhere).collect();
             let external: BTreeSet<_> = named_by_locations
                 .into_iter()
                 .flatten()
