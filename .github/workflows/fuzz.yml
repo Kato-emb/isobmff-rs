@@ -78,9 +78,11 @@ jobs:
       # report informs and never gates, so it cannot fail the job either.
       - continue-on-error: true
         run: |
-          cargo fuzz coverage "$TARGET" --target x86_64-unknown-linux-gnu "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/seeds"
+          # The build directory is given: by default it is named after the
+          # triple cargo-fuzz itself was built for, musl from the action.
+          cargo fuzz coverage "$TARGET" --target x86_64-unknown-linux-gnu --target-dir "$RUNNER_TEMP/coverage-build" "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/seeds"
           llvm_cov="$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-cov"
-          set -- "target/x86_64-unknown-linux-gnu/coverage/x86_64-unknown-linux-gnu/release/$TARGET" \
+          set -- "$RUNNER_TEMP/coverage-build/x86_64-unknown-linux-gnu/release/$TARGET" \
             -instr-profile="fuzz/coverage/$TARGET/coverage.profdata" \
             -ignore-filename-regex='/[.]cargo/|/rustc/|/fuzz/'
           {
