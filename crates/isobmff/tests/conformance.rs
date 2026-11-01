@@ -443,6 +443,7 @@ mod tests {
                     (
                         FileStructure::Segment {
                             first_sequence_number: 1,
+                            segment_index: false,
                         },
                         Some(fragmented_brands()),
                         fragmented(source.movie.clone()),

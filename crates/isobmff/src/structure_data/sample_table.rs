@@ -576,13 +576,38 @@ pub(crate) mod fixtures {
 
     use isobmff_core::{BoxDefinition, BoxEncode};
 
+    use crate::sample::{Sample, SampleProperties};
     use crate::structure_data::StructureDataLimits;
 
     use isobmff_boxes::{
         ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, DataEntry, DataEntryUrlBox,
-        MovieBox, SampleDescription, SampleEntry, SampleSizeBox, SampleSizeVariant, SampleSizes,
-        SampleToChunkBox, SampleToChunkEntry, TimeToSampleBox, TimeToSampleEntry, TrackBox,
+        MovieBox, SampleDescription, SampleEntry, SampleFlags, SampleSizeBox, SampleSizeVariant,
+        SampleSizes, SampleToChunkBox, SampleToChunkEntry, TimeToSampleBox, TimeToSampleEntry,
+        TrackBox,
     };
+
+    /// Returns a sample of `track_id` of sample entry 1 at `decoding_time` lasting `sample_duration`, presented `offset` after it, and a sync sample where `sync`, its media data `A`
+    pub(crate) fn sample(
+        track_id: u32,
+        decoding_time: u64,
+        sample_duration: u32,
+        offset: i64,
+        sync: bool,
+    ) -> Sample {
+        let mut sample_flags = SampleFlags::default();
+        sample_flags.sample_is_non_sync_sample = !sync;
+        Sample::new(
+            SampleProperties {
+                track_id,
+                decoding_time,
+                sample_duration,
+                sample_composition_time_offset: offset,
+                sample_flags,
+                sample_description_index: 1,
+            },
+            b"A".to_vec(),
+        )
+    }
 
     /// Returns the track `track_id` of the samples of `sizes`, each lasting `sample_delta`, laid in chunks at `chunk_offsets` by the runs `(first_chunk, samples_per_chunk)`
     ///
