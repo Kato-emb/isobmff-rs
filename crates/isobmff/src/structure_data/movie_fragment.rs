@@ -764,6 +764,39 @@ mod tests {
     }
 
     #[test]
+    fn a_fragment_whose_leniencies_would_pass_the_limit_is_refused_and_leaves_the_reader_as_it_was()
+    {
+        let mut reader = StructureDataReader::new(StructureDataLimits {
+            leniency_count: 1,
+            ..UNLIMITED
+        });
+        reader.handle_movie(fragmented_movie()).unwrap();
+        let gap = Leniency::DecodingTimeGap {
+            track_id: 1,
+            gap: 100,
+        };
+
+        assert_eq!(
+            resolve(&mut reader, &moof([traf_from(1, 130)])),
+            Ok(Vec::from([(1, 130, 1000..1008)]))
+        );
+        assert_eq!(
+            resolve(&mut reader, &moof([traf_from(1, 330)])),
+            Err(DemuxError::LeniencyCountLimitExceeded {
+                retained_leniencies: 2,
+                limit_leniencies: 1
+            })
+        );
+        assert_eq!(
+            (
+                resolve(&mut reader, &moof([traf(1, &[(1, None)])])),
+                reader.leniencies()
+            ),
+            (Ok(Vec::from([(1, 230, 1000..1008)])), &[gap][..])
+        );
+    }
+
+    #[test]
     fn a_refused_fragment_leaves_the_decoding_times_as_they_were() {
         let mut reader = StructureDataReader::new(StructureDataLimits {
             sample_count: 6,

@@ -31,6 +31,7 @@ use crate::sample::SampleLocation;
 ///     sample_count: 1_048_576,
 ///     segment_index_count: 1024,
 ///     subsegment_count: 1_048_576,
+///     leniency_count: 65_536,
 /// };
 /// assert_eq!(limits.segment_index_count, 1024);
 /// ```
@@ -46,6 +47,8 @@ pub struct StructureDataLimits {
     pub segment_index_count: u64,
     /// Number of subsegments the segment indexes the reader keeps hold up to, together
     pub subsegment_count: u64,
+    /// Number of leniencies the reader keeps up to, over the whole file
+    pub leniency_count: u64,
 }
 
 /// Reader of the structure-data of a file: the movie and its fragments, resolved to the samples they declare
@@ -66,6 +69,7 @@ pub struct StructureDataLimits {
 ///     sample_count: 1_048_576,
 ///     segment_index_count: 1024,
 ///     subsegment_count: 1_048_576,
+///     leniency_count: 65_536,
 /// });
 /// // A movie of no track declares no sample.
 /// let samples = reader.handle_movie(MovieBox::default())?;
@@ -121,6 +125,9 @@ impl StructureDataReader {
     /// * [`SampleCountLimitExceeded`](DemuxError::SampleCountLimitExceeded):
     ///   the sample size tables of every track together count more samples
     ///   than the limit, and none is resolved.
+    /// * [`LeniencyCountLimitExceeded`](DemuxError::LeniencyCountLimitExceeded):
+    ///   keeping what the movie is read past in would take the leniencies the
+    ///   reader keeps past the limit.
     /// * [`SampleTableMismatch`](DemuxError::SampleTableMismatch): the tables
     ///   of a track cannot lay out its samples: the track declares samples,
     ///   but its `stsz` or `stz2`, its `stco` or `co64`, or its `stts`
@@ -159,6 +166,7 @@ impl StructureDataReader {
                 after_sample: locations.len() > earlier_samples,
             }));
         }
+        self.check_room_for_leniencies(&leniencies)?;
         in_file_order(&mut locations);
 
         self.movie = Some(movie);
@@ -195,6 +203,9 @@ impl StructureDataReader {
     /// * [`SampleCountLimitExceeded`](DemuxError::SampleCountLimitExceeded):
     ///   the track runs together count more samples than the limit, and none
     ///   is resolved.
+    /// * [`LeniencyCountLimitExceeded`](DemuxError::LeniencyCountLimitExceeded):
+    ///   keeping what the fragment is read past in would take the leniencies
+    ///   the reader keeps past the limit.
     /// * [`UnknownTrackId`](DemuxError::UnknownTrackId),
     ///   [`MissingTrackExtends`](DemuxError::MissingTrackExtends): a track
     ///   fragment is of a track the movie, or its `mvex`, has none of.
@@ -221,6 +232,7 @@ impl StructureDataReader {
             &mut locations,
             &mut leniencies,
         )?;
+        self.check_room_for_leniencies(&leniencies)?;
         in_file_order(&mut locations);
 
         self.decoding_times = decoding_times;
@@ -320,6 +332,19 @@ impl StructureDataReader {
     #[must_use]
     pub fn leniencies(&self) -> &[Leniency] {
         &self.leniencies
+    }
+
+    /// Refuses `leniencies` where keeping them besides those kept would take the leniencies past the limit
+    fn check_room_for_leniencies(&self, leniencies: &[Leniency]) -> Result<(), DemuxError> {
+        let retained_leniencies =
+            to_u64(self.leniencies.len()).saturating_add(to_u64(leniencies.len()));
+        if retained_leniencies > self.limits.leniency_count {
+            return Err(DemuxError::LeniencyCountLimitExceeded {
+                retained_leniencies,
+                limit_leniencies: self.limits.leniency_count,
+            });
+        }
+        Ok(())
     }
 
     /// Returns room for the locations of `declared_samples` samples, or the failure of more than the limit
