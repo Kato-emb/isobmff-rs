@@ -9,7 +9,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::ops::Range;
 
-    use isobmff::boxes::{MovieBox, MovieFragmentBox};
+    use isobmff::boxes::{DataEntry, MovieBox, MovieFragmentBox};
     use isobmff::structure_data::movie_fragment_random_access_start;
     use isobmff::{BoxDefinition, BoxType, Boxes, DemuxError, DemuxEvent, Demuxer, SampleLocation};
     use isobmff_test_support::{
@@ -110,11 +110,20 @@ mod tests {
             .collect()
     }
 
+    /// Track, data reference entry, and the location the entry names, of samples whose media data is in another file
+    type ElsewhereEntry = (u32, u16, &'static str);
+
     /// Files whose media data is partly in other files, with each track and data reference entry that names another file
-    const EXTERNAL_DATA: [(&str, &[(u32, u16)]); 3] = [
-        ("02_dref_edts_img.mp4", &[(101, 1), (201, 1)]),
-        ("04_bifs_video.mp4", &[(3, 1)]),
-        ("a6_tone_multifile.mp4", &[(1, 2)]),
+    const EXTERNAL_DATA: [(&str, &[ElsewhereEntry]); 3] = [
+        (
+            "02_dref_edts_img.mp4",
+            &[
+                (101, 1, "media/count_english.aac"),
+                (201, 1, "media/logo.jpg"),
+            ],
+        ),
+        ("04_bifs_video.mp4", &[(3, 1, "media/count_video.cmp")]),
+        ("a6_tone_multifile.mp4", &[(1, 2, "./myData.dat")]),
     ];
 
     /// Files `ffprobe` 9.0.1 does not read: it fails with "error reading header"
@@ -141,18 +150,27 @@ mod tests {
             let external: BTreeSet<_> = resolved
                 .locations
                 .iter()
-                .filter(|location| !resolved.demuxer.is_in_same_file(location))
-                .map(|location| {
-                    (
+                .filter_map(|location| {
+                    let entry = resolved.demuxer.data_reference(location);
+                    let named = if let Some(DataEntry::Url(url)) = entry {
+                        url.location.as_ref()?.as_str()?.to_owned()
+                    } else {
+                        format!("{entry:?}")
+                    };
+                    Some((
                         location.properties().track_id,
                         location.data_reference_index(),
-                    )
+                        named,
+                    ))
                 })
                 .collect();
             let expected_external: BTreeSet<_> = EXTERNAL_DATA
                 .iter()
                 .filter(|(external, _)| *external == name)
-                .flat_map(|(_, entries)| entries.iter().copied())
+                .flat_map(|(_, entries)| entries.iter())
+                .map(|&(track_id, data_reference_index, named)| {
+                    (track_id, data_reference_index, named.to_owned())
+                })
                 .collect();
             assert_eq!(
                 external, expected_external,
@@ -186,7 +204,7 @@ mod tests {
             let movie = resolved.demuxer.movie().expect(&name);
             // Why not compare the tracks in other files: ffprobe lists only some of their packets, which it does not read
             let in_file =
-                |track_id: &u32| external.iter().all(|(external, _)| external != track_id);
+                |track_id: &u32| external.iter().all(|(external, ..)| external != track_id);
             let mut samples = resolved
                 .locations
                 .iter()

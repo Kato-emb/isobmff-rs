@@ -101,10 +101,7 @@ pub(super) fn data_reference_index(
         _ => return Err(unknown_description),
     };
 
-    match nth_from_one(
-        &trak.mdia.minf.dinf.dref.data_entries,
-        u32::from(data_reference_index),
-    ) {
+    match data_entry(trak, data_reference_index) {
         Some(entry) if names_the_same_file(entry) => Ok(data_reference_index),
         Some(DataEntry::Imda(_) | DataEntry::SeqNumImda(_)) => {
             Err(DataReferenceRefusal::UnsupportedDataReference {
@@ -167,17 +164,16 @@ pub(super) fn located_data_reference_index(
     }
 }
 
-/// Returns whether entry `data_reference_index` of the `dref` of `trak` says the media data is in the file itself, §8.7.2
-pub(super) fn is_in_same_file(trak: &TrackBox, data_reference_index: u16) -> bool {
+/// Returns entry `data_reference_index` of the `dref` of `trak`, which says where media data is, §8.7.2
+pub(super) fn data_entry(trak: &TrackBox, data_reference_index: u16) -> Option<&DataEntry> {
     nth_from_one(
         &trak.mdia.minf.dinf.dref.data_entries,
         u32::from(data_reference_index),
     )
-    .is_some_and(names_the_same_file)
 }
 
 /// Returns whether `entry` says the media data is in the same file as the data reference: a `url ` without a location, §8.7.2
-fn names_the_same_file(entry: &DataEntry) -> bool {
+pub(crate) fn names_the_same_file(entry: &DataEntry) -> bool {
     matches!(entry, DataEntry::Url(url) if url.location.is_none())
 }
 

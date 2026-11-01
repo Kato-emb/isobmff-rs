@@ -3,7 +3,8 @@
 use alloc::boxed::Box;
 
 use isobmff_boxes::{
-    FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentTypeBox,
+    DataEntry, FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox,
+    SegmentTypeBox,
 };
 use isobmff_core::BoxHeader;
 
@@ -15,7 +16,9 @@ use crate::leniency::Leniency;
 use crate::limits::DemuxLimits;
 use crate::media_data::MediaDataReader;
 use crate::sample::{Sample, SampleLocation};
-use crate::structure_data::{SampleLocations, SegmentIndex, StructureDataReader};
+use crate::structure_data::{
+    SampleLocations, SegmentIndex, StructureDataReader, names_the_same_file,
+};
 
 /// Reader of a movie file or a segment: the boxes at file level, read into their values, and the samples they declare
 ///
@@ -272,14 +275,15 @@ impl Demuxer {
         self.structure_data.movie_fragment_random_access()
     }
 
-    /// Returns whether the media data of the sample at `location` is in the file itself, as [`StructureDataReader::is_in_same_file`] tells
+    /// Returns the entry of the data reference that says where the media data of the sample at `location` is, as [`StructureDataReader::data_reference`] does
     ///
-    /// The demuxer gathers only these samples. The events carry the locations
-    /// of the others too, in file offsets of the file their data reference
-    /// entry names, for the caller to read there.
+    /// The demuxer gathers the samples whose entry says their media data is
+    /// in the file itself. The events carry the locations of the others too,
+    /// in file offsets of the file their entry names, for the caller to read
+    /// there.
     #[must_use]
-    pub fn is_in_same_file(&self, location: &SampleLocation) -> bool {
-        self.structure_data.is_in_same_file(location)
+    pub fn data_reference(&self, location: &SampleLocation) -> Option<&DataEntry> {
+        self.structure_data.data_reference(location)
     }
 
     /// Returns what the demuxer has read past in the file rather than refuse it
@@ -372,11 +376,12 @@ impl Demuxer {
     /// Hands the locations of `samples` whose media data is in the file itself to the media data, and returns them all
     fn gather(&mut self, samples: SampleLocations) -> Result<SampleLocations, DemuxError> {
         let structure_data = &self.structure_data;
-        self.media_data.handle_sample_locations(
-            samples
-                .clone()
-                .filter(|location| structure_data.is_in_same_file(location)),
-        )?;
+        self.media_data
+            .handle_sample_locations(samples.clone().filter(|location| {
+                structure_data
+                    .data_reference(location)
+                    .is_some_and(names_the_same_file)
+            }))?;
         Ok(samples)
     }
 }

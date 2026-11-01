@@ -38,48 +38,62 @@
 //!
 //! The media data of a track may be in another file, which an entry of its
 //! data reference names (§8.7.2). The demuxer locates those samples in that
-//! file, where [`Demuxer::is_in_same_file`] says they are not, and does not
-//! gather them. The caller reads that file, and gathers them with a
-//! [`MediaDataReader`](media_data::MediaDataReader) of its own:
+//! file and does not gather them. [`Demuxer::data_reference`] returns the
+//! entry a location is in, from which the caller reads that file and gathers
+//! them with a [`MediaDataReader`](media_data::MediaDataReader) of its own:
 //!
 //! ```
+//! use std::collections::BTreeMap;
+//!
 //! use isobmff::boxes::DataEntry;
 //! use isobmff::media_data::{MediaDataLimits, MediaDataReader};
-//! use isobmff::{DemuxEvent, Demuxer};
+//! use isobmff::{DemuxEvent, Demuxer, SampleLocation};
 //!
 //! let file: &[u8] = include_bytes!("../tests/data/external.mp4");
-//! let (mut demuxer, mut external) = (Demuxer::new(), Vec::new());
+//! let mut demuxer = Demuxer::new();
+//! let mut elsewhere = BTreeMap::<(u32, u16), Vec<SampleLocation>>::new();
 //! while let Some(wanted) = demuxer.wanted_input() {
 //!     let input = file.get(usize::try_from(wanted.offset())?..).unwrap_or_default();
 //!     let event = match input {
 //!         [] => demuxer.finish(),
 //!         input => demuxer.handle_input(wanted.offset(), input),
 //!     }?;
-//!     // The samples of the file itself come out of the demuxer, the others are left to the caller
+//!     // The demuxer gathers the samples in the file itself; keep the others by track and data reference entry
 //!     if let Some(DemuxEvent::Movie { samples, .. }) = event {
-//!         external.extend(samples.filter(|location| !demuxer.is_in_same_file(location)));
+//!         for location in samples {
+//!             match demuxer.data_reference(&location) {
+//!                 Some(DataEntry::Url(url)) if url.location.is_none() => {}
+//!                 _ => elsewhere
+//!                     .entry((location.properties().track_id, location.data_reference_index()))
+//!                     .or_default()
+//!                     .push(location),
+//!             }
+//!         }
 //!     }
 //!     assert_eq!(demuxer.poll_sample(), None);
 //! }
 //!
-//! // The data reference entry of their sample entry names the file they are in
-//! let trak = demuxer.movie().and_then(|movie| movie.trak.first()).ok_or("no track")?;
-//! let Some(DataEntry::Url(url)) = trak.mdia.minf.dinf.dref.data_entries.first() else {
-//!     return Err("no url".into());
-//! };
-//! assert_eq!(url.location.as_ref().and_then(|location| location.as_str()), Some("external.dat"));
-//!
-//! // Read that file, and gather the samples out of it
-//! let other: &[u8] = include_bytes!("../tests/data/external.dat");
-//! let mut media_data = MediaDataReader::new(MediaDataLimits {
-//!     held_location_count: 1024,
-//!     sample_bytes: 1024 * 1024,
-//!     held_bytes: 16 * 1024 * 1024,
-//! });
-//! media_data.handle_sample_locations(external)?;
-//! media_data.handle_input(0, other)?;
-//! media_data.finish()?;
-//! let samples: Vec<_> = core::iter::from_fn(|| media_data.poll_sample()).collect();
+//! let mut samples = Vec::new();
+//! for locations in elsewhere.into_values() {
+//!     // The entry the locations are in names the file their byte ranges are in
+//!     let entry = locations.first().and_then(|location| demuxer.data_reference(location));
+//!     let Some(DataEntry::Url(url)) = entry else { return Err("not a url".into()) };
+//!     let name = url.location.as_ref().and_then(|location| location.as_str());
+//!     let other: &[u8] = match name {
+//!         Some("external.dat") => include_bytes!("../tests/data/external.dat"),
+//!         _ => return Err("unknown file".into()),
+//!     };
+//!     // Read that file, and gather the samples out of it
+//!     let mut media_data = MediaDataReader::new(MediaDataLimits {
+//!         held_location_count: 1024,
+//!         sample_bytes: 1024 * 1024,
+//!         held_bytes: 16 * 1024 * 1024,
+//!     });
+//!     media_data.handle_sample_locations(locations)?;
+//!     media_data.handle_input(0, other)?;
+//!     media_data.finish()?;
+//!     samples.extend(core::iter::from_fn(|| media_data.poll_sample()));
+//! }
 //! assert_eq!(samples.iter().map(|sample| sample.data()).collect::<Vec<_>>(), [b"AB", b"CD"]);
 //! # Ok::<(), Box<dyn core::error::Error>>(())
 //! ```

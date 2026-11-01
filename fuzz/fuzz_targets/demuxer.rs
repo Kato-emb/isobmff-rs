@@ -24,6 +24,7 @@
 
 #![no_main]
 
+use isobmff::boxes::DataEntry;
 use isobmff::{
     BoxType, ByteRange, DemuxError, DemuxEvent, DemuxLimits, Demuxer, Sample, SampleLocation,
 };
@@ -190,7 +191,12 @@ fn read(bytes: &[u8], piece_lens: &[usize]) -> Read {
                     in_same_file.extend(
                         locations
                             .iter()
-                            .filter(|location| demuxer.is_in_same_file(location))
+                            .filter(|location| {
+                                matches!(
+                                    demuxer.data_reference(location),
+                                    Some(DataEntry::Url(url)) if url.location.is_none()
+                                )
+                            })
                             .cloned(),
                     );
                     bound = locations

@@ -4,7 +4,9 @@ use alloc::vec::{self, Vec};
 use core::iter::FusedIterator;
 use core::ops::Range;
 
-use isobmff_boxes::{MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentIndexBox};
+use isobmff_boxes::{
+    DataEntry, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentIndexBox,
+};
 use isobmff_core::BoxDefinition;
 
 use super::movie_fragment::ReachedTime;
@@ -326,24 +328,23 @@ impl StructureDataReader {
         self.movie_fragment_random_access.as_ref()
     }
 
-    /// Returns whether the media data of the sample at `location` is in the file itself, as the data reference entry its sample entry names says, §8.7.2
+    /// Returns the entry of the data reference that says where the media data of the sample at `location` is, §8.7.2
     ///
-    /// The samples of a track whose data reference entry names another file
-    /// (a `url ` with a location, or a `urn `) are located like the others,
-    /// their byte range in file offsets of that file. The caller reads them
-    /// there, taking the location of the entry from the `dref` of the
-    /// [`movie`](Self::movie). A location of a track the movie does not have
-    /// is not in the file itself.
+    /// It is the entry of the `dref` of the track of the location that its
+    /// sample entry names, as [`data_reference_index`](SampleLocation::data_reference_index)
+    /// numbers it. A `url ` without a location says the media data is in the
+    /// file itself. Any other entry names where else it is: another file,
+    /// which a `url ` with a location or a `urn ` names and whose file offsets
+    /// the byte range of the location is in. `None` where the movie has no
+    /// track of the location, or the track no such entry.
     #[must_use]
-    pub fn is_in_same_file(&self, location: &SampleLocation) -> bool {
+    pub fn data_reference(&self, location: &SampleLocation) -> Option<&DataEntry> {
         let track_id = location.properties().track_id;
         self.movie
             .iter()
             .flat_map(|movie| &movie.trak)
             .find(|trak| trak.tkhd.track_id == track_id)
-            .is_some_and(|trak| {
-                sample_description::is_in_same_file(trak, location.data_reference_index())
-            })
+            .and_then(|trak| sample_description::data_entry(trak, location.data_reference_index()))
     }
 
     /// Returns what the reader has read past in the structure-data, in the order it read it
@@ -861,9 +862,11 @@ mod tests {
     }
 
     #[test]
-    fn media_data_in_another_file_is_located_in_that_file_and_said_not_to_be_in_the_file_itself() {
+    fn media_data_in_another_file_is_located_in_that_file_and_its_data_reference_names_the_file() {
         let external = in_another_file(track(3, 10, &[4], &[(1, 1)], &[100]));
         let internal = track(1, 10, &[2], &[(1, 1)], &[0]);
+        let entries = [&internal, &external]
+            .map(|trak| trak.mdia.minf.dinf.dref.data_entries.first().cloned());
         let mut reader = StructureDataReader::new(UNLIMITED);
 
         let locations: Vec<_> = reader
@@ -877,10 +880,13 @@ mod tests {
                 .map(|location| (
                     location.properties().track_id,
                     location.byte_range(),
-                    reader.is_in_same_file(location)
+                    reader.data_reference(location).cloned()
                 ))
                 .collect::<Vec<_>>(),
-            [(1, 0..2, true), (3, 100..104, false)]
+            [
+                (1, 0..2, entries[0].clone()),
+                (3, 100..104, entries[1].clone())
+            ]
         );
     }
 
