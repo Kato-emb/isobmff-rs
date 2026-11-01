@@ -194,7 +194,7 @@ fn read(bytes: &[u8], piece_lens: &[usize]) -> Read {
                                 demuxer
                                     .data_reference(location.data_reference())
                                     .is_some_and(|data_reference| {
-                                        data_reference.entry().names_this_file()
+                                        data_reference.entry().is_in_same_file()
                                     })
                             })
                             .cloned(),

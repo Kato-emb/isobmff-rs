@@ -73,7 +73,7 @@
 //! for (key, locations) in by_key {
 //!     // The demuxer gathers the samples in the file itself
 //!     let entry = demuxer.data_reference(key).ok_or("no entry")?.entry();
-//!     if entry.names_this_file() {
+//!     if entry.is_in_same_file() {
 //!         continue;
 //!     }
 //!     // The entry names the file the byte ranges of the locations are in

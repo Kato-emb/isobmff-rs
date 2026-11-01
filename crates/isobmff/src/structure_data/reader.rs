@@ -337,7 +337,7 @@ impl StructureDataReader {
     ///
     /// The location of each sample carries the key of the entry its sample
     /// entry names. An entry that
-    /// [`names_this_file`](isobmff_boxes::DataEntry::names_this_file) says
+    /// [`is_in_same_file`](isobmff_boxes::DataEntry::is_in_same_file) says
     /// the media data is in the file itself. Any other entry names where else
     /// it is: another file, which a `url ` with a location or a `urn ` names
     /// and whose file offsets the byte ranges of the locations are in.

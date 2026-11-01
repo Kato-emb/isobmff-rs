@@ -211,13 +211,13 @@ pub enum DataEntry {
 }
 
 impl DataEntry {
-    /// Returns whether the entry places the media data in the file that holds the data reference: a [`DataEntryUrlBox`] without a location, ISO/IEC 14496-12 §8.7.2
+    /// Returns whether the entry says the media data is in the same file as the box containing the data reference: a [`DataEntryUrlBox`] without a location, ISO/IEC 14496-12 §8.7.2
     ///
     /// Every other entry places it elsewhere: in the file a URL or a URN
     /// names, in an `IdentifiedMediaDataBox`, or where an entry of a type
     /// this crate does not read says.
     #[must_use]
-    pub const fn names_this_file(&self) -> bool {
+    pub const fn is_in_same_file(&self) -> bool {
         matches!(self, Self::Url(DataEntryUrlBox { location: None }))
     }
 }
@@ -343,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_url_without_a_location_names_the_file_that_holds_the_data_reference() {
+    fn only_a_url_without_a_location_places_the_media_data_in_the_same_file() {
         assert_eq!(
             [
                 DataEntry::Url(url(None)),
@@ -354,7 +354,7 @@ mod tests {
                 }),
                 DataEntry::SeqNumImda(DataEntrySeqNumImdaBox {}),
             ]
-            .map(|entry| entry.names_this_file()),
+            .map(|entry| entry.is_in_same_file()),
             [true, false, false, false, false]
         );
     }

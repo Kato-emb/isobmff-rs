@@ -276,7 +276,7 @@ impl Demuxer {
     /// Returns the entries of the data references of the tracks of the movie, in the order of their keys, as [`StructureDataReader::data_references`] does
     ///
     /// The demuxer gathers the samples whose entry
-    /// [`names_this_file`](crate::boxes::DataEntry::names_this_file). The
+    /// [`is_in_same_file`](crate::boxes::DataEntry::is_in_same_file). The
     /// events carry the locations of the others too, in file offsets of the
     /// file their entry names, for the caller to read there.
     #[must_use]
@@ -384,7 +384,7 @@ impl Demuxer {
             .handle_sample_locations(samples.clone().filter(|location| {
                 structure_data
                     .data_reference(location.data_reference())
-                    .is_some_and(|data_reference| data_reference.entry().names_this_file())
+                    .is_some_and(|data_reference| data_reference.entry().is_in_same_file())
             }))?;
         Ok(samples)
     }

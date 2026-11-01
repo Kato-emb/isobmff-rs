@@ -159,7 +159,7 @@ mod tests {
                 }
             };
             let elsewhere = |data_reference: &DataReference| {
-                (!data_reference.entry().names_this_file()).then(|| {
+                (!data_reference.entry().is_in_same_file()).then(|| {
                     (
                         data_reference.track_id(),
                         data_reference.index(),

@@ -34,7 +34,7 @@ use crate::sample::DataReferenceKey;
 ///
 /// let [data_reference] = reader.data_references() else { unreachable!() };
 /// assert_eq!((data_reference.track_id(), data_reference.index()), (1, 1));
-/// assert!(data_reference.entry().names_this_file());
+/// assert!(data_reference.entry().is_in_same_file());
 /// assert_eq!(reader.data_reference(data_reference.key()), Some(data_reference));
 /// # Ok::<(), isobmff::DemuxError>(())
 /// ```
@@ -193,7 +193,7 @@ pub(super) fn data_reference_index(
 
     let data_entries = &trak.mdia.minf.dinf.dref.data_entries;
     match nth_from_one(data_entries, u32::from(data_reference_index)) {
-        Some(entry) if entry.names_this_file() => Ok(data_reference_index),
+        Some(entry) if entry.is_in_same_file() => Ok(data_reference_index),
         Some(DataEntry::Imda(_) | DataEntry::SeqNumImda(_)) => {
             Err(DataReferenceRefusal::UnsupportedDataReference {
                 track_id,
