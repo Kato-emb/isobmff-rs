@@ -14,17 +14,20 @@
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::{env, fs, iter, process};
 
     use isobmff::boxes::{
         ChunkOffsetBox, ChunkOffsetVariant, DataEntry, FileTypeBox, MovieBox, MovieExtendsBox,
-        SampleSizeBox, SampleSizeVariant, SampleToChunkBox, TimeToSampleBox, TrackExtendsBox,
+        MovieFragmentBox, MovieFragmentRandomAccessBox, SampleSizeBox, SampleSizeVariant,
+        SampleToChunkBox, TimeToSampleBox, TrackExtendsBox,
     };
     use isobmff::framing::{BoxEvent, BoxReader, BoxWriter};
     use isobmff::media_data::MediaDataReader;
+    use isobmff::structure_data::SegmentIndex;
     use isobmff::{
-        BoxHeader, Boxes, ByteRange, DemuxEvent, DemuxLimits, Demuxer, FileStructure, FourCc,
-        Muxer, Sample, SampleLocation,
+        BoxDefinition, BoxHeader, Boxes, ByteRange, DemuxEvent, DemuxLimits, Demuxer,
+        FileStructure, FourCc, MuxError, Muxer, Sample, SampleLocation,
     };
     use isobmff_test_support::serde_json::Value;
     use isobmff_test_support::{ConformanceFile, conformance_files, ffprobe_packets};
@@ -418,12 +421,14 @@ mod tests {
         }
     }
 
-    /// What a demuxer read of a file: its brands, its movie and its samples, in the order they came out
+    /// What a demuxer read of a file: its brands, its movie and its samples, in the order they came out, and its indexes
     #[derive(PartialEq, Debug)]
     struct Demuxed {
         file_type: Option<FileTypeBox>,
         movie: MovieBox,
         samples: Vec<Sample>,
+        segment_indexes: Vec<SegmentIndex>,
+        movie_fragment_random_access: Option<MovieFragmentRandomAccessBox>,
     }
 
     /// Reads `file` with a [`Demuxer`] from wherever it wants
@@ -443,6 +448,8 @@ mod tests {
             file_type: demuxer.file_type().cloned(),
             movie: demuxer.movie().cloned().unwrap(),
             samples,
+            segment_indexes: demuxer.segment_indexes().to_vec(),
+            movie_fragment_random_access: demuxer.movie_fragment_random_access().cloned(),
         }
     }
 
@@ -456,16 +463,44 @@ mod tests {
         movie: MovieBox,
         samples: &[Sample],
     ) -> Vec<u8> {
+        mux_runs(
+            file_structure,
+            file_type,
+            movie,
+            samples.chunks(SAMPLES_PER_CALL),
+        )
+    }
+
+    /// Returns the boxes a muxer laid out as `file_structure` writes of `file_type`, `movie` and each of `runs` in one call, each whole
+    fn mux_runs<'samples>(
+        file_structure: FileStructure,
+        file_type: Option<FileTypeBox>,
+        movie: MovieBox,
+        runs: impl IntoIterator<Item = &'samples [Sample]>,
+    ) -> Vec<u8> {
         let mut muxer = Muxer::new(file_structure);
         if let Some(file_type) = file_type {
             muxer.handle_file_type(file_type).unwrap();
         }
         muxer.handle_movie(movie).unwrap();
-        for samples in samples.chunks(SAMPLES_PER_CALL) {
+        for samples in runs {
             muxer.handle_samples(samples.iter().cloned()).unwrap();
         }
         muxer.finish().unwrap();
         iter::from_fn(|| muxer.poll_output()).flatten().collect()
+    }
+
+    /// Returns the initialization segment of `movie`, extended for movie fragments: the file of its brands and its movie alone
+    fn initialization(movie: MovieBox) -> Vec<u8> {
+        mux(
+            FileStructure::Fragmented {
+                first_sequence_number: 1,
+                random_access: false,
+            },
+            Some(fragmented_brands()),
+            fragmented(movie),
+            &[],
+        )
     }
 
     /// Returns `movie` with sample tables that declare no sample, as a movie whose samples are muxed takes
@@ -520,7 +555,10 @@ mod tests {
 
     /// Returns the track, size and decoding timestamp of each packet `ffprobe` reads of `file`, sorted
     fn ffprobe_read(name: &str, file: &[u8]) -> Vec<(u32, u64, Option<i64>)> {
-        let path = env::temp_dir().join(format!("isobmff-mux-{}-{name}", process::id()));
+        // Why not the process and the name alone: tests in one process probe files of the same name at once
+        static PROBES: AtomicUsize = AtomicUsize::new(0);
+        let probe = PROBES.fetch_add(1, Ordering::Relaxed);
+        let path = env::temp_dir().join(format!("isobmff-mux-{}-{probe}-{name}", process::id()));
         fs::write(&path, file).unwrap();
         let mut packets: Vec<_> = ffprobe_packets(&path)
             .into_iter()
@@ -606,5 +644,233 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Returns the next event `demuxer` reads of `file`, taking the samples it gathers, or `None` at its end
+    fn next_event(demuxer: &mut Demuxer, file: &[u8]) -> Option<DemuxEvent> {
+        while let Some(wanted) = demuxer.wanted_input() {
+            let event = match piece(file, wanted, usize::MAX) {
+                [] => demuxer.finish(),
+                input => demuxer.handle_input(wanted.offset(), input),
+            };
+            while demuxer.poll_sample().is_some() {}
+            if let Some(event) = event.unwrap() {
+                return Some(event);
+            }
+        }
+        None
+    }
+
+    /// Returns the conformance files the muxer tests write again, by name
+    fn muxed_files() -> Vec<ConformanceFile> {
+        let files: Vec<_> = conformance_files()
+            .into_iter()
+            .filter(|file| {
+                [
+                    "01_simple.mp4",
+                    "a4-tone-fragmented.mp4",
+                    "a7-tone-oddities.mp4",
+                ]
+                .contains(&file.name.as_str())
+            })
+            .collect();
+        assert_eq!(files.len(), 3);
+        files
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names, and runs ffprobe on them"]
+    fn a_demuxer_resumes_at_a_movie_fragment_from_each_entry_of_the_mfra_a_muxer_writes() {
+        for ConformanceFile { name, bytes, .. } in &muxed_files() {
+            let source = demux(bytes);
+            let file = mux(
+                FileStructure::Fragmented {
+                    first_sequence_number: 1,
+                    random_access: true,
+                },
+                Some(fragmented_brands()),
+                fragmented(source.movie.clone()),
+                &source.samples,
+            );
+            let read = demux(&file);
+            let entries: Vec<u64> = read
+                .movie_fragment_random_access
+                .iter()
+                .flat_map(|mfra| &mfra.tfra)
+                .flat_map(|tfra| &tfra.entries)
+                .map(|entry| entry.moof_offset)
+                .collect();
+
+            let mut demuxer = demuxer();
+            while !matches!(
+                next_event(&mut demuxer, &file),
+                Some(DemuxEvent::Movie { .. })
+            ) {}
+            let resumed: Vec<Option<u64>> = entries
+                .iter()
+                .map(|&moof_offset| {
+                    demuxer.resume_at(moof_offset).unwrap();
+                    match next_event(&mut demuxer, &file) {
+                        Some(DemuxEvent::MovieFragment { byte_range, .. }) => {
+                            Some(byte_range.offset())
+                        }
+                        _ => None,
+                    }
+                })
+                .collect();
+
+            assert!(!entries.is_empty(), "{name}: the mfra lists no sync sample");
+            assert_eq!(
+                resumed,
+                entries.iter().copied().map(Some).collect::<Vec<_>>(),
+                "{name}: resuming at an entry of the mfra reads no movie fragment there"
+            );
+            assert!(
+                read.samples == source.samples,
+                "{name}: the demuxer reads other samples"
+            );
+            assert_eq!(
+                ffprobe_read(&format!("random-access-{name}"), &file),
+                ffprobe_read(&format!("source-{name}"), bytes),
+                "{name}: ffprobe reads other packets"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names, and runs ffprobe on them"]
+    fn the_subsegments_of_the_sidx_a_muxer_writes_are_each_movie_fragment_and_its_media_data() {
+        for ConformanceFile { name, bytes, .. } in &muxed_files() {
+            let source = demux(bytes);
+            let segment = mux(
+                FileStructure::Segment {
+                    first_sequence_number: 1,
+                    segment_index: true,
+                },
+                Some(fragmented_brands()),
+                fragmented(source.movie.clone()),
+                &source.samples,
+            );
+            let whole = [initialization(source.movie.clone()), segment].concat();
+            let read = demux(&whole);
+            let subsegments: Vec<_> = read
+                .segment_indexes
+                .iter()
+                .flat_map(SegmentIndex::subsegments)
+                .map(|subsegment| subsegment.byte_range())
+                .collect();
+            let movie_fragments: Vec<u64> = framed_whole(&whole)
+                .into_iter()
+                .filter(|(header, _)| header.box_type() == MovieFragmentBox::BOX_TYPE)
+                .map(|(_, byte_range)| byte_range.offset())
+                .collect();
+            let ends = movie_fragments
+                .iter()
+                .skip(1)
+                .copied()
+                .chain([u64::try_from(whole.len()).unwrap()]);
+
+            assert_eq!(
+                subsegments,
+                movie_fragments
+                    .iter()
+                    .zip(ends)
+                    .map(|(&start, end)| start..end)
+                    .collect::<Vec<_>>(),
+                "{name}: the subsegments are not the movie fragments"
+            );
+            assert!(
+                read.samples == source.samples,
+                "{name}: the demuxer reads other samples"
+            );
+            assert_eq!(
+                ffprobe_read(&format!("segment-index-{name}"), &whole),
+                ffprobe_read(&format!("source-{name}"), bytes),
+                "{name}: ffprobe reads other packets"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn a_segment_whose_edit_list_moves_its_presentation_times_is_not_indexed() {
+        let file = conformance_files()
+            .into_iter()
+            .find(|file| file.name == "21_segment.mp4")
+            .unwrap();
+        let movie = fragmented(demux(&file.bytes).movie);
+
+        let refused = Muxer::new(FileStructure::Segment {
+            first_sequence_number: 1,
+            segment_index: true,
+        })
+        .handle_movie(movie);
+
+        assert!(
+            matches!(
+                refused,
+                Err(MuxError::EditListNotApplied { track_id: 1, .. })
+            ),
+            "{refused:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn the_subsegments_of_a_segment_indexed_again_one_per_movie_fragment_last_as_its_own_sidx_says()
+    {
+        let file = conformance_files()
+            .into_iter()
+            .find(|file| file.name == "FX-VY-9436R.3_qhd-variant.mp4")
+            .unwrap();
+        let source = demux(&file.bytes);
+        let mut demuxer = demuxer();
+        let mut runs: Vec<Vec<Sample>> = Vec::new();
+        while let Some(wanted) = demuxer.wanted_input() {
+            let event = match piece(&file.bytes, wanted, usize::MAX) {
+                [] => demuxer.finish(),
+                input => demuxer.handle_input(wanted.offset(), input),
+            };
+            if let Some(DemuxEvent::MovieFragment { .. }) = event.unwrap() {
+                runs.push(Vec::new());
+            }
+            if let Some(run) = runs.last_mut() {
+                run.extend(iter::from_fn(|| demuxer.poll_sample()));
+            }
+        }
+
+        let segment = mux_runs(
+            FileStructure::Segment {
+                first_sequence_number: 1,
+                segment_index: true,
+            },
+            Some(fragmented_brands()),
+            fragmented(source.movie.clone()),
+            runs.iter().map(Vec::as_slice),
+        );
+        let read = demux(&[initialization(source.movie.clone()), segment].concat());
+
+        let subsegment_durations = |demuxed: &Demuxed| -> Vec<(u32, u32, Vec<u64>)> {
+            demuxed
+                .segment_indexes
+                .iter()
+                .map(|index| {
+                    let durations = index
+                        .subsegments()
+                        .iter()
+                        .map(|subsegment| {
+                            let time = subsegment.presentation_time();
+                            time.end.checked_sub(time.start).unwrap()
+                        })
+                        .collect();
+                    (index.reference_id(), index.timescale(), durations)
+                })
+                .collect()
+        };
+        assert_eq!(subsegment_durations(&read), subsegment_durations(&source));
+        assert!(
+            read.samples == source.samples,
+            "the demuxer reads other samples"
+        );
     }
 }
