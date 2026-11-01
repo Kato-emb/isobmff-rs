@@ -6,15 +6,15 @@ use core::iter;
 use core::num::NonZeroU32;
 
 use isobmff_boxes::{
-    ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, CompactSampleToGroupBox,
-    CompositionOffsetBox, CompositionOffsetEntry, DegradationPriorityBox, MovieBox, PaddingBitsBox,
-    SampleAuxiliaryInformationOffsetsBox, SampleAuxiliaryInformationSizesBox,
-    SampleDependencyTypeBox, SampleFlags, SampleInfoSizes, SampleSizeBox, SampleSizeVariant,
-    SampleSizes, SampleTableBox, SampleToChunkBox, SampleToChunkEntry, SampleToGroupBox,
-    ShadowSyncSampleBox, SubSampleInformationBox, SubSampleReferenceTableBox, SyncSampleBox,
-    TimeToSampleBox, TimeToSampleEntry, TrackBox,
+    ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, CompactSampleSizeBox,
+    CompactSampleToGroupBox, CompositionOffsetBox, CompositionOffsetEntry, DegradationPriorityBox,
+    MovieBox, PaddingBitsBox, SampleAuxiliaryInformationOffsetsBox,
+    SampleAuxiliaryInformationSizesBox, SampleDependencyTypeBox, SampleFlags, SampleInfoSizes,
+    SampleSizeBox, SampleSizeVariant, SampleSizes, SampleTableBox, SampleToChunkBox,
+    SampleToChunkEntry, SampleToGroupBox, ShadowSyncSampleBox, SubSampleInformationBox,
+    SubSampleReferenceTableBox, SyncSampleBox, TimeToSampleBox, TimeToSampleEntry, TrackBox,
 };
-use isobmff_core::BoxDefinition;
+use isobmff_core::{BoxDefinition, BoxType};
 
 use self::sample_flags::SampleFlagsTables;
 use super::sample_description::data_reference_index;
@@ -60,9 +60,9 @@ pub(super) fn sample_count(trak: &TrackBox) -> u64 {
 ///
 /// * [`SampleTableMismatch`](DemuxError::SampleTableMismatch): the track
 ///   declares samples, in its `stsz` or `stz2` or in the chunks of its `stco`
-///   or `co64`, but one of those, the `stsc` or the `stts` states none; or
-///   the `stsc` lays its runs over chunks the `stco` or the `co64` does not
-///   have.
+///   or `co64`, but one of those or the `stts` states none, or the `stsc`
+///   lays no sample in a chunk; or the `stsc` lays its runs over chunks the
+///   `stco` or the `co64` does not have.
 /// * The failures of the sample entry and the data reference entry each run
 ///   of chunks names.
 /// * [`DataOffsetOutOfRange`](DemuxError::DataOffsetOutOfRange),
@@ -86,10 +86,13 @@ pub(super) fn resolve_track(
     let has_chunks = chunk_offsets(stbl).next().is_some();
     if stated_sizes > 0 || has_chunks {
         let none_stated = [
-            (stated_sizes == 0, SampleSizeBox::BOX_TYPE),
+            (stated_sizes == 0, sample_size_box_type(stbl)),
             (!has_chunks, ChunkOffsetBox::BOX_TYPE),
             (
-                stbl.stsc.iter().all(|stsc| stsc.entries.is_empty()),
+                stbl.stsc
+                    .iter()
+                    .flat_map(|stsc| &stsc.entries)
+                    .all(|run| run.samples_per_chunk == 0),
                 SampleToChunkBox::BOX_TYPE,
             ),
             (stated_durations == 0, TimeToSampleBox::BOX_TYPE),
@@ -169,7 +172,7 @@ pub(super) fn resolve_track(
     }
 
     let stated = [
-        (SampleSizeBox::BOX_TYPE, Some(stated_sizes)),
+        (sample_size_box_type(stbl), Some(stated_sizes)),
         (SampleToChunkBox::BOX_TYPE, Some(laid_out)),
         (TimeToSampleBox::BOX_TYPE, Some(stated_durations)),
         (
@@ -228,6 +231,14 @@ fn sample_sizes(stbl: &SampleTableBox) -> impl Iterator<Item = u32> {
     let (constant_size, constant_count, table) = size_table(stbl);
 
     expand(iter::once((constant_count, constant_size))).chain(table.iter().copied())
+}
+
+/// Returns the type of the box of the sample size table of `stbl`: the `stz2` where it has one, else the `stsz`
+fn sample_size_box_type(stbl: &SampleTableBox) -> BoxType {
+    match &stbl.sample_size {
+        Some(SampleSizeVariant::CompactSampleSize(_)) => CompactSampleSizeBox::BOX_TYPE,
+        Some(_) | None => SampleSizeBox::BOX_TYPE,
+    }
 }
 
 /// Returns the sizes the `stsz` or the `stz2` states: a size and the number of samples of it, or a table of a size per sample

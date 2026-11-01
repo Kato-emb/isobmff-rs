@@ -122,9 +122,9 @@ impl StructureDataReader {
     ///   than the limit, and none is resolved.
     /// * [`SampleTableMismatch`](DemuxError::SampleTableMismatch): the tables
     ///   of a track cannot lay out its samples: the track declares samples,
-    ///   but its `stsz` or `stz2`, its `stco` or `co64`, its `stsc` or its
-    ///   `stts` states none; or its `stsc` lays its runs over chunks it does
-    ///   not have.
+    ///   but its `stsz` or `stz2`, its `stco` or `co64`, or its `stts`
+    ///   states none, or its `stsc` lays no sample in a chunk; or its `stsc`
+    ///   lays its runs over chunks it does not have.
     /// * [`UnknownSampleDescriptionIndex`](DemuxError::UnknownSampleDescriptionIndex),
     ///   [`UnknownDataReferenceIndex`](DemuxError::UnknownDataReferenceIndex):
     ///   samples are described by a sample entry, or a sample entry names a
@@ -535,33 +535,35 @@ mod tests {
         );
     }
 
-    /// Decoding time, duration, composition time offset, `sample_flags` bits and byte range of a sample
-    type Timed = (u64, u32, i64, u32, Range<u64>);
-
-    /// Returns how each location is timed
-    fn timed(locations: &[SampleLocation]) -> Vec<Timed> {
-        locations
-            .iter()
-            .map(|location| {
-                let properties = location.properties();
-                (
-                    properties.decoding_time,
-                    properties.sample_duration,
-                    properties.sample_composition_time_offset,
-                    properties.sample_flags.to_bits().unwrap(),
-                    location.byte_range(),
-                )
-            })
-            .collect()
+    /// Returns the location of a sample of track 7, described by sample entry 1 and in the file itself
+    fn located(
+        decoding_time: u64,
+        sample_duration: u32,
+        sample_composition_time_offset: i64,
+        sample_flags: u32,
+        byte_range: Range<u64>,
+    ) -> SampleLocation {
+        SampleLocation::new(
+            SampleProperties {
+                track_id: 7,
+                decoding_time,
+                sample_duration,
+                sample_composition_time_offset,
+                sample_flags: SampleFlags::from_bits(sample_flags),
+                sample_description_index: 1,
+            },
+            1,
+            byte_range,
+        )
     }
 
-    /// Resolves the movie of `tracks`, and returns how each sample is timed and what the reader read past
+    /// Resolves the movie of `tracks`, and returns the locations of its samples and what the reader read past
     fn resolve_leniently(
         tracks: impl IntoIterator<Item = TrackBox>,
-    ) -> (Vec<Timed>, Vec<Leniency>) {
+    ) -> (Vec<SampleLocation>, Vec<Leniency>) {
         let mut reader = StructureDataReader::new(UNLIMITED);
-        let locations: Vec<_> = reader.handle_movie(movie(tracks)).unwrap().collect();
-        (timed(&locations), reader.leniencies().to_vec())
+        let locations = reader.handle_movie(movie(tracks)).unwrap().collect();
+        (locations, reader.leniencies().to_vec())
     }
 
     /// Returns the leniency of the table `box_type` of track 7 of `kind`
@@ -591,9 +593,9 @@ mod tests {
             resolve_leniently([trak]),
             (
                 Vec::from([
-                    (0, 10, 0, 0, 0..1),
-                    (10, 20, 0, 0, 1..2),
-                    (30, 20, 0, 0, 2..3)
+                    located(0, 10, 0, 0, 0..1),
+                    located(10, 20, 0, 0, 1..2),
+                    located(30, 20, 0, 0, 2..3)
                 ]),
                 Vec::from([read_past(
                     b"stts",
@@ -609,7 +611,7 @@ mod tests {
         let chunk_past_the_samples = track(7, 10, &[1, 1], &[(1, 2)], &[0, 9]);
         // The stsz and the stts state a third sample no chunk lays out
         let samples_past_the_chunks = track(7, 10, &[1, 1, 1], &[(1, 2)], &[0]);
-        let first_two = Vec::from([(0, 10, 0, 0, 0..1), (10, 10, 0, 0, 1..2)]);
+        let first_two = Vec::from([located(0, 10, 0, 0, 0..1), located(10, 10, 0, 0, 1..2)]);
 
         assert_eq!(
             [
@@ -632,6 +634,25 @@ mod tests {
                     ])
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn samples_an_stz2_gives_sizes_past_the_chunks_are_left_out_of_the_stz2() {
+        let mut trak = track(7, 10, &[1, 1], &[(1, 1)], &[0]);
+        trak.mdia.minf.stbl.sample_size = Some(SampleSizeVariant::CompactSampleSize(
+            CompactSampleSizeBox::decode_payload(b"\0\0\0\0\0\0\0\x08\0\0\0\x02\x01\x01").unwrap(),
+        ));
+
+        assert_eq!(
+            resolve_leniently([trak]),
+            (
+                Vec::from([located(0, 10, 0, 0, 0..1)]),
+                Vec::from([
+                    read_past(b"stz2", SampleTableDisagreement::Long { excess_samples: 1 }),
+                    read_past(b"stts", SampleTableDisagreement::Long { excess_samples: 1 }),
+                ])
+            )
         );
     }
 
@@ -660,9 +681,9 @@ mod tests {
             resolve_leniently([trak]),
             (
                 Vec::from([
-                    (0, 10, 5, 0x0006_0001, 0..1),
-                    (10, 10, 0, 0x0001_0002, 1..2),
-                    (20, 10, 0, 0x0001_0003, 2..3),
+                    located(0, 10, 5, 0x0006_0001, 0..1),
+                    located(10, 10, 0, 0x0001_0002, 1..2),
+                    located(20, 10, 0, 0x0001_0003, 2..3),
                 ]),
                 Vec::from([
                     read_past(
@@ -691,9 +712,9 @@ mod tests {
             resolve_leniently([trak]),
             (
                 Vec::from([
-                    (0, 10, 0, 0x0001_0000, 0..1),
-                    (10, 10, 0, 0, 1..2),
-                    (20, 10, 0, 0, 2..3),
+                    located(0, 10, 0, 0x0001_0000, 0..1),
+                    located(10, 10, 0, 0, 1..2),
+                    located(20, 10, 0, 0, 2..3),
                 ]),
                 Vec::from([read_past(
                     b"stss",
@@ -717,9 +738,16 @@ mod tests {
             trak
         };
         let runs_past_the_chunks = track(7, 10, &[1, 1], &[(1, 1), (3, 1)], &[0, 1]);
+        let runs_of_no_sample = track(7, 10, &[1, 1], &[(1, 0)], &[0]);
+        let mut empty_stz2 = track(7, 10, &[1, 1], &[(1, 2)], &[0]);
+        empty_stz2.mdia.minf.stbl.sample_size = Some(SampleSizeVariant::CompactSampleSize(
+            CompactSampleSizeBox::decode_payload(b"\0\0\0\0\0\0\0\x08\0\0\0\0").unwrap(),
+        ));
 
         for (trak, box_type) in [
             (without(b"stsz"), SampleSizeBox::BOX_TYPE),
+            (empty_stz2, CompactSampleSizeBox::BOX_TYPE),
+            (runs_of_no_sample, SampleToChunkBox::BOX_TYPE),
             (without(b"stco"), ChunkOffsetBox::BOX_TYPE),
             (without(b"stsc"), SampleToChunkBox::BOX_TYPE),
             (without(b"stts"), TimeToSampleBox::BOX_TYPE),
