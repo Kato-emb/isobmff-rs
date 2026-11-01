@@ -14,6 +14,12 @@
 //! samples in it, wants their bytes. The samples come out of `poll_sample`
 //! once their bytes have arrived, those whose bytes came with a call that
 //! fails among them: the caller takes them before it returns the failure.
+//!
+//! The media data of a track may be in another file, which an entry of its
+//! data reference names (ISO/IEC 14496-12 §8.7.2). The demuxer locates those
+//! samples and does not gather them, and this example does not read them
+//! either: it counts them by data reference entry and names the file each is
+//! in. The `demux_external` example reads them.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -21,7 +27,8 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
-use isobmff::{ByteRange, DemuxEvent, Demuxer, Sample};
+use isobmff::boxes::DataEntry;
+use isobmff::{ByteRange, DataReferenceKey, DemuxEvent, Demuxer, Sample};
 
 /// Samples listed per track
 const LISTED_SAMPLES: usize = 3;
@@ -33,6 +40,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut buffer = vec![0; 64 * 1024];
     let (mut buffered_at, mut buffered) = (0_u64, 0_usize);
     let mut samples = BTreeMap::<u32, Vec<Sample>>::new();
+    let mut elsewhere = BTreeMap::<DataReferenceKey, usize>::new();
 
     while let Some(wanted) = demuxer.wanted_input() {
         let buffered_end = buffered_at.saturating_add(u64::try_from(buffered)?);
@@ -52,11 +60,42 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .push(sample);
         }
         if let Some(event) = event.inspect_err(|_| list_samples(&samples))? {
+            if let DemuxEvent::Movie { samples, .. } | DemuxEvent::MovieFragment { samples, .. } =
+                &event
+            {
+                for location in samples.clone().filter(|location| {
+                    demuxer
+                        .data_reference(location.data_reference())
+                        .is_some_and(|data_reference| !data_reference.entry().is_in_same_file())
+                }) {
+                    let count = elsewhere.entry(location.data_reference()).or_default();
+                    *count = count.saturating_add(1);
+                }
+            }
             report(&demuxer, event)?;
         }
     }
 
     list_samples(&samples);
+    for (key, count) in elsewhere {
+        let Some(data_reference) = demuxer.data_reference(key) else {
+            continue;
+        };
+        let entry = data_reference.entry();
+        let named = if let DataEntry::Url(url) = entry {
+            url.location
+                .as_ref()
+                .and_then(|location| location.as_str())
+                .map(str::to_owned)
+        } else {
+            None
+        };
+        println!(
+            "track {}: {count} samples in {}, not read",
+            data_reference.track_id(),
+            named.unwrap_or_else(|| format!("{entry:?}"))
+        );
+    }
     Ok(())
 }
 

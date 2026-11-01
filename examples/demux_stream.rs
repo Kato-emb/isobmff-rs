@@ -22,6 +22,12 @@
 //! `DemuxLimits::with_held_bytes`, so the samples are taken after each call,
 //! and a buffer is passed again while the demuxer wants bytes of it: those of
 //! a sample it could hold only once the samples before it were taken.
+//!
+//! The media data of a track may be in another file, which an entry of its
+//! data reference names (ISO/IEC 14496-12 §8.7.2). The demuxer locates those
+//! samples and does not gather them, and this example does not read them
+//! either: it counts them by data reference entry and names the file each is
+//! in. The `demux_external` example reads them.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -29,10 +35,10 @@ use std::error::Error;
 use std::io::Read;
 
 use isobmff::boxes::{
-    FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentIndexBox,
-    SegmentTypeBox,
+    DataEntry, FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox,
+    SegmentIndexBox, SegmentTypeBox,
 };
-use isobmff::{BoxDefinition, DemuxEvent, Demuxer};
+use isobmff::{BoxDefinition, DataReferenceKey, DemuxEvent, Demuxer};
 use ureq::Agent;
 use ureq::tls::{RootCerts, TlsConfig};
 
@@ -54,6 +60,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut buffer = vec![0; 64 * 1024];
     let mut offset = 0_u64;
     let mut gathered = BTreeMap::<u32, (u64, u64)>::new();
+    let mut elsewhere = BTreeMap::<DataReferenceKey, usize>::new();
 
     loop {
         let read = body.read(&mut buffer)?;
@@ -66,6 +73,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let event = demuxer.handle_input(offset, piece);
             if let Ok(Some(event)) = &event {
                 print_box(event);
+                count_elsewhere(&demuxer, event, &mut elsewhere);
             }
             take_samples(&mut demuxer, &mut gathered)?;
             if event?.is_none()
@@ -82,6 +90,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let event = demuxer.finish();
         if let Ok(Some(event)) = &event {
             print_box(event);
+            count_elsewhere(&demuxer, event, &mut elsewhere);
         }
         take_samples(&mut demuxer, &mut gathered)?;
         if event?.is_none() {
@@ -92,7 +101,44 @@ fn main() -> Result<(), Box<dyn Error>> {
     for (track_id, (samples, bytes)) in gathered {
         println!("track {track_id}: {samples} samples, {bytes} bytes");
     }
+    for (key, count) in elsewhere {
+        let Some(data_reference) = demuxer.data_reference(key) else {
+            continue;
+        };
+        let entry = data_reference.entry();
+        let named = if let DataEntry::Url(url) = entry {
+            url.location
+                .as_ref()
+                .and_then(|location| location.as_str())
+                .map(str::to_owned)
+        } else {
+            None
+        };
+        println!(
+            "track {}: {count} samples in {}, not read",
+            data_reference.track_id(),
+            named.unwrap_or_else(|| format!("{entry:?}"))
+        );
+    }
     Ok(())
+}
+
+/// Counts the samples `event` locates whose media data is in another file, by data reference entry
+fn count_elsewhere(
+    demuxer: &Demuxer,
+    event: &DemuxEvent,
+    elsewhere: &mut BTreeMap<DataReferenceKey, usize>,
+) {
+    if let DemuxEvent::Movie { samples, .. } | DemuxEvent::MovieFragment { samples, .. } = event {
+        for location in samples.clone().filter(|location| {
+            demuxer
+                .data_reference(location.data_reference())
+                .is_some_and(|data_reference| !data_reference.entry().is_in_same_file())
+        }) {
+            let count = elsewhere.entry(location.data_reference()).or_default();
+            *count = count.saturating_add(1);
+        }
+    }
 }
 
 /// Prints one line for the box at file level `event` reports: its type and where it lies
