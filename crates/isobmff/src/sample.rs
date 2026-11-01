@@ -113,6 +113,13 @@ impl Sample {
 /// in the order of the movie, then by entry in the order of the data
 /// reference.
 ///
+/// The reader decides the value of each key: only the keys of the entries
+/// [`data_references`](crate::structure_data::StructureDataReader::data_references)
+/// lists name an entry, and no other value is to be relied on.
+/// [`new`](Self::new) is for a caller that hands locations of its own to a
+/// [`MediaDataReader`](crate::media_data::MediaDataReader), and a key it
+/// makes names no entry of the reader.
+///
 /// # Examples
 ///
 /// ```
