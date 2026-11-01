@@ -13,12 +13,13 @@ use crate::table::write_entry_count;
 /// wide. Entries of 4 bits pack two to a byte, the earlier sample in the high
 /// half, and the last byte of an odd number of them is padded with zeros.
 ///
-/// A `field_size` of 32 is read, with its entries kept as found, but refused
-/// when the box is written; any other `field_size` than 4, 8 or 16 is refused,
-/// read or written. Both are refused with
-/// [`UnsupportedValue`](isobmff_core::ErrorKind::UnsupportedValue). An
-/// `entry_size` wider than `field_size` is refused when the box is written,
-/// with [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue).
+/// A `field_size` of 32 is read, with its entries kept as found. Any other
+/// `field_size` than 4, 8, 16 or 32 is refused when the box is read, with
+/// [`UnsupportedValue`](isobmff_core::ErrorKind::UnsupportedValue). Writing
+/// takes only the `field_size`s the specification allows, 4, 8 or 16: any
+/// other, 32 among them, is refused with
+/// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue), as is an
+/// `entry_size` wider than `field_size`.
 ///
 /// [`Default`] is the box of no sample, of 16-bit entries.
 #[doc(alias = "stz2")]
@@ -109,7 +110,7 @@ impl BoxEncode for CompactSampleSizeBox {
             4 => 0x0f,
             8 => 0xff,
             16 => 0xffff,
-            _ => return Err(Error::unsupported_value("field_size")),
+            _ => return Err(Error::invalid_value("field_size")),
         };
         if self
             .entry_sizes
@@ -220,8 +221,18 @@ mod tests {
             ),
             (
                 Ok(compact_sample_size(32, &[0x1_0000, 0x1234_5678])),
-                Err(Error::unsupported_value("field_size"))
+                Err(Error::invalid_value("field_size"))
             )
+        );
+    }
+
+    #[test]
+    fn a_field_size_of_32_read_is_refused_when_written_as_a_value_the_specification_does_not_allow()
+    {
+        assert_eq!(
+            CompactSampleSizeBox::decode_payload(b"\0\0\0\x20\0\0\0\x20\0\0\0\0")
+                .map(|read| read.encode(&mut [0; 20]).map(|rest| rest.len())),
+            Ok(Err(Error::invalid_value("field_size")))
         );
     }
 
@@ -234,7 +245,7 @@ mod tests {
             ),
             (
                 Err(Error::unsupported_value("field_size")),
-                Err(Error::unsupported_value("field_size"))
+                Err(Error::invalid_value("field_size"))
             )
         );
     }
