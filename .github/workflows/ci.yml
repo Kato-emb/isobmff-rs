@@ -225,8 +225,10 @@ jobs:
           key: conformance-${{ hashFiles('scripts/fetch-conformance.sh') }}
       - run: ISOBMFF_CONFORMANCE_DIR="$RUNNER_TEMP/conformance" ISOBMFF_FFPROBE="$RUNNER_TEMP/ffprobe" cargo nextest run -p isobmff-core -p isobmff-boxes -p isobmff --run-ignored only
 
-  # A fixed number of runs of each fuzz target, seeded with the conformance
-  # files. A failure is a bug, so it blocks the merge. The nightly
+  # Each fuzz target for a fixed time, seeded with the conformance files. A
+  # failure is a bug, so it blocks the merge. Bounded by time rather than by a
+  # number of runs: the corpus a run starts from grows, and with it the time
+  # each run takes, so a number of runs would not bound the wait. The nightly
   # is pinned so that a regression in it cannot block a change of ours; it is
   # raised by hand. One job per target, so the wait is the longest target
   # rather than the sum of them.
@@ -278,7 +280,7 @@ jobs:
       # nothing to find and slow every run. Not no sanitizer at all: libFuzzer
       # fails a run on an allocation past its limit only through a sanitizer's
       # allocator, and an allocation sized by the input is a bug here.
-      - run: cargo fuzz run "$TARGET" --target x86_64-unknown-linux-gnu --sanitizer leak "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/seeds" -- -runs=500000 -seed=1
+      - run: cargo fuzz run "$TARGET" --target x86_64-unknown-linux-gnu --sanitizer leak "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/seeds" -- -max_total_time=180
 
   # Advisories, license policy, banned crates and sources, per deny.toml.
   deny:
