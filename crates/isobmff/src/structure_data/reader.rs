@@ -4,18 +4,17 @@ use alloc::vec::{self, Vec};
 use core::iter::FusedIterator;
 use core::ops::Range;
 
-use isobmff_boxes::{
-    DataEntry, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentIndexBox,
-};
+use isobmff_boxes::{MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentIndexBox};
 use isobmff_core::BoxDefinition;
 
 use super::movie_fragment::ReachedTime;
+use super::sample_description::DataReference;
 use super::segment_index::SegmentIndex;
 use super::{movie_fragment, sample_description, sample_table};
 use crate::error::DemuxError;
 use crate::framing::to_u64;
 use crate::leniency::Leniency;
-use crate::sample::SampleLocation;
+use crate::sample::{DataReferenceKey, SampleLocation};
 
 /// Limits a [`StructureDataReader`] resolves and keeps structure-data up to
 ///
@@ -158,9 +157,10 @@ impl StructureDataReader {
         let mut locations = self.room_for(declared_samples)?;
         let mut decoding_times = Vec::with_capacity(movie.trak.len());
         let mut leniencies = Vec::new();
-        for trak in &movie.trak {
+        for (track_position, trak) in movie.trak.iter().enumerate() {
             let earlier_samples = locations.len();
-            let time = sample_table::resolve_track(trak, &mut locations, &mut leniencies)?;
+            let time =
+                sample_table::resolve_track(trak, track_position, &mut locations, &mut leniencies)?;
             decoding_times.push(Some(ReachedTime {
                 time,
                 after_sample: locations.len() > earlier_samples,
@@ -304,8 +304,9 @@ impl StructureDataReader {
     /// Forgets the decoding time each track has reached, as a reader does that resumes reading at a later box of the file
     ///
     /// The fragments read after it resolve only where their `tfdt` gives the
-    /// decoding time (§8.8.12). The movie, the segment indexes and the movie
-    /// fragment random access box are kept, and so are the leniencies.
+    /// decoding time (§8.8.12). The movie and the entries of its data
+    /// references, the segment indexes and the movie fragment random access
+    /// box are kept, and so are the leniencies.
     pub fn resume(&mut self) {
         self.decoding_times.fill(None);
     }
@@ -328,23 +329,24 @@ impl StructureDataReader {
         self.movie_fragment_random_access.as_ref()
     }
 
-    /// Returns the entry of the data reference that says where the media data of the sample at `location` is, §8.7.2
+    /// Returns the entries of the data references of the tracks of the movie, in the order of their keys, once the movie is read, §8.7.2
     ///
-    /// It is the entry of the `dref` of the track of the location that its
-    /// sample entry names, as [`data_reference_index`](SampleLocation::data_reference_index)
-    /// numbers it. A `url ` without a location says the media data is in the
-    /// file itself. Any other entry names where else it is: another file,
-    /// which a `url ` with a location or a `urn ` names and whose file offsets
-    /// the byte range of the location is in. `None` where the movie has no
-    /// track of the location, or the track no such entry.
-    #[must_use]
-    pub fn data_reference(&self, location: &SampleLocation) -> Option<&DataEntry> {
-        let track_id = location.properties().track_id;
+    /// The location of each sample carries the key of the entry its sample
+    /// entry names. An entry that
+    /// [`is_in_same_file`](isobmff_boxes::DataEntry::is_in_same_file) says
+    /// the media data is in the file itself. Any other entry names where else
+    /// it is: another file, which a `url ` with a location or a `urn ` names
+    /// and whose file offsets the byte ranges of the locations are in.
+    pub fn data_references(&self) -> impl Iterator<Item = DataReference<'_>> {
         self.movie
             .iter()
-            .flat_map(|movie| &movie.trak)
-            .find(|trak| trak.tkhd.track_id == track_id)
-            .and_then(|trak| sample_description::data_entry(trak, location.data_reference_index()))
+            .flat_map(sample_description::data_references)
+    }
+
+    /// Returns the entry of the data reference of key `key`, as [`data_references`](Self::data_references) lists it, or `None` where it lists none
+    #[must_use]
+    pub fn data_reference(&self, key: DataReferenceKey) -> Option<DataReference<'_>> {
+        sample_description::data_reference(self.movie.as_ref()?, key)
     }
 
     /// Returns what the reader has read past in the structure-data, in the order it read it
@@ -435,7 +437,8 @@ mod tests {
     use super::{StructureDataLimits, StructureDataReader};
     use crate::error::DemuxError;
     use crate::leniency::{Leniency, SampleTableDisagreement};
-    use crate::sample::{SampleLocation, SampleProperties};
+    use crate::sample::{DataReferenceKey, SampleLocation, SampleProperties};
+    use crate::structure_data::DataReference;
     use crate::structure_data::fixtures::{UNLIMITED, in_another_file, movie, track};
 
     /// Resolves the movie of `tracks` with no limit to speak of
@@ -463,7 +466,7 @@ mod tests {
                 sample_flags: SampleFlags::from_bits(sample_flags),
                 sample_description_index: 1,
             },
-            1,
+            DataReferenceKey::of(0, 1),
             byte_range,
         )
     }
@@ -615,7 +618,7 @@ mod tests {
                 sample_flags: SampleFlags::from_bits(sample_flags),
                 sample_description_index: 1,
             },
-            1,
+            DataReferenceKey::of(0, 1),
             byte_range,
         )
     }
@@ -880,7 +883,9 @@ mod tests {
                 .map(|location| (
                     location.properties().track_id,
                     location.byte_range(),
-                    reader.data_reference(location).cloned()
+                    reader
+                        .data_reference(location.data_reference())
+                        .map(|data_reference| data_reference.entry().clone())
                 ))
                 .collect::<Vec<_>>(),
             [
@@ -888,6 +893,53 @@ mod tests {
                 (3, 100..104, entries[1].clone())
             ]
         );
+    }
+
+    #[test]
+    fn each_entry_of_the_data_reference_of_each_track_is_listed_under_a_key_of_its_own() {
+        let mut first = track(1, 10, &[2], &[(1, 1)], &[0]);
+        let elsewhere = in_another_file(track(1, 10, &[], &[], &[]));
+        first
+            .mdia
+            .minf
+            .dinf
+            .dref
+            .data_entries
+            .extend(elsewhere.mdia.minf.dinf.dref.data_entries);
+        let second = in_another_file(track(3, 10, &[4], &[(1, 1)], &[100]));
+        let entries: Vec<_> = [&first, &second]
+            .iter()
+            .flat_map(|trak| trak.mdia.minf.dinf.dref.data_entries.clone())
+            .collect();
+        let mut reader = StructureDataReader::new(UNLIMITED);
+        let locations: Vec<_> = reader
+            .handle_movie(movie([first, second]))
+            .unwrap()
+            .collect();
+        reader.resume();
+
+        let expected: Vec<_> = [(0, 1, 1), (0, 1, 2), (1, 3, 1)]
+            .into_iter()
+            .zip(&entries)
+            .map(|((track_position, track_id, index), entry)| DataReference {
+                key: DataReferenceKey::of(track_position, index),
+                track_id,
+                index,
+                entry,
+            })
+            .collect();
+        let named: Vec<_> = locations
+            .iter()
+            .map(|location| reader.data_reference(location.data_reference()))
+            .collect();
+        assert_eq!(
+            (reader.data_references().collect::<Vec<_>>(), named),
+            (
+                expected.clone(),
+                Vec::from([expected.first().copied(), expected.last().copied()])
+            )
+        );
+        assert_eq!(reader.data_reference(DataReferenceKey::new(u64::MAX)), None);
     }
 
     #[test]

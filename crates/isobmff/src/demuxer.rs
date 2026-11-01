@@ -3,8 +3,7 @@
 use alloc::boxed::Box;
 
 use isobmff_boxes::{
-    DataEntry, FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox,
-    SegmentTypeBox,
+    FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentTypeBox,
 };
 use isobmff_core::BoxHeader;
 
@@ -15,10 +14,8 @@ use crate::framing::{BoxEvent, BoxReader};
 use crate::leniency::Leniency;
 use crate::limits::DemuxLimits;
 use crate::media_data::MediaDataReader;
-use crate::sample::{Sample, SampleLocation};
-use crate::structure_data::{
-    SampleLocations, SegmentIndex, StructureDataReader, names_the_same_file,
-};
+use crate::sample::{DataReferenceKey, Sample};
+use crate::structure_data::{DataReference, SampleLocations, SegmentIndex, StructureDataReader};
 
 /// Reader of a movie file or a segment: the boxes at file level, read into their values, and the samples they declare
 ///
@@ -30,7 +27,7 @@ use crate::structure_data::{
 /// The boxes of structure-data (`moov`, `moof`, `sidx`, `mfra`) and the
 /// brands (`ftyp`, `styp`) are gathered and read into their values, which the
 /// demuxer keeps for its accessors; a `moov` or a `moof` is reported with the
-/// [`SampleLocation`]s it declares. Every other box,
+/// [`SampleLocation`](crate::SampleLocation)s it declares. Every other box,
 /// the media data boxes among them, is skipped and reported by where it lies
 /// (ISO/IEC 14496-12 §4.2.2).
 ///
@@ -220,8 +217,9 @@ impl Demuxer {
     ///
     /// The demuxer forgets the decoding time each track has reached, so a
     /// `moof` read after it resolves only where its `tfdt` gives the decoding
-    /// time (§8.8.12). The movie, the segment indexes, the movie fragment
-    /// random access box, the brands and the leniencies are kept, so a `moov` read again fails
+    /// time (§8.8.12). The movie and the entries of its data references, the
+    /// segment indexes, the movie fragment random access box, the brands and
+    /// the leniencies are kept, so a `moov` read again fails
     /// with [`DuplicateBox`](DemuxError::DuplicateBox). The samples being
     /// gathered are dropped with the bytes gathered for them; the tracks
     /// discarded stay discarded.
@@ -275,15 +273,20 @@ impl Demuxer {
         self.structure_data.movie_fragment_random_access()
     }
 
-    /// Returns the entry of the data reference that says where the media data of the sample at `location` is, as [`StructureDataReader::data_reference`] does
+    /// Returns the entries of the data references of the tracks of the movie, in the order of their keys, as [`StructureDataReader::data_references`] does
     ///
-    /// The demuxer gathers the samples whose entry says their media data is
-    /// in the file itself. The events carry the locations of the others too,
-    /// in file offsets of the file their entry names, for the caller to read
-    /// there.
+    /// The demuxer gathers the samples whose entry
+    /// [`is_in_same_file`](crate::boxes::DataEntry::is_in_same_file). The
+    /// events carry the locations of the others too, in file offsets of the
+    /// file their entry names, for the caller to read there.
+    pub fn data_references(&self) -> impl Iterator<Item = DataReference<'_>> {
+        self.structure_data.data_references()
+    }
+
+    /// Returns the entry of the data reference of key `key`, as [`StructureDataReader::data_reference`] does
     #[must_use]
-    pub fn data_reference(&self, location: &SampleLocation) -> Option<&DataEntry> {
-        self.structure_data.data_reference(location)
+    pub fn data_reference(&self, key: DataReferenceKey) -> Option<DataReference<'_>> {
+        self.structure_data.data_reference(key)
     }
 
     /// Returns what the demuxer has read past in the file rather than refuse it
@@ -379,8 +382,8 @@ impl Demuxer {
         self.media_data
             .handle_sample_locations(samples.clone().filter(|location| {
                 structure_data
-                    .data_reference(location)
-                    .is_some_and(names_the_same_file)
+                    .data_reference(location.data_reference())
+                    .is_some_and(|data_reference| data_reference.entry().is_in_same_file())
             }))?;
         Ok(samples)
     }

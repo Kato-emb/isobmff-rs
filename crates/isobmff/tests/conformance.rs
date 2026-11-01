@@ -336,7 +336,10 @@ mod tests {
             .unwrap();
             if let Some(DemuxEvent::Movie { samples, .. }) = event {
                 for location in samples {
-                    let named = match demuxer.data_reference(&location) {
+                    let named = match demuxer
+                        .data_reference(location.data_reference())
+                        .map(|data_reference| data_reference.entry())
+                    {
                         Some(DataEntry::Url(url)) => {
                             url.location.as_ref().and_then(|named| named.as_str())
                         }

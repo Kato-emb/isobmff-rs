@@ -67,7 +67,7 @@ pub struct MediaDataLimits {
 /// ```
 /// use isobmff::boxes::SampleFlags;
 /// use isobmff::media_data::{MediaDataLimits, MediaDataReader};
-/// use isobmff::{Sample, SampleLocation, SampleProperties};
+/// use isobmff::{DataReferenceKey, Sample, SampleLocation, SampleProperties};
 ///
 /// let properties = SampleProperties {
 ///     track_id: 1,
@@ -84,7 +84,7 @@ pub struct MediaDataLimits {
 /// });
 ///
 /// // The media data of the sample is the four bytes at file offset 100
-/// reader.handle_sample_locations([SampleLocation::new(properties, 1, 100..104)])?;
+/// reader.handle_sample_locations([SampleLocation::new(properties, DataReferenceKey::new(0), 100..104)])?;
 ///
 /// // Its bytes arrive in two pieces, the later one first
 /// reader.handle_input(102, b"CDEF")?;
@@ -363,7 +363,7 @@ mod tests {
     use super::{MediaDataLimits, MediaDataReader};
     use crate::byte_range::ByteRange;
     use crate::error::DemuxError;
-    use crate::sample::{Sample, SampleLocation, SampleProperties};
+    use crate::sample::{DataReferenceKey, Sample, SampleLocation, SampleProperties};
 
     /// Bytes of a file whose byte at each file offset is that offset, modulo 256
     fn file(range: Range<u64>) -> Vec<u8> {
@@ -386,7 +386,11 @@ mod tests {
 
     /// Returns the location of sample `decoding_time` of track 1, at `byte_range` of the file itself
     fn location(decoding_time: u64, byte_range: Range<u64>) -> SampleLocation {
-        SampleLocation::new(properties(1, decoding_time), 1, byte_range)
+        SampleLocation::new(
+            properties(1, decoding_time),
+            DataReferenceKey::new(0),
+            byte_range,
+        )
     }
 
     /// Returns the sample `location` names, with the bytes [`file`] has there
@@ -471,8 +475,8 @@ mod tests {
     fn locations_that_name_the_same_bytes_gather_into_samples_of_their_own() {
         let locations = [
             location(0, 10..20),
-            SampleLocation::new(properties(2, 0), 1, 10..20),
-            SampleLocation::new(properties(3, 0), 1, 15..25),
+            SampleLocation::new(properties(2, 0), DataReferenceKey::new(0), 10..20),
+            SampleLocation::new(properties(3, 0), DataReferenceKey::new(0), 15..25),
         ];
         let mut reader = unlimited();
         reader.handle_sample_locations(locations.clone()).unwrap();
@@ -673,7 +677,7 @@ mod tests {
         reader
             .handle_sample_locations([
                 location(0, 10..12),
-                SampleLocation::new(properties(2, 0), 1, 12..20),
+                SampleLocation::new(properties(2, 0), DataReferenceKey::new(0), 12..20),
                 location(1, 20..30),
             ])
             .unwrap();
