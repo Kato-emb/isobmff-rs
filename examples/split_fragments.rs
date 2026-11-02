@@ -20,7 +20,7 @@
 use std::env;
 use std::error::Error;
 use std::fs::{self, File};
-use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, BufWriter, Seek, Write};
 use std::path::Path;
 
 use isobmff::framing::{BoxEvent, BoxReader, BoxWriter};
@@ -125,9 +125,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let out_dir = Path::new(&out_dir);
     fs::create_dir_all(out_dir)?;
 
-    let mut file = File::open(path)?;
+    let mut file = BufReader::with_capacity(64 * 1024, File::open(path)?);
     let mut reader = BoxReader::new();
-    let mut buffer = vec![0; 64 * 1024];
     let mut splitter = Splitter {
         out_dir,
         output: BufWriter::new(File::create(out_dir.join("init.mp4"))?),
@@ -137,25 +136,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         copying: false,
     };
 
-    let (mut buffered_at, mut buffered) = (0_u64, 0_usize);
-
     while let Some(wanted) = reader.wanted_input() {
-        let buffered_end = buffered_at.saturating_add(u64::try_from(buffered)?);
-        if !(buffered_at..buffered_end).contains(&wanted.offset()) {
-            file.seek(SeekFrom::Start(wanted.offset()))?;
-            let at_most = wanted
-                .length()
-                .and_then(|length| usize::try_from(length).ok())
-                .map_or(buffer.len(), |length| length.min(buffer.len()));
-            buffered = file.read(buffer.get_mut(..at_most).ok_or("buffer too short")?)?;
-            buffered_at = wanted.offset();
-            if buffered == 0 {
-                break;
-            }
+        let position = file.stream_position()?;
+        let distance = i64::try_from(wanted.offset())?
+            .checked_sub(i64::try_from(position)?)
+            .ok_or("an offset past 63 bits")?;
+        file.seek_relative(distance)?;
+        let input = file.fill_buf()?;
+        if input.is_empty() {
+            break;
         }
-        let input = buffer.get(..buffered).ok_or("read past the buffer")?;
 
-        while let Some(event) = reader.handle_input(buffered_at, input)? {
+        while let Some(event) = reader.handle_input(wanted.offset(), input)? {
             splitter.handle(&mut reader, event)?;
         }
     }
