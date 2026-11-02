@@ -10,14 +10,17 @@
 //! itself, and locates the others without gathering them. The location of
 //! each sample carries the key of its data reference entry, so the caller
 //! keeps the locations of the others by key while the movie file is read.
+//! It keeps no more of them, over all the movie fragments, than a media
+//! data reader holds (`MediaDataLimits::held_location_count`), and fails
+//! past that.
 //!
 //! Once it is read, the caller opens the file the entry of each key names,
 //! taking its location as a path relative to the directory of the movie
 //! file, and gathers the samples in it with a `MediaDataReader` of its own,
 //! seeking to the bytes the reader wants as it does for the demuxer. A
-//! location with a scheme (`file:`, `http:`), an entry other than a `url `,
-//! and a file that does not open are reported, and their samples are not
-//! read.
+//! location with a scheme (`file:`, `http:`) or an absolute path, an entry
+//! other than a `url `, and a file that does not open are reported, and
+//! their samples are not read.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -27,7 +30,7 @@ use std::io::{BufRead, BufReader, Seek};
 use std::path::{Path, PathBuf};
 
 use isobmff::boxes::DataEntry;
-use isobmff::media_data::MediaDataReader;
+use isobmff::media_data::{MediaDataLimits, MediaDataReader};
 use isobmff::{DataReferenceKey, DemuxEvent, DemuxLimits, Demuxer, SampleLocation};
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -39,7 +42,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut file = BufReader::with_capacity(64 * 1024, File::open(&path)?);
     let mut demuxer = Demuxer::new();
     let (mut samples_here, mut bytes_here) = (0_usize, 0_usize);
+    let limits = DemuxLimits::new().media_data();
     let mut by_key = BTreeMap::<DataReferenceKey, Vec<SampleLocation>>::new();
+    let mut held = 0_u64;
 
     while let Some(wanted) = demuxer.wanted_input() {
         let event = match read_at(&mut file, wanted.offset())? {
@@ -58,6 +63,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .data_reference(location.data_reference())
                     .is_some_and(|data_reference| !data_reference.entry().is_in_same_file())
             }) {
+                held = held.saturating_add(1);
+                if held > limits.held_location_count {
+                    return Err(format!(
+                        "more than {} samples in other files",
+                        limits.held_location_count
+                    )
+                    .into());
+                }
                 by_key
                     .entry(location.data_reference())
                     .or_default()
@@ -75,7 +88,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         } else {
             None
         };
-        let Some(named) = named.filter(|named| !named.contains(':')) else {
+        let Some(named) =
+            named.filter(|named| Path::new(named).is_relative() && !named.contains(':'))
+        else {
             println!(
                 "track {track_id}: {} samples in {:?}, not read",
                 locations.len(),
@@ -83,7 +98,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             );
             continue;
         };
-        match gather(&path.with_file_name(named), locations) {
+        match gather(&path.with_file_name(named), locations, limits) {
             Ok((samples, bytes)) => {
                 println!("track {track_id} in {named}: {samples} samples, {bytes} bytes");
             }
@@ -93,10 +108,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Gathers the samples of `locations` out of the file at `path`, seeking to the bytes a media data reader wants, and returns how many there are and their bytes
-fn gather(path: &Path, locations: Vec<SampleLocation>) -> Result<(usize, usize), Box<dyn Error>> {
+/// Gathers the samples of `locations` out of the file at `path` with a media data reader of `limits`, seeking to the bytes it wants, and returns how many there are and their bytes
+fn gather(
+    path: &Path,
+    locations: Vec<SampleLocation>,
+    limits: MediaDataLimits,
+) -> Result<(usize, usize), Box<dyn Error>> {
     let mut file = BufReader::with_capacity(64 * 1024, File::open(path)?);
-    let mut media_data = MediaDataReader::new(DemuxLimits::new().media_data());
+    let mut media_data = MediaDataReader::new(limits);
     media_data.handle_sample_locations(locations)?;
     let (mut samples, mut bytes) = (0_usize, 0_usize);
     while let Some(wanted) = media_data.wanted_input() {
