@@ -4,10 +4,12 @@
 //! cargo run --example demux -- movie.mp4
 //! ```
 //!
-//! The demuxer names the bytes it wants next. The caller seeks the file there
-//! and reads a buffer of it, then passes that buffer again for as long as the
-//! demuxer returns events, reading another only once the demuxer wants bytes
-//! past it. A read that returns no byte is the end of the file, which the
+//! The demuxer names the bytes it wants next. The caller reads the file
+//! through a `BufReader` and moves to that file offset with `seek_relative`,
+//! which keeps the buffer when the offset lies within it. It passes the
+//! buffered bytes from there, which `fill_buf` returns, for as long as the
+//! demuxer returns events, and reads more only once the demuxer wants bytes
+//! past them. No byte from `fill_buf` is the end of the file, which the
 //! caller tells the demuxer with `finish`.
 //!
 //! The demuxer skips each `mdat`, and once a `moov` or a `moof` locates
@@ -19,7 +21,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::error::Error;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Seek};
 
 use isobmff::{ByteRange, DemuxEvent, Demuxer, Sample};
 
@@ -28,22 +30,19 @@ const LISTED_SAMPLES: usize = 3;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let path = env::args().nth(1).ok_or("usage: demux <file>")?;
-    let mut file = File::open(path)?;
+    let mut file = BufReader::with_capacity(64 * 1024, File::open(path)?);
     let mut demuxer = Demuxer::new();
-    let mut buffer = vec![0; 64 * 1024];
-    let (mut buffered_at, mut buffered) = (0_u64, 0_usize);
     let mut samples = BTreeMap::<u32, Vec<Sample>>::new();
 
     while let Some(wanted) = demuxer.wanted_input() {
-        let buffered_end = buffered_at.saturating_add(u64::try_from(buffered)?);
-        if !(buffered_at..buffered_end).contains(&wanted.offset()) {
-            file.seek(SeekFrom::Start(wanted.offset()))?;
-            buffered = file.read(&mut buffer)?;
-            buffered_at = wanted.offset();
-        }
-        let event = match buffer.get(..buffered).ok_or("read past the buffer")? {
+        let position = file.stream_position()?;
+        let distance = i64::try_from(wanted.offset())?
+            .checked_sub(i64::try_from(position)?)
+            .ok_or("an offset past 63 bits")?;
+        file.seek_relative(distance)?;
+        let event = match file.fill_buf()? {
             [] => demuxer.finish(),
-            input => demuxer.handle_input(buffered_at, input),
+            input => demuxer.handle_input(wanted.offset(), input),
         };
         while let Some(sample) = demuxer.poll_sample() {
             samples
