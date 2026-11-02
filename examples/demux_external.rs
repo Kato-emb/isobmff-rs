@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::error::Error;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Seek};
 use std::path::{Path, PathBuf};
 
 use isobmff::boxes::DataEntry;
@@ -36,16 +36,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             .nth(1)
             .ok_or("usage: demux_external <file>")?,
     );
-    let mut file = BufferedFile::open(&path)?;
+    let mut file = BufReader::with_capacity(64 * 1024, File::open(&path)?);
     let mut demuxer = Demuxer::new();
     let (mut samples_here, mut bytes_here) = (0_usize, 0_usize);
     let mut by_key = BTreeMap::<DataReferenceKey, Vec<SampleLocation>>::new();
 
     while let Some(wanted) = demuxer.wanted_input() {
-        let (buffered_at, input) = file.read_at(wanted.offset())?;
-        let event = match input {
+        let event = match read_at(&mut file, wanted.offset())? {
             [] => demuxer.finish(),
-            input => demuxer.handle_input(buffered_at, input),
+            input => demuxer.handle_input(wanted.offset(), input),
         };
         while let Some(sample) = demuxer.poll_sample() {
             samples_here = samples_here.saturating_add(1);
@@ -96,16 +95,16 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 /// Gathers the samples of `locations` out of the file at `path`, seeking to the bytes a media data reader wants, and returns how many there are and their bytes
 fn gather(path: &Path, locations: Vec<SampleLocation>) -> Result<(usize, usize), Box<dyn Error>> {
-    let mut file = BufferedFile::open(path)?;
+    let mut file = BufReader::with_capacity(64 * 1024, File::open(path)?);
     let mut media_data = MediaDataReader::new(DemuxLimits::new().media_data());
     media_data.handle_sample_locations(locations)?;
     let (mut samples, mut bytes) = (0_usize, 0_usize);
     while let Some(wanted) = media_data.wanted_input() {
-        let (buffered_at, input) = file.read_at(wanted.offset())?;
+        let input = read_at(&mut file, wanted.offset())?;
         if input.is_empty() {
             break;
         }
-        let handled = media_data.handle_input(buffered_at, input);
+        let handled = media_data.handle_input(wanted.offset(), input);
         while let Some(sample) = media_data.poll_sample() {
             samples = samples.saturating_add(1);
             bytes = bytes.saturating_add(sample.data().len());
@@ -116,41 +115,12 @@ fn gather(path: &Path, locations: Vec<SampleLocation>) -> Result<(usize, usize),
     Ok((samples, bytes))
 }
 
-/// File read a buffer at a time, from the file offset a reader wants
-struct BufferedFile {
-    file: File,
-    buffer: Vec<u8>,
-    /// File offset the buffered bytes start at
-    buffered_at: u64,
-    /// Bytes buffered, from the start of `buffer`
-    buffered: usize,
-}
-
-impl BufferedFile {
-    /// Opens the file at `path`, with nothing buffered
-    fn open(path: &Path) -> Result<Self, Box<dyn Error>> {
-        Ok(Self {
-            file: File::open(path)?,
-            buffer: vec![0; 64 * 1024],
-            buffered_at: 0,
-            buffered: 0,
-        })
-    }
-
-    /// Returns the buffered bytes and the file offset they start at, reading a buffer from `offset` unless they hold it; no byte at the end of the file
-    fn read_at(&mut self, offset: u64) -> Result<(u64, &[u8]), Box<dyn Error>> {
-        let buffered_end = self
-            .buffered_at
-            .saturating_add(u64::try_from(self.buffered)?);
-        if !(self.buffered_at..buffered_end).contains(&offset) {
-            self.file.seek(SeekFrom::Start(offset))?;
-            self.buffered = self.file.read(&mut self.buffer)?;
-            self.buffered_at = offset;
-        }
-        let input = self
-            .buffer
-            .get(..self.buffered)
-            .ok_or("read past the buffer")?;
-        Ok((self.buffered_at, input))
-    }
+/// Returns the bytes `file` buffers from file offset `offset` on, reading more where it buffers none there; none at the end of the file
+fn read_at(file: &mut BufReader<File>, offset: u64) -> Result<&[u8], Box<dyn Error>> {
+    let position = file.stream_position()?;
+    let distance = i64::try_from(offset)?
+        .checked_sub(i64::try_from(position)?)
+        .ok_or("an offset past 63 bits")?;
+    file.seek_relative(distance)?;
+    Ok(file.fill_buf()?)
 }
