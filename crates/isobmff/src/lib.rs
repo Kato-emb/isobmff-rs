@@ -233,6 +233,8 @@
 //! `fast_start` writes a movie file again with its `moov` before its media
 //! data, as a [`FastStart`] lays it out:
 //! `cargo run --example fast_start -- movie.mp4 fast.mp4`.
+//! `presentation_times` lists where the edit list of each track presents
+//! its samples, as a [`Timeline`](timeline::Timeline) maps them.
 
 #![no_std]
 
