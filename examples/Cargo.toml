@@ -43,6 +43,10 @@ name = "remux"
 path = "remux.rs"
 
 [[example]]
+name = "reserved_moov"
+path = "reserved_moov.rs"
+
+[[example]]
 name = "split_fragments"
 path = "split_fragments.rs"
 

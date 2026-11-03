@@ -264,7 +264,12 @@
 //! among them, the other splits a fragmented movie file into segments.
 //! `fast_start` writes a movie file again with its `moov` before its media
 //! data, as a [`FastStart`] lays it out:
-//! `cargo run --example fast_start -- movie.mp4 fast.mp4`.
+//! `cargo run --example fast_start -- movie.mp4 fast.mp4`. `remux
+//! --recoverable` writes a file that is not fragmented as movie fragments
+//! until it finishes. `reserved_moov` writes a file whose `moov` goes into
+//! space reserved before its media data, from the writers of the layers and
+//! the reserving functions of [`framing`]:
+//! `cargo run --example reserved_moov -- movie.mp4 reserved.mp4 --reserve 4096`.
 //! `presentation_times` lists where the edit list of each track presents
 //! its samples, as a [`Timeline`](timeline::Timeline) maps them.
 
