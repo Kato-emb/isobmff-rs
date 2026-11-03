@@ -23,6 +23,7 @@ pub use box_reader::BoxReader;
 pub use box_writer::{BoxWriter, write_box};
 #[cfg(feature = "compressed-boxes")]
 pub use compressed::{decompressed, replacement_type};
+pub(crate) use reserved::write_reserved;
 pub use reserved::{fill, media_data_header, reserve};
 
 /// Converts a length in memory to one in a file, where it always fits

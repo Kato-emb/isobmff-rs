@@ -10,15 +10,20 @@
 //!
 //! `--random-access` ends a fragmented file with an `mfra` that lists the
 //! sync samples of its fragments, and `--segment-index` starts a segment with
-//! a `sidx` that indexes each `moof` and its `mdat` as a subsegment.
+//! a `sidx` that indexes each `moof` and its `mdat` as a subsegment. The
+//! muxer reserves the space of the `sidx` before the first `moof`, so it is
+//! told the number of subsegments first: the source is read once for its
+//! boxes alone to count its samples. As the muxer finishes, it writes the
+//! `sidx` over the space reserved, which is the one output of the example
+//! that does not go at the end of the destination.
 //!
 //! A demuxer reads the source as the `demux` example does, seeking to the
 //! bytes it wants. Its movie goes to a muxer as it is, and the samples the
 //! demuxer returns go to the muxer a run at a time: each run is a `moof` and
 //! an `mdat` of a fragmented file or a segment, or an `mdat` of a file that is
 //! not fragmented, whose `moov` the muxer writes at the end, its sample tables
-//! filled from the samples. Each box the muxer writes is appended to the
-//! destination as it comes out.
+//! filled from the samples. Each box the muxer writes goes to the destination
+//! as it comes out, where its offset says.
 //!
 //! The muxer takes the brands of a fragmented file or a segment where they
 //! name one of `iso5` to `isod`: the source's brands, with `iso6` added where
@@ -61,7 +66,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         ("non-fragmented", None) => Muxer::non_fragmented(NonFragmentedOptions::default()),
         ("segment", option @ (None | Some("--segment-index"))) => {
             let mut options = SegmentOptions::default();
-            options.segment_index = option.is_some();
+            if option.is_some() {
+                options.segment_index = Some(u32::try_from(
+                    sample_count(&source)?.div_ceil(u64::try_from(SAMPLES_PER_RUN)?),
+                )?);
+            }
             Muxer::segment(options)
         }
         _ => return Err(usage.into()),
@@ -119,6 +128,51 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Returns the number of samples the source at `path` locates, reading its boxes but not its media data
+///
+/// A segment indexed by a `sidx` has as many subsegments as calls of the
+/// muxer, which the muxer is told before the first, to reserve the space of
+/// the `sidx`.
+fn sample_count(path: &str) -> Result<u64, Box<dyn Error>> {
+    let mut source = BufReader::new(File::open(path)?);
+    let mut demuxer = Demuxer::new();
+    let mut count = 0_u64;
+    loop {
+        let event = match demuxer.wanted_input() {
+            Some(wanted) => {
+                source.seek(SeekFrom::Start(wanted.offset()))?;
+                match source.fill_buf()? {
+                    [] => demuxer.finish(),
+                    input => demuxer.handle_input(wanted.offset(), input),
+                }
+            }
+            None => match demuxer.finish() {
+                Ok(None) => break,
+                finished => finished,
+            },
+        };
+        match event? {
+            Some(DemuxEvent::Movie { samples, .. }) => {
+                let track_ids: Vec<u32> = demuxer
+                    .movie()
+                    .into_iter()
+                    .flat_map(|movie| &movie.trak)
+                    .map(|trak| trak.tkhd.track_id)
+                    .collect();
+                for track_id in track_ids {
+                    demuxer.discard_track(track_id);
+                }
+                count = count.saturating_add(u64::try_from(samples.len())?);
+            }
+            Some(DemuxEvent::MovieFragment { samples, .. }) => {
+                count = count.saturating_add(u64::try_from(samples.len())?);
+            }
+            _ => {}
+        }
+    }
+    Ok(count)
+}
+
 /// Returns the brands of the destination, made of those of the source, `file_type`
 ///
 /// A fragmented file or a segment takes brands that name one of `iso5` to
@@ -145,28 +199,39 @@ struct Destination {
 }
 
 impl Destination {
-    /// Appends each box `muxer` has written, and prints where it lies
+    /// Writes each box `muxer` has written where it goes, and prints where it lies
     ///
-    /// The file is only appended to, as a pipe would be: an output for
-    /// anywhere but its end is refused.
+    /// An output at the end of the file extends it; one within what is
+    /// written goes over it, the file seeking there and back; any other is
+    /// refused.
     fn write_output(&mut self, muxer: &mut Muxer) -> Result<(), Box<dyn Error>> {
         while let Some(output) = muxer.poll_output() {
             let offset = self.start.saturating_add(output.offset());
-            if offset != self.written {
-                return Err(format!(
-                    "output for file offset {offset}, not the end {} of the file",
-                    self.written
-                )
-                .into());
-            }
             let bytes = output.bytes();
+            let end = offset.saturating_add(u64::try_from(bytes.len())?);
             let box_type = bytes
                 .get(4..8)
                 .map(String::from_utf8_lossy)
                 .unwrap_or_default();
-            println!("[{box_type}] offset={} size={}", self.written, bytes.len());
-            self.file.write_all(bytes)?;
-            self.written = self.written.saturating_add(u64::try_from(bytes.len())?);
+            if offset == self.written {
+                println!("[{box_type}] offset={offset} size={}", bytes.len());
+                self.file.write_all(bytes)?;
+                self.written = end;
+            } else if end <= self.written {
+                println!(
+                    "[{box_type}] offset={offset} size={} (over what is written)",
+                    bytes.len()
+                );
+                self.file.seek(SeekFrom::Start(offset))?;
+                self.file.write_all(bytes)?;
+                self.file.seek(SeekFrom::Start(self.written))?;
+            } else {
+                return Err(format!(
+                    "output for file offset {offset}, neither the end {} of the file nor within it",
+                    self.written
+                )
+                .into());
+            }
         }
         Ok(())
     }

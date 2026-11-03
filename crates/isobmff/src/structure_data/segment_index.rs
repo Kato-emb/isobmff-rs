@@ -6,7 +6,8 @@ use core::ops::Range;
 use isobmff_boxes::{MovieBox, SegmentIndexBox, SegmentIndexReference};
 
 use super::movie_fragment::Run;
-use super::writer::version_for;
+use isobmff_core::BoxEncode;
+
 use crate::error::{DemuxError, MuxError};
 use crate::timeline::{Timeline, composition_time};
 
@@ -172,10 +173,12 @@ pub(super) struct SubsegmentTable {
     /// Its duration runs to its own end until a next such subsegment starts.
     last_presented: Option<(usize, u64)>,
     references: Vec<SegmentIndexReference>,
+    /// Number of subsegments the `sidx` indexes, which the table takes no more than and finishes with no fewer than
+    expected_subsegments: u32,
 }
 
 impl SubsegmentTable {
-    /// Creates the table of subsegments whose reference stream is the first track of `movie`, in the timescale of its media
+    /// Creates the table of `expected_subsegments` subsegments whose reference stream is the first track of `movie`, in the timescale of its media
     ///
     /// The presentation times a `sidx` states are those the edit list of
     /// the track maps the composition times of its samples to (§8.14.3.1),
@@ -185,11 +188,16 @@ impl SubsegmentTable {
     ///
     /// * [`Timeline`](MuxError::Timeline): the edit list of the reference
     ///   track does not map its composition timeline.
-    pub(super) fn new(movie: &MovieBox) -> Result<Self, MuxError> {
+    /// * [`SegmentIndexOutOfRange`](MuxError::SegmentIndexOutOfRange): a
+    ///   `sidx` holds no more than 65,535 references.
+    pub(super) fn new(movie: &MovieBox, expected_subsegments: u32) -> Result<Self, MuxError> {
         let first = movie.trak.first();
         let reference_id = first.map_or(0, |trak| trak.tkhd.track_id);
         if first.is_some() {
             Timeline::new(movie, reference_id).map_err(|error| MuxError::Timeline { error })?;
+        }
+        if u16::try_from(expected_subsegments).is_err() {
+            return Err(MuxError::SegmentIndexOutOfRange { reference_id });
         }
 
         Ok(Self {
@@ -198,7 +206,20 @@ impl SubsegmentTable {
             earliest_presentation_time: None,
             last_presented: None,
             references: Vec::new(),
+            expected_subsegments,
         })
+    }
+
+    /// Returns the length of the `sidx` [`finish`](Self::finish) returns, of version 1 whatever its times
+    pub(super) fn encoded_len(&self) -> u64 {
+        let mut sidx = SegmentIndexBox::default();
+        sidx.version = 1;
+        let without = sidx.encoded_len();
+        sidx.references = Vec::from([SegmentIndexReference::default()]);
+        let reference_len = sidx.encoded_len().saturating_sub(without);
+        reference_len
+            .saturating_mul(u64::from(self.expected_subsegments))
+            .saturating_add(without)
     }
 
     /// Indexes the movie fragment of `track_fragments` of `movie`, which with its media data takes `referenced_size` bytes, as the next subsegment
@@ -246,9 +267,6 @@ impl SubsegmentTable {
             .ok()
             .filter(|&size| size < 1 << 31)
             .ok_or(out_of_range)?;
-        if self.references.len() >= usize::from(u16::MAX) {
-            return Err(out_of_range);
-        }
         let samples: Vec<(bool, i128, Option<Range<u64>>)> = track_fragments
             .iter()
             .flatten()
@@ -304,6 +322,16 @@ impl SubsegmentTable {
             }
         }
 
+        let written_subsegments = u32::try_from(self.references.len())
+            .unwrap_or(u32::MAX)
+            .saturating_add(1);
+        if written_subsegments > self.expected_subsegments {
+            return Err(MuxError::SegmentIndexCountMismatch {
+                expected_subsegments: self.expected_subsegments,
+                written_subsegments,
+            });
+        }
+
         if let Some((previous, duration)) = previous_duration
             && let Some(previous) = self.references.get_mut(previous)
         {
@@ -320,17 +348,30 @@ impl SubsegmentTable {
 
     /// Returns the `sidx` of the subsegments indexed, in their order from its anchor point
     ///
-    /// The `sidx` takes version 0 where its earliest presentation time fits
-    /// in 32 bits.
-    pub(super) fn finish(self) -> SegmentIndexBox {
+    /// The `sidx` takes version 1, its earliest presentation time and first
+    /// offset in 64 bits, whatever they are, so that it is as long as
+    /// [`encoded_len`](Self::encoded_len) said before the first subsegment.
+    ///
+    /// # Errors
+    ///
+    /// * [`SegmentIndexCountMismatch`](MuxError::SegmentIndexCountMismatch):
+    ///   fewer subsegments are indexed than the table was made for.
+    pub(super) fn finish(self) -> Result<SegmentIndexBox, MuxError> {
+        let written_subsegments = u32::try_from(self.references.len()).unwrap_or(u32::MAX);
+        if written_subsegments != self.expected_subsegments {
+            return Err(MuxError::SegmentIndexCountMismatch {
+                expected_subsegments: self.expected_subsegments,
+                written_subsegments,
+            });
+        }
         let mut sidx = SegmentIndexBox::default();
         sidx.reference_id = self.reference_id;
         sidx.timescale = self.timescale;
         sidx.earliest_presentation_time = self.earliest_presentation_time.unwrap_or_default();
-        sidx.version = version_for(sidx.earliest_presentation_time);
+        sidx.version = 1;
         sidx.references = self.references;
 
-        sidx
+        Ok(sidx)
     }
 }
 
@@ -596,7 +637,7 @@ mod tests {
     fn each_movie_fragment_is_a_subsegment_lasting_until_the_earliest_presentation_time_of_the_next_of_the_first_track()
      {
         let movie = two_tracks();
-        let mut table = SubsegmentTable::new(&movie).unwrap();
+        let mut table = SubsegmentTable::new(&movie, 4).unwrap();
         let fragments: [(&[Sample], u64); 4] = [
             (
                 &[
@@ -629,13 +670,14 @@ mod tests {
             reference(300, 0, false, 0, 0),
             reference(400, 10, true, 1, 0),
         ]);
-        assert_eq!(table.finish(), expected);
+        expected.version = 1;
+        assert_eq!(table.finish(), Ok(expected));
     }
 
     #[test]
     fn a_subsegment_the_sidx_cannot_state_is_refused_and_not_indexed() {
         let movie = two_tracks();
-        let mut table = SubsegmentTable::new(&movie).unwrap();
+        let mut table = SubsegmentTable::new(&movie, 1).unwrap();
         index(&mut table, &movie, &[sample(1, 100, 10, 0, true)], 100).unwrap();
 
         let refused = [
@@ -659,13 +701,14 @@ mod tests {
         expected.timescale = 100;
         expected.earliest_presentation_time = 100;
         expected.references = Vec::from([reference(100, 10, true, 1, 0)]);
-        assert_eq!(table.finish(), expected);
+        expected.version = 1;
+        assert_eq!(table.finish(), Ok(expected));
     }
 
     #[test]
     fn a_stream_access_point_past_what_sap_delta_time_holds_is_not_stated() {
         let movie = two_tracks();
-        let mut table = SubsegmentTable::new(&movie).unwrap();
+        let mut table = SubsegmentTable::new(&movie, 1).unwrap();
 
         index(
             &mut table,
@@ -682,7 +725,8 @@ mod tests {
         expected.reference_id = 1;
         expected.timescale = 100;
         expected.references = Vec::from([reference(100, (1 << 28) + 10, false, 0, 0)]);
-        assert_eq!(table.finish(), expected);
+        expected.version = 1;
+        assert_eq!(table.finish(), Ok(expected));
     }
 
     /// Returns [`two_tracks`], fragmented, in a movie of timescale 100, with an edit list on track 1 of one edit from `media_time` to the end of the media
@@ -706,7 +750,7 @@ mod tests {
     #[test]
     fn the_subsegments_last_from_the_presentation_times_the_edit_list_of_the_first_track_maps() {
         let movie = edited(8);
-        let mut table = SubsegmentTable::new(&movie).unwrap();
+        let mut table = SubsegmentTable::new(&movie, 1).unwrap();
         let samples =
             [0, 4, 8, 12].map(|decoding_time| sample(1, decoding_time, 4, 0, decoding_time == 0));
 
@@ -716,13 +760,14 @@ mod tests {
         expected.reference_id = 1;
         expected.timescale = 100;
         expected.references = Vec::from([reference(100, 8, true, 1, 0)]);
-        assert_eq!(table.finish(), expected);
+        expected.version = 1;
+        assert_eq!(table.finish(), Ok(expected));
     }
 
     #[test]
     fn a_reference_track_whose_edit_list_does_not_map_its_composition_timeline_is_refused() {
         assert_eq!(
-            SubsegmentTable::new(&edited(-2)).map(|_| ()),
+            SubsegmentTable::new(&edited(-2), 0).map(|_| ()),
             Err(MuxError::Timeline {
                 error: TimelineError::InvalidMediaTime {
                     track_id: 1,

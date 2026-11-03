@@ -493,9 +493,7 @@ mod tests {
             muxer.handle_samples(samples.iter().cloned()).unwrap();
         }
         muxer.finish().unwrap();
-        iter::from_fn(|| muxer.poll_output())
-            .flat_map(Output::into_bytes)
-            .collect()
+        written_at(&iter::from_fn(|| muxer.poll_output()).collect::<Vec<_>>())
     }
 
     /// Returns the muxer of a fragmented movie file of fragments numbered from 1, that ends with an `mfra` where `movie_fragment_random_access`
@@ -505,8 +503,8 @@ mod tests {
         Muxer::fragmented(options)
     }
 
-    /// Returns the muxer of a media segment of fragments numbered from 1, that a `sidx` indexes where `segment_index`
-    fn segment(segment_index: bool) -> Muxer {
+    /// Returns the muxer of a media segment of fragments numbered from 1, that a `sidx` of `segment_index` subsegments indexes where there is one
+    fn segment(segment_index: Option<u32>) -> Muxer {
         let mut options = SegmentOptions::default();
         options.segment_index = segment_index;
         Muxer::segment(options)
@@ -572,7 +570,7 @@ mod tests {
                         source.movie.clone(),
                     ),
                     (
-                        || segment(false),
+                        || segment(None),
                         Some(fragmented_brands()),
                         source.movie.clone(),
                     ),
@@ -831,8 +829,9 @@ mod tests {
     fn the_subsegments_of_the_sidx_a_muxer_writes_are_each_movie_fragment_and_its_media_data() {
         for ConformanceFile { name, bytes, .. } in &muxed_files() {
             let source = demux(bytes);
+            let calls = u32::try_from(source.samples.len().div_ceil(SAMPLES_PER_CALL)).unwrap();
             let segment = mux(
-                segment(true),
+                segment(Some(calls)),
                 Some(fragmented_brands()),
                 source.movie.clone(),
                 &source.samples,
@@ -983,7 +982,7 @@ mod tests {
         let movie = demux(file).movie;
         let runs = fragment_runs(file);
         let segment = mux_runs(
-            segment(true),
+            segment(Some(u32::try_from(runs.len()).unwrap())),
             Some(fragmented_brands()),
             movie.clone(),
             runs.iter().map(Vec::as_slice),

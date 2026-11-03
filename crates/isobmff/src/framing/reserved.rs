@@ -8,7 +8,7 @@ use isobmff_core::{BoxDefinition, BoxHeader, BoxSize, BoxType, ExtendedSize};
 
 use crate::byte_range::ByteRange;
 use crate::error::MuxError;
-use crate::framing::to_u64;
+use crate::framing::{BoxEvent, BoxWriter, to_u64};
 use crate::output::Output;
 
 /// Length of the header of a `free` box, the least a `free` box takes
@@ -44,6 +44,30 @@ pub fn reserve(total_bytes: u64) -> Result<Vec<u8>, MuxError> {
         .encode(&mut bytes)
         .map_err(|error| MuxError::Box { error })?;
     Ok(bytes)
+}
+
+/// Writes a `free` box of `total_bytes` through `boxes`, as [`reserve`] makes it, and returns it and the file offset `boxes` counts for it
+///
+/// # Errors
+///
+/// * The failures of [`reserve`].
+/// * The failures of [`BoxWriter::handle_event`].
+pub(crate) fn write_reserved(boxes: &mut BoxWriter, total_bytes: u64) -> Result<Output, MuxError> {
+    let bytes = reserve(total_bytes)?;
+    let offset = boxes.next_offset();
+    let header = BoxHeader::with_payload_len(FREE, total_bytes.saturating_sub(FREE_HEADER_BYTES))
+        .ok_or(MuxError::ReservedSpaceMismatch {
+        reserved_bytes: Some(total_bytes),
+        offered_bytes: 0,
+    })?;
+    boxes.handle_event(BoxEvent::Header(header))?;
+    boxes.handle_event(BoxEvent::Payload(
+        bytes
+            .get(usize::try_from(header.encoded_len()).unwrap_or(usize::MAX)..)
+            .unwrap_or_default(),
+    ))?;
+    boxes.handle_event(BoxEvent::End)?;
+    Ok(Output::new(offset, bytes))
 }
 
 /// Returns the outputs that put `bytes` in the space `reserved`: the bytes at its start, and the header of a `free` box after them that spans the rest of it, where there is a rest

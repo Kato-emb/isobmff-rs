@@ -104,9 +104,9 @@ impl Default for FragmentedOptions {
 /// ```
 /// use isobmff::{Muxer, SegmentOptions};
 ///
-/// // Fragments numbered from 1, the segment indexed by a `sidx`
+/// // Fragments numbered from 1, the segment of 4 subsegments indexed by a `sidx`
 /// let mut options = SegmentOptions::default();
-/// options.segment_index = true;
+/// options.segment_index = Some(4);
 /// let muxer = Muxer::segment(options);
 /// assert_eq!(muxer.file_structure(), isobmff::FileStructure::Segment);
 /// ```
@@ -115,24 +115,27 @@ impl Default for FragmentedOptions {
 pub struct SegmentOptions {
     /// `sequence_number` of the first `moof`, §8.8.5; 1 by default
     pub first_sequence_number: u32,
-    /// Whether a `sidx` after the `styp` indexes the segment, each `moof` and its `mdat` a subsegment of the samples of the first track of the movie, §8.14.3; not by default
+    /// Number of subsegments, each `moof` and its `mdat`, of the first track of the movie, that a `sidx` after the `styp` indexes, or `None` for no `sidx`, §8.14.3; none by default
+    ///
+    /// The number is that of the calls of
+    /// [`handle_samples`](crate::Muxer::handle_samples): the muxer reserves
+    /// the space of the `sidx` with a `free` box before the first `moof`, and
+    /// [`finish`](crate::Muxer::finish) writes the `sidx` over it, so that the
+    /// segment is never held in memory. A call past the number is refused,
+    /// and fewer calls leave the `free` box, a segment without a `sidx`. A
+    /// `sidx` references up to 65,535 subsegments.
     ///
     /// The times are the presentation times the edit list of the first
     /// track maps the composition times of its samples to, as a
     /// [`Timeline`](crate::timeline::Timeline) maps them.
-    ///
-    /// The `sidx` states the bytes of what follows it, so the muxer holds
-    /// the boxes of the segment back until
-    /// [`finish`](crate::Muxer::finish) writes it, and returns them after
-    /// it: the segment is in memory whole.
-    pub segment_index: bool,
+    pub segment_index: Option<u32>,
 }
 
 impl Default for SegmentOptions {
     fn default() -> Self {
         Self {
             first_sequence_number: 1,
-            segment_index: false,
+            segment_index: None,
         }
     }
 }
