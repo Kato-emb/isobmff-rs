@@ -29,7 +29,9 @@ use crate::structure_data::{MovieFragmentWriter, SampleTableWriter, StructureDat
 /// writes: those of a track, a sample entry or a data reference entry in the
 /// file itself the movie does not declare.
 ///
-/// A refused call leaves the muxer as it was.
+/// A refused call leaves the muxer as it was, but for a call to
+/// [`finish`](Self::finish) that fails once the muxer holds a movie, which
+/// ends the file.
 ///
 /// # Examples
 ///
@@ -89,8 +91,6 @@ pub struct Muxer {
     file_structure: FileStructure,
     boxes: BoxWriter,
     structure_data: Option<StructureDataWriter>,
-    /// Movie the muxer wrote, once it is finished
-    written_movie: Option<MovieBox>,
     media_data: MediaDataWriter,
     /// Boxes written and not yet polled, in the order they lie in the file
     output: VecDeque<Vec<u8>>,
@@ -109,7 +109,6 @@ impl Muxer {
             file_structure,
             boxes: BoxWriter::new(),
             structure_data: None,
-            written_movie: None,
             media_data: MediaDataWriter,
             output: VecDeque::new(),
             held: Vec::new(),
@@ -325,26 +324,29 @@ impl Muxer {
 
     /// Ends the file: writes the `moov` of a file that is not fragmented, with the sample tables of its samples, the `mfra` of a fragmented file that lists its sync samples, or the `sidx` of an indexed segment before the boxes held back for it
     ///
-    /// The muxer then takes no more input. The boxes written are still
-    /// returned by [`poll_output`](Self::poll_output).
+    /// The muxer then takes no more input, even where this call fails once
+    /// the muxer holds a movie. The boxes written are still returned by
+    /// [`poll_output`](Self::poll_output).
     ///
     /// # Errors
     ///
     /// * [`MissingMovie`](MuxError::MissingMovie): the muxer holds no movie.
     /// * [`Box`](MuxError::Box): the `moov` or the `mfra` does not write.
-    /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the file is finished.
+    /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the file is
+    ///   finished, or a call to finish failed.
     pub fn finish(&mut self) -> Result<(), MuxError> {
         self.refuse_if_finished()?;
-        let structure_data = self.structure_data.take().ok_or(MuxError::MissingMovie)?;
+        let structure_data = self.structure_data.as_mut().ok_or(MuxError::MissingMovie)?;
+        // Why not at the end: the writers take their sample tables, mfra and
+        // sidx as they finish, so a second call after a failure here would
+        // write the file without them
+        self.finished = true;
         let bytes = match structure_data {
             StructureDataWriter::NonFragmented(writer) => {
-                let movie = self.written_movie.insert(writer.finish());
-                Some(write_box(&mut self.boxes, movie)?)
+                Some(write_box(&mut self.boxes, writer.finish())?)
             }
-            StructureDataWriter::Fragmented(mut writer) => {
-                let finished = writer.finish();
-                self.written_movie = Some(writer.into_movie());
-                let (mfra, sidx) = finished?;
+            StructureDataWriter::Fragmented(writer) => {
+                let (mfra, sidx) = writer.finish()?;
                 if let Some(sidx) = sidx {
                     // Why not self.boxes: it counts file offsets in the order
                     // boxes are written, and the sidx goes before boxes it has
@@ -359,7 +361,6 @@ impl Muxer {
         };
         self.output.extend(bytes);
         self.boxes.finish()?;
-        self.finished = true;
 
         Ok(())
     }
@@ -377,7 +378,7 @@ impl Muxer {
     pub const fn movie(&self) -> Option<&MovieBox> {
         match &self.structure_data {
             Some(writer) => Some(writer.movie()),
-            None => self.written_movie.as_ref(),
+            None => None,
         }
     }
 

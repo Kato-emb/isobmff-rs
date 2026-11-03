@@ -181,11 +181,6 @@ impl MovieFragmentWriter {
 
         Ok((mfra, self.segment_index.take().map(SubsegmentTable::finish)))
     }
-
-    /// Returns the movie the writer was made from
-    pub(crate) fn into_movie(self) -> MovieBox {
-        self.movie
-    }
 }
 
 impl SampleTableWriter {
@@ -265,16 +260,16 @@ impl SampleTableWriter {
         Ok(())
     }
 
-    /// Returns the movie with the sample tables of the samples written, and the durations they make up
+    /// Fills the sample tables of the movie with the samples written, and its durations with those they make up, and returns the movie
     ///
     /// A track's `mdhd` takes the duration of its samples, and its `tkhd` the
     /// same in the timescale of the movie, the longest of which the `mvhd`
     /// takes (§8.2.2, §8.3.2, §8.4.2).
-    pub(crate) fn finish(self) -> MovieBox {
-        let mut movie = self.movie;
+    pub(crate) fn finish(&mut self) -> &MovieBox {
+        let movie = &mut self.movie;
         let movie_timescale = movie.mvhd.timescale;
         let mut movie_duration = 0_u64;
-        for (trak, table) in movie.trak.iter_mut().zip(self.tables) {
+        for (trak, table) in movie.trak.iter_mut().zip(core::mem::take(&mut self.tables)) {
             let media_duration = table.decoding_time();
             let track_duration = u128::from(media_duration)
                 .saturating_mul(u128::from(movie_timescale))
@@ -762,7 +757,7 @@ mod tests {
         let tables_of = |movie| {
             let mut writer = SampleTableWriter::new(movie)?;
             writer.handle_samples(&samples, 100)?;
-            Ok::<_, MuxError>(writer.finish())
+            Ok::<_, MuxError>(writer.finish().clone())
         };
         let fragments_of = |mut movie: MovieBox| {
             movie.mvex = two_fragmented_tracks().mvex;
@@ -780,7 +775,7 @@ mod tests {
 
     #[test]
     fn a_movie_written_without_fragments_has_no_mvex() {
-        let writer = SampleTableWriter::new(two_fragmented_tracks()).unwrap();
+        let mut writer = SampleTableWriter::new(two_fragmented_tracks()).unwrap();
 
         assert_eq!(writer.finish().mvex, None);
     }
