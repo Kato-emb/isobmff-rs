@@ -88,7 +88,11 @@ use crate::sample::SampleProperties;
 /// * In a fragmented movie, one with an `mvex`, a last edit of duration 0
 ///   that is not empty lasts to the end of the media, and an edit after the
 ///   edit list presents the media past the last edit's from where that
-///   edit ends (§8.6.6.1).
+///   edit ends (§8.6.6.1). The last edit lasts to the end of the media
+///   whether or not the `mvex` has an `mehd`: §8.6.6.1 states it of a movie
+///   without one, and one with an `mehd` should have its last edit adjusted
+///   to the duration it states, so an edit of duration 0 there is read as
+///   in a movie without one.
 #[derive(Clone, Debug)]
 pub struct Timeline<'a> {
     edits: &'a [EditListEntry],
