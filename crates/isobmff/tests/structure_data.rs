@@ -444,10 +444,6 @@ mod tests {
     #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names, and runs ffprobe on them"]
     fn the_samples_ffprobe_presents_from_their_start_are_presented_at_its_presentation_timestamps()
     {
-        // Edit lists of an empty edit, of a media time past composition time
-        // offsets of either sign, and of edits that enter a sample partway
-        // FFmpeg presents video from the first sample it keeps at 0, which
-        // in a8-foreman_QCIF_edit the edit enters 15 ticks past
         let expected = BTreeMap::from([
             (("02_dref_edts_img.mp4", 101), BTreeSet::from([0])),
             (("17_negative_ctso.mp4", 1), BTreeSet::from([0])),
