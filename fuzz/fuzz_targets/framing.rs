@@ -18,7 +18,7 @@
 //!    of the input that does not frame may also fail with another
 //! 5. every box framed reads back as a compressed box (ISO/IEC 14496-12
 //!    §8.16) exactly when it has a replacement type, into a box of that type
-//!    whose payload is no longer than the limit, or fails with a failure of
+//!    whose payload holds no more than the limit, or fails with a failure of
 //!    reading it back
 
 #![no_main]
@@ -96,8 +96,9 @@ fn reads_back_as_the_box_it_replaces(framed: RawBox<'_>) {
         Ok(Some((box_type, payload))) => {
             assert_eq!(Some(box_type), replacement, "read back into another type");
             assert!(
-                payload.len() as u64 <= DECOMPRESSED_LIMIT_BYTES,
-                "read back past the limit into {} bytes",
+                payload.capacity() as u64 <= DECOMPRESSED_LIMIT_BYTES,
+                "read back into {} bytes held for {}, past the limit",
+                payload.capacity(),
                 payload.len()
             );
         }

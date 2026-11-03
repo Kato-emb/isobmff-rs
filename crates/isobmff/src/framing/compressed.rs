@@ -8,6 +8,7 @@
 //! stream (IETF RFC 1950) is not read: it cannot be told from a deflate
 //! stream by its first bytes.
 
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use isobmff_boxes::{
@@ -15,7 +16,8 @@ use isobmff_boxes::{
     CompressedSubsegmentIndexBox,
 };
 use isobmff_core::{BoxDefinition, BoxType, RawBox};
-use miniz_oxide::inflate::{TINFLStatus, decompress_to_vec_with_limit};
+use miniz_oxide::inflate::TINFLStatus;
+use miniz_oxide::inflate::core::{DecompressorOxide, decompress, inflate_flags};
 
 use crate::error::DemuxError;
 use crate::framing::to_u64;
@@ -36,6 +38,8 @@ const FNAME: u8 = 0x08;
 const FCOMMENT: u8 = 0x10;
 /// Flags RFC 1952 reserves, which a reader refuses
 const FRESERVED: u8 = 0xe0;
+/// Length the payload of a compressed box is first grown to as it is inflated, within the limit
+const MIN_GROWN_BYTES: usize = 1024;
 
 /// Returns the replacement type of a compressed box of `box_type`, the type of the box it replaces (§8.16.1), or `None` for a box that is not compressed
 #[must_use]
@@ -110,22 +114,52 @@ fn inflate(
     Ok(payload)
 }
 
-/// Inflates the deflate stream `stream` of the compressed box of `box_type` into at most `limit_bytes`
+/// Inflates the deflate stream `stream` of the compressed box of `box_type` into at most `limit_bytes`, holding no more than that
 fn deflated(box_type: BoxType, stream: &[u8], limit_bytes: u64) -> Result<Vec<u8>, DemuxError> {
     let limit = usize::try_from(limit_bytes).unwrap_or(usize::MAX);
-    decompress_to_vec_with_limit(stream, limit).map_err(|failure| match failure.status {
-        TINFLStatus::HasMoreOutput => DemuxError::PayloadLimitExceeded {
-            box_type,
-            reached_bytes: limit_bytes.saturating_add(1),
-            limit_bytes,
-        },
-        TINFLStatus::FailedCannotMakeProgress
-        | TINFLStatus::BadParam
-        | TINFLStatus::Adler32Mismatch
-        | TINFLStatus::Failed
-        | TINFLStatus::Done
-        | TINFLStatus::NeedsMoreInput => DemuxError::UnreadableCompressedData { box_type },
-    })
+    let unreadable = DemuxError::UnreadableCompressedData { box_type };
+    let mut decompressor = Box::<DecompressorOxide>::default();
+    let mut payload = Vec::new();
+    let mut input = stream;
+    let mut inflated = 0_usize;
+    loop {
+        // Why not `Vec::resize` alone, as `decompress_to_vec_with_limit` grows its output: it may reserve past the length it grows to, and so past the limit.
+        let grown = payload
+            .len()
+            .saturating_mul(2)
+            .max(MIN_GROWN_BYTES)
+            .min(limit);
+        payload.reserve_exact(grown.saturating_sub(payload.len()));
+        payload.resize(grown, 0);
+        let (status, consumed, produced) = decompress(
+            &mut decompressor,
+            input,
+            &mut payload,
+            inflated,
+            inflate_flags::TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF,
+        );
+        inflated = inflated.saturating_add(produced);
+        input = input.get(consumed..).ok_or(unreadable)?;
+        match status {
+            TINFLStatus::Done => {
+                payload.truncate(inflated);
+                return Ok(payload);
+            }
+            TINFLStatus::HasMoreOutput if payload.len() >= limit => {
+                return Err(DemuxError::PayloadLimitExceeded {
+                    box_type,
+                    reached_bytes: limit_bytes.saturating_add(1),
+                    limit_bytes,
+                });
+            }
+            TINFLStatus::HasMoreOutput => {}
+            TINFLStatus::FailedCannotMakeProgress
+            | TINFLStatus::BadParam
+            | TINFLStatus::Adler32Mismatch
+            | TINFLStatus::Failed
+            | TINFLStatus::NeedsMoreInput => return Err(unreadable),
+        }
+    }
 }
 
 /// Returns the deflate stream of the gzip member `member`, and the CRC-32 and the length modulo 2^32 of what it inflates to, or `None` for a member that does not read
@@ -318,6 +352,20 @@ mod tests {
             (inflated.len(), inflated.capacity() <= 45),
             (PAYLOAD.len(), true)
         );
+        for zeros in [1500, 3000, 70_000] {
+            let grown = read_back(
+                &boxed(MOVIE, &compress_to_vec(&vec![0; zeros], 6)),
+                u64::try_from(zeros).unwrap(),
+            )
+            .unwrap()
+            .unwrap()
+            .1;
+            assert_eq!(
+                (grown.len(), grown.capacity()),
+                (zeros, zeros),
+                "{zeros} bytes"
+            );
+        }
         assert_eq!(
             read_back(&boxed(MOVIE, &compress_to_vec(PAYLOAD, 6)), 44),
             past_limit(45, 44)
