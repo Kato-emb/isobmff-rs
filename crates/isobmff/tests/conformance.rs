@@ -24,12 +24,15 @@ mod tests {
     use isobmff::framing::{BoxEvent, BoxReader, BoxWriter};
     use isobmff::media_data::MediaDataReader;
     use isobmff::structure_data::SegmentIndex;
+    use isobmff::timeline::{Presentation, Timeline};
     use isobmff::{
         BoxDefinition, BoxHeader, Boxes, ByteRange, DemuxEvent, DemuxLimits, Demuxer,
         FileStructure, FourCc, Muxer, Sample, SampleLocation,
     };
     use isobmff_test_support::serde_json::Value;
-    use isobmff_test_support::{ConformanceFile, conformance_files, ffprobe_packets};
+    use isobmff_test_support::{
+        ConformanceFile, FfprobePacket, conformance_files, ffprobe_packets,
+    };
 
     /// Lengths the files are cut into, the last of them longer than any file
     const PIECE_LENS: [usize; 4] = [1, 7, 4096, usize::MAX];
@@ -513,18 +516,24 @@ mod tests {
         ftyp
     }
 
-    /// Returns the track, size and decoding timestamp of each packet `ffprobe` reads of `file`, sorted
-    fn ffprobe_read(name: &str, file: &[u8]) -> Vec<(u32, u64, Option<i64>)> {
+    /// Returns the packets `ffprobe` reads of `file`, in the order it reports them
+    fn ffprobe_probe(name: &str, file: &[u8]) -> Vec<FfprobePacket> {
         // Why not the process and the name alone: tests in one process probe files of the same name at once
         static PROBES: AtomicUsize = AtomicUsize::new(0);
         let probe = PROBES.fetch_add(1, Ordering::Relaxed);
         let path = env::temp_dir().join(format!("isobmff-mux-{}-{probe}-{name}", process::id()));
         fs::write(&path, file).unwrap();
-        let mut packets: Vec<_> = ffprobe_packets(&path)
+        let packets = ffprobe_packets(&path);
+        fs::remove_file(&path).unwrap();
+        packets
+    }
+
+    /// Returns the track, size and decoding timestamp of each packet `ffprobe` reads of `file`, sorted
+    fn ffprobe_read(name: &str, file: &[u8]) -> Vec<(u32, u64, Option<i64>)> {
+        let mut packets: Vec<_> = ffprobe_probe(name, file)
             .into_iter()
             .map(|packet| (packet.track_id, packet.size, packet.dts))
             .collect();
-        fs::remove_file(&path).unwrap();
         packets.sort_unstable();
         packets
     }
@@ -778,6 +787,59 @@ mod tests {
             ffprobe_read("muxed-sg-tl-st.mp4", &muxed),
             ffprobe_read("source-sg-tl-st.mp4", &file.bytes)
         );
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names, and runs ffprobe on them"]
+    fn a_fragmented_movie_written_as_a_movie_file_presents_its_samples_where_its_edit_list_did() {
+        let file = conformance_files()
+            .into_iter()
+            .find(|file| file.name == "21_segment.mp4")
+            .unwrap();
+        let source = demux(&file.bytes);
+        let muxed = mux(
+            FileStructure::NonFragmented,
+            source.file_type.clone(),
+            source.movie.clone(),
+            &source.samples,
+        );
+        let read = demux(&muxed);
+
+        let presented = |demuxed: &Demuxed| -> Vec<(u32, Vec<Presentation>)> {
+            demuxed
+                .samples
+                .iter()
+                .map(|sample| {
+                    let track_id = sample.properties().track_id;
+                    let timeline = Timeline::new(&demuxed.movie, track_id).unwrap();
+                    (track_id, timeline.present(sample.properties()).collect())
+                })
+                .collect()
+        };
+        let track_durations: Vec<_> = read
+            .movie
+            .trak
+            .iter()
+            .filter_map(|trak| {
+                let elst = trak.edts.as_ref()?.elst.as_ref()?;
+                let edits: u64 = elst.entries.iter().map(|edit| edit.edit_duration).sum();
+                Some((trak.tkhd.duration, edits))
+            })
+            .collect();
+        assert_eq!(presented(&read), presented(&source));
+        assert_eq!(track_durations, [(29952, 29952)]);
+
+        let kept: Vec<_> = ffprobe_probe("muxed-21_segment.mp4", &muxed)
+            .into_iter()
+            .zip(presented(&read))
+            .filter(|(packet, _)| !packet.discard)
+            .map(|(packet, (_, presentations))| {
+                let first = presentations.first().map(Presentation::presentation_time);
+                (packet.pts.and_then(|pts| u64::try_from(pts).ok()), first)
+            })
+            .collect();
+        assert!(!kept.is_empty());
+        assert!(kept.iter().all(|(pts, first)| pts == first), "{kept:?}");
     }
 
     /// Returns the samples of `file`, a run for each movie fragment, in the order they come out of a demuxer

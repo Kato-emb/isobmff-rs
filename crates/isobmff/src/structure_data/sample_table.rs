@@ -395,6 +395,23 @@ impl TrackTable {
         self.decoding_time
     }
 
+    /// Returns the latest composition time a sample is composed up to, counted from 0 at the decoding time of the first, or 0 before the first
+    pub(super) fn composition_end(&self) -> i128 {
+        self.samples
+            .iter()
+            .fold((0_i128, 0_i128), |(decoding_time, end), sample| {
+                let duration = i128::from(sample.sample_duration);
+                let composed_until = decoding_time
+                    .saturating_add(i128::from(sample.sample_composition_time_offset))
+                    .saturating_add(duration);
+                (
+                    decoding_time.saturating_add(duration),
+                    end.max(composed_until),
+                )
+            })
+            .1
+    }
+
     /// Returns the decoding time the first sample is taken at, or `None` before the first
     pub(super) const fn decoding_start(&self) -> Option<u64> {
         self.decoding_start

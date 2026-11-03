@@ -57,6 +57,8 @@ pub(crate) struct MovieFragmentWriter {
 pub(crate) struct SampleTableWriter {
     movie: MovieBox,
     tables: Vec<TrackTable>,
+    /// Whether the movie given was fragmented, in which a last edit of duration 0 lasts to the end of the media (§8.6.6.1)
+    fragmented: bool,
 }
 
 impl MovieFragmentWriter {
@@ -194,10 +196,14 @@ impl SampleTableWriter {
     /// * The failure of [`take_sample_tables`].
     pub(crate) fn new(mut movie: MovieBox) -> Result<Self, MuxError> {
         take_sample_tables(&mut movie)?;
-        movie.mvex = None;
+        let fragmented = movie.mvex.take().is_some();
         let tables = movie.trak.iter().map(|_| TrackTable::default()).collect();
 
-        Ok(Self { movie, tables })
+        Ok(Self {
+            movie,
+            tables,
+            fragmented,
+        })
     }
 
     /// Returns the movie the writer was made from, its sample tables those of the samples to come
@@ -291,35 +297,77 @@ impl SampleTableWriter {
 
     /// Fills the sample tables of the movie with the samples written, and its durations with those they make up, and returns the movie
     ///
-    /// A track's `mdhd` takes the duration of its samples, and its `tkhd` the
-    /// same in the timescale of the movie, the longest of which the `mvhd`
-    /// takes (§8.2.2, §8.3.2, §8.4.2). The sample table counts decoding
-    /// times from 0 at the first sample of a track (§8.6.1.2): the edits of
-    /// a track whose first sample is at a later decoding time move their
-    /// `media_time` back by as much.
+    /// A track's `mdhd` takes the duration of its samples, the longest
+    /// `tkhd` the `mvhd` takes, and a track's `tkhd` (§8.2.2, §8.3.2,
+    /// §8.4.2):
+    ///
+    /// * without an edit list, the duration of its samples in the timescale
+    ///   of the movie;
+    /// * with one that repeats, the duration the movie gives, up to which it
+    ///   repeats;
+    /// * otherwise the sum of its edit durations.
+    ///
+    /// The sample table counts decoding times from 0 at the first sample of
+    /// a track (§8.6.1.2): the edits of a track whose first sample is at a
+    /// later decoding time move their `media_time` back by as much. Where
+    /// the movie given was fragmented, a last edit of duration 0 that is not
+    /// empty, which lasts to the end of the media there (§8.6.6.1), takes the
+    /// duration from its `media_time` to the latest composition time a sample
+    /// is composed up to, rounded up to a tick of the movie, and the edit
+    /// list, which is presented once there, does not repeat.
     pub(crate) fn finish(&mut self) -> &MovieBox {
         let movie = &mut self.movie;
-        let movie_timescale = movie.mvhd.timescale;
+        let movie_timescale = u128::from(movie.mvhd.timescale);
         let mut movie_duration = 0_u64;
         for (trak, table) in movie.trak.iter_mut().zip(core::mem::take(&mut self.tables)) {
             let media_duration = table.decoding_time();
-            let track_duration = u128::from(media_duration)
-                .saturating_mul(u128::from(movie_timescale))
-                .checked_div(u128::from(trak.mdia.mdhd.timescale))
-                .map_or(0, |duration| u64::try_from(duration).unwrap_or(u64::MAX));
+            let media_timescale = u128::from(trak.mdia.mdhd.timescale);
+            let in_movie = |duration: Option<u128>| {
+                duration.map_or(0, |duration| u64::try_from(duration).unwrap_or(u64::MAX))
+            };
             trak.mdia.mdhd.duration = media_duration;
             trak.mdia.mdhd.version = trak.mdia.mdhd.version.max(version_for(media_duration));
+            let mut track_duration = in_movie(
+                u128::from(media_duration)
+                    .saturating_mul(movie_timescale)
+                    .checked_div(media_timescale),
+            );
+            let decoding_start = table.decoding_start().unwrap_or_default();
+            let elst = trak.edts.as_mut().and_then(|edts| edts.elst.as_mut());
+            if let Some(elst) = elst.filter(|elst| !elst.entries.is_empty()) {
+                if decoding_start > 0 {
+                    let shift = i64::try_from(decoding_start).unwrap_or(i64::MAX);
+                    for edit in elst.entries.iter_mut().filter(|edit| edit.media_time >= 0) {
+                        edit.media_time = edit.media_time.saturating_sub(shift);
+                    }
+                }
+                let open = elst
+                    .entries
+                    .last_mut()
+                    .filter(|edit| self.fragmented && timeline::lasts_to_end_of_media(edit));
+                if let Some(edit) = open {
+                    let media = table
+                        .composition_end()
+                        .saturating_sub(i128::from(edit.media_time));
+                    let media = u128::try_from(media).unwrap_or_default();
+                    let scaled = media.saturating_mul(movie_timescale);
+                    edit.edit_duration =
+                        in_movie((media_timescale > 0).then(|| scaled.div_ceil(media_timescale)));
+                    elst.version = elst.version.max(version_for(edit.edit_duration));
+                    elst.repeat_edits = false;
+                }
+                track_duration = if elst.repeat_edits {
+                    trak.tkhd.duration
+                } else {
+                    elst.entries
+                        .iter()
+                        .map(|edit| edit.edit_duration)
+                        .fold(0, u64::saturating_add)
+                };
+            }
             trak.tkhd.duration = track_duration;
             trak.tkhd.version = trak.tkhd.version.max(version_for(track_duration));
             movie_duration = movie_duration.max(track_duration);
-            let decoding_start = table.decoding_start().unwrap_or_default();
-            let elst = trak.edts.as_mut().and_then(|edts| edts.elst.as_mut());
-            if let Some(elst) = elst.filter(|_| decoding_start > 0) {
-                let shift = i64::try_from(decoding_start).unwrap_or(i64::MAX);
-                for edit in elst.entries.iter_mut().filter(|edit| edit.media_time >= 0) {
-                    edit.media_time = edit.media_time.saturating_sub(shift);
-                }
-            }
             table.fill(&mut trak.mdia.minf.stbl);
         }
         movie.mvhd.duration = movie_duration;
@@ -730,7 +778,7 @@ mod tests {
 
     #[test]
     fn the_samples_of_a_track_with_an_edit_list_start_at_the_decoding_time_of_the_first() {
-        let mut writer = SampleTableWriter::new(edited(&[-1, 8])).unwrap();
+        let mut writer = SampleTableWriter::new(edited(&[(0, -1), (0, 8)])).unwrap();
 
         writer
             .handle_samples(&[sample(1, 5, 10, b"AB")], 0)
@@ -770,7 +818,7 @@ mod tests {
 
     #[test]
     fn a_track_with_an_edit_before_its_first_sample_is_refused() {
-        let mut writer = SampleTableWriter::new(edited(&[3])).unwrap();
+        let mut writer = SampleTableWriter::new(edited(&[(0, 3)])).unwrap();
 
         assert_eq!(
             writer.handle_samples(&[sample(1, 5, 10, b"AB")], 0),
@@ -793,14 +841,131 @@ mod tests {
         );
     }
 
-    /// Returns [`two_tracks`] with an edit list on track 1 of edits from `media_times`
-    fn edited(media_times: &[i64]) -> MovieBox {
+    /// Returns the edit durations of the edit list of track 1, and the durations of the `tkhd` of each track and of the `mvhd`, of `movie` written with `samples`
+    fn durations(movie: MovieBox, samples: &[Sample]) -> (Vec<u64>, Vec<u64>, u64) {
+        let mut writer = SampleTableWriter::new(movie).unwrap();
+        writer.handle_samples(samples, 0).unwrap();
+        let movie = writer.finish();
+        let edits = movie
+            .trak
+            .first()
+            .map(|trak| {
+                crate::timeline::edits(trak)
+                    .iter()
+                    .map(|edit| edit.edit_duration)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let tracks = movie.trak.iter().map(|trak| trak.tkhd.duration).collect();
+        (edits, tracks, movie.mvhd.duration)
+    }
+
+    #[test]
+    fn a_last_edit_lasting_to_the_end_of_the_media_of_a_fragmented_movie_ends_with_the_samples() {
+        let fragmented = |media_timescale| {
+            let mut movie = edited(&[(0, 8)]);
+            movie.mvex = Some(MovieExtendsBox::default());
+            if let Some(trak) = movie.trak.first_mut() {
+                trak.mdia.mdhd.timescale = media_timescale;
+            }
+            movie
+        };
+        let samples = [
+            sample(1, 0, 10, b"A"),
+            sample(1, 10, 10, b"B"),
+            sample(1, 20, 10, b"C"),
+            sample(2, 0, 20, b"D"),
+        ];
+
+        assert_eq!(
+            [
+                durations(fragmented(100), &samples),
+                durations(fragmented(300), &samples),
+                durations(edited(&[(0, 8)]), &samples),
+            ],
+            [
+                (Vec::from([220]), Vec::from([220, 200]), 220),
+                (Vec::from([74]), Vec::from([74, 200]), 200),
+                (Vec::from([0]), Vec::from([0, 200]), 200),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_last_edit_lasting_to_the_end_of_the_media_closes_where_the_last_sample_composed_ends() {
+        let mut movie = edited(&[(0, 0)]);
+        movie.mvex = Some(MovieExtendsBox::default());
+        if let Some(trak) = movie.trak.first_mut() {
+            trak.mdia.mdhd.timescale = 1000;
+        }
+        let mut late = sample(1, 0, 10, b"A");
+        let mut properties = *late.properties();
+        properties.sample_composition_time_offset = 5;
+        late = Sample::new(properties, late.into_data());
+
+        assert_eq!(
+            durations(movie, &[late, sample(2, 0, 10, b"B")]),
+            (Vec::from([15]), Vec::from([15, 100]), 100)
+        );
+    }
+
+    #[test]
+    fn a_repeated_edit_list_whose_last_edit_lasts_to_the_end_of_the_media_is_presented_once() {
+        let mut movie = edited(&[(0, 0)]);
+        movie.mvex = Some(MovieExtendsBox::default());
+        if let Some(trak) = movie.trak.first_mut() {
+            trak.tkhd.duration = 777;
+            if let Some(elst) = trak.edts.as_mut().and_then(|edts| edts.elst.as_mut()) {
+                elst.repeat_edits = true;
+            }
+        }
+        let mut writer = SampleTableWriter::new(movie).unwrap();
+        writer.handle_samples(&[sample(1, 0, 10, b"A")], 0).unwrap();
+
+        let trak = writer.finish().trak.first().unwrap();
+        let repeat_edits = trak
+            .edts
+            .as_ref()
+            .and_then(|edts| edts.elst.as_ref())
+            .map(|elst| elst.repeat_edits);
+        assert_eq!((repeat_edits, trak.tkhd.duration), (Some(false), 100));
+    }
+
+    #[test]
+    fn a_track_with_an_edit_list_lasts_as_long_as_its_edits_or_as_its_tkhd_states_where_they_repeat()
+     {
+        let samples = [sample(1, 0, 10, b"A"), sample(2, 0, 10, b"B")];
+        let mut repeated = edited(&[(30, 0)]);
+        if let Some(trak) = repeated.trak.first_mut() {
+            trak.tkhd.duration = 777;
+            if let Some(elst) = trak.edts.as_mut().and_then(|edts| edts.elst.as_mut()) {
+                elst.repeat_edits = true;
+            }
+        }
+
+        assert_eq!(
+            [
+                durations(edited(&[(500, -1), (300, 0)]), &samples),
+                durations(edited(&[(0, 0)]), &samples),
+                durations(repeated, &samples),
+            ],
+            [
+                (Vec::from([500, 300]), Vec::from([800, 100]), 800),
+                (Vec::from([0]), Vec::from([0, 100]), 100),
+                (Vec::from([30]), Vec::from([777, 100]), 777),
+            ]
+        );
+    }
+
+    /// Returns [`two_tracks`] with an edit list on track 1 of `edits` (edit duration, media time)
+    fn edited(edits: &[(u64, i64)]) -> MovieBox {
         let mut movie = two_tracks();
         let mut elst = isobmff_boxes::EditListBox::default();
-        elst.entries = media_times
+        elst.entries = edits
             .iter()
-            .map(|&media_time| {
+            .map(|&(edit_duration, media_time)| {
                 let mut edit = isobmff_boxes::EditListEntry::default();
+                edit.edit_duration = edit_duration;
                 edit.media_time = media_time;
                 edit.media_rate_integer = 1;
                 edit
