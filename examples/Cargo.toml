@@ -22,10 +22,6 @@ name = "demux"
 path = "demux.rs"
 
 [[example]]
-name = "demux_external"
-path = "demux_external.rs"
-
-[[example]]
 name = "demux_stream"
 path = "demux_stream.rs"
 

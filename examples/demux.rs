@@ -19,7 +19,7 @@
 //! data reference names (ISO/IEC 14496-12 §8.7.2). The demuxer locates those
 //! samples and does not gather them, and this example does not read them
 //! either: it counts them by data reference entry and names the file each is
-//! in. The `demux_external` example reads them.
+//! in. The crate documentation shows how a caller gathers them.
 
 use std::collections::BTreeMap;
 use std::env;
