@@ -184,8 +184,13 @@ impl Muxer {
     /// or a segment has them declare no sample. So is the `mvex` (§8.8.1): a
     /// file that is not fragmented has none, and a fragmented file or a
     /// segment has the `mvex` of `movie`, with a `trex` whose samples sample
-    /// entry 1 describes added for each track it has none for. A movie read
-    /// by a [`Demuxer`](crate::Demuxer) is taken as it is.
+    /// entry 1 describes added for each track it has none for. So are the
+    /// durations of the `mvhd`, of each `tkhd` and of each `mdhd`, with the
+    /// versions that hold them (§8.2.2, §8.3.2, §8.4.2), in a file that is
+    /// not fragmented: [`finish`](Self::finish) replaces them with the
+    /// duration of the samples of each track and the longest of those. A
+    /// fragmented file or a segment writes them as `movie` gives them. A
+    /// movie read by a [`Demuxer`](crate::Demuxer) is taken as it is.
     ///
     /// # Errors
     ///
