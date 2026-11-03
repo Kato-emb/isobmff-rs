@@ -23,10 +23,11 @@ use crate::structure_data::{MovieFragmentWriter, SampleTableWriter, StructureDat
 /// out is the [`FileStructure`] the muxer is made with.
 ///
 /// The movie is the caller's `moov`, its tracks and their sample entries
-/// already in place, its sample tables empty. The muxer declares the
-/// samples in it, or in movie fragments, and refuses samples it would not
-/// declare in the file it writes: those of a track, a sample entry or a data
-/// reference entry in the file itself the movie does not declare.
+/// already in place, such as the movie a [`Demuxer`](crate::Demuxer) read.
+/// The muxer declares the samples in it, or in movie fragments, in tables
+/// of its own, and refuses samples it would not declare in the file it
+/// writes: those of a track, a sample entry or a data reference entry in the
+/// file itself the movie does not declare.
 ///
 /// A refused call leaves the muxer as it was.
 ///
@@ -173,16 +174,27 @@ impl Muxer {
     /// tables, and a segment writes none: its movie is that of its
     /// initialization segment, which the samples are checked against.
     ///
+    /// The muxer writes how the movie declares its samples: the movie gives
+    /// the tracks, their sample entries, data references and edit lists.
+    /// The tables of each sample table that state what the samples state
+    /// (`stts`, `ctts`, `stsc`, `stsz` or `stz2`, `stco` or `co64`, `stss`,
+    /// `sdtp`, `padb`, `stdp`; ISO/IEC 14496-12 §8.6, §8.7) are outputs of
+    /// the muxer, and their values in `movie` are not used: a file that is
+    /// not fragmented has them filled from its samples, and a fragmented file
+    /// or a segment has them declare no sample. So is the `mvex` (§8.8.1): a
+    /// file that is not fragmented has none, and a fragmented file or a
+    /// segment has the `mvex` of `movie`, with a `trex` whose samples sample
+    /// entry 1 describes added for each track it has none for. A movie read
+    /// by a [`Demuxer`](crate::Demuxer) is taken as it is.
+    ///
     /// # Errors
     ///
     /// * [`DuplicateBox`](MuxError::DuplicateBox): the muxer holds a movie
     ///   already.
-    /// * [`MissingTrackExtends`](MuxError::MissingTrackExtends): the file is
-    ///   fragmented or a segment, and a track of the movie has no `trex`.
-    /// * [`UnexpectedBox`](MuxError::UnexpectedBox): the file is not
-    ///   fragmented, and the movie has an `mvex`.
-    /// * [`SampleTableNotEmpty`](MuxError::SampleTableNotEmpty): a table of
-    ///   the sample table of a track declares samples.
+    /// * [`SampleTableNotEmpty`](MuxError::SampleTableNotEmpty): a sample
+    ///   group, sub-sample, sample auxiliary information or shadow sync table
+    ///   of a track declares samples, which the muxer does not write from the
+    ///   samples it takes.
     /// * [`EditListNotApplied`](MuxError::EditListNotApplied): the segment is
     ///   indexed, and the edit list of the first track of the movie moves its
     ///   presentation times off its composition times, which the muxer does
@@ -398,10 +410,11 @@ mod tests {
     use crate::structure_data::fixtures::{encoded, movie, track, written};
     use crate::structure_data::movie_fragment_random_access_start;
 
-    /// Returns a movie of track 1 of no sample, the movie in a timescale of 1000 and the track of 100
+    /// Returns a movie of track 1 of no sample, its tables of no entry, the movie in a timescale of 1000 and the track of 100
     fn one_track() -> MovieBox {
         let mut trak = track(1, 0, &[], &[], &[]);
         trak.mdia.mdhd.timescale = 100;
+        trak.mdia.minf.stbl.stts = Some(TimeToSampleBox::default());
         let mut movie = movie([trak]);
         movie.mvhd.timescale = 1000;
         movie.mvhd.next_track_id = 2;

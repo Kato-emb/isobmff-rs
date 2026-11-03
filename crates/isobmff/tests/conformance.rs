@@ -18,9 +18,7 @@ mod tests {
     use std::{env, fs, iter, process};
 
     use isobmff::boxes::{
-        ChunkOffsetBox, ChunkOffsetVariant, DataEntry, FileTypeBox, MovieBox, MovieExtendsBox,
-        MovieFragmentBox, MovieFragmentRandomAccessBox, SampleSizeBox, SampleSizeVariant,
-        SampleToChunkBox, TimeToSampleBox, TrackExtendsBox,
+        DataEntry, FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox,
     };
     use isobmff::framing::{BoxEvent, BoxReader, BoxWriter};
     use isobmff::media_data::MediaDataReader;
@@ -493,7 +491,7 @@ mod tests {
         iter::from_fn(|| muxer.poll_output()).flatten().collect()
     }
 
-    /// Returns the initialization segment of `movie`, extended for movie fragments: the file of its brands and its movie alone
+    /// Returns the initialization segment of `movie`: the file of its brands and its movie alone
     fn initialization(movie: MovieBox) -> Vec<u8> {
         mux(
             FileStructure::Fragmented {
@@ -501,51 +499,9 @@ mod tests {
                 random_access: false,
             },
             Some(fragmented_brands()),
-            fragmented(movie),
+            movie,
             &[],
         )
-    }
-
-    /// Returns `movie` with sample tables that declare no sample, as a movie whose samples are muxed takes
-    fn without_samples(mut movie: MovieBox) -> MovieBox {
-        for trak in &mut movie.trak {
-            let stbl = &mut trak.mdia.minf.stbl;
-            stbl.stts = Some(TimeToSampleBox::default());
-            stbl.ctts = None;
-            stbl.stsc = Some(SampleToChunkBox::default());
-            stbl.sample_size = Some(SampleSizeVariant::SampleSize(SampleSizeBox::default()));
-            stbl.chunk_offset = Some(ChunkOffsetVariant::ChunkOffset(ChunkOffsetBox::default()));
-            stbl.stss = None;
-            stbl.sdtp = None;
-            stbl.padb = None;
-            stbl.stdp = None;
-        }
-        movie
-    }
-
-    /// Returns `movie` extended for movie fragments, each track by a `trex` whose samples sample entry 1 describes
-    fn fragmented(movie: MovieBox) -> MovieBox {
-        let mut movie = without_samples(movie);
-        let mut mvex = MovieExtendsBox::default();
-        mvex.trex = movie
-            .trak
-            .iter()
-            .map(|trak| {
-                let mut trex = TrackExtendsBox::default();
-                trex.track_id = trak.tkhd.track_id;
-                trex.default_sample_description_index = 1;
-                trex
-            })
-            .collect();
-        movie.mvex = Some(mvex);
-        movie
-    }
-
-    /// Returns `movie` without its `mvex`, as a movie that is not fragmented
-    fn not_fragmented(movie: MovieBox) -> MovieBox {
-        let mut movie = without_samples(movie);
-        movie.mvex = None;
-        movie
     }
 
     /// Returns the brands of a fragmented file, and of a segment
@@ -598,7 +554,7 @@ mod tests {
                     (
                         FileStructure::NonFragmented,
                         source.file_type.clone(),
-                        not_fragmented(source.movie.clone()),
+                        source.movie.clone(),
                     ),
                     (
                         FileStructure::Segment {
@@ -606,15 +562,11 @@ mod tests {
                             segment_index: false,
                         },
                         Some(fragmented_brands()),
-                        fragmented(source.movie.clone()),
+                        source.movie.clone(),
                     ),
                 ]
             } else {
-                vec![(
-                    first,
-                    Some(fragmented_brands()),
-                    fragmented(source.movie.clone()),
-                )]
+                vec![(first, Some(fragmented_brands()), source.movie.clone())]
             };
             for (file_structure, file_type, movie) in conversions {
                 let context = format!("{name} into {file_structure:?}");
@@ -692,7 +644,7 @@ mod tests {
                     random_access: true,
                 },
                 Some(fragmented_brands()),
-                fragmented(source.movie.clone()),
+                source.movie.clone(),
                 &source.samples,
             );
             let read = demux(&file);
@@ -751,7 +703,7 @@ mod tests {
                     segment_index: true,
                 },
                 Some(fragmented_brands()),
-                fragmented(source.movie.clone()),
+                source.movie.clone(),
                 &source.samples,
             );
             let whole = [initialization(source.movie.clone()), segment].concat();
@@ -801,7 +753,7 @@ mod tests {
             .into_iter()
             .find(|file| file.name == "21_segment.mp4")
             .unwrap();
-        let movie = fragmented(demux(&file.bytes).movie);
+        let movie = demux(&file.bytes).movie;
 
         let refused = Muxer::new(FileStructure::Segment {
             first_sequence_number: 1,
@@ -848,7 +800,7 @@ mod tests {
                 segment_index: true,
             },
             Some(fragmented_brands()),
-            fragmented(source.movie.clone()),
+            source.movie.clone(),
             runs.iter().map(Vec::as_slice),
         );
         let read = demux(&[initialization(source.movie.clone()), segment].concat());

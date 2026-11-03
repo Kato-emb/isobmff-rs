@@ -7,12 +7,12 @@ use core::num::NonZeroU32;
 
 use isobmff_boxes::{
     ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, CompactSampleSizeBox,
-    CompactSampleToGroupBox, CompositionOffsetBox, CompositionOffsetEntry, DegradationPriorityBox,
-    MovieBox, PaddingBitsBox, SampleAuxiliaryInformationOffsetsBox,
-    SampleAuxiliaryInformationSizesBox, SampleDependencyTypeBox, SampleFlags, SampleInfoSizes,
-    SampleSizeBox, SampleSizeVariant, SampleSizes, SampleTableBox, SampleToChunkBox,
-    SampleToChunkEntry, SampleToGroupBox, ShadowSyncSampleBox, SubSampleInformationBox,
-    SubSampleReferenceTableBox, SyncSampleBox, TimeToSampleBox, TimeToSampleEntry, TrackBox,
+    CompactSampleToGroupBox, CompositionOffsetBox, CompositionOffsetEntry, MovieBox,
+    SampleAuxiliaryInformationOffsetsBox, SampleAuxiliaryInformationSizesBox, SampleFlags,
+    SampleInfoSizes, SampleSizeBox, SampleSizeVariant, SampleSizes, SampleTableBox,
+    SampleToChunkBox, SampleToChunkEntry, SampleToGroupBox, ShadowSyncSampleBox,
+    SubSampleInformationBox, SubSampleReferenceTableBox, SyncSampleBox, TimeToSampleBox,
+    TimeToSampleEntry, TrackBox,
 };
 use isobmff_core::{BoxDefinition, BoxType};
 
@@ -281,59 +281,23 @@ fn next_or_zero<Entry: Default>(table: &mut Option<impl Iterator<Item = Entry>>)
     table.as_mut().and_then(Iterator::next).unwrap_or_default()
 }
 
-/// Refuses `movie` where a table of the sample table of a track declares samples
-pub(super) fn refuse_samples_in_tables(movie: &MovieBox) -> Result<(), MuxError> {
+/// Empties the tables of the sample table of each track of `movie` that a writer writes from samples, §8.6 and §8.7, once no other table declares samples
+///
+/// `stts`, `stsc`, `stsz` and `stco` are left without entries, and `ctts`,
+/// `stss`, `sdtp`, `padb` and `stdp` are removed.
+///
+/// # Errors
+///
+/// * [`SampleTableNotEmpty`](MuxError::SampleTableNotEmpty): a sample group,
+///   sub-sample, sample auxiliary information or shadow sync table of a track
+///   declares samples, and `movie` is left as it was.
+pub(super) fn take_sample_tables(movie: &mut MovieBox) -> Result<(), MuxError> {
     for trak in &movie.trak {
         let stbl = &trak.mdia.minf.stbl;
         let declared = [
             (
-                stbl.stts
-                    .iter()
-                    .flat_map(|stts| &stts.entries)
-                    .any(|entry| entry.sample_count > 0),
-                TimeToSampleBox::BOX_TYPE,
-            ),
-            (
-                stbl.ctts
-                    .iter()
-                    .flat_map(|ctts| &ctts.entries)
-                    .any(|entry| entry.sample_count > 0),
-                CompositionOffsetBox::BOX_TYPE,
-            ),
-            (
-                stbl.stsc.iter().any(|stsc| !stsc.entries.is_empty()),
-                SampleToChunkBox::BOX_TYPE,
-            ),
-            (sample_count(trak) > 0, SampleSizeBox::BOX_TYPE),
-            (
-                match &stbl.chunk_offset {
-                    Some(ChunkOffsetVariant::ChunkOffset(stco)) => !stco.chunk_offsets.is_empty(),
-                    Some(ChunkOffsetVariant::ChunkLargeOffset(co64)) => {
-                        !co64.chunk_offsets.is_empty()
-                    }
-                    Some(_) | None => false,
-                },
-                ChunkOffsetBox::BOX_TYPE,
-            ),
-            (
-                stbl.stss.iter().any(|stss| !stss.sample_numbers.is_empty()),
-                SyncSampleBox::BOX_TYPE,
-            ),
-            (
-                stbl.sdtp.iter().any(|sdtp| !sdtp.entries.is_empty()),
-                SampleDependencyTypeBox::BOX_TYPE,
-            ),
-            (
                 stbl.stsh.iter().any(|stsh| !stsh.entries.is_empty()),
                 ShadowSyncSampleBox::BOX_TYPE,
-            ),
-            (
-                stbl.padb.iter().any(|padb| !padb.pads.is_empty()),
-                PaddingBitsBox::BOX_TYPE,
-            ),
-            (
-                stbl.stdp.iter().any(|stdp| !stdp.priorities.is_empty()),
-                DegradationPriorityBox::BOX_TYPE,
             ),
             (
                 stbl.sbgp
@@ -376,6 +340,19 @@ pub(super) fn refuse_samples_in_tables(movie: &MovieBox) -> Result<(), MuxError>
                 box_type,
             });
         }
+    }
+
+    for trak in &mut movie.trak {
+        let stbl = &mut trak.mdia.minf.stbl;
+        stbl.stts = Some(TimeToSampleBox::default());
+        stbl.ctts = None;
+        stbl.stsc = Some(SampleToChunkBox::default());
+        stbl.sample_size = Some(SampleSizeVariant::SampleSize(SampleSizeBox::default()));
+        stbl.chunk_offset = Some(ChunkOffsetVariant::ChunkOffset(ChunkOffsetBox::default()));
+        stbl.stss = None;
+        stbl.sdtp = None;
+        stbl.padb = None;
+        stbl.stdp = None;
     }
 
     Ok(())

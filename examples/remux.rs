@@ -13,26 +13,25 @@
 //! a `sidx` that indexes each `moof` and its `mdat` as a subsegment.
 //!
 //! A demuxer reads the source as the `demux` example does, seeking to the
-//! bytes it wants. Its movie, its sample tables emptied, goes to a muxer, and
-//! the samples the demuxer returns go to the muxer a run at a time: each run
-//! is a `moof` and an `mdat` of a fragmented file or a segment, or an `mdat`
-//! of a file that is not fragmented, whose `moov` the muxer writes at the end.
-//! Each box the muxer writes is appended to the destination as it comes out.
+//! bytes it wants. Its movie goes to a muxer as it is, and the samples the
+//! demuxer returns go to the muxer a run at a time: each run is a `moof` and
+//! an `mdat` of a fragmented file or a segment, or an `mdat` of a file that is
+//! not fragmented, whose `moov` the muxer writes at the end, its sample tables
+//! filled from the samples. Each box the muxer writes is appended to the
+//! destination as it comes out.
 //!
-//! The muxer takes the movie of a fragmented file or a segment with a `trex`
-//! for each track, and brands that name one of `iso5` to `isod`: the source's
-//! brands, with `iso6` added where they name none. A segment is written after
-//! the initialization segment of its movie, which a second muxer writes, so
-//! the destination plays on its own.
+//! The muxer takes the brands of a fragmented file or a segment where they
+//! name one of `iso5` to `isod`: the source's brands, with `iso6` added where
+//! they name none. A segment is written after the initialization segment of
+//! its movie, which a second muxer writes, so the destination plays on its
+//! own.
 
 use std::env;
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, Write};
 
-use isobmff::boxes::{
-    ChunkOffsetVariant, FileTypeBox, MovieBox, MovieExtendsBox, SampleSizeVariant, TrackExtendsBox,
-};
+use isobmff::boxes::FileTypeBox;
 use isobmff::{DemuxEvent, Demuxer, FileStructure, FourCc, Muxer};
 
 /// Samples the muxer takes in one call: one `moof` and `mdat`, or one `mdat`
@@ -89,7 +88,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         pending.extend(std::iter::from_fn(|| demuxer.poll_sample()));
         if let Some(DemuxEvent::Movie { .. }) = event? {
             let movie = demuxer.movie().ok_or("moov without its value")?.clone();
-            let (file_type, movie) = destination_of(file_structure, demuxer.file_type(), movie);
+            let file_type = brands_of(file_structure, demuxer.file_type());
             if let FileStructure::Segment { .. } = file_structure {
                 let mut initialization = Muxer::new(FileStructure::Fragmented {
                     first_sequence_number: 1,
@@ -116,65 +115,24 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Returns the brands and the movie of the destination, made of those of the source, `file_type` and `movie`
+/// Returns the brands of the destination, made of those of the source, `file_type`
 ///
-/// The sample tables of the movie are emptied, as the samples the muxer
-/// writes declare them, and the tables of what else the source states of
-/// each sample, which the muxer does not write, are dropped. A fragmented file or a segment takes a `trex` for
-/// each track, and brands that name one of `iso5` to `isod`.
-fn destination_of(
-    file_structure: FileStructure,
-    file_type: Option<&FileTypeBox>,
-    mut movie: MovieBox,
-) -> (FileTypeBox, MovieBox) {
-    for trak in &mut movie.trak {
-        let stbl = &mut trak.mdia.minf.stbl;
-        stbl.stts = Some(Default::default());
-        stbl.ctts = None;
-        stbl.stsc = Some(Default::default());
-        stbl.sample_size = Some(SampleSizeVariant::SampleSize(Default::default()));
-        stbl.chunk_offset = Some(ChunkOffsetVariant::ChunkOffset(Default::default()));
-        stbl.stss = None;
-        stbl.sdtp = None;
-        stbl.stsh = None;
-        stbl.padb = None;
-        stbl.stdp = None;
-        stbl.sbgp.clear();
-        stbl.csgp.clear();
-        stbl.subs.clear();
-        stbl.ssrt.clear();
-        stbl.saiz.clear();
-        stbl.saio.clear();
-    }
+/// A fragmented file or a segment takes brands that name one of `iso5` to
+/// `isod`: the source's, with `iso6` added where they name none.
+fn brands_of(file_structure: FileStructure, file_type: Option<&FileTypeBox>) -> FileTypeBox {
     let mut file_type = file_type.cloned().unwrap_or_else(|| {
         let mut brands = FileTypeBox::default();
         brands.major_brand = FourCc::new(*b"mp41");
         brands
     });
-    if file_structure == FileStructure::NonFragmented {
-        movie.mvex = None;
-        return (file_type, movie);
-    }
-
-    let mut mvex = MovieExtendsBox::default();
-    mvex.trex = movie
-        .trak
-        .iter()
-        .map(|trak| {
-            let mut trex = TrackExtendsBox::default();
-            trex.track_id = trak.tkhd.track_id;
-            trex.default_sample_description_index = 1;
-            trex
-        })
-        .collect();
-    movie.mvex = Some(mvex);
-    if !std::iter::once(&file_type.major_brand)
-        .chain(&file_type.compatible_brands)
-        .any(|brand| FROM_ISO5.contains(brand.as_bytes()))
+    if file_structure != FileStructure::NonFragmented
+        && !std::iter::once(&file_type.major_brand)
+            .chain(&file_type.compatible_brands)
+            .any(|brand| FROM_ISO5.contains(brand.as_bytes()))
     {
         file_type.compatible_brands.push(FourCc::new(*b"iso6"));
     }
-    (file_type, movie)
+    file_type
 }
 
 /// File the boxes are written to, and how many bytes are written
