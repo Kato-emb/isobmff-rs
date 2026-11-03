@@ -65,8 +65,6 @@ pub struct Demuxer {
     payload_limit_bytes: u64,
     file_type: Option<FileTypeBox>,
     segment_type: Option<SegmentTypeBox>,
-    /// Header and place of the `imda` whose `imda_identifier` is being read
-    identified_media_data: Option<(BoxHeader, ByteRange)>,
 }
 
 impl Demuxer {
@@ -86,7 +84,6 @@ impl Demuxer {
             payload_limit_bytes: limits.payload_bytes(),
             file_type: None,
             segment_type: None,
-            identified_media_data: None,
         }
     }
 
@@ -336,7 +333,6 @@ impl Demuxer {
             Handling::MediaData => DemuxEvent::MediaData { header, byte_range },
             Handling::IdentifiedMediaData => {
                 self.boxes.gather_head(IDENTIFIER_BYTES)?;
-                self.identified_media_data = Some((header, byte_range));
                 return Ok(None);
             }
             Handling::Other => DemuxEvent::Other { header, byte_range },
@@ -347,9 +343,10 @@ impl Demuxer {
 
     /// Reads the box just gathered, if any, into its value, and returns the event it is reported with
     fn close(&mut self) -> Result<Option<DemuxEvent>, DemuxError> {
-        if let Some(head) = self.boxes.gathered_head()
-            && let Some((header, byte_range)) = self.identified_media_data.take()
-        {
+        let Some(byte_range) = self.boxes.gathered_box_range() else {
+            return Ok(None);
+        };
+        if let Some((header, head)) = self.boxes.gathered_head() {
             let identifier = <[u8; 4]>::try_from(head)
                 .map(u32::from_be_bytes)
                 .map_err(|_| DemuxError::Box {
@@ -367,12 +364,9 @@ impl Demuxer {
                 samples: self.gather(samples)?,
             }));
         }
-        let (Some(raw_box), Some(range)) =
-            (self.boxes.gathered_box(), self.boxes.gathered_box_range())
-        else {
+        let Some(raw_box) = self.boxes.gathered_box() else {
             return Ok(None);
         };
-        let byte_range = ByteRange::new(range.start, Some(range.end.saturating_sub(range.start)));
         let Some(value) = file_level::read(raw_box)? else {
             return Ok(None);
         };
@@ -395,7 +389,7 @@ impl Demuxer {
             Value::MovieFragment(moof) => {
                 let samples = self
                     .structure_data
-                    .handle_movie_fragment(&moof, range.start)?;
+                    .handle_movie_fragment(&moof, byte_range.offset())?;
                 DemuxEvent::MovieFragment {
                     samples: self.gather(samples)?,
                     movie_fragment: Box::new(moof),
@@ -403,7 +397,12 @@ impl Demuxer {
                 }
             }
             Value::SegmentIndex(sidx) => {
-                self.structure_data.handle_segment_index(&sidx, range)?;
+                let box_end = byte_range
+                    .offset()
+                    .saturating_add(raw_box.header().encoded_len())
+                    .saturating_add(to_u64(raw_box.payload().len()));
+                self.structure_data
+                    .handle_segment_index(&sidx, byte_range.offset()..box_end)?;
                 DemuxEvent::SegmentIndex { byte_range }
             }
             Value::MovieFragmentRandomAccess(mfra) => {

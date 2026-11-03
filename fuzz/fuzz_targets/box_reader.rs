@@ -195,7 +195,7 @@ fn record(
             if let Some(raw_box) = reader.gathered_box() {
                 recorded.push(Recorded::Gathered(raw_box.payload().to_vec()));
                 write(copy, bytes, BoxEvent::Payload(raw_box.payload()));
-            } else if let Some(head) = reader.gathered_head() {
+            } else if let Some((_, head)) = reader.gathered_head() {
                 assert_eq!(
                     bytes.get(copy.payload_at..copy.payload_at + head.len()),
                     Some(head),
