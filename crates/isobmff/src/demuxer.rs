@@ -500,7 +500,12 @@ pub enum DemuxEvent {
     /// file offsets, and come with the event; those located after it come
     /// with the event of their `moov` or `moof`, as other samples do. A caller
     /// that cannot seek reads the samples of an `imda` only where it comes
-    /// after the `moov` or `moof` that locates them, as for an `mdat`.
+    /// after the `moov` or `moof` that locates them, as for an `mdat`. An
+    /// `imda` whose size runs to the end of the file is reported by
+    /// [`Demuxer::finish`], and the bytes of the samples it locates then are
+    /// wanted from where they lie, before the end: a caller that cannot seek
+    /// lacks them, and the next `finish` fails with
+    /// [`UnfinishedSample`](DemuxError::UnfinishedSample).
     #[non_exhaustive]
     IdentifiedMediaData {
         /// Header of the box
@@ -1185,6 +1190,51 @@ mod tests {
             )
         );
         assert_eq!((streamed, ending), (samples, Ok(())));
+    }
+
+    #[test]
+    fn the_samples_of_an_imda_that_runs_to_the_end_of_the_file_are_wanted_once_it_ends_and_a_caller_that_cannot_seek_lacks_them()
+     {
+        let sequence_numbered =
+            fragmented_movie_of(isobmff_boxes::DataEntry::SeqNumImda(Default::default()));
+        let imda_at = file_type().len() + sequence_numbered.len() + identified_fragment(5).len();
+        let to_end = [
+            file_type(),
+            sequence_numbered,
+            identified_fragment(5),
+            [0, 0, 0, 0].to_vec(),
+            b"imda".to_vec(),
+            5_u32.to_be_bytes().to_vec(),
+            b"WXYZ".to_vec(),
+        ]
+        .concat();
+        let payload = to_u64(imda_at).saturating_add(8);
+        let samples_at = Vec::from([
+            (1, 0, payload + 4..payload + 6),
+            (1, 100, payload + 6..payload + 8),
+        ]);
+
+        let read = read(&mut Demuxer::new(), &to_end, usize::MAX).unwrap();
+
+        assert_eq!(
+            (read.seen.last(), read.wanted.get(1..), read.samples),
+            (
+                Some(&Seen::IdentifiedMediaData(5, samples_at)),
+                Some([payload + 4, payload + 6].as_slice()),
+                vec![(1, b"WX".to_vec()), (1, b"YZ".to_vec())]
+            )
+        );
+        assert_eq!(
+            stream(&mut Demuxer::new(), &to_end, 7),
+            (
+                Vec::new(),
+                Err(DemuxError::UnfinishedSample {
+                    track_id: 1,
+                    needed_bytes: 2,
+                    available_bytes: 0
+                })
+            )
+        );
     }
 
     #[test]
