@@ -312,8 +312,9 @@ impl SampleTableWriter {
     /// later decoding time move their `media_time` back by as much. Where
     /// the movie given was fragmented, a last edit of duration 0 that is not
     /// empty, which lasts to the end of the media there (§8.6.6.1), takes the
-    /// duration from its `media_time` to the end of the samples, rounded up
-    /// to a tick of the movie.
+    /// duration from its `media_time` to the latest composition time a sample
+    /// is composed up to, rounded up to a tick of the movie, and the edit
+    /// list, which is presented once there, does not repeat.
     pub(crate) fn finish(&mut self) -> &MovieBox {
         let movie = &mut self.movie;
         let movie_timescale = u128::from(movie.mvhd.timescale);
@@ -345,12 +346,15 @@ impl SampleTableWriter {
                     .last_mut()
                     .filter(|edit| self.fragmented && timeline::lasts_to_end_of_media(edit));
                 if let Some(edit) = open {
-                    let media = u128::from(media_duration)
-                        .saturating_sub(u128::try_from(edit.media_time).unwrap_or_default());
+                    let media = table
+                        .composition_end()
+                        .saturating_sub(i128::from(edit.media_time));
+                    let media = u128::try_from(media).unwrap_or_default();
                     let scaled = media.saturating_mul(movie_timescale);
                     edit.edit_duration =
                         in_movie((media_timescale > 0).then(|| scaled.div_ceil(media_timescale)));
                     elst.version = elst.version.max(version_for(edit.edit_duration));
+                    elst.repeat_edits = false;
                 }
                 track_duration = if elst.repeat_edits {
                     trak.tkhd.duration
@@ -885,6 +889,46 @@ mod tests {
                 (Vec::from([0]), Vec::from([0, 200]), 200),
             ]
         );
+    }
+
+    #[test]
+    fn a_last_edit_lasting_to_the_end_of_the_media_closes_where_the_last_sample_composed_ends() {
+        let mut movie = edited(&[(0, 0)]);
+        movie.mvex = Some(MovieExtendsBox::default());
+        if let Some(trak) = movie.trak.first_mut() {
+            trak.mdia.mdhd.timescale = 1000;
+        }
+        let mut late = sample(1, 0, 10, b"A");
+        let mut properties = *late.properties();
+        properties.sample_composition_time_offset = 5;
+        late = Sample::new(properties, late.into_data());
+
+        assert_eq!(
+            durations(movie, &[late, sample(2, 0, 10, b"B")]),
+            (Vec::from([15]), Vec::from([15, 100]), 100)
+        );
+    }
+
+    #[test]
+    fn a_repeated_edit_list_whose_last_edit_lasts_to_the_end_of_the_media_is_presented_once() {
+        let mut movie = edited(&[(0, 0)]);
+        movie.mvex = Some(MovieExtendsBox::default());
+        if let Some(trak) = movie.trak.first_mut() {
+            trak.tkhd.duration = 777;
+            if let Some(elst) = trak.edts.as_mut().and_then(|edts| edts.elst.as_mut()) {
+                elst.repeat_edits = true;
+            }
+        }
+        let mut writer = SampleTableWriter::new(movie).unwrap();
+        writer.handle_samples(&[sample(1, 0, 10, b"A")], 0).unwrap();
+
+        let trak = writer.finish().trak.first().unwrap();
+        let repeat_edits = trak
+            .edts
+            .as_ref()
+            .and_then(|edts| edts.elst.as_ref())
+            .map(|elst| elst.repeat_edits);
+        assert_eq!((repeat_edits, trak.tkhd.duration), (Some(false), 100));
     }
 
     #[test]

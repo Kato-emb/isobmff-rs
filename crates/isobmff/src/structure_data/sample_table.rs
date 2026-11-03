@@ -365,6 +365,8 @@ pub(super) struct TrackTable {
     decoding_start: Option<u64>,
     /// Decoding time past the last sample, counted from 0 at the first
     decoding_time: u64,
+    /// Latest composition time a sample is composed up to, counted from 0 at the decoding time of the first
+    composition_end: i128,
     /// Chunks, in chunk order
     chunks: Vec<Chunk>,
     /// Samples, in sample order
@@ -393,6 +395,11 @@ impl TrackTable {
     /// Returns the decoding time past the last sample, counted from 0 at the first
     pub(super) const fn decoding_time(&self) -> u64 {
         self.decoding_time
+    }
+
+    /// Returns the latest composition time a sample is composed up to, counted from 0 at the decoding time of the first, or 0 before the first
+    pub(super) const fn composition_end(&self) -> i128 {
+        self.composition_end
     }
 
     /// Returns the decoding time the first sample is taken at, or `None` before the first
@@ -424,6 +431,10 @@ impl TrackTable {
         }
         for sample in samples {
             let properties = sample.properties();
+            let composition_end = i128::from(self.decoding_time)
+                .saturating_add(i128::from(properties.sample_composition_time_offset))
+                .saturating_add(i128::from(properties.sample_duration));
+            self.composition_end = self.composition_end.max(composition_end);
             self.decoding_time = self
                 .decoding_time
                 .saturating_add(u64::from(properties.sample_duration));
