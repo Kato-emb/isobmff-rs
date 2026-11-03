@@ -348,7 +348,7 @@ mod tests {
     use super::{SegmentIndex, Subsegment, SubsegmentTable};
     use crate::error::{DemuxError, MuxError, TimelineError};
     use crate::sample::Sample;
-    use crate::structure_data::fixtures::{UNLIMITED, movie, sample, track};
+    use crate::structure_data::fixtures::{UNLIMITED, laid_out, movie, sample, track};
     use crate::structure_data::movie_fragment::{runs, track_fragments};
     use crate::structure_data::{StructureDataLimits, StructureDataReader};
 
@@ -570,7 +570,8 @@ mod tests {
         samples: &[Sample],
         referenced_size: u64,
     ) -> Result<(), MuxError> {
-        let runs = runs(movie, samples, &[]).unwrap();
+        let locations = laid_out(samples, 0);
+        let runs = runs(movie, &locations, &[]).unwrap();
         table.handle_movie_fragment(movie, &track_fragments(&runs), referenced_size)
     }
 
