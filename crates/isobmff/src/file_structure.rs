@@ -40,7 +40,27 @@ pub enum FileStructure {
 /// ```
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
-pub struct NonFragmentedOptions {}
+pub struct NonFragmentedOptions {
+    /// Whether the muxer writes the samples as movie fragments, and lays the file out again as one that is not fragmented as it finishes; not by default
+    ///
+    /// Until [`finish`](crate::Muxer::finish), the file written is a
+    /// fragmented movie file (A.10): the `ftyp`, a 16-byte `free`, the `moov`
+    /// of the movie fragments, then a `moof` and an `mdat` for each call, so
+    /// that a file cut short by a crash reads to its last fragment. As it
+    /// finishes, the muxer writes the `moov` of every sample at the end, and
+    /// then turns the `free` into the header of an `mdat` that holds all the
+    /// fragments (§8.1.1): readers take the file as one that is not
+    /// fragmented, and the fragments as media data. FFmpeg calls this
+    /// `hybrid_fragmented`, OBS a hybrid MP4.
+    ///
+    /// The brands of the file name one of `iso5` to `isod`, as those of a
+    /// fragmented movie file do (§8.8.7.1). A file whose samples the sample
+    /// tables cannot declare, or that holds more samples than
+    /// [`MuxLimits::held_location_count`](crate::MuxLimits::held_location_count),
+    /// is not laid out again: [`finish`](crate::Muxer::finish) fails, and the
+    /// file stays the fragmented movie file written.
+    pub recoverable: bool,
+}
 
 /// Options of a fragmented movie file, as a [`Muxer`](crate::Muxer) or a [`MovieFragmentWriter`](crate::structure_data::MovieFragmentWriter) writes it, A.10
 ///

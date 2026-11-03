@@ -178,3 +178,62 @@ impl Default for DemuxLimits {
         Self::new()
     }
 }
+
+/// Limits a [`Muxer`](crate::Muxer) writes a file up to
+///
+/// [`new`](Self::new) sets every limit to a default, and each `with_` method
+/// replaces one of them.
+///
+/// | Limit | Default |
+/// |---|---|
+/// | Samples whose locations a recoverable file keeps, to declare them as it finishes | 1,048,576 |
+///
+/// # Examples
+///
+/// ```
+/// use isobmff::{Muxer, MuxLimits, NonFragmentedOptions};
+///
+/// let mut options = NonFragmentedOptions::default();
+/// options.recoverable = true;
+/// let muxer = Muxer::non_fragmented(options).with_limits(MuxLimits::new().with_held_location_count(1 << 24));
+/// assert_eq!(MuxLimits::new().held_location_count(), 1_048_576);
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct MuxLimits {
+    held_location_count: u64,
+}
+
+impl MuxLimits {
+    /// Creates the limits of the defaults
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            held_location_count: 1_048_576,
+        }
+    }
+
+    /// Replaces the number of samples whose locations a recoverable file keeps
+    #[must_use]
+    pub const fn with_held_location_count(mut self, held_location_count: u64) -> Self {
+        self.held_location_count = held_location_count;
+        self
+    }
+
+    /// Returns the number of samples whose locations a recoverable file keeps, to declare them in the sample tables as it finishes
+    ///
+    /// The locations are kept as the rows of the sample tables, a few tens
+    /// of bytes each. A file past the limit is not laid out again: the muxer
+    /// keeps no more of them, writes the rest of the samples as fragments,
+    /// and [`finish`](crate::Muxer::finish) fails with
+    /// [`NotFinalised`](crate::MuxError::NotFinalised).
+    #[must_use]
+    pub const fn held_location_count(self) -> u64 {
+        self.held_location_count
+    }
+}
+
+impl Default for MuxLimits {
+    fn default() -> Self {
+        Self::new()
+    }
+}

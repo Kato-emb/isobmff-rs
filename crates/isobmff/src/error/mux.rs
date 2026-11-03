@@ -66,6 +66,14 @@ pub enum MuxError {
     /// Samples, or the end of the file, offered before the movie that declares their tracks
     #[non_exhaustive]
     MissingMovie,
+    /// Recoverable file that holds more samples than the muxer keeps the locations of, which it does not lay out again as a file that is not fragmented; the file written is a fragmented movie file whole
+    #[non_exhaustive]
+    NotFinalised {
+        /// Number of samples written
+        held_locations: u64,
+        /// Number of samples the muxer keeps the locations of
+        limit_locations: u64,
+    },
     /// Bytes offered for space reserved with a `free` box that neither fill it nor leave room for a `free` box after them: longer than it, short of it by fewer than the 8 bytes of a `free` header, or offered for space of no known length, §8.1.2
     #[non_exhaustive]
     ReservedSpaceMismatch {
@@ -220,6 +228,13 @@ impl fmt::Display for MuxError {
                 "{box_type} box offered after a box it goes before"
             ),
             Self::MissingMovie => formatter.write_str("samples offered before the movie"),
+            Self::NotFinalised {
+                held_locations,
+                limit_locations,
+            } => write!(
+                formatter,
+                "{held_locations} samples written, past the {limit_locations} whose locations the muxer keeps: the file stays fragmented"
+            ),
             Self::ReservedSpaceMismatch {
                 reserved_bytes: Some(reserved_bytes),
                 offered_bytes,

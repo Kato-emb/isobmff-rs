@@ -12,10 +12,15 @@ use crate::file_structure::{
     FileStructure, FragmentedOptions, NonFragmentedOptions, SegmentOptions,
 };
 use crate::framing::{BoxWriter, to_u64, write_box};
+use crate::limits::MuxLimits;
 use crate::media_data::MediaDataWriter;
 use crate::output::Output;
 use crate::sample::Sample;
 use crate::structure_data::{MovieFragmentWriter, SampleTableWriter, StructureDataWriter};
+
+mod recoverable;
+
+use self::recoverable::Recoverable;
 
 /// Writer of a movie file or a segment from the samples a caller hands it
 ///
@@ -108,6 +113,9 @@ pub struct Muxer {
     /// Whether the `ftyp`, or the `styp` of a segment, is written
     file_type: bool,
     finished: bool,
+    limits: MuxLimits,
+    /// What the muxer keeps of a recoverable file, once it holds the movie
+    recoverable: Option<Recoverable>,
 }
 
 /// Structure of the file a muxer writes, and the options it writes it with
@@ -137,10 +145,30 @@ impl Muxer {
         Self::new(Structure::Segment(options))
     }
 
+    /// Replaces the limits the muxer writes the file up to, which are the defaults of [`MuxLimits::new`] until then
+    #[must_use]
+    pub const fn with_limits(mut self, limits: MuxLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
     /// Returns the structure of the file the muxer writes
+    ///
+    /// A recoverable file is one that is not fragmented, but one
+    /// [`finish`](Self::finish) did not lay out again is the fragmented movie
+    /// file written.
     #[must_use]
     pub fn file_structure(&self) -> FileStructure {
         match self.structure {
+            Structure::NonFragmented(_)
+                if self.finished
+                    && self
+                        .recoverable
+                        .as_ref()
+                        .is_some_and(|recoverable| !recoverable.laid_out()) =>
+            {
+                FileStructure::Fragmented
+            }
             Structure::NonFragmented(_) => FileStructure::NonFragmented,
             Structure::Fragmented(_) => FileStructure::Fragmented,
             Structure::Segment(_) => FileStructure::Segment,
@@ -158,15 +186,19 @@ impl Muxer {
             held: Vec::new(),
             file_type: false,
             finished: false,
+            limits: MuxLimits::new(),
+            recoverable: None,
         }
     }
 
     /// Writes the brands of the file: its `ftyp`, or the `styp` of a segment, of the same brands (§4.3, §8.14.2)
     ///
-    /// A file of movie fragments, or a segment, takes the first byte of each
-    /// `moof` as the base data offset of its track fragments, which a reader
-    /// supports under `iso5` and later brands (§8.8.7.1): its major brand or
-    /// a compatible brand is one of `iso5` to `isod`.
+    /// A file of movie fragments, a recoverable one included, or a segment,
+    /// takes the first byte of each `moof` as the base data offset of its
+    /// track fragments, which a reader supports under `iso5` and later brands
+    /// (§8.8.7.1): its major brand or a compatible brand is one of `iso5` to
+    /// `isod`, as [`supports_default_base_is_moof`](crate::supports_default_base_is_moof)
+    /// says.
     ///
     /// # Errors
     ///
@@ -175,8 +207,8 @@ impl Muxer {
     /// * [`BoxOutOfOrder`](MuxError::BoxOutOfOrder): a box is written
     ///   already, which the brands go before.
     /// * [`UnsupportedBrand`](MuxError::UnsupportedBrand): the file is
-    ///   fragmented or a segment, and its brands name none of `iso5` to
-    ///   `isod`.
+    ///   fragmented, recoverable or a segment, and its brands name none of
+    ///   `iso5` to `isod`.
     /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the file is finished.
     pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), MuxError> {
         let box_type = match self.structure {
@@ -191,8 +223,10 @@ impl Muxer {
             return Err(MuxError::BoxOutOfOrder { box_type });
         }
         let bytes = match self.structure {
-            Structure::NonFragmented(_) => write_box(&mut self.boxes, &file_type)?,
-            Structure::Fragmented(_) => {
+            Structure::NonFragmented(options) if !options.recoverable => {
+                write_box(&mut self.boxes, &file_type)?
+            }
+            Structure::NonFragmented(_) | Structure::Fragmented(_) => {
                 refuse_brands_before_iso5(&file_type)?;
                 write_box(&mut self.boxes, &file_type)?
             }
@@ -216,7 +250,10 @@ impl Muxer {
     /// A fragmented file writes the `moov` here, a file that is not
     /// fragmented at its end, once [`finish`](Self::finish) has its sample
     /// tables, and a segment writes none: its movie is that of its
-    /// initialization segment, which the samples are checked against.
+    /// initialization segment, which the samples are checked against. A
+    /// recoverable file writes the 16-byte `free` the header of its `mdat`
+    /// takes the place of, and the `moov` of its movie fragments, here, and
+    /// the `moov` of its sample tables at its end.
     ///
     /// The muxer writes how the movie declares its samples: the movie gives
     /// the tracks, their sample entries, data references and edit lists.
@@ -273,6 +310,18 @@ impl Muxer {
             }
             Structure::Segment(options) => {
                 StructureDataWriter::Fragmented(MovieFragmentWriter::segment(movie, options)?)
+            }
+            Structure::NonFragmented(options) if options.recoverable => {
+                let writer = MovieFragmentWriter::fragmented(movie, FragmentedOptions::default())?;
+                let (recoverable, free) = Recoverable::new(
+                    &mut self.boxes,
+                    writer.movie(),
+                    self.limits.held_location_count(),
+                )?;
+                let bytes = write_box(&mut self.boxes, writer.movie())?;
+                self.output.extend([free, bytes]);
+                self.recoverable = Some(recoverable);
+                StructureDataWriter::Fragmented(writer)
             }
             Structure::NonFragmented(_) => {
                 StructureDataWriter::NonFragmented(SampleTableWriter::new(movie)?)
@@ -347,7 +396,7 @@ impl Muxer {
             }
             StructureDataWriter::Fragmented(writer) => {
                 let moof_offset = self.boxes.next_offset();
-                let (moof, _) =
+                let (moof, locations) =
                     writer.movie_fragment(&samples, moof_offset, header.encoded_len())?;
                 written.push(write_box(&mut self.boxes, &moof)?);
                 let mdat_offset = self.boxes.next_offset();
@@ -356,6 +405,9 @@ impl Muxer {
                         .write(writer.movie(), &mut self.boxes, header, &samples)?;
                 written.push(Output::new(mdat_offset, mdat));
                 held = writer.indexes_subsegments();
+                if let Some(recoverable) = &mut self.recoverable {
+                    recoverable.handle_locations(&locations);
+                }
             }
         }
         if held {
@@ -382,9 +434,30 @@ impl Muxer {
     /// the muxer holds a movie. The boxes written are still returned by
     /// [`poll_output`](Self::poll_output).
     ///
+    /// A recoverable file is laid out again: the `moov` of its sample tables
+    /// comes at the end, then the output that writes the header of an `mdat`
+    /// over the 16-byte `free` after the `ftyp`, the only output a muxer
+    /// returns for bytes written already. A sink that writes the `moov` but
+    /// not the header leaves a fragmented movie file whole. Where this call
+    /// fails for a recoverable file, the muxer writes nothing more: the file
+    /// is the fragmented movie file written, no byte of it missing, and
+    /// [`file_structure`](Self::file_structure) returns
+    /// [`Fragmented`](FileStructure::Fragmented).
+    ///
     /// # Errors
     ///
     /// * [`MissingMovie`](MuxError::MissingMovie): the muxer holds no movie.
+    /// * [`NotFinalised`](MuxError::NotFinalised): the file is recoverable,
+    ///   and holds more samples than
+    ///   [`MuxLimits::held_location_count`](crate::MuxLimits::held_location_count);
+    ///   the file written is a fragmented movie file whole.
+    /// * The failures of
+    ///   [`SampleTableWriter::handle_locations`](crate::structure_data::SampleTableWriter::handle_locations),
+    ///   such as [`DecodingTimeMismatch`](MuxError::DecodingTimeMismatch):
+    ///   the file is recoverable, and the sample tables refused samples of
+    ///   it, which the movie fragments declare, as a file that is not
+    ///   fragmented does not let them follow on; the file written is a
+    ///   fragmented movie file whole.
     /// * [`Box`](MuxError::Box): the `moov` or the `mfra` does not write.
     /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the file is
     ///   finished, or a call to finish failed.
@@ -401,6 +474,12 @@ impl Muxer {
             }
             StructureDataWriter::Fragmented(writer) => {
                 let (mfra, sidx) = writer.finish()?;
+                if let Some(recoverable) = &mut self.recoverable {
+                    let laid_out = recoverable.finish(&mut self.boxes);
+                    self.boxes.finish()?;
+                    self.output.extend(laid_out?);
+                    return Ok(());
+                }
                 if let Some(sidx) = sidx {
                     // Why not self.boxes: it counts file offsets in the order
                     // boxes are written, and the sidx goes before boxes it has
@@ -434,9 +513,16 @@ impl Muxer {
     /// not write. For a file that is not fragmented it is the `moov` that
     /// [`finish`](Self::finish) writes: its sample tables and durations are
     /// those of the samples once [`finish`](Self::finish) is called, and
-    /// before it the tables declare no sample.
+    /// before it the tables declare no sample. For a recoverable file it is
+    /// the `moov` of its movie fragments, and once the file is laid out again
+    /// the `moov` of its sample tables.
     #[must_use]
     pub const fn movie(&self) -> Option<&MovieBox> {
+        if let Some(recoverable) = &self.recoverable
+            && let Some(movie) = recoverable.movie()
+        {
+            return Some(movie);
+        }
         match &self.structure_data {
             Some(writer) => Some(writer.movie()),
             None => None,
@@ -462,14 +548,17 @@ mod tests {
         SampleSizeBox, SampleSizeVariant, SampleSizes, SampleToChunkBox, SampleToChunkEntry,
         TimeToSampleBox, TimeToSampleEntry, TrackExtendsBox,
     };
-    use isobmff_core::{BoxDecode, BoxDefinition, FourCc};
+    use isobmff_core::{BoxDecode, BoxDefinition, BoxType, Boxes, FourCc};
 
     use super::Muxer;
     use crate::demuxer::Demuxer;
     use crate::error::MuxError;
-    use crate::file_structure::{FragmentedOptions, NonFragmentedOptions, SegmentOptions};
+    use crate::file_structure::{
+        FileStructure, FragmentedOptions, NonFragmentedOptions, SegmentOptions,
+    };
     use crate::framing::to_u64;
     use crate::leniency::{Leniency, SampleTableDisagreement};
+    use crate::limits::MuxLimits;
     use crate::output::Output;
     use crate::sample::{Sample, SampleProperties};
     use crate::structure_data::fixtures::{encoded, movie, track, written};
@@ -942,6 +1031,153 @@ mod tests {
             let offsets: Vec<u64> = outputs.iter().map(Output::offset).collect();
             assert_eq!(offsets, starts);
         }
+    }
+
+    /// Returns the muxer of a recoverable file
+    fn recoverable() -> Muxer {
+        Muxer::non_fragmented(NonFragmentedOptions { recoverable: true })
+    }
+
+    /// Writes `outputs` where each says, and returns the file
+    fn written_at(outputs: impl IntoIterator<Item = Output>) -> Vec<u8> {
+        let mut file = Vec::new();
+        for output in outputs {
+            let start = usize::try_from(output.offset()).unwrap();
+            let end = start.checked_add(output.bytes().len()).unwrap();
+            if file.len() < end {
+                file.resize(end, 0);
+            }
+            file.get_mut(start..end)
+                .unwrap()
+                .copy_from_slice(output.bytes());
+        }
+        file
+    }
+
+    /// Returns the types of the boxes at file level of `file`
+    fn top_level(file: &[u8]) -> Vec<BoxType> {
+        Boxes::new(file)
+            .map(|framed| framed.unwrap().header().box_type())
+            .collect()
+    }
+
+    #[test]
+    fn a_recoverable_file_reads_as_fragmented_until_it_finishes_and_as_not_fragmented_after() {
+        let mut muxer = recoverable();
+        muxer.handle_file_type(file_type(b"iso6", &[])).unwrap();
+        muxer.handle_movie(one_track()).unwrap();
+        let [first, second] = two_samples();
+        muxer.handle_samples([first.clone()]).unwrap();
+        muxer.handle_samples([second.clone()]).unwrap();
+        let before_finish: Vec<Output> = iter::from_fn(|| muxer.poll_output()).collect();
+        muxer.finish().unwrap();
+        let after: Vec<Output> = iter::from_fn(|| muxer.poll_output()).collect();
+
+        let fragmented = written_at(before_finish.clone());
+        let laid_out = written_at([before_finish, after].concat());
+        let types = |names: &[&[u8; 4]]| {
+            names
+                .iter()
+                .map(|&&name| BoxType::compact(name))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            (top_level(&fragmented), demux(&fragmented).1),
+            (
+                types(&[
+                    b"ftyp", b"free", b"moov", b"moof", b"mdat", b"moof", b"mdat"
+                ]),
+                Vec::from([first.clone(), second.clone()])
+            )
+        );
+        let (demuxer, samples) = demux(&laid_out);
+        assert_eq!(
+            (
+                top_level(&laid_out),
+                samples,
+                demuxer.movie().and_then(|movie| movie.mvex.clone())
+            ),
+            (
+                types(&[b"ftyp", b"free", b"mdat", b"moov"]),
+                Vec::from([first, second]),
+                None
+            )
+        );
+        assert_eq!(
+            (
+                muxer.file_structure(),
+                muxer.movie().is_some_and(|movie| movie.mvex.is_none())
+            ),
+            (FileStructure::NonFragmented, true)
+        );
+    }
+
+    #[test]
+    fn a_recoverable_file_past_the_held_locations_stays_fragmented_and_whole() {
+        let mut muxer = recoverable().with_limits(MuxLimits::new().with_held_location_count(1));
+        muxer.handle_file_type(file_type(b"iso6", &[])).unwrap();
+        muxer.handle_movie(one_track()).unwrap();
+        let samples = two_samples();
+        for sample in samples.clone() {
+            muxer.handle_samples([sample]).unwrap();
+        }
+
+        let finished = [muxer.finish(), muxer.finish()];
+        let file = written_at(iter::from_fn(|| muxer.poll_output()));
+
+        assert_eq!(
+            (finished, muxer.file_structure(), demux(&file).1),
+            (
+                [
+                    Err(MuxError::NotFinalised {
+                        held_locations: 2,
+                        limit_locations: 1
+                    }),
+                    Err(MuxError::AlreadyFinished)
+                ],
+                FileStructure::Fragmented,
+                Vec::from(samples)
+            )
+        );
+    }
+
+    #[test]
+    fn a_recoverable_file_whose_samples_the_sample_tables_refuse_stays_fragmented() {
+        let mut muxer = recoverable();
+        muxer.handle_file_type(file_type(b"iso6", &[])).unwrap();
+        muxer.handle_movie(one_track()).unwrap();
+        let [first, mut second] = two_samples();
+        let mut properties = *second.properties();
+        properties.decoding_time = 50;
+        second = Sample::new(properties, second.into_data());
+        muxer.handle_samples([first.clone()]).unwrap();
+        muxer.handle_samples([second.clone()]).unwrap();
+
+        let finished = muxer.finish();
+        let file = written_at(iter::from_fn(|| muxer.poll_output()));
+
+        assert_eq!(
+            (finished, muxer.file_structure(), demux(&file).1),
+            (
+                Err(MuxError::DecodingTimeMismatch {
+                    track_id: 1,
+                    expected_decoding_time: 10,
+                    decoding_time: 50
+                }),
+                FileStructure::Fragmented,
+                Vec::from([first, second])
+            )
+        );
+    }
+
+    #[test]
+    fn the_brands_of_a_recoverable_file_name_one_from_iso5_on() {
+        assert_eq!(
+            recoverable().handle_file_type(file_type(b"isom", &[b"mp41"])),
+            Err(MuxError::UnsupportedBrand {
+                brand: FourCc::new(*b"isom")
+            })
+        );
     }
 
     #[test]

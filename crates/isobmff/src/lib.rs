@@ -296,7 +296,7 @@ pub use file_level::supports_default_base_is_moof;
 pub use file_structure::{FileStructure, FragmentedOptions, NonFragmentedOptions, SegmentOptions};
 pub use isobmff_core::*;
 pub use leniency::{Leniency, SampleTableDisagreement};
-pub use limits::DemuxLimits;
+pub use limits::{DemuxLimits, MuxLimits};
 pub use muxer::Muxer;
 pub use output::Output;
 pub use sample::{DataReferenceKey, Sample, SampleLocation, SampleProperties};
