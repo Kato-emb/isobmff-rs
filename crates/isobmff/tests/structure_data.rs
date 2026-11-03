@@ -6,11 +6,12 @@
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::ops::Range;
 
     use isobmff::boxes::{DataEntry, MovieBox, MovieFragmentBox};
     use isobmff::structure_data::{DataReference, movie_fragment_random_access_start};
+    use isobmff::timeline::Timeline;
     use isobmff::{BoxDefinition, BoxType, Boxes, DemuxError, DemuxEvent, Demuxer, SampleLocation};
     use isobmff_test_support::{
         ConformanceFile, conformance_files, ffprobe_packets, gpac_children,
@@ -437,5 +438,78 @@ mod tests {
             }
         }
         assert_ne!(checked, 0, "no file has a padb");
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names, and runs ffprobe on them"]
+    fn the_samples_ffprobe_presents_from_their_start_are_presented_at_its_presentation_timestamps()
+    {
+        // Edit lists of an empty edit, of a media time past composition time
+        // offsets of either sign, and of edits that enter a sample partway
+        // FFmpeg presents video from the first sample it keeps at 0, which
+        // in a8-foreman_QCIF_edit the edit enters 15 ticks past
+        let expected = BTreeMap::from([
+            (("02_dref_edts_img.mp4", 101), BTreeSet::from([0])),
+            (("17_negative_ctso.mp4", 1), BTreeSet::from([0])),
+            (("a8-foreman_QCIF_edit.mp4", 1), BTreeSet::from([15])),
+            (("a9-aac-samplegroups-edit.mp4", 1), BTreeSet::from([0])),
+            (("restricted.mp4", 1), BTreeSet::from([0])),
+        ]);
+        let mut origins = BTreeMap::<(&str, u32), BTreeSet<i128>>::new();
+        for file in conformance_files() {
+            let Some(&(name, _)) = expected.keys().find(|(name, _)| *name == file.name) else {
+                continue;
+            };
+            let resolved = resolve(&file.bytes).unwrap();
+            let movie = resolved.demuxer.movie().unwrap();
+            for packet in ffprobe_packets(&file.path) {
+                if !expected.contains_key(&(name, packet.track_id)) {
+                    continue;
+                }
+                let location = resolved
+                    .locations
+                    .iter()
+                    .find(|location| {
+                        location.properties().track_id == packet.track_id
+                            && location.byte_range().start == packet.pos
+                    })
+                    .unwrap();
+                let properties = location.properties();
+                let composition_time = i128::from(properties.decoding_time)
+                    + i128::from(properties.sample_composition_time_offset);
+                let first = Timeline::new(movie, packet.track_id)
+                    .unwrap()
+                    .present(properties)
+                    .next();
+                let entered =
+                    first.map(|presented| i128::from(presented.media_time()) - composition_time);
+                if packet.discard {
+                    assert!(
+                        entered.is_none_or(|entered| entered > 0),
+                        "{name}: a packet ffprobe discards is presented from its start: {packet:?}"
+                    );
+                    continue;
+                }
+                let (first, entered) = first.zip(entered).unwrap();
+                let mdhd = &movie
+                    .trak
+                    .iter()
+                    .find(|trak| trak.tkhd.track_id == packet.track_id)
+                    .unwrap()
+                    .mdia
+                    .mdhd;
+                let (numerator, denominator) = packet.time_base;
+                let pts = i128::from(packet.pts.unwrap())
+                    * i128::from(numerator)
+                    * i128::from(mdhd.timescale)
+                    / i128::from(denominator);
+                origins
+                    .entry((name, packet.track_id))
+                    .or_default()
+                    .insert(i128::from(first.presentation_time()) - entered - pts);
+            }
+        }
+
+        assert_eq!(origins, expected);
     }
 }

@@ -8,6 +8,7 @@ use isobmff_boxes::{MovieBox, SegmentIndexBox, SegmentIndexReference};
 use super::movie_fragment::Run;
 use super::writer::version_for;
 use crate::error::{DemuxError, MuxError};
+use crate::timeline::{Timeline, composition_time};
 
 /// Segment index: how a (sub)segment divides into subsegments, each with its byte range and its presentation times, ISO/IEC 14496-12 §8.14.3
 ///
@@ -176,33 +177,19 @@ pub(super) struct SubsegmentTable {
 impl SubsegmentTable {
     /// Creates the table of subsegments whose reference stream is the first track of `movie`, in the timescale of its media
     ///
-    /// The presentation times a `sidx` states are composition times after
-    /// the edit list of the track (§8.14.3.1). The table does not apply an
-    /// edit list, so it takes a track whose edit list presents each sample at
-    /// its composition time: none, or one edit from media time 0 at rate 1
-    /// that does not repeat.
+    /// The presentation times a `sidx` states are those the edit list of
+    /// the track maps the composition times of its samples to (§8.14.3.1),
+    /// as a [`Timeline`] maps them.
     ///
     /// # Errors
     ///
-    /// * [`EditListNotApplied`](MuxError::EditListNotApplied): the edit list
-    ///   of the reference track moves its presentation times off its
-    ///   composition times.
+    /// * [`Timeline`](MuxError::Timeline): the edit list of the reference
+    ///   track does not map its composition timeline.
     pub(super) fn new(movie: &MovieBox) -> Result<Self, MuxError> {
         let first = movie.trak.first();
         let reference_id = first.map_or(0, |trak| trak.tkhd.track_id);
-        let edit_list = first.and_then(|trak| trak.edts.as_ref()?.elst.as_ref());
-        if let Some(elst) = edit_list
-            && (elst.repeat_edits
-                || !matches!(
-                    elst.entries.as_slice(),
-                    [edit] if edit.media_time == 0
-                        && edit.media_rate_integer == 1
-                        && edit.media_rate_fraction == 0
-                ))
-        {
-            return Err(MuxError::EditListNotApplied {
-                track_id: reference_id,
-            });
+        if first.is_some() {
+            Timeline::new(movie, reference_id).map_err(|error| MuxError::Timeline { error })?;
         }
 
         Ok(Self {
@@ -214,32 +201,38 @@ impl SubsegmentTable {
         })
     }
 
-    /// Indexes the movie fragment of `track_fragments`, which with its media data takes `referenced_size` bytes, as the next subsegment
+    /// Indexes the movie fragment of `track_fragments` of `movie`, which with its media data takes `referenced_size` bytes, as the next subsegment
     ///
-    /// The presentation time of a sample is its decoding time plus its
-    /// composition time offset. A subsegment lasts until the earliest
-    /// presentation time of the next with samples of the reference track,
-    /// the last until the end of its own, and one without such samples lasts
-    /// no time. It starts with a stream access point where the first sample
-    /// of the reference track in it is a sync sample, and contains one where
-    /// any is: of type 1 where that sample is presented first of those from
-    /// it on in decoding order, and of type 2 otherwise (Annex I). A stream
-    /// access point too far into the subsegment for `SAP_delta_time` is not
-    /// stated.
+    /// The presentation time of a sample is the first the edit list of its
+    /// track presents it at; a sample it does not present has none. A
+    /// subsegment lasts until the earliest presentation time of the next
+    /// with samples of the reference track presented, the last until the end
+    /// of its own, and one without such samples lasts no time. It starts with
+    /// a stream access point where the first sample of the reference track
+    /// in it is a sync sample, and contains one where any is: of type 1 where
+    /// that sample is composed first of those from it on in decoding order,
+    /// and of type 2 otherwise (Annex I), at the earliest presentation time
+    /// of those. A stream access point too far into the subsegment for
+    /// `SAP_delta_time` is not stated, nor one none of whose samples from it
+    /// on is presented.
     ///
     /// # Errors
     ///
+    /// * [`Timeline`](MuxError::Timeline): the edit list of the reference
+    ///   track does not map its composition timeline.
     /// * [`SegmentIndexOutOfRange`](MuxError::SegmentIndexOutOfRange): the
     ///   `sidx` cannot state the subsegment: it is longer than 31 bits of
-    ///   bytes, past 65,535 subsegments, a sample of the reference track is
-    ///   presented before time 0, or the subsegment starts earlier than the
-    ///   one before it, or more than 32 bits of ticks after it or before its
-    ///   own end.
+    ///   bytes, past 65,535 subsegments, or the subsegment starts earlier
+    ///   than the one before it, or more than 32 bits of ticks after it or
+    ///   before its own end.
     pub(super) fn handle_movie_fragment(
         &mut self,
+        movie: &MovieBox,
         track_fragments: &[Vec<&Run<'_>>],
         referenced_size: u64,
     ) -> Result<(), MuxError> {
+        let timeline = Timeline::new(movie, self.reference_id)
+            .map_err(|error| MuxError::Timeline { error })?;
         let out_of_range = MuxError::SegmentIndexOutOfRange {
             reference_id: self.reference_id,
         };
@@ -256,27 +249,31 @@ impl SubsegmentTable {
         if self.references.len() >= usize::from(u16::MAX) {
             return Err(out_of_range);
         }
-        let samples: Vec<(bool, Range<u64>)> = track_fragments
+        let samples: Vec<(bool, i128, Option<Range<u64>>)> = track_fragments
             .iter()
             .flatten()
             .filter(|run| run.track == 0)
             .flat_map(|run| run.samples)
             .map(|sample| {
                 let properties = sample.properties();
-                let start = properties
-                    .decoding_time
-                    .checked_add_signed(properties.sample_composition_time_offset)?;
-                let end = start.checked_add(u64::from(properties.sample_duration))?;
+                let presented = match timeline.present(properties).next() {
+                    Some(presentation) => {
+                        let start = presentation.presentation_time();
+                        Some(start..start.checked_add(presentation.duration())?)
+                    }
+                    None => None,
+                };
                 Some((
                     !properties.sample_flags.sample_is_non_sync_sample,
-                    start..end,
+                    composition_time(properties),
+                    presented,
                 ))
             })
             .collect::<Option<_>>()
             .ok_or(out_of_range)?;
         let presentation_time = samples
             .iter()
-            .map(|(_, time)| time.clone())
+            .filter_map(|(_, _, time)| time.clone())
             .reduce(|earlier, later| earlier.start.min(later.start)..earlier.end.max(later.end));
         let mut previous_duration = None;
         if let Some(time) = &presentation_time {
@@ -285,20 +282,23 @@ impl SubsegmentTable {
                 previous_duration =
                     Some((previous, ticks(time.start.checked_sub(previous_start))?));
             }
-            let first_sync = samples.iter().position(|&(sync, _)| sync);
+            let first_sync = samples.iter().position(|&(sync, _, _)| sync);
             let from_first_sync = first_sync.and_then(|first_sync| samples.get(first_sync..));
-            if let Some([(_, sync_time), later @ ..]) = from_first_sync {
-                let sap_time = later
+            if let Some(from_sync @ [(_, sync_composition_time, _), ..]) = from_first_sync {
+                let composed_first = from_sync
                     .iter()
-                    .map(|(_, later)| later.start)
-                    .fold(sync_time.start, u64::min);
+                    .all(|(_, composition_time, _)| composition_time >= sync_composition_time);
+                let sap_time = from_sync
+                    .iter()
+                    .filter_map(|(_, _, time)| time.as_ref().map(|time| time.start))
+                    .min();
                 if let Some(sap_delta_time) = sap_time
-                    .checked_sub(time.start)
+                    .and_then(|sap_time| sap_time.checked_sub(time.start))
                     .and_then(|delta| u32::try_from(delta).ok())
                     .filter(|&delta| delta < 1 << 28)
                 {
                     reference.starts_with_sap = first_sync == Some(0);
-                    reference.sap_type = if sap_time == sync_time.start { 1 } else { 2 };
+                    reference.sap_type = if composed_first { 1 } else { 2 };
                     reference.sap_delta_time = sap_delta_time;
                 }
             }
@@ -337,8 +337,8 @@ impl SubsegmentTable {
 #[cfg(test)]
 mod tests {
     use isobmff_boxes::{
-        EditBox, EditListBox, EditListEntry, MovieBox, MovieFragmentRandomAccessBox,
-        SegmentIndexBox, SegmentIndexReference,
+        EditBox, EditListBox, EditListEntry, MovieBox, MovieExtendsBox,
+        MovieFragmentRandomAccessBox, SegmentIndexBox, SegmentIndexReference,
     };
     use isobmff_core::BoxDecode;
 
@@ -346,7 +346,7 @@ mod tests {
     use core::ops::Range;
 
     use super::{SegmentIndex, Subsegment, SubsegmentTable};
-    use crate::error::{DemuxError, MuxError};
+    use crate::error::{DemuxError, MuxError, TimelineError};
     use crate::sample::Sample;
     use crate::structure_data::fixtures::{UNLIMITED, movie, sample, track};
     use crate::structure_data::movie_fragment::{runs, track_fragments};
@@ -570,8 +570,8 @@ mod tests {
         samples: &[Sample],
         referenced_size: u64,
     ) -> Result<(), MuxError> {
-        let runs = runs(movie, samples, None).unwrap();
-        table.handle_movie_fragment(&track_fragments(&runs), referenced_size)
+        let runs = runs(movie, samples, &[]).unwrap();
+        table.handle_movie_fragment(movie, &track_fragments(&runs), referenced_size)
     }
 
     /// Returns the reference to a subsegment of `referenced_size` bytes lasting `subsegment_duration`, starting with a SAP where `starts_with_sap`, of `sap_type` `sap_delta_time` in
@@ -684,44 +684,50 @@ mod tests {
         assert_eq!(table.finish(), expected);
     }
 
-    /// Returns [`two_tracks`] with an edit list of `edits` (media time, rate) on track `track`, repeated where `repeat_edits`
-    fn edited(track: usize, edits: &[(i64, i16)], repeat_edits: bool) -> MovieBox {
+    /// Returns [`two_tracks`], fragmented, in a movie of timescale 100, with an edit list on track 1 of one edit from `media_time` to the end of the media
+    fn edited(media_time: i64) -> MovieBox {
         let mut movie = two_tracks();
+        movie.mvhd.timescale = 100;
+        movie.mvex = Some(MovieExtendsBox::default());
+        let mut edit = EditListEntry::default();
+        edit.media_time = media_time;
+        edit.media_rate_integer = 1;
         let mut elst = EditListBox::default();
-        elst.repeat_edits = repeat_edits;
-        elst.entries = edits
-            .iter()
-            .map(|&(media_time, media_rate_integer)| {
-                let mut edit = EditListEntry::default();
-                edit.media_time = media_time;
-                edit.media_rate_integer = media_rate_integer;
-                edit
-            })
-            .collect();
+        elst.entries = Vec::from([edit]);
         let mut edts = EditBox::default();
         edts.elst = Some(elst);
-        if let Some(trak) = movie.trak.get_mut(track) {
+        if let Some(trak) = movie.trak.first_mut() {
             trak.edts = Some(edts);
         }
         movie
     }
 
     #[test]
-    fn a_reference_track_whose_edit_list_moves_its_presentation_times_is_refused() {
-        let indexed = |movie: MovieBox| SubsegmentTable::new(&movie).map(|_| ());
-        let refused = Err(MuxError::EditListNotApplied { track_id: 1 });
+    fn the_subsegments_last_from_the_presentation_times_the_edit_list_of_the_first_track_maps() {
+        let movie = edited(8);
+        let mut table = SubsegmentTable::new(&movie).unwrap();
+        let samples =
+            [0, 4, 8, 12].map(|decoding_time| sample(1, decoding_time, 4, 0, decoding_time == 0));
 
+        index(&mut table, &movie, &samples, 100).unwrap();
+
+        let mut expected = SegmentIndexBox::default();
+        expected.reference_id = 1;
+        expected.timescale = 100;
+        expected.references = Vec::from([reference(100, 8, true, 1, 0)]);
+        assert_eq!(table.finish(), expected);
+    }
+
+    #[test]
+    fn a_reference_track_whose_edit_list_does_not_map_its_composition_timeline_is_refused() {
         assert_eq!(
-            [
-                indexed(edited(0, &[(0, 1)], false)),
-                indexed(edited(1, &[(8, 1)], false)),
-                indexed(edited(0, &[(8, 1)], false)),
-                indexed(edited(0, &[(-1, 1), (0, 1)], false)),
-                indexed(edited(0, &[(0, 2)], false)),
-                indexed(edited(0, &[(0, 1)], true)),
-                indexed(edited(0, &[], false)),
-            ],
-            [Ok(()), Ok(()), refused, refused, refused, refused, refused]
+            SubsegmentTable::new(&edited(-2)).map(|_| ()),
+            Err(MuxError::Timeline {
+                error: TimelineError::InvalidMediaTime {
+                    track_id: 1,
+                    media_time: -2
+                }
+            })
         );
     }
 }

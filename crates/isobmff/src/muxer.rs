@@ -203,10 +203,9 @@ impl Muxer {
     ///   group, sub-sample, sample auxiliary information or shadow sync table
     ///   of a track declares samples, which the muxer does not write from the
     ///   samples it takes.
-    /// * [`EditListNotApplied`](MuxError::EditListNotApplied): the segment is
-    ///   indexed, and the edit list of the first track of the movie moves its
-    ///   presentation times off its composition times, which the muxer does
-    ///   not apply.
+    /// * [`Timeline`](MuxError::Timeline): the segment is indexed, and the
+    ///   edit list of the first track of the movie does not map its
+    ///   composition timeline.
     /// * [`Box`](MuxError::Box): the `moov` does not write.
     /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the file is finished.
     pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), MuxError> {

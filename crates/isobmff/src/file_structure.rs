@@ -21,6 +21,12 @@ pub enum FileStructure {
         random_access: bool,
     },
     /// Movie file that is not fragmented: the `ftyp`, an `mdat` for each call, and the `moov` at the end
+    ///
+    /// The sample table of a track counts decoding times from 0 at its first
+    /// sample (§8.6.1.2). The first sample of a track without an edit list
+    /// is at decoding time 0; that of a track with one may be at any, from
+    /// which the table counts, and the edit list of the movie, as the caller
+    /// writes it, maps the times the table counts.
     NonFragmented,
     /// Media segment, §8.14: the `styp`, then a `moof` and an `mdat` for each call, of the movie its initialization segment holds
     ///
@@ -32,9 +38,9 @@ pub enum FileStructure {
         first_sequence_number: u32,
         /// Whether a `sidx` after the `styp` indexes the segment, each `moof` and its `mdat` a subsegment of the samples of the first track of the movie, §8.14.3
         ///
-        /// The times are the composition times of the samples: the muxer does
-        /// not apply an edit list, and refuses a movie whose first track has
-        /// one that moves them.
+        /// The times are the presentation times the edit list of the first
+        /// track maps the composition times of its samples to, as a
+        /// [`Timeline`](crate::timeline::Timeline) maps them.
         ///
         /// The `sidx` states the bytes of what follows it, so the muxer holds
         /// the boxes of the segment back until

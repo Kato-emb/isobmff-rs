@@ -5,6 +5,7 @@ use core::fmt;
 
 use isobmff_core::{BoxType, Error, FourCc};
 
+use super::TimelineError;
 use crate::framing::BoxEventKind;
 
 /// Reason boxes do not write as the bytes of a file
@@ -123,7 +124,7 @@ pub enum MuxError {
         /// `track_ID` of the track
         track_id: u32,
     },
-    /// Sample whose decoding time is not where the sample before it of its track ends, §8.6.1.2
+    /// Sample whose decoding time is not where the sample before it of its track ends, or, in a movie file, the first of a track without an edit list, not 0, §8.6.1.2
     #[non_exhaustive]
     DecodingTimeMismatch {
         /// `track_ID` of the track
@@ -147,11 +148,11 @@ pub enum MuxError {
         /// `track_ID` of the track
         track_id: u32,
     },
-    /// Edit list of the reference track of an indexed segment that presents its samples other than at their composition times, which a `sidx` states its times after and the muxer does not apply, §8.6.6, §8.14.3
+    /// Edit list of the reference track of an indexed segment that does not map its composition timeline, which a `sidx` states its times after, §8.6.6, §8.14.3
     #[non_exhaustive]
-    EditListNotApplied {
-        /// `track_ID` of the track
-        track_id: u32,
+    Timeline {
+        /// Why it does not
+        error: TimelineError,
     },
     /// Subsegment that the `sidx` of its segment cannot state, §8.14.3
     #[non_exhaustive]
@@ -266,10 +267,7 @@ impl fmt::Display for MuxError {
                 formatter,
                 "media data of a sample of track {track_id} lies past what a data offset reaches"
             ),
-            Self::EditListNotApplied { track_id } => write!(
-                formatter,
-                "edit list of track {track_id} moves its presentation times, which the segment index of a muxer does not apply"
-            ),
+            Self::Timeline { error } => fmt::Display::fmt(&error, formatter),
             Self::SegmentIndexOutOfRange { reference_id } => write!(
                 formatter,
                 "subsegment that the segment index of stream {reference_id} cannot state"

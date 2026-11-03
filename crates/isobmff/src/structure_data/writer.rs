@@ -16,6 +16,7 @@ use super::segment_index::SubsegmentTable;
 use crate::error::MuxError;
 use crate::framing::to_u64;
 use crate::sample::Sample;
+use crate::timeline;
 
 /// Writer of the structure-data of a file: a movie fragment for each run of samples, or the sample tables of its movie
 ///
@@ -66,9 +67,9 @@ impl MovieFragmentWriter {
     /// # Errors
     ///
     /// * The failure of [`take_sample_tables`].
-    /// * [`EditListNotApplied`](MuxError::EditListNotApplied): the writer
-    ///   indexes subsegments, and the edit list of the first track moves its
-    ///   presentation times off its composition times.
+    /// * [`Timeline`](MuxError::Timeline): the writer indexes subsegments,
+    ///   and the edit list of the first track does not map its composition
+    ///   timeline.
     pub(crate) fn new(
         mut movie: MovieBox,
         first_sequence_number: u32,
@@ -128,7 +129,7 @@ impl MovieFragmentWriter {
         moof_offset: u64,
         data_start: u64,
     ) -> Result<MovieFragmentBox, MuxError> {
-        let runs = runs(&self.movie, samples, None)?;
+        let runs = runs(&self.movie, samples, &[])?;
         let track_fragments = track_fragments(&runs);
         let moof = movie_fragment::movie_fragment_box(
             &self.movie,
@@ -144,7 +145,7 @@ impl MovieFragmentWriter {
                     moof.encoded_len().saturating_add(data_start),
                     u64::saturating_add,
                 );
-            segment_index.handle_movie_fragment(&track_fragments, referenced_size)?;
+            segment_index.handle_movie_fragment(&self.movie, &track_fragments, referenced_size)?;
         }
         self.sequence_number = self.sequence_number.wrapping_add(1);
         if let Some(random_access) = &mut self.random_access {
@@ -222,7 +223,8 @@ impl SampleTableWriter {
     /// * [`MixedSampleDescriptions`](MuxError::MixedSampleDescriptions): the
     ///   samples of one track are described by more than one sample entry.
     /// * [`DecodingTimeMismatch`](MuxError::DecodingTimeMismatch): a sample
-    ///   does not start where the one before it of its track ends.
+    ///   does not start where the one before it of its track ends, or the
+    ///   first of a track without an edit list does not start at 0.
     /// * [`SampleSizeOutOfRange`](MuxError::SampleSizeOutOfRange),
     ///   [`DataOffsetOutOfRange`](MuxError::DataOffsetOutOfRange): the media
     ///   data of a sample is longer than a table holds, or lies past 64-bit
@@ -232,8 +234,17 @@ impl SampleTableWriter {
         samples: &[Sample],
         data_offset: u64,
     ) -> Result<(), MuxError> {
-        let decoding_times: Vec<u64> = self.tables.iter().map(TrackTable::decoding_time).collect();
-        let runs = runs(&self.movie, samples, Some(&decoding_times))?;
+        let decoding_times: Vec<Option<u64>> = self
+            .movie
+            .trak
+            .iter()
+            .zip(&self.tables)
+            .map(|(trak, table)| {
+                let edited = !timeline::edits(trak).is_empty();
+                table.decoding_end().or((!edited).then_some(0))
+            })
+            .collect();
+        let runs = runs(&self.movie, samples, &decoding_times)?;
         if let Some(last) = runs.last() {
             let run_len = last
                 .samples
@@ -685,6 +696,53 @@ mod tests {
                 .first()
                 .map(|trak| trak.mdia.mdhd.duration),
             Some(0)
+        );
+    }
+
+    #[test]
+    fn the_samples_of_a_track_with_an_edit_list_start_at_the_decoding_time_of_the_first() {
+        let mut movie = two_tracks();
+        let mut elst = isobmff_boxes::EditListBox::default();
+        elst.entries = Vec::from([isobmff_boxes::EditListEntry::default()]);
+        let mut edts = isobmff_boxes::EditBox::default();
+        edts.elst = Some(elst);
+        if let Some(trak) = movie.trak.first_mut() {
+            trak.edts = Some(edts);
+        }
+        let mut writer = SampleTableWriter::new(movie).unwrap();
+
+        writer
+            .handle_samples(&[sample(1, 5, 10, b"AB")], 0)
+            .unwrap();
+        let next = [
+            writer.handle_samples(&[sample(1, 10, 10, b"CD")], 2),
+            writer.handle_samples(&[sample(1, 15, 10, b"CD")], 2),
+            writer.handle_samples(&[sample(2, 5, 10, b"EF")], 4),
+        ];
+
+        assert_eq!(
+            next,
+            [
+                Err(MuxError::DecodingTimeMismatch {
+                    track_id: 1,
+                    expected_decoding_time: 15,
+                    decoding_time: 10
+                }),
+                Ok(()),
+                Err(MuxError::DecodingTimeMismatch {
+                    track_id: 2,
+                    expected_decoding_time: 0,
+                    decoding_time: 5
+                }),
+            ]
+        );
+        assert_eq!(
+            writer
+                .finish()
+                .trak
+                .first()
+                .map(|trak| trak.mdia.mdhd.duration),
+            Some(20)
         );
     }
 

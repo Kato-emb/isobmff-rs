@@ -163,7 +163,7 @@ mod tests {
         ];
 
         for (samples, moof_offset) in [(&first[..], 100), (&second[..], 1 << 32)] {
-            let runs = runs(&movie, samples, None).unwrap();
+            let runs = runs(&movie, samples, &[]).unwrap();
             tables.handle_movie_fragment(&track_fragments(&runs), moof_offset);
         }
         let mfra = tables.finish().unwrap();
