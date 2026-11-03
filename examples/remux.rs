@@ -28,7 +28,7 @@
 use std::env;
 use std::error::Error;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, Seek, Write};
 
 use isobmff::boxes::{
     ChunkOffsetVariant, FileTypeBox, MovieBox, MovieExtendsBox, SampleSizeVariant, TrackExtendsBox,
@@ -67,7 +67,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
         _ => return Err(usage.into()),
     };
-    let mut source = File::open(source)?;
+    let mut source = BufReader::with_capacity(64 * 1024, File::open(source)?);
     let mut destination = Destination {
         file: File::create(destination)?,
         written: 0,
@@ -76,18 +76,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut demuxer = Demuxer::new();
     let mut muxer = Muxer::new(file_structure);
     let mut pending = Vec::new();
-    let mut buffer = vec![0; 64 * 1024];
-    let (mut buffered_at, mut buffered) = (0_u64, 0_usize);
     while let Some(wanted) = demuxer.wanted_input() {
-        let buffered_end = buffered_at.saturating_add(u64::try_from(buffered)?);
-        if !(buffered_at..buffered_end).contains(&wanted.offset()) {
-            source.seek(SeekFrom::Start(wanted.offset()))?;
-            buffered = source.read(&mut buffer)?;
-            buffered_at = wanted.offset();
-        }
-        let event = match buffer.get(..buffered).ok_or("read past the buffer")? {
+        let position = source.stream_position()?;
+        let distance = i64::try_from(wanted.offset())?
+            .checked_sub(i64::try_from(position)?)
+            .ok_or("an offset past 63 bits")?;
+        source.seek_relative(distance)?;
+        let event = match source.fill_buf()? {
             [] => demuxer.finish(),
-            input => demuxer.handle_input(buffered_at, input),
+            input => demuxer.handle_input(wanted.offset(), input),
         };
         pending.extend(std::iter::from_fn(|| demuxer.poll_sample()));
         if let Some(DemuxEvent::Movie { .. }) = event? {
