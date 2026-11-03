@@ -28,7 +28,7 @@
 use std::env;
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek, Write};
+use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 
 use isobmff::boxes::{
     ChunkOffsetVariant, FileTypeBox, MovieBox, MovieExtendsBox, SampleSizeVariant, TrackExtendsBox,
@@ -67,7 +67,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
         _ => return Err(usage.into()),
     };
-    let mut source = BufReader::with_capacity(64 * 1024, File::open(source)?);
+    let mut source = BufReader::new(File::open(source)?);
     let mut destination = Destination {
         file: File::create(destination)?,
         written: 0,
@@ -77,11 +77,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut muxer = Muxer::new(file_structure);
     let mut pending = Vec::new();
     while let Some(wanted) = demuxer.wanted_input() {
-        let position = source.stream_position()?;
-        let distance = i64::try_from(wanted.offset())?
-            .checked_sub(i64::try_from(position)?)
-            .ok_or("an offset past 63 bits")?;
-        source.seek_relative(distance)?;
+        source.seek(SeekFrom::Start(wanted.offset()))?;
         let event = match source.fill_buf()? {
             [] => demuxer.finish(),
             input => demuxer.handle_input(wanted.offset(), input),

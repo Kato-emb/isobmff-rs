@@ -13,7 +13,7 @@
 use std::env;
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 
 use isobmff::framing::{BoxEvent, BoxReader};
 use isobmff::{BoxHeader, BoxType, Boxes, ByteRange, RawBox};
@@ -29,16 +29,12 @@ const CONTAINERS: [&[u8; 4]; 14] = [
 
 fn main() -> Result<(), Box<dyn Error>> {
     let path = env::args().nth(1).ok_or("usage: dump_boxes <file>")?;
-    let mut file = BufReader::with_capacity(64 * 1024, File::open(path)?);
+    let mut file = BufReader::new(File::open(path)?);
     let mut reader = BoxReader::new();
     let mut gathering: Option<u64> = None;
 
     while let Some(wanted) = reader.wanted_input() {
-        let position = file.stream_position()?;
-        let distance = i64::try_from(wanted.offset())?
-            .checked_sub(i64::try_from(position)?)
-            .ok_or("an offset past 63 bits")?;
-        file.seek_relative(distance)?;
+        file.seek(SeekFrom::Start(wanted.offset()))?;
         let input = file.fill_buf()?;
         if input.is_empty() {
             break;
