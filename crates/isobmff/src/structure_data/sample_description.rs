@@ -1,9 +1,12 @@
 //! The sample entry that describes samples, and the data reference entry that says where their media data is, ISO/IEC 14496-12 §8.5.2 and §8.7.2
 
+use alloc::vec::Vec;
+
 use isobmff_boxes::{DataEntry, MovieBox, SampleDescription, TrackBox};
 
 use crate::error::{DemuxError, MuxError};
-use crate::sample::DataReferenceKey;
+use crate::framing::to_u64;
+use crate::sample::{DataReferenceKey, Sample, SampleLocation};
 
 /// One entry of the data reference of a track of the movie, under the key the locations of its samples carry, ISO/IEC 14496-12 §8.7.2
 ///
@@ -296,4 +299,71 @@ pub(super) fn located_data_reference(
 /// Returns entry `index` of a table that numbers its entries from 1
 fn nth_from_one<Entry>(entries: &[Entry], index: u32) -> Option<&Entry> {
     entries.get(usize::try_from(index.checked_sub(1)?).ok()?)
+}
+
+/// Returns the location of each of `samples` of the tracks of `movie`, their media data one after another in their order from file offset `data_offset`
+///
+/// Each location carries the key a
+/// [`StructureDataReader`](super::StructureDataReader) gives the data
+/// reference entry the sample entry of its sample names (§8.7.2).
+///
+/// # Errors
+///
+/// * [`UnknownTrackId`](MuxError::UnknownTrackId): a sample is of a track
+///   the movie has none of.
+/// * [`UnknownSampleDescriptionIndex`](MuxError::UnknownSampleDescriptionIndex),
+///   [`UnknownDataReferenceIndex`](MuxError::UnknownDataReferenceIndex),
+///   [`ExternalDataReference`](MuxError::ExternalDataReference),
+///   [`UnsupportedDataReference`](MuxError::UnsupportedDataReference): the
+///   track has no sample entry the sample names, or its entry names a data
+///   reference entry that is not the file itself.
+/// * [`DataOffsetOutOfRange`](MuxError::DataOffsetOutOfRange): the media
+///   data of a sample lies past 64-bit file offsets.
+pub(crate) fn laid_out(
+    movie: &MovieBox,
+    samples: &[Sample],
+    data_offset: u64,
+) -> Result<Vec<SampleLocation>, MuxError> {
+    let mut data_end = data_offset;
+    let mut described: Vec<(u32, u32, DataReferenceKey)> = Vec::new();
+    samples
+        .iter()
+        .map(|sample| {
+            let properties = sample.properties();
+            let (track_id, sample_description_index) =
+                (properties.track_id, properties.sample_description_index);
+            let known = described
+                .iter()
+                .find(|&&(described_track, described_by, _)| {
+                    (described_track, described_by) == (track_id, sample_description_index)
+                })
+                .map(|&(_, _, key)| key);
+            let data_reference = match known {
+                Some(key) => key,
+                None => {
+                    let (track_position, trak) = movie
+                        .trak
+                        .iter()
+                        .enumerate()
+                        .find(|(_, trak)| trak.tkhd.track_id == track_id)
+                        .ok_or(MuxError::UnknownTrackId { track_id })?;
+                    let key = DataReferenceKey::of(
+                        track_position,
+                        data_reference_index(trak, sample_description_index)?,
+                    );
+                    described.push((track_id, sample_description_index, key));
+                    key
+                }
+            };
+            let start = data_end;
+            data_end = start
+                .checked_add(to_u64(sample.data().len()))
+                .ok_or(MuxError::DataOffsetOutOfRange { track_id })?;
+            Ok(SampleLocation::new(
+                *properties,
+                data_reference,
+                start..data_end,
+            ))
+        })
+        .collect()
 }

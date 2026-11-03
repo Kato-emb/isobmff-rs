@@ -11,7 +11,7 @@ use crate::file_level::refuse_brands_before_iso5;
 use crate::file_structure::FileStructure;
 use crate::framing::{BoxEvent, BoxWriter, to_u64};
 use crate::media_data::MediaDataWriter;
-use crate::sample::{Sample, laid_out};
+use crate::sample::Sample;
 use crate::structure_data::{MovieFragmentWriter, SampleTableWriter, StructureDataWriter};
 
 /// Writer of a movie file or a segment from the samples a caller hands it
@@ -20,7 +20,10 @@ use crate::structure_data::{MovieFragmentWriter, SampleTableWriter, StructureDat
 /// of the file, and returns the file a box at file level at a time from
 /// [`poll_output`](Self::poll_output), in the order they lie in the file:
 /// writing them one after another gives the file. How the samples are laid
-/// out is the [`FileStructure`] the muxer is made with.
+/// out is the [`FileStructure`] the muxer is made with. The muxer is the
+/// writers of the layers composed: a caller that lays a file out otherwise
+/// writes it with them, as the [`media_data`](crate::media_data) example
+/// does.
 ///
 /// The movie is the caller's `moov`, its tracks and their sample entries
 /// already in place, such as the movie a [`Demuxer`](crate::Demuxer) read.
@@ -109,7 +112,7 @@ impl Muxer {
             file_structure,
             boxes: BoxWriter::new(),
             structure_data: None,
-            media_data: MediaDataWriter,
+            media_data: MediaDataWriter::new(),
             output: VecDeque::new(),
             held: Vec::new(),
             file_type: false,
@@ -303,21 +306,27 @@ impl Muxer {
         let mut held = false;
         match structure_data {
             StructureDataWriter::NonFragmented(writer) => {
-                let data_offset = self
-                    .boxes
-                    .next_offset()
-                    .saturating_add(header.encoded_len());
-                writer.handle_locations(&laid_out(&samples, data_offset)?)?;
+                // Why not self.boxes: the sample table writer checks the samples once the mdat has placed them, and a refused call leaves the muxer as it was
+                let mut boxes = self.boxes.clone();
+                let (mdat, locations) =
+                    self.media_data
+                        .write(writer.movie(), &mut boxes, header, &samples)?;
+                writer.handle_locations(&locations)?;
+                self.boxes = boxes;
+                written.push(mdat);
             }
             StructureDataWriter::Fragmented(writer) => {
                 let moof_offset = self.boxes.next_offset();
                 let (moof, _) =
                     writer.movie_fragment(&samples, moof_offset, header.encoded_len())?;
                 written.push(write_box(&mut self.boxes, &moof)?);
+                let (mdat, _) =
+                    self.media_data
+                        .write(writer.movie(), &mut self.boxes, header, &samples)?;
+                written.push(mdat);
                 held = writer.indexes_subsegments();
             }
         }
-        written.push(self.media_data.write(&mut self.boxes, header, &samples)?);
         if held {
             self.held.extend(written);
         } else {
@@ -888,6 +897,30 @@ mod tests {
         assert_eq!(
             output(&mut muxer),
             [ftyp, written(b"mdat", &[b"ABCDE"]), encoded(&expected)]
+        );
+    }
+
+    #[test]
+    fn samples_refused_leave_a_file_that_is_not_fragmented_as_it_was() {
+        let written = |refused: &[Sample]| {
+            let mut muxer = Muxer::new(FileStructure::NonFragmented);
+            muxer.handle_movie(one_track()).unwrap();
+            let refusal = muxer.handle_samples(refused.iter().cloned());
+            muxer.handle_samples(two_samples()).unwrap();
+            muxer.finish().unwrap();
+            (refusal, output(&mut muxer))
+        };
+        let [first, second] = two_samples();
+        let mut properties = *second.properties();
+        properties.track_id = 2;
+        let of_no_track = Sample::new(properties, second.into_data());
+
+        assert_eq!(
+            written(&[first, of_no_track]),
+            (
+                Err(MuxError::UnknownTrackId { track_id: 2 }),
+                written(&[]).1
+            )
         );
     }
 

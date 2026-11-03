@@ -1,4 +1,4 @@
-//! [`StructureDataWriter`], which writes the structure-data that declares samples: the sample tables of a movie, or its movie fragments
+//! [`MovieFragmentWriter`] and [`SampleTableWriter`], which write the structure-data that declares samples: the movie fragments of a movie, or its sample tables
 
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
@@ -11,10 +11,11 @@ use isobmff_core::BoxEncode;
 
 use super::movie_fragment::{self, runs, track_fragments};
 use super::random_access::RandomAccessTables;
+use super::sample_description::laid_out;
 use super::sample_table::{TrackTable, take_sample_tables};
 use super::segment_index::SubsegmentTable;
 use crate::error::MuxError;
-use crate::sample::{Sample, SampleLocation, laid_out};
+use crate::sample::{Sample, SampleLocation};
 use crate::timeline;
 
 /// Writer of the structure-data of a file: a movie fragment for each run of samples, or the sample tables of its movie
@@ -40,22 +41,40 @@ impl StructureDataWriter {
     }
 }
 
-/// Writer of the movie fragments of a movie, numbered on from `sequence_number`
+/// Writer of the movie fragments of a movie, ISO/IEC 14496-12 §8.8
+///
+/// The writer does no I/O. It takes the samples of each movie fragment, and
+/// returns the `moof` that declares them, its media data in an `mdat` that
+/// follows it, and the [`SampleLocation`] of each. It refuses samples the
+/// movie does not declare a track, a sample entry or a data reference entry
+/// in the file itself for. A fragmented movie file ends with the `mfra` it
+/// returns as it finishes, where it lists sync samples, and a segment has
+/// the `sidx` it returns after its `styp`, where it indexes subsegments.
+#[doc(alias = "moof")]
 #[derive(Debug)]
-pub(crate) struct MovieFragmentWriter {
+pub struct MovieFragmentWriter {
     movie: MovieBox,
     sequence_number: u32,
     /// Sync samples of the fragments written, where the file ends with an `mfra`
     random_access: Option<RandomAccessTables>,
     /// Subsegments of the fragments written, where the segment starts with a `sidx`
     segment_index: Option<SubsegmentTable>,
+    finished: bool,
 }
 
-/// Writer of the sample table of each track of a movie, in the order of its tracks
+/// Writer of the sample table of each track of a movie, ISO/IEC 14496-12 §8.5
+///
+/// The writer does no I/O. It takes the [`SampleLocation`] of each sample,
+/// wherever its media data lies in the file, and fills the sample tables of
+/// the movie with them as it finishes. It refuses samples the movie does not
+/// declare a track, a sample entry or a data reference entry in the file
+/// itself for.
+#[doc(alias = "stbl")]
 #[derive(Debug)]
-pub(crate) struct SampleTableWriter {
+pub struct SampleTableWriter {
     movie: MovieBox,
-    tables: Vec<TrackTable>,
+    /// Table of each track, until the writer finishes
+    tables: Option<Vec<TrackTable>>,
     /// Whether the movie given was fragmented, in which a last edit of duration 0 lasts to the end of the media (§8.6.6.1)
     fragmented: bool,
 }
@@ -67,11 +86,13 @@ impl MovieFragmentWriter {
     ///
     /// # Errors
     ///
-    /// * The failure of [`take_sample_tables`].
+    /// * [`SampleTableNotEmpty`](MuxError::SampleTableNotEmpty): a sample
+    ///   group, sub-sample, sample auxiliary information or shadow sync table
+    ///   of a track declares samples, which the writer does not write.
     /// * [`Timeline`](MuxError::Timeline): the writer indexes subsegments,
     ///   and the edit list of the first track does not map its composition
     ///   timeline.
-    pub(crate) fn new(
+    pub fn new(
         mut movie: MovieBox,
         first_sequence_number: u32,
         random_access: bool,
@@ -97,11 +118,13 @@ impl MovieFragmentWriter {
             movie,
             sequence_number: first_sequence_number,
             random_access: random_access.then(RandomAccessTables::default),
+            finished: false,
         })
     }
 
-    /// Returns the movie the writer was made from
-    pub(crate) const fn movie(&self) -> &MovieBox {
+    /// Returns the movie the writer was made from, in the form the fragments extend: its `moov`
+    #[must_use]
+    pub const fn movie(&self) -> &MovieBox {
         &self.movie
     }
 
@@ -115,10 +138,14 @@ impl MovieFragmentWriter {
     /// track in the fragment, and one that indexes subsegments indexes the
     /// fragment and its media data as one.
     ///
-    /// The locations are those a
+    /// The `mdat` goes right after the `moof`, its header `data_start` bytes
+    /// long, as a [`MediaDataWriter`](crate::media_data::MediaDataWriter)
+    /// writes it. The locations are those a
     /// [`StructureDataReader`](super::StructureDataReader) resolves out of the
     /// `moof`: the file offsets of the media data of each sample, and the key
     /// of the data reference entry its sample entry names.
+    ///
+    /// A refused call leaves the writer as it was.
     ///
     /// # Errors
     ///
@@ -130,13 +157,18 @@ impl MovieFragmentWriter {
     ///   or past 64-bit file offsets.
     /// * [`SegmentIndexOutOfRange`](MuxError::SegmentIndexOutOfRange): the
     ///   `sidx` cannot state the fragment as a subsegment.
-    pub(crate) fn movie_fragment(
+    /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the writer is
+    ///   finished.
+    pub fn movie_fragment(
         &mut self,
         samples: &[Sample],
         moof_offset: u64,
         data_start: u64,
     ) -> Result<(MovieFragmentBox, Vec<SampleLocation>), MuxError> {
-        let laid_out = laid_out(samples, 0)?;
+        if self.finished {
+            return Err(MuxError::AlreadyFinished);
+        }
+        let laid_out = laid_out(&self.movie, samples, 0)?;
         let data_len = laid_out.last().map_or(0, |last| last.byte_range().end);
         let runs = runs(&self.movie, &laid_out, &[])?;
         let track_fragments = track_fragments(&runs);
@@ -166,18 +198,13 @@ impl MovieFragmentWriter {
         if let Some(random_access) = &mut self.random_access {
             random_access.handle_movie_fragment(&track_fragments, moof_offset);
         }
-        let locations = runs
+        let locations = laid_out
             .iter()
-            .flat_map(|run| {
-                run.samples.iter().map(|sample| {
-                    let range = sample.byte_range();
-                    SampleLocation::new(
-                        *sample.properties(),
-                        run.data_reference,
-                        data_origin.saturating_add(range.start)
-                            ..data_origin.saturating_add(range.end),
-                    )
-                })
+            .map(|location| {
+                let range = location.byte_range();
+                location.with_byte_range(
+                    data_origin.saturating_add(range.start)..data_origin.saturating_add(range.end),
+                )
             })
             .collect();
 
@@ -191,10 +218,14 @@ impl MovieFragmentWriter {
 
     /// Returns the `mfra` of the sync samples listed and the `sidx` of the subsegments indexed, where the writer lists and indexes them, §8.8.9, §8.14.3
     ///
+    /// The `mfra` goes at the end of the file. The `sidx` goes before the
+    /// first `moof`, and its first subsegment starts right after it. A second
+    /// call returns neither, and the writer takes no more samples.
+    ///
     /// # Errors
     ///
     /// * [`Box`](MuxError::Box): the `mfra` is longer than its `mfro` counts.
-    pub(crate) fn finish(
+    pub fn finish(
         &mut self,
     ) -> Result<
         (
@@ -203,6 +234,7 @@ impl MovieFragmentWriter {
         ),
         MuxError,
     > {
+        self.finished = true;
         let mfra = self
             .random_access
             .take()
@@ -220,11 +252,13 @@ impl SampleTableWriter {
     ///
     /// # Errors
     ///
-    /// * The failure of [`take_sample_tables`].
-    pub(crate) fn new(mut movie: MovieBox) -> Result<Self, MuxError> {
+    /// * [`SampleTableNotEmpty`](MuxError::SampleTableNotEmpty): a sample
+    ///   group, sub-sample, sample auxiliary information or shadow sync table
+    ///   of a track declares samples, which the writer does not write.
+    pub fn new(mut movie: MovieBox) -> Result<Self, MuxError> {
         take_sample_tables(&mut movie)?;
         let fragmented = movie.mvex.take().is_some();
-        let tables = movie.trak.iter().map(|_| TrackTable::default()).collect();
+        let tables = Some(movie.trak.iter().map(|_| TrackTable::default()).collect());
 
         Ok(Self {
             movie,
@@ -234,7 +268,8 @@ impl SampleTableWriter {
     }
 
     /// Returns the movie the writer was made from, its sample tables those of the samples to come
-    pub(crate) const fn movie(&self) -> &MovieBox {
+    #[must_use]
+    pub const fn movie(&self) -> &MovieBox {
         &self.movie
     }
 
@@ -245,6 +280,8 @@ impl SampleTableWriter {
     /// first sample (§8.7.5). The data reference entry of a sample is the one
     /// its sample entry names (§8.5.2), and the key a location carries is not
     /// read.
+    ///
+    /// A refused call leaves the writer as it was.
     ///
     /// # Errors
     ///
@@ -265,15 +302,15 @@ impl SampleTableWriter {
     ///   the track of the first sample of a track starts before that sample.
     /// * [`SampleSizeOutOfRange`](MuxError::SampleSizeOutOfRange): the media
     ///   data of a sample is longer than a table holds.
-    pub(crate) fn handle_locations(
-        &mut self,
-        locations: &[SampleLocation],
-    ) -> Result<(), MuxError> {
+    /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the writer is
+    ///   finished.
+    pub fn handle_locations(&mut self, locations: &[SampleLocation]) -> Result<(), MuxError> {
+        let tables = self.tables.as_mut().ok_or(MuxError::AlreadyFinished)?;
         let decoding_times: Vec<Option<u64>> = self
             .movie
             .trak
             .iter()
-            .zip(&self.tables)
+            .zip(tables.iter())
             .map(|(trak, table)| {
                 let edited = !timeline::edits(trak).is_empty();
                 table.decoding_end().or((!edited).then_some(0))
@@ -298,7 +335,7 @@ impl SampleTableWriter {
         }
 
         for run in runs {
-            if let Some(table) = self.tables.get_mut(run.track) {
+            if let Some(table) = tables.get_mut(run.track) {
                 table.push_chunk(run.sample_description_index, run.samples);
             }
         }
@@ -326,11 +363,17 @@ impl SampleTableWriter {
     /// duration from its `media_time` to the latest composition time a sample
     /// is composed up to, rounded up to a tick of the movie, and the edit
     /// list, which is presented once there, does not repeat.
-    pub(crate) fn finish(&mut self) -> &MovieBox {
+    ///
+    /// The writer then takes no more samples, and a second call returns the
+    /// same movie.
+    pub fn finish(&mut self) -> &MovieBox {
+        let Some(tables) = self.tables.take() else {
+            return &self.movie;
+        };
         let movie = &mut self.movie;
         let movie_timescale = u128::from(movie.mvhd.timescale);
         let mut movie_duration = 0_u64;
-        for (trak, table) in movie.trak.iter_mut().zip(core::mem::take(&mut self.tables)) {
+        for (trak, table) in movie.trak.iter_mut().zip(tables) {
             let media_duration = table.decoding_time();
             let media_timescale = u128::from(trak.mdia.mdhd.timescale);
             let in_movie = |duration: Option<u128>| {
@@ -568,6 +611,35 @@ mod tests {
         let read: Vec<SampleLocation> =
             reader.handle_movie_fragment(&moof, 1000).unwrap().collect();
         assert_eq!(locations, read);
+    }
+
+    #[test]
+    fn a_finished_writer_takes_no_more_samples_and_finishes_as_it_did() {
+        let mut tables = SampleTableWriter::new(two_tracks()).unwrap();
+        tables
+            .handle_locations(&laid_out(&[sample(1, 0, 10, b"AB")], 0))
+            .unwrap();
+        let movie = tables.finish().clone();
+        let mut fragments =
+            MovieFragmentWriter::new(two_fragmented_tracks(), 1, true, false).unwrap();
+        fragments.finish().unwrap();
+
+        assert_eq!(
+            (
+                tables.handle_locations(&laid_out(&[sample(1, 10, 10, b"CD")], 2)),
+                tables.finish().clone(),
+                fragments
+                    .movie_fragment(&[sample(1, 0, 10, b"AB")], 0, 8)
+                    .map(|_| ()),
+                fragments.finish(),
+            ),
+            (
+                Err(MuxError::AlreadyFinished),
+                movie,
+                Err(MuxError::AlreadyFinished),
+                Ok((None, None)),
+            )
+        );
     }
 
     #[test]

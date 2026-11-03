@@ -609,7 +609,7 @@ pub(crate) mod fixtures {
 
     use isobmff_core::{BoxDefinition, BoxEncode};
 
-    use crate::sample::{Sample, SampleLocation, SampleProperties};
+    use crate::sample::{DataReferenceKey, Sample, SampleLocation, SampleProperties};
     use crate::structure_data::StructureDataLimits;
 
     use isobmff_boxes::{
@@ -642,9 +642,23 @@ pub(crate) mod fixtures {
         )
     }
 
-    /// Returns the location of each of `samples`, their media data one after another in their order from file offset `data_offset`
+    /// Returns the location of each of `samples`, their media data one after another in their order from file offset `data_offset`, of key 0 whatever the movie declares
     pub(crate) fn laid_out(samples: &[Sample], data_offset: u64) -> Vec<SampleLocation> {
-        crate::sample::laid_out(samples, data_offset).unwrap()
+        let mut data_end = data_offset;
+        samples
+            .iter()
+            .map(|sample| {
+                let start = data_end;
+                data_end = data_end
+                    .checked_add(u64::try_from(sample.data().len()).unwrap())
+                    .unwrap();
+                SampleLocation::new(
+                    *sample.properties(),
+                    DataReferenceKey::new(0),
+                    start..data_end,
+                )
+            })
+            .collect()
     }
 
     /// Returns the track `track_id` of the samples of `sizes`, each lasting `sample_delta`, laid in chunks at `chunk_offsets` by the runs `(first_chunk, samples_per_chunk)`
