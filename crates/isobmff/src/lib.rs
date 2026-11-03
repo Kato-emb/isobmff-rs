@@ -173,6 +173,11 @@
 //! it, and keeps each such [`Leniency`] for the caller to ask after with
 //! [`Demuxer::leniencies`].
 //!
+//! The samples carry their decoding times. Where a track has an edit list,
+//! its samples are presented elsewhere on the presentation timeline, or
+//! not at all, or more than once (§8.6.6): a [`Timeline`](timeline::Timeline)
+//! maps each sample to the times it is presented at.
+//!
 //! A caller that can seek reads a fragmented movie file from any of its
 //! fragments. The `mfra` at the end of the file lists where they start
 //! (§8.8.9), and a fragment with a `tfdt` gives its own decoding time:
@@ -242,10 +247,11 @@ pub mod media_data;
 mod muxer;
 mod sample;
 pub mod structure_data;
+pub mod timeline;
 
 pub use byte_range::ByteRange;
 pub use demuxer::{DemuxEvent, Demuxer};
-pub use error::{DemuxError, MuxError};
+pub use error::{DemuxError, MuxError, TimelineError};
 pub use file_structure::FileStructure;
 pub use isobmff_core::*;
 pub use leniency::{Leniency, SampleTableDisagreement};

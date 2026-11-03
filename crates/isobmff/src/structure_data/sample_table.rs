@@ -361,7 +361,9 @@ pub(super) fn take_sample_tables(movie: &mut MovieBox) -> Result<(), MuxError> {
 /// What the sample table of a track declares, as the samples written to it so far
 #[derive(Debug, Default)]
 pub(super) struct TrackTable {
-    /// Decoding time past the last sample
+    /// Decoding time the first sample is taken at, where there is one
+    decoding_start: Option<u64>,
+    /// Decoding time past the last sample, counted from 0 at the first
     decoding_time: u64,
     /// Chunks, in chunk order
     chunks: Vec<Chunk>,
@@ -388,9 +390,20 @@ struct TableSample {
 }
 
 impl TrackTable {
-    /// Returns the decoding time past the last sample
+    /// Returns the decoding time past the last sample, counted from 0 at the first
     pub(super) const fn decoding_time(&self) -> u64 {
         self.decoding_time
+    }
+
+    /// Returns the decoding time the first sample is taken at, or `None` before the first
+    pub(super) const fn decoding_start(&self) -> Option<u64> {
+        self.decoding_start
+    }
+
+    /// Returns the decoding time past the last sample, counted from the decoding time the first is taken at, or `None` before the first
+    pub(super) fn decoding_end(&self) -> Option<u64> {
+        self.decoding_start
+            .map(|start| start.saturating_add(self.decoding_time))
     }
 
     /// Adds `samples`, described by sample entry `sample_description_index`, as the chunk at file offset `offset`
@@ -405,6 +418,10 @@ impl TrackTable {
             samples_per_chunk: u32::try_from(samples.len()).unwrap_or(u32::MAX),
             sample_description_index,
         });
+        if let Some(first) = samples.first() {
+            self.decoding_start
+                .get_or_insert(first.properties().decoding_time);
+        }
         for sample in samples {
             let properties = sample.properties();
             self.decoding_time = self

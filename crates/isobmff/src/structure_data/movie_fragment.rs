@@ -235,10 +235,9 @@ pub(super) struct Run<'a> {
 /// Returns the runs of samples of one track that lie one after another in `samples`, checked against the tracks of `movie`
 ///
 /// The decoding times of the samples of each track follow from the
-/// durations before them in `samples`, from the first sample's own where
-/// `decoding_times` is `None`, and otherwise from the decoding time
+/// durations before them in `samples`, from the decoding time
 /// `decoding_times` holds for the track, in the order of the tracks of the
-/// movie.
+/// movie, and from the first sample's own where it holds none.
 ///
 /// # Errors
 ///
@@ -246,7 +245,7 @@ pub(super) struct Run<'a> {
 pub(super) fn runs<'a>(
     movie: &MovieBox,
     samples: &'a [Sample],
-    decoding_times: Option<&[u64]>,
+    decoding_times: &[Option<u64>],
 ) -> Result<Vec<Run<'a>>, MuxError> {
     let mut runs: Vec<Run<'a>> = Vec::new();
     let mut rest = samples;
@@ -275,7 +274,7 @@ pub(super) fn runs<'a>(
         };
         let decoding_start = earlier
             .map(|earlier| earlier.decoding_end)
-            .or_else(|| decoding_times.map(|times| times.get(track).copied().unwrap_or_default()));
+            .or_else(|| decoding_times.get(track).copied().flatten());
         let mut decoding_time = decoding_start.unwrap_or(first.decoding_time);
         let mut run_len = 0_u64;
         for sample in run_samples {

@@ -163,7 +163,7 @@ pub fn ffprobe(arguments: &[&str], file: &Path) -> Output {
         .unwrap()
 }
 
-/// Packet `ffprobe` reports for a file: the track of its stream, the bytes it reads, and its decoding timestamp
+/// Packet `ffprobe` reports for a file: the track of its stream, the bytes it reads, and its timestamps
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct FfprobePacket {
@@ -175,6 +175,12 @@ pub struct FfprobePacket {
     pub size: u64,
     /// Decoding timestamp of the packet, in the time base of its stream, where `ffprobe` reports one
     pub dts: Option<i64>,
+    /// Presentation timestamp of the packet, in the time base of its stream, where `ffprobe` reports one
+    pub pts: Option<i64>,
+    /// Time base of the stream, as its numerator and denominator
+    pub time_base: (u64, u64),
+    /// Whether `ffprobe` flags the packet to be discarded after decoding: one an edit list does not present from its start
+    pub discard: bool,
 }
 
 /// Returns the packets `ffprobe -show_streams -show_packets -of json` reports for `file`, in the order it reports them
@@ -208,7 +214,7 @@ pub fn ffprobe_packets(file: &Path) -> Vec<FfprobePacket> {
         String::from_utf8_lossy(&output.stderr)
     );
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-    let track_ids = report
+    let streams = report
         .get("streams")
         .and_then(Value::as_array)
         .expect("ffprobe reports the streams")
@@ -218,9 +224,17 @@ pub fn ffprobe_packets(file: &Path) -> Vec<FfprobePacket> {
                 .get("id")
                 .and_then(Value::as_str)
                 .expect("ffprobe reports the id of a stream");
-            u32::from_str_radix(id.trim_start_matches("0x"), 16).unwrap()
+            let (numerator, denominator) = stream
+                .get("time_base")
+                .and_then(Value::as_str)
+                .and_then(|time_base| time_base.split_once('/'))
+                .expect("ffprobe reports the time base of a stream");
+            (
+                u32::from_str_radix(id.trim_start_matches("0x"), 16).unwrap(),
+                (numerator.parse().unwrap(), denominator.parse().unwrap()),
+            )
         })
-        .collect::<Vec<_>>();
+        .collect::<Vec<(u32, (u64, u64))>>();
 
     report
         .get("packets")
@@ -234,13 +248,20 @@ pub fn ffprobe_packets(file: &Path) -> Vec<FfprobePacket> {
                 .get("stream_index")
                 .and_then(Value::as_u64)
                 .expect("ffprobe reports the stream of a packet");
+            let &(track_id, time_base) = streams
+                .get(usize::try_from(stream_index).unwrap())
+                .expect("ffprobe reports the stream of a packet among its streams");
             FfprobePacket {
-                track_id: *track_ids
-                    .get(usize::try_from(stream_index).unwrap())
-                    .expect("ffprobe reports the stream of a packet among its streams"),
+                track_id,
                 pos: number("pos").expect("ffprobe reports the pos of a packet"),
                 size: number("size").expect("ffprobe reports the size of a packet"),
                 dts: packet.get("dts").and_then(Value::as_i64),
+                pts: packet.get("pts").and_then(Value::as_i64),
+                time_base,
+                discard: packet
+                    .get("flags")
+                    .and_then(Value::as_str)
+                    .is_some_and(|flags| flags.contains('D')),
             }
         })
         .collect()

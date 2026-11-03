@@ -191,7 +191,10 @@ impl Muxer {
     /// versions that hold them (§8.2.2, §8.3.2, §8.4.2), in a file that is
     /// not fragmented: [`finish`](Self::finish) replaces them with the
     /// duration of the samples of each track and the longest of those. A
-    /// fragmented file or a segment writes them as `movie` gives them. A
+    /// fragmented file or a segment writes them as `movie` gives them. In a
+    /// file that is not fragmented, whose sample tables count decoding times
+    /// from 0 (§8.6.1.2), a track whose first sample is at a later decoding
+    /// time has the `media_time` of its edits moved back by as much. A
     /// movie read by a [`Demuxer`](crate::Demuxer) is taken as it is, and
     /// [`movie`](Self::movie) returns the movie in the form the muxer uses.
     ///
@@ -203,10 +206,9 @@ impl Muxer {
     ///   group, sub-sample, sample auxiliary information or shadow sync table
     ///   of a track declares samples, which the muxer does not write from the
     ///   samples it takes.
-    /// * [`EditListNotApplied`](MuxError::EditListNotApplied): the segment is
-    ///   indexed, and the edit list of the first track of the movie moves its
-    ///   presentation times off its composition times, which the muxer does
-    ///   not apply.
+    /// * [`Timeline`](MuxError::Timeline): the segment is indexed, and the
+    ///   edit list of the first track of the movie does not map its
+    ///   composition timeline.
     /// * [`Box`](MuxError::Box): the `moov` does not write.
     /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the file is finished.
     pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), MuxError> {
@@ -267,7 +269,13 @@ impl Muxer {
     /// * [`MixedSampleDescriptions`](MuxError::MixedSampleDescriptions),
     ///   [`DecodingTimeMismatch`](MuxError::DecodingTimeMismatch): the
     ///   samples of a track are described by more than one sample entry, or
-    ///   their decoding times do not follow from their durations.
+    ///   their decoding times do not follow from their durations. In a file
+    ///   that is not fragmented, the first sample of a track without an edit
+    ///   list is at decoding time 0, and its decoding time is the origin the
+    ///   sample tables move the edits of one with an edit list back from.
+    /// * [`MediaTimeOutOfRange`](MuxError::MediaTimeOutOfRange): in a file
+    ///   that is not fragmented, an edit of a track starts before the first
+    ///   sample of the track, which the moved edit could not reach.
     /// * [`SampleSizeOutOfRange`](MuxError::SampleSizeOutOfRange),
     ///   [`DataOffsetOutOfRange`](MuxError::DataOffsetOutOfRange): the media
     ///   data of a sample is longer, or lies further, than the structure-data
