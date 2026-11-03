@@ -190,8 +190,12 @@ impl Muxer {
     /// durations of the `mvhd`, of each `tkhd` and of each `mdhd`, with the
     /// versions that hold them (§8.2.2, §8.3.2, §8.4.2), in a file that is
     /// not fragmented: [`finish`](Self::finish) replaces them with the
-    /// duration of the samples of each track and the longest of those. A
-    /// fragmented file or a segment writes them as `movie` gives them. In a
+    /// duration of the samples of each track, or the sum of the edits of a
+    /// track with an edit list that does not repeat, and the longest of
+    /// those. A fragmented file or a segment writes them as `movie` gives
+    /// them. A last edit of duration 0 of a fragmented `movie`, which lasts
+    /// to the end of its media (§8.6.6.1), lasts to the end of the samples
+    /// in a file that is not fragmented. In a
     /// file that is not fragmented, whose sample tables count decoding times
     /// from 0 (§8.6.1.2), a track whose first sample is at a later decoding
     /// time has the `media_time` of its edits moved back by as much. A

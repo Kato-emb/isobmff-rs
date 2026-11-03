@@ -140,10 +140,7 @@ impl<'a> Timeline<'a> {
             return Err(TimelineError::MissingMovieTimescale { track_id });
         }
         let fragmented = movie.mvex.is_some();
-        let open_last_edit = fragmented
-            && edits
-                .last()
-                .is_some_and(|edit| edit.edit_duration == 0 && edit.media_time >= 0);
+        let open_last_edit = fragmented && edits.last().is_some_and(lasts_to_end_of_media);
         let list_duration = edits
             .iter()
             .map(|edit| u128::from(edit.edit_duration))
@@ -401,6 +398,11 @@ pub(crate) fn edits(trak: &TrackBox) -> &[EditListEntry] {
 pub(crate) fn composition_time(properties: &SampleProperties) -> i128 {
     i128::from(properties.decoding_time)
         .saturating_add(i128::from(properties.sample_composition_time_offset))
+}
+
+/// Returns whether `edit`, the last of the edit list of a fragmented movie, lasts to the end of the media: it is not empty, and of duration 0 (§8.6.6.1)
+pub(crate) const fn lasts_to_end_of_media(edit: &EditListEntry) -> bool {
+    edit.edit_duration == 0 && edit.media_time >= 0
 }
 
 /// Returns whether `edit` is a dwell: its `media_rate` is 0
