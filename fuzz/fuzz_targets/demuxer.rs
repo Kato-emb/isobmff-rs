@@ -10,10 +10,11 @@
 //!    holds is compared up to the events the shorter read reports: what is
 //!    held depends on the samples taken by then, which the cut decides
 //! 3. a read that ends without a failure returns the sample of every location
-//!    the events carry whose media data is in the file itself, in their order,
-//!    holding the bytes of the file the location names
+//!    the events carry whose media data is in the file itself, an `imda` of
+//!    it among the places, in their order, holding the bytes of the file the
+//!    location names
 //! 4. the offset the demuxer wants goes back only after a call that reports a
-//!    `moov` or a `moof`, whose samples may lie before it
+//!    `moov`, a `moof` or an `imda`, whose samples may lie before it
 //! 5. the read ends within as many calls as the file has bytes, the samples
 //!    the events locate have bytes of media data, and two for each event:
 //!    every call reads a byte of a box, keeps a byte of a sample, reports a
@@ -50,6 +51,7 @@ enum Recorded {
     SegmentIndex(ByteRange),
     MovieFragmentRandomAccess(ByteRange),
     MediaData(BoxType, ByteRange),
+    IdentifiedMediaData(ByteRange, u32, Vec<SampleLocation>),
     Other(BoxType, ByteRange),
 }
 
@@ -57,7 +59,7 @@ fuzz_target!(|bytes: &[u8]| {
     let whole = read(bytes, &[usize::MAX]);
     if whole.ending.is_ok() {
         let expected: Vec<_> = whole
-            .in_same_file
+            .in_this_file
             .iter()
             .map(|location| {
                 let byte_range = location.byte_range();
@@ -113,7 +115,7 @@ fn fails_on_what_is_held(read: &Read) -> bool {
 struct Read {
     events: Vec<Recorded>,
     /// Locations the events carry whose media data is in the file itself, in their order
-    in_same_file: Vec<SampleLocation>,
+    in_this_file: Vec<SampleLocation>,
     samples: Vec<Sample>,
     ending: Result<(), DemuxError>,
 }
@@ -121,7 +123,7 @@ struct Read {
 /// Reads `bytes` from wherever the demuxer wants them, in pieces of `piece_lens` in turn
 fn read(bytes: &[u8], piece_lens: &[usize]) -> Read {
     let mut recorded = Vec::new();
-    let mut in_same_file = Vec::new();
+    let mut in_this_file = Vec::new();
     let mut samples = Vec::new();
     let ending = (|| {
         let mut piece_lens = piece_lens.iter().cycle();
@@ -154,7 +156,11 @@ fn read(bytes: &[u8], piece_lens: &[usize]) -> Read {
             samples.extend(std::iter::from_fn(|| demuxer.poll_sample()));
             located = matches!(
                 event,
-                Some(DemuxEvent::Movie { .. } | DemuxEvent::MovieFragment { .. })
+                Some(
+                    DemuxEvent::Movie { .. }
+                        | DemuxEvent::MovieFragment { .. }
+                        | DemuxEvent::IdentifiedMediaData { .. }
+                )
             );
             if let Some(event) = event {
                 let event = match event {
@@ -179,22 +185,29 @@ fn read(bytes: &[u8], piece_lens: &[usize]) -> Read {
                     DemuxEvent::MediaData {
                         header, byte_range, ..
                     } => Recorded::MediaData(header.box_type(), byte_range),
+                    DemuxEvent::IdentifiedMediaData {
+                        byte_range,
+                        identifier,
+                        samples,
+                        ..
+                    } => Recorded::IdentifiedMediaData(byte_range, identifier, samples.collect()),
                     DemuxEvent::Other {
                         header, byte_range, ..
                     } => Recorded::Other(header.box_type(), byte_range),
                     event => panic!("unexpected event {event:?}"),
                 };
-                if let Recorded::Movie(_, locations) | Recorded::MovieFragment(_, locations) =
-                    &event
+                if let Recorded::Movie(_, locations)
+                | Recorded::MovieFragment(_, locations)
+                | Recorded::IdentifiedMediaData(_, _, locations) = &event
                 {
-                    in_same_file.extend(
+                    in_this_file.extend(
                         locations
                             .iter()
                             .filter(|location| {
                                 demuxer
                                     .data_reference(location.data_reference())
                                     .is_some_and(|data_reference| {
-                                        data_reference.entry().is_in_same_file()
+                                        data_reference.entry().is_in_this_file()
                                     })
                             })
                             .cloned(),
@@ -215,7 +228,7 @@ fn read(bytes: &[u8], piece_lens: &[usize]) -> Read {
     })();
     Read {
         events: recorded,
-        in_same_file,
+        in_this_file,
         samples,
         ending,
     }
