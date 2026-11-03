@@ -612,6 +612,31 @@ impl SampleLocations {
     }
 }
 
+impl SampleLocations {
+    /// Returns the locations left, without taking them
+    pub(crate) fn as_slice(&self) -> &[SampleLocation] {
+        self.locations.as_slice()
+    }
+
+    /// Returns the locations left, each replaced by what `replace` returns for it
+    ///
+    /// # Errors
+    ///
+    /// The first failure of `replace`.
+    pub(crate) fn try_map(
+        self,
+        replace: impl FnMut(SampleLocation) -> Result<SampleLocation, DemuxError>,
+    ) -> Result<Self, DemuxError> {
+        Ok(Self {
+            locations: self
+                .locations
+                .map(replace)
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter(),
+        })
+    }
+}
+
 impl Iterator for SampleLocations {
     type Item = SampleLocation;
 
@@ -646,11 +671,7 @@ fn located(location: &SampleLocation, payload_offset: u64) -> Result<SampleLocat
         .checked_add(range.start)
         .ok_or(out_of_range)?;
     let end = payload_offset.checked_add(range.end).ok_or(out_of_range)?;
-    Ok(SampleLocation::new(
-        *location.properties(),
-        location.data_reference(),
-        start..end,
-    ))
+    Ok(location.with_byte_range(start..end))
 }
 
 /// Sorts `locations` into the order their media data lies in the file, samples of no bytes at one offset by track and decoding time

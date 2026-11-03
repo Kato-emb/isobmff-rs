@@ -20,6 +20,7 @@ use crate::structure_data::StructureDataLimits;
 /// | Sample locations a `MediaDataReader` holds | 1,048,576 |
 /// | Bytes of media data of one sample | 16 MiB |
 /// | Bytes of media data allocated for the samples not yet taken, together | 16 MiB |
+/// | Compressed boxes kept the places of, over the whole file (§8.16) | 65,536 |
 ///
 /// The locations of the samples of a `moov` or a `moof` are resolved into one
 /// list before the first of them is returned, so the samples it declares
@@ -42,6 +43,7 @@ use crate::structure_data::StructureDataLimits;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct DemuxLimits {
     payload_bytes: u64,
+    compressed_box_count: u64,
     structure_data: StructureDataLimits,
     media_data: MediaDataLimits,
 }
@@ -52,6 +54,7 @@ impl DemuxLimits {
     pub const fn new() -> Self {
         Self {
             payload_bytes: 16 * 1024 * 1024,
+            compressed_box_count: 65_536,
             structure_data: StructureDataLimits {
                 sample_count: 1_048_576,
                 segment_index_count: 65_536,
@@ -72,6 +75,13 @@ impl DemuxLimits {
     #[must_use]
     pub const fn with_payload_bytes(mut self, payload_bytes: u64) -> Self {
         self.payload_bytes = payload_bytes;
+        self
+    }
+
+    /// Replaces the number of compressed boxes the demuxer keeps the places of, over the whole file (§8.16)
+    #[must_use]
+    pub const fn with_compressed_box_count(mut self, compressed_box_count: u64) -> Self {
+        self.compressed_box_count = compressed_box_count;
         self
     }
 
@@ -150,6 +160,11 @@ impl DemuxLimits {
     /// Returns the bytes of the payload of one box the demuxer gathers into its value
     pub(crate) const fn payload_bytes(self) -> u64 {
         self.payload_bytes
+    }
+
+    /// Returns the number of compressed boxes the demuxer keeps the places of
+    pub(crate) const fn compressed_box_count(self) -> u64 {
+        self.compressed_box_count
     }
 
     /// Returns the limits of the structure-data the demuxer resolves and keeps

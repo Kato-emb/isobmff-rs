@@ -1,8 +1,10 @@
 //! Compressed boxes (ISO/IEC 14496-12 §8.16) read back into the boxes they replace, checked on the files of MPEG's `FileFormatConformance` under consideration
 //!
 //! Every compressed box of the files reads back into a box of its
-//! replacement type, and the brands the demuxer reports are those of the
-//! `ftyp` GPAC finds in the `otyp`. `scripts/fetch-conformance.sh` fetches
+//! replacement type, the brands the demuxer reports are those of the
+//! `ftyp` GPAC finds in the `otyp`, and the samples the demuxer reads out
+//! of a file are those it reads out of the file with its compressed boxes
+//! read back. `scripts/fetch-conformance.sh` fetches
 //! the files into the directory `compressed_boxes` of the one
 //! `ISOBMFF_CONFORMANCE_DIR` names.
 
@@ -14,7 +16,7 @@ mod tests {
 
     use isobmff::boxes::{MovieBox, MovieFragmentBox, SegmentIndexBox, SubsegmentIndexBox};
     use isobmff::framing::decompressed;
-    use isobmff::{BoxDecode, BoxDefinition, BoxType, Boxes, Demuxer, FourCc};
+    use isobmff::{BoxDecode, BoxDefinition, BoxHeader, BoxType, Boxes, Demuxer, FourCc};
     use isobmff_test_support::serde_json::Value;
     use isobmff_test_support::{compressed_box_conformance_files, gpac_children};
 
@@ -104,5 +106,71 @@ mod tests {
                 file.name
             );
         }
+    }
+
+    /// Returns `file` with each of its compressed boxes replaced by the box it reads back into, §8.16.2.1, its `otyp` kept
+    fn read_back(file: &[u8]) -> Vec<u8> {
+        let mut uncompressed = Vec::new();
+        for raw_box in Boxes::new(file) {
+            let raw_box = raw_box.unwrap();
+            if let Some((replacement_type, payload)) = decompressed(raw_box, LIMIT_BYTES).unwrap() {
+                let header =
+                    BoxHeader::with_payload_len(replacement_type, payload.len() as u64).unwrap();
+                let mut bytes = vec![0; usize::try_from(header.encoded_len()).unwrap()];
+                header.encode(&mut bytes).unwrap();
+                uncompressed.extend_from_slice(&bytes);
+                uncompressed.extend_from_slice(&payload);
+            } else {
+                let header = raw_box.header();
+                let mut bytes = vec![0; usize::try_from(header.encoded_len()).unwrap()];
+                header.encode(&mut bytes).unwrap();
+                uncompressed.extend_from_slice(&bytes);
+                uncompressed.extend_from_slice(raw_box.payload());
+            }
+        }
+        uncompressed
+    }
+
+    /// Returns the track, the decoding time and the media data of each sample a demuxer that seeks reads out of `file`
+    fn samples(file: &[u8]) -> Vec<(u32, u64, Vec<u8>)> {
+        let mut demuxer = Demuxer::new();
+        let mut samples = Vec::new();
+        while let Some(wanted) = demuxer.wanted_input() {
+            let input = usize::try_from(wanted.offset())
+                .ok()
+                .and_then(|offset| file.get(offset..))
+                .unwrap_or_default();
+            let event = if input.is_empty() {
+                demuxer.finish()
+            } else {
+                demuxer.handle_input(wanted.offset(), input)
+            };
+            event.unwrap();
+            while let Some(sample) = demuxer.poll_sample() {
+                let properties = sample.properties();
+                samples.push((
+                    properties.track_id,
+                    properties.decoding_time,
+                    sample.data().to_vec(),
+                ));
+            }
+        }
+        samples
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn the_samples_of_a_file_are_those_of_the_file_with_its_compressed_boxes_read_back() {
+        let mut counts = BTreeMap::new();
+        for file in compressed_box_conformance_files() {
+            let read = samples(&file.bytes);
+            assert_eq!(read, samples(&read_back(&file.bytes)), "{}", file.name);
+            counts.insert(file.name, read.len());
+        }
+
+        assert!(
+            counts.values().all(|&count| count > 0),
+            "a file read no sample: {counts:?}"
+        );
     }
 }
