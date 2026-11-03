@@ -15,6 +15,7 @@ use super::sample_description::laid_out;
 use super::sample_table::{TrackTable, take_sample_tables};
 use super::segment_index::SubsegmentTable;
 use crate::error::MuxError;
+use crate::file_structure::{FragmentedOptions, SegmentOptions};
 use crate::sample::{Sample, SampleLocation};
 use crate::timeline;
 
@@ -80,24 +81,55 @@ pub struct SampleTableWriter {
 }
 
 impl MovieFragmentWriter {
-    /// Creates the writer of the movie fragments of `movie`, the first numbered `first_sequence_number`, that lists their sync samples where `random_access` and indexes them as subsegments where `segment_index`
+    /// Creates the writer of the movie fragments of a fragmented movie file of `movie`, written with `options`
     ///
-    /// The movie the writer holds has empty sample tables, and an `mvex` with a `trex` for each track.
+    /// The movie the writer holds has empty sample tables, and an `mvex` with
+    /// a `trex` for each track. Where the file ends with an `mfra`, the
+    /// writer lists the sync samples of the fragments it writes.
     ///
     /// # Errors
     ///
     /// * [`SampleTableNotEmpty`](MuxError::SampleTableNotEmpty): a sample
     ///   group, sub-sample, sample auxiliary information or shadow sync table
     ///   of a track declares samples, which the writer does not write.
-    /// * [`Timeline`](MuxError::Timeline): the writer indexes subsegments,
-    ///   and the edit list of the first track does not map its composition
+    pub fn fragmented(movie: MovieBox, options: FragmentedOptions) -> Result<Self, MuxError> {
+        let mut writer = Self::new(movie, options.first_sequence_number)?;
+        writer.random_access = options
+            .movie_fragment_random_access
+            .then(RandomAccessTables::default);
+        Ok(writer)
+    }
+
+    /// Creates the writer of the movie fragments of a media segment of `movie`, written with `options`
+    ///
+    /// The movie the writer holds has empty sample tables, and an `mvex` with
+    /// a `trex` for each track. Where a `sidx` indexes the segment, the
+    /// writer indexes each fragment it writes as a subsegment.
+    ///
+    /// # Errors
+    ///
+    /// * [`SampleTableNotEmpty`](MuxError::SampleTableNotEmpty): a sample
+    ///   group, sub-sample, sample auxiliary information or shadow sync table
+    ///   of a track declares samples, which the writer does not write.
+    /// * [`Timeline`](MuxError::Timeline): a `sidx` indexes the segment, and
+    ///   the edit list of the first track does not map its composition
     ///   timeline.
-    pub fn new(
-        mut movie: MovieBox,
-        first_sequence_number: u32,
-        random_access: bool,
-        segment_index: bool,
-    ) -> Result<Self, MuxError> {
+    pub fn segment(movie: MovieBox, options: SegmentOptions) -> Result<Self, MuxError> {
+        let mut writer = Self::new(movie, options.first_sequence_number)?;
+        writer.segment_index = options
+            .segment_index
+            .then(|| SubsegmentTable::new(&writer.movie))
+            .transpose()?;
+        Ok(writer)
+    }
+
+    /// Creates the writer of the movie fragments of `movie`, the first numbered `first_sequence_number`, that lists no sync sample and indexes no subsegment
+    ///
+    /// # Errors
+    ///
+    /// * [`SampleTableNotEmpty`](MuxError::SampleTableNotEmpty), as for
+    ///   [`fragmented`](Self::fragmented).
+    fn new(mut movie: MovieBox, first_sequence_number: u32) -> Result<Self, MuxError> {
         take_sample_tables(&mut movie)?;
         let mvex = movie.mvex.get_or_insert_with(MovieExtendsBox::default);
         let extended: BTreeSet<u32> = mvex.trex.iter().map(|trex| trex.track_id).collect();
@@ -112,12 +144,10 @@ impl MovieFragmentWriter {
         }
 
         Ok(Self {
-            segment_index: segment_index
-                .then(|| SubsegmentTable::new(&movie))
-                .transpose()?,
             movie,
             sequence_number: first_sequence_number,
-            random_access: random_access.then(RandomAccessTables::default),
+            random_access: None,
+            segment_index: None,
             finished: false,
         })
     }
@@ -448,6 +478,7 @@ mod tests {
 
     use super::{MovieFragmentWriter, SampleTableWriter};
     use crate::error::MuxError;
+    use crate::file_structure::FragmentedOptions;
     use crate::sample::{DataReferenceKey, Sample, SampleLocation, SampleProperties};
     use crate::structure_data::StructureDataReader;
     use crate::structure_data::fixtures::{
@@ -524,8 +555,7 @@ mod tests {
 
     #[test]
     fn a_movie_fragment_states_each_track_in_a_track_fragment_based_on_the_moof() {
-        let mut writer =
-            MovieFragmentWriter::new(two_fragmented_tracks(), 7, false, false).unwrap();
+        let mut writer = MovieFragmentWriter::new(two_fragmented_tracks(), 7).unwrap();
         let samples = [
             sample(1, 100, 10, b"AB"),
             sample(1, 110, 10, b"CDE"),
@@ -594,8 +624,7 @@ mod tests {
 
     #[test]
     fn the_locations_of_a_movie_fragment_are_those_a_reader_resolves_out_of_its_moof() {
-        let mut writer =
-            MovieFragmentWriter::new(two_fragmented_tracks(), 1, false, false).unwrap();
+        let mut writer = MovieFragmentWriter::new(two_fragmented_tracks(), 1).unwrap();
         let samples = [
             sample(1, 1 << 32, 10, b"AB"),
             sample(1, (1 << 32) + 10, 10, b"CDE"),
@@ -620,8 +649,14 @@ mod tests {
             .handle_locations(&laid_out(&[sample(1, 0, 10, b"AB")], 0))
             .unwrap();
         let movie = tables.finish().clone();
-        let mut fragments =
-            MovieFragmentWriter::new(two_fragmented_tracks(), 1, true, false).unwrap();
+        let mut fragments = MovieFragmentWriter::fragmented(
+            two_fragmented_tracks(),
+            FragmentedOptions {
+                first_sequence_number: 1,
+                movie_fragment_random_access: true,
+            },
+        )
+        .unwrap();
         fragments.finish().unwrap();
 
         assert_eq!(
@@ -644,8 +679,7 @@ mod tests {
 
     #[test]
     fn samples_of_a_track_whose_runs_in_a_fragment_do_not_follow_on_are_refused() {
-        let mut writer =
-            MovieFragmentWriter::new(two_fragmented_tracks(), 1, false, false).unwrap();
+        let mut writer = MovieFragmentWriter::new(two_fragmented_tracks(), 1).unwrap();
 
         assert_eq!(
             writer
@@ -815,7 +849,7 @@ mod tests {
                 );
                 Sample::new(*location.properties(), data.unwrap().to_vec())
             });
-            let mut muxer = crate::Muxer::new(crate::FileStructure::NonFragmented);
+            let mut muxer = crate::Muxer::non_fragmented(crate::NonFragmentedOptions::default());
             muxer.handle_movie(movie.clone()).unwrap();
             muxer.handle_samples(samples).unwrap();
             muxer.finish().unwrap();
@@ -1290,7 +1324,7 @@ mod tests {
         };
         let fragments_of = |mut movie: MovieBox| {
             movie.mvex = two_fragmented_tracks().mvex;
-            MovieFragmentWriter::new(movie, 1, false, false).map(|writer| writer.movie().clone())
+            MovieFragmentWriter::new(movie, 1).map(|writer| writer.movie().clone())
         };
 
         assert_eq!(
@@ -1323,10 +1357,8 @@ mod tests {
         if let Some(mvex) = given.mvex.as_mut() {
             mvex.trex.truncate(1);
         }
-        let written_mvex = |movie| {
-            MovieFragmentWriter::new(movie, 1, false, false)
-                .map(|writer| writer.movie().mvex.clone())
-        };
+        let written_mvex =
+            |movie| MovieFragmentWriter::new(movie, 1).map(|writer| writer.movie().mvex.clone());
 
         assert_eq!(
             [written_mvex(two_tracks()), written_mvex(given)],
