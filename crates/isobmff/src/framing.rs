@@ -10,10 +10,14 @@
 mod box_event;
 mod box_reader;
 mod box_writer;
+#[cfg(feature = "compressed-boxes")]
+mod compressed;
 
 pub use box_event::{BoxEvent, BoxEventKind};
 pub use box_reader::BoxReader;
 pub use box_writer::BoxWriter;
+#[cfg(feature = "compressed-boxes")]
+pub use compressed::{decompressed, replacement_type};
 
 /// Converts a length in memory to one in a file, where it always fits
 pub(crate) fn to_u64(length: usize) -> u64 {

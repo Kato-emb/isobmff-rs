@@ -10,10 +10,14 @@
 //! A file whose track fragments take their `moof` as the base data offset is
 //! written under a brand from `iso5` on (§8.8.7.1).
 
+#[cfg(feature = "compressed-boxes")]
+use isobmff_boxes::OriginalFileTypeBox;
 use isobmff_boxes::{
     FileTypeBox, IdentifiedMediaDataBox, MediaDataBox, MovieBox, MovieFragmentBox,
     MovieFragmentRandomAccessBox, SegmentIndexBox, SegmentTypeBox,
 };
+#[cfg(feature = "compressed-boxes")]
+use isobmff_core::Boxes;
 use isobmff_core::{BoxDecode, BoxDefinition, BoxType, RawBox};
 
 use crate::error::{DemuxError, MuxError};
@@ -34,7 +38,7 @@ pub(crate) enum Handling {
 /// Value of a box at file level that is read off its payload
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) enum Value {
-    /// `ftyp`, §5.2
+    /// `ftyp`, §5.2, or, with the feature `compressed-boxes`, the `ftyp` of the file before its box structure was transformed, which the innermost `otyp` holds, §8.16.5
     FileType(FileTypeBox),
     /// `styp`, §8.14.2
     SegmentType(SegmentTypeBox),
@@ -87,8 +91,35 @@ fn value_reader(box_type: BoxType) -> Option<ReadPayload> {
         MovieFragmentRandomAccessBox::BOX_TYPE => {
             Some(|payload| decode(payload).map(Value::MovieFragmentRandomAccess))
         }
+        #[cfg(feature = "compressed-boxes")]
+        OriginalFileTypeBox::BOX_TYPE => {
+            Some(|payload| innermost_file_type(payload).map(Value::FileType))
+        }
         BoxType::Compact(_) | BoxType::Extended(_) => None,
     }
+}
+
+/// Returns the `ftyp` of the innermost `otyp` the `otyp` of payload `payload` holds, or of that `otyp` itself if it holds none, §8.16.5
+///
+/// A file transformed more than once nests an `otyp` in the one before, the
+/// innermost holding the `ftyp` of the file as it was first written.
+///
+/// # Errors
+///
+/// * [`DemuxError::Box`]: the innermost `otyp` does not read.
+#[cfg(feature = "compressed-boxes")]
+fn innermost_file_type(payload: &[u8]) -> Result<FileTypeBox, DemuxError> {
+    // Why not decode each `otyp` and look among its other boxes: each level
+    // would copy what it holds, the nested ones with it. Why not recurse: the
+    // input alone bounds the depth of nesting.
+    let mut innermost = payload;
+    while let Some(nested) = Boxes::new(innermost)
+        .map_while(Result::ok)
+        .find(|child| child.header().box_type() == OriginalFileTypeBox::BOX_TYPE)
+    {
+        innermost = nested.payload();
+    }
+    decode::<OriginalFileTypeBox>(innermost).map(|otyp| otyp.ftyp)
 }
 
 /// Reads `payload` as the box `Decoded`, naming that box on the path of a failure

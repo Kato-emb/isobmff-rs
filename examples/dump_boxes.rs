@@ -9,13 +9,18 @@
 //! runs to the end of the file are listed by their header alone: the reader
 //! then asks for the bytes past the box, the caller seeks the file there, and the
 //! payload is never read.
+//!
+//! A compressed box (ISO/IEC 14496-12 §8.16) is listed with the box it
+//! replaces under it, read back from its deflated payload, and the boxes that
+//! one holds. Their offsets count from where the compressed box starts, as
+//! though it were the box it replaces.
 
 use std::env;
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 
-use isobmff::framing::{BoxEvent, BoxReader};
+use isobmff::framing::{BoxEvent, BoxReader, decompressed};
 use isobmff::{BoxHeader, BoxType, Boxes, ByteRange, RawBox};
 
 /// Longest payload read whole; a box past it is listed by its header alone
@@ -73,7 +78,8 @@ fn list(
         }
         BoxEvent::End => {
             if let (Some(raw_box), Some(offset)) = (reader.gathered_box(), gathering.take()) {
-                print_tree(raw_box, offset, 0);
+                print_tree(raw_box.header(), raw_box.payload(), offset, 0);
+                print_replaced(raw_box, offset);
             }
         }
         BoxEvent::Payload(_) | _ => {}
@@ -81,9 +87,8 @@ fn list(
     Ok(())
 }
 
-/// Prints `raw_box` at `offset`, and the boxes it holds if it is a container
-fn print_tree(raw_box: RawBox<'_>, offset: u64, depth: usize) {
-    let header = raw_box.header();
+/// Prints the box of `header` and `payload` at `offset`, and the boxes it holds if it is a container
+fn print_tree(header: BoxHeader, payload: &[u8], offset: u64, depth: usize) {
     print_box(
         header,
         ByteRange::new(offset, header.size().total_bytes()),
@@ -95,10 +100,15 @@ fn print_tree(raw_box: RawBox<'_>, offset: u64, depth: usize) {
     }
 
     let mut child_offset = offset.saturating_add(header.encoded_len());
-    for child in Boxes::new(raw_box.payload()) {
+    for child in Boxes::new(payload) {
         match child {
             Ok(child) => {
-                print_tree(child, child_offset, depth.saturating_add(1));
+                print_tree(
+                    child.header(),
+                    child.payload(),
+                    child_offset,
+                    depth.saturating_add(1),
+                );
                 child_offset = child_offset
                     .saturating_add(child.header().size().total_bytes().unwrap_or(u64::MAX));
             }
@@ -111,6 +121,22 @@ fn print_tree(raw_box: RawBox<'_>, offset: u64, depth: usize) {
                 break;
             }
         }
+    }
+}
+
+/// Prints, under the compressed box `raw_box` at `offset`, the box it replaces, and the boxes that one holds
+fn print_replaced(raw_box: RawBox<'_>, offset: u64) {
+    match decompressed(raw_box, GATHER_LIMIT) {
+        Ok(Some((replacement_type, payload))) => {
+            if let Some(header) = u64::try_from(payload.len())
+                .ok()
+                .and_then(|payload_len| BoxHeader::with_payload_len(replacement_type, payload_len))
+            {
+                print_tree(header, &payload, offset, 1);
+            }
+        }
+        Ok(None) => {}
+        Err(error) => println!("  ! {error}"),
     }
 }
 

@@ -38,16 +38,41 @@ pub struct ConformanceFile {
 ///   conformance file.
 /// * A file, or the report of it, does not read.
 #[must_use]
+pub fn conformance_files() -> Vec<ConformanceFile> {
+    files_in(&conformance_directory())
+}
+
+/// Returns the conformance files of compressed boxes (ISO/IEC 14496-12 §8.16), in the directory `compressed_boxes` of the one `ISOBMFF_CONFORMANCE_DIR` names, in the order of their names
+///
+/// They are kept apart from those of [`conformance_files`]: those are
+/// published, and these are under consideration.
+///
+/// # Panics
+///
+/// As for [`conformance_files`].
+#[must_use]
+pub fn compressed_box_conformance_files() -> Vec<ConformanceFile> {
+    files_in(&conformance_directory().join("compressed_boxes"))
+}
+
+/// Returns the directory `ISOBMFF_CONFORMANCE_DIR` names
 #[expect(
     clippy::expect_used,
+    reason = "a test reading files that are not there fails"
+)]
+fn conformance_directory() -> PathBuf {
+    PathBuf::from(env::var_os("ISOBMFF_CONFORMANCE_DIR").expect(
+        "ISOBMFF_CONFORMANCE_DIR names the directory scripts/fetch-conformance.sh fetched into",
+    ))
+}
+
+/// Returns the conformance files in `directory`, in the order of their names
+#[expect(
     clippy::unwrap_used,
     reason = "a test reading files that are not there fails"
 )]
-pub fn conformance_files() -> Vec<ConformanceFile> {
-    let directory = PathBuf::from(env::var_os("ISOBMFF_CONFORMANCE_DIR").expect(
-        "ISOBMFF_CONFORMANCE_DIR names the directory scripts/fetch-conformance.sh fetched into",
-    ));
-    let mut files = fs::read_dir(&directory)
+fn files_in(directory: &Path) -> Vec<ConformanceFile> {
+    let mut files = fs::read_dir(directory)
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .filter(|path| path.extension().is_some_and(|extension| extension == "mp4"))

@@ -19,7 +19,9 @@ fn compressed_data_len(compressed_data: &[u8]) -> u64 {
 /// The payload of a [`MovieBox`](crate::MovieBox), compressed with deflate
 /// (IETF RFC 1951), in place of that box: its replacement type is `moov`.
 ///
-/// The box holds the compressed bytes as they are. Restoring the `moov`
+/// The box holds the compressed bytes as they are, and does not tell their
+/// form: the deflate stream §8.16.1 names, or the gzip member (IETF RFC
+/// 1952) that files are also written with. Restoring the `moov`
 /// they stand for is the layer that handles a whole file, by the processing
 /// model of §8.16.2.
 #[doc(alias = "!mov")]
@@ -63,7 +65,9 @@ impl BoxEncode for CompressedMovieBox {
 /// with deflate (IETF RFC 1951), in place of that box: its replacement type
 /// is `moof`.
 ///
-/// The box holds the compressed bytes as they are. Restoring the `moof`
+/// The box holds the compressed bytes as they are, and does not tell their
+/// form: the deflate stream §8.16.1 names, or the gzip member (IETF RFC
+/// 1952) that files are also written with. Restoring the `moof`
 /// they stand for is the layer that handles a whole file, by the processing
 /// model of §8.16.2.
 #[doc(alias = "!mof")]
@@ -108,7 +112,9 @@ impl BoxEncode for CompressedMovieFragmentBox {
 /// is `sidx`. The sizes and offsets in that payload count bytes of the file as
 /// it is compressed.
 ///
-/// The box holds the compressed bytes as they are. Restoring the `sidx`
+/// The box holds the compressed bytes as they are, and does not tell their
+/// form: the deflate stream §8.16.1 names, or the gzip member (IETF RFC
+/// 1952) that files are also written with. Restoring the `sidx`
 /// they stand for, and moving its offsets to the decompressed file, is the
 /// layer that handles a whole file, by the processing model of §8.16.2.
 #[doc(alias = "!six")]
@@ -153,7 +159,9 @@ impl BoxEncode for CompressedSegmentIndexBox {
 /// replacement type is `ssix`. The sizes in that payload count bytes of the
 /// file as it is compressed.
 ///
-/// The box holds the compressed bytes as they are. Restoring the `ssix`
+/// The box holds the compressed bytes as they are, and does not tell their
+/// form: the deflate stream §8.16.1 names, or the gzip member (IETF RFC
+/// 1952) that files are also written with. Restoring the `ssix`
 /// they stand for, and moving its sizes to the decompressed file, is the
 /// layer that handles a whole file, by the processing model of §8.16.2.
 #[doc(alias = "!ssx")]

@@ -10,7 +10,8 @@ repository.workspace = true
 license.workspace = true
 
 [dev-dependencies]
-isobmff.workspace = true
+# `dump_boxes` reads the compressed boxes back into the boxes they replace.
+isobmff = { workspace = true, features = ["compressed-boxes"] }
 # Fetches the movie file `demux_stream` reads as its bytes arrive. Its TLS
 # verifies certificates against the roots of the operating system, so that no
 # bundled root store joins the graph.
