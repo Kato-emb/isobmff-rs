@@ -47,14 +47,23 @@ mod tests {
     /// Reads `file` into `resolved` from wherever its demuxer wants, discarding every track once the `moov` is read
     fn resolve_from(resolved: &mut Resolved, file: &[u8]) -> Result<(), DemuxError> {
         let demuxer = &mut resolved.demuxer;
-        while let Some(wanted) = demuxer.wanted_input() {
-            resolved.wanted.push(wanted.offset());
-            let input = file
-                .get(usize::try_from(wanted.offset()).unwrap()..)
-                .unwrap_or_default();
-            let events = match input {
-                [] => demuxer.finish()?,
-                input => demuxer.handle_input(wanted.offset(), input)?,
+        loop {
+            let events = match demuxer.wanted_input() {
+                Some(wanted) => {
+                    resolved.wanted.push(wanted.offset());
+                    let input = file
+                        .get(usize::try_from(wanted.offset()).unwrap()..)
+                        .unwrap_or_default();
+                    match input {
+                        [] => demuxer.finish()?,
+                        input => demuxer.handle_input(wanted.offset(), input)?,
+                    }
+                }
+                // Nothing is wanted past a box that runs to the end of the file: it ends with the file.
+                None => match demuxer.finish()? {
+                    None => break,
+                    event => event,
+                },
             };
             if let Some(event) = events {
                 match event {

@@ -56,6 +56,25 @@ mod tests {
         written: Vec<u8>,
     }
 
+    /// Passes `demuxer` the bytes of `file` it wants, `piece_len(wanted)` of them at most, and returns what the call returns, or `None` once the read is done
+    ///
+    /// Nothing is wanted past a box that runs to the end of the file, which
+    /// ends with the file: the file is finished then, until a finish returns
+    /// no more.
+    fn next_event(
+        demuxer: &mut Demuxer,
+        file: &[u8],
+        piece_len: impl Fn(ByteRange) -> usize,
+    ) -> Option<Result<Option<DemuxEvent>, isobmff::DemuxError>> {
+        let Some(wanted) = demuxer.wanted_input() else {
+            return demuxer.finish().transpose().map(|event| event.map(Some));
+        };
+        Some(match piece(file, wanted, piece_len(wanted)) {
+            [] => demuxer.finish(),
+            input => demuxer.handle_input(wanted.offset(), input),
+        })
+    }
+
     /// Returns the `piece_len` bytes of `file` from where `wanted` starts, or as many as there are
     fn piece(file: &[u8], wanted: ByteRange, piece_len: usize) -> &[u8] {
         let rest = file
@@ -254,16 +273,13 @@ mod tests {
     fn gather_seeking(file: &[u8], piece_len: usize) -> Gathered {
         let mut demuxer = demuxer();
         let mut gathered = Gathered::default();
-        while let Some(wanted) = demuxer.wanted_input() {
-            let len = wanted.length().map_or(piece_len, |length| {
+        let len = |wanted: ByteRange| {
+            wanted.length().map_or(piece_len, |length| {
                 piece_len.min(usize::try_from(length).unwrap())
-            });
-            let input = piece(file, wanted, len);
-            let event = match input {
-                [] => demuxer.finish().unwrap(),
-                input => demuxer.handle_input(wanted.offset(), input).unwrap(),
-            };
-            if let Some(event) = event {
+            })
+        };
+        while let Some(event) = next_event(&mut demuxer, file, len) {
+            if let Some(event) = event.unwrap() {
                 gathered.see(event);
             }
             gathered.poll(&mut demuxer);
@@ -331,13 +347,8 @@ mod tests {
             .unwrap();
         let mut demuxer = demuxer();
         let mut elsewhere = BTreeMap::<String, Vec<SampleLocation>>::new();
-        while let Some(wanted) = demuxer.wanted_input() {
-            let event = match piece(&bytes, wanted, usize::MAX) {
-                [] => demuxer.finish(),
-                input => demuxer.handle_input(wanted.offset(), input),
-            }
-            .unwrap();
-            if let Some(DemuxEvent::Movie { samples, .. }) = event {
+        while let Some(event) = next_event(&mut demuxer, &bytes, |_| usize::MAX) {
+            if let Some(DemuxEvent::Movie { samples, .. }) = event.unwrap() {
                 for location in samples {
                     let named = match demuxer
                         .data_reference(location.data_reference())
@@ -441,12 +452,7 @@ mod tests {
     fn demux(file: &[u8]) -> Demuxed {
         let mut demuxer = demuxer();
         let mut samples = Vec::new();
-        while let Some(wanted) = demuxer.wanted_input() {
-            let input = piece(file, wanted, usize::MAX);
-            let event = match input {
-                [] => demuxer.finish(),
-                input => demuxer.handle_input(wanted.offset(), input),
-            };
+        while let Some(event) = next_event(&mut demuxer, file, |_| usize::MAX) {
             samples.extend(iter::from_fn(|| demuxer.poll_sample()));
             event.unwrap();
         }
@@ -613,12 +619,8 @@ mod tests {
     }
 
     /// Returns the next event `demuxer` reads of `file`, taking the samples it gathers, or `None` at its end
-    fn next_event(demuxer: &mut Demuxer, file: &[u8]) -> Option<DemuxEvent> {
-        while let Some(wanted) = demuxer.wanted_input() {
-            let event = match piece(file, wanted, usize::MAX) {
-                [] => demuxer.finish(),
-                input => demuxer.handle_input(wanted.offset(), input),
-            };
+    fn next_reported(demuxer: &mut Demuxer, file: &[u8]) -> Option<DemuxEvent> {
+        while let Some(event) = next_event(demuxer, file, |_| usize::MAX) {
             while demuxer.poll_sample().is_some() {}
             if let Some(event) = event.unwrap() {
                 return Some(event);
@@ -669,14 +671,14 @@ mod tests {
 
             let mut demuxer = demuxer();
             while !matches!(
-                next_event(&mut demuxer, &file),
+                next_reported(&mut demuxer, &file),
                 Some(DemuxEvent::Movie { .. })
             ) {}
             let resumed: Vec<Option<u64>> = entries
                 .iter()
                 .map(|&moof_offset| {
                     demuxer.resume_at(moof_offset).unwrap();
-                    match next_event(&mut demuxer, &file) {
+                    match next_reported(&mut demuxer, &file) {
                         Some(DemuxEvent::MovieFragment { byte_range, .. }) => {
                             Some(byte_range.offset())
                         }
@@ -847,11 +849,7 @@ mod tests {
     fn fragment_runs(file: &[u8]) -> Vec<Vec<Sample>> {
         let mut demuxer = demuxer();
         let mut runs: Vec<Vec<Sample>> = Vec::new();
-        while let Some(wanted) = demuxer.wanted_input() {
-            let event = match piece(file, wanted, usize::MAX) {
-                [] => demuxer.finish(),
-                input => demuxer.handle_input(wanted.offset(), input),
-            };
+        while let Some(event) = next_event(&mut demuxer, file, |_| usize::MAX) {
             if let Some(DemuxEvent::MovieFragment { .. }) = event.unwrap() {
                 runs.push(Vec::new());
             }

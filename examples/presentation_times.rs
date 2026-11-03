@@ -30,50 +30,64 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut file = BufReader::new(File::open(path)?);
     let mut demuxer = Demuxer::new();
 
-    while let Some(wanted) = demuxer.wanted_input() {
-        file.seek(SeekFrom::Start(wanted.offset()))?;
-        let event = match file.fill_buf()? {
-            [] => demuxer.finish(),
-            input => demuxer.handle_input(wanted.offset(), input),
-        };
-        let (Some(DemuxEvent::Movie { samples, .. })
-        | Some(DemuxEvent::MovieFragment { samples, .. })) = event?
-        else {
-            continue;
-        };
-        // Why not drain poll_sample: the demuxer would want and gather the media data first, which the listing never reads.
-        let track_ids: Vec<u32> = demuxer
-            .movie()
-            .iter()
-            .flat_map(|movie| &movie.trak)
-            .map(|trak| trak.tkhd.track_id)
-            .collect();
-        for track_id in track_ids {
-            demuxer.discard_track(track_id);
+    // The demuxer wants no input past a box that runs to the end of the file, which ends only once the file is finished.
+    loop {
+        while let Some(wanted) = demuxer.wanted_input() {
+            file.seek(SeekFrom::Start(wanted.offset()))?;
+            let event = match file.fill_buf()? {
+                [] => demuxer.finish(),
+                input => demuxer.handle_input(wanted.offset(), input),
+            };
+            if let Some(event) = event? {
+                list(&mut demuxer, event)?;
+            }
         }
-        let movie = demuxer.movie().ok_or("samples before the movie")?;
-        for location in samples {
-            let properties = location.properties();
-            let (track_id, decoding_time) = (properties.track_id, properties.decoding_time);
-            let presentations: Vec<_> = Timeline::new(movie, track_id)?
-                .present(properties)
-                .take(LISTED + 1)
-                .collect();
-            if presentations.is_empty() {
-                println!("track {track_id}: decoding {decoding_time}, not presented");
-            }
-            for presentation in presentations.iter().take(LISTED) {
-                println!(
-                    "track {track_id}: decoding {decoding_time} -> presented at {} for {}",
-                    presentation.presentation_time(),
-                    presentation.duration()
-                );
-            }
-            if presentations.len() > LISTED {
-                println!(
-                    "track {track_id}: decoding {decoding_time}, presented again as its edit list repeats"
-                );
-            }
+        let Some(event) = demuxer.finish()? else {
+            break;
+        };
+        list(&mut demuxer, event)?;
+    }
+    Ok(())
+}
+
+/// Lists the presentations of the samples a `moov` or a `moof` `event` locates
+fn list(demuxer: &mut Demuxer, event: DemuxEvent) -> Result<(), Box<dyn Error>> {
+    let (DemuxEvent::Movie { samples, .. } | DemuxEvent::MovieFragment { samples, .. }) = event
+    else {
+        return Ok(());
+    };
+    // Why not drain poll_sample: the demuxer would want and gather the media data first, which the listing never reads.
+    let track_ids: Vec<u32> = demuxer
+        .movie()
+        .iter()
+        .flat_map(|movie| &movie.trak)
+        .map(|trak| trak.tkhd.track_id)
+        .collect();
+    for track_id in track_ids {
+        demuxer.discard_track(track_id);
+    }
+    let movie = demuxer.movie().ok_or("samples before the movie")?;
+    for location in samples {
+        let properties = location.properties();
+        let (track_id, decoding_time) = (properties.track_id, properties.decoding_time);
+        let presentations: Vec<_> = Timeline::new(movie, track_id)?
+            .present(properties)
+            .take(LISTED + 1)
+            .collect();
+        if presentations.is_empty() {
+            println!("track {track_id}: decoding {decoding_time}, not presented");
+        }
+        for presentation in presentations.iter().take(LISTED) {
+            println!(
+                "track {track_id}: decoding {decoding_time} -> presented at {} for {}",
+                presentation.presentation_time(),
+                presentation.duration()
+            );
+        }
+        if presentations.len() > LISTED {
+            println!(
+                "track {track_id}: decoding {decoding_time}, presented again as its edit list repeats"
+            );
         }
     }
     Ok(())

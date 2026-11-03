@@ -14,12 +14,21 @@
 //! let (mut demuxer, mut samples) = (Demuxer::new(), Vec::new());
 //!
 //! // Seek to the offset the demuxer wants, and read from there
-//! while let Some(wanted) = demuxer.wanted_input() {
-//!     let input = file.get(usize::try_from(wanted.offset())?..).unwrap_or_default();
-//!     // Past the last byte, the file ends, and so may a box that runs to its end
-//!     let event = match input {
-//!         [] => demuxer.finish(),
-//!         input => demuxer.handle_input(wanted.offset(), input),
+//! loop {
+//!     let event = match demuxer.wanted_input() {
+//!         Some(wanted) => {
+//!             let input = file.get(usize::try_from(wanted.offset())?..).unwrap_or_default();
+//!             // Past the last byte, the file ends, and so may a box that runs to its end
+//!             match input {
+//!                 [] => demuxer.finish(),
+//!                 input => demuxer.handle_input(wanted.offset(), input),
+//!             }
+//!         }
+//!         // Nothing is wanted past a box that runs to the end of the file: it ends with the file
+//!         None => match demuxer.finish() {
+//!             Ok(None) => break,
+//!             finished => finished,
+//!         },
 //!     };
 //!     // The samples whose bytes have arrived, before a failure of the call is returned
 //!     samples.extend(core::iter::from_fn(|| demuxer.poll_sample()));
@@ -68,11 +77,16 @@
 //! let file: &[u8] = include_bytes!("../tests/data/external.mp4");
 //! let mut demuxer = Demuxer::new();
 //! let mut by_key = BTreeMap::<DataReferenceKey, Vec<SampleLocation>>::new();
-//! while let Some(wanted) = demuxer.wanted_input() {
-//!     let input = file.get(usize::try_from(wanted.offset())?..).unwrap_or_default();
-//!     let event = match input {
-//!         [] => demuxer.finish(),
-//!         input => demuxer.handle_input(wanted.offset(), input),
+//! loop {
+//!     let event = match demuxer.wanted_input() {
+//!         Some(wanted) => match file.get(usize::try_from(wanted.offset())?..).unwrap_or_default() {
+//!             [] => demuxer.finish(),
+//!             input => demuxer.handle_input(wanted.offset(), input),
+//!         },
+//!         None => match demuxer.finish() {
+//!             Ok(None) => break,
+//!             finished => finished,
+//!         },
 //!     }?;
 //!     // Keep the locations by the key of their data reference entry
 //!     if let Some(DemuxEvent::Movie { samples, .. }) = event {

@@ -75,11 +75,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut demuxer = Demuxer::new();
     let mut muxer = Muxer::new(file_structure);
     let mut pending = Vec::new();
-    while let Some(wanted) = demuxer.wanted_input() {
-        source.seek(SeekFrom::Start(wanted.offset()))?;
-        let event = match source.fill_buf()? {
-            [] => demuxer.finish(),
-            input => demuxer.handle_input(wanted.offset(), input),
+    loop {
+        let event = match demuxer.wanted_input() {
+            Some(wanted) => {
+                source.seek(SeekFrom::Start(wanted.offset()))?;
+                match source.fill_buf()? {
+                    [] => demuxer.finish(),
+                    input => demuxer.handle_input(wanted.offset(), input),
+                }
+            }
+            // The demuxer wants no input past a box that runs to the end of the file, which ends only once the file is finished.
+            None => match demuxer.finish() {
+                Ok(None) => break,
+                finished => finished,
+            },
         };
         pending.extend(std::iter::from_fn(|| demuxer.poll_sample()));
         if let Some(DemuxEvent::Movie { .. }) = event? {

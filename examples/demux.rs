@@ -33,24 +33,25 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut file = BufReader::new(File::open(path)?);
     let mut demuxer = Demuxer::new();
 
-    while let Some(wanted) = demuxer.wanted_input() {
-        file.seek(SeekFrom::Start(wanted.offset()))?;
-        let event = match file.fill_buf()? {
-            [] => demuxer.finish(),
-            input => demuxer.handle_input(wanted.offset(), input),
+    // The demuxer wants no input past a box that runs to the end of the file, which ends only once the file is finished.
+    loop {
+        while let Some(wanted) = demuxer.wanted_input() {
+            file.seek(SeekFrom::Start(wanted.offset()))?;
+            let event = match file.fill_buf()? {
+                [] => demuxer.finish(),
+                input => demuxer.handle_input(wanted.offset(), input),
+            };
+            print_samples(&mut demuxer);
+            if let Some(event) = event? {
+                print_event(&event);
+            }
+        }
+        let event = demuxer.finish();
+        print_samples(&mut demuxer);
+        let Some(event) = event? else {
+            break;
         };
-        while let Some(sample) = demuxer.poll_sample() {
-            let properties = sample.properties();
-            println!(
-                "  sample of track {}: decoding time {}, {} bytes",
-                properties.track_id,
-                properties.decoding_time,
-                sample.data().len()
-            );
-        }
-        if let Some(event) = event? {
-            print_event(&event);
-        }
+        print_event(&event);
     }
 
     for data_reference in demuxer.data_references() {
@@ -71,6 +72,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
     }
     Ok(())
+}
+
+/// Prints one line for each sample `demuxer` has gathered
+fn print_samples(demuxer: &mut Demuxer) {
+    while let Some(sample) = demuxer.poll_sample() {
+        let properties = sample.properties();
+        println!(
+            "  sample of track {}: decoding time {}, {} bytes",
+            properties.track_id,
+            properties.decoding_time,
+            sample.data().len()
+        );
+    }
 }
 
 /// Prints one line for the box at file level `event` reports, and one more for the samples a `moov` or a `moof` locates

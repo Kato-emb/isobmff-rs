@@ -86,15 +86,24 @@ mod tests {
     fn the_brands_of_a_file_are_those_of_the_ftyp_in_its_otyp_as_gpac_reports_them() {
         for file in compressed_box_conformance_files() {
             let mut demuxer = Demuxer::new();
-            while let Some(wanted) = demuxer.wanted_input() {
-                let input = usize::try_from(wanted.offset())
-                    .ok()
-                    .and_then(|offset| file.bytes.get(offset..))
-                    .unwrap_or_default();
-                let event = if input.is_empty() {
-                    demuxer.finish()
-                } else {
-                    demuxer.handle_input(wanted.offset(), input)
+            loop {
+                let event = match demuxer.wanted_input() {
+                    Some(wanted) => {
+                        let input = usize::try_from(wanted.offset())
+                            .ok()
+                            .and_then(|offset| file.bytes.get(offset..))
+                            .unwrap_or_default();
+                        if input.is_empty() {
+                            demuxer.finish()
+                        } else {
+                            demuxer.handle_input(wanted.offset(), input)
+                        }
+                    }
+                    // Nothing is wanted past a box that runs to the end of the file: it ends with the file.
+                    None => match demuxer.finish() {
+                        Ok(None) => break,
+                        finished => finished,
+                    },
                 };
                 event.unwrap();
             }
@@ -135,15 +144,24 @@ mod tests {
     fn samples(file: &[u8]) -> Vec<(u32, u64, Vec<u8>)> {
         let mut demuxer = Demuxer::new();
         let mut samples = Vec::new();
-        while let Some(wanted) = demuxer.wanted_input() {
-            let input = usize::try_from(wanted.offset())
-                .ok()
-                .and_then(|offset| file.get(offset..))
-                .unwrap_or_default();
-            let event = if input.is_empty() {
-                demuxer.finish()
-            } else {
-                demuxer.handle_input(wanted.offset(), input)
+        loop {
+            let event = match demuxer.wanted_input() {
+                Some(wanted) => {
+                    let input = usize::try_from(wanted.offset())
+                        .ok()
+                        .and_then(|offset| file.get(offset..))
+                        .unwrap_or_default();
+                    if input.is_empty() {
+                        demuxer.finish()
+                    } else {
+                        demuxer.handle_input(wanted.offset(), input)
+                    }
+                }
+                // Nothing is wanted past a box that runs to the end of the file: it ends with the file.
+                None => match demuxer.finish() {
+                    Ok(None) => break,
+                    finished => finished,
+                },
             };
             event.unwrap();
             while let Some(sample) = demuxer.poll_sample() {
