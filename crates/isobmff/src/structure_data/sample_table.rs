@@ -21,7 +21,7 @@ use super::sample_description::{DataOrigin, located_data_reference};
 use crate::error::{DemuxError, MuxError};
 use crate::framing::to_u64;
 use crate::leniency::{Leniency, SampleTableDisagreement};
-use crate::sample::{Sample, SampleLocation, SampleProperties};
+use crate::sample::{SampleLocation, SampleProperties};
 
 mod sample_flags;
 
@@ -447,15 +447,12 @@ impl TrackTable {
             .map(|start| start.saturating_add(self.decoding_time))
     }
 
-    /// Adds `samples`, described by sample entry `sample_description_index`, as the chunk at file offset `offset`
-    pub(super) fn push_chunk(
-        &mut self,
-        offset: u64,
-        sample_description_index: u32,
-        samples: &[Sample],
-    ) {
+    /// Adds `samples`, described by sample entry `sample_description_index`, as the chunk at the file offset of the first
+    pub(super) fn push_chunk(&mut self, sample_description_index: u32, samples: &[SampleLocation]) {
         self.chunks.push(Chunk {
-            offset,
+            offset: samples
+                .first()
+                .map_or(0, |sample| sample.byte_range().start),
             samples_per_chunk: u32::try_from(samples.len()).unwrap_or(u32::MAX),
             sample_description_index,
         });
@@ -470,7 +467,7 @@ impl TrackTable {
                 .saturating_add(u64::from(properties.sample_duration));
             self.samples.push(TableSample {
                 sample_duration: properties.sample_duration,
-                sample_size: u32::try_from(sample.data().len()).unwrap_or(u32::MAX),
+                sample_size: u32::try_from(sample.data_len()).unwrap_or(u32::MAX),
                 sample_composition_time_offset: properties.sample_composition_time_offset,
                 sample_flags: properties.sample_flags,
             });
@@ -612,7 +609,7 @@ pub(crate) mod fixtures {
 
     use isobmff_core::{BoxDefinition, BoxEncode};
 
-    use crate::sample::{Sample, SampleProperties};
+    use crate::sample::{Sample, SampleLocation, SampleProperties};
     use crate::structure_data::StructureDataLimits;
 
     use isobmff_boxes::{
@@ -643,6 +640,11 @@ pub(crate) mod fixtures {
             },
             b"A".to_vec(),
         )
+    }
+
+    /// Returns the location of each of `samples`, their media data one after another in their order from file offset `data_offset`
+    pub(crate) fn laid_out(samples: &[Sample], data_offset: u64) -> Vec<SampleLocation> {
+        crate::sample::laid_out(samples, data_offset).unwrap()
     }
 
     /// Returns the track `track_id` of the samples of `sizes`, each lasting `sample_delta`, laid in chunks at `chunk_offsets` by the runs `(first_chunk, samples_per_chunk)`

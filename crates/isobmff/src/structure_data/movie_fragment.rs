@@ -12,9 +12,8 @@ use isobmff_core::BoxEncode;
 use super::sample_description::{DataOrigin, data_reference_index, located_data_reference};
 use super::sample_table::expand;
 use crate::error::{DemuxError, MuxError};
-use crate::framing::to_u64;
 use crate::leniency::Leniency;
-use crate::sample::{Sample, SampleLocation, SampleProperties};
+use crate::sample::{DataReferenceKey, SampleLocation, SampleProperties};
 
 /// Returns the number of samples the track runs of `moof` count, those of track fragments of empty duration left out
 pub(super) fn sample_count(moof: &MovieFragmentBox) -> u64 {
@@ -240,7 +239,7 @@ fn rows(trun: &TrackRunBox) -> impl Iterator<Item = TrackRunSample> {
     expand(iter::once((empty_rows, TrackRunSample::default()))).chain(rows.iter().copied())
 }
 
-/// Samples of one track that lie one after another, the first of them at `data_offset` from the media data of the samples written together
+/// Samples of one track whose media data lies one after another
 pub(super) struct Run<'a> {
     /// Index of the track among the tracks of the movie
     pub(super) track: usize,
@@ -250,11 +249,15 @@ pub(super) struct Run<'a> {
     pub(super) decoding_time: u64,
     /// Decoding time past the last sample
     pub(super) decoding_end: u64,
-    pub(super) samples: &'a [Sample],
-    pub(super) data_offset: u64,
+    /// Key a reader gives the data reference entry the sample entry of the run names
+    pub(super) data_reference: DataReferenceKey,
+    pub(super) samples: &'a [SampleLocation],
 }
 
-/// Returns the runs of samples of one track that lie one after another in `samples`, checked against the tracks of `movie`
+/// Returns the runs of samples of one track whose media data lies one after another in `samples`, checked against the tracks of `movie`
+///
+/// A run ends where the next sample is of another track, or where its media
+/// data does not start at the end of that of the sample before it.
 ///
 /// The decoding times of the samples of each track follow from the
 /// durations before them in `samples`, from the decoding time
@@ -263,15 +266,14 @@ pub(super) struct Run<'a> {
 ///
 /// # Errors
 ///
-/// * The failures of the samples as for [`SampleTableWriter::handle_samples`](super::writer::SampleTableWriter::handle_samples).
+/// * The failures of the samples as for [`SampleTableWriter::handle_locations`](super::writer::SampleTableWriter::handle_locations).
 pub(super) fn runs<'a>(
     movie: &MovieBox,
-    samples: &'a [Sample],
+    samples: &'a [SampleLocation],
     decoding_times: &[Option<u64>],
 ) -> Result<Vec<Run<'a>>, MuxError> {
     let mut runs: Vec<Run<'a>> = Vec::new();
     let mut rest = samples;
-    let mut data_offset = 0_u64;
     while let Some(first) = rest.first() {
         let first = first.properties();
         let track_id = first.track_id;
@@ -282,23 +284,32 @@ pub(super) fn runs<'a>(
             .find(|(_, trak)| trak.tkhd.track_id == track_id)
             .ok_or(MuxError::UnknownTrackId { track_id })?;
         let len = rest
-            .iter()
-            .take_while(|sample| sample.properties().track_id == track_id)
-            .count();
+            .windows(2)
+            .take_while(|pair| match pair {
+                [before, after] => {
+                    after.properties().track_id == track_id
+                        && before.byte_range().end == after.byte_range().start
+                }
+                _ => false,
+            })
+            .count()
+            .saturating_add(1);
         let (run_samples, after) = rest.split_at_checked(len).unwrap_or((rest, &[]));
         let earlier = runs.iter().rev().find(|run| run.track == track);
-        let sample_description_index = match earlier {
-            Some(earlier) => earlier.sample_description_index,
-            None => {
-                data_reference_index(trak, first.sample_description_index)?;
-                first.sample_description_index
-            }
+        let (sample_description_index, data_reference) = match earlier {
+            Some(earlier) => (earlier.sample_description_index, earlier.data_reference),
+            None => (
+                first.sample_description_index,
+                DataReferenceKey::of(
+                    track,
+                    data_reference_index(trak, first.sample_description_index)?,
+                ),
+            ),
         };
         let decoding_start = earlier
             .map(|earlier| earlier.decoding_end)
             .or_else(|| decoding_times.get(track).copied().flatten());
         let mut decoding_time = decoding_start.unwrap_or(first.decoding_time);
-        let mut run_len = 0_u64;
         for sample in run_samples {
             let properties = sample.properties();
             if properties.sample_description_index != sample_description_index {
@@ -315,14 +326,12 @@ pub(super) fn runs<'a>(
             decoding_time = decoding_time
                 .checked_add(u64::from(properties.sample_duration))
                 .ok_or(mismatch)?;
-            let size = sample.data().len();
-            if u32::try_from(size).is_err() {
+            if u32::try_from(sample.data_len()).is_err() {
                 return Err(MuxError::SampleSizeOutOfRange {
                     track_id,
-                    sample_bytes: to_u64(size),
+                    sample_bytes: sample.data_len(),
                 });
             }
-            run_len = run_len.saturating_add(to_u64(size));
         }
         runs.push(Run {
             track,
@@ -330,10 +339,9 @@ pub(super) fn runs<'a>(
             sample_description_index,
             decoding_time: first.decoding_time,
             decoding_end: decoding_time,
+            data_reference,
             samples: run_samples,
-            data_offset,
         });
-        data_offset = data_offset.saturating_add(run_len);
         rest = after;
     }
 
@@ -358,7 +366,7 @@ pub(super) fn track_fragments<'runs, 'samples>(
     tracks
 }
 
-/// Returns the movie fragment numbered `sequence_number` of the tracks of `movie`, of a track fragment for each of `track_fragments`, their media data from `data_start` bytes past the end of the `moof`
+/// Returns the movie fragment numbered `sequence_number` of the tracks of `movie`, of a track fragment for each of `track_fragments`, the byte ranges of their samples counting from `data_start` bytes past the end of the `moof`
 ///
 /// Each track fragment has its base data offset the first byte of the
 /// `moof` (§8.8.7.1), its `tfdt` the decoding time of its first sample
@@ -409,7 +417,13 @@ pub(super) fn movie_fragment_box(
             trun.data_offset = Some(
                 moof_len
                     .checked_add(data_start)
-                    .and_then(|offset| offset.checked_add(run.data_offset))
+                    .and_then(|offset| {
+                        offset.checked_add(
+                            run.samples
+                                .first()
+                                .map_or(0, |sample| sample.byte_range().start),
+                        )
+                    })
                     .and_then(|offset| i32::try_from(offset).ok())
                     .ok_or(MuxError::DataOffsetOutOfRange {
                         track_id: run.track_id,
@@ -422,7 +436,7 @@ pub(super) fn movie_fragment_box(
 }
 
 /// Returns the track run of `samples`, each row carrying the fields of its sample, and the composition time offsets only where one is not zero
-fn track_run(samples: &[Sample]) -> TrackRunBox {
+fn track_run(samples: &[SampleLocation]) -> TrackRunBox {
     let offsets = samples
         .iter()
         .any(|sample| sample.properties().sample_composition_time_offset != 0);
@@ -440,7 +454,7 @@ fn track_run(samples: &[Sample]) -> TrackRunBox {
                 let properties = sample.properties();
                 let mut row = TrackRunSample::default();
                 row.sample_duration = Some(properties.sample_duration);
-                row.sample_size = u32::try_from(sample.data().len()).ok();
+                row.sample_size = u32::try_from(sample.data_len()).ok();
                 row.sample_flags = Some(properties.sample_flags);
                 row.sample_composition_time_offset =
                     offsets.then_some(properties.sample_composition_time_offset);

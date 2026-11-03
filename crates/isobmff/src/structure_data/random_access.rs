@@ -141,7 +141,7 @@ fn length_size(number: u32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::{RandomAccessTables, length_size, movie_fragment_random_access_start};
-    use crate::structure_data::fixtures::{encoded, movie, sample, track, written};
+    use crate::structure_data::fixtures::{encoded, laid_out, movie, sample, track, written};
     use crate::structure_data::movie_fragment::{runs, track_fragments};
 
     #[test]
@@ -163,7 +163,8 @@ mod tests {
         ];
 
         for (samples, moof_offset) in [(&first[..], 100), (&second[..], 1 << 32)] {
-            let runs = runs(&movie, samples, &[]).unwrap();
+            let locations = laid_out(samples, 0);
+            let runs = runs(&movie, &locations, &[]).unwrap();
             tables.handle_movie_fragment(&track_fragments(&runs), moof_offset);
         }
         let mfra = tables.finish().unwrap();

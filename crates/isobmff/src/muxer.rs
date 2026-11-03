@@ -11,7 +11,7 @@ use crate::file_level::refuse_brands_before_iso5;
 use crate::file_structure::FileStructure;
 use crate::framing::{BoxEvent, BoxWriter, to_u64};
 use crate::media_data::MediaDataWriter;
-use crate::sample::Sample;
+use crate::sample::{Sample, laid_out};
 use crate::structure_data::{MovieFragmentWriter, SampleTableWriter, StructureDataWriter};
 
 /// Writer of a movie file or a segment from the samples a caller hands it
@@ -307,11 +307,12 @@ impl Muxer {
                     .boxes
                     .next_offset()
                     .saturating_add(header.encoded_len());
-                writer.handle_samples(&samples, data_offset)?;
+                writer.handle_locations(&laid_out(&samples, data_offset)?)?;
             }
             StructureDataWriter::Fragmented(writer) => {
                 let moof_offset = self.boxes.next_offset();
-                let moof = writer.movie_fragment(&samples, moof_offset, header.encoded_len())?;
+                let (moof, _) =
+                    writer.movie_fragment(&samples, moof_offset, header.encoded_len())?;
                 written.push(write_box(&mut self.boxes, &moof)?);
                 held = writer.indexes_subsegments();
             }

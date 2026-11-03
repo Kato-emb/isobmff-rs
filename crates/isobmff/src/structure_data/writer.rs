@@ -14,8 +14,7 @@ use super::random_access::RandomAccessTables;
 use super::sample_table::{TrackTable, take_sample_tables};
 use super::segment_index::SubsegmentTable;
 use crate::error::MuxError;
-use crate::framing::to_u64;
-use crate::sample::Sample;
+use crate::sample::{Sample, SampleLocation, laid_out};
 use crate::timeline;
 
 /// Writer of the structure-data of a file: a movie fragment for each run of samples, or the sample tables of its movie
@@ -106,7 +105,7 @@ impl MovieFragmentWriter {
         &self.movie
     }
 
-    /// Returns the movie fragment of `samples`, its `moof` at file offset `moof_offset` and their media data in their order from `data_start` bytes past its end
+    /// Returns the movie fragment of `samples`, its `moof` at file offset `moof_offset` and their media data in their order from `data_start` bytes past its end, and the location of each sample in that order
     ///
     /// Each track has one track fragment, its base data offset the first byte
     /// of the `moof` (§8.8.7.1) and its `tfdt` the decoding time of its first
@@ -116,13 +115,19 @@ impl MovieFragmentWriter {
     /// track in the fragment, and one that indexes subsegments indexes the
     /// fragment and its media data as one.
     ///
+    /// The locations are those a
+    /// [`StructureDataReader`](super::StructureDataReader) resolves out of the
+    /// `moof`: the file offsets of the media data of each sample, and the key
+    /// of the data reference entry its sample entry names.
+    ///
     /// # Errors
     ///
     /// * The failures of the samples as for
-    ///   [`SampleTableWriter::handle_samples`], but for their decoding times,
-    ///   which follow from the durations within the fragment only.
+    ///   [`SampleTableWriter::handle_locations`], but for their decoding
+    ///   times, which follow from the durations within the fragment only.
     /// * [`DataOffsetOutOfRange`](MuxError::DataOffsetOutOfRange): the media
-    ///   data of a sample lies further from the `moof` than a `trun` reaches.
+    ///   data of a sample lies further from the `moof` than a `trun` reaches,
+    ///   or past 64-bit file offsets.
     /// * [`SegmentIndexOutOfRange`](MuxError::SegmentIndexOutOfRange): the
     ///   `sidx` cannot state the fragment as a subsegment.
     pub(crate) fn movie_fragment(
@@ -130,31 +135,53 @@ impl MovieFragmentWriter {
         samples: &[Sample],
         moof_offset: u64,
         data_start: u64,
-    ) -> Result<MovieFragmentBox, MuxError> {
-        let runs = runs(&self.movie, samples, &[])?;
+    ) -> Result<(MovieFragmentBox, Vec<SampleLocation>), MuxError> {
+        let laid_out = laid_out(samples, 0)?;
+        let data_len = laid_out.last().map_or(0, |last| last.byte_range().end);
+        let runs = runs(&self.movie, &laid_out, &[])?;
         let track_fragments = track_fragments(&runs);
+        // Why not a moof of the data offsets the samples end up at: its length does not depend on them, so the moof is laid out once and its data offsets count from where it ends
         let moof = movie_fragment::movie_fragment_box(
             &self.movie,
             self.sequence_number,
             &track_fragments,
             data_start,
         )?;
+        let moof_len = moof.encoded_len();
+        let data_origin = match runs.first() {
+            Some(first) => moof_offset
+                .checked_add(moof_len)
+                .and_then(|end| end.checked_add(data_start))
+                .filter(|origin| origin.checked_add(data_len).is_some())
+                .ok_or(MuxError::DataOffsetOutOfRange {
+                    track_id: first.track_id,
+                })?,
+            None => 0,
+        };
         if let Some(segment_index) = &mut self.segment_index {
-            let referenced_size = samples
-                .iter()
-                .map(|sample| to_u64(sample.data().len()))
-                .fold(
-                    moof.encoded_len().saturating_add(data_start),
-                    u64::saturating_add,
-                );
+            let referenced_size = moof_len.saturating_add(data_start).saturating_add(data_len);
             segment_index.handle_movie_fragment(&self.movie, &track_fragments, referenced_size)?;
         }
         self.sequence_number = self.sequence_number.wrapping_add(1);
         if let Some(random_access) = &mut self.random_access {
             random_access.handle_movie_fragment(&track_fragments, moof_offset);
         }
+        let locations = runs
+            .iter()
+            .flat_map(|run| {
+                run.samples.iter().map(|sample| {
+                    let range = sample.byte_range();
+                    SampleLocation::new(
+                        *sample.properties(),
+                        run.data_reference,
+                        data_origin.saturating_add(range.start)
+                            ..data_origin.saturating_add(range.end),
+                    )
+                })
+            })
+            .collect();
 
-        Ok(moof)
+        Ok((moof, locations))
     }
 
     /// Returns whether the writer indexes the fragments it writes as the subsegments of a `sidx`
@@ -211,10 +238,13 @@ impl SampleTableWriter {
         &self.movie
     }
 
-    /// Adds `samples`, whose media data lies in their order from file offset `data_offset`, to the sample tables
+    /// Adds the samples of `locations` to the sample tables
     ///
-    /// Each run of samples of one track that lie one after another is a
-    /// chunk (§8.7.4).
+    /// Each run of samples of one track whose media data lies one after
+    /// another is a chunk (§8.7.4), its chunk offset the file offset of its
+    /// first sample (§8.7.5). The data reference entry of a sample is the one
+    /// its sample entry names (§8.5.2), and the key a location carries is not
+    /// read.
     ///
     /// # Errors
     ///
@@ -233,14 +263,11 @@ impl SampleTableWriter {
     ///   first of a track without an edit list does not start at 0.
     /// * [`MediaTimeOutOfRange`](MuxError::MediaTimeOutOfRange): an edit of
     ///   the track of the first sample of a track starts before that sample.
-    /// * [`SampleSizeOutOfRange`](MuxError::SampleSizeOutOfRange),
-    ///   [`DataOffsetOutOfRange`](MuxError::DataOffsetOutOfRange): the media
-    ///   data of a sample is longer than a table holds, or lies past 64-bit
-    ///   file offsets.
-    pub(crate) fn handle_samples(
+    /// * [`SampleSizeOutOfRange`](MuxError::SampleSizeOutOfRange): the media
+    ///   data of a sample is longer than a table holds.
+    pub(crate) fn handle_locations(
         &mut self,
-        samples: &[Sample],
-        data_offset: u64,
+        locations: &[SampleLocation],
     ) -> Result<(), MuxError> {
         let decoding_times: Vec<Option<u64>> = self
             .movie
@@ -252,7 +279,7 @@ impl SampleTableWriter {
                 table.decoding_end().or((!edited).then_some(0))
             })
             .collect();
-        let runs = runs(&self.movie, samples, &decoding_times)?;
+        let runs = runs(&self.movie, locations, &decoding_times)?;
         for (index, run) in runs.iter().enumerate() {
             let earlier = runs.get(..index).unwrap_or_default();
             let first = decoding_times.get(run.track).copied().flatten().is_none()
@@ -269,26 +296,10 @@ impl SampleTableWriter {
                 });
             }
         }
-        if let Some(last) = runs.last() {
-            let run_len = last
-                .samples
-                .iter()
-                .map(|sample| to_u64(sample.data().len()));
-            data_offset
-                .checked_add(last.data_offset)
-                .and_then(|offset| offset.checked_add(run_len.fold(0, u64::saturating_add)))
-                .ok_or(MuxError::DataOffsetOutOfRange {
-                    track_id: last.track_id,
-                })?;
-        }
 
         for run in runs {
             if let Some(table) = self.tables.get_mut(run.track) {
-                table.push_chunk(
-                    data_offset.saturating_add(run.data_offset),
-                    run.sample_description_index,
-                    run.samples,
-                );
+                table.push_chunk(run.sample_description_index, run.samples);
             }
         }
 
@@ -386,13 +397,19 @@ pub(super) fn version_for(duration: u64) -> u8 {
 mod tests {
     use alloc::vec::Vec;
 
-    use isobmff_boxes::{MovieBox, MovieExtendsBox, SampleFlags, TrackBox, TrackExtendsBox};
-    use isobmff_core::BoxDefinition;
+    use isobmff_boxes::{
+        FileTypeBox, MovieBox, MovieExtendsBox, MovieFragmentBox, SampleFlags, TrackBox,
+        TrackExtendsBox,
+    };
+    use isobmff_core::{BoxDecode, BoxDefinition};
 
     use super::{MovieFragmentWriter, SampleTableWriter};
     use crate::error::MuxError;
-    use crate::sample::{Sample, SampleProperties};
-    use crate::structure_data::fixtures::{encoded, in_another_file, movie, track, written};
+    use crate::sample::{DataReferenceKey, Sample, SampleLocation, SampleProperties};
+    use crate::structure_data::StructureDataReader;
+    use crate::structure_data::fixtures::{
+        UNLIMITED, encoded, in_another_file, laid_out, movie, track, written,
+    };
 
     /// Returns a track `track_id` of no sample, its timescale `timescale`
     fn empty_track(track_id: u32, timescale: u32) -> TrackBox {
@@ -472,7 +489,7 @@ mod tests {
             offset_sample(2, 0, 20, b"FGHI", 5),
         ];
 
-        let moof = writer.movie_fragment(&samples, 0, 8).unwrap();
+        let (moof, _) = writer.movie_fragment(&samples, 0, 8).unwrap();
 
         // moof 184 bytes, so the media data starts at 184 + 8
         let traf_1 = written(
@@ -527,9 +544,30 @@ mod tests {
         assert_eq!(
             writer
                 .movie_fragment(&samples, 0, 8)
-                .map(|moof| moof.mfhd.sequence_number),
+                .map(|(moof, _)| moof.mfhd.sequence_number),
             Ok(8)
         );
+    }
+
+    #[test]
+    fn the_locations_of_a_movie_fragment_are_those_a_reader_resolves_out_of_its_moof() {
+        let mut writer =
+            MovieFragmentWriter::new(two_fragmented_tracks(), 1, false, false).unwrap();
+        let samples = [
+            sample(1, 1 << 32, 10, b"AB"),
+            sample(1, (1 << 32) + 10, 10, b"CDE"),
+            offset_sample(2, 0, 20, b"FGHI", -5),
+            sample(1, (1 << 32) + 20, 10, b"J"),
+        ];
+
+        let (moof, locations) = writer.movie_fragment(&samples, 1000, 16).unwrap();
+
+        let mut reader = StructureDataReader::new(UNLIMITED);
+        reader.handle_movie(writer.movie().clone()).unwrap();
+        let moof = MovieFragmentBox::decode(&encoded(&moof)).unwrap().0;
+        let read: Vec<SampleLocation> =
+            reader.handle_movie_fragment(&moof, 1000).unwrap().collect();
+        assert_eq!(locations, read);
     }
 
     #[test]
@@ -562,17 +600,17 @@ mod tests {
      {
         let mut writer = SampleTableWriter::new(two_tracks()).unwrap();
         writer
-            .handle_samples(
+            .handle_locations(&laid_out(
                 &[
                     sample(1, 0, 10, b"AB"),
                     sample(1, 10, 10, b"CD"),
                     offset_sample(2, 0, 20, b"EFG", 5),
                 ],
                 1000,
-            )
+            ))
             .unwrap();
         writer
-            .handle_samples(&[sample(1, 20, 10, b"HI")], 2000)
+            .handle_locations(&laid_out(&[sample(1, 20, 10, b"HI")], 2000))
             .unwrap();
 
         let movie = writer.finish();
@@ -673,6 +711,130 @@ mod tests {
         assert_eq!(movie.mvhd.duration, 300);
     }
 
+    /// Returns the movie of `file`, which is its `ftyp` then its `moov`
+    fn movie_of(file: &[u8]) -> MovieBox {
+        let after_ftyp = FileTypeBox::decode(file).unwrap().1;
+        MovieBox::decode(after_ftyp).unwrap().0
+    }
+
+    /// Returns the locations of the samples of `movie` in decoding order
+    fn locations_of(movie: &MovieBox) -> Vec<SampleLocation> {
+        StructureDataReader::new(UNLIMITED)
+            .handle_movie(movie.clone())
+            .unwrap()
+            .into_decoding_order()
+    }
+
+    /// Files of a movie of one track, the media data of its chunks in decoding order and out of it
+    const FILES: [&[u8]; 2] = [
+        include_bytes!("../../tests/data/movie.mp4"),
+        include_bytes!("../../tests/data/out_of_order.mp4"),
+    ];
+
+    #[test]
+    fn the_moov_written_from_the_locations_of_samples_written_is_the_moov_written_from_the_samples()
+    {
+        for file in FILES {
+            let movie = movie_of(file);
+            let samples = locations_of(&movie).into_iter().map(|location| {
+                let range = location.byte_range();
+                let data = file.get(
+                    usize::try_from(range.start).unwrap()..usize::try_from(range.end).unwrap(),
+                );
+                Sample::new(*location.properties(), data.unwrap().to_vec())
+            });
+            let mut muxer = crate::Muxer::new(crate::FileStructure::NonFragmented);
+            muxer.handle_movie(movie.clone()).unwrap();
+            muxer.handle_samples(samples).unwrap();
+            muxer.finish().unwrap();
+            let written: Vec<Vec<u8>> = core::iter::from_fn(|| muxer.poll_output()).collect();
+            let written_moov = written.last().unwrap();
+
+            let mut writer = SampleTableWriter::new(movie).unwrap();
+            writer
+                .handle_locations(&locations_of(&MovieBox::decode(written_moov).unwrap().0))
+                .unwrap();
+
+            assert_eq!(&encoded(writer.finish()), written_moov);
+        }
+    }
+
+    #[test]
+    fn the_moov_written_from_the_locations_of_a_file_declares_them_where_they_lie() {
+        for file in FILES {
+            let movie = movie_of(file);
+            let locations = locations_of(&movie);
+
+            let mut writer = SampleTableWriter::new(movie).unwrap();
+            writer.handle_locations(&locations).unwrap();
+
+            assert_eq!(locations_of(writer.finish()), locations);
+        }
+    }
+
+    #[test]
+    fn samples_of_a_track_whose_media_data_does_not_follow_on_lie_in_chunks_of_their_own() {
+        let located = |track_id, decoding_time, byte_range| {
+            SampleLocation::new(
+                *sample(track_id, decoding_time, 10, b"").properties(),
+                DataReferenceKey::new(0),
+                byte_range,
+            )
+        };
+        let mut writer = SampleTableWriter::new(two_tracks()).unwrap();
+        writer
+            .handle_locations(&[
+                located(1, 0, 100..102),
+                located(1, 10, 102..104),
+                located(1, 20, 300..302),
+                located(2, 0, 104..107),
+                located(1, 30, 302..304),
+            ])
+            .unwrap();
+
+        let movie = writer.finish();
+
+        let chunks: Vec<_> = movie
+            .trak
+            .iter()
+            .map(|trak| {
+                let stbl = &trak.mdia.minf.stbl;
+                (
+                    stbl.stsc.as_ref().map(encoded),
+                    stbl.chunk_offset.as_ref().map(|stco| match stco {
+                        isobmff_boxes::ChunkOffsetVariant::ChunkOffset(stco) => encoded(stco),
+                        isobmff_boxes::ChunkOffsetVariant::ChunkLargeOffset(co64) => encoded(co64),
+                        _ => Vec::new(),
+                    }),
+                )
+            })
+            .collect();
+        let stsc = |entries: &[[u32; 3]]| {
+            let count = u32::try_from(entries.len()).unwrap().to_be_bytes();
+            let fields: Vec<u8> = entries
+                .iter()
+                .flatten()
+                .flat_map(|field| field.to_be_bytes())
+                .collect();
+            Some(full(b"stsc", &[&count, &fields]))
+        };
+        let stco = |offsets: &[u32]| {
+            let count = u32::try_from(offsets.len()).unwrap().to_be_bytes();
+            let fields: Vec<u8> = offsets
+                .iter()
+                .flat_map(|offset| offset.to_be_bytes())
+                .collect();
+            Some(full(b"stco", &[&count, &fields]))
+        };
+        assert_eq!(
+            chunks,
+            [
+                (stsc(&[[1, 2, 1], [2, 1, 1]]), stco(&[100, 300, 302])),
+                (stsc(&[[1, 1, 1]]), stco(&[104])),
+            ]
+        );
+    }
+
     #[test]
     fn the_padb_and_the_stdp_declare_the_padding_and_the_degradation_priority_of_each_sample() {
         let flagged = |sample: Sample, sample_padding_value, sample_degradation_priority| {
@@ -683,7 +845,7 @@ mod tests {
         };
         let mut writer = SampleTableWriter::new(two_tracks()).unwrap();
         writer
-            .handle_samples(
+            .handle_locations(&laid_out(
                 &[
                     flagged(sample(1, 0, 10, b"A"), 3, 0),
                     flagged(sample(1, 10, 10, b"B"), 0, 0),
@@ -691,7 +853,7 @@ mod tests {
                     sample(2, 0, 10, b"D"),
                 ],
                 1000,
-            )
+            ))
             .unwrap();
 
         let movie = writer.finish();
@@ -732,18 +894,18 @@ mod tests {
         other_description = Sample::new(properties, other_description.into_data());
 
         let refused = [
-            writer.handle_samples(&[sample(3, 0, 10, b"AB")], 0),
-            writer.handle_samples(&[other_description.clone()], 0),
-            writer.handle_samples(&[sample(2, 0, 10, b"AB")], 0),
-            writer.handle_samples(
+            writer.handle_locations(&laid_out(&[sample(3, 0, 10, b"AB")], 0)),
+            writer.handle_locations(&laid_out(&[other_description.clone()], 0)),
+            writer.handle_locations(&laid_out(&[sample(2, 0, 10, b"AB")], 0)),
+            writer.handle_locations(&laid_out(
                 &[
                     sample(1, 0, 10, b"AB"),
                     sample(1, 10, 10, b"CD"),
                     other_description,
                 ],
                 0,
-            ),
-            writer.handle_samples(&[sample(1, 5, 10, b"AB")], 0),
+            )),
+            writer.handle_locations(&laid_out(&[sample(1, 5, 10, b"AB")], 0)),
         ];
 
         assert_eq!(
@@ -781,12 +943,12 @@ mod tests {
         let mut writer = SampleTableWriter::new(edited(&[(0, -1), (0, 8)])).unwrap();
 
         writer
-            .handle_samples(&[sample(1, 5, 10, b"AB")], 0)
+            .handle_locations(&laid_out(&[sample(1, 5, 10, b"AB")], 0))
             .unwrap();
         let next = [
-            writer.handle_samples(&[sample(1, 10, 10, b"CD")], 2),
-            writer.handle_samples(&[sample(1, 15, 10, b"CD")], 2),
-            writer.handle_samples(&[sample(2, 5, 10, b"EF")], 4),
+            writer.handle_locations(&laid_out(&[sample(1, 10, 10, b"CD")], 2)),
+            writer.handle_locations(&laid_out(&[sample(1, 15, 10, b"CD")], 2)),
+            writer.handle_locations(&laid_out(&[sample(2, 5, 10, b"EF")], 4)),
         ];
 
         assert_eq!(
@@ -821,7 +983,7 @@ mod tests {
         let mut writer = SampleTableWriter::new(edited(&[(0, 3)])).unwrap();
 
         assert_eq!(
-            writer.handle_samples(&[sample(1, 5, 10, b"AB")], 0),
+            writer.handle_locations(&laid_out(&[sample(1, 5, 10, b"AB")], 0)),
             Err(MuxError::MediaTimeOutOfRange {
                 track_id: 1,
                 media_time: 3,
@@ -829,14 +991,14 @@ mod tests {
             })
         );
         assert_eq!(
-            writer.handle_samples(
+            writer.handle_locations(&laid_out(
                 &[
                     sample(1, 3, 10, b"AB"),
                     sample(2, 0, 10, b"CD"),
                     sample(1, 13, 10, b"EF")
                 ],
                 0
-            ),
+            )),
             Ok(())
         );
     }
@@ -844,7 +1006,7 @@ mod tests {
     /// Returns the edit durations of the edit list of track 1, and the durations of the `tkhd` of each track and of the `mvhd`, of `movie` written with `samples`
     fn durations(movie: MovieBox, samples: &[Sample]) -> (Vec<u64>, Vec<u64>, u64) {
         let mut writer = SampleTableWriter::new(movie).unwrap();
-        writer.handle_samples(samples, 0).unwrap();
+        writer.handle_locations(&laid_out(samples, 0)).unwrap();
         let movie = writer.finish();
         let edits = movie
             .trak
@@ -920,7 +1082,9 @@ mod tests {
             }
         }
         let mut writer = SampleTableWriter::new(movie).unwrap();
-        writer.handle_samples(&[sample(1, 0, 10, b"A")], 0).unwrap();
+        writer
+            .handle_locations(&laid_out(&[sample(1, 0, 10, b"A")], 0))
+            .unwrap();
 
         let trak = writer.finish().trak.first().unwrap();
         let repeat_edits = trak
@@ -1047,7 +1211,7 @@ mod tests {
         let samples = [sample(2, 0, 5, b"ab"), sample(2, 5, 5, b"cd")];
         let tables_of = |movie| {
             let mut writer = SampleTableWriter::new(movie)?;
-            writer.handle_samples(&samples, 100)?;
+            writer.handle_locations(&laid_out(&samples, 100))?;
             Ok::<_, MuxError>(writer.finish().clone())
         };
         let fragments_of = |mut movie: MovieBox| {
