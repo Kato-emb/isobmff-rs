@@ -156,12 +156,39 @@ const DEFAULT_BASE_IS_MOOF_BRANDS: [[u8; 4]; 9] = [
     *b"iso5", *b"iso6", *b"iso7", *b"iso8", *b"iso9", *b"isoa", *b"isob", *b"isoc", *b"isod",
 ];
 
-/// Refuses `file_type` where it names none of the brands under which a reader takes the `moof` as the base data offset of a track fragment, §8.8.7.1
-pub(crate) fn refuse_brands_before_iso5(file_type: &FileTypeBox) -> Result<(), MuxError> {
-    if core::iter::once(&file_type.major_brand)
+/// Returns whether the brands of `file_type` name one of `iso5` to `isod`, ISO/IEC 14496-12 §8.8.7.1
+///
+/// Under these brands a reader takes the first byte of a `moof` as the base
+/// data offset of a track fragment that says so (`default-base-is-moof`).
+/// A fragmented movie file, or a segment, whose track fragments take the
+/// `moof` as their base data offset declares one of these brands as its major
+/// brand or a compatible brand: the movie fragments a
+/// [`Muxer`](crate::Muxer) and a
+/// [`MovieFragmentWriter`](crate::structure_data::MovieFragmentWriter) write
+/// do.
+///
+/// # Examples
+///
+/// ```
+/// use isobmff::boxes::FileTypeBox;
+/// use isobmff::{FourCc, supports_default_base_is_moof};
+///
+/// let mut ftyp = FileTypeBox::default();
+/// ftyp.major_brand = FourCc::new(*b"mp42");
+/// assert!(!supports_default_base_is_moof(&ftyp));
+/// ftyp.compatible_brands.push(FourCc::new(*b"iso6"));
+/// assert!(supports_default_base_is_moof(&ftyp));
+/// ```
+#[must_use]
+pub fn supports_default_base_is_moof(file_type: &FileTypeBox) -> bool {
+    core::iter::once(&file_type.major_brand)
         .chain(&file_type.compatible_brands)
         .any(|brand| DEFAULT_BASE_IS_MOOF_BRANDS.contains(brand.as_bytes()))
-    {
+}
+
+/// Refuses `file_type` where it names none of the brands [`supports_default_base_is_moof`] looks for
+pub(crate) fn refuse_brands_before_iso5(file_type: &FileTypeBox) -> Result<(), MuxError> {
+    if supports_default_base_is_moof(file_type) {
         return Ok(());
     }
     Err(MuxError::UnsupportedBrand {

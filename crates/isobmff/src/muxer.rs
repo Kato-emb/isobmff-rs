@@ -4,14 +4,14 @@ use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
 use isobmff_boxes::{FileTypeBox, MovieBox, SegmentTypeBox};
-use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader, Error};
+use isobmff_core::BoxDefinition;
 
 use crate::error::MuxError;
 use crate::file_level::refuse_brands_before_iso5;
 use crate::file_structure::{
     FileStructure, FragmentedOptions, NonFragmentedOptions, SegmentOptions,
 };
-use crate::framing::{BoxEvent, BoxWriter, to_u64};
+use crate::framing::{BoxWriter, to_u64, write_box};
 use crate::media_data::MediaDataWriter;
 use crate::output::Output;
 use crate::sample::Sample;
@@ -450,34 +450,6 @@ impl Muxer {
         }
         Ok(())
     }
-}
-
-/// Writes `value` as a box at file level through `boxes`, and returns its bytes and the file offset `boxes` counts for it
-///
-/// # Errors
-///
-/// * [`Box`](MuxError::Box): the box does not write.
-/// * The failures of [`BoxWriter::handle_event`].
-pub(crate) fn write_box<Value: BoxEncode + BoxDefinition>(
-    boxes: &mut BoxWriter,
-    value: &Value,
-) -> Result<Output, MuxError> {
-    let payload_len = value.payload_len();
-    let too_long = MuxError::Box {
-        error: Error::truncated_buffer(payload_len, to_u64(usize::MAX)),
-    };
-    let mut payload = alloc::vec![0; usize::try_from(payload_len).map_err(|_| too_long)?];
-    value
-        .encode_payload(&mut payload)
-        .map_err(|error| MuxError::Box { error })?;
-    let header = BoxHeader::with_payload_len(Value::BOX_TYPE, payload_len).ok_or(too_long)?;
-    let offset = boxes.next_offset();
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(boxes.handle_event(BoxEvent::Header(header))?);
-    bytes.extend_from_slice(boxes.handle_event(BoxEvent::Payload(&payload))?);
-    bytes.extend_from_slice(boxes.handle_event(BoxEvent::End)?);
-
-    Ok(Output::new(offset, bytes))
 }
 
 #[cfg(test)]

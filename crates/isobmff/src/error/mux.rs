@@ -66,6 +66,14 @@ pub enum MuxError {
     /// Samples, or the end of the file, offered before the movie that declares their tracks
     #[non_exhaustive]
     MissingMovie,
+    /// Bytes offered for space reserved with a `free` box that neither fill it nor leave room for a `free` box after them: longer than it, short of it by fewer than the 8 bytes of a `free` header, or offered for space of no known length, §8.1.2
+    #[non_exhaustive]
+    ReservedSpaceMismatch {
+        /// Length of the space reserved, where it is known
+        reserved_bytes: Option<u64>,
+        /// Length of the bytes offered for it
+        offered_bytes: u64,
+    },
     /// Brands of a fragmented file or a segment that name none of `iso5` to `isod`, under which a reader takes the `moof` as the base data offset of a track fragment, §8.8.7.1
     #[non_exhaustive]
     UnsupportedBrand {
@@ -212,6 +220,20 @@ impl fmt::Display for MuxError {
                 "{box_type} box offered after a box it goes before"
             ),
             Self::MissingMovie => formatter.write_str("samples offered before the movie"),
+            Self::ReservedSpaceMismatch {
+                reserved_bytes: Some(reserved_bytes),
+                offered_bytes,
+            } => write!(
+                formatter,
+                "{offered_bytes} bytes offered for {reserved_bytes} bytes reserved, which they neither fill nor leave room for a free box in"
+            ),
+            Self::ReservedSpaceMismatch {
+                reserved_bytes: None,
+                offered_bytes,
+            } => write!(
+                formatter,
+                "{offered_bytes} bytes offered for reserved space of no known length"
+            ),
             Self::UnsupportedBrand { brand } => write!(
                 formatter,
                 "brands of major brand {brand} name none of iso5 to isod, which a track fragment based on its moof takes"

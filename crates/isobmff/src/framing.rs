@@ -6,18 +6,24 @@
 //! asks: gathered whole, streamed in pieces, or skipped. [`BoxWriter`] lays
 //! boxes end to end from the same [`BoxEvent`]s, so the events a reader reports
 //! write back to the bytes they were read from.
+//!
+//! [`write_box`] writes a box value through a [`BoxWriter`]. [`reserve`]
+//! keeps space in a file with a `free` box, which [`fill`] and
+//! [`media_data_header`] write over once the bytes that go there are known.
 
 mod box_event;
 mod box_reader;
 mod box_writer;
 #[cfg(feature = "compressed-boxes")]
 mod compressed;
+mod reserved;
 
 pub use box_event::{BoxEvent, BoxEventKind};
 pub use box_reader::BoxReader;
-pub use box_writer::BoxWriter;
+pub use box_writer::{BoxWriter, write_box};
 #[cfg(feature = "compressed-boxes")]
 pub use compressed::{decompressed, replacement_type};
+pub use reserved::{fill, media_data_header, reserve};
 
 /// Converts a length in memory to one in a file, where it always fits
 pub(crate) fn to_u64(length: usize) -> u64 {
