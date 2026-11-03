@@ -1,0 +1,755 @@
+//! [`FastStart`], which lays a movie file out again with its `moov` before its media data
+
+use alloc::collections::VecDeque;
+use alloc::vec::Vec;
+
+use isobmff_boxes::{
+    ChunkLargeOffsetBox, ChunkOffsetVariant, FileTypeBox, MetaBox, MovieBox, MovieFragmentBox,
+    TrackBox,
+};
+use isobmff_core::{BoxDefinition, BoxEncode, BoxType};
+
+use crate::byte_range::ByteRange;
+use crate::error::{DemuxError, FastStartError};
+use crate::file_level::decode;
+use crate::framing::{BoxEvent, BoxReader, BoxWriter};
+use crate::muxer::write_box;
+use crate::structure_data::{chunk_offsets, data_reference_index};
+
+/// Limits a [`FastStart`] reads a file up to
+///
+/// # Examples
+///
+/// ```
+/// use isobmff::FastStartLimits;
+///
+/// let limits = FastStartLimits {
+///     movie_bytes: 64 * 1024 * 1024,
+///     box_count: 65_536,
+/// };
+/// assert_eq!(limits.box_count, 65_536);
+/// ```
+#[expect(
+    clippy::exhaustive_structs,
+    reason = "a limit added later is one every caller has to set, not one that quietly takes a default"
+)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct FastStartLimits {
+    /// Length of the payload of the `moov`, and of a `meta` at file level, the machine gathers up to
+    pub movie_bytes: u64,
+    /// Number of boxes at file level the machine keeps the places of up to
+    pub box_count: u64,
+}
+
+/// What a [`FastStart`] outputs, in the order the file laid out again is written
+#[non_exhaustive]
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum FastStartOutput {
+    /// Bytes to write: the `moov`, laid out again
+    Bytes(Vec<u8>),
+    /// Bytes of the file read to write as they are: a box at file level, at the file offsets of the range, to the end of the file where the range has no length
+    Copy(ByteRange),
+}
+
+/// Machine that lays a movie file that is not fragmented out again with its `moov` before its media data
+///
+/// A player that reads a file as it arrives needs the `moov` before the
+/// media data it locates. The machine reads the boxes at file level of a
+/// file a caller can seek in, as a [`Demuxer`](crate::Demuxer) does: it names
+/// the bytes it wants, takes them with the file offset they start at, and
+/// is told when the file ends. It gathers the `moov` and skips the others.
+/// It then outputs the file again: the `ftyp`, the `moov`, and the other
+/// boxes in their order, the media data as ranges of the file to copy, which
+/// the machine never takes.
+///
+/// The chunk offsets of the `moov` (§8.7.5), and the offsets of its sample
+/// auxiliary information (§8.7.9), move with the box they lie in. A chunk
+/// offset that no longer fits 32 bits takes a `co64`, and an offset of
+/// sample auxiliary information a `saio` of version 1. Offsets of samples in
+/// another file, or relative to an `IdentifiedMediaDataBox`, stay as they
+/// are. A file whose media data lies after its `moov` comes out as it is.
+///
+/// ```
+/// use isobmff::{FastStart, FastStartLimits, FastStartOutput};
+///
+/// // `ftyp`, an `mdat` of two samples, and the `moov` that locates them
+/// let file: &[u8] = include_bytes!("../tests/data/movie_last.mp4");
+/// let limits = FastStartLimits { movie_bytes: 1024 * 1024, box_count: 1024 };
+/// let mut fast_start = FastStart::new(limits);
+///
+/// // Seek to the offset the machine wants, and read from there
+/// while let Some(wanted) = fast_start.wanted_input() {
+///     match file.get(usize::try_from(wanted.offset())?..).unwrap_or_default() {
+///         [] => fast_start.finish()?,
+///         input => fast_start.handle_input(wanted.offset(), input)?,
+///     }
+/// }
+///
+/// // Write the bytes, and copy the ranges of the file
+/// let mut laid_out = Vec::new();
+/// while let Some(output) = fast_start.poll_output() {
+///     match output {
+///         FastStartOutput::Bytes(bytes) => laid_out.extend_from_slice(&bytes),
+///         FastStartOutput::Copy(range) => {
+///             let start = usize::try_from(range.offset())?;
+///             let end = range.length().map_or(Ok(file.len()), |length| usize::try_from(range.offset() + length))?;
+///             laid_out.extend_from_slice(file.get(start..end).ok_or("short")?);
+///         }
+///         _ => return Err("unknown output".into()),
+///     }
+/// }
+/// // The same file, its `moov` before its `mdat`
+/// assert_eq!(laid_out, include_bytes!("../tests/data/movie.mp4"));
+/// # Ok::<(), Box<dyn core::error::Error>>(())
+/// ```
+#[derive(Debug)]
+pub struct FastStart {
+    limits: FastStartLimits,
+    reader: BoxReader,
+    /// Type and place of each box at file level read, in their order
+    boxes: Vec<(BoxType, ByteRange)>,
+    movie: Option<MovieBox>,
+    outputs: VecDeque<FastStartOutput>,
+    /// Whether the file has ended
+    finished: bool,
+    failed: Option<FastStartError>,
+}
+
+impl FastStart {
+    /// Creates the machine, which wants the file from its first byte
+    #[must_use]
+    pub const fn new(limits: FastStartLimits) -> Self {
+        Self {
+            limits,
+            reader: BoxReader::new(),
+            boxes: Vec::new(),
+            movie: None,
+            outputs: VecDeque::new(),
+            finished: false,
+            failed: None,
+        }
+    }
+
+    /// Returns the file offset of the bytes the machine wants next, and how many it wants where it knows, or `None` once the file has ended or the machine has failed
+    #[must_use]
+    pub fn wanted_input(&self) -> Option<ByteRange> {
+        (self.failed.is_none() && !self.finished)
+            .then(|| self.reader.wanted_input())
+            .flatten()
+    }
+
+    /// Takes `input`, the bytes of the file from file offset `offset`, and reads the boxes at file level they hold
+    ///
+    /// `input` starts at or before the offset
+    /// [`wanted_input`](Self::wanted_input) names. A box whose size runs to
+    /// the end of the file ends the file, as [`finish`](Self::finish) does.
+    ///
+    /// # Errors
+    ///
+    /// * [`Read`](FastStartError::Read): the boxes do not read, as for
+    ///   [`BoxReader::handle_input`], or the `moov`, or a `meta` at file
+    ///   level, is longer than [`FastStartLimits::movie_bytes`].
+    /// * [`FragmentedMovie`](FastStartError::FragmentedMovie): the file has a
+    ///   `moof`, or its `moov` an `mvex`.
+    /// * [`ItemLocationsInFile`](FastStartError::ItemLocationsInFile): a
+    ///   `meta` locates items by file offsets in the file itself.
+    /// * [`BoxCountLimitExceeded`](FastStartError::BoxCountLimitExceeded):
+    ///   the file has more boxes at file level than
+    ///   [`FastStartLimits::box_count`].
+    /// * The failure the machine failed with before.
+    pub fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), FastStartError> {
+        self.check_failed()?;
+        loop {
+            let event = self.reader.handle_input(offset, input);
+            match self.read_event(event) {
+                Ok(true) => {}
+                Ok(false) if self.reader.wanted_input().is_none() => return self.finish(),
+                Ok(false) => return Ok(()),
+                Err(error) => return Err(self.fail(error)),
+            }
+        }
+    }
+
+    /// Ends the file at the offset the machine wants, and lays the file out again
+    ///
+    /// # Errors
+    ///
+    /// * [`MissingMovie`](FastStartError::MissingMovie): the file has no
+    ///   `moov`.
+    /// * [`OffsetOutOfFile`](FastStartError::OffsetOutOfFile): an offset of
+    ///   media data in the file lies in no box of it.
+    /// * [`Write`](FastStartError::Write): the `moov` laid out again does not
+    ///   write.
+    /// * The failures of [`handle_input`](Self::handle_input), for the box
+    ///   the end of the file ends.
+    pub fn finish(&mut self) -> Result<(), FastStartError> {
+        self.check_failed()?;
+        if self.finished {
+            return Ok(());
+        }
+        self.finished = true;
+        let event = self.reader.finish();
+        let laid_out = self.read_event(event).and_then(|_| self.lay_out());
+        match laid_out {
+            Ok(outputs) => {
+                self.outputs = outputs;
+                Ok(())
+            }
+            Err(error) => Err(self.fail(error)),
+        }
+    }
+
+    /// Returns the next output of the file laid out again, or `None` when there is none left
+    ///
+    /// The outputs come once [`finish`](Self::finish) has laid the file out.
+    pub fn poll_output(&mut self) -> Option<FastStartOutput> {
+        self.outputs.pop_front()
+    }
+
+    /// Returns the failure the machine failed with, if it has
+    fn check_failed(&self) -> Result<(), FastStartError> {
+        self.failed.map_or(Ok(()), Err)
+    }
+
+    /// Fails the machine with `error`, and returns it
+    fn fail(&mut self, error: FastStartError) -> FastStartError {
+        self.failed = Some(error);
+        error
+    }
+
+    /// Reads `event`, and returns whether one came
+    fn read_event(
+        &mut self,
+        event: Result<Option<BoxEvent<'_>>, DemuxError>,
+    ) -> Result<bool, FastStartError> {
+        let read = |error| FastStartError::Read { error };
+        match event.map_err(read)? {
+            None => Ok(false),
+            Some(BoxEvent::Header(header)) => {
+                let limit_boxes = self.limits.box_count;
+                if u64::try_from(self.boxes.len()).unwrap_or(u64::MAX) >= limit_boxes {
+                    return Err(FastStartError::BoxCountLimitExceeded { limit_boxes });
+                }
+                let box_type = header.box_type();
+                if box_type == MovieFragmentBox::BOX_TYPE {
+                    return Err(FastStartError::FragmentedMovie);
+                }
+                if let Some(place) = self.reader.open_box() {
+                    self.boxes.push((box_type, place));
+                }
+                if box_type == MovieBox::BOX_TYPE || box_type == MetaBox::BOX_TYPE {
+                    self.reader.gather(self.limits.movie_bytes).map_err(read)?;
+                } else {
+                    self.reader.skip().map_err(read)?;
+                }
+                Ok(true)
+            }
+            Some(BoxEvent::End) => {
+                if let Some(gathered) = self.reader.gathered_box() {
+                    let box_type = gathered.header().box_type();
+                    let read = |error| FastStartError::Read { error };
+                    if box_type == MetaBox::BOX_TYPE {
+                        let meta = decode::<MetaBox>(gathered.payload()).map_err(read)?;
+                        check_item_locations(Some(&meta))?;
+                    } else if self.movie.is_none() {
+                        let movie = decode::<MovieBox>(gathered.payload()).map_err(read)?;
+                        if movie.mvex.is_some() {
+                            return Err(FastStartError::FragmentedMovie);
+                        }
+                        check_item_locations(movie.meta.as_ref())?;
+                        for trak in &movie.trak {
+                            check_item_locations(trak.meta.as_ref())?;
+                        }
+                        self.movie = Some(movie);
+                    }
+                }
+                Ok(true)
+            }
+            Some(_) => Ok(true),
+        }
+    }
+
+    /// Returns the outputs of the file laid out again: the `ftyp`, the `moov` and the other boxes in their order, or the file as it is where its media data lies after its `moov`
+    fn lay_out(&mut self) -> Result<VecDeque<FastStartOutput>, FastStartError> {
+        let mut movie = self.movie.take().ok_or(FastStartError::MissingMovie)?;
+        let movie_position = self
+            .boxes
+            .iter()
+            .position(|&(box_type, _)| box_type == MovieBox::BOX_TYPE)
+            .ok_or(FastStartError::MissingMovie)?;
+        let movie_start = self
+            .boxes
+            .get(movie_position)
+            .map_or(0, |(_, place)| place.offset());
+        let tracks: Vec<TrackOffsets> = movie.trak.iter().map(TrackOffsets::of).collect();
+        if !tracks
+            .iter()
+            .any(|track| track.in_file().any(|offset| offset < movie_start))
+        {
+            return Ok(self
+                .boxes
+                .iter()
+                .map(|&(_, place)| FastStartOutput::Copy(place))
+                .collect());
+        }
+
+        let is_file_type = |index: &usize| {
+            self.boxes
+                .get(*index)
+                .is_some_and(|&(box_type, _)| box_type == FileTypeBox::BOX_TYPE)
+        };
+        let mut order: Vec<usize> = (0..self.boxes.len()).filter(is_file_type).collect();
+        order.push(movie_position);
+        order.extend(
+            (0..self.boxes.len()).filter(|index| *index != movie_position && !is_file_type(index)),
+        );
+        let places: Vec<ByteRange> = order
+            .iter()
+            .filter_map(|&index| self.boxes.get(index).map(|&(_, place)| place))
+            .collect();
+        // Why not a fixed number of passes: a pass that widens a table leaves it wide, so the passes number at most one more than the tables.
+        loop {
+            let movie_len = movie.encoded_len();
+            let mut position = 0_u64;
+            let moved: Vec<(ByteRange, u64)> = places
+                .iter()
+                .map(|&place| {
+                    let at = position;
+                    let length = if place.offset() == movie_start {
+                        movie_len
+                    } else {
+                        place.length().unwrap_or(u64::MAX)
+                    };
+                    position = position.saturating_add(length);
+                    (place, at)
+                })
+                .collect();
+            if !move_offsets(&tracks, &mut movie, &moved)? {
+                break;
+            }
+        }
+
+        let mut bytes = Some(
+            write_box(&mut BoxWriter::new(), &movie)
+                .map_err(|error| FastStartError::Write { error })?,
+        );
+        Ok(order
+            .iter()
+            .filter_map(|&index| {
+                if index == movie_position {
+                    return bytes.take().map(FastStartOutput::Bytes);
+                }
+                self.boxes
+                    .get(index)
+                    .map(|&(_, place)| FastStartOutput::Copy(place))
+            })
+            .collect())
+    }
+}
+
+/// Refuses `meta` where its `iloc` locates an item by file offsets in the file itself (§8.11.3)
+fn check_item_locations(meta: Option<&MetaBox>) -> Result<(), FastStartError> {
+    let in_file = meta
+        .and_then(|meta| meta.iloc.as_ref())
+        .is_some_and(|iloc| {
+            iloc.items
+                .iter()
+                .any(|item| item.construction_method == 0 && item.data_reference_index == 0)
+        });
+    if in_file {
+        return Err(FastStartError::ItemLocationsInFile);
+    }
+    Ok(())
+}
+
+/// Offsets a track of the file read states to media data, each with whether that media data is in the file itself, as the data reference of the sample entry of its chunk names
+#[derive(Debug)]
+struct TrackOffsets {
+    track_id: u32,
+    /// Chunk offsets, in chunk order
+    chunks: Vec<(u64, bool)>,
+    /// Offsets of each `saio`, for each chunk in chunk order
+    auxiliary: Vec<Vec<(u64, bool)>>,
+}
+
+impl TrackOffsets {
+    /// Returns the offsets `trak` states
+    fn of(trak: &TrackBox) -> Self {
+        let stbl = &trak.mdia.minf.stbl;
+        let entries = stbl
+            .stsc
+            .as_ref()
+            .map_or(&[][..], |stsc| stsc.entries.as_slice());
+        let mut entry = 0_usize;
+        let chunks: Vec<(u64, bool)> = chunk_offsets(stbl)
+            .enumerate()
+            .map(|(chunk, offset)| {
+                let number = u32::try_from(chunk).unwrap_or(u32::MAX).saturating_add(1);
+                while entries
+                    .get(entry.saturating_add(1))
+                    .is_some_and(|next| next.first_chunk <= number)
+                {
+                    entry = entry.saturating_add(1);
+                }
+                let description = entries
+                    .get(entry)
+                    .filter(|current| current.first_chunk <= number)
+                    .map_or(1, |current| current.sample_description_index);
+                (offset, data_reference_index(trak, description).is_ok())
+            })
+            .collect();
+        let in_file = |chunk: usize| {
+            chunks
+                .get(chunk)
+                .or_else(|| chunks.first())
+                .is_none_or(|&(_, in_file)| in_file)
+        };
+        let auxiliary = stbl
+            .saio
+            .iter()
+            .map(|saio| {
+                saio.offsets
+                    .iter()
+                    .enumerate()
+                    .map(|(chunk, &offset)| (offset, in_file(chunk)))
+                    .collect()
+            })
+            .collect();
+
+        Self {
+            track_id: trak.tkhd.track_id,
+            chunks,
+            auxiliary,
+        }
+    }
+
+    /// Returns the offsets to media data in the file itself
+    fn in_file(&self) -> impl Iterator<Item = u64> + '_ {
+        self.chunks
+            .iter()
+            .chain(self.auxiliary.iter().flatten())
+            .filter(|&&(_, in_file)| in_file)
+            .map(|&(offset, _)| offset)
+    }
+}
+
+/// Moves the offsets `tracks` state to media data in the file itself into `movie`, each with the box it lies in, which `moved` places at its new file offset; and returns whether a table was widened to hold them
+///
+/// # Errors
+///
+/// * [`OffsetOutOfFile`](FastStartError::OffsetOutOfFile): an offset lies
+///   in no box of `moved`.
+fn move_offsets(
+    tracks: &[TrackOffsets],
+    movie: &mut MovieBox,
+    moved: &[(ByteRange, u64)],
+) -> Result<bool, FastStartError> {
+    let mut widened = false;
+    for (track, trak) in tracks.iter().zip(&mut movie.trak) {
+        let to = |&(offset, in_file): &(u64, bool)| {
+            if !in_file {
+                return Ok(offset);
+            }
+            moved
+                .iter()
+                .find_map(|&(place, position)| {
+                    let into = offset.checked_sub(place.offset())?;
+                    place
+                        .length()
+                        .is_none_or(|length| into < length)
+                        .then(|| position.checked_add(into))
+                        .flatten()
+                })
+                .ok_or(FastStartError::OffsetOutOfFile {
+                    track_id: track.track_id,
+                    offset,
+                })
+        };
+        let stbl = &mut trak.mdia.minf.stbl;
+        let chunk_offsets = track.chunks.iter().map(to).collect::<Result<Vec<_>, _>>()?;
+        match &mut stbl.chunk_offset {
+            Some(ChunkOffsetVariant::ChunkOffset(stco)) => {
+                match chunk_offsets
+                    .iter()
+                    .map(|&offset| u32::try_from(offset))
+                    .collect::<Result<Vec<_>, _>>()
+                {
+                    Ok(compact) => stco.chunk_offsets = compact,
+                    Err(_) => {
+                        let mut co64 = ChunkLargeOffsetBox::default();
+                        co64.chunk_offsets = chunk_offsets;
+                        stbl.chunk_offset = Some(ChunkOffsetVariant::ChunkLargeOffset(co64));
+                        widened = true;
+                    }
+                }
+            }
+            Some(ChunkOffsetVariant::ChunkLargeOffset(co64)) => co64.chunk_offsets = chunk_offsets,
+            _ => {}
+        }
+        for (offsets, saio) in track.auxiliary.iter().zip(&mut stbl.saio) {
+            saio.offsets = offsets.iter().map(to).collect::<Result<Vec<_>, _>>()?;
+            if saio.version == 0
+                && saio
+                    .offsets
+                    .iter()
+                    .any(|&offset| u32::try_from(offset).is_err())
+            {
+                saio.version = 1;
+                widened = true;
+            }
+        }
+    }
+    Ok(widened)
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+
+    use isobmff_boxes::{
+        FileTypeBox, ItemLocation, ItemLocationBox, MetaBox, MovieBox, MovieExtendsBox,
+        SampleAuxiliaryInformationOffsetsBox,
+    };
+    use isobmff_core::{BoxHeader, BoxType};
+
+    use super::{FastStart, FastStartLimits, FastStartOutput};
+    use crate::byte_range::ByteRange;
+    use crate::error::FastStartError;
+    use crate::structure_data::fixtures::{encoded, in_another_file, movie, track};
+
+    const LIMITS: FastStartLimits = FastStartLimits {
+        movie_bytes: 1 << 20,
+        box_count: 16,
+    };
+
+    /// Returns the header of a box of `box_type` whose payload is `payload_len` bytes, which a test does not hold
+    fn header(box_type: &[u8; 4], payload_len: u64) -> Vec<u8> {
+        let header = BoxHeader::with_payload_len(BoxType::compact(*box_type), payload_len).unwrap();
+        let mut bytes = alloc::vec![0; usize::try_from(header.encoded_len()).unwrap()];
+        header.encode(&mut bytes).unwrap();
+        bytes
+    }
+
+    /// Lays out again the file whose bytes are `pieces`, each at its file offset, the file ending at the end of the last
+    fn lay_out(
+        pieces: &[(u64, Vec<u8>)],
+        limits: FastStartLimits,
+    ) -> Result<Vec<FastStartOutput>, FastStartError> {
+        let mut fast_start = FastStart::new(limits);
+        while let Some(wanted) = fast_start.wanted_input() {
+            let piece = pieces.iter().find_map(|(offset, bytes)| {
+                let into = usize::try_from(wanted.offset().checked_sub(*offset)?).ok()?;
+                bytes.get(into..).filter(|rest| !rest.is_empty())
+            });
+            match piece {
+                Some(input) => fast_start.handle_input(wanted.offset(), input)?,
+                None => fast_start.finish()?,
+            }
+        }
+        Ok(core::iter::from_fn(|| fast_start.poll_output()).collect())
+    }
+
+    /// Returns the bytes of a file of an `ftyp`, then `boxes` laid end to end
+    fn file(boxes: &[&[u8]]) -> Vec<u8> {
+        [encoded(&FileTypeBox::default()).as_slice()]
+            .iter()
+            .chain(boxes)
+            .flat_map(|bytes| bytes.iter().copied())
+            .collect()
+    }
+
+    /// Returns the movie of one track of one sample of 4 bytes, in a chunk at `chunk_offset`
+    fn one_chunk(chunk_offset: u64) -> MovieBox {
+        let mut movie = movie([track(1, 10, &[4], &[(1, 1)], &[chunk_offset])]);
+        movie.mvhd.next_track_id = 3;
+        movie
+    }
+
+    /// Returns the chunk offsets of the tracks of the `moov` in `outputs`
+    fn chunk_offsets(outputs: &[FastStartOutput]) -> Vec<Vec<u64>> {
+        let bytes = outputs
+            .iter()
+            .find_map(|output| match output {
+                FastStartOutput::Bytes(bytes) => Some(bytes),
+                FastStartOutput::Copy(_) => None,
+            })
+            .unwrap();
+        let (raw, _) = isobmff_core::RawBox::split_first(bytes).unwrap();
+        let movie = <MovieBox as isobmff_core::BoxDecode>::decode_payload(raw.payload()).unwrap();
+        movie
+            .trak
+            .iter()
+            .map(|trak| super::chunk_offsets(&trak.mdia.minf.stbl).collect())
+            .collect()
+    }
+
+    #[test]
+    fn a_moov_after_its_media_data_moves_after_the_ftyp_and_its_chunk_offsets_with_the_mdat() {
+        let ftyp_len = 16;
+        let mdat = header(b"mdat", 4);
+        let moov = encoded(&one_chunk(ftyp_len + 8));
+        let bytes = file(&[&mdat, b"ABCD", &moov]);
+        let moov_len = u64::try_from(moov.len()).unwrap();
+
+        let outputs = lay_out(&[(0, bytes)], LIMITS).unwrap();
+
+        assert_eq!(chunk_offsets(&outputs), [[ftyp_len + moov_len + 8]]);
+        assert_eq!(
+            outputs
+                .iter()
+                .map(|output| match output {
+                    FastStartOutput::Bytes(bytes) => (None, u64::try_from(bytes.len()).unwrap()),
+                    FastStartOutput::Copy(range) => (Some(range.offset()), range.length().unwrap()),
+                })
+                .collect::<Vec<_>>(),
+            [(Some(0), ftyp_len), (None, moov_len), (Some(ftyp_len), 12)]
+        );
+    }
+
+    #[test]
+    fn a_file_whose_media_data_lies_after_its_moov_comes_out_as_it_is() {
+        let free = header(b"free", 0);
+        let moov_len = u64::try_from(encoded(&one_chunk(0)).len()).unwrap();
+        let moov = encoded(&one_chunk(16 + 8 + moov_len + 8));
+        let bytes = file(&[&free, &moov, &header(b"mdat", 4), b"ABCD"]);
+
+        assert_eq!(
+            lay_out(&[(0, bytes)], LIMITS).unwrap(),
+            [(0, 16), (16, 8), (24, moov_len), (24 + moov_len, 12)].map(|(offset, length)| {
+                FastStartOutput::Copy(ByteRange::new(offset, Some(length)))
+            })
+        );
+    }
+
+    #[test]
+    fn the_header_of_a_box_moved_is_copied_as_it_is_and_one_that_runs_to_the_end_of_the_file_stays_last()
+     {
+        let large = [0, 0, 0, 1, b'm', b'd', b'a', b't', 0, 0, 0, 0, 0, 0, 0, 20];
+        let moved = encoded(&one_chunk(16 + 16));
+        let moov_len = u64::try_from(moved.len()).unwrap();
+        let to_end = [0, 0, 0, 0, b'm', b'd', b'a', b't'];
+        let first = encoded(&one_chunk(16 + moov_len + 8));
+
+        assert_eq!(
+            [
+                lay_out(&[(0, file(&[&large, b"ABCD", &moved]))], LIMITS)
+                    .map(|outputs| outputs.last().cloned()),
+                lay_out(&[(0, file(&[&first, &to_end, b"ABCD"]))], LIMITS)
+                    .map(|outputs| outputs.last().cloned()),
+            ],
+            [
+                Ok(Some(FastStartOutput::Copy(ByteRange::new(16, Some(20))))),
+                Ok(Some(FastStartOutput::Copy(ByteRange::new(
+                    16 + moov_len,
+                    None
+                )))),
+            ]
+        );
+    }
+
+    #[test]
+    fn chunk_offsets_moved_past_32_bits_take_a_co64_and_the_moov_grows_by_it() {
+        let mdat = header(b"mdat", 1 << 32);
+        let near_end = (1 << 32) - 4;
+        let moov = encoded(&one_chunk(near_end));
+        let moov_at = 16 + 16 + (1 << 32);
+
+        let outputs = lay_out(&[(0, file(&[&mdat])), (moov_at, moov.clone())], LIMITS).unwrap();
+
+        let moov_len = match outputs.get(1) {
+            Some(FastStartOutput::Bytes(bytes)) => u64::try_from(bytes.len()).unwrap(),
+            _ => 0,
+        };
+        assert_eq!(moov_len, u64::try_from(moov.len()).unwrap() + 4);
+        assert_eq!(chunk_offsets(&outputs), [[near_end + moov_len]]);
+    }
+
+    #[test]
+    fn chunks_in_another_file_and_offsets_of_sample_auxiliary_information_are_moved_as_their_data_is()
+     {
+        let mut moving = one_chunk(24);
+        let mut saio = SampleAuxiliaryInformationOffsetsBox::default();
+        saio.offsets = Vec::from([26]);
+        if let Some(trak) = moving.trak.first_mut() {
+            trak.mdia.minf.stbl.saio = Vec::from([saio]);
+        }
+        moving
+            .trak
+            .push(in_another_file(track(2, 10, &[4], &[(1, 1)], &[24])));
+        let moov = encoded(&moving);
+        let moov_len = u64::try_from(moov.len()).unwrap();
+
+        let outputs =
+            lay_out(&[(0, file(&[&header(b"mdat", 4), b"ABCD", &moov]))], LIMITS).unwrap();
+
+        let bytes = match outputs.get(1) {
+            Some(FastStartOutput::Bytes(bytes)) => bytes.clone(),
+            _ => Vec::new(),
+        };
+        let (raw, _) = isobmff_core::RawBox::split_first(&bytes).unwrap();
+        let laid_out =
+            <MovieBox as isobmff_core::BoxDecode>::decode_payload(raw.payload()).unwrap();
+        let saio_offsets: Vec<_> = laid_out
+            .trak
+            .iter()
+            .flat_map(|trak| {
+                trak.mdia
+                    .minf
+                    .stbl
+                    .saio
+                    .iter()
+                    .flat_map(|saio| saio.offsets.clone())
+            })
+            .collect();
+        assert_eq!(
+            (chunk_offsets(&outputs), saio_offsets),
+            (
+                Vec::from([Vec::from([24 + moov_len]), Vec::from([24])]),
+                Vec::from([26 + moov_len])
+            )
+        );
+    }
+
+    #[test]
+    fn a_file_the_machine_cannot_lay_out_again_is_refused() {
+        let mut fragmented = one_chunk(24);
+        let mut mvex = MovieExtendsBox::default();
+        mvex.trex = Vec::from([isobmff_boxes::TrackExtendsBox::default()]);
+        fragmented.mvex = Some(mvex);
+        let mut located = one_chunk(24);
+        let mut iloc = ItemLocationBox::default();
+        iloc.items = Vec::from([ItemLocation::default()]);
+        let mut meta = MetaBox::default();
+        meta.iloc = Some(iloc);
+        located.meta = Some(meta);
+        let mdat = [header(b"mdat", 4), b"ABCD".to_vec()].concat();
+        let mut wide = movie([track(1, 10, &[4, 4], &[(1, 1)], &[24, 1 << 40])]);
+        wide.mvhd.next_track_id = 2;
+        let few = FastStartLimits {
+            box_count: 2,
+            ..LIMITS
+        };
+
+        assert_eq!(
+            [
+                lay_out(&[(0, file(&[&mdat, &encoded(&fragmented)]))], LIMITS),
+                lay_out(&[(0, file(&[&header(b"moof", 0), &mdat]))], LIMITS),
+                lay_out(&[(0, file(&[&mdat, &encoded(&located)]))], LIMITS),
+                lay_out(&[(0, file(&[&mdat]))], LIMITS),
+                lay_out(&[(0, file(&[&mdat, &encoded(&wide)]))], LIMITS),
+                lay_out(&[(0, file(&[&mdat, &encoded(&one_chunk(24))]))], few),
+            ],
+            [
+                Err(FastStartError::FragmentedMovie),
+                Err(FastStartError::FragmentedMovie),
+                Err(FastStartError::ItemLocationsInFile),
+                Err(FastStartError::MissingMovie),
+                Err(FastStartError::OffsetOutOfFile {
+                    track_id: 1,
+                    offset: 1 << 40
+                }),
+                Err(FastStartError::BoxCountLimitExceeded { limit_boxes: 2 }),
+            ]
+        );
+    }
+}

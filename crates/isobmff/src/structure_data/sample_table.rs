@@ -262,7 +262,7 @@ fn size_table(stbl: &SampleTableBox) -> (u32, u32, &[u32]) {
 }
 
 /// Returns the file offset of each chunk the `stco` or the `co64` states, in chunk order
-fn chunk_offsets(stbl: &SampleTableBox) -> impl Iterator<Item = u64> {
+pub(crate) fn chunk_offsets(stbl: &SampleTableBox) -> impl Iterator<Item = u64> {
     let (compact, large): (&[u32], &[u64]) = match &stbl.chunk_offset {
         Some(ChunkOffsetVariant::ChunkOffset(stco)) => (&stco.chunk_offsets, &[]),
         Some(ChunkOffsetVariant::ChunkLargeOffset(co64)) => (&[], &co64.chunk_offsets),

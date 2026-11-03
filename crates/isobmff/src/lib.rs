@@ -230,6 +230,9 @@
 //! `dump_boxes` and `split_fragments` read and write files through
 //! [`framing`]: one lists the boxes of a file, the other splits a fragmented
 //! movie file into segments.
+//! `fast_start` writes a movie file again with its `moov` before its media
+//! data, as a [`FastStart`] lays it out:
+//! `cargo run --example fast_start -- movie.mp4 fast.mp4`.
 
 #![no_std]
 
@@ -238,6 +241,7 @@ extern crate alloc;
 mod byte_range;
 mod demuxer;
 mod error;
+mod fast_start;
 mod file_level;
 mod file_structure;
 pub mod framing;
@@ -251,7 +255,8 @@ pub mod timeline;
 
 pub use byte_range::ByteRange;
 pub use demuxer::{DemuxEvent, Demuxer};
-pub use error::{DemuxError, MuxError, TimelineError};
+pub use error::{DemuxError, FastStartError, MuxError, TimelineError};
+pub use fast_start::{FastStart, FastStartLimits, FastStartOutput};
 pub use file_structure::FileStructure;
 pub use isobmff_core::*;
 pub use leniency::{Leniency, SampleTableDisagreement};

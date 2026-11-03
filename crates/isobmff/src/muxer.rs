@@ -409,7 +409,7 @@ impl Muxer {
 ///
 /// * [`Box`](MuxError::Box): the box does not write.
 /// * The failures of [`BoxWriter::handle_event`].
-fn write_box<Value: BoxEncode + BoxDefinition>(
+pub(crate) fn write_box<Value: BoxEncode + BoxDefinition>(
     boxes: &mut BoxWriter,
     value: &Value,
 ) -> Result<Vec<u8>, MuxError> {

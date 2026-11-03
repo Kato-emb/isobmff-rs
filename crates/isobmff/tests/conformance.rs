@@ -26,8 +26,9 @@ mod tests {
     use isobmff::structure_data::SegmentIndex;
     use isobmff::timeline::{Presentation, Timeline};
     use isobmff::{
-        BoxDefinition, BoxHeader, Boxes, ByteRange, DemuxEvent, DemuxLimits, Demuxer,
-        FileStructure, FourCc, Muxer, Sample, SampleLocation,
+        BoxDecode, BoxDefinition, BoxHeader, Boxes, ByteRange, DemuxEvent, DemuxLimits, Demuxer,
+        FastStart, FastStartLimits, FastStartOutput, FileStructure, FourCc, Muxer, Sample,
+        SampleLocation,
     };
     use isobmff_test_support::serde_json::Value;
     use isobmff_test_support::{
@@ -946,5 +947,99 @@ mod tests {
             read.samples == source.samples,
             "the demuxer reads other samples"
         );
+    }
+
+    /// Returns `file` laid out again by a [`FastStart`]
+    fn fast_start(file: &[u8]) -> Vec<u8> {
+        let mut fast_start = FastStart::new(FastStartLimits {
+            movie_bytes: 1 << 24,
+            box_count: 1024,
+        });
+        while let Some(wanted) = fast_start.wanted_input() {
+            match piece(file, wanted, usize::MAX) {
+                [] => fast_start.finish().unwrap(),
+                input => fast_start.handle_input(wanted.offset(), input).unwrap(),
+            }
+        }
+        let mut laid_out = Vec::new();
+        while let Some(output) = fast_start.poll_output() {
+            match output {
+                FastStartOutput::Bytes(bytes) => laid_out.extend_from_slice(&bytes),
+                FastStartOutput::Copy(range) => {
+                    let rest = file
+                        .get(usize::try_from(range.offset()).unwrap()..)
+                        .unwrap();
+                    let length = range
+                        .length()
+                        .map_or(rest.len(), |length| usize::try_from(length).unwrap());
+                    laid_out.extend_from_slice(rest.get(..length).unwrap());
+                }
+                _ => {}
+            }
+        }
+        laid_out
+    }
+
+    /// Returns the movie of the `moov` of `file`
+    fn movie_of(file: &[u8]) -> MovieBox {
+        Boxes::new(file)
+            .map(Result::unwrap)
+            .find(|framed| framed.header().box_type() == MovieBox::BOX_TYPE)
+            .map(|framed| MovieBox::decode_payload(framed.payload()).unwrap())
+            .unwrap()
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names, and runs ffprobe on them"]
+    fn a_movie_file_laid_out_again_has_its_moov_after_its_ftyp_and_reads_as_it_did() {
+        let files: Vec<_> = conformance_files()
+            .into_iter()
+            .filter(|file| {
+                ["06_bifs.mp4", "07_bifs_sprite.mp4", "restricted.mp4"]
+                    .contains(&file.name.as_str())
+            })
+            .collect();
+        assert_eq!(files.len(), 3);
+        for ConformanceFile { name, bytes, .. } in &files {
+            let laid_out = fast_start(bytes);
+
+            let order: Vec<_> = framed_whole(&laid_out)
+                .iter()
+                .take(2)
+                .map(|(header, _)| header.box_type())
+                .collect();
+            assert_eq!(order, [FileTypeBox::BOX_TYPE, MovieBox::BOX_TYPE], "{name}");
+            assert_eq!(laid_out.len(), bytes.len(), "{name}");
+            assert!(
+                demux(&laid_out).samples == demux(bytes).samples,
+                "{name}: the demuxer reads other samples"
+            );
+            assert_eq!(
+                ffprobe_read(&format!("fast-{name}"), &laid_out),
+                ffprobe_read(&format!("source-{name}"), bytes),
+                "{name}: ffprobe reads other packets"
+            );
+            let original = movie_of(bytes);
+            let mut moved = movie_of(&laid_out);
+            for (original, moved) in original.trak.iter().zip(&mut moved.trak) {
+                moved.mdia.minf.stbl.chunk_offset = original.mdia.minf.stbl.chunk_offset.clone();
+                moved.mdia.minf.stbl.saio = original.mdia.minf.stbl.saio.clone();
+            }
+            assert!(
+                moved == original,
+                "{name}: the moov laid out again differs from the original but for its offsets"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names"]
+    fn a_movie_file_whose_moov_comes_before_its_media_data_is_laid_out_as_it_is() {
+        let file = conformance_files()
+            .into_iter()
+            .find(|file| file.name == "01_simple.mp4")
+            .unwrap();
+
+        assert!(fast_start(&file.bytes) == file.bytes);
     }
 }
