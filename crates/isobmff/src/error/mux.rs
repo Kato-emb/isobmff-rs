@@ -207,7 +207,7 @@ impl fmt::Display for MuxError {
             ),
             Self::SampleTableNotEmpty { track_id, box_type } => write!(
                 formatter,
-                "{box_type} of track {track_id} declares samples already"
+                "{box_type} of track {track_id} declares samples, which the muxer does not carry"
             ),
             Self::UnknownTrackId { track_id } => {
                 write!(
