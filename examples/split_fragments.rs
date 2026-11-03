@@ -20,7 +20,7 @@
 use std::env;
 use std::error::Error;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, BufWriter, Seek, Write};
+use std::io::{BufRead, BufReader, BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use isobmff::framing::{BoxEvent, BoxReader, BoxWriter};
@@ -125,7 +125,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let out_dir = Path::new(&out_dir);
     fs::create_dir_all(out_dir)?;
 
-    let mut file = BufReader::with_capacity(64 * 1024, File::open(path)?);
+    let mut file = BufReader::new(File::open(path)?);
     let mut reader = BoxReader::new();
     let mut splitter = Splitter {
         out_dir,
@@ -137,11 +137,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     while let Some(wanted) = reader.wanted_input() {
-        let position = file.stream_position()?;
-        let distance = i64::try_from(wanted.offset())?
-            .checked_sub(i64::try_from(position)?)
-            .ok_or("an offset past 63 bits")?;
-        file.seek_relative(distance)?;
+        file.seek(SeekFrom::Start(wanted.offset()))?;
         let input = file.fill_buf()?;
         if input.is_empty() {
             break;
