@@ -143,7 +143,7 @@ pub enum DemuxError {
         /// `track_ID` of the track
         track_id: u32,
     },
-    /// Media data of a sample that lies outside the file offsets 64 bits count
+    /// Media data of a sample that lies outside the file offsets 64 bits count, or, in a file with compressed boxes, in the box a compressed box replaces (§8.16.1)
     #[non_exhaustive]
     DataOffsetOutOfRange {
         /// `track_ID` of the track
@@ -202,6 +202,30 @@ pub enum DemuxError {
     CompressedBoxWithMovieFragmentRandomAccess {
         /// Type of the compressed box
         box_type: BoxType,
+    },
+    /// Compressed box that grows or shrinks when read back, and starts before the media data of a sample located without it, §8.16.2.2 NOTE 3
+    #[non_exhaustive]
+    CompressedBoxBeforeLocatedSample {
+        /// Type of the compressed box
+        box_type: BoxType,
+    },
+    /// Compressed box that would take the compressed boxes a demuxer keeps the places of past the limit it keeps them up to
+    #[non_exhaustive]
+    CompressedBoxCountLimitExceeded {
+        /// Number of compressed boxes the demuxer would keep
+        retained_compressed_boxes: u64,
+        /// Limit on the compressed boxes kept
+        limit_compressed_boxes: u64,
+    },
+    /// Track fragment of a base data offset, read after a resume in a file known to have been transformed, by a compressed box or an `otyp` read, §8.16.2.2 NOTE 3
+    ///
+    /// The offset counts from the start of the file as its compressed boxes
+    /// read back, and the compressed boxes before the box the demuxer resumed
+    /// at may not have been read.
+    #[non_exhaustive]
+    DataOffsetPastSkippedCompressedBoxes {
+        /// `track_ID` of the track
+        track_id: u32,
     },
     /// Segment index that would take the segment indexes a reader keeps past the limit it keeps them up to
     #[non_exhaustive]
@@ -397,6 +421,21 @@ impl fmt::Display for DemuxError {
             Self::CompressedBoxWithMovieFragmentRandomAccess { box_type } => write!(
                 formatter,
                 "a movie fragment random access box in a file with the compressed box {box_type}"
+            ),
+            Self::CompressedBoxBeforeLocatedSample { box_type } => write!(
+                formatter,
+                "a compressed box {box_type} before the media data of a sample located without it"
+            ),
+            Self::CompressedBoxCountLimitExceeded {
+                retained_compressed_boxes,
+                limit_compressed_boxes,
+            } => write!(
+                formatter,
+                "{retained_compressed_boxes} compressed boxes kept, past the limit of {limit_compressed_boxes}"
+            ),
+            Self::DataOffsetPastSkippedCompressedBoxes { track_id } => write!(
+                formatter,
+                "a base data offset of track {track_id} after a resume, past compressed boxes that may not have been read"
             ),
             Self::SegmentIndexCountLimitExceeded {
                 retained_segment_indexes,

@@ -228,10 +228,12 @@
 //! The feature `compressed-boxes` reads the compressed boxes (ISO/IEC
 //! 14496-12 §8.16), whose payload is the deflated payload of the box they
 //! replace: `framing::decompressed` reads one back into that box, and the
-//! demuxer takes the brands of a file from its `otyp` and refuses a file that
-//! has both a compressed box and an `mfra`. The demuxer skips the compressed
-//! boxes themselves, as it does any box it reads no value of; without the
-//! feature, it skips an `otyp` too.
+//! demuxer reads a `!mov`, a `!mof` and a `!six` as the `moov`, `moof` and
+//! `sidx` they replace, returns the samples they locate where their media
+//! data lies in the file, takes the brands of a file from its `otyp`, and
+//! refuses a file that has both a compressed box and an `mfra`. Without the
+//! feature, the demuxer skips these boxes, as it does any box it reads no
+//! value of.
 //!
 //! The items of [`isobmff_core`], the vocabulary a box is written in, are at
 //! the root of this crate. The boxes ISO/IEC 14496-12 defines, written in that

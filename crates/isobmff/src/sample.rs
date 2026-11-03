@@ -219,4 +219,12 @@ impl SampleLocation {
     pub fn byte_range(&self) -> Range<u64> {
         self.byte_range.clone()
     }
+
+    /// Returns the location of the same sample, its media data at `byte_range`
+    pub(crate) fn with_byte_range(&self, byte_range: Range<u64>) -> Self {
+        Self {
+            byte_range,
+            ..self.clone()
+        }
+    }
 }

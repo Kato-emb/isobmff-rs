@@ -5,9 +5,7 @@ use alloc::boxed::Box;
 use isobmff_boxes::{
     FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentTypeBox,
 };
-#[cfg(feature = "compressed-boxes")]
-use isobmff_core::{BoxDefinition, BoxType};
-use isobmff_core::{BoxHeader, Error};
+use isobmff_core::{BoxDefinition, BoxHeader, BoxType, Error, RawBox};
 
 use crate::byte_range::ByteRange;
 use crate::error::DemuxError;
@@ -17,8 +15,12 @@ use crate::framing::{BoxEvent, BoxReader};
 use crate::leniency::Leniency;
 use crate::limits::DemuxLimits;
 use crate::media_data::MediaDataReader;
-use crate::sample::{DataReferenceKey, Sample};
+use crate::sample::{DataReferenceKey, Sample, SampleLocation};
 use crate::structure_data::{DataReference, SampleLocations, SegmentIndex, StructureDataReader};
+
+mod compressed;
+
+use compressed::CompressedBoxes;
 
 /// Length of the `imda_identifier` an `imda` opens its payload with, §8.1.4
 const IDENTIFIER_BYTES: u64 = 4;
@@ -49,6 +51,20 @@ const IDENTIFIER_BYTES: u64 = 4;
 /// The demuxer holds no rule on the order of the boxes: a `moof` before the
 /// `moov` fails as the structure-data it declares does not resolve.
 ///
+/// With the feature `compressed-boxes`, a compressed box (§8.16) is read as
+/// the box it replaces, and reported as that box is, where the compressed
+/// box lies: a `!mov`, a `!mof` and a `!six` as a `moov`, a `moof` and a
+/// `sidx`, a `!ssx` as any other box. The file offsets in the box it replaces
+/// count in the file as its compressed boxes read back (§8.16.1), and the
+/// demuxer locates the samples where their media data lies in the file
+/// itself, as each compressed box before it grew or shrank when read back.
+/// It can tell only once it has read every compressed box before the media
+/// data (§8.16.2.2 NOTE 3): a compressed box that grows or shrinks before
+/// the media data of a sample located already fails the demuxer with
+/// [`CompressedBoxBeforeLocatedSample`](DemuxError::CompressedBoxBeforeLocatedSample).
+/// The offsets of a `sidx` count in the file as it is (§8.16.8), and are
+/// taken as they are.
+///
 /// A failure is returned by the call that reads it, and leaves the demuxer
 /// failed: it wants no more input, and every call after it returns the same
 /// failure. [`poll_sample`](Self::poll_sample) still returns the samples
@@ -67,9 +83,8 @@ pub struct Demuxer {
     payload_limit_bytes: u64,
     file_type: Option<FileTypeBox>,
     segment_type: Option<SegmentTypeBox>,
-    /// Type of the first compressed box opened, §8.16
-    #[cfg(feature = "compressed-boxes")]
-    compressed_box: Option<BoxType>,
+    /// Compressed boxes read, §8.16, which none are without the feature `compressed-boxes`
+    compressed_boxes: CompressedBoxes,
 }
 
 impl Demuxer {
@@ -89,8 +104,7 @@ impl Demuxer {
             payload_limit_bytes: limits.payload_bytes(),
             file_type: None,
             segment_type: None,
-            #[cfg(feature = "compressed-boxes")]
-            compressed_box: None,
+            compressed_boxes: CompressedBoxes::new(limits.compressed_box_count()),
         }
     }
 
@@ -137,9 +151,21 @@ impl Demuxer {
     /// * The failures of [`BoxReader::handle_input`], and of
     ///   [`BoxReader::gather`] with the limit of the payload of a box.
     /// * [`Box`](DemuxError::Box): a box gathered does not read as its value.
-    /// * [`CompressedBoxWithMovieFragmentRandomAccess`](DemuxError::CompressedBoxWithMovieFragmentRandomAccess):
-    ///   with the feature `compressed-boxes`, the file has both a compressed
-    ///   box and an `mfra` (§8.16.1).
+    /// * With the feature `compressed-boxes`, the failures of
+    ///   `framing::decompressed` with the limit
+    ///   of the payload of a box, and:
+    ///   * [`CompressedBoxWithMovieFragmentRandomAccess`](DemuxError::CompressedBoxWithMovieFragmentRandomAccess):
+    ///     the file has both a compressed box and an `mfra` (§8.16.1).
+    ///   * [`CompressedBoxBeforeLocatedSample`](DemuxError::CompressedBoxBeforeLocatedSample):
+    ///     a compressed box grows or shrinks before the media data of a
+    ///     sample located already.
+    ///   * [`CompressedBoxCountLimitExceeded`](DemuxError::CompressedBoxCountLimitExceeded):
+    ///     the compressed boxes read pass the limit.
+    ///   * [`DataOffsetOutOfRange`](DemuxError::DataOffsetOutOfRange): the
+    ///     media data of a sample lies in the box a compressed box replaces.
+    ///   * [`DataOffsetPastSkippedCompressedBoxes`](DemuxError::DataOffsetPastSkippedCompressedBoxes):
+    ///     a `moof` read after a resume takes a base data offset, as for
+    ///     [`resume_at`](Self::resume_at).
     /// * The failures of the [`StructureDataReader`] the boxes of
     ///   structure-data are handed to.
     /// * The failures of [`MediaDataReader::handle_sample_locations`] the
@@ -246,6 +272,19 @@ impl Demuxer {
     /// gathered are dropped with the bytes gathered for them; the tracks
     /// discarded stay discarded.
     ///
+    /// With the feature `compressed-boxes`, the compressed boxes read are
+    /// kept, but those the resume skips are not read, and the offsets a
+    /// `moof` counts from the start of the file may have moved past them. In a
+    /// file known to have been transformed, by a compressed box or an `otyp`
+    /// read, a `moof` read after the resume that takes a base data offset
+    /// fails with
+    /// [`DataOffsetPastSkippedCompressedBoxes`](DemuxError::DataOffsetPastSkippedCompressedBoxes);
+    /// one that counts from itself reads as it does without resuming. A file
+    /// not known so, such as one without an `otyp` resumed before its first
+    /// compressed box, is read as though it had none skipped. A file with
+    /// compressed boxes has no `mfra` (§8.16.1), so the box to resume at is
+    /// the caller's to find, from a `sidx` among others.
+    ///
     /// # Errors
     ///
     /// * The failure the demuxer failed with before, which no resuming
@@ -256,6 +295,7 @@ impl Demuxer {
         }
         self.boxes = BoxReader::starting_at(offset);
         self.structure_data.resume();
+        self.compressed_boxes.resume();
         self.media_data.clear();
         Ok(())
     }
@@ -339,7 +379,6 @@ impl Demuxer {
     /// Answers the header of a box at file level as its type says, and returns the event it is reported with
     fn open(&mut self, header: BoxHeader) -> Result<Option<DemuxEvent>, DemuxError> {
         let byte_range = self.boxes.open_box().ok_or(DemuxError::NoOpenBox)?;
-        #[cfg(feature = "compressed-boxes")]
         self.refuse_compressed_box_with_movie_fragment_random_access(header.box_type())?;
         let event = match file_level::handling(header.box_type()) {
             Handling::Gather => {
@@ -358,21 +397,20 @@ impl Demuxer {
     }
 
     /// Refuses a box of `box_type` that makes the file one with both a compressed box and an `mfra`, which §8.16.1 does not let a file have
-    #[cfg(feature = "compressed-boxes")]
     fn refuse_compressed_box_with_movie_fragment_random_access(
-        &mut self,
+        &self,
         box_type: BoxType,
     ) -> Result<(), DemuxError> {
-        if crate::framing::replacement_type(box_type).is_some() {
-            self.compressed_box.get_or_insert(box_type);
-        }
-        let with_movie_fragment_random_access = box_type == MovieFragmentRandomAccessBox::BOX_TYPE
-            || self.movie_fragment_random_access().is_some();
-        self.compressed_box
-            .filter(|_| with_movie_fragment_random_access)
-            .map_or(Ok(()), |box_type| {
-                Err(DemuxError::CompressedBoxWithMovieFragmentRandomAccess { box_type })
-            })
+        let compressed = if box_type == MovieFragmentRandomAccessBox::BOX_TYPE {
+            self.compressed_boxes.first_box_type()
+        } else if self.movie_fragment_random_access().is_some() {
+            Some(box_type).filter(|&box_type| file_level::is_compressed(box_type))
+        } else {
+            None
+        };
+        compressed.map_or(Ok(()), |box_type| {
+            Err(DemuxError::CompressedBoxWithMovieFragmentRandomAccess { box_type })
+        })
     }
 
     /// Reads the box just gathered, if any, into its value, and returns the event it is reported with
@@ -380,6 +418,8 @@ impl Demuxer {
         let Some(byte_range) = self.boxes.gathered_box_range() else {
             return Ok(None);
         };
+        // Why not the file offset itself: the offsets in a box count in the file as its compressed boxes read back, §8.16.1.
+        let uncompressed_offset = self.compressed_boxes.uncompressed(byte_range.offset());
         if let Some((header, head)) = self.boxes.gathered_head() {
             let identifier = <[u8; 4]>::try_from(head)
                 .map(u32::from_be_bytes)
@@ -387,10 +427,11 @@ impl Demuxer {
                     error: Error::truncated_buffer(IDENTIFIER_BYTES, to_u64(head.len()))
                         .in_container(header.box_type()),
                 })?;
-            let payload_offset = byte_range.offset().saturating_add(header.encoded_len());
+            let payload_offset = uncompressed_offset.saturating_add(header.encoded_len());
             let samples = self
                 .structure_data
                 .handle_identified_media_data(identifier, payload_offset)?;
+            let samples = self.located(samples)?;
             return Ok(Some(DemuxEvent::IdentifiedMediaData {
                 header,
                 byte_range,
@@ -401,8 +442,17 @@ impl Demuxer {
         let Some(raw_box) = self.boxes.gathered_box() else {
             return Ok(None);
         };
-        let Some(value) = file_level::read(raw_box)? else {
-            return Ok(None);
+        let Some(value) = read(
+            &mut self.compressed_boxes,
+            self.payload_limit_bytes,
+            raw_box,
+            byte_range.offset(),
+        )?
+        else {
+            // A compressed box read back into a box of no value, an `ssix`, is reported as any other box.
+            let header = raw_box.header();
+            return Ok(file_level::is_compressed(header.box_type())
+                .then_some(DemuxEvent::Other { header, byte_range }));
         };
         let event = match value {
             Value::FileType(ftyp) => {
@@ -415,15 +465,18 @@ impl Demuxer {
             }
             Value::Movie(moov) => {
                 let samples = self.structure_data.handle_movie(moov)?;
+                let samples = self.located(samples)?;
                 DemuxEvent::Movie {
                     byte_range,
                     samples: self.gather(samples)?,
                 }
             }
             Value::MovieFragment(moof) => {
+                self.refuse_base_data_offset_past_skipped_compressed_boxes(&moof)?;
                 let samples = self
                     .structure_data
-                    .handle_movie_fragment(&moof, byte_range.offset())?;
+                    .handle_movie_fragment(&moof, uncompressed_offset)?;
+                let samples = self.located(samples)?;
                 DemuxEvent::MovieFragment {
                     samples: self.gather(samples)?,
                     movie_fragment: Box::new(moof),
@@ -449,6 +502,58 @@ impl Demuxer {
         Ok(Some(event))
     }
 
+    /// Returns `samples`, which the uncompressed domain locates, located in the file, those in other files as they are (§8.16.1)
+    ///
+    /// # Errors
+    ///
+    /// * [`DataOffsetOutOfRange`](DemuxError::DataOffsetOutOfRange): the
+    ///   media data of a sample lies in a box a compressed box replaces.
+    fn located(&mut self, samples: SampleLocations) -> Result<SampleLocations, DemuxError> {
+        let structure_data = &self.structure_data;
+        let in_this_file = |location: &SampleLocation| {
+            structure_data
+                .data_reference(location.data_reference())
+                .is_some_and(|data_reference| data_reference.entry().is_in_this_file())
+        };
+        let compressed_boxes = &mut self.compressed_boxes;
+        // Why not map them all as below: the locations would be copied into a new list, which a file with no compressed box read has no need of.
+        if compressed_boxes.is_empty() {
+            for location in samples
+                .as_slice()
+                .iter()
+                .filter(|location| in_this_file(location))
+            {
+                compressed_boxes.note_located(location.byte_range().end);
+            }
+            return Ok(samples);
+        }
+        samples.try_map(|location| {
+            if in_this_file(&location) {
+                compressed_boxes.located(location)
+            } else {
+                Ok(location)
+            }
+        })
+    }
+
+    /// Refuses `moof` where a track fragment of it takes a base data offset that a compressed box skipped by a resume may have moved, §8.16.2.2 NOTE 3
+    fn refuse_base_data_offset_past_skipped_compressed_boxes(
+        &self,
+        moof: &MovieFragmentBox,
+    ) -> Result<(), DemuxError> {
+        if !self.compressed_boxes.absolute_offsets_unknown() {
+            return Ok(());
+        }
+        moof.traf
+            .iter()
+            .find(|traf| traf.tfhd.base_data_offset.is_some())
+            .map_or(Ok(()), |traf| {
+                Err(DemuxError::DataOffsetPastSkippedCompressedBoxes {
+                    track_id: traf.tfhd.track_id,
+                })
+            })
+    }
+
     /// Hands the locations of `samples` whose media data is in the file itself to the media data, and returns them all
     fn gather(&mut self, samples: SampleLocations) -> Result<SampleLocations, DemuxError> {
         let structure_data = &self.structure_data;
@@ -460,6 +565,47 @@ impl Demuxer {
             }))?;
         Ok(samples)
     }
+}
+
+/// Reads the box `raw_box` at file offset `offset`, gathered whole, into its value, a compressed box into that of the box it replaces, its payload at most `limit_bytes`, recorded in `compressed_boxes`
+///
+/// # Errors
+///
+/// * The failures of [`framing::decompressed`](crate::framing::decompressed)
+///   and [`file_level::read`].
+/// * The failures of recording a compressed box, as for
+///   `CompressedBoxes::record`.
+fn read(
+    compressed_boxes: &mut CompressedBoxes,
+    limit_bytes: u64,
+    raw_box: RawBox<'_>,
+    offset: u64,
+) -> Result<Option<Value>, DemuxError> {
+    #[cfg(feature = "compressed-boxes")]
+    {
+        let box_type = raw_box.header().box_type();
+        if box_type == isobmff_boxes::OriginalFileTypeBox::BOX_TYPE {
+            compressed_boxes.note_transformed();
+        }
+        if let Some((replacement_type, payload)) =
+            crate::framing::decompressed(raw_box, limit_bytes)?
+        {
+            // §8.16.2.1: the box read back has the header its type and the length of its payload give it.
+            let uncompressed_length =
+                BoxHeader::with_payload_len(replacement_type, to_u64(payload.len()))
+                    .map_or(u64::MAX, |header| header.encoded_len())
+                    .saturating_add(to_u64(payload.len()));
+            let length = raw_box
+                .header()
+                .encoded_len()
+                .saturating_add(to_u64(raw_box.payload().len()));
+            compressed_boxes.record(box_type, offset, length, uncompressed_length)?;
+            return file_level::read_payload(replacement_type, &payload);
+        }
+    }
+    #[cfg(not(feature = "compressed-boxes"))]
+    let _ = (compressed_boxes, limit_bytes, offset);
+    file_level::read(raw_box)
 }
 
 impl Default for Demuxer {
@@ -1294,6 +1440,20 @@ mod tests {
         );
     }
 
+    /// Returns the bytes of the first box of `bytes`, and those after it
+    #[cfg(feature = "compressed-boxes")]
+    fn split_first_box(bytes: &[u8]) -> (&[u8], &[u8]) {
+        let (header, _) = BoxHeader::decode(bytes).unwrap();
+        bytes.split_at(usize::try_from(header.size().total_bytes().unwrap()).unwrap())
+    }
+
+    /// Returns the compressed box of `box_type` that replaces `original`, the bytes of a box, its payload deflated
+    #[cfg(feature = "compressed-boxes")]
+    fn compressed(box_type: [u8; 4], original: &[u8]) -> Vec<u8> {
+        let (_, payload) = BoxHeader::decode(split_first_box(original).0).unwrap();
+        raw_box(box_type, &miniz_oxide::deflate::compress_to_vec(payload, 6))
+    }
+
     /// Returns a file of an `ftyp` of the brand `comp`, then `boxes`
     #[cfg(feature = "compressed-boxes")]
     fn compressed_file(boxes: &[Vec<u8>]) -> Vec<u8> {
@@ -1340,10 +1500,10 @@ mod tests {
     #[cfg(feature = "compressed-boxes")]
     #[test]
     fn a_file_with_both_a_compressed_box_and_an_mfra_is_refused_whichever_comes_first() {
-        let compressed = raw_box(*b"!mof", b"deflated");
+        let compressed = compressed(*b"!six", &encoded(&SegmentIndexBox::default()));
         let mfra = encoded(&isobmff_boxes::MovieFragmentRandomAccessBox::default());
         let refused = Err(DemuxError::CompressedBoxWithMovieFragmentRandomAccess {
-            box_type: BoxType::compact(*b"!mof"),
+            box_type: BoxType::compact(*b"!six"),
         });
 
         assert_eq!(
@@ -1396,6 +1556,207 @@ mod tests {
         assert_eq!(
             (others, demuxer.file_type().map(|ftyp| ftyp.major_brand)),
             (vec![*b"otyp", *b"!mov"], Some(FourCc::new(*b"isom")))
+        );
+    }
+
+    /// Returns a movie file of an `ftyp`, the `moov` of track 1 of two samples, a `between` and an `mdat` of the six bytes of the samples, the `moov` compressed into a `!mov` if `compress`, the offsets counted in the file with it read back
+    #[cfg(feature = "compressed-boxes")]
+    fn movie_before(between: &[u8], compress: bool) -> Vec<u8> {
+        let ftyp = file_type();
+        let moov_at =
+            |data_offset| encoded(&movie([track(1, 10, &[2, 4], &[(1, 2)], &[data_offset])]));
+        let data_offset = [ftyp.len(), moov_at(0).len(), between.len(), 8]
+            .into_iter()
+            .map(to_u64)
+            .fold(0, u64::saturating_add);
+        let moov = moov_at(data_offset);
+        let moov = if compress {
+            compressed(*b"!mov", &moov)
+        } else {
+            moov
+        };
+        [ftyp, moov, between.to_vec(), raw_box(*b"mdat", b"ABCDEF")].concat()
+    }
+
+    #[cfg(feature = "compressed-boxes")]
+    #[test]
+    fn a_compressed_subsegment_index_is_reported_as_another_box_where_it_lies() {
+        // The demuxer reads no value of an `ssix`, so its payload is but the bytes of one.
+        let ssix = compressed(*b"!ssx", &raw_box(*b"ssix", &[0; 8]));
+        let file = compressed_file(core::slice::from_ref(&ssix));
+        let at = to_u64(file.len() - ssix.len());
+
+        assert_eq!(
+            read(&mut Demuxer::new(), &file, usize::MAX).unwrap().seen,
+            [
+                Seen::FileType,
+                Seen::Other(
+                    BoxType::compact(*b"!ssx"),
+                    ByteRange::new(at, Some(to_u64(ssix.len())))
+                ),
+            ]
+        );
+    }
+
+    #[cfg(feature = "compressed-boxes")]
+    #[test]
+    fn the_samples_a_compressed_moov_locates_are_where_they_lie_in_the_file() {
+        let file = movie_before(&[], true);
+        let data = to_u64(file.len()) - 6;
+        let read = read(&mut Demuxer::new(), &file, usize::MAX).unwrap();
+
+        assert_eq!(
+            (read.seen.get(1), read.samples),
+            (
+                Some(&Seen::Movie(vec![
+                    (1, 0, data..data + 2),
+                    (1, 10, data + 2..data + 6)
+                ])),
+                vec![(1, b"AB".to_vec()), (1, b"CDEF".to_vec())]
+            )
+        );
+        assert_eq!(
+            stream(&mut Demuxer::new(), &file, 7),
+            (vec![(1, b"AB".to_vec()), (1, b"CDEF".to_vec())], Ok(()))
+        );
+    }
+
+    #[cfg(feature = "compressed-boxes")]
+    #[test]
+    fn the_samples_of_compressed_moofs_are_those_of_the_moofs_they_replace() {
+        let compressed_fragment = |sequence_number, media_data: &[u8]| {
+            let fragment = fragment_of(sequence_number, Some(0), 2, None, media_data);
+            let (moof, mdat) = split_first_box(&fragment);
+            [compressed(*b"!mof", moof), mdat.to_vec()].concat()
+        };
+        let head = [file_type(), fragmented_movie()].concat();
+        let file = [
+            head.clone(),
+            compressed_fragment(1, b"WXYZ"),
+            compressed_fragment(2, b"abcd"),
+        ]
+        .concat();
+        let samples = vec![
+            (1, b"WX".to_vec()),
+            (1, b"YZ".to_vec()),
+            (1, b"ab".to_vec()),
+            (1, b"cd".to_vec()),
+        ];
+
+        assert_eq!(
+            read(&mut Demuxer::new(), &file, usize::MAX)
+                .unwrap()
+                .samples,
+            samples
+        );
+        assert_eq!(stream(&mut Demuxer::new(), &file, 5), (samples, Ok(())));
+    }
+
+    #[cfg(feature = "compressed-boxes")]
+    #[test]
+    fn a_compressed_box_that_moves_the_media_data_of_a_sample_located_already_is_refused() {
+        let index = compressed(*b"!six", &encoded(&SegmentIndexBox::default()));
+        let file = movie_before(&index, false);
+
+        assert_eq!(
+            read(&mut Demuxer::new(), &file, usize::MAX).map(|_| ()),
+            Err(DemuxError::CompressedBoxBeforeLocatedSample {
+                box_type: BoxType::compact(*b"!six")
+            })
+        );
+    }
+
+    #[cfg(feature = "compressed-boxes")]
+    #[test]
+    fn media_data_in_the_box_a_compressed_box_replaces_or_past_the_compressed_boxes_kept_is_refused()
+     {
+        let ftyp = file_type();
+        let inside = to_u64(ftyp.len() + 8);
+        let moov = encoded(&movie([track(1, 10, &[2, 4], &[(1, 2)], &[inside])]));
+        let inside_file = [ftyp, compressed(*b"!mov", &moov)].concat();
+        let index = compressed(*b"!six", &encoded(&SegmentIndexBox::default()));
+        let two_boxes = compressed_file(&[index.clone(), index.clone()]);
+        let mut both_at = two_boxes.clone();
+        both_at.extend_from_slice(&index);
+
+        assert_eq!(
+            [
+                read(&mut Demuxer::new(), &inside_file, usize::MAX).map(|_| ()),
+                read(
+                    &mut Demuxer::with_limits(DemuxLimits::new().with_compressed_box_count(1)),
+                    &two_boxes,
+                    usize::MAX
+                )
+                .map(|_| ()),
+            ],
+            [
+                Err(DemuxError::DataOffsetOutOfRange { track_id: 1 }),
+                Err(DemuxError::CompressedBoxCountLimitExceeded {
+                    retained_compressed_boxes: 2,
+                    limit_compressed_boxes: 1
+                }),
+            ]
+        );
+    }
+
+    #[cfg(feature = "compressed-boxes")]
+    #[test]
+    fn a_base_data_offset_read_after_a_resume_in_a_file_with_compressed_boxes_is_refused() {
+        let first = fragment(1, Some(0));
+        let (moof, mdat) = split_first_box(&first);
+        let head = [
+            file_type(),
+            fragmented_movie(),
+            compressed(*b"!mof", moof),
+            mdat.to_vec(),
+        ]
+        .concat();
+        let mut moof = MovieFragmentBox::decode(&fragment(2, Some(200))).unwrap().0;
+        if let Some(traf) = moof.traf.first_mut() {
+            traf.tfhd.default_base_is_moof = false;
+            traf.tfhd.base_data_offset = Some(0);
+        }
+        let absolute = [encoded(&moof), raw_box(*b"mdat", b"WXYZ")].concat();
+        let relative = fragment(2, Some(200));
+        let resumed = |second: &[u8]| {
+            let file = [head.clone(), second.to_vec()].concat();
+            let at = to_u64(head.len());
+            let mut resumed_once = false;
+            read_reacting(&mut Demuxer::new(), &file, usize::MAX, |demuxer, event| {
+                if matches!(event, DemuxEvent::MovieFragment { .. }) && !resumed_once {
+                    resumed_once = true;
+                    demuxer.resume_at(at).unwrap();
+                }
+            })
+            .map(|read| read.samples.len())
+        };
+
+        assert_eq!(
+            [resumed(&absolute), resumed(&relative)],
+            [
+                Err(DemuxError::DataOffsetPastSkippedCompressedBoxes { track_id: 1 }),
+                Ok(2)
+            ]
+        );
+    }
+
+    #[cfg(not(feature = "compressed-boxes"))]
+    #[test]
+    fn without_the_feature_a_box_named_as_a_compressed_box_moves_no_file_offset() {
+        let (file, payload) = movie_at_end();
+        let index = raw_box(*b"!six", b"deflated");
+        let file = [
+            file.get(..usize::try_from(payload.end).unwrap()).unwrap(),
+            index.as_slice(),
+            file.get(usize::try_from(payload.end).unwrap()..).unwrap(),
+        ]
+        .concat();
+
+        assert_eq!(
+            read(&mut Demuxer::new(), &file, usize::MAX)
+                .unwrap()
+                .samples,
+            [(1, b"AB".to_vec()), (1, b"CDEF".to_vec())]
         );
     }
 

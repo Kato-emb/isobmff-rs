@@ -54,7 +54,7 @@ pub(crate) enum Value {
 
 /// Returns what becomes of a box at file level of `box_type`
 pub(crate) fn handling(box_type: BoxType) -> Handling {
-    if value_reader(box_type).is_some() {
+    if value_reader(box_type).is_some() || is_compressed(box_type) {
         return Handling::Gather;
     }
     match box_type {
@@ -62,6 +62,17 @@ pub(crate) fn handling(box_type: BoxType) -> Handling {
         IdentifiedMediaDataBox::BOX_TYPE => Handling::IdentifiedMediaData,
         BoxType::Compact(_) | BoxType::Extended(_) => Handling::Other,
     }
+}
+
+/// Returns whether a box of `box_type` is a compressed box, which is gathered and read back into the box it replaces (§8.16)
+pub(crate) fn is_compressed(box_type: BoxType) -> bool {
+    #[cfg(feature = "compressed-boxes")]
+    return crate::framing::replacement_type(box_type).is_some();
+    #[cfg(not(feature = "compressed-boxes"))]
+    return {
+        let _ = box_type;
+        false
+    };
 }
 
 /// Reads a box gathered whole into its value, or returns `None` for a box [`handling`] does not gather
@@ -72,8 +83,17 @@ pub(crate) fn handling(box_type: BoxType) -> Handling {
 ///   names. The failure names that box as the outermost of the path it was
 ///   reached through.
 pub(crate) fn read(raw_box: RawBox<'_>) -> Result<Option<Value>, DemuxError> {
-    value_reader(raw_box.header().box_type())
-        .map(|read_payload| read_payload(raw_box.payload()))
+    read_payload(raw_box.header().box_type(), raw_box.payload())
+}
+
+/// Reads `payload`, that of a box of `box_type`, into its value, or returns `None` for a box [`handling`] does not gather
+///
+/// # Errors
+///
+/// As for [`read`].
+pub(crate) fn read_payload(box_type: BoxType, payload: &[u8]) -> Result<Option<Value>, DemuxError> {
+    value_reader(box_type)
+        .map(|read_payload| read_payload(payload))
         .transpose()
 }
 

@@ -202,13 +202,41 @@ fn gzip_member(member: &[u8]) -> Option<(&[u8], u32, u32)> {
     ))
 }
 
+/// Polynomial of the CRC-32 of IEEE 802.3 that gzip keeps, least significant bit first, RFC 1952 §8
+const CRC32_POLYNOMIAL: u32 = 0xedb8_8320;
+
+/// CRC-32 of each byte alone, which [`crc32`] takes a byte at a time from
+#[expect(
+    clippy::indexing_slicing,
+    reason = "evaluated when compiled, where an index past the table fails the build; the index runs below 256"
+)]
+const CRC32_TABLE: [u32; 256] = {
+    let mut table = [0; 256];
+    let mut index = 0;
+    let mut byte = 0_u32;
+    while index < 256 {
+        let mut crc = byte;
+        let mut bit = 0;
+        while bit < 8 {
+            crc = (crc >> 1) ^ (CRC32_POLYNOMIAL & 0_u32.wrapping_sub(crc & 1));
+            bit += 1;
+        }
+        table[index] = crc;
+        index += 1;
+        byte += 1;
+    }
+    table
+};
+
 /// Returns the CRC-32 of `bytes`, the one of IEEE 802.3 that gzip keeps, RFC 1952 §8
 fn crc32(bytes: &[u8]) -> u32 {
     !bytes.iter().fold(u32::MAX, |crc, &byte| {
-        (0..8).fold(crc ^ u32::from(byte), |crc, _| {
-            let low_bit = crc & 1;
-            (crc >> 1) ^ (0xedb8_8320 & 0_u32.wrapping_sub(low_bit))
-        })
+        let index = (crc ^ u32::from(byte)) & 0xff;
+        let entry = CRC32_TABLE
+            .get(usize::try_from(index).unwrap_or_default())
+            .copied()
+            .unwrap_or_default();
+        entry ^ (crc >> 8)
     })
 }
 
@@ -264,6 +292,11 @@ mod tests {
         member.extend_from_slice(&crc32(payload).to_le_bytes());
         member.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_le_bytes());
         member
+    }
+
+    #[test]
+    fn the_crc_32_of_the_check_string_is_that_of_ieee_802_3() {
+        assert_eq!(crc32(b"123456789"), 0xcbf4_3926);
     }
 
     #[test]
