@@ -27,8 +27,7 @@ mod tests {
     use isobmff::timeline::{Presentation, Timeline};
     use isobmff::{
         BoxDecode, BoxDefinition, BoxHeader, Boxes, ByteRange, DemuxEvent, DemuxLimits, Demuxer,
-        FastStart, FastStartLimits, FastStartOutput, FileStructure, FourCc, Muxer, Output, Sample,
-        SampleLocation,
+        FastStart, FastStartLimits, FileStructure, FourCc, Muxer, Output, Sample, SampleLocation,
     };
     use isobmff_test_support::serde_json::Value;
     use isobmff_test_support::{
@@ -955,26 +954,15 @@ mod tests {
             movie_bytes: 1 << 24,
             box_count: 1024,
         });
+        let mut laid_out = Vec::new();
         while let Some(wanted) = fast_start.wanted_input() {
             match piece(file, wanted, usize::MAX) {
                 [] => fast_start.finish().unwrap(),
                 input => fast_start.handle_input(wanted.offset(), input).unwrap(),
             }
-        }
-        let mut laid_out = Vec::new();
-        while let Some(output) = fast_start.poll_output() {
-            match output {
-                FastStartOutput::Bytes(bytes) => laid_out.extend_from_slice(&bytes),
-                FastStartOutput::Copy(range) => {
-                    let rest = file
-                        .get(usize::try_from(range.offset()).unwrap()..)
-                        .unwrap();
-                    let length = range
-                        .length()
-                        .map_or(rest.len(), |length| usize::try_from(length).unwrap());
-                    laid_out.extend_from_slice(rest.get(..length).unwrap());
-                }
-                _ => {}
+            while let Some(output) = fast_start.poll_output() {
+                assert_eq!(output.offset(), u64::try_from(laid_out.len()).unwrap());
+                laid_out.extend_from_slice(output.bytes());
             }
         }
         laid_out
