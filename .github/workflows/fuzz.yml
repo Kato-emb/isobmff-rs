@@ -54,9 +54,11 @@ jobs:
           path: ${{ runner.temp }}/corpus
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: fuzz-corpus-${{ matrix.target }}-
+      # fuzz/seeds holds files of what the conformance files have none of, such
+      # as the samples of an imda.
       - run: |
           mkdir -p "$RUNNER_TEMP/seeds" "$RUNNER_TEMP/corpus"
-          cp "$RUNNER_TEMP"/conformance/*.mp4 "$RUNNER_TEMP"/conformance/compressed_boxes/*.mp4 "$RUNNER_TEMP/seeds/"
+          cp "$RUNNER_TEMP"/conformance/*.mp4 "$RUNNER_TEMP"/conformance/compressed_boxes/*.mp4 fuzz/seeds/*.mp4 "$RUNNER_TEMP/seeds/"
       # One worker per core, with LeakSanitizer, as in ci.yml. A failure stops
       # the run, and its input lands in fuzz/artifacts.
       - run: cargo fuzz run "$TARGET" --target x86_64-unknown-linux-gnu --sanitizer leak "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/seeds" -- -fork="$(nproc)" -max_total_time=3600
