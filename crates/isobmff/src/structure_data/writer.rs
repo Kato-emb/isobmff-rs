@@ -30,6 +30,16 @@ pub(crate) enum StructureDataWriter {
     NonFragmented(SampleTableWriter),
 }
 
+impl StructureDataWriter {
+    /// Returns the movie the writer was made from, in the form it writes it
+    pub(crate) const fn movie(&self) -> &MovieBox {
+        match self {
+            Self::Fragmented(writer) => writer.movie(),
+            Self::NonFragmented(writer) => writer.movie(),
+        }
+    }
+}
+
 /// Writer of the movie fragments of a movie, numbered on from `sequence_number`
 #[derive(Debug)]
 pub(crate) struct MovieFragmentWriter {
@@ -155,7 +165,7 @@ impl MovieFragmentWriter {
     ///
     /// * [`Box`](MuxError::Box): the `mfra` is longer than its `mfro` counts.
     pub(crate) fn finish(
-        self,
+        &mut self,
     ) -> Result<
         (
             Option<MovieFragmentRandomAccessBox>,
@@ -165,10 +175,16 @@ impl MovieFragmentWriter {
     > {
         let mfra = self
             .random_access
+            .take()
             .map(RandomAccessTables::finish)
             .transpose()?;
 
-        Ok((mfra, self.segment_index.map(SubsegmentTable::finish)))
+        Ok((mfra, self.segment_index.take().map(SubsegmentTable::finish)))
+    }
+
+    /// Returns the movie the writer was made from
+    pub(crate) fn into_movie(self) -> MovieBox {
+        self.movie
     }
 }
 
@@ -186,6 +202,11 @@ impl SampleTableWriter {
         let tables = movie.trak.iter().map(|_| TrackTable::default()).collect();
 
         Ok(Self { movie, tables })
+    }
+
+    /// Returns the movie the writer was made from, its sample tables those of the samples to come
+    pub(crate) const fn movie(&self) -> &MovieBox {
+        &self.movie
     }
 
     /// Adds `samples`, whose media data lies in their order from file offset `data_offset`, to the sample tables

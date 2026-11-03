@@ -89,6 +89,8 @@ pub struct Muxer {
     file_structure: FileStructure,
     boxes: BoxWriter,
     structure_data: Option<StructureDataWriter>,
+    /// Movie the muxer wrote, once it is finished
+    written_movie: Option<MovieBox>,
     media_data: MediaDataWriter,
     /// Boxes written and not yet polled, in the order they lie in the file
     output: VecDeque<Vec<u8>>,
@@ -107,6 +109,7 @@ impl Muxer {
             file_structure,
             boxes: BoxWriter::new(),
             structure_data: None,
+            written_movie: None,
             media_data: MediaDataWriter,
             output: VecDeque::new(),
             held: Vec::new(),
@@ -190,7 +193,8 @@ impl Muxer {
     /// not fragmented: [`finish`](Self::finish) replaces them with the
     /// duration of the samples of each track and the longest of those. A
     /// fragmented file or a segment writes them as `movie` gives them. A
-    /// movie read by a [`Demuxer`](crate::Demuxer) is taken as it is.
+    /// movie read by a [`Demuxer`](crate::Demuxer) is taken as it is, and
+    /// [`movie`](Self::movie) returns the movie in the form the muxer uses.
     ///
     /// # Errors
     ///
@@ -334,10 +338,13 @@ impl Muxer {
         let structure_data = self.structure_data.take().ok_or(MuxError::MissingMovie)?;
         let bytes = match structure_data {
             StructureDataWriter::NonFragmented(writer) => {
-                Some(write_box(&mut self.boxes, &writer.finish())?)
+                let movie = self.written_movie.insert(writer.finish());
+                Some(write_box(&mut self.boxes, movie)?)
             }
-            StructureDataWriter::Fragmented(writer) => {
-                let (mfra, sidx) = writer.finish()?;
+            StructureDataWriter::Fragmented(mut writer) => {
+                let finished = writer.finish();
+                self.written_movie = Some(writer.into_movie());
+                let (mfra, sidx) = finished?;
                 if let Some(sidx) = sidx {
                     // Why not self.boxes: it counts file offsets in the order
                     // boxes are written, and the sidx goes before boxes it has
@@ -355,6 +362,23 @@ impl Muxer {
         self.finished = true;
 
         Ok(())
+    }
+
+    /// Returns the movie in the form the muxer takes it in, as [`handle_movie`](Self::handle_movie) sets out
+    ///
+    /// It is `None` until [`handle_movie`](Self::handle_movie) takes a movie.
+    /// For a fragmented file it is the `moov` the muxer wrote, and for a
+    /// segment the `moov` of its initialization segment, which the muxer does
+    /// not write. For a file that is not fragmented it is the `moov` that
+    /// [`finish`](Self::finish) writes: its sample tables and durations are
+    /// those of the samples once [`finish`](Self::finish) is called, and
+    /// before it the tables declare no sample.
+    #[must_use]
+    pub const fn movie(&self) -> Option<&MovieBox> {
+        match &self.structure_data {
+            Some(writer) => Some(writer.movie()),
+            None => self.written_movie.as_ref(),
+        }
     }
 
     /// Refuses a call once the file is finished
@@ -502,6 +526,46 @@ mod tests {
                 ),
             ],
         )
+    }
+
+    #[test]
+    fn the_movie_of_a_fragmented_file_or_a_segment_declares_no_sample_and_has_a_trex() {
+        let mut declaring = one_track();
+        if let Some(trak) = declaring.trak.first_mut() {
+            trak.mdia.minf.stbl = track(1, 10, &[2], &[(1, 1)], &[0]).mdia.minf.stbl;
+        }
+
+        for file_structure in [
+            FileStructure::Fragmented {
+                first_sequence_number: 1,
+                random_access: false,
+            },
+            FileStructure::Segment {
+                first_sequence_number: 1,
+                segment_index: false,
+            },
+        ] {
+            let mut muxer = Muxer::new(file_structure);
+            assert_eq!(muxer.movie(), None);
+            muxer.handle_movie(declaring.clone()).unwrap();
+            assert_eq!(
+                muxer.movie(),
+                Some(&one_fragmented_track()),
+                "{file_structure:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_movie_of_a_finished_file_that_is_not_fragmented_is_the_moov_it_wrote_without_an_mvex() {
+        let mut muxer = Muxer::new(FileStructure::NonFragmented);
+        muxer.handle_movie(one_fragmented_track()).unwrap();
+        muxer.handle_samples(two_samples()).unwrap();
+        muxer.finish().unwrap();
+
+        let output = output(&mut muxer);
+        let moov = MovieBox::decode(output.last().unwrap()).unwrap().0;
+        assert_eq!((muxer.movie(), moov.mvex.as_ref()), (Some(&moov), None));
     }
 
     #[test]
