@@ -392,6 +392,66 @@ pub struct SampleLocations {
     locations: vec::IntoIter<SampleLocation>,
 }
 
+impl SampleLocations {
+    /// Returns the locations left, by track in decoding order (§8.6.1.2)
+    ///
+    /// The chunks of a track need not lie in the file in the order of their
+    /// decoding times (§8.7.5), so the order of the media data is not the
+    /// order a decoder takes the samples in. The locations come by track ID,
+    /// then by decoding time; samples of one decoding time come in the order
+    /// their media data lies. The decoding times of tracks count in the
+    /// timescales of their media, so the order across tracks is the
+    /// caller's.
+    ///
+    /// # Examples
+    ///
+    /// A caller that can seek reads the samples of the file in decoding
+    /// order, each from where its media data lies:
+    ///
+    /// ```
+    /// use isobmff::{DemuxEvent, Demuxer};
+    ///
+    /// // Chunk 2 of the track lies before chunk 1
+    /// let file: &[u8] = include_bytes!("../../tests/data/out_of_order.mp4");
+    /// let mut demuxer = Demuxer::new();
+    /// let mut locations = Vec::new();
+    /// while let Some(wanted) = demuxer.wanted_input() {
+    ///     let input = file.get(usize::try_from(wanted.offset())?..).unwrap_or_default();
+    ///     let event = match input {
+    ///         [] => demuxer.finish(),
+    ///         input => demuxer.handle_input(wanted.offset(), input),
+    ///     };
+    ///     while demuxer.poll_sample().is_some() {}
+    ///     if let Some(DemuxEvent::Movie { samples, .. }) = event? {
+    ///         locations = samples.into_decoding_order();
+    ///     }
+    /// }
+    ///
+    /// // Seek to the media data of each sample, and read it
+    /// let data = locations.iter().map(|location| {
+    ///     let range = location.byte_range();
+    ///     file.get(usize::try_from(range.start)?..usize::try_from(range.end)?).ok_or("short".into())
+    /// }).collect::<Result<Vec<_>, Box<dyn core::error::Error>>>()?;
+    /// // Chunk 1 holds the sample of decoding time 0
+    /// assert_eq!(data, [b"CD", b"AB"]);
+    /// # Ok::<(), Box<dyn core::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn into_decoding_order(self) -> Vec<SampleLocation> {
+        let mut locations: Vec<_> = self.locations.collect();
+        // Why not a stable sort: it allocates scratch in proportion to the locations; the start of the media data breaks ties instead.
+        locations.sort_unstable_by_key(|location| {
+            let properties = location.properties();
+            (
+                properties.track_id,
+                properties.decoding_time,
+                location.byte_range().start,
+            )
+        });
+        locations
+    }
+}
+
 impl Iterator for SampleLocations {
     type Item = SampleLocation;
 
@@ -509,6 +569,34 @@ mod tests {
                 (2, 0, 200..250),
                 (1, 2048, 300..304),
                 (1, 3072, 304..308),
+            ]
+        );
+    }
+
+    #[test]
+    fn chunks_laid_out_of_decoding_order_come_by_track_in_decoding_order() {
+        let audio = track(2, 1024, &[4, 4], &[(1, 1)], &[300, 100]);
+        let video = track(1, 3000, &[50, 50], &[(1, 1)], &[450, 350]);
+        let locations = StructureDataReader::new(UNLIMITED)
+            .handle_movie(movie([audio, video]))
+            .unwrap();
+
+        assert_eq!(
+            placed(&locations.clone().collect::<Vec<_>>()),
+            [
+                (2, 1024, 100..104),
+                (2, 0, 300..304),
+                (1, 3000, 350..400),
+                (1, 0, 450..500),
+            ]
+        );
+        assert_eq!(
+            placed(&locations.into_decoding_order()),
+            [
+                (1, 0, 450..500),
+                (1, 3000, 350..400),
+                (2, 0, 300..304),
+                (2, 1024, 100..104),
             ]
         );
     }
