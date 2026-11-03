@@ -30,6 +30,10 @@ name = "dump_boxes"
 path = "dump_boxes.rs"
 
 [[example]]
+name = "fast_start"
+path = "fast_start.rs"
+
+[[example]]
 name = "remux"
 path = "remux.rs"
 

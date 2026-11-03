@@ -89,7 +89,9 @@ fn value_reader(box_type: BoxType) -> Option<ReadPayload> {
 }
 
 /// Reads `payload` as the box `Decoded`, naming that box on the path of a failure
-fn decode<Decoded: BoxDecode + BoxDefinition>(payload: &[u8]) -> Result<Decoded, DemuxError> {
+pub(crate) fn decode<Decoded: BoxDecode + BoxDefinition>(
+    payload: &[u8],
+) -> Result<Decoded, DemuxError> {
     Decoded::decode_payload(payload).map_err(|error| DemuxError::Box {
         error: error.in_container(Decoded::BOX_TYPE),
     })

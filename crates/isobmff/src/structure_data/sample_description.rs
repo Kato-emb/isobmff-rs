@@ -111,7 +111,7 @@ pub(super) fn data_reference(movie: &MovieBox, key: DataReferenceKey) -> Option<
 /// in [`MuxError`]. Reading a file refuses the same ones but those whose
 /// media data is in another file, which it locates in that file.
 #[derive(Clone, Copy, Debug)]
-pub(super) enum DataReferenceRefusal {
+pub(crate) enum DataReferenceRefusal {
     /// The `stsd` has no entry `sample_description_index`, or the entry is too short to hold a `data_reference_index`
     UnknownSampleDescriptionIndex {
         track_id: u32,
@@ -176,7 +176,7 @@ impl From<DataReferenceRefusal> for MuxError {
 /// * The [`DataReferenceRefusal`] of a sample entry the `stsd` has none of,
 ///   of a data reference entry the `dref` has none of, and of one that names
 ///   another file or an `IdentifiedMediaDataBox`.
-pub(super) fn data_reference_index(
+pub(crate) fn data_reference_index(
     trak: &TrackBox,
     sample_description_index: u32,
 ) -> Result<u16, DataReferenceRefusal> {
