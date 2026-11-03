@@ -42,6 +42,14 @@
 //! gathered, and their bytes are not wanted. The events carry the location of
 //! every sample.
 //!
+//! The media data of a track may be in an `IdentifiedMediaDataBox` (`imda`,
+//! §8.1.4) of the file, which an entry of its data reference names by its
+//! `imda_identifier` or by the sequence number of the movie fragment (§8.7.2).
+//! The demuxer gathers those samples as it does the others: those an `imda`
+//! read before holds come with their `moov` or `moof`, and those of an `imda`
+//! read after it come with the
+//! [`IdentifiedMediaData`](DemuxEvent::IdentifiedMediaData) event of the box.
+//!
 //! The media data of a track may be in another file, which an entry of its
 //! data reference names (§8.7.2). The demuxer locates those samples in that
 //! file and does not gather them. Each location carries the
@@ -79,7 +87,7 @@
 //! for (key, locations) in by_key {
 //!     // The demuxer gathers the samples in the file itself
 //!     let entry = demuxer.data_reference(key).ok_or("no entry")?.entry();
-//!     if entry.is_in_same_file() {
+//!     if entry.is_in_this_file() {
 //!         continue;
 //!     }
 //!     // The entry names the file the byte ranges of the locations are in

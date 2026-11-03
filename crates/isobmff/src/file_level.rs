@@ -25,6 +25,8 @@ pub(crate) enum Handling {
     Gather,
     /// Media data box, skipped
     MediaData,
+    /// Identified media data box, its `imda_identifier` read and the rest skipped
+    IdentifiedMediaData,
     /// Any other box, skipped
     Other,
 }
@@ -52,7 +54,8 @@ pub(crate) fn handling(box_type: BoxType) -> Handling {
         return Handling::Gather;
     }
     match box_type {
-        MediaDataBox::BOX_TYPE | IdentifiedMediaDataBox::BOX_TYPE => Handling::MediaData,
+        MediaDataBox::BOX_TYPE => Handling::MediaData,
+        IdentifiedMediaDataBox::BOX_TYPE => Handling::IdentifiedMediaData,
         BoxType::Compact(_) | BoxType::Extended(_) => Handling::Other,
     }
 }
@@ -177,7 +180,7 @@ mod tests {
                     .unwrap_or(file_length.saturating_sub(byte_range.offset()));
                 match handling(header.box_type()) {
                     Handling::Gather => reader.gather(u64::MAX).unwrap(),
-                    Handling::MediaData | Handling::Other => {
+                    Handling::MediaData | Handling::IdentifiedMediaData | Handling::Other => {
                         reader.skip().unwrap();
                         mapped.push((header.box_type(), total, None));
                     }

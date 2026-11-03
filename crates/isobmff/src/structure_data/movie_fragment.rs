@@ -9,7 +9,7 @@ use isobmff_boxes::{
 };
 use isobmff_core::BoxEncode;
 
-use super::sample_description::{data_reference_index, located_data_reference};
+use super::sample_description::{DataOrigin, data_reference_index, located_data_reference};
 use super::sample_table::expand;
 use crate::error::{DemuxError, MuxError};
 use crate::framing::to_u64;
@@ -36,6 +36,15 @@ pub(super) fn sample_count(moof: &MovieFragmentBox) -> u64 {
 /// the `tfhd` says so or the track fragment is the first of the `moof`, else
 /// the end of the data of the track fragment before it. A run without a data
 /// offset starts where the run before it ends.
+///
+/// The samples of a track fragment whose data reference entry names an
+/// `IdentifiedMediaDataBox`, by its `imda_identifier` or by the
+/// `sequence_number` of the `moof`, count from the first byte of the payload
+/// of that box where the `tfhd` gives a `base_data_offset` or the track
+/// fragment is the first of the `moof`, and is not based on the `moof`
+/// (Table 6). `identified` takes the index in `locations` and the
+/// `imda_identifier` of each sample whose location so counts, the end of the
+/// data before a track fragment counting from where that data counts.
 ///
 /// The decoding time of the first sample of a track fragment is the one its
 /// `tfdt` gives, else the one its track has reached in `decoding_times`
@@ -65,10 +74,11 @@ pub(super) fn resolve_fragment(
     moof: &MovieFragmentBox,
     moof_offset: u64,
     locations: &mut Vec<SampleLocation>,
+    identified: &mut Vec<(usize, u32)>,
     leniencies: &mut Vec<Leniency>,
 ) -> Result<(), DemuxError> {
-    let mut previous_end = moof_offset;
-    for traf in &moof.traf {
+    let mut previous_end = (None, moof_offset);
+    for (position, traf) in moof.traf.iter().enumerate() {
         let tfhd = &traf.tfhd;
         let track_id = tfhd.track_id;
         let (track_position, (trak, decoding_time)) = movie
@@ -118,21 +128,30 @@ pub(super) fn resolve_fragment(
                 .unwrap_or(trex.default_sample_flags),
         };
 
-        let base = tfhd
-            .base_data_offset
-            .unwrap_or(if tfhd.default_base_is_moof {
-                moof_offset
-            } else {
-                previous_end
-            });
+        let declares_samples =
+            !tfhd.duration_is_empty && traf.trun.iter().any(|trun| run_sample_count(trun) > 0);
+        let located = declares_samples
+            .then(|| {
+                located_data_reference(trak, track_position, defaults.sample_description_index)
+            })
+            .transpose()?;
+        let identifier = located.and_then(|(_, origin)| match origin {
+            DataOrigin::File => None,
+            DataOrigin::IdentifiedMediaData(identifier) => Some(identifier),
+            DataOrigin::SequenceNumber => Some(moof.mfhd.sequence_number),
+        });
+        let (counts_from, base) = match (tfhd.base_data_offset, tfhd.default_base_is_moof) {
+            (Some(base_data_offset), _) => (identifier, base_data_offset),
+            (None, true) => (None, moof_offset),
+            (None, false) if position == 0 => (identifier, identifier.map_or(moof_offset, |_| 0)),
+            (None, false) => previous_end,
+        };
         let mut data_offset = base;
         if tfhd.duration_is_empty {
             time = time
                 .checked_add(u64::from(defaults.sample_duration))
                 .ok_or(DemuxError::DecodingTimeOverflow { track_id })?;
-        } else if traf.trun.iter().any(|trun| run_sample_count(trun) > 0) {
-            let data_reference =
-                located_data_reference(trak, track_position, defaults.sample_description_index)?;
+        } else if let Some((data_reference, _)) = located {
             for trun in &traf.trun {
                 if let Some(offset) = trun.data_offset {
                     data_offset = base
@@ -146,6 +165,9 @@ pub(super) fn resolve_fragment(
                     let data_end = data_offset
                         .checked_add(u64::from(sample_size))
                         .ok_or(DemuxError::DataOffsetOutOfRange { track_id })?;
+                    if let Some(identifier) = counts_from {
+                        identified.push((locations.len(), identifier));
+                    }
                     locations.push(SampleLocation::new(
                         SampleProperties {
                             track_id,
@@ -175,7 +197,7 @@ pub(super) fn resolve_fragment(
             after_sample: reached.is_some_and(|reached| reached.after_sample)
                 || locations.len() > earlier_samples,
         });
-        previous_end = data_offset;
+        previous_end = (counts_from, data_offset);
     }
 
     Ok(())
@@ -562,6 +584,51 @@ mod tests {
     }
 
     #[test]
+    fn a_track_fragment_of_samples_in_an_imda_counts_from_its_payload_as_table_6_sets_out() {
+        let mut movie = fragmented_movie();
+        let mut imdt = isobmff_boxes::DataEntryImdaBox::default();
+        imdt.imda_ref_identifier = 7;
+        for (trak, entry) in movie.trak.iter_mut().zip([
+            isobmff_boxes::DataEntry::Imda(imdt),
+            isobmff_boxes::DataEntry::SeqNumImda(isobmff_boxes::DataEntrySeqNumImdaBox::default()),
+        ]) {
+            *trak = track(trak.tkhd.track_id, 10, &[], &[], &[]);
+            trak.mdia.minf.dinf.dref.data_entries = Vec::from([entry]);
+        }
+        let mut reader = reader_of(movie);
+        reader.handle_identified_media_data(7, 5000).unwrap();
+        reader.handle_identified_media_data(3, 9000).unwrap();
+        let mut first = moof([traf_from(1, 0), traf_from(2, 0)]);
+        first.mfhd.sequence_number = 3;
+        if let Some(traf) = first.traf.first_mut() {
+            traf.trun
+                .iter_mut()
+                .for_each(|trun| trun.data_offset = Some(4));
+        }
+        let mut based = traf_from(2, 0);
+        based.tfhd.base_data_offset = Some(100);
+        let mut on_moof = traf_from(1, 0);
+        on_moof.tfhd.default_base_is_moof = true;
+        on_moof
+            .trun
+            .iter_mut()
+            .for_each(|trun| trun.data_offset = Some(40));
+        let mut second = moof([based, on_moof]);
+        second.mfhd.sequence_number = 3;
+
+        assert_eq!(
+            [
+                resolve(&mut reader, &first).unwrap(),
+                resolve(&mut reader, &second).unwrap()
+            ],
+            [
+                Vec::from([(1, 0, 5004..5012), (2, 0, 5012..5020)]),
+                Vec::from([(1, 0, 1040..1048), (2, 0, 9100..9108)]),
+            ]
+        );
+    }
+
+    #[test]
     fn a_run_without_a_data_offset_starts_where_the_run_before_it_ends() {
         let moof = moof([traf(1, &[(1, Some(200)), (1, None), (1, Some(100))])]);
 
@@ -775,6 +842,8 @@ mod tests {
     {
         let mut reader = StructureDataReader::new(StructureDataLimits {
             leniency_count: 1,
+            identified_media_data_count: 65_536,
+            unresolved_sample_count: 1_048_576,
             ..UNLIMITED
         });
         reader.handle_movie(fragmented_movie()).unwrap();

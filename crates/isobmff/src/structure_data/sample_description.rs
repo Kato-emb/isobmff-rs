@@ -28,6 +28,8 @@ use crate::sample::DataReferenceKey;
 ///     segment_index_count: 1024,
 ///     subsegment_count: 1_048_576,
 ///     leniency_count: 65_536,
+///     identified_media_data_count: 65_536,
+///     unresolved_sample_count: 1_048_576,
 /// });
 /// reader.handle_movie(movie)?;
 ///
@@ -222,7 +224,18 @@ pub(crate) fn data_reference_index(
     }
 }
 
-/// Returns the key of the entry of the `dref` of `trak`, the track at `track_position` of the movie, that names where the samples sample entry `sample_description_index` describes are, in the file itself or in another
+/// Where the data offsets of the samples a data reference entry names count from, ISO/IEC 14496-12 §6.1 Table 1
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum DataOrigin {
+    /// The start of the file the entry names, the file itself or another
+    File,
+    /// The first byte of the payload of the `IdentifiedMediaDataBox` of this `imda_identifier`, which a `DataEntryImdaBox` names
+    IdentifiedMediaData(u32),
+    /// The first byte of the payload of the `IdentifiedMediaDataBox` whose `imda_identifier` is the `sequence_number` of the movie fragment of the samples, as a `DataEntrySeqNumImdaBox` says
+    SequenceNumber,
+}
+
+/// Returns the key of the entry of the `dref` of `trak`, the track at `track_position` of the movie, that names where the samples sample entry `sample_description_index` describes are, and where their data offsets count from
 ///
 /// # Errors
 ///
@@ -230,41 +243,54 @@ pub(crate) fn data_reference_index(
 ///   [`UnknownDataReferenceIndex`](DemuxError::UnknownDataReferenceIndex):
 ///   the `stsd` has no such sample entry, or the `dref` no entry the sample
 ///   entry names.
-/// * [`UnsupportedDataReference`](DemuxError::UnsupportedDataReference): the
-///   entry names an `IdentifiedMediaDataBox`.
 pub(super) fn located_data_reference(
     trak: &TrackBox,
     track_position: usize,
     sample_description_index: u32,
-) -> Result<DataReferenceKey, DemuxError> {
-    match data_reference_index(trak, sample_description_index) {
+) -> Result<(DataReferenceKey, DataOrigin), DemuxError> {
+    let track_id = trak.tkhd.track_id;
+    let data_reference_index = match data_reference_index(trak, sample_description_index) {
         Ok(data_reference_index)
-        | Err(DataReferenceRefusal::ExternalDataReference {
+        | Err(
+            DataReferenceRefusal::ExternalDataReference {
+                data_reference_index,
+                ..
+            }
+            | DataReferenceRefusal::UnsupportedDataReference {
+                data_reference_index,
+                ..
+            },
+        ) => data_reference_index,
+        Err(DataReferenceRefusal::UnknownSampleDescriptionIndex {
+            sample_description_index,
+            ..
+        }) => {
+            return Err(DemuxError::UnknownSampleDescriptionIndex {
+                track_id,
+                sample_description_index,
+            });
+        }
+        Err(DataReferenceRefusal::UnknownDataReferenceIndex {
             data_reference_index,
             ..
-        }) => Ok(DataReferenceKey::of(track_position, data_reference_index)),
-        Err(DataReferenceRefusal::UnknownSampleDescriptionIndex {
-            track_id,
-            sample_description_index,
-        }) => Err(DemuxError::UnknownSampleDescriptionIndex {
-            track_id,
-            sample_description_index,
-        }),
-        Err(DataReferenceRefusal::UnknownDataReferenceIndex {
-            track_id,
-            data_reference_index,
-        }) => Err(DemuxError::UnknownDataReferenceIndex {
-            track_id,
-            data_reference_index,
-        }),
-        Err(DataReferenceRefusal::UnsupportedDataReference {
-            track_id,
-            data_reference_index,
-        }) => Err(DemuxError::UnsupportedDataReference {
-            track_id,
-            data_reference_index,
-        }),
-    }
+        }) => {
+            return Err(DemuxError::UnknownDataReferenceIndex {
+                track_id,
+                data_reference_index,
+            });
+        }
+    };
+    let entries = &trak.mdia.minf.dinf.dref.data_entries;
+    let origin = match nth_from_one(entries, u32::from(data_reference_index)) {
+        Some(DataEntry::Imda(imdt)) => DataOrigin::IdentifiedMediaData(imdt.imda_ref_identifier),
+        Some(DataEntry::SeqNumImda(_)) => DataOrigin::SequenceNumber,
+        _ => DataOrigin::File,
+    };
+
+    Ok((
+        DataReferenceKey::of(track_position, data_reference_index),
+        origin,
+    ))
 }
 
 /// Returns entry `index` of a table that numbers its entries from 1

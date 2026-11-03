@@ -17,7 +17,7 @@ use isobmff_boxes::{
 use isobmff_core::{BoxDefinition, BoxType};
 
 use self::sample_flags::SampleFlagsTables;
-use super::sample_description::located_data_reference;
+use super::sample_description::{DataOrigin, located_data_reference};
 use crate::error::{DemuxError, MuxError};
 use crate::framing::to_u64;
 use crate::leniency::{Leniency, SampleTableDisagreement};
@@ -56,6 +56,12 @@ pub(super) fn sample_count(trak: &TrackBox) -> u64 {
 /// entries of a table past the last sample are left out, as are the sample
 /// numbers the `stss` marks out of order.
 ///
+/// A sample whose data reference entry is a `DataEntryImdaBox` lies at its
+/// chunk offset from the first byte of the payload of the
+/// `IdentifiedMediaDataBox` the entry names (§8.7.5): its location counts
+/// from there, and `identified` takes its index in `locations` and the
+/// `imda_identifier`.
+///
 /// # Errors
 ///
 /// * [`SampleTableMismatch`](DemuxError::SampleTableMismatch): the track
@@ -65,6 +71,9 @@ pub(super) fn sample_count(trak: &TrackBox) -> u64 {
 ///   `stco` or the `co64` does not have.
 /// * The failures of the sample entry and the data reference entry each run
 ///   of chunks names.
+/// * [`UnsupportedDataReference`](DemuxError::UnsupportedDataReference): a
+///   run of chunks names a `DataEntrySeqNumImdaBox`, which names only the
+///   media data of samples in a movie fragment (§8.7.2).
 /// * [`DataOffsetOutOfRange`](DemuxError::DataOffsetOutOfRange),
 ///   [`DecodingTimeOverflow`](DemuxError::DecodingTimeOverflow): the offsets or
 ///   the decoding times run past 64 bits.
@@ -72,6 +81,7 @@ pub(super) fn resolve_track(
     trak: &TrackBox,
     track_position: usize,
     locations: &mut Vec<SampleLocation>,
+    identified: &mut Vec<(usize, u32)>,
     leniencies: &mut Vec<Leniency>,
 ) -> Result<u64, DemuxError> {
     let track_id = trak.tkhd.track_id;
@@ -129,11 +139,22 @@ pub(super) fn resolve_track(
     let mut laid_out = 0_u64;
     for (chunk, chunk_offset) in (1_u32..).zip(chunk_offsets(stbl)) {
         if let Some(next) = runs.next_if(|next| next.first_chunk == chunk) {
-            let data_reference =
+            let (data_reference, origin) =
                 located_data_reference(trak, track_position, next.sample_description_index)?;
-            run = Some((next, data_reference));
+            let identifier = match origin {
+                DataOrigin::File => None,
+                DataOrigin::IdentifiedMediaData(identifier) => Some(identifier),
+                DataOrigin::SequenceNumber => {
+                    let (_, data_reference_index) = data_reference.unpacked();
+                    return Err(DemuxError::UnsupportedDataReference {
+                        track_id,
+                        data_reference_index,
+                    });
+                }
+            };
+            run = Some((next, data_reference, identifier));
         }
-        let Some((run, data_reference)) = run else {
+        let Some((run, data_reference, identifier)) = run else {
             return Err(mismatch(SampleToChunkBox::BOX_TYPE));
         };
 
@@ -150,6 +171,9 @@ pub(super) fn resolve_track(
             let data_end = data_offset
                 .checked_add(u64::from(size))
                 .ok_or(DemuxError::DataOffsetOutOfRange { track_id })?;
+            if let Some(identifier) = identifier {
+                identified.push((locations.len(), identifier));
+            }
             locations.push(SampleLocation::new(
                 SampleProperties {
                     track_id,
@@ -711,6 +735,8 @@ pub(crate) mod fixtures {
         segment_index_count: u64::MAX,
         subsegment_count: u64::MAX,
         leniency_count: u64::MAX,
+        identified_media_data_count: u64::MAX,
+        unresolved_sample_count: u64::MAX,
     };
 
     /// Returns the movie of `tracks`

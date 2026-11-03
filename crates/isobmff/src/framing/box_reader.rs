@@ -1,7 +1,6 @@
 //! [`BoxReader`], which frames the boxes of a file out of bytes that arrive in pieces
 
 use alloc::vec::Vec;
-use core::ops::Range;
 
 use isobmff_core::{BoxHeader, ErrorKind, RawBox};
 
@@ -111,9 +110,10 @@ enum Progress {
         end: Option<u64>,
         answer: Answer,
     },
-    /// Box in `gathered`, its header `header_len` bytes, until the next input: whole where `whole`, otherwise the head of its payload
+    /// Box of header `header` at file offset `offset` in `gathered`, until the next input: whole where `whole`, otherwise the head of its payload
     Gathered {
-        header_len: u64,
+        header: BoxHeader,
+        offset: u64,
         whole: bool,
     },
     Failed(DemuxError),
@@ -376,25 +376,41 @@ impl BoxReader {
             .map(|(raw_box, _)| raw_box)
     }
 
-    /// Returns the head of the payload [`gather_head`](Self::gather_head) gathered, from its [`BoxEvent::End`] until the next call to [`handle_input`](Self::handle_input) or [`finish`](Self::finish)
+    /// Returns the header of the box [`gather_head`](Self::gather_head) gathered the head of, and that head, from its [`BoxEvent::End`] until the next call to [`handle_input`](Self::handle_input) or [`finish`](Self::finish)
     #[must_use]
-    pub fn gathered_head(&self) -> Option<&[u8]> {
+    pub fn gathered_head(&self) -> Option<(BoxHeader, &[u8])> {
         let Progress::Gathered {
-            header_len,
+            header,
             whole: false,
+            ..
         } = self.progress
         else {
             return None;
         };
-        self.gathered.get(usize::try_from(header_len).ok()?..)
+        let head = self
+            .gathered
+            .get(usize::try_from(header.encoded_len()).ok()?..)?;
+        Some((header, head))
     }
 
-    /// Returns where the box [`gathered_box`](Self::gathered_box) returns lies in the file, header included
-    pub(crate) fn gathered_box_range(&self) -> Option<Range<u64>> {
-        if !matches!(self.progress, Progress::Gathered { whole: true, .. }) {
+    /// Returns where the box [`gathered_box`](Self::gathered_box) or [`gathered_head`](Self::gathered_head) returns lies in the file, header included
+    ///
+    /// The length is `None` for a box whose head was gathered and whose size
+    /// runs to the end of the file.
+    pub(crate) fn gathered_box_range(&self) -> Option<ByteRange> {
+        let Progress::Gathered {
+            header,
+            offset,
+            whole,
+        } = self.progress
+        else {
             return None;
-        }
-        Some(self.position.saturating_sub(to_u64(self.gathered.len()))..self.position)
+        };
+        let length = header
+            .size()
+            .total_bytes()
+            .or_else(|| whole.then(|| to_u64(self.gathered.len())));
+        Some(ByteRange::new(offset, length))
     }
 
     /// Fails the reader with `failure`, of a box it read, which every call after it returns
@@ -493,10 +509,10 @@ impl BoxReader {
             Progress::Header { needed } => self.read_header(&mut input, needed),
             Progress::Payload {
                 header,
+                offset,
                 end,
                 answer,
-                ..
-            } => self.read_payload(&mut input, header, end, answer),
+            } => self.read_payload(&mut input, header, offset, end, answer),
             Progress::Opened { .. } | Progress::Gathered { .. } | Progress::Failed(_) => None,
         };
         if let Progress::Failed(failure) = self.progress {
@@ -547,6 +563,7 @@ impl BoxReader {
         &mut self,
         input: &mut &'a [u8],
         header: BoxHeader,
+        offset: u64,
         end: Option<u64>,
         answer: Answer,
     ) -> Option<BoxEvent<'a>> {
@@ -594,7 +611,8 @@ impl BoxReader {
         if remaining == Some(0) || remaining.is_none() && self.at_end_of_file {
             if let Answer::Gather { .. } | Answer::GatherHead { .. } = answer {
                 self.progress = Progress::Gathered {
-                    header_len: header.encoded_len(),
+                    header,
+                    offset,
                     whole: matches!(answer, Answer::Gather { .. }),
                 };
                 return Some(BoxEvent::End);
@@ -665,7 +683,8 @@ mod tests {
         Header(BoxHeader, Option<ByteRange>),
         Payload(Vec<u8>),
         Gathered(BoxHeader, Vec<u8>),
-        Head(Vec<u8>),
+        /// Header, place and head of a box whose head was gathered
+        Head(BoxHeader, Option<ByteRange>, Vec<u8>),
         End,
     }
 
@@ -721,8 +740,12 @@ mod tests {
                         raw_box.header(),
                         raw_box.payload().to_vec(),
                     ));
-                } else if let Some(head) = reader.gathered_head() {
-                    recorded.push(Recorded::Head(head.to_vec()));
+                } else if let Some((header, head)) = reader.gathered_head() {
+                    recorded.push(Recorded::Head(
+                        header,
+                        reader.gathered_box_range(),
+                        head.to_vec(),
+                    ));
                 }
                 recorded.push(Recorded::End);
             }
@@ -794,7 +817,7 @@ mod tests {
                         read(&file, piece_len, Answer::GatherHead(length_bytes)),
                         Ok(vec![
                             Recorded::Header(header, byte_range),
-                            Recorded::Head(head.to_vec()),
+                            Recorded::Head(header, byte_range, head.to_vec()),
                             Recorded::End,
                         ])
                     );
@@ -811,7 +834,9 @@ mod tests {
         reader.gather_head(3).unwrap();
         let head_wanted = reader.wanted_input();
         let end = reader.handle_input(8, file.get(8..11).unwrap());
-        let head = reader.gathered_head().map(<[u8]>::to_vec);
+        let head = reader
+            .gathered_head()
+            .map(|(header, head)| (header.box_type(), head.to_vec()));
         let whole = reader.gathered_box().is_some();
 
         assert_eq!(
@@ -819,7 +844,10 @@ mod tests {
             (
                 Some(ByteRange::new(8, Some(3))),
                 Ok(Some(BoxEvent::End)),
-                Some(PAYLOAD.get(..3).unwrap().to_vec()),
+                Some((
+                    BoxType::compact(*b"free"),
+                    PAYLOAD.get(..3).unwrap().to_vec()
+                )),
                 false,
                 Some(ByteRange::new(16, None))
             )
@@ -835,7 +863,7 @@ mod tests {
         reader.gather_head(0).unwrap();
         let wanted = reader.wanted_input();
         let end = reader.handle_input(16, next_box);
-        let head = reader.gathered_head().map(<[u8]>::to_vec);
+        let head = reader.gathered_head().map(|(_, head)| head.to_vec());
 
         assert_eq!(
             (wanted, end, head, reader.handle_input(16, next_box)),
