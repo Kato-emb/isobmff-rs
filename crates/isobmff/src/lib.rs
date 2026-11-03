@@ -225,6 +225,14 @@
 //! # Ok::<(), Box<dyn core::error::Error>>(())
 //! ```
 //!
+//! The feature `compressed-boxes` reads the compressed boxes (ISO/IEC
+//! 14496-12 §8.16), whose payload is the deflated payload of the box they
+//! replace: `framing::decompressed` reads one back into that box, and the
+//! demuxer takes the brands of a file from its `otyp` and refuses a file that
+//! has both a compressed box and an `mfra`. The demuxer skips the compressed
+//! boxes themselves, as it does any box it reads no value of; without the
+//! feature, it skips an `otyp` too.
+//!
 //! The items of [`isobmff_core`], the vocabulary a box is written in, are at
 //! the root of this crate. The boxes ISO/IEC 14496-12 defines, written in that
 //! vocabulary, are in [`boxes`].
@@ -236,8 +244,8 @@
 //! samples a demuxer reads into another file structure with a [`Muxer`]:
 //! `cargo run --example remux -- movie.mp4 fragmented.mp4 fragmented`.
 //! `dump_boxes` and `split_fragments` read and write files through
-//! [`framing`]: one lists the boxes of a file, the other splits a fragmented
-//! movie file into segments.
+//! [`framing`]: one lists the boxes of a file, those a compressed box replaces
+//! among them, the other splits a fragmented movie file into segments.
 //! `fast_start` writes a movie file again with its `moov` before its media
 //! data, as a [`FastStart`] lays it out:
 //! `cargo run --example fast_start -- movie.mp4 fast.mp4`.

@@ -42,12 +42,12 @@ pub enum DemuxError {
     /// Gather, stream or skip asked for while no header waits for an answer
     #[non_exhaustive]
     NoOpenBox,
-    /// Payload of a box being gathered reaches past the limit it was gathered with
+    /// Payload of a box being gathered reaches past the limit it was gathered with, or that of a compressed box inflates past the limit it was inflated with
     #[non_exhaustive]
     PayloadLimitExceeded {
         /// Type of the box
         box_type: BoxType,
-        /// Length of the payload as declared, or, for a payload that runs to the end of the file, one byte past the limit
+        /// Length of the payload as declared, as a gzip member declares it inflated, or, for a payload that runs to the end of the file or that inflates past the limit, one byte past the limit
         reached_bytes: u64,
         /// Length the payload was gathered with as a limit
         limit_bytes: u64,
@@ -190,6 +190,18 @@ pub enum DemuxError {
     UnresolvedIdentifiedMediaData {
         /// `imda_identifier` the samples' data reference names
         identifier: u32,
+    },
+    /// Compressed box whose payload is neither a deflate stream nor a gzip member, or a gzip member whose CRC-32 or length does not match what it inflates to, §8.16.1
+    #[non_exhaustive]
+    UnreadableCompressedData {
+        /// Type of the compressed box
+        box_type: BoxType,
+    },
+    /// File that has both a compressed box and a `MovieFragmentRandomAccessBox`, which §8.16.1 does not let a file with compressed boxes have
+    #[non_exhaustive]
+    CompressedBoxWithMovieFragmentRandomAccess {
+        /// Type of the compressed box
+        box_type: BoxType,
     },
     /// Segment index that would take the segment indexes a reader keeps past the limit it keeps them up to
     #[non_exhaustive]
@@ -377,6 +389,14 @@ impl fmt::Display for DemuxError {
             Self::UnresolvedIdentifiedMediaData { identifier } => write!(
                 formatter,
                 "samples in identified media data of identifier {identifier}, which the file does not have"
+            ),
+            Self::UnreadableCompressedData { box_type } => write!(
+                formatter,
+                "{box_type} payload is neither a deflate stream nor a gzip member that inflates as it declares"
+            ),
+            Self::CompressedBoxWithMovieFragmentRandomAccess { box_type } => write!(
+                formatter,
+                "a movie fragment random access box in a file with the compressed box {box_type}"
             ),
             Self::SegmentIndexCountLimitExceeded {
                 retained_segment_indexes,

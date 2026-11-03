@@ -1,7 +1,7 @@
 //! Framing properties of [`Boxes`] and [`RawBox::split_first`]
 //!
 //! The input is the bytes of a file as they lie, so a file of boxes is a seed
-//! as it is. One run checks four properties of it:
+//! as it is. One run checks five properties of it:
 //!
 //! 1. no split panics
 //! 2. the iteration ends, taking at most one step for every eight bytes
@@ -16,14 +16,22 @@
 //!    succeeds or asks for more still. A cut of a box that frames fails with
 //!    no other error, both before and after splitting again; a cut of the end
 //!    of the input that does not frame may also fail with another
+//! 5. every box framed reads back as a compressed box (ISO/IEC 14496-12
+//!    §8.16) exactly when it has a replacement type, into a box of that type
+//!    whose payload is no longer than the limit, or fails with a failure of
+//!    reading it back
 
 #![no_main]
 
-use isobmff::{Boxes, Error, ErrorKind, RawBox};
+use isobmff::framing::{decompressed, replacement_type};
+use isobmff::{Boxes, DemuxError, Error, ErrorKind, RawBox};
 use libfuzzer_sys::fuzz_target;
 
 /// Length of the longest header: a `largesize` field and an `extended_type` field, ISO/IEC 14496-12 §4.2.2
 const LONGEST_HEADER_LEN: usize = 32;
+
+/// Longest payload a compressed box reads back into: past the length of most inputs, so that both a payload within it and one past it are reached
+const DECOMPRESSED_LIMIT_BYTES: u64 = 4096;
 
 /// Twelve bytes ISO/IEC 14496-12 §4.2.3 reserves after the four-character code a UUID maps
 const RESERVED_UUID_SUFFIX: [u8; 12] = [
@@ -70,6 +78,7 @@ fuzz_target!(|bytes: &[u8]| {
             "payload does not lie right after its header"
         );
         offset += header_len + framed.payload().len();
+        reads_back_as_the_box_it_replaces(framed);
     }
 
     truncation_asks_for_more_than_the_cut_offered(&bytes[offset..], false);
@@ -79,6 +88,26 @@ fuzz_target!(|bytes: &[u8]| {
         bytes.len()
     );
 });
+
+/// Checks property 5 of `framed`
+fn reads_back_as_the_box_it_replaces(framed: RawBox<'_>) {
+    let replacement = replacement_type(framed.header().box_type());
+    match decompressed(framed, DECOMPRESSED_LIMIT_BYTES) {
+        Ok(Some((box_type, payload))) => {
+            assert_eq!(Some(box_type), replacement, "read back into another type");
+            assert!(
+                payload.len() as u64 <= DECOMPRESSED_LIMIT_BYTES,
+                "read back past the limit into {} bytes",
+                payload.len()
+            );
+        }
+        Ok(None) => assert_eq!(replacement, None, "a compressed box read back as none"),
+        Err(
+            DemuxError::PayloadLimitExceeded { .. } | DemuxError::UnreadableCompressedData { .. },
+        ) => assert!(replacement.is_some(), "a box that is not compressed failed"),
+        Err(failure) => panic!("reading back failed with {failure}"),
+    }
+}
 
 /// Returns whether the header `input` starts with declares an `extended_type` of the form ISO/IEC 14496-12 §4.2.3 reserves
 fn declares_reserved_extended_type(input: &[u8]) -> bool {

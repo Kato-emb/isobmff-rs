@@ -5,6 +5,8 @@ use alloc::boxed::Box;
 use isobmff_boxes::{
     FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentTypeBox,
 };
+#[cfg(feature = "compressed-boxes")]
+use isobmff_core::{BoxDefinition, BoxType};
 use isobmff_core::{BoxHeader, Error};
 
 use crate::byte_range::ByteRange;
@@ -65,6 +67,9 @@ pub struct Demuxer {
     payload_limit_bytes: u64,
     file_type: Option<FileTypeBox>,
     segment_type: Option<SegmentTypeBox>,
+    /// Type of the first compressed box opened, §8.16
+    #[cfg(feature = "compressed-boxes")]
+    compressed_box: Option<BoxType>,
 }
 
 impl Demuxer {
@@ -84,6 +89,8 @@ impl Demuxer {
             payload_limit_bytes: limits.payload_bytes(),
             file_type: None,
             segment_type: None,
+            #[cfg(feature = "compressed-boxes")]
+            compressed_box: None,
         }
     }
 
@@ -130,6 +137,9 @@ impl Demuxer {
     /// * The failures of [`BoxReader::handle_input`], and of
     ///   [`BoxReader::gather`] with the limit of the payload of a box.
     /// * [`Box`](DemuxError::Box): a box gathered does not read as its value.
+    /// * [`CompressedBoxWithMovieFragmentRandomAccess`](DemuxError::CompressedBoxWithMovieFragmentRandomAccess):
+    ///   with the feature `compressed-boxes`, the file has both a compressed
+    ///   box and an `mfra` (§8.16.1).
     /// * The failures of the [`StructureDataReader`] the boxes of
     ///   structure-data are handed to.
     /// * The failures of [`MediaDataReader::handle_sample_locations`] the
@@ -253,6 +263,10 @@ impl Demuxer {
     /// Returns the `ftyp` read last, §5.2
     ///
     /// A file without one is to be read as one of the brand `mp41` (§5.2.1).
+    /// With the feature `compressed-boxes`, an `otyp` read after it stands in
+    /// for it with the `ftyp` it holds, that of the file before its box
+    /// structure was transformed (§8.16.5): the `ftyp` of the innermost one
+    /// where they nest.
     #[must_use]
     pub const fn file_type(&self) -> Option<&FileTypeBox> {
         self.file_type.as_ref()
@@ -325,6 +339,8 @@ impl Demuxer {
     /// Answers the header of a box at file level as its type says, and returns the event it is reported with
     fn open(&mut self, header: BoxHeader) -> Result<Option<DemuxEvent>, DemuxError> {
         let byte_range = self.boxes.open_box().ok_or(DemuxError::NoOpenBox)?;
+        #[cfg(feature = "compressed-boxes")]
+        self.refuse_compressed_box_with_movie_fragment_random_access(header.box_type())?;
         let event = match file_level::handling(header.box_type()) {
             Handling::Gather => {
                 self.boxes.gather(self.payload_limit_bytes)?;
@@ -339,6 +355,24 @@ impl Demuxer {
         };
         self.boxes.skip()?;
         Ok(Some(event))
+    }
+
+    /// Refuses a box of `box_type` that makes the file one with both a compressed box and an `mfra`, which §8.16.1 does not let a file have
+    #[cfg(feature = "compressed-boxes")]
+    fn refuse_compressed_box_with_movie_fragment_random_access(
+        &mut self,
+        box_type: BoxType,
+    ) -> Result<(), DemuxError> {
+        if crate::framing::replacement_type(box_type).is_some() {
+            self.compressed_box.get_or_insert(box_type);
+        }
+        let with_movie_fragment_random_access = box_type == MovieFragmentRandomAccessBox::BOX_TYPE
+            || self.movie_fragment_random_access().is_some();
+        self.compressed_box
+            .filter(|_| with_movie_fragment_random_access)
+            .map_or(Ok(()), |box_type| {
+                Err(DemuxError::CompressedBoxWithMovieFragmentRandomAccess { box_type })
+            })
     }
 
     /// Reads the box just gathered, if any, into its value, and returns the event it is reported with
@@ -442,7 +476,7 @@ impl Default for Demuxer {
 #[non_exhaustive]
 #[derive(Clone, Debug)]
 pub enum DemuxEvent {
-    /// `ftyp` read, §5.2: [`Demuxer::file_type`] returns it
+    /// `ftyp` read, §5.2, or, with the feature `compressed-boxes`, `otyp` read, §8.16.5: [`Demuxer::file_type`] returns the `ftyp`
     #[non_exhaustive]
     FileType {
         /// Where the whole box lies
@@ -1257,6 +1291,111 @@ mod tests {
                         .in_container(BoxType::compact(*b"imda"))
                 }),
             ]
+        );
+    }
+
+    /// Returns a file of an `ftyp` of the brand `comp`, then `boxes`
+    #[cfg(feature = "compressed-boxes")]
+    fn compressed_file(boxes: &[Vec<u8>]) -> Vec<u8> {
+        let mut ftyp = FileTypeBox::default();
+        ftyp.major_brand = FourCc::new(*b"comp");
+        [encoded(&ftyp), boxes.concat()].concat()
+    }
+
+    #[cfg(feature = "compressed-boxes")]
+    #[test]
+    fn an_otyp_stands_in_for_the_ftyp_with_the_ftyp_of_the_innermost_otyp() {
+        let original = |brand: [u8; 4]| {
+            let mut otyp = isobmff_boxes::OriginalFileTypeBox::default();
+            otyp.ftyp.major_brand = FourCc::new(brand);
+            otyp
+        };
+        let nested = raw_box(
+            *b"otyp",
+            &[
+                encoded(&original(*b"mp41").ftyp),
+                encoded(&original(*b"iso6")),
+            ]
+            .concat(),
+        );
+        let read_brand = |file: &[u8]| {
+            let mut demuxer = Demuxer::new();
+            let read = read(&mut demuxer, file, usize::MAX).unwrap();
+            (read.seen, demuxer.file_type().map(|ftyp| ftyp.major_brand))
+        };
+
+        assert_eq!(
+            read_brand(&compressed_file(&[encoded(&original(*b"mp41"))])),
+            (
+                vec![Seen::FileType, Seen::FileType],
+                Some(FourCc::new(*b"mp41"))
+            )
+        );
+        assert_eq!(
+            read_brand(&compressed_file(&[nested])).1,
+            Some(FourCc::new(*b"iso6"))
+        );
+    }
+
+    #[cfg(feature = "compressed-boxes")]
+    #[test]
+    fn a_file_with_both_a_compressed_box_and_an_mfra_is_refused_whichever_comes_first() {
+        let compressed = raw_box(*b"!mof", b"deflated");
+        let mfra = encoded(&isobmff_boxes::MovieFragmentRandomAccessBox::default());
+        let refused = Err(DemuxError::CompressedBoxWithMovieFragmentRandomAccess {
+            box_type: BoxType::compact(*b"!mof"),
+        });
+
+        assert_eq!(
+            read(
+                &mut Demuxer::new(),
+                &compressed_file(&[compressed.clone(), mfra.clone()]),
+                usize::MAX
+            )
+            .map(|_| ()),
+            refused
+        );
+        assert_eq!(
+            read(
+                &mut Demuxer::new(),
+                &compressed_file(&[mfra, compressed]),
+                usize::MAX
+            )
+            .map(|_| ()),
+            refused
+        );
+    }
+
+    #[cfg(not(feature = "compressed-boxes"))]
+    #[test]
+    fn without_the_feature_an_otyp_and_the_compressed_boxes_are_other_boxes() {
+        let mut otyp = isobmff_boxes::OriginalFileTypeBox::default();
+        otyp.ftyp.major_brand = FourCc::new(*b"mp41");
+        let file = [
+            file_type(),
+            encoded(&otyp),
+            raw_box(*b"!mov", b"deflated"),
+            encoded(&isobmff_boxes::MovieFragmentRandomAccessBox::default()),
+        ]
+        .concat();
+        let mut demuxer = Demuxer::new();
+        let read = read(&mut demuxer, &file, usize::MAX).unwrap();
+
+        let others = read
+            .seen
+            .iter()
+            .filter_map(|seen| {
+                if let Seen::Other(box_type, _) = seen {
+                    Some(*box_type.four_cc().as_bytes())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            (others, demuxer.file_type().map(|ftyp| ftyp.major_brand)),
+            (vec![*b"otyp", *b"!mov"], Some(FourCc::new(*b"isom")))
         );
     }
 
