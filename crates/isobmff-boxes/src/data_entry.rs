@@ -220,6 +220,15 @@ impl DataEntry {
     pub const fn is_in_same_file(&self) -> bool {
         matches!(self, Self::Url(DataEntryUrlBox { location: None }))
     }
+
+    /// Returns whether the entry says the media data is in the file containing the data reference: in the same file, as [`is_in_same_file`](Self::is_in_same_file) says, or in an `IdentifiedMediaDataBox` of it, ISO/IEC 14496-12 §8.7.2
+    ///
+    /// The other entries place it in the file a URL or a URN names, or where
+    /// an entry of a type this crate does not read says.
+    #[must_use]
+    pub const fn is_in_this_file(&self) -> bool {
+        self.is_in_same_file() || matches!(self, Self::Imda(_) | Self::SeqNumImda(_))
+    }
 }
 
 #[cfg(test)]
@@ -343,7 +352,8 @@ mod tests {
     }
 
     #[test]
-    fn only_a_url_without_a_location_places_the_media_data_in_the_same_file() {
+    fn only_a_url_without_a_location_places_the_media_data_in_the_same_file_and_with_an_imda_in_this_file()
+     {
         assert_eq!(
             [
                 DataEntry::Url(url(None)),
@@ -354,8 +364,14 @@ mod tests {
                 }),
                 DataEntry::SeqNumImda(DataEntrySeqNumImdaBox {}),
             ]
-            .map(|entry| entry.is_in_same_file()),
-            [true, false, false, false, false]
+            .map(|entry| (entry.is_in_same_file(), entry.is_in_this_file())),
+            [
+                (true, true),
+                (false, false),
+                (false, false),
+                (false, true),
+                (false, true)
+            ]
         );
     }
 

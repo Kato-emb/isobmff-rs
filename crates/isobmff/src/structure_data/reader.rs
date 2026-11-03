@@ -1,5 +1,6 @@
 //! [`StructureDataReader`], which reads the structure-data of a file into the samples it declares
 
+use alloc::collections::BTreeMap;
 use alloc::vec::{self, Vec};
 use core::iter::FusedIterator;
 use core::ops::Range;
@@ -20,8 +21,10 @@ use crate::sample::{DataReferenceKey, SampleLocation};
 ///
 /// Each bounds what the reader allocates for values the file declares: the
 /// samples of one `moov` or `moof`, and the segment indexes, with their
-/// subsegments, the reader keeps over the whole file. A subsegment takes
-/// the same room whatever the file, so its count bounds its bytes.
+/// subsegments, the places of `IdentifiedMediaDataBox`es and the samples
+/// whose `IdentifiedMediaDataBox` is not read yet, that the reader keeps over
+/// the whole file. Each takes the same room whatever the file, so its count
+/// bounds its bytes.
 ///
 /// # Examples
 ///
@@ -33,6 +36,8 @@ use crate::sample::{DataReferenceKey, SampleLocation};
 ///     segment_index_count: 1024,
 ///     subsegment_count: 1_048_576,
 ///     leniency_count: 65_536,
+///     identified_media_data_count: 65_536,
+///     unresolved_sample_count: 1_048_576,
 /// };
 /// assert_eq!(limits.segment_index_count, 1024);
 /// ```
@@ -50,6 +55,10 @@ pub struct StructureDataLimits {
     pub subsegment_count: u64,
     /// Number of leniencies the reader keeps up to, over the whole file
     pub leniency_count: u64,
+    /// Number of `IdentifiedMediaDataBox`es the reader keeps the places of up to, over the whole file
+    pub identified_media_data_count: u64,
+    /// Number of samples whose `IdentifiedMediaDataBox` is not read yet the reader holds up to, together
+    pub unresolved_sample_count: u64,
 }
 
 /// Reader of the structure-data of a file: the movie and its fragments, resolved to the samples they declare
@@ -57,6 +66,14 @@ pub struct StructureDataLimits {
 /// The reader keeps what structure-data declares: the movie, whose tracks the
 /// fragments extend, the decoding time each track has reached (§8.8.12), the
 /// segment indexes, and the movie fragment random access box.
+///
+/// The data offsets of samples whose data reference entry names an
+/// `IdentifiedMediaDataBox` count from the first byte of its payload, its
+/// `imda_identifier` (§8.7.2, Table 1 of §6.1): the media data starts at
+/// offset 4. The reader keeps where the payload of each box it is told of
+/// with [`handle_identified_media_data`](Self::handle_identified_media_data)
+/// starts, and locates such samples in the file. It holds those of a box it
+/// has not been told of, and returns them once it is.
 ///
 /// A refused call leaves the reader as it was.
 ///
@@ -71,6 +88,8 @@ pub struct StructureDataLimits {
 ///     segment_index_count: 1024,
 ///     subsegment_count: 1_048_576,
 ///     leniency_count: 65_536,
+///     identified_media_data_count: 65_536,
+///     unresolved_sample_count: 1_048_576,
 /// });
 /// // A movie of no track declares no sample.
 /// let samples = reader.handle_movie(MovieBox::default())?;
@@ -87,6 +106,10 @@ pub struct StructureDataReader {
     segment_indexes: Vec<SegmentIndex>,
     movie_fragment_random_access: Option<MovieFragmentRandomAccessBox>,
     leniencies: Vec<Leniency>,
+    /// File offset of the first byte of the payload of each `IdentifiedMediaDataBox` read, by its `imda_identifier`
+    identified_media_data: BTreeMap<u32, u64>,
+    /// Samples whose `IdentifiedMediaDataBox` is not read yet, by its `imda_identifier`, each located from the first byte of the box's payload
+    unresolved: Held,
 }
 
 impl StructureDataReader {
@@ -100,6 +123,8 @@ impl StructureDataReader {
             segment_indexes: Vec::new(),
             movie_fragment_random_access: None,
             leniencies: Vec::new(),
+            identified_media_data: BTreeMap::new(),
+            unresolved: BTreeMap::new(),
         }
     }
 
@@ -126,6 +151,9 @@ impl StructureDataReader {
     /// * [`SampleCountLimitExceeded`](DemuxError::SampleCountLimitExceeded):
     ///   the sample size tables of every track together count more samples
     ///   than the limit, and none is resolved.
+    /// * [`UnresolvedSampleCountLimitExceeded`](DemuxError::UnresolvedSampleCountLimitExceeded):
+    ///   holding the samples in an `IdentifiedMediaDataBox` not read yet would
+    ///   take those the reader holds past the limit.
     /// * [`LeniencyCountLimitExceeded`](DemuxError::LeniencyCountLimitExceeded):
     ///   keeping what the movie is read past in would take the leniencies the
     ///   reader keeps past the limit.
@@ -139,7 +167,8 @@ impl StructureDataReader {
     ///   samples are described by a sample entry, or a sample entry names a
     ///   data reference entry, that the track has none of.
     /// * [`UnsupportedDataReference`](DemuxError::UnsupportedDataReference):
-    ///   the media data of samples is in an `IdentifiedMediaDataBox`.
+    ///   samples of the movie name a `DataEntrySeqNumImdaBox`, which names
+    ///   only the media data of samples in a movie fragment (§8.7.2).
     /// * [`DataOffsetOutOfRange`](DemuxError::DataOffsetOutOfRange),
     ///   [`DecodingTimeOverflow`](DemuxError::DecodingTimeOverflow): the media
     ///   data or the decoding times of a track run past 64 bits.
@@ -156,22 +185,35 @@ impl StructureDataReader {
             .fold(0, u64::saturating_add);
         let mut locations = self.room_for(declared_samples)?;
         let mut decoding_times = Vec::with_capacity(movie.trak.len());
+        let mut identified = Vec::new();
         let mut leniencies = Vec::new();
         for (track_position, trak) in movie.trak.iter().enumerate() {
             let earlier_samples = locations.len();
-            let time =
-                sample_table::resolve_track(trak, track_position, &mut locations, &mut leniencies)?;
+            let time = sample_table::resolve_track(
+                trak,
+                track_position,
+                &mut locations,
+                &mut identified,
+                &mut leniencies,
+            )?;
             decoding_times.push(Some(ReachedTime {
                 time,
                 after_sample: locations.len() > earlier_samples,
             }));
         }
         self.check_room_for_leniencies(&leniencies)?;
+        let (mut locations, unresolved) = self.place(locations, &identified)?;
         in_file_order(&mut locations);
 
         self.movie = Some(movie);
         self.decoding_times = decoding_times;
         self.leniencies = leniencies;
+        for (identifier, mut held) in unresolved {
+            self.unresolved
+                .entry(identifier)
+                .or_default()
+                .append(&mut held);
+        }
         Ok(SampleLocations {
             locations: locations.into_iter(),
         })
@@ -203,6 +245,9 @@ impl StructureDataReader {
     /// * [`SampleCountLimitExceeded`](DemuxError::SampleCountLimitExceeded):
     ///   the track runs together count more samples than the limit, and none
     ///   is resolved.
+    /// * [`UnresolvedSampleCountLimitExceeded`](DemuxError::UnresolvedSampleCountLimitExceeded):
+    ///   holding the samples in an `IdentifiedMediaDataBox` not read yet would
+    ///   take those the reader holds past the limit.
     /// * [`LeniencyCountLimitExceeded`](DemuxError::LeniencyCountLimitExceeded):
     ///   keeping what the fragment is read past in would take the leniencies
     ///   the reader keeps past the limit.
@@ -223,6 +268,7 @@ impl StructureDataReader {
         let movie = self.movie.as_ref().ok_or(DemuxError::MissingMovie)?;
         let mut locations = self.room_for(movie_fragment::sample_count(movie_fragment))?;
         let mut decoding_times = self.decoding_times.clone();
+        let mut identified = Vec::new();
         let mut leniencies = Vec::new();
         movie_fragment::resolve_fragment(
             movie,
@@ -230,13 +276,21 @@ impl StructureDataReader {
             movie_fragment,
             moof_offset,
             &mut locations,
+            &mut identified,
             &mut leniencies,
         )?;
         self.check_room_for_leniencies(&leniencies)?;
+        let (mut locations, unresolved) = self.place(locations, &identified)?;
         in_file_order(&mut locations);
 
         self.decoding_times = decoding_times;
         self.leniencies.append(&mut leniencies);
+        for (identifier, mut held) in unresolved {
+            self.unresolved
+                .entry(identifier)
+                .or_default()
+                .append(&mut held);
+        }
         Ok(SampleLocations {
             locations: locations.into_iter(),
         })
@@ -309,6 +363,65 @@ impl StructureDataReader {
     /// box are kept, and so are the leniencies.
     pub fn resume(&mut self) {
         self.decoding_times.fill(None);
+        self.unresolved.clear();
+    }
+
+    /// Keeps where the payload of the `IdentifiedMediaDataBox` of `identifier` starts, at file offset `payload_offset`, and returns the samples held for it, located in the file
+    ///
+    /// The payload starts with the `imda_identifier`, and the data offsets of
+    /// the samples in the box count from its first byte (§8.7.2): media data
+    /// starts at offset 4. The samples come in the order their media data
+    /// lies in the file. Samples whose box is read before them are located in
+    /// the file as [`handle_movie`](Self::handle_movie) and
+    /// [`handle_movie_fragment`](Self::handle_movie_fragment) resolve them.
+    ///
+    /// # Errors
+    ///
+    /// * [`DuplicateIdentifiedMediaData`](DemuxError::DuplicateIdentifiedMediaData):
+    ///   the reader keeps a box of the same `imda_identifier`, which §8.1.4
+    ///   does not allow.
+    /// * [`IdentifiedMediaDataCountLimitExceeded`](DemuxError::IdentifiedMediaDataCountLimitExceeded):
+    ///   keeping the place of the box would take those the reader keeps past
+    ///   the limit.
+    /// * [`DataOffsetOutOfRange`](DemuxError::DataOffsetOutOfRange): the
+    ///   media data of a sample lies past 64-bit file offsets.
+    pub fn handle_identified_media_data(
+        &mut self,
+        identifier: u32,
+        payload_offset: u64,
+    ) -> Result<SampleLocations, DemuxError> {
+        if self.identified_media_data.contains_key(&identifier) {
+            return Err(DemuxError::DuplicateIdentifiedMediaData { identifier });
+        }
+        let retained_identified_media_data =
+            to_u64(self.identified_media_data.len()).saturating_add(1);
+        if retained_identified_media_data > self.limits.identified_media_data_count {
+            return Err(DemuxError::IdentifiedMediaDataCountLimitExceeded {
+                retained_identified_media_data,
+                limit_identified_media_data: self.limits.identified_media_data_count,
+            });
+        }
+        let mut locations = self
+            .unresolved
+            .get(&identifier)
+            .into_iter()
+            .flatten()
+            .map(|location| located(location, payload_offset))
+            .collect::<Result<Vec<_>, _>>()?;
+        in_file_order(&mut locations);
+
+        self.identified_media_data
+            .insert(identifier, payload_offset);
+        self.unresolved.remove(&identifier);
+        Ok(SampleLocations {
+            locations: locations.into_iter(),
+        })
+    }
+
+    /// Returns the `imda_identifier` of an `IdentifiedMediaDataBox` the reader holds samples for, not read yet, if any
+    #[must_use]
+    pub fn unresolved_identified_media_data(&self) -> Option<u32> {
+        self.unresolved.keys().next().copied()
     }
 
     /// Returns the movie the reader holds, once one is read
@@ -333,10 +446,11 @@ impl StructureDataReader {
     ///
     /// The location of each sample carries the key of the entry its sample
     /// entry names. An entry that
-    /// [`is_in_same_file`](isobmff_boxes::DataEntry::is_in_same_file) says
-    /// the media data is in the file itself. Any other entry names where else
-    /// it is: another file, which a `url ` with a location or a `urn ` names
-    /// and whose file offsets the byte ranges of the locations are in.
+    /// [`is_in_this_file`](isobmff_boxes::DataEntry::is_in_this_file) says
+    /// the media data is in the file itself, or in an `IdentifiedMediaDataBox`
+    /// of it. Any other entry names where else it is: another file, which a
+    /// `url ` with a location or a `urn ` names and whose file offsets the
+    /// byte ranges of the locations are in.
     pub fn data_references(&self) -> impl Iterator<Item = DataReference<'_>> {
         self.movie
             .iter()
@@ -366,6 +480,52 @@ impl StructureDataReader {
             });
         }
         Ok(())
+    }
+
+    /// Splits `locations` into those located in a file and those held for an `IdentifiedMediaDataBox` not read yet, the locations at the indexes `identified` names counting from the first byte of the payload of the box of their `imda_identifier`
+    ///
+    /// # Errors
+    ///
+    /// * [`UnresolvedSampleCountLimitExceeded`](DemuxError::UnresolvedSampleCountLimitExceeded):
+    ///   holding the samples would take those the reader holds past the limit.
+    /// * [`DataOffsetOutOfRange`](DemuxError::DataOffsetOutOfRange): the media
+    ///   data of a sample lies past 64-bit file offsets.
+    fn place(
+        &self,
+        locations: Vec<SampleLocation>,
+        identified: &[(usize, u32)],
+    ) -> Result<(Vec<SampleLocation>, Held), DemuxError> {
+        if identified.is_empty() {
+            return Ok((locations, BTreeMap::new()));
+        }
+        let held_samples = identified
+            .iter()
+            .filter(|(_, identifier)| !self.identified_media_data.contains_key(identifier))
+            .count();
+        let held_before: usize = self.unresolved.values().map(Vec::len).sum();
+        let unresolved_samples = to_u64(held_before).saturating_add(to_u64(held_samples));
+        if unresolved_samples > self.limits.unresolved_sample_count {
+            return Err(DemuxError::UnresolvedSampleCountLimitExceeded {
+                unresolved_samples,
+                limit_samples: self.limits.unresolved_sample_count,
+            });
+        }
+        let mut identified = identified.iter().peekable();
+        let mut located_in_file = Vec::with_capacity(locations.len().saturating_sub(held_samples));
+        let mut unresolved = Held::new();
+        for (index, location) in locations.into_iter().enumerate() {
+            let Some(&(_, identifier)) = identified.next_if(|&&(at, _)| at == index) else {
+                located_in_file.push(location);
+                continue;
+            };
+            match self.identified_media_data.get(&identifier) {
+                Some(&payload_offset) => {
+                    located_in_file.push(located(&location, payload_offset)?);
+                }
+                None => unresolved.entry(identifier).or_default().push(location),
+            }
+        }
+        Ok((located_in_file, unresolved))
     }
 
     /// Returns room for the locations of `declared_samples` samples, or the failure of more than the limit
@@ -467,6 +627,31 @@ impl Iterator for SampleLocations {
 impl ExactSizeIterator for SampleLocations {}
 
 impl FusedIterator for SampleLocations {}
+
+/// Samples held for `IdentifiedMediaDataBox`es not read yet, by their `imda_identifier`, each located from the first byte of the box's payload
+type Held = BTreeMap<u32, Vec<SampleLocation>>;
+
+/// Returns `location`, which counts from the first byte of the payload of an `IdentifiedMediaDataBox`, located in the file, that payload starting at file offset `payload_offset`
+///
+/// # Errors
+///
+/// * [`DataOffsetOutOfRange`](DemuxError::DataOffsetOutOfRange): the media
+///   data lies past 64-bit file offsets.
+fn located(location: &SampleLocation, payload_offset: u64) -> Result<SampleLocation, DemuxError> {
+    let range = location.byte_range();
+    let out_of_range = DemuxError::DataOffsetOutOfRange {
+        track_id: location.properties().track_id,
+    };
+    let start = payload_offset
+        .checked_add(range.start)
+        .ok_or(out_of_range)?;
+    let end = payload_offset.checked_add(range.end).ok_or(out_of_range)?;
+    Ok(SampleLocation::new(
+        *location.properties(),
+        location.data_reference(),
+        start..end,
+    ))
+}
 
 /// Sorts `locations` into the order their media data lies in the file, samples of no bytes at one offset by track and decoding time
 fn in_file_order(locations: &mut [SampleLocation]) {
@@ -929,10 +1114,12 @@ mod tests {
     }
 
     #[test]
-    fn media_data_in_an_imda_or_in_a_data_reference_entry_the_track_has_none_of_is_refused() {
+    fn media_data_in_an_imda_of_a_sequence_number_or_in_a_data_reference_entry_the_track_has_none_of_is_refused()
+     {
         let mut imda = track(3, 10, &[1], &[(1, 1)], &[0]);
-        imda.mdia.minf.dinf.dref.data_entries =
-            Vec::from([DataEntry::Imda(DataEntryImdaBox::default())]);
+        imda.mdia.minf.dinf.dref.data_entries = Vec::from([DataEntry::SeqNumImda(
+            isobmff_boxes::DataEntrySeqNumImdaBox::default(),
+        )]);
         let mut unknown = track(3, 10, &[1], &[(1, 1)], &[0]);
         unknown.mdia.minf.dinf.dref.data_entries.clear();
 
@@ -949,6 +1136,117 @@ mod tests {
                 track_id: 3,
                 data_reference_index: 1
             })
+        );
+    }
+
+    /// Returns track 1, its samples of sizes 4 and 6 in a chunk at offset 4 of the payload of the `imda` of `identifier`
+    fn identified(identifier: u32) -> TrackBox {
+        let mut trak = track(1, 10, &[4, 6], &[(1, 2)], &[4]);
+        let mut imdt = DataEntryImdaBox::default();
+        imdt.imda_ref_identifier = identifier;
+        trak.mdia.minf.dinf.dref.data_entries = Vec::from([DataEntry::Imda(imdt)]);
+        trak
+    }
+
+    #[test]
+    fn samples_in_an_imda_not_read_yet_are_held_until_it_is_and_then_located_from_its_payload() {
+        let mut reader = StructureDataReader::new(UNLIMITED);
+        let in_movie: Vec<_> = reader
+            .handle_movie(movie([identified(7)]))
+            .unwrap()
+            .collect();
+        let held = reader.unresolved_identified_media_data();
+        let located: Vec<_> = reader
+            .handle_identified_media_data(7, 1000)
+            .unwrap()
+            .collect();
+
+        assert_eq!(
+            (
+                in_movie,
+                held,
+                placed(&located),
+                reader.unresolved_identified_media_data()
+            ),
+            (
+                Vec::new(),
+                Some(7),
+                Vec::from([(1, 0, 1004..1008), (1, 10, 1008..1014)]),
+                None
+            )
+        );
+    }
+
+    #[test]
+    fn samples_in_an_imda_read_before_them_are_located_from_its_payload_at_once() {
+        let mut reader = StructureDataReader::new(UNLIMITED);
+        let before: Vec<_> = reader
+            .handle_identified_media_data(7, 1000)
+            .unwrap()
+            .collect();
+        let located: Vec<_> = reader
+            .handle_movie(movie([identified(7)]))
+            .unwrap()
+            .collect();
+
+        assert_eq!(
+            (before, placed(&located)),
+            (
+                Vec::new(),
+                Vec::from([(1, 0, 1004..1008), (1, 10, 1008..1014)])
+            )
+        );
+    }
+
+    #[test]
+    fn a_second_imda_of_an_identifier_and_imdas_or_held_samples_past_the_limits_are_refused() {
+        let mut reader = StructureDataReader::new(UNLIMITED);
+        reader.handle_identified_media_data(7, 1000).unwrap();
+        let few = StructureDataLimits {
+            identified_media_data_count: 1,
+            unresolved_sample_count: 1,
+            ..UNLIMITED
+        };
+        let mut limited = StructureDataReader::new(few);
+        limited.handle_identified_media_data(1, 0).unwrap();
+
+        assert_eq!(
+            [
+                reader.handle_identified_media_data(7, 2000).map(|_| ()),
+                limited.handle_identified_media_data(2, 0).map(|_| ()),
+                limited.handle_movie(movie([identified(9)])).map(|_| ()),
+            ],
+            [
+                Err(DemuxError::DuplicateIdentifiedMediaData { identifier: 7 }),
+                Err(DemuxError::IdentifiedMediaDataCountLimitExceeded {
+                    retained_identified_media_data: 2,
+                    limit_identified_media_data: 1
+                }),
+                Err(DemuxError::UnresolvedSampleCountLimitExceeded {
+                    unresolved_samples: 2,
+                    limit_samples: 1
+                }),
+            ]
+        );
+        assert_eq!(limited.movie(), None);
+    }
+
+    #[test]
+    fn a_resumed_reader_forgets_the_samples_it_held_and_keeps_the_imdas_it_read() {
+        let mut reader = StructureDataReader::new(UNLIMITED);
+        reader.handle_identified_media_data(3, 500).unwrap();
+        reader.handle_movie(movie([identified(7)])).unwrap();
+        reader.resume();
+
+        assert_eq!(
+            (
+                reader.unresolved_identified_media_data(),
+                reader.handle_identified_media_data(3, 600).map(|_| ())
+            ),
+            (
+                None,
+                Err(DemuxError::DuplicateIdentifiedMediaData { identifier: 3 })
+            )
         );
     }
 

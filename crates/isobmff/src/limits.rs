@@ -57,6 +57,8 @@ impl DemuxLimits {
                 segment_index_count: 65_536,
                 subsegment_count: 1_048_576,
                 leniency_count: 65_536,
+                identified_media_data_count: 65_536,
+                unresolved_sample_count: 1_048_576,
             },
             media_data: MediaDataLimits {
                 held_location_count: 1_048_576,
@@ -98,6 +100,23 @@ impl DemuxLimits {
     #[must_use]
     pub const fn with_leniency_count(mut self, leniency_count: u64) -> Self {
         self.structure_data.leniency_count = leniency_count;
+        self
+    }
+
+    /// Replaces the number of `IdentifiedMediaDataBox`es the demuxer keeps the places of, over the whole file
+    #[must_use]
+    pub const fn with_identified_media_data_count(
+        mut self,
+        identified_media_data_count: u64,
+    ) -> Self {
+        self.structure_data.identified_media_data_count = identified_media_data_count;
+        self
+    }
+
+    /// Replaces the number of samples whose `IdentifiedMediaDataBox` is not read yet the demuxer holds
+    #[must_use]
+    pub const fn with_unresolved_sample_count(mut self, unresolved_sample_count: u64) -> Self {
+        self.structure_data.unresolved_sample_count = unresolved_sample_count;
         self
     }
 

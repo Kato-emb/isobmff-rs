@@ -5,17 +5,21 @@ use alloc::boxed::Box;
 use isobmff_boxes::{
     FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentTypeBox,
 };
-use isobmff_core::BoxHeader;
+use isobmff_core::{BoxHeader, Error};
 
 use crate::byte_range::ByteRange;
 use crate::error::DemuxError;
 use crate::file_level::{self, Handling, Value};
+use crate::framing::to_u64;
 use crate::framing::{BoxEvent, BoxReader};
 use crate::leniency::Leniency;
 use crate::limits::DemuxLimits;
 use crate::media_data::MediaDataReader;
 use crate::sample::{DataReferenceKey, Sample};
 use crate::structure_data::{DataReference, SampleLocations, SegmentIndex, StructureDataReader};
+
+/// Length of the `imda_identifier` an `imda` opens its payload with, §8.1.4
+const IDENTIFIER_BYTES: u64 = 4;
 
 /// Reader of a movie file or a segment: the boxes at file level, read into their values, and the samples they declare
 ///
@@ -61,6 +65,8 @@ pub struct Demuxer {
     payload_limit_bytes: u64,
     file_type: Option<FileTypeBox>,
     segment_type: Option<SegmentTypeBox>,
+    /// Header and place of the `imda` whose `imda_identifier` is being read
+    identified_media_data: Option<(BoxHeader, ByteRange)>,
 }
 
 impl Demuxer {
@@ -80,6 +86,7 @@ impl Demuxer {
             payload_limit_bytes: limits.payload_bytes(),
             file_type: None,
             segment_type: None,
+            identified_media_data: None,
         }
     }
 
@@ -183,6 +190,9 @@ impl Demuxer {
     /// * [`UnfinishedSample`](DemuxError::UnfinishedSample): the call returns
     ///   no event, and a sample lacks bytes, as for
     ///   [`MediaDataReader::finish`].
+    /// * [`UnresolvedIdentifiedMediaData`](DemuxError::UnresolvedIdentifiedMediaData):
+    ///   the call returns no event, and samples are located in an `imda` the
+    ///   file has not had.
     /// * The failure the demuxer failed with before.
     pub fn finish(&mut self) -> Result<Option<DemuxEvent>, DemuxError> {
         if let Some(box_event) = self.boxes.finish()?
@@ -193,6 +203,11 @@ impl Demuxer {
         self.media_data
             .finish()
             .inspect_err(|&failure| self.boxes.fail_with(failure))?;
+        if let Some(identifier) = self.structure_data.unresolved_identified_media_data() {
+            let failure = DemuxError::UnresolvedIdentifiedMediaData { identifier };
+            self.boxes.fail_with(failure);
+            return Err(failure);
+        }
         Ok(None)
     }
 
@@ -276,7 +291,7 @@ impl Demuxer {
     /// Returns the entries of the data references of the tracks of the movie, in the order of their keys, as [`StructureDataReader::data_references`] does
     ///
     /// The demuxer gathers the samples whose entry
-    /// [`is_in_same_file`](crate::boxes::DataEntry::is_in_same_file). The
+    /// [`is_in_this_file`](crate::boxes::DataEntry::is_in_this_file). The
     /// events carry the locations of the others too, in file offsets of the
     /// file their entry names, for the caller to read there.
     pub fn data_references(&self) -> impl Iterator<Item = DataReference<'_>> {
@@ -319,6 +334,11 @@ impl Demuxer {
                 return Ok(None);
             }
             Handling::MediaData => DemuxEvent::MediaData { header, byte_range },
+            Handling::IdentifiedMediaData => {
+                self.boxes.gather_head(IDENTIFIER_BYTES)?;
+                self.identified_media_data = Some((header, byte_range));
+                return Ok(None);
+            }
             Handling::Other => DemuxEvent::Other { header, byte_range },
         };
         self.boxes.skip()?;
@@ -327,6 +347,26 @@ impl Demuxer {
 
     /// Reads the box just gathered, if any, into its value, and returns the event it is reported with
     fn close(&mut self) -> Result<Option<DemuxEvent>, DemuxError> {
+        if let Some(head) = self.boxes.gathered_head()
+            && let Some((header, byte_range)) = self.identified_media_data.take()
+        {
+            let identifier = <[u8; 4]>::try_from(head)
+                .map(u32::from_be_bytes)
+                .map_err(|_| DemuxError::Box {
+                    error: Error::truncated_buffer(IDENTIFIER_BYTES, to_u64(head.len()))
+                        .in_container(header.box_type()),
+                })?;
+            let payload_offset = byte_range.offset().saturating_add(header.encoded_len());
+            let samples = self
+                .structure_data
+                .handle_identified_media_data(identifier, payload_offset)?;
+            return Ok(Some(DemuxEvent::IdentifiedMediaData {
+                header,
+                byte_range,
+                identifier,
+                samples: self.gather(samples)?,
+            }));
+        }
         let (Some(raw_box), Some(range)) =
             (self.boxes.gathered_box(), self.boxes.gathered_box_range())
         else {
@@ -383,7 +423,7 @@ impl Demuxer {
             .handle_sample_locations(samples.clone().filter(|location| {
                 structure_data
                     .data_reference(location.data_reference())
-                    .is_some_and(|data_reference| data_reference.entry().is_in_same_file())
+                    .is_some_and(|data_reference| data_reference.entry().is_in_this_file())
             }))?;
         Ok(samples)
     }
@@ -445,13 +485,32 @@ pub enum DemuxEvent {
         /// Where the whole box lies
         byte_range: ByteRange,
     },
-    /// Media data box, `mdat` (§8.1.1) or `imda` (§8.1.4), skipped
+    /// Media data box, `mdat` (§8.1.1), skipped
     #[non_exhaustive]
     MediaData {
         /// Header of the box
         header: BoxHeader,
         /// Where the whole box lies, its length `None` when it runs to the end of the file
         byte_range: ByteRange,
+    },
+    /// Identified media data box, `imda` (§8.1.4): its `imda_identifier` read, and the rest skipped
+    ///
+    /// The samples whose data reference entry names the box (§8.7.2), and
+    /// that a `moov` or a `moof` read before it located, are located now, in
+    /// file offsets, and come with the event; those located after it come
+    /// with the event of their `moov` or `moof`, as other samples do. A caller
+    /// that cannot seek reads the samples of an `imda` only where it comes
+    /// after the `moov` or `moof` that locates them, as for an `mdat`.
+    #[non_exhaustive]
+    IdentifiedMediaData {
+        /// Header of the box
+        header: BoxHeader,
+        /// Where the whole box lies, its length `None` when it runs to the end of the file
+        byte_range: ByteRange,
+        /// `imda_identifier` of the box
+        identifier: u32,
+        /// Locations of the samples the box holds that earlier boxes located, in the order their media data lies
+        samples: SampleLocations,
     },
     /// Any other box, skipped, §4.2.2
     #[non_exhaustive]
@@ -495,6 +554,7 @@ mod tests {
         SegmentIndex,
         MovieFragmentRandomAccess,
         MediaData(ByteRange),
+        IdentifiedMediaData(u32, Vec<(u32, u64, Range<u64>)>),
         Other(BoxType, ByteRange),
     }
 
@@ -629,6 +689,11 @@ mod tests {
             DemuxEvent::SegmentIndex { .. } => Seen::SegmentIndex,
             DemuxEvent::MovieFragmentRandomAccess { .. } => Seen::MovieFragmentRandomAccess,
             DemuxEvent::MediaData { byte_range, .. } => Seen::MediaData(byte_range),
+            DemuxEvent::IdentifiedMediaData {
+                identifier,
+                samples,
+                ..
+            } => Seen::IdentifiedMediaData(identifier, placed(samples)),
             DemuxEvent::Other { header, byte_range } => Seen::Other(header.box_type(), byte_range),
         };
         seen.push(event);
@@ -1029,7 +1094,14 @@ mod tests {
 
     /// Returns a movie of track 1, no sample in its `moov`, and a `trex` of samples of 100 ticks and 2 bytes
     fn fragmented_movie() -> Vec<u8> {
-        let mut movie = movie([track(1, 10, &[], &[], &[])]);
+        fragmented_movie_of(isobmff_boxes::DataEntry::Url(Default::default()))
+    }
+
+    /// Returns a movie as [`fragmented_movie`], its media data where the data reference entry `entry` says
+    fn fragmented_movie_of(entry: isobmff_boxes::DataEntry) -> Vec<u8> {
+        let mut trak = track(1, 10, &[], &[], &[]);
+        trak.mdia.minf.dinf.dref.data_entries = vec![entry];
+        let mut movie = movie([trak]);
         let mut trex = TrackExtendsBox::default();
         trex.track_id = 1;
         trex.default_sample_description_index = 1;
@@ -1039,6 +1111,104 @@ mod tests {
         mvex.trex = vec![trex];
         movie.mvex = Some(mvex);
         encoded(&movie)
+    }
+
+    /// Returns a `moof` of sequence number `sequence_number` of two samples of track 1 of 2 bytes, at offset 4 of the payload of their `imda`, past its `imda_identifier`
+    fn identified_fragment(sequence_number: u32) -> Vec<u8> {
+        let mut trun = TrackRunBox::default();
+        trun.data_offset = Some(4);
+        trun.samples = TrackRunSamples::EmptyRows { sample_count: 2 };
+        let mut traf = TrackFragmentBox::default();
+        traf.tfhd.track_id = 1;
+        traf.tfdt = Some(TrackFragmentBaseMediaDecodeTimeBox::default());
+        traf.trun = vec![trun];
+        let mut moof = MovieFragmentBox::default();
+        moof.mfhd.sequence_number = sequence_number;
+        moof.traf = vec![traf];
+        encoded(&moof)
+    }
+
+    /// Returns the `imda` of `identifier`, of the media data `WXYZ`
+    fn identified_media_data(identifier: u32) -> Vec<u8> {
+        raw_box(
+            *b"imda",
+            &[identifier.to_be_bytes().as_slice(), b"WXYZ"].concat(),
+        )
+    }
+
+    #[test]
+    fn samples_in_an_imda_after_their_moof_come_with_it_and_those_in_an_imda_before_it_with_the_moof()
+     {
+        let sequence_numbered =
+            fragmented_movie_of(isobmff_boxes::DataEntry::SeqNumImda(Default::default()));
+        let mut imdt = isobmff_boxes::DataEntryImdaBox::default();
+        imdt.imda_ref_identifier = 9;
+        let identified = fragmented_movie_of(isobmff_boxes::DataEntry::Imda(imdt));
+        let after = [
+            file_type(),
+            sequence_numbered.clone(),
+            identified_fragment(5),
+            identified_media_data(5),
+        ]
+        .concat();
+        let before = [
+            file_type(),
+            identified.clone(),
+            identified_media_data(9),
+            identified_fragment(1),
+        ]
+        .concat();
+        let payload = |imda_at: usize| {
+            let start = to_u64(imda_at).saturating_add(8);
+            Vec::from([(1, 0, start + 4..start + 6), (1, 100, start + 6..start + 8)])
+        };
+        let after_imda = after.len() - identified_media_data(5).len();
+        let before_imda = file_type().len() + identified.len();
+        let samples = vec![(1, b"WX".to_vec()), (1, b"YZ".to_vec())];
+
+        let read_after = read(&mut Demuxer::new(), &after, usize::MAX).unwrap();
+        let read_before = read(&mut Demuxer::new(), &before, usize::MAX).unwrap();
+        let (streamed, ending) = stream(&mut Demuxer::new(), &after, 7);
+
+        assert_eq!(
+            (read_after.seen.last(), read_after.samples),
+            (
+                Some(&Seen::IdentifiedMediaData(5, payload(after_imda))),
+                samples.clone()
+            )
+        );
+        assert_eq!(
+            (read_before.seen.last(), read_before.samples),
+            (
+                Some(&Seen::MovieFragment(payload(before_imda))),
+                samples.clone()
+            )
+        );
+        assert_eq!((streamed, ending), (samples, Ok(())));
+    }
+
+    #[test]
+    fn a_file_that_ends_without_the_imda_its_samples_are_in_or_with_an_imda_too_short_for_its_identifier_is_refused()
+     {
+        let mut imdt = isobmff_boxes::DataEntryImdaBox::default();
+        imdt.imda_ref_identifier = 9;
+        let identified = fragmented_movie_of(isobmff_boxes::DataEntry::Imda(imdt));
+        let unresolved = [file_type(), identified.clone(), identified_fragment(1)].concat();
+        let short = [file_type(), identified, raw_box(*b"imda", b"AB")].concat();
+
+        assert_eq!(
+            [
+                read(&mut Demuxer::new(), &unresolved, usize::MAX).map(|_| ()),
+                read(&mut Demuxer::new(), &short, usize::MAX).map(|_| ()),
+            ],
+            [
+                Err(DemuxError::UnresolvedIdentifiedMediaData { identifier: 9 }),
+                Err(DemuxError::Box {
+                    error: isobmff_core::Error::truncated_buffer(4, 2)
+                        .in_container(BoxType::compact(*b"imda"))
+                }),
+            ]
+        );
     }
 
     /// Returns a `moof` of two samples of track 1, decoded from `tfdt` if given, followed by the `mdat` of their four bytes
@@ -1198,6 +1368,7 @@ mod tests {
                 | DemuxEvent::SegmentIndex { .. }
                 | DemuxEvent::MovieFragmentRandomAccess { .. }
                 | DemuxEvent::MediaData { .. }
+                | DemuxEvent::IdentifiedMediaData { .. }
                 | DemuxEvent::Other { .. } => {}
             }
         }

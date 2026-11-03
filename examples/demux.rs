@@ -55,7 +55,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     for data_reference in demuxer.data_references() {
         let entry = data_reference.entry();
-        if entry.is_in_same_file() {
+        if entry.is_in_this_file() {
             continue;
         }
         let named = if let DataEntry::Url(url) = entry
@@ -85,6 +85,9 @@ fn print_event(event: &DemuxEvent) {
             (MovieFragmentRandomAccessBox::BOX_TYPE, byte_range)
         }
         DemuxEvent::MediaData {
+            header, byte_range, ..
+        }
+        | DemuxEvent::IdentifiedMediaData {
             header, byte_range, ..
         }
         | DemuxEvent::Other {

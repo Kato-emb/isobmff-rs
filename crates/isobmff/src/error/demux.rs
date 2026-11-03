@@ -114,7 +114,7 @@ pub enum DemuxError {
         /// Index, from 1, of the entry of the `dref`
         data_reference_index: u16,
     },
-    /// Media data in a container the reader does not resolve offsets into: an `IdentifiedMediaDataBox`
+    /// Samples of the movie whose data reference entry is a `DataEntrySeqNumImdaBox`, which names only the media data of samples in a movie fragment, §8.7.2
     #[non_exhaustive]
     UnsupportedDataReference {
         /// `track_ID` of the track
@@ -162,6 +162,34 @@ pub enum DemuxError {
         retained_leniencies: u64,
         /// Number of leniencies the reader keeps up to
         limit_leniencies: u64,
+    },
+    /// `IdentifiedMediaDataBox` that would take those a reader keeps the places of past the limit it keeps them up to
+    #[non_exhaustive]
+    IdentifiedMediaDataCountLimitExceeded {
+        /// Number of `IdentifiedMediaDataBox`es the reader would keep the places of
+        retained_identified_media_data: u64,
+        /// Number of `IdentifiedMediaDataBox`es the reader keeps the places of up to
+        limit_identified_media_data: u64,
+    },
+    /// Samples whose `IdentifiedMediaDataBox` is not read yet that would take those a reader holds past the limit it holds them up to
+    #[non_exhaustive]
+    UnresolvedSampleCountLimitExceeded {
+        /// Number of samples the reader would hold
+        unresolved_samples: u64,
+        /// Number of samples the reader holds up to
+        limit_samples: u64,
+    },
+    /// `IdentifiedMediaDataBox` whose `imda_identifier` one read before has, §8.1.4
+    #[non_exhaustive]
+    DuplicateIdentifiedMediaData {
+        /// `imda_identifier` of the box
+        identifier: u32,
+    },
+    /// File that ends with samples whose media data is in an `IdentifiedMediaDataBox` it does not have, §8.7.2
+    #[non_exhaustive]
+    UnresolvedIdentifiedMediaData {
+        /// `imda_identifier` the samples' data reference names
+        identifier: u32,
     },
     /// Segment index that would take the segment indexes a reader keeps past the limit it keeps them up to
     #[non_exhaustive]
@@ -294,7 +322,7 @@ impl fmt::Display for DemuxError {
                 data_reference_index,
             } => write!(
                 formatter,
-                "data reference entry {data_reference_index} of track {track_id} names an identified media data box"
+                "data reference entry {data_reference_index} of track {track_id} of samples of the movie names identified media data by the sequence number of a movie fragment"
             ),
             Self::MissingMovie => formatter.write_str("a movie fragment before the movie"),
             Self::UnknownTrackId { track_id } => {
@@ -327,6 +355,28 @@ impl fmt::Display for DemuxError {
             } => write!(
                 formatter,
                 "{retained_leniencies} leniencies kept, past the limit of {limit_leniencies}"
+            ),
+            Self::IdentifiedMediaDataCountLimitExceeded {
+                retained_identified_media_data,
+                limit_identified_media_data,
+            } => write!(
+                formatter,
+                "{retained_identified_media_data} identified media data boxes kept, past the limit of {limit_identified_media_data}"
+            ),
+            Self::UnresolvedSampleCountLimitExceeded {
+                unresolved_samples,
+                limit_samples,
+            } => write!(
+                formatter,
+                "{unresolved_samples} samples held for identified media data not read yet, past the limit of {limit_samples}"
+            ),
+            Self::DuplicateIdentifiedMediaData { identifier } => write!(
+                formatter,
+                "a second identified media data box of identifier {identifier}"
+            ),
+            Self::UnresolvedIdentifiedMediaData { identifier } => write!(
+                formatter,
+                "samples in identified media data of identifier {identifier}, which the file does not have"
             ),
             Self::SegmentIndexCountLimitExceeded {
                 retained_segment_indexes,
