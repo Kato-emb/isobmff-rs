@@ -71,25 +71,13 @@ pub enum MuxError {
         /// The major brand
         brand: FourCc,
     },
-    /// Box offered where the file it is written into takes none: an `mvex` in the movie of a file that is not fragmented
-    #[non_exhaustive]
-    UnexpectedBox {
-        /// Type of the box
-        box_type: BoxType,
-    },
-    /// Table of the sample table of a track that declares samples, which the samples written declare in its place
+    /// Table of the sample table of a track that declares samples and that the muxer does not write from the samples it takes: a sample group, sub-sample, sample auxiliary information or shadow sync table
     #[non_exhaustive]
     SampleTableNotEmpty {
         /// `track_ID` of the track
         track_id: u32,
         /// Type of the table
         box_type: BoxType,
-    },
-    /// Track of the movie of a fragmented file with no `trex`, which its fragments take defaults from
-    #[non_exhaustive]
-    MissingTrackExtends {
-        /// `track_ID` of the track
-        track_id: u32,
     },
     /// Sample of a track the movie has none of
     #[non_exhaustive]
@@ -217,19 +205,10 @@ impl fmt::Display for MuxError {
                 formatter,
                 "brands of major brand {brand} name none of iso5 to isod, which a track fragment based on its moof takes"
             ),
-            Self::UnexpectedBox { box_type } => {
-                write!(formatter, "{box_type} box where the file takes none")
-            }
             Self::SampleTableNotEmpty { track_id, box_type } => write!(
                 formatter,
-                "{box_type} of track {track_id} declares samples already"
+                "{box_type} of track {track_id} declares samples, which the muxer does not carry"
             ),
-            Self::MissingTrackExtends { track_id } => {
-                write!(
-                    formatter,
-                    "track {track_id} of a fragmented movie has no trex"
-                )
-            }
             Self::UnknownTrackId { track_id } => {
                 write!(
                     formatter,
