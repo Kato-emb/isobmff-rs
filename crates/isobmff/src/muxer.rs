@@ -11,6 +11,7 @@ use crate::file_level::refuse_brands_before_iso5;
 use crate::file_structure::FileStructure;
 use crate::framing::{BoxEvent, BoxWriter, to_u64};
 use crate::media_data::MediaDataWriter;
+use crate::output::Output;
 use crate::sample::Sample;
 use crate::structure_data::{MovieFragmentWriter, SampleTableWriter, StructureDataWriter};
 
@@ -18,8 +19,10 @@ use crate::structure_data::{MovieFragmentWriter, SampleTableWriter, StructureDat
 ///
 /// The muxer does no I/O. It takes the brands, the movie and the samples
 /// of the file, and returns the file a box at file level at a time from
-/// [`poll_output`](Self::poll_output), in the order they lie in the file:
-/// writing them one after another gives the file. How the samples are laid
+/// [`poll_output`](Self::poll_output), each an [`Output`] with the file
+/// offset it goes to: they come in the order they lie in the file, each at
+/// the end of those before it, so writing them one after another gives the
+/// file, as a caller that cannot seek does. How the samples are laid
 /// out is the [`FileStructure`] the muxer is made with. The muxer is the
 /// writers of the layers composed: a caller that lays a file out otherwise
 /// writes it with them, as the [`media_data`](crate::media_data) example
@@ -40,7 +43,7 @@ use crate::structure_data::{MovieFragmentWriter, SampleTableWriter, StructureDat
 ///
 /// ```
 /// use isobmff::boxes::{DataEntry, DataEntryUrlBox, MovieBox, SampleDescription, SampleEntry, TrackBox};
-/// use isobmff::{DemuxEvent, Demuxer, FileStructure, FourCc, Muxer, Sample, SampleProperties};
+/// use isobmff::{DemuxEvent, Demuxer, FileStructure, FourCc, Muxer, Output, Sample, SampleProperties};
 ///
 /// // A movie of one track, its samples described by one sample entry, and in the file itself
 /// let mut trak = TrackBox::default();
@@ -72,7 +75,7 @@ use crate::structure_data::{MovieFragmentWriter, SampleTableWriter, StructureDat
 /// };
 /// muxer.handle_samples([sample(0, b"AB"), sample(1024, b"CD")])?;
 /// muxer.finish()?;
-/// let file: Vec<u8> = core::iter::from_fn(|| muxer.poll_output()).flatten().collect();
+/// let file: Vec<u8> = core::iter::from_fn(|| muxer.poll_output()).flat_map(Output::into_bytes).collect();
 ///
 /// // A demuxer reads the same samples back
 /// let mut demuxer = Demuxer::new();
@@ -96,9 +99,9 @@ pub struct Muxer {
     structure_data: Option<StructureDataWriter>,
     media_data: MediaDataWriter,
     /// Boxes written and not yet polled, in the order they lie in the file
-    output: VecDeque<Vec<u8>>,
+    output: VecDeque<Output>,
     /// Boxes of an indexed segment that go after its `sidx`, held back until [`finish`](Self::finish) writes it
-    held: Vec<Vec<u8>>,
+    held: Vec<Output>,
     /// Whether the `ftyp`, or the `styp` of a segment, is written
     file_type: bool,
     finished: bool,
@@ -308,22 +311,24 @@ impl Muxer {
             StructureDataWriter::NonFragmented(writer) => {
                 // Why not self.boxes: the sample table writer checks the samples once the mdat has placed them, and a refused call leaves the muxer as it was
                 let mut boxes = self.boxes.clone();
+                let mdat_offset = boxes.next_offset();
                 let (mdat, locations) =
                     self.media_data
                         .write(writer.movie(), &mut boxes, header, &samples)?;
                 writer.handle_locations(&locations)?;
                 self.boxes = boxes;
-                written.push(mdat);
+                written.push(Output::new(mdat_offset, mdat));
             }
             StructureDataWriter::Fragmented(writer) => {
                 let moof_offset = self.boxes.next_offset();
                 let (moof, _) =
                     writer.movie_fragment(&samples, moof_offset, header.encoded_len())?;
                 written.push(write_box(&mut self.boxes, &moof)?);
+                let mdat_offset = self.boxes.next_offset();
                 let (mdat, _) =
                     self.media_data
                         .write(writer.movie(), &mut self.boxes, header, &samples)?;
-                written.push(mdat);
+                written.push(Output::new(mdat_offset, mdat));
                 held = writer.indexes_subsegments();
             }
         }
@@ -336,11 +341,12 @@ impl Muxer {
         Ok(())
     }
 
-    /// Returns the next box at file level written, in the order the boxes lie in the file, or `None` when the muxer has written none it has not returned
+    /// Returns the next box at file level written, and the file offset it goes to, or `None` when the muxer has written none it has not returned
     ///
-    /// The boxes of an indexed segment after its `styp` are returned once
-    /// [`finish`](Self::finish) has written its `sidx`.
-    pub fn poll_output(&mut self) -> Option<Vec<u8>> {
+    /// The boxes come in the order they lie in the file, each at the end of
+    /// the boxes before it. The boxes of an indexed segment after its `styp`
+    /// are returned once [`finish`](Self::finish) has written its `sidx`.
+    pub fn poll_output(&mut self) -> Option<Output> {
         self.output.pop_front()
     }
 
@@ -373,9 +379,16 @@ impl Muxer {
                     // Why not self.boxes: it counts file offsets in the order
                     // boxes are written, and the sidx goes before boxes it has
                     // counted already
-                    let bytes = write_box(&mut BoxWriter::new(), &sidx)?;
-                    self.output.push_back(bytes);
-                    self.output.extend(self.held.drain(..));
+                    let sidx_offset = self
+                        .held
+                        .first()
+                        .map_or(self.boxes.next_offset(), Output::offset);
+                    let sidx = write_box(&mut BoxWriter::new(), &sidx)?.into_bytes();
+                    let sidx_len = to_u64(sidx.len());
+                    self.output.push_back(Output::new(sidx_offset, sidx));
+                    self.output.extend(self.held.drain(..).map(|held| {
+                        Output::new(held.offset().saturating_add(sidx_len), held.into_bytes())
+                    }));
                 }
                 mfra.map(|mfra| write_box(&mut self.boxes, &mfra))
                     .transpose()?
@@ -413,7 +426,7 @@ impl Muxer {
     }
 }
 
-/// Writes `value` as a box at file level through `boxes`, and returns its bytes
+/// Writes `value` as a box at file level through `boxes`, and returns its bytes and the file offset `boxes` counts for it
 ///
 /// # Errors
 ///
@@ -422,7 +435,7 @@ impl Muxer {
 pub(crate) fn write_box<Value: BoxEncode + BoxDefinition>(
     boxes: &mut BoxWriter,
     value: &Value,
-) -> Result<Vec<u8>, MuxError> {
+) -> Result<Output, MuxError> {
     let payload_len = value.payload_len();
     let too_long = MuxError::Box {
         error: Error::truncated_buffer(payload_len, to_u64(usize::MAX)),
@@ -432,12 +445,13 @@ pub(crate) fn write_box<Value: BoxEncode + BoxDefinition>(
         .encode_payload(&mut payload)
         .map_err(|error| MuxError::Box { error })?;
     let header = BoxHeader::with_payload_len(Value::BOX_TYPE, payload_len).ok_or(too_long)?;
+    let offset = boxes.next_offset();
     let mut bytes = Vec::new();
     bytes.extend_from_slice(boxes.handle_event(BoxEvent::Header(header))?);
     bytes.extend_from_slice(boxes.handle_event(BoxEvent::Payload(&payload))?);
     bytes.extend_from_slice(boxes.handle_event(BoxEvent::End)?);
 
-    Ok(bytes)
+    Ok(Output::new(offset, bytes))
 }
 
 #[cfg(test)]
@@ -458,6 +472,7 @@ mod tests {
     use crate::file_structure::FileStructure;
     use crate::framing::to_u64;
     use crate::leniency::{Leniency, SampleTableDisagreement};
+    use crate::output::Output;
     use crate::sample::{Sample, SampleProperties};
     use crate::structure_data::fixtures::{encoded, movie, track, written};
     use crate::structure_data::movie_fragment_random_access_start;
@@ -516,7 +531,9 @@ mod tests {
 
     /// Returns the boxes `muxer` has written, each whole
     fn output(muxer: &mut Muxer) -> Vec<Vec<u8>> {
-        iter::from_fn(|| muxer.poll_output()).collect()
+        iter::from_fn(|| muxer.poll_output())
+            .map(Output::into_bytes)
+            .collect()
     }
 
     /// Returns the `moof` numbered `sequence_number` of [`two_samples`], whose `mdat` follows it
@@ -898,6 +915,49 @@ mod tests {
             output(&mut muxer),
             [ftyp, written(b"mdat", &[b"ABCDE"]), encoded(&expected)]
         );
+    }
+
+    #[test]
+    fn each_output_goes_to_the_end_of_the_outputs_before_it_in_every_file_structure() {
+        let structures = [
+            (FileStructure::NonFragmented, one_track()),
+            (
+                FileStructure::Fragmented {
+                    first_sequence_number: 1,
+                    random_access: true,
+                },
+                one_fragmented_track(),
+            ),
+            (
+                FileStructure::Segment {
+                    first_sequence_number: 1,
+                    segment_index: true,
+                },
+                one_fragmented_track(),
+            ),
+        ];
+
+        for (file_structure, movie) in structures {
+            let mut muxer = Muxer::new(file_structure);
+            muxer.handle_file_type(file_type(b"iso6", &[])).unwrap();
+            muxer.handle_movie(movie).unwrap();
+            let [first, second] = two_samples();
+            muxer.handle_samples([first]).unwrap();
+            muxer.handle_samples([second]).unwrap();
+            muxer.finish().unwrap();
+            let outputs: Vec<Output> = iter::from_fn(|| muxer.poll_output()).collect();
+
+            let starts: Vec<u64> = outputs
+                .iter()
+                .scan(0, |end, output| {
+                    let offset = *end;
+                    *end += to_u64(output.bytes().len());
+                    Some(offset)
+                })
+                .collect();
+            let offsets: Vec<u64> = outputs.iter().map(Output::offset).collect();
+            assert_eq!(offsets, starts);
+        }
     }
 
     #[test]

@@ -345,7 +345,8 @@ impl FastStart {
 
         let mut bytes = Some(
             write_box(&mut BoxWriter::new(), &movie)
-                .map_err(|error| FastStartError::Write { error })?,
+                .map_err(|error| FastStartError::Write { error })?
+                .into_bytes(),
         );
         Ok(order
             .iter()
