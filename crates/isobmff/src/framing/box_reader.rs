@@ -442,7 +442,8 @@ impl BoxReader {
             .size()
             .total_bytes()
             .map(|total| offset.saturating_add(total));
-        if let (Answer::Skip, Some(end)) = (answer, end) {
+        // Why not leave a head of no bytes to `read_payload`: it moves past the payload only as input comes, and the reader would want the payload it skips.
+        if let (Answer::Skip | Answer::GatherHead { head_bytes: 0 }, Some(end)) = (answer, end) {
             self.position = end;
         }
         self.progress = Progress::Payload {
@@ -821,6 +822,30 @@ mod tests {
                 Some(PAYLOAD.get(..3).unwrap().to_vec()),
                 false,
                 Some(ByteRange::new(16, None))
+            )
+        );
+    }
+
+    #[test]
+    fn a_head_of_no_bytes_wants_the_file_offset_just_past_the_box() {
+        let file = [b"\0\0\0\x10free".as_slice(), PAYLOAD, b"\0\0\0\x08skip"].concat();
+        let next_box = file.get(16..).unwrap();
+        let mut reader = BoxReader::new();
+        reader.handle_input(0, file.get(..8).unwrap()).unwrap();
+        reader.gather_head(0).unwrap();
+        let wanted = reader.wanted_input();
+        let end = reader.handle_input(16, next_box);
+        let head = reader.gathered_head().map(<[u8]>::to_vec);
+
+        assert_eq!(
+            (wanted, end, head, reader.handle_input(16, next_box)),
+            (
+                Some(ByteRange::new(16, None)),
+                Ok(Some(BoxEvent::End)),
+                Some(Vec::new()),
+                Ok(Some(BoxEvent::Header(
+                    BoxHeader::decode(next_box).unwrap().0
+                )))
             )
         );
     }
