@@ -148,6 +148,16 @@ pub enum MuxError {
         /// `track_ID` of the track
         track_id: u32,
     },
+    /// Edit of a track in a movie file whose `media_time` is before the first sample of the track, where the sample table counts decoding times from, §8.6.1.2, §8.6.6
+    #[non_exhaustive]
+    MediaTimeOutOfRange {
+        /// `track_ID` of the track
+        track_id: u32,
+        /// `media_time` of the edit
+        media_time: i64,
+        /// Decoding time of the first sample of the track
+        decoding_time: u64,
+    },
     /// Edit list of the reference track of an indexed segment that does not map its composition timeline, which a `sidx` states its times after, §8.6.6, §8.14.3
     #[non_exhaustive]
     Timeline {
@@ -266,6 +276,14 @@ impl fmt::Display for MuxError {
             Self::DataOffsetOutOfRange { track_id } => write!(
                 formatter,
                 "media data of a sample of track {track_id} lies past what a data offset reaches"
+            ),
+            Self::MediaTimeOutOfRange {
+                track_id,
+                media_time,
+                decoding_time,
+            } => write!(
+                formatter,
+                "edit of track {track_id} from media time {media_time}, before its first sample at decoding time {decoding_time}"
             ),
             Self::Timeline { error } => fmt::Display::fmt(&error, formatter),
             Self::SegmentIndexOutOfRange { reference_id } => write!(

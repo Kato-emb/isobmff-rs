@@ -24,9 +24,9 @@ pub enum FileStructure {
     ///
     /// The sample table of a track counts decoding times from 0 at its first
     /// sample (§8.6.1.2). The first sample of a track without an edit list
-    /// is at decoding time 0; that of a track with one may be at any, from
-    /// which the table counts, and the edit list of the movie, as the caller
-    /// writes it, maps the times the table counts.
+    /// is at decoding time 0; that of a track with one may be at any, and
+    /// the edits of the track have their `media_time` moved back by as much,
+    /// so that they present the same media.
     NonFragmented,
     /// Media segment, §8.14: the `styp`, then a `moof` and an `mdat` for each call, of the movie its initialization segment holds
     ///

@@ -395,6 +395,11 @@ impl TrackTable {
         self.decoding_time
     }
 
+    /// Returns the decoding time the first sample is taken at, or `None` before the first
+    pub(super) const fn decoding_start(&self) -> Option<u64> {
+        self.decoding_start
+    }
+
     /// Returns the decoding time past the last sample, counted from the decoding time the first is taken at, or `None` before the first
     pub(super) fn decoding_end(&self) -> Option<u64> {
         self.decoding_start

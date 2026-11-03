@@ -225,6 +225,8 @@ impl SampleTableWriter {
     /// * [`DecodingTimeMismatch`](MuxError::DecodingTimeMismatch): a sample
     ///   does not start where the one before it of its track ends, or the
     ///   first of a track without an edit list does not start at 0.
+    /// * [`MediaTimeOutOfRange`](MuxError::MediaTimeOutOfRange): an edit of
+    ///   the track of the first sample of a track starts before that sample.
     /// * [`SampleSizeOutOfRange`](MuxError::SampleSizeOutOfRange),
     ///   [`DataOffsetOutOfRange`](MuxError::DataOffsetOutOfRange): the media
     ///   data of a sample is longer than a table holds, or lies past 64-bit
@@ -245,6 +247,22 @@ impl SampleTableWriter {
             })
             .collect();
         let runs = runs(&self.movie, samples, &decoding_times)?;
+        for (index, run) in runs.iter().enumerate() {
+            let earlier = runs.get(..index).unwrap_or_default();
+            let first = decoding_times.get(run.track).copied().flatten().is_none()
+                && !earlier.iter().any(|earlier| earlier.track == run.track);
+            let edits = self.movie.trak.get(run.track).map(timeline::edits);
+            let before = edits.unwrap_or_default().iter().find(|edit| {
+                edit.media_time >= 0 && i128::from(edit.media_time) < i128::from(run.decoding_time)
+            });
+            if let Some(edit) = before.filter(|_| first) {
+                return Err(MuxError::MediaTimeOutOfRange {
+                    track_id: run.track_id,
+                    media_time: edit.media_time,
+                    decoding_time: run.decoding_time,
+                });
+            }
+        }
         if let Some(last) = runs.last() {
             let run_len = last
                 .samples
@@ -275,7 +293,10 @@ impl SampleTableWriter {
     ///
     /// A track's `mdhd` takes the duration of its samples, and its `tkhd` the
     /// same in the timescale of the movie, the longest of which the `mvhd`
-    /// takes (§8.2.2, §8.3.2, §8.4.2).
+    /// takes (§8.2.2, §8.3.2, §8.4.2). The sample table counts decoding
+    /// times from 0 at the first sample of a track (§8.6.1.2): the edits of
+    /// a track whose first sample is at a later decoding time move their
+    /// `media_time` back by as much.
     pub(crate) fn finish(&mut self) -> &MovieBox {
         let movie = &mut self.movie;
         let movie_timescale = movie.mvhd.timescale;
@@ -291,6 +312,14 @@ impl SampleTableWriter {
             trak.tkhd.duration = track_duration;
             trak.tkhd.version = trak.tkhd.version.max(version_for(track_duration));
             movie_duration = movie_duration.max(track_duration);
+            let decoding_start = table.decoding_start().unwrap_or_default();
+            let elst = trak.edts.as_mut().and_then(|edts| edts.elst.as_mut());
+            if let Some(elst) = elst.filter(|_| decoding_start > 0) {
+                let shift = i64::try_from(decoding_start).unwrap_or(i64::MAX);
+                for edit in elst.entries.iter_mut().filter(|edit| edit.media_time >= 0) {
+                    edit.media_time = edit.media_time.saturating_sub(shift);
+                }
+            }
             table.fill(&mut trak.mdia.minf.stbl);
         }
         movie.mvhd.duration = movie_duration;
@@ -701,15 +730,7 @@ mod tests {
 
     #[test]
     fn the_samples_of_a_track_with_an_edit_list_start_at_the_decoding_time_of_the_first() {
-        let mut movie = two_tracks();
-        let mut elst = isobmff_boxes::EditListBox::default();
-        elst.entries = Vec::from([isobmff_boxes::EditListEntry::default()]);
-        let mut edts = isobmff_boxes::EditBox::default();
-        edts.elst = Some(elst);
-        if let Some(trak) = movie.trak.first_mut() {
-            trak.edts = Some(edts);
-        }
-        let mut writer = SampleTableWriter::new(movie).unwrap();
+        let mut writer = SampleTableWriter::new(edited(&[-1, 8])).unwrap();
 
         writer
             .handle_samples(&[sample(1, 5, 10, b"AB")], 0)
@@ -736,14 +757,61 @@ mod tests {
                 }),
             ]
         );
+        let trak = writer.finish().trak.first().unwrap();
+        let media_times: Vec<_> = crate::timeline::edits(trak)
+            .iter()
+            .map(|edit| edit.media_time)
+            .collect();
         assert_eq!(
-            writer
-                .finish()
-                .trak
-                .first()
-                .map(|trak| trak.mdia.mdhd.duration),
-            Some(20)
+            (trak.mdia.mdhd.duration, media_times),
+            (20, Vec::from([-1, 3]))
         );
+    }
+
+    #[test]
+    fn a_track_with_an_edit_before_its_first_sample_is_refused() {
+        let mut writer = SampleTableWriter::new(edited(&[3])).unwrap();
+
+        assert_eq!(
+            writer.handle_samples(&[sample(1, 5, 10, b"AB")], 0),
+            Err(MuxError::MediaTimeOutOfRange {
+                track_id: 1,
+                media_time: 3,
+                decoding_time: 5
+            })
+        );
+        assert_eq!(
+            writer.handle_samples(
+                &[
+                    sample(1, 3, 10, b"AB"),
+                    sample(2, 0, 10, b"CD"),
+                    sample(1, 13, 10, b"EF")
+                ],
+                0
+            ),
+            Ok(())
+        );
+    }
+
+    /// Returns [`two_tracks`] with an edit list on track 1 of edits from `media_times`
+    fn edited(media_times: &[i64]) -> MovieBox {
+        let mut movie = two_tracks();
+        let mut elst = isobmff_boxes::EditListBox::default();
+        elst.entries = media_times
+            .iter()
+            .map(|&media_time| {
+                let mut edit = isobmff_boxes::EditListEntry::default();
+                edit.media_time = media_time;
+                edit.media_rate_integer = 1;
+                edit
+            })
+            .collect();
+        let mut edts = isobmff_boxes::EditBox::default();
+        edts.elst = Some(elst);
+        if let Some(trak) = movie.trak.first_mut() {
+            trak.edts = Some(edts);
+        }
+        movie
     }
 
     #[test]
