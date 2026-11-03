@@ -147,8 +147,9 @@ impl FastStart {
     /// # Errors
     ///
     /// * [`Read`](FastStartError::Read): the boxes do not read, as for
-    ///   [`BoxReader::handle_input`], or the `moov`, or a `meta` at file
-    ///   level, is longer than [`FastStartLimits::movie_bytes`].
+    ///   [`BoxReader::handle_input`]; the `moov`, or a `meta` at file level,
+    ///   is longer than [`FastStartLimits::movie_bytes`]; or the file has a
+    ///   second `moov` ([`DuplicateBox`](DemuxError::DuplicateBox)).
     /// * [`FragmentedMovie`](FastStartError::FragmentedMovie): the file has a
     ///   `moof`, or its `moov` an `mvex`.
     /// * [`ItemLocationsInFile`](FastStartError::ItemLocationsInFile): a
@@ -234,6 +235,11 @@ impl FastStart {
                 if box_type == MovieFragmentBox::BOX_TYPE {
                     return Err(FastStartError::FragmentedMovie);
                 }
+                if box_type == MovieBox::BOX_TYPE
+                    && self.boxes.iter().any(|&(earlier, _)| earlier == box_type)
+                {
+                    return Err(read(DemuxError::DuplicateBox { box_type }));
+                }
                 if let Some(place) = self.reader.open_box() {
                     self.boxes.push((box_type, place));
                 }
@@ -251,7 +257,7 @@ impl FastStart {
                     if box_type == MetaBox::BOX_TYPE {
                         let meta = decode::<MetaBox>(gathered.payload()).map_err(read)?;
                         check_item_locations(Some(&meta))?;
-                    } else if self.movie.is_none() {
+                    } else {
                         let movie = decode::<MovieBox>(gathered.payload()).map_err(read)?;
                         if movie.mvex.is_some() {
                             return Err(FastStartError::FragmentedMovie);
@@ -510,11 +516,11 @@ mod tests {
         FileTypeBox, ItemLocation, ItemLocationBox, MetaBox, MovieBox, MovieExtendsBox,
         SampleAuxiliaryInformationOffsetsBox,
     };
-    use isobmff_core::{BoxHeader, BoxType};
+    use isobmff_core::{BoxDefinition, BoxHeader, BoxType};
 
     use super::{FastStart, FastStartLimits, FastStartOutput};
     use crate::byte_range::ByteRange;
-    use crate::error::FastStartError;
+    use crate::error::{DemuxError, FastStartError};
     use crate::structure_data::fixtures::{encoded, in_another_file, movie, track};
 
     const LIMITS: FastStartLimits = FastStartLimits {
@@ -738,6 +744,13 @@ mod tests {
                 lay_out(&[(0, file(&[&mdat]))], LIMITS),
                 lay_out(&[(0, file(&[&mdat, &encoded(&wide)]))], LIMITS),
                 lay_out(&[(0, file(&[&mdat, &encoded(&one_chunk(24))]))], few),
+                lay_out(
+                    &[(
+                        0,
+                        file(&[&mdat, &encoded(&one_chunk(24)), &encoded(&one_chunk(24))])
+                    )],
+                    LIMITS
+                ),
             ],
             [
                 Err(FastStartError::FragmentedMovie),
@@ -749,6 +762,11 @@ mod tests {
                     offset: 1 << 40
                 }),
                 Err(FastStartError::BoxCountLimitExceeded { limit_boxes: 2 }),
+                Err(FastStartError::Read {
+                    error: DemuxError::DuplicateBox {
+                        box_type: MovieBox::BOX_TYPE
+                    }
+                }),
             ]
         );
     }
