@@ -13,7 +13,7 @@ use super::sample_description::{DataOrigin, data_reference_index, located_data_r
 use super::sample_table::expand;
 use crate::error::{DemuxError, MuxError};
 use crate::leniency::Leniency;
-use crate::sample::{DataReferenceKey, SampleLocation, SampleProperties};
+use crate::sample::{SampleLocation, SampleProperties};
 
 /// Returns the number of samples the track runs of `moof` count, those of track fragments of empty duration left out
 pub(super) fn sample_count(moof: &MovieFragmentBox) -> u64 {
@@ -249,8 +249,6 @@ pub(super) struct Run<'a> {
     pub(super) decoding_time: u64,
     /// Decoding time past the last sample
     pub(super) decoding_end: u64,
-    /// Key a reader gives the data reference entry the sample entry of the run names
-    pub(super) data_reference: DataReferenceKey,
     pub(super) samples: &'a [SampleLocation],
 }
 
@@ -296,15 +294,13 @@ pub(super) fn runs<'a>(
             .saturating_add(1);
         let (run_samples, after) = rest.split_at_checked(len).unwrap_or((rest, &[]));
         let earlier = runs.iter().rev().find(|run| run.track == track);
-        let (sample_description_index, data_reference) = match earlier {
-            Some(earlier) => (earlier.sample_description_index, earlier.data_reference),
-            None => (
-                first.sample_description_index,
-                DataReferenceKey::of(
-                    track,
-                    data_reference_index(trak, first.sample_description_index)?,
-                ),
-            ),
+        let sample_description_index = match earlier {
+            Some(earlier) => earlier.sample_description_index,
+            None => {
+                // Why not take the sample entry as checked: locations a caller hands the sample table writer have not been through laid_out
+                data_reference_index(trak, first.sample_description_index)?;
+                first.sample_description_index
+            }
         };
         let decoding_start = earlier
             .map(|earlier| earlier.decoding_end)
@@ -339,7 +335,6 @@ pub(super) fn runs<'a>(
             sample_description_index,
             decoding_time: first.decoding_time,
             decoding_end: decoding_time,
-            data_reference,
             samples: run_samples,
         });
         rest = after;

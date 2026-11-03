@@ -5,7 +5,6 @@ use core::ops::Range;
 
 use isobmff_boxes::SampleFlags;
 
-use crate::error::MuxError;
 use crate::framing::to_u64;
 
 /// Values structure-data declares about one sample, ISO/IEC 14496-12 §8.8.7 and §8.8.8
@@ -233,34 +232,4 @@ impl SampleLocation {
             ..self.clone()
         }
     }
-}
-
-/// Returns the location of each of `samples`, their media data one after another in their order from file offset `data_offset`
-///
-/// # Errors
-///
-/// * [`DataOffsetOutOfRange`](MuxError::DataOffsetOutOfRange): the media
-///   data of a sample lies past 64-bit file offsets.
-pub(crate) fn laid_out(
-    samples: &[Sample],
-    data_offset: u64,
-) -> Result<Vec<SampleLocation>, MuxError> {
-    let mut data_end = data_offset;
-    samples
-        .iter()
-        .map(|sample| {
-            let start = data_end;
-            data_end = start.checked_add(to_u64(sample.data.len())).ok_or(
-                MuxError::DataOffsetOutOfRange {
-                    track_id: sample.properties.track_id,
-                },
-            )?;
-            // Why not the key a reader gives the data reference entry: the sample table writer reads no key, and the movie fragment writer gives each location its key once it has checked the sample entry
-            Ok(SampleLocation::new(
-                sample.properties,
-                DataReferenceKey::new(0),
-                start..data_end,
-            ))
-        })
-        .collect()
 }

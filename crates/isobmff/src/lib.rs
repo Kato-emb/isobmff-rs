@@ -135,14 +135,14 @@
 //! limits a media data reader; a location has a fixed size, so the count
 //! limits their bytes too.
 //!
-//! The demuxer is made of layers that follow the structure of a file, each
-//! usable alone:
+//! The demuxer and the muxer are made of layers that follow the structure of
+//! a file, each usable alone in either direction:
 //!
-//! | Layer | Reads | ISO/IEC 14496-12 |
-//! |---|---|---|
-//! | [`framing`] | the boxes laid end to end, out of bytes that arrive in pieces | §4.2.2 |
-//! | [`structure_data`] | the `moov` and `moof`s, resolved to the [`SampleLocation`] of each sample | A.3, §8.5, §8.8 |
-//! | [`media_data`] | the bytes of each sample, gathered out of the bytes of the file | §8.1.1 |
+//! | Layer | Reads | Writes | ISO/IEC 14496-12 |
+//! |---|---|---|---|
+//! | [`framing`] | the boxes laid end to end, out of bytes that arrive in pieces | the boxes laid end to end as bytes | §4.2.2 |
+//! | [`structure_data`] | the `moov` and `moof`s, resolved to the [`SampleLocation`] of each sample | the sample tables of the `moov`, from the [`SampleLocation`] of each sample, or a `moof` and the [`SampleLocation`] it gives each | A.3, §8.5, §8.8 |
+//! | [`media_data`] | the bytes of each sample, gathered out of the bytes of the file | the `mdat` of samples, and the [`SampleLocation`] of each | §8.1.1 |
 //!
 //! A caller that cannot seek passes the file to the demuxer in order, a piece
 //! at a time, passing each piece again while the demuxer returns events:
