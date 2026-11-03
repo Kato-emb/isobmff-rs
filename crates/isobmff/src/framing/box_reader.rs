@@ -24,8 +24,11 @@ const SHORTEST_HEADER: u64 = 8;
 /// Each box opens with [`BoxEvent::Header`], which the caller answers with
 /// what to do with the payload: [`gather`](Self::gather) it into one
 /// [`RawBox`], [`stream`](Self::stream) it as [`BoxEvent::Payload`]s borrowed
-/// from the input, or [`skip`](Self::skip) it. The reader takes no more input
-/// until it has the answer. Each box closes with [`BoxEvent::End`].
+/// from the input, [`skip`](Self::skip) it, or
+/// [`gather_head`](Self::gather_head): gather the first bytes of it, as many
+/// as a box needs to tell what it is, and skip the rest. The reader takes no
+/// more input until it has the answer. Each box closes with
+/// [`BoxEvent::End`].
 ///
 /// A box whose size runs to the end of the file is closed by
 /// [`finish`](Self::finish), which the caller calls once the file has no
@@ -108,15 +111,24 @@ enum Progress {
         end: Option<u64>,
         answer: Answer,
     },
-    /// Box whole in `gathered`, until the next input
-    Gathered,
+    /// Box in `gathered`, its header `header_len` bytes, until the next input: whole where `whole`, otherwise the head of its payload
+    Gathered {
+        header_len: u64,
+        whole: bool,
+    },
     Failed(DemuxError),
 }
 
 /// What the caller answered a header with
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Answer {
-    Gather { limit_bytes: u64 },
+    Gather {
+        limit_bytes: u64,
+    },
+    /// Gathers the first `head_bytes` of the payload, and skips the rest
+    GatherHead {
+        head_bytes: u64,
+    },
     Stream,
     Skip,
 }
@@ -156,7 +168,7 @@ impl BoxReader {
             return None;
         }
         let length = match self.progress {
-            Progress::Header { .. } | Progress::Gathered => None,
+            Progress::Header { .. } | Progress::Gathered { .. } => None,
             Progress::Opened { header, .. } => header.payload_len(),
             Progress::Payload {
                 end: None,
@@ -164,6 +176,18 @@ impl BoxReader {
                 ..
             }
             | Progress::Failed(_) => return None,
+            Progress::Payload {
+                header,
+                end,
+                answer: Answer::GatherHead { head_bytes },
+                ..
+            } => {
+                let wanted = self.head_wanted(header, end, head_bytes);
+                if wanted == 0 && end.is_none() {
+                    return None;
+                }
+                Some(wanted).filter(|&wanted| wanted > 0)
+            }
             Progress::Payload { end, .. } => self.remaining(end).filter(|&remaining| remaining > 0),
         };
         Some(ByteRange::new(self.position, length))
@@ -277,6 +301,30 @@ impl BoxReader {
         Ok(())
     }
 
+    /// Gathers the first `length_bytes` of the payload of the box just opened, or all of a shorter payload, and skips the rest; [`gathered_head`](Self::gathered_head) returns them after its [`BoxEvent::End`]
+    ///
+    /// The reader wants the bytes of the head alone, and next the file offset
+    /// just past the box. A box whose size runs to the end of the file ends
+    /// at [`finish`](Self::finish), and the reader wants no more input once
+    /// it has the head.
+    ///
+    /// # Errors
+    ///
+    /// * [`NoOpenBox`](DemuxError::NoOpenBox): no header waits for an answer.
+    /// * The failure the reader failed with before.
+    pub fn gather_head(&mut self, length_bytes: u64) -> Result<(), DemuxError> {
+        let (header, offset) = self.open_header()?;
+        let head_bytes = header
+            .payload_len()
+            .map_or(length_bytes, |payload_len| payload_len.min(length_bytes));
+        // Why not reserve: a head asked as long as an address reaches would abort the allocation, and a head that falls short only grows.
+        if let Ok(head_bytes) = usize::try_from(head_bytes) {
+            let _ = self.gathered.try_reserve(head_bytes);
+        }
+        self.answer(header, offset, Answer::GatherHead { head_bytes });
+        Ok(())
+    }
+
     /// Streams the payload of the box just opened as [`BoxEvent::Payload`]s, each a piece of the input it arrives in
     ///
     /// # Errors
@@ -313,14 +361,14 @@ impl BoxReader {
             Progress::Opened { header, offset } | Progress::Payload { header, offset, .. } => {
                 Some(ByteRange::new(offset, header.size().total_bytes()))
             }
-            Progress::Header { .. } | Progress::Gathered | Progress::Failed(_) => None,
+            Progress::Header { .. } | Progress::Gathered { .. } | Progress::Failed(_) => None,
         }
     }
 
     /// Returns the box just gathered, from its [`BoxEvent::End`] until the next call to [`handle_input`](Self::handle_input) or [`finish`](Self::finish)
     #[must_use]
     pub fn gathered_box(&self) -> Option<RawBox<'_>> {
-        if !matches!(self.progress, Progress::Gathered) {
+        if !matches!(self.progress, Progress::Gathered { whole: true, .. }) {
             return None;
         }
         RawBox::split_first(&self.gathered)
@@ -328,9 +376,22 @@ impl BoxReader {
             .map(|(raw_box, _)| raw_box)
     }
 
+    /// Returns the head of the payload [`gather_head`](Self::gather_head) gathered, from its [`BoxEvent::End`] until the next call to [`handle_input`](Self::handle_input) or [`finish`](Self::finish)
+    #[must_use]
+    pub fn gathered_head(&self) -> Option<&[u8]> {
+        let Progress::Gathered {
+            header_len,
+            whole: false,
+        } = self.progress
+        else {
+            return None;
+        };
+        self.gathered.get(usize::try_from(header_len).ok()?..)
+    }
+
     /// Returns where the box [`gathered_box`](Self::gathered_box) returns lies in the file, header included
     pub(crate) fn gathered_box_range(&self) -> Option<Range<u64>> {
-        if !matches!(self.progress, Progress::Gathered) {
+        if !matches!(self.progress, Progress::Gathered { whole: true, .. }) {
             return None;
         }
         Some(self.position.saturating_sub(to_u64(self.gathered.len()))..self.position)
@@ -348,7 +409,7 @@ impl BoxReader {
             Progress::Header { .. }
             | Progress::Opened { .. }
             | Progress::Payload { .. }
-            | Progress::Gathered => None,
+            | Progress::Gathered { .. } => None,
         }
     }
 
@@ -359,7 +420,9 @@ impl BoxReader {
             Progress::Opened { header, .. } => Err(DemuxError::UndecidedBox {
                 box_type: header.box_type(),
             }),
-            Progress::Header { .. } | Progress::Payload { .. } | Progress::Gathered => Ok(()),
+            Progress::Header { .. } | Progress::Payload { .. } | Progress::Gathered { .. } => {
+                Ok(())
+            }
         }
     }
 
@@ -368,7 +431,7 @@ impl BoxReader {
         match self.progress {
             Progress::Opened { header, offset } => Ok((header, offset)),
             Progress::Failed(failure) => Err(failure),
-            Progress::Header { .. } | Progress::Payload { .. } | Progress::Gathered => {
+            Progress::Header { .. } | Progress::Payload { .. } | Progress::Gathered { .. } => {
                 Err(DemuxError::NoOpenBox)
             }
         }
@@ -392,7 +455,7 @@ impl BoxReader {
 
     /// Makes ready for the header after a gathered box, which [`gathered_box`](Self::gathered_box) no longer returns
     fn leave_gathered(&mut self) {
-        if let Progress::Gathered = self.progress {
+        if let Progress::Gathered { .. } = self.progress {
             self.gathered.clear();
             self.progress = Progress::Header {
                 needed: SHORTEST_HEADER,
@@ -404,6 +467,18 @@ impl BoxReader {
     fn fail<'a>(&mut self, failure: DemuxError) -> Option<BoxEvent<'a>> {
         self.progress = Progress::Failed(failure);
         None
+    }
+
+    /// Returns how many bytes of the payload of the box of `header` are gathered
+    fn gathered_payload_bytes(&self, header: BoxHeader) -> u64 {
+        to_u64(self.gathered.len()).saturating_sub(header.encoded_len())
+    }
+
+    /// Returns how many bytes the reader wants next of the head of `head_bytes` of the payload of the box of `header`, up to the file offset `end` or, for `None`, the end of the file
+    fn head_wanted(&self, header: BoxHeader, end: Option<u64>, head_bytes: u64) -> u64 {
+        let head_left = head_bytes.saturating_sub(self.gathered_payload_bytes(header));
+        self.remaining(end)
+            .map_or(head_left, |remaining| remaining.min(head_left))
     }
 
     /// Returns the bytes from the reader's position up to the file offset `end`, or `None` up to the end of the file
@@ -421,7 +496,7 @@ impl BoxReader {
                 answer,
                 ..
             } => self.read_payload(&mut input, header, end, answer),
-            Progress::Opened { .. } | Progress::Gathered | Progress::Failed(_) => None,
+            Progress::Opened { .. } | Progress::Gathered { .. } | Progress::Failed(_) => None,
         };
         if let Progress::Failed(failure) = self.progress {
             return Err(failure);
@@ -481,9 +556,18 @@ impl BoxReader {
                     return Some(BoxEvent::Payload(bytes));
                 }
             }
+            Answer::GatherHead { head_bytes } => {
+                let wanted = self.head_wanted(header, end, head_bytes);
+                if let Some(bytes) = self.take(input, Some(wanted)) {
+                    self.gathered.extend_from_slice(bytes);
+                }
+                if let Some(end) = end.filter(|_| self.gathered_payload_bytes(header) >= head_bytes)
+                {
+                    self.position = end;
+                }
+            }
             Answer::Gather { limit_bytes } => {
-                let gathered_bytes =
-                    to_u64(self.gathered.len()).saturating_sub(header.encoded_len());
+                let gathered_bytes = self.gathered_payload_bytes(header);
                 // Why not take all of the input up to the end of the payload: a
                 // payload that runs to the end of the file would then fail at a
                 // length that depends on where the input was cut. One byte past
@@ -507,8 +591,11 @@ impl BoxReader {
         }
         let remaining = self.remaining(end);
         if remaining == Some(0) || remaining.is_none() && self.at_end_of_file {
-            if let Answer::Gather { .. } = answer {
-                self.progress = Progress::Gathered;
+            if let Answer::Gather { .. } | Answer::GatherHead { .. } = answer {
+                self.progress = Progress::Gathered {
+                    header_len: header.encoded_len(),
+                    whole: matches!(answer, Answer::Gather { .. }),
+                };
                 return Some(BoxEvent::End);
             }
             self.gathered.clear();
@@ -566,6 +653,7 @@ mod tests {
     #[derive(Clone, Copy)]
     enum Answer {
         Gather(u64),
+        GatherHead(u64),
         Stream,
         Skip,
     }
@@ -576,6 +664,7 @@ mod tests {
         Header(BoxHeader, Option<ByteRange>),
         Payload(Vec<u8>),
         Gathered(BoxHeader, Vec<u8>),
+        Head(Vec<u8>),
         End,
     }
 
@@ -616,6 +705,7 @@ mod tests {
                 recorded.push(Recorded::Header(header, reader.open_box()));
                 match answer {
                     Answer::Gather(limit_bytes) => reader.gather(limit_bytes)?,
+                    Answer::GatherHead(length_bytes) => reader.gather_head(length_bytes)?,
                     Answer::Stream => reader.stream()?,
                     Answer::Skip => reader.skip()?,
                 }
@@ -630,6 +720,8 @@ mod tests {
                         raw_box.header(),
                         raw_box.payload().to_vec(),
                     ));
+                } else if let Some(head) = reader.gathered_head() {
+                    recorded.push(Recorded::Head(head.to_vec()));
                 }
                 recorded.push(Recorded::End);
             }
@@ -686,6 +778,51 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_head_of_a_box_of_every_header_form_arrives_as_far_as_it_is_asked_wherever_the_input_is_cut()
+     {
+        for file in every_header_form() {
+            let (header, byte_range) = header_and_range(&file);
+            for (length_bytes, head) in
+                [(3, PAYLOAD.get(..3).unwrap()), (100, PAYLOAD), (0, &[][..])]
+            {
+                for piece_len in every_cut(&file) {
+                    assert_eq!(
+                        read(&file, piece_len, Answer::GatherHead(length_bytes)),
+                        Ok(vec![
+                            Recorded::Header(header, byte_range),
+                            Recorded::Head(head.to_vec()),
+                            Recorded::End,
+                        ])
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_rest_of_a_payload_past_its_head_is_not_wanted() {
+        let file = [b"\0\0\0\x10free".as_slice(), PAYLOAD, b"\0\0\0\x08skip"].concat();
+        let mut reader = BoxReader::new();
+        reader.handle_input(0, file.get(..8).unwrap()).unwrap();
+        reader.gather_head(3).unwrap();
+        let head_wanted = reader.wanted_input();
+        let end = reader.handle_input(8, file.get(8..11).unwrap());
+        let head = reader.gathered_head().map(<[u8]>::to_vec);
+        let whole = reader.gathered_box().is_some();
+
+        assert_eq!(
+            (head_wanted, end, head, whole, reader.wanted_input()),
+            (
+                Some(ByteRange::new(8, Some(3))),
+                Ok(Some(BoxEvent::End)),
+                Some(PAYLOAD.get(..3).unwrap().to_vec()),
+                false,
+                Some(ByteRange::new(16, None))
+            )
+        );
     }
 
     #[test]

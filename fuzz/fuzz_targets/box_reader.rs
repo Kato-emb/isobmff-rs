@@ -1,7 +1,8 @@
 //! Reading of [`BoxReader`] over a file cut into pieces
 //!
 //! The input is the bytes of a file as they lie, so a file of boxes is a seed
-//! as it is. The boxes are answered in turn: gathered, streamed, then skipped.
+//! as it is. The boxes are answered in turn: gathered, streamed, gathered as
+//! far as a head, then skipped.
 //! A gather the limit refuses is answered again with a skip. The events of the
 //! boxes gathered or streamed go on to a [`BoxWriter`]. One run reads the file
 //! cut a few ways, and checks three properties of it:
@@ -10,9 +11,10 @@
 //! 2. every cut reads to the same events, payload pieces joined, and ends in
 //!    the same failure or none, as the file given whole
 //! 3. a read that ends without failure reads the boxes [`Boxes`] frames the
-//!    file into, and at most one more: a skipped box that the file ends
-//!    inside. Each piece of bytes the writer returns is the bytes the file
-//!    holds where the box it writes lies
+//!    file into, and at most one more: a box skipped, or skipped past its
+//!    head, that the file ends inside. Each piece of bytes the writer returns
+//!    is the bytes the file holds where the box it writes lies, and each head
+//!    gathered the bytes the payload of its box opens with
 
 #![no_main]
 
@@ -28,10 +30,14 @@ const CUTS: [&[usize]; 2] = [&[1, 4096], &[3, 7, 64, 1021]];
 /// Limit a gathered payload is held to
 const GATHER_LIMIT: u64 = 1024;
 
+/// Length of the head of a payload gathered as far as a head
+const HEAD_LENGTH: u64 = 4;
+
 /// What a caller answers a header with
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Answer {
     Gather,
+    GatherHead,
     Stream,
     Skip,
 }
@@ -42,6 +48,7 @@ enum Recorded {
     Header(BoxHeader, Option<ByteRange>, Answer),
     Payload(Range<usize>),
     Gathered(Vec<u8>),
+    Head(Vec<u8>),
     End,
 }
 
@@ -51,6 +58,8 @@ struct Copier {
     at: usize,
     /// Whether the box being read is gathered or streamed, and goes on to the writer
     copying: bool,
+    /// File offset of the payload of the box being read
+    payload_at: usize,
 }
 
 fuzz_target!(|bytes: &[u8]| {
@@ -85,7 +94,7 @@ fuzz_target!(|bytes: &[u8]| {
             "boxes read otherwise than they frame"
         );
         assert!(
-            matches!(past_input, [] | [(_, Answer::Skip)]),
+            matches!(past_input, [] | [(_, Answer::Skip | Answer::GatherHead)]),
             "{past_input:?} read past what frames without being skipped"
         );
     }
@@ -98,6 +107,7 @@ fn read(bytes: &[u8], piece_lens: &[usize]) -> (Vec<Recorded>, Result<(), DemuxE
         writer: BoxWriter::new(),
         at: 0,
         copying: false,
+        payload_at: 0,
     };
     let ending = drive(bytes, piece_lens, &mut copy, &mut recorded);
     if ending.is_ok() {
@@ -113,9 +123,14 @@ fn drive(
     recorded: &mut Vec<Recorded>,
 ) -> Result<(), DemuxError> {
     let mut piece_lens = piece_lens.iter().cycle();
-    let mut answers = [Answer::Gather, Answer::Stream, Answer::Skip]
-        .into_iter()
-        .cycle();
+    let mut answers = [
+        Answer::Gather,
+        Answer::Stream,
+        Answer::GatherHead,
+        Answer::Skip,
+    ]
+    .into_iter()
+    .cycle();
     let mut reader = BoxReader::new();
     while let Some(wanted) = reader.wanted_input() {
         let rest = bytes
@@ -154,11 +169,13 @@ fn record(
                         answer = Answer::Skip;
                     }
                 }
+                Answer::GatherHead => reader.gather_head(HEAD_LENGTH)?,
                 Answer::Stream => reader.stream()?,
                 Answer::Skip => reader.skip()?,
             }
             copy.at = usize::try_from(byte_range.unwrap().offset()).unwrap();
-            copy.copying = answer != Answer::Skip;
+            copy.copying = matches!(answer, Answer::Gather | Answer::Stream);
+            copy.payload_at = copy.at + usize::try_from(header.encoded_len()).unwrap();
             recorded.push(Recorded::Header(header, byte_range, answer));
         }
         BoxEvent::Payload(piece) => {
@@ -178,6 +195,13 @@ fn record(
             if let Some(raw_box) = reader.gathered_box() {
                 recorded.push(Recorded::Gathered(raw_box.payload().to_vec()));
                 write(copy, bytes, BoxEvent::Payload(raw_box.payload()));
+            } else if let Some(head) = reader.gathered_head() {
+                assert_eq!(
+                    bytes.get(copy.payload_at..copy.payload_at + head.len()),
+                    Some(head),
+                    "the head gathered is not the bytes the payload opens with"
+                );
+                recorded.push(Recorded::Head(head.to_vec()));
             }
             recorded.push(Recorded::End);
         }
