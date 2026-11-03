@@ -449,7 +449,10 @@ impl Demuxer {
             byte_range.offset(),
         )?
         else {
-            return Ok(None);
+            // A compressed box read back into a box of no value, an `ssix`, is reported as any other box.
+            let header = raw_box.header();
+            return Ok(file_level::is_compressed(header.box_type())
+                .then_some(DemuxEvent::Other { header, byte_range }));
         };
         let event = match value {
             Value::FileType(ftyp) => {
@@ -1573,6 +1576,26 @@ mod tests {
             moov
         };
         [ftyp, moov, between.to_vec(), raw_box(*b"mdat", b"ABCDEF")].concat()
+    }
+
+    #[cfg(feature = "compressed-boxes")]
+    #[test]
+    fn a_compressed_subsegment_index_is_reported_as_another_box_where_it_lies() {
+        // The demuxer reads no value of an `ssix`, so its payload is but the bytes of one.
+        let ssix = compressed(*b"!ssx", &raw_box(*b"ssix", &[0; 8]));
+        let file = compressed_file(core::slice::from_ref(&ssix));
+        let at = to_u64(file.len() - ssix.len());
+
+        assert_eq!(
+            read(&mut Demuxer::new(), &file, usize::MAX).unwrap().seen,
+            [
+                Seen::FileType,
+                Seen::Other(
+                    BoxType::compact(*b"!ssx"),
+                    ByteRange::new(at, Some(to_u64(ssix.len())))
+                ),
+            ]
+        );
     }
 
     #[cfg(feature = "compressed-boxes")]

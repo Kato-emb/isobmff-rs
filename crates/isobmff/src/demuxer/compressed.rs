@@ -152,6 +152,13 @@ impl CompressedBoxes {
                 limit_compressed_boxes: self.limit_compressed_boxes,
             });
         }
+        // Why not leave the growth to `insert`: it may reserve past the limit, which bounds what the boxes allocate as well as how many they are.
+        if self.boxes.len() == self.boxes.capacity() {
+            let limit = usize::try_from(self.limit_compressed_boxes).unwrap_or(usize::MAX);
+            let grown = self.boxes.len().saturating_mul(2).max(4).min(limit);
+            self.boxes
+                .reserve_exact(grown.saturating_sub(self.boxes.len()).max(1));
+        }
         self.boxes.insert(
             at,
             Compressed {
@@ -314,6 +321,15 @@ mod tests {
         boxes.located(at(55..57)).unwrap();
         let mut limited = CompressedBoxes::new(1);
         limited.record(MOVIE, 0, 10, 20).unwrap();
+        let mut five = CompressedBoxes::new(5);
+        for offset in 0..5 {
+            five.record(INDEX, offset * 10, 10, 10).unwrap();
+        }
+        assert_eq!(
+            (limited.boxes.capacity(), five.boxes.capacity()),
+            (1, 5),
+            "the boxes hold no more than the limit"
+        );
 
         assert_eq!(
             (
