@@ -31,6 +31,12 @@
 //! # Ok::<(), Box<dyn core::error::Error>>(())
 //! ```
 //!
+//! The samples come in the order their media data lies in the file, which
+//! need not be the order of their decoding times (§8.7.5). A caller that can
+//! seek takes the locations of a `moov` or a `moof`
+//! [by track in decoding order](structure_data::SampleLocations::into_decoding_order) and
+//! reads the media data of each where it lies.
+//!
 //! A caller that only indexes a file, or plays some of its tracks,
 //! [discards](Demuxer::discard_track) the others: their samples are not
 //! gathered, and their bytes are not wanted. The events carry the location of
