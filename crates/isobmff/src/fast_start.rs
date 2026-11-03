@@ -133,6 +133,10 @@ impl FastStart {
     }
 
     /// Returns the file offset of the bytes the machine wants next, and how many it wants where it knows, or `None` once the file has ended or the machine has failed
+    ///
+    /// The machine also wants no input past a box that runs to the end of the
+    /// file, which ends only with the file: [`handle_input`](Self::handle_input)
+    /// then finishes the file itself, as [`finish`](Self::finish) does.
     #[must_use]
     pub fn wanted_input(&self) -> Option<ByteRange> {
         (self.failed.is_none() && !self.finished)

@@ -114,6 +114,11 @@ impl Demuxer {
     /// [`MediaDataReader::wanted_input`], whichever start first: once the
     /// demuxer skips a box, it wants the file offset past it, and the bytes of
     /// a sample located before that offset are wanted before it.
+    ///
+    /// The demuxer wants no input past a box that runs to the end of the
+    /// file, which ends only with the file: a caller that has not called
+    /// [`finish`](Self::finish) still calls it once the demuxer wants no more,
+    /// and the box it ends may locate samples it then wants.
     #[must_use]
     pub fn wanted_input(&self) -> Option<ByteRange> {
         if self.boxes.failure().is_some() {

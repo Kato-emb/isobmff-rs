@@ -131,7 +131,25 @@ fn read(bytes: &[u8], piece_lens: &[usize]) -> Read {
         let mut last_wanted: Option<u64> = None;
         let mut located = false;
         let (mut calls, mut bound) = (0_u64, u64::try_from(bytes.len()).unwrap() + 2);
-        while let Some(wanted) = demuxer.wanted_input() {
+        loop {
+            let Some(wanted) = demuxer.wanted_input() else {
+                // Past a box that runs to the end of the file, nothing is wanted: the box ends with the file.
+                let event = demuxer.finish()?;
+                samples.extend(std::iter::from_fn(|| demuxer.poll_sample()));
+                match event {
+                    Some(event) => {
+                        located = record(
+                            &demuxer,
+                            event,
+                            &mut recorded,
+                            &mut in_this_file,
+                            &mut bound,
+                        );
+                        continue;
+                    }
+                    None => break,
+                }
+            };
             let offset = wanted.offset();
             if let Some(last) = last_wanted
                 && offset < last
@@ -154,75 +172,15 @@ fn read(bytes: &[u8], piece_lens: &[usize]) -> Read {
                 input => demuxer.handle_input(offset, input)?,
             };
             samples.extend(std::iter::from_fn(|| demuxer.poll_sample()));
-            located = matches!(
-                event,
-                Some(
-                    DemuxEvent::Movie { .. }
-                        | DemuxEvent::MovieFragment { .. }
-                        | DemuxEvent::IdentifiedMediaData { .. }
+            located = event.is_some_and(|event| {
+                record(
+                    &demuxer,
+                    event,
+                    &mut recorded,
+                    &mut in_this_file,
+                    &mut bound,
                 )
-            );
-            if let Some(event) = event {
-                let event = match event {
-                    DemuxEvent::FileType { byte_range, .. } => Recorded::FileType(byte_range),
-                    DemuxEvent::SegmentType { byte_range, .. } => Recorded::SegmentType(byte_range),
-                    DemuxEvent::Movie {
-                        byte_range,
-                        samples,
-                        ..
-                    } => Recorded::Movie(byte_range, samples.collect()),
-                    DemuxEvent::MovieFragment {
-                        byte_range,
-                        samples,
-                        ..
-                    } => Recorded::MovieFragment(byte_range, samples.collect()),
-                    DemuxEvent::SegmentIndex { byte_range, .. } => {
-                        Recorded::SegmentIndex(byte_range)
-                    }
-                    DemuxEvent::MovieFragmentRandomAccess { byte_range, .. } => {
-                        Recorded::MovieFragmentRandomAccess(byte_range)
-                    }
-                    DemuxEvent::MediaData {
-                        header, byte_range, ..
-                    } => Recorded::MediaData(header.box_type(), byte_range),
-                    DemuxEvent::IdentifiedMediaData {
-                        byte_range,
-                        identifier,
-                        samples,
-                        ..
-                    } => Recorded::IdentifiedMediaData(byte_range, identifier, samples.collect()),
-                    DemuxEvent::Other {
-                        header, byte_range, ..
-                    } => Recorded::Other(header.box_type(), byte_range),
-                    event => panic!("unexpected event {event:?}"),
-                };
-                if let Recorded::Movie(_, locations)
-                | Recorded::MovieFragment(_, locations)
-                | Recorded::IdentifiedMediaData(_, _, locations) = &event
-                {
-                    in_this_file.extend(
-                        locations
-                            .iter()
-                            .filter(|location| {
-                                demuxer
-                                    .data_reference(location.data_reference())
-                                    .is_some_and(|data_reference| {
-                                        data_reference.entry().is_in_this_file()
-                                    })
-                            })
-                            .cloned(),
-                    );
-                    bound = locations
-                        .iter()
-                        .map(|location| {
-                            let byte_range = location.byte_range();
-                            byte_range.end - byte_range.start
-                        })
-                        .fold(bound, u64::saturating_add);
-                }
-                bound = bound.saturating_add(2);
-                recorded.push(event);
-            }
+            });
         }
         Ok(())
     })();
@@ -232,4 +190,76 @@ fn read(bytes: &[u8], piece_lens: &[usize]) -> Read {
         samples,
         ending,
     }
+}
+
+/// Records `event` into `recorded`, the locations it carries in the file itself into `in_this_file`, and what it accounts for into `bound`, and returns whether it carries locations, whose samples may lie before it
+fn record(
+    demuxer: &Demuxer,
+    event: DemuxEvent,
+    recorded: &mut Vec<Recorded>,
+    in_this_file: &mut Vec<SampleLocation>,
+    bound: &mut u64,
+) -> bool {
+    let located = matches!(
+        event,
+        DemuxEvent::Movie { .. }
+            | DemuxEvent::MovieFragment { .. }
+            | DemuxEvent::IdentifiedMediaData { .. }
+    );
+    let event = match event {
+        DemuxEvent::FileType { byte_range, .. } => Recorded::FileType(byte_range),
+        DemuxEvent::SegmentType { byte_range, .. } => Recorded::SegmentType(byte_range),
+        DemuxEvent::Movie {
+            byte_range,
+            samples,
+            ..
+        } => Recorded::Movie(byte_range, samples.collect()),
+        DemuxEvent::MovieFragment {
+            byte_range,
+            samples,
+            ..
+        } => Recorded::MovieFragment(byte_range, samples.collect()),
+        DemuxEvent::SegmentIndex { byte_range, .. } => Recorded::SegmentIndex(byte_range),
+        DemuxEvent::MovieFragmentRandomAccess { byte_range, .. } => {
+            Recorded::MovieFragmentRandomAccess(byte_range)
+        }
+        DemuxEvent::MediaData {
+            header, byte_range, ..
+        } => Recorded::MediaData(header.box_type(), byte_range),
+        DemuxEvent::IdentifiedMediaData {
+            byte_range,
+            identifier,
+            samples,
+            ..
+        } => Recorded::IdentifiedMediaData(byte_range, identifier, samples.collect()),
+        DemuxEvent::Other {
+            header, byte_range, ..
+        } => Recorded::Other(header.box_type(), byte_range),
+        event => panic!("unexpected event {event:?}"),
+    };
+    if let Recorded::Movie(_, locations)
+    | Recorded::MovieFragment(_, locations)
+    | Recorded::IdentifiedMediaData(_, _, locations) = &event
+    {
+        in_this_file.extend(
+            locations
+                .iter()
+                .filter(|location| {
+                    demuxer
+                        .data_reference(location.data_reference())
+                        .is_some_and(|data_reference| data_reference.entry().is_in_this_file())
+                })
+                .cloned(),
+        );
+        *bound = locations
+            .iter()
+            .map(|location| {
+                let byte_range = location.byte_range();
+                byte_range.end - byte_range.start
+            })
+            .fold(*bound, u64::saturating_add);
+    }
+    *bound = bound.saturating_add(2);
+    recorded.push(event);
+    located
 }

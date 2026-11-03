@@ -575,11 +575,16 @@ impl SampleLocations {
     /// let file: &[u8] = include_bytes!("../../tests/data/out_of_order.mp4");
     /// let mut demuxer = Demuxer::new();
     /// let mut locations = Vec::new();
-    /// while let Some(wanted) = demuxer.wanted_input() {
-    ///     let input = file.get(usize::try_from(wanted.offset())?..).unwrap_or_default();
-    ///     let event = match input {
-    ///         [] => demuxer.finish(),
-    ///         input => demuxer.handle_input(wanted.offset(), input),
+    /// loop {
+    ///     let event = match demuxer.wanted_input() {
+    ///         Some(wanted) => match file.get(usize::try_from(wanted.offset())?..).unwrap_or_default() {
+    ///             [] => demuxer.finish(),
+    ///             input => demuxer.handle_input(wanted.offset(), input),
+    ///         },
+    ///         None => match demuxer.finish() {
+    ///             Ok(None) => break,
+    ///             finished => finished,
+    ///         },
     ///     };
     ///     while demuxer.poll_sample().is_some() {}
     ///     if let Some(DemuxEvent::Movie { samples, .. }) = event? {

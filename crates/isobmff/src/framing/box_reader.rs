@@ -161,7 +161,9 @@ impl BoxReader {
     /// next box.
     ///
     /// The reader wants no more once the file has ended or the reader has
-    /// failed, and once it skips a box that runs to the end of the file.
+    /// failed, and once it skips a box that runs to the end of the file, or
+    /// has the head of one: such a box ends only with the file, so a caller
+    /// that has not called [`finish`](Self::finish) still calls it then.
     #[must_use]
     pub fn wanted_input(&self) -> Option<ByteRange> {
         if self.at_end_of_file {
