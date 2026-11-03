@@ -97,14 +97,14 @@
 //! # Ok::<(), Box<dyn core::error::Error>>(())
 //! ```
 //!
-//! Which files to open is the caller's to decide: §8.7.2 makes the location a
+//! Which files to open is the caller's choice: §8.7.2 makes the location a
 //! URL, relative to the file that holds the data reference. A caller that
-//! reads local files commonly opens only a relative path, from the directory
-//! of the movie file, and refuses a location with a scheme or an absolute
-//! path. A caller that keeps the locations of samples in other files across
-//! movie fragments bounds them as a media data reader bounds its own, up to
-//! [`MediaDataLimits::held_location_count`](media_data::MediaDataLimits::held_location_count).
-//! A location is of a fixed size, so that count bounds their bytes too.
+//! reads local files commonly accepts only a relative path, resolved against
+//! the directory of the movie file. A caller that keeps the locations of
+//! samples in other files across movie fragments limits how many it keeps,
+//! as [`MediaDataLimits::held_location_count`](media_data::MediaDataLimits::held_location_count)
+//! limits a media data reader; a location has a fixed size, so the count
+//! limits their bytes too.
 //!
 //! The demuxer is made of layers that follow the structure of a file, each
 //! usable alone:

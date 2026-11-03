@@ -63,13 +63,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             if let DemuxEvent::Movie { samples, .. } | DemuxEvent::MovieFragment { samples, .. } =
                 &event
             {
-                for location in samples.clone().filter(|location| {
-                    demuxer
-                        .data_reference(location.data_reference())
+                for location in samples.clone() {
+                    let key = location.data_reference();
+                    if demuxer
+                        .data_reference(key)
                         .is_some_and(|data_reference| !data_reference.entry().is_in_same_file())
-                }) {
-                    let count = elsewhere.entry(location.data_reference()).or_default();
-                    *count = count.saturating_add(1);
+                    {
+                        let count = elsewhere.entry(key).or_default();
+                        *count = count.saturating_add(1);
+                    }
                 }
             }
             report(&demuxer, event)?;
@@ -82,18 +84,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             continue;
         };
         let entry = data_reference.entry();
-        let named = if let DataEntry::Url(url) = entry {
-            url.location
-                .as_ref()
-                .and_then(|location| location.as_str())
-                .map(str::to_owned)
+        let named = if let DataEntry::Url(url) = entry
+            && let Some(location) = url.location.as_ref().and_then(|location| location.as_str())
+        {
+            location.to_owned()
         } else {
-            None
+            format!("{entry:?}")
         };
         println!(
-            "track {}: {count} samples in {}, not read",
-            data_reference.track_id(),
-            named.unwrap_or_else(|| format!("{entry:?}"))
+            "track {}: {count} samples in {named}, not read",
+            data_reference.track_id()
         );
     }
     Ok(())
