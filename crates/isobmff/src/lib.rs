@@ -98,7 +98,8 @@
 //! ```
 //!
 //! Which files to open is the caller's choice: §8.7.2 makes the location a
-//! URL, relative to the file that holds the data reference. A caller that
+//! URL, which, where it is relative, is relative to the file that holds the
+//! data reference. A caller that
 //! reads local files commonly accepts only a relative path, resolved against
 //! the directory of the movie file. A caller that keeps the locations of
 //! samples in other files across movie fragments limits how many it keeps,

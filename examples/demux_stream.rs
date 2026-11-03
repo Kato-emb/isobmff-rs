@@ -16,15 +16,18 @@
 //!
 //! The media data of a track may be in another file, which an entry of its
 //! data reference names (ISO/IEC 14496-12 §8.7.2). The demuxer locates those
-//! samples but does not gather them. This example counts them and names the
-//! files they are in.
+//! samples but does not gather them. This example names the files they are
+//! in.
 
 use std::env;
 use std::error::Error;
 use std::io::Read;
 
-use isobmff::boxes::DataEntry;
-use isobmff::{DemuxEvent, Demuxer};
+use isobmff::boxes::{
+    DataEntry, FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox,
+    SegmentIndexBox, SegmentTypeBox,
+};
+use isobmff::{BoxDefinition, DemuxEvent, Demuxer};
 use ureq::Agent;
 use ureq::tls::{RootCerts, TlsConfig};
 
@@ -56,26 +59,23 @@ fn main() -> Result<(), Box<dyn Error>> {
         loop {
             let event = demuxer.handle_input(offset, piece);
             print_samples(&mut demuxer);
-            let Some(event) = event? else {
-                if demuxer
+            match event? {
+                Some(event) => print_event(&event),
+                None if demuxer
                     .wanted_input()
-                    .is_some_and(|wanted| (offset..end).contains(&wanted.offset()))
-                {
-                    continue;
-                }
-                break;
-            };
-            print_event(&demuxer, &event);
+                    .is_some_and(|wanted| (offset..end).contains(&wanted.offset())) => {}
+                None => break,
+            }
         }
         offset = end;
     }
     loop {
         let event = demuxer.finish();
         print_samples(&mut demuxer);
-        let Some(event) = event? else {
-            break;
-        };
-        print_event(&demuxer, &event);
+        match event? {
+            Some(event) => print_event(&event),
+            None => break,
+        }
     }
 
     for data_reference in demuxer.data_references() {
@@ -112,39 +112,31 @@ fn print_samples(demuxer: &mut Demuxer) {
 }
 
 /// Prints one line for the box at file level `event` reports, and one more for the samples a `moov` or a `moof` locates
-fn print_event(demuxer: &Demuxer, event: &DemuxEvent) {
+fn print_event(event: &DemuxEvent) {
     let (box_type, byte_range) = match event {
-        DemuxEvent::FileType { byte_range, .. } => ("ftyp".to_owned(), byte_range),
-        DemuxEvent::SegmentType { byte_range, .. } => ("styp".to_owned(), byte_range),
-        DemuxEvent::Movie { byte_range, .. } => ("moov".to_owned(), byte_range),
-        DemuxEvent::MovieFragment { byte_range, .. } => ("moof".to_owned(), byte_range),
-        DemuxEvent::SegmentIndex { byte_range, .. } => ("sidx".to_owned(), byte_range),
-        DemuxEvent::MovieFragmentRandomAccess { byte_range, .. } => ("mfra".to_owned(), byte_range),
+        DemuxEvent::FileType { byte_range, .. } => (FileTypeBox::BOX_TYPE, byte_range),
+        DemuxEvent::SegmentType { byte_range, .. } => (SegmentTypeBox::BOX_TYPE, byte_range),
+        DemuxEvent::Movie { byte_range, .. } => (MovieBox::BOX_TYPE, byte_range),
+        DemuxEvent::MovieFragment { byte_range, .. } => (MovieFragmentBox::BOX_TYPE, byte_range),
+        DemuxEvent::SegmentIndex { byte_range, .. } => (SegmentIndexBox::BOX_TYPE, byte_range),
+        DemuxEvent::MovieFragmentRandomAccess { byte_range, .. } => {
+            (MovieFragmentRandomAccessBox::BOX_TYPE, byte_range)
+        }
         DemuxEvent::MediaData {
             header, byte_range, ..
         }
         | DemuxEvent::Other {
             header, byte_range, ..
-        } => (header.box_type().to_string(), byte_range),
+        } => (header.box_type(), byte_range),
         _ => return,
     };
-    let size = byte_range
-        .length()
-        .map_or_else(|| "to end of file".to_owned(), |length| length.to_string());
+    let size = match byte_range.length() {
+        Some(length) => length.to_string(),
+        None => "to end of file".to_owned(),
+    };
     println!("[{box_type}] offset={} size={size}", byte_range.offset());
 
     if let DemuxEvent::Movie { samples, .. } | DemuxEvent::MovieFragment { samples, .. } = event {
-        let elsewhere = samples
-            .clone()
-            .filter(|location| {
-                demuxer
-                    .data_reference(location.data_reference())
-                    .is_some_and(|data_reference| !data_reference.entry().is_in_same_file())
-            })
-            .count();
-        println!(
-            "  locates {} samples, {elsewhere} of them in other files",
-            samples.len()
-        );
+        println!("  locates {} samples", samples.len());
     }
 }
