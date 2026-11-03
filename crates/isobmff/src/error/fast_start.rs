@@ -41,6 +41,14 @@ pub enum FastStartError {
         /// File offset the track states
         offset: u64,
     },
+    /// Chunk or sample auxiliary information offset into the `moov` itself, which laying the `moov` out again does not keep in place, §8.7.5, §8.7.9
+    #[non_exhaustive]
+    OffsetInMovie {
+        /// `track_ID` of the track
+        track_id: u32,
+        /// File offset the track states
+        offset: u64,
+    },
     /// Box at file level past the number the machine keeps the places of
     #[non_exhaustive]
     BoxCountLimitExceeded {
@@ -62,6 +70,10 @@ impl fmt::Display for FastStartError {
             Self::OffsetOutOfFile { track_id, offset } => write!(
                 formatter,
                 "file offset {offset} of track {track_id}, in no box of the file"
+            ),
+            Self::OffsetInMovie { track_id, offset } => write!(
+                formatter,
+                "file offset {offset} of track {track_id}, into the movie laid out again"
             ),
             Self::BoxCountLimitExceeded { limit_boxes } => {
                 write!(formatter, "more than {limit_boxes} boxes at file level")

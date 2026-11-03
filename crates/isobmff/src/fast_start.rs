@@ -67,7 +67,9 @@ pub enum FastStartOutput {
 /// offset that no longer fits 32 bits takes a `co64`, and an offset of
 /// sample auxiliary information a `saio` of version 1. Offsets of samples in
 /// another file, or relative to an `IdentifiedMediaDataBox`, stay as they
-/// are. A file whose media data lies after its `moov` comes out as it is.
+/// are. An offset into the `moov` itself is refused, as the `moov` laid out
+/// again need not keep its boxes in place. A file whose media data lies
+/// after its `moov` comes out as it is.
 ///
 /// ```
 /// use isobmff::{FastStart, FastStartLimits, FastStartOutput};
@@ -179,6 +181,8 @@ impl FastStart {
     ///   `moov`.
     /// * [`OffsetOutOfFile`](FastStartError::OffsetOutOfFile): an offset of
     ///   media data in the file lies in no box of it.
+    /// * [`OffsetInMovie`](FastStartError::OffsetInMovie): the `moov` is laid
+    ///   out again, and an offset of media data lies in it.
     /// * [`Write`](FastStartError::Write): the `moov` laid out again does not
     ///   write.
     /// * The failures of [`handle_input`](Self::handle_input), for the box
@@ -330,7 +334,7 @@ impl FastStart {
                     (place, at)
                 })
                 .collect();
-            if !move_offsets(&tracks, &mut movie, &moved)? {
+            if !move_offsets(&tracks, &mut movie, &moved, movie_start)? {
                 break;
             }
         }
@@ -445,10 +449,13 @@ impl TrackOffsets {
 ///
 /// * [`OffsetOutOfFile`](FastStartError::OffsetOutOfFile): an offset lies
 ///   in no box of `moved`.
+/// * [`OffsetInMovie`](FastStartError::OffsetInMovie): an offset lies in
+///   the `moov`, which starts at file offset `movie_start`.
 fn move_offsets(
     tracks: &[TrackOffsets],
     movie: &mut MovieBox,
     moved: &[(ByteRange, u64)],
+    movie_start: u64,
 ) -> Result<bool, FastStartError> {
     let mut widened = false;
     for (track, trak) in tracks.iter().zip(&mut movie.trak) {
@@ -456,20 +463,23 @@ fn move_offsets(
             if !in_file {
                 return Ok(offset);
             }
-            moved
+            let track_id = track.track_id;
+            let (place, position) = moved
                 .iter()
-                .find_map(|&(place, position)| {
-                    let into = offset.checked_sub(place.offset())?;
-                    place
-                        .length()
-                        .is_none_or(|length| into < length)
-                        .then(|| position.checked_add(into))
-                        .flatten()
+                .find(|(place, _)| {
+                    offset
+                        .checked_sub(place.offset())
+                        .is_some_and(|into| place.length().is_none_or(|length| into < length))
                 })
-                .ok_or(FastStartError::OffsetOutOfFile {
-                    track_id: track.track_id,
-                    offset,
-                })
+                .ok_or(FastStartError::OffsetOutOfFile { track_id, offset })?;
+            // Why not move an offset into the moov by its place in the box: the moov laid out again may order its boxes, and widen its tables, differently.
+            if place.offset() == movie_start {
+                return Err(FastStartError::OffsetInMovie { track_id, offset });
+            }
+            offset
+                .checked_sub(place.offset())
+                .and_then(|into| position.checked_add(into))
+                .ok_or(FastStartError::OffsetOutOfFile { track_id, offset })
         };
         let stbl = &mut trak.mdia.minf.stbl;
         let chunk_offsets = track.chunks.iter().map(to).collect::<Result<Vec<_>, _>>()?;
@@ -713,6 +723,25 @@ mod tests {
                 Vec::from([Vec::from([24 + moov_len]), Vec::from([24])]),
                 Vec::from([26 + moov_len])
             )
+        );
+    }
+
+    #[test]
+    fn an_offset_into_the_moov_it_rewrites_is_refused() {
+        let mut inside = one_chunk(24);
+        let mut saio = SampleAuxiliaryInformationOffsetsBox::default();
+        saio.offsets = Vec::from([28 + 20]);
+        if let Some(trak) = inside.trak.first_mut() {
+            trak.mdia.minf.stbl.saio = Vec::from([saio]);
+        }
+        let mdat = [header(b"mdat", 4), b"ABCD".to_vec()].concat();
+
+        assert_eq!(
+            lay_out(&[(0, file(&[&mdat, &encoded(&inside)]))], LIMITS),
+            Err(FastStartError::OffsetInMovie {
+                track_id: 1,
+                offset: 48
+            })
         );
     }
 
