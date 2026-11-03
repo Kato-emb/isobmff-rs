@@ -36,12 +36,21 @@ fn main() -> Result<(), Box<dyn Error>> {
             [] => demuxer.finish(),
             input => demuxer.handle_input(wanted.offset(), input),
         };
-        while demuxer.poll_sample().is_some() {}
         let (Some(DemuxEvent::Movie { samples, .. })
         | Some(DemuxEvent::MovieFragment { samples, .. })) = event?
         else {
             continue;
         };
+        // Why not drain poll_sample: the demuxer would want and gather the media data first, which the listing never reads.
+        let track_ids: Vec<u32> = demuxer
+            .movie()
+            .iter()
+            .flat_map(|movie| &movie.trak)
+            .map(|trak| trak.tkhd.track_id)
+            .collect();
+        for track_id in track_ids {
+            demuxer.discard_track(track_id);
+        }
         let movie = demuxer.movie().ok_or("samples before the movie")?;
         for location in samples {
             let properties = location.properties();
