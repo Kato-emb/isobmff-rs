@@ -13,6 +13,8 @@ use core::ops::Range;
 
 use isobmff_core::BoxType;
 
+#[cfg(feature = "compressed-boxes")]
+use crate::convert::to_u64;
 use crate::error::DemuxError;
 use crate::sample::SampleLocation;
 
@@ -143,9 +145,7 @@ impl CompressedBoxes {
         if uncompressed_length != length && offset < self.located_end {
             return Err(DemuxError::CompressedBoxBeforeLocatedSample { box_type });
         }
-        let retained_compressed_boxes = u64::try_from(self.boxes.len())
-            .unwrap_or(u64::MAX)
-            .saturating_add(1);
+        let retained_compressed_boxes = to_u64(self.boxes.len()).saturating_add(1);
         if retained_compressed_boxes > self.limit_compressed_boxes {
             return Err(DemuxError::CompressedBoxCountLimitExceeded {
                 retained_compressed_boxes,
