@@ -8,6 +8,7 @@ use core::ops::Range;
 use isobmff_boxes::{MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentIndexBox};
 use isobmff_core::BoxDefinition;
 
+use super::compressed::CompressedBoxes;
 use super::movie_fragment::ReachedTime;
 use super::sample_description::DataReference;
 use super::segment_index::SegmentIndex;
@@ -21,9 +22,9 @@ use crate::sample::{DataReferenceKey, SampleLocation};
 ///
 /// Each bounds what the reader allocates for values the file declares: the
 /// samples of one `moov` or `moof`, and the segment indexes, with their
-/// subsegments, the places of `IdentifiedMediaDataBox`es and the samples
-/// whose `IdentifiedMediaDataBox` is not read yet, that the reader keeps over
-/// the whole file. Each takes the same room whatever the file, so its count
+/// subsegments, the places of `IdentifiedMediaDataBox`es and of compressed
+/// boxes, and the samples whose `IdentifiedMediaDataBox` is not read yet,
+/// that the reader keeps over the whole file. Each takes the same room whatever the file, so its count
 /// bounds its bytes.
 ///
 /// # Examples
@@ -38,6 +39,7 @@ use crate::sample::{DataReferenceKey, SampleLocation};
 ///     leniency_count: 65_536,
 ///     identified_media_data_count: 65_536,
 ///     unresolved_sample_count: 1_048_576,
+///     compressed_box_count: 65_536,
 /// };
 /// assert_eq!(limits.segment_index_count, 1024);
 /// ```
@@ -59,6 +61,8 @@ pub struct StructureDataLimits {
     pub identified_media_data_count: u64,
     /// Number of samples whose `IdentifiedMediaDataBox` is not read yet the reader holds up to, together
     pub unresolved_sample_count: u64,
+    /// Number of compressed boxes the reader keeps the places of up to, over the whole file (§8.16), with the feature `compressed-boxes`
+    pub compressed_box_count: u64,
 }
 
 /// Reader of the structure-data of a file: the movie and its fragments, resolved to the samples they declare
@@ -75,6 +79,16 @@ pub struct StructureDataLimits {
 /// starts, and locates such samples in the file. It holds those of a box it
 /// has not been told of, and returns them once it is.
 ///
+/// With the feature `compressed-boxes`, the file offsets in a box a
+/// compressed box replaces count in the file as its compressed boxes read
+/// back (§8.16.1). The reader keeps the compressed boxes it is told of with
+/// [`handle_compressed_box`](Self::handle_compressed_box), and locates the
+/// samples where their media data lies in the file itself, as each
+/// compressed box before it grew or shrank when read back. It can tell only
+/// once it is told of every compressed box before the media data
+/// (§8.16.2.2 NOTE 3). The offsets of a `sidx` count in the file as it is
+/// (§8.16.8), and are taken as they are.
+///
 /// A refused call leaves the reader as it was.
 ///
 /// # Examples
@@ -90,6 +104,7 @@ pub struct StructureDataLimits {
 ///     leniency_count: 65_536,
 ///     identified_media_data_count: 65_536,
 ///     unresolved_sample_count: 1_048_576,
+///     compressed_box_count: 65_536,
 /// });
 /// // A movie of no track declares no sample.
 /// let samples = reader.handle_movie(MovieBox::default())?;
@@ -104,12 +119,14 @@ pub struct StructureDataReader {
     /// Decoding time past the last sample of each track of the movie, in the order of its tracks, `None` once it is not known
     decoding_times: Vec<Option<ReachedTime>>,
     segment_indexes: Vec<SegmentIndex>,
-    movie_fragment_random_access: Option<MovieFragmentRandomAccessBox>,
+    pub(super) movie_fragment_random_access: Option<MovieFragmentRandomAccessBox>,
     leniencies: Vec<Leniency>,
     /// File offset of the first byte of the payload of each `IdentifiedMediaDataBox` read, by its `imda_identifier`
     identified_media_data: BTreeMap<u32, u64>,
     /// Samples whose `IdentifiedMediaDataBox` is not read yet, by its `imda_identifier`, each located from the first byte of the box's payload
     unresolved: Held,
+    /// Compressed boxes told of, §8.16, which none are without the feature `compressed-boxes`
+    pub(super) compressed: CompressedBoxes,
 }
 
 impl StructureDataReader {
@@ -125,6 +142,7 @@ impl StructureDataReader {
             leniencies: Vec::new(),
             identified_media_data: BTreeMap::new(),
             unresolved: BTreeMap::new(),
+            compressed: CompressedBoxes::new(limits.compressed_box_count),
         }
     }
 
@@ -171,7 +189,9 @@ impl StructureDataReader {
     ///   only the media data of samples in a movie fragment (§8.7.2).
     /// * [`DataOffsetOutOfRange`](DemuxError::DataOffsetOutOfRange),
     ///   [`DecodingTimeOverflow`](DemuxError::DecodingTimeOverflow): the media
-    ///   data or the decoding times of a track run past 64 bits.
+    ///   data or the decoding times of a track run past 64 bits, or, with the
+    ///   feature `compressed-boxes`, the media data of a sample lies in a box
+    ///   a compressed box replaces.
     pub fn handle_movie(&mut self, movie: MovieBox) -> Result<SampleLocations, DemuxError> {
         if self.movie.is_some() {
             return Err(DemuxError::DuplicateBox {
@@ -204,10 +224,14 @@ impl StructureDataReader {
         self.check_room_for_leniencies(&leniencies)?;
         let (mut locations, unresolved) = self.place(locations, &identified)?;
         in_file_order(&mut locations);
+        let located_end = self
+            .compressed
+            .locate_in_this_file(Some(&movie), &mut locations)?;
 
         self.movie = Some(movie);
         self.decoding_times = decoding_times;
         self.leniencies = leniencies;
+        self.compressed.note_located(located_end);
         for (identifier, mut held) in unresolved {
             self.unresolved
                 .entry(identifier)
@@ -257,6 +281,12 @@ impl StructureDataReader {
     /// * [`MissingDecodingTime`](DemuxError::MissingDecodingTime): a track
     ///   fragment has no `tfdt`, and the reader has resumed since its track
     ///   last had one.
+    /// * [`DataOffsetPastSkippedCompressedBoxes`](DemuxError::DataOffsetPastSkippedCompressedBoxes):
+    ///   with the feature `compressed-boxes`, the reader has resumed in a
+    ///   file known to have been transformed, by a compressed box or an
+    ///   `otyp` told of, and a track fragment takes a base data offset: the
+    ///   compressed boxes the resume skipped may have moved it
+    ///   (§8.16.2.2 NOTE 3).
     /// * The failures of the sample entries and the data references, and of
     ///   offsets and decoding times past 64 bits, as for
     ///   [`handle_movie`](Self::handle_movie).
@@ -265,6 +295,10 @@ impl StructureDataReader {
         movie_fragment: &MovieFragmentBox,
         moof_offset: u64,
     ) -> Result<SampleLocations, DemuxError> {
+        self.compressed
+            .refuse_base_data_offset_past_skipped(movie_fragment)?;
+        // Why not the file offset itself: the offsets in a box count in the file as its compressed boxes read back, §8.16.1.
+        let moof_offset = self.compressed.uncompressed(moof_offset);
         let movie = self.movie.as_ref().ok_or(DemuxError::MissingMovie)?;
         let mut locations = self.room_for(movie_fragment::sample_count(movie_fragment))?;
         let mut decoding_times = self.decoding_times.clone();
@@ -282,9 +316,13 @@ impl StructureDataReader {
         self.check_room_for_leniencies(&leniencies)?;
         let (mut locations, unresolved) = self.place(locations, &identified)?;
         in_file_order(&mut locations);
+        let located_end = self
+            .compressed
+            .locate_in_this_file(self.movie.as_ref(), &mut locations)?;
 
         self.decoding_times = decoding_times;
         self.leniencies.append(&mut leniencies);
+        self.compressed.note_located(located_end);
         for (identifier, mut held) in unresolved {
             self.unresolved
                 .entry(identifier)
@@ -351,8 +389,21 @@ impl StructureDataReader {
     }
 
     /// Keeps `mfra`, in place of one the reader kept before
-    pub fn handle_movie_fragment_random_access(&mut self, mfra: MovieFragmentRandomAccessBox) {
+    ///
+    /// # Errors
+    ///
+    /// * [`CompressedBoxWithMovieFragmentRandomAccess`](DemuxError::CompressedBoxWithMovieFragmentRandomAccess):
+    ///   the reader has been told of a compressed box, and a file has no
+    ///   `mfra` with one (§8.16.1).
+    pub fn handle_movie_fragment_random_access(
+        &mut self,
+        mfra: MovieFragmentRandomAccessBox,
+    ) -> Result<(), DemuxError> {
+        if let Some(box_type) = self.compressed.first_box_type() {
+            return Err(DemuxError::CompressedBoxWithMovieFragmentRandomAccess { box_type });
+        }
         self.movie_fragment_random_access = Some(mfra);
+        Ok(())
     }
 
     /// Forgets the decoding time each track has reached, as a reader does that resumes reading at a later box of the file
@@ -364,6 +415,7 @@ impl StructureDataReader {
     pub fn resume(&mut self) {
         self.decoding_times.fill(None);
         self.unresolved.clear();
+        self.compressed.resume();
     }
 
     /// Keeps where the payload of the `IdentifiedMediaDataBox` of `identifier` starts, at file offset `payload_offset`, and returns the samples held for it, located in the file
@@ -390,6 +442,7 @@ impl StructureDataReader {
         identifier: u32,
         payload_offset: u64,
     ) -> Result<SampleLocations, DemuxError> {
+        let payload_offset = self.compressed.uncompressed(payload_offset);
         if self.identified_media_data.contains_key(&identifier) {
             return Err(DemuxError::DuplicateIdentifiedMediaData { identifier });
         }
@@ -409,10 +462,14 @@ impl StructureDataReader {
             .map(|location| located(location, payload_offset))
             .collect::<Result<Vec<_>, _>>()?;
         in_file_order(&mut locations);
+        let located_end = self
+            .compressed
+            .locate_in_this_file(self.movie.as_ref(), &mut locations)?;
 
         self.identified_media_data
             .insert(identifier, payload_offset);
         self.unresolved.remove(&identifier);
+        self.compressed.note_located(located_end);
         Ok(SampleLocations {
             locations: locations.into_iter(),
         })
@@ -614,31 +671,6 @@ impl SampleLocations {
             )
         });
         locations
-    }
-}
-
-impl SampleLocations {
-    /// Returns the locations left, without taking them
-    pub(crate) fn as_slice(&self) -> &[SampleLocation] {
-        self.locations.as_slice()
-    }
-
-    /// Returns the locations left, each replaced by what `replace` returns for it
-    ///
-    /// # Errors
-    ///
-    /// The first failure of `replace`.
-    pub(crate) fn try_map(
-        self,
-        replace: impl FnMut(SampleLocation) -> Result<SampleLocation, DemuxError>,
-    ) -> Result<Self, DemuxError> {
-        Ok(Self {
-            locations: self
-                .locations
-                .map(replace)
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter(),
-        })
     }
 }
 
@@ -1231,6 +1263,7 @@ mod tests {
         let few = StructureDataLimits {
             identified_media_data_count: 1,
             unresolved_sample_count: 1,
+            compressed_box_count: 65_536,
             ..UNLIMITED
         };
         let mut limited = StructureDataReader::new(few);

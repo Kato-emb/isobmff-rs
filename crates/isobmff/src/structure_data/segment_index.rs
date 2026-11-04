@@ -497,7 +497,9 @@ mod tests {
         reader
             .handle_segment_index(&sidx, anchored_at(1000))
             .unwrap();
-        reader.handle_movie_fragment_random_access(MovieFragmentRandomAccessBox::default());
+        reader
+            .handle_movie_fragment_random_access(MovieFragmentRandomAccessBox::default())
+            .unwrap();
         reader.resume();
         reader
             .handle_segment_index(&sidx, anchored_at(1000))

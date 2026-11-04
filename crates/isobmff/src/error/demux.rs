@@ -209,10 +209,10 @@ pub enum DemuxError {
         /// Type of the compressed box
         box_type: BoxType,
     },
-    /// Compressed box that would take the compressed boxes a demuxer keeps the places of past the limit it keeps them up to
+    /// Compressed box that would take the compressed boxes a reader keeps the places of past the limit it keeps them up to
     #[non_exhaustive]
     CompressedBoxCountLimitExceeded {
-        /// Number of compressed boxes the demuxer would keep
+        /// Number of compressed boxes the reader would keep
         retained_compressed_boxes: u64,
         /// Limit on the compressed boxes kept
         limit_compressed_boxes: u64,
@@ -220,7 +220,7 @@ pub enum DemuxError {
     /// Track fragment of a base data offset, read after a resume in a file known to have been transformed, by a compressed box or an `otyp` read, §8.16.2.2 NOTE 3
     ///
     /// The offset counts from the start of the file as its compressed boxes
-    /// read back, and the compressed boxes before the box the demuxer resumed
+    /// read back, and the compressed boxes before the box the reader resumed
     /// at may not have been read.
     #[non_exhaustive]
     DataOffsetPastSkippedCompressedBoxes {

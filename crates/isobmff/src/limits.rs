@@ -43,7 +43,6 @@ use crate::structure_data::StructureDataLimits;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct DemuxLimits {
     payload_bytes: u64,
-    compressed_box_count: u64,
     structure_data: StructureDataLimits,
     media_data: MediaDataLimits,
 }
@@ -54,7 +53,6 @@ impl DemuxLimits {
     pub const fn new() -> Self {
         Self {
             payload_bytes: 16 * 1024 * 1024,
-            compressed_box_count: 65_536,
             structure_data: StructureDataLimits {
                 sample_count: 1_048_576,
                 segment_index_count: 65_536,
@@ -62,6 +60,7 @@ impl DemuxLimits {
                 leniency_count: 65_536,
                 identified_media_data_count: 65_536,
                 unresolved_sample_count: 1_048_576,
+                compressed_box_count: 65_536,
             },
             media_data: MediaDataLimits {
                 held_location_count: 1_048_576,
@@ -81,7 +80,7 @@ impl DemuxLimits {
     /// Replaces the number of compressed boxes the demuxer keeps the places of, over the whole file (§8.16)
     #[must_use]
     pub const fn with_compressed_box_count(mut self, compressed_box_count: u64) -> Self {
-        self.compressed_box_count = compressed_box_count;
+        self.structure_data.compressed_box_count = compressed_box_count;
         self
     }
 
@@ -160,11 +159,6 @@ impl DemuxLimits {
     /// Returns the bytes of the payload of one box the demuxer gathers into its value
     pub(crate) const fn payload_bytes(self) -> u64 {
         self.payload_bytes
-    }
-
-    /// Returns the number of compressed boxes the demuxer keeps the places of
-    pub(crate) const fn compressed_box_count(self) -> u64 {
-        self.compressed_box_count
     }
 
     /// Returns the limits of the structure-data the demuxer resolves and keeps

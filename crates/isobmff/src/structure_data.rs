@@ -32,6 +32,7 @@
 //!     leniency_count: 0,
 //!     identified_media_data_count: 0,
 //!     unresolved_sample_count: 0,
+//!     compressed_box_count: 65_536,
 //! };
 //! let resolve = |movie: &MovieBox| {
 //!     StructureDataReader::new(limits)
@@ -47,6 +48,7 @@
 //! # Ok::<(), Box<dyn core::error::Error>>(())
 //! ```
 
+mod compressed;
 mod movie_fragment;
 mod random_access;
 mod reader;
