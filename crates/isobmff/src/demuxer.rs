@@ -9,7 +9,7 @@ use isobmff_core::{BoxDefinition, BoxHeader, BoxType, Error, RawBox};
 
 use crate::byte_range::ByteRange;
 use crate::error::DemuxError;
-use crate::file_level::{self, Handling, Value};
+use crate::file_level::{Kind, TopLevelBox};
 use crate::framing::to_u64;
 use crate::framing::{BoxEvent, BoxReader};
 use crate::leniency::Leniency;
@@ -385,17 +385,17 @@ impl Demuxer {
     fn open(&mut self, header: BoxHeader) -> Result<Option<DemuxEvent>, DemuxError> {
         let byte_range = self.boxes.open_box().ok_or(DemuxError::NoOpenBox)?;
         self.refuse_compressed_box_with_movie_fragment_random_access(header.box_type())?;
-        let event = match file_level::handling(header.box_type()) {
-            Handling::Gather => {
+        let event = match Kind::of(header.box_type()) {
+            Kind::StructureData => {
                 self.boxes.gather(self.payload_limit_bytes)?;
                 return Ok(None);
             }
-            Handling::MediaData => DemuxEvent::MediaData { header, byte_range },
-            Handling::IdentifiedMediaData => {
+            Kind::MediaData => DemuxEvent::MediaData { header, byte_range },
+            Kind::IdentifiedMediaData => {
                 self.boxes.gather_head(IDENTIFIER_BYTES)?;
                 return Ok(None);
             }
-            Handling::Other => DemuxEvent::Other { header, byte_range },
+            Kind::Other => DemuxEvent::Other { header, byte_range },
         };
         self.boxes.skip()?;
         Ok(Some(event))
@@ -409,7 +409,7 @@ impl Demuxer {
         let compressed = if box_type == MovieFragmentRandomAccessBox::BOX_TYPE {
             self.compressed_boxes.first_box_type()
         } else if self.movie_fragment_random_access().is_some() {
-            Some(box_type).filter(|&box_type| file_level::is_compressed(box_type))
+            Some(box_type).filter(|&box_type| is_compressed(box_type))
         } else {
             None
         };
@@ -456,19 +456,19 @@ impl Demuxer {
         else {
             // A compressed box read back into a box of no value, an `ssix`, is reported as any other box.
             let header = raw_box.header();
-            return Ok(file_level::is_compressed(header.box_type())
+            return Ok(is_compressed(header.box_type())
                 .then_some(DemuxEvent::Other { header, byte_range }));
         };
         let event = match value {
-            Value::FileType(ftyp) => {
+            TopLevelBox::FileType(ftyp) => {
                 self.file_type = Some(ftyp);
                 DemuxEvent::FileType { byte_range }
             }
-            Value::SegmentType(styp) => {
+            TopLevelBox::SegmentType(styp) => {
                 self.segment_type = Some(styp);
                 DemuxEvent::SegmentType { byte_range }
             }
-            Value::Movie(moov) => {
+            TopLevelBox::Movie(moov) => {
                 let samples = self.structure_data.handle_movie(moov)?;
                 let samples = self.located(samples)?;
                 DemuxEvent::Movie {
@@ -476,7 +476,7 @@ impl Demuxer {
                     samples: self.gather(samples)?,
                 }
             }
-            Value::MovieFragment(moof) => {
+            TopLevelBox::MovieFragment(moof) => {
                 self.refuse_base_data_offset_past_skipped_compressed_boxes(&moof)?;
                 let samples = self
                     .structure_data
@@ -488,7 +488,7 @@ impl Demuxer {
                     byte_range,
                 }
             }
-            Value::SegmentIndex(sidx) => {
+            TopLevelBox::SegmentIndex(sidx) => {
                 let box_end = byte_range
                     .offset()
                     .saturating_add(raw_box.header().encoded_len())
@@ -497,7 +497,7 @@ impl Demuxer {
                     .handle_segment_index(&sidx, byte_range.offset()..box_end)?;
                 DemuxEvent::SegmentIndex { byte_range }
             }
-            Value::MovieFragmentRandomAccess(mfra) => {
+            TopLevelBox::MovieFragmentRandomAccess(mfra) => {
                 self.structure_data
                     .handle_movie_fragment_random_access(mfra);
                 DemuxEvent::MovieFragmentRandomAccess { byte_range }
@@ -577,7 +577,7 @@ impl Demuxer {
 /// # Errors
 ///
 /// * The failures of [`framing::decompressed`](crate::framing::decompressed)
-///   and [`file_level::read`].
+///   and [`TopLevelBox::read`].
 /// * The failures of recording a compressed box, as for
 ///   `CompressedBoxes::record`.
 fn read(
@@ -585,7 +585,7 @@ fn read(
     limit_bytes: u64,
     raw_box: RawBox<'_>,
     offset: u64,
-) -> Result<Option<Value>, DemuxError> {
+) -> Result<Option<TopLevelBox>, DemuxError> {
     #[cfg(feature = "compressed-boxes")]
     {
         let box_type = raw_box.header().box_type();
@@ -605,12 +605,23 @@ fn read(
                 .encoded_len()
                 .saturating_add(to_u64(raw_box.payload().len()));
             compressed_boxes.record(box_type, offset, length, uncompressed_length)?;
-            return file_level::read_payload(replacement_type, &payload);
+            return TopLevelBox::read_payload(replacement_type, &payload);
         }
     }
     #[cfg(not(feature = "compressed-boxes"))]
     let _ = (compressed_boxes, limit_bytes, offset);
-    file_level::read(raw_box)
+    TopLevelBox::read(raw_box)
+}
+
+/// Returns whether a box of `box_type` is a compressed box, which the demuxer reads back into the box it replaces (§8.16), none without the feature `compressed-boxes`
+fn is_compressed(box_type: BoxType) -> bool {
+    #[cfg(feature = "compressed-boxes")]
+    return crate::framing::replacement_type(box_type).is_some();
+    #[cfg(not(feature = "compressed-boxes"))]
+    return {
+        let _ = box_type;
+        false
+    };
 }
 
 impl Default for Demuxer {
