@@ -580,6 +580,7 @@ mod tests {
     use isobmff_core::{BoxDecode, BoxDefinition, BoxType, Boxes, FourCc};
 
     use super::Muxer;
+    use crate::convert::widen;
     use crate::demuxer::Demuxer;
     use crate::error::MuxError;
     use crate::file_structure::{
@@ -591,7 +592,6 @@ mod tests {
     use crate::sample::{Sample, SampleProperties};
     use crate::structure_data::fixtures::{encoded, movie, track, written};
     use crate::structure_data::movie_fragment_random_access_start;
-    use crate::widen::widen;
 
     /// Returns a movie of track 1 of no sample, its tables of no entry, the movie in a timescale of 1000 and the track of 100
     fn one_track() -> MovieBox {

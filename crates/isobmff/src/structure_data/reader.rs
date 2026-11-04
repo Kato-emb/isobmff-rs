@@ -12,10 +12,10 @@ use super::movie_fragment::ReachedTime;
 use super::sample_description::DataReference;
 use super::segment_index::SegmentIndex;
 use super::{movie_fragment, sample_description, sample_table};
+use crate::convert::widen;
 use crate::error::DemuxError;
 use crate::leniency::Leniency;
 use crate::sample::{DataReferenceKey, SampleLocation};
-use crate::widen::widen;
 
 /// Limits a [`StructureDataReader`] resolves and keeps structure-data up to
 ///

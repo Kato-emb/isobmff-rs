@@ -7,10 +7,10 @@ use isobmff_boxes::{Free, FreeSpaceBox, MediaDataBox};
 use isobmff_core::{BoxDefinition, BoxHeader, BoxSize, BoxType, ExtendedSize};
 
 use crate::byte_range::ByteRange;
+use crate::convert::widen;
 use crate::error::MuxError;
 use crate::framing::{BoxEvent, BoxWriter};
 use crate::output::Output;
-use crate::widen::widen;
 
 /// Length of the header of a `free` box, the least a `free` box takes
 const FREE_HEADER_BYTES: u64 = 8;

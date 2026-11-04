@@ -19,8 +19,8 @@ use isobmff_core::{BoxDefinition, BoxType, RawBox};
 use miniz_oxide::inflate::TINFLStatus;
 use miniz_oxide::inflate::core::{DecompressorOxide, decompress, inflate_flags};
 
+use crate::convert::widen;
 use crate::error::DemuxError;
-use crate::widen::widen;
 
 /// Identification, compression method, flags, modification time, extra flags and operating system of a gzip member, RFC 1952 §2.3.1
 const GZIP_HEADER_BYTES: usize = 10;

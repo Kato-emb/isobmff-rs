@@ -8,6 +8,7 @@ use isobmff_boxes::{
 use isobmff_core::{BoxDefinition, BoxHeader, BoxType, Error, RawBox};
 
 use crate::byte_range::ByteRange;
+use crate::convert::widen;
 use crate::error::DemuxError;
 use crate::file_level::{Kind, TopLevelBox};
 use crate::framing::{BoxEvent, BoxReader};
@@ -16,7 +17,6 @@ use crate::limits::DemuxLimits;
 use crate::media_data::MediaDataReader;
 use crate::sample::{DataReferenceKey, Sample, SampleLocation};
 use crate::structure_data::{DataReference, SampleLocations, SegmentIndex, StructureDataReader};
-use crate::widen::widen;
 
 mod compressed;
 

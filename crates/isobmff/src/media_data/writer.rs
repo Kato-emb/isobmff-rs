@@ -5,11 +5,11 @@ use alloc::vec::Vec;
 use isobmff_boxes::{MediaDataBox, MovieBox};
 use isobmff_core::{BoxDefinition, BoxHeader};
 
+use crate::convert::widen;
 use crate::error::MuxError;
 use crate::framing::{BoxEvent, BoxWriter};
 use crate::sample::{Sample, SampleLocation};
 use crate::structure_data::laid_out;
-use crate::widen::widen;
 
 /// Writer of the media data of samples written together: one `mdat` that holds them in their order, ISO/IEC 14496-12 §8.1.1
 ///

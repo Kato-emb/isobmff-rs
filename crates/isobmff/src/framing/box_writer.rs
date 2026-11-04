@@ -5,10 +5,10 @@ use alloc::vec::Vec;
 use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader, BoxSize, Error};
 
 use crate::byte_range::ByteRange;
+use crate::convert::widen;
 use crate::error::MuxError;
 use crate::framing::box_event::{BoxEvent, BoxEventKind};
 use crate::output::Output;
-use crate::widen::widen;
 
 /// Length of the header with both a `largesize` and an `extended_type` field, the longest there is
 const LONGEST_HEADER: usize = 32;

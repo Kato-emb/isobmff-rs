@@ -278,6 +278,7 @@
 extern crate alloc;
 
 mod byte_range;
+mod convert;
 mod demuxer;
 mod error;
 mod fast_start;
@@ -292,7 +293,6 @@ mod output;
 mod sample;
 pub mod structure_data;
 pub mod timeline;
-mod widen;
 
 pub use byte_range::ByteRange;
 pub use demuxer::{DemuxEvent, Demuxer};

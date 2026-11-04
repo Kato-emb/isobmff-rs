@@ -5,9 +5,9 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use crate::byte_range::ByteRange;
+use crate::convert::widen;
 use crate::error::DemuxError;
 use crate::sample::{Sample, SampleLocation};
-use crate::widen::widen;
 
 /// Limits a [`MediaDataReader`] holds sample locations and their media data up to
 ///

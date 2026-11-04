@@ -3,12 +3,12 @@
 use isobmff_boxes::MovieBox;
 use isobmff_core::Error;
 
+use crate::convert::widen;
 use crate::error::MuxError;
 use crate::framing::{BoxWriter, media_data_header};
 use crate::output::Output;
 use crate::sample::SampleLocation;
 use crate::structure_data::SampleTableWriter;
-use crate::widen::widen;
 
 /// Length of the `free` box the header of the `mdat` takes the place of, as [`media_data_header`] takes it
 const PLACEHOLDER_BYTES: u64 = 16;

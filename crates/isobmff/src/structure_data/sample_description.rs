@@ -4,9 +4,9 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{DataEntry, MovieBox, SampleDescription, TrackBox};
 
+use crate::convert::widen;
 use crate::error::{DemuxError, MuxError};
 use crate::sample::{DataReferenceKey, Sample, SampleLocation};
-use crate::widen::widen;
 
 /// One entry of the data reference of a track of the movie, under the key the locations of its samples carry, ISO/IEC 14496-12 §8.7.2
 ///
