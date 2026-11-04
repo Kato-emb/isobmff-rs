@@ -24,7 +24,7 @@
 #![no_main]
 
 use isobmff::framing::{decompressed, replacement_type};
-use isobmff::{Boxes, DemuxError, Error, ErrorKind, RawBox};
+use isobmff::{Boxes, Error, ErrorKind, RawBox, ReadError};
 use libfuzzer_sys::fuzz_target;
 
 /// Length of the longest header: a `largesize` field and an `extended_type` field, ISO/IEC 14496-12 §4.2.2
@@ -104,7 +104,7 @@ fn reads_back_as_the_box_it_replaces(framed: RawBox<'_>) {
         }
         Ok(None) => assert_eq!(replacement, None, "a compressed box read back as none"),
         Err(
-            DemuxError::PayloadLimitExceeded { .. } | DemuxError::UnreadableCompressedData { .. },
+            ReadError::PayloadLimitExceeded { .. } | ReadError::UnreadableCompressedData { .. },
         ) => assert!(replacement.is_some(), "a box that is not compressed failed"),
         Err(failure) => panic!("reading back failed with {failure}"),
     }

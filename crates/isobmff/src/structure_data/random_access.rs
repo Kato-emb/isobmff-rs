@@ -10,7 +10,7 @@ use isobmff_boxes::{
 use isobmff_core::{BoxDecode, BoxEncode, Error};
 
 use super::movie_fragment::Run;
-use crate::error::MuxError;
+use crate::error::WriteError;
 
 /// Returns the file offset of the `mfra` the last 16 bytes of a file of `file_length` bytes point at, where they are an `mfro`, ISO/IEC 14496-12 §8.8.11
 ///
@@ -108,8 +108,8 @@ impl RandomAccessTables {
     ///
     /// # Errors
     ///
-    /// * [`Box`](MuxError::Box): the `mfra` is longer than its `mfro` counts.
-    pub(super) fn finish(self) -> Result<MovieFragmentRandomAccessBox, MuxError> {
+    /// * [`Box`](WriteError::Box): the `mfra` is longer than its `mfro` counts.
+    pub(super) fn finish(self) -> Result<MovieFragmentRandomAccessBox, WriteError> {
         let mut mfra = MovieFragmentRandomAccessBox::default();
         mfra.tfra = self.tfra.into_values().collect();
         for tfra in &mut mfra.tfra {
@@ -124,7 +124,7 @@ impl RandomAccessTables {
             tfra.length_size_of_trun_num = largest(|entry| entry.trun_number);
             tfra.length_size_of_sample_num = largest(|entry| entry.sample_delta);
         }
-        mfra.mfro.parent_size = u32::try_from(mfra.encoded_len()).map_err(|_| MuxError::Box {
+        mfra.mfro.parent_size = u32::try_from(mfra.encoded_len()).map_err(|_| WriteError::Box {
             error: Error::invalid_value("parent_size"),
         })?;
 

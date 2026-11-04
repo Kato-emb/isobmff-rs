@@ -8,7 +8,7 @@ use isobmff_core::{BoxDefinition, BoxHeader, BoxSize, BoxType, ExtendedSize};
 
 use crate::byte_range::ByteRange;
 use crate::convert::to_u64;
-use crate::error::MuxError;
+use crate::error::WriteError;
 use crate::framing::{BoxEvent, BoxWriter};
 use crate::output::Output;
 
@@ -22,7 +22,7 @@ const FREE: BoxType = FreeSpaceBox::<Free>::BOX_TYPE;
 ///
 /// # Errors
 ///
-/// * [`ReservedSpaceMismatch`](MuxError::ReservedSpaceMismatch): a `free`
+/// * [`ReservedSpaceMismatch`](WriteError::ReservedSpaceMismatch): a `free`
 ///   box takes no fewer than 8 bytes, the length of its header.
 ///
 /// # Examples
@@ -31,10 +31,10 @@ const FREE: BoxType = FreeSpaceBox::<Free>::BOX_TYPE;
 /// use isobmff::framing::reserve;
 ///
 /// assert_eq!(reserve(12)?, b"\0\0\0\x0cfree\0\0\0\0");
-/// # Ok::<(), isobmff::MuxError>(())
+/// # Ok::<(), isobmff::WriteError>(())
 /// ```
-pub fn reserve(total_bytes: u64) -> Result<Vec<u8>, MuxError> {
-    let mismatch = MuxError::ReservedSpaceMismatch {
+pub fn reserve(total_bytes: u64) -> Result<Vec<u8>, WriteError> {
+    let mismatch = WriteError::ReservedSpaceMismatch {
         reserved_bytes: Some(total_bytes),
         offered_bytes: 0,
     };
@@ -43,7 +43,7 @@ pub fn reserve(total_bytes: u64) -> Result<Vec<u8>, MuxError> {
     let mut bytes = vec![0; usize::try_from(total_bytes).map_err(|_| mismatch)?];
     header
         .encode(&mut bytes)
-        .map_err(|error| MuxError::Box { error })?;
+        .map_err(|error| WriteError::Box { error })?;
     Ok(bytes)
 }
 
@@ -72,14 +72,14 @@ impl BoxWriter {
     /// assert_eq!(free.offset(), after_ftyp);
     /// assert_eq!(free.bytes(), b"\0\0\0\x0cfree\0\0\0\0");
     /// assert_eq!(boxes.next_offset(), after_ftyp + 12);
-    /// # Ok::<(), isobmff::MuxError>(())
+    /// # Ok::<(), isobmff::WriteError>(())
     /// ```
-    pub fn write_reserved(&mut self, total_bytes: u64) -> Result<Output, MuxError> {
+    pub fn write_reserved(&mut self, total_bytes: u64) -> Result<Output, WriteError> {
         let bytes = reserve(total_bytes)?;
         let offset = self.next_offset();
         let header =
             BoxHeader::with_payload_len(FREE, total_bytes.saturating_sub(FREE_HEADER_BYTES))
-                .ok_or(MuxError::ReservedSpaceMismatch {
+                .ok_or(WriteError::ReservedSpaceMismatch {
                     reserved_bytes: Some(total_bytes),
                     offered_bytes: 0,
                 })?;
@@ -102,7 +102,7 @@ impl BoxWriter {
 ///
 /// # Errors
 ///
-/// * [`ReservedSpaceMismatch`](MuxError::ReservedSpaceMismatch): `reserved`
+/// * [`ReservedSpaceMismatch`](WriteError::ReservedSpaceMismatch): `reserved`
 ///   has no length, `bytes` are longer than it, or they leave fewer bytes of
 ///   it than the 8 of the header of a `free` box.
 ///
@@ -110,7 +110,7 @@ impl BoxWriter {
 ///
 /// ```
 /// use isobmff::framing::{fill, reserve};
-/// use isobmff::{ByteRange, MuxError, Output};
+/// use isobmff::{ByteRange, WriteError, Output};
 ///
 /// // 24 bytes reserved at file offset 100, of which a box of 12 takes the start
 /// let reserved = ByteRange::new(100, Some(24));
@@ -122,13 +122,13 @@ impl BoxWriter {
 /// // The 4 bytes 20 would leave hold no `free` box
 /// assert!(matches!(
 ///     fill(ByteRange::new(100, Some(16)), bytes),
-///     Err(MuxError::ReservedSpaceMismatch { reserved_bytes: Some(16), offered_bytes: 12, .. })
+///     Err(WriteError::ReservedSpaceMismatch { reserved_bytes: Some(16), offered_bytes: 12, .. })
 /// ));
-/// # Ok::<(), MuxError>(())
+/// # Ok::<(), WriteError>(())
 /// ```
-pub fn fill(reserved: ByteRange, bytes: Vec<u8>) -> Result<Vec<Output>, MuxError> {
+pub fn fill(reserved: ByteRange, bytes: Vec<u8>) -> Result<Vec<Output>, WriteError> {
     let offered_bytes = to_u64(bytes.len());
-    let mismatch = MuxError::ReservedSpaceMismatch {
+    let mismatch = WriteError::ReservedSpaceMismatch {
         reserved_bytes: reserved.length(),
         offered_bytes,
     };
@@ -145,7 +145,7 @@ pub fn fill(reserved: ByteRange, bytes: Vec<u8>) -> Result<Vec<Output>, MuxError
         let mut free = vec![0; 8];
         header
             .encode(&mut free)
-            .map_err(|error| MuxError::Box { error })?;
+            .map_err(|error| WriteError::Box { error })?;
         outputs.push(Output::new(
             reserved.offset().saturating_add(offered_bytes),
             free,
@@ -218,7 +218,7 @@ mod tests {
 
     use super::{fill, media_data_header, reserve};
     use crate::byte_range::ByteRange;
-    use crate::error::MuxError;
+    use crate::error::WriteError;
     use crate::output::Output;
 
     #[test]
@@ -226,7 +226,7 @@ mod tests {
      {
         let bytes = Vec::from(*b"ABCDEFGH");
         let reserved = |length| ByteRange::new(40, Some(length));
-        let mismatch = |reserved_bytes, offered_bytes| MuxError::ReservedSpaceMismatch {
+        let mismatch = |reserved_bytes, offered_bytes| WriteError::ReservedSpaceMismatch {
             reserved_bytes,
             offered_bytes,
         };
@@ -259,7 +259,7 @@ mod tests {
             [
                 Ok(Vec::from(*b"\0\0\0\x08free")),
                 Ok(Vec::from(*b"\0\0\0\x0afree\0\0")),
-                Err(MuxError::ReservedSpaceMismatch {
+                Err(WriteError::ReservedSpaceMismatch {
                     reserved_bytes: Some(7),
                     offered_bytes: 0
                 }),

@@ -31,8 +31,8 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use isobmff::framing::{BoxWriter, fill, media_data_header, reserve};
 use isobmff::structure_data::{SampleTableWriter, located_in_file};
 use isobmff::{
-    BoxHeader, BoxSize, BoxType, ByteRange, DemuxEvent, Demuxer, ExtendedSize, MuxError, Output,
-    Sample,
+    BoxHeader, BoxSize, BoxType, ByteRange, DemuxEvent, Demuxer, ExtendedSize, Output, Sample,
+    WriteError,
 };
 
 /// Length of the placeholder of the header of the `mdat`, as `media_data_header` takes it
@@ -160,7 +160,7 @@ impl ReservedFile {
                     destination.write(output.offset(), output.bytes())?;
                 }
             }
-            Err(MuxError::ReservedSpaceMismatch { .. }) => {
+            Err(WriteError::ReservedSpaceMismatch { .. }) => {
                 println!(
                     "moov of {moov_len} bytes does not fill the {} reserved: at the end",
                     self.reserved_bytes

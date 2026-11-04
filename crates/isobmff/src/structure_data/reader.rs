@@ -14,7 +14,7 @@ use super::sample_description::DataReference;
 use super::segment_index::SegmentIndex;
 use super::{movie_fragment, sample_description, sample_table};
 use crate::convert::to_u64;
-use crate::error::DemuxError;
+use crate::error::ReadError;
 use crate::leniency::Leniency;
 use crate::sample::{DataReferenceKey, SampleLocation};
 
@@ -110,7 +110,7 @@ pub struct StructureDataLimits {
 /// let samples = reader.handle_movie(MovieBox::default())?;
 /// assert_eq!(samples.len(), 0);
 /// assert!(reader.movie().is_some());
-/// # Ok::<(), isobmff::DemuxError>(())
+/// # Ok::<(), isobmff::ReadError>(())
 /// ```
 #[derive(Debug)]
 pub struct StructureDataReader {
@@ -164,37 +164,37 @@ impl StructureDataReader {
     ///
     /// # Errors
     ///
-    /// * [`DuplicateBox`](DemuxError::DuplicateBox): the reader already holds
+    /// * [`DuplicateBox`](ReadError::DuplicateBox): the reader already holds
     ///   a movie.
-    /// * [`SampleCountLimitExceeded`](DemuxError::SampleCountLimitExceeded):
+    /// * [`SampleCountLimitExceeded`](ReadError::SampleCountLimitExceeded):
     ///   the sample size tables of every track together count more samples
     ///   than the limit, and none is resolved.
-    /// * [`UnresolvedSampleCountLimitExceeded`](DemuxError::UnresolvedSampleCountLimitExceeded):
+    /// * [`UnresolvedSampleCountLimitExceeded`](ReadError::UnresolvedSampleCountLimitExceeded):
     ///   holding the samples in an `IdentifiedMediaDataBox` not read yet would
     ///   take those the reader holds past the limit.
-    /// * [`LeniencyCountLimitExceeded`](DemuxError::LeniencyCountLimitExceeded):
+    /// * [`LeniencyCountLimitExceeded`](ReadError::LeniencyCountLimitExceeded):
     ///   keeping what the movie is read past in would take the leniencies the
     ///   reader keeps past the limit.
-    /// * [`SampleTableMismatch`](DemuxError::SampleTableMismatch): the tables
+    /// * [`SampleTableMismatch`](ReadError::SampleTableMismatch): the tables
     ///   of a track cannot lay out its samples: the track declares samples,
     ///   but its `stsz` or `stz2`, its `stco` or `co64`, or its `stts`
     ///   states none, or its `stsc` lays no sample in a chunk; or its `stsc`
     ///   lays its runs over chunks it does not have.
-    /// * [`UnknownSampleDescriptionIndex`](DemuxError::UnknownSampleDescriptionIndex),
-    ///   [`UnknownDataReferenceIndex`](DemuxError::UnknownDataReferenceIndex):
+    /// * [`UnknownSampleDescriptionIndex`](ReadError::UnknownSampleDescriptionIndex),
+    ///   [`UnknownDataReferenceIndex`](ReadError::UnknownDataReferenceIndex):
     ///   samples are described by a sample entry, or a sample entry names a
     ///   data reference entry, that the track has none of.
-    /// * [`UnsupportedDataReference`](DemuxError::UnsupportedDataReference):
+    /// * [`UnsupportedDataReference`](ReadError::UnsupportedDataReference):
     ///   samples of the movie name a `DataEntrySeqNumImdaBox`, which names
     ///   only the media data of samples in a movie fragment (§8.7.2).
-    /// * [`DataOffsetOutOfRange`](DemuxError::DataOffsetOutOfRange),
-    ///   [`DecodingTimeOverflow`](DemuxError::DecodingTimeOverflow): the media
+    /// * [`DataOffsetOutOfRange`](ReadError::DataOffsetOutOfRange),
+    ///   [`DecodingTimeOverflow`](ReadError::DecodingTimeOverflow): the media
     ///   data or the decoding times of a track run past 64 bits, or, with the
     ///   feature `compressed-boxes`, the media data of a sample lies in a box
     ///   a compressed box replaces.
-    pub fn handle_movie(&mut self, movie: MovieBox) -> Result<SampleLocations, DemuxError> {
+    pub fn handle_movie(&mut self, movie: MovieBox) -> Result<SampleLocations, ReadError> {
         if self.movie.is_some() {
-            return Err(DemuxError::DuplicateBox {
+            return Err(ReadError::DuplicateBox {
                 box_type: MovieBox::BOX_TYPE,
             });
         }
@@ -264,24 +264,24 @@ impl StructureDataReader {
     ///
     /// # Errors
     ///
-    /// * [`MissingMovie`](DemuxError::MissingMovie): the reader holds no
+    /// * [`MissingMovie`](ReadError::MissingMovie): the reader holds no
     ///   movie.
-    /// * [`SampleCountLimitExceeded`](DemuxError::SampleCountLimitExceeded):
+    /// * [`SampleCountLimitExceeded`](ReadError::SampleCountLimitExceeded):
     ///   the track runs together count more samples than the limit, and none
     ///   is resolved.
-    /// * [`UnresolvedSampleCountLimitExceeded`](DemuxError::UnresolvedSampleCountLimitExceeded):
+    /// * [`UnresolvedSampleCountLimitExceeded`](ReadError::UnresolvedSampleCountLimitExceeded):
     ///   holding the samples in an `IdentifiedMediaDataBox` not read yet would
     ///   take those the reader holds past the limit.
-    /// * [`LeniencyCountLimitExceeded`](DemuxError::LeniencyCountLimitExceeded):
+    /// * [`LeniencyCountLimitExceeded`](ReadError::LeniencyCountLimitExceeded):
     ///   keeping what the fragment is read past in would take the leniencies
     ///   the reader keeps past the limit.
-    /// * [`UnknownTrackId`](DemuxError::UnknownTrackId),
-    ///   [`MissingTrackExtends`](DemuxError::MissingTrackExtends): a track
+    /// * [`UnknownTrackId`](ReadError::UnknownTrackId),
+    ///   [`MissingTrackExtends`](ReadError::MissingTrackExtends): a track
     ///   fragment is of a track the movie, or its `mvex`, has none of.
-    /// * [`MissingDecodingTime`](DemuxError::MissingDecodingTime): a track
+    /// * [`MissingDecodingTime`](ReadError::MissingDecodingTime): a track
     ///   fragment has no `tfdt`, and the reader has resumed since its track
     ///   last had one.
-    /// * [`DataOffsetPastSkippedCompressedBoxes`](DemuxError::DataOffsetPastSkippedCompressedBoxes):
+    /// * [`DataOffsetPastSkippedCompressedBoxes`](ReadError::DataOffsetPastSkippedCompressedBoxes):
     ///   with the feature `compressed-boxes`, the reader has resumed in a
     ///   file known to have been transformed, by a compressed box or an
     ///   `otyp` told of, and a track fragment takes a base data offset: the
@@ -294,12 +294,12 @@ impl StructureDataReader {
         &mut self,
         movie_fragment: &MovieFragmentBox,
         moof_offset: u64,
-    ) -> Result<SampleLocations, DemuxError> {
+    ) -> Result<SampleLocations, ReadError> {
         self.compressed
             .refuse_base_data_offset_past_skipped(movie_fragment)?;
         // Why not the file offset itself: the offsets in a box count in the file as its compressed boxes read back, §8.16.1.
         let moof_offset = self.compressed.uncompressed(moof_offset);
-        let movie = self.movie.as_ref().ok_or(DemuxError::MissingMovie)?;
+        let movie = self.movie.as_ref().ok_or(ReadError::MissingMovie)?;
         let mut locations = self.room_for(movie_fragment::sample_count(movie_fragment))?;
         let mut decoding_times = self.decoding_times.clone();
         let mut identified = Vec::new();
@@ -341,24 +341,23 @@ impl StructureDataReader {
     ///
     /// # Errors
     ///
-    /// * [`SubsegmentCountLimitExceeded`](DemuxError::SubsegmentCountLimitExceeded):
+    /// * [`SubsegmentCountLimitExceeded`](ReadError::SubsegmentCountLimitExceeded):
     ///   the `sidx` references more subsegments than the limit, and none is
     ///   resolved; or keeping its index would take the subsegments of the
     ///   kept indexes past the limit.
-    /// * [`SegmentIndexCountLimitExceeded`](DemuxError::SegmentIndexCountLimitExceeded):
+    /// * [`SegmentIndexCountLimitExceeded`](ReadError::SegmentIndexCountLimitExceeded):
     ///   keeping the index would take the kept indexes past the limit.
-    /// * [`SegmentIndexOutOfRange`](DemuxError::SegmentIndexOutOfRange): the
+    /// * [`SegmentIndexOutOfRange`](ReadError::SegmentIndexOutOfRange): the
     ///   byte ranges or the presentation times run past 64 bits.
     pub fn handle_segment_index(
         &mut self,
         sidx: &SegmentIndexBox,
         byte_range: Range<u64>,
-    ) -> Result<(), DemuxError> {
-        let subsegments_exceeded =
-            |retained_subsegments| DemuxError::SubsegmentCountLimitExceeded {
-                retained_subsegments,
-                limit_subsegments: self.limits.subsegment_count,
-            };
+    ) -> Result<(), ReadError> {
+        let subsegments_exceeded = |retained_subsegments| ReadError::SubsegmentCountLimitExceeded {
+            retained_subsegments,
+            limit_subsegments: self.limits.subsegment_count,
+        };
         let declared_subsegments = to_u64(sidx.references.len());
         if declared_subsegments > self.limits.subsegment_count {
             return Err(subsegments_exceeded(declared_subsegments));
@@ -370,7 +369,7 @@ impl StructureDataReader {
 
         let retained_segment_indexes = to_u64(self.segment_indexes.len()).saturating_add(1);
         if retained_segment_indexes > self.limits.segment_index_count {
-            return Err(DemuxError::SegmentIndexCountLimitExceeded {
+            return Err(ReadError::SegmentIndexCountLimitExceeded {
                 retained_segment_indexes,
                 limit_segment_indexes: self.limits.segment_index_count,
             });
@@ -392,15 +391,15 @@ impl StructureDataReader {
     ///
     /// # Errors
     ///
-    /// * [`CompressedBoxWithMovieFragmentRandomAccess`](DemuxError::CompressedBoxWithMovieFragmentRandomAccess):
+    /// * [`CompressedBoxWithMovieFragmentRandomAccess`](ReadError::CompressedBoxWithMovieFragmentRandomAccess):
     ///   the reader has been told of a compressed box, and a file has no
     ///   `mfra` with one (§8.16.1).
     pub fn handle_movie_fragment_random_access(
         &mut self,
         mfra: MovieFragmentRandomAccessBox,
-    ) -> Result<(), DemuxError> {
+    ) -> Result<(), ReadError> {
         if let Some(box_type) = self.compressed.first_box_type() {
-            return Err(DemuxError::CompressedBoxWithMovieFragmentRandomAccess { box_type });
+            return Err(ReadError::CompressedBoxWithMovieFragmentRandomAccess { box_type });
         }
         self.movie_fragment_random_access = Some(mfra);
         Ok(())
@@ -429,27 +428,27 @@ impl StructureDataReader {
     ///
     /// # Errors
     ///
-    /// * [`DuplicateIdentifiedMediaData`](DemuxError::DuplicateIdentifiedMediaData):
+    /// * [`DuplicateIdentifiedMediaData`](ReadError::DuplicateIdentifiedMediaData):
     ///   the reader keeps a box of the same `imda_identifier`, which §8.1.4
     ///   does not allow.
-    /// * [`IdentifiedMediaDataCountLimitExceeded`](DemuxError::IdentifiedMediaDataCountLimitExceeded):
+    /// * [`IdentifiedMediaDataCountLimitExceeded`](ReadError::IdentifiedMediaDataCountLimitExceeded):
     ///   keeping the place of the box would take those the reader keeps past
     ///   the limit.
-    /// * [`DataOffsetOutOfRange`](DemuxError::DataOffsetOutOfRange): the
+    /// * [`DataOffsetOutOfRange`](ReadError::DataOffsetOutOfRange): the
     ///   media data of a sample lies past 64-bit file offsets.
     pub fn handle_identified_media_data(
         &mut self,
         identifier: u32,
         payload_offset: u64,
-    ) -> Result<SampleLocations, DemuxError> {
+    ) -> Result<SampleLocations, ReadError> {
         let payload_offset = self.compressed.uncompressed(payload_offset);
         if self.identified_media_data.contains_key(&identifier) {
-            return Err(DemuxError::DuplicateIdentifiedMediaData { identifier });
+            return Err(ReadError::DuplicateIdentifiedMediaData { identifier });
         }
         let retained_identified_media_data =
             to_u64(self.identified_media_data.len()).saturating_add(1);
         if retained_identified_media_data > self.limits.identified_media_data_count {
-            return Err(DemuxError::IdentifiedMediaDataCountLimitExceeded {
+            return Err(ReadError::IdentifiedMediaDataCountLimitExceeded {
                 retained_identified_media_data,
                 limit_identified_media_data: self.limits.identified_media_data_count,
             });
@@ -481,7 +480,7 @@ impl StructureDataReader {
     ///
     /// # Errors
     ///
-    /// * [`UnresolvedIdentifiedMediaData`](DemuxError::UnresolvedIdentifiedMediaData):
+    /// * [`UnresolvedIdentifiedMediaData`](ReadError::UnresolvedIdentifiedMediaData):
     ///   the reader holds samples in an `IdentifiedMediaDataBox` it has not
     ///   been told of, the one
     ///   [`unresolved_identified_media_data`](Self::unresolved_identified_media_data)
@@ -503,12 +502,12 @@ impl StructureDataReader {
     /// # });
     /// // A file of no sample in an `IdentifiedMediaDataBox` ends whenever it does
     /// reader.finish()?;
-    /// # Ok::<(), isobmff::DemuxError>(())
+    /// # Ok::<(), isobmff::ReadError>(())
     /// ```
-    pub fn finish(&self) -> Result<(), DemuxError> {
+    pub fn finish(&self) -> Result<(), ReadError> {
         self.unresolved_identified_media_data()
             .map_or(Ok(()), |identifier| {
-                Err(DemuxError::UnresolvedIdentifiedMediaData { identifier })
+                Err(ReadError::UnresolvedIdentifiedMediaData { identifier })
             })
     }
 
@@ -564,11 +563,11 @@ impl StructureDataReader {
     }
 
     /// Refuses `leniencies` where keeping them besides those kept would take the leniencies past the limit
-    fn check_room_for_leniencies(&self, leniencies: &[Leniency]) -> Result<(), DemuxError> {
+    fn check_room_for_leniencies(&self, leniencies: &[Leniency]) -> Result<(), ReadError> {
         let retained_leniencies =
             to_u64(self.leniencies.len()).saturating_add(to_u64(leniencies.len()));
         if retained_leniencies > self.limits.leniency_count {
-            return Err(DemuxError::LeniencyCountLimitExceeded {
+            return Err(ReadError::LeniencyCountLimitExceeded {
                 retained_leniencies,
                 limit_leniencies: self.limits.leniency_count,
             });
@@ -580,15 +579,15 @@ impl StructureDataReader {
     ///
     /// # Errors
     ///
-    /// * [`UnresolvedSampleCountLimitExceeded`](DemuxError::UnresolvedSampleCountLimitExceeded):
+    /// * [`UnresolvedSampleCountLimitExceeded`](ReadError::UnresolvedSampleCountLimitExceeded):
     ///   holding the samples would take those the reader holds past the limit.
-    /// * [`DataOffsetOutOfRange`](DemuxError::DataOffsetOutOfRange): the media
+    /// * [`DataOffsetOutOfRange`](ReadError::DataOffsetOutOfRange): the media
     ///   data of a sample lies past 64-bit file offsets.
     fn place(
         &self,
         locations: Vec<SampleLocation>,
         identified: &[(usize, u32)],
-    ) -> Result<(Vec<SampleLocation>, Held), DemuxError> {
+    ) -> Result<(Vec<SampleLocation>, Held), ReadError> {
         if identified.is_empty() {
             return Ok((locations, BTreeMap::new()));
         }
@@ -599,7 +598,7 @@ impl StructureDataReader {
         let held_before: usize = self.unresolved.values().map(Vec::len).sum();
         let unresolved_samples = to_u64(held_before).saturating_add(to_u64(held_samples));
         if unresolved_samples > self.limits.unresolved_sample_count {
-            return Err(DemuxError::UnresolvedSampleCountLimitExceeded {
+            return Err(ReadError::UnresolvedSampleCountLimitExceeded {
                 unresolved_samples,
                 limit_samples: self.limits.unresolved_sample_count,
             });
@@ -623,9 +622,9 @@ impl StructureDataReader {
     }
 
     /// Returns room for the locations of `declared_samples` samples, or the failure of more than the limit
-    fn room_for(&self, declared_samples: u64) -> Result<Vec<SampleLocation>, DemuxError> {
+    fn room_for(&self, declared_samples: u64) -> Result<Vec<SampleLocation>, ReadError> {
         if declared_samples > self.limits.sample_count {
-            return Err(DemuxError::SampleCountLimitExceeded {
+            return Err(ReadError::SampleCountLimitExceeded {
                 declared_samples,
                 limit_samples: self.limits.sample_count,
             });
@@ -734,11 +733,11 @@ type Held = BTreeMap<u32, Vec<SampleLocation>>;
 ///
 /// # Errors
 ///
-/// * [`DataOffsetOutOfRange`](DemuxError::DataOffsetOutOfRange): the media
+/// * [`DataOffsetOutOfRange`](ReadError::DataOffsetOutOfRange): the media
 ///   data lies past 64-bit file offsets.
-fn located(location: &SampleLocation, payload_offset: u64) -> Result<SampleLocation, DemuxError> {
+fn located(location: &SampleLocation, payload_offset: u64) -> Result<SampleLocation, ReadError> {
     let range = location.byte_range();
-    let out_of_range = DemuxError::DataOffsetOutOfRange {
+    let out_of_range = ReadError::DataOffsetOutOfRange {
         track_id: location.properties().track_id,
     };
     let start = payload_offset
@@ -775,7 +774,7 @@ mod tests {
     use isobmff_core::{BoxDecode, BoxDefinition, BoxType};
 
     use super::{StructureDataLimits, StructureDataReader};
-    use crate::error::DemuxError;
+    use crate::error::ReadError;
     use crate::leniency::{Leniency, SampleTableDisagreement};
     use crate::sample::{DataReferenceKey, SampleLocation, SampleProperties};
     use crate::structure_data::DataReference;
@@ -784,7 +783,7 @@ mod tests {
     /// Resolves the movie of `tracks` with no limit to speak of
     fn resolve(
         tracks: impl IntoIterator<Item = TrackBox>,
-    ) -> Result<Vec<SampleLocation>, DemuxError> {
+    ) -> Result<Vec<SampleLocation>, ReadError> {
         StructureDataReader::new(UNLIMITED)
             .handle_movie(movie(tracks))
             .map(Iterator::collect)
@@ -1189,7 +1188,7 @@ mod tests {
         ] {
             assert_eq!(
                 resolve([trak]),
-                Err(DemuxError::SampleTableMismatch {
+                Err(ReadError::SampleTableMismatch {
                     track_id: 7,
                     box_type
                 })
@@ -1220,14 +1219,14 @@ mod tests {
 
         assert_eq!(
             resolve([imda]),
-            Err(DemuxError::UnsupportedDataReference {
+            Err(ReadError::UnsupportedDataReference {
                 track_id: 3,
                 data_reference_index: 1
             })
         );
         assert_eq!(
             resolve([unknown]),
-            Err(DemuxError::UnknownDataReferenceIndex {
+            Err(ReadError::UnknownDataReferenceIndex {
                 track_id: 3,
                 data_reference_index: 1
             })
@@ -1267,7 +1266,7 @@ mod tests {
                 Vec::new(),
                 (
                     Some(7),
-                    Err(DemuxError::UnresolvedIdentifiedMediaData { identifier: 7 })
+                    Err(ReadError::UnresolvedIdentifiedMediaData { identifier: 7 })
                 ),
                 Vec::from([(1, 0, 1004..1008), (1, 10, 1008..1014)]),
                 (None, Ok(()))
@@ -1316,12 +1315,12 @@ mod tests {
                 limited.handle_movie(movie([identified(9)])).map(|_| ()),
             ],
             [
-                Err(DemuxError::DuplicateIdentifiedMediaData { identifier: 7 }),
-                Err(DemuxError::IdentifiedMediaDataCountLimitExceeded {
+                Err(ReadError::DuplicateIdentifiedMediaData { identifier: 7 }),
+                Err(ReadError::IdentifiedMediaDataCountLimitExceeded {
                     retained_identified_media_data: 2,
                     limit_identified_media_data: 1
                 }),
-                Err(DemuxError::UnresolvedSampleCountLimitExceeded {
+                Err(ReadError::UnresolvedSampleCountLimitExceeded {
                     unresolved_samples: 2,
                     limit_samples: 1
                 }),
@@ -1344,7 +1343,7 @@ mod tests {
             ),
             (
                 None,
-                Err(DemuxError::DuplicateIdentifiedMediaData { identifier: 3 })
+                Err(ReadError::DuplicateIdentifiedMediaData { identifier: 3 })
             )
         );
     }
@@ -1440,7 +1439,7 @@ mod tests {
 
         assert_eq!(
             reader.handle_movie(movie(tracks)).map(|_| ()),
-            Err(DemuxError::SampleCountLimitExceeded {
+            Err(ReadError::SampleCountLimitExceeded {
                 declared_samples: 4,
                 limit_samples: 3
             })
@@ -1455,7 +1454,7 @@ mod tests {
 
         assert_eq!(
             reader.handle_movie(movie([])).map(|_| ()),
-            Err(DemuxError::DuplicateBox {
+            Err(ReadError::DuplicateBox {
                 box_type: MovieBox::BOX_TYPE
             })
         );

@@ -6,7 +6,7 @@ use core::ops::Range;
 
 use crate::byte_range::ByteRange;
 use crate::convert::to_u64;
-use crate::error::DemuxError;
+use crate::error::ReadError;
 use crate::sample::{Sample, SampleLocation};
 
 /// Limits a [`MediaDataReader`] holds sample locations and their media data up to
@@ -92,7 +92,7 @@ pub struct MediaDataLimits {
 /// reader.handle_input(98, b"..AB")?;
 /// assert_eq!(reader.poll_sample(), Some(Sample::new(properties, b"ABCD".to_vec())));
 /// reader.finish()?;
-/// # Ok::<(), isobmff::DemuxError>(())
+/// # Ok::<(), isobmff::ReadError>(())
 /// ```
 #[derive(Debug)]
 pub struct MediaDataReader {
@@ -141,16 +141,16 @@ impl MediaDataReader {
     ///
     /// # Errors
     ///
-    /// * [`HeldLocationLimitExceeded`](DemuxError::HeldLocationLimitExceeded):
+    /// * [`HeldLocationLimitExceeded`](ReadError::HeldLocationLimitExceeded):
     ///   holding the locations would take those held past the limit, and none
     ///   of them is held.
-    /// * [`SampleBytesLimitExceeded`](DemuxError::SampleBytesLimitExceeded):
+    /// * [`SampleBytesLimitExceeded`](ReadError::SampleBytesLimitExceeded):
     ///   a location names more media data than the limit of one sample, and
     ///   none of them is held.
     pub fn handle_sample_locations(
         &mut self,
         locations: impl IntoIterator<Item = SampleLocation>,
-    ) -> Result<(), DemuxError> {
+    ) -> Result<(), ReadError> {
         let held_before = self.held.len();
         for location in locations.into_iter().filter(|location| {
             !self
@@ -161,12 +161,12 @@ impl MediaDataReader {
             let held_locations = to_u64(self.held.len()).saturating_add(1);
             let declared_bytes = length(&byte_range);
             let refused = if held_locations > self.limits.held_location_count {
-                Some(DemuxError::HeldLocationLimitExceeded {
+                Some(ReadError::HeldLocationLimitExceeded {
                     held_locations,
                     limit_locations: self.limits.held_location_count,
                 })
             } else if declared_bytes > self.limits.sample_bytes {
-                Some(DemuxError::SampleBytesLimitExceeded {
+                Some(ReadError::SampleBytesLimitExceeded {
                     declared_bytes,
                     limit_bytes: self.limits.sample_bytes,
                 })
@@ -201,13 +201,13 @@ impl MediaDataReader {
     ///
     /// # Errors
     ///
-    /// * [`HeldBytesLimitExceeded`](DemuxError::HeldBytesLimitExceeded): the
+    /// * [`HeldBytesLimitExceeded`](ReadError::HeldBytesLimitExceeded): the
     ///   input names bytes of a sample whose allocation would take the media
     ///   data allocated past the limit, and none of its bytes is kept. The
     ///   reader is left as it was: the samples whose bytes have arrived are to
     ///   be taken with [`poll_sample`](Self::poll_sample) before the input is
     ///   passed again.
-    pub fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), DemuxError> {
+    pub fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), ReadError> {
         let input_range = offset..offset.saturating_add(to_u64(input.len()));
         let mut allocated_bytes = self
             .held
@@ -232,7 +232,7 @@ impl MediaDataReader {
                 let held_bytes =
                     allocated_bytes.saturating_add(length(&held.location.byte_range()));
                 if held_bytes > self.limits.held_bytes {
-                    refused = Some(DemuxError::HeldBytesLimitExceeded {
+                    refused = Some(ReadError::HeldBytesLimitExceeded {
                         held_bytes,
                         limit_bytes: self.limits.held_bytes,
                     });
@@ -277,13 +277,13 @@ impl MediaDataReader {
     ///
     /// # Errors
     ///
-    /// * [`UnfinishedSample`](DemuxError::UnfinishedSample): a held location,
+    /// * [`UnfinishedSample`](ReadError::UnfinishedSample): a held location,
     ///   the first of those that do, lacks bytes.
-    pub fn finish(&self) -> Result<(), DemuxError> {
+    pub fn finish(&self) -> Result<(), ReadError> {
         match self.held.iter().find(|held| !held.missing.is_empty()) {
             Some(held) => {
                 let needed_bytes = length(&held.location.byte_range());
-                Err(DemuxError::UnfinishedSample {
+                Err(ReadError::UnfinishedSample {
                     track_id: held.location.properties().track_id,
                     needed_bytes,
                     available_bytes: needed_bytes
@@ -333,7 +333,7 @@ impl MediaDataReader {
     /// assert_eq!(media_data.poll_sample().map(|sample| sample.data().to_vec()), Some(b"AB".to_vec()));
     /// assert_eq!(media_data.poll_sample(), None);
     /// assert_eq!(media_data.wanted_input(), None);
-    /// # Ok::<(), isobmff::DemuxError>(())
+    /// # Ok::<(), isobmff::ReadError>(())
     /// ```
     pub fn discard_track(&mut self, track_id: u32) {
         self.discarded_tracks.insert(track_id);
@@ -397,7 +397,7 @@ mod tests {
 
     use super::{MediaDataLimits, MediaDataReader};
     use crate::byte_range::ByteRange;
-    use crate::error::DemuxError;
+    use crate::error::ReadError;
     use crate::sample::{DataReferenceKey, Sample, SampleLocation, SampleProperties};
 
     /// Bytes of a file whose byte at each file offset is that offset, modulo 256
@@ -590,7 +590,7 @@ mod tests {
 
         assert_eq!(
             reader.handle_sample_locations([location(1, 12..14), location(2, 14..16)]),
-            Err(DemuxError::HeldLocationLimitExceeded {
+            Err(ReadError::HeldLocationLimitExceeded {
                 held_locations: 3,
                 limit_locations: 2,
             })
@@ -613,7 +613,7 @@ mod tests {
 
         assert_eq!(
             reader.handle_sample_locations([location(1, 14..16), location(2, 16..22)]),
-            Err(DemuxError::SampleBytesLimitExceeded {
+            Err(ReadError::SampleBytesLimitExceeded {
                 declared_bytes: 6,
                 limit_bytes: 5,
             })
@@ -633,7 +633,7 @@ mod tests {
 
         assert_eq!(
             reader.handle_sample_locations([location(0, 10..15)]),
-            Err(DemuxError::SampleBytesLimitExceeded {
+            Err(ReadError::SampleBytesLimitExceeded {
                 declared_bytes: 5,
                 limit_bytes: 4,
             })
@@ -675,7 +675,7 @@ mod tests {
 
         assert_eq!(
             reader.handle_input(14, &file(14..17)),
-            Err(DemuxError::HeldBytesLimitExceeded {
+            Err(ReadError::HeldBytesLimitExceeded {
                 held_bytes: 7,
                 limit_bytes: 6,
             })
@@ -722,7 +722,7 @@ mod tests {
 
         assert_eq!(
             reader.finish(),
-            Err(DemuxError::UnfinishedSample {
+            Err(ReadError::UnfinishedSample {
                 track_id: 2,
                 needed_bytes: 8,
                 available_bytes: 3,
@@ -749,7 +749,7 @@ mod tests {
         assert_eq!(reader.finish(), Ok(()));
         assert_eq!(
             reader.handle_sample_locations([location(1, 20..22), location(2, 22..24)]),
-            Err(DemuxError::HeldLocationLimitExceeded {
+            Err(ReadError::HeldLocationLimitExceeded {
                 held_locations: 2,
                 limit_locations: 1,
             })

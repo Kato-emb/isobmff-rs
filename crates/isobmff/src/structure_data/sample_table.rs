@@ -19,7 +19,7 @@ use isobmff_core::{BoxDefinition, BoxType};
 use self::sample_flags::SampleFlagsTables;
 use super::sample_description::{DataOrigin, located_data_reference};
 use crate::convert::to_u64;
-use crate::error::{DemuxError, MuxError};
+use crate::error::{ReadError, WriteError};
 use crate::leniency::{Leniency, SampleTableDisagreement};
 use crate::sample::{SampleLocation, SampleProperties};
 
@@ -64,18 +64,18 @@ pub(super) fn sample_count(trak: &TrackBox) -> u64 {
 ///
 /// # Errors
 ///
-/// * [`SampleTableMismatch`](DemuxError::SampleTableMismatch): the track
+/// * [`SampleTableMismatch`](ReadError::SampleTableMismatch): the track
 ///   declares samples, in its `stsz` or `stz2` or in the chunks of its `stco`
 ///   or `co64`, but one of those or the `stts` states none, or the `stsc`
 ///   lays no sample in a chunk; or the `stsc` lays its runs over chunks the
 ///   `stco` or the `co64` does not have.
 /// * The failures of the sample entry and the data reference entry each run
 ///   of chunks names.
-/// * [`UnsupportedDataReference`](DemuxError::UnsupportedDataReference): a
+/// * [`UnsupportedDataReference`](ReadError::UnsupportedDataReference): a
 ///   run of chunks names a `DataEntrySeqNumImdaBox`, which names only the
 ///   media data of samples in a movie fragment (§8.7.2).
-/// * [`DataOffsetOutOfRange`](DemuxError::DataOffsetOutOfRange),
-///   [`DecodingTimeOverflow`](DemuxError::DecodingTimeOverflow): the offsets or
+/// * [`DataOffsetOutOfRange`](ReadError::DataOffsetOutOfRange),
+///   [`DecodingTimeOverflow`](ReadError::DecodingTimeOverflow): the offsets or
 ///   the decoding times run past 64 bits.
 pub(super) fn resolve_track(
     trak: &TrackBox,
@@ -83,10 +83,10 @@ pub(super) fn resolve_track(
     locations: &mut Vec<SampleLocation>,
     identified: &mut Vec<(usize, u32)>,
     leniencies: &mut Vec<Leniency>,
-) -> Result<u64, DemuxError> {
+) -> Result<u64, ReadError> {
     let track_id = trak.tkhd.track_id;
     let stbl = &trak.mdia.minf.stbl;
-    let mismatch = |box_type| DemuxError::SampleTableMismatch { track_id, box_type };
+    let mismatch = |box_type| ReadError::SampleTableMismatch { track_id, box_type };
 
     let stated_sizes = sample_count(trak);
     let stated_durations = stated_samples(
@@ -146,7 +146,7 @@ pub(super) fn resolve_track(
                 DataOrigin::IdentifiedMediaData(identifier) => Some(identifier),
                 DataOrigin::SequenceNumber => {
                     let (_, data_reference_index) = data_reference.unpacked();
-                    return Err(DemuxError::UnsupportedDataReference {
+                    return Err(ReadError::UnsupportedDataReference {
                         track_id,
                         data_reference_index,
                     });
@@ -170,7 +170,7 @@ pub(super) fn resolve_track(
 
             let data_end = data_offset
                 .checked_add(u64::from(size))
-                .ok_or(DemuxError::DataOffsetOutOfRange { track_id })?;
+                .ok_or(ReadError::DataOffsetOutOfRange { track_id })?;
             if let Some(identifier) = identifier {
                 identified.push((locations.len(), identifier));
             }
@@ -188,7 +188,7 @@ pub(super) fn resolve_track(
             ));
             decoding_time = decoding_time
                 .checked_add(u64::from(sample_duration))
-                .ok_or(DemuxError::DecodingTimeOverflow { track_id })?;
+                .ok_or(ReadError::DecodingTimeOverflow { track_id })?;
             data_offset = data_end;
             placed = placed.saturating_add(1);
         }
@@ -330,10 +330,10 @@ fn next_or_zero<Entry: Default>(table: &mut Option<impl Iterator<Item = Entry>>)
 ///
 /// # Errors
 ///
-/// * [`SampleTableNotEmpty`](MuxError::SampleTableNotEmpty): a sample group,
+/// * [`SampleTableNotEmpty`](WriteError::SampleTableNotEmpty): a sample group,
 ///   sub-sample, sample auxiliary information or shadow sync table of a track
 ///   declares samples, and `movie` is left as it was.
-pub(super) fn take_sample_tables(movie: &mut MovieBox) -> Result<(), MuxError> {
+pub(super) fn take_sample_tables(movie: &mut MovieBox) -> Result<(), WriteError> {
     for trak in &movie.trak {
         let stbl = &trak.mdia.minf.stbl;
         let declared = [
@@ -377,7 +377,7 @@ pub(super) fn take_sample_tables(movie: &mut MovieBox) -> Result<(), MuxError> {
             ),
         ];
         if let Some((_, box_type)) = declared.into_iter().find(|(declared, _)| *declared) {
-            return Err(MuxError::SampleTableNotEmpty {
+            return Err(WriteError::SampleTableNotEmpty {
                 track_id: trak.tkhd.track_id,
                 box_type,
             });

@@ -3,7 +3,7 @@
 use core::error;
 use core::fmt;
 
-use super::{DemuxError, MuxError};
+use super::{ReadError, WriteError};
 
 /// Reason a movie file does not lay out again with its `moov` first
 ///
@@ -16,13 +16,13 @@ pub enum FastStartError {
     #[non_exhaustive]
     Read {
         /// Why they do not
-        error: DemuxError,
+        error: ReadError,
     },
     /// `moov` laid out again that does not write, as a [`Muxer`](crate::Muxer) writes one and fails to
     #[non_exhaustive]
     Write {
         /// Why it does not
-        error: MuxError,
+        error: WriteError,
     },
     /// File that has ended without a `moov`
     #[non_exhaustive]

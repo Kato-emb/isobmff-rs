@@ -20,7 +20,7 @@ use miniz_oxide::inflate::TINFLStatus;
 use miniz_oxide::inflate::core::{DecompressorOxide, decompress, inflate_flags};
 
 use crate::convert::to_u64;
-use crate::error::DemuxError;
+use crate::error::ReadError;
 
 /// Identification, compression method, flags, modification time, extra flags and operating system of a gzip member, RFC 1952 §2.3.1
 const GZIP_HEADER_BYTES: usize = 10;
@@ -68,15 +68,15 @@ pub fn replacement_type(box_type: BoxType) -> Option<BoxType> {
 ///
 /// # Errors
 ///
-/// * [`PayloadLimitExceeded`](DemuxError::PayloadLimitExceeded): the payload
+/// * [`PayloadLimitExceeded`](ReadError::PayloadLimitExceeded): the payload
 ///   inflates past `limit_bytes`.
-/// * [`UnreadableCompressedData`](DemuxError::UnreadableCompressedData): the
+/// * [`UnreadableCompressedData`](ReadError::UnreadableCompressedData): the
 ///   payload is neither a deflate stream nor a gzip member, or the CRC-32 or
 ///   the length a gzip member ends with does not match what it inflates to.
 pub fn decompressed(
     compressed_box: RawBox<'_>,
     limit_bytes: u64,
-) -> Result<Option<(BoxType, Vec<u8>)>, DemuxError> {
+) -> Result<Option<(BoxType, Vec<u8>)>, ReadError> {
     let box_type = compressed_box.header().box_type();
     replacement_type(box_type)
         .map(|replacement| {
@@ -91,16 +91,16 @@ fn inflate(
     box_type: BoxType,
     compressed_data: &[u8],
     limit_bytes: u64,
-) -> Result<Vec<u8>, DemuxError> {
+) -> Result<Vec<u8>, ReadError> {
     if compressed_data.first() != GZIP_OPENING.first() {
         return deflated(box_type, compressed_data, limit_bytes);
     }
-    let unreadable = DemuxError::UnreadableCompressedData { box_type };
+    let unreadable = ReadError::UnreadableCompressedData { box_type };
     let (deflate_stream, crc, length) = gzip_member(compressed_data).ok_or(unreadable)?;
     // Why not rest on this check alone: the length is kept modulo 2^32, so a
     // member may inflate past the limit with a length that falls short of it.
     if u64::from(length) > limit_bytes {
-        return Err(DemuxError::PayloadLimitExceeded {
+        return Err(ReadError::PayloadLimitExceeded {
             box_type,
             reached_bytes: u64::from(length),
             limit_bytes,
@@ -115,9 +115,9 @@ fn inflate(
 }
 
 /// Inflates the deflate stream `stream` of the compressed box of `box_type` into at most `limit_bytes`, holding no more than that
-fn deflated(box_type: BoxType, stream: &[u8], limit_bytes: u64) -> Result<Vec<u8>, DemuxError> {
+fn deflated(box_type: BoxType, stream: &[u8], limit_bytes: u64) -> Result<Vec<u8>, ReadError> {
     let limit = usize::try_from(limit_bytes).unwrap_or(usize::MAX);
-    let unreadable = DemuxError::UnreadableCompressedData { box_type };
+    let unreadable = ReadError::UnreadableCompressedData { box_type };
     let mut decompressor = Box::<DecompressorOxide>::default();
     let mut payload = Vec::new();
     let mut input = stream;
@@ -146,7 +146,7 @@ fn deflated(box_type: BoxType, stream: &[u8], limit_bytes: u64) -> Result<Vec<u8
                 return Ok(payload);
             }
             TINFLStatus::HasMoreOutput if payload.len() >= limit => {
-                return Err(DemuxError::PayloadLimitExceeded {
+                return Err(ReadError::PayloadLimitExceeded {
                     box_type,
                     reached_bytes: limit_bytes.saturating_add(1),
                     limit_bytes,
@@ -253,7 +253,7 @@ mod tests {
     use miniz_oxide::deflate::compress_to_vec;
 
     use super::{FCOMMENT, FEXTRA, FHCRC, FNAME, crc32, decompressed, replacement_type};
-    use crate::error::DemuxError;
+    use crate::error::ReadError;
 
     const MOVIE: BoxType = BoxType::compact(*b"!mov");
     const PAYLOAD: &[u8] = b"the payload of a moov, deflated and read back";
@@ -268,7 +268,7 @@ mod tests {
     }
 
     /// Reads `bytes`, a compressed box, back as [`decompressed`] does
-    fn read_back(bytes: &[u8], limit_bytes: u64) -> Result<Option<(BoxType, Vec<u8>)>, DemuxError> {
+    fn read_back(bytes: &[u8], limit_bytes: u64) -> Result<Option<(BoxType, Vec<u8>)>, ReadError> {
         decompressed(RawBox::split_first(bytes).unwrap().0, limit_bytes)
     }
 
@@ -354,7 +354,7 @@ mod tests {
      {
         let bomb = vec![0; 1 << 20];
         let past_limit = |reached_bytes, limit_bytes| {
-            Err(DemuxError::PayloadLimitExceeded {
+            Err(ReadError::PayloadLimitExceeded {
                 box_type: MOVIE,
                 reached_bytes,
                 limit_bytes,
@@ -408,7 +408,7 @@ mod tests {
     #[test]
     fn a_payload_that_is_neither_a_deflate_stream_nor_a_gzip_member_that_inflates_as_it_declares_is_unreadable()
      {
-        let unreadable = Err(DemuxError::UnreadableCompressedData { box_type: MOVIE });
+        let unreadable = Err(ReadError::UnreadableCompressedData { box_type: MOVIE });
         let member = gzip(PAYLOAD, FHCRC);
         let corrupt = |at: usize| {
             let mut corrupted = member.clone();

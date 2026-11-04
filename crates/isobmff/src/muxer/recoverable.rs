@@ -3,10 +3,11 @@
 use isobmff_boxes::MovieBox;
 use isobmff_core::Error;
 
+use super::MuxError;
 use crate::convert::to_u64;
 use crate::framing::{BoxWriter, media_data_header};
 use crate::structure_data::SampleTableWriter;
-use crate::{MuxError, Output, SampleLocation};
+use crate::{Output, SampleLocation, WriteError};
 
 /// Length of the `free` box the header of the `mdat` takes the place of, as [`media_data_header`] takes it
 const PLACEHOLDER_BYTES: u64 = 16;
@@ -31,7 +32,7 @@ enum Tables {
     /// Dropped: the file holds more samples than the limit
     PastLimit,
     /// Dropped: they refused samples, with this failure
-    Refused(MuxError),
+    Refused(WriteError),
     /// Written in the `moov` the file is laid out again with
     LaidOut(SampleTableWriter),
 }
@@ -84,7 +85,7 @@ impl Recoverable {
     /// * [`NotFinalised`](MuxError::NotFinalised): the file holds more
     ///   samples than the limit.
     /// * The failure the sample tables refused samples with.
-    /// * [`Box`](MuxError::Box), and the failures of
+    /// * [`Box`](WriteError::Box), and the failures of
     ///   [`BoxWriter::handle_event`]: the `moov` does not write.
     pub(super) fn finish(&mut self, boxes: &mut BoxWriter) -> Result<[Output; 2], MuxError> {
         let tables = match &mut self.tables {
@@ -95,8 +96,8 @@ impl Recoverable {
                     limit_locations: self.limit_locations,
                 });
             }
-            Tables::Refused(error) => return Err(*error),
-            Tables::LaidOut(_) => return Err(MuxError::AlreadyFinished),
+            Tables::Refused(error) => return Err((*error).into()),
+            Tables::LaidOut(_) => return Err(WriteError::AlreadyFinished.into()),
         };
         let movie_offset = boxes.next_offset();
         let movie = boxes.write_box(tables.finish())?;
@@ -104,7 +105,7 @@ impl Recoverable {
         let payload_len = movie_offset
             .saturating_sub(self.placeholder)
             .saturating_sub(PLACEHOLDER_BYTES);
-        let header = media_data_header(self.placeholder, payload_len).ok_or(MuxError::Box {
+        let header = media_data_header(self.placeholder, payload_len).ok_or(WriteError::Box {
             error: Error::truncated_buffer(payload_len, u64::MAX),
         })?;
         if let Tables::Declaring(tables) = core::mem::replace(&mut self.tables, Tables::PastLimit) {

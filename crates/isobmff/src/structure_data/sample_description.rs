@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use isobmff_boxes::{DataEntry, MovieBox, SampleDescription, TrackBox};
 
 use crate::convert::to_u64;
-use crate::error::{DemuxError, MuxError};
+use crate::error::{ReadError, WriteError};
 use crate::sample::{DataReferenceKey, Sample, SampleLocation};
 
 /// One entry of the data reference of a track of the movie, under the key the locations of its samples carry, ISO/IEC 14496-12 §8.7.2
@@ -114,7 +114,7 @@ pub(super) fn data_reference(movie: &MovieBox, key: DataReferenceKey) -> Option<
 /// Reason the samples a sample entry of a track describes are not described, or do not lie in the file itself
 ///
 /// Writing a file refuses these samples, each with the kind of the same name
-/// in [`MuxError`]. Reading a file refuses the same ones but those whose
+/// in [`WriteError`]. Reading a file refuses the same ones but those whose
 /// media data is in another file, which it locates in that file.
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -153,7 +153,7 @@ pub enum DataReferenceRefusal {
     },
 }
 
-impl From<DataReferenceRefusal> for MuxError {
+impl From<DataReferenceRefusal> for WriteError {
     fn from(refusal: DataReferenceRefusal) -> Self {
         match refusal {
             DataReferenceRefusal::UnknownSampleDescriptionIndex {
@@ -278,15 +278,15 @@ pub(super) enum DataOrigin {
 ///
 /// # Errors
 ///
-/// * [`UnknownSampleDescriptionIndex`](DemuxError::UnknownSampleDescriptionIndex),
-///   [`UnknownDataReferenceIndex`](DemuxError::UnknownDataReferenceIndex):
+/// * [`UnknownSampleDescriptionIndex`](ReadError::UnknownSampleDescriptionIndex),
+///   [`UnknownDataReferenceIndex`](ReadError::UnknownDataReferenceIndex):
 ///   the `stsd` has no such sample entry, or the `dref` no entry the sample
 ///   entry names.
 pub(super) fn located_data_reference(
     trak: &TrackBox,
     track_position: usize,
     sample_description_index: u32,
-) -> Result<(DataReferenceKey, DataOrigin), DemuxError> {
+) -> Result<(DataReferenceKey, DataOrigin), ReadError> {
     let track_id = trak.tkhd.track_id;
     let data_reference_index = match data_reference_index(trak, sample_description_index) {
         Ok(data_reference_index)
@@ -304,7 +304,7 @@ pub(super) fn located_data_reference(
             sample_description_index,
             ..
         }) => {
-            return Err(DemuxError::UnknownSampleDescriptionIndex {
+            return Err(ReadError::UnknownSampleDescriptionIndex {
                 track_id,
                 sample_description_index,
             });
@@ -313,7 +313,7 @@ pub(super) fn located_data_reference(
             data_reference_index,
             ..
         }) => {
-            return Err(DemuxError::UnknownDataReferenceIndex {
+            return Err(ReadError::UnknownDataReferenceIndex {
                 track_id,
                 data_reference_index,
             });
@@ -347,15 +347,15 @@ fn nth_from_one<Entry>(entries: &[Entry], index: u32) -> Option<&Entry> {
 ///
 /// # Errors
 ///
-/// * [`UnknownTrackId`](MuxError::UnknownTrackId): a sample is of a track
+/// * [`UnknownTrackId`](WriteError::UnknownTrackId): a sample is of a track
 ///   the movie has none of.
-/// * [`UnknownSampleDescriptionIndex`](MuxError::UnknownSampleDescriptionIndex),
-///   [`UnknownDataReferenceIndex`](MuxError::UnknownDataReferenceIndex),
-///   [`ExternalDataReference`](MuxError::ExternalDataReference),
-///   [`UnsupportedDataReference`](MuxError::UnsupportedDataReference): the
+/// * [`UnknownSampleDescriptionIndex`](WriteError::UnknownSampleDescriptionIndex),
+///   [`UnknownDataReferenceIndex`](WriteError::UnknownDataReferenceIndex),
+///   [`ExternalDataReference`](WriteError::ExternalDataReference),
+///   [`UnsupportedDataReference`](WriteError::UnsupportedDataReference): the
 ///   track has no sample entry the sample names, or its entry names a data
 ///   reference entry that is not the file itself.
-/// * [`DataOffsetOutOfRange`](MuxError::DataOffsetOutOfRange): the media
+/// * [`DataOffsetOutOfRange`](WriteError::DataOffsetOutOfRange): the media
 ///   data of a sample lies past 64-bit file offsets.
 ///
 /// # Examples
@@ -386,13 +386,13 @@ fn nth_from_one<Entry>(entries: &[Entry], index: u32) -> Option<&Entry> {
 /// let locations = located_in_file(&movie, &samples, 100)?;
 /// let byte_ranges: Vec<_> = locations.iter().map(|location| location.byte_range()).collect();
 /// assert_eq!(byte_ranges, [100..102, 102..105]);
-/// # Ok::<(), isobmff::MuxError>(())
+/// # Ok::<(), isobmff::WriteError>(())
 /// ```
 pub fn located_in_file(
     movie: &MovieBox,
     samples: &[Sample],
     data_offset: u64,
-) -> Result<Vec<SampleLocation>, MuxError> {
+) -> Result<Vec<SampleLocation>, WriteError> {
     let mut data_end = data_offset;
     let mut described: Vec<(u32, u32, DataReferenceKey)> = Vec::new();
     samples
@@ -415,7 +415,7 @@ pub fn located_in_file(
                         .iter()
                         .enumerate()
                         .find(|(_, trak)| trak.tkhd.track_id == track_id)
-                        .ok_or(MuxError::UnknownTrackId { track_id })?;
+                        .ok_or(WriteError::UnknownTrackId { track_id })?;
                     let key = DataReferenceKey::of(
                         track_position,
                         data_reference_index(trak, sample_description_index)?,
@@ -427,7 +427,7 @@ pub fn located_in_file(
             let start = data_end;
             data_end = start
                 .checked_add(to_u64(sample.data().len()))
-                .ok_or(MuxError::DataOffsetOutOfRange { track_id })?;
+                .ok_or(WriteError::DataOffsetOutOfRange { track_id })?;
             Ok(SampleLocation::new(
                 *properties,
                 data_reference,

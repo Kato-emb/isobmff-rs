@@ -12,7 +12,7 @@ use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxType, Error};
 use crate::convert::to_u64;
 use crate::framing::{BoxEvent, BoxReader, BoxWriter};
 use crate::structure_data::{chunk_offsets, data_reference_index};
-use crate::{ByteRange, DemuxError, FastStartError, Output};
+use crate::{ByteRange, FastStartError, Output, ReadError};
 
 /// Limits a [`FastStart`] reads a file up to
 ///
@@ -173,12 +173,12 @@ impl FastStart {
     /// # Errors
     ///
     /// * [`Read`](FastStartError::Read) of
-    ///   [`UnwantedInput`](DemuxError::UnwantedInput): the file has ended,
+    ///   [`UnwantedInput`](ReadError::UnwantedInput): the file has ended,
     ///   and `input` starts past the offset the machine wants.
     /// * [`Read`](FastStartError::Read): the boxes do not read, as for
     ///   [`BoxReader::handle_input`]; the `moov`, or a `meta` at file level,
     ///   is longer than [`FastStartLimits::movie_bytes`]; or the file has a
-    ///   second `moov` ([`DuplicateBox`](DemuxError::DuplicateBox)).
+    ///   second `moov` ([`DuplicateBox`](ReadError::DuplicateBox)).
     /// * [`FragmentedMovie`](FastStartError::FragmentedMovie): the file has a
     ///   `moof`, or its `moov` an `mvex`.
     /// * [`ItemLocationsInFile`](FastStartError::ItemLocationsInFile): a
@@ -224,7 +224,7 @@ impl FastStart {
     /// * The failures of [`handle_input`](Self::handle_input), for the box
     ///   the end of the file ends.
     /// * [`Read`](FastStartError::Read) of
-    ///   [`UnfinishedBox`](DemuxError::UnfinishedBox): the file ends inside a
+    ///   [`UnfinishedBox`](ReadError::UnfinishedBox): the file ends inside a
     ///   box the machine passes through, before the total its header
     ///   declares.
     pub fn finish(&mut self) -> Result<(), FastStartError> {
@@ -256,7 +256,7 @@ impl FastStart {
     /// # Errors
     ///
     /// * [`Read`](FastStartError::Read) of
-    ///   [`UnwantedInput`](DemuxError::UnwantedInput): `input` starts past
+    ///   [`UnwantedInput`](ReadError::UnwantedInput): `input` starts past
     ///   the offset the machine wants.
     fn pass_through(&mut self, offset: u64, input: &[u8]) -> Result<(), FastStartError> {
         let Some(wanted) = self.wanted_input() else {
@@ -266,7 +266,7 @@ impl FastStart {
             .offset()
             .checked_sub(offset)
             .ok_or(FastStartError::Read {
-                error: DemuxError::UnwantedInput { offset, wanted },
+                error: ReadError::UnwantedInput { offset, wanted },
             })?;
         let rest = usize::try_from(skipped)
             .ok()
@@ -295,14 +295,14 @@ impl FastStart {
     /// # Errors
     ///
     /// * [`Read`](FastStartError::Read) of
-    ///   [`UnfinishedBox`](DemuxError::UnfinishedBox): the box has a length,
+    ///   [`UnfinishedBox`](ReadError::UnfinishedBox): the box has a length,
     ///   which the bytes passed through fall short of.
     fn end_pass_through(&mut self) -> Result<(), FastStartError> {
         match self.pieces.front() {
             Some(&Piece::Box(box_type, place)) => {
                 if let Some(needed_bytes) = place.length() {
                     return Err(FastStartError::Read {
-                        error: DemuxError::UnfinishedBox {
+                        error: ReadError::UnfinishedBox {
                             box_type,
                             needed_bytes,
                             available_bytes: self.passed,
@@ -349,7 +349,7 @@ impl FastStart {
     /// Reads `event`, and returns whether one came
     fn read_event(
         &mut self,
-        event: Result<Option<BoxEvent<'_>>, DemuxError>,
+        event: Result<Option<BoxEvent<'_>>, ReadError>,
     ) -> Result<bool, FastStartError> {
         let read = |error| FastStartError::Read { error };
         match event.map_err(read)? {
@@ -366,7 +366,7 @@ impl FastStart {
                 if box_type == MovieBox::BOX_TYPE
                     && self.boxes.iter().any(|&(earlier, _)| earlier == box_type)
                 {
-                    return Err(read(DemuxError::DuplicateBox { box_type }));
+                    return Err(read(ReadError::DuplicateBox { box_type }));
                 }
                 if let Some(place) = self.reader.open_box() {
                     self.boxes.push((box_type, place));
@@ -382,7 +382,7 @@ impl FastStart {
                 if let Some(gathered) = self.reader.gathered_box() {
                     let box_type = gathered.header().box_type();
                     let read = |error: Error| FastStartError::Read {
-                        error: DemuxError::Box {
+                        error: ReadError::Box {
                             error: error.in_container(box_type),
                         },
                     };
@@ -659,7 +659,7 @@ mod tests {
     use isobmff_core::{BoxDefinition, BoxHeader, BoxType};
 
     use super::{FastStart, FastStartLimits};
-    use crate::error::{DemuxError, FastStartError};
+    use crate::error::{FastStartError, ReadError};
     use crate::output::Output;
     use crate::structure_data::fixtures::{encoded, in_another_file, movie, track};
 
@@ -831,7 +831,7 @@ mod tests {
             ),
             (
                 Err(FastStartError::Read {
-                    error: DemuxError::UnwantedInput {
+                    error: ReadError::UnwantedInput {
                         offset: wanted.offset() + 1,
                         wanted
                     }
@@ -935,7 +935,7 @@ mod tests {
         assert_eq!(
             ended,
             Err(FastStartError::Read {
-                error: DemuxError::UnfinishedBox {
+                error: ReadError::UnfinishedBox {
                     box_type: BoxType::compact(*b"mdat"),
                     needed_bytes: 16 + (1 << 32),
                     available_bytes: 16
@@ -1055,7 +1055,7 @@ mod tests {
                 }),
                 Err(FastStartError::BoxCountLimitExceeded { limit_boxes: 2 }),
                 Err(FastStartError::Read {
-                    error: DemuxError::DuplicateBox {
+                    error: ReadError::DuplicateBox {
                         box_type: MovieBox::BOX_TYPE
                     }
                 }),

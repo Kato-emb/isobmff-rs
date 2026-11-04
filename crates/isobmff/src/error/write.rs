@@ -1,9 +1,9 @@
-//! [`MuxError`], the reasons boxes do not write as the bytes of a file
+//! [`WriteError`], the reasons boxes do not write as the bytes of a file
 
 use core::error;
 use core::fmt;
 
-use isobmff_core::{BoxType, Error, FourCc};
+use isobmff_core::{BoxType, Error};
 
 use super::TimelineError;
 use crate::framing::BoxEventKind;
@@ -13,7 +13,7 @@ use crate::framing::BoxEventKind;
 /// A refused event leaves the writer as it was: nothing of it is output.
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum MuxError {
+pub enum WriteError {
     /// Payload offered for a box is not the length its header declares
     #[non_exhaustive]
     PayloadLengthMismatch {
@@ -51,21 +51,6 @@ pub enum MuxError {
     /// Box offered after the file is finished
     #[non_exhaustive]
     AlreadyFinished,
-    /// Box of a type the file holds one of, offered again
-    #[non_exhaustive]
-    DuplicateBox {
-        /// Type of the box
-        box_type: BoxType,
-    },
-    /// Box offered after a box it goes before in the file
-    #[non_exhaustive]
-    BoxOutOfOrder {
-        /// Type of the box offered
-        box_type: BoxType,
-    },
-    /// Samples, or the end of the file, offered before the movie that declares their tracks
-    #[non_exhaustive]
-    MissingMovie,
     /// Indexed segment of a number of subsegments other than its `sidx` was reserved for: a subsegment past the number, refused before anything of it is written, or fewer than the number as the segment finishes, which leaves the reserved space a `free` box, §8.14.3
     #[non_exhaustive]
     SegmentIndexCountMismatch {
@@ -74,14 +59,6 @@ pub enum MuxError {
         /// Number of subsegments written, or the one past the number
         written_subsegments: u32,
     },
-    /// Recoverable file that holds more samples than the muxer keeps the locations of, which it does not lay out again as a file that is not fragmented; the file written is a fragmented movie file whole
-    #[non_exhaustive]
-    NotFinalised {
-        /// Number of samples written
-        held_locations: u64,
-        /// Number of samples the muxer keeps the locations of
-        limit_locations: u64,
-    },
     /// Bytes offered for space reserved with a `free` box that neither fill it nor leave room for a `free` box after them: longer than it, short of it by fewer than the 8 bytes of a `free` header, or offered for space of no known length, §8.1.2
     #[non_exhaustive]
     ReservedSpaceMismatch {
@@ -89,12 +66,6 @@ pub enum MuxError {
         reserved_bytes: Option<u64>,
         /// Length of the bytes offered for it
         offered_bytes: u64,
-    },
-    /// Brands of a fragmented file or a segment that name none of `iso5` to `isod`, under which a reader takes the `moof` as the base data offset of a track fragment, §8.8.7.1
-    #[non_exhaustive]
-    UnsupportedBrand {
-        /// The major brand
-        brand: FourCc,
     },
     /// Table of the sample table of a track that declares samples and that the muxer does not write from the samples it takes: a sample group, sub-sample, sample auxiliary information or shadow sync table
     #[non_exhaustive]
@@ -202,7 +173,7 @@ pub enum MuxError {
     },
 }
 
-impl fmt::Display for MuxError {
+impl fmt::Display for WriteError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Self::PayloadLengthMismatch {
@@ -230,25 +201,12 @@ impl fmt::Display for MuxError {
                 "{box_type} box offered after a box that runs to the end of the file"
             ),
             Self::AlreadyFinished => formatter.write_str("box offered after the file is finished"),
-            Self::DuplicateBox { box_type } => write!(formatter, "{box_type} box offered again"),
-            Self::BoxOutOfOrder { box_type } => write!(
-                formatter,
-                "{box_type} box offered after a box it goes before"
-            ),
-            Self::MissingMovie => formatter.write_str("samples offered before the movie"),
             Self::SegmentIndexCountMismatch {
                 expected_subsegments,
                 written_subsegments,
             } => write!(
                 formatter,
                 "subsegment {written_subsegments} of a sidx reserved for {expected_subsegments}"
-            ),
-            Self::NotFinalised {
-                held_locations,
-                limit_locations,
-            } => write!(
-                formatter,
-                "{held_locations} samples written, past the {limit_locations} whose locations the muxer keeps: the file stays fragmented"
             ),
             Self::ReservedSpaceMismatch {
                 reserved_bytes: Some(reserved_bytes),
@@ -263,10 +221,6 @@ impl fmt::Display for MuxError {
             } => write!(
                 formatter,
                 "{offered_bytes} bytes offered for reserved space of no known length"
-            ),
-            Self::UnsupportedBrand { brand } => write!(
-                formatter,
-                "brands of major brand {brand} name none of iso5 to isod, which a track fragment based on its moof takes"
             ),
             Self::SampleTableNotEmpty { track_id, box_type } => write!(
                 formatter,
@@ -347,4 +301,4 @@ impl fmt::Display for MuxError {
     }
 }
 
-impl error::Error for MuxError {}
+impl error::Error for WriteError {}
