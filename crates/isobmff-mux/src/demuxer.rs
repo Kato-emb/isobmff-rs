@@ -2,6 +2,11 @@
 
 use alloc::boxed::Box;
 
+use isobmff::file_level::{Kind, TopLevelBox};
+use isobmff::framing::{BoxEvent, BoxReader};
+use isobmff::media_data::MediaDataReader;
+use isobmff::structure_data::{DataReference, SampleLocations, SegmentIndex, StructureDataReader};
+use isobmff::{ByteRange, DataReferenceKey, Leniency, ReadError, Sample};
 use isobmff_boxes::{
     FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentTypeBox,
 };
@@ -9,12 +14,8 @@ use isobmff_boxes::{
 use isobmff_core::BoxDefinition;
 use isobmff_core::{BoxHeader, BoxType, Error, RawBox};
 
+use crate::DemuxLimits;
 use crate::convert::to_u64;
-use crate::file_level::{Kind, TopLevelBox};
-use crate::framing::{BoxEvent, BoxReader};
-use crate::media_data::MediaDataReader;
-use crate::structure_data::{DataReference, SampleLocations, SegmentIndex, StructureDataReader};
-use crate::{ByteRange, DataReferenceKey, DemuxLimits, Leniency, ReadError, Sample};
 
 /// Length of the `imda_identifier` an `imda` opens its payload with, §8.1.4
 const IDENTIFIER_BYTES: u64 = 4;
@@ -29,7 +30,7 @@ const IDENTIFIER_BYTES: u64 = 4;
 /// The boxes of structure-data (`moov`, `moof`, `sidx`, `mfra`) and the
 /// brands (`ftyp`, `styp`) are gathered and read into their values, which the
 /// demuxer keeps for its accessors; a `moov` or a `moof` is reported with the
-/// [`SampleLocation`](crate::SampleLocation)s it declares. Every other box,
+/// [`SampleLocation`](isobmff::SampleLocation)s it declares. Every other box,
 /// the media data boxes among them, is skipped and reported by where it lies
 /// (ISO/IEC 14496-12 §4.2.2).
 ///
@@ -338,7 +339,7 @@ impl Demuxer {
     /// Returns the entries of the data references of the tracks of the movie, in the order of their keys, as [`StructureDataReader::data_references`] does
     ///
     /// The demuxer gathers the samples whose entry
-    /// [`is_in_this_file`](crate::boxes::DataEntry::is_in_this_file). The
+    /// [`is_in_this_file`](isobmff::boxes::DataEntry::is_in_this_file). The
     /// events carry the locations of the others too, in file offsets of the
     /// file their entry names, for the caller to read there.
     pub fn data_references(&self) -> impl Iterator<Item = DataReference<'_>> {
@@ -474,6 +475,11 @@ impl Demuxer {
                     .handle_movie_fragment_random_access(mfra)?;
                 DemuxEvent::MovieFragmentRandomAccess { byte_range }
             }
+            // Why not refuse an unknown value: the layers read more boxes into values in time, and until the demuxer has an event for one it reports the box as one of no value.
+            _ => DemuxEvent::Other {
+                header: raw_box.header(),
+                byte_range,
+            },
         };
 
         Ok(Some(event))
@@ -496,7 +502,7 @@ impl Demuxer {
 ///
 /// # Errors
 ///
-/// * The failures of [`framing::decompressed`](crate::framing::decompressed)
+/// * The failures of [`framing::decompressed`](isobmff::framing::decompressed)
 ///   and [`TopLevelBox::read`].
 /// * The failures of [`StructureDataReader::handle_compressed_box`].
 fn read(
@@ -512,7 +518,7 @@ fn read(
             structure_data.handle_original_file_type();
         }
         if let Some((replacement_type, payload)) =
-            crate::framing::decompressed(raw_box, limit_bytes)?
+            isobmff::framing::decompressed(raw_box, limit_bytes)?
         {
             let length = raw_box
                 .header()
@@ -536,7 +542,7 @@ fn read(
 /// Returns whether a box of `box_type` is a compressed box, which the demuxer reads back into the box it replaces (§8.16), none without the feature `compressed-boxes`
 fn is_compressed(box_type: BoxType) -> bool {
     #[cfg(feature = "compressed-boxes")]
-    return crate::framing::replacement_type(box_type).is_some();
+    return isobmff::framing::replacement_type(box_type).is_some();
     #[cfg(not(feature = "compressed-boxes"))]
     return {
         let _ = box_type;
@@ -633,6 +639,9 @@ pub enum DemuxEvent {
         samples: SampleLocations,
     },
     /// Any other box, skipped, §4.2.2
+    ///
+    /// A box whose value the layers read, but that the demuxer reports no
+    /// event of, comes as one too, once gathered.
     #[non_exhaustive]
     Other {
         /// Header of the box
@@ -649,19 +658,17 @@ mod tests {
     use core::iter;
     use core::ops::Range;
 
+    use isobmff::{ByteRange, Leniency, ReadError, SampleTableDisagreement};
     use isobmff_boxes::{
         FileTypeBox, MovieExtendsBox, MovieFragmentBox, SegmentIndexBox, SegmentIndexReference,
         SegmentTypeBox, TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox,
         TrackRunBox, TrackRunSamples,
     };
     use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxHeader, BoxType, FourCc};
+    use isobmff_test_support::fixtures::{in_another_file, track};
 
     use super::{DemuxEvent, Demuxer, to_u64};
-    use crate::byte_range::ByteRange;
-    use crate::error::ReadError;
-    use crate::leniency::{Leniency, SampleTableDisagreement};
     use crate::limits::DemuxLimits;
-    use crate::structure_data::fixtures::{in_another_file, track};
 
     /// What a caller saw of an event, the samples by track, decoding time and byte range
     #[derive(PartialEq, Debug)]
@@ -820,7 +827,7 @@ mod tests {
 
     /// Returns the movie of `tracks`, ready to encode
     fn movie(tracks: impl IntoIterator<Item = isobmff_boxes::TrackBox>) -> isobmff_boxes::MovieBox {
-        let mut movie = crate::structure_data::fixtures::movie(tracks);
+        let mut movie = isobmff_test_support::fixtures::movie(tracks);
         movie.mvhd.next_track_id = 2;
         movie
     }

@@ -120,7 +120,6 @@ pub(super) fn data_reference(movie: &MovieBox, key: DataReferenceKey) -> Option<
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DataReferenceRefusal {
     /// The `stsd` has no entry `sample_description_index`, or the entry is too short to hold a `data_reference_index`
-    #[non_exhaustive]
     UnknownSampleDescriptionIndex {
         /// `track_ID` of the track
         track_id: u32,
@@ -128,7 +127,6 @@ pub enum DataReferenceRefusal {
         sample_description_index: u32,
     },
     /// The `dref` has no entry `data_reference_index`
-    #[non_exhaustive]
     UnknownDataReferenceIndex {
         /// `track_ID` of the track
         track_id: u32,
@@ -136,7 +134,6 @@ pub enum DataReferenceRefusal {
         data_reference_index: u16,
     },
     /// The entry names a file other than the file itself (§8.7.2)
-    #[non_exhaustive]
     ExternalDataReference {
         /// `track_ID` of the track
         track_id: u32,
@@ -144,7 +141,6 @@ pub enum DataReferenceRefusal {
         data_reference_index: u16,
     },
     /// The entry names an `IdentifiedMediaDataBox`
-    #[non_exhaustive]
     UnsupportedDataReference {
         /// `track_ID` of the track
         track_id: u32,

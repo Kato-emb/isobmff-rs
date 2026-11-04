@@ -12,7 +12,8 @@ mod tests {
     use isobmff::boxes::{DataEntry, MovieBox, MovieFragmentBox};
     use isobmff::structure_data::{DataReference, movie_fragment_random_access_start};
     use isobmff::timeline::Timeline;
-    use isobmff::{BoxDefinition, BoxType, Boxes, DemuxEvent, Demuxer, ReadError, SampleLocation};
+    use isobmff::{BoxDefinition, BoxType, Boxes, ReadError, SampleLocation};
+    use isobmff_mux::{DemuxEvent, Demuxer};
     use isobmff_test_support::{
         ConformanceFile, conformance_files, ffprobe_packets, gpac_children,
     };

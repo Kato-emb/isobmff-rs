@@ -82,7 +82,7 @@ fn list(
                 print_replaced(raw_box, offset);
             }
         }
-        BoxEvent::Payload(_) | _ => {}
+        BoxEvent::Payload(_) => {}
     }
     Ok(())
 }

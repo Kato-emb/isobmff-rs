@@ -1,9 +1,9 @@
 //! [`DemuxLimits`], how much of what a file declares reading it allocates for
 
-use crate::media_data::MediaDataLimits;
-use crate::structure_data::StructureDataLimits;
+use isobmff::media_data::MediaDataLimits;
+use isobmff::structure_data::StructureDataLimits;
 
-/// Limits a [`Demuxer`](crate::Demuxer) reads a file up to, and a [`MediaDataReader`](crate::media_data::MediaDataReader) holds its samples up to
+/// Limits a [`Demuxer`](crate::Demuxer) reads a file up to, and a [`MediaDataReader`](isobmff::media_data::MediaDataReader) holds its samples up to
 ///
 /// Each bounds what reading allocates for a value the file declares, and is
 /// checked before the allocation. [`new`](Self::new) sets every limit to a
@@ -32,7 +32,7 @@ use crate::structure_data::StructureDataLimits;
 /// ```
 /// use isobmff::media_data::MediaDataReader;
 /// use isobmff::structure_data::StructureDataReader;
-/// use isobmff::{DemuxLimits, Demuxer};
+/// use isobmff_mux::{DemuxLimits, Demuxer};
 ///
 /// const LIMITS: DemuxLimits = DemuxLimits::new()
 ///     .with_payload_bytes(64 * 1024 * 1024)
@@ -154,19 +154,19 @@ impl DemuxLimits {
         self
     }
 
-    /// Returns the limits to create a [`MediaDataReader`](crate::media_data::MediaDataReader) with
+    /// Returns the limits to create a [`MediaDataReader`](isobmff::media_data::MediaDataReader) with
     #[must_use]
     pub const fn media_data(self) -> MediaDataLimits {
         self.media_data
     }
 
-    /// Returns the bytes of the payload of one box the demuxer gathers into its value, the limit to gather a box with [`BoxReader::gather`](crate::framing::BoxReader::gather)
+    /// Returns the bytes of the payload of one box the demuxer gathers into its value, the limit to gather a box with [`BoxReader::gather`](isobmff::framing::BoxReader::gather)
     #[must_use]
     pub const fn payload_bytes(self) -> u64 {
         self.payload_bytes
     }
 
-    /// Returns the limits to create a [`StructureDataReader`](crate::structure_data::StructureDataReader) with
+    /// Returns the limits to create a [`StructureDataReader`](isobmff::structure_data::StructureDataReader) with
     #[must_use]
     pub const fn structure_data(self) -> StructureDataLimits {
         self.structure_data
@@ -191,7 +191,7 @@ impl Default for DemuxLimits {
 /// # Examples
 ///
 /// ```
-/// use isobmff::{Muxer, MuxLimits, NonFragmentedOptions};
+/// use isobmff_mux::{Muxer, MuxLimits, NonFragmentedOptions};
 ///
 /// let mut options = NonFragmentedOptions::default();
 /// options.recoverable = true;

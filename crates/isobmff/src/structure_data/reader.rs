@@ -662,28 +662,24 @@ impl SampleLocations {
     /// order, each from where its media data lies:
     ///
     /// ```
-    /// use isobmff::{DemuxEvent, Demuxer};
+    /// use isobmff::boxes::{FileTypeBox, MovieBox};
+    /// use isobmff::structure_data::{StructureDataLimits, StructureDataReader};
+    /// use isobmff::BoxDecode;
     ///
-    /// // Chunk 2 of the track lies before chunk 1
+    /// // Chunk 2 of the track lies before chunk 1, and the `moov` after the `ftyp`
     /// let file: &[u8] = include_bytes!("../../tests/data/out_of_order.mp4");
-    /// let mut demuxer = Demuxer::new();
-    /// let mut locations = Vec::new();
-    /// loop {
-    ///     let event = match demuxer.wanted_input() {
-    ///         Some(wanted) => match file.get(usize::try_from(wanted.offset())?..).unwrap_or_default() {
-    ///             [] => demuxer.finish(),
-    ///             input => demuxer.handle_input(wanted.offset(), input),
-    ///         },
-    ///         None => match demuxer.finish() {
-    ///             Ok(None) => break,
-    ///             finished => finished,
-    ///         },
-    ///     };
-    ///     while demuxer.poll_sample().is_some() {}
-    ///     if let Some(DemuxEvent::Movie { samples, .. }) = event? {
-    ///         locations = samples.into_decoding_order();
-    ///     }
-    /// }
+    /// let (_, after_ftyp) = FileTypeBox::decode(file)?;
+    /// let (movie, _) = MovieBox::decode(after_ftyp)?;
+    /// # let limits = StructureDataLimits {
+    /// #     sample_count: 1024,
+    /// #     segment_index_count: 0,
+    /// #     subsegment_count: 0,
+    /// #     leniency_count: 0,
+    /// #     identified_media_data_count: 0,
+    /// #     unresolved_sample_count: 0,
+    /// #     compressed_box_count: 0,
+    /// # };
+    /// let locations = StructureDataReader::new(limits).handle_movie(movie)?.into_decoding_order();
     ///
     /// // Seek to the media data of each sample, and read it
     /// let data = locations.iter().map(|location| {

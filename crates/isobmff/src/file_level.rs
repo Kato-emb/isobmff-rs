@@ -8,10 +8,9 @@
 //! reader of their values to judge.
 //!
 //! These are the values a reader reads, not a report of what a reader did: a
-//! [`Demuxer`](crate::Demuxer) reads each box at file level with this
-//! module and reports it as a [`DemuxEvent`](crate::DemuxEvent), the
-//! vocabulary of its own, with the byte range and the sample locations it
-//! resolves.
+//! reader reports each box at file level in a vocabulary of its own, with
+//! the byte range and the sample locations it resolves, as the crate
+//! `isobmff-mux` does.
 //!
 //! A reader of its own lists the boxes at file level with a
 //! [`BoxReader`](crate::framing::BoxReader), gathering the structure-data
@@ -69,7 +68,10 @@ use crate::error::ReadError;
 ///
 /// The structure-data of a file is read into values; the media data is the
 /// bytes of samples, which the structure-data locates by byte range.
-#[non_exhaustive]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a box at file level is structure-data or media data, ISO/IEC 14496-12 A.3, and `Other` takes every box that is neither"
+)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
     /// Structure-data, with a value [`TopLevelBox::read`] reads, or, with the feature `compressed-boxes`, a compressed box that replaces one (§8.16)
@@ -249,9 +251,8 @@ const DEFAULT_BASE_IS_MOOF_BRANDS: [[u8; 4]; 9] = [
 /// A fragmented movie file, or a segment, whose track fragments take the
 /// `moof` as their base data offset declares one of these brands as its major
 /// brand or a compatible brand: the movie fragments a
-/// [`Muxer`](crate::Muxer) and a
-/// [`MovieFragmentWriter`](crate::structure_data::MovieFragmentWriter) write
-/// do.
+/// [`MovieFragmentWriter`](crate::structure_data::MovieFragmentWriter)
+/// writes do.
 ///
 /// # Examples
 ///

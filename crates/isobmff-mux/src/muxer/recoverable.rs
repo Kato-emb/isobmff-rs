@@ -1,13 +1,13 @@
 //! [`Recoverable`], what a muxer keeps of a recoverable file to lay it out again as one that is not fragmented
 
+use isobmff::framing::{BoxWriter, media_data_header};
+use isobmff::structure_data::SampleTableWriter;
+use isobmff::{Output, SampleLocation, WriteError};
 use isobmff_boxes::MovieBox;
 use isobmff_core::Error;
 
 use super::MuxError;
 use crate::convert::to_u64;
-use crate::framing::{BoxWriter, media_data_header};
-use crate::structure_data::SampleTableWriter;
-use crate::{Output, SampleLocation, WriteError};
 
 /// Length of the `free` box the header of the `mdat` takes the place of, as [`media_data_header`] takes it
 const PLACEHOLDER_BYTES: u64 = 16;

@@ -16,6 +16,7 @@ cargo-fuzz = true
 
 [dependencies]
 isobmff = { path = "../crates/isobmff", features = ["compressed-boxes"] }
+isobmff-mux = { path = "../crates/isobmff-mux", features = ["compressed-boxes"] }
 libfuzzer-sys = "0.4.13"
 
 [[bin]]

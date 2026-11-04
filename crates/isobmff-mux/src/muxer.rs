@@ -3,23 +3,22 @@
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
+use isobmff::file_level::supports_default_base_is_moof;
+use isobmff::framing::{BoxWriter, fill};
+use isobmff::media_data::MediaDataWriter;
+use isobmff::structure_data::{
+    FragmentedOptions, MovieFragmentWriter, SampleTableWriter, SegmentOptions,
+};
+use isobmff::{ByteRange, Output, Sample, WriteError};
 use isobmff_boxes::{FileTypeBox, MovieBox, SegmentTypeBox};
 use isobmff_core::BoxDefinition;
 
-use crate::file_level::supports_default_base_is_moof;
-use crate::framing::{BoxWriter, fill};
-use crate::media_data::MediaDataWriter;
-use crate::structure_data::{MovieFragmentWriter, SampleTableWriter};
-use crate::{
-    ByteRange, FileStructure, FragmentedOptions, MuxLimits, NonFragmentedOptions, Output, Sample,
-    SegmentOptions, WriteError,
-};
+use crate::{FileStructure, MuxLimits, NonFragmentedOptions};
 
 mod error;
 mod recoverable;
 
 pub use self::error::MuxError;
-
 use self::recoverable::Recoverable;
 
 /// Writer of a movie file or a segment from the samples a caller hands it
@@ -33,7 +32,7 @@ use self::recoverable::Recoverable;
 /// out is the [`FileStructure`] the muxer is made for, with the options of
 /// that structure. The muxer is the
 /// writers of the layers composed: a caller that lays a file out otherwise
-/// writes it with them, as the [`media_data`](crate::media_data) example
+/// writes it with them, as the [`media_data`](isobmff::media_data) example
 /// does.
 ///
 /// The movie is the caller's `moov`, its tracks and their sample entries
@@ -51,7 +50,8 @@ use self::recoverable::Recoverable;
 ///
 /// ```
 /// use isobmff::boxes::{DataEntry, DataEntryUrlBox, MovieBox, SampleDescription, SampleEntry, TrackBox};
-/// use isobmff::{DemuxEvent, Demuxer, FourCc, Muxer, NonFragmentedOptions, Output, Sample, SampleProperties};
+/// use isobmff::{FourCc, Output, Sample, SampleProperties};
+/// use isobmff_mux::{DemuxEvent, Demuxer, Muxer, NonFragmentedOptions};
 ///
 /// // A movie of one track, its samples described by one sample entry, and in the file itself
 /// let mut trak = TrackBox::default();
@@ -134,12 +134,46 @@ impl Muxer {
     }
 
     /// Creates the muxer of a fragmented movie file, written with `options`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff::structure_data::FragmentedOptions;
+    /// use isobmff_mux::{FileStructure, Muxer};
+    ///
+    /// // Fragments numbered from 1, the file ending with an `mfra`
+    /// let mut options = FragmentedOptions::default();
+    /// options.movie_fragment_random_access = true;
+    /// let muxer = Muxer::fragmented(options);
+    /// assert_eq!(muxer.file_structure(), FileStructure::Fragmented);
+    /// ```
     #[must_use]
     pub fn fragmented(options: FragmentedOptions) -> Self {
         Self::new(Structure::Fragmented(options))
     }
 
     /// Creates the muxer of a media segment, written with `options`
+    ///
+    /// Where a `sidx` indexes the segment, the subsegments are the calls of
+    /// [`handle_samples`](Self::handle_samples): the muxer reserves the space
+    /// of the `sidx` with a `free` box before the first `moof`, and
+    /// [`finish`](Self::finish) writes the `sidx` over it, so that the
+    /// segment is never held in memory. A call past
+    /// [`SegmentOptions::segment_index`] is refused, and fewer calls leave the
+    /// `free` box, a segment without a `sidx`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff::structure_data::SegmentOptions;
+    /// use isobmff_mux::{FileStructure, Muxer};
+    ///
+    /// // Fragments numbered from 1, the segment of 4 subsegments indexed by a `sidx`
+    /// let mut options = SegmentOptions::default();
+    /// options.segment_index = Some(4);
+    /// let muxer = Muxer::segment(options);
+    /// assert_eq!(muxer.file_structure(), FileStructure::Segment);
+    /// ```
     #[must_use]
     pub fn segment(options: SegmentOptions) -> Self {
         Self::new(Structure::Segment(options))
@@ -197,7 +231,7 @@ impl Muxer {
     /// takes the first byte of each `moof` as the base data offset of its
     /// track fragments, which a reader supports under `iso5` and later brands
     /// (§8.8.7.1): its major brand or a compatible brand is one of `iso5` to
-    /// `isod`, as [`supports_default_base_is_moof`](crate::supports_default_base_is_moof)
+    /// `isod`, as [`supports_default_base_is_moof`](isobmff::supports_default_base_is_moof)
     /// says.
     ///
     /// # Errors
@@ -472,7 +506,7 @@ impl Muxer {
     ///   [`MuxLimits::held_location_count`](crate::MuxLimits::held_location_count);
     ///   the file written is a fragmented movie file whole.
     /// * The failures of
-    ///   [`SampleTableWriter::handle_locations`](crate::structure_data::SampleTableWriter::handle_locations),
+    ///   [`SampleTableWriter::handle_locations`](isobmff::structure_data::SampleTableWriter::handle_locations),
     ///   such as [`DecodingTimeMismatch`](WriteError::DecodingTimeMismatch):
     ///   the file is recoverable, and the sample tables refused samples of
     ///   it, which the movie fragments declare, as a file that is not
@@ -596,27 +630,27 @@ mod tests {
     use alloc::vec::Vec;
     use core::iter;
 
+    use isobmff::structure_data::{
+        FragmentedOptions, SampleTableWriter, SegmentOptions, StructureDataLimits,
+        StructureDataReader, movie_fragment_random_access_start,
+    };
+    use isobmff::{
+        Leniency, Output, Sample, SampleLocation, SampleProperties, SampleTableDisagreement,
+        WriteError,
+    };
     use isobmff_boxes::{
         ChunkOffsetBox, ChunkOffsetVariant, FileTypeBox, MovieBox, MovieExtendsBox, SampleFlags,
         SampleSizeBox, SampleSizeVariant, SampleSizes, SampleToChunkBox, SampleToChunkEntry,
         TimeToSampleBox, TimeToSampleEntry, TrackExtendsBox,
     };
     use isobmff_core::{BoxDecode, BoxDefinition, BoxType, Boxes, FourCc};
+    use isobmff_test_support::fixtures::{encoded, movie, track, written};
 
-    use super::MuxError;
-    use super::Muxer;
+    use super::{MuxError, Muxer};
     use crate::convert::to_u64;
     use crate::demuxer::Demuxer;
-    use crate::error::WriteError;
-    use crate::file_structure::{
-        FileStructure, FragmentedOptions, NonFragmentedOptions, SegmentOptions,
-    };
-    use crate::leniency::{Leniency, SampleTableDisagreement};
+    use crate::file_structure::{FileStructure, NonFragmentedOptions};
     use crate::limits::MuxLimits;
-    use crate::output::Output;
-    use crate::sample::{Sample, SampleProperties};
-    use crate::structure_data::fixtures::{encoded, movie, track, written};
-    use crate::structure_data::movie_fragment_random_access_start;
 
     /// Returns a movie of track 1 of no sample, its tables of no entry, the movie in a timescale of 1000 and the track of 100
     fn one_track() -> MovieBox {
@@ -768,9 +802,10 @@ mod tests {
     #[test]
     fn the_mfra_that_ends_a_fragmented_file_lists_where_each_fragment_starts_and_its_mfro_finds_it()
     {
-        let mut muxer = Muxer::fragmented(FragmentedOptions {
-            first_sequence_number: 1,
-            movie_fragment_random_access: true,
+        let mut muxer = Muxer::fragmented({
+            let mut options = FragmentedOptions::default();
+            options.movie_fragment_random_access = true;
+            options
         });
         muxer
             .handle_file_type(file_type(b"iso6", &[b"iso6"]))
@@ -919,9 +954,10 @@ mod tests {
     #[test]
     fn a_segment_is_its_brands_then_a_movie_fragment_and_its_media_data_of_the_movie_of_its_initialization_segment()
      {
-        let mut muxer = Muxer::segment(SegmentOptions {
-            first_sequence_number: 5,
-            segment_index: None,
+        let mut muxer = Muxer::segment({
+            let mut options = SegmentOptions::default();
+            options.first_sequence_number = 5;
+            options
         });
 
         muxer
@@ -944,9 +980,11 @@ mod tests {
     #[test]
     fn an_indexed_segment_reserves_its_sidx_after_its_brands_and_writes_it_over_the_reservation_as_it_finishes()
      {
-        let mut muxer = Muxer::segment(SegmentOptions {
-            first_sequence_number: 5,
-            segment_index: Some(2),
+        let mut muxer = Muxer::segment({
+            let mut options = SegmentOptions::default();
+            options.first_sequence_number = 5;
+            options.segment_index = Some(2);
+            options
         });
         muxer
             .handle_file_type(file_type(b"msdh", &[b"msdh", b"iso6"]))
@@ -1011,9 +1049,10 @@ mod tests {
     #[test]
     fn calls_past_the_subsegments_of_an_indexed_segment_are_refused_and_fewer_leave_its_free_box() {
         let indexed = |subsegments| {
-            let mut muxer = Muxer::segment(SegmentOptions {
-                first_sequence_number: 1,
-                segment_index: Some(subsegments),
+            let mut muxer = Muxer::segment({
+                let mut options = SegmentOptions::default();
+                options.segment_index = Some(subsegments);
+                options
             });
             muxer.handle_file_type(file_type(b"iso6", &[])).unwrap();
             muxer.handle_movie(one_fragmented_track()).unwrap();
@@ -1106,9 +1145,10 @@ mod tests {
                 one_track(),
             ),
             (
-                Muxer::fragmented(FragmentedOptions {
-                    first_sequence_number: 1,
-                    movie_fragment_random_access: true,
+                Muxer::fragmented({
+                    let mut options = FragmentedOptions::default();
+                    options.movie_fragment_random_access = true;
+                    options
                 }),
                 one_fragmented_track(),
             ),
@@ -1375,5 +1415,63 @@ mod tests {
                 Ok(()),
             ]
         );
+    }
+
+    /// Files of a movie of one track, the media data of its chunks in decoding order and out of it
+    const FILES: [&[u8]; 2] = [
+        include_bytes!("../../isobmff/tests/data/movie.mp4"),
+        include_bytes!("../../isobmff/tests/data/out_of_order.mp4"),
+    ];
+
+    /// Returns the `moov` of `file`, which comes right after its `ftyp`
+    fn movie_of(file: &[u8]) -> MovieBox {
+        let after_ftyp = FileTypeBox::decode(file).unwrap().1;
+        MovieBox::decode(after_ftyp).unwrap().0
+    }
+
+    /// Returns the locations of the samples of `movie` in decoding order
+    fn locations_of(movie: &MovieBox) -> Vec<SampleLocation> {
+        StructureDataReader::new(StructureDataLimits {
+            sample_count: u64::MAX,
+            segment_index_count: u64::MAX,
+            subsegment_count: u64::MAX,
+            leniency_count: u64::MAX,
+            identified_media_data_count: u64::MAX,
+            unresolved_sample_count: u64::MAX,
+            compressed_box_count: u64::MAX,
+        })
+        .handle_movie(movie.clone())
+        .unwrap()
+        .into_decoding_order()
+    }
+
+    #[test]
+    fn the_moov_written_from_the_locations_of_samples_written_is_the_moov_written_from_the_samples()
+    {
+        for file in FILES {
+            let movie = movie_of(file);
+            let samples = locations_of(&movie).into_iter().map(|location| {
+                let range = location.byte_range();
+                let data = file.get(
+                    usize::try_from(range.start).unwrap()..usize::try_from(range.end).unwrap(),
+                );
+                Sample::new(*location.properties(), data.unwrap().to_vec())
+            });
+            let mut muxer = Muxer::non_fragmented(NonFragmentedOptions::default());
+            muxer.handle_movie(movie.clone()).unwrap();
+            muxer.handle_samples(samples).unwrap();
+            muxer.finish().unwrap();
+            let written: Vec<Vec<u8>> = iter::from_fn(|| muxer.poll_output())
+                .map(Output::into_bytes)
+                .collect();
+            let written_moov = written.last().unwrap();
+
+            let mut writer = SampleTableWriter::new(movie).unwrap();
+            writer
+                .handle_locations(&locations_of(&MovieBox::decode(written_moov).unwrap().0))
+                .unwrap();
+
+            assert_eq!(&encoded(writer.finish()), written_moov);
+        }
     }
 }

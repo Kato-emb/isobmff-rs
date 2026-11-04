@@ -15,7 +15,7 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Seek, SeekFrom, Write};
 
-use isobmff::{FastStart, FastStartLimits};
+use isobmff_mux::{FastStart, FastStartLimits};
 
 /// Bytes the input is read in, at most, at a time
 const PIECE_BYTES: usize = 64 * 1024;

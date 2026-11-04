@@ -13,6 +13,9 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+# Builds the boxes the tests of reading and writing them share.
+isobmff-boxes.workspace = true
+isobmff-core = { workspace = true, features = ["alloc"] }
 # Reads the box structure GPAC reports for a conformance file.
 serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
 

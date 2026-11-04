@@ -15,7 +15,6 @@ use crate::framing::BoxEventKind;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum WriteError {
     /// Payload offered for a box is not the length its header declares
-    #[non_exhaustive]
     PayloadLengthMismatch {
         /// Type of the box
         box_type: BoxType,
@@ -25,7 +24,6 @@ pub enum WriteError {
         offered_bytes: u64,
     },
     /// Event that does not fit the box being written: a payload or an end with no box open, or a header while one is
-    #[non_exhaustive]
     UnexpectedEvent {
         /// Event the writer takes next: a header when no box is open, otherwise the end of the open box
         expected: BoxEventKind,
@@ -33,7 +31,6 @@ pub enum WriteError {
         found: BoxEventKind,
     },
     /// File finished while a box whose payload length is declared is open
-    #[non_exhaustive]
     UnfinishedBox {
         /// Type of the box
         box_type: BoxType,
@@ -43,16 +40,13 @@ pub enum WriteError {
         written_bytes: u64,
     },
     /// Box offered after one whose size runs to the end of the file
-    #[non_exhaustive]
     PastEndOfFile {
         /// Type of the box offered
         box_type: BoxType,
     },
     /// Box offered after the file is finished
-    #[non_exhaustive]
     AlreadyFinished,
     /// Indexed segment of a number of subsegments other than its `sidx` was reserved for: a subsegment past the number, refused before anything of it is written, or fewer than the number as the segment finishes, which leaves the reserved space a `free` box, §8.14.3
-    #[non_exhaustive]
     SegmentIndexCountMismatch {
         /// Number of subsegments the `sidx` was reserved for
         expected_subsegments: u32,
@@ -60,15 +54,13 @@ pub enum WriteError {
         written_subsegments: u32,
     },
     /// Bytes offered for space reserved with a `free` box that neither fill it nor leave room for a `free` box after them: longer than it, short of it by fewer than the 8 bytes of a `free` header, or offered for space of no known length, §8.1.2
-    #[non_exhaustive]
     ReservedSpaceMismatch {
         /// Length of the space reserved, where it is known
         reserved_bytes: Option<u64>,
         /// Length of the bytes offered for it
         offered_bytes: u64,
     },
-    /// Table of the sample table of a track that declares samples and that the muxer does not write from the samples it takes: a sample group, sub-sample, sample auxiliary information or shadow sync table
-    #[non_exhaustive]
+    /// Table of the sample table of a track that declares samples and that the writer does not write from the samples it takes: a sample group, sub-sample, sample auxiliary information or shadow sync table
     SampleTableNotEmpty {
         /// `track_ID` of the track
         track_id: u32,
@@ -76,13 +68,11 @@ pub enum WriteError {
         box_type: BoxType,
     },
     /// Sample of a track the movie has none of
-    #[non_exhaustive]
     UnknownTrackId {
         /// `track_ID` the sample gives
         track_id: u32,
     },
     /// Sample described by a sample entry the `stsd` of its track has none of, or one too short to hold a `data_reference_index`
-    #[non_exhaustive]
     UnknownSampleDescriptionIndex {
         /// `track_ID` of the track
         track_id: u32,
@@ -90,7 +80,6 @@ pub enum WriteError {
         sample_description_index: u32,
     },
     /// Sample entry that names a data reference entry the `dref` of its track has none of
-    #[non_exhaustive]
     UnknownDataReferenceIndex {
         /// `track_ID` of the track
         track_id: u32,
@@ -98,7 +87,6 @@ pub enum WriteError {
         data_reference_index: u16,
     },
     /// Sample whose sample entry names a data reference entry for another file, §8.7.2
-    #[non_exhaustive]
     ExternalDataReference {
         /// `track_ID` of the track
         track_id: u32,
@@ -106,7 +94,6 @@ pub enum WriteError {
         data_reference_index: u16,
     },
     /// Sample whose sample entry names a data reference entry for an `IdentifiedMediaDataBox`, which the writer does not write
-    #[non_exhaustive]
     UnsupportedDataReference {
         /// `track_ID` of the track
         track_id: u32,
@@ -114,13 +101,11 @@ pub enum WriteError {
         data_reference_index: u16,
     },
     /// Samples of one track written together that more than one sample entry describes, which a track fragment does not state
-    #[non_exhaustive]
     MixedSampleDescriptions {
         /// `track_ID` of the track
         track_id: u32,
     },
     /// Sample whose decoding time is not where the sample before it of its track ends, or, in a movie file, the first of a track without an edit list, not 0, §8.6.1.2
-    #[non_exhaustive]
     DecodingTimeMismatch {
         /// `track_ID` of the track
         track_id: u32,
@@ -130,7 +115,6 @@ pub enum WriteError {
         decoding_time: u64,
     },
     /// Sample whose media data is longer than a sample size field holds
-    #[non_exhaustive]
     SampleSizeOutOfRange {
         /// `track_ID` of the track
         track_id: u32,
@@ -138,13 +122,11 @@ pub enum WriteError {
         sample_bytes: u64,
     },
     /// Sample whose media data lies further than a data offset or a chunk offset reaches
-    #[non_exhaustive]
     DataOffsetOutOfRange {
         /// `track_ID` of the track
         track_id: u32,
     },
     /// Edit of a track in a movie file whose `media_time` is before the first sample of the track, where the sample table counts decoding times from, §8.6.1.2, §8.6.6
-    #[non_exhaustive]
     MediaTimeOutOfRange {
         /// `track_ID` of the track
         track_id: u32,
@@ -154,19 +136,16 @@ pub enum WriteError {
         decoding_time: u64,
     },
     /// Edit list of the reference track of an indexed segment that does not map its composition timeline, which a `sidx` states its times after, §8.6.6, §8.14.3
-    #[non_exhaustive]
     Timeline {
         /// Why it does not
         error: TimelineError,
     },
     /// Subsegment that the `sidx` of its segment cannot state, §8.14.3
-    #[non_exhaustive]
     SegmentIndexOutOfRange {
         /// Stream ID of the reference stream of the `sidx`
         reference_id: u32,
     },
     /// Box does not write into bytes
-    #[non_exhaustive]
     Box {
         /// Why it does not
         error: Error,
@@ -224,7 +203,7 @@ impl fmt::Display for WriteError {
             ),
             Self::SampleTableNotEmpty { track_id, box_type } => write!(
                 formatter,
-                "{box_type} of track {track_id} declares samples, which the muxer does not carry"
+                "{box_type} of track {track_id} declares samples, which the writer does not carry"
             ),
             Self::UnknownTrackId { track_id } => {
                 write!(

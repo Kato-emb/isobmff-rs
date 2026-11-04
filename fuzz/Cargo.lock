@@ -74,7 +74,17 @@ name = "isobmff-fuzz"
 version = "0.0.0"
 dependencies = [
  "isobmff",
+ "isobmff-mux",
  "libfuzzer-sys",
+]
+
+[[package]]
+name = "isobmff-mux"
+version = "0.0.0"
+dependencies = [
+ "isobmff",
+ "isobmff-boxes",
+ "isobmff-core",
 ]
 
 [[package]]

@@ -3,23 +3,24 @@
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
+use isobmff::framing::{BoxEvent, BoxReader, BoxWriter};
+use isobmff::structure_data::{chunk_offsets, data_reference_index};
+use isobmff::{ByteRange, Output, ReadError};
 use isobmff_boxes::{
     ChunkLargeOffsetBox, ChunkOffsetVariant, FileTypeBox, MetaBox, MovieBox, MovieFragmentBox,
     TrackBox,
 };
 use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxType, Error};
 
+use crate::FastStartError;
 use crate::convert::to_u64;
-use crate::framing::{BoxEvent, BoxReader, BoxWriter};
-use crate::structure_data::{chunk_offsets, data_reference_index};
-use crate::{ByteRange, FastStartError, Output, ReadError};
 
 /// Limits a [`FastStart`] reads a file up to
 ///
 /// # Examples
 ///
 /// ```
-/// use isobmff::FastStartLimits;
+/// use isobmff_mux::FastStartLimits;
 ///
 /// let limits = FastStartLimits {
 ///     movie_bytes: 64 * 1024 * 1024,
@@ -70,10 +71,10 @@ enum Piece {
 /// after its `moov` comes out as it is.
 ///
 /// ```
-/// use isobmff::{FastStart, FastStartLimits};
+/// use isobmff_mux::{FastStart, FastStartLimits};
 ///
 /// // `ftyp`, an `mdat` of two samples, and the `moov` that locates them
-/// let file: &[u8] = include_bytes!("../tests/data/movie_last.mp4");
+/// let file: &[u8] = include_bytes!("../../isobmff/tests/data/movie_last.mp4");
 /// let limits = FastStartLimits { movie_bytes: 1024 * 1024, box_count: 1024 };
 /// let mut fast_start = FastStart::new(limits);
 ///
@@ -90,7 +91,7 @@ enum Piece {
 ///     }
 /// }
 /// // The same file, its `moov` before its `mdat`
-/// assert_eq!(laid_out, include_bytes!("../tests/data/movie.mp4"));
+/// assert_eq!(laid_out, include_bytes!("../../isobmff/tests/data/movie.mp4"));
 /// # Ok::<(), Box<dyn core::error::Error>>(())
 /// ```
 #[derive(Debug)]
@@ -652,16 +653,16 @@ fn move_offsets(
 mod tests {
     use alloc::vec::Vec;
 
+    use isobmff::{Output, ReadError};
     use isobmff_boxes::{
         FileTypeBox, ItemLocation, ItemLocationBox, MetaBox, MovieBox, MovieExtendsBox,
         SampleAuxiliaryInformationOffsetsBox,
     };
     use isobmff_core::{BoxDefinition, BoxHeader, BoxType};
+    use isobmff_test_support::fixtures::{encoded, in_another_file, movie, track};
 
     use super::{FastStart, FastStartLimits};
-    use crate::error::{FastStartError, ReadError};
-    use crate::output::Output;
-    use crate::structure_data::fixtures::{encoded, in_another_file, movie, track};
+    use crate::error::FastStartError;
 
     const LIMITS: FastStartLimits = FastStartLimits {
         movie_bytes: 1 << 20,
@@ -782,8 +783,8 @@ mod tests {
 
     #[test]
     fn a_file_laid_out_again_is_the_same_whatever_pieces_its_bytes_arrive_in() {
-        let moved: &[u8] = include_bytes!("../tests/data/movie_last.mp4");
-        let kept: &[u8] = include_bytes!("../tests/data/movie.mp4");
+        let moved: &[u8] = include_bytes!("../../isobmff/tests/data/movie_last.mp4");
+        let kept: &[u8] = include_bytes!("../../isobmff/tests/data/movie.mp4");
 
         let laid_out = [moved, kept].map(|file| {
             [1, 7, 64 * 1024, usize::MAX].map(|piece_len| laid_out_in_pieces(file, piece_len))
@@ -795,7 +796,7 @@ mod tests {
     #[test]
     fn input_past_the_box_passed_through_is_refused_and_the_machine_wants_nothing_once_it_has_output_the_file()
      {
-        let file: &[u8] = include_bytes!("../tests/data/movie_last.mp4");
+        let file: &[u8] = include_bytes!("../../isobmff/tests/data/movie_last.mp4");
         let finished = || {
             let mut fast_start = FastStart::new(LIMITS);
             while !fast_start.finished {

@@ -30,10 +30,8 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 
 use isobmff::framing::{BoxWriter, fill, media_data_header, reserve};
 use isobmff::structure_data::{SampleTableWriter, located_in_file};
-use isobmff::{
-    BoxHeader, BoxSize, BoxType, ByteRange, DemuxEvent, Demuxer, ExtendedSize, Output, Sample,
-    WriteError,
-};
+use isobmff::{BoxHeader, BoxSize, BoxType, ByteRange, ExtendedSize, Output, Sample, WriteError};
+use isobmff_mux::{DemuxEvent, Demuxer};
 
 /// Length of the placeholder of the header of the `mdat`, as `media_data_header` takes it
 const PLACEHOLDER_BYTES: u64 = 16;
