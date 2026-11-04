@@ -581,12 +581,12 @@ mod tests {
     use isobmff_core::{BoxDecode, BoxDefinition, BoxType, Boxes, FourCc};
 
     use super::Muxer;
+    use crate::byte_range::to_u64;
     use crate::demuxer::Demuxer;
     use crate::error::MuxError;
     use crate::file_structure::{
         FileStructure, FragmentedOptions, NonFragmentedOptions, SegmentOptions,
     };
-    use crate::framing::to_u64;
     use crate::leniency::{Leniency, SampleTableDisagreement};
     use crate::limits::MuxLimits;
     use crate::output::Output;

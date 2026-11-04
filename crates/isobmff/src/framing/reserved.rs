@@ -7,8 +7,9 @@ use isobmff_boxes::{Free, FreeSpaceBox, MediaDataBox};
 use isobmff_core::{BoxDefinition, BoxHeader, BoxSize, BoxType, ExtendedSize};
 
 use crate::byte_range::ByteRange;
+use crate::byte_range::to_u64;
 use crate::error::MuxError;
-use crate::framing::{BoxEvent, BoxWriter, to_u64};
+use crate::framing::{BoxEvent, BoxWriter};
 use crate::output::Output;
 
 /// Length of the header of a `free` box, the least a `free` box takes
@@ -52,7 +53,24 @@ pub fn reserve(total_bytes: u64) -> Result<Vec<u8>, MuxError> {
 ///
 /// * The failures of [`reserve`].
 /// * The failures of [`BoxWriter::handle_event`].
-pub(crate) fn write_reserved(boxes: &mut BoxWriter, total_bytes: u64) -> Result<Output, MuxError> {
+///
+/// # Examples
+///
+/// ```
+/// use isobmff::boxes::FileTypeBox;
+/// use isobmff::framing::{BoxWriter, write_box, write_reserved};
+///
+/// // The `free` box goes after the boxes written before it, and counts in what `boxes` writes
+/// let mut boxes = BoxWriter::new();
+/// write_box(&mut boxes, &FileTypeBox::default())?;
+/// let after_ftyp = boxes.next_offset();
+/// let free = write_reserved(&mut boxes, 12)?;
+/// assert_eq!(free.offset(), after_ftyp);
+/// assert_eq!(free.bytes(), b"\0\0\0\x0cfree\0\0\0\0");
+/// assert_eq!(boxes.next_offset(), after_ftyp + 12);
+/// # Ok::<(), isobmff::MuxError>(())
+/// ```
+pub fn write_reserved(boxes: &mut BoxWriter, total_bytes: u64) -> Result<Output, MuxError> {
     let bytes = reserve(total_bytes)?;
     let offset = boxes.next_offset();
     let header = BoxHeader::with_payload_len(FREE, total_bytes.saturating_sub(FREE_HEADER_BYTES))

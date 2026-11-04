@@ -4,7 +4,7 @@ use isobmff_boxes::MovieBox;
 use isobmff_core::Error;
 
 use crate::error::MuxError;
-use crate::framing::{BoxWriter, media_data_header, to_u64, write_box, write_reserved};
+use crate::framing::{BoxWriter, media_data_header, write_box, write_reserved};
 use crate::output::Output;
 use crate::sample::SampleLocation;
 use crate::structure_data::SampleTableWriter;
@@ -67,7 +67,9 @@ impl Recoverable {
     /// Either way the file is not laid out again: the sample tables are
     /// dropped, and [`finish`](Self::finish) returns why.
     pub(super) fn handle_locations(&mut self, locations: &[SampleLocation]) {
-        self.held_locations = self.held_locations.saturating_add(to_u64(locations.len()));
+        self.held_locations = self
+            .held_locations
+            .saturating_add(u64::try_from(locations.len()).unwrap_or(u64::MAX));
         let Tables::Declaring(tables) = &mut self.tables else {
             return;
         };

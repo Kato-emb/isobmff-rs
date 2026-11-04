@@ -1,4 +1,4 @@
-//! [`ByteRange`], a run of bytes of a file named by where it starts
+//! [`ByteRange`], a run of bytes of a file named by where it starts, and lengths in a file
 
 /// Contiguous run of bytes of a file: a file offset and, when it is known, a length
 ///
@@ -42,4 +42,8 @@ impl ByteRange {
     pub const fn length(self) -> Option<u64> {
         self.length
     }
+}
+/// Converts a length in memory to one in a file, where it always fits
+pub(crate) fn to_u64(length: usize) -> u64 {
+    u64::try_from(length).unwrap_or(u64::MAX)
 }

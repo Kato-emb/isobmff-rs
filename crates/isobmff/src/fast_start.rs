@@ -11,7 +11,7 @@ use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxType, Error};
 
 use crate::byte_range::ByteRange;
 use crate::error::{DemuxError, FastStartError};
-use crate::framing::{BoxEvent, BoxReader, BoxWriter, to_u64, write_box};
+use crate::framing::{BoxEvent, BoxReader, BoxWriter, write_box};
 use crate::output::Output;
 use crate::structure_data::{chunk_offsets, data_reference_index};
 
@@ -280,7 +280,7 @@ impl FastStart {
         if taken.is_empty() {
             return Ok(());
         }
-        let taken_len = to_u64(taken.len());
+        let taken_len = u64::try_from(taken.len()).unwrap_or(u64::MAX);
         self.outputs
             .push_back(Output::new(self.output_end, taken.to_vec()));
         self.output_end = self.output_end.saturating_add(taken_len);
@@ -330,7 +330,7 @@ impl FastStart {
             return;
         }
         if let Some(Piece::Movie(bytes)) = self.pieces.pop_front() {
-            let length = to_u64(bytes.len());
+            let length = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
             self.outputs.push_back(Output::new(self.output_end, bytes));
             self.output_end = self.output_end.saturating_add(length);
         }

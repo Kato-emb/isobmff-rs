@@ -10,7 +10,7 @@ use isobmff_boxes::{
 use isobmff_core::{BoxDefinition, BoxType};
 
 use super::next_or_zero;
-use crate::framing::to_u64;
+use crate::byte_range::to_u64;
 
 /// What the `sdtp`, the `padb`, the `stdp` and the `stss` of a sample table state of the samples not read yet, in sample order
 pub(super) struct SampleFlagsTables<'stbl> {

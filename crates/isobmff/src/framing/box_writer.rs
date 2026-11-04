@@ -5,9 +5,9 @@ use alloc::vec::Vec;
 use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader, BoxSize, Error};
 
 use crate::byte_range::ByteRange;
+use crate::byte_range::to_u64;
 use crate::error::MuxError;
 use crate::framing::box_event::{BoxEvent, BoxEventKind};
-use crate::framing::to_u64;
 use crate::output::Output;
 
 /// Length of the header with both a `largesize` and an `extended_type` field, the longest there is
