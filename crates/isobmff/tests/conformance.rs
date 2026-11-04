@@ -27,7 +27,7 @@ mod tests {
     use isobmff::timeline::{Presentation, Timeline};
     use isobmff::{
         BoxDecode, BoxDefinition, BoxHeader, Boxes, ByteRange, DemuxEvent, DemuxLimits, Demuxer,
-        FastStart, FastStartLimits, FastStartOutput, FileStructure, FourCc, Muxer, Sample,
+        FastStart, FastStartLimits, FastStartOutput, FileStructure, FourCc, Muxer, Output, Sample,
         SampleLocation,
     };
     use isobmff_test_support::serde_json::Value;
@@ -499,7 +499,9 @@ mod tests {
             muxer.handle_samples(samples.iter().cloned()).unwrap();
         }
         muxer.finish().unwrap();
-        iter::from_fn(|| muxer.poll_output()).flatten().collect()
+        iter::from_fn(|| muxer.poll_output())
+            .flat_map(Output::into_bytes)
+            .collect()
     }
 
     /// Returns the initialization segment of `movie`: the file of its brands and its movie alone

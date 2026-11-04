@@ -819,7 +819,9 @@ mod tests {
             muxer.handle_movie(movie.clone()).unwrap();
             muxer.handle_samples(samples).unwrap();
             muxer.finish().unwrap();
-            let written: Vec<Vec<u8>> = core::iter::from_fn(|| muxer.poll_output()).collect();
+            let written: Vec<Vec<u8>> = core::iter::from_fn(|| muxer.poll_output())
+                .map(crate::output::Output::into_bytes)
+                .collect();
             let written_moov = written.last().unwrap();
 
             let mut writer = SampleTableWriter::new(movie).unwrap();

@@ -283,6 +283,7 @@ mod leniency;
 mod limits;
 pub mod media_data;
 mod muxer;
+mod output;
 mod sample;
 pub mod structure_data;
 pub mod timeline;
@@ -296,6 +297,7 @@ pub use isobmff_core::*;
 pub use leniency::{Leniency, SampleTableDisagreement};
 pub use limits::DemuxLimits;
 pub use muxer::Muxer;
+pub use output::Output;
 pub use sample::{DataReferenceKey, Sample, SampleLocation, SampleProperties};
 
 /// Boxes of ISO/IEC 14496-12, each read into a value that owns its bytes

@@ -70,6 +70,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut destination = Destination {
         file: File::create(destination)?,
         written: 0,
+        start: 0,
     };
 
     let mut demuxer = Demuxer::new();
@@ -103,6 +104,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 initialization.handle_movie(movie.clone())?;
                 initialization.finish()?;
                 destination.write_output(&mut initialization)?;
+                destination.start = destination.written;
             }
             muxer.handle_file_type(file_type)?;
             muxer.handle_movie(movie)?;
@@ -140,23 +142,37 @@ fn brands_of(file_structure: FileStructure, file_type: Option<&FileTypeBox>) -> 
     file_type
 }
 
-/// File the boxes are written to, and how many bytes are written
+/// File the boxes are written to, where it ends, and where the file of the muxer written to it starts
 struct Destination {
     file: File,
     written: u64,
+    /// File offset in the destination of the first byte of the file the muxer writes: past the initialization segment of a segment
+    start: u64,
 }
 
 impl Destination {
     /// Appends each box `muxer` has written, and prints where it lies
+    ///
+    /// The file is only appended to, as a pipe would be: an output for
+    /// anywhere but its end is refused.
     fn write_output(&mut self, muxer: &mut Muxer) -> Result<(), Box<dyn Error>> {
         while let Some(output) = muxer.poll_output() {
-            let box_type = output
+            let offset = self.start.saturating_add(output.offset());
+            if offset != self.written {
+                return Err(format!(
+                    "output for file offset {offset}, not the end {} of the file",
+                    self.written
+                )
+                .into());
+            }
+            let bytes = output.bytes();
+            let box_type = bytes
                 .get(4..8)
                 .map(String::from_utf8_lossy)
                 .unwrap_or_default();
-            println!("[{box_type}] offset={} size={}", self.written, output.len());
-            self.file.write_all(&output)?;
-            self.written = self.written.saturating_add(u64::try_from(output.len())?);
+            println!("[{box_type}] offset={} size={}", self.written, bytes.len());
+            self.file.write_all(bytes)?;
+            self.written = self.written.saturating_add(u64::try_from(bytes.len())?);
         }
         Ok(())
     }
