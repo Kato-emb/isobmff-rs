@@ -6,18 +6,14 @@ use alloc::vec::Vec;
 use isobmff_boxes::{FileTypeBox, MovieBox, SegmentTypeBox};
 use isobmff_core::BoxDefinition;
 
-use crate::byte_range::ByteRange;
-use crate::error::MuxError;
 use crate::file_level::supports_default_base_is_moof;
-use crate::file_structure::{
-    FileStructure, FragmentedOptions, NonFragmentedOptions, SegmentOptions,
-};
 use crate::framing::{BoxWriter, fill};
-use crate::limits::MuxLimits;
 use crate::media_data::MediaDataWriter;
-use crate::output::Output;
-use crate::sample::Sample;
 use crate::structure_data::{MovieFragmentWriter, SampleTableWriter};
+use crate::{
+    ByteRange, FileStructure, FragmentedOptions, MuxError, MuxLimits, NonFragmentedOptions, Output,
+    Sample, SegmentOptions,
+};
 
 mod recoverable;
 

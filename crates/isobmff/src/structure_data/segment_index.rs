@@ -9,7 +9,7 @@ use super::movie_fragment::Run;
 use isobmff_core::BoxEncode;
 
 use crate::error::{DemuxError, MuxError};
-use crate::timeline::{Timeline, composition_time};
+use crate::timeline::Timeline;
 
 /// Segment index: how a (sub)segment divides into subsegments, each with its byte range and its presentation times, ISO/IEC 14496-12 §8.14.3
 ///
@@ -283,7 +283,7 @@ impl SubsegmentTable {
                 };
                 Some((
                     !properties.sample_flags.sample_is_non_sync_sample,
-                    composition_time(properties),
+                    properties.composition_time(),
                     presented,
                 ))
             })

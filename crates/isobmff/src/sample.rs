@@ -51,6 +51,32 @@ pub struct SampleProperties {
     pub sample_description_index: u32,
 }
 
+impl SampleProperties {
+    /// Returns the composition time of the sample: its decoding time plus its composition time offset, ISO/IEC 14496-12 §8.6.1.3
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff::boxes::SampleFlags;
+    /// use isobmff::SampleProperties;
+    ///
+    /// let properties = SampleProperties {
+    ///     track_id: 1,
+    ///     decoding_time: 1001,
+    ///     sample_duration: 1001,
+    ///     sample_composition_time_offset: -2002,
+    ///     sample_flags: SampleFlags::default(),
+    ///     sample_description_index: 1,
+    /// };
+    /// assert_eq!(properties.composition_time(), -1001);
+    /// ```
+    #[must_use]
+    pub fn composition_time(&self) -> i128 {
+        i128::from(self.decoding_time)
+            .saturating_add(i128::from(self.sample_composition_time_offset))
+    }
+}
+
 /// Sample: the values structure-data declares about it, and its media data, ISO/IEC 14496-12 A.4
 ///
 /// # Examples

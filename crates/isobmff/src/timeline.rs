@@ -210,7 +210,7 @@ impl<'a> Timeline<'a> {
     /// wants, as with [`Iterator::take_while`].
     #[must_use]
     pub fn present(&self, properties: &SampleProperties) -> Presentations<'_> {
-        let start = composition_time(properties);
+        let start = properties.composition_time();
         let stage = match self.repeat {
             Repeat::Once => Stage::Pass { start: 0, edit: 0 },
             Repeat::Until(_) | Repeat::Indefinitely => Stage::Passes { pass: 0, edit: 0 },
@@ -390,22 +390,51 @@ fn first_multiple_in_range(step: u128, modulus: u128, low: u128, high: u128) -> 
     Some(modulus.checked_mul(wraps)?.checked_add(low)?.div_ceil(step))
 }
 
-/// Returns the entries of the edit list of `trak`, none where it has no edit list
-pub(crate) fn edits(trak: &TrackBox) -> &[EditListEntry] {
+/// Returns the entries of the edit list of `trak`, none where it has no edit list, ISO/IEC 14496-12 §8.6.6
+///
+/// # Examples
+///
+/// ```
+/// use isobmff::boxes::{EditBox, EditListBox, EditListEntry, TrackBox};
+/// use isobmff::timeline::edits;
+///
+/// let mut trak = TrackBox::default();
+/// assert!(edits(&trak).is_empty());
+///
+/// // An edit that presents the media from its time 0 on, for 1000 ticks
+/// let mut entry = EditListEntry::default();
+/// entry.edit_duration = 1000;
+/// let mut elst = EditListBox::default();
+/// elst.entries.push(entry);
+/// let mut edts = EditBox::default();
+/// edts.elst = Some(elst);
+/// trak.edts = Some(edts);
+/// assert_eq!(edits(&trak), [entry]);
+/// ```
+#[must_use]
+pub fn edits(trak: &TrackBox) -> &[EditListEntry] {
     trak.edts
         .as_ref()
         .and_then(|edts| edts.elst.as_ref())
         .map_or(&[][..], |elst| elst.entries.as_slice())
 }
 
-/// Returns the composition time of the sample of `properties`: its decoding time plus its composition time offset (§8.6.1.3)
-pub(crate) fn composition_time(properties: &SampleProperties) -> i128 {
-    i128::from(properties.decoding_time)
-        .saturating_add(i128::from(properties.sample_composition_time_offset))
-}
-
-/// Returns whether `edit`, the last of the edit list of a fragmented movie, lasts to the end of the media: it is not empty, and of duration 0 (§8.6.6.1)
-pub(crate) const fn lasts_to_end_of_media(edit: &EditListEntry) -> bool {
+/// Returns whether `edit`, the last of the edit list of a fragmented movie, lasts to the end of the media: it is not empty, and of duration 0, ISO/IEC 14496-12 §8.6.6.1
+///
+/// # Examples
+///
+/// ```
+/// use isobmff::boxes::EditListEntry;
+/// use isobmff::timeline::lasts_to_end_of_media;
+///
+/// let mut edit = EditListEntry::default();
+/// assert!(lasts_to_end_of_media(&edit));
+/// // An empty edit presents no media, and lasts as long as it says
+/// edit.media_time = -1;
+/// assert!(!lasts_to_end_of_media(&edit));
+/// ```
+#[must_use]
+pub const fn lasts_to_end_of_media(edit: &EditListEntry) -> bool {
     edit.edit_duration == 0 && edit.media_time >= 0
 }
 
@@ -599,7 +628,7 @@ mod tests {
 
     use isobmff_boxes::{EditBox, EditListBox, EditListEntry, MovieBox, MovieExtendsBox, TrackBox};
 
-    use super::{Presentation, Timeline, composition_time, first_in_range, is_dwell};
+    use super::{Presentation, Timeline, first_in_range, is_dwell};
     use crate::error::TimelineError;
     use crate::structure_data::fixtures::sample;
 
@@ -811,7 +840,7 @@ mod tests {
                         (0..6).flat_map(|start| (0..3).map(move |duration| (start, duration)))
                     {
                         let sample = sample(1, start, duration, 0, true);
-                        let composition = composition_time(sample.properties());
+                        let composition = sample.properties().composition_time();
                         let composition = composition..composition + i128::from(duration);
                         let mut expected = Vec::new();
                         let mut pass_start = 0;

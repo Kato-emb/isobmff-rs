@@ -38,6 +38,10 @@ jobs:
         run: |
           ! grep -rnE '//.*\b(TODO|FIXME)\b' --include='*.rs' . \
             | grep -vE '(TODO|FIXME)\([^)]+\)|#[0-9]+|https?://'
+      # A layer's items are public or private to the layer, so that the demuxer,
+      # the muxer and fast start use only what another reader or writer could.
+      - name: Forbid crate-wide items in a layer, and private paths in a composition
+        run: scripts/check-layer-visibility.sh
 
   # Every feature combination, so a path that only a non-default set of
   # features compiles is linted as well, the alloc-free one among them.
