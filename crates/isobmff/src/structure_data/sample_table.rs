@@ -18,8 +18,8 @@ use isobmff_core::{BoxDefinition, BoxType};
 
 use self::sample_flags::SampleFlagsTables;
 use super::sample_description::{DataOrigin, located_data_reference};
-use crate::byte_range::to_u64;
 use crate::error::{DemuxError, MuxError};
+use crate::length::to_u64;
 use crate::leniency::{Leniency, SampleTableDisagreement};
 use crate::sample::{SampleLocation, SampleProperties};
 

@@ -7,9 +7,9 @@ use isobmff_boxes::{Free, FreeSpaceBox, MediaDataBox};
 use isobmff_core::{BoxDefinition, BoxHeader, BoxSize, BoxType, ExtendedSize};
 
 use crate::byte_range::ByteRange;
-use crate::byte_range::to_u64;
 use crate::error::MuxError;
 use crate::framing::{BoxEvent, BoxWriter};
+use crate::length::to_u64;
 use crate::output::Output;
 
 /// Length of the header of a `free` box, the least a `free` box takes
@@ -47,45 +47,51 @@ pub fn reserve(total_bytes: u64) -> Result<Vec<u8>, MuxError> {
     Ok(bytes)
 }
 
-/// Writes a `free` box of `total_bytes` through `boxes`, as [`reserve`] makes it, and returns it and the file offset `boxes` counts for it
-///
-/// # Errors
-///
-/// * The failures of [`reserve`].
-/// * The failures of [`BoxWriter::handle_event`].
-///
-/// # Examples
-///
-/// ```
-/// use isobmff::boxes::FileTypeBox;
-/// use isobmff::framing::{BoxWriter, write_box, write_reserved};
-///
-/// // The `free` box goes after the boxes written before it, and counts in what `boxes` writes
-/// let mut boxes = BoxWriter::new();
-/// write_box(&mut boxes, &FileTypeBox::default())?;
-/// let after_ftyp = boxes.next_offset();
-/// let free = write_reserved(&mut boxes, 12)?;
-/// assert_eq!(free.offset(), after_ftyp);
-/// assert_eq!(free.bytes(), b"\0\0\0\x0cfree\0\0\0\0");
-/// assert_eq!(boxes.next_offset(), after_ftyp + 12);
-/// # Ok::<(), isobmff::MuxError>(())
-/// ```
-pub fn write_reserved(boxes: &mut BoxWriter, total_bytes: u64) -> Result<Output, MuxError> {
-    let bytes = reserve(total_bytes)?;
-    let offset = boxes.next_offset();
-    let header = BoxHeader::with_payload_len(FREE, total_bytes.saturating_sub(FREE_HEADER_BYTES))
-        .ok_or(MuxError::ReservedSpaceMismatch {
-        reserved_bytes: Some(total_bytes),
-        offered_bytes: 0,
-    })?;
-    boxes.handle_event(BoxEvent::Header(header))?;
-    boxes.handle_event(BoxEvent::Payload(
-        bytes
-            .get(usize::try_from(header.encoded_len()).unwrap_or(usize::MAX)..)
-            .unwrap_or_default(),
-    ))?;
-    boxes.handle_event(BoxEvent::End)?;
-    Ok(Output::new(offset, bytes))
+impl BoxWriter {
+    /// Writes a `free` box of `total_bytes`, as [`reserve`] makes it, and returns it and the file offset the writer counts for it
+    ///
+    /// A convenience over [`handle_event`](BoxWriter::handle_event), as
+    /// [`write_box`](BoxWriter::write_box) is.
+    ///
+    /// # Errors
+    ///
+    /// * The failures of [`reserve`].
+    /// * The failures of [`handle_event`](BoxWriter::handle_event).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff::boxes::FileTypeBox;
+    /// use isobmff::framing::BoxWriter;
+    ///
+    /// // The `free` box goes after the boxes written before it, and counts in what the writer writes
+    /// let mut boxes = BoxWriter::new();
+    /// boxes.write_box(&FileTypeBox::default())?;
+    /// let after_ftyp = boxes.next_offset();
+    /// let free = boxes.write_reserved(12)?;
+    /// assert_eq!(free.offset(), after_ftyp);
+    /// assert_eq!(free.bytes(), b"\0\0\0\x0cfree\0\0\0\0");
+    /// assert_eq!(boxes.next_offset(), after_ftyp + 12);
+    /// # Ok::<(), isobmff::MuxError>(())
+    /// ```
+    pub fn write_reserved(&mut self, total_bytes: u64) -> Result<Output, MuxError> {
+        let bytes = reserve(total_bytes)?;
+        let offset = self.next_offset();
+        let header =
+            BoxHeader::with_payload_len(FREE, total_bytes.saturating_sub(FREE_HEADER_BYTES))
+                .ok_or(MuxError::ReservedSpaceMismatch {
+                    reserved_bytes: Some(total_bytes),
+                    offered_bytes: 0,
+                })?;
+        self.handle_event(BoxEvent::Header(header))?;
+        self.handle_event(BoxEvent::Payload(
+            bytes
+                .get(usize::try_from(header.encoded_len()).unwrap_or(usize::MAX)..)
+                .unwrap_or_default(),
+        ))?;
+        self.handle_event(BoxEvent::End)?;
+        Ok(Output::new(offset, bytes))
+    }
 }
 
 /// Returns the outputs that put `bytes` in the space `reserved`: the bytes at its start, and the header of a `free` box after them that spans the rest of it, where there is a rest

@@ -5,9 +5,9 @@ use alloc::vec::Vec;
 use isobmff_boxes::{MediaDataBox, MovieBox};
 use isobmff_core::{BoxDefinition, BoxHeader};
 
-use crate::byte_range::to_u64;
 use crate::error::MuxError;
 use crate::framing::{BoxEvent, BoxWriter};
+use crate::length::to_u64;
 use crate::sample::{Sample, SampleLocation};
 use crate::structure_data::laid_out;
 

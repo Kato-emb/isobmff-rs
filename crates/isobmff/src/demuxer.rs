@@ -11,6 +11,7 @@ use crate::byte_range::ByteRange;
 use crate::error::DemuxError;
 use crate::file_level::{Kind, TopLevelBox};
 use crate::framing::{BoxEvent, BoxReader};
+use crate::length::to_u64;
 use crate::leniency::Leniency;
 use crate::limits::DemuxLimits;
 use crate::media_data::MediaDataReader;
@@ -726,11 +727,6 @@ pub enum DemuxEvent {
         /// Where the whole box lies, its length `None` when it runs to the end of the file
         byte_range: ByteRange,
     },
-}
-
-/// Converts a length in memory to one in a file, where it always fits
-fn to_u64(length: usize) -> u64 {
-    u64::try_from(length).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]

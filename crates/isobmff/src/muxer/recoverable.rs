@@ -4,7 +4,8 @@ use isobmff_boxes::MovieBox;
 use isobmff_core::Error;
 
 use crate::error::MuxError;
-use crate::framing::{BoxWriter, media_data_header, write_box, write_reserved};
+use crate::framing::{BoxWriter, media_data_header};
+use crate::length::to_u64;
 use crate::output::Output;
 use crate::sample::SampleLocation;
 use crate::structure_data::SampleTableWriter;
@@ -43,14 +44,14 @@ impl Recoverable {
     /// # Errors
     ///
     /// * The failures of [`SampleTableWriter::new`].
-    /// * The failures of [`write_reserved`].
+    /// * The failures of [`BoxWriter::write_reserved`].
     pub(super) fn new(
         boxes: &mut BoxWriter,
         movie: &MovieBox,
         limit_locations: u64,
     ) -> Result<(Self, Output), MuxError> {
         let tables = SampleTableWriter::new(movie.clone())?;
-        let placeholder = write_reserved(boxes, PLACEHOLDER_BYTES)?;
+        let placeholder = boxes.write_reserved(PLACEHOLDER_BYTES)?;
         Ok((
             Self {
                 placeholder: placeholder.offset(),
@@ -67,9 +68,7 @@ impl Recoverable {
     /// Either way the file is not laid out again: the sample tables are
     /// dropped, and [`finish`](Self::finish) returns why.
     pub(super) fn handle_locations(&mut self, locations: &[SampleLocation]) {
-        self.held_locations = self
-            .held_locations
-            .saturating_add(u64::try_from(locations.len()).unwrap_or(u64::MAX));
+        self.held_locations = self.held_locations.saturating_add(to_u64(locations.len()));
         let Tables::Declaring(tables) = &mut self.tables else {
             return;
         };
@@ -102,7 +101,7 @@ impl Recoverable {
             Tables::LaidOut(_) => return Err(MuxError::AlreadyFinished),
         };
         let movie_offset = boxes.next_offset();
-        let movie = write_box(boxes, tables.finish())?;
+        let movie = boxes.write_box(tables.finish())?;
         // Why not count the payload of the mdat from the end of the fragments: the mdat holds everything between the placeholder and the moov, the moov of the fragments too
         let payload_len = movie_offset
             .saturating_sub(self.placeholder)

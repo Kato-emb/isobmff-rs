@@ -7,8 +7,8 @@
 //! boxes end to end from the same [`BoxEvent`]s, so the events a reader reports
 //! write back to the bytes they were read from.
 //!
-//! [`write_box`] writes a box value through a [`BoxWriter`]. [`reserve`]
-//! keeps space in a file with a `free` box, [`write_reserved`] through a
+//! [`BoxWriter::write_box`] writes a box value. [`reserve`] keeps space in a
+//! file with a `free` box, [`BoxWriter::write_reserved`] through a
 //! [`BoxWriter`], which [`fill`] and [`media_data_header`] write over once
 //! the bytes that go there are known.
 
@@ -21,10 +21,10 @@ mod reserved;
 
 pub use box_event::{BoxEvent, BoxEventKind};
 pub use box_reader::BoxReader;
-pub use box_writer::{BoxWriter, write_box};
+pub use box_writer::BoxWriter;
 #[cfg(feature = "compressed-boxes")]
 pub use compressed::{decompressed, replacement_type};
-pub use reserved::{fill, media_data_header, reserve, write_reserved};
+pub use reserved::{fill, media_data_header, reserve};
 
 /// Boxes in every header form, which the tests of reading and writing share
 #[cfg(test)]

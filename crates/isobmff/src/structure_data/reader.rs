@@ -12,8 +12,8 @@ use super::movie_fragment::ReachedTime;
 use super::sample_description::DataReference;
 use super::segment_index::SegmentIndex;
 use super::{movie_fragment, sample_description, sample_table};
-use crate::byte_range::to_u64;
 use crate::error::DemuxError;
+use crate::length::to_u64;
 use crate::leniency::Leniency;
 use crate::sample::{DataReferenceKey, SampleLocation};
 

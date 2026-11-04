@@ -5,9 +5,9 @@ use alloc::vec::Vec;
 use isobmff_core::{BoxHeader, ErrorKind, RawBox};
 
 use crate::byte_range::ByteRange;
-use crate::byte_range::to_u64;
 use crate::error::DemuxError;
 use crate::framing::box_event::BoxEvent;
+use crate::length::to_u64;
 
 /// Length of the `size` and `boxtype` fields every header opens with
 const SHORTEST_HEADER: u64 = 8;
