@@ -19,7 +19,7 @@ use isobmff_core::{BoxDefinition, BoxType, RawBox};
 use miniz_oxide::inflate::TINFLStatus;
 use miniz_oxide::inflate::core::{DecompressorOxide, decompress, inflate_flags};
 
-use crate::convert::widen;
+use crate::convert::to_u64;
 use crate::error::DemuxError;
 
 /// Identification, compression method, flags, modification time, extra flags and operating system of a gzip member, RFC 1952 §2.3.1
@@ -108,7 +108,7 @@ fn inflate(
     }
     let payload = deflated(box_type, deflate_stream, limit_bytes)?;
     // RFC 1952 keeps the length modulo 2^32.
-    if crc32(&payload) != crc || widen(payload.len()) & u64::from(u32::MAX) != u64::from(length) {
+    if crc32(&payload) != crc || to_u64(payload.len()) & u64::from(u32::MAX) != u64::from(length) {
         return Err(unreadable);
     }
     Ok(payload)

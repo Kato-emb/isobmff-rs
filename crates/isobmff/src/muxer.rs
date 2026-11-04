@@ -580,7 +580,7 @@ mod tests {
     use isobmff_core::{BoxDecode, BoxDefinition, BoxType, Boxes, FourCc};
 
     use super::Muxer;
-    use crate::convert::widen;
+    use crate::convert::to_u64;
     use crate::demuxer::Demuxer;
     use crate::error::MuxError;
     use crate::file_structure::{
@@ -757,7 +757,7 @@ mod tests {
         muxer.finish().unwrap();
         let boxes = output(&mut muxer);
         let file = boxes.concat();
-        let offset_of = |index: usize| widen(boxes.iter().take(index).map(Vec::len).sum());
+        let offset_of = |index: usize| to_u64(boxes.iter().take(index).map(Vec::len).sum());
 
         let (mut demuxer, _) = demux(&file);
         let mfra = demuxer.movie_fragment_random_access().unwrap().clone();
@@ -777,7 +777,7 @@ mod tests {
 
         assert_eq!(resumed, [(offset_of(2), Some(0)), (offset_of(4), Some(10))]);
         assert_eq!(
-            movie_fragment_random_access_start(widen(file.len()), file.last_chunk().unwrap()),
+            movie_fragment_random_access_start(to_u64(file.len()), file.last_chunk().unwrap()),
             Some(offset_of(6))
         );
     }
@@ -941,7 +941,7 @@ mod tests {
             Vec::new(),
         )
         .concat();
-        let in_file = |output: &Output| widen(initialization.len()) + output.offset();
+        let in_file = |output: &Output| to_u64(initialization.len()) + output.offset();
         let box_types = |names: [&[u8; 4]; 6]| names.map(|name| BoxType::compact(*name)).to_vec();
 
         let (demuxer, samples) = demux(&[initialization.as_slice(), &segment].concat());
@@ -975,7 +975,7 @@ mod tests {
             .collect();
         let [first_moof, second_moof] =
             [2, 4].map(|index| in_file(before_finish.get(index).unwrap()));
-        let end = widen(initialization.len() + segment.len());
+        let end = to_u64(initialization.len() + segment.len());
         assert_eq!(
             subsegments,
             [(first_moof..second_moof, 0..10), (second_moof..end, 10..20)]
@@ -1106,7 +1106,7 @@ mod tests {
                 .iter()
                 .scan(0, |end, output| {
                     let offset = *end;
-                    *end += widen(output.bytes().len());
+                    *end += to_u64(output.bytes().len());
                     Some(offset)
                 })
                 .collect();

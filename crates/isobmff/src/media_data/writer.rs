@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use isobmff_boxes::{MediaDataBox, MovieBox};
 use isobmff_core::{BoxDefinition, BoxHeader};
 
-use crate::convert::widen;
+use crate::convert::to_u64;
 use crate::error::MuxError;
 use crate::framing::{BoxEvent, BoxWriter};
 use crate::sample::{Sample, SampleLocation};
@@ -40,7 +40,7 @@ impl MediaDataWriter {
     pub fn header(&self, samples: &[Sample]) -> Result<BoxHeader, MuxError> {
         let payload_len = samples
             .iter()
-            .map(|sample| widen(sample.data().len()))
+            .map(|sample| to_u64(sample.data().len()))
             .fold(0, u64::saturating_add);
         BoxHeader::with_payload_len(MediaDataBox::BOX_TYPE, payload_len).ok_or(
             MuxError::DataOffsetOutOfRange {

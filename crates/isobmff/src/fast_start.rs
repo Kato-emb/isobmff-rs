@@ -10,7 +10,7 @@ use isobmff_boxes::{
 use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxType, Error};
 
 use crate::byte_range::ByteRange;
-use crate::convert::widen;
+use crate::convert::to_u64;
 use crate::error::{DemuxError, FastStartError};
 use crate::framing::{BoxEvent, BoxReader, BoxWriter};
 use crate::output::Output;
@@ -281,7 +281,7 @@ impl FastStart {
         if taken.is_empty() {
             return Ok(());
         }
-        let taken_len = widen(taken.len());
+        let taken_len = to_u64(taken.len());
         self.outputs
             .push_back(Output::new(self.output_end, taken.to_vec()));
         self.output_end = self.output_end.saturating_add(taken_len);
@@ -331,7 +331,7 @@ impl FastStart {
             return;
         }
         if let Some(Piece::Movie(bytes)) = self.pieces.pop_front() {
-            let length = widen(bytes.len());
+            let length = to_u64(bytes.len());
             self.outputs.push_back(Output::new(self.output_end, bytes));
             self.output_end = self.output_end.saturating_add(length);
         }
@@ -358,7 +358,7 @@ impl FastStart {
             None => Ok(false),
             Some(BoxEvent::Header(header)) => {
                 let limit_boxes = self.limits.box_count;
-                if widen(self.boxes.len()) >= limit_boxes {
+                if to_u64(self.boxes.len()) >= limit_boxes {
                     return Err(FastStartError::BoxCountLimitExceeded { limit_boxes });
                 }
                 let box_type = header.box_type();

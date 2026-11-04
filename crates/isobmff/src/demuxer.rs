@@ -8,7 +8,7 @@ use isobmff_boxes::{
 use isobmff_core::{BoxDefinition, BoxHeader, BoxType, Error, RawBox};
 
 use crate::byte_range::ByteRange;
-use crate::convert::widen;
+use crate::convert::to_u64;
 use crate::error::DemuxError;
 use crate::file_level::{Kind, TopLevelBox};
 use crate::framing::{BoxEvent, BoxReader};
@@ -436,7 +436,7 @@ impl Demuxer {
             let identifier = <[u8; 4]>::try_from(head)
                 .map(u32::from_be_bytes)
                 .map_err(|_| DemuxError::Box {
-                    error: Error::truncated_buffer(IDENTIFIER_BYTES, widen(head.len()))
+                    error: Error::truncated_buffer(IDENTIFIER_BYTES, to_u64(head.len()))
                         .in_container(header.box_type()),
                 })?;
             let payload_offset = uncompressed_offset.saturating_add(header.encoded_len());
@@ -499,7 +499,7 @@ impl Demuxer {
                 let box_end = byte_range
                     .offset()
                     .saturating_add(raw_box.header().encoded_len())
-                    .saturating_add(widen(raw_box.payload().len()));
+                    .saturating_add(to_u64(raw_box.payload().len()));
                 self.structure_data
                     .handle_segment_index(&sidx, byte_range.offset()..box_end)?;
                 DemuxEvent::SegmentIndex { byte_range }
@@ -604,13 +604,13 @@ fn read(
         {
             // §8.16.2.1: the box read back has the header its type and the length of its payload give it.
             let uncompressed_length =
-                BoxHeader::with_payload_len(replacement_type, widen(payload.len()))
+                BoxHeader::with_payload_len(replacement_type, to_u64(payload.len()))
                     .map_or(u64::MAX, |header| header.encoded_len())
-                    .saturating_add(widen(payload.len()));
+                    .saturating_add(to_u64(payload.len()));
             let length = raw_box
                 .header()
                 .encoded_len()
-                .saturating_add(widen(raw_box.payload().len()));
+                .saturating_add(to_u64(raw_box.payload().len()));
             compressed_boxes.record(box_type, offset, length, uncompressed_length)?;
             return TopLevelBox::read_payload(replacement_type, &payload);
         }
@@ -743,7 +743,7 @@ mod tests {
     };
     use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxHeader, BoxType, FourCc};
 
-    use super::{DemuxEvent, Demuxer, widen};
+    use super::{DemuxEvent, Demuxer, to_u64};
     use crate::byte_range::ByteRange;
     use crate::error::DemuxError;
     use crate::leniency::{Leniency, SampleTableDisagreement};
@@ -810,7 +810,7 @@ mod tests {
                     break;
                 }
                 read.passed
-                    .push(wanted.offset()..wanted.offset().saturating_add(widen(input.len())));
+                    .push(wanted.offset()..wanted.offset().saturating_add(to_u64(input.len())));
                 while let Some(event) = demuxer.handle_input(wanted.offset(), input)? {
                     react(demuxer, &event);
                     see(&mut read.seen, event);
@@ -838,7 +838,7 @@ mod tests {
         let mut offset = 0_u64;
         let mut ending = Ok(());
         for piece in file.chunks(piece_len).map(Some).chain([None]) {
-            let end = offset.saturating_add(widen(piece.map_or(0, <[u8]>::len)));
+            let end = offset.saturating_add(to_u64(piece.map_or(0, <[u8]>::len)));
             loop {
                 let event = match piece {
                     Some(piece) => demuxer.handle_input(offset, piece),
@@ -922,7 +922,7 @@ mod tests {
     /// Returns the box of `box_type` and `payload`
     fn raw_box(box_type: [u8; 4], payload: &[u8]) -> Vec<u8> {
         let header =
-            BoxHeader::with_payload_len(BoxType::compact(box_type), widen(payload.len())).unwrap();
+            BoxHeader::with_payload_len(BoxType::compact(box_type), to_u64(payload.len())).unwrap();
         let mut bytes = vec![0; usize::try_from(header.encoded_len()).unwrap()];
         header.encode(&mut bytes).unwrap();
         [bytes.as_slice(), payload].concat()
@@ -938,8 +938,8 @@ mod tests {
     fn movie_at_end() -> (Vec<u8>, Range<u64>) {
         let ftyp = file_type();
         let mdat = raw_box(*b"mdat", b"ABCDEF");
-        let payload = widen(ftyp.len()).saturating_add(8)
-            ..widen(ftyp.len()).saturating_add(widen(mdat.len()));
+        let payload = to_u64(ftyp.len()).saturating_add(8)
+            ..to_u64(ftyp.len()).saturating_add(to_u64(mdat.len()));
         let free = raw_box(*b"free", b"AAAA");
         let moov = encoded(&movie([track(1, 10, &[2, 4], &[(1, 2)], &[payload.start])]));
         ([ftyp, mdat, free, moov].concat(), payload)
@@ -1002,7 +1002,7 @@ mod tests {
      {
         let ftyp = file_type();
         let mdat = raw_box(*b"mdat", b"AB");
-        let payload = widen(ftyp.len()).saturating_add(8);
+        let payload = to_u64(ftyp.len()).saturating_add(8);
         let external = in_another_file(track(2, 10, &[4], &[(1, 1)], &[0]));
         let moov = encoded(&movie([
             track(1, 10, &[2], &[(1, 1)], &[payload]),
@@ -1039,7 +1039,7 @@ mod tests {
 
         assert_eq!(
             wanted_after_movie,
-            Some(Some(ByteRange::new(widen(file.len()), None)))
+            Some(Some(ByteRange::new(to_u64(file.len()), None)))
         );
         assert!(
             read.wanted.iter().all(|offset| !payload.contains(offset)),
@@ -1107,8 +1107,8 @@ mod tests {
     #[test]
     fn a_track_discarded_between_fragments_gathers_no_more_samples_and_wants_no_media_data() {
         let head = [file_type(), fragmented_movie()].concat();
-        let first = widen(head.len());
-        let fragment_len = widen(fragment(1, None).len());
+        let first = to_u64(head.len());
+        let fragment_len = to_u64(fragment(1, None).len());
         let file = [head, fragment(1, None), fragment(2, None)].concat();
         let media_data = |fragment_end: u64| fragment_end.saturating_sub(4)..fragment_end;
         let first_media_data = media_data(first.saturating_add(fragment_len));
@@ -1402,7 +1402,7 @@ mod tests {
         ]
         .concat();
         let payload = |imda_at: usize| {
-            let start = widen(imda_at).saturating_add(8);
+            let start = to_u64(imda_at).saturating_add(8);
             Vec::from([(1, 0, start + 4..start + 6), (1, 100, start + 6..start + 8)])
         };
         let after_imda = after.len() - identified_media_data(5).len();
@@ -1446,7 +1446,7 @@ mod tests {
             b"WXYZ".to_vec(),
         ]
         .concat();
-        let payload = widen(imda_at).saturating_add(8);
+        let payload = to_u64(imda_at).saturating_add(8);
         let samples_at = Vec::from([
             (1, 0, payload + 4..payload + 6),
             (1, 100, payload + 6..payload + 8),
@@ -1626,7 +1626,7 @@ mod tests {
             |data_offset| encoded(&movie([track(1, 10, &[2, 4], &[(1, 2)], &[data_offset])]));
         let data_offset = [ftyp.len(), moov_at(0).len(), between.len(), 8]
             .into_iter()
-            .map(widen)
+            .map(to_u64)
             .fold(0, u64::saturating_add);
         let moov = moov_at(data_offset);
         let moov = if compress {
@@ -1643,7 +1643,7 @@ mod tests {
         // The demuxer reads no value of an `ssix`, so its payload is but the bytes of one.
         let ssix = compressed(*b"!ssx", &raw_box(*b"ssix", &[0; 8]));
         let file = compressed_file(core::slice::from_ref(&ssix));
-        let at = widen(file.len() - ssix.len());
+        let at = to_u64(file.len() - ssix.len());
 
         assert_eq!(
             read(&mut Demuxer::new(), &file, usize::MAX).unwrap().seen,
@@ -1651,7 +1651,7 @@ mod tests {
                 Seen::FileType,
                 Seen::Other(
                     BoxType::compact(*b"!ssx"),
-                    ByteRange::new(at, Some(widen(ssix.len())))
+                    ByteRange::new(at, Some(to_u64(ssix.len())))
                 ),
             ]
         );
@@ -1661,7 +1661,7 @@ mod tests {
     #[test]
     fn the_samples_a_compressed_moov_locates_are_where_they_lie_in_the_file() {
         let file = movie_before(&[], true);
-        let data = widen(file.len()) - 6;
+        let data = to_u64(file.len()) - 6;
         let read = read(&mut Demuxer::new(), &file, usize::MAX).unwrap();
 
         assert_eq!(
@@ -1730,7 +1730,7 @@ mod tests {
     fn media_data_in_the_box_a_compressed_box_replaces_or_past_the_compressed_boxes_kept_is_refused()
      {
         let ftyp = file_type();
-        let inside = widen(ftyp.len() + 8);
+        let inside = to_u64(ftyp.len() + 8);
         let moov = encoded(&movie([track(1, 10, &[2, 4], &[(1, 2)], &[inside])]));
         let inside_file = [ftyp, compressed(*b"!mov", &moov)].concat();
         let index = compressed(*b"!six", &encoded(&SegmentIndexBox::default()));
@@ -1779,7 +1779,7 @@ mod tests {
         let relative = fragment(2, Some(200));
         let resumed = |second: &[u8]| {
             let file = [head.clone(), second.to_vec()].concat();
-            let at = widen(head.len());
+            let at = to_u64(head.len());
             let mut resumed_once = false;
             read_reacting(&mut Demuxer::new(), &file, usize::MAX, |demuxer, event| {
                 if matches!(event, DemuxEvent::MovieFragment { .. }) && !resumed_once {
@@ -1849,7 +1849,7 @@ mod tests {
         let mut moof = MovieFragmentBox::default();
         moof.mfhd.sequence_number = sequence_number;
         moof.traf = vec![traf];
-        let data_offset = widen(encoded(&moof).len()).saturating_add(8);
+        let data_offset = to_u64(encoded(&moof).len()).saturating_add(8);
         if let Some(trun) = moof.traf.first_mut().and_then(|traf| traf.trun.first_mut()) {
             trun.data_offset = Some(i32::try_from(data_offset).unwrap());
         }
@@ -1859,7 +1859,7 @@ mod tests {
     /// Returns the samples of `fragment`, made by [`fragment`], at file offset `offset`, that start at decoding time `decoding_time`
     fn fragment_samples(fragment: &[u8], offset: u64, decoding_time: u64) -> Seen {
         let data = offset
-            .saturating_add(widen(fragment.len()))
+            .saturating_add(to_u64(fragment.len()))
             .saturating_sub(4);
         Seen::MovieFragment(vec![
             (1, decoding_time, data..data.saturating_add(2)),
@@ -1875,7 +1875,7 @@ mod tests {
     fn the_fragments_of_a_movie_carry_its_decoding_time_on() {
         let head = [file_type(), fragmented_movie()].concat();
         let file = [head.clone(), fragment(1, None), fragment(2, None)].concat();
-        let second = widen(head.len()).saturating_add(widen(fragment(1, None).len()));
+        let second = to_u64(head.len()).saturating_add(to_u64(fragment(1, None).len()));
         let read = read(&mut Demuxer::new(), &file, 7).unwrap();
 
         let fragments: Vec<_> = read
@@ -1886,7 +1886,7 @@ mod tests {
         assert_eq!(
             fragments,
             [
-                fragment_samples(&fragment(1, None), widen(head.len()), 0),
+                fragment_samples(&fragment(1, None), to_u64(head.len()), 0),
                 fragment_samples(&fragment(2, None), second, 200)
             ]
         );
@@ -1919,11 +1919,11 @@ mod tests {
 
         let fragment_offset = |segment_offset: u64| {
             segment_offset
-                .saturating_add(widen(segment(0).len()))
-                .saturating_sub(widen(fragment(0, None).len()))
+                .saturating_add(to_u64(segment(0).len()))
+                .saturating_sub(to_u64(fragment(0, None).len()))
         };
         let media_data = |segment_offset: u64| {
-            let end = segment_offset.saturating_add(widen(segment(0).len()));
+            let end = segment_offset.saturating_add(to_u64(segment(0).len()));
             Seen::MediaData(ByteRange::new(end.saturating_sub(12), Some(12)))
         };
         assert_eq!(
@@ -1933,12 +1933,16 @@ mod tests {
                 Seen::Movie(vec![]),
                 Seen::SegmentType,
                 Seen::SegmentIndex,
-                fragment_samples(&fragment(0, None), fragment_offset(widen(head.len())), 0),
-                media_data(widen(head.len())),
+                fragment_samples(&fragment(0, None), fragment_offset(to_u64(head.len())), 0),
+                media_data(to_u64(head.len())),
                 Seen::SegmentType,
                 Seen::SegmentIndex,
-                fragment_samples(&fragment(1, None), fragment_offset(widen(first.len())), 200),
-                media_data(widen(first.len())),
+                fragment_samples(
+                    &fragment(1, None),
+                    fragment_offset(to_u64(first.len())),
+                    200
+                ),
+                media_data(to_u64(first.len())),
             ]
         );
         assert_eq!(demuxer.segment_indexes().len(), 2);
@@ -1951,10 +1955,10 @@ mod tests {
     #[test]
     fn the_boxes_read_into_their_values_are_reported_where_they_lie() {
         let (ftyp_length, moov_length) =
-            (widen(file_type().len()), widen(fragmented_movie().len()));
+            (to_u64(file_type().len()), to_u64(fragmented_movie().len()));
         let moof_offset = ftyp_length.saturating_add(moov_length);
-        let mdat_length = widen(raw_box(*b"mdat", b"WXYZ").len());
-        let moof_length = widen(fragment(7, None).len()).saturating_sub(mdat_length);
+        let mdat_length = to_u64(raw_box(*b"mdat", b"WXYZ").len());
+        let moof_length = to_u64(fragment(7, None).len()).saturating_sub(mdat_length);
         let file = [file_type(), fragmented_movie(), fragment(7, None)].concat();
         let mut demuxer = Demuxer::new();
         let mut reported = Vec::new();
@@ -1997,7 +2001,7 @@ mod tests {
             encoded(&sidx)
         };
         let head = [file_type(), fragmented_movie()].concat();
-        let first = widen(head.len());
+        let first = to_u64(head.len());
         let file = [head, sidx(0), sidx(200)].concat();
         let mut demuxer = Demuxer::new();
         read(&mut demuxer, &file, usize::MAX).unwrap();
@@ -2010,19 +2014,19 @@ mod tests {
                 break byte_range;
             }
         };
-        assert_eq!(reported, ByteRange::new(first, Some(widen(sidx(0).len()))));
+        assert_eq!(reported, ByteRange::new(first, Some(to_u64(sidx(0).len()))));
         let starts: Vec<_> = demuxer
             .segment_indexes()
             .iter()
             .map(|index| index.byte_range().start)
             .collect();
-        assert_eq!(starts, [first, first.saturating_add(widen(sidx(0).len()))]);
+        assert_eq!(starts, [first, first.saturating_add(to_u64(sidx(0).len()))]);
     }
 
     #[test]
     fn a_fragment_resumed_at_resolves_only_from_its_tfdt() {
         let head = [file_type(), fragmented_movie()].concat();
-        let second = widen(head.len()).saturating_add(widen(fragment(1, None).len()));
+        let second = to_u64(head.len()).saturating_add(to_u64(fragment(1, None).len()));
         let file = [head.clone(), fragment(1, None), fragment(2, Some(5000))].concat();
         let mut demuxer = Demuxer::new();
         read(&mut demuxer, &file, usize::MAX).unwrap();
@@ -2034,7 +2038,7 @@ mod tests {
             Some(&fragment_samples(&fragment(2, Some(5000)), second, 5000))
         );
 
-        demuxer.resume_at(widen(head.len())).unwrap();
+        demuxer.resume_at(to_u64(head.len())).unwrap();
         assert_eq!(
             read(&mut demuxer, &file, usize::MAX).map(|read| read.seen),
             Err(DemuxError::MissingDecodingTime { track_id: 1 })
@@ -2063,7 +2067,7 @@ mod tests {
         }
         let head = [file_type(), encoded(&movie)].concat();
         let file = [head.clone(), fragment(1, None), fragment(2, Some(200))].concat();
-        let second = widen(head.len()).saturating_add(widen(fragment(1, None).len()));
+        let second = to_u64(head.len()).saturating_add(to_u64(fragment(1, None).len()));
         let mut demuxer = Demuxer::new();
         read(&mut demuxer, &file, usize::MAX).unwrap();
         let read_past = [Leniency::SampleTable {
@@ -2154,7 +2158,7 @@ mod tests {
         let failure = DemuxError::Box {
             error: isobmff_core::Error::size_below_header(8, 2),
         };
-        let mdat = ByteRange::new(widen(file_type().len()), Some(10));
+        let mdat = ByteRange::new(to_u64(file_type().len()), Some(10));
         for piece_len in [1, 2, 8, usize::MAX] {
             let mut demuxer = Demuxer::new();
             let mut seen = Vec::new();

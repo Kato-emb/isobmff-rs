@@ -10,7 +10,7 @@ use isobmff_boxes::{
 use isobmff_core::{BoxDefinition, BoxType};
 
 use super::next_or_zero;
-use crate::convert::widen;
+use crate::convert::to_u64;
 
 /// What the `sdtp`, the `padb`, the `stdp` and the `stss` of a sample table state of the samples not read yet, in sample order
 pub(super) struct SampleFlagsTables<'stbl> {
@@ -101,15 +101,15 @@ pub(super) fn stated_samples(stbl: &SampleTableBox) -> [(BoxType, Option<u64>); 
     [
         (
             SampleDependencyTypeBox::BOX_TYPE,
-            stbl.sdtp.as_ref().map(|sdtp| widen(sdtp.entries.len())),
+            stbl.sdtp.as_ref().map(|sdtp| to_u64(sdtp.entries.len())),
         ),
         (
             PaddingBitsBox::BOX_TYPE,
-            stbl.padb.as_ref().map(|padb| widen(padb.pads.len())),
+            stbl.padb.as_ref().map(|padb| to_u64(padb.pads.len())),
         ),
         (
             DegradationPriorityBox::BOX_TYPE,
-            stbl.stdp.as_ref().map(|stdp| widen(stdp.priorities.len())),
+            stbl.stdp.as_ref().map(|stdp| to_u64(stdp.priorities.len())),
         ),
     ]
 }

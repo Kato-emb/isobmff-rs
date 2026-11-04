@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{DataEntry, MovieBox, SampleDescription, TrackBox};
 
-use crate::convert::widen;
+use crate::convert::to_u64;
 use crate::error::{DemuxError, MuxError};
 use crate::sample::{DataReferenceKey, Sample, SampleLocation};
 
@@ -357,7 +357,7 @@ pub(crate) fn laid_out(
             };
             let start = data_end;
             data_end = start
-                .checked_add(widen(sample.data().len()))
+                .checked_add(to_u64(sample.data().len()))
                 .ok_or(MuxError::DataOffsetOutOfRange { track_id })?;
             Ok(SampleLocation::new(
                 *properties,

@@ -7,7 +7,7 @@ use isobmff_boxes::{Free, FreeSpaceBox, MediaDataBox};
 use isobmff_core::{BoxDefinition, BoxHeader, BoxSize, BoxType, ExtendedSize};
 
 use crate::byte_range::ByteRange;
-use crate::convert::widen;
+use crate::convert::to_u64;
 use crate::error::MuxError;
 use crate::framing::{BoxEvent, BoxWriter};
 use crate::output::Output;
@@ -127,7 +127,7 @@ impl BoxWriter {
 /// # Ok::<(), MuxError>(())
 /// ```
 pub fn fill(reserved: ByteRange, bytes: Vec<u8>) -> Result<Vec<Output>, MuxError> {
-    let offered_bytes = widen(bytes.len());
+    let offered_bytes = to_u64(bytes.len());
     let mismatch = MuxError::ReservedSpaceMismatch {
         reserved_bytes: reserved.length(),
         offered_bytes,

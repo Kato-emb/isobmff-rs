@@ -5,7 +5,7 @@ use core::ops::Range;
 
 use isobmff_boxes::SampleFlags;
 
-use crate::convert::widen;
+use crate::convert::to_u64;
 
 /// Values structure-data declares about one sample, ISO/IEC 14496-12 §8.8.7 and §8.8.8
 ///
@@ -142,7 +142,7 @@ impl DataReferenceKey {
     /// Returns the key a reader gives entry `index`, from 1, of the data reference of the track at `track_position`, from 0, of the movie
     pub(crate) fn of(track_position: usize, index: u16) -> Self {
         // Why not count the entries before the track: an index fits in 16 bits, so the track position takes the bits above them and the key of an entry needs no other track.
-        Self((widen(track_position) << 16) | u64::from(index))
+        Self((to_u64(track_position) << 16) | u64::from(index))
     }
 
     /// Returns the track position and the index the key packs, as [`of`](Self::of) packs them
