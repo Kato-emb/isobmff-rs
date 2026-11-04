@@ -27,8 +27,8 @@ mod tests {
     use isobmff::timeline::{Presentation, Timeline};
     use isobmff::{
         BoxDecode, BoxDefinition, BoxHeader, Boxes, ByteRange, DemuxEvent, DemuxLimits, Demuxer,
-        FastStart, FastStartLimits, FileStructure, FourCc, FragmentedOptions, Muxer,
-        NonFragmentedOptions, Output, Sample, SampleLocation, SegmentOptions,
+        FastStart, FastStartLimits, FileStructure, FourCc, FragmentedOptions, MuxError, MuxLimits,
+        Muxer, NonFragmentedOptions, Output, Sample, SampleLocation, SegmentOptions,
     };
     use isobmff_test_support::serde_json::Value;
     use isobmff_test_support::{
@@ -611,6 +611,135 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Returns the muxer of a recoverable file, keeping the locations of up to `held_location_count` samples
+    fn recoverable(held_location_count: u64) -> Muxer {
+        let mut options = NonFragmentedOptions::default();
+        options.recoverable = true;
+        Muxer::non_fragmented(options)
+            .with_limits(MuxLimits::new().with_held_location_count(held_location_count))
+    }
+
+    /// Writes `outputs` where each says, and returns the file
+    fn written_at(outputs: &[Output]) -> Vec<u8> {
+        let mut file = Vec::new();
+        for output in outputs {
+            let start = usize::try_from(output.offset()).unwrap();
+            let end = start.checked_add(output.bytes().len()).unwrap();
+            assert!(
+                start <= file.len(),
+                "an output past the end of the file written"
+            );
+            if file.len() < end {
+                file.resize(end, 0);
+            }
+            file.get_mut(start..end)
+                .unwrap()
+                .copy_from_slice(output.bytes());
+        }
+        file
+    }
+
+    /// Returns the outputs `muxer` writes of `movie` and `samples` before it finishes, those of finishing, and how finishing ended
+    fn mux_recoverable(
+        mut muxer: Muxer,
+        movie: MovieBox,
+        samples: &[Sample],
+    ) -> (Vec<Output>, Vec<Output>, Result<(), MuxError>) {
+        muxer.handle_file_type(fragmented_brands()).unwrap();
+        muxer.handle_movie(movie).unwrap();
+        for run in samples.chunks(SAMPLES_PER_CALL) {
+            muxer.handle_samples(run.iter().cloned()).unwrap();
+        }
+        let before_finish: Vec<Output> = iter::from_fn(|| muxer.poll_output()).collect();
+        let finished = muxer.finish();
+        let after: Vec<Output> = iter::from_fn(|| muxer.poll_output()).collect();
+        assert_eq!(
+            muxer.file_structure(),
+            if finished.is_ok() {
+                FileStructure::NonFragmented
+            } else {
+                FileStructure::Fragmented
+            }
+        );
+        (before_finish, after, finished)
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names, and runs ffprobe on them"]
+    fn a_recoverable_file_reads_as_its_source_fragmented_until_it_finishes_and_not_fragmented_after()
+     {
+        let files: Vec<_> = conformance_files()
+            .into_iter()
+            .filter(|file| {
+                [
+                    "01_simple.mp4",
+                    "a8-foreman_QCIF_edit.mp4",
+                    "fragment_random_access-2.mp4",
+                ]
+                .contains(&file.name.as_str())
+            })
+            .collect();
+        assert_eq!(files.len(), 3);
+        for ConformanceFile { name, bytes, .. } in &files {
+            let source = demux(bytes);
+            let (before_finish, after, finished) =
+                mux_recoverable(recoverable(1 << 20), source.movie.clone(), &source.samples);
+            finished.unwrap();
+            let fragmented = written_at(&before_finish);
+            let laid_out = written_at(&[before_finish, after].concat());
+
+            assert!(
+                demux(&fragmented).samples == source.samples,
+                "{name}: the demuxer reads other samples before the file finishes"
+            );
+            let read = demux(&laid_out);
+            assert!(
+                read.samples == source.samples,
+                "{name}: the demuxer reads other samples"
+            );
+            assert!(read.movie.mvex.is_none(), "{name}: the moov keeps an mvex");
+            assert_eq!(
+                ffprobe_read(&format!("recoverable-{name}"), &laid_out),
+                ffprobe_read(&format!("source-{name}"), bytes),
+                "{name}: ffprobe reads other packets"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "reads the conformance files ISOBMFF_CONFORMANCE_DIR names, and runs ffprobe on them"]
+    fn a_recoverable_file_past_the_locations_the_muxer_keeps_is_a_whole_fragmented_file() {
+        let file = conformance_files()
+            .into_iter()
+            .find(|file| file.name == "01_simple.mp4")
+            .unwrap();
+        let source = demux(&file.bytes);
+        let samples = u64::try_from(source.samples.len()).unwrap();
+
+        let (before_finish, after, finished) = mux_recoverable(
+            recoverable(samples / 2),
+            source.movie.clone(),
+            &source.samples,
+        );
+        let fragmented = written_at(&before_finish);
+
+        let limit = samples / 2;
+        assert!(
+            matches!(
+                finished,
+                Err(MuxError::NotFinalised { held_locations, limit_locations, .. })
+                    if held_locations == samples && limit_locations == limit
+            ),
+            "{finished:?}"
+        );
+        assert!(after.is_empty());
+        assert!(demux(&fragmented).samples == source.samples);
+        assert_eq!(
+            ffprobe_read("not-finalised", &fragmented),
+            ffprobe_read("source", &file.bytes)
+        );
     }
 
     /// Returns the next event `demuxer` reads of `file`, taking the samples it gathers, or `None` at its end
