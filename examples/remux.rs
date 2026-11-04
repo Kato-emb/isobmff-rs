@@ -34,16 +34,11 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use isobmff::boxes::FileTypeBox;
 use isobmff::{
     DemuxEvent, Demuxer, FileStructure, FourCc, FragmentedOptions, Muxer, NonFragmentedOptions,
-    SegmentOptions,
+    SegmentOptions, supports_default_base_is_moof,
 };
 
 /// Samples the muxer takes in one call: one `moof` and `mdat`, or one `mdat`
 const SAMPLES_PER_RUN: usize = 64;
-
-/// Brands under which a reader takes the `moof` as the base data offset of a track fragment
-const FROM_ISO5: [[u8; 4]; 9] = [
-    *b"iso5", *b"iso6", *b"iso7", *b"iso8", *b"iso9", *b"isoa", *b"isob", *b"isoc", *b"isod",
-];
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut arguments = env::args().skip(1);
@@ -134,10 +129,7 @@ fn brands_of(file_structure: FileStructure, file_type: Option<&FileTypeBox>) -> 
         brands.major_brand = FourCc::new(*b"mp41");
         brands
     });
-    if file_structure != FileStructure::NonFragmented
-        && !std::iter::once(&file_type.major_brand)
-            .chain(&file_type.compatible_brands)
-            .any(|brand| FROM_ISO5.contains(brand.as_bytes()))
+    if file_structure != FileStructure::NonFragmented && !supports_default_base_is_moof(&file_type)
     {
         file_type.compatible_brands.push(FourCc::new(*b"iso6"));
     }

@@ -1,11 +1,14 @@
 //! [`BoxWriter`], which lays the boxes of a file end to end as bytes
 
-use isobmff_core::{BoxHeader, BoxSize};
+use alloc::vec::Vec;
+
+use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader, BoxSize, Error};
 
 use crate::byte_range::ByteRange;
 use crate::error::MuxError;
 use crate::framing::box_event::{BoxEvent, BoxEventKind};
 use crate::framing::to_u64;
+use crate::output::Output;
 
 /// Length of the header with both a `largesize` and an `extended_type` field, the longest there is
 const LONGEST_HEADER: usize = 32;
@@ -247,6 +250,47 @@ impl Default for BoxWriter {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Writes `value` as a box at file level through `boxes`, and returns its bytes and the file offset `boxes` counts for it
+///
+/// # Examples
+///
+/// ```
+/// use isobmff::boxes::FileTypeBox;
+/// use isobmff::framing::{BoxWriter, write_box};
+///
+/// let mut boxes = BoxWriter::new();
+/// let ftyp = write_box(&mut boxes, &FileTypeBox::default())?;
+/// assert_eq!((ftyp.offset(), ftyp.bytes().get(4..8)), (0, Some(b"ftyp".as_slice())));
+/// assert_eq!(boxes.next_offset(), 16);
+/// # Ok::<(), isobmff::MuxError>(())
+/// ```
+///
+/// # Errors
+///
+/// * [`Box`](MuxError::Box): the box does not write.
+/// * The failures of [`BoxWriter::handle_event`].
+pub fn write_box<Value: BoxEncode + BoxDefinition>(
+    boxes: &mut BoxWriter,
+    value: &Value,
+) -> Result<Output, MuxError> {
+    let payload_len = value.payload_len();
+    let too_long = MuxError::Box {
+        error: Error::truncated_buffer(payload_len, to_u64(usize::MAX)),
+    };
+    let mut payload = alloc::vec![0; usize::try_from(payload_len).map_err(|_| too_long)?];
+    value
+        .encode_payload(&mut payload)
+        .map_err(|error| MuxError::Box { error })?;
+    let header = BoxHeader::with_payload_len(Value::BOX_TYPE, payload_len).ok_or(too_long)?;
+    let offset = boxes.next_offset();
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(boxes.handle_event(BoxEvent::Header(header))?);
+    bytes.extend_from_slice(boxes.handle_event(BoxEvent::Payload(&payload))?);
+    bytes.extend_from_slice(boxes.handle_event(BoxEvent::End)?);
+
+    Ok(Output::new(offset, bytes))
 }
 
 #[cfg(test)]

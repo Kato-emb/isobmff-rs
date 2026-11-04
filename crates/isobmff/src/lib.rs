@@ -292,6 +292,7 @@ pub use byte_range::ByteRange;
 pub use demuxer::{DemuxEvent, Demuxer};
 pub use error::{DemuxError, FastStartError, MuxError, TimelineError};
 pub use fast_start::{FastStart, FastStartLimits};
+pub use file_level::supports_default_base_is_moof;
 pub use file_structure::{FileStructure, FragmentedOptions, NonFragmentedOptions, SegmentOptions};
 pub use isobmff_core::*;
 pub use leniency::{Leniency, SampleTableDisagreement};

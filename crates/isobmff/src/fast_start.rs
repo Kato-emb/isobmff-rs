@@ -12,8 +12,7 @@ use isobmff_core::{BoxDefinition, BoxEncode, BoxType};
 use crate::byte_range::ByteRange;
 use crate::error::{DemuxError, FastStartError};
 use crate::file_level::decode;
-use crate::framing::{BoxEvent, BoxReader, BoxWriter, to_u64};
-use crate::muxer::write_box;
+use crate::framing::{BoxEvent, BoxReader, BoxWriter, to_u64, write_box};
 use crate::output::Output;
 use crate::structure_data::{chunk_offsets, data_reference_index};
 
