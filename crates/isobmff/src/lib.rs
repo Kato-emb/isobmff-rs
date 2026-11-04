@@ -278,6 +278,7 @@
 extern crate alloc;
 
 mod byte_range;
+mod convert;
 mod demuxer;
 mod error;
 mod fast_start;

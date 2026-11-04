@@ -12,7 +12,7 @@ use crate::file_level::supports_default_base_is_moof;
 use crate::file_structure::{
     FileStructure, FragmentedOptions, NonFragmentedOptions, SegmentOptions,
 };
-use crate::framing::{BoxWriter, fill, write_box, write_reserved};
+use crate::framing::{BoxWriter, fill};
 use crate::limits::MuxLimits;
 use crate::media_data::MediaDataWriter;
 use crate::output::Output;
@@ -225,11 +225,11 @@ impl Muxer {
         }
         let bytes = match self.structure {
             Structure::NonFragmented(options) if !options.recoverable => {
-                write_box(&mut self.boxes, &file_type)?
+                self.boxes.write_box(&file_type)?
             }
             Structure::NonFragmented(_) | Structure::Fragmented(_) => {
                 refuse_brands_before_iso5(&file_type)?;
-                write_box(&mut self.boxes, &file_type)?
+                self.boxes.write_box(&file_type)?
             }
             Structure::Segment(_) => {
                 refuse_brands_before_iso5(&file_type)?;
@@ -237,7 +237,7 @@ impl Muxer {
                 styp.major_brand = file_type.major_brand;
                 styp.minor_version = file_type.minor_version;
                 styp.compatible_brands = file_type.compatible_brands;
-                write_box(&mut self.boxes, &styp)?
+                self.boxes.write_box(&styp)?
             }
         };
         self.output.push_back(bytes);
@@ -305,7 +305,7 @@ impl Muxer {
         let structure_data = match self.structure {
             Structure::Fragmented(options) => {
                 let writer = MovieFragmentWriter::fragmented(movie, options)?;
-                let bytes = write_box(&mut self.boxes, writer.movie())?;
+                let bytes = self.boxes.write_box(writer.movie())?;
                 self.output.push_back(bytes);
                 StructureDataWriter::Fragmented(writer)
             }
@@ -319,7 +319,7 @@ impl Muxer {
                     writer.movie(),
                     self.limits.held_location_count(),
                 )?;
-                let bytes = write_box(&mut self.boxes, writer.movie())?;
+                let bytes = self.boxes.write_box(writer.movie())?;
                 self.output.extend([free, bytes]);
                 self.recoverable = Some(recoverable);
                 StructureDataWriter::Fragmented(writer)
@@ -411,12 +411,12 @@ impl Muxer {
                 let (moof, locations) =
                     writer.movie_fragment(&samples, moof_offset, header.encoded_len())?;
                 if let Some(total_bytes) = reserving {
-                    let free = write_reserved(&mut self.boxes, total_bytes)?;
+                    let free = self.boxes.write_reserved(total_bytes)?;
                     self.reserved_segment_index =
                         Some(ByteRange::new(free.offset(), Some(total_bytes)));
                     written.push(free);
                 }
-                written.push(write_box(&mut self.boxes, &moof)?);
+                written.push(self.boxes.write_box(&moof)?);
                 let mdat_offset = self.boxes.next_offset();
                 let (mdat, _) =
                     self.media_data
@@ -495,7 +495,7 @@ impl Muxer {
         self.finished = true;
         let bytes = match structure_data {
             StructureDataWriter::NonFragmented(writer) => {
-                Some(write_box(&mut self.boxes, writer.finish())?)
+                Some(self.boxes.write_box(writer.finish())?)
             }
             StructureDataWriter::Fragmented(writer) => {
                 let (mfra, sidx) = writer.finish()?;
@@ -509,14 +509,13 @@ impl Muxer {
                     match self.reserved_segment_index {
                         Some(reserved) => {
                             // Why not self.boxes: it counts file offsets in the order boxes are written, and the sidx goes over the free it has counted already
-                            let sidx = write_box(&mut BoxWriter::new(), &sidx)?.into_bytes();
+                            let sidx = BoxWriter::new().write_box(&sidx)?.into_bytes();
                             self.output.extend(fill(reserved, sidx)?);
                         }
-                        None => self.output.push_back(write_box(&mut self.boxes, &sidx)?),
+                        None => self.output.push_back(self.boxes.write_box(&sidx)?),
                     }
                 }
-                mfra.map(|mfra| write_box(&mut self.boxes, &mfra))
-                    .transpose()?
+                mfra.map(|mfra| self.boxes.write_box(&mfra)).transpose()?
             }
         };
         self.output.extend(bytes);
@@ -581,12 +580,12 @@ mod tests {
     use isobmff_core::{BoxDecode, BoxDefinition, BoxType, Boxes, FourCc};
 
     use super::Muxer;
+    use crate::convert::to_u64;
     use crate::demuxer::Demuxer;
     use crate::error::MuxError;
     use crate::file_structure::{
         FileStructure, FragmentedOptions, NonFragmentedOptions, SegmentOptions,
     };
-    use crate::framing::to_u64;
     use crate::leniency::{Leniency, SampleTableDisagreement};
     use crate::limits::MuxLimits;
     use crate::output::Output;

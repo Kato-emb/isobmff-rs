@@ -5,7 +5,7 @@ use core::ops::Range;
 
 use isobmff_boxes::SampleFlags;
 
-use crate::framing::to_u64;
+use crate::convert::to_u64;
 
 /// Values structure-data declares about one sample, ISO/IEC 14496-12 §8.8.7 and §8.8.8
 ///

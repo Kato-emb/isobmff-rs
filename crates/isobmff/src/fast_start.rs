@@ -10,8 +10,9 @@ use isobmff_boxes::{
 use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxType, Error};
 
 use crate::byte_range::ByteRange;
+use crate::convert::to_u64;
 use crate::error::{DemuxError, FastStartError};
-use crate::framing::{BoxEvent, BoxReader, BoxWriter, to_u64, write_box};
+use crate::framing::{BoxEvent, BoxReader, BoxWriter};
 use crate::output::Output;
 use crate::structure_data::{chunk_offsets, data_reference_index};
 
@@ -357,7 +358,7 @@ impl FastStart {
             None => Ok(false),
             Some(BoxEvent::Header(header)) => {
                 let limit_boxes = self.limits.box_count;
-                if u64::try_from(self.boxes.len()).unwrap_or(u64::MAX) >= limit_boxes {
+                if to_u64(self.boxes.len()) >= limit_boxes {
                     return Err(FastStartError::BoxCountLimitExceeded { limit_boxes });
                 }
                 let box_type = header.box_type();
@@ -469,7 +470,8 @@ impl FastStart {
         }
 
         let mut bytes = Some(
-            write_box(&mut BoxWriter::new(), &movie)
+            BoxWriter::new()
+                .write_box(&movie)
                 .map_err(|error| FastStartError::Write { error })?
                 .into_bytes(),
         );

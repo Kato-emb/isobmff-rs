@@ -5,9 +5,9 @@ use alloc::vec::Vec;
 use isobmff_core::{BoxHeader, ErrorKind, RawBox};
 
 use crate::byte_range::ByteRange;
+use crate::convert::to_u64;
 use crate::error::DemuxError;
 use crate::framing::box_event::BoxEvent;
-use crate::framing::to_u64;
 
 /// Length of the `size` and `boxtype` fields every header opens with
 const SHORTEST_HEADER: u64 = 8;
@@ -141,7 +141,31 @@ impl BoxReader {
     }
 
     /// Creates a reader that wants the file from file offset `position`, where a box starts
-    pub(crate) const fn starting_at(position: u64) -> Self {
+    ///
+    /// The boxes at file level lie end to end (§4.2.2), so a reader can start
+    /// at any of them, as after a seek: the boxes before it are not read.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff::BoxType;
+    /// use isobmff::framing::{BoxEvent, BoxReader};
+    ///
+    /// // The `ftyp` takes the first bytes of the file, which its size gives
+    /// let file: &[u8] = include_bytes!("../../tests/data/movie.mp4");
+    /// let after_ftyp = u32::from_be_bytes(file[..4].try_into()?);
+    ///
+    /// let mut reader = BoxReader::starting_at(after_ftyp.into());
+    /// let wanted = reader.wanted_input().ok_or("no input wanted")?;
+    /// let input = &file[usize::try_from(wanted.offset())?..];
+    /// let Some(BoxEvent::Header(header)) = reader.handle_input(wanted.offset(), input)? else {
+    ///     return Err("no header".into());
+    /// };
+    /// assert_eq!(header.box_type(), BoxType::compact(*b"moov"));
+    /// # Ok::<(), Box<dyn core::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub const fn starting_at(position: u64) -> Self {
         Self {
             position,
             progress: Progress::Header {
@@ -399,7 +423,23 @@ impl BoxReader {
     ///
     /// The length is `None` for a box whose head was gathered and whose size
     /// runs to the end of the file.
-    pub(crate) fn gathered_box_range(&self) -> Option<ByteRange> {
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff::ByteRange;
+    /// use isobmff::framing::{BoxEvent, BoxReader};
+    ///
+    /// let file = b"\0\0\0\x0cfreeABCD";
+    /// let mut reader = BoxReader::new();
+    /// assert!(matches!(reader.handle_input(0, file)?, Some(BoxEvent::Header(_))));
+    /// reader.gather(1024)?;
+    /// assert_eq!(reader.handle_input(0, file)?, Some(BoxEvent::End));
+    /// assert_eq!(reader.gathered_box_range(), Some(ByteRange::new(0, Some(12))));
+    /// # Ok::<(), isobmff::DemuxError>(())
+    /// ```
+    #[must_use]
+    pub fn gathered_box_range(&self) -> Option<ByteRange> {
         let Progress::Gathered {
             header,
             offset,
@@ -413,22 +453,6 @@ impl BoxReader {
             .total_bytes()
             .or_else(|| whole.then(|| to_u64(self.gathered.len())));
         Some(ByteRange::new(offset, length))
-    }
-
-    /// Fails the reader with `failure`, of a box it read, which every call after it returns
-    pub(crate) fn fail_with(&mut self, failure: DemuxError) {
-        self.progress = Progress::Failed(failure);
-    }
-
-    /// Returns the failure the reader failed with, once it has
-    pub(crate) const fn failure(&self) -> Option<DemuxError> {
-        match self.progress {
-            Progress::Failed(failure) => Some(failure),
-            Progress::Header { .. }
-            | Progress::Opened { .. }
-            | Progress::Payload { .. }
-            | Progress::Gathered { .. } => None,
-        }
     }
 
     /// Refuses a call while the reader has failed or waits for a header to be answered

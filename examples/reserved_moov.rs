@@ -18,7 +18,7 @@
 //! How much to reserve is the caller's to choose, from the bit rate and the
 //! duration it expects. The layers do the rest: [`reserve`] makes the `free` boxes,
 //! [`SampleTableWriter`] declares the samples from where the example puts
-//! their media data, and [`write_box`] writes the boxes.
+//! their media data, and [`BoxWriter::write_box`] writes the boxes.
 //! Each output goes where its offset says, the destination seeking back for
 //! the `moov` and the header of the `mdat`.
 
@@ -27,7 +27,7 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 
-use isobmff::framing::{BoxWriter, fill, media_data_header, reserve, write_box};
+use isobmff::framing::{BoxWriter, fill, media_data_header, reserve};
 use isobmff::structure_data::SampleTableWriter;
 use isobmff::{
     BoxHeader, BoxSize, BoxType, ByteRange, DataReferenceKey, DemuxEvent, Demuxer, ExtendedSize,
@@ -80,7 +80,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         if let Some(DemuxEvent::Movie { .. }) = event? {
             let movie = demuxer.movie().ok_or("moov without its value")?.clone();
             let file_type = demuxer.file_type().cloned().unwrap_or_default();
-            let ftyp = write_box(&mut BoxWriter::new(), &file_type)?;
+            let ftyp = BoxWriter::new().write_box(&file_type)?;
             destination.write(ftyp.offset(), ftyp.bytes())?;
             let reserved_offset = destination.written;
             destination.write(reserved_offset, &reserve(reserved_bytes)?)?;
@@ -155,7 +155,9 @@ impl ReservedFile {
             .end
             .saturating_sub(self.placeholder)
             .saturating_sub(PLACEHOLDER_BYTES);
-        let moov = write_box(&mut BoxWriter::new(), self.tables.finish())?.into_bytes();
+        let moov = BoxWriter::new()
+            .write_box(self.tables.finish())?
+            .into_bytes();
         let moov_len = moov.len();
         let reserved = ByteRange::new(self.reserved_offset, Some(self.reserved_bytes));
         match fill(reserved, moov.clone()) {
