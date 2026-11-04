@@ -5,16 +5,20 @@
 //! ```
 //!
 //! The machine reads the boxes at file level, seeking past the media data
-//! to the `moov`, and then names what to write: the `moov` laid out again,
-//! and the ranges of the input to copy as they are. The input is read twice:
-//! once to find the boxes, and once to copy them.
+//! to the `moov`. Once the input ends, it wants each box again in the order
+//! of the file laid out again, and outputs its bytes as they arrive, with the
+//! `moov` laid out again in its place. One loop reads what the machine wants
+//! and writes what it outputs, at the end of the output.
 
 use std::env;
 use std::error::Error;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, BufWriter, Seek, SeekFrom, Write};
 
-use isobmff::{FastStart, FastStartLimits, FastStartOutput};
+use isobmff::{FastStart, FastStartLimits};
+
+/// Bytes the input is read in, at most, at a time
+const PIECE_BYTES: usize = 64 * 1024;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut arguments = env::args().skip(1);
@@ -23,7 +27,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         arguments.next().ok_or(usage)?,
         arguments.next().ok_or(usage)?,
     );
-    let mut input = BufReader::new(File::open(input)?);
+    let mut input = BufReader::with_capacity(PIECE_BYTES, File::open(input)?);
+    let mut output = BufWriter::new(File::create(output)?);
+    let mut written = 0_u64;
     let mut fast_start = FastStart::new(FastStartLimits {
         movie_bytes: 256 * 1024 * 1024,
         box_count: 1 << 20,
@@ -35,26 +41,19 @@ fn main() -> Result<(), Box<dyn Error>> {
             [] => fast_start.finish()?,
             bytes => fast_start.handle_input(wanted.offset(), bytes)?,
         }
-    }
-
-    let mut output = BufWriter::new(File::create(output)?);
-    while let Some(laid_out) = fast_start.poll_output() {
-        match laid_out {
-            FastStartOutput::Bytes(bytes) => {
-                println!("moov: {} bytes", bytes.len());
-                output.write_all(&bytes)?;
+        while let Some(laid_out) = fast_start.poll_output() {
+            if laid_out.offset() != written {
+                return Err(format!(
+                    "output for file offset {}, not the end {written} of the output",
+                    laid_out.offset()
+                )
+                .into());
             }
-            FastStartOutput::Copy(range) => {
-                input.seek(SeekFrom::Start(range.offset()))?;
-                let copied = match range.length() {
-                    Some(length) => io::copy(&mut (&mut input).take(length), &mut output)?,
-                    None => io::copy(&mut input, &mut output)?,
-                };
-                println!("copied {copied} bytes from offset {}", range.offset());
-            }
-            _ => return Err("an output this example does not know".into()),
+            output.write_all(laid_out.bytes())?;
+            written = written.saturating_add(u64::try_from(laid_out.bytes().len())?);
         }
     }
     output.flush()?;
+    println!("wrote {written} bytes");
     Ok(())
 }

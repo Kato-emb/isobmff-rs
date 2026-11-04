@@ -12,8 +12,9 @@ use isobmff_core::{BoxDefinition, BoxEncode, BoxType};
 use crate::byte_range::ByteRange;
 use crate::error::{DemuxError, FastStartError};
 use crate::file_level::decode;
-use crate::framing::{BoxEvent, BoxReader, BoxWriter};
+use crate::framing::{BoxEvent, BoxReader, BoxWriter, to_u64};
 use crate::muxer::write_box;
+use crate::output::Output;
 use crate::structure_data::{chunk_offsets, data_reference_index};
 
 /// Limits a [`FastStart`] reads a file up to
@@ -41,14 +42,13 @@ pub struct FastStartLimits {
     pub box_count: u64,
 }
 
-/// What a [`FastStart`] outputs, in the order the file laid out again is written
-#[non_exhaustive]
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum FastStartOutput {
-    /// Bytes to write: the `moov`, laid out again
-    Bytes(Vec<u8>),
-    /// Bytes of the file read to write as they are: a box at file level, at the file offsets of the range, to the end of the file where the range has no length
-    Copy(ByteRange),
+/// What the machine outputs next of the file laid out again
+#[derive(Debug)]
+enum Piece {
+    /// The `moov`, laid out again
+    Movie(Vec<u8>),
+    /// A box at file level of the file read, its bytes passed through as they arrive, at the file offsets of the range: to the end of the file where the range has no length
+    Box(BoxType, ByteRange),
 }
 
 /// Machine that lays a movie file that is not fragmented out again with its `moov` before its media data
@@ -58,9 +58,10 @@ pub enum FastStartOutput {
 /// file a caller can seek in, as a [`Demuxer`](crate::Demuxer) does: it names
 /// the bytes it wants, takes them with the file offset they start at, and
 /// is told when the file ends. It gathers the `moov` and skips the others.
-/// It then outputs the file again: the `ftyp`, the `moov`, and the other
-/// boxes in their order, the media data as ranges of the file to copy, which
-/// the machine never takes.
+/// It then outputs the file again, each [`Output`] at the end of those
+/// before it: the `ftyp`, the `moov`, and the other boxes in their order.
+/// It wants each box but the `moov` once more, and outputs its bytes as they
+/// arrive, holding none of them.
 ///
 /// The chunk offsets of the `moov` (§8.7.5), and the offsets of its sample
 /// auxiliary information (§8.7.9), move with the box they lie in. A chunk
@@ -72,32 +73,23 @@ pub enum FastStartOutput {
 /// after its `moov` comes out as it is.
 ///
 /// ```
-/// use isobmff::{FastStart, FastStartLimits, FastStartOutput};
+/// use isobmff::{FastStart, FastStartLimits};
 ///
 /// // `ftyp`, an `mdat` of two samples, and the `moov` that locates them
 /// let file: &[u8] = include_bytes!("../tests/data/movie_last.mp4");
 /// let limits = FastStartLimits { movie_bytes: 1024 * 1024, box_count: 1024 };
 /// let mut fast_start = FastStart::new(limits);
 ///
-/// // Seek to the offset the machine wants, and read from there
+/// // Seek to the offset the machine wants, read from there, and write what it outputs
+/// let mut laid_out = Vec::new();
 /// while let Some(wanted) = fast_start.wanted_input() {
 ///     match file.get(usize::try_from(wanted.offset())?..).unwrap_or_default() {
 ///         [] => fast_start.finish()?,
 ///         input => fast_start.handle_input(wanted.offset(), input)?,
 ///     }
-/// }
-///
-/// // Write the bytes, and copy the ranges of the file
-/// let mut laid_out = Vec::new();
-/// while let Some(output) = fast_start.poll_output() {
-///     match output {
-///         FastStartOutput::Bytes(bytes) => laid_out.extend_from_slice(&bytes),
-///         FastStartOutput::Copy(range) => {
-///             let start = usize::try_from(range.offset())?;
-///             let end = range.length().map_or(Ok(file.len()), |length| usize::try_from(range.offset() + length))?;
-///             laid_out.extend_from_slice(file.get(start..end).ok_or("short")?);
-///         }
-///         _ => return Err("unknown output".into()),
+///     while let Some(output) = fast_start.poll_output() {
+///         assert_eq!(output.offset(), u64::try_from(laid_out.len())?);
+///         laid_out.extend_from_slice(output.bytes());
 ///     }
 /// }
 /// // The same file, its `moov` before its `mdat`
@@ -111,7 +103,13 @@ pub struct FastStart {
     /// Type and place of each box at file level read, in their order
     boxes: Vec<(BoxType, ByteRange)>,
     movie: Option<MovieBox>,
-    outputs: VecDeque<FastStartOutput>,
+    /// What is left to output of the file laid out again, once the file has ended
+    pieces: VecDeque<Piece>,
+    /// Bytes of the box first in `pieces` output already
+    passed: u64,
+    /// File offset in the file laid out again of the next output
+    output_end: u64,
+    outputs: VecDeque<Output>,
     /// Whether the file has ended
     finished: bool,
     failed: Option<FastStartError>,
@@ -126,32 +124,60 @@ impl FastStart {
             reader: BoxReader::new(),
             boxes: Vec::new(),
             movie: None,
+            pieces: VecDeque::new(),
+            passed: 0,
+            output_end: 0,
             outputs: VecDeque::new(),
             finished: false,
             failed: None,
         }
     }
 
-    /// Returns the file offset of the bytes the machine wants next, and how many it wants where it knows, or `None` once the file has ended or the machine has failed
+    /// Returns the file offset of the bytes the machine wants next, and how many it wants where it knows, or `None` once it has output the whole file laid out again or has failed
     ///
-    /// The machine also wants no input past a box that runs to the end of the
-    /// file, which ends only with the file: [`handle_input`](Self::handle_input)
-    /// then finishes the file itself, as [`finish`](Self::finish) does.
+    /// Until the file ends, the machine wants the boxes at file level, past
+    /// the payloads it skips. It wants no input past a box that runs to the
+    /// end of the file, which ends only with the file:
+    /// [`handle_input`](Self::handle_input) then finishes the file itself, as
+    /// [`finish`](Self::finish) does. Once the file has ended, it wants the
+    /// rest of each box it passes through, in the order of the file laid out
+    /// again.
     #[must_use]
     pub fn wanted_input(&self) -> Option<ByteRange> {
-        (self.failed.is_none() && !self.finished)
-            .then(|| self.reader.wanted_input())
-            .flatten()
+        if self.failed.is_some() {
+            return None;
+        }
+        if !self.finished {
+            return self.reader.wanted_input();
+        }
+        match self.pieces.front() {
+            Some(Piece::Box(_, place)) => Some(ByteRange::new(
+                place.offset().saturating_add(self.passed),
+                place
+                    .length()
+                    .map(|length| length.saturating_sub(self.passed)),
+            )),
+            Some(Piece::Movie(_)) | None => None,
+        }
     }
 
-    /// Takes `input`, the bytes of the file from file offset `offset`, and reads the boxes at file level they hold
+    /// Takes `input`, the bytes of the file from file offset `offset`, and reads the boxes at file level they hold, or, once the file has ended, outputs the bytes of the box it passes through
     ///
     /// `input` starts at or before the offset
-    /// [`wanted_input`](Self::wanted_input) names. A box whose size runs to
-    /// the end of the file ends the file, as [`finish`](Self::finish) does.
+    /// [`wanted_input`](Self::wanted_input) names, and the bytes before it
+    /// are passed over. A box whose size runs to the end of the file ends the
+    /// file, as [`finish`](Self::finish) does. Once the file has ended, the
+    /// bytes of `input` the machine wants, up to the end of the box it passes
+    /// through, come out as one [`Output`] from
+    /// [`poll_output`](Self::poll_output): a copy of them, which the machine
+    /// holds until it is taken, so a caller takes the outputs after each
+    /// call.
     ///
     /// # Errors
     ///
+    /// * [`Read`](FastStartError::Read) of
+    ///   [`UnwantedInput`](DemuxError::UnwantedInput): the file has ended,
+    ///   and `input` starts past the offset the machine wants.
     /// * [`Read`](FastStartError::Read): the boxes do not read, as for
     ///   [`BoxReader::handle_input`]; the `moov`, or a `meta` at file level,
     ///   is longer than [`FastStartLimits::movie_bytes`]; or the file has a
@@ -166,6 +192,11 @@ impl FastStart {
     /// * The failure the machine failed with before.
     pub fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), FastStartError> {
         self.check_failed()?;
+        if self.finished {
+            return self
+                .pass_through(offset, input)
+                .map_err(|error| self.fail(error));
+        }
         loop {
             let event = self.reader.handle_input(offset, input);
             match self.read_event(event) {
@@ -177,7 +208,11 @@ impl FastStart {
         }
     }
 
-    /// Ends the file at the offset the machine wants, and lays the file out again
+    /// Ends the file at the offset the machine wants, and lays the file out again, or, once the file has ended, ends the box that runs to the end of the file that the machine passes through
+    ///
+    /// The `moov` laid out again is output at once, and so is each box the
+    /// machine passes through, as its bytes arrive. A call once the box the
+    /// machine passes through has ended does nothing.
     ///
     /// # Errors
     ///
@@ -191,28 +226,116 @@ impl FastStart {
     ///   write.
     /// * The failures of [`handle_input`](Self::handle_input), for the box
     ///   the end of the file ends.
+    /// * [`Read`](FastStartError::Read) of
+    ///   [`UnfinishedBox`](DemuxError::UnfinishedBox): the file ends inside a
+    ///   box the machine passes through, before the total its header
+    ///   declares.
     pub fn finish(&mut self) -> Result<(), FastStartError> {
         self.check_failed()?;
-        if self.finished {
-            return Ok(());
-        }
-        self.finished = true;
-        let event = self.reader.finish();
-        let laid_out = self.read_event(event).and_then(|_| self.lay_out());
-        match laid_out {
-            Ok(outputs) => {
-                self.outputs = outputs;
+        let finished = if self.finished {
+            self.end_pass_through()
+        } else {
+            self.finished = true;
+            let event = self.reader.finish();
+            self.read_event(event).and_then(|_| {
+                self.pieces = self.lay_out()?;
+                self.output_movie();
                 Ok(())
-            }
-            Err(error) => Err(self.fail(error)),
-        }
+            })
+        };
+        finished.map_err(|error| self.fail(error))
     }
 
     /// Returns the next output of the file laid out again, or `None` when there is none left
     ///
-    /// The outputs come once [`finish`](Self::finish) has laid the file out.
-    pub fn poll_output(&mut self) -> Option<FastStartOutput> {
+    /// The outputs come once [`finish`](Self::finish) has laid the file out,
+    /// each at the end of those before it.
+    pub fn poll_output(&mut self) -> Option<Output> {
         self.outputs.pop_front()
+    }
+
+    /// Outputs the bytes of `input`, from file offset `offset`, that the box first in the pieces wants
+    ///
+    /// # Errors
+    ///
+    /// * [`Read`](FastStartError::Read) of
+    ///   [`UnwantedInput`](DemuxError::UnwantedInput): `input` starts past
+    ///   the offset the machine wants.
+    fn pass_through(&mut self, offset: u64, input: &[u8]) -> Result<(), FastStartError> {
+        let Some(wanted) = self.wanted_input() else {
+            return Ok(());
+        };
+        let skipped = wanted
+            .offset()
+            .checked_sub(offset)
+            .ok_or(FastStartError::Read {
+                error: DemuxError::UnwantedInput { offset, wanted },
+            })?;
+        let rest = usize::try_from(skipped)
+            .ok()
+            .and_then(|skipped| input.get(skipped..))
+            .unwrap_or_default();
+        let taken = wanted.length().map_or(rest, |length| {
+            rest.get(..usize::try_from(length).unwrap_or(usize::MAX))
+                .unwrap_or(rest)
+        });
+        if taken.is_empty() {
+            return Ok(());
+        }
+        let taken_len = to_u64(taken.len());
+        self.outputs
+            .push_back(Output::new(self.output_end, taken.to_vec()));
+        self.output_end = self.output_end.saturating_add(taken_len);
+        self.passed = self.passed.saturating_add(taken_len);
+        if wanted.length() == Some(taken_len) {
+            self.next_piece();
+        }
+        Ok(())
+    }
+
+    /// Ends the box first in the pieces at the end of the file, where its range runs to it
+    ///
+    /// # Errors
+    ///
+    /// * [`Read`](FastStartError::Read) of
+    ///   [`UnfinishedBox`](DemuxError::UnfinishedBox): the box has a length,
+    ///   which the bytes passed through fall short of.
+    fn end_pass_through(&mut self) -> Result<(), FastStartError> {
+        match self.pieces.front() {
+            Some(&Piece::Box(box_type, place)) => {
+                if let Some(needed_bytes) = place.length() {
+                    return Err(FastStartError::Read {
+                        error: DemuxError::UnfinishedBox {
+                            box_type,
+                            needed_bytes,
+                            available_bytes: self.passed,
+                        },
+                    });
+                }
+                self.next_piece();
+                Ok(())
+            }
+            Some(Piece::Movie(_)) | None => Ok(()),
+        }
+    }
+
+    /// Ends the box first in the pieces, and outputs the `moov` laid out again where it comes next
+    fn next_piece(&mut self) {
+        self.pieces.pop_front();
+        self.passed = 0;
+        self.output_movie();
+    }
+
+    /// Outputs the `moov` laid out again, where it comes next
+    fn output_movie(&mut self) {
+        if !matches!(self.pieces.front(), Some(Piece::Movie(_))) {
+            return;
+        }
+        if let Some(Piece::Movie(bytes)) = self.pieces.pop_front() {
+            let length = to_u64(bytes.len());
+            self.outputs.push_back(Output::new(self.output_end, bytes));
+            self.output_end = self.output_end.saturating_add(length);
+        }
     }
 
     /// Returns the failure the machine failed with, if it has
@@ -283,8 +406,8 @@ impl FastStart {
         }
     }
 
-    /// Returns the outputs of the file laid out again: the `ftyp`, the `moov` and the other boxes in their order, or the file as it is where its media data lies after its `moov`
-    fn lay_out(&mut self) -> Result<VecDeque<FastStartOutput>, FastStartError> {
+    /// Returns the pieces of the file laid out again: the `ftyp`, the `moov` and the other boxes in their order, or the file as it is where its media data lies after its `moov`
+    fn lay_out(&mut self) -> Result<VecDeque<Piece>, FastStartError> {
         let mut movie = self.movie.take().ok_or(FastStartError::MissingMovie)?;
         let movie_position = self
             .boxes
@@ -303,7 +426,7 @@ impl FastStart {
             return Ok(self
                 .boxes
                 .iter()
-                .map(|&(_, place)| FastStartOutput::Copy(place))
+                .map(|&(box_type, place)| Piece::Box(box_type, place))
                 .collect());
         }
 
@@ -352,11 +475,11 @@ impl FastStart {
             .iter()
             .filter_map(|&index| {
                 if index == movie_position {
-                    return bytes.take().map(FastStartOutput::Bytes);
+                    return bytes.take().map(Piece::Movie);
                 }
                 self.boxes
                     .get(index)
-                    .map(|&(_, place)| FastStartOutput::Copy(place))
+                    .map(|&(box_type, place)| Piece::Box(box_type, place))
             })
             .collect())
     }
@@ -533,9 +656,9 @@ mod tests {
     };
     use isobmff_core::{BoxDefinition, BoxHeader, BoxType};
 
-    use super::{FastStart, FastStartLimits, FastStartOutput};
-    use crate::byte_range::ByteRange;
+    use super::{FastStart, FastStartLimits};
     use crate::error::{DemuxError, FastStartError};
+    use crate::output::Output;
     use crate::structure_data::fixtures::{encoded, in_another_file, movie, track};
 
     const LIMITS: FastStartLimits = FastStartLimits {
@@ -551,23 +674,60 @@ mod tests {
         bytes
     }
 
-    /// Lays out again the file whose bytes are `pieces`, each at its file offset, the file ending at the end of the last
-    fn lay_out(
+    /// Lays out again the file whose bytes are `pieces`, each at its file offset, the file ending at the end of the last, and returns what the machine outputs up to its failure or the end
+    fn outputs_of(
         pieces: &[(u64, Vec<u8>)],
         limits: FastStartLimits,
-    ) -> Result<Vec<FastStartOutput>, FastStartError> {
+    ) -> (Vec<Output>, Result<(), FastStartError>) {
         let mut fast_start = FastStart::new(limits);
+        let mut outputs = Vec::new();
+        let mut ended = Ok(());
         while let Some(wanted) = fast_start.wanted_input() {
             let piece = pieces.iter().find_map(|(offset, bytes)| {
                 let into = usize::try_from(wanted.offset().checked_sub(*offset)?).ok()?;
                 bytes.get(into..).filter(|rest| !rest.is_empty())
             });
-            match piece {
-                Some(input) => fast_start.handle_input(wanted.offset(), input)?,
-                None => fast_start.finish()?,
+            ended = match piece {
+                Some(input) => fast_start.handle_input(wanted.offset(), input),
+                None => fast_start.finish(),
+            };
+            outputs.extend(core::iter::from_fn(|| fast_start.poll_output()));
+            if ended.is_err() {
+                break;
             }
         }
-        Ok(core::iter::from_fn(|| fast_start.poll_output()).collect())
+        (outputs, ended)
+    }
+
+    /// Lays out again the file whose bytes are `pieces`, as [`outputs_of`] does, and returns what the machine outputs
+    fn lay_out(
+        pieces: &[(u64, Vec<u8>)],
+        limits: FastStartLimits,
+    ) -> Result<Vec<Output>, FastStartError> {
+        let (outputs, ended) = outputs_of(pieces, limits);
+        ended.map(|()| outputs)
+    }
+
+    /// Returns the file offset and the length of each of `outputs`
+    fn places(outputs: &[Output]) -> Vec<(u64, u64)> {
+        outputs
+            .iter()
+            .map(|output| {
+                (
+                    output.offset(),
+                    u64::try_from(output.bytes().len()).unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    /// Returns the bytes of the `moov` among `outputs`
+    fn movie_bytes(outputs: &[Output]) -> Vec<u8> {
+        outputs
+            .iter()
+            .find(|output| output.bytes().get(4..8) == Some(b"moov".as_slice()))
+            .map(|output| output.bytes().to_vec())
+            .unwrap()
     }
 
     /// Returns the bytes of a file of an `ftyp`, then `boxes` laid end to end
@@ -587,21 +747,98 @@ mod tests {
     }
 
     /// Returns the chunk offsets of the tracks of the `moov` in `outputs`
-    fn chunk_offsets(outputs: &[FastStartOutput]) -> Vec<Vec<u64>> {
-        let bytes = outputs
-            .iter()
-            .find_map(|output| match output {
-                FastStartOutput::Bytes(bytes) => Some(bytes),
-                FastStartOutput::Copy(_) => None,
-            })
-            .unwrap();
-        let (raw, _) = isobmff_core::RawBox::split_first(bytes).unwrap();
+    fn chunk_offsets(outputs: &[Output]) -> Vec<Vec<u64>> {
+        let bytes = movie_bytes(outputs);
+        let (raw, _) = isobmff_core::RawBox::split_first(&bytes).unwrap();
         let movie = <MovieBox as isobmff_core::BoxDecode>::decode_payload(raw.payload()).unwrap();
         movie
             .trak
             .iter()
             .map(|trak| super::chunk_offsets(&trak.mdia.minf.stbl).collect())
             .collect()
+    }
+
+    /// Lays out again `file`, handing the machine at most `piece_len` bytes at a time from where it wants, and returns the file laid out again, each output written where its offset says
+    fn laid_out_in_pieces(file: &[u8], piece_len: usize) -> Vec<u8> {
+        let mut fast_start = FastStart::new(LIMITS);
+        let mut laid_out = Vec::new();
+        while let Some(wanted) = fast_start.wanted_input() {
+            let rest = file
+                .get(usize::try_from(wanted.offset()).unwrap()..)
+                .unwrap_or_default();
+            match rest.get(..piece_len.min(rest.len())).unwrap_or_default() {
+                [] => fast_start.finish().unwrap(),
+                input => fast_start.handle_input(wanted.offset(), input).unwrap(),
+            }
+            while let Some(output) = fast_start.poll_output() {
+                assert_eq!(output.offset(), u64::try_from(laid_out.len()).unwrap());
+                laid_out.extend_from_slice(output.bytes());
+            }
+        }
+        laid_out
+    }
+
+    #[test]
+    fn a_file_laid_out_again_is_the_same_whatever_pieces_its_bytes_arrive_in() {
+        let moved: &[u8] = include_bytes!("../tests/data/movie_last.mp4");
+        let kept: &[u8] = include_bytes!("../tests/data/movie.mp4");
+
+        let laid_out = [moved, kept].map(|file| {
+            [1, 7, 64 * 1024, usize::MAX].map(|piece_len| laid_out_in_pieces(file, piece_len))
+        });
+
+        assert_eq!(laid_out, [[kept; 4], [kept; 4]]);
+    }
+
+    #[test]
+    fn input_past_the_box_passed_through_is_refused_and_the_machine_wants_nothing_once_it_has_output_the_file()
+     {
+        let file: &[u8] = include_bytes!("../tests/data/movie_last.mp4");
+        let finished = || {
+            let mut fast_start = FastStart::new(LIMITS);
+            while !fast_start.finished {
+                let wanted = fast_start.wanted_input().unwrap();
+                let input = file
+                    .get(usize::try_from(wanted.offset()).unwrap()..)
+                    .unwrap();
+                match input {
+                    [] => fast_start.finish().unwrap(),
+                    input => fast_start.handle_input(wanted.offset(), input).unwrap(),
+                }
+            }
+            fast_start
+        };
+        let mut past = finished();
+        let mut whole = finished();
+        let wanted = past.wanted_input().unwrap();
+
+        let refused = past.handle_input(wanted.offset() + 1, file.get(1..).unwrap());
+        while let Some(wanted) = whole.wanted_input() {
+            let input = file
+                .get(usize::try_from(wanted.offset()).unwrap()..)
+                .unwrap();
+            whole.handle_input(wanted.offset(), input).unwrap();
+        }
+
+        assert_eq!(
+            (
+                refused,
+                past.wanted_input(),
+                whole.wanted_input(),
+                whole.finish()
+            ),
+            (
+                Err(FastStartError::Read {
+                    error: DemuxError::UnwantedInput {
+                        offset: wanted.offset() + 1,
+                        wanted
+                    }
+                }),
+                None,
+                None,
+                Ok(())
+            )
+        );
     }
 
     #[test]
@@ -612,18 +849,23 @@ mod tests {
         let bytes = file(&[&mdat, b"ABCD", &moov]);
         let moov_len = u64::try_from(moov.len()).unwrap();
 
-        let outputs = lay_out(&[(0, bytes)], LIMITS).unwrap();
+        let outputs = lay_out(&[(0, bytes.clone())], LIMITS).unwrap();
 
         assert_eq!(chunk_offsets(&outputs), [[ftyp_len + moov_len + 8]]);
         assert_eq!(
-            outputs
-                .iter()
-                .map(|output| match output {
-                    FastStartOutput::Bytes(bytes) => (None, u64::try_from(bytes.len()).unwrap()),
-                    FastStartOutput::Copy(range) => (Some(range.offset()), range.length().unwrap()),
-                })
-                .collect::<Vec<_>>(),
-            [(Some(0), ftyp_len), (None, moov_len), (Some(ftyp_len), 12)]
+            places(&outputs),
+            [
+                (0, ftyp_len),
+                (ftyp_len, moov_len),
+                (ftyp_len + moov_len, 12)
+            ]
+        );
+        assert_eq!(
+            [outputs.first(), outputs.last()].map(|output| output.unwrap().bytes().to_vec()),
+            [
+                bytes.get(..16).unwrap().to_vec(),
+                bytes.get(16..28).unwrap().to_vec()
+            ]
         );
     }
 
@@ -634,11 +876,18 @@ mod tests {
         let moov = encoded(&one_chunk(16 + 8 + moov_len + 8));
         let bytes = file(&[&free, &moov, &header(b"mdat", 4), b"ABCD"]);
 
+        let outputs = lay_out(&[(0, bytes.clone())], LIMITS).unwrap();
+
         assert_eq!(
-            lay_out(&[(0, bytes)], LIMITS).unwrap(),
-            [(0, 16), (16, 8), (24, moov_len), (24 + moov_len, 12)].map(|(offset, length)| {
-                FastStartOutput::Copy(ByteRange::new(offset, Some(length)))
-            })
+            places(&outputs),
+            [(0, 16), (16, 8), (24, moov_len), (24 + moov_len, 12)]
+        );
+        assert_eq!(
+            outputs
+                .into_iter()
+                .flat_map(Output::into_bytes)
+                .collect::<Vec<_>>(),
+            bytes
         );
     }
 
@@ -659,11 +908,14 @@ mod tests {
                     .map(|outputs| outputs.last().cloned()),
             ],
             [
-                Ok(Some(FastStartOutput::Copy(ByteRange::new(16, Some(20))))),
-                Ok(Some(FastStartOutput::Copy(ByteRange::new(
+                Ok(Some(Output::new(
                     16 + moov_len,
-                    None
-                )))),
+                    [large.as_slice(), b"ABCD"].concat()
+                ))),
+                Ok(Some(Output::new(
+                    16 + moov_len,
+                    [to_end.as_slice(), b"ABCD"].concat()
+                ))),
             ]
         );
     }
@@ -675,12 +927,19 @@ mod tests {
         let moov = encoded(&one_chunk(near_end));
         let moov_at = 16 + 16 + (1 << 32);
 
-        let outputs = lay_out(&[(0, file(&[&mdat])), (moov_at, moov.clone())], LIMITS).unwrap();
+        let (outputs, ended) = outputs_of(&[(0, file(&[&mdat])), (moov_at, moov.clone())], LIMITS);
 
-        let moov_len = match outputs.get(1) {
-            Some(FastStartOutput::Bytes(bytes)) => u64::try_from(bytes.len()).unwrap(),
-            _ => 0,
-        };
+        let moov_len = u64::try_from(movie_bytes(&outputs).len()).unwrap();
+        assert_eq!(
+            ended,
+            Err(FastStartError::Read {
+                error: DemuxError::UnfinishedBox {
+                    box_type: BoxType::compact(*b"mdat"),
+                    needed_bytes: 16 + (1 << 32),
+                    available_bytes: 16
+                }
+            })
+        );
         assert_eq!(moov_len, u64::try_from(moov.len()).unwrap() + 4);
         assert_eq!(chunk_offsets(&outputs), [[near_end + moov_len]]);
     }
@@ -703,10 +962,7 @@ mod tests {
         let outputs =
             lay_out(&[(0, file(&[&header(b"mdat", 4), b"ABCD", &moov]))], LIMITS).unwrap();
 
-        let bytes = match outputs.get(1) {
-            Some(FastStartOutput::Bytes(bytes)) => bytes.clone(),
-            _ => Vec::new(),
-        };
+        let bytes = movie_bytes(&outputs);
         let (raw, _) = isobmff_core::RawBox::split_first(&bytes).unwrap();
         let laid_out =
             <MovieBox as isobmff_core::BoxDecode>::decode_payload(raw.payload()).unwrap();

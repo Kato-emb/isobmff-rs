@@ -291,7 +291,7 @@ pub mod timeline;
 pub use byte_range::ByteRange;
 pub use demuxer::{DemuxEvent, Demuxer};
 pub use error::{DemuxError, FastStartError, MuxError, TimelineError};
-pub use fast_start::{FastStart, FastStartLimits, FastStartOutput};
+pub use fast_start::{FastStart, FastStartLimits};
 pub use file_structure::FileStructure;
 pub use isobmff_core::*;
 pub use leniency::{Leniency, SampleTableDisagreement};
