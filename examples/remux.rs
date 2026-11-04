@@ -6,6 +6,7 @@
 //! cargo run --example remux -- fragmented.mp4 segment.mp4 segment
 //! cargo run --example remux -- movie.mp4 fragmented.mp4 fragmented --random-access
 //! cargo run --example remux -- fragmented.mp4 segment.mp4 segment --segment-index
+//! cargo run --example remux -- fragmented.mp4 movie.mp4 non-fragmented --recoverable
 //! ```
 //!
 //! `--random-access` ends a fragmented file with an `mfra` that lists the
@@ -14,8 +15,12 @@
 //! muxer reserves the space of the `sidx` before the first `moof`, so it is
 //! told the number of subsegments first: the source is read once for its
 //! boxes alone to count its samples. As the muxer finishes, it writes the
-//! `sidx` over the space reserved, which is the one output of the example
-//! that does not go at the end of the destination.
+//! `sidx` over the space reserved, an output that goes over what the
+//! destination holds already. `--recoverable` writes a file that is not
+//! fragmented as movie fragments, readable should the example stop short,
+//! and lays it out again as it finishes: the `moov` at the end, then the
+//! header of an `mdat` that holds the fragments over the `free` after the
+//! `ftyp`, another output over what is written.
 //!
 //! A demuxer reads the source as the `demux` example does, seeking to the
 //! bytes it wants. Its movie goes to a muxer as it is, and the samples the
@@ -47,7 +52,7 @@ const SAMPLES_PER_RUN: usize = 64;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut arguments = env::args().skip(1);
-    let usage = "usage: remux <source> <destination> (fragmented [--random-access] | non-fragmented | segment [--segment-index])";
+    let usage = "usage: remux <source> <destination> (fragmented [--random-access] | non-fragmented [--recoverable] | segment [--segment-index])";
     let (source, destination, structure, option) = (
         arguments.next().ok_or(usage)?,
         arguments.next().ok_or(usage)?,
@@ -63,7 +68,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             options.movie_fragment_random_access = option.is_some();
             Muxer::fragmented(options)
         }
-        ("non-fragmented", None) => Muxer::non_fragmented(NonFragmentedOptions::default()),
+        ("non-fragmented", option @ (None | Some("--recoverable"))) => {
+            let mut options = NonFragmentedOptions::default();
+            options.recoverable = option.is_some();
+            Muxer::non_fragmented(options)
+        }
         ("segment", option @ (None | Some("--segment-index"))) => {
             let mut options = SegmentOptions::default();
             if option.is_some() {
@@ -76,6 +85,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         _ => return Err(usage.into()),
     };
     let file_structure = muxer.file_structure();
+    let writes_fragments = file_structure != FileStructure::NonFragmented
+        || option.as_deref() == Some("--recoverable");
     let mut source = BufReader::new(File::open(source)?);
     let mut destination = Destination {
         file: File::create(destination)?,
@@ -103,7 +114,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         pending.extend(std::iter::from_fn(|| demuxer.poll_sample()));
         if let Some(DemuxEvent::Movie { .. }) = event? {
             let movie = demuxer.movie().ok_or("moov without its value")?.clone();
-            let file_type = brands_of(file_structure, demuxer.file_type());
+            let file_type = brands_of(writes_fragments, demuxer.file_type());
             if file_structure == FileStructure::Segment {
                 let mut initialization = Muxer::fragmented(FragmentedOptions::default());
                 initialization.handle_file_type(file_type.clone())?;
@@ -175,16 +186,16 @@ fn sample_count(path: &str) -> Result<u64, Box<dyn Error>> {
 
 /// Returns the brands of the destination, made of those of the source, `file_type`
 ///
-/// A fragmented file or a segment takes brands that name one of `iso5` to
-/// `isod`: the source's, with `iso6` added where they name none.
-fn brands_of(file_structure: FileStructure, file_type: Option<&FileTypeBox>) -> FileTypeBox {
+/// A file the muxer writes movie fragments of, a recoverable one too, or a
+/// segment takes brands that name one of `iso5` to `isod`: the source's, with
+/// `iso6` added where they name none.
+fn brands_of(writes_fragments: bool, file_type: Option<&FileTypeBox>) -> FileTypeBox {
     let mut file_type = file_type.cloned().unwrap_or_else(|| {
         let mut brands = FileTypeBox::default();
         brands.major_brand = FourCc::new(*b"mp41");
         brands
     });
-    if file_structure != FileStructure::NonFragmented && !supports_default_base_is_moof(&file_type)
-    {
+    if writes_fragments && !supports_default_base_is_moof(&file_type) {
         file_type.compatible_brands.push(FourCc::new(*b"iso6"));
     }
     file_type
