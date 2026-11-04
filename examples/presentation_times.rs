@@ -18,7 +18,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 
 use isobmff::timeline::Timeline;
-use isobmff::{DemuxEvent, Demuxer};
+use isobmff_mux::{DemuxEvent, Demuxer};
 
 /// Presentations of a sample listed, past which a repeated edit list is cut short
 const LISTED: usize = 4;

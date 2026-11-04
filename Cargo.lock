@@ -212,6 +212,7 @@ name = "examples"
 version = "0.0.0"
 dependencies = [
  "isobmff",
+ "isobmff-mux",
  "rustls",
  "ureq",
 ]
@@ -287,9 +288,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "isobmff-mux"
+version = "0.0.0"
+dependencies = [
+ "isobmff",
+ "isobmff-boxes",
+ "isobmff-core",
+ "isobmff-test-support",
+ "miniz_oxide",
+]
+
+[[package]]
 name = "isobmff-test-support"
 version = "0.0.0"
 dependencies = [
+ "isobmff-boxes",
+ "isobmff-core",
  "serde_json",
 ]
 

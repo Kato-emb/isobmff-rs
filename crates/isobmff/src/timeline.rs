@@ -7,7 +7,7 @@
 //! [`Timeline`] returns, for a sample, the [`Presentation`]s of it that the
 //! edits make: none where no edit presents it, one each time an edit does.
 //!
-//! The demuxer returns samples at their decoding times; a caller that
+//! A reader returns samples at their decoding times; a caller that
 //! presents them, or states their presentation times, maps them here.
 //!
 //! ```

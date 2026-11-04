@@ -205,7 +205,6 @@ fn record(
             }
             recorded.push(Recorded::End);
         }
-        event => panic!("unknown event {event:?}"),
     }
     if copy.copying {
         write(copy, bytes, event);

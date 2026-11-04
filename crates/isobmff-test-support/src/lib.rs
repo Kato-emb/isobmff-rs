@@ -8,6 +8,8 @@
 //! The functions panic on what they cannot read: they serve tests, which fail
 //! on a panic.
 
+pub mod fixtures;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

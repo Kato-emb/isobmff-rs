@@ -23,11 +23,12 @@ use std::env;
 use std::error::Error;
 use std::io::Read;
 
+use isobmff::BoxDefinition;
 use isobmff::boxes::{
     DataEntry, FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox,
     SegmentIndexBox, SegmentTypeBox,
 };
-use isobmff::{BoxDefinition, DemuxEvent, Demuxer};
+use isobmff_mux::{DemuxEvent, Demuxer};
 use ureq::Agent;
 use ureq::tls::{RootCerts, TlsConfig};
 

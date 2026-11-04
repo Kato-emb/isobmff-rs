@@ -1,4 +1,4 @@
-//! [`SegmentIndex`] and [`Subsegment`], a `sidx` resolved to the byte ranges and the times of the subsegments it indexes, and the `sidx` of the subsegments a muxer writes
+//! [`SegmentIndex`] and [`Subsegment`], a `sidx` resolved to the byte ranges and the times of the subsegments it indexes, and the `sidx` of the subsegments a writer writes
 
 use alloc::vec::Vec;
 use core::ops::Range;

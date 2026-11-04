@@ -49,6 +49,7 @@
 //! ```
 
 mod compressed;
+mod file_structure;
 mod movie_fragment;
 mod random_access;
 mod reader;
@@ -57,6 +58,7 @@ mod sample_table;
 mod segment_index;
 mod writer;
 
+pub use file_structure::{FragmentedOptions, SegmentOptions};
 pub use random_access::movie_fragment_random_access_start;
 pub use reader::{SampleLocations, StructureDataLimits, StructureDataReader};
 pub use sample_description::{

@@ -38,10 +38,6 @@ jobs:
         run: |
           ! grep -rnE '//.*\b(TODO|FIXME)\b' --include='*.rs' . \
             | grep -vE '(TODO|FIXME)\([^)]+\)|#[0-9]+|https?://'
-      # A layer's items are public or private to the layer, so that the demuxer,
-      # the muxer and fast start use only what another reader or writer could.
-      - name: Forbid crate-wide items in a layer, and private paths in a composition
-        run: scripts/check-layer-visibility.sh
 
   # Every feature combination, so a path that only a non-default set of
   # features compiles is linted as well, the alloc-free one among them.
@@ -86,10 +82,10 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo llvm-cov nextest --no-report --workspace --all-features --no-tests=pass
-      # The library without its features, apart from the workspace: the
+      # The libraries without their features, apart from the workspace: the
       # examples take on `compressed-boxes`, and a run of the whole workspace
-      # would build the library with it.
-      - run: cargo llvm-cov nextest --no-report -p isobmff --no-tests=pass
+      # would build the libraries with it.
+      - run: cargo llvm-cov nextest --no-report -p isobmff -p isobmff-mux --no-tests=pass
       # The report informs and never gates, so it cannot fail the job either; it
       # has nothing to report while no code is covered, as in a crate with no
       # items.
@@ -163,7 +159,7 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo check --workspace --exclude isobmff-test-support --target thumbv7em-none-eabihf
-      - run: cargo check -p isobmff --features compressed-boxes --target thumbv7em-none-eabihf
+      - run: cargo check -p isobmff -p isobmff-mux --features compressed-boxes --target thumbv7em-none-eabihf
 
   # Doctests run here, once: they are not instrumented in the coverage job
   # (that needs a nightly toolchain), and the code behaves the same on every host.
@@ -232,7 +228,7 @@ jobs:
         with:
           path: ${{ runner.temp }}/conformance
           key: conformance-${{ hashFiles('scripts/fetch-conformance.sh') }}
-      - run: ISOBMFF_CONFORMANCE_DIR="$RUNNER_TEMP/conformance" ISOBMFF_FFPROBE="$RUNNER_TEMP/ffprobe" cargo nextest run -p isobmff-core -p isobmff-boxes -p isobmff --all-features --run-ignored only
+      - run: ISOBMFF_CONFORMANCE_DIR="$RUNNER_TEMP/conformance" ISOBMFF_FFPROBE="$RUNNER_TEMP/ffprobe" cargo nextest run -p isobmff-core -p isobmff-boxes -p isobmff -p isobmff-mux --all-features --run-ignored only
 
   # Each fuzz target for a fixed time, seeded with the conformance files. A
   # failure is a bug, so it blocks the merge. Bounded by time rather than by a

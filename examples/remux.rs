@@ -42,10 +42,9 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 
 use isobmff::boxes::FileTypeBox;
-use isobmff::{
-    DemuxEvent, Demuxer, FileStructure, FourCc, FragmentedOptions, Muxer, NonFragmentedOptions,
-    SegmentOptions, supports_default_base_is_moof,
-};
+use isobmff::structure_data::{FragmentedOptions, SegmentOptions};
+use isobmff::{FourCc, supports_default_base_is_moof};
+use isobmff_mux::{DemuxEvent, Demuxer, FileStructure, Muxer, NonFragmentedOptions};
 
 /// Samples the muxer takes in one call: one `moof` and `mdat`, or one `mdat`
 const SAMPLES_PER_RUN: usize = 64;

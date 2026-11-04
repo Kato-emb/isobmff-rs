@@ -26,7 +26,6 @@ use crate::byte_range::ByteRange;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ReadError {
     /// Input starts past the file offset the reader wants next
-    #[non_exhaustive]
     UnwantedInput {
         /// File offset the input starts at
         offset: u64,
@@ -34,16 +33,13 @@ pub enum ReadError {
         wanted: ByteRange,
     },
     /// Input arrives before the header just read is answered with a gather, a stream or a skip
-    #[non_exhaustive]
     UndecidedBox {
         /// Type of the box the header opens
         box_type: BoxType,
     },
     /// Gather, stream or skip asked for while no header waits for an answer
-    #[non_exhaustive]
     NoOpenBox,
     /// Payload of a box being gathered reaches past the limit it was gathered with, or that of a compressed box inflates past the limit it was inflated with
-    #[non_exhaustive]
     PayloadLimitExceeded {
         /// Type of the box
         box_type: BoxType,
@@ -53,7 +49,6 @@ pub enum ReadError {
         limit_bytes: u64,
     },
     /// File ends inside the header of a box
-    #[non_exhaustive]
     UnfinishedHeader {
         /// Length the header reaches
         needed_bytes: u64,
@@ -61,7 +56,6 @@ pub enum ReadError {
         available_bytes: u64,
     },
     /// File ends inside a box, before the total its header declares
-    #[non_exhaustive]
     UnfinishedBox {
         /// Type of the box
         box_type: BoxType,
@@ -71,13 +65,11 @@ pub enum ReadError {
         available_bytes: u64,
     },
     /// Box of which a file holds at most one arrives a second time
-    #[non_exhaustive]
     DuplicateBox {
         /// Type of the box
         box_type: BoxType,
     },
     /// Structure-data declares more samples than the limit it is resolved with
-    #[non_exhaustive]
     SampleCountLimitExceeded {
         /// Number of samples the `moov` or the `moof` declares
         declared_samples: u64,
@@ -91,7 +83,6 @@ pub enum ReadError {
     /// another number of samples than the track has, or an `stss` that marks
     /// sample numbers out of order, is read past, as a
     /// [`Leniency::SampleTable`](crate::Leniency::SampleTable).
-    #[non_exhaustive]
     SampleTableMismatch {
         /// `track_ID` of the track
         track_id: u32,
@@ -99,7 +90,6 @@ pub enum ReadError {
         box_type: BoxType,
     },
     /// Samples described by a sample entry their track has none of
-    #[non_exhaustive]
     UnknownSampleDescriptionIndex {
         /// `track_ID` of the track
         track_id: u32,
@@ -107,7 +97,6 @@ pub enum ReadError {
         sample_description_index: u32,
     },
     /// Sample entry that names an entry of a data reference its track has none of
-    #[non_exhaustive]
     UnknownDataReferenceIndex {
         /// `track_ID` of the track
         track_id: u32,
@@ -115,7 +104,6 @@ pub enum ReadError {
         data_reference_index: u16,
     },
     /// Samples of the movie whose data reference entry is a `DataEntrySeqNumImdaBox`, which names only the media data of samples in a movie fragment, §8.7.2
-    #[non_exhaustive]
     UnsupportedDataReference {
         /// `track_ID` of the track
         track_id: u32,
@@ -123,40 +111,33 @@ pub enum ReadError {
         data_reference_index: u16,
     },
     /// Movie fragment that arrives before the movie it extends
-    #[non_exhaustive]
     MissingMovie,
     /// Track fragment of a track the movie has none of
-    #[non_exhaustive]
     UnknownTrackId {
         /// `track_ID` the `tfhd` gives
         track_id: u32,
     },
     /// Track fragment of a track the `mvex` of the movie gives no `trex` for
-    #[non_exhaustive]
     MissingTrackExtends {
         /// `track_ID` of the track
         track_id: u32,
     },
     /// Track fragment without a `tfdt` whose decoding time is not known, as after a reader resumes
-    #[non_exhaustive]
     MissingDecodingTime {
         /// `track_ID` of the track
         track_id: u32,
     },
     /// Media data of a sample that lies outside the file offsets 64 bits count, or, in a file with compressed boxes, in the box a compressed box replaces (§8.16.1)
-    #[non_exhaustive]
     DataOffsetOutOfRange {
         /// `track_ID` of the track
         track_id: u32,
     },
     /// Decoding time of a sample past what 64 bits carry
-    #[non_exhaustive]
     DecodingTimeOverflow {
         /// `track_ID` of the track
         track_id: u32,
     },
     /// Leniencies that would take those a reader keeps past the limit it keeps them up to
-    #[non_exhaustive]
     LeniencyCountLimitExceeded {
         /// Number of leniencies the reader would keep
         retained_leniencies: u64,
@@ -164,7 +145,6 @@ pub enum ReadError {
         limit_leniencies: u64,
     },
     /// `IdentifiedMediaDataBox` that would take those a reader keeps the places of past the limit it keeps them up to
-    #[non_exhaustive]
     IdentifiedMediaDataCountLimitExceeded {
         /// Number of `IdentifiedMediaDataBox`es the reader would keep the places of
         retained_identified_media_data: u64,
@@ -172,7 +152,6 @@ pub enum ReadError {
         limit_identified_media_data: u64,
     },
     /// Samples whose `IdentifiedMediaDataBox` is not read yet that would take those a reader holds past the limit it holds them up to
-    #[non_exhaustive]
     UnresolvedSampleCountLimitExceeded {
         /// Number of samples the reader would hold
         unresolved_samples: u64,
@@ -180,37 +159,31 @@ pub enum ReadError {
         limit_samples: u64,
     },
     /// `IdentifiedMediaDataBox` whose `imda_identifier` one read before has, §8.1.4
-    #[non_exhaustive]
     DuplicateIdentifiedMediaData {
         /// `imda_identifier` of the box
         identifier: u32,
     },
     /// File that ends with samples whose media data is in an `IdentifiedMediaDataBox` it does not have, §8.7.2
-    #[non_exhaustive]
     UnresolvedIdentifiedMediaData {
         /// `imda_identifier` the samples' data reference names
         identifier: u32,
     },
     /// Compressed box whose payload is neither a deflate stream nor a gzip member, or a gzip member whose CRC-32 or length does not match what it inflates to, §8.16.1
-    #[non_exhaustive]
     UnreadableCompressedData {
         /// Type of the compressed box
         box_type: BoxType,
     },
     /// File that has both a compressed box and a `MovieFragmentRandomAccessBox`, which §8.16.1 does not let a file with compressed boxes have
-    #[non_exhaustive]
     CompressedBoxWithMovieFragmentRandomAccess {
         /// Type of the compressed box
         box_type: BoxType,
     },
     /// Compressed box that grows or shrinks when read back, and starts before the media data of a sample located without it, §8.16.2.2 NOTE 3
-    #[non_exhaustive]
     CompressedBoxBeforeLocatedSample {
         /// Type of the compressed box
         box_type: BoxType,
     },
     /// Compressed box that would take the compressed boxes a reader keeps the places of past the limit it keeps them up to
-    #[non_exhaustive]
     CompressedBoxCountLimitExceeded {
         /// Number of compressed boxes the reader would keep
         retained_compressed_boxes: u64,
@@ -222,13 +195,11 @@ pub enum ReadError {
     /// The offset counts from the start of the file as its compressed boxes
     /// read back, and the compressed boxes before the box the reader resumed
     /// at may not have been read.
-    #[non_exhaustive]
     DataOffsetPastSkippedCompressedBoxes {
         /// `track_ID` of the track
         track_id: u32,
     },
     /// Segment index that would take the segment indexes a reader keeps past the limit it keeps them up to
-    #[non_exhaustive]
     SegmentIndexCountLimitExceeded {
         /// Number of segment indexes the reader would keep
         retained_segment_indexes: u64,
@@ -236,7 +207,6 @@ pub enum ReadError {
         limit_segment_indexes: u64,
     },
     /// Segment index whose subsegments would take those a reader keeps past the limit it keeps them up to
-    #[non_exhaustive]
     SubsegmentCountLimitExceeded {
         /// Number of subsegments the reader would keep
         retained_subsegments: u64,
@@ -244,13 +214,11 @@ pub enum ReadError {
         limit_subsegments: u64,
     },
     /// Segment index whose byte ranges or presentation times run past 64 bits
-    #[non_exhaustive]
     SegmentIndexOutOfRange {
         /// Stream ID of the reference stream of the `sidx`
         reference_id: u32,
     },
     /// Sample locations that would take the locations a reader holds past the limit it holds them up to
-    #[non_exhaustive]
     HeldLocationLimitExceeded {
         /// Number of locations the reader would hold
         held_locations: u64,
@@ -258,7 +226,6 @@ pub enum ReadError {
         limit_locations: u64,
     },
     /// Sample location whose media data is longer than the limit a reader holds one sample up to
-    #[non_exhaustive]
     SampleBytesLimitExceeded {
         /// Length of the media data the location names
         declared_bytes: u64,
@@ -266,7 +233,6 @@ pub enum ReadError {
         limit_bytes: u64,
     },
     /// Input that would have a reader allocate the media data of a sample past the limit of the bytes it holds, and of which it takes nothing
-    #[non_exhaustive]
     HeldBytesLimitExceeded {
         /// Bytes the reader would hold allocated for samples not yet taken
         held_bytes: u64,
@@ -274,7 +240,6 @@ pub enum ReadError {
         limit_bytes: u64,
     },
     /// Input ends before the media data of a sample has arrived
-    #[non_exhaustive]
     UnfinishedSample {
         /// `track_ID` of the track the sample is of
         track_id: u32,
@@ -284,7 +249,6 @@ pub enum ReadError {
         available_bytes: u64,
     },
     /// Box does not read off its bytes
-    #[non_exhaustive]
     Box {
         /// Why it does not
         error: Error,

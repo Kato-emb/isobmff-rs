@@ -25,9 +25,8 @@
 
 #![no_main]
 
-use isobmff::{
-    BoxType, ByteRange, DemuxEvent, DemuxLimits, Demuxer, ReadError, Sample, SampleLocation,
-};
+use isobmff::{BoxType, ByteRange, ReadError, Sample, SampleLocation};
+use isobmff_mux::{DemuxEvent, DemuxLimits, Demuxer};
 use libfuzzer_sys::fuzz_target;
 
 /// Lengths the file is cut into, each cut taking its lengths in turn, short ones followed by a long one

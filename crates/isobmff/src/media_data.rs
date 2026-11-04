@@ -7,18 +7,18 @@
 //! A [`MediaDataWriter`], the other way, lays the media data of samples
 //! written together into an `mdat`, and returns the location of each.
 //!
-//! The writers of the layers write a file without a
-//! [`Muxer`](crate::Muxer): here a fragmented movie file, each `moof` its
+//! The writers of the layers write a file: here a fragmented movie file,
+//! each `moof` its
 //! [`MovieFragmentWriter`](crate::structure_data::MovieFragmentWriter)
 //! returns followed by the `mdat` of its samples, which a
-//! [`Demuxer`](crate::Demuxer) reads back.
+//! [`MediaDataReader`] gathers back out of the file.
 //!
 //! ```
 //! use isobmff::boxes::{DataEntry, DataEntryUrlBox, FileTypeBox, MovieBox, SampleDescription, SampleEntry, TrackBox};
 //! use isobmff::framing::{BoxEvent, BoxWriter};
-//! use isobmff::media_data::MediaDataWriter;
-//! use isobmff::structure_data::MovieFragmentWriter;
-//! use isobmff::{BoxDefinition, BoxEncode, BoxHeader, Demuxer, FourCc, FragmentedOptions, Sample, SampleProperties};
+//! use isobmff::media_data::{MediaDataLimits, MediaDataReader, MediaDataWriter};
+//! use isobmff::structure_data::{FragmentedOptions, MovieFragmentWriter};
+//! use isobmff::{BoxDefinition, BoxEncode, BoxHeader, FourCc, Sample, SampleProperties};
 //! # use core::error::Error;
 //!
 //! /// Writes `value` as the next box at file level through `boxes`, onto `file`
@@ -68,6 +68,7 @@
 //!
 //! // Each `moof`, then the `mdat` of its samples where the `moof` locates them
 //! let media_data = MediaDataWriter::new();
+//! let mut written = Vec::new();
 //! for samples in &fragments_of_samples {
 //!     let header = media_data.header(samples)?;
 //!     let (moof, locations) = fragments.movie_fragment(samples, boxes.next_offset(), header.encoded_len())?;
@@ -75,26 +76,20 @@
 //!     let (mdat, placed) = media_data.write(fragments.movie(), &mut boxes, header, samples)?;
 //!     file.extend_from_slice(&mdat);
 //!     assert_eq!(placed, locations);
+//!     written.extend(locations);
 //! }
 //! boxes.finish()?;
 //!
-//! // A demuxer reads the same samples back
-//! let mut demuxer = Demuxer::new();
-//! let mut samples = Vec::new();
-//! loop {
-//!     let event = match demuxer.wanted_input() {
-//!         Some(wanted) => match file.get(usize::try_from(wanted.offset())?..).unwrap_or_default() {
-//!             [] => demuxer.finish(),
-//!             input => demuxer.handle_input(wanted.offset(), input),
-//!         },
-//!         None => match demuxer.finish() {
-//!             Ok(None) => break,
-//!             finished => finished,
-//!         },
-//!     };
-//!     samples.extend(core::iter::from_fn(|| demuxer.poll_sample()));
-//!     event?;
-//! }
+//! // A media data reader gathers the same samples back out of the file
+//! let mut reader = MediaDataReader::new(MediaDataLimits {
+//!     held_location_count: 16,
+//!     sample_bytes: 16,
+//!     held_bytes: 1024,
+//! });
+//! reader.handle_sample_locations(written)?;
+//! reader.handle_input(0, &file)?;
+//! reader.finish()?;
+//! let samples: Vec<Sample> = core::iter::from_fn(|| reader.poll_sample()).collect();
 //! assert_eq!(samples, fragments_of_samples.concat());
 //! # Ok::<(), Box<dyn Error>>(())
 //! ```

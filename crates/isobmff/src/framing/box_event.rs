@@ -9,7 +9,10 @@ use isobmff_core::BoxHeader;
 /// [`Header`](Self::Header), the pieces of its payload as
 /// [`Payload`](Self::Payload)s, then its [`End`](Self::End). Where a box lies
 /// in the file is asked of the reader or the writer, not carried here.
-#[non_exhaustive]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a box reads as its header, its payload and its end, ISO/IEC 14496-12 §4.2.2, and no other event"
+)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BoxEvent<'a> {
     /// Header that opens a box
@@ -33,7 +36,10 @@ impl BoxEvent<'_> {
 }
 
 /// Which of the [`BoxEvent`]s an event is, without what it carries
-#[non_exhaustive]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the kinds are those of the events of a box, its header, its payload and its end, ISO/IEC 14496-12 §4.2.2"
+)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum BoxEventKind {
     /// [`BoxEvent::Header`]

@@ -1,11 +1,9 @@
 //! [`MuxError`], the reasons a muxer does not write samples into a file
 
-use core::error;
-use core::fmt;
+use core::{error, fmt};
 
+use isobmff::WriteError;
 use isobmff_core::{BoxType, FourCc};
-
-use crate::WriteError;
 
 /// Reason a [`Muxer`](crate::Muxer) does not write samples into a file
 ///
@@ -17,28 +15,23 @@ use crate::WriteError;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum MuxError {
     /// Boxes that do not write
-    #[non_exhaustive]
     Write {
         /// Why they do not
         error: WriteError,
     },
     /// Box of a type the file holds one of, offered again
-    #[non_exhaustive]
     DuplicateBox {
         /// Type of the box
         box_type: BoxType,
     },
     /// Box offered after a box it goes before in the file
-    #[non_exhaustive]
     BoxOutOfOrder {
         /// Type of the box offered
         box_type: BoxType,
     },
     /// Samples, or the end of the file, offered before the movie that declares their tracks
-    #[non_exhaustive]
     MissingMovie,
     /// Recoverable file that holds more samples than the muxer keeps the locations of, which it does not lay out again as a file that is not fragmented; the file written is a fragmented movie file whole
-    #[non_exhaustive]
     NotFinalised {
         /// Number of samples written
         held_locations: u64,
@@ -46,7 +39,6 @@ pub enum MuxError {
         limit_locations: u64,
     },
     /// Brands of a fragmented file or a segment that name none of `iso5` to `isod`, under which a reader takes the `moof` as the base data offset of a track fragment, §8.8.7.1
-    #[non_exhaustive]
     UnsupportedBrand {
         /// The major brand
         brand: FourCc,

@@ -37,7 +37,6 @@ pub enum Leniency {
     /// the last duration of the `stts`, or zero for the values the other
     /// tables state. A table past them has the rest of its entries left out,
     /// and so has an `stss` the sample numbers it marks out of order.
-    #[non_exhaustive]
     SampleTable {
         /// `track_ID` of the track
         track_id: u32,
@@ -51,7 +50,6 @@ pub enum Leniency {
     /// ISO/IEC 14496-12 §8.8.12 does not allow it. The first sample of the
     /// track fragment takes the decoding time of the `tfdt`, as FFmpeg reads
     /// it, so the samples of the track overlap by as much.
-    #[non_exhaustive]
     DecodingTimeOverlap {
         /// `track_ID` of the track
         track_id: u32,
@@ -65,7 +63,6 @@ pub enum Leniency {
     /// has returned that sample with the duration it declares, so its first
     /// sample of the track fragment takes the decoding time of the `tfdt`,
     /// and the extension is the gap between the two.
-    #[non_exhaustive]
     DecodingTimeGap {
         /// `track_ID` of the track
         track_id: u32,
@@ -79,19 +76,16 @@ pub enum Leniency {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum SampleTableDisagreement {
     /// The table states fewer samples than the track has
-    #[non_exhaustive]
     Short {
         /// Number of samples past the end of the table
         missing_samples: u64,
     },
     /// The table states samples past the last one of the track
-    #[non_exhaustive]
     Long {
         /// Number of samples the table states past the last one of the track
         excess_samples: u64,
     },
     /// The `stss` marks sample numbers that do not follow the one it marks before them in increasing order
-    #[non_exhaustive]
     Unordered {
         /// Number of sample numbers marked out of order
         sample_numbers: u64,

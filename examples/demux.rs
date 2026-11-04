@@ -22,11 +22,12 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 
+use isobmff::BoxDefinition;
 use isobmff::boxes::{
     DataEntry, FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox,
     SegmentIndexBox, SegmentTypeBox,
 };
-use isobmff::{BoxDefinition, DemuxEvent, Demuxer};
+use isobmff_mux::{DemuxEvent, Demuxer};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let path = env::args().nth(1).ok_or("usage: demux <file>")?;

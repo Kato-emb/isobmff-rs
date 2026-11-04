@@ -14,8 +14,8 @@ use super::random_access::RandomAccessTables;
 use super::sample_description::located_in_file;
 use super::sample_table::{TrackTable, take_sample_tables};
 use super::segment_index::SubsegmentTable;
+use super::{FragmentedOptions, SegmentOptions};
 use crate::error::WriteError;
-use crate::file_structure::{FragmentedOptions, SegmentOptions};
 use crate::sample::{Sample, SampleLocation};
 use crate::timeline;
 
@@ -476,8 +476,8 @@ mod tests {
 
     use super::{MovieFragmentWriter, SampleTableWriter};
     use crate::error::WriteError;
-    use crate::file_structure::FragmentedOptions;
     use crate::sample::{DataReferenceKey, Sample, SampleLocation, SampleProperties};
+    use crate::structure_data::FragmentedOptions;
     use crate::structure_data::StructureDataReader;
     use crate::structure_data::fixtures::{
         UNLIMITED, encoded, in_another_file, laid_out, movie, track, written,
@@ -834,36 +834,6 @@ mod tests {
         include_bytes!("../../tests/data/movie.mp4"),
         include_bytes!("../../tests/data/out_of_order.mp4"),
     ];
-
-    #[test]
-    fn the_moov_written_from_the_locations_of_samples_written_is_the_moov_written_from_the_samples()
-    {
-        for file in FILES {
-            let movie = movie_of(file);
-            let samples = locations_of(&movie).into_iter().map(|location| {
-                let range = location.byte_range();
-                let data = file.get(
-                    usize::try_from(range.start).unwrap()..usize::try_from(range.end).unwrap(),
-                );
-                Sample::new(*location.properties(), data.unwrap().to_vec())
-            });
-            let mut muxer = crate::Muxer::non_fragmented(crate::NonFragmentedOptions::default());
-            muxer.handle_movie(movie.clone()).unwrap();
-            muxer.handle_samples(samples).unwrap();
-            muxer.finish().unwrap();
-            let written: Vec<Vec<u8>> = core::iter::from_fn(|| muxer.poll_output())
-                .map(crate::output::Output::into_bytes)
-                .collect();
-            let written_moov = written.last().unwrap();
-
-            let mut writer = SampleTableWriter::new(movie).unwrap();
-            writer
-                .handle_locations(&locations_of(&MovieBox::decode(written_moov).unwrap().0))
-                .unwrap();
-
-            assert_eq!(&encoded(writer.finish()), written_moov);
-        }
-    }
 
     #[test]
     fn the_moov_written_from_the_locations_of_a_file_declares_them_where_they_lie() {

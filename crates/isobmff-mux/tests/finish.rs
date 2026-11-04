@@ -6,7 +6,7 @@
 
 #[cfg(test)]
 mod tests {
-    use isobmff::{DemuxEvent, Demuxer};
+    use isobmff_mux::{DemuxEvent, Demuxer};
 
     /// `ftyp`, the `moov` of track 1 whose data reference names the `imda` of the sequence number of the `moof`, that `moof`, and the `imda` of its two samples, whose size runs to the end of the file
     const IMDA_TO_END_OF_FILE: &[u8] =

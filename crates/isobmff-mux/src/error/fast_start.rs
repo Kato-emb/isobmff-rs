@@ -1,9 +1,8 @@
 //! [`FastStartError`], the reasons a movie file does not lay out again with its `moov` first
 
-use core::error;
-use core::fmt;
+use core::{error, fmt};
 
-use super::{ReadError, WriteError};
+use isobmff::{ReadError, WriteError};
 
 /// Reason a movie file does not lay out again with its `moov` first
 ///
@@ -13,28 +12,22 @@ use super::{ReadError, WriteError};
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum FastStartError {
     /// Boxes of the file that do not read
-    #[non_exhaustive]
     Read {
         /// Why they do not
         error: ReadError,
     },
     /// `moov` laid out again that does not write, as a [`Muxer`](crate::Muxer) writes one and fails to
-    #[non_exhaustive]
     Write {
         /// Why it does not
         error: WriteError,
     },
     /// File that has ended without a `moov`
-    #[non_exhaustive]
     MissingMovie,
     /// Fragmented movie file: a `moof` at file level, or a `moov` with an `mvex`, §8.8
-    #[non_exhaustive]
     FragmentedMovie,
     /// `ItemLocationBox` that locates items by file offsets in the file itself, which the machine does not move, §8.11.3
-    #[non_exhaustive]
     ItemLocationsInFile,
     /// Chunk or sample auxiliary information offset in the file itself that lies in no box of the file, §8.7.5, §8.7.9
-    #[non_exhaustive]
     OffsetOutOfFile {
         /// `track_ID` of the track
         track_id: u32,
@@ -42,7 +35,6 @@ pub enum FastStartError {
         offset: u64,
     },
     /// Chunk or sample auxiliary information offset into the `moov` itself, which laying the `moov` out again does not keep in place, §8.7.5, §8.7.9
-    #[non_exhaustive]
     OffsetInMovie {
         /// `track_ID` of the track
         track_id: u32,
@@ -50,7 +42,6 @@ pub enum FastStartError {
         offset: u64,
     },
     /// Box at file level past the number the machine keeps the places of
-    #[non_exhaustive]
     BoxCountLimitExceeded {
         /// Number of boxes at file level the machine keeps the places of
         limit_boxes: u64,

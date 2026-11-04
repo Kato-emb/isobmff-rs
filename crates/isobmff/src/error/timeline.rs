@@ -8,13 +8,11 @@ use core::fmt;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum TimelineError {
     /// Track the movie has none of
-    #[non_exhaustive]
     UnknownTrackId {
         /// `track_ID` asked for
         track_id: u32,
     },
     /// Edit whose `media_time` is negative and not the −1 of an empty edit
-    #[non_exhaustive]
     InvalidMediaTime {
         /// `track_ID` of the track
         track_id: u32,
@@ -22,7 +20,6 @@ pub enum TimelineError {
         media_time: i64,
     },
     /// Edit list of a movie whose `mvhd` states a timescale of 0, in which its edit durations count
-    #[non_exhaustive]
     MissingMovieTimescale {
         /// `track_ID` of the track
         track_id: u32,
