@@ -115,26 +115,39 @@ pub(super) fn data_reference(movie: &MovieBox, key: DataReferenceKey) -> Option<
 /// Writing a file refuses these samples, each with the kind of the same name
 /// in [`MuxError`]. Reading a file refuses the same ones but those whose
 /// media data is in another file, which it locates in that file.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum DataReferenceRefusal {
+#[non_exhaustive]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DataReferenceRefusal {
     /// The `stsd` has no entry `sample_description_index`, or the entry is too short to hold a `data_reference_index`
+    #[non_exhaustive]
     UnknownSampleDescriptionIndex {
+        /// `track_ID` of the track
         track_id: u32,
+        /// Index, from 1, of the sample entry
         sample_description_index: u32,
     },
     /// The `dref` has no entry `data_reference_index`
+    #[non_exhaustive]
     UnknownDataReferenceIndex {
+        /// `track_ID` of the track
         track_id: u32,
+        /// Index, from 1, the sample entry gives
         data_reference_index: u16,
     },
     /// The entry names a file other than the file itself (§8.7.2)
+    #[non_exhaustive]
     ExternalDataReference {
+        /// `track_ID` of the track
         track_id: u32,
+        /// Index, from 1, of the entry of the `dref` that names the file
         data_reference_index: u16,
     },
     /// The entry names an `IdentifiedMediaDataBox`
+    #[non_exhaustive]
     UnsupportedDataReference {
+        /// `track_ID` of the track
         track_id: u32,
+        /// Index, from 1, of the entry of the `dref` that names the box
         data_reference_index: u16,
     },
 }
@@ -181,7 +194,29 @@ impl From<DataReferenceRefusal> for MuxError {
 /// * The [`DataReferenceRefusal`] of a sample entry the `stsd` has none of,
 ///   of a data reference entry the `dref` has none of, and of one that names
 ///   another file or an `IdentifiedMediaDataBox`.
-pub(crate) fn data_reference_index(
+///
+/// # Examples
+///
+/// ```
+/// use isobmff::boxes::{DataEntry, DataEntryUrlBox, SampleDescription, SampleEntry, TrackBox};
+/// use isobmff::structure_data::{DataReferenceRefusal, data_reference_index};
+///
+/// // A track whose sample entry names its only data reference entry, the file itself
+/// let mut trak = TrackBox::default();
+/// trak.tkhd.track_id = 1;
+/// let mut entry = SampleEntry::default();
+/// entry.data_reference_index = 1;
+/// trak.mdia.minf.stbl.stsd.sample_descriptions = vec![SampleDescription::Typed(entry)];
+/// trak.mdia.minf.dinf.dref.data_entries = vec![DataEntry::Url(DataEntryUrlBox::default())];
+/// assert_eq!(data_reference_index(&trak, 1), Ok(1));
+///
+/// // The `stsd` has no second entry
+/// assert!(matches!(
+///     data_reference_index(&trak, 2),
+///     Err(DataReferenceRefusal::UnknownSampleDescriptionIndex { .. })
+/// ));
+/// ```
+pub fn data_reference_index(
     trak: &TrackBox,
     sample_description_index: u32,
 ) -> Result<u16, DataReferenceRefusal> {
@@ -301,11 +336,13 @@ fn nth_from_one<Entry>(entries: &[Entry], index: u32) -> Option<&Entry> {
     entries.get(usize::try_from(index.checked_sub(1)?).ok()?)
 }
 
-/// Returns the location of each of `samples` of the tracks of `movie`, their media data one after another in their order from file offset `data_offset`
+/// Returns the location of each of `samples` of the tracks of `movie`, their media data placed in the file itself one after another in their order from file offset `data_offset`
 ///
 /// Each location carries the key a
 /// [`StructureDataReader`](super::StructureDataReader) gives the data
-/// reference entry the sample entry of its sample names (§8.7.2).
+/// reference entry the sample entry of its sample names (§8.7.2), so the
+/// locations of samples a writer places itself are those a reader of the
+/// file resolves.
 ///
 /// # Errors
 ///
@@ -319,7 +356,38 @@ fn nth_from_one<Entry>(entries: &[Entry], index: u32) -> Option<&Entry> {
 ///   reference entry that is not the file itself.
 /// * [`DataOffsetOutOfRange`](MuxError::DataOffsetOutOfRange): the media
 ///   data of a sample lies past 64-bit file offsets.
-pub(crate) fn laid_out(
+///
+/// # Examples
+///
+/// ```
+/// use isobmff::boxes::{DataEntry, DataEntryUrlBox, MovieBox, SampleDescription, SampleEntry, TrackBox};
+/// use isobmff::structure_data::located_in_file;
+/// use isobmff::{Sample, SampleProperties};
+///
+/// # let mut trak = TrackBox::default();
+/// # trak.tkhd.track_id = 1;
+/// # let mut entry = SampleEntry::default();
+/// # entry.data_reference_index = 1;
+/// # trak.mdia.minf.stbl.stsd.sample_descriptions = vec![SampleDescription::Typed(entry)];
+/// # trak.mdia.minf.dinf.dref.data_entries = vec![DataEntry::Url(DataEntryUrlBox::default())];
+/// # let mut movie = MovieBox::default();
+/// # movie.trak = vec![trak];
+/// # let properties = SampleProperties {
+/// #     track_id: 1,
+/// #     decoding_time: 0,
+/// #     sample_duration: 1,
+/// #     sample_composition_time_offset: 0,
+/// #     sample_flags: Default::default(),
+/// #     sample_description_index: 1,
+/// # };
+/// // Two samples of a movie whose sample entry names the file itself, their media data from file offset 100 on
+/// let samples = [Sample::new(properties, b"AB".to_vec()), Sample::new(properties, b"CDE".to_vec())];
+/// let locations = located_in_file(&movie, &samples, 100)?;
+/// let byte_ranges: Vec<_> = locations.iter().map(|location| location.byte_range()).collect();
+/// assert_eq!(byte_ranges, [100..102, 102..105]);
+/// # Ok::<(), isobmff::MuxError>(())
+/// ```
+pub fn located_in_file(
     movie: &MovieBox,
     samples: &[Sample],
     data_offset: u64,

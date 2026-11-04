@@ -57,11 +57,11 @@ mod writer;
 
 pub use random_access::movie_fragment_random_access_start;
 pub use reader::{SampleLocations, StructureDataLimits, StructureDataReader};
-pub use sample_description::DataReference;
-pub(crate) use sample_description::{data_reference_index, laid_out};
-pub(crate) use sample_table::chunk_offsets;
+pub use sample_description::{
+    DataReference, DataReferenceRefusal, data_reference_index, located_in_file,
+};
+pub use sample_table::chunk_offsets;
 #[cfg(test)]
 pub(crate) use sample_table::fixtures;
 pub use segment_index::{SegmentIndex, Subsegment};
-pub(crate) use writer::StructureDataWriter;
 pub use writer::{MovieFragmentWriter, SampleTableWriter};

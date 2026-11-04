@@ -17,7 +17,7 @@ use crate::limits::MuxLimits;
 use crate::media_data::MediaDataWriter;
 use crate::output::Output;
 use crate::sample::Sample;
-use crate::structure_data::{MovieFragmentWriter, SampleTableWriter, StructureDataWriter};
+use crate::structure_data::{MovieFragmentWriter, SampleTableWriter};
 
 mod recoverable;
 
@@ -554,6 +554,29 @@ impl Muxer {
             return Err(MuxError::AlreadyFinished);
         }
         Ok(())
+    }
+}
+
+/// Writer of the structure-data of a file: a movie fragment for each run of samples, or the sample tables of its movie
+///
+/// Each writer holds the movie it was made from, and refuses samples the
+/// movie does not declare a track, a sample entry or a data reference entry
+/// in the file itself for: the media data it writes is in the file itself.
+#[derive(Debug)]
+enum StructureDataWriter {
+    /// Movie fragments, §8.8
+    Fragmented(MovieFragmentWriter),
+    /// The sample tables of the movie, §8.5
+    NonFragmented(SampleTableWriter),
+}
+
+impl StructureDataWriter {
+    /// Returns the movie the writer was made from, in the form it writes it
+    const fn movie(&self) -> &MovieBox {
+        match self {
+            Self::Fragmented(writer) => writer.movie(),
+            Self::NonFragmented(writer) => writer.movie(),
+        }
     }
 }
 

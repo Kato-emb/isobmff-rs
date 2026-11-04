@@ -297,7 +297,7 @@ pub(super) fn runs<'a>(
         let sample_description_index = match earlier {
             Some(earlier) => earlier.sample_description_index,
             None => {
-                // Why not take the sample entry as checked: locations a caller hands the sample table writer have not been through laid_out
+                // Why not take the sample entry as checked: locations a caller hands the sample table writer have not been through located_in_file
                 data_reference_index(trak, first.sample_description_index)?;
                 first.sample_description_index
             }
