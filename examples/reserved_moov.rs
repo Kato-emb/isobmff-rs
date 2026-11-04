@@ -17,8 +17,9 @@
 //!
 //! How much to reserve is the caller's to choose, from the bit rate and the
 //! duration it expects. The layers do the rest: [`reserve`] makes the `free` boxes,
-//! [`SampleTableWriter`] declares the samples from where the example puts
-//! their media data, and [`BoxWriter::write_box`] writes the boxes.
+//! [`located_in_file`] gives the location of each sample where the example
+//! puts its media data, [`SampleTableWriter`] declares the samples there, and
+//! [`BoxWriter::write_box`] writes the boxes.
 //! Each output goes where its offset says, the destination seeking back for
 //! the `moov` and the header of the `mdat`.
 
@@ -28,10 +29,10 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 
 use isobmff::framing::{BoxWriter, fill, media_data_header, reserve};
-use isobmff::structure_data::SampleTableWriter;
+use isobmff::structure_data::{SampleTableWriter, located_in_file};
 use isobmff::{
-    BoxHeader, BoxSize, BoxType, ByteRange, DataReferenceKey, DemuxEvent, Demuxer, ExtendedSize,
-    MuxError, Output, Sample, SampleLocation,
+    BoxHeader, BoxSize, BoxType, ByteRange, DemuxEvent, Demuxer, ExtendedSize, MuxError, Output,
+    Sample,
 };
 
 /// Length of the placeholder of the header of the `mdat`, as `media_data_header` takes it
@@ -123,25 +124,14 @@ impl ReservedFile {
         samples: &[Sample],
         destination: &mut Destination,
     ) -> Result<(), Box<dyn Error>> {
-        let mut locations = Vec::with_capacity(samples.len());
-        let mut at = self.end;
-        for sample in samples {
-            let end = at
-                .checked_add(u64::try_from(sample.data().len())?)
-                .ok_or("past 64-bit file offsets")?;
-            // Why not the key a reader gives: the sample table writer declares the data reference entry the sample entry names, and reads no key
-            locations.push(SampleLocation::new(
-                *sample.properties(),
-                DataReferenceKey::new(0),
-                at..end,
-            ));
-            at = end;
-        }
+        let locations = located_in_file(self.tables.movie(), samples, self.end)?;
         self.tables.handle_locations(&locations)?;
         for (sample, location) in samples.iter().zip(&locations) {
             destination.write(location.byte_range().start, sample.data())?;
         }
-        self.end = at;
+        self.end = locations
+            .last()
+            .map_or(self.end, |last| last.byte_range().end);
         Ok(())
     }
 

@@ -300,7 +300,42 @@ impl MediaDataReader {
     }
 
     /// Drops the held locations of the samples of track `track_id` and the bytes gathered for them, and holds none of the track later
-    pub(crate) fn discard_track(&mut self, track_id: u32) {
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff::media_data::{MediaDataLimits, MediaDataReader};
+    /// use isobmff::{DataReferenceKey, SampleLocation, SampleProperties};
+    ///
+    /// # let location = |track_id, byte_range| {
+    /// #     let properties = SampleProperties {
+    /// #         track_id,
+    /// #         decoding_time: 0,
+    /// #         sample_duration: 1,
+    /// #         sample_composition_time_offset: 0,
+    /// #         sample_flags: Default::default(),
+    /// #         sample_description_index: 1,
+    /// #     };
+    /// #     SampleLocation::new(properties, DataReferenceKey::new(0), byte_range)
+    /// # };
+    /// # let mut media_data = MediaDataReader::new(MediaDataLimits {
+    /// #     held_location_count: 16,
+    /// #     sample_bytes: 1024,
+    /// #     held_bytes: 1024,
+    /// # });
+    /// // A sample of track 1 and one of track 2, held
+    /// media_data.handle_sample_locations([location(1, 0..2), location(2, 2..4)])?;
+    ///
+    /// // Only the sample of track 1 is gathered, and only its bytes are wanted
+    /// media_data.discard_track(2);
+    /// media_data.handle_sample_locations([location(2, 4..6)])?;
+    /// media_data.handle_input(0, b"ABCDEF")?;
+    /// assert_eq!(media_data.poll_sample().map(|sample| sample.data().to_vec()), Some(b"AB".to_vec()));
+    /// assert_eq!(media_data.poll_sample(), None);
+    /// assert_eq!(media_data.wanted_input(), None);
+    /// # Ok::<(), isobmff::DemuxError>(())
+    /// ```
+    pub fn discard_track(&mut self, track_id: u32) {
         self.discarded_tracks.insert(track_id);
         self.held
             .retain(|held| held.location.properties().track_id != track_id);

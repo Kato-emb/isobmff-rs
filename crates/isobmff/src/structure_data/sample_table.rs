@@ -285,8 +285,26 @@ fn size_table(stbl: &SampleTableBox) -> (u32, u32, &[u32]) {
     }
 }
 
-/// Returns the file offset of each chunk the `stco` or the `co64` states, in chunk order
-pub(crate) fn chunk_offsets(stbl: &SampleTableBox) -> impl Iterator<Item = u64> {
+/// Returns the file offset of each chunk the `stco` or the `co64` states, in chunk order, ISO/IEC 14496-12 §8.7.5
+///
+/// # Examples
+///
+/// ```
+/// use isobmff::boxes::{ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, SampleTableBox};
+/// use isobmff::structure_data::chunk_offsets;
+///
+/// // Offsets in 32 bits and in 64 bits read alike
+/// let mut stco = ChunkOffsetBox::default();
+/// stco.chunk_offsets = vec![48, 1024];
+/// let mut co64 = ChunkLargeOffsetBox::default();
+/// co64.chunk_offsets = vec![48, 1 << 32];
+/// let mut stbl = SampleTableBox::default();
+/// stbl.chunk_offset = Some(ChunkOffsetVariant::ChunkOffset(stco));
+/// assert_eq!(chunk_offsets(&stbl).collect::<Vec<_>>(), [48, 1024]);
+/// stbl.chunk_offset = Some(ChunkOffsetVariant::ChunkLargeOffset(co64));
+/// assert_eq!(chunk_offsets(&stbl).collect::<Vec<_>>(), [48, 1 << 32]);
+/// ```
+pub fn chunk_offsets(stbl: &SampleTableBox) -> impl Iterator<Item = u64> {
     let (compact, large): (&[u32], &[u64]) = match &stbl.chunk_offset {
         Some(ChunkOffsetVariant::ChunkOffset(stco)) => (&stco.chunk_offsets, &[]),
         Some(ChunkOffsetVariant::ChunkLargeOffset(co64)) => (&[], &co64.chunk_offsets),

@@ -11,36 +11,13 @@ use isobmff_core::BoxEncode;
 
 use super::movie_fragment::{self, runs, track_fragments};
 use super::random_access::RandomAccessTables;
-use super::sample_description::laid_out;
+use super::sample_description::located_in_file;
 use super::sample_table::{TrackTable, take_sample_tables};
 use super::segment_index::SubsegmentTable;
 use crate::error::MuxError;
 use crate::file_structure::{FragmentedOptions, SegmentOptions};
 use crate::sample::{Sample, SampleLocation};
 use crate::timeline;
-
-/// Writer of the structure-data of a file: a movie fragment for each run of samples, or the sample tables of its movie
-///
-/// Each writer holds the movie it was made from, and refuses samples the
-/// movie does not declare a track, a sample entry or a data reference entry
-/// in the file itself for: the media data it writes is in the file itself.
-#[derive(Debug)]
-pub(crate) enum StructureDataWriter {
-    /// Movie fragments, §8.8
-    Fragmented(MovieFragmentWriter),
-    /// The sample tables of the movie, §8.5
-    NonFragmented(SampleTableWriter),
-}
-
-impl StructureDataWriter {
-    /// Returns the movie the writer was made from, in the form it writes it
-    pub(crate) const fn movie(&self) -> &MovieBox {
-        match self {
-            Self::Fragmented(writer) => writer.movie(),
-            Self::NonFragmented(writer) => writer.movie(),
-        }
-    }
-}
 
 /// Writer of the movie fragments of a movie, ISO/IEC 14496-12 §8.8
 ///
@@ -216,7 +193,7 @@ impl MovieFragmentWriter {
         if self.finished {
             return Err(MuxError::AlreadyFinished);
         }
-        let laid_out = laid_out(&self.movie, samples, 0)?;
+        let laid_out = located_in_file(&self.movie, samples, 0)?;
         let data_len = laid_out.last().map_or(0, |last| last.byte_range().end);
         let runs = runs(&self.movie, &laid_out, &[])?;
         let track_fragments = track_fragments(&runs);

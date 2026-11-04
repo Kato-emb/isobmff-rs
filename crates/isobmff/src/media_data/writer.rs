@@ -9,7 +9,7 @@ use crate::convert::to_u64;
 use crate::error::MuxError;
 use crate::framing::{BoxEvent, BoxWriter};
 use crate::sample::{Sample, SampleLocation};
-use crate::structure_data::laid_out;
+use crate::structure_data::located_in_file;
 
 /// Writer of the media data of samples written together: one `mdat` that holds them in their order, ISO/IEC 14496-12 §8.1.1
 ///
@@ -85,7 +85,7 @@ impl MediaDataWriter {
         let mut bytes = Vec::with_capacity(
             usize::try_from(header.size().total_bytes().unwrap_or_default()).unwrap_or_default(),
         );
-        let locations = laid_out(
+        let locations = located_in_file(
             movie,
             samples,
             boxes.next_offset().saturating_add(header.encoded_len()),
