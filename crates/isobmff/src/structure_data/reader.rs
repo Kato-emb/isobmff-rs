@@ -13,9 +13,9 @@ use super::sample_description::DataReference;
 use super::segment_index::SegmentIndex;
 use super::{movie_fragment, sample_description, sample_table};
 use crate::error::DemuxError;
-use crate::length::to_u64;
 use crate::leniency::Leniency;
 use crate::sample::{DataReferenceKey, SampleLocation};
+use crate::widen::widen;
 
 /// Limits a [`StructureDataReader`] resolves and keeps structure-data up to
 ///
@@ -321,7 +321,7 @@ impl StructureDataReader {
                 retained_subsegments,
                 limit_subsegments: self.limits.subsegment_count,
             };
-        let declared_subsegments = to_u64(sidx.references.len());
+        let declared_subsegments = widen(sidx.references.len());
         if declared_subsegments > self.limits.subsegment_count {
             return Err(subsegments_exceeded(declared_subsegments));
         }
@@ -330,7 +330,7 @@ impl StructureDataReader {
             return Ok(());
         }
 
-        let retained_segment_indexes = to_u64(self.segment_indexes.len()).saturating_add(1);
+        let retained_segment_indexes = widen(self.segment_indexes.len()).saturating_add(1);
         if retained_segment_indexes > self.limits.segment_index_count {
             return Err(DemuxError::SegmentIndexCountLimitExceeded {
                 retained_segment_indexes,
@@ -340,7 +340,7 @@ impl StructureDataReader {
         let retained_subsegments = self
             .segment_indexes
             .iter()
-            .map(|kept| to_u64(kept.subsegments().len()))
+            .map(|kept| widen(kept.subsegments().len()))
             .fold(declared_subsegments, u64::saturating_add);
         if retained_subsegments > self.limits.subsegment_count {
             return Err(subsegments_exceeded(retained_subsegments));
@@ -394,7 +394,7 @@ impl StructureDataReader {
             return Err(DemuxError::DuplicateIdentifiedMediaData { identifier });
         }
         let retained_identified_media_data =
-            to_u64(self.identified_media_data.len()).saturating_add(1);
+            widen(self.identified_media_data.len()).saturating_add(1);
         if retained_identified_media_data > self.limits.identified_media_data_count {
             return Err(DemuxError::IdentifiedMediaDataCountLimitExceeded {
                 retained_identified_media_data,
@@ -472,7 +472,7 @@ impl StructureDataReader {
     /// Refuses `leniencies` where keeping them besides those kept would take the leniencies past the limit
     fn check_room_for_leniencies(&self, leniencies: &[Leniency]) -> Result<(), DemuxError> {
         let retained_leniencies =
-            to_u64(self.leniencies.len()).saturating_add(to_u64(leniencies.len()));
+            widen(self.leniencies.len()).saturating_add(widen(leniencies.len()));
         if retained_leniencies > self.limits.leniency_count {
             return Err(DemuxError::LeniencyCountLimitExceeded {
                 retained_leniencies,
@@ -503,7 +503,7 @@ impl StructureDataReader {
             .filter(|(_, identifier)| !self.identified_media_data.contains_key(identifier))
             .count();
         let held_before: usize = self.unresolved.values().map(Vec::len).sum();
-        let unresolved_samples = to_u64(held_before).saturating_add(to_u64(held_samples));
+        let unresolved_samples = widen(held_before).saturating_add(widen(held_samples));
         if unresolved_samples > self.limits.unresolved_sample_count {
             return Err(DemuxError::UnresolvedSampleCountLimitExceeded {
                 unresolved_samples,

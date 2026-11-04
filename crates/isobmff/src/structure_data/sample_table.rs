@@ -19,9 +19,9 @@ use isobmff_core::{BoxDefinition, BoxType};
 use self::sample_flags::SampleFlagsTables;
 use super::sample_description::{DataOrigin, located_data_reference};
 use crate::error::{DemuxError, MuxError};
-use crate::length::to_u64;
 use crate::leniency::{Leniency, SampleTableDisagreement};
 use crate::sample::{SampleLocation, SampleProperties};
+use crate::widen::widen;
 
 mod sample_flags;
 
@@ -29,7 +29,7 @@ mod sample_flags;
 pub(super) fn sample_count(trak: &TrackBox) -> u64 {
     let (_, constant_count, table) = size_table(&trak.mdia.minf.stbl);
 
-    u64::from(constant_count).saturating_add(to_u64(table.len()))
+    u64::from(constant_count).saturating_add(widen(table.len()))
 }
 
 /// Resolves the samples the sample table of `trak` declares into `locations`, in sample order, and returns the decoding time past the last of them

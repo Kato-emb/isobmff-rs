@@ -7,8 +7,8 @@ use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader, BoxSize, Error};
 use crate::byte_range::ByteRange;
 use crate::error::MuxError;
 use crate::framing::box_event::{BoxEvent, BoxEventKind};
-use crate::length::to_u64;
 use crate::output::Output;
+use crate::widen::widen;
 
 /// Length of the header with both a `largesize` and an `extended_type` field, the longest there is
 const LONGEST_HEADER: usize = 32;
@@ -137,7 +137,7 @@ impl BoxWriter {
                 },
                 BoxEvent::Payload(bytes),
             ) => {
-                let written = written.saturating_add(to_u64(bytes.len()));
+                let written = written.saturating_add(widen(bytes.len()));
                 if let Some(declared_bytes) = header.payload_len()
                     && written > declared_bytes
                 {
@@ -282,7 +282,7 @@ impl BoxWriter {
     ) -> Result<Output, MuxError> {
         let payload_len = value.payload_len();
         let too_long = MuxError::Box {
-            error: Error::truncated_buffer(payload_len, to_u64(usize::MAX)),
+            error: Error::truncated_buffer(payload_len, widen(usize::MAX)),
         };
         let mut payload = alloc::vec![0; usize::try_from(payload_len).map_err(|_| too_long)?];
         value

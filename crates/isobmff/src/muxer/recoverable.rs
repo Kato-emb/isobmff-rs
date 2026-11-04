@@ -5,10 +5,10 @@ use isobmff_core::Error;
 
 use crate::error::MuxError;
 use crate::framing::{BoxWriter, media_data_header};
-use crate::length::to_u64;
 use crate::output::Output;
 use crate::sample::SampleLocation;
 use crate::structure_data::SampleTableWriter;
+use crate::widen::widen;
 
 /// Length of the `free` box the header of the `mdat` takes the place of, as [`media_data_header`] takes it
 const PLACEHOLDER_BYTES: u64 = 16;
@@ -68,7 +68,7 @@ impl Recoverable {
     /// Either way the file is not laid out again: the sample tables are
     /// dropped, and [`finish`](Self::finish) returns why.
     pub(super) fn handle_locations(&mut self, locations: &[SampleLocation]) {
-        self.held_locations = self.held_locations.saturating_add(to_u64(locations.len()));
+        self.held_locations = self.held_locations.saturating_add(widen(locations.len()));
         let Tables::Declaring(tables) = &mut self.tables else {
             return;
         };

@@ -7,7 +7,7 @@ use isobmff_core::{BoxHeader, ErrorKind, RawBox};
 use crate::byte_range::ByteRange;
 use crate::error::DemuxError;
 use crate::framing::box_event::BoxEvent;
-use crate::length::to_u64;
+use crate::widen::widen;
 
 /// Length of the `size` and `boxtype` fields every header opens with
 const SHORTEST_HEADER: u64 = 8;
@@ -451,7 +451,7 @@ impl BoxReader {
         let length = header
             .size()
             .total_bytes()
-            .or_else(|| whole.then(|| to_u64(self.gathered.len())));
+            .or_else(|| whole.then(|| widen(self.gathered.len())));
         Some(ByteRange::new(offset, length))
     }
 
@@ -514,7 +514,7 @@ impl BoxReader {
 
     /// Returns how many bytes of the payload of the box of `header` are gathered
     fn gathered_payload_bytes(&self, header: BoxHeader) -> u64 {
-        to_u64(self.gathered.len()).saturating_sub(header.encoded_len())
+        widen(self.gathered.len()).saturating_sub(header.encoded_len())
     }
 
     /// Returns how many bytes the reader wants next of the head of `head_bytes` of the payload of the box of `header`, up to the file offset `end` or, for `None`, the end of the file
@@ -553,7 +553,7 @@ impl BoxReader {
         // `BoxHeader::decode` asks only for more than it was given, so `needed`
         // stays above what is read until the header is whole.
         loop {
-            let read = to_u64(self.gathered.len());
+            let read = widen(self.gathered.len());
             let Some(bytes) = self.take(input, Some(needed.saturating_sub(read))) else {
                 self.progress = Progress::Header { needed };
                 if self.at_end_of_file && read > 0 {
@@ -565,12 +565,12 @@ impl BoxReader {
                 return None;
             };
             self.gathered.extend_from_slice(bytes);
-            if to_u64(self.gathered.len()) < needed {
+            if widen(self.gathered.len()) < needed {
                 continue;
             }
             match BoxHeader::decode(&self.gathered) {
                 Ok((header, _)) => {
-                    let offset = self.position.saturating_sub(to_u64(self.gathered.len()));
+                    let offset = self.position.saturating_sub(widen(self.gathered.len()));
                     self.progress = Progress::Opened { header, offset };
                     return Some(BoxEvent::Header(header));
                 }
@@ -621,7 +621,7 @@ impl BoxReader {
                     .remaining(end)
                     .map_or(past_limit, |remaining| remaining.min(past_limit));
                 if let Some(bytes) = self.take(input, Some(wanted)) {
-                    let reached_bytes = gathered_bytes.saturating_add(to_u64(bytes.len()));
+                    let reached_bytes = gathered_bytes.saturating_add(widen(bytes.len()));
                     if reached_bytes > limit_bytes {
                         return self.fail(DemuxError::PayloadLimitExceeded {
                             box_type: header.box_type(),
@@ -670,7 +670,7 @@ impl BoxReader {
         let taken = input
             .split_off(..length)
             .filter(|taken| !taken.is_empty())?;
-        self.position = self.position.saturating_add(to_u64(taken.len()));
+        self.position = self.position.saturating_add(widen(taken.len()));
         Some(taken)
     }
 }

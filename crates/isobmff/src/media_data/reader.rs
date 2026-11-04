@@ -6,8 +6,8 @@ use core::ops::Range;
 
 use crate::byte_range::ByteRange;
 use crate::error::DemuxError;
-use crate::length::to_u64;
 use crate::sample::{Sample, SampleLocation};
+use crate::widen::widen;
 
 /// Limits a [`MediaDataReader`] holds sample locations and their media data up to
 ///
@@ -158,7 +158,7 @@ impl MediaDataReader {
                 .contains(&location.properties().track_id)
         }) {
             let byte_range = location.byte_range();
-            let held_locations = to_u64(self.held.len()).saturating_add(1);
+            let held_locations = widen(self.held.len()).saturating_add(1);
             let declared_bytes = length(&byte_range);
             let refused = if held_locations > self.limits.held_location_count {
                 Some(DemuxError::HeldLocationLimitExceeded {
@@ -208,11 +208,11 @@ impl MediaDataReader {
     ///   be taken with [`poll_sample`](Self::poll_sample) before the input is
     ///   passed again.
     pub fn handle_input(&mut self, offset: u64, input: &[u8]) -> Result<(), DemuxError> {
-        let input_range = offset..offset.saturating_add(to_u64(input.len()));
+        let input_range = offset..offset.saturating_add(widen(input.len()));
         let mut allocated_bytes = self
             .held
             .iter()
-            .map(|held| to_u64(held.data.len()))
+            .map(|held| widen(held.data.len()))
             .fold(0, u64::saturating_add);
         let mut refused = None;
         let mut kept = false;

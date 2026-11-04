@@ -7,9 +7,9 @@ use isobmff_core::{BoxDefinition, BoxHeader};
 
 use crate::error::MuxError;
 use crate::framing::{BoxEvent, BoxWriter};
-use crate::length::to_u64;
 use crate::sample::{Sample, SampleLocation};
 use crate::structure_data::laid_out;
+use crate::widen::widen;
 
 /// Writer of the media data of samples written together: one `mdat` that holds them in their order, ISO/IEC 14496-12 §8.1.1
 ///
@@ -40,7 +40,7 @@ impl MediaDataWriter {
     pub fn header(&self, samples: &[Sample]) -> Result<BoxHeader, MuxError> {
         let payload_len = samples
             .iter()
-            .map(|sample| to_u64(sample.data().len()))
+            .map(|sample| widen(sample.data().len()))
             .fold(0, u64::saturating_add);
         BoxHeader::with_payload_len(MediaDataBox::BOX_TYPE, payload_len).ok_or(
             MuxError::DataOffsetOutOfRange {

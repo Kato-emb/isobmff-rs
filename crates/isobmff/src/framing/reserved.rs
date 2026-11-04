@@ -9,8 +9,8 @@ use isobmff_core::{BoxDefinition, BoxHeader, BoxSize, BoxType, ExtendedSize};
 use crate::byte_range::ByteRange;
 use crate::error::MuxError;
 use crate::framing::{BoxEvent, BoxWriter};
-use crate::length::to_u64;
 use crate::output::Output;
+use crate::widen::widen;
 
 /// Length of the header of a `free` box, the least a `free` box takes
 const FREE_HEADER_BYTES: u64 = 8;
@@ -127,7 +127,7 @@ impl BoxWriter {
 /// # Ok::<(), MuxError>(())
 /// ```
 pub fn fill(reserved: ByteRange, bytes: Vec<u8>) -> Result<Vec<Output>, MuxError> {
-    let offered_bytes = to_u64(bytes.len());
+    let offered_bytes = widen(bytes.len());
     let mismatch = MuxError::ReservedSpaceMismatch {
         reserved_bytes: reserved.length(),
         offered_bytes,

@@ -5,8 +5,8 @@ use alloc::vec::Vec;
 use isobmff_boxes::{DataEntry, MovieBox, SampleDescription, TrackBox};
 
 use crate::error::{DemuxError, MuxError};
-use crate::length::to_u64;
 use crate::sample::{DataReferenceKey, Sample, SampleLocation};
+use crate::widen::widen;
 
 /// One entry of the data reference of a track of the movie, under the key the locations of its samples carry, ISO/IEC 14496-12 §8.7.2
 ///
@@ -357,7 +357,7 @@ pub(crate) fn laid_out(
             };
             let start = data_end;
             data_end = start
-                .checked_add(to_u64(sample.data().len()))
+                .checked_add(widen(sample.data().len()))
                 .ok_or(MuxError::DataOffsetOutOfRange { track_id })?;
             Ok(SampleLocation::new(
                 *properties,
