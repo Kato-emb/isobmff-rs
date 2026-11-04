@@ -853,6 +853,7 @@ mod tests {
             leniency_count: 1,
             identified_media_data_count: 65_536,
             unresolved_sample_count: 1_048_576,
+            compressed_box_count: 65_536,
             ..UNLIMITED
         });
         reader.handle_movie(fragmented_movie()).unwrap();

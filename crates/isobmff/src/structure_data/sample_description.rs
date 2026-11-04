@@ -33,6 +33,7 @@ use crate::sample::{DataReferenceKey, Sample, SampleLocation};
 ///     leniency_count: 65_536,
 ///     identified_media_data_count: 65_536,
 ///     unresolved_sample_count: 1_048_576,
+///     compressed_box_count: 65_536,
 /// });
 /// reader.handle_movie(movie)?;
 ///

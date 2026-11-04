@@ -771,6 +771,7 @@ pub(crate) mod fixtures {
         leniency_count: u64::MAX,
         identified_media_data_count: u64::MAX,
         unresolved_sample_count: u64::MAX,
+        compressed_box_count: u64::MAX,
     };
 
     /// Returns the movie of `tracks`

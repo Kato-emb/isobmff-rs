@@ -5,7 +5,9 @@ use alloc::boxed::Box;
 use isobmff_boxes::{
     FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentTypeBox,
 };
-use isobmff_core::{BoxDefinition, BoxHeader, BoxType, Error, RawBox};
+#[cfg(feature = "compressed-boxes")]
+use isobmff_core::BoxDefinition;
+use isobmff_core::{BoxHeader, BoxType, Error, RawBox};
 
 use crate::byte_range::ByteRange;
 use crate::convert::to_u64;
@@ -15,12 +17,8 @@ use crate::framing::{BoxEvent, BoxReader};
 use crate::leniency::Leniency;
 use crate::limits::DemuxLimits;
 use crate::media_data::MediaDataReader;
-use crate::sample::{DataReferenceKey, Sample, SampleLocation};
+use crate::sample::{DataReferenceKey, Sample};
 use crate::structure_data::{DataReference, SampleLocations, SegmentIndex, StructureDataReader};
-
-mod compressed;
-
-use compressed::CompressedBoxes;
 
 /// Length of the `imda_identifier` an `imda` opens its payload with, §8.1.4
 const IDENTIFIER_BYTES: u64 = 4;
@@ -83,8 +81,6 @@ pub struct Demuxer {
     payload_limit_bytes: u64,
     file_type: Option<FileTypeBox>,
     segment_type: Option<SegmentTypeBox>,
-    /// Compressed boxes read, §8.16, which none are without the feature `compressed-boxes`
-    compressed_boxes: CompressedBoxes,
     /// Failure the demuxer failed with, which every call after it returns
     failed: Option<DemuxError>,
 }
@@ -106,7 +102,6 @@ impl Demuxer {
             payload_limit_bytes: limits.payload_bytes(),
             file_type: None,
             segment_type: None,
-            compressed_boxes: CompressedBoxes::new(limits.compressed_box_count()),
             failed: None,
         }
     }
@@ -302,7 +297,6 @@ impl Demuxer {
         }
         self.boxes = BoxReader::starting_at(offset);
         self.structure_data.resume();
-        self.compressed_boxes.resume();
         self.media_data.clear();
         Ok(())
     }
@@ -391,7 +385,6 @@ impl Demuxer {
     /// Answers the header of a box at file level as its type says, and returns the event it is reported with
     fn open(&mut self, header: BoxHeader) -> Result<Option<DemuxEvent>, DemuxError> {
         let byte_range = self.boxes.open_box().ok_or(DemuxError::NoOpenBox)?;
-        self.refuse_compressed_box_with_movie_fragment_random_access(header.box_type())?;
         let event = match Kind::of(header.box_type()) {
             Kind::StructureData => {
                 self.boxes.gather(self.payload_limit_bytes)?;
@@ -408,30 +401,11 @@ impl Demuxer {
         Ok(Some(event))
     }
 
-    /// Refuses a box of `box_type` that makes the file one with both a compressed box and an `mfra`, which §8.16.1 does not let a file have
-    fn refuse_compressed_box_with_movie_fragment_random_access(
-        &self,
-        box_type: BoxType,
-    ) -> Result<(), DemuxError> {
-        let compressed = if box_type == MovieFragmentRandomAccessBox::BOX_TYPE {
-            self.compressed_boxes.first_box_type()
-        } else if self.movie_fragment_random_access().is_some() {
-            Some(box_type).filter(|&box_type| is_compressed(box_type))
-        } else {
-            None
-        };
-        compressed.map_or(Ok(()), |box_type| {
-            Err(DemuxError::CompressedBoxWithMovieFragmentRandomAccess { box_type })
-        })
-    }
-
     /// Reads the box just gathered, if any, into its value, and returns the event it is reported with
     fn close(&mut self) -> Result<Option<DemuxEvent>, DemuxError> {
         let Some(byte_range) = self.boxes.gathered_box_range() else {
             return Ok(None);
         };
-        // Why not the file offset itself: the offsets in a box count in the file as its compressed boxes read back, §8.16.1.
-        let uncompressed_offset = self.compressed_boxes.uncompressed(byte_range.offset());
         if let Some((header, head)) = self.boxes.gathered_head() {
             let identifier = <[u8; 4]>::try_from(head)
                 .map(u32::from_be_bytes)
@@ -439,11 +413,10 @@ impl Demuxer {
                     error: Error::truncated_buffer(IDENTIFIER_BYTES, to_u64(head.len()))
                         .in_container(header.box_type()),
                 })?;
-            let payload_offset = uncompressed_offset.saturating_add(header.encoded_len());
+            let payload_offset = byte_range.offset().saturating_add(header.encoded_len());
             let samples = self
                 .structure_data
                 .handle_identified_media_data(identifier, payload_offset)?;
-            let samples = self.located(samples)?;
             return Ok(Some(DemuxEvent::IdentifiedMediaData {
                 header,
                 byte_range,
@@ -455,7 +428,7 @@ impl Demuxer {
             return Ok(None);
         };
         let Some(value) = read(
-            &mut self.compressed_boxes,
+            &mut self.structure_data,
             self.payload_limit_bytes,
             raw_box,
             byte_range.offset(),
@@ -477,18 +450,15 @@ impl Demuxer {
             }
             TopLevelBox::Movie(moov) => {
                 let samples = self.structure_data.handle_movie(moov)?;
-                let samples = self.located(samples)?;
                 DemuxEvent::Movie {
                     byte_range,
                     samples: self.gather(samples)?,
                 }
             }
             TopLevelBox::MovieFragment(moof) => {
-                self.refuse_base_data_offset_past_skipped_compressed_boxes(&moof)?;
                 let samples = self
                     .structure_data
-                    .handle_movie_fragment(&moof, uncompressed_offset)?;
-                let samples = self.located(samples)?;
+                    .handle_movie_fragment(&moof, byte_range.offset())?;
                 DemuxEvent::MovieFragment {
                     samples: self.gather(samples)?,
                     movie_fragment: Box::new(moof),
@@ -506,64 +476,12 @@ impl Demuxer {
             }
             TopLevelBox::MovieFragmentRandomAccess(mfra) => {
                 self.structure_data
-                    .handle_movie_fragment_random_access(mfra);
+                    .handle_movie_fragment_random_access(mfra)?;
                 DemuxEvent::MovieFragmentRandomAccess { byte_range }
             }
         };
 
         Ok(Some(event))
-    }
-
-    /// Returns `samples`, which the uncompressed domain locates, located in the file, those in other files as they are (§8.16.1)
-    ///
-    /// # Errors
-    ///
-    /// * [`DataOffsetOutOfRange`](DemuxError::DataOffsetOutOfRange): the
-    ///   media data of a sample lies in a box a compressed box replaces.
-    fn located(&mut self, samples: SampleLocations) -> Result<SampleLocations, DemuxError> {
-        let structure_data = &self.structure_data;
-        let in_this_file = |location: &SampleLocation| {
-            structure_data
-                .data_reference(location.data_reference())
-                .is_some_and(|data_reference| data_reference.entry().is_in_this_file())
-        };
-        let compressed_boxes = &mut self.compressed_boxes;
-        // Why not map them all as below: the locations would be copied into a new list, which a file with no compressed box read has no need of.
-        if compressed_boxes.is_empty() {
-            for location in samples
-                .as_slice()
-                .iter()
-                .filter(|location| in_this_file(location))
-            {
-                compressed_boxes.note_located(location.byte_range().end);
-            }
-            return Ok(samples);
-        }
-        samples.try_map(|location| {
-            if in_this_file(&location) {
-                compressed_boxes.located(location)
-            } else {
-                Ok(location)
-            }
-        })
-    }
-
-    /// Refuses `moof` where a track fragment of it takes a base data offset that a compressed box skipped by a resume may have moved, §8.16.2.2 NOTE 3
-    fn refuse_base_data_offset_past_skipped_compressed_boxes(
-        &self,
-        moof: &MovieFragmentBox,
-    ) -> Result<(), DemuxError> {
-        if !self.compressed_boxes.absolute_offsets_unknown() {
-            return Ok(());
-        }
-        moof.traf
-            .iter()
-            .find(|traf| traf.tfhd.base_data_offset.is_some())
-            .map_or(Ok(()), |traf| {
-                Err(DemuxError::DataOffsetPastSkippedCompressedBoxes {
-                    track_id: traf.tfhd.track_id,
-                })
-            })
     }
 
     /// Hands the locations of `samples` whose media data is in the file itself to the media data, and returns them all
@@ -579,16 +497,15 @@ impl Demuxer {
     }
 }
 
-/// Reads the box `raw_box` at file offset `offset`, gathered whole, into its value, a compressed box into that of the box it replaces, its payload at most `limit_bytes`, recorded in `compressed_boxes`
+/// Reads the box `raw_box` at file offset `offset`, gathered whole, into its value, a compressed box into that of the box it replaces, its payload at most `limit_bytes`, told of to `structure_data`
 ///
 /// # Errors
 ///
 /// * The failures of [`framing::decompressed`](crate::framing::decompressed)
 ///   and [`TopLevelBox::read`].
-/// * The failures of recording a compressed box, as for
-///   `CompressedBoxes::record`.
+/// * The failures of [`StructureDataReader::handle_compressed_box`].
 fn read(
-    compressed_boxes: &mut CompressedBoxes,
+    structure_data: &mut StructureDataReader,
     limit_bytes: u64,
     raw_box: RawBox<'_>,
     offset: u64,
@@ -597,26 +514,27 @@ fn read(
     {
         let box_type = raw_box.header().box_type();
         if box_type == isobmff_boxes::OriginalFileTypeBox::BOX_TYPE {
-            compressed_boxes.note_transformed();
+            structure_data.handle_original_file_type();
         }
         if let Some((replacement_type, payload)) =
             crate::framing::decompressed(raw_box, limit_bytes)?
         {
-            // §8.16.2.1: the box read back has the header its type and the length of its payload give it.
-            let uncompressed_length =
-                BoxHeader::with_payload_len(replacement_type, to_u64(payload.len()))
-                    .map_or(u64::MAX, |header| header.encoded_len())
-                    .saturating_add(to_u64(payload.len()));
             let length = raw_box
                 .header()
                 .encoded_len()
                 .saturating_add(to_u64(raw_box.payload().len()));
-            compressed_boxes.record(box_type, offset, length, uncompressed_length)?;
+            structure_data.handle_compressed_box(
+                box_type,
+                offset,
+                length,
+                replacement_type,
+                to_u64(payload.len()),
+            )?;
             return TopLevelBox::read_payload(replacement_type, &payload);
         }
     }
     #[cfg(not(feature = "compressed-boxes"))]
-    let _ = (compressed_boxes, limit_bytes, offset);
+    let _ = (structure_data, limit_bytes, offset);
     TopLevelBox::read(raw_box)
 }
 

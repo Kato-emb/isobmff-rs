@@ -1,4 +1,4 @@
-//! The compressed boxes a demuxer has read, and the file offsets they move, ISO/IEC 14496-12 §8.16
+//! The compressed boxes a structure-data reader has been told of, and the file offsets they move, ISO/IEC 14496-12 §8.16
 //!
 //! The file offsets in a box a compressed box replaces count in the file as
 //! it would be with its compressed boxes read back (§8.16.1): the
@@ -11,6 +11,7 @@
 use alloc::vec::Vec;
 use core::ops::Range;
 
+use isobmff_boxes::{MovieBox, MovieFragmentBox};
 use isobmff_core::BoxType;
 
 #[cfg(feature = "compressed-boxes")]
@@ -48,7 +49,7 @@ impl Compressed {
     }
 }
 
-/// The compressed boxes a demuxer has read, in the order they lie, and what it needs to tell where the offsets of the uncompressed domain lie in the file
+/// The compressed boxes a structure-data reader has been told of, in the order they lie, and what it needs to tell where the offsets of the uncompressed domain lie in the file
 #[derive(Debug)]
 pub(super) struct CompressedBoxes {
     boxes: Vec<Compressed>,
@@ -56,7 +57,7 @@ pub(super) struct CompressedBoxes {
     limit_compressed_boxes: u64,
     /// File offset just past the media data of the samples in the file located so far
     located_end: u64,
-    /// Whether the demuxer has resumed at a later box, past compressed boxes it may not have read
+    /// Whether the reader has resumed at a later box, past compressed boxes it may not have been told of
     resumed: bool,
     /// Whether the file is known to have been transformed, by a compressed box or an `otyp` read
     transformed: bool,
@@ -88,14 +89,33 @@ impl CompressedBoxes {
         self.transformed = true;
     }
 
-    /// Notes that the demuxer resumes at a later box: the compressed boxes before it may not all have been read
+    /// Notes that the reader resumes at a later box: it may not have been told of every compressed box before it
     pub(super) const fn resume(&mut self) {
         self.resumed = true;
     }
 
-    /// Returns whether an offset counted from the start of the uncompressed domain may not be told where it lies in the file: the demuxer has resumed in a file known to have been transformed
-    pub(super) const fn absolute_offsets_unknown(&self) -> bool {
-        self.resumed && self.transformed
+    /// Refuses `moof` where a track fragment of it takes a base data offset that a compressed box skipped by a resume may have moved, §8.16.2.2 NOTE 3
+    ///
+    /// # Errors
+    ///
+    /// * [`DataOffsetPastSkippedCompressedBoxes`](DemuxError::DataOffsetPastSkippedCompressedBoxes):
+    ///   the reader has resumed in a file known to have been transformed,
+    ///   and a track fragment of `moof` takes a base data offset.
+    pub(super) fn refuse_base_data_offset_past_skipped(
+        &self,
+        moof: &MovieFragmentBox,
+    ) -> Result<(), DemuxError> {
+        if !(self.resumed && self.transformed) {
+            return Ok(());
+        }
+        moof.traf
+            .iter()
+            .find(|traf| traf.tfhd.base_data_offset.is_some())
+            .map_or(Ok(()), |traf| {
+                Err(DemuxError::DataOffsetPastSkippedCompressedBoxes {
+                    track_id: traf.tfhd.track_id,
+                })
+            })
     }
 
     /// Returns the offset in the uncompressed domain of file offset `offset`, where no compressed box read lies
@@ -184,35 +204,62 @@ impl CompressedBoxes {
         Ok(())
     }
 
-    /// Returns whether no compressed box is recorded, so that the uncompressed domain is the file itself
-    pub(super) fn is_empty(&self) -> bool {
-        self.boxes.is_empty()
-    }
-
-    /// Notes that the media data of a sample located in the file ends at file offset `end`
+    /// Notes that the media data of the samples in the file located so far ends at file offset `end`, as [`locate`](Self::locate) returns it
     pub(super) fn note_located(&mut self, end: u64) {
         self.located_end = self.located_end.max(end);
     }
 
-    /// Returns `location`, whose media data the uncompressed domain locates, located in the file
+    /// Locates in the file those of `locations` whose media data the uncompressed domain locates in the file itself, as `in_this_file` tells, and returns the file offset past the media data of them and of those located before
+    ///
+    /// Locations in another file are left as they are (§8.16.1). The end is
+    /// for [`note_located`](Self::note_located), once the locations are
+    /// returned.
     ///
     /// # Errors
     ///
     /// * [`DataOffsetOutOfRange`](DemuxError::DataOffsetOutOfRange): the
-    ///   media data lies in the box a compressed box replaces, where the file
-    ///   holds no media data.
-    pub(super) fn located(
-        &mut self,
-        location: SampleLocation,
-    ) -> Result<SampleLocation, DemuxError> {
-        let range = location.byte_range();
-        let in_file = self
-            .in_file(range)
-            .ok_or(DemuxError::DataOffsetOutOfRange {
-                track_id: location.properties().track_id,
-            })?;
-        self.note_located(in_file.end);
-        Ok(location.with_byte_range(in_file))
+    ///   media data of a sample lies in the box a compressed box replaces,
+    ///   where the file holds no media data.
+    pub(super) fn locate(
+        &self,
+        locations: &mut [SampleLocation],
+        in_this_file: impl Fn(&SampleLocation) -> bool,
+    ) -> Result<u64, DemuxError> {
+        let mut located_end = self.located_end;
+        for location in locations
+            .iter_mut()
+            .filter(|location| in_this_file(location))
+        {
+            if !self.boxes.is_empty() {
+                let in_file = self.in_file(location.byte_range()).ok_or(
+                    DemuxError::DataOffsetOutOfRange {
+                        track_id: location.properties().track_id,
+                    },
+                )?;
+                *location = location.with_byte_range(in_file);
+            }
+            located_end = located_end.max(location.byte_range().end);
+        }
+        Ok(located_end)
+    }
+
+    /// Locates in the file those of `locations`, samples of `movie`, whose media data is in the file itself, as [`locate`](Self::locate) does
+    ///
+    /// # Errors
+    ///
+    /// As for [`locate`](Self::locate).
+    pub(super) fn locate_in_this_file(
+        &self,
+        movie: Option<&MovieBox>,
+        locations: &mut [SampleLocation],
+    ) -> Result<u64, DemuxError> {
+        self.locate(locations, |location| {
+            movie
+                .and_then(|movie| {
+                    super::sample_description::data_reference(movie, location.data_reference())
+                })
+                .is_some_and(|data_reference| data_reference.entry().is_in_this_file())
+        })
     }
 
     /// Returns where `range` of the uncompressed domain lies in the file, or `None` where it runs into a box a compressed box replaces
@@ -282,23 +329,27 @@ mod tests {
         boxes
     }
 
+    /// Returns where `boxes` locates `location` in the file
+    fn located(
+        boxes: &CompressedBoxes,
+        location: SampleLocation,
+    ) -> Result<core::ops::Range<u64>, DemuxError> {
+        let mut locations = [location];
+        boxes.locate(&mut locations, |_| true)?;
+        Ok(locations[0].byte_range())
+    }
+
     #[test]
     fn an_offset_moves_by_what_the_compressed_boxes_before_it_grew_and_shrank_by_in_whatever_order_they_are_read()
      {
         for in_order in [true, false] {
-            let mut boxes = recorded(in_order);
+            let boxes = recorded(in_order);
             assert_eq!(
                 (
                     [5, 20, 30, 50].map(|offset| boxes.uncompressed(offset)),
-                    boxes
-                        .located(at(15..20))
-                        .map(|location| location.byte_range()),
-                    boxes
-                        .located(at(55..57))
-                        .map(|location| location.byte_range()),
-                    boxes
-                        .located(at(41..43))
-                        .map(|location| location.byte_range()),
+                    located(&boxes, at(15..20)),
+                    located(&boxes, at(55..57)),
+                    located(&boxes, at(41..43)),
                     boxes.first_box_type(),
                 ),
                 (
@@ -318,7 +369,8 @@ mod tests {
     {
         let mut boxes = recorded(true);
         boxes.record(MOVIE, 0, 10, 20).unwrap();
-        boxes.located(at(55..57)).unwrap();
+        let located_end = boxes.locate(&mut [at(55..57)], |_| true).unwrap();
+        boxes.note_located(located_end);
         let mut limited = CompressedBoxes::new(1);
         limited.record(MOVIE, 0, 10, 20).unwrap();
         let mut five = CompressedBoxes::new(5);
@@ -347,6 +399,39 @@ mod tests {
                     limit_compressed_boxes: 1
                 }),
             )
+        );
+    }
+}
+
+#[cfg(test)]
+#[cfg(not(feature = "compressed-boxes"))]
+mod without_the_feature {
+    use isobmff_boxes::SampleFlags;
+
+    use super::CompressedBoxes;
+    use crate::sample::{DataReferenceKey, SampleLocation, SampleProperties};
+
+    #[test]
+    fn no_compressed_box_is_kept_and_every_offset_stays_where_it_is() {
+        let properties = SampleProperties {
+            track_id: 1,
+            decoding_time: 0,
+            sample_duration: 1,
+            sample_composition_time_offset: 0,
+            sample_flags: SampleFlags::default(),
+            sample_description_index: 1,
+        };
+        let location = SampleLocation::new(properties, DataReferenceKey::new(0), 15..20);
+        let boxes = CompressedBoxes::new(0);
+        let mut locations = [location.clone()];
+
+        assert_eq!(
+            (
+                [0, 15, 1 << 40].map(|offset| boxes.uncompressed(offset)),
+                boxes.locate(&mut locations, |_| true),
+                locations,
+            ),
+            ([0, 15, 1 << 40], Ok(20), [location])
         );
     }
 }
