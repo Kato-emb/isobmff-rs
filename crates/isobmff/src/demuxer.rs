@@ -9,16 +9,12 @@ use isobmff_boxes::{
 use isobmff_core::BoxDefinition;
 use isobmff_core::{BoxHeader, BoxType, Error, RawBox};
 
-use crate::byte_range::ByteRange;
 use crate::convert::to_u64;
-use crate::error::DemuxError;
 use crate::file_level::{Kind, TopLevelBox};
 use crate::framing::{BoxEvent, BoxReader};
-use crate::leniency::Leniency;
-use crate::limits::DemuxLimits;
 use crate::media_data::MediaDataReader;
-use crate::sample::{DataReferenceKey, Sample};
 use crate::structure_data::{DataReference, SampleLocations, SegmentIndex, StructureDataReader};
+use crate::{ByteRange, DataReferenceKey, DemuxError, DemuxLimits, Leniency, Sample};
 
 /// Length of the `imda_identifier` an `imda` opens its payload with, §8.1.4
 const IDENTIFIER_BYTES: u64 = 4;
@@ -222,9 +218,8 @@ impl Demuxer {
     /// * [`UnfinishedSample`](DemuxError::UnfinishedSample): the call returns
     ///   no event, and a sample lacks bytes, as for
     ///   [`MediaDataReader::finish`].
-    /// * [`UnresolvedIdentifiedMediaData`](DemuxError::UnresolvedIdentifiedMediaData):
-    ///   the call returns no event, and samples are located in an `imda` the
-    ///   file has not had.
+    /// * The failures of [`StructureDataReader::finish`]: the call returns no
+    ///   event, and samples are located in an `imda` the file has not had.
     /// * The failure the demuxer failed with before.
     pub fn finish(&mut self) -> Result<Option<DemuxEvent>, DemuxError> {
         if let Some(failure) = self.failed {
@@ -240,9 +235,9 @@ impl Demuxer {
         self.media_data
             .finish()
             .map_err(|failure| self.fail(failure))?;
-        if let Some(identifier) = self.structure_data.unresolved_identified_media_data() {
-            return Err(self.fail(DemuxError::UnresolvedIdentifiedMediaData { identifier }));
-        }
+        self.structure_data
+            .finish()
+            .map_err(|failure| self.fail(failure))?;
         Ok(None)
     }
 

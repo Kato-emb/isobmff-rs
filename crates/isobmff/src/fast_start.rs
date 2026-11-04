@@ -9,12 +9,10 @@ use isobmff_boxes::{
 };
 use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxType, Error};
 
-use crate::byte_range::ByteRange;
 use crate::convert::to_u64;
-use crate::error::{DemuxError, FastStartError};
 use crate::framing::{BoxEvent, BoxReader, BoxWriter};
-use crate::output::Output;
 use crate::structure_data::{chunk_offsets, data_reference_index};
+use crate::{ByteRange, DemuxError, FastStartError, Output};
 
 /// Limits a [`FastStart`] reads a file up to
 ///

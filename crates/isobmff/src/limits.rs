@@ -31,14 +31,18 @@ use crate::structure_data::StructureDataLimits;
 ///
 /// ```
 /// use isobmff::media_data::MediaDataReader;
+/// use isobmff::structure_data::StructureDataReader;
 /// use isobmff::{DemuxLimits, Demuxer};
 ///
 /// const LIMITS: DemuxLimits = DemuxLimits::new()
 ///     .with_payload_bytes(64 * 1024 * 1024)
 ///     .with_held_bytes(64 * 1024 * 1024);
 ///
+/// // The demuxer, or a reader of its own made of the layers, up to the same limits
 /// let demuxer = Demuxer::with_limits(LIMITS);
+/// let structure_data = StructureDataReader::new(LIMITS.structure_data());
 /// let media_data = MediaDataReader::new(LIMITS.media_data());
+/// assert_eq!(LIMITS.payload_bytes(), 64 * 1024 * 1024);
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct DemuxLimits {
@@ -156,13 +160,15 @@ impl DemuxLimits {
         self.media_data
     }
 
-    /// Returns the bytes of the payload of one box the demuxer gathers into its value
-    pub(crate) const fn payload_bytes(self) -> u64 {
+    /// Returns the bytes of the payload of one box the demuxer gathers into its value, the limit to gather a box with [`BoxReader::gather`](crate::framing::BoxReader::gather)
+    #[must_use]
+    pub const fn payload_bytes(self) -> u64 {
         self.payload_bytes
     }
 
-    /// Returns the limits of the structure-data the demuxer resolves and keeps
-    pub(crate) const fn structure_data(self) -> StructureDataLimits {
+    /// Returns the limits to create a [`StructureDataReader`](crate::structure_data::StructureDataReader) with
+    #[must_use]
+    pub const fn structure_data(self) -> StructureDataLimits {
         self.structure_data
     }
 }

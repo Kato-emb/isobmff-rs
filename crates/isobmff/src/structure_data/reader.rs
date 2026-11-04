@@ -475,6 +475,43 @@ impl StructureDataReader {
         })
     }
 
+    /// Declares that the file ends, which every `IdentifiedMediaDataBox` the samples name must have come in before, ISO/IEC 14496-12 §8.1.4
+    ///
+    /// The reader is left as it was.
+    ///
+    /// # Errors
+    ///
+    /// * [`UnresolvedIdentifiedMediaData`](DemuxError::UnresolvedIdentifiedMediaData):
+    ///   the reader holds samples in an `IdentifiedMediaDataBox` it has not
+    ///   been told of, the one
+    ///   [`unresolved_identified_media_data`](Self::unresolved_identified_media_data)
+    ///   returns.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff::structure_data::{StructureDataLimits, StructureDataReader};
+    ///
+    /// # let reader = StructureDataReader::new(StructureDataLimits {
+    /// #     sample_count: 1_048_576,
+    /// #     segment_index_count: 1024,
+    /// #     subsegment_count: 1_048_576,
+    /// #     leniency_count: 65_536,
+    /// #     identified_media_data_count: 65_536,
+    /// #     unresolved_sample_count: 1_048_576,
+    /// #     compressed_box_count: 65_536,
+    /// # });
+    /// // A file of no sample in an `IdentifiedMediaDataBox` ends whenever it does
+    /// reader.finish()?;
+    /// # Ok::<(), isobmff::DemuxError>(())
+    /// ```
+    pub fn finish(&self) -> Result<(), DemuxError> {
+        self.unresolved_identified_media_data()
+            .map_or(Ok(()), |identifier| {
+                Err(DemuxError::UnresolvedIdentifiedMediaData { identifier })
+            })
+    }
+
     /// Returns the `imda_identifier` of an `IdentifiedMediaDataBox` the reader holds samples for, not read yet, if any
     #[must_use]
     pub fn unresolved_identified_media_data(&self) -> Option<u32> {
@@ -1213,7 +1250,7 @@ mod tests {
             .handle_movie(movie([identified(7)]))
             .unwrap()
             .collect();
-        let held = reader.unresolved_identified_media_data();
+        let held = (reader.unresolved_identified_media_data(), reader.finish());
         let located: Vec<_> = reader
             .handle_identified_media_data(7, 1000)
             .unwrap()
@@ -1224,13 +1261,16 @@ mod tests {
                 in_movie,
                 held,
                 placed(&located),
-                reader.unresolved_identified_media_data()
+                (reader.unresolved_identified_media_data(), reader.finish())
             ),
             (
                 Vec::new(),
-                Some(7),
+                (
+                    Some(7),
+                    Err(DemuxError::UnresolvedIdentifiedMediaData { identifier: 7 })
+                ),
                 Vec::from([(1, 0, 1004..1008), (1, 10, 1008..1014)]),
-                None
+                (None, Ok(()))
             )
         );
     }
