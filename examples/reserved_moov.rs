@@ -15,10 +15,8 @@
 //! placeholder ([`media_data_header`]): 8 bytes after a `free` of 8, or the
 //! 16 of a `largesize`, which `--large-mdat` takes whatever the length.
 //!
-//! How much to reserve is the writer's guess: recorders estimate it from the
-//! bit rate and the duration they expect, each its own way, which is why the
-//! crate leaves it to the caller rather than lay this file out itself. The
-//! layers do the rest: [`reserve`] makes the `free` boxes,
+//! How much to reserve is the caller's to choose, from the bit rate and the
+//! duration it expects. The layers do the rest: [`reserve`] makes the `free` boxes,
 //! [`SampleTableWriter`] declares the samples from where the example puts
 //! their media data, and [`write_box`] writes the boxes.
 //! Each output goes where its offset says, the destination seeking back for
