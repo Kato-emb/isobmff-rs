@@ -179,7 +179,7 @@
 //! Such a caller reads the samples of a file whose `moov` and `moof`s each
 //! come before their media data: media data in a piece passed before the box
 //! that locates it is read is not kept, and [`finish`](Demuxer::finish) fails
-//! with [`UnfinishedSample`](DemuxError::UnfinishedSample).
+//! with [`UnfinishedSample`](ReadError::UnfinishedSample).
 //!
 //! The demuxer allocates the media data of a sample when its first byte
 //! arrives, and holds it until [`poll_sample`](Demuxer::poll_sample) takes the
@@ -188,7 +188,7 @@
 //! wanted again, so the loops above take the samples after each call, and the
 //! caller that cannot seek passes a piece again while the demuxer wants bytes
 //! of it. A caller that never takes them fails with
-//! [`HeldBytesLimitExceeded`](DemuxError::HeldBytesLimitExceeded).
+//! [`HeldBytesLimitExceeded`](ReadError::HeldBytesLimitExceeded).
 //!
 //! Where the tables of a sample table state different numbers of samples,
 //! the demuxer reads the file as conforming readers do rather than refuse
@@ -296,7 +296,7 @@ pub mod timeline;
 
 pub use byte_range::ByteRange;
 pub use demuxer::{DemuxEvent, Demuxer};
-pub use error::{DemuxError, FastStartError, MuxError, TimelineError};
+pub use error::{FastStartError, ReadError, TimelineError, WriteError};
 pub use fast_start::{FastStart, FastStartLimits};
 #[doc(inline)]
 pub use file_level::supports_default_base_is_moof;
@@ -304,7 +304,7 @@ pub use file_structure::{FileStructure, FragmentedOptions, NonFragmentedOptions,
 pub use isobmff_core::*;
 pub use leniency::{Leniency, SampleTableDisagreement};
 pub use limits::{DemuxLimits, MuxLimits};
-pub use muxer::Muxer;
+pub use muxer::{MuxError, Muxer};
 pub use output::Output;
 pub use sample::{DataReferenceKey, Sample, SampleLocation, SampleProperties};
 

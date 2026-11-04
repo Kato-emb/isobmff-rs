@@ -65,7 +65,7 @@ mod tests {
         demuxer: &mut Demuxer,
         file: &[u8],
         piece_len: impl Fn(ByteRange) -> usize,
-    ) -> Option<Result<Option<DemuxEvent>, isobmff::DemuxError>> {
+    ) -> Option<Result<Option<DemuxEvent>, isobmff::ReadError>> {
         let Some(wanted) = demuxer.wanted_input() else {
             return demuxer.finish().transpose().map(|event| event.map(Some));
         };

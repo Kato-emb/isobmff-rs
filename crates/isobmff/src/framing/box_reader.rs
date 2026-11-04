@@ -6,7 +6,7 @@ use isobmff_core::{BoxHeader, ErrorKind, RawBox};
 
 use crate::byte_range::ByteRange;
 use crate::convert::to_u64;
-use crate::error::DemuxError;
+use crate::error::ReadError;
 use crate::framing::box_event::BoxEvent;
 
 /// Length of the `size` and `boxtype` fields every header opens with
@@ -40,7 +40,7 @@ const SHORTEST_HEADER: u64 = 8;
 ///
 /// ```
 /// use isobmff::framing::{BoxEvent, BoxReader};
-/// use isobmff::{BoxType, DemuxError};
+/// use isobmff::{BoxType, ReadError};
 ///
 /// // `ftyp`, `free`, and an `mdat` whose size runs to the end of the file
 /// let file = b"\0\0\0\x10ftypisom\0\0\0\0\0\0\0\x0cfreeAAAA\0\0\0\0mdatsamples";
@@ -78,7 +78,7 @@ const SHORTEST_HEADER: u64 = 8;
 /// assert_eq!(reader.finish()?, Some(BoxEvent::End));
 /// assert_eq!(brands, b"isom\0\0\0\0");
 /// assert_eq!(media_data, b"samples");
-/// # Ok::<(), DemuxError>(())
+/// # Ok::<(), ReadError>(())
 /// ```
 #[derive(Clone, Debug)]
 pub struct BoxReader {
@@ -116,7 +116,7 @@ enum Progress {
         offset: u64,
         whole: bool,
     },
-    Failed(DemuxError),
+    Failed(ReadError),
 }
 
 /// What the caller answered a header with
@@ -241,26 +241,26 @@ impl BoxReader {
     ///
     /// # Errors
     ///
-    /// * [`UnwantedInput`](DemuxError::UnwantedInput): `input` starts past the
+    /// * [`UnwantedInput`](ReadError::UnwantedInput): `input` starts past the
     ///   wanted offset. The reader is left as it was.
-    /// * [`UndecidedBox`](DemuxError::UndecidedBox): the last header is not
+    /// * [`UndecidedBox`](ReadError::UndecidedBox): the last header is not
     ///   answered yet. The reader is left as it was.
-    /// * [`Box`](DemuxError::Box): a header declares a size smaller than
+    /// * [`Box`](ReadError::Box): a header declares a size smaller than
     ///   itself.
-    /// * [`PayloadLimitExceeded`](DemuxError::PayloadLimitExceeded): a box
+    /// * [`PayloadLimitExceeded`](ReadError::PayloadLimitExceeded): a box
     ///   gathered up to the end of the file outgrows its limit.
     /// * The failure the reader failed with before.
     pub fn handle_input<'a>(
         &mut self,
         offset: u64,
         input: &'a [u8],
-    ) -> Result<Option<BoxEvent<'a>>, DemuxError> {
+    ) -> Result<Option<BoxEvent<'a>>, ReadError> {
         self.check_answered()?;
         let Some(wanted) = self.wanted_input() else {
             return Ok(None);
         };
         let Some(passed_over) = wanted.offset().checked_sub(offset) else {
-            return Err(DemuxError::UnwantedInput { offset, wanted });
+            return Err(ReadError::UnwantedInput { offset, wanted });
         };
         self.leave_gathered();
         let Some(rest) = usize::try_from(passed_over)
@@ -284,14 +284,14 @@ impl BoxReader {
     ///
     /// # Errors
     ///
-    /// * [`UndecidedBox`](DemuxError::UndecidedBox): the last header is not
+    /// * [`UndecidedBox`](ReadError::UndecidedBox): the last header is not
     ///   answered yet. The reader is left as it was.
-    /// * [`UnfinishedHeader`](DemuxError::UnfinishedHeader): the file ends
+    /// * [`UnfinishedHeader`](ReadError::UnfinishedHeader): the file ends
     ///   inside a header.
-    /// * [`UnfinishedBox`](DemuxError::UnfinishedBox): the file ends before the
+    /// * [`UnfinishedBox`](ReadError::UnfinishedBox): the file ends before the
     ///   total a streamed or gathered box declares.
     /// * The failure the reader failed with before.
-    pub fn finish(&mut self) -> Result<Option<BoxEvent<'static>>, DemuxError> {
+    pub fn finish(&mut self) -> Result<Option<BoxEvent<'static>>, ReadError> {
         self.check_answered()?;
         self.leave_gathered();
         self.at_end_of_file = true;
@@ -302,19 +302,19 @@ impl BoxReader {
     ///
     /// # Errors
     ///
-    /// * [`PayloadLimitExceeded`](DemuxError::PayloadLimitExceeded): the
+    /// * [`PayloadLimitExceeded`](ReadError::PayloadLimitExceeded): the
     ///   payload the header declares is longer than `limit_bytes`. The box
     ///   stays open, to be answered again. A payload that runs to the end of
     ///   the file fails the reader instead, once it outgrows the limit.
-    /// * [`NoOpenBox`](DemuxError::NoOpenBox): no header waits for an answer.
+    /// * [`NoOpenBox`](ReadError::NoOpenBox): no header waits for an answer.
     /// * The failure the reader failed with before.
-    pub fn gather(&mut self, limit_bytes: u64) -> Result<(), DemuxError> {
+    pub fn gather(&mut self, limit_bytes: u64) -> Result<(), ReadError> {
         let (header, offset) = self.open_header()?;
         let payload_len = header.payload_len();
         if let Some(payload_len) = payload_len
             && payload_len > limit_bytes
         {
-            return Err(DemuxError::PayloadLimitExceeded {
+            return Err(ReadError::PayloadLimitExceeded {
                 box_type: header.box_type(),
                 reached_bytes: payload_len,
                 limit_bytes,
@@ -336,9 +336,9 @@ impl BoxReader {
     ///
     /// # Errors
     ///
-    /// * [`NoOpenBox`](DemuxError::NoOpenBox): no header waits for an answer.
+    /// * [`NoOpenBox`](ReadError::NoOpenBox): no header waits for an answer.
     /// * The failure the reader failed with before.
-    pub fn gather_head(&mut self, length_bytes: u64) -> Result<(), DemuxError> {
+    pub fn gather_head(&mut self, length_bytes: u64) -> Result<(), ReadError> {
         let (header, offset) = self.open_header()?;
         let head_bytes = header
             .payload_len()
@@ -355,9 +355,9 @@ impl BoxReader {
     ///
     /// # Errors
     ///
-    /// * [`NoOpenBox`](DemuxError::NoOpenBox): no header waits for an answer.
+    /// * [`NoOpenBox`](ReadError::NoOpenBox): no header waits for an answer.
     /// * The failure the reader failed with before.
-    pub fn stream(&mut self) -> Result<(), DemuxError> {
+    pub fn stream(&mut self) -> Result<(), ReadError> {
         let (header, offset) = self.open_header()?;
         self.answer(header, offset, Answer::Stream);
         Ok(())
@@ -370,9 +370,9 @@ impl BoxReader {
     ///
     /// # Errors
     ///
-    /// * [`NoOpenBox`](DemuxError::NoOpenBox): no header waits for an answer.
+    /// * [`NoOpenBox`](ReadError::NoOpenBox): no header waits for an answer.
     /// * The failure the reader failed with before.
-    pub fn skip(&mut self) -> Result<(), DemuxError> {
+    pub fn skip(&mut self) -> Result<(), ReadError> {
         let (header, offset) = self.open_header()?;
         self.answer(header, offset, Answer::Skip);
         Ok(())
@@ -436,7 +436,7 @@ impl BoxReader {
     /// reader.gather(1024)?;
     /// assert_eq!(reader.handle_input(0, file)?, Some(BoxEvent::End));
     /// assert_eq!(reader.gathered_box_range(), Some(ByteRange::new(0, Some(12))));
-    /// # Ok::<(), isobmff::DemuxError>(())
+    /// # Ok::<(), isobmff::ReadError>(())
     /// ```
     #[must_use]
     pub fn gathered_box_range(&self) -> Option<ByteRange> {
@@ -456,10 +456,10 @@ impl BoxReader {
     }
 
     /// Refuses a call while the reader has failed or waits for a header to be answered
-    fn check_answered(&self) -> Result<(), DemuxError> {
+    fn check_answered(&self) -> Result<(), ReadError> {
         match self.progress {
             Progress::Failed(failure) => Err(failure),
-            Progress::Opened { header, .. } => Err(DemuxError::UndecidedBox {
+            Progress::Opened { header, .. } => Err(ReadError::UndecidedBox {
                 box_type: header.box_type(),
             }),
             Progress::Header { .. } | Progress::Payload { .. } | Progress::Gathered { .. } => {
@@ -469,12 +469,12 @@ impl BoxReader {
     }
 
     /// Returns the header waiting for an answer, and the file offset of its box
-    fn open_header(&self) -> Result<(BoxHeader, u64), DemuxError> {
+    fn open_header(&self) -> Result<(BoxHeader, u64), ReadError> {
         match self.progress {
             Progress::Opened { header, offset } => Ok((header, offset)),
             Progress::Failed(failure) => Err(failure),
             Progress::Header { .. } | Progress::Payload { .. } | Progress::Gathered { .. } => {
-                Err(DemuxError::NoOpenBox)
+                Err(ReadError::NoOpenBox)
             }
         }
     }
@@ -507,7 +507,7 @@ impl BoxReader {
     }
 
     /// Fails the reader, which then reads no event
-    fn fail<'a>(&mut self, failure: DemuxError) -> Option<BoxEvent<'a>> {
+    fn fail<'a>(&mut self, failure: ReadError) -> Option<BoxEvent<'a>> {
         self.progress = Progress::Failed(failure);
         None
     }
@@ -530,7 +530,7 @@ impl BoxReader {
     }
 
     /// Takes from the front of `input` as far as the next event, and returns it, or the failure the reader fails with
-    fn read<'a>(&mut self, mut input: &'a [u8]) -> Result<Option<BoxEvent<'a>>, DemuxError> {
+    fn read<'a>(&mut self, mut input: &'a [u8]) -> Result<Option<BoxEvent<'a>>, ReadError> {
         let event = match self.progress {
             Progress::Header { needed } => self.read_header(&mut input, needed),
             Progress::Payload {
@@ -557,7 +557,7 @@ impl BoxReader {
             let Some(bytes) = self.take(input, Some(needed.saturating_sub(read))) else {
                 self.progress = Progress::Header { needed };
                 if self.at_end_of_file && read > 0 {
-                    return self.fail(DemuxError::UnfinishedHeader {
+                    return self.fail(ReadError::UnfinishedHeader {
                         needed_bytes: needed,
                         available_bytes: read,
                     });
@@ -576,7 +576,7 @@ impl BoxReader {
                 }
                 Err(error) => {
                     let ErrorKind::TruncatedHeader { needed_bytes, .. } = error.kind() else {
-                        return self.fail(DemuxError::Box { error });
+                        return self.fail(ReadError::Box { error });
                     };
                     needed = needed_bytes;
                 }
@@ -623,7 +623,7 @@ impl BoxReader {
                 if let Some(bytes) = self.take(input, Some(wanted)) {
                     let reached_bytes = gathered_bytes.saturating_add(to_u64(bytes.len()));
                     if reached_bytes > limit_bytes {
-                        return self.fail(DemuxError::PayloadLimitExceeded {
+                        return self.fail(ReadError::PayloadLimitExceeded {
                             box_type: header.box_type(),
                             reached_bytes,
                             limit_bytes,
@@ -651,7 +651,7 @@ impl BoxReader {
         }
         if self.at_end_of_file {
             let needed_bytes = header.size().total_bytes().unwrap_or(u64::MAX);
-            return self.fail(DemuxError::UnfinishedBox {
+            return self.fail(ReadError::UnfinishedBox {
                 box_type: header.box_type(),
                 needed_bytes,
                 available_bytes: needed_bytes.saturating_sub(remaining.unwrap_or(0)),
@@ -690,7 +690,7 @@ mod tests {
 
     use super::BoxReader;
     use crate::byte_range::ByteRange;
-    use crate::error::DemuxError;
+    use crate::error::ReadError;
     use crate::framing::box_event::BoxEvent;
     use crate::framing::header_forms::{PAYLOAD, every_header_form};
 
@@ -719,7 +719,7 @@ mod tests {
         file: &[u8],
         piece_len: impl Fn(u64) -> usize,
         answer: Answer,
-    ) -> Result<Vec<Recorded>, DemuxError> {
+    ) -> Result<Vec<Recorded>, ReadError> {
         let mut reader = BoxReader::new();
         let mut recorded = Vec::new();
         while let Some(wanted) = reader.wanted_input() {
@@ -745,7 +745,7 @@ mod tests {
         event: BoxEvent<'_>,
         answer: Answer,
         recorded: &mut Vec<Recorded>,
-    ) -> Result<(), DemuxError> {
+    ) -> Result<(), ReadError> {
         match event {
             BoxEvent::Header(header) => {
                 recorded.push(Recorded::Header(header, reader.open_box()));
@@ -1004,7 +1004,7 @@ mod tests {
         ));
         assert_eq!(
             reader.gather(7),
-            Err(DemuxError::PayloadLimitExceeded {
+            Err(ReadError::PayloadLimitExceeded {
                 box_type: BoxType::compact(*b"free"),
                 reached_bytes: 8,
                 limit_bytes: 7,
@@ -1018,7 +1018,7 @@ mod tests {
     fn a_payload_running_to_the_end_of_the_file_fails_the_reader_once_it_outgrows_the_gather_limit()
     {
         let file = b"\0\0\0\0mdatAAAAAAAAAAAA";
-        let failure = DemuxError::PayloadLimitExceeded {
+        let failure = ReadError::PayloadLimitExceeded {
             box_type: BoxType::compact(*b"mdat"),
             reached_bytes: 8,
             limit_bytes: 7,
@@ -1031,7 +1031,7 @@ mod tests {
     #[test]
     fn a_failed_reader_returns_its_failure_and_wants_no_more_input() {
         let mut reader = BoxReader::new();
-        let failure = DemuxError::Box {
+        let failure = ReadError::Box {
             error: Error::size_below_header(8, 4),
         };
         assert_eq!(
@@ -1051,7 +1051,7 @@ mod tests {
             Ok(Some(BoxEvent::Header(_)))
         ));
         reader.stream().unwrap();
-        let failure = DemuxError::Box {
+        let failure = ReadError::Box {
             error: Error::size_below_header(8, 4),
         };
         let input = b"AAAA\0\0\0\x04free";
@@ -1069,7 +1069,7 @@ mod tests {
     fn a_file_ending_inside_a_header_is_unfinished() {
         let mut reader = BoxReader::new();
         assert_eq!(reader.handle_input(0, b"\0\0\0\x01mdat\0\0"), Ok(None));
-        let failure = DemuxError::UnfinishedHeader {
+        let failure = ReadError::UnfinishedHeader {
             needed_bytes: 16,
             available_bytes: 10,
         };
@@ -1079,7 +1079,7 @@ mod tests {
 
     #[test]
     fn a_file_ending_inside_a_box_is_unfinished() {
-        let failure = DemuxError::UnfinishedBox {
+        let failure = ReadError::UnfinishedBox {
             box_type: BoxType::compact(*b"free"),
             needed_bytes: 16,
             available_bytes: 12,
@@ -1102,7 +1102,7 @@ mod tests {
         let mut reader = BoxReader::new();
         assert_eq!(
             reader.handle_input(1, b"\0\0\x08free").err(),
-            Some(DemuxError::UnwantedInput {
+            Some(ReadError::UnwantedInput {
                 offset: 1,
                 wanted: ByteRange::new(0, None),
             })
@@ -1133,7 +1133,7 @@ mod tests {
             reader.handle_input(0, b"\0\0\0\x0cfree"),
             Ok(Some(BoxEvent::Header(_)))
         ));
-        let undecided = DemuxError::UndecidedBox {
+        let undecided = ReadError::UndecidedBox {
             box_type: BoxType::compact(*b"free"),
         };
         assert_eq!(reader.handle_input(8, b"AAAA").err(), Some(undecided));
@@ -1143,13 +1143,13 @@ mod tests {
     #[test]
     fn an_answer_with_no_header_waiting_is_refused() {
         let mut reader = BoxReader::new();
-        assert_eq!(reader.skip(), Err(DemuxError::NoOpenBox));
+        assert_eq!(reader.skip(), Err(ReadError::NoOpenBox));
         assert!(matches!(
             reader.handle_input(0, b"\0\0\0\x0cfree"),
             Ok(Some(BoxEvent::Header(_)))
         ));
         reader.stream().unwrap();
-        assert_eq!(reader.gather(8), Err(DemuxError::NoOpenBox));
+        assert_eq!(reader.gather(8), Err(ReadError::NoOpenBox));
     }
 
     #[test]

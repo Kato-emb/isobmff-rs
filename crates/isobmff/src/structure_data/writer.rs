@@ -14,7 +14,7 @@ use super::random_access::RandomAccessTables;
 use super::sample_description::located_in_file;
 use super::sample_table::{TrackTable, take_sample_tables};
 use super::segment_index::SubsegmentTable;
-use crate::error::MuxError;
+use crate::error::WriteError;
 use crate::file_structure::{FragmentedOptions, SegmentOptions};
 use crate::sample::{Sample, SampleLocation};
 use crate::timeline;
@@ -66,10 +66,10 @@ impl MovieFragmentWriter {
     ///
     /// # Errors
     ///
-    /// * [`SampleTableNotEmpty`](MuxError::SampleTableNotEmpty): a sample
+    /// * [`SampleTableNotEmpty`](WriteError::SampleTableNotEmpty): a sample
     ///   group, sub-sample, sample auxiliary information or shadow sync table
     ///   of a track declares samples, which the writer does not write.
-    pub fn fragmented(movie: MovieBox, options: FragmentedOptions) -> Result<Self, MuxError> {
+    pub fn fragmented(movie: MovieBox, options: FragmentedOptions) -> Result<Self, WriteError> {
         let mut writer = Self::new(movie, options.first_sequence_number)?;
         writer.random_access = options
             .movie_fragment_random_access
@@ -91,15 +91,15 @@ impl MovieFragmentWriter {
     ///
     /// # Errors
     ///
-    /// * [`SampleTableNotEmpty`](MuxError::SampleTableNotEmpty): a sample
+    /// * [`SampleTableNotEmpty`](WriteError::SampleTableNotEmpty): a sample
     ///   group, sub-sample, sample auxiliary information or shadow sync table
     ///   of a track declares samples, which the writer does not write.
-    /// * [`Timeline`](MuxError::Timeline): a `sidx` indexes the segment, and
+    /// * [`Timeline`](WriteError::Timeline): a `sidx` indexes the segment, and
     ///   the edit list of the first track does not map its composition
     ///   timeline.
-    /// * [`SegmentIndexOutOfRange`](MuxError::SegmentIndexOutOfRange): the
+    /// * [`SegmentIndexOutOfRange`](WriteError::SegmentIndexOutOfRange): the
     ///   number of subsegments is past the 65,535 a `sidx` references.
-    pub fn segment(movie: MovieBox, options: SegmentOptions) -> Result<Self, MuxError> {
+    pub fn segment(movie: MovieBox, options: SegmentOptions) -> Result<Self, WriteError> {
         let mut writer = Self::new(movie, options.first_sequence_number)?;
         writer.segment_index = options
             .segment_index
@@ -120,9 +120,9 @@ impl MovieFragmentWriter {
     ///
     /// # Errors
     ///
-    /// * [`SampleTableNotEmpty`](MuxError::SampleTableNotEmpty), as for
+    /// * [`SampleTableNotEmpty`](WriteError::SampleTableNotEmpty), as for
     ///   [`fragmented`](Self::fragmented).
-    fn new(mut movie: MovieBox, first_sequence_number: u32) -> Result<Self, MuxError> {
+    fn new(mut movie: MovieBox, first_sequence_number: u32) -> Result<Self, WriteError> {
         take_sample_tables(&mut movie)?;
         let mvex = movie.mvex.get_or_insert_with(MovieExtendsBox::default);
         let extended: BTreeSet<u32> = mvex.trex.iter().map(|trex| trex.track_id).collect();
@@ -175,23 +175,23 @@ impl MovieFragmentWriter {
     /// * The failures of the samples as for
     ///   [`SampleTableWriter::handle_locations`], but for their decoding
     ///   times, which follow from the durations within the fragment only.
-    /// * [`DataOffsetOutOfRange`](MuxError::DataOffsetOutOfRange): the media
+    /// * [`DataOffsetOutOfRange`](WriteError::DataOffsetOutOfRange): the media
     ///   data of a sample lies further from the `moof` than a `trun` reaches,
     ///   or past 64-bit file offsets.
-    /// * [`SegmentIndexOutOfRange`](MuxError::SegmentIndexOutOfRange): the
+    /// * [`SegmentIndexOutOfRange`](WriteError::SegmentIndexOutOfRange): the
     ///   `sidx` cannot state the fragment as a subsegment.
-    /// * [`SegmentIndexCountMismatch`](MuxError::SegmentIndexCountMismatch):
+    /// * [`SegmentIndexCountMismatch`](WriteError::SegmentIndexCountMismatch):
     ///   the fragment is past the number of subsegments the writer indexes.
-    /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the writer is
+    /// * [`AlreadyFinished`](WriteError::AlreadyFinished): the writer is
     ///   finished.
     pub fn movie_fragment(
         &mut self,
         samples: &[Sample],
         moof_offset: u64,
         data_start: u64,
-    ) -> Result<(MovieFragmentBox, Vec<SampleLocation>), MuxError> {
+    ) -> Result<(MovieFragmentBox, Vec<SampleLocation>), WriteError> {
         if self.finished {
-            return Err(MuxError::AlreadyFinished);
+            return Err(WriteError::AlreadyFinished);
         }
         let laid_out = located_in_file(&self.movie, samples, 0)?;
         let data_len = laid_out.last().map_or(0, |last| last.byte_range().end);
@@ -210,7 +210,7 @@ impl MovieFragmentWriter {
                 .checked_add(moof_len)
                 .and_then(|end| end.checked_add(data_start))
                 .filter(|origin| origin.checked_add(data_len).is_some())
-                .ok_or(MuxError::DataOffsetOutOfRange {
+                .ok_or(WriteError::DataOffsetOutOfRange {
                     track_id: first.track_id,
                 })?,
             None => 0,
@@ -244,8 +244,8 @@ impl MovieFragmentWriter {
     ///
     /// # Errors
     ///
-    /// * [`Box`](MuxError::Box): the `mfra` is longer than its `mfro` counts.
-    /// * [`SegmentIndexCountMismatch`](MuxError::SegmentIndexCountMismatch):
+    /// * [`Box`](WriteError::Box): the `mfra` is longer than its `mfro` counts.
+    /// * [`SegmentIndexCountMismatch`](WriteError::SegmentIndexCountMismatch):
     ///   the writer indexes fewer subsegments than it was made for.
     pub fn finish(
         &mut self,
@@ -254,7 +254,7 @@ impl MovieFragmentWriter {
             Option<MovieFragmentRandomAccessBox>,
             Option<SegmentIndexBox>,
         ),
-        MuxError,
+        WriteError,
     > {
         self.finished = true;
         let mfra = self
@@ -280,10 +280,10 @@ impl SampleTableWriter {
     ///
     /// # Errors
     ///
-    /// * [`SampleTableNotEmpty`](MuxError::SampleTableNotEmpty): a sample
+    /// * [`SampleTableNotEmpty`](WriteError::SampleTableNotEmpty): a sample
     ///   group, sub-sample, sample auxiliary information or shadow sync table
     ///   of a track declares samples, which the writer does not write.
-    pub fn new(mut movie: MovieBox) -> Result<Self, MuxError> {
+    pub fn new(mut movie: MovieBox) -> Result<Self, WriteError> {
         take_sample_tables(&mut movie)?;
         let fragmented = movie.mvex.take().is_some();
         let tables = Some(movie.trak.iter().map(|_| TrackTable::default()).collect());
@@ -313,27 +313,27 @@ impl SampleTableWriter {
     ///
     /// # Errors
     ///
-    /// * [`UnknownTrackId`](MuxError::UnknownTrackId): a sample is of a track
+    /// * [`UnknownTrackId`](WriteError::UnknownTrackId): a sample is of a track
     ///   the movie has none of.
-    /// * [`UnknownSampleDescriptionIndex`](MuxError::UnknownSampleDescriptionIndex),
-    ///   [`UnknownDataReferenceIndex`](MuxError::UnknownDataReferenceIndex),
-    ///   [`ExternalDataReference`](MuxError::ExternalDataReference),
-    ///   [`UnsupportedDataReference`](MuxError::UnsupportedDataReference): the
+    /// * [`UnknownSampleDescriptionIndex`](WriteError::UnknownSampleDescriptionIndex),
+    ///   [`UnknownDataReferenceIndex`](WriteError::UnknownDataReferenceIndex),
+    ///   [`ExternalDataReference`](WriteError::ExternalDataReference),
+    ///   [`UnsupportedDataReference`](WriteError::UnsupportedDataReference): the
     ///   track has no sample entry the sample names, or its entry names a data
     ///   reference entry that is not the file itself.
-    /// * [`MixedSampleDescriptions`](MuxError::MixedSampleDescriptions): the
+    /// * [`MixedSampleDescriptions`](WriteError::MixedSampleDescriptions): the
     ///   samples of one track are described by more than one sample entry.
-    /// * [`DecodingTimeMismatch`](MuxError::DecodingTimeMismatch): a sample
+    /// * [`DecodingTimeMismatch`](WriteError::DecodingTimeMismatch): a sample
     ///   does not start where the one before it of its track ends, or the
     ///   first of a track without an edit list does not start at 0.
-    /// * [`MediaTimeOutOfRange`](MuxError::MediaTimeOutOfRange): an edit of
+    /// * [`MediaTimeOutOfRange`](WriteError::MediaTimeOutOfRange): an edit of
     ///   the track of the first sample of a track starts before that sample.
-    /// * [`SampleSizeOutOfRange`](MuxError::SampleSizeOutOfRange): the media
+    /// * [`SampleSizeOutOfRange`](WriteError::SampleSizeOutOfRange): the media
     ///   data of a sample is longer than a table holds.
-    /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the writer is
+    /// * [`AlreadyFinished`](WriteError::AlreadyFinished): the writer is
     ///   finished.
-    pub fn handle_locations(&mut self, locations: &[SampleLocation]) -> Result<(), MuxError> {
-        let tables = self.tables.as_mut().ok_or(MuxError::AlreadyFinished)?;
+    pub fn handle_locations(&mut self, locations: &[SampleLocation]) -> Result<(), WriteError> {
+        let tables = self.tables.as_mut().ok_or(WriteError::AlreadyFinished)?;
         let decoding_times: Vec<Option<u64>> = self
             .movie
             .trak
@@ -354,7 +354,7 @@ impl SampleTableWriter {
                 edit.media_time >= 0 && i128::from(edit.media_time) < i128::from(run.decoding_time)
             });
             if let Some(edit) = before.filter(|_| first) {
-                return Err(MuxError::MediaTimeOutOfRange {
+                return Err(WriteError::MediaTimeOutOfRange {
                     track_id: run.track_id,
                     media_time: edit.media_time,
                     decoding_time: run.decoding_time,
@@ -475,7 +475,7 @@ mod tests {
     use isobmff_core::{BoxDecode, BoxDefinition};
 
     use super::{MovieFragmentWriter, SampleTableWriter};
-    use crate::error::MuxError;
+    use crate::error::WriteError;
     use crate::file_structure::FragmentedOptions;
     use crate::sample::{DataReferenceKey, Sample, SampleLocation, SampleProperties};
     use crate::structure_data::StructureDataReader;
@@ -667,9 +667,9 @@ mod tests {
                 fragments.finish(),
             ),
             (
-                Err(MuxError::AlreadyFinished),
+                Err(WriteError::AlreadyFinished),
                 movie,
-                Err(MuxError::AlreadyFinished),
+                Err(WriteError::AlreadyFinished),
                 Ok((None, None)),
             )
         );
@@ -691,7 +691,7 @@ mod tests {
                     8,
                 )
                 .map(|_| ()),
-            Err(MuxError::DecodingTimeMismatch {
+            Err(WriteError::DecodingTimeMismatch {
                 track_id: 1,
                 expected_decoding_time: 10,
                 decoding_time: 15
@@ -1017,17 +1017,17 @@ mod tests {
         assert_eq!(
             refused,
             [
-                Err(MuxError::UnknownTrackId { track_id: 3 }),
-                Err(MuxError::UnknownSampleDescriptionIndex {
+                Err(WriteError::UnknownTrackId { track_id: 3 }),
+                Err(WriteError::UnknownSampleDescriptionIndex {
                     track_id: 1,
                     sample_description_index: 2
                 }),
-                Err(MuxError::ExternalDataReference {
+                Err(WriteError::ExternalDataReference {
                     track_id: 2,
                     data_reference_index: 1
                 }),
-                Err(MuxError::MixedSampleDescriptions { track_id: 1 }),
-                Err(MuxError::DecodingTimeMismatch {
+                Err(WriteError::MixedSampleDescriptions { track_id: 1 }),
+                Err(WriteError::DecodingTimeMismatch {
                     track_id: 1,
                     expected_decoding_time: 0,
                     decoding_time: 5
@@ -1060,13 +1060,13 @@ mod tests {
         assert_eq!(
             next,
             [
-                Err(MuxError::DecodingTimeMismatch {
+                Err(WriteError::DecodingTimeMismatch {
                     track_id: 1,
                     expected_decoding_time: 15,
                     decoding_time: 10
                 }),
                 Ok(()),
-                Err(MuxError::DecodingTimeMismatch {
+                Err(WriteError::DecodingTimeMismatch {
                     track_id: 2,
                     expected_decoding_time: 0,
                     decoding_time: 5
@@ -1090,7 +1090,7 @@ mod tests {
 
         assert_eq!(
             writer.handle_locations(&laid_out(&[sample(1, 5, 10, b"AB")], 0)),
-            Err(MuxError::MediaTimeOutOfRange {
+            Err(WriteError::MediaTimeOutOfRange {
                 track_id: 1,
                 media_time: 3,
                 decoding_time: 5
@@ -1259,7 +1259,7 @@ mod tests {
             SampleTableWriter::new(movie).map(|_| ())
         };
         let refused = |box_type| {
-            Err(MuxError::SampleTableNotEmpty {
+            Err(WriteError::SampleTableNotEmpty {
                 track_id: 2,
                 box_type,
             })
@@ -1318,7 +1318,7 @@ mod tests {
         let tables_of = |movie| {
             let mut writer = SampleTableWriter::new(movie)?;
             writer.handle_locations(&laid_out(&samples, 100))?;
-            Ok::<_, MuxError>(writer.finish().clone())
+            Ok::<_, WriteError>(writer.finish().clone())
         };
         let fragments_of = |mut movie: MovieBox| {
             movie.mvex = two_fragmented_tracks().mvex;

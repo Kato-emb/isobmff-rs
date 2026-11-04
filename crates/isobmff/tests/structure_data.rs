@@ -12,7 +12,7 @@ mod tests {
     use isobmff::boxes::{DataEntry, MovieBox, MovieFragmentBox};
     use isobmff::structure_data::{DataReference, movie_fragment_random_access_start};
     use isobmff::timeline::Timeline;
-    use isobmff::{BoxDefinition, BoxType, Boxes, DemuxError, DemuxEvent, Demuxer, SampleLocation};
+    use isobmff::{BoxDefinition, BoxType, Boxes, DemuxEvent, Demuxer, ReadError, SampleLocation};
     use isobmff_test_support::{
         ConformanceFile, conformance_files, ffprobe_packets, gpac_children,
     };
@@ -32,7 +32,7 @@ mod tests {
     }
 
     /// Reads `file` with a [`Demuxer`] from wherever it wants, discarding every track once the `moov` is read
-    fn resolve(file: &[u8]) -> Result<Resolved, DemuxError> {
+    fn resolve(file: &[u8]) -> Result<Resolved, ReadError> {
         let mut resolved = Resolved {
             locations: Vec::new(),
             segment_type: false,
@@ -45,7 +45,7 @@ mod tests {
     }
 
     /// Reads `file` into `resolved` from wherever its demuxer wants, discarding every track once the `moov` is read
-    fn resolve_from(resolved: &mut Resolved, file: &[u8]) -> Result<(), DemuxError> {
+    fn resolve_from(resolved: &mut Resolved, file: &[u8]) -> Result<(), ReadError> {
         let demuxer = &mut resolved.demuxer;
         loop {
             let events = match demuxer.wanted_input() {
@@ -385,7 +385,7 @@ mod tests {
 
         let refused = resolve_from(&mut resolved, &bytes);
         assert!(
-            matches!(refused, Err(DemuxError::MissingDecodingTime { .. })),
+            matches!(refused, Err(ReadError::MissingDecodingTime { .. })),
             "{refused:?}"
         );
         assert_eq!(held(&resolved.demuxer), read_whole);

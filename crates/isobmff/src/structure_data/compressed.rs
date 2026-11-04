@@ -20,7 +20,7 @@ use isobmff_core::BoxType;
 use super::StructureDataReader;
 #[cfg(feature = "compressed-boxes")]
 use crate::convert::to_u64;
-use crate::error::DemuxError;
+use crate::error::ReadError;
 use crate::sample::SampleLocation;
 
 /// Returns `offset`, which lies past `from_end` where it is counted, counted where `from_end` is `to_end`
@@ -102,13 +102,13 @@ impl CompressedBoxes {
     ///
     /// # Errors
     ///
-    /// * [`DataOffsetPastSkippedCompressedBoxes`](DemuxError::DataOffsetPastSkippedCompressedBoxes):
+    /// * [`DataOffsetPastSkippedCompressedBoxes`](ReadError::DataOffsetPastSkippedCompressedBoxes):
     ///   the reader has resumed in a file known to have been transformed,
     ///   and a track fragment of `moof` takes a base data offset.
     pub(super) fn refuse_base_data_offset_past_skipped(
         &self,
         moof: &MovieFragmentBox,
-    ) -> Result<(), DemuxError> {
+    ) -> Result<(), ReadError> {
         if !(self.resumed && self.transformed) {
             return Ok(());
         }
@@ -116,7 +116,7 @@ impl CompressedBoxes {
             .iter()
             .find(|traf| traf.tfhd.base_data_offset.is_some())
             .map_or(Ok(()), |traf| {
-                Err(DemuxError::DataOffsetPastSkippedCompressedBoxes {
+                Err(ReadError::DataOffsetPastSkippedCompressedBoxes {
                     track_id: traf.tfhd.track_id,
                 })
             })
@@ -141,11 +141,11 @@ impl CompressedBoxes {
     ///
     /// # Errors
     ///
-    /// * [`CompressedBoxBeforeLocatedSample`](DemuxError::CompressedBoxBeforeLocatedSample):
+    /// * [`CompressedBoxBeforeLocatedSample`](ReadError::CompressedBoxBeforeLocatedSample):
     ///   the box grows or shrinks when read back, and starts before the media
     ///   data of a sample located already: the sample was located without
     ///   it, and its location is wrong (§8.16.2.2 NOTE 3).
-    /// * [`CompressedBoxCountLimitExceeded`](DemuxError::CompressedBoxCountLimitExceeded):
+    /// * [`CompressedBoxCountLimitExceeded`](ReadError::CompressedBoxCountLimitExceeded):
     ///   recording the box would take the boxes recorded past the limit.
     #[cfg(feature = "compressed-boxes")]
     pub(super) fn record(
@@ -154,7 +154,7 @@ impl CompressedBoxes {
         offset: u64,
         length: u64,
         uncompressed_length: u64,
-    ) -> Result<(), DemuxError> {
+    ) -> Result<(), ReadError> {
         self.transformed = true;
         let at = self
             .boxes
@@ -167,11 +167,11 @@ impl CompressedBoxes {
             return Ok(());
         }
         if uncompressed_length != length && offset < self.located_end {
-            return Err(DemuxError::CompressedBoxBeforeLocatedSample { box_type });
+            return Err(ReadError::CompressedBoxBeforeLocatedSample { box_type });
         }
         let retained_compressed_boxes = to_u64(self.boxes.len()).saturating_add(1);
         if retained_compressed_boxes > self.limit_compressed_boxes {
-            return Err(DemuxError::CompressedBoxCountLimitExceeded {
+            return Err(ReadError::CompressedBoxCountLimitExceeded {
                 retained_compressed_boxes,
                 limit_compressed_boxes: self.limit_compressed_boxes,
             });
@@ -221,25 +221,25 @@ impl CompressedBoxes {
     ///
     /// # Errors
     ///
-    /// * [`DataOffsetOutOfRange`](DemuxError::DataOffsetOutOfRange): the
+    /// * [`DataOffsetOutOfRange`](ReadError::DataOffsetOutOfRange): the
     ///   media data of a sample lies in the box a compressed box replaces,
     ///   where the file holds no media data.
     pub(super) fn locate(
         &self,
         locations: &mut [SampleLocation],
         in_this_file: impl Fn(&SampleLocation) -> bool,
-    ) -> Result<u64, DemuxError> {
+    ) -> Result<u64, ReadError> {
         let mut located_end = self.located_end;
         for location in locations
             .iter_mut()
             .filter(|location| in_this_file(location))
         {
             if !self.boxes.is_empty() {
-                let in_file = self.in_file(location.byte_range()).ok_or(
-                    DemuxError::DataOffsetOutOfRange {
-                        track_id: location.properties().track_id,
-                    },
-                )?;
+                let in_file =
+                    self.in_file(location.byte_range())
+                        .ok_or(ReadError::DataOffsetOutOfRange {
+                            track_id: location.properties().track_id,
+                        })?;
                 *location = location.with_byte_range(in_file);
             }
             located_end = located_end.max(location.byte_range().end);
@@ -256,7 +256,7 @@ impl CompressedBoxes {
         &self,
         movie: Option<&MovieBox>,
         locations: &mut [SampleLocation],
-    ) -> Result<u64, DemuxError> {
+    ) -> Result<u64, ReadError> {
         self.locate(locations, |location| {
             movie
                 .and_then(|movie| {
@@ -302,14 +302,14 @@ impl StructureDataReader {
     ///
     /// # Errors
     ///
-    /// * [`CompressedBoxWithMovieFragmentRandomAccess`](DemuxError::CompressedBoxWithMovieFragmentRandomAccess):
+    /// * [`CompressedBoxWithMovieFragmentRandomAccess`](ReadError::CompressedBoxWithMovieFragmentRandomAccess):
     ///   the reader keeps an `mfra`, and a file has no compressed box with one
     ///   (§8.16.1).
-    /// * [`CompressedBoxBeforeLocatedSample`](DemuxError::CompressedBoxBeforeLocatedSample):
+    /// * [`CompressedBoxBeforeLocatedSample`](ReadError::CompressedBoxBeforeLocatedSample):
     ///   the box grows or shrinks when read back, and starts before the media
     ///   data of a sample located already: the sample was located without
     ///   it (§8.16.2.2 NOTE 3).
-    /// * [`CompressedBoxCountLimitExceeded`](DemuxError::CompressedBoxCountLimitExceeded):
+    /// * [`CompressedBoxCountLimitExceeded`](ReadError::CompressedBoxCountLimitExceeded):
     ///   keeping the box would take those the reader keeps past the limit.
     #[cfg(feature = "compressed-boxes")]
     pub fn handle_compressed_box(
@@ -319,9 +319,9 @@ impl StructureDataReader {
         length: u64,
         replacement_type: BoxType,
         payload_len: u64,
-    ) -> Result<(), DemuxError> {
+    ) -> Result<(), ReadError> {
         if self.movie_fragment_random_access.is_some() {
-            return Err(DemuxError::CompressedBoxWithMovieFragmentRandomAccess { box_type });
+            return Err(ReadError::CompressedBoxWithMovieFragmentRandomAccess { box_type });
         }
         let uncompressed_length = BoxHeader::with_payload_len(replacement_type, payload_len)
             .map_or(u64::MAX, |header| header.encoded_len())
@@ -349,7 +349,7 @@ mod tests {
     use isobmff_core::BoxType;
 
     use super::CompressedBoxes;
-    use crate::error::DemuxError;
+    use crate::error::ReadError;
     use crate::sample::{DataReferenceKey, SampleLocation, SampleProperties};
 
     const MOVIE: BoxType = BoxType::compact(*b"!mov");
@@ -390,7 +390,7 @@ mod tests {
     fn located(
         boxes: &CompressedBoxes,
         location: SampleLocation,
-    ) -> Result<core::ops::Range<u64>, DemuxError> {
+    ) -> Result<core::ops::Range<u64>, ReadError> {
         let mut locations = [location];
         boxes.locate(&mut locations, |_| true)?;
         Ok(locations[0].byte_range())
@@ -411,9 +411,9 @@ mod tests {
                 ),
                 (
                     [5, 30, 40, 55],
-                    Err(DemuxError::DataOffsetOutOfRange { track_id: 1 }),
+                    Err(ReadError::DataOffsetOutOfRange { track_id: 1 }),
                     Ok(50..52),
-                    Err(DemuxError::DataOffsetOutOfRange { track_id: 1 }),
+                    Err(ReadError::DataOffsetOutOfRange { track_id: 1 }),
                     Some(MOVIE),
                 ),
                 "in order: {in_order}"
@@ -449,9 +449,9 @@ mod tests {
             ),
             (
                 55,
-                Err(DemuxError::CompressedBoxBeforeLocatedSample { box_type: INDEX }),
+                Err(ReadError::CompressedBoxBeforeLocatedSample { box_type: INDEX }),
                 Ok(()),
-                Err(DemuxError::CompressedBoxCountLimitExceeded {
+                Err(ReadError::CompressedBoxCountLimitExceeded {
                     retained_compressed_boxes: 2,
                     limit_compressed_boxes: 1
                 }),
@@ -501,7 +501,7 @@ mod reader_tests {
     use isobmff_boxes::MovieBox;
     use isobmff_core::{BoxDefinition, BoxType};
 
-    use crate::error::DemuxError;
+    use crate::error::ReadError;
     use crate::structure_data::StructureDataReader;
     use crate::structure_data::fixtures::{UNLIMITED, movie, track};
 
@@ -566,9 +566,9 @@ mod reader_tests {
         assert_eq!(
             [after(true, true), after(true, false), after(false, true)],
             [
-                Err(DemuxError::DataOffsetPastSkippedCompressedBoxes { track_id: 1 }),
-                Err(DemuxError::MissingMovie),
-                Err(DemuxError::MissingMovie),
+                Err(ReadError::DataOffsetPastSkippedCompressedBoxes { track_id: 1 }),
+                Err(ReadError::MissingMovie),
+                Err(ReadError::MissingMovie),
             ]
         );
     }
@@ -579,7 +579,7 @@ mod reader_tests {
      {
         let mfra = isobmff_boxes::MovieFragmentRandomAccessBox::default();
         let refused = |box_type| {
-            Err(DemuxError::CompressedBoxWithMovieFragmentRandomAccess {
+            Err(ReadError::CompressedBoxWithMovieFragmentRandomAccess {
                 box_type: BoxType::compact(box_type),
             })
         };

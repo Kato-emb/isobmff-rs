@@ -1,4 +1,4 @@
-//! [`DemuxError`], the reasons the bytes of a file do not read as its boxes, its structure-data as its samples, or its media data as their bytes
+//! [`ReadError`], the reasons the bytes of a file do not read as its boxes, its structure-data as its samples, or its media data as their bytes
 
 use core::error;
 use core::fmt;
@@ -24,7 +24,7 @@ use crate::byte_range::ByteRange;
 /// carried whole as [`Box`](Self::Box).
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum DemuxError {
+pub enum ReadError {
     /// Input starts past the file offset the reader wants next
     #[non_exhaustive]
     UnwantedInput {
@@ -291,7 +291,7 @@ pub enum DemuxError {
     },
 }
 
-impl fmt::Display for DemuxError {
+impl fmt::Display for ReadError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Self::UnwantedInput { offset, wanted } => write!(
@@ -489,4 +489,4 @@ impl fmt::Display for DemuxError {
     }
 }
 
-impl error::Error for DemuxError {}
+impl error::Error for ReadError {}

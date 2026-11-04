@@ -14,7 +14,7 @@ use crate::file_level::{Kind, TopLevelBox};
 use crate::framing::{BoxEvent, BoxReader};
 use crate::media_data::MediaDataReader;
 use crate::structure_data::{DataReference, SampleLocations, SegmentIndex, StructureDataReader};
-use crate::{ByteRange, DataReferenceKey, DemuxError, DemuxLimits, Leniency, Sample};
+use crate::{ByteRange, DataReferenceKey, DemuxLimits, Leniency, ReadError, Sample};
 
 /// Length of the `imda_identifier` an `imda` opens its payload with, §8.1.4
 const IDENTIFIER_BYTES: u64 = 4;
@@ -55,7 +55,7 @@ const IDENTIFIER_BYTES: u64 = 4;
 /// It can tell only once it has read every compressed box before the media
 /// data (§8.16.2.2 NOTE 3): a compressed box that grows or shrinks before
 /// the media data of a sample located already fails the demuxer with
-/// [`CompressedBoxBeforeLocatedSample`](DemuxError::CompressedBoxBeforeLocatedSample).
+/// [`CompressedBoxBeforeLocatedSample`](ReadError::CompressedBoxBeforeLocatedSample).
 /// The offsets of a `sidx` count in the file as it is (§8.16.8), and are
 /// taken as they are.
 ///
@@ -64,7 +64,7 @@ const IDENTIFIER_BYTES: u64 = 4;
 /// failure. [`poll_sample`](Self::poll_sample) still returns the samples
 /// whose bytes arrived until then, those of the failing call among them.
 /// Input that starts past the offset the demuxer wants is refused with
-/// [`UnwantedInput`](DemuxError::UnwantedInput), and leaves the demuxer as it
+/// [`UnwantedInput`](ReadError::UnwantedInput), and leaves the demuxer as it
 /// was.
 ///
 /// The crate documentation shows the loops of a caller that can seek, of one
@@ -78,7 +78,7 @@ pub struct Demuxer {
     file_type: Option<FileTypeBox>,
     segment_type: Option<SegmentTypeBox>,
     /// Failure the demuxer failed with, which every call after it returns
-    failed: Option<DemuxError>,
+    failed: Option<ReadError>,
 }
 
 impl Demuxer {
@@ -145,31 +145,31 @@ impl Demuxer {
     ///
     /// # Errors
     ///
-    /// * [`UnwantedInput`](DemuxError::UnwantedInput): `input` starts past the
+    /// * [`UnwantedInput`](ReadError::UnwantedInput): `input` starts past the
     ///   wanted offset. The demuxer is left as it was.
     /// * The failures of [`BoxReader::handle_input`], and of
     ///   [`BoxReader::gather`] with the limit of the payload of a box.
-    /// * [`Box`](DemuxError::Box): a box gathered does not read as its value.
+    /// * [`Box`](ReadError::Box): a box gathered does not read as its value.
     /// * With the feature `compressed-boxes`, the failures of
     ///   `framing::decompressed` with the limit
     ///   of the payload of a box, and:
-    ///   * [`CompressedBoxWithMovieFragmentRandomAccess`](DemuxError::CompressedBoxWithMovieFragmentRandomAccess):
+    ///   * [`CompressedBoxWithMovieFragmentRandomAccess`](ReadError::CompressedBoxWithMovieFragmentRandomAccess):
     ///     the file has both a compressed box and an `mfra` (§8.16.1).
-    ///   * [`CompressedBoxBeforeLocatedSample`](DemuxError::CompressedBoxBeforeLocatedSample):
+    ///   * [`CompressedBoxBeforeLocatedSample`](ReadError::CompressedBoxBeforeLocatedSample):
     ///     a compressed box grows or shrinks before the media data of a
     ///     sample located already.
-    ///   * [`CompressedBoxCountLimitExceeded`](DemuxError::CompressedBoxCountLimitExceeded):
+    ///   * [`CompressedBoxCountLimitExceeded`](ReadError::CompressedBoxCountLimitExceeded):
     ///     the compressed boxes read pass the limit.
-    ///   * [`DataOffsetOutOfRange`](DemuxError::DataOffsetOutOfRange): the
+    ///   * [`DataOffsetOutOfRange`](ReadError::DataOffsetOutOfRange): the
     ///     media data of a sample lies in the box a compressed box replaces.
-    ///   * [`DataOffsetPastSkippedCompressedBoxes`](DemuxError::DataOffsetPastSkippedCompressedBoxes):
+    ///   * [`DataOffsetPastSkippedCompressedBoxes`](ReadError::DataOffsetPastSkippedCompressedBoxes):
     ///     a `moof` read after a resume takes a base data offset, as for
     ///     [`resume_at`](Self::resume_at).
     /// * The failures of the [`StructureDataReader`] the boxes of
     ///   structure-data are handed to.
     /// * The failures of [`MediaDataReader::handle_sample_locations`] the
     ///   locations of the samples are handed to.
-    /// * [`HeldBytesLimitExceeded`](DemuxError::HeldBytesLimitExceeded): the
+    /// * [`HeldBytesLimitExceeded`](ReadError::HeldBytesLimitExceeded): the
     ///   call reads no event, and keeps no byte of the input because a sample's
     ///   allocation would take the media data held past the limit, as a caller
     ///   that does not take the samples it gathers comes to.
@@ -178,7 +178,7 @@ impl Demuxer {
         &mut self,
         offset: u64,
         input: &[u8],
-    ) -> Result<Option<DemuxEvent>, DemuxError> {
+    ) -> Result<Option<DemuxEvent>, ReadError> {
         if let Some(failure) = self.failed {
             return Err(failure);
         }
@@ -192,7 +192,7 @@ impl Demuxer {
                 demuxed => break demuxed,
             }
         };
-        if matches!(event, Err(DemuxError::UnwantedInput { .. })) {
+        if matches!(event, Err(ReadError::UnwantedInput { .. })) {
             return event;
         }
         // Why not leave the input to a call that succeeds: a box that fails after a skipped `mdat` ends the reading, and the caller would pass no more of the `mdat`.
@@ -215,13 +215,13 @@ impl Demuxer {
     ///
     /// * The failures of [`BoxReader::finish`], and those of reading a box
     ///   into its value as for [`handle_input`](Self::handle_input).
-    /// * [`UnfinishedSample`](DemuxError::UnfinishedSample): the call returns
+    /// * [`UnfinishedSample`](ReadError::UnfinishedSample): the call returns
     ///   no event, and a sample lacks bytes, as for
     ///   [`MediaDataReader::finish`].
     /// * The failures of [`StructureDataReader::finish`]: the call returns no
     ///   event, and samples are located in an `imda` the file has not had.
     /// * The failure the demuxer failed with before.
-    pub fn finish(&mut self) -> Result<Option<DemuxEvent>, DemuxError> {
+    pub fn finish(&mut self) -> Result<Option<DemuxEvent>, ReadError> {
         if let Some(failure) = self.failed {
             return Err(failure);
         }
@@ -265,7 +265,7 @@ impl Demuxer {
     /// time (§8.8.12). The movie and the entries of its data references, the
     /// segment indexes, the movie fragment random access box, the brands and
     /// the leniencies are kept, so a `moov` read again fails
-    /// with [`DuplicateBox`](DemuxError::DuplicateBox). The samples being
+    /// with [`DuplicateBox`](ReadError::DuplicateBox). The samples being
     /// gathered are dropped with the bytes gathered for them; the tracks
     /// discarded stay discarded.
     ///
@@ -275,7 +275,7 @@ impl Demuxer {
     /// file known to have been transformed, by a compressed box or an `otyp`
     /// read, a `moof` read after the resume that takes a base data offset
     /// fails with
-    /// [`DataOffsetPastSkippedCompressedBoxes`](DemuxError::DataOffsetPastSkippedCompressedBoxes);
+    /// [`DataOffsetPastSkippedCompressedBoxes`](ReadError::DataOffsetPastSkippedCompressedBoxes);
     /// one that counts from itself reads as it does without resuming. A file
     /// not known so, such as one without an `otyp` resumed before its first
     /// compressed box, is read as though it had none skipped. A file with
@@ -286,7 +286,7 @@ impl Demuxer {
     ///
     /// * The failure the demuxer failed with before, which no resuming
     ///   undoes.
-    pub fn resume_at(&mut self, offset: u64) -> Result<(), DemuxError> {
+    pub fn resume_at(&mut self, offset: u64) -> Result<(), ReadError> {
         if let Some(failure) = self.failed {
             return Err(failure);
         }
@@ -361,7 +361,7 @@ impl Demuxer {
     }
 
     /// Makes an event of the reader of the boxes into the event of the demuxer, if it makes one
-    fn demux(&mut self, box_event: BoxEvent<'_>) -> Result<Option<DemuxEvent>, DemuxError> {
+    fn demux(&mut self, box_event: BoxEvent<'_>) -> Result<Option<DemuxEvent>, ReadError> {
         match box_event {
             BoxEvent::Header(header) => self.open(header),
             // Why not `unreachable!`: a payload comes only after `stream`, which
@@ -372,14 +372,14 @@ impl Demuxer {
     }
 
     /// Leaves the demuxer failed with `failure`, which every call after it returns, and returns it
-    fn fail(&mut self, failure: DemuxError) -> DemuxError {
+    fn fail(&mut self, failure: ReadError) -> ReadError {
         self.failed = Some(failure);
         failure
     }
 
     /// Answers the header of a box at file level as its type says, and returns the event it is reported with
-    fn open(&mut self, header: BoxHeader) -> Result<Option<DemuxEvent>, DemuxError> {
-        let byte_range = self.boxes.open_box().ok_or(DemuxError::NoOpenBox)?;
+    fn open(&mut self, header: BoxHeader) -> Result<Option<DemuxEvent>, ReadError> {
+        let byte_range = self.boxes.open_box().ok_or(ReadError::NoOpenBox)?;
         let event = match Kind::of(header.box_type()) {
             Kind::StructureData => {
                 self.boxes.gather(self.payload_limit_bytes)?;
@@ -397,14 +397,14 @@ impl Demuxer {
     }
 
     /// Reads the box just gathered, if any, into its value, and returns the event it is reported with
-    fn close(&mut self) -> Result<Option<DemuxEvent>, DemuxError> {
+    fn close(&mut self) -> Result<Option<DemuxEvent>, ReadError> {
         let Some(byte_range) = self.boxes.gathered_box_range() else {
             return Ok(None);
         };
         if let Some((header, head)) = self.boxes.gathered_head() {
             let identifier = <[u8; 4]>::try_from(head)
                 .map(u32::from_be_bytes)
-                .map_err(|_| DemuxError::Box {
+                .map_err(|_| ReadError::Box {
                     error: Error::truncated_buffer(IDENTIFIER_BYTES, to_u64(head.len()))
                         .in_container(header.box_type()),
                 })?;
@@ -480,7 +480,7 @@ impl Demuxer {
     }
 
     /// Hands the locations of `samples` whose media data is in the file itself to the media data, and returns them all
-    fn gather(&mut self, samples: SampleLocations) -> Result<SampleLocations, DemuxError> {
+    fn gather(&mut self, samples: SampleLocations) -> Result<SampleLocations, ReadError> {
         let structure_data = &self.structure_data;
         self.media_data
             .handle_sample_locations(samples.clone().filter(|location| {
@@ -504,7 +504,7 @@ fn read(
     limit_bytes: u64,
     raw_box: RawBox<'_>,
     offset: u64,
-) -> Result<Option<TopLevelBox>, DemuxError> {
+) -> Result<Option<TopLevelBox>, ReadError> {
     #[cfg(feature = "compressed-boxes")]
     {
         let box_type = raw_box.header().box_type();
@@ -620,7 +620,7 @@ pub enum DemuxEvent {
     /// [`Demuxer::finish`], and the bytes of the samples it locates then are
     /// wanted from where they lie, before the end: a caller that cannot seek
     /// lacks them, and the next `finish` fails with
-    /// [`UnfinishedSample`](DemuxError::UnfinishedSample).
+    /// [`UnfinishedSample`](ReadError::UnfinishedSample).
     #[non_exhaustive]
     IdentifiedMediaData {
         /// Header of the box
@@ -658,7 +658,7 @@ mod tests {
 
     use super::{DemuxEvent, Demuxer, to_u64};
     use crate::byte_range::ByteRange;
-    use crate::error::DemuxError;
+    use crate::error::ReadError;
     use crate::leniency::{Leniency, SampleTableDisagreement};
     use crate::limits::DemuxLimits;
     use crate::structure_data::fixtures::{in_another_file, track};
@@ -692,7 +692,7 @@ mod tests {
     }
 
     /// Reads `file` from wherever `demuxer` wants it, `piece_len` bytes at a time and no more than it wants
-    fn read(demuxer: &mut Demuxer, file: &[u8], piece_len: usize) -> Result<Read, DemuxError> {
+    fn read(demuxer: &mut Demuxer, file: &[u8], piece_len: usize) -> Result<Read, ReadError> {
         read_reacting(demuxer, file, piece_len, |_, _| {})
     }
 
@@ -702,7 +702,7 @@ mod tests {
         file: &[u8],
         piece_len: usize,
         mut react: impl FnMut(&mut Demuxer, &DemuxEvent),
-    ) -> Result<Read, DemuxError> {
+    ) -> Result<Read, ReadError> {
         let mut read = Read {
             seen: Vec::new(),
             wanted: Vec::new(),
@@ -746,7 +746,7 @@ mod tests {
         demuxer: &mut Demuxer,
         file: &[u8],
         piece_len: usize,
-    ) -> (Polled, Result<(), DemuxError>) {
+    ) -> (Polled, Result<(), ReadError>) {
         let mut samples = Vec::new();
         let mut offset = 0_u64;
         let mut ending = Ok(());
@@ -973,7 +973,7 @@ mod tests {
                 stream(&mut demuxer, &file, piece_len),
                 (
                     Vec::new(),
-                    Err(DemuxError::UnfinishedSample {
+                    Err(ReadError::UnfinishedSample {
                         track_id: 1,
                         needed_bytes: 2,
                         available_bytes: 0
@@ -1057,7 +1057,7 @@ mod tests {
                 stream(&mut Demuxer::new(), cut, piece_len),
                 (
                     vec![(1, b"WX".to_vec())],
-                    Err(DemuxError::UnfinishedSample {
+                    Err(ReadError::UnfinishedSample {
                         track_id: 1,
                         needed_bytes: 2,
                         available_bytes: 1
@@ -1073,7 +1073,7 @@ mod tests {
         let head = [file_type(), fragmented_movie(), fragment(1, None)].concat();
         let media_data = head.len().saturating_sub(4);
         let file = [head.as_slice(), &[0, 0, 0, 4, b'f', b'r', b'e', b'e']].concat();
-        let failure = DemuxError::Box {
+        let failure = ReadError::Box {
             error: isobmff_core::Error::size_below_header(8, 4),
         };
         for piece_len in [media_data, file.len()] {
@@ -1172,7 +1172,7 @@ mod tests {
         let head = [file_type(), fragmented_movie()].concat();
         let file = [head, fragment(1, None)].concat();
         let mut demuxer = Demuxer::with_limits(DemuxLimits::new().with_sample_bytes(1));
-        let failure = DemuxError::SampleBytesLimitExceeded {
+        let failure = ReadError::SampleBytesLimitExceeded {
             declared_bytes: 2,
             limit_bytes: 1,
         };
@@ -1196,14 +1196,14 @@ mod tests {
             (
                 header_below_its_size,
                 DemuxLimits::new(),
-                DemuxError::Box {
+                ReadError::Box {
                     error: isobmff_core::Error::size_below_header(8, 2),
                 },
             ),
             (
                 sample_past_the_limit,
                 DemuxLimits::new().with_sample_bytes(1),
-                DemuxError::SampleBytesLimitExceeded {
+                ReadError::SampleBytesLimitExceeded {
                     declared_bytes: 2,
                     limit_bytes: 1,
                 },
@@ -1226,7 +1226,7 @@ mod tests {
         let file = [head, fragment(1, None)].concat();
         let limits = DemuxLimits::new().with_held_bytes(2);
         let mut demuxer = Demuxer::with_limits(limits);
-        let failure = DemuxError::HeldBytesLimitExceeded {
+        let failure = ReadError::HeldBytesLimitExceeded {
             held_bytes: 4,
             limit_bytes: 2,
         };
@@ -1379,7 +1379,7 @@ mod tests {
             stream(&mut Demuxer::new(), &to_end, 7),
             (
                 Vec::new(),
-                Err(DemuxError::UnfinishedSample {
+                Err(ReadError::UnfinishedSample {
                     track_id: 1,
                     needed_bytes: 2,
                     available_bytes: 0
@@ -1403,8 +1403,8 @@ mod tests {
                 read(&mut Demuxer::new(), &short, usize::MAX).map(|_| ()),
             ],
             [
-                Err(DemuxError::UnresolvedIdentifiedMediaData { identifier: 9 }),
-                Err(DemuxError::Box {
+                Err(ReadError::UnresolvedIdentifiedMediaData { identifier: 9 }),
+                Err(ReadError::Box {
                     error: isobmff_core::Error::truncated_buffer(4, 2)
                         .in_container(BoxType::compact(*b"imda"))
                 }),
@@ -1474,7 +1474,7 @@ mod tests {
     fn a_file_with_both_a_compressed_box_and_an_mfra_is_refused_whichever_comes_first() {
         let compressed = compressed(*b"!six", &encoded(&SegmentIndexBox::default()));
         let mfra = encoded(&isobmff_boxes::MovieFragmentRandomAccessBox::default());
-        let refused = Err(DemuxError::CompressedBoxWithMovieFragmentRandomAccess {
+        let refused = Err(ReadError::CompressedBoxWithMovieFragmentRandomAccess {
             box_type: BoxType::compact(*b"!six"),
         });
 
@@ -1632,7 +1632,7 @@ mod tests {
 
         assert_eq!(
             read(&mut Demuxer::new(), &file, usize::MAX).map(|_| ()),
-            Err(DemuxError::CompressedBoxBeforeLocatedSample {
+            Err(ReadError::CompressedBoxBeforeLocatedSample {
                 box_type: BoxType::compact(*b"!six")
             })
         );
@@ -1662,8 +1662,8 @@ mod tests {
                 .map(|_| ()),
             ],
             [
-                Err(DemuxError::DataOffsetOutOfRange { track_id: 1 }),
-                Err(DemuxError::CompressedBoxCountLimitExceeded {
+                Err(ReadError::DataOffsetOutOfRange { track_id: 1 }),
+                Err(ReadError::CompressedBoxCountLimitExceeded {
                     retained_compressed_boxes: 2,
                     limit_compressed_boxes: 1
                 }),
@@ -1706,7 +1706,7 @@ mod tests {
         assert_eq!(
             [resumed(&absolute), resumed(&relative)],
             [
-                Err(DemuxError::DataOffsetPastSkippedCompressedBoxes { track_id: 1 }),
+                Err(ReadError::DataOffsetPastSkippedCompressedBoxes { track_id: 1 }),
                 Ok(2)
             ]
         );
@@ -1954,13 +1954,13 @@ mod tests {
         demuxer.resume_at(to_u64(head.len())).unwrap();
         assert_eq!(
             read(&mut demuxer, &file, usize::MAX).map(|read| read.seen),
-            Err(DemuxError::MissingDecodingTime { track_id: 1 })
+            Err(ReadError::MissingDecodingTime { track_id: 1 })
         );
         assert_eq!(demuxer.wanted_input(), None);
         assert!(demuxer.movie().is_some());
         assert_eq!(
             demuxer.resume_at(second),
-            Err(DemuxError::MissingDecodingTime { track_id: 1 })
+            Err(ReadError::MissingDecodingTime { track_id: 1 })
         );
     }
 
@@ -2025,7 +2025,7 @@ mod tests {
 
         let failure = read(&mut demuxer, &file, usize::MAX).map(|read| read.seen);
         assert!(
-            matches!(failure, Err(DemuxError::PayloadLimitExceeded { box_type, limit_bytes: 16, .. }) if box_type == isobmff_boxes::MovieBox::BOX_TYPE),
+            matches!(failure, Err(ReadError::PayloadLimitExceeded { box_type, limit_bytes: 16, .. }) if box_type == isobmff_boxes::MovieBox::BOX_TYPE),
             "{failure:?}"
         );
         assert_eq!(demuxer.wanted_input(), None);
@@ -2054,7 +2054,7 @@ mod tests {
 
         assert_eq!(
             outcomes.last(),
-            Some(&Err(DemuxError::Box {
+            Some(&Err(ReadError::Box {
                 error: isobmff_core::Error::size_below_header(8, 2)
             }))
         );
@@ -2068,7 +2068,7 @@ mod tests {
             b"\0\0\0\x02free".to_vec(),
         ]
         .concat();
-        let failure = DemuxError::Box {
+        let failure = ReadError::Box {
             error: isobmff_core::Error::size_below_header(8, 2),
         };
         let mdat = ByteRange::new(to_u64(file_type().len()), Some(10));
@@ -2123,7 +2123,7 @@ mod tests {
         demuxer.resume_at(0).unwrap();
         assert_eq!(
             read(&mut demuxer, &file, usize::MAX).map(|read| read.seen),
-            Err(DemuxError::DuplicateBox {
+            Err(ReadError::DuplicateBox {
                 box_type: isobmff_boxes::MovieBox::BOX_TYPE
             })
         );
@@ -2135,7 +2135,7 @@ mod tests {
 
         assert_eq!(
             read(&mut Demuxer::new(), &file, usize::MAX).map(|read| read.seen),
-            Err(DemuxError::MissingMovie)
+            Err(ReadError::MissingMovie)
         );
     }
 }

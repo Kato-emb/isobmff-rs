@@ -6,7 +6,7 @@ use isobmff_boxes::{MediaDataBox, MovieBox};
 use isobmff_core::{BoxDefinition, BoxHeader};
 
 use crate::convert::to_u64;
-use crate::error::MuxError;
+use crate::error::WriteError;
 use crate::framing::{BoxEvent, BoxWriter};
 use crate::sample::{Sample, SampleLocation};
 use crate::structure_data::located_in_file;
@@ -35,15 +35,15 @@ impl MediaDataWriter {
     ///
     /// # Errors
     ///
-    /// * [`DataOffsetOutOfRange`](MuxError::DataOffsetOutOfRange): the media
+    /// * [`DataOffsetOutOfRange`](WriteError::DataOffsetOutOfRange): the media
     ///   data of the samples together is longer than a box holds.
-    pub fn header(&self, samples: &[Sample]) -> Result<BoxHeader, MuxError> {
+    pub fn header(&self, samples: &[Sample]) -> Result<BoxHeader, WriteError> {
         let payload_len = samples
             .iter()
             .map(|sample| to_u64(sample.data().len()))
             .fold(0, u64::saturating_add);
         BoxHeader::with_payload_len(MediaDataBox::BOX_TYPE, payload_len).ok_or(
-            MuxError::DataOffsetOutOfRange {
+            WriteError::DataOffsetOutOfRange {
                 track_id: samples
                     .first()
                     .map_or(0, |sample| sample.properties().track_id),
@@ -62,18 +62,18 @@ impl MediaDataWriter {
     ///
     /// # Errors
     ///
-    /// * [`UnknownTrackId`](MuxError::UnknownTrackId): a sample is of a track
+    /// * [`UnknownTrackId`](WriteError::UnknownTrackId): a sample is of a track
     ///   the movie has none of.
-    /// * [`UnknownSampleDescriptionIndex`](MuxError::UnknownSampleDescriptionIndex),
-    ///   [`UnknownDataReferenceIndex`](MuxError::UnknownDataReferenceIndex),
-    ///   [`ExternalDataReference`](MuxError::ExternalDataReference),
-    ///   [`UnsupportedDataReference`](MuxError::UnsupportedDataReference): the
+    /// * [`UnknownSampleDescriptionIndex`](WriteError::UnknownSampleDescriptionIndex),
+    ///   [`UnknownDataReferenceIndex`](WriteError::UnknownDataReferenceIndex),
+    ///   [`ExternalDataReference`](WriteError::ExternalDataReference),
+    ///   [`UnsupportedDataReference`](WriteError::UnsupportedDataReference): the
     ///   track has no sample entry the sample names, or its entry names a data
     ///   reference entry that is not the file itself, which the `mdat` is in.
     /// * The failures of [`BoxWriter::handle_event`], such as
-    ///   [`PayloadLengthMismatch`](MuxError::PayloadLengthMismatch) where
+    ///   [`PayloadLengthMismatch`](WriteError::PayloadLengthMismatch) where
     ///   `header` is not the header of the `mdat` of `samples`.
-    /// * [`DataOffsetOutOfRange`](MuxError::DataOffsetOutOfRange): the media
+    /// * [`DataOffsetOutOfRange`](WriteError::DataOffsetOutOfRange): the media
     ///   data of a sample lies past 64-bit file offsets.
     pub fn write(
         &self,
@@ -81,7 +81,7 @@ impl MediaDataWriter {
         boxes: &mut BoxWriter,
         header: BoxHeader,
         samples: &[Sample],
-    ) -> Result<(Vec<u8>, Vec<SampleLocation>), MuxError> {
+    ) -> Result<(Vec<u8>, Vec<SampleLocation>), WriteError> {
         let mut bytes = Vec::with_capacity(
             usize::try_from(header.size().total_bytes().unwrap_or_default()).unwrap_or_default(),
         );
@@ -105,7 +105,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use super::MediaDataWriter;
-    use crate::error::MuxError;
+    use crate::error::WriteError;
     use crate::framing::BoxWriter;
     use crate::sample::SampleLocation;
     use crate::structure_data::fixtures::{UNLIMITED, in_another_file, movie, sample, track};
@@ -155,7 +155,7 @@ mod tests {
                 boxes.next_offset(),
             ),
             (
-                Err(MuxError::ExternalDataReference {
+                Err(WriteError::ExternalDataReference {
                     track_id: 2,
                     data_reference_index: 1
                 }),

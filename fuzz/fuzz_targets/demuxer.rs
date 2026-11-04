@@ -26,7 +26,7 @@
 #![no_main]
 
 use isobmff::{
-    BoxType, ByteRange, DemuxError, DemuxEvent, DemuxLimits, Demuxer, Sample, SampleLocation,
+    BoxType, ByteRange, DemuxEvent, DemuxLimits, Demuxer, ReadError, Sample, SampleLocation,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -106,8 +106,7 @@ fuzz_target!(|bytes: &[u8]| {
 fn fails_on_what_is_held(read: &Read) -> bool {
     matches!(
         read.ending,
-        Err(DemuxError::HeldLocationLimitExceeded { .. }
-            | DemuxError::HeldBytesLimitExceeded { .. })
+        Err(ReadError::HeldLocationLimitExceeded { .. } | ReadError::HeldBytesLimitExceeded { .. })
     )
 }
 
@@ -117,7 +116,7 @@ struct Read {
     /// Locations the events carry whose media data is in the file itself, in their order
     in_this_file: Vec<SampleLocation>,
     samples: Vec<Sample>,
-    ending: Result<(), DemuxError>,
+    ending: Result<(), ReadError>,
 }
 
 /// Reads `bytes` from wherever the demuxer wants them, in pieces of `piece_lens` in turn

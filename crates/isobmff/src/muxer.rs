@@ -11,11 +11,14 @@ use crate::framing::{BoxWriter, fill};
 use crate::media_data::MediaDataWriter;
 use crate::structure_data::{MovieFragmentWriter, SampleTableWriter};
 use crate::{
-    ByteRange, FileStructure, FragmentedOptions, MuxError, MuxLimits, NonFragmentedOptions, Output,
-    Sample, SegmentOptions,
+    ByteRange, FileStructure, FragmentedOptions, MuxLimits, NonFragmentedOptions, Output, Sample,
+    SegmentOptions, WriteError,
 };
 
+mod error;
 mod recoverable;
+
+pub use self::error::MuxError;
 
 use self::recoverable::Recoverable;
 
@@ -206,7 +209,7 @@ impl Muxer {
     /// * [`UnsupportedBrand`](MuxError::UnsupportedBrand): the file is
     ///   fragmented, recoverable or a segment, and its brands name none of
     ///   `iso5` to `isod`.
-    /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the file is finished.
+    /// * [`AlreadyFinished`](WriteError::AlreadyFinished): the file is finished.
     pub fn handle_file_type(&mut self, file_type: FileTypeBox) -> Result<(), MuxError> {
         let box_type = match self.structure {
             Structure::Segment(_) => SegmentTypeBox::BOX_TYPE,
@@ -282,15 +285,15 @@ impl Muxer {
     ///
     /// * [`DuplicateBox`](MuxError::DuplicateBox): the muxer holds a movie
     ///   already.
-    /// * [`SampleTableNotEmpty`](MuxError::SampleTableNotEmpty): a sample
+    /// * [`SampleTableNotEmpty`](WriteError::SampleTableNotEmpty): a sample
     ///   group, sub-sample, sample auxiliary information or shadow sync table
     ///   of a track declares samples, which the muxer does not write from the
     ///   samples it takes.
-    /// * [`Timeline`](MuxError::Timeline): the segment is indexed, and the
+    /// * [`Timeline`](WriteError::Timeline): the segment is indexed, and the
     ///   edit list of the first track of the movie does not map its
     ///   composition timeline.
-    /// * [`Box`](MuxError::Box): the `moov` does not write.
-    /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the file is finished.
+    /// * [`Box`](WriteError::Box): the `moov` does not write.
+    /// * [`AlreadyFinished`](WriteError::AlreadyFinished): the file is finished.
     pub fn handle_movie(&mut self, movie: MovieBox) -> Result<(), MuxError> {
         self.refuse_if_finished()?;
         if self.structure_data.is_some() {
@@ -341,35 +344,35 @@ impl Muxer {
     /// # Errors
     ///
     /// * [`MissingMovie`](MuxError::MissingMovie): the muxer holds no movie.
-    /// * [`UnknownTrackId`](MuxError::UnknownTrackId),
-    ///   [`UnknownSampleDescriptionIndex`](MuxError::UnknownSampleDescriptionIndex),
-    ///   [`UnknownDataReferenceIndex`](MuxError::UnknownDataReferenceIndex),
-    ///   [`ExternalDataReference`](MuxError::ExternalDataReference),
-    ///   [`UnsupportedDataReference`](MuxError::UnsupportedDataReference): a
+    /// * [`UnknownTrackId`](WriteError::UnknownTrackId),
+    ///   [`UnknownSampleDescriptionIndex`](WriteError::UnknownSampleDescriptionIndex),
+    ///   [`UnknownDataReferenceIndex`](WriteError::UnknownDataReferenceIndex),
+    ///   [`ExternalDataReference`](WriteError::ExternalDataReference),
+    ///   [`UnsupportedDataReference`](WriteError::UnsupportedDataReference): a
     ///   sample is of a track, a sample entry or a data reference entry in the
     ///   file itself the movie has none of.
-    /// * [`MixedSampleDescriptions`](MuxError::MixedSampleDescriptions),
-    ///   [`DecodingTimeMismatch`](MuxError::DecodingTimeMismatch): the
+    /// * [`MixedSampleDescriptions`](WriteError::MixedSampleDescriptions),
+    ///   [`DecodingTimeMismatch`](WriteError::DecodingTimeMismatch): the
     ///   samples of a track are described by more than one sample entry, or
     ///   their decoding times do not follow from their durations. In a file
     ///   that is not fragmented, the first sample of a track without an edit
     ///   list is at decoding time 0, and its decoding time is the origin the
     ///   sample tables move the edits of one with an edit list back from.
-    /// * [`MediaTimeOutOfRange`](MuxError::MediaTimeOutOfRange): in a file
+    /// * [`MediaTimeOutOfRange`](WriteError::MediaTimeOutOfRange): in a file
     ///   that is not fragmented, an edit of a track starts before the first
     ///   sample of the track, which the moved edit could not reach.
-    /// * [`SampleSizeOutOfRange`](MuxError::SampleSizeOutOfRange),
-    ///   [`DataOffsetOutOfRange`](MuxError::DataOffsetOutOfRange): the media
+    /// * [`SampleSizeOutOfRange`](WriteError::SampleSizeOutOfRange),
+    ///   [`DataOffsetOutOfRange`](WriteError::DataOffsetOutOfRange): the media
     ///   data of a sample is longer, or lies further, than the structure-data
     ///   reaches.
-    /// * [`SegmentIndexOutOfRange`](MuxError::SegmentIndexOutOfRange): the
+    /// * [`SegmentIndexOutOfRange`](WriteError::SegmentIndexOutOfRange): the
     ///   segment is indexed, and its `sidx` cannot state the `moof` and the
     ///   `mdat` of the samples as a subsegment.
-    /// * [`SegmentIndexCountMismatch`](MuxError::SegmentIndexCountMismatch):
+    /// * [`SegmentIndexCountMismatch`](WriteError::SegmentIndexCountMismatch):
     ///   the segment is indexed, and the call is past the number of
     ///   subsegments [`SegmentOptions::segment_index`] gives; nothing is
     ///   written.
-    /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the file is finished.
+    /// * [`AlreadyFinished`](WriteError::AlreadyFinished): the file is finished.
     pub fn handle_samples(
         &mut self,
         samples: impl IntoIterator<Item = Sample>,
@@ -470,17 +473,17 @@ impl Muxer {
     ///   the file written is a fragmented movie file whole.
     /// * The failures of
     ///   [`SampleTableWriter::handle_locations`](crate::structure_data::SampleTableWriter::handle_locations),
-    ///   such as [`DecodingTimeMismatch`](MuxError::DecodingTimeMismatch):
+    ///   such as [`DecodingTimeMismatch`](WriteError::DecodingTimeMismatch):
     ///   the file is recoverable, and the sample tables refused samples of
     ///   it, which the movie fragments declare, as a file that is not
     ///   fragmented does not let them follow on; the file written is a
     ///   fragmented movie file whole.
-    /// * [`SegmentIndexCountMismatch`](MuxError::SegmentIndexCountMismatch):
+    /// * [`SegmentIndexCountMismatch`](WriteError::SegmentIndexCountMismatch):
     ///   the segment is indexed, and holds fewer subsegments than
     ///   [`SegmentOptions::segment_index`] gives; the segment keeps the
     ///   `free` box reserved for the `sidx`.
-    /// * [`Box`](MuxError::Box): the `moov` or the `mfra` does not write.
-    /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the file is
+    /// * [`Box`](WriteError::Box): the `moov` or the `mfra` does not write.
+    /// * [`AlreadyFinished`](WriteError::AlreadyFinished): the file is
     ///   finished, or a call to finish failed.
     pub fn finish(&mut self) -> Result<(), MuxError> {
         self.refuse_if_finished()?;
@@ -547,7 +550,9 @@ impl Muxer {
     /// Refuses a call once the file is finished
     const fn refuse_if_finished(&self) -> Result<(), MuxError> {
         if self.finished {
-            return Err(MuxError::AlreadyFinished);
+            return Err(MuxError::Write {
+                error: WriteError::AlreadyFinished,
+            });
         }
         Ok(())
     }
@@ -598,10 +603,11 @@ mod tests {
     };
     use isobmff_core::{BoxDecode, BoxDefinition, BoxType, Boxes, FourCc};
 
+    use super::MuxError;
     use super::Muxer;
     use crate::convert::to_u64;
     use crate::demuxer::Demuxer;
-    use crate::error::MuxError;
+    use crate::error::WriteError;
     use crate::file_structure::{
         FileStructure, FragmentedOptions, NonFragmentedOptions, SegmentOptions,
     };
@@ -1027,15 +1033,15 @@ mod tests {
         assert_eq!(
             (refused, past.poll_output(), finished),
             (
-                Err(MuxError::SegmentIndexCountMismatch {
+                Err(MuxError::from(WriteError::SegmentIndexCountMismatch {
                     expected_subsegments: 1,
                     written_subsegments: 2
-                }),
+                })),
                 None,
-                Err(MuxError::SegmentIndexCountMismatch {
+                Err(MuxError::from(WriteError::SegmentIndexCountMismatch {
                     expected_subsegments: 2,
                     written_subsegments: 1
-                }),
+                })),
             )
         );
         assert_eq!(written.len(), 4);
@@ -1234,7 +1240,7 @@ mod tests {
                         held_locations: 2,
                         limit_locations: 1
                     }),
-                    Err(MuxError::AlreadyFinished)
+                    Err(MuxError::from(WriteError::AlreadyFinished))
                 ],
                 FileStructure::Fragmented,
                 Vec::from(samples)
@@ -1260,11 +1266,11 @@ mod tests {
         assert_eq!(
             (finished, muxer.file_structure(), demux(&file).1),
             (
-                Err(MuxError::DecodingTimeMismatch {
+                Err(MuxError::from(WriteError::DecodingTimeMismatch {
                     track_id: 1,
                     expected_decoding_time: 10,
                     decoding_time: 50
-                }),
+                })),
                 FileStructure::Fragmented,
                 Vec::from([first, second])
             )
@@ -1299,7 +1305,7 @@ mod tests {
         assert_eq!(
             written(&[first, of_no_track]),
             (
-                Err(MuxError::UnknownTrackId { track_id: 2 }),
+                Err(MuxError::from(WriteError::UnknownTrackId { track_id: 2 })),
                 written(&[]).1
             )
         );
@@ -1341,8 +1347,8 @@ mod tests {
                 Err(MuxError::DuplicateBox {
                     box_type: FileTypeBox::BOX_TYPE
                 }),
-                Err(MuxError::AlreadyFinished),
-                Err(MuxError::AlreadyFinished),
+                Err(MuxError::from(WriteError::AlreadyFinished)),
+                Err(MuxError::from(WriteError::AlreadyFinished)),
             ]
         );
     }

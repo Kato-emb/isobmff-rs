@@ -6,7 +6,7 @@ use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader, BoxSize, Error};
 
 use crate::byte_range::ByteRange;
 use crate::convert::to_u64;
-use crate::error::MuxError;
+use crate::error::WriteError;
 use crate::framing::box_event::{BoxEvent, BoxEventKind};
 use crate::output::Output;
 
@@ -30,7 +30,7 @@ const LONGEST_HEADER: usize = 32;
 ///
 /// ```
 /// use isobmff::framing::{BoxEvent, BoxWriter};
-/// use isobmff::{BoxHeader, BoxSize, BoxType, ByteRange, MuxError};
+/// use isobmff::{BoxHeader, BoxSize, BoxType, ByteRange, WriteError};
 ///
 /// let mut writer = BoxWriter::new();
 /// let mut file = Vec::new();
@@ -52,7 +52,7 @@ const LONGEST_HEADER: usize = 32;
 /// writer.finish()?;
 ///
 /// assert_eq!(file, b"\0\0\0\x0cfreeAAAA\0\0\0\0mdatsamples");
-/// # Ok::<(), MuxError>(())
+/// # Ok::<(), WriteError>(())
 /// ```
 #[derive(Clone, Debug)]
 pub struct BoxWriter {
@@ -100,26 +100,26 @@ impl BoxWriter {
     ///
     /// Nothing is returned and the writer is left as it was when:
     ///
-    /// * [`UnexpectedEvent`](MuxError::UnexpectedEvent): a payload or an end
+    /// * [`UnexpectedEvent`](WriteError::UnexpectedEvent): a payload or an end
     ///   arrives with no box open, or a header while one is.
-    /// * [`PayloadLengthMismatch`](MuxError::PayloadLengthMismatch): a payload
+    /// * [`PayloadLengthMismatch`](WriteError::PayloadLengthMismatch): a payload
     ///   would run past the length its header declares, or the box ends short
     ///   of it.
-    /// * [`PastEndOfFile`](MuxError::PastEndOfFile): a header follows a box
+    /// * [`PastEndOfFile`](WriteError::PastEndOfFile): a header follows a box
     ///   whose size runs to the end of the file.
-    /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the file is finished.
-    /// * [`Box`](MuxError::Box): the header does not write, as when its
+    /// * [`AlreadyFinished`](WriteError::AlreadyFinished): the file is finished.
+    /// * [`Box`](WriteError::Box): the header does not write, as when its
     ///   `extended_type` is one ISO/IEC 14496-12 §4.2.3 reserves.
-    pub fn handle_event<'a>(&'a mut self, event: BoxEvent<'a>) -> Result<&'a [u8], MuxError> {
+    pub fn handle_event<'a>(&'a mut self, event: BoxEvent<'a>) -> Result<&'a [u8], WriteError> {
         match (self.state, event) {
-            (State::Finished, _) => Err(MuxError::AlreadyFinished),
-            (State::PastEndOfFile, BoxEvent::Header(header)) => Err(MuxError::PastEndOfFile {
+            (State::Finished, _) => Err(WriteError::AlreadyFinished),
+            (State::PastEndOfFile, BoxEvent::Header(header)) => Err(WriteError::PastEndOfFile {
                 box_type: header.box_type(),
             }),
             (State::Open, BoxEvent::Header(header)) => {
                 let unused = header
                     .encode(&mut self.header_bytes)
-                    .map_err(|error| MuxError::Box { error })?
+                    .map_err(|error| WriteError::Box { error })?
                     .len();
                 self.state = State::Writing {
                     header,
@@ -141,7 +141,7 @@ impl BoxWriter {
                 if let Some(declared_bytes) = header.payload_len()
                     && written > declared_bytes
                 {
-                    return Err(MuxError::PayloadLengthMismatch {
+                    return Err(WriteError::PayloadLengthMismatch {
                         box_type: header.box_type(),
                         declared_bytes,
                         offered_bytes: written,
@@ -165,7 +165,7 @@ impl BoxWriter {
                 if let Some(declared_bytes) = header.payload_len()
                     && written != declared_bytes
                 {
-                    return Err(MuxError::PayloadLengthMismatch {
+                    return Err(WriteError::PayloadLengthMismatch {
                         box_type: header.box_type(),
                         declared_bytes,
                         offered_bytes: written,
@@ -181,12 +181,12 @@ impl BoxWriter {
                 };
                 Ok(&[])
             }
-            (State::Writing { .. }, BoxEvent::Header(_)) => Err(MuxError::UnexpectedEvent {
+            (State::Writing { .. }, BoxEvent::Header(_)) => Err(WriteError::UnexpectedEvent {
                 expected: BoxEventKind::End,
                 found: BoxEventKind::Header,
             }),
             (State::Open | State::PastEndOfFile, BoxEvent::Payload(_) | BoxEvent::End) => {
-                Err(MuxError::UnexpectedEvent {
+                Err(WriteError::UnexpectedEvent {
                     expected: BoxEventKind::Header,
                     found: event.kind(),
                 })
@@ -222,17 +222,17 @@ impl BoxWriter {
     ///
     /// The writer is left as it was when:
     ///
-    /// * [`UnfinishedBox`](MuxError::UnfinishedBox): a box whose payload
+    /// * [`UnfinishedBox`](WriteError::UnfinishedBox): a box whose payload
     ///   length is declared is open.
-    /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the file is finished.
-    pub fn finish(&mut self) -> Result<(), MuxError> {
+    /// * [`AlreadyFinished`](WriteError::AlreadyFinished): the file is finished.
+    pub fn finish(&mut self) -> Result<(), WriteError> {
         match self.state {
-            State::Finished => return Err(MuxError::AlreadyFinished),
+            State::Finished => return Err(WriteError::AlreadyFinished),
             State::Writing {
                 header, written, ..
             } => {
                 if let Some(declared_bytes) = header.payload_len() {
-                    return Err(MuxError::UnfinishedBox {
+                    return Err(WriteError::UnfinishedBox {
                         box_type: header.box_type(),
                         declared_bytes,
                         written_bytes: written,
@@ -269,25 +269,25 @@ impl BoxWriter {
     /// let ftyp = boxes.write_box(&FileTypeBox::default())?;
     /// assert_eq!((ftyp.offset(), ftyp.bytes().get(4..8)), (0, Some(b"ftyp".as_slice())));
     /// assert_eq!(boxes.next_offset(), 16);
-    /// # Ok::<(), isobmff::MuxError>(())
+    /// # Ok::<(), isobmff::WriteError>(())
     /// ```
     ///
     /// # Errors
     ///
-    /// * [`Box`](MuxError::Box): the box does not write.
+    /// * [`Box`](WriteError::Box): the box does not write.
     /// * The failures of [`handle_event`](Self::handle_event).
     pub fn write_box<Value: BoxEncode + BoxDefinition>(
         &mut self,
         value: &Value,
-    ) -> Result<Output, MuxError> {
+    ) -> Result<Output, WriteError> {
         let payload_len = value.payload_len();
-        let too_long = MuxError::Box {
+        let too_long = WriteError::Box {
             error: Error::truncated_buffer(payload_len, to_u64(usize::MAX)),
         };
         let mut payload = alloc::vec![0; usize::try_from(payload_len).map_err(|_| too_long)?];
         value
             .encode_payload(&mut payload)
-            .map_err(|error| MuxError::Box { error })?;
+            .map_err(|error| WriteError::Box { error })?;
         let header = BoxHeader::with_payload_len(Value::BOX_TYPE, payload_len).ok_or(too_long)?;
         let offset = self.next_offset();
         let mut bytes = Vec::new();
@@ -307,7 +307,7 @@ mod tests {
 
     use super::BoxWriter;
     use crate::byte_range::ByteRange;
-    use crate::error::MuxError;
+    use crate::error::WriteError;
     use crate::framing::box_event::{BoxEvent, BoxEventKind};
     use crate::framing::header_forms::{PAYLOAD, every_header_form};
 
@@ -319,7 +319,7 @@ mod tests {
     fn write<'a>(
         writer: &mut BoxWriter,
         events: impl IntoIterator<Item = BoxEvent<'a>>,
-    ) -> Result<Vec<u8>, MuxError> {
+    ) -> Result<Vec<u8>, WriteError> {
         let mut bytes = Vec::new();
         for event in events {
             bytes.extend_from_slice(writer.handle_event(event)?);
@@ -397,7 +397,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             writer.handle_event(BoxEvent::Payload(b"AAA")),
-            Err(MuxError::PayloadLengthMismatch {
+            Err(WriteError::PayloadLengthMismatch {
                 box_type: free.box_type(),
                 declared_bytes: 4,
                 offered_bytes: 5,
@@ -420,7 +420,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             writer.handle_event(BoxEvent::End),
-            Err(MuxError::PayloadLengthMismatch {
+            Err(WriteError::PayloadLengthMismatch {
                 box_type: free.box_type(),
                 declared_bytes: 4,
                 offered_bytes: 3,
@@ -437,14 +437,14 @@ mod tests {
         let mut writer = BoxWriter::new();
         assert_eq!(
             writer.handle_event(BoxEvent::Payload(b"AA")),
-            Err(MuxError::UnexpectedEvent {
+            Err(WriteError::UnexpectedEvent {
                 expected: BoxEventKind::Header,
                 found: BoxEventKind::Payload,
             })
         );
         assert_eq!(
             writer.handle_event(BoxEvent::End),
-            Err(MuxError::UnexpectedEvent {
+            Err(WriteError::UnexpectedEvent {
                 expected: BoxEventKind::Header,
                 found: BoxEventKind::End,
             })
@@ -453,7 +453,7 @@ mod tests {
         write(&mut writer, [BoxEvent::Header(free)]).unwrap();
         assert_eq!(
             writer.handle_event(BoxEvent::Header(free)),
-            Err(MuxError::UnexpectedEvent {
+            Err(WriteError::UnexpectedEvent {
                 expected: BoxEventKind::End,
                 found: BoxEventKind::Header,
             })
@@ -476,7 +476,7 @@ mod tests {
         let free = BoxHeader::with_payload_len(BoxType::compact(*b"free"), 0).unwrap();
         assert_eq!(
             writer.handle_event(BoxEvent::Header(free)),
-            Err(MuxError::PastEndOfFile {
+            Err(WriteError::PastEndOfFile {
                 box_type: free.box_type(),
             })
         );
@@ -505,7 +505,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             writer.finish(),
-            Err(MuxError::UnfinishedBox {
+            Err(WriteError::UnfinishedBox {
                 box_type: free.box_type(),
                 declared_bytes: 4,
                 written_bytes: 2,
@@ -522,9 +522,9 @@ mod tests {
         let free = BoxHeader::with_payload_len(BoxType::compact(*b"free"), 0).unwrap();
         assert_eq!(
             writer.handle_event(BoxEvent::Header(free)),
-            Err(MuxError::AlreadyFinished)
+            Err(WriteError::AlreadyFinished)
         );
-        assert_eq!(writer.finish(), Err(MuxError::AlreadyFinished));
+        assert_eq!(writer.finish(), Err(WriteError::AlreadyFinished));
     }
 
     #[test]
@@ -536,7 +536,7 @@ mod tests {
         ];
         assert_eq!(
             writer.handle_event(BoxEvent::Header(header_of(&reserved))),
-            Err(MuxError::Box {
+            Err(WriteError::Box {
                 error: Error::invalid_value("extended_type"),
             })
         );

@@ -21,7 +21,7 @@
 use std::ops::Range;
 
 use isobmff::framing::{BoxEvent, BoxReader, BoxWriter};
-use isobmff::{BoxHeader, Boxes, ByteRange, DemuxError};
+use isobmff::{BoxHeader, Boxes, ByteRange, ReadError};
 use libfuzzer_sys::fuzz_target;
 
 /// Lengths the file is cut into, each cut taking its lengths in turn, short ones followed by a long one
@@ -101,7 +101,7 @@ fuzz_target!(|bytes: &[u8]| {
 });
 
 /// Reads `bytes` from wherever the reader wants them, in pieces of `piece_lens` in turn, and returns the events and how the read ended
-fn read(bytes: &[u8], piece_lens: &[usize]) -> (Vec<Recorded>, Result<(), DemuxError>) {
+fn read(bytes: &[u8], piece_lens: &[usize]) -> (Vec<Recorded>, Result<(), ReadError>) {
     let mut recorded = Vec::new();
     let mut copy = Copier {
         writer: BoxWriter::new(),
@@ -121,7 +121,7 @@ fn drive(
     piece_lens: &[usize],
     copy: &mut Copier,
     recorded: &mut Vec<Recorded>,
-) -> Result<(), DemuxError> {
+) -> Result<(), ReadError> {
     let mut piece_lens = piece_lens.iter().cycle();
     let mut answers = [
         Answer::Gather,
@@ -157,7 +157,7 @@ fn record(
     answers: &mut impl Iterator<Item = Answer>,
     copy: &mut Copier,
     recorded: &mut Vec<Recorded>,
-) -> Result<(), DemuxError> {
+) -> Result<(), ReadError> {
     match event {
         BoxEvent::Header(header) => {
             let byte_range = reader.open_box();

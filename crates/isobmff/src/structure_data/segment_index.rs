@@ -8,7 +8,7 @@ use isobmff_boxes::{MovieBox, SegmentIndexBox, SegmentIndexReference};
 use super::movie_fragment::Run;
 use isobmff_core::BoxEncode;
 
-use crate::error::{DemuxError, MuxError};
+use crate::error::{ReadError, WriteError};
 use crate::timeline::Timeline;
 
 /// Segment index: how a (sub)segment divides into subsegments, each with its byte range and its presentation times, ISO/IEC 14496-12 §8.14.3
@@ -36,10 +36,10 @@ impl SegmentIndex {
     ///
     /// # Errors
     ///
-    /// * [`SegmentIndexOutOfRange`](DemuxError::SegmentIndexOutOfRange): the
+    /// * [`SegmentIndexOutOfRange`](ReadError::SegmentIndexOutOfRange): the
     ///   byte ranges or the times run past 64 bits.
-    pub(super) fn new(sidx: &SegmentIndexBox, byte_range: Range<u64>) -> Result<Self, DemuxError> {
-        let out_of_range = DemuxError::SegmentIndexOutOfRange {
+    pub(super) fn new(sidx: &SegmentIndexBox, byte_range: Range<u64>) -> Result<Self, ReadError> {
+        let out_of_range = ReadError::SegmentIndexOutOfRange {
             reference_id: sidx.reference_id,
         };
         let mut offset = byte_range
@@ -67,7 +67,7 @@ impl SegmentIndex {
                 };
                 offset = end;
                 time = time_end;
-                Ok::<_, DemuxError>(subsegment)
+                Ok::<_, ReadError>(subsegment)
             })
             .collect::<Result<_, _>>()?;
 
@@ -186,18 +186,18 @@ impl SubsegmentTable {
     ///
     /// # Errors
     ///
-    /// * [`Timeline`](MuxError::Timeline): the edit list of the reference
+    /// * [`Timeline`](WriteError::Timeline): the edit list of the reference
     ///   track does not map its composition timeline.
-    /// * [`SegmentIndexOutOfRange`](MuxError::SegmentIndexOutOfRange): a
+    /// * [`SegmentIndexOutOfRange`](WriteError::SegmentIndexOutOfRange): a
     ///   `sidx` holds no more than 65,535 references.
-    pub(super) fn new(movie: &MovieBox, expected_subsegments: u32) -> Result<Self, MuxError> {
+    pub(super) fn new(movie: &MovieBox, expected_subsegments: u32) -> Result<Self, WriteError> {
         let first = movie.trak.first();
         let reference_id = first.map_or(0, |trak| trak.tkhd.track_id);
         if first.is_some() {
-            Timeline::new(movie, reference_id).map_err(|error| MuxError::Timeline { error })?;
+            Timeline::new(movie, reference_id).map_err(|error| WriteError::Timeline { error })?;
         }
         if u16::try_from(expected_subsegments).is_err() {
-            return Err(MuxError::SegmentIndexOutOfRange { reference_id });
+            return Err(WriteError::SegmentIndexOutOfRange { reference_id });
         }
 
         Ok(Self {
@@ -239,9 +239,9 @@ impl SubsegmentTable {
     ///
     /// # Errors
     ///
-    /// * [`Timeline`](MuxError::Timeline): the edit list of the reference
+    /// * [`Timeline`](WriteError::Timeline): the edit list of the reference
     ///   track does not map its composition timeline.
-    /// * [`SegmentIndexOutOfRange`](MuxError::SegmentIndexOutOfRange): the
+    /// * [`SegmentIndexOutOfRange`](WriteError::SegmentIndexOutOfRange): the
     ///   `sidx` cannot state the subsegment: it is longer than 31 bits of
     ///   bytes, past 65,535 subsegments, or the subsegment starts earlier
     ///   than the one before it, or more than 32 bits of ticks after it or
@@ -251,10 +251,10 @@ impl SubsegmentTable {
         movie: &MovieBox,
         track_fragments: &[Vec<&Run<'_>>],
         referenced_size: u64,
-    ) -> Result<(), MuxError> {
+    ) -> Result<(), WriteError> {
         let timeline = Timeline::new(movie, self.reference_id)
-            .map_err(|error| MuxError::Timeline { error })?;
-        let out_of_range = MuxError::SegmentIndexOutOfRange {
+            .map_err(|error| WriteError::Timeline { error })?;
+        let out_of_range = WriteError::SegmentIndexOutOfRange {
             reference_id: self.reference_id,
         };
         let ticks = |ticks: Option<u64>| {
@@ -326,7 +326,7 @@ impl SubsegmentTable {
             .unwrap_or(u32::MAX)
             .saturating_add(1);
         if written_subsegments > self.expected_subsegments {
-            return Err(MuxError::SegmentIndexCountMismatch {
+            return Err(WriteError::SegmentIndexCountMismatch {
                 expected_subsegments: self.expected_subsegments,
                 written_subsegments,
             });
@@ -354,12 +354,12 @@ impl SubsegmentTable {
     ///
     /// # Errors
     ///
-    /// * [`SegmentIndexCountMismatch`](MuxError::SegmentIndexCountMismatch):
+    /// * [`SegmentIndexCountMismatch`](WriteError::SegmentIndexCountMismatch):
     ///   fewer subsegments are indexed than the table was made for.
-    pub(super) fn finish(self) -> Result<SegmentIndexBox, MuxError> {
+    pub(super) fn finish(self) -> Result<SegmentIndexBox, WriteError> {
         let written_subsegments = u32::try_from(self.references.len()).unwrap_or(u32::MAX);
         if written_subsegments != self.expected_subsegments {
-            return Err(MuxError::SegmentIndexCountMismatch {
+            return Err(WriteError::SegmentIndexCountMismatch {
                 expected_subsegments: self.expected_subsegments,
                 written_subsegments,
             });
@@ -387,7 +387,7 @@ mod tests {
     use core::ops::Range;
 
     use super::{SegmentIndex, Subsegment, SubsegmentTable};
-    use crate::error::{DemuxError, MuxError, TimelineError};
+    use crate::error::{ReadError, TimelineError, WriteError};
     use crate::sample::Sample;
     use crate::structure_data::fixtures::{UNLIMITED, laid_out, movie, sample, track};
     use crate::structure_data::movie_fragment::{runs, track_fragments};
@@ -534,7 +534,7 @@ mod tests {
 
         assert_eq!(
             reader.handle_segment_index(&sidx, anchored_at(3000)),
-            Err(DemuxError::SegmentIndexCountLimitExceeded {
+            Err(ReadError::SegmentIndexCountLimitExceeded {
                 retained_segment_indexes: 3,
                 limit_segment_indexes: 2
             })
@@ -569,14 +569,14 @@ mod tests {
 
         assert_eq!(
             too_few.handle_segment_index(&sidx, anchored_at(1000)),
-            Err(DemuxError::SubsegmentCountLimitExceeded {
+            Err(ReadError::SubsegmentCountLimitExceeded {
                 retained_subsegments: 2,
                 limit_subsegments: 1
             })
         );
         assert_eq!(
             reader.handle_segment_index(&sidx, anchored_at(2000)),
-            Err(DemuxError::SubsegmentCountLimitExceeded {
+            Err(ReadError::SubsegmentCountLimitExceeded {
                 retained_subsegments: 4,
                 limit_subsegments: 3
             })
@@ -593,7 +593,7 @@ mod tests {
 
         assert_eq!(
             StructureDataReader::new(UNLIMITED).handle_segment_index(&sidx, anchored_at(u64::MAX)),
-            Err(DemuxError::SegmentIndexOutOfRange { reference_id: 1 })
+            Err(ReadError::SegmentIndexOutOfRange { reference_id: 1 })
         );
     }
 
@@ -612,7 +612,7 @@ mod tests {
         movie: &MovieBox,
         samples: &[Sample],
         referenced_size: u64,
-    ) -> Result<(), MuxError> {
+    ) -> Result<(), WriteError> {
         let locations = laid_out(samples, 0);
         let runs = runs(movie, &locations, &[]).unwrap();
         table.handle_movie_fragment(movie, &track_fragments(&runs), referenced_size)
@@ -696,7 +696,7 @@ mod tests {
 
         assert_eq!(
             refused,
-            [Err(MuxError::SegmentIndexOutOfRange { reference_id: 1 }); 4]
+            [Err(WriteError::SegmentIndexOutOfRange { reference_id: 1 }); 4]
         );
         let mut expected = SegmentIndexBox::default();
         expected.reference_id = 1;
@@ -770,7 +770,7 @@ mod tests {
     fn a_reference_track_whose_edit_list_does_not_map_its_composition_timeline_is_refused() {
         assert_eq!(
             SubsegmentTable::new(&edited(-2), 0).map(|_| ()),
-            Err(MuxError::Timeline {
+            Err(WriteError::Timeline {
                 error: TimelineError::InvalidMediaTime {
                     track_id: 1,
                     media_time: -2

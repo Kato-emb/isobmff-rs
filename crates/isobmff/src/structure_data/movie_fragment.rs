@@ -11,7 +11,7 @@ use isobmff_core::BoxEncode;
 
 use super::sample_description::{DataOrigin, data_reference_index, located_data_reference};
 use super::sample_table::expand;
-use crate::error::{DemuxError, MuxError};
+use crate::error::{ReadError, WriteError};
 use crate::leniency::Leniency;
 use crate::sample::{SampleLocation, SampleProperties};
 
@@ -56,16 +56,16 @@ pub(super) fn sample_count(moof: &MovieFragmentBox) -> u64 {
 ///
 /// # Errors
 ///
-/// * [`UnknownTrackId`](DemuxError::UnknownTrackId),
-///   [`MissingTrackExtends`](DemuxError::MissingTrackExtends): a track
+/// * [`UnknownTrackId`](ReadError::UnknownTrackId),
+///   [`MissingTrackExtends`](ReadError::MissingTrackExtends): a track
 ///   fragment is of a track the movie, or its `mvex`, has none of.
-/// * [`MissingDecodingTime`](DemuxError::MissingDecodingTime): a track
+/// * [`MissingDecodingTime`](ReadError::MissingDecodingTime): a track
 ///   fragment has no `tfdt`, and the decoding time its track has reached is
 ///   not known.
 /// * The failures of the sample entry and the data reference entry the
 ///   samples are described by.
-/// * [`DataOffsetOutOfRange`](DemuxError::DataOffsetOutOfRange),
-///   [`DecodingTimeOverflow`](DemuxError::DecodingTimeOverflow): the media
+/// * [`DataOffsetOutOfRange`](ReadError::DataOffsetOutOfRange),
+///   [`DecodingTimeOverflow`](ReadError::DecodingTimeOverflow): the media
 ///   data or the decoding times run outside 64 bits.
 pub(super) fn resolve_fragment(
     movie: &MovieBox,
@@ -75,7 +75,7 @@ pub(super) fn resolve_fragment(
     locations: &mut Vec<SampleLocation>,
     identified: &mut Vec<(usize, u32)>,
     leniencies: &mut Vec<Leniency>,
-) -> Result<(), DemuxError> {
+) -> Result<(), ReadError> {
     let mut previous_end = (None, moof_offset);
     for (position, traf) in moof.traf.iter().enumerate() {
         let tfhd = &traf.tfhd;
@@ -86,13 +86,13 @@ pub(super) fn resolve_fragment(
             .zip(decoding_times.iter_mut())
             .enumerate()
             .find(|(_, (trak, _))| trak.tkhd.track_id == track_id)
-            .ok_or(DemuxError::UnknownTrackId { track_id })?;
+            .ok_or(ReadError::UnknownTrackId { track_id })?;
         let trex = movie
             .mvex
             .iter()
             .flat_map(|mvex| &mvex.trex)
             .find(|trex| trex.track_id == track_id)
-            .ok_or(DemuxError::MissingTrackExtends { track_id })?;
+            .ok_or(ReadError::MissingTrackExtends { track_id })?;
         let tfdt = traf.tfdt.as_ref().map(|tfdt| tfdt.base_media_decode_time);
         let reached = *decoding_time;
         if let (Some(tfdt), Some(reached)) = (tfdt, reached)
@@ -112,7 +112,7 @@ pub(super) fn resolve_fragment(
         }
         let mut time = tfdt
             .or(reached.map(|reached| reached.time))
-            .ok_or(DemuxError::MissingDecodingTime { track_id })?;
+            .ok_or(ReadError::MissingDecodingTime { track_id })?;
         let earlier_samples = locations.len();
         let defaults = Defaults {
             sample_description_index: tfhd
@@ -149,13 +149,13 @@ pub(super) fn resolve_fragment(
         if tfhd.duration_is_empty {
             time = time
                 .checked_add(u64::from(defaults.sample_duration))
-                .ok_or(DemuxError::DecodingTimeOverflow { track_id })?;
+                .ok_or(ReadError::DecodingTimeOverflow { track_id })?;
         } else if let Some((data_reference, _)) = located {
             for trun in &traf.trun {
                 if let Some(offset) = trun.data_offset {
                     data_offset = base
                         .checked_add_signed(i64::from(offset))
-                        .ok_or(DemuxError::DataOffsetOutOfRange { track_id })?;
+                        .ok_or(ReadError::DataOffsetOutOfRange { track_id })?;
                 }
                 for (row_number, row) in rows(trun).enumerate() {
                     let first_sample_flags = trun.first_sample_flags.filter(|_| row_number == 0);
@@ -163,7 +163,7 @@ pub(super) fn resolve_fragment(
                     let sample_size = row.sample_size.unwrap_or(defaults.sample_size);
                     let data_end = data_offset
                         .checked_add(u64::from(sample_size))
-                        .ok_or(DemuxError::DataOffsetOutOfRange { track_id })?;
+                        .ok_or(ReadError::DataOffsetOutOfRange { track_id })?;
                     if let Some(identifier) = counts_from {
                         identified.push((locations.len(), identifier));
                     }
@@ -185,7 +185,7 @@ pub(super) fn resolve_fragment(
                     ));
                     time = time
                         .checked_add(u64::from(sample_duration))
-                        .ok_or(DemuxError::DecodingTimeOverflow { track_id })?;
+                        .ok_or(ReadError::DecodingTimeOverflow { track_id })?;
                     data_offset = data_end;
                 }
             }
@@ -269,7 +269,7 @@ pub(super) fn runs<'a>(
     movie: &MovieBox,
     samples: &'a [SampleLocation],
     decoding_times: &[Option<u64>],
-) -> Result<Vec<Run<'a>>, MuxError> {
+) -> Result<Vec<Run<'a>>, WriteError> {
     let mut runs: Vec<Run<'a>> = Vec::new();
     let mut rest = samples;
     while let Some(first) = rest.first() {
@@ -280,7 +280,7 @@ pub(super) fn runs<'a>(
             .iter()
             .enumerate()
             .find(|(_, trak)| trak.tkhd.track_id == track_id)
-            .ok_or(MuxError::UnknownTrackId { track_id })?;
+            .ok_or(WriteError::UnknownTrackId { track_id })?;
         let len = rest
             .windows(2)
             .take_while(|pair| match pair {
@@ -309,9 +309,9 @@ pub(super) fn runs<'a>(
         for sample in run_samples {
             let properties = sample.properties();
             if properties.sample_description_index != sample_description_index {
-                return Err(MuxError::MixedSampleDescriptions { track_id });
+                return Err(WriteError::MixedSampleDescriptions { track_id });
             }
-            let mismatch = MuxError::DecodingTimeMismatch {
+            let mismatch = WriteError::DecodingTimeMismatch {
                 track_id,
                 expected_decoding_time: decoding_time,
                 decoding_time: properties.decoding_time,
@@ -323,7 +323,7 @@ pub(super) fn runs<'a>(
                 .checked_add(u64::from(properties.sample_duration))
                 .ok_or(mismatch)?;
             if u32::try_from(sample.data_len()).is_err() {
-                return Err(MuxError::SampleSizeOutOfRange {
+                return Err(WriteError::SampleSizeOutOfRange {
                     track_id,
                     sample_bytes: sample.data_len(),
                 });
@@ -370,14 +370,14 @@ pub(super) fn track_fragments<'runs, 'samples>(
 ///
 /// # Errors
 ///
-/// * [`DataOffsetOutOfRange`](MuxError::DataOffsetOutOfRange): the media
+/// * [`DataOffsetOutOfRange`](WriteError::DataOffsetOutOfRange): the media
 ///   data of a sample lies further from the `moof` than a `trun` reaches.
 pub(super) fn movie_fragment_box(
     movie: &MovieBox,
     sequence_number: u32,
     track_fragments: &[Vec<&Run<'_>>],
     data_start: u64,
-) -> Result<MovieFragmentBox, MuxError> {
+) -> Result<MovieFragmentBox, WriteError> {
     let mut moof = MovieFragmentBox::default();
     moof.mfhd.sequence_number = sequence_number;
     for track_runs in track_fragments {
@@ -420,7 +420,7 @@ pub(super) fn movie_fragment_box(
                         )
                     })
                     .and_then(|offset| i32::try_from(offset).ok())
-                    .ok_or(MuxError::DataOffsetOutOfRange {
+                    .ok_or(WriteError::DataOffsetOutOfRange {
                         track_id: run.track_id,
                     })?,
             );
@@ -471,7 +471,7 @@ mod tests {
         TrackRunSamples,
     };
 
-    use crate::error::DemuxError;
+    use crate::error::ReadError;
     use crate::leniency::Leniency;
     use crate::sample::{DataReferenceKey, SampleLocation, SampleProperties};
     use crate::structure_data::fixtures::{UNLIMITED, movie, track};
@@ -550,7 +550,7 @@ mod tests {
     fn resolve(
         reader: &mut StructureDataReader,
         moof: &MovieFragmentBox,
-    ) -> Result<Vec<(u32, u64, Range<u64>)>, DemuxError> {
+    ) -> Result<Vec<(u32, u64, Range<u64>)>, ReadError> {
         Ok(reader
             .handle_movie_fragment(moof, MOOF_OFFSET)?
             .map(|location| {
@@ -753,7 +753,7 @@ mod tests {
 
         assert_eq!(
             resolve(&mut reader, &moof([traf(1, &[(1, None)])])),
-            Err(DemuxError::MissingDecodingTime { track_id: 1 })
+            Err(ReadError::MissingDecodingTime { track_id: 1 })
         );
         assert_eq!(
             resolve(&mut reader, &moof([with_tfdt])).unwrap(),
@@ -834,15 +834,15 @@ mod tests {
                 &mut StructureDataReader::new(UNLIMITED),
                 &moof([traf(1, &[(1, None)])])
             ),
-            Err(DemuxError::MissingMovie)
+            Err(ReadError::MissingMovie)
         );
         assert_eq!(
             resolve(&mut reader(), &moof([traf(9, &[(1, None)])])),
-            Err(DemuxError::UnknownTrackId { track_id: 9 })
+            Err(ReadError::UnknownTrackId { track_id: 9 })
         );
         assert_eq!(
             resolve(&mut reader_without_trex, &moof([traf(2, &[(1, None)])])),
-            Err(DemuxError::MissingTrackExtends { track_id: 2 })
+            Err(ReadError::MissingTrackExtends { track_id: 2 })
         );
     }
 
@@ -868,7 +868,7 @@ mod tests {
         );
         assert_eq!(
             resolve(&mut reader, &moof([traf_from(1, 330)])),
-            Err(DemuxError::LeniencyCountLimitExceeded {
+            Err(ReadError::LeniencyCountLimitExceeded {
                 retained_leniencies: 2,
                 limit_leniencies: 1
             })
@@ -892,11 +892,11 @@ mod tests {
 
         assert_eq!(
             resolve(&mut reader, &moof([traf(1, &[(1, None)]), traf(9, &[])])),
-            Err(DemuxError::UnknownTrackId { track_id: 9 })
+            Err(ReadError::UnknownTrackId { track_id: 9 })
         );
         assert_eq!(
             resolve(&mut reader, &moof([traf(1, &[(7, None)])])),
-            Err(DemuxError::SampleCountLimitExceeded {
+            Err(ReadError::SampleCountLimitExceeded {
                 declared_samples: 7,
                 limit_samples: 6
             })

@@ -63,7 +63,7 @@ use isobmff_boxes::{
 use isobmff_core::Boxes;
 use isobmff_core::{BoxDecode, BoxDefinition, BoxType, RawBox};
 
-use crate::error::DemuxError;
+use crate::error::ReadError;
 
 /// Kind of a box at file level, as its type says, ISO/IEC 14496-12 A.3
 ///
@@ -138,7 +138,7 @@ impl TopLevelBox {
     ///
     /// # Errors
     ///
-    /// * [`DemuxError::Box`]: the payload does not read as the box its type
+    /// * [`ReadError::Box`]: the payload does not read as the box its type
     ///   names. The failure names that box as the outermost of the path it
     ///   was reached through.
     ///
@@ -156,7 +156,7 @@ impl TopLevelBox {
     /// assert_eq!(TopLevelBox::read(mdat)?, None);
     /// # Ok::<(), Box<dyn core::error::Error>>(())
     /// ```
-    pub fn read(raw_box: RawBox<'_>) -> Result<Option<Self>, DemuxError> {
+    pub fn read(raw_box: RawBox<'_>) -> Result<Option<Self>, ReadError> {
         Self::read_payload(raw_box.header().box_type(), raw_box.payload())
     }
 
@@ -176,7 +176,7 @@ impl TopLevelBox {
     /// assert!(matches!(value, Some(TopLevelBox::FileType(_))));
     /// # Ok::<(), Box<dyn core::error::Error>>(())
     /// ```
-    pub fn read_payload(box_type: BoxType, payload: &[u8]) -> Result<Option<Self>, DemuxError> {
+    pub fn read_payload(box_type: BoxType, payload: &[u8]) -> Result<Option<Self>, ReadError> {
         value_reader(box_type)
             .map(|read_payload| read_payload(payload))
             .transpose()
@@ -184,7 +184,7 @@ impl TopLevelBox {
 }
 
 /// Reads the payload of a box into its value
-type ReadPayload = fn(&[u8]) -> Result<TopLevelBox, DemuxError>;
+type ReadPayload = fn(&[u8]) -> Result<TopLevelBox, ReadError>;
 
 /// Returns what reads the payload of a box of `box_type` into its value, or `None` for a box with no value
 fn value_reader(box_type: BoxType) -> Option<ReadPayload> {
@@ -214,9 +214,9 @@ fn value_reader(box_type: BoxType) -> Option<ReadPayload> {
 ///
 /// # Errors
 ///
-/// * [`DemuxError::Box`]: the innermost `otyp` does not read.
+/// * [`ReadError::Box`]: the innermost `otyp` does not read.
 #[cfg(feature = "compressed-boxes")]
-fn innermost_file_type(payload: &[u8]) -> Result<FileTypeBox, DemuxError> {
+fn innermost_file_type(payload: &[u8]) -> Result<FileTypeBox, ReadError> {
     // Why not decode each `otyp` and look among its other boxes: each level
     // would copy what it holds, the nested ones with it. Why not recurse: the
     // input alone bounds the depth of nesting.
@@ -231,8 +231,8 @@ fn innermost_file_type(payload: &[u8]) -> Result<FileTypeBox, DemuxError> {
 }
 
 /// Reads `payload` as the box `Decoded`, naming that box on the path of a failure
-fn decode<Decoded: BoxDecode + BoxDefinition>(payload: &[u8]) -> Result<Decoded, DemuxError> {
-    Decoded::decode_payload(payload).map_err(|error| DemuxError::Box {
+fn decode<Decoded: BoxDecode + BoxDefinition>(payload: &[u8]) -> Result<Decoded, ReadError> {
+    Decoded::decode_payload(payload).map_err(|error| ReadError::Box {
         error: error.in_container(Decoded::BOX_TYPE),
     })
 }
@@ -313,7 +313,7 @@ mod tests {
 
         assert_eq!(
             TopLevelBox::read(raw_box),
-            Err(DemuxError::Box {
+            Err(ReadError::Box {
                 error: Error::truncated_payload(8, 4)
                     .in_container(MovieHeaderBox::BOX_TYPE)
                     .in_container(MovieBox::BOX_TYPE)
