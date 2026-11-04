@@ -66,6 +66,14 @@ pub enum MuxError {
     /// Samples, or the end of the file, offered before the movie that declares their tracks
     #[non_exhaustive]
     MissingMovie,
+    /// Indexed segment of a number of subsegments other than its `sidx` was reserved for: a subsegment past the number, refused before anything of it is written, or fewer than the number as the segment finishes, which leaves the reserved space a `free` box, §8.14.3
+    #[non_exhaustive]
+    SegmentIndexCountMismatch {
+        /// Number of subsegments the `sidx` was reserved for
+        expected_subsegments: u32,
+        /// Number of subsegments written, or the one past the number
+        written_subsegments: u32,
+    },
     /// Recoverable file that holds more samples than the muxer keeps the locations of, which it does not lay out again as a file that is not fragmented; the file written is a fragmented movie file whole
     #[non_exhaustive]
     NotFinalised {
@@ -228,6 +236,13 @@ impl fmt::Display for MuxError {
                 "{box_type} box offered after a box it goes before"
             ),
             Self::MissingMovie => formatter.write_str("samples offered before the movie"),
+            Self::SegmentIndexCountMismatch {
+                expected_subsegments,
+                written_subsegments,
+            } => write!(
+                formatter,
+                "subsegment {written_subsegments} of a sidx reserved for {expected_subsegments}"
+            ),
             Self::NotFinalised {
                 held_locations,
                 limit_locations,

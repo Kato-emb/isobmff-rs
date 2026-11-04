@@ -104,7 +104,13 @@ impl MovieFragmentWriter {
     ///
     /// The movie the writer holds has empty sample tables, and an `mvex` with
     /// a `trex` for each track. Where a `sidx` indexes the segment, the
-    /// writer indexes each fragment it writes as a subsegment.
+    /// writer indexes each fragment it writes as a subsegment, as many as
+    /// [`SegmentOptions::segment_index`] says: it refuses a fragment past the
+    /// number, and [`finish`](Self::finish) refuses fewer.
+    /// [`segment_index_len`](Self::segment_index_len) is the length of the
+    /// `sidx` from the start, so that a writer can reserve its space: the
+    /// `sidx` is of version 1, its earliest presentation time and first
+    /// offset in 64 bits whatever they are.
     ///
     /// # Errors
     ///
@@ -114,13 +120,23 @@ impl MovieFragmentWriter {
     /// * [`Timeline`](MuxError::Timeline): a `sidx` indexes the segment, and
     ///   the edit list of the first track does not map its composition
     ///   timeline.
+    /// * [`SegmentIndexOutOfRange`](MuxError::SegmentIndexOutOfRange): the
+    ///   number of subsegments is past the 65,535 a `sidx` references.
     pub fn segment(movie: MovieBox, options: SegmentOptions) -> Result<Self, MuxError> {
         let mut writer = Self::new(movie, options.first_sequence_number)?;
         writer.segment_index = options
             .segment_index
-            .then(|| SubsegmentTable::new(&writer.movie))
+            .map(|subsegments| SubsegmentTable::new(&writer.movie, subsegments))
             .transpose()?;
         Ok(writer)
+    }
+
+    /// Returns the length of the `sidx` [`finish`](Self::finish) returns, where the writer indexes subsegments
+    #[must_use]
+    pub fn segment_index_len(&self) -> Option<u64> {
+        self.segment_index
+            .as_ref()
+            .map(SubsegmentTable::encoded_len)
     }
 
     /// Creates the writer of the movie fragments of `movie`, the first numbered `first_sequence_number`, that lists no sync sample and indexes no subsegment
@@ -187,6 +203,8 @@ impl MovieFragmentWriter {
     ///   or past 64-bit file offsets.
     /// * [`SegmentIndexOutOfRange`](MuxError::SegmentIndexOutOfRange): the
     ///   `sidx` cannot state the fragment as a subsegment.
+    /// * [`SegmentIndexCountMismatch`](MuxError::SegmentIndexCountMismatch):
+    ///   the fragment is past the number of subsegments the writer indexes.
     /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the writer is
     ///   finished.
     pub fn movie_fragment(
@@ -241,11 +259,6 @@ impl MovieFragmentWriter {
         Ok((moof, locations))
     }
 
-    /// Returns whether the writer indexes the fragments it writes as the subsegments of a `sidx`
-    pub(crate) const fn indexes_subsegments(&self) -> bool {
-        self.segment_index.is_some()
-    }
-
     /// Returns the `mfra` of the sync samples listed and the `sidx` of the subsegments indexed, where the writer lists and indexes them, §8.8.9, §8.14.3
     ///
     /// The `mfra` goes at the end of the file. The `sidx` goes before the
@@ -255,6 +268,8 @@ impl MovieFragmentWriter {
     /// # Errors
     ///
     /// * [`Box`](MuxError::Box): the `mfra` is longer than its `mfro` counts.
+    /// * [`SegmentIndexCountMismatch`](MuxError::SegmentIndexCountMismatch):
+    ///   the writer indexes fewer subsegments than it was made for.
     pub fn finish(
         &mut self,
     ) -> Result<
@@ -271,7 +286,13 @@ impl MovieFragmentWriter {
             .map(RandomAccessTables::finish)
             .transpose()?;
 
-        Ok((mfra, self.segment_index.take().map(SubsegmentTable::finish)))
+        let sidx = self
+            .segment_index
+            .take()
+            .map(SubsegmentTable::finish)
+            .transpose()?;
+
+        Ok((mfra, sidx))
     }
 }
 

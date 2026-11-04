@@ -1,15 +1,15 @@
 //! [`Recoverable`], what a muxer keeps of a recoverable file to lay it out again as one that is not fragmented
 
-use isobmff_boxes::{Free, FreeSpaceBox, MovieBox};
+use isobmff_boxes::MovieBox;
 use isobmff_core::Error;
 
 use crate::error::MuxError;
-use crate::framing::{BoxWriter, media_data_header, to_u64, write_box};
+use crate::framing::{BoxWriter, media_data_header, to_u64, write_box, write_reserved};
 use crate::output::Output;
 use crate::sample::SampleLocation;
 use crate::structure_data::SampleTableWriter;
 
-/// Length of the `free` box the header of the `mdat` takes the place of, as [`media_data_header`] takes it: a header and 8 bytes
+/// Length of the `free` box the header of the `mdat` takes the place of, as [`media_data_header`] takes it
 const PLACEHOLDER_BYTES: u64 = 16;
 
 /// What a muxer keeps of a recoverable file: where the `free` that becomes the header of the `mdat` lies, and the sample tables of the samples written as fragments
@@ -43,16 +43,14 @@ impl Recoverable {
     /// # Errors
     ///
     /// * The failures of [`SampleTableWriter::new`].
-    /// * The failures of [`write_box`].
+    /// * The failures of [`write_reserved`].
     pub(super) fn new(
         boxes: &mut BoxWriter,
         movie: &MovieBox,
         limit_locations: u64,
     ) -> Result<(Self, Output), MuxError> {
         let tables = SampleTableWriter::new(movie.clone())?;
-        let mut free = FreeSpaceBox::<Free>::default();
-        free.data = [0; 8].to_vec();
-        let placeholder = write_box(boxes, &free)?;
+        let placeholder = write_reserved(boxes, PLACEHOLDER_BYTES)?;
         Ok((
             Self {
                 placeholder: placeholder.offset(),

@@ -6,12 +6,13 @@ use alloc::vec::Vec;
 use isobmff_boxes::{FileTypeBox, MovieBox, SegmentTypeBox};
 use isobmff_core::BoxDefinition;
 
+use crate::byte_range::ByteRange;
 use crate::error::MuxError;
 use crate::file_level::refuse_brands_before_iso5;
 use crate::file_structure::{
     FileStructure, FragmentedOptions, NonFragmentedOptions, SegmentOptions,
 };
-use crate::framing::{BoxWriter, to_u64, write_box};
+use crate::framing::{BoxWriter, fill, write_box, write_reserved};
 use crate::limits::MuxLimits;
 use crate::media_data::MediaDataWriter;
 use crate::output::Output;
@@ -108,8 +109,8 @@ pub struct Muxer {
     media_data: MediaDataWriter,
     /// Boxes written and not yet polled, in the order they lie in the file
     output: VecDeque<Output>,
-    /// Boxes of an indexed segment that go after its `sidx`, held back until [`finish`](Self::finish) writes it
-    held: Vec<Output>,
+    /// Space the `free` box reserves for the `sidx` of an indexed segment, once it is written
+    reserved_segment_index: Option<ByteRange>,
     /// Whether the `ftyp`, or the `styp` of a segment, is written
     file_type: bool,
     finished: bool,
@@ -183,7 +184,7 @@ impl Muxer {
             structure_data: None,
             media_data: MediaDataWriter::new(),
             output: VecDeque::new(),
-            held: Vec::new(),
+            reserved_segment_index: None,
             file_type: false,
             finished: false,
             limits: MuxLimits::new(),
@@ -368,6 +369,10 @@ impl Muxer {
     /// * [`SegmentIndexOutOfRange`](MuxError::SegmentIndexOutOfRange): the
     ///   segment is indexed, and its `sidx` cannot state the `moof` and the
     ///   `mdat` of the samples as a subsegment.
+    /// * [`SegmentIndexCountMismatch`](MuxError::SegmentIndexCountMismatch):
+    ///   the segment is indexed, and the call is past the number of
+    ///   subsegments [`SegmentOptions::segment_index`] gives; nothing is
+    ///   written.
     /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the file is finished.
     pub fn handle_samples(
         &mut self,
@@ -381,7 +386,6 @@ impl Muxer {
         }
         let header = self.media_data.header(&samples)?;
         let mut written = Vec::new();
-        let mut held = false;
         match structure_data {
             StructureDataWriter::NonFragmented(writer) => {
                 // Why not self.boxes: the sample table writer checks the samples once the mdat has placed them, and a refused call leaves the muxer as it was
@@ -395,26 +399,35 @@ impl Muxer {
                 written.push(Output::new(mdat_offset, mdat));
             }
             StructureDataWriter::Fragmented(writer) => {
-                let moof_offset = self.boxes.next_offset();
+                let reserving = if self.reserved_segment_index.is_none() {
+                    writer.segment_index_len()
+                } else {
+                    None
+                };
+                let moof_offset = self
+                    .boxes
+                    .next_offset()
+                    .saturating_add(reserving.unwrap_or_default());
                 let (moof, locations) =
                     writer.movie_fragment(&samples, moof_offset, header.encoded_len())?;
+                if let Some(total_bytes) = reserving {
+                    let free = write_reserved(&mut self.boxes, total_bytes)?;
+                    self.reserved_segment_index =
+                        Some(ByteRange::new(free.offset(), Some(total_bytes)));
+                    written.push(free);
+                }
                 written.push(write_box(&mut self.boxes, &moof)?);
                 let mdat_offset = self.boxes.next_offset();
                 let (mdat, _) =
                     self.media_data
                         .write(writer.movie(), &mut self.boxes, header, &samples)?;
                 written.push(Output::new(mdat_offset, mdat));
-                held = writer.indexes_subsegments();
                 if let Some(recoverable) = &mut self.recoverable {
                     recoverable.handle_locations(&locations);
                 }
             }
         }
-        if held {
-            self.held.extend(written);
-        } else {
-            self.output.extend(written);
-        }
+        self.output.extend(written);
 
         Ok(())
     }
@@ -422,17 +435,25 @@ impl Muxer {
     /// Returns the next box at file level written, and the file offset it goes to, or `None` when the muxer has written none it has not returned
     ///
     /// The boxes come in the order they lie in the file, each at the end of
-    /// the boxes before it. The boxes of an indexed segment after its `styp`
-    /// are returned once [`finish`](Self::finish) has written its `sidx`.
+    /// the boxes before it, but for the last of a recoverable file and the
+    /// `sidx` of an indexed segment, which [`finish`](Self::finish) writes
+    /// over space reserved before: a sink that cannot seek stops there.
     pub fn poll_output(&mut self) -> Option<Output> {
         self.output.pop_front()
     }
 
-    /// Ends the file: writes the `moov` of a file that is not fragmented, with the sample tables of its samples, the `mfra` of a fragmented file that lists its sync samples, or the `sidx` of an indexed segment before the boxes held back for it
+    /// Ends the file: writes the `moov` of a file that is not fragmented, with the sample tables of its samples, the `mfra` of a fragmented file that lists its sync samples, or the `sidx` of an indexed segment over the space reserved for it
     ///
     /// The muxer then takes no more input, even where this call fails once
     /// the muxer holds a movie. The boxes written are still returned by
     /// [`poll_output`](Self::poll_output).
+    ///
+    /// The `sidx` of an indexed segment goes over the `free` box the muxer
+    /// wrote before the first `moof`, just as long, as an output for bytes
+    /// written already. A segment of fewer subsegments than
+    /// [`SegmentOptions::segment_index`] gives keeps the `free` box: it is a
+    /// segment without a `sidx`, whole. A segment of no samples, which
+    /// reserves nothing, takes its `sidx` of no subsegment at its end.
     ///
     /// A recoverable file is laid out again: the `moov` of its sample tables
     /// comes at the end, then the output that writes the header of an `mdat`
@@ -458,6 +479,10 @@ impl Muxer {
     ///   it, which the movie fragments declare, as a file that is not
     ///   fragmented does not let them follow on; the file written is a
     ///   fragmented movie file whole.
+    /// * [`SegmentIndexCountMismatch`](MuxError::SegmentIndexCountMismatch):
+    ///   the segment is indexed, and holds fewer subsegments than
+    ///   [`SegmentOptions::segment_index`] gives; the segment keeps the
+    ///   `free` box reserved for the `sidx`.
     /// * [`Box`](MuxError::Box): the `moov` or the `mfra` does not write.
     /// * [`AlreadyFinished`](MuxError::AlreadyFinished): the file is
     ///   finished, or a call to finish failed.
@@ -481,19 +506,14 @@ impl Muxer {
                     return Ok(());
                 }
                 if let Some(sidx) = sidx {
-                    // Why not self.boxes: it counts file offsets in the order
-                    // boxes are written, and the sidx goes before boxes it has
-                    // counted already
-                    let sidx_offset = self
-                        .held
-                        .first()
-                        .map_or(self.boxes.next_offset(), Output::offset);
-                    let sidx = write_box(&mut BoxWriter::new(), &sidx)?.into_bytes();
-                    let sidx_len = to_u64(sidx.len());
-                    self.output.push_back(Output::new(sidx_offset, sidx));
-                    self.output.extend(self.held.drain(..).map(|held| {
-                        Output::new(held.offset().saturating_add(sidx_len), held.into_bytes())
-                    }));
+                    match self.reserved_segment_index {
+                        Some(reserved) => {
+                            // Why not self.boxes: it counts file offsets in the order boxes are written, and the sidx goes over the free it has counted already
+                            let sidx = write_box(&mut BoxWriter::new(), &sidx)?.into_bytes();
+                            self.output.extend(fill(reserved, sidx)?);
+                        }
+                        None => self.output.push_back(write_box(&mut self.boxes, &sidx)?),
+                    }
                 }
                 mfra.map(|mfra| write_box(&mut self.boxes, &mfra))
                     .transpose()?
@@ -867,7 +887,7 @@ mod tests {
      {
         let mut muxer = Muxer::segment(SegmentOptions {
             first_sequence_number: 5,
-            segment_index: false,
+            segment_index: None,
         });
 
         muxer
@@ -888,11 +908,11 @@ mod tests {
     }
 
     #[test]
-    fn an_indexed_segment_holds_its_movie_fragments_back_for_a_sidx_after_its_brands_that_indexes_each_with_its_media_data()
+    fn an_indexed_segment_reserves_its_sidx_after_its_brands_and_writes_it_over_the_reservation_as_it_finishes()
      {
         let mut muxer = Muxer::segment(SegmentOptions {
             first_sequence_number: 5,
-            segment_index: true,
+            segment_index: Some(2),
         });
         muxer
             .handle_file_type(file_type(b"msdh", &[b"msdh", b"iso6"]))
@@ -901,29 +921,42 @@ mod tests {
         let [first, second] = two_samples();
         muxer.handle_samples([first]).unwrap();
         muxer.handle_samples([second]).unwrap();
-        let before_finish = output(&mut muxer);
+        let before_finish: Vec<Output> = iter::from_fn(|| muxer.poll_output()).collect();
         muxer.finish().unwrap();
-        let segment = [before_finish.clone(), output(&mut muxer)].concat();
+        let finishing: Vec<Output> = iter::from_fn(|| muxer.poll_output()).collect();
+        let segment = written_at([before_finish.clone(), finishing.clone()].concat());
         let initialization = mux(
             Muxer::fragmented(FragmentedOptions::default()),
             file_type(b"iso6", &[b"iso6"]),
             one_fragmented_track(),
             Vec::new(),
-        );
-        let boxes = [initialization.clone(), segment.clone()].concat();
-        let offset_of = |index: usize| to_u64(boxes.iter().take(index).map(Vec::len).sum());
-        let first_moof = initialization.len() + 2;
+        )
+        .concat();
+        let in_file = |output: &Output| to_u64(initialization.len()) + output.offset();
+        let box_types = |names: [&[u8; 4]; 6]| names.map(|name| BoxType::compact(*name)).to_vec();
 
-        let (demuxer, samples) = demux(&boxes.concat());
+        let (demuxer, samples) = demux(&[initialization.as_slice(), &segment].concat());
 
-        assert_eq!(before_finish.len(), 1);
         assert_eq!(
-            segment
+            (
+                top_level(&written_at(before_finish.clone())),
+                top_level(&segment)
+            ),
+            (
+                box_types([b"styp", b"free", b"moof", b"mdat", b"moof", b"mdat"]),
+                box_types([b"styp", b"sidx", b"moof", b"mdat", b"moof", b"mdat"])
+            )
+        );
+        assert_eq!(
+            finishing
                 .iter()
-                .map(|bytes| bytes.get(4..8))
+                .map(|output| (output.offset(), output.bytes().len()))
                 .collect::<Vec<_>>(),
-            [b"styp", b"sidx", b"moof", b"mdat", b"moof", b"mdat"]
-                .map(|box_type| Some(&box_type[..]))
+            before_finish
+                .get(1)
+                .map(|free| (free.offset(), free.bytes().len()))
+                .into_iter()
+                .collect::<Vec<_>>()
         );
         let subsegments: Vec<_> = demuxer
             .segment_indexes()
@@ -931,14 +964,57 @@ mod tests {
             .flat_map(|index| index.subsegments())
             .map(|subsegment| (subsegment.byte_range(), subsegment.presentation_time()))
             .collect();
+        let [first_moof, second_moof] =
+            [2, 4].map(|index| in_file(before_finish.get(index).unwrap()));
+        let end = to_u64(initialization.len() + segment.len());
         assert_eq!(
             subsegments,
-            [
-                (offset_of(first_moof)..offset_of(first_moof + 2), 0..10),
-                (offset_of(first_moof + 2)..offset_of(first_moof + 4), 10..20),
-            ]
+            [(first_moof..second_moof, 0..10), (second_moof..end, 10..20)]
         );
         assert_eq!(samples, two_samples());
+    }
+
+    #[test]
+    fn calls_past_the_subsegments_of_an_indexed_segment_are_refused_and_fewer_leave_its_free_box() {
+        let indexed = |subsegments| {
+            let mut muxer = Muxer::segment(SegmentOptions {
+                first_sequence_number: 1,
+                segment_index: Some(subsegments),
+            });
+            muxer.handle_file_type(file_type(b"iso6", &[])).unwrap();
+            muxer.handle_movie(one_fragmented_track()).unwrap();
+            muxer
+        };
+        let [first, second] = two_samples();
+        let mut past = indexed(1);
+        past.handle_samples([first.clone()]).unwrap();
+        let written: Vec<Output> = iter::from_fn(|| past.poll_output()).collect();
+        let mut fewer = indexed(2);
+        fewer.handle_samples([first]).unwrap();
+
+        let refused = past.handle_samples([second]);
+        let finished = fewer.finish();
+        let segment = written_at(iter::from_fn(|| fewer.poll_output()));
+
+        assert_eq!(
+            (refused, past.poll_output(), finished),
+            (
+                Err(MuxError::SegmentIndexCountMismatch {
+                    expected_subsegments: 1,
+                    written_subsegments: 2
+                }),
+                None,
+                Err(MuxError::SegmentIndexCountMismatch {
+                    expected_subsegments: 2,
+                    written_subsegments: 1
+                }),
+            )
+        );
+        assert_eq!(written.len(), 4);
+        assert_eq!(
+            top_level(&segment),
+            [b"styp", b"free", b"moof", b"mdat"].map(|name| BoxType::compact(*name))
+        );
     }
 
     #[test]
@@ -1003,10 +1079,7 @@ mod tests {
                 one_fragmented_track(),
             ),
             (
-                Muxer::segment(SegmentOptions {
-                    first_sequence_number: 1,
-                    segment_index: true,
-                }),
+                Muxer::segment(SegmentOptions::default()),
                 one_fragmented_track(),
             ),
         ];
