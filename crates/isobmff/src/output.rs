@@ -22,7 +22,7 @@ use alloc::vec::Vec;
 ///
 /// ```
 /// # use isobmff::boxes::{DataEntry, DataEntryUrlBox, MovieBox, SampleDescription, SampleEntry, TrackBox};
-/// use isobmff::{FileStructure, FourCc, Muxer, Sample, SampleProperties};
+/// use isobmff::{FourCc, Muxer, NonFragmentedOptions, Sample, SampleProperties};
 ///
 /// # let mut trak = TrackBox::default();
 /// # trak.tkhd.track_id = 1;
@@ -44,7 +44,7 @@ use alloc::vec::Vec;
 /// #     sample_flags: Default::default(),
 /// #     sample_description_index: 1,
 /// # };
-/// let mut muxer = Muxer::new(FileStructure::NonFragmented);
+/// let mut muxer = Muxer::non_fragmented(NonFragmentedOptions::default());
 /// muxer.handle_movie(movie)?;
 /// muxer.handle_samples([Sample::new(properties, b"AB".to_vec())])?;
 /// muxer.finish()?;

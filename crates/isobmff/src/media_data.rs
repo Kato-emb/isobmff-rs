@@ -18,7 +18,7 @@
 //! use isobmff::framing::{BoxEvent, BoxWriter};
 //! use isobmff::media_data::MediaDataWriter;
 //! use isobmff::structure_data::MovieFragmentWriter;
-//! use isobmff::{BoxDefinition, BoxEncode, BoxHeader, Demuxer, FourCc, Sample, SampleProperties};
+//! use isobmff::{BoxDefinition, BoxEncode, BoxHeader, Demuxer, FourCc, FragmentedOptions, Sample, SampleProperties};
 //! # use core::error::Error;
 //!
 //! /// Writes `value` as the next box at file level through `boxes`, onto `file`
@@ -63,7 +63,7 @@
 //! let mut ftyp = FileTypeBox::default();
 //! ftyp.major_brand = FourCc::new(*b"iso6");
 //! write_box(&mut boxes, &mut file, &ftyp)?;
-//! let mut fragments = MovieFragmentWriter::new(movie, 1, false, false)?;
+//! let mut fragments = MovieFragmentWriter::fragmented(movie, FragmentedOptions::default())?;
 //! write_box(&mut boxes, &mut file, fragments.movie())?;
 //!
 //! // Each `moof`, then the `mdat` of its samples where the `moof` locates them

@@ -32,7 +32,10 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 
 use isobmff::boxes::FileTypeBox;
-use isobmff::{DemuxEvent, Demuxer, FileStructure, FourCc, Muxer};
+use isobmff::{
+    DemuxEvent, Demuxer, FileStructure, FourCc, FragmentedOptions, Muxer, NonFragmentedOptions,
+    SegmentOptions,
+};
 
 /// Samples the muxer takes in one call: one `moof` and `mdat`, or one `mdat`
 const SAMPLES_PER_RUN: usize = 64;
@@ -54,18 +57,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     if arguments.next().is_some() {
         return Err(usage.into());
     }
-    let file_structure = match (structure.as_str(), option.as_deref()) {
-        ("fragmented", option @ (None | Some("--random-access"))) => FileStructure::Fragmented {
-            first_sequence_number: 1,
-            random_access: option.is_some(),
-        },
-        ("non-fragmented", None) => FileStructure::NonFragmented,
-        ("segment", option @ (None | Some("--segment-index"))) => FileStructure::Segment {
-            first_sequence_number: 1,
-            segment_index: option.is_some(),
-        },
+    let mut muxer = match (structure.as_str(), option.as_deref()) {
+        ("fragmented", option @ (None | Some("--random-access"))) => {
+            let mut options = FragmentedOptions::default();
+            options.movie_fragment_random_access = option.is_some();
+            Muxer::fragmented(options)
+        }
+        ("non-fragmented", None) => Muxer::non_fragmented(NonFragmentedOptions::default()),
+        ("segment", option @ (None | Some("--segment-index"))) => {
+            let mut options = SegmentOptions::default();
+            options.segment_index = option.is_some();
+            Muxer::segment(options)
+        }
         _ => return Err(usage.into()),
     };
+    let file_structure = muxer.file_structure();
     let mut source = BufReader::new(File::open(source)?);
     let mut destination = Destination {
         file: File::create(destination)?,
@@ -74,7 +80,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let mut demuxer = Demuxer::new();
-    let mut muxer = Muxer::new(file_structure);
     let mut pending = Vec::new();
     loop {
         let event = match demuxer.wanted_input() {
@@ -95,11 +100,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         if let Some(DemuxEvent::Movie { .. }) = event? {
             let movie = demuxer.movie().ok_or("moov without its value")?.clone();
             let file_type = brands_of(file_structure, demuxer.file_type());
-            if let FileStructure::Segment { .. } = file_structure {
-                let mut initialization = Muxer::new(FileStructure::Fragmented {
-                    first_sequence_number: 1,
-                    random_access: false,
-                });
+            if file_structure == FileStructure::Segment {
+                let mut initialization = Muxer::fragmented(FragmentedOptions::default());
                 initialization.handle_file_type(file_type.clone())?;
                 initialization.handle_movie(movie.clone())?;
                 initialization.finish()?;
