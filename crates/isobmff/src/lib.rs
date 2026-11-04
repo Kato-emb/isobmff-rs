@@ -281,7 +281,7 @@ mod byte_range;
 mod demuxer;
 mod error;
 mod fast_start;
-mod file_level;
+pub mod file_level;
 mod file_structure;
 pub mod framing;
 mod leniency;
@@ -297,6 +297,7 @@ pub use byte_range::ByteRange;
 pub use demuxer::{DemuxEvent, Demuxer};
 pub use error::{DemuxError, FastStartError, MuxError, TimelineError};
 pub use fast_start::{FastStart, FastStartLimits};
+#[doc(inline)]
 pub use file_level::supports_default_base_is_moof;
 pub use file_structure::{FileStructure, FragmentedOptions, NonFragmentedOptions, SegmentOptions};
 pub use isobmff_core::*;

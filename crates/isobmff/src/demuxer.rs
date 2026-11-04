@@ -9,7 +9,7 @@ use isobmff_core::{BoxDefinition, BoxHeader, BoxType, Error, RawBox};
 
 use crate::byte_range::ByteRange;
 use crate::error::DemuxError;
-use crate::file_level::{self, Handling, Value};
+use crate::file_level::{self, Handling, TopLevelBox};
 use crate::framing::to_u64;
 use crate::framing::{BoxEvent, BoxReader};
 use crate::leniency::Leniency;
@@ -460,15 +460,15 @@ impl Demuxer {
                 .then_some(DemuxEvent::Other { header, byte_range }));
         };
         let event = match value {
-            Value::FileType(ftyp) => {
+            TopLevelBox::FileType(ftyp) => {
                 self.file_type = Some(ftyp);
                 DemuxEvent::FileType { byte_range }
             }
-            Value::SegmentType(styp) => {
+            TopLevelBox::SegmentType(styp) => {
                 self.segment_type = Some(styp);
                 DemuxEvent::SegmentType { byte_range }
             }
-            Value::Movie(moov) => {
+            TopLevelBox::Movie(moov) => {
                 let samples = self.structure_data.handle_movie(moov)?;
                 let samples = self.located(samples)?;
                 DemuxEvent::Movie {
@@ -476,7 +476,7 @@ impl Demuxer {
                     samples: self.gather(samples)?,
                 }
             }
-            Value::MovieFragment(moof) => {
+            TopLevelBox::MovieFragment(moof) => {
                 self.refuse_base_data_offset_past_skipped_compressed_boxes(&moof)?;
                 let samples = self
                     .structure_data
@@ -488,7 +488,7 @@ impl Demuxer {
                     byte_range,
                 }
             }
-            Value::SegmentIndex(sidx) => {
+            TopLevelBox::SegmentIndex(sidx) => {
                 let box_end = byte_range
                     .offset()
                     .saturating_add(raw_box.header().encoded_len())
@@ -497,7 +497,7 @@ impl Demuxer {
                     .handle_segment_index(&sidx, byte_range.offset()..box_end)?;
                 DemuxEvent::SegmentIndex { byte_range }
             }
-            Value::MovieFragmentRandomAccess(mfra) => {
+            TopLevelBox::MovieFragmentRandomAccess(mfra) => {
                 self.structure_data
                     .handle_movie_fragment_random_access(mfra);
                 DemuxEvent::MovieFragmentRandomAccess { byte_range }
@@ -585,7 +585,7 @@ fn read(
     limit_bytes: u64,
     raw_box: RawBox<'_>,
     offset: u64,
-) -> Result<Option<Value>, DemuxError> {
+) -> Result<Option<TopLevelBox>, DemuxError> {
     #[cfg(feature = "compressed-boxes")]
     {
         let box_type = raw_box.header().box_type();

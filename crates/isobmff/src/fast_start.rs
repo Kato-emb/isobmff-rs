@@ -7,11 +7,10 @@ use isobmff_boxes::{
     ChunkLargeOffsetBox, ChunkOffsetVariant, FileTypeBox, MetaBox, MovieBox, MovieFragmentBox,
     TrackBox,
 };
-use isobmff_core::{BoxDefinition, BoxEncode, BoxType};
+use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxType, Error};
 
 use crate::byte_range::ByteRange;
 use crate::error::{DemuxError, FastStartError};
-use crate::file_level::decode;
 use crate::framing::{BoxEvent, BoxReader, BoxWriter, to_u64, write_box};
 use crate::output::Output;
 use crate::structure_data::{chunk_offsets, data_reference_index};
@@ -383,12 +382,16 @@ impl FastStart {
             Some(BoxEvent::End) => {
                 if let Some(gathered) = self.reader.gathered_box() {
                     let box_type = gathered.header().box_type();
-                    let read = |error| FastStartError::Read { error };
+                    let read = |error: Error| FastStartError::Read {
+                        error: DemuxError::Box {
+                            error: error.in_container(box_type),
+                        },
+                    };
                     if box_type == MetaBox::BOX_TYPE {
-                        let meta = decode::<MetaBox>(gathered.payload()).map_err(read)?;
+                        let meta = MetaBox::decode_payload(gathered.payload()).map_err(read)?;
                         check_item_locations(Some(&meta))?;
                     } else {
-                        let movie = decode::<MovieBox>(gathered.payload()).map_err(read)?;
+                        let movie = MovieBox::decode_payload(gathered.payload()).map_err(read)?;
                         if movie.mvex.is_some() {
                             return Err(FastStartError::FragmentedMovie);
                         }

@@ -8,7 +8,7 @@ use isobmff_core::BoxDefinition;
 
 use crate::byte_range::ByteRange;
 use crate::error::MuxError;
-use crate::file_level::refuse_brands_before_iso5;
+use crate::file_level::supports_default_base_is_moof;
 use crate::file_structure::{
     FileStructure, FragmentedOptions, NonFragmentedOptions, SegmentOptions,
 };
@@ -556,6 +556,16 @@ impl Muxer {
         }
         Ok(())
     }
+}
+
+/// Refuses `file_type` where it names none of the brands [`supports_default_base_is_moof`] looks for
+fn refuse_brands_before_iso5(file_type: &FileTypeBox) -> Result<(), MuxError> {
+    if supports_default_base_is_moof(file_type) {
+        return Ok(());
+    }
+    Err(MuxError::UnsupportedBrand {
+        brand: file_type.major_brand,
+    })
 }
 
 #[cfg(test)]
