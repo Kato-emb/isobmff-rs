@@ -1,10 +1,11 @@
-//! Boxes at file level: what becomes of each as its type says, and the value of each that has one
+//! Boxes at file level: the kind of each as its type says, and the value of each that has one
 //!
 //! A box at file level is one no other box contains (ISO/IEC 14496-12
-//! §3.1.14). What becomes of it follows from its type alone ([`handling`]),
-//! and the boxes gathered whole read into their values ([`read`]). Nothing is
-//! held between boxes: the order the boxes come in is for the reader of their
-//! values to judge.
+//! §3.1.14). Its kind follows from its type alone ([`Kind::of`]): the
+//! structure-data, which has a value ([`TopLevelBox::read`]), the media data,
+//! which the structure-data locates samples in, and any other box (A.3).
+//! Nothing is held between boxes: the order the boxes come in is for the
+//! reader of their values to judge.
 //!
 //! These are the values a reader reads, not a report of what a reader did: a
 //! [`Demuxer`](crate::Demuxer) reads each box at file level with this
@@ -13,11 +14,11 @@
 //! resolves.
 //!
 //! A reader of its own lists the boxes at file level with a
-//! [`BoxReader`](crate::framing::BoxReader), answering each header as
-//! [`handling`] says:
+//! [`BoxReader`](crate::framing::BoxReader), gathering the structure-data
+//! into its values and skipping the rest:
 //!
 //! ```
-//! use isobmff::file_level::{self, Handling, TopLevelBox};
+//! use isobmff::file_level::{Kind, TopLevelBox};
 //! use isobmff::framing::{BoxEvent, BoxReader};
 //!
 //! let file: &[u8] = include_bytes!("../tests/data/movie.mp4");
@@ -29,17 +30,15 @@
 //!     }
 //!     while let Some(event) = reader.handle_input(wanted.offset(), input)? {
 //!         match event {
-//!             // Gather the boxes that have a value, and skip the others
-//!             BoxEvent::Header(header) => {
-//!                 match file_level::handling(header.box_type()) {
-//!                     Handling::Gather => reader.gather(1024 * 1024)?,
-//!                     _ => reader.skip()?,
-//!                 }
-//!             }
+//!             // Gather the structure-data, and skip the other boxes
+//!             BoxEvent::Header(header) => match Kind::of(header.box_type()) {
+//!                 Kind::StructureData => reader.gather(1024 * 1024)?,
+//!                 _ => reader.skip()?,
+//!             },
 //!             // Read the box just gathered into its value
 //!             BoxEvent::End => {
 //!                 if let Some(raw_box) = reader.gathered_box() {
-//!                     values.extend(file_level::read(raw_box)?);
+//!                     values.extend(TopLevelBox::read(raw_box)?);
 //!                 }
 //!             }
 //!             _ => {}
@@ -66,18 +65,52 @@ use isobmff_core::{BoxDecode, BoxDefinition, BoxType, RawBox};
 
 use crate::error::DemuxError;
 
-/// What becomes of a box at file level, as its type says
+/// Kind of a box at file level, as its type says, ISO/IEC 14496-12 A.3
+///
+/// The structure-data of a file is read into values; the media data is the
+/// bytes of samples, which the structure-data locates by byte range.
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Handling {
-    /// Structure-data, or a compressed box (§8.16): gathered whole, and read into its value with [`read`]
-    Gather,
-    /// Media data box (`mdat`, §8.1.1): skipped
+pub enum Kind {
+    /// Structure-data, with a value [`TopLevelBox::read`] reads, or, with the feature `compressed-boxes`, a compressed box that replaces one (§8.16)
+    StructureData,
+    /// Media data box (`mdat`, §8.1.1)
     MediaData,
-    /// Identified media data box (`imda`, §8.1.4): its `imda_identifier` read, and the rest skipped
+    /// Identified media data box (`imda`, §8.1.4), whose `imda_identifier` the data references of samples name
     IdentifiedMediaData,
-    /// Any other box: skipped
+    /// Any other box
     Other,
+}
+
+impl Kind {
+    /// Returns the kind of a box at file level of `box_type`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff::BoxType;
+    /// use isobmff::file_level::Kind;
+    ///
+    /// assert_eq!(Kind::of(BoxType::compact(*b"moov")), Kind::StructureData);
+    /// assert_eq!(Kind::of(BoxType::compact(*b"mdat")), Kind::MediaData);
+    /// assert_eq!(Kind::of(BoxType::compact(*b"imda")), Kind::IdentifiedMediaData);
+    /// assert_eq!(Kind::of(BoxType::compact(*b"free")), Kind::Other);
+    /// ```
+    #[must_use]
+    pub fn of(box_type: BoxType) -> Self {
+        #[cfg(feature = "compressed-boxes")]
+        let compressed = crate::framing::replacement_type(box_type).is_some();
+        #[cfg(not(feature = "compressed-boxes"))]
+        let compressed = false;
+        if value_reader(box_type).is_some() || compressed {
+            return Self::StructureData;
+        }
+        match box_type {
+            MediaDataBox::BOX_TYPE => Self::MediaData,
+            IdentifiedMediaDataBox::BOX_TYPE => Self::IdentifiedMediaData,
+            BoxType::Compact(_) | BoxType::Extended(_) => Self::Other,
+        }
+    }
 }
 
 /// Value of a box at file level that is read off its payload
@@ -98,103 +131,56 @@ pub enum TopLevelBox {
     MovieFragmentRandomAccess(MovieFragmentRandomAccessBox),
 }
 
-/// Returns what becomes of a box at file level of `box_type`
-///
-/// # Examples
-///
-/// ```
-/// use isobmff::BoxType;
-/// use isobmff::file_level::{Handling, handling};
-///
-/// assert_eq!(handling(BoxType::compact(*b"moov")), Handling::Gather);
-/// assert_eq!(handling(BoxType::compact(*b"mdat")), Handling::MediaData);
-/// assert_eq!(handling(BoxType::compact(*b"imda")), Handling::IdentifiedMediaData);
-/// assert_eq!(handling(BoxType::compact(*b"free")), Handling::Other);
-/// ```
-#[must_use]
-pub fn handling(box_type: BoxType) -> Handling {
-    if value_reader(box_type).is_some() || is_compressed(box_type) {
-        return Handling::Gather;
+impl TopLevelBox {
+    /// Reads a box gathered whole into its value, or returns `None` for a box with no value
+    ///
+    /// A compressed box reads into `None`: [`read_payload`](Self::read_payload) reads the payload of the box it replaces.
+    ///
+    /// # Errors
+    ///
+    /// * [`DemuxError::Box`]: the payload does not read as the box its type
+    ///   names. The failure names that box as the outermost of the path it
+    ///   was reached through.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff::RawBox;
+    /// use isobmff::file_level::TopLevelBox;
+    ///
+    /// let (ftyp, _) = RawBox::split_first(b"\0\0\0\x10ftypisom\0\0\x02\0")?;
+    /// let Some(TopLevelBox::FileType(ftyp)) = TopLevelBox::read(ftyp)? else { return Err("no ftyp".into()) };
+    /// assert_eq!(ftyp.major_brand.as_bytes(), b"isom");
+    ///
+    /// let (mdat, _) = RawBox::split_first(b"\0\0\0\x0amdatAB")?;
+    /// assert_eq!(TopLevelBox::read(mdat)?, None);
+    /// # Ok::<(), Box<dyn core::error::Error>>(())
+    /// ```
+    pub fn read(raw_box: RawBox<'_>) -> Result<Option<Self>, DemuxError> {
+        Self::read_payload(raw_box.header().box_type(), raw_box.payload())
     }
-    match box_type {
-        MediaDataBox::BOX_TYPE => Handling::MediaData,
-        IdentifiedMediaDataBox::BOX_TYPE => Handling::IdentifiedMediaData,
-        BoxType::Compact(_) | BoxType::Extended(_) => Handling::Other,
+
+    /// Reads `payload`, that of a box of `box_type`, into its value, or returns `None` for a box with no value
+    ///
+    /// # Errors
+    ///
+    /// As for [`read`](Self::read).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isobmff::BoxType;
+    /// use isobmff::file_level::TopLevelBox;
+    ///
+    /// let value = TopLevelBox::read_payload(BoxType::compact(*b"ftyp"), b"isom\0\0\x02\0")?;
+    /// assert!(matches!(value, Some(TopLevelBox::FileType(_))));
+    /// # Ok::<(), Box<dyn core::error::Error>>(())
+    /// ```
+    pub fn read_payload(box_type: BoxType, payload: &[u8]) -> Result<Option<Self>, DemuxError> {
+        value_reader(box_type)
+            .map(|read_payload| read_payload(payload))
+            .transpose()
     }
-}
-
-/// Returns whether a box of `box_type` is a compressed box, which is gathered and read back into the box it replaces (§8.16)
-///
-/// Without the feature `compressed-boxes`, no box is.
-///
-/// # Examples
-///
-/// ```
-/// use isobmff::BoxType;
-/// use isobmff::file_level::is_compressed;
-///
-/// assert_eq!(is_compressed(BoxType::compact(*b"!mov")), cfg!(feature = "compressed-boxes"));
-/// assert!(!is_compressed(BoxType::compact(*b"moov")));
-/// ```
-#[must_use]
-pub fn is_compressed(box_type: BoxType) -> bool {
-    #[cfg(feature = "compressed-boxes")]
-    return crate::framing::replacement_type(box_type).is_some();
-    #[cfg(not(feature = "compressed-boxes"))]
-    return {
-        let _ = box_type;
-        false
-    };
-}
-
-/// Reads a box gathered whole into its value, or returns `None` for a box [`handling`] does not gather
-///
-/// A compressed box reads into `None`: [`read_payload`] reads the payload of the box it replaces.
-///
-/// # Errors
-///
-/// * [`DemuxError::Box`]: the payload does not read as the box its type
-///   names. The failure names that box as the outermost of the path it was
-///   reached through.
-///
-/// # Examples
-///
-/// ```
-/// use isobmff::RawBox;
-/// use isobmff::file_level::{TopLevelBox, read};
-///
-/// let (ftyp, _) = RawBox::split_first(b"\0\0\0\x10ftypisom\0\0\x02\0")?;
-/// let Some(TopLevelBox::FileType(ftyp)) = read(ftyp)? else { return Err("no ftyp".into()) };
-/// assert_eq!(ftyp.major_brand.as_bytes(), b"isom");
-///
-/// let (mdat, _) = RawBox::split_first(b"\0\0\0\x0amdatAB")?;
-/// assert_eq!(read(mdat)?, None);
-/// # Ok::<(), Box<dyn core::error::Error>>(())
-/// ```
-pub fn read(raw_box: RawBox<'_>) -> Result<Option<TopLevelBox>, DemuxError> {
-    read_payload(raw_box.header().box_type(), raw_box.payload())
-}
-
-/// Reads `payload`, that of a box of `box_type`, into its value, or returns `None` for a box [`handling`] does not gather
-///
-/// # Errors
-///
-/// As for [`read`].
-///
-/// # Examples
-///
-/// ```
-/// use isobmff::BoxType;
-/// use isobmff::file_level::{TopLevelBox, read_payload};
-///
-/// let value = read_payload(BoxType::compact(*b"ftyp"), b"isom\0\0\x02\0")?;
-/// assert!(matches!(value, Some(TopLevelBox::FileType(_))));
-/// # Ok::<(), Box<dyn core::error::Error>>(())
-/// ```
-pub fn read_payload(box_type: BoxType, payload: &[u8]) -> Result<Option<TopLevelBox>, DemuxError> {
-    value_reader(box_type)
-        .map(|read_payload| read_payload(payload))
-        .transpose()
 }
 
 /// Reads the payload of a box into its value
@@ -308,14 +294,17 @@ mod tests {
         file_type.minor_version = 0x200;
         file_type.compatible_brands = vec![FourCc::new(*b"isom"), FourCc::new(*b"iso2")];
 
-        assert_eq!(read(raw_box), Ok(Some(TopLevelBox::FileType(file_type))));
+        assert_eq!(
+            TopLevelBox::read(raw_box),
+            Ok(Some(TopLevelBox::FileType(file_type)))
+        );
     }
 
     #[test]
     fn a_media_data_box_reads_into_no_value() {
         let (raw_box, _) = RawBox::split_first(b"\0\0\0\x10mdatpayload!").unwrap();
 
-        assert_eq!(read(raw_box), Ok(None));
+        assert_eq!(TopLevelBox::read(raw_box), Ok(None));
     }
 
     #[test]
@@ -323,7 +312,7 @@ mod tests {
         let (raw_box, _) = RawBox::split_first(b"\0\0\0\x14moov\0\0\0\x0cmvhd\0\0\0\0").unwrap();
 
         assert_eq!(
-            read(raw_box),
+            TopLevelBox::read(raw_box),
             Err(DemuxError::Box {
                 error: Error::truncated_payload(8, 4)
                     .in_container(MovieHeaderBox::BOX_TYPE)
@@ -335,7 +324,7 @@ mod tests {
     /// Box at file level as the mapping leaves it: its type, its total, and whether a value was read off it
     type Mapped = (BoxType, u64, Option<TopLevelBox>);
 
-    /// Reads the boxes at file level of `file`, answering each header as [`handling`] says, and reading each gathered box with [`read`]
+    /// Reads the boxes at file level of `file`, answering each header as [`Kind::of`] says, and reading each gathered box with [`TopLevelBox::read`]
     fn map_file_level(file: &[u8]) -> Vec<Mapped> {
         let file_length = u64::try_from(file.len()).unwrap();
         let mut reader = BoxReader::new();
@@ -346,9 +335,9 @@ mod tests {
                 let total = byte_range
                     .length()
                     .unwrap_or(file_length.saturating_sub(byte_range.offset()));
-                match handling(header.box_type()) {
-                    Handling::Gather => reader.gather(u64::MAX).unwrap(),
-                    Handling::MediaData | Handling::IdentifiedMediaData | Handling::Other => {
+                match Kind::of(header.box_type()) {
+                    Kind::StructureData => reader.gather(u64::MAX).unwrap(),
+                    Kind::MediaData | Kind::IdentifiedMediaData | Kind::Other => {
                         reader.skip().unwrap();
                         mapped.push((header.box_type(), total, None));
                     }
@@ -360,7 +349,11 @@ mod tests {
                         .header()
                         .encoded_len()
                         .saturating_add(u64::try_from(raw_box.payload().len()).unwrap());
-                    mapped.push((raw_box.header().box_type(), total, read(raw_box).unwrap()));
+                    mapped.push((
+                        raw_box.header().box_type(),
+                        total,
+                        TopLevelBox::read(raw_box).unwrap(),
+                    ));
                 }
             }
             BoxEvent::Payload(_) => {}
@@ -408,11 +401,11 @@ mod tests {
             for (box_type, _, value) in &mapped {
                 assert_eq!(
                     value.is_some(),
-                    handling(*box_type) == Handling::Gather,
+                    Kind::of(*box_type) == Kind::StructureData,
                     "{name}: {box_type}"
                 );
                 if *box_type == BoxType::compact(*b"meta") {
-                    assert_eq!(handling(*box_type), Handling::Other, "{name}");
+                    assert_eq!(Kind::of(*box_type), Kind::Other, "{name}");
                     metas.push(name.clone());
                 }
             }
