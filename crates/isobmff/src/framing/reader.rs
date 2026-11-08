@@ -18,6 +18,9 @@ enum State {
     Header,
     /// The header of a box the reader gathers was consumed; its payload
     /// starts the unconsumed bytes
+    // Why hold the offset, though the cursor less the payload in hand and the
+    // header gives it: Skipping cannot derive its own, with nothing in hand,
+    // and both states keep the box in one shape.
     Gathering { offset: u64, header: BoxHeader },
     /// The header of a box the reader does not gather, or cannot, was
     /// consumed; the bytes up to its end are dropped
