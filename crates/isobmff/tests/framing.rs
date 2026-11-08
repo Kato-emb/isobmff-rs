@@ -183,28 +183,111 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_events_of_a_fragmented_movie_file() {
-        let (_, file) = FIXTURES.get(2).unwrap();
-        let lines = read_every_way("fragmented.mp4", file, &FramerConfig::new(PAYLOAD_LIMIT))
+    /// The type of each box of `reported`, with whether its payload was gathered
+    fn layout(reported: &[Reported]) -> Vec<(String, bool)> {
+        reported
             .iter()
             .map(|reported| match reported {
-                Reported::Box { .. } | Reported::Gathered { .. } => {
-                    let (box_type, offset, total) = reported.frame(file).unwrap();
-                    match reported {
-                        Reported::Gathered { payload, .. } => format!(
-                            "{offset}: {box_type} of {total} bytes, payload of {} gathered",
-                            payload.len()
-                        ),
-                        Reported::Box { .. } | Reported::Error(_) | Reported::Other(_) => {
-                            format!("{offset}: {box_type} of {total} bytes, skipped")
-                        }
-                    }
-                }
-                Reported::Error(error) => format!("{error}"),
-                Reported::Other(other) => other.clone(),
+                Reported::Box { header, .. } => (header.box_type().to_string(), false),
+                Reported::Gathered { box_type, .. } => (box_type.to_string(), true),
+                Reported::Error(error) => (error.to_string(), false),
+                Reported::Other(other) => (other.clone(), false),
             })
-            .collect::<Vec<_>>();
+            .collect()
+    }
+
+    #[test]
+    fn the_fixtures_frame_as_the_boxes_ffmpeg_lays_out() {
+        let config = FramerConfig::new(PAYLOAD_LIMIT);
+        let gathered = |box_type: &str| (box_type.to_owned(), true);
+        let skipped = |box_type: &str| (box_type.to_owned(), false);
+        let fragment = [gathered("moof"), skipped("mdat")];
+        let segment = [gathered("styp"), gathered("moof"), skipped("mdat")];
+        let expected: [(&str, Vec<(String, bool)>); 4] = [
+            (
+                "movie_moov_last.mp4",
+                vec![
+                    gathered("ftyp"),
+                    skipped("free"),
+                    skipped("mdat"),
+                    gathered("moov"),
+                ],
+            ),
+            (
+                "movie_moov_first.mp4",
+                vec![
+                    gathered("ftyp"),
+                    gathered("moov"),
+                    skipped("free"),
+                    skipped("mdat"),
+                ],
+            ),
+            (
+                "fragmented.mp4",
+                [
+                    vec![gathered("ftyp"), gathered("moov")],
+                    fragment.iter().cloned().cycle().take(6).collect(),
+                    vec![gathered("mfra")],
+                ]
+                .concat(),
+            ),
+            (
+                "segment.mp4",
+                [
+                    vec![gathered("ftyp"), gathered("moov")],
+                    segment.iter().cloned().cycle().take(9).collect(),
+                ]
+                .concat(),
+            ),
+        ];
+        for ((name, file), (expected_name, boxes)) in FIXTURES.into_iter().zip(expected) {
+            assert_eq!(name, expected_name);
+            assert_eq!(
+                layout(&read_every_way(name, file, &config)),
+                boxes,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_events_across_boxes_that_cannot_be_read() {
+        let config = FramerConfig::new(16);
+        let over_limit_then_malformed = [
+            &compact_box(b"moov", 32)[..],
+            &compact_box(b"moof", 8),
+            &compact_box(b"mdat", 4),
+            b"\0\0\0\x04abcd",
+            &compact_box(b"moov", 4),
+        ]
+        .concat();
+        let truncated_payload = [&compact_box(b"ftyp", 8)[..], &compact_box(b"moov", 12)]
+            .concat()
+            .get(..24)
+            .unwrap()
+            .to_vec();
+        let truncated_header = [&compact_box(b"ftyp", 8)[..], b"\0\0\0\x10mo"].concat();
+        let lines = [
+            over_limit_then_malformed,
+            truncated_payload,
+            truncated_header,
+        ]
+        .iter()
+        .flat_map(|bytes| {
+            let reported = read_cut_everywhere(bytes, &config);
+            layout(&reported)
+                .into_iter()
+                .map(|(event, gathered)| {
+                    if gathered {
+                        format!("{event} gathered")
+                    } else {
+                        event
+                    }
+                })
+                .chain(["--".to_owned()])
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
         insta::assert_debug_snapshot!(lines);
     }
 
