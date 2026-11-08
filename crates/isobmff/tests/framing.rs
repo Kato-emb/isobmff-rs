@@ -6,6 +6,7 @@ mod tests {
 
     use isobmff::framing::{BoxReader, Error, Event, FramerConfig};
     use isobmff_core::{BoxHeader, BoxType};
+    use isobmff_test_support::fixtures::written;
     use isobmff_test_support::{
         compressed_box_conformance_files, conformance_files, gpac_children, gpac_frame, gpac_type,
         tally,
@@ -36,12 +37,37 @@ mod tests {
         },
         Gathered {
             offset: u64,
-            header: BoxHeader,
+            box_type: BoxType,
+            payload_offset: u64,
             payload: Vec<u8>,
         },
         Error(Error),
         /// An event of a variant added after this test was written
         Other(String),
+    }
+
+    impl Reported {
+        /// The type, file offset and total of the box a box event reports
+        fn frame(&self, file: &[u8]) -> Option<(BoxType, u64, u64)> {
+            match self {
+                Self::Box { offset, header } => {
+                    Some((header.box_type(), *offset, total(*offset, *header, file)))
+                }
+                Self::Gathered {
+                    offset,
+                    box_type,
+                    payload_offset,
+                    payload,
+                } => Some((
+                    *box_type,
+                    *offset,
+                    payload_offset
+                        .checked_sub(*offset)?
+                        .checked_add(u64::try_from(payload.len()).ok()?)?,
+                )),
+                Self::Error(_) | Self::Other(_) => None,
+            }
+        }
     }
 
     fn drain(reader: &mut BoxReader, reported: &mut Vec<Reported>) {
@@ -50,11 +76,13 @@ mod tests {
                 Event::Box { offset, header } => Reported::Box { offset, header },
                 Event::Gathered {
                     offset,
-                    header,
+                    box_type,
+                    payload_offset,
                     payload,
                 } => Reported::Gathered {
                     offset,
-                    header,
+                    box_type,
+                    payload_offset,
                     payload: payload.to_vec(),
                 },
                 Event::Error(error) => Reported::Error(error),
@@ -145,13 +173,7 @@ mod tests {
             let reported = read_every_way(name, file, &FramerConfig::new(PAYLOAD_LIMIT));
             let covered = reported
                 .iter()
-                .map(|reported| match reported {
-                    Reported::Box { offset, header }
-                    | Reported::Gathered { offset, header, .. } => {
-                        Some(total(*offset, *header, file))
-                    }
-                    Reported::Error(_) | Reported::Other(_) => None,
-                })
+                .map(|reported| reported.frame(file).map(|(_, _, total)| total))
                 .sum::<Option<u64>>();
             assert_eq!(
                 covered,
@@ -167,23 +189,18 @@ mod tests {
         let lines = read_every_way("fragmented.mp4", file, &FramerConfig::new(PAYLOAD_LIMIT))
             .iter()
             .map(|reported| match reported {
-                Reported::Box { offset, header } => {
-                    format!(
-                        "{offset}: {} of {} bytes, skipped",
-                        header.box_type(),
-                        total(*offset, *header, file)
-                    )
+                Reported::Box { .. } | Reported::Gathered { .. } => {
+                    let (box_type, offset, total) = reported.frame(file).unwrap();
+                    match reported {
+                        Reported::Gathered { payload, .. } => format!(
+                            "{offset}: {box_type} of {total} bytes, payload of {} gathered",
+                            payload.len()
+                        ),
+                        Reported::Box { .. } | Reported::Error(_) | Reported::Other(_) => {
+                            format!("{offset}: {box_type} of {total} bytes, skipped")
+                        }
+                    }
                 }
-                Reported::Gathered {
-                    offset,
-                    header,
-                    payload,
-                } => format!(
-                    "{offset}: {} of {} bytes, payload of {} gathered",
-                    header.box_type(),
-                    total(*offset, *header, file),
-                    payload.len()
-                ),
                 Reported::Error(error) => format!("{error}"),
                 Reported::Other(other) => other.clone(),
             })
@@ -224,10 +241,9 @@ mod tests {
         }
     }
 
-    /// `size`, `boxtype` and what follows, as one box of `payload_len` bytes of payload
+    /// One box of `payload_len` bytes of payload
     fn compact_box(box_type: &[u8; 4], payload_len: usize) -> Vec<u8> {
-        let size = u32::try_from(payload_len.checked_add(8).unwrap()).unwrap();
-        [&size.to_be_bytes()[..], box_type, &vec![0xab; payload_len]].concat()
+        written(box_type, &[&vec![0xab; payload_len]])
     }
 
     /// The events of `bytes` handed over in two pieces cut at each position, and at none
@@ -311,10 +327,27 @@ mod tests {
                 }),
                 Reported::Gathered {
                     offset: 40,
-                    header: BoxHeader::decode(bytes.get(40..).unwrap()).unwrap().0,
+                    box_type: BoxType::compact(*b"moof"),
+                    payload_offset: 48,
                     payload: vec![0xab; 8],
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn a_payload_under_the_limit_is_gathered_whatever_follows_it() {
+        let bytes = [&compact_box(b"moov", 8)[..], &compact_box(b"mdat", 64)].concat();
+        let reported = read_cut_everywhere(&bytes, &FramerConfig::new(16));
+        assert!(
+            matches!(
+                &reported[..],
+                [
+                    Reported::Gathered { offset: 0, .. },
+                    Reported::Box { offset: 16, .. }
+                ]
+            ),
+            "{reported:?}"
         );
     }
 
@@ -412,11 +445,10 @@ mod tests {
             let reported =
                 read_every_way(&file.name, &file.bytes, &FramerConfig::new(PAYLOAD_LIMIT));
             let ours = tally(reported.iter().filter_map(|reported| match reported {
-                Reported::Box { offset, header } | Reported::Gathered { offset, header, .. } => {
-                    Some((
-                        gpac_type(header.box_type().four_cc().as_bytes()),
-                        total(*offset, *header, &file.bytes),
-                    ))
+                Reported::Box { .. } | Reported::Gathered { .. } => {
+                    reported.frame(&file.bytes).map(|(box_type, _, total)| {
+                        (gpac_type(box_type.four_cc().as_bytes()), total)
+                    })
                 }
                 Reported::Error(error) => {
                     differences.push(format!("{}: {error}", file.name));

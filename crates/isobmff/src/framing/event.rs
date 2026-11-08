@@ -2,7 +2,7 @@
 
 use core::fmt;
 
-use isobmff_core::BoxHeader;
+use isobmff_core::{BoxHeader, BoxType};
 
 /// What a [`BoxReader`](super::BoxReader) found in its input
 ///
@@ -20,12 +20,17 @@ pub enum Event<'a> {
     },
     /// A box the reader gathered whole, its payload lent from the reader's
     /// buffer
+    ///
+    /// The header is not carried: the box ends where its payload does, at
+    /// `payload_offset` plus the length of `payload`.
     Gathered {
         /// File offset of the box
         offset: u64,
-        /// Header of the box
-        header: BoxHeader,
-        /// Payload of the box, after its header
+        /// Type of the box
+        box_type: BoxType,
+        /// File offset of the payload, past the header
+        payload_offset: u64,
+        /// Payload of the box
         payload: &'a [u8],
     },
     /// A box that cannot be read; reading goes on where the error says

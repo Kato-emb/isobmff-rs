@@ -1,4 +1,4 @@
-//! The boxes laid end to end in a file, read from bytes that arrive in pieces, ISO/IEC 14496-12 §4.2.2
+//! The boxes laid end to end in a file, read from bytes that arrive in pieces
 //!
 //! [`BoxReader`] cuts each box at file level off the bytes of a file: it
 //! gathers the payload of a box whose type [`FramerConfig`] names, and skips

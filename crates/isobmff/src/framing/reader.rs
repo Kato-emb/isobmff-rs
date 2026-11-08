@@ -61,9 +61,12 @@ enum Output {
     Error(Error),
 }
 
-/// Whether [`BoxReader::step`] has an output, or waits for input
-enum Progress {
+/// What one transition leaves [`BoxReader::step`] to do
+enum Step {
+    /// Step again
+    Continue,
     Output(Output),
+    /// Wait for input
     NeedMoreData,
 }
 
@@ -71,11 +74,12 @@ struct Transition {
     next_state: State,
     /// Bytes that leave the buffer front, already reported or cut
     consume: usize,
-    /// `None` keeps [`BoxReader::step`] stepping
-    progress: Option<Progress>,
+    step: Step,
 }
 
-/// Reader of the boxes laid end to end in a file, from bytes that arrive in pieces, ISO/IEC 14496-12 §4.2.2
+/// Reader of the boxes laid end to end in a file, from bytes that arrive in pieces
+///
+/// The framing of boxes, ISO/IEC 14496-12 §4.2.2.
 ///
 /// The reader names the file offset it wants next with
 /// [`required_input`](Self::required_input), takes bytes from any offset up
@@ -101,8 +105,8 @@ struct Transition {
 ///     while let Some(event) = reader.poll_event() {
 ///         match event {
 ///             Event::Box { header, .. } => boxes.push(format!("{} skipped", header.box_type())),
-///             Event::Gathered { header, payload, .. } => {
-///                 boxes.push(format!("{} of {} bytes", header.box_type(), payload.len()));
+///             Event::Gathered { box_type, payload, .. } => {
+///                 boxes.push(format!("{box_type} of {} bytes", payload.len()));
 ///             }
 ///             Event::Error(error) => return Err(error.into()),
 ///             _ => {}
@@ -152,7 +156,7 @@ impl BoxReader {
             return None;
         }
         let end_of_input = self.offset_of(self.input.len());
-        let unconsumed = u64::try_from(self.input.unconsumed().len()).unwrap_or(u64::MAX);
+        let unconsumed = length_of(self.input.unconsumed());
         match self.state {
             State::Header => Some(RequiredInput {
                 position: end_of_input,
@@ -219,11 +223,7 @@ impl BoxReader {
     pub fn poll_event(&mut self) -> Option<Event<'_>> {
         let dropped = self.input.compact();
         self.position = self.offset_of(dropped);
-        let output = match self.step() {
-            Progress::Output(output) => output,
-            Progress::NeedMoreData => return None,
-        };
-        Some(match output {
+        Some(match self.step()? {
             Output::Box { offset, header } => Event::Box { offset, header },
             Output::Gathered {
                 offset,
@@ -231,7 +231,8 @@ impl BoxReader {
                 payload,
             } => Event::Gathered {
                 offset,
-                header,
+                box_type: header.box_type(),
+                payload_offset: offset.saturating_add(header.encoded_len()),
                 payload: self.input.get(payload),
             },
             Output::Error(error) => Event::Error(error),
@@ -249,153 +250,148 @@ impl BoxReader {
         self.input.finish();
     }
 
-    /// Steps the state machine until it has an output, or waits for input
-    fn step(&mut self) -> Progress {
+    /// Steps the state machine until it has an output, or `None` once it
+    /// waits for input
+    fn step(&mut self) -> Option<Output> {
         loop {
             let transition = self.transition();
             self.state = transition.next_state;
             self.input.consume(transition.consume);
-            if let Some(progress) = transition.progress {
-                return progress;
+            match transition.step {
+                Step::Continue => {}
+                Step::Output(output) => return Some(output),
+                Step::NeedMoreData => return None,
             }
         }
     }
 
     fn transition(&self) -> Transition {
         let unconsumed = self.input.unconsumed();
-        let offset = self.offset_of(self.input.consumed());
+        let start = self.input.consumed();
+        let offset = self.offset_of(start);
         let input = if self.input.is_ended() {
             Input::Ends
         } else {
             Input::Continues
         };
+        let limit = self.config.payload_limit;
+        let over_limit = |offset, header| {
+            Step::Output(Output::Error(Error::PayloadOverLimit {
+                offset,
+                header,
+                limit,
+            }))
+        };
+        // Why compare what is in hand against the limit only for a box of
+        // size 0: a box that declares its length is refused at its header
+        // when that length is over the limit, and what is in hand past its
+        // payload belongs to the boxes after it.
+        let gathered_over_limit = length_of(unconsumed) > limit;
         match (self.state, observe(self.state, offset, unconsumed, input)) {
-            (State::Header, Observation::Header(header)) if self.gathers(header) => {
-                match header.payload_len() {
-                    Some(payload_len) if payload_len > self.config.payload_limit => Transition {
-                        next_state: State::Skipping { offset, header },
-                        consume: header_length(header),
-                        progress: Some(Progress::Output(Output::Error(Error::PayloadOverLimit {
-                            offset,
-                            header,
-                            limit: self.config.payload_limit,
-                        }))),
-                    },
-                    Some(_) | None => Transition {
-                        next_state: State::Gathering { offset, header },
-                        consume: header_length(header),
-                        progress: None,
-                    },
+            (State::Ended, _) => Transition {
+                next_state: State::Ended,
+                consume: 0,
+                step: Step::NeedMoreData,
+            },
+            (State::Header, Observation::Header(header))
+                if self.gathers(header)
+                    && header.payload_len().is_some_and(|length| length > limit) =>
+            {
+                Transition {
+                    next_state: State::Skipping { offset, header },
+                    consume: header_length(header),
+                    step: over_limit(offset, header),
                 }
             }
+            (State::Header, Observation::Header(header)) if self.gathers(header) => Transition {
+                next_state: State::Gathering { offset, header },
+                consume: header_length(header),
+                step: Step::Continue,
+            },
             (State::Header, Observation::Header(header)) => Transition {
                 next_state: State::Skipping { offset, header },
                 consume: header_length(header),
-                progress: Some(Progress::Output(Output::Box { offset, header })),
+                step: Step::Output(Output::Box { offset, header }),
             },
             (State::Header, Observation::MalformedHeader(source)) => Transition {
                 next_state: State::Ended,
                 consume: unconsumed.len(),
-                progress: Some(Progress::Output(Output::Error(Error::MalformedHeader {
-                    offset,
-                    source,
-                }))),
+                step: Step::Output(Output::Error(Error::MalformedHeader { offset, source })),
             },
             (State::Header, Observation::InputEndedShort) => Transition {
                 next_state: State::Ended,
                 consume: unconsumed.len(),
-                progress: Some(Progress::Output(Output::Error(Error::TruncatedHeader {
-                    offset,
-                }))),
+                step: Step::Output(Output::Error(Error::TruncatedHeader { offset })),
             },
-            (State::Gathering { offset, header }, Observation::BoxEndInHand) => {
-                let payload_len = header
+            (
+                State::Gathering {
+                    offset: box_offset,
+                    header,
+                },
+                Observation::BoxEndInHand | Observation::NeedMoreData,
+            ) if header.payload_len().is_none() && gathered_over_limit => Transition {
+                next_state: State::Skipping {
+                    offset: box_offset,
+                    header,
+                },
+                consume: 0,
+                step: over_limit(box_offset, header),
+            },
+            (
+                State::Gathering {
+                    offset: box_offset,
+                    header,
+                },
+                Observation::BoxEndInHand,
+            ) => {
+                let (payload_len, next_state) = match header
                     .payload_len()
                     .and_then(|payload_len| usize::try_from(payload_len).ok())
-                    .unwrap_or(unconsumed.len());
-                let start = self.input.consumed();
+                {
+                    Some(payload_len) => (payload_len, State::Header),
+                    None => (unconsumed.len(), State::Ended),
+                };
                 Transition {
-                    next_state: State::Header,
+                    next_state,
                     consume: payload_len,
-                    progress: Some(Progress::Output(Output::Gathered {
-                        offset,
+                    step: Step::Output(Output::Gathered {
+                        offset: box_offset,
                         header,
                         payload: start..start.saturating_add(payload_len),
-                    })),
-                }
-            }
-            (State::Gathering { offset, header }, Observation::NeedMoreData)
-                if u64::try_from(unconsumed.len()).unwrap_or(u64::MAX)
-                    > self.config.payload_limit =>
-            {
-                Transition {
-                    next_state: State::Skipping { offset, header },
-                    consume: 0,
-                    progress: Some(Progress::Output(Output::Error(Error::PayloadOverLimit {
-                        offset,
-                        header,
-                        limit: self.config.payload_limit,
-                    }))),
-                }
-            }
-            (State::Ended, _)
-            | (State::Header | State::Gathering { .. }, Observation::NeedMoreData) => Transition {
-                next_state: self.state,
-                consume: 0,
-                progress: Some(Progress::NeedMoreData),
-            },
-            (
-                State::Gathering { offset, header },
-                Observation::InputEndedShort | Observation::InputExhausted,
-            ) if header.payload_len().is_none()
-                && u64::try_from(unconsumed.len()).unwrap_or(u64::MAX)
-                    > self.config.payload_limit =>
-            {
-                Transition {
-                    next_state: State::Ended,
-                    consume: unconsumed.len(),
-                    progress: Some(Progress::Output(Output::Error(Error::PayloadOverLimit {
-                        offset,
-                        header,
-                        limit: self.config.payload_limit,
-                    }))),
+                    }),
                 }
             }
             (
-                State::Gathering { offset, header },
-                Observation::InputEndedShort | Observation::InputExhausted,
-            ) if header.payload_len().is_none() => {
-                let start = self.input.consumed();
-                Transition {
-                    next_state: State::Ended,
-                    consume: unconsumed.len(),
-                    progress: Some(Progress::Output(Output::Gathered {
-                        offset,
-                        header,
-                        payload: start..self.input.len(),
-                    })),
-                }
-            }
-            (
-                State::Gathering { offset, header },
+                State::Gathering {
+                    offset: box_offset,
+                    header,
+                },
                 Observation::InputEndedShort | Observation::InputExhausted,
             ) => Transition {
                 next_state: State::Ended,
                 consume: unconsumed.len(),
-                progress: Some(Progress::Output(Output::Error(Error::TruncatedBox {
-                    offset,
+                step: Step::Output(Output::Error(Error::TruncatedBox {
+                    offset: box_offset,
                     header,
-                }))),
+                })),
             },
-            (State::Skipping { offset, header }, Observation::BoxEndInHand) => Transition {
+            (State::Header | State::Gathering { .. }, Observation::NeedMoreData) => Transition {
+                next_state: self.state,
+                consume: 0,
+                step: Step::NeedMoreData,
+            },
+            (
+                State::Skipping {
+                    offset: box_offset,
+                    header,
+                },
+                Observation::BoxEndInHand,
+            ) => Transition {
                 next_state: State::Header,
-                consume: end_of_box(offset, header)
-                    .and_then(|end| {
-                        usize::try_from(end.saturating_sub(self.offset_of(self.input.consumed())))
-                            .ok()
-                    })
+                consume: end_of_box(box_offset, header)
+                    .and_then(|end| usize::try_from(end.saturating_sub(offset)).ok())
                     .unwrap_or(unconsumed.len()),
-                progress: None,
+                step: Step::Continue,
             },
             // Why consume what the box being skipped holds before more input
             // arrives: compacting can then drop it, so skipping a large
@@ -403,14 +399,21 @@ impl BoxReader {
             (State::Skipping { .. }, Observation::NeedMoreData) => Transition {
                 next_state: self.state,
                 consume: unconsumed.len(),
-                progress: Some(Progress::NeedMoreData),
+                step: Step::NeedMoreData,
             },
-            (State::Skipping { .. } | State::Gathering { .. }, _)
+            (
+                State::Skipping { .. },
+                Observation::InputEndedShort
+                | Observation::InputExhausted
+                | Observation::Header(_)
+                | Observation::MalformedHeader(_),
+            )
+            | (State::Gathering { .. }, Observation::Header(_) | Observation::MalformedHeader(_))
             | (State::Header, Observation::BoxEndInHand | Observation::InputExhausted) => {
                 Transition {
                     next_state: State::Ended,
                     consume: unconsumed.len(),
-                    progress: Some(Progress::NeedMoreData),
+                    step: Step::NeedMoreData,
                 }
             }
         }
@@ -441,28 +444,26 @@ impl BoxReader {
 
 /// Classifies the unconsumed bytes, starting at the file offset `offset`, in `state`
 fn observe(state: State, offset: u64, bytes: &[u8], input: Input) -> Observation {
-    let available = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     let wanted = match state {
-        State::Header => {
-            return match (BoxHeader::decode(bytes), input) {
-                (Ok((header, _)), _) => Observation::Header(header),
-                (Err(error), _) if !matches!(error.kind(), ErrorKind::TruncatedHeader { .. }) => {
-                    Observation::MalformedHeader(error)
-                }
-                (Err(_), Input::Continues) => Observation::NeedMoreData,
-                (Err(_), Input::Ends) if bytes.is_empty() => Observation::InputExhausted,
-                (Err(_), Input::Ends) => Observation::InputEndedShort,
-            };
-        }
-        State::Gathering { header, .. } => header.payload_len(),
+        State::Header => match BoxHeader::decode(bytes) {
+            Ok((header, _)) => return Observation::Header(header),
+            Err(error) if !matches!(error.kind(), ErrorKind::TruncatedHeader { .. }) => {
+                return Observation::MalformedHeader(error);
+            }
+            Err(_) => None,
+        },
+        State::Gathering { header, .. } => match (header.payload_len(), input) {
+            (None, Input::Ends) => Some(0),
+            (payload_len, _) => payload_len,
+        },
         State::Skipping {
             offset: box_offset,
             header,
         } => end_of_box(box_offset, header).map(|end| end.saturating_sub(offset)),
-        State::Ended => Some(u64::MAX),
+        State::Ended => None,
     };
     match (wanted, input) {
-        (Some(wanted), _) if available >= wanted => Observation::BoxEndInHand,
+        (Some(wanted), _) if length_of(bytes) >= wanted => Observation::BoxEndInHand,
         (_, Input::Continues) => Observation::NeedMoreData,
         (_, Input::Ends) if bytes.is_empty() => Observation::InputExhausted,
         (_, Input::Ends) => Observation::InputEndedShort,
@@ -481,4 +482,8 @@ fn end_of_box(offset: u64, header: BoxHeader) -> Option<u64> {
 
 fn header_length(header: BoxHeader) -> usize {
     usize::try_from(header.encoded_len()).unwrap_or(usize::MAX)
+}
+
+fn length_of(bytes: &[u8]) -> u64 {
+    u64::try_from(bytes.len()).unwrap_or(u64::MAX)
 }
