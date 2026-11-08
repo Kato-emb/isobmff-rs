@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [framing, boxes, box_reader, demuxer]
+        target: [boxes]
     runs-on: ubuntu-latest
     env:
       TARGET: ${{ matrix.target }}

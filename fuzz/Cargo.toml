@@ -15,34 +15,13 @@ publish = false
 cargo-fuzz = true
 
 [dependencies]
-isobmff = { path = "../crates/isobmff", features = ["compressed-boxes"] }
-isobmff-mux = { path = "../crates/isobmff-mux", features = ["compressed-boxes"] }
+isobmff-boxes = { path = "../crates/isobmff-boxes" }
+isobmff-core = { path = "../crates/isobmff-core" }
 libfuzzer-sys = "0.4.13"
-
-[[bin]]
-name = "framing"
-path = "fuzz_targets/framing.rs"
-test = false
-doc = false
-bench = false
 
 [[bin]]
 name = "boxes"
 path = "fuzz_targets/boxes.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "box_reader"
-path = "fuzz_targets/box_reader.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "demuxer"
-path = "fuzz_targets/demuxer.rs"
 test = false
 doc = false
 bench = false

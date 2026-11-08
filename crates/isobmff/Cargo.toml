@@ -12,21 +12,5 @@ license.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-[dependencies]
-isobmff-boxes.workspace = true
-isobmff-core = { workspace = true, features = ["alloc"] }
-# Inflates the compressed boxes (ISO/IEC 14496-12 §8.16) under the feature
-# `compressed-boxes`.
-miniz_oxide = { version = "0.8.9", default-features = false, features = ["with-alloc"], optional = true }
-
-[features]
-# Reads the compressed boxes, `!mov`, `!mof`, `!six` and `!ssx` (§8.16).
-compressed-boxes = ["dep:miniz_oxide"]
-
-[dev-dependencies]
-# Reads the conformance files, which the reading and writing of boxes are
-# checked against.
-isobmff-test-support.workspace = true
-
 [lints]
 workspace = true
