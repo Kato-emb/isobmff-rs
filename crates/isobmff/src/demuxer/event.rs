@@ -76,6 +76,12 @@ pub enum Error {
     /// The sample tables of the `moov` cannot be resolved; no location is
     /// reported for them
     StructureData(structure_data::Error),
+    /// A `moov` follows the one already read, which a file holds one of,
+    /// ISO/IEC 14496-12 §8.2.1; it is not read, and the first is kept
+    DuplicateMovie {
+        /// File offset of the `moov` that follows
+        offset: u64,
+    },
     /// A sample of a subscribed track is larger than
     /// [`DemuxerConfig::sample_size_limit`](super::DemuxerConfig::sample_size_limit);
     /// its bytes are not requested, and demuxing goes on at the next sample
@@ -105,6 +111,10 @@ impl fmt::Display for Error {
             Self::StructureData(_) => {
                 write!(formatter, "the samples of the `moov` cannot be resolved")
             }
+            Self::DuplicateMovie { offset } => write!(
+                formatter,
+                "the `moov` at offset {offset} follows the one already read"
+            ),
             Self::SampleOverLimit { location, limit } => write!(
                 formatter,
                 "the sample of track {} at offset {} is {} bytes, over the limit of {limit}",
@@ -125,7 +135,9 @@ impl core::error::Error for Error {
             Self::Framing(source) => Some(source),
             Self::Decode { source, .. } => Some(source),
             Self::StructureData(source) => Some(source),
-            Self::SampleOverLimit { .. } | Self::TruncatedSample { .. } => None,
+            Self::DuplicateMovie { .. }
+            | Self::SampleOverLimit { .. }
+            | Self::TruncatedSample { .. } => None,
         }
     }
 }

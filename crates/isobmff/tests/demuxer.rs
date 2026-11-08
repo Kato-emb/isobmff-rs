@@ -267,6 +267,41 @@ mod tests {
     }
 
     #[test]
+    fn a_second_moov_is_refused_and_the_first_movie_kept() {
+        let (name, file) = FIXTURES[0];
+        let moov = file.get(32..1832).unwrap();
+        assert_eq!(moov.get(4..8), Some(&b"moov"[..]));
+        let doubled = [file, moov].concat();
+        let reported = read_every_way(name, &doubled, config(None, None), Subscribe::Every);
+        let count = |matches: fn(&Reported) -> bool| {
+            reported.iter().filter(|reported| matches(reported)).count()
+        };
+        assert_eq!(
+            (
+                count(|reported| matches!(reported, Reported::Movie(_))),
+                count(|reported| matches!(reported, Reported::SampleLocation(_))),
+                count(|reported| matches!(reported, Reported::Sample(..))),
+            ),
+            (1, 70, 70)
+        );
+        assert_eq!(
+            reported
+                .iter()
+                .filter_map(|reported| {
+                    if let Reported::Error(error) = reported {
+                        Some(*error)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>(),
+            [Error::DuplicateMovie {
+                offset: u64::try_from(file.len()).unwrap()
+            }]
+        );
+    }
+
+    #[test]
     fn the_events_across_a_truncated_file() {
         let (name, file) = FIXTURES[0];
         // Why 23600: inside the last sample of track 1, which starts at 23497
