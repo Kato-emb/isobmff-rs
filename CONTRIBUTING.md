@@ -17,19 +17,17 @@ pass; each runs a command you can run locally before opening one.
 
 ### Fuzzing
 
-The fuzz targets in `fuzz/`, `framing`, `boxes`, `box_reader` and `demuxer`, need
+The fuzz target in `fuzz/`, `boxes`, needs
 [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) and the nightly the
-`fuzz` job pins. The conformance files are their seeds:
+`fuzz` job pins. The conformance files are its seeds:
 
 ```sh
 scripts/fetch-conformance.sh target/conformance
-mkdir -p target/fuzz-seeds fuzz/corpus/framing
+mkdir -p target/fuzz-seeds fuzz/corpus/boxes
 cp target/conformance/*.mp4 target/fuzz-seeds/
-cargo +nightly-2026-10-13 fuzz run framing --target x86_64-unknown-linux-gnu \
-  --sanitizer leak fuzz/corpus/framing target/fuzz-seeds
+cargo +nightly-2026-10-13 fuzz run boxes --target x86_64-unknown-linux-gnu \
+  --sanitizer leak fuzz/corpus/boxes target/fuzz-seeds
 ```
-
-Run the other targets the same way, each with a corpus of its own.
 
 A failing input lands in `fuzz/artifacts/`. Shrink it with `cargo fuzz tmin`,
 and fix the bug with a unit test that holds the shrunk bytes.

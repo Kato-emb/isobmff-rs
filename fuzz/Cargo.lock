@@ -3,12 +3,6 @@
 version = 4
 
 [[package]]
-name = "adler2"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
-
-[[package]]
 name = "arbitrary"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -50,15 +44,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "isobmff"
-version = "0.0.0"
-dependencies = [
- "isobmff-boxes",
- "isobmff-core",
- "miniz_oxide",
-]
-
-[[package]]
 name = "isobmff-boxes"
 version = "0.0.0"
 dependencies = [
@@ -73,18 +58,9 @@ version = "0.0.0"
 name = "isobmff-fuzz"
 version = "0.0.0"
 dependencies = [
- "isobmff",
- "isobmff-mux",
- "libfuzzer-sys",
-]
-
-[[package]]
-name = "isobmff-mux"
-version = "0.0.0"
-dependencies = [
- "isobmff",
  "isobmff-boxes",
  "isobmff-core",
+ "libfuzzer-sys",
 ]
 
 [[package]]
@@ -111,15 +87,6 @@ checksum = "a9fd2f41a1cba099f79a0b6b6c35656cf7c03351a7bae8ff0f28f25270f929d2"
 dependencies = [
  "arbitrary",
  "cc",
-]
-
-[[package]]
-name = "miniz_oxide"
-version = "0.8.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
-dependencies = [
- "adler2",
 ]
 
 [[package]]

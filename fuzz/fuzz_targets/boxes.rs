@@ -1,4 +1,4 @@
-//! Reading and writing back every box of [`isobmff::boxes`]
+//! Reading and writing back every box of [`isobmff_boxes`]
 //!
 //! The input is the bytes of a file as they lie, so a file of boxes is a seed
 //! as it is. Each box [`Boxes`] frames from it is read as every type of
@@ -19,7 +19,7 @@
 
 use std::fmt::Debug;
 
-use isobmff::boxes::{
+use isobmff_boxes::{
     AlbumLoudnessInfo, AlternativeStartupSequencePropertiesBox, AmbientViewingEnvironmentBox,
     AudioElementBox, AudioElementDescriptionBox, AudioElementPosInteractivityPolar,
     AudioElementProminenceInteractivity, AudioElementSelectionBox,
@@ -74,7 +74,7 @@ use isobmff::boxes::{
     VideoMediaHeaderBox, VisualSampleEntry, VolumetricVisualMediaHeaderBox,
     VolumetricVisualSampleEntry, XmlBox, XmlMetaDataSampleEntry, XmlSubtitleSampleEntry,
 };
-use isobmff::{BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, Error, ErrorKind};
+use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, Error, ErrorKind};
 use libfuzzer_sys::fuzz_target;
 
 /// Checks a payload of one box type, as [`round_trip`] does for a type
