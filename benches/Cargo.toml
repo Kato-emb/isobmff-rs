@@ -1,0 +1,15 @@
+[package]
+name = "isobmff-benches"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Kept out of the workspace above, as the fuzz targets are: a benchmark
+# measures a build of the library on its own, with criterion and what it pulls
+# in kept out of the workspace's lockfile. Without this table cargo walks up to
+# the workspace manifest and refuses a package it does not list.
+[workspace]
+
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false }
