@@ -1,0 +1,15 @@
+---
+source: crates/isobmff/tests/framing.rs
+expression: lines
+---
+[
+    "0: ftyp of 28 bytes, payload of 20 gathered",
+    "28: moov of 1186 bytes, payload of 1178 gathered",
+    "1214: moof of 292 bytes, payload of 284 gathered",
+    "1506: mdat of 7789 bytes, skipped",
+    "9295: moof of 272 bytes, payload of 264 gathered",
+    "9567: mdat of 7337 bytes, skipped",
+    "16904: moof of 348 bytes, payload of 340 gathered",
+    "17252: mdat of 7445 bytes, skipped",
+    "24697: mfra of 186 bytes, payload of 178 gathered",
+]
