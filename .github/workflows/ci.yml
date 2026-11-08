@@ -32,6 +32,13 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all --check
       - run: cargo fmt --manifest-path fuzz/Cargo.toml --check
+      # A fixture comes from an independent implementation, never from this
+      # repository's writer: xtask, which generates them, depends on no crate
+      # of the workspace.
+      - name: Keep xtask apart from the crates of the workspace
+        run: |
+          cargo tree -p xtask --edges all --prefix none > "$RUNNER_TEMP/xtask-tree"
+          ! grep -E '^isobmff' "$RUNNER_TEMP/xtask-tree"
       - uses: crate-ci/typos@7f9d0819ca1c008ade73f4b41fa9d258d48f605b # v1.51.1
       # A TODO/FIXME must carry an issue link or owner: `TODO(#12):`, `TODO(name):`, or a URL.
       - name: Forbid bare TODO/FIXME markers
@@ -81,7 +88,14 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: |
+            .
+            benches
       - run: cargo llvm-cov nextest --no-report --workspace --all-features --no-tests=pass
+      # The benchmarks are a crate apart from the workspace; their tests, such
+      # as that a reader allocates nothing once its buffers have grown, run
+      # here uninstrumented.
+      - run: cargo test --manifest-path benches/Cargo.toml
       # The report informs and never gates, so it cannot fail the job either; it
       # has nothing to report while no code is covered, as in a crate with no
       # items.
@@ -140,7 +154,7 @@ jobs:
   # The host jobs link std for their test binaries whatever a crate declares, so
   # std creeping into a library crate — a dropped `#![no_std]`, a dependency that
   # needs std — fails only on a target that ships no std. isobmff-test-support
-  # serves the tests alone, which run on a host, so it needs std.
+  # serves the tests alone, which run on a host, so it needs std, as xtask does.
   no-std:
     runs-on: ubuntu-latest
     steps:
@@ -154,7 +168,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo check --workspace --exclude isobmff-test-support --target thumbv7em-none-eabihf
+      - run: cargo check --workspace --exclude isobmff-test-support --exclude xtask --target thumbv7em-none-eabihf
 
   # Doctests run here, once: they are not instrumented in the coverage job
   # (that needs a nightly toolchain), and the code behaves the same on every host.

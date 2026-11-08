@@ -25,6 +25,18 @@ updates:
       cargo:
         patterns: ["*"]
 
+  # The benchmarks are a workspace of their own, with a lockfile of their own.
+  - package-ecosystem: cargo
+    directory: /benches
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      cargo:
+        patterns: ["*"]
+
   # Actions are pinned by commit SHA; Dependabot moves the SHA and the version
   # comment beside it together.
   - package-ecosystem: github-actions

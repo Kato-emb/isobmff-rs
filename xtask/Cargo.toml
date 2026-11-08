@@ -1,0 +1,11 @@
+[package]
+name = "xtask"
+version = "0.0.0"
+description = "Tasks of this repository that are not part of building it, such as regenerating the test fixtures"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
