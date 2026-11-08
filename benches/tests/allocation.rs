@@ -71,3 +71,50 @@ fn a_payload_over_the_limit_is_never_copied() {
     assert_eq!(errors, 1);
     assert!(allocated < 1024, "allocated {allocated} bytes");
 }
+
+/// Bytes allocated reading `file` handed over whole, again after each event, under a payload limit of 16
+fn allocated_reading(file: &[u8]) -> (usize, usize) {
+    let mut events = 0;
+    let end = u64::try_from(file.len()).unwrap();
+    let allocated = allocated_by(|| {
+        let mut reader = BoxReader::new(FramerConfig::new(16));
+        while reader
+            .required_input()
+            .is_some_and(|required| required.position < end)
+        {
+            reader.handle_input(0, file);
+            while reader.poll_event().is_some() {
+                events += 1;
+            }
+        }
+        reader.finish();
+        while reader.poll_event().is_some() {
+            events += 1;
+        }
+    });
+    (allocated, events)
+}
+
+/// `count` boxes of `box_type`, each with `payload_len` bytes of payload
+fn boxes(box_type: &[u8; 4], payload_len: usize, count: usize) -> Vec<u8> {
+    let size = u32::try_from(payload_len + 8).unwrap();
+    [&size.to_be_bytes()[..], box_type, &vec![0; payload_len]]
+        .concat()
+        .repeat(count)
+}
+
+#[test]
+fn what_a_reader_holds_does_not_grow_with_the_number_of_boxes_handed_over() {
+    for (box_type, payload_len) in [(b"moov", 16), (b"free", 0)] {
+        let (few, few_events) = allocated_reading(&boxes(box_type, payload_len, 16));
+        let (many, many_events) = allocated_reading(&boxes(box_type, payload_len, 65_536));
+        println!(
+            "allocated {few} bytes reading 16 `{}` boxes, {many} bytes reading 65536",
+            String::from_utf8_lossy(box_type)
+        );
+        let name = String::from_utf8_lossy(box_type);
+        assert_eq!((few_events, many_events), (16, 65_536), "`{name}`");
+        assert_eq!(few, many, "`{name}`");
+        assert!(many < 1024, "`{name}`: allocated {many} bytes");
+    }
+}

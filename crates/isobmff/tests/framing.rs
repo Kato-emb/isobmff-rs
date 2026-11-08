@@ -91,19 +91,32 @@ mod tests {
         }
     }
 
+    /// Hands `bytes`, which start at the file offset `position`, over until the reader wants what lies past them, reporting each event
+    fn hand_over(
+        reader: &mut BoxReader,
+        position: u64,
+        bytes: &[u8],
+        reported: &mut Vec<Reported>,
+    ) {
+        let end = position
+            .checked_add(u64::try_from(bytes.len()).unwrap())
+            .unwrap();
+        while reader
+            .required_input()
+            .is_some_and(|required| required.position < end)
+        {
+            reader.handle_input(position, bytes);
+            drain(reader, reported);
+        }
+    }
+
     /// Reads `file` handed over from its start in pieces of `piece` bytes, as a caller that cannot seek does
     fn read_in_pieces(file: &[u8], config: &FramerConfig, piece: usize) -> Vec<Reported> {
         let mut reader = BoxReader::new(config.clone());
         let mut reported = Vec::new();
         for (index, bytes) in file.chunks(piece).enumerate() {
-            if reader.required_input().is_none() {
-                break;
-            }
-            reader.handle_input(
-                u64::try_from(index.checked_mul(piece).unwrap()).unwrap(),
-                bytes,
-            );
-            drain(&mut reader, &mut reported);
+            let position = u64::try_from(index.checked_mul(piece).unwrap()).unwrap();
+            hand_over(&mut reader, position, bytes, &mut reported);
         }
         reader.finish();
         drain(&mut reader, &mut reported);
@@ -335,12 +348,13 @@ mod tests {
         for cut in 0..=bytes.len() {
             let mut reader = BoxReader::new(config.clone());
             let mut reported = Vec::new();
-            reader.handle_input(0, bytes.get(..cut).unwrap());
-            drain(&mut reader, &mut reported);
-            if reader.required_input().is_some() {
-                reader.handle_input(u64::try_from(cut).unwrap(), bytes.get(cut..).unwrap());
-            }
-            drain(&mut reader, &mut reported);
+            hand_over(&mut reader, 0, bytes.get(..cut).unwrap(), &mut reported);
+            hand_over(
+                &mut reader,
+                u64::try_from(cut).unwrap(),
+                bytes.get(cut..).unwrap(),
+                &mut reported,
+            );
             reader.finish();
             drain(&mut reader, &mut reported);
             assert_eq!(reported, whole, "cut at {cut}");
@@ -449,9 +463,8 @@ mod tests {
 
         let skipped = [b"\0\0\0\0mdat", &[0xcd; 5][..]].concat();
         let mut reader = BoxReader::new(config.clone());
-        reader.handle_input(0, &skipped);
         let mut reported = Vec::new();
-        drain(&mut reader, &mut reported);
+        hand_over(&mut reader, 0, &skipped, &mut reported);
         assert_eq!(reader.required_input(), None);
         assert!(
             matches!(&reported[..], [Reported::Box { offset: 0, .. }]),

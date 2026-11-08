@@ -1,6 +1,5 @@
 //! [`BoxReader`], the state machine that cuts the boxes of a file off its bytes
 
-use alloc::collections::VecDeque;
 use core::ops::Range;
 
 use isobmff_core::{BoxHeader, ErrorKind};
@@ -61,7 +60,7 @@ enum Observation {
     InputExhausted,
 }
 
-/// Output of one transition, queued until [`BoxReader::poll_event`] lends it
+/// Output of one transition, held until [`BoxReader::poll_event`] lends it
 #[derive(Debug, Clone)]
 enum Output {
     Box {
@@ -80,7 +79,7 @@ enum Output {
 enum Step {
     /// Step again
     Continue,
-    /// Queue the output, and step again
+    /// Hold the output for `poll_event`
     Output(Output),
     /// Wait for input
     NeedMoreData,
@@ -109,6 +108,13 @@ struct Transition {
 /// that runs past the end of the input: a caller sees that by comparing the
 /// position [`required_input`](Self::required_input) names with the length of
 /// its input.
+///
+/// One call of `handle_input` takes no more of the input than the next event
+/// needs, so what the reader holds stays within a box header and one payload
+/// however much is handed over. A caller that seeks hands over the bytes from
+/// the position `required_input` names after each poll; a caller that reads a
+/// stream in pieces hands each piece over again until that position lies past
+/// the end of the piece.
 ///
 /// ```
 /// use isobmff::framing::{BoxReader, Event, FramerConfig};
@@ -147,10 +153,8 @@ pub struct BoxReader {
     input: InputBuffer,
     /// File offset of the next byte the reader takes
     cursor: u64,
-    // Why queue the outputs rather than step in poll_event: handle_input
-    // takes only what each state wants, so it steps between takes, and the
-    // queue holds the outputs until they are polled.
-    pending: VecDeque<Output>,
+    /// The output of the last step, which `poll_event` lends
+    pending: Option<Output>,
 }
 
 impl BoxReader {
@@ -162,7 +166,7 @@ impl BoxReader {
             state: State::Header,
             input: InputBuffer::new(),
             cursor: 0,
-            pending: VecDeque::new(),
+            pending: None,
         }
     }
 
@@ -209,17 +213,21 @@ impl BoxReader {
     ///
     /// Bytes before the position [`required_input`](Self::required_input)
     /// names are ignored, so input may start earlier and run on past what is
-    /// wanted. Input once the reader wants none is ignored. The reader copies
-    /// only the box headers and the payloads it gathers, each within
-    /// [`FramerConfig::payload_limit`]; it walks past the payload of a box it
-    /// skips. A payload gathered is held until [`poll_event`](Self::poll_event)
-    /// has lent it.
+    /// wanted. The reader takes bytes until it has the next event, and leaves
+    /// the rest to be handed over again; it takes none while an event waits for
+    /// [`poll_event`](Self::poll_event), and none once it wants no more. It
+    /// copies only the box headers and the payloads it gathers, each within
+    /// [`FramerConfig::payload_limit`], and walks past the payload of a box it
+    /// skips.
     ///
     /// # Panics
     /// Panics if `position` is after the position `required_input` names, or
     /// if called after [`finish`](Self::finish): either is a bug of the caller.
     pub fn handle_input(&mut self, position: u64, bytes: &[u8]) {
         assert!(!self.input.is_ended(), "input handed over after finish");
+        if self.pending.is_some() {
+            return;
+        }
         let Some(required) = self.required_input() else {
             return;
         };
@@ -234,11 +242,9 @@ impl BoxReader {
             return;
         };
         self.cursor = required.position;
+        self.input.compact();
         self.step();
-        while !bytes.is_empty() {
-            if self.pending.is_empty() {
-                self.input.compact();
-            }
+        while self.pending.is_none() && !bytes.is_empty() {
             let (taken, copied) = match self.take() {
                 Take::Copy(length) => (clamp(length, bytes.len()), true),
                 Take::Skip(length) => (clamp(length, bytes.len()), false),
@@ -264,8 +270,14 @@ impl BoxReader {
 
     /// Returns what the bytes handed over hold, one event at a time, or `None`
     /// once the reader needs more input
+    ///
+    /// After [`finish`](Self::finish), each call reports the next event the
+    /// end of the input leaves, until there is none.
     pub fn poll_event(&mut self) -> Option<Event<'_>> {
-        Some(match self.pending.pop_front()? {
+        if self.pending.is_none() {
+            self.step();
+        }
+        Some(match self.pending.take()? {
             Output::Box { offset, header } => Event::Box { offset, header },
             Output::Gathered {
                 offset,
@@ -314,7 +326,7 @@ impl BoxReader {
         }
     }
 
-    /// Steps the state machine until it waits for input, queueing each output
+    /// Steps the state machine until it has an output for `poll_event`, or waits for input
     fn step(&mut self) {
         loop {
             let transition = self.transition();
@@ -322,7 +334,10 @@ impl BoxReader {
             self.input.consume(transition.consume);
             match transition.step {
                 Step::Continue => {}
-                Step::Output(output) => self.pending.push_back(output),
+                Step::Output(output) => {
+                    self.pending = Some(output);
+                    return;
+                }
                 Step::NeedMoreData => return,
             }
         }
