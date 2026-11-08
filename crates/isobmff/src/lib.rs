@@ -1,8 +1,9 @@
 //! Sans-IO reading and writing of ISO base media files (ISO/IEC 14496-12)
 //!
 //! Under construction. [`framing`] reads the boxes laid end to end in a file
-//! from bytes that arrive in pieces; the boxes themselves are read and written
-//! with `isobmff-boxes`.
+//! from bytes that arrive in pieces, and [`structure_data`] resolves the
+//! samples a `moov` declares to where their bytes lie; the boxes themselves
+//! are read and written with `isobmff-boxes`.
 
 #![no_std]
 
@@ -10,6 +11,10 @@ extern crate alloc;
 
 pub mod framing;
 mod input_buffer;
+mod sample;
+pub mod structure_data;
+
+pub use sample::{SampleLocation, SampleProperties};
 
 /// Where a reader wants input next
 ///
