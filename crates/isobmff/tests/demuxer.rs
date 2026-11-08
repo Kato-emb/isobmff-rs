@@ -16,7 +16,13 @@ mod tests {
         ),
     ];
 
-    const CONFIG: DemuxerConfig = DemuxerConfig::new(64 * 1024 * 1024, 1 << 20, 16 * 1024 * 1024);
+    /// The default limits, with each `(payload_limit, sample_size_limit)` given that differs
+    fn config(payload_limit: Option<u64>, sample_size_limit: Option<u64>) -> DemuxerConfig {
+        let mut config = DemuxerConfig::default();
+        config.payload_limit = payload_limit.unwrap_or(config.payload_limit);
+        config.sample_size_limit = sample_size_limit.unwrap_or(config.sample_size_limit);
+        config
+    }
 
     /// An [`Event`] that owns what it lent, the boxes read into values left as their type
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,7 +184,7 @@ mod tests {
     #[test]
     fn the_samples_after_the_moov_are_lent_as_the_file_holds_them() {
         for (name, file) in FIXTURES {
-            let reported = read_every_way(name, file, CONFIG, Subscribe::Every);
+            let reported = read_every_way(name, file, config(None, None), Subscribe::Every);
             let locations = reported
                 .iter()
                 .filter_map(|reported| {
@@ -213,7 +219,7 @@ mod tests {
     #[test]
     fn the_samples_of_a_track_not_subscribed_to_are_located_and_not_lent() {
         let (name, file) = FIXTURES[0];
-        let reported = read_every_way(name, file, CONFIG, Subscribe::Only(&[1]));
+        let reported = read_every_way(name, file, config(None, None), Subscribe::Only(&[1]));
         assert!(
             samples_lent(&reported)
                 .iter()
@@ -226,12 +232,7 @@ mod tests {
     #[test]
     fn a_sample_over_the_limit_is_reported_and_the_samples_after_it_are_lent() {
         let (name, file) = FIXTURES[0];
-        let reported = read_every_way(
-            name,
-            file,
-            DemuxerConfig::new(1 << 20, 1 << 20, 1024),
-            Subscribe::Every,
-        );
+        let reported = read_every_way(name, file, config(None, Some(1024)), Subscribe::Every);
         let over = reported
             .iter()
             .filter_map(|reported| {
@@ -253,12 +254,7 @@ mod tests {
     #[test]
     fn a_moov_over_the_payload_limit_is_reported_and_the_boxes_after_it_are_read() {
         let (name, file) = FIXTURES[0];
-        let reported = read_every_way(
-            name,
-            file,
-            DemuxerConfig::new(64, 1 << 20, 1 << 20),
-            Subscribe::Every,
-        );
+        let reported = read_every_way(name, file, config(Some(64), None), Subscribe::Every);
         assert_eq!(
             reported.iter().map(Reported::line).collect::<Vec<_>>(),
             [
@@ -275,12 +271,7 @@ mod tests {
         let (name, file) = FIXTURES[0];
         // Why 23600: inside the last sample of track 1, which starts at 23497
         let truncated = file.get(..23_600).unwrap();
-        let reported = read_every_way(
-            name,
-            truncated,
-            DemuxerConfig::new(1 << 20, 1 << 20, 1 << 20),
-            Subscribe::Only(&[1]),
-        );
+        let reported = read_every_way(name, truncated, config(None, None), Subscribe::Only(&[1]));
         let lines = reported
             .iter()
             .filter(|reported| !matches!(reported, Reported::SampleLocation(_)))
@@ -294,7 +285,12 @@ mod tests {
     fn the_samples_of_the_conformance_files_are_lent_as_the_files_hold_them() {
         let mut differences = Vec::new();
         for file in conformance_files() {
-            let reported = read_every_way(&file.name, &file.bytes, CONFIG, Subscribe::Every);
+            let reported = read_every_way(
+                &file.name,
+                &file.bytes,
+                config(None, None),
+                Subscribe::Every,
+            );
             for reported in &reported {
                 if let Reported::Sample(location, bytes) = reported
                     && bytes.as_slice() != bytes_at(&file.bytes, location)

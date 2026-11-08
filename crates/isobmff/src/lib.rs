@@ -9,7 +9,7 @@
 //! use isobmff::{Demuxer, DemuxerConfig, Event};
 //!
 //! let file: &[u8] = include_bytes!("../tests/fixtures/movie_moov_first.mp4");
-//! let mut demuxer = Demuxer::new(DemuxerConfig::new(1 << 20, 1 << 16, 1 << 20));
+//! let mut demuxer = Demuxer::new(DemuxerConfig::default());
 //! let (mut locations, mut samples) = (0, Vec::new());
 //! loop {
 //!     // Report what the bytes handed over hold, subscribing to every track

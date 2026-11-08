@@ -129,7 +129,9 @@ enum Since {
 
 /// Bytes allocated from a sample of `file` lent on, its every track subscribed to, under a sample size limit of `sample_size_limit`, with the number of samples lent
 fn allocated_lending(file: &[u8], sample_size_limit: u64, since: Since) -> (usize, usize) {
-    let mut demuxer = Demuxer::new(DemuxerConfig::new(1 << 20, 1 << 16, sample_size_limit));
+    let mut config = DemuxerConfig::default();
+    config.sample_size_limit = sample_size_limit;
+    let mut demuxer = Demuxer::new(config);
     let (mut before, mut largest, mut samples) = (None, 0, 0);
     loop {
         while let Some(event) = demuxer.poll_event() {
