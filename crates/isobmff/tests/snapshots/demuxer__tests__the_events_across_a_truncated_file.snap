@@ -1,0 +1,22 @@
+---
+source: crates/isobmff/tests/demuxer.rs
+expression: lines
+---
+[
+    "FileType",
+    "Movie([1, 2])",
+    "Box(\"free\")",
+    "Box(\"mdat\")",
+    "sample of track 1 at 1973, 4477 bytes",
+    "sample of track 1 at 6863, 404 bytes",
+    "sample of track 1 at 7674, 562 bytes",
+    "sample of track 1 at 8666, 635 bytes",
+    "sample of track 1 at 9629, 4185 bytes",
+    "sample of track 1 at 14248, 372 bytes",
+    "sample of track 1 at 15060, 544 bytes",
+    "sample of track 1 at 15956, 587 bytes",
+    "sample of track 1 at 16958, 4222 bytes",
+    "sample of track 1 at 21614, 370 bytes",
+    "sample of track 1 at 22320, 733 bytes",
+    "the input ends inside the sample of track 1 at offset 23497",
+]
