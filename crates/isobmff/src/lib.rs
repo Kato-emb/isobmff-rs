@@ -40,8 +40,8 @@
 //! # Ok::<(), Box<dyn core::error::Error>>(())
 //! ```
 //!
-//! [`Muxer`] writes the structure of a movie file, its `ftyp`, the header of
-//! its `mdat` and its `moov`, around the samples a caller writes; the
+//! [`MovieFileMuxer`] writes a movie file, its `ftyp`, one `mdat` and the
+//! `moov` that declares it, from the samples a caller hands it; the
 //! [`muxer`] module holds what describes the movie and its tracks.
 //!
 //! The layers they are made of are usable alone: [`framing`] reads the boxes
@@ -62,7 +62,7 @@ mod sample;
 pub mod structure_data;
 
 pub use demuxer::{Demuxer, DemuxerConfig};
-pub use muxer::{Muxer, MuxerConfig};
+pub use muxer::{MovieFileMuxer, MuxerConfig};
 pub use sample::{SampleLocation, SampleProperties};
 
 /// Where a reader wants input next

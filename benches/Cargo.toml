@@ -15,6 +15,7 @@ publish = false
 criterion = { version = "0.8.2", default-features = false }
 isobmff = { path = "../crates/isobmff" }
 isobmff-boxes = { path = "../crates/isobmff-boxes" }
+isobmff-core = { path = "../crates/isobmff-core" }
 
 [[bench]]
 name = "sample_table"

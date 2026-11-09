@@ -4,8 +4,8 @@
 mod tests {
     use isobmff::demuxer::Event;
     use isobmff::framing::media_data_header;
-    use isobmff::muxer::{Error, FileStructure, MovieDescription, TrackDescription};
-    use isobmff::{Demuxer, DemuxerConfig, Muxer, MuxerConfig, SampleLocation, SampleProperties};
+    use isobmff::muxer::{Error, MovieDescription, TrackDescription};
+    use isobmff::{Demuxer, DemuxerConfig, MovieFileMuxer, MuxerConfig, SampleProperties};
     use isobmff_boxes::{EditBox, FileTypeBox, MovieBox, SampleFlags};
     use isobmff_core::{BoxDecode, BoxEncode, FourCc, OtherBoxes};
     use isobmff_test_support::fixtures::track;
@@ -56,25 +56,20 @@ mod tests {
         })
     }
 
-    /// The file a muxer writes of what `source` holds, its samples in the order read, each written where the muxer places it
-    fn remux(source: &Read) -> Result<Vec<u8>, Error> {
-        let structure = FileStructure::NonFragmented {
-            file_type: source.file_type.clone(),
-        };
-        let mut muxer = Muxer::new(
+    /// The file a muxer writes of what `source` holds, its samples in the order read
+    fn remux(source: &Read, config: MuxerConfig) -> Result<Vec<u8>, Error> {
+        let mut muxer = MovieFileMuxer::new(
             MovieDescription::from(&source.movie),
-            MuxerConfig::default(),
-            structure,
+            config,
+            source.file_type.clone(),
         )?;
         for trak in &source.movie.trak {
             muxer.add_track(TrackDescription::from(trak))?;
         }
         let mut written = Vec::new();
         for (properties, bytes) in &source.samples {
-            let location = muxer.handle_sample(*properties, u32::try_from(bytes.len()).unwrap())?;
+            muxer.handle_sample(*properties, bytes)?;
             muxer.poll_output(&mut written);
-            written.resize(usize::try_from(location.offset).unwrap(), 0);
-            written.extend_from_slice(bytes);
         }
         let header = muxer.finish()?;
         muxer.poll_output(&mut written);
@@ -95,16 +90,19 @@ mod tests {
         ftyp
     }
 
+    /// The bytes a muxer opens a file of [`mp4_file_type`] with: the `ftyp` and the header of the `mdat`
+    fn opening() -> Vec<u8> {
+        let ftyp = mp4_file_type();
+        let mut bytes = vec![0; usize::try_from(ftyp.encoded_len()).unwrap()];
+        ftyp.encode(&mut bytes).unwrap();
+        bytes.extend_from_slice(&media_data_header(0).unwrap());
+        bytes
+    }
+
     /// A muxer of a movie of one track, `track_ID` 1, of one sample entry
-    fn muxer_of_one_track() -> Muxer {
-        let mut muxer = Muxer::new(
-            MovieDescription::new(1000),
-            MuxerConfig::default(),
-            FileStructure::NonFragmented {
-                file_type: mp4_file_type(),
-            },
-        )
-        .unwrap();
+    fn muxer_of_one_track(config: MuxerConfig) -> MovieFileMuxer {
+        let mut muxer =
+            MovieFileMuxer::new(MovieDescription::new(1000), config, mp4_file_type()).unwrap();
         muxer.add_track(one_sample_entry_track(1)).unwrap();
         muxer
     }
@@ -133,7 +131,7 @@ mod tests {
             include_bytes!("fixtures/movie_moov_last.mp4"),
         ] {
             let source = read(file).unwrap();
-            let written = read(&remux(&source).unwrap()).unwrap();
+            let written = read(&remux(&source, MuxerConfig::default()).unwrap()).unwrap();
             assert_eq!(
                 (written.samples, written.errors),
                 (source.samples, Vec::new())
@@ -142,64 +140,67 @@ mod tests {
     }
 
     #[test]
-    fn the_file_opens_with_the_ftyp_and_an_mdat_header_the_one_finish_returns_replaces() {
-        let ftyp = mp4_file_type();
-        let mut opening = vec![0; usize::try_from(ftyp.encoded_len()).unwrap()];
-        ftyp.encode(&mut opening).unwrap();
-        let ftyp_length = u64::try_from(opening.len()).unwrap();
-        opening.extend_from_slice(&media_data_header(0).unwrap());
-
-        let mut muxer = muxer_of_one_track();
+    fn the_file_is_the_ftyp_an_mdat_header_the_samples_and_the_moov_in_one_run() {
+        let opening = opening();
+        let mut muxer = muxer_of_one_track(MuxerConfig::default());
         let mut written = Vec::new();
         muxer.poll_output(&mut written);
         assert_eq!(written, opening);
 
-        let location = muxer.handle_sample(sample(0), 5).unwrap();
-        muxer.advance_position(3).unwrap();
+        muxer.handle_sample(sample(0), b"abc").unwrap();
+        muxer.handle_sample(sample(10), b"de").unwrap();
+        muxer.poll_output(&mut written);
+        let mut expected = opening.clone();
+        expected.extend_from_slice(b"abcde");
+        assert_eq!(written, expected);
+
         let header = muxer.finish().unwrap();
         assert_eq!(
-            (location.offset, header.offset, Some(header.bytes)),
-            (ftyp_length + 16, ftyp_length, media_data_header(5 + 3))
+            (header.offset, Some(header.bytes)),
+            (
+                u64::try_from(opening.len() - 16).unwrap(),
+                media_data_header(5)
+            )
         );
+        muxer.poll_output(&mut written);
+        let moov = written.get(expected.len()..).unwrap();
+        assert_eq!(MovieBox::decode(moov).map(|(_, rest)| rest.len()), Ok(0));
     }
 
     #[test]
     fn decoding_times_count_from_the_first_sample_of_the_track() {
-        let mut muxer = muxer_of_one_track();
-        let taken = [
-            muxer.handle_sample(sample(1000), 1),
-            muxer.handle_sample(sample(1010), 1),
-            muxer.handle_sample(sample(990), 1),
-        ];
-        let start = taken[0].as_ref().unwrap().offset;
+        let mut muxer = muxer_of_one_track(MuxerConfig::default());
+        muxer.handle_sample(sample(1000), b"a").unwrap();
+        muxer.handle_sample(sample(1010), b"b").unwrap();
         assert_eq!(
-            taken,
-            [
-                Ok(SampleLocation {
-                    properties: sample(0),
-                    offset: start,
-                    size: 1,
-                }),
-                Ok(SampleLocation {
-                    properties: sample(10),
-                    offset: start + 1,
-                    size: 1,
-                }),
-                Err(Error::StructureData(
-                    isobmff::structure_data::Error::DecodingTimeGap {
-                        track_id: 1,
-                        expected: 1020,
-                        found: 990,
-                    }
-                )),
-            ]
+            muxer.handle_sample(sample(990), b"c"),
+            Err(Error::StructureData(
+                isobmff::structure_data::Error::DecodingTimeGap {
+                    track_id: 1,
+                    expected: 1020,
+                    found: 990,
+                }
+            ))
+        );
+        let mut written = Vec::new();
+        muxer.poll_output(&mut written);
+        let header = muxer.finish().unwrap();
+        muxer.poll_output(&mut written);
+        let offset = usize::try_from(header.offset).unwrap();
+        written
+            .get_mut(offset..offset + 16)
+            .unwrap()
+            .copy_from_slice(&header.bytes);
+        assert_eq!(
+            read(&written).unwrap().samples,
+            [(sample(0), b"a".to_vec()), (sample(10), b"b".to_vec())]
         );
     }
 
     #[test]
-    fn a_track_is_refused_with_a_track_id_of_0_or_one_taken_a_data_reference_elsewhere_or_after_the_media_data()
+    fn a_track_is_refused_with_a_track_id_of_0_or_one_taken_a_data_reference_elsewhere_or_after_a_sample()
      {
-        let mut muxer = muxer_of_one_track();
+        let mut muxer = muxer_of_one_track(MuxerConfig::default());
         let mut elsewhere = one_sample_entry_track(3);
         if let Some(isobmff_boxes::SampleDescription::Typed(entry)) =
             elsewhere.sample_entries.sample_descriptions.first_mut()
@@ -221,17 +222,7 @@ mod tests {
                 }),
             ]
         );
-        muxer.advance_position(1).unwrap();
-        assert_eq!(
-            muxer.add_track(one_sample_entry_track(2)),
-            Err(Error::TrackAfterMediaData { track_id: 2 })
-        );
-    }
-
-    #[test]
-    fn a_track_is_refused_after_a_sample_of_no_bytes() {
-        let mut muxer = muxer_of_one_track();
-        muxer.handle_sample(sample(0), 0).unwrap();
+        muxer.handle_sample(sample(0), b"").unwrap();
         assert_eq!(
             muxer.add_track(one_sample_entry_track(2)),
             Err(Error::TrackAfterMediaData { track_id: 2 })
@@ -272,21 +263,28 @@ mod tests {
             }
             kept
         };
-        let written = read(&remux(&source).unwrap()).unwrap();
+        let written = read(&remux(&source, MuxerConfig::default()).unwrap()).unwrap();
         assert_eq!(containers(&written.movie), containers(&source.movie));
     }
 
     #[test]
-    fn a_sample_refused_leaves_the_media_data_as_it_was() {
-        let mut muxer = muxer_of_one_track();
+    fn a_sample_refused_leaves_what_the_muxer_holds_as_it_was() {
+        let opening = opening();
+        let mut config = MuxerConfig::default();
+        config.buffer_limit = opening.len() + 4;
+        let mut muxer = muxer_of_one_track(config);
         let mut of_track_2 = sample(0);
         of_track_2.track_id = 2;
         let mut described_by_2 = sample(0);
         described_by_2.sample_description_index = 2;
         assert_eq!(
             [
-                muxer.handle_sample(of_track_2, 1).map(|_| ()),
-                muxer.handle_sample(described_by_2, 1).map(|_| ()),
+                muxer.handle_sample(of_track_2, b"x"),
+                muxer.handle_sample(described_by_2, b"x"),
+                muxer.handle_sample(sample(0), b"vwxyz"),
+                muxer.handle_sample(sample(0), b"wxyz"),
+                muxer.handle_sample(sample(10), b""),
+                muxer.handle_sample(sample(20), b"z"),
             ],
             [
                 Err(Error::UnknownTrack { track_id: 2 }),
@@ -295,57 +293,38 @@ mod tests {
                         sample_description_index: 2,
                     }
                 )),
+                Err(Error::BufferFull {
+                    length: opening.len() + 5,
+                }),
+                Ok(()),
+                Ok(()),
+                Err(Error::BufferFull {
+                    length: opening.len() + 5,
+                }),
             ]
         );
-        let first = muxer.handle_sample(sample(0), 1).unwrap();
-        let mut fresh = muxer_of_one_track();
-        assert_eq!(first, fresh.handle_sample(sample(0), 1).unwrap());
-    }
-
-    #[test]
-    fn the_media_data_ends_at_the_last_offset_a_file_can_have_and_not_past_it() {
-        let mut muxer = muxer_of_one_track();
-        let start = muxer.handle_sample(sample(0), 0).unwrap().offset;
-        muxer
-            .advance_position(u64::MAX.checked_sub(start + 1).unwrap())
-            .unwrap();
-        assert_eq!(
-            [
-                muxer.handle_sample(sample(10), 2).map(|_| ()),
-                muxer.advance_position(2),
-            ],
-            [Err(Error::Overflow), Err(Error::Overflow)]
-        );
-        assert_eq!(
-            [
-                muxer
-                    .handle_sample(sample(10), 1)
-                    .map(|location| location.offset),
-                muxer
-                    .handle_sample(sample(20), 0)
-                    .map(|location| location.offset),
-            ],
-            [Ok(u64::MAX - 1), Ok(u64::MAX)]
-        );
-        assert_eq!(muxer.advance_position(1), Err(Error::Overflow));
+        let mut written = Vec::new();
+        muxer.poll_output(&mut written);
+        let mut expected = opening.clone();
+        expected.extend_from_slice(b"wxyz");
+        assert_eq!(written, expected);
+        assert_eq!(muxer.handle_sample(sample(20), b"z"), Ok(()));
     }
 
     #[test]
     fn a_finished_muxer_takes_nothing_more() {
-        let mut muxer = muxer_of_one_track();
+        let mut muxer = muxer_of_one_track(MuxerConfig::default());
         muxer.finish().unwrap();
         assert_eq!(
             [
                 muxer.add_track(one_sample_entry_track(2)),
-                muxer.handle_sample(sample(0), 1).map(|_| ()),
-                muxer.advance_position(1),
+                muxer.handle_sample(sample(0), b"x"),
                 muxer.finish().map(|_| ()),
             ],
             [
                 Err(Error::Finished),
                 Err(Error::Finished),
-                Err(Error::Finished),
-                Err(Error::Finished),
+                Err(Error::Finished)
             ]
         );
     }
@@ -379,7 +358,7 @@ mod tests {
             {
                 continue;
             }
-            let written = match remux(&source) {
+            let written = match remux(&source, MuxerConfig::default()) {
                 Ok(written) => written,
                 Err(error) => {
                     differences.push(format!("{}: {error}", file.name));

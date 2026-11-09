@@ -187,3 +187,54 @@ fn a_sample_over_the_size_limit_is_never_copied() {
     assert!(samples < 12 + 58);
     assert!(allocated <= 2048, "allocated {allocated} bytes");
 }
+
+#[test]
+fn a_muxer_polled_after_each_sample_allocates_for_the_tables_and_not_for_the_bytes() {
+    use isobmff::muxer::{MovieDescription, TrackDescription};
+    use isobmff::{MovieFileMuxer, MuxerConfig, SampleProperties};
+    use isobmff_boxes::{
+        FileTypeBox, SampleDescription, SampleDescriptionBox, SampleEntry, SampleFlags,
+    };
+    use isobmff_core::FourCc;
+
+    const SAMPLES: u32 = 1024;
+    const SAMPLE_SIZE: usize = 4096;
+    let mut entry = SampleEntry::default();
+    entry.data_reference_index = 1;
+    let mut stsd = SampleDescriptionBox::default();
+    stsd.sample_descriptions = vec![SampleDescription::Typed(entry)];
+    let mut muxer = MovieFileMuxer::new(
+        MovieDescription::new(1000),
+        MuxerConfig::default(),
+        FileTypeBox::default(),
+    )
+    .unwrap();
+    muxer
+        .add_track(TrackDescription::new(1, 1000, FourCc::new(*b"vide"), stsd))
+        .unwrap();
+    let bytes = vec![0xAA; SAMPLE_SIZE];
+    let sample = |index: u32| SampleProperties {
+        track_id: 1,
+        decoding_time: u64::from(index) * 10,
+        sample_duration: 10,
+        sample_composition_time_offset: 0,
+        sample_flags: SampleFlags::default(),
+        sample_description_index: 1,
+    };
+    let mut out = Vec::new();
+    muxer.handle_sample(sample(0), &bytes).unwrap();
+    muxer.poll_output(&mut out);
+    out.clear();
+    let allocated = allocated_by(|| {
+        for index in 1..SAMPLES {
+            muxer.handle_sample(sample(index), &bytes).unwrap();
+            muxer.poll_output(&mut out);
+            out.clear();
+        }
+    });
+    let sample_bytes = SAMPLE_SIZE * usize::try_from(SAMPLES - 1).unwrap();
+    println!(
+        "allocated {allocated} bytes muxing {sample_bytes} bytes of {SAMPLES} samples, polled after each"
+    );
+    assert!(allocated < sample_bytes / 16, "allocated {allocated} bytes");
+}

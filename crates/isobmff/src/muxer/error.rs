@@ -1,16 +1,16 @@
-//! Why a [`Muxer`](super::Muxer) refuses a value
+//! Why a muxer refuses a value
 
 use core::fmt;
 
 use crate::structure_data;
 
-/// Why a [`Muxer`](super::Muxer) refuses a value; a refused call changes nothing
+/// Why a muxer refuses a value; a refused call changes nothing
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Error {
     /// The muxer has finished, and takes no more
     Finished,
-    /// A track is added after the media data has begun
+    /// A track is added after a sample was taken
     TrackAfterMediaData {
         /// `track_ID` of the track
         track_id: u32,
@@ -37,8 +37,15 @@ pub enum Error {
     /// The sample table of the track refuses the sample, as where it names a
     /// sample entry the track does not have
     StructureData(structure_data::Error),
-    /// The media data would reach past the last offset a file can have
+    /// A sample is longer than a sample table counts, or the media data would
+    /// reach past the last offset a file can have
     Overflow,
+    /// A sample would grow the bytes held for `poll_output` past
+    /// [`MuxerConfig::buffer_limit`](super::MuxerConfig::buffer_limit)
+    BufferFull {
+        /// The bytes the output held would grow to
+        length: usize,
+    },
     /// A box does not write
     Encode(isobmff_core::Error),
 }
@@ -49,7 +56,7 @@ impl fmt::Display for Error {
             Self::Finished => write!(formatter, "the muxer has finished"),
             Self::TrackAfterMediaData { track_id } => write!(
                 formatter,
-                "track {track_id} is added after the media data has begun"
+                "track {track_id} is added after a sample was taken"
             ),
             Self::TrackId { track_id } => write!(
                 formatter,
@@ -70,7 +77,11 @@ impl fmt::Display for Error {
             }
             Self::Overflow => write!(
                 formatter,
-                "the media data would reach past the last offset a file can have"
+                "a sample is longer than a sample table counts, or ends past the last offset a file can have"
+            ),
+            Self::BufferFull { length } => write!(
+                formatter,
+                "the output held would grow to {length} bytes, past buffer_limit"
             ),
             Self::Encode(_) => write!(formatter, "a box does not write"),
         }
@@ -87,7 +98,8 @@ impl core::error::Error for Error {
             | Self::TrackId { .. }
             | Self::DataReferenceIndex { .. }
             | Self::UnknownTrack { .. }
-            | Self::Overflow => None,
+            | Self::Overflow
+            | Self::BufferFull { .. } => None,
         }
     }
 }

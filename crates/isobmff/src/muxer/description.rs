@@ -10,7 +10,7 @@ use isobmff_core::{FourCc, OtherBoxes, U16F16};
 /// duration and the next `track_ID`.
 ///
 /// A description holds no table, duration or movie extends box: a
-/// [`Muxer`](super::Muxer) derives those. One is built from its timescale, or
+/// muxer derives those. One is built from its timescale, or
 /// taken from a `moov` read, to write the movie again:
 ///
 /// ```
