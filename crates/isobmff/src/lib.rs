@@ -38,10 +38,15 @@
 //! # Ok::<(), Box<dyn core::error::Error>>(())
 //! ```
 //!
-//! The layers it is made of are usable alone: [`framing`] reads the boxes laid
-//! end to end in a file from bytes that arrive in pieces, and
+//! [`Muxer`] writes the structure of a movie file, its `ftyp`, the header of
+//! its `mdat` and its `moov`, around the samples a caller writes; the
+//! [`muxer`] module holds what describes the movie and its tracks.
+//!
+//! The layers they are made of are usable alone: [`framing`] reads the boxes
+//! laid end to end in a file from bytes that arrive in pieces, and
 //! [`structure_data`] resolves the samples a `moov` declares to where their
-//! bytes lie. The boxes themselves are read and written with `isobmff-boxes`.
+//! bytes lie, and writes the sample table of a track from them. The boxes
+//! themselves are read and written with `isobmff-boxes`.
 
 #![no_std]
 
@@ -50,10 +55,12 @@ extern crate alloc;
 mod demuxer;
 pub mod framing;
 mod input_buffer;
+pub mod muxer;
 mod sample;
 pub mod structure_data;
 
 pub use demuxer::{Demuxer, DemuxerConfig, Error, Event, Sample};
+pub use muxer::{Muxer, MuxerConfig};
 pub use sample::{SampleLocation, SampleProperties};
 
 /// Where a reader wants input next

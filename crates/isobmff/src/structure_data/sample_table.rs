@@ -5,9 +5,8 @@ use core::iter;
 
 use isobmff_boxes::{
     ChunkOffsetBox, ChunkOffsetVariant, CompositionOffsetBox, DataReferenceBox,
-    SampleDependencyTypeBox, SampleDescription, SampleDescriptionBox, SampleFlags, SampleSizeBox,
-    SampleSizeVariant, SampleSizes, SampleTableBox, SampleToChunkBox, SyncSampleBox,
-    TimeToSampleBox, TrackBox,
+    SampleDependencyTypeBox, SampleDescriptionBox, SampleFlags, SampleSizeBox, SampleSizeVariant,
+    SampleSizes, SampleTableBox, SampleToChunkBox, SyncSampleBox, TimeToSampleBox, TrackBox,
 };
 use isobmff_core::{BoxDefinition, BoxType};
 
@@ -293,17 +292,7 @@ fn chunk_sample_count(
 /// The `data_reference_index` of the sample entry `sample_description_index` names, from 1
 fn data_reference_index(stsd: &SampleDescriptionBox, sample_description_index: u32) -> Option<u16> {
     let index = usize::try_from(sample_description_index.checked_sub(1)?).ok()?;
-    match stsd.sample_descriptions.get(index)? {
-        SampleDescription::Typed(entry) => Some(entry.data_reference_index),
-        // Why read the bytes: an entry under a `uuid` type is kept unread,
-        // and every sample entry opens with six reserved bytes and then
-        // `data_reference_index`, §8.5.2.2.
-        SampleDescription::Other(entry) => {
-            let bytes = entry.raw_payload()?.get(6..8)?;
-            Some(u16::from_be_bytes(bytes.try_into().ok()?))
-        }
-        _ => None,
-    }
+    stsd.sample_descriptions.get(index)?.data_reference_index()
 }
 
 /// Whether the data reference entry `data_reference_index` names, from 1, places the media data in the same file
