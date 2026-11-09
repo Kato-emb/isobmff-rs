@@ -4,6 +4,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
 use isobmff::framing::{BoxReader, Event, FramerConfig};
+use isobmff::{Demuxer, DemuxerConfig};
 
 thread_local! {
     // Why count per thread: the test harness runs tests on threads of their
@@ -117,4 +118,72 @@ fn what_a_reader_holds_does_not_grow_with_the_number_of_boxes_handed_over() {
         assert_eq!(few, many, "`{name}`");
         assert!(many < 1024, "`{name}`: allocated {many} bytes");
     }
+}
+
+/// From which sample lent the allocations are counted
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Since {
+    FirstSample,
+    LargestSample,
+}
+
+/// Bytes allocated from a sample of `file` lent on, its every track subscribed to, under a sample size limit of `sample_size_limit`, with the number of samples lent
+fn allocated_lending(file: &[u8], sample_size_limit: u64, since: Since) -> (usize, usize) {
+    let mut config = DemuxerConfig::default();
+    config.sample_size_limit = sample_size_limit;
+    let mut demuxer = Demuxer::new(config);
+    let (mut before, mut largest, mut samples) = (None, 0, 0);
+    loop {
+        while let Some(event) = demuxer.poll_event() {
+            match event {
+                isobmff::Event::Movie(movie) => {
+                    let track_ids = movie
+                        .trak
+                        .iter()
+                        .map(|trak| trak.tkhd.track_id)
+                        .collect::<Vec<_>>();
+                    for track_id in track_ids {
+                        demuxer.subscribe_track(track_id);
+                    }
+                }
+                isobmff::Event::Sample(sample) => {
+                    samples += 1;
+                    let counts_from_here = match since {
+                        Since::FirstSample => before.is_none(),
+                        Since::LargestSample => sample.bytes.len() > largest,
+                    };
+                    largest = largest.max(sample.bytes.len());
+                    if counts_from_here {
+                        before = Some(ALLOCATED.with(Cell::get));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(required) = demuxer.required_input() else {
+            break;
+        };
+        match file.get(usize::try_from(required.position).unwrap()..) {
+            Some(bytes) if !bytes.is_empty() => demuxer.handle_input(required.position, bytes),
+            _ => demuxer.finish(),
+        }
+    }
+    let allocated = before.map_or(0, |before| ALLOCATED.with(Cell::get).saturating_sub(before));
+    (allocated, samples)
+}
+
+const MOVIE: &[u8] = include_bytes!("../../crates/isobmff/tests/fixtures/movie_moov_first.mp4");
+
+#[test]
+fn lending_a_sample_allocates_nothing_once_the_buffer_holds_the_largest() {
+    let (allocated, samples) = allocated_lending(MOVIE, 1 << 20, Since::LargestSample);
+    assert_eq!((allocated, samples), (0, 12 + 58));
+}
+
+#[test]
+fn a_sample_over_the_size_limit_is_never_copied() {
+    let (allocated, samples) = allocated_lending(MOVIE, 1024, Since::FirstSample);
+    println!("allocated {allocated} bytes lending {samples} samples of at most 1024 bytes");
+    assert!(samples < 12 + 58);
+    assert!(allocated <= 2048, "allocated {allocated} bytes");
 }
