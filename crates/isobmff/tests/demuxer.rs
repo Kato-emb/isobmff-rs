@@ -5,16 +5,17 @@ mod tests {
     use isobmff::{Demuxer, DemuxerConfig, Error, Event, SampleLocation};
     use isobmff_test_support::conformance_files;
 
+    /// The fixtures whose samples all lie after the `moov`
     const FIXTURES: [(&str, &[u8]); 2] = [
         (
             "movie_moov_first.mp4",
             include_bytes!("fixtures/movie_moov_first.mp4"),
         ),
-        (
-            "movie_moov_last.mp4",
-            include_bytes!("fixtures/movie_moov_last.mp4"),
-        ),
+        ("fragmented.mp4", include_bytes!("fixtures/fragmented.mp4")),
     ];
+
+    /// A movie file whose samples all lie before the `moov`
+    const MOVIE_LAST: &[u8] = include_bytes!("fixtures/movie_moov_last.mp4");
 
     /// The default limits, with each `(payload_limit, sample_size_limit)` given that differs
     fn config(payload_limit: Option<u64>, sample_size_limit: Option<u64>) -> DemuxerConfig {
@@ -110,7 +111,7 @@ mod tests {
         reported
     }
 
-    /// Reads `file` handed over from its start in pieces of `piece` bytes, each again until the demuxer wants what lies past it
+    /// Reads `file` handed over from its start in pieces of `piece` bytes, each again until the demuxer wants what lies past it, as a caller that cannot seek does: it ends the input where the demuxer wants bytes before the piece
     fn read_in_pieces(
         file: &[u8],
         config: DemuxerConfig,
@@ -124,10 +125,14 @@ mod tests {
             let end = position
                 .checked_add(u64::try_from(bytes.len()).unwrap())
                 .unwrap();
-            while demuxer
-                .required_input()
-                .is_some_and(|required| required.position < end)
+            while let Some(required) = demuxer.required_input()
+                && required.position < end
             {
+                if required.position < position {
+                    demuxer.finish();
+                    drain(&mut demuxer, subscribe, &mut reported);
+                    return reported;
+                }
                 demuxer.handle_input(position, bytes);
                 drain(&mut demuxer, subscribe, &mut reported);
             }
@@ -167,13 +172,13 @@ mod tests {
         .unwrap()
     }
 
-    /// The end of the `moov` of a movie file, from the events that report it: the samples before it are reported by location alone
-    fn samples_lent(reported: &[Reported]) -> Vec<&SampleLocation> {
+    /// The location of each sample `reported` lends
+    fn samples_lent(reported: &[Reported]) -> Vec<SampleLocation> {
         reported
             .iter()
             .filter_map(|reported| {
                 if let Reported::Sample(location, _) = reported {
-                    Some(location)
+                    Some(*location)
                 } else {
                     None
                 }
@@ -181,38 +186,71 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn the_samples_after_the_moov_are_lent_as_the_file_holds_them() {
-        for (name, file) in FIXTURES {
-            let reported = read_every_way(name, file, config(None, None), Subscribe::Every);
-            let locations = reported
-                .iter()
-                .filter_map(|reported| {
-                    if let Reported::SampleLocation(location) = reported {
-                        Some(*location)
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(locations.len(), 12 + 58, "{name}");
-            for reported in &reported {
-                if let Reported::Sample(location, bytes) = reported {
-                    assert_eq!(bytes.as_slice(), bytes_at(file, location), "{name}");
+    /// The locations `reported` holds
+    fn locations(reported: &[Reported]) -> Vec<SampleLocation> {
+        reported
+            .iter()
+            .filter_map(|reported| {
+                if let Reported::SampleLocation(location) = reported {
+                    Some(*location)
+                } else {
+                    None
                 }
+            })
+            .collect()
+    }
+
+    /// Every sample `reported` lends holds the bytes of its location in `file`
+    fn lent_as_held(name: &str, file: &[u8], reported: &[Reported]) {
+        for reported in reported {
+            if let Reported::Sample(location, bytes) = reported {
+                assert_eq!(bytes.as_slice(), bytes_at(file, location), "{name}");
             }
-            let lent = samples_lent(&reported)
-                .into_iter()
-                .copied()
-                .collect::<Vec<_>>();
-            match name {
-                "movie_moov_first.mp4" => assert_eq!(lent, locations, "{name}"),
-                _ => assert_eq!(
-                    lent,
-                    Vec::new(),
-                    "{name}: every sample lies before the `moov`"
+        }
+    }
+
+    #[test]
+    fn a_file_whose_samples_follow_the_moov_reads_the_same_however_it_is_handed_over() {
+        for ((name, file), sample_count) in FIXTURES.into_iter().zip([12 + 58, 0]) {
+            let reported = read_every_way(name, file, config(None, None), Subscribe::Every);
+            lent_as_held(name, file, &reported);
+            let lent = samples_lent(&reported);
+            assert_eq!(lent.len(), sample_count, "{name}");
+            assert_eq!(lent, locations(&reported), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_samples_before_the_moov_are_lent_to_a_caller_that_seeks() {
+        let reported = read_where_required(MOVIE_LAST, config(None, None), Subscribe::Every);
+        lent_as_held("movie_moov_last.mp4", MOVIE_LAST, &reported);
+        let lent = samples_lent(&reported);
+        assert_eq!(lent.len(), 12 + 58);
+        assert_eq!(lent, locations(&reported));
+    }
+
+    #[test]
+    fn a_caller_that_cannot_seek_ends_the_input_at_the_samples_before_the_bytes_it_holds() {
+        // Why every sample, or none: the demuxer asks for the samples in the
+        // order of their offsets, so the first decides whether the piece the
+        // caller holds when the `moov` is read reaches back to them, which only
+        // a piece of the whole file does.
+        for (piece, sample_count) in [(1, 0), (4096, 0), (MOVIE_LAST.len(), 12 + 58)] {
+            let reported = read_in_pieces(MOVIE_LAST, config(None, None), Subscribe::Every, piece);
+            lent_as_held("movie_moov_last.mp4", MOVIE_LAST, &reported);
+            let errors = reported
+                .iter()
+                .filter(|reported| matches!(reported, Reported::Error(_)))
+                .count();
+            assert_eq!(
+                (
+                    locations(&reported).len(),
+                    samples_lent(&reported).len(),
+                    errors
                 ),
-            }
+                (12 + 58, sample_count, 0),
+                "in pieces of {piece}"
+            );
         }
     }
 
@@ -320,13 +358,9 @@ mod tests {
     fn the_samples_of_the_conformance_files_are_lent_as_the_files_hold_them() {
         let mut differences = Vec::new();
         for file in conformance_files() {
-            let reported = read_every_way(
-                &file.name,
-                &file.bytes,
-                config(None, None),
-                Subscribe::Every,
-            );
-            for reported in &reported {
+            let seeking = read_where_required(&file.bytes, config(None, None), Subscribe::Every);
+            let in_pieces = read_in_pieces(&file.bytes, config(None, None), Subscribe::Every, 4096);
+            for reported in seeking.iter().chain(&in_pieces) {
                 if let Reported::Sample(location, bytes) = reported
                     && bytes.as_slice() != bytes_at(&file.bytes, location)
                 {
@@ -335,6 +369,14 @@ mod tests {
                         file.name, location.offset
                     ));
                 }
+            }
+            if samples_lent(&seeking).len() != locations(&seeking).len() {
+                differences.push(format!(
+                    "{}: {} of {} samples lent to a caller that seeks",
+                    file.name,
+                    samples_lent(&seeking).len(),
+                    locations(&seeking).len()
+                ));
             }
         }
         assert_eq!(differences, Vec::<String>::new());
