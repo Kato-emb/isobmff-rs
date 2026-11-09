@@ -3,6 +3,8 @@
 use alloc::vec::Vec;
 use core::num::NonZeroU32;
 
+use super::Error;
+use crate::SampleLocation;
 use isobmff_boxes::{
     ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, CompositionOffsetBox,
     CompositionOffsetEntry, SampleDependencyTypeBox, SampleDependencyTypeEntry,
@@ -10,10 +12,6 @@ use isobmff_boxes::{
     SampleTableBox, SampleToChunkBox, SampleToChunkEntry, SyncSampleBox, TimeToSampleBox,
     TimeToSampleEntry,
 };
-use isobmff_core::BoxEncode;
-
-use super::Error;
-use crate::SampleLocation;
 
 /// What the sample table holds of a sample
 #[derive(Debug, Clone, Copy)]
@@ -31,9 +29,9 @@ struct Sample {
 /// [`SampleTableBox`] (`stbl`), ISO/IEC 14496-12 §8.5.1
 ///
 /// [`handle_location`](Self::handle_location) takes the samples of one track
-/// in decoding order, and [`finish`](Self::finish) appends the `stbl` that
-/// declares them, with the sample entries the caller gives, to a buffer the
-/// caller owns. The tables are the shortest the samples allow:
+/// in decoding order, and [`finish`](Self::finish) returns the `stbl` that
+/// declares them, with the sample entries the caller gives. The tables are
+/// the shortest the samples allow:
 ///
 /// * `stts` (§8.6.1.2): one entry for each run of samples of one
 ///   `sample_duration`.
@@ -49,10 +47,10 @@ struct Sample {
 /// * `sdtp` (§8.6.4): written only where a sample declares `is_leading`,
 ///   `sample_depends_on`, `sample_is_depended_on` or `sample_has_redundancy`.
 ///
-/// The decoding time of each sample is the sum of the `sample_duration`s
-/// before it, from 0, as the `stts` declares it; the writer does not check
-/// the `decoding_time` of a location against it, nor its `track_id`. The
-/// sample padding value and the degradation priority of `sample_flags` have
+/// The `stts` declares the decoding time of each sample as the sum of the
+/// `sample_duration`s before it, from 0, so the writer takes a sample only at
+/// that decoding time, and only of the track of the first sample. The sample
+/// padding value and the degradation priority of `sample_flags` have
 /// no place in these tables and are not written. Where the samples lie is up
 /// to the caller; the writer does not write the other children of a `stbl`,
 /// such as sample groups.
@@ -60,8 +58,6 @@ struct Sample {
 /// ```
 /// use isobmff::structure_data::{SampleTableWriter, StructureDataReader};
 /// use isobmff::{Demuxer, DemuxerConfig, Event};
-/// use isobmff_boxes::SampleTableBox;
-/// use isobmff_core::BoxDecode;
 ///
 /// // Read the `moov` of a file and where the samples of its first track lie
 /// let file: &[u8] = include_bytes!("../../tests/fixtures/movie_moov_first.mp4");
@@ -90,14 +86,13 @@ struct Sample {
 /// for &location in &locations {
 ///     writer.handle_location(location)?;
 /// }
-/// let mut out = Vec::new();
 /// let trak = &movie.trak[0];
-/// writer.finish(&trak.mdia.minf.stbl.stsd, &mut out)?;
+/// let stbl = writer.finish(&trak.mdia.minf.stbl.stsd)?;
 ///
 /// // The table declares the samples where they lie
 /// let mut written = movie.clone();
 /// written.trak = vec![trak.clone()];
-/// written.trak[0].mdia.minf.stbl = SampleTableBox::decode(&out)?.0;
+/// written.trak[0].mdia.minf.stbl = stbl;
 /// let resolved: Vec<_> = StructureDataReader::new(1024).handle_movie(&written)?.collect();
 /// assert_eq!(resolved, locations);
 /// # Ok::<(), Box<dyn core::error::Error>>(())
@@ -110,6 +105,12 @@ pub struct SampleTableWriter {
     // last is its offset and size, which the `stsc` and `stco` alone do not
     // hold.
     samples: Vec<Sample>,
+    /// `track_ID` of the track of the samples taken, while there are any
+    track_id: u32,
+    // Why not sum the `sample_duration`s of the samples held: that sum on
+    // every sample makes taking a track's samples quadratic in their number.
+    /// Decoding time the next sample is to have
+    decoding_time: u64,
 }
 
 impl SampleTableWriter {
@@ -123,6 +124,8 @@ impl SampleTableWriter {
         Self {
             sample_count_limit,
             samples: Vec::new(),
+            track_id: 0,
+            decoding_time: 0,
         }
     }
 
@@ -131,6 +134,13 @@ impl SampleTableWriter {
     /// # Errors
     /// * [`Error::SampleCountOverLimit`]: the writer holds as many samples
     ///   as its limit, or as a table can count; the sample is not taken.
+    /// * [`Error::OtherTrack`]: the sample is of another track than the
+    ///   first sample taken; the sample is not taken.
+    /// * [`Error::DecodingTimeGap`]: the decoding time of the sample is not
+    ///   that of the sample before it plus its `sample_duration`, or 0 for
+    ///   the first; the sample is not taken.
+    /// * [`Error::Overflow`]: the decoding time after the sample lies past
+    ///   the last a track can have; the sample is not taken.
     /// * [`Error::CompositionOffsetOutOfRange`]: the composition offset of
     ///   the sample does not fit the 32 bits of a `ctts` entry, signed; the
     ///   sample is not taken.
@@ -146,6 +156,25 @@ impl SampleTableWriter {
             });
         }
         let properties = location.properties;
+        if !self.samples.is_empty() && self.track_id != properties.track_id {
+            return Err(Error::OtherTrack {
+                track_id: self.track_id,
+                found: properties.track_id,
+            });
+        }
+        if properties.decoding_time != self.decoding_time {
+            return Err(Error::DecodingTimeGap {
+                track_id: properties.track_id,
+                expected: self.decoding_time,
+                found: properties.decoding_time,
+            });
+        }
+        let decoding_time = self
+            .decoding_time
+            .checked_add(u64::from(properties.sample_duration))
+            .ok_or(Error::Overflow {
+                track_id: properties.track_id,
+            })?;
         let sample_composition_time_offset =
             i32::try_from(properties.sample_composition_time_offset).map_err(|_| {
                 Error::CompositionOffsetOutOfRange {
@@ -160,21 +189,20 @@ impl SampleTableWriter {
             sample_composition_time_offset,
             sample_flags: properties.sample_flags,
         });
+        self.track_id = properties.track_id;
+        self.decoding_time = decoding_time;
         Ok(())
     }
 
-    /// Appends the `stbl` of the samples taken to `out`, with `stsd` as its sample entries, and starts anew
+    /// Returns the `stbl` of the samples taken, with `stsd` as its sample entries, and starts anew
     ///
     /// The writer then holds no sample, and takes those of another track. A
-    /// write that fails leaves `out` and the writer as they were.
+    /// call that fails leaves the writer as it was.
     ///
     /// # Errors
     /// * [`Error::SampleDescriptionIndexOutOfRange`]: a sample names a sample
     ///   entry `stsd` does not hold.
-    /// * [`Error::Encode`]: the `stbl` does not write, as where an entry of
-    ///   `stsd` does not, or a field of `sample_flags` is wider than
-    ///   `sdtp` holds.
-    pub fn finish(&mut self, stsd: &SampleDescriptionBox, out: &mut Vec<u8>) -> Result<(), Error> {
+    pub fn finish(&mut self, stsd: &SampleDescriptionBox) -> Result<SampleTableBox, Error> {
         if let Some(sample) = self.samples.iter().find(|sample| {
             usize::try_from(sample.sample_description_index)
                 .ok()
@@ -314,18 +342,11 @@ impl SampleTableWriter {
             .any(|entry| *entry != SampleDependencyTypeEntry::default())
             .then_some(sdtp);
 
-        let start = out.len();
-        let length = usize::try_from(stbl.encoded_len()).unwrap_or(usize::MAX);
-        out.resize(start.saturating_add(length), 0);
-        match stbl.encode(out.get_mut(start..).unwrap_or_default()) {
-            Ok(_) => {
-                self.samples.clear();
-                Ok(())
-            }
-            Err(source) => {
-                out.truncate(start);
-                Err(Error::Encode(source))
-            }
-        }
+        self.samples.clear();
+        *self = Self {
+            samples: core::mem::take(&mut self.samples),
+            ..Self::new(self.sample_count_limit)
+        };
+        Ok(stbl)
     }
 }

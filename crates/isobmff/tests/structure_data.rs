@@ -458,20 +458,21 @@ mod tests {
         stsd
     }
 
-    /// The `stbl` a writer writes from `locations`, with `stsd`
+    /// The `stbl` a writer writes from `locations`, each at the decoding time the `sample_duration`s before it add up to, with `stsd`
     fn written(
         stsd: &SampleDescriptionBox,
         locations: impl IntoIterator<Item = SampleLocation>,
     ) -> SampleTableBox {
         let mut writer = SampleTableWriter::new(SAMPLE_COUNT_LIMIT);
-        for location in locations {
+        let mut decoding_time = 0;
+        for mut location in locations {
+            location.properties.decoding_time = decoding_time;
+            decoding_time = decoding_time
+                .checked_add(u64::from(location.properties.sample_duration))
+                .unwrap();
             writer.handle_location(location).unwrap();
         }
-        let mut out = Vec::new();
-        writer.finish(stsd, &mut out).unwrap();
-        let (stbl, rest) = SampleTableBox::decode(&out).unwrap();
-        assert!(rest.is_empty());
-        stbl
+        writer.finish(stsd).unwrap()
     }
 
     /// The `stbl` of a track of one sample entry whose samples are `sizes`, each lasting `sample_delta`, laid in chunks at `chunk_offsets` by the runs `(first_chunk, samples_per_chunk)`
@@ -609,20 +610,38 @@ mod tests {
 
     #[test]
     fn a_sample_the_writer_refuses_is_not_taken() {
-        let mut writer = SampleTableWriter::new(2);
-        let mut far_composition = location(2, 1, 1);
+        let at = |offset, decoding_time| {
+            let mut sample = location(offset, 1, 1);
+            sample.properties.decoding_time = decoding_time;
+            sample
+        };
+        let mut far_composition = at(1, 1);
         far_composition.properties.sample_composition_time_offset = i64::from(i32::MAX) + 1;
+        let mut of_track_2 = at(1, 1);
+        of_track_2.properties.track_id = 2;
+        let mut writer = SampleTableWriter::new(2);
         assert_eq!(
             [
-                writer.handle_location(location(0, 1, 1)),
+                writer.handle_location(at(0, 0)),
                 writer.handle_location(far_composition),
-                writer.handle_location(location(1, 1, 1)),
-                writer.handle_location(location(2, 1, 1)),
+                writer.handle_location(of_track_2),
+                writer.handle_location(at(1, 2)),
+                writer.handle_location(at(1, 1)),
+                writer.handle_location(at(2, 2)),
             ],
             [
                 Ok(()),
                 Err(Error::CompositionOffsetOutOfRange {
                     sample_composition_time_offset: i64::from(i32::MAX) + 1,
+                }),
+                Err(Error::OtherTrack {
+                    track_id: 1,
+                    found: 2,
+                }),
+                Err(Error::DecodingTimeGap {
+                    track_id: 1,
+                    expected: 1,
+                    found: 2,
                 }),
                 Ok(()),
                 Err(Error::SampleCountOverLimit {
@@ -631,11 +650,26 @@ mod tests {
                 }),
             ]
         );
-        let mut out = Vec::new();
-        writer.finish(&sample_entries(1), &mut out).unwrap();
         assert_eq!(
-            SampleTableBox::decode(&out).unwrap().0,
-            written(&sample_entries(1), [location(0, 1, 1), location(1, 1, 1)])
+            writer.finish(&sample_entries(1)),
+            Ok(written(
+                &sample_entries(1),
+                [location(0, 1, 1), location(1, 1, 1)]
+            ))
+        );
+    }
+
+    #[test]
+    fn the_first_sample_of_a_table_is_at_decoding_time_0() {
+        let mut later = location(0, 1, 1);
+        later.properties.decoding_time = 1;
+        assert_eq!(
+            SampleTableWriter::new(SAMPLE_COUNT_LIMIT).handle_location(later),
+            Err(Error::DecodingTimeGap {
+                track_id: 1,
+                expected: 0,
+                found: 1,
+            })
         );
     }
 
@@ -645,41 +679,32 @@ mod tests {
         let mut described_by_2 = location(0, 1, 1);
         described_by_2.properties.sample_description_index = 2;
         writer.handle_location(described_by_2).unwrap();
-        let mut out = b"ftyp".to_vec();
         assert_eq!(
-            writer.finish(&sample_entries(1), &mut out),
+            writer.finish(&sample_entries(1)),
             Err(Error::SampleDescriptionIndexOutOfRange {
                 sample_description_index: 2,
             })
         );
-        assert_eq!(out, b"ftyp");
-        writer.finish(&sample_entries(2), &mut out).unwrap();
         assert_eq!(
-            SampleTableBox::decode(out.get(4..).unwrap()).unwrap().0,
-            written(&sample_entries(2), [described_by_2])
+            writer.finish(&sample_entries(2)),
+            Ok(written(&sample_entries(2), [described_by_2]))
         );
     }
 
     #[test]
     fn a_writer_that_has_written_a_table_takes_the_samples_of_another_track() {
         let stsd = sample_entries(1);
+        let mut of_track_2 = location(7, 9, 2);
+        of_track_2.properties.track_id = 2;
         let mut writer = SampleTableWriter::new(SAMPLE_COUNT_LIMIT);
-        let mut out = Vec::new();
         writer.handle_location(location(0, 7, 1)).unwrap();
-        writer.finish(&stsd, &mut out).unwrap();
-        let first_length = out.len();
-        writer.handle_location(location(7, 9, 2)).unwrap();
-        writer.finish(&stsd, &mut out).unwrap();
+        let first = writer.finish(&stsd);
+        writer.handle_location(of_track_2).unwrap();
         assert_eq!(
+            [first, writer.finish(&stsd)],
             [
-                SampleTableBox::decode(&out).unwrap().0,
-                SampleTableBox::decode(out.get(first_length..).unwrap())
-                    .unwrap()
-                    .0,
-            ],
-            [
-                written(&stsd, [location(0, 7, 1)]),
-                written(&stsd, [location(7, 9, 2)]),
+                Ok(written(&stsd, [location(0, 7, 1)])),
+                Ok(written(&stsd, [of_track_2])),
             ]
         );
     }
@@ -859,16 +884,17 @@ mod tests {
                     .collect::<Vec<_>>();
                 track.sort_by_key(|location| location.properties.decoding_time);
                 let mut writer = SampleTableWriter::new(SAMPLE_COUNT_LIMIT);
-                let mut out = Vec::new();
                 let result = track
                     .into_iter()
                     .try_for_each(|&location| writer.handle_location(location))
-                    .and_then(|()| writer.finish(&trak.mdia.minf.stbl.stsd, &mut out));
-                if let Err(error) = result {
-                    differences.push(format!("{} track {track_id}: {error}", file.name));
-                    continue;
+                    .and_then(|()| writer.finish(&trak.mdia.minf.stbl.stsd));
+                match result {
+                    Ok(stbl) => trak.mdia.minf.stbl = stbl,
+                    Err(error) => {
+                        differences.push(format!("{} track {track_id}: {error}", file.name));
+                        continue;
+                    }
                 }
-                trak.mdia.minf.stbl = SampleTableBox::decode(&out).unwrap().0;
                 tracks_written += 1;
             }
             let read_back = match locations(&rewritten) {

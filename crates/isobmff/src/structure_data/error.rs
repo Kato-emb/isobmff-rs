@@ -75,8 +75,25 @@ pub enum Error {
         /// `sample_description_index` of the sample, from 1
         sample_description_index: u32,
     },
-    /// The sample table does not write
-    Encode(isobmff_core::Error),
+    /// A sample is of another track than the samples a
+    /// [`SampleTableWriter`](super::SampleTableWriter) has taken
+    OtherTrack {
+        /// `track_ID` of the samples taken
+        track_id: u32,
+        /// `track_ID` of the sample
+        found: u32,
+    },
+    /// The decoding time of a sample is not the one the `sample_duration`s
+    /// of the samples before it in the track add up to, from 0, which a
+    /// time-to-sample table declares, ISO/IEC 14496-12 §8.6.1.2
+    DecodingTimeGap {
+        /// `track_ID` of the track
+        track_id: u32,
+        /// Decoding time the table declares for the sample
+        expected: u64,
+        /// Decoding time of the sample
+        found: u64,
+    },
 }
 
 impl fmt::Display for Error {
@@ -133,23 +150,20 @@ impl fmt::Display for Error {
                 formatter,
                 "sample_description_index {sample_description_index} names no entry of the `stsd`"
             ),
-            Self::Encode(_) => write!(formatter, "the sample table does not write"),
+            Self::OtherTrack { track_id, found } => write!(
+                formatter,
+                "a sample of track {found} follows those of track {track_id}"
+            ),
+            Self::DecodingTimeGap {
+                track_id,
+                expected,
+                found,
+            } => write!(
+                formatter,
+                "a sample of track {track_id} has decoding_time {found}, and the samples before it add up to {expected}"
+            ),
         }
     }
 }
 
-impl core::error::Error for Error {
-    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
-        match self {
-            Self::Encode(source) => Some(source),
-            Self::SampleCountOverLimit { .. }
-            | Self::MissingTable { .. }
-            | Self::SampleCountMismatch { .. }
-            | Self::InvalidEntry { .. }
-            | Self::MediaDataElsewhere { .. }
-            | Self::Overflow { .. }
-            | Self::CompositionOffsetOutOfRange { .. }
-            | Self::SampleDescriptionIndexOutOfRange { .. } => None,
-        }
-    }
-}
+impl core::error::Error for Error {}
