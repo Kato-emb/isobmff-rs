@@ -139,8 +139,9 @@ impl SampleTableWriter {
     /// * [`Error::DecodingTimeGap`]: the decoding time of the sample is not
     ///   that of the sample before it plus its `sample_duration`, or 0 for
     ///   the first; the sample is not taken.
-    /// * [`Error::Overflow`]: the decoding time after the sample lies past
-    ///   the last a track can have; the sample is not taken.
+    /// * [`Error::Overflow`]: the bytes of the sample lie past the last
+    ///   offset a file can have, or the decoding time after it past the last
+    ///   a track can have; the sample is not taken.
     /// * [`Error::CompositionOffsetOutOfRange`]: the composition offset of
     ///   the sample does not fit the 32 bits of a `ctts` entry, signed; the
     ///   sample is not taken.
@@ -169,12 +170,17 @@ impl SampleTableWriter {
                 found: properties.decoding_time,
             });
         }
+        let overflow = Error::Overflow {
+            track_id: properties.track_id,
+        };
+        location
+            .offset
+            .checked_add(u64::from(location.size))
+            .ok_or(overflow)?;
         let decoding_time = self
             .decoding_time
             .checked_add(u64::from(properties.sample_duration))
-            .ok_or(Error::Overflow {
-                track_id: properties.track_id,
-            })?;
+            .ok_or(overflow)?;
         let sample_composition_time_offset =
             i32::try_from(properties.sample_composition_time_offset).map_err(|_| {
                 Error::CompositionOffsetOutOfRange {
