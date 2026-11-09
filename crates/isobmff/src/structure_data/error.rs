@@ -1,20 +1,23 @@
-//! Why a [`StructureDataReader`](super::StructureDataReader) refuses a box
+//! Why a [`StructureDataReader`](super::StructureDataReader) refuses a box, or a [`SampleTableWriter`](super::SampleTableWriter) a sample
 
 use core::fmt;
 
 use isobmff_core::BoxType;
 
-/// Why a [`StructureDataReader`](super::StructureDataReader) refuses a box
+/// Why a [`StructureDataReader`](super::StructureDataReader) refuses a box, or a [`SampleTableWriter`](super::SampleTableWriter) a sample
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Error {
     /// The tracks declare more samples than
-    /// [`StructureDataReader::new`](super::StructureDataReader::new) allows;
-    /// nothing is allocated for them
+    /// [`StructureDataReader::new`](super::StructureDataReader::new) allows,
+    /// and nothing is allocated for them; or a sample is one more than
+    /// [`SampleTableWriter::new`](super::SampleTableWriter::new) allows, and
+    /// it is not taken
     SampleCountOverLimit {
-        /// Number of samples the tracks declare
+        /// Number of samples the tracks declare, or the writer would hold
         sample_count: u64,
-        /// The most samples the reader resolves from one box
+        /// The most samples the reader resolves from one box, or the writer
+        /// holds
         limit: u64,
     },
     /// A table the sample table of a track needs is missing
@@ -60,6 +63,20 @@ pub enum Error {
         /// `track_ID` of the track
         track_id: u32,
     },
+    /// The `sample_composition_time_offset` of a sample does not fit the 32
+    /// bits of a `ctts` entry, signed, ISO/IEC 14496-12 §8.6.1.3
+    CompositionOffsetOutOfRange {
+        /// `sample_composition_time_offset` of the sample
+        sample_composition_time_offset: i64,
+    },
+    /// The `sample_description_index` of a sample names no entry of the
+    /// `stsd` the sample table is written with
+    SampleDescriptionIndexOutOfRange {
+        /// `sample_description_index` of the sample, from 1
+        sample_description_index: u32,
+    },
+    /// The sample table does not write
+    Encode(isobmff_core::Error),
 }
 
 impl fmt::Display for Error {
@@ -70,7 +87,7 @@ impl fmt::Display for Error {
                 limit,
             } => write!(
                 formatter,
-                "the tracks declare {sample_count} samples, over the limit of {limit}"
+                "{sample_count} samples, over the limit of {limit}"
             ),
             Self::MissingTable { track_id, box_type } => write!(
                 formatter,
@@ -104,8 +121,35 @@ impl fmt::Display for Error {
                 formatter,
                 "a sample of track {track_id} lies past the last offset or decoding time there can be"
             ),
+            Self::CompositionOffsetOutOfRange {
+                sample_composition_time_offset,
+            } => write!(
+                formatter,
+                "sample_composition_time_offset {sample_composition_time_offset} does not fit 32 bits, signed"
+            ),
+            Self::SampleDescriptionIndexOutOfRange {
+                sample_description_index,
+            } => write!(
+                formatter,
+                "sample_description_index {sample_description_index} names no entry of the `stsd`"
+            ),
+            Self::Encode(_) => write!(formatter, "the sample table does not write"),
         }
     }
 }
 
-impl core::error::Error for Error {}
+impl core::error::Error for Error {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::Encode(source) => Some(source),
+            Self::SampleCountOverLimit { .. }
+            | Self::MissingTable { .. }
+            | Self::SampleCountMismatch { .. }
+            | Self::InvalidEntry { .. }
+            | Self::MediaDataElsewhere { .. }
+            | Self::Overflow { .. }
+            | Self::CompositionOffsetOutOfRange { .. }
+            | Self::SampleDescriptionIndexOutOfRange { .. } => None,
+        }
+    }
+}

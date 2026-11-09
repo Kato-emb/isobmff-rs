@@ -6,7 +6,10 @@ use isobmff_boxes::SampleFlags;
 ///
 /// The fields of a sample a sample table (ISO/IEC 14496-12 §8.5) or a track
 /// fragment run (§8.8.8) gives it.
-#[non_exhaustive]
+#[expect(
+    clippy::exhaustive_structs,
+    reason = "a caller of a writer builds one, and the fields are those a sample table or a track fragment run declares of a sample"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SampleProperties {
     /// `track_ID` of the track the sample belongs to
@@ -29,7 +32,10 @@ pub struct SampleProperties {
 }
 
 /// Where the bytes of a `sample` lie, with what the structure-data declares of it
-#[non_exhaustive]
+#[expect(
+    clippy::exhaustive_structs,
+    reason = "a caller of a writer builds one, and a sample lies at an offset for a size whatever else it declares"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SampleLocation {
     /// What the structure-data declares of the sample
