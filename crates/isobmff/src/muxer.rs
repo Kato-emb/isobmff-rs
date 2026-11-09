@@ -224,6 +224,10 @@ impl Muxer {
             > self
                 .media_data_offset
                 .saturating_add(MEDIA_DATA_HEADER_LENGTH)
+            || self
+                .tracks
+                .iter()
+                .any(|track| track.first_decoding_time.is_some())
         {
             return Err(Error::TrackAfterMediaData { track_id });
         }
@@ -463,11 +467,12 @@ impl Track {
         };
         trak.tkhd.width = description.width;
         trak.tkhd.height = description.height;
-        trak.edts = description.edit_list.clone().map(|elst| {
+        if description.edit_list.is_some() || !description.edit_other_boxes.as_slice().is_empty() {
             let mut edts = EditBox::default();
-            edts.elst = Some(elst);
-            edts
-        });
+            edts.elst.clone_from(&description.edit_list);
+            edts.other_boxes = description.edit_other_boxes.clone();
+            trak.edts = Some(edts);
+        }
         trak.mdia.mdhd.version = is_wide(media_duration);
         trak.mdia.mdhd.timescale = description.timescale;
         trak.mdia.mdhd.duration = media_duration;
@@ -482,7 +487,11 @@ impl Track {
             _ => MediaInformationHeader::Null(NullMediaHeaderBox::default()),
         });
         trak.mdia.minf.dinf.dref.data_entries = vec![DataEntry::Url(DataEntryUrlBox::default())];
+        trak.mdia.minf.dinf.other_boxes = description.data_information_other_boxes.clone();
         trak.mdia.minf.stbl = stbl;
+        trak.mdia.minf.stbl.other_boxes = description.sample_table_other_boxes.clone();
+        trak.mdia.minf.other_boxes = description.media_information_other_boxes.clone();
+        trak.mdia.other_boxes = description.media_other_boxes.clone();
         trak.other_boxes = description.other_boxes.clone();
         Ok(trak)
     }

@@ -6,8 +6,8 @@ mod tests {
     use isobmff::framing::media_data_header;
     use isobmff::muxer::{Error, FileStructure, MovieDescription, TrackDescription};
     use isobmff::{Demuxer, DemuxerConfig, Muxer, MuxerConfig, SampleLocation, SampleProperties};
-    use isobmff_boxes::{FileTypeBox, MovieBox, SampleFlags};
-    use isobmff_core::{BoxEncode, FourCc};
+    use isobmff_boxes::{EditBox, FileTypeBox, MovieBox, SampleFlags};
+    use isobmff_core::{BoxDecode, BoxEncode, FourCc, OtherBoxes};
     use isobmff_test_support::fixtures::track;
     use isobmff_test_support::{FfprobePacket, conformance_files, ffprobe, ffprobe_packets};
 
@@ -226,6 +226,54 @@ mod tests {
             muxer.add_track(one_sample_entry_track(2)),
             Err(Error::TrackAfterMediaData { track_id: 2 })
         );
+    }
+
+    #[test]
+    fn a_track_is_refused_after_a_sample_of_no_bytes() {
+        let mut muxer = muxer_of_one_track();
+        muxer.handle_sample(sample(0), 0).unwrap();
+        assert_eq!(
+            muxer.add_track(one_sample_entry_track(2)),
+            Err(Error::TrackAfterMediaData { track_id: 2 })
+        );
+    }
+
+    /// A child of a type no box of the crate reads, under `box_type`, as the containers keep it
+    fn unknown_child(box_type: &[u8; 4]) -> OtherBoxes {
+        let mut edts = b"\0\0\0\x14edts\0\0\0\x0c".to_vec();
+        edts.extend_from_slice(box_type);
+        edts.extend_from_slice(&[1, 2, 3, 4]);
+        EditBox::decode(&edts).unwrap().0.other_boxes
+    }
+
+    #[test]
+    fn the_boxes_of_a_type_the_crate_does_not_read_are_written_back_into_their_containers() {
+        let mut source = read(include_bytes!("fixtures/movie_moov_first.mp4")).unwrap();
+        for trak in &mut source.movie.trak {
+            trak.other_boxes = unknown_child(b"trk0");
+            trak.edts.get_or_insert_default().other_boxes = unknown_child(b"edt0");
+            trak.mdia.other_boxes = unknown_child(b"mdi0");
+            trak.mdia.minf.other_boxes = unknown_child(b"mnf0");
+            trak.mdia.minf.dinf.other_boxes = unknown_child(b"dnf0");
+            trak.mdia.minf.stbl.other_boxes = unknown_child(b"stb0");
+        }
+        source.movie.other_boxes = unknown_child(b"mov0");
+        let containers = |movie: &MovieBox| {
+            let mut kept = vec![movie.other_boxes.clone()];
+            for trak in &movie.trak {
+                kept.extend([
+                    trak.other_boxes.clone(),
+                    trak.edts.clone().unwrap_or_default().other_boxes,
+                    trak.mdia.other_boxes.clone(),
+                    trak.mdia.minf.other_boxes.clone(),
+                    trak.mdia.minf.dinf.other_boxes.clone(),
+                    trak.mdia.minf.stbl.other_boxes.clone(),
+                ]);
+            }
+            kept
+        };
+        let written = read(&remux(&source).unwrap()).unwrap();
+        assert_eq!(containers(&written.movie), containers(&source.movie));
     }
 
     #[test]

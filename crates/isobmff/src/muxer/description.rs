@@ -93,6 +93,16 @@ pub struct TrackDescription {
     /// Children of the `trak` of a type the crate holds no field for, written
     /// last
     pub other_boxes: OtherBoxes,
+    /// Children of the `edts`, §8.6.5, of a type the crate holds no field for
+    pub edit_other_boxes: OtherBoxes,
+    /// Children of the `mdia`, §8.4.1, of a type the crate holds no field for
+    pub media_other_boxes: OtherBoxes,
+    /// Children of the `minf`, §8.4.4, of a type the crate holds no field for
+    pub media_information_other_boxes: OtherBoxes,
+    /// Children of the `dinf`, §8.7.1, of a type the crate holds no field for
+    pub data_information_other_boxes: OtherBoxes,
+    /// Children of the `stbl`, §8.5.1, of a type the crate holds no field for
+    pub sample_table_other_boxes: OtherBoxes,
 }
 
 impl TrackDescription {
@@ -113,6 +123,11 @@ impl TrackDescription {
             width: U16F16::ZERO,
             height: U16F16::ZERO,
             other_boxes: OtherBoxes::default(),
+            edit_other_boxes: OtherBoxes::default(),
+            media_other_boxes: OtherBoxes::default(),
+            media_information_other_boxes: OtherBoxes::default(),
+            data_information_other_boxes: OtherBoxes::default(),
+            sample_table_other_boxes: OtherBoxes::default(),
         }
     }
 }
@@ -128,6 +143,15 @@ impl From<&TrackBox> for TrackDescription {
             width: track.tkhd.width,
             height: track.tkhd.height,
             other_boxes: track.other_boxes.clone(),
+            edit_other_boxes: track
+                .edts
+                .as_ref()
+                .map(|edts| edts.other_boxes.clone())
+                .unwrap_or_default(),
+            media_other_boxes: track.mdia.other_boxes.clone(),
+            media_information_other_boxes: track.mdia.minf.other_boxes.clone(),
+            data_information_other_boxes: track.mdia.minf.dinf.other_boxes.clone(),
+            sample_table_other_boxes: track.mdia.minf.stbl.other_boxes.clone(),
         }
     }
 }
