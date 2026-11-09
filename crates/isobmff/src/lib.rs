@@ -3,10 +3,12 @@
 //! [`Demuxer`] reads a file into its `ftyp` and `moov`, the location of each
 //! sample, and the bytes of the samples of the tracks a caller subscribes to.
 //! It does no I/O: it names where it wants input next, and the caller reads
-//! the file however it can.
+//! the file however it can. The [`demuxer`] module holds the events it
+//! reports.
 //!
 //! ```
-//! use isobmff::{Demuxer, DemuxerConfig, Event};
+//! use isobmff::demuxer::Event;
+//! use isobmff::{Demuxer, DemuxerConfig};
 //!
 //! let file: &[u8] = include_bytes!("../tests/fixtures/movie_moov_first.mp4");
 //! let mut demuxer = Demuxer::new(DemuxerConfig::default());
@@ -52,14 +54,14 @@
 
 extern crate alloc;
 
-mod demuxer;
+pub mod demuxer;
 pub mod framing;
 mod input_buffer;
 pub mod muxer;
 mod sample;
 pub mod structure_data;
 
-pub use demuxer::{Demuxer, DemuxerConfig, Error, Event, Sample};
+pub use demuxer::{Demuxer, DemuxerConfig};
 pub use muxer::{Muxer, MuxerConfig};
 pub use sample::{SampleLocation, SampleProperties};
 

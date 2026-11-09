@@ -2,11 +2,10 @@
 
 #[cfg(test)]
 mod tests {
+    use isobmff::demuxer::Event;
     use isobmff::framing::media_data_header;
     use isobmff::muxer::{Error, FileStructure, MovieDescription, TrackDescription};
-    use isobmff::{
-        Demuxer, DemuxerConfig, Event, Muxer, MuxerConfig, SampleLocation, SampleProperties,
-    };
+    use isobmff::{Demuxer, DemuxerConfig, Muxer, MuxerConfig, SampleLocation, SampleProperties};
     use isobmff_boxes::{FileTypeBox, MovieBox, SampleFlags};
     use isobmff_core::{BoxEncode, FourCc};
     use isobmff_test_support::fixtures::track;
@@ -17,7 +16,7 @@ mod tests {
         file_type: FileTypeBox,
         movie: MovieBox,
         samples: Vec<(SampleProperties, Vec<u8>)>,
-        errors: Vec<isobmff::Error>,
+        errors: Vec<isobmff::demuxer::Error>,
     }
 
     fn read(file: &[u8]) -> Option<Read> {

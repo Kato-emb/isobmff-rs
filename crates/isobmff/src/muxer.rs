@@ -92,7 +92,8 @@ struct Track {
 ///
 /// ```
 /// use isobmff::muxer::{FileStructure, MovieDescription, TrackDescription};
-/// use isobmff::{Demuxer, DemuxerConfig, Event, Muxer, MuxerConfig};
+/// use isobmff::demuxer::Event;
+/// use isobmff::{Demuxer, DemuxerConfig, Muxer, MuxerConfig};
 ///
 /// // Read the `ftyp`, the `moov` and every sample of a file
 /// let file: &[u8] = include_bytes!("../tests/fixtures/movie_moov_first.mp4");

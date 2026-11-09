@@ -2,7 +2,8 @@
 
 #[cfg(test)]
 mod tests {
-    use isobmff::{Demuxer, DemuxerConfig, Error, Event, SampleLocation};
+    use isobmff::demuxer::{Error, Event};
+    use isobmff::{Demuxer, DemuxerConfig, SampleLocation};
     use isobmff_test_support::conformance_files;
 
     /// The fixtures whose samples all lie after the `moov`

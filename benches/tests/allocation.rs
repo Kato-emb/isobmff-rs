@@ -136,7 +136,7 @@ fn allocated_lending(file: &[u8], sample_size_limit: u64, since: Since) -> (usiz
     loop {
         while let Some(event) = demuxer.poll_event() {
             match event {
-                isobmff::Event::Movie(movie) => {
+                isobmff::demuxer::Event::Movie(movie) => {
                     let track_ids = movie
                         .trak
                         .iter()
@@ -146,7 +146,7 @@ fn allocated_lending(file: &[u8], sample_size_limit: u64, since: Since) -> (usiz
                         demuxer.subscribe_track(track_id);
                     }
                 }
-                isobmff::Event::Sample(sample) => {
+                isobmff::demuxer::Event::Sample(sample) => {
                     samples += 1;
                     let counts_from_here = match since {
                         Since::FirstSample => before.is_none(),
