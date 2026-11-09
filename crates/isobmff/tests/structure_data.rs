@@ -1,60 +1,32 @@
 //! The samples a `moov` declares, resolved to where their bytes lie, checked against FFmpeg on the conformance files
 
 #[cfg(test)]
+#[path = "support/movie.rs"]
+mod support;
+
+#[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
     use std::path::Path;
 
     use isobmff::SampleLocation;
-    use isobmff::framing::{BoxReader, Event, FramerConfig};
     use isobmff::structure_data::{Error, StructureDataReader};
     use std::num::NonZeroU32;
 
+    use crate::support::{locations, movie_of};
+
     use isobmff_boxes::{
-        CompositionOffsetBox, CompositionOffsetEntry, MovieBox, SampleDependencyTypeBox,
+        CompositionOffsetBox, CompositionOffsetEntry, SampleDependencyTypeBox,
         SampleDependencyTypeEntry, SampleSizeBox, SampleSizeVariant, SampleSizes, SampleToChunkBox,
         SyncSampleBox, TimeToSampleBox,
     };
-    use isobmff_core::{BoxDecode, BoxDefinition};
+    use isobmff_core::BoxDefinition;
     use isobmff_test_support::fixtures::{encoded, in_another_file, movie, track};
     use isobmff_test_support::serde_json::{self, Value};
     use isobmff_test_support::{conformance_files, ffprobe};
 
-    const SAMPLE_COUNT_LIMIT: u64 = 1 << 20;
-
     /// `(offset, size, decoding_time)` of the samples of each track, by `track_ID`
     type Samples = BTreeMap<u32, Vec<(u64, u64, u64)>>;
-
-    /// The `moov` of `file`, read with the framing reader
-    fn movie_of(file: &[u8]) -> Option<MovieBox> {
-        let mut reader = BoxReader::new(FramerConfig::new(64 * 1024 * 1024));
-        let mut movie = None;
-        loop {
-            while let Some(event) = reader.poll_event() {
-                if let Event::Gathered {
-                    box_type, payload, ..
-                } = event
-                    && box_type == MovieBox::BOX_TYPE
-                {
-                    movie = Some(MovieBox::decode_payload(payload).unwrap());
-                }
-            }
-            let Some(required) = reader.required_input() else {
-                break;
-            };
-            match file.get(usize::try_from(required.position).unwrap()..) {
-                Some(bytes) if !bytes.is_empty() => reader.handle_input(required.position, bytes),
-                _ => reader.finish(),
-            }
-        }
-        movie
-    }
-
-    fn locations(movie: &MovieBox) -> Result<Vec<SampleLocation>, Error> {
-        StructureDataReader::new(SAMPLE_COUNT_LIMIT)
-            .handle_movie(movie)
-            .map(Iterator::collect)
-    }
 
     /// `(offset, size, decoding_time)` of the samples of each track, in decoding order
     fn by_track(locations: &[SampleLocation]) -> Samples {

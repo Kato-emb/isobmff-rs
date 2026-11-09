@@ -130,15 +130,21 @@ pub fn gpac_children(node: &Value) -> Vec<&Value> {
         .into_iter()
         .flatten()
         .filter(|(key, _)| !key.starts_with('@'))
-        .flat_map(|(_, value)| {
-            if let Value::Array(items) = value {
-                items.iter().collect()
-            } else {
-                vec![value]
-            }
-        })
+        .flat_map(|(_, value)| gpac_list(value))
         .filter(|item| item.get("@Type").is_some() && item.get("@Size").is_some())
         .collect()
+}
+
+/// Returns what GPAC reports under one name, which it reports as an array where there are several and as the value alone where there is one
+#[must_use]
+pub fn gpac_list(value: &Value) -> Vec<&Value> {
+    match value {
+        Value::Array(items) => items.iter().collect(),
+        Value::Null => Vec::new(),
+        value @ (Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Object(_)) => {
+            vec![value]
+        }
+    }
 }
 
 /// Returns the type and total GPAC reports for a box, as GPAC spells them

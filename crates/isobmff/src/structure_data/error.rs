@@ -1,20 +1,23 @@
-//! Why a [`StructureDataReader`](super::StructureDataReader) refuses a box
+//! Why a [`StructureDataReader`](super::StructureDataReader) refuses a box, or a [`SampleTableWriter`](super::SampleTableWriter) a sample
 
 use core::fmt;
 
 use isobmff_core::BoxType;
 
-/// Why a [`StructureDataReader`](super::StructureDataReader) refuses a box
+/// Why a [`StructureDataReader`](super::StructureDataReader) refuses a box, or a [`SampleTableWriter`](super::SampleTableWriter) a sample
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Error {
     /// The tracks declare more samples than
-    /// [`StructureDataReader::new`](super::StructureDataReader::new) allows;
-    /// nothing is allocated for them
+    /// [`StructureDataReader::new`](super::StructureDataReader::new) allows,
+    /// and nothing is allocated for them; or a sample is one more than
+    /// [`SampleTableWriter::new`](super::SampleTableWriter::new) allows, and
+    /// it is not taken
     SampleCountOverLimit {
-        /// Number of samples the tracks declare
+        /// Number of samples the tracks declare, or the writer would hold
         sample_count: u64,
-        /// The most samples the reader resolves from one box
+        /// The most samples the reader resolves from one box, or the writer
+        /// holds
         limit: u64,
     },
     /// A table the sample table of a track needs is missing
@@ -60,6 +63,37 @@ pub enum Error {
         /// `track_ID` of the track
         track_id: u32,
     },
+    /// The `sample_composition_time_offset` of a sample does not fit the 32
+    /// bits of a `ctts` entry, signed, ISO/IEC 14496-12 §8.6.1.3
+    CompositionOffsetOutOfRange {
+        /// `sample_composition_time_offset` of the sample
+        sample_composition_time_offset: i64,
+    },
+    /// The `sample_description_index` of a sample names no entry of the
+    /// `stsd` the sample table is written with
+    SampleDescriptionIndexOutOfRange {
+        /// `sample_description_index` of the sample, from 1
+        sample_description_index: u32,
+    },
+    /// A sample is of another track than the samples a
+    /// [`SampleTableWriter`](super::SampleTableWriter) has taken
+    OtherTrack {
+        /// `track_ID` of the samples taken
+        track_id: u32,
+        /// `track_ID` of the sample
+        found: u32,
+    },
+    /// The decoding time of a sample is not the one the `sample_duration`s
+    /// of the samples before it in the track add up to, from 0, which a
+    /// time-to-sample table declares, ISO/IEC 14496-12 §8.6.1.2
+    DecodingTimeGap {
+        /// `track_ID` of the track
+        track_id: u32,
+        /// Decoding time the table declares for the sample
+        expected: u64,
+        /// Decoding time of the sample
+        found: u64,
+    },
 }
 
 impl fmt::Display for Error {
@@ -70,7 +104,7 @@ impl fmt::Display for Error {
                 limit,
             } => write!(
                 formatter,
-                "the tracks declare {sample_count} samples, over the limit of {limit}"
+                "{sample_count} samples, over the limit of {limit}"
             ),
             Self::MissingTable { track_id, box_type } => write!(
                 formatter,
@@ -103,6 +137,30 @@ impl fmt::Display for Error {
             Self::Overflow { track_id } => write!(
                 formatter,
                 "a sample of track {track_id} lies past the last offset or decoding time there can be"
+            ),
+            Self::CompositionOffsetOutOfRange {
+                sample_composition_time_offset,
+            } => write!(
+                formatter,
+                "sample_composition_time_offset {sample_composition_time_offset} does not fit 32 bits, signed"
+            ),
+            Self::SampleDescriptionIndexOutOfRange {
+                sample_description_index,
+            } => write!(
+                formatter,
+                "sample_description_index {sample_description_index} names no entry of the `stsd`"
+            ),
+            Self::OtherTrack { track_id, found } => write!(
+                formatter,
+                "a sample of track {found} follows those of track {track_id}"
+            ),
+            Self::DecodingTimeGap {
+                track_id,
+                expected,
+                found,
+            } => write!(
+                formatter,
+                "a sample of track {track_id} has decoding_time {found}, and the samples before it add up to {expected}"
             ),
         }
     }
