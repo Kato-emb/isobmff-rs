@@ -10,6 +10,7 @@ mod support;
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::path::Path;
 
     use isobmff::framing::{BoxReader, Event, FramerConfig};
@@ -21,8 +22,9 @@ mod tests {
         TrackRunSamples,
     };
     use isobmff_core::{BoxDecode, BoxDefinition};
-    use isobmff_test_support::conformance_files;
     use isobmff_test_support::fixtures::{movie, track};
+    use isobmff_test_support::serde_json::Value;
+    use isobmff_test_support::{conformance_files, gpac_list};
 
     use crate::support::{SAMPLE_COUNT_LIMIT, by_track, ffprobe_by_track};
 
@@ -286,9 +288,45 @@ mod tests {
         );
     }
 
+    /// Number of samples GPAC reports each track to have, in the sample size table of the `moov` and the track runs of every `moof`, by `track_ID`
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "indexing a JSON value yields null for a key it lacks, and never panics"
+    )]
+    fn gpac_sample_counts(report: &Value) -> BTreeMap<u32, u64> {
+        let number = |value: &Value| -> u64 { value.as_str().unwrap().parse().unwrap() };
+        let add = |counts: &mut BTreeMap<u32, u64>, track_id: u64, count: u64| {
+            let total = counts.entry(u32::try_from(track_id).unwrap()).or_insert(0);
+            *total = total.checked_add(count).unwrap();
+        };
+        let file = &report["IsoMediaFile"];
+        let mut counts = BTreeMap::new();
+        for trak in gpac_list(&file["MovieBox"]["TrackBox"]) {
+            let stbl = &trak["MediaBox"]["MediaInformationBox"]["SampleTableBox"];
+            let sizes = if stbl["SampleSizeBox"].is_null() {
+                &stbl["CompactSampleSizeBox"]
+            } else {
+                &stbl["SampleSizeBox"]
+            };
+            let track_id = number(&trak["TrackHeaderBox"]["@TrackID"]);
+            add(&mut counts, track_id, number(&sizes["@SampleCount"]));
+        }
+        for moof in gpac_list(&file["MovieFragmentBox"]) {
+            for traf in gpac_list(&moof["TrackFragmentBox"]) {
+                let track_id = number(&traf["TrackFragmentHeaderBox"]["@TrackID"]);
+                for trun in gpac_list(&traf["TrackRunBox"]) {
+                    add(&mut counts, track_id, number(&trun["@SampleCount"]));
+                }
+            }
+        }
+        counts.retain(|_, count| *count > 0);
+        counts
+    }
+
     #[test]
     #[ignore = "needs ISOBMFF_CONFORMANCE_DIR and ffprobe"]
-    fn the_fragments_of_the_conformance_files_resolve_to_the_packets_ffmpeg_reads() {
+    fn the_fragments_of_the_conformance_files_resolve_to_the_samples_gpac_counts_and_the_packets_ffmpeg_reads()
+     {
         let mut differences = Vec::new();
         let mut compared = 0;
         for file in conformance_files() {
@@ -305,6 +343,17 @@ mod tests {
                     continue;
                 }
             };
+            let counts = ours
+                .iter()
+                .map(|(&track_id, samples)| (track_id, u64::try_from(samples.len()).unwrap()))
+                .collect::<BTreeMap<_, _>>();
+            let gpac_counts = gpac_sample_counts(&file.report);
+            if counts != gpac_counts {
+                differences.push(format!(
+                    "{}: {counts:?} samples, GPAC reports {gpac_counts:?}",
+                    file.name
+                ));
+            }
             // Why compare these with this crate's demuxer alone: ffprobe
             // refuses to read them.
             let Some(theirs) = ffprobe_by_track(&file.path) else {
