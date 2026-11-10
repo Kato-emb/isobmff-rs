@@ -51,7 +51,9 @@
 //! laid end to end in a file from bytes that arrive in pieces, and
 //! [`structure_data`] resolves the samples a `moov` or a `moof` declares to where their
 //! bytes lie, and writes the sample table of a track, or a `moof`, from them. The boxes
-//! themselves are read and written with `isobmff-boxes`.
+//! themselves are read and written with [`boxes`], and the header that frames
+//! a box, the values its fields carry and the traits a box implements, such as
+//! [`BoxDecode`] and [`BoxEncode`], are at the root of the crate.
 
 #![no_std]
 
@@ -65,6 +67,9 @@ mod sample;
 pub mod structure_data;
 
 pub use demuxer::{Demuxer, DemuxerConfig};
+/// The boxes of ISO/IEC 14496-12, each read into a value and written back, from `isobmff-boxes`
+pub use isobmff_boxes as boxes;
+pub use isobmff_core::*;
 pub use muxer::{FragmentedMovieFileMuxer, MovieFileMuxer, MuxerConfig, SegmentMuxer};
 pub use sample::{SampleLocation, SampleProperties};
 

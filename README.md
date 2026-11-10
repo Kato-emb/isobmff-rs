@@ -15,7 +15,7 @@ Sans-IO reading and writing of the ISO base media file format
 | `isobmff-core` | the vocabulary a box is written in: the header that frames a box, the values its fields carry, and the traits a box implements to be read and written |
 | `isobmff-boxes` | the boxes of ISO/IEC 14496-12, each read into a value that owns its bytes and written back |
 | `isobmff` | under construction: reading a file into its samples, and writing samples into a file |
-| `isobmff-examples` | programs that read and write files with `isobmff`, through its demuxer and muxers or through its layers alone; not published |
+| `examples` | programs that read and write files with `isobmff`, through its demuxer and muxers or through its layers alone, each a file of its own run with `cargo run -p examples --example <name>`; not published |
 
 ## Minimum supported Rust version
 
