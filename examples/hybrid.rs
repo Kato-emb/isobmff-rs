@@ -1,49 +1,61 @@
 //! A movie that reads as a fragmented movie file while it is written, and as a movie file once it ends, written from the layers of `isobmff` alone
 //!
 //! The example reads a file with the demuxer, then writes its samples again
-//! with [`HybridWriter`], which uses no muxer: only the movie fragment writer
-//! and the sample table writer of [`structure_data`], the box header of
-//! [`framing`](isobmff::framing), and the boxes. The bytes written up to its `finish` are a
-//! fragmented movie file; `finish` appends a `moov` that declares every
-//! sample, and the `mdat` header it returns, written over the `free` that
-//! opens the file, puts the fragments inside one `mdat`.
+//! without a muxer, with only the movie fragment writer and the sample table
+//! writer of [`structure_data`], the `mdat` header of
+//! [`framing`](isobmff::framing), and the boxes:
+//!
+//! 1. an `ftyp`, a `free` (§8.1.2) as long as the header of an `mdat`, and a
+//!    `moov` with an `mvex` and no sample;
+//! 2. each fragment, a `moof` and the `mdat` of its samples; up to here the
+//!    file is a fragmented movie file (§8.8);
+//! 3. a `moov` without an `mvex`, whose sample tables declare every sample
+//!    where its fragment put it, and over the `free` the header of an `mdat`
+//!    that holds the first `moov` and the fragments: the file is then an
+//!    `ftyp`, one `mdat` and a `moov`.
 //!
 //! `cargo run --example hybrid -- <input> <output> [samples_per_fragment]`
 
-use isobmff::boxes::{
-    FileTypeBox, Free, FreeSpaceBox, MovieBox, MovieExtendsBox, TrackBox, TrackExtendsBox,
-};
-use isobmff::demuxer::{self, Event};
+use std::error::Error;
+
+use isobmff::boxes::{FileTypeBox, Free, FreeSpaceBox, MovieBox, MovieExtendsBox, TrackExtendsBox};
+use isobmff::demuxer::Event;
 use isobmff::framing::media_data_header;
-use isobmff::structure_data::{
-    self, MovieFragmentWriter, SampleTableWriter, TrackSampleDescription,
-};
+use isobmff::structure_data::{MovieFragmentWriter, SampleTableWriter, TrackSampleDescription};
 use isobmff::{BoxDefinition, BoxEncode, Demuxer, DemuxerConfig, SampleLocation, SampleProperties};
 
 // Why not take the limit from the muxer configuration: the example writes
 // without a muxer; this is the limit a muxer takes by default.
-/// The most samples the writer takes of a fragment, and of a track
+/// The most samples the writers take of a fragment, and of a track
 const SAMPLE_COUNT_LIMIT: u64 = 1 << 20;
 
-/// What the demuxer reads of a file: its `ftyp`, its `moov`, and every sample of its tracks with its bytes, in file order
-#[derive(Debug, Clone, PartialEq)]
-struct Read {
-    /// The `ftyp` of the file
-    file_type: FileTypeBox,
-    /// The `moov` of the file
-    movie: MovieBox,
-    /// What the structure-data declares of each sample, with its bytes
-    samples: Vec<(SampleProperties, Vec<u8>)>,
-    /// What the demuxer could not read
-    errors: Vec<demuxer::Error>,
+/// What the structure-data declares of each sample of a file, with its bytes, in file order
+type Samples = Vec<(SampleProperties, Vec<u8>)>;
+
+/// Length of the header of an `mdat` as [`media_data_header`] writes it, which the `free` that opens the movie is as long as
+const MEDIA_DATA_HEADER_LENGTH: usize = 16;
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let mut arguments = std::env::args().skip(1);
+    let usage = "usage: hybrid <input> <output> [samples_per_fragment]";
+    let (input, output) = (
+        arguments.next().ok_or(usage)?,
+        arguments.next().ok_or(usage)?,
+    );
+    let samples_per_fragment = arguments
+        .next()
+        .map_or(Ok(30), |count| count.parse::<usize>())?;
+    let (file_type, movie, samples) =
+        read(&std::fs::read(input)?).ok_or("no ftyp or no moov, or a box that does not read")?;
+    let (_, written) = write_hybrid(&file_type, &movie, &samples, samples_per_fragment)?;
+    std::fs::write(output, written)?;
+    Ok(())
 }
 
-/// Reads `file` where the demuxer asks, subscribing to every track, or returns `None` where it holds no `ftyp` or no `moov`
-#[must_use]
-fn read(file: &[u8]) -> Option<Read> {
+/// Reads `file` where the demuxer asks, every track subscribed to: its `ftyp`, its `moov`, and every sample with its bytes in file order, or `None` where it lacks one of the boxes or holds what the demuxer cannot read
+fn read(file: &[u8]) -> Option<(FileTypeBox, MovieBox, Samples)> {
     let mut demuxer = Demuxer::new(DemuxerConfig::default());
-    let (mut file_type, mut movie) = (None, None);
-    let (mut samples, mut errors) = (Vec::new(), Vec::new());
+    let (mut file_type, mut movie, mut samples, mut readable) = (None, None, Vec::new(), true);
     loop {
         while let Some(event) = demuxer.poll_event() {
             match event {
@@ -55,318 +67,122 @@ fn read(file: &[u8]) -> Option<Read> {
                     movie = Some(*moov);
                 }
                 Event::Sample(sample) => samples.push((sample.properties, sample.bytes.to_vec())),
-                Event::Error(error) => errors.push(error),
-                Event::SegmentType(_)
-                | Event::MovieFragment(_)
-                | Event::SampleLocation(_)
-                | Event::Box { .. }
-                | _ => {}
+                Event::Error(_) => readable = false,
+                _ => {}
             }
         }
         let Some(required) = demuxer.required_input() else {
             break;
         };
-        match usize::try_from(required.position)
-            .ok()
-            .and_then(|position| file.get(position..))
-        {
+        match file.get(usize::try_from(required.position).ok()?..) {
             Some(bytes) if !bytes.is_empty() => demuxer.handle_input(required.position, bytes),
             _ => demuxer.finish(),
         }
     }
-    Some(Read {
-        file_type: file_type?,
-        movie: movie?,
-        samples,
-        errors,
-    })
+    readable.then_some((file_type?, movie?, samples))
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut arguments = std::env::args().skip(1);
-    let usage = "usage: hybrid <input> <output> [samples_per_fragment]";
-    let (input, output) = (
-        arguments.next().ok_or(usage)?,
-        arguments.next().ok_or(usage)?,
-    );
-    let samples_per_fragment = arguments
-        .next()
-        .map_or(Ok(30), |count| count.parse::<usize>())?
-        .max(1);
-    let source = read(&std::fs::read(input)?).ok_or("no ftyp or no moov")?;
-    let written = write_hybrid(&source, samples_per_fragment)?.1;
-    std::fs::write(output, written)?;
-    Ok(())
-}
+/// Writes `samples`, of the tracks of `movie`, after `file_type`, a fragment for every `samples_per_fragment` of them: returns the bytes as a fragmented movie file, and the file once a `moov` declares every sample
+fn write_hybrid(
+    file_type: &FileTypeBox,
+    movie: &MovieBox,
+    samples: &[(SampleProperties, Vec<u8>)],
+    samples_per_fragment: usize,
+) -> Result<(Vec<u8>, Vec<u8>), Box<dyn Error>> {
+    let tracks: Vec<TrackSampleDescription<'_>> = movie
+        .trak
+        .iter()
+        .map(|trak| TrackSampleDescription {
+            track_id: trak.tkhd.track_id,
+            stsd: &trak.mdia.minf.stbl.stsd,
+            dref: &trak.mdia.minf.dinf.dref,
+        })
+        .collect();
+    let mut fragments = MovieFragmentWriter::new(&tracks, SAMPLE_COUNT_LIMIT);
+    let mut tables: Vec<SampleTableWriter> = tracks
+        .iter()
+        .map(|track| SampleTableWriter::new(track, SAMPLE_COUNT_LIMIT))
+        .collect();
+    let mut first_decoding_times = vec![None; tracks.len()];
 
-/// What a [`HybridWriter`] writes of the samples `source` holds, a fragment for every `samples_per_fragment` of them: the bytes before it finishes, and the file once it has
-fn write_hybrid(source: &Read, samples_per_fragment: usize) -> Result<(Vec<u8>, Vec<u8>), Error> {
+    // The `ftyp`, the `free` to write the `mdat` header over, and the `moov` of no sample
     let mut written = Vec::new();
-    let mut writer = HybridWriter::new(
-        &source.file_type,
-        source.movie.clone(),
-        SAMPLE_COUNT_LIMIT,
-        &mut written,
-    )?;
-    for (index, (properties, bytes)) in source.samples.iter().enumerate() {
-        if index > 0 && index % samples_per_fragment == 0 {
-            writer.finish_fragment(&mut written)?;
+    append(file_type, &mut written)?;
+    let free_offset = written.len();
+    let mut free = FreeSpaceBox::<Free>::default();
+    free.data = vec![0; MEDIA_DATA_HEADER_LENGTH - 8];
+    append(&free, &mut written)?;
+    append(&fragmented_movie_box(movie, &tracks), &mut written)?;
+
+    // Each fragment: its `moof`, the header of its `mdat`, its samples
+    for group in samples.chunks(samples_per_fragment.max(1)) {
+        let mut media_data = Vec::new();
+        let mut placed = Vec::new();
+        for (properties, bytes) in group {
+            let location = SampleLocation {
+                properties: *properties,
+                offset: u64::try_from(media_data.len())?,
+                size: u32::try_from(bytes.len())?,
+            };
+            fragments.handle_location(location)?;
+            let track = movie
+                .trak
+                .iter()
+                .position(|trak| trak.tkhd.track_id == properties.track_id)
+                .ok_or("a sample of a track the moov does not have")?;
+            placed.push((track, location));
+            media_data.extend_from_slice(bytes);
         }
-        writer.handle_sample(*properties, bytes)?;
+        append(&fragments.finish(), &mut written)?;
+        written.extend_from_slice(
+            &media_data_header(u64::try_from(media_data.len())?).ok_or("a fragment too long")?,
+        );
+        let media_data_offset = u64::try_from(written.len())?;
+        written.extend_from_slice(&media_data);
+
+        // Where each sample now lies in the file, for the sample table of its track
+        for (track, location) in placed {
+            let properties = location.properties;
+            let first = *first_decoding_times[track].get_or_insert(properties.decoding_time);
+            tables[track].handle_location(SampleLocation {
+                properties: SampleProperties {
+                    decoding_time: properties.decoding_time - first,
+                    ..properties
+                },
+                offset: media_data_offset + location.offset,
+                size: location.size,
+            })?;
+        }
     }
-    writer.finish_fragment(&mut written)?;
     let fragmented = written.clone();
-    let header = writer.finish(&mut written)?;
-    let free = usize::try_from(header.offset).map_err(|_| Error::Overflow)?;
-    written[free..free + header.bytes.len()].copy_from_slice(&header.bytes);
+
+    // The `moov` that declares every sample, and the `mdat` header over the `free`
+    let mut moov = movie.clone();
+    let edits_run_to_the_end = moov.mvex.take().is_some_and(|mvex| mvex.mehd.is_none());
+    for (trak, table) in moov.trak.iter_mut().zip(&mut tables) {
+        trak.mdia.minf.stbl = table.finish();
+    }
+    declare_durations(&mut moov, edits_run_to_the_end);
+    let payload_length = written.len() - free_offset - MEDIA_DATA_HEADER_LENGTH;
+    let header = media_data_header(u64::try_from(payload_length)?).ok_or("a file too long")?;
+    written[free_offset..free_offset + MEDIA_DATA_HEADER_LENGTH].copy_from_slice(&header);
+    append(&moov, &mut written)?;
     Ok((fragmented, written))
 }
 
-/// Length of the header of an `mdat` as [`media_data_header`] writes it, which the `free` that opens the movie is as long as
-const MEDIA_DATA_HEADER_LENGTH: u64 = 16;
-
-/// Why a [`HybridWriter`] refuses a sample or a movie
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum Error {
-    /// A movie fragment or a sample table refuses a sample
-    StructureData(structure_data::Error),
-    /// A box does not write
-    Encode(isobmff::Error),
-    /// The file would grow past the last offset a file can have
-    Overflow,
-}
-
-impl core::fmt::Display for Error {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::StructureData(_) => write!(formatter, "the structure-data refuses the sample"),
-            Self::Encode(_) => write!(formatter, "a box does not write"),
-            Self::Overflow => write!(
-                formatter,
-                "the file grows past the last offset there can be"
-            ),
-        }
+/// The `moov` of the tracks of `movie`, described by `tracks`, which declares no sample and extends each track into movie fragments
+fn fragmented_movie_box(movie: &MovieBox, tracks: &[TrackSampleDescription<'_>]) -> MovieBox {
+    let mut moov = movie.clone();
+    let mut mvex = MovieExtendsBox::default();
+    for (trak, track) in moov.trak.iter_mut().zip(tracks) {
+        trak.mdia.minf.stbl = SampleTableWriter::new(track, 0).finish();
+        let mut trex = TrackExtendsBox::default();
+        trex.track_id = track.track_id;
+        trex.default_sample_description_index = 1;
+        mvex.trex.push(trex);
     }
-}
-
-impl core::error::Error for Error {
-    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
-        match self {
-            Self::StructureData(source) => Some(source),
-            Self::Encode(source) => Some(source),
-            Self::Overflow => None,
-        }
-    }
-}
-
-/// The header of the `mdat` a caller writes over the `free` that opens the movie, once the [`HybridWriter`] has finished
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct MediaDataHeader {
-    /// File offset of the `free`
-    offset: u64,
-    /// The header of an `mdat` that holds every byte from the end of the `free` to the `moov` that ends the file
-    bytes: [u8; 16],
-}
-
-/// Writer of a movie of fragments that, once it ends, lie in one `mdat` that a `moov` after them declares
-///
-/// The movie is written in the order ISO/IEC 14496-12 lays a fragmented
-/// movie file out (§8.8): an `ftyp`; a `free` (§8.1.2) as long as the header
-/// of an `mdat`; a `moov` with an `mvex` and no sample; then each fragment, a
-/// `moof` that [`MovieFragmentWriter`] writes and the `mdat` of its samples.
-/// Until [`finish`](Self::finish), the bytes written read as a fragmented
-/// movie file. `finish` appends a `moov` without an `mvex` whose sample
-/// tables, which [`SampleTableWriter`] writes, declare every sample where its
-/// fragment put it, and returns the header of an `mdat` that the caller
-/// writes over the `free`. The file then reads as an `ftyp`, one `mdat` and a
-/// `moov`: the first `moov` and the fragments lie inside the `mdat`.
-///
-/// The writer takes the tracks of a `moov` it is given, and keeps each of
-/// them but for its sample table and durations. It uses no demuxer and no
-/// muxer of `isobmff`.
-#[derive(Debug, Clone)]
-struct HybridWriter {
-    movie: MovieBox,
-    fragments: MovieFragmentWriter,
-    tables: Vec<SampleTableWriter>,
-    /// Decoding time of the first sample of each track, from which its sample
-    /// table counts
-    first_decoding_times: Vec<Option<u64>>,
-    /// The samples of the fragment being written, each with the index of its
-    /// track and at its offset in the media data of the fragment
-    fragment: Vec<(usize, SampleLocation)>,
-    media_data: Vec<u8>,
-    /// File offset of the `free` that opens the movie
-    free_offset: u64,
-    /// File offset of the next byte written
-    position: u64,
-}
-
-impl HybridWriter {
-    /// Creates a writer of the tracks of `movie` in a file that opens with `file_type`, and appends the `ftyp`, the `free` and the `moov` of no sample to `out`
-    ///
-    /// The writer takes at most `sample_count_limit` samples of a fragment,
-    /// and of each track: it holds some tens of bytes of each until it ends.
-    ///
-    /// # Errors
-    /// * [`Error::Encode`]: a box does not write.
-    /// * [`Error::Overflow`]: the boxes are longer than a file can be.
-    fn new(
-        file_type: &FileTypeBox,
-        movie: MovieBox,
-        sample_count_limit: u64,
-        out: &mut Vec<u8>,
-    ) -> Result<Self, Error> {
-        let tracks: Vec<TrackSampleDescription<'_>> = movie.trak.iter().map(description).collect();
-        let fragments = MovieFragmentWriter::new(&tracks, sample_count_limit);
-        let tables: Vec<SampleTableWriter> = tracks
-            .iter()
-            .map(|track| SampleTableWriter::new(track, sample_count_limit))
-            .collect();
-        let mut fragmented = movie.clone();
-        let mut mvex = MovieExtendsBox::default();
-        for (trak, table) in fragmented.trak.iter_mut().zip(&tables) {
-            trak.mdia.minf.stbl = table.clone().finish();
-            let mut trex = TrackExtendsBox::default();
-            trex.track_id = trak.tkhd.track_id;
-            trex.default_sample_description_index = 1;
-            mvex.trex.push(trex);
-        }
-        fragmented.mvex = Some(mvex);
-
-        let mut free = FreeSpaceBox::<Free>::default();
-        free.data = vec![0; 8];
-        let ftyp = encoded(file_type)?;
-        let opening = [ftyp.as_slice(), &encoded(&free)?, &encoded(&fragmented)?].concat();
-        let free_offset = length_of(out.len().saturating_add(ftyp.len()))?;
-        out.extend_from_slice(&opening);
-        Ok(Self {
-            first_decoding_times: vec![None; movie.trak.len()],
-            movie,
-            fragments,
-            tables,
-            fragment: Vec::new(),
-            media_data: Vec::new(),
-            free_offset,
-            position: length_of(out.len())?,
-        })
-    }
-
-    /// Takes the next sample of the fragment being written, with its bytes
-    ///
-    /// # Errors
-    /// * [`Error::StructureData`]: the movie fragment refuses the sample, as
-    ///   where it is of a track the movie does not have, or the fragment holds
-    ///   as many samples as the limit.
-    /// * [`Error::Overflow`]: the sample is longer than a fragment counts.
-    fn handle_sample(&mut self, properties: SampleProperties, bytes: &[u8]) -> Result<(), Error> {
-        let track = self
-            .movie
-            .trak
-            .iter()
-            .position(|trak| trak.tkhd.track_id == properties.track_id);
-        let location = SampleLocation {
-            properties,
-            offset: length_of(self.media_data.len())?,
-            size: u32::try_from(bytes.len()).map_err(|_| Error::Overflow)?,
-        };
-        self.fragments
-            .handle_location(location)
-            .map_err(Error::StructureData)?;
-        if let Some(track) = track {
-            self.fragment.push((track, location));
-        }
-        self.media_data.extend_from_slice(bytes);
-        Ok(())
-    }
-
-    /// Ends the fragment being written, and appends its `moof` and its `mdat` to `out`
-    ///
-    /// # Errors
-    /// * [`Error::StructureData`]: a sample table refuses a sample of the
-    ///   fragment, as where the track holds as many samples as the limit.
-    /// * [`Error::Encode`]: the `moof` does not write.
-    /// * [`Error::Overflow`]: the file would grow past the last offset there
-    ///   can be.
-    fn finish_fragment(&mut self, out: &mut Vec<u8>) -> Result<(), Error> {
-        if !self.fragments.has_samples() {
-            return Ok(());
-        }
-        let moof = encoded(&self.fragments.finish())?;
-        let media_data_length = length_of(self.media_data.len())?;
-        let header = media_data_header(media_data_length).ok_or(Error::Overflow)?;
-        let media_data_offset = self
-            .position
-            .checked_add(length_of(moof.len())?)
-            .and_then(|offset| offset.checked_add(MEDIA_DATA_HEADER_LENGTH))
-            .ok_or(Error::Overflow)?;
-        for (track, location) in self.fragment.drain(..) {
-            let properties = location.properties;
-            let (Some(table), Some(first)) = (
-                self.tables.get_mut(track),
-                self.first_decoding_times.get_mut(track),
-            ) else {
-                continue;
-            };
-            let first = *first.get_or_insert(properties.decoding_time);
-            table
-                .handle_location(SampleLocation {
-                    properties: SampleProperties {
-                        decoding_time: properties.decoding_time.saturating_sub(first),
-                        ..properties
-                    },
-                    offset: media_data_offset
-                        .checked_add(location.offset)
-                        .ok_or(Error::Overflow)?,
-                    size: location.size,
-                })
-                .map_err(Error::StructureData)?;
-        }
-        out.extend_from_slice(&moof);
-        out.extend_from_slice(&header);
-        out.append(&mut self.media_data);
-        self.position = media_data_offset
-            .checked_add(media_data_length)
-            .ok_or(Error::Overflow)?;
-        Ok(())
-    }
-
-    /// Ends the last fragment, appends the `moov` that declares every sample to `out`, and returns the header the caller writes over the `free`
-    ///
-    /// # Errors
-    /// As [`finish_fragment`](Self::finish_fragment), and [`Error::Encode`]
-    /// where the `moov` does not write.
-    fn finish(mut self, out: &mut Vec<u8>) -> Result<MediaDataHeader, Error> {
-        self.finish_fragment(out)?;
-        let mut moov = self.movie;
-        let edits_run_to_the_end = moov.mvex.take().is_some_and(|mvex| mvex.mehd.is_none());
-        for (trak, table) in moov.trak.iter_mut().zip(&mut self.tables) {
-            trak.mdia.minf.stbl = table.finish();
-        }
-        declare_durations(&mut moov, edits_run_to_the_end);
-        let payload_length = self
-            .position
-            .checked_sub(self.free_offset)
-            .and_then(|length| length.checked_sub(MEDIA_DATA_HEADER_LENGTH))
-            .ok_or(Error::Overflow)?;
-        let bytes = media_data_header(payload_length).ok_or(Error::Overflow)?;
-        out.extend_from_slice(&encoded(&moov)?);
-        Ok(MediaDataHeader {
-            offset: self.free_offset,
-            bytes,
-        })
-    }
-}
-
-/// The sample entries and data references of `trak`
-fn description(trak: &TrackBox) -> TrackSampleDescription<'_> {
-    TrackSampleDescription {
-        track_id: trak.tkhd.track_id,
-        stsd: &trak.mdia.minf.stbl.stsd,
-        dref: &trak.mdia.minf.dinf.dref,
-    }
+    moov.mvex = Some(mvex);
+    moov
 }
 
 /// Sets the durations of the media of each track of `moov`, of the track and of the movie, to those its sample tables and edit lists give
@@ -430,15 +246,17 @@ fn declare_durations(moov: &mut MovieBox, edits_run_to_the_end: bool) {
     moov.mvhd.version = u8::from(moov.mvhd.duration > u64::from(u32::MAX));
 }
 
-/// The whole box `value` forms
-fn encoded(value: &(impl BoxEncode + BoxDefinition)) -> Result<Vec<u8>, Error> {
-    let mut bytes = vec![0; usize::try_from(value.encoded_len()).map_err(|_| Error::Overflow)?];
-    value.encode(&mut bytes).map_err(Error::Encode)?;
-    Ok(bytes)
-}
-
-fn length_of(length: usize) -> Result<u64, Error> {
-    u64::try_from(length).map_err(|_| Error::Overflow)
+// Why not encode into a new `Vec` and copy it: the box is encoded in place at
+// the end of what is written.
+/// Appends the whole box `value` forms to `out`
+fn append(
+    value: &(impl BoxEncode + BoxDefinition),
+    out: &mut Vec<u8>,
+) -> Result<(), Box<dyn Error>> {
+    let start = out.len();
+    out.resize(start + usize::try_from(value.encoded_len())?, 0);
+    value.encode(&mut out[start..])?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -451,7 +269,7 @@ mod tests {
     use isobmff::structure_data;
     use isobmff_test_support::{conformance_files, ffprobe, ffprobe_packets};
 
-    use super::{Error, read, write_hybrid};
+    use super::{read, write_hybrid};
 
     /// The fixtures of the reading tests, two movie files and two of movie fragments
     const FIXTURES: [&[u8]; 4] = [
@@ -507,31 +325,25 @@ mod tests {
     #[test]
     fn a_movie_reads_as_fragmented_while_it_is_written_and_as_a_movie_file_once_it_ends() {
         for file in FIXTURES {
-            let source = read(file).unwrap();
-            let (fragmented, finished) = write_hybrid(&source, 16).unwrap();
+            let (file_type, movie, samples) = read(file).unwrap();
+            let (fragmented, finished) = write_hybrid(&file_type, &movie, &samples, 16).unwrap();
 
-            let while_written = read(&fragmented).unwrap();
+            let (_, movie_while_written, while_written) = read(&fragmented).unwrap();
             assert_eq!(
-                (
-                    while_written.samples,
-                    while_written.movie.mvex.is_some(),
-                    while_written.errors
-                ),
-                (source.samples.clone(), true, Vec::new())
+                (while_written, movie_while_written.mvex.is_some()),
+                (samples.clone(), true)
             );
 
-            let once_ended = read(&finished).unwrap();
+            let (_, movie_once_ended, once_ended) = read(&finished).unwrap();
             assert_eq!(
                 (
-                    once_ended.samples,
-                    once_ended.movie.mvex.is_some(),
-                    once_ended.errors,
+                    once_ended,
+                    movie_once_ended.mvex.is_some(),
                     top_level_box_types(&finished)
                 ),
                 (
-                    counted_from_the_first(&source.samples),
+                    counted_from_the_first(&samples),
                     false,
-                    Vec::new(),
                     ["ftyp", "mdat", "moov"].map(String::from).to_vec()
                 )
             );
@@ -560,20 +372,25 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let (mut differences, mut written_files, mut compared, mut refused) = (Vec::new(), 0, 0, 0);
         for file in conformance_files() {
-            let Some(source) = read(&file.bytes) else {
-                continue;
-            };
             // Why skip these: a file the demuxer reports an error in, such as
             // one whose samples lie in another file, has none to write.
-            if !source.errors.is_empty() || source.samples.is_empty() {
+            let Some((file_type, movie, samples)) = read(&file.bytes) else {
+                continue;
+            };
+            if samples.is_empty() {
                 continue;
             }
-            let (fragmented, finished) = match write_hybrid(&source, 30) {
+            let (fragmented, finished) = match write_hybrid(&file_type, &movie, &samples, 30) {
                 Ok(written) => written,
                 // Why accept this refusal: a `tfdt` is the sum of the
                 // durations of the samples before it, §8.8.12, and the source
                 // jumps.
-                Err(Error::StructureData(structure_data::Error::DecodingTimeGap { .. })) => {
+                Err(error)
+                    if matches!(
+                        error.downcast_ref(),
+                        Some(structure_data::Error::DecodingTimeGap { .. })
+                    ) =>
+                {
                     refused += 1;
                     continue;
                 }
@@ -583,17 +400,15 @@ mod tests {
                 }
             };
             written_files += 1;
-            let while_written = read(&fragmented).unwrap();
-            let once_ended = read(&finished).unwrap();
-            if (&while_written.samples, &while_written.errors) != (&source.samples, &Vec::new()) {
+            let while_written = read(&fragmented).map(|(_, _, samples)| samples);
+            let once_ended = read(&finished).map(|(_, _, samples)| samples);
+            if while_written.as_ref() != Some(&samples) {
                 differences.push(format!(
                     "{}: the samples read while written differ",
                     file.name
                 ));
             }
-            if (&once_ended.samples, &once_ended.errors)
-                != (&counted_from_the_first(&source.samples), &Vec::new())
-            {
+            if once_ended != Some(counted_from_the_first(&samples)) {
                 differences.push(format!("{}: the samples read once ended differ", file.name));
             }
             // Why compare these with this crate's demuxer alone: ffprobe

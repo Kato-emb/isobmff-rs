@@ -3,18 +3,24 @@
 //! The example reads every sample of a file with [`Demuxer`], then hands
 //! them to [`MovieFileMuxer`], or with `--fragmented` to
 //! [`FragmentedMovieFileMuxer`], which ends a fragment where one of the file
-//! did.
+//! did, and where the next sample would pass the limits of the muxer.
 //!
 //! `cargo run --example remux -- <input> <output> [--fragmented]`
 
+use std::error::Error;
+
 use isobmff::boxes::{FileTypeBox, MovieBox};
-use isobmff::demuxer::{Error as DemuxError, Event};
-use isobmff::muxer::{Error, MovieDescription, TrackDescription};
+use isobmff::demuxer::Event;
+use isobmff::muxer::{self, MovieDescription, TrackDescription};
 use isobmff::{
-    Demuxer, DemuxerConfig, FragmentedMovieFileMuxer, MovieFileMuxer, MuxerConfig, SampleProperties,
+    Demuxer, DemuxerConfig, FragmentedMovieFileMuxer, MovieFileMuxer, MuxerConfig,
+    SampleProperties, structure_data,
 };
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// What the structure-data declares of each sample of a file, with its bytes, in file order
+type Samples = Vec<(SampleProperties, Vec<u8>)>;
+
+fn main() -> Result<(), Box<dyn Error>> {
     let mut arguments = std::env::args().skip(1);
     let usage = "usage: remux <input> <output> [--fragmented]";
     let (input, output) = (
@@ -22,38 +28,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         arguments.next().ok_or(usage)?,
     );
     let fragmented = arguments.next().as_deref() == Some("--fragmented");
-    let source = read(&std::fs::read(input)?).ok_or("no ftyp or no moov")?;
+    let (file_type, movie, samples, fragment_starts) =
+        read(&std::fs::read(input)?).ok_or("no ftyp or no moov, or a box that does not read")?;
     let written = if fragmented {
-        fragmented_movie_file(&source)?
+        fragmented_movie_file(&file_type, &movie, &samples, &fragment_starts)?
     } else {
-        movie_file(&source)?
+        movie_file(&file_type, &movie, &samples)?
     };
     std::fs::write(output, written)?;
     Ok(())
 }
 
-/// What the demuxer reads of a file: its `ftyp`, its `moov`, and every sample of its tracks with its bytes, in file order
-#[derive(Debug, Clone, PartialEq)]
-struct Read {
-    /// The `ftyp` of the file
-    file_type: FileTypeBox,
-    /// The `moov` of the file
-    movie: MovieBox,
-    /// What the structure-data declares of each sample, with its bytes
-    samples: Vec<(SampleProperties, Vec<u8>)>,
-    /// Index in `samples` of the first sample read after each `moof`, in the
-    /// order the boxes come
-    fragment_starts: Vec<usize>,
-    /// What the demuxer could not read
-    errors: Vec<DemuxError>,
-}
-
-/// Reads `file` where the demuxer asks, subscribing to every track, or returns `None` where it holds no `ftyp` or no `moov`
-#[must_use]
-fn read(file: &[u8]) -> Option<Read> {
+/// Reads `file` where the demuxer asks, every track subscribed to: its `ftyp`, its `moov`, every sample with its bytes in file order, and the index of the first sample after each `moof`, or `None` where it lacks one of the boxes or holds what the demuxer cannot read
+fn read(file: &[u8]) -> Option<(FileTypeBox, MovieBox, Samples, Vec<usize>)> {
     let mut demuxer = Demuxer::new(DemuxerConfig::default());
-    let (mut file_type, mut movie) = (None, None);
-    let (mut samples, mut fragment_starts, mut errors) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut file_type, mut movie, mut readable) = (None, None, true);
+    let (mut samples, mut fragment_starts) = (Vec::new(), Vec::new());
     loop {
         while let Some(event) = demuxer.poll_event() {
             match event {
@@ -66,79 +56,73 @@ fn read(file: &[u8]) -> Option<Read> {
                 }
                 Event::MovieFragment(_) => fragment_starts.push(samples.len()),
                 Event::Sample(sample) => samples.push((sample.properties, sample.bytes.to_vec())),
-                Event::Error(error) => errors.push(error),
-                Event::SegmentType(_) | Event::SampleLocation(_) | Event::Box { .. } | _ => {}
+                Event::Error(_) => readable = false,
+                _ => {}
             }
         }
         let Some(required) = demuxer.required_input() else {
             break;
         };
-        match usize::try_from(required.position)
-            .ok()
-            .and_then(|position| file.get(position..))
-        {
+        match file.get(usize::try_from(required.position).ok()?..) {
             Some(bytes) if !bytes.is_empty() => demuxer.handle_input(required.position, bytes),
             _ => demuxer.finish(),
         }
     }
-    Some(Read {
-        file_type: file_type?,
-        movie: movie?,
-        samples,
-        fragment_starts,
-        errors,
-    })
+    readable.then_some((file_type?, movie?, samples, fragment_starts))
 }
 
-/// Returns the movie file of the samples `source` holds: its `ftyp`, one `mdat` and the `moov` that declares them
-///
-/// # Errors
-/// What [`MovieFileMuxer`] refuses of the movie or its samples.
-fn movie_file(source: &Read) -> Result<Vec<u8>, Error> {
+/// Returns the movie file of `samples`, of the tracks of `movie`: its `ftyp`, one `mdat` and the `moov` that declares them
+fn movie_file(
+    file_type: &FileTypeBox,
+    movie: &MovieBox,
+    samples: &Samples,
+) -> Result<Vec<u8>, muxer::Error> {
     let mut muxer = MovieFileMuxer::new(
-        MovieDescription::from(&source.movie),
+        MovieDescription::from(movie),
         MuxerConfig::default(),
-        source.file_type.clone(),
+        file_type.clone(),
     )?;
-    for trak in &source.movie.trak {
+    for trak in &movie.trak {
         muxer.add_track(TrackDescription::from(trak))?;
     }
     let mut written = Vec::new();
-    for (properties, bytes) in &source.samples {
+    for (properties, bytes) in samples {
         muxer.handle_sample(*properties, bytes)?;
         muxer.poll_output(&mut written);
     }
     let header = muxer.finish()?;
     muxer.poll_output(&mut written);
+    // The length of the `mdat` is known only now: write its header over the first
     let first = usize::try_from(header.offset).unwrap_or(usize::MAX);
     written[first..first + header.bytes.len()].copy_from_slice(&header.bytes);
     Ok(written)
 }
 
-/// Returns the fragmented movie file of the samples `source` holds, a fragment ending where one of `source` does, or where the next sample would pass the limits of the muxer
-///
-/// # Errors
-/// What [`FragmentedMovieFileMuxer`] refuses of the movie or its samples.
-fn fragmented_movie_file(source: &Read) -> Result<Vec<u8>, Error> {
+/// Returns the fragmented movie file of `samples`, of the tracks of `movie`, a fragment ending at each of `fragment_starts` and where the next sample would pass the limits of the muxer
+fn fragmented_movie_file(
+    file_type: &FileTypeBox,
+    movie: &MovieBox,
+    samples: &Samples,
+    fragment_starts: &[usize],
+) -> Result<Vec<u8>, muxer::Error> {
     let mut muxer = FragmentedMovieFileMuxer::new(
-        MovieDescription::from(&source.movie),
+        MovieDescription::from(movie),
         MuxerConfig::default(),
-        source.file_type.clone(),
+        file_type.clone(),
     )?;
-    for trak in &source.movie.trak {
+    for trak in &movie.trak {
         muxer.add_track(TrackDescription::from(trak))?;
     }
     let mut written = Vec::new();
-    for (index, (properties, bytes)) in source.samples.iter().enumerate() {
-        if source.fragment_starts.binary_search(&index).is_ok() {
+    for (index, (properties, bytes)) in samples.iter().enumerate() {
+        if fragment_starts.binary_search(&index).is_ok() {
             muxer.finish_fragment()?;
         }
         match muxer.handle_sample(*properties, bytes) {
+            // The fragment is full: end it, and hand the sample over again
             Err(
-                Error::BufferFull { .. }
-                | Error::StructureData(isobmff::structure_data::Error::SampleCountOverLimit {
-                    ..
-                }),
+                muxer::Error::BufferFull { .. }
+                | muxer::Error::StructureData(structure_data::Error::SampleCountOverLimit { .. }),
             ) => {
                 muxer.poll_output(&mut written);
                 muxer.finish_fragment()?;
@@ -164,13 +148,13 @@ mod tests {
             include_bytes!("../crates/isobmff/tests/fixtures/movie_moov_last.mp4").as_slice(),
             include_bytes!("../crates/isobmff/tests/fixtures/fragmented.mp4"),
         ] {
-            let source = read(file).unwrap();
-            for written in [movie_file(&source), fragmented_movie_file(&source)] {
-                let read_back = read(&written.unwrap()).unwrap();
-                assert_eq!(
-                    (read_back.samples, read_back.errors),
-                    (source.samples.clone(), Vec::new())
-                );
+            let (file_type, movie, samples, fragment_starts) = read(file).unwrap();
+            for written in [
+                movie_file(&file_type, &movie, &samples),
+                fragmented_movie_file(&file_type, &movie, &samples, &fragment_starts),
+            ] {
+                let (_, _, read_back, _) = read(&written.unwrap()).unwrap();
+                assert_eq!(read_back, samples);
             }
         }
     }
