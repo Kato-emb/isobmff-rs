@@ -1,4 +1,4 @@
-//! Why a [`StructureDataReader`](super::StructureDataReader) refuses a box, or a writer a sample
+//! Why a [`StructureDataReader`](super::StructureDataReader) refuses a box, a writer a sample, or [`relocate_offsets`](super::relocate_offsets) an offset
 
 use core::fmt;
 
@@ -112,6 +112,14 @@ pub enum Error {
         /// Decoding time of the sample
         found: u64,
     },
+    /// [`relocate_offsets`](super::relocate_offsets) is given no offset to
+    /// move an offset of a track to
+    OffsetNotRelocated {
+        /// `track_ID` of the track
+        track_id: u32,
+        /// Offset, in the file the `moov` is in, that is not moved
+        offset: u64,
+    },
     /// A box does not write
     Encode(isobmff_core::Error),
 }
@@ -192,6 +200,10 @@ impl fmt::Display for Error {
                 formatter,
                 "a sample of track {track_id} has decoding_time {found}, and the samples before it add up to {expected}"
             ),
+            Self::OffsetNotRelocated { track_id, offset } => write!(
+                formatter,
+                "offset {offset} of track {track_id} is not moved"
+            ),
             Self::Encode(_) => write!(formatter, "a box does not write"),
         }
     }
@@ -213,7 +225,8 @@ impl core::error::Error for Error {
             | Self::UnknownTrack { .. }
             | Self::MissingDefault { .. }
             | Self::OtherTrack { .. }
-            | Self::DecodingTimeGap { .. } => None,
+            | Self::DecodingTimeGap { .. }
+            | Self::OffsetNotRelocated { .. } => None,
         }
     }
 }

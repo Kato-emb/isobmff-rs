@@ -5,12 +5,14 @@
 //! [`SampleLocation`](crate::SampleLocation) of each sample they declare. [`SampleTableWriter`] takes the locations of the samples of
 //! a track and writes the sample table that declares them, and
 //! [`MovieFragmentWriter`] the samples of each fragment and writes the `moof`
-//! that declares them.
+//! that declares them. [`relocate_offsets`] moves the offsets a `moov` gives
+//! into the file it is in.
 
 mod error;
 mod movie_fragment;
 mod movie_fragment_writer;
 mod reader;
+mod relocate;
 mod sample;
 mod sample_table;
 mod sample_table_writer;
@@ -19,5 +21,6 @@ pub use error::Error;
 pub use movie_fragment::movie_fragment_sample_count;
 pub use movie_fragment_writer::MovieFragmentWriter;
 pub use reader::StructureDataReader;
+pub use relocate::relocate_offsets;
 pub use sample::TrackSampleDescription;
 pub use sample_table_writer::SampleTableWriter;

@@ -253,18 +253,7 @@ impl SampleTableWriter {
         let offsets = chunks
             .iter()
             .map(|chunk| chunk.first().map_or(0, |sample| sample.offset));
-        let chunk_offset = match offsets.clone().map(u32::try_from).collect() {
-            Ok(compact) => {
-                let mut stco = ChunkOffsetBox::default();
-                stco.chunk_offsets = compact;
-                ChunkOffsetVariant::ChunkOffset(stco)
-            }
-            Err(_) => {
-                let mut co64 = ChunkLargeOffsetBox::default();
-                co64.chunk_offsets = offsets.collect();
-                ChunkOffsetVariant::ChunkLargeOffset(co64)
-            }
-        };
+        let chunk_offset = chunk_offset_table(offsets);
 
         let mut stsz = SampleSizeBox::default();
         stsz.sample_sizes = match samples
@@ -328,5 +317,21 @@ impl SampleTableWriter {
         self.samples.clear();
         self.decoding_time = 0;
         stbl
+    }
+}
+
+/// The chunk offset table of `offsets`: a `stco` where every offset fits 32 bits, a `co64` otherwise, ISO/IEC 14496-12 §8.7.5
+pub(super) fn chunk_offset_table(offsets: impl Iterator<Item = u64> + Clone) -> ChunkOffsetVariant {
+    match offsets.clone().map(u32::try_from).collect() {
+        Ok(compact) => {
+            let mut stco = ChunkOffsetBox::default();
+            stco.chunk_offsets = compact;
+            ChunkOffsetVariant::ChunkOffset(stco)
+        }
+        Err(_) => {
+            let mut co64 = ChunkLargeOffsetBox::default();
+            co64.chunk_offsets = offsets.collect();
+            ChunkOffsetVariant::ChunkLargeOffset(co64)
+        }
     }
 }
