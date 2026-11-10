@@ -1,0 +1,25 @@
+[package]
+name = "isobmff-examples"
+version = "0.0.0"
+description = "Programs that read and write ISO base media files with isobmff, through its demuxer and muxers or through its layers alone"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+isobmff = { path = "../crates/isobmff" }
+isobmff-boxes.workspace = true
+isobmff-core = { workspace = true, features = ["alloc"] }
+
+[dev-dependencies]
+# Reads the conformance files, and runs ffprobe on what the examples write.
+isobmff-test-support.workspace = true
+
+[lints]
+workspace = true
