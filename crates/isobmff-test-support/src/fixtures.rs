@@ -2,8 +2,9 @@
 
 use isobmff_boxes::{
     ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, DataEntry, DataEntryUrlBox, MovieBox,
-    SampleDescription, SampleEntry, SampleSizeBox, SampleSizeVariant, SampleSizes,
-    SampleToChunkBox, SampleToChunkEntry, TimeToSampleBox, TimeToSampleEntry, TrackBox,
+    MovieExtendsBox, MovieFragmentBox, SampleDescription, SampleEntry, SampleSizeBox,
+    SampleSizeVariant, SampleSizes, SampleToChunkBox, SampleToChunkEntry, TimeToSampleBox,
+    TimeToSampleEntry, TrackBox, TrackExtendsBox, TrackFragmentBox, TrackRunBox, TrackRunSamples,
 };
 use isobmff_core::{BoxDefinition, BoxEncode, Utf8String};
 
@@ -124,4 +125,75 @@ pub fn movie(tracks: impl IntoIterator<Item = TrackBox>) -> MovieBox {
     let mut movie = MovieBox::default();
     movie.trak = tracks.into_iter().collect();
     movie
+}
+
+/// Returns a movie file whose `count` movie fragments come before the samples they declare
+///
+/// The file holds track 1, whose `moov` declares no sample. Each of the
+/// `count` fragments that follow declares one sample, and every one of
+/// those samples lies in one `mdat` after the last fragment. One more
+/// fragment then follows, its sample in an `mdat` after it.
+///
+/// Each sample is 4 bytes lasting 20, its sample entry the first, as the
+/// `trex` of the track gives them. The fragments give no `tfdt`, so the
+/// decoding time of each sample is the sum of the durations of the samples
+/// resolved before it.
+///
+/// # Panics
+///
+/// * A length passes what a `u64` counts.
+#[must_use]
+#[expect(
+    clippy::unwrap_used,
+    reason = "a test of a file longer than a u64 counts fails"
+)]
+pub fn fragments_ahead_of_their_samples(count: usize) -> Vec<u8> {
+    let mut movie = movie([track(1, 20, &[], &[], &[])]);
+    let mut trex = TrackExtendsBox::default();
+    trex.track_id = 1;
+    trex.default_sample_description_index = 1;
+    trex.default_sample_duration = 20;
+    trex.default_sample_size = 4;
+    let mut mvex = MovieExtendsBox::default();
+    mvex.trex = Vec::from([trex]);
+    movie.mvex = Some(mvex);
+    movie.mvhd.next_track_id = 2;
+    let moof = |base_data_offset: u64| {
+        let mut traf = TrackFragmentBox::default();
+        traf.tfhd.track_id = 1;
+        traf.tfhd.base_data_offset = Some(base_data_offset);
+        let mut trun = TrackRunBox::default();
+        trun.samples = TrackRunSamples::EmptyRows { sample_count: 1 };
+        traf.trun = Vec::from([trun]);
+        let mut moof = MovieFragmentBox::default();
+        moof.traf = Vec::from([traf]);
+        encoded(&moof)
+    };
+    let length = |length: usize| u64::try_from(length).unwrap();
+    let moof_length = length(moof(0).len());
+    let samples_length = length(count).checked_mul(4).unwrap();
+    let mut file = encoded(&movie);
+    let first_sample = length(count)
+        .checked_mul(moof_length)
+        .and_then(|moofs| moofs.checked_add(length(file.len())))
+        .and_then(|end| end.checked_add(8))
+        .unwrap();
+    for index in 0..length(count) {
+        file.extend(moof(
+            first_sample
+                .checked_add(index.checked_mul(4).unwrap())
+                .unwrap(),
+        ));
+    }
+    file.extend(written(
+        b"mdat",
+        &[&vec![0xAA; usize::try_from(samples_length).unwrap()]],
+    ));
+    let last_sample = length(file.len())
+        .checked_add(moof_length)
+        .and_then(|end| end.checked_add(8))
+        .unwrap();
+    file.extend(moof(last_sample));
+    file.extend(written(b"mdat", &[&[0xBB; 4]]));
+    file
 }

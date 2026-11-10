@@ -2,6 +2,10 @@
 
 #[cfg(test)]
 #[path = "support/movie.rs"]
+#[expect(
+    dead_code,
+    reason = "the comparison with ffprobe is for the tests of reading"
+)]
 mod support;
 
 #[cfg(test)]

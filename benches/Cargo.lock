@@ -190,6 +190,7 @@ dependencies = [
  "isobmff",
  "isobmff-boxes",
  "isobmff-core",
+ "isobmff-test-support",
 ]
 
 [[package]]
@@ -202,6 +203,15 @@ dependencies = [
 [[package]]
 name = "isobmff-core"
 version = "0.0.0"
+
+[[package]]
+name = "isobmff-test-support"
+version = "0.0.0"
+dependencies = [
+ "isobmff-boxes",
+ "isobmff-core",
+ "serde_json",
+]
 
 [[package]]
 name = "itertools"

@@ -1,7 +1,8 @@
 //! Sans-IO reading and writing of ISO base media files (ISO/IEC 14496-12)
 //!
-//! [`Demuxer`] reads a file into its `ftyp` and `moov`, the location of each
-//! sample, and the bytes of the samples of the tracks a caller subscribes to.
+//! [`Demuxer`] reads a file into its `ftyp` and `moov`, its movie fragments,
+//! the location of each sample, and the bytes of the samples of the tracks a
+//! caller subscribes to.
 //! It does no I/O: it names where it wants input next, and the caller reads
 //! the file however it can. The [`demuxer`] module holds the events it
 //! reports.
@@ -46,7 +47,7 @@
 //!
 //! The layers they are made of are usable alone: [`framing`] reads the boxes
 //! laid end to end in a file from bytes that arrive in pieces, and
-//! [`structure_data`] resolves the samples a `moov` declares to where their
+//! [`structure_data`] resolves the samples a `moov` or a `moof` declares to where their
 //! bytes lie, and writes the sample table of a track from them. The boxes
 //! themselves are read and written with `isobmff-boxes`.
 

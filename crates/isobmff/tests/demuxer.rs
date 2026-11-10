@@ -5,14 +5,16 @@ mod tests {
     use isobmff::demuxer::{Error, Event};
     use isobmff::{Demuxer, DemuxerConfig, SampleLocation};
     use isobmff_test_support::conformance_files;
+    use isobmff_test_support::fixtures::fragments_ahead_of_their_samples;
 
     /// The fixtures whose samples all lie after the `moov`
-    const FIXTURES: [(&str, &[u8]); 2] = [
+    const FIXTURES: [(&str, &[u8]); 3] = [
         (
             "movie_moov_first.mp4",
             include_bytes!("fixtures/movie_moov_first.mp4"),
         ),
         ("fragmented.mp4", include_bytes!("fixtures/fragmented.mp4")),
+        ("segment.mp4", include_bytes!("fixtures/segment.mp4")),
     ];
 
     /// A movie file whose samples all lie before the `moov`
@@ -30,7 +32,9 @@ mod tests {
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum Reported {
         FileType,
+        SegmentType,
         Movie(Vec<u32>),
+        MovieFragment(u32),
         SampleLocation(SampleLocation),
         Sample(SampleLocation, Vec<u8>),
         Box(String),
@@ -48,9 +52,16 @@ mod tests {
                     location.offset,
                     bytes.len()
                 ),
-                Self::Error(error) => format!("{error}"),
+                Self::Error(error) => {
+                    core::iter::successors(core::error::Error::source(error), |cause| {
+                        cause.source()
+                    })
+                    .fold(format!("{error}"), |line, cause| format!("{line}: {cause}"))
+                }
                 Self::FileType
+                | Self::SegmentType
                 | Self::Movie(_)
+                | Self::MovieFragment(_)
                 | Self::SampleLocation(_)
                 | Self::Box(_)
                 | Self::Other(_) => format!("{self:?}"),
@@ -69,6 +80,8 @@ mod tests {
         while let Some(event) = demuxer.poll_event() {
             let next = match event {
                 Event::FileType(_) => Reported::FileType,
+                Event::SegmentType(_) => Reported::SegmentType,
+                Event::MovieFragment(moof) => Reported::MovieFragment(moof.mfhd.sequence_number),
                 Event::Movie(movie) => {
                     Reported::Movie(movie.trak.iter().map(|trak| trak.tkhd.track_id).collect())
                 }
@@ -212,11 +225,11 @@ mod tests {
 
     #[test]
     fn a_file_whose_samples_follow_the_moov_reads_the_same_however_it_is_handed_over() {
-        for ((name, file), sample_count) in FIXTURES.into_iter().zip([12 + 58, 0]) {
+        for (name, file) in FIXTURES {
             let reported = read_every_way(name, file, config(None, None), Subscribe::Every);
             lent_as_held(name, file, &reported);
             let lent = samples_lent(&reported);
-            assert_eq!(lent.len(), sample_count, "{name}");
+            assert_eq!(lent.len(), 12 + 58, "{name}");
             assert_eq!(lent, locations(&reported), "{name}");
         }
     }
@@ -298,7 +311,7 @@ mod tests {
             reported.iter().map(Reported::line).collect::<Vec<_>>(),
             [
                 "FileType",
-                "a box at file level cannot be framed",
+                "a box at file level cannot be framed: the payload of the box `moov` at offset 32 is 1792 bytes, over the limit of 64",
                 "Box(\"free\")",
                 "Box(\"mdat\")"
             ]
@@ -351,6 +364,78 @@ mod tests {
             .filter(|reported| !matches!(reported, Reported::SampleLocation(_)))
             .map(Reported::line)
             .collect::<Vec<_>>();
+        insta::assert_debug_snapshot!(lines);
+    }
+
+    #[test]
+    fn each_segment_reports_its_styp_and_its_moof_and_their_samples_follow() {
+        let (name, file) = FIXTURES[2];
+        let reported = read_every_way(name, file, config(None, None), Subscribe::Every);
+        let boxes = reported
+            .iter()
+            .filter(|reported| {
+                !matches!(reported, Reported::SampleLocation(_) | Reported::Sample(..))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let segment = |sequence_number| {
+            [
+                Reported::SegmentType,
+                Reported::MovieFragment(sequence_number),
+                Reported::Box("mdat".to_owned()),
+            ]
+        };
+        assert_eq!(
+            boxes,
+            [
+                vec![Reported::FileType, Reported::Movie(vec![1, 2])],
+                segment(1).to_vec(),
+                segment(2).to_vec(),
+                segment(3).to_vec(),
+            ]
+            .concat()
+        );
+    }
+
+    #[test]
+    fn a_moof_whose_samples_would_pass_the_locations_held_is_reported_and_its_time_is_not_counted()
+    {
+        let file = fragments_ahead_of_their_samples(64);
+        let mut limited = DemuxerConfig::default();
+        limited.sample_count_limit = 8;
+        let reported = read_where_required(&file, limited, Subscribe::Every);
+        let refused = reported
+            .iter()
+            .filter(|reported| {
+                matches!(
+                    reported,
+                    Reported::Error(Error::StructureData {
+                        source: isobmff::structure_data::Error::SampleCountOverLimit {
+                            limit: 8,
+                            ..
+                        },
+                        ..
+                    })
+                )
+            })
+            .count();
+        let lent = samples_lent(&reported)
+            .iter()
+            .map(|location| location.properties.decoding_time)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            (refused, lent),
+            (64 - 8, [0, 20, 40, 60, 80, 100, 120, 140, 160].to_vec())
+        );
+    }
+
+    #[test]
+    fn the_events_across_movie_fragments_before_any_movie() {
+        let (name, file) = FIXTURES[2];
+        // Why 1298: the `moov` of the fixture spans 28 to 1298, after the `ftyp`
+        let without_movie = [file.get(..28).unwrap(), file.get(1298..).unwrap()].concat();
+        let reported = read_every_way(name, &without_movie, config(None, None), Subscribe::Every);
+        let lines = reported.iter().map(Reported::line).collect::<Vec<_>>();
         insta::assert_debug_snapshot!(lines);
     }
 

@@ -7,13 +7,12 @@ mod support;
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::path::Path;
 
     use isobmff::SampleLocation;
     use isobmff::structure_data::{Error, StructureDataReader};
     use std::num::NonZeroU32;
 
-    use crate::support::{locations, movie_of};
+    use crate::support::{by_track, ffprobe_by_track, locations, movie_of};
 
     use isobmff_boxes::{
         CompositionOffsetBox, CompositionOffsetEntry, SampleDependencyTypeBox,
@@ -21,104 +20,9 @@ mod tests {
         SyncSampleBox, TimeToSampleBox,
     };
     use isobmff_core::BoxDefinition;
+    use isobmff_test_support::conformance_files;
     use isobmff_test_support::fixtures::{encoded, in_another_file, movie, track};
-    use isobmff_test_support::serde_json::{self, Value};
-    use isobmff_test_support::{conformance_files, ffprobe};
-
-    /// `(offset, size, decoding_time)` of the samples of each track, by `track_ID`
-    type Samples = BTreeMap<u32, Vec<(u64, u64, u64)>>;
-
-    /// `(offset, size, decoding_time)` of the samples of each track, in decoding order
-    fn by_track(locations: &[SampleLocation]) -> Samples {
-        let mut tracks = Samples::new();
-        for location in locations {
-            tracks
-                .entry(location.properties.track_id)
-                .or_default()
-                .push((
-                    location.offset,
-                    u64::from(location.size),
-                    location.properties.decoding_time,
-                ));
-        }
-        for samples in tracks.values_mut() {
-            samples.sort_by_key(|&(_, _, decoding_time)| decoding_time);
-        }
-        tracks
-    }
-
-    /// `(pos, size, dts)` of the packets ffprobe reads from each track, ignoring edit lists, or `None` where ffprobe does not read the file
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "indexing a JSON value yields null for a key it lacks, and never panics"
-    )]
-    fn ffprobe_by_track(path: &Path) -> Option<Samples> {
-        let output = ffprobe(
-            &[
-                "-v",
-                "error",
-                "-ignore_editlist",
-                "1",
-                "-show_entries",
-                "stream=index,id:packet=stream_index,pos,size,dts",
-                "-of",
-                "json",
-            ],
-            path,
-        );
-        if !output.status.success() {
-            return None;
-        }
-        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-        let ids = report["streams"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|stream| {
-                let id = stream["id"].as_str().unwrap().trim_start_matches("0x");
-                u32::from_str_radix(id, 16).unwrap()
-            })
-            .collect::<Vec<_>>();
-        let mut tracks = BTreeMap::<u32, Vec<_>>::new();
-        for packet in report["packets"]
-            .as_array()
-            .map(Vec::as_slice)
-            .unwrap_or_default()
-        {
-            let number = |field: &str| {
-                let value = &packet[field];
-                value
-                    .as_i64()
-                    .or_else(|| value.as_str()?.parse().ok())
-                    .unwrap()
-            };
-            let index = usize::try_from(packet["stream_index"].as_u64().unwrap()).unwrap();
-            tracks.entry(*ids.get(index).unwrap()).or_default().push((
-                u64::try_from(number("pos")).unwrap(),
-                u64::try_from(number("size")).unwrap(),
-                number("dts"),
-            ));
-        }
-        Some(
-            tracks
-                .into_iter()
-                .map(|(track_id, packets)| {
-                    let first = packets.first().map_or(0, |&(_, _, dts)| dts);
-                    let counted = packets
-                        .into_iter()
-                        .map(|(pos, size, dts)| {
-                            (
-                                pos,
-                                size,
-                                u64::try_from(dts.checked_sub(first).unwrap()).unwrap(),
-                            )
-                        })
-                        .collect();
-                    (track_id, counted)
-                })
-                .collect(),
-        )
-    }
+    use isobmff_test_support::serde_json::Value;
 
     #[test]
     fn the_samples_of_a_chunk_lie_one_after_another_from_its_offset() {

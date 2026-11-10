@@ -1,0 +1,16 @@
+---
+source: crates/isobmff/tests/demuxer.rs
+expression: lines
+---
+[
+    "FileType",
+    "SegmentType",
+    "the samples of the `moof` at offset 52 cannot be resolved: a movie fragment comes before any moov",
+    "Box(\"mdat\")",
+    "SegmentType",
+    "the samples of the `moof` at offset 8141 cannot be resolved: a movie fragment comes before any moov",
+    "Box(\"mdat\")",
+    "SegmentType",
+    "the samples of the `moof` at offset 15774 cannot be resolved: a movie fragment comes before any moov",
+    "Box(\"mdat\")",
+]

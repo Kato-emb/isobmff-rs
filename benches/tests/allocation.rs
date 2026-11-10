@@ -10,6 +10,8 @@ thread_local! {
     // Why count per thread: the test harness runs tests on threads of their
     // own, whose allocations would land in a shared count.
     static ALLOCATED: Cell<usize> = const { Cell::new(0) };
+    /// Bytes the current thread holds allocated, and the most it has held
+    static HELD: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
 }
 
 /// The system allocator, counting the bytes each thread asks of it
@@ -19,21 +21,32 @@ fn count(bytes: usize) {
     let _ = ALLOCATED.try_with(|allocated| allocated.set(allocated.get().saturating_add(bytes)));
 }
 
+fn hold(more: usize, less: usize) {
+    let _ = HELD.try_with(|held| {
+        let (now, most) = held.get();
+        let now = now.saturating_add(more).saturating_sub(less);
+        held.set((now, most.max(now)));
+    });
+}
+
 // SAFETY: every call is passed on to the system allocator as it came.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         count(layout.size());
+        hold(layout.size(), 0);
         // SAFETY: the caller upholds the contract of `GlobalAlloc::alloc`.
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        hold(0, layout.size());
         // SAFETY: the caller upholds the contract of `GlobalAlloc::dealloc`.
         unsafe { System.dealloc(pointer, layout) }
     }
 
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         count(new_size);
+        hold(new_size, layout.size());
         // SAFETY: the caller upholds the contract of `GlobalAlloc::realloc`.
         unsafe { System.realloc(pointer, layout, new_size) }
     }
@@ -41,6 +54,14 @@ unsafe impl GlobalAlloc for Counting {
 
 #[global_allocator]
 static ALLOCATOR: Counting = Counting;
+
+/// The most bytes the current thread holds allocated while `run` runs, above what it held before
+fn most_held_by(run: impl FnOnce()) -> usize {
+    let (before, _) = HELD.with(Cell::get);
+    HELD.with(|held| held.set((before, before)));
+    run();
+    HELD.with(Cell::get).1.saturating_sub(before)
+}
 
 /// Bytes the current thread allocates while `run` runs
 fn allocated_by(run: impl FnOnce()) -> usize {
@@ -237,4 +258,73 @@ fn a_muxer_polled_after_each_sample_allocates_for_the_tables_and_not_for_the_byt
         "allocated {allocated} bytes muxing {sample_bytes} bytes of {SAMPLES} samples, polled after each"
     );
     assert!(allocated < sample_bytes / 16, "allocated {allocated} bytes");
+}
+
+/// A file of the `ftyp` and `moov` of the segment fixture followed by its segments, `repeats` times over
+fn segments(repeats: usize) -> Vec<u8> {
+    let file: &[u8] = include_bytes!("../../crates/isobmff/tests/fixtures/segment.mp4");
+    // Why 1298: the `ftyp` and the `moov` of the fixture end there, and its
+    // segments follow.
+    let (initialization, segments) = file.split_at(1298);
+    [initialization, &segments.repeat(repeats)].concat()
+}
+
+/// The most bytes held while every sample of `file` is lent under `config`, handed over where the demuxer asks
+fn most_held_lending(file: &[u8], config: DemuxerConfig) -> (usize, usize) {
+    let mut samples = 0;
+    let held = most_held_by(|| {
+        let mut demuxer = Demuxer::new(config);
+        loop {
+            while let Some(event) = demuxer.poll_event() {
+                match event {
+                    isobmff::demuxer::Event::Movie(movie) => {
+                        let track_ids = movie
+                            .trak
+                            .iter()
+                            .map(|trak| trak.tkhd.track_id)
+                            .collect::<Vec<_>>();
+                        for track_id in track_ids {
+                            demuxer.subscribe_track(track_id);
+                        }
+                    }
+                    isobmff::demuxer::Event::Sample(_) => samples += 1,
+                    _ => {}
+                }
+            }
+            let Some(required) = demuxer.required_input() else {
+                break;
+            };
+            match file.get(usize::try_from(required.position).unwrap()..) {
+                Some(bytes) if !bytes.is_empty() => demuxer.handle_input(required.position, bytes),
+                _ => demuxer.finish(),
+            }
+        }
+    });
+    (held, samples)
+}
+
+#[test]
+fn the_memory_a_demuxer_holds_does_not_grow_with_the_movie_fragments_it_reads() {
+    let (few, few_samples) = most_held_lending(&segments(4), DemuxerConfig::default());
+    let (many, many_samples) = most_held_lending(&segments(64), DemuxerConfig::default());
+    println!(
+        "held at most {few} bytes lending {few_samples} samples of 12 fragments, {many} bytes lending {many_samples} of 192"
+    );
+    assert_eq!((few_samples, many_samples), (70 * 4, 70 * 64));
+    assert_eq!(many, few);
+}
+
+#[test]
+fn the_memory_a_demuxer_holds_stays_within_the_limit_when_fragments_come_before_their_samples() {
+    use isobmff_test_support::fixtures::fragments_ahead_of_their_samples;
+
+    let mut limited = DemuxerConfig::default();
+    limited.sample_count_limit = 8;
+    let (few, few_samples) = most_held_lending(&fragments_ahead_of_their_samples(64), limited);
+    let (many, many_samples) = most_held_lending(&fragments_ahead_of_their_samples(1024), limited);
+    println!(
+        "held at most {few} bytes over 64 fragments ahead of their samples, {many} bytes over 1024, under a limit of 8 locations"
+    );
+    assert_eq!((few_samples, many_samples), (8 + 1, 8 + 1));
+    assert_eq!(many, few);
 }

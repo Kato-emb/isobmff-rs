@@ -75,6 +75,20 @@ pub enum Error {
         /// `sample_description_index` of the sample, from 1
         sample_description_index: u32,
     },
+    /// A movie fragment comes before any `moov`, which says what its tracks
+    /// are, ISO/IEC 14496-12 §8.8.1
+    MovieFragmentWithoutMovie,
+    /// A track fragment is of a track the `moov` does not have
+    UnknownTrack {
+        /// `track_ID` the `tfhd` names
+        track_id: u32,
+    },
+    /// A sample of a track fragment takes a value that neither the `tfhd` nor
+    /// a `trex` of its track gives, ISO/IEC 14496-12 §8.8.3, §8.8.7
+    MissingDefault {
+        /// `track_ID` of the track
+        track_id: u32,
+    },
     /// A sample is of another track than the samples a
     /// [`SampleTableWriter`](super::SampleTableWriter) has taken
     OtherTrack {
@@ -149,6 +163,17 @@ impl fmt::Display for Error {
             } => write!(
                 formatter,
                 "sample_description_index {sample_description_index} names no entry of the `stsd`"
+            ),
+            Self::MovieFragmentWithoutMovie => {
+                write!(formatter, "a movie fragment comes before any moov")
+            }
+            Self::UnknownTrack { track_id } => write!(
+                formatter,
+                "a track fragment is of track {track_id}, which the moov does not have"
+            ),
+            Self::MissingDefault { track_id } => write!(
+                formatter,
+                "a sample of track {track_id} takes a value neither its tfhd nor a trex gives"
             ),
             Self::OtherTrack { track_id, found } => write!(
                 formatter,
