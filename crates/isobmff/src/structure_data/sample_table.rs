@@ -224,20 +224,20 @@ pub(super) fn resolve(track: &TrackBox, locations: &mut Vec<SampleLocation>) -> 
 }
 
 /// The `chunk_offset` of each chunk, as the chunk offset table of a track gives it
-pub(super) enum ChunkOffsets<'a> {
+enum ChunkOffsets<'a> {
     Compact(&'a [u32]),
     Large(&'a [u64]),
 }
 
 impl ChunkOffsets<'_> {
-    pub(super) fn len(&self) -> usize {
+    fn len(&self) -> usize {
         match self {
             Self::Compact(offsets) => offsets.len(),
             Self::Large(offsets) => offsets.len(),
         }
     }
 
-    pub(super) fn iter(&self) -> impl Iterator<Item = u64> + '_ {
+    fn iter(&self) -> impl Iterator<Item = u64> + '_ {
         let (compact, large) = match self {
             Self::Compact(offsets) => (*offsets, &[][..]),
             Self::Large(offsets) => (&[][..], *offsets),
@@ -250,7 +250,7 @@ impl ChunkOffsets<'_> {
     }
 }
 
-pub(super) fn chunk_offsets(stbl: &SampleTableBox) -> Option<ChunkOffsets<'_>> {
+fn chunk_offsets(stbl: &SampleTableBox) -> Option<ChunkOffsets<'_>> {
     match stbl.chunk_offset.as_ref()? {
         ChunkOffsetVariant::ChunkOffset(stco) => Some(ChunkOffsets::Compact(&stco.chunk_offsets)),
         ChunkOffsetVariant::ChunkLargeOffset(co64) => {
@@ -261,7 +261,7 @@ pub(super) fn chunk_offsets(stbl: &SampleTableBox) -> Option<ChunkOffsets<'_>> {
 }
 
 /// Number of samples the chunks of a sample-to-chunk table hold, refusing an entry whose `first_chunk` does not increase from 1 or lies past the last chunk
-pub(super) fn chunk_sample_count(
+fn chunk_sample_count(
     stsc: &SampleToChunkBox,
     chunk_count: usize,
     invalid: impl Fn(BoxType, usize) -> Error,
@@ -291,10 +291,7 @@ pub(super) fn chunk_sample_count(
 }
 
 /// The `data_reference_index` of the sample entry `sample_description_index` names, from 1
-pub(super) fn data_reference_index(
-    stsd: &SampleDescriptionBox,
-    sample_description_index: u32,
-) -> Option<u16> {
+fn data_reference_index(stsd: &SampleDescriptionBox, sample_description_index: u32) -> Option<u16> {
     let index = usize::try_from(sample_description_index.checked_sub(1)?).ok()?;
     stsd.sample_descriptions.get(index)?.data_reference_index()
 }
@@ -304,6 +301,6 @@ fn total(mut counts: impl Iterator<Item = u32>) -> Option<u64> {
     counts.try_fold(0_u64, |total, count| total.checked_add(u64::from(count)))
 }
 
-pub(super) fn length_of(length: usize) -> u64 {
+fn length_of(length: usize) -> u64 {
     u64::try_from(length).unwrap_or(u64::MAX)
 }

@@ -6,9 +6,9 @@
 //! then writes:
 //!
 //! 1. the `ftyp`, where it is the first box;
-//! 2. the `moov`, its chunk offsets and sample auxiliary information offsets
-//!    moved with [`relocate_offsets`] to where the media data they point at
-//!    now lies;
+//! 2. the `moov`, its chunk offsets (`stco` / `co64`, §8.7.5) and sample
+//!    auxiliary information offsets (`saio`, §8.7.9) moved to where the media
+//!    data they point at now lies;
 //! 3. every other box, in the order it came in, copied from the input.
 //!
 //! The media data is copied through a buffer of fixed length, never held, so
@@ -16,16 +16,18 @@
 //! file. A file whose `moov` already comes before every `mdat` is copied as it
 //! is. A fragmented movie file, one whose `moov` holds an offset into the
 //! `moov` itself, and one with an item that lies in the file (§8.11.3) are
-//! refused: moving the `moov` moves what they point at.
+//! refused: moving the `moov` moves what they point at. So is one with a
+//! track whose data references name media data elsewhere than in the file
+//! (another file, or an `IdentifiedMediaDataBox`, §8.7.2): which of its
+//! offsets to move would need each chunk resolved to its data reference.
 //!
 //! `cargo run --example fast_start -- <input> <output>`
 
 use std::error::Error;
 use std::io::{Read, Seek, SeekFrom, Write};
 
-use isobmff::boxes::{MetaBox, MovieBox};
+use isobmff::boxes::{ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, MetaBox, MovieBox};
 use isobmff::framing::{BoxReader, Event, FramerConfig};
-use isobmff::structure_data::relocate_offsets;
 use isobmff::{BoxDecode, BoxEncode, BoxType};
 
 // Why not take the limit from the demuxer configuration: the example reads
@@ -110,6 +112,12 @@ fn fast_start(
     if metas.any(lies_in_the_file) {
         return Err("an item that lies in the file".into());
     }
+    if source.trak.iter().any(|trak| {
+        let entries = &trak.mdia.minf.dinf.dref.data_entries;
+        entries.iter().any(|entry| !entry.is_in_same_file())
+    }) {
+        return Err("a track whose media data may lie elsewhere than in the file".into());
+    }
     if !media_data_first {
         input.seek(SeekFrom::Start(0))?;
         std::io::copy(&mut input, &mut output)?;
@@ -124,7 +132,7 @@ fn fast_start(
     let moov = loop {
         let mut moov = source.clone();
         let written_length = moov_length;
-        relocate_offsets(&mut moov, |offset| match offset {
+        map_offsets(&mut moov, |offset| match offset {
             _ if offset < head_end => Some(offset),
             _ if offset < moov_offset => offset.checked_add(written_length),
             _ if offset < moov_end => None,
@@ -150,6 +158,60 @@ fn fast_start(
     copy(&mut input, head_end, moov_offset, &mut output)?;
     input.seek(SeekFrom::Start(moov_end))?;
     std::io::copy(&mut input, &mut output)?;
+    Ok(())
+}
+
+/// Maps every chunk offset and sample auxiliary information offset of `moov` with `map`, each table in its short form where every offset of it fits 32 bits, and in its long form otherwise
+fn map_offsets(
+    moov: &mut MovieBox,
+    map: impl Fn(u64) -> Option<u64>,
+) -> Result<(), Box<dyn Error>> {
+    let map_all = |offsets: Vec<u64>| -> Result<Vec<u64>, Box<dyn Error>> {
+        offsets
+            .into_iter()
+            .map(|offset| {
+                map(offset)
+                    .ok_or_else(|| format!("offset {offset} points at nothing once moved").into())
+            })
+            .collect()
+    };
+    for trak in &mut moov.trak {
+        let stbl = &mut trak.mdia.minf.stbl;
+        let offsets = match &stbl.chunk_offset {
+            Some(ChunkOffsetVariant::ChunkOffset(stco)) => {
+                stco.chunk_offsets.iter().copied().map(u64::from).collect()
+            }
+            Some(ChunkOffsetVariant::ChunkLargeOffset(co64)) => co64.chunk_offsets.clone(),
+            _ => return Err("a track with no chunk offset table".into()),
+        };
+        let offsets = map_all(offsets)?;
+        stbl.chunk_offset = Some(
+            match offsets
+                .iter()
+                .map(|&offset| u32::try_from(offset))
+                .collect()
+            {
+                Ok(compact) => {
+                    let mut stco = ChunkOffsetBox::default();
+                    stco.chunk_offsets = compact;
+                    ChunkOffsetVariant::ChunkOffset(stco)
+                }
+                Err(_) => {
+                    let mut co64 = ChunkLargeOffsetBox::default();
+                    co64.chunk_offsets = offsets;
+                    ChunkOffsetVariant::ChunkLargeOffset(co64)
+                }
+            },
+        );
+        for saio in &mut stbl.saio {
+            saio.offsets = map_all(std::mem::take(&mut saio.offsets))?;
+            saio.version = u8::from(
+                saio.offsets
+                    .iter()
+                    .any(|&offset| u32::try_from(offset).is_err()),
+            );
+        }
+    }
     Ok(())
 }
 
@@ -195,7 +257,7 @@ mod tests {
     };
     use isobmff::framing::{BoxReader, Event, FramerConfig};
     use isobmff::{
-        BoxDecode, BoxEncode, Demuxer, DemuxerConfig, SampleProperties, demuxer, structure_data,
+        BoxDecode, BoxEncode, Demuxer, DemuxerConfig, SampleProperties, Utf8String, demuxer,
     };
     use isobmff_test_support::{FfprobePacket, conformance_files, ffprobe, ffprobe_packets};
 
@@ -339,11 +401,27 @@ mod tests {
             }
         });
         assert_eq!(
-            written(&file).unwrap_err().downcast_ref(),
-            Some(&structure_data::Error::OffsetNotRelocated {
-                track_id: 1,
-                offset: 22_595 + 8
-            })
+            written(&file).unwrap_err().to_string(),
+            "offset 22603 points at nothing once moved"
+        );
+    }
+
+    #[test]
+    fn a_movie_with_a_track_whose_media_data_may_lie_in_another_file_is_refused() {
+        let file = moov_last_with(|moov, _| {
+            let mut elsewhere = DataEntryUrlBox::default();
+            elsewhere.location = Some(Utf8String::from_slice(b"other.mp4"));
+            moov.trak[0]
+                .mdia
+                .minf
+                .dinf
+                .dref
+                .data_entries
+                .push(DataEntry::Url(elsewhere));
+        });
+        assert_eq!(
+            written(&file).unwrap_err().to_string(),
+            "a track whose media data may lie elsewhere than in the file"
         );
     }
 
