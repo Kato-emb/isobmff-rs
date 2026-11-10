@@ -110,13 +110,8 @@ fn movie_file(source: &Read) -> Result<Vec<u8>, Error> {
     }
     let header = muxer.finish()?;
     muxer.poll_output(&mut written);
-    if let Some(first) = usize::try_from(header.offset)
-        .ok()
-        .and_then(|offset| written.get_mut(offset..))
-        .and_then(|rest| rest.get_mut(..header.bytes.len()))
-    {
-        first.copy_from_slice(&header.bytes);
-    }
+    let first = usize::try_from(header.offset).unwrap_or(usize::MAX);
+    written[first..first + header.bytes.len()].copy_from_slice(&header.bytes);
     Ok(written)
 }
 

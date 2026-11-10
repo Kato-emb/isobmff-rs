@@ -12,7 +12,6 @@ use isobmff::boxes::{FileTypeBox, MovieBox};
 use isobmff::demuxer::{Error, Event};
 use isobmff::{Demuxer, DemuxerConfig, SampleProperties};
 
-#[expect(clippy::print_stdout, reason = "a program that prints what it read")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input = std::env::args().nth(1).ok_or("usage: demux <input>")?;
     let source = read(&std::fs::read(input)?).ok_or("no ftyp or no moov")?;

@@ -91,7 +91,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let samples_per_fragment = arguments
         .next()
-        .map_or(Ok(30), |count| count.parse::<usize>())?;
+        .map_or(Ok(30), |count| count.parse::<usize>())?
+        .max(1);
     let source = read(&std::fs::read(input)?).ok_or("no ftyp or no moov")?;
     let written = write_hybrid(&source, samples_per_fragment)?.1;
     std::fs::write(output, written)?;
@@ -108,7 +109,7 @@ fn write_hybrid(source: &Read, samples_per_fragment: usize) -> Result<(Vec<u8>, 
         &mut written,
     )?;
     for (index, (properties, bytes)) in source.samples.iter().enumerate() {
-        if index > 0 && index.checked_rem(samples_per_fragment) == Some(0) {
+        if index > 0 && index % samples_per_fragment == 0 {
             writer.finish_fragment(&mut written)?;
         }
         writer.handle_sample(*properties, bytes)?;
@@ -116,13 +117,8 @@ fn write_hybrid(source: &Read, samples_per_fragment: usize) -> Result<(Vec<u8>, 
     writer.finish_fragment(&mut written)?;
     let fragmented = written.clone();
     let header = writer.finish(&mut written)?;
-    if let Some(free) = usize::try_from(header.offset)
-        .ok()
-        .and_then(|offset| written.get_mut(offset..))
-        .and_then(|rest| rest.get_mut(..header.bytes.len()))
-    {
-        free.copy_from_slice(&header.bytes);
-    }
+    let free = usize::try_from(header.offset).map_err(|_| Error::Overflow)?;
+    written[free..free + header.bytes.len()].copy_from_slice(&header.bytes);
     Ok((fragmented, written))
 }
 
@@ -477,7 +473,7 @@ mod tests {
                     .entry(properties.track_id)
                     .or_insert(properties.decoding_time);
                 let properties = SampleProperties {
-                    decoding_time: properties.decoding_time.checked_sub(first).unwrap(),
+                    decoding_time: properties.decoding_time - first,
                     ..*properties
                 };
                 (properties, bytes.clone())
@@ -550,10 +546,7 @@ mod tests {
                 (
                     packet.track_id,
                     packet.size,
-                    packet
-                        .pts
-                        .zip(packet.dts)
-                        .map(|(pts, dts)| pts.checked_sub(dts).unwrap()),
+                    packet.pts.zip(packet.dts).map(|(pts, dts)| pts - dts),
                     packet.key,
                 )
             })
