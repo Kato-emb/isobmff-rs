@@ -9,7 +9,7 @@ use isobmff_boxes::{
     MediaInformationHeader, MovieBox, NullMediaHeaderBox, SampleTableBox, SoundMediaHeaderBox,
     SubtitleMediaHeaderBox, TrackBox, VideoMediaHeaderBox,
 };
-use isobmff_core::{BoxDefinition, BoxEncode, I8F8};
+use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, ExtendedSize, I8F8};
 
 use super::{Error, MovieDescription, TrackDescription};
 
@@ -133,6 +133,19 @@ pub(super) fn data_reference() -> DataReferenceBox {
     let mut dref = DataReferenceBox::default();
     dref.data_entries = vec![DataEntry::Url(DataEntryUrlBox::default())];
     dref
+}
+
+/// Returns the header of an `mdat` of `payload_length` bytes, in the 16 bytes of a `largesize`, or `None` where the box would be longer than 64 bits count
+///
+/// The `media data` box, ISO/IEC 14496-12 §8.1.1, under the header of §4.2.2
+/// with `size` 1: 16 bytes whatever the length, so a header written before
+/// the payload is written over in place once the length is known.
+pub(super) fn media_data_header(payload_length: u64) -> Option<[u8; 16]> {
+    let size = ExtendedSize::new(payload_length.checked_add(16)?)?;
+    let header = BoxHeader::new(BoxType::compact(*b"mdat"), BoxSize::Extended(size))?;
+    let mut bytes = [0; 16];
+    header.encode(&mut bytes).ok()?;
+    Some(bytes)
 }
 
 /// The version of a box that holds `value` in a field of 32 bits in version 0 and 64 in version 1

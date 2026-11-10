@@ -10,11 +10,11 @@ mod support;
 
 #[cfg(test)]
 mod tests {
-    use isobmff::framing::media_data_header;
     use isobmff::muxer::{Error, MovieDescription, TrackDescription};
     use isobmff::{MovieFileMuxer, MuxerConfig};
     use isobmff_boxes::{EditBox, MovieBox};
     use isobmff_core::{BoxDecode, BoxEncode, OtherBoxes};
+    use isobmff_test_support::fixtures::media_data_header;
     use isobmff_test_support::{conformance_files, ffprobe, ffprobe_packets};
 
     use crate::support::{Read, mp4_file_type, one_sample_entry_track, packet_read, read, sample};

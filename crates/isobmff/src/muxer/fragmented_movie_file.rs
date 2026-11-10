@@ -5,9 +5,10 @@ use alloc::vec::Vec;
 use isobmff_boxes::{FileTypeBox, MovieBox, MovieExtendsBox, SegmentTypeBox, TrackExtendsBox};
 use isobmff_core::BoxEncode;
 
-use super::movie::{append_encoded, check_track, data_reference, movie_box, track_box};
+use super::movie::{
+    append_encoded, check_track, data_reference, media_data_header, movie_box, track_box,
+};
 use super::{Error, MovieDescription, MuxerConfig, TrackDescription};
-use crate::framing;
 use crate::structure_data::{self, MovieFragmentWriter, SampleTableWriter, TrackSampleDescription};
 use crate::{SampleLocation, SampleProperties};
 
@@ -320,7 +321,7 @@ impl FragmentedMovieFileMuxer {
                 let moof = finished.finish();
                 let header = u64::try_from(media_data.len())
                     .ok()
-                    .and_then(framing::media_data_header)
+                    .and_then(media_data_header)
                     .ok_or(Error::Overflow)?;
                 let written = segment_type
                     .map_or(Ok(()), |styp| append_encoded(styp, &mut self.output))

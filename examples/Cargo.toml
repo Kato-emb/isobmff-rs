@@ -1,0 +1,100 @@
+[package]
+name = "examples"
+version = "0.0.0"
+description = "Programs that read and write ISO base media files with isobmff, through its demuxer and muxers or through its layers alone"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dev-dependencies]
+isobmff = { path = "../crates/isobmff" }
+# Reads the conformance files, and runs ffprobe on what the examples write.
+isobmff-test-support.workspace = true
+
+[[example]]
+name = "demux"
+path = "demux.rs"
+test = true
+
+[[example]]
+name = "remux"
+path = "remux.rs"
+test = true
+
+[[example]]
+name = "hybrid"
+path = "hybrid.rs"
+test = true
+
+# The examples are programs, not the library: they keep the lints of the
+# workspace that guard safety and reproducible output, and leave out those that
+# keep a library free of panics, its public API documented and extensible, and
+# its package publishable.
+[lints.rust]
+# Memory safety: no example needs unsafe, so none may introduce it.
+unsafe_code = "forbid"
+
+# Dead weight: constructs that compile but say nothing (no-op casts, stale
+# lifetimes, redundant paths) accumulate as noise and hide real changes.
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unused_lifetimes = "warn"
+redundant_lifetimes = "warn"
+unused_qualifications = "warn"
+
+# Idioms: a lifetime elided in a path (`Formatter` for `Formatter<'_>`) hides
+# that the type borrows. Priority -1 lets a lint of the group be set apart.
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+# Identifiers: the names are specification vocabulary, which is ASCII; a
+# non-ASCII identifier can only be a mistake or a confusable.
+non_ascii_idents = "forbid"
+
+[lints.clippy]
+# Lossy numeric conversion: a silent `as` that truncates or flips sign
+# corrupts a field of a box without any error; convert with From/TryFrom.
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_precision_loss = "deny"
+cast_sign_loss = "deny"
+cast_lossless = "deny"
+checked_conversions = "deny"
+
+# Fixed-point discipline: rate/volume/matrix fields are fixed-point held as
+# raw integers; computing them via floats loses precision.
+float_arithmetic = "deny"
+
+# Byte order: ISOBMFF is big-endian on the wire, and a symmetric le/ne mistake
+# cancels out in a round trip.
+host_endian_bytes = "deny"
+little_endian_bytes = "deny"
+
+# Deterministic output: iterating a hash type would make the bytes written
+# differ between runs.
+iter_over_hash_type = "deny"
+
+# Debugging leftovers: dbg! must not ship; the examples print on purpose.
+dbg_macro = "deny"
+
+# Inlining: #[inline(always)] overrides the compiler for no measured gain.
+inline_always = "deny"
+
+# Source layout and naming: single-char idents are the mechanized half of the
+# no-abbreviation rule in AGENTS.md.
+mod_module_files = "deny"
+min_ident_chars = "deny"
+
+# Lint suppression: a lint is relaxed with #[expect] and a reason, which fails
+# once the code no longer trips it.
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+
+# Doc quality: the docs of an example are read to learn the crate.
+doc_markdown = "warn"
+doc_link_with_quotes = "warn"

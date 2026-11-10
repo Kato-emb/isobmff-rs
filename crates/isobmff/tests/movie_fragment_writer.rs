@@ -2,7 +2,6 @@
 
 #[cfg(test)]
 mod tests {
-    use isobmff::framing::media_data_header;
     use isobmff::structure_data::{
         Error, MovieFragmentWriter, StructureDataReader, TrackSampleDescription,
     };
@@ -12,7 +11,7 @@ mod tests {
         TrackFragmentBox, TrackRunBox, TrackRunSamples,
     };
     use isobmff_core::{BoxDecode, BoxEncode};
-    use isobmff_test_support::fixtures::{in_another_file, movie, track};
+    use isobmff_test_support::fixtures::{in_another_file, media_data_header, movie, track};
 
     /// A movie of track 1, of one sample entry, track 2, of two, and track 3, whose media data is in another file
     fn three_tracks() -> MovieBox {
