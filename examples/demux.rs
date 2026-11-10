@@ -4,7 +4,7 @@
 //! over the file from where the demuxer asks, subscribes to every track once
 //! the `moov` is read, and takes the bytes of each sample it lends.
 //!
-//! `cargo run -p examples --example demux -- <input>`
+//! `cargo run --example demux -- <input>`
 
 use std::collections::BTreeMap;
 

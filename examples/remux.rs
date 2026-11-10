@@ -5,7 +5,7 @@
 //! [`FragmentedMovieFileMuxer`], which ends a fragment where one of the file
 //! did.
 //!
-//! `cargo run -p examples --example remux -- <input> <output> [--fragmented]`
+//! `cargo run --example remux -- <input> <output> [--fragmented]`
 
 use isobmff::boxes::{FileTypeBox, MovieBox};
 use isobmff::demuxer::{Error as DemuxError, Event};

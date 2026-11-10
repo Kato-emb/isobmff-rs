@@ -8,7 +8,7 @@
 //! sample, and the `mdat` header it returns, written over the `free` that
 //! opens the file, puts the fragments inside one `mdat`.
 //!
-//! `cargo run -p examples --example hybrid -- <input> <output> [samples_per_fragment]`
+//! `cargo run --example hybrid -- <input> <output> [samples_per_fragment]`
 
 use isobmff::boxes::{
     FileTypeBox, Free, FreeSpaceBox, MovieBox, MovieExtendsBox, TrackBox, TrackExtendsBox,
