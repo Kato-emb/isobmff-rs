@@ -102,7 +102,7 @@ impl MovieParameters {
     ///
     /// let track = TrackParameters::new(1, 48_000, FourCc::new(*b"soun"), SampleDescriptionBox::default());
     /// let movie = MovieParameters::new(1000);
-    /// let moov = movie.to_movie_box(vec![track.to_track_box(SampleTableBox::default(), 1000)]);
+    /// let moov = movie.to_movie_box(vec![track.to_track_box(SampleTableBox::default())]);
     /// assert_eq!(moov.mvhd.next_track_id, 2);
     /// ```
     #[must_use]
@@ -160,7 +160,7 @@ impl MovieParameters {
                     0,
                 )
                 .finish();
-                track.to_track_box(stbl, self.timescale)
+                track.to_track_box(stbl)
             })
             .collect();
         let mut moov = self.to_movie_box(trak);

@@ -2,8 +2,8 @@
 //!
 //! The example reads a file with the demuxer where it asks, and writes each
 //! sample it lends without a muxer, with only the movie fragment writer, the
-//! sample table writer of [`structure_data`], the parameters of the movie and
-//! its tracks of [`muxer`](isobmff::muxer), the box header [`BoxHeader`], and the boxes:
+//! sample table writer, [`set_durations`] and [`movie_extends_box`] of
+//! [`structure_data`], the box header [`BoxHeader`], and the boxes:
 //!
 //! 1. an `ftyp`, a `free` (§8.1.2) as long as the header of an `mdat`, and a
 //!    `moov` with an `mvex` and no sample;
@@ -34,10 +34,12 @@ use std::error::Error;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use isobmff::boxes::{Free, FreeSpaceBox};
+use isobmff::boxes::{Free, FreeSpaceBox, MovieBox};
 use isobmff::demuxer::Event;
-use isobmff::muxer::{MovieParameters, TrackParameters};
-use isobmff::structure_data::{MovieFragmentWriter, SampleTableWriter, TrackSampleDescription};
+use isobmff::structure_data::{
+    MovieFragmentWriter, SampleTableWriter, TrackSampleDescription, movie_extends_box,
+    set_durations,
+};
 use isobmff::{
     BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, Demuxer, DemuxerConfig, ExtendedSize,
     SampleLocation, SampleProperties,
@@ -85,11 +87,9 @@ fn hybrid(
     let mut demuxer = Demuxer::new(DemuxerConfig::default());
     let (mut buffer, mut out) = (vec![0; 64 * 1024], Vec::new());
     let mut file_type = None;
-    // Set once the `moov` is read: the parameters of the movie and of its
-    // tracks; and the writers of its fragments and of the sample table of
-    // each track, and where the `free` lies
-    let mut parameters: Option<(MovieParameters, Vec<TrackParameters>)> = None;
-    let mut writers: Option<(MovieFragmentWriter, Vec<SampleTableWriter>, u64)> = None;
+    // Set once the `moov` is read: the movie, the writers of its fragments
+    // and of the sample table of each track, and where the `free` lies
+    let mut movie: Option<(MovieBox, MovieFragmentWriter, Vec<SampleTableWriter>, u64)> = None;
     let mut first_decoding_times = Vec::new();
     // The samples of the fragment being written, each with the index of its
     // track and at its offset in the media data of the fragment, and its bytes
@@ -114,10 +114,13 @@ fn hybrid(
                             dref: &trak.mdia.minf.dinf.dref,
                         })
                         .collect();
-                    let movie = MovieParameters::from(&*moov);
-                    let track_parameters: Vec<TrackParameters> =
-                        moov.trak.iter().map(TrackParameters::from).collect();
-                    append(&movie.to_fragmented_movie_box(&track_parameters), &mut out)?;
+                    let mut fragmented = (*moov).clone();
+                    for (trak, track) in fragmented.trak.iter_mut().zip(&tracks) {
+                        trak.mdia.minf.stbl = SampleTableWriter::new(track, 0).finish();
+                    }
+                    fragmented.mvex = Some(movie_extends_box(&fragmented.trak));
+                    set_durations(&mut fragmented);
+                    append(&fragmented, &mut out)?;
                     output.write_all(&out)?;
                     out.clear();
                     let fragments = MovieFragmentWriter::new(&tracks, SAMPLE_COUNT_LIMIT);
@@ -129,15 +132,12 @@ fn hybrid(
                     for trak in &moov.trak {
                         demuxer.subscribe_track(trak.tkhd.track_id);
                     }
-                    parameters = Some((movie, track_parameters));
-                    writers = Some((fragments, tables, free_offset));
+                    movie = Some((*moov, fragments, tables, free_offset));
                 }
                 // Each sample joins the fragment being written, which is written once full
                 Event::Sample(sample) => {
-                    let ((_, track_parameters), (fragments, tables, _)) = parameters
-                        .as_ref()
-                        .zip(writers.as_mut())
-                        .ok_or("a sample before any moov")?;
+                    let (moov, fragments, tables, _) =
+                        movie.as_mut().ok_or("a sample before any moov")?;
                     if placed.len() == samples_per_fragment.max(1) {
                         write_fragment(
                             fragments,
@@ -154,9 +154,10 @@ fn hybrid(
                         size: u32::try_from(sample.bytes.len())?,
                     };
                     fragments.handle_location(location)?;
-                    let track = track_parameters
+                    let track = moov
+                        .trak
                         .iter()
-                        .position(|track| track.track_id == location.properties.track_id)
+                        .position(|trak| trak.tkhd.track_id == location.properties.track_id)
                         .ok_or("a sample of a track the moov does not have")?;
                     placed.push((track, location));
                     media_data.extend_from_slice(sample.bytes);
@@ -174,8 +175,7 @@ fn hybrid(
             read => demuxer.handle_input(required.position, &buffer[..read]),
         }
     }
-    let ((movie, track_parameters), (mut fragments, mut tables, free_offset)) =
-        parameters.zip(writers).ok_or("no moov")?;
+    let (mut moov, mut fragments, mut tables, free_offset) = movie.ok_or("no moov")?;
     write_fragment(
         &mut fragments,
         &mut tables,
@@ -186,12 +186,11 @@ fn hybrid(
     )?;
 
     // The `moov` that declares every sample, and the `mdat` header over the `free`
-    let trak = track_parameters
-        .iter()
-        .zip(&mut tables)
-        .map(|(track, table)| track.to_track_box(table.finish(), movie.timescale))
-        .collect();
-    let moov = movie.to_movie_box(trak);
+    moov.mvex = None;
+    for (trak, table) in moov.trak.iter_mut().zip(&mut tables) {
+        trak.mdia.minf.stbl = table.finish();
+    }
+    set_durations(&mut moov);
     // The `free` was written first, as long as an `mdat` header with a
     // `largesize`; now that the length is known, the header is written over it
     let size =

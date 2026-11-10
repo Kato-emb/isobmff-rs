@@ -64,7 +64,7 @@ mod tests {
             ..MovieParameters::new(600)
         };
 
-        let moov = movie.to_movie_box(vec![track.to_track_box(table(), 600)]);
+        let moov = movie.to_movie_box(vec![track.to_track_box(table())]);
         let trak = moov.trak.first().unwrap();
         assert_eq!(
             (
@@ -125,7 +125,7 @@ mod tests {
     }
 
     /// `trak` written again from its parameters and the tables its samples declare, what the parameters do not hold taken from `trak`
-    fn track_written_again(trak: &TrackBox, movie_timescale: u32) -> TrackBox {
+    fn track_written_again(trak: &TrackBox) -> TrackBox {
         let mut derived = trak.mdia.minf.stbl.clone();
         derived.stsd = Default::default();
         derived.sbgp.clear();
@@ -135,7 +135,7 @@ mod tests {
         derived.ssrt.clear();
         derived.stsh = None;
         derived.other_boxes = Default::default();
-        let mut written = TrackParameters::from(trak).to_track_box(derived, movie_timescale);
+        let mut written = TrackParameters::from(trak).to_track_box(derived);
         (written.tkhd.version, written.tkhd.duration) = (trak.tkhd.version, trak.tkhd.duration);
         let mdhd = &mut written.mdia.mdhd;
         (mdhd.version, mdhd.duration) = (trak.mdia.mdhd.version, trak.mdia.mdhd.duration);
@@ -177,7 +177,7 @@ mod tests {
                     continue;
                 }
                 tracks += 1;
-                let written = track_written_again(trak, moov.mvhd.timescale);
+                let written = track_written_again(trak);
                 if encoded(&written) != encoded(trak) {
                     differences.push(format!(
                         "{} track {}: {:?}",

@@ -1,11 +1,10 @@
 //! [`TrackParameters`], what the samples of a track do not give a muxer
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use isobmff_boxes::{
     CompactSampleToGroupBox, EditBox, ExtendedLanguageBox, HintMediaHeaderBox, LanguageCode,
-    Matrix, MediaInformationHeader, MetaBox, MovieBox, NullMediaHeaderBox, SampleDescriptionBox,
+    Matrix, MediaInformationHeader, MetaBox, NullMediaHeaderBox, SampleDescriptionBox,
     SampleGroupDescriptionBox, SampleTableBox, SampleToGroupBox, ShadowSyncSampleBox,
     SoundMediaHeaderBox, SubSampleInformationBox, SubSampleReferenceTableBox,
     SubtitleMediaHeaderBox, TrackBox, TrackGroupBox, TrackReferenceBox, TrackTypeBox, UserDataBox,
@@ -14,7 +13,6 @@ use isobmff_boxes::{
 use isobmff_core::{FourCc, I8F8, OtherBoxes, U16F16, Utf8String};
 
 use super::movie::data_reference;
-use crate::structure_data::set_durations;
 
 /// What the samples of a track do not give a muxer: every field and box of its `track` box that is not derived from them or from where the muxer places them
 ///
@@ -213,13 +211,16 @@ impl TrackParameters {
         }
     }
 
-    /// Returns the `trak` of the track whose samples `stbl` declares, its durations those of `stbl` and of the edit list in `movie_timescale`
+    /// Returns the `trak` of the track whose samples `stbl` declares
     ///
-    /// The durations and versions are set as
-    /// [`set_durations`](crate::structure_data::set_durations) sets them.
-    /// The sample entries and the boxes of the sample table the parameters
-    /// hold replace those of `stbl`; the data reference is one entry, the
-    /// media data in the same file.
+    /// The fields and boxes the parameters hold are written as they are:
+    /// the sample entries and the boxes of the sample table the parameters
+    /// hold replace those of `stbl`, and the data reference is one entry,
+    /// the media data in the same file. The durations and the versions of
+    /// the headers are left at 0, for
+    /// [`MovieParameters::to_movie_box`](super::MovieParameters::to_movie_box)
+    /// to set as [`set_durations`](crate::structure_data::set_durations)
+    /// does.
     ///
     /// ```
     /// use isobmff::boxes::{SampleDescriptionBox, SampleTableBox};
@@ -227,11 +228,11 @@ impl TrackParameters {
     /// use isobmff::FourCc;
     ///
     /// let track = TrackParameters::new(1, 90_000, FourCc::new(*b"vide"), SampleDescriptionBox::default());
-    /// let trak = track.to_track_box(SampleTableBox::default(), 1000);
+    /// let trak = track.to_track_box(SampleTableBox::default());
     /// assert_eq!((trak.tkhd.track_id, trak.mdia.mdhd.timescale), (1, 90_000));
     /// ```
     #[must_use]
-    pub fn to_track_box(&self, stbl: SampleTableBox, movie_timescale: u32) -> TrackBox {
+    pub fn to_track_box(&self, stbl: SampleTableBox) -> TrackBox {
         let mut trak = TrackBox::default();
         let tkhd = &mut trak.tkhd;
         tkhd.track_enabled = self.track_enabled;
@@ -283,14 +284,7 @@ impl TrackParameters {
         stbl.stsh.clone_from(&self.stsh);
         stbl.other_boxes.clone_from(&self.sample_table_other_boxes);
 
-        // Why set the durations through a movie of the one track: the layer
-        // sets them for a `moov`, whose timescale the duration of a track is
-        // counted in.
-        let mut moov = MovieBox::default();
-        moov.mvhd.timescale = movie_timescale;
-        moov.trak = vec![trak];
-        set_durations(&mut moov);
-        moov.trak.pop().unwrap_or_default()
+        trak
     }
 }
 
