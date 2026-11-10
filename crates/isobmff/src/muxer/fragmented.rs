@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use isobmff_boxes::{FileTypeBox, MovieBox, MovieExtendsBox, SegmentTypeBox, TrackExtendsBox};
 use isobmff_core::BoxEncode;
 
-use super::movie::{append_encoded, check_track, movie_box, track_box};
+use super::movie::{append_encoded, check_track, data_reference, movie_box, track_box};
 use super::{Error, MovieDescription, MuxerConfig, TrackDescription};
 use crate::SampleProperties;
 use crate::structure_data::{self, MovieFragmentWriter, SampleTableWriter};
@@ -220,7 +220,7 @@ impl FragmentedMovieFileMuxer {
         match &mut self.state {
             State::Finished => Err(Error::Finished),
             State::Tracks { movie, tracks } => {
-                let moov = fragmented_movie_box(movie, tracks)?;
+                let moov = fragmented_movie_box(movie, tracks);
                 let length = self
                     .output
                     .len()
@@ -314,7 +314,7 @@ impl FragmentedMovieFileMuxer {
         match &self.state {
             State::Finished => return Err(Error::Finished),
             State::Tracks { movie, tracks } => {
-                let moov = fragmented_movie_box(movie, tracks)?;
+                let moov = fragmented_movie_box(movie, tracks);
                 append_encoded(&moov, &mut self.output)?;
             }
             State::Fragments { .. } => self.write_fragment(segment_type)?,
@@ -452,16 +452,11 @@ impl SegmentMuxer {
 }
 
 /// Returns the `moov` of `movie` whose tracks `tracks` describe, which declares no sample and extends each track into movie fragments
-fn fragmented_movie_box(
-    movie: &MovieDescription,
-    tracks: &[TrackDescription],
-) -> Result<MovieBox, Error> {
+fn fragmented_movie_box(movie: &MovieDescription, tracks: &[TrackDescription]) -> MovieBox {
     let mut trak = Vec::with_capacity(tracks.len());
     let mut mvex = MovieExtendsBox::default();
     for track in tracks {
-        let stbl = SampleTableWriter::new(0)
-            .finish(&track.sample_entries)
-            .map_err(Error::StructureData)?;
+        let stbl = SampleTableWriter::new(&track.sample_entries, &data_reference(), 0).finish();
         trak.push(track_box(track, stbl, movie.timescale));
         let mut trex = TrackExtendsBox::default();
         trex.track_id = track.track_id;
@@ -470,7 +465,7 @@ fn fragmented_movie_box(
     }
     let mut moov = movie_box(movie, trak);
     moov.mvex = Some(mvex);
-    Ok(moov)
+    moov
 }
 
 /// The error of a muxer for the error a fragment refuses a sample or a `moof` with

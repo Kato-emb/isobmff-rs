@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use isobmff_boxes::FileTypeBox;
 use isobmff_core::BoxEncode;
 
-use super::movie::{append_encoded, check_track, movie_box, track_box};
+use super::movie::{append_encoded, check_track, data_reference, movie_box, track_box};
 use super::{Error, MovieDescription, MuxerConfig, TrackDescription};
 use crate::framing;
 use crate::structure_data::{self, SampleTableWriter};
@@ -206,9 +206,14 @@ impl MovieFileMuxer {
             return Err(Error::TrackAfterMediaData { track_id });
         }
         check_track(self.tracks.iter().map(|added| &added.description), &track)?;
+        let samples = SampleTableWriter::new(
+            &track.sample_entries,
+            &data_reference(),
+            self.config.sample_count_limit,
+        );
         self.tracks.push(Track {
             description: track,
-            samples: SampleTableWriter::new(self.config.sample_count_limit),
+            samples,
             first_decoding_time: None,
         });
         Ok(())
@@ -249,27 +254,6 @@ impl MovieFileMuxer {
             .iter_mut()
             .find(|track| track.description.track_id == track_id)
             .ok_or(Error::UnknownTrack { track_id })?;
-        // Why check here as well as in the sample table: a sample the table
-        // would refuse only at `finish` is refused while the caller holds it.
-        let sample_description_index = properties.sample_description_index;
-        if usize::try_from(sample_description_index)
-            .ok()
-            .and_then(|index| index.checked_sub(1))
-            .and_then(|index| {
-                track
-                    .description
-                    .sample_entries
-                    .sample_descriptions
-                    .get(index)
-            })
-            .is_none()
-        {
-            return Err(Error::StructureData(
-                structure_data::Error::SampleDescriptionIndexOutOfRange {
-                    sample_description_index,
-                },
-            ));
-        }
         let size = u32::try_from(bytes.len()).map_err(|_| Error::Overflow)?;
         let next = self
             .position
@@ -347,11 +331,7 @@ impl MovieFileMuxer {
         for track in &self.tracks {
             // Why finish a clone: a `moov` that does not write leaves the
             // muxer as it was, samples and all.
-            let stbl = track
-                .samples
-                .clone()
-                .finish(&track.description.sample_entries)
-                .map_err(Error::StructureData)?;
+            let stbl = track.samples.clone().finish();
             trak.push(track_box(&track.description, stbl, self.movie.timescale));
         }
         append_encoded(&movie_box(&self.movie, trak), &mut self.output)?;

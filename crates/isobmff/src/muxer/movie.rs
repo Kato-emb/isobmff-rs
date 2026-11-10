@@ -5,9 +5,9 @@ use alloc::vec::Vec;
 use core::num::NonZeroU128;
 
 use isobmff_boxes::{
-    DataEntry, DataEntryUrlBox, EditBox, HandlerBox, HintMediaHeaderBox, MediaInformationHeader,
-    MovieBox, NullMediaHeaderBox, SampleTableBox, SoundMediaHeaderBox, SubtitleMediaHeaderBox,
-    TrackBox, VideoMediaHeaderBox,
+    DataEntry, DataEntryUrlBox, DataReferenceBox, EditBox, HandlerBox, HintMediaHeaderBox,
+    MediaInformationHeader, MovieBox, NullMediaHeaderBox, SampleTableBox, SoundMediaHeaderBox,
+    SubtitleMediaHeaderBox, TrackBox, VideoMediaHeaderBox,
 };
 use isobmff_core::{BoxDefinition, BoxEncode, I8F8};
 
@@ -94,7 +94,7 @@ pub(super) fn track_box(
         b"subt" => MediaInformationHeader::Subtitle(SubtitleMediaHeaderBox::default()),
         _ => MediaInformationHeader::Null(NullMediaHeaderBox::default()),
     });
-    trak.mdia.minf.dinf.dref.data_entries = vec![DataEntry::Url(DataEntryUrlBox::default())];
+    trak.mdia.minf.dinf.dref = data_reference();
     trak.mdia.minf.dinf.other_boxes = description.data_information_other_boxes.clone();
     trak.mdia.minf.stbl = stbl;
     trak.mdia.minf.stbl.other_boxes = description.sample_table_other_boxes.clone();
@@ -126,6 +126,13 @@ pub(super) fn check_track<'a>(
         });
     }
     Ok(())
+}
+
+/// The data references of every track a muxer writes: one entry, the media data in the same file
+pub(super) fn data_reference() -> DataReferenceBox {
+    let mut dref = DataReferenceBox::default();
+    dref.data_entries = vec![DataEntry::Url(DataEntryUrlBox::default())];
+    dref
 }
 
 /// The version of a box that holds `value` in a field of 32 bits in version 0 and 64 in version 1

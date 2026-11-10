@@ -10,7 +10,10 @@ use std::hint::black_box;
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use isobmff::structure_data::SampleTableWriter;
 use isobmff::{SampleLocation, SampleProperties};
-use isobmff_boxes::SampleFlags;
+use isobmff_boxes::{
+    DataEntry, DataEntryUrlBox, DataReferenceBox, SampleDescription, SampleDescriptionBox,
+    SampleEntry, SampleFlags,
+};
 
 const SAMPLE_DURATION: u32 = 512;
 const SAMPLE_SIZE: u32 = 100;
@@ -53,8 +56,14 @@ fn handle_location(criterion: &mut Criterion) {
             BenchmarkId::new("decoding time kept", count),
             &samples,
             |bencher, samples| {
+                let mut entry = SampleEntry::default();
+                entry.data_reference_index = 1;
+                let mut stsd = SampleDescriptionBox::default();
+                stsd.sample_descriptions = vec![SampleDescription::Typed(entry)];
+                let mut dref = DataReferenceBox::default();
+                dref.data_entries = vec![DataEntry::Url(DataEntryUrlBox::default())];
                 bencher.iter_batched(
-                    || SampleTableWriter::new(count),
+                    || SampleTableWriter::new(&stsd, &dref, count),
                     |mut writer| {
                         for &sample in samples {
                             writer.handle_location(black_box(sample)).unwrap();
