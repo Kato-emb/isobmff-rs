@@ -2,7 +2,6 @@
 
 #[cfg(test)]
 mod tests {
-    use isobmff::framing::media_data_header;
     use isobmff::structure_data::{
         Error, MovieFragmentWriter, StructureDataReader, TrackSampleDescription,
     };
@@ -13,6 +12,18 @@ mod tests {
     };
     use isobmff_core::{BoxDecode, BoxEncode};
     use isobmff_test_support::fixtures::{in_another_file, movie, track};
+
+    /// The header of an `mdat` of `payload_length` bytes, 16 bytes with a `largesize`
+    fn media_data_header(payload_length: u64) -> Option<[u8; 16]> {
+        let size = isobmff_core::ExtendedSize::new(payload_length.checked_add(16)?)?;
+        let header = isobmff_core::BoxHeader::new(
+            isobmff_core::BoxType::compact(*b"mdat"),
+            isobmff_core::BoxSize::Extended(size),
+        )?;
+        let mut bytes = [0; 16];
+        header.encode(&mut bytes).ok()?;
+        Some(bytes)
+    }
 
     /// A movie of track 1, of one sample entry, track 2, of two, and track 3, whose media data is in another file
     fn three_tracks() -> MovieBox {

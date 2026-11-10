@@ -5,20 +5,20 @@ use alloc::vec::Vec;
 use isobmff_boxes::FileTypeBox;
 use isobmff_core::BoxEncode;
 
-use super::movie::{append_encoded, check_track, data_reference, movie_box, track_box};
+use super::movie::{
+    append_encoded, check_track, data_reference, media_data_header, movie_box, track_box,
+};
 use super::{Error, MovieDescription, MuxerConfig, TrackDescription};
-use crate::framing;
 use crate::structure_data::{self, SampleTableWriter, TrackSampleDescription};
 use crate::{SampleLocation, SampleProperties};
 
-/// Length of the header of the `mdat`, which [`framing::media_data_header`] writes with a `largesize`
+/// Length of the header of the `mdat`, written with a `largesize` so that its length can be written over in place
 const MEDIA_DATA_HEADER_LENGTH: u64 = 16;
 
 /// The header of the `mdat` a caller writes over the one first written, once a [`MovieFileMuxer`] has finished
 ///
-/// The header of the `media data` box, ISO/IEC 14496-12 §8.1.1, as
-/// [`framing::media_data_header`] writes it, with the length of every sample
-/// in the box.
+/// The header of the `media data` box, ISO/IEC 14496-12 §8.1.1, of 16 bytes
+/// with a `largesize`, with the length of every sample in the box.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MediaDataHeader {
@@ -172,7 +172,7 @@ impl MovieFileMuxer {
         let mut output = Vec::with_capacity(length);
         append_encoded(&file_type, &mut output)?;
         let media_data_offset = u64::try_from(output.len()).map_err(|_| Error::Overflow)?;
-        let header = framing::media_data_header(0).ok_or(Error::Overflow)?;
+        let header = media_data_header(0).ok_or(Error::Overflow)?;
         output.extend_from_slice(&header);
         Ok(Self {
             movie,
@@ -329,7 +329,7 @@ impl MovieFileMuxer {
         );
         let header = MediaDataHeader {
             offset: self.media_data_offset,
-            bytes: framing::media_data_header(payload_length).ok_or(Error::Overflow)?,
+            bytes: media_data_header(payload_length).ok_or(Error::Overflow)?,
         };
         let mut trak = Vec::with_capacity(self.tracks.len());
         for track in &self.tracks {

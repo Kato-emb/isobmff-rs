@@ -2,8 +2,8 @@
 //!
 //! The example reads a file with the demuxer where it asks, and writes each
 //! sample it lends without a muxer, with only the movie fragment writer and
-//! the sample table writer of [`structure_data`], the `mdat` header of
-//! [`framing`](isobmff::framing), and the boxes:
+//! the sample table writer of [`structure_data`], the box header
+//! [`BoxHeader`], and the boxes:
 //!
 //! 1. an `ftyp`, a `free` (§8.1.2) as long as the header of an `mdat`, and a
 //!    `moov` with an `mvex` and no sample;
@@ -13,6 +13,13 @@
 //!    where its fragment put it, and over the `free` the header of an `mdat`
 //!    that holds the first `moov` and the fragments: the file is then an
 //!    `ftyp`, one `mdat` and a `moov`.
+//!
+//! While it is written, the file is a whole fragmented movie file each time a
+//! fragment has been written: a writing cut off, by a crash or a lost
+//! connection, leaves a file that reads up to the last fragment written, and
+//! loses only the fragment being written. `finish` then appends the `moov`
+//! and turns the `free` into the header of an `mdat`, which makes the file a
+//! movie file.
 //!
 //! Memory is bounded by the limits of [`DemuxerConfig`], the bytes of one
 //! fragment and some tens of bytes for each sample of the sample tables,
@@ -25,16 +32,18 @@ use std::io::{Read, Seek, SeekFrom, Write};
 
 use isobmff::boxes::{Free, FreeSpaceBox, MovieBox, MovieExtendsBox, TrackExtendsBox};
 use isobmff::demuxer::Event;
-use isobmff::framing::media_data_header;
 use isobmff::structure_data::{MovieFragmentWriter, SampleTableWriter, TrackSampleDescription};
-use isobmff::{BoxDefinition, BoxEncode, Demuxer, DemuxerConfig, SampleLocation, SampleProperties};
+use isobmff::{
+    BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, Demuxer, DemuxerConfig, ExtendedSize,
+    SampleLocation, SampleProperties,
+};
 
 // Why not take the limit from the muxer configuration: the example writes
 // without a muxer; this is the limit a muxer takes by default.
 /// The most samples the writers take of a fragment, and of a track
 const SAMPLE_COUNT_LIMIT: u64 = 1 << 20;
 
-/// Length of the header of an `mdat` as [`media_data_header`] writes it, which the `free` that opens the movie is as long as
+/// Length of the header of an `mdat` with a `largesize`, which the `free` that opens the movie is as long as
 const MEDIA_DATA_HEADER_LENGTH: usize = 16;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -161,13 +170,18 @@ fn hybrid(
         trak.mdia.minf.stbl = table.finish();
     }
     declare_durations(&mut moov, edits_run_to_the_end);
-    let end = output.stream_position()?;
-    let header = media_data_header(end - free_offset - u64::try_from(MEDIA_DATA_HEADER_LENGTH)?)
+    // The `free` was written first, as long as an `mdat` header with a
+    // `largesize`; now that the length is known, the header is written over it
+    let size =
+        ExtendedSize::new(output.stream_position()? - free_offset).ok_or("a file too long")?;
+    let header = BoxHeader::new(BoxType::compact(*b"mdat"), BoxSize::Extended(size))
         .ok_or("a file too long")?;
+    let mut bytes = [0; MEDIA_DATA_HEADER_LENGTH];
+    header.encode(&mut bytes)?;
     append(&moov, &mut out)?;
     output.write_all(&out)?;
     output.seek(SeekFrom::Start(free_offset))?;
-    output.write_all(&header)?;
+    output.write_all(&bytes)?;
     Ok(())
 }
 
@@ -185,9 +199,14 @@ fn write_fragment(
     }
     let mut out = Vec::new();
     append(&fragments.finish(), &mut out)?;
-    out.extend_from_slice(
-        &media_data_header(u64::try_from(media_data.len())?).ok_or("a fragment too long")?,
-    );
+    // The `moof` declares its samples after an `mdat` header with a `largesize`
+    let size = ExtendedSize::new(u64::try_from(MEDIA_DATA_HEADER_LENGTH + media_data.len())?)
+        .ok_or("a fragment too long")?;
+    let header = BoxHeader::new(BoxType::compact(*b"mdat"), BoxSize::Extended(size))
+        .ok_or("a fragment too long")?;
+    let start = out.len();
+    out.resize(start + MEDIA_DATA_HEADER_LENGTH, 0);
+    header.encode(&mut out[start..])?;
     output.write_all(&out)?;
     let media_data_offset = output.stream_position()?;
     output.write_all(media_data)?;
@@ -204,6 +223,8 @@ fn write_fragment(
         })?;
     }
     media_data.clear();
+    // The file is now a whole fragmented movie file, up to this fragment
+    output.flush()?;
     Ok(())
 }
 
@@ -344,7 +365,7 @@ mod tests {
         readable.then_some((movie?, samples))
     }
 
-    /// What the example writes of `file`, a fragment for every `samples_per_fragment` samples: the file as it stood before its last `moov` and its `mdat` header were written, and the file once they were
+    /// What the example writes of `file`, a fragment for every `samples_per_fragment` samples: the file as it stood once its last fragment was written, before its last `moov` and its `mdat` header were, and the file once they were
     fn write_hybrid(
         file: &[u8],
         samples_per_fragment: usize,
@@ -420,16 +441,36 @@ mod tests {
     }
 
     #[test]
-    fn a_movie_reads_as_fragmented_while_it_is_written_and_as_a_movie_file_once_it_ends() {
+    fn a_movie_cut_off_after_any_fragment_reads_up_to_it_and_once_it_ends_reads_as_a_movie_file() {
         for file in FIXTURES {
             let (_, samples) = read(file).unwrap();
             let (fragmented, finished) = write_hybrid(file, 16).unwrap();
 
-            let (movie_while_written, while_written) = read(&fragmented).unwrap();
-            assert_eq!(
-                (while_written, movie_while_written.mvex.is_some()),
-                (samples.clone(), true)
-            );
+            // Where each fragment ends: its `moof`, then its `mdat`, then the next box or the end
+            let boxes = top_level_boxes(&fragmented);
+            let ends_of_fragments: Vec<u64> = (0..boxes.len())
+                .filter(|&index| {
+                    boxes[index].0 == "moof"
+                        && boxes.get(index + 1).is_some_and(|next| next.0 == "mdat")
+                })
+                .map(|index| {
+                    boxes
+                        .get(index + 2)
+                        .map_or(u64::try_from(fragmented.len()).unwrap(), |(_, offset)| {
+                            *offset
+                        })
+                })
+                .collect();
+            assert_eq!(ends_of_fragments.len(), samples.len().div_ceil(16));
+            for (fragments, end) in (1..).zip(&ends_of_fragments) {
+                let cut_off = &fragmented[..usize::try_from(*end).unwrap()];
+                let (movie_while_written, while_written) = read(cut_off).unwrap();
+                let written = samples.len().min(fragments * 16);
+                assert_eq!(
+                    (while_written.as_slice(), movie_while_written.mvex.is_some()),
+                    (&samples[..written], true)
+                );
+            }
 
             let (movie_once_ended, once_ended) = read(&finished).unwrap();
             assert_eq!(

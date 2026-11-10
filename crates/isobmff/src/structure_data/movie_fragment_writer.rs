@@ -12,7 +12,7 @@ use super::Error;
 use super::sample::{self, Sample, TrackSampleDescription};
 use crate::SampleLocation;
 
-/// Length of the header of the `mdat` that follows each `moof`, as [`framing::media_data_header`](crate::framing::media_data_header) writes it
+/// Length of the header of the `mdat` that follows each `moof`, with a `largesize`
 const MEDIA_DATA_HEADER_LENGTH: u64 = 16;
 
 /// The most bytes the `moof` header and its `mfhd` take
@@ -48,9 +48,8 @@ struct Track {
 /// fragment declares its samples from the `moof` it is in, §8.8.7, wherever
 /// it lies in the file. [`finish`](Self::finish) returns the `moof` that
 /// declares them and goes on to the next fragment; the caller writes the
-/// `moof`, then the header of an `mdat` as
-/// [`framing::media_data_header`](crate::framing::media_data_header) writes
-/// it, then the media data, each sample at its offset. The `finish` of a
+/// `moof`, then the header of an `mdat` of 16 bytes with a `largesize`
+/// (§4.2.2), then the media data, each sample at its offset. The `finish` of a
 /// writer of structure-data ends one unit, unlike that of a muxer, which ends
 /// the file. Each `moof` takes the next `sequence_number`, from 1, §8.8.5.
 ///
@@ -78,15 +77,14 @@ struct Track {
 /// in the media data.
 ///
 /// ```
-/// use isobmff::framing::media_data_header;
+/// use isobmff::boxes::{MovieBox, SampleFlags};
 /// use isobmff::structure_data::{MovieFragmentWriter, StructureDataReader, TrackSampleDescription};
+/// use isobmff::{BoxDecode, BoxEncode, BoxHeader, BoxSize, BoxType, ExtendedSize};
 /// use isobmff::{SampleLocation, SampleProperties};
-/// use isobmff_boxes::{MovieBox, SampleFlags};
-/// use isobmff_core::{BoxDecode, BoxEncode};
 ///
 /// // A `moov` of one track, whose sample entry names the media data in the file
 /// let file: &[u8] = include_bytes!("../../tests/fixtures/fragmented.mp4");
-/// let (_ftyp, rest) = isobmff_boxes::FileTypeBox::decode(file)?;
+/// let (_ftyp, rest) = isobmff::boxes::FileTypeBox::decode(file)?;
 /// let (moov, _) = MovieBox::decode(rest)?;
 /// let trak = &moov.trak[0];
 /// let track = TrackSampleDescription {
@@ -114,7 +112,11 @@ struct Track {
 /// let moof = writer.finish();
 /// let mut written = vec![0; usize::try_from(moof.encoded_len())?];
 /// moof.encode(&mut written)?;
-/// written.extend_from_slice(&media_data_header(5).ok_or("too long")?);
+/// let size = ExtendedSize::new(16 + 5).ok_or("too long")?;
+/// let header = BoxHeader::new(BoxType::compact(*b"mdat"), BoxSize::Extended(size)).ok_or("too long")?;
+/// let start = written.len();
+/// written.resize(start + 16, 0);
+/// header.encode(&mut written[start..])?;
 /// written.extend_from_slice(b"abcde");
 ///
 /// // The fragment declares the samples where their bytes lie in the file
@@ -257,8 +259,7 @@ impl MovieFragmentWriter {
     /// Returns the `moof` of the samples taken, and goes on to the next fragment
     ///
     /// The `moof` declares each sample where it lies after the header of an
-    /// `mdat` as [`framing::media_data_header`](crate::framing::media_data_header)
-    /// writes it, written right after the `moof`. Where no sample was taken,
+    /// `mdat` of 16 bytes with a `largesize`, written right after the `moof`. Where no sample was taken,
     /// the `moof` holds no track fragment; it still takes a `sequence_number`.
     #[must_use]
     pub fn finish(&mut self) -> MovieFragmentBox {

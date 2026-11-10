@@ -10,12 +10,23 @@ mod support;
 
 #[cfg(test)]
 mod tests {
-    use isobmff::framing::media_data_header;
     use isobmff::muxer::{Error, MovieDescription, TrackDescription};
     use isobmff::{MovieFileMuxer, MuxerConfig};
     use isobmff_boxes::{EditBox, MovieBox};
     use isobmff_core::{BoxDecode, BoxEncode, OtherBoxes};
     use isobmff_test_support::{conformance_files, ffprobe, ffprobe_packets};
+
+    /// The header of an `mdat` of `payload_length` bytes, 16 bytes with a `largesize`
+    fn media_data_header(payload_length: u64) -> Option<[u8; 16]> {
+        let size = isobmff_core::ExtendedSize::new(payload_length.checked_add(16)?)?;
+        let header = isobmff_core::BoxHeader::new(
+            isobmff_core::BoxType::compact(*b"mdat"),
+            isobmff_core::BoxSize::Extended(size),
+        )?;
+        let mut bytes = [0; 16];
+        header.encode(&mut bytes).ok()?;
+        Some(bytes)
+    }
 
     use crate::support::{Read, mp4_file_type, one_sample_entry_track, packet_read, read, sample};
 
