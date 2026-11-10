@@ -45,6 +45,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         arguments.next().ok_or(usage)?,
         arguments.next().ok_or(usage)?,
     );
+    if std::fs::canonicalize(&output).ok() == Some(std::fs::canonicalize(&input)?) {
+        return Err("the output is the input, which writing it would empty".into());
+    }
     fast_start(std::fs::File::open(input)?, std::fs::File::create(output)?)
 }
 

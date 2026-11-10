@@ -53,6 +53,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         arguments.next().ok_or(usage)?,
         arguments.next().ok_or(usage)?,
     );
+    if std::fs::canonicalize(&output).ok() == Some(std::fs::canonicalize(&input)?) {
+        return Err("the output is the input, which writing it would empty".into());
+    }
     let samples_per_fragment = arguments
         .next()
         .map_or(Ok(30), |count| count.parse::<usize>())?;
