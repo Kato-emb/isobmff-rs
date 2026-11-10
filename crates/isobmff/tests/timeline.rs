@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use isobmff::timeline::set_durations;
+    use isobmff::timeline::declare_durations;
     use isobmff_boxes::{
         CompositionOffsetBox, CompositionOffsetEntry, EditBox, EditListBox, EditListEntry,
         MovieBox, TrackBox,
@@ -57,7 +57,7 @@ mod tests {
     fn with_durations(timescale: u32, tracks: impl IntoIterator<Item = TrackBox>) -> MovieBox {
         let mut moov = movie(tracks);
         moov.mvhd.timescale = timescale;
-        set_durations(&mut moov);
+        declare_durations(&mut moov);
         moov
     }
 
@@ -181,7 +181,7 @@ mod tests {
         let mut moov = movie([timed]);
         moov.mvhd.timescale = 1000;
         moov.mvhd.creation_time = 1 << 32;
-        set_durations(&mut moov);
+        declare_durations(&mut moov);
         assert_eq!(
             [
                 versions(&with_durations(1000, [timed_track(1, 1000, None, None)])),
@@ -202,7 +202,7 @@ mod tests {
             timed_track(2, 1000, None, Some(&[(500, -1), (3, 0)])),
         ]);
         (moov.mvhd.timescale, moov.mvhd.next_track_id) = (1000, 9);
-        set_durations(&mut moov);
+        declare_durations(&mut moov);
         assert_eq!((moov.mvhd.duration, moov.mvhd.next_track_id), (503, 9));
     }
 }

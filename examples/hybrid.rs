@@ -2,7 +2,7 @@
 //!
 //! The example reads a file with the demuxer where it asks, and writes each
 //! sample it lends without a muxer, with only the movie fragment writer, the
-//! sample table writer of [`structure_data`], [`set_durations`] of
+//! sample table writer of [`structure_data`], [`declare_durations`] of
 //! [`timeline`], the box header [`BoxHeader`], and the boxes:
 //!
 //! 1. an `ftyp`, a `free` (§8.1.2) as long as the header of an `mdat`, and a
@@ -37,7 +37,7 @@ use std::path::Path;
 use isobmff::boxes::{Free, FreeSpaceBox, MovieBox, MovieExtendsBox, TrackExtendsBox};
 use isobmff::demuxer::Event;
 use isobmff::structure_data::{MovieFragmentWriter, SampleTableWriter, TrackSampleDescription};
-use isobmff::timeline::set_durations;
+use isobmff::timeline::declare_durations;
 use isobmff::{
     BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, Demuxer, DemuxerConfig, ExtendedSize,
     SampleLocation, SampleProperties,
@@ -122,7 +122,7 @@ fn hybrid(
                         mvex.trex.push(trex);
                     }
                     fragmented.mvex = Some(mvex);
-                    set_durations(&mut fragmented);
+                    declare_durations(&mut fragmented);
                     append(&fragmented, &mut out)?;
                     output.write_all(&out)?;
                     out.clear();
@@ -193,7 +193,7 @@ fn hybrid(
     for (trak, table) in moov.trak.iter_mut().zip(&mut tables) {
         trak.mdia.minf.stbl = table.finish();
     }
-    set_durations(&mut moov);
+    declare_durations(&mut moov);
     // The `free` was written first, as long as an `mdat` header with a
     // `largesize`; now that the length is known, the header is written over it
     let size =

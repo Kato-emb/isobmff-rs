@@ -2,7 +2,7 @@
 //!
 //! The example reads a file with the demuxer where it asks, and writes each
 //! sample it lends without a muxer, with only the sample table writer of
-//! [`structure_data`], [`set_durations`] of [`timeline`], the box header
+//! [`structure_data`], [`declare_durations`] of [`timeline`], the box header
 //! [`BoxHeader`], and the boxes:
 //!
 //! 1. an `ftyp`, then a `free` (§8.1.2) of `reserved_bytes`, the space kept
@@ -41,7 +41,7 @@ use std::path::Path;
 use isobmff::boxes::MovieBox;
 use isobmff::demuxer::Event;
 use isobmff::structure_data::{SampleTableWriter, TrackSampleDescription};
-use isobmff::timeline::set_durations;
+use isobmff::timeline::declare_durations;
 use isobmff::{
     BoxEncode, BoxHeader, BoxSize, BoxType, CompactSize, Demuxer, DemuxerConfig, ExtendedSize,
     SampleLocation, SampleProperties,
@@ -186,7 +186,7 @@ fn reserved_moov(
     for (trak, (table, _)) in moov.trak.iter_mut().zip(&mut tables) {
         trak.mdia.minf.stbl = table.finish();
     }
-    set_durations(&mut moov);
+    declare_durations(&mut moov);
     let length = moov.encoded_len();
     let mut bytes = vec![0; usize::try_from(length)?];
     moov.encode(&mut bytes)?;

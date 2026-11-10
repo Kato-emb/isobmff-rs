@@ -1,4 +1,4 @@
-//! The timelines of a movie: how long its media, its tracks and the movie last, as their sample tables and edit lists give it
+//! The timelines of a movie: the durations its headers declare, as its sample tables and edit lists give them
 
 use core::num::NonZeroU128;
 
@@ -6,7 +6,7 @@ use isobmff_boxes::MovieBox;
 
 use crate::structure_data::{composition_end, media_duration};
 
-/// Sets the durations of `movie`, of each of its tracks and of their media to those the sample tables and the edit lists give, and each header to the version they need
+/// Makes the headers of `movie` declare the durations its sample tables and edit lists give, of the movie, of each of its tracks and of their media, each header in the version they need
 ///
 /// * The duration of the media of a track is
 ///   [`media_duration`], ISO/IEC
@@ -33,7 +33,7 @@ use crate::structure_data::{composition_end, media_duration};
 ///
 /// ```
 /// use isobmff::boxes::{MovieBox, TimeToSampleBox, TimeToSampleEntry, TrackBox};
-/// use isobmff::timeline::set_durations;
+/// use isobmff::timeline::declare_durations;
 ///
 /// // A track of 3 samples of 3,000 each, in media of 90,000 units a second
 /// let mut run = TimeToSampleEntry::default();
@@ -48,13 +48,13 @@ use crate::structure_data::{composition_end, media_duration};
 /// moov.mvhd.timescale = 1_000;
 /// moov.trak = vec![trak];
 ///
-/// set_durations(&mut moov);
+/// declare_durations(&mut moov);
 /// assert_eq!(
 ///     (moov.mvhd.duration, moov.trak[0].tkhd.duration, moov.trak[0].mdia.mdhd.duration),
 ///     (100, 100, 9_000)
 /// );
 /// ```
-pub fn set_durations(movie: &mut MovieBox) {
+pub fn declare_durations(movie: &mut MovieBox) {
     let movie_timescale = movie.mvhd.timescale;
     for trak in &mut movie.trak {
         let stbl = &trak.mdia.minf.stbl;

@@ -10,7 +10,7 @@ use isobmff_core::{I8F8, I16F16, OtherBoxes};
 use super::TrackParameters;
 use super::movie::data_reference;
 use crate::structure_data::{SampleTableWriter, TrackSampleDescription};
-use crate::timeline::set_durations;
+use crate::timeline::declare_durations;
 
 /// What the samples of a movie do not give a muxer: every field and box of its `moov` that is not derived from its tracks
 ///
@@ -140,7 +140,7 @@ impl MovieParameters {
         moov.meta.clone_from(&self.meta);
         moov.udta.clone_from(&self.udta);
         moov.other_boxes.clone_from(&self.other_boxes);
-        set_durations(&mut moov);
+        declare_durations(&mut moov);
         moov
     }
 

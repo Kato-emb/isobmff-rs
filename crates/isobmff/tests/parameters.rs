@@ -11,7 +11,7 @@ mod support;
 #[cfg(test)]
 mod tests {
     use isobmff::muxer::{MovieParameters, TrackParameters};
-    use isobmff::timeline::set_durations;
+    use isobmff::timeline::declare_durations;
     use isobmff_boxes::{
         CompositionOffsetBox, CompositionOffsetEntry, EditBox, EditListBox, EditListEntry, Matrix,
         SampleTableBox, TrackBox,
@@ -78,7 +78,7 @@ mod tests {
                 last.edit_duration = 0;
             }
         }
-        set_durations(&mut again);
+        declare_durations(&mut again);
         assert_eq!((again, moov.mvhd.duration), (moov.clone(), 502));
     }
 

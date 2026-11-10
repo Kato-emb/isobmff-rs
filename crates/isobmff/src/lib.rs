@@ -51,8 +51,9 @@
 //! laid end to end in a file from bytes that arrive in pieces, and
 //! [`structure_data`] resolves the samples a `moov` or a `moof` declares to where their
 //! bytes lie, and writes the sample table of a track, or a `moof`, from them;
-//! [`timeline`] sets how long the media, the tracks and the movie of a `moov`
-//! last, from its sample tables and edit lists. The boxes
+//! [`timeline`] makes the headers of a `moov` declare how long its media,
+//! its tracks and the movie last, as its sample tables and edit lists give it.
+//! The boxes
 //! themselves are read and written with [`boxes`], and the header that frames
 //! a box, the values its fields carry and the traits a box implements, such as
 //! [`BoxDecode`] and [`BoxEncode`], are at the root of the crate. The [`Error`]
