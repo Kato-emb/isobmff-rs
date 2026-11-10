@@ -33,6 +33,7 @@ fn demux(mut input: impl Read + Seek, mut summary: impl Write) -> Result<(), Box
                 Event::Movie(moov) => {
                     for trak in &moov.trak {
                         demuxer.subscribe_track(trak.tkhd.track_id);
+                        tracks.entry(trak.tkhd.track_id).or_default();
                     }
                 }
                 Event::Sample(sample) => {
@@ -82,5 +83,21 @@ mod tests {
                 "track 1: 12 samples, 17615 bytes\ntrack 2: 58 samples, 4932 bytes\n"
             );
         }
+    }
+
+    #[test]
+    fn every_track_the_moov_declares_is_counted_even_with_no_sample() {
+        let file = include_bytes!("../crates/isobmff/tests/fixtures/segment.mp4");
+        let first_segment = file
+            .windows(4)
+            .position(|window| window == b"styp")
+            .unwrap()
+            - 4;
+        let mut summary = Vec::new();
+        demux(Cursor::new(&file[..first_segment]), &mut summary).unwrap();
+        assert_eq!(
+            String::from_utf8(summary).unwrap(),
+            "track 1: 0 samples, 0 bytes\ntrack 2: 0 samples, 0 bytes\n"
+        );
     }
 }

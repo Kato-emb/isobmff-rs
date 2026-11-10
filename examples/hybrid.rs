@@ -243,7 +243,7 @@ fn fragmented_movie_box(movie: &MovieBox, tracks: &[TrackSampleDescription<'_>])
     moov
 }
 
-/// Sets the durations of the media of each track of `moov`, of the track and of the movie, to those its sample tables and edit lists give
+/// Sets the durations of the media of each track of `moov`, of the track and of the movie, to those its sample tables and edit lists give, each box in the version its duration and times need
 ///
 /// Where `edits_run_to_the_end`, the `moov` was that of a fragmented movie
 /// without a `mehd`, whose last edit of a duration of 0 runs to the end of the
@@ -260,7 +260,12 @@ fn declare_durations(moov: &mut MovieBox, edits_run_to_the_end: bool) {
             })
         });
         trak.mdia.mdhd.duration = media_duration;
-        trak.mdia.mdhd.version = u8::from(media_duration > u64::from(u32::MAX));
+        let mdhd = &mut trak.mdia.mdhd;
+        mdhd.version = u8::from(
+            [media_duration, mdhd.creation_time, mdhd.modification_time]
+                .iter()
+                .any(|&value| value > u64::from(u32::MAX)),
+        );
         let media_timescale = u128::from(trak.mdia.mdhd.timescale);
         if let Some(last) = trak
             .edts
@@ -293,7 +298,12 @@ fn declare_durations(moov: &mut MovieBox, edits_run_to_the_end: bool) {
                 .unwrap_or(u64::MAX)
         });
         trak.tkhd.duration = duration;
-        trak.tkhd.version = u8::from(duration > u64::from(u32::MAX));
+        let tkhd = &mut trak.tkhd;
+        tkhd.version = u8::from(
+            [duration, tkhd.creation_time, tkhd.modification_time]
+                .iter()
+                .any(|&value| value > u64::from(u32::MAX)),
+        );
     }
     moov.mvhd.duration = moov
         .trak
@@ -301,7 +311,12 @@ fn declare_durations(moov: &mut MovieBox, edits_run_to_the_end: bool) {
         .map(|trak| trak.tkhd.duration)
         .max()
         .unwrap_or(0);
-    moov.mvhd.version = u8::from(moov.mvhd.duration > u64::from(u32::MAX));
+    let mvhd = &mut moov.mvhd;
+    mvhd.version = u8::from(
+        [mvhd.duration, mvhd.creation_time, mvhd.modification_time]
+            .iter()
+            .any(|&value| value > u64::from(u32::MAX)),
+    );
 }
 
 // Why not encode into a new `Vec` and copy it: the box is encoded in place at
@@ -363,6 +378,55 @@ mod tests {
             }
         }
         readable.then_some((movie?, samples))
+    }
+
+    /// The segment fixture, its `mvhd`, and each `tkhd` and `mdhd`, created and modified at a time past 32 bits, so of version 1
+    fn with_times_past_32_bits() -> Vec<u8> {
+        use isobmff::BoxDecode;
+        use isobmff::boxes::FileTypeBox;
+
+        let file = FIXTURES[3];
+        let (_, after_ftyp) = FileTypeBox::decode(file).unwrap();
+        let (mut moov, after_moov) = MovieBox::decode(after_ftyp).unwrap();
+        let time = 1 << 32;
+        moov.mvhd.version = 1;
+        (moov.mvhd.creation_time, moov.mvhd.modification_time) = (time, time);
+        for trak in &mut moov.trak {
+            trak.tkhd.version = 1;
+            (trak.tkhd.creation_time, trak.tkhd.modification_time) = (time, time);
+            trak.mdia.mdhd.version = 1;
+            (
+                trak.mdia.mdhd.creation_time,
+                trak.mdia.mdhd.modification_time,
+            ) = (time, time);
+        }
+        let mut written = file[..file.len() - after_ftyp.len()].to_vec();
+        super::append(&moov, &mut written).unwrap();
+        written.extend_from_slice(after_moov);
+        written
+    }
+
+    #[test]
+    fn a_movie_created_at_a_time_past_32_bits_is_written_with_its_times() {
+        let file = with_times_past_32_bits();
+        let (movie, samples) = read(&file).unwrap();
+        let (_, finished) = write_hybrid(&file, 16).unwrap();
+        let (written, read_back) = read(&finished).unwrap();
+        let times = |moov: &MovieBox| {
+            let mut times = vec![(moov.mvhd.creation_time, moov.mvhd.modification_time)];
+            for trak in &moov.trak {
+                times.push((trak.tkhd.creation_time, trak.tkhd.modification_time));
+                times.push((
+                    trak.mdia.mdhd.creation_time,
+                    trak.mdia.mdhd.modification_time,
+                ));
+            }
+            times
+        };
+        assert_eq!(
+            (read_back.len(), times(&written)),
+            (samples.len(), times(&movie))
+        );
     }
 
     /// What the example writes of `file`, a fragment for every `samples_per_fragment` samples: the file as it stood once its last fragment was written, before its last `moov` and its `mdat` header were, and the file once they were

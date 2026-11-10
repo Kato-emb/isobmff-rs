@@ -6,7 +6,9 @@ use isobmff_boxes::{
     SampleSizeVariant, SampleSizes, SampleToChunkBox, SampleToChunkEntry, TimeToSampleBox,
     TimeToSampleEntry, TrackBox, TrackExtendsBox, TrackFragmentBox, TrackRunBox, TrackRunSamples,
 };
-use isobmff_core::{BoxDefinition, BoxEncode, Utf8String};
+use isobmff_core::{
+    BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, ExtendedSize, Utf8String,
+};
 
 /// Returns the track `track_id` of the samples of `sizes`, each lasting `sample_delta`, laid in chunks at `chunk_offsets` by the runs `(first_chunk, samples_per_chunk)`
 ///
@@ -101,6 +103,16 @@ pub fn encoded(value: &(impl BoxEncode + BoxDefinition)) -> Vec<u8> {
     let mut bytes = vec![0; usize::try_from(value.encoded_len()).unwrap()];
     value.encode(&mut bytes).unwrap();
     bytes
+}
+
+/// Returns the header of an `mdat` of `payload_length` bytes, 16 bytes with a `largesize`, or `None` where the box would be longer than 64 bits count
+#[must_use]
+pub fn media_data_header(payload_length: u64) -> Option<[u8; 16]> {
+    let size = ExtendedSize::new(payload_length.checked_add(16)?)?;
+    let header = BoxHeader::new(BoxType::compact(*b"mdat"), BoxSize::Extended(size))?;
+    let mut bytes = [0; 16];
+    header.encode(&mut bytes).ok()?;
+    Some(bytes)
 }
 
 /// Returns the box of `box_type` whose payload is `fields` laid end to end, under a 32-bit size
