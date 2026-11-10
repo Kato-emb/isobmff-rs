@@ -3,6 +3,7 @@
 use alloc::vec::Vec;
 
 use isobmff_boxes::FileTypeBox;
+use isobmff_core::BoxEncode;
 
 use super::movie::{append_encoded, movie_box, track_box};
 use super::{Error, MovieDescription, MuxerConfig, TrackDescription};
@@ -152,13 +153,23 @@ impl MovieFileMuxer {
     /// Creates a muxer of the movie `movie` describes, in a file that opens with `file_type`, and holds the bytes that open the file
     ///
     /// # Errors
+    /// * [`Error::BufferFull`]: the `ftyp` and the header of the `mdat` are
+    ///   longer than [`MuxerConfig::buffer_limit`]; nothing is allocated for
+    ///   them.
     /// * [`Error::Encode`]: the `ftyp` does not write.
     pub fn new(
         movie: MovieDescription,
         config: MuxerConfig,
         file_type: FileTypeBox,
     ) -> Result<Self, Error> {
-        let mut output = Vec::new();
+        let opening = file_type
+            .encoded_len()
+            .saturating_add(MEDIA_DATA_HEADER_LENGTH);
+        let length = usize::try_from(opening).unwrap_or(usize::MAX);
+        if length > config.buffer_limit {
+            return Err(Error::BufferFull { length });
+        }
+        let mut output = Vec::with_capacity(length);
         append_encoded(&file_type, &mut output)?;
         let media_data_offset = u64::try_from(output.len()).map_err(|_| Error::Overflow)?;
         let header = framing::media_data_header(0).ok_or(Error::Overflow)?;

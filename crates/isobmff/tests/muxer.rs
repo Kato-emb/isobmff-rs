@@ -312,6 +312,32 @@ mod tests {
     }
 
     #[test]
+    fn the_bytes_that_open_the_file_are_held_within_the_buffer_limit() {
+        let opening = opening();
+        let with_limit = |buffer_limit| {
+            let mut config = MuxerConfig::default();
+            config.buffer_limit = buffer_limit;
+            MovieFileMuxer::new(MovieDescription::new(1000), config, mp4_file_type()).map(|_| ())
+        };
+        assert_eq!(
+            [
+                with_limit(1),
+                with_limit(opening.len() - 1),
+                with_limit(opening.len())
+            ],
+            [
+                Err(Error::BufferFull {
+                    length: opening.len()
+                }),
+                Err(Error::BufferFull {
+                    length: opening.len()
+                }),
+                Ok(()),
+            ]
+        );
+    }
+
+    #[test]
     fn a_finished_muxer_takes_nothing_more() {
         let mut muxer = muxer_of_one_track(MuxerConfig::default());
         muxer.finish().unwrap();

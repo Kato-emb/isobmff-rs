@@ -13,7 +13,9 @@
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MuxerConfig {
-    /// The most bytes the muxer holds for `poll_output` (16 MiB by default)
+    /// The most bytes the muxer holds for `poll_output`, those that open the
+    /// file (the `ftyp` and the header of the `mdat`) among them (16 MiB by
+    /// default)
     ///
     /// A caller that polls after each sample needs room for its largest
     /// sample: 16 MiB holds any sample the demuxer lends by default, and a

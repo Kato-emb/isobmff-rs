@@ -40,7 +40,8 @@ pub enum Error {
     /// A sample is longer than a sample table counts, or the media data would
     /// reach past the last offset a file can have
     Overflow,
-    /// A sample would grow the bytes held for `poll_output` past
+    /// The bytes that open the file, or a sample, would grow the bytes held
+    /// for `poll_output` past
     /// [`MuxerConfig::buffer_limit`](super::MuxerConfig::buffer_limit)
     BufferFull {
         /// The bytes the output held would grow to
