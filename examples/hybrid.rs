@@ -25,10 +25,14 @@
 //! fragment and some tens of bytes for each sample of the sample tables,
 //! whatever the length of the file.
 //!
+//! The output is a new file: an output that exists already is refused, so
+//! the input is never written over, whatever path names it.
+//!
 //! `cargo run --example hybrid -- <input> <output> [samples_per_fragment]`
 
 use std::error::Error;
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::Path;
 
 use isobmff::boxes::{Free, FreeSpaceBox, MovieBox, MovieExtendsBox, TrackExtendsBox};
 use isobmff::demuxer::Event;
@@ -53,17 +57,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         arguments.next().ok_or(usage)?,
         arguments.next().ok_or(usage)?,
     );
-    if std::fs::canonicalize(&output).ok() == Some(std::fs::canonicalize(&input)?) {
-        return Err("the output is the input, which writing it would empty".into());
-    }
     let samples_per_fragment = arguments
         .next()
         .map_or(Ok(30), |count| count.parse::<usize>())?;
-    hybrid(
+    run(Path::new(&input), Path::new(&output), samples_per_fragment)
+}
+
+/// Writes the samples of the file at `input` to a new file at `output`, a fragment for every `samples_per_fragment` of them
+fn run(input: &Path, output: &Path, samples_per_fragment: usize) -> Result<(), Box<dyn Error>> {
+    let (input, output) = (
         std::fs::File::open(input)?,
-        std::fs::File::create(output)?,
-        samples_per_fragment,
-    )
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(output)?,
+    );
+    hybrid(input, output, samples_per_fragment)
 }
 
 /// Writes the samples of `input` to `output`, a fragment for every `samples_per_fragment` of them, then the `moov` that declares every sample, and the `mdat` header over the `free`
@@ -655,5 +664,32 @@ mod tests {
         );
         assert_eq!(differences, Vec::<String>::new());
         assert!(written_files > 0);
+    }
+
+    #[test]
+    fn an_output_that_already_exists_is_refused_and_the_input_is_left_as_it_was() {
+        let directory =
+            std::env::temp_dir().join(format!("isobmff-hybrid-output-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let (input, link, other) = (
+            directory.join("input.mp4"),
+            directory.join("link.mp4"),
+            directory.join("other.mp4"),
+        );
+        std::fs::write(&input, FIXTURES[1]).unwrap();
+        std::fs::hard_link(&input, &link).unwrap();
+        std::fs::write(&other, b"other").unwrap();
+        for output in [&input, &link, &other] {
+            let refused = super::run(&input, output, 16).is_err();
+            assert_eq!(
+                (
+                    refused,
+                    std::fs::read(&input).unwrap(),
+                    std::fs::read(&other).unwrap()
+                ),
+                (true, FIXTURES[1].to_vec(), b"other".to_vec())
+            );
+        }
+        std::fs::remove_dir_all(&directory).unwrap();
     }
 }

@@ -21,10 +21,14 @@
 //! (another file, or an `IdentifiedMediaDataBox`, §8.7.2): which of its
 //! offsets to move would need each chunk resolved to its data reference.
 //!
+//! The output is a new file: an output that exists already is refused, so
+//! the input is never written over, whatever path names it.
+//!
 //! `cargo run --example fast_start -- <input> <output>`
 
 use std::error::Error;
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::Path;
 
 use isobmff::boxes::{ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, MetaBox, MovieBox};
 use isobmff::framing::{BoxReader, Event, FramerConfig};
@@ -47,10 +51,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         arguments.next().ok_or(usage)?,
         arguments.next().ok_or(usage)?,
     );
-    if std::fs::canonicalize(&output).ok() == Some(std::fs::canonicalize(&input)?) {
-        return Err("the output is the input, which writing it would empty".into());
-    }
-    fast_start(std::fs::File::open(input)?, std::fs::File::create(output)?)
+    run(Path::new(&input), Path::new(&output))
+}
+
+/// Writes the file at `input` to a new file at `output`, its `moov` first
+fn run(input: &Path, output: &Path) -> Result<(), Box<dyn Error>> {
+    let (input, output) = (
+        std::fs::File::open(input)?,
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(output)?,
+    );
+    fast_start(input, output)
 }
 
 /// Writes `input` to `output` with its `moov` after its `ftyp` and before every other box, the offsets of the `moov` moved where the boxes they point into now lie
@@ -261,7 +274,7 @@ mod tests {
     };
     use isobmff_test_support::{FfprobePacket, conformance_files, ffprobe, ffprobe_packets};
 
-    use super::fast_start;
+    use super::{fast_start, run};
 
     const MOOV_FIRST: &[u8] =
         include_bytes!("../crates/isobmff/tests/fixtures/movie_moov_first.mp4");
@@ -547,5 +560,32 @@ mod tests {
         );
         assert_eq!(differences, Vec::<String>::new());
         assert!(moved > 0);
+    }
+
+    #[test]
+    fn an_output_that_already_exists_is_refused_and_the_input_is_left_as_it_was() {
+        let directory =
+            std::env::temp_dir().join(format!("isobmff-fast-start-output-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let (input, link, other) = (
+            directory.join("input.mp4"),
+            directory.join("link.mp4"),
+            directory.join("other.mp4"),
+        );
+        std::fs::write(&input, MOOV_LAST).unwrap();
+        std::fs::hard_link(&input, &link).unwrap();
+        std::fs::write(&other, b"other").unwrap();
+        for output in [&input, &link, &other] {
+            let refused = run(&input, output).is_err();
+            assert_eq!(
+                (
+                    refused,
+                    std::fs::read(&input).unwrap(),
+                    std::fs::read(&other).unwrap()
+                ),
+                (true, MOOV_LAST.to_vec(), b"other".to_vec())
+            );
+        }
+        std::fs::remove_dir_all(&directory).unwrap();
     }
 }
