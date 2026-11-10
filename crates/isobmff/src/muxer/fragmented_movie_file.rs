@@ -354,8 +354,8 @@ impl FragmentedMovieFileMuxer {
 
 /// Writer of a movie in segments: an initialization segment, the `ftyp` and a `moov` that declares the tracks and no sample, and media segments, each an `styp` and a movie fragment
 ///
-/// The segments of ISO/IEC 14496-12 §8.16, each media segment opening with a
-/// [`SegmentTypeBox`] (`styp`), §8.16.2, and holding one movie fragment as
+/// The segments of ISO/IEC 14496-12 §8.14, each media segment opening with a
+/// [`SegmentTypeBox`] (`styp`), §8.14.2, and holding one movie fragment as
 /// [`FragmentedMovieFileMuxer`] writes it.
 ///
 /// The muxer is driven as a [`FragmentedMovieFileMuxer`] is, with
@@ -391,20 +391,21 @@ impl FragmentedMovieFileMuxer {
 ///     sample_flags: SampleFlags::default(),
 ///     sample_description_index: 1,
 /// };
-/// let (mut initialization, mut segments) = (Vec::new(), Vec::new());
+/// let (mut initialization, mut first, mut second) = (Vec::new(), Vec::new(), Vec::new());
 /// muxer.handle_sample(sample(0), b"abc")?;
 /// muxer.poll_output(&mut initialization);
 /// muxer.finish_segment()?;
+/// muxer.poll_output(&mut first);
 /// muxer.handle_sample(sample(1024), b"de")?;
 /// muxer.finish()?;
-/// for _ in 0..2 {
-///     let mut segment = Vec::new();
-///     muxer.poll_output(&mut segment);
-///     segments.push(segment);
-/// }
+/// muxer.poll_output(&mut second);
 ///
-/// // Each media segment opens with the `styp`
-/// assert_eq!(&segments[0][4..8], b"styp");
+/// // The initialization segment opens with the `ftyp`, and each media segment with the `styp`
+/// let box_type = |segment: &[u8]| segment.get(4..8).map(<[u8]>::to_vec);
+/// assert_eq!(box_type(&initialization), Some(b"ftyp".to_vec()));
+/// assert_eq!(box_type(&first), Some(b"styp".to_vec()));
+/// assert_eq!(box_type(&second), Some(b"styp".to_vec()));
+/// assert!(first.ends_with(b"abc") && second.ends_with(b"de"));
 /// # Ok::<(), Box<dyn core::error::Error>>(())
 /// ```
 #[derive(Debug, Clone)]

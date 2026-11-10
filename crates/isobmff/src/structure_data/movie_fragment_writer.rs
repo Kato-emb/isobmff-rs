@@ -134,7 +134,8 @@ pub struct MovieFragmentWriter {
     samples: Vec<(usize, Sample)>,
     // Why not find the end of the samples held when the fragment is written:
     // the bound `handle_location` keeps needs it on every sample, and finding
-    // it there makes taking a fragment's samples quadratic in their number.
+    // it there makes taking a fragment's samples quadratic in their number,
+    // as `benches/benches/movie_fragment.rs` measures.
     /// Length of the media data of the fragment: where the sample that ends
     /// last ends
     media_data_length: u64,
