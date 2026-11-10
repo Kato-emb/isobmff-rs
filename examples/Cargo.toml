@@ -32,6 +32,11 @@ name = "hybrid"
 path = "hybrid.rs"
 test = true
 
+[[example]]
+name = "fast_start"
+path = "fast_start.rs"
+test = true
+
 # The examples are programs, not the library: they keep the lints of the
 # workspace that guard safety and reproducible output, and leave out those that
 # keep a library free of panics, its public API documented and extensible, and
