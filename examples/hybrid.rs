@@ -268,8 +268,12 @@ fn declare_durations(moov: &mut MovieBox) {
         let (media, composed) = (media_duration(stbl), composition_end(stbl));
         let media_timescale = u128::from(trak.mdia.mdhd.timescale).max(1);
         let in_movie_timescale = |duration: u64| {
-            u64::try_from((u128::from(duration) * movie_timescale).div_ceil(media_timescale))
-                .unwrap_or(u64::MAX)
+            u64::try_from(
+                u128::from(duration)
+                    .saturating_mul(movie_timescale)
+                    .div_ceil(media_timescale),
+            )
+            .unwrap_or(u64::MAX)
         };
         trak.tkhd.duration = match trak.edts.as_mut().and_then(|edts| edts.elst.as_mut()) {
             Some(elst) => {
@@ -285,7 +289,9 @@ fn declare_durations(moov: &mut MovieBox) {
                         in_movie_timescale(composed.saturating_sub(last.media_time.unsigned_abs()));
                     elst.version = elst.version.max(version([last.edit_duration, 0, 0]));
                 }
-                elst.entries.iter().map(|entry| entry.edit_duration).sum()
+                elst.entries.iter().fold(0_u64, |total, entry| {
+                    total.saturating_add(entry.edit_duration)
+                })
             }
             None => in_movie_timescale(media),
         };
@@ -390,6 +396,32 @@ mod tests {
         super::append(&moov, &mut written).unwrap();
         written.extend_from_slice(after_moov);
         written
+    }
+
+    #[test]
+    fn edits_that_last_longer_than_64_bits_count_together_give_the_longest_duration_there_can_be() {
+        use isobmff::boxes::{EditBox, EditListBox, EditListEntry};
+
+        let (mut moov, _) = read(FIXTURES[1]).unwrap();
+        let mut elst = EditListBox::default();
+        elst.version = 1;
+        elst.entries = [1 << 63, 1 << 63]
+            .into_iter()
+            .map(|edit_duration| {
+                let mut entry = EditListEntry::default();
+                (entry.edit_duration, entry.media_time) = (edit_duration, 0);
+                entry
+            })
+            .collect();
+        let mut edts = EditBox::default();
+        edts.elst = Some(elst);
+        let trak = moov.trak.first_mut().unwrap();
+        trak.edts = Some(edts);
+        super::declare_durations(&mut moov);
+        assert_eq!(
+            (moov.trak.first().unwrap().tkhd.duration, moov.mvhd.duration),
+            (u64::MAX, u64::MAX)
+        );
     }
 
     #[test]

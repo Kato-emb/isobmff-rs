@@ -92,10 +92,9 @@ mod tests {
         (edits, trak.tkhd.duration, trak.mdia.mdhd.duration)
     }
 
+    /// Three samples lasting 1 each, composed at 1, 3 and 2 until 2, 4 and 3, end their composition at 4: an edit from 1 lasts 3, past the 2 their durations leave it
     #[test]
     fn a_last_edit_of_duration_0_lasts_to_the_end_of_the_composition_of_the_samples() {
-        // Composed at 1, 3 and 2 until 2, 4 and 3: the composition ends at 4,
-        // past the 3 their durations add up to.
         let moov = written(1000, 1000, Some(&[(0, 1)]), table_composed_at([1, 2, 0]));
         assert_eq!(durations(&moov), (vec![(3, 1)], 3, 3));
         let moov = written(1000, 1000, Some(&[(500, -1), (0, 1)]), table());

@@ -49,13 +49,10 @@ mod tests {
         );
     }
 
+    /// Three samples lasting 1 each, composed at 1, 3 and 2 until 2, 4 and 3, end their composition at 4, past the 3 their durations add up to; and where the runs of durations and of offsets cut each other, samples composed at 0, 1 and 2 end it at 3
     #[test]
     fn the_composition_ends_where_the_sample_composed_last_ends() {
-        // Composed at 1, 3 and 2 until 2, 4 and 3: the composition ends at 4,
-        // past the 3 their durations add up to.
         let reordered = table(&[(3, 1)], Some(&[(1, 1), (1, 2), (1, 0)]));
-        // Composed at 0 and 1 until 1 and 2, then at 2 until 3: the runs of
-        // durations and of offsets cut each other.
         let runs = table(&[(2, 1), (1, 1)], Some(&[(1, 0), (2, 0)]));
         assert_eq!(
             [
