@@ -14,18 +14,22 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MuxerConfig {
     /// The most bytes the muxer holds for `poll_output`, those that open the
-    /// file (the `ftyp` and the header of the `mdat`) among them (16 MiB by
-    /// default)
+    /// file (the `ftyp`, and the header of the `mdat` or the `moov`) among
+    /// them, and the bytes of the samples of the movie fragment being written
+    /// (16 MiB by default)
     ///
     /// A caller that polls after each sample needs room for its largest
     /// sample: 16 MiB holds any sample the demuxer lends by default, and a
-    /// frame of 4K video coded as a sync sample takes a few MiB.
+    /// frame of 4K video coded as a sync sample takes a few MiB. A movie
+    /// fragment holds its samples until it ends, so the limit bounds its
+    /// length too: 16 MiB holds some seconds of 4K video.
     pub buffer_limit: usize,
-    /// The most samples the muxer takes of one track (2^20 by default)
+    /// The most samples the muxer takes of one track, or of one movie
+    /// fragment (2^20 by default)
     ///
-    /// The muxer keeps some tens of bytes of each until it finishes, so 2^20
-    /// of them take some tens of MiB; at 30 a second, they last more than
-    /// nine hours.
+    /// The muxer keeps some tens of bytes of each until it finishes, or ends
+    /// the fragment, so 2^20 of them take some tens of MiB; at 30 a second,
+    /// they last more than nine hours.
     pub sample_count_limit: u64,
 }
 

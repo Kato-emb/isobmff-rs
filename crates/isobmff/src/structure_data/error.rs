@@ -1,23 +1,24 @@
-//! Why a [`StructureDataReader`](super::StructureDataReader) refuses a box, or a [`SampleTableWriter`](super::SampleTableWriter) a sample
+//! Why a [`StructureDataReader`](super::StructureDataReader) refuses a box, or a writer a sample
 
 use core::fmt;
 
 use isobmff_core::BoxType;
 
-/// Why a [`StructureDataReader`](super::StructureDataReader) refuses a box, or a [`SampleTableWriter`](super::SampleTableWriter) a sample
+/// Why a [`StructureDataReader`](super::StructureDataReader) refuses a box, or a [`SampleTableWriter`](super::SampleTableWriter) or a [`MovieFragmentWriter`](super::MovieFragmentWriter) a sample
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Error {
     /// The tracks declare more samples than
     /// [`StructureDataReader::new`](super::StructureDataReader::new) allows,
     /// and nothing is allocated for them; or a sample is one more than
-    /// [`SampleTableWriter::new`](super::SampleTableWriter::new) allows, and
-    /// it is not taken
+    /// [`SampleTableWriter::new`](super::SampleTableWriter::new) or
+    /// [`MovieFragmentWriter::new`](super::MovieFragmentWriter::new) allows,
+    /// and it is not taken
     SampleCountOverLimit {
         /// Number of samples the tracks declare, or the writer would hold
         sample_count: u64,
         /// The most samples the reader resolves from one box, or the writer
-        /// holds
+        /// holds of a track or of a fragment
         limit: u64,
     },
     /// A table the sample table of a track needs is missing
@@ -78,9 +79,11 @@ pub enum Error {
     /// A movie fragment comes before any `moov`, which says what its tracks
     /// are, ISO/IEC 14496-12 §8.8.1
     MovieFragmentWithoutMovie,
-    /// A track fragment is of a track the `moov` does not have
+    /// A track fragment, or a sample a
+    /// [`MovieFragmentWriter`](super::MovieFragmentWriter) takes, is of a
+    /// track the `moov` does not have
     UnknownTrack {
-        /// `track_ID` the `tfhd` names
+        /// `track_ID` the `tfhd` or the sample names
         track_id: u32,
     },
     /// A sample of a track fragment takes a value that neither the `tfhd` nor
@@ -99,7 +102,8 @@ pub enum Error {
     },
     /// The decoding time of a sample is not the one the `sample_duration`s
     /// of the samples before it in the track add up to, from 0, which a
-    /// time-to-sample table declares, ISO/IEC 14496-12 §8.6.1.2
+    /// time-to-sample table declares, ISO/IEC 14496-12 §8.6.1.2, or from the
+    /// first sample of the track, which a track fragment run declares, §8.8.8
     DecodingTimeGap {
         /// `track_ID` of the track
         track_id: u32,
@@ -108,6 +112,8 @@ pub enum Error {
         /// Decoding time of the sample
         found: u64,
     },
+    /// A box does not write
+    Encode(isobmff_core::Error),
 }
 
 impl fmt::Display for Error {
@@ -167,10 +173,9 @@ impl fmt::Display for Error {
             Self::MovieFragmentWithoutMovie => {
                 write!(formatter, "a movie fragment comes before any moov")
             }
-            Self::UnknownTrack { track_id } => write!(
-                formatter,
-                "a track fragment is of track {track_id}, which the moov does not have"
-            ),
+            Self::UnknownTrack { track_id } => {
+                write!(formatter, "the moov has no track {track_id}")
+            }
             Self::MissingDefault { track_id } => write!(
                 formatter,
                 "a sample of track {track_id} takes a value neither its tfhd nor a trex gives"
@@ -187,8 +192,28 @@ impl fmt::Display for Error {
                 formatter,
                 "a sample of track {track_id} has decoding_time {found}, and the samples before it add up to {expected}"
             ),
+            Self::Encode(_) => write!(formatter, "a box does not write"),
         }
     }
 }
 
-impl core::error::Error for Error {}
+impl core::error::Error for Error {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::Encode(source) => Some(source),
+            Self::SampleCountOverLimit { .. }
+            | Self::MissingTable { .. }
+            | Self::SampleCountMismatch { .. }
+            | Self::InvalidEntry { .. }
+            | Self::MediaDataElsewhere { .. }
+            | Self::Overflow { .. }
+            | Self::CompositionOffsetOutOfRange { .. }
+            | Self::SampleDescriptionIndexOutOfRange { .. }
+            | Self::MovieFragmentWithoutMovie
+            | Self::UnknownTrack { .. }
+            | Self::MissingDefault { .. }
+            | Self::OtherTrack { .. }
+            | Self::DecodingTimeGap { .. } => None,
+        }
+    }
+}

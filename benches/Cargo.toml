@@ -21,3 +21,7 @@ isobmff-test-support = { path = "../crates/isobmff-test-support" }
 [[bench]]
 name = "sample_table"
 harness = false
+
+[[bench]]
+name = "movie_fragment"
+harness = false

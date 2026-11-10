@@ -13,15 +13,15 @@ mod tests {
     use std::collections::BTreeMap;
     use std::num::NonZeroU32;
 
-    use isobmff::structure_data::{Error, SampleTableWriter};
+    use isobmff::structure_data::{Error, SampleTableWriter, TrackSampleDescription};
     use isobmff::{SampleLocation, SampleProperties};
     use isobmff_boxes::{
         ChunkLargeOffsetBox, ChunkOffsetVariant, CompositionOffsetBox, CompositionOffsetEntry,
-        SampleDependencyTypeBox, SampleDependencyTypeEntry, SampleDescriptionBox, SampleFlags,
-        SampleSizeBox, SampleSizeVariant, SampleSizes, SampleTableBox, SampleToChunkBox,
-        SampleToChunkEntry, SyncSampleBox, TimeToSampleBox, TimeToSampleEntry,
+        DataReferenceBox, SampleDependencyTypeBox, SampleDependencyTypeEntry, SampleDescriptionBox,
+        SampleFlags, SampleSizeBox, SampleSizeVariant, SampleSizes, SampleTableBox,
+        SampleToChunkBox, SampleToChunkEntry, SyncSampleBox, TimeToSampleBox, TimeToSampleEntry,
     };
-    use isobmff_test_support::fixtures::{movie, track};
+    use isobmff_test_support::fixtures::{in_another_file, movie, track};
     use isobmff_test_support::serde_json::Value;
     use isobmff_test_support::{conformance_files, gpac_list as list};
 
@@ -51,12 +51,31 @@ mod tests {
         stsd
     }
 
+    /// A writer of the samples of track 1, which the sample entries `stsd` describe, their media data where `dref` names
+    fn writer_of(
+        stsd: &SampleDescriptionBox,
+        dref: &DataReferenceBox,
+        sample_count_limit: u64,
+    ) -> SampleTableWriter {
+        let track = TrackSampleDescription {
+            track_id: 1,
+            stsd,
+            dref,
+        };
+        SampleTableWriter::new(&track, sample_count_limit)
+    }
+
+    /// The data references of a track whose media data is in the file itself
+    fn in_the_file() -> DataReferenceBox {
+        track(1, 1, &[], &[], &[]).mdia.minf.dinf.dref
+    }
+
     /// The `stbl` a writer writes from `locations`, each at the decoding time the `sample_duration`s before it add up to, with `stsd`
     fn written(
         stsd: &SampleDescriptionBox,
         locations: impl IntoIterator<Item = SampleLocation>,
     ) -> SampleTableBox {
-        let mut writer = SampleTableWriter::new(SAMPLE_COUNT_LIMIT);
+        let mut writer = writer_of(stsd, &in_the_file(), SAMPLE_COUNT_LIMIT);
         let mut decoding_time = 0;
         for mut location in locations {
             location.properties.decoding_time = decoding_time;
@@ -65,7 +84,7 @@ mod tests {
                 .unwrap();
             writer.handle_location(location).unwrap();
         }
-        writer.finish(stsd).unwrap()
+        writer.finish()
     }
 
     /// The `stbl` of a track of one sample entry whose samples are `sizes`, each lasting `sample_delta`, laid in chunks at `chunk_offsets` by the runs `(first_chunk, samples_per_chunk)`
@@ -212,10 +231,32 @@ mod tests {
         far_composition.properties.sample_composition_time_offset = i64::from(i32::MAX) + 1;
         let mut of_track_2 = at(1, 1);
         of_track_2.properties.track_id = 2;
-        let mut writer = SampleTableWriter::new(2);
+        let mut described_by_2 = at(1, 1);
+        described_by_2.properties.sample_description_index = 2;
+        let mut elsewhere = writer_of(
+            &sample_entries(1),
+            &in_another_file(track(1, 1, &[], &[], &[]))
+                .mdia
+                .minf
+                .dinf
+                .dref,
+            2,
+        );
+        assert_eq!(
+            (elsewhere.handle_location(at(0, 0)), elsewhere.has_samples()),
+            (
+                Err(Error::MediaDataElsewhere {
+                    track_id: 1,
+                    data_reference_index: 1,
+                }),
+                false
+            )
+        );
+        let mut writer = writer_of(&sample_entries(1), &in_the_file(), 2);
         assert_eq!(
             [
                 writer.handle_location(at(0, 0)),
+                writer.handle_location(described_by_2),
                 writer.handle_location(far_composition),
                 writer.handle_location(of_track_2),
                 writer.handle_location(at(1, 2)),
@@ -224,6 +265,9 @@ mod tests {
             ],
             [
                 Ok(()),
+                Err(Error::SampleDescriptionIndexOutOfRange {
+                    sample_description_index: 2,
+                }),
                 Err(Error::CompositionOffsetOutOfRange {
                     sample_composition_time_offset: i64::from(i32::MAX) + 1,
                 }),
@@ -244,17 +288,18 @@ mod tests {
             ]
         );
         assert_eq!(
-            writer.finish(&sample_entries(1)),
-            Ok(written(
-                &sample_entries(1),
-                [location(0, 1, 1), location(1, 1, 1)]
-            ))
+            (writer.has_samples(), writer.finish(), writer.has_samples()),
+            (
+                true,
+                written(&sample_entries(1), [location(0, 1, 1), location(1, 1, 1)]),
+                false
+            )
         );
     }
 
     #[test]
     fn a_sample_ending_past_the_last_file_offset_is_refused_and_one_ending_at_it_is_read_back() {
-        let mut writer = SampleTableWriter::new(SAMPLE_COUNT_LIMIT);
+        let mut writer = writer_of(&sample_entries(1), &in_the_file(), SAMPLE_COUNT_LIMIT);
         assert_eq!(
             writer.handle_location(location(u64::MAX, 1, 1)),
             Err(Error::Overflow { track_id: 1 })
@@ -262,7 +307,7 @@ mod tests {
         let last = location(u64::MAX - 1, 1, 1);
         writer.handle_location(last).unwrap();
         let mut trak = track(1, 1, &[], &[], &[]);
-        trak.mdia.minf.stbl = writer.finish(&sample_entries(1)).unwrap();
+        trak.mdia.minf.stbl = writer.finish();
         assert_eq!(locations(&movie([trak])), Ok(vec![last]));
     }
 
@@ -271,7 +316,8 @@ mod tests {
         let mut later = location(0, 1, 1);
         later.properties.decoding_time = 1;
         assert_eq!(
-            SampleTableWriter::new(SAMPLE_COUNT_LIMIT).handle_location(later),
+            writer_of(&sample_entries(1), &in_the_file(), SAMPLE_COUNT_LIMIT)
+                .handle_location(later),
             Err(Error::DecodingTimeGap {
                 track_id: 1,
                 expected: 0,
@@ -281,37 +327,17 @@ mod tests {
     }
 
     #[test]
-    fn a_table_naming_a_sample_entry_the_stsd_lacks_is_not_written_and_the_samples_stay() {
-        let mut writer = SampleTableWriter::new(SAMPLE_COUNT_LIMIT);
-        let mut described_by_2 = location(0, 1, 1);
-        described_by_2.properties.sample_description_index = 2;
-        writer.handle_location(described_by_2).unwrap();
-        assert_eq!(
-            writer.finish(&sample_entries(1)),
-            Err(Error::SampleDescriptionIndexOutOfRange {
-                sample_description_index: 2,
-            })
-        );
-        assert_eq!(
-            writer.finish(&sample_entries(2)),
-            Ok(written(&sample_entries(2), [described_by_2]))
-        );
-    }
-
-    #[test]
-    fn a_writer_that_has_written_a_table_takes_the_samples_of_another_track() {
+    fn a_writer_that_has_finished_a_table_takes_the_next_of_the_track_from_decoding_time_0() {
         let stsd = sample_entries(1);
-        let mut of_track_2 = location(7, 9, 2);
-        of_track_2.properties.track_id = 2;
-        let mut writer = SampleTableWriter::new(SAMPLE_COUNT_LIMIT);
+        let mut writer = writer_of(&stsd, &in_the_file(), SAMPLE_COUNT_LIMIT);
         writer.handle_location(location(0, 7, 1)).unwrap();
-        let first = writer.finish(&stsd);
-        writer.handle_location(of_track_2).unwrap();
+        let first = writer.finish();
+        writer.handle_location(location(7, 9, 2)).unwrap();
         assert_eq!(
-            [first, writer.finish(&stsd)],
+            [first, writer.finish()],
             [
-                Ok(written(&stsd, [location(0, 7, 1)])),
-                Ok(written(&stsd, [of_track_2])),
+                written(&stsd, [location(0, 7, 1)]),
+                written(&stsd, [location(7, 9, 2)]),
             ]
         );
     }
@@ -490,11 +516,18 @@ mod tests {
                     .filter(|location| location.properties.track_id == track_id)
                     .collect::<Vec<_>>();
                 track.sort_by_key(|location| location.properties.decoding_time);
-                let mut writer = SampleTableWriter::new(SAMPLE_COUNT_LIMIT);
+                let mut writer = SampleTableWriter::new(
+                    &TrackSampleDescription {
+                        track_id,
+                        stsd: &trak.mdia.minf.stbl.stsd,
+                        dref: &trak.mdia.minf.dinf.dref,
+                    },
+                    SAMPLE_COUNT_LIMIT,
+                );
                 let result = track
                     .into_iter()
                     .try_for_each(|&location| writer.handle_location(location))
-                    .and_then(|()| writer.finish(&trak.mdia.minf.stbl.stsd));
+                    .map(|()| writer.finish());
                 match result {
                     Ok(stbl) => trak.mdia.minf.stbl = stbl,
                     Err(error) => {

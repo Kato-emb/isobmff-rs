@@ -328,3 +328,60 @@ fn the_memory_a_demuxer_holds_stays_within_the_limit_when_fragments_come_before_
     assert_eq!((few_samples, many_samples), (8 + 1, 8 + 1));
     assert_eq!(many, few);
 }
+
+/// The most bytes held while a fragmented muxer writes `fragments` fragments of 8 samples of 4 KiB each, its output polled after each fragment
+fn most_held_writing_fragments(fragments: u32) -> usize {
+    use isobmff::muxer::{MovieDescription, TrackDescription};
+    use isobmff::{FragmentedMovieFileMuxer, MuxerConfig, SampleProperties};
+    use isobmff_boxes::{
+        FileTypeBox, SampleDescription, SampleDescriptionBox, SampleEntry, SampleFlags,
+    };
+    use isobmff_core::FourCc;
+
+    const SAMPLES_PER_FRAGMENT: u32 = 8;
+    let bytes = vec![0xAA; 4096];
+    let sample = |index: u32| SampleProperties {
+        track_id: 1,
+        decoding_time: u64::from(index) * 10,
+        sample_duration: 10,
+        sample_composition_time_offset: 0,
+        sample_flags: SampleFlags::default(),
+        sample_description_index: 1,
+    };
+    most_held_by(|| {
+        let mut entry = SampleEntry::default();
+        entry.data_reference_index = 1;
+        let mut stsd = SampleDescriptionBox::default();
+        stsd.sample_descriptions = vec![SampleDescription::Typed(entry)];
+        let mut muxer = FragmentedMovieFileMuxer::new(
+            MovieDescription::new(1000),
+            MuxerConfig::default(),
+            FileTypeBox::default(),
+        )
+        .unwrap();
+        muxer
+            .add_track(TrackDescription::new(1, 1000, FourCc::new(*b"vide"), stsd))
+            .unwrap();
+        let mut out = Vec::new();
+        for index in 0..fragments * SAMPLES_PER_FRAGMENT {
+            if index > 0 && index % SAMPLES_PER_FRAGMENT == 0 {
+                muxer.finish_fragment().unwrap();
+                muxer.poll_output(&mut out);
+                out.clear();
+            }
+            muxer.handle_sample(sample(index), &bytes).unwrap();
+        }
+        muxer.finish().unwrap();
+        muxer.poll_output(&mut out);
+    })
+}
+
+#[test]
+fn the_memory_a_fragmented_muxer_holds_does_not_grow_with_the_fragments_it_writes() {
+    let few = most_held_writing_fragments(16);
+    let many = most_held_writing_fragments(1024);
+    println!(
+        "held at most {few} bytes writing 16 fragments of 8 samples of 4 KiB, {many} bytes writing 1024"
+    );
+    assert_eq!(many, few);
+}

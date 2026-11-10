@@ -269,6 +269,52 @@ mod tests {
     }
 
     #[test]
+    fn a_sample_of_no_bytes_at_the_end_of_the_media_data_is_lent_before_what_follows_it() {
+        use isobmff_test_support::fixtures::{encoded, movie, track, written};
+
+        let moov_at = |chunk_offset| {
+            let mut moov = movie([track(1, 10, &[3, 0], &[(1, 2)], &[chunk_offset])]);
+            moov.mvhd.next_track_id = 2;
+            encoded(&moov)
+        };
+        let chunk_offset = u64::try_from(moov_at(0).len() + 8).unwrap();
+        let media_data = [moov_at(chunk_offset), written(b"mdat", &[b"abc"])].concat();
+        for (name, file, after) in [
+            (
+                "a file that ends with the media data",
+                media_data.clone(),
+                None,
+            ),
+            (
+                "media data followed by free space",
+                [media_data.clone(), written(b"free", &[])].concat(),
+                Some(Reported::Box("free".into())),
+            ),
+        ] {
+            let reported = read_every_way(name, &file, config(None, None), Subscribe::Every);
+            lent_as_held(name, &file, &reported);
+            let lent = reported
+                .iter()
+                .filter(|reported| matches!(reported, Reported::Sample(..) | Reported::Box(_)))
+                .map(|reported| {
+                    if let Reported::Sample(location, _) = reported {
+                        Reported::Sample(*location, Vec::new())
+                    } else {
+                        reported.clone()
+                    }
+                })
+                .collect::<Vec<_>>();
+            let mut expected = locations(&reported)
+                .into_iter()
+                .map(|location| Reported::Sample(location, Vec::new()))
+                .collect::<Vec<_>>();
+            expected.insert(0, Reported::Box("mdat".into()));
+            expected.extend(after);
+            assert_eq!((locations(&reported).len(), lent), (2, expected), "{name}");
+        }
+    }
+
+    #[test]
     fn the_samples_of_a_track_not_subscribed_to_are_located_and_not_lent() {
         let (name, file) = FIXTURES[0];
         let reported = read_every_way(name, file, config(None, None), Subscribe::Only(&[1]));

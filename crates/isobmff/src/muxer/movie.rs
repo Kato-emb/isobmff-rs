@@ -5,9 +5,9 @@ use alloc::vec::Vec;
 use core::num::NonZeroU128;
 
 use isobmff_boxes::{
-    DataEntry, DataEntryUrlBox, EditBox, HandlerBox, HintMediaHeaderBox, MediaInformationHeader,
-    MovieBox, NullMediaHeaderBox, SampleTableBox, SoundMediaHeaderBox, SubtitleMediaHeaderBox,
-    TrackBox, VideoMediaHeaderBox,
+    DataEntry, DataEntryUrlBox, DataReferenceBox, EditBox, HandlerBox, HintMediaHeaderBox,
+    MediaInformationHeader, MovieBox, NullMediaHeaderBox, SampleTableBox, SoundMediaHeaderBox,
+    SubtitleMediaHeaderBox, TrackBox, VideoMediaHeaderBox,
 };
 use isobmff_core::{BoxDefinition, BoxEncode, I8F8};
 
@@ -94,7 +94,7 @@ pub(super) fn track_box(
         b"subt" => MediaInformationHeader::Subtitle(SubtitleMediaHeaderBox::default()),
         _ => MediaInformationHeader::Null(NullMediaHeaderBox::default()),
     });
-    trak.mdia.minf.dinf.dref.data_entries = vec![DataEntry::Url(DataEntryUrlBox::default())];
+    trak.mdia.minf.dinf.dref = data_reference();
     trak.mdia.minf.dinf.other_boxes = description.data_information_other_boxes.clone();
     trak.mdia.minf.stbl = stbl;
     trak.mdia.minf.stbl.other_boxes = description.sample_table_other_boxes.clone();
@@ -102,6 +102,37 @@ pub(super) fn track_box(
     trak.mdia.other_boxes = description.media_other_boxes.clone();
     trak.other_boxes = description.other_boxes.clone();
     trak
+}
+
+/// Checks that `track` may be added beside the tracks `added`: its `track_ID` is neither 0 nor taken, and its media data is in the same file
+pub(super) fn check_track<'a>(
+    mut added: impl Iterator<Item = &'a TrackDescription>,
+    track: &TrackDescription,
+) -> Result<(), Error> {
+    let track_id = track.track_id;
+    if track_id == 0 || added.any(|added| added.track_id == track_id) {
+        return Err(Error::TrackId { track_id });
+    }
+    if let Some(data_reference_index) = track
+        .sample_entries
+        .sample_descriptions
+        .iter()
+        .map(|entry| entry.data_reference_index().unwrap_or(0))
+        .find(|&index| index != 1)
+    {
+        return Err(Error::DataReferenceIndex {
+            track_id,
+            data_reference_index,
+        });
+    }
+    Ok(())
+}
+
+/// The data references of every track a muxer writes: one entry, the media data in the same file
+pub(super) fn data_reference() -> DataReferenceBox {
+    let mut dref = DataReferenceBox::default();
+    dref.data_entries = vec![DataEntry::Url(DataEntryUrlBox::default())];
+    dref
 }
 
 /// The version of a box that holds `value` in a field of 32 bits in version 0 and 64 in version 1

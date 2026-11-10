@@ -5,10 +5,10 @@ use alloc::vec::Vec;
 use isobmff_boxes::FileTypeBox;
 use isobmff_core::BoxEncode;
 
-use super::movie::{append_encoded, movie_box, track_box};
+use super::movie::{append_encoded, check_track, data_reference, movie_box, track_box};
 use super::{Error, MovieDescription, MuxerConfig, TrackDescription};
 use crate::framing;
-use crate::structure_data::{self, SampleTableWriter};
+use crate::structure_data::{self, SampleTableWriter, TrackSampleDescription};
 use crate::{SampleLocation, SampleProperties};
 
 /// Length of the header of the `mdat`, which [`framing::media_data_header`] writes with a `largesize`
@@ -205,29 +205,18 @@ impl MovieFileMuxer {
         {
             return Err(Error::TrackAfterMediaData { track_id });
         }
-        if track_id == 0
-            || self
-                .tracks
-                .iter()
-                .any(|added| added.description.track_id == track_id)
-        {
-            return Err(Error::TrackId { track_id });
-        }
-        if let Some(data_reference_index) = track
-            .sample_entries
-            .sample_descriptions
-            .iter()
-            .map(|entry| entry.data_reference_index().unwrap_or(0))
-            .find(|&index| index != 1)
-        {
-            return Err(Error::DataReferenceIndex {
-                track_id,
-                data_reference_index,
-            });
-        }
+        check_track(self.tracks.iter().map(|added| &added.description), &track)?;
+        let samples = SampleTableWriter::new(
+            &TrackSampleDescription {
+                track_id: track.track_id,
+                stsd: &track.sample_entries,
+                dref: &data_reference(),
+            },
+            self.config.sample_count_limit,
+        );
         self.tracks.push(Track {
             description: track,
-            samples: SampleTableWriter::new(self.config.sample_count_limit),
+            samples,
             first_decoding_time: None,
         });
         Ok(())
@@ -268,27 +257,6 @@ impl MovieFileMuxer {
             .iter_mut()
             .find(|track| track.description.track_id == track_id)
             .ok_or(Error::UnknownTrack { track_id })?;
-        // Why check here as well as in the sample table: a sample the table
-        // would refuse only at `finish` is refused while the caller holds it.
-        let sample_description_index = properties.sample_description_index;
-        if usize::try_from(sample_description_index)
-            .ok()
-            .and_then(|index| index.checked_sub(1))
-            .and_then(|index| {
-                track
-                    .description
-                    .sample_entries
-                    .sample_descriptions
-                    .get(index)
-            })
-            .is_none()
-        {
-            return Err(Error::StructureData(
-                structure_data::Error::SampleDescriptionIndexOutOfRange {
-                    sample_description_index,
-                },
-            ));
-        }
         let size = u32::try_from(bytes.len()).map_err(|_| Error::Overflow)?;
         let next = self
             .position
@@ -344,7 +312,8 @@ impl MovieFileMuxer {
     /// Builds the `moov` of the samples taken, holds it for [`poll_output`](Self::poll_output), and returns the header the `mdat` takes
     ///
     /// The `moov` follows the media data, whatever
-    /// [`MuxerConfig::buffer_limit`] holds. The muxer then takes nothing more.
+    /// [`MuxerConfig::buffer_limit`] holds. The muxer then takes nothing more: it ends the file, unlike the
+    /// `finish` of a writer of structure-data, which ends one unit and goes on.
     ///
     /// # Errors
     /// * [`Error::Finished`]: the muxer has finished.
@@ -366,11 +335,7 @@ impl MovieFileMuxer {
         for track in &self.tracks {
             // Why finish a clone: a `moov` that does not write leaves the
             // muxer as it was, samples and all.
-            let stbl = track
-                .samples
-                .clone()
-                .finish(&track.description.sample_entries)
-                .map_err(Error::StructureData)?;
+            let stbl = track.samples.clone().finish();
             trak.push(track_box(&track.description, stbl, self.movie.timescale));
         }
         append_encoded(&movie_box(&self.movie, trak), &mut self.output)?;

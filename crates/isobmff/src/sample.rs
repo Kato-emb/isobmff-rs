@@ -40,7 +40,7 @@ pub struct SampleProperties {
 pub struct SampleLocation {
     /// What the structure-data declares of the sample
     pub properties: SampleProperties,
-    /// File offset of the first byte of the sample
+    /// Offset of the first byte of the sample, from where whoever hands it over counts: the first byte of the file for a reader, the first byte of the media data of the fragment for a [`MovieFragmentWriter`](crate::structure_data::MovieFragmentWriter)
     pub offset: u64,
     /// Number of bytes of the sample
     pub size: u32,

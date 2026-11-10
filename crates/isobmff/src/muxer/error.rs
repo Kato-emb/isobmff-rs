@@ -34,14 +34,16 @@ pub enum Error {
         /// `track_ID` of the sample
         track_id: u32,
     },
-    /// The sample table of the track refuses the sample, as where it names a
-    /// sample entry the track does not have
+    /// The sample table of the track, or the movie fragment, refuses the
+    /// sample, as where it names a sample entry the track does not have, or
+    /// does not write
     StructureData(structure_data::Error),
-    /// A sample is longer than a sample table counts, or the media data would
-    /// reach past the last offset a file can have
+    /// A sample is longer than a sample table or a track fragment run counts,
+    /// or the media data would reach past the last offset a file can have
     Overflow,
-    /// The bytes that open the file, or a sample, would grow the bytes held
-    /// for `poll_output` past
+    /// The bytes that open the file, the `moov` written before the first
+    /// movie fragment, or a sample, would grow the bytes held for
+    /// `poll_output` past
     /// [`MuxerConfig::buffer_limit`](super::MuxerConfig::buffer_limit)
     BufferFull {
         /// The bytes the output held would grow to
@@ -74,11 +76,11 @@ impl fmt::Display for Error {
                 write!(formatter, "a sample is of track {track_id}, not added")
             }
             Self::StructureData(_) => {
-                write!(formatter, "the sample table refuses the sample")
+                write!(formatter, "the structure-data refuses the sample")
             }
             Self::Overflow => write!(
                 formatter,
-                "a sample is longer than a sample table counts, or ends past the last offset a file can have"
+                "a sample is longer than a sample table or a track fragment run counts, or ends past the last offset a file can have"
             ),
             Self::BufferFull { length } => write!(
                 formatter,

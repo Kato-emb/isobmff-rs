@@ -4,13 +4,14 @@ use alloc::vec::Vec;
 use core::iter;
 
 use isobmff_boxes::{
-    ChunkOffsetBox, ChunkOffsetVariant, CompositionOffsetBox, DataReferenceBox,
-    SampleDependencyTypeBox, SampleDescriptionBox, SampleFlags, SampleSizeBox, SampleSizeVariant,
-    SampleSizes, SampleTableBox, SampleToChunkBox, SyncSampleBox, TimeToSampleBox, TrackBox,
+    ChunkOffsetBox, ChunkOffsetVariant, CompositionOffsetBox, SampleDependencyTypeBox,
+    SampleDescriptionBox, SampleFlags, SampleSizeBox, SampleSizeVariant, SampleSizes,
+    SampleTableBox, SampleToChunkBox, SyncSampleBox, TimeToSampleBox, TrackBox,
 };
 use isobmff_core::{BoxDefinition, BoxType};
 
 use super::Error;
+use super::sample::is_in_same_file;
 use crate::{SampleLocation, SampleProperties};
 
 /// The size of each sample, as the sample size table of a track gives it
@@ -289,38 +290,10 @@ fn chunk_sample_count(
     Ok(total)
 }
 
-/// The `data_reference_index` of each sample entry of `track`, from 1, and whether it places the media data in the same file
-pub(super) fn entry_data_references(track: &TrackBox) -> Vec<(u16, bool)> {
-    let dref = &track.mdia.minf.dinf.dref;
-    track
-        .mdia
-        .minf
-        .stbl
-        .stsd
-        .sample_descriptions
-        .iter()
-        .map(|entry| {
-            let data_reference_index = entry.data_reference_index().unwrap_or(0);
-            (
-                data_reference_index,
-                is_in_same_file(dref, data_reference_index),
-            )
-        })
-        .collect()
-}
-
 /// The `data_reference_index` of the sample entry `sample_description_index` names, from 1
 fn data_reference_index(stsd: &SampleDescriptionBox, sample_description_index: u32) -> Option<u16> {
     let index = usize::try_from(sample_description_index.checked_sub(1)?).ok()?;
     stsd.sample_descriptions.get(index)?.data_reference_index()
-}
-
-/// Whether the data reference entry `data_reference_index` names, from 1, places the media data in the same file
-fn is_in_same_file(dref: &DataReferenceBox, data_reference_index: u16) -> bool {
-    usize::from(data_reference_index)
-        .checked_sub(1)
-        .and_then(|index| dref.data_entries.get(index))
-        .is_some_and(isobmff_boxes::DataEntry::is_in_same_file)
 }
 
 /// Sum of the `sample_count`s of the runs of a table, or `None` past `u64`
