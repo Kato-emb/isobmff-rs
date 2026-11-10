@@ -2,7 +2,7 @@
 
 use core::fmt;
 
-use isobmff_boxes::{FileTypeBox, MovieBox};
+use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox, SegmentTypeBox};
 use isobmff_core::{BoxHeader, BoxType};
 
 use crate::{SampleLocation, SampleProperties, framing, structure_data};
@@ -13,11 +13,18 @@ use crate::{SampleLocation, SampleProperties, framing, structure_data};
 pub enum Event<'a> {
     /// The `ftyp` of the file, read into its value
     FileType(FileTypeBox),
+    /// An `styp` of the file, read into its value: the brands of the segment
+    /// it opens, ISO/IEC 14496-12 §8.14.2
+    SegmentType(SegmentTypeBox),
     /// The `moov` of the file, read into its value; the location of each of
     /// its samples follows as [`Event::SampleLocation`]
     Movie(alloc::boxed::Box<MovieBox>),
-    /// Where the bytes of a sample of the `moov` lie, for every sample of
-    /// every track, in the order of their file offsets
+    /// A `moof` of the file, read into its value; the location of each of
+    /// the samples it adds follows as [`Event::SampleLocation`]
+    MovieFragment(alloc::boxed::Box<MovieFragmentBox>),
+    /// Where the bytes of a sample of the `moov` or of a `moof` lie, for
+    /// every sample of every track, in the order of their file offsets
+    /// within the box
     SampleLocation(SampleLocation),
     /// A sample of a subscribed track, its bytes lent from the demuxer's
     /// buffer
@@ -73,9 +80,16 @@ pub enum Error {
         /// Why the box does not read
         source: isobmff_core::Error,
     },
-    /// The sample tables of the `moov` cannot be resolved; no location is
-    /// reported for them
-    StructureData(structure_data::Error),
+    /// The samples a `moov` or a `moof` declares cannot be resolved; no
+    /// location is reported for them
+    StructureData {
+        /// File offset of the box
+        offset: u64,
+        /// Type of the box, `moov` or `moof`
+        box_type: BoxType,
+        /// Why its samples cannot be resolved
+        source: structure_data::Error,
+    },
     /// A `moov` follows the one already read, which a file holds one of,
     /// ISO/IEC 14496-12 §8.2.1; it is not read, and the first is kept
     DuplicateMovie {
@@ -108,9 +122,12 @@ impl fmt::Display for Error {
                 formatter,
                 "the box `{box_type}` at offset {offset} does not read"
             ),
-            Self::StructureData(_) => {
-                write!(formatter, "the samples of the `moov` cannot be resolved")
-            }
+            Self::StructureData {
+                offset, box_type, ..
+            } => write!(
+                formatter,
+                "the samples of the `{box_type}` at offset {offset} cannot be resolved"
+            ),
             Self::DuplicateMovie { offset } => write!(
                 formatter,
                 "the `moov` at offset {offset} follows the one already read"
@@ -134,7 +151,7 @@ impl core::error::Error for Error {
         match self {
             Self::Framing(source) => Some(source),
             Self::Decode { source, .. } => Some(source),
-            Self::StructureData(source) => Some(source),
+            Self::StructureData { source, .. } => Some(source),
             Self::DuplicateMovie { .. }
             | Self::SampleOverLimit { .. }
             | Self::TruncatedSample { .. } => None,

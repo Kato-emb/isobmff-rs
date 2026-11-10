@@ -3,7 +3,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use isobmff_boxes::{FileTypeBox, MovieBox};
+use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox, SegmentTypeBox};
 use isobmff_core::{BoxDecode, BoxDefinition};
 
 use crate::framing::{self, BoxReader, FramerConfig};
@@ -80,6 +80,9 @@ enum Take {
 enum BoxRead {
     /// The `moov`, whose locations now fill [`Samples::locations`]
     Movie(alloc::boxed::Box<MovieBox>),
+    /// A `moof`, whose locations now follow those of [`Samples::locations`]
+    /// still wanted
+    MovieFragment(alloc::boxed::Box<MovieFragmentBox>),
     Event(Event<'static>),
 }
 
@@ -100,18 +103,23 @@ struct Samples {
 
 /// Reader of a file into its boxes at file level and the samples of the tracks a caller subscribes to
 ///
-/// The structure of a file, ISO/IEC 14496-12 §4.2.2, §8.2 and §8.5.
+/// The structure of a file, ISO/IEC 14496-12 §4.2.2, §8.2, §8.5, §8.8 and
+/// §8.14.
 ///
 /// The demuxer is driven as a [`BoxReader`] is: it names where it wants input
 /// with [`required_input`](Self::required_input), takes bytes from any offset
 /// up to that one with [`handle_input`](Self::handle_input), and reports one
-/// event per call of [`poll_event`](Self::poll_event). It reads the `ftyp` and
-/// the `moov` into their values, reports where every sample of the `moov`
-/// lies, and lends the bytes of each sample of a track
-/// [`subscribe_track`](Self::subscribe_track) names: once it has read the
-/// `moov`, it requests the ranges of those samples in the order of their file
-/// offsets, those before the `moov` among them. Handing input over never
-/// fails: what cannot be read is reported as [`Event::Error`]. Which tracks to
+/// event per call of [`poll_event`](Self::poll_event). It reads the `ftyp`,
+/// each `styp`, the `moov` and each `moof` into their values, reports where
+/// every sample of the `moov` and of each `moof` lies, and lends the bytes of
+/// each sample of a track [`subscribe_track`](Self::subscribe_track) names:
+/// once it has read the `moov` or a `moof`, it requests the ranges of those
+/// samples in the order of their file offsets, those before the `moov` among
+/// them. A file of movie fragments, or of segments laid one after another, is
+/// read as one input, the decoding times of each track going on across them.
+/// A sample before a `moof` is not requested once the `moof` is read.
+/// Handing input over never fails: what cannot be read, such as a `moof`
+/// before any `moov`, is reported as [`Event::Error`]. Which tracks to
 /// subscribe to, and whether to read the file where the demuxer asks, are the
 /// caller's choice; the demuxer reads no sample of a track not subscribed to.
 /// A caller that cannot seek, and finds the position `required_input` names
@@ -174,7 +182,12 @@ impl Demuxer {
     #[must_use]
     pub fn new(config: DemuxerConfig) -> Self {
         let mut framer = FramerConfig::new(config.payload_limit);
-        framer.gathered_box_types = vec![FileTypeBox::BOX_TYPE, MovieBox::BOX_TYPE];
+        framer.gathered_box_types = vec![
+            FileTypeBox::BOX_TYPE,
+            SegmentTypeBox::BOX_TYPE,
+            MovieBox::BOX_TYPE,
+            MovieFragmentBox::BOX_TYPE,
+        ];
         Self {
             boxes: BoxReader::new(framer),
             structure_data: StructureDataReader::new(config.sample_count_limit),
@@ -386,6 +399,14 @@ impl Demuxer {
             let (next_state, step) = match (self.state, self.observe(read)) {
                 (state, Observation::Unreported(location)) => {
                     self.samples.reported = self.samples.reported.saturating_add(1);
+                    // Why sort once every location is reported: the samples of
+                    // an earlier box still wanted may lie after those of a
+                    // `moof`, and samples are requested in file order.
+                    if self.samples.reported == self.samples.locations.len() {
+                        self.samples
+                            .locations
+                            .sort_by_key(|location| location.offset);
+                    }
                     (
                         state,
                         Step::Output(Pending::Ready(Event::SampleLocation(location))),
@@ -428,6 +449,10 @@ impl Demuxer {
                 (_, Observation::Box(BoxRead::Movie(movie))) => (
                     State::Movie,
                     Step::Output(Pending::Ready(Event::Movie(movie))),
+                ),
+                (state, Observation::Box(BoxRead::MovieFragment(moof))) => (
+                    state,
+                    Step::Output(Pending::Ready(Event::MovieFragment(moof))),
                 ),
                 (state, Observation::Box(BoxRead::Event(event))) => {
                     (state, Step::Output(Pending::Ready(event)))
@@ -473,13 +498,50 @@ impl Demuxer {
                     FileTypeBox::decode_payload(payload).map_or_else(decode_error, |file_type| {
                         BoxRead::Event(Event::FileType(file_type))
                     })
+                } else if box_type == SegmentTypeBox::BOX_TYPE {
+                    SegmentTypeBox::decode_payload(payload).map_or_else(decode_error, |styp| {
+                        BoxRead::Event(Event::SegmentType(styp))
+                    })
+                } else if box_type == MovieFragmentBox::BOX_TYPE {
+                    match MovieFragmentBox::decode_payload(payload) {
+                        Err(source) => decode_error(source),
+                        Ok(moof) => {
+                            match self.structure_data.handle_movie_fragment(&moof, offset) {
+                                Err(error) => BoxRead::Event(Event::Error(Error::StructureData {
+                                    offset,
+                                    box_type,
+                                    source: error,
+                                })),
+                                Ok(locations) => {
+                                    let samples = &mut self.samples;
+                                    // Why drop the locations before the `moof`: a
+                                    // sample of a subscribed track before it was
+                                    // lent before the box reader passed it, and
+                                    // the locations would otherwise grow with
+                                    // every fragment.
+                                    samples.locations.drain(..samples.next);
+                                    samples
+                                        .locations
+                                        .retain(|location| location.offset >= offset);
+                                    samples.next = 0;
+                                    samples.reported = samples.locations.len();
+                                    samples.locations.extend(locations);
+                                    BoxRead::MovieFragment(alloc::boxed::Box::new(moof))
+                                }
+                            }
+                        }
+                    }
                 } else if self.state != State::NoMovie {
                     BoxRead::Event(Event::Error(Error::DuplicateMovie { offset }))
                 } else {
                     match MovieBox::decode_payload(payload) {
                         Err(source) => decode_error(source),
                         Ok(movie) => match self.structure_data.handle_movie(&movie) {
-                            Err(error) => BoxRead::Event(Event::Error(Error::StructureData(error))),
+                            Err(error) => BoxRead::Event(Event::Error(Error::StructureData {
+                                offset,
+                                box_type,
+                                source: error,
+                            })),
                             Ok(locations) => {
                                 self.samples.locations.clear();
                                 self.samples.locations.extend(locations);

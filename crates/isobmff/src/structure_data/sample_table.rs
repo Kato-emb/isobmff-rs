@@ -62,8 +62,8 @@ pub(super) fn sample_count(track: &TrackBox) -> Result<u64, Error> {
     sizes(track).map(|(sample_count, _)| sample_count)
 }
 
-/// Appends the samples of `track` to `locations`, in decoding order, refusing a sample table whose tables disagree
-pub(super) fn resolve(track: &TrackBox, locations: &mut Vec<SampleLocation>) -> Result<(), Error> {
+/// Appends the samples of `track` to `locations`, in decoding order, and returns the decoding time they end at, refusing a sample table whose tables disagree
+pub(super) fn resolve(track: &TrackBox, locations: &mut Vec<SampleLocation>) -> Result<u64, Error> {
     let track_id = track.tkhd.track_id;
     let stbl = &track.mdia.minf.stbl;
     let missing = |box_type| Error::MissingTable { track_id, box_type };
@@ -219,7 +219,7 @@ pub(super) fn resolve(track: &TrackBox, locations: &mut Vec<SampleLocation>) -> 
             offset = offset.checked_add(u64::from(size)).ok_or(overflow)?;
         }
     }
-    Ok(())
+    Ok(decoding_time)
 }
 
 /// The `chunk_offset` of each chunk, as the chunk offset table of a track gives it
@@ -287,6 +287,26 @@ fn chunk_sample_count(
             .ok_or_else(|| invalid(SampleToChunkBox::BOX_TYPE, entry))?;
     }
     Ok(total)
+}
+
+/// The `data_reference_index` of each sample entry of `track`, from 1, and whether it places the media data in the same file
+pub(super) fn entry_data_references(track: &TrackBox) -> Vec<(u16, bool)> {
+    let dref = &track.mdia.minf.dinf.dref;
+    track
+        .mdia
+        .minf
+        .stbl
+        .stsd
+        .sample_descriptions
+        .iter()
+        .map(|entry| {
+            let data_reference_index = entry.data_reference_index().unwrap_or(0);
+            (
+                data_reference_index,
+                is_in_same_file(dref, data_reference_index),
+            )
+        })
+        .collect()
 }
 
 /// The `data_reference_index` of the sample entry `sample_description_index` names, from 1

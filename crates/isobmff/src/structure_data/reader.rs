@@ -2,8 +2,9 @@
 
 use alloc::vec::Vec;
 
-use isobmff_boxes::MovieBox;
+use isobmff_boxes::{MovieBox, MovieFragmentBox};
 
+use super::movie_fragment::{self, FragmentTrack};
 use super::{Error, sample_table};
 use crate::SampleLocation;
 
@@ -14,9 +15,13 @@ use crate::SampleLocation;
 /// [`handle_movie`](Self::handle_movie) takes a `moov` and returns the
 /// [`SampleLocation`] of each sample of its tracks, in the order of their file
 /// offsets. It refuses a sample table whose tables count different numbers of
-/// samples, or a track whose samples lie in another file. It does not read the
-/// bytes of the file: reading the `moov` out of them, and the samples where
-/// their locations say, is up to the caller.
+/// samples, or a track whose samples lie in another file.
+/// [`handle_movie_fragment`](Self::handle_movie_fragment) then takes each
+/// `moof` that follows and returns the samples it adds, ISO/IEC 14496-12
+/// §8.8: their decoding times go on from those of the samples before them in
+/// their track, the `moov`'s and those of the fragments before. It does not
+/// read the bytes of the file: reading the boxes out of them, and the samples
+/// where their locations say, is up to the caller.
 ///
 /// ```
 /// use isobmff::framing::{BoxReader, Event, FramerConfig};
@@ -58,6 +63,9 @@ pub struct StructureDataReader {
     // buffer is reused, so resolving the next box allocates only past the
     // most samples a box held before.
     locations: Vec<SampleLocation>,
+    /// What the tracks of the `moov` give the samples of their fragments,
+    /// once a `moov` was taken
+    tracks: Option<Vec<FragmentTrack>>,
 }
 
 impl StructureDataReader {
@@ -71,6 +79,7 @@ impl StructureDataReader {
         Self {
             sample_count_limit,
             locations: Vec::new(),
+            tracks: None,
         }
     }
 
@@ -109,9 +118,102 @@ impl StructureDataReader {
         self.locations.clear();
         self.locations
             .reserve(usize::try_from(sample_count).unwrap_or(usize::MAX));
+        let mut tracks = Vec::with_capacity(movie.trak.len());
         for track in &movie.trak {
-            sample_table::resolve(track, &mut self.locations)?;
+            let next_decoding_time = sample_table::resolve(track, &mut self.locations)?;
+            tracks.push(FragmentTrack::new(movie, track, next_decoding_time));
         }
+        self.tracks = Some(tracks);
+        self.locations.sort_by_key(|location| location.offset);
+        Ok(self.locations.drain(..))
+    }
+
+    /// Returns the location of each sample the track fragments of `moof`, the `moof` at file offset `moof_offset`, declare, in the order of their file offsets
+    ///
+    /// A track fragment counts its data from the base the `tfhd` gives, or
+    /// from the first byte of the `moof` or the end of the data of the track
+    /// fragment before it, as §8.8.7.1 Table 6 sets out. Its decoding times
+    /// start at the `tfdt` where there is one, and otherwise go on from the
+    /// samples before it in its track, §8.8.12. Each value a sample does not
+    /// carry is taken from the `tfhd`, then from the `trex` of its track.
+    ///
+    /// # Errors
+    /// * [`Error::MovieFragmentWithoutMovie`]: no `moov` was taken; nothing
+    ///   says what the tracks of the fragment are.
+    /// * [`Error::SampleCountOverLimit`]: the track runs declare more samples
+    ///   than the limit, checked before anything is allocated for them.
+    /// * [`Error::UnknownTrack`]: a track fragment is of a track the `moov`
+    ///   does not have.
+    /// * [`Error::MissingDefault`]: a sample takes a value neither the `tfhd`
+    ///   nor a `trex` gives.
+    /// * [`Error::MediaDataElsewhere`]: a sample lies in another file, or in
+    ///   an `IdentifiedMediaDataBox`.
+    /// * [`Error::SampleDescriptionIndexOutOfRange`]: a sample names a sample
+    ///   entry its track does not have.
+    /// * [`Error::Overflow`]: a sample lies past the last file offset or
+    ///   decoding time.
+    ///
+    /// A box refused leaves the decoding times of the tracks as they were.
+    ///
+    /// ```
+    /// use isobmff::framing::{BoxReader, Event, FramerConfig};
+    /// use isobmff::structure_data::StructureDataReader;
+    /// use isobmff_boxes::{MovieBox, MovieFragmentBox};
+    /// use isobmff_core::{BoxDecode, BoxDefinition};
+    ///
+    /// // Resolve the `moov` and each `moof` of a fragmented file as they come
+    /// let file: &[u8] = include_bytes!("../../tests/fixtures/fragmented.mp4");
+    /// let mut boxes = BoxReader::new(FramerConfig::new(1024 * 1024));
+    /// let mut structure_data = StructureDataReader::new(1024);
+    /// let mut locations = Vec::new();
+    /// loop {
+    ///     while let Some(event) = boxes.poll_event() {
+    ///         if let Event::Gathered { offset, box_type, payload, .. } = event {
+    ///             if box_type == MovieBox::BOX_TYPE {
+    ///                 let movie = MovieBox::decode_payload(payload)?;
+    ///                 locations.extend(structure_data.handle_movie(&movie)?);
+    ///             } else if box_type == MovieFragmentBox::BOX_TYPE {
+    ///                 let moof = MovieFragmentBox::decode_payload(payload)?;
+    ///                 locations.extend(structure_data.handle_movie_fragment(&moof, offset)?);
+    ///             }
+    ///         }
+    ///     }
+    ///     let Some(required) = boxes.required_input() else { break };
+    ///     match file.get(usize::try_from(required.position)?..) {
+    ///         Some(bytes) if !bytes.is_empty() => boxes.handle_input(required.position, bytes),
+    ///         _ => boxes.finish(),
+    ///     }
+    /// }
+    ///
+    /// // The samples of track 1 go on in decoding time across the fragments
+    /// let track_1: Vec<_> = locations.iter().filter(|location| location.properties.track_id == 1).collect();
+    /// assert_eq!(locations.len(), 12 + 58);
+    /// assert!(track_1.windows(2).all(|pair| {
+    ///     pair[1].properties.decoding_time
+    ///         == pair[0].properties.decoding_time + u64::from(pair[0].properties.sample_duration)
+    /// }));
+    /// # Ok::<(), Box<dyn core::error::Error>>(())
+    /// ```
+    pub fn handle_movie_fragment(
+        &mut self,
+        moof: &MovieFragmentBox,
+        moof_offset: u64,
+    ) -> Result<impl ExactSizeIterator<Item = SampleLocation> + '_, Error> {
+        let tracks = self
+            .tracks
+            .as_mut()
+            .ok_or(Error::MovieFragmentWithoutMovie)?;
+        let sample_count = movie_fragment::sample_count(moof);
+        if sample_count > self.sample_count_limit {
+            return Err(Error::SampleCountOverLimit {
+                sample_count,
+                limit: self.sample_count_limit,
+            });
+        }
+        self.locations.clear();
+        self.locations
+            .reserve(usize::try_from(sample_count).unwrap_or(usize::MAX));
+        movie_fragment::resolve(moof, moof_offset, tracks, &mut self.locations)?;
         self.locations.sort_by_key(|location| location.offset);
         Ok(self.locations.drain(..))
     }
