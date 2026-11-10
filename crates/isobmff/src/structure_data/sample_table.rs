@@ -1,4 +1,4 @@
-//! The samples the sample table of a track declares, and where their bytes lie
+//! The samples the sample table of a track declares, where their bytes lie, and how long they last
 
 use alloc::vec::Vec;
 use core::iter;
@@ -303,4 +303,103 @@ fn total(mut counts: impl Iterator<Item = u32>) -> Option<u64> {
 
 fn length_of(length: usize) -> u64 {
     u64::try_from(length).unwrap_or(u64::MAX)
+}
+
+/// Returns the duration of the media whose samples `stbl` declares: the sum of the durations of its samples, in the timescale of the media
+///
+/// The duration of the media is that of its samples laid end to end on the
+/// decoding timeline, ISO/IEC 14496-12 §8.4.2, each lasting the
+/// `sample_delta` the time-to-sample table gives it, §8.6.1.2. A table
+/// without a time-to-sample table declares a duration of 0; one past what a
+/// `u64` counts, `u64::MAX`.
+///
+/// ```
+/// use isobmff::boxes::{SampleTableBox, TimeToSampleBox, TimeToSampleEntry};
+/// use isobmff::structure_data::media_duration;
+///
+/// // 3 samples lasting 1,000 each, then 1 lasting 500
+/// let mut stts = TimeToSampleBox::default();
+/// stts.entries = [(3, 1_000), (1, 500)]
+///     .into_iter()
+///     .map(|(sample_count, sample_delta)| {
+///         let mut run = TimeToSampleEntry::default();
+///         (run.sample_count, run.sample_delta) = (sample_count, sample_delta);
+///         run
+///     })
+///     .collect();
+/// let mut stbl = SampleTableBox::default();
+/// stbl.stts = Some(stts);
+/// assert_eq!(media_duration(&stbl), 3_500);
+/// ```
+#[must_use]
+pub fn media_duration(stbl: &SampleTableBox) -> u64 {
+    stbl.stts.as_ref().map_or(0, |stts| {
+        stts.entries.iter().fold(0_u64, |total, entry| {
+            total.saturating_add(
+                u64::from(entry.sample_count).saturating_mul(u64::from(entry.sample_delta)),
+            )
+        })
+    })
+}
+
+/// Returns the latest time a sample of `stbl` is composed until: its decoding time, composition offset and duration added, in the timescale of the media, or 0 for no sample
+///
+/// The composition time of a sample is its decoding time, §8.6.1.2, plus
+/// the offset the composition offset table gives it, §8.6.1.3; it lasts
+/// its `sample_delta` from there. Without a composition offset table, the
+/// samples are composed in decoding order and the end is the
+/// [`media_duration`]. An end before 0 is 0; one past what a `u64` counts,
+/// `u64::MAX`.
+///
+/// ```
+/// use isobmff::boxes::{
+///     CompositionOffsetBox, CompositionOffsetEntry, SampleTableBox, TimeToSampleBox,
+///     TimeToSampleEntry,
+/// };
+/// use isobmff::structure_data::composition_end;
+///
+/// // 3 samples lasting 1 each, composed at 1, 3 and 2: the last ends at 4
+/// let mut run = TimeToSampleEntry::default();
+/// (run.sample_count, run.sample_delta) = (3, 1);
+/// let mut stts = TimeToSampleBox::default();
+/// stts.entries = vec![run];
+/// let mut ctts = CompositionOffsetBox::default();
+/// ctts.entries = [1, 2, 0]
+///     .into_iter()
+///     .map(|offset| {
+///         let mut entry = CompositionOffsetEntry::default();
+///         (entry.sample_count, entry.sample_offset) = (1, offset);
+///         entry
+///     })
+///     .collect();
+/// let mut stbl = SampleTableBox::default();
+/// (stbl.stts, stbl.ctts) = (Some(stts), Some(ctts));
+/// assert_eq!(composition_end(&stbl), 4);
+/// ```
+#[must_use]
+pub fn composition_end(stbl: &SampleTableBox) -> u64 {
+    let mut offsets = stbl
+        .ctts
+        .iter()
+        .flat_map(|ctts| ctts.entries.iter())
+        .map(|entry| (entry.sample_count, entry.sample_offset));
+    let (mut offset_count, mut offset) = offsets.next().unwrap_or((0, 0));
+    let (mut decoding_time, mut end) = (0_i128, 0_i128);
+    for run in stbl.stts.iter().flat_map(|stts| stts.entries.iter()) {
+        let (mut count, delta) = (run.sample_count, i128::from(run.sample_delta));
+        // Why not look at each sample: within a run of one duration and one
+        // composition offset, each sample ends later than the one before, so
+        // the last of the run ends latest, and the walk is linear in runs.
+        while count > 0 {
+            while offset_count == 0 {
+                (offset_count, offset) = offsets.next().unwrap_or((u32::MAX, 0));
+            }
+            let taken = count.min(offset_count);
+            decoding_time = decoding_time.saturating_add(delta.saturating_mul(i128::from(taken)));
+            end = end.max(decoding_time.saturating_add(i128::from(offset)));
+            count = count.saturating_sub(taken);
+            offset_count = offset_count.saturating_sub(taken);
+        }
+    }
+    u64::try_from(end.max(0)).unwrap_or(u64::MAX)
 }

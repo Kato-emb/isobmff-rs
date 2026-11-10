@@ -2,7 +2,7 @@
 
 use isobmff::SampleProperties;
 use isobmff::demuxer::Event;
-use isobmff::muxer::TrackDescription;
+use isobmff::muxer::TrackParameters;
 use isobmff::{Demuxer, DemuxerConfig};
 use isobmff_boxes::{FileTypeBox, MovieBox, SampleFlags};
 use isobmff_core::FourCc;
@@ -69,9 +69,9 @@ pub(crate) fn mp4_file_type() -> FileTypeBox {
     ftyp
 }
 
-pub(crate) fn one_sample_entry_track(track_id: u32) -> TrackDescription {
+pub(crate) fn one_sample_entry_track(track_id: u32) -> TrackParameters {
     let stsd = track(track_id, 1, &[], &[], &[]).mdia.minf.stbl.stsd;
-    TrackDescription::new(track_id, 1000, FourCc::new(*b"vide"), stsd)
+    TrackParameters::new(track_id, 1000, FourCc::new(*b"vide"), stsd)
 }
 
 /// A sync sample of track 1 at `decoding_time`, lasting 10

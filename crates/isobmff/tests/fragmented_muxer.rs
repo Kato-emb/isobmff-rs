@@ -6,7 +6,8 @@ mod support;
 
 #[cfg(test)]
 mod tests {
-    use isobmff::muxer::{Error, MovieDescription, TrackDescription};
+    use isobmff::muxer::Error;
+    use isobmff::muxer::{MovieParameters, TrackParameters};
     use isobmff::{FragmentedMovieFileMuxer, MuxerConfig, SampleProperties, SegmentMuxer};
     use isobmff_boxes::{FileTypeBox, SegmentTypeBox};
     use isobmff_core::FourCc;
@@ -24,7 +25,7 @@ mod tests {
         /// A muxer of the movie `movie` describes, in segments of `msdh` where `in_segments`
         fn new(
             in_segments: bool,
-            movie: MovieDescription,
+            movie: MovieParameters,
             config: MuxerConfig,
             file_type: FileTypeBox,
         ) -> Result<Self, Error> {
@@ -38,7 +39,7 @@ mod tests {
             }
         }
 
-        fn add_track(&mut self, track: TrackDescription) -> Result<(), Error> {
+        fn add_track(&mut self, track: TrackParameters) -> Result<(), Error> {
             match self {
                 Self::MovieFile(muxer) => muxer.add_track(track),
                 Self::Segments(muxer) => muxer.add_track(track),
@@ -87,12 +88,12 @@ mod tests {
     ) -> Result<Vec<u8>, Error> {
         let mut muxer = FragmentMuxer::new(
             in_segments,
-            MovieDescription::from(&source.movie),
+            MovieParameters::from(&source.movie),
             config,
             source.file_type.clone(),
         )?;
         for trak in &source.movie.trak {
-            muxer.add_track(TrackDescription::from(trak))?;
+            muxer.add_track(TrackParameters::from(trak))?;
         }
         let mut written = Vec::new();
         for (index, (properties, bytes)) in source.samples.iter().enumerate() {
@@ -204,7 +205,7 @@ mod tests {
     #[test]
     fn a_fragmented_muxer_holds_the_moov_from_the_first_sample_and_each_fragment_from_its_end() {
         let mut muxer = FragmentedMovieFileMuxer::new(
-            MovieDescription::new(1000),
+            MovieParameters::new(1000),
             MuxerConfig::default(),
             mp4_file_type(),
         )
@@ -240,7 +241,7 @@ mod tests {
             let mut config = MuxerConfig::default();
             config.buffer_limit = buffer_limit;
             let mut muxer =
-                FragmentedMovieFileMuxer::new(MovieDescription::new(1000), config, mp4_file_type())
+                FragmentedMovieFileMuxer::new(MovieParameters::new(1000), config, mp4_file_type())
                     .unwrap();
             muxer.add_track(one_sample_entry_track(1)).unwrap();
             muxer
@@ -284,14 +285,14 @@ mod tests {
     fn a_finished_fragmented_muxer_takes_nothing_more() {
         let mut fragments = FragmentMuxer::new(
             false,
-            MovieDescription::new(1000),
+            MovieParameters::new(1000),
             MuxerConfig::default(),
             mp4_file_type(),
         )
         .unwrap();
         let mut segments = FragmentMuxer::new(
             true,
-            MovieDescription::new(1000),
+            MovieParameters::new(1000),
             MuxerConfig::default(),
             mp4_file_type(),
         )

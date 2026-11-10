@@ -18,7 +18,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use isobmff::demuxer::Event;
-use isobmff::muxer::{self, MovieDescription, TrackDescription};
+use isobmff::muxer::{self, MovieParameters, TrackParameters};
 use isobmff::{
     Demuxer, DemuxerConfig, FragmentedMovieFileMuxer, MovieFileMuxer, MuxerConfig, structure_data,
 };
@@ -66,12 +66,12 @@ fn movie_file(
                 Event::Movie(moov) => {
                     let file_type = file_type.take().ok_or("a moov before any ftyp")?;
                     let mut movie_muxer = MovieFileMuxer::new(
-                        MovieDescription::from(&*moov),
+                        MovieParameters::from(&*moov),
                         MuxerConfig::default(),
                         file_type,
                     )?;
                     for trak in &moov.trak {
-                        movie_muxer.add_track(TrackDescription::from(trak))?;
+                        movie_muxer.add_track(TrackParameters::from(trak))?;
                         demuxer.subscribe_track(trak.tkhd.track_id);
                     }
                     muxer = Some(movie_muxer);
@@ -122,12 +122,12 @@ fn fragmented_movie_file(
                 Event::Movie(moov) => {
                     let file_type = file_type.take().ok_or("a moov before any ftyp")?;
                     let mut fragmented_muxer = FragmentedMovieFileMuxer::new(
-                        MovieDescription::from(&*moov),
+                        MovieParameters::from(&*moov),
                         MuxerConfig::default(),
                         file_type,
                     )?;
                     for trak in &moov.trak {
-                        fragmented_muxer.add_track(TrackDescription::from(trak))?;
+                        fragmented_muxer.add_track(TrackParameters::from(trak))?;
                         demuxer.subscribe_track(trak.tkhd.track_id);
                     }
                     muxer = Some(fragmented_muxer);

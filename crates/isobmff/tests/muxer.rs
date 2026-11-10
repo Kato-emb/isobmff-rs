@@ -10,8 +10,9 @@ mod support;
 
 #[cfg(test)]
 mod tests {
-    use isobmff::muxer::{Error, MovieDescription, TrackDescription};
-    use isobmff::{MovieFileMuxer, MuxerConfig};
+    use isobmff::muxer::Error;
+    use isobmff::muxer::{MovieParameters, TrackParameters};
+    use isobmff::{MovieFileMuxer, MuxerConfig, SampleProperties, structure_data};
     use isobmff_boxes::{EditBox, MovieBox};
     use isobmff_core::{BoxDecode, BoxEncode, OtherBoxes};
     use isobmff_test_support::fixtures::media_data_header;
@@ -22,12 +23,12 @@ mod tests {
     /// The file a muxer writes of what `source` holds, its samples in the order read
     fn remux(source: &Read, config: MuxerConfig) -> Result<Vec<u8>, Error> {
         let mut muxer = MovieFileMuxer::new(
-            MovieDescription::from(&source.movie),
+            MovieParameters::from(&source.movie),
             config,
             source.file_type.clone(),
         )?;
         for trak in &source.movie.trak {
-            muxer.add_track(TrackDescription::from(trak))?;
+            muxer.add_track(TrackParameters::from(trak))?;
         }
         let mut written = Vec::new();
         for (properties, bytes) in &source.samples {
@@ -57,7 +58,7 @@ mod tests {
     /// A muxer of a movie of one track, `track_ID` 1, of one sample entry
     fn muxer_of_one_track(config: MuxerConfig) -> MovieFileMuxer {
         let mut muxer =
-            MovieFileMuxer::new(MovieDescription::new(1000), config, mp4_file_type()).unwrap();
+            MovieFileMuxer::new(MovieParameters::new(1000), config, mp4_file_type()).unwrap();
         muxer.add_track(one_sample_entry_track(1)).unwrap();
         muxer
     }
@@ -113,7 +114,7 @@ mod tests {
         assert_eq!(
             muxer.handle_sample(sample(990), b"c"),
             Err(Error::StructureData(
-                isobmff::structure_data::Error::DecodingTimeGap {
+                structure_data::Error::DecodingTimeGap {
                     track_id: 1,
                     expected: 1020,
                     found: 990,
@@ -141,7 +142,7 @@ mod tests {
         let mut muxer = muxer_of_one_track(MuxerConfig::default());
         let mut elsewhere = one_sample_entry_track(3);
         if let Some(isobmff_boxes::SampleDescription::Typed(entry)) =
-            elsewhere.sample_entries.sample_descriptions.first_mut()
+            elsewhere.stsd.sample_descriptions.first_mut()
         {
             entry.data_reference_index = 2;
         }
@@ -227,7 +228,7 @@ mod tests {
             [
                 Err(Error::UnknownTrack { track_id: 2 }),
                 Err(Error::StructureData(
-                    isobmff::structure_data::Error::SampleDescriptionIndexOutOfRange {
+                    structure_data::Error::SampleDescriptionIndexOutOfRange {
                         sample_description_index: 2,
                     }
                 )),
@@ -255,7 +256,7 @@ mod tests {
         let with_limit = |buffer_limit| {
             let mut config = MuxerConfig::default();
             config.buffer_limit = buffer_limit;
-            MovieFileMuxer::new(MovieDescription::new(1000), config, mp4_file_type()).map(|_| ())
+            MovieFileMuxer::new(MovieParameters::new(1000), config, mp4_file_type()).map(|_| ())
         };
         assert_eq!(
             [
@@ -294,24 +295,70 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs ffprobe"]
+    fn a_fragmented_movie_written_as_a_movie_file_presents_every_sample_its_last_edit_runs_to() {
+        let directory =
+            std::env::temp_dir().join(format!("isobmff-muxer-edits-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut presented = Vec::new();
+        for (name, file) in [
+            (
+                "fragmented.mp4",
+                include_bytes!("fixtures/fragmented.mp4").as_slice(),
+            ),
+            ("segment.mp4", include_bytes!("fixtures/segment.mp4")),
+        ] {
+            let (source, written) = (
+                directory.join(format!("source-{name}")),
+                directory.join(format!("written-{name}")),
+            );
+            std::fs::write(&source, file).unwrap();
+            std::fs::write(
+                &written,
+                remux(&read(file).unwrap(), MuxerConfig::default()).unwrap(),
+            )
+            .unwrap();
+            presented.push((
+                name,
+                ffprobe_packets(&[], &written).len(),
+                ffprobe_packets(&[], &source).len(),
+            ));
+        }
+        std::fs::remove_dir_all(&directory).unwrap();
+        assert_eq!(
+            presented,
+            [("fragmented.mp4", 70, 70), ("segment.mp4", 70, 70)]
+        );
+    }
+
+    #[test]
     #[ignore = "needs ISOBMFF_CONFORMANCE_DIR and ffprobe"]
     fn the_conformance_files_written_again_read_as_the_same_packets_and_samples() {
         let directory = std::env::temp_dir().join(format!("isobmff-muxer-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
-        let (mut differences, mut written_files) = (Vec::new(), 0);
+        let (mut differences, mut written_files, mut fragmented_files, mut refused) =
+            (Vec::new(), 0, 0, 0);
         for file in conformance_files() {
             let Some(source) = read(&file.bytes) else {
                 continue;
             };
-            // Why skip these: a fragmented file holds samples the `moov` does
-            // not declare, and a file the demuxer reports an error in, such
-            // as one whose samples lie in another file, has none to write.
-            if source.movie.mvex.is_some() || !source.errors.is_empty() || source.samples.is_empty()
-            {
+            // Why skip these: a file the demuxer reports an error in, such as
+            // one whose samples lie in another file, has none to write.
+            if !source.errors.is_empty() || source.samples.is_empty() {
                 continue;
             }
+            let fragmented = source.movie.mvex.is_some();
             let written = match remux(&source, MuxerConfig::default()) {
                 Ok(written) => written,
+                // Why accept this refusal: a `tfdt` is the sum of the
+                // durations of the samples before it, §8.8.12, and the source
+                // jumps.
+                Err(Error::StructureData(structure_data::Error::DecodingTimeGap { .. }))
+                    if fragmented =>
+                {
+                    refused += 1;
+                    continue;
+                }
                 Err(error) => {
                     differences.push(format!("{}: {error}", file.name));
                     continue;
@@ -319,7 +366,13 @@ mod tests {
             };
             written_files += 1;
             let read_back = read(&written).unwrap();
-            if (&read_back.samples, &read_back.errors) != (&source.samples, &Vec::new()) {
+            let samples = if fragmented {
+                fragmented_files += 1;
+                counted_from_the_first(&source.samples)
+            } else {
+                source.samples.clone()
+            };
+            if (&read_back.samples, &read_back.errors) != (&samples, &Vec::new()) {
                 differences.push(format!("{}: the samples read back differ", file.name));
             }
             // Why compare these with this crate's demuxer alone: ffprobe
@@ -329,6 +382,41 @@ mod tests {
             }
             let path = directory.join(&file.name);
             std::fs::write(&path, &written).unwrap();
+            // Why compare a fragmented source apart: its decoding times start
+            // where its first `tfdt` says, and a movie file starts them at 0,
+            // §8.6.1.2. What edits present is compared by the number of
+            // packets, and each packet with the edits ignored.
+            if fragmented {
+                let presented = |path: &std::path::Path| ffprobe_packets(&[], path).len();
+                if presented(&path) != presented(&file.path) {
+                    differences.push(format!(
+                        "{}: ffprobe presents {} packets through the edit lists, {} of the source",
+                        file.name,
+                        presented(&path),
+                        presented(&file.path)
+                    ));
+                }
+                let read = |path: &std::path::Path| {
+                    ffprobe_packets(&["-ignore_editlist", "1"], path)
+                        .iter()
+                        .map(|packet| {
+                            (
+                                packet.track_id,
+                                packet.size,
+                                packet.pts.zip(packet.dts).map(|(pts, dts)| pts - dts),
+                                packet.key,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                };
+                if read(&path) != read(&file.path) {
+                    differences.push(format!(
+                        "{}: ffprobe reads other packets with the edits ignored",
+                        file.name
+                    ));
+                }
+                continue;
+            }
             let theirs = ffprobe_packets(&[], &file.path)
                 .iter()
                 .map(packet_read)
@@ -350,7 +438,30 @@ mod tests {
             }
         }
         std::fs::remove_dir_all(&directory).unwrap();
+        println!(
+            "{written_files} files written, {fragmented_files} of them fragmented, {refused} refused for a gap in decoding times"
+        );
         assert_eq!(differences, Vec::<String>::new());
-        assert!(written_files > 0);
+        assert!(written_files > 0 && fragmented_files > 0);
+    }
+
+    /// `samples`, the decoding times of each track counted from that of its first sample, as a sample table declares them
+    fn counted_from_the_first(
+        samples: &[(SampleProperties, Vec<u8>)],
+    ) -> Vec<(SampleProperties, Vec<u8>)> {
+        let mut firsts = std::collections::BTreeMap::new();
+        samples
+            .iter()
+            .map(|(properties, bytes)| {
+                let first = *firsts
+                    .entry(properties.track_id)
+                    .or_insert(properties.decoding_time);
+                let properties = SampleProperties {
+                    decoding_time: properties.decoding_time.saturating_sub(first),
+                    ..*properties
+                };
+                (properties, bytes.clone())
+            })
+            .collect()
     }
 }
