@@ -53,7 +53,9 @@
 //! bytes lie, and writes the sample table of a track, or a `moof`, from them. The boxes
 //! themselves are read and written with [`boxes`], and the header that frames
 //! a box, the values its fields carry and the traits a box implements, such as
-//! [`BoxDecode`] and [`BoxEncode`], are at the root of the crate.
+//! [`BoxDecode`] and [`BoxEncode`], are at the root of the crate. The [`Error`]
+//! at the root is that of reading and writing a box; the demuxer and the
+//! muxers report through [`demuxer::Error`] and [`muxer::Error`].
 
 #![no_std]
 
