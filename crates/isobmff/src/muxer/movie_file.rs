@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use isobmff_boxes::FileTypeBox;
 use isobmff_core::BoxEncode;
 
-use super::movie::{append_encoded, movie_box, track_box};
+use super::movie::{append_encoded, check_track, movie_box, track_box};
 use super::{Error, MovieDescription, MuxerConfig, TrackDescription};
 use crate::framing;
 use crate::structure_data::{self, SampleTableWriter};
@@ -205,26 +205,7 @@ impl MovieFileMuxer {
         {
             return Err(Error::TrackAfterMediaData { track_id });
         }
-        if track_id == 0
-            || self
-                .tracks
-                .iter()
-                .any(|added| added.description.track_id == track_id)
-        {
-            return Err(Error::TrackId { track_id });
-        }
-        if let Some(data_reference_index) = track
-            .sample_entries
-            .sample_descriptions
-            .iter()
-            .map(|entry| entry.data_reference_index().unwrap_or(0))
-            .find(|&index| index != 1)
-        {
-            return Err(Error::DataReferenceIndex {
-                track_id,
-                data_reference_index,
-            });
-        }
+        check_track(self.tracks.iter().map(|added| &added.description), &track)?;
         self.tracks.push(Track {
             description: track,
             samples: SampleTableWriter::new(self.config.sample_count_limit),

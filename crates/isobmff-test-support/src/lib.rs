@@ -218,7 +218,7 @@ pub struct FfprobePacket {
     pub key: bool,
 }
 
-/// Returns the packets `ffprobe -show_streams -show_packets -of json` reports for `file`, in the order it reports them
+/// Returns the packets `ffprobe -show_streams -show_packets -of json` reports for `file`, with the options `arguments` before them, in the order it reports them
 ///
 /// # Panics
 ///
@@ -230,16 +230,20 @@ pub struct FfprobePacket {
     clippy::unwrap_used,
     reason = "a test checking against what ffprobe does not report fails"
 )]
-pub fn ffprobe_packets(file: &Path) -> Vec<FfprobePacket> {
+pub fn ffprobe_packets(arguments: &[&str], file: &Path) -> Vec<FfprobePacket> {
     let output = ffprobe(
         &[
-            "-v",
-            "error",
-            "-show_streams",
-            "-show_packets",
-            "-of",
-            "json",
-        ],
+            arguments,
+            &[
+                "-v",
+                "error",
+                "-show_streams",
+                "-show_packets",
+                "-of",
+                "json",
+            ],
+        ]
+        .concat(),
         file,
     );
     assert!(

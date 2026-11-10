@@ -104,6 +104,30 @@ pub(super) fn track_box(
     trak
 }
 
+/// Checks that `track` may be added beside the tracks `added`: its `track_ID` is neither 0 nor taken, and its media data is in the same file
+pub(super) fn check_track<'a>(
+    mut added: impl Iterator<Item = &'a TrackDescription>,
+    track: &TrackDescription,
+) -> Result<(), Error> {
+    let track_id = track.track_id;
+    if track_id == 0 || added.any(|added| added.track_id == track_id) {
+        return Err(Error::TrackId { track_id });
+    }
+    if let Some(data_reference_index) = track
+        .sample_entries
+        .sample_descriptions
+        .iter()
+        .map(|entry| entry.data_reference_index().unwrap_or(0))
+        .find(|&index| index != 1)
+    {
+        return Err(Error::DataReferenceIndex {
+            track_id,
+            data_reference_index,
+        });
+    }
+    Ok(())
+}
+
 /// The version of a box that holds `value` in a field of 32 bits in version 0 and 64 in version 1
 fn version_for(value: u64) -> u8 {
     u8::from(value > u64::from(u32::MAX))

@@ -583,7 +583,12 @@ impl Demuxer {
             .get(start..)?
             .iter()
             .enumerate()
-            .take_while(|(_, location)| location.offset < before)
+            // Why also a sample of no bytes at the position the box reader
+            // wants: it lies at the end of the media data before that box, or
+            // of the input, and needs no byte of either.
+            .take_while(|(_, location)| {
+                location.offset < before || (location.size == 0 && location.offset == before)
+            })
             .find(|(_, location)| samples.subscribed.contains(&location.properties.track_id))
             .map(|(index, &location)| (start.saturating_add(index), location))
     }

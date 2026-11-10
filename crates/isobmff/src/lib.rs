@@ -42,13 +42,15 @@
 //! ```
 //!
 //! [`MovieFileMuxer`] writes a movie file, its `ftyp`, one `mdat` and the
-//! `moov` that declares it, from the samples a caller hands it; the
-//! [`muxer`] module holds what describes the movie and its tracks.
+//! `moov` that declares it, from the samples a caller hands it;
+//! [`FragmentedMovieFileMuxer`] writes their movie fragments instead, and
+//! [`SegmentMuxer`] its segments. The [`muxer`] module holds what describes
+//! the movie and its tracks.
 //!
 //! The layers they are made of are usable alone: [`framing`] reads the boxes
 //! laid end to end in a file from bytes that arrive in pieces, and
 //! [`structure_data`] resolves the samples a `moov` or a `moof` declares to where their
-//! bytes lie, and writes the sample table of a track from them. The boxes
+//! bytes lie, and writes the sample table of a track, or a `moof`, from them. The boxes
 //! themselves are read and written with `isobmff-boxes`.
 
 #![no_std]
@@ -63,7 +65,7 @@ mod sample;
 pub mod structure_data;
 
 pub use demuxer::{Demuxer, DemuxerConfig};
-pub use muxer::{MovieFileMuxer, MuxerConfig};
+pub use muxer::{FragmentedMovieFileMuxer, MovieFileMuxer, MuxerConfig, SegmentMuxer};
 pub use sample::{SampleLocation, SampleProperties};
 
 /// Where a reader wants input next
