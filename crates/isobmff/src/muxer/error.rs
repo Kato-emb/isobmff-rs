@@ -2,7 +2,7 @@
 
 use core::fmt;
 
-use crate::structure_data;
+use crate::{structure_data, timeline};
 
 /// Why a muxer refuses a value; a refused call changes nothing
 #[non_exhaustive]
@@ -49,6 +49,14 @@ pub enum Error {
         /// The bytes the output held would grow to
         length: usize,
     },
+    /// The edit list of a track starts an edit outside the samples the track
+    /// was given, once its decoding times start at 0
+    Timeline {
+        /// `track_ID` of the track
+        track_id: u32,
+        /// Why the edit list does not fit the samples
+        error: timeline::Error,
+    },
     /// A box does not write
     Encode(isobmff_core::Error),
 }
@@ -86,6 +94,10 @@ impl fmt::Display for Error {
                 formatter,
                 "the output held would grow to {length} bytes, past buffer_limit"
             ),
+            Self::Timeline { track_id, .. } => write!(
+                formatter,
+                "the edit list of track {track_id} starts an edit outside its samples"
+            ),
             Self::Encode(_) => write!(formatter, "a box does not write"),
         }
     }
@@ -96,6 +108,7 @@ impl core::error::Error for Error {
         match self {
             Self::StructureData(source) => Some(source),
             Self::Encode(source) => Some(source),
+            Self::Timeline { error, .. } => Some(error),
             Self::Finished
             | Self::TrackAfterMediaData { .. }
             | Self::TrackId { .. }

@@ -8,7 +8,8 @@ use isobmff_core::BoxEncode;
 use super::movie::{append_encoded, check_track, data_reference, media_data_header};
 use super::{Error, MuxerConfig};
 use super::{MovieParameters, TrackParameters};
-use crate::structure_data::{self, SampleTableWriter, TrackSampleDescription};
+use crate::structure_data::{self, SampleTableWriter, TrackSampleDescription, composition_end};
+use crate::timeline::move_media_times;
 use crate::{SampleLocation, SampleProperties};
 
 /// Length of the header of the `mdat`, written with a `largesize` so that its length can be written over in place
@@ -225,7 +226,9 @@ impl MovieFileMuxer {
     ///
     /// The sample lies after the samples taken before it. Its decoding time
     /// counts from that of the first sample of its track, as the sample table
-    /// declares it.
+    /// declares it, and [`finish`](Self::finish) moves the edits of the track
+    /// as many units back in the media, as
+    /// [`move_media_times`](crate::timeline::move_media_times) does.
     ///
     /// # Errors
     /// * [`Error::Finished`]: the muxer has finished.
@@ -316,6 +319,8 @@ impl MovieFileMuxer {
     ///
     /// # Errors
     /// * [`Error::Finished`]: the muxer has finished.
+    /// * [`Error::Timeline`]: an edit of a track starts outside the samples
+    ///   it was given, once their decoding times start at 0.
     /// * [`Error::Encode`]: the `moov` does not write, as where a sample
     ///   entry or a box of the parameters does not.
     pub fn finish(&mut self) -> Result<MediaDataHeader, Error> {
@@ -335,7 +340,17 @@ impl MovieFileMuxer {
             // Why finish a clone: a `moov` that does not write leaves the
             // muxer as it was, samples and all.
             let stbl = track.samples.clone().finish();
-            trak.push(track.parameters.to_track_box(stbl));
+            let media_end = composition_end(&stbl);
+            let mut track_box = track.parameters.to_track_box(stbl);
+            if let Some(elst) = track_box.edts.as_mut().and_then(|edts| edts.elst.as_mut()) {
+                move_media_times(elst, track.first_decoding_time.unwrap_or(0), media_end).map_err(
+                    |error| Error::Timeline {
+                        track_id: track.parameters.track_id,
+                        error,
+                    },
+                )?;
+            }
+            trak.push(track_box);
         }
         append_encoded(&self.movie.to_movie_box(trak), &mut self.output)?;
         self.finished = true;

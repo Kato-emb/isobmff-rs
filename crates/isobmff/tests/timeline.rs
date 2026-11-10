@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use isobmff::timeline::declare_durations;
+    use isobmff::timeline::{Error, declare_durations, move_media_times};
     use isobmff_boxes::{
         CompositionOffsetBox, CompositionOffsetEntry, EditBox, EditListBox, EditListEntry,
         MovieBox, TrackBox,
@@ -204,5 +204,63 @@ mod tests {
         (moov.mvhd.timescale, moov.mvhd.next_track_id) = (1000, 9);
         declare_durations(&mut moov);
         assert_eq!((moov.mvhd.duration, moov.mvhd.next_track_id), (503, 9));
+    }
+
+    /// The edit list of the edits `(edit_duration, media_time)`
+    fn edit_list(edits: &[(u64, i64)]) -> EditListBox {
+        let mut elst = EditListBox::default();
+        elst.entries = edits
+            .iter()
+            .map(|&(edit_duration, media_time)| {
+                let mut entry = EditListEntry::default();
+                (entry.edit_duration, entry.media_time) = (edit_duration, media_time);
+                entry
+            })
+            .collect();
+        elst
+    }
+
+    #[test]
+    fn edits_that_are_not_empty_start_as_much_sooner_as_the_media_does() {
+        let mut elst = edit_list(&[(500, -1), (100, 1_000), (0, 1_200)]);
+        move_media_times(&mut elst, 1_000, 300).unwrap();
+        assert_eq!(elst, edit_list(&[(500, -1), (100, 0), (0, 200)]));
+    }
+
+    #[test]
+    fn edits_of_media_that_starts_where_it_did_are_left_as_they_are() {
+        let mut elst = edit_list(&[(500, -1), (100, 7)]);
+        move_media_times(&mut elst, 0, 10).unwrap();
+        assert_eq!(elst, edit_list(&[(500, -1), (100, 7)]));
+    }
+
+    #[test]
+    fn an_edit_that_would_start_before_the_media_or_where_its_composition_has_ended_is_refused_and_no_edit_moves()
+     {
+        let before = edit_list(&[(100, 1_000), (100, 999)]);
+        let after = edit_list(&[(100, 1_000), (100, 1_300)]);
+        let mut moved = [before.clone(), after.clone()];
+        let refusals = [
+            move_media_times(&mut moved[0], 1_000, 300),
+            move_media_times(&mut moved[1], 1_000, 300),
+        ];
+        assert_eq!(
+            (refusals, moved),
+            (
+                [
+                    Err(Error::EditOutsideMedia {
+                        media_time: 999,
+                        media_start: 1_000,
+                        media_end: 1_300
+                    }),
+                    Err(Error::EditOutsideMedia {
+                        media_time: 1_300,
+                        media_start: 1_000,
+                        media_end: 1_300
+                    }),
+                ],
+                [before, after]
+            )
+        );
     }
 }

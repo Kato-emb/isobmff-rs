@@ -2,8 +2,8 @@
 //!
 //! The example reads a file with the demuxer where it asks, and writes each
 //! sample it lends without a muxer, with only the sample table writer of
-//! [`structure_data`], [`declare_durations`] of [`timeline`], the box header
-//! [`BoxHeader`], and the boxes:
+//! [`structure_data`], [`declare_durations`] and [`move_media_times`] of
+//! [`timeline`], the box header [`BoxHeader`], and the boxes:
 //!
 //! 1. an `ftyp`, then a `free` (§8.1.2) of `reserved_bytes`, the space kept
 //!    for the `moov`;
@@ -40,8 +40,8 @@ use std::path::Path;
 
 use isobmff::boxes::MovieBox;
 use isobmff::demuxer::Event;
-use isobmff::structure_data::{SampleTableWriter, TrackSampleDescription};
-use isobmff::timeline::declare_durations;
+use isobmff::structure_data::{SampleTableWriter, TrackSampleDescription, composition_end};
+use isobmff::timeline::{declare_durations, move_media_times};
 use isobmff::{
     BoxEncode, BoxHeader, BoxSize, BoxType, CompactSize, Demuxer, DemuxerConfig, ExtendedSize,
     SampleLocation, SampleProperties,
@@ -100,9 +100,6 @@ fn reserved_moov(
     let mut demuxer = Demuxer::new(DemuxerConfig::default());
     let mut buffer = vec![0; 64 * 1024];
     let mut file_type = None;
-    // Set once the `moov` is read: the movie, and where the `free` and the
-    // `mdat` lie; the writer of the sample table of each track, and the
-    // decoding time of its first sample; and where the next sample goes
     let mut movie: Option<(MovieBox, u64, u64)> = None;
     let mut tables: Vec<(SampleTableWriter, Option<u64>)> = Vec::new();
     let mut position = 0_u64;
@@ -110,7 +107,6 @@ fn reserved_moov(
         while let Some(event) = demuxer.poll_event() {
             match event {
                 Event::FileType(ftyp) => file_type = Some(ftyp),
-                // The `ftyp`, the `free` the `moov` is to be written over, and the header of the `mdat`
                 Event::Movie(moov) => {
                     let ftyp = file_type.take().ok_or("a moov before any ftyp")?;
                     let mut bytes = vec![0; usize::try_from(ftyp.encoded_len())?];
@@ -144,7 +140,6 @@ fn reserved_moov(
                     }
                     movie = Some((*moov, free_offset, media_data_offset));
                 }
-                // Each sample is written where the media data has come to, and its table takes it there
                 Event::Sample(sample) => {
                     let (moov, _, _) = movie.as_ref().ok_or("a sample before any moov")?;
                     let properties = sample.properties;
@@ -181,10 +176,13 @@ fn reserved_moov(
     }
     let (mut moov, free_offset, media_data_offset) = movie.ok_or("no moov")?;
 
-    // The `moov` that declares every sample
     moov.mvex = None;
-    for (trak, (table, _)) in moov.trak.iter_mut().zip(&mut tables) {
+    for (trak, (table, first)) in moov.trak.iter_mut().zip(&mut tables) {
         trak.mdia.minf.stbl = table.finish();
+        if let Some(elst) = trak.edts.as_mut().and_then(|edts| edts.elst.as_mut()) {
+            let media_end = composition_end(&trak.mdia.minf.stbl);
+            move_media_times(elst, first.unwrap_or(0), media_end)?;
+        }
     }
     declare_durations(&mut moov);
     let length = moov.encoded_len();
@@ -202,8 +200,6 @@ fn reserved_moov(
     output.seek(SeekFrom::Start(at))?;
     output.write_all(&bytes)?;
 
-    // The header of the `mdat` was written first, as long as one with a
-    // `largesize`; now that the length is known, it is written over
     let size =
         ExtendedSize::new(position.saturating_sub(media_data_offset)).ok_or("a file too long")?;
     output.seek(SeekFrom::Start(media_data_offset))?;
@@ -469,6 +465,89 @@ mod tests {
         );
         assert_eq!(differences, Vec::<String>::new());
         assert!(written_files > 0);
+    }
+
+    /// `file`, each of its tracks starting a second later: the `tfdt` of each movie fragment, and the `media_time` of each edit that is not empty, a second more in the media of the track
+    fn a_second_later(file: &[u8]) -> Vec<u8> {
+        use isobmff::BoxDecode;
+        use isobmff::BoxEncode;
+        use isobmff::boxes::{MovieBox, MovieFragmentBox};
+
+        let boxes = top_level_boxes(file);
+        let mut written = file.to_vec();
+        let mut timescales = BTreeMap::new();
+        for (index, (box_type, offset)) in boxes.iter().enumerate() {
+            let start = usize::try_from(*offset).unwrap();
+            let end = boxes
+                .get(index + 1)
+                .map_or(file.len(), |(_, next)| usize::try_from(*next).unwrap());
+            let bytes = match box_type.as_str() {
+                "moov" => {
+                    let (mut moov, _) = MovieBox::decode(&file[start..end]).unwrap();
+                    for trak in &mut moov.trak {
+                        let timescale = trak.mdia.mdhd.timescale;
+                        timescales.insert(trak.tkhd.track_id, u64::from(timescale));
+                        let elst = trak.edts.as_mut().and_then(|edts| edts.elst.as_mut());
+                        for entry in elst.into_iter().flat_map(|elst| elst.entries.iter_mut()) {
+                            if entry.media_time >= 0 {
+                                entry.media_time += i64::from(timescale);
+                            }
+                        }
+                    }
+                    let mut bytes = vec![0; usize::try_from(moov.encoded_len()).unwrap()];
+                    moov.encode(&mut bytes).unwrap();
+                    bytes
+                }
+                "moof" => {
+                    let (mut moof, _) = MovieFragmentBox::decode(&file[start..end]).unwrap();
+                    for traf in &mut moof.traf {
+                        if let Some(tfdt) = traf.tfdt.as_mut() {
+                            tfdt.base_media_decode_time += timescales[&traf.tfhd.track_id];
+                        }
+                    }
+                    let mut bytes = vec![0; usize::try_from(moof.encoded_len()).unwrap()];
+                    moof.encode(&mut bytes).unwrap();
+                    bytes
+                }
+                _ => continue,
+            };
+            assert_eq!(bytes.len(), end - start);
+            written[start..end].copy_from_slice(&bytes);
+        }
+        written
+    }
+
+    #[test]
+    #[ignore = "needs ffprobe"]
+    fn a_movie_whose_tracks_start_later_than_0_presents_the_samples_its_edits_select() {
+        let directory = std::env::temp_dir().join(format!(
+            "isobmff-reserved-moov-later-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut presented = Vec::new();
+        for (name, file) in [
+            ("fragmented.mp4", FIXTURES[2]),
+            ("segment.mp4", FIXTURES[3]),
+        ] {
+            let later = a_second_later(file);
+            let (source, finished) = (
+                directory.join(format!("source-{name}")),
+                directory.join(format!("written-{name}")),
+            );
+            std::fs::write(&source, &later).unwrap();
+            std::fs::write(&finished, written(&later, RESERVED_BYTES).unwrap()).unwrap();
+            presented.push((
+                name,
+                ffprobe_packets(&[], &finished).len(),
+                ffprobe_packets(&[], &source).len(),
+            ));
+        }
+        std::fs::remove_dir_all(&directory).unwrap();
+        assert_eq!(
+            presented,
+            [("fragmented.mp4", 70, 70), ("segment.mp4", 70, 70)]
+        );
     }
 
     #[test]

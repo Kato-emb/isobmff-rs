@@ -10,12 +10,13 @@ mod support;
 
 #[cfg(test)]
 mod tests {
+    use isobmff::framing::{self, BoxReader, FramerConfig};
     use isobmff::muxer::Error;
     use isobmff::muxer::{MovieParameters, TrackParameters};
     use isobmff::{MovieFileMuxer, MuxerConfig, SampleProperties, structure_data};
-    use isobmff_boxes::{EditBox, MovieBox};
-    use isobmff_core::{BoxDecode, BoxEncode, OtherBoxes};
-    use isobmff_test_support::fixtures::media_data_header;
+    use isobmff_boxes::{EditBox, MovieBox, MovieFragmentBox};
+    use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxType, OtherBoxes};
+    use isobmff_test_support::fixtures::{encoded, media_data_header};
     use isobmff_test_support::{conformance_files, ffprobe, ffprobe_packets};
 
     use crate::support::{Read, mp4_file_type, one_sample_entry_track, packet_read, read, sample};
@@ -316,6 +317,115 @@ mod tests {
             std::fs::write(
                 &written,
                 remux(&read(file).unwrap(), MuxerConfig::default()).unwrap(),
+            )
+            .unwrap();
+            presented.push((
+                name,
+                ffprobe_packets(&[], &written).len(),
+                ffprobe_packets(&[], &source).len(),
+            ));
+        }
+        std::fs::remove_dir_all(&directory).unwrap();
+        assert_eq!(
+            presented,
+            [("fragmented.mp4", 70, 70), ("segment.mp4", 70, 70)]
+        );
+    }
+
+    /// The file offset of each box at file level of `file`, and the offset where it ends
+    fn top_level_boxes(file: &[u8]) -> Vec<(BoxType, usize, usize)> {
+        let mut config = FramerConfig::new(0);
+        config.gathered_box_types.clear();
+        let mut reader = BoxReader::new(config);
+        let mut starts = Vec::new();
+        loop {
+            while let Some(event) = reader.poll_event() {
+                if let framing::Event::Box { offset, header } = event {
+                    starts.push((header.box_type(), usize::try_from(offset).unwrap()));
+                }
+            }
+            let Some(required) = reader.required_input() else {
+                break;
+            };
+            match file.get(usize::try_from(required.position).unwrap()..) {
+                Some(bytes) if !bytes.is_empty() => reader.handle_input(required.position, bytes),
+                _ => reader.finish(),
+            }
+        }
+        let ends = starts
+            .iter()
+            .skip(1)
+            .map(|&(_, start)| start)
+            .chain([file.len()]);
+        starts
+            .iter()
+            .zip(ends)
+            .map(|(&(box_type, start), end)| (box_type, start, end))
+            .collect()
+    }
+
+    /// `file`, each of its tracks starting a second later: the `tfdt` of each movie fragment, and the `media_time` of each edit that is not empty, a second more in the media of the track
+    fn a_second_later(file: &[u8]) -> Vec<u8> {
+        let mut written = file.to_vec();
+        let mut timescales = std::collections::BTreeMap::new();
+        for (box_type, start, end) in top_level_boxes(file) {
+            let original = file.get(start..end).unwrap();
+            let bytes = if box_type == MovieBox::BOX_TYPE {
+                let (mut moov, _) = MovieBox::decode(original).unwrap();
+                for trak in &mut moov.trak {
+                    let timescale = trak.mdia.mdhd.timescale;
+                    timescales.insert(trak.tkhd.track_id, u64::from(timescale));
+                    let elst = trak.edts.as_mut().and_then(|edts| edts.elst.as_mut());
+                    for entry in elst.into_iter().flat_map(|elst| elst.entries.iter_mut()) {
+                        if entry.media_time >= 0 {
+                            entry.media_time =
+                                entry.media_time.checked_add(i64::from(timescale)).unwrap();
+                        }
+                    }
+                }
+                encoded(&moov)
+            } else if box_type == MovieFragmentBox::BOX_TYPE {
+                let (mut moof, _) = MovieFragmentBox::decode(original).unwrap();
+                for traf in &mut moof.traf {
+                    let timescale = timescales.get(&traf.tfhd.track_id).copied().unwrap();
+                    if let Some(tfdt) = traf.tfdt.as_mut() {
+                        tfdt.base_media_decode_time =
+                            tfdt.base_media_decode_time.checked_add(timescale).unwrap();
+                    }
+                }
+                encoded(&moof)
+            } else {
+                continue;
+            };
+            written.get_mut(start..end).unwrap().copy_from_slice(&bytes);
+        }
+        written
+    }
+
+    #[test]
+    #[ignore = "needs ffprobe"]
+    fn a_movie_whose_tracks_start_later_than_0_written_as_a_movie_file_presents_the_samples_its_edits_select()
+     {
+        let directory =
+            std::env::temp_dir().join(format!("isobmff-muxer-later-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut presented = Vec::new();
+        for (name, file) in [
+            (
+                "fragmented.mp4",
+                include_bytes!("fixtures/fragmented.mp4").as_slice(),
+            ),
+            ("segment.mp4", include_bytes!("fixtures/segment.mp4")),
+        ] {
+            let later = a_second_later(file);
+            let (source, written) = (
+                directory.join(format!("source-{name}")),
+                directory.join(format!("written-{name}")),
+            );
+            std::fs::write(&source, &later).unwrap();
+            std::fs::write(
+                &written,
+                remux(&read(&later).unwrap(), MuxerConfig::default()).unwrap(),
             )
             .unwrap();
             presented.push((

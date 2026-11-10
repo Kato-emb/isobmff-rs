@@ -27,7 +27,6 @@ fn demux(mut input: impl Read + Seek, mut summary: impl Write) -> Result<(), Box
     let mut buffer = vec![0; 64 * 1024];
     let mut tracks = BTreeMap::<u32, (usize, usize)>::new();
     loop {
-        // Report what the bytes handed over hold
         while let Some(event) = demuxer.poll_event() {
             match event {
                 Event::Movie(moov) => {
@@ -45,7 +44,6 @@ fn demux(mut input: impl Read + Seek, mut summary: impl Write) -> Result<(), Box
                 _ => {}
             }
         }
-        // Read the file where the demuxer asks, and end it where it ends
         let Some(required) = demuxer.required_input() else {
             break;
         };
