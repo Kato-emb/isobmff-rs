@@ -12,10 +12,10 @@ mod movie_fragment;
 mod movie_fragment_writer;
 mod reader;
 mod sample_table;
-mod writer;
+mod sample_table_writer;
 
 pub use error::Error;
 pub use movie_fragment::movie_fragment_sample_count;
 pub use movie_fragment_writer::MovieFragmentWriter;
 pub use reader::StructureDataReader;
-pub use writer::SampleTableWriter;
+pub use sample_table_writer::SampleTableWriter;

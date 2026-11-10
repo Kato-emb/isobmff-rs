@@ -10,12 +10,12 @@
 mod config;
 mod description;
 mod error;
-mod fragmented;
+mod fragmented_movie_file;
 mod movie;
 mod movie_file;
 
 pub use config::MuxerConfig;
 pub use description::{MovieDescription, TrackDescription};
 pub use error::Error;
-pub use fragmented::{FragmentedMovieFileMuxer, SegmentMuxer};
+pub use fragmented_movie_file::{FragmentedMovieFileMuxer, SegmentMuxer};
 pub use movie_file::{MediaDataHeader, MovieFileMuxer};
