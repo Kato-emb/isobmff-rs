@@ -11,9 +11,10 @@ mod support;
 #[cfg(test)]
 mod tests {
     use isobmff::muxer::{MovieParameters, TrackParameters};
+    use isobmff::timeline::set_durations;
     use isobmff_boxes::{
         CompositionOffsetBox, CompositionOffsetEntry, EditBox, EditListBox, EditListEntry, Matrix,
-        MovieBox, SampleTableBox, TrackBox,
+        SampleTableBox, TrackBox,
     };
     use isobmff_core::{BoxDefinition, BoxEncode, FourCc, I8F8};
     use isobmff_test_support::conformance_files;
@@ -48,11 +49,12 @@ mod tests {
         track(1, 1, &[4, 4, 4], &[(1, 3)], &[100]).mdia.minf.stbl
     }
 
-    /// The sample table of three samples lasting 1 each, composed at the offsets `offsets`
-    fn table_composed_at(offsets: [i64; 3]) -> SampleTableBox {
+    /// The durations and versions of the `moov` written are those the timeline sets: setting them again from 0 gives the same `moov`
+    #[test]
+    fn a_movie_written_has_the_durations_its_timeline_gives() {
         let mut stbl = table();
         let mut ctts = CompositionOffsetBox::default();
-        ctts.entries = offsets
+        ctts.entries = [1, 2, 0]
             .into_iter()
             .map(|offset| {
                 let mut entry = CompositionOffsetEntry::default();
@@ -61,99 +63,23 @@ mod tests {
             })
             .collect();
         stbl.ctts = Some(ctts);
-        stbl
-    }
-
-    /// The `moov` the parameters of a track of media in `timescale`, whose edits are `edits` (no edit list where `None`) and whose samples `stbl` declares, write in a movie of `movie_timescale`
-    fn written(
-        movie_timescale: u32,
-        timescale: u32,
-        edits: Option<&[(u64, i64)]>,
-        stbl: SampleTableBox,
-    ) -> MovieBox {
-        let track = TrackParameters {
-            timescale,
-            edts: edits.and_then(|edits| parameters(edits).edts),
-            ..parameters(&[])
-        };
-        MovieParameters::new(movie_timescale).to_movie_box(vec![track.to_track_box(stbl)])
-    }
-
-    /// The `(edit_duration, media_time)` of each edit of the track of `moov`, the duration of the track and of its media
-    fn durations(moov: &MovieBox) -> (Vec<(u64, i64)>, u64, u64) {
-        let trak = moov.trak.first().unwrap();
-        let edits = trak
-            .edts
-            .iter()
-            .filter_map(|edts| edts.elst.as_ref())
-            .flat_map(|elst| elst.entries.iter())
-            .map(|entry| (entry.edit_duration, entry.media_time))
-            .collect();
-        (edits, trak.tkhd.duration, trak.mdia.mdhd.duration)
-    }
-
-    /// Three samples lasting 1 each, composed at 1, 3 and 2 until 2, 4 and 3, end their composition at 4: an edit from 1 lasts 3, past the 2 their durations leave it
-    #[test]
-    fn a_last_edit_of_duration_0_lasts_to_the_end_of_the_composition_of_the_samples() {
-        let moov = written(1000, 1000, Some(&[(0, 1)]), table_composed_at([1, 2, 0]));
-        assert_eq!(durations(&moov), (vec![(3, 1)], 3, 3));
-        let moov = written(1000, 1000, Some(&[(500, -1), (0, 1)]), table());
-        assert_eq!(durations(&moov), (vec![(500, -1), (2, 1)], 502, 3));
-    }
-
-    #[test]
-    fn a_closed_edit_and_a_track_without_edits_are_counted_in_the_movie_timescale_rounded_up() {
-        assert_eq!(
-            [
-                durations(&written(1000, 3, Some(&[(0, 0)]), table())),
-                durations(&written(1000, 7, Some(&[(0, 0)]), table())),
-                durations(&written(1000, 10, None, table())),
-            ],
-            [
-                (vec![(1000, 0)], 1000, 3),
-                (vec![(429, 0)], 429, 3),
-                (vec![], 300, 3),
-            ]
-        );
-    }
-
-    #[test]
-    fn edits_of_a_duration_keep_it() {
-        let moov = written(1000, 1000, Some(&[(7, 1)]), table());
-        assert_eq!(durations(&moov), (vec![(7, 1)], 7, 3));
-    }
-
-    #[test]
-    fn a_closed_edit_past_32_bits_is_written_in_an_edit_list_of_version_1() {
-        let moov = written(u32::MAX, 1, Some(&[(0, 0)]), table());
-        let elst = moov
-            .trak
-            .first()
-            .and_then(|trak| trak.edts.as_ref())
-            .and_then(|edts| edts.elst.as_ref())
-            .unwrap();
-        assert_eq!(
-            (
-                elst.version,
-                elst.entries.first().map(|entry| entry.edit_duration)
-            ),
-            (1, Some(3 * u64::from(u32::MAX)))
-        );
-    }
-
-    #[test]
-    fn a_header_takes_version_1_where_its_duration_or_a_time_does_not_fit_32_bits() {
-        let versions = |moov: &MovieBox| {
-            let trak = moov.trak.first().unwrap();
-            [moov.mvhd.version, trak.tkhd.version, trak.mdia.mdhd.version]
-        };
-        assert_eq!(
-            [
-                versions(&written(1000, 1000, None, table())),
-                versions(&written(1000, 1, Some(&[(1 << 32, 0)]), table())),
-            ],
-            [[0, 0, 0], [1, 1, 0]]
-        );
+        let track = parameters(&[(500, -1), (0, 1)]);
+        let moov = MovieParameters::new(600).to_movie_box(vec![track.to_track_box(stbl)]);
+        let mut again = moov.clone();
+        again.mvhd.duration = 0;
+        for trak in &mut again.trak {
+            (trak.tkhd.duration, trak.mdia.mdhd.duration) = (0, 0);
+            if let Some(last) = trak
+                .edts
+                .as_mut()
+                .and_then(|edts| edts.elst.as_mut())
+                .and_then(|elst| elst.entries.last_mut())
+            {
+                last.edit_duration = 0;
+            }
+        }
+        set_durations(&mut again);
+        assert_eq!((again, moov.mvhd.duration), (moov.clone(), 502));
     }
 
     #[test]

@@ -2,8 +2,8 @@
 //!
 //! The example reads a file with the demuxer where it asks, and writes each
 //! sample it lends without a muxer, with only the movie fragment writer, the
-//! sample table writer, [`media_duration`] and [`composition_end`] of
-//! [`structure_data`], the box header [`BoxHeader`], and the boxes:
+//! sample table writer of [`structure_data`], [`set_durations`] of
+//! [`timeline`], the box header [`BoxHeader`], and the boxes:
 //!
 //! 1. an `ftyp`, a `free` (§8.1.2) as long as the header of an `mdat`, and a
 //!    `moov` with an `mvex` and no sample;
@@ -36,9 +36,8 @@ use std::path::Path;
 
 use isobmff::boxes::{Free, FreeSpaceBox, MovieBox, MovieExtendsBox, TrackExtendsBox};
 use isobmff::demuxer::Event;
-use isobmff::structure_data::{
-    MovieFragmentWriter, SampleTableWriter, TrackSampleDescription, composition_end, media_duration,
-};
+use isobmff::structure_data::{MovieFragmentWriter, SampleTableWriter, TrackSampleDescription};
+use isobmff::timeline::set_durations;
 use isobmff::{
     BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, Demuxer, DemuxerConfig, ExtendedSize,
     SampleLocation, SampleProperties,
@@ -123,7 +122,7 @@ fn hybrid(
                         mvex.trex.push(trex);
                     }
                     fragmented.mvex = Some(mvex);
-                    declare_durations(&mut fragmented);
+                    set_durations(&mut fragmented);
                     append(&fragmented, &mut out)?;
                     output.write_all(&out)?;
                     out.clear();
@@ -194,7 +193,7 @@ fn hybrid(
     for (trak, table) in moov.trak.iter_mut().zip(&mut tables) {
         trak.mdia.minf.stbl = table.finish();
     }
-    declare_durations(&mut moov);
+    set_durations(&mut moov);
     // The `free` was written first, as long as an `mdat` header with a
     // `largesize`; now that the length is known, the header is written over it
     let size =
@@ -251,64 +250,6 @@ fn write_fragment(
     // The file is now a whole fragmented movie file, up to this fragment
     output.flush()?;
     Ok(())
-}
-
-/// Sets the durations of `moov`, of each of its tracks and of their media to those the sample tables and the edit lists give, and each header to the version they need
-///
-/// The media lasts as long as its samples, §8.4.2; a track as long as its
-/// edits, or without an edit list as long as its media, §8.3.2; the movie as
-/// long as its longest track, §8.2.2. A header takes version 1 where its
-/// duration or one of its times does not fit 32 bits.
-fn declare_durations(moov: &mut MovieBox) {
-    let version =
-        |values: [u64; 3]| u8::from(values.iter().any(|&value| value > u64::from(u32::MAX)));
-    let movie_timescale = u128::from(moov.mvhd.timescale);
-    for trak in &mut moov.trak {
-        let stbl = &trak.mdia.minf.stbl;
-        let (media, composed) = (media_duration(stbl), composition_end(stbl));
-        let media_timescale = u128::from(trak.mdia.mdhd.timescale).max(1);
-        let in_movie_timescale = |duration: u64| {
-            u64::try_from(
-                u128::from(duration)
-                    .saturating_mul(movie_timescale)
-                    .div_ceil(media_timescale),
-            )
-            .unwrap_or(u64::MAX)
-        };
-        trak.tkhd.duration = match trak.edts.as_mut().and_then(|edts| edts.elst.as_mut()) {
-            Some(elst) => {
-                // A last edit of duration 0 runs to the end of the media of a
-                // fragmented movie, §8.6.6.1; a movie file closes it where the
-                // composition of the samples ends.
-                if let Some(last) = elst
-                    .entries
-                    .last_mut()
-                    .filter(|last| last.edit_duration == 0 && last.media_time >= 0)
-                {
-                    last.edit_duration =
-                        in_movie_timescale(composed.saturating_sub(last.media_time.unsigned_abs()));
-                    elst.version = elst.version.max(version([last.edit_duration, 0, 0]));
-                }
-                elst.entries.iter().fold(0_u64, |total, entry| {
-                    total.saturating_add(entry.edit_duration)
-                })
-            }
-            None => in_movie_timescale(media),
-        };
-        let tkhd = &mut trak.tkhd;
-        tkhd.version = version([tkhd.duration, tkhd.creation_time, tkhd.modification_time]);
-        let mdhd = &mut trak.mdia.mdhd;
-        mdhd.duration = media;
-        mdhd.version = version([mdhd.duration, mdhd.creation_time, mdhd.modification_time]);
-    }
-    let mvhd = &mut moov.mvhd;
-    mvhd.duration = moov
-        .trak
-        .iter()
-        .map(|trak| trak.tkhd.duration)
-        .max()
-        .unwrap_or(0);
-    mvhd.version = version([mvhd.duration, mvhd.creation_time, mvhd.modification_time]);
 }
 
 // Why not encode into a new `Vec` and copy it: the box is encoded in place at
@@ -396,32 +337,6 @@ mod tests {
         super::append(&moov, &mut written).unwrap();
         written.extend_from_slice(after_moov);
         written
-    }
-
-    #[test]
-    fn edits_that_last_longer_than_64_bits_count_together_give_the_longest_duration_there_can_be() {
-        use isobmff::boxes::{EditBox, EditListBox, EditListEntry};
-
-        let (mut moov, _) = read(FIXTURES[1]).unwrap();
-        let mut elst = EditListBox::default();
-        elst.version = 1;
-        elst.entries = [1 << 63, 1 << 63]
-            .into_iter()
-            .map(|edit_duration| {
-                let mut entry = EditListEntry::default();
-                (entry.edit_duration, entry.media_time) = (edit_duration, 0);
-                entry
-            })
-            .collect();
-        let mut edts = EditBox::default();
-        edts.elst = Some(elst);
-        let trak = moov.trak.first_mut().unwrap();
-        trak.edts = Some(edts);
-        super::declare_durations(&mut moov);
-        assert_eq!(
-            (moov.trak.first().unwrap().tkhd.duration, moov.mvhd.duration),
-            (u64::MAX, u64::MAX)
-        );
     }
 
     #[test]

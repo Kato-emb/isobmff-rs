@@ -50,7 +50,9 @@
 //! The layers they are made of are usable alone: [`framing`] reads the boxes
 //! laid end to end in a file from bytes that arrive in pieces, and
 //! [`structure_data`] resolves the samples a `moov` or a `moof` declares to where their
-//! bytes lie, and writes the sample table of a track, or a `moof`, from them. The boxes
+//! bytes lie, and writes the sample table of a track, or a `moof`, from them;
+//! [`timeline`] sets how long the media, the tracks and the movie of a `moov`
+//! last, from its sample tables and edit lists. The boxes
 //! themselves are read and written with [`boxes`], and the header that frames
 //! a box, the values its fields carry and the traits a box implements, such as
 //! [`BoxDecode`] and [`BoxEncode`], are at the root of the crate. The [`Error`]
@@ -67,6 +69,7 @@ mod input_buffer;
 pub mod muxer;
 mod sample;
 pub mod structure_data;
+pub mod timeline;
 
 pub use demuxer::{Demuxer, DemuxerConfig};
 /// The boxes of ISO/IEC 14496-12, each read into a value and written back, from `isobmff-boxes`

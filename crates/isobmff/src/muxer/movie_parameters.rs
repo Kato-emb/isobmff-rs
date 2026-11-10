@@ -8,8 +8,9 @@ use isobmff_boxes::{
 use isobmff_core::{I8F8, I16F16, OtherBoxes};
 
 use super::TrackParameters;
-use super::movie::{data_reference, set_durations};
+use super::movie::data_reference;
 use crate::structure_data::{SampleTableWriter, TrackSampleDescription};
+use crate::timeline::set_durations;
 
 /// What the samples of a movie do not give a muxer: every field and box of its `moov` that is not derived from its tracks
 ///
