@@ -2,13 +2,16 @@
 
 #[cfg(test)]
 mod tests {
-    use isobmff::structure_data::{Error, MovieFragmentWriter, StructureDataReader};
+    use isobmff::framing::media_data_header;
+    use isobmff::structure_data::{
+        Error, MovieFragmentWriter, StructureDataReader, TrackSampleDescription,
+    };
     use isobmff::{SampleLocation, SampleProperties};
     use isobmff_boxes::{
         MovieBox, MovieFragmentBox, SampleFlags, TrackFragmentBaseMediaDecodeTimeBox,
         TrackFragmentBox, TrackRunBox, TrackRunSamples,
     };
-    use isobmff_core::BoxDecode;
+    use isobmff_core::{BoxDecode, BoxEncode};
     use isobmff_test_support::fixtures::{in_another_file, movie, track};
 
     /// A movie of track 1, of one sample entry, track 2, of two, and track 3, whose media data is in another file
@@ -50,6 +53,38 @@ mod tests {
         }
     }
 
+    /// A writer of fragments of the tracks of `moov`, each of at most `sample_count_limit` samples
+    fn writer_of(moov: &MovieBox, sample_count_limit: u64) -> MovieFragmentWriter {
+        let tracks: Vec<_> = moov
+            .trak
+            .iter()
+            .map(|trak| TrackSampleDescription {
+                track_id: trak.tkhd.track_id,
+                stsd: &trak.mdia.minf.stbl.stsd,
+                dref: &trak.mdia.minf.dinf.dref,
+            })
+            .collect();
+        MovieFragmentWriter::new(&tracks, sample_count_limit)
+    }
+
+    /// Finishes the fragment of `writer` and appends its `moof` to `file`, with the header of an `mdat` of `media_data_length` bytes
+    fn append_fragment(
+        writer: &mut MovieFragmentWriter,
+        media_data_length: u64,
+        file: &mut Vec<u8>,
+    ) {
+        let moof = writer.finish();
+        let start = file.len();
+        file.resize(
+            start
+                .checked_add(usize::try_from(moof.encoded_len()).unwrap())
+                .unwrap(),
+            0,
+        );
+        moof.encode(file.get_mut(start..).unwrap()).unwrap();
+        file.extend_from_slice(&media_data_header(media_data_length).unwrap());
+    }
+
     /// Writes the fragment of `samples`, their bytes one after another in the order given, after `file`, and their bytes after it, each sample as many bytes of its index as its size; returns where each sample lies in `file`
     fn write_fragment(
         writer: &mut MovieFragmentWriter,
@@ -63,7 +98,7 @@ mod tests {
                 .unwrap();
             offset = offset.checked_add(u64::from(size)).unwrap();
         }
-        writer.write_movie_fragment(file).unwrap();
+        append_fragment(writer, offset, file);
         let mut locations = Vec::new();
         for (index, &(properties, size)) in samples.iter().enumerate() {
             locations.push(SampleLocation {
@@ -86,7 +121,7 @@ mod tests {
     #[test]
     fn the_fragments_declare_their_samples_where_their_bytes_follow_one_another_across_tracks() {
         let moov = three_tracks();
-        let mut writer = MovieFragmentWriter::new(&moov, 16);
+        let mut writer = writer_of(&moov, 16);
         let mut reordered = sample(2, 100, 20);
         reordered.sample_composition_time_offset = -5;
         let mut described_by_2 = sample(2, 120, 30);
@@ -144,7 +179,7 @@ mod tests {
     fn the_samples_lie_where_their_offsets_place_them_in_the_media_data_whatever_the_order_handed_over()
      {
         let moov = three_tracks();
-        let mut writer = MovieFragmentWriter::new(&moov, 16);
+        let mut writer = writer_of(&moov, 16);
         let samples = [
             at(sample(1, 0, 10), 10, 1),
             at(sample(2, 0, 10), 0, 10),
@@ -155,7 +190,7 @@ mod tests {
             writer.handle_location(location).unwrap();
         }
         let mut file = Vec::new();
-        writer.write_movie_fragment(&mut file).unwrap();
+        append_fragment(&mut writer, 21, &mut file);
         let moof = movie_fragment_at(&file, 0);
         let media_data = u64::try_from(file.len()).unwrap();
         file.extend([0; 21]);
@@ -183,9 +218,7 @@ mod tests {
             (
                 expected.to_vec(),
                 vec![2, 1],
-                isobmff::framing::media_data_header(21)
-                    .as_ref()
-                    .map(<[u8; 16]>::as_slice),
+                media_data_header(21).as_ref().map(<[u8; 16]>::as_slice),
             )
         );
     }
@@ -193,7 +226,7 @@ mod tests {
     #[test]
     fn what_every_sample_of_a_track_fragment_shares_is_declared_once_in_its_header() {
         let moov = three_tracks();
-        let mut writer = MovieFragmentWriter::new(&moov, 16);
+        let mut writer = writer_of(&moov, 16);
         let later = SampleProperties {
             sample_flags: non_sync(),
             ..sample(1, 0, 10)
@@ -240,7 +273,7 @@ mod tests {
     #[test]
     fn a_sample_refused_leaves_the_fragment_as_it_was() {
         let moov = three_tracks();
-        let mut writer = MovieFragmentWriter::new(&moov, 2);
+        let mut writer = writer_of(&moov, 2);
         let mut described_by_2 = sample(1, 0, 10);
         described_by_2.sample_description_index = 2;
         let mut far_composed = sample(1, 10, 10);
@@ -295,33 +328,32 @@ mod tests {
             ]
         );
 
-        let mut written = Vec::new();
-        writer.write_movie_fragment(&mut written).unwrap();
-        let mut taken_alone = MovieFragmentWriter::new(&moov, 2);
+        let mut taken_alone = writer_of(&moov, 2);
         taken_alone
             .handle_location(at(sample(1, 0, 10), 0, 1))
             .unwrap();
         taken_alone
             .handle_location(at(sample(1, 10, 10), 1, 1))
             .unwrap();
-        let mut expected = Vec::new();
-        taken_alone.write_movie_fragment(&mut expected).unwrap();
-        assert_eq!(written, expected);
+        assert_eq!(writer.finish(), taken_alone.finish());
     }
 
     #[test]
-    fn each_fragment_takes_the_next_sequence_number_and_one_of_no_sample_is_not_written() {
+    fn each_fragment_takes_the_next_sequence_number_and_one_of_no_sample_declares_no_track_fragment()
+     {
         let moov = three_tracks();
-        let mut writer = MovieFragmentWriter::new(&moov, 16);
+        let mut writer = writer_of(&moov, 16);
+        let empty = writer.finish();
         let mut file = Vec::new();
-        writer.write_movie_fragment(&mut file).unwrap();
-        assert_eq!(file, Vec::<u8>::new());
-        let mut sequence_numbers = Vec::new();
+        let mut sequence_numbers = vec![empty.mfhd.sequence_number];
         for decoding_time in [0, 10] {
             let offset = u64::try_from(file.len()).unwrap();
             write_fragment(&mut writer, &[(sample(1, decoding_time, 10), 1)], &mut file);
             sequence_numbers.push(movie_fragment_at(&file, offset).mfhd.sequence_number);
         }
-        assert_eq!(sequence_numbers, [1, 2]);
+        assert_eq!(
+            (empty.traf.len(), writer.has_samples(), sequence_numbers),
+            (0, false, vec![1, 2, 3])
+        );
     }
 }

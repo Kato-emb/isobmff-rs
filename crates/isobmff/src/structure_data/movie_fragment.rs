@@ -7,7 +7,7 @@ use isobmff_boxes::{
     TrackRunSamples,
 };
 
-use super::{Error, sample_table};
+use super::{Error, sample};
 use crate::{SampleLocation, SampleProperties};
 
 /// What a track of the `moov` gives the samples of its track fragments
@@ -36,7 +36,10 @@ impl FragmentTrack {
                     .find(|trex| trex.track_id == track_id)
                     .cloned()
             }),
-            entries: sample_table::entry_data_references(track),
+            entries: sample::entry_data_references(
+                &track.mdia.minf.stbl.stsd,
+                &track.mdia.minf.dinf.dref,
+            ),
             next_decoding_time,
         }
     }

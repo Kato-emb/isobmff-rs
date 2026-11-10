@@ -8,7 +8,7 @@
 use std::hint::black_box;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
-use isobmff::structure_data::SampleTableWriter;
+use isobmff::structure_data::{SampleTableWriter, TrackSampleDescription};
 use isobmff::{SampleLocation, SampleProperties};
 use isobmff_boxes::{
     DataEntry, DataEntryUrlBox, DataReferenceBox, SampleDescription, SampleDescriptionBox,
@@ -62,8 +62,13 @@ fn handle_location(criterion: &mut Criterion) {
                 stsd.sample_descriptions = vec![SampleDescription::Typed(entry)];
                 let mut dref = DataReferenceBox::default();
                 dref.data_entries = vec![DataEntry::Url(DataEntryUrlBox::default())];
+                let description = TrackSampleDescription {
+                    track_id: 1,
+                    stsd: &stsd,
+                    dref: &dref,
+                };
                 bencher.iter_batched(
-                    || SampleTableWriter::new(&stsd, &dref, count),
+                    || SampleTableWriter::new(&description, count),
                     |mut writer| {
                         for &sample in samples {
                             writer.handle_location(black_box(sample)).unwrap();

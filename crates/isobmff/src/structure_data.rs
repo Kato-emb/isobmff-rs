@@ -11,6 +11,7 @@ mod error;
 mod movie_fragment;
 mod movie_fragment_writer;
 mod reader;
+mod sample;
 mod sample_table;
 mod sample_table_writer;
 
@@ -18,4 +19,5 @@ pub use error::Error;
 pub use movie_fragment::movie_fragment_sample_count;
 pub use movie_fragment_writer::MovieFragmentWriter;
 pub use reader::StructureDataReader;
+pub use sample::TrackSampleDescription;
 pub use sample_table_writer::SampleTableWriter;

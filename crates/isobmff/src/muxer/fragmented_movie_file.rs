@@ -7,7 +7,8 @@ use isobmff_core::BoxEncode;
 
 use super::movie::{append_encoded, check_track, data_reference, movie_box, track_box};
 use super::{Error, MovieDescription, MuxerConfig, TrackDescription};
-use crate::structure_data::{self, MovieFragmentWriter, SampleTableWriter};
+use crate::framing;
+use crate::structure_data::{self, MovieFragmentWriter, SampleTableWriter, TrackSampleDescription};
 use crate::{SampleLocation, SampleProperties};
 
 /// Where a fragmented muxer stands
@@ -229,7 +230,17 @@ impl FragmentedMovieFileMuxer {
                 if length > buffer_limit {
                     return Err(Error::BufferFull { length });
                 }
-                let mut writer = MovieFragmentWriter::new(&moov, self.config.sample_count_limit);
+                let dref = data_reference();
+                let descriptions: Vec<TrackSampleDescription<'_>> = tracks
+                    .iter()
+                    .map(|track| TrackSampleDescription {
+                        track_id: track.track_id,
+                        stsd: &track.sample_entries,
+                        dref: &dref,
+                    })
+                    .collect();
+                let mut writer =
+                    MovieFragmentWriter::new(&descriptions, self.config.sample_count_limit);
                 writer
                     .handle_location(SampleLocation {
                         properties,
@@ -273,8 +284,7 @@ impl FragmentedMovieFileMuxer {
     ///
     /// # Errors
     /// * [`Error::Finished`]: the muxer has finished.
-    /// * [`Error::StructureData`]: the `moof` does not write, as where the
-    ///   movie has as many fragments as a `sequence_number` counts.
+    /// * [`Error::Encode`]: the `moof` does not write.
     pub fn finish_fragment(&mut self) -> Result<(), Error> {
         self.write_fragment(None)
     }
@@ -286,12 +296,12 @@ impl FragmentedMovieFileMuxer {
 
     /// Ends the last fragment, or writes the `moov` where no sample was taken, and holds it for [`poll_output`](Self::poll_output)
     ///
-    /// The muxer then takes nothing more.
+    /// The muxer then takes nothing more: it ends the file, unlike the
+    /// `finish` of a writer of structure-data, which ends one unit and goes on.
     ///
     /// # Errors
     /// * [`Error::Finished`]: the muxer has finished.
-    /// * [`Error::StructureData`]: the `moof` does not write.
-    /// * [`Error::Encode`]: the `moov` does not write.
+    /// * [`Error::Encode`]: the `moof` or the `moov` does not write.
     pub fn finish(&mut self) -> Result<(), Error> {
         self.finish_after(None)
     }
@@ -304,14 +314,24 @@ impl FragmentedMovieFileMuxer {
             State::Fragments { writer, .. } if !writer.has_samples() => Ok(()),
             State::Fragments { writer, media_data } => {
                 let start = self.output.len();
-                if let Some(styp) = segment_type {
-                    append_encoded(styp, &mut self.output)?;
-                }
-                if let Err(error) = writer.write_movie_fragment(&mut self.output) {
+                // Why finish a clone: a `moof` that does not write leaves the
+                // muxer as it was, the samples of the fragment and all.
+                let mut finished = writer.clone();
+                let moof = finished.finish();
+                let header = u64::try_from(media_data.len())
+                    .ok()
+                    .and_then(framing::media_data_header)
+                    .ok_or(Error::Overflow)?;
+                let written = segment_type
+                    .map_or(Ok(()), |styp| append_encoded(styp, &mut self.output))
+                    .and_then(|()| append_encoded(&moof, &mut self.output));
+                if let Err(error) = written {
                     self.output.truncate(start);
-                    return Err(from_fragment(error));
+                    return Err(error);
                 }
+                self.output.extend_from_slice(&header);
                 self.output.append(media_data);
+                *writer = finished;
                 Ok(())
             }
         }
@@ -436,8 +456,7 @@ impl SegmentMuxer {
     ///
     /// # Errors
     /// * [`Error::Finished`]: the muxer has finished.
-    /// * [`Error::StructureData`]: the `moof` does not write.
-    /// * [`Error::Encode`]: the `styp` does not write.
+    /// * [`Error::Encode`]: the `styp` or the `moof` does not write.
     pub fn finish_segment(&mut self) -> Result<(), Error> {
         self.muxer.write_fragment(Some(&self.segment_type))
     }
@@ -449,7 +468,8 @@ impl SegmentMuxer {
 
     /// Ends the last media segment, or writes the initialization segment where no sample was taken, and holds it for [`poll_output`](Self::poll_output)
     ///
-    /// The muxer then takes nothing more.
+    /// The muxer then takes nothing more: it ends the file, unlike the
+    /// `finish` of a writer of structure-data, which ends one unit and goes on.
     ///
     /// # Errors
     /// As [`finish_segment`](Self::finish_segment), and
@@ -464,8 +484,15 @@ fn fragmented_movie_box(movie: &MovieDescription, tracks: &[TrackDescription]) -
     let mut trak = Vec::with_capacity(tracks.len());
     let mut mvex = MovieExtendsBox::default();
     for track in tracks {
-        let stbl = SampleTableWriter::new(&track.sample_entries, &data_reference(), 0)
-            .write_sample_table();
+        let stbl = SampleTableWriter::new(
+            &TrackSampleDescription {
+                track_id: track.track_id,
+                stsd: &track.sample_entries,
+                dref: &data_reference(),
+            },
+            0,
+        )
+        .finish();
         trak.push(track_box(track, stbl, movie.timescale));
         let mut trex = TrackExtendsBox::default();
         trex.track_id = track.track_id;

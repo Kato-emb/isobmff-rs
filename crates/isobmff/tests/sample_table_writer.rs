@@ -13,7 +13,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::num::NonZeroU32;
 
-    use isobmff::structure_data::{Error, SampleTableWriter};
+    use isobmff::structure_data::{Error, SampleTableWriter, TrackSampleDescription};
     use isobmff::{SampleLocation, SampleProperties};
     use isobmff_boxes::{
         ChunkLargeOffsetBox, ChunkOffsetVariant, CompositionOffsetBox, CompositionOffsetEntry,
@@ -51,6 +51,20 @@ mod tests {
         stsd
     }
 
+    /// A writer of the samples of track 1, which the sample entries `stsd` describe, their media data where `dref` names
+    fn writer_of(
+        stsd: &SampleDescriptionBox,
+        dref: &DataReferenceBox,
+        sample_count_limit: u64,
+    ) -> SampleTableWriter {
+        let track = TrackSampleDescription {
+            track_id: 1,
+            stsd,
+            dref,
+        };
+        SampleTableWriter::new(&track, sample_count_limit)
+    }
+
     /// The data references of a track whose media data is in the file itself
     fn in_the_file() -> DataReferenceBox {
         track(1, 1, &[], &[], &[]).mdia.minf.dinf.dref
@@ -61,7 +75,7 @@ mod tests {
         stsd: &SampleDescriptionBox,
         locations: impl IntoIterator<Item = SampleLocation>,
     ) -> SampleTableBox {
-        let mut writer = SampleTableWriter::new(stsd, &in_the_file(), SAMPLE_COUNT_LIMIT);
+        let mut writer = writer_of(stsd, &in_the_file(), SAMPLE_COUNT_LIMIT);
         let mut decoding_time = 0;
         for mut location in locations {
             location.properties.decoding_time = decoding_time;
@@ -70,7 +84,7 @@ mod tests {
                 .unwrap();
             writer.handle_location(location).unwrap();
         }
-        writer.write_sample_table()
+        writer.finish()
     }
 
     /// The `stbl` of a track of one sample entry whose samples are `sizes`, each lasting `sample_delta`, laid in chunks at `chunk_offsets` by the runs `(first_chunk, samples_per_chunk)`
@@ -219,7 +233,7 @@ mod tests {
         of_track_2.properties.track_id = 2;
         let mut described_by_2 = at(1, 1);
         described_by_2.properties.sample_description_index = 2;
-        let mut elsewhere = SampleTableWriter::new(
+        let mut elsewhere = writer_of(
             &sample_entries(1),
             &in_another_file(track(1, 1, &[], &[], &[]))
                 .mdia
@@ -238,7 +252,7 @@ mod tests {
                 false
             )
         );
-        let mut writer = SampleTableWriter::new(&sample_entries(1), &in_the_file(), 2);
+        let mut writer = writer_of(&sample_entries(1), &in_the_file(), 2);
         assert_eq!(
             [
                 writer.handle_location(at(0, 0)),
@@ -274,11 +288,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            (
-                writer.has_samples(),
-                writer.write_sample_table(),
-                writer.has_samples()
-            ),
+            (writer.has_samples(), writer.finish(), writer.has_samples()),
             (
                 true,
                 written(&sample_entries(1), [location(0, 1, 1), location(1, 1, 1)]),
@@ -289,8 +299,7 @@ mod tests {
 
     #[test]
     fn a_sample_ending_past_the_last_file_offset_is_refused_and_one_ending_at_it_is_read_back() {
-        let mut writer =
-            SampleTableWriter::new(&sample_entries(1), &in_the_file(), SAMPLE_COUNT_LIMIT);
+        let mut writer = writer_of(&sample_entries(1), &in_the_file(), SAMPLE_COUNT_LIMIT);
         assert_eq!(
             writer.handle_location(location(u64::MAX, 1, 1)),
             Err(Error::Overflow { track_id: 1 })
@@ -298,7 +307,7 @@ mod tests {
         let last = location(u64::MAX - 1, 1, 1);
         writer.handle_location(last).unwrap();
         let mut trak = track(1, 1, &[], &[], &[]);
-        trak.mdia.minf.stbl = writer.write_sample_table();
+        trak.mdia.minf.stbl = writer.finish();
         assert_eq!(locations(&movie([trak])), Ok(vec![last]));
     }
 
@@ -307,7 +316,7 @@ mod tests {
         let mut later = location(0, 1, 1);
         later.properties.decoding_time = 1;
         assert_eq!(
-            SampleTableWriter::new(&sample_entries(1), &in_the_file(), SAMPLE_COUNT_LIMIT)
+            writer_of(&sample_entries(1), &in_the_file(), SAMPLE_COUNT_LIMIT)
                 .handle_location(later),
             Err(Error::DecodingTimeGap {
                 track_id: 1,
@@ -318,19 +327,17 @@ mod tests {
     }
 
     #[test]
-    fn a_writer_that_has_written_a_table_takes_the_samples_of_another_track() {
+    fn a_writer_that_has_finished_a_table_takes_the_next_of_the_track_from_decoding_time_0() {
         let stsd = sample_entries(1);
-        let mut of_track_2 = location(7, 9, 2);
-        of_track_2.properties.track_id = 2;
-        let mut writer = SampleTableWriter::new(&stsd, &in_the_file(), SAMPLE_COUNT_LIMIT);
+        let mut writer = writer_of(&stsd, &in_the_file(), SAMPLE_COUNT_LIMIT);
         writer.handle_location(location(0, 7, 1)).unwrap();
-        let first = writer.write_sample_table();
-        writer.handle_location(of_track_2).unwrap();
+        let first = writer.finish();
+        writer.handle_location(location(7, 9, 2)).unwrap();
         assert_eq!(
-            [first, writer.write_sample_table()],
+            [first, writer.finish()],
             [
                 written(&stsd, [location(0, 7, 1)]),
-                written(&stsd, [of_track_2]),
+                written(&stsd, [location(7, 9, 2)]),
             ]
         );
     }
@@ -510,14 +517,17 @@ mod tests {
                     .collect::<Vec<_>>();
                 track.sort_by_key(|location| location.properties.decoding_time);
                 let mut writer = SampleTableWriter::new(
-                    &trak.mdia.minf.stbl.stsd,
-                    &trak.mdia.minf.dinf.dref,
+                    &TrackSampleDescription {
+                        track_id,
+                        stsd: &trak.mdia.minf.stbl.stsd,
+                        dref: &trak.mdia.minf.dinf.dref,
+                    },
                     SAMPLE_COUNT_LIMIT,
                 );
                 let result = track
                     .into_iter()
                     .try_for_each(|&location| writer.handle_location(location))
-                    .map(|()| writer.write_sample_table());
+                    .map(|()| writer.finish());
                 match result {
                     Ok(stbl) => trak.mdia.minf.stbl = stbl,
                     Err(error) => {

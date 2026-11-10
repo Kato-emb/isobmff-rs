@@ -8,7 +8,7 @@ use isobmff_core::BoxEncode;
 use super::movie::{append_encoded, check_track, data_reference, movie_box, track_box};
 use super::{Error, MovieDescription, MuxerConfig, TrackDescription};
 use crate::framing;
-use crate::structure_data::{self, SampleTableWriter};
+use crate::structure_data::{self, SampleTableWriter, TrackSampleDescription};
 use crate::{SampleLocation, SampleProperties};
 
 /// Length of the header of the `mdat`, which [`framing::media_data_header`] writes with a `largesize`
@@ -207,8 +207,11 @@ impl MovieFileMuxer {
         }
         check_track(self.tracks.iter().map(|added| &added.description), &track)?;
         let samples = SampleTableWriter::new(
-            &track.sample_entries,
-            &data_reference(),
+            &TrackSampleDescription {
+                track_id: track.track_id,
+                stsd: &track.sample_entries,
+                dref: &data_reference(),
+            },
             self.config.sample_count_limit,
         );
         self.tracks.push(Track {
@@ -309,7 +312,8 @@ impl MovieFileMuxer {
     /// Builds the `moov` of the samples taken, holds it for [`poll_output`](Self::poll_output), and returns the header the `mdat` takes
     ///
     /// The `moov` follows the media data, whatever
-    /// [`MuxerConfig::buffer_limit`] holds. The muxer then takes nothing more.
+    /// [`MuxerConfig::buffer_limit`] holds. The muxer then takes nothing more: it ends the file, unlike the
+    /// `finish` of a writer of structure-data, which ends one unit and goes on.
     ///
     /// # Errors
     /// * [`Error::Finished`]: the muxer has finished.
@@ -331,7 +335,7 @@ impl MovieFileMuxer {
         for track in &self.tracks {
             // Why finish a clone: a `moov` that does not write leaves the
             // muxer as it was, samples and all.
-            let stbl = track.samples.clone().write_sample_table();
+            let stbl = track.samples.clone().finish();
             trak.push(track_box(&track.description, stbl, self.movie.timescale));
         }
         append_encoded(&movie_box(&self.movie, trak), &mut self.output)?;
