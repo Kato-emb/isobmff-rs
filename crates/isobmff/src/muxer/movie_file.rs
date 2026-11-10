@@ -5,10 +5,9 @@ use alloc::vec::Vec;
 use isobmff_boxes::FileTypeBox;
 use isobmff_core::BoxEncode;
 
-use super::movie::{
-    append_encoded, check_track, data_reference, media_data_header, movie_box, track_box,
-};
-use super::{Error, MovieDescription, MuxerConfig, TrackDescription};
+use super::movie::{append_encoded, check_track, data_reference, media_data_header};
+use super::{Error, MuxerConfig};
+use super::{MovieParameters, TrackParameters};
 use crate::structure_data::{self, SampleTableWriter, TrackSampleDescription};
 use crate::{SampleLocation, SampleProperties};
 
@@ -31,7 +30,7 @@ pub struct MediaDataHeader {
 /// A track added, and what the muxer has taken of its samples
 #[derive(Debug, Clone)]
 struct Track {
-    description: TrackDescription,
+    parameters: TrackParameters,
     samples: SampleTableWriter,
     /// Decoding time of the first sample taken, from which the sample table
     /// counts
@@ -44,7 +43,7 @@ struct Track {
 /// §8.5.
 ///
 /// The muxer takes values and bytes, and returns bytes:
-/// [`add_track`](Self::add_track) takes the description of each track, and
+/// [`add_track`](Self::add_track) takes the parameters of each track, and
 /// [`handle_sample`](Self::handle_sample) what the structure-data declares of
 /// each sample with its bytes, in decoding order within its track.
 /// [`finish`](Self::finish) builds the `moov`. [`poll_output`](Self::poll_output)
@@ -64,7 +63,7 @@ struct Track {
 ///
 /// ```
 /// use isobmff::demuxer::Event;
-/// use isobmff::muxer::{MovieDescription, TrackDescription};
+/// use isobmff::muxer::{MovieParameters, TrackParameters};
 /// use isobmff::{Demuxer, DemuxerConfig, MovieFileMuxer, MuxerConfig};
 ///
 /// // Read the `ftyp`, the `moov` and every sample of a file
@@ -94,10 +93,10 @@ struct Track {
 /// let (file_type, movie) = (file_type.ok_or("no ftyp")?, movie.ok_or("no moov")?);
 ///
 /// // Write them into a file of their own
-/// let description = MovieDescription::from(&*movie);
-/// let mut muxer = MovieFileMuxer::new(description, MuxerConfig::default(), file_type)?;
+/// let parameters = MovieParameters::from(&*movie);
+/// let mut muxer = MovieFileMuxer::new(parameters, MuxerConfig::default(), file_type)?;
 /// for trak in &movie.trak {
-///     muxer.add_track(TrackDescription::from(trak))?;
+///     muxer.add_track(TrackParameters::from(trak))?;
 /// }
 /// let mut written = Vec::new();
 /// for (properties, bytes) in &samples {
@@ -137,7 +136,7 @@ struct Track {
 /// ```
 #[derive(Debug, Clone)]
 pub struct MovieFileMuxer {
-    movie: MovieDescription,
+    movie: MovieParameters,
     tracks: Vec<Track>,
     config: MuxerConfig,
     /// File offset of the header of the `mdat`
@@ -158,7 +157,7 @@ impl MovieFileMuxer {
     ///   them.
     /// * [`Error::Encode`]: the `ftyp` does not write.
     pub fn new(
-        movie: MovieDescription,
+        movie: MovieParameters,
         config: MuxerConfig,
         file_type: FileTypeBox,
     ) -> Result<Self, Error> {
@@ -193,7 +192,7 @@ impl MovieFileMuxer {
     /// * [`Error::TrackId`]: the `track_ID` is 0 or that of a track added.
     /// * [`Error::DataReferenceIndex`]: a sample entry names another data
     ///   reference than 1, the media data in the same file.
-    pub fn add_track(&mut self, track: TrackDescription) -> Result<(), Error> {
+    pub fn add_track(&mut self, track: TrackParameters) -> Result<(), Error> {
         let track_id = track.track_id;
         if self.finished {
             return Err(Error::Finished);
@@ -205,17 +204,17 @@ impl MovieFileMuxer {
         {
             return Err(Error::TrackAfterMediaData { track_id });
         }
-        check_track(self.tracks.iter().map(|added| &added.description), &track)?;
+        check_track(self.tracks.iter().map(|added| &added.parameters), &track)?;
         let samples = SampleTableWriter::new(
             &TrackSampleDescription {
                 track_id: track.track_id,
-                stsd: &track.sample_entries,
+                stsd: &track.stsd,
                 dref: &data_reference(),
             },
             self.config.sample_count_limit,
         );
         self.tracks.push(Track {
-            description: track,
+            parameters: track,
             samples,
             first_decoding_time: None,
         });
@@ -255,7 +254,7 @@ impl MovieFileMuxer {
         let track = self
             .tracks
             .iter_mut()
-            .find(|track| track.description.track_id == track_id)
+            .find(|track| track.parameters.track_id == track_id)
             .ok_or(Error::UnknownTrack { track_id })?;
         let size = u32::try_from(bytes.len()).map_err(|_| Error::Overflow)?;
         let next = self
@@ -318,7 +317,7 @@ impl MovieFileMuxer {
     /// # Errors
     /// * [`Error::Finished`]: the muxer has finished.
     /// * [`Error::Encode`]: the `moov` does not write, as where a sample
-    ///   entry or a box of a description does not.
+    ///   entry or a box of the parameters does not.
     pub fn finish(&mut self) -> Result<MediaDataHeader, Error> {
         if self.finished {
             return Err(Error::Finished);
@@ -336,9 +335,9 @@ impl MovieFileMuxer {
             // Why finish a clone: a `moov` that does not write leaves the
             // muxer as it was, samples and all.
             let stbl = track.samples.clone().finish();
-            trak.push(track_box(&track.description, stbl, self.movie.timescale));
+            trak.push(track.parameters.to_track_box(stbl, self.movie.timescale));
         }
-        append_encoded(&movie_box(&self.movie, trak), &mut self.output)?;
+        append_encoded(&self.movie.to_movie_box(trak), &mut self.output)?;
         self.finished = true;
         Ok(header)
     }

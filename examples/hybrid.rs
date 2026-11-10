@@ -1,9 +1,9 @@
 //! A movie that reads as a fragmented movie file while it is written, and as a movie file once it ends, written from the layers of `isobmff` alone
 //!
 //! The example reads a file with the demuxer where it asks, and writes each
-//! sample it lends without a muxer, with only the movie fragment writer and
-//! the sample table writer of [`structure_data`], the box header
-//! [`BoxHeader`], and the boxes:
+//! sample it lends without a muxer, with only the movie fragment writer, the
+//! sample table writer of [`structure_data`], the parameters of the movie and
+//! its tracks of [`muxer`](isobmff::muxer), the box header [`BoxHeader`], and the boxes:
 //!
 //! 1. an `ftyp`, a `free` (§8.1.2) as long as the header of an `mdat`, and a
 //!    `moov` with an `mvex` and no sample;
@@ -34,8 +34,9 @@ use std::error::Error;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use isobmff::boxes::{Free, FreeSpaceBox, MovieBox, MovieExtendsBox, TrackExtendsBox};
+use isobmff::boxes::{Free, FreeSpaceBox};
 use isobmff::demuxer::Event;
+use isobmff::muxer::{MovieParameters, TrackParameters};
 use isobmff::structure_data::{MovieFragmentWriter, SampleTableWriter, TrackSampleDescription};
 use isobmff::{
     BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, Demuxer, DemuxerConfig, ExtendedSize,
@@ -84,9 +85,11 @@ fn hybrid(
     let mut demuxer = Demuxer::new(DemuxerConfig::default());
     let (mut buffer, mut out) = (vec![0; 64 * 1024], Vec::new());
     let mut file_type = None;
-    // Set once the `moov` is read: the movie, the writers of its fragments
-    // and of the sample table of each track, and where the `free` lies
-    let mut movie: Option<(MovieBox, MovieFragmentWriter, Vec<SampleTableWriter>, u64)> = None;
+    // Set once the `moov` is read: the parameters of the movie and of its
+    // tracks; and the writers of its fragments and of the sample table of
+    // each track, and where the `free` lies
+    let mut parameters: Option<(MovieParameters, Vec<TrackParameters>)> = None;
+    let mut writers: Option<(MovieFragmentWriter, Vec<SampleTableWriter>, u64)> = None;
     let mut first_decoding_times = Vec::new();
     // The samples of the fragment being written, each with the index of its
     // track and at its offset in the media data of the fragment, and its bytes
@@ -111,7 +114,10 @@ fn hybrid(
                             dref: &trak.mdia.minf.dinf.dref,
                         })
                         .collect();
-                    append(&fragmented_movie_box(&moov, &tracks), &mut out)?;
+                    let movie = MovieParameters::from(&*moov);
+                    let track_parameters: Vec<TrackParameters> =
+                        moov.trak.iter().map(TrackParameters::from).collect();
+                    append(&movie.to_fragmented_movie_box(&track_parameters), &mut out)?;
                     output.write_all(&out)?;
                     out.clear();
                     let fragments = MovieFragmentWriter::new(&tracks, SAMPLE_COUNT_LIMIT);
@@ -123,12 +129,15 @@ fn hybrid(
                     for trak in &moov.trak {
                         demuxer.subscribe_track(trak.tkhd.track_id);
                     }
-                    movie = Some((*moov, fragments, tables, free_offset));
+                    parameters = Some((movie, track_parameters));
+                    writers = Some((fragments, tables, free_offset));
                 }
                 // Each sample joins the fragment being written, which is written once full
                 Event::Sample(sample) => {
-                    let (moov, fragments, tables, _) =
-                        movie.as_mut().ok_or("a sample before any moov")?;
+                    let ((_, track_parameters), (fragments, tables, _)) = parameters
+                        .as_ref()
+                        .zip(writers.as_mut())
+                        .ok_or("a sample before any moov")?;
                     if placed.len() == samples_per_fragment.max(1) {
                         write_fragment(
                             fragments,
@@ -145,10 +154,9 @@ fn hybrid(
                         size: u32::try_from(sample.bytes.len())?,
                     };
                     fragments.handle_location(location)?;
-                    let track = moov
-                        .trak
+                    let track = track_parameters
                         .iter()
-                        .position(|trak| trak.tkhd.track_id == location.properties.track_id)
+                        .position(|track| track.track_id == location.properties.track_id)
                         .ok_or("a sample of a track the moov does not have")?;
                     placed.push((track, location));
                     media_data.extend_from_slice(sample.bytes);
@@ -166,7 +174,8 @@ fn hybrid(
             read => demuxer.handle_input(required.position, &buffer[..read]),
         }
     }
-    let (mut moov, mut fragments, mut tables, free_offset) = movie.ok_or("no moov")?;
+    let ((movie, track_parameters), (mut fragments, mut tables, free_offset)) =
+        parameters.zip(writers).ok_or("no moov")?;
     write_fragment(
         &mut fragments,
         &mut tables,
@@ -177,11 +186,12 @@ fn hybrid(
     )?;
 
     // The `moov` that declares every sample, and the `mdat` header over the `free`
-    let edits_run_to_the_end = moov.mvex.take().is_some_and(|mvex| mvex.mehd.is_none());
-    for (trak, table) in moov.trak.iter_mut().zip(&mut tables) {
-        trak.mdia.minf.stbl = table.finish();
-    }
-    declare_durations(&mut moov, edits_run_to_the_end);
+    let trak = track_parameters
+        .iter()
+        .zip(&mut tables)
+        .map(|(track, table)| track.to_track_box(table.finish(), movie.timescale))
+        .collect();
+    let moov = movie.to_movie_box(trak);
     // The `free` was written first, as long as an `mdat` header with a
     // `largesize`; now that the length is known, the header is written over it
     let size =
@@ -238,97 +248,6 @@ fn write_fragment(
     // The file is now a whole fragmented movie file, up to this fragment
     output.flush()?;
     Ok(())
-}
-
-/// The `moov` of the tracks of `movie`, described by `tracks`, which declares no sample and extends each track into movie fragments
-fn fragmented_movie_box(movie: &MovieBox, tracks: &[TrackSampleDescription<'_>]) -> MovieBox {
-    let mut moov = movie.clone();
-    let mut mvex = MovieExtendsBox::default();
-    for (trak, track) in moov.trak.iter_mut().zip(tracks) {
-        trak.mdia.minf.stbl = SampleTableWriter::new(track, 0).finish();
-        let mut trex = TrackExtendsBox::default();
-        trex.track_id = track.track_id;
-        trex.default_sample_description_index = 1;
-        mvex.trex.push(trex);
-    }
-    moov.mvex = Some(mvex);
-    moov
-}
-
-/// Sets the durations of the media of each track of `moov`, of the track and of the movie, to those its sample tables and edit lists give, each box in the version its duration and times need
-///
-/// Where `edits_run_to_the_end`, the `moov` was that of a fragmented movie
-/// without a `mehd`, whose last edit of a duration of 0 runs to the end of the
-/// media, §8.6.6.1; it is given the duration it runs for, as a movie file
-/// takes it.
-fn declare_durations(moov: &mut MovieBox, edits_run_to_the_end: bool) {
-    let movie_timescale = u128::from(moov.mvhd.timescale);
-    for trak in &mut moov.trak {
-        let media_duration = trak.mdia.minf.stbl.stts.as_ref().map_or(0, |stts| {
-            stts.entries.iter().fold(0_u64, |total, entry| {
-                total.saturating_add(
-                    u64::from(entry.sample_count).saturating_mul(u64::from(entry.sample_delta)),
-                )
-            })
-        });
-        trak.mdia.mdhd.duration = media_duration;
-        let mdhd = &mut trak.mdia.mdhd;
-        mdhd.version = u8::from(
-            [media_duration, mdhd.creation_time, mdhd.modification_time]
-                .iter()
-                .any(|&value| value > u64::from(u32::MAX)),
-        );
-        let media_timescale = u128::from(trak.mdia.mdhd.timescale);
-        if let Some(last) = trak
-            .edts
-            .as_mut()
-            .and_then(|edts| edts.elst.as_mut())
-            .and_then(|elst| elst.entries.last_mut())
-            .filter(|last| edits_run_to_the_end && last.edit_duration == 0 && last.media_time >= 0)
-        {
-            let remaining = media_duration.saturating_sub(last.media_time.unsigned_abs());
-            last.edit_duration = u128::from(remaining)
-                .saturating_mul(movie_timescale)
-                .checked_div(media_timescale)
-                .and_then(|duration| u64::try_from(duration).ok())
-                .unwrap_or(u64::MAX);
-        }
-        let edited = trak
-            .edts
-            .as_ref()
-            .and_then(|edts| edts.elst.as_ref())
-            .map(|elst| {
-                elst.entries.iter().fold(0_u64, |total, entry| {
-                    total.saturating_add(entry.edit_duration)
-                })
-            });
-        let duration = edited.unwrap_or_else(|| {
-            u128::from(media_duration)
-                .saturating_mul(movie_timescale)
-                .checked_div(media_timescale)
-                .and_then(|duration| u64::try_from(duration).ok())
-                .unwrap_or(u64::MAX)
-        });
-        trak.tkhd.duration = duration;
-        let tkhd = &mut trak.tkhd;
-        tkhd.version = u8::from(
-            [duration, tkhd.creation_time, tkhd.modification_time]
-                .iter()
-                .any(|&value| value > u64::from(u32::MAX)),
-        );
-    }
-    moov.mvhd.duration = moov
-        .trak
-        .iter()
-        .map(|trak| trak.tkhd.duration)
-        .max()
-        .unwrap_or(0);
-    let mvhd = &mut moov.mvhd;
-    mvhd.version = u8::from(
-        [mvhd.duration, mvhd.creation_time, mvhd.modification_time]
-            .iter()
-            .any(|&value| value > u64::from(u32::MAX)),
-    );
 }
 
 // Why not encode into a new `Vec` and copy it: the box is encoded in place at

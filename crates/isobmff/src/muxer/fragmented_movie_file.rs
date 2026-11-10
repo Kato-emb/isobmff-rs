@@ -1,15 +1,15 @@
 //! [`FragmentedMovieFileMuxer`], which writes a movie whose samples lie in movie fragments, and [`SegmentMuxer`], which writes it in segments
 
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-use isobmff_boxes::{FileTypeBox, MovieBox, MovieExtendsBox, SegmentTypeBox, TrackExtendsBox};
+use isobmff_boxes::{FileTypeBox, SegmentTypeBox};
 use isobmff_core::BoxEncode;
 
-use super::movie::{
-    append_encoded, check_track, data_reference, media_data_header, movie_box, track_box,
-};
-use super::{Error, MovieDescription, MuxerConfig, TrackDescription};
-use crate::structure_data::{self, MovieFragmentWriter, SampleTableWriter, TrackSampleDescription};
+use super::movie::{append_encoded, check_track, data_reference, media_data_header};
+use super::{Error, MuxerConfig};
+use super::{MovieParameters, TrackParameters};
+use crate::structure_data::{self, MovieFragmentWriter, TrackSampleDescription};
 use crate::{SampleLocation, SampleProperties};
 
 /// Where a fragmented muxer stands
@@ -18,8 +18,10 @@ enum State {
     /// Before the first sample, while tracks are added and the `moov` is yet
     /// to be written
     Tracks {
-        movie: MovieDescription,
-        tracks: Vec<TrackDescription>,
+        // Why box it: the parameters hold boxes such as a `meta`, and the
+        // state takes the size of its largest variant.
+        movie: Box<MovieParameters>,
+        tracks: Vec<TrackParameters>,
     },
     /// After the `moov`, the samples of the fragment being written and their
     /// bytes
@@ -33,11 +35,11 @@ enum State {
 /// Writer of a fragmented movie file: an `ftyp`, a `moov` that declares the tracks and no sample, and the movie fragments that hold the samples, each a `moof` and the `mdat` that follows it
 ///
 /// The structure of a fragmented movie file, ISO/IEC 14496-12 §8.8, with a
-/// [`MovieExtendsBox`] (`mvex`), §8.8.1, of a [`TrackExtendsBox`] (`trex`),
+/// [`MovieExtendsBox`](isobmff_boxes::MovieExtendsBox) (`mvex`), §8.8.1, of a [`TrackExtendsBox`](isobmff_boxes::TrackExtendsBox) (`trex`),
 /// §8.8.3, for each track.
 ///
 /// The muxer takes values and bytes, and returns bytes:
-/// [`add_track`](Self::add_track) takes the description of each track, and
+/// [`add_track`](Self::add_track) takes the parameters of each track, and
 /// [`handle_sample`](Self::handle_sample) what the structure-data declares of
 /// each sample with its bytes, in decoding order within its track. The first
 /// sample writes the `moov`. [`finish_fragment`](Self::finish_fragment) ends
@@ -60,7 +62,7 @@ enum State {
 ///
 /// ```
 /// use isobmff::demuxer::Event;
-/// use isobmff::muxer::{MovieDescription, TrackDescription};
+/// use isobmff::muxer::{MovieParameters, TrackParameters};
 /// use isobmff::{Demuxer, DemuxerConfig, FragmentedMovieFileMuxer, MuxerConfig};
 ///
 /// // Read the `ftyp`, the `moov` and every sample of a file, noting where each fragment starts
@@ -91,9 +93,9 @@ enum State {
 /// let (file_type, movie) = (file_type.ok_or("no ftyp")?, movie.ok_or("no moov")?);
 ///
 /// // Write them in fragments of their own, ending each where one of the file ended
-/// let mut muxer = FragmentedMovieFileMuxer::new(MovieDescription::from(&*movie), MuxerConfig::default(), file_type)?;
+/// let mut muxer = FragmentedMovieFileMuxer::new(MovieParameters::from(&*movie), MuxerConfig::default(), file_type)?;
 /// for trak in &movie.trak {
-///     muxer.add_track(TrackDescription::from(trak))?;
+///     muxer.add_track(TrackParameters::from(trak))?;
 /// }
 /// let mut written = Vec::new();
 /// for (index, (properties, bytes)) in samples.iter().enumerate() {
@@ -146,7 +148,7 @@ impl FragmentedMovieFileMuxer {
     ///   [`MuxerConfig::buffer_limit`]; nothing is allocated for it.
     /// * [`Error::Encode`]: the `ftyp` does not write.
     pub fn new(
-        movie: MovieDescription,
+        movie: MovieParameters,
         config: MuxerConfig,
         file_type: FileTypeBox,
     ) -> Result<Self, Error> {
@@ -159,7 +161,7 @@ impl FragmentedMovieFileMuxer {
         Ok(Self {
             config,
             state: State::Tracks {
-                movie,
+                movie: Box::new(movie),
                 tracks: Vec::new(),
             },
             output,
@@ -174,7 +176,7 @@ impl FragmentedMovieFileMuxer {
     /// * [`Error::TrackId`]: the `track_ID` is 0 or that of a track added.
     /// * [`Error::DataReferenceIndex`]: a sample entry names another data
     ///   reference than 1, the media data in the same file.
-    pub fn add_track(&mut self, track: TrackDescription) -> Result<(), Error> {
+    pub fn add_track(&mut self, track: TrackParameters) -> Result<(), Error> {
         match &mut self.state {
             State::Finished => Err(Error::Finished),
             State::Fragments { .. } => Err(Error::TrackAfterMediaData {
@@ -208,7 +210,7 @@ impl FragmentedMovieFileMuxer {
     /// * [`Error::Overflow`]: the sample is longer than a track fragment run
     ///   counts.
     /// * [`Error::Encode`]: the `moov` does not write, as where a sample
-    ///   entry or a box of a description does not.
+    ///   entry or a box of the parameters does not.
     pub fn handle_sample(
         &mut self,
         properties: SampleProperties,
@@ -222,7 +224,7 @@ impl FragmentedMovieFileMuxer {
         match &mut self.state {
             State::Finished => Err(Error::Finished),
             State::Tracks { movie, tracks } => {
-                let moov = fragmented_movie_box(movie, tracks);
+                let moov = movie.to_fragmented_movie_box(tracks);
                 let length = self
                     .output
                     .len()
@@ -236,7 +238,7 @@ impl FragmentedMovieFileMuxer {
                     .iter()
                     .map(|track| TrackSampleDescription {
                         track_id: track.track_id,
-                        stsd: &track.sample_entries,
+                        stsd: &track.stsd,
                         dref: &dref,
                     })
                     .collect();
@@ -343,7 +345,7 @@ impl FragmentedMovieFileMuxer {
         match &self.state {
             State::Finished => return Err(Error::Finished),
             State::Tracks { movie, tracks } => {
-                let moov = fragmented_movie_box(movie, tracks);
+                let moov = movie.to_fragmented_movie_box(tracks);
                 append_encoded(&moov, &mut self.output)?;
             }
             State::Fragments { .. } => self.write_fragment(segment_type)?,
@@ -369,7 +371,7 @@ impl FragmentedMovieFileMuxer {
 /// writes no segment index.
 ///
 /// ```
-/// use isobmff::muxer::{MovieDescription, TrackDescription};
+/// use isobmff::muxer::{MovieParameters, TrackParameters};
 /// use isobmff::{MuxerConfig, SampleProperties, SegmentMuxer};
 /// use isobmff_boxes::{FileTypeBox, SampleFlags, SegmentTypeBox};
 /// use isobmff_core::{BoxDecode, FourCc};
@@ -380,8 +382,8 @@ impl FragmentedMovieFileMuxer {
 /// let (moov, _) = isobmff_boxes::MovieBox::decode(rest)?;
 /// let mut segment_type = SegmentTypeBox::default();
 /// segment_type.major_brand = FourCc::new(*b"msdh");
-/// let mut muxer = SegmentMuxer::new(MovieDescription::from(&moov), MuxerConfig::default(), file_type, segment_type)?;
-/// muxer.add_track(TrackDescription::from(&moov.trak[0]))?;
+/// let mut muxer = SegmentMuxer::new(MovieParameters::from(&moov), MuxerConfig::default(), file_type, segment_type)?;
+/// muxer.add_track(TrackParameters::from(&moov.trak[0]))?;
 ///
 /// // Write two segments of one sample each, keeping each segment apart
 /// let sample = |decoding_time| SampleProperties {
@@ -421,7 +423,7 @@ impl SegmentMuxer {
     /// # Errors
     /// As [`FragmentedMovieFileMuxer::new`].
     pub fn new(
-        movie: MovieDescription,
+        movie: MovieParameters,
         config: MuxerConfig,
         file_type: FileTypeBox,
         segment_type: SegmentTypeBox,
@@ -436,7 +438,7 @@ impl SegmentMuxer {
     ///
     /// # Errors
     /// As [`FragmentedMovieFileMuxer::add_track`].
-    pub fn add_track(&mut self, track: TrackDescription) -> Result<(), Error> {
+    pub fn add_track(&mut self, track: TrackParameters) -> Result<(), Error> {
         self.muxer.add_track(track)
     }
 
@@ -479,31 +481,6 @@ impl SegmentMuxer {
     pub fn finish(&mut self) -> Result<(), Error> {
         self.muxer.finish_after(Some(&self.segment_type))
     }
-}
-
-/// Returns the `moov` of `movie` whose tracks `tracks` describe, which declares no sample and extends each track into movie fragments
-fn fragmented_movie_box(movie: &MovieDescription, tracks: &[TrackDescription]) -> MovieBox {
-    let mut trak = Vec::with_capacity(tracks.len());
-    let mut mvex = MovieExtendsBox::default();
-    for track in tracks {
-        let stbl = SampleTableWriter::new(
-            &TrackSampleDescription {
-                track_id: track.track_id,
-                stsd: &track.sample_entries,
-                dref: &data_reference(),
-            },
-            0,
-        )
-        .finish();
-        trak.push(track_box(track, stbl, movie.timescale));
-        let mut trex = TrackExtendsBox::default();
-        trex.track_id = track.track_id;
-        trex.default_sample_description_index = 1;
-        mvex.trex.push(trex);
-    }
-    let mut moov = movie_box(movie, trak);
-    moov.mvex = Some(mvex);
-    moov
 }
 
 /// The error of a muxer for the error a fragment refuses a sample or a `moof` with

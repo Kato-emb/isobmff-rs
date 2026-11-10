@@ -211,7 +211,7 @@ fn a_sample_over_the_size_limit_is_never_copied() {
 
 #[test]
 fn a_muxer_polled_after_each_sample_allocates_for_the_tables_and_not_for_the_bytes() {
-    use isobmff::muxer::{MovieDescription, TrackDescription};
+    use isobmff::muxer::{MovieParameters, TrackParameters};
     use isobmff::{MovieFileMuxer, MuxerConfig, SampleProperties};
     use isobmff_boxes::{
         FileTypeBox, SampleDescription, SampleDescriptionBox, SampleEntry, SampleFlags,
@@ -225,13 +225,13 @@ fn a_muxer_polled_after_each_sample_allocates_for_the_tables_and_not_for_the_byt
     let mut stsd = SampleDescriptionBox::default();
     stsd.sample_descriptions = vec![SampleDescription::Typed(entry)];
     let mut muxer = MovieFileMuxer::new(
-        MovieDescription::new(1000),
+        MovieParameters::new(1000),
         MuxerConfig::default(),
         FileTypeBox::default(),
     )
     .unwrap();
     muxer
-        .add_track(TrackDescription::new(1, 1000, FourCc::new(*b"vide"), stsd))
+        .add_track(TrackParameters::new(1, 1000, FourCc::new(*b"vide"), stsd))
         .unwrap();
     let bytes = vec![0xAA; SAMPLE_SIZE];
     let sample = |index: u32| SampleProperties {
@@ -331,7 +331,7 @@ fn the_memory_a_demuxer_holds_stays_within_the_limit_when_fragments_come_before_
 
 /// The most bytes held while a fragmented muxer writes `fragments` fragments of 8 samples of 4 KiB each, its output polled after each fragment
 fn most_held_writing_fragments(fragments: u32) -> usize {
-    use isobmff::muxer::{MovieDescription, TrackDescription};
+    use isobmff::muxer::{MovieParameters, TrackParameters};
     use isobmff::{FragmentedMovieFileMuxer, MuxerConfig, SampleProperties};
     use isobmff_boxes::{
         FileTypeBox, SampleDescription, SampleDescriptionBox, SampleEntry, SampleFlags,
@@ -354,13 +354,13 @@ fn most_held_writing_fragments(fragments: u32) -> usize {
         let mut stsd = SampleDescriptionBox::default();
         stsd.sample_descriptions = vec![SampleDescription::Typed(entry)];
         let mut muxer = FragmentedMovieFileMuxer::new(
-            MovieDescription::new(1000),
+            MovieParameters::new(1000),
             MuxerConfig::default(),
             FileTypeBox::default(),
         )
         .unwrap();
         muxer
-            .add_track(TrackDescription::new(1, 1000, FourCc::new(*b"vide"), stsd))
+            .add_track(TrackParameters::new(1, 1000, FourCc::new(*b"vide"), stsd))
             .unwrap();
         let mut out = Vec::new();
         for index in 0..fragments * SAMPLES_PER_FRAGMENT {
