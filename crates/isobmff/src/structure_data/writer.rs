@@ -57,7 +57,8 @@ struct Sample {
 ///
 /// ```
 /// use isobmff::structure_data::{SampleTableWriter, StructureDataReader};
-/// use isobmff::{Demuxer, DemuxerConfig, Event};
+/// use isobmff::demuxer::Event;
+/// use isobmff::{Demuxer, DemuxerConfig};
 ///
 /// // Read the `moov` of a file and where the samples of its first track lie
 /// let file: &[u8] = include_bytes!("../../tests/fixtures/movie_moov_first.mp4");

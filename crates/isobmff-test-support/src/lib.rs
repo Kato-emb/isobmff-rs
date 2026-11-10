@@ -214,6 +214,8 @@ pub struct FfprobePacket {
     pub time_base: (u64, u64),
     /// Whether `ffprobe` flags the packet to be discarded after decoding: one an edit list does not present from its start
     pub discard: bool,
+    /// Whether `ffprobe` flags the packet a key frame: a sync sample
+    pub key: bool,
 }
 
 /// Returns the packets `ffprobe -show_streams -show_packets -of json` reports for `file`, in the order it reports them
@@ -295,6 +297,10 @@ pub fn ffprobe_packets(file: &Path) -> Vec<FfprobePacket> {
                     .get("flags")
                     .and_then(Value::as_str)
                     .is_some_and(|flags| flags.contains('D')),
+                key: packet
+                    .get("flags")
+                    .and_then(Value::as_str)
+                    .is_some_and(|flags| flags.contains('K')),
             }
         })
         .collect()

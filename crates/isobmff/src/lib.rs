@@ -3,10 +3,12 @@
 //! [`Demuxer`] reads a file into its `ftyp` and `moov`, the location of each
 //! sample, and the bytes of the samples of the tracks a caller subscribes to.
 //! It does no I/O: it names where it wants input next, and the caller reads
-//! the file however it can.
+//! the file however it can. The [`demuxer`] module holds the events it
+//! reports.
 //!
 //! ```
-//! use isobmff::{Demuxer, DemuxerConfig, Event};
+//! use isobmff::demuxer::Event;
+//! use isobmff::{Demuxer, DemuxerConfig};
 //!
 //! let file: &[u8] = include_bytes!("../tests/fixtures/movie_moov_first.mp4");
 //! let mut demuxer = Demuxer::new(DemuxerConfig::default());
@@ -38,22 +40,29 @@
 //! # Ok::<(), Box<dyn core::error::Error>>(())
 //! ```
 //!
-//! The layers it is made of are usable alone: [`framing`] reads the boxes laid
-//! end to end in a file from bytes that arrive in pieces, and
+//! [`MovieFileMuxer`] writes a movie file, its `ftyp`, one `mdat` and the
+//! `moov` that declares it, from the samples a caller hands it; the
+//! [`muxer`] module holds what describes the movie and its tracks.
+//!
+//! The layers they are made of are usable alone: [`framing`] reads the boxes
+//! laid end to end in a file from bytes that arrive in pieces, and
 //! [`structure_data`] resolves the samples a `moov` declares to where their
-//! bytes lie. The boxes themselves are read and written with `isobmff-boxes`.
+//! bytes lie, and writes the sample table of a track from them. The boxes
+//! themselves are read and written with `isobmff-boxes`.
 
 #![no_std]
 
 extern crate alloc;
 
-mod demuxer;
+pub mod demuxer;
 pub mod framing;
 mod input_buffer;
+pub mod muxer;
 mod sample;
 pub mod structure_data;
 
-pub use demuxer::{Demuxer, DemuxerConfig, Error, Event, Sample};
+pub use demuxer::{Demuxer, DemuxerConfig};
+pub use muxer::{MovieFileMuxer, MuxerConfig};
 pub use sample::{SampleLocation, SampleProperties};
 
 /// Where a reader wants input next

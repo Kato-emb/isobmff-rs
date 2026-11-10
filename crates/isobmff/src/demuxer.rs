@@ -126,7 +126,8 @@ struct Samples {
 /// A movie file whose `moov` comes last, read where the demuxer asks:
 ///
 /// ```
-/// use isobmff::{Demuxer, DemuxerConfig, Event};
+/// use isobmff::demuxer::Event;
+/// use isobmff::{Demuxer, DemuxerConfig};
 ///
 /// let file: &[u8] = include_bytes!("../tests/fixtures/movie_moov_last.mp4");
 /// let mut demuxer = Demuxer::new(DemuxerConfig::default());

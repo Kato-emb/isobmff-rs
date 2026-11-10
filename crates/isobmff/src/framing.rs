@@ -2,11 +2,13 @@
 //!
 //! [`BoxReader`] cuts each box at file level off the bytes of a file: it
 //! gathers the payload of a box whose type [`FramerConfig`] names, and skips
-//! the payload of any other without requesting it.
+//! the payload of any other without requesting it. [`media_data_header`]
+//! writes the header of an `mdat` whose length is known only once its
+//! payload is written.
 
 use alloc::vec::Vec;
 
-use isobmff_core::BoxType;
+use isobmff_core::{BoxHeader, BoxSize, BoxType, ExtendedSize};
 
 mod event;
 mod reader;
@@ -66,4 +68,29 @@ impl FramerConfig {
             payload_limit,
         }
     }
+}
+
+/// Returns the header of an `mdat` of `payload_length` bytes, in the 16 bytes of a `largesize`, or [`None`] where the box would be longer than 64 bits count
+///
+/// The `media data` box, ISO/IEC 14496-12 §8.1.1, under the header of §4.2.2
+/// with `size` 1. The header is 16 bytes whatever the length, so one written
+/// before the payload, while its length is unknown, is written over in place
+/// once it is known.
+///
+/// ```
+/// use isobmff::framing::media_data_header;
+///
+/// assert_eq!(
+///     media_data_header(4),
+///     Some(*b"\0\0\0\x01mdat\0\0\0\0\0\0\0\x14")
+/// );
+/// assert_eq!(media_data_header(u64::MAX), None);
+/// ```
+#[must_use]
+pub fn media_data_header(payload_length: u64) -> Option<[u8; 16]> {
+    let size = ExtendedSize::new(payload_length.checked_add(16)?)?;
+    let header = BoxHeader::new(BoxType::compact(*b"mdat"), BoxSize::Extended(size))?;
+    let mut bytes = [0; 16];
+    header.encode(&mut bytes).ok()?;
+    Some(bytes)
 }

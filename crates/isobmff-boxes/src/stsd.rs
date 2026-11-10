@@ -21,6 +21,24 @@ pub enum SampleDescription {
     Other(AnyBox),
 }
 
+impl SampleDescription {
+    /// Returns the `data_reference_index` of the entry, from 1, or [`None`] where its bytes end before it
+    ///
+    /// Every sample entry opens with six reserved bytes and then
+    /// `data_reference_index`, ISO/IEC 14496-12 §8.5.2.2, so the index of an
+    /// entry kept as its bytes is read from them.
+    #[must_use]
+    pub fn data_reference_index(&self) -> Option<u16> {
+        match self {
+            Self::Typed(entry) => Some(entry.data_reference_index),
+            Self::Other(entry) => {
+                let bytes = entry.raw_payload()?.get(6..8)?;
+                Some(u16::from_be_bytes(bytes.try_into().ok()?))
+            }
+        }
+    }
+}
+
 /// [`SampleDescriptionBox`] (`stsd`), ISO/IEC 14496-12 §8.5.2
 ///
 /// The sample entries of a track, which give the coding type of its samples
