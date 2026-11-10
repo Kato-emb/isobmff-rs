@@ -2,14 +2,14 @@
 
 use alloc::vec::Vec;
 
-use isobmff_boxes::{Matrix, MetaBox, MovieBox, TrackBox, UserDataBox};
+use isobmff_boxes::{
+    Matrix, MetaBox, MovieBox, MovieExtendsBox, TrackBox, TrackExtendsBox, UserDataBox,
+};
 use isobmff_core::{I8F8, I16F16, OtherBoxes};
 
 use super::TrackParameters;
-use super::movie::data_reference;
-use crate::structure_data::{
-    SampleTableWriter, TrackSampleDescription, movie_extends_box, set_durations,
-};
+use super::movie::{data_reference, set_durations};
+use crate::structure_data::{SampleTableWriter, TrackSampleDescription};
 
 /// What the samples of a movie do not give a muxer: every field and box of its `moov` that is not derived from its tracks
 ///
@@ -90,10 +90,24 @@ impl MovieParameters {
 
     /// Returns the `moov` of the movie whose tracks are `trak`, its durations those the tracks give and its next `track_ID` past theirs
     ///
-    /// The durations and versions are set as
-    /// [`set_durations`](crate::structure_data::set_durations) sets them,
-    /// and the next `track_ID` is one more than the largest of the tracks,
-    /// §8.2.2.
+    /// * The duration of the media of a track is
+    ///   [`media_duration`](crate::structure_data::media_duration), ISO/IEC
+    ///   14496-12 §8.4.2.
+    /// * The duration of a track is the sum of the durations of its edits,
+    ///   or, without an edit list, the duration of its media in the
+    ///   timescale of the movie, rounded up, §8.3.2.
+    /// * Where the last edit of a track is not empty and lasts 0, as the last
+    ///   edit of a fragmented movie may to run to the end of its media
+    ///   (§8.6.6.1), it is closed at the end of the composition of the
+    ///   samples: it lasts from its `media_time` to the
+    ///   [`composition_end`](crate::structure_data::composition_end) of the
+    ///   track, in the timescale of the movie, rounded up. The `elst` takes
+    ///   version 1 where that duration does not fit 32 bits.
+    /// * The duration of the movie is that of its longest track, §8.2.2, and
+    ///   its next `track_ID` one more than the largest of the tracks.
+    /// * The `mvhd`, each `tkhd` and each `mdhd` are of version 0 where their
+    ///   duration, `creation_time` and `modification_time` fit 32 bits, and
+    ///   of version 1 otherwise.
     ///
     /// ```
     /// use isobmff::boxes::{SampleDescriptionBox, SampleTableBox};
@@ -131,9 +145,9 @@ impl MovieParameters {
 
     /// Returns the `moov` of the movie whose tracks `tracks` describe, which declares no sample and extends each track into movie fragments
     ///
-    /// Each track has a sample table of no sample, and the `mvex` is the one
-    /// [`movie_extends_box`](crate::structure_data::movie_extends_box)
-    /// returns. A last edit of duration 0 is kept: in a fragmented movie, it
+    /// Each track has a sample table of no sample, and the `mvex`, §8.8.1, a
+    /// `trex`, §8.8.3, for each track, whose default sample entry is the
+    /// first. A last edit of duration 0 is kept: in a fragmented movie, it
     /// runs to the end of the media the movie fragments add, §8.6.6.1.
     ///
     /// ```
@@ -164,7 +178,17 @@ impl MovieParameters {
             })
             .collect();
         let mut moov = self.to_movie_box(trak);
-        moov.mvex = Some(movie_extends_box(&moov.trak));
+        let mut mvex = MovieExtendsBox::default();
+        mvex.trex = tracks
+            .iter()
+            .map(|track| {
+                let mut trex = TrackExtendsBox::default();
+                trex.track_id = track.track_id;
+                trex.default_sample_description_index = 1;
+                trex
+            })
+            .collect();
+        moov.mvex = Some(mvex);
         moov
     }
 }

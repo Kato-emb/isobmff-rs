@@ -1,13 +1,72 @@
-//! What the muxers share: the checks of a track, the data references and the `mdat` header they write, and the writing of a box into the bytes a muxer holds
+//! What the muxers share: the checks of a track, the durations of the `moov`, the data references and the `mdat` header they write, and the writing of a box into the bytes a muxer holds
 
 use alloc::vec;
 use alloc::vec::Vec;
+use core::num::NonZeroU128;
 
-use isobmff_boxes::{DataEntry, DataEntryUrlBox, DataReferenceBox};
+use isobmff_boxes::{DataEntry, DataEntryUrlBox, DataReferenceBox, MovieBox};
 use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, ExtendedSize};
 
 use super::Error;
 use super::TrackParameters;
+use crate::structure_data::{composition_end, media_duration};
+
+/// Sets the durations of `movie`, of each of its tracks and of their media to those the sample tables and the edit lists give, and each header to the version they need, as [`MovieParameters::to_movie_box`](super::MovieParameters::to_movie_box) says
+pub(super) fn set_durations(movie: &mut MovieBox) {
+    let movie_timescale = movie.mvhd.timescale;
+    for trak in &mut movie.trak {
+        let stbl = &trak.mdia.minf.stbl;
+        let (media, composed) = (media_duration(stbl), composition_end(stbl));
+        let media_timescale = trak.mdia.mdhd.timescale;
+        let in_movie_timescale = |duration: u64| {
+            // Why round up: the track then lasts at least as long as its
+            // media, as FFmpeg's movenc rounds it.
+            NonZeroU128::new(u128::from(media_timescale)).map_or(0, |timescale| {
+                let scaled = u128::from(duration)
+                    .saturating_mul(u128::from(movie_timescale))
+                    .div_ceil(timescale.get());
+                u64::try_from(scaled).unwrap_or(u64::MAX)
+            })
+        };
+        if let Some(elst) = trak.edts.as_mut().and_then(|edts| edts.elst.as_mut()) {
+            if let Some(last) = elst
+                .entries
+                .last_mut()
+                .filter(|last| last.edit_duration == 0 && last.media_time >= 0)
+            {
+                last.edit_duration = in_movie_timescale(
+                    composed.saturating_sub(u64::try_from(last.media_time).unwrap_or(0)),
+                );
+                if u32::try_from(last.edit_duration).is_err() {
+                    elst.version = 1;
+                }
+            }
+            trak.tkhd.duration = elst.entries.iter().fold(0_u64, |total, entry| {
+                total.saturating_add(entry.edit_duration)
+            });
+        } else {
+            trak.tkhd.duration = in_movie_timescale(media);
+        }
+        let tkhd = &mut trak.tkhd;
+        tkhd.version = version_for([tkhd.duration, tkhd.creation_time, tkhd.modification_time]);
+        let mdhd = &mut trak.mdia.mdhd;
+        mdhd.duration = media;
+        mdhd.version = version_for([mdhd.duration, mdhd.creation_time, mdhd.modification_time]);
+    }
+    let mvhd = &mut movie.mvhd;
+    mvhd.duration = movie
+        .trak
+        .iter()
+        .map(|trak| trak.tkhd.duration)
+        .max()
+        .unwrap_or(0);
+    mvhd.version = version_for([mvhd.duration, mvhd.creation_time, mvhd.modification_time]);
+}
+
+/// The version of a box whose `values` take 32 bits in version 0 and 64 in version 1
+fn version_for(values: [u64; 3]) -> u8 {
+    u8::from(values.iter().any(|&value| u32::try_from(value).is_err()))
+}
 
 /// Checks that `track` may be added beside the tracks `added`: its `track_ID` is neither 0 nor taken, and its media data is in the same file
 pub(super) fn check_track<'a>(

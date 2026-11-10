@@ -91,7 +91,8 @@ pub struct TrackParameters {
     pub trgr: Option<TrackGroupBox>,
     /// The `edts` of the track, §8.6.5, with its edit list; the duration of a
     /// last edit of duration 0 is set from the samples, as
-    /// [`set_durations`](crate::structure_data::set_durations) says
+    /// [`MovieParameters::to_movie_box`](super::MovieParameters::to_movie_box)
+    /// says
     pub edts: Option<EditBox>,
     /// The `meta` of the track, §8.11.1
     pub meta: Option<MetaBox>,
@@ -219,8 +220,7 @@ impl TrackParameters {
     /// the media data in the same file. The durations and the versions of
     /// the headers are left at 0, for
     /// [`MovieParameters::to_movie_box`](super::MovieParameters::to_movie_box)
-    /// to set as [`set_durations`](crate::structure_data::set_durations)
-    /// does.
+    /// to set.
     ///
     /// ```
     /// use isobmff::boxes::{SampleDescriptionBox, SampleTableBox};
