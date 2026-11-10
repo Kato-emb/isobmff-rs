@@ -21,11 +21,13 @@ pub struct DemuxerConfig {
     /// A `moov` grows with the samples it declares, by some bytes a sample;
     /// 16 MiB holds that of a movie of hours.
     pub payload_limit: u64,
-    /// The most samples the demuxer resolves from one `moov` (2^20 by
-    /// default)
+    /// The most sample locations the demuxer holds at once, those of the
+    /// `moov` or the `moof` it reads among them (2^20 by default)
     ///
     /// The demuxer holds the location of each, some tens of bytes; 2^20 of
-    /// them take some tens of MiB.
+    /// them take some tens of MiB. A `moof` whose samples would pass it is
+    /// reported and not resolved, and the decoding times of its tracks do
+    /// not move on.
     pub sample_count_limit: u64,
     /// The most bytes a sample of a subscribed track may hold (16 MiB by
     /// default)

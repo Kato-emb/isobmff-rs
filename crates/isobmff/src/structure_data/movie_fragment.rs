@@ -42,8 +42,14 @@ impl FragmentTrack {
     }
 }
 
-/// Number of samples the track runs of `moof` declare
-pub(super) fn sample_count(moof: &MovieFragmentBox) -> u64 {
+/// Returns the number of samples the track runs of `moof` declare
+///
+/// The `sample_count` of each `trun` of each `traf`, ISO/IEC 14496-12
+/// §8.8.8, saturating at `u64::MAX`. A caller that holds the samples of
+/// several boxes counts those of a `moof` with it before it hands the box to
+/// [`StructureDataReader::handle_movie_fragment`](super::StructureDataReader::handle_movie_fragment).
+#[must_use]
+pub fn movie_fragment_sample_count(moof: &MovieFragmentBox) -> u64 {
     moof.traf
         .iter()
         .flat_map(|traf| &traf.trun)
@@ -89,8 +95,7 @@ pub(super) fn resolve(
             .or(trex.map(|trex| trex.default_sample_size));
         let default_flags = tfhd
             .default_sample_flags
-            .or(trex.map(|trex| trex.default_sample_flags))
-            .unwrap_or_default();
+            .or(trex.map(|trex| trex.default_sample_flags));
         let has_samples = traf.trun.iter().any(|trun| run_len(trun) > 0);
         let sample_description_index = tfhd
             .sample_description_index
@@ -143,7 +148,8 @@ pub(super) fn resolve(
                     .first_sample_flags
                     .filter(|_| number == 0)
                     .or(row.sample_flags)
-                    .unwrap_or(default_flags);
+                    .or(default_flags)
+                    .ok_or(missing)?;
                 locations.push(SampleLocation {
                     properties: SampleProperties {
                         track_id,

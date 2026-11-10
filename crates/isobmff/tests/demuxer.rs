@@ -5,6 +5,7 @@ mod tests {
     use isobmff::demuxer::{Error, Event};
     use isobmff::{Demuxer, DemuxerConfig, SampleLocation};
     use isobmff_test_support::conformance_files;
+    use isobmff_test_support::fixtures::fragments_ahead_of_their_samples;
 
     /// The fixtures whose samples all lie after the `moov`
     const FIXTURES: [(&str, &[u8]); 3] = [
@@ -393,6 +394,38 @@ mod tests {
                 segment(3).to_vec(),
             ]
             .concat()
+        );
+    }
+
+    #[test]
+    fn a_moof_whose_samples_would_pass_the_locations_held_is_reported_and_its_time_is_not_counted()
+    {
+        let file = fragments_ahead_of_their_samples(64);
+        let mut limited = DemuxerConfig::default();
+        limited.sample_count_limit = 8;
+        let reported = read_where_required(&file, limited, Subscribe::Every);
+        let refused = reported
+            .iter()
+            .filter(|reported| {
+                matches!(
+                    reported,
+                    Reported::Error(Error::StructureData {
+                        source: isobmff::structure_data::Error::SampleCountOverLimit {
+                            limit: 8,
+                            ..
+                        },
+                        ..
+                    })
+                )
+            })
+            .count();
+        let lent = samples_lent(&reported)
+            .iter()
+            .map(|location| location.properties.decoding_time)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            (refused, lent),
+            (64 - 8, [0, 20, 40, 60, 80, 100, 120, 140, 160].to_vec())
         );
     }
 

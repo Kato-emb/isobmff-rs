@@ -203,7 +203,7 @@ impl StructureDataReader {
             .tracks
             .as_mut()
             .ok_or(Error::MovieFragmentWithoutMovie)?;
-        let sample_count = movie_fragment::sample_count(moof);
+        let sample_count = movie_fragment::movie_fragment_sample_count(moof);
         if sample_count > self.sample_count_limit {
             return Err(Error::SampleCountOverLimit {
                 sample_count,

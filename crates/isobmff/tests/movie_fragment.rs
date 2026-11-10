@@ -324,6 +324,34 @@ mod tests {
     }
 
     #[test]
+    fn a_sample_whose_flags_nothing_gives_is_refused_and_one_whose_row_gives_them_is_not() {
+        let mut no_trex = movie_with_samples_and_fragments();
+        no_trex.mvex = None;
+        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
+        let _ = reader.handle_movie(&no_trex).unwrap().count();
+        let mut without_flags = traf(1, 1, None);
+        without_flags.tfhd.default_sample_duration = Some(20);
+        without_flags.tfhd.default_sample_size = Some(4);
+        without_flags.tfhd.sample_description_index = Some(1);
+        let mut with_flags = without_flags.clone();
+        let mut row = TrackRunSample::default();
+        row.sample_flags = Some(SampleFlags::default());
+        with_flags.trun.first_mut().unwrap().samples = TrackRunSamples::Rows { samples: vec![row] };
+        assert_eq!(
+            reader
+                .handle_movie_fragment(&moof([without_flags]), 1000)
+                .map(|_| ()),
+            Err(Error::MissingDefault { track_id: 1 })
+        );
+        assert_eq!(
+            reader
+                .handle_movie_fragment(&moof([with_flags]), 2000)
+                .map(Iterator::collect::<Vec<_>>),
+            Ok(vec![at(2000, 4, 20, 20)])
+        );
+    }
+
+    #[test]
     #[ignore = "needs ISOBMFF_CONFORMANCE_DIR and ffprobe"]
     fn the_fragments_of_the_conformance_files_resolve_to_the_samples_gpac_counts_and_the_packets_ffmpeg_reads()
      {

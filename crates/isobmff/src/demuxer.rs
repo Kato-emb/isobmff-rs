@@ -7,7 +7,7 @@ use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox, SegmentTypeBox};
 use isobmff_core::{BoxDecode, BoxDefinition};
 
 use crate::framing::{self, BoxReader, FramerConfig};
-use crate::structure_data::StructureDataReader;
+use crate::structure_data::{self, StructureDataReader};
 use crate::{RequiredInput, SampleLocation};
 
 mod config;
@@ -167,6 +167,7 @@ struct Samples {
 pub struct Demuxer {
     boxes: BoxReader,
     structure_data: StructureDataReader,
+    sample_count_limit: u64,
     sample_size_limit: u64,
     state: State,
     samples: Samples,
@@ -191,6 +192,7 @@ impl Demuxer {
         Self {
             boxes: BoxReader::new(framer),
             structure_data: StructureDataReader::new(config.sample_count_limit),
+            sample_count_limit: config.sample_count_limit,
             sample_size_limit: config.sample_size_limit,
             state: State::NoMovie,
             samples: Samples {
@@ -506,28 +508,40 @@ impl Demuxer {
                     match MovieFragmentBox::decode_payload(payload) {
                         Err(source) => decode_error(source),
                         Ok(moof) => {
-                            match self.structure_data.handle_movie_fragment(&moof, offset) {
+                            let samples = &mut self.samples;
+                            // Why drop the locations before the `moof`: a sample
+                            // of a subscribed track before it was lent before the
+                            // box reader passed it, and the locations would
+                            // otherwise grow with every fragment.
+                            samples.locations.drain(..samples.next);
+                            samples
+                                .locations
+                                .retain(|location| location.offset >= offset);
+                            samples.next = 0;
+                            samples.reported = samples.locations.len();
+                            // Why count before resolving: the samples of the
+                            // fragments before may lie after this `moof` and
+                            // stay held, and the decoding times move on only for
+                            // a `moof` resolved.
+                            let held = length_of(samples.locations.len())
+                                .saturating_add(structure_data::movie_fragment_sample_count(&moof));
+                            let resolved = if held > self.sample_count_limit {
+                                Err(structure_data::Error::SampleCountOverLimit {
+                                    sample_count: held,
+                                    limit: self.sample_count_limit,
+                                })
+                            } else {
+                                self.structure_data
+                                    .handle_movie_fragment(&moof, offset)
+                                    .map(|locations| self.samples.locations.extend(locations))
+                            };
+                            match resolved {
                                 Err(error) => BoxRead::Event(Event::Error(Error::StructureData {
                                     offset,
                                     box_type,
                                     source: error,
                                 })),
-                                Ok(locations) => {
-                                    let samples = &mut self.samples;
-                                    // Why drop the locations before the `moof`: a
-                                    // sample of a subscribed track before it was
-                                    // lent before the box reader passed it, and
-                                    // the locations would otherwise grow with
-                                    // every fragment.
-                                    samples.locations.drain(..samples.next);
-                                    samples
-                                        .locations
-                                        .retain(|location| location.offset >= offset);
-                                    samples.next = 0;
-                                    samples.reported = samples.locations.len();
-                                    samples.locations.extend(locations);
-                                    BoxRead::MovieFragment(alloc::boxed::Box::new(moof))
-                                }
+                                Ok(()) => BoxRead::MovieFragment(alloc::boxed::Box::new(moof)),
                             }
                         }
                     }

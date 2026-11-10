@@ -269,11 +269,11 @@ fn segments(repeats: usize) -> Vec<u8> {
     [initialization, &segments.repeat(repeats)].concat()
 }
 
-/// The most bytes held while every sample of `file` is lent, handed over where the demuxer asks
-fn most_held_lending(file: &[u8]) -> (usize, usize) {
+/// The most bytes held while every sample of `file` is lent under `config`, handed over where the demuxer asks
+fn most_held_lending(file: &[u8], config: DemuxerConfig) -> (usize, usize) {
     let mut samples = 0;
     let held = most_held_by(|| {
-        let mut demuxer = Demuxer::new(DemuxerConfig::default());
+        let mut demuxer = Demuxer::new(config);
         loop {
             while let Some(event) = demuxer.poll_event() {
                 match event {
@@ -305,11 +305,26 @@ fn most_held_lending(file: &[u8]) -> (usize, usize) {
 
 #[test]
 fn the_memory_a_demuxer_holds_does_not_grow_with_the_movie_fragments_it_reads() {
-    let (few, few_samples) = most_held_lending(&segments(4));
-    let (many, many_samples) = most_held_lending(&segments(64));
+    let (few, few_samples) = most_held_lending(&segments(4), DemuxerConfig::default());
+    let (many, many_samples) = most_held_lending(&segments(64), DemuxerConfig::default());
     println!(
         "held at most {few} bytes lending {few_samples} samples of 12 fragments, {many} bytes lending {many_samples} of 192"
     );
     assert_eq!((few_samples, many_samples), (70 * 4, 70 * 64));
+    assert_eq!(many, few);
+}
+
+#[test]
+fn the_memory_a_demuxer_holds_stays_within_the_limit_when_fragments_come_before_their_samples() {
+    use isobmff_test_support::fixtures::fragments_ahead_of_their_samples;
+
+    let mut limited = DemuxerConfig::default();
+    limited.sample_count_limit = 8;
+    let (few, few_samples) = most_held_lending(&fragments_ahead_of_their_samples(64), limited);
+    let (many, many_samples) = most_held_lending(&fragments_ahead_of_their_samples(1024), limited);
+    println!(
+        "held at most {few} bytes over 64 fragments ahead of their samples, {many} bytes over 1024, under a limit of 8 locations"
+    );
+    assert_eq!((few_samples, many_samples), (8 + 1, 8 + 1));
     assert_eq!(many, few);
 }
