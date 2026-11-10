@@ -5,9 +5,9 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::Path;
 
-    use isobmff::SampleProperties;
     use isobmff::framing::{BoxReader, Event, FramerConfig};
     use isobmff::structure_data;
+    use isobmff::{MuxerConfig, SampleProperties};
     use isobmff_examples::demux::{Read, read};
     use isobmff_examples::hybrid::{Error, HybridWriter};
     use isobmff_test_support::{conformance_files, ffprobe, ffprobe_packets};
@@ -26,7 +26,12 @@ mod tests {
         samples_per_fragment: usize,
     ) -> Result<(Vec<u8>, Vec<u8>), Error> {
         let mut written = Vec::new();
-        let mut writer = HybridWriter::new(&source.file_type, source.movie.clone(), &mut written)?;
+        let mut writer = HybridWriter::new(
+            &source.file_type,
+            source.movie.clone(),
+            MuxerConfig::default().sample_count_limit,
+            &mut written,
+        )?;
         for (index, (properties, bytes)) in source.samples.iter().enumerate() {
             if index > 0 && index.checked_rem(samples_per_fragment) == Some(0) {
                 writer.finish_fragment(&mut written)?;

@@ -1,7 +1,11 @@
 //! Writes the samples of a file the demuxer reads with the hybrid writer of `isobmff_examples`, a fragment for every `samples_per_fragment` samples
 //!
 //! `cargo run -p isobmff-examples --bin hybrid -- <input> <output> [samples_per_fragment]`
+//!
+//! It takes as many samples of a track, and of a fragment, as the muxers take
+//! by default.
 
+use isobmff::MuxerConfig;
 use isobmff_examples::demux::read;
 use isobmff_examples::hybrid::HybridWriter;
 
@@ -18,7 +22,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let source = read(&std::fs::read(input)?).ok_or("no ftyp or no moov")?;
 
     let mut written = Vec::new();
-    let mut writer = HybridWriter::new(&source.file_type, source.movie, &mut written)?;
+    let mut writer = HybridWriter::new(
+        &source.file_type,
+        source.movie,
+        MuxerConfig::default().sample_count_limit,
+        &mut written,
+    )?;
     for (index, (properties, bytes)) in source.samples.iter().enumerate() {
         if index > 0 && index.checked_rem(samples_per_fragment) == Some(0) {
             writer.finish_fragment(&mut written)?;

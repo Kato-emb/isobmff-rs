@@ -95,15 +95,23 @@ pub struct HybridWriter {
 impl HybridWriter {
     /// Creates a writer of the tracks of `movie` in a file that opens with `file_type`, and appends the `ftyp`, the `free` and the `moov` of no sample to `out`
     ///
+    /// The writer takes at most `sample_count_limit` samples of a fragment,
+    /// and of each track: it holds some tens of bytes of each until it ends.
+    ///
     /// # Errors
     /// * [`Error::Encode`]: a box does not write.
     /// * [`Error::Overflow`]: the boxes are longer than a file can be.
-    pub fn new(file_type: &FileTypeBox, movie: MovieBox, out: &mut Vec<u8>) -> Result<Self, Error> {
+    pub fn new(
+        file_type: &FileTypeBox,
+        movie: MovieBox,
+        sample_count_limit: u64,
+        out: &mut Vec<u8>,
+    ) -> Result<Self, Error> {
         let tracks: Vec<TrackSampleDescription<'_>> = movie.trak.iter().map(description).collect();
-        let fragments = MovieFragmentWriter::new(&tracks, u64::MAX);
+        let fragments = MovieFragmentWriter::new(&tracks, sample_count_limit);
         let tables: Vec<SampleTableWriter> = tracks
             .iter()
-            .map(|track| SampleTableWriter::new(track, u64::MAX))
+            .map(|track| SampleTableWriter::new(track, sample_count_limit))
             .collect();
         let mut fragmented = movie.clone();
         let mut mvex = MovieExtendsBox::default();
@@ -138,7 +146,8 @@ impl HybridWriter {
     ///
     /// # Errors
     /// * [`Error::StructureData`]: the movie fragment refuses the sample, as
-    ///   where it is of a track the movie does not have.
+    ///   where it is of a track the movie does not have, or the fragment holds
+    ///   as many samples as the limit.
     /// * [`Error::Overflow`]: the sample is longer than a fragment counts.
     pub fn handle_sample(
         &mut self,
@@ -169,7 +178,7 @@ impl HybridWriter {
     ///
     /// # Errors
     /// * [`Error::StructureData`]: a sample table refuses a sample of the
-    ///   fragment.
+    ///   fragment, as where the track holds as many samples as the limit.
     /// * [`Error::Encode`]: the `moof` does not write.
     /// * [`Error::Overflow`]: the file would grow past the last offset there
     ///   can be.
