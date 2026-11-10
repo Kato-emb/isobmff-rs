@@ -70,7 +70,7 @@ mod tests {
                 .unwrap();
             writer.handle_location(location).unwrap();
         }
-        writer.finish()
+        writer.write_sample_table()
     }
 
     /// The `stbl` of a track of one sample entry whose samples are `sizes`, each lasting `sample_delta`, laid in chunks at `chunk_offsets` by the runs `(first_chunk, samples_per_chunk)`
@@ -274,7 +274,11 @@ mod tests {
             ]
         );
         assert_eq!(
-            (writer.has_samples(), writer.finish(), writer.has_samples()),
+            (
+                writer.has_samples(),
+                writer.write_sample_table(),
+                writer.has_samples()
+            ),
             (
                 true,
                 written(&sample_entries(1), [location(0, 1, 1), location(1, 1, 1)]),
@@ -294,7 +298,7 @@ mod tests {
         let last = location(u64::MAX - 1, 1, 1);
         writer.handle_location(last).unwrap();
         let mut trak = track(1, 1, &[], &[], &[]);
-        trak.mdia.minf.stbl = writer.finish();
+        trak.mdia.minf.stbl = writer.write_sample_table();
         assert_eq!(locations(&movie([trak])), Ok(vec![last]));
     }
 
@@ -320,10 +324,10 @@ mod tests {
         of_track_2.properties.track_id = 2;
         let mut writer = SampleTableWriter::new(&stsd, &in_the_file(), SAMPLE_COUNT_LIMIT);
         writer.handle_location(location(0, 7, 1)).unwrap();
-        let first = writer.finish();
+        let first = writer.write_sample_table();
         writer.handle_location(of_track_2).unwrap();
         assert_eq!(
-            [first, writer.finish()],
+            [first, writer.write_sample_table()],
             [
                 written(&stsd, [location(0, 7, 1)]),
                 written(&stsd, [of_track_2]),
@@ -513,7 +517,7 @@ mod tests {
                 let result = track
                     .into_iter()
                     .try_for_each(|&location| writer.handle_location(location))
-                    .map(|()| writer.finish());
+                    .map(|()| writer.write_sample_table());
                 match result {
                     Ok(stbl) => trak.mdia.minf.stbl = stbl,
                     Err(error) => {

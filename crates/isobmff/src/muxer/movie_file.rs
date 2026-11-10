@@ -331,7 +331,7 @@ impl MovieFileMuxer {
         for track in &self.tracks {
             // Why finish a clone: a `moov` that does not write leaves the
             // muxer as it was, samples and all.
-            let stbl = track.samples.clone().finish();
+            let stbl = track.samples.clone().write_sample_table();
             trak.push(track_box(&track.description, stbl, self.movie.timescale));
         }
         append_encoded(&movie_box(&self.movie, trak), &mut self.output)?;

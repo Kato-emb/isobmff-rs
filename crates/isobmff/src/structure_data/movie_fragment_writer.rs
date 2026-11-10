@@ -9,7 +9,7 @@ use isobmff_boxes::{
 use isobmff_core::BoxEncode;
 
 use super::{Error, sample_table};
-use crate::{SampleProperties, framing};
+use crate::{SampleLocation, framing};
 
 /// Length of the header of the `mdat` that follows each `moof`, which [`framing::media_data_header`] writes
 const MEDIA_DATA_HEADER_LENGTH: u64 = 16;
@@ -39,6 +39,9 @@ struct Track {
 #[derive(Debug, Clone, Copy)]
 struct Sample {
     track_id: u32,
+    /// Offset of the sample from the first byte of the media data of the
+    /// fragment
+    offset: u64,
     sample_description_index: u32,
     sample_duration: u32,
     size: u32,
@@ -46,17 +49,19 @@ struct Sample {
     sample_flags: SampleFlags,
 }
 
-/// Writer of the `movie fragment`s of a movie, from what the structure-data declares of each sample and its size
+/// Writer of the `movie fragment`s of a movie, from where each of their samples lies in the media data of its fragment
 ///
 /// [`MovieFragmentBox`] (`moof`), ISO/IEC 14496-12 §8.8.4, and the header of
 /// the `mdat`, §8.1.1, that holds its samples.
 ///
-/// [`handle_sample`](Self::handle_sample) takes the samples of one fragment,
-/// of any of the tracks of the `moov`, in the order their bytes follow one
-/// another in the `mdat`, and in decoding order within each track.
+/// [`handle_location`](Self::handle_location) takes the samples of one
+/// fragment, of any of the tracks of the `moov`, in decoding order within each
+/// track, each at its offset from the first byte of the media data of the
+/// fragment: a fragment declares its samples from the `moof` it is in,
+/// §8.8.7, wherever it lies in the file.
 /// [`write_movie_fragment`](Self::write_movie_fragment) writes the `moof` that
-/// declares them and the header of the `mdat`; the caller writes their bytes
-/// after it, in the order it handed them over. Each `moof` takes the next
+/// declares them and the header of the `mdat`; the caller writes the media
+/// data after it, each sample at its offset. Each `moof` takes the next
 /// `sequence_number`, from 1, §8.8.5.
 ///
 /// The fragment declares its samples in the fewest boxes and fields they
@@ -68,7 +73,7 @@ struct Sample {
 ///   of its first sample;
 /// * a `trun` (§8.8.8) for each run of samples of the `traf` whose bytes
 ///   follow one another, its `data_offset` counting from the first byte of the
-///   `moof`;
+///   `moof`; the `mdat` runs to the end of the sample that ends last;
 /// * a `sample_duration`, a `sample_size` or `sample_flags` in the `tfhd`
 ///   where every sample of the `traf` has the same, the flags of the first
 ///   sample of a `trun` as `first_sample_flags` where only they differ, and
@@ -79,7 +84,8 @@ struct Sample {
 /// one of any defaults. The decoding time of the first sample of each track
 /// is the caller's, and of each later sample the one before it plus its
 /// `sample_duration`, across fragments; the writer does not choose where a
-/// fragment ends.
+/// fragment ends, nor check that the samples neither overlap nor leave a gap
+/// in the media data.
 ///
 /// ```
 /// use isobmff::structure_data::{MovieFragmentWriter, StructureDataReader};
@@ -93,47 +99,46 @@ struct Sample {
 /// let (moov, _) = MovieBox::decode(rest)?;
 /// let track_id = moov.trak[0].tkhd.track_id;
 ///
-/// // Write a fragment of two samples, then their bytes
-/// let sample = |decoding_time| SampleProperties {
-///     track_id,
-///     decoding_time,
-///     sample_duration: 512,
-///     sample_composition_time_offset: 0,
-///     sample_flags: SampleFlags::default(),
-///     sample_description_index: 1,
+/// // Write a fragment of two samples, three bytes and two in its media data, then the media data
+/// let sample = |decoding_time, offset, size| SampleLocation {
+///     properties: SampleProperties {
+///         track_id,
+///         decoding_time,
+///         sample_duration: 512,
+///         sample_composition_time_offset: 0,
+///         sample_flags: SampleFlags::default(),
+///         sample_description_index: 1,
+///     },
+///     offset,
+///     size,
 /// };
 /// let mut writer = MovieFragmentWriter::new(&moov, 1024);
-/// writer.handle_sample(sample(0), 3)?;
-/// writer.handle_sample(sample(512), 2)?;
+/// writer.handle_location(sample(0, 0, 3))?;
+/// writer.handle_location(sample(512, 3, 2))?;
 /// let mut written = Vec::new();
 /// writer.write_movie_fragment(&mut written)?;
 /// written.extend_from_slice(b"abcde");
 ///
-/// // The fragment declares the samples where their bytes lie
+/// // The fragment declares the samples where their bytes lie in the file
 /// let (moof, _) = MovieFragmentBox::decode(&written)?;
 /// let mut reader = StructureDataReader::new(1024);
 /// reader.handle_movie(&moov)?;
 /// let locations: Vec<_> = reader.handle_movie_fragment(&moof, 0)?.collect();
 /// let mdat = u64::try_from(written.len())? - 5;
-/// assert_eq!(
-///     locations,
-///     [
-///         SampleLocation { properties: sample(0), offset: mdat, size: 3 },
-///         SampleLocation { properties: sample(512), offset: mdat + 3, size: 2 },
-///     ]
-/// );
+/// assert_eq!(locations, [sample(0, mdat, 3), sample(512, mdat + 3, 2)]);
 /// # Ok::<(), Box<dyn core::error::Error>>(())
 /// ```
 #[derive(Debug, Clone)]
 pub struct MovieFragmentWriter {
     tracks: Vec<Track>,
     sample_count_limit: u64,
-    /// The samples of the fragment, in the order their bytes follow one
-    /// another
+    /// The samples of the fragment, in decoding order within each track
     samples: Vec<Sample>,
-    // Why not sum the sizes of the samples held: that sum on every sample
-    // makes taking a fragment's samples quadratic in their number.
-    /// Number of bytes of the samples held
+    // Why not find the end of the samples held when the fragment is written:
+    // the bound `handle_location` keeps needs it on every sample, and finding
+    // it there makes taking a fragment's samples quadratic in their number.
+    /// Length of the media data of the fragment: where the sample that ends
+    /// last ends
     media_data_length: u64,
     /// `sequence_number` of the next `moof`, until the `moof` of the last a
     /// `sequence_number` counts is written
@@ -165,7 +170,7 @@ impl MovieFragmentWriter {
         }
     }
 
-    /// Takes the next sample of the fragment, of `size` bytes, which follow those of the sample before it
+    /// Takes the next sample of the fragment, where `location` places it: its offset counts from the first byte of the media data of the fragment
     ///
     /// # Errors
     /// * [`Error::SampleCountOverLimit`]: the fragment holds as many samples
@@ -183,12 +188,13 @@ impl MovieFragmentWriter {
     /// * [`Error::Encode`]: a field of the `sample_flags` of the sample holds
     ///   a value wider than its bits.
     /// * [`Error::Overflow`]: the decoding time after the sample is past the
-    ///   last a track can have, the bytes of the fragment would lie past
-    ///   where a `data_offset` of 32 bits, signed, reaches, or the movie has
-    ///   as many fragments as a `sequence_number` counts.
+    ///   last a track can have, the bytes of the sample would lie past where
+    ///   a `data_offset` of 32 bits, signed, reaches, or the movie has as many
+    ///   fragments as a `sequence_number` counts.
     ///
     /// A sample refused is not taken, and the writer is left as it was.
-    pub fn handle_sample(&mut self, properties: SampleProperties, size: u32) -> Result<(), Error> {
+    pub fn handle_location(&mut self, location: SampleLocation) -> Result<(), Error> {
+        let properties = location.properties;
         let limit = self.sample_count_limit.min(u64::from(u32::MAX));
         let sample_count = u64::try_from(self.samples.len())
             .unwrap_or(u64::MAX)
@@ -248,15 +254,16 @@ impl MovieFragmentWriter {
         if self.sequence_number.is_none() {
             return Err(overflow);
         }
-        let media_data_length = self
-            .media_data_length
-            .checked_add(u64::from(size))
-            .ok_or(overflow)?;
+        let media_data_length = location
+            .offset
+            .checked_add(u64::from(location.size))
+            .ok_or(overflow)?
+            .max(self.media_data_length);
         // Why bound the fragment here rather than when it is written: a
         // `data_offset` reaches no further than the `moof`, the header of the
-        // `mdat` and the bytes of the samples before the run, so a fragment
-        // whose bound fits `i32` writes, and one refused at writing could be
-        // neither written nor taken back.
+        // `mdat` and the end of the media data, so a fragment whose bound fits
+        // `i32` writes, and one refused at writing could be neither written
+        // nor taken back.
         let bound = SAMPLE_LENGTH
             .saturating_mul(sample_count)
             .saturating_add(MOVIE_FRAGMENT_LENGTH + MEDIA_DATA_HEADER_LENGTH)
@@ -267,9 +274,10 @@ impl MovieFragmentWriter {
         track.next_decoding_time = Some(next_decoding_time);
         self.samples.push(Sample {
             track_id,
+            offset: location.offset,
             sample_description_index,
             sample_duration: properties.sample_duration,
-            size,
+            size: location.size,
             sample_composition_time_offset,
             sample_flags: properties.sample_flags,
         });
@@ -285,8 +293,8 @@ impl MovieFragmentWriter {
 
     /// Appends the `moof` of the samples taken and the header of the `mdat` that holds them to `out`, and starts the next fragment
     ///
-    /// The bytes of the samples follow, in the order they were taken; the
-    /// caller writes them. Where no sample was taken, nothing is written and
+    /// The media data follows, each sample at its offset; the caller writes
+    /// it. Where no sample was taken, nothing is written and
     /// the next fragment takes the same `sequence_number`.
     ///
     /// # Errors
@@ -307,12 +315,6 @@ impl MovieFragmentWriter {
         // `data_offset` is 32 bits whatever its value, so the length of the
         // `moof` does not depend on the offsets, and they are moved past it
         // once it is known.
-        let mut offsets = Vec::with_capacity(self.samples.len());
-        let mut offset = 0_u64;
-        for sample in &self.samples {
-            offsets.push(offset);
-            offset = offset.saturating_add(u64::from(sample.size));
-        }
         for track in &self.tracks {
             let indices: Vec<usize> = (0..self.samples.len())
                 .filter(|&index| {
@@ -344,12 +346,11 @@ impl MovieFragmentWriter {
                     .iter()
                     .filter_map(|&index| self.samples.get(index).copied())
                     .collect();
-                let runs: Vec<(u64, usize)> = described
-                    .chunk_by(|&earlier, &later| earlier.checked_add(1) == Some(later))
-                    .map(|run| {
-                        let offset = run.first().and_then(|&first| offsets.get(first));
-                        (offset.copied().unwrap_or(0), run.len())
+                let runs: Vec<(u64, usize)> = samples
+                    .chunk_by(|earlier, later| {
+                        earlier.offset.checked_add(u64::from(earlier.size)) == Some(later.offset)
                     })
+                    .map(|run| (run.first().map_or(0, |sample| sample.offset), run.len()))
                     .collect();
                 let traf = track_fragment(&samples, &runs, decoding_time, track.track_id);
                 decoding_time = samples.iter().fold(decoding_time, |time, sample| {
@@ -447,7 +448,7 @@ fn track_fragment(
         let mut trun = TrackRunBox::default();
         // Why hold the offset in the `mdat` for now: the writer moves it past
         // the `moof` and the header of the `mdat` once their length is known,
-        // and the bound `handle_sample` keeps holds it within `i32`.
+        // and the bound `handle_location` keeps holds it within `i32`.
         trun.data_offset = i32::try_from(offset).ok();
         let first_flags = run.first().map(|sample| sample.sample_flags);
         if !flags_in_rows && first_flags != default_sample_flags {

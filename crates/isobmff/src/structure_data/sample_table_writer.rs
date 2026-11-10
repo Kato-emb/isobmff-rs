@@ -31,7 +31,7 @@ struct Sample {
 /// The writer is created with what describes the samples of the track: its
 /// sample entries and its data references.
 /// [`handle_location`](Self::handle_location) takes the samples of the track
-/// in decoding order, and [`finish`](Self::finish) returns the `stbl` that
+/// in decoding order, and [`write_sample_table`](Self::write_sample_table) returns the `stbl` that
 /// declares them, with those sample entries. The tables are the shortest the
 /// samples allow:
 ///
@@ -90,7 +90,7 @@ struct Sample {
 /// for &location in &locations {
 ///     writer.handle_location(location)?;
 /// }
-/// let stbl = writer.finish();
+/// let stbl = writer.write_sample_table();
 ///
 /// // The table declares the samples where they lie
 /// let mut written = movie.clone();
@@ -125,7 +125,7 @@ impl SampleTableWriter {
     /// Creates a writer of the samples of a track that the sample entries `stsd` describe, their media data where the data references `dref` name, taking at most `sample_count_limit` samples
     ///
     /// The writer keeps some tens of bytes for each sample until
-    /// [`finish`](Self::finish). A table counts its samples in 32 bits, so
+    /// [`write_sample_table`](Self::write_sample_table). A table counts its samples in 32 bits, so
     /// the writer takes no more than `u32::MAX` whatever the limit.
     #[must_use]
     pub fn new(
@@ -147,7 +147,7 @@ impl SampleTableWriter {
         }
     }
 
-    /// Whether the writer holds a sample taken since it was created or last finished
+    /// Whether the writer holds a sample taken since it was created or last wrote a table
     #[must_use]
     pub fn has_samples(&self) -> bool {
         !self.samples.is_empty()
@@ -255,7 +255,7 @@ impl SampleTableWriter {
     /// The writer then holds no sample, and takes those of another track
     /// described as the samples taken were.
     #[must_use]
-    pub fn finish(&mut self) -> SampleTableBox {
+    pub fn write_sample_table(&mut self) -> SampleTableBox {
         let samples = self.samples.as_slice();
         let count = |run: &[Sample]| u32::try_from(run.len()).unwrap_or(u32::MAX);
 

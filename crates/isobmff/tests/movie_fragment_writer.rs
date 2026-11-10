@@ -41,14 +41,27 @@ mod tests {
         }
     }
 
-    /// Writes the fragment of `samples` after `file`, and their bytes after it, each sample as many bytes of its index as its size; returns where each sample lies
+    /// The sample `properties` declares, at `offset` from the first byte of the media data of its fragment, of `size` bytes
+    fn at(properties: SampleProperties, offset: u64, size: u32) -> SampleLocation {
+        SampleLocation {
+            properties,
+            offset,
+            size,
+        }
+    }
+
+    /// Writes the fragment of `samples`, their bytes one after another in the order given, after `file`, and their bytes after it, each sample as many bytes of its index as its size; returns where each sample lies in `file`
     fn write_fragment(
         writer: &mut MovieFragmentWriter,
         samples: &[(SampleProperties, u32)],
         file: &mut Vec<u8>,
     ) -> Vec<SampleLocation> {
+        let mut offset = 0;
         for &(properties, size) in samples {
-            writer.handle_sample(properties, size).unwrap();
+            writer
+                .handle_location(at(properties, offset, size))
+                .unwrap();
+            offset = offset.checked_add(u64::from(size)).unwrap();
         }
         writer.write_movie_fragment(file).unwrap();
         let mut locations = Vec::new();
@@ -128,6 +141,56 @@ mod tests {
     }
 
     #[test]
+    fn the_samples_lie_where_their_offsets_place_them_in_the_media_data_whatever_the_order_handed_over()
+     {
+        let moov = three_tracks();
+        let mut writer = MovieFragmentWriter::new(&moov, 16);
+        let samples = [
+            at(sample(1, 0, 10), 10, 1),
+            at(sample(2, 0, 10), 0, 10),
+            at(sample(1, 10, 10), 11, 2),
+            at(sample(1, 20, 10), 20, 1),
+        ];
+        for location in samples {
+            writer.handle_location(location).unwrap();
+        }
+        let mut file = Vec::new();
+        writer.write_movie_fragment(&mut file).unwrap();
+        let moof = movie_fragment_at(&file, 0);
+        let media_data = u64::try_from(file.len()).unwrap();
+        file.extend([0; 21]);
+
+        let mut reader = StructureDataReader::new(16);
+        assert_eq!(reader.handle_movie(&moov).unwrap().count(), 0);
+        let mut resolved: Vec<_> = reader.handle_movie_fragment(&moof, 0).unwrap().collect();
+        resolved.sort_by_key(|location| location.offset);
+        let mut expected = samples.map(|location| SampleLocation {
+            offset: media_data + location.offset,
+            ..location
+        });
+        expected.sort_by_key(|location| location.offset);
+        assert_eq!(
+            (
+                resolved,
+                moof.traf
+                    .iter()
+                    .map(|traf| traf.trun.len())
+                    .collect::<Vec<_>>(),
+                file.get(
+                    usize::try_from(media_data).unwrap() - 16..usize::try_from(media_data).unwrap()
+                ),
+            ),
+            (
+                expected.to_vec(),
+                vec![2, 1],
+                isobmff::framing::media_data_header(21)
+                    .as_ref()
+                    .map(<[u8; 16]>::as_slice),
+            )
+        );
+    }
+
+    #[test]
     fn what_every_sample_of_a_track_fragment_shares_is_declared_once_in_its_header() {
         let moov = three_tracks();
         let mut writer = MovieFragmentWriter::new(&moov, 16);
@@ -185,16 +248,16 @@ mod tests {
         let mut flags_too_wide = sample(1, 10, 10);
         flags_too_wide.sample_flags.is_leading = 4;
         let results = [
-            writer.handle_sample(sample(4, 0, 10), 1),
-            writer.handle_sample(described_by_2, 1),
-            writer.handle_sample(sample(3, 0, 10), 1),
-            writer.handle_sample(sample(1, 0, 10), 1),
-            writer.handle_sample(sample(1, 5, 10), 1),
-            writer.handle_sample(far_composed, 1),
-            writer.handle_sample(flags_too_wide, 1),
-            writer.handle_sample(sample(1, 10, 10), u32::MAX),
-            writer.handle_sample(sample(1, 10, 10), 1),
-            writer.handle_sample(sample(1, 20, 10), 1),
+            writer.handle_location(at(sample(4, 0, 10), 0, 1)),
+            writer.handle_location(at(described_by_2, 0, 1)),
+            writer.handle_location(at(sample(3, 0, 10), 0, 1)),
+            writer.handle_location(at(sample(1, 0, 10), 0, 1)),
+            writer.handle_location(at(sample(1, 5, 10), 1, 1)),
+            writer.handle_location(at(far_composed, 1, 1)),
+            writer.handle_location(at(flags_too_wide, 1, 1)),
+            writer.handle_location(at(sample(1, 10, 10), 1, u32::MAX)),
+            writer.handle_location(at(sample(1, 10, 10), 1, 1)),
+            writer.handle_location(at(sample(1, 20, 10), 2, 1)),
         ];
         assert_eq!(
             results.map(|result| result.map_err(|error| {
@@ -235,8 +298,12 @@ mod tests {
         let mut written = Vec::new();
         writer.write_movie_fragment(&mut written).unwrap();
         let mut taken_alone = MovieFragmentWriter::new(&moov, 2);
-        taken_alone.handle_sample(sample(1, 0, 10), 1).unwrap();
-        taken_alone.handle_sample(sample(1, 10, 10), 1).unwrap();
+        taken_alone
+            .handle_location(at(sample(1, 0, 10), 0, 1))
+            .unwrap();
+        taken_alone
+            .handle_location(at(sample(1, 10, 10), 1, 1))
+            .unwrap();
         let mut expected = Vec::new();
         taken_alone.write_movie_fragment(&mut expected).unwrap();
         assert_eq!(written, expected);

@@ -7,8 +7,8 @@ use isobmff_core::BoxEncode;
 
 use super::movie::{append_encoded, check_track, data_reference, movie_box, track_box};
 use super::{Error, MovieDescription, MuxerConfig, TrackDescription};
-use crate::SampleProperties;
 use crate::structure_data::{self, MovieFragmentWriter, SampleTableWriter};
+use crate::{SampleLocation, SampleProperties};
 
 /// Where a fragmented muxer stands
 #[derive(Debug, Clone)]
@@ -231,7 +231,11 @@ impl FragmentedMovieFileMuxer {
                 }
                 let mut writer = MovieFragmentWriter::new(&moov, self.config.sample_count_limit);
                 writer
-                    .handle_sample(properties, size)
+                    .handle_location(SampleLocation {
+                        properties,
+                        offset: 0,
+                        size,
+                    })
                     .map_err(from_fragment)?;
                 append_encoded(&moov, &mut self.output)?;
                 self.state = State::Fragments {
@@ -250,7 +254,11 @@ impl FragmentedMovieFileMuxer {
                     return Err(Error::BufferFull { length });
                 }
                 writer
-                    .handle_sample(properties, size)
+                    .handle_location(SampleLocation {
+                        properties,
+                        offset: u64::try_from(media_data.len()).map_err(|_| Error::Overflow)?,
+                        size,
+                    })
                     .map_err(from_fragment)?;
                 media_data.extend_from_slice(bytes);
                 Ok(())
@@ -456,7 +464,8 @@ fn fragmented_movie_box(movie: &MovieDescription, tracks: &[TrackDescription]) -
     let mut trak = Vec::with_capacity(tracks.len());
     let mut mvex = MovieExtendsBox::default();
     for track in tracks {
-        let stbl = SampleTableWriter::new(&track.sample_entries, &data_reference(), 0).finish();
+        let stbl = SampleTableWriter::new(&track.sample_entries, &data_reference(), 0)
+            .write_sample_table();
         trak.push(track_box(track, stbl, movie.timescale));
         let mut trex = TrackExtendsBox::default();
         trex.track_id = track.track_id;
