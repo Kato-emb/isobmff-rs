@@ -100,7 +100,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fixture_that_disagrees_with_itself_is_read_through() {
+    fn a_fixture_whose_tables_disagree_reports_the_error_and_lends_the_samples_ffmpeg_reads() {
         let summaries = [
             include_bytes!("../crates/isobmff/tests/fixtures/mismatch_tables.mp4").as_slice(),
             include_bytes!("../crates/isobmff/tests/fixtures/mismatch_chunks.mp4"),
@@ -114,9 +114,12 @@ mod tests {
         assert_eq!(
             summaries,
             [
-                "track 1: 12 samples, 17615 bytes\ntrack 2: 55 samples, 4732 bytes\n",
-                "track 1: 12 samples, 17615 bytes\ntrack 2: 58 samples, 4932 bytes\n",
-                "track 1: 12 samples, 17615 bytes\ntrack 2: 58 samples, 4932 bytes\n",
+                "error: the samples of the `moov` at offset 22595 cannot be resolved as the specification reads them\n\
+                 track 1: 12 samples, 17615 bytes\ntrack 2: 55 samples, 4732 bytes\n",
+                "error: the samples of the `moov` at offset 22595 cannot be resolved as the specification reads them\n\
+                 track 1: 12 samples, 17615 bytes\ntrack 2: 58 samples, 4932 bytes\n",
+                "error: the samples of the `moof` at offset 16904 cannot be resolved as the specification reads them\n\
+                 track 1: 12 samples, 17615 bytes\ntrack 2: 58 samples, 4932 bytes\n",
             ]
         );
     }

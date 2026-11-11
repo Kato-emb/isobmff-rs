@@ -11,7 +11,7 @@ use isobmff_boxes::{
 use isobmff_core::{BoxDefinition, BoxType};
 
 use super::Error;
-use super::mismatch::Mismatch;
+use super::reader::Reading;
 use super::sample::is_in_same_file;
 use crate::{SampleLocation, SampleProperties};
 
@@ -67,18 +67,18 @@ pub(super) fn sample_count(track: &TrackBox) -> Result<u64, Error> {
 /// Appends the samples of `track` to `locations`, in decoding order, and returns the decoding time they end at, or `None` for no sample
 ///
 /// A table that counts another number of samples than the sample size
-/// table, or an entry that names no sample, is read past as the [`Mismatch`]
-/// says, and pushed to `mismatches`. A sample table under which no sample can
-/// be placed is refused.
+/// table, or an entry of the sync sample table that names no sample, is
+/// refused as the specification reads it, and read past as FFmpeg reads
+/// it; a sample table under which no sample can be placed is refused either
+/// way.
 pub(super) fn resolve(
     track: &TrackBox,
     locations: &mut Vec<SampleLocation>,
-    mismatches: &mut Vec<Mismatch>,
+    reading: Reading,
 ) -> Result<Option<u64>, Error> {
     let track_id = track.tkhd.track_id;
     let stbl = &track.mdia.minf.stbl;
     let missing = |box_type| Error::MissingTable { track_id, box_type };
-    let none_placed = |box_type| Error::NoSamplePlaced { track_id, box_type };
     let invalid = |box_type, entry: usize| Error::InvalidEntry {
         track_id,
         box_type,
@@ -91,53 +91,51 @@ pub(super) fn resolve(
         .stts
         .as_ref()
         .ok_or_else(|| missing(TimeToSampleBox::BOX_TYPE))?;
-    let agrees = |mismatches: &mut Vec<Mismatch>, box_type, table_sample_count: u64| {
-        if table_sample_count != sample_count {
-            mismatches.push(Mismatch::SampleCount {
-                track_id,
-                box_type,
-                sample_count,
-                table_sample_count,
-            });
-        }
+    let mismatch = |box_type, table_sample_count| Error::SampleCountMismatch {
+        track_id,
+        box_type,
+        sample_count,
+        table_sample_count,
     };
-    agrees(
-        mismatches,
-        TimeToSampleBox::BOX_TYPE,
-        total(stts.entries.iter().map(|entry| entry.sample_count)).ok_or(overflow)?,
-    );
+    let agrees = |box_type, table_sample_count: u64| match reading {
+        Reading::Specification if table_sample_count != sample_count => {
+            Err(mismatch(box_type, table_sample_count))
+        }
+        Reading::Specification | Reading::AsFfmpeg => Ok(()),
+    };
+    let stts_sample_count =
+        total(stts.entries.iter().map(|entry| entry.sample_count)).ok_or(overflow)?;
+    agrees(TimeToSampleBox::BOX_TYPE, stts_sample_count)?;
     if let Some(ctts) = &stbl.ctts {
         agrees(
-            mismatches,
             CompositionOffsetBox::BOX_TYPE,
             total(ctts.entries.iter().map(|entry| entry.sample_count)).ok_or(overflow)?,
-        );
+        )?;
     }
     if let Some(sdtp) = &stbl.sdtp {
         agrees(
-            mismatches,
             SampleDependencyTypeBox::BOX_TYPE,
             length_of(sdtp.entries.len()),
-        );
+        )?;
     }
     // Why read past the entries of the sync sample table that name no sample
-    // or go back: FFmpeg's mov_build_index does, and still takes the others.
-    let sync_samples = stbl.stss.as_ref().map(|stss| {
-        let mut followed = Vec::with_capacity(stss.sample_numbers.len());
-        for (entry, &sample_number) in stss.sample_numbers.iter().enumerate() {
-            let previous = followed.last().copied().unwrap_or(0);
-            if sample_number > previous && u64::from(sample_number) <= sample_count {
-                followed.push(sample_number);
-            } else {
-                mismatches.push(Mismatch::Entry {
-                    track_id,
-                    box_type: SyncSampleBox::BOX_TYPE,
-                    entry: length_of(entry),
-                });
+    // or go back, as FFmpeg reads them: FFmpeg's mov_build_index does, and
+    // still takes the others.
+    let sync_samples = match &stbl.stss {
+        None => None,
+        Some(stss) => {
+            let mut followed = Vec::with_capacity(stss.sample_numbers.len());
+            for (entry, &sample_number) in stss.sample_numbers.iter().enumerate() {
+                let previous = followed.last().copied().unwrap_or(0);
+                if sample_number > previous && u64::from(sample_number) <= sample_count {
+                    followed.push(sample_number);
+                } else if reading == Reading::Specification {
+                    return Err(invalid(SyncSampleBox::BOX_TYPE, entry));
+                }
             }
+            Some(followed)
         }
-        followed
-    });
+    };
     let stsc = stbl
         .stsc
         .as_ref()
@@ -145,13 +143,13 @@ pub(super) fn resolve(
     let chunk_offsets = chunk_offsets(stbl).ok_or_else(|| missing(ChunkOffsetBox::BOX_TYPE))?;
     let chunk_count = chunk_offsets.len();
     let chunk_samples = chunk_sample_count(stsc, chunk_count, invalid)?;
-    agrees(mismatches, SampleToChunkBox::BOX_TYPE, chunk_samples);
+    agrees(SampleToChunkBox::BOX_TYPE, chunk_samples)?;
     if sample_count == 0 {
         return Ok(None);
     }
     let placed = sample_count.min(chunk_samples);
     if placed == 0 {
-        return Err(none_placed(SampleToChunkBox::BOX_TYPE));
+        return Err(mismatch(SampleToChunkBox::BOX_TYPE, chunk_samples));
     }
     let last_duration = stts
         .entries
@@ -159,7 +157,7 @@ pub(super) fn resolve(
         .rev()
         .find(|entry| entry.sample_count > 0)
         .map(|entry| entry.sample_delta)
-        .ok_or_else(|| none_placed(TimeToSampleBox::BOX_TYPE))?;
+        .ok_or_else(|| mismatch(TimeToSampleBox::BOX_TYPE, stts_sample_count))?;
     for (entry, stsc_entry) in stsc.entries.iter().enumerate() {
         let data_reference_index =
             data_reference_index(&stbl.stsd, stsc_entry.sample_description_index)

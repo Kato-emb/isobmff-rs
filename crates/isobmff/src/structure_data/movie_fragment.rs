@@ -7,7 +7,7 @@ use isobmff_boxes::{
     TrackRunSamples,
 };
 
-use super::mismatch::Mismatch;
+use super::reader::Reading;
 use super::{Error, sample};
 use crate::{SampleLocation, SampleProperties};
 
@@ -64,15 +64,16 @@ pub fn movie_fragment_sample_count(moof: &MovieFragmentBox) -> u64 {
 
 /// Appends the samples of `moof`, the `moof` at file offset `moof_offset`, to `locations`, and moves the decoding time of each track on past them
 ///
-/// A `tfdt` that gives another decoding time than the samples before it in
-/// its track add up to is taken, and pushed to `mismatches`. Leaves `tracks`
-/// as they were where it refuses the box.
+/// A `tfdt` past the decoding time the samples before it in its track add
+/// up to is taken, §8.8.12.1. One before it is refused as the specification
+/// reads it, and taken as FFmpeg reads it. Leaves `tracks` as they were
+/// where it refuses the box.
 pub(super) fn resolve(
     moof: &MovieFragmentBox,
     moof_offset: u64,
     tracks: &mut [FragmentTrack],
     locations: &mut Vec<SampleLocation>,
-    mismatches: &mut Vec<Mismatch>,
+    reading: Reading,
 ) -> Result<(), Error> {
     // Why move the decoding times on in a copy: a box refused at a later
     // track fragment leaves the tracks as they were.
@@ -141,9 +142,10 @@ pub(super) fn resolve(
         if let Some(tfdt) = &traf.tfdt {
             let found = tfdt.base_media_decode_time;
             if let Some(expected) = *decoding_time
-                && expected != found
+                && found < expected
+                && reading == Reading::Specification
             {
-                mismatches.push(Mismatch::DecodingTime {
+                return Err(Error::DecodingTimeMismatch {
                     track_id,
                     expected,
                     found,

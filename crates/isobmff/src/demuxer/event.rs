@@ -16,17 +16,12 @@ pub enum Event<'a> {
     /// An `styp` of the file, read into its value: the brands of the segment
     /// it opens, ISO/IEC 14496-12 §8.14.2
     SegmentType(SegmentTypeBox),
-    /// The `moov` of the file, read into its value; each
-    /// [`Event::Mismatch`] of it follows, then the location of each of its
-    /// samples as [`Event::SampleLocation`]
+    /// The `moov` of the file, read into its value; the location of each of
+    /// its samples follows as [`Event::SampleLocation`]
     Movie(alloc::boxed::Box<MovieBox>),
-    /// A `moof` of the file, read into its value; each [`Event::Mismatch`]
-    /// of it follows, then the location of each of the samples it adds as
-    /// [`Event::SampleLocation`]
+    /// A `moof` of the file, read into its value; the location of each of
+    /// the samples it adds follows as [`Event::SampleLocation`]
     MovieFragment(alloc::boxed::Box<MovieFragmentBox>),
-    /// Where the `moov` or the `moof` reported last disagrees with itself,
-    /// and which side was taken; demuxing goes on
-    Mismatch(structure_data::Mismatch),
     /// Where the bytes of a sample of the `moov` or of a `moof` lie, for
     /// every sample of every track, in the order of their file offsets
     /// within the box
@@ -85,8 +80,10 @@ pub enum Error {
         /// Why the box does not read
         source: isobmff_core::Error,
     },
-    /// The samples a `moov` or a `moof` declares cannot be resolved; no
-    /// location is reported for them
+    /// The samples a `moov` or a `moof` declares cannot be resolved as the
+    /// specification reads them; the box and the location of each of its
+    /// samples follow where they resolve as FFmpeg reads them, and none
+    /// otherwise
     StructureData {
         /// File offset of the box
         offset: u64,
@@ -131,7 +128,7 @@ impl fmt::Display for Error {
                 offset, box_type, ..
             } => write!(
                 formatter,
-                "the samples of the `{box_type}` at offset {offset} cannot be resolved"
+                "the samples of the `{box_type}` at offset {offset} cannot be resolved as the specification reads them"
             ),
             Self::DuplicateMovie { offset } => write!(
                 formatter,

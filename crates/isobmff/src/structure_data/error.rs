@@ -28,21 +28,27 @@ pub enum Error {
         /// Type of the box missing
         box_type: BoxType,
     },
-    /// A table of a track places no sample, though the sample size table of
-    /// the track counts some: the chunks place none, or the time-to-sample
-    /// table gives no duration
+    /// A table of a track counts another number of samples than the sample
+    /// size table of the track does, which gives the number of samples in
+    /// the track, ISO/IEC 14496-12 §8.7.3.2
     ///
-    /// A table that counts another number of samples, and places some, is
-    /// read past as [`Mismatch::SampleCount`](super::Mismatch::SampleCount)
-    /// says.
-    NoSamplePlaced {
+    /// The specification recommends against such tables, and gives no value
+    /// to a sample past the shorter of them, so no location can be made for
+    /// it as the specification reads them.
+    SampleCountMismatch {
         /// `track_ID` of the track
         track_id: u32,
-        /// Type of the table that places no sample
+        /// Type of the box whose count differs
         box_type: BoxType,
+        /// Number of samples the sample size table counts
+        sample_count: u64,
+        /// Number of samples the box counts
+        table_sample_count: u64,
     },
     /// An entry of a table of a track holds a value the table does not allow,
-    /// such as a `first_chunk` that does not increase
+    /// such as a `first_chunk` that does not increase, or a sync sample
+    /// number that names no sample of the track or is not after the one
+    /// before it, ISO/IEC 14496-12 §8.6.2.1
     InvalidEntry {
         /// `track_ID` of the track
         track_id: u32,
@@ -93,6 +99,17 @@ pub enum Error {
         /// `track_ID` of the track
         track_id: u32,
     },
+    /// The `tfdt` of a track fragment gives a decoding time less than the
+    /// `sample_duration`s of the samples before it in the track add up to,
+    /// which ISO/IEC 14496-12 §8.8.12.1 forbids
+    DecodingTimeMismatch {
+        /// `track_ID` of the track
+        track_id: u32,
+        /// Decoding time the durations of the samples before add up to
+        expected: u64,
+        /// Decoding time the `tfdt` gives
+        found: u64,
+    },
     /// A sample is of another track than the samples a
     /// [`SampleTableWriter`](super::SampleTableWriter) has taken
     OtherTrack {
@@ -131,9 +148,14 @@ impl fmt::Display for Error {
                 formatter,
                 "the sample table of track {track_id} has no `{box_type}`"
             ),
-            Self::NoSamplePlaced { track_id, box_type } => write!(
+            Self::SampleCountMismatch {
+                track_id,
+                box_type,
+                sample_count,
+                table_sample_count,
+            } => write!(
                 formatter,
-                "the `{box_type}` of track {track_id} places no sample, and the sample size table counts some"
+                "the `{box_type}` of track {track_id} counts {table_sample_count} samples, and the sample size table {sample_count}"
             ),
             Self::InvalidEntry {
                 track_id,
@@ -176,6 +198,14 @@ impl fmt::Display for Error {
                 formatter,
                 "a sample of track {track_id} takes a value neither its tfhd nor a trex gives"
             ),
+            Self::DecodingTimeMismatch {
+                track_id,
+                expected,
+                found,
+            } => write!(
+                formatter,
+                "the tfdt of track {track_id} gives decoding time {found}, less than the {expected} the samples before it add up to"
+            ),
             Self::OtherTrack { track_id, found } => write!(
                 formatter,
                 "a sample of track {found} follows those of track {track_id}"
@@ -199,7 +229,7 @@ impl core::error::Error for Error {
             Self::Encode(source) => Some(source),
             Self::SampleCountOverLimit { .. }
             | Self::MissingTable { .. }
-            | Self::NoSamplePlaced { .. }
+            | Self::SampleCountMismatch { .. }
             | Self::InvalidEntry { .. }
             | Self::MediaDataElsewhere { .. }
             | Self::Overflow { .. }
@@ -208,6 +238,7 @@ impl core::error::Error for Error {
             | Self::MovieFragmentWithoutMovie
             | Self::UnknownTrack { .. }
             | Self::MissingDefault { .. }
+            | Self::DecodingTimeMismatch { .. }
             | Self::OtherTrack { .. }
             | Self::DecodingTimeGap { .. } => None,
         }

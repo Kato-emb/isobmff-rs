@@ -14,7 +14,7 @@ mod tests {
     use std::path::Path;
 
     use isobmff::framing::{BoxReader, Event, FramerConfig};
-    use isobmff::structure_data::{Error, Mismatch, StructureDataReader};
+    use isobmff::structure_data::{Error, StructureDataReader};
     use isobmff::{SampleLocation, SampleProperties};
     use isobmff_boxes::{
         MovieBox, MovieExtendsBox, MovieFragmentBox, SampleFlags, TrackExtendsBox,
@@ -95,7 +95,8 @@ mod tests {
 
     #[test]
     #[ignore = "needs ffprobe"]
-    fn the_fixtures_the_specification_does_not_allow_resolve_to_the_packets_ffmpeg_reads() {
+    fn the_fixtures_whose_tables_disagree_read_as_ffmpeg_reads_them_resolve_to_the_packets_ffmpeg_reads()
+     {
         for name in [
             "mismatch_tables.mp4",
             "mismatch_chunks.mp4",
@@ -103,8 +104,19 @@ mod tests {
         ] {
             let (file, path) = fixture(name);
             let (movie, fragments) = structure_data_of(&file);
-            let ours = by_track(&locations(&movie.unwrap(), &fragments).unwrap());
-            assert_eq!(Some(ours), ffprobe_by_track(&path), "{name}");
+            let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
+            let mut found: Vec<_> = reader
+                .handle_movie_as_ffmpeg_reads(&movie.unwrap())
+                .unwrap()
+                .collect();
+            for (offset, moof) in &fragments {
+                found.extend(
+                    reader
+                        .handle_movie_fragment_as_ffmpeg_reads(moof, *offset)
+                        .unwrap(),
+                );
+            }
+            assert_eq!(Some(by_track(&found)), ffprobe_by_track(&path), "{name}");
         }
     }
 
@@ -298,45 +310,39 @@ mod tests {
         fragment
     }
 
-    fn time_mismatch(expected: u64, found: u64) -> Mismatch {
-        Mismatch::DecodingTime {
-            track_id: 1,
-            expected,
-            found,
-        }
-    }
-
     #[test]
-    fn a_tfdt_that_disagrees_with_the_samples_before_it_is_taken_and_reported_for_its_fragment() {
+    fn a_tfdt_past_the_samples_before_it_is_taken_and_one_before_them_is_refused_and_taken_as_ffmpeg_reads_it()
+     {
         let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
-        let mut found: Vec<_> = reader
+        let _ = reader
             .handle_movie(&movie_with_samples_and_fragments())
             .unwrap()
-            .collect();
-        let mut mismatches = Vec::new();
+            .count();
+        let mut found = Vec::new();
         for (offset, base) in [(1000, 20), (2000, 70), (3000, 50)] {
-            found.extend(
+            found.push(
                 reader
                     .handle_movie_fragment(&moof([traf_at(base)]), offset)
-                    .unwrap(),
+                    .map(Iterator::collect::<Vec<_>>),
             );
-            mismatches.push(reader.mismatches().to_vec());
         }
+        let as_ffmpeg: Vec<_> = reader
+            .handle_movie_fragment_as_ffmpeg_reads(&moof([traf_at(50)]), 3000)
+            .unwrap()
+            .collect();
         assert_eq!(
-            (found, mismatches),
+            (found, as_ffmpeg),
             (
                 vec![
-                    at(100, 2, 0, 10),
-                    at(102, 3, 10, 10),
-                    at(1000, 4, 20, 20),
-                    at(2000, 4, 70, 20),
-                    at(3000, 4, 50, 20),
+                    Ok(vec![at(1000, 4, 20, 20)]),
+                    Ok(vec![at(2000, 4, 70, 20)]),
+                    Err(Error::DecodingTimeMismatch {
+                        track_id: 1,
+                        expected: 90,
+                        found: 50
+                    }),
                 ],
-                vec![
-                    vec![],
-                    vec![time_mismatch(40, 70)],
-                    vec![time_mismatch(90, 50)]
-                ]
+                vec![at(3000, 4, 50, 20)]
             )
         );
     }
@@ -351,36 +357,32 @@ mod tests {
             .handle_movie_fragment(&moof([traf_at(219)]), 1000)
             .unwrap()
             .collect();
-        assert_eq!(
-            (found, reader.mismatches().len()),
-            (vec![at(1000, 4, 219, 20)], 0)
-        );
+        assert_eq!(found, vec![at(1000, 4, 219, 20)]);
     }
 
     #[test]
-    fn a_fragment_refused_has_no_mismatch() {
+    fn a_fragment_refused_for_its_tfdt_leaves_the_decoding_times_as_they_were() {
         let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
         let _ = reader
             .handle_movie(&movie_with_samples_and_fragments())
             .unwrap()
             .count();
-        let _ = reader
-            .handle_movie_fragment(&moof([traf_at(500)]), 0)
+        let refused = reader
+            .handle_movie_fragment(&moof([traf(1, 1, None), traf_at(0)]), 1000)
+            .map(|_| ());
+        let next: Vec<_> = reader
+            .handle_movie_fragment(&moof([traf(1, 1, None)]), 2000)
             .unwrap()
-            .count();
-        let mismatched = reader.mismatches().to_vec();
+            .collect();
         assert_eq!(
+            (refused, next),
             (
-                mismatched,
-                reader
-                    .handle_movie_fragment(&moof([traf_at(900), traf(2, 1, None)]), 0)
-                    .map(|_| ()),
-                reader.mismatches().len()
-            ),
-            (
-                vec![time_mismatch(20, 500)],
-                Err(Error::UnknownTrack { track_id: 2 }),
-                0
+                Err(Error::DecodingTimeMismatch {
+                    track_id: 1,
+                    expected: 40,
+                    found: 0
+                }),
+                vec![at(2000, 4, 20, 20)]
             )
         );
     }

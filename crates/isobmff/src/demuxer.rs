@@ -37,8 +37,6 @@ enum State {
 
 /// What the demuxer holds, in its state, that decides its next step
 enum Observation {
-    /// A mismatch of the box taken last not yet reported
-    Mismatch(structure_data::Mismatch),
     /// A location not yet reported
     Unreported(SampleLocation),
     /// The next sample of a subscribed track wanted, at this index of the
@@ -85,7 +83,26 @@ enum BoxRead {
     /// A `moof`, whose locations now follow those of [`Samples::locations`]
     /// still wanted
     MovieFragment(alloc::boxed::Box<MovieFragmentBox>),
+    /// A `moov` or a `moof` the structure-data refuses as the specification
+    /// reads it, with the error to report
+    Refused {
+        error: Error,
+        refused: Refused,
+    },
+    /// A box refused before, its error reported, to be read as FFmpeg reads it
+    Held(Refused),
     Event(Event<'static>),
+}
+
+/// A `moov` or a `moof` the structure-data refused, held until its error is reported
+#[derive(Debug, Clone)]
+enum Refused {
+    Movie(alloc::boxed::Box<MovieBox>),
+    MovieFragment {
+        /// File offset of the `moof`
+        offset: u64,
+        moof: alloc::boxed::Box<MovieFragmentBox>,
+    },
 }
 
 /// The samples of the `moov`, and how far they are reported and their bytes gathered
@@ -121,7 +138,9 @@ struct Samples {
 /// read as one input, the decoding times of each track going on across them.
 /// A sample before a `moof` is not requested once the `moof` is read.
 /// Handing input over never fails: what cannot be read, such as a `moof`
-/// before any `moov`, is reported as [`Event::Error`]. Which tracks to
+/// before any `moov`, is reported as [`Event::Error`]. What the reading of
+/// the specification refuses, the demuxer reads as FFmpeg does once the
+/// error is reported; what that refuses too is left out. Which tracks to
 /// subscribe to, and whether to read the file where the demuxer asks, are the
 /// caller's choice; the demuxer reads no sample of a track not subscribed to.
 /// A caller that cannot seek, and finds the position `required_input` names
@@ -169,15 +188,14 @@ struct Samples {
 pub struct Demuxer {
     boxes: BoxReader,
     structure_data: StructureDataReader,
-    // Why count the mismatches reported rather than copy them: the reader
-    // holds those of the box it took last until it takes the next, which it
-    // takes only once every one is reported.
-    mismatches_reported: usize,
     sample_count_limit: u64,
     sample_size_limit: u64,
     state: State,
     samples: Samples,
     pending: Option<Pending>,
+    // Why hold the box refused rather than read it as FFmpeg does at once:
+    // its error is reported first, and one event is held at a time.
+    refused: Option<Refused>,
     // Why hold that the input ended rather than ask the box reader: it wants
     // no input either once no box follows that it can find, while samples
     // may still be wanted.
@@ -198,7 +216,6 @@ impl Demuxer {
         Self {
             boxes: BoxReader::new(framer),
             structure_data: StructureDataReader::new(config.sample_count_limit),
-            mismatches_reported: 0,
             sample_count_limit: config.sample_count_limit,
             sample_size_limit: config.sample_size_limit,
             state: State::NoMovie,
@@ -210,6 +227,7 @@ impl Demuxer {
                 subscribed: Vec::new(),
             },
             pending: None,
+            refused: None,
             finished: false,
         }
     }
@@ -350,18 +368,11 @@ impl Demuxer {
 
     /// What the demuxer holds, in its state, and what the box reader reported, that decides its next step
     fn observe(&self, read: Option<BoxRead>) -> Observation {
-        // Why the box first: the box reader is asked only once every mismatch
-        // and every location is reported, and the `moov` it reports brings
-        // the mismatches and the locations that follow it.
+        // Why the box first: the box reader is asked only once every location
+        // is reported, and the `moov` it reports brings the locations that
+        // follow it.
         if let Some(read) = read {
             return Observation::Box(read);
-        }
-        if let Some(&mismatch) = self
-            .structure_data
-            .mismatches()
-            .get(self.mismatches_reported)
-        {
-            return Observation::Mismatch(mismatch);
         }
         let samples = &self.samples;
         if let Some(&location) = samples.locations.get(samples.reported) {
@@ -406,24 +417,16 @@ impl Demuxer {
             // the samples in it.
             let read = match self.state {
                 State::NoMovie | State::Movie
-                    // Why not `==` for the mismatches: a box the reader
-                    // refuses leaves it none, while the count stays at those
-                    // of the box before.
-                    if self.samples.reported == self.samples.locations.len()
-                        && self.mismatches_reported >= self.structure_data.mismatches().len() =>
+                    if self.samples.reported == self.samples.locations.len() =>
                 {
-                    self.read_box()
+                    match self.refused.take() {
+                        Some(refused) => Some(BoxRead::Held(refused)),
+                        None => self.read_box(),
+                    }
                 }
                 State::NoMovie | State::Movie | State::Gathering { .. } => None,
             };
             let (next_state, step) = match (self.state, self.observe(read)) {
-                (state, Observation::Mismatch(mismatch)) => {
-                    self.mismatches_reported = self.mismatches_reported.saturating_add(1);
-                    (
-                        state,
-                        Step::Output(Pending::Ready(Event::Mismatch(mismatch))),
-                    )
-                }
                 (state, Observation::Unreported(location)) => {
                     self.samples.reported = self.samples.reported.saturating_add(1);
                     // Why sort once every location is reported: the samples of
@@ -481,6 +484,43 @@ impl Demuxer {
                     state,
                     Step::Output(Pending::Ready(Event::MovieFragment(moof))),
                 ),
+                (state, Observation::Box(BoxRead::Refused { error, refused })) => {
+                    self.refused = Some(refused);
+                    (state, Step::Output(Pending::Ready(Event::Error(error))))
+                }
+                // Why read every box refused again rather than those whose
+                // error FFmpeg reads past: no table of which errors those are
+                // is kept, and reading again stops at the same check, most
+                // before any sample is resolved.
+                (state, Observation::Box(BoxRead::Held(Refused::Movie(movie)))) => {
+                    match self.structure_data.handle_movie_as_ffmpeg_reads(&movie) {
+                        Ok(locations) => {
+                            self.samples.locations.clear();
+                            self.samples.locations.extend(locations);
+                            (
+                                State::Movie,
+                                Step::Output(Pending::Ready(Event::Movie(movie))),
+                            )
+                        }
+                        Err(_) => (state, Step::Continue),
+                    }
+                }
+                (
+                    state,
+                    Observation::Box(BoxRead::Held(Refused::MovieFragment { offset, moof })),
+                ) => match self
+                    .structure_data
+                    .handle_movie_fragment_as_ffmpeg_reads(&moof, offset)
+                {
+                    Ok(locations) => {
+                        self.samples.locations.extend(locations);
+                        (
+                            state,
+                            Step::Output(Pending::Ready(Event::MovieFragment(moof))),
+                        )
+                    }
+                    Err(_) => (state, Step::Continue),
+                },
                 (state, Observation::Box(BoxRead::Event(event))) => {
                     (state, Step::Output(Pending::Ready(event)))
                 }
@@ -514,6 +554,11 @@ impl Demuxer {
                 payload,
                 ..
             } => {
+                let refused = |source| Error::StructureData {
+                    offset,
+                    box_type,
+                    source,
+                };
                 let decode_error = |source| {
                     BoxRead::Event(Event::Error(Error::Decode {
                         offset,
@@ -550,25 +595,26 @@ impl Demuxer {
                             // a `moof` resolved.
                             let held = length_of(samples.locations.len())
                                 .saturating_add(structure_data::movie_fragment_sample_count(&moof));
-                            let resolved = if held > self.sample_count_limit {
-                                Err(structure_data::Error::SampleCountOverLimit {
-                                    sample_count: held,
-                                    limit: self.sample_count_limit,
-                                })
+                            if held > self.sample_count_limit {
+                                BoxRead::Event(Event::Error(refused(
+                                    structure_data::Error::SampleCountOverLimit {
+                                        sample_count: held,
+                                        limit: self.sample_count_limit,
+                                    },
+                                )))
                             } else {
-                                self.structure_data
-                                    .handle_movie_fragment(&moof, offset)
-                                    .map(|locations| self.samples.locations.extend(locations))
-                            };
-                            match resolved {
-                                Err(error) => BoxRead::Event(Event::Error(Error::StructureData {
-                                    offset,
-                                    box_type,
-                                    source: error,
-                                })),
-                                Ok(()) => {
-                                    self.mismatches_reported = 0;
-                                    BoxRead::MovieFragment(alloc::boxed::Box::new(moof))
+                                match self.structure_data.handle_movie_fragment(&moof, offset) {
+                                    Ok(locations) => {
+                                        self.samples.locations.extend(locations);
+                                        BoxRead::MovieFragment(alloc::boxed::Box::new(moof))
+                                    }
+                                    Err(error) => BoxRead::Refused {
+                                        error: refused(error),
+                                        refused: Refused::MovieFragment {
+                                            offset,
+                                            moof: alloc::boxed::Box::new(moof),
+                                        },
+                                    },
                                 }
                             }
                         }
@@ -579,15 +625,13 @@ impl Demuxer {
                     match MovieBox::decode_payload(payload) {
                         Err(source) => decode_error(source),
                         Ok(movie) => match self.structure_data.handle_movie(&movie) {
-                            Err(error) => BoxRead::Event(Event::Error(Error::StructureData {
-                                offset,
-                                box_type,
-                                source: error,
-                            })),
+                            Err(error) => BoxRead::Refused {
+                                error: refused(error),
+                                refused: Refused::Movie(alloc::boxed::Box::new(movie)),
+                            },
                             Ok(locations) => {
                                 self.samples.locations.clear();
                                 self.samples.locations.extend(locations);
-                                self.mismatches_reported = 0;
                                 BoxRead::Movie(alloc::boxed::Box::new(movie))
                             }
                         },

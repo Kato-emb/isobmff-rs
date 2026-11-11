@@ -9,7 +9,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use isobmff::SampleLocation;
-    use isobmff::structure_data::{Error, Mismatch, StructureDataReader};
+    use isobmff::structure_data::{Error, StructureDataReader};
     use std::num::NonZeroU32;
 
     use crate::support::{by_track, ffprobe_by_track, locations, movie_of};
@@ -122,24 +122,29 @@ mod tests {
         );
     }
 
-    /// `(offset, size, decoding_time, sample_duration)` of each sample, and where the movie disagrees with itself
-    type Resolved = (Vec<(u64, u32, u64, u32)>, Vec<Mismatch>);
+    /// `(offset, size, decoding_time, sample_duration)` of each sample
+    type Samples = Vec<(u64, u32, u64, u32)>;
 
-    /// `(offset, size, decoding_time, sample_duration)` of each sample `movie` declares, and where the movie disagrees with itself
-    fn resolved(movie: &isobmff_boxes::MovieBox) -> Result<Resolved, Error> {
+    /// The samples `movie` declares as the specification reads it, and as FFmpeg reads it
+    fn read_both_ways(
+        movie: &isobmff_boxes::MovieBox,
+    ) -> (Result<Samples, Error>, Result<Samples, Error>) {
+        let sample = |location: SampleLocation| {
+            (
+                location.offset,
+                location.size,
+                location.properties.decoding_time,
+                location.properties.sample_duration,
+            )
+        };
         let mut reader = StructureDataReader::new(1024);
-        let samples = reader
-            .handle_movie(movie)?
-            .map(|location| {
-                (
-                    location.offset,
-                    location.size,
-                    location.properties.decoding_time,
-                    location.properties.sample_duration,
-                )
-            })
-            .collect();
-        Ok((samples, reader.mismatches().to_vec()))
+        let specification = reader
+            .handle_movie(movie)
+            .map(|locations| locations.map(sample).collect());
+        let as_ffmpeg = reader
+            .handle_movie_as_ffmpeg_reads(movie)
+            .map(|locations| locations.map(sample).collect());
+        (specification, as_ffmpeg)
     }
 
     /// The `sample_count` of the only run of the time-to-sample table of `trak` set to `sample_count`
@@ -156,8 +161,8 @@ mod tests {
         box_type: isobmff_core::BoxType,
         sample_count: u64,
         table_sample_count: u64,
-    ) -> Mismatch {
-        Mismatch::SampleCount {
+    ) -> Error {
+        Error::SampleCountMismatch {
             track_id: 7,
             box_type,
             sample_count,
@@ -166,55 +171,54 @@ mod tests {
     }
 
     #[test]
-    fn samples_past_the_end_of_the_time_to_sample_table_last_as_long_as_its_last() {
+    fn samples_past_the_time_to_sample_table_last_as_long_as_its_last_as_ffmpeg_reads_them() {
         let trak = durations_counted(track(7, 10, &[1, 2, 3], &[(1, 3)], &[0]), 2);
         assert_eq!(
-            resolved(&movie([trak])),
-            Ok((
-                vec![(0, 1, 0, 10), (1, 2, 10, 10), (3, 3, 20, 10)],
-                vec![mismatch(TimeToSampleBox::BOX_TYPE, 3, 2)]
-            ))
+            read_both_ways(&movie([trak])),
+            (
+                Err(mismatch(TimeToSampleBox::BOX_TYPE, 3, 2)),
+                Ok(vec![(0, 1, 0, 10), (1, 2, 10, 10), (3, 3, 20, 10)])
+            )
         );
     }
 
     #[test]
-    fn durations_past_the_samples_are_not_read() {
+    fn durations_past_the_samples_are_not_read_as_ffmpeg_reads_them() {
         let trak = durations_counted(track(7, 10, &[1, 2], &[(1, 2)], &[0]), 5);
         assert_eq!(
-            resolved(&movie([trak])),
-            Ok((
-                vec![(0, 1, 0, 10), (1, 2, 10, 10)],
-                vec![mismatch(TimeToSampleBox::BOX_TYPE, 2, 5)]
-            ))
+            read_both_ways(&movie([trak])),
+            (
+                Err(mismatch(TimeToSampleBox::BOX_TYPE, 2, 5)),
+                Ok(vec![(0, 1, 0, 10), (1, 2, 10, 10)])
+            )
         );
     }
 
     #[test]
-    fn the_samples_are_those_both_the_sample_size_table_and_the_chunks_place() {
-        let more_in_chunks = track(7, 10, &[1, 2], &[(1, 3)], &[0]);
-        let fewer_in_chunks = track(7, 10, &[1, 2, 3], &[(1, 2)], &[0]);
-        let more_in_chunks = durations_counted(more_in_chunks, 2);
-        let fewer_in_chunks = durations_counted(fewer_in_chunks, 3);
+    fn the_samples_are_those_both_the_sample_size_table_and_the_chunks_place_as_ffmpeg_reads_them()
+    {
+        let more_in_chunks = durations_counted(track(7, 10, &[1, 2], &[(1, 3)], &[0]), 2);
+        let fewer_in_chunks = durations_counted(track(7, 10, &[1, 2, 3], &[(1, 2)], &[0]), 3);
         assert_eq!(
             [
-                resolved(&movie([more_in_chunks])),
-                resolved(&movie([fewer_in_chunks]))
+                read_both_ways(&movie([more_in_chunks])),
+                read_both_ways(&movie([fewer_in_chunks]))
             ],
             [
-                Ok((
-                    vec![(0, 1, 0, 10), (1, 2, 10, 10)],
-                    vec![mismatch(SampleToChunkBox::BOX_TYPE, 2, 3)]
-                )),
-                Ok((
-                    vec![(0, 1, 0, 10), (1, 2, 10, 10)],
-                    vec![mismatch(SampleToChunkBox::BOX_TYPE, 3, 2)]
-                )),
+                (
+                    Err(mismatch(SampleToChunkBox::BOX_TYPE, 2, 3)),
+                    Ok(vec![(0, 1, 0, 10), (1, 2, 10, 10)])
+                ),
+                (
+                    Err(mismatch(SampleToChunkBox::BOX_TYPE, 3, 2)),
+                    Ok(vec![(0, 1, 0, 10), (1, 2, 10, 10)])
+                ),
             ]
         );
     }
 
     #[test]
-    fn samples_past_the_composition_offsets_and_the_dependencies_have_none() {
+    fn samples_past_the_composition_offsets_and_the_dependencies_have_none_as_ffmpeg_reads_them() {
         let mut trak = track(7, 10, &[1, 1, 1], &[(1, 3)], &[0]);
         let stbl = &mut trak.mdia.minf.stbl;
         let mut ctts = CompositionOffsetBox::default();
@@ -227,9 +231,11 @@ mod tests {
         entry.sample_depends_on = 2;
         sdtp.entries = vec![entry; 4];
         stbl.sdtp = Some(sdtp);
+        let movie = movie([trak]);
         let mut reader = StructureDataReader::new(1024);
+        let refused = reader.handle_movie(&movie).map(|_| ());
         let found: Vec<_> = reader
-            .handle_movie(&movie([trak]))
+            .handle_movie_as_ffmpeg_reads(&movie)
             .unwrap()
             .map(|location| {
                 (
@@ -239,69 +245,76 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            (found, reader.mismatches().to_vec()),
+            (refused, found),
             (
-                vec![(20, 2), (0, 2), (0, 2)],
-                vec![
-                    mismatch(CompositionOffsetBox::BOX_TYPE, 3, 1),
-                    mismatch(SampleDependencyTypeBox::BOX_TYPE, 3, 4),
-                ]
+                Err(mismatch(CompositionOffsetBox::BOX_TYPE, 3, 1)),
+                vec![(20, 2), (0, 2), (0, 2)]
             )
         );
     }
 
     #[test]
-    fn a_sync_sample_number_past_the_samples_or_not_after_the_one_before_is_not_read() {
+    fn a_sync_sample_number_past_the_samples_or_not_after_the_one_before_is_not_read_as_ffmpeg_reads_it()
+     {
         let mut trak = track(7, 10, &[1, 1, 1], &[(1, 3)], &[0]);
         let mut stss = SyncSampleBox::default();
         stss.sample_numbers = vec![1, 1, 3, 9];
         trak.mdia.minf.stbl.stss = Some(stss);
+        let movie = movie([trak]);
         let mut reader = StructureDataReader::new(1024);
+        let refused = reader.handle_movie(&movie).map(|_| ());
         let sync: Vec<_> = reader
-            .handle_movie(&movie([trak]))
+            .handle_movie_as_ffmpeg_reads(&movie)
             .unwrap()
             .map(|location| !location.properties.sample_flags.sample_is_non_sync_sample)
             .collect();
-        let ignored = |entry| Mismatch::Entry {
-            track_id: 7,
-            box_type: SyncSampleBox::BOX_TYPE,
-            entry,
-        };
         assert_eq!(
-            (sync, reader.mismatches().to_vec()),
-            (vec![true, false, true], vec![ignored(1), ignored(3)])
+            (refused, sync),
+            (
+                Err(Error::InvalidEntry {
+                    track_id: 7,
+                    box_type: SyncSampleBox::BOX_TYPE,
+                    entry: 1,
+                }),
+                vec![true, false, true]
+            )
         );
     }
 
     #[test]
-    fn a_sample_table_under_which_no_sample_can_be_placed_is_refused() {
+    fn a_sample_table_under_which_no_sample_can_be_placed_is_refused_either_way() {
         let no_durations = durations_counted(track(7, 10, &[1, 2], &[(1, 2)], &[0]), 0);
         let no_chunks = track(7, 10, &[1, 2], &[], &[]);
+        let no_durations_counted = mismatch(TimeToSampleBox::BOX_TYPE, 2, 0);
+        let no_chunk_counted = mismatch(SampleToChunkBox::BOX_TYPE, 2, 0);
         assert_eq!(
             [
-                resolved(&movie([no_durations])),
-                resolved(&movie([no_chunks]))
+                read_both_ways(&movie([no_durations])),
+                read_both_ways(&movie([no_chunks]))
             ],
             [
-                Err(Error::NoSamplePlaced {
-                    track_id: 7,
-                    box_type: TimeToSampleBox::BOX_TYPE,
-                }),
-                Err(Error::NoSamplePlaced {
-                    track_id: 7,
-                    box_type: SampleToChunkBox::BOX_TYPE,
-                }),
+                (Err(no_durations_counted), Err(no_durations_counted)),
+                (Err(no_chunk_counted), Err(no_chunk_counted)),
             ]
         );
     }
 
     #[test]
-    fn a_movie_refused_has_no_mismatch() {
+    fn a_movie_refused_gives_no_track_to_the_movie_fragments_after_it() {
         let mismatched = durations_counted(track(7, 10, &[1, 2], &[(1, 2)], &[0]), 3);
-        let refused = in_another_file(track(8, 1, &[1], &[(1, 1)], &[0]));
         let mut reader = StructureDataReader::new(1024);
-        assert!(reader.handle_movie(&movie([mismatched, refused])).is_err());
-        assert_eq!(reader.mismatches().len(), 0);
+        assert_eq!(
+            (
+                reader.handle_movie(&movie([mismatched])).map(|_| ()),
+                reader
+                    .handle_movie_fragment(&isobmff_boxes::MovieFragmentBox::default(), 0)
+                    .map(|_| ())
+            ),
+            (
+                Err(mismatch(TimeToSampleBox::BOX_TYPE, 2, 3)),
+                Err(Error::MovieFragmentWithoutMovie)
+            )
+        );
     }
 
     #[test]

@@ -5,8 +5,17 @@ use alloc::vec::Vec;
 use isobmff_boxes::{MovieBox, MovieFragmentBox};
 
 use super::movie_fragment::{self, FragmentTrack};
-use super::{Error, Mismatch, sample_table};
+use super::{Error, sample_table};
 use crate::SampleLocation;
+
+/// How a reader reads tables that disagree with each other
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Reading {
+    /// As the specification reads them: the box is refused
+    Specification,
+    /// As FFmpeg's `mov.c` reads them
+    AsFfmpeg,
+}
 
 /// Reader of the samples the structure-data of a file declares, from the boxes read into their values
 ///
@@ -66,8 +75,6 @@ pub struct StructureDataReader {
     /// What the tracks of the `moov` give the samples of their fragments,
     /// once a `moov` was taken
     tracks: Option<Vec<FragmentTrack>>,
-    /// Where the box taken last disagrees with itself
-    mismatches: Vec<Mismatch>,
 }
 
 impl StructureDataReader {
@@ -77,47 +84,28 @@ impl StructureDataReader {
     /// can declare millions, so the reader holds the declared number against
     /// this limit before it allocates room for them.
     #[must_use]
-    pub fn new(sample_count_limit: u64) -> Self {
+    pub const fn new(sample_count_limit: u64) -> Self {
         Self {
             sample_count_limit,
             locations: Vec::new(),
             tracks: None,
-            mismatches: Vec::new(),
         }
-    }
-
-    /// Returns where the box the reader took last disagrees with itself, in the order the reader found them
-    ///
-    /// They are those of the last call of
-    /// [`handle_movie`](Self::handle_movie) or
-    /// [`handle_movie_fragment`](Self::handle_movie_fragment), and the next
-    /// call drops them. A box the reader refuses has none.
-    ///
-    /// ```
-    /// use isobmff::structure_data::StructureDataReader;
-    ///
-    /// let reader = StructureDataReader::new(1024);
-    /// assert_eq!(reader.mismatches(), []);
-    /// ```
-    #[must_use]
-    pub fn mismatches(&self) -> &[Mismatch] {
-        &self.mismatches
     }
 
     /// Returns the location of each sample the tracks of `movie` declare, in the order of their file offsets
     ///
     /// Samples at the same offset keep the order of their tracks in `movie`,
-    /// and within a track the decoding order. A table that counts another
-    /// number of samples than the sample size table, and an entry of the sync
-    /// sample table that names no sample, are read past as FFmpeg and GPAC
-    /// read them, and returned by [`mismatches`](Self::mismatches).
+    /// and within a track the decoding order.
     ///
     /// # Errors
     /// * [`Error::SampleCountOverLimit`]: the tracks declare more samples than
     ///   the limit, checked before anything is allocated for them.
-    /// * [`Error::MissingTable`], [`Error::NoSamplePlaced`],
+    /// * [`Error::MissingTable`], [`Error::SampleCountMismatch`],
     ///   [`Error::InvalidEntry`]: the sample table of a track lacks a table it
-    ///   needs, places no sample, or has a sample-to-chunk entry out of order.
+    ///   needs, or its tables disagree, such as a table that counts another
+    ///   number of samples than the sample size table, §8.7.3, or a sync
+    ///   sample table not in strictly increasing order of sample number,
+    ///   §8.6.2.
     /// * [`Error::MediaDataElsewhere`]: the samples of a track lie in another
     ///   file, or in an `IdentifiedMediaDataBox`.
     /// * [`Error::Overflow`]: a sample lies past the last file offset or
@@ -126,7 +114,57 @@ impl StructureDataReader {
         &mut self,
         movie: &MovieBox,
     ) -> Result<impl ExactSizeIterator<Item = SampleLocation> + '_, Error> {
-        self.mismatches.clear();
+        self.resolve_movie(movie, Reading::Specification)
+    }
+
+    /// Returns the location of each sample the tracks of `movie` declare, in the order of their file offsets, reading tables that disagree as FFmpeg's `mov.c` does
+    ///
+    /// Where the tables of a sample table disagree, which §8.7.3.2 recommends
+    /// against, the specification gives no reading of the samples past the
+    /// shorter table, and [`handle_movie`](Self::handle_movie) refuses it;
+    /// this reads them as FFmpeg does, and resolves the samples as
+    /// `handle_movie` does where the tables agree:
+    ///
+    /// * The samples are those both the sample size table, §8.7.3, and the
+    ///   chunks, §8.7.4, place: as many as the fewer of the two counts.
+    /// * Past the end of the time-to-sample table, §8.6.1.2, each sample
+    ///   lasts as long as its last.
+    /// * Past the end of the composition offset table, §8.6.1.3, a sample has
+    ///   an offset of 0; past the end of the sample dependency table, §8.6.4,
+    ///   its dependencies are unknown.
+    /// * What a table declares past the samples is not read.
+    /// * An entry of the sync sample table, §8.6.2, that names no sample, or
+    ///   is not after the entry before it, is not read.
+    ///
+    /// # Errors
+    /// As [`handle_movie`](Self::handle_movie), but for the disagreements
+    /// above; [`Error::SampleCountMismatch`] where no sample can be placed:
+    /// the chunks place none, or the time-to-sample table gives no duration,
+    /// though the sample size table counts some.
+    ///
+    /// ```
+    /// use isobmff::structure_data::{Error, StructureDataReader};
+    /// use isobmff_boxes::MovieBox;
+    /// use isobmff_core::BoxDefinition;
+    ///
+    /// // A movie whose tables agree reads the same either way
+    /// let movie = MovieBox::default();
+    /// let mut reader = StructureDataReader::new(1024);
+    /// assert_eq!(reader.handle_movie_as_ffmpeg_reads(&movie)?.len(), 0);
+    /// # Ok::<(), Error>(())
+    /// ```
+    pub fn handle_movie_as_ffmpeg_reads(
+        &mut self,
+        movie: &MovieBox,
+    ) -> Result<impl ExactSizeIterator<Item = SampleLocation> + '_, Error> {
+        self.resolve_movie(movie, Reading::AsFfmpeg)
+    }
+
+    fn resolve_movie(
+        &mut self,
+        movie: &MovieBox,
+        reading: Reading,
+    ) -> Result<impl ExactSizeIterator<Item = SampleLocation> + '_, Error> {
         let sample_count = movie
             .trak
             .iter()
@@ -145,9 +183,7 @@ impl StructureDataReader {
             .reserve(usize::try_from(sample_count).unwrap_or(usize::MAX));
         let mut tracks = Vec::with_capacity(movie.trak.len());
         for track in &movie.trak {
-            let next_decoding_time =
-                sample_table::resolve(track, &mut self.locations, &mut self.mismatches)
-                    .inspect_err(|_| self.mismatches.clear())?;
+            let next_decoding_time = sample_table::resolve(track, &mut self.locations, reading)?;
             tracks.push(FragmentTrack::new(movie, track, next_decoding_time));
         }
         self.tracks = Some(tracks);
@@ -161,8 +197,12 @@ impl StructureDataReader {
     /// from the first byte of the `moof` or the end of the data of the track
     /// fragment before it, as §8.8.7.1 Table 6 sets out. Its decoding times
     /// start at the `tfdt` where there is one, and otherwise go on from the
-    /// samples before it in its track, §8.8.12. Each value a sample does not
-    /// carry is taken from the `tfhd`, then from the `trex` of its track.
+    /// samples before it in its track, §8.8.12. A `tfdt` past the time those
+    /// samples add up to extends the last of them, §8.8.12.1: its location,
+    /// returned before, keeps the `sample_duration` it declares, and the
+    /// extended duration is the decoding time of the next sample less its
+    /// own. Each value a sample does not carry is taken from the `tfhd`, then
+    /// from the `trex` of its track.
     ///
     /// # Errors
     /// * [`Error::MovieFragmentWithoutMovie`]: no `moov` was taken; nothing
@@ -177,14 +217,13 @@ impl StructureDataReader {
     ///   an `IdentifiedMediaDataBox`.
     /// * [`Error::SampleDescriptionIndexOutOfRange`]: a sample names a sample
     ///   entry its track does not have.
+    /// * [`Error::DecodingTimeMismatch`]: the `tfdt` of a track fragment is
+    ///   less than the durations of the samples before it in its track add
+    ///   up to, §8.8.12.
     /// * [`Error::Overflow`]: a sample lies past the last file offset or
     ///   decoding time.
     ///
-    /// A `tfdt` that gives another decoding time than the samples before it
-    /// in its track add up to is taken, and returned by
-    /// [`mismatches`](Self::mismatches) as [`Mismatch::DecodingTime`]; the
-    /// samples already returned are left as they were. A box refused leaves
-    /// the decoding times of the tracks as they were.
+    /// A box refused leaves the decoding times of the tracks as they were.
     ///
     /// ```
     /// use isobmff::framing::{BoxReader, Event, FramerConfig};
@@ -230,7 +269,49 @@ impl StructureDataReader {
         moof: &MovieFragmentBox,
         moof_offset: u64,
     ) -> Result<impl ExactSizeIterator<Item = SampleLocation> + '_, Error> {
-        self.mismatches.clear();
+        self.resolve_movie_fragment(moof, moof_offset, Reading::Specification)
+    }
+
+    /// Returns the location of each sample the track fragments of `moof`, the `moof` at file offset `moof_offset`, declare, in the order of their file offsets, reading a `tfdt` that disagrees as FFmpeg's `mov.c` does
+    ///
+    /// Where [`handle_movie_fragment`](Self::handle_movie_fragment) refuses a
+    /// track fragment whose `tfdt` is less than the durations of the samples
+    /// before it in its track add up to, §8.8.12, this takes the time the
+    /// `tfdt` gives, as FFmpeg does, and resolves the samples the same way
+    /// otherwise. The samples already returned are left as they were.
+    ///
+    /// # Errors
+    /// As [`handle_movie_fragment`](Self::handle_movie_fragment), but for
+    /// [`Error::DecodingTimeMismatch`].
+    ///
+    /// ```
+    /// use isobmff::structure_data::{Error, StructureDataReader};
+    /// use isobmff_boxes::{MovieBox, MovieFragmentBox};
+    ///
+    /// // A fragment needs the `moov` of its tracks either way
+    /// let mut reader = StructureDataReader::new(1024);
+    /// assert_eq!(
+    ///     reader.handle_movie_fragment_as_ffmpeg_reads(&MovieFragmentBox::default(), 0).map(|_| ()),
+    ///     Err(Error::MovieFragmentWithoutMovie)
+    /// );
+    /// let _ = reader.handle_movie(&MovieBox::default())?.count();
+    /// assert_eq!(reader.handle_movie_fragment_as_ffmpeg_reads(&MovieFragmentBox::default(), 0)?.len(), 0);
+    /// # Ok::<(), Error>(())
+    /// ```
+    pub fn handle_movie_fragment_as_ffmpeg_reads(
+        &mut self,
+        moof: &MovieFragmentBox,
+        moof_offset: u64,
+    ) -> Result<impl ExactSizeIterator<Item = SampleLocation> + '_, Error> {
+        self.resolve_movie_fragment(moof, moof_offset, Reading::AsFfmpeg)
+    }
+
+    fn resolve_movie_fragment(
+        &mut self,
+        moof: &MovieFragmentBox,
+        moof_offset: u64,
+        reading: Reading,
+    ) -> Result<impl ExactSizeIterator<Item = SampleLocation> + '_, Error> {
         let tracks = self
             .tracks
             .as_mut()
@@ -245,14 +326,7 @@ impl StructureDataReader {
         self.locations.clear();
         self.locations
             .reserve(usize::try_from(sample_count).unwrap_or(usize::MAX));
-        movie_fragment::resolve(
-            moof,
-            moof_offset,
-            tracks,
-            &mut self.locations,
-            &mut self.mismatches,
-        )
-        .inspect_err(|_| self.mismatches.clear())?;
+        movie_fragment::resolve(moof, moof_offset, tracks, &mut self.locations, reading)?;
         self.locations.sort_by_key(|location| location.offset);
         Ok(self.locations.drain(..))
     }

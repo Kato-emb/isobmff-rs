@@ -387,17 +387,15 @@ fn the_memory_a_fragmented_muxer_holds_does_not_grow_with_the_fragments_it_write
 }
 
 #[test]
-fn the_mismatches_a_demuxer_holds_are_those_of_one_box_which_the_payload_limit_bounds() {
+fn what_a_demuxer_holds_of_a_movie_it_refuses_does_not_grow_past_the_entries_of_its_tables() {
     use isobmff::demuxer::Event;
-    use isobmff::structure_data::Mismatch;
     use isobmff_boxes::SyncSampleBox;
     use isobmff_test_support::fixtures::{encoded, movie, track};
 
-    // Why up to 1 KiB under the payload limit: the rest of the `moov` takes
-    // some hundred bytes, and every 4 bytes left are an entry of the sync
-    // sample table, the most mismatches a `moov` under the limit can hold.
-    let most = usize::try_from(DemuxerConfig::default().payload_limit).unwrap() / 4 - 256;
-    for entries in [1 << 12, 1 << 20, most] {
+    // Why subtract 12 bytes an entry: the payload of the `moov`, the sync
+    // sample table read from it, and the entries taken of it each hold 4
+    // bytes an entry, and nothing else may grow with the entries.
+    let held_past_the_table = |entries: usize| {
         let mut trak = track(1, 10, &[1], &[(1, 1)], &[0]);
         let mut stss = SyncSampleBox::default();
         stss.sample_numbers = vec![0; entries];
@@ -405,13 +403,15 @@ fn the_mismatches_a_demuxer_holds_are_those_of_one_box_which_the_payload_limit_b
         let mut moov = movie([trak]);
         moov.mvhd.next_track_id = 2;
         let file = encoded(&moov);
-        let mut mismatches = 0;
+        let mut reported = Vec::new();
         let held = most_held_by(|| {
             let mut demuxer = Demuxer::new(DemuxerConfig::default());
             loop {
                 while let Some(event) = demuxer.poll_event() {
-                    if let Event::Mismatch(_) = event {
-                        mismatches += 1;
+                    match event {
+                        Event::Error(error) => reported.push(format!("{error:?}")),
+                        Event::Movie(_) => reported.push("moov".to_owned()),
+                        _ => {}
                     }
                 }
                 let Some(required) = demuxer.required_input() else {
@@ -425,15 +425,13 @@ fn the_mismatches_a_demuxer_holds_are_those_of_one_box_which_the_payload_limit_b
                 }
             }
         });
-        println!(
-            "held at most {held} bytes reading a moov of {entries} sync sample entries that name no sample, {} per entry, a mismatch {} bytes",
-            held / entries,
-            size_of::<Mismatch>()
-        );
-        assert_eq!(mismatches, entries);
-        // Why twice a mismatch: the mismatches of the box are in one vector,
-        // which grows to twice what it holds at most; the payload, the table
-        // read from it, and the entries taken of it hold 4 bytes an entry.
-        assert!(held <= entries * (2 * size_of::<Mismatch>() + 3 * 4) + 64 * 1024);
-    }
+        (held.saturating_sub(entries * 3 * 4), reported)
+    };
+    let (few, few_reported) = held_past_the_table(1 << 12);
+    let (many, many_reported) = held_past_the_table(1 << 20);
+    println!(
+        "held at most {few} bytes past 12 bytes an entry reading 4096 sync sample entries that name no sample, {many} bytes reading 1048576; reported {few_reported:?}"
+    );
+    assert_eq!(few_reported, many_reported);
+    assert_eq!(many, few);
 }
