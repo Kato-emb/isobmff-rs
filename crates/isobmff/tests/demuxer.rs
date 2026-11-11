@@ -576,8 +576,7 @@ mod tests {
                 table_sample_count,
             }
         };
-        // Why 22595: the `moov` of movie_moov_last.mp4, which the fixtures
-        // change in place, starts there.
+        /// File offset of the `moov` of `movie_moov_last.mp4`, which the fixtures change in place
         const MOOV_OFFSET: u64 = 22595;
         let read = |file| read_disagreeing(file, DemuxerConfig::default());
         assert_eq!(

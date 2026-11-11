@@ -145,7 +145,6 @@ impl StructureDataReader {
     /// ```
     /// use isobmff::structure_data::{Error, StructureDataReader};
     /// use isobmff_boxes::MovieBox;
-    /// use isobmff_core::BoxDefinition;
     ///
     /// // A movie whose tables agree reads the same either way
     /// let movie = MovieBox::default();
