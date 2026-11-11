@@ -157,7 +157,7 @@ mod tests {
             ],
         ];
 
-        let mut reader = StructureDataReader::new(16, 16);
+        let mut reader = StructureDataReader::new(16);
         assert_eq!(reader.handle_movie(&moov).unwrap().count(), 0);
         let mut file = Vec::new();
         for samples in &fragments {
@@ -194,7 +194,7 @@ mod tests {
         let media_data = u64::try_from(file.len()).unwrap();
         file.extend([0; 21]);
 
-        let mut reader = StructureDataReader::new(16, 16);
+        let mut reader = StructureDataReader::new(16);
         assert_eq!(reader.handle_movie(&moov).unwrap().count(), 0);
         let mut resolved: Vec<_> = reader.handle_movie_fragment(&moof, 0).unwrap().collect();
         resolved.sort_by_key(|location| location.offset);

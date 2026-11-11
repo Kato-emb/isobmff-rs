@@ -9,7 +9,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use isobmff::SampleLocation;
-    use isobmff::structure_data::{Error, Leniency, StructureDataReader};
+    use isobmff::structure_data::{Error, Mismatch, StructureDataReader};
     use std::num::NonZeroU32;
 
     use crate::support::{by_track, ffprobe_by_track, locations, movie_of};
@@ -112,7 +112,7 @@ mod tests {
         movie.mvhd.next_track_id = 2;
         assert!(encoded(&movie).len() < 1024);
         assert_eq!(
-            StructureDataReader::new(1024, 16)
+            StructureDataReader::new(1024)
                 .handle_movie(&movie)
                 .map(|_| ()),
             Err(Error::SampleCountOverLimit {
@@ -122,12 +122,12 @@ mod tests {
         );
     }
 
-    /// `(offset, size, decoding_time, sample_duration)` of each sample, and what the reader read past
-    type ReadPast = (Vec<(u64, u32, u64, u32)>, Vec<Leniency>);
+    /// `(offset, size, decoding_time, sample_duration)` of each sample, and where the movie disagrees with itself
+    type Resolved = (Vec<(u64, u32, u64, u32)>, Vec<Mismatch>);
 
-    /// `(offset, size, decoding_time, sample_duration)` of each sample `movie` declares, and what the reader read past
-    fn read_past(movie: &isobmff_boxes::MovieBox) -> Result<ReadPast, Error> {
-        let mut reader = StructureDataReader::new(1024, 16);
+    /// `(offset, size, decoding_time, sample_duration)` of each sample `movie` declares, and where the movie disagrees with itself
+    fn resolved(movie: &isobmff_boxes::MovieBox) -> Result<Resolved, Error> {
+        let mut reader = StructureDataReader::new(1024);
         let samples = reader
             .handle_movie(movie)?
             .map(|location| {
@@ -139,7 +139,7 @@ mod tests {
                 )
             })
             .collect();
-        Ok((samples, reader.leniencies().copied().collect()))
+        Ok((samples, reader.mismatches().to_vec()))
     }
 
     /// The `sample_count` of the only run of the time-to-sample table of `trak` set to `sample_count`
@@ -156,8 +156,8 @@ mod tests {
         box_type: isobmff_core::BoxType,
         sample_count: u64,
         table_sample_count: u64,
-    ) -> Leniency {
-        Leniency::SampleCountMismatch {
+    ) -> Mismatch {
+        Mismatch::SampleCount {
             track_id: 7,
             box_type,
             sample_count,
@@ -169,7 +169,7 @@ mod tests {
     fn samples_past_the_end_of_the_time_to_sample_table_last_as_long_as_its_last() {
         let trak = durations_counted(track(7, 10, &[1, 2, 3], &[(1, 3)], &[0]), 2);
         assert_eq!(
-            read_past(&movie([trak])),
+            resolved(&movie([trak])),
             Ok((
                 vec![(0, 1, 0, 10), (1, 2, 10, 10), (3, 3, 20, 10)],
                 vec![mismatch(TimeToSampleBox::BOX_TYPE, 3, 2)]
@@ -181,7 +181,7 @@ mod tests {
     fn durations_past_the_samples_are_not_read() {
         let trak = durations_counted(track(7, 10, &[1, 2], &[(1, 2)], &[0]), 5);
         assert_eq!(
-            read_past(&movie([trak])),
+            resolved(&movie([trak])),
             Ok((
                 vec![(0, 1, 0, 10), (1, 2, 10, 10)],
                 vec![mismatch(TimeToSampleBox::BOX_TYPE, 2, 5)]
@@ -197,8 +197,8 @@ mod tests {
         let fewer_in_chunks = durations_counted(fewer_in_chunks, 3);
         assert_eq!(
             [
-                read_past(&movie([more_in_chunks])),
-                read_past(&movie([fewer_in_chunks]))
+                resolved(&movie([more_in_chunks])),
+                resolved(&movie([fewer_in_chunks]))
             ],
             [
                 Ok((
@@ -227,7 +227,7 @@ mod tests {
         entry.sample_depends_on = 2;
         sdtp.entries = vec![entry; 4];
         stbl.sdtp = Some(sdtp);
-        let mut reader = StructureDataReader::new(1024, 16);
+        let mut reader = StructureDataReader::new(1024);
         let found: Vec<_> = reader
             .handle_movie(&movie([trak]))
             .unwrap()
@@ -239,7 +239,7 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            (found, reader.leniencies().copied().collect::<Vec<_>>()),
+            (found, reader.mismatches().to_vec()),
             (
                 vec![(20, 2), (0, 2), (0, 2)],
                 vec![
@@ -256,19 +256,19 @@ mod tests {
         let mut stss = SyncSampleBox::default();
         stss.sample_numbers = vec![1, 1, 3, 9];
         trak.mdia.minf.stbl.stss = Some(stss);
-        let mut reader = StructureDataReader::new(1024, 16);
+        let mut reader = StructureDataReader::new(1024);
         let sync: Vec<_> = reader
             .handle_movie(&movie([trak]))
             .unwrap()
             .map(|location| !location.properties.sample_flags.sample_is_non_sync_sample)
             .collect();
-        let ignored = |entry| Leniency::EntryIgnored {
+        let ignored = |entry| Mismatch::Entry {
             track_id: 7,
             box_type: SyncSampleBox::BOX_TYPE,
             entry,
         };
         assert_eq!(
-            (sync, reader.leniencies().copied().collect::<Vec<_>>()),
+            (sync, reader.mismatches().to_vec()),
             (vec![true, false, true], vec![ignored(1), ignored(3)])
         );
     }
@@ -279,8 +279,8 @@ mod tests {
         let no_chunks = track(7, 10, &[1, 2], &[], &[]);
         assert_eq!(
             [
-                read_past(&movie([no_durations])),
-                read_past(&movie([no_chunks]))
+                resolved(&movie([no_durations])),
+                resolved(&movie([no_chunks]))
             ],
             [
                 Err(Error::NoSamplePlaced {
@@ -296,12 +296,12 @@ mod tests {
     }
 
     #[test]
-    fn a_movie_refused_adds_nothing_to_what_was_read_past() {
-        let read_past = durations_counted(track(7, 10, &[1, 2], &[(1, 2)], &[0]), 3);
+    fn a_movie_refused_has_no_mismatch() {
+        let mismatched = durations_counted(track(7, 10, &[1, 2], &[(1, 2)], &[0]), 3);
         let refused = in_another_file(track(8, 1, &[1], &[(1, 1)], &[0]));
-        let mut reader = StructureDataReader::new(1024, 16);
-        assert!(reader.handle_movie(&movie([read_past, refused])).is_err());
-        assert_eq!(reader.leniencies().len(), 0);
+        let mut reader = StructureDataReader::new(1024);
+        assert!(reader.handle_movie(&movie([mismatched, refused])).is_err());
+        assert_eq!(reader.mismatches().len(), 0);
     }
 
     #[test]

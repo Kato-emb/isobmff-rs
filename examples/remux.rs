@@ -263,4 +263,59 @@ mod tests {
         }
         std::fs::remove_dir_all(&directory).unwrap();
     }
+
+    #[test]
+    fn a_file_whose_tables_disagree_is_written_again_with_every_sample_it_reads_as() {
+        let file = include_bytes!("../crates/isobmff/tests/fixtures/mismatch_tables.mp4");
+        let bytes_of = |file: &[u8]| -> Vec<Vec<u8>> {
+            samples_of(file)
+                .into_iter()
+                .map(|(_, bytes)| bytes)
+                .collect()
+        };
+        let mut as_movie_file = Cursor::new(Vec::new());
+        movie_file(Cursor::new(file), &mut as_movie_file).unwrap();
+        let mut in_fragments = Vec::new();
+        fragmented_movie_file(Cursor::new(file), &mut in_fragments).unwrap();
+        assert_eq!(
+            (bytes_of(as_movie_file.get_ref()), bytes_of(&in_fragments)),
+            (bytes_of(file), bytes_of(file))
+        );
+    }
+
+    #[test]
+    fn samples_read_past_a_mismatch_reach_the_muxer_which_refuses_a_gap_in_their_decoding_times() {
+        use isobmff::muxer::Error;
+        use isobmff::structure_data;
+
+        // Why a gap in each: the video samples of the chunks lie out of
+        // their decoding order, and are handed over in file order; the
+        // `tfdt` moves the decoding time on past the samples before it.
+        let refused = |result: Result<(), Box<dyn std::error::Error>>| {
+            result.unwrap_err().downcast_ref::<Error>().copied()
+        };
+        for (file, (expected, found)) in [
+            (
+                include_bytes!("../crates/isobmff/tests/fixtures/mismatch_chunks.mp4").as_slice(),
+                (5120, 6144),
+            ),
+            (
+                include_bytes!("../crates/isobmff/tests/fixtures/mismatch_tfdt.mp4"),
+                (4315, 4415),
+            ),
+        ] {
+            let gap = Error::StructureData(structure_data::Error::DecodingTimeGap {
+                track_id: 1,
+                expected,
+                found,
+            });
+            assert_eq!(
+                [
+                    refused(movie_file(Cursor::new(file), Cursor::new(Vec::new()))),
+                    refused(fragmented_movie_file(Cursor::new(file), Vec::new())),
+                ],
+                [Some(gap); 2]
+            );
+        }
+    }
 }

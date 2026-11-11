@@ -37,6 +37,8 @@ enum State {
 
 /// What the demuxer holds, in its state, that decides its next step
 enum Observation {
+    /// A mismatch of the box taken last not yet reported
+    Mismatch(structure_data::Mismatch),
     /// A location not yet reported
     Unreported(SampleLocation),
     /// The next sample of a subscribed track wanted, at this index of the
@@ -167,6 +169,10 @@ struct Samples {
 pub struct Demuxer {
     boxes: BoxReader,
     structure_data: StructureDataReader,
+    // Why count the mismatches reported rather than copy them: the reader
+    // holds those of the box it took last until it takes the next, which it
+    // takes only once every one is reported.
+    mismatches_reported: usize,
     sample_count_limit: u64,
     sample_size_limit: u64,
     state: State,
@@ -191,10 +197,8 @@ impl Demuxer {
         ];
         Self {
             boxes: BoxReader::new(framer),
-            structure_data: StructureDataReader::new(
-                config.sample_count_limit,
-                config.leniency_limit,
-            ),
+            structure_data: StructureDataReader::new(config.sample_count_limit),
+            mismatches_reported: 0,
             sample_count_limit: config.sample_count_limit,
             sample_size_limit: config.sample_size_limit,
             state: State::NoMovie,
@@ -231,25 +235,6 @@ impl Demuxer {
         {
             self.state = State::Movie;
         }
-    }
-
-    /// Returns what the demuxer read past of the `moov` and each `moof` it read, the oldest first
-    ///
-    /// A table that disagrees with another, or a `tfdt` that disagrees with
-    /// the samples before it, is read as FFmpeg and GPAC read it, and the
-    /// samples go on; each [`Leniency`](crate::structure_data::Leniency)
-    /// says what was read past. Past
-    /// [`DemuxerConfig::leniency_limit`] the oldest is dropped for each new
-    /// one.
-    ///
-    /// ```
-    /// use isobmff::{Demuxer, DemuxerConfig};
-    ///
-    /// let demuxer = Demuxer::new(DemuxerConfig::default());
-    /// assert_eq!(demuxer.leniencies().len(), 0);
-    /// ```
-    pub fn leniencies(&self) -> impl ExactSizeIterator<Item = &structure_data::Leniency> + '_ {
-        self.structure_data.leniencies()
     }
 
     /// Returns where the demuxer wants input next, or `None` once it wants none
@@ -365,11 +350,18 @@ impl Demuxer {
 
     /// What the demuxer holds, in its state, and what the box reader reported, that decides its next step
     fn observe(&self, read: Option<BoxRead>) -> Observation {
-        // Why the box first: the box reader is asked only once every location
-        // is reported, and the `moov` it reports brings the locations that
-        // follow it.
+        // Why the box first: the box reader is asked only once every mismatch
+        // and every location is reported, and the `moov` it reports brings
+        // the mismatches and the locations that follow it.
         if let Some(read) = read {
             return Observation::Box(read);
+        }
+        if let Some(&mismatch) = self
+            .structure_data
+            .mismatches()
+            .get(self.mismatches_reported)
+        {
+            return Observation::Mismatch(mismatch);
         }
         let samples = &self.samples;
         if let Some(&location) = samples.locations.get(samples.reported) {
@@ -414,13 +406,24 @@ impl Demuxer {
             // the samples in it.
             let read = match self.state {
                 State::NoMovie | State::Movie
-                    if self.samples.reported == self.samples.locations.len() =>
+                    // Why not `==` for the mismatches: a box the reader
+                    // refuses leaves it none, while the count stays at those
+                    // of the box before.
+                    if self.samples.reported == self.samples.locations.len()
+                        && self.mismatches_reported >= self.structure_data.mismatches().len() =>
                 {
                     self.read_box()
                 }
                 State::NoMovie | State::Movie | State::Gathering { .. } => None,
             };
             let (next_state, step) = match (self.state, self.observe(read)) {
+                (state, Observation::Mismatch(mismatch)) => {
+                    self.mismatches_reported = self.mismatches_reported.saturating_add(1);
+                    (
+                        state,
+                        Step::Output(Pending::Ready(Event::Mismatch(mismatch))),
+                    )
+                }
                 (state, Observation::Unreported(location)) => {
                     self.samples.reported = self.samples.reported.saturating_add(1);
                     // Why sort once every location is reported: the samples of
@@ -563,7 +566,10 @@ impl Demuxer {
                                     box_type,
                                     source: error,
                                 })),
-                                Ok(()) => BoxRead::MovieFragment(alloc::boxed::Box::new(moof)),
+                                Ok(()) => {
+                                    self.mismatches_reported = 0;
+                                    BoxRead::MovieFragment(alloc::boxed::Box::new(moof))
+                                }
                             }
                         }
                     }
@@ -581,6 +587,7 @@ impl Demuxer {
                             Ok(locations) => {
                                 self.samples.locations.clear();
                                 self.samples.locations.extend(locations);
+                                self.mismatches_reported = 0;
                                 BoxRead::Movie(alloc::boxed::Box::new(movie))
                             }
                         },

@@ -1,17 +1,15 @@
-//! [`Leniency`], what a reader read past that the specification does not allow, and the most recent of them it holds
-
-use alloc::collections::VecDeque;
+//! [`Mismatch`], where the boxes a reader took disagree with themselves, and which side the reader took
 
 use isobmff_core::BoxType;
 
-/// What a reader read past that the specification does not allow, as FFmpeg and GPAC read it
+/// Where the boxes a reader took disagree with themselves, as FFmpeg and GPAC read them
 ///
-/// A reader that reads a box past such a disagreement resolves its samples
-/// as the variant says, and goes on. It refuses only a sample table under
-/// which no sample can be placed.
+/// A reader that takes a box of such a disagreement resolves its samples as
+/// the variant says, and goes on. It refuses only a sample table under which
+/// no sample can be placed.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Leniency {
+pub enum Mismatch {
     /// A table of the sample table of a track counts another number of
     /// samples than the sample size table does, ISO/IEC 14496-12 §8.7.3
     ///
@@ -22,7 +20,7 @@ pub enum Leniency {
     /// a sample has an offset of 0; past the end of the sample dependency
     /// table, §8.6.4, its dependencies are unknown. What a table declares
     /// past the samples is not read.
-    SampleCountMismatch {
+    SampleCount {
         /// `track_ID` of the track
         track_id: u32,
         /// Type of the table whose count differs
@@ -37,7 +35,7 @@ pub enum Leniency {
     ///
     /// The samples of the track fragment take the time the `tfdt` gives; the
     /// samples before them are left as they were returned.
-    DecodingTimeMismatch {
+    DecodingTime {
         /// `track_ID` of the track
         track_id: u32,
         /// Decoding time the durations of the samples before add up to
@@ -50,7 +48,7 @@ pub enum Leniency {
     ///
     /// Such as a number in the sync sample table, §8.6.2, past the last
     /// sample, or no greater than the one before it.
-    EntryIgnored {
+    Entry {
         /// `track_ID` of the track
         track_id: u32,
         /// Type of the table
@@ -58,49 +56,4 @@ pub enum Leniency {
         /// Index, from 0, of the entry
         entry: u64,
     },
-}
-
-/// The leniencies a reader holds, the most recent `limit` of them
-#[derive(Debug, Clone)]
-pub(super) struct Leniencies {
-    limit: usize,
-    held: VecDeque<Leniency>,
-}
-
-impl Leniencies {
-    /// Holds no leniency yet, and at most `limit`
-    pub(super) fn new(limit: u64) -> Self {
-        Self {
-            limit: usize::try_from(limit).unwrap_or(usize::MAX),
-            held: VecDeque::new(),
-        }
-    }
-
-    /// Holds `leniency`, the oldest held dropped where `limit` are
-    pub(super) fn push(&mut self, leniency: Leniency) {
-        self.held.push_back(leniency);
-        if self.held.len() > self.limit {
-            self.held.pop_front();
-        }
-    }
-
-    /// Holds each of `leniencies` after those held, in order
-    pub(super) fn append(&mut self, leniencies: Self) {
-        for leniency in leniencies.held {
-            self.push(leniency);
-        }
-    }
-
-    /// Each leniency held, the oldest first
-    pub(super) fn iter(&self) -> impl ExactSizeIterator<Item = &Leniency> + '_ {
-        self.held.iter()
-    }
-
-    /// The same limit, and no leniency held
-    pub(super) fn emptied(&self) -> Self {
-        Self {
-            limit: self.limit,
-            held: VecDeque::new(),
-        }
-    }
 }

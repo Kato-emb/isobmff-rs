@@ -4,9 +4,8 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{MovieBox, MovieFragmentBox};
 
-use super::leniency::Leniencies;
 use super::movie_fragment::{self, FragmentTrack};
-use super::{Error, Leniency, sample_table};
+use super::{Error, Mismatch, sample_table};
 use crate::SampleLocation;
 
 /// Reader of the samples the structure-data of a file declares, from the boxes read into their values
@@ -51,7 +50,7 @@ use crate::SampleLocation;
 /// }
 ///
 /// // Resolve its samples to where their bytes lie
-/// let mut structure_data = StructureDataReader::new(1024, 16);
+/// let mut structure_data = StructureDataReader::new(1024);
 /// let locations: Vec<_> = structure_data.handle_movie(&movie.ok_or("no moov")?)?.collect();
 /// assert_eq!(locations.len(), 12 + 58);
 /// assert!(locations.windows(2).all(|pair| pair[0].offset <= pair[1].offset));
@@ -67,41 +66,42 @@ pub struct StructureDataReader {
     /// What the tracks of the `moov` give the samples of their fragments,
     /// once a `moov` was taken
     tracks: Option<Vec<FragmentTrack>>,
-    /// What the boxes taken were read past, the most recent of them
-    leniencies: Leniencies,
+    /// Where the box taken last disagrees with itself
+    mismatches: Vec<Mismatch>,
 }
 
 impl StructureDataReader {
-    /// Creates a reader that resolves at most `sample_count_limit` samples from one box, and holds the most recent `leniency_limit` of what it reads past
+    /// Creates a reader that resolves at most `sample_count_limit` samples from one box
     ///
     /// The number of samples is read from the input, and a box of a few bytes
     /// can declare millions, so the reader holds the declared number against
-    /// this limit before it allocates room for them. A file can disagree with
-    /// itself in each of its boxes, so the reader holds no more than
-    /// `leniency_limit` of the [`Leniency`]s it reads past.
+    /// this limit before it allocates room for them.
     #[must_use]
-    pub fn new(sample_count_limit: u64, leniency_limit: u64) -> Self {
+    pub fn new(sample_count_limit: u64) -> Self {
         Self {
             sample_count_limit,
             locations: Vec::new(),
             tracks: None,
-            leniencies: Leniencies::new(leniency_limit),
+            mismatches: Vec::new(),
         }
     }
 
-    /// Returns what the reader read past of the boxes it took, the oldest first
+    /// Returns where the box the reader took last disagrees with itself, in the order the reader found them
     ///
-    /// A box the reader refuses adds none. Past the `leniency_limit` the
-    /// reader was created with, the oldest is dropped for each new one.
+    /// They are those of the last call of
+    /// [`handle_movie`](Self::handle_movie) or
+    /// [`handle_movie_fragment`](Self::handle_movie_fragment), and the next
+    /// call drops them. A box the reader refuses has none.
     ///
     /// ```
     /// use isobmff::structure_data::StructureDataReader;
     ///
-    /// let reader = StructureDataReader::new(1024, 16);
-    /// assert_eq!(reader.leniencies().len(), 0);
+    /// let reader = StructureDataReader::new(1024);
+    /// assert_eq!(reader.mismatches(), []);
     /// ```
-    pub fn leniencies(&self) -> impl ExactSizeIterator<Item = &Leniency> + '_ {
-        self.leniencies.iter()
+    #[must_use]
+    pub fn mismatches(&self) -> &[Mismatch] {
+        &self.mismatches
     }
 
     /// Returns the location of each sample the tracks of `movie` declare, in the order of their file offsets
@@ -110,8 +110,7 @@ impl StructureDataReader {
     /// and within a track the decoding order. A table that counts another
     /// number of samples than the sample size table, and an entry of the sync
     /// sample table that names no sample, are read past as FFmpeg and GPAC
-    /// read them, and held for [`leniencies`](Self::leniencies); a box refused
-    /// adds none.
+    /// read them, and returned by [`mismatches`](Self::mismatches).
     ///
     /// # Errors
     /// * [`Error::SampleCountOverLimit`]: the tracks declare more samples than
@@ -127,6 +126,7 @@ impl StructureDataReader {
         &mut self,
         movie: &MovieBox,
     ) -> Result<impl ExactSizeIterator<Item = SampleLocation> + '_, Error> {
+        self.mismatches.clear();
         let sample_count = movie
             .trak
             .iter()
@@ -144,14 +144,13 @@ impl StructureDataReader {
         self.locations
             .reserve(usize::try_from(sample_count).unwrap_or(usize::MAX));
         let mut tracks = Vec::with_capacity(movie.trak.len());
-        let mut leniencies = self.leniencies.emptied();
         for track in &movie.trak {
             let next_decoding_time =
-                sample_table::resolve(track, &mut self.locations, &mut leniencies)?;
+                sample_table::resolve(track, &mut self.locations, &mut self.mismatches)
+                    .inspect_err(|_| self.mismatches.clear())?;
             tracks.push(FragmentTrack::new(movie, track, next_decoding_time));
         }
         self.tracks = Some(tracks);
-        self.leniencies.append(leniencies);
         self.locations.sort_by_key(|location| location.offset);
         Ok(self.locations.drain(..))
     }
@@ -182,11 +181,10 @@ impl StructureDataReader {
     ///   decoding time.
     ///
     /// A `tfdt` that gives another decoding time than the samples before it
-    /// in its track add up to is taken, and held for
-    /// [`leniencies`](Self::leniencies) as
-    /// [`Leniency::DecodingTimeMismatch`]; the samples already returned are
-    /// left as they were. A box refused leaves the decoding times of the
-    /// tracks as they were, and adds no leniency.
+    /// in its track add up to is taken, and returned by
+    /// [`mismatches`](Self::mismatches) as [`Mismatch::DecodingTime`]; the
+    /// samples already returned are left as they were. A box refused leaves
+    /// the decoding times of the tracks as they were.
     ///
     /// ```
     /// use isobmff::framing::{BoxReader, Event, FramerConfig};
@@ -197,7 +195,7 @@ impl StructureDataReader {
     /// // Resolve the `moov` and each `moof` of a fragmented file as they come
     /// let file: &[u8] = include_bytes!("../../tests/fixtures/fragmented.mp4");
     /// let mut boxes = BoxReader::new(FramerConfig::new(1024 * 1024));
-    /// let mut structure_data = StructureDataReader::new(1024, 16);
+    /// let mut structure_data = StructureDataReader::new(1024);
     /// let mut locations = Vec::new();
     /// loop {
     ///     while let Some(event) = boxes.poll_event() {
@@ -232,6 +230,7 @@ impl StructureDataReader {
         moof: &MovieFragmentBox,
         moof_offset: u64,
     ) -> Result<impl ExactSizeIterator<Item = SampleLocation> + '_, Error> {
+        self.mismatches.clear();
         let tracks = self
             .tracks
             .as_mut()
@@ -246,15 +245,14 @@ impl StructureDataReader {
         self.locations.clear();
         self.locations
             .reserve(usize::try_from(sample_count).unwrap_or(usize::MAX));
-        let mut leniencies = self.leniencies.emptied();
         movie_fragment::resolve(
             moof,
             moof_offset,
             tracks,
             &mut self.locations,
-            &mut leniencies,
-        )?;
-        self.leniencies.append(leniencies);
+            &mut self.mismatches,
+        )
+        .inspect_err(|_| self.mismatches.clear())?;
         self.locations.sort_by_key(|location| location.offset);
         Ok(self.locations.drain(..))
     }

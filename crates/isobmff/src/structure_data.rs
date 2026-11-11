@@ -9,7 +9,7 @@
 //! long the samples of a sample table last.
 
 mod error;
-mod leniency;
+mod mismatch;
 mod movie_fragment;
 mod movie_fragment_writer;
 mod reader;
@@ -18,7 +18,7 @@ mod sample_table;
 mod sample_table_writer;
 
 pub use error::Error;
-pub use leniency::Leniency;
+pub use mismatch::Mismatch;
 pub use movie_fragment::movie_fragment_sample_count;
 pub use movie_fragment_writer::MovieFragmentWriter;
 pub use reader::StructureDataReader;

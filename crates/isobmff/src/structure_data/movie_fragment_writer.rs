@@ -120,7 +120,7 @@ struct Track {
 /// written.extend_from_slice(b"abcde");
 ///
 /// // The fragment declares the samples where their bytes lie in the file
-/// let mut reader = StructureDataReader::new(1024, 16);
+/// let mut reader = StructureDataReader::new(1024);
 /// reader.handle_movie(&moov)?;
 /// let locations: Vec<_> = reader.handle_movie_fragment(&moof, 0)?.collect();
 /// let media_data = u64::try_from(written.len())? - 5;

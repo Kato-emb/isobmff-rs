@@ -7,7 +7,7 @@ use isobmff_boxes::{
     TrackRunSamples,
 };
 
-use super::leniency::{Leniencies, Leniency};
+use super::mismatch::Mismatch;
 use super::{Error, sample};
 use crate::{SampleLocation, SampleProperties};
 
@@ -65,14 +65,14 @@ pub fn movie_fragment_sample_count(moof: &MovieFragmentBox) -> u64 {
 /// Appends the samples of `moof`, the `moof` at file offset `moof_offset`, to `locations`, and moves the decoding time of each track on past them
 ///
 /// A `tfdt` that gives another decoding time than the samples before it in
-/// its track add up to is taken, and held in `leniencies`. Leaves `tracks`
+/// its track add up to is taken, and pushed to `mismatches`. Leaves `tracks`
 /// as they were where it refuses the box.
 pub(super) fn resolve(
     moof: &MovieFragmentBox,
     moof_offset: u64,
     tracks: &mut [FragmentTrack],
     locations: &mut Vec<SampleLocation>,
-    leniencies: &mut Leniencies,
+    mismatches: &mut Vec<Mismatch>,
 ) -> Result<(), Error> {
     // Why move the decoding times on in a copy: a box refused at a later
     // track fragment leaves the tracks as they were.
@@ -143,7 +143,7 @@ pub(super) fn resolve(
             if let Some(expected) = *decoding_time
                 && expected != found
             {
-                leniencies.push(Leniency::DecodingTimeMismatch {
+                mismatches.push(Mismatch::DecodingTime {
                     track_id,
                     expected,
                     found,

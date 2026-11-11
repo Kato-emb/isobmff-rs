@@ -33,7 +33,7 @@ pub enum Error {
     /// table gives no duration
     ///
     /// A table that counts another number of samples, and places some, is
-    /// read past as [`Leniency::SampleCountMismatch`](super::Leniency::SampleCountMismatch)
+    /// read past as [`Mismatch::SampleCount`](super::Mismatch::SampleCount)
     /// says.
     NoSamplePlaced {
         /// `track_ID` of the track

@@ -170,7 +170,7 @@ const fn sample_table(track: usize, table: &'static [u8; 4]) -> [(&'static [u8; 
 
 const CHANGED: &[Changed] = &[
     Changed {
-        name: "lenient_tables.mp4",
+        name: "mismatch_tables.mp4",
         holds: "movie_moov_last.mp4 whose video time-to-sample table counts 10 of its 12 samples and whose sync sample table names sample 99 of 12, and whose audio chunks place 55 of its 58 samples",
         from: "movie_moov_last.mp4",
         changes: &[
@@ -192,7 +192,7 @@ const CHANGED: &[Changed] = &[
         ],
     },
     Changed {
-        name: "lenient_chunks.mp4",
+        name: "mismatch_chunks.mp4",
         holds: "movie_moov_last.mp4 whose video chunks place 2 samples each, 24 of the 12 its sample size table counts",
         from: "movie_moov_last.mp4",
         changes: &[Change {
@@ -202,7 +202,7 @@ const CHANGED: &[Changed] = &[
         }],
     },
     Changed {
-        name: "lenient_tfdt.mp4",
+        name: "mismatch_tfdt.mp4",
         holds: "fragmented.mp4 whose second movie fragment gives its video a tfdt (version 1) 100 past the durations of the samples before it",
         from: "fragmented.mp4",
         changes: &[Change {

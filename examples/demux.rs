@@ -98,4 +98,26 @@ mod tests {
             "track 1: 0 samples, 0 bytes\ntrack 2: 0 samples, 0 bytes\n"
         );
     }
+
+    #[test]
+    fn a_fixture_that_disagrees_with_itself_is_read_through() {
+        let summaries = [
+            include_bytes!("../crates/isobmff/tests/fixtures/mismatch_tables.mp4").as_slice(),
+            include_bytes!("../crates/isobmff/tests/fixtures/mismatch_chunks.mp4"),
+            include_bytes!("../crates/isobmff/tests/fixtures/mismatch_tfdt.mp4"),
+        ]
+        .map(|file| {
+            let mut summary = Vec::new();
+            demux(Cursor::new(file), &mut summary).unwrap();
+            String::from_utf8(summary).unwrap()
+        });
+        assert_eq!(
+            summaries,
+            [
+                "track 1: 12 samples, 17615 bytes\ntrack 2: 55 samples, 4732 bytes\n",
+                "track 1: 12 samples, 17615 bytes\ntrack 2: 58 samples, 4932 bytes\n",
+                "track 1: 12 samples, 17615 bytes\ntrack 2: 58 samples, 4932 bytes\n",
+            ]
+        );
+    }
 }

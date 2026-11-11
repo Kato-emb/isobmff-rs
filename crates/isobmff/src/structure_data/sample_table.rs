@@ -11,7 +11,7 @@ use isobmff_boxes::{
 use isobmff_core::{BoxDefinition, BoxType};
 
 use super::Error;
-use super::leniency::{Leniencies, Leniency};
+use super::mismatch::Mismatch;
 use super::sample::is_in_same_file;
 use crate::{SampleLocation, SampleProperties};
 
@@ -67,13 +67,13 @@ pub(super) fn sample_count(track: &TrackBox) -> Result<u64, Error> {
 /// Appends the samples of `track` to `locations`, in decoding order, and returns the decoding time they end at, or `None` for no sample
 ///
 /// A table that counts another number of samples than the sample size
-/// table, or an entry that names no sample, is read past as [`Leniency`]
-/// says, and held in `leniencies`. A sample table under which no sample can
+/// table, or an entry that names no sample, is read past as the [`Mismatch`]
+/// says, and pushed to `mismatches`. A sample table under which no sample can
 /// be placed is refused.
 pub(super) fn resolve(
     track: &TrackBox,
     locations: &mut Vec<SampleLocation>,
-    leniencies: &mut Leniencies,
+    mismatches: &mut Vec<Mismatch>,
 ) -> Result<Option<u64>, Error> {
     let track_id = track.tkhd.track_id;
     let stbl = &track.mdia.minf.stbl;
@@ -91,9 +91,9 @@ pub(super) fn resolve(
         .stts
         .as_ref()
         .ok_or_else(|| missing(TimeToSampleBox::BOX_TYPE))?;
-    let agrees = |leniencies: &mut Leniencies, box_type, table_sample_count: u64| {
+    let agrees = |mismatches: &mut Vec<Mismatch>, box_type, table_sample_count: u64| {
         if table_sample_count != sample_count {
-            leniencies.push(Leniency::SampleCountMismatch {
+            mismatches.push(Mismatch::SampleCount {
                 track_id,
                 box_type,
                 sample_count,
@@ -102,20 +102,20 @@ pub(super) fn resolve(
         }
     };
     agrees(
-        leniencies,
+        mismatches,
         TimeToSampleBox::BOX_TYPE,
         total(stts.entries.iter().map(|entry| entry.sample_count)).ok_or(overflow)?,
     );
     if let Some(ctts) = &stbl.ctts {
         agrees(
-            leniencies,
+            mismatches,
             CompositionOffsetBox::BOX_TYPE,
             total(ctts.entries.iter().map(|entry| entry.sample_count)).ok_or(overflow)?,
         );
     }
     if let Some(sdtp) = &stbl.sdtp {
         agrees(
-            leniencies,
+            mismatches,
             SampleDependencyTypeBox::BOX_TYPE,
             length_of(sdtp.entries.len()),
         );
@@ -129,7 +129,7 @@ pub(super) fn resolve(
             if sample_number > previous && u64::from(sample_number) <= sample_count {
                 followed.push(sample_number);
             } else {
-                leniencies.push(Leniency::EntryIgnored {
+                mismatches.push(Mismatch::Entry {
                     track_id,
                     box_type: SyncSampleBox::BOX_TYPE,
                     entry: length_of(entry),
@@ -145,7 +145,7 @@ pub(super) fn resolve(
     let chunk_offsets = chunk_offsets(stbl).ok_or_else(|| missing(ChunkOffsetBox::BOX_TYPE))?;
     let chunk_count = chunk_offsets.len();
     let chunk_samples = chunk_sample_count(stsc, chunk_count, invalid)?;
-    agrees(leniencies, SampleToChunkBox::BOX_TYPE, chunk_samples);
+    agrees(mismatches, SampleToChunkBox::BOX_TYPE, chunk_samples);
     if sample_count == 0 {
         return Ok(None);
     }

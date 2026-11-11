@@ -305,14 +305,8 @@ fn most_held_lending(file: &[u8], config: DemuxerConfig) -> (usize, usize) {
 
 #[test]
 fn the_memory_a_demuxer_holds_does_not_grow_with_the_movie_fragments_it_reads() {
-    // Why hold a single leniency: the segments laid end to end go back in
-    // decoding time at each repetition, and what the demuxer holds of that is
-    // bounded by its own limit, which
-    // `what_a_reader_holds_of_what_it_read_past_stops_at_its_limit` measures.
-    let mut config = DemuxerConfig::default();
-    config.leniency_limit = 1;
-    let (few, few_samples) = most_held_lending(&segments(4), config);
-    let (many, many_samples) = most_held_lending(&segments(64), config);
+    let (few, few_samples) = most_held_lending(&segments(4), DemuxerConfig::default());
+    let (many, many_samples) = most_held_lending(&segments(64), DemuxerConfig::default());
     println!(
         "held at most {few} bytes lending {few_samples} samples of 12 fragments, {many} bytes lending {many_samples} of 192"
     );
@@ -392,57 +386,54 @@ fn the_memory_a_fragmented_muxer_holds_does_not_grow_with_the_fragments_it_write
     assert_eq!(many, few);
 }
 
-/// Bytes the current thread still holds once a reader of a `leniency_limit` of 16 has read a movie of one track and `fragments` movie fragments, each of a `tfdt` that disagrees with the samples before it
-fn held_reading_past(fragments: u64) -> usize {
-    use isobmff::structure_data::StructureDataReader;
-    use isobmff_boxes::{
-        MovieExtendsBox, MovieFragmentBox, TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox,
-        TrackFragmentBox, TrackRunBox, TrackRunSamples,
-    };
-    use isobmff_test_support::fixtures::{movie, track};
-
-    let mut moov = movie([track(1, 10, &[], &[], &[])]);
-    let mut trex = TrackExtendsBox::default();
-    (trex.track_id, trex.default_sample_description_index) = (1, 1);
-    (trex.default_sample_duration, trex.default_sample_size) = (10, 4);
-    let mut mvex = MovieExtendsBox::default();
-    mvex.trex = vec![trex];
-    moov.mvex = Some(mvex);
-    let moof = |base_media_decode_time| {
-        let mut traf = TrackFragmentBox::default();
-        traf.tfhd.track_id = 1;
-        let mut tfdt = TrackFragmentBaseMediaDecodeTimeBox::default();
-        tfdt.base_media_decode_time = base_media_decode_time;
-        traf.tfdt = Some(tfdt);
-        let mut trun = TrackRunBox::default();
-        trun.samples = TrackRunSamples::EmptyRows { sample_count: 1 };
-        traf.trun = vec![trun];
-        let mut moof = MovieFragmentBox::default();
-        moof.traf = vec![traf];
-        moof
-    };
-    let mut reader = StructureDataReader::new(1024, 16);
-    let _ = reader.handle_movie(&moov).unwrap().count();
-    let (before, _) = HELD.with(Cell::get);
-    let mut read_past = 0;
-    for fragment in 1..=fragments {
-        let _ = reader
-            .handle_movie_fragment(&moof(fragment.saturating_mul(1000)), 0)
-            .unwrap()
-            .count();
-        read_past = reader.leniencies().len();
-    }
-    let held = HELD.with(Cell::get).0.saturating_sub(before);
-    assert_eq!(read_past, 16.min(usize::try_from(fragments).unwrap() - 1));
-    drop(reader);
-    held
-}
-
 #[test]
-fn what_a_reader_holds_of_what_it_read_past_stops_at_its_limit() {
-    let (few, many) = (held_reading_past(64), held_reading_past(4096));
-    println!(
-        "held {few} bytes after reading past 63 tfdt, {many} bytes after reading past 4095, under a limit of 16"
-    );
-    assert_eq!(few, many);
+fn the_mismatches_a_demuxer_holds_are_those_of_one_box_which_the_payload_limit_bounds() {
+    use isobmff::demuxer::Event;
+    use isobmff::structure_data::Mismatch;
+    use isobmff_boxes::SyncSampleBox;
+    use isobmff_test_support::fixtures::{encoded, movie, track};
+
+    // Why up to 1 KiB under the payload limit: the rest of the `moov` takes
+    // some hundred bytes, and every 4 bytes left are an entry of the sync
+    // sample table, the most mismatches a `moov` under the limit can hold.
+    let most = usize::try_from(DemuxerConfig::default().payload_limit).unwrap() / 4 - 256;
+    for entries in [1 << 12, 1 << 20, most] {
+        let mut trak = track(1, 10, &[1], &[(1, 1)], &[0]);
+        let mut stss = SyncSampleBox::default();
+        stss.sample_numbers = vec![0; entries];
+        trak.mdia.minf.stbl.stss = Some(stss);
+        let mut moov = movie([trak]);
+        moov.mvhd.next_track_id = 2;
+        let file = encoded(&moov);
+        let mut mismatches = 0;
+        let held = most_held_by(|| {
+            let mut demuxer = Demuxer::new(DemuxerConfig::default());
+            loop {
+                while let Some(event) = demuxer.poll_event() {
+                    if let Event::Mismatch(_) = event {
+                        mismatches += 1;
+                    }
+                }
+                let Some(required) = demuxer.required_input() else {
+                    break;
+                };
+                match file.get(usize::try_from(required.position).unwrap()..) {
+                    Some(bytes) if !bytes.is_empty() => {
+                        demuxer.handle_input(required.position, bytes);
+                    }
+                    _ => demuxer.finish(),
+                }
+            }
+        });
+        println!(
+            "held at most {held} bytes reading a moov of {entries} sync sample entries that name no sample, {} per entry, a mismatch {} bytes",
+            held / entries,
+            size_of::<Mismatch>()
+        );
+        assert_eq!(mismatches, entries);
+        // Why twice a mismatch: the mismatches of the box are in one vector,
+        // which grows to twice what it holds at most; the payload, the table
+        // read from it, and the entries taken of it hold 4 bytes an entry.
+        assert!(held <= entries * (2 * size_of::<Mismatch>() + 3 * 4) + 64 * 1024);
+    }
 }

@@ -90,7 +90,7 @@ use isobmff_boxes::{
 /// let mut written = movie.clone();
 /// written.trak = vec![trak.clone()];
 /// written.trak[0].mdia.minf.stbl = stbl;
-/// let resolved: Vec<_> = StructureDataReader::new(1024, 16).handle_movie(&written)?.collect();
+/// let resolved: Vec<_> = StructureDataReader::new(1024).handle_movie(&written)?.collect();
 /// assert_eq!(resolved, locations);
 /// # Ok::<(), Box<dyn core::error::Error>>(())
 /// ```
