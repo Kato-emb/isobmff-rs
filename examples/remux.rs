@@ -62,7 +62,6 @@ fn movie_file(
         while let Some(event) = demuxer.poll_event() {
             match event {
                 Event::FileType(ftyp) => file_type = Some(ftyp),
-                // Describe the movie and its tracks to the muxer, which writes the opening of the file
                 Event::Movie(moov) => {
                     let file_type = file_type.take().ok_or("a moov before any ftyp")?;
                     let mut movie_muxer = MovieFileMuxer::new(
@@ -76,7 +75,6 @@ fn movie_file(
                     }
                     muxer = Some(movie_muxer);
                 }
-                // Hand the sample over as it is lent, and write what the muxer holds
                 Event::Sample(sample) => {
                     let muxer = muxer.as_mut().ok_or("a sample before any moov")?;
                     muxer.handle_sample(sample.properties, sample.bytes)?;
@@ -97,7 +95,6 @@ fn movie_file(
             read => demuxer.handle_input(required.position, &buffer[..read]),
         }
     }
-    // The `moov` follows the samples; the header of the `mdat` is written over the first
     let mut muxer = muxer.ok_or("no moov")?;
     let header = muxer.finish()?;
     muxer.poll_output(&mut out);
@@ -132,7 +129,6 @@ fn fragmented_movie_file(
                     }
                     muxer = Some(fragmented_muxer);
                 }
-                // A fragment of the file ends where the next begins
                 Event::MovieFragment(_) => {
                     if let Some(muxer) = muxer.as_mut() {
                         muxer.finish_fragment()?;
@@ -141,7 +137,6 @@ fn fragmented_movie_file(
                 Event::Sample(sample) => {
                     let muxer = muxer.as_mut().ok_or("a sample before any moov")?;
                     match muxer.handle_sample(sample.properties, sample.bytes) {
-                        // The fragment is full: end it, and hand the sample over again
                         Err(
                             muxer::Error::BufferFull { .. }
                             | muxer::Error::StructureData(

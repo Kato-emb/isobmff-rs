@@ -75,8 +75,6 @@ fn fast_start(
     config.gathered_box_types = vec![FILE_TYPE, MOVIE, META];
     let mut reader = BoxReader::new(config);
     let mut buffer = vec![0; 64 * 1024];
-    // Where the `ftyp` ends, if it is the first box; the `moov` and where it
-    // lies; and whether an `mdat` comes before it
     let (mut head_end, mut movie, mut media_data_first) = (0, None, false);
     loop {
         while let Some(event) = reader.poll_event() {
