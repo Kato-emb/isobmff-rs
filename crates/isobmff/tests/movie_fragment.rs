@@ -95,28 +95,32 @@ mod tests {
 
     #[test]
     #[ignore = "needs ffprobe"]
-    fn the_fixtures_whose_tables_disagree_read_as_ffmpeg_reads_them_resolve_to_the_packets_ffmpeg_reads()
+    fn the_fixtures_whose_tables_disagree_read_lossily_resolve_to_the_packets_ffmpeg_reads_that_every_table_gives_a_value()
      {
-        for name in [
-            "mismatch_tables.mp4",
-            "mismatch_chunks.mp4",
-            "mismatch_tfdt.mp4",
+        // Why cut track 1 of mismatch_tables.mp4 to the packets its
+        // time-to-sample table gives a duration: FFmpeg gives the samples
+        // past it the duration of the one before, and a lossy reading does
+        // not place them.
+        for (name, placed) in [
+            ("mismatch_tables.mp4", Some((1, 10))),
+            ("mismatch_chunks.mp4", None),
+            ("mismatch_tfdt.mp4", None),
         ] {
             let (file, path) = fixture(name);
             let (movie, fragments) = structure_data_of(&file);
             let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
             let mut found: Vec<_> = reader
-                .handle_movie_as_ffmpeg_reads(&movie.unwrap())
+                .handle_movie_lossy(&movie.unwrap())
                 .unwrap()
                 .collect();
             for (offset, moof) in &fragments {
-                found.extend(
-                    reader
-                        .handle_movie_fragment_as_ffmpeg_reads(moof, *offset)
-                        .unwrap(),
-                );
+                found.extend(reader.handle_movie_fragment_lossy(moof, *offset).unwrap());
             }
-            assert_eq!(Some(by_track(&found)), ffprobe_by_track(&path), "{name}");
+            let mut expected = ffprobe_by_track(&path).unwrap();
+            if let Some((track_id, placed)) = placed {
+                expected.get_mut(&track_id).unwrap().truncate(placed);
+            }
+            assert_eq!(by_track(&found), expected, "{name}");
         }
     }
 
@@ -311,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn a_tfdt_past_the_samples_before_it_is_taken_and_one_before_them_is_refused_and_taken_as_ffmpeg_reads_it()
+    fn a_tfdt_past_the_samples_before_it_is_taken_and_one_before_them_is_refused_and_taken_when_read_lossily()
      {
         let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
         let _ = reader
@@ -326,12 +330,12 @@ mod tests {
                     .map(Iterator::collect::<Vec<_>>),
             );
         }
-        let as_ffmpeg: Vec<_> = reader
-            .handle_movie_fragment_as_ffmpeg_reads(&moof([traf_at(50)]), 3000)
+        let lossy: Vec<_> = reader
+            .handle_movie_fragment_lossy(&moof([traf_at(50)]), 3000)
             .unwrap()
             .collect();
         assert_eq!(
-            (found, as_ffmpeg),
+            (found, lossy),
             (
                 vec![
                     Ok(vec![at(1000, 4, 20, 20)]),

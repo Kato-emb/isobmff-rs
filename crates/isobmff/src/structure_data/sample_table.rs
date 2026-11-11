@@ -68,9 +68,10 @@ pub(super) fn sample_count(track: &TrackBox) -> Result<u64, Error> {
 ///
 /// A table that counts another number of samples than the sample size
 /// table, or an entry of the sync sample table that names no sample, is
-/// refused as the specification reads it, and read past as FFmpeg reads
-/// it; a sample table under which no sample can be placed is refused either
-/// way.
+/// refused as the specification reads it, and read lossily as
+/// [`StructureDataReader::handle_movie_lossy`](super::StructureDataReader::handle_movie_lossy)
+/// sets out. A sample table under which no sample can be placed is refused
+/// either way.
 pub(super) fn resolve(
     track: &TrackBox,
     locations: &mut Vec<SampleLocation>,
@@ -101,7 +102,7 @@ pub(super) fn resolve(
         Reading::Specification if table_sample_count != sample_count => {
             Err(mismatch(box_type, table_sample_count))
         }
-        Reading::Specification | Reading::AsFfmpeg => Ok(()),
+        Reading::Specification | Reading::Lossy => Ok(()),
     };
     let stts_sample_count =
         total(stts.entries.iter().map(|entry| entry.sample_count)).ok_or(overflow)?;
@@ -119,8 +120,8 @@ pub(super) fn resolve(
         )?;
     }
     // Why read past the entries of the sync sample table that name no sample
-    // or go back, as FFmpeg reads them: FFmpeg's mov_build_index does, and
-    // still takes the others.
+    // or go back rather than drop the table when read lossily: they give no
+    // sample a value, and the entries that follow still mark sync samples.
     let sync_samples = match &stbl.stss {
         None => None,
         Some(stss) => {
@@ -147,17 +148,13 @@ pub(super) fn resolve(
     if sample_count == 0 {
         return Ok(None);
     }
-    let placed = sample_count.min(chunk_samples);
-    if placed == 0 {
+    if chunk_samples == 0 {
         return Err(mismatch(SampleToChunkBox::BOX_TYPE, chunk_samples));
     }
-    let last_duration = stts
-        .entries
-        .iter()
-        .rev()
-        .find(|entry| entry.sample_count > 0)
-        .map(|entry| entry.sample_delta)
-        .ok_or_else(|| mismatch(TimeToSampleBox::BOX_TYPE, stts_sample_count))?;
+    if stts_sample_count == 0 {
+        return Err(mismatch(TimeToSampleBox::BOX_TYPE, stts_sample_count));
+    }
+    let placed = sample_count.min(chunk_samples).min(stts_sample_count);
     for (entry, stsc_entry) in stsc.entries.iter().enumerate() {
         let data_reference_index =
             data_reference_index(&stbl.stsd, stsc_entry.sample_description_index)
@@ -170,16 +167,12 @@ pub(super) fn resolve(
         }
     }
 
-    let mut durations = stts
-        .entries
-        .iter()
-        .flat_map(|entry| {
-            iter::repeat_n(
-                entry.sample_delta,
-                usize::try_from(entry.sample_count).unwrap_or(0),
-            )
-        })
-        .chain(iter::repeat(last_duration));
+    let mut durations = stts.entries.iter().flat_map(|entry| {
+        iter::repeat_n(
+            entry.sample_delta,
+            usize::try_from(entry.sample_count).unwrap_or(0),
+        )
+    });
     let mut composition_offsets = stbl.ctts.iter().flat_map(|ctts| {
         ctts.entries.iter().flat_map(|entry| {
             iter::repeat_n(

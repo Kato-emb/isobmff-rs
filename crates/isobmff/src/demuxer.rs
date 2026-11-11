@@ -89,7 +89,7 @@ enum BoxRead {
         error: Error,
         refused: Refused,
     },
-    /// A box refused before, its error reported, to be read as FFmpeg reads it
+    /// A box refused before, its error reported, to be read lossily
     Held(Refused),
     Event(Event<'static>),
 }
@@ -139,7 +139,7 @@ struct Samples {
 /// A sample before a `moof` is not requested once the `moof` is read.
 /// Handing input over never fails: what cannot be read, such as a `moof`
 /// before any `moov`, is reported as [`Event::Error`]. What the reading of
-/// the specification refuses, the demuxer reads as FFmpeg does once the
+/// the specification refuses, the demuxer reads lossily once the
 /// error is reported; what that refuses too is left out. Which tracks to
 /// subscribe to, and whether to read the file where the demuxer asks, are the
 /// caller's choice; the demuxer reads no sample of a track not subscribed to.
@@ -193,7 +193,7 @@ pub struct Demuxer {
     state: State,
     samples: Samples,
     pending: Option<Pending>,
-    // Why hold the box refused rather than read it as FFmpeg does at once:
+    // Why hold the box refused rather than read it lossily at once:
     // its error is reported first, and one event is held at a time.
     refused: Option<Refused>,
     // Why hold that the input ended rather than ask the box reader: it wants
@@ -489,11 +489,11 @@ impl Demuxer {
                     (state, Step::Output(Pending::Ready(Event::Error(error))))
                 }
                 // Why read every box refused again rather than those whose
-                // error FFmpeg reads past: no table of which errors those are
-                // is kept, and reading again stops at the same check, most
-                // before any sample is resolved.
+                // error a lossy reading reads past: no table of which errors
+                // those are is kept, and reading again stops at the same
+                // check, most before any sample is resolved.
                 (state, Observation::Box(BoxRead::Held(Refused::Movie(movie)))) => {
-                    match self.structure_data.handle_movie_as_ffmpeg_reads(&movie) {
+                    match self.structure_data.handle_movie_lossy(&movie) {
                         Ok(locations) => {
                             self.samples.locations.clear();
                             self.samples.locations.extend(locations);
@@ -510,7 +510,7 @@ impl Demuxer {
                     Observation::Box(BoxRead::Held(Refused::MovieFragment { offset, moof })),
                 ) => match self
                     .structure_data
-                    .handle_movie_fragment_as_ffmpeg_reads(&moof, offset)
+                    .handle_movie_fragment_lossy(&moof, offset)
                 {
                     Ok(locations) => {
                         self.samples.locations.extend(locations);

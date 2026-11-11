@@ -66,7 +66,7 @@ pub fn movie_fragment_sample_count(moof: &MovieFragmentBox) -> u64 {
 ///
 /// A `tfdt` past the decoding time the samples before it in its track add
 /// up to is taken, §8.8.12.1. One before it is refused as the specification
-/// reads it, and taken as FFmpeg reads it. Leaves `tracks` as they were
+/// reads it, and taken when read lossily. Leaves `tracks` as they were
 /// where it refuses the box.
 pub(super) fn resolve(
     moof: &MovieFragmentBox,

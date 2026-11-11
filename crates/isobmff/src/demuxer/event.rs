@@ -82,7 +82,7 @@ pub enum Error {
     },
     /// The samples a `moov` or a `moof` declares cannot be resolved as the
     /// specification reads them; the box and the location of each of its
-    /// samples follow where they resolve as FFmpeg reads them, and none
+    /// samples follow where they resolve when read lossily, and none
     /// otherwise
     StructureData {
         /// File offset of the box

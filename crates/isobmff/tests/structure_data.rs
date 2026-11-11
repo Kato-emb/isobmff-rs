@@ -125,7 +125,7 @@ mod tests {
     /// `(offset, size, decoding_time, sample_duration)` of each sample
     type Samples = Vec<(u64, u32, u64, u32)>;
 
-    /// The samples `movie` declares as the specification reads it, and as FFmpeg reads it
+    /// The samples `movie` declares as the specification reads it, and as it is read lossily
     fn read_both_ways(
         movie: &isobmff_boxes::MovieBox,
     ) -> (Result<Samples, Error>, Result<Samples, Error>) {
@@ -141,10 +141,10 @@ mod tests {
         let specification = reader
             .handle_movie(movie)
             .map(|locations| locations.map(sample).collect());
-        let as_ffmpeg = reader
-            .handle_movie_as_ffmpeg_reads(movie)
+        let lossy = reader
+            .handle_movie_lossy(movie)
             .map(|locations| locations.map(sample).collect());
-        (specification, as_ffmpeg)
+        (specification, lossy)
     }
 
     /// The `sample_count` of the only run of the time-to-sample table of `trak` set to `sample_count`
@@ -171,19 +171,19 @@ mod tests {
     }
 
     #[test]
-    fn samples_past_the_time_to_sample_table_last_as_long_as_its_last_as_ffmpeg_reads_them() {
+    fn samples_the_time_to_sample_table_gives_no_duration_are_not_placed_when_read_lossily() {
         let trak = durations_counted(track(7, 10, &[1, 2, 3], &[(1, 3)], &[0]), 2);
         assert_eq!(
             read_both_ways(&movie([trak])),
             (
                 Err(mismatch(TimeToSampleBox::BOX_TYPE, 3, 2)),
-                Ok(vec![(0, 1, 0, 10), (1, 2, 10, 10), (3, 3, 20, 10)])
+                Ok(vec![(0, 1, 0, 10), (1, 2, 10, 10)])
             )
         );
     }
 
     #[test]
-    fn durations_past_the_samples_are_not_read_as_ffmpeg_reads_them() {
+    fn durations_past_the_samples_are_not_read_when_read_lossily() {
         let trak = durations_counted(track(7, 10, &[1, 2], &[(1, 2)], &[0]), 5);
         assert_eq!(
             read_both_ways(&movie([trak])),
@@ -195,8 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn the_samples_are_those_both_the_sample_size_table_and_the_chunks_place_as_ffmpeg_reads_them()
-    {
+    fn the_samples_are_those_both_the_sample_size_table_and_the_chunks_place_when_read_lossily() {
         let more_in_chunks = durations_counted(track(7, 10, &[1, 2], &[(1, 3)], &[0]), 2);
         let fewer_in_chunks = durations_counted(track(7, 10, &[1, 2, 3], &[(1, 2)], &[0]), 3);
         assert_eq!(
@@ -218,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn samples_past_the_composition_offsets_and_the_dependencies_have_none_as_ffmpeg_reads_them() {
+    fn samples_past_the_composition_offsets_and_the_dependencies_have_none_when_read_lossily() {
         let mut trak = track(7, 10, &[1, 1, 1], &[(1, 3)], &[0]);
         let stbl = &mut trak.mdia.minf.stbl;
         let mut ctts = CompositionOffsetBox::default();
@@ -235,7 +234,7 @@ mod tests {
         let mut reader = StructureDataReader::new(1024);
         let refused = reader.handle_movie(&movie).map(|_| ());
         let found: Vec<_> = reader
-            .handle_movie_as_ffmpeg_reads(&movie)
+            .handle_movie_lossy(&movie)
             .unwrap()
             .map(|location| {
                 (
@@ -254,7 +253,7 @@ mod tests {
     }
 
     #[test]
-    fn a_sync_sample_number_past_the_samples_or_not_after_the_one_before_is_not_read_as_ffmpeg_reads_it()
+    fn a_sync_sample_number_past_the_samples_or_not_after_the_one_before_is_not_read_when_read_lossily()
      {
         let mut trak = track(7, 10, &[1, 1, 1], &[(1, 3)], &[0]);
         let mut stss = SyncSampleBox::default();
@@ -264,7 +263,7 @@ mod tests {
         let mut reader = StructureDataReader::new(1024);
         let refused = reader.handle_movie(&movie).map(|_| ());
         let sync: Vec<_> = reader
-            .handle_movie_as_ffmpeg_reads(&movie)
+            .handle_movie_lossy(&movie)
             .unwrap()
             .map(|location| !location.properties.sample_flags.sample_is_non_sync_sample)
             .collect();

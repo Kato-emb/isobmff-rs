@@ -567,7 +567,7 @@ mod tests {
     }
 
     #[test]
-    fn a_box_whose_tables_disagree_is_reported_then_read_as_ffmpeg_reads_it() {
+    fn a_box_whose_tables_disagree_is_reported_then_read_lossily() {
         let sample_count_mismatch = |track_id, box_type, sample_count, table_sample_count| {
             structure_data::Error::SampleCountMismatch {
                 track_id,
@@ -593,7 +593,7 @@ mod tests {
                         sample_count_mismatch(1, TimeToSampleBox::BOX_TYPE, 12, 10)
                     ),
                     Read::Movie,
-                    run_of(&[(1, 12), (2, 55)]),
+                    run_of(&[(1, 10), (2, 55)]),
                 ],
                 vec![
                     refused(
@@ -687,7 +687,7 @@ mod tests {
     }
 
     #[test]
-    fn the_movie_fragments_after_a_movie_read_as_ffmpeg_reads_it_take_its_tracks() {
+    fn the_movie_fragments_after_a_movie_read_lossily_take_its_tracks() {
         use isobmff_boxes::{
             MovieExtendsBox, MovieFragmentBox, TrackExtendsBox, TrackFragmentBox, TrackRunBox,
             TrackRunSamples,
