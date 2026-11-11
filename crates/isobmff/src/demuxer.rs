@@ -191,7 +191,10 @@ impl Demuxer {
         ];
         Self {
             boxes: BoxReader::new(framer),
-            structure_data: StructureDataReader::new(config.sample_count_limit),
+            structure_data: StructureDataReader::new(
+                config.sample_count_limit,
+                config.leniency_limit,
+            ),
             sample_count_limit: config.sample_count_limit,
             sample_size_limit: config.sample_size_limit,
             state: State::NoMovie,
@@ -228,6 +231,25 @@ impl Demuxer {
         {
             self.state = State::Movie;
         }
+    }
+
+    /// Returns what the demuxer read past of the `moov` and each `moof` it read, the oldest first
+    ///
+    /// A table that disagrees with another, or a `tfdt` that disagrees with
+    /// the samples before it, is read as FFmpeg and GPAC read it, and the
+    /// samples go on; each [`Leniency`](crate::structure_data::Leniency)
+    /// says what was read past. Past
+    /// [`DemuxerConfig::leniency_limit`] the oldest is dropped for each new
+    /// one.
+    ///
+    /// ```
+    /// use isobmff::{Demuxer, DemuxerConfig};
+    ///
+    /// let demuxer = Demuxer::new(DemuxerConfig::default());
+    /// assert_eq!(demuxer.leniencies().len(), 0);
+    /// ```
+    pub fn leniencies(&self) -> impl ExactSizeIterator<Item = &structure_data::Leniency> + '_ {
+        self.structure_data.leniencies()
     }
 
     /// Returns where the demuxer wants input next, or `None` once it wants none

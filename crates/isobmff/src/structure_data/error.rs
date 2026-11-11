@@ -28,17 +28,18 @@ pub enum Error {
         /// Type of the box missing
         box_type: BoxType,
     },
-    /// A table of a track counts another number of samples than the sample
-    /// size table of the track does
-    SampleCountMismatch {
+    /// A table of a track places no sample, though the sample size table of
+    /// the track counts some: the chunks place none, or the time-to-sample
+    /// table gives no duration
+    ///
+    /// A table that counts another number of samples, and places some, is
+    /// read past as [`Leniency::SampleCountMismatch`](super::Leniency::SampleCountMismatch)
+    /// says.
+    NoSamplePlaced {
         /// `track_ID` of the track
         track_id: u32,
-        /// Type of the box whose count differs
+        /// Type of the table that places no sample
         box_type: BoxType,
-        /// Number of samples the sample size table counts
-        sample_count: u64,
-        /// Number of samples the box counts
-        table_sample_count: u64,
     },
     /// An entry of a table of a track holds a value the table does not allow,
     /// such as a `first_chunk` that does not increase
@@ -130,14 +131,9 @@ impl fmt::Display for Error {
                 formatter,
                 "the sample table of track {track_id} has no `{box_type}`"
             ),
-            Self::SampleCountMismatch {
-                track_id,
-                box_type,
-                sample_count,
-                table_sample_count,
-            } => write!(
+            Self::NoSamplePlaced { track_id, box_type } => write!(
                 formatter,
-                "the `{box_type}` of track {track_id} counts {table_sample_count} samples, and the sample size table {sample_count}"
+                "the `{box_type}` of track {track_id} places no sample, and the sample size table counts some"
             ),
             Self::InvalidEntry {
                 track_id,
@@ -203,7 +199,7 @@ impl core::error::Error for Error {
             Self::Encode(source) => Some(source),
             Self::SampleCountOverLimit { .. }
             | Self::MissingTable { .. }
-            | Self::SampleCountMismatch { .. }
+            | Self::NoSamplePlaced { .. }
             | Self::InvalidEntry { .. }
             | Self::MediaDataElsewhere { .. }
             | Self::Overflow { .. }

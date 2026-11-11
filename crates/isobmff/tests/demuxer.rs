@@ -3,9 +3,13 @@
 #[cfg(test)]
 mod tests {
     use isobmff::demuxer::{Error, Event};
+    use isobmff::structure_data::Leniency;
     use isobmff::{Demuxer, DemuxerConfig, SampleLocation};
+    use isobmff_boxes::{SampleToChunkBox, SyncSampleBox, TimeToSampleBox};
+    use isobmff_core::BoxDefinition;
     use isobmff_test_support::conformance_files;
     use isobmff_test_support::fixtures::fragments_ahead_of_their_samples;
+    use std::collections::BTreeMap;
 
     /// The fixtures whose samples all lie after the `moov`
     const FIXTURES: [(&str, &[u8]); 3] = [
@@ -512,5 +516,81 @@ mod tests {
             }
         }
         assert_eq!(differences, Vec::<String>::new());
+    }
+
+    /// The number of samples of each track of `file` the demuxer locates, and what it read past
+    fn read_past(file: &[u8]) -> (BTreeMap<u32, usize>, Vec<Leniency>) {
+        let mut demuxer = Demuxer::new(DemuxerConfig::default());
+        let mut samples = BTreeMap::new();
+        loop {
+            while let Some(event) = demuxer.poll_event() {
+                if let Event::SampleLocation(location) = event {
+                    let count = samples
+                        .entry(location.properties.track_id)
+                        .or_insert(0_usize);
+                    *count = count.saturating_add(1);
+                }
+            }
+            let Some(required) = demuxer.required_input() else {
+                break;
+            };
+            match file.get(usize::try_from(required.position).unwrap()..) {
+                Some(bytes) if !bytes.is_empty() => demuxer.handle_input(required.position, bytes),
+                _ => demuxer.finish(),
+            }
+        }
+        (samples, demuxer.leniencies().copied().collect())
+    }
+
+    #[test]
+    fn a_file_whose_tables_or_tfdt_disagree_is_read_as_ffmpeg_reads_it_and_says_what_was_read_past()
+    {
+        let mismatch =
+            |track_id, box_type, sample_count, table_sample_count| Leniency::SampleCountMismatch {
+                track_id,
+                box_type,
+                sample_count,
+                table_sample_count,
+            };
+        assert_eq!(
+            [
+                read_past(include_bytes!("fixtures/lenient_tables.mp4")),
+                read_past(include_bytes!("fixtures/lenient_chunks.mp4")),
+                read_past(include_bytes!("fixtures/lenient_tfdt.mp4")),
+            ],
+            [
+                (
+                    BTreeMap::from([(1, 12), (2, 55)]),
+                    vec![
+                        mismatch(1, TimeToSampleBox::BOX_TYPE, 12, 10),
+                        Leniency::EntryIgnored {
+                            track_id: 1,
+                            box_type: SyncSampleBox::BOX_TYPE,
+                            entry: 2
+                        },
+                        mismatch(2, SampleToChunkBox::BOX_TYPE, 58, 55),
+                    ]
+                ),
+                (
+                    BTreeMap::from([(1, 12), (2, 58)]),
+                    vec![mismatch(1, SampleToChunkBox::BOX_TYPE, 12, 24)]
+                ),
+                (
+                    BTreeMap::from([(1, 12), (2, 58)]),
+                    vec![
+                        Leniency::DecodingTimeMismatch {
+                            track_id: 1,
+                            expected: 4315,
+                            found: 4415
+                        },
+                        Leniency::DecodingTimeMismatch {
+                            track_id: 1,
+                            expected: 8511,
+                            found: 8411
+                        },
+                    ]
+                ),
+            ]
+        );
     }
 }

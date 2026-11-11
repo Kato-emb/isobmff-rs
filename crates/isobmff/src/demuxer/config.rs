@@ -35,6 +35,14 @@ pub struct DemuxerConfig {
     /// A sample is a frame of video or audio; even a frame of 4K video coded
     /// as a sync sample takes a few MiB.
     pub sample_size_limit: u64,
+    /// The most of what the demuxer read past that it holds for
+    /// [`Demuxer::leniencies`](super::Demuxer::leniencies) (1,024 by default)
+    ///
+    /// Each takes some tens of bytes, so 1,024 take some tens of KiB. A file
+    /// that disagrees with itself does so in a few tables of each track, or
+    /// once in each movie fragment; the most recent 1,024 say where. Past
+    /// the limit the oldest is dropped, and reading goes on.
+    pub leniency_limit: u64,
 }
 
 impl Default for DemuxerConfig {
@@ -45,6 +53,7 @@ impl Default for DemuxerConfig {
             payload_limit: 16 * 1024 * 1024,
             sample_count_limit: 1 << 20,
             sample_size_limit: 16 * 1024 * 1024,
+            leniency_limit: 1024,
         }
     }
 }

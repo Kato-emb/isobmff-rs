@@ -11,6 +11,7 @@ use isobmff_boxes::{
 use isobmff_core::{BoxDefinition, BoxType};
 
 use super::Error;
+use super::leniency::{Leniencies, Leniency};
 use super::sample::is_in_same_file;
 use crate::{SampleLocation, SampleProperties};
 
@@ -63,17 +64,21 @@ pub(super) fn sample_count(track: &TrackBox) -> Result<u64, Error> {
     sizes(track).map(|(sample_count, _)| sample_count)
 }
 
-/// Appends the samples of `track` to `locations`, in decoding order, and returns the decoding time they end at, refusing a sample table whose tables disagree
-pub(super) fn resolve(track: &TrackBox, locations: &mut Vec<SampleLocation>) -> Result<u64, Error> {
+/// Appends the samples of `track` to `locations`, in decoding order, and returns the decoding time they end at, or `None` for no sample
+///
+/// A table that counts another number of samples than the sample size
+/// table, or an entry that names no sample, is read past as [`Leniency`]
+/// says, and held in `leniencies`. A sample table under which no sample can
+/// be placed is refused.
+pub(super) fn resolve(
+    track: &TrackBox,
+    locations: &mut Vec<SampleLocation>,
+    leniencies: &mut Leniencies,
+) -> Result<Option<u64>, Error> {
     let track_id = track.tkhd.track_id;
     let stbl = &track.mdia.minf.stbl;
     let missing = |box_type| Error::MissingTable { track_id, box_type };
-    let mismatch = |box_type, sample_count, table_sample_count| Error::SampleCountMismatch {
-        track_id,
-        box_type,
-        sample_count,
-        table_sample_count,
-    };
+    let none_placed = |box_type| Error::NoSamplePlaced { track_id, box_type };
     let invalid = |box_type, entry: usize| Error::InvalidEntry {
         track_id,
         box_type,
@@ -86,39 +91,53 @@ pub(super) fn resolve(track: &TrackBox, locations: &mut Vec<SampleLocation>) -> 
         .stts
         .as_ref()
         .ok_or_else(|| missing(TimeToSampleBox::BOX_TYPE))?;
-    let agrees = |box_type, counts: Option<u64>| match counts {
-        Some(table_sample_count) if table_sample_count == sample_count => Ok(()),
-        Some(table_sample_count) => Err(mismatch(box_type, sample_count, table_sample_count)),
-        None => Err(overflow),
+    let agrees = |leniencies: &mut Leniencies, box_type, table_sample_count: u64| {
+        if table_sample_count != sample_count {
+            leniencies.push(Leniency::SampleCountMismatch {
+                track_id,
+                box_type,
+                sample_count,
+                table_sample_count,
+            });
+        }
     };
     agrees(
+        leniencies,
         TimeToSampleBox::BOX_TYPE,
-        total(stts.entries.iter().map(|entry| entry.sample_count)),
-    )?;
+        total(stts.entries.iter().map(|entry| entry.sample_count)).ok_or(overflow)?,
+    );
     if let Some(ctts) = &stbl.ctts {
         agrees(
+            leniencies,
             CompositionOffsetBox::BOX_TYPE,
-            total(ctts.entries.iter().map(|entry| entry.sample_count)),
-        )?;
+            total(ctts.entries.iter().map(|entry| entry.sample_count)).ok_or(overflow)?,
+        );
     }
-    if let Some(sdtp) = &stbl.sdtp
-        && length_of(sdtp.entries.len()) != sample_count
-    {
-        return Err(mismatch(
+    if let Some(sdtp) = &stbl.sdtp {
+        agrees(
+            leniencies,
             SampleDependencyTypeBox::BOX_TYPE,
-            sample_count,
             length_of(sdtp.entries.len()),
-        ));
+        );
     }
-    if let Some(stss) = &stbl.stss {
-        let mut previous = 0;
+    // Why read past the entries of the sync sample table that name no sample
+    // or go back: FFmpeg's mov_build_index does, and still takes the others.
+    let sync_samples = stbl.stss.as_ref().map(|stss| {
+        let mut followed = Vec::with_capacity(stss.sample_numbers.len());
         for (entry, &sample_number) in stss.sample_numbers.iter().enumerate() {
-            if sample_number <= previous || u64::from(sample_number) > sample_count {
-                return Err(invalid(SyncSampleBox::BOX_TYPE, entry));
+            let previous = followed.last().copied().unwrap_or(0);
+            if sample_number > previous && u64::from(sample_number) <= sample_count {
+                followed.push(sample_number);
+            } else {
+                leniencies.push(Leniency::EntryIgnored {
+                    track_id,
+                    box_type: SyncSampleBox::BOX_TYPE,
+                    entry: length_of(entry),
+                });
             }
-            previous = sample_number;
         }
-    }
+        followed
+    });
     let stsc = stbl
         .stsc
         .as_ref()
@@ -126,13 +145,21 @@ pub(super) fn resolve(track: &TrackBox, locations: &mut Vec<SampleLocation>) -> 
     let chunk_offsets = chunk_offsets(stbl).ok_or_else(|| missing(ChunkOffsetBox::BOX_TYPE))?;
     let chunk_count = chunk_offsets.len();
     let chunk_samples = chunk_sample_count(stsc, chunk_count, invalid)?;
-    if chunk_samples != sample_count {
-        return Err(mismatch(
-            SampleToChunkBox::BOX_TYPE,
-            sample_count,
-            chunk_samples,
-        ));
+    agrees(leniencies, SampleToChunkBox::BOX_TYPE, chunk_samples);
+    if sample_count == 0 {
+        return Ok(None);
     }
+    let placed = sample_count.min(chunk_samples);
+    if placed == 0 {
+        return Err(none_placed(SampleToChunkBox::BOX_TYPE));
+    }
+    let last_duration = stts
+        .entries
+        .iter()
+        .rev()
+        .find(|entry| entry.sample_count > 0)
+        .map(|entry| entry.sample_delta)
+        .ok_or_else(|| none_placed(TimeToSampleBox::BOX_TYPE))?;
     for (entry, stsc_entry) in stsc.entries.iter().enumerate() {
         let data_reference_index =
             data_reference_index(&stbl.stsd, stsc_entry.sample_description_index)
@@ -145,12 +172,16 @@ pub(super) fn resolve(track: &TrackBox, locations: &mut Vec<SampleLocation>) -> 
         }
     }
 
-    let mut durations = stts.entries.iter().flat_map(|entry| {
-        iter::repeat_n(
-            entry.sample_delta,
-            usize::try_from(entry.sample_count).unwrap_or(0),
-        )
-    });
+    let mut durations = stts
+        .entries
+        .iter()
+        .flat_map(|entry| {
+            iter::repeat_n(
+                entry.sample_delta,
+                usize::try_from(entry.sample_count).unwrap_or(0),
+            )
+        })
+        .chain(iter::repeat(last_duration));
     let mut composition_offsets = stbl.ctts.iter().flat_map(|ctts| {
         ctts.entries.iter().flat_map(|entry| {
             iter::repeat_n(
@@ -160,15 +191,14 @@ pub(super) fn resolve(track: &TrackBox, locations: &mut Vec<SampleLocation>) -> 
         })
     });
     let mut dependencies = stbl.sdtp.iter().flat_map(|sdtp| sdtp.entries.iter());
-    let mut sync_samples = stbl
-        .stss
+    let mut sync_samples = sync_samples
         .as_ref()
-        .map(|stss| stss.sample_numbers.iter().peekable());
+        .map(|numbers| numbers.iter().peekable());
 
     let mut decoding_time = 0_u64;
     let mut sample_number = 0_u32;
     let mut current = 0_usize;
-    for (chunk, chunk_offset) in (1_u32..).zip(chunk_offsets.iter()) {
+    'chunks: for (chunk, chunk_offset) in (1_u32..).zip(chunk_offsets.iter()) {
         while stsc
             .entries
             .get(current.saturating_add(1))
@@ -181,14 +211,13 @@ pub(super) fn resolve(track: &TrackBox, locations: &mut Vec<SampleLocation>) -> 
         };
         let mut offset = chunk_offset;
         for _ in 0..stsc_entry.samples_per_chunk {
+            if u64::from(sample_number) >= placed {
+                break 'chunks;
+            }
             let index = usize::try_from(sample_number).map_err(|_| overflow)?;
             sample_number = sample_number.checked_add(1).ok_or(overflow)?;
             let (Some(size), Some(sample_duration)) = (sizes.get(index), durations.next()) else {
-                return Err(mismatch(
-                    SampleToChunkBox::BOX_TYPE,
-                    sample_count,
-                    chunk_samples,
-                ));
+                break 'chunks;
             };
             let is_non_sync_sample = match &mut sync_samples {
                 None => false,
@@ -220,7 +249,7 @@ pub(super) fn resolve(track: &TrackBox, locations: &mut Vec<SampleLocation>) -> 
             offset = offset.checked_add(u64::from(size)).ok_or(overflow)?;
         }
     }
-    Ok(decoding_time)
+    Ok(Some(decoding_time))
 }
 
 /// The `chunk_offset` of each chunk, as the chunk offset table of a track gives it

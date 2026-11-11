@@ -1,7 +1,8 @@
 //! Tasks of this repository that are not part of building it, run as `cargo xtask <task>`
 //!
 //! `cargo xtask fixtures` regenerates the files under
-//! `crates/isobmff/tests/fixtures/` with FFmpeg, and
+//! `crates/isobmff/tests/fixtures/` with FFmpeg, then the files that are one
+//! of them with a field of a box changed, and
 //! `cargo xtask fixtures --help` lists what each holds and the command that
 //! made it. The crate depends on no crate of this workspace, so a fixture
 //! cannot come from this repository's own writer.

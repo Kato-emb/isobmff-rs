@@ -305,8 +305,14 @@ fn most_held_lending(file: &[u8], config: DemuxerConfig) -> (usize, usize) {
 
 #[test]
 fn the_memory_a_demuxer_holds_does_not_grow_with_the_movie_fragments_it_reads() {
-    let (few, few_samples) = most_held_lending(&segments(4), DemuxerConfig::default());
-    let (many, many_samples) = most_held_lending(&segments(64), DemuxerConfig::default());
+    // Why hold a single leniency: the segments laid end to end go back in
+    // decoding time at each repetition, and what the demuxer holds of that is
+    // bounded by its own limit, which
+    // `what_a_reader_holds_of_what_it_read_past_stops_at_its_limit` measures.
+    let mut config = DemuxerConfig::default();
+    config.leniency_limit = 1;
+    let (few, few_samples) = most_held_lending(&segments(4), config);
+    let (many, many_samples) = most_held_lending(&segments(64), config);
     println!(
         "held at most {few} bytes lending {few_samples} samples of 12 fragments, {many} bytes lending {many_samples} of 192"
     );
@@ -384,4 +390,59 @@ fn the_memory_a_fragmented_muxer_holds_does_not_grow_with_the_fragments_it_write
         "held at most {few} bytes writing 16 fragments of 8 samples of 4 KiB, {many} bytes writing 1024"
     );
     assert_eq!(many, few);
+}
+
+/// Bytes the current thread still holds once a reader of a `leniency_limit` of 16 has read a movie of one track and `fragments` movie fragments, each of a `tfdt` that disagrees with the samples before it
+fn held_reading_past(fragments: u64) -> usize {
+    use isobmff::structure_data::StructureDataReader;
+    use isobmff_boxes::{
+        MovieExtendsBox, MovieFragmentBox, TrackExtendsBox, TrackFragmentBaseMediaDecodeTimeBox,
+        TrackFragmentBox, TrackRunBox, TrackRunSamples,
+    };
+    use isobmff_test_support::fixtures::{movie, track};
+
+    let mut moov = movie([track(1, 10, &[], &[], &[])]);
+    let mut trex = TrackExtendsBox::default();
+    (trex.track_id, trex.default_sample_description_index) = (1, 1);
+    (trex.default_sample_duration, trex.default_sample_size) = (10, 4);
+    let mut mvex = MovieExtendsBox::default();
+    mvex.trex = vec![trex];
+    moov.mvex = Some(mvex);
+    let moof = |base_media_decode_time| {
+        let mut traf = TrackFragmentBox::default();
+        traf.tfhd.track_id = 1;
+        let mut tfdt = TrackFragmentBaseMediaDecodeTimeBox::default();
+        tfdt.base_media_decode_time = base_media_decode_time;
+        traf.tfdt = Some(tfdt);
+        let mut trun = TrackRunBox::default();
+        trun.samples = TrackRunSamples::EmptyRows { sample_count: 1 };
+        traf.trun = vec![trun];
+        let mut moof = MovieFragmentBox::default();
+        moof.traf = vec![traf];
+        moof
+    };
+    let mut reader = StructureDataReader::new(1024, 16);
+    let _ = reader.handle_movie(&moov).unwrap().count();
+    let (before, _) = HELD.with(Cell::get);
+    let mut read_past = 0;
+    for fragment in 1..=fragments {
+        let _ = reader
+            .handle_movie_fragment(&moof(fragment.saturating_mul(1000)), 0)
+            .unwrap()
+            .count();
+        read_past = reader.leniencies().len();
+    }
+    let held = HELD.with(Cell::get).0.saturating_sub(before);
+    assert_eq!(read_past, 16.min(usize::try_from(fragments).unwrap() - 1));
+    drop(reader);
+    held
+}
+
+#[test]
+fn what_a_reader_holds_of_what_it_read_past_stops_at_its_limit() {
+    let (few, many) = (held_reading_past(64), held_reading_past(4096));
+    println!(
+        "held {few} bytes after reading past 63 tfdt, {many} bytes after reading past 4095, under a limit of 16"
+    );
+    assert_eq!(few, many);
 }

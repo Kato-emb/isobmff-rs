@@ -14,7 +14,7 @@ mod tests {
     use std::path::Path;
 
     use isobmff::framing::{BoxReader, Event, FramerConfig};
-    use isobmff::structure_data::{Error, StructureDataReader};
+    use isobmff::structure_data::{Error, Leniency, StructureDataReader};
     use isobmff::{SampleLocation, SampleProperties};
     use isobmff_boxes::{
         MovieBox, MovieExtendsBox, MovieFragmentBox, SampleFlags, TrackExtendsBox,
@@ -65,7 +65,7 @@ mod tests {
         movie: &MovieBox,
         fragments: &[(u64, MovieFragmentBox)],
     ) -> Result<Vec<SampleLocation>, Error> {
-        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
+        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT, 16);
         let mut found: Vec<_> = reader.handle_movie(movie)?.collect();
         for (offset, moof) in fragments {
             found.extend(reader.handle_movie_fragment(moof, *offset)?);
@@ -86,6 +86,21 @@ mod tests {
     #[ignore = "needs ffprobe"]
     fn the_fixtures_resolve_to_the_packets_ffmpeg_reads() {
         for name in FIXTURES {
+            let (file, path) = fixture(name);
+            let (movie, fragments) = structure_data_of(&file);
+            let ours = by_track(&locations(&movie.unwrap(), &fragments).unwrap());
+            assert_eq!(Some(ours), ffprobe_by_track(&path), "{name}");
+        }
+    }
+
+    #[test]
+    #[ignore = "needs ffprobe"]
+    fn the_fixtures_the_specification_does_not_allow_resolve_to_the_packets_ffmpeg_reads() {
+        for name in [
+            "lenient_tables.mp4",
+            "lenient_chunks.mp4",
+            "lenient_tfdt.mp4",
+        ] {
             let (file, path) = fixture(name);
             let (movie, fragments) = structure_data_of(&file);
             let ours = by_track(&locations(&movie.unwrap(), &fragments).unwrap());
@@ -238,7 +253,7 @@ mod tests {
 
     #[test]
     fn a_fragment_refused_leaves_the_decoding_times_of_its_tracks_as_they_were() {
-        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
+        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT, 16);
         assert_eq!(
             reader
                 .handle_movie_fragment(&moof([traf(1, 1, None)]), 0)
@@ -274,9 +289,117 @@ mod tests {
         assert_eq!(next, [at(3000, 4, 20, 20)]);
     }
 
+    /// A track fragment of track 1 of one sample that takes every default, decoded from `base_media_decode_time`
+    fn traf_at(base_media_decode_time: u64) -> TrackFragmentBox {
+        let mut fragment = traf(1, 1, None);
+        let mut tfdt = TrackFragmentBaseMediaDecodeTimeBox::default();
+        tfdt.base_media_decode_time = base_media_decode_time;
+        fragment.tfdt = Some(tfdt);
+        fragment
+    }
+
+    fn time_mismatch(expected: u64, found: u64) -> Leniency {
+        Leniency::DecodingTimeMismatch {
+            track_id: 1,
+            expected,
+            found,
+        }
+    }
+
+    #[test]
+    fn a_tfdt_that_disagrees_with_the_samples_before_it_is_taken_and_read_past() {
+        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT, 16);
+        let mut found: Vec<_> = reader
+            .handle_movie(&movie_with_samples_and_fragments())
+            .unwrap()
+            .collect();
+        for (offset, base) in [(1000, 20), (2000, 70), (3000, 50)] {
+            found.extend(
+                reader
+                    .handle_movie_fragment(&moof([traf_at(base)]), offset)
+                    .unwrap(),
+            );
+        }
+        assert_eq!(
+            (found, reader.leniencies().copied().collect::<Vec<_>>()),
+            (
+                vec![
+                    at(100, 2, 0, 10),
+                    at(102, 3, 10, 10),
+                    at(1000, 4, 20, 20),
+                    at(2000, 4, 70, 20),
+                    at(3000, 4, 50, 20),
+                ],
+                vec![time_mismatch(40, 70), time_mismatch(90, 50)]
+            )
+        );
+    }
+
+    #[test]
+    fn the_tfdt_of_a_track_with_no_sample_before_it_disagrees_with_nothing() {
+        let mut movie = movie_with_samples_and_fragments();
+        movie.trak = vec![track(1, 10, &[], &[], &[])];
+        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT, 16);
+        let _ = reader.handle_movie(&movie).unwrap().count();
+        let found: Vec<_> = reader
+            .handle_movie_fragment(&moof([traf_at(219)]), 1000)
+            .unwrap()
+            .collect();
+        assert_eq!(
+            (found, reader.leniencies().len()),
+            (vec![at(1000, 4, 219, 20)], 0)
+        );
+    }
+
+    #[test]
+    fn past_the_limit_the_oldest_of_what_was_read_past_is_dropped_and_reading_goes_on() {
+        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT, 4);
+        let _ = reader
+            .handle_movie(&movie_with_samples_and_fragments())
+            .unwrap()
+            .count();
+        let mut resolved = 0;
+        for fragment in 0..10_u64 {
+            resolved += reader
+                .handle_movie_fragment(&moof([traf_at(1000 * (fragment + 1))]), 0)
+                .unwrap()
+                .count();
+        }
+        assert_eq!(
+            (resolved, reader.leniencies().copied().collect::<Vec<_>>()),
+            (
+                10,
+                vec![
+                    time_mismatch(6020, 7000),
+                    time_mismatch(7020, 8000),
+                    time_mismatch(8020, 9000),
+                    time_mismatch(9020, 10000),
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn a_fragment_refused_adds_nothing_to_what_was_read_past() {
+        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT, 16);
+        let _ = reader
+            .handle_movie(&movie_with_samples_and_fragments())
+            .unwrap()
+            .count();
+        assert_eq!(
+            (
+                reader
+                    .handle_movie_fragment(&moof([traf_at(500), traf(2, 1, None)]), 0)
+                    .map(|_| ()),
+                reader.leniencies().len()
+            ),
+            (Err(Error::UnknownTrack { track_id: 2 }), 0)
+        );
+    }
+
     #[test]
     fn a_sample_that_takes_a_default_nothing_gives_is_refused() {
-        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
+        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT, 16);
         let mut no_trex = movie_with_samples_and_fragments();
         no_trex.mvex = None;
         let _ = reader.handle_movie(&no_trex).unwrap().count();
@@ -327,7 +450,7 @@ mod tests {
     fn a_sample_whose_flags_nothing_gives_is_refused_and_one_whose_row_gives_them_is_not() {
         let mut no_trex = movie_with_samples_and_fragments();
         no_trex.mvex = None;
-        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
+        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT, 16);
         let _ = reader.handle_movie(&no_trex).unwrap().count();
         let mut without_flags = traf(1, 1, None);
         without_flags.tfhd.default_sample_duration = Some(20);
