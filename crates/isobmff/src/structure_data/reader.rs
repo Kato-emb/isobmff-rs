@@ -126,8 +126,8 @@ impl StructureDataReader {
     /// This reads it losing what the specification gives no value to, and
     /// resolves the samples as `handle_movie` does where the tables agree:
     ///
-    /// 1. An entry that names no sample is not read, as §4.2.2 and §4.2.3
-    ///    have a reader ignore what it does not recognize and go on: what a
+    /// 1. An entry that names no sample is not read, as §4.2.2 has a reader
+    ///    ignore what it does not recognize and go on: what a
     ///    time-to-sample, composition offset, sample dependency or
     ///    sample-to-chunk table declares past the samples of the sample size
     ///    table, and a sync sample number, §8.6.2.1, past the last sample or
