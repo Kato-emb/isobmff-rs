@@ -148,7 +148,7 @@ enum Value {
     Add64(u64),
 }
 
-/// A fixture that is another fixture with fields of its boxes changed, as a file the specification does not allow and FFmpeg reads
+/// A fixture that is another fixture with fields of its boxes changed, as a file FFmpeg does not write and reads
 struct Changed {
     name: &'static str,
     holds: &'static str,
@@ -167,6 +167,15 @@ const fn sample_table(track: usize, table: &'static [u8; 4]) -> [(&'static [u8; 
         (table, 0),
     ]
 }
+
+/// The `elst` of the video track of a movie file
+const VIDEO_EDITS: [(&[u8; 4], usize); 4] =
+    [(b"moov", 0), (b"trak", 0), (b"edts", 0), (b"elst", 0)];
+
+/// Where the fields of the only entry of an `elst` of version 0 lie, past its header
+const EDIT_DURATION: usize = 8;
+const MEDIA_TIME: usize = 12;
+const MEDIA_RATE: usize = 16;
 
 const CHANGED: &[Changed] = &[
     Changed {
@@ -210,6 +219,84 @@ const CHANGED: &[Changed] = &[
             at: 4,
             value: Value::Add64(100),
         }],
+    },
+    Changed {
+        name: "edit_cut.mp4",
+        holds: "movie_moov_last.mp4 whose video edit plays 24000 of the movie timescale (5120 of its media) from media time 1536, inside its second sample, to inside its seventh",
+        from: "movie_moov_last.mp4",
+        changes: &[
+            Change {
+                path: &VIDEO_EDITS,
+                at: EDIT_DURATION,
+                value: Value::Set32(24_000),
+            },
+            Change {
+                path: &VIDEO_EDITS,
+                at: MEDIA_TIME,
+                value: Value::Set32(1_536),
+            },
+        ],
+    },
+    Changed {
+        name: "edit_dwell.mp4",
+        holds: "movie_moov_last.mp4 whose video edit is a dwell of media rate 0 holding media time 2560, inside its third sample, for 48000 of the movie timescale",
+        from: "movie_moov_last.mp4",
+        changes: &[
+            Change {
+                path: &VIDEO_EDITS,
+                at: EDIT_DURATION,
+                value: Value::Set32(48_000),
+            },
+            Change {
+                path: &VIDEO_EDITS,
+                at: MEDIA_TIME,
+                value: Value::Set32(2_560),
+            },
+            Change {
+                path: &VIDEO_EDITS,
+                at: MEDIA_RATE,
+                value: Value::Set32(0),
+            },
+        ],
+    },
+    Changed {
+        name: "edit_repeat.mp4",
+        holds: "movie_moov_last.mp4 whose video edit list, of RepeatEdits, plays its first 9600 of the movie timescale (2048 of its media) and repeats it for the 24000 its tkhd lasts",
+        from: "movie_moov_last.mp4",
+        changes: &[
+            Change {
+                path: &VIDEO_EDITS,
+                at: 0,
+                value: Value::Set32(1),
+            },
+            Change {
+                path: &VIDEO_EDITS,
+                at: EDIT_DURATION,
+                value: Value::Set32(9_600),
+            },
+            Change {
+                path: &[(b"moov", 0), (b"trak", 0), (b"tkhd", 0)],
+                at: 20,
+                value: Value::Set32(24_000),
+            },
+        ],
+    },
+    Changed {
+        name: "chunks_out_of_order.mp4",
+        holds: "movie_moov_last.mp4 whose video chunk offset table names the offsets of its second and third chunks, of one sample each, the other way round: their samples are no longer in decoding order in the file, and the bytes of each lie where the other's did, so they no longer decode as pictures, but the tables agree as the specification requires",
+        from: "movie_moov_last.mp4",
+        changes: &[
+            Change {
+                path: &sample_table(0, b"stco"),
+                at: 12,
+                value: Value::Set32(5_874),
+            },
+            Change {
+                path: &sample_table(0, b"stco"),
+                at: 16,
+                value: Value::Set32(5_063),
+            },
+        ],
     },
 ];
 

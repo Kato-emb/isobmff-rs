@@ -20,9 +20,9 @@ mod tests {
         SyncSampleBox, TimeToSampleBox,
     };
     use isobmff_core::BoxDefinition;
-    use isobmff_test_support::conformance_files;
     use isobmff_test_support::fixtures::{encoded, in_another_file, movie, track};
     use isobmff_test_support::serde_json::Value;
+    use isobmff_test_support::{conformance_files, gpac_list};
 
     #[test]
     fn the_samples_of_a_chunk_lie_one_after_another_from_its_offset() {
@@ -380,6 +380,98 @@ mod tests {
         "04_bifs_video.mp4",
         "a6_tone_multifile.mp4",
     ];
+
+    /// File offset of each sample of each track of the `moov` GPAC reports, in the order of their sample numbers, by `track_ID`
+    ///
+    /// Sample numbers count the samples in decoding order, ISO/IEC 14496-12
+    /// §8.6.1.2; the offsets are those its sample-to-chunk, chunk offset and
+    /// sample size tables give, §8.7.4, §8.7.5, §8.7.3.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "indexing a JSON value yields null for a key it lacks, and never panics"
+    )]
+    fn gpac_offsets_by_sample_number(report: &Value) -> BTreeMap<u32, Vec<u64>> {
+        let number = |value: &Value| -> Option<u64> { value.as_str()?.parse().ok() };
+        let mut tracks = BTreeMap::new();
+        for trak in gpac_list(&report["IsoMediaFile"]["MovieBox"]["TrackBox"]) {
+            let stbl = &trak["MediaBox"]["MediaInformationBox"]["SampleTableBox"];
+            let sizes_box = if stbl["SampleSizeBox"].is_null() {
+                &stbl["CompactSampleSizeBox"]
+            } else {
+                &stbl["SampleSizeBox"]
+            };
+            let sizes = gpac_list(&sizes_box["SampleSizeEntry"]);
+            let size_of = |sample: usize| -> Option<u64> {
+                number(&sizes_box["@ConstantSampleSize"])
+                    .or_else(|| number(&sizes.get(sample)?["@Size"]))
+            };
+            let (Some(sample_count), Some(track_id)) = (
+                number(&sizes_box["@SampleCount"]),
+                number(&trak["TrackHeaderBox"]["@TrackID"]),
+            ) else {
+                continue;
+            };
+            let chunks = gpac_list(&stbl["ChunkOffsetBox"]["ChunkEntry"])
+                .into_iter()
+                .filter_map(|entry| number(&entry["@offset"]));
+            let runs: Vec<(u64, u64)> = gpac_list(&stbl["SampleToChunkBox"]["SampleToChunkEntry"])
+                .into_iter()
+                .filter_map(|entry| {
+                    Some((
+                        number(&entry["@FirstChunk"])?,
+                        number(&entry["@SamplesPerChunk"])?,
+                    ))
+                })
+                .collect();
+            let mut offsets = Vec::new();
+            'chunks: for (chunk, chunk_offset) in (1_u64..).zip(chunks) {
+                let per_chunk = runs
+                    .iter()
+                    .rev()
+                    .find(|&&(first_chunk, _)| first_chunk <= chunk)
+                    .map_or(0, |&(_, per_chunk)| per_chunk);
+                let mut offset = chunk_offset;
+                for _ in 0..per_chunk {
+                    let sample = offsets.len();
+                    if u64::try_from(sample).unwrap() == sample_count {
+                        break 'chunks;
+                    }
+                    offsets.push(offset);
+                    offset = offset.checked_add(size_of(sample).unwrap()).unwrap();
+                }
+            }
+            if !offsets.is_empty() {
+                tracks.insert(u32::try_from(track_id).unwrap(), offsets);
+            }
+        }
+        tracks
+    }
+
+    #[test]
+    #[ignore = "needs the conformance files"]
+    fn the_samples_of_each_track_in_decoding_order_lie_where_gpac_reports_them_by_sample_number() {
+        let mut differences = Vec::new();
+        for file in conformance_files() {
+            let Some(movie) = movie_of(&file.bytes) else {
+                continue;
+            };
+            let Ok(mut found) = locations(&movie) else {
+                continue;
+            };
+            found.sort_by_key(|location| location.properties.decoding_time);
+            let mut ours: BTreeMap<u32, Vec<u64>> = BTreeMap::new();
+            for location in &found {
+                ours.entry(location.properties.track_id)
+                    .or_default()
+                    .push(location.offset);
+            }
+            let gpac = gpac_offsets_by_sample_number(&file.report);
+            if ours != gpac {
+                differences.push(file.name);
+            }
+        }
+        assert_eq!(differences, Vec::<String>::new());
+    }
 
     /// Number of samples GPAC reports the sample size table of each track of the `moov` to count
     #[expect(
