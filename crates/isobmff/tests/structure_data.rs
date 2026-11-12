@@ -122,37 +122,211 @@ mod tests {
         );
     }
 
+    /// `(offset, size, decoding_time, sample_duration)` of each sample
+    type Samples = Vec<(u64, u32, u64, u32)>;
+
+    /// The samples `movie` declares as the specification reads it, and as it is read lossily
+    fn read_both_ways(
+        movie: &isobmff_boxes::MovieBox,
+    ) -> (Result<Samples, Error>, Result<Samples, Error>) {
+        let sample = |location: SampleLocation| {
+            (
+                location.offset,
+                location.size,
+                location.properties.decoding_time,
+                location.properties.sample_duration,
+            )
+        };
+        let mut reader = StructureDataReader::new(1024);
+        let specification = reader
+            .handle_movie(movie)
+            .map(|locations| locations.map(sample).collect());
+        let lossy = reader
+            .handle_movie_lossy(movie)
+            .map(|locations| locations.map(sample).collect());
+        (specification, lossy)
+    }
+
+    /// The `sample_count` of the only run of the time-to-sample table of `trak` set to `sample_count`
+    fn durations_counted(
+        mut trak: isobmff_boxes::TrackBox,
+        sample_count: u32,
+    ) -> isobmff_boxes::TrackBox {
+        let stts = trak.mdia.minf.stbl.stts.as_mut().unwrap();
+        stts.entries.first_mut().unwrap().sample_count = sample_count;
+        trak
+    }
+
+    fn mismatch(
+        box_type: isobmff_core::BoxType,
+        sample_count: u64,
+        table_sample_count: u64,
+    ) -> Error {
+        Error::SampleCountMismatch {
+            track_id: 7,
+            box_type,
+            sample_count,
+            table_sample_count,
+        }
+    }
+
     #[test]
-    fn tables_that_count_different_numbers_of_samples_are_refused() {
-        let mut trak = track(7, 1, &[1, 1], &[(1, 2)], &[0]);
-        trak.mdia
-            .minf
-            .stbl
-            .stts
-            .as_mut()
-            .unwrap()
-            .entries
-            .first_mut()
-            .unwrap()
-            .sample_count = 3;
+    fn samples_the_time_to_sample_table_gives_no_duration_are_not_placed_when_read_lossily() {
+        let trak = durations_counted(track(7, 10, &[1, 2, 3], &[(1, 3)], &[0]), 2);
         assert_eq!(
-            locations(&movie([trak])),
-            Err(Error::SampleCountMismatch {
-                track_id: 7,
-                box_type: TimeToSampleBox::BOX_TYPE,
-                sample_count: 2,
-                table_sample_count: 3,
-            })
+            read_both_ways(&movie([trak])),
+            (
+                Err(mismatch(TimeToSampleBox::BOX_TYPE, 3, 2)),
+                Ok(vec![(0, 1, 0, 10), (1, 2, 10, 10)])
+            )
         );
-        let chunks_short = track(7, 1, &[1, 1, 1], &[(1, 2)], &[0]);
+    }
+
+    #[test]
+    fn durations_past_the_samples_are_not_read_when_read_lossily() {
+        let trak = durations_counted(track(7, 10, &[1, 2], &[(1, 2)], &[0]), 5);
         assert_eq!(
-            locations(&movie([chunks_short])),
-            Err(Error::SampleCountMismatch {
-                track_id: 7,
-                box_type: SampleToChunkBox::BOX_TYPE,
-                sample_count: 3,
-                table_sample_count: 2,
+            read_both_ways(&movie([trak])),
+            (
+                Err(mismatch(TimeToSampleBox::BOX_TYPE, 2, 5)),
+                Ok(vec![(0, 1, 0, 10), (1, 2, 10, 10)])
+            )
+        );
+    }
+
+    #[test]
+    fn the_samples_are_those_both_the_sample_size_table_and_the_chunks_place_when_read_lossily() {
+        let more_in_chunks = durations_counted(track(7, 10, &[1, 2], &[(1, 3)], &[0]), 2);
+        let fewer_in_chunks = durations_counted(track(7, 10, &[1, 2, 3], &[(1, 2)], &[0]), 3);
+        assert_eq!(
+            [
+                read_both_ways(&movie([more_in_chunks])),
+                read_both_ways(&movie([fewer_in_chunks]))
+            ],
+            [
+                (
+                    Err(mismatch(SampleToChunkBox::BOX_TYPE, 2, 3)),
+                    Ok(vec![(0, 1, 0, 10), (1, 2, 10, 10)])
+                ),
+                (
+                    Err(mismatch(SampleToChunkBox::BOX_TYPE, 3, 2)),
+                    Ok(vec![(0, 1, 0, 10), (1, 2, 10, 10)])
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn samples_past_the_composition_offsets_and_the_dependencies_have_none_when_read_lossily() {
+        let mut trak = track(7, 10, &[1, 1, 1], &[(1, 3)], &[0]);
+        let stbl = &mut trak.mdia.minf.stbl;
+        let mut ctts = CompositionOffsetBox::default();
+        let mut run = CompositionOffsetEntry::default();
+        (run.sample_count, run.sample_offset) = (1, 20);
+        ctts.entries = vec![run];
+        stbl.ctts = Some(ctts);
+        let mut sdtp = SampleDependencyTypeBox::default();
+        let mut entry = SampleDependencyTypeEntry::default();
+        entry.sample_depends_on = 2;
+        sdtp.entries = vec![entry; 4];
+        stbl.sdtp = Some(sdtp);
+        let movie = movie([trak]);
+        let mut reader = StructureDataReader::new(1024);
+        let refused = reader.handle_movie(&movie).map(|_| ());
+        let found: Vec<_> = reader
+            .handle_movie_lossy(&movie)
+            .unwrap()
+            .map(|location| {
+                (
+                    location.properties.sample_composition_time_offset,
+                    location.properties.sample_flags.sample_depends_on,
+                )
             })
+            .collect();
+        assert_eq!(
+            (refused, found),
+            (
+                Err(mismatch(CompositionOffsetBox::BOX_TYPE, 3, 1)),
+                vec![(20, 2), (0, 2), (0, 2)]
+            )
+        );
+    }
+
+    #[test]
+    fn a_sync_sample_number_past_the_samples_or_not_after_the_one_before_is_not_read_when_read_lossily()
+     {
+        let mut trak = track(7, 10, &[1, 1, 1], &[(1, 3)], &[0]);
+        let mut stss = SyncSampleBox::default();
+        stss.sample_numbers = vec![1, 1, 3, 9];
+        trak.mdia.minf.stbl.stss = Some(stss);
+        let movie = movie([trak]);
+        let mut reader = StructureDataReader::new(1024);
+        let refused = reader.handle_movie(&movie).map(|_| ());
+        let sync: Vec<_> = reader
+            .handle_movie_lossy(&movie)
+            .unwrap()
+            .map(|location| !location.properties.sample_flags.sample_is_non_sync_sample)
+            .collect();
+        assert_eq!(
+            (refused, sync),
+            (
+                Err(Error::InvalidEntry {
+                    track_id: 7,
+                    box_type: SyncSampleBox::BOX_TYPE,
+                    entry: 1,
+                }),
+                vec![true, false, true]
+            )
+        );
+    }
+
+    #[test]
+    fn a_sample_table_under_which_no_sample_can_be_placed_is_refused_either_way() {
+        let no_durations = durations_counted(track(7, 10, &[1, 2], &[(1, 2)], &[0]), 0);
+        let no_chunks = track(7, 10, &[1, 2], &[], &[]);
+        let no_durations_counted = mismatch(TimeToSampleBox::BOX_TYPE, 2, 0);
+        let no_chunk_counted = mismatch(SampleToChunkBox::BOX_TYPE, 2, 0);
+        assert_eq!(
+            [
+                read_both_ways(&movie([no_durations])),
+                read_both_ways(&movie([no_chunks]))
+            ],
+            [
+                (Err(no_durations_counted), Err(no_durations_counted)),
+                (Err(no_chunk_counted), Err(no_chunk_counted)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_sample_to_chunk_run_no_sample_placed_uses_is_not_read_when_read_lossily() {
+        let mut trak = track(7, 10, &[1], &[(1, 1), (2, 1)], &[100, 200]);
+        let stsc = trak.mdia.minf.stbl.stsc.as_mut().unwrap();
+        stsc.entries.last_mut().unwrap().sample_description_index = 2;
+        assert_eq!(
+            read_both_ways(&movie([trak])),
+            (
+                Err(mismatch(SampleToChunkBox::BOX_TYPE, 1, 2)),
+                Ok(vec![(100, 1, 0, 10)])
+            )
+        );
+    }
+
+    #[test]
+    fn a_movie_refused_gives_no_track_to_the_movie_fragments_after_it() {
+        let mismatched = durations_counted(track(7, 10, &[1, 2], &[(1, 2)], &[0]), 3);
+        let mut reader = StructureDataReader::new(1024);
+        assert_eq!(
+            (
+                reader.handle_movie(&movie([mismatched])).map(|_| ()),
+                reader
+                    .handle_movie_fragment(&isobmff_boxes::MovieFragmentBox::default(), 0)
+                    .map(|_| ())
+            ),
+            (
+                Err(mismatch(TimeToSampleBox::BOX_TYPE, 2, 3)),
+                Err(Error::MovieFragmentWithoutMovie)
+            )
         );
     }
 

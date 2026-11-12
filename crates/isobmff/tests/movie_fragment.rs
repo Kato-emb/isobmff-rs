@@ -94,6 +94,37 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs ffprobe"]
+    fn the_fixtures_whose_tables_disagree_read_lossily_resolve_to_the_packets_ffmpeg_reads_that_every_table_gives_a_value()
+     {
+        // Why cut track 1 of mismatch_tables.mp4 to the packets its
+        // time-to-sample table gives a duration: FFmpeg gives the samples
+        // past it the duration of the one before, and a lossy reading does
+        // not place them.
+        for (name, placed) in [
+            ("mismatch_tables.mp4", Some((1, 10))),
+            ("mismatch_chunks.mp4", None),
+            ("mismatch_tfdt.mp4", None),
+        ] {
+            let (file, path) = fixture(name);
+            let (movie, fragments) = structure_data_of(&file);
+            let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
+            let mut found: Vec<_> = reader
+                .handle_movie_lossy(&movie.unwrap())
+                .unwrap()
+                .collect();
+            for (offset, moof) in &fragments {
+                found.extend(reader.handle_movie_fragment_lossy(moof, *offset).unwrap());
+            }
+            let mut expected = ffprobe_by_track(&path).unwrap();
+            if let Some((track_id, placed)) = placed {
+                expected.get_mut(&track_id).unwrap().truncate(placed);
+            }
+            assert_eq!(by_track(&found), expected, "{name}");
+        }
+    }
+
+    #[test]
     fn concatenated_segments_go_on_in_decoding_time_without_a_tfdt() {
         let (file, _) = fixture("segment.mp4");
         let (movie, fragments) = structure_data_of(&file);
@@ -272,6 +303,92 @@ mod tests {
             .unwrap()
             .collect();
         assert_eq!(next, [at(3000, 4, 20, 20)]);
+    }
+
+    /// A track fragment of track 1 of one sample that takes every default, decoded from `base_media_decode_time`
+    fn traf_at(base_media_decode_time: u64) -> TrackFragmentBox {
+        let mut fragment = traf(1, 1, None);
+        let mut tfdt = TrackFragmentBaseMediaDecodeTimeBox::default();
+        tfdt.base_media_decode_time = base_media_decode_time;
+        fragment.tfdt = Some(tfdt);
+        fragment
+    }
+
+    #[test]
+    fn a_tfdt_past_the_samples_before_it_is_taken_and_one_before_them_is_refused_and_taken_when_read_lossily()
+     {
+        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
+        let _ = reader
+            .handle_movie(&movie_with_samples_and_fragments())
+            .unwrap()
+            .count();
+        let mut found = Vec::new();
+        for (offset, base) in [(1000, 20), (2000, 70), (3000, 50)] {
+            found.push(
+                reader
+                    .handle_movie_fragment(&moof([traf_at(base)]), offset)
+                    .map(Iterator::collect::<Vec<_>>),
+            );
+        }
+        let lossy: Vec<_> = reader
+            .handle_movie_fragment_lossy(&moof([traf_at(50)]), 3000)
+            .unwrap()
+            .collect();
+        assert_eq!(
+            (found, lossy),
+            (
+                vec![
+                    Ok(vec![at(1000, 4, 20, 20)]),
+                    Ok(vec![at(2000, 4, 70, 20)]),
+                    Err(Error::DecodingTimeMismatch {
+                        track_id: 1,
+                        expected: 90,
+                        found: 50
+                    }),
+                ],
+                vec![at(3000, 4, 50, 20)]
+            )
+        );
+    }
+
+    #[test]
+    fn the_tfdt_of_a_track_with_no_sample_before_it_disagrees_with_nothing() {
+        let mut movie = movie_with_samples_and_fragments();
+        movie.trak = vec![track(1, 10, &[], &[], &[])];
+        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
+        let _ = reader.handle_movie(&movie).unwrap().count();
+        let found: Vec<_> = reader
+            .handle_movie_fragment(&moof([traf_at(219)]), 1000)
+            .unwrap()
+            .collect();
+        assert_eq!(found, vec![at(1000, 4, 219, 20)]);
+    }
+
+    #[test]
+    fn a_fragment_refused_for_its_tfdt_leaves_the_decoding_times_as_they_were() {
+        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
+        let _ = reader
+            .handle_movie(&movie_with_samples_and_fragments())
+            .unwrap()
+            .count();
+        let refused = reader
+            .handle_movie_fragment(&moof([traf(1, 1, None), traf_at(0)]), 1000)
+            .map(|_| ());
+        let next: Vec<_> = reader
+            .handle_movie_fragment(&moof([traf(1, 1, None)]), 2000)
+            .unwrap()
+            .collect();
+        assert_eq!(
+            (refused, next),
+            (
+                Err(Error::DecodingTimeMismatch {
+                    track_id: 1,
+                    expected: 40,
+                    found: 0
+                }),
+                vec![at(2000, 4, 20, 20)]
+            )
+        );
     }
 
     #[test]

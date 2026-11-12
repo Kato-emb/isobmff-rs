@@ -3,9 +3,12 @@
 #[cfg(test)]
 mod tests {
     use isobmff::demuxer::{Error, Event};
-    use isobmff::{Demuxer, DemuxerConfig, SampleLocation};
+    use isobmff::{Demuxer, DemuxerConfig, SampleLocation, structure_data};
+    use isobmff_boxes::{SampleToChunkBox, TimeToSampleBox};
+    use isobmff_core::BoxDefinition;
     use isobmff_test_support::conformance_files;
     use isobmff_test_support::fixtures::fragments_ahead_of_their_samples;
+    use std::collections::BTreeMap;
 
     /// The fixtures whose samples all lie after the `moov`
     const FIXTURES: [(&str, &[u8]); 3] = [
@@ -456,10 +459,7 @@ mod tests {
                 matches!(
                     reported,
                     Reported::Error(Error::StructureData {
-                        source: isobmff::structure_data::Error::SampleCountOverLimit {
-                            limit: 8,
-                            ..
-                        },
+                        source: structure_data::Error::SampleCountOverLimit { limit: 8, .. },
                         ..
                     })
                 )
@@ -512,5 +512,253 @@ mod tests {
             }
         }
         assert_eq!(differences, Vec::<String>::new());
+    }
+
+    /// What the demuxer reports of a file whose boxes disagree with themselves, in order
+    #[derive(Debug, PartialEq, Eq)]
+    enum Read {
+        Movie,
+        MovieFragment(u32),
+        /// A run of locations, as how many of each track it holds
+        Locations(BTreeMap<u32, usize>),
+        Error(Error),
+    }
+
+    /// What the demuxer reports of `file` under `config`, subscribed to no track: each box read into a value, each error, and each run of locations
+    fn read_disagreeing(file: &[u8], config: DemuxerConfig) -> Vec<Read> {
+        let mut read: Vec<Read> = Vec::new();
+        for reported in read_where_required(file, config, Subscribe::Only(&[])) {
+            let next = match reported {
+                Reported::Movie(_) => Read::Movie,
+                Reported::MovieFragment(sequence_number) => Read::MovieFragment(sequence_number),
+                Reported::Error(error) => Read::Error(error),
+                Reported::SampleLocation(location) => {
+                    let track_id = location.properties.track_id;
+                    if let Some(Read::Locations(counts)) = read.last_mut() {
+                        let count = counts.entry(track_id).or_insert(0);
+                        *count = count.saturating_add(1);
+                        continue;
+                    }
+                    Read::Locations(BTreeMap::from([(track_id, 1)]))
+                }
+                Reported::FileType
+                | Reported::SegmentType
+                | Reported::Sample(..)
+                | Reported::Box(_)
+                | Reported::Other(_) => continue,
+            };
+            read.push(next);
+        }
+        read
+    }
+
+    /// The error of a `moov` or a `moof` at `offset` whose samples the structure-data refuses for `source`
+    fn refused(offset: u64, box_type: &[u8; 4], source: structure_data::Error) -> Read {
+        Read::Error(Error::StructureData {
+            offset,
+            box_type: isobmff_core::BoxType::compact(*box_type),
+            source,
+        })
+    }
+
+    /// A run of locations, `(track_ID, count)` for each track it holds
+    fn run_of(counts: &[(u32, usize)]) -> Read {
+        Read::Locations(counts.iter().copied().collect())
+    }
+
+    #[test]
+    fn a_box_whose_tables_disagree_is_reported_then_read_lossily() {
+        let sample_count_mismatch = |track_id, box_type, sample_count, table_sample_count| {
+            structure_data::Error::SampleCountMismatch {
+                track_id,
+                box_type,
+                sample_count,
+                table_sample_count,
+            }
+        };
+        /// File offset of the `moov` of `movie_moov_last.mp4`, which the fixtures change in place
+        const MOOV_OFFSET: u64 = 22595;
+        let read = |file| read_disagreeing(file, DemuxerConfig::default());
+        assert_eq!(
+            [
+                read(include_bytes!("fixtures/mismatch_tables.mp4")),
+                read(include_bytes!("fixtures/mismatch_chunks.mp4")),
+                read(include_bytes!("fixtures/mismatch_tfdt.mp4")),
+            ],
+            [
+                vec![
+                    refused(
+                        MOOV_OFFSET,
+                        b"moov",
+                        sample_count_mismatch(1, TimeToSampleBox::BOX_TYPE, 12, 10)
+                    ),
+                    Read::Movie,
+                    run_of(&[(1, 10), (2, 55)]),
+                ],
+                vec![
+                    refused(
+                        MOOV_OFFSET,
+                        b"moov",
+                        sample_count_mismatch(1, SampleToChunkBox::BOX_TYPE, 12, 24)
+                    ),
+                    Read::Movie,
+                    run_of(&[(1, 12), (2, 58)]),
+                ],
+                vec![
+                    Read::Movie,
+                    Read::MovieFragment(1),
+                    run_of(&[(1, 4), (2, 20)]),
+                    Read::MovieFragment(2),
+                    run_of(&[(1, 4), (2, 19)]),
+                    refused(
+                        16904,
+                        b"moof",
+                        structure_data::Error::DecodingTimeMismatch {
+                            track_id: 1,
+                            expected: 8511,
+                            found: 8411
+                        }
+                    ),
+                    Read::MovieFragment(3),
+                    run_of(&[(1, 4), (2, 19)]),
+                ],
+            ]
+        );
+    }
+
+    #[test]
+    fn a_movie_fragment_refused_either_way_is_left_out_and_reading_goes_on() {
+        use isobmff_boxes::{MovieFragmentBox, TrackFragmentBox, TrackRunBox, TrackRunSamples};
+        use isobmff_test_support::fixtures::encoded;
+
+        // Why split the fixture at 16904: its third `moof` starts there, after
+        // the second and that one's `mdat`.
+        let fixture: &[u8] = include_bytes!("fixtures/mismatch_tfdt.mp4");
+        let (before, after) = fixture.split_at(16904);
+        let moof = |track_id, sample_count| {
+            let mut trun = TrackRunBox::default();
+            trun.samples = TrackRunSamples::EmptyRows { sample_count };
+            let mut traf = TrackFragmentBox::default();
+            traf.tfhd.track_id = track_id;
+            traf.trun = vec![trun];
+            let mut moof = MovieFragmentBox::default();
+            moof.traf = vec![traf];
+            encoded(&moof)
+        };
+        let (over_limit, unknown_track) = (moof(1, 64), moof(9, 1));
+        let file = [before, &over_limit, &unknown_track, after].concat();
+        let offset = |length: usize| u64::try_from(length).unwrap();
+        let mut config = DemuxerConfig::default();
+        config.sample_count_limit = 32;
+        assert_eq!(
+            read_disagreeing(&file, config).get(3..),
+            Some(
+                [
+                    Read::MovieFragment(2),
+                    run_of(&[(1, 4), (2, 19)]),
+                    refused(
+                        offset(before.len()),
+                        b"moof",
+                        structure_data::Error::SampleCountOverLimit {
+                            sample_count: 64,
+                            limit: 32
+                        }
+                    ),
+                    refused(
+                        offset(before.len() + over_limit.len()),
+                        b"moof",
+                        structure_data::Error::UnknownTrack { track_id: 9 }
+                    ),
+                    refused(
+                        offset(before.len() + over_limit.len() + unknown_track.len()),
+                        b"moof",
+                        structure_data::Error::DecodingTimeMismatch {
+                            track_id: 1,
+                            expected: 8511,
+                            found: 8411
+                        }
+                    ),
+                    Read::MovieFragment(3),
+                    run_of(&[(1, 4), (2, 19)]),
+                ]
+                .as_slice()
+            )
+        );
+    }
+
+    #[test]
+    fn the_movie_fragments_after_a_movie_read_lossily_take_its_tracks() {
+        use isobmff_boxes::{
+            MovieExtendsBox, MovieFragmentBox, TrackExtendsBox, TrackFragmentBox, TrackRunBox,
+            TrackRunSamples,
+        };
+        use isobmff_test_support::fixtures::{encoded, movie, track};
+
+        let mut trak = track(1, 20, &[], &[], &[]);
+        let stts = trak.mdia.minf.stbl.stts.as_mut().unwrap();
+        stts.entries.first_mut().unwrap().sample_count = 3;
+        let mut moov = movie([trak]);
+        let mut trex = TrackExtendsBox::default();
+        (trex.track_id, trex.default_sample_description_index) = (1, 1);
+        (trex.default_sample_duration, trex.default_sample_size) = (20, 4);
+        let mut mvex = MovieExtendsBox::default();
+        mvex.trex = vec![trex];
+        moov.mvex = Some(mvex);
+        moov.mvhd.next_track_id = 2;
+        let mut trun = TrackRunBox::default();
+        trun.samples = TrackRunSamples::EmptyRows { sample_count: 1 };
+        let mut traf = TrackFragmentBox::default();
+        traf.tfhd.track_id = 1;
+        traf.trun = vec![trun];
+        let mut moof = MovieFragmentBox::default();
+        moof.mfhd.sequence_number = 1;
+        moof.traf = vec![traf];
+        let file = [encoded(&moov), encoded(&moof)].concat();
+        assert_eq!(
+            read_disagreeing(&file, DemuxerConfig::default()),
+            [
+                refused(
+                    0,
+                    b"moov",
+                    structure_data::Error::SampleCountMismatch {
+                        track_id: 1,
+                        box_type: TimeToSampleBox::BOX_TYPE,
+                        sample_count: 0,
+                        table_sample_count: 3,
+                    }
+                ),
+                Read::Movie,
+                Read::MovieFragment(1),
+                run_of(&[(1, 1)]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_movie_whose_unused_sample_to_chunk_run_names_no_sample_entry_is_read_lossily() {
+        use isobmff_test_support::fixtures::{encoded, movie, track};
+
+        let mut trak = track(7, 10, &[1], &[(1, 1), (2, 1)], &[100, 200]);
+        let stsc = trak.mdia.minf.stbl.stsc.as_mut().unwrap();
+        stsc.entries.last_mut().unwrap().sample_description_index = 2;
+        let mut moov = movie([trak]);
+        moov.mvhd.next_track_id = 8;
+        assert_eq!(
+            read_disagreeing(&encoded(&moov), DemuxerConfig::default()),
+            [
+                refused(
+                    0,
+                    b"moov",
+                    structure_data::Error::SampleCountMismatch {
+                        track_id: 7,
+                        box_type: SampleToChunkBox::BOX_TYPE,
+                        sample_count: 1,
+                        table_sample_count: 2,
+                    }
+                ),
+                Read::Movie,
+                run_of(&[(7, 1)]),
+            ]
+        );
     }
 }

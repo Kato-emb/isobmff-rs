@@ -98,4 +98,29 @@ mod tests {
             "track 1: 0 samples, 0 bytes\ntrack 2: 0 samples, 0 bytes\n"
         );
     }
+
+    #[test]
+    fn a_fixture_whose_tables_disagree_reports_the_error_and_lends_the_samples_read_lossily() {
+        let summaries = [
+            include_bytes!("../crates/isobmff/tests/fixtures/mismatch_tables.mp4").as_slice(),
+            include_bytes!("../crates/isobmff/tests/fixtures/mismatch_chunks.mp4"),
+            include_bytes!("../crates/isobmff/tests/fixtures/mismatch_tfdt.mp4"),
+        ]
+        .map(|file| {
+            let mut summary = Vec::new();
+            demux(Cursor::new(file), &mut summary).unwrap();
+            String::from_utf8(summary).unwrap()
+        });
+        assert_eq!(
+            summaries,
+            [
+                "error: the samples of the `moov` at offset 22595 cannot be resolved as the specification reads them\n\
+                 track 1: 10 samples, 16358 bytes\ntrack 2: 55 samples, 4732 bytes\n",
+                "error: the samples of the `moov` at offset 22595 cannot be resolved as the specification reads them\n\
+                 track 1: 12 samples, 17615 bytes\ntrack 2: 58 samples, 4932 bytes\n",
+                "error: the samples of the `moof` at offset 16904 cannot be resolved as the specification reads them\n\
+                 track 1: 12 samples, 17615 bytes\ntrack 2: 58 samples, 4932 bytes\n",
+            ]
+        );
+    }
 }

@@ -11,6 +11,7 @@ use isobmff_boxes::{
 use isobmff_core::{BoxDefinition, BoxType};
 
 use super::Error;
+use super::reader::Reading;
 use super::sample::is_in_same_file;
 use crate::{SampleLocation, SampleProperties};
 
@@ -63,17 +64,22 @@ pub(super) fn sample_count(track: &TrackBox) -> Result<u64, Error> {
     sizes(track).map(|(sample_count, _)| sample_count)
 }
 
-/// Appends the samples of `track` to `locations`, in decoding order, and returns the decoding time they end at, refusing a sample table whose tables disagree
-pub(super) fn resolve(track: &TrackBox, locations: &mut Vec<SampleLocation>) -> Result<u64, Error> {
+/// Appends the samples of `track` to `locations`, in decoding order, and returns the decoding time they end at, or `None` for no sample
+///
+/// A table that counts another number of samples than the sample size
+/// table, or an entry of the sync sample table that names no sample, is
+/// refused as the specification reads it, and read lossily as
+/// [`StructureDataReader::handle_movie_lossy`](super::StructureDataReader::handle_movie_lossy)
+/// sets out. A sample table under which no sample can be placed is refused
+/// either way.
+pub(super) fn resolve(
+    track: &TrackBox,
+    locations: &mut Vec<SampleLocation>,
+    reading: Reading,
+) -> Result<Option<u64>, Error> {
     let track_id = track.tkhd.track_id;
     let stbl = &track.mdia.minf.stbl;
     let missing = |box_type| Error::MissingTable { track_id, box_type };
-    let mismatch = |box_type, sample_count, table_sample_count| Error::SampleCountMismatch {
-        track_id,
-        box_type,
-        sample_count,
-        table_sample_count,
-    };
     let invalid = |box_type, entry: usize| Error::InvalidEntry {
         track_id,
         box_type,
@@ -86,39 +92,59 @@ pub(super) fn resolve(track: &TrackBox, locations: &mut Vec<SampleLocation>) -> 
         .stts
         .as_ref()
         .ok_or_else(|| missing(TimeToSampleBox::BOX_TYPE))?;
-    let agrees = |box_type, counts: Option<u64>| match counts {
-        Some(table_sample_count) if table_sample_count == sample_count => Ok(()),
-        Some(table_sample_count) => Err(mismatch(box_type, sample_count, table_sample_count)),
-        None => Err(overflow),
+    let mismatch = |box_type, table_sample_count| Error::SampleCountMismatch {
+        track_id,
+        box_type,
+        sample_count,
+        table_sample_count,
     };
-    agrees(
-        TimeToSampleBox::BOX_TYPE,
-        total(stts.entries.iter().map(|entry| entry.sample_count)),
-    )?;
+    let agrees = |box_type, table_sample_count: u64| match reading {
+        Reading::Specification if table_sample_count != sample_count => {
+            Err(mismatch(box_type, table_sample_count))
+        }
+        Reading::Specification | Reading::Lossy => Ok(()),
+    };
+    let stts_sample_count =
+        total(stts.entries.iter().map(|entry| entry.sample_count)).ok_or(overflow)?;
+    agrees(TimeToSampleBox::BOX_TYPE, stts_sample_count)?;
     if let Some(ctts) = &stbl.ctts {
         agrees(
             CompositionOffsetBox::BOX_TYPE,
-            total(ctts.entries.iter().map(|entry| entry.sample_count)),
+            total(ctts.entries.iter().map(|entry| entry.sample_count)).ok_or(overflow)?,
         )?;
     }
-    if let Some(sdtp) = &stbl.sdtp
-        && length_of(sdtp.entries.len()) != sample_count
-    {
-        return Err(mismatch(
+    if let Some(sdtp) = &stbl.sdtp {
+        agrees(
             SampleDependencyTypeBox::BOX_TYPE,
-            sample_count,
             length_of(sdtp.entries.len()),
-        ));
+        )?;
     }
-    if let Some(stss) = &stbl.stss {
-        let mut previous = 0;
-        for (entry, &sample_number) in stss.sample_numbers.iter().enumerate() {
-            if sample_number <= previous || u64::from(sample_number) > sample_count {
-                return Err(invalid(SyncSampleBox::BOX_TYPE, entry));
+    // Why read past the entries of the sync sample table that name no sample
+    // or go back rather than drop the table when read lossily: they give no
+    // sample a value, and the entries that follow still mark sync samples.
+    let sync_samples = match &stbl.stss {
+        None => None,
+        Some(stss) => {
+            // Why not reserve a slot for every entry: the box, not the limit,
+            // decides how many entries there are, while the numbers taken go
+            // up strictly and none is past `sample_count`, which the reader
+            // holds against its limit.
+            let mut followed = Vec::with_capacity(
+                stss.sample_numbers
+                    .len()
+                    .min(usize::try_from(sample_count).unwrap_or(usize::MAX)),
+            );
+            for (entry, &sample_number) in stss.sample_numbers.iter().enumerate() {
+                let previous = followed.last().copied().unwrap_or(0);
+                if sample_number > previous && u64::from(sample_number) <= sample_count {
+                    followed.push(sample_number);
+                } else if reading == Reading::Specification {
+                    return Err(invalid(SyncSampleBox::BOX_TYPE, entry));
+                }
             }
-            previous = sample_number;
+            Some(followed)
         }
-    }
+    };
     let stsc = stbl
         .stsc
         .as_ref()
@@ -126,22 +152,32 @@ pub(super) fn resolve(track: &TrackBox, locations: &mut Vec<SampleLocation>) -> 
     let chunk_offsets = chunk_offsets(stbl).ok_or_else(|| missing(ChunkOffsetBox::BOX_TYPE))?;
     let chunk_count = chunk_offsets.len();
     let chunk_samples = chunk_sample_count(stsc, chunk_count, invalid)?;
-    if chunk_samples != sample_count {
-        return Err(mismatch(
-            SampleToChunkBox::BOX_TYPE,
-            sample_count,
-            chunk_samples,
-        ));
+    agrees(SampleToChunkBox::BOX_TYPE, chunk_samples)?;
+    if sample_count == 0 {
+        return Ok(None);
     }
-    for (entry, stsc_entry) in stsc.entries.iter().enumerate() {
-        let data_reference_index =
-            data_reference_index(&stbl.stsd, stsc_entry.sample_description_index)
-                .ok_or_else(|| invalid(SampleToChunkBox::BOX_TYPE, entry))?;
-        if !is_in_same_file(&track.mdia.minf.dinf.dref, data_reference_index) {
-            return Err(Error::MediaDataElsewhere {
+    if chunk_samples == 0 {
+        return Err(mismatch(SampleToChunkBox::BOX_TYPE, chunk_samples));
+    }
+    if stts_sample_count == 0 {
+        return Err(mismatch(TimeToSampleBox::BOX_TYPE, stts_sample_count));
+    }
+    let placed = sample_count.min(chunk_samples).min(stts_sample_count);
+    let check_run = |entry: usize, sample_description_index: u32| {
+        let data_reference_index = data_reference_index(&stbl.stsd, sample_description_index)
+            .ok_or_else(|| invalid(SampleToChunkBox::BOX_TYPE, entry))?;
+        if is_in_same_file(&track.mdia.minf.dinf.dref, data_reference_index) {
+            Ok(())
+        } else {
+            Err(Error::MediaDataElsewhere {
                 track_id,
                 data_reference_index,
-            });
+            })
+        }
+    };
+    if reading == Reading::Specification {
+        for (entry, stsc_entry) in stsc.entries.iter().enumerate() {
+            check_run(entry, stsc_entry.sample_description_index)?;
         }
     }
 
@@ -160,15 +196,17 @@ pub(super) fn resolve(track: &TrackBox, locations: &mut Vec<SampleLocation>) -> 
         })
     });
     let mut dependencies = stbl.sdtp.iter().flat_map(|sdtp| sdtp.entries.iter());
-    let mut sync_samples = stbl
-        .stss
+    let mut sync_samples = sync_samples
         .as_ref()
-        .map(|stss| stss.sample_numbers.iter().peekable());
+        .map(|numbers| numbers.iter().peekable());
 
     let mut decoding_time = 0_u64;
     let mut sample_number = 0_u32;
     let mut current = 0_usize;
-    for (chunk, chunk_offset) in (1_u32..).zip(chunk_offsets.iter()) {
+    // Why not check every run up front when read lossily: a run no sample
+    // placed uses is not read.
+    let mut checked_run = None;
+    'chunks: for (chunk, chunk_offset) in (1_u32..).zip(chunk_offsets.iter()) {
         while stsc
             .entries
             .get(current.saturating_add(1))
@@ -181,14 +219,17 @@ pub(super) fn resolve(track: &TrackBox, locations: &mut Vec<SampleLocation>) -> 
         };
         let mut offset = chunk_offset;
         for _ in 0..stsc_entry.samples_per_chunk {
+            if u64::from(sample_number) >= placed {
+                break 'chunks;
+            }
+            if reading == Reading::Lossy && checked_run != Some(current) {
+                check_run(current, stsc_entry.sample_description_index)?;
+                checked_run = Some(current);
+            }
             let index = usize::try_from(sample_number).map_err(|_| overflow)?;
             sample_number = sample_number.checked_add(1).ok_or(overflow)?;
             let (Some(size), Some(sample_duration)) = (sizes.get(index), durations.next()) else {
-                return Err(mismatch(
-                    SampleToChunkBox::BOX_TYPE,
-                    sample_count,
-                    chunk_samples,
-                ));
+                break 'chunks;
             };
             let is_non_sync_sample = match &mut sync_samples {
                 None => false,
@@ -220,7 +261,7 @@ pub(super) fn resolve(track: &TrackBox, locations: &mut Vec<SampleLocation>) -> 
             offset = offset.checked_add(u64::from(size)).ok_or(overflow)?;
         }
     }
-    Ok(decoding_time)
+    Ok(Some(decoding_time))
 }
 
 /// The `chunk_offset` of each chunk, as the chunk offset table of a track gives it

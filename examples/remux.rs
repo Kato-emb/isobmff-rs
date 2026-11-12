@@ -263,4 +263,47 @@ mod tests {
         }
         std::fs::remove_dir_all(&directory).unwrap();
     }
+
+    #[test]
+    fn a_movie_whose_tables_disagree_is_not_written() {
+        use isobmff::BoxType;
+        use isobmff::demuxer::Error;
+        use isobmff::structure_data;
+
+        let refused = |result: Result<(), Box<dyn std::error::Error>>| {
+            result.unwrap_err().downcast_ref::<Error>().copied()
+        };
+        /// File offset of the `moov` of `movie_moov_last.mp4`, which the fixtures change in place
+        const MOOV_OFFSET: u64 = 22595;
+        for (file, box_type, table_sample_count) in [
+            (
+                include_bytes!("../crates/isobmff/tests/fixtures/mismatch_tables.mp4").as_slice(),
+                b"stts",
+                10,
+            ),
+            (
+                include_bytes!("../crates/isobmff/tests/fixtures/mismatch_chunks.mp4"),
+                b"stsc",
+                24,
+            ),
+        ] {
+            let error = Error::StructureData {
+                offset: MOOV_OFFSET,
+                box_type: BoxType::compact(*b"moov"),
+                source: structure_data::Error::SampleCountMismatch {
+                    track_id: 1,
+                    box_type: BoxType::compact(*box_type),
+                    sample_count: 12,
+                    table_sample_count,
+                },
+            };
+            assert_eq!(
+                [
+                    refused(movie_file(Cursor::new(file), Cursor::new(Vec::new()))),
+                    refused(fragmented_movie_file(Cursor::new(file), Vec::new())),
+                ],
+                [Some(error); 2]
+            );
+        }
+    }
 }

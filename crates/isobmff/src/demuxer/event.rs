@@ -80,8 +80,10 @@ pub enum Error {
         /// Why the box does not read
         source: isobmff_core::Error,
     },
-    /// The samples a `moov` or a `moof` declares cannot be resolved; no
-    /// location is reported for them
+    /// The samples a `moov` or a `moof` declares cannot be resolved as the
+    /// specification reads them; the box and the location of each of its
+    /// samples follow where they resolve when read lossily, and none
+    /// otherwise
     StructureData {
         /// File offset of the box
         offset: u64,
@@ -126,7 +128,7 @@ impl fmt::Display for Error {
                 offset, box_type, ..
             } => write!(
                 formatter,
-                "the samples of the `{box_type}` at offset {offset} cannot be resolved"
+                "the samples of the `{box_type}` at offset {offset} cannot be resolved as the specification reads them"
             ),
             Self::DuplicateMovie { offset } => write!(
                 formatter,

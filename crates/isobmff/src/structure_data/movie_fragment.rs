@@ -7,6 +7,7 @@ use isobmff_boxes::{
     TrackRunSamples,
 };
 
+use super::reader::Reading;
 use super::{Error, sample};
 use crate::{SampleLocation, SampleProperties};
 
@@ -20,13 +21,14 @@ pub(super) struct FragmentTrack {
     /// and whether it places the media data in the same file
     entries: Vec<(u16, bool)>,
     /// Decoding time of the next sample of the track: the sum of the
-    /// `sample_duration`s of the samples before it, §8.8.12
-    next_decoding_time: u64,
+    /// `sample_duration`s of the samples before it, §8.8.12, or the `tfdt`
+    /// of the last track fragment that gave one; `None` before any
+    next_decoding_time: Option<u64>,
 }
 
 impl FragmentTrack {
-    /// The track `track` of `movie`, whose samples in the `moov` end at `next_decoding_time`
-    pub(super) fn new(movie: &MovieBox, track: &TrackBox, next_decoding_time: u64) -> Self {
+    /// The track `track` of `movie`, whose samples in the `moov` end at `next_decoding_time`, or `None` for no sample
+    pub(super) fn new(movie: &MovieBox, track: &TrackBox, next_decoding_time: Option<u64>) -> Self {
         let track_id = track.tkhd.track_id;
         Self {
             track_id,
@@ -62,16 +64,20 @@ pub fn movie_fragment_sample_count(moof: &MovieFragmentBox) -> u64 {
 
 /// Appends the samples of `moof`, the `moof` at file offset `moof_offset`, to `locations`, and moves the decoding time of each track on past them
 ///
-/// Leaves `tracks` as they were where it refuses the box.
+/// A `tfdt` past the decoding time the samples before it in its track add
+/// up to is taken, §8.8.12.1. One before it is refused as the specification
+/// reads it, and taken when read lossily. Leaves `tracks` as they were
+/// where it refuses the box.
 pub(super) fn resolve(
     moof: &MovieFragmentBox,
     moof_offset: u64,
     tracks: &mut [FragmentTrack],
     locations: &mut Vec<SampleLocation>,
+    reading: Reading,
 ) -> Result<(), Error> {
     // Why move the decoding times on in a copy: a box refused at a later
     // track fragment leaves the tracks as they were.
-    let mut decoding_times: Vec<u64> = tracks
+    let mut decoding_times: Vec<Option<u64>> = tracks
         .iter()
         .map(|track| track.next_decoding_time)
         .collect();
@@ -134,8 +140,20 @@ pub(super) fn resolve(
             (None, true, _) | (None, false, None) => moof_offset,
         };
         if let Some(tfdt) = &traf.tfdt {
-            *decoding_time = tfdt.base_media_decode_time;
+            let found = tfdt.base_media_decode_time;
+            if let Some(expected) = *decoding_time
+                && found < expected
+                && reading == Reading::Specification
+            {
+                return Err(Error::DecodingTimeMismatch {
+                    track_id,
+                    expected,
+                    found,
+                });
+            }
+            *decoding_time = Some(found);
         }
+        let time = decoding_time.get_or_insert(0);
         let mut end = base;
         for trun in &traf.trun {
             let mut offset = match trun.data_offset {
@@ -156,7 +174,7 @@ pub(super) fn resolve(
                 locations.push(SampleLocation {
                     properties: SampleProperties {
                         track_id,
-                        decoding_time: *decoding_time,
+                        decoding_time: *time,
                         sample_duration,
                         sample_composition_time_offset: row
                             .sample_composition_time_offset
@@ -167,7 +185,7 @@ pub(super) fn resolve(
                     offset,
                     size,
                 });
-                *decoding_time = decoding_time
+                *time = time
                     .checked_add(u64::from(sample_duration))
                     .ok_or(overflow)?;
                 offset = offset.checked_add(u64::from(size)).ok_or(overflow)?;
