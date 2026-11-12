@@ -733,4 +733,32 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn a_movie_whose_unused_sample_to_chunk_run_names_no_sample_entry_is_read_lossily() {
+        use isobmff_test_support::fixtures::{encoded, movie, track};
+
+        let mut trak = track(7, 10, &[1], &[(1, 1), (2, 1)], &[100, 200]);
+        let stsc = trak.mdia.minf.stbl.stsc.as_mut().unwrap();
+        stsc.entries.last_mut().unwrap().sample_description_index = 2;
+        let mut moov = movie([trak]);
+        moov.mvhd.next_track_id = 8;
+        assert_eq!(
+            read_disagreeing(&encoded(&moov), DemuxerConfig::default()),
+            [
+                refused(
+                    0,
+                    b"moov",
+                    structure_data::Error::SampleCountMismatch {
+                        track_id: 7,
+                        box_type: SampleToChunkBox::BOX_TYPE,
+                        sample_count: 1,
+                        table_sample_count: 2,
+                    }
+                ),
+                Read::Movie,
+                run_of(&[(7, 1)]),
+            ]
+        );
+    }
 }

@@ -392,9 +392,9 @@ fn what_a_demuxer_holds_of_a_movie_it_refuses_does_not_grow_past_the_entries_of_
     use isobmff_boxes::SyncSampleBox;
     use isobmff_test_support::fixtures::{encoded, movie, track};
 
-    // Why subtract 12 bytes an entry: the payload of the `moov`, the sync
-    // sample table read from it, and the entries taken of it each hold 4
-    // bytes an entry, and nothing else may grow with the entries.
+    // Why subtract 8 bytes an entry: the payload of the `moov` and the sync
+    // sample table read from it each hold 4 bytes an entry, and nothing else
+    // may grow with the entries.
     let held_past_the_table = |entries: usize| {
         let mut trak = track(1, 10, &[1], &[(1, 1)], &[0]);
         let mut stss = SyncSampleBox::default();
@@ -425,13 +425,43 @@ fn what_a_demuxer_holds_of_a_movie_it_refuses_does_not_grow_past_the_entries_of_
                 }
             }
         });
-        (held.saturating_sub(entries * 3 * 4), reported)
+        (held.saturating_sub(entries * 2 * 4), reported)
     };
     let (few, few_reported) = held_past_the_table(1 << 12);
     let (many, many_reported) = held_past_the_table(1 << 20);
     println!(
-        "held at most {few} bytes past 12 bytes an entry reading 4096 sync sample entries that name no sample, {many} bytes reading 1048576; reported {few_reported:?}"
+        "held at most {few} bytes past 8 bytes an entry reading 4096 sync sample entries that name no sample, {many} bytes reading 1048576; reported {few_reported:?}"
     );
     assert_eq!(few_reported, many_reported);
+    assert_eq!(many, few);
+}
+
+#[test]
+fn what_a_structure_data_reader_allocates_does_not_grow_with_the_sync_sample_numbers_that_name_no_sample()
+ {
+    use isobmff::structure_data::StructureDataReader;
+    use isobmff_boxes::SyncSampleBox;
+    use isobmff_test_support::fixtures::{movie, track};
+
+    let allocated_reading = |entries: usize| {
+        let mut trak = track(1, 10, &[1], &[(1, 1)], &[0]);
+        let mut stss = SyncSampleBox::default();
+        stss.sample_numbers = vec![0; entries];
+        trak.mdia.minf.stbl.stss = Some(stss);
+        let moov = movie([trak]);
+        let mut read = (None, None);
+        let allocated = allocated_by(|| {
+            let mut reader = StructureDataReader::new(1);
+            read.0 = Some(reader.handle_movie(&moov).map(|_| ()));
+            read.1 = Some(reader.handle_movie_lossy(&moov).map(Iterator::count));
+        });
+        (allocated, read)
+    };
+    let (few, few_read) = allocated_reading(1 << 12);
+    let (many, many_read) = allocated_reading(1 << 20);
+    println!(
+        "allocated {few} bytes reading 4096 sync sample numbers that name no sample, {many} bytes reading 1048576, under a limit of 1 sample"
+    );
+    assert_eq!(few_read, many_read);
     assert_eq!(many, few);
 }

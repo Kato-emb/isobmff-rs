@@ -125,7 +125,15 @@ pub(super) fn resolve(
     let sync_samples = match &stbl.stss {
         None => None,
         Some(stss) => {
-            let mut followed = Vec::with_capacity(stss.sample_numbers.len());
+            // Why not reserve a slot for every entry: the box, not the limit,
+            // decides how many entries there are, while the numbers taken go
+            // up strictly and none is past `sample_count`, which the reader
+            // holds against its limit.
+            let mut followed = Vec::with_capacity(
+                stss.sample_numbers
+                    .len()
+                    .min(usize::try_from(sample_count).unwrap_or(usize::MAX)),
+            );
             for (entry, &sample_number) in stss.sample_numbers.iter().enumerate() {
                 let previous = followed.last().copied().unwrap_or(0);
                 if sample_number > previous && u64::from(sample_number) <= sample_count {
@@ -155,15 +163,21 @@ pub(super) fn resolve(
         return Err(mismatch(TimeToSampleBox::BOX_TYPE, stts_sample_count));
     }
     let placed = sample_count.min(chunk_samples).min(stts_sample_count);
-    for (entry, stsc_entry) in stsc.entries.iter().enumerate() {
-        let data_reference_index =
-            data_reference_index(&stbl.stsd, stsc_entry.sample_description_index)
-                .ok_or_else(|| invalid(SampleToChunkBox::BOX_TYPE, entry))?;
-        if !is_in_same_file(&track.mdia.minf.dinf.dref, data_reference_index) {
-            return Err(Error::MediaDataElsewhere {
+    let check_run = |entry: usize, sample_description_index: u32| {
+        let data_reference_index = data_reference_index(&stbl.stsd, sample_description_index)
+            .ok_or_else(|| invalid(SampleToChunkBox::BOX_TYPE, entry))?;
+        if is_in_same_file(&track.mdia.minf.dinf.dref, data_reference_index) {
+            Ok(())
+        } else {
+            Err(Error::MediaDataElsewhere {
                 track_id,
                 data_reference_index,
-            });
+            })
+        }
+    };
+    if reading == Reading::Specification {
+        for (entry, stsc_entry) in stsc.entries.iter().enumerate() {
+            check_run(entry, stsc_entry.sample_description_index)?;
         }
     }
 
@@ -189,6 +203,9 @@ pub(super) fn resolve(
     let mut decoding_time = 0_u64;
     let mut sample_number = 0_u32;
     let mut current = 0_usize;
+    // Why not check every run up front when read lossily: a run no sample
+    // placed uses is not read.
+    let mut checked_run = None;
     'chunks: for (chunk, chunk_offset) in (1_u32..).zip(chunk_offsets.iter()) {
         while stsc
             .entries
@@ -204,6 +221,10 @@ pub(super) fn resolve(
         for _ in 0..stsc_entry.samples_per_chunk {
             if u64::from(sample_number) >= placed {
                 break 'chunks;
+            }
+            if reading == Reading::Lossy && checked_run != Some(current) {
+                check_run(current, stsc_entry.sample_description_index)?;
+                checked_run = Some(current);
             }
             let index = usize::try_from(sample_number).map_err(|_| overflow)?;
             sample_number = sample_number.checked_add(1).ok_or(overflow)?;

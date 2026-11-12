@@ -299,6 +299,20 @@ mod tests {
     }
 
     #[test]
+    fn a_sample_to_chunk_run_no_sample_placed_uses_is_not_read_when_read_lossily() {
+        let mut trak = track(7, 10, &[1], &[(1, 1), (2, 1)], &[100, 200]);
+        let stsc = trak.mdia.minf.stbl.stsc.as_mut().unwrap();
+        stsc.entries.last_mut().unwrap().sample_description_index = 2;
+        assert_eq!(
+            read_both_ways(&movie([trak])),
+            (
+                Err(mismatch(SampleToChunkBox::BOX_TYPE, 1, 2)),
+                Ok(vec![(100, 1, 0, 10)])
+            )
+        );
+    }
+
+    #[test]
     fn a_movie_refused_gives_no_track_to_the_movie_fragments_after_it() {
         let mismatched = durations_counted(track(7, 10, &[1, 2], &[(1, 2)], &[0]), 3);
         let mut reader = StructureDataReader::new(1024);
