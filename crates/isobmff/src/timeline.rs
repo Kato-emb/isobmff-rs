@@ -1,4 +1,4 @@
-//! The timelines of a movie: the durations its headers declare, as its sample tables and edit lists give them, and where its edits start in the media
+//! The timelines of a movie: the durations its headers declare, as its sample tables and edit lists give them, where its edits start in the media, and how they present its samples
 
 use core::fmt;
 use core::num::NonZeroU128;
@@ -6,6 +6,10 @@ use core::num::NonZeroU128;
 use isobmff_boxes::{EditListBox, MovieBox};
 
 use crate::structure_data::{composition_end, media_duration};
+
+mod presentation;
+
+pub use presentation::{Presentation, PresentedSample, presentation};
 
 /// Makes the headers of `movie` declare the durations its sample tables and edit lists give, of the movie, of each of its tracks and of their media, each header in the version they need
 ///
@@ -177,7 +181,7 @@ pub fn move_media_times(elst: &mut EditListBox, earlier: u64, media_end: u64) ->
     Ok(())
 }
 
-/// Why the edits of a track cannot be moved where its media now starts
+/// Why the edits of a track cannot be moved where its media now starts, or cannot present its samples
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Error {
@@ -193,6 +197,27 @@ pub enum Error {
         /// started before it moved
         media_end: u64,
     },
+    /// The movie has no track of this `track_ID`
+    UnknownTrack {
+        /// `track_ID` asked for
+        track_id: u32,
+    },
+    /// A sample is of another track than the one asked for
+    OtherTrack {
+        /// `track_ID` of the track asked for
+        track_id: u32,
+        /// `track_ID` of the sample
+        found: u32,
+    },
+    /// The track has an edit list, and the movie or its media has a
+    /// `timescale` of 0, which ISO/IEC 14496-12 §8.2.2 and §8.4.2 do not
+    /// allow: its edits cannot be written in the timescale of the media
+    ZeroTimescale {
+        /// `timescale` of the `mvhd`
+        movie_timescale: u32,
+        /// `timescale` of the `mdhd` of the track
+        media_timescale: u32,
+    },
 }
 
 impl fmt::Display for Error {
@@ -205,6 +230,20 @@ impl fmt::Display for Error {
             } => write!(
                 formatter,
                 "an edit starts at media_time {media_time}, outside the media, which runs from {media_start} to {media_end}"
+            ),
+            Self::UnknownTrack { track_id } => {
+                write!(formatter, "the movie has no track {track_id}")
+            }
+            Self::OtherTrack { track_id, found } => write!(
+                formatter,
+                "a sample of track {found} is among those of track {track_id}"
+            ),
+            Self::ZeroTimescale {
+                movie_timescale,
+                media_timescale,
+            } => write!(
+                formatter,
+                "the movie timescale is {movie_timescale} and the media timescale {media_timescale}, and an edit list needs both above 0"
             ),
         }
     }

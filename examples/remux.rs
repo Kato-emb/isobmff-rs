@@ -1,12 +1,18 @@
 //! A file read with the demuxer where it asks and written again with a muxer as it is read, as a movie file or as a fragmented movie file
 //!
-//! The example hands each sample the demuxer lends to [`MovieFileMuxer`],
-//! or with `--fragmented` to [`FragmentedMovieFileMuxer`], which ends a
-//! fragment where one of the file did and where the next sample would pass
-//! the limits of the muxer, and writes what the muxer holds after each sample.
-//! A movie file then takes the header of its `mdat`, known once every sample
-//! is in it, written over the first. Memory is bounded by the limits of
-//! [`DemuxerConfig`] and [`MuxerConfig`], whatever the length of the file.
+//! The muxer takes the samples of a track in decoding order, which need not
+//! be the order their bytes lie in the file, ISO/IEC 14496-12 §8.7.5. The
+//! example takes the location of each sample of the `moov` or a `moof` from
+//! the demuxer, orders them by decoding time, reads the bytes of each where
+//! its location says, and hands it to [`MovieFileMuxer`], or with
+//! `--fragmented` to [`FragmentedMovieFileMuxer`], which ends a fragment
+//! where one of the file did and where the next sample would pass the limits
+//! of the muxer. Samples of different tracks are ordered by their decoding
+//! times in seconds: how to interleave the tracks is the example's choice.
+//! It writes what the muxer holds after each sample. A movie file then takes
+//! the header of its `mdat`, known once every sample is in it, written over
+//! the first. Memory is bounded by the limits of [`DemuxerConfig`] and
+//! [`MuxerConfig`], whatever the length of the file.
 //!
 //! The output is a new file: an output that exists already is refused, so
 //! the input is never written over, whatever path names it.
@@ -20,7 +26,8 @@ use std::path::Path;
 use isobmff::demuxer::Event;
 use isobmff::muxer::{self, MovieParameters, TrackParameters};
 use isobmff::{
-    Demuxer, DemuxerConfig, FragmentedMovieFileMuxer, MovieFileMuxer, MuxerConfig, structure_data,
+    Demuxer, DemuxerConfig, FragmentedMovieFileMuxer, MovieFileMuxer, MuxerConfig, SampleLocation,
+    SampleProperties, structure_data,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -50,6 +57,52 @@ fn run(input: &Path, output: &Path, fragmented: bool) -> Result<(), Box<dyn Erro
     }
 }
 
+/// Hands each sample of `held` to `handle` with its bytes, read from `input`, in decoding order, the samples of tracks of different `timescales` ordered by their decoding times in seconds
+fn hand_over(
+    held: &mut Vec<SampleLocation>,
+    timescales: &[(u32, u32)],
+    input: &mut (impl Read + Seek),
+    mut handle: impl FnMut(SampleProperties, &[u8]) -> Result<(), Box<dyn Error>>,
+) -> Result<(), Box<dyn Error>> {
+    let timescale = |location: &SampleLocation| {
+        timescales
+            .iter()
+            .find(|&&(track_id, _)| track_id == location.properties.track_id)
+            .map_or(1, |&(_, timescale)| u128::from(timescale.max(1)))
+    };
+    // Why not compare the decoding times as they are: those of tracks of
+    // different timescales count different units. Each is scaled by the
+    // timescale of the other, a u64 by a u32, which a u128 holds.
+    held.sort_by(|first, second| {
+        (u128::from(first.properties.decoding_time) * timescale(second))
+            .cmp(&(u128::from(second.properties.decoding_time) * timescale(first)))
+    });
+    let limit = DemuxerConfig::default().sample_size_limit;
+    let mut bytes = Vec::new();
+    for location in held.drain(..) {
+        if u64::from(location.size) > limit {
+            return Err(format!(
+                "a sample of track {} is {} bytes, over the limit of {limit}",
+                location.properties.track_id, location.size
+            )
+            .into());
+        }
+        bytes.resize(usize::try_from(location.size)?, 0);
+        input.seek(SeekFrom::Start(location.offset))?;
+        input.read_exact(&mut bytes)?;
+        handle(location.properties, &bytes)?;
+    }
+    Ok(())
+}
+
+/// The `track_ID` and media `timescale` of each track of `moov`
+fn timescales_of(moov: &isobmff::boxes::MovieBox) -> Vec<(u32, u32)> {
+    moov.trak
+        .iter()
+        .map(|trak| (trak.tkhd.track_id, trak.mdia.mdhd.timescale))
+        .collect()
+}
+
 /// Writes the samples of `input` to `output` as a movie file: its `ftyp`, one `mdat` and the `moov` that declares them
 fn movie_file(
     mut input: impl Read + Seek,
@@ -57,7 +110,15 @@ fn movie_file(
 ) -> Result<(), Box<dyn Error>> {
     let mut demuxer = Demuxer::new(DemuxerConfig::default());
     let (mut buffer, mut out) = (vec![0; 64 * 1024], Vec::new());
-    let (mut file_type, mut muxer) = (None, None);
+    let (mut file_type, mut muxer, mut timescales, mut held) = (None, None, Vec::new(), Vec::new());
+    let mut write =
+        |muxer: &mut MovieFileMuxer, properties, bytes: &[u8]| -> Result<(), Box<dyn Error>> {
+            muxer.handle_sample(properties, bytes)?;
+            muxer.poll_output(&mut out);
+            output.write_all(&out)?;
+            out.clear();
+            Ok(())
+        };
     loop {
         while let Some(event) = demuxer.poll_event() {
             match event {
@@ -71,17 +132,17 @@ fn movie_file(
                     )?;
                     for trak in &moov.trak {
                         movie_muxer.add_track(TrackParameters::from(trak))?;
-                        demuxer.subscribe_track(trak.tkhd.track_id);
                     }
+                    timescales = timescales_of(&moov);
                     muxer = Some(movie_muxer);
                 }
-                Event::Sample(sample) => {
-                    let muxer = muxer.as_mut().ok_or("a sample before any moov")?;
-                    muxer.handle_sample(sample.properties, sample.bytes)?;
-                    muxer.poll_output(&mut out);
-                    output.write_all(&out)?;
-                    out.clear();
+                Event::MovieFragment(_) => {
+                    let muxer = muxer.as_mut().ok_or("a moof before any moov")?;
+                    hand_over(&mut held, &timescales, &mut input, |properties, bytes| {
+                        write(muxer, properties, bytes)
+                    })?;
                 }
+                Event::SampleLocation(location) => held.push(location),
                 Event::Error(error) => return Err(error.into()),
                 _ => {}
             }
@@ -96,6 +157,9 @@ fn movie_file(
         }
     }
     let mut muxer = muxer.ok_or("no moov")?;
+    hand_over(&mut held, &timescales, &mut input, |properties, bytes| {
+        write(&mut muxer, properties, bytes)
+    })?;
     let header = muxer.finish()?;
     muxer.poll_output(&mut out);
     output.write_all(&out)?;
@@ -111,7 +175,30 @@ fn fragmented_movie_file(
 ) -> Result<(), Box<dyn Error>> {
     let mut demuxer = Demuxer::new(DemuxerConfig::default());
     let (mut buffer, mut out) = (vec![0; 64 * 1024], Vec::new());
-    let (mut file_type, mut muxer) = (None, None);
+    let (mut file_type, mut muxer, mut timescales, mut held) = (None, None, Vec::new(), Vec::new());
+    let mut write = |muxer: &mut FragmentedMovieFileMuxer,
+                     properties,
+                     bytes: &[u8]|
+     -> Result<(), Box<dyn Error>> {
+        match muxer.handle_sample(properties, bytes) {
+            Err(
+                muxer::Error::BufferFull { .. }
+                | muxer::Error::StructureData(structure_data::Error::SampleCountOverLimit { .. }),
+            ) => {
+                muxer.poll_output(&mut out);
+                muxer.finish_fragment()?;
+                muxer.poll_output(&mut out);
+                output.write_all(&out)?;
+                out.clear();
+                muxer.handle_sample(properties, bytes)?;
+            }
+            result => result?,
+        }
+        muxer.poll_output(&mut out);
+        output.write_all(&out)?;
+        out.clear();
+        Ok(())
+    };
     loop {
         while let Some(event) = demuxer.poll_event() {
             match event {
@@ -125,37 +212,18 @@ fn fragmented_movie_file(
                     )?;
                     for trak in &moov.trak {
                         fragmented_muxer.add_track(TrackParameters::from(trak))?;
-                        demuxer.subscribe_track(trak.tkhd.track_id);
                     }
+                    timescales = timescales_of(&moov);
                     muxer = Some(fragmented_muxer);
                 }
                 Event::MovieFragment(_) => {
-                    if let Some(muxer) = muxer.as_mut() {
-                        muxer.finish_fragment()?;
-                    }
+                    let muxer = muxer.as_mut().ok_or("a moof before any moov")?;
+                    hand_over(&mut held, &timescales, &mut input, |properties, bytes| {
+                        write(muxer, properties, bytes)
+                    })?;
+                    muxer.finish_fragment()?;
                 }
-                Event::Sample(sample) => {
-                    let muxer = muxer.as_mut().ok_or("a sample before any moov")?;
-                    match muxer.handle_sample(sample.properties, sample.bytes) {
-                        Err(
-                            muxer::Error::BufferFull { .. }
-                            | muxer::Error::StructureData(
-                                structure_data::Error::SampleCountOverLimit { .. },
-                            ),
-                        ) => {
-                            muxer.poll_output(&mut out);
-                            muxer.finish_fragment()?;
-                            muxer.poll_output(&mut out);
-                            output.write_all(&out)?;
-                            out.clear();
-                            muxer.handle_sample(sample.properties, sample.bytes)?;
-                        }
-                        result => result?,
-                    }
-                    muxer.poll_output(&mut out);
-                    output.write_all(&out)?;
-                    out.clear();
-                }
+                Event::SampleLocation(location) => held.push(location),
                 Event::Error(error) => return Err(error.into()),
                 _ => {}
             }
@@ -170,6 +238,9 @@ fn fragmented_movie_file(
         }
     }
     let mut muxer = muxer.ok_or("no moov")?;
+    hand_over(&mut held, &timescales, &mut input, |properties, bytes| {
+        write(&mut muxer, properties, bytes)
+    })?;
     muxer.finish()?;
     muxer.poll_output(&mut out);
     output.write_all(&out)?;
@@ -185,7 +256,7 @@ mod tests {
 
     use super::{fragmented_movie_file, movie_file};
 
-    /// Every sample of `file` with its bytes, in file order, as the demuxer lends them
+    /// Every sample of `file` with its bytes, as the demuxer lends them, track by track and in decoding order within each
     fn samples_of(file: &[u8]) -> Vec<(SampleProperties, Vec<u8>)> {
         let mut demuxer = Demuxer::new(DemuxerConfig::default());
         let mut samples = Vec::new();
@@ -211,6 +282,7 @@ mod tests {
                 _ => demuxer.finish(),
             }
         }
+        samples.sort_by_key(|(properties, _)| (properties.track_id, properties.decoding_time));
         samples
     }
 
@@ -262,6 +334,22 @@ mod tests {
             }
         }
         std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn a_file_whose_samples_lie_out_of_decoding_order_is_written_again_with_them_in_it() {
+        let file = include_bytes!("../crates/isobmff/tests/fixtures/chunks_out_of_order.mp4");
+        let mut as_movie_file = Cursor::new(Vec::new());
+        movie_file(Cursor::new(file), &mut as_movie_file).unwrap();
+        let mut in_fragments = Vec::new();
+        fragmented_movie_file(Cursor::new(file), &mut in_fragments).unwrap();
+        assert_eq!(
+            (
+                samples_of(as_movie_file.get_ref()),
+                samples_of(&in_fragments)
+            ),
+            (samples_of(file), samples_of(file))
+        );
     }
 
     #[test]
