@@ -27,7 +27,7 @@ compressed-boxes = ["isobmff/compressed-boxes"]
 # checked against.
 isobmff-test-support.workspace = true
 # Writes the compressed boxes the tests of the demuxer read (§8.16).
-miniz_oxide = { version = "0.8.9", default-features = false, features = ["with-alloc"] }
+miniz_oxide = { version = "0.9.1", default-features = false, features = ["with-alloc"] }
 
 [lints]
 workspace = true
