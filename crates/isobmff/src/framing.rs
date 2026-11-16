@@ -4,9 +4,9 @@
 //! gathers the payload of a box whose type [`FramerConfig`] names, and skips
 //! the payload of any other without requesting it.
 
+mod buffer;
 mod config;
 mod event;
-mod input_buffer;
 mod reader;
 
 pub use config::FramerConfig;

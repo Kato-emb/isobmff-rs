@@ -10,7 +10,7 @@ use core::ops::Range;
 
 /// The bytes a reader copied from its input and has not yet dropped
 #[derive(Debug, Clone)]
-pub(super) struct InputBuffer {
+pub(super) struct Buffer {
     bytes: Vec<u8>,
     /// Bytes at the front of `bytes` that were reported or cut; a range an
     /// event lends can still point at them
@@ -19,7 +19,7 @@ pub(super) struct InputBuffer {
     ended: bool,
 }
 
-impl InputBuffer {
+impl Buffer {
     pub(super) const fn new() -> Self {
         Self {
             bytes: Vec::new(),
@@ -31,7 +31,7 @@ impl InputBuffer {
     /// Appends input; the ranges already lent keep pointing at the same bytes
     ///
     /// # Panics
-    /// Panics if called after [`InputBuffer::finish`].
+    /// Panics if called after [`Buffer::finish`].
     pub(super) fn extend(&mut self, bytes: &[u8]) {
         assert!(!self.ended, "input handed over after finish");
         // Why copy rather than borrow the caller's chunk: an event borrows the
