@@ -27,7 +27,10 @@ pub(super) struct FragmentTrack {
 }
 
 impl FragmentTrack {
-    /// Track `track_id`, of the defaults `defaults` of its `trex`, the sample entries `stsd` and the data references `dref`, whose samples in the `moov` end at `next_decoding_time`, or `None` for no sample
+    /// Track `track_id`, whose samples in the `moov` end at `next_decoding_time`, or `None` for no sample
+    ///
+    /// `defaults` are those of the `trex` of the track, and `stsd` and `dref`
+    /// its sample entries and data references.
     pub(super) fn new(
         track_id: u32,
         defaults: Option<TrackExtendsBox>,

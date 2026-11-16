@@ -187,14 +187,10 @@ impl StructureDataReader {
             .reserve(usize::try_from(sample_count).unwrap_or(usize::MAX));
         let mut tracks = Vec::with_capacity(movie.trak.len());
         for track in &movie.trak {
-            let (track_id, minf) = (track.tkhd.track_id, &track.mdia.minf);
-            let next_decoding_time = sample_table::resolve(
-                &minf.stbl,
-                track_id,
-                &minf.dinf.dref,
-                &mut self.locations,
-                reading,
-            )?;
+            let track_id = track.tkhd.track_id;
+            let (stbl, dref) = (&track.mdia.minf.stbl, &track.mdia.minf.dinf.dref);
+            let next_decoding_time =
+                sample_table::resolve(stbl, track_id, dref, &mut self.locations, reading)?;
             let defaults = movie.mvex.as_ref().and_then(|mvex| {
                 mvex.trex
                     .iter()
@@ -204,8 +200,8 @@ impl StructureDataReader {
             tracks.push(FragmentTrack::new(
                 track_id,
                 defaults,
-                &minf.stbl.stsd,
-                &minf.dinf.dref,
+                &stbl.stsd,
+                dref,
                 next_decoding_time,
             ));
         }
