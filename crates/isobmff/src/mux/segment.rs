@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{FileTypeBox, SegmentTypeBox};
 
+use super::output::to_bytes;
 use super::{Error, FragmentedMovieFileMuxer, MovieParameters, MuxerConfig, TrackParameters};
 use crate::SampleProperties;
 
@@ -66,14 +67,16 @@ use crate::SampleProperties;
 #[derive(Debug, Clone)]
 pub struct SegmentMuxer {
     muxer: FragmentedMovieFileMuxer,
-    segment_type: SegmentTypeBox,
+    /// The bytes of the `styp` each media segment opens with
+    segment_type: Vec<u8>,
 }
 
 impl SegmentMuxer {
     /// Creates a muxer of the movie `movie` describes, whose initialization segment opens with `file_type` and each media segment with `segment_type`, and holds the `ftyp`
     ///
     /// # Errors
-    /// As [`FragmentedMovieFileMuxer::new`].
+    /// As [`FragmentedMovieFileMuxer::new`], and [`Error::Encode`] where the
+    /// `styp` does not write.
     pub fn new(
         movie: MovieParameters,
         config: MuxerConfig,
@@ -81,8 +84,8 @@ impl SegmentMuxer {
         segment_type: SegmentTypeBox,
     ) -> Result<Self, Error> {
         Ok(Self {
+            segment_type: to_bytes(&segment_type)?,
             muxer: FragmentedMovieFileMuxer::new(movie, config, file_type)?,
-            segment_type,
         })
     }
 
@@ -112,9 +115,9 @@ impl SegmentMuxer {
     ///
     /// # Errors
     /// * [`Error::Finished`]: the muxer has finished.
-    /// * [`Error::Encode`]: the `styp` or the `moof` does not write.
+    /// * [`Error::Encode`]: the `moof` does not write.
     pub fn finish_segment(&mut self) -> Result<(), Error> {
-        self.muxer.write_fragment(Some(&self.segment_type))
+        self.muxer.write_fragment(&self.segment_type)
     }
 
     /// Appends the bytes the muxer holds to `out`, and holds none
@@ -131,6 +134,6 @@ impl SegmentMuxer {
     /// As [`finish_segment`](Self::finish_segment), and
     /// [`Error::Encode`] where the `moov` does not write.
     pub fn finish(&mut self) -> Result<(), Error> {
-        self.muxer.finish_after(Some(&self.segment_type))
+        self.muxer.finish_after(&self.segment_type)
     }
 }

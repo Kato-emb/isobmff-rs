@@ -3,10 +3,10 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-use isobmff_boxes::{FileTypeBox, SegmentTypeBox};
+use isobmff_boxes::FileTypeBox;
 use isobmff_core::BoxEncode;
 
-use super::output::{append_encoded, media_data_header};
+use super::output::{MEDIA_DATA_HEADER_LENGTH, append_encoded, media_data_header};
 use super::track_parameters::{check_track, data_reference};
 use super::{Error, MuxerConfig};
 use super::{MovieParameters, TrackParameters};
@@ -290,7 +290,7 @@ impl FragmentedMovieFileMuxer {
     /// * [`Error::Finished`]: the muxer has finished.
     /// * [`Error::Encode`]: the `moof` does not write.
     pub fn finish_fragment(&mut self) -> Result<(), Error> {
-        self.write_fragment(None)
+        self.write_fragment(&[])
     }
 
     /// Appends the bytes the muxer holds to `out`, and holds none
@@ -307,14 +307,31 @@ impl FragmentedMovieFileMuxer {
     /// * [`Error::Finished`]: the muxer has finished.
     /// * [`Error::Encode`]: the `moof` or the `moov` does not write.
     pub fn finish(&mut self) -> Result<(), Error> {
-        self.finish_after(None)
+        self.finish_after(&[])
     }
 
-    /// Ends the fragment, after `segment_type` where there is one, as [`finish_fragment`](Self::finish_fragment) does
-    pub(super) fn write_fragment(
-        &mut self,
-        segment_type: Option<&SegmentTypeBox>,
-    ) -> Result<(), Error> {
+    /// Returns how many bytes the muxer holds for [`poll_output`](Self::poll_output)
+    pub(super) fn held_len(&self) -> usize {
+        self.output.len()
+    }
+
+    /// Returns how many bytes the `moof` and the `mdat` of the fragment take, or `None` where it holds no sample
+    pub(super) fn fragment_len(&self) -> Option<u64> {
+        match &self.state {
+            State::Fragments { writer, media_data } if writer.has_samples() => {
+                let moof = writer.clone().finish();
+                Some(
+                    moof.encoded_len()
+                        .saturating_add(MEDIA_DATA_HEADER_LENGTH)
+                        .saturating_add(u64::try_from(media_data.len()).unwrap_or(u64::MAX)),
+                )
+            }
+            State::Tracks { .. } | State::Fragments { .. } | State::Finished => None,
+        }
+    }
+
+    /// Ends the fragment, after the bytes `before` where it holds a sample, as [`finish_fragment`](Self::finish_fragment) does
+    pub(super) fn write_fragment(&mut self, before: &[u8]) -> Result<(), Error> {
         match &mut self.state {
             State::Finished => Err(Error::Finished),
             State::Tracks { .. } => Ok(()),
@@ -329,10 +346,8 @@ impl FragmentedMovieFileMuxer {
                     .ok()
                     .and_then(media_data_header)
                     .ok_or(Error::Overflow)?;
-                let written = segment_type
-                    .map_or(Ok(()), |styp| append_encoded(styp, &mut self.output))
-                    .and_then(|()| append_encoded(&moof, &mut self.output));
-                if let Err(error) = written {
+                self.output.extend_from_slice(before);
+                if let Err(error) = append_encoded(&moof, &mut self.output) {
                     self.output.truncate(start);
                     return Err(error);
                 }
@@ -344,18 +359,15 @@ impl FragmentedMovieFileMuxer {
         }
     }
 
-    /// Ends the muxer, as [`finish`](Self::finish) does, the last fragment after `segment_type` where there is one
-    pub(super) fn finish_after(
-        &mut self,
-        segment_type: Option<&SegmentTypeBox>,
-    ) -> Result<(), Error> {
+    /// Ends the muxer, as [`finish`](Self::finish) does, the last fragment after the bytes `before` where it holds a sample
+    pub(super) fn finish_after(&mut self, before: &[u8]) -> Result<(), Error> {
         match &self.state {
             State::Finished => return Err(Error::Finished),
             State::Tracks { movie, tracks } => {
                 let moov = movie.to_fragmented_movie_box(tracks);
                 append_encoded(&moov, &mut self.output)?;
             }
-            State::Fragments { .. } => self.write_fragment(segment_type)?,
+            State::Fragments { .. } => self.write_fragment(before)?,
         }
         self.state = State::Finished;
         Ok(())

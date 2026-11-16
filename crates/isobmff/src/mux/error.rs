@@ -59,6 +59,42 @@ pub enum Error {
     },
     /// A box does not write
     Encode(isobmff_core::Error),
+    /// A media segment would hold more subsegments than its segment index
+    /// counts, ISO/IEC 14496-12 §8.14.3
+    SubsegmentCount {
+        /// The subsegments the segment index counts
+        subsegment_count: u16,
+    },
+    /// A subsegment presents no sample of the reference track, so the
+    /// segment index cannot give its earliest presentation time
+    NoReferenceSample {
+        /// `track_ID` of the reference track
+        track_id: u32,
+    },
+    /// The `moof` and the `mdat` of a subsegment take more bytes than the 31
+    /// bits of a `referenced_size` count
+    ReferencedSize {
+        /// The bytes they take
+        size: u64,
+    },
+    /// A subsegment lasts longer than the 32 bits of a `subsegment_duration`
+    /// count
+    SubsegmentDuration {
+        /// How long it lasts, in the timescale of the reference track
+        duration: u64,
+    },
+    /// A subsegment starts no later in presentation time than the one before
+    /// it in its segment, or the first of a segment not where the segment
+    /// before it ends: the subsegments a segment index references are
+    /// contiguous in presentation time, ISO/IEC 14496-12 §8.14.3.1
+    SubsegmentTime {
+        /// The earliest presentation time of the subsegment before, which
+        /// that of the subsegment is to be past, or the end of the segment
+        /// before, which that of its first subsegment is to be
+        expected: u64,
+        /// The earliest presentation time of the subsegment
+        found: u64,
+    },
 }
 
 impl fmt::Display for Error {
@@ -96,9 +132,29 @@ impl fmt::Display for Error {
             ),
             Self::Timeline { track_id, .. } => write!(
                 formatter,
-                "the edit list of track {track_id} starts an edit outside its samples"
+                "the edit list of track {track_id} does not fit its samples"
             ),
             Self::Encode(_) => write!(formatter, "a box does not write"),
+            Self::SubsegmentCount { subsegment_count } => write!(
+                formatter,
+                "a subsegment is past the {subsegment_count} the segment index counts"
+            ),
+            Self::NoReferenceSample { track_id } => write!(
+                formatter,
+                "a subsegment presents no sample of reference track {track_id}"
+            ),
+            Self::ReferencedSize { size } => write!(
+                formatter,
+                "a subsegment takes {size} bytes, more than referenced_size counts"
+            ),
+            Self::SubsegmentDuration { duration } => write!(
+                formatter,
+                "a subsegment lasts {duration}, longer than subsegment_duration counts"
+            ),
+            Self::SubsegmentTime { expected, found } => write!(
+                formatter,
+                "a subsegment starts at {found}, not after or at {expected} as the one before it calls for"
+            ),
         }
     }
 }
@@ -115,7 +171,12 @@ impl core::error::Error for Error {
             | Self::DataReferenceIndex { .. }
             | Self::UnknownTrack { .. }
             | Self::Overflow
-            | Self::BufferFull { .. } => None,
+            | Self::BufferFull { .. }
+            | Self::SubsegmentCount { .. }
+            | Self::NoReferenceSample { .. }
+            | Self::ReferencedSize { .. }
+            | Self::SubsegmentDuration { .. }
+            | Self::SubsegmentTime { .. } => None,
         }
     }
 }

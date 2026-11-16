@@ -6,6 +6,9 @@ use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, Extend
 
 use super::Error;
 
+/// Length of the header of the `mdat`, written with a `largesize` so that its length can be written over in place
+pub(super) const MEDIA_DATA_HEADER_LENGTH: u64 = 16;
+
 /// Returns the header of an `mdat` of `payload_length` bytes, in the 16 bytes of a `largesize`, or `None` where the box would be longer than 64 bits count
 ///
 /// The `media data` box, ISO/IEC 14496-12 §8.1.1, under the header of §4.2.2
@@ -34,4 +37,11 @@ pub(super) fn append_encoded(
             Err(Error::Encode(source))
         }
     }
+}
+
+/// Returns the bytes of the whole box `value` forms
+pub(super) fn to_bytes(value: &(impl BoxEncode + BoxDefinition)) -> Result<Vec<u8>, Error> {
+    let mut bytes = Vec::new();
+    append_encoded(value, &mut bytes)?;
+    Ok(bytes)
 }
