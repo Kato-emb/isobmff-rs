@@ -2,9 +2,10 @@
 
 use alloc::vec::Vec;
 
-use isobmff_core::{AnyBox, BoxDefinition, BoxEncode, BoxType, Error, OtherBoxes};
+use isobmff_core::{
+    AnyBox, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, OtherBoxes, RawBox,
+};
 
-use super::entry::split_children;
 use crate::btrt::BitRateBox;
 use crate::rinf::RestrictedSchemeInfoBox;
 use crate::scrb::ScrambleSchemeInfoBox;
@@ -139,4 +140,35 @@ pub(crate) fn encode_optional<'buffer, Child: BoxEncode + BoxDefinition>(
         Some(child) => child.encode(rest),
         None => Ok(rest),
     }
+}
+
+/// Splits the children of an entry before the first child of a type in `defined`, the boxes its class defines, or of a type in [`AnyEntryBoxes::BOX_TYPES`]
+///
+/// Returns the children before it, which are the boxes of a derived
+/// specification where the entry lays its children out in the order its
+/// class does, and the children from it on, from which the class takes its
+/// boxes and keeps the rest as the extra boxes.
+///
+/// # Errors
+///
+/// * The failures of [`ChildBoxes::decode`]: a child does not frame.
+pub(super) fn split_children<'payload>(
+    payload: &'payload [u8],
+    defined: &[BoxType],
+) -> Result<(OtherBoxes, ChildBoxes<'payload>), Error> {
+    let mut rest = payload;
+    while !rest.is_empty() {
+        let (child, after) = RawBox::split_first(rest)?;
+        let box_type = child.header().box_type();
+        if defined.contains(&box_type) || AnyEntryBoxes::BOX_TYPES.contains(&box_type) {
+            break;
+        }
+        rest = after;
+    }
+    let (derived, defined_onward) = payload.split_at(payload.len().saturating_sub(rest.len()));
+
+    Ok((
+        OtherBoxes::from(ChildBoxes::decode(derived)?),
+        ChildBoxes::decode(defined_onward)?,
+    ))
 }

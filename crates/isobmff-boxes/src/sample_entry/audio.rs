@@ -8,8 +8,10 @@ use isobmff_core::{
 };
 
 use super::audio_v1::AudioSampleEntryV1;
-use super::children::{AnyEntryBoxes, children_len, encode_children, encode_optional};
-use super::entry::{SampleEntry, from_class, split_children};
+use super::children::{
+    AnyEntryBoxes, children_len, encode_children, encode_optional, split_children,
+};
+use super::entry::{SampleEntry, from_class};
 use crate::btrt::BitRateBox;
 use crate::chnl::{ChannelLayout, ChannelStructure};
 use crate::dmix::{DownMixInstructions, UndecodedDownMixInstructions};

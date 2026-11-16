@@ -6,8 +6,10 @@ use isobmff_core::{
     BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FourCc, OtherBoxes, U16F16,
 };
 
-use super::children::{AnyEntryBoxes, children_len, encode_children, encode_optional};
-use super::entry::{SampleEntry, from_class, split_children};
+use super::children::{
+    AnyEntryBoxes, children_len, encode_children, encode_optional, split_children,
+};
+use super::entry::{SampleEntry, from_class};
 use crate::amve::AmbientViewingEnvironmentBox;
 use crate::btrt::BitRateBox;
 use crate::cclv::ContentColourVolumeBox;

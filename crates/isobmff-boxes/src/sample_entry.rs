@@ -1,4 +1,4 @@
-//! [`SampleEntry`], the fields every sample entry opens with, and the bytes the class derived for its format lays out
+//! [`SampleEntry`], the abstract class every sample entry derives from, and the classes ISO/IEC 14496-12 derives from it
 
 mod audio;
 mod audio_v1;

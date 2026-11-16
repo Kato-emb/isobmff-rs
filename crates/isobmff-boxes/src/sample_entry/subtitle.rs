@@ -6,8 +6,10 @@ use isobmff_core::{
     BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FourCc, OtherBoxes, Utf8List, Utf8String,
 };
 
-use super::children::{AnyEntryBoxes, children_len, encode_children, encode_optional};
-use super::entry::{SampleEntry, from_class, of_format, read_string, split_children};
+use super::children::{
+    AnyEntryBoxes, children_len, encode_children, encode_optional, split_children,
+};
+use super::entry::{SampleEntry, from_class, of_format, read_string};
 use super::mime_format::{MimeFormat, encode_remaining, remaining_len};
 use crate::btrt::BitRateBox;
 use crate::mime::MimeBox;

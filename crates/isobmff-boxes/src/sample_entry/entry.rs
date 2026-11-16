@@ -3,11 +3,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use isobmff_core::{
-    BoxEncode, BoxType, ChildBoxes, Error, FieldReader, FieldWriter, FourCc, OtherBoxes, RawBox,
-};
-
-use super::children::AnyEntryBoxes;
+use isobmff_core::{BoxEncode, Error, FieldReader, FieldWriter, FourCc};
 
 /// [`SampleEntry`], ISO/IEC 14496-12 §8.5.2
 ///
@@ -179,37 +175,6 @@ pub(super) fn from_class(
         data_reference_index,
         remaining_data,
     })
-}
-
-/// Splits the children of an entry before the first child of a type in `defined`, the boxes its class defines, or of a type in [`AnyEntryBoxes::BOX_TYPES`]
-///
-/// Returns the children before it, which are the boxes of a derived
-/// specification where the entry lays its children out in the order its
-/// class does, and the children from it on, from which the class takes its
-/// boxes and keeps the rest as the extra boxes.
-///
-/// # Errors
-///
-/// * The failures of [`ChildBoxes::decode`]: a child does not frame.
-pub(super) fn split_children<'payload>(
-    payload: &'payload [u8],
-    defined: &[BoxType],
-) -> Result<(OtherBoxes, ChildBoxes<'payload>), Error> {
-    let mut rest = payload;
-    while !rest.is_empty() {
-        let (child, after) = RawBox::split_first(rest)?;
-        let box_type = child.header().box_type();
-        if defined.contains(&box_type) || AnyEntryBoxes::BOX_TYPES.contains(&box_type) {
-            break;
-        }
-        rest = after;
-    }
-    let (derived, defined_onward) = payload.split_at(payload.len().saturating_sub(rest.len()));
-
-    Ok((
-        OtherBoxes::from(ChildBoxes::decode(derived)?),
-        ChildBoxes::decode(defined_onward)?,
-    ))
 }
 
 /// Checks that `entry` is of the format `format`, the format of a class that takes no coding name

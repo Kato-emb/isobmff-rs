@@ -7,9 +7,9 @@ use isobmff_core::{
 };
 
 use super::children::{
-    AnyEntryBoxes, AnyEntryChildren, children_len, encode_children, encode_optional,
+    AnyEntryBoxes, AnyEntryChildren, children_len, encode_children, encode_optional, split_children,
 };
-use super::entry::{SampleEntry, from_class, of_format, read_string, split_children};
+use super::entry::{SampleEntry, from_class, of_format, read_string};
 use super::mime_format::{MimeFormat, encode_remaining, remaining_len};
 use crate::btrt::BitRateBox;
 use crate::keys::MetadataKeyTableBox;

@@ -6,8 +6,10 @@ use isobmff_core::{
     BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, OtherBoxes, Utf8String,
 };
 
-use super::children::{AnyEntryBoxes, children_len, encode_children, encode_optional};
-use super::entry::{SampleEntry, read_string, split_children};
+use super::children::{
+    AnyEntryBoxes, children_len, encode_children, encode_optional, split_children,
+};
+use super::entry::{SampleEntry, read_string};
 use crate::btrt::BitRateBox;
 use crate::rinf::RestrictedSchemeInfoBox;
 use crate::scrb::ScrambleSchemeInfoBox;

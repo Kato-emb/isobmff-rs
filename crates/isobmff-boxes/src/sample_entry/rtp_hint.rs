@@ -7,8 +7,10 @@ use isobmff_core::{
     OtherBoxes,
 };
 
-use super::children::{AnyEntryBoxes, children_len, encode_children, encode_optional};
-use super::entry::{SampleEntry, from_class, of_format, split_children};
+use super::children::{
+    AnyEntryBoxes, children_len, encode_children, encode_optional, split_children,
+};
+use super::entry::{SampleEntry, from_class, of_format};
 use super::hint::HINT_TRACK_VERSION;
 use crate::btrt::BitRateBox;
 use crate::hint_entry_boxes::{SequenceOffsetBox, TimeOffsetBox, TimescaleEntryBox};
