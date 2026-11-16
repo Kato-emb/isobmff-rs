@@ -48,7 +48,7 @@ use isobmff_boxes::{
 ///
 /// ```
 /// use isobmff::structure_data::{SampleTableWriter, StructureDataReader, TrackSampleDescription};
-/// use isobmff::demuxer::Event;
+/// use isobmff::demux::Event;
 /// use isobmff::{Demuxer, DemuxerConfig};
 ///
 /// // Read the `moov` of a file and where the samples of its first track lie

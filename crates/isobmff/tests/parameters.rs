@@ -10,7 +10,7 @@ mod support;
 
 #[cfg(test)]
 mod tests {
-    use isobmff::muxer::{MovieParameters, TrackParameters};
+    use isobmff::mux::{MovieParameters, TrackParameters};
     use isobmff::timeline::declare_durations;
     use isobmff_boxes::{
         CompositionOffsetBox, CompositionOffsetEntry, EditBox, EditListBox, EditListEntry, Matrix,

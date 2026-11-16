@@ -36,7 +36,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use isobmff::boxes::{Free, FreeSpaceBox, MovieBox, MovieExtendsBox, TrackExtendsBox};
-use isobmff::demuxer::Event;
+use isobmff::demux::Event;
 use isobmff::structure_data::{
     MovieFragmentWriter, SampleTableWriter, TrackSampleDescription, composition_end,
 };
@@ -275,7 +275,7 @@ mod tests {
 
     use isobmff::boxes::MovieBox;
     use isobmff::framing::{BoxReader, Event, FramerConfig};
-    use isobmff::{Demuxer, DemuxerConfig, SampleProperties, demuxer, structure_data};
+    use isobmff::{Demuxer, DemuxerConfig, SampleProperties, demux, structure_data};
     use isobmff_test_support::{conformance_files, ffprobe, ffprobe_packets};
 
     use super::{MEDIA_DATA_HEADER_LENGTH, hybrid};
@@ -290,16 +290,16 @@ mod tests {
         loop {
             while let Some(event) = demuxer.poll_event() {
                 match event {
-                    demuxer::Event::Movie(moov) => {
+                    demux::Event::Movie(moov) => {
                         for trak in &moov.trak {
                             demuxer.subscribe_track(trak.tkhd.track_id);
                         }
                         movie = Some(*moov);
                     }
-                    demuxer::Event::Sample(sample) => {
+                    demux::Event::Sample(sample) => {
                         samples.push((sample.properties, sample.bytes.to_vec()));
                     }
-                    demuxer::Event::Error(_) => readable = false,
+                    demux::Event::Error(_) => readable = false,
                     _ => {}
                 }
             }

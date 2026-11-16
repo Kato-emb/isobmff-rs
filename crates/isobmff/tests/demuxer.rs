@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use isobmff::demuxer::{Error, Event};
+    use isobmff::demux::{Error, Event};
     use isobmff::{Demuxer, DemuxerConfig, SampleLocation, structure_data};
     use isobmff_boxes::{SampleToChunkBox, TimeToSampleBox};
     use isobmff_core::BoxDefinition;

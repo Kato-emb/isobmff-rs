@@ -24,7 +24,7 @@ use crate::timeline::declare_durations;
 /// movie that differs sets the fields after it:
 ///
 /// ```
-/// use isobmff::muxer::MovieParameters;
+/// use isobmff::mux::MovieParameters;
 ///
 /// let movie = MovieParameters {
 ///     creation_time: 3_786_825_600,
@@ -36,7 +36,7 @@ use crate::timeline::declare_durations;
 /// A value a muxer derives cannot be set:
 ///
 /// ```compile_fail
-/// let mut movie = isobmff::muxer::MovieParameters::new(1000);
+/// let mut movie = isobmff::mux::MovieParameters::new(1000);
 /// movie.duration = 60_000;
 /// ```
 #[expect(
@@ -112,7 +112,7 @@ impl MovieParameters {
     ///
     /// ```
     /// use isobmff::boxes::{SampleDescriptionBox, SampleTableBox};
-    /// use isobmff::muxer::{MovieParameters, TrackParameters};
+    /// use isobmff::mux::{MovieParameters, TrackParameters};
     /// use isobmff::FourCc;
     ///
     /// let track = TrackParameters::new(1, 48_000, FourCc::new(*b"soun"), SampleDescriptionBox::default());
@@ -153,7 +153,7 @@ impl MovieParameters {
     ///
     /// ```
     /// use isobmff::boxes::SampleDescriptionBox;
-    /// use isobmff::muxer::{MovieParameters, TrackParameters};
+    /// use isobmff::mux::{MovieParameters, TrackParameters};
     /// use isobmff::FourCc;
     ///
     /// let track = TrackParameters::new(1, 90_000, FourCc::new(*b"vide"), SampleDescriptionBox::default());

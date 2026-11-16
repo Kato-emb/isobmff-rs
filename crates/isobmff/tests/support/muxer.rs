@@ -1,8 +1,8 @@
 //! What the tests of the muxers share: a file read back with the demuxer, the samples and tracks they write, and what ffprobe reads of a packet
 
 use isobmff::SampleProperties;
-use isobmff::demuxer::Event;
-use isobmff::muxer::TrackParameters;
+use isobmff::demux::Event;
+use isobmff::mux::TrackParameters;
 use isobmff::{Demuxer, DemuxerConfig};
 use isobmff_boxes::{FileTypeBox, MovieBox, SampleFlags};
 use isobmff_core::FourCc;
@@ -16,7 +16,7 @@ pub(crate) struct Read {
     pub(crate) samples: Vec<(SampleProperties, Vec<u8>)>,
     /// Index in `samples` of the first sample read after each `moof`
     pub(crate) fragment_starts: std::collections::BTreeSet<usize>,
-    pub(crate) errors: Vec<isobmff::demuxer::Error>,
+    pub(crate) errors: Vec<isobmff::demux::Error>,
 }
 
 pub(crate) fn read(file: &[u8]) -> Option<Read> {

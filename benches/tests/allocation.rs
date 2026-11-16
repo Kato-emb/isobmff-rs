@@ -157,7 +157,7 @@ fn allocated_lending(file: &[u8], sample_size_limit: u64, since: Since) -> (usiz
     loop {
         while let Some(event) = demuxer.poll_event() {
             match event {
-                isobmff::demuxer::Event::Movie(movie) => {
+                isobmff::demux::Event::Movie(movie) => {
                     let track_ids = movie
                         .trak
                         .iter()
@@ -167,7 +167,7 @@ fn allocated_lending(file: &[u8], sample_size_limit: u64, since: Since) -> (usiz
                         demuxer.subscribe_track(track_id);
                     }
                 }
-                isobmff::demuxer::Event::Sample(sample) => {
+                isobmff::demux::Event::Sample(sample) => {
                     samples += 1;
                     let counts_from_here = match since {
                         Since::FirstSample => before.is_none(),
@@ -211,7 +211,7 @@ fn a_sample_over_the_size_limit_is_never_copied() {
 
 #[test]
 fn a_muxer_polled_after_each_sample_allocates_for_the_tables_and_not_for_the_bytes() {
-    use isobmff::muxer::{MovieParameters, TrackParameters};
+    use isobmff::mux::{MovieParameters, TrackParameters};
     use isobmff::{MovieFileMuxer, MuxerConfig, SampleProperties};
     use isobmff_boxes::{
         FileTypeBox, SampleDescription, SampleDescriptionBox, SampleEntry, SampleFlags,
@@ -277,7 +277,7 @@ fn most_held_lending(file: &[u8], config: DemuxerConfig) -> (usize, usize) {
         loop {
             while let Some(event) = demuxer.poll_event() {
                 match event {
-                    isobmff::demuxer::Event::Movie(movie) => {
+                    isobmff::demux::Event::Movie(movie) => {
                         let track_ids = movie
                             .trak
                             .iter()
@@ -287,7 +287,7 @@ fn most_held_lending(file: &[u8], config: DemuxerConfig) -> (usize, usize) {
                             demuxer.subscribe_track(track_id);
                         }
                     }
-                    isobmff::demuxer::Event::Sample(_) => samples += 1,
+                    isobmff::demux::Event::Sample(_) => samples += 1,
                     _ => {}
                 }
             }
@@ -331,7 +331,7 @@ fn the_memory_a_demuxer_holds_stays_within_the_limit_when_fragments_come_before_
 
 /// The most bytes held while a fragmented muxer writes `fragments` fragments of 8 samples of 4 KiB each, its output polled after each fragment
 fn most_held_writing_fragments(fragments: u32) -> usize {
-    use isobmff::muxer::{MovieParameters, TrackParameters};
+    use isobmff::mux::{MovieParameters, TrackParameters};
     use isobmff::{FragmentedMovieFileMuxer, MuxerConfig, SampleProperties};
     use isobmff_boxes::{
         FileTypeBox, SampleDescription, SampleDescriptionBox, SampleEntry, SampleFlags,
@@ -388,7 +388,7 @@ fn the_memory_a_fragmented_muxer_holds_does_not_grow_with_the_fragments_it_write
 
 #[test]
 fn what_a_demuxer_holds_of_a_movie_it_refuses_does_not_grow_past_the_entries_of_its_tables() {
-    use isobmff::demuxer::Event;
+    use isobmff::demux::Event;
     use isobmff_boxes::SyncSampleBox;
     use isobmff_test_support::fixtures::{encoded, movie, track};
 
