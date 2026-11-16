@@ -1,6 +1,6 @@
 //! What a [`Demuxer`](super::Demuxer) reports
 
-use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox, SegmentTypeBox};
+use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox, SegmentIndexBox, SegmentTypeBox};
 use isobmff_core::BoxHeader;
 
 use super::error::Error;
@@ -21,6 +21,16 @@ pub enum Event<'a> {
     /// A `moof` of the file, read into its value; the location of each of
     /// the samples it adds follows as [`Event::SampleLocation`]
     MovieFragment(alloc::boxed::Box<MovieFragmentBox>),
+    /// A `sidx` of the file, read into its value, ISO/IEC 14496-12 §8.14.3;
+    /// [`subsegments`](crate::structure_data::subsegments) resolves it to
+    /// where its subsegments lie and when they are presented
+    SegmentIndex {
+        /// File offset of the first byte after the box, the anchor point its
+        /// offsets count from
+        anchor: u64,
+        /// The box
+        sidx: SegmentIndexBox,
+    },
     /// Where the bytes of a sample of the `moov` or of a `moof` lie, for
     /// every sample of every track, in the order of their file offsets
     /// within the box
