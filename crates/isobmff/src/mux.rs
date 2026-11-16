@@ -10,9 +10,9 @@
 mod config;
 mod error;
 mod fragmented_movie_file;
-mod movie;
 mod movie_file;
 mod movie_parameters;
+mod output;
 mod track_parameters;
 
 pub use config::MuxerConfig;

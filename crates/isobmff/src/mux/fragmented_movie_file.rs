@@ -6,7 +6,8 @@ use alloc::vec::Vec;
 use isobmff_boxes::{FileTypeBox, SegmentTypeBox};
 use isobmff_core::BoxEncode;
 
-use super::movie::{append_encoded, check_track, data_reference, media_data_header};
+use super::output::{append_encoded, media_data_header};
+use super::track_parameters::{check_track, data_reference};
 use super::{Error, MuxerConfig};
 use super::{MovieParameters, TrackParameters};
 use crate::structure_data::{self, MovieFragmentWriter, TrackSampleDescription};
