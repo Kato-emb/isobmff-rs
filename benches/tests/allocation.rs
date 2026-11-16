@@ -384,6 +384,79 @@ fn the_memory_a_fragmented_muxer_holds_does_not_grow_with_the_fragments_it_write
     assert_eq!(many, few);
 }
 
+/// The most bytes held while an indexed segment muxer writes `segments` media segments of `subsegment_count` subsegments of 8 samples of 4 KiB each, its output polled after each subsegment
+fn most_held_writing_indexed_segments(segments: u32, subsegment_count: u16) -> usize {
+    use std::num::NonZeroU16;
+
+    use isobmff::mux::{MovieParameters, SegmentIndexParameters, TrackParameters};
+    use isobmff::{IndexedSegmentMuxer, MuxerConfig, SampleProperties};
+    use isobmff_boxes::{
+        FileTypeBox, SampleDescription, SampleDescriptionBox, SampleEntry, SampleFlags,
+        SegmentTypeBox,
+    };
+    use isobmff_core::FourCc;
+
+    const SAMPLES_PER_SUBSEGMENT: u32 = 8;
+    let bytes = vec![0xAA; 4096];
+    let sample = |index: u32| SampleProperties {
+        track_id: 1,
+        decoding_time: u64::from(index) * 10,
+        sample_duration: 10,
+        sample_composition_time_offset: 0,
+        sample_flags: SampleFlags::default(),
+        sample_description_index: 1,
+    };
+    let subsegments = segments * u32::from(subsegment_count);
+    most_held_by(|| {
+        let entry = SampleEntry::new(FourCc::new([0; 4]), 1, Vec::new());
+        let mut stsd = SampleDescriptionBox::default();
+        stsd.sample_descriptions = vec![SampleDescription::Typed(entry)];
+        let index = SegmentIndexParameters::new(1, NonZeroU16::new(subsegment_count).unwrap());
+        let mut muxer = IndexedSegmentMuxer::new(
+            MovieParameters::new(1000),
+            MuxerConfig::default(),
+            FileTypeBox::default(),
+            SegmentTypeBox::default(),
+            index,
+        )
+        .unwrap();
+        muxer
+            .add_track(TrackParameters::new(1, 1000, FourCc::new(*b"vide"), stsd))
+            .unwrap();
+        let mut out = Vec::new();
+        for index in 0..subsegments * SAMPLES_PER_SUBSEGMENT {
+            if index > 0 && index % SAMPLES_PER_SUBSEGMENT == 0 {
+                let subsegment = index / SAMPLES_PER_SUBSEGMENT;
+                if subsegment.is_multiple_of(u32::from(subsegment_count)) {
+                    drop(muxer.finish_segment().unwrap());
+                } else {
+                    muxer.finish_subsegment().unwrap();
+                }
+                muxer.poll_output(&mut out);
+                out.clear();
+            }
+            muxer.handle_sample(sample(index), &bytes).unwrap();
+        }
+        drop(muxer.finish().unwrap());
+        muxer.poll_output(&mut out);
+    })
+}
+
+#[test]
+fn the_memory_an_indexed_segment_muxer_holds_grows_with_the_subsegments_a_segment_holds_alone() {
+    let few = most_held_writing_indexed_segments(4, 4);
+    let many = most_held_writing_indexed_segments(256, 4);
+    let wide = most_held_writing_indexed_segments(4, 64);
+    println!(
+        "held at most {few} bytes writing 4 segments of 4 subsegments, {many} bytes writing 256, {wide} bytes writing 4 of 64"
+    );
+    assert_eq!(many, few);
+    // Why 128 bytes a subsegment: each holds what its reference gives in the
+    // `sidx`, its 12 bytes there, and the room reserved for it, and nothing
+    // else may grow with the subsegments of a segment.
+    assert!(wide - few <= 60 * 128, "{wide} - {few}");
+}
+
 #[test]
 fn what_a_demuxer_holds_of_a_movie_it_refuses_does_not_grow_past_the_entries_of_its_tables() {
     use isobmff::demux::Event;
