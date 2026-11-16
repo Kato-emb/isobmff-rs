@@ -10,7 +10,7 @@ use super::children::{
     AnyEntryBoxes, AnyEntryChildren, children_len, encode_children, encode_optional,
 };
 use super::entry::{SampleEntry, from_class, of_format, read_string, split_children};
-use super::text::{MimeFormat, encode_remaining, remaining_len};
+use super::mime_format::{MimeFormat, encode_remaining, remaining_len};
 use crate::btrt::BitRateBox;
 use crate::keys::MetadataKeyTableBox;
 use crate::rinf::RestrictedSchemeInfoBox;

@@ -9,6 +9,7 @@ mod font;
 mod haptic;
 mod hint;
 mod metadata;
+mod mime_format;
 mod mpeg2ts_hint;
 mod protected_mpeg2ts_hint;
 mod received_rtp_hint;
