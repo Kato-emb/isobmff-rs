@@ -61,15 +61,14 @@ struct List<'a> {
     entries: &'a [EditListEntry],
     movie_timescale: u128,
     media_timescale: u128,
-    /// Sum of the `edit_duration`s before each edit, and of all of them
-    /// last, in the timescale of the movie
-    starts: Vec<u128>,
     repeat: Repeat,
     /// Whether the movie is fragmented, §8.6.6.1
     fragmented: bool,
     /// Where the composition of the samples ends
     media_end: i128,
-    repetition: u128,
+    /// Sum of the `edit_duration`s before the edit `edit`, over the
+    /// repetitions so far, in the timescale of the movie
+    position: u128,
     edit: usize,
     /// Whether a sample was presented in this repetition of the list
     presented: bool,
@@ -128,7 +127,8 @@ struct Span {
 ///
 /// The samples are returned in the order of the presentation timeline; a
 /// sample an edit list repeats is returned each time. The iterator ends
-/// where a presentation time would pass what a `u64` counts.
+/// where a presentation time, or the composition time of a sample presented,
+/// would pass what a `u64` counts.
 ///
 /// # Errors
 /// * [`Error::UnknownTrack`]: the movie has no track `track_id`.
@@ -219,19 +219,13 @@ pub fn presentation(
                     media_timescale,
                 });
             }
-            let mut starts = Vec::with_capacity(elst.entries.len().saturating_add(1));
-            let mut sum = 0_u128;
-            starts.push(sum);
-            for entry in &elst.entries {
-                sum = sum.saturating_add(u128::from(entry.edit_duration));
-                starts.push(sum);
-            }
+            let lasts = elst.entries.iter().any(|entry| entry.edit_duration > 0);
             let (movie_timescale, media_timescale) =
                 (u128::from(movie_timescale), u128::from(media_timescale));
             let duration = track.tkhd.duration;
             let indefinite = duration == u64::MAX
                 || (track.tkhd.version == 0 && duration == u64::from(u32::MAX));
-            let repeat = match (elst.repeat_edits && sum > 0, indefinite) {
+            let repeat = match (elst.repeat_edits && lasts, indefinite) {
                 (false, _) => Repeat::Once,
                 (true, true) => Repeat::Forever,
                 (true, false) => Repeat::Until(in_media(
@@ -244,7 +238,6 @@ pub fn presentation(
                 entries: &elst.entries,
                 movie_timescale,
                 media_timescale,
-                starts,
                 repeat,
                 fragmented: movie.mvex.is_some(),
                 media_end: samples
@@ -253,7 +246,7 @@ pub fn presentation(
                     .max()
                     .unwrap_or(0)
                     .max(0),
-                repetition: 0,
+                position: 0,
                 edit: 0,
                 presented: false,
                 explicit_end: None,
@@ -287,103 +280,114 @@ impl Iterator for Presentation<'_> {
                 Some(open) => open,
                 None => {
                     let span = self.edits.next_span()?;
-                    let position = self.first_at(span.media_time, span.dwell);
+                    let position = self.first_at(span.media_time);
                     self.span = Some((span, position));
                     (span, position)
                 }
             };
             match self.presented_at(span, position) {
-                Some((presented, next)) => {
+                Presented::Sample(sample, next) => {
                     self.span = Some((span, next));
-                    if let Some(presented) = presented {
-                        if let Edits::List(list) = &mut self.edits {
-                            list.presented = true;
-                        }
-                        return Some(presented);
+                    if let Edits::List(list) = &mut self.edits {
+                        list.presented = true;
                     }
+                    return Some(sample);
                 }
-                None => self.span = None,
+                Presented::Nothing => self.span = Some((span, position.saturating_add(1))),
+                Presented::SpanEnded => self.span = None,
+                // Why not close the span: the samples after this one are
+                // presented later still, and so is every span after it.
+                Presented::PastU64 => return None,
             }
         }
     }
 }
 
+/// What a span presents at a position in `order`
+enum Presented {
+    /// The sample there, as the span presents it, and the position to look at next
+    Sample(PresentedSample, usize),
+    /// Nothing of the sample there
+    Nothing,
+    /// The span presents no more
+    SpanEnded,
+    /// The sample there is presented past what a `u64` counts
+    PastU64,
+}
+
 impl Presentation<'_> {
-    /// The position in `order` of the first sample a span from `media_time` may present
-    fn first_at(&self, media_time: i128, dwell: bool) -> usize {
-        let starts_before = self.order.partition_point(|&index| {
-            self.samples
-                .get(index)
-                .is_some_and(|sample| composition_start(sample) <= media_time)
-        });
-        let before = starts_before.saturating_sub(1);
-        // Why not start at the first sample that starts at `media_time` or
-        // later: the one that starts before it may still be composed at
-        // `media_time`, and is then the first presented.
-        let covers = self
-            .order
-            .get(before)
-            .and_then(|&index| self.samples.get(index))
-            .is_some_and(|sample| composition_end_of(sample) > media_time);
-        if covers || dwell {
-            before
-        } else {
-            starts_before
-        }
+    /// The position in `order` of the first sample composed past `media_time`, where a span from there starts
+    fn first_at(&self, media_time: i128) -> usize {
+        // Why not partition_point: the samples are ordered by where their
+        // composition starts, and one may end before another that starts
+        // earlier does.
+        self.order
+            .iter()
+            .position(|&index| {
+                self.samples
+                    .get(index)
+                    .is_some_and(|sample| composition_end_of(sample) > media_time)
+            })
+            .unwrap_or(self.order.len())
     }
 
-    /// The sample at `position` in `order` as `span` presents it, if any, and the position to look at next; `None` once the span presents no more
-    fn presented_at(
-        &self,
-        span: Span,
-        position: usize,
-    ) -> Option<(Option<PresentedSample>, usize)> {
-        let &index = self.order.get(position)?;
-        let sample = self.samples.get(index)?;
-        let (start, end) = (composition_start(sample), composition_end_of(sample));
-        let presented = |presentation_time: i128, duration: i128, composition_time: i128| {
-            Some(PresentedSample {
-                index,
-                presentation_time: u64::try_from(presentation_time).ok()?,
-                duration: u64::try_from(duration).unwrap_or(u64::MAX),
-                composition_time: u64::try_from(composition_time).ok()?,
-                dwell: span.dwell,
-            })
+    /// What `span` presents of the sample at `position` in `order`
+    fn presented_at(&self, span: Span, position: usize) -> Presented {
+        let Some(&index) = self.order.get(position) else {
+            return Presented::SpanEnded;
         };
+        let Some(sample) = self.samples.get(index) else {
+            return Presented::SpanEnded;
+        };
+        let (start, end) = (composition_start(sample), composition_end_of(sample));
+        let presented =
+            |presentation_time: i128, duration: i128, composition_time: i128, next| match (
+                u64::try_from(presentation_time),
+                u64::try_from(composition_time),
+            ) {
+                (Ok(presentation_time), Ok(composition_time)) => Presented::Sample(
+                    PresentedSample {
+                        index,
+                        presentation_time,
+                        duration: u64::try_from(duration).unwrap_or(u64::MAX),
+                        composition_time,
+                        dwell: span.dwell,
+                    },
+                    next,
+                ),
+                _ => Presented::PastU64,
+            };
         if span.dwell {
             let held = start <= span.media_time && span.media_time < end;
-            let duration = span.end?.saturating_sub(span.start);
+            let duration = span.end.map_or(0, |end| end.saturating_sub(span.start));
             if !held || duration <= 0 {
-                return None;
+                return Presented::SpanEnded;
             }
             // Why not look past the sample: a dwell holds one point of the media.
-            return Some((
-                Some(presented(span.start, duration, span.media_time)?),
-                self.order.len(),
-            ));
+            return presented(span.start, duration, span.media_time, self.order.len());
         }
         let media_end = span.end.map(|end| {
             span.media_time
                 .saturating_add(end.saturating_sub(span.start))
         });
         if media_end.is_some_and(|media_end| start >= media_end) {
-            return None;
+            return Presented::SpanEnded;
         }
         let shown_start = start.max(span.media_time);
         let shown_end = media_end.map_or(end, |media_end| end.min(media_end));
         let next = position.saturating_add(1);
         if shown_end <= shown_start {
-            return Some((None, next));
+            return Presented::Nothing;
         }
         let presentation_time = span
             .start
             .saturating_add(shown_start.saturating_sub(span.media_time));
-        let item = presented(
+        presented(
             presentation_time,
             shown_end.saturating_sub(shown_start),
             shown_start,
-        )?;
-        Some((Some(item), next))
+            next,
+        )
     }
 }
 
@@ -407,13 +411,15 @@ impl List<'_> {
                 if !self.presented {
                     return None;
                 }
-                self.repetition = self.repetition.saturating_add(1);
                 self.edit = 0;
                 self.presented = false;
                 continue;
             };
-            let start = self.bound(self.edit)?;
-            let mut end = self.bound(self.edit.saturating_add(1))?;
+            let start = self.bound(self.position);
+            self.position = self
+                .position
+                .saturating_add(u128::from(entry.edit_duration));
+            let mut end = self.bound(self.position);
             let last = self.edit.saturating_add(1) == self.entries.len();
             self.edit = self.edit.saturating_add(1);
             let media_time = i128::from(entry.media_time);
@@ -452,13 +458,9 @@ impl List<'_> {
         }
     }
 
-    /// Where edit `edit` of the current repetition starts on the presentation timeline, `None` past what a `u64` counts
-    fn bound(&self, edit: usize) -> Option<i128> {
-        let total = self.starts.last().copied().unwrap_or(0);
-        let before = self.starts.get(edit).copied().unwrap_or(total);
-        let movie_units = self.repetition.saturating_mul(total).saturating_add(before);
-        let media_units = in_media(movie_units, self.movie_timescale, self.media_timescale);
-        (media_units <= i128::from(u64::MAX)).then_some(media_units)
+    /// Where `movie_units` of edits lie on the presentation timeline
+    fn bound(&self, movie_units: u128) -> i128 {
+        in_media(movie_units, self.movie_timescale, self.media_timescale)
     }
 
     /// The implied edit of a fragmented movie, §8.6.6.1: the media past the last edit that is not empty, after the edits
@@ -467,7 +469,7 @@ impl List<'_> {
             return None;
         }
         self.implied = true;
-        let total = self.bound(self.entries.len())?;
+        let total = self.bound(self.position);
         let (start, media_time) = match self.explicit_end {
             Some((end, media_reached)) => (end.max(total), media_reached),
             None => (total, 0),

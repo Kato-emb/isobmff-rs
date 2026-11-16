@@ -449,7 +449,29 @@ mod tests {
     #[test]
     fn a_presentation_past_what_a_u64_counts_ends() {
         let movie = edited_movie(1_000, Some(&[(u64::MAX, -1, 1), (100, 0, 1)]), false, 0);
-        assert_eq!(presented(&movie, samples(&[(0, 100, 0)])), Ok(vec![]));
+        assert_eq!(
+            presented(&movie, samples(&[(0, 1, 0), (1, 1, 0)])),
+            Ok(vec![(0, u64::MAX, 1, 0, false)])
+        );
+    }
+
+    #[test]
+    fn an_edit_that_ends_past_what_a_u64_counts_presents_its_samples_that_do_not() {
+        let mut movie = edited_movie(2, Some(&[(u64::MAX, 0, 1)]), false, 0);
+        movie.mvhd.timescale = 1;
+        assert_eq!(
+            presented(&movie, samples(&[(0, 1, 0)])),
+            Ok(vec![(0, 0, 1, 0, false)])
+        );
+    }
+
+    #[test]
+    fn an_edit_presents_every_sample_composed_where_it_starts_not_only_the_last_to_start() {
+        let movie = edited_movie(1_000, Some(&[(20, 15, 1)]), false, 0);
+        assert_eq!(
+            presented(&movie, samples(&[(0, 100, 0), (100, 10, -90)])),
+            Ok(vec![(0, 0, 20, 15, false), (1, 0, 5, 15, false)])
+        );
     }
 
     #[test]
