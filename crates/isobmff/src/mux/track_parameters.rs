@@ -30,7 +30,7 @@ use super::movie::data_reference;
 ///
 /// ```
 /// use isobmff::boxes::SampleDescriptionBox;
-/// use isobmff::muxer::TrackParameters;
+/// use isobmff::mux::TrackParameters;
 /// use isobmff::FourCc;
 ///
 /// let track = TrackParameters {
@@ -45,7 +45,7 @@ use super::movie::data_reference;
 /// ```compile_fail
 /// # use isobmff::boxes::SampleDescriptionBox;
 /// # use isobmff::FourCc;
-/// let mut track = isobmff::muxer::TrackParameters::new(1, 1000, FourCc::new(*b"vide"), SampleDescriptionBox::default());
+/// let mut track = isobmff::mux::TrackParameters::new(1, 1000, FourCc::new(*b"vide"), SampleDescriptionBox::default());
 /// track.duration = 60_000;
 /// ```
 #[expect(
@@ -224,7 +224,7 @@ impl TrackParameters {
     ///
     /// ```
     /// use isobmff::boxes::{SampleDescriptionBox, SampleTableBox};
-    /// use isobmff::muxer::TrackParameters;
+    /// use isobmff::mux::TrackParameters;
     /// use isobmff::FourCc;
     ///
     /// let track = TrackParameters::new(1, 90_000, FourCc::new(*b"vide"), SampleDescriptionBox::default());

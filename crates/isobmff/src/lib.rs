@@ -4,11 +4,11 @@
 //! the location of each sample, and the bytes of the samples of the tracks a
 //! caller subscribes to.
 //! It does no I/O: it names where it wants input next, and the caller reads
-//! the file however it can. The [`demuxer`] module holds the events it
+//! the file however it can. The [`demux`] module holds the events it
 //! reports.
 //!
 //! ```
-//! use isobmff::demuxer::Event;
+//! use isobmff::demux::Event;
 //! use isobmff::{Demuxer, DemuxerConfig};
 //!
 //! let file: &[u8] = include_bytes!("../tests/fixtures/movie_moov_first.mp4");
@@ -44,7 +44,7 @@
 //! [`MovieFileMuxer`] writes a movie file, its `ftyp`, one `mdat` and the
 //! `moov` that declares it, from the samples a caller hands it;
 //! [`FragmentedMovieFileMuxer`] writes their movie fragments instead, and
-//! [`SegmentMuxer`] its segments. The [`muxer`] module holds what describes
+//! [`SegmentMuxer`] its segments. The [`mux`] module holds what describes
 //! the movie and its tracks.
 //!
 //! The layers they are made of are usable alone: [`framing`] reads the boxes
@@ -58,25 +58,25 @@
 //! a box, the values its fields carry and the traits a box implements, such as
 //! [`BoxDecode`] and [`BoxEncode`], are at the root of the crate. The [`Error`]
 //! at the root is that of reading and writing a box; the demuxer and the
-//! muxers report through [`demuxer::Error`] and [`muxer::Error`].
+//! muxers report through [`demux::Error`] and [`mux::Error`].
 
 #![no_std]
 
 extern crate alloc;
 
-pub mod demuxer;
+pub mod demux;
 pub mod framing;
 mod input_buffer;
-pub mod muxer;
+pub mod mux;
 mod sample;
 pub mod structure_data;
 pub mod timeline;
 
-pub use demuxer::{Demuxer, DemuxerConfig};
+pub use demux::{Demuxer, DemuxerConfig};
 /// The boxes of ISO/IEC 14496-12, each read into a value and written back, from `isobmff-boxes`
 pub use isobmff_boxes as boxes;
 pub use isobmff_core::*;
-pub use muxer::{FragmentedMovieFileMuxer, MovieFileMuxer, MuxerConfig, SegmentMuxer};
+pub use mux::{FragmentedMovieFileMuxer, MovieFileMuxer, MuxerConfig, SegmentMuxer};
 pub use sample::{SampleLocation, SampleProperties};
 
 /// Where a reader wants input next

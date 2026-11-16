@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::io::{Read, Seek, SeekFrom, Write};
 
-use isobmff::demuxer::Event;
+use isobmff::demux::Event;
 use isobmff::{Demuxer, DemuxerConfig};
 
 fn main() -> Result<(), Box<dyn Error>> {

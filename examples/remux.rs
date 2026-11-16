@@ -23,8 +23,8 @@ use std::error::Error;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use isobmff::demuxer::Event;
-use isobmff::muxer::{self, MovieParameters, TrackParameters};
+use isobmff::demux::Event;
+use isobmff::mux::{self, MovieParameters, TrackParameters};
 use isobmff::{
     Demuxer, DemuxerConfig, FragmentedMovieFileMuxer, MovieFileMuxer, MuxerConfig, SampleLocation,
     SampleProperties, structure_data,
@@ -182,8 +182,8 @@ fn fragmented_movie_file(
      -> Result<(), Box<dyn Error>> {
         match muxer.handle_sample(properties, bytes) {
             Err(
-                muxer::Error::BufferFull { .. }
-                | muxer::Error::StructureData(structure_data::Error::SampleCountOverLimit { .. }),
+                mux::Error::BufferFull { .. }
+                | mux::Error::StructureData(structure_data::Error::SampleCountOverLimit { .. }),
             ) => {
                 muxer.poll_output(&mut out);
                 muxer.finish_fragment()?;
@@ -251,7 +251,7 @@ fn fragmented_movie_file(
 mod tests {
     use std::io::Cursor;
 
-    use isobmff::demuxer::Event;
+    use isobmff::demux::Event;
     use isobmff::{Demuxer, DemuxerConfig, SampleProperties};
 
     use super::{fragmented_movie_file, movie_file};
@@ -355,7 +355,7 @@ mod tests {
     #[test]
     fn a_movie_whose_tables_disagree_is_not_written() {
         use isobmff::BoxType;
-        use isobmff::demuxer::Error;
+        use isobmff::demux::Error;
         use isobmff::structure_data;
 
         let refused = |result: Result<(), Box<dyn std::error::Error>>| {

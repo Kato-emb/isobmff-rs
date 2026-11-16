@@ -61,8 +61,8 @@ enum State {
 /// A fragmented movie file written again:
 ///
 /// ```
-/// use isobmff::demuxer::Event;
-/// use isobmff::muxer::{MovieParameters, TrackParameters};
+/// use isobmff::demux::Event;
+/// use isobmff::mux::{MovieParameters, TrackParameters};
 /// use isobmff::{Demuxer, DemuxerConfig, FragmentedMovieFileMuxer, MuxerConfig};
 ///
 /// // Read the `ftyp`, the `moov` and every sample of a file, noting where each fragment starts
@@ -371,7 +371,7 @@ impl FragmentedMovieFileMuxer {
 /// writes no segment index.
 ///
 /// ```
-/// use isobmff::muxer::{MovieParameters, TrackParameters};
+/// use isobmff::mux::{MovieParameters, TrackParameters};
 /// use isobmff::{MuxerConfig, SampleProperties, SegmentMuxer};
 /// use isobmff_boxes::{FileTypeBox, SampleFlags, SegmentTypeBox};
 /// use isobmff_core::{BoxDecode, FourCc};

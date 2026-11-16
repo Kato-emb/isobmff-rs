@@ -503,7 +503,7 @@ mod tests {
 
     /// The `moov` of `file` and the location of each of its samples and of those of its movie fragments, as a demuxer reports them
     fn structure_of(file: &[u8]) -> (Option<MovieBox>, Vec<SampleLocation>) {
-        use isobmff::demuxer::Event;
+        use isobmff::demux::Event;
         use isobmff::{Demuxer, DemuxerConfig};
 
         let mut demuxer = Demuxer::new(DemuxerConfig::default());

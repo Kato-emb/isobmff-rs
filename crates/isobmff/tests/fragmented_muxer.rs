@@ -6,8 +6,8 @@ mod support;
 
 #[cfg(test)]
 mod tests {
-    use isobmff::muxer::Error;
-    use isobmff::muxer::{MovieParameters, TrackParameters};
+    use isobmff::mux::Error;
+    use isobmff::mux::{MovieParameters, TrackParameters};
     use isobmff::{FragmentedMovieFileMuxer, MuxerConfig, SampleProperties, SegmentMuxer};
     use isobmff_boxes::{FileTypeBox, SegmentTypeBox};
     use isobmff_core::FourCc;

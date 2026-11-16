@@ -11,8 +11,8 @@ mod support;
 #[cfg(test)]
 mod tests {
     use isobmff::framing::{self, BoxReader, FramerConfig};
-    use isobmff::muxer::Error;
-    use isobmff::muxer::{MovieParameters, TrackParameters};
+    use isobmff::mux::Error;
+    use isobmff::mux::{MovieParameters, TrackParameters};
     use isobmff::{MovieFileMuxer, MuxerConfig, SampleProperties, structure_data};
     use isobmff_boxes::{EditBox, MovieBox, MovieFragmentBox};
     use isobmff_core::{BoxDecode, BoxDefinition, BoxEncode, BoxType, OtherBoxes};

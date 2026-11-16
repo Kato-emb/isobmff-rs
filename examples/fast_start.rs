@@ -268,7 +268,7 @@ mod tests {
     };
     use isobmff::framing::{BoxReader, Event, FramerConfig};
     use isobmff::{
-        BoxDecode, BoxEncode, Demuxer, DemuxerConfig, SampleProperties, Utf8String, demuxer,
+        BoxDecode, BoxEncode, Demuxer, DemuxerConfig, SampleProperties, Utf8String, demux,
     };
     use isobmff_test_support::{FfprobePacket, conformance_files, ffprobe, ffprobe_packets};
 
@@ -288,16 +288,16 @@ mod tests {
         loop {
             while let Some(event) = demuxer.poll_event() {
                 match event {
-                    demuxer::Event::Movie(moov) => {
+                    demux::Event::Movie(moov) => {
                         for trak in &moov.trak {
                             demuxer.subscribe_track(trak.tkhd.track_id);
                         }
                         movie = Some(*moov);
                     }
-                    demuxer::Event::Sample(sample) => {
+                    demux::Event::Sample(sample) => {
                         samples.push((sample.properties, sample.bytes.to_vec()));
                     }
-                    demuxer::Event::Error(_) => readable = false,
+                    demux::Event::Error(_) => readable = false,
                     _ => {}
                 }
             }

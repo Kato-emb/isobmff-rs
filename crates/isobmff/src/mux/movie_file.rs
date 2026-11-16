@@ -63,8 +63,8 @@ struct Track {
 /// A movie file written again:
 ///
 /// ```
-/// use isobmff::demuxer::Event;
-/// use isobmff::muxer::{MovieParameters, TrackParameters};
+/// use isobmff::demux::Event;
+/// use isobmff::mux::{MovieParameters, TrackParameters};
 /// use isobmff::{Demuxer, DemuxerConfig, MovieFileMuxer, MuxerConfig};
 ///
 /// // Read the `ftyp`, the `moov` and every sample of a file
