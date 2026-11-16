@@ -1,10 +1,10 @@
-//! Why a [`StructureDataReader`](super::StructureDataReader) refuses a box, or a writer a sample
+//! Why a [`StructureDataReader`](super::StructureDataReader) refuses a box, a writer a sample, or [`subsegments`](super::subsegments) a segment index
 
 use core::fmt;
 
 use isobmff_core::BoxType;
 
-/// Why a [`StructureDataReader`](super::StructureDataReader) refuses a box, or a [`SampleTableWriter`](super::SampleTableWriter) or a [`MovieFragmentWriter`](super::MovieFragmentWriter) a sample
+/// Why a [`StructureDataReader`](super::StructureDataReader) refuses a box, a [`SampleTableWriter`](super::SampleTableWriter) or a [`MovieFragmentWriter`](super::MovieFragmentWriter) a sample, or [`subsegments`](super::subsegments) a segment index
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Error {
@@ -132,6 +132,13 @@ pub enum Error {
     },
     /// A box does not write
     Encode(isobmff_core::Error),
+    /// The items a `sidx` references reach past the last offset a file can
+    /// have, or past the last presentation time 64 bits count, ISO/IEC
+    /// 14496-12 §8.14.3
+    SegmentIndexOverflow {
+        /// `reference_ID` of the box
+        reference_id: u32,
+    },
 }
 
 impl fmt::Display for Error {
@@ -219,6 +226,10 @@ impl fmt::Display for Error {
                 "a sample of track {track_id} has decoding_time {found}, and the samples before it add up to {expected}"
             ),
             Self::Encode(_) => write!(formatter, "a box does not write"),
+            Self::SegmentIndexOverflow { reference_id } => write!(
+                formatter,
+                "the items the segment index of stream {reference_id} references reach past the last offset or presentation time there can be"
+            ),
         }
     }
 }
@@ -228,6 +239,7 @@ impl core::error::Error for Error {
         match self {
             Self::Encode(source) => Some(source),
             Self::SampleCountOverLimit { .. }
+            | Self::SegmentIndexOverflow { .. }
             | Self::MissingTable { .. }
             | Self::SampleCountMismatch { .. }
             | Self::InvalidEntry { .. }
