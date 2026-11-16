@@ -26,6 +26,21 @@ pub struct RollRecoveryEntry {
     pub roll_distance: i16,
 }
 
+impl RollRecoveryEntry {
+    pub(super) fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
+        Ok(Self {
+            roll_distance: reader.read_i16()?,
+        })
+    }
+
+    pub(super) fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+        if self.roll_distance == 0 {
+            return Err(Error::invalid_value("roll_distance"));
+        }
+        writer.write_i16(self.roll_distance)
+    }
+}
+
 /// [`AudioPreRollEntry`] (`prol`), ISO/IEC 14496-12 §10.1
 ///
 /// The independently decodable samples of an audio stream, from which the
@@ -38,6 +53,21 @@ pub struct RollRecoveryEntry {
 pub struct AudioPreRollEntry {
     /// Number of samples to decode before the decoder output is correct, positive
     pub roll_distance: i16,
+}
+
+impl AudioPreRollEntry {
+    pub(super) fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
+        Ok(Self {
+            roll_distance: reader.read_i16()?,
+        })
+    }
+
+    pub(super) fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+        if self.roll_distance <= 0 {
+            return Err(Error::invalid_value("roll_distance"));
+        }
+        writer.write_i16(self.roll_distance)
+    }
 }
 
 /// Piece of an alternative startup sequence of one sample output rate, of an [`AlternativeStartupEntry`]
