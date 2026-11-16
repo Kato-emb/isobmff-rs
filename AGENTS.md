@@ -36,10 +36,16 @@ to write.
 * Do not add a dependency to a library crate without stating in the PR why; take it with `default-features = false`, and only if it builds without std.
 * Do not abbreviate variable names. Do not write `count` as `cnt`. Naming lists the exceptions.
 * Relax a lint at the narrowest site that needs it, and call it out in the pull request. Never copy the workspace lint table into a crate to change one lint.
-* Do not create a new file to add functionality; add it to an existing one. A new logical component, or a file past the size cap below, may take a new module.
-* Do not grow a module past 500 LoC, excluding tests. Do not extend a file past roughly 800 LoC; add the functionality in a new module instead, unless the PR description states a strong reason.
+* Do not create a new file to add functionality; add it to an existing one. A new logical component may take a new module.
+* A module past 500 LoC, excluding tests, likely holds more than one component: consider splitting the components into child modules.
 * When extracting or rewriting code, do not leave its tests, its module and type docs, or its Why-not comments behind: move them with it, so the invariants stay next to the code that owns them.
 * Do not create small helper methods that are referenced only once. Split code along logical component boundaries, not to shrink line counts.
+* Keep the code of one responsibility in one module: a reader finds a responsibility by its module, and other modules see only the items they are meant to use.
+* Widen the visibility of an item or a field only for a module that depends on it for what that module is responsible for. Do not widen it to keep a change small, since private is the module's boundary; move the item, or the code that uses it, into the module whose responsibility it is.
+* A function takes only the values it uses, as general values. Take integers, the specification's values or the function's own module's types; not a value it reads part of, and not a type of the caller's responsibility. Which values those are follows the responsibility of the function's module, not what the caller holds: a function of the sample table takes the `stbl`, and where it also needs a field of the `trak`, such as the `track_ID` of its `tkhd`, it takes that field, never the `trak`.
+* Put code in the module whose responsibility it is. Code that is a module's responsibility is a function there that the caller only calls; code that is the caller's responsibility stays in the caller, which reads or changes the module's values as it needs.
+* When a module is split into child modules, the children are its components and the parent is the layer above them: the parent implements what the children's code, put together, does, or only declares and re-exports them, and keeps no component of its own beside them. Dependencies go one way: the parent uses its children, a child uses its siblings, and no child uses an item the parent's file defines. What several children share, such as the module's `Error`, is a child of its own, re-exported by the parent so the public path stays the parent's.
+* Put the unit tests of a module in the same file as the code they test, in `#[cfg(test)] mod tests`; do not split the tests off into a file of their own. A test that drives the crate through its public API alone is an integration test and goes in `tests/`, in a file per component it exercises.
 
 # Untrusted input
 
