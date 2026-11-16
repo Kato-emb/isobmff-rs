@@ -1,265 +1,29 @@
 //! [`SampleGroupDescriptionEntry`], the entry a `SampleGroupDescriptionBox` holds, and the entries of ISO/IEC 14496-12 it reads
 
+mod clean_aperture;
+mod essential_descriptions_hierarchy;
+mod pixel_aspect_ratio;
 mod random_access;
+mod rate_share;
+mod sample_to_metadata_item;
+mod t35;
+mod temporal_level;
 
 use alloc::vec::Vec;
 
 use isobmff_core::{Error, FieldReader, FieldWriter, FourCc};
 
+pub use self::clean_aperture::CleanApertureEntry;
+pub use self::essential_descriptions_hierarchy::EssentialDescriptionsHierarchyEntry;
+pub use self::pixel_aspect_ratio::PixelAspectRatioEntry;
 pub use self::random_access::{
     AlternativeStartupEntry, AlternativeStartupPiece, AudioPreRollEntry, RollRecoveryEntry,
     SapEntry, VisualDrapEntry, VisualEdrapEntry, VisualRandomAccessEntry,
 };
-use crate::table::{
-    TableEntry, counted_len, entries_len, read_counted, read_entries, write_counted, write_entries,
-};
-
-/// Operation point of a [`RateShareEntry`] that holds more than one
-#[non_exhaustive]
-#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
-pub struct RateShareOperationPoint {
-    /// Total bitrate available to share at this point, in kilobits per second
-    pub available_bitrate: u32,
-    /// Percentage of the available bitrate to allocate to the media, 0 for no information
-    pub target_rate_share: u16,
-}
-
-impl TableEntry for RateShareOperationPoint {
-    const ENCODED_LEN: u64 = 6;
-
-    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        Ok(Self {
-            available_bitrate: reader.read_u32()?,
-            target_rate_share: reader.read_u16()?,
-        })
-    }
-
-    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        writer.write_u32(self.available_bitrate)?;
-        writer.write_u16(self.target_rate_share)
-    }
-}
-
-/// Target rate shares of a [`RateShareEntry`], for one operation point or more
-#[non_exhaustive]
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum RateShareOperationPoints {
-    /// One operation point, whose share applies at every available bitrate
-    Single {
-        /// Percentage of the available bitrate to allocate to the media, 0 for no information
-        target_rate_share: u16,
-    },
-    /// Operation points in increasing order of `available_bitrate`, more than
-    /// one where the entry is written
-    Multiple {
-        /// The operation points
-        operation_points: Vec<RateShareOperationPoint>,
-    },
-}
-
-impl Default for RateShareOperationPoints {
-    fn default() -> Self {
-        Self::Single {
-            target_rate_share: 0,
-        }
-    }
-}
-
-/// [`RateShareEntry`] (`rash`), ISO/IEC 14496-12 §10.2.2
-///
-/// How to share the available bitrate between the media of a track and the
-/// others. `operation_point_count` is the number of operation points; a
-/// [`Multiple`](RateShareOperationPoints::Multiple) of fewer than two is
-/// refused when written, with
-/// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for
-/// `operation_point_count`, as is one whose `available_bitrate`s are not
-/// positive and strictly increasing, for `available_bitrate`.
-#[doc(alias = "rash")]
-#[non_exhaustive]
-#[derive(Clone, Default, PartialEq, Eq, Hash, Debug)]
-pub struct RateShareEntry {
-    /// Target rate shares
-    pub operation_points: RateShareOperationPoints,
-    /// Bitrate above which to allocate no more to the media, in kilobits per
-    /// second, 0 for no information
-    pub maximum_bitrate: u32,
-    /// Bitrate below which to allocate nothing to the media, in kilobits per
-    /// second, 0 for no information
-    pub minimum_bitrate: u32,
-    /// Order in which tracks are discarded, the highest first
-    pub discard_priority: u8,
-}
-
-impl RateShareEntry {
-    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let operation_point_count = reader.read_u16()?;
-        let operation_points = if operation_point_count == 1 {
-            RateShareOperationPoints::Single {
-                target_rate_share: reader.read_u16()?,
-            }
-        } else {
-            RateShareOperationPoints::Multiple {
-                operation_points: read_entries(
-                    reader,
-                    u32::from(operation_point_count),
-                    RateShareOperationPoint::ENCODED_LEN,
-                    RateShareOperationPoint::read,
-                )?,
-            }
-        };
-
-        Ok(Self {
-            operation_points,
-            maximum_bitrate: reader.read_u32()?,
-            minimum_bitrate: reader.read_u32()?,
-            discard_priority: reader.read_bytes::<1>()?[0],
-        })
-    }
-
-    fn encoded_len(&self) -> u64 {
-        let operation_points_len = match &self.operation_points {
-            RateShareOperationPoints::Single { .. } => 2,
-            RateShareOperationPoints::Multiple { operation_points } => {
-                entries_len(operation_points)
-            }
-        };
-
-        operation_points_len.saturating_add(2 + 4 + 4 + 1)
-    }
-
-    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        match &self.operation_points {
-            RateShareOperationPoints::Single { target_rate_share } => {
-                writer.write_u16(1)?;
-                writer.write_u16(*target_rate_share)?;
-            }
-            RateShareOperationPoints::Multiple { operation_points } => {
-                let operation_point_count = u16::try_from(operation_points.len())
-                    .ok()
-                    .filter(|count| *count > 1)
-                    .ok_or_else(|| Error::invalid_value("operation_point_count"))?;
-                let increasing = operation_points
-                    .iter()
-                    .try_fold(0, |previous, point| {
-                        (point.available_bitrate > previous).then_some(point.available_bitrate)
-                    })
-                    .is_some();
-                if !increasing {
-                    return Err(Error::invalid_value("available_bitrate"));
-                }
-                writer.write_u16(operation_point_count)?;
-                write_entries(writer, operation_points)?;
-            }
-        }
-        writer.write_u32(self.maximum_bitrate)?;
-        writer.write_u32(self.minimum_bitrate)?;
-        writer.write_bytes(&[self.discard_priority])
-    }
-}
-
-/// [`TemporalLevelEntry`] (`tele`), ISO/IEC 14496-12 §10.5
-///
-/// A temporal level, which is the index of the entry: its samples depend on
-/// none of a higher level.
-#[doc(alias = "tele")]
-#[non_exhaustive]
-#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
-pub struct TemporalLevelEntry {
-    /// Whether the samples of the level depend on none of other levels,
-    /// `false` for no information
-    pub level_independently_decodable: bool,
-}
-
-/// [`SampleToMetadataItemEntry`] (`stmi`), ISO/IEC 14496-12 §10.7
-///
-/// The metadata items that apply to the samples.
-#[doc(alias = "stmi")]
-#[non_exhaustive]
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct SampleToMetadataItemEntry {
-    /// `handler_type` of the `MetaBox` that holds the items
-    pub meta_box_handler_type: FourCc,
-    /// `item_id` of every item that applies to the samples
-    pub item_ids: Vec<u32>,
-}
-
-impl Default for SampleToMetadataItemEntry {
-    fn default() -> Self {
-        Self {
-            meta_box_handler_type: FourCc::new([0; 4]),
-            item_ids: Vec::new(),
-        }
-    }
-}
-
-/// [`PixelAspectRatioEntry`] (`pasr`), ISO/IEC 14496-12 §10.9
-///
-/// The pixel aspect ratio of the samples of a video track whose ratio
-/// changes, as a `PixelAspectRatioBox` states it.
-#[doc(alias = "pasr")]
-#[non_exhaustive]
-#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
-pub struct PixelAspectRatioEntry {
-    /// Relative width of a pixel
-    pub h_spacing: u32,
-    /// Relative height of a pixel
-    pub v_spacing: u32,
-}
-
-/// [`CleanApertureEntry`] (`casg`), ISO/IEC 14496-12 §10.10
-///
-/// The clean aperture of the samples of a video track whose aperture
-/// changes, as a `CleanApertureBox` states it, each value a fraction of a
-/// numerator and a denominator.
-#[doc(alias = "casg")]
-#[non_exhaustive]
-#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
-pub struct CleanApertureEntry {
-    /// Numerator of the width of the clean aperture, in pixels
-    pub clean_aperture_width_n: i32,
-    /// Denominator of the width of the clean aperture
-    pub clean_aperture_width_d: i32,
-    /// Numerator of the height of the clean aperture, in pixels
-    pub clean_aperture_height_n: i32,
-    /// Denominator of the height of the clean aperture
-    pub clean_aperture_height_d: i32,
-    /// Numerator of the horizontal offset of the center of the clean aperture
-    pub horiz_off_n: i32,
-    /// Denominator of the horizontal offset of the center of the clean aperture
-    pub horiz_off_d: i32,
-    /// Numerator of the vertical offset of the center of the clean aperture
-    pub vert_off_n: i32,
-    /// Denominator of the vertical offset of the center of the clean aperture
-    pub vert_off_d: i32,
-}
-
-/// [`EssentialDescriptionsHierarchyEntry`] (`esgh`), ISO/IEC 14496-12 §10.12
-///
-/// The order in which a reader applies the essential sample group
-/// descriptions, and the transformations of reserved values such as `stsd`
-/// and `cenc`, to a sample.
-#[doc(alias = "esgh")]
-#[non_exhaustive]
-#[derive(Clone, Default, PartialEq, Eq, Hash, Debug)]
-pub struct EssentialDescriptionsHierarchyEntry {
-    /// `sample_group_description_type` of each, in the order they apply
-    pub sample_group_description_types: Vec<FourCc>,
-}
-
-/// [`T35SampleGroupEntry`] (`it35`), ISO/IEC 14496-12 §10.13
-///
-/// An ITU-T T.35 message, whole or its part that identifies its type. The
-/// data runs to the end of the entry, so it takes the length a
-/// `SampleGroupDescriptionBox` of version 1 or more states.
-#[doc(alias = "it35")]
-#[non_exhaustive]
-#[derive(Clone, Default, PartialEq, Eq, Hash, Debug)]
-pub struct T35SampleGroupEntry {
-    /// Whether `itu_t_t35_data` holds the whole message, which the samples then do not
-    pub complete_message_flag: bool,
-    /// The message from its first byte, without emulation prevention bits
-    pub itu_t_t35_data: Vec<u8>,
-}
+pub use self::rate_share::{RateShareEntry, RateShareOperationPoint, RateShareOperationPoints};
+pub use self::sample_to_metadata_item::SampleToMetadataItemEntry;
+pub use self::t35::T35SampleGroupEntry;
+pub use self::temporal_level::TemporalLevelEntry;
 
 /// [`SampleGroupDescriptionEntry`], ISO/IEC 14496-12 §8.9.3, an entry of a `SampleGroupDescriptionBox`
 ///
@@ -344,58 +108,21 @@ impl SampleGroupDescriptionEntry {
         reader: &mut FieldReader<'_>,
     ) -> Option<Result<Self, Error>> {
         let read = match grouping_type.as_bytes() {
-            b"roll" => reader
-                .read_i16()
-                .map(|roll_distance| Self::RollRecovery(RollRecoveryEntry { roll_distance })),
-            b"prol" => reader
-                .read_i16()
-                .map(|roll_distance| Self::AudioPreRoll(AudioPreRollEntry { roll_distance })),
+            b"roll" => RollRecoveryEntry::read(reader).map(Self::RollRecovery),
+            b"prol" => AudioPreRollEntry::read(reader).map(Self::AudioPreRoll),
             b"rash" => RateShareEntry::read(reader).map(Self::RateShare),
             b"alst" => AlternativeStartupEntry::read(reader).map(Self::AlternativeStartup),
             b"rap " => VisualRandomAccessEntry::read(reader).map(Self::VisualRandomAccess),
-            b"tele" => reader.read_bytes::<1>().map(|&[byte]| {
-                Self::TemporalLevel(TemporalLevelEntry {
-                    level_independently_decodable: byte & 0x80 != 0,
-                })
-            }),
+            b"tele" => TemporalLevelEntry::read(reader).map(Self::TemporalLevel),
             b"sap " => SapEntry::read(reader).map(Self::Sap),
-            b"stmi" => reader.read_bytes::<4>().and_then(|&handler_type| {
-                Ok(Self::SampleToMetadataItem(SampleToMetadataItemEntry {
-                    meta_box_handler_type: FourCc::new(handler_type),
-                    item_ids: read_counted(reader)?,
-                }))
-            }),
+            b"stmi" => SampleToMetadataItemEntry::read(reader).map(Self::SampleToMetadataItem),
             b"drap" => VisualDrapEntry::read(reader).map(Self::VisualDrap),
-            b"pasr" => reader.read_u32().and_then(|h_spacing| {
-                Ok(Self::PixelAspectRatio(PixelAspectRatioEntry {
-                    h_spacing,
-                    v_spacing: reader.read_u32()?,
-                }))
-            }),
-            b"casg" => reader.read_i32().and_then(|clean_aperture_width_n| {
-                Ok(Self::CleanAperture(CleanApertureEntry {
-                    clean_aperture_width_n,
-                    clean_aperture_width_d: reader.read_i32()?,
-                    clean_aperture_height_n: reader.read_i32()?,
-                    clean_aperture_height_d: reader.read_i32()?,
-                    horiz_off_n: reader.read_i32()?,
-                    horiz_off_d: reader.read_i32()?,
-                    vert_off_n: reader.read_i32()?,
-                    vert_off_d: reader.read_i32()?,
-                }))
-            }),
+            b"pasr" => PixelAspectRatioEntry::read(reader).map(Self::PixelAspectRatio),
+            b"casg" => CleanApertureEntry::read(reader).map(Self::CleanAperture),
             b"edrp" => VisualEdrapEntry::read(reader).map(Self::VisualEdrap),
-            b"esgh" => read_counted(reader).map(|sample_group_description_types| {
-                Self::EssentialDescriptionsHierarchy(EssentialDescriptionsHierarchyEntry {
-                    sample_group_description_types,
-                })
-            }),
-            b"it35" => reader.read_bytes::<1>().map(|&[byte]| {
-                Self::T35SampleGroup(T35SampleGroupEntry {
-                    complete_message_flag: byte & 0x80 != 0,
-                    itu_t_t35_data: reader.take_remainder().to_vec(),
-                })
-            }),
+            b"esgh" => EssentialDescriptionsHierarchyEntry::read(reader)
+                .map(Self::EssentialDescriptionsHierarchy),
+            b"it35" => T35SampleGroupEntry::read(reader).map(Self::T35SampleGroup),
             _ => return None,
         };
 
@@ -409,19 +136,13 @@ impl SampleGroupDescriptionEntry {
             Self::RateShare(rate_share) => rate_share.encoded_len(),
             Self::AlternativeStartup(alternative_startup) => alternative_startup.encoded_len(),
             Self::VisualRandomAccess(_) | Self::TemporalLevel(_) | Self::Sap(_) => 1,
-            Self::SampleToMetadataItem(sample_to_item) => {
-                counted_len(&sample_to_item.item_ids).saturating_add(4)
-            }
+            Self::SampleToMetadataItem(sample_to_item) => sample_to_item.encoded_len(),
             Self::VisualDrap(_) => 4,
             Self::PixelAspectRatio(_) => 8,
             Self::CleanAperture(_) => 32,
             Self::VisualEdrap(edrap) => edrap.encoded_len(),
-            Self::EssentialDescriptionsHierarchy(hierarchy) => {
-                counted_len(&hierarchy.sample_group_description_types)
-            }
-            Self::T35SampleGroup(t35) => u64::try_from(t35.itu_t_t35_data.len())
-                .unwrap_or(u64::MAX)
-                .saturating_add(1),
+            Self::EssentialDescriptionsHierarchy(hierarchy) => hierarchy.encoded_len(),
+            Self::T35SampleGroup(t35) => t35.encoded_len(),
             Self::Other(bytes) => u64::try_from(bytes.len()).unwrap_or(u64::MAX),
         }
     }
@@ -436,58 +157,20 @@ impl SampleGroupDescriptionEntry {
     ///   buffer ends inside the entry.
     pub(crate) fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         match self {
-            Self::RollRecovery(RollRecoveryEntry { roll_distance }) => {
-                if *roll_distance == 0 {
-                    return Err(Error::invalid_value("roll_distance"));
-                }
-                writer.write_i16(*roll_distance)
-            }
-            Self::AudioPreRoll(AudioPreRollEntry { roll_distance }) => {
-                if *roll_distance <= 0 {
-                    return Err(Error::invalid_value("roll_distance"));
-                }
-                writer.write_i16(*roll_distance)
-            }
+            Self::RollRecovery(roll) => roll.write(writer),
+            Self::AudioPreRoll(pre_roll) => pre_roll.write(writer),
             Self::RateShare(rate_share) => rate_share.write(writer),
             Self::AlternativeStartup(alternative_startup) => alternative_startup.write(writer),
             Self::VisualRandomAccess(random_access) => random_access.write(writer),
-            Self::TemporalLevel(temporal_level) => {
-                writer.write_bytes(&[if temporal_level.level_independently_decodable {
-                    0x80
-                } else {
-                    0
-                }])
-            }
+            Self::TemporalLevel(temporal_level) => temporal_level.write(writer),
             Self::Sap(sap) => sap.write(writer),
-            Self::SampleToMetadataItem(sample_to_item) => {
-                writer.write_bytes(sample_to_item.meta_box_handler_type.as_bytes())?;
-                write_counted(writer, &sample_to_item.item_ids)
-            }
+            Self::SampleToMetadataItem(sample_to_item) => sample_to_item.write(writer),
             Self::VisualDrap(drap) => drap.write(writer),
-            Self::PixelAspectRatio(pixel_aspect_ratio) => {
-                writer.write_u32(pixel_aspect_ratio.h_spacing)?;
-                writer.write_u32(pixel_aspect_ratio.v_spacing)
-            }
-            Self::CleanAperture(clean_aperture) => [
-                clean_aperture.clean_aperture_width_n,
-                clean_aperture.clean_aperture_width_d,
-                clean_aperture.clean_aperture_height_n,
-                clean_aperture.clean_aperture_height_d,
-                clean_aperture.horiz_off_n,
-                clean_aperture.horiz_off_d,
-                clean_aperture.vert_off_n,
-                clean_aperture.vert_off_d,
-            ]
-            .into_iter()
-            .try_for_each(|value| writer.write_i32(value)),
+            Self::PixelAspectRatio(pixel_aspect_ratio) => pixel_aspect_ratio.write(writer),
+            Self::CleanAperture(clean_aperture) => clean_aperture.write(writer),
             Self::VisualEdrap(edrap) => edrap.write(writer),
-            Self::EssentialDescriptionsHierarchy(hierarchy) => {
-                write_counted(writer, &hierarchy.sample_group_description_types)
-            }
-            Self::T35SampleGroup(t35) => {
-                writer.write_bytes(&[if t35.complete_message_flag { 0x80 } else { 0 }])?;
-                writer.write_slice(&t35.itu_t_t35_data)
-            }
+            Self::EssentialDescriptionsHierarchy(hierarchy) => hierarchy.write(writer),
+            Self::T35SampleGroup(t35) => t35.write(writer),
             Self::Other(bytes) => writer.write_slice(bytes),
         }
     }
