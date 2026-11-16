@@ -4,6 +4,8 @@ use alloc::vec::Vec;
 
 use isobmff_core::{Error, FieldReader, FieldWriter};
 
+use super::entry::{SampleGroupDescriptionEntry, from_class, of_grouping_type, read_whole};
+
 use crate::table::{TableEntry, entries_len, read_entries, write_entries};
 
 /// Operation point of a [`RateShareEntry`] that holds more than one
@@ -82,69 +84,171 @@ pub struct RateShareEntry {
     pub discard_priority: u8,
 }
 
-impl RateShareEntry {
-    pub(super) fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let operation_point_count = reader.read_u16()?;
-        let operation_points = if operation_point_count == 1 {
-            RateShareOperationPoints::Single {
-                target_rate_share: reader.read_u16()?,
-            }
-        } else {
-            RateShareOperationPoints::Multiple {
-                operation_points: read_entries(
-                    reader,
-                    u32::from(operation_point_count),
-                    RateShareOperationPoint::ENCODED_LEN,
-                    RateShareOperationPoint::read,
-                )?,
-            }
-        };
+impl TryFrom<&SampleGroupDescriptionEntry> for RateShareEntry {
+    type Error = Error;
 
-        Ok(Self {
-            operation_points,
-            maximum_bitrate: reader.read_u32()?,
-            minimum_bitrate: reader.read_u32()?,
-            discard_priority: reader.read_bytes::<1>()?[0],
+    fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
+        of_grouping_type(entry, b"rash")?;
+        read_whole(&entry.data, |reader| {
+            let operation_point_count = reader.read_u16()?;
+            let operation_points = if operation_point_count == 1 {
+                RateShareOperationPoints::Single {
+                    target_rate_share: reader.read_u16()?,
+                }
+            } else {
+                RateShareOperationPoints::Multiple {
+                    operation_points: read_entries(
+                        reader,
+                        u32::from(operation_point_count),
+                        RateShareOperationPoint::ENCODED_LEN,
+                        RateShareOperationPoint::read,
+                    )?,
+                }
+            };
+
+            Ok(Self {
+                operation_points,
+                maximum_bitrate: reader.read_u32()?,
+                minimum_bitrate: reader.read_u32()?,
+                discard_priority: reader.read_bytes::<1>()?[0],
+            })
         })
     }
+}
 
-    pub(super) fn encoded_len(&self) -> u64 {
-        let operation_points_len = match &self.operation_points {
+impl TryFrom<&RateShareEntry> for SampleGroupDescriptionEntry {
+    type Error = Error;
+
+    fn try_from(class: &RateShareEntry) -> Result<Self, Error> {
+        let operation_points_len = match &class.operation_points {
             RateShareOperationPoints::Single { .. } => 2,
             RateShareOperationPoints::Multiple { operation_points } => {
                 entries_len(operation_points)
             }
         };
+        from_class(
+            b"rash",
+            operation_points_len.saturating_add(2 + 4 + 4 + 1),
+            |writer| {
+                match &class.operation_points {
+                    RateShareOperationPoints::Single { target_rate_share } => {
+                        writer.write_u16(1)?;
+                        writer.write_u16(*target_rate_share)?;
+                    }
+                    RateShareOperationPoints::Multiple { operation_points } => {
+                        let operation_point_count = u16::try_from(operation_points.len())
+                            .ok()
+                            .filter(|count| *count > 1)
+                            .ok_or_else(|| Error::invalid_value("operation_point_count"))?;
+                        let increasing = operation_points
+                            .iter()
+                            .try_fold(0, |previous, point| {
+                                (point.available_bitrate > previous)
+                                    .then_some(point.available_bitrate)
+                            })
+                            .is_some();
+                        if !increasing {
+                            return Err(Error::invalid_value("available_bitrate"));
+                        }
+                        writer.write_u16(operation_point_count)?;
+                        write_entries(writer, operation_points)?;
+                    }
+                }
+                writer.write_u32(class.maximum_bitrate)?;
+                writer.write_u32(class.minimum_bitrate)?;
+                writer.write_bytes(&[class.discard_priority])
+            },
+        )
+    }
+}
 
-        operation_points_len.saturating_add(2 + 4 + 4 + 1)
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use isobmff_core::Error;
+
+    use super::super::entry::{SampleGroupDescriptionEntry, assert_round_trips, entry_of};
+    use super::{RateShareEntry, RateShareOperationPoint, RateShareOperationPoints};
+
+    #[test]
+    fn reads_and_writes_the_bytes_its_syntax_lays_out() {
+        assert_round_trips(&[
+            (
+                b"rash",
+                b"\0\x01\0\x32\0\0\x01\0\0\0\0\x10\x80".as_slice(),
+                RateShareEntry {
+                    operation_points: RateShareOperationPoints::Single {
+                        target_rate_share: 50,
+                    },
+                    maximum_bitrate: 256,
+                    minimum_bitrate: 16,
+                    discard_priority: 128,
+                },
+            ),
+            (
+                b"rash",
+                b"\0\x02\0\0\0\x40\0\x14\0\0\x01\0\0\x1e\0\0\0\0\0\0\0\0\0".as_slice(),
+                RateShareEntry {
+                    operation_points: RateShareOperationPoints::Multiple {
+                        operation_points: vec![
+                            RateShareOperationPoint {
+                                available_bitrate: 64,
+                                target_rate_share: 20,
+                            },
+                            RateShareOperationPoint {
+                                available_bitrate: 256,
+                                target_rate_share: 30,
+                            },
+                        ],
+                    },
+                    ..RateShareEntry::default()
+                },
+            ),
+        ]);
     }
 
-    pub(super) fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        match &self.operation_points {
-            RateShareOperationPoints::Single { target_rate_share } => {
-                writer.write_u16(1)?;
-                writer.write_u16(*target_rate_share)?;
-            }
-            RateShareOperationPoints::Multiple { operation_points } => {
-                let operation_point_count = u16::try_from(operation_points.len())
-                    .ok()
-                    .filter(|count| *count > 1)
-                    .ok_or_else(|| Error::invalid_value("operation_point_count"))?;
-                let increasing = operation_points
-                    .iter()
-                    .try_fold(0, |previous, point| {
-                        (point.available_bitrate > previous).then_some(point.available_bitrate)
-                    })
-                    .is_some();
-                if !increasing {
-                    return Err(Error::invalid_value("available_bitrate"));
-                }
-                writer.write_u16(operation_point_count)?;
-                write_entries(writer, operation_points)?;
-            }
-        }
-        writer.write_u32(self.maximum_bitrate)?;
-        writer.write_u32(self.minimum_bitrate)?;
-        writer.write_bytes(&[self.discard_priority])
+    #[test]
+    fn an_entry_of_another_grouping_type_is_refused() {
+        assert_eq!(
+            [
+                RateShareEntry::try_from(&entry_of(
+                    b"seig",
+                    b"\0\x01\0\x32\0\0\x01\0\0\0\0\x10\x80"
+                ))
+                .map(|_| ()),
+            ],
+            [Err(Error::invalid_value("grouping_type")); 1]
+        );
+    }
+
+    #[test]
+    fn values_the_specification_does_not_allow_are_refused_when_written() {
+        let operation_point = |available_bitrate| RateShareOperationPoint {
+            available_bitrate,
+            target_rate_share: 10,
+        };
+        let refused = [
+            SampleGroupDescriptionEntry::try_from(&RateShareEntry {
+                operation_points: RateShareOperationPoints::Multiple {
+                    operation_points: vec![operation_point(64)],
+                },
+                ..RateShareEntry::default()
+            }),
+            SampleGroupDescriptionEntry::try_from(&RateShareEntry {
+                operation_points: RateShareOperationPoints::Multiple {
+                    operation_points: vec![operation_point(64), operation_point(64)],
+                },
+                ..RateShareEntry::default()
+            }),
+        ];
+
+        assert_eq!(
+            refused,
+            [
+                Err(Error::invalid_value("operation_point_count")),
+                Err(Error::invalid_value("available_bitrate"))
+            ]
+        );
     }
 }
