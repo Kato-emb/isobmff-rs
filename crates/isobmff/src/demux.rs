@@ -10,11 +10,13 @@ use crate::structure_data::{self, StructureDataReader};
 use crate::{RequiredInput, SampleLocation};
 
 mod config;
+mod error;
 mod event;
 mod samples;
 
 pub use config::DemuxerConfig;
-pub use event::{Error, Event, Sample};
+pub use error::Error;
+pub use event::{Event, Sample};
 use samples::Samples;
 
 /// The event [`Demuxer::poll_event`] lends next

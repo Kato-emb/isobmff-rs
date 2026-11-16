@@ -6,7 +6,8 @@ use isobmff_core::{BoxHeader, ErrorKind};
 
 use super::buffer::Buffer;
 use super::config::FramerConfig;
-use super::{Error, Event};
+use super::error::Error;
+use super::event::Event;
 use crate::RequiredInput;
 
 /// The smallest box header, `size` and `boxtype`, ISO/IEC 14496-12 §4.2.2
