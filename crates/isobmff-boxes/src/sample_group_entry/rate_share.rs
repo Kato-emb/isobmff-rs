@@ -2,9 +2,9 @@
 
 use alloc::vec::Vec;
 
-use isobmff_core::{Error, FieldReader, FieldWriter, FourCc};
+use isobmff_core::{Error, FieldReader, FieldWriter};
 
-use super::entry::{DerivedEntry, SampleGroupDescriptionEntry, read_class, write_class};
+use super::entry::{SampleGroupDescriptionEntry, from_class, of_grouping_type, read_whole};
 
 use crate::table::{TableEntry, entries_len, read_entries, write_entries};
 
@@ -84,88 +84,81 @@ pub struct RateShareEntry {
     pub discard_priority: u8,
 }
 
-impl DerivedEntry for RateShareEntry {
-    const GROUPING_TYPE: FourCc = FourCc::new(*b"rash");
-
-    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let operation_point_count = reader.read_u16()?;
-        let operation_points = if operation_point_count == 1 {
-            RateShareOperationPoints::Single {
-                target_rate_share: reader.read_u16()?,
-            }
-        } else {
-            RateShareOperationPoints::Multiple {
-                operation_points: read_entries(
-                    reader,
-                    u32::from(operation_point_count),
-                    RateShareOperationPoint::ENCODED_LEN,
-                    RateShareOperationPoint::read,
-                )?,
-            }
-        };
-
-        Ok(Self {
-            operation_points,
-            maximum_bitrate: reader.read_u32()?,
-            minimum_bitrate: reader.read_u32()?,
-            discard_priority: reader.read_bytes::<1>()?[0],
-        })
-    }
-
-    fn encoded_len(&self) -> u64 {
-        let operation_points_len = match &self.operation_points {
-            RateShareOperationPoints::Single { .. } => 2,
-            RateShareOperationPoints::Multiple { operation_points } => {
-                entries_len(operation_points)
-            }
-        };
-
-        operation_points_len.saturating_add(2 + 4 + 4 + 1)
-    }
-
-    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        match &self.operation_points {
-            RateShareOperationPoints::Single { target_rate_share } => {
-                writer.write_u16(1)?;
-                writer.write_u16(*target_rate_share)?;
-            }
-            RateShareOperationPoints::Multiple { operation_points } => {
-                let operation_point_count = u16::try_from(operation_points.len())
-                    .ok()
-                    .filter(|count| *count > 1)
-                    .ok_or_else(|| Error::invalid_value("operation_point_count"))?;
-                let increasing = operation_points
-                    .iter()
-                    .try_fold(0, |previous, point| {
-                        (point.available_bitrate > previous).then_some(point.available_bitrate)
-                    })
-                    .is_some();
-                if !increasing {
-                    return Err(Error::invalid_value("available_bitrate"));
-                }
-                writer.write_u16(operation_point_count)?;
-                write_entries(writer, operation_points)?;
-            }
-        }
-        writer.write_u32(self.maximum_bitrate)?;
-        writer.write_u32(self.minimum_bitrate)?;
-        writer.write_bytes(&[self.discard_priority])
-    }
-}
-
 impl TryFrom<&SampleGroupDescriptionEntry> for RateShareEntry {
     type Error = Error;
 
     fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
-        read_class(entry)
+        of_grouping_type(entry, b"rash")?;
+        read_whole(&entry.data, |reader| {
+            let operation_point_count = reader.read_u16()?;
+            let operation_points = if operation_point_count == 1 {
+                RateShareOperationPoints::Single {
+                    target_rate_share: reader.read_u16()?,
+                }
+            } else {
+                RateShareOperationPoints::Multiple {
+                    operation_points: read_entries(
+                        reader,
+                        u32::from(operation_point_count),
+                        RateShareOperationPoint::ENCODED_LEN,
+                        RateShareOperationPoint::read,
+                    )?,
+                }
+            };
+
+            Ok(Self {
+                operation_points,
+                maximum_bitrate: reader.read_u32()?,
+                minimum_bitrate: reader.read_u32()?,
+                discard_priority: reader.read_bytes::<1>()?[0],
+            })
+        })
     }
 }
 
 impl TryFrom<&RateShareEntry> for SampleGroupDescriptionEntry {
     type Error = Error;
 
-    fn try_from(entry: &RateShareEntry) -> Result<Self, Error> {
-        write_class(entry)
+    fn try_from(class: &RateShareEntry) -> Result<Self, Error> {
+        let operation_points_len = match &class.operation_points {
+            RateShareOperationPoints::Single { .. } => 2,
+            RateShareOperationPoints::Multiple { operation_points } => {
+                entries_len(operation_points)
+            }
+        };
+        from_class(
+            b"rash",
+            operation_points_len.saturating_add(2 + 4 + 4 + 1),
+            |writer| {
+                match &class.operation_points {
+                    RateShareOperationPoints::Single { target_rate_share } => {
+                        writer.write_u16(1)?;
+                        writer.write_u16(*target_rate_share)?;
+                    }
+                    RateShareOperationPoints::Multiple { operation_points } => {
+                        let operation_point_count = u16::try_from(operation_points.len())
+                            .ok()
+                            .filter(|count| *count > 1)
+                            .ok_or_else(|| Error::invalid_value("operation_point_count"))?;
+                        let increasing = operation_points
+                            .iter()
+                            .try_fold(0, |previous, point| {
+                                (point.available_bitrate > previous)
+                                    .then_some(point.available_bitrate)
+                            })
+                            .is_some();
+                        if !increasing {
+                            return Err(Error::invalid_value("available_bitrate"));
+                        }
+                        writer.write_u16(operation_point_count)?;
+                        write_entries(writer, operation_points)?;
+                    }
+                }
+                writer.write_u32(class.maximum_bitrate)?;
+                writer.write_u32(class.minimum_bitrate)?;
+                writer.write_bytes(&[class.discard_priority])
+            },
+        )
     }
 }
 

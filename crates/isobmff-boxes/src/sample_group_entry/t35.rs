@@ -2,9 +2,9 @@
 
 use alloc::vec::Vec;
 
-use isobmff_core::{Error, FieldReader, FieldWriter, FourCc};
+use isobmff_core::Error;
 
-use super::entry::{DerivedEntry, SampleGroupDescriptionEntry, read_class, write_class};
+use super::entry::{SampleGroupDescriptionEntry, from_class, of_grouping_type, read_whole};
 
 /// [`T35SampleGroupEntry`] (`it35`), ISO/IEC 14496-12 §10.13
 ///
@@ -21,43 +21,36 @@ pub struct T35SampleGroupEntry {
     pub itu_t_t35_data: Vec<u8>,
 }
 
-impl DerivedEntry for T35SampleGroupEntry {
-    const GROUPING_TYPE: FourCc = FourCc::new(*b"it35");
-
-    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let &[byte] = reader.read_bytes::<1>()?;
-
-        Ok(Self {
-            complete_message_flag: byte & 0x80 != 0,
-            itu_t_t35_data: reader.take_remainder().to_vec(),
-        })
-    }
-
-    fn encoded_len(&self) -> u64 {
-        u64::try_from(self.itu_t_t35_data.len())
-            .unwrap_or(u64::MAX)
-            .saturating_add(1)
-    }
-
-    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        writer.write_bytes(&[if self.complete_message_flag { 0x80 } else { 0 }])?;
-        writer.write_slice(&self.itu_t_t35_data)
-    }
-}
-
 impl TryFrom<&SampleGroupDescriptionEntry> for T35SampleGroupEntry {
     type Error = Error;
 
     fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
-        read_class(entry)
+        of_grouping_type(entry, b"it35")?;
+        read_whole(&entry.data, |reader| {
+            let &[byte] = reader.read_bytes::<1>()?;
+
+            Ok(Self {
+                complete_message_flag: byte & 0x80 != 0,
+                itu_t_t35_data: reader.take_remainder().to_vec(),
+            })
+        })
     }
 }
 
 impl TryFrom<&T35SampleGroupEntry> for SampleGroupDescriptionEntry {
     type Error = Error;
 
-    fn try_from(entry: &T35SampleGroupEntry) -> Result<Self, Error> {
-        write_class(entry)
+    fn try_from(class: &T35SampleGroupEntry) -> Result<Self, Error> {
+        from_class(
+            b"it35",
+            u64::try_from(class.itu_t_t35_data.len())
+                .unwrap_or(u64::MAX)
+                .saturating_add(1),
+            |writer| {
+                writer.write_bytes(&[if class.complete_message_flag { 0x80 } else { 0 }])?;
+                writer.write_slice(&class.itu_t_t35_data)
+            },
+        )
     }
 }
 

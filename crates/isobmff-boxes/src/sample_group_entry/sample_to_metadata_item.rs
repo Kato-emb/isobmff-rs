@@ -2,9 +2,9 @@
 
 use alloc::vec::Vec;
 
-use isobmff_core::{Error, FieldReader, FieldWriter, FourCc};
+use isobmff_core::{Error, FourCc};
 
-use super::entry::{DerivedEntry, SampleGroupDescriptionEntry, read_class, write_class};
+use super::entry::{SampleGroupDescriptionEntry, from_class, of_grouping_type, read_whole};
 
 use crate::table::{counted_len, read_counted, write_counted};
 
@@ -30,41 +30,34 @@ impl Default for SampleToMetadataItemEntry {
     }
 }
 
-impl DerivedEntry for SampleToMetadataItemEntry {
-    const GROUPING_TYPE: FourCc = FourCc::new(*b"stmi");
-
-    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let &handler_type = reader.read_bytes::<4>()?;
-
-        Ok(Self {
-            meta_box_handler_type: FourCc::new(handler_type),
-            item_ids: read_counted(reader)?,
-        })
-    }
-
-    fn encoded_len(&self) -> u64 {
-        counted_len(&self.item_ids).saturating_add(4)
-    }
-
-    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        writer.write_bytes(self.meta_box_handler_type.as_bytes())?;
-        write_counted(writer, &self.item_ids)
-    }
-}
-
 impl TryFrom<&SampleGroupDescriptionEntry> for SampleToMetadataItemEntry {
     type Error = Error;
 
     fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
-        read_class(entry)
+        of_grouping_type(entry, b"stmi")?;
+        read_whole(&entry.data, |reader| {
+            let &handler_type = reader.read_bytes::<4>()?;
+
+            Ok(Self {
+                meta_box_handler_type: FourCc::new(handler_type),
+                item_ids: read_counted(reader)?,
+            })
+        })
     }
 }
 
 impl TryFrom<&SampleToMetadataItemEntry> for SampleGroupDescriptionEntry {
     type Error = Error;
 
-    fn try_from(entry: &SampleToMetadataItemEntry) -> Result<Self, Error> {
-        write_class(entry)
+    fn try_from(class: &SampleToMetadataItemEntry) -> Result<Self, Error> {
+        from_class(
+            b"stmi",
+            counted_len(&class.item_ids).saturating_add(4),
+            |writer| {
+                writer.write_bytes(class.meta_box_handler_type.as_bytes())?;
+                write_counted(writer, &class.item_ids)
+            },
+        )
     }
 }
 

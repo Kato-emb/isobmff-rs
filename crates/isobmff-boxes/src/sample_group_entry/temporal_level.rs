@@ -1,8 +1,8 @@
 //! [`TemporalLevelEntry`], the temporal level of the samples of a sample group
 
-use isobmff_core::{Error, FieldReader, FieldWriter, FourCc};
+use isobmff_core::Error;
 
-use super::entry::{DerivedEntry, SampleGroupDescriptionEntry, read_class, write_class};
+use super::entry::{SampleGroupDescriptionEntry, from_class, of_grouping_type, read_whole};
 
 /// [`TemporalLevelEntry`] (`tele`), ISO/IEC 14496-12 §10.5
 ///
@@ -17,43 +17,37 @@ pub struct TemporalLevelEntry {
     pub level_independently_decodable: bool,
 }
 
-impl DerivedEntry for TemporalLevelEntry {
-    const GROUPING_TYPE: FourCc = FourCc::new(*b"tele");
-
-    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let &[byte] = reader.read_bytes::<1>()?;
-
-        Ok(Self {
-            level_independently_decodable: byte & 0x80 != 0,
-        })
-    }
-
-    fn encoded_len(&self) -> u64 {
-        1
-    }
-
-    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        writer.write_bytes(&[if self.level_independently_decodable {
-            0x80
-        } else {
-            0
-        }])
-    }
+impl TemporalLevelEntry {
+    /// How many bytes the entry takes
+    pub(super) const ENCODED_LEN: u64 = 1;
 }
 
 impl TryFrom<&SampleGroupDescriptionEntry> for TemporalLevelEntry {
     type Error = Error;
 
     fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
-        read_class(entry)
+        of_grouping_type(entry, b"tele")?;
+        read_whole(&entry.data, |reader| {
+            let &[byte] = reader.read_bytes::<1>()?;
+
+            Ok(Self {
+                level_independently_decodable: byte & 0x80 != 0,
+            })
+        })
     }
 }
 
 impl TryFrom<&TemporalLevelEntry> for SampleGroupDescriptionEntry {
     type Error = Error;
 
-    fn try_from(entry: &TemporalLevelEntry) -> Result<Self, Error> {
-        write_class(entry)
+    fn try_from(class: &TemporalLevelEntry) -> Result<Self, Error> {
+        from_class(b"tele", TemporalLevelEntry::ENCODED_LEN, |writer| {
+            writer.write_bytes(&[if class.level_independently_decodable {
+                0x80
+            } else {
+                0
+            }])
+        })
     }
 }
 

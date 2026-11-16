@@ -1,4 +1,4 @@
-//! The classes ISO/IEC 14496-12 derives from [`SampleGroupDescriptionEntry`] for each `grouping_type`, and the delimiting of an entry by its syntax
+//! The classes ISO/IEC 14496-12 derives from [`SampleGroupDescriptionEntry`] for each `grouping_type`, and the length of those whose syntax fixes it
 
 mod clean_aperture;
 mod entry;
@@ -10,7 +10,7 @@ mod sample_to_metadata_item;
 mod t35;
 mod temporal_level;
 
-use isobmff_core::{Error, FieldReader, FourCc};
+use isobmff_core::FourCc;
 
 pub use self::clean_aperture::CleanApertureEntry;
 pub use self::entry::SampleGroupDescriptionEntry;
@@ -25,73 +25,21 @@ pub use self::sample_to_metadata_item::SampleToMetadataItemEntry;
 pub use self::t35::T35SampleGroupEntry;
 pub use self::temporal_level::TemporalLevelEntry;
 
-use self::entry::DerivedEntry;
-
-/// Returns whether an entry of `grouping_type` runs to the end of the bytes it is given, so that only a stated length bounds it
-pub(crate) fn runs_to_end(grouping_type: FourCc) -> bool {
-    matches!(grouping_type.as_bytes(), b"alst" | b"it35")
-}
-
-/// Returns how many bytes an entry of `grouping_type` at the front of `reader` takes as its syntax lays it out, reading past them
+/// Returns how many bytes an entry of `grouping_type` takes where its syntax fixes the length, or `None` where it does not
 ///
 /// An entry of a `SampleGroupDescriptionBox` of version 0 states no length,
-/// so its syntax alone delimits it.
-///
-/// # Errors
-///
-/// * [`UnsupportedValue`](isobmff_core::ErrorKind::UnsupportedValue) for
-///   `grouping_type`: the crate does not read the `grouping_type`, or its
-///   fields run to the end of the entry.
-/// * [`TruncatedPayload`](isobmff_core::ErrorKind::TruncatedPayload): the
-///   payload ends inside the entry.
-/// * [`UnsupportedValue`](isobmff_core::ErrorKind::UnsupportedValue) for
-///   `reserved`: the `reserved` bits of a `drap` or `edrp` entry are not zero.
-pub(crate) fn delimited_len(
-    grouping_type: FourCc,
-    reader: &mut FieldReader<'_>,
-) -> Result<usize, Error> {
-    fn read_past<Class: DerivedEntry>(reader: &mut FieldReader<'_>) -> Result<usize, Error> {
-        let before = reader.remainder().len();
-        Class::read(reader)?;
-
-        Ok(before.saturating_sub(reader.remainder().len()))
-    }
-
-    if runs_to_end(grouping_type) {
-        return Err(Error::unsupported_value("grouping_type"));
-    }
-    match grouping_type.as_bytes() {
-        b"roll" => read_past::<RollRecoveryEntry>(reader),
-        b"prol" => read_past::<AudioPreRollEntry>(reader),
-        b"rash" => read_past::<RateShareEntry>(reader),
-        b"rap " => read_past::<VisualRandomAccessEntry>(reader),
-        b"tele" => read_past::<TemporalLevelEntry>(reader),
-        b"sap " => read_past::<SapEntry>(reader),
-        b"stmi" => read_past::<SampleToMetadataItemEntry>(reader),
-        b"drap" => read_past::<VisualDrapEntry>(reader),
-        b"pasr" => read_past::<PixelAspectRatioEntry>(reader),
-        b"casg" => read_past::<CleanApertureEntry>(reader),
-        b"edrp" => read_past::<VisualEdrapEntry>(reader),
-        b"esgh" => read_past::<EssentialDescriptionsHierarchyEntry>(reader),
-        _ => Err(Error::unsupported_value("grouping_type")),
-    }
-}
-
-/// Reads an entry of `grouping_type` off the front of `reader` as far as its syntax lays it out, keeping its bytes
-///
-/// # Errors
-///
-/// * The failures of [`delimited_len`].
-pub(crate) fn read_delimited(
-    grouping_type: FourCc,
-    reader: &mut FieldReader<'_>,
-) -> Result<SampleGroupDescriptionEntry, Error> {
-    let rest = reader.remainder();
-    let length = delimited_len(grouping_type, reader)?;
-
-    Ok(SampleGroupDescriptionEntry {
-        grouping_type,
-        data: rest.get(..length).unwrap_or_default().to_vec(),
+/// so the box reads one only of a `grouping_type` of a fixed length.
+pub(crate) fn fixed_len(grouping_type: FourCc) -> Option<u64> {
+    Some(match grouping_type.as_bytes() {
+        b"roll" => RollRecoveryEntry::ENCODED_LEN,
+        b"prol" => AudioPreRollEntry::ENCODED_LEN,
+        b"rap " => VisualRandomAccessEntry::ENCODED_LEN,
+        b"tele" => TemporalLevelEntry::ENCODED_LEN,
+        b"sap " => SapEntry::ENCODED_LEN,
+        b"drap" => VisualDrapEntry::ENCODED_LEN,
+        b"pasr" => PixelAspectRatioEntry::ENCODED_LEN,
+        b"casg" => CleanApertureEntry::ENCODED_LEN,
+        _ => return None,
     })
 }
 
@@ -100,95 +48,21 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use isobmff_core::{Error, FieldReader, FourCc};
+    use isobmff_core::Error;
 
+    use super::entry::entry_of;
     use super::{
         AudioPreRollEntry, RateShareEntry, RateShareOperationPoint, RateShareOperationPoints,
         RollRecoveryEntry, SampleGroupDescriptionEntry, SapEntry, VisualDrapEntry,
-        VisualEdrapEntry, VisualRandomAccessEntry, read_delimited,
+        VisualEdrapEntry, VisualRandomAccessEntry,
     };
-
-    /// The bytes an entry of every `grouping_type` ISO/IEC 14496-12 defines lays out, of those whose syntax delimits them
-    const EVERY_ENTRY: [(&[u8; 4], &[u8]); 13] = [
-        (b"roll", b"\xff\xfe"),
-        (b"prol", b"\0\x05"),
-        (b"rash", b"\0\x01\0\x32\0\0\x01\0\0\0\0\x10\x80"),
-        (
-            b"rash",
-            b"\0\x02\0\0\0\x40\0\x14\0\0\x01\0\0\x1e\0\0\0\0\0\0\0\0\0",
-        ),
-        (b"rap ", b"\x83"),
-        (b"tele", b"\x80"),
-        (b"sap ", b"\x82"),
-        (b"stmi", b"meta\0\0\0\x02\0\0\0\x01\0\0\0\x07"),
-        (b"drap", b"\x40\0\0\0"),
-        (b"pasr", b"\0\0\0\x04\0\0\0\x03"),
-        (
-            b"casg",
-            b"\0\0\x07\x80\0\0\0\x01\0\0\x04\x38\0\0\0\x01\
-              \xff\xff\xff\xf8\0\0\0\x01\0\0\0\0\0\0\0\x01",
-        ),
-        (b"edrp", b"\x24\0\x01\0\x03"),
-        (b"esgh", b"\0\0\0\x02stsdcenc"),
-    ];
-
-    #[test]
-    fn reads_every_entry_as_far_as_its_syntax_lays_it_out() {
-        assert_eq!(
-            EVERY_ENTRY
-                .iter()
-                .map(|(grouping_type, bytes)| {
-                    let mut reader = FieldReader::new(bytes);
-                    read_delimited(FourCc::new(**grouping_type), &mut reader)
-                        .map(|entry| (entry, reader.remainder().len()))
-                })
-                .collect::<Vec<_>>(),
-            EVERY_ENTRY
-                .iter()
-                .map(|(grouping_type, bytes)| {
-                    Ok((
-                        SampleGroupDescriptionEntry {
-                            grouping_type: FourCc::new(**grouping_type),
-                            data: bytes.to_vec(),
-                        },
-                        0,
-                    ))
-                })
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn an_entry_of_a_grouping_type_its_syntax_does_not_delimit_is_refused() {
-        assert_eq!(
-            [
-                read_delimited(
-                    FourCc::new(*b"seig"),
-                    &mut FieldReader::new(b"\0\0\x01\x10")
-                ),
-                read_delimited(
-                    FourCc::new(*b"alst"),
-                    &mut FieldReader::new(b"\0\x01\0\x01")
-                ),
-                read_delimited(FourCc::new(*b"it35"), &mut FieldReader::new(b"\x80\xb5")),
-            ],
-            [
-                Err(Error::unsupported_value("grouping_type")),
-                Err(Error::unsupported_value("grouping_type")),
-                Err(Error::unsupported_value("grouping_type"))
-            ]
-        );
-    }
 
     #[test]
     fn a_drap_or_edrp_entry_whose_reserved_bits_are_set_is_refused() {
         assert_eq!(
             [
-                read_delimited(
-                    FourCc::new(*b"drap"),
-                    &mut FieldReader::new(b"\x40\0\0\x01")
-                ),
-                read_delimited(FourCc::new(*b"edrp"), &mut FieldReader::new(b"\x21\0\x01"))
+                VisualDrapEntry::try_from(&entry_of(b"drap", b"\x40\0\0\x01")).map(|_| ()),
+                VisualEdrapEntry::try_from(&entry_of(b"edrp", b"\x21\0\x01")).map(|_| ())
             ],
             [
                 Err(Error::unsupported_value("reserved")),

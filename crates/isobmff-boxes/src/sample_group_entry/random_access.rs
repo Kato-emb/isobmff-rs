@@ -2,9 +2,9 @@
 
 use alloc::vec::Vec;
 
-use isobmff_core::{Error, FieldReader, FieldWriter, FourCc};
+use isobmff_core::{Error, FieldReader, FieldWriter};
 
-use super::entry::{DerivedEntry, SampleGroupDescriptionEntry, read_class, write_class};
+use super::entry::{SampleGroupDescriptionEntry, from_class, of_grouping_type, read_whole};
 
 use crate::table::{TableEntry, entries_len, read_entries, read_to_end, write_entries};
 
@@ -28,40 +28,34 @@ pub struct RollRecoveryEntry {
     pub roll_distance: i16,
 }
 
-impl DerivedEntry for RollRecoveryEntry {
-    const GROUPING_TYPE: FourCc = FourCc::new(*b"roll");
-
-    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        Ok(Self {
-            roll_distance: reader.read_i16()?,
-        })
-    }
-
-    fn encoded_len(&self) -> u64 {
-        2
-    }
-
-    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        if self.roll_distance == 0 {
-            return Err(Error::invalid_value("roll_distance"));
-        }
-        writer.write_i16(self.roll_distance)
-    }
+impl RollRecoveryEntry {
+    /// How many bytes the entry takes
+    pub(super) const ENCODED_LEN: u64 = 2;
 }
 
 impl TryFrom<&SampleGroupDescriptionEntry> for RollRecoveryEntry {
     type Error = Error;
 
     fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
-        read_class(entry)
+        of_grouping_type(entry, b"roll")?;
+        read_whole(&entry.data, |reader| {
+            Ok(Self {
+                roll_distance: reader.read_i16()?,
+            })
+        })
     }
 }
 
 impl TryFrom<&RollRecoveryEntry> for SampleGroupDescriptionEntry {
     type Error = Error;
 
-    fn try_from(entry: &RollRecoveryEntry) -> Result<Self, Error> {
-        write_class(entry)
+    fn try_from(class: &RollRecoveryEntry) -> Result<Self, Error> {
+        from_class(b"roll", RollRecoveryEntry::ENCODED_LEN, |writer| {
+            if class.roll_distance == 0 {
+                return Err(Error::invalid_value("roll_distance"));
+            }
+            writer.write_i16(class.roll_distance)
+        })
     }
 }
 
@@ -79,40 +73,34 @@ pub struct AudioPreRollEntry {
     pub roll_distance: i16,
 }
 
-impl DerivedEntry for AudioPreRollEntry {
-    const GROUPING_TYPE: FourCc = FourCc::new(*b"prol");
-
-    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        Ok(Self {
-            roll_distance: reader.read_i16()?,
-        })
-    }
-
-    fn encoded_len(&self) -> u64 {
-        2
-    }
-
-    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        if self.roll_distance <= 0 {
-            return Err(Error::invalid_value("roll_distance"));
-        }
-        writer.write_i16(self.roll_distance)
-    }
+impl AudioPreRollEntry {
+    /// How many bytes the entry takes
+    pub(super) const ENCODED_LEN: u64 = 2;
 }
 
 impl TryFrom<&SampleGroupDescriptionEntry> for AudioPreRollEntry {
     type Error = Error;
 
     fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
-        read_class(entry)
+        of_grouping_type(entry, b"prol")?;
+        read_whole(&entry.data, |reader| {
+            Ok(Self {
+                roll_distance: reader.read_i16()?,
+            })
+        })
     }
 }
 
 impl TryFrom<&AudioPreRollEntry> for SampleGroupDescriptionEntry {
     type Error = Error;
 
-    fn try_from(entry: &AudioPreRollEntry) -> Result<Self, Error> {
-        write_class(entry)
+    fn try_from(class: &AudioPreRollEntry) -> Result<Self, Error> {
+        from_class(b"prol", AudioPreRollEntry::ENCODED_LEN, |writer| {
+            if class.roll_distance <= 0 {
+                return Err(Error::invalid_value("roll_distance"));
+            }
+            writer.write_i16(class.roll_distance)
+        })
     }
 }
 
@@ -163,55 +151,48 @@ pub struct AlternativeStartupEntry {
     pub pieces: Vec<AlternativeStartupPiece>,
 }
 
-impl DerivedEntry for AlternativeStartupEntry {
-    const GROUPING_TYPE: FourCc = FourCc::new(*b"alst");
-
-    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let roll_count = reader.read_u16()?;
-        let first_output_sample = reader.read_u16()?;
-        let sample_offsets = read_entries(
-            reader,
-            u32::from(roll_count),
-            u32::ENCODED_LEN,
-            <u32 as TableEntry>::read,
-        )?;
-
-        Ok(Self {
-            first_output_sample,
-            sample_offsets,
-            pieces: read_to_end(reader)?,
-        })
-    }
-
-    fn encoded_len(&self) -> u64 {
-        entries_len(&self.sample_offsets)
-            .saturating_add(entries_len(&self.pieces))
-            .saturating_add(2 + 2)
-    }
-
-    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        let roll_count = u16::try_from(self.sample_offsets.len())
-            .map_err(|_| Error::invalid_value("roll_count"))?;
-        writer.write_u16(roll_count)?;
-        writer.write_u16(self.first_output_sample)?;
-        write_entries(writer, &self.sample_offsets)?;
-        write_entries(writer, &self.pieces)
-    }
-}
-
 impl TryFrom<&SampleGroupDescriptionEntry> for AlternativeStartupEntry {
     type Error = Error;
 
     fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
-        read_class(entry)
+        of_grouping_type(entry, b"alst")?;
+        read_whole(&entry.data, |reader| {
+            let roll_count = reader.read_u16()?;
+            let first_output_sample = reader.read_u16()?;
+            let sample_offsets = read_entries(
+                reader,
+                u32::from(roll_count),
+                u32::ENCODED_LEN,
+                <u32 as TableEntry>::read,
+            )?;
+
+            Ok(Self {
+                first_output_sample,
+                sample_offsets,
+                pieces: read_to_end(reader)?,
+            })
+        })
     }
 }
 
 impl TryFrom<&AlternativeStartupEntry> for SampleGroupDescriptionEntry {
     type Error = Error;
 
-    fn try_from(entry: &AlternativeStartupEntry) -> Result<Self, Error> {
-        write_class(entry)
+    fn try_from(class: &AlternativeStartupEntry) -> Result<Self, Error> {
+        from_class(
+            b"alst",
+            entries_len(&class.sample_offsets)
+                .saturating_add(entries_len(&class.pieces))
+                .saturating_add(2 + 2),
+            |writer| {
+                let roll_count = u16::try_from(class.sample_offsets.len())
+                    .map_err(|_| Error::invalid_value("roll_count"))?;
+                writer.write_u16(roll_count)?;
+                writer.write_u16(class.first_output_sample)?;
+                write_entries(writer, &class.sample_offsets)?;
+                write_entries(writer, &class.pieces)
+            },
+        )
     }
 }
 
@@ -230,48 +211,42 @@ pub struct VisualRandomAccessEntry {
     pub num_leading_samples: u8,
 }
 
-impl DerivedEntry for VisualRandomAccessEntry {
-    const GROUPING_TYPE: FourCc = FourCc::new(*b"rap ");
-
-    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let [byte] = *reader.read_bytes::<1>()?;
-
-        Ok(Self {
-            num_leading_samples_known: byte & 0x80 != 0,
-            num_leading_samples: byte & 0x7f,
-        })
-    }
-
-    fn encoded_len(&self) -> u64 {
-        1
-    }
-
-    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        if self.num_leading_samples > 0x7f {
-            return Err(Error::invalid_value("num_leading_samples"));
-        }
-        let known = if self.num_leading_samples_known {
-            0x80
-        } else {
-            0
-        };
-        writer.write_bytes(&[known | self.num_leading_samples])
-    }
+impl VisualRandomAccessEntry {
+    /// How many bytes the entry takes
+    pub(super) const ENCODED_LEN: u64 = 1;
 }
 
 impl TryFrom<&SampleGroupDescriptionEntry> for VisualRandomAccessEntry {
     type Error = Error;
 
     fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
-        read_class(entry)
+        of_grouping_type(entry, b"rap ")?;
+        read_whole(&entry.data, |reader| {
+            let [byte] = *reader.read_bytes::<1>()?;
+
+            Ok(Self {
+                num_leading_samples_known: byte & 0x80 != 0,
+                num_leading_samples: byte & 0x7f,
+            })
+        })
     }
 }
 
 impl TryFrom<&VisualRandomAccessEntry> for SampleGroupDescriptionEntry {
     type Error = Error;
 
-    fn try_from(entry: &VisualRandomAccessEntry) -> Result<Self, Error> {
-        write_class(entry)
+    fn try_from(class: &VisualRandomAccessEntry) -> Result<Self, Error> {
+        from_class(b"rap ", VisualRandomAccessEntry::ENCODED_LEN, |writer| {
+            if class.num_leading_samples > 0x7f {
+                return Err(Error::invalid_value("num_leading_samples"));
+            }
+            let known = if class.num_leading_samples_known {
+                0x80
+            } else {
+                0
+            };
+            writer.write_bytes(&[known | class.num_leading_samples])
+        })
     }
 }
 
@@ -292,44 +267,38 @@ pub struct SapEntry {
     pub sap_type: u8,
 }
 
-impl DerivedEntry for SapEntry {
-    const GROUPING_TYPE: FourCc = FourCc::new(*b"sap ");
-
-    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let [byte] = *reader.read_bytes::<1>()?;
-
-        Ok(Self {
-            dependent_flag: byte & 0x80 != 0,
-            sap_type: byte & 0x0f,
-        })
-    }
-
-    fn encoded_len(&self) -> u64 {
-        1
-    }
-
-    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        if !(1..=6).contains(&self.sap_type) {
-            return Err(Error::invalid_value("SAP_type"));
-        }
-        let dependent = if self.dependent_flag { 0x80 } else { 0 };
-        writer.write_bytes(&[dependent | self.sap_type])
-    }
+impl SapEntry {
+    /// How many bytes the entry takes
+    pub(super) const ENCODED_LEN: u64 = 1;
 }
 
 impl TryFrom<&SampleGroupDescriptionEntry> for SapEntry {
     type Error = Error;
 
     fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
-        read_class(entry)
+        of_grouping_type(entry, b"sap ")?;
+        read_whole(&entry.data, |reader| {
+            let [byte] = *reader.read_bytes::<1>()?;
+
+            Ok(Self {
+                dependent_flag: byte & 0x80 != 0,
+                sap_type: byte & 0x0f,
+            })
+        })
     }
 }
 
 impl TryFrom<&SapEntry> for SampleGroupDescriptionEntry {
     type Error = Error;
 
-    fn try_from(entry: &SapEntry) -> Result<Self, Error> {
-        write_class(entry)
+    fn try_from(class: &SapEntry) -> Result<Self, Error> {
+        from_class(b"sap ", SapEntry::ENCODED_LEN, |writer| {
+            if !(1..=6).contains(&class.sap_type) {
+                return Err(Error::invalid_value("SAP_type"));
+            }
+            let dependent = if class.dependent_flag { 0x80 } else { 0 };
+            writer.write_bytes(&[dependent | class.sap_type])
+        })
     }
 }
 
@@ -350,45 +319,39 @@ pub struct VisualDrapEntry {
     pub drap_type: u8,
 }
 
-impl DerivedEntry for VisualDrapEntry {
-    const GROUPING_TYPE: FourCc = FourCc::new(*b"drap");
-
-    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let fields = reader.read_u32()?;
-        if fields & 0x1fff_ffff != 0 {
-            return Err(Error::unsupported_value("reserved"));
-        }
-
-        Ok(Self {
-            drap_type: u8::try_from(fields >> 29).unwrap_or_default(),
-        })
-    }
-
-    fn encoded_len(&self) -> u64 {
-        4
-    }
-
-    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        if !(1..=3).contains(&self.drap_type) {
-            return Err(Error::invalid_value("DRAP_type"));
-        }
-        writer.write_u32(u32::from(self.drap_type) << 29)
-    }
+impl VisualDrapEntry {
+    /// How many bytes the entry takes
+    pub(super) const ENCODED_LEN: u64 = 4;
 }
 
 impl TryFrom<&SampleGroupDescriptionEntry> for VisualDrapEntry {
     type Error = Error;
 
     fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
-        read_class(entry)
+        of_grouping_type(entry, b"drap")?;
+        read_whole(&entry.data, |reader| {
+            let fields = reader.read_u32()?;
+            if fields & 0x1fff_ffff != 0 {
+                return Err(Error::unsupported_value("reserved"));
+            }
+
+            Ok(Self {
+                drap_type: u8::try_from(fields >> 29).unwrap_or_default(),
+            })
+        })
     }
 }
 
 impl TryFrom<&VisualDrapEntry> for SampleGroupDescriptionEntry {
     type Error = Error;
 
-    fn try_from(entry: &VisualDrapEntry) -> Result<Self, Error> {
-        write_class(entry)
+    fn try_from(class: &VisualDrapEntry) -> Result<Self, Error> {
+        from_class(b"drap", VisualDrapEntry::ENCODED_LEN, |writer| {
+            if !(1..=3).contains(&class.drap_type) {
+                return Err(Error::invalid_value("DRAP_type"));
+            }
+            writer.write_u32(u32::from(class.drap_type) << 29)
+        })
     }
 }
 
@@ -415,60 +378,53 @@ pub struct VisualEdrapEntry {
     pub ref_sap_or_edrap_idx_deltas: Vec<u16>,
 }
 
-impl DerivedEntry for VisualEdrapEntry {
-    const GROUPING_TYPE: FourCc = FourCc::new(*b"edrp");
-
-    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        let [byte] = *reader.read_bytes::<1>()?;
-        if byte & 0x03 != 0 {
-            return Err(Error::unsupported_value("reserved"));
-        }
-        let delta_count = u32::from(byte >> 2 & 0x07) + 1;
-
-        Ok(Self {
-            edrap_type: byte >> 5,
-            ref_sap_or_edrap_idx_deltas: read_entries(
-                reader,
-                delta_count,
-                u16::ENCODED_LEN,
-                <u16 as TableEntry>::read,
-            )?,
-        })
-    }
-
-    fn encoded_len(&self) -> u64 {
-        entries_len(&self.ref_sap_or_edrap_idx_deltas).saturating_add(1)
-    }
-
-    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        if !(1..=3).contains(&self.edrap_type) {
-            return Err(Error::invalid_value("edrap_type"));
-        }
-        let minus1 = self
-            .ref_sap_or_edrap_idx_deltas
-            .len()
-            .checked_sub(1)
-            .and_then(|minus1| u8::try_from(minus1).ok())
-            .filter(|minus1| *minus1 < 8)
-            .ok_or_else(|| Error::invalid_value("num_ref_sap_or_edrap_samples_minus1"))?;
-        writer.write_bytes(&[self.edrap_type << 5 | minus1 << 2])?;
-        write_entries(writer, &self.ref_sap_or_edrap_idx_deltas)
-    }
-}
-
 impl TryFrom<&SampleGroupDescriptionEntry> for VisualEdrapEntry {
     type Error = Error;
 
     fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
-        read_class(entry)
+        of_grouping_type(entry, b"edrp")?;
+        read_whole(&entry.data, |reader| {
+            let [byte] = *reader.read_bytes::<1>()?;
+            if byte & 0x03 != 0 {
+                return Err(Error::unsupported_value("reserved"));
+            }
+            let delta_count = u32::from(byte >> 2 & 0x07) + 1;
+
+            Ok(Self {
+                edrap_type: byte >> 5,
+                ref_sap_or_edrap_idx_deltas: read_entries(
+                    reader,
+                    delta_count,
+                    u16::ENCODED_LEN,
+                    <u16 as TableEntry>::read,
+                )?,
+            })
+        })
     }
 }
 
 impl TryFrom<&VisualEdrapEntry> for SampleGroupDescriptionEntry {
     type Error = Error;
 
-    fn try_from(entry: &VisualEdrapEntry) -> Result<Self, Error> {
-        write_class(entry)
+    fn try_from(class: &VisualEdrapEntry) -> Result<Self, Error> {
+        from_class(
+            b"edrp",
+            entries_len(&class.ref_sap_or_edrap_idx_deltas).saturating_add(1),
+            |writer| {
+                if !(1..=3).contains(&class.edrap_type) {
+                    return Err(Error::invalid_value("edrap_type"));
+                }
+                let minus1 = class
+                    .ref_sap_or_edrap_idx_deltas
+                    .len()
+                    .checked_sub(1)
+                    .and_then(|minus1| u8::try_from(minus1).ok())
+                    .filter(|minus1| *minus1 < 8)
+                    .ok_or_else(|| Error::invalid_value("num_ref_sap_or_edrap_samples_minus1"))?;
+                writer.write_bytes(&[class.edrap_type << 5 | minus1 << 2])?;
+                write_entries(writer, &class.ref_sap_or_edrap_idx_deltas)
+            },
+        )
     }
 }
 

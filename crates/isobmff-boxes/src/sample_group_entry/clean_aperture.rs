@@ -1,8 +1,8 @@
 //! [`CleanApertureEntry`], the clean aperture of the samples of a sample group
 
-use isobmff_core::{Error, FieldReader, FieldWriter, FourCc};
+use isobmff_core::Error;
 
-use super::entry::{DerivedEntry, SampleGroupDescriptionEntry, read_class, write_class};
+use super::entry::{SampleGroupDescriptionEntry, from_class, of_grouping_type, read_whole};
 
 /// [`CleanApertureEntry`] (`casg`), ISO/IEC 14496-12 §10.10
 ///
@@ -31,55 +31,49 @@ pub struct CleanApertureEntry {
     pub vert_off_d: i32,
 }
 
-impl DerivedEntry for CleanApertureEntry {
-    const GROUPING_TYPE: FourCc = FourCc::new(*b"casg");
-
-    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        Ok(Self {
-            clean_aperture_width_n: reader.read_i32()?,
-            clean_aperture_width_d: reader.read_i32()?,
-            clean_aperture_height_n: reader.read_i32()?,
-            clean_aperture_height_d: reader.read_i32()?,
-            horiz_off_n: reader.read_i32()?,
-            horiz_off_d: reader.read_i32()?,
-            vert_off_n: reader.read_i32()?,
-            vert_off_d: reader.read_i32()?,
-        })
-    }
-
-    fn encoded_len(&self) -> u64 {
-        32
-    }
-
-    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        [
-            self.clean_aperture_width_n,
-            self.clean_aperture_width_d,
-            self.clean_aperture_height_n,
-            self.clean_aperture_height_d,
-            self.horiz_off_n,
-            self.horiz_off_d,
-            self.vert_off_n,
-            self.vert_off_d,
-        ]
-        .into_iter()
-        .try_for_each(|value| writer.write_i32(value))
-    }
+impl CleanApertureEntry {
+    /// How many bytes the entry takes
+    pub(super) const ENCODED_LEN: u64 = 32;
 }
 
 impl TryFrom<&SampleGroupDescriptionEntry> for CleanApertureEntry {
     type Error = Error;
 
     fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
-        read_class(entry)
+        of_grouping_type(entry, b"casg")?;
+        read_whole(&entry.data, |reader| {
+            Ok(Self {
+                clean_aperture_width_n: reader.read_i32()?,
+                clean_aperture_width_d: reader.read_i32()?,
+                clean_aperture_height_n: reader.read_i32()?,
+                clean_aperture_height_d: reader.read_i32()?,
+                horiz_off_n: reader.read_i32()?,
+                horiz_off_d: reader.read_i32()?,
+                vert_off_n: reader.read_i32()?,
+                vert_off_d: reader.read_i32()?,
+            })
+        })
     }
 }
 
 impl TryFrom<&CleanApertureEntry> for SampleGroupDescriptionEntry {
     type Error = Error;
 
-    fn try_from(entry: &CleanApertureEntry) -> Result<Self, Error> {
-        write_class(entry)
+    fn try_from(class: &CleanApertureEntry) -> Result<Self, Error> {
+        from_class(b"casg", CleanApertureEntry::ENCODED_LEN, |writer| {
+            [
+                class.clean_aperture_width_n,
+                class.clean_aperture_width_d,
+                class.clean_aperture_height_n,
+                class.clean_aperture_height_d,
+                class.horiz_off_n,
+                class.horiz_off_d,
+                class.vert_off_n,
+                class.vert_off_d,
+            ]
+            .into_iter()
+            .try_for_each(|value| writer.write_i32(value))
+        })
     }
 }
 

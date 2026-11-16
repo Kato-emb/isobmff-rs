@@ -73,53 +73,68 @@ impl Default for SampleGroupDescriptionEntry {
     }
 }
 
-/// A class derived from [`SampleGroupDescriptionEntry`] for one `grouping_type`
-pub(super) trait DerivedEntry: Sized {
-    /// The `grouping_type` whose entries the class lays out
-    const GROUPING_TYPE: FourCc;
-
-    /// Reads the fields of the class off the front of `reader`
-    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error>;
-
-    /// Returns how many bytes the fields take, saturating at `u64::MAX`
-    fn encoded_len(&self) -> u64;
-
-    /// Writes the fields onto the front of what `writer` has left, refusing a value the specification does not allow
-    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error>;
-}
-
-/// Reads `entry` into the class `Class`, as [`SampleGroupDescriptionEntry`] sets out
-pub(super) fn read_class<Class: DerivedEntry>(
+/// Checks that `entry` is of the `grouping_type` `grouping_type`, that of the class it is read into
+///
+/// # Errors
+///
+/// * [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for
+///   `grouping_type`: the entry is of another `grouping_type`.
+pub(super) fn of_grouping_type(
     entry: &SampleGroupDescriptionEntry,
-) -> Result<Class, Error> {
-    if entry.grouping_type != Class::GROUPING_TYPE {
+    grouping_type: &[u8; 4],
+) -> Result<(), Error> {
+    if entry.grouping_type.as_bytes() != grouping_type {
         return Err(Error::invalid_value("grouping_type"));
     }
-    let mut reader = FieldReader::new(&entry.data);
-    let class = Class::read(&mut reader)?;
+
+    Ok(())
+}
+
+/// Returns what `read_fields` reads from `data`, the bytes of an entry, which its fields fill
+///
+/// # Errors
+///
+/// * [`BufferLengthMismatch`](isobmff_core::ErrorKind::BufferLengthMismatch):
+///   `data` runs past the fields.
+/// * The failures of `read_fields`.
+pub(super) fn read_whole<Class>(
+    data: &[u8],
+    read_fields: impl FnOnce(&mut FieldReader<'_>) -> Result<Class, Error>,
+) -> Result<Class, Error> {
+    let mut reader = FieldReader::new(data);
+    let class = read_fields(&mut reader)?;
     let left = reader.remainder().len();
     if left != 0 {
         let length = |length: usize| u64::try_from(length).unwrap_or(u64::MAX);
         return Err(Error::buffer_length_mismatch(
-            length(entry.data.len().saturating_sub(left)),
-            length(entry.data.len()),
+            length(data.len().saturating_sub(left)),
+            length(data.len()),
         ));
     }
 
     Ok(class)
 }
 
-/// Writes `class` into an entry of its `grouping_type`, as [`SampleGroupDescriptionEntry`] sets out
-pub(super) fn write_class<Class: DerivedEntry>(
-    class: &Class,
+/// Returns the entry of `grouping_type` whose bytes, `length` of them, `write_fields` writes, as a class derived from [`SampleGroupDescriptionEntry`] lays them out
+///
+/// # Errors
+///
+/// * [`TrailingBuffer`](isobmff_core::ErrorKind::TrailingBuffer) or
+///   [`TruncatedBuffer`](isobmff_core::ErrorKind::TruncatedBuffer): what
+///   `write_fields` writes is not `length` long.
+/// * The failures of `write_fields`.
+pub(super) fn from_class(
+    grouping_type: &[u8; 4],
+    length: u64,
+    write_fields: impl FnOnce(&mut FieldWriter<'_>) -> Result<(), Error>,
 ) -> Result<SampleGroupDescriptionEntry, Error> {
-    let mut data = vec![0; usize::try_from(class.encoded_len()).unwrap_or(usize::MAX)];
+    let mut data = vec![0; usize::try_from(length).unwrap_or(usize::MAX)];
     let mut writer = FieldWriter::new(&mut data);
-    class.write(&mut writer)?;
+    write_fields(&mut writer)?;
     writer.finish()?;
 
     Ok(SampleGroupDescriptionEntry {
-        grouping_type: Class::GROUPING_TYPE,
+        grouping_type: FourCc::new(*grouping_type),
         data,
     })
 }

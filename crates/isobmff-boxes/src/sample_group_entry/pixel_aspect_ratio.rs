@@ -1,8 +1,8 @@
 //! [`PixelAspectRatioEntry`], the pixel aspect ratio of the samples of a sample group
 
-use isobmff_core::{Error, FieldReader, FieldWriter, FourCc};
+use isobmff_core::Error;
 
-use super::entry::{DerivedEntry, SampleGroupDescriptionEntry, read_class, write_class};
+use super::entry::{SampleGroupDescriptionEntry, from_class, of_grouping_type, read_whole};
 
 /// [`PixelAspectRatioEntry`] (`pasr`), ISO/IEC 14496-12 §10.9
 ///
@@ -18,39 +18,33 @@ pub struct PixelAspectRatioEntry {
     pub v_spacing: u32,
 }
 
-impl DerivedEntry for PixelAspectRatioEntry {
-    const GROUPING_TYPE: FourCc = FourCc::new(*b"pasr");
-
-    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        Ok(Self {
-            h_spacing: reader.read_u32()?,
-            v_spacing: reader.read_u32()?,
-        })
-    }
-
-    fn encoded_len(&self) -> u64 {
-        8
-    }
-
-    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        writer.write_u32(self.h_spacing)?;
-        writer.write_u32(self.v_spacing)
-    }
+impl PixelAspectRatioEntry {
+    /// How many bytes the entry takes
+    pub(super) const ENCODED_LEN: u64 = 8;
 }
 
 impl TryFrom<&SampleGroupDescriptionEntry> for PixelAspectRatioEntry {
     type Error = Error;
 
     fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
-        read_class(entry)
+        of_grouping_type(entry, b"pasr")?;
+        read_whole(&entry.data, |reader| {
+            Ok(Self {
+                h_spacing: reader.read_u32()?,
+                v_spacing: reader.read_u32()?,
+            })
+        })
     }
 }
 
 impl TryFrom<&PixelAspectRatioEntry> for SampleGroupDescriptionEntry {
     type Error = Error;
 
-    fn try_from(entry: &PixelAspectRatioEntry) -> Result<Self, Error> {
-        write_class(entry)
+    fn try_from(class: &PixelAspectRatioEntry) -> Result<Self, Error> {
+        from_class(b"pasr", PixelAspectRatioEntry::ENCODED_LEN, |writer| {
+            writer.write_u32(class.h_spacing)?;
+            writer.write_u32(class.v_spacing)
+        })
     }
 }
 

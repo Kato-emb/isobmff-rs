@@ -2,9 +2,9 @@
 
 use alloc::vec::Vec;
 
-use isobmff_core::{Error, FieldReader, FieldWriter, FourCc};
+use isobmff_core::{Error, FourCc};
 
-use super::entry::{DerivedEntry, SampleGroupDescriptionEntry, read_class, write_class};
+use super::entry::{SampleGroupDescriptionEntry, from_class, of_grouping_type, read_whole};
 
 use crate::table::{counted_len, read_counted, write_counted};
 
@@ -21,37 +21,28 @@ pub struct EssentialDescriptionsHierarchyEntry {
     pub sample_group_description_types: Vec<FourCc>,
 }
 
-impl DerivedEntry for EssentialDescriptionsHierarchyEntry {
-    const GROUPING_TYPE: FourCc = FourCc::new(*b"esgh");
-
-    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
-        Ok(Self {
-            sample_group_description_types: read_counted(reader)?,
-        })
-    }
-
-    fn encoded_len(&self) -> u64 {
-        counted_len(&self.sample_group_description_types)
-    }
-
-    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
-        write_counted(writer, &self.sample_group_description_types)
-    }
-}
-
 impl TryFrom<&SampleGroupDescriptionEntry> for EssentialDescriptionsHierarchyEntry {
     type Error = Error;
 
     fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
-        read_class(entry)
+        of_grouping_type(entry, b"esgh")?;
+        read_whole(&entry.data, |reader| {
+            Ok(Self {
+                sample_group_description_types: read_counted(reader)?,
+            })
+        })
     }
 }
 
 impl TryFrom<&EssentialDescriptionsHierarchyEntry> for SampleGroupDescriptionEntry {
     type Error = Error;
 
-    fn try_from(entry: &EssentialDescriptionsHierarchyEntry) -> Result<Self, Error> {
-        write_class(entry)
+    fn try_from(class: &EssentialDescriptionsHierarchyEntry) -> Result<Self, Error> {
+        from_class(
+            b"esgh",
+            counted_len(&class.sample_group_description_types),
+            |writer| write_counted(writer, &class.sample_group_description_types),
+        )
     }
 }
 
