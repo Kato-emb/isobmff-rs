@@ -4,12 +4,11 @@ use alloc::vec::Vec;
 
 use isobmff_core::{Error, FieldReader, FourCc, OtherBoxes};
 
+use super::children::{AnyEntryBoxes, AnyEntryChildren, children_len, encode_children};
+use super::entry::{SampleEntry, from_class};
 use crate::btrt::BitRateBox;
 use crate::data_types::CompressorName;
 use crate::rinf::RestrictedSchemeInfoBox;
-use crate::sample_entry::{
-    AnyEntryBoxes, AnyEntryChildren, SampleEntry, children_len, encode_children, from_class,
-};
 use crate::scrb::ScrambleSchemeInfoBox;
 use crate::sinf::ProtectionSchemeInfoBox;
 

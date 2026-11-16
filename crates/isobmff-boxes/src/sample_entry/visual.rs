@@ -6,6 +6,8 @@ use isobmff_core::{
     BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FieldWriter, FourCc, OtherBoxes, U16F16,
 };
 
+use super::children::{AnyEntryBoxes, children_len, encode_children, encode_optional};
+use super::entry::{SampleEntry, from_class, split_children};
 use crate::amve::AmbientViewingEnvironmentBox;
 use crate::btrt::BitRateBox;
 use crate::cclv::ContentColourVolumeBox;
@@ -16,10 +18,6 @@ use crate::data_types::CompressorName;
 use crate::mdcv::MasteringDisplayColourVolumeBox;
 use crate::pasp::PixelAspectRatioBox;
 use crate::rinf::RestrictedSchemeInfoBox;
-use crate::sample_entry::{
-    AnyEntryBoxes, SampleEntry, children_len, encode_children, encode_optional, from_class,
-    split_children,
-};
 use crate::scrb::ScrambleSchemeInfoBox;
 use crate::sinf::ProtectionSchemeInfoBox;
 

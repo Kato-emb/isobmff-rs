@@ -4,15 +4,14 @@ use alloc::vec::Vec;
 
 use isobmff_core::{BoxDefinition, BoxEncode, BoxType, Error, FourCc, OtherBoxes};
 
+use super::children::{AnyEntryBoxes, children_len, encode_children, encode_optional};
+use super::entry::{SampleEntry, from_class};
+use super::rtp_hint::{self, FIELDS_LEN, RtpEntry, write_fields};
 use crate::btrt::BitRateBox;
 use crate::hint_entry_boxes::{
     ReceivedSsrcBox, TimeOffsetBox, TimescaleEntryBox, TimestampSynchronyBox,
 };
 use crate::rinf::RestrictedSchemeInfoBox;
-use crate::sample_entry::rtp_hint::{self, FIELDS_LEN, RtpEntry, write_fields};
-use crate::sample_entry::{
-    AnyEntryBoxes, SampleEntry, children_len, encode_children, encode_optional, from_class,
-};
 use crate::scrb::ScrambleSchemeInfoBox;
 use crate::sinf::ProtectionSchemeInfoBox;
 

@@ -7,12 +7,10 @@ use isobmff_core::{
     Utf8String,
 };
 
+use super::children::{AnyEntryBoxes, children_len, encode_children, encode_optional};
+use super::entry::{SampleEntry, from_class, of_format, read_string, split_children};
 use crate::btrt::BitRateBox;
 use crate::rinf::RestrictedSchemeInfoBox;
-use crate::sample_entry::{
-    AnyEntryBoxes, SampleEntry, children_len, encode_children, encode_optional, from_class,
-    of_format, read_string, split_children,
-};
 use crate::scrb::ScrambleSchemeInfoBox;
 use crate::sinf::ProtectionSchemeInfoBox;
 use crate::txtc::TextConfigBox;

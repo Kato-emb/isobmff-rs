@@ -39,9 +39,6 @@ pub use text::SimpleTextSampleEntry;
 pub use visual::VisualSampleEntry;
 pub use volumetric::VolumetricVisualSampleEntry;
 
-pub(crate) use children::{
-    AnyEntryBoxes, AnyEntryChildren, children_len, encode_children, encode_optional,
-};
+pub(crate) use children::encode_optional;
 pub use entry::SampleEntry;
-pub(crate) use entry::{from_class, of_format, read_string, split_children};
-pub(crate) use hint::HINT_TRACK_VERSION;
+pub(crate) use entry::read_string;
