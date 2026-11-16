@@ -3,8 +3,8 @@
 use alloc::vec::Vec;
 
 use isobmff_boxes::{
-    MovieBox, MovieFragmentBox, TrackBox, TrackExtendsBox, TrackRunBox, TrackRunSample,
-    TrackRunSamples,
+    DataReferenceBox, MovieFragmentBox, SampleDescriptionBox, TrackExtendsBox, TrackRunBox,
+    TrackRunSample, TrackRunSamples,
 };
 
 use super::reader::Reading;
@@ -27,21 +27,21 @@ pub(super) struct FragmentTrack {
 }
 
 impl FragmentTrack {
-    /// The track `track` of `movie`, whose samples in the `moov` end at `next_decoding_time`, or `None` for no sample
-    pub(super) fn new(movie: &MovieBox, track: &TrackBox, next_decoding_time: Option<u64>) -> Self {
-        let track_id = track.tkhd.track_id;
+    /// Track `track_id`, whose samples in the `moov` end at `next_decoding_time`, or `None` for no sample
+    ///
+    /// `defaults` are those of the `trex` of the track, and `stsd` and `dref`
+    /// its sample entries and data references.
+    pub(super) fn new(
+        track_id: u32,
+        defaults: Option<TrackExtendsBox>,
+        stsd: &SampleDescriptionBox,
+        dref: &DataReferenceBox,
+        next_decoding_time: Option<u64>,
+    ) -> Self {
         Self {
             track_id,
-            defaults: movie.mvex.as_ref().and_then(|mvex| {
-                mvex.trex
-                    .iter()
-                    .find(|trex| trex.track_id == track_id)
-                    .cloned()
-            }),
-            entries: sample::entry_data_references(
-                &track.mdia.minf.stbl.stsd,
-                &track.mdia.minf.dinf.dref,
-            ),
+            defaults,
+            entries: sample::entry_data_references(stsd, dref),
             next_decoding_time,
         }
     }

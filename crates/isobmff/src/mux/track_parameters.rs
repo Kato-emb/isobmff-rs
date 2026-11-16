@@ -1,18 +1,19 @@
-//! [`TrackParameters`], what the samples of a track do not give a muxer
+//! [`TrackParameters`], what the samples of a track do not give a muxer, whether a muxer may add the track, and the data references it writes for it
 
+use alloc::vec;
 use alloc::vec::Vec;
 
 use isobmff_boxes::{
-    CompactSampleToGroupBox, EditBox, ExtendedLanguageBox, HintMediaHeaderBox, LanguageCode,
-    Matrix, MediaInformationHeader, MetaBox, NullMediaHeaderBox, SampleDescriptionBox,
-    SampleGroupDescriptionBox, SampleTableBox, SampleToGroupBox, ShadowSyncSampleBox,
-    SoundMediaHeaderBox, SubSampleInformationBox, SubSampleReferenceTableBox,
-    SubtitleMediaHeaderBox, TrackBox, TrackGroupBox, TrackReferenceBox, TrackTypeBox, UserDataBox,
-    VideoMediaHeaderBox,
+    CompactSampleToGroupBox, DataEntry, DataEntryUrlBox, DataReferenceBox, EditBox,
+    ExtendedLanguageBox, HintMediaHeaderBox, LanguageCode, Matrix, MediaInformationHeader, MetaBox,
+    NullMediaHeaderBox, SampleDescriptionBox, SampleGroupDescriptionBox, SampleTableBox,
+    SampleToGroupBox, ShadowSyncSampleBox, SoundMediaHeaderBox, SubSampleInformationBox,
+    SubSampleReferenceTableBox, SubtitleMediaHeaderBox, TrackBox, TrackGroupBox, TrackReferenceBox,
+    TrackTypeBox, UserDataBox, VideoMediaHeaderBox,
 };
 use isobmff_core::{FourCc, I8F8, OtherBoxes, U16F16, Utf8String};
 
-use super::movie::data_reference;
+use super::Error;
 
 /// What the samples of a track do not give a muxer: every field and box of its `track` box that is not derived from them or from where the muxer places them
 ///
@@ -334,4 +335,35 @@ impl From<&TrackBox> for TrackParameters {
             sample_table_other_boxes: stbl.other_boxes.clone(),
         }
     }
+}
+
+/// Checks that `track` may be added beside the tracks `added`: its `track_ID` is neither 0 nor taken, and its media data is in the same file
+pub(super) fn check_track<'a>(
+    mut added: impl Iterator<Item = &'a TrackParameters>,
+    track: &TrackParameters,
+) -> Result<(), Error> {
+    let track_id = track.track_id;
+    if track_id == 0 || added.any(|added| added.track_id == track_id) {
+        return Err(Error::TrackId { track_id });
+    }
+    if let Some(data_reference_index) = track
+        .stsd
+        .sample_descriptions
+        .iter()
+        .map(|entry| entry.data_reference_index().unwrap_or(0))
+        .find(|&index| index != 1)
+    {
+        return Err(Error::DataReferenceIndex {
+            track_id,
+            data_reference_index,
+        });
+    }
+    Ok(())
+}
+
+/// The data references of every track a muxer writes: one entry, the media data in the same file
+pub(super) fn data_reference() -> DataReferenceBox {
+    let mut dref = DataReferenceBox::default();
+    dref.data_entries = vec![DataEntry::Url(DataEntryUrlBox::default())];
+    dref
 }

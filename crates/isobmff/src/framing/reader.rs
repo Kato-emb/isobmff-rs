@@ -4,9 +4,11 @@ use core::ops::Range;
 
 use isobmff_core::{BoxHeader, ErrorKind};
 
-use super::{Error, Event, FramerConfig};
+use super::buffer::Buffer;
+use super::config::FramerConfig;
+use super::error::Error;
+use super::event::Event;
 use crate::RequiredInput;
-use crate::input_buffer::InputBuffer;
 
 /// The smallest box header, `size` and `boxtype`, ISO/IEC 14496-12 §4.2.2
 const COMPACT_HEADER_LENGTH: u64 = 8;
@@ -150,7 +152,7 @@ pub struct BoxReader {
     state: State,
     /// The bytes of the box header being read and of the payloads gathered;
     /// the payload of a box skipped is never copied in
-    input: InputBuffer,
+    input: Buffer,
     /// File offset of the next byte the reader takes
     cursor: u64,
     /// The output of the last step, which `poll_event` lends
@@ -164,7 +166,7 @@ impl BoxReader {
         Self {
             config,
             state: State::Header,
-            input: InputBuffer::new(),
+            input: Buffer::new(),
             cursor: 0,
             pending: None,
         }

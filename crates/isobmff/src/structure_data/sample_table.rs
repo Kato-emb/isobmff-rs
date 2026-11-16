@@ -4,9 +4,9 @@ use alloc::vec::Vec;
 use core::iter;
 
 use isobmff_boxes::{
-    ChunkOffsetBox, ChunkOffsetVariant, CompositionOffsetBox, SampleDependencyTypeBox,
-    SampleDescriptionBox, SampleFlags, SampleSizeBox, SampleSizeVariant, SampleSizes,
-    SampleTableBox, SampleToChunkBox, SyncSampleBox, TimeToSampleBox, TrackBox,
+    ChunkOffsetBox, ChunkOffsetVariant, CompositionOffsetBox, DataReferenceBox,
+    SampleDependencyTypeBox, SampleDescriptionBox, SampleFlags, SampleSizeBox, SampleSizeVariant,
+    SampleSizes, SampleTableBox, SampleToChunkBox, SyncSampleBox, TimeToSampleBox,
 };
 use isobmff_core::{BoxDefinition, BoxType};
 
@@ -30,10 +30,9 @@ impl Sizes<'_> {
     }
 }
 
-/// Returns the number of samples the sample size table of `track` declares, and their sizes
-fn sizes(track: &TrackBox) -> Result<(u64, Sizes<'_>), Error> {
-    let track_id = track.tkhd.track_id;
-    match &track.mdia.minf.stbl.sample_size {
+/// Returns the number of samples the sample size table of `stbl`, of track `track_id`, declares, and their sizes
+fn sizes(stbl: &SampleTableBox, track_id: u32) -> Result<(u64, Sizes<'_>), Error> {
+    match &stbl.sample_size {
         Some(SampleSizeVariant::SampleSize(stsz)) => match &stsz.sample_sizes {
             SampleSizes::Constant {
                 sample_size,
@@ -59,12 +58,12 @@ fn sizes(track: &TrackBox) -> Result<(u64, Sizes<'_>), Error> {
     }
 }
 
-/// Returns the number of samples the sample size table of `track` declares
-pub(super) fn sample_count(track: &TrackBox) -> Result<u64, Error> {
-    sizes(track).map(|(sample_count, _)| sample_count)
+/// Returns the number of samples the sample size table of `stbl`, of track `track_id`, declares
+pub(super) fn sample_count(stbl: &SampleTableBox, track_id: u32) -> Result<u64, Error> {
+    sizes(stbl, track_id).map(|(sample_count, _)| sample_count)
 }
 
-/// Appends the samples of `track` to `locations`, in decoding order, and returns the decoding time they end at, or `None` for no sample
+/// Appends the samples the sample table `stbl` of track `track_id` declares to `locations`, in decoding order, and returns the decoding time they end at, or `None` for no sample
 ///
 /// A table that counts another number of samples than the sample size
 /// table, or an entry of the sync sample table that names no sample, is
@@ -72,13 +71,16 @@ pub(super) fn sample_count(track: &TrackBox) -> Result<u64, Error> {
 /// [`StructureDataReader::handle_movie_lossy`](super::StructureDataReader::handle_movie_lossy)
 /// sets out. A sample table under which no sample can be placed is refused
 /// either way.
+///
+/// `dref` is the data reference table of the track, which tells whether
+/// the media data of a sample lies in the same file.
 pub(super) fn resolve(
-    track: &TrackBox,
+    stbl: &SampleTableBox,
+    track_id: u32,
+    dref: &DataReferenceBox,
     locations: &mut Vec<SampleLocation>,
     reading: Reading,
 ) -> Result<Option<u64>, Error> {
-    let track_id = track.tkhd.track_id;
-    let stbl = &track.mdia.minf.stbl;
     let missing = |box_type| Error::MissingTable { track_id, box_type };
     let invalid = |box_type, entry: usize| Error::InvalidEntry {
         track_id,
@@ -87,7 +89,7 @@ pub(super) fn resolve(
     };
     let overflow = Error::Overflow { track_id };
 
-    let (sample_count, sizes) = sizes(track)?;
+    let (sample_count, sizes) = sizes(stbl, track_id)?;
     let stts = stbl
         .stts
         .as_ref()
@@ -166,7 +168,7 @@ pub(super) fn resolve(
     let check_run = |entry: usize, sample_description_index: u32| {
         let data_reference_index = data_reference_index(&stbl.stsd, sample_description_index)
             .ok_or_else(|| invalid(SampleToChunkBox::BOX_TYPE, entry))?;
-        if is_in_same_file(&track.mdia.minf.dinf.dref, data_reference_index) {
+        if is_in_same_file(dref, data_reference_index) {
             Ok(())
         } else {
             Err(Error::MediaDataElsewhere {

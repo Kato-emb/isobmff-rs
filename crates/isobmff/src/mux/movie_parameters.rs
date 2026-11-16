@@ -8,7 +8,7 @@ use isobmff_boxes::{
 use isobmff_core::{I8F8, I16F16, OtherBoxes};
 
 use super::TrackParameters;
-use super::movie::data_reference;
+use super::track_parameters::data_reference;
 use crate::structure_data::{SampleTableWriter, TrackSampleDescription};
 use crate::timeline::declare_durations;
 

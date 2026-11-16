@@ -1,44 +1,10 @@
-//! What the muxers share: the checks of a track, the data references and the `mdat` header they write, and the writing of a box into the bytes a muxer holds
+//! The bytes a muxer writes: each whole box it appends to the bytes it holds, and the header of an `mdat`
 
-use alloc::vec;
 use alloc::vec::Vec;
 
-use isobmff_boxes::{DataEntry, DataEntryUrlBox, DataReferenceBox};
 use isobmff_core::{BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, ExtendedSize};
 
 use super::Error;
-use super::TrackParameters;
-
-/// Checks that `track` may be added beside the tracks `added`: its `track_ID` is neither 0 nor taken, and its media data is in the same file
-pub(super) fn check_track<'a>(
-    mut added: impl Iterator<Item = &'a TrackParameters>,
-    track: &TrackParameters,
-) -> Result<(), Error> {
-    let track_id = track.track_id;
-    if track_id == 0 || added.any(|added| added.track_id == track_id) {
-        return Err(Error::TrackId { track_id });
-    }
-    if let Some(data_reference_index) = track
-        .stsd
-        .sample_descriptions
-        .iter()
-        .map(|entry| entry.data_reference_index().unwrap_or(0))
-        .find(|&index| index != 1)
-    {
-        return Err(Error::DataReferenceIndex {
-            track_id,
-            data_reference_index,
-        });
-    }
-    Ok(())
-}
-
-/// The data references of every track a muxer writes: one entry, the media data in the same file
-pub(super) fn data_reference() -> DataReferenceBox {
-    let mut dref = DataReferenceBox::default();
-    dref.data_entries = vec![DataEntry::Url(DataEntryUrlBox::default())];
-    dref
-}
 
 /// Returns the header of an `mdat` of `payload_length` bytes, in the 16 bytes of a `largesize`, or `None` where the box would be longer than 64 bits count
 ///
