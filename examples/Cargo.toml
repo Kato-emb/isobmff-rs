@@ -100,6 +100,10 @@ inline_always = "deny"
 mod_module_files = "deny"
 min_ident_chars = "deny"
 
+# Responsibility: a type's inherent methods live in one impl, in the module
+# that defines the type.
+multiple_inherent_impl = "warn"
+
 # Lint suppression: a lint is relaxed with #[expect] and a reason, which fails
 # once the code no longer trips it.
 allow_attributes = "deny"
