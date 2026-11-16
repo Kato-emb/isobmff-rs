@@ -431,10 +431,11 @@ impl TryFrom<&VisualEdrapEntry> for SampleGroupDescriptionEntry {
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+    use alloc::vec::Vec;
 
     use isobmff_core::Error;
 
-    use super::super::entry::{assert_round_trips, entry_of};
+    use super::super::entry::{SampleGroupDescriptionEntry, assert_round_trips, entry_of};
     use super::{
         AlternativeStartupEntry, AlternativeStartupPiece, AudioPreRollEntry, RollRecoveryEntry,
         SapEntry, VisualDrapEntry, VisualEdrapEntry, VisualRandomAccessEntry,
@@ -512,6 +513,58 @@ mod tests {
                 VisualEdrapEntry::try_from(&entry_of(b"seig", b"\x24\0\x01\0\x03")).map(|_| ()),
             ],
             [Err(Error::invalid_value("grouping_type")); 7]
+        );
+    }
+
+    #[test]
+    fn a_drap_or_edrp_entry_whose_reserved_bits_are_set_is_refused() {
+        assert_eq!(
+            [
+                VisualDrapEntry::try_from(&entry_of(b"drap", b"\x40\0\0\x01")).map(|_| ()),
+                VisualEdrapEntry::try_from(&entry_of(b"edrp", b"\x21\0\x01")).map(|_| ())
+            ],
+            [
+                Err(Error::unsupported_value("reserved")),
+                Err(Error::unsupported_value("reserved"))
+            ]
+        );
+    }
+
+    #[test]
+    fn values_the_specification_does_not_allow_are_refused_when_written() {
+        let refused = [
+            SampleGroupDescriptionEntry::try_from(&RollRecoveryEntry { roll_distance: 0 }),
+            SampleGroupDescriptionEntry::try_from(&AudioPreRollEntry { roll_distance: -1 }),
+            SampleGroupDescriptionEntry::try_from(&VisualRandomAccessEntry {
+                num_leading_samples_known: true,
+                num_leading_samples: 0x80,
+            }),
+            SampleGroupDescriptionEntry::try_from(&SapEntry {
+                dependent_flag: false,
+                sap_type: 7,
+            }),
+            SampleGroupDescriptionEntry::try_from(&VisualDrapEntry { drap_type: 4 }),
+            SampleGroupDescriptionEntry::try_from(&VisualEdrapEntry {
+                edrap_type: 4,
+                ref_sap_or_edrap_idx_deltas: vec![1],
+            }),
+            SampleGroupDescriptionEntry::try_from(&VisualEdrapEntry {
+                edrap_type: 1,
+                ref_sap_or_edrap_idx_deltas: Vec::new(),
+            }),
+        ];
+
+        assert_eq!(
+            refused,
+            [
+                Err(Error::invalid_value("roll_distance")),
+                Err(Error::invalid_value("roll_distance")),
+                Err(Error::invalid_value("num_leading_samples")),
+                Err(Error::invalid_value("SAP_type")),
+                Err(Error::invalid_value("DRAP_type")),
+                Err(Error::invalid_value("edrap_type")),
+                Err(Error::invalid_value("num_ref_sap_or_edrap_samples_minus1"))
+            ]
         );
     }
 }

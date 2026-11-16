@@ -261,10 +261,7 @@ mod tests {
 
     /// An entry of `grouping_type` of the bytes `data`
     fn entry(grouping_type: &[u8; 4], data: &[u8]) -> SampleGroupDescriptionEntry {
-        SampleGroupDescriptionEntry {
-            grouping_type: FourCc::new(*grouping_type),
-            data: data.to_vec(),
-        }
+        SampleGroupDescriptionEntry::new(FourCc::new(*grouping_type), data.to_vec())
     }
 
     /// `sgpd` of version 0 and `grouping_type` `roll`, of distances -1 and 2

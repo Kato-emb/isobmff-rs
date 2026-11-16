@@ -168,7 +168,7 @@ mod tests {
 
     use isobmff_core::Error;
 
-    use super::super::entry::{assert_round_trips, entry_of};
+    use super::super::entry::{SampleGroupDescriptionEntry, assert_round_trips, entry_of};
     use super::{RateShareEntry, RateShareOperationPoint, RateShareOperationPoints};
 
     #[test]
@@ -219,6 +219,36 @@ mod tests {
                 .map(|_| ()),
             ],
             [Err(Error::invalid_value("grouping_type")); 1]
+        );
+    }
+
+    #[test]
+    fn values_the_specification_does_not_allow_are_refused_when_written() {
+        let operation_point = |available_bitrate| RateShareOperationPoint {
+            available_bitrate,
+            target_rate_share: 10,
+        };
+        let refused = [
+            SampleGroupDescriptionEntry::try_from(&RateShareEntry {
+                operation_points: RateShareOperationPoints::Multiple {
+                    operation_points: vec![operation_point(64)],
+                },
+                ..RateShareEntry::default()
+            }),
+            SampleGroupDescriptionEntry::try_from(&RateShareEntry {
+                operation_points: RateShareOperationPoints::Multiple {
+                    operation_points: vec![operation_point(64), operation_point(64)],
+                },
+                ..RateShareEntry::default()
+            }),
+        ];
+
+        assert_eq!(
+            refused,
+            [
+                Err(Error::invalid_value("operation_point_count")),
+                Err(Error::invalid_value("available_bitrate"))
+            ]
         );
     }
 }

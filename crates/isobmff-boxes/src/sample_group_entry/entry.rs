@@ -45,9 +45,7 @@ use isobmff_core::{Error, FieldReader, FieldWriter, FourCc};
 /// use isobmff_core::FourCc;
 ///
 /// // An entry of a `roll` sample group description, of distance -2
-/// let mut entry = SampleGroupDescriptionEntry::default();
-/// entry.grouping_type = FourCc::new(*b"roll");
-/// entry.data = vec![0xff, 0xfe];
+/// let entry = SampleGroupDescriptionEntry::new(FourCc::new(*b"roll"), vec![0xff, 0xfe]);
 ///
 /// // Read it into its class, and write it back
 /// let roll = RollRecoveryEntry::try_from(&entry)?;
@@ -64,11 +62,13 @@ pub struct SampleGroupDescriptionEntry {
     pub data: Vec<u8>,
 }
 
-impl Default for SampleGroupDescriptionEntry {
-    fn default() -> Self {
+impl SampleGroupDescriptionEntry {
+    /// Creates the entry of the bytes `data`, of a box of the `grouping_type` `grouping_type`
+    #[must_use]
+    pub const fn new(grouping_type: FourCc, data: Vec<u8>) -> Self {
         Self {
-            grouping_type: FourCc::new([0; 4]),
-            data: Vec::new(),
+            grouping_type,
+            data,
         }
     }
 }
@@ -142,10 +142,7 @@ pub(super) fn from_class(
 /// An entry of `grouping_type` of the bytes `data`
 #[cfg(test)]
 pub(super) fn entry_of(grouping_type: &[u8; 4], data: &[u8]) -> SampleGroupDescriptionEntry {
-    SampleGroupDescriptionEntry {
-        grouping_type: FourCc::new(*grouping_type),
-        data: data.to_vec(),
-    }
+    SampleGroupDescriptionEntry::new(FourCc::new(*grouping_type), data.to_vec())
 }
 
 /// Asserts that each of `cases`, a `grouping_type`, the bytes its syntax lays out and the value of the class they hold, reads into its value and writes back into its bytes
