@@ -4,9 +4,10 @@ use core::ops::Range;
 
 use isobmff_core::{BoxHeader, ErrorKind};
 
-use super::{Error, Event, FramerConfig};
+use super::config::FramerConfig;
+use super::input_buffer::InputBuffer;
+use super::{Error, Event};
 use crate::RequiredInput;
-use crate::input_buffer::InputBuffer;
 
 /// The smallest box header, `size` and `boxtype`, ISO/IEC 14496-12 §4.2.2
 const COMPACT_HEADER_LENGTH: u64 = 8;
