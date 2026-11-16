@@ -7,7 +7,7 @@ use isobmff_boxes::{
     TimeToSampleEntry, TrackBox, TrackExtendsBox, TrackFragmentBox, TrackRunBox, TrackRunSamples,
 };
 use isobmff_core::{
-    BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, ExtendedSize, Utf8String,
+    BoxDefinition, BoxEncode, BoxHeader, BoxSize, BoxType, ExtendedSize, FourCc, Utf8String,
 };
 
 /// Returns the track `track_id` of the samples of `sizes`, each lasting `sample_delta`, laid in chunks at `chunk_offsets` by the runs `(first_chunk, samples_per_chunk)`
@@ -32,8 +32,7 @@ pub fn track(
     let mut trak = TrackBox::default();
     trak.tkhd.track_id = track_id;
     let stbl = &mut trak.mdia.minf.stbl;
-    let mut entry = SampleEntry::default();
-    entry.data_reference_index = 1;
+    let entry = SampleEntry::new(FourCc::new([0; 4]), 1, Vec::new());
     stbl.stsd.sample_descriptions = Vec::from([SampleDescription::Typed(entry)]);
     let mut stts = TimeToSampleBox::default();
     let mut run = TimeToSampleEntry::default();

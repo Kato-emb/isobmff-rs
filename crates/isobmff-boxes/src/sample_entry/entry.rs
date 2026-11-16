@@ -61,12 +61,13 @@ use isobmff_core::{BoxEncode, Error, FieldReader, FieldWriter, FourCc};
 /// use isobmff_core::FourCc;
 ///
 /// // A protected `stxt` of plain text, whose `sinf` gives its original format
-/// let mut enct = SampleEntry::default();
-/// enct.format = FourCc::new(*b"enct");
-/// enct.data_reference_index = 1;
-/// enct.remaining_data = b"\0text/plain\0\
+/// let enct = SampleEntry::new(
+///     FourCc::new(*b"enct"),
+///     1,
+///     b"\0text/plain\0\
 ///     \0\0\0\x30sinf\0\0\0\x0cfrmastxt\0\0\0\x14schm\0\0\0\0cenc\0\x01\0\0\0\0\0\x08schi"
-///     .to_vec();
+///         .to_vec(),
+/// );
 ///
 /// // Read it into the class of its original format
 /// let mut original = enct.clone();
@@ -108,17 +109,17 @@ pub struct SampleEntry {
     pub remaining_data: Vec<u8>,
 }
 
-impl Default for SampleEntry {
-    fn default() -> Self {
+impl SampleEntry {
+    /// Creates the entry of the format `format` whose samples are retrieved from the [`DataEntry`](crate::DataEntry) at `data_reference_index`, and of the bytes `remaining_data` after `data_reference_index`
+    #[must_use]
+    pub const fn new(format: FourCc, data_reference_index: u16, remaining_data: Vec<u8>) -> Self {
         Self {
-            format: FourCc::new([0; 4]),
-            data_reference_index: 0,
-            remaining_data: Vec::new(),
+            format,
+            data_reference_index,
+            remaining_data,
         }
     }
-}
 
-impl SampleEntry {
     /// Reads the payload of a box of the box type `format`
     ///
     /// # Errors

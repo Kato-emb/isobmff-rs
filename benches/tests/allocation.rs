@@ -220,8 +220,7 @@ fn a_muxer_polled_after_each_sample_allocates_for_the_tables_and_not_for_the_byt
 
     const SAMPLES: u32 = 1024;
     const SAMPLE_SIZE: usize = 4096;
-    let mut entry = SampleEntry::default();
-    entry.data_reference_index = 1;
+    let entry = SampleEntry::new(FourCc::new([0; 4]), 1, Vec::new());
     let mut stsd = SampleDescriptionBox::default();
     stsd.sample_descriptions = vec![SampleDescription::Typed(entry)];
     let mut muxer = MovieFileMuxer::new(
@@ -349,8 +348,7 @@ fn most_held_writing_fragments(fragments: u32) -> usize {
         sample_description_index: 1,
     };
     most_held_by(|| {
-        let mut entry = SampleEntry::default();
-        entry.data_reference_index = 1;
+        let entry = SampleEntry::new(FourCc::new([0; 4]), 1, Vec::new());
         let mut stsd = SampleDescriptionBox::default();
         stsd.sample_descriptions = vec![SampleDescription::Typed(entry)];
         let mut muxer = FragmentedMovieFileMuxer::new(

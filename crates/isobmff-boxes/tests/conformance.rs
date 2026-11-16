@@ -693,7 +693,7 @@ mod tests {
             .map(|(index, reported)| {
                 let mut entry = match ours.sample_descriptions.get(index) {
                     Some(SampleDescription::Typed(entry)) => entry.clone(),
-                    _ => SampleEntry::default(),
+                    _ => SampleEntry::new(FourCc::new([0; 4]), 0, Vec::new()),
                 };
                 entry.format =
                     FourCc::new(gpac_str(reported, "@Type").as_bytes().try_into().unwrap());

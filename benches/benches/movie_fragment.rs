@@ -14,6 +14,7 @@ use isobmff_boxes::{
     DataEntry, DataEntryUrlBox, DataReferenceBox, SampleDescription, SampleDescriptionBox,
     SampleEntry, SampleFlags,
 };
+use isobmff_core::FourCc;
 
 const SAMPLE_DURATION: u32 = 512;
 const SAMPLE_SIZE: u32 = 100;
@@ -37,8 +38,7 @@ fn fragment(count: u64) -> Vec<SampleLocation> {
 }
 
 fn handle_location(criterion: &mut Criterion) {
-    let mut entry = SampleEntry::default();
-    entry.data_reference_index = 1;
+    let entry = SampleEntry::new(FourCc::new([0; 4]), 1, Vec::new());
     let mut stsd = SampleDescriptionBox::default();
     stsd.sample_descriptions = vec![SampleDescription::Typed(entry)];
     let mut dref = DataReferenceBox::default();
