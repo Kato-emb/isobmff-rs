@@ -4,11 +4,12 @@ use alloc::vec::Vec;
 
 use isobmff_core::{Error, FourCc, OtherBoxes};
 
+use super::children::AnyEntryBoxes;
+use super::entry::SampleEntry;
+use super::mpeg2ts_hint::{Mpeg2TsEntry, Mpeg2TsParts, read_entry};
 use crate::btrt::BitRateBox;
 use crate::mpeg2ts_hint::{InitialSampleTimeBox, OdBox, PatBox, PmtBox, TsTimingBox};
 use crate::rinf::RestrictedSchemeInfoBox;
-use crate::sample_entry::mpeg2ts_hint::{Mpeg2TsEntry, Mpeg2TsParts, read_entry};
-use crate::sample_entry::{AnyEntryBoxes, SampleEntry};
 use crate::scrb::ScrambleSchemeInfoBox;
 use crate::sinf::ProtectionSchemeInfoBox;
 

@@ -4,11 +4,10 @@ use alloc::vec::Vec;
 
 use isobmff_core::{Error, FourCc, OtherBoxes};
 
+use super::children::{AnyEntryBoxes, AnyEntryChildren, children_len, encode_children};
+use super::entry::{SampleEntry, from_class};
 use crate::btrt::BitRateBox;
 use crate::rinf::RestrictedSchemeInfoBox;
-use crate::sample_entry::{
-    AnyEntryBoxes, AnyEntryChildren, SampleEntry, children_len, encode_children, from_class,
-};
 use crate::scrb::ScrambleSchemeInfoBox;
 use crate::sinf::ProtectionSchemeInfoBox;
 

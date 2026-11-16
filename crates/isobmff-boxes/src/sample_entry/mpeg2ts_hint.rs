@@ -4,13 +4,14 @@ use alloc::vec::Vec;
 
 use isobmff_core::{BoxDefinition, BoxEncode, BoxType, Error, FieldReader, FourCc, OtherBoxes};
 
+use super::children::{
+    AnyEntryBoxes, children_len, encode_children, encode_optional, split_children,
+};
+use super::entry::{SampleEntry, from_class, of_format};
+use super::hint::HINT_TRACK_VERSION;
 use crate::btrt::BitRateBox;
 use crate::mpeg2ts_hint::{InitialSampleTimeBox, OdBox, PatBox, PmtBox, TsTimingBox};
 use crate::rinf::RestrictedSchemeInfoBox;
-use crate::sample_entry::{
-    AnyEntryBoxes, HINT_TRACK_VERSION, SampleEntry, children_len, encode_children, encode_optional,
-    from_class, of_format, split_children,
-};
 use crate::scrb::ScrambleSchemeInfoBox;
 use crate::sinf::ProtectionSchemeInfoBox;
 
