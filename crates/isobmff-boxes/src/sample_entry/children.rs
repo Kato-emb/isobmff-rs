@@ -11,13 +11,13 @@ use crate::scrb::ScrambleSchemeInfoBox;
 use crate::sinf::ProtectionSchemeInfoBox;
 
 /// Children of a class that defines no box of its own, which holds only the boxes any sample entry may hold
-pub(crate) struct AnyEntryChildren {
-    pub(crate) derived_boxes: OtherBoxes,
-    pub(crate) sinf: Vec<ProtectionSchemeInfoBox>,
-    pub(crate) scrb: Vec<ScrambleSchemeInfoBox>,
-    pub(crate) rinf: Option<RestrictedSchemeInfoBox>,
-    pub(crate) btrt: Option<BitRateBox>,
-    pub(crate) extra_boxes: OtherBoxes,
+pub(super) struct AnyEntryChildren {
+    pub(super) derived_boxes: OtherBoxes,
+    pub(super) sinf: Vec<ProtectionSchemeInfoBox>,
+    pub(super) scrb: Vec<ScrambleSchemeInfoBox>,
+    pub(super) rinf: Option<RestrictedSchemeInfoBox>,
+    pub(super) btrt: Option<BitRateBox>,
+    pub(super) extra_boxes: OtherBoxes,
 }
 
 impl AnyEntryChildren {
@@ -27,7 +27,7 @@ impl AnyEntryChildren {
     ///
     /// * The failures of a child that does not frame, and of a `btrt` given
     ///   more than once.
-    pub(crate) fn read(payload: &[u8]) -> Result<Self, Error> {
+    pub(super) fn read(payload: &[u8]) -> Result<Self, Error> {
         let (derived_boxes, mut children) = split_children(payload, &[])?;
 
         Ok(Self {
@@ -42,16 +42,16 @@ impl AnyEntryChildren {
 }
 
 /// Boxes of ISO/IEC 14496-12 that any sample entry may hold, which an entry writes after the boxes its class defines, in this order
-pub(crate) struct AnyEntryBoxes<'entry> {
-    pub(crate) sinf: &'entry [ProtectionSchemeInfoBox],
-    pub(crate) scrb: &'entry [ScrambleSchemeInfoBox],
-    pub(crate) rinf: Option<&'entry RestrictedSchemeInfoBox>,
-    pub(crate) btrt: Option<&'entry BitRateBox>,
+pub(super) struct AnyEntryBoxes<'entry> {
+    pub(super) sinf: &'entry [ProtectionSchemeInfoBox],
+    pub(super) scrb: &'entry [ScrambleSchemeInfoBox],
+    pub(super) rinf: Option<&'entry RestrictedSchemeInfoBox>,
+    pub(super) btrt: Option<&'entry BitRateBox>,
 }
 
 impl AnyEntryBoxes<'_> {
     /// Box types of the boxes
-    pub(crate) const BOX_TYPES: [BoxType; 4] = [
+    pub(super) const BOX_TYPES: [BoxType; 4] = [
         ProtectionSchemeInfoBox::BOX_TYPE,
         ScrambleSchemeInfoBox::BOX_TYPE,
         RestrictedSchemeInfoBox::BOX_TYPE,
@@ -59,7 +59,7 @@ impl AnyEntryBoxes<'_> {
     ];
 
     /// Returns the length of the boxes
-    pub(crate) fn encoded_len(&self) -> u64 {
+    pub(super) fn encoded_len(&self) -> u64 {
         self.sinf
             .iter()
             .map(BoxEncode::encoded_len)
@@ -74,7 +74,7 @@ impl AnyEntryBoxes<'_> {
     /// # Errors
     ///
     /// * The failures of writing a box.
-    pub(crate) fn encode<'buffer>(
+    pub(super) fn encode<'buffer>(
         &self,
         mut rest: &'buffer mut [u8],
     ) -> Result<&'buffer mut [u8], Error> {
@@ -90,7 +90,7 @@ impl AnyEntryBoxes<'_> {
 }
 
 /// Returns the length of the children of an entry: `derived_boxes`, the boxes of ISO/IEC 14496-12 the class defines, of the lengths `defined`, and `extra_boxes`
-pub(crate) fn children_len(
+pub(super) fn children_len(
     derived_boxes: &OtherBoxes,
     defined: impl IntoIterator<Item = u64>,
     extra_boxes: &OtherBoxes,
@@ -109,7 +109,7 @@ pub(crate) fn children_len(
 /// # Errors
 ///
 /// * The failures of writing a child.
-pub(crate) fn encode_children<'buffer>(
+pub(super) fn encode_children<'buffer>(
     mut rest: &'buffer mut [u8],
     derived_boxes: &OtherBoxes,
     encode_defined: impl FnOnce(&'buffer mut [u8]) -> Result<&'buffer mut [u8], Error>,

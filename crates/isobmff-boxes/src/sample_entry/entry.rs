@@ -163,7 +163,7 @@ impl BoxEncode for SampleEntry {
 ///   [`TruncatedBuffer`](isobmff_core::ErrorKind::TruncatedBuffer): what
 ///   `encode_remaining` writes is not `remaining_len` long.
 /// * The failures of `encode_remaining`.
-pub(crate) fn from_class(
+pub(super) fn from_class(
     format: FourCc,
     data_reference_index: u16,
     remaining_len: u64,
@@ -191,7 +191,7 @@ pub(crate) fn from_class(
 /// # Errors
 ///
 /// * The failures of [`ChildBoxes::decode`]: a child does not frame.
-pub(crate) fn split_children<'payload>(
+pub(super) fn split_children<'payload>(
     payload: &'payload [u8],
     defined: &[BoxType],
 ) -> Result<(OtherBoxes, ChildBoxes<'payload>), Error> {
@@ -218,7 +218,7 @@ pub(crate) fn split_children<'payload>(
 ///
 /// * [`UnsupportedValue`](isobmff_core::ErrorKind::UnsupportedValue) for
 ///   `format`: the entry is of another format.
-pub(crate) fn of_format(entry: &SampleEntry, format: FourCc) -> Result<(), Error> {
+pub(super) fn of_format(entry: &SampleEntry, format: FourCc) -> Result<(), Error> {
     if entry.format != format {
         return Err(Error::unsupported_value("format"));
     }
