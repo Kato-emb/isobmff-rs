@@ -48,7 +48,7 @@ const STATIC_MAPPING: u32 = 0x2;
 /// `default_length` other than 0 that is not the length of every entry, or a
 /// field its version does not carry that is not 0; with
 /// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for
-/// `SampleGroupDescriptionEntry` where it is of version 0 and holds an entry
+/// `data` where it is of version 0 and holds an entry
 /// whose bytes are not the length its syntax lays out, which a reader could
 /// not delimit; and with
 /// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for `version` where
@@ -201,7 +201,7 @@ impl BoxEncode for SampleGroupDescriptionBox {
             if self.version == 0 {
                 let length = delimited_len(self.grouping_type, &mut FieldReader::new(&entry.data))?;
                 if length != entry.data.len() {
-                    return Err(Error::invalid_value("SampleGroupDescriptionEntry"));
+                    return Err(Error::invalid_value("data"));
                 }
             }
             if self.default_length != 0 && length_of(&entry.data) != u64::from(self.default_length)
@@ -450,7 +450,7 @@ mod tests {
         assert_eq!(
             [longer, shorter].map(|value| value.encode(&mut [0; 64]).map(|_| ())),
             [
-                Err(Error::invalid_value("SampleGroupDescriptionEntry")),
+                Err(Error::invalid_value("data")),
                 Err(Error::truncated_payload(2, 1))
             ]
         );
