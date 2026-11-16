@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{EditListEntry, MovieBox};
 
-use super::Error;
+use super::error::Error;
 use crate::SampleProperties;
 
 /// A sample, or the part of it, that the edit list of its track presents
