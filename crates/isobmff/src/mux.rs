@@ -13,11 +13,13 @@ mod fragmented_movie_file;
 mod movie_file;
 mod movie_parameters;
 mod output;
+mod segment;
 mod track_parameters;
 
 pub use config::MuxerConfig;
 pub use error::Error;
-pub use fragmented_movie_file::{FragmentedMovieFileMuxer, SegmentMuxer};
+pub use fragmented_movie_file::FragmentedMovieFileMuxer;
 pub use movie_file::{MediaDataHeader, MovieFileMuxer};
 pub use movie_parameters::MovieParameters;
+pub use segment::SegmentMuxer;
 pub use track_parameters::TrackParameters;
