@@ -1,7 +1,6 @@
 //! [`Demuxer`], which reads a file into its boxes and the samples of the tracks a caller subscribes to
 
 use alloc::vec;
-use alloc::vec::Vec;
 
 use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox, SegmentTypeBox};
 use isobmff_core::{BoxDecode, BoxDefinition};
@@ -12,9 +11,11 @@ use crate::{RequiredInput, SampleLocation};
 
 mod config;
 mod event;
+mod samples;
 
 pub use config::DemuxerConfig;
 pub use event::{Error, Event, Sample};
+use samples::Samples;
 
 /// The event [`Demuxer::poll_event`] lends next
 #[derive(Debug, Clone)]
@@ -78,9 +79,9 @@ enum Take {
 
 /// A box the box reader reported, read into its value where the demuxer reads one
 enum BoxRead {
-    /// The `moov`, whose locations now fill [`Samples::locations`]
+    /// The `moov`, whose locations now fill the [`Samples`]
     Movie(alloc::boxed::Box<MovieBox>),
-    /// A `moof`, whose locations now follow those of [`Samples::locations`]
+    /// A `moof`, whose locations now follow those of the [`Samples`]
     /// still wanted
     MovieFragment(alloc::boxed::Box<MovieFragmentBox>),
     /// A `moov` or a `moof` the structure-data refuses as the specification
@@ -103,21 +104,6 @@ enum Refused {
         offset: u64,
         moof: alloc::boxed::Box<MovieFragmentBox>,
     },
-}
-
-/// The samples of the `moov`, and how far they are reported and their bytes gathered
-#[derive(Debug, Clone)]
-struct Samples {
-    /// The location of each sample, in the order of their file offsets
-    locations: Vec<SampleLocation>,
-    /// How many of `locations` were reported
-    reported: usize,
-    /// Index of the first location whose bytes may still be requested
-    next: usize,
-    /// The bytes of the sample gathered, or being gathered
-    bytes: Vec<u8>,
-    /// `track_ID` of each track whose samples are lent
-    subscribed: Vec<u32>,
 }
 
 /// Reader of a file into its boxes at file level and the samples of the tracks a caller subscribes to
@@ -219,13 +205,7 @@ impl Demuxer {
             sample_count_limit: config.sample_count_limit,
             sample_size_limit: config.sample_size_limit,
             state: State::NoMovie,
-            samples: Samples {
-                locations: Vec::new(),
-                reported: 0,
-                next: 0,
-                bytes: Vec::new(),
-                subscribed: Vec::new(),
-            },
+            samples: Samples::default(),
             pending: None,
             refused: None,
             finished: false,
@@ -234,21 +214,16 @@ impl Demuxer {
 
     /// Lends the bytes of the samples of track `track_id` from now on
     pub fn subscribe_track(&mut self, track_id: u32) {
-        if !self.samples.subscribed.contains(&track_id) {
-            self.samples.subscribed.push(track_id);
-        }
+        self.samples.subscribe(track_id);
     }
 
     /// Stops lending the bytes of the samples of track `track_id`, dropping those of one being gathered
     pub fn unsubscribe_track(&mut self, track_id: u32) {
-        self.samples
-            .subscribed
-            .retain(|&subscribed| subscribed != track_id);
+        self.samples.unsubscribe(track_id);
         if let State::Gathering { index } = self.state
             && self
                 .samples
-                .locations
-                .get(index)
+                .location(index)
                 .is_some_and(|location| location.properties.track_id == track_id)
         {
             self.state = State::Movie;
@@ -266,11 +241,13 @@ impl Demuxer {
         }
         let boxes = self.boxes.required_input();
         let (location, gathered) = match self.state {
-            State::Gathering { index } => (
-                self.samples.locations.get(index).copied(),
-                length_of(self.samples.bytes.len()),
+            State::Gathering { index } => (self.samples.location(index), self.samples.gathered()),
+            State::Movie => (
+                self.samples
+                    .target(boxes.map(|required| required.position))
+                    .map(|(_, location)| location),
+                0,
             ),
-            State::Movie => (self.target(boxes).map(|(_, location)| location), 0),
             State::NoMovie => (None, 0),
         };
         match location {
@@ -317,7 +294,7 @@ impl Demuxer {
                 let taken = bytes
                     .get(..usize::try_from(remaining).unwrap_or(usize::MAX))
                     .unwrap_or(bytes);
-                self.samples.bytes.extend_from_slice(taken);
+                self.samples.gather(taken);
             }
             Take::Boxes => self.boxes.handle_input(position, bytes),
         }
@@ -335,7 +312,7 @@ impl Demuxer {
             Pending::Sample(location) => Event::Sample(Sample {
                 properties: location.properties,
                 offset: location.offset,
-                bytes: &self.samples.bytes,
+                bytes: self.samples.bytes(),
             }),
         })
     }
@@ -355,13 +332,7 @@ impl Demuxer {
     /// How much of the input the state takes next
     fn take(&self) -> Take {
         match self.state {
-            State::Gathering { index } => Take::Sample(
-                self.samples
-                    .locations
-                    .get(index)
-                    .map_or(0, |location| u64::from(location.size))
-                    .saturating_sub(length_of(self.samples.bytes.len())),
-            ),
+            State::Gathering { index } => Take::Sample(self.samples.remaining(index)),
             State::NoMovie | State::Movie => Take::Boxes,
         }
     }
@@ -375,17 +346,15 @@ impl Demuxer {
             return Observation::Box(read);
         }
         let samples = &self.samples;
-        if let Some(&location) = samples.locations.get(samples.reported) {
+        if let Some(location) = samples.unreported() {
             return Observation::Unreported(location);
         }
         match self.state {
-            State::Gathering { index } => match samples.locations.get(index) {
-                Some(&location)
-                    if usize::try_from(location.size).ok() == Some(samples.bytes.len()) =>
-                {
+            State::Gathering { index } => match samples.location(index) {
+                Some(location) if u64::from(location.size) == samples.gathered() => {
                     Observation::SampleInHand(location)
                 }
-                Some(&location) if self.finished && !samples.bytes.is_empty() => {
+                Some(location) if self.finished && samples.gathered() > 0 => {
                     Observation::Truncated(index, location)
                 }
                 Some(_) if self.finished => Observation::Abandoned,
@@ -395,7 +364,11 @@ impl Demuxer {
             // seek ends the input where the demuxer asks for bytes before
             // those it has read, and gets no error for the samples there.
             State::Movie if self.finished => Observation::NeedMoreData,
-            State::Movie => match self.target(self.boxes.required_input()) {
+            State::Movie => match self.samples.target(
+                self.boxes
+                    .required_input()
+                    .map(|required| required.position),
+            ) {
                 Some((index, location)) if u64::from(location.size) > self.sample_size_limit => {
                     Observation::OverLimit(index, location)
                 }
@@ -416,9 +389,7 @@ impl Demuxer {
             // samples it lets the demuxer request, such as an `mdat` before
             // the samples in it.
             let read = match self.state {
-                State::NoMovie | State::Movie
-                    if self.samples.reported == self.samples.locations.len() =>
-                {
+                State::NoMovie | State::Movie if self.samples.is_reported() => {
                     match self.refused.take() {
                         Some(refused) => Some(BoxRead::Held(refused)),
                         None => self.read_box(),
@@ -428,26 +399,18 @@ impl Demuxer {
             };
             let (next_state, step) = match (self.state, self.observe(read)) {
                 (state, Observation::Unreported(location)) => {
-                    self.samples.reported = self.samples.reported.saturating_add(1);
-                    // Why sort once every location is reported: the samples of
-                    // an earlier box still wanted may lie after those of a
-                    // `moof`, and samples are requested in file order.
-                    if self.samples.reported == self.samples.locations.len() {
-                        self.samples
-                            .locations
-                            .sort_by_key(|location| location.offset);
-                    }
+                    self.samples.report();
                     (
                         state,
                         Step::Output(Pending::Ready(Event::SampleLocation(location))),
                     )
                 }
                 (State::Movie, Observation::Wanted(index)) => {
-                    self.samples.bytes.clear();
+                    self.samples.clear_bytes();
                     (State::Gathering { index }, Step::Continue)
                 }
                 (state, Observation::OverLimit(index, location)) => {
-                    self.samples.next = index.saturating_add(1);
+                    self.samples.pass(index);
                     (
                         state,
                         Step::Output(Pending::Ready(Event::Error(Error::SampleOverLimit {
@@ -457,18 +420,18 @@ impl Demuxer {
                     )
                 }
                 (state, Observation::Empty(index, location)) => {
-                    self.samples.bytes.clear();
-                    self.samples.next = index.saturating_add(1);
+                    self.samples.clear_bytes();
+                    self.samples.pass(index);
                     (state, Step::Output(Pending::Sample(location)))
                 }
                 (State::Gathering { index }, Observation::SampleInHand(location)) => {
-                    self.samples.next = index.saturating_add(1);
+                    self.samples.pass(index);
                     (State::Movie, Step::Output(Pending::Sample(location)))
                 }
                 (_, Observation::Abandoned) => (State::Movie, Step::Continue),
                 (_, Observation::Truncated(index, location)) => {
-                    self.samples.bytes.clear();
-                    self.samples.next = index.saturating_add(1);
+                    self.samples.clear_bytes();
+                    self.samples.pass(index);
                     (
                         State::Movie,
                         Step::Output(Pending::Ready(Event::Error(Error::TruncatedSample {
@@ -495,8 +458,7 @@ impl Demuxer {
                 (state, Observation::Box(BoxRead::Held(Refused::Movie(movie)))) => {
                     match self.structure_data.handle_movie_lossy(&movie) {
                         Ok(locations) => {
-                            self.samples.locations.clear();
-                            self.samples.locations.extend(locations);
+                            self.samples.replace(locations);
                             (
                                 State::Movie,
                                 Step::Output(Pending::Ready(Event::Movie(movie))),
@@ -513,7 +475,7 @@ impl Demuxer {
                     .handle_movie_fragment_lossy(&moof, offset)
                 {
                     Ok(locations) => {
-                        self.samples.locations.extend(locations);
+                        self.samples.extend(locations);
                         (
                             state,
                             Step::Output(Pending::Ready(Event::MovieFragment(moof))),
@@ -578,22 +540,14 @@ impl Demuxer {
                     match MovieFragmentBox::decode_payload(payload) {
                         Err(source) => decode_error(source),
                         Ok(moof) => {
-                            let samples = &mut self.samples;
-                            // Why drop the locations before the `moof`: a sample
-                            // of a subscribed track before it was lent before the
-                            // box reader passed it, and the locations would
-                            // otherwise grow with every fragment.
-                            samples.locations.drain(..samples.next);
-                            samples
-                                .locations
-                                .retain(|location| location.offset >= offset);
-                            samples.next = 0;
-                            samples.reported = samples.locations.len();
+                            self.samples.drop_before(offset);
                             // Why count before resolving: the samples of the
                             // fragments before may lie after this `moof` and
                             // stay held, and the decoding times move on only for
                             // a `moof` resolved.
-                            let held = length_of(samples.locations.len())
+                            let held = self
+                                .samples
+                                .held()
                                 .saturating_add(structure_data::movie_fragment_sample_count(&moof));
                             if held > self.sample_count_limit {
                                 BoxRead::Event(Event::Error(refused(
@@ -605,7 +559,7 @@ impl Demuxer {
                             } else {
                                 match self.structure_data.handle_movie_fragment(&moof, offset) {
                                     Ok(locations) => {
-                                        self.samples.locations.extend(locations);
+                                        self.samples.extend(locations);
                                         BoxRead::MovieFragment(alloc::boxed::Box::new(moof))
                                     }
                                     Err(error) => BoxRead::Refused {
@@ -630,8 +584,7 @@ impl Demuxer {
                                 refused: Refused::Movie(alloc::boxed::Box::new(movie)),
                             },
                             Ok(locations) => {
-                                self.samples.locations.clear();
-                                self.samples.locations.extend(locations);
+                                self.samples.replace(locations);
                                 BoxRead::Movie(alloc::boxed::Box::new(movie))
                             }
                         },
@@ -642,31 +595,4 @@ impl Demuxer {
         };
         Some(read)
     }
-
-    /// The next sample of a subscribed track whose bytes are wanted before what the box reader wants, with its index
-    fn target(&self, boxes: Option<RequiredInput>) -> Option<(usize, SampleLocation)> {
-        let samples = &self.samples;
-        // Why also before the end of the input when the box reader wants
-        // none: an `mdat` of size 0 runs to the end of the file, and its
-        // samples are wanted though no box follows it.
-        let before = boxes.map_or(u64::MAX, |required| required.position);
-        let start = samples.next;
-        samples
-            .locations
-            .get(start..)?
-            .iter()
-            .enumerate()
-            // Why also a sample of no bytes at the position the box reader
-            // wants: it lies at the end of the media data before that box, or
-            // of the input, and needs no byte of either.
-            .take_while(|(_, location)| {
-                location.offset < before || (location.size == 0 && location.offset == before)
-            })
-            .find(|(_, location)| samples.subscribed.contains(&location.properties.track_id))
-            .map(|(index, &location)| (start.saturating_add(index), location))
-    }
-}
-
-fn length_of(length: usize) -> u64 {
-    u64::try_from(length).unwrap_or(u64::MAX)
 }
