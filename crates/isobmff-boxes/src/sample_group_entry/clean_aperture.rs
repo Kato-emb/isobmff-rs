@@ -1,6 +1,8 @@
 //! [`CleanApertureEntry`], the clean aperture of the samples of a sample group
 
-use isobmff_core::{Error, FieldReader, FieldWriter};
+use isobmff_core::{Error, FieldReader, FieldWriter, FourCc};
+
+use super::entry::{DerivedEntry, SampleGroupDescriptionEntry, read_class, write_class};
 
 /// [`CleanApertureEntry`] (`casg`), ISO/IEC 14496-12 §10.10
 ///
@@ -29,8 +31,10 @@ pub struct CleanApertureEntry {
     pub vert_off_d: i32,
 }
 
-impl CleanApertureEntry {
-    pub(super) fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
+impl DerivedEntry for CleanApertureEntry {
+    const GROUPING_TYPE: FourCc = FourCc::new(*b"casg");
+
+    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         Ok(Self {
             clean_aperture_width_n: reader.read_i32()?,
             clean_aperture_width_d: reader.read_i32()?,
@@ -43,7 +47,11 @@ impl CleanApertureEntry {
         })
     }
 
-    pub(super) fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+    fn encoded_len(&self) -> u64 {
+        32
+    }
+
+    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         [
             self.clean_aperture_width_n,
             self.clean_aperture_width_d,
@@ -56,5 +64,47 @@ impl CleanApertureEntry {
         ]
         .into_iter()
         .try_for_each(|value| writer.write_i32(value))
+    }
+}
+
+impl TryFrom<&SampleGroupDescriptionEntry> for CleanApertureEntry {
+    type Error = Error;
+
+    fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
+        read_class(entry)
+    }
+}
+
+impl TryFrom<&CleanApertureEntry> for SampleGroupDescriptionEntry {
+    type Error = Error;
+
+    fn try_from(entry: &CleanApertureEntry) -> Result<Self, Error> {
+        write_class(entry)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use isobmff_core::Error;
+
+    use super::super::entry::{assert_round_trips, entry_of};
+    use super::CleanApertureEntry;
+
+    #[test]
+    fn reads_and_writes_the_bytes_its_syntax_lays_out() {
+        assert_round_trips(&[
+            (b"casg", b"\0\0\x07\x80\0\0\0\x01\0\0\x04\x38\0\0\0\x01\xff\xff\xff\xf8\0\0\0\x01\0\0\0\0\0\0\0\x01".as_slice(), CleanApertureEntry { clean_aperture_width_n: 1920, clean_aperture_width_d: 1, clean_aperture_height_n: 1080, clean_aperture_height_d: 1, horiz_off_n: -8, horiz_off_d: 1, vert_off_n: 0, vert_off_d: 1 }),
+        ]);
+    }
+
+    #[test]
+    fn an_entry_of_another_grouping_type_is_refused() {
+        assert_eq!(
+            [
+                CleanApertureEntry::try_from(&entry_of(b"seig", b"\0\0\x07\x80\0\0\0\x01\0\0\x04\x38\0\0\0\x01\xff\xff\xff\xf8\0\0\0\x01\0\0\0\0\0\0\0\x01")).map(|_| ()),
+            ],
+            [Err(Error::invalid_value("grouping_type")); 1]
+        );
     }
 }

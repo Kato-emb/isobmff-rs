@@ -2,7 +2,9 @@
 
 use alloc::vec::Vec;
 
-use isobmff_core::{Error, FieldReader, FieldWriter};
+use isobmff_core::{Error, FieldReader, FieldWriter, FourCc};
+
+use super::entry::{DerivedEntry, SampleGroupDescriptionEntry, read_class, write_class};
 
 use crate::table::{TableEntry, entries_len, read_entries, write_entries};
 
@@ -82,8 +84,10 @@ pub struct RateShareEntry {
     pub discard_priority: u8,
 }
 
-impl RateShareEntry {
-    pub(super) fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
+impl DerivedEntry for RateShareEntry {
+    const GROUPING_TYPE: FourCc = FourCc::new(*b"rash");
+
+    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let operation_point_count = reader.read_u16()?;
         let operation_points = if operation_point_count == 1 {
             RateShareOperationPoints::Single {
@@ -108,7 +112,7 @@ impl RateShareEntry {
         })
     }
 
-    pub(super) fn encoded_len(&self) -> u64 {
+    fn encoded_len(&self) -> u64 {
         let operation_points_len = match &self.operation_points {
             RateShareOperationPoints::Single { .. } => 2,
             RateShareOperationPoints::Multiple { operation_points } => {
@@ -119,7 +123,7 @@ impl RateShareEntry {
         operation_points_len.saturating_add(2 + 4 + 4 + 1)
     }
 
-    pub(super) fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         match &self.operation_points {
             RateShareOperationPoints::Single { target_rate_share } => {
                 writer.write_u16(1)?;
@@ -146,5 +150,82 @@ impl RateShareEntry {
         writer.write_u32(self.maximum_bitrate)?;
         writer.write_u32(self.minimum_bitrate)?;
         writer.write_bytes(&[self.discard_priority])
+    }
+}
+
+impl TryFrom<&SampleGroupDescriptionEntry> for RateShareEntry {
+    type Error = Error;
+
+    fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
+        read_class(entry)
+    }
+}
+
+impl TryFrom<&RateShareEntry> for SampleGroupDescriptionEntry {
+    type Error = Error;
+
+    fn try_from(entry: &RateShareEntry) -> Result<Self, Error> {
+        write_class(entry)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use isobmff_core::Error;
+
+    use super::super::entry::{assert_round_trips, entry_of};
+    use super::{RateShareEntry, RateShareOperationPoint, RateShareOperationPoints};
+
+    #[test]
+    fn reads_and_writes_the_bytes_its_syntax_lays_out() {
+        assert_round_trips(&[
+            (
+                b"rash",
+                b"\0\x01\0\x32\0\0\x01\0\0\0\0\x10\x80".as_slice(),
+                RateShareEntry {
+                    operation_points: RateShareOperationPoints::Single {
+                        target_rate_share: 50,
+                    },
+                    maximum_bitrate: 256,
+                    minimum_bitrate: 16,
+                    discard_priority: 128,
+                },
+            ),
+            (
+                b"rash",
+                b"\0\x02\0\0\0\x40\0\x14\0\0\x01\0\0\x1e\0\0\0\0\0\0\0\0\0".as_slice(),
+                RateShareEntry {
+                    operation_points: RateShareOperationPoints::Multiple {
+                        operation_points: vec![
+                            RateShareOperationPoint {
+                                available_bitrate: 64,
+                                target_rate_share: 20,
+                            },
+                            RateShareOperationPoint {
+                                available_bitrate: 256,
+                                target_rate_share: 30,
+                            },
+                        ],
+                    },
+                    ..RateShareEntry::default()
+                },
+            ),
+        ]);
+    }
+
+    #[test]
+    fn an_entry_of_another_grouping_type_is_refused() {
+        assert_eq!(
+            [
+                RateShareEntry::try_from(&entry_of(
+                    b"seig",
+                    b"\0\x01\0\x32\0\0\x01\0\0\0\0\x10\x80"
+                ))
+                .map(|_| ()),
+            ],
+            [Err(Error::invalid_value("grouping_type")); 1]
+        );
     }
 }

@@ -2,7 +2,9 @@
 
 use alloc::vec::Vec;
 
-use isobmff_core::{Error, FieldReader, FieldWriter};
+use isobmff_core::{Error, FieldReader, FieldWriter, FourCc};
+
+use super::entry::{DerivedEntry, SampleGroupDescriptionEntry, read_class, write_class};
 
 use crate::table::{TableEntry, entries_len, read_entries, read_to_end, write_entries};
 
@@ -26,18 +28,40 @@ pub struct RollRecoveryEntry {
     pub roll_distance: i16,
 }
 
-impl RollRecoveryEntry {
-    pub(super) fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
+impl DerivedEntry for RollRecoveryEntry {
+    const GROUPING_TYPE: FourCc = FourCc::new(*b"roll");
+
+    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         Ok(Self {
             roll_distance: reader.read_i16()?,
         })
     }
 
-    pub(super) fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+    fn encoded_len(&self) -> u64 {
+        2
+    }
+
+    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         if self.roll_distance == 0 {
             return Err(Error::invalid_value("roll_distance"));
         }
         writer.write_i16(self.roll_distance)
+    }
+}
+
+impl TryFrom<&SampleGroupDescriptionEntry> for RollRecoveryEntry {
+    type Error = Error;
+
+    fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
+        read_class(entry)
+    }
+}
+
+impl TryFrom<&RollRecoveryEntry> for SampleGroupDescriptionEntry {
+    type Error = Error;
+
+    fn try_from(entry: &RollRecoveryEntry) -> Result<Self, Error> {
+        write_class(entry)
     }
 }
 
@@ -55,18 +79,40 @@ pub struct AudioPreRollEntry {
     pub roll_distance: i16,
 }
 
-impl AudioPreRollEntry {
-    pub(super) fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
+impl DerivedEntry for AudioPreRollEntry {
+    const GROUPING_TYPE: FourCc = FourCc::new(*b"prol");
+
+    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         Ok(Self {
             roll_distance: reader.read_i16()?,
         })
     }
 
-    pub(super) fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+    fn encoded_len(&self) -> u64 {
+        2
+    }
+
+    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         if self.roll_distance <= 0 {
             return Err(Error::invalid_value("roll_distance"));
         }
         writer.write_i16(self.roll_distance)
+    }
+}
+
+impl TryFrom<&SampleGroupDescriptionEntry> for AudioPreRollEntry {
+    type Error = Error;
+
+    fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
+        read_class(entry)
+    }
+}
+
+impl TryFrom<&AudioPreRollEntry> for SampleGroupDescriptionEntry {
+    type Error = Error;
+
+    fn try_from(entry: &AudioPreRollEntry) -> Result<Self, Error> {
+        write_class(entry)
     }
 }
 
@@ -117,8 +163,10 @@ pub struct AlternativeStartupEntry {
     pub pieces: Vec<AlternativeStartupPiece>,
 }
 
-impl AlternativeStartupEntry {
-    pub(super) fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
+impl DerivedEntry for AlternativeStartupEntry {
+    const GROUPING_TYPE: FourCc = FourCc::new(*b"alst");
+
+    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let roll_count = reader.read_u16()?;
         let first_output_sample = reader.read_u16()?;
         let sample_offsets = read_entries(
@@ -135,19 +183,35 @@ impl AlternativeStartupEntry {
         })
     }
 
-    pub(super) fn encoded_len(&self) -> u64 {
+    fn encoded_len(&self) -> u64 {
         entries_len(&self.sample_offsets)
             .saturating_add(entries_len(&self.pieces))
             .saturating_add(2 + 2)
     }
 
-    pub(super) fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         let roll_count = u16::try_from(self.sample_offsets.len())
             .map_err(|_| Error::invalid_value("roll_count"))?;
         writer.write_u16(roll_count)?;
         writer.write_u16(self.first_output_sample)?;
         write_entries(writer, &self.sample_offsets)?;
         write_entries(writer, &self.pieces)
+    }
+}
+
+impl TryFrom<&SampleGroupDescriptionEntry> for AlternativeStartupEntry {
+    type Error = Error;
+
+    fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
+        read_class(entry)
+    }
+}
+
+impl TryFrom<&AlternativeStartupEntry> for SampleGroupDescriptionEntry {
+    type Error = Error;
+
+    fn try_from(entry: &AlternativeStartupEntry) -> Result<Self, Error> {
+        write_class(entry)
     }
 }
 
@@ -166,8 +230,10 @@ pub struct VisualRandomAccessEntry {
     pub num_leading_samples: u8,
 }
 
-impl VisualRandomAccessEntry {
-    pub(super) fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
+impl DerivedEntry for VisualRandomAccessEntry {
+    const GROUPING_TYPE: FourCc = FourCc::new(*b"rap ");
+
+    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let [byte] = *reader.read_bytes::<1>()?;
 
         Ok(Self {
@@ -176,7 +242,11 @@ impl VisualRandomAccessEntry {
         })
     }
 
-    pub(super) fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+    fn encoded_len(&self) -> u64 {
+        1
+    }
+
+    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         if self.num_leading_samples > 0x7f {
             return Err(Error::invalid_value("num_leading_samples"));
         }
@@ -186,6 +256,22 @@ impl VisualRandomAccessEntry {
             0
         };
         writer.write_bytes(&[known | self.num_leading_samples])
+    }
+}
+
+impl TryFrom<&SampleGroupDescriptionEntry> for VisualRandomAccessEntry {
+    type Error = Error;
+
+    fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
+        read_class(entry)
+    }
+}
+
+impl TryFrom<&VisualRandomAccessEntry> for SampleGroupDescriptionEntry {
+    type Error = Error;
+
+    fn try_from(entry: &VisualRandomAccessEntry) -> Result<Self, Error> {
+        write_class(entry)
     }
 }
 
@@ -206,8 +292,10 @@ pub struct SapEntry {
     pub sap_type: u8,
 }
 
-impl SapEntry {
-    pub(super) fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
+impl DerivedEntry for SapEntry {
+    const GROUPING_TYPE: FourCc = FourCc::new(*b"sap ");
+
+    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let [byte] = *reader.read_bytes::<1>()?;
 
         Ok(Self {
@@ -216,12 +304,32 @@ impl SapEntry {
         })
     }
 
-    pub(super) fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+    fn encoded_len(&self) -> u64 {
+        1
+    }
+
+    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         if !(1..=6).contains(&self.sap_type) {
             return Err(Error::invalid_value("SAP_type"));
         }
         let dependent = if self.dependent_flag { 0x80 } else { 0 };
         writer.write_bytes(&[dependent | self.sap_type])
+    }
+}
+
+impl TryFrom<&SampleGroupDescriptionEntry> for SapEntry {
+    type Error = Error;
+
+    fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
+        read_class(entry)
+    }
+}
+
+impl TryFrom<&SapEntry> for SampleGroupDescriptionEntry {
+    type Error = Error;
+
+    fn try_from(entry: &SapEntry) -> Result<Self, Error> {
+        write_class(entry)
     }
 }
 
@@ -242,8 +350,10 @@ pub struct VisualDrapEntry {
     pub drap_type: u8,
 }
 
-impl VisualDrapEntry {
-    pub(super) fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
+impl DerivedEntry for VisualDrapEntry {
+    const GROUPING_TYPE: FourCc = FourCc::new(*b"drap");
+
+    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let fields = reader.read_u32()?;
         if fields & 0x1fff_ffff != 0 {
             return Err(Error::unsupported_value("reserved"));
@@ -254,11 +364,31 @@ impl VisualDrapEntry {
         })
     }
 
-    pub(super) fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+    fn encoded_len(&self) -> u64 {
+        4
+    }
+
+    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         if !(1..=3).contains(&self.drap_type) {
             return Err(Error::invalid_value("DRAP_type"));
         }
         writer.write_u32(u32::from(self.drap_type) << 29)
+    }
+}
+
+impl TryFrom<&SampleGroupDescriptionEntry> for VisualDrapEntry {
+    type Error = Error;
+
+    fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
+        read_class(entry)
+    }
+}
+
+impl TryFrom<&VisualDrapEntry> for SampleGroupDescriptionEntry {
+    type Error = Error;
+
+    fn try_from(entry: &VisualDrapEntry) -> Result<Self, Error> {
+        write_class(entry)
     }
 }
 
@@ -285,8 +415,10 @@ pub struct VisualEdrapEntry {
     pub ref_sap_or_edrap_idx_deltas: Vec<u16>,
 }
 
-impl VisualEdrapEntry {
-    pub(super) fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
+impl DerivedEntry for VisualEdrapEntry {
+    const GROUPING_TYPE: FourCc = FourCc::new(*b"edrp");
+
+    fn read(reader: &mut FieldReader<'_>) -> Result<Self, Error> {
         let [byte] = *reader.read_bytes::<1>()?;
         if byte & 0x03 != 0 {
             return Err(Error::unsupported_value("reserved"));
@@ -304,11 +436,11 @@ impl VisualEdrapEntry {
         })
     }
 
-    pub(super) fn encoded_len(&self) -> u64 {
+    fn encoded_len(&self) -> u64 {
         entries_len(&self.ref_sap_or_edrap_idx_deltas).saturating_add(1)
     }
 
-    pub(super) fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
+    fn write(&self, writer: &mut FieldWriter<'_>) -> Result<(), Error> {
         if !(1..=3).contains(&self.edrap_type) {
             return Err(Error::invalid_value("edrap_type"));
         }
@@ -321,5 +453,109 @@ impl VisualEdrapEntry {
             .ok_or_else(|| Error::invalid_value("num_ref_sap_or_edrap_samples_minus1"))?;
         writer.write_bytes(&[self.edrap_type << 5 | minus1 << 2])?;
         write_entries(writer, &self.ref_sap_or_edrap_idx_deltas)
+    }
+}
+
+impl TryFrom<&SampleGroupDescriptionEntry> for VisualEdrapEntry {
+    type Error = Error;
+
+    fn try_from(entry: &SampleGroupDescriptionEntry) -> Result<Self, Error> {
+        read_class(entry)
+    }
+}
+
+impl TryFrom<&VisualEdrapEntry> for SampleGroupDescriptionEntry {
+    type Error = Error;
+
+    fn try_from(entry: &VisualEdrapEntry) -> Result<Self, Error> {
+        write_class(entry)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use isobmff_core::Error;
+
+    use super::super::entry::{assert_round_trips, entry_of};
+    use super::{
+        AlternativeStartupEntry, AlternativeStartupPiece, AudioPreRollEntry, RollRecoveryEntry,
+        SapEntry, VisualDrapEntry, VisualEdrapEntry, VisualRandomAccessEntry,
+    };
+
+    #[test]
+    fn reads_and_writes_the_bytes_its_syntax_lays_out() {
+        assert_round_trips(&[(
+            b"roll",
+            b"\xff\xfe".as_slice(),
+            RollRecoveryEntry { roll_distance: -2 },
+        )]);
+        assert_round_trips(&[(
+            b"prol",
+            b"\0\x05".as_slice(),
+            AudioPreRollEntry { roll_distance: 5 },
+        )]);
+        assert_round_trips(&[(
+            b"alst",
+            b"\0\x02\0\x01\0\0\0\0\0\0\x0b\xb8\0\x01\0\x02".as_slice(),
+            AlternativeStartupEntry {
+                first_output_sample: 1,
+                sample_offsets: vec![0, 3000],
+                pieces: vec![AlternativeStartupPiece {
+                    num_output_samples: 1,
+                    num_total_samples: 2,
+                }],
+            },
+        )]);
+        assert_round_trips(&[(
+            b"rap ",
+            b"\x83".as_slice(),
+            VisualRandomAccessEntry {
+                num_leading_samples_known: true,
+                num_leading_samples: 3,
+            },
+        )]);
+        assert_round_trips(&[(
+            b"sap ",
+            b"\x82".as_slice(),
+            SapEntry {
+                dependent_flag: true,
+                sap_type: 2,
+            },
+        )]);
+        assert_round_trips(&[(
+            b"drap",
+            b"\x40\0\0\0".as_slice(),
+            VisualDrapEntry { drap_type: 2 },
+        )]);
+        assert_round_trips(&[(
+            b"edrp",
+            b"\x24\0\x01\0\x03".as_slice(),
+            VisualEdrapEntry {
+                edrap_type: 1,
+                ref_sap_or_edrap_idx_deltas: vec![1, 3],
+            },
+        )]);
+    }
+
+    #[test]
+    fn an_entry_of_another_grouping_type_is_refused() {
+        assert_eq!(
+            [
+                RollRecoveryEntry::try_from(&entry_of(b"seig", b"\xff\xfe")).map(|_| ()),
+                AudioPreRollEntry::try_from(&entry_of(b"seig", b"\0\x05")).map(|_| ()),
+                AlternativeStartupEntry::try_from(&entry_of(
+                    b"seig",
+                    b"\0\x02\0\x01\0\0\0\0\0\0\x0b\xb8\0\x01\0\x02"
+                ))
+                .map(|_| ()),
+                VisualRandomAccessEntry::try_from(&entry_of(b"seig", b"\x83")).map(|_| ()),
+                SapEntry::try_from(&entry_of(b"seig", b"\x82")).map(|_| ()),
+                VisualDrapEntry::try_from(&entry_of(b"seig", b"\x40\0\0\0")).map(|_| ()),
+                VisualEdrapEntry::try_from(&entry_of(b"seig", b"\x24\0\x01\0\x03")).map(|_| ()),
+            ],
+            [Err(Error::invalid_value("grouping_type")); 7]
+        );
     }
 }

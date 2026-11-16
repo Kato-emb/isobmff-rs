@@ -7,7 +7,9 @@ use isobmff_core::{
     FullBoxFlags, FullBoxHeader,
 };
 
-use crate::sample_group_entry::SampleGroupDescriptionEntry;
+use crate::sample_group_entry::{
+    SampleGroupDescriptionEntry, delimited_len, read_delimited, runs_to_end,
+};
 use crate::table::{read_entries, write_entry_count};
 
 /// Flag mask of `static_group_description`
@@ -30,21 +32,25 @@ const STATIC_MAPPING: u32 = 0x2;
 /// `default_group_description_index`; a box of a lower version describes no
 /// default, as if the field were 0.
 ///
-/// An entry of version 0 states no length, so the box reads one only of a
-/// `grouping_type` whose syntax delimits it: an entry of another
-/// `grouping_type`, such as `alst` or `it35` whose fields run to the end of
-/// the entry, is refused with
-/// [`UnsupportedValue`](isobmff_core::ErrorKind::UnsupportedValue) for
-/// `grouping_type`, read or written. An entry of version 1 and up that is of
-/// a `grouping_type` the crate does not read, or that does not decode as its
-/// `grouping_type` lays it out or fill the length stated for it, is kept as
-/// its bytes.
+/// Each entry is kept as its bytes, a [`SampleGroupDescriptionEntry`] that
+/// reads into the class of its `grouping_type` by an explicit conversion. An
+/// entry of version 1 and up is the bytes of the length stated for it. An
+/// entry of version 0 states no length, so the box reads one only of a
+/// `grouping_type` whose syntax delimits it, as far as its fields go, and
+/// refuses one its syntax does not read: an entry of another `grouping_type`,
+/// such as `alst` or `it35` whose fields run to the end of the entry, is
+/// refused with [`UnsupportedValue`](isobmff_core::ErrorKind::UnsupportedValue)
+/// for `grouping_type`, read or written.
 ///
 /// A box is refused when written, with
 /// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for the field,
 /// where it holds an entry of another `grouping_type` than its own, a
 /// `default_length` other than 0 that is not the length of every entry, or a
-/// field its version does not carry that is not 0; and with
+/// field its version does not carry that is not 0; with
+/// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for
+/// `SampleGroupDescriptionEntry` where it is of version 0 and holds an entry
+/// whose bytes are not the length its syntax lays out, which a reader could
+/// not delimit; and with
 /// [`InvalidValue`](isobmff_core::ErrorKind::InvalidValue) for `version` where
 /// its `grouping_type` is `esgh` and its version is not 3, as §10.12.1
 /// requires.
@@ -114,12 +120,11 @@ impl BoxDecode for SampleGroupDescriptionBox {
         let default_group_description_index = if version >= 2 { reader.read_u32()? } else { 0 };
         let entry_count = reader.read_u32()?;
         let entries = if version == 0 {
-            if entry_count != 0 && SampleGroupDescriptionEntry::runs_to_end(grouping_type) {
+            if entry_count != 0 && runs_to_end(grouping_type) {
                 return Err(Error::unsupported_value("grouping_type"));
             }
             read_entries(reader, entry_count, 1, |reader| {
-                SampleGroupDescriptionEntry::read(grouping_type, reader)
-                    .unwrap_or_else(|| Err(Error::unsupported_value("grouping_type")))
+                read_delimited(grouping_type, reader)
             })?
         } else {
             let minimum_len = if default_length == 0 {
@@ -135,13 +140,10 @@ impl BoxDecode for SampleGroupDescriptionBox {
                 };
                 let bytes =
                     reader.read_slice(usize::try_from(description_length).unwrap_or(usize::MAX))?;
-                let mut entry_reader = FieldReader::new(bytes);
-                Ok(
-                    match SampleGroupDescriptionEntry::read(grouping_type, &mut entry_reader) {
-                        Some(Ok(entry)) if entry_reader.remainder().is_empty() => entry,
-                        _ => SampleGroupDescriptionEntry::Other(bytes.to_vec()),
-                    },
-                )
+                Ok(SampleGroupDescriptionEntry {
+                    grouping_type,
+                    data: bytes.to_vec(),
+                })
             })?
         };
 
@@ -172,7 +174,7 @@ impl BoxEncode for SampleGroupDescriptionBox {
 
         self.entries
             .iter()
-            .map(|entry| entry.encoded_len().saturating_add(length_len))
+            .map(|entry| length_of(&entry.data).saturating_add(length_len))
             .fold(fields_len, u64::saturating_add)
     }
 
@@ -189,23 +191,21 @@ impl BoxEncode for SampleGroupDescriptionBox {
         if self.grouping_type.as_bytes() == b"esgh" && self.version != 3 {
             return Err(Error::invalid_value("version"));
         }
-        if self.version == 0
-            && !self.entries.is_empty()
-            && SampleGroupDescriptionEntry::runs_to_end(self.grouping_type)
-        {
+        if self.version == 0 && !self.entries.is_empty() && runs_to_end(self.grouping_type) {
             return Err(Error::unsupported_value("grouping_type"));
         }
         for entry in &self.entries {
-            match entry.grouping_type() {
-                Some(grouping_type) if grouping_type != self.grouping_type => {
-                    return Err(Error::invalid_value("grouping_type"));
-                }
-                None if self.version == 0 => {
-                    return Err(Error::unsupported_value("grouping_type"));
-                }
-                _ => {}
+            if entry.grouping_type != self.grouping_type {
+                return Err(Error::invalid_value("grouping_type"));
             }
-            if self.default_length != 0 && entry.encoded_len() != u64::from(self.default_length) {
+            if self.version == 0 {
+                let length = delimited_len(self.grouping_type, &mut FieldReader::new(&entry.data))?;
+                if length != entry.data.len() {
+                    return Err(Error::invalid_value("SampleGroupDescriptionEntry"));
+                }
+            }
+            if self.default_length != 0 && length_of(&entry.data) != u64::from(self.default_length)
+            {
                 return Err(Error::invalid_value("default_length"));
             }
         }
@@ -229,15 +229,20 @@ impl BoxEncode for SampleGroupDescriptionBox {
         write_entry_count(writer, self.entries.len())?;
         for entry in &self.entries {
             if self.states_description_length() {
-                let description_length = u32::try_from(entry.encoded_len())
+                let description_length = u32::try_from(entry.data.len())
                     .map_err(|_| Error::invalid_value("description_length"))?;
                 writer.write_u32(description_length)?;
             }
-            entry.write(writer)?;
+            writer.write_slice(&entry.data)?;
         }
 
         Ok(())
     }
+}
+
+/// Returns the length of `bytes`, saturating at `u64::MAX`
+fn length_of(bytes: &[u8]) -> u64 {
+    u64::try_from(bytes.len()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
@@ -251,6 +256,14 @@ mod tests {
     use crate::sample_group_entry::{
         RollRecoveryEntry, SampleGroupDescriptionEntry, TemporalLevelEntry, VisualRandomAccessEntry,
     };
+
+    /// An entry of `grouping_type` of the bytes `data`
+    fn entry(grouping_type: &[u8; 4], data: &[u8]) -> SampleGroupDescriptionEntry {
+        SampleGroupDescriptionEntry {
+            grouping_type: FourCc::new(*grouping_type),
+            data: data.to_vec(),
+        }
+    }
 
     /// `sgpd` of version 0 and `grouping_type` `roll`, of distances -1 and 2
     const SGPD_0: &[u8] = b"\0\0\0\x18sgpd\0\0\0\0roll\0\0\0\x02\xff\xff\0\x02";
@@ -276,8 +289,10 @@ mod tests {
             version: 0,
             grouping_type: FourCc::new(*b"roll"),
             entries: vec![
-                SampleGroupDescriptionEntry::RollRecovery(RollRecoveryEntry { roll_distance: -1 }),
-                SampleGroupDescriptionEntry::RollRecovery(RollRecoveryEntry { roll_distance: 2 }),
+                SampleGroupDescriptionEntry::try_from(&RollRecoveryEntry { roll_distance: -1 })
+                    .unwrap(),
+                SampleGroupDescriptionEntry::try_from(&RollRecoveryEntry { roll_distance: 2 })
+                    .unwrap(),
             ],
             ..SampleGroupDescriptionBox::default()
         }
@@ -288,12 +303,14 @@ mod tests {
             grouping_type: FourCc::new(*b"tele"),
             default_length: 1,
             entries: vec![
-                SampleGroupDescriptionEntry::TemporalLevel(TemporalLevelEntry {
+                SampleGroupDescriptionEntry::try_from(&TemporalLevelEntry {
                     level_independently_decodable: true,
-                }),
-                SampleGroupDescriptionEntry::TemporalLevel(TemporalLevelEntry {
+                })
+                .unwrap(),
+                SampleGroupDescriptionEntry::try_from(&TemporalLevelEntry {
                     level_independently_decodable: false,
-                }),
+                })
+                .unwrap(),
             ],
             ..SampleGroupDescriptionBox::default()
         }
@@ -306,10 +323,7 @@ mod tests {
             static_mapping: true,
             grouping_type: FourCc::new(*b"seig"),
             default_group_description_index: 2,
-            entries: vec![
-                SampleGroupDescriptionEntry::Other(vec![1, 2, 3]),
-                SampleGroupDescriptionEntry::Other(vec![4]),
-            ],
+            entries: vec![entry(b"seig", &[1, 2, 3]), entry(b"seig", &[4])],
             ..SampleGroupDescriptionBox::default()
         }
     }
@@ -319,11 +333,12 @@ mod tests {
             version: 3,
             grouping_type: FourCc::new(*b"rap "),
             entries: vec![
-                SampleGroupDescriptionEntry::VisualRandomAccess(VisualRandomAccessEntry {
+                SampleGroupDescriptionEntry::try_from(&VisualRandomAccessEntry {
                     num_leading_samples_known: true,
                     num_leading_samples: 1,
-                }),
-                SampleGroupDescriptionEntry::Other(vec![0x81, 0]),
+                })
+                .unwrap(),
+                entry(b"rap ", &[0x81, 0]),
             ],
             ..SampleGroupDescriptionBox::default()
         }
@@ -417,6 +432,26 @@ mod tests {
                 Err(Error::invalid_value("default_length")),
                 Err(Error::unsupported_value("grouping_type")),
                 Err(Error::invalid_value("version"))
+            ]
+        );
+    }
+
+    #[test]
+    fn an_entry_of_version_0_that_is_not_the_length_its_syntax_lays_out_is_refused_when_written() {
+        let longer = SampleGroupDescriptionBox {
+            entries: vec![entry(b"roll", &[0xff, 0xff, 0])],
+            ..roll()
+        };
+        let shorter = SampleGroupDescriptionBox {
+            entries: vec![entry(b"roll", &[0xff])],
+            ..roll()
+        };
+
+        assert_eq!(
+            [longer, shorter].map(|value| value.encode(&mut [0; 64]).map(|_| ())),
+            [
+                Err(Error::invalid_value("SampleGroupDescriptionEntry")),
+                Err(Error::truncated_payload(2, 1))
             ]
         );
     }
