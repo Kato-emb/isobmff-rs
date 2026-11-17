@@ -7,6 +7,7 @@ use isobmff_boxes::FileTypeBox;
 use isobmff_core::BoxEncode;
 
 use super::output::{MEDIA_DATA_HEADER_LENGTH, append_encoded, media_data_header};
+use super::random_access::RandomAccess;
 use super::track_parameters::{check_track, data_reference};
 use super::{Error, MuxerConfig};
 use super::{MovieParameters, TrackParameters};
@@ -58,6 +59,18 @@ enum State {
 /// allows it, in the `ftyp`; the muxer does not check the brands. The
 /// decoding time of the first sample of a track is that of the first `tfdt`
 /// of the track.
+///
+/// After the last fragment, the muxer writes a
+/// [`MovieFragmentRandomAccessBox`](isobmff_boxes::MovieFragmentRandomAccessBox)
+/// (`mfra`), §8.8.9, of a
+/// [`TrackFragmentRandomAccessBox`](isobmff_boxes::TrackFragmentRandomAccessBox)
+/// (`tfra`), §8.8.10, of version 1 for each track that has a sync sample: an
+/// entry for the first sync sample of the track in each fragment, at its
+/// composition time with no edit list applied, in the timescale of its media.
+/// A sync sample composed before 0 is not listed, and past
+/// [`MuxerConfig::random_access_entry_limit`] entries no more are: the table
+/// is a hint to where sync samples lie, which need not list every one.
+/// Where it would list none, no `mfra` is written.
 ///
 /// A fragmented movie file written again:
 ///
@@ -143,6 +156,9 @@ pub struct FragmentedMovieFileMuxer {
     // `moof` the random access table points at, is that of the whole run of
     // bytes, which the bytes held do not give once some are polled.
     polled: u64,
+    /// The random access table the muxer writes after the last fragment,
+    /// where it writes one
+    random_access: Option<RandomAccess>,
 }
 
 impl FragmentedMovieFileMuxer {
@@ -156,6 +172,20 @@ impl FragmentedMovieFileMuxer {
         movie: MovieParameters,
         config: MuxerConfig,
         file_type: FileTypeBox,
+    ) -> Result<Self, Error> {
+        let random_access = RandomAccess::new(config.random_access_entry_limit);
+        Self::with_random_access(movie, config, file_type, Some(random_access))
+    }
+
+    /// Creates a muxer as [`new`](Self::new) does, that writes the random access table `random_access` where there is one: segments take none
+    ///
+    /// # Errors
+    /// As [`new`](Self::new).
+    pub(super) fn with_random_access(
+        movie: MovieParameters,
+        config: MuxerConfig,
+        file_type: FileTypeBox,
+        random_access: Option<RandomAccess>,
     ) -> Result<Self, Error> {
         let length = usize::try_from(file_type.encoded_len()).unwrap_or(usize::MAX);
         if length > config.buffer_limit {
@@ -171,6 +201,7 @@ impl FragmentedMovieFileMuxer {
             },
             output,
             polled: 0,
+            random_access,
         })
     }
 
@@ -227,7 +258,7 @@ impl FragmentedMovieFileMuxer {
         }
         let size = u32::try_from(bytes.len()).map_err(|_| Error::Overflow)?;
         let buffer_limit = self.config.buffer_limit;
-        match &mut self.state {
+        let taken = match &mut self.state {
             State::Finished => Err(Error::Finished),
             State::Tracks { movie, tracks } => {
                 let moov = movie.to_fragmented_movie_box(tracks);
@@ -283,7 +314,12 @@ impl FragmentedMovieFileMuxer {
                 media_data.extend_from_slice(bytes);
                 Ok(())
             }
+        };
+        taken?;
+        if let Some(random_access) = &mut self.random_access {
+            random_access.take_sample(&properties);
         }
+        Ok(())
     }
 
     /// Ends the fragment, and holds its `moof` and its `mdat` for [`poll_output`](Self::poll_output)
@@ -305,14 +341,17 @@ impl FragmentedMovieFileMuxer {
         out.append(&mut self.output);
     }
 
-    /// Ends the last fragment, or writes the `moov` where no sample was taken, and holds it for [`poll_output`](Self::poll_output)
+    /// Ends the last fragment and writes the random access table after it, or writes the `moov` where no sample was taken, and holds them for [`poll_output`](Self::poll_output)
     ///
     /// The muxer then takes nothing more: it ends the file, unlike the
     /// `finish` of a writer of structure-data, which ends one unit and goes on.
     ///
     /// # Errors
     /// * [`Error::Finished`]: the muxer has finished.
-    /// * [`Error::Encode`]: the `moof` or the `moov` does not write.
+    /// * [`Error::Overflow`]: the random access table is longer than the 32
+    ///   bits of its `mfro` count.
+    /// * [`Error::Encode`]: the `moof`, the random access table or the `moov`
+    ///   does not write.
     pub fn finish(&mut self) -> Result<(), Error> {
         self.finish_after(&[])
     }
@@ -345,6 +384,9 @@ impl FragmentedMovieFileMuxer {
 
     /// Ends the fragment, after the bytes `before` where it holds a sample, as [`finish_fragment`](Self::finish_fragment) does
     pub(super) fn write_fragment(&mut self, before: &[u8]) -> Result<(), Error> {
+        let moof_offset = self
+            .position()
+            .saturating_add(u64::try_from(before.len()).unwrap_or(u64::MAX));
         match &mut self.state {
             State::Finished => Err(Error::Finished),
             State::Tracks { .. } => Ok(()),
@@ -367,6 +409,9 @@ impl FragmentedMovieFileMuxer {
                 self.output.extend_from_slice(&header);
                 self.output.append(media_data);
                 *writer = finished;
+                if let Some(random_access) = &mut self.random_access {
+                    random_access.record(&moof, moof_offset);
+                }
                 Ok(())
             }
         }
@@ -380,7 +425,26 @@ impl FragmentedMovieFileMuxer {
                 let moov = movie.to_fragmented_movie_box(tracks);
                 append_encoded(&moov, &mut self.output)?;
             }
-            State::Fragments { .. } => self.write_fragment(before)?,
+            State::Fragments { writer, .. } => {
+                let mut table = None;
+                if let Some(random_access) = &self.random_access {
+                    // Why build the table the last fragment completes before
+                    // the fragment is written: a table that does not write
+                    // leaves the muxer as it was.
+                    let mut completed = random_access.clone();
+                    if writer.has_samples() {
+                        let moof_offset = self
+                            .position()
+                            .saturating_add(u64::try_from(before.len()).unwrap_or(u64::MAX));
+                        completed.record(&writer.clone().finish(), moof_offset);
+                    }
+                    table = completed.into_bytes()?;
+                }
+                self.write_fragment(before)?;
+                if let Some(table) = table {
+                    self.output.extend_from_slice(&table);
+                }
+            }
         }
         self.state = State::Finished;
         Ok(())

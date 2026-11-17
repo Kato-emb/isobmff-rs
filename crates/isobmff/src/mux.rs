@@ -14,6 +14,7 @@ mod fragmented_movie_file;
 mod movie_file;
 mod movie_parameters;
 mod output;
+mod random_access;
 mod segment;
 mod segment_index;
 mod track_parameters;

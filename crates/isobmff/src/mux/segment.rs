@@ -209,7 +209,7 @@ impl SegmentMuxer {
             }
         };
         Ok(Self {
-            muxer: FragmentedMovieFileMuxer::new(movie, config, file_type)?,
+            muxer: FragmentedMovieFileMuxer::with_random_access(movie, config, file_type, None)?,
             opening,
             segments,
         })

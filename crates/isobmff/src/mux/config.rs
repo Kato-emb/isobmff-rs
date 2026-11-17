@@ -31,6 +31,18 @@ pub struct MuxerConfig {
     /// the fragment, so 2^20 of them take some tens of MiB; at 30 a second,
     /// they last more than nine hours.
     pub sample_count_limit: u64,
+    /// The most entries the random access table of a
+    /// [`FragmentedMovieFileMuxer`](super::FragmentedMovieFileMuxer) holds, of
+    /// all its tracks (2^16 by default)
+    ///
+    /// The table names the first sync sample of each track in each movie
+    /// fragment. Past the limit, the muxer records no more entries and goes
+    /// on writing fragments: the table is a hint, which need not list every
+    /// sync sample, ISO/IEC 14496-12 §8.8.10. The muxer holds some tens of
+    /// bytes an entry until it finishes, and some more while it writes the
+    /// table, so 2^16 of them take some MiB; at a fragment of two tracks every
+    /// two seconds, they last some eighteen hours.
+    pub random_access_entry_limit: usize,
 }
 
 impl Default for MuxerConfig {
@@ -40,6 +52,7 @@ impl Default for MuxerConfig {
         Self {
             buffer_limit: 16 * 1024 * 1024,
             sample_count_limit: 1 << 20,
+            random_access_entry_limit: 1 << 16,
         }
     }
 }
