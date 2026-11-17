@@ -4,7 +4,7 @@
 mod tests {
     use std::ops::Range;
 
-    use isobmff::framing::{BoxReader, Error, Event, FramerConfig};
+    use isobmff::framing::{BoxReader, Error, Event, FramerConfig, FrontPart};
     use isobmff_core::{BoxHeader, BoxType};
     use isobmff_test_support::fixtures::written;
     use isobmff_test_support::{
@@ -41,6 +41,11 @@ mod tests {
             payload_offset: u64,
             payload: Vec<u8>,
         },
+        FrontPart {
+            offset: u64,
+            header: BoxHeader,
+            front_part: Vec<u8>,
+        },
         Error(Error),
         /// An event of a variant added after this test was written
         Other(String),
@@ -50,7 +55,7 @@ mod tests {
         /// The type, file offset and total of the box a box event reports
         fn frame(&self, file: &[u8]) -> Option<(BoxType, u64, u64)> {
             match self {
-                Self::Box { offset, header } => {
+                Self::Box { offset, header } | Self::FrontPart { offset, header, .. } => {
                     Some((header.box_type(), *offset, total(*offset, *header, file)))
                 }
                 Self::Gathered {
@@ -84,6 +89,15 @@ mod tests {
                     box_type,
                     payload_offset,
                     payload: payload.to_vec(),
+                },
+                Event::FrontPart {
+                    offset,
+                    header,
+                    front_part,
+                } => Reported::FrontPart {
+                    offset,
+                    header,
+                    front_part: front_part.to_vec(),
                 },
                 Event::Error(error) => Reported::Error(error),
                 other => Reported::Other(format!("{other:?}")),
@@ -201,7 +215,9 @@ mod tests {
         reported
             .iter()
             .map(|reported| match reported {
-                Reported::Box { header, .. } => (header.box_type().to_string(), false),
+                Reported::Box { header, .. } | Reported::FrontPart { header, .. } => {
+                    (header.box_type().to_string(), false)
+                }
                 Reported::Gathered { box_type, .. } => (box_type.to_string(), true),
                 Reported::Error(error) => (error.to_string(), false),
                 Reported::Other(other) => (other.clone(), false),
@@ -311,7 +327,8 @@ mod tests {
             let skipped = reported
                 .iter()
                 .filter_map(|reported| match reported {
-                    Reported::Box { offset, header } => {
+                    Reported::Box { offset, header }
+                    | Reported::FrontPart { offset, header, .. } => {
                         let start = offset.checked_add(header.encoded_len()).unwrap();
                         let end = offset.checked_add(total(*offset, *header, file)).unwrap();
                         Some(usize::try_from(start).unwrap()..usize::try_from(end).unwrap())
@@ -432,6 +449,122 @@ mod tests {
         );
     }
 
+    /// Settings that gather the default structure-data, and the front part of `imda` of `length` bytes, under `payload_limit`
+    fn front_part_config(length: u64, payload_limit: u64) -> FramerConfig {
+        let mut config = FramerConfig::new(payload_limit);
+        config.front_part_box_types.push(FrontPart {
+            box_type: BoxType::compact(*b"imda"),
+            length,
+        });
+        config
+    }
+
+    #[test]
+    fn the_front_part_of_a_box_is_gathered_and_the_rest_of_it_skipped() {
+        let imda = written(b"imda", &[b"\0\0\0\x07", &[0xab; 32]]);
+        let bytes = [&imda[..], &compact_box(b"moof", 8)].concat();
+        let config = front_part_config(4, PAYLOAD_LIMIT);
+        let reported = read_cut_everywhere(&bytes, &config);
+        assert_eq!(
+            reported,
+            [
+                Reported::FrontPart {
+                    offset: 0,
+                    header: BoxHeader::decode(&imda).unwrap().0,
+                    front_part: b"\0\0\0\x07".to_vec(),
+                },
+                Reported::Gathered {
+                    offset: 44,
+                    box_type: BoxType::compact(*b"moof"),
+                    payload_offset: 52,
+                    payload: vec![0xab; 8],
+                },
+            ]
+        );
+        assert_eq!(read_every_way("imda", &bytes, &config), reported);
+        let (_, handed) = read_where_required(&bytes, &config);
+        assert!(
+            handed
+                .iter()
+                .all(|range| range.end <= 12 || range.start >= 44),
+            "{handed:?}"
+        );
+    }
+
+    #[test]
+    fn a_payload_shorter_than_the_front_part_is_gathered_whole() {
+        let imda = written(b"imda", &[b"\0\x07"]);
+        assert_eq!(
+            read_cut_everywhere(&imda, &front_part_config(4, PAYLOAD_LIMIT)),
+            [Reported::FrontPart {
+                offset: 0,
+                header: BoxHeader::decode(&imda).unwrap().0,
+                front_part: b"\0\x07".to_vec(),
+            }]
+        );
+    }
+
+    #[test]
+    fn input_that_ends_inside_a_front_part_reports_its_box_truncated() {
+        let imda = written(b"imda", &[b"\0\0\0\x07", &[0xab; 32]]);
+        assert_eq!(
+            read_cut_everywhere(
+                imda.get(..10).unwrap(),
+                &front_part_config(4, PAYLOAD_LIMIT)
+            ),
+            [Reported::Error(Error::TruncatedBox {
+                offset: 0,
+                header: BoxHeader::decode(&imda).unwrap().0,
+            })]
+        );
+    }
+
+    #[test]
+    fn the_front_part_of_a_box_of_size_0_is_what_the_input_holds_of_it() {
+        let config = front_part_config(4, PAYLOAD_LIMIT);
+        let header = |bytes: &[u8]| BoxHeader::decode(bytes).unwrap().0;
+        let long = [b"\0\0\0\0imda\0\0\0\x07", &[0xab; 32][..]].concat();
+        assert_eq!(
+            read_cut_everywhere(&long, &config),
+            [Reported::FrontPart {
+                offset: 0,
+                header: header(&long),
+                front_part: b"\0\0\0\x07".to_vec(),
+            }]
+        );
+        let short = b"\0\0\0\0imda\0\x07";
+        assert_eq!(
+            read_cut_everywhere(short, &config),
+            [Reported::FrontPart {
+                offset: 0,
+                header: header(short),
+                front_part: b"\0\x07".to_vec(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_front_part_over_the_limit_is_skipped_and_reading_goes_on() {
+        let imda = written(b"imda", &[b"\0\0\0\x07", &[0xab; 32]]);
+        let bytes = [&imda[..], &compact_box(b"moof", 2)].concat();
+        assert_eq!(
+            read_cut_everywhere(&bytes, &front_part_config(4, 2)),
+            [
+                Reported::Error(Error::PayloadOverLimit {
+                    offset: 0,
+                    header: BoxHeader::decode(&imda).unwrap().0,
+                    limit: 2
+                }),
+                Reported::Gathered {
+                    offset: 44,
+                    box_type: BoxType::compact(*b"moof"),
+                    payload_offset: 52,
+                    payload: vec![0xab; 2],
+                },
+            ]
+        );
+    }
+
     #[test]
     fn a_payload_under_the_limit_is_gathered_whatever_follows_it() {
         let bytes = [&compact_box(b"moov", 8)[..], &compact_box(b"mdat", 64)].concat();
@@ -541,7 +674,7 @@ mod tests {
             let reported =
                 read_every_way(&file.name, &file.bytes, &FramerConfig::new(PAYLOAD_LIMIT));
             let ours = tally(reported.iter().filter_map(|reported| match reported {
-                Reported::Box { .. } | Reported::Gathered { .. } => {
+                Reported::Box { .. } | Reported::Gathered { .. } | Reported::FrontPart { .. } => {
                     reported.frame(&file.bytes).map(|(box_type, _, total)| {
                         (gpac_type(box_type.four_cc().as_bytes()), total)
                     })

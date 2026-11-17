@@ -33,6 +33,20 @@ pub enum Event<'a> {
         /// Payload of the box
         payload: &'a [u8],
     },
+    /// A box the reader gathered the front part of, its first bytes lent
+    /// from the reader's buffer; the rest of its payload is not requested,
+    /// and reading goes on at the box after it
+    ///
+    /// `front_part` holds the [`FrontPart::length`](super::FrontPart::length)
+    /// bytes that start the payload, or the whole payload where it is shorter.
+    FrontPart {
+        /// File offset of the box
+        offset: u64,
+        /// Header of the box
+        header: BoxHeader,
+        /// The first bytes of the payload
+        front_part: &'a [u8],
+    },
     /// A box that cannot be read; reading goes on where the error says
     Error(Error),
 }

@@ -508,7 +508,10 @@ impl Demuxer {
     fn read_box(&mut self) -> Option<BoxRead> {
         let event = self.boxes.poll_event()?;
         let read = match event {
-            framing::Event::Box { offset, header } => BoxRead::Event(Event::Box { offset, header }),
+            framing::Event::Box { offset, header }
+            | framing::Event::FrontPart { offset, header, .. } => {
+                BoxRead::Event(Event::Box { offset, header })
+            }
             framing::Event::Gathered {
                 offset,
                 box_type,
