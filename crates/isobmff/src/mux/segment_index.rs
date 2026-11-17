@@ -225,11 +225,7 @@ pub(super) enum Reference {
     // parameters of its tracks once it writes the `moov`, and the
     // presentation of each subsegment needs the edit list and the timescales
     // of the track.
-    Added {
-        movie: Box<MovieBox>,
-        /// `timescale` of the media of the track, that of the `sidx`
-        timescale: u32,
-    },
+    Added(Box<MovieBox>),
 }
 
 /// The media segment being written, which holds no subsegment until its first is written
@@ -265,12 +261,11 @@ impl Index {
     pub(super) fn reference_of(&self, track: &TrackParameters) -> Option<Reference> {
         match &self.reference {
             Reference::Pending(movie) if track.track_id == self.parameters.reference_track_id => {
-                Some(Reference::Added {
-                    movie: Box::new(movie.to_fragmented_movie_box(slice::from_ref(track))),
-                    timescale: track.timescale,
-                })
+                Some(Reference::Added(Box::new(
+                    movie.to_fragmented_movie_box(slice::from_ref(track)),
+                )))
             }
-            Reference::Pending(_) | Reference::Added { .. } => None,
+            Reference::Pending(_) | Reference::Added(_) => None,
         }
     }
 
@@ -335,7 +330,7 @@ impl Index {
             return Ok(None);
         };
         let track_id = self.parameters.reference_track_id;
-        let Reference::Added { movie, .. } = &self.reference else {
+        let Reference::Added(movie) = &self.reference else {
             return Err(Error::UnknownTrack { track_id });
         };
         let next = Subsegment::new(movie, track_id, &self.samples, length)?;
@@ -383,9 +378,13 @@ impl Index {
     /// As [`segment_index`].
     pub(super) fn segment_index(&self, next: Option<&Subsegment>) -> Result<Vec<u8>, Error> {
         let track_id = self.parameters.reference_track_id;
-        let Reference::Added { timescale, .. } = self.reference else {
+        let Reference::Added(movie) = &self.reference else {
             return Err(Error::UnknownTrack { track_id });
         };
+        let timescale = movie
+            .trak
+            .first()
+            .map_or(0, |track| track.mdia.mdhd.timescale);
         segment_index(
             timescale,
             track_id,
