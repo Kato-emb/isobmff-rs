@@ -586,3 +586,64 @@ fn an_mfra_over_the_entry_limit_allocates_nothing_for_its_entries() {
     // with the entries it declares.
     assert!(many - few <= (4096 - 4) * 11, "{many} - {few}");
 }
+
+/// `count` `imda` of the identifiers from 1, each of `payload_len` bytes of media data
+fn identified_media_data(count: u32, payload_len: usize) -> Vec<u8> {
+    use isobmff_test_support::fixtures::written;
+
+    (1..=count)
+        .flat_map(|identifier| {
+            written(b"imda", &[&identifier.to_be_bytes(), &vec![0; payload_len]])
+        })
+        .collect()
+}
+
+#[test]
+fn the_imda_a_demuxer_remembers_stay_within_the_limit() {
+    let mut limited = DemuxerConfig::default();
+    limited.identified_media_data_limit = 16;
+    let (few, _) = most_held_lending(&identified_media_data(64, 0), limited);
+    let (many, _) = most_held_lending(&identified_media_data(4096, 0), limited);
+    println!(
+        "held at most {few} bytes demuxing 64 imda under a limit of 16, {many} bytes demuxing 4096"
+    );
+    assert_eq!(many, few);
+}
+
+#[test]
+fn the_media_data_of_an_imda_is_never_copied() {
+    let (small, _) = most_held_lending(&identified_media_data(1, 4), DemuxerConfig::default());
+    let (large, _) =
+        most_held_lending(&identified_media_data(1, 1 << 20), DemuxerConfig::default());
+    println!("held at most {small} bytes demuxing an imda of 8 bytes, {large} bytes of 1 MiB");
+    assert_eq!(large, small);
+}
+
+#[test]
+fn a_fragment_of_more_samples_than_the_limit_waits_for_no_imda() {
+    use isobmff_test_support::fixtures::samples_waiting_for_an_imda;
+
+    let mut limited = DemuxerConfig::default();
+    limited.sample_count_limit = 8;
+    let (few, _) = most_held_lending(&samples_waiting_for_an_imda(64, 0), limited);
+    let (many, _) = most_held_lending(&samples_waiting_for_an_imda(4096, 0), limited);
+    println!(
+        "held at most {few} bytes demuxing a fragment of 64 samples waiting for an imda under a limit of 8, {many} bytes of 4096"
+    );
+    assert_eq!(many, few);
+}
+
+#[test]
+fn an_imda_that_would_resolve_past_the_locations_held_resolves_nothing() {
+    use isobmff_test_support::fixtures::samples_waiting_for_an_imda;
+
+    let mut limited = DemuxerConfig::default();
+    limited.sample_count_limit = 8;
+    let (few, few_samples) = most_held_lending(&samples_waiting_for_an_imda(4, 64), limited);
+    let (many, many_samples) = most_held_lending(&samples_waiting_for_an_imda(4, 1024), limited);
+    println!(
+        "held at most {few} bytes lending the samples of 64 fragments ahead of them and of an imda, {many} bytes of 1024, under a limit of 8"
+    );
+    assert_eq!((few_samples, many_samples), (8, 8));
+    assert_eq!(many, few);
+}

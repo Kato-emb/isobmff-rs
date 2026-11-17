@@ -24,11 +24,12 @@ pub enum Error {
     /// The samples a `moov` or a `moof` declares cannot be resolved as the
     /// specification reads them; the box and the location of each of its
     /// samples follow where they resolve when read lossily, and none
-    /// otherwise
+    /// otherwise. Or an `imda` cannot be taken for the samples that lie in
+    /// it, which are then not resolved from it
     StructureData {
         /// File offset of the box
         offset: u64,
-        /// Type of the box, `moov` or `moof`
+        /// Type of the box, `moov`, `moof` or `imda`
         box_type: BoxType,
         /// Why its samples cannot be resolved
         source: structure_data::Error,
@@ -64,12 +65,19 @@ pub enum Error {
         /// The limit they are over
         limit: u64,
     },
+    /// What the structure-data refuses once the input ends, such as samples
+    /// that lie in an `imda` the file does not hold; they are not resolved
+    EndOfInput(structure_data::Error),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Framing(_) => write!(formatter, "a box at file level cannot be framed"),
+            Self::EndOfInput(_) => write!(
+                formatter,
+                "the structure-data cannot be resolved at the end of the input"
+            ),
             Self::Decode {
                 offset, box_type, ..
             } => write!(
@@ -114,6 +122,7 @@ impl core::error::Error for Error {
             Self::Framing(source) => Some(source),
             Self::Decode { source, .. } => Some(source),
             Self::StructureData { source, .. } => Some(source),
+            Self::EndOfInput(source) => Some(source),
             Self::DuplicateMovie { .. }
             | Self::SampleOverLimit { .. }
             | Self::TruncatedSample { .. }
