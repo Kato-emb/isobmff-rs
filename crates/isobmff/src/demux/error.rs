@@ -53,6 +53,17 @@ pub enum Error {
         /// Where the sample lies
         location: SampleLocation,
     },
+    /// The `tfra`s of an `mfra` declare more entries than
+    /// [`DemuxerConfig::random_access_entry_limit`](super::DemuxerConfig::random_access_entry_limit);
+    /// the box is not read, and nothing is allocated for its entries
+    RandomAccessEntryOverLimit {
+        /// File offset of the `mfra`
+        offset: u64,
+        /// The entries its `tfra`s declare
+        entry_count: u64,
+        /// The limit they are over
+        limit: u64,
+    },
 }
 
 impl fmt::Display for Error {
@@ -85,6 +96,14 @@ impl fmt::Display for Error {
                 "the input ends inside the sample of track {} at offset {}",
                 location.properties.track_id, location.offset
             ),
+            Self::RandomAccessEntryOverLimit {
+                offset,
+                entry_count,
+                limit,
+            } => write!(
+                formatter,
+                "the `mfra` at offset {offset} declares {entry_count} entries, over the limit of {limit}"
+            ),
         }
     }
 }
@@ -97,7 +116,8 @@ impl core::error::Error for Error {
             Self::StructureData { source, .. } => Some(source),
             Self::DuplicateMovie { .. }
             | Self::SampleOverLimit { .. }
-            | Self::TruncatedSample { .. } => None,
+            | Self::TruncatedSample { .. }
+            | Self::RandomAccessEntryOverLimit { .. } => None,
         }
     }
 }

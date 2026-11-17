@@ -544,3 +544,45 @@ fn what_a_structure_data_reader_allocates_does_not_grow_with_the_sync_sample_num
     assert_eq!(few_read, many_read);
     assert_eq!(many, few);
 }
+
+/// The bytes of an `mfra` of one `tfra` of `entries` entries of version 0, 11 bytes each
+fn random_access_table(entries: usize) -> Vec<u8> {
+    use isobmff_boxes::{
+        MovieFragmentRandomAccessBox, TrackFragmentRandomAccessBox, TrackFragmentRandomAccessEntry,
+    };
+    use isobmff_core::BoxEncode;
+
+    let mut tfra = TrackFragmentRandomAccessBox::default();
+    tfra.track_id = 1;
+    tfra.entries = vec![TrackFragmentRandomAccessEntry::default(); entries];
+    let mut mfra = MovieFragmentRandomAccessBox::default();
+    mfra.tfra = vec![tfra];
+    mfra.mfro.parent_size = u32::try_from(mfra.encoded_len()).unwrap();
+    let mut bytes = vec![0; usize::try_from(mfra.encoded_len()).unwrap()];
+    mfra.encode(&mut bytes).unwrap();
+    bytes
+}
+
+#[test]
+fn an_mfra_over_the_entry_limit_allocates_nothing_for_its_entries() {
+    let mut config = DemuxerConfig::default();
+    config.random_access_entry_limit = 1;
+    let held_demuxing = |file: Vec<u8>| {
+        most_held_by(|| {
+            let mut demuxer = Demuxer::new(config);
+            demuxer.handle_input(0, &file);
+            while demuxer.poll_event().is_some() {}
+            demuxer.finish();
+            while demuxer.poll_event().is_some() {}
+        })
+    };
+    let few = held_demuxing(random_access_table(4));
+    let many = held_demuxing(random_access_table(4096));
+    println!(
+        "held at most {few} bytes demuxing an mfra of 4 entries over a limit of 1, {many} bytes of 4096"
+    );
+    // Why allow the length of an entry for each: the box reader gathers the
+    // payload of the `mfra`, which grows by that, and nothing else may grow
+    // with the entries it declares.
+    assert!(many - few <= (4096 - 4) * 11, "{many} - {few}");
+}

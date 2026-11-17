@@ -3,12 +3,12 @@
 use alloc::vec::Vec;
 
 use isobmff_core::{
-    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, ChildBoxes, Error, FieldReader,
+    AnyBox, BoxDecode, BoxDefinition, BoxEncode, BoxType, Boxes, ChildBoxes, Error, FieldReader,
     FieldWriter, OtherBoxes,
 };
 
 use crate::mfro::MovieFragmentRandomAccessOffsetBox;
-use crate::tfra::TrackFragmentRandomAccessBox;
+use crate::tfra::{self, TrackFragmentRandomAccessBox};
 
 /// [`MovieFragmentRandomAccessBox`] (`mfra`), ISO/IEC 14496-12 §8.8.9
 ///
@@ -33,6 +33,36 @@ pub struct MovieFragmentRandomAccessBox {
     pub other_boxes: OtherBoxes,
     /// Copy of the size of the box
     pub mfro: MovieFragmentRandomAccessOffsetBox,
+}
+
+impl MovieFragmentRandomAccessBox {
+    /// Returns the entries the `tfra`s of the box whose payload is `payload` declare, counted before the box is read
+    ///
+    /// The sum of the `number_of_entry` of each `tfra`, ISO/IEC 14496-12
+    /// §8.8.10, saturating at `u64::MAX`, read without allocating, so that a
+    /// reader that bounds what it holds can refuse the box before reading
+    /// it. The count ends at a child that does not split, and a `tfra` too
+    /// short to hold its `number_of_entry` counts none, as reading the box
+    /// keeps such a child in [`other_boxes`](Self::other_boxes).
+    ///
+    /// ```
+    /// use isobmff_boxes::MovieFragmentRandomAccessBox;
+    ///
+    /// // Two `tfra`s, of 2 and 3 entries, the second without its entries
+    /// let tfra = |number_of_entry: u8| [b"\0\0\0\x18tfra\0\0\0\0\0\0\0\x01\0\0\0\0\0\0\0".as_slice(), &[number_of_entry]].concat();
+    /// let payload = [tfra(2), tfra(3)].concat();
+    ///
+    /// assert_eq!(MovieFragmentRandomAccessBox::entry_count(&payload), 5);
+    /// ```
+    #[must_use]
+    pub fn entry_count(payload: &[u8]) -> u64 {
+        Boxes::new(payload)
+            .map_while(Result::ok)
+            .filter(|child| child.header().box_type() == TrackFragmentRandomAccessBox::BOX_TYPE)
+            .filter_map(|child| tfra::number_of_entry(child.payload()))
+            .map(u64::from)
+            .fold(0, u64::saturating_add)
+    }
 }
 
 impl BoxDefinition for MovieFragmentRandomAccessBox {
@@ -130,5 +160,29 @@ mod tests {
                 MovieFragmentRandomAccessOffsetBox::BOX_TYPE
             ))
         );
+    }
+
+    #[test]
+    fn the_entries_counted_are_those_the_tfras_declare_up_to_a_child_that_does_not_split() {
+        let tfra = |number_of_entry: u8| {
+            [
+                b"\0\0\0\x18tfra\0\0\0\0\0\0\0\x01\0\0\0\0\0\0\0".as_slice(),
+                &[number_of_entry],
+            ]
+            .concat()
+        };
+        let short = b"\0\0\0\x0ctfra\0\0\0\0".as_slice();
+        let unsplit = b"\0\0\0\xfftfra".as_slice();
+        let payload = [
+            tfra(2),
+            FREE.to_vec(),
+            short.to_vec(),
+            tfra(3),
+            unsplit.to_vec(),
+            tfra(7),
+        ]
+        .concat();
+
+        assert_eq!(MovieFragmentRandomAccessBox::entry_count(&payload), 5);
     }
 }

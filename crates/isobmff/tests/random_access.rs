@@ -399,4 +399,62 @@ mod tests {
         assert_eq!(differences_found, Vec::<String>::new());
         assert!(written_files > 0);
     }
+
+    #[test]
+    fn an_mfra_over_the_entry_limit_is_reported_and_the_boxes_after_it_are_read() {
+        use isobmff::demux::Error;
+        use isobmff_boxes::{TrackFragmentRandomAccessBox, TrackFragmentRandomAccessEntry};
+        use isobmff_core::BoxEncode;
+
+        let mut tfra = TrackFragmentRandomAccessBox::default();
+        tfra.track_id = 1;
+        tfra.entries = vec![TrackFragmentRandomAccessEntry::default(); 2];
+        let mut mfra = MovieFragmentRandomAccessBox::default();
+        mfra.tfra = vec![tfra];
+        mfra.mfro.parent_size = u32::try_from(mfra.encoded_len()).unwrap();
+        let mut file = vec![0; usize::try_from(mfra.encoded_len()).unwrap()];
+        mfra.encode(&mut file).unwrap();
+        file.extend_from_slice(b"\0\0\0\x08free");
+        let mut config = DemuxerConfig::default();
+        config.random_access_entry_limit = 1;
+
+        let mut demuxer = Demuxer::new(config);
+        let (mut errors, mut boxes) = (Vec::new(), Vec::new());
+        loop {
+            while let Some(event) = demuxer.poll_event() {
+                match event {
+                    Event::Error(error) => errors.push(error),
+                    Event::Box { header, .. } => boxes.push(header.box_type()),
+                    Event::FileType(_)
+                    | Event::SegmentType(_)
+                    | Event::Movie(_)
+                    | Event::MovieFragment(_)
+                    | Event::SegmentIndex { .. }
+                    | Event::MovieFragmentRandomAccess(_)
+                    | Event::SampleLocation(_)
+                    | Event::Sample(_)
+                    | _ => {}
+                }
+            }
+            let Some(required) = demuxer.required_input() else {
+                break;
+            };
+            match file.get(usize::try_from(required.position).unwrap()..) {
+                Some(bytes) if !bytes.is_empty() => demuxer.handle_input(required.position, bytes),
+                _ => demuxer.finish(),
+            }
+        }
+
+        assert_eq!(
+            (errors, boxes),
+            (
+                vec![Error::RandomAccessEntryOverLimit {
+                    offset: 0,
+                    entry_count: 2,
+                    limit: 1,
+                }],
+                vec![BoxType::compact(*b"free")]
+            )
+        );
+    }
 }

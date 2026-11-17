@@ -1,6 +1,6 @@
 //! [`Demuxer`], which reads a file into its boxes and the samples of the tracks a caller subscribes to
 
-use isobmff_boxes::{MovieBox, MovieFragmentBox};
+use isobmff_boxes::{MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox};
 use isobmff_core::BoxDefinition;
 
 use crate::framing::{self, BoxReader, FramerConfig};
@@ -178,6 +178,7 @@ pub struct Demuxer {
     structure_data: StructureDataReader,
     sample_count_limit: u64,
     sample_size_limit: u64,
+    random_access_entry_limit: u64,
     state: State,
     samples: Samples,
     pending: Option<Pending>,
@@ -201,6 +202,7 @@ impl Demuxer {
             structure_data: StructureDataReader::new(config.sample_count_limit),
             sample_count_limit: config.sample_count_limit,
             sample_size_limit: config.sample_size_limit,
+            random_access_entry_limit: config.random_access_entry_limit,
             state: State::NoMovie,
             samples: Samples::default(),
             pending: None,
@@ -524,6 +526,20 @@ impl Demuxer {
                     return Some(BoxRead::Event(Event::Error(Error::DuplicateMovie {
                         offset,
                     })));
+                }
+                // Why not read the box and then check its entries: reading it
+                // allocates for each entry its `tfra`s declare.
+                if box_type == MovieFragmentRandomAccessBox::BOX_TYPE {
+                    let entry_count = MovieFragmentRandomAccessBox::entry_count(payload);
+                    if entry_count > self.random_access_entry_limit {
+                        return Some(BoxRead::Event(Event::Error(
+                            Error::RandomAccessEntryOverLimit {
+                                offset,
+                                entry_count,
+                                limit: self.random_access_entry_limit,
+                            },
+                        )));
+                    }
                 }
                 match Gathered::decode(box_type, payload) {
                     Err(source) => BoxRead::Event(Event::Error(Error::Decode {
