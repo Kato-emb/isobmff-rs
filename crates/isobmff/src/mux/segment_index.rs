@@ -10,7 +10,7 @@ use isobmff_boxes::{Free, FreeSpaceBox, MovieBox, SegmentIndexBox, SegmentIndexR
 use isobmff_core::BoxEncode;
 
 use super::output::{append_encoded, to_bytes};
-use super::{Error, FragmentedMovieFileMuxer, MovieParameters, TrackParameters};
+use super::{Error, MovieParameters, TrackParameters};
 use crate::{SampleProperties, timeline};
 
 /// Which track a [`SegmentMuxer`](super::SegmentMuxer) indexes, and how many subsegments each of its media segments holds at most
@@ -126,7 +126,7 @@ impl Subsegment {
 }
 
 /// Returns the length of a `sidx` of version 1 of `reference_count` references
-fn segment_index_len(reference_count: u16) -> u64 {
+pub(super) fn segment_index_len(reference_count: u16) -> u64 {
     let mut sidx = SegmentIndexBox::default();
     sidx.version = 1;
     sidx.references = vec![SegmentIndexReference::default(); usize::from(reference_count)];
@@ -134,14 +134,14 @@ fn segment_index_len(reference_count: u16) -> u64 {
 }
 
 /// Returns the `free` of `length` bytes, at least its header
-fn free_space(length: u64) -> FreeSpaceBox<Free> {
+pub(super) fn free_space(length: u64) -> FreeSpaceBox<Free> {
     let mut free = FreeSpaceBox::<Free>::default();
     let header = free.encoded_len();
     free.data = vec![0; usize::try_from(length.saturating_sub(header)).unwrap_or(0)];
     free
 }
 
-/// Returns the bytes of the `sidx` of version 1 that indexes `subsegments`, those of a media segment of the track `reference_id` of `movie`, followed by a `free` that fills the room reserved for `subsegment_count`
+/// Returns the bytes of the `sidx` of version 1 that indexes `subsegments`, those of a media segment of the track `reference_id` whose media has the timescale `timescale`, followed by a `free` that fills the room reserved for `subsegment_count`
 ///
 /// The last subsegment lasts up to where the presentation of the reference
 /// track ends in it.
@@ -150,8 +150,8 @@ fn free_space(length: u64) -> FreeSpaceBox<Free> {
 /// * [`Error::SubsegmentDuration`]: a subsegment lasts longer than a
 ///   `subsegment_duration` counts.
 /// * [`Error::Encode`]: the `sidx` does not write.
-pub(super) fn segment_index<'a>(
-    movie: &MovieBox,
+fn segment_index<'a>(
+    timescale: u32,
     reference_id: u32,
     subsegment_count: u16,
     subsegments: impl Iterator<Item = &'a Subsegment>,
@@ -160,11 +160,7 @@ pub(super) fn segment_index<'a>(
     let mut sidx = SegmentIndexBox::default();
     sidx.version = 1;
     sidx.reference_id = reference_id;
-    sidx.timescale = movie
-        .trak
-        .iter()
-        .find(|track| track.tkhd.track_id == reference_id)
-        .map_or(0, |track| track.mdia.mdhd.timescale);
+    sidx.timescale = timescale;
     sidx.earliest_presentation_time = subsegments
         .peek()
         .map_or(0, |subsegment| subsegment.earliest_presentation_time);
@@ -205,6 +201,9 @@ pub(super) struct Index {
     // `free` reserved for it in the whole run of bytes, which the bytes the
     // muxer holds do not give once some are polled.
     polled: u64,
+    /// Offset of the `free` reserved for the `sidx` in the bytes each media
+    /// segment opens with, past the `styp`
+    reserved_at: u64,
     segment: Segment,
     // Why hold the samples of the reference track: the presentation of the
     // subsegment, and its stream access point, are of them, and the
@@ -218,7 +217,7 @@ pub(super) struct Index {
 
 /// The track a [`SegmentMuxer`](super::SegmentMuxer) indexes, before and once it is added
 #[derive(Debug, Clone)]
-enum Reference {
+pub(super) enum Reference {
     /// The track is yet to be added; the parameters of the movie build the
     /// `moov` of the track once it is
     Pending(Box<MovieParameters>),
@@ -226,7 +225,11 @@ enum Reference {
     // parameters of its tracks once it writes the `moov`, and the
     // presentation of each subsegment needs the edit list and the timescales
     // of the track.
-    Added(Box<MovieBox>),
+    Added {
+        movie: Box<MovieBox>,
+        /// `timescale` of the media of the track, that of the `sidx`
+        timescale: u32,
+    },
 }
 
 /// The media segment being written, which holds no subsegment until its first is written
@@ -240,49 +243,40 @@ struct Segment {
 }
 
 impl Index {
-    /// Returns what indexes the segments `parameters` sets of the movie `movie` describes, its reference track yet to be added, and appends to `opening`, the bytes each media segment opens with, the `free` reserved for the `sidx`
-    ///
-    /// # Errors
-    /// * [`Error::Encode`]: the `free` does not write.
+    /// Returns what indexes the segments `parameters` sets of the movie `movie` describes, its reference track yet to be added, where the `free` reserved for the `sidx` lies `reserved_at` bytes into those each media segment opens with
     pub(super) fn new(
         parameters: SegmentIndexParameters,
         movie: &MovieParameters,
-        opening: &mut Vec<u8>,
-    ) -> Result<Self, Error> {
-        let reserved = segment_index_len(parameters.subsegment_count.get());
-        append_encoded(&free_space(reserved), opening)?;
-        Ok(Self {
+        reserved_at: usize,
+    ) -> Self {
+        let reserved_at = u64::try_from(reserved_at).unwrap_or(u64::MAX);
+        Self {
             parameters,
             reference: Reference::Pending(Box::new(movie.clone())),
             polled: 0,
+            reserved_at,
             segment: Segment::default(),
             samples: Vec::new(),
             previous_end: None,
-        })
+        }
     }
 
-    /// Adds the track `track` describes to `muxer`, and holds its `moov` where it is the reference track
-    ///
-    /// # Errors
-    /// As [`FragmentedMovieFileMuxer::add_track`].
-    pub(super) fn add_track(
-        &mut self,
-        muxer: &mut FragmentedMovieFileMuxer,
-        track: TrackParameters,
-    ) -> Result<(), Error> {
-        let reference = match &self.reference {
+    /// Returns the reference track as the segments index it, where the track `track` describes is that track, yet to be added
+    pub(super) fn reference_of(&self, track: &TrackParameters) -> Option<Reference> {
+        match &self.reference {
             Reference::Pending(movie) if track.track_id == self.parameters.reference_track_id => {
-                Some(Box::new(
-                    movie.to_fragmented_movie_box(slice::from_ref(&track)),
-                ))
+                Some(Reference::Added {
+                    movie: Box::new(movie.to_fragmented_movie_box(slice::from_ref(track))),
+                    timescale: track.timescale,
+                })
             }
-            Reference::Pending(_) | Reference::Added(_) => None,
-        };
-        muxer.add_track(track)?;
-        if let Some(movie) = reference {
-            self.reference = Reference::Added(movie);
+            Reference::Pending(_) | Reference::Added { .. } => None,
         }
-        Ok(())
+    }
+
+    /// Holds `reference`, the reference track as [`Index::reference_of`] returns it, once the track is added
+    pub(super) fn add_reference(&mut self, reference: Reference) {
+        self.reference = reference;
     }
 
     /// Checks that a sample can be taken
@@ -321,28 +315,27 @@ impl Index {
         self.polled = self.polled.saturating_add(appended);
     }
 
-    /// Ends the fragment `muxer` holds, as [`SegmentMuxer::finish_fragment`](super::SegmentMuxer::finish_fragment) does, after `opening` where it opens the media segment
-    pub(super) fn finish_fragment(
-        &mut self,
-        muxer: &mut FragmentedMovieFileMuxer,
-        opening: &[u8],
-    ) -> Result<(), Error> {
-        match self.next_subsegment(muxer)? {
-            Some(next) => self.write_subsegment(muxer, opening, next),
-            None => muxer.write_fragment(&[]),
-        }
+    /// Returns whether the next subsegment opens a media segment, after the bytes it opens with
+    pub(super) fn opens(&self) -> bool {
+        self.segment.subsegments.is_empty()
     }
 
-    /// Returns the subsegment the samples `muxer` holds make, or `None` where there are none, checked against the subsegments before it
-    fn next_subsegment(
-        &self,
-        muxer: &FragmentedMovieFileMuxer,
-    ) -> Result<Option<Subsegment>, Error> {
-        let Some(length) = muxer.fragment_len() else {
+    /// Returns the subsegment of the samples taken whose `moof` and `mdat` take `length` bytes, or `None` where there is no fragment, checked against the subsegments before it
+    ///
+    /// # Errors
+    /// * [`Error::UnknownTrack`]: the reference track was not added.
+    /// * [`Error::SubsegmentTime`]: the subsegment starts no later than the
+    ///   one before it, or, as the first of a media segment, not where the
+    ///   segment before ends.
+    /// * [`Error::SubsegmentDuration`]: the subsegment before it lasts longer
+    ///   than a `subsegment_duration` counts.
+    /// * The errors of [`Subsegment::new`].
+    pub(super) fn next_subsegment(&self, length: Option<u64>) -> Result<Option<Subsegment>, Error> {
+        let Some(length) = length else {
             return Ok(None);
         };
         let track_id = self.parameters.reference_track_id;
-        let Reference::Added(movie) = &self.reference else {
+        let Reference::Added { movie, .. } = &self.reference else {
             return Err(Error::UnknownTrack { track_id });
         };
         let next = Subsegment::new(movie, track_id, &self.samples, length)?;
@@ -371,60 +364,44 @@ impl Index {
         }
     }
 
-    /// Writes the subsegment `next` the samples `muxer` holds make, after `opening`, the `styp` and the `free` reserved for the `sidx`, where it opens its media segment
-    fn write_subsegment(
-        &mut self,
-        muxer: &mut FragmentedMovieFileMuxer,
-        opening: &[u8],
-        next: Subsegment,
-    ) -> Result<(), Error> {
-        let opens = self.segment.subsegments.is_empty();
-        let position = self
-            .polled
-            .saturating_add(u64::try_from(muxer.held_len()).unwrap_or(u64::MAX));
-        muxer.write_fragment(if opens { opening } else { &[] })?;
-        if opens {
-            let reserved = segment_index_len(self.parameters.subsegment_count.get());
-            let opening = u64::try_from(opening.len()).unwrap_or(u64::MAX);
-            self.segment.offset = position.saturating_add(opening.saturating_sub(reserved));
+    /// Records `next`, a subsegment written after the `held` bytes the muxer held for polling, after the bytes its media segment opens with where it opens it
+    pub(super) fn push_subsegment(&mut self, next: Subsegment, held: usize) {
+        if self.opens() {
+            let held = u64::try_from(held).unwrap_or(u64::MAX);
+            self.segment.offset = self
+                .polled
+                .saturating_add(held)
+                .saturating_add(self.reserved_at);
         }
         self.samples.clear();
         self.segment.subsegments.push(next);
-        Ok(())
     }
 
-    /// Ends the media segment, as [`SegmentMuxer::finish_segment`](super::SegmentMuxer::finish_segment) does, after `opening` where its last fragment opens it
-    pub(super) fn finish_segment(
-        &mut self,
-        muxer: &mut FragmentedMovieFileMuxer,
-        opening: &[u8],
-    ) -> Result<Option<SegmentIndex>, Error> {
-        let next = self.next_subsegment(muxer)?;
-        if self.segment.subsegments.is_empty() && next.is_none() {
-            muxer.write_fragment(&[])?;
-            return Ok(None);
-        }
+    /// Returns the bytes of the `sidx` of the media segment, its last subsegment `next` where there is one
+    ///
+    /// # Errors
+    /// As [`segment_index`].
+    pub(super) fn segment_index(&self, next: Option<&Subsegment>) -> Result<Vec<u8>, Error> {
         let track_id = self.parameters.reference_track_id;
-        let Reference::Added(movie) = &self.reference else {
+        let Reference::Added { timescale, .. } = self.reference else {
             return Err(Error::UnknownTrack { track_id });
         };
-        // Why build the `sidx` before the last subsegment is written: a
-        // `sidx` that does not write leaves the muxer as it was.
-        let bytes = segment_index(
-            movie,
+        segment_index(
+            timescale,
             track_id,
             self.parameters.subsegment_count.get(),
-            self.segment.subsegments.iter().chain(next.as_ref()),
-        )?;
-        if let Some(next) = next {
-            self.write_subsegment(muxer, opening, next)?;
-        }
+            self.segment.subsegments.iter().chain(next),
+        )
+    }
+
+    /// Ends the media segment whose `sidx` is `bytes`, and returns it with the offset of the `free` it is written over
+    pub(super) fn close_segment(&mut self, bytes: Vec<u8>) -> SegmentIndex {
         let segment = core::mem::take(&mut self.segment);
         self.previous_end = segment.subsegments.last().map(|last| last.end);
-        Ok(Some(SegmentIndex {
+        SegmentIndex {
             offset: segment.offset,
             bytes,
-        }))
+        }
     }
 }
 
@@ -572,7 +549,7 @@ mod tests {
         )
         .unwrap();
 
-        let bytes = segment_index(&movie, 1, 2, [first, second].iter()).unwrap();
+        let bytes = segment_index(1_000, 1, 2, [first, second].iter()).unwrap();
 
         let mut expected = SegmentIndexBox::default();
         expected.version = 1;
@@ -590,7 +567,7 @@ mod tests {
         let movie = movie(&[]);
         let only = Subsegment::new(&movie, 1, &[sample(0, 0, true)], 300).unwrap();
 
-        let bytes = segment_index(&movie, 1, 3, [only].iter()).unwrap();
+        let bytes = segment_index(1_000, 1, 3, [only].iter()).unwrap();
 
         let (sidx, rest) = SegmentIndexBox::decode(&bytes).unwrap();
         assert_eq!(

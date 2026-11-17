@@ -5,8 +5,10 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{FileTypeBox, SegmentTypeBox};
 
-use super::output::to_bytes;
-use super::segment_index::{Index, SegmentIndex, SegmentIndexParameters};
+use super::output::{append_encoded, to_bytes};
+use super::segment_index::{
+    Index, SegmentIndex, SegmentIndexParameters, Subsegment, free_space, segment_index_len,
+};
 use super::{Error, FragmentedMovieFileMuxer, MovieParameters, MuxerConfig, TrackParameters};
 use crate::SampleProperties;
 
@@ -200,7 +202,10 @@ impl SegmentMuxer {
         let segments = match index {
             None => Segments::Plain { opened: false },
             Some(parameters) => {
-                Segments::Indexed(Box::new(Index::new(parameters, &movie, &mut opening)?))
+                let reserved_at = opening.len();
+                let reserved = segment_index_len(parameters.subsegment_count.get());
+                append_encoded(&free_space(reserved), &mut opening)?;
+                Segments::Indexed(Box::new(Index::new(parameters, &movie, reserved_at)))
             }
         };
         Ok(Self {
@@ -215,10 +220,15 @@ impl SegmentMuxer {
     /// # Errors
     /// As [`FragmentedMovieFileMuxer::add_track`].
     pub fn add_track(&mut self, track: TrackParameters) -> Result<(), Error> {
-        match &mut self.segments {
-            Segments::Plain { .. } => self.muxer.add_track(track),
-            Segments::Indexed(index) => index.add_track(&mut self.muxer, track),
+        let reference = match &self.segments {
+            Segments::Indexed(index) => index.reference_of(&track),
+            Segments::Plain { .. } => None,
+        };
+        self.muxer.add_track(track)?;
+        if let (Some(reference), Segments::Indexed(index)) = (reference, &mut self.segments) {
+            index.add_reference(reference);
         }
+        Ok(())
     }
 
     /// Takes the next sample of the fragment, with its bytes, and holds them until the fragment ends; the first sample writes the initialization segment first
@@ -268,16 +278,8 @@ impl SegmentMuxer {
     /// * [`Error::Timeline`]: the edit list of the reference track does not
     ///   fit its samples.
     pub fn finish_fragment(&mut self) -> Result<(), Error> {
-        match &mut self.segments {
-            Segments::Plain { opened } => {
-                let held = self.muxer.has_fragment();
-                self.muxer
-                    .write_fragment(if *opened { &[] } else { &self.opening })?;
-                *opened |= held;
-                Ok(())
-            }
-            Segments::Indexed(index) => index.finish_fragment(&mut self.muxer, &self.opening),
-        }
+        let next = self.next_subsegment()?;
+        self.write_fragment(next)
     }
 
     /// Ends the media segment, its last fragment as [`finish_fragment`](Self::finish_fragment) does, and returns the `sidx` that indexes it, or `None` where segments are not indexed or the segment holds no subsegment
@@ -292,14 +294,23 @@ impl SegmentMuxer {
     /// [`Error::SubsegmentDuration`] where the last subsegment lasts longer
     /// than a `subsegment_duration` counts.
     pub fn finish_segment(&mut self) -> Result<Option<SegmentIndex>, Error> {
-        match &mut self.segments {
-            Segments::Plain { .. } => {
-                self.finish_fragment()?;
-                self.segments = Segments::Plain { opened: false };
-                Ok(None)
+        let next = self.next_subsegment()?;
+        // Why build the `sidx` before the last fragment is written: a `sidx`
+        // that does not write leaves the muxer as it was.
+        let bytes = match &self.segments {
+            Segments::Indexed(index) if !index.opens() || next.is_some() => {
+                Some(index.segment_index(next.as_ref())?)
             }
-            Segments::Indexed(index) => index.finish_segment(&mut self.muxer, &self.opening),
-        }
+            Segments::Indexed(_) | Segments::Plain { .. } => None,
+        };
+        self.write_fragment(next)?;
+        Ok(match &mut self.segments {
+            Segments::Indexed(index) => bytes.map(|bytes| index.close_segment(bytes)),
+            Segments::Plain { opened } => {
+                *opened = false;
+                None
+            }
+        })
     }
 
     /// Appends the bytes the muxer holds to `out`, and holds none
@@ -323,5 +334,33 @@ impl SegmentMuxer {
         let index = self.finish_segment()?;
         self.muxer.finish_after(&[])?;
         Ok(index)
+    }
+
+    /// Returns the subsegment the fragment held makes where segments are indexed, checked against those before it
+    fn next_subsegment(&self) -> Result<Option<Subsegment>, Error> {
+        match &self.segments {
+            Segments::Indexed(index) => index.next_subsegment(self.muxer.fragment_len()),
+            Segments::Plain { .. } => Ok(None),
+        }
+    }
+
+    /// Writes the fragment held, the subsegment `next` where segments are indexed, after the bytes its media segment opens with where it opens it
+    fn write_fragment(&mut self, next: Option<Subsegment>) -> Result<(), Error> {
+        let (opens, held) = match &self.segments {
+            Segments::Plain { opened } => (!opened, self.muxer.has_fragment()),
+            Segments::Indexed(index) => (index.opens(), next.is_some()),
+        };
+        let held_len = self.muxer.held_len();
+        self.muxer
+            .write_fragment(if opens { &self.opening } else { &[] })?;
+        match &mut self.segments {
+            Segments::Plain { opened } => *opened |= held,
+            Segments::Indexed(index) => {
+                if let Some(next) = next {
+                    index.push_subsegment(next, held_len);
+                }
+            }
+        }
+        Ok(())
     }
 }
