@@ -33,7 +33,7 @@ mod tests {
                 let mut styp = SegmentTypeBox::default();
                 styp.major_brand = FourCc::new(*b"msdh");
                 styp.compatible_brands = vec![FourCc::new(*b"msdh"), FourCc::new(*b"msix")];
-                SegmentMuxer::new(movie, config, file_type, styp).map(Self::Segments)
+                SegmentMuxer::new(movie, config, file_type, styp, None).map(Self::Segments)
             } else {
                 FragmentedMovieFileMuxer::new(movie, config, file_type).map(Self::MovieFile)
             }
@@ -61,7 +61,7 @@ mod tests {
         fn end(&mut self) -> Result<(), Error> {
             match self {
                 Self::MovieFile(muxer) => muxer.finish_fragment(),
-                Self::Segments(muxer) => muxer.finish_segment(),
+                Self::Segments(muxer) => muxer.finish_segment().map(drop),
             }
         }
 
@@ -75,7 +75,7 @@ mod tests {
         fn finish(&mut self) -> Result<(), Error> {
             match self {
                 Self::MovieFile(muxer) => muxer.finish(),
-                Self::Segments(muxer) => muxer.finish(),
+                Self::Segments(muxer) => muxer.finish().map(drop),
             }
         }
     }

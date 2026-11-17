@@ -5,16 +5,13 @@ use alloc::vec::Vec;
 use isobmff_boxes::FileTypeBox;
 use isobmff_core::BoxEncode;
 
-use super::output::{append_encoded, media_data_header};
+use super::output::{MEDIA_DATA_HEADER_LENGTH, append_encoded, media_data_header};
 use super::track_parameters::{check_track, data_reference};
 use super::{Error, MuxerConfig};
 use super::{MovieParameters, TrackParameters};
 use crate::structure_data::{self, SampleTableWriter, TrackSampleDescription, composition_end};
 use crate::timeline::move_media_times;
 use crate::{SampleLocation, SampleProperties};
-
-/// Length of the header of the `mdat`, written with a `largesize` so that its length can be written over in place
-const MEDIA_DATA_HEADER_LENGTH: u64 = 16;
 
 /// The header of the `mdat` a caller writes over the one first written, once a [`MovieFileMuxer`] has finished
 ///

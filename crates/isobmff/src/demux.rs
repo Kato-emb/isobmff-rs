@@ -1,9 +1,7 @@
 //! [`Demuxer`], which reads a file into its boxes and the samples of the tracks a caller subscribes to
 
-use alloc::vec;
-
-use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox, SegmentTypeBox};
-use isobmff_core::{BoxDecode, BoxDefinition};
+use isobmff_boxes::{MovieBox, MovieFragmentBox};
+use isobmff_core::BoxDefinition;
 
 use crate::framing::{self, BoxReader, FramerConfig};
 use crate::structure_data::{self, StructureDataReader};
@@ -12,11 +10,13 @@ use crate::{RequiredInput, SampleLocation};
 mod config;
 mod error;
 mod event;
+mod gathered;
 mod samples;
 
 pub use config::DemuxerConfig;
 pub use error::Error;
 pub use event::{Event, Sample};
+use gathered::Gathered;
 use samples::Samples;
 
 /// The event [`Demuxer::poll_event`] lends next
@@ -117,7 +117,7 @@ enum Refused {
 /// with [`required_input`](Self::required_input), takes bytes from any offset
 /// up to that one with [`handle_input`](Self::handle_input), and reports one
 /// event per call of [`poll_event`](Self::poll_event). It reads the `ftyp`,
-/// each `styp`, the `moov` and each `moof` into their values, reports where
+/// each `styp`, the `moov`, each `moof` and each `sidx` into their values, reports where
 /// every sample of the `moov` and of each `moof` lies, and lends the bytes of
 /// each sample of a track [`subscribe_track`](Self::subscribe_track) names:
 /// once it has read the `moov` or a `moof`, it requests the ranges of those
@@ -195,12 +195,7 @@ impl Demuxer {
     #[must_use]
     pub fn new(config: DemuxerConfig) -> Self {
         let mut framer = FramerConfig::new(config.payload_limit);
-        framer.gathered_box_types = vec![
-            FileTypeBox::BOX_TYPE,
-            SegmentTypeBox::BOX_TYPE,
-            MovieBox::BOX_TYPE,
-            MovieFragmentBox::BOX_TYPE,
-        ];
+        framer.gathered_box_types = Gathered::BOX_TYPES.to_vec();
         Self {
             boxes: BoxReader::new(framer),
             structure_data: StructureDataReader::new(config.sample_count_limit),
@@ -515,82 +510,77 @@ impl Demuxer {
             framing::Event::Gathered {
                 offset,
                 box_type,
+                payload_offset,
                 payload,
-                ..
             } => {
                 let refused = |source| Error::StructureData {
                     offset,
                     box_type,
                     source,
                 };
-                let decode_error = |source| {
-                    BoxRead::Event(Event::Error(Error::Decode {
+                // Why before reading the box: a second `moov` is reported as
+                // such, whether it reads or not.
+                if box_type == MovieBox::BOX_TYPE && self.state != State::NoMovie {
+                    return Some(BoxRead::Event(Event::Error(Error::DuplicateMovie {
+                        offset,
+                    })));
+                }
+                match Gathered::decode(box_type, payload) {
+                    Err(source) => BoxRead::Event(Event::Error(Error::Decode {
                         offset,
                         box_type,
                         source,
-                    }))
-                };
-                if box_type == FileTypeBox::BOX_TYPE {
-                    FileTypeBox::decode_payload(payload).map_or_else(decode_error, |file_type| {
-                        BoxRead::Event(Event::FileType(file_type))
-                    })
-                } else if box_type == SegmentTypeBox::BOX_TYPE {
-                    SegmentTypeBox::decode_payload(payload).map_or_else(decode_error, |styp| {
-                        BoxRead::Event(Event::SegmentType(styp))
-                    })
-                } else if box_type == MovieFragmentBox::BOX_TYPE {
-                    match MovieFragmentBox::decode_payload(payload) {
-                        Err(source) => decode_error(source),
-                        Ok(moof) => {
-                            self.samples.drop_before(offset);
-                            // Why count before resolving: the samples of the
-                            // fragments before may lie after this `moof` and
-                            // stay held, and the decoding times move on only for
-                            // a `moof` resolved.
-                            let held = self
-                                .samples
-                                .held()
-                                .saturating_add(structure_data::movie_fragment_sample_count(&moof));
-                            if held > self.sample_count_limit {
-                                BoxRead::Event(Event::Error(refused(
-                                    structure_data::Error::SampleCountOverLimit {
-                                        sample_count: held,
-                                        limit: self.sample_count_limit,
-                                    },
-                                )))
-                            } else {
-                                match self.structure_data.handle_movie_fragment(&moof, offset) {
-                                    Ok(locations) => {
-                                        self.samples.extend(locations);
-                                        BoxRead::MovieFragment(alloc::boxed::Box::new(moof))
-                                    }
-                                    Err(error) => BoxRead::Refused {
-                                        error: refused(error),
-                                        refused: Refused::MovieFragment {
-                                            offset,
-                                            moof: alloc::boxed::Box::new(moof),
-                                        },
-                                    },
+                    })),
+                    Ok(Gathered::FileType(file_type)) => BoxRead::Event(Event::FileType(file_type)),
+                    Ok(Gathered::SegmentType(styp)) => BoxRead::Event(Event::SegmentType(styp)),
+                    Ok(Gathered::SegmentIndex(sidx)) => BoxRead::Event(Event::SegmentIndex {
+                        // Why the end of the payload: the anchor is the first
+                        // byte after the box, which a header of any length
+                        // ends the payload of.
+                        anchor: payload_offset
+                            .saturating_add(u64::try_from(payload.len()).unwrap_or(u64::MAX)),
+                        sidx,
+                    }),
+                    Ok(Gathered::MovieFragment(moof)) => {
+                        self.samples.drop_before(offset);
+                        // Why count before resolving: the samples of the
+                        // fragments before may lie after this `moof` and
+                        // stay held, and the decoding times move on only for
+                        // a `moof` resolved.
+                        let held = self
+                            .samples
+                            .held()
+                            .saturating_add(structure_data::movie_fragment_sample_count(&moof));
+                        if held > self.sample_count_limit {
+                            BoxRead::Event(Event::Error(refused(
+                                structure_data::Error::SampleCountOverLimit {
+                                    sample_count: held,
+                                    limit: self.sample_count_limit,
+                                },
+                            )))
+                        } else {
+                            match self.structure_data.handle_movie_fragment(&moof, offset) {
+                                Ok(locations) => {
+                                    self.samples.extend(locations);
+                                    BoxRead::MovieFragment(moof)
                                 }
+                                Err(error) => BoxRead::Refused {
+                                    error: refused(error),
+                                    refused: Refused::MovieFragment { offset, moof },
+                                },
                             }
                         }
                     }
-                } else if self.state != State::NoMovie {
-                    BoxRead::Event(Event::Error(Error::DuplicateMovie { offset }))
-                } else {
-                    match MovieBox::decode_payload(payload) {
-                        Err(source) => decode_error(source),
-                        Ok(movie) => match self.structure_data.handle_movie(&movie) {
-                            Err(error) => BoxRead::Refused {
-                                error: refused(error),
-                                refused: Refused::Movie(alloc::boxed::Box::new(movie)),
-                            },
-                            Ok(locations) => {
-                                self.samples.replace(locations);
-                                BoxRead::Movie(alloc::boxed::Box::new(movie))
-                            }
+                    Ok(Gathered::Movie(movie)) => match self.structure_data.handle_movie(&movie) {
+                        Err(error) => BoxRead::Refused {
+                            error: refused(error),
+                            refused: Refused::Movie(movie),
                         },
-                    }
+                        Ok(locations) => {
+                            self.samples.replace(locations);
+                            BoxRead::Movie(movie)
+                        }
+                    },
                 }
             }
             framing::Event::Error(error) => BoxRead::Event(Event::Error(Error::Framing(error))),

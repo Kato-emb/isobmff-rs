@@ -128,6 +128,42 @@ const FIXTURES: &[Fixture] = &[
         ],
         outputs: &["init.mp4", "seg0.m4s", "seg1.m4s", "seg2.m4s"],
     },
+    Fixture {
+        name: "segment_index_global.mp4",
+        holds: "fragmented.mp4 with a sidx for each track after the moov, indexing the three moof and mdat pairs as its subsegments",
+        program: "ffmpeg",
+        arguments: &[
+            FFMPEG,
+            INPUT,
+            ENCODING,
+            &[
+                "-movflags",
+                "+frag_keyframe+empty_moov+default_base_moof+global_sidx",
+                "-f",
+                "mp4",
+                "out.mp4",
+            ],
+        ],
+        outputs: &["out.mp4"],
+    },
+    Fixture {
+        name: "segment_index_per_fragment.mp4",
+        holds: "fragmented.mp4 with a sidx for each track before each moof, indexing that moof and mdat pair",
+        program: "ffmpeg",
+        arguments: &[
+            FFMPEG,
+            INPUT,
+            ENCODING,
+            &[
+                "-movflags",
+                "+frag_keyframe+empty_moov+default_base_moof+dash",
+                "-f",
+                "mp4",
+                "out.mp4",
+            ],
+        ],
+        outputs: &["out.mp4"],
+    },
 ];
 
 /// A field of a box of a fixture, and the value it is changed to

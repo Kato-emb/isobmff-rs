@@ -38,6 +38,7 @@ mod tests {
         SegmentType,
         Movie(Vec<u32>),
         MovieFragment(u32),
+        SegmentIndex { anchor: u64, reference_count: usize },
         SampleLocation(SampleLocation),
         Sample(SampleLocation, Vec<u8>),
         Box(String),
@@ -65,6 +66,7 @@ mod tests {
                 | Self::SegmentType
                 | Self::Movie(_)
                 | Self::MovieFragment(_)
+                | Self::SegmentIndex { .. }
                 | Self::SampleLocation(_)
                 | Self::Box(_)
                 | Self::Other(_) => format!("{self:?}"),
@@ -88,6 +90,10 @@ mod tests {
                 Event::Movie(movie) => {
                     Reported::Movie(movie.trak.iter().map(|trak| trak.tkhd.track_id).collect())
                 }
+                Event::SegmentIndex { anchor, sidx } => Reported::SegmentIndex {
+                    anchor,
+                    reference_count: sidx.references.len(),
+                },
                 Event::SampleLocation(location) => Reported::SampleLocation(location),
                 Event::Sample(sample) => Reported::Sample(sample.location(), sample.bytes.to_vec()),
                 Event::Box { header, .. } => Reported::Box(header.box_type().to_string()),
@@ -543,6 +549,7 @@ mod tests {
                 }
                 Reported::FileType
                 | Reported::SegmentType
+                | Reported::SegmentIndex { .. }
                 | Reported::Sample(..)
                 | Reported::Box(_)
                 | Reported::Other(_) => continue,
