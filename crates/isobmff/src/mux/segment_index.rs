@@ -384,7 +384,10 @@ impl Index {
         let timescale = movie
             .trak
             .first()
-            .map_or(0, |track| track.mdia.mdhd.timescale);
+            .ok_or(Error::UnknownTrack { track_id })?
+            .mdia
+            .mdhd
+            .timescale;
         segment_index(
             timescale,
             track_id,
