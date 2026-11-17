@@ -41,7 +41,7 @@ pub(crate) fn movie_of(file: &[u8]) -> Option<MovieBox> {
 
 /// The location of each sample the tracks of `movie` declare, in the order of their file offsets
 pub(crate) fn locations(movie: &MovieBox) -> Result<Vec<SampleLocation>, Error> {
-    StructureDataReader::new(SAMPLE_COUNT_LIMIT)
+    StructureDataReader::new(SAMPLE_COUNT_LIMIT, 16)
         .handle_movie(movie)
         .map(Iterator::collect)
 }

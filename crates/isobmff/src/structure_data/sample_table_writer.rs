@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use core::num::NonZeroU32;
 
 use super::Error;
-use super::sample::{self, Sample, TrackSampleDescription};
+use super::sample::{self, MediaData, Sample, TrackSampleDescription};
 use crate::SampleLocation;
 use isobmff_boxes::{
     ChunkLargeOffsetBox, ChunkOffsetBox, ChunkOffsetVariant, CompositionOffsetBox,
@@ -90,7 +90,7 @@ use isobmff_boxes::{
 /// let mut written = movie.clone();
 /// written.trak = vec![trak.clone()];
 /// written.trak[0].mdia.minf.stbl = stbl;
-/// let resolved: Vec<_> = StructureDataReader::new(1024).handle_movie(&written)?.collect();
+/// let resolved: Vec<_> = StructureDataReader::new(1024, 16).handle_movie(&written)?.collect();
 /// assert_eq!(resolved, locations);
 /// # Ok::<(), Box<dyn core::error::Error>>(())
 /// ```
@@ -99,9 +99,9 @@ pub struct SampleTableWriter {
     track_id: u32,
     /// The sample entries of the track, which the `stbl` holds
     stsd: SampleDescriptionBox,
-    /// The `data_reference_index` of each sample entry, and whether it places
-    /// the media data in the same file
-    entries: Vec<(u16, bool)>,
+    /// The `data_reference_index` of each sample entry, and where it places
+    /// the media data
+    entries: Vec<(u16, MediaData)>,
     sample_count_limit: u64,
     // Why keep each sample rather than the tables as they grow: a chunk ends
     // where the next sample does not follow the last, and the end of the

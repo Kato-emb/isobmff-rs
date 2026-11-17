@@ -11,8 +11,9 @@ use isobmff_boxes::{
 use isobmff_core::{BoxDefinition, BoxType};
 
 use super::Error;
+use super::identified_media_data::{IdentifiedMediaData, Origin};
 use super::reader::Reading;
-use super::sample::is_in_same_file;
+use super::sample::{MediaData, media_data};
 use crate::{SampleLocation, SampleProperties};
 
 /// The size of each sample, as the sample size table of a track gives it
@@ -63,7 +64,7 @@ pub(super) fn sample_count(stbl: &SampleTableBox, track_id: u32) -> Result<u64, 
     sizes(stbl, track_id).map(|(sample_count, _)| sample_count)
 }
 
-/// Appends the samples the sample table `stbl` of track `track_id` declares to `locations`, in decoding order, and returns the decoding time they end at, or `None` for no sample
+/// Appends the samples the sample table `stbl` of track `track_id` declares to `locations`, in decoding order, or to the samples of `identified` that wait for an `imda`, and returns the decoding time they end at, or `None` for no sample
 ///
 /// A table that counts another number of samples than the sample size
 /// table, or an entry of the sync sample table that names no sample, is
@@ -73,12 +74,15 @@ pub(super) fn sample_count(stbl: &SampleTableBox, track_id: u32) -> Result<u64, 
 /// either way.
 ///
 /// `dref` is the data reference table of the track, which tells whether
-/// the media data of a sample lies in the same file.
+/// the media data of a sample lies in the same file, where a chunk offset is
+/// a file offset, or in an `imda`, from the payload of which it counts,
+/// §8.7.5.3.
 pub(super) fn resolve(
     stbl: &SampleTableBox,
     track_id: u32,
     dref: &DataReferenceBox,
     locations: &mut Vec<SampleLocation>,
+    identified: &mut IdentifiedMediaData,
     reading: Reading,
 ) -> Result<Option<u64>, Error> {
     let missing = |box_type| Error::MissingTable { track_id, box_type };
@@ -168,13 +172,19 @@ pub(super) fn resolve(
     let check_run = |entry: usize, sample_description_index: u32| {
         let data_reference_index = data_reference_index(&stbl.stsd, sample_description_index)
             .ok_or_else(|| invalid(SampleToChunkBox::BOX_TYPE, entry))?;
-        if is_in_same_file(dref, data_reference_index) {
-            Ok(())
-        } else {
-            Err(Error::MediaDataElsewhere {
+        match media_data(dref, data_reference_index) {
+            MediaData::SameFile => Ok(Origin::File),
+            MediaData::Identified(imda_identifier) => {
+                Ok(Origin::IdentifiedMediaData(imda_identifier))
+            }
+            MediaData::SequenceNumber => Err(Error::SequenceNumberOutsideMovieFragment {
                 track_id,
                 data_reference_index,
-            })
+            }),
+            MediaData::Elsewhere => Err(Error::MediaDataElsewhere {
+                track_id,
+                data_reference_index,
+            }),
         }
     };
     if reading == Reading::Specification {
@@ -207,7 +217,7 @@ pub(super) fn resolve(
     let mut current = 0_usize;
     // Why not check every run up front when read lossily: a run no sample
     // placed uses is not read.
-    let mut checked_run = None;
+    let mut checked_run: Option<(usize, Origin)> = None;
     'chunks: for (chunk, chunk_offset) in (1_u32..).zip(chunk_offsets.iter()) {
         while stsc
             .entries
@@ -224,10 +234,14 @@ pub(super) fn resolve(
             if u64::from(sample_number) >= placed {
                 break 'chunks;
             }
-            if reading == Reading::Lossy && checked_run != Some(current) {
-                check_run(current, stsc_entry.sample_description_index)?;
-                checked_run = Some(current);
-            }
+            let origin = match checked_run {
+                Some((run, origin)) if run == current => origin,
+                Some(_) | None => {
+                    let origin = check_run(current, stsc_entry.sample_description_index)?;
+                    checked_run = Some((current, origin));
+                    origin
+                }
+            };
             let index = usize::try_from(sample_number).map_err(|_| overflow)?;
             sample_number = sample_number.checked_add(1).ok_or(overflow)?;
             let (Some(size), Some(sample_duration)) = (sizes.get(index), durations.next()) else {
@@ -245,18 +259,22 @@ pub(super) fn resolve(
                 sample_flags.sample_has_redundancy = entry.sample_has_redundancy;
             }
             sample_flags.sample_is_non_sync_sample = is_non_sync_sample;
-            locations.push(SampleLocation {
-                properties: SampleProperties {
-                    track_id,
-                    decoding_time,
-                    sample_duration,
-                    sample_composition_time_offset: composition_offsets.next().unwrap_or(0),
-                    sample_flags,
-                    sample_description_index: stsc_entry.sample_description_index,
+            identified.place(
+                origin,
+                SampleLocation {
+                    properties: SampleProperties {
+                        track_id,
+                        decoding_time,
+                        sample_duration,
+                        sample_composition_time_offset: composition_offsets.next().unwrap_or(0),
+                        sample_flags,
+                        sample_description_index: stsc_entry.sample_description_index,
+                    },
+                    offset,
+                    size,
                 },
-                offset,
-                size,
-            });
+                locations,
+            )?;
             decoding_time = decoding_time
                 .checked_add(u64::from(sample_duration))
                 .ok_or(overflow)?;

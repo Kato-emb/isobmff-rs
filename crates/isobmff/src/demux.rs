@@ -199,7 +199,10 @@ impl Demuxer {
         framer.gathered_box_types = Gathered::BOX_TYPES.to_vec();
         Self {
             boxes: BoxReader::new(framer),
-            structure_data: StructureDataReader::new(config.sample_count_limit),
+            structure_data: StructureDataReader::new(
+                config.sample_count_limit,
+                config.identified_media_data_limit,
+            ),
             sample_count_limit: config.sample_count_limit,
             sample_size_limit: config.sample_size_limit,
             random_access_entry_limit: config.random_access_entry_limit,

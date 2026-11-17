@@ -7,8 +7,10 @@ use isobmff_boxes::{
     TrackRunSample, TrackRunSamples,
 };
 
+use super::Error;
+use super::identified_media_data::{IdentifiedMediaData, Origin};
 use super::reader::Reading;
-use super::{Error, sample};
+use super::sample::{self, MediaData};
 use crate::{SampleLocation, SampleProperties};
 
 /// What a track of the `moov` gives the samples of its track fragments
@@ -18,8 +20,8 @@ pub(super) struct FragmentTrack {
     /// The defaults of the `trex` of the track, §8.8.3
     defaults: Option<TrackExtendsBox>,
     /// The `data_reference_index` of each sample entry of the track, from 1,
-    /// and whether it places the media data in the same file
-    entries: Vec<(u16, bool)>,
+    /// and where it places the media data
+    entries: Vec<(u16, MediaData)>,
     /// Decoding time of the next sample of the track: the sum of the
     /// `sample_duration`s of the samples before it, §8.8.12, or the `tfdt`
     /// of the last track fragment that gave one; `None` before any
@@ -137,7 +139,7 @@ pub fn sample_position(
     None
 }
 
-/// Appends the samples of `moof`, the `moof` at file offset `moof_offset`, to `locations`, and moves the decoding time of each track on past them
+/// Appends the samples of `moof`, the `moof` at file offset `moof_offset`, to `locations`, or to the samples of `identified` that wait for an `imda`, and moves the decoding time of each track on past them
 ///
 /// A `tfdt` past the decoding time the samples before it in its track add
 /// up to is taken, §8.8.12.1. One before it is refused as the specification
@@ -148,6 +150,7 @@ pub(super) fn resolve(
     moof_offset: u64,
     tracks: &mut [FragmentTrack],
     locations: &mut Vec<SampleLocation>,
+    identified: &mut IdentifiedMediaData,
     reading: Reading,
 ) -> Result<(), Error> {
     // Why move the decoding times on in a copy: a box refused at a later
@@ -158,8 +161,9 @@ pub(super) fn resolve(
         .collect();
     // Why carry the end of the data of the preceding track fragment: a
     // `tfhd` that gives no base and is not of the first track fragment
-    // counts from there, Table 6 of §8.8.7.1.
-    let mut previous_end: Option<u64> = None;
+    // counts from there, Table 6 of §8.8.7.1, in the coordinates that data
+    // lies in.
+    let mut previous_end: Option<(Origin, u64)> = None;
     for traf in &moof.traf {
         let tfhd = &traf.tfhd;
         let track_id = tfhd.track_id;
@@ -184,15 +188,20 @@ pub(super) fn resolve(
         let sample_description_index = tfhd
             .sample_description_index
             .or(trex.map(|trex| trex.default_sample_description_index));
-        if has_samples {
+        // Why the identified media data only of a track fragment with
+        // samples: no sample entry is named by one without, and its data
+        // ends where it starts, so no origin is needed.
+        let identified_media_data = if has_samples {
             let sample_description_index = sample_description_index.ok_or(missing)?;
             let entry = usize::try_from(sample_description_index)
                 .ok()
                 .and_then(|index| index.checked_sub(1))
                 .and_then(|index| track.entries.get(index));
             match entry {
-                Some(&(_, true)) => {}
-                Some(&(data_reference_index, false)) => {
+                Some(&(_, MediaData::SameFile)) => None,
+                Some(&(_, MediaData::Identified(imda_identifier))) => Some(imda_identifier),
+                Some(&(_, MediaData::SequenceNumber)) => Some(moof.mfhd.sequence_number),
+                Some(&(data_reference_index, MediaData::Elsewhere)) => {
                     return Err(Error::MediaDataElsewhere {
                         track_id,
                         data_reference_index,
@@ -204,15 +213,24 @@ pub(super) fn resolve(
                     });
                 }
             }
-        }
-        let base = match (
+        } else {
+            None
+        };
+        let (origin, base) = match (
             tfhd.base_data_offset,
             tfhd.default_base_is_moof,
             previous_end,
+            identified_media_data,
         ) {
-            (Some(base), _, _) => base,
-            (None, false, Some(end)) => end,
-            (None, true, _) | (None, false, None) => moof_offset,
+            (Some(base), _, _, Some(imda_identifier)) => {
+                (Origin::IdentifiedMediaData(imda_identifier), base)
+            }
+            (Some(base), _, _, None) => (Origin::File, base),
+            (None, false, Some(end), _) => end,
+            (None, false, None, Some(imda_identifier)) => {
+                (Origin::IdentifiedMediaData(imda_identifier), 0)
+            }
+            (None, true, _, _) | (None, false, None, None) => (Origin::File, moof_offset),
         };
         if let Some(tfdt) = &traf.tfdt {
             let found = tfdt.base_media_decode_time;
@@ -246,20 +264,24 @@ pub(super) fn resolve(
                     .or(row.sample_flags)
                     .or(default_flags)
                     .ok_or(missing)?;
-                locations.push(SampleLocation {
-                    properties: SampleProperties {
-                        track_id,
-                        decoding_time: *time,
-                        sample_duration,
-                        sample_composition_time_offset: row
-                            .sample_composition_time_offset
-                            .unwrap_or(0),
-                        sample_flags,
-                        sample_description_index: sample_description_index.unwrap_or(0),
+                identified.place(
+                    origin,
+                    SampleLocation {
+                        properties: SampleProperties {
+                            track_id,
+                            decoding_time: *time,
+                            sample_duration,
+                            sample_composition_time_offset: row
+                                .sample_composition_time_offset
+                                .unwrap_or(0),
+                            sample_flags,
+                            sample_description_index: sample_description_index.unwrap_or(0),
+                        },
+                        offset,
+                        size,
                     },
-                    offset,
-                    size,
-                });
+                    locations,
+                )?;
                 *time = time
                     .checked_add(u64::from(sample_duration))
                     .ok_or(overflow)?;
@@ -267,7 +289,7 @@ pub(super) fn resolve(
             }
             end = offset;
         }
-        previous_end = Some(end);
+        previous_end = Some((origin, end));
     }
     for (track, decoding_time) in tracks.iter_mut().zip(decoding_times) {
         track.next_decoding_time = decoding_time;

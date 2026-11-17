@@ -530,7 +530,7 @@ fn what_a_structure_data_reader_allocates_does_not_grow_with_the_sync_sample_num
         let moov = movie([trak]);
         let mut read = (None, None);
         let allocated = allocated_by(|| {
-            let mut reader = StructureDataReader::new(1);
+            let mut reader = StructureDataReader::new(1, 16);
             read.0 = Some(reader.handle_movie(&moov).map(|_| ()));
             read.1 = Some(reader.handle_movie_lossy(&moov).map(Iterator::count));
         });

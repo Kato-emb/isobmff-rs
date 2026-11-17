@@ -27,7 +27,8 @@ pub struct DemuxerConfig {
     /// The demuxer holds the location of each, some tens of bytes; 2^20 of
     /// them take some tens of MiB. A `moof` whose samples would pass it is
     /// reported and not resolved, and the decoding times of its tracks do
-    /// not move on.
+    /// not move on. The samples that wait for an `imda` not yet read are
+    /// held, as many again at most, until it is.
     pub sample_count_limit: u64,
     /// The most bytes a sample of a subscribed track may hold (16 MiB by
     /// default)
@@ -42,6 +43,15 @@ pub struct DemuxerConfig {
     /// 2^16 of them take some MiB, and list the sync samples of hours of
     /// fragments. An `mfra` that declares more is reported and not read.
     pub random_access_entry_limit: u64,
+    /// The most `imda` the demuxer remembers where it lies, ISO/IEC 14496-12
+    /// §8.1.4 (2^16 by default)
+    ///
+    /// The demuxer remembers the identifier and the offset of each `imda`
+    /// until the input ends, some tens of bytes an `imda` with what holds
+    /// them; 2^16 of them take some MiB, and are one `imda` a movie fragment
+    /// of a few seconds for a day. An `imda` past the limit is reported and
+    /// not remembered, so the samples that lie in it are not resolved.
+    pub identified_media_data_limit: u64,
 }
 
 impl Default for DemuxerConfig {
@@ -53,6 +63,7 @@ impl Default for DemuxerConfig {
             sample_count_limit: 1 << 20,
             sample_size_limit: 16 * 1024 * 1024,
             random_access_entry_limit: 1 << 16,
+            identified_media_data_limit: 1 << 16,
         }
     }
 }

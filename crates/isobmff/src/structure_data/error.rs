@@ -57,13 +57,46 @@ pub enum Error {
         /// Index, from 0, of the entry
         entry: u64,
     },
-    /// The samples of a track lie in another file than the one the box is in,
-    /// or in an `IdentifiedMediaDataBox`
+    /// The samples of a track lie in another file than the one the box is in;
+    /// or, for a writer, in an `IdentifiedMediaDataBox`
     MediaDataElsewhere {
         /// `track_ID` of the track
         track_id: u32,
         /// `data_reference_index`, from 1, of the sample entry of the samples
         data_reference_index: u16,
+    },
+    /// The samples of a track lie in the `IdentifiedMediaDataBox` the
+    /// sequence number of their movie fragment names, and are not in a
+    /// movie fragment, which ISO/IEC 14496-12 §8.7.2.1 requires them to be
+    SequenceNumberOutsideMovieFragment {
+        /// `track_ID` of the track
+        track_id: u32,
+        /// `data_reference_index`, from 1, of the sample entry of the samples
+        data_reference_index: u16,
+    },
+    /// An `imda` has the `imda_identifier` of an `imda` read before, which
+    /// ISO/IEC 14496-12 §8.1.4.3 forbids; the one read before is kept
+    DuplicateImdaIdentifier {
+        /// `imda_identifier` of the box
+        imda_identifier: u32,
+    },
+    /// An `imda` is one more than
+    /// [`StructureDataReader::new`](super::StructureDataReader::new) allows
+    /// to remember, and it is not remembered
+    IdentifiedMediaDataOverLimit {
+        /// `imda_identifier` of the box
+        imda_identifier: u32,
+        /// The most `imda` the reader remembers
+        limit: u64,
+    },
+    /// Samples count their offsets from an `imda` the file does not hold:
+    /// none of the identifier was read when the input ended, ISO/IEC 14496-12
+    /// §8.7.2.1
+    IdentifiedMediaDataNotFound {
+        /// The least `imda_identifier` the samples wait for
+        imda_identifier: u32,
+        /// Number of the samples that wait for it
+        sample_count: u64,
     },
     /// The bytes of a sample of a track lie past the last offset a file can
     /// have, or its decoding time past the last a track can have
@@ -179,6 +212,31 @@ impl fmt::Display for Error {
                 formatter,
                 "the samples of track {track_id} lie where data reference {data_reference_index} names, not in this file"
             ),
+            Self::SequenceNumberOutsideMovieFragment {
+                track_id,
+                data_reference_index,
+            } => write!(
+                formatter,
+                "the samples of track {track_id} lie in the imda of the sequence number data reference {data_reference_index} names, outside any movie fragment"
+            ),
+            Self::DuplicateImdaIdentifier { imda_identifier } => write!(
+                formatter,
+                "imda_identifier {imda_identifier} is that of an imda read before"
+            ),
+            Self::IdentifiedMediaDataOverLimit {
+                imda_identifier,
+                limit,
+            } => write!(
+                formatter,
+                "the imda of imda_identifier {imda_identifier} is over the limit of {limit}"
+            ),
+            Self::IdentifiedMediaDataNotFound {
+                imda_identifier,
+                sample_count,
+            } => write!(
+                formatter,
+                "{sample_count} samples lie in the imda of imda_identifier {imda_identifier}, and the file has none"
+            ),
             Self::Overflow { track_id } => write!(
                 formatter,
                 "a sample of track {track_id} lies past the last offset or decoding time there can be"
@@ -244,6 +302,10 @@ impl core::error::Error for Error {
             | Self::SampleCountMismatch { .. }
             | Self::InvalidEntry { .. }
             | Self::MediaDataElsewhere { .. }
+            | Self::SequenceNumberOutsideMovieFragment { .. }
+            | Self::DuplicateImdaIdentifier { .. }
+            | Self::IdentifiedMediaDataOverLimit { .. }
+            | Self::IdentifiedMediaDataNotFound { .. }
             | Self::Overflow { .. }
             | Self::CompositionOffsetOutOfRange { .. }
             | Self::SampleDescriptionIndexOutOfRange { .. }
