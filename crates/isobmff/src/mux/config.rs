@@ -42,7 +42,7 @@ pub struct MuxerConfig {
     /// bytes an entry until it finishes, and some more while it writes the
     /// table, so 2^16 of them take some MiB; at a fragment of two tracks every
     /// two seconds, they last some eighteen hours.
-    pub random_access_entry_limit: usize,
+    pub random_access_entry_limit: u64,
 }
 
 impl Default for MuxerConfig {

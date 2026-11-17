@@ -4,30 +4,31 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{
     MovieFragmentBox, MovieFragmentRandomAccessBox, TrackFragmentRandomAccessBox,
-    TrackFragmentRandomAccessEntry, TrackRunSamples,
+    TrackFragmentRandomAccessEntry,
 };
 use isobmff_core::BoxEncode;
 
 use super::Error;
 use super::output::to_bytes;
 use crate::SampleProperties;
+use crate::structure_data::sample_position;
 
 /// The first sync sample of a track in the fragment being written
 #[derive(Debug, Clone)]
 struct FirstSync {
     track_id: u32,
     /// Samples of the track taken in the fragment
-    taken: usize,
+    taken: u64,
     /// Position of the first sync sample among them, from 0, and its
     /// composition time, once one is taken
-    sync: Option<(usize, u64)>,
+    sync: Option<(u64, u64)>,
 }
 
 /// What a fragmented muxer holds of its random access table: the entries of the fragments written, and the first sync sample of each track in the fragment being written
 #[derive(Debug, Clone)]
 pub(super) struct RandomAccess {
     /// The most entries the table holds
-    limit: usize,
+    limit: u64,
     /// The table of each track, in the order its first entry was recorded
     tracks: Vec<TrackFragmentRandomAccessBox>,
     /// The first sync sample of each track in the fragment being written
@@ -36,7 +37,7 @@ pub(super) struct RandomAccess {
 
 impl RandomAccess {
     /// Returns an empty table of at most `limit` entries
-    pub(super) fn new(limit: usize) -> Self {
+    pub(super) fn new(limit: u64) -> Self {
         Self {
             limit,
             tracks: Vec::new(),
@@ -76,8 +77,8 @@ impl RandomAccess {
 
     /// Records the first sync sample of each track in `moof`, the fragment written at `moof_offset`, while the table holds fewer entries than its limit
     pub(super) fn record(&mut self, moof: &MovieFragmentBox, moof_offset: u64) {
-        let mut entry_count = self.tracks.iter().fold(0_usize, |count, tfra| {
-            count.saturating_add(tfra.entries.len())
+        let mut entry_count = self.tracks.iter().fold(0_u64, |count, tfra| {
+            count.saturating_add(u64::try_from(tfra.entries.len()).unwrap_or(u64::MAX))
         });
         for first in core::mem::take(&mut self.first_syncs) {
             if entry_count >= self.limit {
@@ -86,17 +87,15 @@ impl RandomAccess {
             let Some((index, time)) = first.sync else {
                 continue;
             };
-            let Some((traf_number, trun_number, sample_delta)) =
-                locate(moof, first.track_id, index)
-            else {
+            let Some(position) = sample_position(moof, first.track_id, index) else {
                 continue;
             };
             let mut entry = TrackFragmentRandomAccessEntry::default();
             entry.time = time;
             entry.moof_offset = moof_offset;
-            entry.traf_number = traf_number;
-            entry.trun_number = trun_number;
-            entry.sample_delta = sample_delta;
+            entry.traf_number = position.traf_number;
+            entry.trun_number = position.trun_number;
+            entry.sample_delta = position.sample_delta;
             match self
                 .tracks
                 .iter_mut()
@@ -151,34 +150,6 @@ impl RandomAccess {
         mfra.mfro.parent_size = u32::try_from(mfra.encoded_len()).map_err(|_| Error::Overflow)?;
         to_bytes(&mfra).map(Some)
     }
-}
-
-/// Returns the `traf_number`, the `trun_number` and the `sample_delta` of the sample at `index`, from 0, among those of track `track_id` in `moof`
-fn locate(moof: &MovieFragmentBox, track_id: u32, index: usize) -> Option<(u32, u32, u32)> {
-    let mut before = index;
-    for (traf_index, traf) in moof.traf.iter().enumerate() {
-        if traf.tfhd.track_id != track_id {
-            continue;
-        }
-        for (trun_index, trun) in traf.trun.iter().enumerate() {
-            let sample_count = match &trun.samples {
-                TrackRunSamples::EmptyRows { sample_count } => {
-                    usize::try_from(*sample_count).ok()?
-                }
-                TrackRunSamples::Rows { samples } => samples.len(),
-                _ => 0,
-            };
-            if before < sample_count {
-                return Some((
-                    u32::try_from(traf_index.checked_add(1)?).ok()?,
-                    u32::try_from(trun_index.checked_add(1)?).ok()?,
-                    u32::try_from(before.checked_add(1)?).ok()?,
-                ));
-            }
-            before = before.saturating_sub(sample_count);
-        }
-    }
-    None
 }
 
 #[cfg(test)]

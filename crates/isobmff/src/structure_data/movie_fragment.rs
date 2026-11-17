@@ -62,6 +62,81 @@ pub fn movie_fragment_sample_count(moof: &MovieFragmentBox) -> u64 {
         .fold(0, u64::saturating_add)
 }
 
+/// Where a sample lies among the boxes of a `moof`: the `traf` that holds it, the `trun` of that `traf`, and its place in the `trun`
+///
+/// The numbers of an entry of a
+/// [`TrackFragmentRandomAccessBox`](isobmff_boxes::TrackFragmentRandomAccessBox),
+/// ISO/IEC 14496-12 §8.8.10, each from 1.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SamplePosition {
+    /// Number of the `traf` that holds the sample, among those of the `moof`
+    pub traf_number: u32,
+    /// Number of the `trun` that holds the sample, among those of its `traf`
+    pub trun_number: u32,
+    /// Number of the sample among those of its `trun`
+    pub sample_delta: u32,
+}
+
+/// Returns where the sample at `index`, from 0, of the samples of track `track_id` in `moof`, in decoding order, lies among its boxes, or `None` where the track has fewer samples there
+///
+/// The samples of a track in a `moof` are those of its `traf`s, in their
+/// order, and of their `trun`s, in theirs, ISO/IEC 14496-12 §8.8.6 and
+/// §8.8.8; their positions are what a `tfra` entry names, §8.8.10.
+///
+/// ```
+/// use isobmff::boxes::{MovieFragmentBox, TrackFragmentBox, TrackRunBox, TrackRunSamples};
+/// use isobmff::structure_data::sample_position;
+///
+/// // A `traf` of track 1 of runs of 2 and 3 samples, after one of track 2
+/// let traf = |track_id, runs: &[u32]| {
+///     let mut traf = TrackFragmentBox::default();
+///     traf.tfhd.track_id = track_id;
+///     traf.trun = runs
+///         .iter()
+///         .map(|&sample_count| {
+///             let mut trun = TrackRunBox::default();
+///             trun.samples = TrackRunSamples::EmptyRows { sample_count };
+///             trun
+///         })
+///         .collect();
+///     traf
+/// };
+/// let mut moof = MovieFragmentBox::default();
+/// moof.traf = vec![traf(2, &[1]), traf(1, &[2, 3])];
+///
+/// // The fourth sample of track 1 is the second of its second `trun`
+/// let position = sample_position(&moof, 1, 3).ok_or("no sample")?;
+/// assert_eq!((position.traf_number, position.trun_number, position.sample_delta), (2, 2, 2));
+/// assert_eq!(sample_position(&moof, 1, 5), None);
+/// # Ok::<(), &str>(())
+/// ```
+#[must_use]
+pub fn sample_position(
+    moof: &MovieFragmentBox,
+    track_id: u32,
+    index: u64,
+) -> Option<SamplePosition> {
+    let mut before = index;
+    for (traf_index, traf) in moof.traf.iter().enumerate() {
+        if traf.tfhd.track_id != track_id {
+            continue;
+        }
+        for (trun_index, trun) in traf.trun.iter().enumerate() {
+            let sample_count = u64::try_from(run_len(trun)).unwrap_or(u64::MAX);
+            if before < sample_count {
+                return Some(SamplePosition {
+                    traf_number: u32::try_from(traf_index.checked_add(1)?).ok()?,
+                    trun_number: u32::try_from(trun_index.checked_add(1)?).ok()?,
+                    sample_delta: u32::try_from(before.checked_add(1)?).ok()?,
+                });
+            }
+            before = before.saturating_sub(sample_count);
+        }
+    }
+    None
+}
+
 /// Appends the samples of `moof`, the `moof` at file offset `moof_offset`, to `locations`, and moves the decoding time of each track on past them
 ///
 /// A `tfdt` past the decoding time the samples before it in its track add

@@ -329,7 +329,7 @@ fn the_memory_a_demuxer_holds_stays_within_the_limit_when_fragments_come_before_
 }
 
 /// The most bytes held while a fragmented muxer writes `fragments` fragments of 8 samples of 4 KiB each, its output polled after each fragment, and a random access table of at most `entry_limit` entries
-fn most_held_writing_fragments(fragments: u32, entry_limit: usize) -> usize {
+fn most_held_writing_fragments(fragments: u32, entry_limit: u64) -> usize {
     use isobmff::mux::{MovieParameters, TrackParameters};
     use isobmff::{FragmentedMovieFileMuxer, MuxerConfig, SampleProperties};
     use isobmff_boxes::{
