@@ -384,12 +384,12 @@ fn the_memory_a_fragmented_muxer_holds_does_not_grow_with_the_fragments_it_write
     assert_eq!(many, few);
 }
 
-/// The most bytes held while an indexed segment muxer writes `segments` media segments of `subsegment_count` subsegments of 8 samples of 4 KiB each, its output polled after each subsegment
+/// The most bytes held while a segment muxer indexing its segments writes `segments` media segments of `subsegment_count` subsegments of 8 samples of 4 KiB each, its output polled after each subsegment
 fn most_held_writing_indexed_segments(segments: u32, subsegment_count: u16) -> usize {
     use std::num::NonZeroU16;
 
     use isobmff::mux::{MovieParameters, SegmentIndexParameters, TrackParameters};
-    use isobmff::{IndexedSegmentMuxer, MuxerConfig, SampleProperties};
+    use isobmff::{MuxerConfig, SampleProperties, SegmentMuxer};
     use isobmff_boxes::{
         FileTypeBox, SampleDescription, SampleDescriptionBox, SampleEntry, SampleFlags,
         SegmentTypeBox,
@@ -412,12 +412,12 @@ fn most_held_writing_indexed_segments(segments: u32, subsegment_count: u16) -> u
         let mut stsd = SampleDescriptionBox::default();
         stsd.sample_descriptions = vec![SampleDescription::Typed(entry)];
         let index = SegmentIndexParameters::new(1, NonZeroU16::new(subsegment_count).unwrap());
-        let mut muxer = IndexedSegmentMuxer::new(
+        let mut muxer = SegmentMuxer::new(
             MovieParameters::new(1000),
             MuxerConfig::default(),
             FileTypeBox::default(),
             SegmentTypeBox::default(),
-            index,
+            Some(index),
         )
         .unwrap();
         muxer
@@ -430,7 +430,7 @@ fn most_held_writing_indexed_segments(segments: u32, subsegment_count: u16) -> u
                 if subsegment.is_multiple_of(u32::from(subsegment_count)) {
                     drop(muxer.finish_segment().unwrap());
                 } else {
-                    muxer.finish_subsegment().unwrap();
+                    muxer.finish_fragment().unwrap();
                 }
                 muxer.poll_output(&mut out);
                 out.clear();
@@ -443,7 +443,8 @@ fn most_held_writing_indexed_segments(segments: u32, subsegment_count: u16) -> u
 }
 
 #[test]
-fn the_memory_an_indexed_segment_muxer_holds_grows_with_the_subsegments_a_segment_holds_alone() {
+fn the_memory_a_segment_muxer_indexing_its_segments_holds_grows_with_the_subsegments_a_segment_holds_alone()
+ {
     let few = most_held_writing_indexed_segments(4, 4);
     let many = most_held_writing_indexed_segments(256, 4);
     let wide = most_held_writing_indexed_segments(4, 64);

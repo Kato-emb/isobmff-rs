@@ -75,9 +75,7 @@ pub use demux::{Demuxer, DemuxerConfig};
 /// The boxes of ISO/IEC 14496-12, each read into a value and written back, from `isobmff-boxes`
 pub use isobmff_boxes as boxes;
 pub use isobmff_core::*;
-pub use mux::{
-    FragmentedMovieFileMuxer, IndexedSegmentMuxer, MovieFileMuxer, MuxerConfig, SegmentMuxer,
-};
+pub use mux::{FragmentedMovieFileMuxer, MovieFileMuxer, MuxerConfig, SegmentMuxer};
 pub use sample::{SampleLocation, SampleProperties};
 
 /// Where a reader wants input next

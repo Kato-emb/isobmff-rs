@@ -5,13 +5,12 @@
 //! muxer returns the bytes of the file. [`MovieFileMuxer`] writes a movie
 //! file of one `mdat` and the `moov` that declares it,
 //! [`FragmentedMovieFileMuxer`] a movie whose samples lie in movie fragments,
-//! [`SegmentMuxer`] such a movie in segments, and [`IndexedSegmentMuxer`] in
-//! segments indexed by a segment index.
+//! and [`SegmentMuxer`] such a movie in segments, each indexed by a segment
+//! index where asked.
 
 mod config;
 mod error;
 mod fragmented_movie_file;
-mod indexed_segment;
 mod movie_file;
 mod movie_parameters;
 mod output;
@@ -22,8 +21,8 @@ mod track_parameters;
 pub use config::MuxerConfig;
 pub use error::Error;
 pub use fragmented_movie_file::FragmentedMovieFileMuxer;
-pub use indexed_segment::{IndexedSegmentMuxer, SegmentIndex, SegmentIndexParameters};
 pub use movie_file::{MediaDataHeader, MovieFileMuxer};
 pub use movie_parameters::MovieParameters;
 pub use segment::SegmentMuxer;
+pub use segment_index::{SegmentIndex, SegmentIndexParameters};
 pub use track_parameters::TrackParameters;

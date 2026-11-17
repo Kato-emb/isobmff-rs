@@ -315,6 +315,11 @@ impl FragmentedMovieFileMuxer {
         self.output.len()
     }
 
+    /// Returns whether the fragment holds a sample
+    pub(super) fn has_fragment(&self) -> bool {
+        matches!(&self.state, State::Fragments { writer, .. } if writer.has_samples())
+    }
+
     /// Returns how many bytes the `moof` and the `mdat` of the fragment take, or `None` where it holds no sample
     pub(super) fn fragment_len(&self) -> Option<u64> {
         match &self.state {

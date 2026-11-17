@@ -1,4 +1,4 @@
-//! Segments indexed by a segment index written around samples, the `sidx` written over the room reserved for it, read back by this crate's demuxer and checked against ffprobe on the conformance files
+//! Segments written around samples, of several movie fragments, and indexed by a segment index with the `sidx` written over the room reserved for it, read back by this crate's demuxer and checked against ffprobe on the conformance files
 
 #[cfg(test)]
 #[path = "support/muxer.rs"]
@@ -14,7 +14,7 @@ mod tests {
     };
     use isobmff::structure_data::subsegments;
     use isobmff::timeline::presentation;
-    use isobmff::{Demuxer, DemuxerConfig, IndexedSegmentMuxer, MuxerConfig, SampleProperties};
+    use isobmff::{Demuxer, DemuxerConfig, MuxerConfig, SampleProperties, SegmentMuxer};
     use isobmff_boxes::{SegmentIndexBox, SegmentTypeBox};
     use isobmff_core::FourCc;
     use isobmff_test_support::{conformance_files, ffprobe, ffprobe_packets};
@@ -104,14 +104,14 @@ mod tests {
     }
 
     /// A muxer of one track, of media segments of at most `subsegment_count` subsegments
-    fn muxer(subsegment_count: u16) -> IndexedSegmentMuxer {
+    fn muxer(subsegment_count: u16) -> SegmentMuxer {
         let index = SegmentIndexParameters::new(1, NonZeroU16::new(subsegment_count).unwrap());
-        let mut muxer = IndexedSegmentMuxer::new(
+        let mut muxer = SegmentMuxer::new(
             MovieParameters::new(1000),
             MuxerConfig::default(),
             mp4_file_type(),
             segment_type(),
-            index,
+            Some(index),
         )
         .unwrap();
         muxer.add_track(one_sample_entry_track(1)).unwrap();
@@ -136,17 +136,73 @@ mod tests {
     }
 
     #[test]
+    fn the_movie_fragments_ended_within_a_segment_follow_its_one_styp() {
+        let mut muxer = SegmentMuxer::new(
+            MovieParameters::new(1000),
+            MuxerConfig::default(),
+            mp4_file_type(),
+            segment_type(),
+            None,
+        )
+        .unwrap();
+        muxer.add_track(one_sample_entry_track(1)).unwrap();
+        let mut written = Vec::new();
+        muxer.handle_sample(sample(0), b"abc").unwrap();
+        muxer.finish_fragment().unwrap();
+        muxer.handle_sample(sample(10), b"d").unwrap();
+        muxer.finish_fragment().unwrap();
+        muxer.handle_sample(sample(20), b"ef").unwrap();
+        assert_eq!(muxer.finish_segment(), Ok(None));
+        muxer.handle_sample(sample(30), b"g").unwrap();
+        assert_eq!(muxer.finish(), Ok(None));
+        muxer.poll_output(&mut written);
+
+        let mut box_types = Vec::new();
+        let mut position: usize = 0;
+        while let Some((header, _)) = written
+            .get(position..)
+            .and_then(|rest| isobmff_core::BoxHeader::decode(rest).ok())
+        {
+            box_types.push(header.box_type().to_string());
+            let length = usize::try_from(header.size().total_bytes().unwrap()).unwrap();
+            position = position.checked_add(length).unwrap();
+        }
+        let read_back = read(&written).unwrap();
+
+        assert_eq!(
+            box_types,
+            [
+                "ftyp", "moov", "styp", "moof", "mdat", "moof", "mdat", "moof", "mdat", "styp",
+                "moof", "mdat"
+            ]
+        );
+        assert_eq!(
+            read_back
+                .samples
+                .iter()
+                .map(|(properties, bytes)| (properties.decoding_time, bytes.clone()))
+                .collect::<Vec<_>>(),
+            [
+                (0, b"abc".to_vec()),
+                (10, b"d".to_vec()),
+                (20, b"ef".to_vec()),
+                (30, b"g".to_vec())
+            ]
+        );
+    }
+
+    #[test]
     fn each_subsegment_a_segment_index_references_is_a_movie_fragment_of_the_segment() {
         let mut muxer = muxer(2);
         let mut written = Vec::new();
         let mut segment_indexes = Vec::new();
         muxer.handle_sample(sample(0), b"abc").unwrap();
         muxer.handle_sample(not_sync(sample(10)), b"d").unwrap();
-        muxer.finish_subsegment().unwrap();
+        muxer.finish_fragment().unwrap();
         muxer.handle_sample(sample(20), b"ef").unwrap();
         segment_indexes.extend(muxer.finish_segment().unwrap());
         muxer.handle_sample(not_sync(sample(30)), b"g").unwrap();
-        muxer.finish_subsegment().unwrap();
+        muxer.finish_fragment().unwrap();
         muxer.handle_sample(sample(40), b"hi").unwrap();
         segment_indexes.extend(muxer.finish().unwrap());
         muxer.poll_output(&mut written);
@@ -189,7 +245,7 @@ mod tests {
     fn a_sample_past_the_subsegments_a_segment_holds_is_refused_and_opens_the_next_segment() {
         let mut muxer = muxer(1);
         muxer.handle_sample(sample(0), b"abc").unwrap();
-        muxer.finish_subsegment().unwrap();
+        muxer.finish_fragment().unwrap();
 
         assert_eq!(
             muxer.handle_sample(sample(10), b"d"),
@@ -205,13 +261,13 @@ mod tests {
     fn a_subsegment_presented_before_the_one_before_it_is_refused() {
         let mut muxer = muxer(2);
         muxer.handle_sample(sample(0), b"abc").unwrap();
-        muxer.finish_subsegment().unwrap();
+        muxer.finish_fragment().unwrap();
         let mut early = sample(10);
         early.sample_composition_time_offset = -10;
         muxer.handle_sample(early, b"d").unwrap();
 
         assert_eq!(
-            muxer.finish_subsegment(),
+            muxer.finish_fragment(),
             Err(Error::SubsegmentTime {
                 expected: 0,
                 found: 0
@@ -240,12 +296,12 @@ mod tests {
     #[test]
     fn a_subsegment_of_no_sample_of_the_reference_track_is_refused() {
         let index = SegmentIndexParameters::new(1, NonZeroU16::new(2).unwrap());
-        let mut muxer = IndexedSegmentMuxer::new(
+        let mut muxer = SegmentMuxer::new(
             MovieParameters::new(1000),
             MuxerConfig::default(),
             mp4_file_type(),
             segment_type(),
-            index,
+            Some(index),
         )
         .unwrap();
         muxer.add_track(one_sample_entry_track(1)).unwrap();
@@ -255,7 +311,7 @@ mod tests {
         muxer.handle_sample(other, b"abc").unwrap();
 
         assert_eq!(
-            muxer.finish_subsegment(),
+            muxer.finish_fragment(),
             Err(Error::NoReferenceSample { track_id: 1 })
         );
     }
@@ -263,12 +319,12 @@ mod tests {
     #[test]
     fn a_sample_is_refused_until_the_reference_track_is_added() {
         let index = SegmentIndexParameters::new(7, NonZeroU16::new(2).unwrap());
-        let mut muxer = IndexedSegmentMuxer::new(
+        let mut muxer = SegmentMuxer::new(
             MovieParameters::new(1000),
             MuxerConfig::default(),
             mp4_file_type(),
             segment_type(),
-            index,
+            Some(index),
         )
         .unwrap();
         muxer.add_track(one_sample_entry_track(1)).unwrap();
@@ -284,14 +340,14 @@ mod tests {
         let mut muxer = muxer(2);
         let mut written = Vec::new();
         muxer.handle_sample(sample(0), b"abc").unwrap();
-        muxer.finish_subsegment().unwrap();
+        muxer.finish_fragment().unwrap();
         muxer.poll_output(&mut written);
         let mut early = sample(10);
         early.sample_composition_time_offset = -10;
         muxer.handle_sample(early, b"d").unwrap();
         let before = muxer.clone();
 
-        muxer.finish_subsegment().unwrap_err();
+        muxer.finish_fragment().unwrap_err();
         let (mut held, mut held_before) = (Vec::new(), Vec::new());
         muxer.clone().poll_output(&mut held);
         before.clone().poll_output(&mut held_before);
@@ -313,12 +369,12 @@ mod tests {
             reference_track_id,
             NonZeroU16::new(subsegment_count).unwrap(),
         );
-        let mut muxer = IndexedSegmentMuxer::new(
+        let mut muxer = SegmentMuxer::new(
             MovieParameters::from(&source.movie),
             MuxerConfig::default(),
             source.file_type.clone(),
             segment_type(),
-            index,
+            Some(index),
         )?;
         for trak in &source.movie.trak {
             muxer.add_track(TrackParameters::from(trak))?;
@@ -339,7 +395,7 @@ mod tests {
                 .find(|(next, _)| next.track_id == reference_track_id)
                 .is_some_and(|(next, _)| !next.sample_flags.sample_is_non_sync_sample);
             if source.fragment_starts.contains(&index) && referenced && opens_with_sync {
-                muxer.finish_subsegment()?;
+                muxer.finish_fragment()?;
                 referenced = false;
             }
             match muxer.handle_sample(*properties, bytes) {
