@@ -209,7 +209,7 @@ impl SegmentMuxer {
             }
         };
         Ok(Self {
-            muxer: FragmentedMovieFileMuxer::new(movie, config, file_type)?,
+            muxer: FragmentedMovieFileMuxer::with_random_access(movie, config, file_type, None)?,
             opening,
             segments,
         })
@@ -315,11 +315,7 @@ impl SegmentMuxer {
 
     /// Appends the bytes the muxer holds to `out`, and holds none
     pub fn poll_output(&mut self, out: &mut Vec<u8>) {
-        let start = out.len();
         self.muxer.poll_output(out);
-        if let Segments::Indexed(index) = &mut self.segments {
-            index.polled(out.len().saturating_sub(start));
-        }
     }
 
     /// Ends the last media segment, as [`finish_segment`](Self::finish_segment) does, or writes the initialization segment where no sample was taken, and returns the `sidx` of the segment where there is one
@@ -350,14 +346,14 @@ impl SegmentMuxer {
             Segments::Plain { opened } => (!opened, self.muxer.has_fragment()),
             Segments::Indexed(index) => (index.opens(), next.is_some()),
         };
-        let held_len = self.muxer.held_len();
+        let position = self.muxer.position();
         self.muxer
             .write_fragment(if opens { &self.opening } else { &[] })?;
         match &mut self.segments {
             Segments::Plain { opened } => *opened |= held,
             Segments::Indexed(index) => {
                 if let Some(next) = next {
-                    index.push_subsegment(next, held_len);
+                    index.push_subsegment(next, position);
                 }
             }
         }

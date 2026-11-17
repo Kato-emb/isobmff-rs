@@ -188,7 +188,7 @@ mod tests {
             ),
             (
                 [
-                    "ftyp", "moov", "moof", "mdat", "moof", "mdat", "moof", "mdat"
+                    "ftyp", "moov", "moof", "mdat", "moof", "mdat", "moof", "mdat", "mfra"
                 ]
                 .map(String::from)
                 .to_vec(),
@@ -224,12 +224,19 @@ mod tests {
         assert_eq!(written.len(), opening);
         muxer.finish_fragment().unwrap();
         muxer.finish_fragment().unwrap();
+        muxer.poll_output(&mut written);
+        let fragmented = written.len();
         muxer.finish().unwrap();
         muxer.poll_output(&mut written);
         assert_eq!(
-            (top_level_box_types(&written), written.ends_with(b"abcde")),
             (
-                ["ftyp", "moov", "moof", "mdat"].map(String::from).to_vec(),
+                top_level_box_types(&written),
+                written.get(..fragmented).unwrap().ends_with(b"abcde")
+            ),
+            (
+                ["ftyp", "moov", "moof", "mdat", "mfra"]
+                    .map(String::from)
+                    .to_vec(),
                 true
             )
         );

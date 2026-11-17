@@ -526,4 +526,74 @@ mod tests {
         assert_eq!(differences, Vec::<String>::new());
         assert!(compared > 0);
     }
+
+    #[test]
+    #[ignore = "needs ISOBMFF_CONFORMANCE_DIR"]
+    fn the_sample_each_random_access_entry_of_the_conformance_files_names_is_where_its_numbers_say()
+    {
+        use isobmff::structure_data::sample_position;
+        use isobmff_boxes::MovieFragmentRandomAccessBox;
+        use isobmff_core::Boxes;
+
+        let (mut differences, mut compared) = (Vec::new(), 0);
+        for file in conformance_files() {
+            let mfra = Boxes::new(&file.bytes)
+                .map_while(Result::ok)
+                .find(|found| found.header().box_type() == MovieFragmentRandomAccessBox::BOX_TYPE)
+                .and_then(|found| {
+                    MovieFragmentRandomAccessBox::decode_payload(found.payload()).ok()
+                });
+            let Some(mfra) = mfra else {
+                continue;
+            };
+            for tfra in &mfra.tfra {
+                for entry in &tfra.entries {
+                    let at = usize::try_from(entry.moof_offset).unwrap();
+                    let (moof, _) =
+                        MovieFragmentBox::decode(file.bytes.get(at..).unwrap()).unwrap();
+                    let count = |trun: &TrackRunBox| -> u64 {
+                        match &trun.samples {
+                            TrackRunSamples::EmptyRows { sample_count } => u64::from(*sample_count),
+                            TrackRunSamples::Rows { samples } => {
+                                u64::try_from(samples.len()).unwrap()
+                            }
+                            _ => 0,
+                        }
+                    };
+                    let traf_index = usize::try_from(entry.traf_number).unwrap() - 1;
+                    let trun_index = usize::try_from(entry.trun_number).unwrap() - 1;
+                    let before: u64 = moof
+                        .traf
+                        .iter()
+                        .take(traf_index)
+                        .filter(|traf| traf.tfhd.track_id == tfra.track_id)
+                        .flat_map(|traf| traf.trun.iter().map(count))
+                        .sum::<u64>()
+                        + moof
+                            .traf
+                            .get(traf_index)
+                            .unwrap()
+                            .trun
+                            .iter()
+                            .take(trun_index)
+                            .map(count)
+                            .sum::<u64>();
+                    let index = before + u64::from(entry.sample_delta) - 1;
+                    let found = sample_position(&moof, tfra.track_id, index).map(|position| {
+                        (
+                            position.traf_number,
+                            position.trun_number,
+                            position.sample_delta,
+                        )
+                    });
+                    compared += 1;
+                    if found != Some((entry.traf_number, entry.trun_number, entry.sample_delta)) {
+                        differences.push(format!("{}: {entry:?} found {found:?}", file.name));
+                    }
+                }
+            }
+        }
+        assert_eq!(differences, Vec::<String>::new());
+        assert_eq!(compared, 47);
+    }
 }

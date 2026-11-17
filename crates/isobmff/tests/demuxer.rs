@@ -39,6 +39,7 @@ mod tests {
         Movie(Vec<u32>),
         MovieFragment(u32),
         SegmentIndex { anchor: u64, reference_count: usize },
+        MovieFragmentRandomAccess { track_ids: Vec<u32> },
         SampleLocation(SampleLocation),
         Sample(SampleLocation, Vec<u8>),
         Box(String),
@@ -67,6 +68,7 @@ mod tests {
                 | Self::Movie(_)
                 | Self::MovieFragment(_)
                 | Self::SegmentIndex { .. }
+                | Self::MovieFragmentRandomAccess { .. }
                 | Self::SampleLocation(_)
                 | Self::Box(_)
                 | Self::Other(_) => format!("{self:?}"),
@@ -93,6 +95,9 @@ mod tests {
                 Event::SegmentIndex { anchor, sidx } => Reported::SegmentIndex {
                     anchor,
                     reference_count: sidx.references.len(),
+                },
+                Event::MovieFragmentRandomAccess(mfra) => Reported::MovieFragmentRandomAccess {
+                    track_ids: mfra.tfra.iter().map(|tfra| tfra.track_id).collect(),
                 },
                 Event::SampleLocation(location) => Reported::SampleLocation(location),
                 Event::Sample(sample) => Reported::Sample(sample.location(), sample.bytes.to_vec()),
@@ -550,6 +555,7 @@ mod tests {
                 Reported::FileType
                 | Reported::SegmentType
                 | Reported::SegmentIndex { .. }
+                | Reported::MovieFragmentRandomAccess { .. }
                 | Reported::Sample(..)
                 | Reported::Box(_)
                 | Reported::Other(_) => continue,

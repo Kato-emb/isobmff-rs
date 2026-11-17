@@ -2,7 +2,10 @@
 
 use alloc::boxed::Box;
 
-use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox, SegmentIndexBox, SegmentTypeBox};
+use isobmff_boxes::{
+    FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentIndexBox,
+    SegmentTypeBox,
+};
 use isobmff_core::{BoxDecode, BoxDefinition, BoxType, Error};
 
 /// A box the demuxer gathers, read into its value
@@ -12,16 +15,18 @@ pub(super) enum Gathered {
     Movie(Box<MovieBox>),
     MovieFragment(Box<MovieFragmentBox>),
     SegmentIndex(SegmentIndexBox),
+    MovieFragmentRandomAccess(MovieFragmentRandomAccessBox),
 }
 
 impl Gathered {
     /// The box types the demuxer gathers
-    pub(super) const BOX_TYPES: [BoxType; 5] = [
+    pub(super) const BOX_TYPES: [BoxType; 6] = [
         FileTypeBox::BOX_TYPE,
         SegmentTypeBox::BOX_TYPE,
         MovieBox::BOX_TYPE,
         MovieFragmentBox::BOX_TYPE,
         SegmentIndexBox::BOX_TYPE,
+        MovieFragmentRandomAccessBox::BOX_TYPE,
     ];
 
     /// Reads `payload`, that of a box of `box_type`, one of [`Gathered::BOX_TYPES`], into its value
@@ -38,6 +43,8 @@ impl Gathered {
             Self::MovieFragment(Box::new(MovieFragmentBox::decode_payload(payload)?))
         } else if box_type == SegmentIndexBox::BOX_TYPE {
             Self::SegmentIndex(SegmentIndexBox::decode_payload(payload)?)
+        } else if box_type == MovieFragmentRandomAccessBox::BOX_TYPE {
+            Self::MovieFragmentRandomAccess(MovieFragmentRandomAccessBox::decode_payload(payload)?)
         } else {
             Self::Movie(Box::new(MovieBox::decode_payload(payload)?))
         })

@@ -328,8 +328,8 @@ fn the_memory_a_demuxer_holds_stays_within_the_limit_when_fragments_come_before_
     assert_eq!(many, few);
 }
 
-/// The most bytes held while a fragmented muxer writes `fragments` fragments of 8 samples of 4 KiB each, its output polled after each fragment
-fn most_held_writing_fragments(fragments: u32) -> usize {
+/// The most bytes held while a fragmented muxer writes `fragments` fragments of 8 samples of 4 KiB each, its output polled after each fragment, and a random access table of at most `entry_limit` entries
+fn most_held_writing_fragments(fragments: u32, entry_limit: u64) -> usize {
     use isobmff::mux::{MovieParameters, TrackParameters};
     use isobmff::{FragmentedMovieFileMuxer, MuxerConfig, SampleProperties};
     use isobmff_boxes::{
@@ -351,9 +351,11 @@ fn most_held_writing_fragments(fragments: u32) -> usize {
         let entry = SampleEntry::new(FourCc::new([0; 4]), 1, Vec::new());
         let mut stsd = SampleDescriptionBox::default();
         stsd.sample_descriptions = vec![SampleDescription::Typed(entry)];
+        let mut config = MuxerConfig::default();
+        config.random_access_entry_limit = entry_limit;
         let mut muxer = FragmentedMovieFileMuxer::new(
             MovieParameters::new(1000),
-            MuxerConfig::default(),
+            config,
             FileTypeBox::default(),
         )
         .unwrap();
@@ -375,13 +377,18 @@ fn most_held_writing_fragments(fragments: u32) -> usize {
 }
 
 #[test]
-fn the_memory_a_fragmented_muxer_holds_does_not_grow_with_the_fragments_it_writes() {
-    let few = most_held_writing_fragments(16);
-    let many = most_held_writing_fragments(1024);
+fn the_memory_a_fragmented_muxer_holds_grows_with_the_entries_of_its_random_access_table_alone() {
+    let few = most_held_writing_fragments(16, 8);
+    let many = most_held_writing_fragments(1024, 8);
+    let listed = most_held_writing_fragments(1024, 1 << 16);
     println!(
-        "held at most {few} bytes writing 16 fragments of 8 samples of 4 KiB, {many} bytes writing 1024"
+        "held at most {few} bytes writing 16 fragments of 8 samples of 4 KiB, {many} bytes writing 1024, under a limit of 8 entries; {listed} bytes writing 1024 under the default limit"
     );
     assert_eq!(many, few);
+    // Why 128 bytes an entry: the muxer holds each until it finishes, and a
+    // copy and its bytes while it writes the table, and nothing else may grow
+    // with the fragments.
+    assert!(listed - few <= 1016 * 128, "{listed} - {few}");
 }
 
 /// The most bytes held while a segment muxer indexing its segments writes `segments` media segments of `subsegment_count` subsegments of 8 samples of 4 KiB each, its output polled after each subsegment
@@ -536,4 +543,46 @@ fn what_a_structure_data_reader_allocates_does_not_grow_with_the_sync_sample_num
     );
     assert_eq!(few_read, many_read);
     assert_eq!(many, few);
+}
+
+/// The bytes of an `mfra` of one `tfra` of `entries` entries of version 0, 11 bytes each
+fn random_access_table(entries: usize) -> Vec<u8> {
+    use isobmff_boxes::{
+        MovieFragmentRandomAccessBox, TrackFragmentRandomAccessBox, TrackFragmentRandomAccessEntry,
+    };
+    use isobmff_core::BoxEncode;
+
+    let mut tfra = TrackFragmentRandomAccessBox::default();
+    tfra.track_id = 1;
+    tfra.entries = vec![TrackFragmentRandomAccessEntry::default(); entries];
+    let mut mfra = MovieFragmentRandomAccessBox::default();
+    mfra.tfra = vec![tfra];
+    mfra.mfro.parent_size = u32::try_from(mfra.encoded_len()).unwrap();
+    let mut bytes = vec![0; usize::try_from(mfra.encoded_len()).unwrap()];
+    mfra.encode(&mut bytes).unwrap();
+    bytes
+}
+
+#[test]
+fn an_mfra_over_the_entry_limit_allocates_nothing_for_its_entries() {
+    let mut config = DemuxerConfig::default();
+    config.random_access_entry_limit = 1;
+    let held_demuxing = |file: Vec<u8>| {
+        most_held_by(|| {
+            let mut demuxer = Demuxer::new(config);
+            demuxer.handle_input(0, &file);
+            while demuxer.poll_event().is_some() {}
+            demuxer.finish();
+            while demuxer.poll_event().is_some() {}
+        })
+    };
+    let few = held_demuxing(random_access_table(4));
+    let many = held_demuxing(random_access_table(4096));
+    println!(
+        "held at most {few} bytes demuxing an mfra of 4 entries over a limit of 1, {many} bytes of 4096"
+    );
+    // Why allow the length of an entry for each: the box reader gathers the
+    // payload of the `mfra`, which grows by that, and nothing else may grow
+    // with the entries it declares.
+    assert!(many - few <= (4096 - 4) * 11, "{many} - {few}");
 }

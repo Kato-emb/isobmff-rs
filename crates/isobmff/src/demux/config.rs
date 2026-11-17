@@ -35,6 +35,13 @@ pub struct DemuxerConfig {
     /// A sample is a frame of video or audio; even a frame of 4K video coded
     /// as a sync sample takes a few MiB.
     pub sample_size_limit: u64,
+    /// The most entries the `tfra`s of an `mfra` may declare, of all its
+    /// tracks (2^16 by default, as a muxer writes at most by default)
+    ///
+    /// The demuxer holds some tens of bytes an entry once it reads the box;
+    /// 2^16 of them take some MiB, and list the sync samples of hours of
+    /// fragments. An `mfra` that declares more is reported and not read.
+    pub random_access_entry_limit: u64,
 }
 
 impl Default for DemuxerConfig {
@@ -45,6 +52,7 @@ impl Default for DemuxerConfig {
             payload_limit: 16 * 1024 * 1024,
             sample_count_limit: 1 << 20,
             sample_size_limit: 16 * 1024 * 1024,
+            random_access_entry_limit: 1 << 16,
         }
     }
 }
