@@ -197,10 +197,6 @@ fn segment_index<'a>(
 pub(super) struct Index {
     parameters: SegmentIndexParameters,
     reference: Reference,
-    // Why count what was polled: the offset of a `sidx` is that of the
-    // `free` reserved for it in the whole run of bytes, which the bytes the
-    // muxer holds do not give once some are polled.
-    polled: u64,
     /// Offset of the `free` reserved for the `sidx` in the bytes each media
     /// segment opens with, past the `styp`
     reserved_at: u64,
@@ -249,7 +245,6 @@ impl Index {
         Self {
             parameters,
             reference: Reference::Pending(Box::new(movie.clone())),
-            polled: 0,
             reserved_at,
             segment: Segment::default(),
             samples: Vec::new(),
@@ -304,12 +299,6 @@ impl Index {
         }
     }
 
-    /// Counts `appended` more bytes polled
-    pub(super) fn polled(&mut self, appended: usize) {
-        let appended = u64::try_from(appended).unwrap_or(u64::MAX);
-        self.polled = self.polled.saturating_add(appended);
-    }
-
     /// Returns whether the next subsegment opens a media segment, after the bytes it opens with
     pub(super) fn opens(&self) -> bool {
         self.segment.subsegments.is_empty()
@@ -359,14 +348,10 @@ impl Index {
         }
     }
 
-    /// Records `next`, a subsegment written after the `held` bytes the muxer held for polling, after the bytes its media segment opens with where it opens it
-    pub(super) fn push_subsegment(&mut self, next: Subsegment, held: usize) {
+    /// Records `next`, a subsegment written from `position` in the run of bytes, after the bytes its media segment opens with where it opens it
+    pub(super) fn push_subsegment(&mut self, next: Subsegment, position: u64) {
         if self.opens() {
-            let held = u64::try_from(held).unwrap_or(u64::MAX);
-            self.segment.offset = self
-                .polled
-                .saturating_add(held)
-                .saturating_add(self.reserved_at);
+            self.segment.offset = position.saturating_add(self.reserved_at);
         }
         self.samples.clear();
         self.segment.subsegments.push(next);

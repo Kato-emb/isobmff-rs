@@ -139,6 +139,10 @@ pub struct FragmentedMovieFileMuxer {
     state: State,
     /// Bytes [`poll_output`](Self::poll_output) has yet to append
     output: Vec<u8>,
+    // Why count the bytes polled: the offset of a box written, such as a
+    // `moof` the random access table points at, is that of the whole run of
+    // bytes, which the bytes held do not give once some are polled.
+    polled: u64,
 }
 
 impl FragmentedMovieFileMuxer {
@@ -166,6 +170,7 @@ impl FragmentedMovieFileMuxer {
                 tracks: Vec::new(),
             },
             output,
+            polled: 0,
         })
     }
 
@@ -295,6 +300,8 @@ impl FragmentedMovieFileMuxer {
 
     /// Appends the bytes the muxer holds to `out`, and holds none
     pub fn poll_output(&mut self, out: &mut Vec<u8>) {
+        let polled = u64::try_from(self.output.len()).unwrap_or(u64::MAX);
+        self.polled = self.polled.saturating_add(polled);
         out.append(&mut self.output);
     }
 
@@ -310,9 +317,10 @@ impl FragmentedMovieFileMuxer {
         self.finish_after(&[])
     }
 
-    /// Returns how many bytes the muxer holds for [`poll_output`](Self::poll_output)
-    pub(super) fn held_len(&self) -> usize {
-        self.output.len()
+    /// Returns the offset of the next byte the muxer writes, in the run of bytes it returns from its first, the first byte of the `ftyp`
+    pub(super) fn position(&self) -> u64 {
+        self.polled
+            .saturating_add(u64::try_from(self.output.len()).unwrap_or(u64::MAX))
     }
 
     /// Returns whether the fragment holds a sample
