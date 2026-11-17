@@ -117,7 +117,7 @@ enum Refused {
 /// with [`required_input`](Self::required_input), takes bytes from any offset
 /// up to that one with [`handle_input`](Self::handle_input), and reports one
 /// event per call of [`poll_event`](Self::poll_event). It reads the `ftyp`,
-/// each `styp`, the `moov`, each `moof` and each `sidx` into their values, reports where
+/// each `styp`, the `moov`, each `moof`, each `sidx` and the `mfra` into their values, reports where
 /// every sample of the `moov` and of each `moof` lies, and lends the bytes of
 /// each sample of a track [`subscribe_track`](Self::subscribe_track) names:
 /// once it has read the `moov` or a `moof`, it requests the ranges of those
@@ -532,6 +532,9 @@ impl Demuxer {
                         source,
                     })),
                     Ok(Gathered::FileType(file_type)) => BoxRead::Event(Event::FileType(file_type)),
+                    Ok(Gathered::MovieFragmentRandomAccess(mfra)) => {
+                        BoxRead::Event(Event::MovieFragmentRandomAccess(mfra))
+                    }
                     Ok(Gathered::SegmentType(styp)) => BoxRead::Event(Event::SegmentType(styp)),
                     Ok(Gathered::SegmentIndex(sidx)) => BoxRead::Event(Event::SegmentIndex {
                         // Why the end of the payload: the anchor is the first

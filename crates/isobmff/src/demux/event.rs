@@ -1,6 +1,9 @@
 //! What a [`Demuxer`](super::Demuxer) reports
 
-use isobmff_boxes::{FileTypeBox, MovieBox, MovieFragmentBox, SegmentIndexBox, SegmentTypeBox};
+use isobmff_boxes::{
+    FileTypeBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox, SegmentIndexBox,
+    SegmentTypeBox,
+};
 use isobmff_core::BoxHeader;
 
 use super::error::Error;
@@ -31,6 +34,10 @@ pub enum Event<'a> {
         /// The box
         sidx: SegmentIndexBox,
     },
+    /// The `mfra` of the file, read into its value, ISO/IEC 14496-12 §8.8.9:
+    /// where sync samples lie, which is a hint only, the movie fragments being
+    /// definitive; the demuxer does not seek by it
+    MovieFragmentRandomAccess(MovieFragmentRandomAccessBox),
     /// Where the bytes of a sample of the `moov` or of a `moof` lie, for
     /// every sample of every track, in the order of their file offsets
     /// within the box
