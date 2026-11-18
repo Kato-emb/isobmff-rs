@@ -165,11 +165,85 @@ mod tests {
         assert_eq!(resolved(&moof(2, [based])), [at(1104, 4, 0, 20)]);
     }
 
-    #[test]
-    fn a_track_fragment_based_on_the_moof_counts_from_it_whatever_its_data_reference_entry() {
+    /// A track fragment of `default-base-is-moof` and one sample at 16 past its base
+    fn based_on_the_moof() -> TrackFragmentBox {
         let mut on_moof = traf(1, Some(16));
         on_moof.tfhd.default_base_is_moof = true;
-        assert_eq!(resolved(&moof(2, [on_moof])), [at(516, 4, 0, 20)]);
+        on_moof
+    }
+
+    #[test]
+    fn a_track_fragment_based_on_the_moof_counts_from_it_once_its_imda_is_read() {
+        assert_eq!(
+            resolved(&moof(2, [based_on_the_moof()])),
+            [at(516, 4, 0, 20)]
+        );
+        let mut reader = reader_with(2, 1000);
+        let _ = reader.handle_movie(&movie_of_fragments()).unwrap().count();
+        let found: Vec<_> = reader
+            .handle_movie_fragment(&moof(2, [based_on_the_moof()]), 500)
+            .unwrap()
+            .collect();
+        assert_eq!(found, [at(516, 4, 0, 20)]);
+    }
+
+    #[test]
+    fn a_track_fragment_based_on_the_moof_waits_for_the_imda_it_lies_in_and_is_refused_where_the_file_lacks_it()
+     {
+        let mut reader = reader();
+        let _ = reader.handle_movie(&movie_of_fragments()).unwrap().count();
+        assert_eq!(
+            reader
+                .handle_movie_fragment(&moof(2, [based_on_the_moof()]), 500)
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            reader.finish(),
+            Err(Error::IdentifiedMediaDataNotFound {
+                imda_identifier: 2,
+                sample_count: 1
+            })
+        );
+    }
+
+    /// Track 1 lies in the `imda` of the sequence number and track 2 in that
+    /// of identifier 9; the fragment of track 2 follows that of track 1, so
+    /// it counts from the end of its data, in the payload of `imda` 2
+    #[test]
+    fn a_track_fragment_that_counts_from_one_imda_and_lies_in_another_waits_for_both() {
+        let mut movie = movie_of_fragments();
+        let mut other = in_identified_media_data(track(2, 10, &[], &[], &[]), imdt(9));
+        other.tkhd.track_id = 2;
+        movie.trak.push(other);
+        let mut trex = movie.mvex.as_ref().unwrap().trex.first().unwrap().clone();
+        trex.track_id = 2;
+        movie.mvex.as_mut().unwrap().trex.push(trex);
+        let mut second = traf(1, None);
+        second.tfhd.track_id = 2;
+        let mut reader = reader();
+        let _ = reader.handle_movie(&movie).unwrap().count();
+        assert_eq!(
+            reader
+                .handle_movie_fragment(&moof(2, [traf(1, Some(4)), second]), 500)
+                .unwrap()
+                .len(),
+            0
+        );
+        let found: Vec<_> = reader
+            .handle_identified_media_data(2, 1000)
+            .unwrap()
+            .collect();
+        assert_eq!(found, [at(1004, 4, 0, 20)]);
+        let found: Vec<_> = reader
+            .handle_identified_media_data(9, 5000)
+            .unwrap()
+            .collect();
+        let mut expected = at(1008, 4, 0, 20);
+        expected.properties.track_id = 2;
+        assert_eq!(found, [expected]);
+        assert_eq!(reader.finish(), Ok(()));
     }
 
     #[test]

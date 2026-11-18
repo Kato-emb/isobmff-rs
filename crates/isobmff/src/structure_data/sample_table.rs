@@ -259,8 +259,13 @@ pub(super) fn resolve(
                 sample_flags.sample_has_redundancy = entry.sample_has_redundancy;
             }
             sample_flags.sample_is_non_sync_sample = is_non_sync_sample;
+            let imda_identifier = match origin {
+                Origin::File => None,
+                Origin::IdentifiedMediaData(imda_identifier) => Some(imda_identifier),
+            };
             identified.place(
                 origin,
+                imda_identifier,
                 SampleLocation {
                     properties: SampleProperties {
                         track_id,

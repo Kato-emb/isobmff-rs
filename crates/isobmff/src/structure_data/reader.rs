@@ -287,7 +287,8 @@ impl StructureDataReader {
     /// from the payload of that `imda` where Table 6 says so: with no
     /// `default-base-is-moof`, from the base the `tfhd` gives or, for the
     /// first track fragment, from 0. With `default-base-is-moof` it counts
-    /// from the first byte of the `moof`, as any other does.
+    /// from the first byte of the `moof`, as any other does, and its samples
+    /// are still returned only once that `imda` is read.
     ///
     /// # Panics
     /// Panics if called after [`finish`](Self::finish): a bug of the caller.

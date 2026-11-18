@@ -676,6 +676,49 @@ mod tests {
         insta::assert_debug_snapshot!(lines);
     }
 
+    /// `fragmented.mp4` with each track naming the `imda` of the sequence
+    /// number of each fragment, a `snim` in place of its `url ` (both 12 bytes,
+    /// at 381 and 867): its fragments keep `default-base-is-moof`, so their
+    /// samples count from the `moof`, and the file holds no `imda`
+    #[test]
+    fn the_samples_of_fragments_based_on_their_moof_in_imda_the_file_lacks_are_refused() {
+        let mut file = FRAGMENTED.to_vec();
+        for entry in [381, 867] {
+            file.get_mut(entry + 4..entry + 12)
+                .unwrap()
+                .copy_from_slice(b"snim\0\0\0\0");
+        }
+        let reported = read_every_way("snim", &file, config(None, None), Subscribe::Every);
+        let errors = reported
+            .iter()
+            .filter_map(|reported| match reported {
+                Reported::Error(error) => Some(*error),
+                Reported::FileType
+                | Reported::SegmentType
+                | Reported::Movie(_)
+                | Reported::MovieFragment(_)
+                | Reported::SegmentIndex { .. }
+                | Reported::MovieFragmentRandomAccess { .. }
+                | Reported::SampleLocation(_)
+                | Reported::Sample(..)
+                | Reported::Box(_)
+                | Reported::Other(_) => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            (locations(&reported).len(), errors),
+            (
+                0,
+                vec![Error::EndOfInput(
+                    structure_data::Error::IdentifiedMediaDataNotFound {
+                        imda_identifier: 1,
+                        sample_count: 24
+                    }
+                )]
+            )
+        );
+    }
+
     #[test]
     fn an_imda_too_short_for_its_identifier_is_reported() {
         let file = isobmff_test_support::fixtures::written(b"imda", &[b"\0\x07"]);

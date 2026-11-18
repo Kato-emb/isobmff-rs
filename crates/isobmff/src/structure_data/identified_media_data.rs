@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use super::Error;
 use crate::SampleLocation;
 
-/// Where the offset of a sample counts from
+/// Where the offset of a sample counts from, which ISO/IEC 14496-12 §8.8.7.1 Table 6 may set apart from the `imda` the sample lies in
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Origin {
     /// The first byte of the file
@@ -16,15 +16,27 @@ pub(super) enum Origin {
     IdentifiedMediaData(u32),
 }
 
-/// The file offset of the payload of each `imda` read, and the samples whose offsets count from an `imda` not yet read
+/// A sample that waits for an `imda`
+#[derive(Debug, Clone, Copy)]
+struct Waiting {
+    location: SampleLocation,
+    /// Where the offset of `location` counts from
+    origin: Origin,
+    /// `imda_identifier` of the `imda` the sample lies in, which its data
+    /// reference entry names
+    imda_identifier: Option<u32>,
+}
+
+/// The file offset of the payload of each `imda` read, and the samples that wait for an `imda` not yet read
 #[derive(Debug, Clone)]
 pub(super) struct IdentifiedMediaData {
     limit: u64,
     /// File offset of the payload of each `imda` read, by its `imda_identifier`
     payloads: BTreeMap<u32, u64>,
-    /// The samples whose offsets count from the payload of an `imda` not yet
-    /// read, by the `imda_identifier` of that `imda`
-    waiting: BTreeMap<u32, Vec<SampleLocation>>,
+    /// The samples that wait for an `imda` not yet read, by the
+    /// `imda_identifier` of that `imda`: the one their offsets count from, or
+    /// else the one they lie in
+    waiting: BTreeMap<u32, Vec<Waiting>>,
     // Why count the samples that wait rather than add up the lengths of
     // `waiting`: the count is checked before every box is resolved, and the
     // sum runs over every identifier waited for.
@@ -33,7 +45,7 @@ pub(super) struct IdentifiedMediaData {
     /// its identifier, until the box is taken
     // Why hold them apart rather than in `waiting` at once: a box refused
     // leaves the samples that wait as they were.
-    placed: Vec<(u32, SampleLocation)>,
+    placed: Vec<(u32, Waiting)>,
 }
 
 impl IdentifiedMediaData {
@@ -53,26 +65,55 @@ impl IdentifiedMediaData {
         self.waiting_count
     }
 
-    /// Appends `location`, whose offset counts from `origin`, to `locations` at its file offset, or holds it for the box being resolved until the `imda` it counts from is read
+    /// Appends `location`, whose offset counts from `origin`, to `locations` at its file offset once the `imda` it counts from, and the `imda` of `imda_identifier` it lies in, are read, or holds it for the box being resolved until they are
     ///
     /// # Errors
     /// * [`Error::Overflow`]: the sample lies past the last file offset.
     pub(super) fn place(
         &mut self,
         origin: Origin,
+        imda_identifier: Option<u32>,
         location: SampleLocation,
         locations: &mut Vec<SampleLocation>,
     ) -> Result<(), Error> {
-        match origin {
-            Origin::File => locations.push(location),
-            Origin::IdentifiedMediaData(imda_identifier) => {
-                match self.payloads.get(&imda_identifier) {
-                    Some(&payload_offset) => locations.push(at(payload_offset, location)?),
-                    None => self.placed.push((imda_identifier, location)),
-                }
-            }
+        let waiting = Waiting {
+            location,
+            origin,
+            imda_identifier,
+        };
+        match self.resolved(waiting, None)? {
+            Resolved::At(location) => locations.push(location),
+            Resolved::Waits(waited, waiting) => self.placed.push((waited, waiting)),
         }
         Ok(())
+    }
+
+    /// Where `waiting` lies once the `imda` read, and that of `read` with its payload offset, are known
+    fn resolved(&self, waiting: Waiting, read: Option<(u32, u64)>) -> Result<Resolved, Error> {
+        let payload_offset = |identifier: u32| match read {
+            Some((read, payload_offset)) if read == identifier => Some(payload_offset),
+            Some(_) | None => self.payloads.get(&identifier).copied(),
+        };
+        let waiting = match waiting.origin {
+            Origin::File => waiting,
+            Origin::IdentifiedMediaData(origin) => match payload_offset(origin) {
+                Some(payload_offset) => Waiting {
+                    location: at(payload_offset, waiting.location)?,
+                    origin: Origin::File,
+                    ..waiting
+                },
+                None => return Ok(Resolved::Waits(origin, waiting)),
+            },
+        };
+        Ok(
+            match waiting
+                .imda_identifier
+                .filter(|&identifier| payload_offset(identifier).is_none())
+            {
+                Some(identifier) => Resolved::Waits(identifier, waiting),
+                None => Resolved::At(waiting.location),
+            },
+        )
     }
 
     /// Ends the box being resolved: its samples held wait for their `imda` where it is `Ok`, and are dropped where it refuses the box
@@ -123,14 +164,13 @@ impl IdentifiedMediaData {
                 limit: self.limit,
             });
         }
-        let waited = self
-            .waiting
-            .get(&imda_identifier)
-            .map_or(&[][..], Vec::as_slice);
+        let read = Some((imda_identifier, payload_offset));
         let start = locations.len();
-        for &location in waited {
-            match at(payload_offset, location) {
-                Ok(location) => locations.push(location),
+        let mut still_waiting = Vec::new();
+        for &waiting in self.waiting.get(&imda_identifier).into_iter().flatten() {
+            match self.resolved(waiting, read) {
+                Ok(Resolved::At(location)) => locations.push(location),
+                Ok(Resolved::Waits(waited, waiting)) => still_waiting.push((waited, waiting)),
                 // Why drop those taken: a sample past the last offset
                 // refuses the `imda`, and the samples go on waiting.
                 Err(error) => {
@@ -140,9 +180,13 @@ impl IdentifiedMediaData {
             }
         }
         if let Some(waited) = self.waiting.remove(&imda_identifier) {
+            let taken = waited.len().saturating_sub(still_waiting.len());
             self.waiting_count = self
                 .waiting_count
-                .saturating_sub(u64::try_from(waited.len()).unwrap_or(u64::MAX));
+                .saturating_sub(u64::try_from(taken).unwrap_or(u64::MAX));
+        }
+        for (waited, waiting) in still_waiting {
+            self.waiting.entry(waited).or_default().push(waiting);
         }
         self.payloads.insert(imda_identifier, payload_offset);
         Ok(())
@@ -165,6 +209,14 @@ impl IdentifiedMediaData {
             sample_count,
         })
     }
+}
+
+/// Where a sample lies, once the `imda` read are known
+enum Resolved {
+    /// At this file offset
+    At(SampleLocation),
+    /// Not known until the `imda` of this `imda_identifier` is read
+    Waits(u32, Waiting),
 }
 
 /// `location`, whose offset counts from the payload at the file offset `payload_offset`, at its file offset

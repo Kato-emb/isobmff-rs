@@ -266,6 +266,7 @@ pub(super) fn resolve(
                     .ok_or(missing)?;
                 identified.place(
                     origin,
+                    identified_media_data,
                     SampleLocation {
                         properties: SampleProperties {
                             track_id,
