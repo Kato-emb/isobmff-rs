@@ -653,6 +653,44 @@ mod tests {
         insta::assert_debug_snapshot!(lines);
     }
 
+    /// `imda_missing.mp4` with a `free` of size 0 at its end, which runs to
+    /// the end of the file, so that the demuxer wants no input past it and a
+    /// caller that reads where it asks never calls `finish`
+    #[test]
+    fn the_samples_of_an_imda_the_file_lacks_are_refused_when_the_last_box_runs_to_the_end_of_the_file()
+     {
+        let missing = include_bytes!("fixtures/imda_missing.mp4");
+        let file = [&missing[..], b"\0\0\0\0free"].concat();
+        let reported = read_every_way(
+            "imda_missing.mp4 and a free",
+            &file,
+            config(None, None),
+            Subscribe::Every,
+        );
+        let expected = read_every_way(
+            "imda_missing.mp4",
+            missing,
+            config(None, None),
+            Subscribe::Every,
+        );
+        let not_found = Reported::Error(Error::EndOfInput(
+            structure_data::Error::IdentifiedMediaDataNotFound {
+                imda_identifier: 2,
+                sample_count: 23,
+            },
+        ));
+        assert_eq!(
+            (
+                samples_by_track(&reported),
+                reported
+                    .iter()
+                    .filter(|reported| **reported == not_found)
+                    .count()
+            ),
+            (samples_by_track(&expected), 1)
+        );
+    }
+
     #[test]
     fn the_events_of_a_file_of_two_imda_of_one_identifier() {
         let file = include_bytes!("fixtures/imda_duplicate.mp4");

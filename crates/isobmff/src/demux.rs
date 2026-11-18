@@ -526,11 +526,12 @@ impl Demuxer {
     /// The next event of the box reader, read into the value of its box where the demuxer reads one
     fn read_box(&mut self) -> Option<BoxRead> {
         let Some(event) = self.boxes.poll_event() else {
-            // Why only once the box reader reports nothing more: the end of
-            // the input is the end of the file only once every box is read,
-            // and an `imda` may be the last of them.
-            return self
-                .finished
+            // Why only once the box reader reports nothing more, and the
+            // input ends or the box reader wants none: no `imda` follows
+            // then, but one may be the last box, and a box of size 0 runs to
+            // the end of the file with no `finish` from a caller that reads
+            // until no input is wanted.
+            return (self.finished || self.boxes.required_input().is_none())
                 .then(|| self.structure_data.finish().err())
                 .flatten()
                 .map(|error| BoxRead::Event(Event::Error(Error::EndOfInput(error))));
