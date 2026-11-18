@@ -56,6 +56,9 @@ enum Observation {
     MalformedHeader(isobmff_core::Error),
     /// The unconsumed bytes reach the end of the box the state reads
     BoxEndInHand,
+    /// The unconsumed bytes hold the front part the state gathers, or the
+    /// whole payload where the input ends inside a box of size 0
+    FrontPartInHand,
     /// The unconsumed bytes stop before what the state waits for, and more
     /// input may follow
     NeedMoreData,
@@ -522,7 +525,7 @@ impl BoxReader {
                     offset: box_offset,
                     header,
                 },
-                Observation::BoxEndInHand,
+                Observation::FrontPartInHand,
             ) => {
                 // Why the bytes in hand for a box of size 0 the input ends
                 // inside: its payload runs to the end of the input, so a
@@ -583,6 +586,11 @@ impl BoxReader {
             | (
                 State::Gathering { .. } | State::FrontPart { .. },
                 Observation::Header(_) | Observation::MalformedHeader(_),
+            )
+            | (State::FrontPart { .. }, Observation::BoxEndInHand)
+            | (
+                State::Header | State::Gathering { .. } | State::Skipping { .. },
+                Observation::FrontPartInHand,
             )
             | (State::Header, Observation::BoxEndInHand | Observation::InputExhausted) => {
                 Transition {
@@ -645,10 +653,13 @@ fn observe(
             Some(payload_len) => length_of(bytes) >= payload_len,
             None => input == Input::Ends,
         },
-        State::FrontPart { header, .. } => {
-            length_of(bytes) >= front_part_length
-                || (header.payload_len().is_none() && input == Input::Ends)
+        State::FrontPart { header, .. }
+            if length_of(bytes) >= front_part_length
+                || (header.payload_len().is_none() && input == Input::Ends) =>
+        {
+            return Observation::FrontPartInHand;
         }
+        State::FrontPart { .. } => false,
         State::Skipping { offset, header } => {
             end_of_box(offset, header).is_some_and(|end| cursor >= end)
         }
