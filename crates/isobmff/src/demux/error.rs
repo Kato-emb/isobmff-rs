@@ -4,7 +4,7 @@ use core::fmt;
 
 use isobmff_core::BoxType;
 
-use crate::{SampleLocation, framing, structure_data};
+use crate::{framing, media_data, structure_data};
 
 /// What a [`Demuxer`](super::Demuxer) cannot read
 #[non_exhaustive]
@@ -40,20 +40,11 @@ pub enum Error {
         /// File offset of the `moov` that follows
         offset: u64,
     },
-    /// A sample of a subscribed track is larger than
-    /// [`DemuxerConfig::sample_size_limit`](super::DemuxerConfig::sample_size_limit);
-    /// its bytes are not requested, and demuxing goes on at the next sample
-    SampleOverLimit {
-        /// Where the sample lies
-        location: SampleLocation,
-        /// The limit the sample is larger than
-        limit: u64,
-    },
-    /// The input ends inside a sample of a subscribed track
-    TruncatedSample {
-        /// Where the sample lies
-        location: SampleLocation,
-    },
+    /// The bytes of a sample of a subscribed track cannot be lent, such as
+    /// one larger than
+    /// [`DemuxerConfig::sample_size_limit`](super::DemuxerConfig::sample_size_limit)
+    /// or one the input ends inside; demuxing goes on at the next sample
+    MediaData(media_data::Error),
     /// The `tfra`s of an `mfra` declare more entries than
     /// [`DemuxerConfig::random_access_entry_limit`](super::DemuxerConfig::random_access_entry_limit);
     /// the box is not read, and nothing is allocated for its entries
@@ -94,15 +85,9 @@ impl fmt::Display for Error {
                 formatter,
                 "the `moov` at offset {offset} follows the one already read"
             ),
-            Self::SampleOverLimit { location, limit } => write!(
+            Self::MediaData(_) => write!(
                 formatter,
-                "the sample of track {} at offset {} is {} bytes, over the limit of {limit}",
-                location.properties.track_id, location.offset, location.size
-            ),
-            Self::TruncatedSample { location } => write!(
-                formatter,
-                "the input ends inside the sample of track {} at offset {}",
-                location.properties.track_id, location.offset
+                "the bytes of a sample of a subscribed track cannot be lent"
             ),
             Self::RandomAccessEntryOverLimit {
                 offset,
@@ -122,11 +107,9 @@ impl core::error::Error for Error {
             Self::Framing(source) => Some(source),
             Self::Decode { source, .. } => Some(source),
             Self::StructureData { source, .. } => Some(source),
+            Self::MediaData(source) => Some(source),
             Self::EndOfInput(source) => Some(source),
-            Self::DuplicateMovie { .. }
-            | Self::SampleOverLimit { .. }
-            | Self::TruncatedSample { .. }
-            | Self::RandomAccessEntryOverLimit { .. } => None,
+            Self::DuplicateMovie { .. } | Self::RandomAccessEntryOverLimit { .. } => None,
         }
     }
 }

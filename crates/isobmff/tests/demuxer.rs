@@ -3,7 +3,9 @@
 #[cfg(test)]
 mod tests {
     use isobmff::demux::{Error, Event};
-    use isobmff::{Demuxer, DemuxerConfig, SampleLocation, SampleProperties, structure_data};
+    use isobmff::{
+        Demuxer, DemuxerConfig, SampleLocation, SampleProperties, media_data, structure_data,
+    };
     use isobmff_boxes::{IdentifiedMediaDataBox, SampleToChunkBox, TimeToSampleBox};
     use isobmff_core::BoxDefinition;
     use isobmff_test_support::conformance_files;
@@ -348,10 +350,10 @@ mod tests {
         let over = reported
             .iter()
             .filter_map(|reported| {
-                if let Reported::Error(Error::SampleOverLimit {
+                if let Reported::Error(Error::MediaData(media_data::Error::SampleOverLimit {
                     location,
                     limit: 1024,
-                }) = reported
+                })) = reported
                 {
                     Some(location.size)
                 } else {
