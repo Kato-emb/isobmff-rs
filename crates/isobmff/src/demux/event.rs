@@ -7,7 +7,8 @@ use isobmff_boxes::{
 use isobmff_core::BoxHeader;
 
 use super::error::Error;
-use crate::{SampleLocation, SampleProperties};
+use crate::SampleLocation;
+use crate::media_data::Sample;
 
 /// What a [`Demuxer`](super::Demuxer) found in its input
 #[non_exhaustive]
@@ -60,28 +61,4 @@ pub enum Event<'a> {
     },
     /// What cannot be read; demuxing goes on where the error says
     Error(Error),
-}
-
-/// A `sample` of a subscribed track, with its bytes
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Sample<'a> {
-    /// What the structure-data declares of the sample
-    pub properties: SampleProperties,
-    /// File offset of the first byte of the sample
-    pub offset: u64,
-    /// The bytes of the sample
-    pub bytes: &'a [u8],
-}
-
-impl Sample<'_> {
-    /// Returns where the bytes of the sample lie
-    #[must_use]
-    pub fn location(&self) -> SampleLocation {
-        SampleLocation {
-            properties: self.properties,
-            offset: self.offset,
-            size: u32::try_from(self.bytes.len()).unwrap_or(u32::MAX),
-        }
-    }
 }

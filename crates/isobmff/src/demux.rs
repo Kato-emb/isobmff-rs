@@ -17,9 +17,10 @@ mod event;
 mod gathered;
 mod samples;
 
+pub use crate::media_data::Sample;
 pub use config::DemuxerConfig;
 pub use error::Error;
-pub use event::{Event, Sample};
+pub use event::Event;
 use gathered::Gathered;
 use samples::Samples;
 
