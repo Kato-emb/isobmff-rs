@@ -8,7 +8,6 @@ use isobmff_boxes::{
 use isobmff_core::{BoxDecode, BoxDefinition};
 
 use crate::framing::{self, BoxReader, FramerConfig, FrontPart};
-use crate::media_data::{self, MediaDataReader};
 use crate::structure_data::{self, StructureDataReader};
 use crate::{RequiredInput, SampleLocation};
 
@@ -16,13 +15,14 @@ mod config;
 mod error;
 mod event;
 mod gathered;
+mod sample_reader;
 mod samples;
 
-pub use crate::media_data::Sample;
 pub use config::DemuxerConfig;
 pub use error::Error;
-pub use event::Event;
+pub use event::{Event, Sample};
 use gathered::Gathered;
+use sample_reader::SampleReader;
 use samples::Samples;
 
 /// Length of the `imda_identifier` that starts the payload of an `imda`, ISO/IEC 14496-12 §8.1.4.2
@@ -32,8 +32,8 @@ const IMDA_IDENTIFIER_LENGTH: u64 = 4;
 #[derive(Debug, Clone)]
 enum Pending {
     Ready(Event<'static>),
-    /// The event the media data reader holds
-    MediaData,
+    /// The event the sample reader holds
+    Sample,
 }
 
 /// Where the demuxer is in the file
@@ -52,9 +52,9 @@ enum Observation {
     /// The next sample of a subscribed track wanted, at this index of the
     /// locations
     Wanted(usize, SampleLocation),
-    /// An event the media data reader holds
-    MediaDataEvent,
-    /// The media data reader is gathering a sample
+    /// An event the sample reader holds
+    SampleEvent,
+    /// The sample reader is gathering a sample
     Gathering,
     /// A box the box reader reported
     Box(BoxRead),
@@ -124,8 +124,8 @@ enum Refused {
 /// caller that cannot seek locates the samples of an `imda` that comes
 /// before the box that declares them, and is not lent them. A sample whose
 /// data reference names another file, §8.7.2, is located and not lent, nor
-/// are bytes requested for it: a caller reads that file itself, and can
-/// assemble its samples with a [`MediaDataReader`].
+/// are bytes requested for it: a caller takes its bytes from that file, at
+/// the offset and of the size the location gives.
 /// Handing input over never fails: what cannot be read, such as a `moof`
 /// before any `moov`, is reported as [`Event::Error`]. What the reading of
 /// the specification refuses, the demuxer reads lossily once the
@@ -178,13 +178,12 @@ pub struct Demuxer {
     boxes: BoxReader,
     structure_data: StructureDataReader,
     sample_count_limit: u64,
-    sample_size_limit: u64,
     random_access_entry_limit: u64,
     state: State,
     samples: Samples,
     /// Reader of the bytes of the sample of a subscribed track being
     /// gathered, which [`Samples`] picks and hands over one at a time
-    media_data: MediaDataReader,
+    sample_reader: SampleReader,
     pending: Option<Pending>,
     // Why hold the box refused rather than read it lossily at once:
     // its error is reported first, and one event is held at a time.
@@ -212,11 +211,10 @@ impl Demuxer {
                 config.identified_media_data_limit,
             ),
             sample_count_limit: config.sample_count_limit,
-            sample_size_limit: config.sample_size_limit,
             random_access_entry_limit: config.random_access_entry_limit,
             state: State::NoMovie,
             samples: Samples::default(),
-            media_data: MediaDataReader::new(1, config.sample_size_limit),
+            sample_reader: SampleReader::new(config.sample_size_limit),
             pending: None,
             refused: None,
             finished: false,
@@ -231,18 +229,7 @@ impl Demuxer {
     /// Stops lending the bytes of the samples of track `track_id`, dropping those of one being gathered
     pub fn unsubscribe_track(&mut self, track_id: u32) {
         self.samples.unsubscribe(track_id);
-        if self.media_data.has_samples()
-            && self
-                .samples
-                .handed()
-                .is_some_and(|location| location.properties.track_id == track_id)
-        {
-            // Why a new reader rather than an operation that drops what it
-            // holds: the media data reader holds no sample but the one handed
-            // over, and dropping it is the demuxer's choice, not a step of
-            // assembling samples; only the capacity of its buffer is lost.
-            self.media_data = MediaDataReader::new(1, self.sample_size_limit);
-        }
+        self.sample_reader.drop_track(track_id);
     }
 
     /// Returns where the demuxer wants input next, or `None` once it wants none
@@ -254,8 +241,8 @@ impl Demuxer {
         if self.finished {
             return None;
         }
-        if self.media_data.has_samples() {
-            return self.media_data.required_input();
+        if let Some(required) = self.sample_reader.required_input() {
+            return Some(required);
         }
         let boxes = self.boxes.required_input();
         let target = match self.state {
@@ -302,8 +289,8 @@ impl Demuxer {
             "input starts at offset {position}, after the offset {} the demuxer requires",
             required.position
         );
-        if self.media_data.has_samples() {
-            self.media_data.handle_input(position, bytes);
+        if self.sample_reader.has_sample() {
+            self.sample_reader.handle_input(position, bytes);
         } else {
             self.boxes.handle_input(position, bytes);
         }
@@ -318,23 +305,20 @@ impl Demuxer {
         }
         Some(match self.pending.take()? {
             Pending::Ready(event) => event,
-            Pending::MediaData => match self.media_data.poll_event()? {
-                media_data::Event::Sample(sample) => Event::Sample(sample),
-                media_data::Event::Error(error) => Event::Error(Error::MediaData(error)),
-            },
+            Pending::Sample => self.sample_reader.poll_event()?,
         })
     }
 
     /// Ends the input at the bytes handed over so far
     ///
     /// The events that follow report a sample of a subscribed track whose
-    /// bytes the input ends inside as [`media_data::Error::TruncatedSample`],
-    /// and what the box reader reports of the end of the input. No sample is
-    /// requested after it, and no error is reported for one none of whose
-    /// bytes was handed over: a caller that cannot seek ends the input there.
+    /// bytes the input ends inside as [`Error::TruncatedSample`], and what the
+    /// box reader reports of the end of the input. No sample is requested
+    /// after it, and no error is reported for one none of whose bytes was
+    /// handed over: a caller that cannot seek ends the input there.
     pub fn finish(&mut self) {
         self.finished = true;
-        self.media_data.finish();
+        self.sample_reader.finish();
         self.boxes.finish();
     }
 
@@ -349,10 +333,10 @@ impl Demuxer {
         if let Some(location) = self.samples.unreported() {
             return Observation::Unreported(location);
         }
-        if self.media_data.has_event() {
-            return Observation::MediaDataEvent;
+        if self.sample_reader.has_event() {
+            return Observation::SampleEvent;
         }
-        if self.media_data.has_samples() {
+        if self.sample_reader.has_sample() {
             return Observation::Gathering;
         }
         match self.state {
@@ -380,8 +364,8 @@ impl Demuxer {
             // samples it lets the demuxer request, such as an `mdat` before
             // the samples in it.
             let read = if self.samples.is_reported()
-                && !self.media_data.has_samples()
-                && !self.media_data.has_event()
+                && !self.sample_reader.has_sample()
+                && !self.sample_reader.has_event()
             {
                 match self.refused.take() {
                     Some(refused) => Some(BoxRead::Held(refused)),
@@ -400,15 +384,10 @@ impl Demuxer {
                 }
                 (State::Movie, Observation::Wanted(index, location)) => {
                     self.samples.pass(index);
-                    match self.media_data.handle_location(location) {
-                        Ok(()) => (State::Movie, Step::Continue),
-                        Err(error) => (
-                            State::Movie,
-                            Step::Output(Pending::Ready(Event::Error(Error::MediaData(error)))),
-                        ),
-                    }
+                    self.sample_reader.handle_location(location);
+                    (State::Movie, Step::Continue)
                 }
-                (state, Observation::MediaDataEvent) => (state, Step::Output(Pending::MediaData)),
+                (state, Observation::SampleEvent) => (state, Step::Output(Pending::Sample)),
                 (_, Observation::Box(BoxRead::Movie(movie))) => (
                     State::Movie,
                     Step::Output(Pending::Ready(Event::Movie(movie))),

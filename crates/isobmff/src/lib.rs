@@ -66,7 +66,6 @@ extern crate alloc;
 
 pub mod demux;
 pub mod framing;
-pub mod media_data;
 pub mod mux;
 mod sample;
 pub mod structure_data;

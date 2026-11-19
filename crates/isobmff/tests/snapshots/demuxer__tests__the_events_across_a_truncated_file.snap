@@ -18,5 +18,5 @@ expression: lines
     "sample of track 1 at 16958, 4222 bytes",
     "sample of track 1 at 21614, 370 bytes",
     "sample of track 1 at 22320, 733 bytes",
-    "the bytes of a sample of a subscribed track cannot be lent: the input ends inside the sample of track 1 at offset 23497",
+    "the input ends inside the sample of track 1 at offset 23497",
 ]

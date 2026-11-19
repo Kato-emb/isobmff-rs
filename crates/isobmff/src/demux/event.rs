@@ -7,8 +7,7 @@ use isobmff_boxes::{
 use isobmff_core::BoxHeader;
 
 use super::error::Error;
-use crate::SampleLocation;
-use crate::media_data::Sample;
+use crate::{SampleLocation, SampleProperties};
 
 /// What a [`Demuxer`](super::Demuxer) found in its input
 #[non_exhaustive]
@@ -49,7 +48,9 @@ pub enum Event<'a> {
     /// reference entry names another file is one of that file, ISO/IEC
     /// 14496-12 §8.7.5.1: the entry is the one of the `dref` of its track that
     /// the `data_reference_index` of its sample entry, the
-    /// `sample_description_index`-th of the `stsd`, names.
+    /// `sample_description_index`-th of the `stsd`, names. The demuxer
+    /// requests no bytes of such a sample and lends none: a caller takes the
+    /// `size` bytes at that offset of the file the entry names.
     SampleLocation(SampleLocation),
     /// A sample of a subscribed track, its bytes lent from the demuxer's
     /// buffer
@@ -65,4 +66,28 @@ pub enum Event<'a> {
     },
     /// What cannot be read; demuxing goes on where the error says
     Error(Error),
+}
+
+/// A `sample` of a subscribed track, with its bytes
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Sample<'a> {
+    /// What the structure-data declares of the sample
+    pub properties: SampleProperties,
+    /// File offset of the first byte of the sample
+    pub offset: u64,
+    /// The bytes of the sample
+    pub bytes: &'a [u8],
+}
+
+impl Sample<'_> {
+    /// Returns where the bytes of the sample lie
+    #[must_use]
+    pub fn location(&self) -> SampleLocation {
+        SampleLocation {
+            properties: self.properties,
+            offset: self.offset,
+            size: u32::try_from(self.bytes.len()).unwrap_or(u32::MAX),
+        }
+    }
 }

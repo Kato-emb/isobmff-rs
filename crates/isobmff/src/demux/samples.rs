@@ -110,11 +110,6 @@ impl Samples {
             .map(|(index, &location)| (start.saturating_add(index), location))
     }
 
-    /// The location of the sample last handed over to be gathered
-    pub(super) fn handed(&self) -> Option<SampleLocation> {
-        self.location(self.next.checked_sub(1)?)
-    }
-
     /// Requests no bytes of the samples up to the one at `index`
     pub(super) fn pass(&mut self, index: usize) {
         self.next = index.saturating_add(1);

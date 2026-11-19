@@ -3,9 +3,7 @@
 #[cfg(test)]
 mod tests {
     use isobmff::demux::{Error, Event};
-    use isobmff::{
-        Demuxer, DemuxerConfig, SampleLocation, SampleProperties, media_data, structure_data,
-    };
+    use isobmff::{Demuxer, DemuxerConfig, SampleLocation, SampleProperties, structure_data};
     use isobmff_boxes::{IdentifiedMediaDataBox, SampleToChunkBox, TimeToSampleBox};
     use isobmff_core::BoxDefinition;
     use isobmff_test_support::conformance_files;
@@ -343,6 +341,49 @@ mod tests {
         assert!(reported.iter().any(|reported| matches!(reported, Reported::SampleLocation(location) if location.properties.track_id == 2)));
     }
 
+    /// `movie_moov_first.mp4` handed over a byte at a time, track 1 unsubscribed from once one byte of a sample of it is in hand
+    #[test]
+    fn a_track_unsubscribed_from_while_a_sample_of_it_is_gathered_is_lent_no_more_and_the_other_tracks_go_on()
+     {
+        let (name, file) = FIXTURES[0];
+        let every = read_every_way(name, file, config(None, None), Subscribe::Every);
+        let mut demuxer = Demuxer::new(config(None, None));
+        let mut reported = Vec::new();
+        let mut dropped = None;
+        loop {
+            drain(&mut demuxer, Subscribe::Every, &mut reported);
+            let Some(required) = demuxer.required_input() else {
+                break;
+            };
+            let gathered = locations(&reported).into_iter().find(|location| {
+                location.properties.track_id == 1
+                    && location.offset < required.position
+                    && required.position < location.offset + u64::from(location.size)
+            });
+            if dropped.is_none()
+                && let Some(location) = gathered
+            {
+                demuxer.unsubscribe_track(1);
+                dropped = Some(location);
+                continue;
+            }
+            let start = usize::try_from(required.position).unwrap();
+            match file.get(start..=start) {
+                Some(byte) => demuxer.handle_input(required.position, byte),
+                None => demuxer.finish(),
+            }
+        }
+        let dropped = dropped.unwrap();
+        let expected: Vec<_> = samples_lent(&every)
+            .into_iter()
+            .filter(|location| {
+                location.properties.track_id == 2 || location.offset < dropped.offset
+            })
+            .collect();
+        assert_eq!(samples_lent(&reported), expected);
+        lent_as_held(name, file, &reported);
+    }
+
     #[test]
     fn a_sample_over_the_limit_is_reported_and_the_samples_after_it_are_lent() {
         let (name, file) = FIXTURES[0];
@@ -350,10 +391,10 @@ mod tests {
         let over = reported
             .iter()
             .filter_map(|reported| {
-                if let Reported::Error(Error::MediaData(media_data::Error::SampleOverLimit {
+                if let Reported::Error(Error::SampleOverLimit {
                     location,
                     limit: 1024,
-                })) = reported
+                }) = reported
                 {
                     Some(location.size)
                 } else {
@@ -759,10 +800,31 @@ mod tests {
         );
     }
 
+    /// `(properties, bytes)` of each location `reported` holds of a track `in_media_data` names, its bytes those of `media_data` at its offset, by track and decoding time
+    fn sliced_by_track(
+        reported: &[Reported],
+        media_data: &[u8],
+        in_media_data: impl Fn(u32) -> bool,
+    ) -> Vec<(SampleProperties, Vec<u8>)> {
+        let mut sliced = locations(reported)
+            .into_iter()
+            .filter(|location| in_media_data(location.properties.track_id))
+            .map(|location| {
+                (
+                    location.properties,
+                    bytes_at(media_data, &location).to_vec(),
+                )
+            })
+            .collect::<Vec<_>>();
+        sliced.sort_by_key(|(properties, _)| (properties.track_id, properties.decoding_time));
+        sliced
+    }
+
     /// `movie_moov_last.mp4` with the media data of its video, track 1, in `external_movie.dat`, which its `url ` names, and that of its audio, track 2, in the file itself; its `moov` comes last, so a caller that cannot seek is lent its samples only when it holds the whole file
     #[test]
-    fn the_samples_of_a_track_in_another_file_are_located_and_not_lent() {
+    fn the_samples_of_a_track_in_another_file_are_located_there_and_not_lent() {
         let file = include_bytes!("fixtures/external_movie.mp4");
+        let media_data = include_bytes!("fixtures/external_movie.dat");
         let expected = read_where_required(MOVIE_LAST, config(None, None), Subscribe::Every);
         let reported = read_where_required(file, config(None, None), Subscribe::Every);
         assert_eq!(
@@ -781,19 +843,22 @@ mod tests {
                 located_by_track(&reported),
                 of_track(samples_by_track(&reported), 1).len(),
                 of_track(samples_by_track(&reported), 2),
+                sliced_by_track(&reported, media_data, |track_id| track_id == 1),
             ),
             (
                 located_by_track(&expected),
                 0,
                 of_track(samples_by_track(&expected), 2),
+                of_track(samples_by_track(&expected), 1),
             )
         );
     }
 
     /// `fragmented.mp4` with the media data of its movie fragments in `external_fragments.dat`, each track fragment based in that file
     #[test]
-    fn the_samples_of_movie_fragments_in_another_file_are_located_and_not_lent() {
+    fn the_samples_of_movie_fragments_in_another_file_are_located_there_and_not_lent() {
         let file = include_bytes!("fixtures/external_fragments.mp4");
+        let media_data = include_bytes!("fixtures/external_fragments.dat");
         let expected = read_where_required(FRAGMENTED, config(None, None), Subscribe::Every);
         let reported = read_every_way(
             "external_fragments.mp4",
@@ -802,8 +867,12 @@ mod tests {
             Subscribe::Every,
         );
         assert_eq!(
-            (located_by_track(&reported), samples_lent(&reported).len()),
-            (located_by_track(&expected), 0)
+            (
+                located_by_track(&reported),
+                samples_lent(&reported).len(),
+                sliced_by_track(&reported, media_data, |_| true),
+            ),
+            (located_by_track(&expected), 0, samples_by_track(&expected))
         );
     }
 
@@ -941,6 +1010,28 @@ mod tests {
             }
         }
         assert_eq!(differences, Vec::<String>::new());
+    }
+
+    /// `a6_tone_multifile.mp4`, whose one track names `./myData.dat` beside it, a file that holds nothing but the samples of that track
+    #[test]
+    #[ignore = "needs ISOBMFF_CONFORMANCE_DIR"]
+    fn the_samples_of_the_conformance_file_of_media_data_in_another_file_span_that_file() {
+        let file = conformance_files()
+            .into_iter()
+            .find(|file| file.name == "a6_tone_multifile.mp4")
+            .unwrap();
+        let media_data = std::fs::read(file.path.with_file_name("myData.dat")).unwrap();
+        let reported = read_where_required(&file.bytes, config(None, None), Subscribe::Every);
+        let mut located = locations(&reported);
+        located.sort_by_key(|location| location.offset);
+        let spanned: Vec<u8> = located
+            .iter()
+            .flat_map(|location| bytes_at(&media_data, location).to_vec())
+            .collect();
+        assert_eq!(
+            (located.len(), samples_lent(&reported).len(), spanned),
+            (48, 0, media_data)
+        );
     }
 
     /// What the demuxer reports of a file whose boxes disagree with themselves, in order
