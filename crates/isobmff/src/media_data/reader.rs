@@ -43,10 +43,11 @@ impl Ord for Held {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
-    /// No bytes of the first sample held are being gathered
+    /// No sample is being gathered
     Waiting,
-    /// The bytes of the first sample held are being gathered
-    Gathering,
+    /// The bytes of the sample at this location, taken off the samples held,
+    /// are being gathered
+    Gathering(SampleLocation),
 }
 
 /// What the reader holds, in its state, that decides its next step
@@ -58,12 +59,16 @@ enum Observation {
     /// The first sample held is larger than the limit
     OverLimit(SampleLocation),
     /// The first sample held wants its bytes
-    Wanted,
+    Wanted(SampleLocation),
+    /// No byte of the sample being gathered is in hand, and a sample held comes
+    /// before it
+    Preceded(SampleLocation),
     /// Every byte of the sample being gathered is in hand
     InHand(SampleLocation),
     /// The input ended inside the sample being gathered
     Truncated(SampleLocation),
-    /// The input ended before a byte of the first sample held was taken
+    /// The input ended before a byte of the first sample held, or of the
+    /// sample being gathered, was taken
     Abandoned,
     /// Nothing without more input
     NeedMoreData,
@@ -97,7 +102,9 @@ enum Step {
 /// lends each sample from [`poll_event`](Self::poll_event) once its bytes are
 /// in hand. It requests the samples it holds in the order of their file
 /// offsets, those at the same offset in the order they were handed over, and
-/// holds the bytes of one sample at a time. Handing input over never fails: a
+/// holds the bytes of one sample at a time: a sample whose bytes it has begun
+/// to gather is finished first, even where one at a lower offset is handed
+/// over meanwhile. Handing input over never fails: a
 /// sample larger than the limit, or one the input ends inside, is reported as
 /// [`Event::Error`]. The reader does no I/O, and does not tell which file the
 /// locations lie in: that is the caller's, from the data reference of each
@@ -199,8 +206,13 @@ impl MediaDataReader {
     )]
     pub fn handle_location(&mut self, location: SampleLocation) -> Result<(), Error> {
         assert!(!self.finished, "a location handed over after finish");
+        let gathering = match self.state {
+            State::Gathering(_) => 1,
+            State::Waiting => 0,
+        };
         let sample_count = u64::try_from(self.held.len())
             .unwrap_or(u64::MAX)
+            .saturating_add(gathering)
             .saturating_add(1);
         if sample_count > self.sample_count_limit {
             return Err(Error::SampleCountOverLimit {
@@ -222,7 +234,7 @@ impl MediaDataReader {
     /// Returns whether the reader holds a sample it has not lent or reported
     #[must_use]
     pub fn has_samples(&self) -> bool {
-        !self.held.is_empty()
+        matches!(self.state, State::Gathering(_)) || !self.held.is_empty()
     }
 
     /// Returns whether an event waits for [`poll_event`](Self::poll_event)
@@ -233,23 +245,22 @@ impl MediaDataReader {
 
     /// Returns where the reader wants input next, or `None` once it wants none
     ///
-    /// The position is the file offset of the next byte of the first sample
-    /// held, in the order of their file offsets, and the length the bytes of
-    /// it still wanted. The reader wants none while it holds no sample, and
+    /// The position is the file offset of the next byte of the sample being
+    /// gathered, or else of the first sample held in the order of their file
+    /// offsets, and the length the bytes of it still wanted. The reader wants none while it holds no sample, and
     /// after [`finish`](Self::finish).
     #[must_use]
     pub fn required_input(&self) -> Option<RequiredInput> {
         if self.finished {
             return None;
         }
-        let Reverse(head) = self.held.peek()?;
-        let gathered = match self.state {
-            State::Gathering => length_of(self.bytes.len()),
-            State::Waiting => 0,
+        let (location, gathered) = match self.state {
+            State::Gathering(location) => (location, length_of(self.bytes.len())),
+            State::Waiting => (self.held.peek()?.0.location, 0),
         };
         Some(RequiredInput {
-            position: head.location.offset.saturating_add(gathered),
-            length: Some(u64::from(head.location.size).saturating_sub(gathered)),
+            position: location.offset.saturating_add(gathered),
+            length: Some(u64::from(location.size).saturating_sub(gathered)),
         })
     }
 
@@ -270,7 +281,7 @@ impl MediaDataReader {
         if self.pending.is_none() {
             self.step();
         }
-        if self.pending.is_some() || self.state != State::Gathering {
+        if self.pending.is_some() || self.state == State::Waiting {
             return;
         }
         let Some(required) = self.required_input() else {
@@ -322,25 +333,41 @@ impl MediaDataReader {
 
     /// What the reader holds, in its state, that decides its next step
     fn observe(&self) -> Observation {
-        let Some(Reverse(head)) = self.held.peek() else {
-            return Observation::NoSample;
-        };
-        let location = head.location;
-        let size = u64::from(location.size);
-        let gathered = match self.state {
-            State::Gathering => length_of(self.bytes.len()),
-            State::Waiting => 0,
-        };
         match self.state {
-            State::Waiting if size > self.sample_size_limit => Observation::OverLimit(location),
-            State::Waiting if size == 0 => Observation::Empty(location),
-            State::Waiting | State::Gathering if self.finished && gathered == 0 => {
-                Observation::Abandoned
+            State::Gathering(location) => {
+                let gathered = length_of(self.bytes.len());
+                let preceded = self
+                    .held
+                    .peek()
+                    .is_some_and(|Reverse(head)| head.location.offset < location.offset);
+                if gathered == u64::from(location.size) {
+                    Observation::InHand(location)
+                } else if self.finished && gathered == 0 {
+                    Observation::Abandoned
+                } else if gathered == 0 && preceded {
+                    Observation::Preceded(location)
+                } else if self.finished {
+                    Observation::Truncated(location)
+                } else {
+                    Observation::NeedMoreData
+                }
             }
-            State::Waiting => Observation::Wanted,
-            State::Gathering if gathered == size => Observation::InHand(location),
-            State::Gathering if self.finished => Observation::Truncated(location),
-            State::Gathering => Observation::NeedMoreData,
+            State::Waiting => {
+                let Some(Reverse(head)) = self.held.peek() else {
+                    return Observation::NoSample;
+                };
+                let location = head.location;
+                let size = u64::from(location.size);
+                if size > self.sample_size_limit {
+                    Observation::OverLimit(location)
+                } else if size == 0 {
+                    Observation::Empty(location)
+                } else if self.finished {
+                    Observation::Abandoned
+                } else {
+                    Observation::Wanted(location)
+                }
+            }
         }
     }
 
@@ -348,7 +375,7 @@ impl MediaDataReader {
     fn step(&mut self) {
         loop {
             let (next_state, step) = match (self.state, self.observe()) {
-                (_, Observation::NoSample) => (State::Waiting, Step::NeedMoreData),
+                (State::Waiting, Observation::NoSample) => (State::Waiting, Step::NeedMoreData),
                 (State::Waiting, Observation::OverLimit(location)) => {
                     self.held.pop();
                     (
@@ -367,35 +394,51 @@ impl MediaDataReader {
                 // Why drop a sample none of whose bytes came without an
                 // error: a caller that cannot seek ends the input where the
                 // reader wants bytes before those it has read.
-                (_, Observation::Abandoned) => {
+                (State::Waiting, Observation::Abandoned) => {
                     self.held.pop();
                     (State::Waiting, Step::Continue)
                 }
-                (State::Waiting, Observation::Wanted) => {
-                    self.bytes.clear();
-                    (State::Gathering, Step::NeedMoreData)
+                (State::Gathering(_), Observation::Abandoned) => (State::Waiting, Step::Continue),
+                // Why put it back rather than gather it: none of its bytes is
+                // in hand, and the samples held are requested in the order of
+                // their offsets.
+                (State::Gathering(_), Observation::Preceded(location)) => {
+                    self.held.push(Reverse(Held {
+                        location,
+                        order: self.handed,
+                    }));
+                    self.handed = self.handed.wrapping_add(1);
+                    (State::Waiting, Step::Continue)
                 }
-                (State::Gathering, Observation::InHand(location)) => {
+                // Why take the sample off the samples held as its bytes are
+                // gathered: a location handed over before them would take its
+                // place at the head, past the checks of a sample to begin.
+                (State::Waiting, Observation::Wanted(location)) => {
                     self.held.pop();
+                    self.bytes.clear();
+                    (State::Gathering(location), Step::NeedMoreData)
+                }
+                (State::Gathering(_), Observation::InHand(location)) => {
                     (State::Waiting, Step::Output(Output::Sample(location)))
                 }
-                (State::Gathering, Observation::Truncated(location)) => {
-                    self.held.pop();
-                    (
-                        State::Waiting,
-                        Step::Output(Output::Error(Error::TruncatedSample { location })),
-                    )
-                }
+                (State::Gathering(_), Observation::Truncated(location)) => (
+                    State::Waiting,
+                    Step::Output(Output::Error(Error::TruncatedSample { location })),
+                ),
                 (
-                    State::Gathering,
+                    State::Gathering(_),
                     Observation::NeedMoreData
+                    | Observation::NoSample
                     | Observation::OverLimit(_)
                     | Observation::Empty(_)
-                    | Observation::Wanted,
+                    | Observation::Wanted(_),
                 )
                 | (
                     State::Waiting,
-                    Observation::NeedMoreData | Observation::InHand(_) | Observation::Truncated(_),
+                    Observation::NeedMoreData
+                    | Observation::Preceded(_)
+                    | Observation::InHand(_)
+                    | Observation::Truncated(_),
                 ) => (self.state, Step::NeedMoreData),
             };
             self.state = next_state;

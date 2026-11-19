@@ -212,6 +212,62 @@ mod tests {
         assert_eq!(read_every_way(&file, &locations, 100), reported);
     }
 
+    /// A sample over the size limit, at a lower offset, handed over after one the reader wants the bytes of and before any of them came
+    #[test]
+    fn a_sample_handed_over_after_one_wanted_is_checked_against_the_size_limit_and_its_bytes_never_requested()
+     {
+        let file = media_data(100);
+        let mut reader = MediaDataReader::new(2, 4);
+        reader.handle_location(at(1, 10, 4)).unwrap();
+        reader.handle_location(at(1, 0, 8)).unwrap();
+        let mut reported = Vec::new();
+        let mut handed = Vec::new();
+        drain(&mut reader, &mut reported);
+        while let Some(required) = reader.required_input() {
+            let start = usize::try_from(required.position).unwrap();
+            let end = start + usize::try_from(required.length.unwrap()).unwrap();
+            handed.push((start, end));
+            reader.handle_input(required.position, file.get(start..end).unwrap());
+            drain(&mut reader, &mut reported);
+        }
+        assert_eq!(
+            (reported, handed),
+            (
+                vec![
+                    Reported::Error(Error::SampleOverLimit {
+                        location: at(1, 0, 8),
+                        limit: 4
+                    }),
+                    lent(&file, at(1, 10, 4)),
+                ],
+                vec![(10, 14)]
+            )
+        );
+    }
+
+    /// A sample at offset 0 handed over once 2 of the 4 bytes of the one at offset 10 are in hand
+    #[test]
+    fn a_sample_being_gathered_is_finished_before_one_at_a_lower_offset_handed_over_meanwhile() {
+        let file = media_data(100);
+        let mut reader = MediaDataReader::new(2, 1 << 20);
+        reader.handle_location(at(1, 10, 4)).unwrap();
+        reader.handle_input(10, file.get(10..12).unwrap());
+        let wanted = reader.required_input();
+        reader.handle_location(at(2, 0, 2)).unwrap();
+        assert_eq!(reader.required_input(), wanted);
+        let mut reported = Vec::new();
+        drain(&mut reader, &mut reported);
+        while let Some(required) = reader.required_input() {
+            let start = usize::try_from(required.position).unwrap();
+            reader.handle_input(required.position, file.get(start..).unwrap());
+            drain(&mut reader, &mut reported);
+        }
+        assert_eq!(
+            reported,
+            [lent(&file, at(1, 10, 4)), lent(&file, at(2, 0, 2))]
+        );
+    }
+
     #[test]
     fn a_sample_past_the_count_limit_is_refused_and_the_reader_left_as_it_was() {
         let file = media_data(100);
