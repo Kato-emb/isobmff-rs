@@ -45,9 +45,9 @@ impl Ord for Held {
 enum State {
     /// No sample is being gathered
     Waiting,
-    /// The bytes of the sample at this location, taken off the samples held,
-    /// are being gathered
-    Gathering(SampleLocation),
+    /// The bytes of this sample, taken off the samples held with the order it
+    /// was handed over in, are being gathered
+    Gathering(Held),
 }
 
 /// What the reader holds, in its state, that decides its next step
@@ -59,10 +59,10 @@ enum Observation {
     /// The first sample held is larger than the limit
     OverLimit(SampleLocation),
     /// The first sample held wants its bytes
-    Wanted(SampleLocation),
+    Wanted(Held),
     /// No byte of the sample being gathered is in hand, and a sample held comes
     /// before it
-    Preceded(SampleLocation),
+    Preceded(Held),
     /// Every byte of the sample being gathered is in hand
     InHand(SampleLocation),
     /// The input ended inside the sample being gathered
@@ -255,7 +255,7 @@ impl MediaDataReader {
             return None;
         }
         let (location, gathered) = match self.state {
-            State::Gathering(location) => (location, length_of(self.bytes.len())),
+            State::Gathering(held) => (held.location, length_of(self.bytes.len())),
             State::Waiting => (self.held.peek()?.0.location, 0),
         };
         Some(RequiredInput {
@@ -334,7 +334,8 @@ impl MediaDataReader {
     /// What the reader holds, in its state, that decides its next step
     fn observe(&self) -> Observation {
         match self.state {
-            State::Gathering(location) => {
+            State::Gathering(held) => {
+                let location = held.location;
                 let gathered = length_of(self.bytes.len());
                 let preceded = self
                     .held
@@ -345,7 +346,7 @@ impl MediaDataReader {
                 } else if self.finished && gathered == 0 {
                     Observation::Abandoned
                 } else if gathered == 0 && preceded {
-                    Observation::Preceded(location)
+                    Observation::Preceded(held)
                 } else if self.finished {
                     Observation::Truncated(location)
                 } else {
@@ -365,7 +366,7 @@ impl MediaDataReader {
                 } else if self.finished {
                     Observation::Abandoned
                 } else {
-                    Observation::Wanted(location)
+                    Observation::Wanted(*head)
                 }
             }
         }
@@ -402,21 +403,17 @@ impl MediaDataReader {
                 // Why put it back rather than gather it: none of its bytes is
                 // in hand, and the samples held are requested in the order of
                 // their offsets.
-                (State::Gathering(_), Observation::Preceded(location)) => {
-                    self.held.push(Reverse(Held {
-                        location,
-                        order: self.handed,
-                    }));
-                    self.handed = self.handed.wrapping_add(1);
+                (State::Gathering(_), Observation::Preceded(held)) => {
+                    self.held.push(Reverse(held));
                     (State::Waiting, Step::Continue)
                 }
                 // Why take the sample off the samples held as its bytes are
                 // gathered: a location handed over before them would take its
                 // place at the head, past the checks of a sample to begin.
-                (State::Waiting, Observation::Wanted(location)) => {
+                (State::Waiting, Observation::Wanted(held)) => {
                     self.held.pop();
                     self.bytes.clear();
-                    (State::Gathering(location), Step::NeedMoreData)
+                    (State::Gathering(held), Step::NeedMoreData)
                 }
                 (State::Gathering(_), Observation::InHand(location)) => {
                     (State::Waiting, Step::Output(Output::Sample(location)))

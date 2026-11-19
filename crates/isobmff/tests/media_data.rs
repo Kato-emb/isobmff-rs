@@ -268,6 +268,31 @@ mod tests {
         );
     }
 
+    /// A sample at offset 10 the reader wants, then another at offset 10 and one at offset 0 handed over before any of its bytes came
+    #[test]
+    fn a_sample_put_back_for_one_at_a_lower_offset_keeps_its_place_among_those_at_its_offset() {
+        let file = media_data(100);
+        let mut reader = MediaDataReader::new(4, 1 << 20);
+        reader.handle_location(at(1, 10, 4)).unwrap();
+        reader.handle_location(at(3, 10, 4)).unwrap();
+        reader.handle_location(at(2, 0, 2)).unwrap();
+        let mut reported = Vec::new();
+        drain(&mut reader, &mut reported);
+        while let Some(required) = reader.required_input() {
+            let start = usize::try_from(required.position).unwrap();
+            reader.handle_input(required.position, file.get(start..).unwrap());
+            drain(&mut reader, &mut reported);
+        }
+        assert_eq!(
+            reported,
+            [
+                lent(&file, at(2, 0, 2)),
+                lent(&file, at(1, 10, 4)),
+                lent(&file, at(3, 10, 4)),
+            ]
+        );
+    }
+
     #[test]
     fn a_sample_past_the_count_limit_is_refused_and_the_reader_left_as_it_was() {
         let file = media_data(100);
