@@ -41,12 +41,17 @@ pub enum Event<'a> {
     /// Where the bytes of a sample of the `moov` or of a `moof` lie, for
     /// every sample of every track, in the order of their file offsets
     /// within the box
+    ///
+    /// A sample that lies in an `imda` not yet read follows that `imda`
+    /// instead, reported as [`Event::Box`], in the order of the file offsets
+    /// of the samples that lie in it.
     SampleLocation(SampleLocation),
     /// A sample of a subscribed track, its bytes lent from the demuxer's
     /// buffer
     Sample(Sample<'a>),
     /// A box at file level the demuxer does not read into a value, such as an
-    /// `mdat`; its payload is not requested
+    /// `mdat`; its payload is not requested, but for the identifier of an
+    /// `imda`
     Box {
         /// File offset of the box
         offset: u64,

@@ -27,6 +27,14 @@ pub struct FramerConfig {
     /// bounds what the reader holds. The header needs no limit: it is at most
     /// 32 bytes.
     pub payload_limit: u64,
+    /// The types of the boxes whose payload the reader gathers the front
+    /// part of, the rest being skipped; a box whose type
+    /// [`gathered_box_types`](Self::gathered_box_types) holds is gathered
+    /// whole
+    ///
+    /// A front part longer than [`payload_limit`](Self::payload_limit) is
+    /// reported as [`Error::PayloadOverLimit`](crate::framing::Error::PayloadOverLimit), and its box skipped.
+    pub front_part_box_types: Vec<FrontPart>,
 }
 
 impl FramerConfig {
@@ -54,6 +62,33 @@ impl FramerConfig {
         Self {
             gathered_box_types: Self::STRUCTURE_DATA.to_vec(),
             payload_limit,
+            front_part_box_types: Vec::new(),
         }
     }
+}
+
+/// The first bytes of the payload of a box, the `front part` of it, that a [`BoxReader`](crate::framing::BoxReader) gathers
+///
+/// The `FrontPartBox`, ISO/IEC 23001-14, which ISO/IEC 14496-12 E.15.1
+/// sets to hold the `imda_identifier` of an
+/// [`IdentifiedMediaDataBox`](crate::boxes::IdentifiedMediaDataBox).
+///
+/// ```
+/// use isobmff::framing::{FramerConfig, FrontPart};
+/// use isobmff_core::BoxType;
+///
+/// // Gather the identifier of each `imda`, and skip its media data
+/// let mut config = FramerConfig::new(16 * 1024 * 1024);
+/// config.front_part_box_types.push(FrontPart { box_type: BoxType::compact(*b"imda"), length: 4 });
+/// ```
+#[expect(
+    clippy::exhaustive_structs,
+    reason = "a caller of a reader builds one, and a front part is the bytes of a type of box up to a length"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FrontPart {
+    /// Type of the box
+    pub box_type: BoxType,
+    /// Number of the bytes of its payload gathered, from the first
+    pub length: u64,
 }

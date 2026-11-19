@@ -9,7 +9,7 @@ use isobmff_boxes::{
 use isobmff_core::BoxEncode;
 
 use super::Error;
-use super::sample::{self, Sample, TrackSampleDescription};
+use super::sample::{self, MediaData, Sample, TrackSampleDescription};
 use crate::SampleLocation;
 
 /// Length of the header of the `mdat` that follows each `moof`, with a `largesize`
@@ -26,8 +26,8 @@ const SAMPLE_LENGTH: u64 = 8 + 40 + 20 + 24 + 16;
 struct Track {
     track_id: u32,
     /// The `data_reference_index` of each sample entry of the track, and
-    /// whether it places the media data in the same file
-    entries: Vec<(u16, bool)>,
+    /// where it places the media data
+    entries: Vec<(u16, MediaData)>,
     // Why not sum the `sample_duration`s of the samples held: that sum on
     // every sample makes taking a fragment's samples quadratic in their
     // number, and the samples of earlier fragments are no longer held.
@@ -120,7 +120,7 @@ struct Track {
 /// written.extend_from_slice(b"abcde");
 ///
 /// // The fragment declares the samples where their bytes lie in the file
-/// let mut reader = StructureDataReader::new(1024);
+/// let mut reader = StructureDataReader::new(1024, 16);
 /// reader.handle_movie(&moov)?;
 /// let locations: Vec<_> = reader.handle_movie_fragment(&moof, 0)?.collect();
 /// let media_data = u64::try_from(written.len())? - 5;

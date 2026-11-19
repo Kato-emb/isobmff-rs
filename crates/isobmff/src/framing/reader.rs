@@ -23,6 +23,9 @@ enum State {
     // header gives it: Skipping cannot derive its own, with nothing in hand,
     // and both states keep the box in one shape.
     Gathering { offset: u64, header: BoxHeader },
+    /// The header of a box the reader gathers the front part of was
+    /// consumed; its payload starts the unconsumed bytes
+    FrontPart { offset: u64, header: BoxHeader },
     /// The header of a box the reader does not gather, or cannot, was
     /// consumed; the bytes up to its end are dropped
     Skipping { offset: u64, header: BoxHeader },
@@ -53,6 +56,9 @@ enum Observation {
     MalformedHeader(isobmff_core::Error),
     /// The unconsumed bytes reach the end of the box the state reads
     BoxEndInHand,
+    /// The unconsumed bytes hold the front part the state gathers, or the
+    /// whole payload where the input ends inside a box of size 0
+    FrontPartInHand,
     /// The unconsumed bytes stop before what the state waits for, and more
     /// input may follow
     NeedMoreData,
@@ -73,6 +79,11 @@ enum Output {
         offset: u64,
         header: BoxHeader,
         payload: Range<usize>,
+    },
+    FrontPart {
+        offset: u64,
+        header: BoxHeader,
+        front_part: Range<usize>,
     },
     Error(Error),
 }
@@ -103,8 +114,9 @@ struct Transition {
 /// to that one with [`handle_input`](Self::handle_input), and reports each
 /// box at file level from [`poll_event`](Self::poll_event): a box whose type
 /// [`FramerConfig::gathered_box_types`] holds as [`Event::Gathered`], with
-/// its payload; any other as [`Event::Box`], whose payload it never
-/// requests. Handing input over never fails: a box that cannot be read is
+/// its payload; one whose type [`FramerConfig::front_part_box_types`] holds as
+/// [`Event::FrontPart`], with the first bytes of its payload; any other as
+/// [`Event::Box`], whose payload it never requests. Handing input over never fails: a box that cannot be read is
 /// reported as [`Event::Error`]. The reader does no I/O, and does not read
 /// the payload it gathers into a value. It does not report a box it skips
 /// that runs past the end of the input: a caller sees that by comparing the
@@ -200,6 +212,12 @@ impl BoxReader {
                     .payload_len()
                     .map(|payload_len| payload_len.saturating_sub(unconsumed).max(1)),
             }),
+            State::FrontPart { header, .. } => Some(RequiredInput {
+                position: self.cursor,
+                length: self
+                    .front_part_length(header)
+                    .map(|length| length.saturating_sub(unconsumed).max(1)),
+            }),
             State::Skipping { offset, header } => {
                 let end = end_of_box(offset, header)?;
                 Some(RequiredInput {
@@ -291,6 +309,15 @@ impl BoxReader {
                 payload_offset: offset.saturating_add(header.encoded_len()),
                 payload: self.input.get(payload),
             },
+            Output::FrontPart {
+                offset,
+                header,
+                front_part,
+            } => Event::FrontPart {
+                offset,
+                header,
+                front_part: self.input.get(front_part),
+            },
             Output::Error(error) => Event::Error(error),
         })
     }
@@ -319,6 +346,11 @@ impl BoxReader {
                     // declares no length, so only a payload longer than the
                     // limit shows that it is.
                     .unwrap_or(self.config.payload_limit.saturating_add(1))
+                    .saturating_sub(unconsumed),
+            ),
+            State::FrontPart { header, .. } => Take::Copy(
+                self.front_part_length(header)
+                    .unwrap_or(0)
                     .saturating_sub(unconsumed),
             ),
             State::Skipping { offset, header } => Take::Skip(
@@ -367,9 +399,19 @@ impl BoxReader {
         // when that length is over the limit, and what is in hand past its
         // payload belongs to the boxes after it.
         let gathered_over_limit = length_of(unconsumed) > limit;
+        let front_part_length = match self.state {
+            State::FrontPart { header, .. } => self.front_part_length(header).unwrap_or(0),
+            State::Header | State::Gathering { .. } | State::Skipping { .. } | State::Ended => 0,
+        };
         match (
             self.state,
-            observe(self.state, self.cursor, unconsumed, input),
+            observe(
+                self.state,
+                self.cursor,
+                unconsumed,
+                input,
+                front_part_length,
+            ),
         ) {
             (State::Ended, _) => Transition {
                 next_state: State::Ended,
@@ -391,6 +433,26 @@ impl BoxReader {
                 consume: header_length(header),
                 step: Step::Continue,
             },
+            (State::Header, Observation::Header(header))
+                if self
+                    .front_part_length(header)
+                    .is_some_and(|length| length > limit) =>
+            {
+                Transition {
+                    next_state: State::Skipping { offset, header },
+                    consume: header_length(header),
+                    step: over_limit(offset, header),
+                }
+            }
+            (State::Header, Observation::Header(header))
+                if self.front_part_length(header).is_some() =>
+            {
+                Transition {
+                    next_state: State::FrontPart { offset, header },
+                    consume: header_length(header),
+                    step: Step::Continue,
+                }
+            }
             (State::Header, Observation::Header(header)) => Transition {
                 next_state: State::Skipping { offset, header },
                 consume: header_length(header),
@@ -458,7 +520,48 @@ impl BoxReader {
                     header,
                 })),
             },
-            (State::Header | State::Gathering { .. }, Observation::NeedMoreData) => Transition {
+            (
+                State::FrontPart {
+                    offset: box_offset,
+                    header,
+                },
+                Observation::FrontPartInHand,
+            ) => {
+                // Why the bytes in hand for a box of size 0 the input ends
+                // inside: its payload runs to the end of the input, so a
+                // front part shorter than the length is the whole payload.
+                let length = clamp(front_part_length, unconsumed.len());
+                Transition {
+                    next_state: State::Skipping {
+                        offset: box_offset,
+                        header,
+                    },
+                    consume: length,
+                    step: Step::Output(Output::FrontPart {
+                        offset: box_offset,
+                        header,
+                        front_part: start..start.saturating_add(length),
+                    }),
+                }
+            }
+            (
+                State::FrontPart {
+                    offset: box_offset,
+                    header,
+                },
+                Observation::InputEndedShort | Observation::InputExhausted,
+            ) => Transition {
+                next_state: State::Ended,
+                consume: unconsumed.len(),
+                step: Step::Output(Output::Error(Error::TruncatedBox {
+                    offset: box_offset,
+                    header,
+                })),
+            },
+            (
+                State::Header | State::Gathering { .. } | State::FrontPart { .. },
+                Observation::NeedMoreData,
+            ) => Transition {
                 next_state: self.state,
                 consume: 0,
                 step: Step::NeedMoreData,
@@ -480,7 +583,15 @@ impl BoxReader {
                 | Observation::Header(_)
                 | Observation::MalformedHeader(_),
             )
-            | (State::Gathering { .. }, Observation::Header(_) | Observation::MalformedHeader(_))
+            | (
+                State::Gathering { .. } | State::FrontPart { .. },
+                Observation::Header(_) | Observation::MalformedHeader(_),
+            )
+            | (State::FrontPart { .. }, Observation::BoxEndInHand)
+            | (
+                State::Header | State::Gathering { .. } | State::Skipping { .. },
+                Observation::FrontPartInHand,
+            )
             | (State::Header, Observation::BoxEndInHand | Observation::InputExhausted) => {
                 Transition {
                     next_state: State::Ended,
@@ -495,6 +606,23 @@ impl BoxReader {
         self.config.gathered_box_types.contains(&header.box_type())
     }
 
+    /// Length of the front part the reader gathers of the box of `header`,
+    /// that the settings give its type or its payload where that is shorter,
+    /// or `None` where the settings give its type none
+    fn front_part_length(&self, header: BoxHeader) -> Option<u64> {
+        let length = self
+            .config
+            .front_part_box_types
+            .iter()
+            .find(|front_part| front_part.box_type == header.box_type())?
+            .length;
+        Some(
+            header
+                .payload_len()
+                .map_or(length, |payload_len| payload_len.min(length)),
+        )
+    }
+
     /// Length of the header that starts the unconsumed bytes, as far as they
     /// show it
     fn header_length_wanted(&self) -> u64 {
@@ -505,8 +633,14 @@ impl BoxReader {
     }
 }
 
-/// Classifies the unconsumed bytes in `state`, `cursor` being the file offset past them
-fn observe(state: State, cursor: u64, bytes: &[u8], input: Input) -> Observation {
+/// Classifies the unconsumed bytes in `state`, `cursor` being the file offset past them and `front_part_length` the length of the front part the state gathers
+fn observe(
+    state: State,
+    cursor: u64,
+    bytes: &[u8],
+    input: Input,
+    front_part_length: u64,
+) -> Observation {
     let in_hand = match state {
         State::Header => match BoxHeader::decode(bytes) {
             Ok((header, _)) => return Observation::Header(header),
@@ -519,6 +653,13 @@ fn observe(state: State, cursor: u64, bytes: &[u8], input: Input) -> Observation
             Some(payload_len) => length_of(bytes) >= payload_len,
             None => input == Input::Ends,
         },
+        State::FrontPart { header, .. }
+            if length_of(bytes) >= front_part_length
+                || (header.payload_len().is_none() && input == Input::Ends) =>
+        {
+            return Observation::FrontPartInHand;
+        }
+        State::FrontPart { .. } => false,
         State::Skipping { offset, header } => {
             end_of_box(offset, header).is_some_and(|end| cursor >= end)
         }

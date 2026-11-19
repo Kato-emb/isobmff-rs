@@ -25,3 +25,7 @@ harness = false
 [[bench]]
 name = "movie_fragment"
 harness = false
+
+[[bench]]
+name = "identified_media_data"
+harness = false

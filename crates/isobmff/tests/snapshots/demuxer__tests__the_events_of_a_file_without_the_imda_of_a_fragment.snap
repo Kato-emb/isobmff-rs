@@ -1,0 +1,16 @@
+---
+source: crates/isobmff/tests/demuxer.rs
+expression: lines
+---
+[
+    "FileType",
+    "Movie([1, 2])",
+    "MovieFragment(1)",
+    "Box(\"imda\")",
+    "MovieFragment(2)",
+    "Box(\"imda\")",
+    "MovieFragment(3)",
+    "Box(\"imda\")",
+    "Box(\"free\")",
+    "the structure-data cannot be resolved at the end of the input: 23 samples lie in the imda of imda_identifier 2, and the file has none",
+]

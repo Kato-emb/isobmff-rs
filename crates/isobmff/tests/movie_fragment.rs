@@ -65,7 +65,7 @@ mod tests {
         movie: &MovieBox,
         fragments: &[(u64, MovieFragmentBox)],
     ) -> Result<Vec<SampleLocation>, Error> {
-        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
+        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT, 16);
         let mut found: Vec<_> = reader.handle_movie(movie)?.collect();
         for (offset, moof) in fragments {
             found.extend(reader.handle_movie_fragment(moof, *offset)?);
@@ -108,7 +108,7 @@ mod tests {
         ] {
             let (file, path) = fixture(name);
             let (movie, fragments) = structure_data_of(&file);
-            let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
+            let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT, 16);
             let mut found: Vec<_> = reader
                 .handle_movie_lossy(&movie.unwrap())
                 .unwrap()
@@ -269,7 +269,7 @@ mod tests {
 
     #[test]
     fn a_fragment_refused_leaves_the_decoding_times_of_its_tracks_as_they_were() {
-        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
+        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT, 16);
         assert_eq!(
             reader
                 .handle_movie_fragment(&moof([traf(1, 1, None)]), 0)
@@ -317,7 +317,7 @@ mod tests {
     #[test]
     fn a_tfdt_past_the_samples_before_it_is_taken_and_one_before_them_is_refused_and_taken_when_read_lossily()
      {
-        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
+        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT, 16);
         let _ = reader
             .handle_movie(&movie_with_samples_and_fragments())
             .unwrap()
@@ -355,7 +355,7 @@ mod tests {
     fn the_tfdt_of_a_track_with_no_sample_before_it_disagrees_with_nothing() {
         let mut movie = movie_with_samples_and_fragments();
         movie.trak = vec![track(1, 10, &[], &[], &[])];
-        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
+        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT, 16);
         let _ = reader.handle_movie(&movie).unwrap().count();
         let found: Vec<_> = reader
             .handle_movie_fragment(&moof([traf_at(219)]), 1000)
@@ -366,7 +366,7 @@ mod tests {
 
     #[test]
     fn a_fragment_refused_for_its_tfdt_leaves_the_decoding_times_as_they_were() {
-        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
+        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT, 16);
         let _ = reader
             .handle_movie(&movie_with_samples_and_fragments())
             .unwrap()
@@ -393,7 +393,7 @@ mod tests {
 
     #[test]
     fn a_sample_that_takes_a_default_nothing_gives_is_refused() {
-        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
+        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT, 16);
         let mut no_trex = movie_with_samples_and_fragments();
         no_trex.mvex = None;
         let _ = reader.handle_movie(&no_trex).unwrap().count();
@@ -444,7 +444,7 @@ mod tests {
     fn a_sample_whose_flags_nothing_gives_is_refused_and_one_whose_row_gives_them_is_not() {
         let mut no_trex = movie_with_samples_and_fragments();
         no_trex.mvex = None;
-        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT);
+        let mut reader = StructureDataReader::new(SAMPLE_COUNT_LIMIT, 16);
         let _ = reader.handle_movie(&no_trex).unwrap().count();
         let mut without_flags = traf(1, 1, None);
         without_flags.tfhd.default_sample_duration = Some(20);

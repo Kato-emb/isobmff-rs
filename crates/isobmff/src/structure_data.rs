@@ -2,7 +2,8 @@
 //!
 //! [`StructureDataReader`] takes the `moov` of a file, and each `moof` after
 //! it, read into their values, and returns the
-//! [`SampleLocation`](crate::SampleLocation) of each sample they declare. [`SampleTableWriter`] takes the locations of the samples of
+//! [`SampleLocation`](crate::SampleLocation) of each sample they declare,
+//! those that lie in an `imda` once it has taken where that `imda` lies. [`SampleTableWriter`] takes the locations of the samples of
 //! a track and writes the sample table that declares them, and
 //! [`MovieFragmentWriter`] the samples of each fragment and writes the `moof`
 //! that declares them. [`media_duration`] and [`composition_end`] say how
@@ -11,6 +12,7 @@
 //! subsegments a segment index declares lie and when they are presented.
 
 mod error;
+mod identified_media_data;
 mod movie_fragment;
 mod movie_fragment_writer;
 mod reader;

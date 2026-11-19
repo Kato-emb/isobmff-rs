@@ -3,8 +3,8 @@
 #[cfg(test)]
 mod tests {
     use isobmff::demux::{Error, Event};
-    use isobmff::{Demuxer, DemuxerConfig, SampleLocation, structure_data};
-    use isobmff_boxes::{SampleToChunkBox, TimeToSampleBox};
+    use isobmff::{Demuxer, DemuxerConfig, SampleLocation, SampleProperties, structure_data};
+    use isobmff_boxes::{IdentifiedMediaDataBox, SampleToChunkBox, TimeToSampleBox};
     use isobmff_core::BoxDefinition;
     use isobmff_test_support::conformance_files;
     use isobmff_test_support::fixtures::fragments_ahead_of_their_samples;
@@ -494,6 +494,335 @@ mod tests {
         let reported = read_every_way(name, &without_movie, config(None, None), Subscribe::Every);
         let lines = reported.iter().map(Reported::line).collect::<Vec<_>>();
         insta::assert_debug_snapshot!(lines);
+    }
+
+    /// `(properties, bytes)` of each sample `reported` lends, by track and decoding time
+    fn samples_by_track(reported: &[Reported]) -> Vec<(SampleProperties, Vec<u8>)> {
+        let mut samples = reported
+            .iter()
+            .filter_map(|reported| match reported {
+                Reported::Sample(location, bytes) => Some((location.properties, bytes.clone())),
+                Reported::FileType
+                | Reported::SegmentType
+                | Reported::Movie(_)
+                | Reported::MovieFragment(_)
+                | Reported::SegmentIndex { .. }
+                | Reported::MovieFragmentRandomAccess { .. }
+                | Reported::SampleLocation(_)
+                | Reported::Box(_)
+                | Reported::Error(_)
+                | Reported::Other(_) => None,
+            })
+            .collect::<Vec<_>>();
+        samples.sort_by_key(|(properties, _)| (properties.track_id, properties.decoding_time));
+        samples
+    }
+
+    /// `(properties, size)` of each location `reported` holds, by track and decoding time
+    fn located_by_track(reported: &[Reported]) -> Vec<(SampleProperties, u32)> {
+        let mut located = locations(reported)
+            .into_iter()
+            .map(|location| (location.properties, location.size))
+            .collect::<Vec<_>>();
+        located.sort_by_key(|(properties, _)| (properties.track_id, properties.decoding_time));
+        located
+    }
+
+    const FRAGMENTED: &[u8] = include_bytes!("fixtures/fragmented.mp4");
+    const IMDA_AFTER_MOOF: &[u8] = include_bytes!("fixtures/imda_after_moof.mp4");
+    const IMDA_BEFORE_MOOF: &[u8] = include_bytes!("fixtures/imda_before_moof.mp4");
+    const IMDA_TO_END_OF_FILE: &[u8] = include_bytes!("fixtures/imda_to_end_of_file.mp4");
+
+    /// A caller that cannot seek locates the samples of an `imda` before
+    /// their `moof`, is lent none, and ends the input there
+    #[test]
+    fn the_samples_of_fragments_in_an_imda_before_or_after_their_moof_are_those_of_the_file_with_an_mdat()
+     {
+        let expected = read_where_required(FRAGMENTED, config(None, None), Subscribe::Every);
+        assert_eq!(samples_lent(&expected).len(), 12 + 58);
+        for (name, file) in [
+            ("imda_after_moof.mp4", IMDA_AFTER_MOOF),
+            ("imda_before_moof.mp4", IMDA_BEFORE_MOOF),
+            ("imda_to_end_of_file.mp4", IMDA_TO_END_OF_FILE),
+        ] {
+            let reported = read_where_required(file, config(None, None), Subscribe::Every);
+            lent_as_held(name, file, &reported);
+            assert!(
+                !reported
+                    .iter()
+                    .any(|reported| matches!(reported, Reported::Error(_))),
+                "{name}: {reported:?}"
+            );
+            assert_eq!(
+                samples_by_track(&reported),
+                samples_by_track(&expected),
+                "{name}"
+            );
+            assert_eq!(
+                located_by_track(&reported),
+                located_by_track(&expected),
+                "{name}"
+            );
+        }
+        for (name, file) in [
+            ("imda_after_moof.mp4", IMDA_AFTER_MOOF),
+            ("imda_to_end_of_file.mp4", IMDA_TO_END_OF_FILE),
+        ] {
+            let _ = read_every_way(name, file, config(None, None), Subscribe::Every);
+        }
+        let in_pieces =
+            read_in_pieces(IMDA_BEFORE_MOOF, config(None, None), Subscribe::Every, 4096);
+        let first_fragment = expected
+            .iter()
+            .filter(|reported| {
+                !matches!(reported, Reported::SampleLocation(location) if location.offset >= 9295)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            (located_by_track(&in_pieces), samples_lent(&in_pieces).len()),
+            (located_by_track(&first_fragment), 0)
+        );
+    }
+
+    #[test]
+    fn the_samples_of_a_movie_in_an_imda_before_or_after_the_moov_are_those_of_the_file_with_an_mdat()
+     {
+        for (name, file, source) in [
+            (
+                "imda_movie_moov_first.mp4",
+                &include_bytes!("fixtures/imda_movie_moov_first.mp4")[..],
+                FIXTURES[0].1,
+            ),
+            (
+                "imda_movie_moov_last.mp4",
+                include_bytes!("fixtures/imda_movie_moov_last.mp4"),
+                MOVIE_LAST,
+            ),
+        ] {
+            let expected = read_where_required(source, config(None, None), Subscribe::Every);
+            let reported = read_where_required(file, config(None, None), Subscribe::Every);
+            lent_as_held(name, file, &reported);
+            assert_eq!(samples_lent(&reported).len(), 12 + 58, "{name}");
+            assert_eq!(
+                samples_by_track(&reported),
+                samples_by_track(&expected),
+                "{name}"
+            );
+        }
+        let _ = read_every_way(
+            "imda_movie_moov_first.mp4",
+            include_bytes!("fixtures/imda_movie_moov_first.mp4"),
+            config(None, None),
+            Subscribe::Every,
+        );
+    }
+
+    /// The samples of `fragmented.mp4` but for those of its second movie fragment, which lie in its second `mdat`, from 9567 to 16904; its first `moof` lies from 1214 to 9295
+    fn samples_but_of_the_second_fragment() -> Vec<(SampleProperties, Vec<u8>)> {
+        let expected = read_where_required(FRAGMENTED, config(None, None), Subscribe::Every);
+        let kept = expected
+            .into_iter()
+            .filter(|reported| {
+                !matches!(reported, Reported::Sample(location, _) if (9567..16904).contains(&location.offset))
+            })
+            .collect::<Vec<_>>();
+        samples_by_track(&kept)
+    }
+
+    #[test]
+    fn the_events_of_a_file_without_the_imda_of_a_fragment() {
+        let file = include_bytes!("fixtures/imda_missing.mp4");
+        let reported = read_every_way(
+            "imda_missing.mp4",
+            file,
+            config(None, None),
+            Subscribe::Every,
+        );
+        assert_eq!(
+            samples_by_track(&reported),
+            samples_but_of_the_second_fragment()
+        );
+        let lines = reported
+            .iter()
+            .filter(|reported| {
+                !matches!(reported, Reported::SampleLocation(_) | Reported::Sample(..))
+            })
+            .map(Reported::line)
+            .collect::<Vec<_>>();
+        insta::assert_debug_snapshot!(lines);
+    }
+
+    /// `imda_missing.mp4` with a `free` of size 0 at its end, which runs to
+    /// the end of the file, so that the demuxer wants no input past it and a
+    /// caller that reads where it asks never calls `finish`
+    #[test]
+    fn the_samples_of_an_imda_the_file_lacks_are_refused_when_the_last_box_runs_to_the_end_of_the_file()
+     {
+        let missing = include_bytes!("fixtures/imda_missing.mp4");
+        let file = [&missing[..], b"\0\0\0\0free"].concat();
+        let reported = read_every_way(
+            "imda_missing.mp4 and a free",
+            &file,
+            config(None, None),
+            Subscribe::Every,
+        );
+        let expected = read_every_way(
+            "imda_missing.mp4",
+            missing,
+            config(None, None),
+            Subscribe::Every,
+        );
+        let not_found = Reported::Error(Error::EndOfInput(
+            structure_data::Error::IdentifiedMediaDataNotFound {
+                imda_identifier: 2,
+                sample_count: 23,
+            },
+        ));
+        assert_eq!(
+            (
+                samples_by_track(&reported),
+                reported
+                    .iter()
+                    .filter(|reported| **reported == not_found)
+                    .count()
+            ),
+            (samples_by_track(&expected), 1)
+        );
+    }
+
+    #[test]
+    fn the_events_of_a_file_of_two_imda_of_one_identifier() {
+        let file = include_bytes!("fixtures/imda_duplicate.mp4");
+        let reported = read_every_way(
+            "imda_duplicate.mp4",
+            file,
+            config(None, None),
+            Subscribe::Every,
+        );
+        assert_eq!(
+            samples_by_track(&reported),
+            samples_but_of_the_second_fragment()
+        );
+        let lines = reported
+            .iter()
+            .filter(|reported| {
+                !matches!(reported, Reported::SampleLocation(_) | Reported::Sample(..))
+            })
+            .map(Reported::line)
+            .collect::<Vec<_>>();
+        insta::assert_debug_snapshot!(lines);
+    }
+
+    /// `fragmented.mp4` with each track naming the `imda` of the sequence
+    /// number of each fragment, a `snim` in place of its `url ` (both 12 bytes,
+    /// at 381 and 867): its fragments keep `default-base-is-moof`, so their
+    /// samples count from the `moof`, and the file holds no `imda`
+    #[test]
+    fn the_samples_of_fragments_based_on_their_moof_in_imda_the_file_lacks_are_refused() {
+        let mut file = FRAGMENTED.to_vec();
+        for entry in [381, 867] {
+            file.get_mut(entry + 4..entry + 12)
+                .unwrap()
+                .copy_from_slice(b"snim\0\0\0\0");
+        }
+        let reported = read_every_way("snim", &file, config(None, None), Subscribe::Every);
+        let errors = reported
+            .iter()
+            .filter_map(|reported| match reported {
+                Reported::Error(error) => Some(*error),
+                Reported::FileType
+                | Reported::SegmentType
+                | Reported::Movie(_)
+                | Reported::MovieFragment(_)
+                | Reported::SegmentIndex { .. }
+                | Reported::MovieFragmentRandomAccess { .. }
+                | Reported::SampleLocation(_)
+                | Reported::Sample(..)
+                | Reported::Box(_)
+                | Reported::Other(_) => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            (locations(&reported).len(), errors),
+            (
+                0,
+                vec![Error::EndOfInput(
+                    structure_data::Error::IdentifiedMediaDataNotFound {
+                        imda_identifier: 1,
+                        sample_count: 24
+                    }
+                )]
+            )
+        );
+    }
+
+    #[test]
+    fn an_imda_too_short_for_its_identifier_is_reported() {
+        let file = isobmff_test_support::fixtures::written(b"imda", &[b"\0\x07"]);
+        let reported = read_every_way("imda", &file, config(None, None), Subscribe::Every);
+        assert!(
+            matches!(
+                reported.as_slice(),
+                [Reported::Error(Error::Decode { offset: 0, box_type, .. })]
+                    if *box_type == IdentifiedMediaDataBox::BOX_TYPE
+            ),
+            "{reported:?}"
+        );
+    }
+
+    #[test]
+    fn an_imda_whose_samples_would_pass_the_locations_held_is_reported_and_its_samples_left_out() {
+        use isobmff_test_support::fixtures::samples_waiting_for_an_imda;
+
+        let mut limited = DemuxerConfig::default();
+        limited.sample_count_limit = 8;
+        for (ahead, refused) in [(4, false), (5, true)] {
+            let file = samples_waiting_for_an_imda(4, ahead);
+            let reported = read_where_required(&file, limited, Subscribe::Every);
+            let errors = reported
+                .iter()
+                .filter_map(|reported| match reported {
+                    Reported::Error(error) => Some(*error),
+                    Reported::FileType
+                    | Reported::SegmentType
+                    | Reported::Movie(_)
+                    | Reported::MovieFragment(_)
+                    | Reported::SegmentIndex { .. }
+                    | Reported::MovieFragmentRandomAccess { .. }
+                    | Reported::SampleLocation(_)
+                    | Reported::Sample(..)
+                    | Reported::Box(_)
+                    | Reported::Other(_) => None,
+                })
+                .collect::<Vec<_>>();
+            let identified = samples_lent(&reported)
+                .iter()
+                .filter(|location| location.properties.track_id == 2)
+                .count();
+            let imda_offset = file.len() - ahead * 4 - 8 - (4 * 4 + 12);
+            let expected = if refused {
+                vec![Error::StructureData {
+                    offset: u64::try_from(imda_offset).unwrap(),
+                    box_type: IdentifiedMediaDataBox::BOX_TYPE,
+                    source: structure_data::Error::SampleCountOverLimit {
+                        sample_count: 9,
+                        limit: 8,
+                    },
+                }]
+            } else {
+                vec![]
+            };
+            assert_eq!(
+                (errors, identified, samples_lent(&reported).len()),
+                (
+                    expected,
+                    if refused { 0 } else { 4 },
+                    ahead + if refused { 0 } else { 4 }
+                ),
+                "{ahead} ahead"
+            );
+        }
     }
 
     #[test]

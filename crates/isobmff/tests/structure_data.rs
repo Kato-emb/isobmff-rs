@@ -112,7 +112,7 @@ mod tests {
         movie.mvhd.next_track_id = 2;
         assert!(encoded(&movie).len() < 1024);
         assert_eq!(
-            StructureDataReader::new(1024)
+            StructureDataReader::new(1024, 16)
                 .handle_movie(&movie)
                 .map(|_| ()),
             Err(Error::SampleCountOverLimit {
@@ -137,7 +137,7 @@ mod tests {
                 location.properties.sample_duration,
             )
         };
-        let mut reader = StructureDataReader::new(1024);
+        let mut reader = StructureDataReader::new(1024, 16);
         let specification = reader
             .handle_movie(movie)
             .map(|locations| locations.map(sample).collect());
@@ -231,7 +231,7 @@ mod tests {
         sdtp.entries = vec![entry; 4];
         stbl.sdtp = Some(sdtp);
         let movie = movie([trak]);
-        let mut reader = StructureDataReader::new(1024);
+        let mut reader = StructureDataReader::new(1024, 16);
         let refused = reader.handle_movie(&movie).map(|_| ());
         let found: Vec<_> = reader
             .handle_movie_lossy(&movie)
@@ -260,7 +260,7 @@ mod tests {
         stss.sample_numbers = vec![1, 1, 3, 9];
         trak.mdia.minf.stbl.stss = Some(stss);
         let movie = movie([trak]);
-        let mut reader = StructureDataReader::new(1024);
+        let mut reader = StructureDataReader::new(1024, 16);
         let refused = reader.handle_movie(&movie).map(|_| ());
         let sync: Vec<_> = reader
             .handle_movie_lossy(&movie)
@@ -315,7 +315,7 @@ mod tests {
     #[test]
     fn a_movie_refused_gives_no_track_to_the_movie_fragments_after_it() {
         let mismatched = durations_counted(track(7, 10, &[1, 2], &[(1, 2)], &[0]), 3);
-        let mut reader = StructureDataReader::new(1024);
+        let mut reader = StructureDataReader::new(1024, 16);
         assert_eq!(
             (
                 reader.handle_movie(&movie([mismatched])).map(|_| ()),

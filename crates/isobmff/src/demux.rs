@@ -1,9 +1,13 @@
 //! [`Demuxer`], which reads a file into its boxes and the samples of the tracks a caller subscribes to
 
-use isobmff_boxes::{MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox};
-use isobmff_core::BoxDefinition;
+use alloc::vec;
 
-use crate::framing::{self, BoxReader, FramerConfig};
+use isobmff_boxes::{
+    IdentifiedMediaDataBox, MovieBox, MovieFragmentBox, MovieFragmentRandomAccessBox,
+};
+use isobmff_core::{BoxDecode, BoxDefinition};
+
+use crate::framing::{self, BoxReader, FramerConfig, FrontPart};
 use crate::structure_data::{self, StructureDataReader};
 use crate::{RequiredInput, SampleLocation};
 
@@ -18,6 +22,9 @@ pub use error::Error;
 pub use event::{Event, Sample};
 use gathered::Gathered;
 use samples::Samples;
+
+/// Length of the `imda_identifier` that starts the payload of an `imda`, ISO/IEC 14496-12 §8.1.4.2
+const IMDA_IDENTIFIER_LENGTH: u64 = 4;
 
 /// The event [`Demuxer::poll_event`] lends next
 #[derive(Debug, Clone)]
@@ -124,7 +131,12 @@ enum Refused {
 /// samples in the order of their file offsets, those before the `moov` among
 /// them. A file of movie fragments, or of segments laid one after another, is
 /// read as one input, the decoding times of each track going on across them.
-/// A sample before a `moof` is not requested once the `moof` is read.
+/// A sample before a `moof` is not requested once the `moof` is read. A
+/// sample that lies in an `imda`, §8.1.4, is located once both the box that
+/// declares it and that `imda` are read, in whichever order the file holds
+/// them; one whose `imda` the file lacks is reported once the input ends. A
+/// caller that cannot seek locates the samples of an `imda` that comes
+/// before the box that declares them, and is not lent them.
 /// Handing input over never fails: what cannot be read, such as a `moof`
 /// before any `moov`, is reported as [`Event::Error`]. What the reading of
 /// the specification refuses, the demuxer reads lossily once the
@@ -197,9 +209,16 @@ impl Demuxer {
     pub fn new(config: DemuxerConfig) -> Self {
         let mut framer = FramerConfig::new(config.payload_limit);
         framer.gathered_box_types = Gathered::BOX_TYPES.to_vec();
+        framer.front_part_box_types = vec![FrontPart {
+            box_type: IdentifiedMediaDataBox::BOX_TYPE,
+            length: IMDA_IDENTIFIER_LENGTH,
+        }];
         Self {
             boxes: BoxReader::new(framer),
-            structure_data: StructureDataReader::new(config.sample_count_limit),
+            structure_data: StructureDataReader::new(
+                config.sample_count_limit,
+                config.identified_media_data_limit,
+            ),
             sample_count_limit: config.sample_count_limit,
             sample_size_limit: config.sample_size_limit,
             random_access_entry_limit: config.random_access_entry_limit,
@@ -506,9 +525,70 @@ impl Demuxer {
 
     /// The next event of the box reader, read into the value of its box where the demuxer reads one
     fn read_box(&mut self) -> Option<BoxRead> {
-        let event = self.boxes.poll_event()?;
+        let Some(event) = self.boxes.poll_event() else {
+            // Why only once the box reader reports nothing more, and the
+            // input ends or the box reader wants none: no `imda` follows
+            // then, but one may be the last box, and a box of size 0 runs to
+            // the end of the file with no `finish` from a caller that reads
+            // until no input is wanted.
+            return (self.finished || self.boxes.required_input().is_none())
+                .then(|| self.structure_data.finish().err())
+                .flatten()
+                .map(|error| BoxRead::Event(Event::Error(Error::EndOfInput(error))));
+        };
         let read = match event {
             framing::Event::Box { offset, header } => BoxRead::Event(Event::Box { offset, header }),
+            framing::Event::FrontPart { offset, header, .. }
+                if header.box_type() != IdentifiedMediaDataBox::BOX_TYPE =>
+            {
+                BoxRead::Event(Event::Box { offset, header })
+            }
+            framing::Event::FrontPart {
+                offset,
+                header,
+                front_part,
+            } => {
+                let box_type = header.box_type();
+                let error = |error| BoxRead::Event(Event::Error(error));
+                let refused = |source| {
+                    error(Error::StructureData {
+                        offset,
+                        box_type,
+                        source,
+                    })
+                };
+                let imda = match IdentifiedMediaDataBox::decode_payload(front_part) {
+                    Ok(imda) => imda,
+                    Err(source) => {
+                        return Some(error(Error::Decode {
+                            offset,
+                            box_type,
+                            source,
+                        }));
+                    }
+                };
+                let resolved = match self.structure_data.handle_identified_media_data(
+                    imda.imda_identifier,
+                    offset.saturating_add(header.encoded_len()),
+                ) {
+                    Ok(resolved) => resolved,
+                    Err(source) => return Some(refused(source)),
+                };
+                // Why count before holding them: an `imda` may resolve every
+                // sample that waits for it at once.
+                let held = self
+                    .samples
+                    .held()
+                    .saturating_add(u64::try_from(resolved.len()).unwrap_or(u64::MAX));
+                if held > self.sample_count_limit {
+                    return Some(refused(structure_data::Error::SampleCountOverLimit {
+                        sample_count: held,
+                        limit: self.sample_count_limit,
+                    }));
+                }
+                self.samples.extend(resolved);
+                BoxRead::Event(Event::Box { offset, header })
+            }
             framing::Event::Gathered {
                 offset,
                 box_type,
