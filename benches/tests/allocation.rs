@@ -647,3 +647,75 @@ fn an_imda_that_would_resolve_past_the_locations_held_resolves_nothing() {
     assert_eq!((few_samples, many_samples), (8, 8));
     assert_eq!(many, few);
 }
+
+/// A sample of track 1 of `size` bytes at `offset`
+fn sample_at(offset: u64, size: u32) -> isobmff::SampleLocation {
+    isobmff::SampleLocation {
+        properties: isobmff::SampleProperties {
+            track_id: 1,
+            decoding_time: offset,
+            sample_duration: 1,
+            sample_composition_time_offset: 0,
+            sample_flags: isobmff_boxes::SampleFlags::default(),
+            sample_description_index: 1,
+        },
+        offset,
+        size,
+    }
+}
+
+#[test]
+fn a_media_data_reader_holds_no_more_samples_than_its_limit() {
+    use isobmff::media_data::MediaDataReader;
+
+    let held_taking = |count: u32| {
+        most_held_by(|| {
+            let mut reader = MediaDataReader::new(8, 1 << 20);
+            let refused = (0..count)
+                .filter(|&index| {
+                    reader
+                        .handle_location(sample_at(u64::from(index) * 16, 16))
+                        .is_err()
+                })
+                .count();
+            assert_eq!(refused, usize::try_from(count).unwrap() - 8);
+        })
+    };
+    let (few, many) = (held_taking(64), held_taking(4096));
+    println!(
+        "held at most {few} bytes taking 64 locations under a limit of 8, {many} bytes taking 4096"
+    );
+    assert_eq!(many, few);
+}
+
+#[test]
+fn a_media_data_reader_holds_the_bytes_of_one_sample() {
+    use isobmff::media_data::MediaDataReader;
+
+    let held_assembling = |count: u32| {
+        let media_data = vec![0xAB; usize::try_from(count).unwrap() * 1024];
+        let mut assembled = 0;
+        let held = most_held_by(|| {
+            let mut reader = MediaDataReader::new(1, 1 << 20);
+            for index in 0..count {
+                reader
+                    .handle_location(sample_at(u64::from(index) * 1024, 1024))
+                    .unwrap();
+                while let Some(required) = reader.required_input() {
+                    let start = usize::try_from(required.position).unwrap();
+                    reader.handle_input(required.position, &media_data[start..]);
+                    while reader.poll_event().is_some() {
+                        assembled += 1;
+                    }
+                }
+            }
+        });
+        (held, assembled)
+    };
+    let ((few, few_samples), (many, many_samples)) = (held_assembling(16), held_assembling(1024));
+    println!(
+        "held at most {few} bytes assembling {few_samples} samples of 1 KiB, {many} bytes assembling {many_samples}"
+    );
+    assert_eq!((few_samples, many_samples), (16, 1024));
+    assert_eq!(many, few);
+}

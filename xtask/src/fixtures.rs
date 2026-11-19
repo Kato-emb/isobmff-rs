@@ -425,7 +425,7 @@ enum Edit {
     Insert {
         path: BoxPath,
         at: usize,
-        bytes: [u8; 4],
+        bytes: Vec<u8>,
     },
     /// A box at file level moved to just before another
     MoveBefore { path: BoxPath, before: BoxPath },
@@ -435,9 +435,19 @@ enum Edit {
     /// the end of the file, ISO/IEC 14496-12 §4.2.2
     SizeToEnd { path: BoxPath },
     /// Every `chunk_offset` of an `stco`, a file offset in the first `mdat`,
-    /// counted from the payload of the `imda` that `mdat` becomes, past its
-    /// 4-byte identifier
-    CountChunkOffsetsFromMediaData { path: BoxPath },
+    /// counted from the payload of that `mdat`, `plus` bytes more: from the
+    /// payload of the `imda` it becomes, past its 4-byte identifier, or from
+    /// the first byte of a file of its payload
+    CountChunkOffsetsFromMediaData { path: BoxPath, plus: u32 },
+    /// The payload of a box appended to the file of media data the fixture
+    /// comes with
+    CopyPayload { path: BoxPath },
+    /// The `tfhd` of each track fragment of each movie fragment given the
+    /// `base_data_offset` where the data of its first run lies in the file of
+    /// media data the payloads of the `mdat`s, in file order, make, with no
+    /// `default-base-is-moof`, and its first run the `data_offset` 0,
+    /// ISO/IEC 14496-12 §8.8.7.1 Table 6
+    SetTrackFragmentBases,
 }
 
 /// A fixture that is another fixture with its boxes rewritten, as a file FFmpeg does not write
@@ -446,6 +456,9 @@ struct Rewritten {
     holds: &'static str,
     from: &'static str,
     edits: fn() -> Vec<Edit>,
+    /// Name of the file of media data the fixture comes with, which its
+    /// `CopyPayload` edits write
+    media_data: Option<&'static str>,
 }
 
 /// The flags of a `tfhd` FFmpeg writes, default sample duration, size and
@@ -498,7 +511,7 @@ fn fragments_in_identified_media_data() -> Vec<Edit> {
         edits.push(Edit::Insert {
             path: vec![(b"imda", moof)],
             at: 0,
-            bytes: [0, 0, 0, sequence_number],
+            bytes: vec![0, 0, 0, sequence_number],
         });
         for (traf, data_offset) in [(0, 4), (1, 0)] {
             edits.push(Edit::Set32 {
@@ -527,6 +540,7 @@ fn movie_in_identified_media_data() -> Vec<Edit> {
     let mut edits: Vec<Edit> = (0..2)
         .map(|track| Edit::CountChunkOffsetsFromMediaData {
             path: sample_table(track, b"stco").to_vec(),
+            plus: 4,
         })
         .collect();
     for track in 0..2 {
@@ -538,7 +552,7 @@ fn movie_in_identified_media_data() -> Vec<Edit> {
         edits.push(Edit::Insert {
             path: data_entry(track),
             at: 4,
-            bytes: [0, 0, 0, 1],
+            bytes: vec![0, 0, 0, 1],
         });
         edits.push(Edit::Retype {
             path: data_entry(track),
@@ -552,8 +566,67 @@ fn movie_in_identified_media_data() -> Vec<Edit> {
     edits.push(Edit::Insert {
         path: vec![(b"imda", 0)],
         at: 0,
-        bytes: [0, 0, 0, 1],
+        bytes: vec![0, 0, 0, 1],
     });
+    edits
+}
+
+/// The location of the file of media data a `url ` names, as its `location` string with the terminating null
+fn location(name: &str) -> Vec<u8> {
+    [name.as_bytes(), &[0]].concat()
+}
+
+/// The `url ` of track `track` of a movie naming the file `name` instead of the file itself: no flag, and a `location`, ISO/IEC 14496-12 §8.7.2.3
+fn data_entry_elsewhere(track: usize, name: &str) -> [Edit; 2] {
+    [
+        Edit::Set32 {
+            path: data_entry(track),
+            at: 0,
+            value: 0,
+        },
+        Edit::Insert {
+            path: data_entry(track),
+            at: 4,
+            bytes: location(name),
+        },
+    ]
+}
+
+/// `movie_moov_last.mp4` with the media data of its video track in `external_movie.dat`, a copy of the payload of its `mdat`, its chunk offsets counted from the first byte of that file, §8.7.5.1
+fn movie_in_another_file() -> Vec<Edit> {
+    let mut edits = vec![
+        Edit::CountChunkOffsetsFromMediaData {
+            path: sample_table(0, b"stco").to_vec(),
+            plus: 0,
+        },
+        Edit::CopyPayload {
+            path: vec![(b"mdat", 0)],
+        },
+    ];
+    edits.extend(data_entry_elsewhere(0, "external_movie.dat"));
+    edits
+}
+
+/// `fragmented.mp4` with the media data of its movie fragments in `external_fragments.dat`, the payloads of its `mdat`s laid end to end, each track fragment based in that file, §8.8.7.1 Table 6, the `mdat`s removed and the `mfra` free space
+fn fragments_in_another_file() -> Vec<Edit> {
+    let mut edits = vec![Edit::SetTrackFragmentBases];
+    for media_data in 0..3 {
+        edits.push(Edit::CopyPayload {
+            path: vec![(b"mdat", media_data)],
+        });
+    }
+    for _ in 0..3 {
+        edits.push(Edit::Remove {
+            path: vec![(b"mdat", 0)],
+        });
+    }
+    edits.push(Edit::Retype {
+        path: vec![(b"mfra", 0)],
+        box_type: *b"free",
+    });
+    for track in 0..2 {
+        edits.extend(data_entry_elsewhere(track, "external_fragments.dat"));
+    }
     edits
 }
 
@@ -563,6 +636,7 @@ const REWRITTEN: &[Rewritten] = &[
         holds: "fragmented.mp4 with the media data of each movie fragment in the imda of its sequence number, after its moof, which its tracks name with a snim and count from as Table 6 of 8.8.7.1 sets out, and the mfra free space",
         from: "fragmented.mp4",
         edits: fragments_in_identified_media_data,
+        media_data: None,
     },
     Rewritten {
         name: "imda_before_moof.mp4",
@@ -576,6 +650,7 @@ const REWRITTEN: &[Rewritten] = &[
                 })
                 .collect()
         },
+        media_data: None,
     },
     Rewritten {
         name: "imda_to_end_of_file.mp4",
@@ -591,6 +666,7 @@ const REWRITTEN: &[Rewritten] = &[
                 },
             ]
         },
+        media_data: None,
     },
     Rewritten {
         name: "imda_missing.mp4",
@@ -603,6 +679,7 @@ const REWRITTEN: &[Rewritten] = &[
                 value: 9,
             }]
         },
+        media_data: None,
     },
     Rewritten {
         name: "imda_duplicate.mp4",
@@ -615,32 +692,53 @@ const REWRITTEN: &[Rewritten] = &[
                 value: 1,
             }]
         },
+        media_data: None,
     },
     Rewritten {
         name: "imda_movie_moov_last.mp4",
         holds: "movie_moov_last.mp4 with its mdat the imda of the identifier 1, which each track names with an imdt and counts its chunk offsets from",
         from: "movie_moov_last.mp4",
         edits: movie_in_identified_media_data,
+        media_data: None,
     },
     Rewritten {
         name: "imda_movie_moov_first.mp4",
         holds: "movie_moov_first.mp4 with its mdat the imda of the identifier 1, which each track names with an imdt and counts its chunk offsets from",
         from: "movie_moov_first.mp4",
         edits: movie_in_identified_media_data,
+        media_data: None,
+    },
+    Rewritten {
+        name: "external_movie.mp4",
+        holds: "movie_moov_last.mp4 with the media data of its video track in external_movie.dat, a copy of the payload of its mdat, which its url names, its chunk offsets those of that file; its audio track in the file itself",
+        from: "movie_moov_last.mp4",
+        edits: movie_in_another_file,
+        media_data: Some("external_movie.dat"),
+    },
+    Rewritten {
+        name: "external_fragments.mp4",
+        holds: "fragmented.mp4 with the media data of its movie fragments in external_fragments.dat, the payloads of its mdats laid end to end, which the url of each track names, each track fragment given a base_data_offset in that file as Table 6 of 8.8.7.1 sets out, its mdats removed and its mfra free space",
+        from: "fragmented.mp4",
+        edits: fragments_in_another_file,
+        media_data: Some("external_fragments.dat"),
     },
 ];
 
 /// Writes `rewritten` into `directory`, from the fixture it is made from there
 fn write_rewritten(rewritten: &Rewritten, directory: &Path) -> io::Result<()> {
     let mut file = fs::read(directory.join(rewritten.from))?;
+    let mut media_data = Vec::new();
     for edit in (rewritten.edits)() {
-        apply(&mut file, &edit)?;
+        apply(&mut file, &mut media_data, &edit)?;
+    }
+    if let Some(name) = rewritten.media_data {
+        fs::write(directory.join(name), media_data)?;
     }
     fs::write(directory.join(rewritten.name), file)
 }
 
-/// Applies `edit` to `file`
-fn apply(file: &mut Vec<u8>, edit: &Edit) -> io::Result<()> {
+/// Applies `edit` to `file`, and to the file of media data it comes with
+fn apply(file: &mut Vec<u8>, media_data: &mut Vec<u8>, edit: &Edit) -> io::Result<()> {
     match edit {
         Edit::Set32 { path, at, value } => change_field(file, path, *at, &Value::Set32(*value)),
         Edit::Retype { path, box_type } => {
@@ -648,28 +746,7 @@ fn apply(file: &mut Vec<u8>, edit: &Edit) -> io::Result<()> {
             bytes_at(file, past(start, 4)?)?.copy_from_slice(box_type);
             Ok(())
         }
-        Edit::Insert { path, at, bytes } => {
-            let (start, end) = located(file, path)?;
-            let at = past(past(start, 8)?, *at)?;
-            if at > end {
-                return Err(io::Error::other(format!("{path:?} ends before {at}")));
-            }
-            // Why find every box that holds it before growing any: a box
-            // grown before its bytes are in no longer fits the file.
-            let holders = (1..=path.len())
-                .map(|depth| located(file, path.get(..depth).unwrap_or_default()))
-                .collect::<io::Result<Vec<_>>>()?;
-            for (holder, _) in holders {
-                let size = bytes_at(file, holder)?;
-                let grown = Some(u32::from_be_bytes(*size))
-                    .filter(|&size| size >= 8)
-                    .and_then(|size| size.checked_add(4))
-                    .ok_or_else(|| io::Error::other(format!("no 32-bit size at {holder}")))?;
-                size.copy_from_slice(&grown.to_be_bytes());
-            }
-            file.splice(at..at, bytes.iter().copied());
-            Ok(())
-        }
+        Edit::Insert { path, at, bytes } => insert(file, path, *at, bytes),
         Edit::MoveBefore { path, before } => {
             let (start, end) = located(file, path)?;
             let moved: Vec<u8> = file.drain(start..end).collect();
@@ -690,7 +767,7 @@ fn apply(file: &mut Vec<u8>, edit: &Edit) -> io::Result<()> {
             bytes_at(file, start)?.copy_from_slice(&[0; 4]);
             Ok(())
         }
-        Edit::CountChunkOffsetsFromMediaData { path } => {
+        Edit::CountChunkOffsetsFromMediaData { path, plus } => {
             let (media_data, _) = located(file, &[(b"mdat", 0)])?;
             let payload = u32::try_from(past(media_data, 8)?)
                 .map_err(|_| io::Error::other("the mdat starts past 32 bits"))?;
@@ -700,7 +777,7 @@ fn apply(file: &mut Vec<u8>, edit: &Edit) -> io::Result<()> {
                 let field = bytes_at(file, entry)?;
                 let counted = u32::from_be_bytes(*field)
                     .checked_sub(payload)
-                    .and_then(|offset| offset.checked_add(4))
+                    .and_then(|offset| offset.checked_add(*plus))
                     .ok_or_else(|| {
                         io::Error::other(format!("{path:?} has an offset before {payload}"))
                     })?;
@@ -709,7 +786,101 @@ fn apply(file: &mut Vec<u8>, edit: &Edit) -> io::Result<()> {
             }
             Ok(())
         }
+        Edit::CopyPayload { path } => {
+            let (start, end) = located(file, path)?;
+            media_data.extend_from_slice(file.get(past(start, 8)?..end).unwrap_or_default());
+            Ok(())
+        }
+        Edit::SetTrackFragmentBases => {
+            // Why find every base before giving any: a base given grows its
+            // `moof`, which moves the data the `data_offset` of the next
+            // track fragment counts to.
+            let mut bases = Vec::new();
+            for moof in 0.. {
+                let Some((moof_start, _)) = find(file, &[(b"moof", moof)]) else {
+                    break;
+                };
+                for traf in 0.. {
+                    let trun = [(b"moof", moof), (b"traf", traf), (b"trun", 0)];
+                    let Some((trun_start, _)) = find(file, &trun) else {
+                        break;
+                    };
+                    let data_offset = i32::from_be_bytes(*bytes_at(file, past(trun_start, 16)?)?);
+                    let data = isize::try_from(data_offset)
+                        .ok()
+                        .and_then(|data_offset| moof_start.checked_add_signed(data_offset))
+                        .ok_or_else(|| {
+                            io::Error::other(format!("{trun:?} has its data before the file"))
+                        })?;
+                    bases.push((moof, traf, offset_in_media_data(file, data)?));
+                }
+            }
+            for &(moof, traf, base) in bases.iter().rev() {
+                let tfhd: BoxPath = vec![(b"moof", moof), (b"traf", traf), (b"tfhd", 0)];
+                let (trun_start, _) =
+                    located(file, &[(b"moof", moof), (b"traf", traf), (b"trun", 0)])?;
+                bytes_at(file, past(trun_start, 16)?)?.copy_from_slice(&[0; 4]);
+                let (tfhd_start, _) = located(file, &tfhd)?;
+                let flags = bytes_at(file, past(tfhd_start, 8)?)?;
+                let based =
+                    (u32::from_be_bytes(*flags) | BASE_DATA_OFFSET_PRESENT) & !DEFAULT_BASE_IS_MOOF;
+                flags.copy_from_slice(&based.to_be_bytes());
+                let base = u64::try_from(base).map_err(io::Error::other)?;
+                insert(file, &tfhd, 8, &base.to_be_bytes())?;
+            }
+            Ok(())
+        }
     }
+}
+
+/// Where the file offset `data`, in the payload of an `mdat` of `file`, lies in the file the payloads of its `mdat`s, in file order, make
+fn offset_in_media_data(file: &[u8], data: usize) -> io::Result<usize> {
+    let mut before = 0_usize;
+    for index in 0.. {
+        let (start, end) = located(file, &[(b"mdat", index)])?;
+        let payload = past(start, 8)?;
+        if (payload..end).contains(&data) {
+            return past(before, data.saturating_sub(payload));
+        }
+        before = past(before, end.saturating_sub(payload))?;
+    }
+    Err(io::Error::other(format!("no mdat holds {data}")))
+}
+
+/// The `base-data-offset-present` flag of a `tfhd`, ISO/IEC 14496-12 §8.8.7.1
+const BASE_DATA_OFFSET_PRESENT: u32 = 0x1;
+
+/// The `default-base-is-moof` flag of a `tfhd`, ISO/IEC 14496-12 §8.8.7.1
+const DEFAULT_BASE_IS_MOOF: u32 = 0x2_0000;
+
+/// Inserts `bytes` at `at` past the header of the box `path` names, growing it and the boxes that hold it by their length
+fn insert(
+    file: &mut Vec<u8>,
+    path: &[(&[u8; 4], usize)],
+    at: usize,
+    bytes: &[u8],
+) -> io::Result<()> {
+    let more = u32::try_from(bytes.len()).map_err(io::Error::other)?;
+    let (start, end) = located(file, path)?;
+    let at = past(past(start, 8)?, at)?;
+    if at > end {
+        return Err(io::Error::other(format!("{path:?} ends before {at}")));
+    }
+    // Why find every box that holds it before growing any: a box grown
+    // before its bytes are in no longer fits the file.
+    let holders = (1..=path.len())
+        .map(|depth| located(file, path.get(..depth).unwrap_or_default()))
+        .collect::<io::Result<Vec<_>>>()?;
+    for (holder, _) in holders {
+        let size = bytes_at(file, holder)?;
+        let grown = Some(u32::from_be_bytes(*size))
+            .filter(|&size| size >= 8)
+            .and_then(|size| size.checked_add(more))
+            .ok_or_else(|| io::Error::other(format!("no 32-bit size at {holder}")))?;
+        size.copy_from_slice(&grown.to_be_bytes());
+    }
+    file.splice(at..at, bytes.iter().copied());
+    Ok(())
 }
 
 /// Where the box `path` names starts in `file`, and where it ends

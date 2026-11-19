@@ -759,6 +759,54 @@ mod tests {
         );
     }
 
+    /// `movie_moov_last.mp4` with the media data of its video, track 1, in `external_movie.dat`, which its `url ` names, and that of its audio, track 2, in the file itself; its `moov` comes last, so a caller that cannot seek is lent its samples only when it holds the whole file
+    #[test]
+    fn the_samples_of_a_track_in_another_file_are_located_and_not_lent() {
+        let file = include_bytes!("fixtures/external_movie.mp4");
+        let expected = read_where_required(MOVIE_LAST, config(None, None), Subscribe::Every);
+        let reported = read_where_required(file, config(None, None), Subscribe::Every);
+        assert_eq!(
+            read_in_pieces(file, config(None, None), Subscribe::Every, file.len()),
+            reported
+        );
+        lent_as_held("external_movie.mp4", file, &reported);
+        let of_track = |samples: Vec<(SampleProperties, Vec<u8>)>, track_id| {
+            samples
+                .into_iter()
+                .filter(|(properties, _)| properties.track_id == track_id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            (
+                located_by_track(&reported),
+                of_track(samples_by_track(&reported), 1).len(),
+                of_track(samples_by_track(&reported), 2),
+            ),
+            (
+                located_by_track(&expected),
+                0,
+                of_track(samples_by_track(&expected), 2),
+            )
+        );
+    }
+
+    /// `fragmented.mp4` with the media data of its movie fragments in `external_fragments.dat`, each track fragment based in that file
+    #[test]
+    fn the_samples_of_movie_fragments_in_another_file_are_located_and_not_lent() {
+        let file = include_bytes!("fixtures/external_fragments.mp4");
+        let expected = read_where_required(FRAGMENTED, config(None, None), Subscribe::Every);
+        let reported = read_every_way(
+            "external_fragments.mp4",
+            file,
+            config(None, None),
+            Subscribe::Every,
+        );
+        assert_eq!(
+            (located_by_track(&reported), samples_lent(&reported).len()),
+            (located_by_track(&expected), 0)
+        );
+    }
+
     #[test]
     fn an_imda_too_short_for_its_identifier_is_reported() {
         let file = isobmff_test_support::fixtures::written(b"imda", &[b"\0\x07"]);
