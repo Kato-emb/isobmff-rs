@@ -12,7 +12,7 @@ mod tests {
     use isobmff::structure_data::{Error, StructureDataReader};
     use std::num::NonZeroU32;
 
-    use crate::support::{by_track, ffprobe_by_track, locations, movie_of};
+    use crate::support::{by_track, ffprobe_by_track, locations, movie_of, tracks_in_other_files};
 
     use isobmff_boxes::{
         CompositionOffsetBox, CompositionOffsetEntry, SampleDependencyTypeBox,
@@ -343,18 +343,107 @@ mod tests {
         );
     }
 
+    /// A movie of track 7, of one sample, whose sample entry has the `data_reference_index` `data_reference_index`, of one data reference entry
+    fn movie_naming_data_reference(data_reference_index: u16) -> isobmff_boxes::MovieBox {
+        let mut trak = track(7, 1, &[1], &[(1, 1)], &[3]);
+        let entry = isobmff_boxes::SampleEntry::new(
+            isobmff_core::FourCc::new([0; 4]),
+            data_reference_index,
+            Vec::new(),
+        );
+        trak.mdia.minf.stbl.stsd.sample_descriptions =
+            vec![isobmff_boxes::SampleDescription::Typed(entry)];
+        movie([trak])
+    }
+
     #[test]
-    fn samples_in_another_file_are_refused() {
-        let trak = in_another_file(track(7, 1, &[1], &[(1, 1)], &[0]));
-        assert_eq!(
-            locations(&movie([trak])),
-            Err(Error::MediaDataElsewhere {
+    fn a_sample_entry_that_names_no_data_reference_entry_is_refused_read_either_way() {
+        for data_reference_index in [0, 2] {
+            let refused = Err(Error::DataReferenceIndexOutOfRange {
                 track_id: 7,
-                data_reference_index: 1,
+                data_reference_index,
+            });
+            let movie = movie_naming_data_reference(data_reference_index);
+            let mut reader = StructureDataReader::new(1024, 16);
+            assert_eq!(reader.handle_movie(&movie).map(|_| ()), refused);
+            assert_eq!(reader.handle_movie_lossy(&movie).map(|_| ()), refused);
+        }
+    }
+
+    /// A sample entry kept as its bytes, which end before its `data_reference_index`
+    #[test]
+    fn a_sample_entry_that_ends_before_its_data_reference_index_is_refused() {
+        let mut movie = movie_naming_data_reference(1);
+        movie
+            .trak
+            .first_mut()
+            .unwrap()
+            .mdia
+            .minf
+            .stbl
+            .stsd
+            .sample_descriptions = vec![isobmff_boxes::SampleDescription::Other(
+            isobmff_core::AnyBox::from_raw_bytes(
+                isobmff_core::BoxType::compact(*b"avc1"),
+                vec![0; 4],
+            ),
+        )];
+        assert_eq!(
+            StructureDataReader::new(1024, 16)
+                .handle_movie(&movie)
+                .map(|_| ()),
+            Err(Error::InvalidEntry {
+                track_id: 7,
+                box_type: isobmff_core::BoxType::compact(*b"stsd"),
+                entry: 0,
             })
         );
     }
 
+    #[test]
+    fn whether_samples_lie_in_this_file_is_told_of_the_tracks_and_sample_entries_of_the_movie_alone()
+     {
+        let mut reader = StructureDataReader::new(1024, 16);
+        assert_eq!(
+            reader.is_in_this_file(7, 1),
+            Err(Error::UnknownTrack { track_id: 7 })
+        );
+        let _ = reader
+            .handle_movie(&movie_naming_data_reference(1))
+            .unwrap()
+            .count();
+        assert_eq!(
+            [
+                reader.is_in_this_file(7, 1),
+                reader.is_in_this_file(7, 2),
+                reader.is_in_this_file(8, 1),
+            ],
+            [
+                Ok(true),
+                Err(Error::SampleDescriptionIndexOutOfRange {
+                    sample_description_index: 2
+                }),
+                Err(Error::UnknownTrack { track_id: 8 }),
+            ]
+        );
+    }
+
+    #[test]
+    fn samples_in_another_file_are_located_at_offsets_of_that_file() {
+        let trak = in_another_file(track(7, 1, &[1], &[(1, 1)], &[3]));
+        let mut reader = StructureDataReader::new(1024, 16);
+        let found: Vec<_> = reader.handle_movie(&movie([trak])).unwrap().collect();
+        assert_eq!(
+            (
+                found
+                    .iter()
+                    .map(|location| location.offset)
+                    .collect::<Vec<_>>(),
+                reader.is_in_this_file(7, 1)
+            ),
+            (vec![3], Ok(false))
+        );
+    }
     #[test]
     fn a_movie_file_resolves_to_the_same_samples_whether_its_moov_is_first_or_last() {
         let first =
@@ -373,13 +462,6 @@ mod tests {
             shifted(&last, last.first().unwrap().offset)
         );
     }
-
-    /// The conformance files whose samples lie in another file, which the reader refuses
-    const MEDIA_DATA_ELSEWHERE: [&str; 3] = [
-        "02_dref_edts_img.mp4",
-        "04_bifs_video.mp4",
-        "a6_tone_multifile.mp4",
-    ];
 
     /// File offset of each sample of each track of the `moov` GPAC reports, in the order of their sample numbers, by `track_ID`
     ///
@@ -517,11 +599,6 @@ mod tests {
             };
             let ours = match locations(&movie) {
                 Ok(locations) => by_track(&locations),
-                Err(Error::MediaDataElsewhere { .. })
-                    if MEDIA_DATA_ELSEWHERE.contains(&file.name.as_str()) =>
-                {
-                    continue;
-                }
                 Err(error) => {
                     differences.push(format!("{}: {error}", file.name));
                     continue;
@@ -546,7 +623,14 @@ mod tests {
                 continue;
             };
             let fragmented = movie.mvex.is_some();
-            for (track_id, samples) in &ours {
+            let in_other_files = tracks_in_other_files(&movie);
+            // Why compare the tracks in other files with GPAC alone: ffprobe
+            // does not follow a `url ` or `urn ` data reference, and reads
+            // their offsets in this file.
+            for (track_id, samples) in ours
+                .iter()
+                .filter(|(track_id, _)| !in_other_files.contains(track_id))
+            {
                 let Some(packets) = theirs.get(track_id) else {
                     differences.push(format!("{}: ffprobe reads no track {track_id}", file.name));
                     continue;

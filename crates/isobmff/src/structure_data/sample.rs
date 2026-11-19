@@ -4,6 +4,8 @@ use alloc::vec::Vec;
 
 use isobmff_boxes::{DataEntry, DataReferenceBox, SampleDescriptionBox, SampleFlags};
 
+use isobmff_core::BoxDefinition;
+
 use super::Error;
 use crate::SampleLocation;
 
@@ -58,20 +60,25 @@ pub(super) enum MediaData {
     /// In the `imda` whose `imda_identifier` is the `sequence_number` of the
     /// movie fragment of each sample: a `DataEntrySeqNumImdaBox`
     SequenceNumber,
-    /// In another file, or under no entry
+    /// In another file: the one a `DataEntryUrlBox` with a `location` or a
+    /// `DataEntryUrnBox` names, or one an entry of a type this crate does not
+    /// read names
     Elsewhere,
+    /// Under no entry: the `data_reference_index` is 0, or past the entries,
+    /// which ISO/IEC 14496-12 §8.5.2.3 numbers from 1
+    NoEntry,
 }
 
-/// The `data_reference_index` of each sample entry of `stsd`, from 1, and where the entry of `dref` it names places the media data
+/// The `data_reference_index` of each sample entry of `stsd`, from 1, and where the entry of `dref` it names places the media data, or `None` for an entry that ends before its `data_reference_index`
 pub(super) fn entry_data_references(
     stsd: &SampleDescriptionBox,
     dref: &DataReferenceBox,
-) -> Vec<(u16, MediaData)> {
+) -> Vec<Option<(u16, MediaData)>> {
     stsd.sample_descriptions
         .iter()
         .map(|entry| {
-            let data_reference_index = entry.data_reference_index().unwrap_or(0);
-            (data_reference_index, media_data(dref, data_reference_index))
+            let data_reference_index = entry.data_reference_index()?;
+            Some((data_reference_index, media_data(dref, data_reference_index)))
         })
         .collect()
 }
@@ -85,7 +92,8 @@ pub(super) fn media_data(dref: &DataReferenceBox, data_reference_index: u16) -> 
         Some(entry) if entry.is_in_same_file() => MediaData::SameFile,
         Some(DataEntry::Imda(imdt)) => MediaData::Identified(imdt.imda_ref_identifier),
         Some(DataEntry::SeqNumImda(_)) => MediaData::SequenceNumber,
-        Some(_) | None => MediaData::Elsewhere,
+        Some(_) => MediaData::Elsewhere,
+        None => MediaData::NoEntry,
     }
 }
 
@@ -97,15 +105,18 @@ pub(super) fn media_data(dref: &DataReferenceBox, data_reference_index: u16) -> 
 /// * [`Error::SampleDescriptionIndexOutOfRange`]: the sample names no entry
 ///   of `entries`.
 /// * [`Error::MediaDataElsewhere`]: the entry places the media data in
-///   another file, in an `IdentifiedMediaDataBox`, or under no data
+///   another file, or in an `IdentifiedMediaDataBox`.
+/// * [`Error::DataReferenceIndexOutOfRange`]: the sample entry names no data
 ///   reference entry.
+/// * [`Error::InvalidEntry`]: the sample entry ends before its
+///   `data_reference_index`.
 /// * [`Error::Overflow`]: the bytes of the sample end past the last offset
 ///   there can be.
 /// * [`Error::CompositionOffsetOutOfRange`]: the composition offset of the
 ///   sample does not fit 32 bits, signed.
 pub(super) fn checked(
     location: &SampleLocation,
-    entries: &[(u16, MediaData)],
+    entries: &[Option<(u16, MediaData)>],
     held: usize,
     sample_count_limit: u64,
 ) -> Result<Sample, Error> {
@@ -125,14 +136,27 @@ pub(super) fn checked(
         .and_then(|index| index.checked_sub(1))
         .and_then(|index| entries.get(index))
     {
-        Some(&(_, MediaData::SameFile)) => {}
-        Some(&(
+        Some(&Some((_, MediaData::SameFile))) => {}
+        Some(&Some((data_reference_index, MediaData::NoEntry))) => {
+            return Err(Error::DataReferenceIndexOutOfRange {
+                track_id,
+                data_reference_index,
+            });
+        }
+        Some(&Some((
             data_reference_index,
             MediaData::Identified(_) | MediaData::SequenceNumber | MediaData::Elsewhere,
-        )) => {
+        ))) => {
             return Err(Error::MediaDataElsewhere {
                 track_id,
                 data_reference_index,
+            });
+        }
+        Some(None) => {
+            return Err(Error::InvalidEntry {
+                track_id,
+                box_type: SampleDescriptionBox::BOX_TYPE,
+                entry: u64::from(sample_description_index.saturating_sub(1)),
             });
         }
         None => {

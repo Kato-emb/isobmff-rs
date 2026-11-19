@@ -19,7 +19,10 @@ mod tests {
     use isobmff_core::FourCc;
     use isobmff_test_support::{conformance_files, ffprobe, ffprobe_packets};
 
-    use crate::support::{Read, mp4_file_type, one_sample_entry_track, packet_read, read, sample};
+    use crate::support::{
+        Read, has_tracks_in_other_files, mp4_file_type, one_sample_entry_track, packet_read, read,
+        sample,
+    };
 
     /// What a demuxer reads of the subsegments of a file: each `sidx` with its anchor, and the file offset of each `moof` with the length of it and the `mdat` after it
     struct Indexed {
@@ -451,9 +454,13 @@ mod tests {
                 continue;
             };
             // Why only fragmented sources without errors: their samples are
-            // written in movie fragments as they are, and a file the demuxer
-            // reports an error in has none to write.
-            if source.movie.mvex.is_none() || !source.errors.is_empty() || source.samples.is_empty()
+            // written in movie fragments as they are, a file the demuxer
+            // reports an error in has none to write, and the muxers write the
+            // samples of one file alone.
+            if source.movie.mvex.is_none()
+                || !source.errors.is_empty()
+                || source.samples.is_empty()
+                || has_tracks_in_other_files(&source.movie)
             {
                 continue;
             }

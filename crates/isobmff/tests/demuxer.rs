@@ -827,6 +827,41 @@ mod tests {
         }
     }
 
+    /// `track_ID` of each track of the `moov` of `file` whose data references name another file
+    fn tracks_in_other_files(file: &[u8]) -> std::collections::BTreeSet<u32> {
+        let mut demuxer = Demuxer::new(config(None, None));
+        let mut tracks = std::collections::BTreeSet::new();
+        loop {
+            while let Some(event) = demuxer.poll_event() {
+                if let Event::Movie(movie) = event {
+                    tracks.extend(
+                        movie
+                            .trak
+                            .iter()
+                            .filter(|trak| {
+                                trak.mdia
+                                    .minf
+                                    .dinf
+                                    .dref
+                                    .data_entries
+                                    .iter()
+                                    .any(|entry| !entry.is_in_this_file())
+                            })
+                            .map(|trak| trak.tkhd.track_id),
+                    );
+                }
+            }
+            let Some(required) = demuxer.required_input() else {
+                break;
+            };
+            match file.get(usize::try_from(required.position).unwrap()..) {
+                Some(bytes) if !bytes.is_empty() => demuxer.handle_input(required.position, bytes),
+                _ => demuxer.finish(),
+            }
+        }
+        tracks
+    }
+
     #[test]
     #[ignore = "needs ISOBMFF_CONFORMANCE_DIR"]
     fn the_samples_of_the_conformance_files_are_lent_as_the_files_hold_them() {
@@ -844,12 +879,16 @@ mod tests {
                     ));
                 }
             }
-            if samples_lent(&seeking).len() != locations(&seeking).len() {
+            let in_other_files = tracks_in_other_files(&file.bytes);
+            let in_this_file = locations(&seeking)
+                .iter()
+                .filter(|location| !in_other_files.contains(&location.properties.track_id))
+                .count();
+            if samples_lent(&seeking).len() != in_this_file {
                 differences.push(format!(
-                    "{}: {} of {} samples lent to a caller that seeks",
+                    "{}: {} of {in_this_file} samples in this file lent to a caller that seeks",
                     file.name,
                     samples_lent(&seeking).len(),
-                    locations(&seeking).len()
                 ));
             }
         }

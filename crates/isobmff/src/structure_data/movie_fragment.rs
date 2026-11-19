@@ -7,6 +7,8 @@ use isobmff_boxes::{
     TrackRunSample, TrackRunSamples,
 };
 
+use isobmff_core::BoxDefinition;
+
 use super::Error;
 use super::identified_media_data::{IdentifiedMediaData, Origin};
 use super::reader::Reading;
@@ -21,7 +23,7 @@ pub(super) struct FragmentTrack {
     defaults: Option<TrackExtendsBox>,
     /// The `data_reference_index` of each sample entry of the track, from 1,
     /// and where it places the media data
-    entries: Vec<(u16, MediaData)>,
+    entries: Vec<Option<(u16, MediaData)>>,
     /// Decoding time of the next sample of the track: the sum of the
     /// `sample_duration`s of the samples before it, §8.8.12, or the `tfdt`
     /// of the last track fragment that gave one; `None` before any
@@ -45,6 +47,48 @@ impl FragmentTrack {
             defaults,
             entries: sample::entry_data_references(stsd, dref),
             next_decoding_time,
+        }
+    }
+    /// `track_ID` of the track
+    pub(super) const fn track_id(&self) -> u32 {
+        self.track_id
+    }
+
+    /// Whether the samples of the sample entry `sample_description_index`, from 1, lie in the file of the `dref`, or in an `imda` of it
+    ///
+    /// # Errors
+    /// * [`Error::SampleDescriptionIndexOutOfRange`]: the track has no such
+    ///   sample entry.
+    /// * [`Error::InvalidEntry`]: the sample entry ends before its
+    ///   `data_reference_index`.
+    /// * [`Error::DataReferenceIndexOutOfRange`]: the sample entry names no
+    ///   data reference entry.
+    pub(super) fn is_in_this_file(&self, sample_description_index: u32) -> Result<bool, Error> {
+        let track_id = self.track_id;
+        match usize::try_from(sample_description_index)
+            .ok()
+            .and_then(|index| index.checked_sub(1))
+            .and_then(|index| self.entries.get(index))
+        {
+            Some(&Some((
+                _,
+                MediaData::SameFile | MediaData::Identified(_) | MediaData::SequenceNumber,
+            ))) => Ok(true),
+            Some(&Some((_, MediaData::Elsewhere))) => Ok(false),
+            Some(&Some((data_reference_index, MediaData::NoEntry))) => {
+                Err(Error::DataReferenceIndexOutOfRange {
+                    track_id,
+                    data_reference_index,
+                })
+            }
+            Some(None) => Err(Error::InvalidEntry {
+                track_id,
+                box_type: SampleDescriptionBox::BOX_TYPE,
+                entry: u64::from(sample_description_index.saturating_sub(1)),
+            }),
+            None => Err(Error::SampleDescriptionIndexOutOfRange {
+                sample_description_index,
+            }),
         }
     }
 }
@@ -198,13 +242,23 @@ pub(super) fn resolve(
                 .and_then(|index| index.checked_sub(1))
                 .and_then(|index| track.entries.get(index));
             match entry {
-                Some(&(_, MediaData::SameFile)) => None,
-                Some(&(_, MediaData::Identified(imda_identifier))) => Some(imda_identifier),
-                Some(&(_, MediaData::SequenceNumber)) => Some(moof.mfhd.sequence_number),
-                Some(&(data_reference_index, MediaData::Elsewhere)) => {
-                    return Err(Error::MediaDataElsewhere {
+                // Why a file offset for a sample in another file: Table 6
+                // counts its data from the base the `tfhd` gives in that file,
+                // or from where it counts that of any other.
+                Some(&Some((_, MediaData::SameFile | MediaData::Elsewhere))) => None,
+                Some(&Some((_, MediaData::Identified(imda_identifier)))) => Some(imda_identifier),
+                Some(&Some((_, MediaData::SequenceNumber))) => Some(moof.mfhd.sequence_number),
+                Some(&Some((data_reference_index, MediaData::NoEntry))) => {
+                    return Err(Error::DataReferenceIndexOutOfRange {
                         track_id,
                         data_reference_index,
+                    });
+                }
+                Some(None) => {
+                    return Err(Error::InvalidEntry {
+                        track_id,
+                        box_type: SampleDescriptionBox::BOX_TYPE,
+                        entry: u64::from(sample_description_index.saturating_sub(1)),
                     });
                 }
                 None => {

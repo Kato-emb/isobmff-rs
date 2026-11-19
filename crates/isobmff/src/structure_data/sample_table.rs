@@ -5,8 +5,9 @@ use core::iter;
 
 use isobmff_boxes::{
     ChunkOffsetBox, ChunkOffsetVariant, CompositionOffsetBox, DataReferenceBox,
-    SampleDependencyTypeBox, SampleDescriptionBox, SampleFlags, SampleSizeBox, SampleSizeVariant,
-    SampleSizes, SampleTableBox, SampleToChunkBox, SyncSampleBox, TimeToSampleBox,
+    SampleDependencyTypeBox, SampleDescription, SampleDescriptionBox, SampleFlags, SampleSizeBox,
+    SampleSizeVariant, SampleSizes, SampleTableBox, SampleToChunkBox, SyncSampleBox,
+    TimeToSampleBox,
 };
 use isobmff_core::{BoxDefinition, BoxType};
 
@@ -170,8 +171,17 @@ pub(super) fn resolve(
     }
     let placed = sample_count.min(chunk_samples).min(stts_sample_count);
     let check_run = |entry: usize, sample_description_index: u32| {
-        let data_reference_index = data_reference_index(&stbl.stsd, sample_description_index)
+        let index = sample_description_index
+            .checked_sub(1)
+            .and_then(|index| usize::try_from(index).ok())
+            .filter(|&index| index < stbl.stsd.sample_descriptions.len())
             .ok_or_else(|| invalid(SampleToChunkBox::BOX_TYPE, entry))?;
+        let data_reference_index = stbl
+            .stsd
+            .sample_descriptions
+            .get(index)
+            .and_then(SampleDescription::data_reference_index)
+            .ok_or_else(|| invalid(SampleDescriptionBox::BOX_TYPE, index))?;
         match media_data(dref, data_reference_index) {
             MediaData::SameFile => Ok(Origin::File),
             MediaData::Identified(imda_identifier) => {
@@ -181,7 +191,11 @@ pub(super) fn resolve(
                 track_id,
                 data_reference_index,
             }),
-            MediaData::Elsewhere => Err(Error::MediaDataElsewhere {
+            // Why place a sample of another file rather than refuse it: its
+            // chunk offset is a file offset of that file, ISO/IEC 14496-12
+            // §8.7.5.1, where a caller reads its bytes.
+            MediaData::Elsewhere => Ok(Origin::File),
+            MediaData::NoEntry => Err(Error::DataReferenceIndexOutOfRange {
                 track_id,
                 data_reference_index,
             }),
@@ -354,12 +368,6 @@ fn chunk_sample_count(
             .ok_or_else(|| invalid(SampleToChunkBox::BOX_TYPE, entry))?;
     }
     Ok(total)
-}
-
-/// The `data_reference_index` of the sample entry `sample_description_index` names, from 1
-fn data_reference_index(stsd: &SampleDescriptionBox, sample_description_index: u32) -> Option<u16> {
-    let index = usize::try_from(sample_description_index.checked_sub(1)?).ok()?;
-    stsd.sample_descriptions.get(index)?.data_reference_index()
 }
 
 /// Sum of the `sample_count`s of the runs of a table, or `None` past `u64`

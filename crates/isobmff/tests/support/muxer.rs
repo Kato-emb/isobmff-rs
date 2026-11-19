@@ -61,6 +61,19 @@ pub(crate) fn read(file: &[u8]) -> Option<Read> {
     })
 }
 
+/// Whether a track of `movie` names another file in its data references, whose samples the muxers do not write
+pub(crate) fn has_tracks_in_other_files(movie: &MovieBox) -> bool {
+    movie.trak.iter().any(|trak| {
+        trak.mdia
+            .minf
+            .dinf
+            .dref
+            .data_entries
+            .iter()
+            .any(|entry| !entry.is_in_this_file())
+    })
+}
+
 /// The file type of an MP4 file, ISO/IEC 14496-14
 pub(crate) fn mp4_file_type() -> FileTypeBox {
     let mut ftyp = FileTypeBox::default();

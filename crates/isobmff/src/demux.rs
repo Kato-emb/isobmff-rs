@@ -122,7 +122,10 @@ enum Refused {
 /// declares it and that `imda` are read, in whichever order the file holds
 /// them; one whose `imda` the file lacks is reported once the input ends. A
 /// caller that cannot seek locates the samples of an `imda` that comes
-/// before the box that declares them, and is not lent them.
+/// before the box that declares them, and is not lent them. A sample whose
+/// data reference names another file, §8.7.2, is located and not lent, nor
+/// are bytes requested for it: a caller reads that file itself, and can
+/// assemble its samples with a [`MediaDataReader`].
 /// Handing input over never fails: what cannot be read, such as a `moof`
 /// before any `moov`, is reported as [`Event::Error`]. What the reading of
 /// the specification refuses, the demuxer reads lossily once the
@@ -256,7 +259,11 @@ impl Demuxer {
         }
         let boxes = self.boxes.required_input();
         let target = match self.state {
-            State::Movie => self.samples.target(boxes.map(|required| required.position)),
+            State::Movie => self
+                .samples
+                .target(boxes.map(|required| required.position), |location| {
+                    self.is_in_this_file(location)
+                }),
             State::NoMovie => None,
         };
         match target {
@@ -357,6 +364,7 @@ impl Demuxer {
                 self.boxes
                     .required_input()
                     .map(|required| required.position),
+                |location| self.is_in_this_file(location),
             ) {
                 Some((index, location)) => Observation::Wanted(index, location),
                 None => Observation::NeedMoreData,
@@ -418,33 +426,34 @@ impl Demuxer {
                 // those are is kept, and reading again stops at the same
                 // check, most before any sample is resolved.
                 (state, Observation::Box(BoxRead::Held(Refused::Movie(movie)))) => {
-                    match self.structure_data.handle_movie_lossy(&movie) {
-                        Ok(locations) => {
-                            self.samples.replace(locations);
-                            (
-                                State::Movie,
-                                Step::Output(Pending::Ready(Event::Movie(movie))),
-                            )
-                        }
+                    let resolved = self
+                        .structure_data
+                        .handle_movie_lossy(&movie)
+                        .map(|locations| self.samples.replace(locations));
+                    match resolved {
+                        Ok(()) => (
+                            State::Movie,
+                            Step::Output(Pending::Ready(Event::Movie(movie))),
+                        ),
                         Err(_) => (state, Step::Continue),
                     }
                 }
                 (
                     state,
                     Observation::Box(BoxRead::Held(Refused::MovieFragment { offset, moof })),
-                ) => match self
-                    .structure_data
-                    .handle_movie_fragment_lossy(&moof, offset)
-                {
-                    Ok(locations) => {
-                        self.samples.extend(locations);
-                        (
+                ) => {
+                    let resolved = self
+                        .structure_data
+                        .handle_movie_fragment_lossy(&moof, offset)
+                        .map(|locations| self.samples.extend(locations));
+                    match resolved {
+                        Ok(()) => (
                             state,
                             Step::Output(Pending::Ready(Event::MovieFragment(moof))),
-                        )
+                        ),
+                        Err(_) => (state, Step::Continue),
                     }
-                    Err(_) => (state, Step::Continue),
-                },
+                }
                 (state, Observation::Box(BoxRead::Event(event))) => {
                     (state, Step::Output(Pending::Ready(event)))
                 }
@@ -463,6 +472,20 @@ impl Demuxer {
                 Step::NeedMoreData => return,
             }
         }
+    }
+
+    /// Whether the bytes of the sample at `location` lie in this file, where the demuxer requests them
+    fn is_in_this_file(&self, location: &SampleLocation) -> bool {
+        // Why read an error as another file rather than report it: the
+        // structure-data checks the sample entry and the data reference entry
+        // of every location it returns as it resolves them, and refuses the
+        // box where it cannot, so no location it returned errs here.
+        self.structure_data
+            .is_in_this_file(
+                location.properties.track_id,
+                location.properties.sample_description_index,
+            )
+            .unwrap_or(false)
     }
 
     /// The next event of the box reader, read into the value of its box where the demuxer reads one
@@ -600,11 +623,12 @@ impl Demuxer {
                                 },
                             )))
                         } else {
-                            match self.structure_data.handle_movie_fragment(&moof, offset) {
-                                Ok(locations) => {
-                                    self.samples.extend(locations);
-                                    BoxRead::MovieFragment(moof)
-                                }
+                            let resolved = self
+                                .structure_data
+                                .handle_movie_fragment(&moof, offset)
+                                .map(|locations| self.samples.extend(locations));
+                            match resolved {
+                                Ok(()) => BoxRead::MovieFragment(moof),
                                 Err(error) => BoxRead::Refused {
                                     error: refused(error),
                                     refused: Refused::MovieFragment { offset, moof },
@@ -612,15 +636,16 @@ impl Demuxer {
                             }
                         }
                     }
-                    Ok(Gathered::Movie(movie)) => match self.structure_data.handle_movie(&movie) {
+                    Ok(Gathered::Movie(movie)) => match self
+                        .structure_data
+                        .handle_movie(&movie)
+                        .map(|locations| self.samples.replace(locations))
+                    {
                         Err(error) => BoxRead::Refused {
                             error: refused(error),
                             refused: Refused::Movie(movie),
                         },
-                        Ok(locations) => {
-                            self.samples.replace(locations);
-                            BoxRead::Movie(movie)
-                        }
+                        Ok(()) => BoxRead::Movie(movie),
                     },
                 }
             }

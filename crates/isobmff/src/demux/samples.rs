@@ -83,8 +83,12 @@ impl Samples {
         length_of(self.locations.len())
     }
 
-    /// The next sample of a subscribed track whose bytes are wanted before the file offset `before` the box reader wants, with its index
-    pub(super) fn target(&self, before: Option<u64>) -> Option<(usize, SampleLocation)> {
+    /// The next sample of a subscribed track, in this file as `is_in_this_file` tells, whose bytes are wanted before the file offset `before` the box reader wants, with its index
+    pub(super) fn target(
+        &self,
+        before: Option<u64>,
+        is_in_this_file: impl Fn(&SampleLocation) -> bool,
+    ) -> Option<(usize, SampleLocation)> {
         // Why also before the end of the input when the box reader wants
         // none: an `mdat` of size 0 runs to the end of the file, and its
         // samples are wanted though no box follows it.
@@ -100,7 +104,9 @@ impl Samples {
             .take_while(|(_, location)| {
                 location.offset < before || (location.size == 0 && location.offset == before)
             })
-            .find(|(_, location)| self.subscribed.contains(&location.properties.track_id))
+            .find(|(_, location)| {
+                self.subscribed.contains(&location.properties.track_id) && is_in_this_file(location)
+            })
             .map(|(index, &location)| (start.saturating_add(index), location))
     }
 

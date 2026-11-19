@@ -13,7 +13,10 @@ mod tests {
     use isobmff_core::FourCc;
     use isobmff_test_support::{conformance_files, ffprobe, ffprobe_packets};
 
-    use crate::support::{Read, mp4_file_type, one_sample_entry_track, packet_read, read, sample};
+    use crate::support::{
+        Read, has_tracks_in_other_files, mp4_file_type, one_sample_entry_track, packet_read, read,
+        sample,
+    };
 
     /// A muxer that writes movie fragments, of a fragmented movie file or of segments
     enum FragmentMuxer {
@@ -345,9 +348,12 @@ mod tests {
             let Some(source) = read(&file.bytes) else {
                 continue;
             };
-            // Why skip these: a file the demuxer reports an error in, such as
-            // one whose samples lie in another file, has none to write.
-            if !source.errors.is_empty() || source.samples.is_empty() {
+            // Why skip these: a file the demuxer reports an error in has none
+            // to write, and the muxers write the samples of one file alone.
+            if !source.errors.is_empty()
+                || source.samples.is_empty()
+                || has_tracks_in_other_files(&source.movie)
+            {
                 continue;
             }
             let fragmented = source.movie.mvex.is_some();

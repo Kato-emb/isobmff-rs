@@ -57,12 +57,21 @@ pub enum Error {
         /// Index, from 0, of the entry
         entry: u64,
     },
-    /// The samples of a track lie in another file than the one the box is in;
-    /// or, for a writer, in an `IdentifiedMediaDataBox`
+    /// A sample a writer takes lies in another file than the one it writes,
+    /// or in an `IdentifiedMediaDataBox`, which it does not write
     MediaDataElsewhere {
         /// `track_ID` of the track
         track_id: u32,
         /// `data_reference_index`, from 1, of the sample entry of the samples
+        data_reference_index: u16,
+    },
+    /// The sample entry of the samples of a track names no data reference
+    /// entry: its `data_reference_index` is 0, or past the entries of the
+    /// `dref`, which ISO/IEC 14496-12 §8.5.2.3 numbers from 1
+    DataReferenceIndexOutOfRange {
+        /// `track_ID` of the track
+        track_id: u32,
+        /// `data_reference_index` of the sample entry
         data_reference_index: u16,
     },
     /// The samples of a track lie in the `IdentifiedMediaDataBox` the
@@ -210,7 +219,14 @@ impl fmt::Display for Error {
                 data_reference_index,
             } => write!(
                 formatter,
-                "the samples of track {track_id} lie where data reference {data_reference_index} names, not in this file"
+                "a sample of track {track_id} lies where data reference {data_reference_index} names, not in the file written"
+            ),
+            Self::DataReferenceIndexOutOfRange {
+                track_id,
+                data_reference_index,
+            } => write!(
+                formatter,
+                "a sample entry of track {track_id} has data_reference_index {data_reference_index}, which names no data reference entry"
             ),
             Self::SequenceNumberOutsideMovieFragment {
                 track_id,
@@ -302,6 +318,7 @@ impl core::error::Error for Error {
             | Self::SampleCountMismatch { .. }
             | Self::InvalidEntry { .. }
             | Self::MediaDataElsewhere { .. }
+            | Self::DataReferenceIndexOutOfRange { .. }
             | Self::SequenceNumberOutsideMovieFragment { .. }
             | Self::DuplicateImdaIdentifier { .. }
             | Self::IdentifiedMediaDataOverLimit { .. }

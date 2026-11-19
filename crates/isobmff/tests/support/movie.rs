@@ -1,6 +1,6 @@
 //! The `moov` of a file and the samples it declares, and the packets ffprobe reads, which the tests of reading and writing sample tables share
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use isobmff::SampleLocation;
@@ -37,6 +37,24 @@ pub(crate) fn movie_of(file: &[u8]) -> Option<MovieBox> {
         }
     }
     movie
+}
+
+/// `track_ID` of each track of `movie` whose data references name another file, whose bytes neither this crate's demuxer nor ffprobe reads
+pub(crate) fn tracks_in_other_files(movie: &MovieBox) -> BTreeSet<u32> {
+    movie
+        .trak
+        .iter()
+        .filter(|trak| {
+            trak.mdia
+                .minf
+                .dinf
+                .dref
+                .data_entries
+                .iter()
+                .any(|entry| !entry.is_in_this_file())
+        })
+        .map(|trak| trak.tkhd.track_id)
+        .collect()
 }
 
 /// The location of each sample the tracks of `movie` declare, in the order of their file offsets
