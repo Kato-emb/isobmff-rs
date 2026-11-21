@@ -9,7 +9,7 @@ use isobmff_boxes::{
 use isobmff_core::BoxEncode;
 
 use super::Error;
-use super::sample::{self, MediaData, Sample, TrackSampleDescription};
+use super::sample::{self, EntryDataReference, Sample, TrackSampleDescription};
 use crate::SampleLocation;
 
 /// Length of the header of the `mdat` that follows each `moof`, with a `largesize`
@@ -27,7 +27,7 @@ struct Track {
     track_id: u32,
     /// The `data_reference_index` of each sample entry of the track, and
     /// where it places the media data
-    entries: Vec<Option<(u16, MediaData)>>,
+    entries: Vec<EntryDataReference>,
     // Why not sum the `sample_duration`s of the samples held: that sum on
     // every sample makes taking a fragment's samples quadratic in their
     // number, and the samples of earlier fragments are no longer held.
