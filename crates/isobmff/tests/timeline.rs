@@ -645,6 +645,18 @@ mod tests {
                         .and_then(|edts| edts.elst.as_ref())
                         .is_some()
                 })
+                // Why leave out a track in another file: ffprobe does not
+                // follow a `url ` or `urn ` data reference, and reads its
+                // offsets in this file.
+                .filter(|trak| {
+                    trak.mdia
+                        .minf
+                        .dinf
+                        .dref
+                        .data_entries
+                        .iter()
+                        .all(isobmff_boxes::DataEntry::is_in_this_file)
+                })
                 .collect();
             if edited.is_empty() {
                 continue;

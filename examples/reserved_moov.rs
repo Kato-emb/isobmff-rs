@@ -241,6 +241,20 @@ mod tests {
             while let Some(event) = demuxer.poll_event() {
                 match event {
                     demux::Event::Movie(moov) => {
+                        // Why read a movie with a track in another file as
+                        // unreadable: the example writes the samples of one
+                        // file alone.
+                        if moov.trak.iter().any(|trak| {
+                            trak.mdia
+                                .minf
+                                .dinf
+                                .dref
+                                .data_entries
+                                .iter()
+                                .any(|entry| !entry.is_in_this_file())
+                        }) {
+                            readable = false;
+                        }
                         for trak in &moov.trak {
                             demuxer.subscribe_track(trak.tkhd.track_id);
                         }
@@ -407,8 +421,8 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let (mut differences, mut written_files, mut compared, mut refused) = (Vec::new(), 0, 0, 0);
         for file in conformance_files() {
-            // Why skip these: a file the demuxer reports an error in, such as
-            // one whose samples lie in another file, has none to write.
+            // Why skip these: a file the demuxer reports an error in, or one
+            // with a track in another file, has none to write.
             let Some(samples) = read(&file.bytes) else {
                 continue;
             };

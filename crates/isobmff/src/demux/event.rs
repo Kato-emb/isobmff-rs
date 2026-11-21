@@ -44,7 +44,13 @@ pub enum Event<'a> {
     ///
     /// A sample that lies in an `imda` not yet read follows that `imda`
     /// instead, reported as [`Event::Box`], in the order of the file offsets
-    /// of the samples that lie in it.
+    /// of the samples that lie in it. The offset of a sample whose data
+    /// reference entry names another file is one of that file, ISO/IEC
+    /// 14496-12 §8.7.5.1: the entry is the one of the `dref` of its track that
+    /// the `data_reference_index` of its sample entry, the
+    /// `sample_description_index`-th of the `stsd`, names. The demuxer
+    /// requests no bytes of such a sample and lends none: a caller takes the
+    /// `size` bytes at that offset of the file the entry names.
     SampleLocation(SampleLocation),
     /// A sample of a subscribed track, its bytes lent from the demuxer's
     /// buffer

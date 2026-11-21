@@ -25,7 +25,7 @@ mod tests {
     use isobmff_test_support::serde_json::Value;
     use isobmff_test_support::{conformance_files, gpac_list as list};
 
-    use crate::support::{SAMPLE_COUNT_LIMIT, locations, movie_of};
+    use crate::support::{SAMPLE_COUNT_LIMIT, locations, movie_of, tracks_in_other_files};
 
     /// A sample of track 1 the first sample entry describes, a sync sample of no declared dependency
     fn location(offset: u64, size: u32, sample_duration: u32) -> SampleLocation {
@@ -509,8 +509,14 @@ mod tests {
                 continue;
             };
             let mut rewritten = movie.clone();
+            let in_other_files = tracks_in_other_files(&movie);
             for trak in &mut rewritten.trak {
                 let track_id = trak.tkhd.track_id;
+                // Why keep the table of a track in another file: the writer
+                // writes the samples of this file alone.
+                if in_other_files.contains(&track_id) {
+                    continue;
+                }
                 let mut track = found
                     .iter()
                     .filter(|location| location.properties.track_id == track_id)
